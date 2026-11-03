@@ -6997,6 +6997,14 @@ unless the complete range is proved. Run it with the finite scalar branch,
 call-register unread, FP parameter mask and Med prologue-save suites when
 changing their shared dataflow.
 
+The same suite checks 1/2/4/8-byte home spills, original FS/GS-prefixed store
+instructions, ordered stores, overlapping readers and returned home pointers.
+Narrow private spills must not invent parameters; externally observable writes
+and returned incoming-area addresses must retain them. A partial save area
+cannot acquire the full-word variadic contract.
+Ignored scalar identities and vector upper-lane clears before a spill must
+also preserve its operation index, including a later wider register read.
+
 `NeverDCallStackRangeSourceTests` executes independent Win64 machine bytes
 beside both C routes on Linux x64. Fixed writes followed by indexed reads,
 and indexed writes followed by fixed reads, must share storage. The matrix
@@ -7005,6 +7013,12 @@ UBSan, comparing 1,024 inputs in each of 32 configurations. Run
 `NeverDLLVMCFrameMemoryTests` and `NeverDCSourcePresentationTests` for the
 associated frame-alias and rendering changes. These checks establish local
 storage semantics, not Windows service execution or inferred alias exclusions.
+
+Its unread-home caller/callee matrix additionally compiles both C routes with
+no synthetic arguments at default/NoOpt and O0/O2. All four store widths return
+the independently specified value; Linux x64 also compares 1,024 original
+machine-code calls per executable with varied incoming registers. Other hosts
+run the generated-C value check without claiming the native Win64 oracle.
 
 `CompleteFunctionCache` compares reconstructed default functions with cold
 builds, including address-taken roots, instruction coverage, relocation
@@ -11058,6 +11072,20 @@ boundaries. High-byte GPR inputs, scalar vector lanes and callee-SP aliases are
 negative controls too. Its nested variants include raw omitted-body operands,
 recursive calls, stale target/position bindings, stack and hidden-register
 readers, GS/EH observers, capture, and exact/one-over call-depth bounds.
+`SourceFrameBorrows.NullTestsDoNotObserveBorrowedContents` checks both operand
+orders and equality directions for complete incoming pointers. Real reads of
+partially overwritten storage, pointer capture, adjusted pointers, narrow or
+malformed comparisons and non-scalar zeroes retain the store. The original
+comparison and returned Boolean stay in the callee.
+It also covers exact AND/OR-self transport and retained architectural flag
+outputs, with width, identity and malformed-output negative controls.
+`Win64CallContract.NullGuardedBorrowKeepsItsActualReadExtent` statically lifts
+the actual x64 TEST/JZ sequence through both C routes, with optimization enabled
+or disabled and the callee selected or omitted. The guarded real reader keeps
+its extent; a neighboring unknown-byte read still refuses removal.
+`MedFlagConstants.GeneratedComparisonZeroIsScalar` checks generated flag-fold
+zeroes on x64, x86, AArch64 and ARM, while a real subtraction preserves its
+address operand's provenance. These two tests do not launch emitted code.
 `Win64CallContract.BoundedCalleeReadDoesNotExposeAdjacentUnknownBytes`
 executes both source routes at O0/O2 with UBSan, with optimization enabled or
 disabled and with the callee selected or omitted. Its observing negative control

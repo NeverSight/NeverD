@@ -673,6 +673,18 @@ stale bindings, pointer capture, lossy transforms, exceptional observers and
 incoming pointer stack parameters refuse the proof. No callee write proves
 initialization. Implicit register inputs are checked independently of inferred
 source arity.
+An exact full-width incoming borrow may be compared with scalar null without
+observing its contents. This preserves the comparison and its Boolean result;
+it supplies neither a byte read nor an escaped address. Adjusted pointers,
+narrow tests, nonzero comparisons and address-provenance zeroes remain outside
+that permission, and every real memory reader still contributes its extent.
+Same-width AND/OR of an SSA value with itself transports that address unchanged,
+including x64 TEST's retained flag calculation. The flag-recovery owner marks
+its generated comparison zeroes as scalar; consumers do not reclassify an
+unknown constant to gain this permission.
+This distinction follows LLVM's separate
+[null-address and memory-provenance capture](https://llvm.org/docs/LangRef.html#pointer-capture)
+semantics; it grants no native callee-effect or initialization fact.
 An SSA version of zero is not itself an entry input: a first load or arithmetic
 definition can also have that version. Call home areas and released frame bytes
 remain observable without explicit pointer arguments. This proof annotates only
@@ -8994,6 +9006,16 @@ before writing, including arguments it only passes on to its own callees.
 For Win64 calls LowToMed publishes those argument registers as CALL inputs.
 SSA then sees a caller's pass-through argument, and HighC passes exactly the
 arguments the callee reads. Stack arguments follow the 32-byte home area.
+
+Win64 home-spill input elision accepts ordinary stores of an incoming
+register's low bytes only when their home slot is unread and does not escape.
+FS/GS and ordered stores keep their register observations. Returning an
+incoming-area address also retains its possible readers; it cannot establish
+a variadic forwarding contract. The variadic save-area rule still requires
+complete argument words, even though an unused private spill may be narrower.
+Before final compaction, each LowIR operation owns exactly one register-summary
+step, including ignored identities, stack probes and vector upper-lane clears.
+Home-spill refinement therefore cannot erase a different operation's reads.
 
 A complete scalar register summary also publishes an empty vector bank.
 Win64 does so only when no tracked vector family is read; a positional float

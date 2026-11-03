@@ -595,8 +595,8 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
   auto HomeSlot = [&](size_t K) {
     return static_cast<int64_t>(TRI.PointerSize + K * Layout.SlotBytes);
   };
-  // Spills of an incoming argument register to its own home slot in the
-  // entry block, by register position: the step that spills it.
+  // Ordinary spills of an incoming argument register's low bytes to its own
+  // home slot in the entry block, by register position: the spilling step.
   std::vector<std::optional<size_t>> HomeSpill(NumArgRegs);
   // Home slots a load reads back.
   std::vector<bool> HomeLoaded(NumArgRegs);
@@ -627,6 +627,7 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
     }
   }
   bool Unknown = false;
+  bool ReturnsIncomingAddress = false;
   int StackArgs = 0;
   std::optional<CallStackOffsets> ScalarOffsets;
   auto ReadRange = [&](const StackValue &A, unsigned Bytes) {
@@ -752,14 +753,25 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
         Unknown |= Escapes(In(1));
         const StackValue A = In(0);
         if (HomeSlots && &Block == &F.Blocks.front() &&
-            A.K == StackValue::Range && A.Lo == A.Hi && Op.NumInputs >= 2)
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+            Op.MemoryOrdering == NdMemoryOrdering::None &&
+            A.K == StackValue::Range && A.Lo == A.Hi && Op.NumInputs == 2 &&
+            Op.Inputs[1].isReg() && Op.Inputs[1].Size &&
+            Op.Inputs[1].Size <= Layout.SlotBytes)
           for (size_t K = 0; K < NumArgRegs; ++K)
             if (A.Lo == HomeSlot(K) &&
-                Op.Inputs[1] == NdVar::reg(Layout.Registers[K], 8) &&
+                Op.Inputs[1].Offset == Layout.Registers[K] &&
                 !((EntryWrittenBefore[I] >> K) & 1))
               HomeSpill[K] = I;
         continue;
       }
+      case NdOp::RETURN:
+        // The caller can dereference a returned incoming-area address.
+        // This is an observer, not evidence for a variadic forwarding call.
+        for (unsigned K = 0; K < Op.NumInputs; ++K)
+          ReturnsIncomingAddress |= Escapes(In(K));
+        Unknown |= ReturnsIncomingAddress;
+        continue;
       case NdOp::CALL:
       case NdOp::INDIR_CALL:
       case NdOp::BRANCH:
@@ -892,20 +904,23 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
     Work.push_back(BI);
     Drain();
   }
-  // A variadic prologue spills the first variadic argument register and
+  // A variadic prologue spills the whole first variadic argument register and
   // every later one to their home slots and hands a pointer to the first of
   // those slots on as the va_list.  A caller passes only the variadic
   // arguments it sets, so those spills read none.  Any other spill that no
   // load reads back, with no pointer to the incoming area escaping, reads
   // nothing either: only this function could observe its home slots.
   int VariadicFrom = -1;
-  if (HomeSlots && LowestEscape && *LowestEscape >= HomeSlot(1) &&
+  if (HomeSlots && !ReturnsIncomingAddress && LowestEscape &&
+      *LowestEscape >= HomeSlot(1) &&
       (*LowestEscape - HomeSlot(0)) % Layout.SlotBytes == 0) {
     const size_t First =
         static_cast<size_t>((*LowestEscape - HomeSlot(0)) / Layout.SlotBytes);
     bool Spilled = First < NumArgRegs;
     for (size_t K = First; Spilled && K < NumArgRegs; ++K)
-      Spilled = HomeSpill[K].has_value();
+      Spilled =
+          HomeSpill[K] && F.Blocks.front().Ops[*HomeSpill[K]].Inputs[1].Size ==
+                              Layout.SlotBytes;
     if (Spilled)
       VariadicFrom = static_cast<int>(First);
   }
@@ -1375,6 +1390,9 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
     };
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
       const LowOp &Op = Block.Ops[I];
+      // Home-spill refinement below addresses steps by their LowIR index.
+      // Keep an empty step for ignored operations until joinPlainSteps.
+      RegisterStep &Step = Out.Steps.emplace_back();
       if (const auto Arm = SelectedArms.find(I);
           Arm != SelectedArms.end() && Op.Output.isReg() &&
           Op.Output == Op.Inputs[Arm->second])
@@ -1412,7 +1430,6 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
         if (const auto Family = registerFamilyOf(Img.Arch, Op.Output.Offset);
             Family && Family->first >= kX64VectorFamilyBase)
           continue;
-      RegisterStep Step;
       // A slice of a vector register reads that slice's bytes only, and a
       // whole copy reads the source as wide as the copy is read.
       const std::optional<unsigned> SlicedVector =
@@ -1499,7 +1516,6 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
           Step.FixedTailCall = TailCall;
           Step.Exits = NoReturnCall;
           Effect.CallsFixedContract = true;
-          Out.Steps.push_back(Step);
           continue;
         }
       switch (Op.Opcode) {
@@ -1578,7 +1594,6 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
       Effect.UnknownEntryReads |= Step.UnknownTailCall &&
                                   Step.ImportCallee == InvalidVA &&
                                   Step.ArgumentsFrom == InvalidVA;
-      Out.Steps.push_back(Step);
     }
   }
   summarizeIncomingStackReads(Img, F, IndexOfId, BlockStarts, ArgumentSources,
