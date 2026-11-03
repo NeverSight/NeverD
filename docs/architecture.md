@@ -590,8 +590,8 @@ uses. Unknown values reaching memory, calls, returns or control reject expansion
 dead register PHIs alone do not. The observable dependency closure owns the
 body-size limit: bounded cleanup removes dead register/flag calculations before
 admission while retaining every load, store, ordinary call and terminator. The
-scan still shares the existing work bound. Candidate checks discard implicit
-mutable-parameter entry stores early; source cleanup supplies no native-slot
+scan still shares the existing work bound. Candidate checks reject parameters
+with implicit mutable entry stores early; source cleanup supplies no native-slot
 nonobservation proof. Complete support bodies are prepared from
 leaves to callers, once per query, within the same callee and expansion budgets.
 Shared descendants reuse that preparation; cycles and unresolved observations
