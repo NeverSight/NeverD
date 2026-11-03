@@ -16,6 +16,7 @@
 #include "X64FarPointerEncoding.h"
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/X86/X86ExceptionDelivery.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/lift/X86/X86Regs.h"
 
@@ -364,12 +365,6 @@ private:
   uint8_t AccessCPL = 0;
 };
 
-bool contributory(uint8_t Vector) {
-  return Vector == 0 || (Vector >= 10 && Vector <= 13) || Vector == 21;
-}
-
-bool pageFault(uint8_t Vector) { return Vector == 14 || Vector == 20; }
-
 } // namespace
 
 llvm::Expected<X64PagedEventResult>
@@ -418,16 +413,14 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
     const bool FirstFault = Event.Kind == X64ContinuationEventKind::Fault;
     const bool FirstDouble =
         Event.Kind == X64ContinuationEventKind::Abort && Event.Vector == 8;
-    const bool SecondContributory = contributory(W.Fault->Vector);
-    const bool SecondPage = pageFault(W.Fault->Vector);
+    const bool SecondContributory = x86ContributoryException(W.Fault->Vector);
+    const bool SecondPage = x86PageClassException(W.Fault->Vector);
     if (FirstDouble && (SecondContributory || SecondPage)) {
       Result.Status = X64PagedEventStatus::Shutdown;
       return Result;
     }
     const bool Double =
-        FirstFault &&
-        ((contributory(Event.Vector) && SecondContributory) ||
-         (pageFault(Event.Vector) && (SecondContributory || SecondPage)));
+        FirstFault && x86DoubleFaultPair(Event.Vector, W.Fault->Vector);
     Event = {};
     Event.SavedPC = FaultPC;
     Event.Vector = Double ? 8 : W.Fault->Vector;

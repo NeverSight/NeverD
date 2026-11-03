@@ -51,6 +51,10 @@ struct X86LegacySegmentExecutionResult : X86MemoryAccessResult {
   bool LoadsSSWithInhibition = false;
 };
 
+/// Shared external-state admission; performs no RAM accesses or mutations.
+llvm::Error validateX86LegacySegmentState(const X86LegacySegmentState &State,
+                                          const X86PagingState &Controls);
+
 /// Instruction-transition boundary, like loadX64PagedFarPointer. The caller
 /// owns original instruction fetch/authentication, EIP, RF, interruptibility,
 /// event arbitration and fault delivery. This function authenticates the

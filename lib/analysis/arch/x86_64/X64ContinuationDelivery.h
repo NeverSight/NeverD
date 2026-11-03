@@ -17,6 +17,8 @@
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/ir/low/LowIR.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -52,7 +54,7 @@ class X64ContinuationDelivery : private X64ContinuationSegments<Writer> {
     return Bytes == 8 ? Value : op(NdOp::INT_ZEXT, {Value});
   }
 
-  NdVar member(NdVar Value, std::initializer_list<unsigned> Values) {
+  NdVar member(NdVar Value, llvm::ArrayRef<unsigned> Values) {
     auto Result = eq(Value, k(*Values.begin()));
     for (auto I = Values.begin() + 1; I != Values.end(); ++I)
       Result = either(Result, eq(Value, k(*I)));
@@ -74,11 +76,9 @@ public:
     auto Valid = either(Interrupt, Software);
     Valid = either(Valid, both(NMI, eq(Vector, k(2))));
     Valid = either(Valid, both(Breakpoint, eq(Vector, k(1))));
-    Valid = either(Valid, both(Trap, member(Vector, {1, 3, 4})));
-    Valid = either(Valid, both(Abort, member(Vector, {8, 18})));
-    Valid =
-        either(Valid, both(Fault, member(Vector, {0, 1, 5, 6, 7, 10, 11, 12, 13,
-                                                  14, 16, 17, 19, 20})));
+    Valid = either(Valid, both(Trap, member(Vector, kX86TrapVectors)));
+    Valid = either(Valid, both(Abort, member(Vector, kX86AbortVectors)));
+    Valid = either(Valid, both(Fault, member(Vector, kX86FaultVectors)));
     W.rejectIf(eq(Valid, NdVar::scalar(0, 1)));
     for (auto Offset :
          {offsetof(Event, STIBlocked), offsetof(Event, SSBlocked),
@@ -91,7 +91,7 @@ public:
                                  NdVar::scalar(0, 1))));
     const auto Error = event(Pointer, offsetof(Event, ErrorCode), 8);
     const auto HasError =
-        both(either(Fault, Abort), member(Vector, {8, 10, 11, 12, 13, 14, 17}));
+        both(either(Fault, Abort), member(Vector, kX86ErrorCodeVectors));
     W.rejectIf(both(eq(HasError, NdVar::scalar(0, 1)), ne(Error, k(0))));
     W.rejectIf(both(member(Vector, {8, 17}), ne(Error, k(0))));
     W.rejectIf(less(k(UINT32_MAX), Error));

@@ -20,7 +20,8 @@ template <class Operations> struct X86SegmentDescriptorRules {
   using Value = typename Operations::Value;
 
   static void checkData(Operations &O, bool Stack, Value Selector,
-                        Value Descriptor, Value CPL) {
+                        Value Descriptor, Value CPL,
+                        uint8_t InvalidFault = 13) {
     const auto Error = O.masked(Selector, 0xfffc);
     const auto Access = O.shifted(Descriptor, 40);
     const auto DPL = O.masked(O.shifted(Access, 5), 3);
@@ -28,15 +29,15 @@ template <class Operations> struct X86SegmentDescriptorRules {
       O.faultIf(O.either(O.ne(O.masked(Selector, 3), CPL),
                          O.either(O.ne(O.masked(Access, 0x1a), O.k(0x12)),
                                   O.ne(DPL, CPL))),
-                13, Error);
+                InvalidFault, Error);
     } else {
       O.faultIf(O.either(O.eq(O.masked(Access, 0x10), O.k(0)),
                          O.eq(O.masked(Access, 0x0a), O.k(8))),
-                13, Error);
+                InvalidFault, Error);
       O.faultIf(O.both(O.ne(O.masked(Access, 12), O.k(12)),
                        O.either(O.less(DPL, O.masked(Selector, 3)),
                                 O.less(DPL, CPL))),
-                13, Error);
+                InvalidFault, Error);
     }
     O.faultIf(O.eq(O.masked(Access, 0x80), O.k(0)), Stack ? 12 : 11, Error);
   }

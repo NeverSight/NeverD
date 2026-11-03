@@ -37,8 +37,14 @@ loading uses `translate/X86/X86LegacySegmentExecution` for explicit legacy
 selector MOV/PUSH/POP and LxS. `ir/X86/X86SegmentDescriptorRules` shares data/stack
 type, privilege, present and cache-field decisions with the x64 continuation
 writer. The legacy transition stages coupled cache/GPR/stack publication over
-paged RAM; its caller retains fetch, EIP/RF, event/shadow and delivery ownership.
-Mode transitions and exception delivery remain separate authorities.
+paged RAM. `translate/X86/X86LegacyExecution` supplies original-byte CS fetch,
+EIP/RF completion, persistent SS/STI/NMI state and 16/32-bit IDT gate entry
+for its admitted instruction subset. Its event owner stages registers and
+caches while retaining descriptor/frame RAM effects and CR2 on later faults.
+TSS stack selection, conforming code and privilege changes stay in that owner;
+`ir/X86/X86ExceptionDelivery` shares event kinds, error-code vector sets and
+recursive-fault classification with IA-32e. The legacy entry is an internal
+execution interface, not a general i386 source dispatcher or an IRET/task engine.
 See [legacy segment operands](x86-legacy-segments.md).
 
 `translate/X86/X86Paging` owns architectural linear-address translation over

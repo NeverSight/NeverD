@@ -10,19 +10,13 @@
 #ifndef NEVERD_ANALYSIS_ARCH_X86_64_X64CONTINUATIONEVENT_H
 #define NEVERD_ANALYSIS_ARCH_X86_64_X64CONTINUATIONEVENT_H
 
+#include "neverd/ir/X86/X86ExceptionDelivery.h"
+
 #include <cstdint>
 
 namespace neverd::analysis {
 
-enum class X64ContinuationEventKind : uint8_t {
-  Fault = 0,
-  Trap = 1,
-  Interrupt = 2,
-  NMI = 3,
-  Software = 4,
-  InstructionBreakpoint = 5,
-  Abort = 6,
-};
+using X64ContinuationEventKind = X86EventKind;
 
 /// Input to neverd_x64_deliver_event_v6. The event producer owns selection,
 /// priority, instruction restart/partial completion and cause-specific banks

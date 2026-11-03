@@ -1,0 +1,109 @@
+//===- X86LegacyExecution.h - Protected legacy execution -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Original-byte segment steps and IDT event entry over owned paged RAM.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_TRANSLATE_X86_X86LEGACYEXECUTION_H
+#define NEVERD_TRANSLATE_X86_X86LEGACYEXECUTION_H
+
+#include "neverd/ir/X86/X86ExceptionDelivery.h"
+#include "neverd/translate/X86/X86LegacySegmentExecution.h"
+
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/Error.h"
+
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+namespace neverd::translate {
+
+struct X86LegacyExecutionState {
+  X86LegacySegmentState Core;
+  uint32_t EIP = 0;
+  uint32_t EFlags = 2;
+  uint32_t CR2 = 0;
+  uint32_t IDTRBase = 0;
+  uint16_t IDTRLimit = 0;
+  X86LegacySegmentCache TR;
+  bool STIBlocked = false;
+  bool SSBlocked = false;
+  bool NMIBlocked = false;
+};
+
+using X86LegacyEventKind = X86EventKind;
+
+struct X86LegacyEvent {
+  uint32_t SavedEIP = 0;
+  uint32_t ErrorCode = 0;
+  uint32_t FaultAddress = 0;
+  uint8_t Vector = 0;
+  X86LegacyEventKind Kind = X86LegacyEventKind::Fault;
+};
+
+/// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
+/// TSS reads and ordered frame pushes. A 16-bit target stack preserves old
+/// ESP high bits. Consecutive MOV/POP SS does not extend an incoming shadow.
+/// The producer owns event selection, APIC/debug state and machine-check
+/// recovery. Task gates, VM86 and CET need separate bindings.
+enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
+
+struct X86LegacyExecutionOptions {
+  X86LegacySegmentExecutionOptions Segments;
+  std::optional<X86LegacyEventProfile> Events;
+  /// Required for NMI eligibility under STI when no other blocker decides it;
+  /// does not affect MOV/POP SS's NMI inhibition.
+  std::optional<bool> NMIBlockedBySTI;
+};
+
+enum class X86LegacyExecutionStatus : uint8_t {
+  Completed,
+  EventDelivered,
+  EventDeferred,
+  CodeChanged,
+  BackingFault,
+  Shutdown,
+};
+
+struct X86LegacyExecutionResult {
+  X86LegacyExecutionStatus Status = X86LegacyExecutionStatus::Completed;
+  bool InstructionAttempted = false;
+  bool InstructionCompleted = false;
+  bool EventAccepted = false;
+  uint8_t DeliveredVector = 0;
+  unsigned DeliveryAttempts = 0;
+  std::optional<X86MemoryException> Exception;
+  std::optional<GuestMemoryFault> BackingFault;
+  std::vector<SelfModificationExit> SelfModifications;
+};
+
+/// Persistent shadows determine eligibility before any table access. Fault
+/// delivery retains CR2, NMI blocking, descriptor writes and earlier frame
+/// stores, including on a subsequent #DF/shutdown. Registers/cache/EIP commit
+/// together only after a complete entry. No handler instructions are fetched.
+llvm::Expected<X86LegacyExecutionResult>
+deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
+                      const X86LegacyEvent &Event,
+                      const X86LegacyExecutionOptions &Options);
+
+/// Authenticates original bytes through CS and paging, then executes the
+/// segment-transition owner or
+/// NOP/MOV-immediate/CLI/STI/INT/INT3/INTO/INT1/UD2. On an architectural fault,
+/// enters the IDT with the original EIP. On success, commits fallthrough,
+/// clears RF and advances persistent SS/STI inhibition. Changed code returns
+/// CodeChanged at the first mismatch. Unimplemented or malformed instructions
+/// return Error, never a synthesized #UD or NOP. TF stepping and hardware debug
+/// event production are not supplied here.
+llvm::Expected<X86LegacyExecutionResult>
+executeX86LegacyInstruction(X86LegacyExecutionState &State,
+                            X86PagedMemory &Memory,
+                            llvm::ArrayRef<uint8_t> Instruction,
+                            const X86LegacyExecutionOptions &Options);
+
+} // namespace neverd::translate
+
+#endif // NEVERD_TRANSLATE_X86_X86LEGACYEXECUTION_H

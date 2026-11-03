@@ -15,6 +15,22 @@ lifetime. A userspace IRQ must wait for KVM's injection window: an immediate
 `KVM_INTERRUPT` while IF=0 is not a valid pending-event oracle.
 See [the generated execution contract](x86-paged-execution.md).
 
+`X86LegacyExecutionTest`, `LegacyEvents/*` and `LegacySteps/*` in
+`NeverDX86PagingTests` cover original-byte protected legacy execution and
+16/32-bit IDT entry. The independent KVM oracle compares code/stack caches,
+EIP, ESP, flags, CR2, descriptor bytes and frame memory across all privilege
+levels, conforming targets, GDT/LDT, gate/code/stack/TSS widths, IRQ/NMI,
+software/fault classification, entry failures, #DF and shutdown. TSS page
+boundaries distinguish the offset-first read and its actual extent. Separate
+flags/high-ESP cases distinguish target SS.D/B from gate or TSS width.
+Original instruction sequences test CS-base/limit fetch, sequential EIP above
+FFFFh in 16-bit code, MOV/POP SS, LSS, CLI/STI and pending IRQ/NMI shadows.
+IRQ injection waits for `KVM_EXIT_IRQ_WINDOW_OPEN`. The native debugger's RF
+bit and shutdown's undefined register bank are excluded; saved frame flags,
+CR2 and retained ordinary RAM remain checked. Repeat these tests on the
+qualified P/E cores and both SDKs; preserve raw failing probes as diagnostics.
+See [the legacy execution contract](x86-legacy-segments.md#protected-instruction-and-event-execution).
+
 `X86LegacySegmentExecutionTest` in `NeverDX86PagingTests` checks protected
 selector transition admission, null-cache invalidation, accessed-write faults,
 old-SS stack sizing, coupled far-pointer publication, alignment priority and

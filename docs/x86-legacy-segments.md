@@ -158,3 +158,68 @@ type-corpus skips. All 704 paged-source exports per SDK still match the earlier
 qualification. These integration checks are recorded separately from the
 primary totals; the paired parser component check retains its raw measurements
 locally and makes no whole-decompilation performance claim.
+
+## Protected instruction and event execution
+
+`translate/X86/X86LegacyExecution` connects the selector-transition owner to
+an internal protected-mode execution state: EIP, EFLAGS, CR2, IDTR, loaded TR,
+and persistent SS/STI/NMI inhibition accompany the existing GPR/segment state.
+That state owns flags; execution binds the paging provider to it before
+accesses and again after completion. Event selection and APIC/debug producer
+state remain the embedding caller's responsibility.
+
+A step authenticates each original instruction byte through CS and paging.
+It stops at the first changed byte, preserving earlier page-walk effects and
+requiring the caller to decode the new code. A fetch or operand exception
+retains the original EIP and enters the IDT. Successful execution publishes
+fallthrough, clears RF, and advances SS/STI inhibition. The admitted byte
+grammar includes the segment instructions, NOP, register-immediate MOV,
+CLI/STI with IOPL/PVI checks, INT, INT3, INTO, INT1 and UD2. An unimplemented
+instruction returns an error; only an authenticated UD2 generates its #UD.
+Sequential EIP is not truncated solely because CS.D is zero. Code-base and
+limit checks still apply to each fetched byte.
+
+Event entry supports 16/32-bit interrupt and trap gates, conforming code,
+GDT/LDT targets, all four CPLs, inner-ring stacks from 16/32-bit TSS caches,
+and frame/error-code widths selected by the gate. The gate DPL check belongs
+to software entry; an IRQ to vector 14 does not push a page-fault error code.
+Faults set saved RF, software entry clears saved RF, and live flags receive
+interrupt/trap-gate updates. Descriptor-table accesses are implicit supervisor
+accesses; frame writes use the destination CPL. Table and frame permissions
+flow through the same page walker as operands.
+
+The explicit `OrderedFrame` target profile uses qword accessed writes,
+TSS offset reads before the selector, and ordered SS/ESP/flags/CS/EIP/error
+pushes as applicable. TSS reads cover the actual 16/32-bit offset and selector,
+not a padded eight-byte field. On a 16-bit target stack, ESP retains its old
+high word while the low word comes from the TSS; a 32-bit target stack uses
+the TSS value. Gate width, TSS width and stack address size remain independent.
+Earlier descriptor and frame stores survive a later entry failure, while
+registers, caches and EIP commit together only after the full entry succeeds.
+CR2 survives a subsequent #DF or shutdown. NMI blocking starts when the event
+is accepted, including when entry subsequently faults. A missing physical
+backing remains a host binding failure, never a synthesized guest #PF.
+
+The profile also binds consecutive MOV/POP SS not to extend an incoming SS
+window. LSS does not establish that window. External IRQ, NMI and debug-event
+eligibility is checked before table reads. The STI/NMI relationship requires
+an explicit policy when it affects eligibility; it is not inferred from the
+host. TF instruction stepping and ICEBP while an SS window is active require
+a debug producer and are refused by this step interface. Native debug
+registers and delayed data-breakpoint state are not silently approximated.
+
+The architecture basis is Intel SDM revision 093, volume 2 INT/MOV/POP/STI/CLI
+and volume 3A chapter 7. Target-specific access ordering and stack high-bit
+behavior are qualified against original instructions in KVM, not inferred
+from the pseudocode's textual evaluation order.
+[Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+The [November 3 evidence](evidence/x86-legacy-event-entry-2026-11-03.json)
+records commands, source hashes, SDK inputs, CPU affinity, independent native
+matrices, corrected probes and regression results.
+
+This is a bounded internal execution interface. General i386 scalar/source
+dispatch, IRET/RETF and task/call-gate transitions, real/VM86, CET/FRED, software
+SMM, enclave/AEX/EPCM and the remaining device/partial-progress contracts are
+not completed by it. No new LLVM or NeverC intrinsic is required for these
+runtime state transitions. The final LLVM release, SDK pin and NeverD LLVM
+gitlink remain unchanged pending global completion.

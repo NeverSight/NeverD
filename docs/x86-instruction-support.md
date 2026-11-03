@@ -3705,3 +3705,22 @@ software SMM, SGX execution/AEX/EPCM or the other listed machine-environment
 contracts. The native compiler interfaces already transport these instructions;
 no new builtin, final LLVM release, production SDK pin or gitlink update is
 claimed by this transition change.
+
+## Protected legacy instruction and IDT execution
+
+`translate/X86/X86LegacyExecution` now connects the selector transitions to
+original-byte CS/paging authentication, EIP/RF completion and persistent
+interruptibility. Architectural faults enter 16/32-bit interrupt/trap gates,
+including conforming code, ring changes, 16/32-bit TSS stacks, ordered frame
+stores, nested exceptions, #DF and shutdown. Software INT to an exception
+vector does not acquire that exception's error-code field. Shared event kinds,
+error-code sets and exception pairing serve both legacy and IA-32e execution.
+
+This internal execution interface admits the segment instructions plus
+NOP, register-immediate MOV, CLI/STI, INT/INT3/INTO/INT1 and UD2. It is not a
+general i386 scalar/source dispatcher or an IRET implementation. Task/call
+gates, real/VM86, debug-event production, software SMM and SGX execution/AEX/EPCM
+remain separate incomplete contracts. Unsupported input returns an explicit
+error. [The execution contract](x86-legacy-segments.md#protected-instruction-and-event-execution)
+records the bound processor behavior and native evidence. The global
+completion, final LLVM release/pin and submodule-update gates remain open.

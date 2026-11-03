@@ -11,6 +11,7 @@
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
+#include "neverd/ir/X86/X86ExceptionDelivery.h"
 
 #include "llvm/Support/Errc.h"
 
@@ -308,8 +309,7 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
   // Protected-mode virtual interrupts raise #GP at instruction entry when
   // VIF and VIP are both set, independent of IOPL and of the opcode. External
   // event selection has already happened at the scheduler boundary.
-  if (CPL == 3 && (Controls.CR4 & 2) &&
-      (Controls.RFlags & 0x180000) == 0x180000) {
+  if (x86PendingVirtualInterrupt(CPL, Controls.CR4, Controls.RFlags)) {
     T.Access.Status = X86PageWalkStatus::Exception;
     T.Access.Exception = X86MemoryException{13, 0, std::nullopt};
   }

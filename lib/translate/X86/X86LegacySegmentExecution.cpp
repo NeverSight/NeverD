@@ -246,26 +246,12 @@ private:
 
 } // namespace
 
-llvm::Expected<X86LegacySegmentExecutionResult>
-executeX86LegacySegmentInstruction(
-    X86LegacySegmentState &State, X86PagedMemory &Memory,
-    llvm::ArrayRef<uint8_t> Instruction,
-    const X86LegacySegmentExecutionOptions &Options) {
-  const auto &Controls = Memory.controls();
+llvm::Error validateX86LegacySegmentState(const X86LegacySegmentState &State,
+                                          const X86PagingState &Controls) {
   if (!(Controls.CR0 & 1) || (Controls.EFER & 0x400) ||
-      (Controls.RFlags & 0x20000) || State.CPL > 3 ||
-      Options.Profile != X86LegacySegmentProfile::WordStackOffsetFirst ||
-      (Options.AlignmentPriority &&
-       *Options.AlignmentPriority != X86AlignmentPriority::BeforePaging &&
-       *Options.AlignmentPriority != X86AlignmentPriority::AfterPaging) ||
-      (Options.FullLimitChoice &&
-       *Options.FullLimitChoice != X86FullSegmentLimitChoice::Fault &&
-       *Options.FullLimitChoice != X86FullSegmentLimitChoice::Wrap))
+      (Controls.RFlags & 0x20000) || State.CPL > 3)
     return invalid(
         "legacy segment execution requires bound protected-mode state");
-  if (State.CPL == 3 && (Controls.CR0 & (1u << 18)) &&
-      (Controls.RFlags & (1u << 18)) && !Options.AlignmentPriority)
-    return invalid("legacy segment execution requires an alignment priority");
   for (unsigned I = 0; I != State.Segments.size(); ++I)
     if (auto Error = validateX86LegacySegmentCache(
             static_cast<X86SegmentRegister>(I), State.Segments[I]))
@@ -276,6 +262,29 @@ executeX86LegacySegmentInstruction(
   const auto &CS = State.Segments[unsigned(X86SegmentRegister::CS)];
   if ((CS.Selector & 3) != State.CPL)
     return invalid("legacy segment execution CPL disagrees with CS");
+  return llvm::Error::success();
+}
+
+llvm::Expected<X86LegacySegmentExecutionResult>
+executeX86LegacySegmentInstruction(
+    X86LegacySegmentState &State, X86PagedMemory &Memory,
+    llvm::ArrayRef<uint8_t> Instruction,
+    const X86LegacySegmentExecutionOptions &Options) {
+  const auto &Controls = Memory.controls();
+  if (auto Error = validateX86LegacySegmentState(State, Controls))
+    return std::move(Error);
+  if (Options.Profile != X86LegacySegmentProfile::WordStackOffsetFirst ||
+      (Options.AlignmentPriority &&
+       *Options.AlignmentPriority != X86AlignmentPriority::BeforePaging &&
+       *Options.AlignmentPriority != X86AlignmentPriority::AfterPaging) ||
+      (Options.FullLimitChoice &&
+       *Options.FullLimitChoice != X86FullSegmentLimitChoice::Fault &&
+       *Options.FullLimitChoice != X86FullSegmentLimitChoice::Wrap))
+    return invalid("legacy segment execution requires a bound profile");
+  if (State.CPL == 3 && (Controls.CR0 & (1u << 18)) &&
+      (Controls.RFlags & (1u << 18)) && !Options.AlignmentPriority)
+    return invalid("legacy segment execution requires an alignment priority");
+  const auto &CS = State.Segments[unsigned(X86SegmentRegister::CS)];
   const auto F = detail::decodeLegacySegmentInstruction(Instruction,
                                                         CS.Attributes & 0x4000);
   if (!F)
