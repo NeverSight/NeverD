@@ -5033,7 +5033,12 @@ event repaints the close button even without a separate hover-leave event.
 ordinary and Quick Start dialogs, with and without an early native handle,
 through both `show()` and `exec()`. It compares desktop pixels over a known
 background with the widget's alpha-composited shadow; a widget-only capture
-cannot detect an opaque native window. The test requires an accessible Windows
+cannot detect an opaque native window. It also requires the native client area
+to equal the complete window rectangle: keeping `WS_THICKFRAME` for resizing
+must not let Windows inset the client origin or its size. The native frame
+filter handles `WM_NCCALCSIZE` before coordinate mapping and hit testing;
+the desktop pixel comparison runs at both 100% and 150% scale in CI.
+The test requires an accessible Windows
 desktop and skips other platform plugins, including offscreen. Run it directly:
 
 ```powershell
@@ -5142,7 +5147,11 @@ tab docking. `explicitDockIgnoresLock` clicks the dock button while locked.
 including opening a recent file, maximizes the workbench, while reopening the
 dialog over a visible workbench preserves its state. `workbenchReopensWindowed`
 checks saved normal/maximized geometry, F11 from either state and legacy
-full-screen settings before loading a file. `oldFullscreenLayoutsKeepStartupGeometry`
+full-screen settings before loading a file. Cocoa full-screen fixtures require
+a foreground test window. After preserving the requested geometry, they finish
+the native full-screen transition and restore the desktop work area before
+creating the reopened workbench; the restore-button check requires a delivered
+click as well as the restored state. `oldFullscreenLayoutsKeepStartupGeometry`
 checks that global and project pane layouts cannot restore full screen.
 `framedWindowEdgesResize` checks native Windows hit targets and edge/corner
 drags on Quick Start and a loaded workbench on Windows, X11 and Wayland,
@@ -5152,6 +5161,8 @@ the maximized geometry under the window manager's control. The Wayland
 runner supplies trusted pointer input and activation for restore-button
 checks. Set the initial workbench size before opening its file, since that
 operation starts its first native show and asynchronous configure.
+The initial window fits inside the available work area with room for the
+complete 60-pixel drag on every edge, including small Windows runner desktops.
 These workbench cases use the fixture worker when it is built. Native drag
 coverage requires a native platform plugin and window manager; offscreen
 reports it as skipped.
