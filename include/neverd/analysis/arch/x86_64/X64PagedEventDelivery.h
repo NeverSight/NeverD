@@ -25,7 +25,7 @@ namespace neverd::analysis {
 
 /// Canonical-address checks precede either order. Concurrent data-fault
 /// priority is processor-specific, not specified by the boundary-event table.
-enum class X64PagedAlignmentPriority : uint8_t { BeforePaging, AfterPaging };
+using X64PagedAlignmentPriority = translate::X86AlignmentPriority;
 
 /// Bound processor observation for competing IRET stack faults. The qualified
 /// order reads FLAGS, CS, IP, then SS and SP, and updates accessed descriptors
@@ -143,8 +143,8 @@ loadX64PagedFarPointer(X64ContinuationStateV6 &State,
                        X64PagedFarPointerProfile Profile,
                        std::optional<X64NullSegmentBasePolicy> NullBasePolicy);
 
-/// Execute an authenticated long-mode selector MOV/PUSH/POP over explicit state.
-/// The caller owns MOV-SS interruptibility; generated source uses its
+/// Execute an authenticated long-mode selector MOV/PUSH/POP over explicit
+/// state. The caller owns MOV-SS interruptibility; generated source uses its
 /// persistent scheduler. Fault delivery and instruction-budget accounting
 /// belong to the executor, not this descriptor/operand transition.
 llvm::Expected<X64PagedInstructionTransitionResult>

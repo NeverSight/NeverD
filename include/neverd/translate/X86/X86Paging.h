@@ -55,6 +55,10 @@ struct X86PagingState {
   std::array<uint64_t, 4> PDPTE{};
 };
 
+/// Segment/canonical checks precede either order. Competing #AC/#PF priority
+/// is a bound processor property, shared by legacy and long-mode executors.
+enum class X86AlignmentPriority : uint8_t { BeforePaging, AfterPaging };
+
 struct X86LinearAccess {
   uint64_t Address = 0;
   MemoryAccessKind Kind = MemoryAccessKind::Read;
@@ -64,8 +68,8 @@ struct X86LinearAccess {
   bool ImplicitSupervisor = false;
   /// Noncanonical stack addresses raise #SS(0), other addresses #GP(0).
   bool Stack = false;
-  /// Legacy explicit operands after whole-segment checking may cross the
-  /// 32-bit linear wrap. IA-32e and implicit system references cannot select
+  /// Legacy operands after whole-segment/table checking may cross the
+  /// 32-bit linear wrap. IA-32e references cannot select
   /// this flag. It does not waive segment-offset limit checks.
   bool Wrap32 = false;
 };

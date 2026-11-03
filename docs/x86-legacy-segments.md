@@ -54,8 +54,8 @@ rules. It does not certify RAO/AVX-512 physical execution or full i386 event
 frame delivery. The tests separately exercise the instruction integrations,
 mask suppression, byte wrap, fault preservation and expired bindings.
 
-This layer does not complete the legacy instruction dispatcher, segment-load
-state transitions, task/call gates, real/VM86 modes, software SMM, enclave
+The cached-operand layer does not complete the legacy instruction dispatcher,
+task/call gates, real/VM86 modes, software SMM, enclave
 execution/AEX/EPCM, CET/FRED or the remaining partial-progress and device
 contracts. LLVM and NeverC already transport these native instruction controls;
 this change adds no compiler builtin, LLVM release, SDK pin or submodule update.
@@ -73,3 +73,77 @@ LLVMC files differ only by r6 retaining an unused result declaration/copy.
 Their native-operation text is identical, and both variants pass independent
 source execution. The evidence retains the input hashes, commands, build
 receipts and exact distinction instead of claiming all exports are identical.
+
+
+## Explicit selector instructions
+
+`translate/X86/X86LegacySegmentExecution` adds the protected 16/32-bit
+instruction-transition boundary for selector MOV in both directions, PUSH/POP
+and LDS/LES/LSS/LFS/LGS. It accepts complete instruction bytes, an explicit
+GPR/segment/GDTR/LDTR/CPL snapshot, owned paged RAM and a target profile. A
+strict prefix/ModRM/SIB grammar retains independent code, operand, address
+and stack sizes, all six segment overrides, signed displacements and captured
+source registers. It refuses malformed forms, real/VM86/IA-32e state, and
+missing or invalid profiles before any RAM access.
+
+`ir/X86/X86SegmentDescriptorRules` is the shared owner of data/stack type,
+privilege, present checks and descriptor field extraction. The existing x64
+continuation templates emit these rules as IR; the legacy executor evaluates
+them directly. Neither source renderer acquires a second descriptor algorithm.
+The x86 alignment-priority type also has one owner, with the existing x64
+name retained as an alias.
+
+The `WordStackOffsetFirst` profile reads a selector word for MOV/POP, and
+writes a word for PUSH even with a four-byte stack adjustment. MOV r32,Sreg
+clears its high word. A far pointer reads its offset and then its selector;
+each field's effective address is truncated separately before segment-base
+addition. Ordinary bytes within a field retain the full offset bound check.
+GDT/LDT lookup checks the complete descriptor extent against the table limit,
+then reads and conditionally writes eight bytes with implicit supervisor
+permissions. Linear table-base addition and descriptor bytes can wrap at
+2^32. A descriptor spanning two pages checks write permission on both pages
+when A=0, including a read-only first page whose bytes do not contain A.
+An already-accessed descriptor skips that write. Null data selectors skip table
+access; null SS reports #GP(0).
+
+Segment/page checks precede publication. Successful loading publishes the
+visible selector, hidden cache and coupled GPR or stack update together;
+a failed explicit operand, descriptor check or accessed write preserves all
+of them. POP uses the old SS.D/B for its stack update, including preserving
+ESP's high word with a 16-bit stack. A/D page effects remain visible, and a
+missing physical backing is separate from a guest exception. Active alignment
+checking requires an explicit before/after-paging choice; a misaligned
+store never publishes data. The qualified legacy selector operands report
+#AC before a competing #PF on both local core classes. The original CPU
+matrix also distinguishes a four-byte far-pointer offset from word-sized
+MOV/POP/PUSH selector accesses at addresses aligned to two but not four bytes.
+This observation is specific to these instructions and cannot select the
+priority of an unrelated scalar instruction. MOV/POP SS report the inhibition
+request to the scheduler, while LSS does not create that request.
+
+This is an instruction-transition interface, matching the scope of the x64
+far-pointer transition helper. Its caller owns original-byte fetch and
+authentication, EIP/RF completion, persistent interruptibility, asynchronous
+event arbitration and fault delivery. It is not a complete i386 dispatcher or
+legacy task/call-gate engine. Null-loaded unusable caches retain opaque old
+fields; those fields are not observable as a valid segment or evidence for a
+later mode switch. Reserved descriptor state outside the loaded-cache contract
+fails explicitly. Processor profiles are bound by the caller, never guessed
+from the host.
+
+The original-instruction tests independently author GDT/LDT entries and raw
+selector instructions in KVM. They compare every GPR, all usable segment
+cache fields, selectors/unusable bits, explicit operand and descriptor bytes,
+fault vector/error/CR2 and the old fault-stack pointer. A following NOP passes
+the MOV/POP SS debug-inhibition boundary without changing registers. The
+exception handler itself remains an oracle fixture; these results do not
+qualify a software i386 event-delivery implementation. Hidden fields of null
+unusable caches and unrelated exception-frame memory are excluded explicitly.
+The matrix records 174,368 comparisons across legacy paging and PAE, both SDKs,
+and the local P/E core classes. The cross-page accessed-write cases run
+separately after the main matrix; their counts are included once. The three
+shared paged/continuation suites also export 1,032 files per SDK; all are
+byte-identical across the two toolchains. The qualification totals 1,536
+passing tests and 34 explicit skips, including LA57, absent native AMX,
+NeverC's i386 frontend and older SDK interfaces. See
+[the selector-load qualification](evidence/x86-legacy-segment-loads-2026-11-02.json).

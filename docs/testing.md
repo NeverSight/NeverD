@@ -15,6 +15,22 @@ lifetime. A userspace IRQ must wait for KVM's injection window: an immediate
 `KVM_INTERRUPT` while IF=0 is not a valid pending-event oracle.
 See [the generated execution contract](x86-paged-execution.md).
 
+`X86LegacySegmentExecutionTest` in `NeverDX86PagingTests` checks protected
+selector transition admission, null-cache invalidation, accessed-write faults,
+old-SS stack sizing, coupled far-pointer publication, alignment priority and
+physical backing stops. `LegacySegmentLoads/*` executes independent original
+MOV/PUSH/POP/LDS/LES/LSS/LFS/LGS instructions in KVM under legacy paging and PAE.
+It checks 16/32-bit code and operands, address-size and nonflat ModRM/SIB/segment
+combinations, permissions, descriptor/operand page failures and linear wrap.
+Run the complete paging and paged-source suites after changing the common
+rules, plus the continuation source/export, virtualization source and MPX
+context/encoding suites. Preserve raw logs and XML properties; KVM and LA57
+skips are not physical execution evidence. Competing legacy #AC/#PF cases
+require `NEVERD_TEST_LEGACY_ALIGNMENT=before` with affinity `0-11` or `12` on
+the recorded i9-13900H; an unbound processor is explicitly skipped. That binding
+is instruction-specific and does not set the x64 scalar profile. See
+[legacy selector loads](x86-legacy-segments.md#explicit-selector-instructions).
+
 `NeverDX86PagingTests` checks the owned x86 paging and paged V6 event interfaces.
 Its KVM oracle executes original loads, stores and instruction fetches in
 legacy i386, PAE and IA-32e modes, including cross-page faults and failures

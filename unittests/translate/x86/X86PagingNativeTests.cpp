@@ -11,15 +11,19 @@
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedEventDelivery.h"
+#include "neverd/translate/X86/X86LegacySegmentExecution.h"
 #include "neverd/translate/X86/X86PagedMemory.h"
 #include "neverd/translate/X86/X86Paging.h"
 
 #include "llvm/Support/Error.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #if defined(__linux__) && defined(__x86_64__)
@@ -633,6 +637,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
   RecordProperty("event_cpu_comparisons", EventComparisons);
 }
 
+#include "X86LegacySegmentLoadNativeTests.inc"
 #include "X86LegacySegmentNativeTests.inc"
 
 INSTANTIATE_TEST_SUITE_P(PagingModes, X86PagingNativeTest,

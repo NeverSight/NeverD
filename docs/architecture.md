@@ -33,7 +33,12 @@ symbols or instruction semantics.
 operand permissions and complete offset bounds. `X86PagedMemory` composes this
 owner with page walks and 32-bit linear wrap; the native-memory concrete
 adapter applies it to one explicitly bound CS/ES/SS operation. Descriptor
-loading, mode transitions and exception delivery remain separate authorities.
+loading uses `translate/X86/X86LegacySegmentExecution` for explicit legacy
+selector MOV/PUSH/POP and LxS. `ir/X86/X86SegmentDescriptorRules` shares data/stack
+type, privilege, present and cache-field decisions with the x64 continuation
+writer. The legacy transition stages coupled cache/GPR/stack publication over
+paged RAM; its caller retains fetch, EIP/RF, event/shadow and delivery ownership.
+Mode transitions and exception delivery remain separate authorities.
 See [legacy segment operands](x86-legacy-segments.md).
 
 `translate/X86/X86Paging` owns architectural linear-address translation over

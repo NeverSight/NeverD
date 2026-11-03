@@ -317,7 +317,7 @@ The distinction applies to the memory/fault gaps listed below.
 | --- | --- |
 | REP beyond the explicit paged memory-string binding | Long-mode MOVS/STOS/LODS and REPE/REPNE CMPS/SCAS now own element progress, page/alignment faults, handler repair/IRET/retry and producer-selected IRQ/NMI boundaries through both C routes. The local processor profile binds addr32 entry normalization and destination-first CMPS reads. INS/OUTS now use the explicit paged device binding below. Legacy segmented progress, physical device read-ahead, fast-string event timing and other processor profiles remain separate. Native LLVM/NeverC completion interfaces continue to own all seven families in their executing environment. |
 | SNP/RMP and VMGEXIT outside explicit native bindings | Nine appended decoder IDs and native LLVM/NeverC APIs now retain exact register/flag completion and memory effects. The [explicit SNP/SEV-ES source bindings](x86-snp-state.md) connect canonical x64 bytes to both C routes, including PVALIDATE address32 and both VMGEXIT prefixes. Unbound ordinary ABI lifting, other source prefixes/modes, faults/restart and physical RMP/SEV-ES service execution remain unqualified. The [dated census](evidence/x86-snp-census-2026-10-31.json) records the earlier missing implementation. |
-| LDS, LES, LSS, LFS, LGS | LLVM provides 13 native interfaces and NeverC the nine valid long-mode builtins. Explicit V6 owns both destinations and declared clear/preserve null FS/GS policies. The paged binding adds all CPLs, null SS at CPL0..2, ordered descriptor/page/alignment faults, handler repair/retry and event scheduling, qualified on both local hybrid core types. i386/compatibility forms and other processor qualification remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |
+| LDS, LES, LSS, LFS, LGS | LLVM provides 13 native interfaces and NeverC the nine valid long-mode builtins. Explicit V6 owns both destinations and declared clear/preserve null FS/GS policies. The paged binding adds all CPLs, null SS at CPL0..2, ordered descriptor/page/alignment faults, handler repair/retry and event scheduling, qualified on both local hybrid core types. The [protected legacy transition](x86-legacy-segments.md#explicit-selector-instructions) now owns all five i386 LxS forms with staged cache/GPR publication over paged RAM. The enclosing legacy/compatibility dispatcher, event delivery and other processor qualification remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |
 | Unowned and i386 3DNow! operations | All 24 operations now retain their original instruction inside the owned x64 MMX/x87 context, qualified below. Typed/unowned and i386 paths still require a state contract. Strict and portable concrete execution refuse processor-dependent values. Physical execution and pending-#MF/stack-#SS behavior remain unqualified. LLVM and NeverC provide the native packed-value interfaces. |
 | Unowned FNOP/EMMS/FEMMS | Waiting behavior and tag/payload transitions require an owned x87 context. Owned x64 native and explicit portable paths retain all three instructions, including FEMMS payload invalidation; typed/unowned and i386 paths still refuse rather than emit NOP. Portable MMX data operations remain outside the admitted profile. |
 | VMRUN outside explicit native SVM | LLVM/NeverC provide the returning fourteen-GPR/user-xstate context. The `amd-svm-v10` source profile connects canonical raw addr64/addr32 VMRUN to that API through both C routes, with explicit GPR/SIMD/MXCSR/CR2 publication and a VMEXIT stop. Ordinary function-ABI lifting and arbitrary guest supervisor/memory environments remain outside that declared domain. See [the contract and IDA counterexample](x86-vmrun-context.md). |
@@ -3684,3 +3684,24 @@ source transport runs plus 504 packed-constant comparisons. The 144 SDK output
 differences are explicitly classified as unused LLVMC result copies; 677 other
 C/header exports are identical. Physical RAO/AVX-512, complete i386 execution
 and the remaining global state environments are not inferred from these counts.
+
+
+## Protected legacy selector transitions
+
+[Explicit legacy selector execution](x86-legacy-segments.md#explicit-selector-instructions)
+now executes MOV Sreg/rm in both directions, PUSH/POP and all five LxS
+instructions over bound protected-mode caches and paged RAM. Shared descriptor
+rules serve both the i386 concrete transition and x64 continuation lowering.
+The executor retains independent code/operand/address/stack sizes, segmented
+source addresses, GDT/LDT permissions, ordered accessed writes, coupled
+publication and fault/backing distinctions. It returns MOV/POP SS's inhibition
+request to the scheduler. This adds the segment-load state transition missing
+from the earlier cached-operand work.
+
+The interface deliberately leaves instruction fetch, EIP/RF, persistent
+interruptibility and fault/event delivery with the enclosing legacy executor.
+It does not complete that dispatcher, task/call gates, real/VM86 state,
+software SMM, SGX execution/AEX/EPCM or the other listed machine-environment
+contracts. The native compiler interfaces already transport these instructions;
+no new builtin, final LLVM release, production SDK pin or gitlink update is
+claimed by this transition change.

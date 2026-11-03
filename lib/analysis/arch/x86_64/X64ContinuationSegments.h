@@ -11,6 +11,7 @@
 #define NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64CONTINUATIONSEGMENTS_H
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/ir/X86/X86SegmentDescriptorRules.h"
 #include "neverd/ir/intrinsics/X86/X86SegmentRegisters.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -55,6 +56,10 @@ void writeX64FlatContinuationSegment(Writer &W, bool Code, NdVar Selector,
 
 template <class Writer> class X64ContinuationSegments {
 protected:
+  using Value = NdVar;
+  using Rules =
+      neverd::detail::X86SegmentDescriptorRules<X64ContinuationSegments>;
+  friend Rules;
   using State = X64ContinuationStateV1;
   using V5 = X64ContinuationStateV5;
   using V6 = X64ContinuationStateV6;
@@ -91,6 +96,11 @@ protected:
 
   NdVar shifted(NdVar V, unsigned Bits) {
     return op(NdOp::INT_RIGHT, {V, k(Bits)});
+  }
+
+  NdVar bitOr(NdVar A, NdVar B) { return op(NdOp::INT_OR, {A, B}); }
+  NdVar left(NdVar A, unsigned Bits) {
+    return op(NdOp::INT_LEFT, {A, k(Bits)});
   }
 
   NdVar eq(NdVar A, NdVar B) { return op(NdOp::INT_EQUAL, {A, B}, 1); }
@@ -227,23 +237,14 @@ protected:
     W.storeIf(eq(masked(D.Value, uint64_t{1} << 40), k(0)), Address, Byte);
   }
 
-  NdVar segmentBase(NdVar Descriptor) {
-    return op(NdOp::INT_OR, {masked(shifted(Descriptor, 16), 0xffffff),
-                             masked(shifted(Descriptor, 32), 0xff000000)});
-  }
+  NdVar segmentBase(NdVar Descriptor) { return Rules::base(*this, Descriptor); }
 
   NdVar segmentLimit(NdVar Descriptor) {
-    auto Limit = op(NdOp::INT_OR, {masked(Descriptor, 0xffff),
-                                   masked(shifted(Descriptor, 32), 0xf0000)});
-    Limit =
-        choose(ne(masked(Descriptor, uint64_t{1} << 55), k(0)),
-               op(NdOp::INT_OR, {op(NdOp::INT_LEFT, {Limit, k(12)}), k(0xfff)}),
-               Limit);
-    return Limit;
+    return Rules::limit(*this, Descriptor);
   }
 
   NdVar segmentAttributes(NdVar Descriptor) {
-    return op(NdOp::INT_OR, {masked(shifted(Descriptor, 40), 0xf0ff), k(1)});
+    return Rules::attributes(*this, Descriptor);
   }
 
   void segment(uint64_t Offset, NdVar Selector, NdVar Descriptor,
@@ -410,33 +411,21 @@ protected:
       W.rejectIf(Null);
     }
     const auto D = descriptor(Selector);
-    const auto Access = shifted(D.Value, 40);
     if constexpr (Writer::FaultableMemory) {
-      const auto Error = masked(Selector, 0xfffc);
-      const auto DPL = masked(shifted(Access, 5), 3);
-      if (SS) {
-        faultIf(either(ne(masked(Selector, 3), CPL),
-                       either(ne(masked(Access, 0x1a), k(0x12)), ne(DPL, CPL))),
-                13, Error);
-      } else {
-        faultIf(either(eq(masked(Access, 0x10), k(0)),
-                       eq(masked(Access, 0x0a), k(8))),
-                13, Error);
-        faultIf(both(ne(masked(Access, 12), k(12)),
-                     either(less(DPL, masked(Selector, 3)), less(DPL, CPL))),
-                13, Error);
-      }
-      faultIf(eq(masked(Access, 0x80), k(0)), SS ? 12 : 11, Error);
-    } else if (SS) {
-      W.rejectIf(ne(masked(Selector, 3), k(0)));
-      // Present writable data, DPL=CPL=0; expand-down and A are independent.
-      W.rejectIf(ne(masked(Access, 0xfa), k(0x92)));
+      Rules::checkData(*this, SS, Selector, D.Value, CPL);
     } else {
-      W.rejectIf(ne(masked(Access, 0x90), k(0x90)));
-      W.rejectIf(eq(masked(Access, 0x0a), k(8))); // Execute-only code.
-      const auto DPL = masked(shifted(Access, 5), 3);
-      W.rejectIf(
-          both(ne(masked(Access, 12), k(12)), less(DPL, masked(Selector, 3))));
+      const auto Access = shifted(D.Value, 40);
+      if (SS) {
+        W.rejectIf(ne(masked(Selector, 3), k(0)));
+        // Present writable data, DPL=CPL=0; expand-down and A are independent.
+        W.rejectIf(ne(masked(Access, 0xfa), k(0x92)));
+      } else {
+        W.rejectIf(ne(masked(Access, 0x90), k(0x90)));
+        W.rejectIf(eq(masked(Access, 0x0a), k(8))); // Execute-only code.
+        const auto DPL = masked(shifted(Access, 5), 3);
+        W.rejectIf(both(ne(masked(Access, 12), k(12)),
+                        less(DPL, masked(Selector, 3))));
+      }
     }
     // Explicit operands are captured before the conditional descriptor write.
     accessed(D);
