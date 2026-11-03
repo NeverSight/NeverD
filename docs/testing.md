@@ -5007,7 +5007,12 @@ event repaints the close button even without a separate hover-leave event.
 ordinary and Quick Start dialogs, with and without an early native handle,
 through both `show()` and `exec()`. It compares desktop pixels over a known
 background with the widget's alpha-composited shadow; a widget-only capture
-cannot detect an opaque native window. The test requires an accessible Windows
+cannot detect an opaque native window. It also requires the native client area
+to equal the complete window rectangle: keeping `WS_THICKFRAME` for resizing
+must not let Windows inset the client origin or its size. The native frame
+filter handles `WM_NCCALCSIZE` before coordinate mapping and hit testing;
+the desktop pixel comparison runs at both 100% and 150% scale in CI.
+The test requires an accessible Windows
 desktop and skips other platform plugins, including offscreen. Run it directly:
 
 ```powershell
@@ -5126,6 +5131,8 @@ the maximized geometry under the window manager's control. The Wayland
 runner supplies trusted pointer input and activation for restore-button
 checks. Set the initial workbench size before opening its file, since that
 operation starts its first native show and asynchronous configure.
+The initial window fits inside the available work area with room for the
+complete 60-pixel drag on every edge, including small Windows runner desktops.
 These workbench cases use the fixture worker when it is built. Native drag
 coverage requires a native platform plugin and window manager; offscreen
 reports it as skipped.

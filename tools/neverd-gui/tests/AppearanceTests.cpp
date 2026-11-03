@@ -244,28 +244,13 @@ private slots:
         QPainter painter(&composite);
         painter.drawImage(QPoint(), painted, QRect(0, 0, 1, 1));
       }
+      QTRY_COMPARE(capture().pixelColor(0, 0), composite.pixelColor(0, 0));
       const auto captures = qEnvironmentVariable("NEVERD_APPEARANCE_CAPTURES");
       if (!captures.isEmpty()) {
         QDir().mkpath(captures);
-        QVERIFY(painted.save(captures + '/' + QTest::currentDataTag() +
-                             "-painted.png"));
-        QVERIFY(dialog->screen()->grabWindow(0).save(
-            captures + '/' + QTest::currentDataTag() + "-screen.png"));
         QVERIFY(capture().save(captures + '/' + QTest::currentDataTag() +
                                "-desktop.png"));
       }
-      qInfo() << "Shadow coordinates" << dialog->geometry()
-              << dialog->mapToGlobal(QPoint()) << dialog->devicePixelRatioF()
-              << painted.size() << painted.devicePixelRatio()
-              << painted.pixelColor(0, 0) << composite.pixelColor(0, 0)
-              << capture().size() << capture().devicePixelRatio()
-              << capture().pixelColor(0, 0);
-#ifdef Q_OS_WIN
-      qInfo() << "Shadow native frame" << frame.left << frame.top << frame.right
-              << frame.bottom << origin.x << origin.y
-              << GetDpiForWindow(handle);
-#endif
-      QTRY_COMPARE(capture().pixelColor(0, 0), composite.pixelColor(0, 0));
     };
     if (modal) {
       QTimer::singleShot(0, dialog.get(), [&] {
