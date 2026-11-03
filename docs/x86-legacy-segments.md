@@ -337,6 +337,9 @@ types, 85,120 scalar regression comparisons, 946 passing tests and two LA57
 skips. The retained 1,032 exports per SDK agree byte for byte. Native LLVM
 code16 SYSEXIT32 compilation and NeverC's absent i386 frontend target remain
 separate from this qualified software execution interface.
+After merging the subsequent `dev` source-address changes, 154 focused tests
+and 9,648 original CPU comparisons pass on the resulting tree. The evidence
+records this integration separately and retains both SDK build inputs.
 
 ## Protected IRET and far returns
 
