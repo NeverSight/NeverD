@@ -6275,6 +6275,18 @@ similar identifiers and transactional diagnostics across all three data models.
 record/enum kinds, declared size_t and va_list, fixed builtin precedence, and
 recovery after unknown or incompatible type words across those models.
 
+`HeaderLibrary.LayoutComparisonsFollowEachMergeAndGrowingConflicts` checks
+same-size, different-alignment overrides across ILP32, LP64 and LLP64. Reverse
+declaration order forces conflicts to propagate through multiple rounds;
+by-value prototypes must observe the resulting opaque records, pointers stay
+usable, and separate merges with matching layouts remain unaffected.
+`HeaderLibrary.EmptyLibrariesKeepMissingNamesAndOrdinaryIdentifiers` checks
+empty imports, including removed ordinals, without admitting missing type
+dependencies or a prototype that collides with a typedef.
+`HeaderLibrary.EmptyLibrariesStillCheckDifferentLayoutRules` keeps prototype
+rejection for different data models under the same ABI and for different
+record ABIs under the same data model.
+
 `DWARFTypeImportGo.ReadsGosStructuresAndFuncValues` builds a real Go program
 with the selected `NEVERD_TEST_GO` compiler (or `go` on PATH). It checks both
 legacy unmarked result pointers and current marked results, including input

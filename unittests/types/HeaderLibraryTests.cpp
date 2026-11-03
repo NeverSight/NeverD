@@ -12,6 +12,8 @@
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
 
+#include <memory>
+
 using namespace neverd::types;
 
 namespace {
@@ -874,6 +876,129 @@ TEST(HeaderLibrary, SupplementsPreservePrimaryDeclarationsAndRejectChangedABI) {
   EXPECT_EQ(Merge.Prototypes, 2u);
   EXPECT_EQ(Merge.Conflicts, (std::vector<std::string>{"Holder"}));
   EXPECT_FALSE(Primary.find("Holder")->Record->Defined);
+}
+
+TEST(HeaderLibrary, EmptyLibrariesKeepMissingNamesAndOrdinaryIdentifiers) {
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LLP64, DataModel::LP64}) {
+    TypeLibrary Headers(Model);
+    ASSERT_TRUE(parseCTypes(R"(
+      struct Value { unsigned long long Bits; };
+      typedef struct Value VALUE;
+      struct Holder { VALUE Member; };
+      typedef int Reserved;
+      void Valid(struct Holder Value);
+    )",
+                            Headers)
+                    .ok());
+    auto Missing = std::make_shared<FunctionDef>();
+    Missing->Return = makeBuiltin(Builtin::Void);
+    Missing->Params.push_back(
+        {"Value", makeNamed("Missing", TypeKind::Struct)});
+    Headers.definePrototype("ByMissing", Missing);
+    Headers.definePrototype("Reserved", Headers.prototypes().lookup("Valid"));
+
+    for (bool RemovedOrdinal : {false, true}) {
+      TypeLibrary Program(Model);
+      if (RemovedOrdinal) {
+        ASSERT_TRUE(
+            parseCTypes("struct Previous { char Byte; };", Program).ok());
+        ASSERT_TRUE(Program.remove("Previous"));
+      }
+      const auto Merge = mergeHeaderTypes(Program, Headers);
+      EXPECT_TRUE(Merge.Conflicts.empty());
+      EXPECT_EQ(Merge.Types, Headers.size());
+      EXPECT_EQ(Merge.Prototypes, 1u);
+      EXPECT_NE(Program.findPrototype("Valid"), nullptr);
+      EXPECT_EQ(Program.findPrototype("ByMissing"), nullptr);
+      EXPECT_EQ(Program.findPrototype("Reserved"), nullptr);
+      if (RemovedOrdinal)
+        EXPECT_EQ(Program.byOrdinal(1), nullptr);
+      for (const LocalType *Type : Headers.types()) {
+        const LocalType *Copy = Program.find(Type->Name);
+        ASSERT_NE(Copy, nullptr);
+        EXPECT_EQ(Copy->Origin, TypeOrigin::Header);
+        EXPECT_EQ(sizeOf(Program, Type->Name), sizeOf(Headers, Type->Name));
+        const auto Named = makeNamed(Type->Name, Type->Kind);
+        EXPECT_EQ(Program.alignOf(*Named), Headers.alignOf(*Named));
+      }
+    }
+  }
+}
+
+TEST(HeaderLibrary, EmptyLibrariesStillCheckDifferentLayoutRules) {
+  TypeLibrary LongHeaders(DataModel::LP64);
+  LongHeaders.setRecordABI(RecordABI::Microsoft);
+  ASSERT_TRUE(parseCTypes("long ByLong(long Value);", LongHeaders).ok());
+  TypeLibrary Windows(DataModel::LLP64);
+  Windows.setRecordABI(RecordABI::Microsoft);
+  EXPECT_EQ(mergeHeaderTypes(Windows, LongHeaders).Prototypes, 0u);
+  EXPECT_EQ(Windows.findPrototype("ByLong"), nullptr);
+
+  TypeLibrary X86(DataModel::ILP32);
+  X86.setRecordABI(RecordABI::I386SystemV);
+  ASSERT_TRUE(parseCTypes("double ByDouble(double Value);", X86).ok());
+  TypeLibrary Arm(DataModel::ILP32);
+  Arm.setRecordABI(RecordABI::AAPCS32);
+  const auto Double = makeBuiltin(Builtin::Double);
+  ASSERT_EQ(Arm.sizeOf(*Double), X86.sizeOf(*Double));
+  ASSERT_NE(Arm.alignOf(*Double), X86.alignOf(*Double));
+  EXPECT_EQ(mergeHeaderTypes(Arm, X86).Prototypes, 0u);
+  EXPECT_EQ(Arm.findPrototype("ByDouble"), nullptr);
+}
+
+TEST(HeaderLibrary, LayoutComparisonsFollowEachMergeAndGrowingConflicts) {
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LLP64, DataModel::LP64}) {
+    TypeLibrary Parsed(Model);
+    ASSERT_TRUE(parseCTypes(R"(
+      struct Base { unsigned long long Value; };
+      typedef struct Base BASE;
+      struct __declspec(align(8)) First { BASE Value; };
+      struct Second { struct First Value; };
+      struct Again { BASE Value; };
+      void ByValue(struct Second Value);
+      void ByPointer(struct Second *Value);
+      void ByAlias(BASE Value);
+    )",
+                            Parsed)
+                    .ok());
+    // First keeps its explicit alignment even when BASE changes. Reversed
+    // ordinal order therefore makes its conflict reach Second only on the
+    // next propagation round.
+    TypeLibrary Headers(Model);
+    const auto Types = Parsed.types();
+    for (auto At = Types.rbegin(); At != Types.rend(); ++At)
+      Headers.define(**At);
+    for (const auto &Entry : Parsed.prototypes())
+      Headers.definePrototype(Entry.first().str(), Entry.second);
+
+    for (bool Matching : {true, false, true}) {
+      TypeLibrary Program(Model);
+      ASSERT_TRUE(parseCTypes(Matching
+                                  ? "struct Base { unsigned long long Value; };"
+                                  : "struct Base { char Bytes[8]; };",
+                              Program)
+                      .ok());
+      const auto Merge = mergeHeaderTypes(Program, Headers);
+      EXPECT_EQ(sizeOf(Program, "BASE"), 8u);
+      EXPECT_NE(Program.findPrototype("ByPointer"), nullptr);
+      if (Matching) {
+        EXPECT_TRUE(Merge.Conflicts.empty());
+        EXPECT_EQ(Merge.Types, 4u);
+        EXPECT_EQ(Merge.Prototypes, 3u);
+        EXPECT_TRUE(Program.find("Second")->Record->Defined);
+      } else {
+        EXPECT_EQ(Merge.Conflicts,
+                  (std::vector<std::string>{"Again", "First", "Second"}));
+        EXPECT_EQ(Merge.Types, 1u);
+        EXPECT_EQ(Merge.Prototypes, 1u);
+        EXPECT_FALSE(Program.find("Second")->Record->Defined);
+        EXPECT_EQ(Program.findPrototype("ByValue"), nullptr);
+        EXPECT_EQ(Program.findPrototype("ByAlias"), nullptr);
+      }
+    }
+  }
 }
 
 TEST(HeaderLibrary, PrimaryAliasesExcludeSupplementalFunctionNames) {
