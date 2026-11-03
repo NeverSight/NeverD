@@ -457,14 +457,15 @@ std::string LLVMCWriter::namedImageObject(va_t Addr) const {
   if (Raw.empty()) {
     // As the listing names it: a pointer slot, or the size of its accesses.
     const auto Use = ImageDataUses.find(Addr);
+    const auto *Widths = Opts.dataAccessWidths();
     const bool PointerSlot =
         (Img && (Img->CodePtrRelocSlots.count(Addr) ||
                  Img->DataPtrRelocSlots.count(Addr))) ||
         (Use != ImageDataUses.end() && Use->second.CallSlot &&
-         !(Opts.AccessWidths && Opts.AccessWidths->at(Addr).has_value()));
+         !(Widths && Widths->at(Addr).has_value()));
     std::optional<uint64_t> AccessBytes;
-    if (Opts.AccessWidths) {
-      if (const auto Width = Opts.AccessWidths->at(Addr); Width && *Width)
+    if (Widths) {
+      if (const auto Width = Widths->at(Addr); Width && *Width)
         AccessBytes = *Width;
     } else if (Use != ImageDataUses.end() &&
                Use->second.AccessBytes.size() == 1) {
