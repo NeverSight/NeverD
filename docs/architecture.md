@@ -44,7 +44,13 @@ caches while retaining descriptor/frame RAM effects and CR2 on later faults.
 TSS stack selection, conforming code and privilege changes stay in that owner;
 `ir/X86/X86ExceptionDelivery` shares event kinds, error-code vector sets and
 recursive-fault classification with IA-32e. The legacy entry is an internal
-execution interface, not a general i386 source dispatcher or an IRET/task engine.
+execution interface, not a general i386 source dispatcher or a task engine.
+`translate/X86/X86LegacyFrameReturn` adds protected 16/32-bit IRET/RETF to that
+executor, retaining ordered descriptor writes and IRET NMI unblocking on later
+faults. `ir/X86/X86ReturnRules` shares code-return privilege checks, inaccessible
+data-cache invalidation and IRET flag restoration with the x64 source and
+faultable owners. Frame access order and mode-specific stack transitions remain
+in their respective owners, with explicit target profiles.
 See [legacy segment operands](x86-legacy-segments.md).
 
 `translate/X86/X86Paging` owns architectural linear-address translation over
@@ -4233,6 +4239,10 @@ Supplemental callee-signature recovery scopes the same immutable inventories
 and returning-stack memo to its reader. Its omitted-body and warmup paths
 therefore share the ordinary LowIR worker's reuse rules; these records retire
 when that reader ends, independently of any longer-lived signature memo.
+The signature memo lazily retains the image's exact no-return name index as
+well. Supplemental CFGs and their nested register-preservation proofs reuse it;
+indexes with resolver or declaration callbacks stay outside nested proofs to
+avoid re-entry. Readers without an image memo retain the live name lookup.
 The physical C++ prologue reader delays index construction until its bounded
 raw shape check finds a candidate. Nonmatching entries pay only for those raw
 reads. A candidate still pays the index cost and must pass every immutable

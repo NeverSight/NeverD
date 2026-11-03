@@ -41,6 +41,24 @@ CR2 and retained ordinary RAM remain checked. Repeat these tests on the
 qualified P/E cores and both SDKs; preserve raw failing probes as diagnostics.
 See [the legacy execution contract](x86-legacy-segments.md#protected-instruction-and-event-execution).
 
+`LegacyReturns/*` in `NeverDX86PagingTests` compares original protected IRET,
+RETF and RETF imm16 across legacy paging/PAE, all CPLs, 16/32-bit code,
+operands and stack sizes, nonflat/conforming/LDT code, high ESP, wrapping,
+descriptor/frame faults, flags and accessed-descriptor/frame aliases. Adjacent
+page/segment boundaries and word-aligned dword frames verify two-byte CS/SS
+accesses independently of the frame slot size. Adjacent
+execution breakpoints witness restored RF independently of debugger flags.
+INT/IRQ/NMI round trips and explicit handler-boundary page repair followed by
+original IRETD/retry connect entry and return without assuming a general i386
+handler dispatcher. It reports Linux VMX #AC/NMI reinjection discrepancies
+separately. Bind `NEVERD_TEST_LEGACY_ALIGNMENT=before` on the qualified P/E
+cores for competing #AC/#PF cases. The software tests retain backing-stop
+effects, retry without duplicate pops, refuse task/VM86/debug boundaries and
+verify checked-error propagation. Run full paging, paged execution,
+continuation source/export, virtualization source and MPX context/encoding
+on both SDKs after changes to the shared return rules; also repeat the return
+matrix on the qualified E core. See [protected returns](x86-legacy-segments.md#protected-iret-and-far-returns).
+
 `X86LegacySegmentExecutionTest` in `NeverDX86PagingTests` checks protected
 selector transition admission, null-cache invalidation, accessed-write faults,
 old-SS stack sizing, coupled far-pointer publication, alignment priority and
@@ -3709,6 +3727,12 @@ address provenance when function bodies are copied and moved.
 `CalleeSignatureMemo.WideOperandsCountAgainstTheBodyBudget` checks that expanded
 operand storage counts against the memo's byte budget, including retained
 allocations after the active operand list shrinks.
+`CalleeSignatureMemo.NoReturnNamesFollowTheAdoptedImage` checks name-index reuse
+and replacement across image and symbol inventories.
+`InternalNoReturn.RegisterPreservationReusesOnlyImageNames` compares cached and
+live lookup on PE/ELF call chains and keeps resolver/declaration callbacks out
+of nested register proofs. Both tests analyze synthetic bytes without executing
+them.
 
 ## Acceleration libraries
 

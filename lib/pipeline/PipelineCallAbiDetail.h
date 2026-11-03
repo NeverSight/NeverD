@@ -49,6 +49,9 @@ bool needsCallSignatureRecovery(const CallArgumentConvention *Convention);
 namespace detail {
 class AbsoluteRelocationRootIndex;
 } // namespace detail
+namespace libc {
+class NoReturnTargetIndex;
+} // namespace libc
 
 /// What reading the signature bodies of omitted callees read of each callee
 /// (recoverModuleCallAbi): how its lift's blocks count against the bound on
@@ -282,6 +285,9 @@ struct OmittedCalleeMemo {
   /// The absolute relocations of the image the memo adopted, indexed by
   /// target for the lifts of the callees read of it, kept like codeOwners.
   const detail::AbsoluteRelocationRootIndex &absoluteRelocationRoots();
+  /// The same exact no-return names used by every supplemental signature
+  /// lift of this image. Declarations remain owned by the ordinary pipeline.
+  const libc::NoReturnTargetIndex &noReturnTargets();
   /// The addresses that name a runtime routine one intrinsic models in the
   /// image the memo adopted (runtimeRoutineCallsOf), read for the
   /// conversions of the callees read of it where they first need them, and
@@ -303,6 +309,7 @@ private:
   std::optional<ExecutableCodeOwnerIndex> CodeOwners;
   std::shared_ptr<const detail::AbsoluteRelocationRootIndex>
       AbsoluteRelocationRoots;
+  std::shared_ptr<const libc::NoReturnTargetIndex> NoReturnTargets;
   std::optional<std::map<va_t, Intrinsic>> RuntimeRoutineCalls;
   std::optional<std::vector<va_t>> CodePointerTargets;
   size_t Bytes = 0;

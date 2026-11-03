@@ -46,6 +46,7 @@ class X64ContinuationEvents : private X64ContinuationSegments<Writer> {
   using Base::eq;
   using Base::faultIf;
   using Base::InstructionDescriptors;
+  using Base::interruptReturnFlags;
   using Base::k;
   using Base::less;
   using Base::load;
@@ -178,7 +179,7 @@ public:
       OldCPL =
           masked(load(offsetof(V5, CS) + offsetof(Segment, Selector), 2), 3);
     }
-    const auto Code = returnCode(CS, CPL, OldCPL);
+    const auto Code = returnCode(CS, OldCPL);
     if constexpr (Writer::FaultableMemory)
       accessed(Code);
     const auto Compatibility = eq(masked(Code.Value, uint64_t{1} << 53), k(0));
@@ -198,24 +199,8 @@ public:
     const auto Stack = returnStack(CS, CPL, SS, NullSS);
     const auto CompatSP =
         compatibilityStack(SP, NewSP, segmentAttributes(Stack.Value));
-    // A word IRET retains AC/ID/VIF/VIP. Input RF clears at instruction entry;
-    // only the wider IRET forms restore RF from the frame (SDM 20.3.1.1).
-    auto NewFlags = op(NdOp::INT_OR, {masked(Flags, 0x3d7fd7), k(2)});
-    if (Bytes == 2)
-      NewFlags =
-          op(NdOp::INT_OR,
-             {NewFlags, masked(load(offsetof(State, RFlags)), 0x3c0000)});
-    if constexpr (Writer::FaultableMemory) {
-      const auto OldFlags = load(offsetof(State, RFlags));
-      const auto IOPL = masked(shifted(OldFlags, 12), 3);
-      const auto Keep =
-          op(NdOp::INT_OR, {choose(less(IOPL, *OldCPL), k(0x200), k(0)),
-                            choose(ne(*OldCPL, k(0)), k(0x183000), k(0))});
-      NewFlags = op(NdOp::INT_OR,
-                    {op(NdOp::INT_AND,
-                        {NewFlags, op(NdOp::INT_XOR, {Keep, k(UINT64_MAX)})}),
-                     op(NdOp::INT_AND, {OldFlags, Keep})});
-    }
+    const auto NewFlags = interruptReturnFlags(
+        load(offsetof(State, RFlags)), Flags, OldCPL.value_or(k(0)), Bytes);
     if constexpr (!Writer::FaultableMemory)
       accessed(Code);
     accessed(Stack);
@@ -280,7 +265,7 @@ public:
     } else {
       Outer = ne(CPL, k(0));
     }
-    const auto Code = returnCode(CS, CPL, OldCPL);
+    const auto Code = returnCode(CS, OldCPL);
     if constexpr (Writer::FaultableMemory)
       accessed(Code);
     const auto Compatibility = eq(masked(Code.Value, uint64_t{1} << 53), k(0));

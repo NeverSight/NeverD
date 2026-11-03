@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <utility>
 
 namespace neverd::translate {
@@ -81,7 +82,7 @@ public:
   llvm::Expected<X86MemoryAccessResult> run() {
     execute();
     if (Failure)
-      return std::move(Failure);
+      return std::move(*Failure);
     return std::move(R);
   }
 
@@ -93,7 +94,7 @@ private:
   uint32_t Flags;
   uint32_t External;
   X86MemoryAccessResult R;
-  llvm::Error Failure = llvm::Error::success();
+  std::optional<llvm::Error> Failure;
 
   bool access(uint32_t Address, unsigned Bytes, Value &V, bool Write = false,
               bool Implicit = true, uint8_t CPL = 0) {
