@@ -44,6 +44,10 @@ The combined `.github/workflows/web-release-qualification.yml` calls this lane
 and the fixed CEF resource qualification at the same selected repository ref.
 Its final `Web release qualification gate` requires both called jobs to report
 `success`; failures, cancellation and skips cannot produce a successful gate.
+When the whole workflow is cancelled, its gate also stops instead of reporting
+a new qualification failure. Otherwise it still checks all three prerequisite
+results, including failures and skips. The CI configuration tests execute the
+gate's shell condition for all 64 combinations of those results.
 The input preflight must also succeed, and rejects missing/invalid URL, SHA-256
 or witness selections before scheduling either expensive reader build.
 It is available both by explicit dispatch and as a reusable release prerequisite.
@@ -53,6 +57,11 @@ The combined lane defaults to the fixed public corpus in the
 to the owning Web, C API, CLI, worker/MCP and build boundaries on `dev` or a pull
 request. The automatic caller uses the same pinned defaults and needs no
 corpus credentials. Missing/invalid explicit overrides still fail preflight.
+A macOS reader builds ICU 77.1 with `scripts/build_web_icu.sh` in its temporary
+directory and passes that installation through `ICU_ROOT`. The script verifies
+the official source archive's pinned SHA-256 before extraction. This preserves
+the reader's exact Unicode policy after Homebrew disabled `icu4c@77`; Homebrew
+supplies only CMake and Ninja for these jobs.
 A publishing workflow must depend on this gate before claiming complete Web
 release qualification. Ordinary CI and unrelated package publication are not
 represented as substitutes for the combined gate.
