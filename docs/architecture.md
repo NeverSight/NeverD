@@ -3867,7 +3867,13 @@ writers read it, so that a caller returning what a `void` routine left in
 RAX returns nothing too. A routine never returns where its name says so, as
 the tables (`isNoReturnFunction`) or a `_Noreturn` prototype
 (`resolvePrototype`) do: an import, a symbol, or an export the image's own
-code calls (`NoReturnTargetIndex`). A name a program may also give a routine
+code calls (`NoReturnTargetIndex`). Its declaration query uses
+`DebugContext::prototypeDoesNotReturn`, which has exactly the resolver's answer.
+The local-type provider can reject missing or returning declarations directly
+from its immutable library, without converting and caching every image symbol's
+parameter/return graph. Positive declarations still pass full prototype
+validation; an unsupported type cannot terminate a CFG path.
+A name a program may also give a routine
 of its own decides only together with the module that exports it
 (`isNoReturnImport`, `WindowsNoReturnImports.inc`): the Universal CRT's
 `terminate` never returns. Its cached and demand-loaded lookups share

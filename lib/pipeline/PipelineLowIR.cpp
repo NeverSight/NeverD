@@ -4583,10 +4583,8 @@ struct PipelineAnalysisCache::Impl {
                   : libc::NoReturnTargetIndex::NameResolver(),
               Dbg ? libc::NoReturnTargetIndex::DeclaredNoReturn(
                         [Dbg, &Img](llvm::StringRef Name) {
-                          const std::optional<FunctionSym> Prototype =
-                              Dbg->resolvePrototype(cNameOfStatedName(
-                                  Name, Img.Format, Img.Arch));
-                          return Prototype && Prototype->NoReturn;
+                          return Dbg->prototypeDoesNotReturn(
+                              cNameOfStatedName(Name, Img.Format, Img.Arch));
                         })
                   : libc::NoReturnTargetIndex::DeclaredNoReturn()),
           StackProbes(Img), PointerCallees(collectPointerVariableCallees(Img)),

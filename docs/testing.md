@@ -6565,6 +6565,11 @@ caller at `0x140a3aad4` is an integration witness: its two zero arguments must
 survive omitted-callee recovery and its HighC must compile at O0 and O2.
 `IsNoReturnTarget.ExportsAndDeclaredPrototypesNameNoReturnRoutines` covers
 exports and `_Noreturn` prototypes in the no-return index.
+`DebugContext.NoReturnQueryUsesTheProvidersValidatedPrototype` retains existing
+providers' declaration behavior. `LocalTypesDebugContext.NoReturnQueryMatchesValidatedPrototype`
+compares the cheap declaration query with the full resolver across ILP32, LLP64
+and LP64, including recursive pointer records, variadic declarations, missing
+names and invalid no-return parameter/return types before and after cache fill.
 `HighCReturnJoin.BareReturnBesideATailCallReturnsTheParameter` decompiles
 `if (b) return g(b); return a;` with a direct and an indirect tail call for
 x86-64, i386, ARM and AArch64 (`test_return_join.c`) and requires

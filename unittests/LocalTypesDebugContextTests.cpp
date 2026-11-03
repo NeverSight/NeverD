@@ -51,6 +51,62 @@ public:
 
 } // namespace
 
+TEST(DebugContext, NoReturnQueryUsesTheProvidersValidatedPrototype) {
+  struct Prototypes final : neverd::NullDebugContext {
+    std::optional<neverd::FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      if (Name == "missing")
+        return std::nullopt;
+      neverd::FunctionSym Function;
+      Function.NoReturn = Name == "stop";
+      return Function;
+    }
+  } Context;
+  EXPECT_TRUE(Context.prototypeDoesNotReturn("stop"));
+  EXPECT_FALSE(Context.prototypeDoesNotReturn("returning"));
+  EXPECT_FALSE(Context.prototypeDoesNotReturn("missing"));
+}
+
+TEST(LocalTypesDebugContext, NoReturnQueryMatchesValidatedPrototype) {
+  using namespace neverd;
+  for (auto Model : {types::DataModel::ILP32, types::DataModel::LLP64,
+                     types::DataModel::LP64}) {
+    auto Library = std::make_shared<types::TypeLibrary>(Model);
+    ASSERT_TRUE(types::parseCTypes(R"(
+      typedef struct Node { struct Node *Next; unsigned long Value; } Node;
+      Node *ReadNode(Node *Input);
+      _Noreturn void Stop(Node *Input);
+      _Noreturn void StopWithMessage(const char *Message, ...);
+    )",
+                                   *Library)
+                    .ok());
+    auto BadReturn = std::make_shared<types::FunctionDef>();
+    BadReturn->NoReturn = true;
+    BadReturn->Return =
+        types::makeNamed("MissingType", types::TypeKind::Typedef);
+    Library->definePrototype("BadReturn", BadReturn);
+    auto BadParameter = std::make_shared<types::FunctionDef>();
+    BadParameter->NoReturn = true;
+    BadParameter->Return = types::makeBuiltin(types::Builtin::Void);
+    BadParameter->Params.push_back(
+        {"Input", types::makeBuiltin(types::Builtin::Void)});
+    Library->definePrototype("BadParameter", BadParameter);
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library);
+    for (const char *Name : {"ReadNode", "Stop", "StopWithMessage", "BadReturn",
+                             "BadParameter", "Absent"}) {
+      SCOPED_TRACE(Name);
+      const bool Before = Context.prototypeDoesNotReturn(Name);
+      const auto Signature = Context.resolvePrototype(Name);
+      EXPECT_EQ(Before, Signature && Signature->NoReturn);
+      EXPECT_EQ(Context.prototypeDoesNotReturn(Name), Before);
+    }
+    EXPECT_TRUE(Context.prototypeDoesNotReturn("Stop"));
+    EXPECT_FALSE(Context.prototypeDoesNotReturn("BadReturn"));
+    EXPECT_FALSE(Context.prototypeDoesNotReturn("BadParameter"));
+  }
+}
+
 TEST(LocalTypesDebugContext, SourceCallDeclarationsRetainCompleteValueLayouts) {
   using namespace neverd;
   types::TypeLibrary Library(types::DataModel::LP64);
