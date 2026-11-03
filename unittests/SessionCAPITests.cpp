@@ -3528,11 +3528,11 @@ TEST_F(SessionCAPITest, UserNamesNameDataInSymbolsAndC) {
       std::string::npos);
 }
 
-TEST_F(SessionCAPITest, DataTakesItsListingNameWhereOnlyItsAddressIsTaken) {
+TEST_F(SessionCAPITest, ReturnedImageAddressKeepsStorageAcrossAccessWidths) {
   // The entry calls a reader for each access width, then returns the address
-  // of the data they read, which no symbol names.  Decompiled alone, as the
-  // workbench shows it, the entry names the data as the listing does: by the
-  // width every function's accesses share there.
+  // of the data they read, which no symbol names. Its escaping pointer must
+  // retain the whole object, whether other functions agree on one width,
+  // disagree or never access it. A width-derived scalar is not its extent.
   const auto Bytes32 = [](uint64_t Value) {
     std::string Bytes;
     for (unsigned I = 0; I < 4; ++I)
@@ -3558,10 +3558,9 @@ TEST_F(SessionCAPITest, DataTakesItsListingNameWhereOnlyItsAddressIsTaken) {
     return Entry + Readers;
   };
   const std::string Data = llvm::utohexstr(DataELFData);
-  const std::pair<std::vector<unsigned>, std::string> Cases[] = {
-      {{8}, "qword_"}, {{8, 4}, "unk_"}, {{}, "unk_"}};
-  for (const auto &[Widths, Prefix] : Cases) {
-    SCOPED_TRACE(Prefix + std::to_string(Widths.size()));
+  const std::vector<unsigned> Cases[] = {{8}, {8, 4}, {}};
+  for (const auto &Widths : Cases) {
+    SCOPED_TRACE(Widths.size());
     const auto Input =
         write("listing-names-" + std::to_string(Widths.size()) + ".elf",
               makeDataELF(std::string(8, '\x11'), Program(Widths)));
@@ -3571,11 +3570,11 @@ TEST_F(SessionCAPITest, DataTakesItsListingNameWhereOnlyItsAddressIsTaken) {
     ASSERT_GE(neverd_session_discover_functions(Names),
               static_cast<int>(Widths.size()) + 1);
     const std::string HighC = takeString(neverd_decompile(Names, DataELFEntry));
-    EXPECT_NE(HighC.find("&" + Prefix + Data), std::string::npos) << HighC;
-    // Declared as wide as the accesses the name says.
-    if (Prefix == "qword_")
-      EXPECT_NE(HighC.find("int64_t qword_" + Data + " = "), std::string::npos)
-          << HighC;
+    EXPECT_NE(HighC.find("unsigned char g_" + Data + "_bytes[8] = "),
+              std::string::npos)
+        << HighC;
+    EXPECT_NE(HighC.find("&g_" + Data + "_bytes[0]"), std::string::npos)
+        << HighC;
     const std::string LLVMC =
         takeString(neverd_decompile_llvm(Names, DataELFEntry));
     // LLVMC's loaded-image view keeps one external storage identity. Naming
