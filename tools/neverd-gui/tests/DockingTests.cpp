@@ -676,7 +676,9 @@ private slots:
       previous.setGeometry(normal);
       previous.show();
       QVERIFY(QTest::qWaitForWindowExposed(&previous));
+#ifdef Q_OS_MACOS
       test::NativeWindowStates previousApplied(*previous.windowHandle());
+#endif
       // X11 can quantize a requested size at fractional scale. Save the
       // normal geometry accepted by the window manager.
       QTest::qWait(250);
@@ -714,9 +716,6 @@ private slots:
         normal = previous.normalGeometry();
       geometry =
           legacy ? previous.saveGeometry() : frame->saveWindowedGeometry();
-      qInfo() << "Previous restore fixture" << previous.windowState()
-              << previousApplied.states << previousApplied.count
-              << previous.geometry() << previous.normalGeometry();
 #ifdef Q_OS_MACOS
       if (fullScreen &&
           QGuiApplication::platformName() == QLatin1String("cocoa")) {
@@ -735,7 +734,6 @@ private slots:
     McpConnectionManager mcp;
     GuiSessionBroker broker;
     MainWindow window(session, mcp, broker);
-    test::NativeWindowStates reopenedApplied(*window.windowHandle());
     window.setLayoutPath(project.filePath(QStringLiteral("layout.json")));
     // Startup restores the geometry while the native workbench is still hidden,
     // before a file is loaded and before its first Show event.
@@ -778,35 +776,10 @@ private slots:
         window.activateWindow();
       }
       QVERIFY(QTest::qWaitForWindowActive(&window));
-      class ClickTrace final : public QObject {
-        bool eventFilter(QObject *object, QEvent *event) override {
-          if (event->type() == QEvent::MouseButtonPress ||
-              event->type() == QEvent::MouseButtonRelease ||
-              event->type() == QEvent::MouseButtonDblClick) {
-            auto *mouse = static_cast<QMouseEvent *>(event);
-            qInfo() << "Restore mouse event" << object << event->type()
-                    << mouse->position() << mouse->globalPosition();
-          }
-          return false;
-        }
-      } trace;
-      qApp->installEventFilter(&trace);
       QSignalSpy restoreClicks(restore, &QAbstractButton::clicked);
-      qInfo() << "Before restore click" << window.windowState()
-              << reopenedApplied.states << reopenedApplied.count
-              << window.geometry() << window.normalGeometry()
-              << restore->mapToGlobal(restore->rect().center())
-              << QApplication::widgetAt(restore->mapToGlobal(restore->rect().center()))
-              << restore->underMouse() << QApplication::activePopupWidget()
-              << QApplication::activeModalWidget();
-      const auto recordRestore = qScopeGuard([&] {
-        qInfo() << "After restore click" << restoreClicks.size()
-                << window.windowState() << reopenedApplied.states
-                << reopenedApplied.count << window.geometry()
-                << window.normalGeometry();
-      });
       Pointer pointer;
       QVERIFY(pointer.click(*restore));
+      QTRY_COMPARE(restoreClicks.size(), 1);
       QTRY_VERIFY_WITH_TIMEOUT(!window.isMaximized(), 2000);
     }
     if (maximized &&

@@ -5116,7 +5116,11 @@ tab docking. `explicitDockIgnoresLock` clicks the dock button while locked.
 including opening a recent file, maximizes the workbench, while reopening the
 dialog over a visible workbench preserves its state. `workbenchReopensWindowed`
 checks saved normal/maximized geometry, F11 from either state and legacy
-full-screen settings before loading a file. `oldFullscreenLayoutsKeepStartupGeometry`
+full-screen settings before loading a file. Cocoa full-screen fixtures require
+a foreground test window. After preserving the requested geometry, they finish
+the native full-screen transition and restore the desktop work area before
+creating the reopened workbench; the restore-button check requires a delivered
+click as well as the restored state. `oldFullscreenLayoutsKeepStartupGeometry`
 checks that global and project pane layouts cannot restore full screen.
 `framedWindowEdgesResize` checks native Windows hit targets and edge/corner
 drags on Quick Start and a loaded workbench on Windows, X11 and Wayland,
