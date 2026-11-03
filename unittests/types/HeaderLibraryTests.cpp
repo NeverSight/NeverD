@@ -876,6 +876,60 @@ TEST(HeaderLibrary, SupplementsPreservePrimaryDeclarationsAndRejectChangedABI) {
   EXPECT_FALSE(Primary.find("Holder")->Record->Defined);
 }
 
+TEST(HeaderLibrary, LayoutComparisonsFollowEachMergeAndGrowingConflicts) {
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LLP64, DataModel::LP64}) {
+    TypeLibrary Parsed(Model);
+    ASSERT_TRUE(parseCTypes(R"(
+      struct Base { unsigned long long Value; };
+      typedef struct Base BASE;
+      struct __declspec(align(8)) First { BASE Value; };
+      struct Second { struct First Value; };
+      struct Again { BASE Value; };
+      void ByValue(struct Second Value);
+      void ByPointer(struct Second *Value);
+      void ByAlias(BASE Value);
+    )",
+                            Parsed)
+                    .ok());
+    // First keeps its explicit alignment even when BASE changes. Reversed
+    // ordinal order therefore makes its conflict reach Second only on the
+    // next propagation round.
+    TypeLibrary Headers(Model);
+    const auto Types = Parsed.types();
+    for (auto At = Types.rbegin(); At != Types.rend(); ++At)
+      Headers.define(**At);
+    for (const auto &Entry : Parsed.prototypes())
+      Headers.definePrototype(Entry.first().str(), Entry.second);
+
+    for (bool Matching : {true, false, true}) {
+      TypeLibrary Program(Model);
+      ASSERT_TRUE(parseCTypes(Matching
+                                  ? "struct Base { unsigned long long Value; };"
+                                  : "struct Base { char Bytes[8]; };",
+                              Program)
+                      .ok());
+      const auto Merge = mergeHeaderTypes(Program, Headers);
+      EXPECT_EQ(sizeOf(Program, "BASE"), 8u);
+      EXPECT_NE(Program.findPrototype("ByPointer"), nullptr);
+      if (Matching) {
+        EXPECT_TRUE(Merge.Conflicts.empty());
+        EXPECT_EQ(Merge.Types, 4u);
+        EXPECT_EQ(Merge.Prototypes, 3u);
+        EXPECT_TRUE(Program.find("Second")->Record->Defined);
+      } else {
+        EXPECT_EQ(Merge.Conflicts,
+                  (std::vector<std::string>{"Again", "First", "Second"}));
+        EXPECT_EQ(Merge.Types, 1u);
+        EXPECT_EQ(Merge.Prototypes, 1u);
+        EXPECT_FALSE(Program.find("Second")->Record->Defined);
+        EXPECT_EQ(Program.findPrototype("ByValue"), nullptr);
+        EXPECT_EQ(Program.findPrototype("ByAlias"), nullptr);
+      }
+    }
+  }
+}
+
 TEST(HeaderLibrary, PrimaryAliasesExcludeSupplementalFunctionNames) {
   for (DataModel Model :
        {DataModel::ILP32, DataModel::LLP64, DataModel::LP64}) {

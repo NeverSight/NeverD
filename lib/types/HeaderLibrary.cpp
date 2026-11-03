@@ -10,6 +10,7 @@
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
 
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 
 #include <array>
@@ -272,6 +273,18 @@ HeaderMerge mergeHeaderTypes(TypeLibrary &Library, const TypeLibrary &Headers,
   // one that holds a type the program sizes or aligns otherwise goes, as does
   // any type that names one gone.  A typedef has no layout of its own: it names
   // the program's type, as C binds it.
+  // Definitions stay unchanged until conflicts have propagated. Compare a
+  // dependency's layout once across records and propagation rounds; Gone is
+  // still checked separately as it grows. Do not reuse these comparisons after
+  // the conflicting definitions are removed below.
+  llvm::StringMap<bool> SameLayouts;
+  const auto SameLayout = [&](llvm::StringRef Name) {
+    auto [At, Inserted] = SameLayouts.try_emplace(Name, false);
+    if (Inserted)
+      At->second = sizeOfNamed(Library, Name) == sizeOfNamed(Headers, Name) &&
+                   alignOfNamed(Library, Name) == alignOfNamed(Headers, Name);
+    return At->second;
+  };
   for (bool Changed = true; Changed;) {
     Changed = false;
     for (const std::string &Name : Added) {
@@ -291,10 +304,7 @@ HeaderMerge mergeHeaderTypes(TypeLibrary &Library, const TypeLibrary &Headers,
               Incompatible = true;
           }
       for (const std::string &Held : valueDependencyNames(*Type))
-        if (Gone.contains(Held) ||
-            (LaidOut &&
-             (sizeOfNamed(Library, Held) != sizeOfNamed(Headers, Held) ||
-              alignOfNamed(Library, Held) != alignOfNamed(Headers, Held)))) {
+        if (Gone.contains(Held) || (LaidOut && !SameLayout(Held))) {
           Incompatible = true;
           break;
         }
