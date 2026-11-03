@@ -9,6 +9,7 @@
 
 #include "../../lift/NeverDLiftFixture.h"
 #include "X64PagedNativeCPU.h"
+#include "X64PagedPortDevice.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -421,7 +422,7 @@ TEST_F(X64PagedExecutionTest, NativeAndPartialCommitDomainsRemainExplicit) {
   O.PagingAddressBits = 48;
   O.PagedMemory = true;
   for (const auto &Code : std::vector<std::vector<uint8_t>>{
-           {0xf3, 0x6c}, // REP INS still needs device-side-effect ownership.
+           {0xf2, 0x6c}, // Noncanonical port repeat remains a native boundary.
            {0xf0, 0x48, 0x01,
             0x07},             // Native LOCK is not a host-pointer operation.
            {0x0f, 0x20, 0xd8}, // Native CR3 needs its architectural transition.
@@ -824,6 +825,8 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #endif
 #include "X64PagedFarPointerTests.inc"
 #include "X64PagedFarReturnTests.inc"
+#include "X64PagedPortIOBoundaryTests.inc"
+#include "X64PagedPortIOTests.inc"
 #include "X64PagedRepeatedStringBoundaryTests.inc"
 #include "X64PagedRepeatedStringTests.inc"
 #include "X64PagedReturnTests.inc"

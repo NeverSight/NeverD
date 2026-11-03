@@ -5,6 +5,8 @@
 //===----------------------------------------------------------------------===//
 /// \file
 /// A KVM CPU executes original instruction bytes over an independent RAM copy.
+/// Port exits invoke an explicitly supplied synthetic device. KVM emulates
+/// intercepted port instructions; their results are not bare CPU evidence.
 //===----------------------------------------------------------------------===//
 #ifndef NEVERD_UNITTESTS_TRANSLATE_X86_X64PAGEDNATIVECPU_H
 #define NEVERD_UNITTESTS_TRANSLATE_X86_X64PAGEDNATIVECPU_H
@@ -36,6 +38,24 @@ namespace {
 class X64PagedNativeCPU {
 public:
   static constexpr unsigned Size = 0x40000;
+  void (*PortTransfer)(void *, bool, uint16_t, unsigned, unsigned,
+                       uint8_t *) = nullptr;
+  void *PortContext = nullptr;
+
+  void run() {
+    ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
+    while (Run->exit_reason == KVM_EXIT_IO) {
+      ASSERT_NE(PortTransfer, nullptr) << "unexpected device access";
+      ASSERT_TRUE(Run->io.size == 1 || Run->io.size == 2 || Run->io.size == 4);
+      ASSERT_LE(Run->io.data_offset + uint64_t(Run->io.size) * Run->io.count,
+                uint64_t(RunSize));
+      PortTransfer(PortContext, Run->io.direction == KVM_EXIT_IO_IN,
+                   Run->io.port, Run->io.size, Run->io.count,
+                   reinterpret_cast<uint8_t *>(Run) + Run->io.data_offset);
+      ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
+    }
+  }
+
   int KVM = -1, VM = -1, CPU = -1, RunSize = 0;
   uint8_t *RAM = nullptr;
   kvm_run *Run = nullptr;
@@ -218,14 +238,14 @@ public:
         Run->request_interrupt_window = 1;
       }
     }
-    ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
+    ASSERT_NO_FATAL_FAILURE(run());
     if (Run->exit_reason == KVM_EXIT_IRQ_WINDOW_OPEN) {
       ASSERT_NE(Pending, nullptr);
       ASSERT_TRUE(Run->ready_for_interrupt_injection);
       Run->request_interrupt_window = 0;
       kvm_interrupt Interrupt{Pending->Vector};
       ASSERT_EQ(ioctl(CPU, KVM_INTERRUPT, &Interrupt), 0);
-      ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
+      ASSERT_NO_FATAL_FAILURE(run());
     }
     ASSERT_TRUE(Run->exit_reason == KVM_EXIT_DEBUG ||
                 Run->exit_reason == KVM_EXIT_HLT)

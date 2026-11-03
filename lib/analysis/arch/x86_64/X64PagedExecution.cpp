@@ -40,7 +40,7 @@ struct Transaction {
   X64PagedAlignmentPriority AlignmentPriority;
   std::optional<X64PagedRepeatProfile> RepeatProfile;
   X64ContinuationStateV6 &StagedState;
-  bool Repeated = false;
+  bool Repeated = false, PortIO = false;
   uint8_t RepeatRegisters = 0, RepeatAddressBytes = 0;
   X86MemoryAccessResult Access;
   std::optional<llvm::Error> Error;
@@ -101,6 +101,10 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   auto &Exchange = *reinterpret_cast<X64PagedExchange *>(Opaque);
   auto &T = *static_cast<Transaction *>(Exchange.Transaction);
   const auto Kind = X64PagedAccess(Flags & ~kX64PagedStackAccess);
+  if (Kind == X64PagedAccess::PortIO) {
+    T.PortIO = true;
+    return 1;
+  }
   if (Kind == X64PagedAccess::BeginRepeat) {
     if (!T.RepeatProfile ||
         (*T.RepeatProfile != X64PagedRepeatProfile::ClearLodsCountHigh &&
@@ -326,6 +330,25 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     Exit = Body(NextBytes, ExchangeBytes);
   if (T.Error)
     return std::move(*T.Error);
+  if (T.PortIO) {
+    if (!Options.PortIO)
+      return invalid(
+          "paged port I/O requires a bound device and element profile");
+    auto IO = executeX64PagedPortIO(Next, Memory, Bytes, T.AlignmentPriority,
+                                    *Options.PortIO);
+    if (!IO)
+      return IO.takeError();
+    Last.DeviceTransferCompleted = IO->DeviceTransferCompleted;
+    Last.PortInputBytesWritten = IO->InputBytesWritten;
+    T.Access = IO->Access;
+    if (IO->DeviceUnavailable) {
+      Last.Exit = uint64_t(X64PagedExit::DeviceUnavailable);
+      return Last;
+    }
+    T.Repeated = IO->RepeatContinue;
+    Exit = uint64_t(IO->RepeatContinue ? X64PagedExit::RepeatContinue
+                                       : X64PagedExit(0));
+  }
   if (T.Return) {
     if (T.Return->Interrupt ? !Options.IretAccessOrder
                             : !Options.FarReturnProfile)

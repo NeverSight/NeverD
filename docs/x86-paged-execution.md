@@ -501,8 +501,9 @@ requires no hidden flags checkpoint in the execution context.
 Native IRQ/NMI comparisons replay the observed interruption index. Some fast
 string forms complete multiple elements before accepting the pending event;
 this elementwise binding does not predict a physical CPU's internal grouping.
-Arrival and eligibility remain producer-owned. INS/OUTS still require a
-device-side-effect contract and retain explicit native boundaries.
+Arrival and eligibility remain producer-owned. INS/OUTS use the
+[explicit port device binding](#explicit-port-devices); physical devices and
+read-ahead retain separate native boundaries.
 
 The [REP qualification](evidence/x86-paged-rep-2026-11-02.json) records 759
 passing checks across the fork and r6 SDKs, with two unavailable LA57 checks
@@ -524,3 +525,72 @@ volume 2 CALL/RET/DIV/IDIV/CMOV/CLI/STI/IRET/LSS/LFS/LGS/MOV/PUSH/POP/REP,
 volume 3A paging, exception priority
 and interrupt inhibition, and volume 3B protected-mode virtual interrupts;
 [KVM API](https://www.kernel.org/doc/html/latest/virt/kvm/api.html).
+
+## Explicit port devices
+
+Paged V6 exports admit long-mode scalar `IN/OUT` (DX or imm8) and single or
+F3-repeated `INS/OUTS`, at byte/word/dword widths and 32/64-bit address widths.
+REX.W overrides 66 but the transfer remains capped at a dword; without
+REX.W, 66 selects a word. OUTS applies FS/GS after address truncation; INS always uses ES, whose
+base is ignored in long mode. The strict shared prefix grammar rejects LOCK,
+F2 repeats, duplicate groups and misplaced REX. Ordinary source contracts
+retain their existing native requirements.
+
+Bind `X64PagedExecutionOptions::PortIO` to a synchronous synthetic device and
+one of `X64PagedPortIOProfile`'s explicit element policies. No host port is
+accessed. Permissions precede even a zero-count repeat: CPL at or below IOPL
+bypasses the TSS, otherwise the runtime reads the I/O-map offset and two-byte
+permission window as implicit supervisor memory. Bitmap limits include the
+extra terminator byte; a wide access at port 65535 never wraps its permission
+check to port zero. Permission denial raises #GP(0); paging and physical
+backing failures keep their distinct existing meanings.
+
+Each successful element commits its RAM/register changes, updates the index
+according to DF, and consumes one attempt. Addr32 writes zero-extend the
+updated index and count. Zero count clears RCX's upper half after permission
+checks but does not touch either index. A fault before element completion
+preserves its entry registers; earlier completed elements remain visible.
+The scheduler polls at each published element boundary, including restart at
+the original PC. This is an element execution contract, not a claim about
+physical bus cycles, APIC arrival timing or device prefetch.
+
+`InputBeforeWrite` retains one completed input transfer even when the
+corresponding destination write faults. `InputAfterWriteChecks` checks the
+complete destination before consuming input. `InputBeforeWriteFragments` uses
+prepared translations and retains earlier
+4 KiB write fragments if a later page faults. `PortInputBytesWritten` reports
+these committed bytes even though the element's index/count remain unchanged.
+All three profiles check OUTS memory before output. Fragment qualification
+uses nonaliasing paging structures; it does not establish a hardware policy
+for self-modifying page tables during an operand. `lastResult().DeviceTransferCompleted` identifies that irreversible
+device effect separately from `InstructionCompleted`; a faulting INS can set
+the former while leaving the latter false. Fault repair and IRET retry the
+uncompleted element and may consume the next input value. A discarded input
+must not silently be reused after a guest exception.
+
+A device callback returns an optional value: a value completes exactly one
+transfer; empty returns status 22 (`DeviceUnavailable`) without charging an
+attempt; an error reports a binding failure with no transfer. Output success
+ignores the returned value. Callbacks cannot throw, reenter execution, access
+guest state/RAM, or change the paging binding. The runtime can therefore
+preflight physical backing before invoking the device. An operand or permission backing stop never
+consumes input, even under `InputBeforeWrite`; retry after that repair is safe.
+Backing failure during later fault delivery is different: the attempted INS
+and its device read have already happened. Preserve the reported exception,
+repair backing and call `deliver` to finish that exception entry; replaying
+INS would consume a second value. Tests cover this separate recovery path. Page-table A/D effects can remain after a stop. There is no private
+pending-input buffer: architectural state/RAM plus the caller's device state
+are sufficient to recreate the execution context and resume.
+
+The Intel SDM explicitly allows an INS read to happen before a destination
+fault. It does not define one portable prefetch or fault-priority policy for
+all processors. Qualification with KVM uses original instruction bytes and
+an independent synthetic device tape, but intercepted I/O is emulated by KVM;
+these counts are **not bare CPU equivalence results**. KVM can read multiple
+INS values ahead of a faulting store, so fault trace comparisons use one
+requested element. Multi-element success, OUTS fault progress, and the bound
+one-element device policies have separate tests. Physical devices, read-ahead
+batching, MMIO and concurrent writers are outside this binding.
+
+References: [Intel SDM, INS/OUTS and I/O permission maps](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
+[KVM I/O exit API](https://www.kernel.org/doc/html/latest/virt/kvm/api.html).
