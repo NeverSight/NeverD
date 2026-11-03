@@ -46,10 +46,18 @@ public:
     if (type != "windows_generic_MSG")
       return false;
     const auto *msg = static_cast<const MSG *>(message);
-    if ((msg->message != WM_NCHITTEST && msg->message != WM_NCLBUTTONDOWN) ||
+    if ((msg->message != WM_NCCALCSIZE && msg->message != WM_NCHITTEST &&
+         msg->message != WM_NCLBUTTONDOWN) ||
         !window_ || !window_->handle() ||
         msg->hwnd != reinterpret_cast<HWND>(window_->winId()))
       return false;
+    if (msg->message == WM_NCCALCSIZE) {
+      // WS_THICKFRAME retains native resizing, but DefWindowProc would also
+      // inset the client area. Our painted frame owns the complete rectangle;
+      // keep native input coordinates aligned with it at every scale.
+      *result = 0;
+      return true;
+    }
     POINT position{GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
     if (!ScreenToClient(msg->hwnd, &position))
       return false;
@@ -103,8 +111,8 @@ void configureFrame(QWindow &window) {
     return;
   const auto hwnd = reinterpret_cast<HWND>(window.winId());
   // FramelessWindowHint removes WS_THICKFRAME as well as the decoration.
-  // Keep the native resize capability: Qt's frameless WM_NCCALCSIZE handling
-  // still leaves the complete rectangle available for our painted chrome.
+  // Keep the native resize capability. The filter's WM_NCCALCSIZE handling
+  // leaves the complete rectangle available for our painted chrome.
   if (!(window.flags() & Qt::MSWindowsFixedSizeDialogHint) &&
       window.minimumSize() != window.maximumSize() &&
       window.visibility() != QWindow::FullScreen) {

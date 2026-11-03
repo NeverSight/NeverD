@@ -919,6 +919,11 @@ private slots:
     McpConnectionManager mcp;
     GuiSessionBroker broker;
     std::unique_ptr<QWidget> window;
+    // Keep the complete 60-pixel edge gesture on small runner desktops.
+    const QRect available =
+        QGuiApplication::primaryScreen()->availableGeometry();
+    const QRect testArea = available.adjusted(80, 80, -80, -80);
+    const QSize initialSize = QSize(950, 620).boundedTo(testArea.size());
     if (quickStart) {
       auto dialog = std::make_unique<QuickStartDialog>(
           [](QWidget *) { return QString(); });
@@ -936,12 +941,12 @@ private slots:
       file.close();
       // Opening the file shows the workbench. Set its initial size before
       // Wayland starts configuring that first surface.
-      workbench->resize(950, 620);
+      workbench->resize(initialSize);
       workbench->openFile(path);
       QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), 7000);
       window = std::move(workbench);
     }
-    window->resize(950, 620);
+    window->resize(initialSize);
     window->show();
     QVERIFY(QTest::qWaitForWindowExposed(window.get()));
     QTest::qWait(250);
@@ -967,8 +972,10 @@ private slots:
       // received the maximized size.
       QTest::qWait(500);
     } else {
-      QVERIFY(place(*window, QPoint(100, 100)));
+      QVERIFY(place(*window, testArea.topLeft()));
       QTest::qWait(100);
+      QVERIFY(available.contains(
+          window->frameGeometry().adjusted(-60, -60, 60, 60)));
     }
     const QSize initial = window->size();
     const int shadow =
