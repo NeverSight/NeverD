@@ -52,9 +52,9 @@ The second caller now has no missing ordinary argument. HighC keeps structured
 callers and emits separate source helpers; LLVM C inlines the same admitted
 bodies. The remaining occurrences are two registry-query stack inputs, four
 device-property-query register inputs and one hibernation-adjustment register
-input. Partial home spills, nested observers, complete Windows execution and
-automatic ordinary/state composition remain open. Counts of 56 below describe
-earlier qualifications, not the current source output.
+input. Observed or escaping home storage, nested observers, complete Windows
+execution and automatic ordinary/state composition remain open. Counts of 56
+below describe earlier qualifications, not the current source output.
 
 HighC integer call results now keep their lifted carrier in both expressions
 and local declarations. Direct and indirect MedIR calls use the same result
