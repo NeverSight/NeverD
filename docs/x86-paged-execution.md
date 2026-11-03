@@ -592,5 +592,12 @@ requested element. Multi-element success, OUTS fault progress, and the bound
 one-element device policies have separate tests. Physical devices, read-ahead
 batching, MMIO and concurrent writers are outside this binding.
 
+The port emulator also omits #AC and incorrectly reports #SS for an SS-prefixed
+OUTS with a noncanonical RSI. The runtime retains #AC and reports #GP for that
+data reference: long mode ignores legacy CS/DS/ES/SS overrides, including fault
+classification (Intel SDM Vol. 1, 3.3.7.1). Tests assert both discrepancies
+separately and exclude them from KVM equivalence counts. Independent CPU MOV
+probes confirm that SS/DS overrides preserve #GP for RSI and #SS for RBP.
+
 References: [Intel SDM, INS/OUTS and I/O permission maps](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
 [KVM I/O exit API](https://www.kernel.org/doc/html/latest/virt/kvm/api.html).

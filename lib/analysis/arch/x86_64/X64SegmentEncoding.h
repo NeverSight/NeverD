@@ -23,7 +23,6 @@ struct X64SegmentPrefixes {
   unsigned AddressBytes = 8;
   // Long mode ignores CS/DS/ES/SS overrides; FS=1, GS=2.
   unsigned Segment = 0;
-  bool Stack = false;
   uint8_t Rex = 0;
 };
 
@@ -54,7 +53,6 @@ inline bool x64SegmentPrefixes(llvm::ArrayRef<uint8_t> Bytes, size_t &P,
              !Segment) {
       Segment = true;
       F.Segment = Bytes[P] >= 0x64 ? Bytes[P] - 0x63 : 0;
-      F.Stack = Bytes[P] == 0x36;
     } else
       break;
     ++P;

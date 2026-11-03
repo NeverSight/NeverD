@@ -22,7 +22,7 @@
 namespace neverd::analysis::detail {
 
 struct X64PortIOEncoding {
-  bool Input = false, String = false, Repeat = false, Stack = false;
+  bool Input = false, String = false, Repeat = false;
   unsigned Bytes = 1, AddressBytes = 8, Segment = 0;
   std::optional<uint8_t> ImmediatePort;
 };
@@ -66,7 +66,6 @@ x64PortIOEncoding(llvm::ArrayRef<uint8_t> Bytes) {
   F.Bytes = !(Opcode & 1) ? 1 : Prefix.Operand16 && !(Prefix.Rex & 8) ? 2 : 4;
   F.AddressBytes = Prefix.AddressBytes;
   F.Segment = Prefix.Segment;
-  F.Stack = Prefix.Stack;
   if (Immediate)
     F.ImmediatePort = Element[P];
   return F;

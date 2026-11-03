@@ -70,7 +70,8 @@ TEST_F(X64PagedExecutionTest, PagedPortTransfersMatchKVM) {
   std::vector<std::string> Compilers{NEVERD_TEST_CLANG};
   if (const char *Compiler = std::getenv("NEVERD_TEST_NEVERC"))
     Compilers.emplace_back(Compiler);
-  unsigned Comparisons = 0, Faults = 0, InputFaults = 0, MissingAC = 0;
+  unsigned Comparisons = 0, Faults = 0, InputFaults = 0, MissingAC = 0,
+           WrongSS = 0;
   for (const auto &Compiler : Compilers)
     for (bool LLVM : {false, true})
       for (const std::string O : {"-O0", "-O2"}) {
@@ -194,6 +195,8 @@ TEST_F(X64PagedExecutionTest, PagedPortTransfersMatchKVM) {
                      PagedPortTape::transfer, &Tape}});
             const auto EntryState = State;
             const bool ACGap = Case == 14 && F.String && F.Width != 1;
+            const bool SSGap = Case == 12 && F.String && !F.Input &&
+                               F.Segment == 0x36 && F.AddressBytes == 8;
             uint64_t Budget = F.Repeat ? std::max(Count, 1u) : 1;
             EXPECT_EQ(
                 Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget),
@@ -212,6 +215,22 @@ TEST_F(X64PagedExecutionTest, PagedPortTransfersMatchKVM) {
               EXPECT_EQ(Tape.Transfers.size(), unsigned(F.Input));
               EXPECT_EQ(Context.lastResult().DeviceTransferCompleted, F.Input);
               ++MissingAC;
+            } else if (SSGap) {
+              // KVM incorrectly applies SS to an implicit RSI reference.
+              // Intel SDM Vol. 1, 3.3.7.1 ignores that override, including its
+              // fault class. Assert the discrepancy before comparing the
+              // otherwise identical exception state and frame.
+              ASSERT_TRUE(Handler);
+              EXPECT_EQ(Native.Core.Core.Core.Core.PC, 0x40c0u);
+              ASSERT_TRUE(Context.lastResult().Exception.has_value());
+              EXPECT_EQ(Context.lastResult().Exception->Vector, 13u);
+              EXPECT_EQ(Core.PC, 0x40d0u);
+              EXPECT_TRUE(Tape.Transfers.empty());
+              EXPECT_TRUE(NativeTape.Transfers.empty());
+              EXPECT_FALSE(Context.lastResult().DeviceTransferCompleted);
+              Native.Core.Core.Core.Core.PC = 0x40d0;
+              expectPagedSegmentCPU(State, Native, *Memory, CPU);
+              ++WrongSS;
             } else {
               expectPagedSegmentCPU(State, Native, *Memory, CPU);
               EXPECT_EQ(Tape.Transfers, NativeTape.Transfers);
@@ -226,6 +245,7 @@ TEST_F(X64PagedExecutionTest, PagedPortTransfersMatchKVM) {
           }
       }
   RecordProperty("kvm_port_missing_alignment_checks", MissingAC);
+  RecordProperty("kvm_port_wrong_ss_faults", WrongSS);
   RecordProperty("kvm_port_comparisons", Comparisons);
   RecordProperty("kvm_port_fault_comparisons", Faults);
   RecordProperty("kvm_port_input_fault_effects", InputFaults);

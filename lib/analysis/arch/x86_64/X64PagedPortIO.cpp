@@ -99,9 +99,11 @@ llvm::Expected<X64PagedPortIOResult> executeX64PagedPortIO(
     uint64_t Linear = AddressValue(Core.GPR[F.Input ? 7 : 6]);
     if (!F.Input)
       Linear += F.Segment == 1 ? Core.FSBase : F.Segment == 2 ? Core.GSBase : 0;
+    // INS/OUTS have data references even with an SS override: legacy segment
+    // overrides are ignored in long mode, including the noncanonical fault.
     const X86LinearAccess Access{
-        Linear, F.Input ? MemoryAccessKind::Write : MemoryAccessKind::Read, CPL,
-        false, !F.Input && F.Stack};
+        Linear, F.Input ? MemoryAccessKind::Write : MemoryAccessKind::Read,
+        CPL};
     auto Check = checkX86LinearAccess(Memory.controls(), Access, F.Bytes);
     if (!Check)
       return Check.takeError();
