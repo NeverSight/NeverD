@@ -56,7 +56,9 @@ struct X86LegacyEvent {
 enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
 
 /// IRET reads FLAGS/CS/IP, RETF reads CS/IP; descriptor accessed writes precede
-/// outer SS/SP reads and late target-limit checks. Ordinary RAM, one CPU.
+/// outer SS/SP reads and late target-limit checks. CS/SS accesses cover only
+/// their selector word, independently of the frame slot width. Ordinary RAM,
+/// one CPU.
 enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
 
 struct X86LegacyExecutionOptions {

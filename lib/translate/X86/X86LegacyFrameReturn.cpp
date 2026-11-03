@@ -169,9 +169,10 @@ private:
       unsupported("legacy IRET to VM86 requires virtual-mode state");
       return;
     }
-    if (!frame(Bytes, Bytes, Selector) || !frame(0, Bytes, IP))
+    // Selector accesses are words even in dword frame slots. Their padding
+    // does not participate in segment, page or alignment checks.
+    if (!frame(Bytes, 2, Selector) || !frame(0, Bytes, IP))
       return;
-    Selector &= 0xffff;
     Value Code = 0;
     uint32_t CodeAddress = 0;
     if (!descriptor(Selector, Code, CodeAddress))
@@ -194,10 +195,8 @@ private:
       const unsigned Offset = (Interrupt ? 3 : 2) * Bytes + Discard;
       Value StackSelector = 0, Stack = 0;
       uint32_t StackAddress = 0;
-      if (!frame(Offset + Bytes, Bytes, StackSelector) ||
-          !frame(Offset, Bytes, SP))
+      if (!frame(Offset + Bytes, 2, StackSelector) || !frame(Offset, Bytes, SP))
         return;
-      StackSelector &= 0xffff;
       if (!descriptor(StackSelector, Stack, StackAddress))
         return;
       Descriptors::checkData(*this, true, StackSelector, Stack, CPL);

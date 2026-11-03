@@ -350,6 +350,40 @@ TEST_F(X86LegacyExecutionTest, ReturnFrameFaultUnblocksOnlyIRET) {
   }
 }
 
+TEST_F(X86LegacyExecutionTest, FarReturnDoesNotReadSelectorSlotPadding) {
+  S.Core.GPR[4] = 0xcffa;
+  put(0xcffa, 0x3000, GuestScalarWidth::I32);
+  put(0xcffe, 27, GuestScalarWidth::I16);
+  put(0x11034, 0, GuestScalarWidth::I32);
+  auto R = run({0xcb});
+  ASSERT_TRUE(R.InstructionCompleted);
+  EXPECT_EQ(S.EIP, 0x3000u);
+  EXPECT_EQ(S.Core.GPR[4], 0xd002u);
+  EXPECT_EQ(S.Core.Segments[1].Selector, 27);
+  EXPECT_EQ(S.CR2, 0x12345678u);
+}
+
+TEST_F(X86LegacyExecutionTest, InterruptReturnReadsOnlyTheOuterStackSelector) {
+  auto Entered = llvm::cantFail(deliverX86LegacyEvent(
+      S, *M, {S.EIP, 0, 0, 2, X86LegacyEventKind::NMI}, O));
+  ASSERT_EQ(Entered.Status, X86LegacyExecutionStatus::EventDelivered);
+  S.Core.GPR[4] = 0xcfee;
+  put(0xcfee, 0x3000, GuestScalarWidth::I32);
+  put(0xcff2, 27, GuestScalarWidth::I16);
+  put(0xcff6, 0x202, GuestScalarWidth::I32);
+  put(0xcffa, 0xf000, GuestScalarWidth::I32);
+  put(0xcffe, 35, GuestScalarWidth::I16);
+  put(0x11034, 0, GuestScalarWidth::I32);
+  auto R = run({0xcf});
+  ASSERT_TRUE(R.InstructionCompleted);
+  EXPECT_EQ(S.EIP, 0x3000u);
+  EXPECT_EQ(S.Core.CPL, 3);
+  EXPECT_EQ(S.Core.GPR[4], 0xf000u);
+  EXPECT_EQ(S.Core.Segments[2].Selector, 35);
+  EXPECT_EQ(S.CR2, 0x12345678u);
+  EXPECT_FALSE(S.NMIBlocked);
+}
+
 TEST_F(X86LegacyExecutionTest, FetchAndAdmissionCannotUnblockNMI) {
   S.NMIBlocked = true;
   put(S.EIP, 0x90, GuestScalarWidth::I8);

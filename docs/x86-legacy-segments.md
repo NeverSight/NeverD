@@ -174,7 +174,8 @@ requiring the caller to decode the new code. A fetch or operand exception
 retains the original EIP and enters the IDT. Successful execution publishes
 fallthrough, clears RF, and advances SS/STI inhibition. The admitted byte
 grammar includes the segment instructions, NOP, register-immediate MOV,
-CLI/STI with IOPL/PVI checks, INT, INT3, INTO, INT1 and UD2. An unimplemented
+CLI/STI with IOPL/PVI checks, INT, INT3, INTO, INT1, UD2 and the protected
+IRET/RETF returns described below. An unimplemented
 instruction returns an error; only an authenticated UD2 generates its #UD.
 Sequential EIP is not truncated solely because CS.D is zero. Code-base and
 limit checks still apply to each fetched byte.
@@ -227,8 +228,90 @@ records commands, source hashes, SDK inputs, CPU affinity, independent native
 matrices, corrected probes and regression results.
 
 This is a bounded internal execution interface. General i386 scalar/source
-dispatch, IRET/RETF and task/call-gate transitions, real/VM86, CET/FRED, software
+dispatch, task/call-gate transitions, real/VM86, CET/FRED, software
 SMM, enclave/AEX/EPCM and the remaining device/partial-progress contracts are
 not completed by it. No new LLVM or NeverC intrinsic is required for these
 runtime state transitions. The final LLVM release, SDK pin and NeverD LLVM
 gitlink remain unchanged pending global completion.
+
+## Protected IRET and far returns
+
+Canonical `CF`, `CB` and `CA imm16`, optionally prefixed with `66`, execute
+16/32-bit protected returns through `X86LegacyFrameReturn`. The original-byte
+executor owns fetch, restart EIP, fault delivery and completion. The return
+owner stages GPRs, caches and flags and stops at the destination before executing
+it. `ir/X86/X86ReturnRules` shares return-code privilege checks, data-cache
+invalidation and IRET flag restoration with the x64 continuation/source owner.
+
+Bind `X86LegacyExecutionOptions::Returns` to `OrderedFrame`. IRET reads
+FLAGS, CS and IP; RETF reads CS and IP. Both fetch and validate the code
+descriptor, publish its qword accessed update, then read SS before SP on an
+outer return. SS descriptor validation and its accessed write precede the
+final target IP-limit check. A same-CPL return never accesses an outer frame.
+Each field uses the current SS base, bounds and D/B-controlled stack offset;
+the frame slot width remains independent of CS.D and SS.D/B. CS and SS each
+read only their two-byte selector, including in four-byte slots. Their padding
+does not trigger page, segment-limit or alignment faults. IP, SP and flags
+retain their full operand width. These access-order
+choices bind the qualified processor, rather than generalizing the SDM's
+pseudocode order. Active CPL3 alignment checking needs the explicit alignment
+priority, independently of the return profile.
+
+The target code segment may be 16 or 32 bits, conforming or nonconforming,
+and selected from the GDT or LDT. The operand width controls truncation of
+the returned IP. A 16-bit destination CS alone does not truncate a 32-bit EIP.
+An outer return replaces SP/ESP according to the target SS.D/B, retaining the
+old ESP high word for a 16-bit stack. RETF's unsigned immediate skips current
+parameters before locating an outer frame and also adjusts the destination
+stack, with the applicable stack-width wrap. An outer return invalidates
+inaccessible ES/DS/FS/GS caches; a same-CPL return preserves them. Null-loaded
+unusable cache fields remain opaque.
+
+Original CPL and IOPL govern IF/IOPL/VIF/VIP restoration. Word IRET retains
+AC/ID/VIF/VIP and clears RF; IRETD restores RF/AC/ID, with VIF/VIP writable at
+CPL0. RETF clears RF and preserves the other flags. Successful returns end
+SS/STI inhibition. IRET unblocks NMI after byte authentication even if a later
+frame or descriptor access faults; RETF retains NMI blocking. Ordered RAM and
+page-table effects survive later faults and backing failures. Missing physical
+backing never manufactures a guest #PF, and retry does not duplicate an ESP
+increment. The fault path enters the existing IDT owner with the original EIP.
+
+Nested-task IRET is refused before execution because task-switch state is
+not owned. A CPL0 frame requesting VM86 is refused after reading its flags,
+retaining NMI unblocking; it is not misreported as an ordinary protected
+return. Restored TF is preserved, and the next step requires a debug producer.
+Reserved legacy descriptor bits, CET/FRED and unbound profiles remain explicit
+errors. The error holders in selector, event and return transitions preserve
+LLVM's checked-error contract, including these dynamically discovered refusals.
+
+`LegacyReturns/*` executes original IRET/RETF bytes in KVM under legacy paging
+and PAE. It checks all privilege levels, code/operand/stack width combinations,
+nonflat code, GDT/LDT, descriptor and frame faults, parameter cleanup, high
+ESP, wrapping, flag/IOPL combinations and descriptor/frame aliases. Page and
+segment boundaries distinguish selector bytes from slot padding,
+including an actually inaccessible second selector byte. Word-aligned but
+dword-misaligned frames distinguish CS access from IP/flags accesses. Two adjacent
+execution breakpoints independently witness restored RF: it suppresses the
+first stop only. INT/IRQ/NMI entry followed by IRET resumes the interrupted
+code. Page-repair cases supply a repaired PTE and consumed error code at the
+handler boundary, then execute original IRETD and retry the original return.
+The repair itself is an explicit embedding operation, not a claim that this
+legacy subset executes a general page-fault handler.
+
+The oracle compares all eight GPRs, usable caches, selectors/unusable bits,
+flags, NMI state, CR2, restart frames and retained descriptor RAM. Debugger RF
+and inactive cache fields are not used as direct cache/flag equality witnesses.
+[Linux VMX's #AC reinjection](https://github.com/torvalds/linux/blob/master/arch/x86/kvm/vmx/vmx.c)
+can restore NMI blocking after IRET; this known VMM
+discrepancy is counted separately while the model keeps architectural NMI
+unblocking. See the [return qualification](evidence/x86-legacy-returns-2026-11-03.json)
+for the two SDKs, both hybrid core profiles, commands, hashes and exclusions.
+The final matrix records 46,008 new return comparisons, with 96 VMX #AC/NMI
+reinjection observations reported separately. The 22 regression runs contain
+1,794 passes and 42 explicit skips for unavailable hardware, SDK interfaces
+or optional type providers. The additional selector-boundary probes exposed
+and corrected four-byte CS/SS overreads after the earlier matrix had passed.
+Superseded runs do not enter these totals. Each SDK exports 1,032 shared
+paged/continuation artifacts, all byte-identical across the SDKs.
+The architectural reference is Intel SDM revision 093, volume 2 IRET and RET,
+available from the [Intel manual page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).

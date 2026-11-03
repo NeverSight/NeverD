@@ -31,6 +31,9 @@ protected:
     const unsigned Bytes = Operand32 ? 4 : 2;
     const unsigned Discard = Kind == 2 ? 7 : 0;
     const bool RoundTrip = Case >= 31 && Case <= 33;
+    const bool SelectorBoundary =
+        (Case >= 37 && Case <= 42) || Case == 45 || Case == 46;
+    const uint32_t Boundary = Stack32 ? 0xd000 : 0x10000;
     std::memset(RAM, 0, MemorySize);
     put(0x10000, Legacy ? 0x11007 : 0x11001, PTWidth);
     if (!Legacy)
@@ -110,6 +113,16 @@ protected:
       SP = CodeAddress - (Kind == 0 ? 3 : 2) * Bytes - Discard;
     if (Case == 36)
       SP = 0xd000 - (Kind == 0 ? 3 : 2) * Bytes - Discard;
+    if (SelectorBoundary) {
+      // Odd cases place CS at the boundary; even cases place outer SS there.
+      // 37/38 omit the next page, 39/40 end SS, and 41/42 do both. 45/46
+      // leave only one accessible selector byte, which must still fault.
+      const unsigned Offset =
+          Case % 2 ? Bytes : (Kind == 0 ? 4 : 3) * Bytes + Discard;
+      SP = Boundary - (Case >= 45 ? 1 : 2) - Offset;
+    }
+    if (Case == 43 || Case == 44)
+      SP = 0xd102;
     put(CodeAddress, CodeDescriptor);
     put(GDT + 80, StackDescriptor);
     put(0x5804, 0xb000, 4);
@@ -125,16 +138,22 @@ protected:
       put(Entry + 11, Stop - (Entry + 15), 4);
     }
     const uint32_t StackMask = Stack32 ? UINT32_MAX : UINT16_MAX;
-    const auto Frame = [&](unsigned Offset, uint32_t V) {
-      put((SP + Offset) & StackMask, V, Bytes);
+    const auto Frame = [&](unsigned Offset, uint32_t V, bool Selector = false) {
+      const uint32_t Address = (SP + Offset) & StackMask;
+      unsigned Size = Selector && SelectorBoundary ? 2 : Bytes;
+      // Only initialize the accessible selector bytes. With a 16-bit stack,
+      // physical 0x10000 contains the page directory, not selector padding.
+      if (Selector && SelectorBoundary && Address < Boundary)
+        Size = std::min(Size, Boundary - Address);
+      put(Address, V, Size);
     };
     Frame(0, IP);
-    Frame(Bytes, CS | (Operand32 ? 0xa5a50000u : 0));
+    Frame(Bytes, CS | (Operand32 ? 0xa5a50000u : 0), true);
     if (Kind == 0)
       Frame(2 * Bytes, SavedFlags);
     const unsigned OuterOffset = (Kind == 0 ? 3 : 2) * Bytes + Discard;
     Frame(OuterOffset, NewSP);
-    Frame(OuterOffset + Bytes, SS | (Operand32 ? 0x5a5a0000u : 0));
+    Frame(OuterOffset + Bytes, SS | (Operand32 ? 0x5a5a0000u : 0), true);
     if (Case == 35)
       put(CodeAddress, CodeDescriptor);
     if (Case == 15)
@@ -143,8 +162,11 @@ protected:
       Clear(CodeAddress, 2);
     if ((Case >= 18 && Case <= 22) || Case == 36)
       Clear(0xd000, 1);
-    if (Case == 25)
+    if (Case == 25 || Case == 44)
       Clear(SP, 1);
+    if (Case == 37 || Case == 38 || Case == 41 || Case == 42 || Case == 45 ||
+        Case == 46)
+      Clear(Boundary, 1);
     std::vector<uint8_t> Instruction;
     if ((RoundTrip || Code32) != Operand32)
       Instruction.push_back(0x66);
@@ -179,6 +201,10 @@ protected:
     if (!Stack32) {
       Special.ss.g = 0;
       Special.ss.limit = 0xffff;
+    }
+    if (Case >= 39 && Case <= 42) {
+      Special.ss.g = 0;
+      Special.ss.limit = Boundary - 1;
     }
     Special.gdt.base = GDT;
     Special.gdt.limit = 0xff;
@@ -458,6 +484,18 @@ TEST_P(X86LegacyReturnNativeTest, FlagsStackWidthsAndWrapping) {
   RecordProperty("cpu_comparisons", Comparisons);
 }
 
+TEST_P(X86LegacyReturnNativeTest, SelectorFieldExtentsAndStackLimits) {
+  for (bool Code32 : {false, true})
+    for (bool Operand32 : {false, true})
+      for (bool Stack32 : {false, true})
+        for (unsigned Kind : {0u, 1u, 2u})
+          for (unsigned Case : {37u, 38u, 39u, 40u, 41u, 42u, 45u, 46u})
+            ASSERT_NO_FATAL_FAILURE(compare(0, Case % 2 ? 0 : 3, Code32,
+                                            Operand32, Stack32, true, Kind,
+                                            Case));
+  RecordProperty("cpu_comparisons", Comparisons);
+}
+
 TEST_P(X86LegacyReturnNativeTest, OriginalINTIRQAndNMIReturnToInterruptedCode) {
   for (unsigned CPL = 0; CPL != 4; ++CPL)
     for (bool Code32 : {false, true})
@@ -476,7 +514,7 @@ TEST_P(X86LegacyReturnNativeTest, AlignmentAndPageFaultPriority) {
   for (bool Code32 : {false, true})
     for (bool Operand32 : {false, true})
       for (unsigned Kind : {0u, 1u, 2u})
-        for (unsigned Case : {24u, 25u})
+        for (unsigned Case : {24u, 25u, 43u, 44u})
           ASSERT_NO_FATAL_FAILURE(compare(3, 3, Code32, Operand32, true, true,
                                           Kind, Case, 0x40202, 0x202));
   RecordProperty("cpu_comparisons", Comparisons);
