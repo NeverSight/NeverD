@@ -669,6 +669,9 @@ Same-width AND/OR of an SSA value with itself transports that address unchanged,
 including x64 TEST's retained flag calculation. The flag-recovery owner marks
 its generated comparison zeroes as scalar; consumers do not reclassify an
 unknown constant to gain this permission.
+This distinction follows LLVM's separate
+[null-address and memory-provenance capture](https://llvm.org/docs/LangRef.html#pointer-capture)
+semantics; it grants no native callee-effect or initialization fact.
 An SSA version of zero is not itself an entry input: a first load or arithmetic
 definition can also have that version. Call home areas and released frame bytes
 remain observable without explicit pointer arguments. This proof annotates only
