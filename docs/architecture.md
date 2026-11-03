@@ -654,6 +654,15 @@ stale bindings, pointer capture, lossy transforms, exceptional observers and
 incoming pointer stack parameters refuse the proof. No callee write proves
 initialization. Implicit register inputs are checked independently of inferred
 source arity.
+An exact full-width incoming borrow may be compared with scalar null without
+observing its contents. This preserves the comparison and its Boolean result;
+it supplies neither a byte read nor an escaped address. Adjusted pointers,
+narrow tests, nonzero comparisons and address-provenance zeroes remain outside
+that permission, and every real memory reader still contributes its extent.
+Same-width AND/OR of an SSA value with itself transports that address unchanged,
+including x64 TEST's retained flag calculation. The flag-recovery owner marks
+its generated comparison zeroes as scalar; consumers do not reclassify an
+unknown constant to gain this permission.
 An SSA version of zero is not itself an entry input: a first load or arithmetic
 definition can also have that version. Call home areas and released frame bytes
 remain observable without explicit pointer arguments. This proof annotates only

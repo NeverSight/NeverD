@@ -1547,6 +1547,162 @@ int main(void) {
     }
 }
 
+TEST(MedFlagConstants, GeneratedComparisonZeroIsScalar) {
+  for (Arch Architecture : {Arch::X64, Arch::X86, Arch::AArch64, Arch::ARM})
+    for (unsigned Producer = 0; Producer != 4; ++Producer)
+      for (bool Select : {false, true}) {
+        // SELECT currently folds SUB and AND producers, while branches also
+        // recover zero tests of other arithmetic results.
+        if (Select && Producer == 2)
+          continue;
+        SCOPED_TRACE(Select);
+        SCOPED_TRACE(unsigned(Architecture));
+        SCOPED_TRACE(Producer);
+        const auto &TRI = getTargetRegInfo(Architecture);
+        const uint16_t Width = TRI.PointerSize;
+        const NdVar Value = NdVar::reg(TRI.IntReturnReg, Width);
+        const NdVar Result = NdVar::tmp(0x10000, Width);
+        const NdVar Condition = NdVar::tmp(0x10020, 1);
+        const NdVar Flag = NdVar::reg(TRI.FlagZF, 1);
+        LowFunc Low;
+        Low.Entry = Text;
+        LowBlock Block;
+        Block.Id = 0;
+        Block.StartAddr = Text;
+        Block.EndAddr = Text + 16;
+        const auto Add = [&](NdOp Opcode, NdVar Output,
+                             std::initializer_list<NdVar> Inputs) {
+          LowOp Op;
+          Op.Opcode = Opcode;
+          Op.Addr = Text;
+          Op.Output = Output;
+          for (const auto &Input : Inputs)
+            Op.addInput(Input);
+          Block.Ops.push_back(Op);
+        };
+        Add(NdOp::COPY, Value, {Value});
+        const auto Other = Producer == 0   ? Value
+                           : Producer == 3 ? NdVar::dataAddress(0, Width)
+                                           : NdVar::scalar(7, Width);
+        Add(Producer < 2    ? NdOp::INT_AND
+            : Producer == 2 ? NdOp::INT_ADD
+                            : NdOp::INT_SUB,
+            Result, {Value, Other});
+        Add(NdOp::INT_EQUAL, Flag, {Result, NdVar::scalar(0, Width)});
+        Add(NdOp::COPY, Condition, {Flag});
+        if (Select) {
+          Add(NdOp::SELECT, Value,
+              {Condition, NdVar::scalar(11, Width), NdVar::scalar(23, Width)});
+          Add(NdOp::RETURN, NdVar(), {Value});
+          Low.Blocks.push_back(std::move(Block));
+        } else {
+          Add(NdOp::COND_BR, NdVar(),
+              {NdVar::codeAddress(Text + 32, Width), Condition});
+          Block.Succs = {1, 2};
+          Low.Blocks.push_back(std::move(Block));
+          for (int I : {1, 2}) {
+            Block = {};
+            Block.Id = I;
+            Block.StartAddr = Text + I * 16;
+            Block.EndAddr = Block.StartAddr + 16;
+            Block.Preds = {0};
+            Add(NdOp::RETURN, NdVar(),
+                {NdVar::scalar(I == 1 ? 11 : 23, Width)});
+            Block.Ops.back().Addr = Block.StartAddr;
+            Low.Blocks.push_back(std::move(Block));
+          }
+        }
+        const auto Med = LowToMedConverter().convert(Low, Architecture);
+        ASSERT_EQ(Med.Blocks.size(), Select ? 1u : 3u);
+        const auto &Ops = Med.Blocks.front().Ops;
+        const auto Comparison =
+            std::find_if(Ops.begin(), Ops.end(), [](const MedOp &Op) {
+              return Op.Opcode == NdOp::INT_EQUAL &&
+                     Op.Output.Kind == MedVar::Temp;
+            });
+        ASSERT_NE(Comparison, Ops.end());
+        ASSERT_EQ(Comparison->NumInputs, 2);
+        const auto &Zero = Comparison->Inputs[1];
+        ASSERT_TRUE(Zero.isConst());
+        EXPECT_EQ(Zero.ConstVal, 0u);
+        EXPECT_EQ(Zero.Size, Width);
+        // A real subtraction keeps its operand's address identity. Only the
+        // zero invented for an arithmetic result is a new scalar constant.
+        EXPECT_EQ(Zero.Provenance, Producer == 3
+                                       ? ConstantAddressProvenance::DataAddress
+                                       : ConstantAddressProvenance::Scalar);
+      }
+}
+
+TEST(Win64CallContract, NullGuardedBorrowKeepsItsActualReadExtent) {
+  constexpr va_t Consumer = Text + 0x80;
+  for (bool ReadsNeighbor : {false, true}) {
+    SCOPED_TRACE(ReadsNeighbor);
+    std::vector<uint8_t> Code(0xA0, 0xCC);
+    std::vector<uint8_t> Caller = {0x48, 0x83, 0xEC, 0x38};
+    const auto Random = throughSlot(Text + Caller.size(), Iat);
+    Caller.insert(Caller.end(), Random.begin(), Random.end());
+    Caller.insert(Caller.end(),
+                  {0x31, 0xC0,             // xor eax,eax
+                   0x0F, 0xBD, 0xC8,       // bsr ecx,eax: unavailable old ECX
+                   0x89, 0x4C, 0x24, 0x20, // mov [rsp+20h],ecx
+                   0xC7, 0x44, 0x24, 0x24, 37,   0,    0,
+                   0,    0x48, 0x8D, 0x4C, 0x24, 0x24, // lea rcx,[rsp+24h]
+                   0xE8});
+    const auto Displacement = rel32(Text + Caller.size() + 4, Consumer);
+    Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+    Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
+    put(Code, Text, Caller);
+    std::vector<uint8_t> Reader = {0x48, 0x85, 0xC9, // test rcx,rcx
+                                   0x74, uint8_t(ReadsNeighbor ? 4 : 3)};
+    if (ReadsNeighbor)
+      Reader.insert(Reader.end(), {0x8B, 0x41, 0xFC}); // mov eax,[rcx-4]
+    else
+      Reader.insert(Reader.end(), {0x8B, 0x01}); // mov eax,[rcx]
+    Reader.insert(Reader.end(), {0xC3, 0x31, 0xC0, 0xC3});
+    put(Code, Consumer, Reader);
+    const auto Image = makeImage(
+        Code, {{Text, "guarded_borrow_caller"}, {Consumer, "nullable_reader"}},
+        {"rand"});
+    for (bool OmitCallee : {false, true})
+      for (bool NoOpt : {false, true})
+        for (bool LLVM : {false, true}) {
+          SCOPED_TRACE(OmitCallee);
+          SCOPED_TRACE(NoOpt);
+          SCOPED_TRACE(LLVM);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee)
+            Options.OnlyFunctionEntries.insert(Consumer);
+          Options.NoOpt = NoOpt;
+          Options.SourceProjection = true;
+          Options.LiftMode = LLVM;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          ASSERT_TRUE(
+              LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                         nullptr, &Image)
+                   : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          const bool HasUnknown =
+              Source.find("__builtin_trap") != std::string::npos;
+          if (HasUnknown != ReadsNeighbor) {
+            std::string Facts;
+            llvm::raw_string_ostream FactsOut(Facts);
+            Pipeline::dumpMedIR(Result.MedFuncs, FactsOut);
+            ADD_FAILURE() << Source << Facts;
+          }
+        }
+  }
+}
+
 TEST(Win64CallContract, BoundedCalleeReadDoesNotExposeAdjacentUnknownBytes) {
   constexpr va_t Consumer = Text + 0x80;
   for (bool ReadsNeighbor : {false, true}) {

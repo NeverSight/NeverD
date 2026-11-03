@@ -714,6 +714,40 @@ private:
           Work.emplace_back(Op.Output, Offset);
           continue;
         }
+        // TEST retains an AND-self for its original flag calculation even
+        // when source conditions already compare the pointer directly.
+        if ((Op.Opcode == NdOp::INT_AND || Op.Opcode == NdOp::INT_OR) &&
+            Op.NumInputs == 2 && Op.Output.Size == TRI.PointerSize &&
+            Op.Output.Id >= 0 &&
+            (Op.Output.Kind == MedVar::Reg || Op.Output.Kind == MedVar::Temp) &&
+            Op.Inputs[0] == Op.Inputs[1] &&
+            Op.Inputs[0].Size == TRI.PointerSize &&
+            Op.Inputs[1].Size == TRI.PointerSize &&
+            (Op.Inputs[0].Kind != MedVar::Reg ||
+             Op.Inputs[0].RegOff == Op.Inputs[1].RegOff) &&
+            Op.IntrinsicOutputs.empty()) {
+          Work.emplace_back(Op.Output, Offset);
+          continue;
+        }
+        // The complete incoming borrow denotes live private storage. Testing
+        // that pointer against scalar null observes neither its contents nor
+        // an address from which another reader can reconstruct the borrow.
+        // Keep the comparison and every use of its result unchanged. An
+        // adjusted address, partial test or other comparison has no such
+        // permission; in particular, affine arithmetic can wrap to null.
+        if (!Offset &&
+            (Op.Opcode == NdOp::INT_EQUAL || Op.Opcode == NdOp::INT_NOTEQUAL) &&
+            Op.NumInputs == 2 && Op.Output.Size == 1 && Op.Output.Id >= 0 &&
+            (Op.Output.Kind == MedVar::Reg || Op.Output.Kind == MedVar::Temp ||
+             (Op.Output.Kind == MedVar::Flag &&
+              TRI.isFlag(Op.Output.RegOff, Op.Output.Size))) &&
+            Op.IntrinsicOutputs.empty()) {
+          const auto &Other = Op.Inputs[1 - By.Input];
+          if (Op.Inputs[By.Input].Size == TRI.PointerSize && Other.isConst() &&
+              Other.Size == TRI.PointerSize && Other.ConstVal == 0 &&
+              Other.Provenance == ConstantAddressProvenance::Scalar)
+            continue;
+        }
         if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
             Op.NumInputs == 2 && Op.Inputs[1 - By.Input].isConst() &&
             (Op.Opcode == NdOp::INT_ADD || By.Input == 0)) {
