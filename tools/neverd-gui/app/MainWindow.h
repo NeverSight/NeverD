@@ -38,6 +38,7 @@ class PackageReviewDialog;
 
 class AnalysisIndicator;
 class AnalysisProgress;
+class AnalysisPlugins;
 class ComparisonDialog;
 class LineageDialog;
 class LoadProgressCard;
@@ -118,6 +119,7 @@ public:
   DisassemblyView *disassembly() const { return disassembly_; }
   const AddressSpace &addressSpace() const { return space_; }
   ActionRegistry &actions() { return actions_; }
+  AnalysisPlugins *analysisPlugins() const { return plugins_; }
   /// The window's menus, which sit in its title bar when it draws its own
   /// frame.  This hides QMainWindow::menuBar(), which would replace that
   /// title bar with a new menu bar.
@@ -395,6 +397,7 @@ private:
   DisassemblyView *primaryDisassembly_ = nullptr;
   HexView *hex_ = nullptr;
   OutputWindow *output_ = nullptr;
+  AnalysisPlugins *plugins_ = nullptr;
   MicrosoftSymbols *microsoftSymbols_ = nullptr;
   /// A file to open once the worker has started, asking for its debug
   /// information then.

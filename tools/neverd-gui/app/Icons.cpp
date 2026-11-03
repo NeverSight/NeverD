@@ -1,10 +1,14 @@
 #include "Icons.h"
 
+#include "../ResourceLimits.h"
+
+#include <QCryptographicHash>
 #include <QFile>
 #include <QFileIconProvider>
 #include <QFileInfo>
 #include <QHash>
 #include <QIconEngine>
+#include <QImageReader>
 #include <QPainter>
 #include <QPixmapCache>
 #include <QSvgRenderer>
@@ -124,6 +128,32 @@ QIcon icon(const QString &name) {
     result = QIcon(new SvgIconEngine(name, path));
   cache.insert(name, result);
   return result;
+}
+
+QIcon iconFromFile(const QString &path) {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly) ||
+      file.size() > ::neverd::limits::gui::plugin::kMaxIconBytes)
+    return {};
+  const auto bytes = file.readAll();
+  if (path.endsWith(QLatin1String(".svg"), Qt::CaseInsensitive)) {
+    auto renderer = std::make_shared<QSvgRenderer>(bytes);
+    if (!renderer->isValid())
+      return {};
+    const auto key = QString::fromLatin1(
+        QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+    return QIcon(
+        new SvgIconEngine(QStringLiteral("file:") + key, std::move(renderer)));
+  }
+  QImageReader reader(&file);
+  if (!file.seek(0))
+    return {};
+  const auto size = reader.size();
+  if (!size.isValid() ||
+      size.width() > ::neverd::limits::gui::plugin::kMaxIconDimension ||
+      size.height() > ::neverd::limits::gui::plugin::kMaxIconDimension)
+    return {};
+  return QIcon(QPixmap::fromImage(reader.read()));
 }
 
 } // namespace neverd::gui

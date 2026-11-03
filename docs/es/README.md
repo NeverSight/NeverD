@@ -1,6 +1,6 @@
 **Idiomas**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 94dee57ee027f151dab4552ab101a5387ee571d24d447a250e7550c573b77f74 -->
+<!-- i18n-source: e1b18ca385ee2c0da797d70ea8b6d1d166393d196100096863a20662b72d11db -->
 
 [← Proyecto NeverD](project.md)
 
@@ -41,6 +41,7 @@ Las guías en inglés se encuentran directamente en `docs/`. Las traducciones se
 | [Auditoría y caza de seguridad de memoria](memory-safety.md) | Análisis de vida del montón y desbordamiento de copia: contrato de identidad por formato, catálogo de sumideros/fuentes, veredictos, presupuestos y esquema JSON |
 | [SDK de plugins de proceso (inglés)](../process-plugin-sdk.md) | Ayudante Python autónomo, protocolo y ejemplos independientes |
 | [Capa Tools (inglés)](../tools-layer.md) | Llamadas exactas, pasos congelados del consumidor y registros de operaciones |
+| [Plugins de proceso GUI (inglés)](../gui-plugins.md) | Administrador, ubicación de menús, resultados y protocolo de proveedores |
 | [Host NPH de plugins de proceso (inglés)](../plugin-host.md) | Propietarios compartidos, admisión de tareas, protocolo y duración de procesos |
 | [Plugins nativos](plugins.md) | ABI de descriptor en C puro, callbacks y eventos, flujo de compilación/enlace, descubrimiento y reglas de compatibilidad |
 | [Plugins de Python](python-plugins.md) | Autoría, API de sesión y eventos, aislamiento, pruebas y publicación |

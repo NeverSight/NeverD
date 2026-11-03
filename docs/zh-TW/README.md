@@ -1,6 +1,6 @@
 **語言**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 94dee57ee027f151dab4552ab101a5387ee571d24d447a250e7550c573b77f74 -->
+<!-- i18n-source: e1b18ca385ee2c0da797d70ea8b6d1d166393d196100096863a20662b72d11db -->
 
 [← NeverD 專案](project.md)
 
@@ -41,6 +41,7 @@
 | [記憶體安全稽核與獵取](memory-safety.md) | 堆積生命週期與拷貝越界分析：各格式身分契約、匯/源目錄、判定、預算與 JSON 模式 |
 | [行程外掛 SDK（英文）](../process-plugin-sdk.md) | 獨立 Python 輔助程式、通訊協定與獨立範例 |
 | [Tools 層（英文）](../tools-layer.md) | 精確外掛呼叫、凍結的使用方步驟與操作記錄 |
+| [GUI 行程外掛（英文）](../gui-plugins.md) | 管理員、功能表位置、工作結果與行程提供程式通訊協定 |
 | [NPH 行程外掛宿主（英文）](../plugin-host.md) | 共用擁有權、工作准入、通訊協定與行程生命週期 |
 | [原生外掛](plugins.md) | 純 C 描述元 ABI、回呼與事件、建置/連結流程、探索順序及相容性規則 |
 | [Python 外掛](python-plugins.md) | 外掛撰寫、工作階段與事件 API、隔離、測試及發佈 |

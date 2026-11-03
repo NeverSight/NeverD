@@ -69,7 +69,8 @@ public:
   SubscriptionId graphViewport(QJsonObject payload, QObject *owner,
                                Completion complete);
   SubscriptionId enqueueCommand(QString operation, QJsonObject payload,
-                                QObject *owner, Completion complete);
+                                QObject *owner, Completion complete,
+                                QString expectedRevision = {});
   void unsubscribe(SubscriptionId id);
   void unsubscribeOwner(QObject *owner);
   /// Detach every read except those owned by \p keep (commands always run).

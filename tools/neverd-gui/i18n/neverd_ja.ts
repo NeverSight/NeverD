@@ -1319,6 +1319,14 @@
         <source>Enter &amp;comment...</source>
         <translation>コメントを入力(&amp;C)...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>プラグインのインストール、有効化、無効化、削除</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>プラグインマネージャー(M)...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -3371,6 +3379,10 @@ After:
     <message>
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>1 バイトから %1 までのファイル、16 進数のアドレス、セクション名を指定してください。関数には名前と実行権限が必要です。</translation>
+    </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>プラグインタスク</translation>
     </message>
 </context>
 <context>
@@ -10202,6 +10214,454 @@ Your previous graph is still available.</source>
     <message>
         <source>%1 s</source>
         <translation>%1 秒</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> アイコン</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> 位置</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · タスク %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 秒</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>タスクをキャンセル(&amp;C)</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>成果物をエクスポート(&amp;E)…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>プラグインをインポート(&amp;I)…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>復元コードを解析セクションとして追加し、最初の関数を開く</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>成果物:</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>参照…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>コマンドのアイコンを選択</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>コンテキストメニューに直接表示するコマンドを選択します。他のコマンドは Plugins → プラグイン名にまとめられます。アイコンには builtin:name またはローカルの PNG、ICO、SVG ファイルを指定できます。</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>コマンド</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>コンテキストメニューの設定…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>コンテキストメニューに直接表示</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>経過時間</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>成果物をエクスポート</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>成果物を新しいファイルにエクスポート</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>アイコン</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>アイコンを使用できません: %1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>アイコン (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>プロセスプラグインをインポートしてコマンドを追加します。</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>イメージにコードをインポート</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>プロセスプラグインをインポート</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>プロセスプラグインをインポート…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>%1 のログ</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>メニュー設定…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>プラグイン(&amp;G)</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>プラグイン</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>プラグイン / タスク</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>プラグインの成果物を %1 にエクスポートしました</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>プラグインのコンテキストメニュー</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>プラグインのアイコンを使用できません: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>プラグインマネージャー…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>プラグインマニフェスト (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>プラグインのタスクログ</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>プラグインのタスクと結果</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>プラグイン</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>Plugins サブメニュー</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>位置</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>プロセスプラグインをインポートしました: %1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>進捗</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>プラグインのダイアログ表示中にプロジェクトが変更されました</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>このアクションの値を保存</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>プラグインのコマンドを実行するとタスクと結果が表示されます。</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>%1 の下のタスクを選択して結果を表示します。</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>選択したプラグインタスクの進捗</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>ログを表示(&amp;L)</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>状態</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>タスクの結果</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>プラグイン別のタスク</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>このアクションの登録は無効になりました。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>有効化中</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>有効化状態</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>有効化状態: %1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>有効</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>コンポーネントの世代: %1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>プラグインのフォルダーを開けませんでした。</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>宣言された読み取りサービス: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>診断: %1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>無効化</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>有効化</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>有効</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>起動時に有効化: %1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>プラグイン名、ID、パスで絞り込み</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>プラグインを絞り込み</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>プロセスプラグインのマニフェストをインポートしてコマンドを追加します。プロバイダーはコマンド実行時にのみ起動します。</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>プラグインをインポート…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>プロセスプラグインをインポート</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>無効</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>インストール記録を削除しました。プラグインファイルとタスクの成果物は保持されます。</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>インストール記録を削除しました。実行中の処理を停止しています。</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>インストール済みプロセスプラグイン</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>マニフェスト: %1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>いいえ</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>フォルダーを開く</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>プラグイン</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>プラグインを無効にしました。インストール記録は保持され、実行中の処理はキャンセルされます。</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>プラグインを有効にしました。</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>プラグインをインポートしました: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>プラグインマネージャー</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>プラグインマニフェスト (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>プラグイン: %1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>登録数: %1、実行中の呼び出し: %2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>保存済みの登録を削除します。プラグインファイルとタスクの成果物は保持されます。</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>有効化を再試行</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>プラグインを選択するとマニフェスト、有効化状態、診断が表示されます。</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>選択したプラグインの詳細</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>停止中</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>種類: 外部プロセス</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>使用不可</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>アンインストール</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>バージョン</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>バージョン: %1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>タスクの終了と受理済み公開処理のクリーンアップを待機しています。</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>はい</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>公開の受領記録を読み取れません: %1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>%2 からプラグイン %1 を復元できませんでした: %3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>解析セクション %1 をインポートしました。保持するにはプロジェクトを保存してください。</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>プラグインの状態は変更されましたが、起動時の設定を保存できませんでした。</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>プロジェクト操作は完了しましたが、受領記録を保存できませんでした: %1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>公開の受領記録が届く前にセッションが終了しました。</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>このプラグインのインスタンスは無効になりました。</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>プロジェクトの受領記録を待機しています。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>プラグイン結果グラフ</translation>
     </message>
 </context>
 </TS>

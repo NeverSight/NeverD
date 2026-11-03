@@ -11,6 +11,14 @@ endif()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/NeverDProjectDatabase.cmake)
 neverd_add_project_database()
+if(NOT TARGET neverd_plugin_host)
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../lib/plugin"
+    "${CMAKE_CURRENT_BINARY_DIR}/plugin-host")
+endif()
+if(NOT TARGET neverd-plugin-host)
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../neverd-plugin-host"
+    "${CMAKE_CURRENT_BINARY_DIR}/plugin-cli")
+endif()
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Network LinguistTools Svg
   Sql Concurrent)
@@ -43,12 +51,13 @@ set_property(DIRECTORY "${neverd_docking_SOURCE_DIR}" PROPERTY EXCLUDE_FROM_ALL 
 
 # Worker transport, request dispatch and MCP bridges: no widgets.
 add_library(neverd_gui_core STATIC EngineClient.cpp QueryService.cpp
+  plugins/PluginManifest.cpp plugins/PluginJobs.cpp
   LibraryCodeView.cpp mcp/McpConnectionManager.cpp mcp/GuiSessionBroker.cpp)
 target_include_directories(neverd_gui_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
 target_compile_features(neverd_gui_core PUBLIC cxx_std_20)
-target_link_libraries(neverd_gui_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network)
+target_link_libraries(neverd_gui_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network neverd_plugin_protocol)
 
 # Offline package presentation and local journals; all analysis stays in the
 # shared worker/C API owner. No LLVM or input runtime enters this target.
@@ -221,6 +230,13 @@ if(BUILD_TESTING)
     set_target_properties(neverd-gui-web-tests PROPERTIES WIN32_EXECUTABLE FALSE)
   endif()
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME NeverDGuiPluginSdk COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+    -s "${CMAKE_CURRENT_SOURCE_DIR}/../../pluginsdk/gui/tests" -v)
+  add_test(NAME NeverDGuiPluginLaunch COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/plugin_launch_test.py"
+    "$<TARGET_FILE:neverd-gui>")
+  set_tests_properties(NeverDGuiPluginLaunch PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 30)
   target_sources(neverd-gui PRIVATE tests/WidgetsProbe.cpp)
   target_compile_definitions(neverd-gui PRIVATE NEVERD_GUI_TEST_PROBES=1)
   target_link_libraries(neverd-gui PRIVATE Qt6::Test)
@@ -317,6 +333,18 @@ if(BUILD_TESTING)
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
   if(TARGET neverd-worker-test-server)
+    qt_add_executable(neverd-gui-plugin-tests tests/PluginTests.cpp)
+    target_link_libraries(neverd-gui-plugin-tests PRIVATE neverd_gui_app Qt6::Test)
+    target_compile_definitions(neverd-gui-plugin-tests PRIVATE
+      TEST_WORKER="$<TARGET_FILE:neverd-worker-test-server>"
+      TEST_PYTHON="${Python3_EXECUTABLE}"
+      TEST_PROVIDER_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../../unittests/plugin/process_provider.py"
+      TEST_GUI_SDK="${CMAKE_CURRENT_SOURCE_DIR}/../../pluginsdk/gui")
+    add_dependencies(neverd-gui-plugin-tests neverd-worker-test-server)
+    add_test(NAME NeverDGuiPlugins COMMAND neverd-gui-plugin-tests
+      -o "${CMAKE_CURRENT_BINARY_DIR}/plugin-tests.txt,txt")
+    set_tests_properties(NeverDGuiPlugins PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
     qt_add_executable(neverd-gui-symbol-tests tests/MicrosoftSymbolsTests.cpp)
     target_link_libraries(neverd-gui-symbol-tests PRIVATE neverd_gui_app Qt6::Test)
     target_compile_definitions(neverd-gui-symbol-tests PRIVATE
@@ -378,6 +406,18 @@ if(BUILD_TESTING)
   add_test(NAME NeverDMcpQt COMMAND neverd-mcp-qt-tests)
   set_tests_properties(NeverDMcpQt PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 30)
   if(NEVERD_WORKER_REAL_ENGINE_TESTS)
+    qt_add_executable(neverd-gui-analysis-section-tests tests/AnalysisSectionTests.cpp)
+    target_link_libraries(neverd-gui-analysis-section-tests PRIVATE neverd_gui_app Qt6::Test)
+    target_compile_definitions(neverd-gui-analysis-section-tests PRIVATE
+      TEST_REAL_WORKER="$<TARGET_FILE:neverd-worker>"
+      TEST_PYTHON="${Python3_EXECUTABLE}"
+      TEST_GUI_SDK="${CMAKE_CURRENT_SOURCE_DIR}/../../pluginsdk/gui")
+    set_target_properties(neverd-gui-analysis-section-tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    add_dependencies(neverd-gui-analysis-section-tests neverd-worker)
+    add_test(NAME NeverDGuiAnalysisSections COMMAND neverd-gui-analysis-section-tests
+      -o "${CMAKE_CURRENT_BINARY_DIR}/analysis-section-tests.txt,txt")
+    set_tests_properties(NeverDGuiAnalysisSections PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
     add_test(NAME NeverDGuiAnalysis COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/analysis_probe_test.py"
       "$<TARGET_FILE:neverd-gui>" "$<TARGET_FILE:neverd_shared>")
@@ -400,6 +440,7 @@ if(BUILD_TESTING)
   # Keep their diagnostics connected to CTest's stdout on Windows.
   foreach(_neverd_gui_test IN ITEMS neverd-gui-tests neverd-gui-unit-tests
       neverd-gui-patch-tests
+      neverd-gui-plugin-tests
       neverd-gui-library-view-tests neverd-gui-query-tests neverd-mcp-qt-tests
       neverd-gui-language-tests)
     if(TARGET ${_neverd_gui_test})

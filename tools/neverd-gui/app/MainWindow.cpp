@@ -2,6 +2,7 @@
 
 #include "../Config.h"
 #include "../ResourceLimits.h"
+#include "AnalysisPlugins.h"
 #include "AnalysisProgress.h"
 #include "ChooserView.h"
 #include "CodeView.h"
@@ -34,6 +35,7 @@
 #include "OutputWindow.h"
 #include "PathfinderView.h"
 #include "PdbPromptDialog.h"
+#include "PluginManagerDialog.h"
 #include "ProjectDatabase.h"
 #include "QuickStartDialog.h"
 #include "Resolve.h"
@@ -311,6 +313,48 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
   qApp->installEventFilter(this);
   buildMenusAndToolbars();
   buildDocks();
+  plugins_ = new AnalysisPlugins(session_, actions_);
+  plugins_->setSelectionProvider([this] {
+    QJsonObject selection;
+    auto address = currentAddress();
+    auto function = currentFunction();
+    if (auto *code = focusedCodeView()) {
+      function = code->text()->function();
+      address = code->text()->currentAddress();
+      if (!address)
+        address = function;
+    } else if (auto *chooser = focusedChooser()) {
+      address = chooser->currentAddress();
+      function = chooser->model().kind() == ChooserKind::Functions
+                     ? address
+                     : std::nullopt;
+    }
+    if (address)
+      selection.insert("address", hexAddress(*address));
+    if (function)
+      selection.insert("function_address", hexAddress(*function));
+    QString text;
+    if (auto *chooser = focusedChooser())
+      text = chooser->selectedText();
+    else if (auto *code = focusedCodeView())
+      text = code->text()->selectedText();
+    else
+      text = disassembly_->selectedText();
+    selection.insert(
+        "selection_text",
+        text.left(::neverd::limits::gui::plugin::kMaxSelectionCharacters));
+    return selection;
+  });
+  auto *pluginDock =
+      makeDock(QStringLiteral("analysisPlugins"), QT_TR_NOOP("Plugin tasks"),
+               QStringLiteral("extensions"), plugins_);
+  menuBar()->insertMenu(actions_.menu(QStringLiteral("Help"))->menuAction(),
+                        plugins_->menu());
+  connect(plugins_, &AnalysisPlugins::showRequested, this,
+          [this, pluginDock] { openDock(pluginDock, false); });
+  connect(plugins_, &AnalysisPlugins::navigateRequested, this,
+          &MainWindow::navigate);
+  connect(plugins_, &AnalysisPlugins::message, output_, &OutputWindow::append);
   buildStatusBar();
   connectSession();
   microsoftSymbols_ = new MicrosoftSymbols(session_, this);
@@ -530,6 +574,7 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
 }
 
 MainWindow::~MainWindow() {
+  plugins_->jobs().stopAll();
   qApp->removeEventFilter(this);
   // The startup greeting has no widget parent: it is the application's only
   // visible window until a start is chosen.
@@ -2358,6 +2403,10 @@ void MainWindow::connectActions() {
         action->trigger();
         return;
       }
+  });
+  on(ActionId::OptionsPlugins, [this] {
+    showModelessDialog(new PluginManagerDialog(session_.pluginServices(), this),
+                       this);
   });
   on(ActionId::OptionsAnalyze, [this] { session_.analyzeWholeProgram(); });
   on(ActionId::OptionsCancel, [this] { session_.cancelReads(); });
@@ -4735,6 +4784,7 @@ void MainWindow::contextMenu(const QPoint &globalPosition) {
   // The click moved the cursor: the commands act where it is now.
   updateActions();
   QMenu menu(commandWindow());
+  plugins_->populateContextMenu(menu);
   menu.setObjectName(QStringLiteral("analysisContextMenu"));
   if (auto *code = focusedCodeView())
     addNumberActions(menu, code);
@@ -4912,7 +4962,18 @@ void MainWindow::functionsMenu(ChooserView *view, const QPoint &position) {
   const auto entry = view->currentAddress();
   if (!entry)
     return;
+  const QPointer<MainWindow> window = this;
+  const QPointer<QWidget> previous = contextMenuFocus_;
+  const auto restore = qScopeGuard([window, previous] {
+    if (window) {
+      window->contextMenuFocus_ = previous;
+      window->updateActions();
+    }
+  });
+  contextMenuFocus_ = table;
   QMenu menu(table->window());
+  menu.setObjectName(QStringLiteral("functionsContextMenu"));
+  plugins_->populateContextMenu(menu);
   // The commands of the disassembly's, run on the row's function.
   auto *edit = actions_.action(ActionId::EditFunction);
   auto *rowEdit = menu.addAction(edit->icon(), edit->text());
@@ -5855,6 +5916,8 @@ void MainWindow::resetDesktop() {
 }
 
 void MainWindow::closeTransientDocks(bool discardContents) {
+  if (discardContents || plugins_->jobs().jobs().isEmpty())
+    docks_.value(QStringLiteral("analysisPlugins"))->forceClose();
   if (discardContents)
     leaveFocusMode();
   for (auto *dock : std::as_const(codeDocks_)) {

@@ -12,6 +12,19 @@
 #include <QToolBar>
 
 namespace neverd::gui {
+void ActionRegistry::registerExternalAction(QAction *action) {
+  if (action && !all_.contains(action)) {
+    action->setProperty("externalCommand", true);
+    all_.append(action);
+    connect(action, &QObject::destroyed, this,
+            [this, action] { all_.removeAll(action); });
+  }
+}
+
+void ActionRegistry::unregisterExternalAction(QAction *action) {
+  all_.removeAll(action);
+}
+
 namespace {
 struct ActionSpec {
   const char *id;
