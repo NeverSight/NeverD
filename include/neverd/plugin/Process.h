@@ -28,8 +28,12 @@ struct ProcessEvent {
 };
 
 /// One process per transport. I/O threads never call plugin or GUI code.
-/// Exit is posted after both output streams drain and descendants terminate.
-/// The consumer must keep its completion queue alive through join().
+/// Exit is posted after the provider exits, its job (Windows) or process group
+/// (POSIX) is terminated and both output streams drain. A POSIX descendant
+/// that leaves the group is not terminated: if the pipes are still open
+/// kShutdownWaitMs after the provider exits, they are abandoned and an Error
+/// precedes Exit. The consumer must keep its completion queue alive through
+/// join().
 class Process {
   struct Impl;
   std::unique_ptr<Impl> State;

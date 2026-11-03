@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HOST = Path(sys.argv[1]).resolve()
@@ -164,9 +165,54 @@ raise SystemExit(run(handler))
 """)
         output = self.root / "tree"
         self.invoke("--output", str(output))
-        import time
         time.sleep(1.2)
         self.assertFalse((output / "survived").exists())
+
+    @unittest.skipIf(os.name == "nt", "a Windows job contains every descendant")
+    def test_descendant_outside_the_process_group_cannot_hold_the_task(self):
+        self.script("""from neverd_gui_plugin import run
+from pathlib import Path
+import subprocess, sys
+def handler(task):
+    # A new session leaves the provider's process group but keeps its stdout.
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+    Path('escaped.pid').write_text(str(child.pid), encoding='utf-8')
+    return dict(views=[])
+raise SystemExit(run(handler))
+""")
+        def reap():
+            try:
+                os.kill(int((self.root / "escaped.pid").read_text(encoding="utf-8")), 9)
+            except (OSError, ValueError):
+                pass
+        self.addCleanup(reap)
+        started = time.monotonic()
+        report, _ = self.invoke(code=1)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(report["state"], "failed")
+        self.assertIn("kept its pipes open", report["diagnostic"])
+
+    @unittest.skipIf(os.name == "nt", "Windows passes an explicit handle list")
+    def test_provider_inherits_only_protocol_pipes(self):
+        read, write = os.pipe()
+        # A high number that the provider's interpreter does not open itself.
+        inherited = os.dup2(write, 200)
+        for descriptor in (read, write, inherited):
+            self.addCleanup(os.close, descriptor)
+        self.script("""from neverd_gui_plugin import run
+import os
+def handler(task):
+    try: os.fstat(200)
+    except OSError: text = 'closed'
+    else: text = 'inherited'
+    return dict(views=[dict(kind='text', title='Descriptor', text=text)])
+raise SystemExit(run(handler))
+""")
+        result = subprocess.run([str(HOST), "run", str(self.manifest), "run"], cwd=self.root,
+                                capture_output=True, timeout=12, pass_fds=(inherited,))
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+        self.assertEqual(json.loads(result.stdout)["result"]["views"][0]["text"], "closed")
 
     def test_headless_action_context_is_explained(self):
         self.declaration["actions"][0]["context"] = "function"
