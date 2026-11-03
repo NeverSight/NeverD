@@ -639,9 +639,9 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
 }
 
 #include "X86LegacyEventNativeTests.inc"
-#include "X86LegacyStepNativeTests.inc"
 #include "X86LegacySegmentLoadNativeTests.inc"
 #include "X86LegacySegmentNativeTests.inc"
+#include "X86LegacyStepNativeTests.inc"
 
 INSTANTIATE_TEST_SUITE_P(PagingModes, X86PagingNativeTest,
                          testing::Values(2u, 3u, 4u, 5u));

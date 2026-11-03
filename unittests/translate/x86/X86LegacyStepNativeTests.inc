@@ -195,10 +195,16 @@ protected:
     ASSERT_EQ(Run->exit_reason, unsigned(KVM_EXIT_DEBUG));
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &Registers), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &Special), 0);
+    kvm_vcpu_events FinalEvents{};
+    ASSERT_EQ(ioctl(CPU, KVM_GET_VCPU_EVENTS, &FinalEvents), 0);
+    EXPECT_EQ(bool(FinalEvents.nmi.masked), State.NMIBlocked);
     EXPECT_EQ(Registers.rip, State.EIP);
-    EXPECT_EQ(Registers.rax, State.Core.GPR[0]);
-    EXPECT_EQ(Registers.rsp, State.Core.GPR[4]);
-    EXPECT_EQ(Registers.rdi, State.Core.GPR[7]);
+    const std::array<uint32_t, 8> GPR{
+        uint32_t(Registers.rax), uint32_t(Registers.rcx),
+        uint32_t(Registers.rdx), uint32_t(Registers.rbx),
+        uint32_t(Registers.rsp), uint32_t(Registers.rbp),
+        uint32_t(Registers.rsi), uint32_t(Registers.rdi)};
+    EXPECT_EQ(GPR, State.Core.GPR);
     EXPECT_EQ(Registers.rflags & ~uint64_t{0x10000}, State.EFlags);
     EXPECT_EQ(Special.cr2, State.CR2);
     for (unsigned I = 0; I != Segments.size(); ++I) {
@@ -208,6 +214,7 @@ protected:
       EXPECT_EQ(Native.Base, Model.Base);
       EXPECT_EQ(Native.Limit, Model.Limit);
       EXPECT_EQ(Native.Attributes, Model.Attributes);
+      EXPECT_EQ(Native.Unusable, Model.Unusable);
     }
     for (unsigned Address = 0xcfd0; Address != 0xd020; ++Address) {
       auto Got =

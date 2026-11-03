@@ -259,12 +259,19 @@ protected:
               unsigned(Shutdown ? KVM_EXIT_SHUTDOWN : KVM_EXIT_DEBUG));
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &Registers), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &Special), 0);
+    kvm_vcpu_events FinalEvents{};
+    ASSERT_EQ(ioctl(CPU, KVM_GET_VCPU_EVENTS, &FinalEvents), 0);
     EXPECT_EQ(Special.cr2, State.CR2);
     if (!Shutdown) {
       ASSERT_EQ(Expected->Status, X86LegacyExecutionStatus::EventDelivered);
       EXPECT_EQ(Registers.rip, State.EIP);
-      EXPECT_EQ(Registers.rsp, State.Core.GPR[4]);
-      EXPECT_EQ(Registers.rax, State.Core.GPR[0]);
+      const std::array<uint32_t, 8> GPR{
+          uint32_t(Registers.rax), uint32_t(Registers.rcx),
+          uint32_t(Registers.rdx), uint32_t(Registers.rbx),
+          uint32_t(Registers.rsp), uint32_t(Registers.rbp),
+          uint32_t(Registers.rsi), uint32_t(Registers.rdi)};
+      EXPECT_EQ(GPR, State.Core.GPR);
+      EXPECT_EQ(bool(FinalEvents.nmi.masked), State.NMIBlocked);
       EXPECT_EQ(Registers.rflags & ~uint64_t{0x10000}, State.EFlags);
       for (unsigned I = 0; I != Segments.size(); ++I) {
         const auto Native = Cache(*Segments[I]);
@@ -273,6 +280,7 @@ protected:
         EXPECT_EQ(Native.Base, Model.Base) << "segment " << I;
         EXPECT_EQ(Native.Limit, Model.Limit) << "segment " << I;
         EXPECT_EQ(Native.Attributes, Model.Attributes) << "segment " << I;
+        EXPECT_EQ(Native.Unusable, Model.Unusable) << "segment " << I;
       }
     }
     for (unsigned Begin : {0xb000u - 32, 0xd000u, 0xd100u, 0xdf00u, 0xe000u,
