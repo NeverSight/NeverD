@@ -3709,6 +3709,12 @@ address provenance when function bodies are copied and moved.
 `CalleeSignatureMemo.WideOperandsCountAgainstTheBodyBudget` checks that expanded
 operand storage counts against the memo's byte budget, including retained
 allocations after the active operand list shrinks.
+`CalleeSignatureMemo.NoReturnNamesFollowTheAdoptedImage` checks name-index reuse
+and replacement across image and symbol inventories.
+`InternalNoReturn.RegisterPreservationReusesOnlyImageNames` compares cached and
+live lookup on PE/ELF call chains and keeps resolver/declaration callbacks out
+of nested register proofs. Both tests analyze synthetic bytes without executing
+them.
 
 ## Acceleration libraries
 
