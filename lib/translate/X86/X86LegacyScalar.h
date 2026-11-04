@@ -12,6 +12,7 @@
 
 #include "X86LegacyEncoding.h"
 
+#include "neverd/ir/X86/X86DecimalAdjust.h"
 #include "neverd/translate/X86/X86LegacyExecution.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -40,6 +41,7 @@ enum class X86LegacyScalarOperation {
   ExchangeAdd,
   CompareExchange,
   CompareExchangePair,
+  DecimalAdjust,
   Add,
   Or,
   AddCarry,
@@ -93,6 +95,7 @@ struct X86LegacyScalarInstruction {
   X86LegacyScalarOperand Destination, Source;
   std::optional<uint32_t> MultiplyImmediate;
   std::optional<uint8_t> ShiftImmediate;
+  std::optional<X86DecimalAdjustInstruction> Adjustment;
   unsigned Bytes = 4, SourceBytes = 4, Condition = 0;
   unsigned CounterBytes = 0;
   uint16_t Discard = 0;

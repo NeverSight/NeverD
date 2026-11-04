@@ -154,6 +154,10 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacyBitScanChoices> BitScanChoices;
   /// Required for explicit LOCK and implicit-lock memory XCHG.
   std::optional<X86LegacyAtomicProfile> Atomics;
+  /// Successful decimal-adjust undefined flags: AAA/AAS OF/SF/ZF/PF,
+  /// DAA/DAS OF, AAM/AAD OF/AF/CF. No other bits are permitted. AAM base
+  /// zero delivers #DE before publishing AX or flags; AAD base zero is valid.
+  std::optional<uint32_t> DecimalUndefinedFlags;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -194,6 +198,7 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// BSWAP (dword), XLAT, LEAVE, SETcc/CMOVcc, LOOP/LOOPcc/JCXZ/JECXZ,
 /// SHL/SAL/SHR/SAR, ROL/ROR/RCL/RCR, SHLD/SHRD,
 /// BT/BTS/BTR/BTC, BSF/BSR, XCHG/XADD/CMPXCHG/CMPXCHG8B,
+/// AAA/AAS/DAA/DAS and AAM/AAD with every immediate base,
 /// PUSH/POP and near CALL/JMP/Jcc/RET.
 /// Register immediates
 /// retain their unbound interface; other scalars require Scalars, CALL requires

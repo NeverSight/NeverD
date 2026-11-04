@@ -14,6 +14,7 @@
 
 #include "X86BitTestUndefined.h"
 #include "X86CompatibilityReturnUndefined.h"
+#include "X86DecimalAdjustAudit.h"
 #include "X86DivisionUndefined.h"
 #include "X86DoubleShiftUndefined.h"
 #include "X86LegacyVectorMoveAudit.h"
@@ -1361,6 +1362,11 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
             ? divisionundefined::matches(
                   llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
                   EffectsDraft)
+        : decimaladjust::form(Insn, TargetArch)
+            ? decimaladjust::matches(
+                  Insn, TargetArch,
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
         : Logic ? HasLogicEffect
                 : EffectsDraft.Effects.empty();
     if (!Strict) {
@@ -1372,6 +1378,7 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
                 !nativestateaudit::form(Insn, TargetArch) &&
                 !registermoveundefined::form(Insn, TargetArch) &&
                 !divisionundefined::form(Insn, TargetArch) &&
+                !decimaladjust::form(Insn, TargetArch) &&
                 !multiplyundefined::form(Insn, TargetArch) &&
                 !tbm::form(Insn, TargetArch) &&
                 !bextr::form(Insn, TargetArch) &&

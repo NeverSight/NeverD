@@ -3830,6 +3830,7 @@ full/truncated MUL/IMUL, full-dividend DIV/IDIV, NOP, CLI/STI,
 CBW/CWDE/CWD/CDQ, LAHF/SAHF, CLC/STC/CMC/CLD/STD, SETcc/CMOVcc,
 BSWAP (dword), XLAT, LEAVE, SHL/SAL/SHR/SAR, ROL/ROR/RCL/RCR,
 SHLD/SHRD, BT/BTS/BTR/BTC, BSF/BSR, XCHG/XADD/CMPXCHG/CMPXCHG8B,
+AAA/AAS/DAA/DAS/AAM/AAD,
 LOOP/LOOPcc/JCXZ/JECXZ, INT/INT3/INTO/INT1,
 UD2, protected
 16/32-bit IRET/RETF and Intel SEP SYSENTER/SYSEXIT. It is not a general i386
@@ -3901,3 +3902,33 @@ diagnostics. General i386 source ABI, the remaining scalar/vector/string
 families, task/call gates, real/VM86, debug-event production, SMM/SGX state and
 exact faulting-walk A/D behavior remain separate completion work. The final
 LLVM release, production SDK pin and LLVM gitlink remain gated on that work.
+
+### Protected decimal adjustment and zero-base correction
+
+AAA/AAS/DAA/DAS/AAM/AAD now execute through the original-byte protected scalar
+owner. All 256 immediate bases remain distinct; AAM zero delivers #DE while
+AAD zero preserves AL and clears AH. Code/operand/address widths do not widen
+these implicit byte/word operations. A separate successful-completion flag
+image supplies only the documented undefined bits. Defined flags, high
+register bits and fault rollback remain owned by the executor.
+
+The ordinary lifter previously changed a zero immediate to one for both
+AAM and AAD. Regressions reproduced both incorrect behaviors before the fix.
+It now reads the original immediate byte, refuses AAM zero without a fault
+continuation, and computes AAD zero correctly. Its six form-specific audits
+record exactly the architectural undefined outputs; the same shared rule
+supplies the protected execution boundary. This does not introduce a NeverC
+i386 frontend or an i386 native compiler intrinsic API.
+
+[November 4 decimal evidence](evidence/x86-legacy-decimal-2026-11-04.json)
+records the original CPU matrices, both SDK profiles, lifter regressions and
+remaining completion boundaries. The paging matrices pass 1,030 checks with
+two explicit LA57 skips; another 152 lifting/audit checks pass. The new decimal
+matrices contribute 198,784 original CPU state comparisons. HighC and LLVM-to-C
+exports of AAD zero, AAD seventeen and AAM ten run as static ELF32 at O0/O2,
+with UBSan trap mode, on both P/E cores. Their 1,572,864 original result
+comparisons cover all AX values. Both exporters refuse AAM zero; an original
+ELF32 control produces SIGFPE. These source checks use the native fork SDK.
+Software SMM, SGX/AEX, task/VM86 state,
+general i386 source ABI and the other unqualified environments remain open;
+the final LLVM release, SDK pin and LLVM gitlink stay unchanged.

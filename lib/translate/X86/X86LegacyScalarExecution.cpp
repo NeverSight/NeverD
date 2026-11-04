@@ -34,6 +34,10 @@ public:
     S.EIP = Fallthrough;
     uint32_t A = 0, B = 0;
     const unsigned N = F.Bytes;
+    if (F.Adjustment) {
+      decimalAdjust(*F.Adjustment);
+      return;
+    }
     if (F.Operation == Op::ByteSwap) {
       A = S.Core.GPR[*F.Destination.Register];
       writeRegister(*F.Destination.Register, 4,
@@ -281,6 +285,44 @@ public:
   }
 
 private:
+  void decimalAdjust(const X86DecimalAdjustInstruction &F) {
+    using Adjust = X86DecimalAdjustOperation;
+    if (F.raisesDivideError()) {
+      fault(0);
+      return;
+    }
+    const uint32_t AX = uint16_t(S.Core.GPR[0]);
+    const uint8_t AL = AX, AH = AX >> 8;
+    uint32_t Value = AX, Flags = *O.DecimalUndefinedFlags;
+    unsigned Bytes = 2;
+    if (F.Operation == Adjust::AAA || F.Operation == Adjust::AAS) {
+      const bool Carry = (AL & 15) > 9 || (S.EFlags & 16);
+      if (Carry)
+        Value = F.Operation == Adjust::AAA ? AX + 0x106 : AX - 0x106;
+      Value &= 0xff0f;
+      Flags |= Carry ? 0x11 : 0;
+    } else {
+      if (F.Operation == Adjust::AAM) {
+        Value = (uint32_t(AL / F.Base) << 8) | (AL % F.Base);
+      } else if (F.Operation == Adjust::AAD) {
+        Value = uint8_t(AL + AH * F.Base);
+      } else {
+        const bool Subtract = F.Operation == Adjust::DAS;
+        const bool Low = (AL & 15) > 9 || (S.EFlags & 16);
+        const bool High = AL > 0x99 || (S.EFlags & 1);
+        const unsigned Delta = (Low ? 6 : 0) + (High ? 0x60 : 0);
+        Value = uint8_t(Subtract ? AL - Delta : AL + Delta);
+        Flags |= (Low ? 16 : 0) | (High || (Subtract && Low && AL < 6) ? 1 : 0);
+        Bytes = 1;
+      }
+      const uint8_t Result = Value;
+      Flags |= (!(std::popcount(Result) & 1) ? 4 : 0) | (!Result ? 64 : 0) |
+               (Result & 0x80);
+    }
+    writeRegister(0, Bytes, Value);
+    S.EFlags = (S.EFlags & ~kX86LegacyArithmeticFlagsMask) | Flags;
+  }
+
   X86LegacyExecutionState &S;
   X86PagedMemory &M;
   const X86LegacyExecutionOptions &O;

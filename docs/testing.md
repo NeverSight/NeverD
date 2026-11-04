@@ -100,6 +100,20 @@ operand grammar, and the x64 paged execution and continuation source/export
 suites on both SDKs after changing the shared paged-RAM owner. Repeat the new
 CPU matrix on the qualified E core; retain skips as missing coverage.
 
+`LegacyDecimal/*` uses the same fixture for AAA/AAS/DAA/DAS/AAM/AAD. It checks
+every AL with incoming AF/CF, AH carry/borrow boundaries, every immediate base,
+ignored prefixes, all CPLs and both code/stack widths under legacy paging and
+PAE. AAM base zero enters the original #DE handler, which writes a new
+immediate, IRETs and retries. The original CPU runs before the software model;
+only each instruction's documented undefined flag bits become explicit model
+inputs. Defined flags, AX, unrelated registers, frames and RAM remain independent
+comparison outputs. Software tests vary arbitrary images separately and
+check admission before fetch and fetch faults before #DE.
+`NeverDX86LegacyAdmissionTests` also checks AAM zero refusal, valid AAD zero,
+all immediate bytes through three decoder routes, exact undefined-output
+audits, and original-byte authority over conflicting decoded annotations.
+Run `NeverDX86UndefinedEffectsTests` after changing this audit boundary.
+
 `LegacyImplicit/*` uses that same scalar fixture for BSWAP, XLAT and LEAVE.
 It covers every dword register, every unsigned AL index, all segment prefixes,
 address truncation before base addition, exact byte reads, read-only and

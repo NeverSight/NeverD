@@ -76,6 +76,12 @@ comparison writeback and preflights the full eight-byte pair. The execution
 entry requires an explicit exclusive-RAM profile for memory XCHG and valid
 memory LOCK forms; prefix admission belongs only to the scalar grammar.
 No concurrent RAM observer or lock-trap producer is supplied by that profile.
+`ir/X86/X86DecimalAdjust` owns the six decimal opcode identities, zero-base
+exception rule and undefined flag masks shared by lifting and protected
+execution. The lifter authenticates the original immediate byte and records
+arbitrary flag producers. The protected executor publishes only AX/AL and
+the instruction's flag slice, or routes AAM base zero to the existing #DE
+owner before any result. Neither path changes a zero base into a nonzero one.
 Segment permissions and page walks remain in their existing owners. A scalar
 read/modify/write prepares write permission once, reads those exact physical
 fragments through `X86PagedMemory::loadPreparedStore`, and commits the final

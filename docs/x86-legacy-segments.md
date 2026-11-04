@@ -251,6 +251,7 @@ executor to one CPU and ordinary paged RAM for these protected-mode families:
 | BT, BTS, BTR, BTC | Word/dword register or memory bit base, register or imm8 index. Memory register indices are signed word offsets; immediate indices stay within the base word. LOCK on BTS/BTR/BTC requires the exclusive-RAM binding below. |
 | XCHG, XADD, CMPXCHG | Byte/word/dword registers or segmented memory, every high-byte alias, accumulator-short XCHG forms and all six arithmetic flags for XADD/CMPXCHG. Memory XCHG always requires the atomic binding. |
 | CMPXCHG8B | Eight-byte segmented memory, full EDX:EAX comparison and ECX:EBX replacement, failed writeback and ZF-only flag changes; 66 does not shrink the operand. |
+| AAA, AAS, DAA, DAS, AAM, AAD | Implicit AX/AL adjustment, every immediate base, explicit undefined flag slices, and restartable AAM base-zero #DE. Operand/address/segment prefixes do not change the operation. |
 | BSF, BSR | Word/dword register or memory source, partial GPR publication and architectural ZF. Zero-source destination and non-ZF CPU choices are explicit. |
 | CBW, CWDE, CWD, CDQ | Implicit AL/AX/EAX sign extension with independent code/operand widths; other register bits and all flags are preserved. |
 | LAHF, SAHF | Exact AH/status-bit transfer, reserved bits, and preservation of OF, DF and privileged flags. |
@@ -300,6 +301,20 @@ ZF. Complete eight-byte bounds and permissions precede publication. The
 existing page-table A/D model remains observable when operands alias a PTE.
 These rules follow the XCHG, XADD, CMPXCHG, CMPXCHG8B and LOCK sections of
 [Intel SDM revision 093](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+
+Decimal adjustments require `DecimalUndefinedFlags`: OF/SF/ZF/PF for AAA/AAS,
+OF for DAA/DAS, and OF/AF/CF for AAM/AAD. Other bits are rejected before fetch.
+Defined flags are calculated from the original AL, AH, CF and AF as applicable;
+unrelated flags and register bits are retained. AAA/AAS include carry/borrow
+between AL and AH before masking the low nibble. DAS retains its first-stage
+borrow even when the second adjustment is not taken. AAM/AAD use the full
+unsigned immediate byte, independently of operand and code widths.
+AAM zero delivers #DE without publishing AX or new arithmetic flags. AAD zero
+is valid: it keeps AL and clears AH. Instruction-fetch faults precede #DE.
+An original handler can repair the immediate and IRET to retry with the new
+authenticated bytes. LOCK, REP, duplicate prefixes and malformed extents are
+refused. These operations reuse the protected scalar transaction; they add no
+real/VM86 mode or general i386 source-dispatch contract.
 
 DIV/IDIV additionally require `DivisionArithmeticFlags`, an explicit EFLAGS
 image containing only CF/PF/AF/ZF/SF/OF (`kX86LegacyArithmeticFlagsMask`).

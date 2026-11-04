@@ -40,7 +40,12 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   };
   constexpr Op Arithmetic[]{Op::Add, Op::Or,       Op::AddCarry, Op::SubBorrow,
                             Op::And, Op::Subtract, Op::Xor,      Op::Compare};
-  if (B <= 0x3d && (B & 7) <= 5) {
+  if (const auto Adjust = x86DecimalAdjustOperation(B)) {
+    F.Operation = Op::DecimalAdjust;
+    F.Adjustment = X86DecimalAdjustInstruction{*Adjust};
+    if (F.Adjustment->hasBase())
+      F.Adjustment->Base = R.byte();
+  } else if (B <= 0x3d && (B & 7) <= 5) {
     F.Operation = Arithmetic[B >> 3];
     Width(!(B & 1));
     if ((B & 7) < 4) {

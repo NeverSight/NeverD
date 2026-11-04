@@ -23,6 +23,9 @@ protected:
   std::optional<X86LegacyBitScanChoices> BitScanChoices;
   std::optional<X86LegacyAtomicProfile> Atomics;
   std::optional<uint32_t> MemoryHigh;
+  /// Bind only architectural undefined bits from the independent original CPU.
+  /// All defined values, flags, faults and memory still come from the model.
+  std::optional<uint32_t> DecimalUndefinedMask;
   bool CheckOperandPageEffects = false;
 
   void SetUp() override {
@@ -96,6 +99,7 @@ protected:
     if (Case == 9 || Case == 15 || Case == 16)
       put(PT + 13 * PW, 0xd006, PW);
     std::vector<std::vector<uint8_t>> Repair;
+    auto RetryBytes = Bytes;
     if (Case == 12) {
       const uint32_t PTE = PT + (Data >> 12) * PW;
       Repair = {{0xc7, 0x05, uint8_t(PTE), uint8_t(PTE >> 8),
@@ -111,6 +115,18 @@ protected:
     if (Case == 18) {
       Repair = {{0xb9, 3, 0, 0, 0}, {0xcf}};
       uint32_t PC = 0x2000; // #DE has no error code to discard.
+      for (const auto &I : Repair) {
+        std::copy(I.begin(), I.end(), RAM + PC);
+        PC += I.size();
+      }
+    }
+    if (Case == 20) {
+      const uint32_t Immediate = InstructionPC + Bytes.size() - 1;
+      Repair = {{0xc6, 0x05, uint8_t(Immediate), uint8_t(Immediate >> 8),
+                 uint8_t(Immediate >> 16), uint8_t(Immediate >> 24), 10},
+                {0xcf}};
+      RetryBytes.back() = 10;
+      uint32_t PC = 0x2000;
       for (const auto &I : Repair) {
         std::copy(I.begin(), I.end(), RAM + PC);
         PC += I.size();
@@ -230,20 +246,6 @@ protected:
     Options.BitTestUndefinedFlags = BitTestUndefinedFlags;
     Options.BitScanChoices = BitScanChoices;
     Options.Atomics = Atomics;
-    auto Expected = executeX86LegacyInstruction(State, *Memory, Bytes, Options);
-    ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
-    if (Case == 12 || Case == 18) {
-      ASSERT_EQ(Expected->DeliveredVector, Case == 12 ? 14 : 0);
-      for (const auto &I : Repair) {
-        Expected = executeX86LegacyInstruction(State, *Memory, I, Options);
-        ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
-        ASSERT_TRUE(Expected->InstructionCompleted);
-      }
-      ASSERT_EQ(State.EIP, InstructionPC);
-      Expected = executeX86LegacyInstruction(State, *Memory, Bytes, Options);
-      ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
-      ASSERT_TRUE(Expected->InstructionCompleted);
-    }
     auto Flush = Special;
     Flush.cr3 = 0x90000;
     ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &Flush), 0);
@@ -260,6 +262,25 @@ protected:
     Debug.arch.debugreg[7] = 0x415;
     ASSERT_EQ(ioctl(CPU, KVM_SET_GUEST_DEBUG, &Debug), 0);
     ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
+    if (DecimalUndefinedMask) {
+      ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &Registers), 0);
+      Options.DecimalUndefinedFlags = Registers.rflags & *DecimalUndefinedMask;
+    }
+    auto Expected = executeX86LegacyInstruction(State, *Memory, Bytes, Options);
+    ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
+    if (Case == 12 || Case == 18 || Case == 20) {
+      ASSERT_EQ(Expected->DeliveredVector, Case == 12 ? 14 : 0);
+      for (const auto &I : Repair) {
+        Expected = executeX86LegacyInstruction(State, *Memory, I, Options);
+        ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
+        ASSERT_TRUE(Expected->InstructionCompleted);
+      }
+      ASSERT_EQ(State.EIP, InstructionPC);
+      Expected =
+          executeX86LegacyInstruction(State, *Memory, RetryBytes, Options);
+      ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
+      ASSERT_TRUE(Expected->InstructionCompleted);
+    }
     if (Expected->Status == X86LegacyExecutionStatus::Shutdown) {
       ASSERT_EQ(Run->exit_reason, unsigned(KVM_EXIT_SHUTDOWN));
       ++Comparisons;

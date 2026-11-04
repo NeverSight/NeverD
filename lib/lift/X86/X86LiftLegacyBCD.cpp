@@ -12,11 +12,14 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86DecimalAdjustAudit.h"
 #include "X86LiftDetail.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/X86/X86Lifter.h"
+
+#include <optional>
 
 #define DEBUG_TYPE "neverd-lift-x86"
 
@@ -25,11 +28,16 @@ namespace neverd {
 bool liftLegacyBCD(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
                    const cs_x86 &X86) {
   unsigned InsnId = Insn->id;
+  std::optional<X86DecimalAdjustInstruction> Adjust;
+  if (decimaladjust::isInstruction(InsnId)) {
+    Adjust = decimaladjust::encoding(Insn, L.targetArch());
+    if (!Adjust || Adjust->raisesDivideError())
+      throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
+  }
   switch (InsnId) {
 
-  // BCD legacy (AAA/AAS/AAD/AAM/DAA/DAS, 32-bit only).  Modelled in MedIR to
-  // match QEMU/Unicorn bit-for-bit; the prior placeholders emitted an intrinsic
-  // then clobbered AX with an uninitialised temp (garbage result, no flags).
+  // Defined BCD values and flags. The shared audit records undefined outputs
+  // separately; ordinary source has no #DE continuation for AAM base zero.
   case X86_INS_AAA:
   case X86_INS_AAS: {
     bool IsSub = (InsnId == X86_INS_AAS);
@@ -125,11 +133,7 @@ bool liftLegacyBCD(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   case X86_INS_AAM:
   case X86_INS_AAD: {
     bool IsMul = (InsnId == X86_INS_AAM);
-    uint64_t Base = 10; // implicit base; aam/aad imm8 overrides it
-    if (X86.op_count >= 1 && X86.operands[0].type == X86_OP_IMM)
-      Base = static_cast<uint64_t>(X86.operands[0].imm) & 0xFF;
-    if (Base == 0)
-      Base = 1; // aam/aad 0 faults (#DE); avoid an IR divide-by-zero
+    const uint64_t Base = Adjust->Base;
     NdVar AL = NdVar::reg(x86reg::RAX, 1);
     NdVar AH = NdVar::reg(x86reg::RAX + 1, 1);
     NdVar OldAL = S.makeTemp(1), OldAH = S.makeTemp(1);
@@ -147,7 +151,8 @@ bool liftLegacyBCD(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     }
     S.emit(NdOp::COPY, AL, {AlNew});
     S.emit(NdOp::COPY, AH, {AhNew});
-    // QEMU sets LOGICB flags: SF/ZF/PF from AL, CF/OF/AF cleared.
+    // These concrete placeholders are superseded by the undefined-output
+    // producers when the consumer requests the architectural state contract.
     L.emitZSPF(S, AlNew);
     S.emit(NdOp::COPY, NdVar::reg(x86reg::CF, 1), {NdVar::cst(0, 1)});
     S.emit(NdOp::COPY, NdVar::reg(x86reg::OF, 1), {NdVar::cst(0, 1)});
@@ -202,6 +207,8 @@ bool liftLegacyBCD(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   default:
     return false;
   }
+  if (Adjust)
+    decimaladjust::record(S, *Adjust);
   return true;
 }
 

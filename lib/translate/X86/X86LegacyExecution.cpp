@@ -94,6 +94,12 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (Scalar && Scalar->Atomic &&
       Options.Atomics != X86LegacyAtomicProfile::ExclusiveRAM)
     return invalid("legacy atomic step requires a bound exclusive-RAM profile");
+  if (Scalar && Scalar->Adjustment &&
+      (!Options.DecimalUndefinedFlags ||
+       (*Options.DecimalUndefinedFlags &
+        ~Scalar->Adjustment->undefinedFlagsMask())))
+    return invalid(
+        "legacy decimal adjustment requires an undefined-flags image");
   if (FastSystem && Options.FastSystem != X86LegacyFastSystemProfile::IntelSEP)
     return invalid("legacy fast transfer requires a bound Intel SEP profile");
   if (Scalar && Scalar->logical() && !Options.LogicalAuxiliaryCarry)
