@@ -4294,7 +4294,11 @@ before. A selection that adds its own entry, a full-image run and a cache
 without the summaries keep solving their own. The solve reads each function as a
 run reads a callee, from the warmed facts where their consulted call reads hold,
 and stops past `kMaxImageCallSummaryFunctions`. Publishing drops those facts,
-which only the closure solve reads. The GUI's analysis replicas restore with
+which only the closure solve reads. A run shares the table's maps rather than copying
+them (`SharedValue`, copy-on-write); the table also lists once the imports among
+its stack-argument entries, which the source stack pass would otherwise query
+for every function of the image, and the image's call-argument sources are
+built once per cache rather than once per run. The GUI's analysis replicas restore with
 `call_summaries:true`: they warm a page of functions per idle step, solve, then
 drop their cached replies, and the shown source is read again.
 The GUI owner no longer requests that pipeline warmup: source/CFG views use

@@ -245,7 +245,7 @@ MedFunc *forwardingCallee(const BinaryImage &Img, const PipelineResult &Result,
     return nullptr;
   const va_t Target = Call.Inputs[0].ConstVal;
   if (const std::optional<va_t> Own =
-          importOwnRoutine(Img, &Result.CallArgumentSources, Target))
+          importOwnRoutine(Img, &Result.CallArgumentSources.get(), Target))
     if (const auto It = ByEntry.find(*Own); It != ByEntry.end()) {
       if (ThroughImport)
         *ThroughImport = true;

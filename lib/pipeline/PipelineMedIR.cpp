@@ -303,7 +303,15 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
         DeclaredCallees.insert(Target);
     }
   };
-  ImportDeclarations(Result.CallEntryStackArgs);
+  // An image's summaries list their imports (CallEntryStackArgImports).
+  if (Result.CallEntryStackArgImports) {
+    for (const va_t Target : *Result.CallEntryStackArgImports)
+      if (const auto Own = Result.CallArgumentSources.find(Target);
+          Own == Result.CallArgumentSources.end() || Own->second == Target)
+        DeclaredCallees.insert(Target);
+  } else {
+    ImportDeclarations(Result.CallEntryStackArgs);
+  }
   if (Result.OmittedCalleeStackArgs)
     ImportDeclarations(*Result.OmittedCalleeStackArgs);
   for (const auto &[Target, Signature] : Result.CallEntryVariadicArguments)
@@ -623,12 +631,12 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     Local.setObjCBlockParameterReceivers(&Opts.ObjCBlockParameterReceivers);
     Local.setObjCBlockCaptureReceivers(&Opts.ObjCBlockCaptureReceivers);
     Local.setCalleePopMap(&CalleePop);
-    Local.setCallMayWriteGPRs(&Result.CallMayWriteGPRs);
-    Local.setCallExitConstants(&Result.CallExitConstants);
-    Local.setCallEntryReadGPRs(&Result.CallEntryReadGPRs);
-    Local.setCallUnreadGPRs(&Result.CallUnreadGPRs);
-    Local.setCallArgumentSources(&Result.CallArgumentSources);
-    Local.setCallEntryStackArgs(&Result.CallEntryStackArgs);
+    Local.setCallMayWriteGPRs(&Result.CallMayWriteGPRs.get());
+    Local.setCallExitConstants(&Result.CallExitConstants.get());
+    Local.setCallEntryReadGPRs(&Result.CallEntryReadGPRs.get());
+    Local.setCallUnreadGPRs(&Result.CallUnreadGPRs.get());
+    Local.setCallArgumentSources(&Result.CallArgumentSources.get());
+    Local.setCallEntryStackArgs(&Result.CallEntryStackArgs.get());
     Local.setCallEntryStackSlots(&Result.CallEntryStackSlots);
     Local.setCallEntryArgumentCounts(&Result.CallEntryArgumentCounts);
     Local.setCallEntryFloatingArguments(&Result.CallEntryFloatingArguments);
@@ -636,7 +644,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     Local.setCallEntryVariadicArguments(&Result.CallEntryVariadicArguments);
     Local.setUserPrototypeCallees(&Result.CallUserPrototypes);
     Local.setCallDispatchThunks(&Result.CallDispatchThunks);
-    Local.setCallVariadicFrom(&Result.CallVariadicFrom);
+    Local.setCallVariadicFrom(&Result.CallVariadicFrom.get());
     Local.setFormattedCalls(&Result.FormattedCalls);
     Local.setStackProbeSlots(&StackProbeSlots);
   };

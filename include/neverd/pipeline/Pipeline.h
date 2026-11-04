@@ -33,6 +33,7 @@
 #include "neverd/pipeline/SourceViewOptions.h"
 #include "neverd/sbf/SBFIR.h"
 #include "neverd/solver/SymSynthVerifier.h"
+#include "neverd/support/SharedValue.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
@@ -356,22 +357,23 @@ struct PipelineResult {
   std::optional<SourceFunctionTypeHint> InterpreterMachineSourceABI;
   /// Direct-callee GPR write summaries (see CallRegisterEffects.h), keyed by
   /// callee entry.  Absent entries keep the ABI clobber set.
-  std::map<va_t, uint32_t> CallMayWriteGPRs;
+  SharedValue<std::map<va_t, uint32_t>> CallMayWriteGPRs;
   /// Scalar register words proved equal at every ordinary callee return.
-  std::map<va_t, GPRExitConstants> CallExitConstants;
+  SharedValue<std::map<va_t, GPRExitConstants>> CallExitConstants;
   /// Validated register-only leaves, shared with the bounded callee cache.
-  std::map<va_t, std::shared_ptr<const std::vector<LowOp>>> CallRegisterLeaves;
+  SharedValue<std::map<va_t, std::shared_ptr<const std::vector<LowOp>>>>
+      CallRegisterLeaves;
   /// Bytes of each GPR family a lifted callee reads before writing (its
   /// register arguments, including pass-throughs), keyed by callee entry.
-  std::map<va_t, GPRReadWidths> CallEntryReadGPRs;
+  SharedValue<std::map<va_t, GPRReadWidths>> CallEntryReadGPRs;
   /// Incoming GPR values proved unobserved independently of argument inference.
-  std::map<va_t, GPRFamilyMask> CallUnreadGPRs;
+  SharedValue<std::map<va_t, GPRFamilyMask>> CallUnreadGPRs;
   /// For each function-pointer variable a call may go through, by address,
   /// the key of the routine whose summary gives that call its arguments: the
   /// routine the variable starts at (collectPointerVariableCallees), or the
   /// variable itself for another module's routine, whose prototype fixes the
   /// summary kept under the variable's address.
-  std::map<va_t, va_t> CallArgumentSources;
+  SharedValue<std::map<va_t, va_t>> CallArgumentSources;
   /// The bodies recoverModuleCallAbi lifted for the direct callees these
   /// functions leave out, as lifted: another recovery over the same functions
   /// (the native LLVM route of a session) reuses them instead of lifting them
@@ -394,7 +396,11 @@ struct PipelineResult {
   /// Positional arguments implied by the incoming stack slots a lifted callee
   /// reads, including through tail calls (0 when none), keyed by callee
   /// entry. Absent entries leave the stack arguments to the call-site scan.
-  std::map<va_t, int> CallEntryStackArgs;
+  SharedValue<std::map<va_t, int>> CallEntryStackArgs;
+  /// Where the run took an image's summaries (Pipeline::prepareCallSummaries),
+  /// the callees in CallEntryStackArgs at an import (BinaryImage::findImportAt)
+  /// whose count is not negative, listed once for the image; null otherwise.
+  std::shared_ptr<const std::vector<va_t>> CallEntryStackArgImports;
   /// The callees in CallEntryStackArgs whose count a typed prototype gives
   /// slot by slot where every argument is on the stack (i386): a call to one
   /// passes those slots and no register.
@@ -446,7 +452,7 @@ struct PipelineResult {
   /// Register position of the first variadic argument of each lifted Win64
   /// variadic callee, keyed by callee entry: a call to one passes the fixed
   /// arguments and the variadic argument registers its caller set.
-  std::map<va_t, int> CallVariadicFrom;
+  SharedValue<std::map<va_t, int>> CallVariadicFrom;
   std::vector<MedFunc> MedFuncs;
   std::vector<HighFunc> HighFuncs;
   /// Shared source MedIR is ready; HighIR projection has not been requested.

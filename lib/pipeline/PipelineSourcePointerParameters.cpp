@@ -79,9 +79,22 @@ void refineSourcePointerParameters(const BinaryImage &Image,
   };
   // These targets already supplied explicit call operands before SSA. HighC
   // does not need a second call-argument recovery on independent register
-  // banks.
-  for (const auto &[Target, Arguments] : Result.CallEntryIntegerArguments)
-    Admit(Target);
+  // banks.  Only the calls of these functions read what is admitted, below
+  // and in inferMedSourcePointerParameterTypes: an image's summaries name
+  // every routine of the image.
+  for (const MedFunc &Function : Result.MedFuncs) {
+    const auto AdmitDeclared = [&](va_t Target) {
+      if (Result.CallEntryIntegerArguments.count(Target))
+        Admit(Target);
+    };
+    for (const auto &Call : Function.CallInfos)
+      AdmitDeclared(Call.TargetAddr);
+    for (const auto &Block : Function.Blocks)
+      for (const auto &Op : Block.Ops)
+        if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+            Op.NumInputs && Op.Inputs[0].isConst())
+          AdmitDeclared(Op.Inputs[0].ConstVal);
+  }
   for (size_t I = 0; I < Result.MedFuncs.size(); ++I) {
     auto &Function = Result.MedFuncs[I];
     if (Function.SourceTypeHint || Function.SourceParametersBound ||

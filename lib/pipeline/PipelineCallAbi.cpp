@@ -74,6 +74,7 @@ void copyCallSignatureFacts(const PipelineResult &Source,
   COPY_SIGNATURE_FACT(CallEntryReadGPRs);
   COPY_SIGNATURE_FACT(CallUnreadGPRs);
   COPY_SIGNATURE_FACT(CallEntryStackArgs);
+  COPY_SIGNATURE_FACT(CallEntryStackArgImports);
   COPY_SIGNATURE_FACT(CallEntryStackSlots);
   COPY_SIGNATURE_FACT(CallEntryArgumentCounts);
   COPY_SIGNATURE_FACT(CallEntryIntegerArguments);
@@ -134,7 +135,7 @@ omittedCalleeVariadicArguments(const PipelineResult &Result) {
 const std::map<va_t, int> &
 omittedCalleeStackArgs(const PipelineResult &Result) {
   return Result.OmittedCalleeStackArgs ? *Result.OmittedCalleeStackArgs
-                                       : Result.CallEntryStackArgs;
+                                       : Result.CallEntryStackArgs.get();
 }
 
 const std::set<va_t> &omittedCalleeStackSlots(const PipelineResult &Result) {
@@ -484,7 +485,8 @@ std::vector<va_t> calleesToRead(const MedFunc &F, const BinaryImage &Img,
           !FrameBorrows.count(&Op))
         continue;
       if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst())
-        Callees.push_back(importOwnRoutine(Img, &Result.CallArgumentSources,
+        Callees.push_back(importOwnRoutine(Img,
+                                           &Result.CallArgumentSources.get(),
                                            Op.Inputs[0].ConstVal)
                               .value_or(Op.Inputs[0].ConstVal));
       else if (Op.Opcode == NdOp::INDIR_CALL &&
@@ -855,11 +857,11 @@ private:
       LowToMedConverter Converter;
       Converter.setBinaryImage(&Img);
       Converter.setSourceCallHintsEnabled(false);
-      Converter.setCallMayWriteGPRs(&Result.CallMayWriteGPRs);
-      Converter.setCallExitConstants(&Result.CallExitConstants);
-      Converter.setCallEntryReadGPRs(&Result.CallEntryReadGPRs);
-      Converter.setCallUnreadGPRs(&Result.CallUnreadGPRs);
-      Converter.setCallArgumentSources(&Result.CallArgumentSources);
+      Converter.setCallMayWriteGPRs(&Result.CallMayWriteGPRs.get());
+      Converter.setCallExitConstants(&Result.CallExitConstants.get());
+      Converter.setCallEntryReadGPRs(&Result.CallEntryReadGPRs.get());
+      Converter.setCallUnreadGPRs(&Result.CallUnreadGPRs.get());
+      Converter.setCallArgumentSources(&Result.CallArgumentSources.get());
       Converter.setCallEntryStackArgs(&omittedCalleeStackArgs(Result));
       Converter.setCallEntryStackSlots(&omittedCalleeStackSlots(Result));
       Converter.setCallEntryArgumentCounts(
