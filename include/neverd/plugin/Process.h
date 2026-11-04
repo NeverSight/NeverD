@@ -27,6 +27,10 @@ struct ProcessEvent {
   int ExitCode = 0;
 };
 
+/// Provider jobs bound all output over their lifetime. A persistent worker
+/// instead bounds the bytes awaiting delivery, independently for each stream.
+enum class ProcessOutputBudget { Lifetime, PendingDelivery };
+
 /// One process per transport. I/O threads never call plugin or GUI code.
 /// Exit is posted after the provider exits, its job (Windows) or process group
 /// (POSIX) is terminated and both output streams drain. A POSIX descendant
@@ -40,7 +44,8 @@ class Process {
 
 public:
   using Notify = std::function<void(ProcessEvent)>;
-  Process(PluginHost::Post Post, Notify Changed);
+  Process(PluginHost::Post Post, Notify Changed,
+          ProcessOutputBudget OutputBudget = ProcessOutputBudget::Lifetime);
   ~Process();
   Process(const Process &) = delete;
   Process &operator=(const Process &) = delete;
@@ -54,3 +59,4 @@ public:
 } // namespace neverd::plugin
 
 #endif // NEVERD_PLUGIN_PROCESS_H
+

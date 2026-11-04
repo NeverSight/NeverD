@@ -6386,6 +6386,10 @@ parser cases without loader/call-model dependencies, for focused ASan/UBSan
 checks of this storage boundary; these are not additional distinct cases.
 Macro chains at and beyond the expansion budget, plus cycles, retain their
 invocation diagnostics when ordinary identifiers bypass recursive expansion.
+`TypeParse.GrowingTokenStreamsKeepMacroValuesSpellingAndSourceOrder` grows a
+stream through hundreds of records and prototypes on all three data models.
+It checks macro redefinition, wide literals, declaration order and published
+names after overwriting the input and destroying the parse's token storage.
 `TypeParse.PunctuationKeepsOperatorsDeclaratorsAndErrorPositions` checks
 longest-match operators, qualified names, callbacks, variadics, member access,
 constant expressions and transactional errors on ILP32, LP64 and LLP64. The

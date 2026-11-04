@@ -189,6 +189,58 @@ TEST(TypeParse, NamedSpecifiersKeepPrecedenceAndUnknownWordPositions) {
   }
 }
 
+TEST(TypeParse, GrowingTokenStreamsKeepMacroValuesSpellingAndSourceOrder) {
+  constexpr unsigned Count = 256;
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    std::string Source = "#pragma neverd_header(\"growth.h\")\n"
+                         "#define BOUND 3\n#define WORD unsigned short\n";
+    for (unsigned I = 0; I < Count; ++I) {
+      if (I == Count / 2)
+        Source += "#undef BOUND\n#define BOUND 5\n";
+      const auto Index = std::to_string(I);
+      Source += "struct Entry" + Index + " { WORD field" + Index +
+                "[BOUND]; char wide[sizeof(L\"A\")]; };\n"
+                "struct Entry" +
+                Index + " *Read" + Index + "(struct Entry" + Index +
+                " *value);\n";
+    }
+    TypeLibrary Library(Model);
+    const auto Result = parseCTypes(Source, Library);
+    ASSERT_TRUE(Result.ok()) << Result.Problems.front().Message;
+    ASSERT_EQ(Result.Types.size(), Count);
+    ASSERT_EQ(Result.Prototypes.size(), Count);
+    // Published names and headers must own their spelling after both the
+    // token stream and its arena are destroyed and the source is overwritten.
+    Source.assign(Source.size(), '!');
+    for (unsigned I = 0; I < Count; ++I) {
+      const auto Index = std::to_string(I);
+      const auto Name = "Entry" + Index;
+      SCOPED_TRACE(Name);
+      EXPECT_EQ(Result.Types[I], Name);
+      EXPECT_EQ(Result.Prototypes[I], "Read" + Index);
+      const auto *Type = Library.find(Name);
+      ASSERT_NE(Type, nullptr);
+      EXPECT_EQ(Type->Header, "growth.h");
+      const auto &Record = recordOf(Library, Name);
+      ASSERT_EQ(Record.Members.size(), 2u);
+      EXPECT_EQ(Record.Members[0].Name, "field" + Index);
+      EXPECT_EQ(Record.Members[0].Type->Count, I < Count / 2 ? 3u : 5u);
+      ASSERT_NE(Record.Members[0].Type->Element, nullptr);
+      EXPECT_EQ(Record.Members[0].Type->Element->TheBuiltin, Builtin::UShort);
+      EXPECT_EQ(Record.Members[1].Type->Count,
+                2 * Library.builtinBytes(Builtin::WChar));
+      const auto *Read = Library.findPrototype("Read" + Index);
+      ASSERT_NE(Read, nullptr);
+      ASSERT_EQ(Read->Params.size(), 1u);
+      EXPECT_EQ(Read->Params[0].Name, "value");
+      EXPECT_EQ(Read->Return->Element->Name, Name);
+      EXPECT_EQ(Read->Params[0].Type->Element->Name, Name);
+    }
+  }
+}
+
 TEST(TypeParse, LaysAStructureOutAsMSVC) {
   const TypeLibrary Library = parsed(R"(
     struct A { char c; int i; short s; };

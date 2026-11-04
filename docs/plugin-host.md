@@ -37,6 +37,12 @@ work has a terminal state and completion receipt. A process provider exchanges
 bounded length-prefixed UTF-8 JSON frames; artifact descriptors bind relative paths
 and SHA-256 digests to that task's output directory.
 
+Provider processes retain cumulative stdout and diagnostic limits per task.
+The headless analysis worker persists across tasks, so its transport instead
+bounds bytes awaiting callback delivery on each stream. Delivered bytes release
+that charge; a stalled consumer still fails at the same buffered-byte limit.
+The worker's separate per-frame size limit remains unchanged.
+
 ## Configuration
 
 The shared resolver applies plugin defaults, user preferences, project profile
@@ -57,6 +63,8 @@ ctest --test-dir build-plugin-host --output-on-failure
 `NeverDPluginHost.*` covers activation failure, retirement, registration
 replacement, cleanup errors, separate projects, dispatch, asynchronous close,
 late cleanup, task completion, retirement, receipt failures and configuration.
+`NeverDPluginProcess.*` covers cumulative provider limits, persistent output on
+both streams, queued-output limits, and callback disposal after transport exit.
 
 ## Services and events
 
@@ -321,3 +329,4 @@ LowIR/MedIR/HighIR pass registration, persistent project providers, and agent
 adapters remain separate work. The GUI manages process manifests and does not
 yet discover Tools catalogs. No external source-IR renderer or F5 source
 provider is part of this series.
+
