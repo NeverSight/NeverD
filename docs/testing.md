@@ -7235,6 +7235,10 @@ lifts a raw five-integer kernel that saves XMM6/XMM7 with optimization enabled
 and disabled, then executes its LLVM-derived C at O0/O2 with UB traps for
 1,024 independent argument tuples. This checks host C execution, not native
 execution of every source architecture.
+`SummarizedCallArguments.Win64SavedVectorReadsStillProveAnEmptyBank` checks
+the call side: a summarized Win64 callee whose only vector reads are of
+XMM6/XMM7 (saves) still gives the call an empty vector bank, while a read of
+volatile XMM4/XMM5 keeps the positional contract open.
 `Win64CallContract.CallersPassWhatAnExportedRoutinesPrototypeDeclares`
 (`NeverDWin64CallContractTests`) checks that a routine the image exports,
 whose name binds a prototype, reads the parameters it declares, a system call

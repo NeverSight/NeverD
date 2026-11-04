@@ -9403,7 +9403,11 @@ computed on every path.
 argument bank. Entry recovery, outgoing call recovery, module propagation and
 LLVM emission use the same query. Win64 has four positional floating slots
 (XMM0-XMM3); saving XMM6/XMM7 must not create parameters or move the fifth
-integer argument away from its stack slot. SysV x64 retains XMM0-XMM7, and the
+integer argument away from its stack slot. The same holds at a call: a
+callee summary whose only vector reads are of registers the convention
+preserves (`CallArgumentConvention::VolatileVectorFamilies`; Win64 passes
+or clobbers XMM0-XMM5 only) still proves that the call takes no vector
+argument. SysV x64 retains XMM0-XMM7, and the
 ARM/AArch64 banks retain their architecture-specific lanes. Physical vector
 classification for intermediate values is separate from parameter membership.
 This follows Microsoft's [x64 calling convention](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention)

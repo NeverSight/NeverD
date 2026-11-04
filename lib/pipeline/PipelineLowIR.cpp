@@ -4408,10 +4408,17 @@ void computeCallRegisterEffects(
     Volatile |= Family(x86reg::RSI) | Family(x86reg::RDI);
     Arguments |= Family(x86reg::RSI) | Family(x86reg::RDI);
   }
-  // A call clobbers the vector argument registers Win64 does not preserve
-  // (XMM6 and up are callee-saved there).  Code no summary describes takes
-  // no vector argument: an import that does has a prototype.
-  Volatile |= vectorArgumentFamilies(Win64 ? 6 : kX64VectorArgumentFamilies);
+  // A call clobbers the vector argument registers the convention does not
+  // preserve (Win64's XMM6 and up are callee-saved).  Code no summary
+  // describes takes no vector argument: an import that does has a
+  // prototype.
+  const CallArgumentConvention *VectorConvention =
+      callArgumentConvention(Img.Arch, Img.abiFormat());
+  Volatile |= vectorArgumentFamilies(
+      VectorConvention && VectorConvention->VolatileVectorFamilies
+          ? std::min(VectorConvention->VolatileVectorFamilies,
+                     kX64VectorArgumentFamilies)
+          : kX64VectorArgumentFamilies);
   // Documented contracts (WindowsKernelRoutines.inc): a Control Flow Guard
   // dispatcher is an indirect call, and a WDK routine reads exactly its
   // prototype's parameters however its body forwards registers.  A forwarder

@@ -91,6 +91,9 @@ const CallArgumentConvention Win64CallArguments = {
     .VariadicFromSummary = true,
     .StackArgumentSummary = true,
     .PositionalArgumentSlots = true,
+    // __vectorcall passes vector arguments in XMM0 through XMM5; XMM6 and up
+    // are callee-saved in every Win64 convention.
+    .VolatileVectorFamilies = 6,
     .ReservedOutgoingArea = true,
     .ParametersFromIncomingReads = true,
     .PrototypeArgCount = wdkPrototypeArgCount,

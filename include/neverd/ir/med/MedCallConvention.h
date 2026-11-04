@@ -91,6 +91,12 @@ struct CallArgumentConvention {
   /// position K is the Kth integer or the Kth vector argument register, and
   /// the stack positions follow all the register ones.
   bool PositionalArgumentSlots = false;
+  /// The vector register families, from XMM0, that a call may pass or
+  /// clobber (CallRegisterEffects.h tracks kX64VectorArgumentFamilies of
+  /// them); zero where every tracked family may.  Win64 preserves XMM6 and
+  /// up, so a callee reads those only to save them: such a read is no
+  /// argument.
+  unsigned VolatileVectorFamilies = 0;
   /// The caller reserves its outgoing argument area once, with a home slot
   /// for each register position.  A stack argument is a store at a fixed
   /// offset from the stack pointer anywhere before the call, also at a fixed
