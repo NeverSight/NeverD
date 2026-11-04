@@ -64,6 +64,17 @@ public:
       write(F.Destination, 1, condition(F.Condition));
       return;
     }
+    if (F.Operation == Op::AdjustPrivilege) {
+      if (!read(F.Destination, 2, A) || !read(F.Source, 2, B))
+        return;
+      const bool Adjust = (A & 3) < (B & 3);
+      // Read-only segments and pages are valid when the RPL needs no change.
+      // A required write is checked only after the original word was read.
+      if (Adjust && !write(F.Destination, 2, (A & ~3u) | (B & 3)))
+        return;
+      S.EFlags = (S.EFlags & ~64u) | (Adjust ? 64 : 0);
+      return;
+    }
     if (F.Operation == Op::ConditionalMove) {
       // The native source access precedes the condition, even when false.
       if (read(F.Source, N, B) && condition(F.Condition))

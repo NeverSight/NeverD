@@ -77,6 +77,10 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     Width(B < 0xb8);
     F.Destination.Register = B & 7;
     Immediate(F.Bytes);
+  } else if (B == 0x63) {
+    F.Operation = Op::AdjustPrivilege;
+    F.Bytes = F.SourceBytes = 2; // ARPL ignores operand-size overrides.
+    Binary(false);
   } else if (B == 0xc6 || B == 0xc7) {
     Width(B == 0xc6);
     if (R.modRM(F.Destination) != 0)
