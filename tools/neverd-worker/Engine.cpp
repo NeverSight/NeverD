@@ -1668,6 +1668,8 @@ Listing &Engine::listing() {
   return *listing_;
 }
 bool Engine::hasIdleWork() const {
+  if (summaryWorkPending() && neverd_session_is_loaded(session_))
+    return true;
   if (!listing_ || !neverd_session_is_loaded(session_))
     return false;
   return listing_->cachePending() ||
@@ -1678,16 +1680,111 @@ bool Engine::hasIdleWork() const {
 bool Engine::idleStep() {
   if (!hasIdleWork())
     return false;
-  if (listing_->cachePending()) {
+  if (listing_ && listing_->cachePending()) {
     listing_->flushCacheOne();
     return true;
   }
   // The listing and its reference index come first; preparing functions
   // only shortens later decompiles.
-  if (listing_->hasIdleWork())
-    return listing_->idleStep();
-  warmStep();
+  if (listing_ && backgroundAnalysis_) {
+    if (listing_->hasIdleWork())
+      return listing_->idleStep();
+    if (warmState_ == WarmState::Pending || warmState_ == WarmState::Running) {
+      warmStep();
+      return true;
+    }
+  }
+  summaryStep();
   return true;
+}
+bool Engine::summaryWorkPending() const {
+  return summaryState_ == SummaryState::Pending ||
+         summaryState_ == SummaryState::Preparing ||
+         summaryState_ == SummaryState::Solving;
+}
+void Engine::restartSummaries() {
+  // The engine may have dropped them with the analysis a change drops; a
+  // run of the job finds kept ones at once.
+  summaryState_ = summaryJob_ ? SummaryState::Pending : SummaryState::Off;
+  summaryCursor_ = 0;
+  summaryError_.clear();
+}
+void Engine::summaryStep() {
+  if (!summaryWorkPending())
+    return;
+  // A step that fails ends the job with its error rather than retrying it
+  // at every idle moment.
+  try {
+    summaryJobStep();
+  } catch (const std::exception &failure) {
+    summaryState_ = SummaryState::Unavailable;
+    summaryError_ = failure.what();
+  }
+}
+void Engine::summaryJobStep() {
+  using WarmFunction = const char *(*)(neverd_session_t, neverd_va_t, int);
+  static const auto warm =
+      engineSymbol<WarmFunction>("neverd_warm_functions_json");
+  if (!warm) {
+    summaryState_ = SummaryState::Unavailable;
+    return;
+  }
+  if (summaryState_ == SummaryState::Solving) {
+    prepareCallSummaries();
+    return;
+  }
+  // The solve reads each function's facts, which a page at a time keeps
+  // each step as short as warming's.
+  summaryState_ = SummaryState::Preparing;
+  constexpr int SummaryStepFunctions = 4;
+  const char *raw = warm(session_, summaryCursor_, SummaryStepFunctions);
+  if (!raw) {
+    summaryState_ = SummaryState::Unavailable;
+    summaryError_ = error();
+    return;
+  }
+  const auto page = backendJson(raw);
+  // The engine says at the first page whether it solves this image's
+  // summaries; preparing the rest would serve nothing.
+  if (!page.value("available", false) || !page.value("call_summaries", false)) {
+    summaryState_ = SummaryState::Unavailable;
+    return;
+  }
+  const auto next = page.value("next_entry", Json());
+  if (next.is_string())
+    summaryCursor_ = parseAddress(next.get<std::string>());
+  else
+    summaryState_ = SummaryState::Solving;
+}
+Json Engine::prepareCallSummaries() {
+  using PrepareFunction = const char *(*)(neverd_session_t);
+  static const auto prepare =
+      engineSymbol<PrepareFunction>("neverd_prepare_call_summaries_json");
+  if (!prepare)
+    throw Error("unsupported", "This engine cannot prepare call summaries");
+  auto result = backendJson(prepare(session_), true);
+  if (result.value("ready", false)) {
+    summaryState_ = SummaryState::Ready;
+    forgetDecompiledViews();
+  } else {
+    summaryState_ = SummaryState::Unavailable;
+  }
+  return result;
+}
+void Engine::forgetDecompiledViews() {
+  forgetNamedViews();
+  graphs_.clear();
+  textKey_.clear();
+  textCache_.clear();
+  textLines_.clear();
+}
+Json Engine::summaryJson() const {
+  static constexpr const char *Names[] = {"off",     "pending", "preparing",
+                                          "solving", "ready",   "unavailable"};
+  Json state = {{"state", Names[static_cast<int>(summaryState_)]}};
+  if (!summaryError_.empty())
+    state["error"] = summaryError_;
+  return state;
 }
 void Engine::restartWarming() {
   warmState_ = warmFunctions_ ? WarmState::Pending : WarmState::Off;
@@ -1738,9 +1835,13 @@ Json Engine::warmJson() const {
 }
 Json Engine::backgroundState() const {
   if (!listing_)
-    return nullptr;
+    return summaryState_ == SummaryState::Off
+               ? Json(nullptr)
+               : Json{{"call_summaries", summaryJson()}};
   auto state = listing_->indexState();
   state["warm"] = warmJson();
+  if (summaryState_ != SummaryState::Off)
+    state["call_summaries"] = summaryJson();
   return state;
 }
 Json Engine::backendJson(const char *owned, bool checkError) const {
@@ -2241,7 +2342,13 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
         restoredDebugInputs_.push_back(
             {{"path", path}, {"stamp", signatureStamp(utf8Path(path))}});
       }
+  // A replica that serves the workbench's decompiles solves the image's
+  // call summaries in idle time.  That is this client's request, not the
+  // owner's state, which later name updates compare.
   restoredSnapshot_ = snapshot;
+  restoredSnapshot_.erase("call_summaries");
+  summaryJob_ = snapshot.value("call_summaries", false);
+  restartSummaries();
   return metadata();
 }
 
@@ -2397,8 +2504,10 @@ Engine::Reply Engine::executeResponse(const std::string &operation,
     Engine &engine;
     std::uint64_t before;
     ~RestartOnChange() {
-      if (engine.revision_ != before)
+      if (engine.revision_ != before) {
         engine.restartWarming();
+        engine.restartSummaries();
+      }
     }
   } restart{*this, before};
   Reply reply;
@@ -2853,6 +2962,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     // Preparing functions is the last step of idle-time analysis.
     warmFunctions_ = backgroundAnalysis_ && p.value("warm", false);
     restartWarming();
+    // A replica's restore asks for the image's call summaries afterwards.
+    summaryJob_ = false;
+    restartSummaries();
     dirty_ = false;
     sectionsDirty_ = false;
     analyzed_ = false;
@@ -3426,6 +3538,13 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
   if (operation == "analyze") {
     analyze();
     return metadata();
+  }
+  if (operation == "prepare_call_summaries") {
+    if (!p.is_object() || !p.empty())
+      throw Error("invalid_request",
+                  "prepare_call_summaries accepts no parameters");
+    requireLoaded();
+    return prepareCallSummaries();
   }
   if (operation == "functions" || operation == "resolve" ||
       operation == "disasm")

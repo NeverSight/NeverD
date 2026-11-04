@@ -184,6 +184,8 @@ Session::Session(QString workerPath, QObject *parent)
   queries_.setCacheBudgetMiB(::neverd::limits::gui::kSessionCacheMiB);
   connect(&analysis_, &AnalysisPool::diagnostic, this,
           [this](const QString &text) { emit message(text, 0); });
+  connect(&analysis_, &AnalysisPool::sourceRefined, this,
+          &Session::sourceRefined);
   connect(&client_, &EngineClient::message, this, &Session::receive);
   connect(&client_, &EngineClient::diagnostic, this,
           [this](const QString &text) {

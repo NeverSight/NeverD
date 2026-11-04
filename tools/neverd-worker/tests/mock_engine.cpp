@@ -158,6 +158,8 @@ struct MockSession {
   unsigned RecoveryCalls = 0;
   /// The functions the current neverd_warm_functions_json pass prepared.
   int warmed = 0;
+  /// neverd_prepare_call_summaries_json calls this session answered.
+  int summarySolves = 0;
   std::string preparedView;
   bool rejectedPreparation = false;
   bool wholeProgramPrepared = false;
@@ -1033,8 +1035,10 @@ const char *neverd_warm_functions_json(neverd_session_t s,
          nullptr}}.dump());
   if (firstEntry == 0)
     state.warmed = 0;
-  // warm-slow.bin takes long enough per step for heartbeats to show a pass.
-  if (state.path.find("warm-slow") != std::string::npos)
+  // warm-slow.bin takes long enough per step for heartbeats to show a pass;
+  // so does summaries-ready.bin, for its call-summary job.
+  if (state.path.find("warm-slow") != std::string::npos ||
+      state.path.find("summaries-ready") != std::string::npos)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   auto next = std::lower_bound(state.functions.begin(), state.functions.end(),
                                firstEntry);
@@ -1047,13 +1051,33 @@ const char *neverd_warm_functions_json(neverd_session_t s,
   if (full)
     prepared = 8 - state.warmed;
   state.warmed += prepared;
-  return copy(Json{{"available", true},
-                   {"prepared", prepared},
-                   {"full", full},
-                   {"next_entry", next == state.functions.end()
-                                      ? Json(nullptr)
-                                      : Json(hexAddress(*next))}}
-                  .dump());
+  // Only the summaries-ready.bin and summaries-fail.bin images have call
+  // summaries to solve.
+  const bool summaries =
+      state.path.find("summaries-ready") != std::string::npos ||
+      state.path.find("summaries-fail") != std::string::npos;
+  return copy(Json{
+      {"available", true},
+      {"prepared", prepared},
+      {"full", full},
+      {"next_entry",
+       next == state.functions.end() ? Json(nullptr) : Json(hexAddress(*next))},
+      {"call_summaries",
+       summaries}}.dump());
+}
+const char *neverd_prepare_call_summaries_json(neverd_session_t s) {
+  auto &state = *session(s);
+  state.error.clear();
+  // summaries-ready.bin solves them, summaries-fail.bin fails; any other
+  // image has none, as one that is not x86-64.
+  if (state.path.find("summaries-fail") != std::string::npos) {
+    state.error = "call summary preparation failed: fixture";
+    return nullptr;
+  }
+  const bool available =
+      state.path.find("summaries-ready") != std::string::npos;
+  ++state.summarySolves;
+  return copy(Json{{"available", available}, {"ready", available}}.dump());
 }
 const char *neverd_code_refs_json(neverd_session_t s, neverd_va_t firstEntry,
                                   int maxFunctions) {

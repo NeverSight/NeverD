@@ -5747,7 +5747,14 @@ summarizes. After `neverd_prepare_call_summaries_json` the caller passes the
 deepest callee's RDX argument, the analysis kept from before is dropped, and a
 session that prepares first prints the same C.
 `SessionCAPITest.CallSummariesAreUnavailableForAnAArch64Image` checks that the
-warm page and the request report none for AArch64.
+warm page and the request report none for AArch64. `NeverDWorkerCallSummaries`
+checks `analysis_restore`'s `call_summaries` job against the mock engine:
+absent without it, preparing then ready, the explicit request, an image without
+summaries ending at its first page, and a failed solve.
+`WorkbenchTests::analysisReplicaRefinesSourceOnceItsCallSummariesAreReady`
+checks that the session refreshes shown source once when a replica's job is
+ready. `localNameEditsReuseTheIdleAnalysisReplica` checks that the option is
+not part of the snapshot that later name updates compare.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and

@@ -506,14 +506,18 @@ CodeText::CodeText(Session &session, QWidget *parent)
       ++hintSerial_;
       hintRect_ = {};
     });
-  connect(&session_, &Session::revisionChanged, this, [this] {
-    if (!function_)
-      return;
-    if (isVisible())
-      load(*function_, representation_);
-    else
-      interrupted_ = true;
-  });
+  // A new revision changes the shown function's text, and so, once, does an
+  // analysis replica that has solved the image's call summaries.
+  for (const auto changed :
+       {&Session::revisionChanged, &Session::sourceRefined})
+    connect(&session_, changed, this, [this] {
+      if (!function_)
+        return;
+      if (isVisible())
+        load(*function_, representation_);
+      else
+        interrupted_ = true;
+    });
   // A new default reaches the shown function too, whatever this window
   // chose for it; a hidden window takes it when it shows again.
   connect(&SourceDefaults::instance(), &SourceDefaults::changed, this, [this] {

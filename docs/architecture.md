@@ -4294,7 +4294,9 @@ before. A selection that adds its own entry, a full-image run and a cache
 without the summaries keep solving their own. The solve reads each function as a
 run reads a callee, from the warmed facts where their consulted call reads hold,
 and stops past `kMaxImageCallSummaryFunctions`. Publishing drops those facts,
-which only the closure solve reads.
+which only the closure solve reads. The GUI's analysis replicas restore with
+`call_summaries:true`: they warm a page of functions per idle step, solve, then
+drop their cached replies, and the shown source is read again.
 The GUI owner no longer requests that pipeline warmup: source/CFG views use
 separate analysis sessions and cannot consume the owner's pipeline cache.
 With idle analysis enabled, native images with 4096–65536 functions and at most
