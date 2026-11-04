@@ -16084,6 +16084,15 @@ recursion and cumulative work remain in the owning callee index. Guarded exits
 and nonreturning paths retain the complete source-proof fallback. No stack fact
 authorizes omitting handler guards, object effects, saved registers or return PC.
 
+Bound plain-callee queries derive physical EAX and returning stack cleanup in
+the same private-frame traversal. Its current scalar inputs and initialized
+argument bytes may select a return that has no input-independent ABI. Every
+reached terminal must be an immutable near RET with restored ESP/nonvolatile
+registers and a consistent cleanup; unresolved indirect exits refuse. A closed
+loop supplies no ordinary result. These invocation facts never enter the
+target-only stack cache. A nested RaiseException frame proof still grants no
+runtime binding preservation, callback-effect closure or native SEH admission.
+
 A zero-argument native C++ callee query first checks its authenticated shared
 entry prefix. An incoming frame access before any ordinary call or branch
 already contradicts that query's input contract, so it refuses before analysing

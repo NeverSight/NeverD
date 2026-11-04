@@ -17131,6 +17131,16 @@ test `ConditionalResultsReachTheNextInitializedCall` follows these results
 through physical EAX or an instruction-local temporary into the next call,
 including partial/wide output carriers, other volatile registers, absent
 results and a refusing callee prover.
+`RegistrationConditionalReturn` in `NeverDSEHRuntimeMemoryTests` checks
+input-dependent near-return cleanup and an unselected indirect tail at two
+image bases. Reversed/repeated inputs, unknown branches, far returns, changed
+ESP/nonvolatile registers, overwritten return PCs, nonreturning loops and
+exact/one-unit-short budgets retain their separate outcomes. The pinned
+`BoundRaiseWrapperRetainsOnlyLocalProofs` case verifies that initialized cdecl
+arguments can prove a wrapper's returning frame without creating a target-only
+ABI or a call-free effect for its RaiseException invocation. Run registration
+callee, state and EH suites alongside this owner; the shared frame interpreter
+also serves C++ source and native-effect queries.
 `RegistrationConditionalFrame.UnknownScalarArgumentsNeedInitializedBytes`
 adds a search with an unknown scalar key. Complete byte initialization admits
 both full-word and bytewise stores despite absent sparse scalar cells. Every
