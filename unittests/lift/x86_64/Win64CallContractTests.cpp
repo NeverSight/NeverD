@@ -5538,6 +5538,96 @@ TEST(Win64CallContract, CallersPassWhatAnExportedRoutinesPrototypeDeclares) {
   EXPECT_EQ(Reads.at(Extra)[family(x86reg::R9)], 8u);
 }
 
+TEST(Win64CallContract, AGuardedBsrCalleeReadsNoDestinationRegister) {
+  // The callee runs `bsr r8, rcx` only where RCX is nonzero, so it always
+  // writes R8 and never reads the old value. The run lifts the callee only
+  // for its summary, and that body is folded like a published one: its
+  // summary reads RCX and not R8, which the caller never sets.
+  constexpr va_t Caller = Text, Callee = Text + 0x20;
+  std::vector<uint8_t> Code(0x40, 0xCC);
+  // sub rsp, 28h; call Callee; add rsp, 28h; ret
+  std::vector<uint8_t> CallerCode = {0x48, 0x83, 0xEC, 0x28, 0xE8};
+  for (uint8_t B : rel32(Caller + CallerCode.size() + 4, Callee))
+    CallerCode.push_back(B);
+  for (uint8_t B : {0x48, 0x83, 0xC4, 0x28, 0xC3})
+    CallerCode.push_back(B);
+  put(Code, Caller, CallerCode);
+  // test rcx, rcx; je zero; bsr r8, rcx; mov rax, r8; ret;
+  // zero: xor eax, eax; ret
+  put(Code, Callee,
+      {0x48, 0x85, 0xC9, 0x74, 0x08, 0x4C, 0x0F, 0xBD, 0xC1, 0x4C, 0x89, 0xC0,
+       0xC3, 0x31, 0xC0, 0xC3});
+  const BinaryImage Img =
+      makeImage(Code, {{Caller, "caller"}, {Callee, "highest_bit"}}, {});
+  llvm::LLVMContext Ctx;
+  const PipelineResult Result = run(Img, Ctx, {Caller});
+  const auto &Reads = Result.CallEntryReadGPRs;
+  ASSERT_TRUE(Reads.count(Callee));
+  EXPECT_EQ(Reads.at(Callee)[family(x86reg::RCX)], 8u);
+  EXPECT_EQ(Reads.at(Callee)[family(x86reg::R8)], 0u);
+}
+
+TEST(Win64CallContract, PreparedSummariesReadCalleesPastTheRunsDepth) {
+  // caller -> f1 -> ... -> fN, each passing its argument registers on, and
+  // fN reads R9: one call deeper than a run summarizes callees.  The run of
+  // the caller leaves fN unread, so f1 seems to read nothing.  A session's
+  // image summaries read every function, as a whole-image run does.
+  constexpr size_t Chain = limits::kMaxCallEffectCalleeDepth + 1;
+  constexpr va_t Stride = 0x20;
+  std::vector<uint8_t> Code((Chain + 1) * Stride, 0xCC);
+  std::vector<std::pair<va_t, const char *>> Functions;
+  static const char *const Names[] = {"caller", "f1", "f2", "f3",
+                                      "f4",     "f5", "f6", "f7"};
+  static_assert(Chain < std::size(Names));
+  for (size_t I = 0; I <= Chain; ++I) {
+    const va_t At = Text + I * Stride;
+    Functions.emplace_back(At, Names[I]);
+    if (I == Chain) {
+      // mov rax, r9; ret
+      put(Code, At, {0x4C, 0x89, 0xC8, 0xC3});
+      break;
+    }
+    // sub rsp, 28h; call next; add rsp, 28h; ret
+    std::vector<uint8_t> Call = {0xE8};
+    for (uint8_t B : rel32(At + 9, At + Stride))
+      Call.push_back(B);
+    put(Code, At, framed({Call}));
+  }
+  const BinaryImage Img = makeImage(Code, Functions, {});
+  const va_t First = Text + Stride, Last = Text + Chain * Stride;
+  llvm::LLVMContext Ctx;
+  PipelineAnalysisCache Cache;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries = {Text};
+  Opts.AnalysisCache = &Cache;
+  {
+    const PipelineResult Closure = Pipeline().run(Img, Ctx, Opts);
+    ASSERT_TRUE(Closure.Success) << Closure.Error;
+    EXPECT_FALSE(Closure.CallEntryReadGPRs.count(Last));
+    ASSERT_TRUE(Closure.CallEntryReadGPRs.count(First));
+    EXPECT_EQ(Closure.CallEntryReadGPRs.at(First)[family(x86reg::R9)], 0u);
+  }
+  ASSERT_TRUE(Pipeline().prepareCallSummaries(Img, Opts, nullptr));
+  const PipelineResult Prepared = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Prepared.Success) << Prepared.Error;
+  PipelineOptions WholeOpts;
+  WholeOpts.EmitDumpOutput = false;
+  const PipelineResult Whole = Pipeline().run(Img, Ctx, WholeOpts);
+  ASSERT_TRUE(Whole.Success) << Whole.Error;
+  for (size_t I = 1; I <= Chain; ++I) {
+    const va_t Entry = Text + I * Stride;
+    SCOPED_TRACE(Names[I]);
+    ASSERT_TRUE(Prepared.CallEntryReadGPRs.count(Entry));
+    ASSERT_TRUE(Whole.CallEntryReadGPRs.count(Entry));
+    EXPECT_EQ(Prepared.CallEntryReadGPRs.at(Entry)[family(x86reg::R9)], 8u);
+    EXPECT_EQ(Prepared.CallEntryReadGPRs.at(Entry),
+              Whole.CallEntryReadGPRs.at(Entry));
+    EXPECT_EQ(Prepared.CallMayWriteGPRs.at(Entry),
+              Whole.CallMayWriteGPRs.at(Entry));
+  }
+}
+
 TEST(Win64CallContract, AnOutgoingArgumentMayReuseAnAddressTakenLocal) {
   constexpr va_t Initialize = Text + 0x80, Consume = Text + 0xA0;
   std::vector<uint8_t> Code(0xC0, 0xCC);

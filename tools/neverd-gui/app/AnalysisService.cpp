@@ -48,6 +48,7 @@ void AnalysisService::stopWorker() {
   ready_ = false;
   startingReplica_ = false;
   refreshingNames_ = false;
+  summariesReady_ = false;
   snapshot_ = {};
   client_.stop();
 }
@@ -141,12 +142,30 @@ void AnalysisService::requestSnapshot() {
 }
 
 void AnalysisService::receive(const QJsonObject &message) {
+  // The replica solves the image's call summaries while no read waits.
+  if (message.value("type") == QLatin1String("heartbeat")) {
+    if (solvesSummaries_ && !summariesReady_ &&
+        message.value("background")
+                .toObject()
+                .value("call_summaries")
+                .toObject()
+                .value("state")
+                .toString() == QLatin1String("ready")) {
+      summariesReady_ = true;
+      queries_.listingChanged();
+      emit sourceRefined();
+    }
+    return;
+  }
   if (active_.isEmpty())
     return;
   if (message.value("type") == QLatin1String("hello")) {
     updatesNames_ = message.value("capabilities")
                         .toArray()
                         .contains(QStringLiteral("analysis_update_names"));
+    solvesSummaries_ = message.value("capabilities")
+                           .toArray()
+                           .contains(QStringLiteral("prepare_call_summaries"));
     if (!message.value("capabilities")
              .toArray()
              .contains(QStringLiteral("analysis_restore"))) {
@@ -154,7 +173,10 @@ void AnalysisService::receive(const QJsonObject &message) {
            tr("The worker cannot restore analysis state."));
       return;
     }
-    restore_ = client_.request(QStringLiteral("analysis_restore"), snapshot_);
+    auto restore = snapshot_;
+    if (solvesSummaries_)
+      restore["call_summaries"] = true;
+    restore_ = client_.request(QStringLiteral("analysis_restore"), restore);
     return;
   }
   if (message.value("type") != QLatin1String("response") ||
@@ -230,6 +252,8 @@ AnalysisPool::AnalysisPool(QueryService &owner, const QString &workerPath,
         QueryService::Limits{}.cacheBytes / (1024 * 1024 * lanes_.size()));
     connect(lane.service.get(), &AnalysisService::diagnostic, this,
             &AnalysisPool::diagnostic);
+    connect(lane.service.get(), &AnalysisService::sourceRefined, this,
+            &AnalysisPool::sourceRefined);
   }
   connect(&owner, &QueryService::contextChanged, this, [this, &owner] {
     ++preparationSerial_;

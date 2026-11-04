@@ -193,6 +193,34 @@ private:
   void restartWarming();
   void warmStep();
   Json warmJson() const;
+  /// Whether idle time solves the image's call-register summaries for this
+  /// session's decompiles (neverd_prepare_call_summaries_json), after
+  /// preparing every function a page at a time for that solve to read.  An
+  /// analysis replica opts in at restore. Decompiles from then on read the
+  /// image's summaries, so a function's text can change once.
+  enum class SummaryState {
+    Off,
+    Pending,
+    Preparing,
+    Solving,
+    Ready,
+    Unavailable
+  };
+  SummaryState summaryState_ = SummaryState::Off;
+  /// Whether the restore asked for the job, which a change to the project
+  /// then runs again; an explicit request's summaries are only forgotten.
+  bool summaryJob_ = false;
+  std::uint64_t summaryCursor_ = 0;
+  std::string summaryError_;
+  bool summaryWorkPending() const;
+  void restartSummaries();
+  void summaryStep();
+  void summaryJobStep();
+  Json summaryJson() const;
+  Json prepareCallSummaries();
+  /// Drop the decompiled text, views and graphs kept from before the
+  /// engine's analysis changed.
+  void forgetDecompiledViews();
   std::uintmax_t loadedSize_ = 0;
   std::filesystem::file_time_type loadedTime_;
   /// neverd_strings_ex_json options as JSON text, empty for the defaults; a

@@ -422,6 +422,9 @@ signals:
   void unloaded();
   void revisionChanged();
   void generationChanged();
+  /// An analysis replica's decompiles changed once, after it solved the
+  /// image's call summaries; shown source should be read again.
+  void sourceRefined();
   /// The worker lists a different number of functions, for example after its
   /// function detector ran.
   void functionsChanged();

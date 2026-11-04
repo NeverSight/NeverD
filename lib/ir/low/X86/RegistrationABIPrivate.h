@@ -252,6 +252,11 @@ struct PrivateFrameOptions {
   /// ThrowProof's exact terminal runtime call withdraw it monotonically.
   /// Declared ECX accesses remain conditional on the caller's object proof.
   bool *ClosedIntegerEffects = nullptr;
+  /// Returning cleanup for this bound invocation only. Every reached exit
+  /// must be an authenticated near RET with the same pop and restored frame;
+  /// an unresolved tail cannot supply a partial result. A closed loop has no
+  /// returning cleanup. Never publish this as a target-only ABI contract.
+  std::optional<uint32_t> *StackPopBytes = nullptr;
 };
 
 bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,

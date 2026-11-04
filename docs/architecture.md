@@ -4289,6 +4289,21 @@ function that is not a symbol start adds its own entry to its run, which keys
 other facts. The cache keeps the latest such
 selection's facts beside the symbol inventory's, so passing through one
 leaves what the symbol starts share in place.
+On x86-64, `neverd_prepare_call_summaries_json` (`Pipeline::prepareCallSummaries`)
+solves the call-register summaries of every symbol start and the callees they
+reach once, in address order, as a full-image analysis solves them, and keeps
+them in the symbol inventory's facts. A selected run of a symbol start then
+takes those summaries instead of solving its own callees within
+`kMaxCallEffectCalleeDepth` and `kMaxCallEffectExtraLifts`, which leave farther
+callees reading nothing. Its output therefore agrees with the full-image
+summaries and no longer depends on which functions the session decompiled
+before. A selection that adds its own entry, a full-image run and a cache
+without the summaries keep solving their own. The solve reads each function as a
+run reads a callee, from the warmed facts where their consulted call reads hold,
+and stops past `kMaxImageCallSummaryFunctions`. Publishing drops those facts,
+which only the closure solve reads. The GUI's analysis replicas restore with
+`call_summaries:true`: they warm a page of functions per idle step, solve, then
+drop their cached replies, and the shown source is read again.
 The GUI owner no longer requests that pipeline warmup: source/CFG views use
 separate analysis sessions and cannot consume the owner's pipeline cache.
 With idle analysis enabled, native images with 4096–65536 functions and at most
@@ -16104,6 +16119,15 @@ recursion and cumulative work remain in the owning callee index. Guarded exits
 and nonreturning paths retain the complete source-proof fallback. No stack fact
 authorizes omitting handler guards, object effects, saved registers or return PC.
 
+Bound plain-callee queries derive physical EAX and returning stack cleanup in
+the same private-frame traversal. Its current scalar inputs and initialized
+argument bytes may select a return that has no input-independent ABI. Every
+reached terminal must be an immutable near RET with restored ESP/nonvolatile
+registers and a consistent cleanup; unresolved indirect exits refuse. A closed
+loop supplies no ordinary result. These invocation facts never enter the
+target-only stack cache. A nested RaiseException frame proof still grants no
+runtime binding preservation, callback-effect closure or native SEH admission.
+
 A zero-argument native C++ callee query first checks its authenticated shared
 entry prefix. An incoming frame access before any ordinary call or branch
 already contradicts that query's input contract, so it refuses before analysing
@@ -17424,6 +17448,19 @@ a separate caller-owned budget, including declined and nonprogressing attempts;
 invalid state and exhausted translated-instruction budgets remain final stops.
 The provider owns native effects and profile reentry. This is an execution
 interface, not an inferred Windows service contract or an ordinary ABI proof.
+
+`X64FunctionContext` separately owns the opt-in V6 entry return-cell boundary.
+The instruction-state builder authenticates near RET once; both driver emitters
+consume that metadata and the same completion check. A context retains entry
+RSP across pauses. Only a successful selected near RET whose original SP equals
+that cell marks completion, charges its instruction and stops before the
+returned target or an environment provider. Actual PC, cleanup and memory remain
+instruction-owned. The producer declares the cell's lifetime; this is not an
+inferred dynamic frame owner. Outside-provider completion and arbitrary frame
+reuse cannot be guessed from post-transfer SP or PC. Ordinary drivers are
+retained, and disabling the option adds no generated execution checks. This
+explicit input contract keeps unknown original stack bytes supplied by the
+caller instead of weakening ordinary source proofs.
 
 Continuation source lowers `RequireAligned` through the shared
 `X64Alignment` predicate after projecting a live FS/GS base. A failed predicate

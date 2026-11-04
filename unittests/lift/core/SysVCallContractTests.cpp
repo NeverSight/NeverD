@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -2241,7 +2242,8 @@ TEST(SysVCallContract, ATailCallLeavesNoRegisterOfTheCallersOwn) {
   // g adds RDX to what f returns in RAX, so f returns the pair.  f sets
   // EDX to 11 and tail-jumps to an import no declaration describes: RDX
   // then holds what the import leaves there, not 11.  Nothing forwards the
-  // pair such an import returns yet, so f refuses to return one.
+  // pair such an import returns yet, so HighC must refuse the failed
+  // conversion instead of emitting the old trap-stub fallback.
   constexpr va_t F = Text, G = Text + 0x20, Stub = Text + 0x40;
   std::vector<uint8_t> Code(0x50, 0xCC);
   std::vector<uint8_t> FCode = {0xBA, 0x0B, 0x00, 0x00, 0x00, // mov edx, 11
@@ -2258,12 +2260,14 @@ TEST(SysVCallContract, ATailCallLeavesNoRegisterOfTheCallersOwn) {
   put(Code, G, GCode);
   const BinaryImage Img = makeImportImage(Code, {{F, "f"}, {G, "g"}},
                                           {{Stub, "neverd_pair_source"}});
-  const std::string Source = liftEntries(Img, {F, G, Stub});
-  EXPECT_EQ(Source.find("(11)) << 64"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("int64_t f(void) {\n    __builtin_trap(); /* unknown "
-                        "return value */"),
-            std::string::npos)
-      << Source;
+  try {
+    (void)liftEntries(Img, {F, G, Stub});
+    FAIL() << "an unproved high return register must refuse source emission";
+  } catch (const std::invalid_argument &Error) {
+    EXPECT_EQ(std::string(Error.what()),
+              "HighIR conversion failed: cannot recover the high register "
+              "of a wide integer return");
+  }
 }
 
 TEST(SysVCallContract, AByteSetAfterAFloatCallLeavesNoUnknownBytes) {

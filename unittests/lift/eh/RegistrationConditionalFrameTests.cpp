@@ -533,6 +533,38 @@ auto loadXCPT4(bool Selected = false) {
 }
 } // namespace
 
+TEST(RegistrationConditionalFrame, BoundRaiseWrapperRetainsOnlyLocalProofs) {
+  using namespace registration_state;
+  auto Image = loadXCPT4();
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  LowOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = 0x401288;
+  Call.Seq = 0;
+  Call.addInput(NdVar::cst(0x401030, 4));
+  FrameState Parent;
+  Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+      FrameValue::frame(-64);
+  Parent.store(-64, 4, FrameValue::constant(0xc0000005));
+  const std::set<int32_t> Initialized{-64, -63, -62, -61};
+  // The independent query cannot assume this cdecl argument is accessible.
+  EXPECT_FALSE(getCheckedX86CalleeStackPop(*Image, 0x401030));
+  size_t Work = 0;
+  std::optional<FrameValue> Returned;
+  EXPECT_TRUE(registration_abi::hasConditionalCallFrame(
+      *Image, Call, Parent, Work, &Initialized, &Returned));
+  ASSERT_TRUE(Returned);
+  EXPECT_FALSE(Returned->Constant);
+  EXPECT_TRUE(Returned->FrameOnlyFromCall);
+  // Frame transport grants no closed call-free source effect: the outer SEH
+  // solver still owns RaiseException's callback and runtime binding proofs.
+  BoundPlainCalleeEffect Effect;
+  EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+      *Image, Call, Parent, Work, &Initialized, &Returned, &Effect));
+  EXPECT_FALSE(Returned);
+  EXPECT_FALSE(getCheckedX86CalleeStackPop(*Image, 0x401030));
+}
+
 TEST(RegistrationConditionalFrame,
      XCPT4CompletesWithinTheDefaultClosureBudget) {
   auto Image = loadXCPT4();

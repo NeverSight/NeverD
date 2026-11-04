@@ -524,11 +524,57 @@ const char *neverd_warm_functions_json(neverd_session_t Sess,
     Result["full"] = Warmup && Warmup->Full;
     Result["next_entry"] =
         Warmup && Next ? llvm::json::Value(vaHex(*Next)) : nullptr;
+    // What neverd_prepare_call_summaries_json can solve for this image.
+    Result["call_summaries"] = S->Img.Arch == Arch::X64;
     return dupStr(jsonToString(llvm::json::Value(std::move(Result))));
   } catch (const std::exception &Error) {
     S->setError(std::string("function preparation failed: ") + Error.what());
   } catch (...) {
     S->setError("unexpected function preparation failure");
+  }
+  return nullptr;
+}
+
+const char *neverd_prepare_call_summaries_json(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  S->clearError();
+  try {
+    if (!S->Loaded) {
+      S->setError("no binary loaded");
+      return nullptr;
+    }
+    const bool Available = S->Img.Arch == Arch::X64;
+    bool Ready = false;
+    if (Available && S->synchronizeFunctions()) {
+      // As in warming: the state built here belongs to the current signature
+      // feature generation, which ensurePipeline would otherwise drop.
+      if (S->PipelineFeatureGeneration != S->SigDB.featureGeneration()) {
+        S->clearPipeline();
+        S->PipelineFeatureGeneration = S->SigDB.featureGeneration();
+      }
+      PipelineOptions Opts;
+      S->applyAnalysisOptions(Opts);
+      Opts.AnalysisCache = &S->AnalysisCache;
+      bool Solved = false;
+      Ready = Pipeline().prepareCallSummaries(S->Img, Opts, S->decompileDebug(),
+                                              &Solved);
+      // The kept analysis and C read each run's own callee summaries; the
+      // next request reads the image's.  Summaries the session already held
+      // leave both as they are.
+      if (Solved)
+        S->clearPipelineResult();
+    }
+    llvm::json::Object Result;
+    Result["available"] = Available;
+    Result["ready"] = Ready;
+    return dupStr(jsonToString(llvm::json::Value(std::move(Result))));
+  } catch (const std::exception &Error) {
+    S->setError(std::string("call summary preparation failed: ") +
+                Error.what());
+  } catch (...) {
+    S->setError("unexpected call summary preparation failure");
   }
   return nullptr;
 }

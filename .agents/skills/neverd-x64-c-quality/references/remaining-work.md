@@ -1,5 +1,15 @@
 # Remaining x64 C-quality work
 
+The opt-in V6 `function_context` interface now retains a caller-declared entry
+return cell across continuation pauses and stops when a selected successful
+near RET consumes it. Both C routes and dispatchers share the check; the
+original stack supplies incoming bytes instead of guessed arguments. This
+adds an explicit invocation boundary to state exports, not automatic ordinary
+ABI recovery. The producer must own the return cell's lifetime and external
+environment effects; arbitrary frame reuse or provider-executed completion
+cannot be inferred from post-SP/PC. The two ordinary-C registry-query gaps
+below remain open.
+
 Exact private-word pointer transport now works in single-block, call-free Win64
 source callees when the caller locates the borrow above the callee's private
 frame and all non-stack accesses use that exact borrow. Reloads retain their
@@ -59,6 +69,14 @@ Its callee-stack closure now fits the unchanged work bound: local queries reuse
 the parent block index and completed results, and reject an irretrievably lost
 entry-stack coordinate before recursive callee discovery. The later state
 propagation and local-unwind obligations remain unresolved.
+
+Bound plain-callee result queries now keep the current argument initialization
+and scalar inputs through their return-cleanup proof, avoiding a second,
+context-free traversal that could reject the same invocation. Only reached,
+authenticated near returns with restored frames contribute. This closes the
+input-dependent return-proof inconsistency, including the xcpt4 raise wrapper's
+local frame query. It does not establish the enclosing helper's live runtime
+bindings, callback effects or complete native reconstruction.
 
 The incoming-stack summary now preserves address dependence through partial
 register writes, whole-word transforms and SELECT alternatives. HighC also

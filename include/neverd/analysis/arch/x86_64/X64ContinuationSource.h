@@ -534,6 +534,9 @@ struct X64ContinuationInstructionSource {
   /// Present for ScheduledEvents or PagedMemory. Returns Continue or
   /// InvalidState.
   std::optional<LowFunc> EntryValidation;
+  /// Authenticated physical near RET. Only a successful Return exit consumes
+  /// its original stack cell; native requests and invalid states consume none.
+  bool IsNearReturn = false;
   /// A successfully completed canonical STI starts a one-instruction shadow
   /// only if its original IF was zero. A rejected/native step starts none.
   bool IsSti = false;

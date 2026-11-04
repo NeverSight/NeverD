@@ -5762,6 +5762,20 @@ unchanged, keeps a cache built for other entries, and stops at the cache bound
 without evicting. `NeverDWorkerWarmFunctions` checks the worker's `warm` open
 option against the mock engine: off by default, a running pass, a restart
 after an edit, a full cache and an engine without preparation.
+`SessionCAPITest.PreparedCallSummariesReplaceEachAnalysisClosure` decompiles
+an x86-64 caller whose callee chain is one call deeper than an analysis
+summarizes. After `neverd_prepare_call_summaries_json` the caller passes the
+deepest callee's RDX argument, the analysis kept from before is dropped, and a
+session that prepares first prints the same C.
+`SessionCAPITest.CallSummariesAreUnavailableForAnAArch64Image` checks that the
+warm page and the request report none for AArch64. `NeverDWorkerCallSummaries`
+checks `analysis_restore`'s `call_summaries` job against the mock engine:
+absent without it, preparing then ready, the explicit request, an image without
+summaries ending at its first page, and a failed solve.
+`WorkbenchTests::analysisReplicaRefinesSourceOnceItsCallSummariesAreReady`
+checks that the session refreshes shown source once when a replica's job is
+ready. `localNameEditsReuseTheIdleAnalysisReplica` checks that the option is
+not part of the snapshot that later name updates compare.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and
@@ -7309,6 +7323,16 @@ volatile XMM4/XMM5 keeps the positional contract open.
 (`NeverDWin64CallContractTests`) checks that a routine the image exports,
 whose name binds a prototype, reads the parameters it declares, a system call
 stub's fifth on the stack too, together with any its body reads past them.
+`Win64CallContract.AGuardedBsrCalleeReadsNoDestinationRegister` lifts a callee
+only for its summary: it runs `bsr r8, rcx` only on a nonzero RCX path. Every
+built body folds that select as a published one does, so the summary reads RCX
+and not the R8 its caller never sets.
+`Win64CallContract.PreparedSummariesReadCalleesPastTheRunsDepth` passes
+argument registers through a chain one call deeper than
+`kMaxCallEffectCalleeDepth`, whose last function reads R9. A run of the caller
+leaves that read out. After `Pipeline::prepareCallSummaries` every function of
+the chain reads R9, and its read and write summaries equal those of a
+whole-image run.
 
 `NeverDMedStackDeltaTests` isolates the shared entry-stack offset worker and its
 per-recovery root cache. It checks equal and conflicting PHI chains, both query
@@ -16646,6 +16670,8 @@ Mixed exits from a single internal call site retain both outcomes: a checked bar
 
 `NeverDSysVCallContractTests` covers x86-64 System V call contracts on the shapes of QtXml's `QDomNode::save` and `QDomNode::isDocument`. A direct callee whose summary reads an argument register receives the caller's value of it, including an incoming `this` passed through untouched, in a Mach-O image as in an ELF one; a virtual call takes the object a dominating block loaded into `RDI`; a method that returns without writing `RAX` on one path while only passing callee results on the others is void; and a byte written to `AL` before a comparison chain is the value returned on every path. The emitted programs run at `-O0` and `-O2` under AddressSanitizer and undefined-behavior traps. `ADoubleAVariadicCallPassesOnIsAParameter` builds forwarders that load `AL` before they jump to or call a variadic routine that saves the vector registers: each that passes its own `XMM0` on untouched reads it at entry as a double parameter, which its caller passes; one that sets `XMM1` first does not read that register, and one that leaves `AL` alone reads no vector register.
 
+`SysVCallContract.ATailCallLeavesNoRegisterOfTheCallersOwn` requires the precise HighIR conversion error when an untyped tail callee leaves the high half of a wide return unproved. It must neither reuse the caller's earlier RDX constant nor publish the old trap-stub fallback as successful C.
+
 `ObjCCallHints.CIImageAffineValueKeepsProviderAndPhysicalCopyCarrier` checks the CoreImage provider, CIImage factory, complete 48-byte logical record and x2 pointer, rejecting missing or wrong providers, x86_64 and conflicting declarations. `ObjCImageValueCopy.OriginalFrameAndCompleteBodyAuthorizePublication` retains the original call independently of result assignments at the same machine address. `RejectsChangedCopyCallBodyAndCurrentImage` rejects 24 edits to receipts, arguments, stores, frames, metadata, imports, duplicate calls and saved IR, including consistent edits to both MedIR and HighIR. `GeneratedCExecutesAgainstIndependentPhysicalCopyABI` executes unchanged generated C at O0/O2 on ARM64 against a callee accepting the independently compiler-observed x2 pointer, checking all six floating bit patterns, selector/receiver identity, one evaluation, returned object, legal copy writes, unchanged inputs and boundary guards. Other hosts skip this physical ABI execution test.
 
 `ObjCCallHints.CurrentMethodEncodingMustAgreeWithCachedDeclaration` rejects a cached ABI that disagrees with the current nonempty method encoding or selector; declaration-only clients retain their existing contract.
@@ -17152,6 +17178,16 @@ test `ConditionalResultsReachTheNextInitializedCall` follows these results
 through physical EAX or an instruction-local temporary into the next call,
 including partial/wide output carriers, other volatile registers, absent
 results and a refusing callee prover.
+`RegistrationConditionalReturn` in `NeverDSEHRuntimeMemoryTests` checks
+input-dependent near-return cleanup and an unselected indirect tail at two
+image bases. Reversed/repeated inputs, unknown branches, far returns, changed
+ESP/nonvolatile registers, overwritten return PCs, nonreturning loops and
+exact/one-unit-short budgets retain their separate outcomes. The pinned
+`BoundRaiseWrapperRetainsOnlyLocalProofs` case verifies that initialized cdecl
+arguments can prove a wrapper's returning frame without creating a target-only
+ABI or a call-free effect for its RaiseException invocation. Run registration
+callee, state and EH suites alongside this owner; the shared frame interpreter
+also serves C++ source and native-effect queries.
 `RegistrationConditionalFrame.UnknownScalarArgumentsNeedInitializedBytes`
 adds a search with an unknown scalar key. Complete byte initialization admits
 both full-word and bytewise stores despite absent sparse scalar cells. Every
@@ -19749,6 +19785,11 @@ pre-SSA queries agree on the original LOAD index. A single predecessor with no
 intervening effects can retain the import name; stores, calls, ordered reads
 and joins retain the original captured value and signature. The linked AAPCS64 PLT/GOT fixtures
 retain `getuid()` and `toupper(arg0)` in HighC alongside their LLVM counterparts.
+`MedBoundCallStackArguments.CallsPassTheValueTheirBlockStoredLast` binds
+`KeBugCheckEx`'s fifth parameter as the load of its outgoing slot and checks
+that the call passes the value its block stored there last, across an x87
+context export and a disjoint slot store. Another intrinsic, a call, an
+overlapping store or a store through another base keeps the load.
 `NeverDWorkerCachedCallABI` generates PE fixtures with direct and cached
 seven-argument imports and zero/one-argument private callees, checking both C
 routes independently of function preparation order.
@@ -20014,6 +20055,19 @@ The suite also checks selected CFG export without an ordinary return proof,
 strict request rejection, source/manifest hash binding and SDK/CLI parity.
 Run `NeverDX64ContinuationSourceTests` for the independent privileged-instruction
 KVM comparisons; source export alone does not extend that native qualification.
+
+`X64ContinuationExportTest.FunctionContextRejectsUnboundContracts` and
+`X64FunctionContextTest.CompileOnly` do not execute fixture instructions or
+exported code. They check request admission, disabled-option output identity,
+manifest contracts and O0/O2 object compilation through both C routes and both
+dispatch strategies. `X64FunctionContextTest.RuntimeBoundaries` separately runs
+the generated C at O0/O2 with ASan/UBSan. Its fourteen independent probes cover
+incoming high-DWORD values, internal returns, selected completion targets,
+changed return cells, RET cleanup, pivots, pause/resume, invalid/native states,
+provider handoff, context-free adapter behavior and rejected descendant
+initialization. Compile-only checks
+must not be reported as passing those runtime probes. Neither set establishes
+arbitrary dynamic frame ownership or a Windows environment implementation.
 
 `EnvironmentResumesTheActualPhysicalContext`,
 `EnvironmentBudgetsBoundEveryProviderAttempt` and

@@ -7108,6 +7108,35 @@ private slots:
                  .toBool());
   }
 
+  void analysisReplicaRefinesSourceOnceItsCallSummariesAreReady() {
+    // The replica restores with call_summaries, solves them while no read
+    // waits, and the session reads shown source again exactly once.
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    QSignalSpy refined(&session, &Session::sourceRefined);
+    session.open(
+        writeFixture(directory, QStringLiteral("summaries-ready.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject owner;
+    const QJsonObject payload{{"address", hexAddress(Base)},
+                              {"representation", "source"}};
+    const auto read = [&] {
+      bool done = false;
+      session.analysisQueries(payload, &owner)
+          .subscribe({"decompile", payload}, &owner,
+                     [&](const QJsonObject &response) {
+                       done = response.value("status") == QLatin1String("ok");
+                     });
+      QTRY_VERIFY_WITH_TIMEOUT(done, OpenTimeoutMs);
+    };
+    read();
+    QTRY_COMPARE_WITH_TIMEOUT(refined.count(), 1, OpenTimeoutMs);
+    // Reads go on after the refinement, which later heartbeats repeat none of.
+    read();
+    read();
+    QCOMPARE(refined.count(), 1);
+  }
+
   void prefetchedSourceAndForegroundUseTheSameAnalysisReplica() {
     QTemporaryDir directory;
     Session session(QString::fromLocal8Bit(TEST_WORKER));

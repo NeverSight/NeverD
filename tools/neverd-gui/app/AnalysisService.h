@@ -25,6 +25,9 @@ public:
 
 signals:
   void diagnostic(const QString &message);
+  /// The replica's decompiles read the image's call summaries now, which it
+  /// solved in idle time: earlier replies no longer answer.
+  void sourceRefined();
 
 private:
   QString send(const QString &operation, const QJsonObject &payload);
@@ -46,6 +49,7 @@ private:
   bool ready_ = false;
   bool snapshotBlocked_ = false, startingReplica_ = false;
   bool updatesNames_ = false, refreshingNames_ = false;
+  bool solvesSummaries_ = false, summariesReady_ = false;
 };
 
 /// Bounded independent replicas. A function's pages and graph transaction stay
@@ -71,6 +75,8 @@ public:
 
 signals:
   void diagnostic(const QString &message);
+  /// A replica's decompiles changed once, as AnalysisService::sourceRefined.
+  void sourceRefined();
 
 private:
   struct Lane {
