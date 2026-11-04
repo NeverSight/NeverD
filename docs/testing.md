@@ -19744,6 +19744,11 @@ pre-SSA queries agree on the original LOAD index. A single predecessor with no
 intervening effects can retain the import name; stores, calls, ordered reads
 and joins retain the original captured value and signature. The linked AAPCS64 PLT/GOT fixtures
 retain `getuid()` and `toupper(arg0)` in HighC alongside their LLVM counterparts.
+`MedBoundCallStackArguments.CallsPassTheValueTheirBlockStoredLast` binds
+`KeBugCheckEx`'s fifth parameter as the load of its outgoing slot and checks
+that the call passes the value its block stored there last, across an x87
+context export and a disjoint slot store. Another intrinsic, a call, an
+overlapping store or a store through another base keeps the load.
 `NeverDWorkerCachedCallABI` generates PE fixtures with direct and cached
 seven-argument imports and zero/one-argument private callees, checking both C
 routes independently of function preparation order.

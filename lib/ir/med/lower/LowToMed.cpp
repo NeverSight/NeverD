@@ -44,6 +44,7 @@
 #include "neverd/ir/low/X86/X86FourSourceShape.h"
 #include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/ir/med/MedBoundCallStackArguments.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallTarget.h"
 #include "neverd/ir/med/MedConstantPropagation.h"
@@ -1855,6 +1856,10 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
 
     propagate(Func);
     debugVerifyMedFunc(Func, "propagate");
+    // A bound call passes what the block stored in its outgoing slots; the
+    // loads become dead, as for a call recovery takes from those stores.
+    if (forwardBoundCallStackArguments(Func))
+      debugVerifyMedFunc(Func, "forwardBoundCallStackArguments");
 
     eliminateFlags(Func);
     debugVerifyMedFunc(Func, "eliminateFlags");
