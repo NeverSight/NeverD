@@ -5783,6 +5783,8 @@ an x86-64 caller whose callee chain is one call deeper than an analysis
 summarizes. After `neverd_prepare_call_summaries_json` the caller passes the
 deepest callee's RDX argument, the analysis kept from before is dropped, and a
 session that prepares first prints the same C.
+`NeverDSupportHostMemoryTests` checks that the host reports its physical
+memory, which sizes the omitted-callee memo.
 `NeverDSupportSharedValueTests` checks the copy-on-write value those runs share
 the table's maps through: copies share one instance until one changes, a
 shared instance is never changed through a holder, and equality compares

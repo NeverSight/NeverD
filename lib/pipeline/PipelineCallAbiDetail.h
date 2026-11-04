@@ -267,9 +267,11 @@ struct OmittedCalleeMemo {
   /// most of its MedIR.  A session's decompiles read the same callees again,
   /// so the memo holds what they read rather than evicting it for each one's
   /// new callees: 600 decompiles of 300 ntoskrnl functions read 3980 callees,
-  /// 1.3 GB, which a cap of 512 MB evicted from the 48th on.
-  static constexpr size_t MaxBytes =
-      ::neverd::limits::pipeline::kPipelineCallAbiDetailMaxBytes;
+  /// 1.3 GB, which a cap of 512 MB evicted from the 48th on.  A replica's
+  /// read-ahead fills three quarters of it, the more the larger it is: a
+  /// share of the host's physical memory, between
+  /// kPipelineCallAbiDetailMaxBytes and kPipelineCallAbiDetailMaxBytesCeiling.
+  static size_t maxBytes();
   /// Read of \p Img with \p Result's function-pointer variables; starts
   /// again when this was read of another image or with other variables.
   void adopt(const BinaryImage &Img, const PipelineResult &Result);
@@ -289,14 +291,14 @@ struct OmittedCalleeMemo {
   Callee *find(va_t Entry);
   /// Keeps \p Converted as \p Holder's conversion used last, where its
   /// conversion used longest ago makes room past MaxConversions.  Past
-  /// MaxBytes, the bodies of the callees used longest ago go, \p Holder's
+  /// maxBytes(), the bodies of the callees used longest ago go, \p Holder's
   /// aside, down to three quarters of it.
   const Conversion &keep(Callee &Holder, Conversion Converted);
   /// Keeps \p Kept as \p Holder's prepared source body, counted against
-  /// MaxBytes until the conversion goes; the next keep makes room.
+  /// maxBytes() until the conversion goes; the next keep makes room.
   void keepPrepared(Conversion &Holder,
                     std::shared_ptr<const Conversion::PreparedSource> Kept);
-  /// What the kept bodies count against MaxBytes.
+  /// What the kept bodies count against maxBytes().
   size_t bytes() const { return Bytes; }
   /// The entries callee lifts know: the image's function symbols that are
   /// not boundary guesses, read when the memo adopts the image.

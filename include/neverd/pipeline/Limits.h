@@ -75,7 +75,12 @@ inline constexpr size_t kPipelineCallAbiMinParallelCalleeReads = 2;
 // lib/pipeline/PipelineCallAbiDetail.h
 inline constexpr size_t kPipelineCallAbiDetailMaxProbes = 16;
 inline constexpr size_t kPipelineCallAbiDetailMaxConversions = 4;
+/// The omitted-callee memo's bodies take up to a twelfth of the host's
+/// physical memory (OmittedCalleeMemo::maxBytes), between these bounds.
 inline constexpr size_t kPipelineCallAbiDetailMaxBytes = size_t{2048} << 20;
+inline constexpr uint64_t kPipelineCallAbiDetailMaxBytesCeiling = uint64_t{4096}
+                                                                  << 20;
+inline constexpr uint64_t kPipelineCallAbiDetailMemoryShare = 12;
 
 // lib/pipeline/PipelineFormattedCalls.cpp
 /// The distinct constants a register may hold where paths join, as the scan

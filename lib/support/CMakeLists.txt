@@ -9,6 +9,7 @@ add_neverd_component_library(NeverDDigest
 add_neverd_component_library(NeverDSupport
   AtomicOutput.cpp
   BinaryLoading.cpp
+  HostMemory.cpp
   StringScan.cpp
   TextCodec.cpp
   TextEncoding.cpp

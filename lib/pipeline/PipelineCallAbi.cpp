@@ -38,6 +38,7 @@
 #include "neverd/loader/FunctionNames.h"
 #include "neverd/loader/ReadOnlyBytesScope.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/HostMemory.h"
 #include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -48,6 +49,7 @@
 #include <cstdint>
 #include <deque>
 #include <exception>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <optional>
@@ -381,6 +383,20 @@ OmittedCalleeMemo::Callee *OmittedCalleeMemo::find(va_t Entry) {
   return &Found;
 }
 
+size_t OmittedCalleeMemo::maxBytes() {
+  namespace L = ::neverd::limits::pipeline;
+  static const size_t Bound = [] {
+    const auto Host = hostPhysicalMemoryBytes();
+    const uint64_t Share =
+        Host ? *Host / L::kPipelineCallAbiDetailMemoryShare : 0;
+    return static_cast<size_t>(std::min<uint64_t>(
+        std::clamp<uint64_t>(Share, L::kPipelineCallAbiDetailMaxBytes,
+                             L::kPipelineCallAbiDetailMaxBytesCeiling),
+        std::numeric_limits<size_t>::max()));
+  }();
+  return Bound;
+}
+
 const OmittedCalleeMemo::Conversion &
 OmittedCalleeMemo::keep(Callee &Holder, Conversion Converted) {
   if (Converted.Body) {
@@ -427,7 +443,8 @@ OmittedCalleeMemo::keep(Callee &Holder, Conversion Converted) {
   }
   Bytes += Converted.Bytes;
   Holder.Conversions.insert(Holder.Conversions.begin(), std::move(Converted));
-  if (Bytes > MaxBytes) {
+  const size_t Max = maxBytes();
+  if (Bytes > Max) {
     // A callee's lift stays: it holds no body.
     std::vector<std::pair<uint64_t, va_t>> Order;
     for (const auto &[Entry, Read] : Callees)
@@ -435,7 +452,7 @@ OmittedCalleeMemo::keep(Callee &Holder, Conversion Converted) {
         Order.emplace_back(Read.LastUsed, Entry);
     std::sort(Order.begin(), Order.end());
     for (const auto &[Used, Entry] : Order) {
-      if (Bytes <= MaxBytes / 4 * 3)
+      if (Bytes <= Max / 4 * 3)
         break;
       Callee &Gone = Callees.at(Entry);
       for (const Conversion &Each : Gone.Conversions)
@@ -1851,7 +1868,7 @@ AnalysisCacheWarmup warmOmittedCallees(const BinaryImage &Img,
     return Warmup;
   // Warming fills three quarters of the memo, and leaves the rest to the
   // callees selections read: bodies past it would only push those out.
-  constexpr size_t WarmedBytes = OmittedCalleeMemo::MaxBytes / 4 * 3;
+  const size_t WarmedBytes = OmittedCalleeMemo::maxBytes() / 4 * 3;
   // A body past the SSA node bound is no signature (conversion), so warming
   // converts lifts up to that many operations; a selection converts a larger
   // callee where it first calls it.
@@ -1890,7 +1907,7 @@ AnalysisCacheWarmup prefillOmittedCallees(const BinaryImage &Img,
     return Warmup;
   // As warming: three quarters of the memo, the rest left to the callees
   // runs read.
-  constexpr size_t WarmedBytes = OmittedCalleeMemo::MaxBytes / 4 * 3;
+  const size_t WarmedBytes = OmittedCalleeMemo::maxBytes() / 4 * 3;
   std::vector<va_t> Next;
   for (size_t At = 0; At < Functions.size();) {
     if (Memo->bytes() >= WarmedBytes) {

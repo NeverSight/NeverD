@@ -104,6 +104,11 @@ add_neverd_unittest(NeverDStringScanTests
   LINK_COMPONENTS Support
 )
 
+add_neverd_unittest(NeverDSupportHostMemoryTests
+  SupportHostMemoryTests.cpp
+  LINK_COMPONENTS Support
+)
+
 add_neverd_unittest(NeverDTextEncodingTests
   TextEncodingTests.cpp
   LINK_COMPONENTS Support
