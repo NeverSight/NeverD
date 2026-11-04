@@ -11,6 +11,15 @@ their native allocation chain includes cold verifier, tracing and indirect-call
 paths. Neither a source spill annotation nor an inferred argument count proves
 those paths unable to observe saved pointers or incoming stack bytes.
 
+Offline boot images, API-set schemas and recovered registry logs can narrow
+import-binding candidates, but do not authenticate live verifier or tracing
+state. Absence of a dynamic-trace extension does not exclude independent ETW
+stack walking. Keep these conditional facts out of ordinary incoming-byte
+elision until the remaining callback and unwind observations are proved.
+Pre-load PDB name hints now share the full loader's RSDS age and trailing
+resource-section rules, removing a static symbol-location obstacle without
+changing either registry-query argument proof.
+
 The public PE32 `xcpt4-msvc-x86-native-no-gs-o0.exe` filter regression now
 checks the current display contract: signed local and constant filter values
 remain visible even when native registration closure is deferred. An explicit
