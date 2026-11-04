@@ -75,8 +75,8 @@ TEST(X86FlagsSource, EveryWidthSurvivesBothRoutesAndFormats) {
             auto Image = flagsFunction(A, Format, Word, Write);
             std::string High, C, Native;
             std::vector<uint8_t> Object;
-            sourceRoutes(Image, NoOpt, Entry, "", &High, &C, {}, {}, &Native,
-                         &Object);
+            ASSERT_NO_THROW(sourceRoutes(Image, NoOpt, Entry, "", &High, &C, {},
+                                         {}, &Native, &Object));
             ASSERT_FALSE(testing::Test::HasFailure());
             for (const auto &Source : {High, C}) {
               if (Word)

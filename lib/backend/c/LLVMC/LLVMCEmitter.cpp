@@ -1074,14 +1074,22 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
           }
           if (const auto *Asm =
                   llvm::dyn_cast<llvm::InlineAsm>(CI->getCalledOperand())) {
+            bool FlagsAssembly = false;
             for (const auto &P : X86FlagsNativeInventory)
               if (Asm->getAsmString() == P.Assembly) {
+                FlagsAssembly = true;
                 NeedsX86Flags16Dispatch |= P.Bytes == 2;
+                HasCIntrinsics |= P.Bytes != 2;
                 if (P.Bytes != 2)
                   Headers.insert(Opts.Format == BinaryFormat::COFF
                                      ? "intrin.h"
                                      : "x86intrin.h");
+                break;
               }
+            // This width table already selects the complete FLAGS headers.
+            // The generic header probe assumes a live result, unlike POPF.
+            if (FlagsAssembly)
+              continue;
             if ((Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64) &&
                 (Asm->getAsmString() == "ldmxcsr ($0)" ||
                  Asm->getAsmString() == "stmxcsr ($0)"))
