@@ -13209,6 +13209,16 @@ callback's ordinary returning-stack witness while refusing the same address
 as a standalone entry, in both query orders and on repeated queries. A relay
 outside the parent's EH range also cannot export that local witness through
 the standalone cache.
+`RepeatedLocalStackWitnessesStayInTheirParent` checks a repeated local call
+graph, reversed block order and retained transitive import bindings without
+exhausting the shared work bound. `LocalStackWitnessesDoNotCompleteCycles`
+keeps cycles and mismatched stack pops unproved; `PendingLocalDependencyCanBeRetried`
+requires a pending refusal to be retried after its dependency completes.
+`LocalStackCoordinatesNeedAProvenRestore` distinguishes full-width ESP saves
+from lost and narrowed coordinates. The public corpus check
+`RegistrationOriginalImageCaller.CorpusLocalStackClosureFitsItsBudget` covers
+the large PE32 SEH function's callee closure and physical-control inventory.
+It does not assert complete registration-state propagation or native C output.
 `OwnedStackQueriesKeepImageAndBudgetBoundaries` checks reuse within the active
 index, a different image with the same entry address and another return pop,
 an independent near-exhausted counter, and nested owner restoration. Leaving
