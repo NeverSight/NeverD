@@ -125,6 +125,33 @@ MedCallReturnRanges sourceCallReturnRanges(const BinaryImage &Image,
   return Ranges;
 }
 
+SourceStackScan sourceStackScanOf(const MedFunc &Func,
+                                  const BinaryImage &Image) {
+  SourceStackScan Scan;
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  const auto Arguments = TRI.integerArgumentLayout(Image.abiFormat());
+  Scan.Candidate = Func.Params.size() > Arguments.Registers.size();
+  for (const auto &Block : Func.Blocks) {
+    Scan.Weight += Block.Ops.size();
+    for (const auto &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&
+          !Op.SourceCallHint)
+        Scan.Calls.push_back(Op.Inputs[0].ConstVal);
+      Scan.Candidate |= forwardsSourceEntryRegister(Op, Arguments);
+      if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2)
+        Scan.Candidate |= Op.Inputs[1].Kind == MedVar::Reg &&
+                          Op.Inputs[1].SSAVer == 0 &&
+                          Arguments.registerIndex(Op.Inputs[1].RegOff) >= 0;
+      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
+        Scan.Candidate |= Op.Inputs[0].Kind == MedVar::Reg &&
+                          Op.Inputs[0].SSAVer == 0 &&
+                          Op.Inputs[0].Size < TRI.PointerSize &&
+                          Arguments.registerIndex(Op.Inputs[0].RegOff) >= 0;
+    }
+  }
+  return Scan;
+}
+
 void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
                                          PipelineResult &Result,
                                          llvm::ArrayRef<LowFunc> Originals) {
@@ -174,6 +201,21 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
   }
   if (!HasCallerBatch)
     return;
+  // What preparation reads of each callee it may follow: kept with the
+  // memo's conversion of an omitted body, else read here once.
+  OmittedCalleeMemo *Memo = Result.CalleeSignatureMemo.get();
+  std::map<va_t, SourceStackScan> OwnScans;
+  const auto ScanOf = [&](va_t Entry,
+                          const MedFunc &Func) -> const SourceStackScan & {
+    if (Memo && !Complete.count(Entry))
+      if (const auto *Kept = Memo->conversionOf(Func);
+          Kept && Kept->SourceStack)
+        return *Kept->SourceStack;
+    auto [At, Added] = OwnScans.try_emplace(Entry);
+    if (Added)
+      At->second = sourceStackScanOf(Func, Image);
+    return At->second;
+  };
   std::set<va_t> Referenced;
   std::vector<va_t> Pending;
   const auto Reference = [&](va_t Target) {
@@ -191,38 +233,16 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
   // Reading a callee's source inputs never starts an unbounded image walk.
   for (size_t I = 0; I < Pending.size(); ++I)
     if (const auto At = Callees.find(Pending[I]); At != Callees.end())
-      for (const auto &Block : At->second->Blocks)
-        for (const auto &Op : Block.Ops)
-          if (Op.Opcode == NdOp::CALL && Op.NumInputs &&
-              Op.Inputs[0].isConst() && !Op.SourceCallHint)
-            Reference(Op.Inputs[0].ConstVal);
+      for (const va_t Target : ScanOf(At->first, *At->second).Calls)
+        Reference(Target);
   std::vector<const MedFunc *> Sources;
   std::vector<uint64_t> Weights;
-  const auto Arguments =
-      getTargetRegInfo(Image.Arch).integerArgumentLayout(Image.abiFormat());
   for (const auto &[Entry, Func] : Callees) {
     if (!Referenced.count(Entry))
       continue;
-    bool Candidate = Func->Params.size() > Arguments.Registers.size();
-    uint64_t Weight = 1;
-    for (const auto &Block : Func->Blocks) {
-      Weight += Block.Ops.size();
-      for (const auto &Op : Block.Ops) {
-        Candidate |= forwardsSourceEntryRegister(Op, Arguments);
-        if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2)
-          Candidate |= Op.Inputs[1].Kind == MedVar::Reg &&
-                       Op.Inputs[1].SSAVer == 0 &&
-                       Arguments.registerIndex(Op.Inputs[1].RegOff) >= 0;
-        if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
-          Candidate |=
-              Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[0].SSAVer == 0 &&
-              Op.Inputs[0].Size < getTargetRegInfo(Image.Arch).PointerSize &&
-              Arguments.registerIndex(Op.Inputs[0].RegOff) >= 0;
-      }
-    }
-    if (Candidate) {
+    if (const SourceStackScan &Scan = ScanOf(Entry, *Func); Scan.Candidate) {
       Sources.push_back(Func);
-      Weights.push_back(Weight);
+      Weights.push_back(Scan.Weight);
     }
   }
   // Cached bodies are immutable. Prepare each candidate once; independent
@@ -230,7 +250,6 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
   // omitted callee's preparation reads only its kept body and the image, so
   // the memo keeps it with that conversion for every later run.
   using PreparedSource = OmittedCalleeMemo::Conversion::PreparedSource;
-  OmittedCalleeMemo *Memo = Result.CalleeSignatureMemo.get();
   std::vector<OmittedCalleeMemo::Conversion *> Kept(Sources.size(), nullptr);
   std::vector<std::shared_ptr<PreparedSource>> Prepared(Sources.size());
   std::vector<const std::set<const MedOp *> *> OverwrittenSpills(Sources.size(),

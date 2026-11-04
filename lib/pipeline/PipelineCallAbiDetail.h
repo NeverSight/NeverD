@@ -13,6 +13,8 @@
 #ifndef NEVERD_LIB_PIPELINE_PIPELINECALLABIDETAIL_H
 #define NEVERD_LIB_PIPELINE_PIPELINECALLABIDETAIL_H
 
+#include "PipelineSourceStackAccesses.h"
+
 #include "neverd/Common.h"
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/IntegerCallArguments.h"
@@ -204,6 +206,11 @@ struct OmittedCalleeMemo {
     std::optional<CalleeSummary> Summary;
     std::vector<va_t> CalleesRead;
     std::vector<va_t> DirectCallTargets;
+    /// The callees whose bodies its source parameter reads take
+    /// (sourcePrefixCallees), and what source stack preparation reads of it
+    /// on an x64 COFF image (sourceStackScanOf).
+    std::vector<va_t> SourcePrefixCallees;
+    std::optional<SourceStackScan> SourceStack;
     /// Complete read-only leaf inputs proved from this conversion's original
     /// LowIR, as entry-SP offset and observed byte width. These inputs do not
     /// alter Body's machine calling convention.

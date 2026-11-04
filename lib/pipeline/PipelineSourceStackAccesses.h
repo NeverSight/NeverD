@@ -18,8 +18,10 @@
 #include "llvm/ADT/ArrayRef.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace neverd {
 
@@ -31,6 +33,19 @@ struct PipelineOptions;
 struct PipelineResult;
 
 enum class MedStackProjection { Machine, Source };
+
+/// What source stack preparation reads of a callee body it may follow
+/// (prepareRecoveredSourceStackAccesses): the targets of its direct calls
+/// without a source hint, in order, whether the body may take a source stack
+/// or register input, and its operations plus one.  A fact of the body and
+/// the image, which the omitted-callee memo keeps with a kept body.
+struct SourceStackScan {
+  std::vector<va_t> Calls;
+  bool Candidate = false;
+  uint64_t Weight = 1;
+};
+SourceStackScan sourceStackScanOf(const MedFunc &Func,
+                                  const BinaryImage &Image);
 
 /// Source projections omit proved caller-state saves. Machine analysis and
 /// rewriting retain those operations even when source output was also asked

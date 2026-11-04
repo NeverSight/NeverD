@@ -370,8 +370,12 @@ OmittedCalleeMemo::keep(Callee &Holder, Conversion Converted) {
               sizeof(uint64_t) +
           Summary->FPScalarBytes.size() * sizeof(std::pair<uint64_t, uint16_t>);
     Converted.Bytes +=
-        (Converted.CalleesRead.size() + Converted.DirectCallTargets.size()) *
+        (Converted.CalleesRead.size() + Converted.DirectCallTargets.size() +
+         Converted.SourcePrefixCallees.size()) *
         sizeof(va_t);
+    if (Converted.SourceStack)
+      Converted.Bytes += sizeof(SourceStackScan) +
+                         Converted.SourceStack->Calls.size() * sizeof(va_t);
   }
   if (Converted.SourceOriginalBlocks) {
     Converted.Bytes +=
@@ -958,6 +962,9 @@ private:
       Converted.Summary = summarizeCallee(*Converted.Body, Img);
       Converted.CalleesRead = calleesToRead(*Converted.Body, Img, Result);
       Converted.DirectCallTargets = directCallTargets(*Converted.Body);
+      Converted.SourcePrefixCallees = sourcePrefixCallees(*Converted.Body, Img);
+      if (Img.Arch == Arch::X64 && Img.abiFormat() == BinaryFormat::COFF)
+        Converted.SourceStack = sourceStackScanOf(*Converted.Body, Img);
     }
     return Converted;
   }
@@ -1033,13 +1040,20 @@ std::vector<std::shared_ptr<const MedFunc>> omittedDirectCalleeSignatures(
   };
   for (const MedFunc &F : Result.MedFuncs)
     enqueueCallees(calleesToRead(F, Img, Result));
-  const auto enqueueSourcePrefixes = [&](const MedFunc &Func) {
-    if (SourceParameterReads)
-      for (va_t Target : sourcePrefixCallees(Func, Img))
-        if (!Result.CallPrototypeArguments.count(Target) &&
-            !Result.CallUserPrototypes.count(Target))
-          enqueue(Target);
-  };
+  // A kept body's are read where it was kept.
+  const auto enqueueSourcePrefixes =
+      [&](const OmittedCalleeMemo::Conversion &Conversion) {
+        if (!SourceParameterReads)
+          return;
+        std::vector<va_t> Own;
+        if (!Conversion.Summary)
+          Own = sourcePrefixCallees(*Conversion.Body, Img);
+        for (va_t Target :
+             Conversion.Summary ? Conversion.SourcePrefixCallees : Own)
+          if (!Result.CallPrototypeArguments.count(Target) &&
+              !Result.CallUserPrototypes.count(Target))
+            enqueue(Target);
+      };
   if (SourceParameterReads) {
     std::vector<uint64_t> Weights;
     for (const auto &Func : Result.MedFuncs) {
@@ -1127,7 +1141,7 @@ std::vector<std::shared_ptr<const MedFunc>> omittedDirectCalleeSignatures(
       // Descendants retain this reader's deterministic breadth-first budget:
       // a late child cannot consume another direct callee's support
       // allowance.
-      enqueueSourcePrefixes(*Conversion.Body);
+      enqueueSourcePrefixes(Conversion);
       // System V's model takes every register a variadic prologue saves: as
       // an omitted callee's signature it would make its callers pass
       // registers they never set.
