@@ -1,0 +1,342 @@
+{
+  "schema": 1,
+  "date": "2026-11-03",
+  "status": "qualified",
+  "global_goal_complete": false,
+  "scope": "Full LLVM native register/memory ARPL in protected code16 with the 32-bit pointer/stack ABI; protected code32, the existing three-format compiler/IA32 oracle and shared far-pointer fault observation are regressions. No NeverC i386 frontend is enabled.",
+  "commits": {
+    "llvm": "c560029f9473fe4832f1416bda82d65be7141f51",
+    "neverc": "c41fa3d348abaea9f1c36cdaf047ce5ca75e1112"
+  },
+  "tested_source_inputs": {
+    "llvm": {
+      "base_commit": "82add89d3b7b0c0124f5668b321a80355ac464f9",
+      "files": {
+        "llvm/include/llvm/IR/IntrinsicsX86.td": "cc761eae6fb73f1129f36554027e827ed0623fef000c748e946ce9cac8319d2b",
+        "llvm/lib/Target/X86/X86ISelLowering.cpp": "a3532e3173ac1034ced9a073f04f2abbaa3adc75e3aaf34d4c5916ffee975461",
+        "llvm/test/CodeGen/X86/arpl-intrinsics.ll": "146bf14e54c55f8c09688e2ee63502345b2f44aef7ee81459a320fba66424534"
+      }
+    },
+    "neverc": {
+      "base_commit": "08ba7a386e703fe3167f23940c0f6a84b1660212",
+      "files": {
+        "tests/neverc/X86/KvmProtectedFaultFixture.h": "6e90efb197081399e7588af4b8892ac09989634cea53bc697243da2993dd32eb",
+        "tests/neverc/X86/KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+        "tests/neverc/X86/protected_arpl_kvm.c": "ac4eab4c51245758ac74e260b0b7d832375c69507c1ff5f7e59470011d7cfa22",
+        "tests/neverc/X86/verify_protected_arpl.py": "ff880a35b04ca863908ba837e1db41642b57709c0b02cb266a29bafc28989575",
+        "tests/neverc/X86/protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "tests/neverc/X86/verify_protected_far_pointer.py": "559994d3eaa13625f6132a7111325d0eb70a589e3ce72b4193bf0721e422a85a",
+        "tests/verify-arpl-completion.py": "b941f2a33c6c47a5d44bae2ba161cd095b2591e0cdb09ef105bcfd861c01f389",
+        "tests/verify-descriptor-query-completion.py": "b1c2232c568d1a7c7aa662343f5eed9f43347441a32dd7be38e43ff5356f940e"
+      }
+    }
+  },
+  "source_basis": "Base commits plus retained patches/source-snapshot identify the executable inputs. Hashes were checked after all final native runs and after commit/integration. Documentation records the result afterward.",
+  "neverc_integration": {
+    "before": "ac42054693abbb13d32f88338c02fd36b2376214",
+    "remote": "a93d792aff407004ab841fcc32ab33107ed8754f",
+    "after": "c41fa3d348abaea9f1c36cdaf047ce5ca75e1112",
+    "tree": "6fd86abb27290c853de6e49632a483906f34c7be",
+    "source_tree_identical": true,
+    "reason": "Upstream diagnostic history preserves the existing dev source tree; merge changes history only."
+  },
+  "cpu": {
+    "model": "Intel Core i9-13900H",
+    "family": 6,
+    "model_number": 186,
+    "stepping": 2,
+    "microcode": "0x6134",
+    "p_core": "0",
+    "e_core": "12",
+    "kernel": "7.0.0-42-generic"
+  },
+  "counts": {
+    "arpl16": {
+      "profiles": 4,
+      "complete_state_pairs": 30720,
+      "returns": 13504,
+      "gp": 6912,
+      "pf": 4928,
+      "changed": 4224,
+      "unchanged": 12608,
+      "ac": 2048,
+      "faults": 13888
+    },
+    "arpl32": {
+      "profiles": 4,
+      "complete_state_pairs": 30720,
+      "returns": 13504,
+      "gp": 6912,
+      "pf": 4928,
+      "changed": 4224,
+      "unchanged": 12608,
+      "ac": 2048,
+      "faults": 13888
+    },
+    "far16": {
+      "profiles": 4,
+      "complete_state_pairs": 63840,
+      "returns": 19680,
+      "gp": 18240,
+      "pf": 18720,
+      "np": 1920,
+      "ss": 480,
+      "faults": 39360
+    },
+    "far32": {
+      "profiles": 4,
+      "complete_state_pairs": 63840,
+      "returns": 19680,
+      "gp": 18240,
+      "pf": 18720,
+      "np": 1920,
+      "ss": 480,
+      "faults": 39360
+    }
+  },
+  "other_checks": {
+    "llvm_codegen_tests": 9,
+    "compiler_isa_cases": 960,
+    "ia32_result_fault_comparisons": 16480,
+    "failures": 0,
+    "skips": 0,
+    "capstone_version": "5.0.7",
+    "unicorn_version": "2.1.4"
+  },
+  "count_definition": "Actual executions across O0/O2 and the recorded P/E cores, not unique inputs. Native complete-state pairs compare GPRs, flags, caches/system state, active events and RAM against independently encoded original bytes. Return checks are subsets. Earlier focused runs are not added to these totals. The 960 existing compiler/ISA cases use Unicorn; 16,480 result/fault comparisons execute real IA32 code.",
+  "negative_controls": "Each ARPL profile rejects both a corrupted declared source before an intact ARPL and an inverted returned ZF after the intact ARPL. Each far-pointer profile retains its wrong-pointer transport negative control.",
+  "fault_observation": "Original #GP/#PF/#AC handlers expose their vector with OUT and run to completed I/O. Original restart PCs are authenticated on both sides before normalizing only that frame PC. The shared helper excludes stale exception payload only after proving neither pending nor injected; all other event fields remain compared.",
+  "test_refactoring": "KvmProtectedFaultFixture.h owns GPR lookup, completed-OUT observation and inactive exception-payload handling. The existing protected far-pointer oracle consumes the same helper and was rerun on both modes and core types.",
+  "binaries_sha256": {
+    "opt": "37af7a15977d4f343141b4fd22e7700c1758d8b3ee3e85a3c57cef8c83fbf2e3",
+    "FileCheck": "f9bffb050e642a24ed6d8d67c57aafc62fb46461c5f40c0e889b4caa0718bf50",
+    "llvm-mc": "6a7e7cc884bc9c6269a8938a9e190769ce28e2a9377d80a231600553df0ab499",
+    "llvm-objdump": "624adc605ab04608610ea7580d1a5482b2f66c593918d17f265e2a0c95596cd8",
+    "llc": "ebf60f544bb7068da0766c6ee9875e84aa5ddeb4b974b207b54c6526d6d5e29e"
+  },
+  "artifact_root": "/mnt/data/neverd-code16-arpl-20261103",
+  "artifact_manifest_sha256": "0e405884f35b9573987db1ce1dc01fcb722fa75da6c20c20250404f4e6617c35",
+  "artifact_count": 655,
+  "runs": [
+    {
+      "name": "arpl16",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-arpl-20261103/final/p-core/arpl16/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_arpl.py",
+        "--mode",
+        "16",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-arpl-20261103/frozen-bin",
+        "--output",
+        "/mnt/data/neverd-code16-arpl-20261103/final/p-core/arpl16"
+      ],
+      "exit_code": 0,
+      "seconds": 11.82588243484497
+    },
+    {
+      "name": "arpl32",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-arpl-20261103/final/p-core/arpl32/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_arpl.py",
+        "--mode",
+        "32",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-arpl-20261103/frozen-bin",
+        "--output",
+        "/mnt/data/neverd-code16-arpl-20261103/final/p-core/arpl32"
+      ],
+      "exit_code": 0,
+      "seconds": 11.8711097240448
+    },
+    {
+      "name": "far16",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-arpl-20261103/final/p-core/far16/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_far_pointer.py",
+        "--mode",
+        "16",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-arpl-20261103/frozen-bin",
+        "--output",
+        "/mnt/data/neverd-code16-arpl-20261103/final/p-core/far16"
+      ],
+      "exit_code": 0,
+      "seconds": 22.557466745376587
+    },
+    {
+      "name": "far32",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-arpl-20261103/final/p-core/far32/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_far_pointer.py",
+        "--mode",
+        "32",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-arpl-20261103/frozen-bin",
+        "--output",
+        "/mnt/data/neverd-code16-arpl-20261103/final/p-core/far32"
+      ],
+      "exit_code": 0,
+      "seconds": 23.20107626914978
+    },
+    {
+      "name": "arpl16",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-arpl-20261103/final/e-core/arpl16/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "tests/neverc/X86/verify_protected_arpl.py",
+        "--mode",
+        "16",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-arpl-20261103/frozen-bin",
+        "--output",
+        "/mnt/data/neverd-code16-arpl-20261103/final/e-core/arpl16"
+      ],
+      "exit_code": 0,
+      "seconds": 17.594502210617065
+    },
+    {
+      "name": "arpl32",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-arpl-20261103/final/e-core/arpl32/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "tests/neverc/X86/verify_protected_arpl.py",
+        "--mode",
+        "32",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-arpl-20261103/frozen-bin",
+        "--output",
+        "/mnt/data/neverd-code16-arpl-20261103/final/e-core/arpl32"
+      ],
+      "exit_code": 0,
+      "seconds": 18.00826072692871
+    },
+    {
+      "name": "far16",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-arpl-20261103/final/e-core/far16/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "tests/neverc/X86/verify_protected_far_pointer.py",
+        "--mode",
+        "16",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-arpl-20261103/frozen-bin",
+        "--output",
+        "/mnt/data/neverd-code16-arpl-20261103/final/e-core/far16"
+      ],
+      "exit_code": 0,
+      "seconds": 33.805763959884644
+    },
+    {
+      "name": "far32",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-arpl-20261103/final/e-core/far32/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "tests/neverc/X86/verify_protected_far_pointer.py",
+        "--mode",
+        "32",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-arpl-20261103/frozen-bin",
+        "--output",
+        "/mnt/data/neverd-code16-arpl-20261103/final/e-core/far32"
+      ],
+      "exit_code": 0,
+      "seconds": 32.39567041397095
+    }
+  ],
+  "source_reference": {
+    "title": "Intel SDM Volume 2 revision 093: ARPL",
+    "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
+    "local_text": "/mnt/data/neverd-paged-scheduling-20261101/intel-sdm-vol2-093.txt"
+  },
+  "boundaries": [
+    "The code16/code32 matrix covers CPL0/CPL3, all RPL pairs, high selector bits, aliased inputs, used/unused results, arithmetic flags, read-only/missing/cross-page operands and explicit DS cache states.",
+    "Non-ABI DS caches are changed only at the native instruction boundary and stop there. Successful ABI-compatible cases additionally check the compiler return/result and callee-saved registers. This is not an arbitrary segmented C ABI.",
+    "Real mode, VM86, asynchronous events, device memory, all original address/segment encodings and other CPU models are not qualified here. No undefined state is invented and no missing mode is represented as a NOP.",
+    "ARPL has no long-mode encoding. The full LLVM fork admits protected 16/32-bit code; NeverC retains its x86-64/AArch64 target set.",
+    "Production SDK neverd-llvm-v23.0.0-r6 and gitlink 03270359c2ed8f6806533d3832a947bf883a6f69 are unchanged. Remaining i386 dispatch/scalars, real/VM86/tasks/debug, software SMM/SGX and complete CET/FRED events remain open; release/pin waits for global completion."
+  ]
+}

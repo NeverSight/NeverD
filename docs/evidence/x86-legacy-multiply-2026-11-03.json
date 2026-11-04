@@ -415,7 +415,97 @@
     "unit.log": "795576859e1360e168462835ecf120cb8b5b6ff706bf19fabc3ead86710e0c8c",
     "unit.xml": "15df46b8e606263b5cce4a371aeff5623327e771d4beacec0cc7a79cbe48dbb8",
     "wrong-sign-parity-12.log": "0cf811ee6bbb9196355539e2bc3fe41b2f96e159eafa46829efb2ad18648e83b",
-    "wrong-sign-parity-zero-0.log": "3f3ee565d4ed877798d1dd7abec226fe18dd4568b2b6ce6372adcd5693bbe42e"
+    "wrong-sign-parity-zero-0.log": "3f3ee565d4ed877798d1dd7abec226fe18dd4568b2b6ce6372adcd5693bbe42e",
+    "integration/build-native.log": "9892b2c66560be91555154b984a768f24ad62ca9db4c346627432e2ac3d8b962",
+    "integration/build-r6.log": "79bd579cc7ce426679578fc6678ed54ddd66f2ffb43581e570e9ff6928f5255f",
+    "integration/integration.json": "be6103683c3d2d2aa6119492c94b5ad1b44b06a412579865f3907ff613f290f9",
+    "integration/native/CMakeCache.txt": "00b0dde0a4aff478d6c457105ed359c78e626ddd45895e445df77edf64158c55",
+    "integration/native/NeverDRelocatedFunctionEntryTests": "438ba9476f81d898e05585d1f23ead1b025a307ed08ea31777485820de897480",
+    "integration/native/NeverDX86PagingTests": "5875bbd82c66899a066abf542cbfcced21d2f0ff39848e4f9821ed571ac77b4b",
+    "integration/native/loader.log": "5193b9984f6798e611153e0a4b2a507b056c79277bdb54eab00e03abb1a72710",
+    "integration/native/loader.xml": "7e491ce9f1f6833317a8fe77e4caecd8ca82611030746a759f8ae489345f2062",
+    "integration/native/neverd-build-receipt.json": "0a63c3ef2f74f4fc150dd2e17cac6731946322f16fe7f1ff7a5a0fae9953c4c4",
+    "integration/native/neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+    "integration/native/result.json": "b239a0840591625fd20658b100d34a1d5af4886c47b1b17cf9c7e690565cd34a",
+    "integration/r6/CMakeCache.txt": "c9e92f0e3d2de59b6529ad6eaf9a42361e21655caa6d1f37ba3e65f10b8fdc29",
+    "integration/r6/NeverDRelocatedFunctionEntryTests": "19e8629ea12e06e9ac9b89035437ee26c52af8c1263d490b33155e9c3c6d6562",
+    "integration/r6/NeverDX86PagingTests": "b569a645fecb85d011b623a5cb57829f1f6eb313df44147d85820ee84c77d470",
+    "integration/r6/loader.log": "c888761aac325fd5158bb91b3a01be95fefc62abab3eda817dda764b526183b3",
+    "integration/r6/loader.xml": "0d216bd0e199c337968ade25742a94ea5305a129ffaeb1a2548d578cec950f53",
+    "integration/r6/neverd-build-receipt.json": "9357fa707f717eff36572e7d3c9e99e21cbdbc2bda63ec92d83977b30515b0f8",
+    "integration/r6/neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+    "integration/r6/result.json": "32f79ad74c38f04ffcad2b8f014c6a446f931a233d31c00cba61decd95dedb4a",
+    "integration/tested-head.txt": "81a3f87178cc0b1d787b5e2fbe940c23394577422c8097cfa5e5edaf5785444b",
+    "integration/verification.log": "3d7dede71ab8c5410342f40285ba8485e3b6679e7060b867266ae204ee301b64",
+    "integration/verify.py": "3dbbd01f8c76e922e87515a5d7b5ebc0528f8f8691471725d7bc1a499e8313eb",
+    "provenance-unit.log": "5d5adab03c112a3cace28b4989059cd5f11fdaee2a3220581224cbbaf96fcf50",
+    "provenance-history-final.log": "a3bb01c9bc15f849ebd82827c9bbfd6357a4274e6c522ef025103281e8549830",
+    "docs-final-corrected.log": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
   },
-  "path_normalization": "Public command/diagnostic paths use ${NEVERD_WORKTREE}; original commands and logs remain unchanged in the retained artifact root and are hashed above."
+  "path_normalization": "Public command/diagnostic paths use ${NEVERD_WORKTREE}; original commands and logs remain unchanged in the retained artifact root and are hashed above.",
+  "integration": {
+    "head": "32c9553939250882506832992a32750f56c0549c",
+    "integrated_dev": "1df8e74758fcd08a418c7b3d6dfcf81366aed8ef",
+    "source_inputs_unchanged": true,
+    "paging_execution_evidence_reused": "Both rebuilt paging binaries and dependency manifests are byte-identical to the four final qualified runs; no repeat of identical executable tests was needed.",
+    "results": [
+      {
+        "sdk": "native",
+        "paging_binary_sha256": "5875bbd82c66899a066abf542cbfcced21d2f0ff39848e4f9821ed571ac77b4b",
+        "paging_binary_identical": true,
+        "dependencies_identical": true,
+        "loader_binary_sha256": "438ba9476f81d898e05585d1f23ead1b025a307ed08ea31777485820de897480",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-legacy-multiply-20261103/integration/native/tmp",
+          "/mnt/data/neverd-legacy-multiply-20261103/integration/native/NeverDRelocatedFunctionEntryTests",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-multiply-20261103/integration/native/loader.xml"
+        ],
+        "exit_code": 0,
+        "seconds": 0.2145535945892334,
+        "tests": 69,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "sdk": "r6",
+        "paging_binary_sha256": "b569a645fecb85d011b623a5cb57829f1f6eb313df44147d85820ee84c77d470",
+        "paging_binary_identical": true,
+        "dependencies_identical": true,
+        "loader_binary_sha256": "19e8629ea12e06e9ac9b89035437ee26c52af8c1263d490b33155e9c3c6d6562",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-legacy-multiply-20261103/integration/r6/tmp",
+          "/mnt/data/neverd-legacy-multiply-20261103/integration/r6/NeverDRelocatedFunctionEntryTests",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-multiply-20261103/integration/r6/loader.xml"
+        ],
+        "exit_code": 0,
+        "seconds": 0.26480674743652344,
+        "tests": 69,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    ]
+  },
+  "repository_hygiene": {
+    "provenance_unit_tests": 47,
+    "provenance_history_commits": 16,
+    "provenance_passed": true,
+    "localized_documentation_passed": true,
+    "normalization": "Previously published checkout/tool paths were replaced by public placeholders. Exact publication/cleanup commit and line digests are reviewed in the provenance checker; raw artifacts, counts and hashes are unchanged."
+  }
 }
