@@ -84,6 +84,19 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     F.Destination.Register = R.modRM(F.Source);
     if (F.Source.Register)
       return std::nullopt;
+  } else if (B == 0x98 || B == 0x99) {
+    F.Operation = B == 0x98 ? Op::MoveSigned : Op::SignHigh;
+    F.Source.Register = 0;
+    F.Destination.Register = B == 0x98 ? 0 : 2;
+    if (B == 0x98)
+      F.SourceBytes = F.Bytes / 2;
+  } else if (B == 0x9e || B == 0x9f) {
+    F.Operation = B == 0x9e ? Op::AHToFlags : Op::FlagsToAH;
+  } else if (B == 0xf5 || B == 0xf8 || B == 0xf9 || B == 0xfc || B == 0xfd) {
+    F.Operation = B == 0xf5 ? Op::ComplementFlag
+                  : B & 1   ? Op::SetFlag
+                            : Op::ClearFlag;
+    F.Source.Immediate = B >= 0xfc ? 0x400 : 1;
   } else if (B >= 0x40 && B <= 0x4f) {
     F.Operation = B & 8 ? Op::Decrement : Op::Increment;
     F.Destination.Register = B & 7;

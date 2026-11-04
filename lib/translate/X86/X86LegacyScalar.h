@@ -25,6 +25,12 @@ namespace neverd::translate::detail {
 enum class X86LegacyScalarOperation {
   Move,
   MoveSigned,
+  SignHigh,
+  FlagsToAH,
+  AHToFlags,
+  ClearFlag,
+  SetFlag,
+  ComplementFlag,
   Address,
   Add,
   Or,

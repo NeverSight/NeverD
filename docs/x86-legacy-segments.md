@@ -246,7 +246,11 @@ executor to one CPU and ordinary paged RAM for these protected-mode families:
 | ADD, ADC, SUB, SBB, CMP | Register/memory, accumulator-immediate and group-immediate forms, including signed imm8 and all six arithmetic flags. |
 | AND, OR, XOR, TEST | The same exact operand widths, with an explicit `LogicalAuxiliaryCarry` value for architecturally undefined AF. An absent choice refuses before fetch. |
 | INC, DEC, NEG, NOT | Register and memory forms. INC/DEC preserve CF; NOT preserves flags. |
+| CBW, CWDE, CWD, CDQ | Implicit AL/AX/EAX sign extension with independent code/operand widths; other register bits and all flags are preserved. |
+| LAHF, SAHF | Exact AH/status-bit transfer, reserved bits, and preservation of OF, DF and privileged flags. |
+| CLC, STC, CMC, CLD, STD | CF or DF alone; nonprivileged execution at every CPL. |
 | PUSH, POP | GPR, memory and PUSH immediate, with independent SS.B stack size. PUSH ESP observes old ESP; POP ESP publishes the popped value after advancement; POP memory uses incremented ESP for its explicit address. |
+| MUL, IMUL | Byte/word/dword full products and word/dword truncated/immediate signed products; architectural CF/OF and an explicit undefined-flags profile. |
 | DIV, IDIV | Byte/word/dword register or segmented memory divisors, full double-width dividend, signed truncation toward zero, coupled quotient/remainder, and restartable zero/overflow #DE. |
 | Near CALL, JMP, Jcc, RET | Relative and indirect transfers, all sixteen condition codes, short branches and RET imm16. Taken targets use the operand width and code limit. Untaken conditional branches do not consult the target. |
 
@@ -294,6 +298,18 @@ suite with `NEVERD_TEST_LEGACY_MULTIPLY_FLAGS=sign-parity` on the qualified P
 core or `sign-parity-zero` on its E core. An absent or unknown binding fails
 before instruction fetch in the software executor.
 
+CBW/CWDE sign-extend AL/AX into AX/EAX; CWD/CDQ fill DX/EDX from the sign of
+AX/EAX without changing the low half of the dividend. Word operations retain
+the destination's upper word. All four preserve flags apart from enclosing
+instruction completion clearing RF. Code and operand width remain independent.
+
+LAHF writes only AH, with reserved bits fixed to the architectural image.
+SAHF changes only SF/ZF/AF/PF/CF and preserves OF, DF, IF and IOPL. CLC/STC/CMC
+own CF alone, and CLD/STD own DF alone. These nonprivileged operations use the
+existing explicit scalar binding and require no undefined-flag choice. Their
+admitted operand/address/segment prefixes do not cause memory access or change
+the operation; malformed/group-one prefixes are refused by the scalar grammar.
+
 CALL additionally requires `X86LegacyExecutionOptions::Calls`. Both profiles
 preflight the stack before checking the target code limit, so a competing stack
 #PF takes precedence and page-table effects survive a later target #GP.
@@ -338,6 +354,14 @@ skips. The independent flag probe passes 2,700 cases per core and detects
 748 mismatches per core when the P/E profiles are exchanged. Division,
 existing scalars and fast-system instructions retain their separate regression
 counts. Source snapshots, frozen binaries and build receipts are retained.
+
+The [November 3 implicit-state qualification](evidence/x86-legacy-status-2026-11-03.json)
+records 88,064 CPU comparisons for sign extensions, LAHF/SAHF and carry/direction
+controls across both SDKs, paging modes and P/E cores. All 514 available checks
+pass; two LA57 checks remain explicit skips. The same runs retain 138,240
+multiplication, 185,856 division, 85,120 existing-scalar and 9,648 fast-system
+regression comparisons. Executable source hashes and frozen/live binary hashes
+were checked after completion.
 
 ## Protected SYSENTER and SYSEXIT
 

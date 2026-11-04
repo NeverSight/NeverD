@@ -34,6 +34,29 @@ public:
     S.EIP = Fallthrough;
     uint32_t A = 0, B = 0;
     const unsigned N = F.Bytes;
+    if (F.Operation == Op::FlagsToAH || F.Operation == Op::AHToFlags) {
+      constexpr uint32_t StatusMask = kX86LegacyArithmeticFlagsMask & ~0x800u;
+      if (F.Operation == Op::FlagsToAH)
+        writeRegister(4, 1, (S.EFlags & StatusMask) | 2);
+      else
+        S.EFlags =
+            (S.EFlags & ~StatusMask) | ((S.Core.GPR[0] >> 8) & StatusMask);
+      return;
+    }
+    if (F.Operation == Op::ClearFlag || F.Operation == Op::SetFlag ||
+        F.Operation == Op::ComplementFlag) {
+      const uint32_t Mask = *F.Source.Immediate;
+      S.EFlags = F.Operation == Op::ClearFlag ? S.EFlags & ~Mask
+                 : F.Operation == Op::SetFlag ? S.EFlags | Mask
+                                              : S.EFlags ^ Mask;
+      return;
+    }
+    if (F.Operation == Op::SignHigh) {
+      const uint32_t Sign = uint32_t(1) << (N * 8 - 1);
+      writeRegister(*F.Destination.Register, N,
+                    S.Core.GPR[*F.Source.Register] & Sign ? UINT32_MAX : 0);
+      return;
+    }
     if (F.Operation == Op::Address) {
       writeRegister(*F.Destination.Register, N, F.Source.offset(S.Core.GPR));
       return;
