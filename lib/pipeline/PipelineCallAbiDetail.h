@@ -36,6 +36,7 @@
 
 namespace neverd {
 class DebugContext;
+struct MedValueReads;
 
 struct BinaryImage;
 struct AnalysisCacheWarmup;
@@ -218,6 +219,9 @@ struct OmittedCalleeMemo {
     struct PreparedSource {
       MedFunc Body;
       std::set<const MedOp *> OverwrittenSpills;
+      /// The readers of Body's values its source parameter reads consult
+      /// (valueReadsOf), or null where it has none.
+      std::shared_ptr<const MedValueReads> ValueReads;
     };
     std::shared_ptr<const PreparedSource> Prepared;
     /// Whether \p Result's summaries read as they did for the conversion.

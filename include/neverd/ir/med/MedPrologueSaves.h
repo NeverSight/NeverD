@@ -22,11 +22,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <set>
 
 namespace neverd {
 struct BinaryImage;
 struct IntegerArgumentLayout;
+struct MedValueReads;
 
 /// Whether \p V is the value register \p RegOff holds at \p Func's entry:
 /// its version zero, or the entry seed that copies it (`COPY RSI.1 = RSI`).
@@ -129,9 +131,19 @@ std::set<unsigned> unobservedSourceStackParameters(
 /// and PHIs retain byte positions; narrow views may read the retained prefix.
 /// Opaque implicit readers, changed call bindings and other transports reject
 /// a suffix proof. The shared per-function budget also bounds repeated queries.
+/// \p Index, where given, is valueReadsOf(Func).
 SourceRegisterParameterReads sourceRegisterParameterReads(
     const MedFunc &Func, const SourceCalleeParameterReads &Callees,
-    size_t &Remaining, const SourceCalleeParameterOverwrites &Overwrites = {});
+    size_t &Remaining, const SourceCalleeParameterOverwrites &Overwrites = {},
+    const MedValueReads *Index = nullptr);
+
+/// The readers of each value of a body that every
+/// sourceRegisterParameterReads query of it consults: a fact of the body
+/// alone, which a caller keeping the body unchanged builds once for all of
+/// them.  Null where the body has no source register input to query.
+std::shared_ptr<const MedValueReads> valueReadsOf(const MedFunc &Func);
+/// What \p Reads holds, as a memo of it counts.
+size_t valueReadsBytes(const MedValueReads &Reads);
 
 /// Choose zero for unobserved argument bytes only when the complete retained
 /// prefix is an exact scalar constant. Follow COPY/CONCAT/SUBBYTES/ZEXT views

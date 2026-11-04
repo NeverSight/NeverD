@@ -1983,9 +1983,37 @@ unobservedSourceStackParameters(const MedFunc &Func,
   return Result;
 }
 
+struct MedValueReads {
+  explicit MedValueReads(const MedFunc &Func) : Reads(Func) {}
+  const ValueReads Reads;
+};
+
+std::shared_ptr<const MedValueReads> valueReadsOf(const MedFunc &Func) {
+  if (!hasSourceRegisterInputBody(Func))
+    return nullptr;
+  return std::make_shared<const MedValueReads>(Func);
+}
+
+size_t valueReadsBytes(const MedValueReads &Index) {
+  // A tree node holds its colour, three links and the element.
+  constexpr size_t Node = 4 * sizeof(void *);
+  const ValueReads &Reads = Index.Reads;
+  size_t Bytes = sizeof(MedValueReads);
+  for (const auto &[Key, Ops] : Reads.Ops)
+    Bytes += Node + sizeof(Key) + sizeof(Ops) +
+             Ops.capacity() * sizeof(const MedOp *);
+  for (const auto &[Key, Outputs] : Reads.PhiOutputs)
+    Bytes += Node + sizeof(Key) + sizeof(Outputs) +
+             Outputs.capacity() * sizeof(ValueKey);
+  Bytes += (Reads.Others.size() + Reads.ImplicitReads.size()) *
+           (Node + sizeof(ValueKey));
+  return Bytes;
+}
+
 SourceRegisterParameterReads sourceRegisterParameterReads(
     const MedFunc &Func, const SourceCalleeParameterReads &Callees,
-    size_t &Budget, const SourceCalleeParameterOverwrites &Overwrites) {
+    size_t &Budget, const SourceCalleeParameterOverwrites &Overwrites,
+    const MedValueReads *Index) {
   SourceRegisterParameterReads Result;
   if (!Budget || !hasSourceRegisterInputBody(Func))
     return Result;
@@ -2063,7 +2091,8 @@ SourceRegisterParameterReads sourceRegisterParameterReads(
     return Read == Callee->second.end() ? std::nullopt
                                         : std::optional(Read->second);
   };
-  const ValueReads Reads(Func);
+  std::optional<ValueReads> Own;
+  const ValueReads &Reads = Index ? Index->Reads : Own.emplace(Func);
   for (unsigned P = 0; P < Func.Params.size() && P < Layout.Registers.size();
        ++P) {
     const uint64_t Register = Layout.Registers[P];

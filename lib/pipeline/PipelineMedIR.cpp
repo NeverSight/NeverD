@@ -265,15 +265,23 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
           for (size_t O = 0; O < Source.Blocks[B].Ops.size(); ++O)
             Func.Blocks[B].Ops[O].PrologueSave |=
                 Source.Blocks[B].Ops[O].PrologueSave;
+      // Every dependency wave below, and every later run's, queries the
+      // prepared body's value readers.
+      Prepared[I]->ValueReads = valueReadsOf(Func);
       Sources[I] = &Func;
     }
   });
-  for (size_t I = 0; I < Sources.size(); ++I)
+  std::vector<const MedValueReads *> ValueReads(Sources.size(), nullptr);
+  for (size_t I = 0; I < Sources.size(); ++I) {
     if (Prepared[I]) {
       OverwrittenSpills[I] = &Prepared[I]->OverwrittenSpills;
+      ValueReads[I] = Prepared[I]->ValueReads.get();
       if (Kept[I])
         Memo->keepPrepared(*Kept[I], Prepared[I]);
+    } else if (Kept[I] && Kept[I]->Prepared) {
+      ValueReads[I] = Kept[I]->Prepared->ValueReads.get();
     }
+  }
   std::map<va_t, std::set<size_t>> Callers;
   for (size_t I = 0; I < Sources.size(); ++I)
     for (const auto &Block : Sources[I]->Blocks)
@@ -330,8 +338,8 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
     parallelForEachWeighted(WaveWeights, [&](auto Claim, size_t N) {
       for (size_t W; (W = Claim()) < N;) {
         const size_t I = Work[W];
-        Reads[W] = sourceRegisterParameterReads(*Sources[I], Facts,
-                                                Remaining[I], Overwrites);
+        Reads[W] = sourceRegisterParameterReads(
+            *Sources[I], Facts, Remaining[I], Overwrites, ValueReads[I]);
         if (const auto At = OriginalBlocks.find(Sources[I]->Entry);
             At != OriginalBlocks.end() && !At->second.empty()) {
           // This original-CFG fact is independent of the changing source

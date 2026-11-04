@@ -424,8 +424,10 @@ void OmittedCalleeMemo::keepPrepared(
     Conversion &Holder,
     std::shared_ptr<const Conversion::PreparedSource> Kept) {
   const size_t Added =
-      bodyBytes(Kept->Body) + Kept->OverwrittenSpills.size() *
-                                  (sizeof(const MedOp *) + 4 * sizeof(void *));
+      bodyBytes(Kept->Body) +
+      Kept->OverwrittenSpills.size() *
+          (sizeof(const MedOp *) + 4 * sizeof(void *)) +
+      (Kept->ValueReads ? valueReadsBytes(*Kept->ValueReads) : 0);
   Holder.Bytes += Added;
   Bytes += Added;
   Holder.Prepared = std::move(Kept);
