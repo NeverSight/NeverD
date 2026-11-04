@@ -10531,7 +10531,10 @@ parameter count that bounds the run's calls, and on i386 what the second
 regparm pass reads of the body and gives. Where only that second pass reads
 differently, the body is recovered again from the summaries the first pass
 read. A Darwin run, whose recovery also reads the leaf callees of its own
-selection, keeps none. Every normal
+selection, keeps none. A kept body also keeps its source preparation
+(`prepareRecoveredSourceStackAccesses`): the copy with its stack accesses
+marked and the stores found overwritten, which read only the body and the
+image, counted against the memo's bound. Every normal
 return must agree on the stack change, and a pushed result must be initialized
 without reading an empty slot. Cycles in the call graph, incomplete lifting,
 environment restores, tag changes, unknown intrinsics and exceptional edges

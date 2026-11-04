@@ -226,15 +226,38 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
     }
   }
   // Cached bodies are immutable. Prepare each candidate once; independent
-  // functions and each dependency wave run in weighted parallel batches.
-  std::vector<std::optional<MedFunc>> Prepared(Sources.size());
-  std::vector<std::set<const MedOp *>> OverwrittenSpills(Sources.size());
-  parallelForEachWeighted(Weights, [&](auto Claim, size_t N) {
+  // functions and each dependency wave run in weighted parallel batches. An
+  // omitted callee's preparation reads only its kept body and the image, so
+  // the memo keeps it with that conversion for every later run.
+  using PreparedSource = OmittedCalleeMemo::Conversion::PreparedSource;
+  OmittedCalleeMemo *Memo = Result.CalleeSignatureMemo.get();
+  std::vector<OmittedCalleeMemo::Conversion *> Kept(Sources.size(), nullptr);
+  std::vector<std::shared_ptr<PreparedSource>> Prepared(Sources.size());
+  std::vector<const std::set<const MedOp *> *> OverwrittenSpills(Sources.size(),
+                                                                 nullptr);
+  std::vector<uint64_t> PrepareWeights(Sources.size(), 0);
+  for (size_t I = 0; I < Sources.size(); ++I) {
+    if (Memo && !Complete.count(Sources[I]->Entry))
+      Kept[I] = Memo->conversionOf(*Sources[I]);
+    if (Kept[I] && Kept[I]->Prepared) {
+      Sources[I] = &Kept[I]->Prepared->Body;
+      OverwrittenSpills[I] = &Kept[I]->Prepared->OverwrittenSpills;
+    } else {
+      PrepareWeights[I] = Weights[I];
+    }
+  }
+  parallelForEachWeighted(PrepareWeights, [&](auto Claim, size_t N) {
     for (size_t I; (I = Claim()) < N;) {
+      if (OverwrittenSpills[I])
+        continue;
       const auto &Source = *Sources[I];
-      auto &Func = Prepared[I].emplace(Source);
+      // Marked where it is kept: the spills name its operations.
+      Prepared[I] =
+          std::make_shared<PreparedSource>(PreparedSource{Source, {}});
+      MedFunc &Func = Prepared[I]->Body;
       markSourceStackAccesses(Func, Image.Arch, Image.abiFormat(),
-                              Func.EntryKind, &Image, &OverwrittenSpills[I]);
+                              Func.EntryKind, &Image,
+                              &Prepared[I]->OverwrittenSpills);
       // Selected bodies also carry this phase's complete borrowed-frame proof.
       // Keep that source fact, but never promote it into an overwrite receipt.
       if (Complete.count(Source.Entry))
@@ -245,6 +268,12 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
       Sources[I] = &Func;
     }
   });
+  for (size_t I = 0; I < Sources.size(); ++I)
+    if (Prepared[I]) {
+      OverwrittenSpills[I] = &Prepared[I]->OverwrittenSpills;
+      if (Kept[I])
+        Memo->keepPrepared(*Kept[I], Prepared[I]);
+    }
   std::map<va_t, std::set<size_t>> Callers;
   for (size_t I = 0; I < Sources.size(); ++I)
     for (const auto &Block : Sources[I]->Blocks)
@@ -306,7 +335,7 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
             Reads[W].emplace(P, 0);
           Destroyed[W] = sourceRegisterInputOverwrites(
               *Sources[I], At->second, Reads[W], Overwrites,
-              OverwrittenSpills[I], Remaining[I]);
+              *OverwrittenSpills[I], Remaining[I]);
           // A proved original destruction also rules out a source input.
           // This includes the GS case, whose register proof cannot discard
           // even a transient spill observed by its exceptional cookie check.

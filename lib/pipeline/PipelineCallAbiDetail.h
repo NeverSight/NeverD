@@ -210,6 +210,15 @@ struct OmittedCalleeMemo {
     /// candidate, retained under the same image and conversion identity as
     /// Body.
     std::shared_ptr<const std::vector<LowBlock>> SourceOriginalBlocks;
+    /// Body as source preparation marks a candidate's stack accesses
+    /// (prepareRecoveredSourceStackAccesses), with the stores it found
+    /// overwritten; kept where a run first prepared it.  It reads only Body
+    /// and the image, so every later run's preparation is the same.
+    struct PreparedSource {
+      MedFunc Body;
+      std::set<const MedOp *> OverwrittenSpills;
+    };
+    std::shared_ptr<const PreparedSource> Prepared;
     /// Whether \p Result's summaries read as they did for the conversion.
     bool readsHold(const PipelineResult &Result) const;
   };
@@ -267,6 +276,10 @@ struct OmittedCalleeMemo {
   /// MaxBytes, the bodies of the callees used longest ago go, \p Holder's
   /// aside, down to three quarters of it.
   const Conversion &keep(Callee &Holder, Conversion Converted);
+  /// Keeps \p Kept as \p Holder's prepared source body, counted against
+  /// MaxBytes until the conversion goes; the next keep makes room.
+  void keepPrepared(Conversion &Holder,
+                    std::shared_ptr<const Conversion::PreparedSource> Kept);
   /// What the kept bodies count against MaxBytes.
   size_t bytes() const { return Bytes; }
   /// The entries callee lifts know: the image's function symbols that are

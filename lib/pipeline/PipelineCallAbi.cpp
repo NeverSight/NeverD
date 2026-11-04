@@ -259,6 +259,26 @@ OmittedCalleeMemo::conversionOf(const MedFunc &Body) {
 }
 
 namespace {
+/// What \p Body's blocks, operations and external operands count against the
+/// memo's bound (keep).
+size_t bodyBytes(const MedFunc &Body) {
+  size_t Bytes = sizeof(MedFunc);
+  for (const MedBlock &Block : Body.Blocks) {
+    Bytes += sizeof(MedBlock) + Block.Ops.size() * sizeof(MedOp) +
+             Block.Phis.size() * sizeof(PhiNode);
+    // Expanded operand storage remains allocated when an operation shrinks.
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Inputs.capacity() > MedOp::InlineInputs)
+        Bytes += Op.Inputs.capacity() * sizeof(MedVar);
+      if (Op.IntegerCallSignature)
+        Bytes += sizeof(FixedIntegerCallArguments) +
+                 Op.IntegerCallSignature->Parameters.capacity() *
+                     sizeof(FixedIntegerCallArguments::Parameter);
+    }
+  }
+  return Bytes;
+}
+
 /// What \p Reads count against the memo's bound.
 size_t readBytes(llvm::ArrayRef<OmittedCalleeMemo::ProbeRead> Reads) {
   size_t Bytes = Reads.size() * sizeof(OmittedCalleeMemo::ProbeRead);
@@ -328,20 +348,7 @@ OmittedCalleeMemo::Callee *OmittedCalleeMemo::find(va_t Entry) {
 const OmittedCalleeMemo::Conversion &
 OmittedCalleeMemo::keep(Callee &Holder, Conversion Converted) {
   if (Converted.Body) {
-    Converted.Bytes = sizeof(MedFunc);
-    for (const MedBlock &Block : Converted.Body->Blocks) {
-      Converted.Bytes += sizeof(MedBlock) + Block.Ops.size() * sizeof(MedOp) +
-                         Block.Phis.size() * sizeof(PhiNode);
-      // Expanded operand storage remains allocated when an operation shrinks.
-      for (const MedOp &Op : Block.Ops) {
-        if (Op.Inputs.capacity() > MedOp::InlineInputs)
-          Converted.Bytes += Op.Inputs.capacity() * sizeof(MedVar);
-        if (Op.IntegerCallSignature)
-          Converted.Bytes += sizeof(FixedIntegerCallArguments) +
-                             Op.IntegerCallSignature->Parameters.capacity() *
-                                 sizeof(FixedIntegerCallArguments::Parameter);
-      }
-    }
+    Converted.Bytes = bodyBytes(*Converted.Body);
     if (const auto &Summary = Converted.Summary)
       Converted.Bytes +=
           sizeof(CalleeSummary) +
@@ -397,6 +404,17 @@ OmittedCalleeMemo::keep(Callee &Holder, Conversion Converted) {
     }
   }
   return Holder.Conversions.front();
+}
+
+void OmittedCalleeMemo::keepPrepared(
+    Conversion &Holder,
+    std::shared_ptr<const Conversion::PreparedSource> Kept) {
+  const size_t Added =
+      bodyBytes(Kept->Body) + Kept->OverwrittenSpills.size() *
+                                  (sizeof(const MedOp *) + 4 * sizeof(void *));
+  Holder.Bytes += Added;
+  Bytes += Added;
+  Holder.Prepared = std::move(Kept);
 }
 
 namespace {
