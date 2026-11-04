@@ -60,7 +60,7 @@
       "ss": 480,
       "gp": 18240,
       "pf": 18720,
-      "faults": 0
+      "faults": 39360
     },
     "code32": {
       "profiles": 2,
@@ -70,16 +70,11 @@
       "ss": 240,
       "gp": 9120,
       "pf": 9360,
-      "faults": 0
+      "faults": 19680
     },
     "division-regression": {
       "profiles": 2,
       "complete_state_pairs": 82944,
-      "returns": 0,
-      "np": 0,
-      "ss": 0,
-      "gp": 0,
-      "pf": 0,
       "faults": 47944
     },
     "x64": {
