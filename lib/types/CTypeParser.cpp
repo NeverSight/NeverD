@@ -17,6 +17,7 @@
 #include "neverd/types/TypeParse.h"
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
@@ -53,6 +54,11 @@ struct Token {
   unsigned Column = 1;
 };
 
+// Tokens only borrow immutable spelling. Keep their growing sequence on
+// SmallVector's trivial relocation path rather than moving each token during
+// vector growth. Zero inline elements keep the complete stream off the stack.
+using TokenList = llvm::SmallVector<Token, 0>;
+
 /// What a #pragma pack asks, kept in a pragma token's value.
 enum class PackAction : uint8_t { Set, Reset, Push, PushSet, Pop, PopSet };
 
@@ -83,8 +89,8 @@ public:
         llvm::StringSaver &Spellings)
       : Source(Source), Problems(Problems), Spellings(Spellings) {}
 
-  std::vector<Token> run() {
-    std::vector<Token> Tokens;
+  TokenList run() {
+    TokenList Tokens;
     bool LineStart = true;
     while (At < Source.size()) {
       const char C = Source[At];
@@ -332,8 +338,8 @@ private:
   }
 
   /// Expand a known macro. Ordinary identifiers stay on the token append path.
-  void expand(Token Word, const std::vector<Token> &Replacements,
-              std::vector<Token> &Tokens, unsigned Depth) {
+  void expand(Token Word, const TokenList &Replacements, TokenList &Tokens,
+              unsigned Depth) {
     if (Depth > ::neverd::limits::types::kCTypeParserExpandDepthLimit) {
       Tokens.push_back(std::move(Word));
       return;
@@ -352,7 +358,7 @@ private:
 
   /// A preprocessor line: #pragma pack becomes a token, an object-like
   /// #define a macro, and anything else is skipped.
-  void directive(std::vector<Token> &Tokens) {
+  void directive(TokenList &Tokens) {
     const unsigned L = Line, Col = Column;
     std::string Text;
     while (At < Source.size() && Source[At] != '\n') {
@@ -497,7 +503,7 @@ private:
         return;
       std::vector<SourceProblem> Ignored;
       Lexer Inner(Body, Ignored, Spellings);
-      std::vector<Token> Replacement = Inner.run();
+      TokenList Replacement = Inner.run();
       Replacement.pop_back();
       // A header NeverD renders names a system's types otherwise for
       // another system's compilers (#define X neverd_X); the declarations
@@ -519,7 +525,7 @@ private:
   size_t At = 0;
   unsigned Line = 1;
   unsigned Column = 1;
-  llvm::StringMap<std::vector<Token>> Macros;
+  llvm::StringMap<TokenList> Macros;
 };
 
 /// The builtins a single word names, in every spelling the renderers write.
@@ -670,8 +676,8 @@ bool declspecWord(llvm::StringRef Word) {
 
 class Parser {
 public:
-  Parser(std::vector<Token> Tokens, TypeLibrary &Library,
-         const ParseOptions &Options, ParseResult &Result)
+  Parser(TokenList Tokens, TypeLibrary &Library, const ParseOptions &Options,
+         ParseResult &Result)
       : Tokens(std::move(Tokens)), Library(Library), Options(Options),
         Result(Result), Cpp(Options.Lang == Language::Cpp) {}
 
@@ -2527,7 +2533,7 @@ private:
                                : "a static assertion fails: " + Message);
   }
 
-  std::vector<Token> Tokens;
+  TokenList Tokens;
   size_t Pos = 0;
   TypeLibrary &Library;
   const ParseOptions &Options;
@@ -2584,7 +2590,7 @@ ParseResult parseCTypes(llvm::StringRef Source, TypeLibrary &Library,
   ParseResult Result;
   llvm::BumpPtrAllocator Storage;
   llvm::StringSaver Spellings(Storage);
-  std::vector<Token> Tokens = Lexer(Source, Result.Problems, Spellings).run();
+  TokenList Tokens = Lexer(Source, Result.Problems, Spellings).run();
   if (!Result.Problems.empty())
     return Result;
   TypeLibrary Scratch(Library);
@@ -2606,7 +2612,7 @@ FunctionDeclaration parseFunctionDeclaration(llvm::StringRef Source,
     Text += ";";
   llvm::BumpPtrAllocator Storage;
   llvm::StringSaver Spellings(Storage);
-  std::vector<Token> Tokens = Lexer(Text, Result.Problems, Spellings).run();
+  TokenList Tokens = Lexer(Text, Result.Problems, Spellings).run();
   if (Result.Problems.empty()) {
     TypeLibrary Scratch(Library);
     ParseOptions One = Options;
