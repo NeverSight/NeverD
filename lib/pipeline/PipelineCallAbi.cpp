@@ -44,6 +44,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <exception>
 #include <map>
 #include <numeric>
 #include <optional>
@@ -563,6 +565,17 @@ void shrinkToFit(MedFunc &Med) {
 /// entries, and their conversions, into \p Result's memo where it has room.
 class CalleeReader {
 public:
+  /// What a read-ahead (readAhead) computed of one callee a run reads next:
+  /// the block sizes readLift records of its lift and the conversion of that
+  /// lift, or what either threw.
+  struct Ahead {
+    /// The lift ran; BlockOps then holds what readLift would record.
+    bool Lifted = false;
+    std::optional<std::vector<size_t>> BlockOps;
+    std::optional<OmittedCalleeMemo::Conversion> Converted;
+    std::exception_ptr Error;
+  };
+
   /// \p Result's memo, where it has one, has adopted \p Img.
   CalleeReader(const BinaryImage &Img, const PipelineResult &Result)
       : Img(Img), Result(Result), Memo(Result.CalleeSignatureMemo.get()),
@@ -575,9 +588,13 @@ public:
     // The callees' builds prove each x87 call effect from the same callee
     // graphs: build each once.  A 32-bit printf engine in a call cycle with
     // the heap reaches every build here, and its jump tables take seconds.
-    Builder.setX87CallGraphCache(createX87CallGraphCache());
+    // Read-ahead builders share them as well (readAhead).
+    X87Graphs = createX87CallGraphCache();
+    Builder.setX87CallGraphCache(X87Graphs);
   }
   bool init() { return Dec.init(Img); }
+  /// Whether this reader's reads are the memo's: their conversions are kept.
+  bool keeps() const { return Memo != nullptr; }
   bool incomingStackCandidate(va_t Target) {
     return mayReadIncomingStackLeaf(Img, Target, Dec);
   }
@@ -606,48 +623,189 @@ public:
       // The lifts look the image's code owners and absolute relocations up
       // in one index each: the memo's, or ones built for the first lift of
       // this read.
-      if (!OwnersLent) {
-        Builder.setExecutableCodeOwnerIndex(Memo ? &Memo->codeOwners()
-                                                 : &Owners.emplace(Img));
-        Builder.setAbsoluteRelocationRootIndex(
-            Memo ? &Memo->absoluteRelocationRoots()
-                 : &RelocationRoots.emplace(Img));
-        // Reuse the image's exact names across supplemental signature reads.
-        // A reader without a retained image memo keeps the live lookup: a
-        // whole symbol index per short-lived read costs more than it saves.
-        if (Memo)
-          Builder.setNoReturnTargetIndex(&Memo->noReturnTargets());
-        OwnersLent = true;
-      }
+      lendIndexes();
       Low.emplace(Builder.buildCallSignatureProof(
           Img, Dec, Target, Img.getFunctionNameAt(Target)));
     }
     return *Low;
   }
   /// Reads \p Target's lift into \p Read: the operations of its blocks.
+  /// \p Computed, a read-ahead of \p Target, supplies the lift it ran.
   void readLift(va_t Target, OmittedCalleeMemo::Callee &Read,
-                std::optional<LowFunc> &Low) {
+                std::optional<LowFunc> &Low, Ahead *Computed = nullptr) {
     if (Read.Lifted)
       return;
-    const LowFunc &Lifted = lift(Target, Low);
-    if (Lifted.hasCompleteLiftCoverage() &&
-        Lifted.UnsafeIndirectBranchAddresses.empty()) {
-      Read.BlockOps.emplace();
-      for (const auto &Block : Lifted.Blocks)
-        Read.BlockOps->push_back(Block.Ops.size());
+    if (Computed && Computed->Lifted) {
+      Read.BlockOps = std::move(Computed->BlockOps);
+      Read.Lifted = true;
+      return;
     }
+    if (Computed && Computed->Error)
+      std::rethrow_exception(Computed->Error);
+    if (auto Ops = blockOps(lift(Target, Low)))
+      Read.BlockOps = std::move(Ops);
     Read.Lifted = true;
   }
   /// The conversion of \p Target's lift the run's summaries hold for,
   /// converting it where none does.  \p Kept says \p Read is the memo's.
+  /// \p Computed, a read-ahead of \p Target, supplies the conversion it ran.
   const OmittedCalleeMemo::Conversion &
   conversion(va_t Target, OmittedCalleeMemo::Callee &Read, bool Kept,
-             std::optional<LowFunc> &Low) {
+             std::optional<LowFunc> &Low, Ahead *Computed = nullptr) {
     // A conversion that read summaries this run states otherwise serves
     // none of its reads: the callee is converted again.
     if (const OmittedCalleeMemo::Conversion *Held = Read.conversionFor(Result))
       return *Held;
-    const LowFunc &Lifted = lift(Target, Low);
+    if (Computed && Computed->Converted)
+      return keep(Read, Kept, std::move(*Computed->Converted));
+    if (Computed && Computed->Error)
+      std::rethrow_exception(Computed->Error);
+    return keep(Read, Kept, convert(Target, lift(Target, Low), Kept));
+  }
+  /// Lifts and converts, on the pipeline's workers, those of \p Next (the
+  /// callees a run reads next, in its order) that the memo holds no answer
+  /// for, as readLift and conversion would.  The run still takes each in
+  /// turn, so its order, budgets and memo updates are those of reading them
+  /// one by one; a callee whose kept conversion goes before its turn is read
+  /// then.  Empty where the workers would gain nothing.
+  std::vector<Ahead> readAhead(llvm::ArrayRef<va_t> Next, bool Kept) {
+    std::vector<Ahead> Computed;
+    if (workerThreadCount() < 2)
+      return Computed;
+    struct Need {
+      size_t Position;
+      /// The memo holds the lift: the read converts it again.
+      bool HeldLift;
+      /// The memo holds a conversion the run's summaries hold for.
+      bool HeldConversion;
+    };
+    std::vector<Need> Needs;
+    // Heaviest first keeps one large callee from holding the batch's tail:
+    // a held lift's operations, else the code its unwind entry covers.
+    std::vector<uint64_t> Weight;
+    for (size_t Position = 0; Position < Next.size(); ++Position) {
+      const OmittedCalleeMemo::Callee *Held = nullptr;
+      if (Memo)
+        if (const auto Found = Memo->Callees.find(Next[Position]);
+            Found != Memo->Callees.end())
+          Held = &Found->second;
+      const bool HeldConversion =
+          Held && llvm::any_of(Held->Conversions,
+                               [&](const OmittedCalleeMemo::Conversion &Each) {
+                                 return Each.readsHold(Result);
+                               });
+      if (Held && Held->Lifted && (!Held->BlockOps || HeldConversion))
+        continue;
+      Needs.push_back({Position, Held && Held->Lifted, HeldConversion});
+      uint64_t Cost = 1;
+      if (Held && Held->Lifted)
+        Cost += std::accumulate(Held->BlockOps->begin(), Held->BlockOps->end(),
+                                uint64_t{0});
+      else if (const ExceptionFunction *Unwind =
+                   Img.ExceptionMetadata.findFunction(Next[Position]);
+               Unwind && Unwind->CodeRange.Begin == Next[Position])
+        Cost += Unwind->CodeRange.size();
+      Weight.push_back(Cost);
+    }
+    if (Needs.size() < limits::pipeline::kPipelineCallAbiMinParallelCalleeReads)
+      return Computed;
+    // What lifts and conversions otherwise build on first use, built before
+    // the workers share it.
+    lendIndexes();
+    (void)runtimeRoutineCalls();
+    (void)codePointerTargets();
+    Computed.resize(Next.size());
+    parallelForEachWeighted(
+        Weight,
+        [&](auto Claim, size_t N) {
+          // As the LowIR workers build: this thread's readers and proof
+          // memos, and builders over the same immutable indexes and graphs.
+          ReadOnlyBytesScope WorkerReads(Img);
+          RegistrationStackPopMemoScope WorkerStackPops(StackPops);
+          RegistrationLeafPrefixMemoScope WorkerLeafPrefixes(LeafPrefixes);
+          Decoder WorkerDec;
+          // A callee no worker computed is read in its turn.
+          if (!WorkerDec.init(Img))
+            return;
+          CFGBuilder WorkerBuilder;
+          WorkerBuilder.setKnownFuncEntries(Entries);
+          WorkerBuilder.setX87CallGraphCache(X87Graphs);
+          lendIndexes(WorkerBuilder);
+          for (size_t Index; (Index = Claim()) < N;) {
+            const Need &Item = Needs[Index];
+            const va_t Target = Next[Item.Position];
+            Ahead &Out = Computed[Item.Position];
+            try {
+              const LowFunc Lifted = WorkerBuilder.buildCallSignatureProof(
+                  Img, WorkerDec, Target, Img.getFunctionNameAt(Target));
+              auto Ops = blockOps(Lifted);
+              // A held lift has block sizes; a needed one has them here.
+              const bool Converts =
+                  !Item.HeldConversion && (Item.HeldLift || Ops.has_value());
+              if (!Item.HeldLift)
+                Out.BlockOps = std::move(Ops);
+              Out.Lifted = true;
+              if (Converts)
+                Out.Converted = convert(Target, Lifted, Kept);
+            } catch (...) {
+              Out.Error = std::current_exception();
+            }
+          }
+        },
+        limits::pipeline::kPipelineCallAbiMinParallelCalleeReads);
+    return Computed;
+  }
+
+private:
+  /// The operations of each block of \p Lifted, where the lift is complete
+  /// and has no unsafe indirect branch.
+  static std::optional<std::vector<size_t>> blockOps(const LowFunc &Lifted) {
+    if (!Lifted.hasCompleteLiftCoverage() ||
+        !Lifted.UnsafeIndirectBranchAddresses.empty())
+      return std::nullopt;
+    std::vector<size_t> Ops;
+    for (const auto &Block : Lifted.Blocks)
+      Ops.push_back(Block.Ops.size());
+    return Ops;
+  }
+  /// Lends the run's code-owner, relocation-root and no-return indexes to
+  /// the reader's builder, building its own where it has no memo, once.
+  void lendIndexes() {
+    if (OwnersLent)
+      return;
+    if (!Memo) {
+      Owners.emplace(Img);
+      RelocationRoots.emplace(Img);
+    }
+    lendIndexes(Builder);
+    OwnersLent = true;
+  }
+  void lendIndexes(CFGBuilder &Into) {
+    Into.setExecutableCodeOwnerIndex(Memo ? &Memo->codeOwners() : &*Owners);
+    Into.setAbsoluteRelocationRootIndex(Memo ? &Memo->absoluteRelocationRoots()
+                                             : &*RelocationRoots);
+    // Reuse the image's exact names across supplemental signature reads.
+    // A reader without a retained image memo keeps the live lookup: a
+    // whole symbol index per short-lived read costs more than it saves.
+    if (Memo)
+      Into.setNoReturnTargetIndex(&Memo->noReturnTargets());
+  }
+  /// Keeps \p Converted as \p Read's conversion used last: in the memo where
+  /// \p Kept, else in \p Read alone.
+  const OmittedCalleeMemo::Conversion &
+  keep(OmittedCalleeMemo::Callee &Read, bool Kept,
+       OmittedCalleeMemo::Conversion Converted) {
+    if (Memo && Kept)
+      return Memo->keep(Read, std::move(Converted));
+    Read.Conversions.insert(Read.Conversions.begin(), std::move(Converted));
+    return Read.Conversions.front();
+  }
+  /// The conversion of \p Lifted, \p Target's lift, under the run's
+  /// summaries, with what a kept body is read for where \p Kept.  It reads
+  /// only the image, the run's summaries and the indexes and tables built
+  /// before (readAhead), so read-ahead workers run it concurrently.
+  OmittedCalleeMemo::Conversion convert(va_t Target, const LowFunc &Lifted,
+                                        bool Kept) {
     std::shared_ptr<const MedFunc> Body;
     // The callee's parameters read the entry-read summary of its own entry.
     std::set<va_t> Keys{Target};
@@ -749,20 +907,15 @@ public:
     }
     for (const va_t Key : Keys)
       Converted.Reads.push_back(OmittedCalleeMemo::readAt(Result, Key));
-    if (Memo && Kept) {
-      // Every run that reads the body reads these of it.
-      if (Converted.Body) {
-        Converted.Summary = summarizeCallee(*Converted.Body, Img);
-        Converted.CalleesRead = calleesToRead(*Converted.Body, Img, Result);
-        Converted.DirectCallTargets = directCallTargets(*Converted.Body);
-      }
-      return Memo->keep(Read, std::move(Converted));
+    // Every run that reads a kept body reads these of it.
+    if (Memo && Kept && Converted.Body) {
+      Converted.Summary = summarizeCallee(*Converted.Body, Img);
+      Converted.CalleesRead = calleesToRead(*Converted.Body, Img, Result);
+      Converted.DirectCallTargets = directCallTargets(*Converted.Body);
     }
-    Read.Conversions.insert(Read.Conversions.begin(), std::move(Converted));
-    return Read.Conversions.front();
+    return Converted;
   }
 
-private:
   /// The runtime routines every conversion reads: the memo's, or the
   /// reader's own, read once.
   const std::map<va_t, Intrinsic> &runtimeRoutineCalls() {
@@ -800,6 +953,7 @@ private:
   bool OwnersLent = false;
   std::optional<std::map<va_t, Intrinsic>> OwnRuntimeRoutineCalls;
   std::optional<std::vector<va_t>> OwnCodePointerTargets;
+  std::shared_ptr<X87CallGraphCache> X87Graphs;
   CFGBuilder Builder;
 };
 
@@ -812,7 +966,7 @@ std::vector<std::shared_ptr<const MedFunc>> omittedDirectCalleeSignatures(
   if (!needsCallSignatureRecovery(Convention) || Img.IsRelocatable)
     return {};
   std::set<va_t> Present, Queued;
-  std::queue<va_t> Pending;
+  std::deque<va_t> Pending;
   // Each callee is read as an earlier run of the image read it, where the
   // run shares what those read.
   if (OmittedCalleeMemo *Memo = Result.CalleeSignatureMemo.get())
@@ -823,7 +977,7 @@ std::vector<std::shared_ptr<const MedFunc>> omittedDirectCalleeSignatures(
   auto enqueue = [&](va_t Target) {
     if (!Present.count(Target) && Reader.reads(Target) &&
         Queued.insert(Target).second)
-      Pending.push(Target);
+      Pending.push_back(Target);
   };
   auto enqueueCallees = [&](llvm::ArrayRef<va_t> Callees) {
     for (const va_t Callee : Callees)
@@ -885,42 +1039,56 @@ std::vector<std::shared_ptr<const MedFunc>> omittedDirectCalleeSignatures(
   size_t Operations = 0;
   // Visit the selected functions' direct callees before their descendants.
   // A deep lower-address chain must not consume the bounded support budget
-  // before another direct callee can supply its signature.
+  // before another direct callee can supply its signature.  The callees next
+  // in line are lifted and converted together first (readAhead); the loop
+  // still takes each in queue order under the same budgets.
   while (!Pending.empty() && Inspected < limits::kMaxCallEffectExtraLifts) {
-    ++Inspected;
-    const va_t Target = Pending.front();
-    Pending.pop();
-    Present.insert(Target);
-    OmittedCalleeMemo::Callee Local;
-    OmittedCalleeMemo::Callee &Read = Reader.callee(Target, Local);
-    std::optional<LowFunc> Low;
-    Reader.readLift(Target, Read, Low);
-    if (!Read.BlockOps)
-      continue;
-    for (const size_t BlockOps : *Read.BlockOps) {
-      if (BlockOps > limits::kMaxSSAFunctionOps - Operations)
-        return Signatures;
-      Operations += BlockOps;
+    const size_t Wave =
+        std::min({Pending.size(), limits::kMaxCallEffectExtraLifts - Inspected,
+                  limits::pipeline::kPipelineCallAbiCalleeReadAhead});
+    const std::vector<va_t> Next(
+        Pending.begin(), Pending.begin() + static_cast<std::ptrdiff_t>(Wave));
+    std::vector<CalleeReader::Ahead> Computed =
+        Reader.readAhead(Next, Reader.keeps());
+    for (size_t Position = 0; Position < Wave; ++Position) {
+      ++Inspected;
+      const va_t Target = Pending.front();
+      Pending.pop_front();
+      CalleeReader::Ahead *Ahead =
+          Computed.empty() ? nullptr : &Computed[Position];
+      Present.insert(Target);
+      OmittedCalleeMemo::Callee Local;
+      OmittedCalleeMemo::Callee &Read = Reader.callee(Target, Local);
+      std::optional<LowFunc> Low;
+      Reader.readLift(Target, Read, Low, Ahead);
+      if (!Read.BlockOps)
+        continue;
+      for (const size_t BlockOps : *Read.BlockOps) {
+        if (BlockOps > limits::kMaxSSAFunctionOps - Operations)
+          return Signatures;
+        Operations += BlockOps;
+      }
+      const OmittedCalleeMemo::Conversion &Conversion =
+          Reader.conversion(Target, Read, &Read != &Local, Low, Ahead);
+      if (!Conversion.Body)
+        continue;
+      if (Conversion.Summary)
+        enqueueCallees(Conversion.CalleesRead);
+      else
+        enqueueCallees(calleesToRead(*Conversion.Body, Img, Result));
+      // Descendants retain this reader's deterministic breadth-first budget:
+      // a late child cannot consume another direct callee's support
+      // allowance.
+      enqueueSourcePrefixes(*Conversion.Body);
+      // System V's model takes every register a variadic prologue saves: as
+      // an omitted callee's signature it would make its callers pass
+      // registers they never set.
+      if (Conversion.Body->takesVectorArgumentRegisters())
+        continue;
+      Signatures.push_back(Conversion.Body);
+      if (SourceParameterReads && Conversion.SourceOriginalBlocks)
+        SourceBlocks.emplace(Target, Conversion.SourceOriginalBlocks);
     }
-    const OmittedCalleeMemo::Conversion &Conversion =
-        Reader.conversion(Target, Read, &Read != &Local, Low);
-    if (!Conversion.Body)
-      continue;
-    if (Conversion.Summary)
-      enqueueCallees(Conversion.CalleesRead);
-    else
-      enqueueCallees(calleesToRead(*Conversion.Body, Img, Result));
-    // Descendants retain this reader's deterministic breadth-first budget:
-    // a late child cannot consume another direct callee's support allowance.
-    enqueueSourcePrefixes(*Conversion.Body);
-    // System V's model takes every register a variadic prologue saves: as an
-    // omitted callee's signature it would make its callers pass registers
-    // they never set.
-    if (Conversion.Body->takesVectorArgumentRegisters())
-      continue;
-    Signatures.push_back(Conversion.Body);
-    if (SourceParameterReads && Conversion.SourceOriginalBlocks)
-      SourceBlocks.emplace(Target, Conversion.SourceOriginalBlocks);
   }
   return Signatures;
 }
