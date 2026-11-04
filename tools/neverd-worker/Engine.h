@@ -215,6 +215,16 @@ private:
   /// then solves (summaryJobStep).
   bool summaryDiscovered_ = false;
   std::string summaryError_;
+  /// Once the summaries are ready, the job reads ahead the signature bodies
+  /// of the callees later decompiles read (neverd_prefill_callees_json),
+  /// from prefillCursor_ in the engine's order, until it has read them all,
+  /// the engine's memory for them is full, or the engine has none to read.
+  enum class PrefillState { Off, Pending, Done, Unavailable };
+  PrefillState prefillState_ = PrefillState::Off;
+  std::uint64_t prefillCursor_ = 0;
+  std::uint64_t prefillPrepared_ = 0;
+  bool prefillPending() const;
+  void prefillStep();
   bool summaryWorkPending() const;
   void restartSummaries();
   /// False where the step only waits on discovery (summaryJobStep).

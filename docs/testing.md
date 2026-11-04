@@ -5787,11 +5787,17 @@ session that prepares first prints the same C.
 the table's maps through: copies share one instance until one changes, a
 shared instance is never changed through a holder, and equality compares
 contents.
+`SessionCAPITest.PrefilledCalleesLeaveEachAnalysisAsItWas` checks that
+`neverd_prefill_callees_json` has nothing to read before the summaries, pages
+through the callee order once they are held, and leaves the caller's C as a
+session that reads its callees as it decompiles prints it.
 `SessionCAPITest.CallSummariesAreUnavailableForAnAArch64Image` checks that the
 warm page and the request report none for AArch64. `NeverDWorkerCallSummaries`
 checks `analysis_restore`'s `call_summaries` job against the mock engine:
-absent without it, preparing then ready, the explicit request, an image without
-summaries ending at its first page, and a failed solve.
+absent without it, discovery before the warm pages (`summaries-discover`),
+preparing then ready, the callee read-ahead only after ready, the explicit
+request, an image without summaries ending at its first page, and a failed
+solve.
 `WorkbenchTests::analysisReplicaRefinesSourceOnceItsCallSummariesAreReady`
 checks that the session refreshes shown source once when a replica's job is
 ready. `localNameEditsReuseTheIdleAnalysisReplica` checks that the option is

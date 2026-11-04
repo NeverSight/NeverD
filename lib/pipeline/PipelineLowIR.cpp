@@ -3486,6 +3486,9 @@ struct ImageCallSummaries {
   /// The entries of EntryStackArgs at an import whose count is not negative
   /// (PipelineResult::CallEntryStackArgImports).
   std::shared_ptr<const std::vector<va_t>> StackArgImports;
+  /// The functions the solve found called, those more functions call first,
+  /// then by address: the order Pipeline::prefillCalleeSignatures reads them.
+  std::vector<va_t> CalleesByCallers;
 };
 
 /// The summaries a solve over every function of \p Img gave \p Solved.
@@ -4240,7 +4243,8 @@ static LocalRegisterEffect summarizeRecoveredCallRegisters(
 /// and every callee they reach, unbounded but for
 /// limits::kMaxImageCallSummaryFunctions, and classifies every import, as a
 /// computed call target may be any.  False where that limit or a decoder
-/// stops the solve, leaving Result without summaries.
+/// stops the solve, leaving Result without summaries.  With \p CallerCounts,
+/// a whole-image solve counts there the functions that call each callee.
 bool computeCallRegisterEffects(
     const BinaryImage &Img, const std::set<va_t> &FuncEntries,
     const libc::NoReturnTargetIndex &NoReturnTargets,
@@ -4256,7 +4260,7 @@ bool computeCallRegisterEffects(
     const std::vector<va_t> *ExportStarts,
     std::shared_ptr<const ImageImportCounts> *KeptImportCounts,
     const pipeline_detail::ImageCallSummaries *ImageSummaries, bool WholeImage,
-    PipelineResult &Result) {
+    PipelineResult &Result, std::map<va_t, uint32_t> *CallerCounts = nullptr) {
   // A call through a function-pointer variable passes the arguments of the
   // routine the variable starts at (PointerCallees): another module's, whose
   // prototype is kept under the variable's address, or this image's, by its
@@ -4477,6 +4481,9 @@ bool computeCallRegisterEffects(
         for (const RegisterStep &Step : Block.Steps)
           if (Step.ArgumentsFrom != InvalidVA)
             Callees.insert(Step.ArgumentsFrom);
+      if (WholeImage && CallerCounts)
+        for (va_t Callee : Callees)
+          ++(*CallerCounts)[Callee];
       for (va_t Callee : Callees) {
         if (Depth.count(Callee) ||
             (!WholeImage && (CalleeDepth > limits::kMaxCallEffectCalleeDepth ||
@@ -5229,22 +5236,66 @@ bool Pipeline::prepareCallSummaries(const BinaryImage &Img,
   // the summaries do not depend on which function a session decompiled
   // first.
   PipelineResult Whole;
+  std::map<va_t, uint32_t> Callers;
   if (!computeCallRegisterEffects(
           Img, Facts.Entries, Inputs.Targets, Inputs.StackProbes, Facts.Callees,
           Inputs.Roots, &Inputs.Owners, Facts.Graphs, Inputs.PointerCallees,
           &Inputs.ArgumentSources, Facts.CalleeFacts, Dbg,
           &Inventory.functionNames(Img), &Inventory.ExportStarts,
           /*KeptImportCounts=*/nullptr, /*ImageSummaries=*/nullptr,
-          /*WholeImage=*/true, Whole))
+          /*WholeImage=*/true, Whole, &Callers))
     return false;
+  auto Summaries = pipeline_detail::imageCallSummariesOf(Img, std::move(Whole));
+  // The callees most functions read first: a function's run reads its
+  // direct callees' bodies, and shares those of the ones many call.
+  std::vector<std::pair<uint32_t, va_t>> Ranked;
+  Ranked.reserve(Callers.size());
+  for (const auto &[Callee, Count] : Callers)
+    Ranked.emplace_back(Count, Callee);
+  llvm::stable_sort(
+      Ranked, [](const auto &A, const auto &B) { return A.first > B.first; });
+  Summaries.CalleesByCallers.reserve(Ranked.size());
+  for (const auto &[Count, Callee] : Ranked)
+    Summaries.CalleesByCallers.push_back(Callee);
   Facts.CallSummaries =
       std::make_shared<const pipeline_detail::ImageCallSummaries>(
-          pipeline_detail::imageCallSummariesOf(Img, std::move(Whole)));
+          std::move(Summaries));
   // Runs of these entries read the summaries now, not each callee's facts.
   Facts.CalleeFacts.clear();
   if (Solved)
     *Solved = true;
   return true;
+}
+
+std::optional<AnalysisCacheWarmup> Pipeline::prefillCalleeSignatures(
+    const BinaryImage &Img, const PipelineOptions &Opts, DebugContext *Dbg,
+    size_t First, size_t Count, std::optional<size_t> &Next) {
+  Next.reset();
+  if (!Opts.AnalysisCache || Img.Arch != Arch::X64)
+    return std::nullopt;
+  PipelineAnalysisCache &Cache = *Opts.AnalysisCache;
+  auto &Facts = PipelineAnalysisCache::Impl::symbolFacts(Img, Dbg, Cache);
+  if (!Facts.CallSummaries)
+    return std::nullopt;
+  // What a run of a symbol start reads its callees under
+  // (computeCallRegisterEffects): the image's summaries, the routines its
+  // function-pointer variables start at, and its imports' declarations.
+  PipelineResult Summaries;
+  Summaries.CallArgumentSources = Facts.Inputs->ArgumentSources;
+  setOmittedImportArguments(Img, Dbg, Facts.Inputs->PointerCallees,
+                            &Cache.ImportCounts, Summaries);
+  pipeline_detail::applyImageCallSummaries(*Facts.CallSummaries, Summaries);
+  if (!Cache.CalleeSignatures)
+    Cache.CalleeSignatures = std::make_shared<OmittedCalleeMemo>();
+  Summaries.CalleeSignatureMemo = Cache.CalleeSignatures;
+  const std::vector<va_t> &Order = Facts.CallSummaries->CalleesByCallers;
+  First = std::min(First, Order.size());
+  Count = std::min(Count, Order.size() - First);
+  const AnalysisCacheWarmup Warmup = prefillOmittedCallees(
+      Img, Summaries, llvm::ArrayRef<va_t>(Order).slice(First, Count));
+  if (!Warmup.Full && First + Count < Order.size())
+    Next = First + Count;
+  return Warmup;
 }
 
 void Pipeline::buildLowIR(

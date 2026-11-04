@@ -398,6 +398,13 @@ AnalysisCacheWarmup warmOmittedCallees(const BinaryImage &Img,
                                        const PipelineResult &Summaries,
                                        llvm::ArrayRef<va_t> Functions);
 
+/// warmOmittedCallees, reading the next callees of \p Functions together on
+/// the pipeline's workers as a run's signature read does (readAhead), and
+/// converting every lift as that read does.
+AnalysisCacheWarmup prefillOmittedCallees(const BinaryImage &Img,
+                                          const PipelineResult &Summaries,
+                                          llvm::ArrayRef<va_t> Functions);
+
 /// Give each call in \p Result exactly its callee's parameters, as the LLVM
 /// emitter does when it truncates a call to its callee's declaration: once
 /// every signature is final, a register the caller set for something else,

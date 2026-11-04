@@ -561,6 +561,20 @@ public:
   bool prepareCallSummaries(const BinaryImage &Img, const PipelineOptions &Opts,
                             DebugContext *Dbg, bool *Solved = nullptr);
 
+  /// Read the signature bodies of the functions \p Img's functions call,
+  /// those more of them call first, into Opts.AnalysisCache's omitted-callee
+  /// memo, as runs of the image's symbol starts read them once the cache
+  /// holds the image's call summaries (prepareCallSummaries): from the
+  /// \p First'th in that order, at most \p Count.  The output of every run
+  /// stays as it was; runs find the bodies read.  Stops, full, where the
+  /// memo holds three quarters of its bound.  \p Next is where a later call
+  /// continues, or nullopt once the order or the memo is done.  Nullopt
+  /// where the cache holds no summaries.
+  std::optional<AnalysisCacheWarmup>
+  prefillCalleeSignatures(const BinaryImage &Img, const PipelineOptions &Opts,
+                          DebugContext *Dbg, size_t First, size_t Count,
+                          std::optional<size_t> &Next);
+
   /// Complete deferred HighIR from this image's prepared source MedIR. This
   /// preserves LowIR, MedIR and LLVM module identities and contains failures
   /// through the same completion boundary as eager HighIR conversion.

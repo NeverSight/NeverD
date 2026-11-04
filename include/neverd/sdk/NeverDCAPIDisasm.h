@@ -306,6 +306,22 @@ NEVERD_API const char *neverd_warm_functions_json(neverd_session_t Sess,
 NEVERD_API const char *
 neverd_prepare_call_summaries_json(neverd_session_t Sess);
 
+/// Once the session holds its image's call summaries
+/// (neverd_prepare_call_summaries_json), read ahead the signature bodies of
+/// the functions the image's functions call, those more of them call first,
+/// as the session's function analyses read their callees: from the First'th
+/// in that order, at most MaxCallees (1-4096).  Later analyses find them read;
+/// their output is the same.  It stops where the bodies take three quarters
+/// of the session's callee memory.  Returns
+/// {"available":bool,"prepared":int,"full":bool,"next":int|null}:
+/// "available" is false where the session holds no summaries, and "next" is
+/// where a later call continues, null once the order or the memory is done.
+/// NULL with an error when no binary is loaded or a read fails.  Like every
+/// session call, this must not run concurrently with another call on the
+/// session.
+NEVERD_API const char *neverd_prefill_callees_json(neverd_session_t Sess,
+                                                   int First, int MaxCallees);
+
 NEVERD_API const char *neverd_decompile(neverd_session_t Sess,
                                         neverd_va_t FuncEntry);
 

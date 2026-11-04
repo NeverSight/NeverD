@@ -1876,6 +1876,52 @@ AnalysisCacheWarmup warmOmittedCallees(const BinaryImage &Img,
   return Warmup;
 }
 
+AnalysisCacheWarmup prefillOmittedCallees(const BinaryImage &Img,
+                                          const PipelineResult &Summaries,
+                                          llvm::ArrayRef<va_t> Functions) {
+  AnalysisCacheWarmup Warmup;
+  OmittedCalleeMemo *Memo = Summaries.CalleeSignatureMemo.get();
+  const auto *Convention = callArgumentConvention(Img.Arch, Img.abiFormat());
+  if (!Memo || !needsCallSignatureRecovery(Convention) || Img.IsRelocatable)
+    return Warmup;
+  Memo->adopt(Img, Summaries);
+  CalleeReader Reader(Img, Summaries);
+  if (!Reader.init())
+    return Warmup;
+  // As warming: three quarters of the memo, the rest left to the callees
+  // runs read.
+  constexpr size_t WarmedBytes = OmittedCalleeMemo::MaxBytes / 4 * 3;
+  std::vector<va_t> Next;
+  for (size_t At = 0; At < Functions.size();) {
+    if (Memo->bytes() >= WarmedBytes) {
+      Warmup.Full = true;
+      break;
+    }
+    Next.clear();
+    for (; At < Functions.size() &&
+           Next.size() < limits::pipeline::kPipelineCallAbiCalleeReadAhead;
+         ++At)
+      if (Reader.reads(Functions[At]))
+        Next.push_back(Functions[At]);
+    std::vector<CalleeReader::Ahead> Computed =
+        Reader.readAhead(Next, Reader.keeps());
+    for (size_t Position = 0; Position < Next.size(); ++Position) {
+      const va_t Target = Next[Position];
+      CalleeReader::Ahead *Ahead =
+          Computed.empty() ? nullptr : &Computed[Position];
+      OmittedCalleeMemo::Callee Local;
+      OmittedCalleeMemo::Callee &Read = Reader.callee(Target, Local);
+      std::optional<LowFunc> Low;
+      Reader.readLift(Target, Read, Low, Ahead);
+      if (!Read.BlockOps)
+        continue;
+      (void)Reader.conversion(Target, Read, &Read != &Local, Low, Ahead);
+      ++Warmup.Prepared;
+    }
+  }
+  return Warmup;
+}
+
 void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                           const std::map<va_t, std::string> &AllFuncNames,
                           bool SourceDeclarations, bool SourceParameterReads) {

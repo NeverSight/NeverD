@@ -1668,7 +1668,8 @@ Listing &Engine::listing() {
   return *listing_;
 }
 bool Engine::hasIdleWork() const {
-  if (summaryWorkPending() && neverd_session_is_loaded(session_))
+  if ((summaryWorkPending() || prefillPending()) &&
+      neverd_session_is_loaded(session_))
     return true;
   if (!listing_ || !neverd_session_is_loaded(session_))
     return false;
@@ -1708,8 +1709,53 @@ void Engine::restartSummaries() {
   summaryCursor_ = 0;
   summaryDiscovered_ = false;
   summaryError_.clear();
+  prefillState_ = PrefillState::Off;
+  prefillCursor_ = 0;
+  prefillPrepared_ = 0;
+}
+bool Engine::prefillPending() const {
+  return summaryState_ == SummaryState::Ready &&
+         prefillState_ == PrefillState::Pending;
+}
+void Engine::prefillStep() {
+  using PrefillFunction = const char *(*)(neverd_session_t, int, int);
+  static const auto prefill =
+      engineSymbol<PrefillFunction>("neverd_prefill_callees_json");
+  if (!prefill) {
+    prefillState_ = PrefillState::Unavailable;
+    return;
+  }
+  // A step reads one batch of callees together, as a decompile's read-ahead
+  // does, and stays as short as one.
+  constexpr int PrefillStepCallees = 32;
+  const char *raw =
+      prefill(session_, static_cast<int>(prefillCursor_), PrefillStepCallees);
+  if (!raw) {
+    prefillState_ = PrefillState::Unavailable;
+    return;
+  }
+  const auto page = backendJson(raw);
+  if (!page.value("available", false)) {
+    prefillState_ = PrefillState::Unavailable;
+    return;
+  }
+  prefillPrepared_ += page.value("prepared", std::uint64_t{0});
+  const auto next = page.value("next", Json());
+  if (next.is_number_unsigned() || next.is_number_integer())
+    prefillCursor_ = next.get<std::uint64_t>();
+  else
+    prefillState_ = PrefillState::Done;
 }
 bool Engine::summaryStep() {
+  if (prefillPending()) {
+    try {
+      prefillStep();
+    } catch (const std::exception &) {
+      // Reading ahead only shortens later decompiles; they read the rest.
+      prefillState_ = PrefillState::Unavailable;
+    }
+    return true;
+  }
   if (!summaryWorkPending())
     return true;
   // A step that fails ends the job with its error rather than retrying it
@@ -1791,6 +1837,10 @@ Json Engine::prepareCallSummaries() {
   if (result.value("ready", false)) {
     summaryState_ = SummaryState::Ready;
     forgetDecompiledViews();
+    // The replica's own job reads ahead the callees its decompiles read; an
+    // explicit request only solves.
+    if (summaryJob_ && prefillState_ == PrefillState::Off)
+      prefillState_ = PrefillState::Pending;
   } else {
     summaryState_ = SummaryState::Unavailable;
   }
@@ -1809,6 +1859,12 @@ Json Engine::summaryJson() const {
   Json state = {{"state", Names[static_cast<int>(summaryState_)]}};
   if (!summaryError_.empty())
     state["error"] = summaryError_;
+  if (prefillState_ != PrefillState::Off) {
+    static constexpr const char *Prefill[] = {"off", "pending", "done",
+                                              "unavailable"};
+    state["prefill"] = {{"state", Prefill[static_cast<int>(prefillState_)]},
+                        {"prepared", prefillPrepared_}};
+  }
   return state;
 }
 void Engine::restartWarming() {

@@ -1097,6 +1097,29 @@ const char *neverd_prepare_call_summaries_json(neverd_session_t s) {
   ++state.summarySolves;
   return copy(Json{{"available", available}, {"ready", available}}.dump());
 }
+// The callees of an image whose summaries a solve made ready are its
+// functions, read ahead in their order.
+const char *neverd_prefill_callees_json(neverd_session_t s, int first,
+                                        int maxCallees) {
+  auto &state = *session(s);
+  state.error.clear();
+  const bool available =
+      state.summarySolves > 0 &&
+      (state.path.find("summaries-ready") != std::string::npos ||
+       state.path.find("summaries-discover") != std::string::npos);
+  const size_t total = state.functions.size();
+  const size_t from = std::min<size_t>(std::max(first, 0), total);
+  const size_t count =
+      available
+          ? std::min<size_t>(std::clamp(maxCallees, 1, 4096), total - from)
+          : 0;
+  const bool more = available && from + count < total;
+  return copy(Json{{"available", available},
+                   {"prepared", count},
+                   {"full", false},
+                   {"next", more ? Json(from + count) : Json(nullptr)}}
+                  .dump());
+}
 const char *neverd_code_refs_json(neverd_session_t s, neverd_va_t firstEntry,
                                   int maxFunctions) {
   session(s)->error.clear();

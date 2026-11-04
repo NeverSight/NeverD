@@ -1606,6 +1606,12 @@ _declare(
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
+    "neverd_prefill_callees_json",
+    "const char *",
+    ["neverd_session_t", "int", "int"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_decompile",
     "const char *",
     ["neverd_session_t", "neverd_va_t"],

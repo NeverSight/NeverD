@@ -4307,9 +4307,17 @@ which only the closure solve reads. A run shares the table's maps rather than co
 them (`SharedValue`, copy-on-write); the table also lists once the imports among
 its stack-argument entries, which the source stack pass would otherwise query
 for every function of the image, and the image's call-argument sources are
-built once per cache rather than once per run. The GUI's analysis replicas restore with
-`call_summaries:true`: they warm a page of functions per idle step, solve, then
-drop their cached replies, and the shown source is read again.
+built once per cache rather than once per run. The solve also counts each
+callee's callers. `neverd_prefill_callees_json`
+(`Pipeline::prefillCalleeSignatures`) then reads ahead the signature bodies of
+the callees more functions call first, into the omitted-callee memo, under the
+same summaries, import declarations and call-argument sources a run of a symbol
+start reads them under, so a run's memo lookups take them as its own read
+would; it stops at three quarters of the memo's bound and changes no output.
+The GUI's analysis replicas restore with `call_summaries:true`: they discover
+the image's functions, warm a page of functions per idle step, solve, drop
+their cached replies so the shown source is read again, and then read ahead
+callees a batch per idle step.
 The GUI owner no longer requests that pipeline warmup: source/CFG views use
 separate analysis sessions and cannot consume the owner's pipeline cache.
 With idle analysis enabled, native images with 4096–65536 functions and at most

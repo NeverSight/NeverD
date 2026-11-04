@@ -45,6 +45,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/SaveAndRestore.h"
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <set>
@@ -575,6 +576,47 @@ const char *neverd_prepare_call_summaries_json(neverd_session_t Sess) {
                 Error.what());
   } catch (...) {
     S->setError("unexpected call summary preparation failure");
+  }
+  return nullptr;
+}
+
+const char *neverd_prefill_callees_json(neverd_session_t Sess, int First,
+                                        int MaxCallees) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  S->clearError();
+  try {
+    if (!S->Loaded) {
+      S->setError("no binary loaded");
+      return nullptr;
+    }
+    std::optional<AnalysisCacheWarmup> Prefilled;
+    std::optional<size_t> Next;
+    // The summaries belong to the session's current functions and signature
+    // generation; a change since leaves none to read the callees under.
+    if (S->Img.Arch == Arch::X64 && S->synchronizeFunctions() &&
+        S->PipelineFeatureGeneration == S->SigDB.featureGeneration()) {
+      PipelineOptions Opts;
+      S->applyAnalysisOptions(Opts);
+      Opts.AnalysisCache = &S->AnalysisCache;
+      Prefilled = Pipeline().prefillCalleeSignatures(
+          S->Img, Opts, S->decompileDebug(),
+          static_cast<size_t>(std::max(First, 0)),
+          static_cast<size_t>(std::clamp(MaxCallees, 1, 4096)), Next);
+    }
+    llvm::json::Object Result;
+    Result["available"] = Prefilled.has_value();
+    Result["prepared"] =
+        static_cast<int64_t>(Prefilled ? Prefilled->Prepared : 0);
+    Result["full"] = Prefilled && Prefilled->Full;
+    Result["next"] = Next ? llvm::json::Value(static_cast<int64_t>(*Next))
+                          : llvm::json::Value(nullptr);
+    return dupStr(jsonToString(llvm::json::Value(std::move(Result))));
+  } catch (const std::exception &Error) {
+    S->setError(std::string("callee prefill failed: ") + Error.what());
+  } catch (...) {
+    S->setError("unexpected callee prefill failure");
   }
   return nullptr;
 }

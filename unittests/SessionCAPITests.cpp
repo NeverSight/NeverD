@@ -4254,6 +4254,65 @@ TEST_F(SessionCAPITest, PreparedCallSummariesReplaceEachAnalysisClosure) {
   EXPECT_EQ(takeString(neverd_decompile(Fresh, Entry)), Prepared);
 }
 
+TEST_F(SessionCAPITest, PrefilledCalleesLeaveEachAnalysisAsItWas) {
+  // The chain of PreparedCallSummariesReplaceEachAnalysisClosure: each
+  // function calls the next, which the image's summaries list as callees.
+  constexpr unsigned Chain = neverd::limits::kMaxCallEffectCalleeDepth + 1;
+  constexpr unsigned Stride = 0x20;
+  std::string Code((Chain + 1) * Stride, '\xcc');
+  static constexpr char Forward[] =
+      "\x48\x83\xec\x08\xe8\x17\x00\x00\x00\x48\x83\xc4\x08\xc3";
+  for (unsigned I = 0; I < Chain; ++I)
+    Code.replace(I * Stride, sizeof(Forward) - 1, Forward, sizeof(Forward) - 1);
+  Code.replace(Chain * Stride, 4, "\x48\x89\xd0\xc3", 4);
+  const auto Path =
+      write("prefill.elf", makeNativeELF(false, 0x400000, {}, Code));
+  const auto Load = [&](neverd_session_t Into) {
+    ASSERT_EQ(neverd_session_load(Into, Path.c_str()), 1);
+    auto &State = *neverd::sdk::toSession(Into);
+    const auto Entry = neverd_session_entry_addr(Into);
+    for (unsigned I = 0; I <= Chain; ++I)
+      State.Img.Symbols.push_back(
+          neverd::Symbol::makeFunc(Entry + I * Stride, Stride));
+    neverd::sdk::SessionTestAccess::resetFunctions(State);
+  };
+  const auto Prefill = [&](int First, int Max) {
+    auto Reply = llvm::json::parse(
+        takeString(neverd_prefill_callees_json(Session, First, Max)));
+    EXPECT_TRUE(bool(Reply)) << llvm::toString(Reply.takeError());
+    return Reply ? *Reply : llvm::json::Value(nullptr);
+  };
+  Load(Session);
+  const auto Entry = neverd_session_entry_addr(Session);
+  // Without the image's summaries there is nothing to read the callees under.
+  const auto Before = Prefill(0, 64);
+  ASSERT_NE(Before.getAsObject(), nullptr);
+  EXPECT_EQ(Before.getAsObject()->getBoolean("available"), false);
+  EXPECT_EQ(Before.getAsObject()->getInteger("prepared"), 0);
+  ASSERT_FALSE(takeString(neverd_prepare_call_summaries_json(Session)).empty());
+  // A page continues where it stopped; the last ends the order.
+  const auto First = Prefill(0, 1);
+  ASSERT_NE(First.getAsObject(), nullptr);
+  EXPECT_EQ(First.getAsObject()->getBoolean("available"), true);
+  EXPECT_LE(First.getAsObject()->getInteger("prepared").value_or(2), 1);
+  EXPECT_EQ(First.getAsObject()->getInteger("next"), 1);
+  const auto Rest = Prefill(1, 4096);
+  ASSERT_NE(Rest.getAsObject(), nullptr);
+  EXPECT_EQ(Rest.getAsObject()->getBoolean("available"), true);
+  EXPECT_EQ(Rest.getAsObject()->getBoolean("full"), false);
+  ASSERT_NE(Rest.getAsObject()->get("next"), nullptr);
+  EXPECT_EQ(*Rest.getAsObject()->get("next"), llvm::json::Value(nullptr));
+  const std::string Prefilled = takeString(neverd_decompile(Session, Entry));
+  ASSERT_FALSE(Prefilled.empty());
+  // A session that reads its callees as it decompiles prints the same.
+  neverd_session_t Fresh = neverd_session_create();
+  const auto Destroy =
+      llvm::make_scope_exit([&] { neverd_session_destroy(Fresh); });
+  Load(Fresh);
+  ASSERT_FALSE(takeString(neverd_prepare_call_summaries_json(Fresh)).empty());
+  EXPECT_EQ(takeString(neverd_decompile(Fresh, Entry)), Prefilled);
+}
+
 TEST_F(SessionCAPITest, CallSummariesAreUnavailableForAnAArch64Image) {
   std::ifstream Input(std::filesystem::path(__FILE__).parent_path() / "types" /
                           "fixtures" / "linux_libc_calls_arm64",

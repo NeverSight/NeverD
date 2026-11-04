@@ -33,6 +33,19 @@ def summaries(client, accept, timeout=30):
             return state, seen
 
 
+def prefill(client, accept, timeout=30):
+    deadline = time.monotonic() + timeout
+    seen = []
+    while True:
+        message = client.next(lambda m: m.get("type") == "heartbeat",
+                              timeout=max(0.1, deadline - time.monotonic()))
+        summaries = (message.get("background") or {}).get("call_summaries") or {}
+        state = (summaries.get("prefill") or {}).get("state")
+        seen.append((summaries.get("state"), state))
+        if accept(state):
+            return state, seen
+
+
 def replica(clients, executable, owner, **extra):
     snapshot = ok(owner, "analysis_snapshot")
     snapshot.update(extra)
@@ -60,6 +73,11 @@ def run(executable):
         state, seen = summaries(solving, lambda s: s not in ("pending", "preparing", "solving"))
         assert state == "ready", seen
         assert "preparing" in seen, seen
+        # Then, while idle, it reads ahead the callees its decompiles read,
+        # only once the summaries are ready.
+        state, seen = prefill(solving, lambda s: s in ("done", "unavailable"))
+        assert state == "done", seen
+        assert all(s == "ready" for s, p in seen if p is not None), seen
         # Its decompiles keep working as before, and an explicit request
         # answers at once.
         assert ok(solving, "prepare_call_summaries") == {"available": True, "ready": True}
@@ -91,8 +109,8 @@ def run(executable):
             else:
                 assert reply["status"] == "ok" and reply["payload"] == {"available": False,
                                                                          "ready": False}, reply
-        print("call summaries: off by default, replica idle solve after discovery, explicit request, "
-              "unavailable, failure")
+        print("call summaries: off by default, replica idle solve after discovery, callee "
+              "read-ahead, explicit request, unavailable, failure")
 
 
 if __name__ == "__main__":

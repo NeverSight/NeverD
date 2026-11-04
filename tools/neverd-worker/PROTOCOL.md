@@ -920,7 +920,12 @@ no request waits, as `open`'s `warm` does, and finally solves the image's call
 summaries, which its later decompiles read (`prepare_call_summaries`).
 Discovering first solves them for the functions the replica keeps listing: a
 later discovery, as its first decompile of a function only discovery finds
-starts, would add functions and retire summaries solved before it. Heartbeats report the job
+starts, would add functions and retire summaries solved before it. Once they
+are ready, the replica reads ahead, a batch per idle step, the signature bodies
+of the callees its decompiles read (`neverd_prefill_callees_json`), until the
+engine has read them all or its memory for them is full; decompiles print the
+same either way. Heartbeats report it as `background.call_summaries.prefill`:
+`{state, prepared}` with `pending`, `done` or `unavailable`. Heartbeats report the job
 as `background.call_summaries.state`: `pending`, `preparing`, `solving`,
 `ready` or `unavailable`: the engine's first page says it solves none for the
 image (one that is not x86-64), or the solve stopped at the engine's limit. On
