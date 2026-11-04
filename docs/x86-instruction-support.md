@@ -3490,8 +3490,9 @@ The LLVM fork provides `llvm.x86.udivrem8/16/32/64` and
 as equally sized bit patterns and returns the quotient/remainder pair from
 one native DIV/IDIV. A zero divisor or out-of-range quotient retains #DE,
 including when both results are unused. The byte operation transports full AX
-without an AH/REX allocation conflict. Code32 supports 8/16/32-bit operands;
-code64 and x32 also support 64 bits. Code16 is rejected.
+without an AH/REX allocation conflict. Protected code16 and code32 support 8/16/32-bit operands; code16 uses
+the 32-bit stack ABI and mode-correct operand-size prefixes. Code64 and x32
+also support 64 bits. NeverC retains its existing x64 frontend target.
 
 NeverC's corresponding `__builtin_ia32_[us]divrem*` builtins return the quotient
 and store the remainder through their fourth argument only after completion.
@@ -3518,6 +3519,14 @@ comparisons. Sixteen LLVM code-generation regressions, 21 NeverC frontend
 regressions and ten generated-table tests pass. The recorded `_udiv128`
 counterexample distinguishes the old optimized-away overflow from the new
 native call. No release, SDK pin or LLVM gitlink is changed by this work.
+
+The [protected code16 division qualification](evidence/x86-native-code16-division-2026-11-03.json)
+adds 165,888 native state pairs on P/E cores, plus 82,944 code32 pairs and
+718,848 existing i386/x64/NeverC result/fault comparisons. All ten related LLVM
+and ten NeverC frontend tests pass. Wrong-divisor and erased-unused-DIV
+controls fail as intended. Protected coverage includes native #DE frames,
+argument transport, result projection and ABI return checks at CPL0; it does
+not add operand-memory fault or asynchronous-event qualification.
 
 ## Owned paged RAM and recursive delivery faults
 
@@ -3744,8 +3753,10 @@ vector does not acquire that exception's error-code field. Shared event kinds,
 error-code sets and exception pairing serve both legacy and IA-32e execution.
 
 This internal execution interface admits the segment instructions plus
-NOP, register-immediate MOV, CLI/STI, INT/INT3/INTO/INT1, UD2 and protected
-16/32-bit IRET/RETF. It is not a general i386 scalar/source dispatcher. Task/call
+the explicitly bound MOV/arithmetic/logic/stack/near-control scalar subset,
+full-dividend DIV/IDIV, NOP, CLI/STI, INT/INT3/INTO/INT1, UD2, protected
+16/32-bit IRET/RETF and Intel SEP SYSENTER/SYSEXIT. It is not a general i386
+source dispatcher. Task/call
 gates, real/VM86, debug-event production, software SMM and SGX execution/AEX/EPCM
 remain separate incomplete contracts. Unsupported input returns an explicit
 error. [The execution contract](x86-legacy-segments.md#protected-instruction-and-event-execution)
