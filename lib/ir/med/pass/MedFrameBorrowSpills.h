@@ -13,6 +13,7 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/SourceFrameAnalysis.h"
+#include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 
 #include "llvm/Support/MathExtras.h"
@@ -82,7 +83,9 @@ public:
         if (!Bytes ||
             (Address && llvm::AddOverflow(*Address, int64_t(Bytes), End)))
           return;
-        if (Address) {
+        if (!Address) {
+          NonStackAddresses.push_back(Op.Inputs[0]);
+        } else {
           // Index every overlapped word, including partial and wide accesses.
           // Querying a spill never rescans the function or all other spills.
           const int64_t Word = TRI.PointerSize;
@@ -136,6 +139,10 @@ public:
     return &Found->second.Loads;
   }
 
+  const std::vector<MedVar> &nonStackAddresses() const {
+    return NonStackAddresses;
+  }
+
 private:
   struct Slot {
     bool Exact = true;
@@ -147,6 +154,7 @@ private:
   };
   std::map<int64_t, Slot> Slots;
   std::map<const MedOp *, Spill> Stores;
+  std::vector<MedVar> NonStackAddresses;
   bool Valid = false;
 };
 

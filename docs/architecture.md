@@ -703,7 +703,11 @@ semantics; it grants no native callee-effect or initialization fact.
 An incoming borrow may also pass through an exact private word in a single-block,
 call-free callee. `MedFrameBorrowSpills` lazily indexes its stack accesses and
 reaching whole-word stores once; every reloaded pointer resumes the same complete
-use walk. The callee's own SP must separately pass the nonescape proof. Monotone
+use walk. The caller must locate the borrow at or above its current call SP;
+an unlocated relay borrow has no spill permission. The cache includes that
+permission in its key. Every non-stack memory access in the leaf must use the
+same unadjusted borrow, excluding another argument that aliases its spill.
+The callee's own SP must separately pass the nonescape proof. Monotone
 allocation and release keep each access within live private storage. Partial or
 wide overlaps, reads before a store, released/reallocated slots, incoming homes,
 ordered/segmented accesses and intrinsics refuse this transport. Dead or omitted

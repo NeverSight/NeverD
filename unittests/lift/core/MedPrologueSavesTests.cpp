@@ -4918,7 +4918,7 @@ TEST(SourceFrameBorrows, NullTestsDoNotObserveBorrowedContents) {
 }
 
 TEST(SourceFrameBorrows, PrivateLeafSpillsRetainEveryReloadedPointerUse) {
-  for (unsigned Case = 0; Case != 24; ++Case) {
+  for (unsigned Case = 0; Case != 29; ++Case) {
     SCOPED_TRACE(Case);
     MedFunc Caller;
     Caller.Entry = 0x1000;
@@ -5031,7 +5031,7 @@ TEST(SourceFrameBorrows, PrivateLeafSpillsRetainEveryReloadedPointerUse) {
       Body.Ops.insert(Body.Ops.begin() + 4,
                       op(NdOp::INTRINSIC, none(),
                          {MedVar::makeConst(unsigned(Intrinsic::Pause), 4)}));
-    if (Case >= 20) {
+    if (Case >= 20 && Case <= 23) {
       // A full replacement cuts the earlier transport edge. A partial one
       // combines pointer bytes and must not acquire the replacement's offset.
       Body.Ops.insert(
@@ -5047,6 +5047,66 @@ TEST(SourceFrameBorrows, PrivateLeafSpillsRetainEveryReloadedPointerUse) {
         Body.Ops[5].Dead = true;
       if (Case == 23)
         Body.Ops[5].PrologueSave = true;
+    }
+    if (Case == 24 || Case == 26) {
+      // A second argument can address the future callee slot. Its indirect
+      // reload must not hide the borrowed pointer's adjacent-byte read.
+      Caller.Blocks[0].Ops.insert(
+          Caller.Blocks[0].Ops.begin() + 6,
+          op(NdOp::INT_SUB, temp(12), {sp(1), MedVar::makeConst(16, 8)}));
+      auto &Invoke = Caller.Blocks[0].Ops[7];
+      Invoke.addInput(temp(12));
+      Invoke.CalleeRegisterArgs = 2;
+      Caller.CallInfos[0].OpIdx = 7;
+      Caller.CallInfos[0].Args.push_back(temp(12));
+      const auto Other =
+          reg(4, getTargetRegInfo(Arch::X64).Win64ParamRegs[1], 0);
+      Callee.Params.push_back(Other);
+      if (Case == 24) {
+        Body.Ops[4].Inputs[0] = Other;
+        Body.Ops.insert(
+            Body.Ops.begin() + 5,
+            op(NdOp::INT_SUB, temp(31), {temp(30), MedVar::makeConst(4, 8)}));
+        Body.Ops[6].Inputs[0] = temp(31);
+      } else {
+        // With caller entry SP 0x10000, this partial alias write changes
+        // the saved pointer from the known neighbor to the unknown word.
+        Body.Ops.insert(
+            Body.Ops.begin() + 4,
+            op(NdOp::STORE, none(), {Other, MedVar::makeConst(0xFFE8, 4)}));
+      }
+    }
+    if (Case == 25 || Case >= 27) {
+      // Even the borrow itself may name the future slot. Loading through it
+      // then returns that pointer, allowing the caller to observe its frame.
+      Caller.Blocks[0].Ops[3] =
+          op(NdOp::INT_SUB, temp(11), {sp(1), MedVar::makeConst(16, 8)});
+      Caller.Blocks[0].Ops[6].Output = temp(40);
+      Caller.Blocks[0].Ops.insert(
+          Caller.Blocks[0].Ops.begin() + 7,
+          op(NdOp::INT_ADD, temp(41), {temp(40), MedVar::makeConst(0x30, 8)}));
+      Caller.Blocks[0].Ops.insert(Caller.Blocks[0].Ops.begin() + 8,
+                                  op(NdOp::LOAD, Word, {temp(41)}));
+      Body.Ops[5].Output = temp(32);
+      Body.Ops.back().Inputs[0] = temp(32);
+    }
+    if (Case >= 27) {
+      // Query the same callee with and without located-spill permission.
+      // Reverse the SSA-use traversal order without changing either call.
+      auto Address =
+          op(NdOp::INT_ADD, temp(12), {sp(1), MedVar::makeConst(0x24, 8)});
+      if (Case == 28)
+        std::swap(Address, Caller.Blocks[0].Ops[3]);
+      auto Invoke = Caller.Blocks[0].Ops[6];
+      Invoke.Output = temp(42);
+      Invoke.Inputs[1] = temp(12);
+      Caller.Blocks[0].Ops.insert(Caller.Blocks[0].Ops.begin() + 6, Address);
+      Caller.Blocks[0].Ops.insert(Caller.Blocks[0].Ops.begin() + 7, Invoke);
+      Caller.CallInfos[0].OpIdx = 8;
+      auto Located = Caller.CallInfos[0];
+      Located.OpIdx = 7;
+      Located.Args = {temp(12)};
+      Caller.CallInfos.insert(Caller.CallInfos.begin(), Located);
     }
     Callee.Blocks = {Body};
     const auto Before = Callee.Blocks[0].Ops;

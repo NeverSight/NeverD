@@ -1,9 +1,11 @@
 # Remaining x64 C-quality work
 
 Exact private-word pointer transport now works in single-block, call-free Win64
-source callees. Reloads retain their actual read/capture uses; partial overlaps,
-dead replacements, frame escape and released storage stay conservative. The
-index is lazy and shares the existing source-borrow budget. This removes the
+source callees when the caller locates the borrow above the callee's private
+frame and all non-stack accesses use that exact borrow. Reloads retain their
+actual read/capture uses; aliased slots, partial overlaps, dead replacements,
+frame escape and released storage stay conservative. The index is lazy and
+shares the existing source-borrow budget. This removes the
 leaf-spill false rejection, but the two registry-query stack-input gaps remain:
 their native allocation chain includes cold verifier, tracing and indirect-call
 paths. Neither a source spill annotation nor an inferred argument count proves
