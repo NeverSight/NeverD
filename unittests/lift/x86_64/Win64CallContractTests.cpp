@@ -216,6 +216,58 @@ TEST(SummarizedCallArguments, PublishesAnEmptyVectorBankForScalarCallees) {
   }
 }
 
+TEST(SummarizedCallArguments, Win64SavedVectorReadsStillProveAnEmptyBank) {
+  // Win64 preserves XMM6 and up in every convention: a callee reads them
+  // only to save them, so a summary whose only vector reads are those still
+  // proves that the call passes no vector argument.  XMM4 and XMM5 are
+  // volatile, __vectorcall's fifth and sixth vector arguments: a read of
+  // either keeps the positional contract open.
+  const auto &Registers = getTargetRegInfo(Arch::X64);
+  const auto Integers = Registers.integerParamRegs(BinaryFormat::COFF);
+  for (unsigned Saved : {4u, 5u, 6u, 7u}) {
+    SCOPED_TRACE(Saved);
+    GPRReadWidths Reads{};
+    Reads[Integers[0] / 8] = 8;
+    Reads[Integers[1] / 8] = 8;
+    Reads[kX64VectorFamilyBase + Saved] = 16;
+    const std::map<va_t, GPRReadWidths> Summaries{{0x2000, Reads}};
+    LowFunc Low;
+    Low.Entry = 0x1000;
+    Low.Name = "forward_values";
+    Low.Blocks.resize(1);
+    Low.Blocks[0].Id = 0;
+    Low.Blocks[0].StartAddr = Low.Entry;
+    LowOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = Low.Entry;
+    Call.Output = NdVar::reg(Registers.IntReturnReg, 8);
+    Call.addInput(NdVar::cst(0x2000, 8));
+    Low.Blocks[0].Ops.push_back(Call);
+    LowOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = Low.Entry + 5;
+    Return.addInput(Call.Output);
+    Low.Blocks[0].Ops.push_back(Return);
+    LowToMedConverter Converter;
+    Converter.setCallEntryReadGPRs(&Summaries);
+    const MedFunc Function =
+        Converter.convert(Low, Arch::X64, BinaryFormat::COFF);
+    const MedOp *Bound = nullptr;
+    for (const auto &Block : Function.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::CALL)
+          Bound = &Op;
+    ASSERT_NE(Bound, nullptr);
+    EXPECT_EQ(Bound->CalleeRegisterArgs, 2);
+    EXPECT_EQ(Bound->CalleeVectorSlots, 0);
+    EXPECT_EQ(Bound->NumInputs, 3u);
+    if (Saved >= 6)
+      EXPECT_EQ(Bound->CalleeVectorArgs, 0);
+    else
+      EXPECT_NE(Bound->CalleeVectorArgs, 0);
+  }
+}
+
 TEST(SummarizedCallArguments, ScalarCallsDoNotAcquireIncidentalVectorState) {
   for (BinaryFormat Format :
        {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})

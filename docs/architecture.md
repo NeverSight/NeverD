@@ -2882,6 +2882,15 @@ Recovered indirect-call arguments retain separate integer and floating register 
 
 ## Manual PDB presentation boundary
 
+`lib/debug/PDBIdentity.h` owns RSDS build identity for full loading, symbol-store
+discovery and the pre-load public-name hint. A nonzero DBI age identifies the
+link; a zero DBI age falls back to Info. Republishing may advance Info, but
+DBI cannot be newer than Info. GUID and effective age must still match the PE.
+`PDBSectionIdentity.h` shares the native section checks: only a trailing
+resource/relocation suffix permits layout changes, and names and permissions
+must still agree. The name hint keeps its indexed GSI bucket lookup and does
+not construct a full debug context. NB10 retains its separate reader.
+
 `PDBDebugContext::inspect` owns manual PE/PDB validation. A missing CodeView
 identity allows machine- and section-checked inspection without changing the
 session. Present mismatched or ambiguous identities fail. After explicit user
@@ -9405,7 +9414,11 @@ computed on every path.
 argument bank. Entry recovery, outgoing call recovery, module propagation and
 LLVM emission use the same query. Win64 has four positional floating slots
 (XMM0-XMM3); saving XMM6/XMM7 must not create parameters or move the fifth
-integer argument away from its stack slot. SysV x64 retains XMM0-XMM7, and the
+integer argument away from its stack slot. The same holds at a call: a
+callee summary whose only vector reads are of registers the convention
+preserves (`CallArgumentConvention::VolatileVectorFamilies`; Win64 passes
+or clobbers XMM0-XMM5 only) still proves that the call takes no vector
+argument. SysV x64 retains XMM0-XMM7, and the
 ARM/AArch64 banks retain their architecture-specific lanes. Physical vector
 classification for intermediate values is separate from parameter membership.
 This follows Microsoft's [x64 calling convention](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention)
