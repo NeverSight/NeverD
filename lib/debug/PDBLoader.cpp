@@ -2578,7 +2578,16 @@ PDBDebugContext::dataSymbolsAround(va_t Addr) const {
     return {};
   if (PImpl->hasLazyPublics())
     return PImpl->publicsAround(Addr);
-  return DebugContext::dataSymbolsAround(Addr);
+  // What the default reads of allDataObjects(), whose objects are kept by
+  // their address: the last at or before Addr and the first after it.
+  std::lock_guard<std::mutex> Guard(PImpl->PublicMutex);
+  std::optional<va_t> Before, After;
+  const auto Next = PImpl->DataObjects.upper_bound(Addr);
+  if (Next != PImpl->DataObjects.end())
+    After = Next->first;
+  if (Next != PImpl->DataObjects.begin())
+    Before = std::prev(Next)->first;
+  return {Before, After};
 }
 
 std::optional<va_t> PDBDebugContext::precedingDataSymbol(va_t Addr) const {
