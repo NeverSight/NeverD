@@ -248,7 +248,9 @@ executor to one CPU and ordinary paged RAM for these protected-mode families:
 | INC, DEC, NEG, NOT | Register and memory forms. INC/DEC preserve CF; NOT preserves flags. |
 | SHL/SAL, SHR, SAR, ROL, ROR, RCL, RCR | Byte/word/dword registers and memory, implicit one, imm8 and CL counts, masked counts and independent code/address widths. Undefined CF/AF/OF choices are explicit. |
 | SHLD, SHRD | Word/dword destinations and register source, imm8/CL counts, explicit undefined state for narrow out-of-range counts. |
-| BT, BTS, BTR, BTC | Word/dword register or memory bit base, register or imm8 index. Memory register indices are signed word offsets; immediate indices stay within the base word. LOCK requires a separate atomic binding and remains refused. |
+| BT, BTS, BTR, BTC | Word/dword register or memory bit base, register or imm8 index. Memory register indices are signed word offsets; immediate indices stay within the base word. LOCK on BTS/BTR/BTC requires the exclusive-RAM binding below. |
+| XCHG, XADD, CMPXCHG | Byte/word/dword registers or segmented memory, every high-byte alias, accumulator-short XCHG forms and all six arithmetic flags for XADD/CMPXCHG. Memory XCHG always requires the atomic binding. |
+| CMPXCHG8B | Eight-byte segmented memory, full EDX:EAX comparison and ECX:EBX replacement, failed writeback and ZF-only flag changes; 66 does not shrink the operand. |
 | BSF, BSR | Word/dword register or memory source, partial GPR publication and architectural ZF. Zero-source destination and non-ZF CPU choices are explicit. |
 | CBW, CWDE, CWD, CDQ | Implicit AL/AX/EAX sign extension with independent code/operand widths; other register bits and all flags are preserved. |
 | LAHF, SAHF | Exact AH/status-bit transfer, reserved bits, and preservation of OF, DF and privileged flags. |
@@ -276,6 +278,28 @@ visible if the operand aliases its own PTE. Physical read or write denial
 remains a backing stop, distinct from an architectural exception. Segment
 checks precede paging and the selected alignment priority. Logical undefined
 AF choices become observable only on successful completion.
+
+`Atomics = ExclusiveRAM` additionally binds a step to exclusive ownership of
+the ordinary-RAM image, with no competing CPU, DMA, MMIO or split-lock/bus-lock
+trap producer. It admits memory XCHG's implicit locking and legal memory LOCK
+forms of ADD/ADC/SUB/SBB/AND/OR/XOR, INC/DEC/NEG/NOT, BTS/BTR/BTC,
+XCHG/XADD/CMPXCHG and CMPXCHG8B. Register destinations, read-only operations,
+HLE prefixes and unsupported LOCK combinations refuse before fetch. An absent
+or unknown binding also refuses before fetch; this model supplies no
+concurrent shared-memory synchronization contract.
+
+Exchanges snapshot source values and authenticate the destination before
+publishing registers. XADD's sum wins when both operands name the same
+register. CMPXCHG and CMPXCHG8B always prepare and commit a write, including
+when comparison fails; a failed comparison on read-only RAM therefore faults.
+Their original memory plan survives changes to an implicit accumulator or
+explicit source that also participates in addressing. CMPXCHG uses accumulator
+minus original destination for all six arithmetic flags. CMPXCHG8B compares
+both dwords, updates EDX:EAX together on failure and preserves all flags except
+ZF. Complete eight-byte bounds and permissions precede publication. The
+existing page-table A/D model remains observable when operands alias a PTE.
+These rules follow the XCHG, XADD, CMPXCHG, CMPXCHG8B and LOCK sections of
+[Intel SDM revision 093](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 
 DIV/IDIV additionally require `DivisionArithmeticFlags`, an explicit EFLAGS
 image containing only CF/PF/AF/ZF/SF/OF (`kX86LegacyArithmeticFlagsMask`).

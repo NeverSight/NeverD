@@ -19,7 +19,7 @@ std::optional<X86LegacyScalarInstruction>
 decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   using Op = X86LegacyScalarOperation;
   X86LegacyEncoding R(Bytes, Code32);
-  if (R.Group1Prefix)
+  if (R.Group1Prefix && R.Group1Prefix != 0xf0)
     return std::nullopt;
   X86LegacyScalarInstruction F;
   F.Bytes = F.SourceBytes = R.OperandBytes;
@@ -57,6 +57,17 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     Width(!(B & 1));
     F.Operation = B < 0x88 ? Op::Test : Op::Move;
     Binary(B >= 0x88 && (B & 2));
+  } else if (B == 0x86 || B == 0x87) {
+    Width(B == 0x86);
+    F.Operation = Op::Exchange;
+    Binary(false);
+  } else if (B >= 0x90 && B <= 0x97) {
+    // Keep the original unbound one-byte NOP interface in the step owner.
+    if (B == 0x90 && Bytes.size() == 1)
+      return std::nullopt;
+    F.Operation = Op::Exchange;
+    F.Destination.Register = 0;
+    F.Source.Register = B & 7;
   } else if (B >= 0xb0 && B <= 0xbf) {
     Width(B < 0xb8);
     F.Destination.Register = B & 7;
@@ -187,7 +198,17 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
               B == 0xeb || B < 0x80 || F.Bytes == 2);
   } else if (B == 0x0f) {
     const uint8_t Extended = R.byte();
-    if (Extended >= 0xc8 && Extended <= 0xcf) {
+    if (Extended == 0xb0 || Extended == 0xb1 || Extended == 0xc0 ||
+        Extended == 0xc1) {
+      Width(!(Extended & 1));
+      F.Operation = Extended < 0xc0 ? Op::CompareExchange : Op::ExchangeAdd;
+      Binary(false);
+    } else if (Extended == 0xc7) {
+      F.Operation = Op::CompareExchangePair;
+      F.Bytes = F.SourceBytes = 8;
+      if (R.modRM(F.Destination) != 1 || F.Destination.Register)
+        return std::nullopt;
+    } else if (Extended >= 0xc8 && Extended <= 0xcf) {
       // The architectural word form has no defined result.
       if (F.Bytes != 4)
         return std::nullopt;
@@ -246,6 +267,10 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   }
   if (!R.done())
     return std::nullopt;
+  if (R.Group1Prefix && !F.lockable())
+    return std::nullopt;
+  F.Atomic = R.Group1Prefix ||
+             (F.Operation == Op::Exchange && !F.Destination.Register);
   return F;
 }
 

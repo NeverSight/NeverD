@@ -153,6 +153,18 @@ faults, signal address/error and marker order. Set `NEVERD_TEST_NEVERC` to
 qualify the native builtin branch in addition to the stock compiler fallback.
 Run faulting fixtures in the private `/tmp` mount with core dumps disabled.
 
+`LegacyExchanges/*` compares XCHG/XADD/CMPXCHG/CMPXCHG8B and every admitted
+LOCK family against original instructions in legacy paging and PAE. Matrices
+cover all GPR/high-byte aliases, same-register XADD, accumulator and source
+address overlaps, both code/address widths, ignored CMPXCHG8B operand prefixes,
+all segment overrides, arithmetic flag boundaries, immediate forms, read-only
+and cross-page failures, alignment, and original page repair/IRET/retry.
+The fixture binds exclusive ordinary RAM and compares GPRs, flags, exception
+frames, CR2, operand bytes and successful operand A/D effects. Unit controls
+also check rejection before fetch and a compare-exchange operand that aliases
+its own PTE. Run the full paging suite when changing the shared memory plan;
+the exclusive profile does not qualify concurrent CPUs or lock-trap producers.
+
 `LegacyFastSystem/*` in `NeverDX86PagingTests` compares original protected
 SYSENTER/SYSEXIT under legacy paging and PAE, all CPLs, both code and stack
 sizes, nonflat entry, selector wrap, flags, caches and complete restart frames.

@@ -1,0 +1,429 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-04",
+  "scope": "Protected original-byte exchanges, legal LOCK forms and NeverC state-audit closure",
+  "global_goal_complete": false,
+  "instruction_contract": {
+    "ordinary_forms": [
+      "XCHG r/m8/16/32, r8/16/32 and accumulator short forms",
+      "XADD r/m8/16/32, r8/16/32",
+      "CMPXCHG r/m8/16/32, r8/16/32",
+      "CMPXCHG8B m64"
+    ],
+    "locked_memory_families": [
+      "ADD",
+      "ADC",
+      "SUB",
+      "SBB",
+      "AND",
+      "OR",
+      "XOR",
+      "INC",
+      "DEC",
+      "NEG",
+      "NOT",
+      "BTS",
+      "BTR",
+      "BTC",
+      "XCHG",
+      "XADD",
+      "CMPXCHG",
+      "CMPXCHG8B"
+    ],
+    "atomic_binding": "X86LegacyAtomicProfile::ExclusiveRAM",
+    "atomic_domain": "One CPU exclusively owns ordinary RAM throughout each step; no concurrent CPU, DMA, MMIO or split-lock/bus-lock trap producer.",
+    "fault_contract": "Write-permission checks and complete original-operand writeback occur even when compare-exchange fails. Eight-byte preflight precedes pair publication. Register/flag state rolls back on operand faults; prior page-table effects remain.",
+    "source": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
+    "source_revision": "Intel SDM 093, XCHG/XADD/CMPXCHG/CMPXCHG8B/LOCK"
+  },
+  "source_snapshots": {
+    "neverd": {
+      "base_commit": "92fd4f100d85fa77323ef93f9e21ec0d0c1c36d5",
+      "files": {
+        "include/neverd/translate/X86/X86LegacyExecution.h": "9ab433e056e768423f472d01bb750cb68f989a291a259dfb3354ee24ecca4584",
+        "lib/translate/X86/X86LegacyExecution.cpp": "bb8bcd522e741f7fd372a4591c2656111d68778515c3dc51c20f7fd89ccab4d2",
+        "lib/translate/X86/X86LegacyScalar.h": "7451ae418b9565cbc99b4a06f6c18e0f5632e213c7bfe8412d2a22c84abfde40",
+        "lib/translate/X86/X86LegacyScalarEncoding.cpp": "0b0bd5540d45f4700497f5e15b72bb4071fc44331e47fc942dccaf4d07ef81b4",
+        "lib/translate/X86/X86LegacyScalarExecution.cpp": "301c59f01bbb9c160f8f5c0b3a7dbe848fc72ecf4bfe951cf64123c6d2b16cdc",
+        "unittests/translate/x86/X86LegacyExecutionTests.cpp": "7250b7158e38b6e05609b48597d5e15d0694a1751fd0e5ce6eefa1e3e7610554",
+        "unittests/translate/x86/X86LegacyScalarNativeFixture.inc": "e9a30d00465aefa60cabf973424f2f564346b9dfe5b3b6f516796a8fdd4c8dcd",
+        "unittests/translate/x86/X86PagingNativeTests.cpp": "9e40e474e10136df2330fbfac78373520ae1340800586262cc9f05070bed35a0",
+        "unittests/translate/x86/X86LegacyExchangeNativeTests.inc": "0a7061d2c9e7d3388e2925d77c664961fa2a06f9853a55051bccdd917a932a03",
+        "unittests/translate/x86/X86LegacyExchangeTests.inc": "52a934955918cdcdc5e1626016a0465e6f300221d51532d492c5cb4079a71401"
+      }
+    },
+    "neverc": {
+      "base_commit": "a629ab8113573174247514da5a583968659e7dd7",
+      "files": {
+        "neverc/lib/Linker/Backends/ELF/Driver/ElfDriver.cpp": "ec41f486c8e917fd2185d110465155319e785723d3960632ad5e519523721c11",
+        "neverc/lib/Linker/Backends/ELF/FastPath/FastLink.cpp": "9a7add741d3442b75d43e13ef2732db1a4912079aab60420df35834406b6b699",
+        "neverc/lib/Linker/Backends/ELF/Transforms/MarkLive.cpp": "e277e9259717cecc71c26d37a3d57e463694c36bfd0de7e6bd120360e936891d",
+        "neverc/lib/Linker/Backends/MachO/Driver/MachODriver.cpp": "47a09f849251269c069aa450837beaea6282f8c1007da65b2b2b528ba4538ecf",
+        "neverc/lib/Linker/Core/Runtime/Session.cpp": "e70f83af56ca54da00fdf65f67605877ec37f5236fda30b12a9da22f2289c4e4",
+        "tests/neverc/LinkerTests.cpp": "8e298b981e1debb3ed7c0871c4cb1508a9a33b86a46338409f1ac7a847cafe17",
+        "utils/plugin-api/check-global-state.py": "47de135a293a103b62a7a99e5623e8673b3e53ac14ddfb60b4d05b47d709e4de",
+        "utils/plugin-api/global-state-allowlist.json": "340ebe5b47438caaf0538e5474f2279ee467f3a96c658d6be201ab355710b962",
+        "utils/plugin-api/tests/test-check-global-state.py": "53f051c6637a2fcd0a6d1a8111e17dd214eb70a3aac24ca5a5f02dad5ee0cc1c"
+      },
+      "tested_commit": "9d12c806209324fb7d964367980d0eb2327a56b2"
+    },
+    "llvm": {
+      "base_commit": "d31f0320dc89e677bae6a8721fd251e6856bf342",
+      "files": {}
+    }
+  },
+  "host": {
+    "vendor_id": "GenuineIntel",
+    "cpu family": "6",
+    "model": "186",
+    "model name": "13th Gen Intel(R) Core(TM) i9-13900H",
+    "stepping": "2",
+    "microcode": "0x6134",
+    "kernel": "7.0.0-42-generic",
+    "p_core": 0,
+    "e_core": 12
+  },
+  "neverd": {
+    "builds": [
+      {
+        "sdk": "native",
+        "command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86-native",
+          "--target",
+          "NeverDX86PagingTests",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "elapsed": 38.32462286949158,
+        "binary_sha256": "4d58b0016b0b9efa48002bce99c1966e220ade5bbc00981b8a7c9e8e3a5239c9"
+      },
+      {
+        "sdk": "r6",
+        "command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86",
+          "--target",
+          "NeverDX86PagingTests",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "elapsed": 42.38149452209473,
+        "binary_sha256": "7abe925fd8614f815cdee1e768f905c6195c18a0f7c971bf96de8f4bb4f3bac0"
+      }
+    ],
+    "profiles": [
+      {
+        "sdk": "native",
+        "cpu": "0",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIOR_SUPPORT_ARTIFACTS}/private_tmp.py",
+          "${ARTIFACTS}/final-neverd/native/p-core/tmp",
+          "env",
+          "TMPDIR=/tmp",
+          "taskset",
+          "-c",
+          "0",
+          "${ARTIFACTS}/final-neverd/native/NeverDX86PagingTests",
+          "--gtest_filter=*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACTS}/final-neverd/native/p-core/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity"
+        },
+        "exit_code": 0,
+        "elapsed": 681.1105136871338,
+        "binary_sha256": "4d58b0016b0b9efa48002bce99c1966e220ade5bbc00981b8a7c9e8e3a5239c9",
+        "tests": 357,
+        "failures": 0,
+        "errors": 0,
+        "disabled": 0,
+        "skipped": 1,
+        "LegacyExchanges_cpu_comparisons": 27600,
+        "LegacyBits_cpu_comparisons": 52096,
+        "LegacyDoubleShifts_cpu_comparisons": 38656,
+        "LegacyShifts_cpu_comparisons": 55944,
+        "LegacyImplicit_cpu_comparisons": 15232,
+        "LegacyConditions_cpu_comparisons": 25216,
+        "LegacyStatus_cpu_comparisons": 22016,
+        "LegacyMultiply_cpu_comparisons": 34560,
+        "LegacyDivision_cpu_comparisons": 46464,
+        "LegacyScalars_cpu_comparisons": 21280,
+        "LegacyFastSystem_cpu_comparisons": 4824
+      },
+      {
+        "sdk": "r6",
+        "cpu": "0",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIOR_SUPPORT_ARTIFACTS}/private_tmp.py",
+          "${ARTIFACTS}/final-neverd/r6/p-core/tmp",
+          "env",
+          "TMPDIR=/tmp",
+          "taskset",
+          "-c",
+          "0",
+          "${ARTIFACTS}/final-neverd/r6/NeverDX86PagingTests",
+          "--gtest_filter=*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACTS}/final-neverd/r6/p-core/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity"
+        },
+        "exit_code": 0,
+        "elapsed": 563.7382481098175,
+        "binary_sha256": "7abe925fd8614f815cdee1e768f905c6195c18a0f7c971bf96de8f4bb4f3bac0",
+        "tests": 357,
+        "failures": 0,
+        "errors": 0,
+        "disabled": 0,
+        "skipped": 1,
+        "LegacyExchanges_cpu_comparisons": 27600,
+        "LegacyBits_cpu_comparisons": 52096,
+        "LegacyDoubleShifts_cpu_comparisons": 38656,
+        "LegacyShifts_cpu_comparisons": 55944,
+        "LegacyImplicit_cpu_comparisons": 15232,
+        "LegacyConditions_cpu_comparisons": 25216,
+        "LegacyStatus_cpu_comparisons": 22016,
+        "LegacyMultiply_cpu_comparisons": 34560,
+        "LegacyDivision_cpu_comparisons": 46464,
+        "LegacyScalars_cpu_comparisons": 21280,
+        "LegacyFastSystem_cpu_comparisons": 4824
+      },
+      {
+        "sdk": "native",
+        "cpu": "12",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIOR_SUPPORT_ARTIFACTS}/private_tmp.py",
+          "${ARTIFACTS}/final-neverd/native/e-core/tmp",
+          "env",
+          "TMPDIR=/tmp",
+          "taskset",
+          "-c",
+          "12",
+          "${ARTIFACTS}/final-neverd/native/NeverDX86PagingTests",
+          "--gtest_filter=LegacyExchanges/*:LegacyBits/*:LegacyDoubleShifts/*:LegacyShifts/*:LegacyImplicit/*:LegacyConditions/*:LegacyStatus/*:LegacyMultiply/*:LegacyDivision/*:LegacyScalars/*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACTS}/final-neverd/native/e-core/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_CALL": "check",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero"
+        },
+        "exit_code": 0,
+        "elapsed": 799.4623143672943,
+        "binary_sha256": "4d58b0016b0b9efa48002bce99c1966e220ade5bbc00981b8a7c9e8e3a5239c9",
+        "tests": 128,
+        "failures": 0,
+        "errors": 0,
+        "disabled": 0,
+        "skipped": 0,
+        "LegacyExchanges_cpu_comparisons": 27600,
+        "LegacyBits_cpu_comparisons": 52096,
+        "LegacyDoubleShifts_cpu_comparisons": 38656,
+        "LegacyShifts_cpu_comparisons": 55944,
+        "LegacyImplicit_cpu_comparisons": 15232,
+        "LegacyConditions_cpu_comparisons": 25216,
+        "LegacyStatus_cpu_comparisons": 22016,
+        "LegacyMultiply_cpu_comparisons": 34560,
+        "LegacyDivision_cpu_comparisons": 46464,
+        "LegacyScalars_cpu_comparisons": 21280,
+        "LegacyFastSystem_cpu_comparisons": 0
+      },
+      {
+        "sdk": "r6",
+        "cpu": "12",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIOR_SUPPORT_ARTIFACTS}/private_tmp.py",
+          "${ARTIFACTS}/final-neverd/r6/e-core/tmp",
+          "env",
+          "TMPDIR=/tmp",
+          "taskset",
+          "-c",
+          "12",
+          "${ARTIFACTS}/final-neverd/r6/NeverDX86PagingTests",
+          "--gtest_filter=LegacyExchanges/*:LegacyBits/*:LegacyDoubleShifts/*:LegacyShifts/*:LegacyImplicit/*:LegacyConditions/*:LegacyStatus/*:LegacyMultiply/*:LegacyDivision/*:LegacyScalars/*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACTS}/final-neverd/r6/e-core/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_CALL": "check",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero"
+        },
+        "exit_code": 0,
+        "elapsed": 737.6259565353394,
+        "binary_sha256": "7abe925fd8614f815cdee1e768f905c6195c18a0f7c971bf96de8f4bb4f3bac0",
+        "tests": 128,
+        "failures": 0,
+        "errors": 0,
+        "disabled": 0,
+        "skipped": 0,
+        "LegacyExchanges_cpu_comparisons": 27600,
+        "LegacyBits_cpu_comparisons": 52096,
+        "LegacyDoubleShifts_cpu_comparisons": 38656,
+        "LegacyShifts_cpu_comparisons": 55944,
+        "LegacyImplicit_cpu_comparisons": 15232,
+        "LegacyConditions_cpu_comparisons": 25216,
+        "LegacyStatus_cpu_comparisons": 22016,
+        "LegacyMultiply_cpu_comparisons": 34560,
+        "LegacyDivision_cpu_comparisons": 46464,
+        "LegacyScalars_cpu_comparisons": 21280,
+        "LegacyFastSystem_cpu_comparisons": 0
+      }
+    ],
+    "test_executions": 970,
+    "passed": 968,
+    "skipped": 2,
+    "skip_reason": "LA57 unavailable on this hardware",
+    "new_unit_tests": 10,
+    "new_native_test_executions_per_profile": 18,
+    "new_original_instruction_comparisons": 110400,
+    "oracle": "Original instruction bytes in independent KVM legacy-paging and PAE states; compare GPRs, flags, exception frames, CR2, RAM and successful operand A/D. CPU choices for earlier undefined-result families remain explicitly bound.",
+    "coverage": [
+      "all GPR and high-byte aliases",
+      "same-register XADD destination wins",
+      "all arithmetic flag boundary pairs",
+      "memory source/base and implicit accumulator/base overlaps",
+      "code16/code32 and address16/address32 independently",
+      "all segment overrides and privilege cases",
+      "ignored CMPXCHG8B 66 prefix",
+      "register/immediate LOCK forms",
+      "read-only, alignment, cross-page and segment faults",
+      "original handler repair, IRET and retry",
+      "unbound and malformed refusal before fetch",
+      "prepared-store page-table alias unit control"
+    ]
+  },
+  "neverc": {
+    "commit": "9d12c806209324fb7d964367980d0eb2327a56b2",
+    "binaries": {
+      "neverc": "2bd7e45fffc5c6fcd2d9e5d04f70e6c4973807bf111abababf450411bb5933f3",
+      "neverc-tests": "ede466c79606b7be4c5536f40d4ff7dc7e72f0f425a92f116072de5a347fd8b2",
+      "neverc-plugin-link-tests": "e6434579482b17252468db54f8a7a471d6e50f99079063c07b16724bc1a0cd91"
+    },
+    "tests": [
+      {
+        "tests": 70,
+        "failures": 0,
+        "errors": 0,
+        "disabled": 0,
+        "report": "neverc-final/results.xml",
+        "skipped": 0
+      },
+      {
+        "tests": 17,
+        "failures": 0,
+        "errors": 0,
+        "disabled": 0,
+        "report": "neverc-tests/ownership.xml",
+        "skipped": 0
+      }
+    ],
+    "passed": 87,
+    "global_state_audit": {
+      "forbidden": [],
+      "heuristic": [],
+      "headers": [],
+      "source_globals": [],
+      "binary": [],
+      "unscannable": [],
+      "failed": false
+    },
+    "audit_self_test_checks": 481,
+    "python_plugins": "OFF in the qualified build; ON/OFF/absent/duplicate/invalid configuration and disabled-owner presence have explicit checker controls",
+    "resolved_findings": {
+      "previous_total": 10,
+      "gc_metadata": "UsedBit belongs to each MarkLive instance and is shared read-only by its marking jobs.",
+      "affinity": "Each pin request owns a fresh performance-core mask; no process cache.",
+      "lookup_tables": "Five small immutable tables are automatic constexpr objects.",
+      "array_scan": "An array-bound multiplication is not a pointer declarator; const inside a bound does not make a mutable array read-only.",
+      "python_owners": "The two existing owner entries require exactly one symbol when enabled and zero when disabled; no new allowlisted object."
+    },
+    "large_gc": "5,000 live functions, 5,000 dead functions and unwind references. Full ELF backend with one/two workers produces identical images, exact symbol counts and native exit 99."
+  },
+  "retained_diagnostics": [
+    {
+      "artifact": "build-neverc-gc-test.log",
+      "scope": "test harness",
+      "resolution": "Use the pruned LLVM SmallString error conversion supported by the existing test fixture."
+    },
+    {
+      "artifact": "neverc-gc/run.log",
+      "scope": "test harness",
+      "child_exit": 139,
+      "resolution": "The freestanding _start fixture needed -static; the same object relinked statically returned 99 before the final serial/parallel regression passed."
+    }
+  ],
+  "unchanged_release_boundary": {
+    "llvm_fork_commit": "d31f0320dc89e677bae6a8721fd251e6856bf342",
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "new_llvm_release": false
+  },
+  "remaining_boundaries": [
+    "General i386 NeverC frontend and NeverD source ABI",
+    "Other protected scalar/vector/string instruction families",
+    "Real/VM86 and task/call gates or nested-task IRET",
+    "Debug and deferred-debug event producers",
+    "Software SMM and SGX enclave/AEX/EPCM state",
+    "Complete CET/FRED, device and partial-progress environments",
+    "Exact A/D effects of faulting page walks",
+    "Multicore/shared-memory and split-lock/bus-lock trap models",
+    "Unavailable hardware qualification such as LA57/AMX/SGX/SVM/CET"
+  ],
+  "artifact_manifest": {
+    "file": "artifact-manifest.json",
+    "files": 98,
+    "sha256": "df075ce17df970b4789ad06d17131935715ccb15ef108d4452f2785c4bef0f65"
+  },
+  "checks": {
+    "neverd_docs": "309 Markdown files, 10 locales passed",
+    "neverd_source_provenance": "11,537 worktree files and newest 16 commits checked",
+    "neverd_format": "Changed C/C++ formatter check and git diff --check passed",
+    "neverc_docs_facts": "132 plugin pages and 11 release locales passed; 1,893 distinct citations",
+    "neverc_docs_links": "747 pages and 1,201 reference definitions passed; 82 existing unfinished translations remain outside this change"
+  }
+}

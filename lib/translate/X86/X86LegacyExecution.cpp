@@ -91,6 +91,9 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
         Scalar->Destination.Register && Scalar->Source.Immediate) &&
       Options.Scalars != X86LegacyScalarProfile::OrderedRAM)
     return invalid("legacy scalar step requires a bound ordinary-RAM profile");
+  if (Scalar && Scalar->Atomic &&
+      Options.Atomics != X86LegacyAtomicProfile::ExclusiveRAM)
+    return invalid("legacy atomic step requires a bound exclusive-RAM profile");
   if (FastSystem && Options.FastSystem != X86LegacyFastSystemProfile::IntelSEP)
     return invalid("legacy fast transfer requires a bound Intel SEP profile");
   if (Scalar && Scalar->logical() && !Options.LogicalAuxiliaryCarry)

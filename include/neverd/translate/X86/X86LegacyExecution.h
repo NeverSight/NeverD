@@ -73,6 +73,12 @@ enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
 /// stack advancement preserving high ESP on a word wrap.
 enum class X86LegacyScalarProfile : uint8_t { OrderedRAM };
 
+/// One CPU with exclusive access to the entire ordinary-RAM image for each
+/// step. No concurrent CPU, DMA, MMIO, split-lock or bus-lock trap producer.
+/// Locked operands use one prepared read/write plan, including failed
+/// compare-exchange. This is not a shared-memory synchronization primitive.
+enum class X86LegacyAtomicProfile : uint8_t { ExclusiveRAM };
+
 inline constexpr uint32_t kX86LegacyArithmeticFlagsMask = 0x8d5;
 inline constexpr uint32_t kX86LegacyShiftUndefinedFlagsMask = 0x811;
 inline constexpr uint32_t kX86LegacyBitTestUndefinedFlagsMask = 0x894;
@@ -146,6 +152,8 @@ struct X86LegacyExecutionOptions {
   /// Required for BSF/BSR; Flags may contain only CF/PF/AF/SF/OF.
   /// Faults retain the original destination and complete flag image.
   std::optional<X86LegacyBitScanChoices> BitScanChoices;
+  /// Required for explicit LOCK and implicit-lock memory XCHG.
+  std::optional<X86LegacyAtomicProfile> Atomics;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -185,7 +193,7 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// MUL/IMUL, DIV/IDIV, CBW/CWDE/CWD/CDQ, LAHF/SAHF, CLC/STC/CMC/CLD/STD,
 /// BSWAP (dword), XLAT, LEAVE, SETcc/CMOVcc, LOOP/LOOPcc/JCXZ/JECXZ,
 /// SHL/SAL/SHR/SAR, ROL/ROR/RCL/RCR, SHLD/SHRD,
-/// BT/BTS/BTR/BTC (without LOCK), BSF/BSR,
+/// BT/BTS/BTR/BTC, BSF/BSR, XCHG/XADD/CMPXCHG/CMPXCHG8B,
 /// PUSH/POP and near CALL/JMP/Jcc/RET.
 /// Register immediates
 /// retain their unbound interface; other scalars require Scalars, CALL requires
@@ -198,6 +206,9 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// Double shifts use DoubleShiftUndefined: only a word count above 16 consumes
 /// its result and full arithmetic-flags image; other counts retain all defined
 /// bits. Count zero still checks a memory destination's write permissions.
+/// Valid memory LOCK forms and memory XCHG additionally require Atomics.
+/// CMPXCHG/CMPXCHG8B check write permissions and write the original memory
+/// value on comparison failure. CMPXCHG8B changes only ZF among the flags.
 /// The explicit FastSystem profile adds protected
 /// SYSENTER/SYSEXIT with live Sysenter inputs and fixed CS/SS caches. Ignored
 /// prefixes retain 32-bit targets; LOCK delivers #UD after original-byte fetch.

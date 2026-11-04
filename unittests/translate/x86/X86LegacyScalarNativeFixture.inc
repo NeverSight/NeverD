@@ -21,6 +21,8 @@ protected:
   std::optional<X86LegacyDoubleShiftUndefinedState> DoubleShiftUndefined;
   std::optional<uint32_t> BitTestUndefinedFlags;
   std::optional<X86LegacyBitScanChoices> BitScanChoices;
+  std::optional<X86LegacyAtomicProfile> Atomics;
+  std::optional<uint32_t> MemoryHigh;
   bool CheckOperandPageEffects = false;
 
   void SetUp() override {
@@ -84,6 +86,8 @@ protected:
                                                    : 0xc100;
     const uint32_t Data = Offset + (Case == 3 ? 0x10000 : 0);
     put(Data, Left, 4);
+    if (MemoryHigh)
+      put(Data + 4, *MemoryHigh, 4);
     put(0xd100, (Case == 11 || Case == 14 || Case == 15) ? Target : Left, 4);
     if (Case == 1 || Case == 8 || Case == 12)
       put(PT + (Data >> 12) * PW, Data & ~4095u | 6, PW);
@@ -225,6 +229,7 @@ protected:
     Options.DoubleShiftUndefined = DoubleShiftUndefined;
     Options.BitTestUndefinedFlags = BitTestUndefinedFlags;
     Options.BitScanChoices = BitScanChoices;
+    Options.Atomics = Atomics;
     auto Expected = executeX86LegacyInstruction(State, *Memory, Bytes, Options);
     ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
     if (Case == 12 || Case == 18) {
@@ -284,7 +289,8 @@ protected:
     // image; qualify exact A/D only for successful operand translations.
     if (CheckOperandPageEffects && Expected->InstructionCompleted) {
       for (uint32_t Address :
-           {Offset, Offset + 3, Offset + 0x10000, Offset + 0x10003}) {
+           {Offset, Offset + (MemoryHigh ? 7 : 3), Offset + 0x10000,
+            Offset + (MemoryHigh ? 0x10007 : 0x10003)}) {
         const uint32_t PTE = PT + (Address >> 12) * PW;
         auto Got = Memory->physicalMemory().loadScalar(
             PTE, Legacy ? GuestScalarWidth::I32 : GuestScalarWidth::I64);

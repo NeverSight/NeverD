@@ -36,6 +36,10 @@ enum class X86LegacyScalarOperation {
   SetFlag,
   ComplementFlag,
   Address,
+  Exchange,
+  ExchangeAdd,
+  CompareExchange,
+  CompareExchangePair,
   Add,
   Or,
   AddCarry,
@@ -93,6 +97,36 @@ struct X86LegacyScalarInstruction {
   unsigned CounterBytes = 0;
   uint16_t Discard = 0;
   bool Relative = false;
+  bool Atomic = false;
+
+  bool lockable() const {
+    using Op = X86LegacyScalarOperation;
+    if (Destination.Register)
+      return false;
+    switch (Operation) {
+    case Op::Add:
+    case Op::Or:
+    case Op::AddCarry:
+    case Op::SubBorrow:
+    case Op::And:
+    case Op::Subtract:
+    case Op::Xor:
+    case Op::Increment:
+    case Op::Decrement:
+    case Op::Negate:
+    case Op::Complement:
+    case Op::BitSet:
+    case Op::BitReset:
+    case Op::BitComplement:
+    case Op::Exchange:
+    case Op::ExchangeAdd:
+    case Op::CompareExchange:
+    case Op::CompareExchangePair:
+      return true;
+    default:
+      return false;
+    }
+  }
 
   bool division() const {
     return Operation == X86LegacyScalarOperation::Divide ||

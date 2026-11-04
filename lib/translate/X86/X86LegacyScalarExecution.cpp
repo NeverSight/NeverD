@@ -147,6 +147,22 @@ public:
                  O.BitScanChoices->Flags | (!B ? 64 : 0);
       return;
     }
+    if (F.Operation == Op::CompareExchangePair) {
+      uint64_t Original;
+      if (!memory(F.Destination, 8, Original, MemoryOperation::ReadForUpdate))
+        return;
+      const bool Equal =
+          Original == ((uint64_t(S.Core.GPR[2]) << 32) | S.Core.GPR[0]);
+      const uint64_t Value =
+          Equal ? (uint64_t(S.Core.GPR[1]) << 32) | S.Core.GPR[3] : Original;
+      commitStore(8, Value);
+      if (!Equal) {
+        S.Core.GPR[0] = uint32_t(Original);
+        S.Core.GPR[2] = uint32_t(Original >> 32);
+      }
+      S.EFlags = (S.EFlags & ~64u) | (Equal ? 64 : 0);
+      return;
+    }
     if (F.Operation == Op::Push) {
       if (!read(F.Source, N, B))
         return;
@@ -187,8 +203,10 @@ public:
       return;
     }
 
-    const bool Compare = F.Operation == Op::Compare || F.Operation == Op::Test;
-    if (!read(F.Destination, N, A, !Compare))
+    const bool CompareExchange = F.Operation == Op::CompareExchange;
+    const bool Compare = F.Operation == Op::Compare ||
+                         F.Operation == Op::Test || CompareExchange;
+    if (!read(F.Destination, N, A, !Compare || CompareExchange))
       return;
     if (F.Operation == Op::Increment || F.Operation == Op::Decrement) {
       B = 1;
@@ -199,11 +217,27 @@ public:
       return;
     }
     const uint32_t Mask = UINT32_MAX >> (32 - N * 8);
+    if (F.Operation == Op::Exchange) {
+      if (write(F.Destination, N, B))
+        writeRegister(*F.Source.Register, N, A);
+      return;
+    }
+    if (CompareExchange) {
+      const uint32_t Expected = S.Core.GPR[0] & Mask;
+      // Even failure writes through the authenticated original address. The
+      // accumulator and source may alias the destination or its address base.
+      if (!write(F.Destination, N, Expected == A ? B : A))
+        return;
+      if (Expected != A)
+        writeRegister(0, N, A);
+      B = A;
+      A = Expected;
+    }
     const uint32_t Sign = (Mask >> 1) + 1;
     const bool Subtract =
         F.Operation == Op::Subtract || F.Operation == Op::SubBorrow ||
         F.Operation == Op::Compare || F.Operation == Op::Decrement ||
-        F.Operation == Op::Negate;
+        F.Operation == Op::Negate || CompareExchange;
     const bool CarryIn =
         (F.Operation == Op::AddCarry || F.Operation == Op::SubBorrow) &&
         (S.EFlags & 1);
@@ -218,6 +252,10 @@ public:
       Value = A ^ B;
     if (F.Operation == Op::Complement)
       Value = ~A & Mask;
+    // The destination wins when both XADD operands name the same register.
+    // A memory destination keeps its prepared address if the source is a base.
+    if (F.Operation == Op::ExchangeAdd)
+      writeRegister(*F.Source.Register, N, A);
     if (!Compare && !write(F.Destination, N, Value))
       return;
     if (F.Operation == Op::Complement)
@@ -497,14 +535,15 @@ private:
     return Conditions[Code >> 1] != bool(Code & 1);
   }
 
-  void commitStore(unsigned Bytes, uint32_t V) {
-    std::array<uint8_t, 4> Buffer{};
+  void commitStore(unsigned Bytes, uint64_t V) {
+    std::array<uint8_t, 8> Buffer{};
     for (unsigned I = 0; I != Bytes; ++I)
       Buffer[I] = V >> (I * 8);
     M.commitStore(*Store, llvm::ArrayRef(Buffer).take_front(Bytes));
   }
 
-  bool memory(const X86LegacyScalarOperand &A, unsigned Bytes, uint32_t &V,
+  template <typename UInt>
+  bool memory(const X86LegacyScalarOperand &A, unsigned Bytes, UInt &V,
               MemoryOperation Operation) {
     if (Store && Operation == MemoryOperation::Store) {
       commitStore(Bytes, V);
@@ -536,7 +575,7 @@ private:
                            false,
                            Segment == X86SegmentRegister::SS,
                            true};
-    std::array<uint8_t, 4> Buffer{};
+    std::array<uint8_t, 8> Buffer{};
     auto Span = llvm::MutableArrayRef(Buffer).take_front(Bytes);
     if (Write) {
       auto Prepared = M.prepareStore(Access, Bytes);
@@ -564,7 +603,7 @@ private:
       return fault(17);
     V = 0;
     for (unsigned I = 0; I != Bytes; ++I)
-      V |= uint32_t(Buffer[I]) << (I * 8);
+      V |= UInt(Buffer[I]) << (I * 8);
     return true;
   }
 

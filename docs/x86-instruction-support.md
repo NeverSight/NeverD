@@ -3829,7 +3829,7 @@ the explicitly bound MOV/arithmetic/logic/stack/near-control scalar subset,
 full/truncated MUL/IMUL, full-dividend DIV/IDIV, NOP, CLI/STI,
 CBW/CWDE/CWD/CDQ, LAHF/SAHF, CLC/STC/CMC/CLD/STD, SETcc/CMOVcc,
 BSWAP (dword), XLAT, LEAVE, SHL/SAL/SHR/SAR, ROL/ROR/RCL/RCR,
-SHLD/SHRD, BT/BTS/BTR/BTC (without LOCK), BSF/BSR,
+SHLD/SHRD, BT/BTS/BTR/BTC, BSF/BSR, XCHG/XADD/CMPXCHG/CMPXCHG8B,
 LOOP/LOOPcc/JCXZ/JECXZ, INT/INT3/INTO/INT1,
 UD2, protected
 16/32-bit IRET/RETF and Intel SEP SYSENTER/SYSEXIT. It is not a general i386
@@ -3861,8 +3861,9 @@ compatibility APIs retain their separate native LOCK operations.
 LLVM-to-C validates those contracts and emits the new builtins when available;
 its stock-compiler fallback keeps the same native instruction. The protected
 ordinary-RAM executor separately owns word/dword BT/BTS/BTR/BTC and BSF/BSR,
-including complete operand faults and original repair/IRET/retry. LOCK and
-REP-prefixed count instructions are not silently folded into that profile.
+including complete operand faults and original repair/IRET/retry. LOCK now
+requires the additional exclusive-RAM binding described below; REP-prefixed
+count instructions remain outside this profile.
 Compiler code16 checks use LLVM's 32-bit pointer/stack ABI; compiler runtime
 checks cover i386/x64, while NeverC's frontend remains x64-only. None of these
 interfaces supplies a complete architectural flag or asynchronous-event API.
@@ -3870,3 +3871,33 @@ interfaces supplies a complete architectural flag or asynchronous-event API.
 [Qualification evidence](evidence/x86-legacy-bits-2026-11-03.json) records the
 native comparisons, compiler paths, retained diagnostics and open boundaries.
 The global completion and final LLVM release/pin gates remain open.
+
+### Protected exchanges and explicit LOCK execution
+
+The protected scalar owner now executes XCHG, XADD, CMPXCHG and CMPXCHG8B
+with original-byte authentication, complete register overlap handling and
+restartable operand faults. Failed compares retain the original memory write;
+CMPXCHG8B checks all eight bytes and changes only ZF among the flags.
+`X86LegacyAtomicProfile::ExclusiveRAM` additionally admits implicit-lock
+memory XCHG and the eighteen legal legacy memory LOCK families. It binds one
+CPU with exclusive ordinary RAM and excludes competing CPUs, DMA, MMIO and
+split-lock/bus-lock trap producers. This is a separate execution contract from
+native compiler atomic code generation.
+
+Both LLVM SDK profiles pass their complete P-core paging suite and E-core
+scalar suite: 968 successful checks and two explicit LA57 hardware skips.
+The new exchange matrices contribute 110,400 original-instruction comparisons
+across those four profiles. The accompanying NeverC changes move GC bit-layout
+state into each marking instance, keep affinity observations call-local, and
+make the global-state audit honor the actual Python build configuration.
+All ten previously retained findings are resolved without adding allowlisted
+objects; 481 checker controls and 87 compiler/linker/ownership tests pass.
+The large GC fixture retains 5,000 live functions, drops 5,000 dead ones and
+produces identical serial/parallel executables with the expected native result.
+
+[November 4 evidence](evidence/x86-legacy-exchanges-2026-11-04.json) records
+source/tool identities, actual counts, configurations and retained fixture
+diagnostics. General i386 source ABI, the remaining scalar/vector/string
+families, task/call gates, real/VM86, debug-event production, SMM/SGX state and
+exact faulting-walk A/D behavior remain separate completion work. The final
+LLVM release, production SDK pin and LLVM gitlink remain gated on that work.

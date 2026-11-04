@@ -70,6 +70,12 @@ BT/BTS/BTR/BTC reuse that owner after resolving a signed register bit index
 to an address-sized word offset. Immediate indices stay within the base word.
 BSF/BSR read before publishing their GPR and ZF; their zero-source result and
 non-ZF CPU choices are explicit inputs, independent of every nonzero index.
+XCHG/XADD/CMPXCHG and CMPXCHG8B share the same operand plan. The scalar owner
+captures every aliased source before publishing GPRs, preserves failed
+comparison writeback and preflights the full eight-byte pair. The execution
+entry requires an explicit exclusive-RAM profile for memory XCHG and valid
+memory LOCK forms; prefix admission belongs only to the scalar grammar.
+No concurrent RAM observer or lock-trap producer is supplied by that profile.
 Segment permissions and page walks remain in their existing owners. A scalar
 read/modify/write prepares write permission once, reads those exact physical
 fragments through `X86PagedMemory::loadPreparedStore`, and commits the final
