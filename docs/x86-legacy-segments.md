@@ -483,6 +483,8 @@ These replays perform 154,624 double-shift and 223,776 single-shift/rotate CPU
 comparisons. Production source and both translate-library archives remain
 identical to the full-suite qualification; final test sources and binaries
 are separately hashed.
+After merging the subsequent dev loader/pipeline changes, both rebuilt paging
+test executables remain byte-identical to those final qualified binaries.
 
 The same record checks NeverC's existing x64 Microsoft-compatible
 `__shiftleft128`/`__shiftright128` interfaces at O0/O2: their LLVM funnel-shift

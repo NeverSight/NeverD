@@ -7,7 +7,7 @@
   "tested_base_commit": "faf5d65fce285ad7579125ba843f325862fe0a5a",
   "tested_tree": "483b1538bf5b837714c4bd3542b9bb97401bfe56",
   "tested_worktree_patch_sha256": "fec99c72f7f41caede5c0fa45970e99b1ae902bee65ffdb439b8d62de578c7fa",
-  "source_basis": "The initial full-suite snapshot is retained with its source/patch/tree and frozen binaries. The subsequent test-only initial-memory consolidation and added nonflat SS regression are separately qualified below. Production source and translate-library archives are unchanged. Final source and copied/live binary hashes are checked after all affected tests; later edits are documentation only.",
+  "source_basis": "The initial full-suite snapshot is retained with its source/patch/tree and frozen binaries. The subsequent test-only initial-memory consolidation and added nonflat SS regression are separately qualified below. Production source and translate-library archives are unchanged. Final source and copied/live binary hashes are checked after all affected tests; later edits are documentation only. Subsequent dev loader/pipeline integration preserves both final qualified executable hashes; its build receipts are retained separately.",
   "source_inputs_sha256": {
     "include/neverd/translate/X86/X86LegacyExecution.h": "3d208339969e51e1f875a420e0b9bbd5f3f59e22812bcde435166f7c1d72c9f3",
     "lib/translate/X86/X86LegacyExecution.cpp": "e116d20dba7984d5e17ff58ee1174d6c642c0131cae4918684f492fe4fedee21",
@@ -525,8 +525,8 @@
     "This adds no new native LLVM/NeverC builtin API or general i386 source frontend. Other unlisted scalar and machine-state families remain separate work.",
     "LA57 is unavailable. Real/VM86, tasks/call gates, debug producers, software SMM/enclave/AEX/EPCM and complete CET/FRED/event domains remain unqualified. The production SDK and LLVM gitlink are unchanged; global completion and final release/pin remain open."
   ],
-  "artifact_count": 211,
-  "artifact_manifest_sha256": "1b2af335f7831651ead3eb8a779c38adc4801c1411fe61fd5c7d48d4c7bc6b83",
+  "artifact_count": 227,
+  "artifact_manifest_sha256": "3a1109fdca44509f4b49d20942113fc92ea271ee5181f76832c10f7e26b8540e",
   "path_normalization": "Public commands/diagnostics use ${NEVERD_WORKTREE} and ${NEVERC_WORKTREE}; original local logs remain in the hashed artifact root.",
   "test_input_integration": {
     "scope": "Match both the original [BX]/[EBX] memory input and the register/memory operand form in single/double-shift observers; nonflat SS uses the zero-based untouched operand. Add nonzero single-shift count boundaries under SS, then rerun all affected shift families on both SDKs and cores, plus all 102 legacy unit checks on each SDK.",
@@ -905,6 +905,48 @@
         "sdk": "r6",
         "cpu": "12",
         "exit_code": -15
+      }
+    ]
+  },
+  "upstream_integration": {
+    "feature_commit": "50272082e5326de8d2bf81db0713d074ea446a87",
+    "merge_commit": "fa10a7bcf407e9d0ab9ba739cd5c22eb40d43d0a",
+    "upstream_commit": "cdf4c2a6e2f27596a0d08008b4b8602840642144",
+    "scope": "Integrate the dev COFF table-proof and pipeline omitted-callee signature changes. Both SDK builds succeed and their paging test executables are byte-identical to the final affected-test qualification. Executable source hashes and translate-library archives also remain unchanged.",
+    "builds": [
+      {
+        "sdk": "native",
+        "command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86-native",
+          "--target",
+          "NeverDX86PagingTests",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "elapsed": 14.064258337020874,
+        "before_sha256": "ad73e34eda359d4895b55b0d1479572e523cc9604a84500c338e0da8d10d2472",
+        "after_sha256": "ad73e34eda359d4895b55b0d1479572e523cc9604a84500c338e0da8d10d2472",
+        "identical": true
+      },
+      {
+        "sdk": "r6",
+        "command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86",
+          "--target",
+          "NeverDX86PagingTests",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "elapsed": 15.890272855758667,
+        "before_sha256": "88cb6763caeb3e7a1302530f1f51f61e16b4a1d523e50fb9593b1473404de2ae",
+        "after_sha256": "88cb6763caeb3e7a1302530f1f51f61e16b4a1d523e50fb9593b1473404de2ae",
+        "identical": true
       }
     ]
   }
