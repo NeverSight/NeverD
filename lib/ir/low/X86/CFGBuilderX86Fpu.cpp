@@ -292,6 +292,9 @@ struct X87CallGraphStep {
   std::optional<va_t> Callee;
   bool Unknown = false;
   bool ChangesControl = false;
+  /// Whether Callee names an import (importCalleeName), a fact of the image
+  /// the graph was built from: every build that reads the graph shares it.
+  bool CalleeImport = false;
 };
 struct X87CallGraphBlock {
   std::vector<X87CallGraphStep> Steps;
@@ -1459,6 +1462,8 @@ class X87CallEffectIndex {
             else
               S.Callee = loadedCallSlot(F, Source, O, Op.Inputs[0]);
             S.Unknown |= !S.Callee;
+            S.CalleeImport =
+                S.Callee && !importCalleeName(Image, *S.Callee).empty();
           }
           B.Returns |= Op.Opcode == NdOp::RETURN;
         }
@@ -1665,14 +1670,17 @@ public:
     Query Q;
     std::set<va_t> Active;
     std::map<va_t, bool> Done;
-    std::function<std::optional<bool>(va_t, unsigned)> Visit =
-        [&](va_t Address, unsigned Depth) -> std::optional<bool> {
+    // A call step's graph already knows whether its callee is an import;
+    // only the entry is asked here.
+    std::function<std::optional<bool>(va_t, unsigned, std::optional<bool>)>
+        Visit = [&](va_t Address, unsigned Depth,
+                    std::optional<bool> Import) -> std::optional<bool> {
       if (!Q.pay(1) || Depth >= limits::kMaxX87CallProofDepth ||
           Active.size() >= limits::kMaxX87CallProofFunctions)
         return std::nullopt;
       if (auto It = Done.find(Address); It != Done.end())
         return It->second;
-      if (!importCalleeName(Image, Address).empty())
+      if (Import ? *Import : !importCalleeName(Image, Address).empty())
         return false;
       if (!Active.insert(Address).second)
         return std::nullopt;
@@ -1688,7 +1696,7 @@ public:
       for (const Block &B : G.Blocks)
         for (const Step &S : B.Steps)
           if (S.Callee) {
-            const auto Callee = Visit(*S.Callee, Depth + 1);
+            const auto Callee = Visit(*S.Callee, Depth + 1, S.CalleeImport);
             // Ownership needs one definite witness, unlike a net TOP proof
             // that must understand every call. An unresolved sibling cannot
             // erase an observed requirement or decide it absent.
@@ -1703,7 +1711,7 @@ public:
       Done[Address] = false;
       return false;
     };
-    return Visit(Entry, 0);
+    return Visit(Entry, 0, std::nullopt);
   }
   void prepareCalls(const LowFunc &F, bool ContextOwnership = false) {
     const auto &Cache = Settings.SharedX87CallGraphs;

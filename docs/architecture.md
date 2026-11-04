@@ -10532,7 +10532,9 @@ checks the builder's settings against the cache's frozen context; one CFG
 build compares the inventories its builder borrows with each context once,
 since neither changes during the build, and checks the rest every time. Each query
 still independently bounds and pays for its complete call closure and dataflow
-work; caller-dependent answers are not shared. A completely lifted, nontruncated
+work; caller-dependent answers are not shared.
+A graph's call steps record whether each callee is an import, a fact of the
+image the graph was built from. A completely lifted, nontruncated
 CFG with exceptional edges, a block without any successor, return or modeled
 stop, invalid boundaries or successors, or more work than the fixed graph-size
 limit may retain an empty refusal marker: each is a fact of that CFG, so a later
