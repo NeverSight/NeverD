@@ -59,6 +59,12 @@ CLC/STC/CMC/CLD/STD across both code widths, stack widths, CPL0..3 and legacy
 paging/PAE. It compares all represented state and RAM, including unaffected
 register/flag bits and ignored operand/address/segment prefixes. Unit cases
 also verify binding, malformed extents and fetch faults before publication.
+`LegacyConditions/*` checks all sixteen SETcc/CMOVcc conditions against every
+CF/PF/ZF/SF/OF image, register aliases, ignored SETcc reg fields, partial writes,
+unconditional CMOV source faults, exact SETcc byte stores and original page
+repair/IRET/retry. LOOP/LOOPcc and JCXZ/JECXZ compare address/operand/code widths,
+CX/ECX wrap, high EIP, both directions, unchanged flags and restart on target
+limit faults. The shared scalar fixture accepts an explicit instruction PC.
 
 `LegacyReturns/*` in `NeverDX86PagingTests` compares original protected IRET,
 RETF and RETF imm16 across legacy paging/PAE, all CPLs, 16/32-bit code,

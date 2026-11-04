@@ -34,6 +34,30 @@ public:
     S.EIP = Fallthrough;
     uint32_t A = 0, B = 0;
     const unsigned N = F.Bytes;
+    if (F.Operation == Op::SetCondition) {
+      write(F.Destination, 1, condition(F.Condition));
+      return;
+    }
+    if (F.Operation == Op::ConditionalMove) {
+      // The native source access precedes the condition, even when false.
+      if (read(F.Source, N, B) && condition(F.Condition))
+        writeRegister(*F.Destination.Register, N, B);
+      return;
+    }
+    if (F.Operation == Op::Loop || F.Operation == Op::CounterZeroJump) {
+      const uint32_t Mask = F.CounterBytes == 2 ? UINT16_MAX : UINT32_MAX;
+      uint32_t Count = S.Core.GPR[1] & Mask;
+      bool Take = !Count;
+      if (F.Operation == Op::Loop) {
+        Count = (Count - 1) & Mask;
+        writeRegister(1, F.CounterBytes, Count);
+        Take = Count &&
+               (F.Condition == 2 || bool(S.EFlags & 64) == bool(F.Condition));
+      }
+      if (Take)
+        branch(Fallthrough + *F.Source.Immediate, N);
+      return;
+    }
     if (F.Operation == Op::FlagsToAH || F.Operation == Op::AHToFlags) {
       constexpr uint32_t StatusMask = kX86LegacyArithmeticFlagsMask & ~0x800u;
       if (F.Operation == Op::FlagsToAH)

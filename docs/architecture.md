@@ -76,6 +76,11 @@ The same scalar owner handles CBW/CWDE and CWD/CDQ without changing flags,
 LAHF/SAHF with exact AH/status-bit ownership, and CLC/STC/CMC/CLD/STD without
 touching unrelated flags. Operand width selects sign extension independently
 of code width; ignored segment/address prefixes do not create memory accesses.
+SETcc and CMOVcc reuse the same condition evaluator as Jcc. SETcc owns one
+byte store; CMOVcc reads its source before evaluating the condition, retaining
+faults even when false. LOOP/LOOPcc and JCXZ/JECXZ keep address-sized CX/ECX
+selection separate from operand-sized target truncation. A target fault discards
+the staged loop decrement; flags stay unchanged on successful completion.
 `translate/X86/X86LegacyFastSystem` owns protected SYSENTER/SYSEXIT with an
 explicit Intel SEP binding and low MSR inputs. It authenticates ignored
 prefixes through the same strict reader and classifies LOCK as #UD after

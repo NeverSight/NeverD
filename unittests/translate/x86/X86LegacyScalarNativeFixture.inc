@@ -35,12 +35,14 @@ protected:
                bool Stack32 = true, unsigned CPL = 3, unsigned Case = 0,
                uint32_t Left = 0x12345678, uint32_t Right = 0x80,
                uint32_t Flags = 0x202, uint32_t Target = 0x4000,
-               uint32_t HighDividend = 0x22334455) {
+               uint32_t HighDividend = 0x22334455,
+               uint32_t InstructionPC = Code) {
     using namespace neverd;
     SCOPED_TRACE(testing::Message()
                  << "code32=" << Code32 << " stack32=" << Stack32
-                 << " cpl=" << CPL << " case=" << Case << " left=" << std::hex
-                 << Left << " right=" << Right << " flags=" << Flags);
+                 << " cpl=" << CPL << " case=" << Case << " pc=" << std::hex
+                 << InstructionPC << " left=" << Left << " right=" << Right
+                 << " flags=" << Flags);
     SCOPED_TRACE(testing::PrintToString(Bytes));
     const bool Legacy = GetParam() == 2;
     const unsigned PW = Legacy ? 4 : 8;
@@ -69,8 +71,8 @@ protected:
       RAM[Entry + 11] = 0xe9;
       put(Entry + 12, Stop - Entry - 16, 4);
     }
-    std::copy(Bytes.begin(), Bytes.end(), RAM + Code);
-    RAM[Code + Bytes.size()] = RAM[Target] = RAM[Stop] = 0xf4;
+    std::copy(Bytes.begin(), Bytes.end(), RAM + InstructionPC);
+    RAM[InstructionPC + Bytes.size()] = RAM[Target] = RAM[Stop] = 0xf4;
     const uint32_t Offset = Case == 7 || Case == 8 ? 0xc101
                             : Case == 16           ? 0xcfff
                                                    : 0xc100;
@@ -114,6 +116,10 @@ protected:
     Special.cs.db = Code32;
     if (Case == 14 || Case == 15)
       Special.cs.limit = 0x3fff;
+    if (Case == 19) {
+      Special.cs.g = 0;
+      Special.cs.limit = InstructionPC + 0x1f;
+    }
     Special.ds = Special.es = Special.ss = Special.fs = Special.gs =
         segment(32 | CPL, false, false, CPL);
     Special.ss.db = Stack32;
@@ -141,7 +147,7 @@ protected:
     Special.tr.type = 11;
     Special.tr.present = 1;
     kvm_regs Registers{};
-    Registers.rip = Code;
+    Registers.rip = InstructionPC;
     Registers.rsp = Case == 13 ? 0xabcd0000 : 0xd100;
     if (Case == 17) {
       const bool Operand32 = Code32 != (std::find(Bytes.begin(), Bytes.end(),
@@ -184,7 +190,7 @@ protected:
     State.TR = Cache(Special.tr);
     State.IDTRBase = IDT;
     State.IDTRLimit = 0x7ff;
-    State.EIP = Code;
+    State.EIP = InstructionPC;
     State.EFlags = Flags;
     State.CR2 = Special.cr2;
     X86PagingState Controls{.CR0 = Special.cr0,
@@ -220,7 +226,7 @@ protected:
         ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
         ASSERT_TRUE(Expected->InstructionCompleted);
       }
-      ASSERT_EQ(State.EIP, Code);
+      ASSERT_EQ(State.EIP, InstructionPC);
       Expected = executeX86LegacyInstruction(State, *Memory, Bytes, Options);
       ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
       ASSERT_TRUE(Expected->InstructionCompleted);
@@ -235,7 +241,7 @@ protected:
     ASSERT_EQ(ioctl(CPU, KVM_SET_REGS, &Registers), 0);
     kvm_guest_debug Debug{};
     Debug.control = KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP;
-    Debug.arch.debugreg[0] = Code + Bytes.size();
+    Debug.arch.debugreg[0] = InstructionPC + Bytes.size();
     Debug.arch.debugreg[1] = Target;
     Debug.arch.debugreg[2] = Stop;
     Debug.arch.debugreg[7] = 0x415;

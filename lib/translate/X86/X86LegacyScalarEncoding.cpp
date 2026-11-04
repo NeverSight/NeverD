@@ -147,6 +147,11 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     F.Operation = Op::Return;
     if (B == 0xc2)
       F.Discard = R.value(2);
+  } else if (B >= 0xe0 && B <= 0xe3) {
+    F.Operation = B == 0xe3 ? Op::CounterZeroJump : Op::Loop;
+    F.CounterBytes = R.AddressBytes;
+    F.Condition = B & 3;
+    Immediate(1, true);
   } else if (B == 0xe8 || B == 0xe9 || B == 0xeb || (B >= 0x70 && B <= 0x7f)) {
     F.Operation = B == 0xe8   ? Op::Call
                   : B >= 0xe8 ? Op::Jump
@@ -157,7 +162,16 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
               B == 0xeb || B < 0x80 || F.Bytes == 2);
   } else if (B == 0x0f) {
     const uint8_t Extended = R.byte();
-    if (Extended >= 0x80 && Extended <= 0x8f) {
+    if (Extended >= 0x40 && Extended <= 0x4f) {
+      F.Operation = Op::ConditionalMove;
+      F.Condition = Extended & 15;
+      F.Destination.Register = R.modRM(F.Source);
+    } else if (Extended >= 0x90 && Extended <= 0x9f) {
+      F.Operation = Op::SetCondition;
+      F.Condition = Extended & 15;
+      Width(true);
+      R.modRM(F.Destination); // The reg field is ignored for SETcc.
+    } else if (Extended >= 0x80 && Extended <= 0x8f) {
       F.Operation = Op::ConditionalJump;
       F.Condition = Extended & 15;
       F.Relative = true;
