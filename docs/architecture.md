@@ -10535,7 +10535,9 @@ context's frozen inventories are immutable and shared by its copies, so that
 comparison runs outside the lock, and a request built under the cache's context
 shares them instead of freezing them again. Each query
 still independently bounds and pays for its complete call closure and dataflow
-work; caller-dependent answers are not shared.
+work; caller-dependent answers are not shared. Within one build, a walk for
+x87 context ownership reads only graphs the build keeps from their first read
+and starts with its own allowance, so the build answers each entry's walk once.
 A graph's call steps record whether each callee is an import, a fact of the
 image the graph was built from. A completely lifted, nontruncated
 CFG with exceptional edges, a block without any successor, return or modeled

@@ -1154,6 +1154,10 @@ class X87CallEffectIndex {
   const BinaryImage &Image;
   std::map<va_t, std::shared_ptr<const Graph>> Graphs;
   std::map<va_t, std::optional<X87CallContract>> Answers;
+  /// usesContext's answer for each entry this index walked.  A walk reads
+  /// only graphs the index keeps from their first read (Graphs) and starts
+  /// with its own allowance, so walking the entry again repeats it.
+  std::unordered_map<va_t, std::optional<bool>> ContextAnswers;
   /// This build's comparisons of its builder's sets with the shared cache's
   /// contexts: the builder borrows the same sets for the whole build.
   X87ContextMatches ContextMatches;
@@ -1711,9 +1715,19 @@ public:
     return Dependencies;
   }
   std::optional<bool> usesContext(va_t Entry) {
+    if (const auto Known = ContextAnswers.find(Entry);
+        Known != ContextAnswers.end())
+      return Known->second;
+    const auto Answer = walkContextUse(Entry);
+    ContextAnswers.emplace(Entry, Answer);
+    return Answer;
+  }
+  std::optional<bool> walkContextUse(va_t Entry) {
     Query Q;
-    std::set<va_t> Active;
-    std::map<va_t, bool> Done;
+    // The callees on the walk's path, innermost last: one met again is a
+    // cycle.  At most kMaxX87CallProofDepth deep.
+    std::vector<va_t> Active;
+    std::unordered_map<va_t, bool> Done;
     // A call step's graph already knows whether its callee is an import;
     // only the entry is asked here.
     std::function<std::optional<bool>(va_t, unsigned, std::optional<bool>)>
@@ -1726,9 +1740,10 @@ public:
         return It->second;
       if (Import ? *Import : !importCalleeName(Image, Address).empty())
         return false;
-      if (!Active.insert(Address).second)
+      if (std::find(Active.begin(), Active.end(), Address) != Active.end())
         return std::nullopt;
-      llvm::scope_exit Leave([&] { Active.erase(Address); });
+      Active.push_back(Address);
+      llvm::scope_exit Leave([&] { Active.pop_back(); });
       const Graph &G = graph(Address);
       if (!G.Complete || !Q.pay(G.Cost))
         return std::nullopt;
