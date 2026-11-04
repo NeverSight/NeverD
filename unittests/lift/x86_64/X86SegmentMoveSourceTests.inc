@@ -7,23 +7,6 @@
 /// Segment moves share the pipeline/compilation fixture with system sources.
 //===----------------------------------------------------------------------===//
 
-namespace {
-void saveSegmentMoveArtifact(llvm::StringRef Name, llvm::StringRef Data) {
-  const char *Directory = std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR");
-  if (!Directory)
-    return;
-  ASSERT_FALSE(llvm::sys::fs::create_directories(Directory));
-  llvm::SmallString<128> Path(Directory);
-  llvm::sys::path::append(Path, Name);
-  std::error_code Error;
-  llvm::raw_fd_ostream File(Path, Error);
-  ASSERT_FALSE(Error);
-  File << Data;
-  File.close();
-  ASSERT_FALSE(File.has_error());
-}
-} // namespace
-
 TEST(X86SegmentMoveSource, EverySelectorSurvivesBothRoutesAndFormats) {
   for (auto A : {Arch::X86, Arch::X64})
     for (auto Format :
@@ -64,10 +47,10 @@ TEST(X86SegmentMoveSource, EverySelectorSurvivesBothRoutesAndFormats) {
                 "segment_" + std::to_string(unsigned(A)) + "_" +
                 std::to_string(unsigned(Format)) + "_" + std::to_string(NoOpt) +
                 "_" + std::to_string(Segment) + "_" + std::to_string(Read);
-            saveSegmentMoveArtifact(Name + ".high.c", High);
-            saveSegmentMoveArtifact(Name + ".llvm.c", C);
-            saveSegmentMoveArtifact(Name + ".ll", Native);
-            saveSegmentMoveArtifact(
+            saveX86SourceArtifact(Name + ".high.c", High);
+            saveX86SourceArtifact(Name + ".llvm.c", C);
+            saveX86SourceArtifact(Name + ".ll", Native);
+            saveX86SourceArtifact(
                 Name + ".o",
                 {reinterpret_cast<const char *>(Object.data()), Object.size()});
           }
@@ -202,7 +185,7 @@ TEST(X86SegmentMoveSource, NativeRegisterAndMemoryCallsCompileAcrossFormats) {
       std::string Source;
       llvm::raw_string_ostream Out(Source);
       ASSERT_TRUE(LLVMCEmitter().emit(Module, Out, Options));
-      saveSegmentMoveArtifact(Name + ".llvm.c", Source);
+      saveX86SourceArtifact(Name + ".llvm.c", Source);
       for (const auto &P : X86SegmentMoveInventory)
         EXPECT_NE(Source.find(P.Builtin), std::string::npos) << Source;
       if (llvm::Intrinsic::lookupIntrinsicID("llvm.x86.readseg")) {
@@ -210,9 +193,9 @@ TEST(X86SegmentMoveSource, NativeRegisterAndMemoryCallsCompileAcrossFormats) {
         const auto Object = Codegen().compile(*Copy, A, Format);
         ASSERT_TRUE(Object.Success);
         ASSERT_FALSE(Object.ObjectData.empty());
-        saveSegmentMoveArtifact(Name + ".o", {reinterpret_cast<const char *>(
-                                                  Object.ObjectData.data()),
-                                              Object.ObjectData.size()});
+        saveX86SourceArtifact(Name + ".o", {reinterpret_cast<const char *>(
+                                                Object.ObjectData.data()),
+                                            Object.ObjectData.size()});
       }
       llvm::SmallString<128> Input(Directory), Output(Directory),
           Errors(Directory);

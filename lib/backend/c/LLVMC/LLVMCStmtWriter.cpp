@@ -24,6 +24,7 @@
 #include "../render/X86/X86CompressExpand.h"
 #include "../render/X86/X86DivRem.h"
 #include "../render/X86/X86FPStateHelpers.h"
+#include "../render/X86/X86Flags.h"
 #include "../render/X86/X86FourSource.h"
 #include "../render/X86/X86Hle.h"
 #include "../render/X86/X86RepState.h"
@@ -4299,7 +4300,8 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
     return true;
   }
 
-  if (isX86VirtualizationNativeName(Callee->getName()) ||
+  if (x86FlagsNative(Callee->getName()) ||
+      isX86VirtualizationNativeName(Callee->getName()) ||
       isX86SystemStateNativeName(Callee->getName()) ||
       isX86SystemRegisterNativeName(Callee->getName()) ||
       isX86ScalarSystemNativeName(Callee->getName()) ||
@@ -4310,6 +4312,13 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
       Arguments.push_back(valueStr(Argument.get()));
     const bool ResultLive =
         !Call.getType()->isVoidTy() && valueFeedsPrintedUse(&Call);
+    if (const auto Code = renderX86FlagsCall(Opts.TheArch, Call,
+                                             ResultLive ? getName(&Call) : "",
+                                             ResultLive, Arguments)) {
+      emitIndent(Indent);
+      OS << Code->Code;
+      return true;
+    }
     if (const auto Code = renderX86SegmentMoveCall(
             Opts.TheArch, Call, ResultLive ? getName(&Call) : "", ResultLive,
             Arguments)) {
@@ -5603,6 +5612,13 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
           Opts.TheArch, Call, Name, ResultLive, ArgStrs)) {
     emitIndent(Indent);
     OS << AuthenticatedLoad->Code;
+    return true;
+  }
+  if (auto Flags =
+          renderX86FlagsCall(Opts.TheArch, Call, Name, ResultLive, ArgStrs)) {
+    emitIndent(Indent);
+    OS << Flags->Code;
+    HasCIntrinsics |= Flags->SetIntrinsics;
     return true;
   }
   if (auto Segment = renderX86SegmentMoveCall(Opts.TheArch, Call, Name,

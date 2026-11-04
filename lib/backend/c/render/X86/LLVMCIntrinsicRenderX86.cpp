@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86DescriptorState.h"
+#include "X86Flags.h"
 #include "X86ScalarSystem.h"
 #include "X86SystemRegister.h"
 
@@ -35,6 +36,38 @@
 #include <utility>
 
 namespace neverd {
+
+std::optional<InlineAsmRender>
+renderX86FlagsCall(Arch TheArch, const llvm::CallBase &Call,
+                   const std::string &ResultName, bool ResultLive,
+                   const std::vector<std::string> &Args) {
+  const auto *Callee = Call.getCalledFunction();
+  const auto P = Callee ? x86FlagsNative(Callee->getName()) : std::nullopt;
+  if (!P)
+    return std::nullopt;
+  const auto ID = llvm::Intrinsic::lookupIntrinsicID(P->LLVMName);
+  if (!P->supports(TheArch) || !ID || !Callee->isDeclaration() ||
+      Callee->getIntrinsicID() != ID || Call.getNumOperandBundles() ||
+      Call.getFunctionType()->isVarArg() ||
+      Call.getCallingConv() != llvm::CallingConv::C || Call.doesNotReturn() ||
+      Call.arg_size() != unsigned(P->write()) ||
+      Args.size() != Call.arg_size() ||
+      (P->write()
+           ? !Call.getType()->isVoidTy() ||
+                 !Call.getArgOperand(0)->getType()->isIntegerTy(8 * P->Bytes)
+           : !Call.getType()->isIntegerTy(8 * P->Bytes) ||
+                 (ResultLive && ResultName.empty())) ||
+      Call.getMemoryEffects() !=
+          llvm::Intrinsic::getAttributes(Call.getContext(), ID,
+                                         Call.getFunctionType())
+              .getMemoryEffects() ||
+      Callee->hasFnAttribute(llvm::Attribute::Speculatable) ||
+      Call.hasFnAttr(llvm::Attribute::Speculatable))
+    throw std::invalid_argument("unsupported x86 FLAGS call contract");
+  return InlineAsmRender{(!P->write() && ResultLive ? ResultName + " = " : "") +
+                             renderX86FlagsExpression(*P, Args) + ";\n",
+                         P->Bytes != 2};
+}
 
 std::optional<InlineAsmRender>
 renderX86TimestampCall(Arch TheArch, const llvm::CallBase &Call,
@@ -674,16 +707,19 @@ InlineAsmRender renderX86InlineAsm(Arch TheArch, const std::string &AsmStr,
     throw std::runtime_error("unsupported MXCSR inline assembly contract");
   }
 
-  // PUSHF/POPF of the whole EFLAGS image, as MedLLVM emits them.
-  if (llvm::StringRef(AsmStr).starts_with("pushf") && Args.empty()) {
-    std::string Result;
-    if (ResultLive && !ResultName.empty())
-      Result = ResultName + " = ";
-    return {Result + "__readeflags();\n", true};
-  }
-  if ((AsmStr == "pushq $0\n\tpopfq" || AsmStr == "pushl $0\n\tpopfl") &&
-      Args.size() == 1)
-    return {"__writeeflags(" + Args[0] + ");\n", true};
+  // Old SDKs retain the same exact-width fallback as the native calls.
+  for (const auto &P : X86FlagsNativeInventory)
+    if (AsmStr == P.Assembly) {
+      if (!P.supports(TheArch) || IsStructReturn ||
+          Args.size() != unsigned(P.write()) ||
+          (ResultLive && (P.write() || ResultName.empty())))
+        throw std::invalid_argument("unsupported x86 FLAGS assembly contract");
+      return {(!P.write() && ResultLive && !ResultName.empty()
+                   ? ResultName + " = "
+                   : "") +
+                  renderX86FlagsExpression(P, Args) + ";\n",
+              P.Bytes != 2};
+    }
 
   if (Mnemonic == "cpuid") {
     if (AsmStr != "cpuid" || !IsStructReturn || ResultName.empty() ||

@@ -14,6 +14,7 @@
 #include "../../UnalignedMemory.h"
 #include "X86DescriptorState.h"
 #include "X86FPStateHelpers.h"
+#include "X86Flags.h"
 #include "X86ScalarSystem.h"
 #include "X86SystemRegister.h"
 #include "X87NativeState.h"
@@ -1826,6 +1827,25 @@ std::string renderX86TypedIntrinsicCall(
   if (Call.IntrinsicId == I::CetRdSsp)
     llvm::report_fatal_error(
         "RDSSP C projection requires a caller-scoped full-GPR expression");
+  if (Call.IntrinsicId == I::Pushf || Call.IntrinsicId == I::Popf) {
+    const bool Write = Call.IntrinsicId == I::Popf;
+    const auto *Value =
+        Write && Call.Operands.size() == 1 ? Call.Operands[0].get() : nullptr;
+    const auto *Type =
+        Write ? Value ? Value->Type.get() : nullptr : Call.Type.get();
+    const auto P =
+        x86FlagsNative(Call.IntrinsicId, TheArch, Type ? Type->Size : 0);
+    if (!P || Type->Kind != NdTypeKind::Int || Call.DoesNotReturn ||
+        (Write && (!Call.Type || Call.Type->Kind != NdTypeKind::Void)) ||
+        Call.Operands.size() != unsigned(Write) ||
+        Call.MemoryOrdering != NdMemoryOrdering::None ||
+        Call.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      throw std::invalid_argument("invalid x86 FLAGS C contract");
+    HasCIntrinsics |= P->Bytes != 2;
+    return renderX86FlagsExpression(
+        *P, Write ? std::vector<std::string>{ExprFn(*Value)}
+                  : std::vector<std::string>{});
+  }
   if (isX86DescriptorStateIntrinsic(Call.IntrinsicId))
     return renderDescriptorStateExpression(TheArch, Call, ExprFn);
   if (isX86ScalarSystemIntrinsic(Call.IntrinsicId)) {

@@ -47,7 +47,8 @@ protected:
                uint32_t Flags = 0x202, uint32_t Target = 0x4000,
                uint32_t HighDividend = 0x22334455,
                uint32_t InstructionPC = Code,
-               std::optional<std::array<uint32_t, 8>> InputRegisters = {}) {
+               std::optional<std::array<uint32_t, 8>> InputRegisters = {},
+               std::function<void(kvm_sregs &, kvm_regs &)> Configure = {}) {
     using namespace neverd;
     SCOPED_TRACE(testing::Message()
                  << "code32=" << Code32 << " stack32=" << Stack32
@@ -96,14 +97,16 @@ protected:
       put(PT + (Data >> 12) * PW, Data & ~4095u | 6, PW);
     if (Case == 2)
       put(PT + (Data >> 12) * PW, Data & ~4095u | 5, PW);
-    if (Case == 9 || Case == 15 || Case == 16)
+    if (Case == 9 || Case == 15 || Case == 16 || Case == 21)
       put(PT + 13 * PW, 0xd006, PW);
     std::vector<std::vector<uint8_t>> Repair;
     auto RetryBytes = Bytes;
-    if (Case == 12) {
-      const uint32_t PTE = PT + (Data >> 12) * PW;
+    if (Case == 12 || Case == 21) {
+      const uint32_t Page = Case == 21 ? 0xd000 : Data & ~4095u;
+      const uint32_t PTE = PT + (Page >> 12) * PW;
       Repair = {{0xc7, 0x05, uint8_t(PTE), uint8_t(PTE >> 8),
-                 uint8_t(PTE >> 16), 0, 7, 0xc0, 0, 0},
+                 uint8_t(PTE >> 16), 0, uint8_t(Page | 7), uint8_t(Page >> 8),
+                 uint8_t(Page >> 16), 0},
                 {0x83, 0xc4, 4},
                 {0xcf}};
       uint32_t PC = 0x2000 + 14 * 16;
@@ -183,6 +186,8 @@ protected:
       put(uint16_t(Registers.rsp), Left, Width);
     }
     Registers.rflags = Flags;
+    if (Configure)
+      Configure(Special, Registers);
     const auto Cache = [](const kvm_segment &C) {
       return X86LegacySegmentCache{uint32_t(C.base), C.limit, C.selector,
                                    uint16_t(C.type | C.s << 4 | C.dpl << 5 |
@@ -205,6 +210,9 @@ protected:
     Registers.rbp = State.Core.GPR[5];
     Registers.rsi = State.Core.GPR[6];
     Registers.rdi = State.Core.GPR[7];
+    const uint32_t StackLinear =
+        Special.ss.base +
+        (Special.ss.db ? uint32_t(Registers.rsp) : uint16_t(Registers.rsp));
     for (unsigned I = 0; I != Segments.size(); ++I)
       State.Core.Segments[I] = Cache(*Segments[I]);
     State.Core.CPL = CPL;
@@ -268,8 +276,10 @@ protected:
     }
     auto Expected = executeX86LegacyInstruction(State, *Memory, Bytes, Options);
     ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
-    if (Case == 12 || Case == 18 || Case == 20) {
-      ASSERT_EQ(Expected->DeliveredVector, Case == 12 ? 14 : 0);
+    // At CPL0 an unmapped original stack also prevents #PF/#DF entry.
+    // Only an inner-ring stack switch can reach the Case 21 repair handler.
+    if (Case == 12 || Case == 18 || Case == 20 || (Case == 21 && CPL != 0)) {
+      ASSERT_EQ(Expected->DeliveredVector, Case == 12 || Case == 21 ? 14 : 0);
       for (const auto &I : Repair) {
         Expected = executeX86LegacyInstruction(State, *Memory, I, Options);
         ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
@@ -325,8 +335,17 @@ protected:
       ASSERT_EQ(PTE.Status, GuestMemoryAccessStatus::Completed);
       EXPECT_EQ(get(PT + 13 * PW, PW) & 0x60, PTE.Value & 0x60);
     }
+    const auto &FinalStack = State.Core.Segments[2];
+    const uint32_t FinalStackLinear =
+        FinalStack.Base + ((FinalStack.Attributes & 0x4000)
+                               ? State.Core.GPR[4]
+                               : uint16_t(State.Core.GPR[4]));
     for (unsigned Begin :
-         {0xaff0u - 16, 0xc0f0u, 0xcfe0u, 0xd0e0u, 0xffe0u, 0x1c0f0u}) {
+         {0xaff0u - 16, 0xc0f0u, 0xcfe0u, 0xd0e0u, 0xffe0u, 0x1c0f0u,
+          StackLinear >= 16 ? StackLinear - 16 : 0,
+          FinalStackLinear >= 16 ? FinalStackLinear - 16 : 0}) {
+      if (Begin > MemorySize - 64)
+        continue;
       for (unsigned I = 0; I != 64; ++I) {
         // The 16-bit wrapping stack can approach the page-directory page;
         // hardware translation caches make its A/D bits a separate contract.

@@ -23,6 +23,7 @@
 #include "../render/X86/X86AtomicRmw.h"
 #include "../render/X86/X86DescriptorState.h"
 #include "../render/X86/X86FPStateHelpers.h"
+#include "../render/X86/X86Flags.h"
 #include "../render/X86/X86ScalarSystem.h"
 #include "../render/X86/X86SystemRegister.h"
 #include "../render/X86/X86SystemState.h"
@@ -1612,6 +1613,12 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
       if (Opts.TheArch == Arch::X64 &&
           isX86DescriptorStateIntrinsic(Ex.IntrinsicId))
         NeedsX86DescriptorStateDispatch = true;
+      if ((Ex.IntrinsicId == Intrinsic::Pushf && Ex.Type &&
+           Ex.Type->Size == 2) ||
+          (Ex.IntrinsicId == Intrinsic::Popf && Ex.Operands.size() == 1 &&
+           Ex.Operands[0] && Ex.Operands[0]->Type &&
+           Ex.Operands[0]->Type->Size == 2))
+        NeedsX86Flags16Dispatch = true;
       if ((Opts.TheArch == Arch::X64 || Opts.TheArch == Arch::X86) &&
           isX86ScalarSystemIntrinsic(Ex.IntrinsicId))
         NeedsX86ScalarSystemDispatch = true;
@@ -5040,6 +5047,8 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
     OS << X86SegmentMoveCompilerDispatch;
   if (NeedsX86DescriptorStateDispatch)
     OS << X86DescriptorStateCompilerDispatch;
+  if (NeedsX86Flags16Dispatch)
+    OS << X86Flags16CompilerDispatch;
   if (NeedsX86ScalarSystemDispatch)
     OS << X86ScalarSystemCompilerDispatch;
   if (NeedsX86VirtualizationDispatch)

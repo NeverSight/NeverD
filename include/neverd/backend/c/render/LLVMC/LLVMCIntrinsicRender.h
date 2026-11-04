@@ -68,6 +68,11 @@ std::optional<X86RepMovs> classifyX86RepMovs(Arch TheArch,
                                              const llvm::CallInst &Call);
 
 //--- Arch-specific (LLVMCIntrinsicRenderX86.cpp) ---
+/// Preserve word POPF's upper flags and retain unused native reads.
+std::optional<InlineAsmRender>
+renderX86FlagsCall(Arch TheArch, const llvm::CallBase &Call,
+                   const std::string &ResultName, bool ResultLive,
+                   const std::vector<std::string> &Args);
 /// Render the native RDTSCP pair without losing its auxiliary result or read.
 std::optional<InlineAsmRender>
 renderX86TimestampCall(Arch TheArch, const llvm::CallBase &Call,

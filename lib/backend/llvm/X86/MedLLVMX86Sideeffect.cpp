@@ -20,6 +20,7 @@
 #include "neverd/backend/llvm/X86/LLVMX86X87StateAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX87NativeState.h"
 #include "neverd/backend/llvm/X86/X86DescriptorStateNative.h"
+#include "neverd/backend/llvm/X86/X86FlagsNative.h"
 #include "neverd/backend/llvm/X86/X86ScalarSystemNative.h"
 #include "neverd/backend/llvm/X86/X86SystemRegisterAsm.h"
 
@@ -765,19 +766,22 @@ bool MedLLVMEmitter::emitX86Privileged(const MedOp &Op, Intrinsic IC,
 
   // POPF writes the whole EFLAGS image, including the system flags.
   if (IC == I::Popf) {
-    if (Op.NumInputs != 2)
-      llvm::report_fatal_error("x86 POPF has no EFLAGS image");
-    const bool Wide = TargetArch == Arch::X64;
-    auto *AsmTy =
-        Wide ? llvm::Type::getInt64Ty(*Ctx) : llvm::Type::getInt32Ty(*Ctx);
-    llvm::Value *Flags =
-        Builder.CreateZExtOrTrunc(getVar(Op.Inputs[1], Builder), AsmTy);
-    auto *FnTy =
-        llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx), {AsmTy}, false);
-    auto *IA = llvm::InlineAsm::get(
-        FnTy, Wide ? "pushq $0\n\tpopfq" : "pushl $0\n\tpopfl",
-        "r,~{memory},~{dirflag},~{flags}", /*hasSideEffects=*/true);
-    markX86StackTemporary(*Builder.CreateCall(IA, {Flags}));
+    const auto P = x86FlagsNative(IC, TargetArch,
+                                  Op.NumInputs == 2 ? Op.Inputs[1].Size : 0);
+    if (!P || Op.Output.Size || Op.MemoryOrdering != NdMemoryOrdering::None ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      llvm::report_fatal_error("invalid x86 POPF image contract");
+    auto *Flags = getVar(Op.Inputs[1], Builder);
+    if (const auto ID = llvm::Intrinsic::lookupIntrinsicID(P->LLVMName)) {
+      Builder.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(Mod, ID),
+                         {Flags});
+    } else {
+      auto *FnTy = llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx),
+                                           {Flags->getType()}, false);
+      auto *IA = llvm::InlineAsm::get(FnTy, P->Assembly,
+                                      "r,~{memory},~{dirflag},~{flags}", true);
+      markX86StackTemporary(*Builder.CreateCall(IA, {Flags}));
+    }
     return true;
   }
 

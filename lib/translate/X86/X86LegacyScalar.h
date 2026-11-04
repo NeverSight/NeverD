@@ -77,6 +77,8 @@ enum class X86LegacyScalarOperation {
   SignedMultiplyLow,
   Push,
   Pop,
+  PushFlags,
+  PopFlags,
   Leave,
   Call,
   Jump,

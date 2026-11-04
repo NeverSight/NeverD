@@ -31,6 +31,7 @@
 #include "neverd/backend/llvm/X86/X86AmxAsm.h"
 #include "neverd/backend/llvm/X86/X86AmxNative.h"
 #include "neverd/backend/llvm/X86/X86DescriptorStateNative.h"
+#include "neverd/backend/llvm/X86/X86FlagsNative.h"
 #include "neverd/backend/llvm/X86/X86ScalarSystemNative.h"
 #include "neverd/backend/llvm/X86/X86SegmentMoveNative.h"
 #include "neverd/backend/llvm/X86/X86SgxAsm.h"
@@ -195,7 +196,8 @@ void sourceRoutes(BinaryImage &Image, bool NoOpt, va_t Address,
   }
   if (UsesForkNative)
     for (const auto &F : *Module)
-      *UsesForkNative |= isX86VirtualizationNativeName(F.getName()) ||
+      *UsesForkNative |= x86FlagsNative(F.getName()).has_value() ||
+                         isX86VirtualizationNativeName(F.getName()) ||
                          (isX86SystemStateNativeName(F.getName()) &&
                           F.getName() != "llvm.x86.xabort") ||
                          isX86ScalarSystemNativeName(F.getName()) ||
@@ -5715,4 +5717,22 @@ TEST(X86AmxSource, HighCRejectsMalformedBankOwnership) {
   }
 }
 
+namespace {
+void saveX86SourceArtifact(llvm::StringRef Name, llvm::StringRef Data) {
+  const char *Directory = std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR");
+  if (!Directory)
+    return;
+  ASSERT_FALSE(llvm::sys::fs::create_directories(Directory));
+  llvm::SmallString<128> Path(Directory);
+  llvm::sys::path::append(Path, Name);
+  std::error_code Error;
+  llvm::raw_fd_ostream File(Path, Error);
+  ASSERT_FALSE(Error);
+  File << Data;
+  File.close();
+  ASSERT_FALSE(File.has_error());
+}
+} // namespace
+
+#include "X86FlagsSourceTests.inc"
 #include "X86SegmentMoveSourceTests.inc"

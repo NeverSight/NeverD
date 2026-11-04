@@ -1266,6 +1266,7 @@ public:
   bool NeedsMsvcIntrinsics = false;
   bool NeedsX86SystemRegisterDispatch = false;
   bool NeedsX86ScalarSystemDispatch = false;
+  bool NeedsX86Flags16Dispatch = false;
   bool NeedsX86DescriptorStateDispatch = false;
   bool NeedsX86SegmentMoveDispatch = false;
   bool NeedsX86VirtualizationDispatch = false;

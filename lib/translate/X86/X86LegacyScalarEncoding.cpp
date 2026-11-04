@@ -131,6 +131,8 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     F.Destination.Register = B == 0x98 ? 0 : 2;
     if (B == 0x98)
       F.SourceBytes = F.Bytes / 2;
+  } else if (B == 0x9c || B == 0x9d) {
+    F.Operation = B == 0x9c ? Op::PushFlags : Op::PopFlags;
   } else if (B == 0x9e || B == 0x9f) {
     F.Operation = B == 0x9e ? Op::AHToFlags : Op::FlagsToAH;
   } else if (B == 0xf5 || B == 0xf8 || B == 0xf9 || B == 0xfc || B == 0xfd) {

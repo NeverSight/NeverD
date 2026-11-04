@@ -167,6 +167,27 @@ public:
       S.EFlags = (S.EFlags & ~64u) | (Equal ? 64 : 0);
       return;
     }
+    if (F.Operation == Op::PushFlags) {
+      adjustStack(-N);
+      write(stack(), N, S.EFlags & ~uint32_t{0x30000});
+      return;
+    }
+    if (F.Operation == Op::PopFlags) {
+      if (!read(stack(), N, A))
+        return;
+      // Original CPL/IOPL govern IF, even when the same pop changes IOPL.
+      // PVI does not redirect POPF to VIF. Word POPF also preserves AC/ID.
+      uint32_t Mask = 0x4dd5;
+      if (S.Core.CPL == 0)
+        Mask |= 0x3000;
+      if (S.Core.CPL <= ((S.EFlags >> 12) & 3))
+        Mask |= 0x200;
+      if (N == 4)
+        Mask |= 0x240000;
+      S.EFlags = (S.EFlags & ~Mask) | (A & Mask);
+      adjustStack(N);
+      return;
+    }
     if (F.Operation == Op::Push) {
       if (!read(F.Source, N, B))
         return;

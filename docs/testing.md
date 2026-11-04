@@ -100,6 +100,27 @@ operand grammar, and the x64 paged execution and continuation source/export
 suites on both SDKs after changing the shared paged-RAM owner. Repeat the new
 CPU matrix on the qualified E core; retain skips as missing coverage.
 
+`LegacyFlags/*` uses the scalar fixture for PUSHF/POPF word/dword images.
+It compares every CPL/IOPL pair, each flag bit, original AC/ID state, independent
+code/stack sizes, nonflat/wrapping stacks, ignored prefixes and CR4.PVI.
+Fault cases check old AC, complete operand permissions, original restart frames,
+handler PTE repair/IRET/retry, and CPL0 shutdown when its fault-entry stack is
+also unavailable. `X86LegacyExecutionTest` separately checks IRQ eligibility,
+SS/STI/NMI state and the next-step debug-producer requirement after restoring TF.
+
+`X86FlagsSource.*` in `NeverDX86VirtualizationSourceTests` checks both C routes
+and LLVM objects for all supported image widths, ELF/COFF/Mach-O and optimized
+or NoOpt lifting. It rejects malformed native/HighIR/assembly contracts and
+retains unused snapshots. Export with `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`;
+NeverC's `tests/verify-flags16-completion.py --source FILE --symbol FUNCTION`
+compiles each unchanged C file at O0/O2 and compares original word POPF for all
+TF-clear word inputs and four incoming AC/ID images. The witness restores host
+flags before C and rejects a deliberately widened write. It observes system
+flags, not arithmetic flags across an ordinary function ABI. Run this matrix
+with the native NeverC builtin and a stock Clang GNU fallback, separately from
+the original-state KVM matrix. LLVM frontend/code16 regressions and compiler
+stack/red-zone guards qualify their own interfaces.
+
 `LegacyDecimal/*` uses the same fixture for AAA/AAS/DAA/DAS/AAM/AAD. It checks
 every AL with incoming AF/CF, AH carry/borrow boundaries, every immediate base,
 ignored prefixes, all CPLs and both code/stack widths under legacy paging and

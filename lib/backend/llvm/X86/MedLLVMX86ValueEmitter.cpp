@@ -25,6 +25,7 @@
 #include "neverd/backend/llvm/X86/LLVMX87ContextAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX87GuardedValueAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX87ValueAsm.h"
+#include "neverd/backend/llvm/X86/X86FlagsNative.h"
 #include "neverd/backend/llvm/X86/X86SystemRegisterAsm.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -1576,16 +1577,19 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
   // PUSHF: the lifter merges the machine's unmodelled EFLAGS bits with the
   // modelled arithmetic flags.
   if (IC == I::Pushf && Op.Output.Size > 0) {
-    const bool Wide = TargetArch == Arch::X64;
-    auto *AsmTy =
-        Wide ? llvm::Type::getInt64Ty(*Ctx) : llvm::Type::getInt32Ty(*Ctx);
-    auto *FnTy = llvm::FunctionType::get(AsmTy, false);
-    auto *IA = llvm::InlineAsm::get(
-        FnTy, Wide ? "pushfq\n\tpopq $0" : "pushfl\n\tpopl $0", "=r,~{memory}",
-        /*hasSideEffects=*/true);
-    llvm::Value *Flags = Builder.CreateCall(IA, {}, "eflags");
-    markX86StackTemporary(*llvm::cast<llvm::CallInst>(Flags));
-    return Builder.CreateZExtOrTrunc(Flags, sizeToType(Op.Output.Size));
+    const auto P = x86FlagsNative(IC, TargetArch, Op.Output.Size);
+    if (!P || Op.NumInputs != 1 ||
+        Op.MemoryOrdering != NdMemoryOrdering::None ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      llvm::report_fatal_error("invalid x86 PUSHF image contract");
+    if (const auto ID = llvm::Intrinsic::lookupIntrinsicID(P->LLVMName))
+      return Builder.CreateCall(
+          llvm::Intrinsic::getOrInsertDeclaration(Mod, ID), {}, "eflags");
+    auto *FnTy = llvm::FunctionType::get(sizeToType(P->Bytes), false);
+    auto *IA = llvm::InlineAsm::get(FnTy, P->Assembly, "=r,~{memory}", true);
+    auto *Flags = Builder.CreateCall(IA, {}, "eflags");
+    markX86StackTemporary(*Flags);
+    return Flags;
   }
 
   if (IC == I::Ldmxcsr || IC == I::Leave || IC == I::Enter || IC == I::Popf)

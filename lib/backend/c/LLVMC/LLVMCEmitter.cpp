@@ -30,6 +30,7 @@
 #include "../render/X86/X86CompressExpand.h"
 #include "../render/X86/X86DescriptorState.h"
 #include "../render/X86/X86FPStateHelpers.h"
+#include "../render/X86/X86Flags.h"
 #include "../render/X86/X86FourSource.h"
 #include "../render/X86/X86Hle.h"
 #include "../render/X86/X86ScalarSystem.h"
@@ -863,6 +864,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   bool NeedsAArch64RawCall = false;
   bool NeedsX86SystemRegisterDispatch = false;
   bool NeedsX86ScalarSystemDispatch = false;
+  bool NeedsX86Flags16Dispatch = false;
   bool NeedsX86DescriptorStateDispatch = false;
   bool NeedsX86SegmentMoveDispatch = false;
   bool NeedsX86VirtualizationDispatch = false;
@@ -966,6 +968,19 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
                                Opts.ScalarPointers)
                    .empty();
         if (auto *CI = llvm::dyn_cast<llvm::CallInst>(&Inst)) {
+          if (const auto *Target = CI->getCalledFunction();
+              Target && x86FlagsNative(Target->getName())) {
+            const auto Flags = renderX86FlagsCall(
+                Opts.TheArch, *CI, "result", !CI->getType()->isVoidTy(),
+                std::vector<std::string>(CI->arg_size(), "0"));
+            NeedsX86Flags16Dispatch |= !Flags->SetIntrinsics;
+            if (Flags->SetIntrinsics) {
+              Headers.insert(Opts.Format == BinaryFormat::COFF ? "intrin.h"
+                                                               : "x86intrin.h");
+              HasCIntrinsics = true;
+            }
+            continue;
+          }
           if (renderX86TimestampCall(Opts.TheArch, *CI, "result", true)) {
             Headers.insert(Opts.Format == BinaryFormat::COFF ? "intrin.h"
                                                              : "x86intrin.h");
@@ -1059,11 +1074,14 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
           }
           if (const auto *Asm =
                   llvm::dyn_cast<llvm::InlineAsm>(CI->getCalledOperand())) {
-            if (Asm->getAsmString().starts_with("pushf") ||
-                Asm->getAsmString() == "pushq $0\n\tpopfq" ||
-                Asm->getAsmString() == "pushl $0\n\tpopfl")
-              Headers.insert(Opts.Format == BinaryFormat::COFF ? "intrin.h"
-                                                               : "x86intrin.h");
+            for (const auto &P : X86FlagsNativeInventory)
+              if (Asm->getAsmString() == P.Assembly) {
+                NeedsX86Flags16Dispatch |= P.Bytes == 2;
+                if (P.Bytes != 2)
+                  Headers.insert(Opts.Format == BinaryFormat::COFF
+                                     ? "intrin.h"
+                                     : "x86intrin.h");
+              }
             if ((Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64) &&
                 (Asm->getAsmString() == "ldmxcsr ($0)" ||
                  Asm->getAsmString() == "stmxcsr ($0)"))
@@ -1208,6 +1226,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     OS << X86SegmentMoveCompilerDispatch;
   if (NeedsX86DescriptorStateDispatch)
     OS << X86DescriptorStateCompilerDispatch;
+  if (NeedsX86Flags16Dispatch)
+    OS << X86Flags16CompilerDispatch;
   if (NeedsX86ScalarSystemDispatch)
     OS << X86ScalarSystemCompilerDispatch;
   if (NeedsX86VirtualizationDispatch)

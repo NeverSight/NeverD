@@ -260,6 +260,7 @@ executor to one CPU and ordinary paged RAM for these protected-mode families:
 | SETcc, CMOVcc | All sixteen conditions; exact byte destinations for SETcc and word/dword register destinations for CMOVcc. CMOVcc reads its source even when the condition is false. |
 | LOOP, LOOPE, LOOPNE, JCXZ, JECXZ | Independent address-sized CX/ECX and operand-sized targets, signed short displacements, unchanged flags and restartable target-limit faults. |
 | PUSH, POP | GPR, memory and PUSH immediate, with independent SS.B stack size. PUSH ESP observes old ESP; POP ESP publishes the popped value after advancement; POP memory uses incremented ESP for its explicit address. |
+| PUSHF/PUSHFD, POPF/POPFD | Exact word/dword flag images through SS, with independent stack size, original CPL/IOPL permissions and staged flag publication. |
 | MUL, IMUL | Byte/word/dword full products and word/dword truncated/immediate signed products; architectural CF/OF and an explicit undefined-flags profile. |
 | DIV, IDIV | Byte/word/dword register or segmented memory divisors, full double-width dividend, signed truncation toward zero, coupled quotient/remainder, and restartable zero/overflow #DE. |
 | Near CALL, JMP, Jcc, RET | Relative and indirect transfers, all sixteen condition codes, short branches and RET imm16. Taken targets use the operand width and code limit. Untaken conditional branches do not consult the target. |
@@ -279,6 +280,22 @@ visible if the operand aliases its own PTE. Physical read or write denial
 remains a backing stop, distinct from an architectural exception. Segment
 checks precede paging and the selected alignment priority. Logical undefined
 AF choices become observable only on successful completion.
+
+PUSHF/PUSHFD clear RF/VM only in the stored snapshot; ordinary completion
+then clears live RF. POPF/POPFD read the whole stack operand before changing
+flags or ESP. Original CPL/IOPL govern IF, and only CPL0 can replace IOPL.
+Word POPF preserves AC/ID; neither width changes VM/VIF/VIP. CR4.PVI does not
+redirect these instructions to VIF. Old AC governs operand alignment faults.
+Successful POPF ends existing SS/STI inhibition without starting an STI window;
+NMI blocking is retained. Newly restored TF does not trap on the POPF itself,
+but the next step still requires the separate debug-event producer.
+
+The word native LLVM and C projections preserve this width through
+`llvm.x86.flags.{read,write}.u16` and the matching builtin. Extending a word
+write to POPFD/POPFQ would incorrectly replace AC/ID. Native compiler functions
+own their stack and ABI; they do not replace this original-state executor.
+The [FLAGS qualification](evidence/x86-flags-2026-11-04.json) distinguishes
+the original protected-mode CPU matrix from source-function ABI comparisons.
 
 `Atomics = ExclusiveRAM` additionally binds a step to exclusive ownership of
 the ordinary-RAM image, with no competing CPU, DMA, MMIO or split-lock/bus-lock

@@ -3932,3 +3932,26 @@ ELF32 control produces SIGFPE. These source checks use the native fork SDK.
 Software SMM, SGX/AEX, task/VM86 state,
 general i386 source ABI and the other unqualified environments remain open;
 the final LLVM release, SDK pin and LLVM gitlink stay unchanged.
+
+### Exact-width FLAGS and protected stack execution
+
+Protected PUSHF/PUSHFD and POPF/POPFD now use the ordinary-RAM legacy executor,
+including independent code/operand/stack widths, original CPL/IOPL checks,
+RF/VM snapshot rules, CR4.PVI behavior, old-AC fault priority and restartable
+stack faults. Completion updates flags, stack state and interruptibility
+together. Newly restored TF remains subject to the existing debug-producer
+boundary on the following instruction.
+
+Word POPF previously widened to POPFD/POPFQ in native LLVM and C output,
+incorrectly replacing AC/ID. The LLVM fork now provides native
+`llvm.x86.flags.{read,write}.u16` and Clang builtin interfaces; NeverC exposes
+the same word builtins. MedLLVM, HighC and LLVMC share one native-width table.
+Both C writers prefer the builtin and retain an exact-width GNU fallback for
+older compilers, with red-zone-safe temporary stack use. Native compiler ABI
+functions and original-state protected execution have separate contracts.
+
+The [FLAGS evidence](evidence/x86-flags-2026-11-04.json) records CPU matrices,
+frontend/code-generation checks, unchanged exported-C execution and widened-write
+negative controls. General i386 source ABI, debug producers, task/VM86 state,
+software SMM/SGX and the other unqualified environments remain open. This
+batch does not advance the final LLVM release, SDK pin or LLVM gitlink.

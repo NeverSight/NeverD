@@ -55,6 +55,13 @@ in their respective owners, with explicit target profiles.
 addressing for selector and scalar instructions. `X86LegacyScalarEncoding`
 authenticates complete scalar extents; `X86LegacyScalarExecution` owns staged
 GPR/flag/near-control-flow changes in the explicit ordinary-RAM profile.
+PUSHF/POPF use that owner's exact word/dword stack access. Original CPL/IOPL
+select writable flags after a successful pop; the word form retains AC/ID.
+`backend/llvm/X86/X86FlagsNative.h` separately owns native image widths and
+API/assembly identities for MedLLVM and both C writers. The shared C renderer
+selects the native word builtin or an exact word GNU assembly fallback that
+preserves compiler red-zone storage. Compiler stack ownership does not supply
+an original-image fault continuation or make flags live across arbitrary C.
 BSWAP stays in that scalar owner; XLAT reuses its byte read after computing the
 address-sized (E)BX-plus-AL offset. LEAVE reuses its SS-owned stack access and
 stages ESP/EBP together, so faults retain the original frame state.

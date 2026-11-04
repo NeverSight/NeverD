@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -646,6 +647,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
 #include "X86LegacyEventNativeTests.inc"
 #include "X86LegacyExchangeNativeTests.inc"
 #include "X86LegacyFastSystemNativeTests.inc"
+#include "X86LegacyFlagsNativeTests.inc"
 #include "X86LegacyImplicitNativeTests.inc"
 #include "X86LegacyMultiplyNativeTests.inc"
 #include "X86LegacyReturnNativeTests.inc"
