@@ -558,8 +558,8 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   auto SourceSites = Opts.usesSourceDeclarations()
                          ? Opts.SourceCallSiteHints
                          : decltype(Opts.SourceCallSiteHints){};
-  const auto SEHRuntimeMemory =
-      collectLowSEHRuntimeMemory(Img, Result.LowFuncs);
+  const auto SEHRuntimeMemory = collectLowSEHRuntimeMemory(
+      Img, Result.LowFuncs, Result.SEHWritableImageRanges.get());
   std::map<va_t, const LowFunc *> SourceCalleeFunctions;
   for (const auto &F : Result.LowFuncs)
     SourceCalleeFunctions.emplace(F.Entry, &F);
@@ -970,6 +970,7 @@ neverd::PipelineResult neverd::Pipeline::rebuildSourceCalls(
   COPY_SOURCE_FACT(FormattedCalls);
   COPY_SOURCE_FACT(OmittedCallees);
   COPY_SOURCE_FACT(CallFloatReturns);
+  COPY_SOURCE_FACT(SEHWritableImageRanges);
 #undef COPY_SOURCE_FACT
   Result.Success = true;
   buildMedIR(Img, Opts, Result);

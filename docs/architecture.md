@@ -15870,6 +15870,9 @@ displacement; an address cache supplies no callable authority.
 Receipts bind the consulted runtime catalog and inspected callee bodies; SSA
 rechecks the same dependencies. Unproved writable formats and opaque calls
 retain their refusal for invocation identity and native reconstruction.
+The catalog's file-backed writable ranges depend on the image alone: an
+analysis cache's image inputs read them once (`lowSEHWritableImageRanges`) and
+each run's catalog takes them, under the same scan allowance and range limit.
 
 Source analysis has a separate `LowSEHFrameUse::SourceProjection` request.
 It checks the decoded unwind/prologue and SP stability throughout each

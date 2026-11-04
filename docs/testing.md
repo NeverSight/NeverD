@@ -17400,6 +17400,9 @@ parent-return-PC overlaps with either CALL's push or the home area, saved cells
 below SP and encoded frame escape
 must refuse. These focused contracts do not establish xcpt4 support; retain the
 real `DecompileMatrixFailsClosedWithAuditableExceptionMetadata` acceptance test.
+`AnImagesWritableRangesServeEachCatalogOfIt` checks that an image's shared
+writable ranges give the catalog its own scan gives, that another image's
+ranges are not taken, and that a stopped or over-allowance scan gives none.
 
 `SEHRuntimeMemory.WindowsFormatsDoNotBorrowForeignDialectContracts` checks the
 decoded CALL through the complete frame proof. Ordinary integer/float formats

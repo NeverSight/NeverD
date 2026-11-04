@@ -4800,6 +4800,9 @@ struct PipelineAnalysisCache::Impl {
     const std::map<std::string, uint16_t> X87FloatingImports;
     detail::AbsoluteRelocationRootIndex Roots;
     ExecutableCodeOwnerIndex Owners;
+    /// The image's writable ranges that each run's SEH runtime catalog reads
+    /// (PipelineResult::SEHWritableImageRanges).
+    const std::shared_ptr<const LowSEHWritableImageRanges> SEHWritable;
 
     ImageInputs(const BinaryImage &Img, DebugContext *Dbg,
                 std::shared_ptr<const SymbolInventory> Inventory)
@@ -4819,7 +4822,9 @@ struct PipelineAnalysisCache::Impl {
           StackProbes(Img), PointerCallees(collectPointerVariableCallees(Img)),
           ArgumentSources(callArgumentSourcesOf(Img, PointerCallees)),
           X87FloatingImports(declaredX87Imports(Img, Dbg)), Roots(Img),
-          Owners(Img) {}
+          Owners(Img),
+          SEHWritable(std::make_shared<const LowSEHWritableImageRanges>(
+              lowSEHWritableImageRanges(Img))) {}
 
     /// Import-address names (getImportAddressNames). HighIR lays a run's own
     /// function, debug and thunk names over this map and takes them off
@@ -5811,6 +5816,7 @@ void Pipeline::buildLowIR(
     ++FuncCount;
   }
 
+  Result.SEHWritableImageRanges = Inputs.SEHWritable;
   // A run of a symbol start reads the image's summaries once a session
   // solved them (prepareCallSummaries); one that adds its own entry keys
   // other facts.

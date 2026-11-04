@@ -18,6 +18,7 @@
 #include "neverd/loader/ReadOnlyBytes.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <utility>
@@ -492,6 +493,41 @@ TEST(SEHRuntimeMemory, ImportAndFormatChangesInvalidateTheReceipt) {
   F.Image.Segments[1].Data[0] = 'R';
   const auto Changed = collectLowSEHRuntimeMemory(F.Image, {Caller});
   EXPECT_NE(Digest, lowSEHFrameDependencyDigest(Caller, {}, nullptr, &Changed));
+}
+
+TEST(SEHRuntimeMemory, AnImagesWritableRangesServeEachCatalogOfIt) {
+  Fixture F(true, false);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  CFGBuilder Builder;
+  auto Caller = Builder.build(F.Image, Dec, Entry, "caller");
+  const auto Own = collectLowSEHRuntimeMemory(F.Image, {Caller});
+  const auto Digest = lowSEHRuntimeMemoryDigest(Own);
+  ASSERT_FALSE(Digest.empty());
+  ASSERT_FALSE(Own.writableImageRanges().empty());
+  const auto Writable = lowSEHWritableImageRanges(F.Image);
+  ASSERT_TRUE(Writable.Complete);
+  EXPECT_EQ(lowSEHRuntimeMemoryDigest(
+                collectLowSEHRuntimeMemory(F.Image, {Caller}, &Writable)),
+            Digest);
+  // Another image's ranges are not this one's.
+  Fixture Other(true, false);
+  Other.Image.Segments.back().Flags = SegmentFlags::Readable;
+  const auto Foreign = lowSEHWritableImageRanges(Other.Image);
+  EXPECT_NE(Foreign.Ranges.size(), Writable.Ranges.size());
+  EXPECT_EQ(lowSEHRuntimeMemoryDigest(
+                collectLowSEHRuntimeMemory(F.Image, {Caller}, &Foreign)),
+            Digest);
+  // Ranges whose scan stopped, or would take more than the catalog's
+  // allowance leaves, give no catalog.
+  auto Stopped = Writable;
+  Stopped.Complete = false;
+  EXPECT_TRUE(
+      collectLowSEHRuntimeMemory(F.Image, {Caller}, &Stopped).calls().empty());
+  auto Long = Writable;
+  Long.Steps = SIZE_MAX;
+  EXPECT_TRUE(
+      collectLowSEHRuntimeMemory(F.Image, {Caller}, &Long).calls().empty());
 }
 
 TEST(SEHRuntimeMemory, WritablePEStorageRequiresCompleteUniqueFileBytes) {

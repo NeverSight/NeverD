@@ -70,6 +70,7 @@ struct AnalysisCacheWarmup {
 
 struct OmittedCalleeMemo;
 struct ImageImportCounts;
+struct LowSEHWritableImageRanges;
 
 /// Optional facts for consecutive restricted x64, i386, AArch64 and ARM
 /// analyses of an unchanged image. Owns the indexes borrowed by bounded
@@ -401,6 +402,10 @@ struct PipelineResult {
   /// the callees in CallEntryStackArgs at an import (BinaryImage::findImportAt)
   /// whose count is not negative, listed once for the image; null otherwise.
   std::shared_ptr<const std::vector<va_t>> CallEntryStackArgImports;
+  /// The writable ranges of the image that MedIR's SEH runtime catalog
+  /// reads (collectLowSEHRuntimeMemory), kept with the image's analysis
+  /// inputs and set by buildLowIR.
+  std::shared_ptr<const LowSEHWritableImageRanges> SEHWritableImageRanges;
   /// The callees in CallEntryStackArgs whose count a typed prototype gives
   /// slot by slot where every argument is on the stack (i386): a call to one
   /// passes those slots and no register.
