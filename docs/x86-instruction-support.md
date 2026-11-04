@@ -3952,6 +3952,11 @@ functions and original-state protected execution have separate contracts.
 
 The [FLAGS evidence](evidence/x86-flags-2026-11-04.json) records CPU matrices,
 frontend/code-generation checks, unchanged exported-C execution and widened-write
-negative controls. General i386 source ABI, debug producers, task/VM86 state,
+negative controls. The x64 and ELF32 compiler-ABI matrices perform 13,107,200
+original word-POPF comparisons on the qualified P/E cores. The separate
+protected-state matrices contribute 96,512 FLAGS comparisons, including
+privilege and fault state; these counts do not mix ordinary compiler ABI
+observations with original-machine arithmetic flags. General i386 source ABI,
+debug producers, task/VM86 state,
 software SMM/SGX and the other unqualified environments remain open. This
 batch does not advance the final LLVM release, SDK pin or LLVM gitlink.

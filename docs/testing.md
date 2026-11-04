@@ -120,6 +120,11 @@ flags, not arithmetic flags across an ordinary function ABI. Run this matrix
 with the native NeverC builtin and a stock Clang GNU fallback, separately from
 the original-state KVM matrix. LLVM frontend/code16 regressions and compiler
 stack/red-zone guards qualify their own interfaces.
+The same witness accepts `--bits 32` for full LLVM/Clang and unchanged i386 C
+exports. Its separate cdecl assembly capture preserves callee-saved registers
+and restores host flags before returning to the multilib C driver. Run native
+LLVM objects from both SDK profiles as ELF32 too. This qualifies the selected
+compiler ABI paths; NeverC still refuses an i386 frontend request.
 
 `LegacyDecimal/*` uses the same fixture for AAA/AAS/DAA/DAS/AAM/AAD. It checks
 every AL with incoming AF/CF, AH carry/borrow boundaries, every immediate base,
