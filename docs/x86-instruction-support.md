@@ -1073,6 +1073,26 @@ intrinsic tests, 81 existing binary checks and 20 generator tests pass. The
 complete overload audit reports zero mismatches. VMCS completion regressions
 remain green after sharing the frontend's value/status extraction helper.
 
+The [protected code16 query qualification](evidence/x86-native-code16-descriptor-queries-2026-11-03.json)
+extends the full fork's explicit-address LAR/LSL `.address32` APIs to code16
+with the 32-bit stack/pointer ABI. Result width and address width remain
+independent. The native original-byte oracle passes 573,440 complete state
+pairs in code16 and 573,440 code32 regression pairs across O0/O2 and local
+P/E cores. It covers every segment prefix, live/dead value/ZF uses, rejected
+selectors, nonflat CS/FS/GS, operand/descriptor paging faults and alignment
+faults. Compiled returns check the supplied prior, value, ZF and saved registers;
+corrupted input transport and returned ZF are independent negative controls.
+
+The shared KVM fixture now separates CS-relative RIP from linear debug
+addresses, retaining flat callers and their ARPL, far-pointer/segment-load,
+frame-return and system-return regressions. Nine LLVM tests, six NeverC
+frontend/native-address tests and ten backend tests pass. The existing three
+format completion matrices retain 4,704 full-LLVM and 2,928 checks on each C
+route, including 96 native queries and 112 LKGS CPL3 faults per C route.
+This does not enable NeverC's i386 frontend, a general NeverD i386 dispatcher,
+real/VM86, asynchronous events or arbitrary source-segment caches. The final
+LLVM release, SDK pin and submodule update remain gated on global completion.
+
 Native HRESET, INVLPGB, TLBSYNC and both LKGS forms now have matching NeverC
 builtins. INVLPGB's original machine descriptions omitted ECX; both forks now
 retain its count/page-size input alongside rAX and EDX. The five NeverC builtin
