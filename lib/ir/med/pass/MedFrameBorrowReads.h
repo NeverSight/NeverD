@@ -13,6 +13,7 @@
 #define NEVERD_IR_MED_PASS_MEDFRAMEBORROWREADS_H
 
 #include "../abi/MedABIPassDetail.h"
+#include "MedFrameBorrowSpills.h"
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -27,6 +28,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -37,7 +39,8 @@ namespace neverd::detail {
 
 /// A complete use proof, rather than a type or an observed access list. A
 /// borrowed pointer can move through scalar SSA values and direct synchronous
-/// calls; storing it, returning it, or losing its offset cancels the proof.
+/// calls and exact private leaf spills. Escaping it, returning it, or losing
+/// its offset cancels the proof.
 /// Reads are a union over every path, so an unvisited CFG arm cannot supply a
 /// noncapture claim. Distinct offsets at a join and recursive borrows remain
 /// conservative. No result outlives the current operation/argument sequence.
@@ -95,7 +98,7 @@ public:
       // released below SP. Neither requires an explicit pointer parameter.
       ImplicitFrameReads.emplace_back(-Func.FrameSize, End);
       ReadSites[Call].emplace_back(-Func.FrameSize, End);
-      LocatedCalls.insert(Call);
+      LocatedCalls.emplace(Call, *Offset);
     }
     return through(Func, roots(Func, TRI.StackPointer, std::nullopt), true,
                    true);
@@ -230,15 +233,18 @@ private:
   size_t Budget = limits::ir::kSourceFrameBorrowWork;
   unsigned CallDepth = 0;
   std::set<const MedOp *> EmptyPrefixCalls;
-  std::set<const MedOp *> LocatedCalls;
+  std::map<const MedOp *, int64_t> LocatedCalls;
   Ranges ImplicitFrameReads;
   std::map<const MedOp *, Ranges> ReadSites;
-  std::map<std::pair<va_t, uint64_t>, std::optional<Ranges>> Known;
+  std::map<std::tuple<va_t, uint64_t, bool>, std::optional<Ranges>> Known;
 
   struct FunctionUses {
     std::map<ValueKey, std::vector<Use>> Uses;
     std::map<std::pair<int, int>, MedCallInfo> NativeCalls;
     Ranges StackReads;
+    std::unique_ptr<FrameBorrowSpills> Spills;
+    std::unique_ptr<std::map<const MedOp *, int64_t>> CallOffsets;
+    bool PrivateSpillFrame = false;
     bool Ready = false;
   };
   std::map<va_t, FunctionUses> IndexedUses;
@@ -320,7 +326,8 @@ private:
     return Result;
   }
 
-  std::optional<Ranges> parameter(const MedCallInfo &Call, unsigned Index) {
+  std::optional<Ranges> parameter(const MedCallInfo &Call, unsigned Index,
+                                  bool PermitPrivateSpills) {
     const auto Found = Callees.find(Call.TargetAddr);
     if (Call.IsIndirect || Found == Callees.end())
       return std::nullopt;
@@ -340,11 +347,12 @@ private:
     if (Register == kNoParamReg) {
       return std::nullopt;
     }
-    return inputRegister(Func, Register);
+    return inputRegister(Func, Register, PermitPrivateSpills);
   }
 
-  std::optional<Ranges> inputRegister(const MedFunc &Func, uint64_t Register) {
-    const auto Key = std::pair{Func.Entry, Register};
+  std::optional<Ranges> inputRegister(const MedFunc &Func, uint64_t Register,
+                                      bool PermitPrivateSpills = false) {
+    const auto Key = std::tuple{Func.Entry, Register, PermitPrivateSpills};
     if (const auto It = Known.find(Key); It != Known.end())
       return It->second;
     if (CallDepth >= limits::ir::kSourceFrameBorrowCallDepth)
@@ -355,14 +363,15 @@ private:
         Func,
         roots(Func, Register,
               Index < 0 ? std::nullopt : std::optional<unsigned>(Index)),
-        false, Register == TRI.StackPointer);
+        false, Register == TRI.StackPointer, PermitPrivateSpills);
     Known.emplace(Key, Result);
     return Result;
   }
 
   std::optional<Ranges> through(const MedFunc &Func,
                                 const std::vector<MedVar> &Roots, bool IsFrame,
-                                bool IsStack = false) {
+                                bool IsStack = false,
+                                bool PermitPrivateSpills = false) {
     if (!Budget || Func.SkippedSSA || Func.AnalystStackFrame ||
         Func.Blocks.empty() || Func.SourceParametersBound || Func.IsVariadic ||
         Func.CC != CallingConv::Win64 || !Func.FPParamScalarBytes.empty() ||
@@ -396,7 +405,9 @@ private:
       std::set<const MedOp *> LocalCalls;
       std::map<const MedOp *, int64_t> CallOffsets;
       if (IsFrame) {
-        LocalCalls = LocatedCalls;
+        for (const auto &[Call, Offset] : LocatedCalls)
+          LocalCalls.insert(Call);
+        CallOffsets = LocatedCalls;
         Graph.StackReads = ImplicitFrameReads;
       } else {
         const auto StackPointers =
@@ -647,6 +658,9 @@ private:
       for (const MedOp *Call : OpaquePrefixCalls)
         if (Call->Output.Size && !Uses[keyOf(Call->Output)].empty())
           return std::nullopt;
+      if (!CallOffsets.empty())
+        Graph.CallOffsets = std::make_unique<std::map<const MedOp *, int64_t>>(
+            std::move(CallOffsets));
       Graph.Ready = true;
     }
 
@@ -654,6 +668,7 @@ private:
     for (const MedVar &Root : Roots)
       Work.emplace_back(Root, 0);
     std::map<ValueKey, int64_t> Seen;
+    bool FollowedSpill = false;
     Ranges Reads = IsStack ? Graph.StackReads : Ranges{};
     while (!Work.empty()) {
       const auto [Value, Offset] = Work.back();
@@ -679,7 +694,21 @@ private:
           return std::nullopt;
         const MedOp &Op = *By.Op;
         if (By.Call) {
-          const auto Borrowed = parameter(*By.Call, By.Input);
+          // Only a pointer located in this caller's live stack region can
+          // exclude the callee's future private slots. A pointer below call
+          // SP, or an unlocated incoming borrow forwarded by a relay, cannot.
+          bool PrivateSpill = false;
+          if ((IsFrame || IsStack) && Graph.CallOffsets) {
+            const auto Stack = Graph.CallOffsets->find(&Op);
+            int64_t Distance;
+            PrivateSpill =
+                Stack != Graph.CallOffsets->end() &&
+                !llvm::SubOverflow(Offset, Stack->second, Distance) &&
+                Distance >= 0 &&
+                !llvm::AddOverflow(Distance, int64_t(TRI.PointerSize),
+                                   Distance);
+          }
+          const auto Borrowed = parameter(*By.Call, By.Input, PrivateSpill);
           if (!Borrowed || Borrowed->size() > Budget)
             return std::nullopt;
           Budget -= Borrowed->size();
@@ -708,6 +737,31 @@ private:
             if (IsFrame)
               ReadSites[By.Op].emplace_back(Offset, End);
           }
+          continue;
+        }
+        if (PermitPrivateSpills && !IsFrame && !IsStack &&
+            Op.Opcode == NdOp::STORE && By.Input == 1 && Op.NumInputs == 2 &&
+            !Op.Inputs[0].isConst() && Op.Inputs[1].Size == TRI.PointerSize) {
+          // Prove that this callee's own frame never escapes before following
+          // a saved borrow. The spill index only adds exact transport edges;
+          // every reloaded value still goes through this same use proof.
+          if (!Graph.Spills)
+            Graph.Spills =
+                std::make_unique<FrameBorrowSpills>(Func, Format, Budget);
+          const auto *Loads = Graph.Spills->loads(Op);
+          if (!Loads)
+            return std::nullopt;
+          if (!Graph.PrivateSpillFrame) {
+            if (!inputRegister(Func, TRI.StackPointer))
+              return std::nullopt;
+            Graph.PrivateSpillFrame = true;
+          }
+          if (Loads->size() > Budget)
+            return std::nullopt;
+          Budget -= Loads->size();
+          for (const auto &Load : *Loads)
+            Work.emplace_back(Load, Offset);
+          FollowedSpill = true;
           continue;
         }
         if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
@@ -765,6 +819,20 @@ private:
         // Other integer transforms, including pointer comparisons and lossy
         // slices, do not supply a bounded noncapture proof here.
         return std::nullopt;
+      }
+    }
+    if (FollowedSpill) {
+      // Nonescape of SP alone does not exclude aliases supplied by another
+      // parameter. Every non-stack access must use this exact unadjusted
+      // borrow, whose caller proved it lies above the callee's private frame.
+      const auto &Addresses = Graph.Spills->nonStackAddresses();
+      if (Addresses.size() > Budget)
+        return std::nullopt;
+      Budget -= Addresses.size();
+      for (const auto &Address : Addresses) {
+        const auto At = Seen.find(keyOf(Address));
+        if (Address.Size != TRI.PointerSize || At == Seen.end() || At->second)
+          return std::nullopt;
       }
     }
     // Queries below use disjoint, ordered intervals. Charging the walk alone

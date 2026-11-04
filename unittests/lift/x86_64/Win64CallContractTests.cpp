@@ -1703,6 +1703,79 @@ TEST(Win64CallContract, NullGuardedBorrowKeepsItsActualReadExtent) {
   }
 }
 
+TEST(Win64CallContract, PrivateBorrowSpillsKeepNativeReadExtents) {
+  constexpr va_t Consumer = Text + 0x80;
+  for (unsigned Case = 0; Case != 3; ++Case) {
+    SCOPED_TRACE(Case);
+    const bool ReadsNeighbor = Case != 0;
+    const bool AliasedSlot = Case == 2;
+    std::vector<uint8_t> Code(0xB0, 0xCC);
+    std::vector<uint8_t> Caller = {0x48, 0x83, 0xEC, 0x38};
+    const auto Random = throughSlot(Text + Caller.size(), Iat);
+    Caller.insert(Caller.end(), Random.begin(), Random.end());
+    Caller.insert(Caller.end(),
+                  {0x31, 0xC0,             // xor eax,eax
+                   0x0F, 0xBD, 0xC8,       // bsr ecx,eax: unavailable old ECX
+                   0x89, 0x4C, 0x24, 0x20, // mov [rsp+20h],ecx
+                   0xC7, 0x44, 0x24, 0x24, 37,   0,   0,
+                   0,    0x48, 0x8D, 0x4C, 0x24, 0x24}); // lea rcx,[rsp+24h]
+    if (AliasedSlot)
+      Caller.insert(Caller.end(), {0x48, 0x8D, 0x54, 0x24, 0xF0});
+    Caller.push_back(0xE8);
+    const auto Displacement = rel32(Text + Caller.size() + 4, Consumer);
+    Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+    Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
+    put(Code, Text, Caller);
+    std::vector<uint8_t> Reader = {0x48, 0x83, 0xEC, 0x08,  // sub rsp,8
+                                   0x48, 0x89, 0x0C, 0x24}; // mov [rsp],rcx
+    if (AliasedSlot)
+      Reader.insert(Reader.end(), {0x48, 0x8B, 0x12}); // mov rdx,[rdx]
+    else
+      Reader.insert(Reader.end(), {0x48, 0x8B, 0x14, 0x24}); // mov rdx,[rsp]
+    if (ReadsNeighbor)
+      Reader.insert(Reader.end(), {0x8B, 0x42, 0xFC}); // mov eax,[rdx-4]
+    else
+      Reader.insert(Reader.end(), {0x8B, 0x02}); // mov eax,[rdx]
+    Reader.insert(Reader.end(), {0x48, 0x83, 0xC4, 0x08, 0xC3});
+    put(Code, Consumer, Reader);
+    const auto Image = makeImage(
+        Code, {{Text, "borrow_spill_caller"}, {Consumer, "spill_reader"}},
+        {"rand"});
+    // Static projection only: neither the specimen nor emitted C is executed.
+    for (bool OmitCallee : {false, true})
+      for (bool NoOpt : {false, true})
+        for (bool LLVM : {false, true}) {
+          SCOPED_TRACE(OmitCallee);
+          SCOPED_TRACE(NoOpt);
+          SCOPED_TRACE(LLVM);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee)
+            Options.OnlyFunctionEntries.insert(Consumer);
+          Options.NoOpt = NoOpt;
+          Options.SourceProjection = true;
+          Options.LiftMode = LLVM;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          ASSERT_TRUE(
+              LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                         nullptr, &Image)
+                   : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          EXPECT_EQ(Source.find("__builtin_trap") != std::string::npos,
+                    ReadsNeighbor)
+              << Source;
+        }
+  }
+}
+
 TEST(Win64CallContract, BoundedCalleeReadDoesNotExposeAdjacentUnknownBytes) {
   constexpr va_t Consumer = Text + 0x80;
   for (bool ReadsNeighbor : {false, true}) {

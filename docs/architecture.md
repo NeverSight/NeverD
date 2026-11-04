@@ -709,6 +709,20 @@ unknown constant to gain this permission.
 This distinction follows LLVM's separate
 [null-address and memory-provenance capture](https://llvm.org/docs/LangRef.html#pointer-capture)
 semantics; it grants no native callee-effect or initialization fact.
+An incoming borrow may also pass through an exact private word in a single-block,
+call-free callee. `MedFrameBorrowSpills` lazily indexes its stack accesses and
+reaching whole-word stores once; every reloaded pointer resumes the same complete
+use walk. The caller must locate the borrow at or above its current call SP;
+an unlocated relay borrow has no spill permission. The cache includes that
+permission in its key. Every non-stack memory access in the leaf must use the
+same unadjusted borrow, excluding another argument that aliases its spill.
+The callee's own SP must separately pass the nonescape proof. Monotone
+allocation and release keep each access within live private storage. Partial or
+wide overlaps, reads before a store, released/reallocated slots, incoming homes,
+ordered/segmented accesses and intrinsics refuse this transport. Dead or omitted
+stores cannot cut a reaching source value. This does not certify spills across
+native calls or change the stronger original-byte proof for missing stack
+parameters.
 An SSA version of zero is not itself an entry input: a first load or arithmetic
 definition can also have that version. Call home areas and released frame bytes
 remain observable without explicit pointer arguments. This proof annotates only
