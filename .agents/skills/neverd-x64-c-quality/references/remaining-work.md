@@ -11,6 +11,35 @@ their native allocation chain includes cold verifier, tracing and indirect-call
 paths. Neither a source spill annotation nor an inferred argument count proves
 those paths unable to observe saved pointers or incoming stack bytes.
 
+Selected native unwind steps now distinguish restoring a saved pointer from
+reading its pointee. The inspected allocator-to-root chains use SP-based
+unwind records and do not read the status slot's high DWORD. This conditional
+fact starts with an already restored allocator context; it does not certify
+context capture, the complete walker, verifier, or runtime callbacks. A
+constructed symbolic observer can recover the status pointer from the actual
+saved-register cell and distinguish two otherwise identical stacks by reading
+that high DWORD. This is a counterexample to unconditional observer independence,
+not evidence that such a callback is installed in either inspected VM.
+
+The four inspected heap-interceptor sites also need a narrower description:
+their index guards admit only the immutable zero table entry in the linked
+image. They lead to CFG failure, not an arbitrary registered interceptor.
+Retain the failure and crash effects; an invalid target does not authorize
+deleting its branch. Dynamic trace targets and verifier effects remain separate
+obligations. Offline absence of an extension, a prototype, or the selected
+unwind footprint cannot supply their complete memory-effect contract.
+
+The two ordinary-C stack-input gaps still remain in both routes. Automatic
+parameter removal still requires a complete observer proof. Exposing native
+state or choosing an explicit API effect contract changes the interface or
+semantic domain; neither recovers those bytes from ordinary arguments.
+Existing explicit-state exports are a separate capability, not evidence that
+the ordinary parameters were recovered. Do not
+replace the unknown bytes with zero or remove their initializer on the strength
+of these partial unwind certificates. Keep these private symbolic receipts and
+native listings outside the repository; these research checks add no work to
+source emission.
+
 Offline boot images, API-set schemas and recovered registry logs can narrow
 import-binding candidates, but do not authenticate live verifier or tracing
 state. Absence of a dynamic-trace extension does not exclude independent ETW
