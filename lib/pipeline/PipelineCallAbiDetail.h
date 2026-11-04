@@ -224,7 +224,9 @@ struct OmittedCalleeMemo {
     bool readsHold(const PipelineResult &Result) const;
   };
   /// The probes kept of each conversion's body.  The selections around a
-  /// forwarder hold different summaries of its callees.
+  /// forwarder hold different summaries of its callees, and a callee many
+  /// functions read is probed under many: with four kept, the second
+  /// decompile of 300 ntoskrnl functions recovered 2265 callees again.
   static constexpr size_t MaxProbes =
       ::neverd::limits::pipeline::kPipelineCallAbiDetailMaxProbes;
   /// The conversions kept of each callee.  The selections around a callee

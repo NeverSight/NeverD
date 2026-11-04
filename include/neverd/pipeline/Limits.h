@@ -73,7 +73,7 @@ inline constexpr size_t kPipelineCallAbiCalleeReadAhead = 64;
 inline constexpr size_t kPipelineCallAbiMinParallelCalleeReads = 2;
 
 // lib/pipeline/PipelineCallAbiDetail.h
-inline constexpr size_t kPipelineCallAbiDetailMaxProbes = 4;
+inline constexpr size_t kPipelineCallAbiDetailMaxProbes = 16;
 inline constexpr size_t kPipelineCallAbiDetailMaxConversions = 4;
 inline constexpr size_t kPipelineCallAbiDetailMaxBytes = size_t{2048} << 20;
 
