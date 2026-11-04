@@ -15,7 +15,8 @@
     "llvm_commit": "d31f0320dc89e677bae6a8721fd251e6856bf342",
     "neverc_feature_commit": "2aee37ed5bd0a89001ed21a6ff1a7ecde1b1e196",
     "neverc_published_commit": "445dd6d25bbd396871d323e2a34bea7549ea8f45",
-    "note": "The source hashes below include newly added files. Frozen KVM binaries were qualified before upstream integration; both rebuilt integration binaries are byte-identical. C projection is separately qualified after integration. LLVM tools were built from the same effective source before its commit. NeverC integration merged independent C++ translation changes and requalified the published compiler."
+    "note": "The source hashes below include newly added files. Frozen KVM binaries were qualified before upstream integration; both rebuilt integration binaries are byte-identical. C projection is separately qualified after integration. LLVM tools were built from the same effective source before its commit. NeverC integration merged independent C++ translation changes and requalified the published compiler.",
+    "final_neverd_code_commit": "255ba87d54f6ce86dafe6993695c2fe510d09865"
   },
   "source_inputs_sha256": {
     "neverd": {
@@ -961,7 +962,7 @@
           "--mount",
           "python3",
           "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
-          "/mnt/data/neverd-legacy-bits-20261103/c-projection/final/native/2/tmp",
+          "/mnt/data/neverd-legacy-bits-20261103/c-projection/post-dev/native/2/tmp",
           "env",
           "TMPDIR=/tmp",
           "NEVERD_THREADS=1",
@@ -969,22 +970,22 @@
           "taskset",
           "-c",
           "2",
-          "/mnt/data/neverd-legacy-bits-20261103/c-projection/final/native/NeverDLLVMCValueTests",
+          "/mnt/data/neverd-legacy-bits-20261103/c-projection/post-dev/native/NeverDLLVMCValueTests",
           "--gtest_filter=LLVMCValues.X86BitString*:LLVMCValues.X86Divide*",
           "--gtest_break_on_failure",
-          "--gtest_output=xml:/mnt/data/neverd-legacy-bits-20261103/c-projection/final/native/2/result.xml"
+          "--gtest_output=xml:/mnt/data/neverd-legacy-bits-20261103/c-projection/post-dev/native/2/result.xml"
         ],
         "exit_code": 0,
-        "seconds": 2.9277400970458984,
-        "binary_sha256": "d1dd2980eee77bd09234c490c3280d9083fc0bef332cf72cd459989007fb4c8d",
+        "seconds": 3.377798557281494,
+        "binary_sha256": "88f59389279c442015807682188bfc1e2c7e7e924459ece5ef9b1910f30e1764",
         "compiler_sha256": "89ac76cc0dd47dd44f14e4aae03c23009e6109c3a8eebc3b471dc8e0d5525380",
         "results": {
           "tests": "4",
           "failures": "0",
           "disabled": "0",
           "errors": "0",
-          "time": "2.888",
-          "timestamp": "2026-11-03T22:59:36.908",
+          "time": "3.335",
+          "timestamp": "2026-11-03T23:15:19.952",
           "name": "AllTests"
         },
         "runtime_profiles": [
@@ -1020,7 +1021,7 @@
           "--mount",
           "python3",
           "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
-          "/mnt/data/neverd-legacy-bits-20261103/c-projection/final/native/14/tmp",
+          "/mnt/data/neverd-legacy-bits-20261103/c-projection/post-dev/native/14/tmp",
           "env",
           "TMPDIR=/tmp",
           "NEVERD_THREADS=1",
@@ -1028,22 +1029,22 @@
           "taskset",
           "-c",
           "14",
-          "/mnt/data/neverd-legacy-bits-20261103/c-projection/final/native/NeverDLLVMCValueTests",
+          "/mnt/data/neverd-legacy-bits-20261103/c-projection/post-dev/native/NeverDLLVMCValueTests",
           "--gtest_filter=LLVMCValues.X86BitString*",
           "--gtest_break_on_failure",
-          "--gtest_output=xml:/mnt/data/neverd-legacy-bits-20261103/c-projection/final/native/14/result.xml"
+          "--gtest_output=xml:/mnt/data/neverd-legacy-bits-20261103/c-projection/post-dev/native/14/result.xml"
         ],
         "exit_code": 0,
-        "seconds": 9.632641792297363,
-        "binary_sha256": "d1dd2980eee77bd09234c490c3280d9083fc0bef332cf72cd459989007fb4c8d",
+        "seconds": 5.73663330078125,
+        "binary_sha256": "88f59389279c442015807682188bfc1e2c7e7e924459ece5ef9b1910f30e1764",
         "compiler_sha256": "89ac76cc0dd47dd44f14e4aae03c23009e6109c3a8eebc3b471dc8e0d5525380",
         "results": {
           "tests": "2",
           "failures": "0",
           "disabled": "0",
           "errors": "0",
-          "time": "9.572",
-          "timestamp": "2026-11-03T22:59:39.839",
+          "time": "5.678",
+          "timestamp": "2026-11-03T23:15:23.333",
           "name": "AllTests"
         },
         "runtime_profiles": [
@@ -1079,7 +1080,7 @@
           "--mount",
           "python3",
           "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
-          "/mnt/data/neverd-legacy-bits-20261103/c-projection/final/r6/2/tmp",
+          "/mnt/data/neverd-legacy-bits-20261103/c-projection/post-dev/r6/2/tmp",
           "env",
           "TMPDIR=/tmp",
           "NEVERD_THREADS=1",
@@ -1087,22 +1088,22 @@
           "taskset",
           "-c",
           "2",
-          "/mnt/data/neverd-legacy-bits-20261103/c-projection/final/r6/NeverDLLVMCValueTests",
+          "/mnt/data/neverd-legacy-bits-20261103/c-projection/post-dev/r6/NeverDLLVMCValueTests",
           "--gtest_filter=LLVMCValues.X86BitString*:LLVMCValues.X86Divide*",
           "--gtest_break_on_failure",
-          "--gtest_output=xml:/mnt/data/neverd-legacy-bits-20261103/c-projection/final/r6/2/result.xml"
+          "--gtest_output=xml:/mnt/data/neverd-legacy-bits-20261103/c-projection/post-dev/r6/2/result.xml"
         ],
         "exit_code": 0,
-        "seconds": 3.5213608741760254,
-        "binary_sha256": "dc8c1cd419e595be700efe99aa981eaf62b73c7985d6029b8f2f6ed4a1a0e60a",
+        "seconds": 3.272456407546997,
+        "binary_sha256": "d2a04d1b8e09cbecb87a2f92d525193cb4e24d2aa26d5e15945396f06250ae7e",
         "compiler_sha256": "89ac76cc0dd47dd44f14e4aae03c23009e6109c3a8eebc3b471dc8e0d5525380",
         "results": {
           "tests": "4",
           "failures": "0",
           "disabled": "0",
           "errors": "0",
-          "time": "3.449",
-          "timestamp": "2026-11-03T22:59:49.771",
+          "time": "3.246",
+          "timestamp": "2026-11-03T23:15:29.335",
           "name": "AllTests"
         },
         "runtime_profiles": [
@@ -1138,7 +1139,7 @@
           "--mount",
           "python3",
           "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
-          "/mnt/data/neverd-legacy-bits-20261103/c-projection/final/r6/14/tmp",
+          "/mnt/data/neverd-legacy-bits-20261103/c-projection/post-dev/r6/14/tmp",
           "env",
           "TMPDIR=/tmp",
           "NEVERD_THREADS=1",
@@ -1146,22 +1147,22 @@
           "taskset",
           "-c",
           "14",
-          "/mnt/data/neverd-legacy-bits-20261103/c-projection/final/r6/NeverDLLVMCValueTests",
+          "/mnt/data/neverd-legacy-bits-20261103/c-projection/post-dev/r6/NeverDLLVMCValueTests",
           "--gtest_filter=LLVMCValues.X86BitString*",
           "--gtest_break_on_failure",
-          "--gtest_output=xml:/mnt/data/neverd-legacy-bits-20261103/c-projection/final/r6/14/result.xml"
+          "--gtest_output=xml:/mnt/data/neverd-legacy-bits-20261103/c-projection/post-dev/r6/14/result.xml"
         ],
         "exit_code": 0,
-        "seconds": 5.577345132827759,
-        "binary_sha256": "dc8c1cd419e595be700efe99aa981eaf62b73c7985d6029b8f2f6ed4a1a0e60a",
+        "seconds": 5.677356004714966,
+        "binary_sha256": "d2a04d1b8e09cbecb87a2f92d525193cb4e24d2aa26d5e15945396f06250ae7e",
         "compiler_sha256": "89ac76cc0dd47dd44f14e4aae03c23009e6109c3a8eebc3b471dc8e0d5525380",
         "results": {
           "tests": "2",
           "failures": "0",
           "disabled": "0",
           "errors": "0",
-          "time": "5.546",
-          "timestamp": "2026-11-03T22:59:53.296",
+          "time": "5.636",
+          "timestamp": "2026-11-03T23:15:32.617",
           "name": "AllTests"
         },
         "runtime_profiles": [
@@ -1208,7 +1209,8 @@
         "builtin_selection": "fallback",
         "version": "Ubuntu clang version 23.1.2 (++20260910044155+069ef0e7cb36-1~exp1~20260910044205.69)"
       }
-    ]
+    ],
+    "initial_qualification_report": "c-projection/final/results.json"
   },
   "count_definition": "Actual repeated executions across compilers, SDKs, optimizations, pass managers and P/E cores; not unique input counts. Earlier failed/focused/pre-integration runs are retained but excluded from the final totals.",
   "retained_diagnostics": [
@@ -1330,5 +1332,82 @@
   ],
   "artifact_count": 746,
   "artifact_manifest_sha256": "caaad4cdeae1305ee0a6e2a4becf59cc0b219753f04893c1dad4fb6c943fbfce",
-  "artifact_manifest_scope": "Final local diagnostics, frozen binaries, reports and source snapshots; later Git publication logs and cache bytecode are outside this frozen manifest."
+  "artifact_manifest_scope": "Frozen initial qualification artifacts. Subsequent dev integration is covered by its separate manifest; later Git publication logs and cache bytecode are outside both manifests.",
+  "upstream_integration": {
+    "scope": "Merge current dev PDB identity and Win64 ABI work. All eighteen changed NeverD code inputs remain unchanged. Both paging executables remain byte-identical; both C test executables changed and were requalified on P/E with the published NeverC compiler.",
+    "builds": [
+      {
+        "sdk": "native",
+        "target": "NeverDLLVMCValueTests",
+        "command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86-native",
+          "--target",
+          "NeverDLLVMCValueTests",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "seconds": 75.68532061576843,
+        "binary_sha256": "88f59389279c442015807682188bfc1e2c7e7e924459ece5ef9b1910f30e1764",
+        "qualified_binary_unchanged": false
+      },
+      {
+        "sdk": "native",
+        "target": "NeverDX86PagingTests",
+        "command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86-native",
+          "--target",
+          "NeverDX86PagingTests",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "seconds": 11.336722612380981,
+        "binary_sha256": "4dc05e03a9664f75fa4faf71d0881aceef80ccca9c042ef5d65f7f15c996709c",
+        "qualified_binary_unchanged": true
+      },
+      {
+        "sdk": "r6",
+        "target": "NeverDLLVMCValueTests",
+        "command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86",
+          "--target",
+          "NeverDLLVMCValueTests",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "seconds": 78.0350775718689,
+        "binary_sha256": "d2a04d1b8e09cbecb87a2f92d525193cb4e24d2aa26d5e15945396f06250ae7e",
+        "qualified_binary_unchanged": false
+      },
+      {
+        "sdk": "r6",
+        "target": "NeverDX86PagingTests",
+        "command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86",
+          "--target",
+          "NeverDX86PagingTests",
+          "--parallel",
+          "4"
+        ],
+        "exit_code": 0,
+        "seconds": 11.642798900604248,
+        "binary_sha256": "6d3c5c326d71becdf299001eefbafcffe2c7bea00ec31ccacd11c0cf55642d21",
+        "qualified_binary_unchanged": true
+      }
+    ],
+    "final_c_tests": 12,
+    "final_c_comparisons": 6369280,
+    "artifact_manifest_sha256": "25cb4bb98c7d188600d5e6966ff4b9c00d70b4b19c0ab211848a6b8929f8cccc",
+    "artifact_count": 21
+  }
 }
