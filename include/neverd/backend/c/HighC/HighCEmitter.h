@@ -45,6 +45,13 @@ HighCImageDataObjects collectImageDataObjects(const BinaryImage &Image);
 using HighCImageFunctionSymbols = std::unordered_map<va_t, const Symbol *>;
 HighCImageFunctionSymbols collectImageFunctionSymbols(const BinaryImage &Image);
 
+/// The C names of \p Image's named function symbols as \p Format and
+/// \p Target spell them (cNameOfSymbol): views into its symbols, valid while
+/// they stay unchanged.
+std::unordered_set<std::string_view>
+collectImageFunctionLinkNames(const BinaryImage &Image, BinaryFormat Format,
+                              Arch Target);
+
 class PreparedPortableX87Function;
 
 class HighCEmitter {
@@ -54,6 +61,11 @@ class HighCEmitter {
   std::unordered_set<std::string_view> PreparedImageFunctionNames;
   HighCImageDataObjects PreparedDataObjects;
   HighCImageFunctionSymbols PreparedFunctionSymbols;
+  /// The image's function link names in the ABI format and architecture it
+  /// was prepared with; an emission in another reads them itself.
+  std::unordered_set<std::string_view> PreparedFunctionLinkNames;
+  BinaryFormat PreparedLinkFormat = BinaryFormat::Unknown;
+  Arch PreparedLinkArch = Arch::Unknown;
 
 public:
   /// Reuse the image's defined-function index and data objects across a

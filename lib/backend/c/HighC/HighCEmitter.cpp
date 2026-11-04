@@ -4380,14 +4380,14 @@ std::string HighCWriter::functionAddressIdentifier(
 }
 
 bool HighCWriter::imageFunctionOwnsLinkIdentifier(llvm::StringRef Name) {
-  if (!ImageFunctionLinkNames) {
-    ImageFunctionLinkNames.emplace();
-    for (const Symbol &Symbol : Opts.Image->Symbols)
-      if (Symbol.IsFunc && !Symbol.Name.empty())
-        ImageFunctionLinkNames->insert(
-            cNameOfSymbol(Symbol.Name, Opts.Format, Opts.TheArch).str());
+  const std::unordered_set<std::string_view> *Names = SharedFunctionLinkNames;
+  if (!Names) {
+    if (!ImageFunctionLinkNames)
+      ImageFunctionLinkNames.emplace(collectImageFunctionLinkNames(
+          *Opts.Image, Opts.Format, Opts.TheArch));
+    Names = &*ImageFunctionLinkNames;
   }
-  return ImageFunctionLinkNames->count(Name.str());
+  return Names->count({Name.data(), Name.size()}) != 0;
 }
 
 void HighCWriter::writeImageObjects() {
@@ -5199,11 +5199,28 @@ collectImageFunctionSymbols(const BinaryImage &Image) {
   return Symbols;
 }
 
+std::unordered_set<std::string_view>
+collectImageFunctionLinkNames(const BinaryImage &Image, BinaryFormat Format,
+                              Arch Target) {
+  std::unordered_set<std::string_view> Names;
+  Names.reserve(Image.Symbols.size());
+  for (const Symbol &Sym : Image.Symbols)
+    if (Sym.IsFunc && !Sym.Name.empty()) {
+      const llvm::StringRef Name = cNameOfSymbol(Sym.Name, Format, Target);
+      Names.emplace(Name.data(), Name.size());
+    }
+  return Names;
+}
+
 void HighCEmitter::prepareImageFunctionNames(const BinaryImage &Image) {
   PreparedImage = nullptr;
   PreparedImageFunctionNames = collectImageFunctionNameViews(Image);
   PreparedDataObjects = collectImageDataObjects(Image);
   PreparedFunctionSymbols = collectImageFunctionSymbols(Image);
+  PreparedLinkFormat = Image.abiFormat();
+  PreparedLinkArch = Image.Arch;
+  PreparedFunctionLinkNames = collectImageFunctionLinkNames(
+      Image, PreparedLinkFormat, PreparedLinkArch);
   PreparedImage = &Image;
 }
 
@@ -5375,11 +5392,14 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
       }
     }
     const bool Prepared = Opts.Image && Opts.Image == PreparedImage;
+    const bool PreparedLinks = Prepared && Opts.Format == PreparedLinkFormat &&
+                               Opts.TheArch == PreparedLinkArch;
     HighCWriter W(OS, Opts, Dbg, true,
                   Prepared ? &PreparedImageFunctionNames : nullptr, Recorder,
                   Prepared ? &PreparedDataObjects : nullptr,
                   Prepared ? &PreparedFunctionSymbols : nullptr,
-                  Portable ? PortableInterface : nullptr);
+                  Portable ? PortableInterface : nullptr,
+                  PreparedLinks ? &PreparedFunctionLinkNames : nullptr);
     W.ExtraRecords = Extra;
     W.WantedRecords = Wanted;
     W.prepareFunctionReturns(Working);

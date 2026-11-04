@@ -140,19 +140,22 @@ public:
   static std::optional<std::string> sourceValue(llvm::StringRef Text,
                                                 const TypeRef &Carrier,
                                                 const TypeRef &Source);
-  HighCWriter(llvm::raw_ostream &Stream, const CEmitterOptions &Opts,
-              DebugContext *Dbg, bool GuardAnalysisOnlyFunctions = true,
-              const std::unordered_set<std::string_view> *SharedNames = nullptr,
-              CSourceRecorder *Recorder = nullptr,
-              const HighCImageDataObjects *SharedDataObjects = nullptr,
-              const HighCImageFunctionSymbols *SharedFunctionSymbols = nullptr,
-              const PreparedPortableX87Function *PortableInterface = nullptr)
+  HighCWriter(
+      llvm::raw_ostream &Stream, const CEmitterOptions &Opts, DebugContext *Dbg,
+      bool GuardAnalysisOnlyFunctions = true,
+      const std::unordered_set<std::string_view> *SharedNames = nullptr,
+      CSourceRecorder *Recorder = nullptr,
+      const HighCImageDataObjects *SharedDataObjects = nullptr,
+      const HighCImageFunctionSymbols *SharedFunctionSymbols = nullptr,
+      const PreparedPortableX87Function *PortableInterface = nullptr,
+      const std::unordered_set<std::string_view> *SharedLinkNames = nullptr)
       : OS(Stream), Opts(Opts), Dbg(Dbg),
         GuardAnalysisOnlyFunctions(GuardAnalysisOnlyFunctions),
         SharedImageFunctionNames(SharedNames), SourceRecorder(Recorder),
         SharedDataObjects(SharedDataObjects),
         SharedFunctionSymbols(SharedFunctionSymbols),
-        PortableInterface(PortableInterface) {}
+        PortableInterface(PortableInterface),
+        SharedFunctionLinkNames(SharedLinkNames) {}
 
   //--- Module-level (HighCEmitter.cpp) ---
   void writeAll(const std::vector<HighFunc> &Funcs);
@@ -1726,7 +1729,10 @@ public:
   std::string
   functionAddressIdentifier(const FunctionAddressTarget &Target) const;
   /// Linker function names cannot also name definitions of reconstructed data.
-  std::optional<std::set<std::string>> ImageFunctionLinkNames;
+  /// The image's function link names: the emitter's prepared ones, or read
+  /// on the first query (imageFunctionOwnsLinkIdentifier).
+  const std::unordered_set<std::string_view> *SharedFunctionLinkNames;
+  std::optional<std::unordered_set<std::string_view>> ImageFunctionLinkNames;
   bool imageFunctionOwnsLinkIdentifier(llvm::StringRef Name);
   /// The symbols of those functions this output does not define, declared as
   /// the functions it calls are.
