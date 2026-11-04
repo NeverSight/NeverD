@@ -10,31 +10,11 @@
 #ifndef NEVERD_UNITTESTS_TRANSLATE_X86_X86LEGACYSHIFTNATIVEFIXTURE_INC
 #define NEVERD_UNITTESTS_TRANSLATE_X86_X86LEGACYSHIFTNATIVEFIXTURE_INC
 
-#include "X86LegacyScalarNativeFixture.inc"
+#include "X86LegacyScalarNativeObserverFixture.inc"
 
-class X86LegacyShiftNativeFixture : public X86LegacyScalarNativeFixture {
+class X86LegacyShiftNativeFixture
+    : public X86LegacyScalarNativeObserverFixture {
 protected:
-  static constexpr unsigned kObserverBytes = 4096;
-  uint8_t *Observer = nullptr;
-  std::vector<uint8_t> ObserverCode;
-
-  void SetUp() override {
-    X86LegacyScalarNativeFixture::SetUp();
-    if (HasFatalFailure() || IsSkipped())
-      return;
-    CheckOperandPageEffects = true;
-    Observer = static_cast<uint8_t *>(mmap(nullptr, kObserverBytes,
-                                           PROT_READ | PROT_WRITE,
-                                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
-    ASSERT_NE(Observer, MAP_FAILED);
-  }
-
-  void TearDown() override {
-    if (Observer && Observer != MAP_FAILED)
-      EXPECT_EQ(munmap(Observer, kObserverBytes), 0);
-    X86LegacyScalarNativeFixture::TearDown();
-  }
-
   // Both shift fixtures use [BX]/[EBX]. The nonflat scalar fixture stores
   // Value at DS.base+offset, while SS retains its zero base and untouched RAM.
   static uint32_t memoryInputValue(unsigned Case, unsigned Prefix,
@@ -61,16 +41,7 @@ protected:
       Bytes.insert(Bytes.end(), {0x8b, 0x04, 0x24, 0x48, 0x8d, 0x64, 0x24, 8});
     Bytes.insert(Bytes.end(), {0x9c, 0x5a, 0x48, 0xc1, 0xe2, 0x20, 0x48, 0x09,
                                0xd0, 0x9d, 0xc3});
-    if (Bytes != ObserverCode) {
-      ASSERT_EQ(mprotect(Observer, kObserverBytes, PROT_READ | PROT_WRITE), 0);
-      std::copy(Bytes.begin(), Bytes.end(), Observer);
-      ASSERT_EQ(mprotect(Observer, kObserverBytes, PROT_READ | PROT_EXEC), 0);
-      ObserverCode = Bytes;
-    }
-    using Probe = uint64_t (*)(uint32_t, uint32_t, unsigned, uint64_t);
-    Observed = reinterpret_cast<Probe>(Observer)(
-        Destination, Source, Count,
-        (Flags & kX86LegacyArithmeticFlagsMask) | 2);
+    observeCode(Bytes, Destination, Source, Count, Flags, Observed);
   }
 };
 

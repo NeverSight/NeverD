@@ -112,6 +112,15 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       (!Options.DoubleShiftUndefined ||
        (Options.DoubleShiftUndefined->Flags & ~kX86LegacyArithmeticFlagsMask)))
     return invalid("legacy double shift requires an explicit undefined state");
+  if (Scalar && Scalar->bitTesting() &&
+      (!Options.BitTestUndefinedFlags ||
+       (*Options.BitTestUndefinedFlags & ~kX86LegacyBitTestUndefinedFlagsMask)))
+    return invalid(
+        "legacy bit test requires an explicit undefined-flags image");
+  if (Scalar && Scalar->bitScanning() &&
+      (!Options.BitScanChoices ||
+       (Options.BitScanChoices->Flags & ~kX86LegacyBitScanChoiceFlagsMask)))
+    return invalid("legacy bit scan requires explicit CPU choices");
   if (Scalar && Scalar->Operation == detail::X86LegacyScalarOperation::Call &&
       Options.Calls != X86LegacyCallProfile::StoreBeforeTargetLimit &&
       Options.Calls != X86LegacyCallProfile::CheckBeforeTargetLimit)

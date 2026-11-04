@@ -131,6 +131,22 @@ public:
       doubleShift(F);
       return;
     }
+    if (F.bitTesting()) {
+      bitTest(F);
+      return;
+    }
+    if (F.bitScanning()) {
+      if (!read(F.Source, N, B))
+        return;
+      const uint32_t Value = !B ? O.BitScanChoices->ZeroResult
+                             : F.Operation == Op::BitScanForward
+                                 ? std::countr_zero(B)
+                                 : 31 - std::countl_zero(B);
+      writeRegister(*F.Destination.Register, N, Value);
+      S.EFlags = (S.EFlags & ~kX86LegacyArithmeticFlagsMask) |
+                 O.BitScanChoices->Flags | (!B ? 64 : 0);
+      return;
+    }
     if (F.Operation == Op::Push) {
       if (!read(F.Source, N, B))
         return;
@@ -233,6 +249,36 @@ private:
   X86MemoryAccessResult Result;
   std::optional<llvm::Error> Failure;
   std::optional<X86PagedMemory::PreparedStore> Store;
+
+  void bitTest(const X86LegacyScalarInstruction &F) {
+    uint32_t Index, Value;
+    if (!read(F.Source, F.Bytes, Index))
+      return;
+    auto Destination = F.Destination;
+    if (!Destination.Register && !F.Source.Immediate) {
+      const int32_t SignedIndex =
+          F.Bytes == 2 ? int32_t(int16_t(Index)) : int32_t(Index);
+      // Floor division selects the preceding word for a negative bit index.
+      // The final effective offset still wraps at the address-size boundary.
+      Destination.Displacement +=
+          (SignedIndex >> (F.Bytes == 2 ? 4 : 5)) * int32_t(F.Bytes);
+    }
+    const bool Update = F.Operation != Op::BitTest;
+    if (!read(Destination, F.Bytes, Value, Update))
+      return;
+    const uint32_t Bit = uint32_t(1) << (Index & (F.Bytes * 8 - 1));
+    const bool Carry = Value & Bit;
+    if (F.Operation == Op::BitSet)
+      Value |= Bit;
+    else if (F.Operation == Op::BitReset)
+      Value &= ~Bit;
+    else if (F.Operation == Op::BitComplement)
+      Value ^= Bit;
+    if (Update && !write(Destination, F.Bytes, Value))
+      return;
+    S.EFlags = (S.EFlags & ~(kX86LegacyBitTestUndefinedFlagsMask | 1u)) |
+               *O.BitTestUndefinedFlags | unsigned(Carry);
+  }
 
   void doubleShift(const X86LegacyScalarInstruction &F) {
     const unsigned Count = F.ShiftImmediate.value_or(S.Core.GPR[1]) & 31;

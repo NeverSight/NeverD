@@ -75,6 +75,18 @@ enum class X86LegacyScalarProfile : uint8_t { OrderedRAM };
 
 inline constexpr uint32_t kX86LegacyArithmeticFlagsMask = 0x8d5;
 inline constexpr uint32_t kX86LegacyShiftUndefinedFlagsMask = 0x811;
+inline constexpr uint32_t kX86LegacyBitTestUndefinedFlagsMask = 0x894;
+inline constexpr uint32_t kX86LegacyBitScanChoiceFlagsMask = 0x895;
+
+/// Explicit CPU choices for BSF/BSR's zero-source result and non-ZF flags.
+/// Current Intel documentation specifies preservation of the zero result;
+/// older architectural contracts leave it undefined. The producer binds the
+/// selected target, never the executing host. Nonzero indices and ZF are
+/// always computed from the source, independently of this image.
+struct X86LegacyBitScanChoices {
+  uint32_t ZeroResult = 0;
+  uint32_t Flags = 0;
+};
 
 /// SHLD/SHRD consume Result and all arithmetic Flags only for a word count
 /// above 16 after masking. Otherwise only undefined AF/OF consume Flags;
@@ -129,6 +141,11 @@ struct X86LegacyExecutionOptions {
   /// Required for SHLD/SHRD. Flags may contain only arithmetic flag bits.
   /// Faults retain the original operand and flags; no host policy is inferred.
   std::optional<X86LegacyDoubleShiftUndefinedState> DoubleShiftUndefined;
+  /// OF/SF/AF/PF after successful BT/BTS/BTR/BTC. CF is computed; ZF is kept.
+  std::optional<uint32_t> BitTestUndefinedFlags;
+  /// Required for BSF/BSR; Flags may contain only CF/PF/AF/SF/OF.
+  /// Faults retain the original destination and complete flag image.
+  std::optional<X86LegacyBitScanChoices> BitScanChoices;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -168,6 +185,7 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// MUL/IMUL, DIV/IDIV, CBW/CWDE/CWD/CDQ, LAHF/SAHF, CLC/STC/CMC/CLD/STD,
 /// BSWAP (dword), XLAT, LEAVE, SETcc/CMOVcc, LOOP/LOOPcc/JCXZ/JECXZ,
 /// SHL/SAL/SHR/SAR, ROL/ROR/RCL/RCR, SHLD/SHRD,
+/// BT/BTS/BTR/BTC (without LOCK), BSF/BSR,
 /// PUSH/POP and near CALL/JMP/Jcc/RET.
 /// Register immediates
 /// retain their unbound interface; other scalars require Scalars, CALL requires

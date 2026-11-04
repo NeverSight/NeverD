@@ -247,6 +247,9 @@ executor to one CPU and ordinary paged RAM for these protected-mode families:
 | AND, OR, XOR, TEST | The same exact operand widths, with an explicit `LogicalAuxiliaryCarry` value for architecturally undefined AF. An absent choice refuses before fetch. |
 | INC, DEC, NEG, NOT | Register and memory forms. INC/DEC preserve CF; NOT preserves flags. |
 | SHL/SAL, SHR, SAR, ROL, ROR, RCL, RCR | Byte/word/dword registers and memory, implicit one, imm8 and CL counts, masked counts and independent code/address widths. Undefined CF/AF/OF choices are explicit. |
+| SHLD, SHRD | Word/dword destinations and register source, imm8/CL counts, explicit undefined state for narrow out-of-range counts. |
+| BT, BTS, BTR, BTC | Word/dword register or memory bit base, register or imm8 index. Memory register indices are signed word offsets; immediate indices stay within the base word. LOCK requires a separate atomic binding and remains refused. |
+| BSF, BSR | Word/dword register or memory source, partial GPR publication and architectural ZF. Zero-source destination and non-ZF CPU choices are explicit. |
 | CBW, CWDE, CWD, CDQ | Implicit AL/AX/EAX sign extension with independent code/operand widths; other register bits and all flags are preserved. |
 | LAHF, SAHF | Exact AH/status-bit transfer, reserved bits, and preservation of OF, DF and privileged flags. |
 | CLC, STC, CMC, CLD, STD | CF or DF alone; nonprivileged execution at every CPL. |
@@ -339,6 +342,28 @@ The executor never derives an undefined result from a host-specific formula.
 All source, destination and count aliases use their original inputs. These
 operations reuse the staged scalar owner and its original fault/restart path;
 missing or invalid undefined-state bindings refuse before instruction fetch.
+
+BT/BTS/BTR/BTC require `BitTestUndefinedFlags`, containing only OF/SF/AF/PF.
+The selected original bit determines CF; ZF and unrelated flags are preserved.
+Register bit bases mask the index to the operand width. For memory, a signed
+register index selects a preceding or following whole word/dword before the
+final address-sized offset wraps and the segment base is added. An imm8 index
+never extends the memory address. BT performs a read; the modifying forms
+prepare a writable operand even when the selected bit would not change.
+Complete word/dword permissions, bounds and alignment apply, including a
+page boundary beyond the selected bit's byte. Faults retain original flags,
+registers and operand bytes for the ordinary-RAM profile.
+
+BSF/BSR require `BitScanChoices`. `ZeroResult` supplies the operand-sized
+destination only when the source is zero; `Flags` contains only CF/PF/AF/SF/OF.
+The executor computes every nonzero bit index and ZF independently. The
+producer binds its target CPU: current Intel SDM 093 documents preservation
+of the zero-source destination and distinguishes older flag behavior; older
+architectural contracts also leave more state undefined. This interface does
+not infer a vendor profile or choose one from the host. Source faults precede
+destination and flag publication. Missing or malformed bindings fail before
+fetch. REP-prefixed TZCNT/LZCNT and LOCK variants are separate instructions
+or execution contracts and are not silently interpreted as these forms.
 
 CBW/CWDE sign-extend AL/AX into AX/EAX; CWD/CDQ fill DX/EDX from the sign of
 AX/EAX without changing the low half of the dividend. Word operations retain

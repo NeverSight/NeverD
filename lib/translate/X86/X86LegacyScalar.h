@@ -58,6 +58,12 @@ enum class X86LegacyScalarOperation {
   RotateCarryRight,
   DoubleShiftLeft,
   DoubleShiftRight,
+  BitTest,
+  BitSet,
+  BitReset,
+  BitComplement,
+  BitScanForward,
+  BitScanReverse,
   Divide,
   SignedDivide,
   Multiply,
@@ -117,6 +123,17 @@ struct X86LegacyScalarInstruction {
   bool doubleShifting() const {
     return Operation == X86LegacyScalarOperation::DoubleShiftLeft ||
            Operation == X86LegacyScalarOperation::DoubleShiftRight;
+  }
+
+  bool bitTesting() const {
+    using Op = X86LegacyScalarOperation;
+    return Operation == Op::BitTest || Operation == Op::BitSet ||
+           Operation == Op::BitReset || Operation == Op::BitComplement;
+  }
+
+  bool bitScanning() const {
+    return Operation == X86LegacyScalarOperation::BitScanForward ||
+           Operation == X86LegacyScalarOperation::BitScanReverse;
   }
 };
 

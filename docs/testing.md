@@ -134,6 +134,17 @@ bases. The software unit oracle uses single-bit transfers and independent
 arbitrary images to distinguish count 16 from 17, preserve defined upper words,
 and retain original fault state even at zero or undefined counts.
 
+`LegacyBits/*` compares word/dword BT/BTS/BTR/BTC and BSF/BSR under both paging
+modes. Cases cover every immediate byte, signed and extreme register indices,
+word selection before address truncation, full-width access faults, all GPR
+aliases, segment overrides, read-only pages and original repair/IRET/retry.
+Bit tests bind an explicit measured OF/SF/AF/PF preservation image; CF and ZF
+are independently calculated or retained. Scans observe only their zero-input
+result and non-ZF choices through a separate host instruction. Nonflat CS and
+SS inputs use their own memory, independently of DS. The shared W^X observer
+allocation and calls live in `X86LegacyScalarNativeObserverFixture.inc`;
+shift-specific encodings remain in `X86LegacyShiftNativeFixture.inc`.
+
 `LegacyFastSystem/*` in `NeverDX86PagingTests` compares original protected
 SYSENTER/SYSEXIT under legacy paging and PAE, all CPLs, both code and stack
 sizes, nonflat entry, selector wrap, flags, caches and complete restart frames.

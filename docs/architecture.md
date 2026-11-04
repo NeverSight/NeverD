@@ -66,6 +66,10 @@ SHLD/SHRD capture their register source and CL before writing any destination.
 Their explicit undefined-state input supplies only AF/OF for in-range counts,
 or the low-word result and arithmetic flags for masked word counts above 16.
 The shared prepared-store owner retains zero-count and undefined-count faults.
+BT/BTS/BTR/BTC reuse that owner after resolving a signed register bit index
+to an address-sized word offset. Immediate indices stay within the base word.
+BSF/BSR read before publishing their GPR and ZF; their zero-source result and
+non-ZF CPU choices are explicit inputs, independent of every nonzero index.
 Segment permissions and page walks remain in their existing owners. A scalar
 read/modify/write prepares write permission once, reads those exact physical
 fragments through `X86PagedMemory::loadPreparedStore`, and commits the final

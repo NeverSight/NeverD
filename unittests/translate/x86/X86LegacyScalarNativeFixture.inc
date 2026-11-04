@@ -19,6 +19,8 @@ protected:
   std::optional<X86LegacyMultiplyProfile> Multiply;
   std::optional<uint32_t> ShiftUndefinedFlags;
   std::optional<X86LegacyDoubleShiftUndefinedState> DoubleShiftUndefined;
+  std::optional<uint32_t> BitTestUndefinedFlags;
+  std::optional<X86LegacyBitScanChoices> BitScanChoices;
   bool CheckOperandPageEffects = false;
 
   void SetUp() override {
@@ -221,6 +223,8 @@ protected:
     Options.Multiply = Multiply;
     Options.ShiftUndefinedFlags = ShiftUndefinedFlags;
     Options.DoubleShiftUndefined = DoubleShiftUndefined;
+    Options.BitTestUndefinedFlags = BitTestUndefinedFlags;
+    Options.BitScanChoices = BitScanChoices;
     auto Expected = executeX86LegacyInstruction(State, *Memory, Bytes, Options);
     ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
     if (Case == 12 || Case == 18) {

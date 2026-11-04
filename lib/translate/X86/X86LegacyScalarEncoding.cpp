@@ -213,6 +213,23 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
       F.Source.Register = R.modRM(F.Destination);
       if (!(Extended & 1))
         F.ShiftImmediate = R.byte();
+    } else if (Extended == 0xa3 || Extended == 0xab || Extended == 0xb3 ||
+               Extended == 0xbb || Extended == 0xba) {
+      constexpr Op Operations[]{Op::BitTest, Op::BitSet, Op::BitReset,
+                                Op::BitComplement};
+      if (Extended == 0xba) {
+        const unsigned Group = R.modRM(F.Destination);
+        if (Group < 4)
+          return std::nullopt;
+        F.Operation = Operations[Group - 4];
+        Immediate(1);
+      } else {
+        F.Operation = Operations[(Extended - 0xa3) >> 3];
+        F.Source.Register = R.modRM(F.Destination);
+      }
+    } else if (Extended == 0xbc || Extended == 0xbd) {
+      F.Operation = Extended & 1 ? Op::BitScanReverse : Op::BitScanForward;
+      F.Destination.Register = R.modRM(F.Source);
     } else if (Extended == 0xaf) {
       F.Operation = Op::SignedMultiplyLow;
       F.Destination.Register = R.modRM(F.Source);
