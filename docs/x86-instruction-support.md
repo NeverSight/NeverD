@@ -224,8 +224,9 @@ effects. Unknown descriptor reads/writes remain separate from the exact image
 read. Segment definitions and scheduling boundaries retain the state change;
 unused integer results do not remove it. NeverC exposes the nine valid long-mode
 `__builtin_ia32_lfs*`, `__builtin_ia32_lgs*` and `__builtin_ia32_lss*` spellings
-without inline assembly. LDS/LES require 32-bit code; 64-bit results require long
-mode, and code16 is explicitly refused.
+without inline assembly. The full LLVM fork supports word/dword results in
+protected code16 with the 32-bit stack/pointer ABI. LDS/LES require 16/32-bit
+code; 64-bit results require long mode. NeverC retains its x64 target.
 
 The selected segment remains ambient CPU state. Callers must maintain compiler
 ABI invariants, including TLS and the stack. The interface does not carry an
@@ -245,10 +246,20 @@ The 1,440 null-selector observations use the immediate debugger stop because a
 retained host reproduction shows Linux SIGTRAP return clearing selectors 1..3.
 They qualify the instruction result before return to userspace, without
 claiming post-interrupt continuation. No failing sample is retried or counted
-as passed. i386 execution, privileged descriptor-page faults, alignment checks
-and asynchronous interrupt delivery remain unqualified. See the exact tools,
+as passed. That original x64 qualification excluded i386 execution, privileged
+descriptor-page faults, alignment checks and asynchronous interrupts. See its exact tools,
 sources, host diagnosis and results in
 [the qualification record](evidence/x86-far-pointer-native-2026-10-29.json).
+
+The [protected code16 far-pointer qualification](evidence/x86-native-code16-far-pointer-2026-11-03.json)
+adds 63,840 state pairs on P/E cores and 31,920 code32 pairs, including
+#GP/#NP/#SS/#PF frames, CR2, segment caches and descriptor accesses. Only
+ABI-compatible successful cases continue through the compiler return. Six
+x64/NeverC profiles, seven LLVM code-generation tests, nine NeverC frontend
+tests and 82,944 protected division regression pairs also pass. Wrong-pointer
+controls fail as intended. The record retains the KVM I/O-completion and
+inactive-event-payload diagnostics; these checks do not establish real/VM86,
+CPL3 alignment, descriptor-write-fault or asynchronous-event support.
 
 ## Explicit LSS/LFS/LGS continuation
 
