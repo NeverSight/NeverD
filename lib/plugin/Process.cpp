@@ -17,7 +17,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -41,6 +43,17 @@ extern char **environ;
 namespace neverd::plugin {
 using namespace limits;
 namespace {
+/// Own the charge separately from the transport: callbacks may be delivered
+/// or discarded after Process has joined and destroyed its implementation.
+struct OutputCharge {
+  std::shared_ptr<std::atomic<size_t>> Pending;
+  size_t Bytes;
+
+  OutputCharge(std::shared_ptr<std::atomic<size_t>> Pending, size_t Bytes)
+      : Pending(std::move(Pending)), Bytes(Bytes) {}
+  ~OutputCharge() { Pending->fetch_sub(Bytes, std::memory_order_relaxed); }
+};
+
 #ifdef _WIN32
 using Pipe = HANDLE;
 constexpr Pipe InvalidPipe = nullptr;
@@ -120,6 +133,7 @@ bool openPipe(int (&Ends)[2]) {
 struct Process::Impl {
   PluginHost::Post Post;
   Notify Changed;
+  ProcessOutputBudget OutputBudget;
   Pipe Input = InvalidPipe, Output = InvalidPipe, Diagnostic = InvalidPipe;
 #ifdef _WIN32
   HANDLE Handle = nullptr, Tree = nullptr;
@@ -137,8 +151,9 @@ struct Process::Impl {
   /// Pipe threads that have not finished, guarded by Mutex.
   int Active = 0;
 
-  Impl(PluginHost::Post Post, Notify Changed)
-      : Post(std::move(Post)), Changed(std::move(Changed)) {}
+  Impl(PluginHost::Post Post, Notify Changed, ProcessOutputBudget OutputBudget)
+      : Post(std::move(Post)), Changed(std::move(Changed)),
+        OutputBudget(OutputBudget) {}
   ~Impl() {
     closePipe(Input);
     closePipe(Output);
@@ -151,9 +166,11 @@ struct Process::Impl {
     closePipe(Wake[1]);
 #endif
   }
-  void emit(ProcessEvent Event) {
-    Post([Callback = Changed, Event = std::move(Event)]() mutable {
+  void emit(ProcessEvent Event, std::shared_ptr<OutputCharge> Charge = {}) {
+    Post([Callback = Changed, Event = std::move(Event),
+          Charge = std::move(Charge)]() mutable {
       Callback(std::move(Event));
+      Charge.reset();
     });
   }
   void stop() {
@@ -193,6 +210,9 @@ struct Process::Impl {
   void read(Pipe Value, ProcessEvent::Kind Kind, size_t Limit) {
     std::array<char, kReadChunkBytes> Bytes;
     size_t Total = 0;
+    const auto Pending = OutputBudget == ProcessOutputBudget::PendingDelivery
+                             ? std::make_shared<std::atomic<size_t>>(0)
+                             : nullptr;
     while (true) {
 #ifndef _WIN32
       if (!ready(Value, POLLIN))
@@ -201,13 +221,23 @@ struct Process::Impl {
       const auto N = readPipe(Value, Bytes.data(), Bytes.size());
       if (N <= 0)
         break;
-      Total += N;
-      if (Total > Limit) {
+      const size_t Size = size_t(N);
+      const size_t Used =
+          Pending ? Pending->fetch_add(Size, std::memory_order_relaxed) : Total;
+      if (Size > Limit || Used > Limit - Size) {
+        if (Pending)
+          Pending->fetch_sub(Size, std::memory_order_relaxed);
         emit({ProcessEvent::Error, "Provider pipe output exceeded its limit"});
         stop();
         break;
       }
-      emit({Kind, std::string(Bytes.data(), N)});
+      if (Pending)
+        emit({Kind, std::string(Bytes.data(), Size)},
+             std::make_shared<OutputCharge>(Pending, Size));
+      else {
+        Total += Size;
+        emit({Kind, std::string(Bytes.data(), Size)});
+      }
     }
   }
   void writeInput() {
@@ -308,8 +338,10 @@ struct Process::Impl {
   }
 };
 
-Process::Process(PluginHost::Post Post, Notify Changed)
-    : State(std::make_unique<Impl>(std::move(Post), std::move(Changed))) {}
+Process::Process(PluginHost::Post Post, Notify Changed,
+                  ProcessOutputBudget OutputBudget)
+    : State(std::make_unique<Impl>(std::move(Post), std::move(Changed),
+                                   OutputBudget)) {}
 Process::~Process() {
   stop();
   join();
@@ -477,3 +509,4 @@ void Process::join() {
     State->Waiter.join();
 }
 } // namespace neverd::plugin
+

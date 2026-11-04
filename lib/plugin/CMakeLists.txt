@@ -27,6 +27,15 @@ elseif(NOT APPLE)
 endif()
 
 if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
+  add_executable(neverd-plugin-process-tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../unittests/plugin/ProcessTests.cpp")
+  target_link_libraries(neverd-plugin-process-tests PRIVATE neverd_plugin_host)
+  foreach(case streaming diagnostic_streaming lifetime diagnostic_lifetime
+      backlog diagnostic_backlog discard)
+    add_test(NAME NeverDPluginProcess.${case}
+      COMMAND neverd-plugin-process-tests ${case})
+    set_tests_properties(NeverDPluginProcess.${case} PROPERTIES TIMEOUT 30)
+  endforeach()
   add_executable(neverd-plugin-service-tests
     "${CMAKE_CURRENT_SOURCE_DIR}/../../unittests/plugin/ServiceEventTests.cpp")
   target_link_libraries(neverd-plugin-service-tests PRIVATE neverd_plugin_protocol)
@@ -62,3 +71,4 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
     set_tests_properties(NeverDProcessPluginSDK PROPERTIES TIMEOUT 60)
   endif()
 endif()
+
