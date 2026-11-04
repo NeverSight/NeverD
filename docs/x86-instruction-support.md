@@ -1466,6 +1466,21 @@ software descriptor-table model nor successful privileged execution on the
 host. MPX integration and the other full-machine-state gaps remain open;
 the production SDK pin and LLVM submodule have not changed.
 
+The full fork also accepts all 17 explicit descriptor-state `.address32`
+interfaces in protected code16 with its 32-bit stack/pointer ABI. Address
+width, table operand width and CS.D remain independent. The
+[November 3 native qualification](evidence/x86-native-code16-descriptor-state-2026-11-03.json)
+records 397,824 complete represented state/RAM pairs in code16 and another
+397,824 in code32 across O0/O2 and both local core types. It checks CPL0/CPL3,
+UMIP, segment overrides, descriptor busy writes, original #NP/#GP/#PF/#AC
+frames, successful compiler returns and corrupted-input/status rejection.
+INVLPG encoding, operand transport and exceptions are covered; stale physical
+TLB contents are not observed. Nine LLVM tests and all three compiler routes
+pass. The subsequent NeverC integration adds 19 x86 tests and reruns both
+affected 1,404-check routes; the stage-2 Android runtime test is unavailable
+in this stage-1 build, with its failed diagnostic retained separately.
+This adds neither a NeverC i386 frontend nor a general legacy dispatcher.
+
 Qualification with the current `dev` decoder (`f5e47ac44c1c`) passes 438
 source fixtures and 1,680 NeverC native-builtin compilations per SDK, using
 both the pinned fallback SDK and the new fork. The new SDK additionally
