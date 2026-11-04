@@ -1,5 +1,15 @@
 # Remaining x64 C-quality work
 
+The opt-in V6 `function_context` interface now retains a caller-declared entry
+return cell across continuation pauses and stops when a selected successful
+near RET consumes it. Both C routes and dispatchers share the check; the
+original stack supplies incoming bytes instead of guessed arguments. This
+adds an explicit invocation boundary to state exports, not automatic ordinary
+ABI recovery. The producer must own the return cell's lifetime and external
+environment effects; arbitrary frame reuse or provider-executed completion
+cannot be inferred from post-SP/PC. The two ordinary-C registry-query gaps
+below remain open.
+
 Exact private-word pointer transport now works in single-block, call-free Win64
 source callees when the caller locates the borrow above the callee's private
 frame and all non-stack accesses use that exact borrow. Reloads retain their

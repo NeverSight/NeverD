@@ -55,6 +55,13 @@ struct X64ContinuationExport {
 /// environment callback and a separate provider-invocation budget. The
 /// original continue driver remains available without environment dispatch.
 /// Providers own their effects; no ordinary ABI or native service is inferred.
+/// V6 function_context adds begin/continue/run_function entry points for a
+/// producer-declared entry return cell. Successful selected near RET through
+/// that cell completes the activation even at a selected destination. It
+/// requires entries and follow_internal_calls; paged memory, scheduled events
+/// and native RTM regions are separate contracts. Ordinary drivers are retained
+/// with their original behavior. This supplies no dynamic frame-ownership or
+/// source-ABI proof.
 /// V7 requires sysenter_msr_address_bits and returns a distinct V7
 /// state/driver. The intel-user-interrupt-v8 profile additionally requires
 /// uiret_restores_uif, owns UIF/monitor validity and stops UIRET at its

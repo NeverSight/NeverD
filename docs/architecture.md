@@ -17418,6 +17418,19 @@ invalid state and exhausted translated-instruction budgets remain final stops.
 The provider owns native effects and profile reentry. This is an execution
 interface, not an inferred Windows service contract or an ordinary ABI proof.
 
+`X64FunctionContext` separately owns the opt-in V6 entry return-cell boundary.
+The instruction-state builder authenticates near RET once; both driver emitters
+consume that metadata and the same completion check. A context retains entry
+RSP across pauses. Only a successful selected near RET whose original SP equals
+that cell marks completion, charges its instruction and stops before the
+returned target or an environment provider. Actual PC, cleanup and memory remain
+instruction-owned. The producer declares the cell's lifetime; this is not an
+inferred dynamic frame owner. Outside-provider completion and arbitrary frame
+reuse cannot be guessed from post-transfer SP or PC. Ordinary drivers are
+retained, and disabling the option adds no generated execution checks. This
+explicit input contract keeps unknown original stack bytes supplied by the
+caller instead of weakening ordinary source proofs.
+
 Continuation source lowers `RequireAligned` through the shared
 `X64Alignment` predicate after projecting a live FS/GS base. A failed predicate
 returns unchanged-state refusal before guest memory, architectural writes or

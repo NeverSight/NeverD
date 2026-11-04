@@ -20,7 +20,10 @@ namespace neverd {
 /// boundary. A separate caller-owned budget bounds provider invocations,
 /// including providers that leave PC unchanged. Invalid states and exhausted
 /// translated-instruction budgets never invoke the provider.
-void emitX64ContinuationEnvironment(llvm::raw_ostream &OS, unsigned Version);
+/// FunctionContext emits a companion run_function entry; a completed entry
+/// return cell stops before calling the environment, including selected PCs.
+void emitX64ContinuationEnvironment(llvm::raw_ostream &OS, unsigned Version,
+                                    bool FunctionContext);
 
 } // namespace neverd
 

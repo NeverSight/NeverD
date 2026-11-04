@@ -64,10 +64,12 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
 /// Connect adjacent selected instructions after checking their actual next PC.
 /// All other transfers use the common indexed dispatch. Keep instruction exits,
 /// physical CALL/RET, resumption and exact budget precedence unchanged.
+/// Optionally emit the function-context companion with the same selection
+/// index.
 void emitX64SpecialRegionDriver(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
-    bool FollowInternalCalls);
+    bool FollowInternalCalls, bool FunctionContext);
 
 } // namespace neverd
 

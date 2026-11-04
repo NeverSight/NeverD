@@ -19994,6 +19994,19 @@ strict request rejection, source/manifest hash binding and SDK/CLI parity.
 Run `NeverDX64ContinuationSourceTests` for the independent privileged-instruction
 KVM comparisons; source export alone does not extend that native qualification.
 
+`X64ContinuationExportTest.FunctionContextRejectsUnboundContracts` and
+`X64FunctionContextTest.CompileOnly` do not execute fixture instructions or
+exported code. They check request admission, disabled-option output identity,
+manifest contracts and O0/O2 object compilation through both C routes and both
+dispatch strategies. `X64FunctionContextTest.RuntimeBoundaries` separately runs
+the generated C at O0/O2 with ASan/UBSan. Its fourteen independent probes cover
+incoming high-DWORD values, internal returns, selected completion targets,
+changed return cells, RET cleanup, pivots, pause/resume, invalid/native states,
+provider handoff, context-free adapter behavior and rejected descendant
+initialization. Compile-only checks
+must not be reported as passing those runtime probes. Neither set establishes
+arbitrary dynamic frame ownership or a Windows environment implementation.
+
 `EnvironmentResumesTheActualPhysicalContext`,
 `EnvironmentBudgetsBoundEveryProviderAttempt` and
 `EnvironmentReceivesCompletedPrivilegeState` execute the companion run driver

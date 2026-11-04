@@ -12,6 +12,7 @@
 #include "X64ContinuationEnvironment.h"
 #include "X64ContinuationPagedDriver.h"
 #include "X64ContinuationSchedule.h"
+#include "X64FunctionContext.h"
 #include "X64RtmAbortRegions.h"
 #include "X64RtmRegions.h"
 #include "X64SpecialRegions.h"
@@ -77,6 +78,7 @@ struct Request {
   bool NativeRtmRegions = false;
   unsigned CalleeDepth = 0;
   bool DirectDispatch = false;
+  bool FunctionContext = false;
 };
 
 llvm::Expected<Request> readRequest(llvm::StringRef Text) {
@@ -117,6 +119,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "scheduled_events",
                                        "native_hyperv_hypercall_entry",
                                        "follow_internal_calls",
+                                       "function_context",
                                        "follow_direct_jumps",
                                        "callee_depth",
                                        "dispatch",
@@ -219,6 +222,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       {"paged_memory", &Options.PagedMemory},
       {"scheduled_events", &Options.ScheduledEvents},
       {"follow_internal_calls", &Result.FollowInternalCalls},
+      {"function_context", &Result.FunctionContext},
       {"follow_direct_jumps", &Result.FollowDirectJumps}};
   if (const auto *Value = Object->get("uiret_restores_uif")) {
     const auto Flag = Value->getAsBoolean();
@@ -287,6 +291,14 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
   Result.Entries = Object->get("entries") != nullptr;
   if (Object->get("follow_direct_jumps") && !Result.Entries)
     return invalid("follow_direct_jumps requires entries");
+  if (Result.FunctionContext &&
+      (!Result.Entries || !Result.FollowInternalCalls ||
+       Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
+       Options.PagedMemory || Options.ScheduledEvents ||
+       Result.NativeRtmRegions || Result.NativeRtmAbortRegions))
+    return invalid("function_context requires kernel-events-v6 entries with "
+                   "follow_internal_calls, without paged memory, scheduled "
+                   "events or native RTM regions");
   const auto *Addresses =
       Object->getArray(Result.Entries ? "entries" : "instructions");
   if (!Addresses || Addresses->empty() ||
@@ -469,7 +481,7 @@ typedef struct {
 
 void driver(llvm::raw_ostream &OS,
             llvm::ArrayRef<X64ContinuationInstructionSource> Units,
-            bool FollowInternalCalls) {
+            bool FollowInternalCalls, bool FunctionContext) {
   OS << R"C(
 /* State and budget are accessible and disjoint from each other and guest RAM.
  * Every successful instruction consumes one step, including exiting transfers.
@@ -487,18 +499,29 @@ void driver(llvm::raw_ostream &OS,
                "used. */\n"
              : "/* CALL/RET stop even when their target is selected. */\n");
   const auto Version = Units.front().StateVersion;
-  OS << "uint64_t neverd_x64_continue_v" << Version << "(neverd_x64_state_v"
-     << Version << " *state, uint64_t *budget) {\n";
+  OS << "uint64_t neverd_x64_continue" << (FunctionContext ? "_function" : "")
+     << "_v" << Version << "(neverd_x64_state_v" << Version
+     << " *state, uint64_t *budget"
+     << (FunctionContext ? ", neverd_x64_function_context_v1 *function" : "")
+     << ") {\n";
+  if (FunctionContext)
+    emitX64FunctionContextGuard(OS);
   OS << R"C(
     uint64_t last = 8;
     while (*budget) {
         uint64_t status;
         switch (state->PC) {
 )C";
-  for (const auto &Unit : Units)
-    OS << "        case " << hex(Unit.Address)
-       << "ULL: status = " << Unit.Function.Name
-       << "((uint8_t *)state); break;\n";
+  for (const auto &Unit : Units) {
+    OS << "        case " << hex(Unit.Address) << "ULL: ";
+    if (FunctionContext) {
+      OS << "\n";
+      emitX64FunctionContextStep(OS, Unit, "            ");
+      OS << "            break;\n";
+    } else {
+      OS << "status = " << Unit.Function.Name << "((uint8_t *)state); break;\n";
+    }
+  }
   OS << "        default: return last == "
      << uint64_t(X64ContinuationExitV1::Jump) << " ? "
      << uint64_t(X64ContinuationExitV1::Jump) << " : 8;\n"
@@ -734,11 +757,20 @@ typedef struct neverd_x64_event_v1 {
     emitX64PagedDriver(OS, *Units, Request->Options,
                        Request->FollowInternalCalls);
   } else {
-    if (Request->DirectDispatch)
-      emitX64SpecialRegionDriver(OS, *Units, Request->FollowInternalCalls);
-    else
-      driver(OS, *Units, Request->FollowInternalCalls);
-    emitX64ContinuationEnvironment(OS, Version);
+    if (Request->FunctionContext)
+      emitX64FunctionContext(OS, Version, Request->Addresses);
+    if (Request->DirectDispatch) {
+      emitX64SpecialRegionDriver(OS, *Units, Request->FollowInternalCalls,
+                                 Request->FunctionContext);
+    } else {
+      driver(OS, *Units, Request->FollowInternalCalls,
+             Request->FunctionContext);
+    }
+    if (Request->FunctionContext)
+      emitX64FunctionContextAdapter(OS, Version);
+    emitX64ContinuationEnvironment(OS, Version, false);
+    if (Request->FunctionContext)
+      emitX64ContinuationEnvironment(OS, Version, true);
   }
   if (Request->Options.ScheduledEvents)
     emitX64ContinuationSchedule(OS, *Units, Request->FollowInternalCalls,
@@ -1003,6 +1035,21 @@ typedef struct neverd_x64_event_v1 {
                    "environment invocation per pair"}};
   if (Request->NativeRtmRegions)
     Report["native_rtm_environment"] = std::move(Rtm);
+  if (Request->FunctionContext)
+    Report["function_context"] = llvm::json::Object{
+        {"context_type", "neverd_x64_function_context_v1"},
+        {"begin", "neverd_x64_begin_function_v6"},
+        {"driver", "neverd_x64_continue_function_v6"},
+        {"environment_driver", "neverd_x64_run_function_v6"},
+        {"completion",
+         "successful selected near RET consuming entry RSP; "
+         "stop before following its target or invoking a provider"},
+        {"frame_ownership_proven", false},
+        {"domain",
+         "producer declares entry return cell as completion boundary; "
+         "original full state and RAM, including incoming stack "
+         "bytes; retain context across pauses; provider completion "
+         "and arbitrary frame reuse are not inferred"}};
   llvm::raw_string_ostream(Result.Manifest)
       << llvm::formatv("{0:2}\n", llvm::json::Value(std::move(Report)));
   return Result;

@@ -125,6 +125,68 @@ address after a callback. Both work with HighC and LLVM C. Environment bindings
 remain explicit, and successful compilation is not whole-function execution
 qualification.
 
+### An explicit function context
+
+For `kernel-events-v6` entry selections, set `"function_context": true` and
+`"follow_internal_calls": true` to add a callable activation alongside the
+ordinary state drivers. The caller supplies the complete native entry state
+and original stack RAM, including bytes that ordinary source parameters cannot
+recover. This option does not manufacture an argument value or grant a native
+service implementation. Its owner is
+[`X64FunctionContext.cpp`](../lib/pipeline/X86/X64FunctionContext.cpp).
+
+```c
+neverd_x64_function_context_v1 function = {0};
+/* state already describes an explicitly requested root and its original RAM. */
+if (!neverd_x64_begin_function_v6(&state, &function))
+    return INVALID_ENTRY;
+uint64_t status = neverd_x64_run_function_v6(
+    &state, &instruction_budget, &environment_budget, &function,
+    environment, environment_context);
+/* Retain function and state when replenishing budgets or handling a boundary. */
+```
+
+`begin_function` accepts only the request's explicit roots, not automatically
+discovered descendants. It records entry RSP without reading or copying its
+return address; a rejected entry leaves the context unchanged. The producer
+declares that cell to be the completion boundary. A successful selected near
+`RET` using that **pre-instruction** SP changes `Phase` from
+`NEVERD_X64_FUNCTION_ACTIVE` to `NEVERD_X64_FUNCTION_RETURNED`. It retains the
+actual returned PC, `RET imm` cleanup and every state/memory effect, consumes
+one instruction unit and returns status 3 before following even a selected
+destination or invoking the environment. Other near returns follow the usual
+physical target policy. No per-step scan or host call stack is introduced;
+only selected near-return steps capture their pre-instruction SP.
+
+`neverd_x64_continue_function_v6` runs the same activation without a provider.
+Budget exhaustion, native requests, invalid machine states and external
+boundaries preserve an active context for resumption. Resuming a completed
+context returns 3 without accessing guest RAM or consuming either budget.
+An uninitialized or unknown phase returns 5 without invoking a provider.
+Context storage, state, both budgets and compiler storage must be accessible
+and mutually disjoint from guest RAM. The producer must retain the activation
+and avoid modifying its fields between begin and completion.
+
+This is a declared return-cell boundary, **not a dynamic frame-ownership
+proof**. A callee that reuses that cell for a different return violates the
+producer's function-boundary declaration. A pivot to a different cell does not
+complete this activation, even when its post-RET SP equals entry RSP or its PC
+resembles a caller. Provider execution outside the selection cannot report
+completion implicitly; return to selected code before the completing RET, or
+use the ordinary state driver with producer-owned stopping. No post-SP/PC
+heuristic fills this gap. Paged memory, scheduled events, other profiles and
+native RTM regions have separate contracts and are rejected with this option.
+
+Both dispatch strategies and C routes share the same return-cell check. The
+manifest records the additional entry points, completion contract and
+`frame_ownership_proven: false`. With the option disabled, generated source
+retains the existing driver text. When enabled, both interfaces share the
+instruction bodies and one driver;
+the original entry point delegates with no activation context. Added work is
+limited to activation entry/exit and selected near-return checks. This
+interface does not close ordinary-C argument-recovery gaps or
+qualify a full Windows execution environment.
+
 ## Invocation
 
 Legacy SHUFPS register forms select their four 32-bit lanes through primitive

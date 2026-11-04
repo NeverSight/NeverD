@@ -1321,6 +1321,7 @@ buildInstruction(SpecializationInstruction Instruction,
     Instruction.Ops = std::move(Expanded->Ops);
     Instruction.UndefinedEffects = std::move(Expanded->UndefinedEffects);
     Kind = Call ? Exit::Call : Exit::Return;
+    Result.IsNearReturn = !Call;
   } else if (Instruction.Origin.Control == LowInstructionControl::Branch) {
     Kind = Exit::Jump;
     if (!Instruction.Ops.empty() &&
