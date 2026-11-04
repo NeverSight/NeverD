@@ -277,6 +277,68 @@ TEST(COFFIndexedTables, ReachedInstructionOperandCannotBecomeATableSlot) {
   EXPECT_FALSE(Img.DataInCode.count(0x1100));
 }
 
+TEST(COFFIndexedTables, BackwardEdgesRetainAdjacentAndSeparatedCodeCoverage) {
+  for (Arch A : {Arch::X86, Arch::X64}) {
+    for (bool TableInGap : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(A));
+      SCOPED_TRACE(TableInGap);
+      auto Img = tableImage(A);
+      auto &Code = Img.Segments[0].Data;
+      std::fill_n(Code.begin(), 0x42, 0x90);
+      Code[0] = 0xeb; // jmp 0x1040: visit the right-hand interval first.
+      Code[1] = 0x3e;
+      Code[0x40] = 0x75; // jne 0x1002: fill between two visited intervals.
+      Code[0x41] = 0xc0;
+      const va_t Base = TableInGap ? 0x1010 : 0x1100;
+      if (TableInGap) {
+        Code[2] = 0xeb; // jmp 0x1020: the skipped bytes remain data.
+        Code[3] = 0x1c;
+      }
+      access(Img, 0xff, 0x14, false, 0x1042, Base);
+      pointer(Img, Base, 0x1080);
+      pointer(Img, Base + Img.getPointerSize(), 0x1090);
+      Code[0x80] = Code[0x90] = 0xc3;
+      coff_loader::recordIndexedTableBasesInCode(Img);
+      EXPECT_EQ(Img.CodePtrRelocSlots,
+                (std::set<va_t>{Base, Base + Img.getPointerSize()}));
+      EXPECT_EQ(Img.CallDispatchRelocSlots, Img.CodePtrRelocSlots);
+      EXPECT_EQ(Img.DataInCode, (std::set<va_t>{Base}));
+    }
+  }
+}
+
+TEST(COFFIndexedTables, ConflictingStartsRejectEvidenceInEitherVisitOrder) {
+  for (Arch A : {Arch::X86, Arch::X64}) {
+    for (bool OperandFirst : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(A));
+      SCOPED_TRACE(OperandFirst);
+      auto Img = tableImage(A);
+      auto &Code = Img.Segments[0].Data;
+      std::fill_n(Code.begin(), 0x42, 0x90);
+      Code[0] = 0xeb;
+      Code[1] = 0x3e;    // jmp 0x1040
+      Code[0x20] = 0xb8; // mov eax, 0x90909090
+      Code[0x40] = 0x75;
+      Code[0x41] = 0xc0; // jne 0x1002
+      access(Img, 0xff, 0x14, false, 0x1042);
+      pointer(Img, 0x1100, 0x1080);
+      Code[0x80] = 0xc3;
+      if (OperandFirst) {
+        Img.RuntimeFunctionAddrs.insert(0x1022);
+      } else {
+        Code[0x49] = 0xeb;
+        Code[0x4a] = 0xd7; // jmp 0x1022 after reading the table
+      }
+      Img.DataInCode.insert(0x1190);
+      coff_loader::recordIndexedTableBasesInCode(Img);
+      EXPECT_EQ(Img.DataInCode, (std::set<va_t>{0x1190}));
+      EXPECT_TRUE(Img.CodePtrRelocSlots.empty());
+      EXPECT_TRUE(Img.CallDispatchRelocSlots.empty());
+      EXPECT_TRUE(Img.CodeAddressRelocOperands.count(0x1100));
+    }
+  }
+}
+
 TEST(COFFIndexedTables, ExistingPointerRunStillSuppliesCallableEvidence) {
   auto Img = tableImage();
   access(Img);

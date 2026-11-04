@@ -795,7 +795,11 @@ void recordIndexedTableBasesInCode(BinaryImage &Img) {
     bool Jump;
   };
   std::map<va_t, std::vector<TableRead>> Reads;
-  std::map<va_t, va_t> Instructions;
+  // Only byte coverage is queried below. Coalesce adjacent instructions so
+  // straight-line code does not allocate a tree node for each instruction.
+  // Starts remain separate: revisiting a start is legal, but entering the
+  // middle of an already decoded instruction still rejects all evidence.
+  std::map<va_t, va_t> InstructionRanges;
   std::set<va_t> Seen;
   std::map<va_t, std::vector<va_t>> TableSlots;
   std::set<va_t> FollowedTables;
@@ -859,11 +863,22 @@ void recordIndexedTableBasesInCode(BinaryImage &Img) {
         !isFileBackedCodeImageRange(Img, Cur, Len))
       continue;
     const va_t End = Cur + Len;
-    const auto Next = Instructions.lower_bound(Cur);
-    if ((Next != Instructions.end() && Next->first < End) ||
-        (Next != Instructions.begin() && std::prev(Next)->second > Cur))
+    auto Next = InstructionRanges.lower_bound(Cur);
+    const auto Before = Next == InstructionRanges.begin()
+                            ? InstructionRanges.end()
+                            : std::prev(Next);
+    if ((Next != InstructionRanges.end() && Next->first < End) ||
+        (Before != InstructionRanges.end() && Before->second > Cur))
       return; // Conflicting instruction boundaries cannot authenticate data.
-    Instructions.emplace(Cur, End);
+    const va_t RangeEnd = Next != InstructionRanges.end() && Next->first == End
+                              ? Next->second
+                              : End;
+    if (Next != InstructionRanges.end() && Next->first == End)
+      Next = InstructionRanges.erase(Next);
+    if (Before != InstructionRanges.end() && Before->second == Cur)
+      Before->second = RangeEnd;
+    else
+      InstructionRanges.emplace_hint(Next, Cur, RangeEnd);
 
     const cs_detail &Detail = *Insn.Raw->detail;
     const cs_x86 &X86 = Detail.x86;
@@ -917,9 +932,10 @@ void recordIndexedTableBasesInCode(BinaryImage &Img) {
   }
 
   auto OverlapsCode = [&](va_t Slot) {
-    const auto Next = Instructions.lower_bound(Slot);
-    return (Next != Instructions.end() && Next->first - Slot < Width) ||
-           (Next != Instructions.begin() && std::prev(Next)->second > Slot);
+    const auto Next = InstructionRanges.lower_bound(Slot);
+    return (Next != InstructionRanges.end() && Next->first - Slot < Width) ||
+           (Next != InstructionRanges.begin() &&
+            std::prev(Next)->second > Slot);
   };
   std::vector<AbsolutePointerRelocationEffect> Effects;
   struct TableRun {
