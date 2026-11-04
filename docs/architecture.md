@@ -55,6 +55,8 @@ in their respective owners, with explicit target profiles.
 addressing for selector and scalar instructions. `X86LegacyScalarEncoding`
 authenticates complete scalar extents; `X86LegacyScalarExecution` owns staged
 GPR/flag/near-control-flow changes in the explicit ordinary-RAM profile.
+ARPL uses that owner's word read and a conditional store. Only a required RPL
+adjustment requests write permission, and ZF is staged until the store succeeds.
 PUSHF/POPF use that owner's exact word/dword stack access. Original CPL/IOPL
 select writable flags after a successful pop; the word form retains AC/ID.
 `backend/llvm/X86/X86FlagsNative.h` separately owns native image widths and

@@ -100,6 +100,17 @@ operand grammar, and the x64 paged execution and continuation source/export
 suites on both SDKs after changing the shared paged-RAM owner. Repeat the new
 CPU matrix on the qualified E core; retain skips as missing coverage.
 
+`LegacyArpl/*` uses the same original-instruction fixture for word selector
+adjustment. It covers every register alias and RPL pair, code/address widths,
+ignored operand-size prefixes, all CPLs, flat/nonflat segments and exact
+page-end words. Read-only segment/page cases distinguish conditional writes
+from unconditional RMW admission. Failed writes must preserve incoming ZF;
+read faults precede conditional write checks. Original PTE repair and IRET
+retry, successful operand A/D effects and complete state/RAM are compared on
+both paging modes and qualified P/E cores. Pair this matrix with
+`X86LegacyExecutionTest.Arpl*` and the full paging suite on both SDK profiles.
+See the [ARPL evidence](evidence/x86-legacy-arpl-2026-11-04.json).
+
 `LegacyFlags/*` uses the scalar fixture for PUSHF/POPF word/dword images.
 It compares every CPL/IOPL pair, each flag bit, original AC/ID state, independent
 code/stack sizes, nonflat/wrapping stacks, ignored prefixes and CR4.PVI.

@@ -193,13 +193,13 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// Authenticates original bytes through CS and paging, then executes the
 /// segment-transition owner, the explicit ordinary-RAM scalar owner, or
 /// NOP/CLI/STI/INT/INT3/INTO/INT1/UD2/IRET/RETF. Scalars include
-/// MOV/MOVSX/MOVZX, LEA, ADD/ADC/SUB/SBB/CMP, AND/OR/XOR/TEST, INC/DEC/NEG/NOT,
-/// MUL/IMUL, DIV/IDIV, CBW/CWDE/CWD/CDQ, LAHF/SAHF, CLC/STC/CMC/CLD/STD,
-/// BSWAP (dword), XLAT, LEAVE, SETcc/CMOVcc, LOOP/LOOPcc/JCXZ/JECXZ,
-/// SHL/SAL/SHR/SAR, ROL/ROR/RCL/RCR, SHLD/SHRD,
+/// MOV/MOVSX/MOVZX, LEA, ARPL, ADD/ADC/SUB/SBB/CMP, AND/OR/XOR/TEST,
+/// INC/DEC/NEG/NOT, MUL/IMUL, DIV/IDIV, CBW/CWDE/CWD/CDQ, LAHF/SAHF,
+/// CLC/STC/CMC/CLD/STD, BSWAP (dword), XLAT, LEAVE, SETcc/CMOVcc,
+/// LOOP/LOOPcc/JCXZ/JECXZ, SHL/SAL/SHR/SAR, ROL/ROR/RCL/RCR, SHLD/SHRD,
 /// BT/BTS/BTR/BTC, BSF/BSR, XCHG/XADD/CMPXCHG/CMPXCHG8B,
 /// AAA/AAS/DAA/DAS and AAM/AAD with every immediate base,
-/// PUSH/POP and near CALL/JMP/Jcc/RET.
+/// PUSH/POP, PUSHF/POPF and near CALL/JMP/Jcc/RET.
 /// Register immediates
 /// retain their unbound interface; other scalars require Scalars, CALL requires
 /// Calls, and logical flags require an AF choice. Division requires an explicit
@@ -214,6 +214,8 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// Valid memory LOCK forms and memory XCHG additionally require Atomics.
 /// CMPXCHG/CMPXCHG8B check write permissions and write the original memory
 /// value on comparison failure. CMPXCHG8B changes only ZF among the flags.
+/// ARPL reads its word first and checks write permissions only when RPL must
+/// increase. A failed conditional store preserves the original ZF.
 /// The explicit FastSystem profile adds protected
 /// SYSENTER/SYSEXIT with live Sysenter inputs and fixed CS/SS caches. Ignored
 /// prefixes retain 32-bit targets; LOCK delivers #UD after original-byte fetch.

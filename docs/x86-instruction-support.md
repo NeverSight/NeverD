@@ -3960,3 +3960,26 @@ observations with original-machine arithmetic flags. General i386 source ABI,
 debug producers, task/VM86 state,
 software SMM/SGX and the other unqualified environments remain open. This
 batch does not advance the final LLVM release, SDK pin or LLVM gitlink.
+
+### Protected ARPL conditional completion
+
+The protected ordinary-RAM executor now runs original ARPL register and memory
+forms through the shared legacy operand grammar. It retains the exact word
+width, unrelated register/flag bits and original fault restart state. The
+destination is read first; only an actual RPL increase requires a writable
+segment and page. ZF is committed after that write succeeds. A false condition
+can therefore complete on a read-only operand, while an unreadable operand
+still faults before the conditional write check.
+
+The [ARPL evidence](evidence/x86-legacy-arpl-2026-11-04.json) records 100,864
+original-instruction comparisons across both SDKs, both paging modes and
+qualified P/E cores. It covers all register aliases/RPL pairs, all CPLs,
+code/address widths, ignored operand prefixes, segment/page/alignment faults,
+exact page-end words and original handler repair/IRET/retry. Native ELF32
+read-only page/segment probes independently check conditional access and old
+ZF on a failed write. Both complete paging suites pass 814 checks, with two
+explicit LA57 hardware skips. The paging binaries remain byte-identical after
+the later dev integration, whose FLAGS exports and call-contract checks also pass.
+Native LLVM ARPL APIs were already present; this batch
+extends original protected-state execution. General i386 source dispatch,
+NeverC's i386 frontend and the other recorded completion boundaries remain open.

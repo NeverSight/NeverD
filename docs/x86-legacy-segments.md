@@ -243,6 +243,7 @@ executor to one CPU and ordinary paged RAM for these protected-mode families:
 | Family | Admitted forms |
 | --- | --- |
 | MOV, MOVSX, MOVZX, LEA | Byte/word/dword GPR and memory operands, high byte registers, immediate and moffs moves, independent 16/32-bit addresses and operands. LEA consumes the effective offset without consulting segment or paging permissions. |
+| ARPL | Word register or segmented memory destination and word register source, independent code/address widths, conditional RPL adjustment and ZF-only publication. Operand-size prefixes do not widen the word. |
 | ADD, ADC, SUB, SBB, CMP | Register/memory, accumulator-immediate and group-immediate forms, including signed imm8 and all six arithmetic flags. |
 | AND, OR, XOR, TEST | The same exact operand widths, with an explicit `LogicalAuxiliaryCarry` value for architecturally undefined AF. An absent choice refuses before fetch. |
 | INC, DEC, NEG, NOT | Register and memory forms. INC/DEC preserve CF; NOT preserves flags. |
@@ -273,13 +274,27 @@ unbound instructions fail before memory access. No decoder name alone grants
 an execution contract.
 
 Register and flag writes are staged until completion. Stores preflight the
-whole operand before writing data. Read/modify/write instructions request
-write permission first, preserving the write bit in #PF, and read through
-that same physical plan. Page-table A/D effects survive later faults and are
+whole operand before writing data. Unconditional read/modify/write instructions
+request write permission first, preserving the write bit in #PF, and read
+through that same physical plan. ARPL instead reads before checking whether
+its conditional write is needed. Page-table A/D effects survive later faults and are
 visible if the operand aliases its own PTE. Physical read or write denial
 remains a backing stop, distinct from an architectural exception. Segment
 checks precede paging and the selected alignment priority. Logical undefined
 AF choices become observable only on successful completion.
+
+ARPL compares the original low two RPL bits, raises the destination RPL only
+when needed, and preserves every other destination bit. A false condition
+clears ZF without requesting write permission: read-only segments and pages
+remain valid sources. A true condition checks the complete word store before
+publishing ZF; a write fault retains the original flags and operand. Read
+faults therefore precede conditional write-permission faults. The word remains
+two bytes in either code width, including with 66; 67 still selects addressing.
+Original handlers can repair the page and IRET/retry. See the
+[P/E-core qualification](evidence/x86-legacy-arpl-2026-11-04.json), including
+successful operand A/D effects and independent native ELF32 fault probes.
+The existing native LLVM ARPL interfaces retain their separate compiler ABI
+contract; this executor extension adds no NeverC i386 frontend or real/VM86 mode.
 
 PUSHF/PUSHFD clear RF/VM only in the stored snapshot; ordinary completion
 then clears live RF. POPF/POPFD read the whole stack operand before changing

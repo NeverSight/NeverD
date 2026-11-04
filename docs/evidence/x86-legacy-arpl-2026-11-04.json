@@ -1,0 +1,1166 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-04",
+  "scope": "Protected word ARPL register/memory completion, conditional access and original fault retry",
+  "global_goal_complete": false,
+  "reference": {
+    "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
+    "edition": "Intel SDM 093 Volume 2A, ARPL, pages 3-75 and 3-76",
+    "qualified_host": "Intel Core i9-13900H, P core CPU 0 and E core CPU 12"
+  },
+  "contract": {
+    "ownership": "Existing protected ordinary-RAM scalar grammar and executor; no new option or public state field. Exact raw bytes and mode precede fetch. The architectural RPL and ZF rules are implemented once.",
+    "width": "ARPL always consumes a word, even with 66. Independent code/address sizes, segment prefixes and every register alias preserve unaffected bits.",
+    "memory": "Read the original destination first. Only DEST.RPL < SRC.RPL requests a complete word store. False conditions can complete through read-only pages/segments. Read faults precede conditional write permission faults.",
+    "publication": "Only successful completion changes destination RPL and ZF. Failed writes preserve old ZF and all original register state. Ordinary completion alone clears live RF. Fault frames retain original EIP and the original flags.",
+    "restart": "Original guest handlers repair the PTE, discard the #PF error code and execute IRET before retry. Read and successful conditional-write A/D effects are compared independently of architectural state.",
+    "native_interfaces": "The LLVM ARPL native interfaces already exist; this batch extends the protected original-state executor and adds no new compiler API or NeverC i386 frontend."
+  },
+  "source_identity": {
+    "base_commit": "3c85ea8049e37d6e25bd6af9fb7519b6e2aadf96",
+    "source_sha256": {
+      "lib/translate/X86/X86LegacyScalarEncoding.cpp": "f8218244f0c727e3f83a8968b4cd224f63cc337fc5f72067c3a7cee0c52afd99",
+      "lib/translate/X86/X86LegacyScalar.h": "6a42a2fd461f378f951f214c2d494295fc2e007813ec7783680d6f356dba66cb",
+      "lib/translate/X86/X86LegacyScalarExecution.cpp": "3cac3b53d32271f1fe10a386d414b2f35ba01be5e98cf8f500825972ea709cfe",
+      "unittests/translate/x86/X86LegacyExecutionTests.cpp": "8c946128a8e1dfe7ad862dffd22c4027428f1f64ae42b9f5422c98364687f92a",
+      "unittests/translate/x86/X86PagingNativeTests.cpp": "2e3bc27bb12b58ffee8d6d97bb61df09f923d6781f266ff906e4f1eafd1d9292",
+      "unittests/translate/x86/X86LegacyArplNativeTests.inc": "db6088b082e6161d96adc7183cbaaabfa2ac1608c9f39363b7333a4bf0818075",
+      "unittests/translate/x86/X86LegacyArplTests.inc": "ebaeaf86479c04311af2bf1ec603087d68dcd127fe6925129813505cc5554eeb"
+    },
+    "binaries": {
+      "native": "2c0c73a81597708eb06421c877cac390b01e989f7f08a87cc80b81ea9729304d",
+      "r6": "dd00feb5c55cac5d2671d56dbf7c808fa1c7baa9c04fbfee7b21974c17f9bde0"
+    },
+    "implementation_commit": "0a2b310e86",
+    "integration_commit": "c0b099e6201517b133435ac1b5b2dbb21d306836",
+    "integration_binaries": {
+      "native": {
+        "commit": "c0b099e6201517b133435ac1b5b2dbb21d306836",
+        "sdk": "native",
+        "binaries": {
+          "NeverDX86PagingTests": "2c0c73a81597708eb06421c877cac390b01e989f7f08a87cc80b81ea9729304d",
+          "NeverDX86VirtualizationSourceTests": "58899fe993b2033b7322ad7e9a2f7e59330fd845b42513b9e434b9971728932d",
+          "NeverDSysVCallContractTests": "67653eba38cd375d590998ef1cf789591a71b6239c51c198640c5f4ea2b1b88a",
+          "NeverDSupportSharedValueTests": "194dafffa8d8c15034affbacc6c8d9598568c889861da780c20a93e7da1dfed1"
+        }
+      },
+      "r6": {
+        "commit": "c0b099e6201517b133435ac1b5b2dbb21d306836",
+        "sdk": "r6",
+        "binaries": {
+          "NeverDX86PagingTests": "dd00feb5c55cac5d2671d56dbf7c808fa1c7baa9c04fbfee7b21974c17f9bde0",
+          "NeverDX86VirtualizationSourceTests": "bffba5eacb9135960a96abe2e19477b8bf94785e9c9170632d4e46b4315a00ca",
+          "NeverDSysVCallContractTests": "2821dc67f2902344bea6e5555b28c30beb55a3b478e1a7e32cd9ec4f400ad168",
+          "NeverDSupportSharedValueTests": "b7edb36f53e5436be4485925a093fa9cef36328283bc7016f9bc57a3d6bba306"
+        }
+      }
+    },
+    "build_inputs": {
+      "frozen": {
+        "native": {
+          "receipt_sha256": "f42236cf2a8b3912da77876c7dbc1bc3e18647928fce8e00d4c5b05906ebab12",
+          "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+          "cache_sha256": "00b0dde0a4aff478d6c457105ed359c78e626ddd45895e445df77edf64158c55",
+          "options": [
+            "--target",
+            "NeverDX86PagingTests",
+            "--parallel",
+            "4"
+          ],
+          "dependencies": {
+            "neverd_highway": {
+              "branch": "master",
+              "commit": "1693ca7926ed12c5520623564e465cff97d93374",
+              "sha256": "f5149df5acb77cd9730ed8e5160f2deff0b02fe49cc45443fd396fdb5f0519d2"
+            },
+            "neverd_simdutf": {
+              "branch": "master",
+              "commit": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+              "sha256": "48e9c9fc33940bcc81cdaec785ce6e21ea20f7b03b7a26bff56abb41d2cf5126"
+            },
+            "neverd_simdjson": {
+              "branch": "master",
+              "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+              "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d"
+            },
+            "neverd_tbb": {
+              "branch": "master",
+              "commit": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+              "sha256": "98300a443e43d047eabae27d3e30232efe7508b20d8e24a92ff2d54ef511761b"
+            },
+            "neverd_mimalloc": {
+              "branch": "main3",
+              "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+              "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3"
+            }
+          }
+        },
+        "r6": {
+          "receipt_sha256": "3f50430baabd928fbafbf2bbbf76dafda2e74ee89f65a3e631aceef11a392b04",
+          "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+          "cache_sha256": "c9e92f0e3d2de59b6529ad6eaf9a42361e21655caa6d1f37ba3e65f10b8fdc29",
+          "options": [
+            "--target",
+            "NeverDX86PagingTests",
+            "--parallel",
+            "4"
+          ],
+          "dependencies": {
+            "neverd_highway": {
+              "branch": "master",
+              "commit": "1693ca7926ed12c5520623564e465cff97d93374",
+              "sha256": "f5149df5acb77cd9730ed8e5160f2deff0b02fe49cc45443fd396fdb5f0519d2"
+            },
+            "neverd_simdutf": {
+              "branch": "master",
+              "commit": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+              "sha256": "48e9c9fc33940bcc81cdaec785ce6e21ea20f7b03b7a26bff56abb41d2cf5126"
+            },
+            "neverd_simdjson": {
+              "branch": "master",
+              "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+              "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d"
+            },
+            "neverd_tbb": {
+              "branch": "master",
+              "commit": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+              "sha256": "98300a443e43d047eabae27d3e30232efe7508b20d8e24a92ff2d54ef511761b"
+            },
+            "neverd_mimalloc": {
+              "branch": "main3",
+              "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+              "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3"
+            }
+          }
+        }
+      },
+      "integration": {
+        "native": {
+          "receipt_sha256": "1ddcbd89962ec97b96788149e314d0d1640e67943adfedd855332f989310efba",
+          "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+          "cache_sha256": "00b0dde0a4aff478d6c457105ed359c78e626ddd45895e445df77edf64158c55",
+          "options": [
+            "--target",
+            "NeverDX86PagingTests",
+            "NeverDX86VirtualizationSourceTests",
+            "NeverDSysVCallContractTests",
+            "NeverDSupportSharedValueTests",
+            "--parallel",
+            "4"
+          ],
+          "dependencies": {
+            "neverd_highway": {
+              "branch": "master",
+              "commit": "1693ca7926ed12c5520623564e465cff97d93374",
+              "sha256": "f5149df5acb77cd9730ed8e5160f2deff0b02fe49cc45443fd396fdb5f0519d2"
+            },
+            "neverd_simdutf": {
+              "branch": "master",
+              "commit": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+              "sha256": "48e9c9fc33940bcc81cdaec785ce6e21ea20f7b03b7a26bff56abb41d2cf5126"
+            },
+            "neverd_simdjson": {
+              "branch": "master",
+              "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+              "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d"
+            },
+            "neverd_tbb": {
+              "branch": "master",
+              "commit": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+              "sha256": "98300a443e43d047eabae27d3e30232efe7508b20d8e24a92ff2d54ef511761b"
+            },
+            "neverd_mimalloc": {
+              "branch": "main3",
+              "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+              "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3"
+            }
+          }
+        },
+        "r6": {
+          "receipt_sha256": "4fc6de43d3c43df9fd9babb44f20730845573f265e7caed59fc4936c3c078ae7",
+          "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+          "cache_sha256": "c9e92f0e3d2de59b6529ad6eaf9a42361e21655caa6d1f37ba3e65f10b8fdc29",
+          "options": [
+            "--target",
+            "NeverDX86PagingTests",
+            "NeverDX86VirtualizationSourceTests",
+            "NeverDSysVCallContractTests",
+            "NeverDSupportSharedValueTests",
+            "--parallel",
+            "4"
+          ],
+          "dependencies": {
+            "neverd_highway": {
+              "branch": "master",
+              "commit": "1693ca7926ed12c5520623564e465cff97d93374",
+              "sha256": "f5149df5acb77cd9730ed8e5160f2deff0b02fe49cc45443fd396fdb5f0519d2"
+            },
+            "neverd_simdutf": {
+              "branch": "master",
+              "commit": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+              "sha256": "48e9c9fc33940bcc81cdaec785ce6e21ea20f7b03b7a26bff56abb41d2cf5126"
+            },
+            "neverd_simdjson": {
+              "branch": "master",
+              "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+              "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d"
+            },
+            "neverd_tbb": {
+              "branch": "master",
+              "commit": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+              "sha256": "98300a443e43d047eabae27d3e30232efe7508b20d8e24a92ff2d54ef511761b"
+            },
+            "neverd_mimalloc": {
+              "branch": "main3",
+              "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+              "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3"
+            }
+          }
+        }
+      }
+    }
+  },
+  "qualification": {
+    "focused_runs": [
+      {
+        "sdk": "native",
+        "cpu": 0,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIOR_SUPPORT_ARTIFACTS}/private_tmp.py",
+          "${ARTIFACTS}/frozen/native/focus-p-core/tmp",
+          "env",
+          "TMPDIR=/tmp",
+          "taskset",
+          "-c",
+          "0",
+          "${ARTIFACTS}/frozen/native/NeverDX86PagingTests",
+          "--gtest_filter=X86LegacyExecutionTest.Arpl*:LegacyArpl/*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACTS}/frozen/native/focus-p-core/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity"
+        },
+        "binary_sha256": "2c0c73a81597708eb06421c877cac390b01e989f7f08a87cc80b81ea9729304d",
+        "exit_code": 0,
+        "elapsed": 38.231700175994774,
+        "totals": {
+          "tests": "14",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "38.194",
+          "timestamp": "2026-11-04T09:09:33.848",
+          "name": "AllTests"
+        },
+        "comparisons": {
+          "LegacyArpl/X86LegacyArplNativeTest": 25216
+        },
+        "tests": {
+          "xml": "${ARTIFACTS}/frozen/native/focus-p-core/result.xml",
+          "xml_sha256": "b87460e4c206586c1387a1cca00f6397fda3c91d16bd11f435c2cdcc128fa104",
+          "discovered": 14,
+          "passed": 14,
+          "skipped": [],
+          "failed": [],
+          "comparisons": {
+            "LegacyArpl/X86LegacyArplNativeTest": {
+              "cpu_comparisons": 25216
+            }
+          }
+        }
+      },
+      {
+        "sdk": "native",
+        "cpu": 12,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIOR_SUPPORT_ARTIFACTS}/private_tmp.py",
+          "${ARTIFACTS}/frozen/native/focus-e-core/tmp",
+          "env",
+          "TMPDIR=/tmp",
+          "taskset",
+          "-c",
+          "12",
+          "${ARTIFACTS}/frozen/native/NeverDX86PagingTests",
+          "--gtest_filter=X86LegacyExecutionTest.Arpl*:LegacyArpl/*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACTS}/frozen/native/focus-e-core/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_CALL": "check",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero"
+        },
+        "binary_sha256": "2c0c73a81597708eb06421c877cac390b01e989f7f08a87cc80b81ea9729304d",
+        "exit_code": 0,
+        "elapsed": 64.43694258200412,
+        "totals": {
+          "tests": "14",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "64.399",
+          "timestamp": "2026-11-04T09:09:33.849",
+          "name": "AllTests"
+        },
+        "comparisons": {
+          "LegacyArpl/X86LegacyArplNativeTest": 25216
+        },
+        "tests": {
+          "xml": "${ARTIFACTS}/frozen/native/focus-e-core/result.xml",
+          "xml_sha256": "5b63c6870c44316a50fdd8aa40c822e52d3c5476b44a9e8591c2e75d647f2bcd",
+          "discovered": 14,
+          "passed": 14,
+          "skipped": [],
+          "failed": [],
+          "comparisons": {
+            "LegacyArpl/X86LegacyArplNativeTest": {
+              "cpu_comparisons": 25216
+            }
+          }
+        }
+      },
+      {
+        "sdk": "r6",
+        "cpu": 0,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIOR_SUPPORT_ARTIFACTS}/private_tmp.py",
+          "${ARTIFACTS}/frozen/r6/focus-p-core/tmp",
+          "env",
+          "TMPDIR=/tmp",
+          "taskset",
+          "-c",
+          "0",
+          "${ARTIFACTS}/frozen/r6/NeverDX86PagingTests",
+          "--gtest_filter=X86LegacyExecutionTest.Arpl*:LegacyArpl/*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACTS}/frozen/r6/focus-p-core/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity"
+        },
+        "binary_sha256": "dd00feb5c55cac5d2671d56dbf7c808fa1c7baa9c04fbfee7b21974c17f9bde0",
+        "exit_code": 0,
+        "elapsed": 39.02928411999892,
+        "totals": {
+          "tests": "14",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "39.004",
+          "timestamp": "2026-11-04T09:10:12.079",
+          "name": "AllTests"
+        },
+        "comparisons": {
+          "LegacyArpl/X86LegacyArplNativeTest": 25216
+        },
+        "tests": {
+          "xml": "${ARTIFACTS}/frozen/r6/focus-p-core/result.xml",
+          "xml_sha256": "fbaf416c8bb97fcad23fc8af467836d83845d74b30ea88cb46d855af0806862a",
+          "discovered": 14,
+          "passed": 14,
+          "skipped": [],
+          "failed": [],
+          "comparisons": {
+            "LegacyArpl/X86LegacyArplNativeTest": {
+              "cpu_comparisons": 25216
+            }
+          }
+        }
+      },
+      {
+        "sdk": "r6",
+        "cpu": 12,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIOR_SUPPORT_ARTIFACTS}/private_tmp.py",
+          "${ARTIFACTS}/frozen/r6/focus-e-core/tmp",
+          "env",
+          "TMPDIR=/tmp",
+          "taskset",
+          "-c",
+          "12",
+          "${ARTIFACTS}/frozen/r6/NeverDX86PagingTests",
+          "--gtest_filter=X86LegacyExecutionTest.Arpl*:LegacyArpl/*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACTS}/frozen/r6/focus-e-core/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_CALL": "check",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero"
+        },
+        "binary_sha256": "dd00feb5c55cac5d2671d56dbf7c808fa1c7baa9c04fbfee7b21974c17f9bde0",
+        "exit_code": 0,
+        "elapsed": 61.46700274798786,
+        "totals": {
+          "tests": "14",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "61.441",
+          "timestamp": "2026-11-04T09:10:38.285",
+          "name": "AllTests"
+        },
+        "comparisons": {
+          "LegacyArpl/X86LegacyArplNativeTest": 25216
+        },
+        "tests": {
+          "xml": "${ARTIFACTS}/frozen/r6/focus-e-core/result.xml",
+          "xml_sha256": "3cb7502e169a8b9e44f07be57d13b1b2a97be7b2e23f9f92d1f00b3f3da968d9",
+          "discovered": 14,
+          "passed": 14,
+          "skipped": [],
+          "failed": [],
+          "comparisons": {
+            "LegacyArpl/X86LegacyArplNativeTest": {
+              "cpu_comparisons": 25216
+            }
+          }
+        }
+      }
+    ],
+    "focused_passed": 56,
+    "focused_original_cpu_comparisons": 100864,
+    "full_paging_runs": [
+      {
+        "sdk": "native",
+        "cpu": 0,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIOR_SUPPORT_ARTIFACTS}/private_tmp.py",
+          "${ARTIFACTS}/frozen/native/full-p-core/tmp",
+          "env",
+          "TMPDIR=/tmp",
+          "taskset",
+          "-c",
+          "0",
+          "${ARTIFACTS}/frozen/native/NeverDX86PagingTests",
+          "--gtest_filter=*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACTS}/frozen/native/full-p-core/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity"
+        },
+        "binary_sha256": "2c0c73a81597708eb06421c877cac390b01e989f7f08a87cc80b81ea9729304d",
+        "exit_code": 0,
+        "elapsed": 1312.5574299610016,
+        "totals": {
+          "tests": "408",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "1312.517",
+          "timestamp": "2026-11-04T09:13:31.347",
+          "name": "AllTests"
+        },
+        "comparisons": {
+          "PagingModes/X86PagingNativeTest": 900,
+          "LegacyArpl/X86LegacyArplNativeTest": 25216,
+          "LegacyBits/X86LegacyBitNativeTest": 52096,
+          "LegacyConditions/X86LegacyConditionNativeTest": 25216,
+          "LegacyDecimal/X86LegacyDecimalNativeTest": 49696,
+          "LegacyDivision/X86LegacyDivisionNativeTest": 46464,
+          "LegacyDoubleShifts/X86LegacyDoubleShiftNativeTest": 38656,
+          "LegacyEvents/X86LegacyEventNativeTest": 14820,
+          "LegacyExchanges/X86LegacyExchangeNativeTest": 27600,
+          "LegacyFastSystem/X86LegacyFastSystemNativeTest": 4824,
+          "LegacyFlags/X86LegacyFlagsNativeTest": 24128,
+          "LegacyImplicit/X86LegacyImplicitNativeTest": 15232,
+          "LegacyMultiply/X86LegacyMultiplyNativeTest": 34560,
+          "LegacyReturns/X86LegacyReturnNativeTest": 11502,
+          "LegacyScalars/X86LegacyScalarNativeTest": 21280,
+          "LegacySegmentLoads/X86LegacySegmentLoadNativeTest": 43592,
+          "LegacyPagingModes/X86LegacySegmentNativeTest": 3216,
+          "LegacyShifts/X86LegacyShiftNativeTest": 55944,
+          "LegacyStatus/X86LegacyStatusNativeTest": 22016,
+          "LegacySteps/X86LegacyStepNativeTest": 80
+        },
+        "tests": {
+          "xml": "${ARTIFACTS}/frozen/native/full-p-core/result.xml",
+          "xml_sha256": "ea1d4553c39b2d387399f952c50d756c199e7eab0d3724ade99b3a38602cc2d8",
+          "discovered": 408,
+          "passed": 407,
+          "skipped": [
+            {
+              "test": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+              "reason": "${NEVERD_SOURCE}/unittests/translate/x86/X86PagingNativeTests.cpp:116\nBound KVM CPU has no LA57\n"
+            }
+          ],
+          "failed": [],
+          "comparisons": {
+            "PagingModes/X86PagingNativeTest": {
+              "cpu_comparisons": 900,
+              "event_cpu_comparisons": 292
+            },
+            "LegacyArpl/X86LegacyArplNativeTest": {
+              "cpu_comparisons": 25216
+            },
+            "LegacyBits/X86LegacyBitNativeTest": {
+              "cpu_comparisons": 52096
+            },
+            "LegacyConditions/X86LegacyConditionNativeTest": {
+              "cpu_comparisons": 25216
+            },
+            "LegacyDecimal/X86LegacyDecimalNativeTest": {
+              "cpu_comparisons": 49696
+            },
+            "LegacyDivision/X86LegacyDivisionNativeTest": {
+              "cpu_comparisons": 46464
+            },
+            "LegacyDoubleShifts/X86LegacyDoubleShiftNativeTest": {
+              "cpu_comparisons": 38656
+            },
+            "LegacyEvents/X86LegacyEventNativeTest": {
+              "cpu_comparisons": 14820
+            },
+            "LegacyExchanges/X86LegacyExchangeNativeTest": {
+              "cpu_comparisons": 27600
+            },
+            "LegacyFastSystem/X86LegacyFastSystemNativeTest": {
+              "cpu_comparisons": 4824
+            },
+            "LegacyFlags/X86LegacyFlagsNativeTest": {
+              "cpu_comparisons": 24128
+            },
+            "LegacyImplicit/X86LegacyImplicitNativeTest": {
+              "cpu_comparisons": 15232
+            },
+            "LegacyMultiply/X86LegacyMultiplyNativeTest": {
+              "cpu_comparisons": 34560
+            },
+            "LegacyReturns/X86LegacyReturnNativeTest": {
+              "cpu_comparisons": 11502
+            },
+            "LegacyScalars/X86LegacyScalarNativeTest": {
+              "cpu_comparisons": 21280
+            },
+            "LegacySegmentLoads/X86LegacySegmentLoadNativeTest": {
+              "cpu_comparisons": 43592
+            },
+            "LegacyPagingModes/X86LegacySegmentNativeTest": {
+              "cpu_comparisons": 3216
+            },
+            "LegacyShifts/X86LegacyShiftNativeTest": {
+              "cpu_comparisons": 55944
+            },
+            "LegacyStatus/X86LegacyStatusNativeTest": {
+              "cpu_comparisons": 22016
+            },
+            "LegacySteps/X86LegacyStepNativeTest": {
+              "cpu_comparisons": 80
+            }
+          }
+        }
+      },
+      {
+        "sdk": "r6",
+        "cpu": 0,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIOR_SUPPORT_ARTIFACTS}/private_tmp.py",
+          "${ARTIFACTS}/frozen/r6/full-p-core-retry/tmp",
+          "env",
+          "TMPDIR=/tmp",
+          "taskset",
+          "-c",
+          "0",
+          "${ARTIFACTS}/frozen/r6/NeverDX86PagingTests",
+          "--gtest_filter=*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACTS}/frozen/r6/full-p-core-retry/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity"
+        },
+        "binary_sha256": "dd00feb5c55cac5d2671d56dbf7c808fa1c7baa9c04fbfee7b21974c17f9bde0",
+        "exit_code": 0,
+        "elapsed": 1218.530246882001,
+        "totals": {
+          "tests": "408",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "1218.495",
+          "timestamp": "2026-11-04T09:21:22.585",
+          "name": "AllTests"
+        },
+        "comparisons": {
+          "PagingModes/X86PagingNativeTest": 900,
+          "LegacyArpl/X86LegacyArplNativeTest": 25216,
+          "LegacyBits/X86LegacyBitNativeTest": 52096,
+          "LegacyConditions/X86LegacyConditionNativeTest": 25216,
+          "LegacyDecimal/X86LegacyDecimalNativeTest": 49696,
+          "LegacyDivision/X86LegacyDivisionNativeTest": 46464,
+          "LegacyDoubleShifts/X86LegacyDoubleShiftNativeTest": 38656,
+          "LegacyEvents/X86LegacyEventNativeTest": 14820,
+          "LegacyExchanges/X86LegacyExchangeNativeTest": 27600,
+          "LegacyFastSystem/X86LegacyFastSystemNativeTest": 4824,
+          "LegacyFlags/X86LegacyFlagsNativeTest": 24128,
+          "LegacyImplicit/X86LegacyImplicitNativeTest": 15232,
+          "LegacyMultiply/X86LegacyMultiplyNativeTest": 34560,
+          "LegacyReturns/X86LegacyReturnNativeTest": 11502,
+          "LegacyScalars/X86LegacyScalarNativeTest": 21280,
+          "LegacySegmentLoads/X86LegacySegmentLoadNativeTest": 43592,
+          "LegacyPagingModes/X86LegacySegmentNativeTest": 3216,
+          "LegacyShifts/X86LegacyShiftNativeTest": 55944,
+          "LegacyStatus/X86LegacyStatusNativeTest": 22016,
+          "LegacySteps/X86LegacyStepNativeTest": 80
+        },
+        "tests": {
+          "xml": "${ARTIFACTS}/frozen/r6/full-p-core-retry/result.xml",
+          "xml_sha256": "b7cd4028cda8da3592238c89491cf6be081ec14ab05e8f0a5c6e07ced905e8fe",
+          "discovered": 408,
+          "passed": 407,
+          "skipped": [
+            {
+              "test": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+              "reason": "${NEVERD_SOURCE}/unittests/translate/x86/X86PagingNativeTests.cpp:116\nBound KVM CPU has no LA57\n"
+            }
+          ],
+          "failed": [],
+          "comparisons": {
+            "PagingModes/X86PagingNativeTest": {
+              "cpu_comparisons": 900,
+              "event_cpu_comparisons": 292
+            },
+            "LegacyArpl/X86LegacyArplNativeTest": {
+              "cpu_comparisons": 25216
+            },
+            "LegacyBits/X86LegacyBitNativeTest": {
+              "cpu_comparisons": 52096
+            },
+            "LegacyConditions/X86LegacyConditionNativeTest": {
+              "cpu_comparisons": 25216
+            },
+            "LegacyDecimal/X86LegacyDecimalNativeTest": {
+              "cpu_comparisons": 49696
+            },
+            "LegacyDivision/X86LegacyDivisionNativeTest": {
+              "cpu_comparisons": 46464
+            },
+            "LegacyDoubleShifts/X86LegacyDoubleShiftNativeTest": {
+              "cpu_comparisons": 38656
+            },
+            "LegacyEvents/X86LegacyEventNativeTest": {
+              "cpu_comparisons": 14820
+            },
+            "LegacyExchanges/X86LegacyExchangeNativeTest": {
+              "cpu_comparisons": 27600
+            },
+            "LegacyFastSystem/X86LegacyFastSystemNativeTest": {
+              "cpu_comparisons": 4824
+            },
+            "LegacyFlags/X86LegacyFlagsNativeTest": {
+              "cpu_comparisons": 24128
+            },
+            "LegacyImplicit/X86LegacyImplicitNativeTest": {
+              "cpu_comparisons": 15232
+            },
+            "LegacyMultiply/X86LegacyMultiplyNativeTest": {
+              "cpu_comparisons": 34560
+            },
+            "LegacyReturns/X86LegacyReturnNativeTest": {
+              "cpu_comparisons": 11502
+            },
+            "LegacyScalars/X86LegacyScalarNativeTest": {
+              "cpu_comparisons": 21280
+            },
+            "LegacySegmentLoads/X86LegacySegmentLoadNativeTest": {
+              "cpu_comparisons": 43592
+            },
+            "LegacyPagingModes/X86LegacySegmentNativeTest": {
+              "cpu_comparisons": 3216
+            },
+            "LegacyShifts/X86LegacyShiftNativeTest": {
+              "cpu_comparisons": 55944
+            },
+            "LegacyStatus/X86LegacyStatusNativeTest": {
+              "cpu_comparisons": 22016
+            },
+            "LegacySteps/X86LegacyStepNativeTest": {
+              "cpu_comparisons": 80
+            }
+          }
+        }
+      }
+    ],
+    "full_paging_passed": 814,
+    "full_paging_skips": 2,
+    "full_paging_all_family_cpu_comparisons": 1034076,
+    "independent_native_elf32_probes": [
+      {
+        "family": "readonly",
+        "cpu": 0,
+        "cases": 16,
+        "outcomes": {
+          "completed": 10,
+          "read_only_page_fault": 6,
+          "read_only_segment_fault": 0
+        },
+        "log_sha256": "af99cd74a54f519a3542b414d9bf912b5fb42e030e77b550d9f0870d74350eec"
+      },
+      {
+        "family": "readonly",
+        "cpu": 12,
+        "cases": 16,
+        "outcomes": {
+          "completed": 10,
+          "read_only_page_fault": 6,
+          "read_only_segment_fault": 0
+        },
+        "log_sha256": "af99cd74a54f519a3542b414d9bf912b5fb42e030e77b550d9f0870d74350eec"
+      },
+      {
+        "family": "segments",
+        "cpu": 0,
+        "cases": 64,
+        "outcomes": {
+          "completed": 46,
+          "read_only_page_fault": 6,
+          "read_only_segment_fault": 12
+        },
+        "log_sha256": "6ab8f97d36949d26730cd59a291defd3487e9c63aeffddd311c185275c1651f6"
+      },
+      {
+        "family": "segments",
+        "cpu": 12,
+        "cases": 64,
+        "outcomes": {
+          "completed": 46,
+          "read_only_page_fault": 6,
+          "read_only_segment_fault": 12
+        },
+        "log_sha256": "6ab8f97d36949d26730cd59a291defd3487e9c63aeffddd311c185275c1651f6"
+      },
+      {
+        "family": "fault-flags",
+        "cpu": 0,
+        "cases": 64,
+        "outcomes": {
+          "completed": 46,
+          "read_only_page_fault": 6,
+          "read_only_segment_fault": 12
+        },
+        "log_sha256": "71adfa279524d0b72c58379110f46ba8f3c2843ccc79c7d115ca3db990f26a8e"
+      },
+      {
+        "family": "fault-flags",
+        "cpu": 12,
+        "cases": 64,
+        "outcomes": {
+          "completed": 46,
+          "read_only_page_fault": 6,
+          "read_only_segment_fault": 12
+        },
+        "log_sha256": "71adfa279524d0b72c58379110f46ba8f3c2843ccc79c7d115ca3db990f26a8e"
+      }
+    ],
+    "independent_probe_cases": 288,
+    "probe_sources_and_binaries": {
+      "readonly": "7a313858fd9044a32469710a2bcf96de6d50201916b62d780639da75bf0fba15",
+      "readonly.c": "619862edc6b069e53e6d379c213ce6d382326e307e606312d028a2afdcaa0542",
+      "segments": "218d1b79b3b6e963ef406ba97d554b46cff8052b3cb132f68a40daa4bd87ccec",
+      "segments.c": "8511ec93e9e55a137703cc801f13a0a9027c7d1d14c80e87d87f1a2b2f09fefd",
+      "fault-flags": "1a77bdee92a786e7ce11eb9b0acf6900e123af867e91f5c01fa16ed7d400101f",
+      "fault-flags.c": "032fb4e59f1f506d3d7aee9745352e8814ab3648c2ddd3429b46807bac40cf8d"
+    },
+    "integration_source_runs": [
+      [
+        {
+          "sdk": "native",
+          "target": "NeverDSupportSharedValueTests",
+          "command": [
+            "${ARTIFACTS}/integration/native/NeverDSupportSharedValueTests",
+            "--gtest_output=xml:${ARTIFACTS}/integration/native/NeverDSupportSharedValueTests.xml"
+          ],
+          "exit_code": 0,
+          "elapsed": 0.0024792530020931736,
+          "binary_sha256": "194dafffa8d8c15034affbacc6c8d9598568c889861da780c20a93e7da1dfed1",
+          "totals": {
+            "tests": "3",
+            "failures": "0",
+            "disabled": "0",
+            "errors": "0",
+            "time": "0.",
+            "timestamp": "2026-11-04T09:36:28.571",
+            "name": "AllTests"
+          },
+          "skipped": 0,
+          "tests": {
+            "xml": "${ARTIFACTS}/integration/native/NeverDSupportSharedValueTests.xml",
+            "xml_sha256": "6f21da0c8cad58ae7e6aae5325e373e4be6e124837f213d34386d3920414fa41",
+            "discovered": 3,
+            "passed": 3,
+            "skipped": [],
+            "failed": [],
+            "comparisons": {}
+          }
+        },
+        {
+          "sdk": "native",
+          "target": "NeverDSysVCallContractTests",
+          "command": [
+            "${ARTIFACTS}/integration/native/NeverDSysVCallContractTests",
+            "--gtest_output=xml:${ARTIFACTS}/integration/native/NeverDSysVCallContractTests.xml"
+          ],
+          "exit_code": 0,
+          "elapsed": 5.005616876995191,
+          "binary_sha256": "67653eba38cd375d590998ef1cf789591a71b6239c51c198640c5f4ea2b1b88a",
+          "totals": {
+            "tests": "43",
+            "failures": "0",
+            "disabled": "0",
+            "errors": "0",
+            "time": "4.998",
+            "timestamp": "2026-11-04T09:36:28.578",
+            "name": "AllTests"
+          },
+          "skipped": 0,
+          "tests": {
+            "xml": "${ARTIFACTS}/integration/native/NeverDSysVCallContractTests.xml",
+            "xml_sha256": "60e9284546bcd65601e651b72125ac08677157254317591c83902c6dafd14141",
+            "discovered": 43,
+            "passed": 43,
+            "skipped": [],
+            "failed": [],
+            "comparisons": {}
+          }
+        },
+        {
+          "sdk": "native",
+          "target": "NeverDX86VirtualizationSourceTests",
+          "command": [
+            "${ARTIFACTS}/integration/native/NeverDX86VirtualizationSourceTests",
+            "--gtest_output=xml:${ARTIFACTS}/integration/native/NeverDX86VirtualizationSourceTests.xml",
+            "--gtest_filter=X86FlagsSource.*"
+          ],
+          "exit_code": 0,
+          "elapsed": 32.21518288401421,
+          "binary_sha256": "58899fe993b2033b7322ad7e9a2f7e59330fd845b42513b9e434b9971728932d",
+          "totals": {
+            "tests": "6",
+            "failures": "0",
+            "disabled": "0",
+            "errors": "0",
+            "time": "32.205",
+            "timestamp": "2026-11-04T09:36:33.587",
+            "name": "AllTests"
+          },
+          "skipped": 0,
+          "tests": {
+            "xml": "${ARTIFACTS}/integration/native/NeverDX86VirtualizationSourceTests.xml",
+            "xml_sha256": "d3352c3b1a9e04ff1a0def0fa07520de28d0bcf10202fec639aec62030e71eaa",
+            "discovered": 6,
+            "passed": 6,
+            "skipped": [],
+            "failed": [],
+            "comparisons": {}
+          }
+        }
+      ],
+      [
+        {
+          "sdk": "r6",
+          "target": "NeverDSupportSharedValueTests",
+          "command": [
+            "${ARTIFACTS}/integration/r6/NeverDSupportSharedValueTests",
+            "--gtest_output=xml:${ARTIFACTS}/integration/r6/NeverDSupportSharedValueTests.xml"
+          ],
+          "exit_code": 0,
+          "elapsed": 0.002481168005033396,
+          "binary_sha256": "b7edb36f53e5436be4485925a093fa9cef36328283bc7016f9bc57a3d6bba306",
+          "totals": {
+            "tests": "3",
+            "failures": "0",
+            "disabled": "0",
+            "errors": "0",
+            "time": "0.",
+            "timestamp": "2026-11-04T09:37:42.444",
+            "name": "AllTests"
+          },
+          "skipped": 0,
+          "tests": {
+            "xml": "${ARTIFACTS}/integration/r6/NeverDSupportSharedValueTests.xml",
+            "xml_sha256": "edadcb79df0db004ab8dcba54aa520c2c8ee8ea63a66f11e29e38647c218b853",
+            "discovered": 3,
+            "passed": 3,
+            "skipped": [],
+            "failed": [],
+            "comparisons": {}
+          }
+        },
+        {
+          "sdk": "r6",
+          "target": "NeverDSysVCallContractTests",
+          "command": [
+            "${ARTIFACTS}/integration/r6/NeverDSysVCallContractTests",
+            "--gtest_output=xml:${ARTIFACTS}/integration/r6/NeverDSysVCallContractTests.xml"
+          ],
+          "exit_code": 0,
+          "elapsed": 4.759873333998257,
+          "binary_sha256": "2821dc67f2902344bea6e5555b28c30beb55a3b478e1a7e32cd9ec4f400ad168",
+          "totals": {
+            "tests": "43",
+            "failures": "0",
+            "disabled": "0",
+            "errors": "0",
+            "time": "4.753",
+            "timestamp": "2026-11-04T09:37:42.451",
+            "name": "AllTests"
+          },
+          "skipped": 0,
+          "tests": {
+            "xml": "${ARTIFACTS}/integration/r6/NeverDSysVCallContractTests.xml",
+            "xml_sha256": "3b30fcd5c97ff5d2834ffb4a4882b1017dcdbe4ed78d562be1995b8482e88842",
+            "discovered": 43,
+            "passed": 43,
+            "skipped": [],
+            "failed": [],
+            "comparisons": {}
+          }
+        },
+        {
+          "sdk": "r6",
+          "target": "NeverDX86VirtualizationSourceTests",
+          "command": [
+            "${ARTIFACTS}/integration/r6/NeverDX86VirtualizationSourceTests",
+            "--gtest_output=xml:${ARTIFACTS}/integration/r6/NeverDX86VirtualizationSourceTests.xml",
+            "--gtest_filter=X86FlagsSource.*"
+          ],
+          "exit_code": 0,
+          "elapsed": 34.014781279998715,
+          "binary_sha256": "bffba5eacb9135960a96abe2e19477b8bf94785e9c9170632d4e46b4315a00ca",
+          "totals": {
+            "tests": "6",
+            "failures": "0",
+            "disabled": "0",
+            "errors": "0",
+            "time": "34.006",
+            "timestamp": "2026-11-04T09:37:47.213",
+            "name": "AllTests"
+          },
+          "skipped": 0,
+          "tests": {
+            "xml": "${ARTIFACTS}/integration/r6/NeverDX86VirtualizationSourceTests.xml",
+            "xml_sha256": "31e78e1c5b6b8b3ba0172a2838ff46bcc05c9eccbc27179f3763c6712903d234",
+            "discovered": 6,
+            "passed": 6,
+            "skipped": [],
+            "failed": [],
+            "comparisons": {}
+          }
+        }
+      ]
+    ],
+    "integration_paging_runs": [
+      {
+        "sdk": "native",
+        "cpu": 0,
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "${PRIOR_SUPPORT_ARTIFACTS}/private_tmp.py",
+          "${ARTIFACTS}/integration/native/paging/tmp",
+          "env",
+          "TMPDIR=/tmp",
+          "taskset",
+          "-c",
+          "0",
+          "${ARTIFACTS}/integration/native/NeverDX86PagingTests",
+          "--gtest_filter=X86LegacyExecutionTest.*:LegacyArpl/*:LegacyFlags/*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:${ARTIFACTS}/integration/native/paging/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity"
+        },
+        "binary_sha256": "2c0c73a81597708eb06421c877cac390b01e989f7f08a87cc80b81ea9729304d",
+        "exit_code": 0,
+        "elapsed": 137.38742740100133,
+        "totals": {
+          "tests": "163",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "137.349",
+          "timestamp": "2026-11-04T09:36:28.606",
+          "name": "AllTests"
+        },
+        "comparisons": {
+          "LegacyArpl/X86LegacyArplNativeTest": 25216,
+          "LegacyFlags/X86LegacyFlagsNativeTest": 24128
+        },
+        "tests": {
+          "xml": "${ARTIFACTS}/integration/native/paging/result.xml",
+          "xml_sha256": "bd1712c2f28c2573b88464866b1f9e9aeb1713e3a2b2c39535f28176c0784d00",
+          "discovered": 163,
+          "passed": 163,
+          "skipped": [],
+          "failed": [],
+          "comparisons": {
+            "LegacyArpl/X86LegacyArplNativeTest": {
+              "cpu_comparisons": 25216
+            },
+            "LegacyFlags/X86LegacyFlagsNativeTest": {
+              "cpu_comparisons": 24128
+            }
+          }
+        }
+      }
+    ],
+    "integration_paging_binary_identity": [
+      {
+        "sdk": "native",
+        "sha256": "2c0c73a81597708eb06421c877cac390b01e989f7f08a87cc80b81ea9729304d",
+        "identical_to_full_and_focused_frozen_binary": true
+      },
+      {
+        "sdk": "r6",
+        "sha256": "dd00feb5c55cac5d2671d56dbf7c808fa1c7baa9c04fbfee7b21974c17f9bde0",
+        "identical_to_full_and_focused_frozen_binary": true
+      }
+    ],
+    "integration_flags_export_identity": [
+      {
+        "sdk": "native",
+        "identical": 192,
+        "changed": [],
+        "missing": []
+      },
+      {
+        "sdk": "r6",
+        "identical": 192,
+        "changed": [],
+        "missing": []
+      }
+    ]
+  },
+  "diagnostics": {
+    "resource_reschedule": {
+      "reason": "Reserve one KVM worker for the pending frozen FLAGS integration paging check. Resume the r6 full ARPL matrix afterward; do not count this interrupted run as a failure of the implementation or as completed coverage.",
+      "terminated_pids": [
+        3313624
+      ],
+      "time": "2026-11-04T17:17:37.595761+00:00"
+    },
+    "interrupted_r6_run": {
+      "sdk": "r6",
+      "cpu": 0,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "${PRIOR_SUPPORT_ARTIFACTS}/private_tmp.py",
+        "${ARTIFACTS}/frozen/r6/full-p-core/tmp",
+        "env",
+        "TMPDIR=/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "${ARTIFACTS}/frozen/r6/NeverDX86PagingTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:${ARTIFACTS}/frozen/r6/full-p-core/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity"
+      },
+      "binary_sha256": "dd00feb5c55cac5d2671d56dbf7c808fa1c7baa9c04fbfee7b21974c17f9bde0",
+      "exit_code": -15,
+      "elapsed": 246.30208430899074
+    },
+    "interrupted_run_excluded_from_totals": true,
+    "original_probe_logs": "The six host logs are asserted against every RPL/permission combination by host-probes.json; they retain actual trap numbers, error codes and failed-write flags.",
+    "test_strengthening": "Final sources initialize ZF to zero when a write adjustment will fault, preventing an early ZF write from passing the oracle. Nonflat-memory cases initialize the selected segment address; CS/SS cases use their flat address."
+  },
+  "remaining_boundaries": [
+    "No general i386 source dispatcher or NeverC i386 frontend.",
+    "Real/VM86, task/call gates and debug producers remain outside this protected profile.",
+    "Faulting page-walk A/D details, TLB/device/concurrent-CPU behavior and unqualified processor models remain separate.",
+    "Software SMM/SMI, SGX/AEX/EPCM, full CET/FRED and the other global instruction/state gaps remain open."
+  ],
+  "publication_gate": {
+    "final_llvm_release_created": false,
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69"
+  },
+  "artifact_commands": {
+    "assemble-evidence.py": "9a9b28eaf3939fbeee594e0b94fd5da3458c7e82a4098d48abae1fa04d3d730d",
+    "build-integration.py": "e7d7eaece4b184e3da9b40eb932cefd2d309682fe1e6cb2d1b610bdccd00ad3b",
+    "run-focused.py": "56bc4588a0bd3a357c3ac867c22b66af067412976a7fad8999801ab0cd4fa5b6",
+    "run-full.py": "533882bab292ee21cd683817935c4b69cc7db304ffbb917b9d3ca7506879a931",
+    "run-integration-paging.py": "0d657797d42852ecd69ee72832d134b465685cfee8305d8c52f6aab5a6b28dee",
+    "run-integration.py": "b28ec8af6c2d8284e0d3af763465e5902f08790744f2e038ee0d2ecb914208ae",
+    "run-r6-retry.py": "9ada20174695e9efab1326ce9433a1dd2a2df568e0479e90db68a604b6f46d76"
+  }
+}
