@@ -11122,6 +11122,13 @@ its extent; a neighboring unknown-byte read still refuses removal.
 `MedFlagConstants.GeneratedComparisonZeroIsScalar` checks generated flag-fold
 zeroes on x64, x86, AArch64 and ARM, while a real subtraction preserves its
 address operand's provenance. These two tests do not launch emitted code.
+`SourceFrameBorrows.PrivateLeafSpillsRetainEveryReloadedPointerUse` checks exact
+private pointer saves/reloads, their real and adjacent read extents, full versus
+partial replacement, dead/omitted replacements, escaped storage, incoming homes
+and allocation lifetime. `Win64CallContract.PrivateBorrowSpillsKeepNativeReadExtents`
+statically projects actual x64 spill/reload bytes through both C routes, with
+optimization enabled/disabled and the callee selected/omitted. These checks do
+not execute an input or emitted program and do not certify native nested calls.
 `Win64CallContract.BoundedCalleeReadDoesNotExposeAdjacentUnknownBytes`
 executes both source routes at O0/O2 with UBSan, with optimization enabled or
 disabled and with the callee selected or omitted. Its observing negative control

@@ -4917,4 +4917,148 @@ TEST(SourceFrameBorrows, NullTestsDoNotObserveBorrowedContents) {
   }
 }
 
+TEST(SourceFrameBorrows, PrivateLeafSpillsRetainEveryReloadedPointerUse) {
+  for (unsigned Case = 0; Case != 24; ++Case) {
+    SCOPED_TRACE(Case);
+    MedFunc Caller;
+    Caller.Entry = 0x1000;
+    Caller.CC = CallingConv::Win64;
+    Caller.FrameSize = 0x38;
+    auto Word = temp(20);
+    Word.Size = 4;
+    MedBlock Entry;
+    Entry.Id = 0;
+    Entry.StartAddr = Caller.Entry;
+    Entry.Ops = {
+        op(NdOp::COPY, sp(0), {sp(0)}),
+        op(NdOp::INT_SUB, sp(1), {sp(0), MedVar::makeConst(0x38, 8)}),
+        op(NdOp::INT_ADD, temp(10), {sp(1), MedVar::makeConst(0x20, 8)}),
+        op(NdOp::INT_ADD, temp(11), {sp(1), MedVar::makeConst(0x24, 8)}),
+        op(NdOp::STORE, none(),
+           {temp(10), MedVar::makeUnspecified(4, Arch::X64)}),
+        op(NdOp::STORE, none(), {temp(11), MedVar::makeConst(37, 4)}),
+        op(NdOp::CALL, Word, {MedVar::makeConst(0x2000, 8), temp(11)}),
+        op(NdOp::INT_ADD, sp(2), {sp(1), MedVar::makeConst(0x38, 8)}),
+        op(NdOp::RETURN, none(), {Word})};
+    Entry.Ops[6].CalleeRegisterArgs = 1;
+    Entry.Ops[6].CalleeStackArgs = 0;
+    Entry.Ops[6].CalleeVectorArgs = 0;
+    Caller.Blocks = {Entry};
+    MedCallInfo Call;
+    Call.BlockId = 0;
+    Call.OpIdx = 6;
+    Call.TargetAddr = 0x2000;
+    Call.Args = {temp(11)};
+    Caller.CallInfos = {Call};
+
+    MedFunc Callee;
+    Callee.Entry = Call.TargetAddr;
+    Callee.CC = CallingConv::Win64;
+    Callee.FrameSize = 8;
+    Callee.Params = {rcx(0)};
+    MedBlock Body;
+    Body.Id = 0;
+    Body.StartAddr = Callee.Entry;
+    Body.Ops = {op(NdOp::COPY, sp(0), {sp(0)}),
+                op(NdOp::COPY, rcx(0), {rcx(0)}),
+                op(NdOp::INT_SUB, sp(1), {sp(0), MedVar::makeConst(8, 8)}),
+                op(NdOp::STORE, none(), {sp(1), rcx(0)}),
+                op(NdOp::LOAD, temp(30), {sp(1)}),
+                op(NdOp::LOAD, Word, {temp(30)}),
+                op(NdOp::INT_ADD, sp(2), {sp(1), MedVar::makeConst(8, 8)}),
+                op(NdOp::RETURN, none(), {Word})};
+    if (Case == 1) {
+      Body.Ops.insert(
+          Body.Ops.begin() + 5,
+          op(NdOp::INT_SUB, temp(31), {temp(30), MedVar::makeConst(4, 8)}));
+      Body.Ops[6].Inputs[0] = temp(31);
+    }
+    if (Case == 2)
+      Body.Ops.back().Inputs[0] = temp(30);
+    if (Case == 3)
+      Body.Ops.insert(
+          Body.Ops.begin() + 5,
+          op(NdOp::STORE, none(), {MedVar::makeConst(0x3000, 8), temp(30)}));
+    if (Case == 4)
+      Body.Ops[4].Output.Size = 4;
+    if (Case == 5)
+      Body.Ops.insert(
+          Body.Ops.begin() + 4,
+          op(NdOp::STORE, none(), {sp(1), MedVar::makeConst(0, 4)}));
+    if (Case == 6)
+      Body.Ops.insert(
+          Body.Ops.begin() + 4,
+          op(NdOp::STORE, none(), {MedVar::makeConst(0x3000, 8), sp(1)}));
+    if (Case == 7)
+      Body.Ops.back().Inputs[0] = sp(1);
+    if (Case == 8 || Case == 9) {
+      const auto Address = Case == 8 ? sp(0) : temp(31);
+      if (Case == 9)
+        Body.Ops.insert(
+            Body.Ops.begin() + 3,
+            op(NdOp::INT_ADD, temp(31), {sp(0), MedVar::makeConst(8, 8)}));
+      for (auto &Op : Body.Ops)
+        if (Op.Opcode == NdOp::STORE ||
+            (Op.Opcode == NdOp::LOAD && Op.Output == temp(30)))
+          Op.Inputs[0] = Address;
+    }
+    if (Case == 10)
+      Callee.FrameSize = 4;
+    if (Case == 11)
+      Body.Ops[3].MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+    if (Case == 12)
+      Body.Ops[4].MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+    if (Case == 13) {
+      Body.Ops.insert(Body.Ops.begin() + 4, op(NdOp::COPY, sp(3), {sp(0)}));
+      Body.Ops.insert(Body.Ops.begin() + 5, op(NdOp::COPY, sp(4), {sp(1)}));
+    }
+    if (Case == 14)
+      std::swap(Body.Ops[3], Body.Ops[4]);
+    if (Case == 15)
+      Body.Ops[6].Inputs[1] = MedVar::makeConst(4, 8);
+    if (Case == 16) {
+      Body.Ops[5] =
+          op(NdOp::STORE, none(), {temp(30), MedVar::makeConst(37, 4)});
+      Body.Ops.back().Inputs[0] = MedVar::makeConst(37, 4);
+    }
+    if (Case == 17) {
+      Body.Ops.insert(Body.Ops.begin() + 5, op(NdOp::LOAD, temp(31), {sp(1)}));
+      Body.Ops[6].Inputs[0] = temp(31);
+    }
+    if (Case == 18)
+      Body.Ops[3].PrologueSave = true;
+    if (Case == 19)
+      Body.Ops.insert(Body.Ops.begin() + 4,
+                      op(NdOp::INTRINSIC, none(),
+                         {MedVar::makeConst(unsigned(Intrinsic::Pause), 4)}));
+    if (Case >= 20) {
+      // A full replacement cuts the earlier transport edge. A partial one
+      // combines pointer bytes and must not acquire the replacement's offset.
+      Body.Ops.insert(
+          Body.Ops.begin() + 3,
+          op(NdOp::INT_SUB, temp(32), {rcx(0), MedVar::makeConst(4, 8)}));
+      Body.Ops[4].Inputs[1] = temp(32);
+      auto Replacement = rcx(0);
+      if (Case == 21)
+        Replacement.Size = 4;
+      Body.Ops.insert(Body.Ops.begin() + 5,
+                      op(NdOp::STORE, none(), {sp(1), Replacement}));
+      if (Case == 22)
+        Body.Ops[5].Dead = true;
+      if (Case == 23)
+        Body.Ops[5].PrologueSave = true;
+    }
+    Callee.Blocks = {Body};
+    const auto Before = Callee.Blocks[0].Ops;
+    markUnobservedBorrowedFrameStores(Caller, Arch::X64, BinaryFormat::COFF,
+                                      {{Callee.Entry, &Callee}});
+    EXPECT_EQ(Caller.Blocks[0].Ops[4].PrologueSave,
+              Case == 0 || Case == 16 || Case == 17 || Case == 18 ||
+                  Case == 20);
+    EXPECT_FALSE(Caller.Blocks[0].Ops[5].PrologueSave);
+    EXPECT_EQ(Callee.Blocks[0].Ops.size(), Before.size());
+    EXPECT_EQ(Callee.Blocks[0].Ops[3].PrologueSave, Before[3].PrologueSave);
+  }
+}
+
 } // namespace

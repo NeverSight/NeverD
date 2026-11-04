@@ -13,6 +13,7 @@
 #define NEVERD_IR_MED_PASS_MEDFRAMEBORROWREADS_H
 
 #include "../abi/MedABIPassDetail.h"
+#include "MedFrameBorrowSpills.h"
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -27,6 +28,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -37,7 +39,8 @@ namespace neverd::detail {
 
 /// A complete use proof, rather than a type or an observed access list. A
 /// borrowed pointer can move through scalar SSA values and direct synchronous
-/// calls; storing it, returning it, or losing its offset cancels the proof.
+/// calls and exact private leaf spills. Escaping it, returning it, or losing
+/// its offset cancels the proof.
 /// Reads are a union over every path, so an unvisited CFG arm cannot supply a
 /// noncapture claim. Distinct offsets at a join and recursive borrows remain
 /// conservative. No result outlives the current operation/argument sequence.
@@ -239,6 +242,8 @@ private:
     std::map<ValueKey, std::vector<Use>> Uses;
     std::map<std::pair<int, int>, MedCallInfo> NativeCalls;
     Ranges StackReads;
+    std::unique_ptr<FrameBorrowSpills> Spills;
+    bool PrivateSpillFrame = false;
     bool Ready = false;
   };
   std::map<va_t, FunctionUses> IndexedUses;
@@ -708,6 +713,30 @@ private:
             if (IsFrame)
               ReadSites[By.Op].emplace_back(Offset, End);
           }
+          continue;
+        }
+        if (!IsFrame && !IsStack && Op.Opcode == NdOp::STORE && By.Input == 1 &&
+            Op.NumInputs == 2 && !Op.Inputs[0].isConst() &&
+            Op.Inputs[1].Size == TRI.PointerSize) {
+          // Prove that this callee's own frame never escapes before following
+          // a saved borrow. The spill index only adds exact transport edges;
+          // every reloaded value still goes through this same use proof.
+          if (!Graph.Spills)
+            Graph.Spills =
+                std::make_unique<FrameBorrowSpills>(Func, Format, Budget);
+          const auto *Loads = Graph.Spills->loads(Op);
+          if (!Loads)
+            return std::nullopt;
+          if (!Graph.PrivateSpillFrame) {
+            if (!inputRegister(Func, TRI.StackPointer))
+              return std::nullopt;
+            Graph.PrivateSpillFrame = true;
+          }
+          if (Loads->size() > Budget)
+            return std::nullopt;
+          Budget -= Loads->size();
+          for (const auto &Load : *Loads)
+            Work.emplace_back(Load, Offset);
           continue;
         }
         if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {

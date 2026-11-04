@@ -1,5 +1,14 @@
 # Remaining x64 C-quality work
 
+Exact private-word pointer transport now works in single-block, call-free Win64
+source callees. Reloads retain their actual read/capture uses; partial overlaps,
+dead replacements, frame escape and released storage stay conservative. The
+index is lazy and shares the existing source-borrow budget. This removes the
+leaf-spill false rejection, but the two registry-query stack-input gaps remain:
+their native allocation chain includes cold verifier, tracing and indirect-call
+paths. Neither a source spill annotation nor an inferred argument count proves
+those paths unable to observe saved pointers or incoming stack bytes.
+
 The public PE32 `xcpt4-msvc-x86-native-no-gs-o0.exe` filter regression now
 checks the current display contract: signed local and constant filter values
 remain visible even when native registration closure is deferred. An explicit
