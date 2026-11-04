@@ -3434,6 +3434,15 @@ consultedCallReads(llvm::ArrayRef<LowBlock> Blocks,
   return Consulted;
 }
 
+std::unordered_map<va_t, size_t>
+firstFunctionAudits(const std::vector<PipelineFunctionAudit> &Audits) {
+  std::unordered_map<va_t, size_t> First;
+  First.reserve(Audits.size());
+  for (size_t I = 0; I < Audits.size(); ++I)
+    First.try_emplace(Audits[I].Entry, I);
+  return First;
+}
+
 bool consultedReadsHold(const CalleeFacts &Facts,
                         const std::map<va_t, GPRReadWidths> &Reads) {
   return llvm::all_of(Facts.Consulted, [&](const auto &Call) {
@@ -5483,13 +5492,15 @@ void Pipeline::buildLowIR(
   // shared.
 
   size_t FuncCount = 0;
+  // This loop changes no audit's entry and adds none.
+  const auto FirstAudits =
+      pipeline_detail::firstFunctionAudits(Result.FunctionAudits);
   for (size_t I = 0; I < Total; ++I) {
     auto &Low = AllLow[I];
-    auto AuditIt =
-        std::find_if(Result.FunctionAudits.begin(), Result.FunctionAudits.end(),
-                     [&](const PipelineFunctionAudit &Audit) {
-                       return Audit.Entry == Candidates[I].first;
-                     });
+    const auto FirstAudit = FirstAudits.find(Candidates[I].first);
+    auto AuditIt = FirstAudit == FirstAudits.end()
+                       ? Result.FunctionAudits.end()
+                       : Result.FunctionAudits.begin() + FirstAudit->second;
     if (AuditIt != Result.FunctionAudits.end()) {
       AuditIt->DecodedInstructions = Low.DecodedInstructionCount;
       AuditIt->LiftedInstructions = Low.LiftedInstructionCount;

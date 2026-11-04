@@ -26,6 +26,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <unordered_map>
 #include <vector>
 
 namespace neverd {
@@ -197,6 +198,11 @@ void collectFormattedCalls(const BinaryImage &Img,
                            llvm::ArrayRef<LowBlock> Blocks,
                            std::map<va_t, FormattedCall> &Calls,
                            bool HasIndependentRoots = false);
+
+/// The index in \p Audits of each entry's first audit, the one a search from
+/// the front finds: each of a whole image's functions looks up its own.
+std::unordered_map<va_t, size_t>
+firstFunctionAudits(const std::vector<PipelineFunctionAudit> &Audits);
 
 } // namespace neverd::pipeline_detail
 

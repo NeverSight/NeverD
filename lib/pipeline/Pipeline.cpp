@@ -499,14 +499,14 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     }
   }
 
-  for (const auto &LF : Result.LowFuncs) {
-    auto AuditIt =
-        std::find_if(Result.FunctionAudits.begin(), Result.FunctionAudits.end(),
-                     [&](const PipelineFunctionAudit &Audit) {
-                       return Audit.Entry == LF.Entry;
-                     });
-    if (AuditIt != Result.FunctionAudits.end())
-      AuditIt->Disposition = PipelineFunctionDisposition::Accepted;
+  {
+    const auto FirstAudits =
+        pipeline_detail::firstFunctionAudits(Result.FunctionAudits);
+    for (const auto &LF : Result.LowFuncs)
+      if (const auto Found = FirstAudits.find(LF.Entry);
+          Found != FirstAudits.end())
+        Result.FunctionAudits[Found->second].Disposition =
+            PipelineFunctionDisposition::Accepted;
   }
 
   if (Opts.DumpLow && Opts.EmitDumpOutput)
