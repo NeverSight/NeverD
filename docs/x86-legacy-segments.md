@@ -467,8 +467,9 @@ and retries the original load. Neither side receives a host-side PTE repair
 or register adjustment between these instructions. This covers legacy paging
 and PAE, CPL0..3, and independent code/stack sizes. It closes that earlier
 handler boundary for the admitted scalar instructions; it does not supply a
-general i386 source exporter, a TLB/cache model, devices, LOCK/HLE, task gates,
-real/VM86 state, debug producers or other unlisted instructions.
+general i386 source exporter, a TLB/cache model, devices, concurrent shared-memory
+synchronization, HLE, task gates, real/VM86 state, debug producers or other
+unlisted instructions. Exclusive-RAM LOCK forms use the additional binding above.
 
 The [November 3 scalar qualification](evidence/x86-legacy-scalars-2026-11-03.json)
 records both CALL counterexamples, 85,120 scalar CPU comparisons across two

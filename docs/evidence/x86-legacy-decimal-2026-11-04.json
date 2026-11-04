@@ -793,5 +793,448 @@
     "localized_docs": "309 Markdown files and 10 locales passed",
     "source_provenance": "11,543 worktree files and newest 16 commits checked",
     "diff_whitespace": "git diff --check passed"
+  },
+  "integration": {
+    "tested_commit": "4b85d5b964f4170f913ed425b6404db500d33aa2",
+    "runs": [
+      {
+        "sdk": "native",
+        "suite": "NeverDX86PagingTests",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/native/NeverDX86PagingTests",
+          "--gtest_output=xml:${INTEGRATION_ARTIFACTS}/native/NeverDX86PagingTests.xml",
+          "--gtest_filter=X86LegacyExecutionTest.*"
+        ],
+        "exit_code": 0,
+        "tests": 131,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "binary_sha256": "eef91ac16bf1c39824f5e88618ff54e99f0b5f87a3419e27223f5f9cb5051ab3"
+      },
+      {
+        "sdk": "native",
+        "suite": "NeverDX86LegacyAdmissionTests",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/native/NeverDX86LegacyAdmissionTests",
+          "--gtest_output=xml:${INTEGRATION_ARTIFACTS}/native/NeverDX86LegacyAdmissionTests.xml"
+        ],
+        "exit_code": 0,
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "binary_sha256": "512df751890662b614ff71a805824eaae1a99b9df5de40302b23f2efd9e3aec8"
+      },
+      {
+        "sdk": "native",
+        "suite": "NeverDX86UndefinedEffectsTests",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/native/NeverDX86UndefinedEffectsTests",
+          "--gtest_output=xml:${INTEGRATION_ARTIFACTS}/native/NeverDX86UndefinedEffectsTests.xml"
+        ],
+        "exit_code": 0,
+        "tests": 66,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "binary_sha256": "16a77717dd82b7247b0c0f587dbdf465550754a5e92e77e8a07d840bf696ae8f"
+      },
+      {
+        "sdk": "r6",
+        "suite": "NeverDX86PagingTests",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/r6/NeverDX86PagingTests",
+          "--gtest_output=xml:${INTEGRATION_ARTIFACTS}/r6/NeverDX86PagingTests.xml",
+          "--gtest_filter=X86LegacyExecutionTest.*"
+        ],
+        "exit_code": 0,
+        "tests": 131,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "binary_sha256": "783d69474bf66e82de52050e8edacebbb861092744ae402d47359ed323da1a11"
+      },
+      {
+        "sdk": "r6",
+        "suite": "NeverDX86LegacyAdmissionTests",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/r6/NeverDX86LegacyAdmissionTests",
+          "--gtest_output=xml:${INTEGRATION_ARTIFACTS}/r6/NeverDX86LegacyAdmissionTests.xml"
+        ],
+        "exit_code": 0,
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "binary_sha256": "6f4e115c40469836ec5a686a6b02a6a2e59a6ae0bfa5f5f94157cefbffca95bc"
+      },
+      {
+        "sdk": "r6",
+        "suite": "NeverDX86UndefinedEffectsTests",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/r6/NeverDX86UndefinedEffectsTests",
+          "--gtest_output=xml:${INTEGRATION_ARTIFACTS}/r6/NeverDX86UndefinedEffectsTests.xml"
+        ],
+        "exit_code": 0,
+        "tests": 66,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "binary_sha256": "df482b4038957f638a28d8cb7d85674dae12123b1ae79d3e72ab72e0e67a2d60"
+      }
+    ],
+    "original_inputs_unchanged": true,
+    "integrated_upstream_commit": "281da8c64a98c9baf140fdd589d2703770951442",
+    "paging_binary_identical_to_full_runs": {
+      "native": true,
+      "r6": true
+    },
+    "source_exports": [
+      {
+        "route": "highc",
+        "function": "aad_zero",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/source-export/neverd",
+          "decompile",
+          "${INTEGRATION_ARTIFACTS}/source-export/original.o",
+          "--func",
+          "aad_zero",
+          "-o",
+          "${INTEGRATION_ARTIFACTS}/source-export/highc/aad_zero.c"
+        ],
+        "exit_code": 0,
+        "output_exists": true,
+        "cli_sha256": "645200309a35c0c1a617eb8cd0579808fc913272a21a90d8f02ed2d437f48956",
+        "source_sha256": "9ba7cf0eafba2ba4d5793ea6221c6d3cf66b746f37f156f5b5a38bdb17ba02d1"
+      },
+      {
+        "route": "highc",
+        "function": "aad_seventeen",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/source-export/neverd",
+          "decompile",
+          "${INTEGRATION_ARTIFACTS}/source-export/original.o",
+          "--func",
+          "aad_seventeen",
+          "-o",
+          "${INTEGRATION_ARTIFACTS}/source-export/highc/aad_seventeen.c"
+        ],
+        "exit_code": 0,
+        "output_exists": true,
+        "cli_sha256": "645200309a35c0c1a617eb8cd0579808fc913272a21a90d8f02ed2d437f48956",
+        "source_sha256": "cac3f077c3dd79c6f30c69d8f0ea1e71040bb4498bdc375f28a6e6758339e67e"
+      },
+      {
+        "route": "highc",
+        "function": "aam_ten",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/source-export/neverd",
+          "decompile",
+          "${INTEGRATION_ARTIFACTS}/source-export/original.o",
+          "--func",
+          "aam_ten",
+          "-o",
+          "${INTEGRATION_ARTIFACTS}/source-export/highc/aam_ten.c"
+        ],
+        "exit_code": 0,
+        "output_exists": true,
+        "cli_sha256": "645200309a35c0c1a617eb8cd0579808fc913272a21a90d8f02ed2d437f48956",
+        "source_sha256": "988d9c891e9bf288f67687ffa2cde384dfe63056f5ce0e2e5160b1d824baae27"
+      },
+      {
+        "route": "highc",
+        "function": "aam_zero",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/source-export/neverd",
+          "decompile",
+          "${INTEGRATION_ARTIFACTS}/source-export/original.o",
+          "--func",
+          "aam_zero",
+          "-o",
+          "${INTEGRATION_ARTIFACTS}/source-export/highc/aam_zero.c"
+        ],
+        "exit_code": 1,
+        "output_exists": false,
+        "cli_sha256": "645200309a35c0c1a617eb8cd0579808fc913272a21a90d8f02ed2d437f48956"
+      },
+      {
+        "route": "llvmc",
+        "function": "aad_zero",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/source-export/neverd",
+          "decompile",
+          "${INTEGRATION_ARTIFACTS}/source-export/original.o",
+          "--func",
+          "aad_zero",
+          "-o",
+          "${INTEGRATION_ARTIFACTS}/source-export/llvmc/aad_zero.c",
+          "--llvm"
+        ],
+        "exit_code": 0,
+        "output_exists": true,
+        "cli_sha256": "645200309a35c0c1a617eb8cd0579808fc913272a21a90d8f02ed2d437f48956",
+        "source_sha256": "f5190b5138dc19b4f7483f56d9fa8b4ff5c6a9c979bddf4051528142e979f933"
+      },
+      {
+        "route": "llvmc",
+        "function": "aad_seventeen",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/source-export/neverd",
+          "decompile",
+          "${INTEGRATION_ARTIFACTS}/source-export/original.o",
+          "--func",
+          "aad_seventeen",
+          "-o",
+          "${INTEGRATION_ARTIFACTS}/source-export/llvmc/aad_seventeen.c",
+          "--llvm"
+        ],
+        "exit_code": 0,
+        "output_exists": true,
+        "cli_sha256": "645200309a35c0c1a617eb8cd0579808fc913272a21a90d8f02ed2d437f48956",
+        "source_sha256": "9047b03bf30adc1e9bc967d8f5b267587518dd7fe60d389d215b6b3ca4091708"
+      },
+      {
+        "route": "llvmc",
+        "function": "aam_ten",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/source-export/neverd",
+          "decompile",
+          "${INTEGRATION_ARTIFACTS}/source-export/original.o",
+          "--func",
+          "aam_ten",
+          "-o",
+          "${INTEGRATION_ARTIFACTS}/source-export/llvmc/aam_ten.c",
+          "--llvm"
+        ],
+        "exit_code": 0,
+        "output_exists": true,
+        "cli_sha256": "645200309a35c0c1a617eb8cd0579808fc913272a21a90d8f02ed2d437f48956",
+        "source_sha256": "ba9d5812fe20e9ab3b2735a2ddcc0f50ddbd6e01cd15dfc5071abc4953d3bba4"
+      },
+      {
+        "route": "llvmc",
+        "function": "aam_zero",
+        "command": [
+          "${INTEGRATION_ARTIFACTS}/source-export/neverd",
+          "decompile",
+          "${INTEGRATION_ARTIFACTS}/source-export/original.o",
+          "--func",
+          "aam_zero",
+          "-o",
+          "${INTEGRATION_ARTIFACTS}/source-export/llvmc/aam_zero.c",
+          "--llvm"
+        ],
+        "exit_code": 1,
+        "output_exists": false,
+        "cli_sha256": "645200309a35c0c1a617eb8cd0579808fc913272a21a90d8f02ed2d437f48956"
+      }
+    ],
+    "source_execution": [
+      {
+        "route": "highc",
+        "optimization": 0,
+        "compile_command": [
+          "${HOST_CLANG}",
+          "-m32",
+          "-std=c11",
+          "-ffreestanding",
+          "-fno-pie",
+          "-fno-stack-protector",
+          "-nostdlib",
+          "-static",
+          "-fuse-ld=lld",
+          "-fsanitize=undefined",
+          "-fsanitize-trap=undefined",
+          "-O0",
+          "${INTEGRATION_ARTIFACTS}/source-export/highc/combined.c",
+          "${INTEGRATION_ARTIFACTS}/source-export/original.o",
+          "-o",
+          "${INTEGRATION_ARTIFACTS}/source-export/highc/compare-O0"
+        ],
+        "compile_exit": 0,
+        "undefined_behavior_sanitizer": "trap mode, no runtime fallback",
+        "binary_sha256": "8a9d6fd50e54ad184222737b92cf08254a426a688934dfddca019c1d7fcc8131",
+        "runs": [
+          {
+            "cpu": 0,
+            "command": [
+              "taskset",
+              "-c",
+              "0",
+              "${INTEGRATION_ARTIFACTS}/source-export/highc/compare-O0"
+            ],
+            "exit_code": 0,
+            "original_comparisons": 196608
+          },
+          {
+            "cpu": 12,
+            "command": [
+              "taskset",
+              "-c",
+              "12",
+              "${INTEGRATION_ARTIFACTS}/source-export/highc/compare-O0"
+            ],
+            "exit_code": 0,
+            "original_comparisons": 196608
+          }
+        ]
+      },
+      {
+        "route": "highc",
+        "optimization": 2,
+        "compile_command": [
+          "${HOST_CLANG}",
+          "-m32",
+          "-std=c11",
+          "-ffreestanding",
+          "-fno-pie",
+          "-fno-stack-protector",
+          "-nostdlib",
+          "-static",
+          "-fuse-ld=lld",
+          "-fsanitize=undefined",
+          "-fsanitize-trap=undefined",
+          "-O2",
+          "${INTEGRATION_ARTIFACTS}/source-export/highc/combined.c",
+          "${INTEGRATION_ARTIFACTS}/source-export/original.o",
+          "-o",
+          "${INTEGRATION_ARTIFACTS}/source-export/highc/compare-O2"
+        ],
+        "compile_exit": 0,
+        "undefined_behavior_sanitizer": "trap mode, no runtime fallback",
+        "binary_sha256": "99cdcbbf98817dddc9026f81143d1330ef37af5b015d33941864ca66bc6b2932",
+        "runs": [
+          {
+            "cpu": 0,
+            "command": [
+              "taskset",
+              "-c",
+              "0",
+              "${INTEGRATION_ARTIFACTS}/source-export/highc/compare-O2"
+            ],
+            "exit_code": 0,
+            "original_comparisons": 196608
+          },
+          {
+            "cpu": 12,
+            "command": [
+              "taskset",
+              "-c",
+              "12",
+              "${INTEGRATION_ARTIFACTS}/source-export/highc/compare-O2"
+            ],
+            "exit_code": 0,
+            "original_comparisons": 196608
+          }
+        ]
+      },
+      {
+        "route": "llvmc",
+        "optimization": 0,
+        "compile_command": [
+          "${HOST_CLANG}",
+          "-m32",
+          "-std=c11",
+          "-ffreestanding",
+          "-fno-pie",
+          "-fno-stack-protector",
+          "-nostdlib",
+          "-static",
+          "-fuse-ld=lld",
+          "-fsanitize=undefined",
+          "-fsanitize-trap=undefined",
+          "-O0",
+          "${INTEGRATION_ARTIFACTS}/source-export/llvmc/combined.c",
+          "${INTEGRATION_ARTIFACTS}/source-export/original.o",
+          "-o",
+          "${INTEGRATION_ARTIFACTS}/source-export/llvmc/compare-O0"
+        ],
+        "compile_exit": 0,
+        "undefined_behavior_sanitizer": "trap mode, no runtime fallback",
+        "binary_sha256": "a5bf304a3a03e5bda2add8cd4d0f3395ce811c215d2e1930618c62048843e4d0",
+        "runs": [
+          {
+            "cpu": 0,
+            "command": [
+              "taskset",
+              "-c",
+              "0",
+              "${INTEGRATION_ARTIFACTS}/source-export/llvmc/compare-O0"
+            ],
+            "exit_code": 0,
+            "original_comparisons": 196608
+          },
+          {
+            "cpu": 12,
+            "command": [
+              "taskset",
+              "-c",
+              "12",
+              "${INTEGRATION_ARTIFACTS}/source-export/llvmc/compare-O0"
+            ],
+            "exit_code": 0,
+            "original_comparisons": 196608
+          }
+        ]
+      },
+      {
+        "route": "llvmc",
+        "optimization": 2,
+        "compile_command": [
+          "${HOST_CLANG}",
+          "-m32",
+          "-std=c11",
+          "-ffreestanding",
+          "-fno-pie",
+          "-fno-stack-protector",
+          "-nostdlib",
+          "-static",
+          "-fuse-ld=lld",
+          "-fsanitize=undefined",
+          "-fsanitize-trap=undefined",
+          "-O2",
+          "${INTEGRATION_ARTIFACTS}/source-export/llvmc/combined.c",
+          "${INTEGRATION_ARTIFACTS}/source-export/original.o",
+          "-o",
+          "${INTEGRATION_ARTIFACTS}/source-export/llvmc/compare-O2"
+        ],
+        "compile_exit": 0,
+        "undefined_behavior_sanitizer": "trap mode, no runtime fallback",
+        "binary_sha256": "f848b46ddf0fd22a481ed16a142b7cf39911d4f9731451f3a6bf87c9bae072e4",
+        "runs": [
+          {
+            "cpu": 0,
+            "command": [
+              "taskset",
+              "-c",
+              "0",
+              "${INTEGRATION_ARTIFACTS}/source-export/llvmc/compare-O2"
+            ],
+            "exit_code": 0,
+            "original_comparisons": 196608
+          },
+          {
+            "cpu": 12,
+            "command": [
+              "taskset",
+              "-c",
+              "12",
+              "${INTEGRATION_ARTIFACTS}/source-export/llvmc/compare-O2"
+            ],
+            "exit_code": 0,
+            "original_comparisons": 196608
+          }
+        ]
+      }
+    ],
+    "total_checks": 414,
+    "repeated_source_result_comparisons": 1572864,
+    "note": "Integration repetitions are separate from the primary full-run totals. No instruction owner changed in the upstream stack-closure merge.",
+    "artifact_manifest": {
+      "path": "${INTEGRATION_ARTIFACTS}/artifact-manifest.json",
+      "sha256": "d7430aafeb4828a60ba59357898bc1bbe7ee6d8b51e7d28b874a93549b5bc15a",
+      "files": 67
+    }
   }
 }
