@@ -1,0 +1,1072 @@
+{
+  "schema": 1,
+  "date": "2026-11-03",
+  "status": "qualified",
+  "global_goal_complete": false,
+  "scope": "Full LLVM explicit-address LAR/LSL .address32 APIs in protected code16 with the 32-bit stack/pointer ABI; protected code32 and existing x64 LLVM/NeverC/combined routes are regressions. NeverC i386 frontend support is not enabled.",
+  "commits": {
+    "llvm": "8bad5a9ed5189f4fa8dc764f82b062aaeb01e939",
+    "neverc": "7c4f4f935207d358f22fb7303b7229662c7fe880"
+  },
+  "tested_source_inputs": {
+    "llvm": {
+      "base": "94c555d27cf861954930472602f8b5cde9f54199",
+      "files": {
+        "llvm/include/llvm/IR/IntrinsicsX86.td": "c660f02ca8d89f5825760500c7df6f007db02c26e54c60bc7b64760acc60f389",
+        "llvm/lib/Target/X86/X86ISelLowering.cpp": "06ae2121cba37954740dee95a8017565b9179575f63871bffc1db344f6509a9d",
+        "llvm/test/CodeGen/X86/descriptor-state-address-intrinsics.ll": "d3d176601d3f9ea9bd0f9fd21a5a00e44e03f7b2ca6234995abeb2cfd07822b7",
+        "llvm/test/CodeGen/X86/far-pointer-load-intrinsics.ll": "a8eb6815a6d2ea5a315da5c2edc5133750dbcc9e2fbebe711cc83759109812e7",
+        "llvm/test/CodeGen/X86/segment-move-intrinsics.ll": "af7d5c9e32136aeda71a991d96e6dd9f62c0ee653828396da38bcf3fc484c64f",
+        "llvm/test/CodeGen/X86/native-frame-returns.ll": "4292ee4c392e674c1fba53a7bba95b314f35c895f550ab766eb13ee8d9062239",
+        "llvm/test/CodeGen/X86/native-divrem.ll": "1488bd1ee4d98b3701828a39cd686feda291faba5b2953ae6aa2541858f05cad",
+        "llvm/test/CodeGen/X86/descriptor-address-intrinsics.ll": "331f138589f3cae53f8dbe8f381d9998879c1e076fe1d15cb3dc0dfebb5bc1e8",
+        "llvm/test/CodeGen/X86/descriptor-state-intrinsics.ll": "8e4bcb19eba7b06395500249b7d11cf26a0a23b09d135865f5f984f596fc8112",
+        "llvm/test/CodeGen/X86/descriptor-query-intrinsics.ll": "63ff1d45cf23e94dab328db364ef67dfb0e629d8b4c6df843b6885d73d552c13",
+        "llvm/test/CodeGen/X86/arpl-intrinsics.ll": "146bf14e54c55f8c09688e2ee63502345b2f44aef7ee81459a320fba66424534"
+      }
+    },
+    "neverc": {
+      "base": "1f3a071bda81b488fa4b741cb1569b2ece464eb4",
+      "files": {
+        "tests/verify-descriptor-address-completion.py": "db846ef1c77856ac23ec0be57da51903f8ee9acac23f699e0853bdbcfdc1a15c",
+        "tests/verify-descriptor-query-completion.py": "b1c2232c568d1a7c7aa662343f5eed9f43347441a32dd7be38e43ff5356f940e",
+        "tests/neverc/X86PrivilegedIntrinTests.cpp": "073ccbb386c9b9297cde4ad0e5249fc93540481f8cb0ba3a0c1129dfb16bbd21",
+        "tests/neverc/X86/KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33",
+        "tests/neverc/X86/KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "tests/neverc/X86/NativeBuiltinFixture.h": "5f0ae5f654a993e4527bd19889237641ded0bf23610082abae2c7d569babfa6d",
+        "tests/neverc/X86/NativeXStateFixture.h": "9927c4d5d03f7d52ab1a7ae4f10139b5b546f832b6eb51a5406ee466b390300c",
+        "tests/neverc/X86/far_pointer_harness.c": "0d4fde5c8cd24e359a6c2a77be54137db7bb49f20a822d21bd7973a569a35e67",
+        "tests/neverc/X86/frame_return_kvm.c": "c021df97aba9386fb1a6f54f14eea733236b07fdc6331940890293e737fc1f6c",
+        "tests/neverc/X86/native_division_harness.c": "ef1cbf85034236a2e0d3abe60daaa698b968c810b822a5243ae222f85a5ee48e",
+        "tests/neverc/X86/native_division_kvm.c": "29dcaec6166e635a2432419c62e1551099a60356b90a4d0bf45064945f5b1218",
+        "tests/neverc/X86/native_qualification.py": "ba9010b38658bd134a88977643ed1c321db2739596ccb4f4b72855398278c177",
+        "tests/neverc/X86/protected_arpl_kvm.c": "ac4eab4c51245758ac74e260b0b7d832375c69507c1ff5f7e59470011d7cfa22",
+        "tests/neverc/X86/protected_descriptor_query_kvm.c": "c3bb5095bec7edb333bd9880f64d4b4e9531b13988e4edb0b202bc02abe66aca",
+        "tests/neverc/X86/protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "tests/neverc/X86/protected_segment_move_kvm.c": "1d7a0d87c2f3fa9628677ca7c8fe7d691dcf2caaba9e2dfad2955ba61e6b37c7",
+        "tests/neverc/X86/segment_move_harness.c": "9725b4fcb666c5c6a235c081c220e56c9e114dd3bf851fd7949727a5421111fa",
+        "tests/neverc/X86/sgx_transfer_context_kvm.c": "8f3ae2bea518444a012bdc2c224a02c6b06dd78a1de860596f43de17a2e60dd6",
+        "tests/neverc/X86/smm_return_kvm.c": "180a4db33a1a99038d329cf0093018fae54190c801c043caecc896bab9e698da",
+        "tests/neverc/X86/system_return_kvm.c": "2fdf98407ce7aaec8de5c2fd7f05bcc0e7ed69316613426eea606c6934198188",
+        "tests/neverc/X86/verify_far_pointer.py": "fbd8df10e78829890d463c96bc2f3f1fee6727be93cbb21c0870ba8c4fcd5b6a",
+        "tests/neverc/X86/verify_fnop_state.py": "76d650dcc8babbbc79c20bb39b6e9efc744a7e7b3a96e6a9ff9962e062228228",
+        "tests/neverc/X86/verify_frame_return_encodings.py": "7482bddf8676569ec9d4b41825cebaeefa244fbb55aac93ad42d9a8f62d6892f",
+        "tests/neverc/X86/verify_frame_returns.py": "8167187e146312f3dbf871196552d1fc5532977977b10b757f60929fec1aef78",
+        "tests/neverc/X86/verify_hle_context.py": "9168ffc9dcec1b41219090ba2731f6afacddd88f1440fd77e562f711287cebea",
+        "tests/neverc/X86/verify_hyperv_context.py": "84d0bb8ceee936ef7a69ed732fbd94f4a14f4077ad4da7e508371329e73b69c6",
+        "tests/neverc/X86/verify_hyperv_native.py": "43000baf6645ac0e2e81fe49b3dea80fd09488f1ed8df74595ef2834c3829cef",
+        "tests/neverc/X86/verify_kvm_hypercalls.py": "34457fdd4ceade721df12d9c1b9fe209893df96d1321071680a40395e74bc74a",
+        "tests/neverc/X86/verify_mpx_continuation.py": "f299fe3abdf56517161347d3ebb72b74dd83e87a430e2852324538eb82bff77f",
+        "tests/neverc/X86/verify_native_division.py": "9eb46cb452f9b5d64ae88111fe1a4050d8dbf6ab2be7d813008253317e6148d0",
+        "tests/neverc/X86/verify_protected_arpl.py": "ff880a35b04ca863908ba837e1db41642b57709c0b02cb266a29bafc28989575",
+        "tests/neverc/X86/verify_protected_descriptor_queries.py": "00558641e543f14ecb3a1cab905dc56eb48f1aeeb2b3e120ad1393369c378136",
+        "tests/neverc/X86/verify_protected_division.py": "1d71a04b9478b2c5f8d65e26d6b4f83d23487adb2868214ada1a359219a939b9",
+        "tests/neverc/X86/verify_protected_far_pointer.py": "559994d3eaa13625f6132a7111325d0eb70a589e3ce72b4193bf0721e422a85a",
+        "tests/neverc/X86/verify_protected_segment_moves.py": "a28b2d70191e96da3989a03b6a4912f6fdfa65dfd1d79786b5e7f83ae6ddb0a5",
+        "tests/neverc/X86/verify_rtm_abort_pair.py": "c8823ea05d0296fdd84f83c0be550a46e26d03e15f108046946143b0c9ae76a8",
+        "tests/neverc/X86/verify_segment_moves.py": "04f9692d262e3a398d11f1d0a91481adb8067e2f3edd2ef9cc5ccd3bacf0ef9f",
+        "tests/neverc/X86/verify_sgx_transfer_context.py": "3d10d707f12dbcec1f7763cc421e8cbb2c654b0588d0bc6967bb1a5ec62cc661",
+        "tests/neverc/X86/verify_skinit_completion.py": "e119ea7d49d0a0cc02db55ef1bddab3ed403f6a7df722b3f1b2be8cd1bcf643c",
+        "tests/neverc/X86/verify_snp_context.py": "73fd3de75a1801f387d80d80de1e7e8ff12682c447b72425768f0528a50b73c3",
+        "tests/neverc/X86/verify_system_returns.py": "d0afa2109dbd842bdc66eee68e0cdc3944358041f642a7febb0617756fae47fc",
+        "tests/neverc/X86/verify_vmrun_context.py": "5a20f64bcd3ffdf261377289f6e93736707ffd2915c7809a23078a1bbacea156",
+        "tests/neverc/X86/verify_x87_control.py": "1e9491d23e755fe25d102bbb7fbfddfcec61be1153882c79c00fde06e86f9121",
+        "tests/neverc/X86/verify_x87_environment.py": "23008f1fbe0dc772a4d21f5811cf6b98f8dc35c5c60bfadf959a9ecb98ae53d2",
+        "tests/neverc/X86/verify_x87_status.py": "316aa049c2f3d95212d89d0602642b0a6a63c57cd466f026d29f65f94cc5b3cf",
+        "tests/neverc/X86/x87_environment_harness.c": "2df183f45a7cb532253c488aa589b8b034a1d5750cd4221e44665348ea899bf6"
+      }
+    }
+  },
+  "source_basis": "Retained base commits, patches, complete source snapshots and tool hashes identify the executable inputs. The final runner validates unchanged source and live/frozen binaries after all checks. Earlier probes and failed qualification attempts are retained but excluded from totals.",
+  "cpu": {
+    "model": "Intel Core i9-13900H",
+    "family": 6,
+    "model_number": 186,
+    "stepping": 2,
+    "microcode": "0x6134",
+    "p_core": "0",
+    "e_core": "12",
+    "kernel": "7.0.0-42-generic"
+  },
+  "counts": {
+    "code16": {
+      "profiles": 4,
+      "complete_state_pairs": 573440,
+      "returns": 370048,
+      "success": 176512,
+      "rejected": 193536,
+      "pf": 131712,
+      "ac": 71680
+    },
+    "code32": {
+      "profiles": 4,
+      "complete_state_pairs": 573440,
+      "returns": 370048,
+      "success": 176512,
+      "rejected": 193536,
+      "pf": 131712,
+      "ac": 71680
+    }
+  },
+  "shared_fixture_regressions": {
+    "arpl-code16": {
+      "schema_version": 1,
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "1e86d46842a7e428dc8bd7c5a978aff8857e4bf41cbf3d3cab0fc0f09b5890d5",
+        "opt": "acd2e36d23ef82c7cd3e70a3dbd62f91f114f2e0f4c1ec21d1e6a7afcfd57b67",
+        "llvm-objdump": "75a9dded63be93541b79bea408a78c63ca7d0470181c1a062276287c90a20042"
+      },
+      "inputs": {
+        "verify_protected_arpl.py": "ff880a35b04ca863908ba837e1db41642b57709c0b02cb266a29bafc28989575",
+        "protected_arpl_kvm.c": "ac4eab4c51245758ac74e260b0b7d832375c69507c1ff5f7e59470011d7cfa22",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 16,
+          "image_sha256": "14c73ed230e05e5320b46ac55c05c8f81afe6c7b45a42e85392ad9cdc634beeb",
+          "manifest_sha256": "4cb047b29e6c96e91dd138ef24d532df2dd287b396e634d81e5fe9c4ad2585bf",
+          "negative_controls": [
+            "wrong source before intact ARPL rejected",
+            "inverted status after intact ARPL rejected"
+          ],
+          "functions": 8,
+          "complete_state_pairs": 7680,
+          "returns": 3376,
+          "changed": 1056,
+          "unchanged": 3152,
+          "gp": 1728,
+          "pf": 1232,
+          "ac": 512
+        },
+        {
+          "optimization": "O2",
+          "mode": 16,
+          "image_sha256": "c9591043310a25730e3b5efcbc0513f1e5125766a252c4a12969f5d53acc0c62",
+          "manifest_sha256": "59c22c2eae26f653dace4babe0c5852c0db30ffd362684d3de183d270f431481",
+          "negative_controls": [
+            "wrong source before intact ARPL rejected",
+            "inverted status after intact ARPL rejected"
+          ],
+          "functions": 8,
+          "complete_state_pairs": 7680,
+          "returns": 3376,
+          "changed": 1056,
+          "unchanged": 3152,
+          "gp": 1728,
+          "pf": 1232,
+          "ac": 512
+        }
+      ],
+      "comparisons": 15360,
+      "boundary": "CPL0/CPL3 protected code16/code32, 32-bit pointer/stack ABI; original ARPL register and memory effects, flags, #GP/#PF/#AC frames, read-only/missing/cross-page operands and explicit DS cache states. ABI-compatible successes return through the compiler frame. No NeverC i386 frontend, real/VM86, asynchronous events or device memory."
+    },
+    "arpl-code32": {
+      "schema_version": 1,
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "1e86d46842a7e428dc8bd7c5a978aff8857e4bf41cbf3d3cab0fc0f09b5890d5",
+        "opt": "acd2e36d23ef82c7cd3e70a3dbd62f91f114f2e0f4c1ec21d1e6a7afcfd57b67",
+        "llvm-objdump": "75a9dded63be93541b79bea408a78c63ca7d0470181c1a062276287c90a20042"
+      },
+      "inputs": {
+        "verify_protected_arpl.py": "ff880a35b04ca863908ba837e1db41642b57709c0b02cb266a29bafc28989575",
+        "protected_arpl_kvm.c": "ac4eab4c51245758ac74e260b0b7d832375c69507c1ff5f7e59470011d7cfa22",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 32,
+          "image_sha256": "82073ea1d8781c1d48815aaa60450e809fa161e596eec8aa6553e8553f9ea65a",
+          "manifest_sha256": "1692bc607b3ce88ff0e2389062a74e01b04280fa8b36f9b9df4269d4e3922b5c",
+          "negative_controls": [
+            "wrong source before intact ARPL rejected",
+            "inverted status after intact ARPL rejected"
+          ],
+          "functions": 8,
+          "complete_state_pairs": 7680,
+          "returns": 3376,
+          "changed": 1056,
+          "unchanged": 3152,
+          "gp": 1728,
+          "pf": 1232,
+          "ac": 512
+        },
+        {
+          "optimization": "O2",
+          "mode": 32,
+          "image_sha256": "d44211898dbad741d2e2c099810893aeb0961c30608a904e97a53fdca0b0bf35",
+          "manifest_sha256": "08b9b4830c3a4cd3eaf3205cdcca75d41926189d273d98119a83b04505f4f263",
+          "negative_controls": [
+            "wrong source before intact ARPL rejected",
+            "inverted status after intact ARPL rejected"
+          ],
+          "functions": 8,
+          "complete_state_pairs": 7680,
+          "returns": 3376,
+          "changed": 1056,
+          "unchanged": 3152,
+          "gp": 1728,
+          "pf": 1232,
+          "ac": 512
+        }
+      ],
+      "comparisons": 15360,
+      "boundary": "CPL0/CPL3 protected code16/code32, 32-bit pointer/stack ABI; original ARPL register and memory effects, flags, #GP/#PF/#AC frames, read-only/missing/cross-page operands and explicit DS cache states. ABI-compatible successes return through the compiler frame. No NeverC i386 frontend, real/VM86, asynchronous events or device memory."
+    },
+    "far_pointer-code16": {
+      "schema_version": 1,
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "1e86d46842a7e428dc8bd7c5a978aff8857e4bf41cbf3d3cab0fc0f09b5890d5",
+        "opt": "acd2e36d23ef82c7cd3e70a3dbd62f91f114f2e0f4c1ec21d1e6a7afcfd57b67",
+        "llvm-objdump": "75a9dded63be93541b79bea408a78c63ca7d0470181c1a062276287c90a20042"
+      },
+      "inputs": {
+        "verify_protected_far_pointer.py": "559994d3eaa13625f6132a7111325d0eb70a589e3ce72b4193bf0721e422a85a",
+        "protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 16,
+          "image_sha256": "fab6bc70452331d32e45ea12be111b6ac2d9fae7e38a0c502ad59d1d8b98419b",
+          "manifest_sha256": "64b6e5cff47190eebdd6b27be87e56d75c2c79890251636031f6cbdac0afc770",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 16,
+          "image_sha256": "319fe3f4927ef2bbe65ec7e7df1552623ec881d7a079b495273a6913a5dc9171",
+          "manifest_sha256": "a7cce4026b00c419d2b788551d5fead054154ee5dd8cf351546140a0702166b5",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ],
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. No NeverC i386 frontend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events."
+    },
+    "far_pointer-code32": {
+      "schema_version": 1,
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "1e86d46842a7e428dc8bd7c5a978aff8857e4bf41cbf3d3cab0fc0f09b5890d5",
+        "opt": "acd2e36d23ef82c7cd3e70a3dbd62f91f114f2e0f4c1ec21d1e6a7afcfd57b67",
+        "llvm-objdump": "75a9dded63be93541b79bea408a78c63ca7d0470181c1a062276287c90a20042"
+      },
+      "inputs": {
+        "verify_protected_far_pointer.py": "559994d3eaa13625f6132a7111325d0eb70a589e3ce72b4193bf0721e422a85a",
+        "protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 32,
+          "image_sha256": "d7c0974e21dc2505b90cc58bca088926bc57b0e2b0d06b4072e0e825fdfc08d9",
+          "manifest_sha256": "8dada9d8297777dfb3c650df4889f673920b5db8493e638f6610958a5582ec6b",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 32,
+          "image_sha256": "b7dbbcb17cc8c876f67d8354eef25da278136d5a047115f21fab8df3b56c6161",
+          "manifest_sha256": "44d504b9b3c183eb4ac1e24a42f78cf160ae92e59b169f8dcfb323e08dbb4a1e",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ],
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. No NeverC i386 frontend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events."
+    },
+    "segment_moves-code16": {
+      "schema_version": 1,
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "1e86d46842a7e428dc8bd7c5a978aff8857e4bf41cbf3d3cab0fc0f09b5890d5",
+        "opt": "acd2e36d23ef82c7cd3e70a3dbd62f91f114f2e0f4c1ec21d1e6a7afcfd57b67",
+        "llvm-objdump": "75a9dded63be93541b79bea408a78c63ca7d0470181c1a062276287c90a20042"
+      },
+      "inputs": {
+        "verify_protected_segment_moves.py": "a28b2d70191e96da3989a03b6a4912f6fdfa65dfd1d79786b5e7f83ae6ddb0a5",
+        "protected_segment_move_kvm.c": "1d7a0d87c2f3fa9628677ca7c8fe7d691dcf2caaba9e2dfad2955ba61e6b37c7",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 16,
+          "image_sha256": "a2a8b5404f7f17c9f0ed859eea07ae610a6dc955b3ca1395f87105bfb75272f3",
+          "manifest_sha256": "385adeb871f7670eff0bd4e39c6422d2f6a9934c8cdd8ee2c45bba6686ceb490",
+          "negative_controls": [
+            "wrong pointer before intact segment MOV rejected",
+            "wrong selector before intact segment MOV rejected"
+          ],
+          "functions": 28,
+          "complete_state_pairs": 4824,
+          "returns": 1618,
+          "np": 80,
+          "ss": 20,
+          "gp": 1512,
+          "pf": 946,
+          "ac": 404
+        },
+        {
+          "optimization": "O2",
+          "mode": 16,
+          "image_sha256": "90590630f742204252e2d5cdadc6c9d02efff72670275e105ed7dc80ff3e78c2",
+          "manifest_sha256": "839227344af636525991765540dd00ac537bbd6f52618189c6530f74c6d6a056",
+          "negative_controls": [
+            "wrong pointer before intact segment MOV rejected",
+            "wrong selector before intact segment MOV rejected"
+          ],
+          "functions": 28,
+          "complete_state_pairs": 4824,
+          "returns": 1618,
+          "np": 80,
+          "ss": 20,
+          "gp": 1512,
+          "pf": 946,
+          "ac": 404
+        }
+      ],
+      "comparisons": 9648,
+      "boundary": "CPL0/CPL3 protected code16/code32 with the 32-bit stack/pointer ABI. Compare each native MOV followed immediately by LFENCE, which ends MOV-SS inhibition without changing represented registers/flags/RAM. Original #GP/#NP/#SS/#PF/#AC handlers expose vectors with OUT. ABI-compatible successes also return through the compiler frame. No NeverC i386 frontend, real/VM86, observation inside MOV-SS inhibition or asynchronous events."
+    },
+    "segment_moves-code32": {
+      "schema_version": 1,
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "1e86d46842a7e428dc8bd7c5a978aff8857e4bf41cbf3d3cab0fc0f09b5890d5",
+        "opt": "acd2e36d23ef82c7cd3e70a3dbd62f91f114f2e0f4c1ec21d1e6a7afcfd57b67",
+        "llvm-objdump": "75a9dded63be93541b79bea408a78c63ca7d0470181c1a062276287c90a20042"
+      },
+      "inputs": {
+        "verify_protected_segment_moves.py": "a28b2d70191e96da3989a03b6a4912f6fdfa65dfd1d79786b5e7f83ae6ddb0a5",
+        "protected_segment_move_kvm.c": "1d7a0d87c2f3fa9628677ca7c8fe7d691dcf2caaba9e2dfad2955ba61e6b37c7",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 32,
+          "image_sha256": "123d0b0c52f502e4c920c007b03d7563eab901bb86884fc6700ae076440815b9",
+          "manifest_sha256": "489aff8c2f934a588df7c783a3b1e861f7a360da20243172e2357eec4d390ebb",
+          "negative_controls": [
+            "wrong pointer before intact segment MOV rejected",
+            "wrong selector before intact segment MOV rejected"
+          ],
+          "functions": 28,
+          "complete_state_pairs": 4824,
+          "returns": 1618,
+          "np": 80,
+          "ss": 20,
+          "gp": 1512,
+          "pf": 946,
+          "ac": 404
+        },
+        {
+          "optimization": "O2",
+          "mode": 32,
+          "image_sha256": "4b872aa0fb342cc636feca397dfa44afaa73b32daa5189da0710d4d82c1a8d30",
+          "manifest_sha256": "6bd45c36dc74e4176f12447a0fceb176c55fc7d4275fc57b067e75ede87f4bfb",
+          "negative_controls": [
+            "wrong pointer before intact segment MOV rejected",
+            "wrong selector before intact segment MOV rejected"
+          ],
+          "functions": 28,
+          "complete_state_pairs": 4824,
+          "returns": 1618,
+          "np": 80,
+          "ss": 20,
+          "gp": 1512,
+          "pf": 946,
+          "ac": 404
+        }
+      ],
+      "comparisons": 9648,
+      "boundary": "CPL0/CPL3 protected code16/code32 with the 32-bit stack/pointer ABI. Compare each native MOV followed immediately by LFENCE, which ends MOV-SS inhibition without changing represented registers/flags/RAM. Original #GP/#NP/#SS/#PF/#AC handlers expose vectors with OUT. ABI-compatible successes also return through the compiler frame. No NeverC i386 frontend, real/VM86, observation inside MOV-SS inhibition or asynchronous events."
+    }
+  },
+  "completion_regressions": {
+    "llvm": {
+      "controlled_checks": 4704,
+      "native_queries": 0,
+      "lkgs_cpl3_faults": 0
+    },
+    "neverc": {
+      "controlled_checks": 2928,
+      "native_queries": 96,
+      "lkgs_cpl3_faults": 112
+    },
+    "combined": {
+      "controlled_checks": 2928,
+      "native_queries": 96,
+      "lkgs_cpl3_faults": 112
+    }
+  },
+  "other_checks": {
+    "llvm_codegen_tests": 9,
+    "neverc_tests": {
+      "neverc_descriptor_frontend": 3,
+      "neverc_backend": 10,
+      "neverc_native_address": 3
+    },
+    "failures": 0,
+    "skips": 0
+  },
+  "count_definition": "Actual final executions across O0/O2 and P/E cores, not unique inputs. Query pairs compare complete represented GPRs/flags, segment/system state, active events and RAM; compiled-return checks are subsets. Earlier focused/diagnostic/failed attempts are not added.",
+  "native_boundary": "224 functions per profile: both operations, 16/32-bit result and address widths, seven segment-prefix choices and independent live/dead value/ZF outputs. Each runs CPL0/CPL3, 20 selectors, two flag images and eight memory configurations. Original instruction bytes are independently encoded and authenticated. All queries retain native selector reads even with dead results.",
+  "fault_observation": "Original #PF/#AC handlers expose their vector through completed OUT. Both restart PCs are authenticated before normalizing only that frame PC. Inactive exception payload is excluded only after proving neither pending nor injected; other event fields remain compared.",
+  "cs_address_contract": "The image is loaded at linear 0x10000 with CS.base=0x10000. Function/control-flow RIPs remain within 64 KiB in code16; debug addresses are separately linear. Existing flat helper callers retain their original wrapper and are regressed through ARPL, far-pointer/segment loads and frame/system returns.",
+  "negative_controls": "Every final profile rejects zeroed offset transport before an intact native query and an inverted returned ZF after an intact query. Successes/rejections check prior/value/ZF selection, return ESP and callee-saved registers.",
+  "binary_sha256": {
+    "llc": "1e86d46842a7e428dc8bd7c5a978aff8857e4bf41cbf3d3cab0fc0f09b5890d5",
+    "opt": "acd2e36d23ef82c7cd3e70a3dbd62f91f114f2e0f4c1ec21d1e6a7afcfd57b67",
+    "llvm-objdump": "75a9dded63be93541b79bea408a78c63ca7d0470181c1a062276287c90a20042",
+    "llvm-mc": "6a7e7cc884bc9c6269a8938a9e190769ce28e2a9377d80a231600553df0ab499",
+    "FileCheck": "f9bffb050e642a24ed6d8d67c57aafc62fb46461c5f40c0e889b4caa0718bf50",
+    "neverc": "a8439a7d11d9f8dfb4c3cd5d2fa350b24e7dfa10c5e3fc3422b9d4b32613286b",
+    "neverc-tests": "1c5526bde82ef5f6102b03abcdd200e97c492fa044122e65c1460a96da8f3ae1",
+    "neverc-x86-backend-tests": "cb33f9b2de8ab77491bb7b71d834aa60fd4bcc7e96659ff6ba0f3444528f831e"
+  },
+  "artifact_root": "/mnt/data/neverd-code16-descriptor-query-20261103",
+  "artifact_manifest_sha256": "1d884b89865ac9e82f3b3f0ff8bfb8550f71d996da06c3658bc44e4de40cfa23",
+  "artifact_count": 9759,
+  "runs": [
+    {
+      "name": "queries-code16",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_descriptor_queries.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--mode",
+        "16",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/queries-code16"
+      ],
+      "exit_code": 0,
+      "seconds": 181.2815933227539
+    },
+    {
+      "name": "queries-code32",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_descriptor_queries.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--mode",
+        "32",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/queries-code32"
+      ],
+      "exit_code": 0,
+      "seconds": 182.14992952346802
+    },
+    {
+      "name": "arpl-code16",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_arpl.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--mode",
+        "16",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/arpl-code16"
+      ],
+      "exit_code": 0,
+      "seconds": 11.261663675308228
+    },
+    {
+      "name": "arpl-code32",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_arpl.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--mode",
+        "32",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/arpl-code32"
+      ],
+      "exit_code": 0,
+      "seconds": 11.497639417648315
+    },
+    {
+      "name": "far_pointer-code16",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_far_pointer.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--mode",
+        "16",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/far_pointer-code16"
+      ],
+      "exit_code": 0,
+      "seconds": 20.93833589553833
+    },
+    {
+      "name": "far_pointer-code32",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_far_pointer.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--mode",
+        "32",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/far_pointer-code32"
+      ],
+      "exit_code": 0,
+      "seconds": 21.208951234817505
+    },
+    {
+      "name": "segment_moves-code16",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_segment_moves.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--mode",
+        "16",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/segment_moves-code16"
+      ],
+      "exit_code": 0,
+      "seconds": 7.935111999511719
+    },
+    {
+      "name": "segment_moves-code32",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_segment_moves.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--mode",
+        "32",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/segment_moves-code32"
+      ],
+      "exit_code": 0,
+      "seconds": 8.011242866516113
+    },
+    {
+      "name": "frame-code16",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_frame_returns.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--neverc",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/neverc",
+        "--code16",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/frame-code16"
+      ],
+      "exit_code": 0,
+      "seconds": 6.738520860671997
+    },
+    {
+      "name": "frame-i386",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_frame_returns.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--neverc",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/neverc",
+        "--i386",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/frame-i386"
+      ],
+      "exit_code": 0,
+      "seconds": 6.7903454303741455
+    },
+    {
+      "name": "system-code16",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_system_returns.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--neverc",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/neverc",
+        "--code16",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/system-code16"
+      ],
+      "exit_code": 0,
+      "seconds": 12.326359272003174
+    },
+    {
+      "name": "system-i386",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_system_returns.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--neverc",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/neverc",
+        "--i386",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/p-core/system-i386"
+      ],
+      "exit_code": 0,
+      "seconds": 12.570456504821777
+    },
+    {
+      "name": "queries-code16",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "tests/neverc/X86/verify_protected_descriptor_queries.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--mode",
+        "16",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/queries-code16"
+      ],
+      "exit_code": 0,
+      "seconds": 285.08836483955383
+    },
+    {
+      "name": "queries-code32",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "tests/neverc/X86/verify_protected_descriptor_queries.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin",
+        "--mode",
+        "32",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/queries-code32"
+      ],
+      "exit_code": 0,
+      "seconds": 283.78533267974854
+    },
+    {
+      "name": "llvm-lit",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "${LLVM_WORKTREE}/build-intrinsics/bin/llvm-lit",
+        "-v",
+        "-j",
+        "1",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/descriptor-state-address-intrinsics.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/far-pointer-load-intrinsics.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/segment-move-intrinsics.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/native-frame-returns.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/native-divrem.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/descriptor-address-intrinsics.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/descriptor-state-intrinsics.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/descriptor-query-intrinsics.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/arpl-intrinsics.ll"
+      ],
+      "exit_code": 0,
+      "seconds": 5.171844720840454
+    },
+    {
+      "name": "addresses-llvm",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "${NEVERC_WORKTREE}/build-neverc/vmcs-test-env/bin/python",
+        "tests/verify-descriptor-address-completion.py",
+        "--compiler",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/neverc",
+        "--llc",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/llc",
+        "--keep",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/addresses-llvm"
+      ],
+      "exit_code": 0,
+      "seconds": 34.53447985649109
+    },
+    {
+      "name": "addresses-neverc",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "${NEVERC_WORKTREE}/build-neverc/vmcs-test-env/bin/python",
+        "tests/verify-descriptor-address-completion.py",
+        "--compiler",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/neverc",
+        "--keep",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/addresses-neverc"
+      ],
+      "exit_code": 0,
+      "seconds": 27.105985403060913
+    },
+    {
+      "name": "addresses-combined",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "${NEVERC_WORKTREE}/build-neverc/vmcs-test-env/bin/python",
+        "tests/verify-descriptor-address-completion.py",
+        "--compiler",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/neverc",
+        "--backend-llc",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/llc",
+        "--keep",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/addresses-combined"
+      ],
+      "exit_code": 0,
+      "seconds": 30.473579168319702
+    },
+    {
+      "name": "neverc-tests",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/neverc-tests",
+        "--gtest_filter=*DescriptorAddresses*",
+        "--gtest_output=xml:/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/neverc-tests.xml"
+      ],
+      "exit_code": 0,
+      "seconds": 1.6194634437561035
+    },
+    {
+      "name": "neverc-x86-backend-tests",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/neverc-x86-backend-tests",
+        "--gtest_filter=*DescriptorAddresses*",
+        "--gtest_output=xml:/mnt/data/neverd-code16-descriptor-query-20261103/final/e-core/neverc-x86-backend-tests.xml"
+      ],
+      "exit_code": 0,
+      "seconds": 0.06406950950622559
+    }
+  ],
+  "source_reference": {
+    "title": "Intel SDM Volume 2 revision 093: LAR and LSL",
+    "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
+    "local_text": "/mnt/data/neverd-paged-scheduling-20261101/intel-sdm-vol2-093.txt"
+  },
+  "retained_diagnostics": [
+    "The descriptor-name filter matched no tests in the separate lightweight backend binary. This zero-test result is not counted as coverage; the full ten-test backend suite and three native-address frontend tests were then run and passed.",
+    "The first code16 native fixture placed code above 64 KiB with flat CS; a taken compiler branch truncated IP. A nonzero CS base and explicit relative/linear breakpoint coordinates fixed the fixture without changing query code generation.",
+    "The next host build diagnosed an unused flat fault-helper wrapper. Making that retained compatibility wrapper inline fixed the -Werror failure.",
+    "The first final code32 run passed its O0 native matrix, then the offset negative-control generator could not fit a prefixed word XOR into the compiler dword-copy extent. Zeroing the full 32-bit carrier preserves the intended negative test and fits both modes. Final profiles were rerun after this fix."
+  ],
+  "boundaries": [
+    "The matrix covers query success/rejection and source/descriptor #PF and #AC with valid loaded source-segment caches; it does not qualify arbitrary invalid segment caches or every descriptor/task form.",
+    "Real/VM86, asynchronous events, device memory, other CPU models, the general i386 frontend/source dispatcher and the remaining machine-state domains are not established by these counts.",
+    "Production SDK neverd-llvm-v23.0.0-r6 and gitlink 03270359c2ed8f6806533d3832a947bf883a6f69 remain unchanged. Final LLVM release and pin await global completion."
+  ],
+  "neverc_integration": {
+    "commit": "7c4f4f935207d358f22fb7303b7229662c7fe880",
+    "upstream": "542e34ec3aa2b9059fd70e05d1d07d7f80f9565c",
+    "kind": "history-only merge",
+    "upstream_tree_equals_tested_base": true,
+    "result_tree_equals_feature_commit": true,
+    "binaries_unchanged": {
+      "neverc": "a8439a7d11d9f8dfb4c3cd5d2fa350b24e7dfa10c5e3fc3422b9d4b32613286b",
+      "neverc-tests": "1c5526bde82ef5f6102b03abcdd200e97c492fa044122e65c1460a96da8f3ae1",
+      "neverc-x86-backend-tests": "cb33f9b2de8ab77491bb7b71d834aa60fd4bcc7e96659ff6ba0f3444528f831e"
+    },
+    "additional_checks": [
+      {
+        "name": "backend-all",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-code16-descriptor-query-20261103/postchecks/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/neverc-x86-backend-tests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-code16-descriptor-query-20261103/postchecks/backend-all.xml"
+        ],
+        "exit_code": 0
+      },
+      {
+        "name": "native-address",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-code16-descriptor-query-20261103/postchecks/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "/mnt/data/neverd-code16-descriptor-query-20261103/frozen-bin/neverc-tests",
+          "--gtest_filter=X86NativeAddressTest.StackControlUsesNativeInstructionsAcrossFormats:X86NativeAddressTest.InvalidStackControlsFailBeforeCodeGeneration:X86NativeAddressTest.NativeResultsFaultClassesAndRealignedStackAgree",
+          "--gtest_output=xml:/mnt/data/neverd-code16-descriptor-query-20261103/postchecks/native-address.xml"
+        ],
+        "exit_code": 0
+      }
+    ]
+  },
+  "path_normalization": "Public paths use ${LLVM_WORKTREE}, ${NEVERC_WORKTREE} and ${CLANG}; original commands/logs remain unchanged in the hashed local artifacts."
+}
