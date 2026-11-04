@@ -4,8 +4,9 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Shared independent original-byte scalar/divide execution and handler retry.
-/// Included inside the native paging test translation unit after its fixture.
+/// Shared original-byte scalar, divide and multiply execution and handler
+/// retry. Included inside the native paging test translation unit after its
+/// fixture.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_UNITTESTS_TRANSLATE_X86_X86LEGACYSCALARNATIVEFIXTURE_INC
@@ -15,6 +16,7 @@ class X86LegacyScalarNativeFixture : public X86PagingNativeTest {
 protected:
   unsigned Comparisons = 0;
   std::optional<X86LegacyCallProfile> Calls;
+  std::optional<X86LegacyMultiplyProfile> Multiply;
 
   void SetUp() override {
     X86PagingNativeTest::SetUp();
@@ -208,6 +210,7 @@ protected:
         X86LegacyScalarProfile::OrderedRAM,
         Calls};
     Options.DivisionArithmeticFlags = Flags & kX86LegacyArithmeticFlagsMask;
+    Options.Multiply = Multiply;
     auto Expected = executeX86LegacyInstruction(State, *Memory, Bytes, Options);
     ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
     if (Case == 12 || Case == 18) {

@@ -41,6 +41,9 @@ enum class X86LegacyScalarOperation {
   Complement,
   Divide,
   SignedDivide,
+  Multiply,
+  SignedMultiply,
+  SignedMultiplyLow,
   Push,
   Pop,
   Call,
@@ -56,6 +59,7 @@ struct X86LegacyScalarOperand : X86LegacyAddress {
 struct X86LegacyScalarInstruction {
   X86LegacyScalarOperation Operation = X86LegacyScalarOperation::Move;
   X86LegacyScalarOperand Destination, Source;
+  std::optional<uint32_t> MultiplyImmediate;
   unsigned Bytes = 4, SourceBytes = 4, Condition = 0;
   uint16_t Discard = 0;
   bool Relative = false;
@@ -63,6 +67,12 @@ struct X86LegacyScalarInstruction {
   bool division() const {
     return Operation == X86LegacyScalarOperation::Divide ||
            Operation == X86LegacyScalarOperation::SignedDivide;
+  }
+
+  bool multiplication() const {
+    return Operation == X86LegacyScalarOperation::Multiply ||
+           Operation == X86LegacyScalarOperation::SignedMultiply ||
+           Operation == X86LegacyScalarOperation::SignedMultiplyLow;
   }
 
   bool logical() const {

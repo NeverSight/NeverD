@@ -50,6 +50,10 @@ public:
       divide(F);
       return;
     }
+    if (F.multiplication()) {
+      multiply(F);
+      return;
+    }
     if (F.Operation == Op::Push) {
       if (!read(F.Source, N, B))
         return;
@@ -152,6 +156,41 @@ private:
   X86MemoryAccessResult Result;
   std::optional<llvm::Error> Failure;
   std::optional<X86PagedMemory::PreparedStore> Store;
+
+  void multiply(const X86LegacyScalarInstruction &F) {
+    uint32_t Source;
+    if (!read(F.Source, F.Bytes, Source))
+      return;
+    const unsigned Bits = F.Bytes * 8;
+    const bool LowOnly = F.Operation == Op::SignedMultiplyLow;
+    const bool Signed = F.Operation != Op::Multiply;
+    const uint32_t Left =
+        LowOnly
+            ? F.MultiplyImmediate.value_or(S.Core.GPR[*F.Destination.Register])
+            : S.Core.GPR[0];
+    const llvm::APInt A(Bits, Left), B(Bits, Source);
+    const auto Product = Signed ? A.sext(2 * Bits) * B.sext(2 * Bits)
+                                : A.zext(2 * Bits) * B.zext(2 * Bits);
+    const uint64_t Raw = Product.getZExtValue();
+    const uint32_t Low = uint32_t(Raw) & (UINT32_MAX >> (32 - Bits));
+    const bool Overflow =
+        Signed ? !Product.isSignedIntN(Bits) : Product.getActiveBits() > Bits;
+    if (LowOnly) {
+      writeRegister(*F.Destination.Register, F.Bytes, Low);
+    } else if (F.Bytes == 1) {
+      writeRegister(0, 2, uint32_t(Raw));
+    } else {
+      writeRegister(0, F.Bytes, Low);
+      writeRegister(2, F.Bytes, uint32_t(Raw >> Bits));
+    }
+    const uint32_t Flags =
+        (Overflow ? 0x801 : 0) | (!(std::popcount(Low & 0xff) & 1) ? 4 : 0) |
+        (Low & (uint32_t(1) << (Bits - 1)) ? 128 : 0) |
+        (O.Multiply == X86LegacyMultiplyProfile::ProductSignParityZero && !Low
+             ? 64
+             : 0);
+    S.EFlags = (S.EFlags & ~kX86LegacyArithmeticFlagsMask) | Flags;
+  }
 
   void divide(const X86LegacyScalarInstruction &F) {
     uint32_t Source;

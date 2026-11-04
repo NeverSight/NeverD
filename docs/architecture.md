@@ -60,6 +60,10 @@ read/modify/write prepares write permission once, reads those exact physical
 fragments through `X86PagedMemory::loadPreparedStore`, and commits the final
 operand through the same plan. Logical AF is an explicit input. DIV/IDIV read
 one divisor before computing the full AX/DX:AX/EDX:EAX quotient and remainder.
+MUL/IMUL use the same read owner and publish full or truncated products with
+architectural CF/OF. Their undefined flags have explicit product-sign/parity
+profiles with distinct ZF choices; immediate sign extension stays in the
+scalar grammar. There is no new memory-write requirement for either family.
 Zero divisors and unrepresentable quotients become restartable #DE without
 publishing either result. Their six undefined arithmetic flags require an
 explicit successful-completion image; operand faults retain original flags. CALL's separate

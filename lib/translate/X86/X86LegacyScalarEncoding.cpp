@@ -95,8 +95,11 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
       Immediate(F.Bytes);
     } else if (Group == 2 || Group == 3) {
       F.Operation = Group == 2 ? Op::Complement : Op::Negate;
-    } else if (Group == 6 || Group == 7) {
-      F.Operation = Group == 6 ? Op::Divide : Op::SignedDivide;
+    } else if (Group >= 4) {
+      F.Operation = Group == 4   ? Op::Multiply
+                    : Group == 5 ? Op::SignedMultiply
+                    : Group == 6 ? Op::Divide
+                                 : Op::SignedDivide;
       std::swap(F.Source, F.Destination);
     } else {
       return std::nullopt;
@@ -118,6 +121,11 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   } else if (B == 0x68 || B == 0x6a) {
     F.Operation = Op::Push;
     Immediate(B == 0x6a ? 1 : F.Bytes, B == 0x6a);
+  } else if (B == 0x69 || B == 0x6b) {
+    F.Operation = Op::SignedMultiplyLow;
+    F.Destination.Register = R.modRM(F.Source);
+    const uint32_t V = R.value(B == 0x6b ? 1 : F.Bytes);
+    F.MultiplyImmediate = B == 0x6b ? uint32_t(int8_t(V)) : V;
   } else if (B == 0x8f) {
     F.Operation = Op::Pop;
     if (R.modRM(F.Destination) != 0)
@@ -141,6 +149,9 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
       F.Condition = Extended & 15;
       F.Relative = true;
       Immediate(F.Bytes, F.Bytes == 2);
+    } else if (Extended == 0xaf) {
+      F.Operation = Op::SignedMultiplyLow;
+      F.Destination.Register = R.modRM(F.Source);
     } else if (Extended == 0xb6 || Extended == 0xb7 || Extended == 0xbe ||
                Extended == 0xbf) {
       F.Operation = Extended & 8 ? Op::MoveSigned : Op::Move;

@@ -49,6 +49,11 @@ readonly pages, segment/page/alignment faults before #DE, and original
 `NEVERD_TEST_LEGACY_DIVIDE_FLAGS=preserve` only for the measured CPU profile;
 the runtime instead accepts an explicit successful arithmetic-flags image.
 The shared fixture is owned once in `X86LegacyScalarNativeFixture.inc`.
+`LegacyMultiply/*` covers full MUL/IMUL and truncated/immediate IMUL, all
+registers and aliases, read-only operands, segment/page/alignment faults and
+original page repair. Bind `NEVERD_TEST_LEGACY_MULTIPLY_FLAGS=sign-parity` for
+the qualified P core or `sign-parity-zero` for the E core. These are explicit
+undefined-flag choices, not an architectural rule inferred from CPU vendor.
 
 `LegacyReturns/*` in `NeverDX86PagingTests` compares original protected IRET,
 RETF and RETF imm16 across legacy paging/PAE, all CPLs, 16/32-bit code,

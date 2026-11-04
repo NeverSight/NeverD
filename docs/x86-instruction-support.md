@@ -3765,7 +3765,8 @@ error-code sets and exception pairing serve both legacy and IA-32e execution.
 
 This internal execution interface admits the segment instructions plus
 the explicitly bound MOV/arithmetic/logic/stack/near-control scalar subset,
-full-dividend DIV/IDIV, NOP, CLI/STI, INT/INT3/INTO/INT1, UD2, protected
+full/truncated MUL/IMUL, full-dividend DIV/IDIV, NOP, CLI/STI,
+INT/INT3/INTO/INT1, UD2, protected
 16/32-bit IRET/RETF and Intel SEP SYSENTER/SYSEXIT. It is not a general i386
 source dispatcher. Task/call
 gates, real/VM86, debug-event production, software SMM and SGX execution/AEX/EPCM

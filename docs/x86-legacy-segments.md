@@ -278,6 +278,22 @@ handler can change the divisor, IRET and retry without host register repair.
 The native suite requires `NEVERD_TEST_LEGACY_DIVIDE_FLAGS=preserve` to bind
 the separately measured local CPU choice.
 
+MUL and all one/two/three-operand IMUL forms require the explicit `Multiply`
+profile. Full products publish AX, DX:AX or EDX:EAX; truncated IMUL forms write
+only their selected destination. Byte immediates are sign-extended before the
+signed product, and CF/OF report representability at the operand width. The
+source is read before any result or flag publication, including high-byte and
+implicit-result aliases, read-only pages and original #PF/IRET/retry.
+
+SF/ZF/AF/PF are architecturally undefined. Both admitted profiles clear AF and
+compute SF/PF from the low product. `ProductSignParity` clears ZF;
+`ProductSignParityZero` sets it exactly when the low product is zero. The
+local 13900H P/E counterexample requires these distinct choices; neither is
+a vendor-wide guarantee or selected from the executing host. Bind the native
+suite with `NEVERD_TEST_LEGACY_MULTIPLY_FLAGS=sign-parity` on the qualified P
+core or `sign-parity-zero` on its E core. An absent or unknown binding fails
+before instruction fetch in the software executor.
+
 CALL additionally requires `X86LegacyExecutionOptions::Calls`. Both profiles
 preflight the stack before checking the target code limit, so a competing stack
 #PF takes precedence and page-table effects survive a later target #GP.
@@ -314,6 +330,14 @@ P/E cores. All 428 available checks pass; two LA57 checks remain explicit
 skips. Separate regression counts are 85,120 existing scalar comparisons and
 9,648 fast-system comparisons. The retained source patch, frozen binaries,
 build receipts and raw results identify exactly what was tested.
+
+The [November 3 multiplication qualification](evidence/x86-legacy-multiply-2026-11-03.json)
+records 138,240 MUL/IMUL CPU comparisons across both SDKs, paging modes and
+P/E cores. All 476 available checks pass; two LA57 checks remain explicit
+skips. The independent flag probe passes 2,700 cases per core and detects
+748 mismatches per core when the P/E profiles are exchanged. Division,
+existing scalars and fast-system instructions retain their separate regression
+counts. Source snapshots, frozen binaries and build receipts are retained.
 
 ## Protected SYSENTER and SYSEXIT
 
