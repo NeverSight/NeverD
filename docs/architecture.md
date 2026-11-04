@@ -4282,6 +4282,19 @@ function that is not a symbol start adds its own entry to its run, which keys
 other facts. The cache keeps the latest such
 selection's facts beside the symbol inventory's, so passing through one
 leaves what the symbol starts share in place.
+On x86-64, `neverd_prepare_call_summaries_json` (`Pipeline::prepareCallSummaries`)
+solves the call-register summaries of every symbol start and the callees they
+reach once, in address order, as a full-image analysis solves them, and keeps
+them in the symbol inventory's facts. A selected run of a symbol start then
+takes those summaries instead of solving its own callees within
+`kMaxCallEffectCalleeDepth` and `kMaxCallEffectExtraLifts`, which leave farther
+callees reading nothing. Its output therefore agrees with the full-image
+summaries and no longer depends on which functions the session decompiled
+before. A selection that adds its own entry, a full-image run and a cache
+without the summaries keep solving their own. The solve reads each function as a
+run reads a callee, from the warmed facts where their consulted call reads hold,
+and stops past `kMaxImageCallSummaryFunctions`. Publishing drops those facts,
+which only the closure solve reads.
 The GUI owner no longer requests that pipeline warmup: source/CFG views use
 separate analysis sessions and cannot consume the owner's pipeline cache.
 With idle analysis enabled, native images with 4096–65536 functions and at most

@@ -5741,6 +5741,13 @@ unchanged, keeps a cache built for other entries, and stops at the cache bound
 without evicting. `NeverDWorkerWarmFunctions` checks the worker's `warm` open
 option against the mock engine: off by default, a running pass, a restart
 after an edit, a full cache and an engine without preparation.
+`SessionCAPITest.PreparedCallSummariesReplaceEachAnalysisClosure` decompiles
+an x86-64 caller whose callee chain is one call deeper than an analysis
+summarizes. After `neverd_prepare_call_summaries_json` the caller passes the
+deepest callee's RDX argument, the analysis kept from before is dropped, and a
+session that prepares first prints the same C.
+`SessionCAPITest.CallSummariesAreUnavailableForAnAArch64Image` checks that the
+warm page and the request report none for AArch64.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and
@@ -7292,6 +7299,12 @@ stub's fifth on the stack too, together with any its body reads past them.
 only for its summary: it runs `bsr r8, rcx` only on a nonzero RCX path. Every
 built body folds that select as a published one does, so the summary reads RCX
 and not the R8 its caller never sets.
+`Win64CallContract.PreparedSummariesReadCalleesPastTheRunsDepth` passes
+argument registers through a chain one call deeper than
+`kMaxCallEffectCalleeDepth`, whose last function reads R9. A run of the caller
+leaves that read out. After `Pipeline::prepareCallSummaries` every function of
+the chain reads R9, and its read and write summaries equal those of a
+whole-image run.
 
 `NeverDMedStackDeltaTests` isolates the shared entry-stack offset worker and its
 per-recovery root cache. It checks equal and conflicting PHI chains, both query

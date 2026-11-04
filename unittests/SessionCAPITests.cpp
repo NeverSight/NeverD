@@ -15,6 +15,7 @@
 #include "SessionImpl.h"
 #include "SessionTestAccess.h"
 
+#include "neverd/Limits.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/sdk/NeverDCAPI.h"
@@ -4195,6 +4196,83 @@ TEST_F(SessionCAPITest, WarmingScansTheDataAccessWidthsTheFirstViewReads) {
   EXPECT_EQ(takeString(neverd_decompile(Session, DataELFEntry)), Cold);
   ASSERT_TRUE(State.AccessWidths);
   EXPECT_EQ(&*State.AccessWidths->begin(), Storage);
+}
+
+TEST_F(SessionCAPITest, PreparedCallSummariesReplaceEachAnalysisClosure) {
+  // caller -> f1 -> ... -> fN, each passing its argument registers on, and
+  // fN reads RDX: one call deeper than an analysis summarizes callees.  Once
+  // the session holds the image's summaries, the caller passes that
+  // argument, and the analysis kept from before is dropped.
+  constexpr unsigned Chain = neverd::limits::kMaxCallEffectCalleeDepth + 1;
+  constexpr unsigned Stride = 0x20;
+  std::string Code((Chain + 1) * Stride, '\xcc');
+  // sub rsp, 8; call next; add rsp, 8; ret
+  static constexpr char Forward[] =
+      "\x48\x83\xec\x08\xe8\x17\x00\x00\x00\x48\x83\xc4\x08\xc3";
+  for (unsigned I = 0; I < Chain; ++I)
+    Code.replace(I * Stride, sizeof(Forward) - 1, Forward, sizeof(Forward) - 1);
+  // mov rax, rdx; ret
+  Code.replace(Chain * Stride, 4, "\x48\x89\xd0\xc3", 4);
+  const auto Path =
+      write("summaries.elf", makeNativeELF(false, 0x400000, {}, Code));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  auto &State = *neverd::sdk::toSession(Session);
+  const auto Entry = neverd_session_entry_addr(Session);
+  for (unsigned I = 0; I <= Chain; ++I)
+    State.Img.Symbols.push_back(
+        neverd::Symbol::makeFunc(Entry + I * Stride, Stride));
+  neverd::sdk::SessionTestAccess::resetFunctions(State);
+  const std::string Closure = takeString(neverd_decompile(Session, Entry));
+  ASSERT_FALSE(Closure.empty());
+  ASSERT_TRUE(State.PipeRan);
+  auto Page = llvm::json::parse(
+      takeString(neverd_warm_functions_json(Session, 0, 4096)));
+  ASSERT_TRUE(bool(Page)) << llvm::toString(Page.takeError());
+  ASSERT_NE(Page->getAsObject(), nullptr);
+  EXPECT_EQ(Page->getAsObject()->getBoolean("call_summaries"), true);
+  auto Reply = llvm::json::parse(
+      takeString(neverd_prepare_call_summaries_json(Session)));
+  ASSERT_TRUE(bool(Reply)) << llvm::toString(Reply.takeError());
+  ASSERT_NE(Reply->getAsObject(), nullptr);
+  EXPECT_EQ(Reply->getAsObject()->getBoolean("available"), true);
+  EXPECT_EQ(Reply->getAsObject()->getBoolean("ready"), true);
+  EXPECT_FALSE(State.PipeRan);
+  const std::string Prepared = takeString(neverd_decompile(Session, Entry));
+  ASSERT_FALSE(Prepared.empty());
+  EXPECT_NE(Prepared, Closure);
+  // Another session that prepares them first prints the same.
+  neverd_session_t Fresh = neverd_session_create();
+  const auto Destroy =
+      llvm::make_scope_exit([&] { neverd_session_destroy(Fresh); });
+  ASSERT_EQ(neverd_session_load(Fresh, Path.c_str()), 1);
+  auto &FreshState = *neverd::sdk::toSession(Fresh);
+  for (unsigned I = 0; I <= Chain; ++I)
+    FreshState.Img.Symbols.push_back(
+        neverd::Symbol::makeFunc(Entry + I * Stride, Stride));
+  neverd::sdk::SessionTestAccess::resetFunctions(FreshState);
+  ASSERT_FALSE(takeString(neverd_prepare_call_summaries_json(Fresh)).empty());
+  EXPECT_EQ(takeString(neverd_decompile(Fresh, Entry)), Prepared);
+}
+
+TEST_F(SessionCAPITest, CallSummariesAreUnavailableForAnAArch64Image) {
+  std::ifstream Input(std::filesystem::path(__FILE__).parent_path() / "types" /
+                          "fixtures" / "linux_libc_calls_arm64",
+                      std::ios::binary);
+  const std::string Path =
+      write("summaries_arm64",
+            std::string(std::istreambuf_iterator<char>(Input), {}));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  auto Page =
+      llvm::json::parse(takeString(neverd_warm_functions_json(Session, 0, 4)));
+  ASSERT_TRUE(bool(Page)) << llvm::toString(Page.takeError());
+  ASSERT_NE(Page->getAsObject(), nullptr);
+  EXPECT_EQ(Page->getAsObject()->getBoolean("call_summaries"), false);
+  auto Reply = llvm::json::parse(
+      takeString(neverd_prepare_call_summaries_json(Session)));
+  ASSERT_TRUE(bool(Reply)) << llvm::toString(Reply.takeError());
+  ASSERT_NE(Reply->getAsObject(), nullptr);
+  EXPECT_EQ(Reply->getAsObject()->getBoolean("available"), false);
+  EXPECT_EQ(Reply->getAsObject()->getBoolean("ready"), false);
 }
 
 TEST_F(SessionCAPITest, WarmingPreparesTheFirstViewsOfAnAArch64Image) {

@@ -72,7 +72,8 @@ struct ImageImportCounts;
 
 /// Optional facts for consecutive restricted x64, i386, AArch64 and ARM
 /// analyses of an unchanged image. Owns the indexes borrowed by bounded
-/// machine-graph/body caches, not output IR or caller-dependent summaries. The
+/// machine-graph/body caches and, once Pipeline::prepareCallSummaries solves
+/// them, the image's call-register summaries; not output IR. The
 /// image and debug context must outlive the cache; reset it before changing
 /// either, including symbols, exception metadata, bytes or analysis policy.
 /// Function selection may vary. Pipeline checks the exact function-entry and
@@ -536,6 +537,18 @@ public:
   std::optional<AnalysisCacheWarmup>
   warmAnalysisCache(const BinaryImage &Img, const PipelineOptions &Opts,
                     DebugContext *Dbg, llvm::ArrayRef<va_t> Functions);
+
+  /// Solve the call-register summaries of every function of \p Img once, as
+  /// a whole-image run solves them, and keep them in Opts.AnalysisCache.
+  /// Later selected-function runs of the image's symbol starts read these
+  /// instead of solving their own callees, whose depth and lift bounds leave
+  /// farther calls unread, so those runs can decompile differently than
+  /// before.  Whether the cache holds them: none for an image that is not
+  /// x86-64, without a cache, or past limits::kMaxImageCallSummaryFunctions.
+  /// \p Solved, where given, says whether this call solved them rather than
+  /// finding them kept.
+  bool prepareCallSummaries(const BinaryImage &Img, const PipelineOptions &Opts,
+                            DebugContext *Dbg, bool *Solved = nullptr);
 
   /// Complete deferred HighIR from this image's prepared source MedIR. This
   /// preserves LowIR, MedIR and LLVM module identities and contains failures

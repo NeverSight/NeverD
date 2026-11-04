@@ -3347,6 +3347,12 @@ public:
     Index[Entry] = Items.begin();
     Bytes += Size;
   }
+  void clear() {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    Items.clear();
+    Index.clear();
+    Bytes = 0;
+  }
 
 private:
   // Joined effects take a few kilobytes a function: room for a kernel's.
@@ -3457,6 +3463,65 @@ bool consultedReadsHold(const CalleeFacts &Facts,
     return Found == Reads.end() ? !Call.second
                                 : Call.second && *Call.second == Found->second;
   });
+}
+
+/// What computeCallRegisterEffects gives an x64 run, solved once over every
+/// function of an image (Pipeline::prepareCallSummaries).  A run of one of
+/// the image's symbol starts takes these instead of solving its callees.
+struct ImageCallSummaries {
+  decltype(PipelineResult::CallPrototypeArguments) PrototypeArguments;
+  decltype(PipelineResult::CallUserPrototypes) UserPrototypes;
+  decltype(PipelineResult::CallFloatReturns) FloatReturns;
+  decltype(PipelineResult::CallEntryFloatingArguments) EntryFloatingArguments;
+  decltype(PipelineResult::CallEntryIntegerArguments) EntryIntegerArguments;
+  decltype(PipelineResult::CallEntryVariadicArguments) EntryVariadicArguments;
+  decltype(PipelineResult::CallDispatchThunks) DispatchThunks;
+  decltype(PipelineResult::CallMayWriteGPRs) MayWrite;
+  decltype(PipelineResult::CallExitConstants) ExitConstants;
+  decltype(PipelineResult::CallRegisterLeaves) RegisterLeaves;
+  decltype(PipelineResult::CallEntryReadGPRs) EntryReads;
+  decltype(PipelineResult::CallUnreadGPRs) Unread;
+  decltype(PipelineResult::CallEntryStackArgs) EntryStackArgs;
+  decltype(PipelineResult::CallVariadicFrom) VariadicFrom;
+};
+
+/// The summaries a solve over every function gave \p Solved.
+ImageCallSummaries imageCallSummariesOf(PipelineResult &&Solved) {
+  ImageCallSummaries Image;
+  Image.PrototypeArguments = std::move(Solved.CallPrototypeArguments);
+  Image.UserPrototypes = std::move(Solved.CallUserPrototypes);
+  Image.FloatReturns = std::move(Solved.CallFloatReturns);
+  Image.EntryFloatingArguments = std::move(Solved.CallEntryFloatingArguments);
+  Image.EntryIntegerArguments = std::move(Solved.CallEntryIntegerArguments);
+  Image.EntryVariadicArguments = std::move(Solved.CallEntryVariadicArguments);
+  Image.DispatchThunks = std::move(Solved.CallDispatchThunks);
+  Image.MayWrite = std::move(Solved.CallMayWriteGPRs);
+  Image.ExitConstants = std::move(Solved.CallExitConstants);
+  Image.RegisterLeaves = std::move(Solved.CallRegisterLeaves);
+  Image.EntryReads = std::move(Solved.CallEntryReadGPRs);
+  Image.Unread = std::move(Solved.CallUnreadGPRs);
+  Image.EntryStackArgs = std::move(Solved.CallEntryStackArgs);
+  Image.VariadicFrom = std::move(Solved.CallVariadicFrom);
+  return Image;
+}
+
+/// Give \p Result the summaries of \p Image, as the run's own solve would.
+void applyImageCallSummaries(const ImageCallSummaries &Image,
+                             PipelineResult &Result) {
+  Result.CallPrototypeArguments = Image.PrototypeArguments;
+  Result.CallUserPrototypes = Image.UserPrototypes;
+  Result.CallFloatReturns = Image.FloatReturns;
+  Result.CallEntryFloatingArguments = Image.EntryFloatingArguments;
+  Result.CallEntryIntegerArguments = Image.EntryIntegerArguments;
+  Result.CallEntryVariadicArguments = Image.EntryVariadicArguments;
+  Result.CallDispatchThunks = Image.DispatchThunks;
+  Result.CallMayWriteGPRs = Image.MayWrite;
+  Result.CallExitConstants = Image.ExitConstants;
+  Result.CallRegisterLeaves = Image.RegisterLeaves;
+  Result.CallEntryReadGPRs = Image.EntryReads;
+  Result.CallUnreadGPRs = Image.Unread;
+  Result.CallEntryStackArgs = Image.EntryStackArgs;
+  Result.CallVariadicFrom = Image.VariadicFrom;
 }
 } // namespace pipeline_detail
 
@@ -4157,7 +4222,14 @@ static LocalRegisterEffect summarizeRecoveredCallRegisters(
       &NoReturnTargets, &FixedCallReads, &ArgumentSources, &StackProbes);
 }
 
-void computeCallRegisterEffects(
+/// With \p ImageSummaries, a run takes those, solved over the whole image,
+/// and only collects its own functions' formatted calls.  With \p WholeImage,
+/// the solve reads every function of FuncEntries (Result.LowFuncs is empty)
+/// and every callee they reach, unbounded but for
+/// limits::kMaxImageCallSummaryFunctions, and classifies every import, as a
+/// computed call target may be any.  False where that limit or a decoder
+/// stops the solve, leaving Result without summaries.
+bool computeCallRegisterEffects(
     const BinaryImage &Img, const std::set<va_t> &FuncEntries,
     const libc::NoReturnTargetIndex &NoReturnTargets,
     const libc::StackProbeIndex &StackProbes,
@@ -4170,6 +4242,7 @@ void computeCallRegisterEffects(
     const std::map<va_t, std::string> *FunctionNames,
     const std::vector<va_t> *ExportStarts,
     std::shared_ptr<const ImageImportCounts> *KeptImportCounts,
+    const pipeline_detail::ImageCallSummaries *ImageSummaries, bool WholeImage,
     PipelineResult &Result) {
   // A call through a function-pointer variable passes the arguments of the
   // routine the variable starts at (PointerCallees): another module's, whose
@@ -4225,7 +4298,20 @@ void computeCallRegisterEffects(
     }
     setOmittedImportArguments(Img, Dbg, PointerCallees, KeptImportCounts,
                               Result);
-    return;
+    return true;
+  }
+  if (ImageSummaries) {
+    // The run's formatted calls, joined in its functions' order as below.
+    for (const LowFunc &LF : Result.LowFuncs) {
+      const CallRegisterBodyView Body(LF);
+      std::map<va_t, FormattedCall> Calls;
+      pipeline_detail::collectFormattedCalls(Img, Body.Blocks, Calls,
+                                             Body.HasIndependentRoots);
+      for (auto &[Address, Call] : Calls)
+        Result.FormattedCalls.emplace(Address, std::move(Call));
+    }
+    pipeline_detail::applyImageCallSummaries(*ImageSummaries, Result);
+    return true;
   }
   // Each function's effect.  A callee's is the one its kept facts hold,
   // which the run reads in place (Kept holds them); the run copies an
@@ -4353,10 +4439,12 @@ void computeCallRegisterEffects(
     Work.push_back(LF.Entry);
   }
   size_t ExtraLifts = 0;
+  // The whole image's first frontier is every function, in address order.
+  bool SeedImage = WholeImage;
   // Reserve callees one breadth-first frontier at a time in the original
   // caller/address order. Discovery, budget admission and summary publication
   // remain deterministic; only independent CFG builds run concurrently.
-  for (size_t Next = 0; Next < Work.size();) {
+  for (size_t Next = 0; Next < Work.size() || SeedImage;) {
     const size_t FrontierEnd = Work.size();
     std::vector<va_t> Pending;
     for (; Next < FrontierEnd; ++Next) {
@@ -4374,8 +4462,8 @@ void computeCallRegisterEffects(
             Callees.insert(Step.ArgumentsFrom);
       for (va_t Callee : Callees) {
         if (Depth.count(Callee) ||
-            CalleeDepth > limits::kMaxCallEffectCalleeDepth ||
-            ExtraLifts >= limits::kMaxCallEffectExtraLifts ||
+            (!WholeImage && (CalleeDepth > limits::kMaxCallEffectCalleeDepth ||
+                             ExtraLifts >= limits::kMaxCallEffectExtraLifts)) ||
             !Img.hasExecutableCodeOwnerAt(Callee))
           continue;
         ++ExtraLifts;
@@ -4383,6 +4471,16 @@ void computeCallRegisterEffects(
         Pending.push_back(Callee);
       }
     }
+    if (SeedImage) {
+      SeedImage = false;
+      for (const va_t Entry : FuncEntries)
+        if (!Depth.count(Entry) && Img.hasExecutableCodeOwnerAt(Entry)) {
+          Depth[Entry] = 1;
+          Pending.push_back(Entry);
+        }
+    }
+    if (WholeImage && Depth.size() > limits::kMaxImageCallSummaryFunctions)
+      return false;
     // Give parallel workers enough admitted bodies to overlap costly callees
     // across the old eight-body barriers. Publication remains in Pending
     // order, and the next breadth-first frontier is still discovered only
@@ -4441,7 +4539,7 @@ void computeCallRegisterEffects(
               : limits::kMinParallelIRWorkItems,
           /*MaxThreads=*/4);
       if (!Initialized.load(std::memory_order_relaxed))
-        return;
+        return false;
       for (size_t I = 0; I < Count; ++I) {
         const va_t Callee = Pending[Begin + I];
         if (const auto &Facts = Known[I]) {
@@ -4463,7 +4561,7 @@ void computeCallRegisterEffects(
           if (!CachedBodies[I]) {
             Decoder Dec;
             if (!Dec.init(Img))
-              return;
+              return false;
             Bodies[I] = BuildCallee(Dec, Callee);
           }
         }
@@ -4575,10 +4673,20 @@ void computeCallRegisterEffects(
   if (const CallArgumentConvention *Convention =
           callArgumentConvention(Img.Arch, Img.abiFormat());
       Convention && Convention->ImportArgumentsFromPrototype) {
+    // A solve of the whole image has no run's calls to scan: any import may
+    // be a computed target.
+    std::vector<va_t> ImportSlots;
+    if (WholeImage) {
+      for (const Import &Imp : Img.Imports)
+        if (Imp.IATAddr)
+          ImportSlots.push_back(Imp.IATAddr);
+      for (const auto &[Slot, Name] : Img.ImportPtrSlots)
+        ImportSlots.push_back(Slot);
+    }
     ImportPrototypeArguments Prototyped = importPrototypeArguments(
         Img, Result.LowFuncs, Effects, Convention->StackArgumentSummary, Dbg,
         /*RegisterArguments=*/true, &PointerCallees, ExportStarts,
-        /*AlsoClassify=*/nullptr, &DispatchThunks);
+        WholeImage ? &ImportSlots : nullptr, &DispatchThunks);
     // An exported body joins its declared reads into the entry summary.
     // Its recovered body alone cannot later truncate those arguments.
     for (va_t Addr : Prototyped.PrototypeDeclared)
@@ -4640,6 +4748,7 @@ void computeCallRegisterEffects(
   Result.CallUnreadGPRs = std::move(Summaries.Unread);
   Result.CallEntryStackArgs = std::move(Summaries.EntryStackArgs);
   Result.CallVariadicFrom = std::move(Summaries.VariadicFrom);
+  return true;
 }
 } // namespace
 
@@ -4740,6 +4849,10 @@ struct PipelineAnalysisCache::Impl {
   // Never changes, so the graph cache matches it by identity.
   const std::set<va_t> Entries;
   mutable pipeline_detail::CalleeFactsCache CalleeFacts;
+  /// The image's call-register summaries once Pipeline::prepareCallSummaries
+  /// solved them, for runs of the symbol inventory's starts: kept only in
+  /// the inventory's facts, which a changed inventory replaces.
+  std::shared_ptr<const pipeline_detail::ImageCallSummaries> CallSummaries;
   /// Whether warming found no room for another body.  Later pages lift each
   /// function once, for its callee facts.
   bool BodiesFull = false;
@@ -4760,6 +4873,30 @@ struct PipelineAnalysisCache::Impl {
              limits::kMaxPipelineCallGraphBytes,
              limits::kMaxPipelineCallBodyBytes},
             &this->Entries, this->Inputs->X87FloatingImports)) {}
+
+  /// The facts a selected-function run of a symbol start keeps (buildLowIR),
+  /// with what every run reads of the image's names, runtime routines and
+  /// catch continuations, read here rather than in the first run.
+  static Impl &symbolFacts(const BinaryImage &Img, DebugContext *Dbg,
+                           PipelineAnalysisCache &Cache) {
+    const auto Inventory =
+        PipelineAnalysisCache::SymbolInventory::of(Img, Cache);
+    const std::vector<va_t> &CandidateEntries = Inventory->Starts;
+    (void)Inventory->functionNames(Img);
+    (void)Inventory->runtimeRoutineCalls(Img);
+    (void)Inventory->fh4ContinuationCandidates(Img);
+    // Facts for another symbol inventory serve no later run.
+    if (!Cache.Facts ||
+        !Cache.Facts->matches(Img, Dbg, CandidateEntries, Inventory.get()))
+      Cache.Facts = std::make_shared<Impl>(
+          imageInputs(Img, Dbg, Inventory, Cache.Facts, Cache.SelectionFacts),
+          std::set<va_t>(CandidateEntries.begin(), CandidateEntries.end()),
+          /*RetainBodies=*/true, /*SymbolEntries=*/true);
+    else
+      Cache.Facts->Callees.trimMemoizedProofs(
+          limits::kMaxRetainedNoReturnAnswers);
+    return *Cache.Facts;
+  }
 
   /// \p CandidateEntries is sorted and holds each entry once. BuiltFrom
   /// permits the identity shortcut only when these are the inventory's starts.
@@ -4996,33 +5133,11 @@ Pipeline::warmAnalysisCache(const BinaryImage &Img, const PipelineOptions &Opts,
                             DebugContext *Dbg, llvm::ArrayRef<va_t> Functions) {
   if (!Opts.AnalysisCache)
     return std::nullopt;
-  // The facts a selected-function run of a symbol start keeps (buildLowIR
-  // below), with what every run reads of the image's names, runtime routines
-  // and catch continuations, read here rather than in the first run.
-  const auto symbolFacts = [&](PipelineAnalysisCache &Cache) {
-    const auto Inventory =
-        PipelineAnalysisCache::SymbolInventory::of(Img, Cache);
-    const std::vector<va_t> &CandidateEntries = Inventory->Starts;
-    (void)Inventory->functionNames(Img);
-    (void)Inventory->runtimeRoutineCalls(Img);
-    (void)Inventory->fh4ContinuationCandidates(Img);
-    // Facts for another symbol inventory serve no later run.
-    if (!Cache.Facts ||
-        !Cache.Facts->matches(Img, Dbg, CandidateEntries, Inventory.get()))
-      Cache.Facts = std::make_shared<PipelineAnalysisCache::Impl>(
-          PipelineAnalysisCache::Impl::imageInputs(
-              Img, Dbg, Inventory, Cache.Facts, Cache.SelectionFacts),
-          std::set<va_t>(CandidateEntries.begin(), CandidateEntries.end()),
-          /*RetainBodies=*/true, /*SymbolEntries=*/true);
-    else
-      Cache.Facts->Callees.trimMemoizedProofs(
-          limits::kMaxRetainedNoReturnAnswers);
-  };
   if (Img.Arch != Arch::X64) {
     // i386, AArch64 and ARM runs share those facts too (sharedAnalysisCache).
     if (Img.Arch == Arch::X86 || Img.Arch == Arch::AArch64 ||
         Img.Arch == Arch::ARM)
-      symbolFacts(*Opts.AnalysisCache);
+      PipelineAnalysisCache::Impl::symbolFacts(Img, Dbg, *Opts.AnalysisCache);
     // Where each call's setup gives its arguments, a restricted run reads
     // the signature bodies of the callees it leaves out. Those conversions
     // read the image's import counts and stack-slot identities, together with
@@ -5047,8 +5162,7 @@ Pipeline::warmAnalysisCache(const BinaryImage &Img, const PipelineOptions &Opts,
   // The entries a selected-function run of a symbol start knows (buildLowIR
   // below): its own entry adds nothing to them, so its run shares this state.
   PipelineAnalysisCache &Cache = *Opts.AnalysisCache;
-  symbolFacts(Cache);
-  auto &Facts = *Cache.Facts;
+  auto &Facts = PipelineAnalysisCache::Impl::symbolFacts(Img, Dbg, Cache);
   Facts.Inputs->Targets.clearMemoizedNames();
   const auto &Inputs = *Facts.Inputs;
   // Bodies and graphs serve the call proofs of the functions runs lift
@@ -5061,10 +5175,50 @@ Pipeline::warmAnalysisCache(const BinaryImage &Img, const PipelineOptions &Opts,
         &Facts.Callees, &Inputs.Roots, &Inputs.Owners, workerThreadCount());
     Facts.BodiesFull = Warmup.Full;
   }
-  warmCalleeFacts(Img, Functions, Facts.Graphs, Facts.Entries, Inputs.Targets,
-                  Facts.Callees, Inputs.Roots, Inputs.Owners,
-                  Inputs.StackProbes, Inputs.PointerCallees, Facts.CalleeFacts);
+  // Once the image's summaries are solved, runs of these entries read no
+  // callee's facts.
+  if (!Facts.CallSummaries)
+    warmCalleeFacts(Img, Functions, Facts.Graphs, Facts.Entries, Inputs.Targets,
+                    Facts.Callees, Inputs.Roots, Inputs.Owners,
+                    Inputs.StackProbes, Inputs.PointerCallees,
+                    Facts.CalleeFacts);
   return AnalysisCacheWarmup{Warmup.Retained, Facts.BodiesFull};
+}
+
+bool Pipeline::prepareCallSummaries(const BinaryImage &Img,
+                                    const PipelineOptions &Opts,
+                                    DebugContext *Dbg, bool *Solved) {
+  if (Solved)
+    *Solved = false;
+  if (!Opts.AnalysisCache || Img.Arch != Arch::X64)
+    return false;
+  PipelineAnalysisCache &Cache = *Opts.AnalysisCache;
+  auto &Facts = PipelineAnalysisCache::Impl::symbolFacts(Img, Dbg, Cache);
+  if (Facts.CallSummaries)
+    return true;
+  Facts.Inputs->Targets.clearMemoizedNames();
+  const auto &Inputs = *Facts.Inputs;
+  const auto &Inventory = *Facts.Inputs->Inventory;
+  // Every function is read as a run reads a callee, in address order, so
+  // the summaries do not depend on which function a session decompiled
+  // first.
+  PipelineResult Whole;
+  if (!computeCallRegisterEffects(
+          Img, Facts.Entries, Inputs.Targets, Inputs.StackProbes, Facts.Callees,
+          Inputs.Roots, &Inputs.Owners, Facts.Graphs, Inputs.PointerCallees,
+          Facts.CalleeFacts, Dbg, &Inventory.functionNames(Img),
+          &Inventory.ExportStarts,
+          /*KeptImportCounts=*/nullptr, /*ImageSummaries=*/nullptr,
+          /*WholeImage=*/true, Whole))
+    return false;
+  Facts.CallSummaries =
+      std::make_shared<const pipeline_detail::ImageCallSummaries>(
+          pipeline_detail::imageCallSummariesOf(std::move(Whole)));
+  // Runs of these entries read the summaries now, not each callee's facts.
+  Facts.CalleeFacts.clear();
+  if (Solved)
+    *Solved = true;
+  return true;
 }
 
 void Pipeline::buildLowIR(
@@ -5636,12 +5790,17 @@ void Pipeline::buildLowIR(
     ++FuncCount;
   }
 
-  computeCallRegisterEffects(
+  // A run of a symbol start reads the image's summaries once a session
+  // solved them (prepareCallSummaries); one that adds its own entry keys
+  // other facts.
+  (void)computeCallRegisterEffects(
       Img, FuncEntries, NoReturnTargets, Inputs.StackProbes, NoReturnCallees,
       AbsoluteRelocationRoots, CodeOwnerIndex, X87Graphs, Inputs.PointerCallees,
       Facts.CalleeFacts, Dbg, Shared ? &Inventory->functionNames(Img) : nullptr,
       Shared ? &Inventory->ExportStarts : nullptr,
-      Opts.AnalysisCache ? &Opts.AnalysisCache->ImportCounts : nullptr, Result);
+      Opts.AnalysisCache ? &Opts.AnalysisCache->ImportCounts : nullptr,
+      Shared && !AddsEntries ? Facts.CallSummaries.get() : nullptr,
+      /*WholeImage=*/false, Result);
 }
 
 } // namespace neverd

@@ -262,7 +262,8 @@ NEVERD_API int neverd_prepare_function_view(neverd_session_t Sess,
 /// on demand, for them to reuse, and scan the image's data access widths the
 /// first C view reads.  The results of later calls are unchanged,
 /// and nothing already prepared is discarded.  Returns
-/// {"available":bool,"prepared":int,"full":bool,"next_entry":"0x..."|null}:
+/// {"available":bool,"prepared":int,"full":bool,"next_entry":"0x..."|null,
+/// "call_summaries":bool}:
 /// "prepared" counts the functions the session now holds prepared, "full"
 /// says it refused one for lack of room, so further calls prepare no more
 /// functions.  They still keep what a decompile reads of calls to the
@@ -276,13 +277,34 @@ NEVERD_API int neverd_prepare_function_view(neverd_session_t Sess,
 /// prepared.  A function that is not a symbol start keeps its own state
 /// beside it.  A PE function's preparation keeps it unless discovering the
 /// function's exception handlers adds metadata, which after a full load it
-/// does not.  NULL
+/// does not.  "call_summaries" says whether
+/// neverd_prepare_call_summaries_json solves this image's summaries.  NULL
 /// with an error when no binary is loaded or a build fails.  Like every
 /// session call, this must not run concurrently with another call on the
 /// session.
 NEVERD_API const char *neverd_warm_functions_json(neverd_session_t Sess,
                                                   neverd_va_t FirstEntry,
                                                   int MaxFunctions);
+
+/// Solve the call-register summaries of every function of an x86-64 image
+/// once, as a whole-image analysis solves them, and keep them for the
+/// session's later function analyses.  Until then, a function's analysis
+/// solves the summaries of the callees it reaches within fixed depth and lift
+/// bounds, which leave farther calls unread; afterwards it reads the image's,
+/// so a function can decompile differently than before.  The kept C, views
+/// and function analysis from before are dropped; a session that already
+/// holds the summaries keeps them and answers at once.  Warming the session
+/// first (neverd_warm_functions_json over every function) leaves this call
+/// little to lift.  Returns {"available":bool,"ready":bool}: "available" is
+/// false for images other than x86-64, and "ready" says the session holds the
+/// summaries; an image whose functions and callees exceed the engine's limit
+/// keeps solving each analysis's own.  The summaries last until the session
+/// drops its analysis state, as a change to its types or signatures does.
+/// NULL with an error when no binary is loaded or a build fails.  Like every
+/// session call, this must not run concurrently with another call on the
+/// session.
+NEVERD_API const char *
+neverd_prepare_call_summaries_json(neverd_session_t Sess);
 
 NEVERD_API const char *neverd_decompile(neverd_session_t Sess,
                                         neverd_va_t FuncEntry);

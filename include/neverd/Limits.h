@@ -459,6 +459,10 @@ constexpr uint64_t kMaxOverlapDistance = 0x10000;
 /// the ABI clobber set.
 constexpr int kMaxCallEffectCalleeDepth = 4;
 constexpr size_t kMaxCallEffectExtraLifts = 256;
+/// The functions Pipeline::prepareCallSummaries reads for an image's
+/// call-register summaries: its symbol starts and the callees they reach.
+/// An image with more keeps each run's own callee summaries.
+constexpr size_t kMaxImageCallSummaryFunctions = 262144;
 /// On-demand CFG register proofs admit only small, metadata-bounded callees.
 /// The query may not recursively start another CFG register proof.
 constexpr size_t kMaxCFGCallRegisterProofFunctions = 32;
