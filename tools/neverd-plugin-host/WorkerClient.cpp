@@ -33,7 +33,8 @@ std::string utf8(const std::filesystem::path &Path) {
 
 WorkerClient::WorkerClient(Executor &Queue)
     : Queue(Queue), Child([&Queue](auto Work) { Queue.post(std::move(Work)); },
-                          [this](auto Event) { receive(std::move(Event)); }) {}
+                          [this](auto Event) { receive(std::move(Event)); },
+                          ProcessOutputBudget::PendingDelivery) {}
 WorkerClient::~WorkerClient() {
   Child.stop();
   Child.join();
@@ -185,3 +186,4 @@ bool WorkerClient::open(const std::filesystem::path &Worker,
   return true;
 }
 } // namespace neverd::plugin::cli
+
