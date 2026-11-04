@@ -330,6 +330,15 @@ struct X87CallGraph {
   std::vector<X87NoReturnAnswer> NoReturnAnswers;
 };
 
+/// What one CFG build's queries found comparing the inventories its builder
+/// borrows with the cache's frozen contexts (X87CallGraphCache::matches), by
+/// context.  The borrowed sets do not change while the builder builds, so
+/// each context is compared with them once rather than at every query: on a
+/// whole image the protected relocation slots alone hold tens of thousands.
+struct X87ContextMatches {
+  std::vector<std::pair<uint64_t, bool>> Known;
+};
+
 class X87CallGraphCache {
   friend class X87CallEffectIndex;
   friend class CFGBuilder;
@@ -350,6 +359,9 @@ class X87CallGraphCache {
     std::optional<std::vector<va_t>> UnsafeBranches;
     // The cache's immutable inventory, borrowed in place of Entries.
     const std::set<va_t> *EntriesSource = nullptr;
+    // Unique among the contexts this cache froze (freezeContext), so a
+    // query's earlier comparison with it stands (X87ContextMatches).
+    uint64_t Id = 0;
   };
   struct Entry {
     va_t Address;
@@ -378,7 +390,11 @@ class X87CallGraphCache {
   const size_t MaxGraphs;
   const size_t MaxBytes;
   const size_t MaxSummaryBytes;
+  /// The contexts one build's memo keeps (X87ContextMatches); past them it
+  /// starts again, which only compares once more.
+  static constexpr size_t MaxContextMatches = 16;
   std::mutex Mutex;
+  uint64_t LastContextId = 0;
   std::optional<Context> Inputs;
   std::list<Entry> Graphs;
   std::unordered_map<va_t, std::list<Entry>::iterator> GraphIndex;
@@ -701,7 +717,8 @@ private:
             (Frozen->size() == Live->size() &&
              std::equal(Frozen->begin(), Frozen->end(), Live->begin())));
   }
-  static bool matches(const Context &C, const CFGBuilder &B) {
+  /// Whether \p C and \p B agree on everything but the sets \p B borrows.
+  static bool scalarsMatch(const Context &C, const CFGBuilder &B) {
     return C.Image == B.CurrentImg && C.Architecture == B.CurrentImg->Arch &&
            C.Mode == B.CurrentImg->Mode && C.Bits == B.CurrentImg->Bits &&
            C.Format == B.CurrentImg->Format &&
@@ -710,18 +727,38 @@ private:
            C.NoReturnCallees == B.NoReturnCallees &&
            C.NoReturnDepth == B.NoReturnCalleeDepth + 1 &&
            C.RelocationRoots == B.AbsoluteRelocationRoots &&
-           C.CodeOwners == B.ExecutableCodeOwners &&
-           // The immutable inventory a context borrows still holds what it
-           // held; any other set is compared entry by entry.
-           (C.EntriesSource ? B.KnownFuncEntries &&
+           C.CodeOwners == B.ExecutableCodeOwners;
+  }
+  /// Whether \p C froze the sets \p B borrows.
+  static bool setsMatch(const Context &C, const CFGBuilder &B) {
+    // The immutable inventory a context borrows still holds what it held;
+    // any other set is compared entry by entry.
+    return (C.EntriesSource ? B.KnownFuncEntries &&
                                   (C.EntriesSource == B.KnownFuncEntries ||
                                    *C.EntriesSource == *B.KnownFuncEntries)
                             : sameSet(C.Entries, B.KnownFuncEntries)) &&
            sameSet(C.ProtectedSlots, B.ProtectedJumpTableRelocationSlots) &&
            sameSet(C.UnsafeBranches, B.UnsafeJumpTableBranches);
   }
-  bool matches(const CFGBuilder &B) const {
-    return Inputs && matches(*Inputs, B);
+  /// Whether \p B builds under \p C.  \p Memo, kept by one of \p B's
+  /// builds, answers the set comparison for a context it already compared.
+  static bool matches(const Context &C, const CFGBuilder &B,
+                      X87ContextMatches *Memo = nullptr) {
+    if (!scalarsMatch(C, B))
+      return false;
+    if (!Memo || !C.Id)
+      return setsMatch(C, B);
+    for (const auto &[Id, Same] : Memo->Known)
+      if (Id == C.Id)
+        return Same;
+    const bool Same = setsMatch(C, B);
+    if (Memo->Known.size() >= MaxContextMatches)
+      Memo->Known.clear();
+    Memo->Known.emplace_back(C.Id, Same);
+    return Same;
+  }
+  bool matches(const CFGBuilder &B, X87ContextMatches *Memo = nullptr) const {
+    return Inputs && matches(*Inputs, B, Memo);
   }
   std::optional<size_t> graphBytes(const X87CallGraph &Graph) const {
     size_t Bytes = sizeof(Entry) + sizeof(X87CallGraph) + 16 * sizeof(void *);
@@ -766,7 +803,8 @@ private:
         return false;
     return true;
   }
-  Context freezeContext(const CFGBuilder &B) const {
+  /// Called under Mutex: every context gets an id of its own.
+  Context freezeContext(const CFGBuilder &B) {
     const bool Borrowed = borrowsEntries(B);
     return {B.CurrentImg,
             B.CurrentImg->Arch,
@@ -782,11 +820,13 @@ private:
             Borrowed ? std::nullopt : freeze(B.KnownFuncEntries),
             freeze(B.ProtectedJumpTableRelocationSlots),
             freeze(B.UnsafeJumpTableBranches),
-            Borrowed ? ImmutableEntries : nullptr};
+            Borrowed ? ImmutableEntries : nullptr,
+            ++LastContextId};
   }
-  Request acquire(const CFGBuilder &B, va_t Address) {
+  Request acquire(const CFGBuilder &B, va_t Address,
+                  X87ContextMatches *Memo = nullptr) {
     std::unique_lock<std::mutex> Lock(Mutex);
-    if (matches(B))
+    if (matches(B, Memo))
       if (const auto Found = GraphIndex.find(Address);
           Found != GraphIndex.end()) {
         Graphs.splice(Graphs.begin(), Graphs, Found->second);
@@ -803,7 +843,7 @@ private:
       return {};
     }
     for (const auto &Flight : Pending)
-      if (Flight->Address == Address && matches(Flight->Inputs, B)) {
+      if (Flight->Address == Address && matches(Flight->Inputs, B, Memo)) {
         // Keep the state alive even after its leader removes the pending slot.
         const auto Waiting = Flight;
         ++Waits;
@@ -903,7 +943,8 @@ private:
   };
   std::shared_ptr<const X87CallGraph>
   publish(const CFGBuilder &B, va_t Address,
-          std::shared_ptr<const X87CallGraph> Graph) {
+          std::shared_ptr<const X87CallGraph> Graph,
+          X87ContextMatches *Memo = nullptr) {
     if (!Graph->Complete &&
         Graph->Rejection == X87CallGraph::ProjectionRejection::None)
       return Graph;
@@ -919,7 +960,7 @@ private:
     if (*Bytes > MaxBytes - Estimated)
       return Graph;
     std::lock_guard<std::mutex> Lock(Mutex);
-    if (!matches(B)) {
+    if (!matches(B, Memo)) {
       Context Next = freezeContext(B);
       const auto NextBytes = contextBytes(Next);
       if (!NextBytes || *Bytes > MaxBytes - *NextBytes)
@@ -1066,6 +1107,9 @@ class X87CallEffectIndex {
   const BinaryImage &Image;
   std::map<va_t, std::shared_ptr<const Graph>> Graphs;
   std::map<va_t, std::optional<X87CallContract>> Answers;
+  /// This build's comparisons of its builder's sets with the shared cache's
+  /// contexts: the builder borrows the same sets for the whole build.
+  X87ContextMatches ContextMatches;
   /// Set when this index read an incomplete lift whose no-return answers
   /// went unrecorded, so nothing derived from it can name what it depends on.
   bool UnrecordedLift = false;
@@ -1220,7 +1264,7 @@ class X87CallEffectIndex {
         RegistrationCallees ? nullptr : Settings.SharedX87CallGraphs;
     std::shared_ptr<X87CallGraphCache::PendingGraph> Flight;
     if (HasCodeOwner && SharedGraphs) {
-      auto Request = SharedGraphs->acquire(Settings, Entry);
+      auto Request = SharedGraphs->acquire(Settings, Entry, &ContextMatches);
       // A refusal whose answers no longer hold is built again; the build
       // replaces it.  Replay runs outside the cache's lock.
       if (Request.Value && answersHold(*Request.Value))
@@ -1316,7 +1360,8 @@ class X87CallEffectIndex {
       G = Graph{};
       G.Rejection = Reason;
       if (SharedGraphs)
-        It->second = SharedGraphs->publish(Settings, Entry, Built);
+        It->second =
+            SharedGraphs->publish(Settings, Entry, Built, &ContextMatches);
       Complete.completed(It->second);
       return *It->second;
     };
@@ -1332,7 +1377,8 @@ class X87CallEffectIndex {
       }
       G.Rejection = Graph::ProjectionRejection::IncompleteLift;
       G.NoReturnAnswers = std::move(Answers);
-      It->second = SharedGraphs->publish(Settings, Entry, Built);
+      It->second =
+          SharedGraphs->publish(Settings, Entry, Built, &ContextMatches);
       Complete.completed(It->second);
       return *It->second;
     }
@@ -1425,7 +1471,8 @@ class X87CallEffectIndex {
     }
     G.Complete = true;
     if (SharedGraphs)
-      It->second = SharedGraphs->publish(Settings, Entry, Built);
+      It->second =
+          SharedGraphs->publish(Settings, Entry, Built, &ContextMatches);
     Complete.completed(It->second);
     return *It->second;
   }

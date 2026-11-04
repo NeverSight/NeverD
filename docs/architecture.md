@@ -10521,7 +10521,10 @@ stack/tag normalization and do not consume that inventory. Ordinary x87
 normalization still computes its tag-entry seeds against the new references;
 normalized output CFGs and caller-dependent effect answers are never retained.
 Cache locks cover lookup
-and publication, while graph construction runs outside the lock. Each query
+and publication, while graph construction runs outside the lock. A lookup
+checks the builder's settings against the cache's frozen context; one CFG
+build compares the inventories its builder borrows with each context once,
+since neither changes during the build, and checks the rest every time. Each query
 still independently bounds and pays for its complete call closure and dataflow
 work; caller-dependent answers are not shared. A completely lifted, nontruncated
 CFG with exceptional edges, a block without any successor, return or modeled
