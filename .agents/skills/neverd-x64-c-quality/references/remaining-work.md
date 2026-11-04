@@ -79,17 +79,18 @@ their zero address marker. A conflicting 32-bit native declaration previously
 truncated a 64-bit helper result. Real native address-zero declarations remain
 usable, and entryless PE DLLs no longer acquire an implicit DLL-entry prototype.
 
-The latest ordinary source qualification reduces the former 56 missing
+An earlier ordinary source qualification reduced the former 56 missing
 argument occurrences to **7 in each C route**, across four of the five roots.
-Actual-body specialization removes 47 unused stack-formal occurrences in one
+Actual-body specialization removed 47 unused stack-formal occurrences in one
 caller and two in another, without declaring their physical slots unobservable.
-The second caller now has no missing ordinary argument. HighC keeps structured
+The second caller then had no missing ordinary argument. HighC keeps structured
 callers and emits separate source helpers; LLVM C inlines the same admitted
-bodies. The remaining occurrences are two registry-query stack inputs, four
-device-property-query register inputs and one hibernation-adjustment register
-input. Observed or escaping home storage, nested observers, complete Windows
-execution and automatic ordinary/state composition remain open. Counts of 56
-below describe earlier qualifications, not the current source output.
+bodies. The remaining occurrences at that stage were two registry-query stack
+inputs, four device-property-query register inputs and one hibernation-adjustment
+register input. Observed or escaping home storage, nested observers, complete Windows
+execution and automatic ordinary/state composition remain open. Later source
+repairs leave the two registry-query gaps recorded above. The seven- and
+56-occurrence counts here describe earlier qualifications.
 
 HighC integer call results now keep their lifted carrier in both expressions
 and local declarations. Direct and indirect MedIR calls use the same result
