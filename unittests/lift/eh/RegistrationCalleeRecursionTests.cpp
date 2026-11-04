@@ -113,7 +113,8 @@ TEST(RegistrationCallABI, FloatingAndRegistrationProofsSharePendingCallees) {
 }
 
 namespace {
-BinaryImage makeSeparateStackEntryImage(bool Reached, bool Cached) {
+BinaryImage makeSeparateStackEntryImage(bool Reached, bool Cached,
+                                        const char *ImportName = "Sleep") {
   constexpr va_t TextVA = 0x401000, DataVA = 0x404000, IAT = DataVA + 16;
   BinaryImage Image;
   Image.Arch = Arch::X86;
@@ -175,9 +176,9 @@ BinaryImage makeSeparateStackEntryImage(bool Reached, bool Cached) {
   }
   Image.Symbols.push_back(Symbol::makeFunc(TextVA, sizeof(Caller)));
   Image.Symbols.push_back(Symbol::makeFunc(TextVA + 0x40, 0x30));
-  Image.Imports.push_back({"KERNEL32.dll", "Sleep", 0, IAT});
+  Image.Imports.push_back({"KERNEL32.dll", ImportName, 0, IAT});
   EXPECT_TRUE(Image.recordImportStorageSlot(
-      IAT, "Sleep", 0, ImportStorageEvidence::ImportDirectory));
+      IAT, ImportName, 0, ImportStorageEvidence::ImportDirectory));
   return Image;
 }
 LowFunc stackEntryQuery(va_t Target) {
@@ -190,7 +191,166 @@ LowFunc stackEntryQuery(va_t Target) {
   Query.Blocks.front().Ops.push_back(Call);
   return Query;
 }
+
+BinaryImage makeRepeatedLocalStackImage(unsigned Levels, bool Cycle = false) {
+  auto Image = makeSeparateStackEntryImage(false, false, "EncodePointer");
+  auto &Text = Image.Segments.front();
+  Text.Data.assign(0x40 + 16 * Levels, 0xcc);
+  auto &Pointers = Image.Segments[1];
+  Pointers.Data.resize(4 * Levels);
+  Image.CodePtrRelocSlots.clear();
+  for (unsigned I = 0; I != Levels; ++I) {
+    const size_t Offset = 0x40 + 16 * I;
+    writeLE<uint32_t>(Pointers.Data.data() + 4 * I, Text.VA + Offset);
+    Image.CodePtrRelocSlots.insert(Pointers.VA + 4 * I);
+    if (I + 1 == Levels && !Cycle) {
+      Text.Data[Offset] = 0xc3;
+      continue;
+    }
+    const va_t Target = Text.VA + (I + 1 == Levels ? 0x40 : Offset + 16);
+    for (unsigned Call : {0u, 5u}) {
+      Text.Data[Offset + Call] = 0xe8;
+      writeLE<uint32_t>(Text.Data.data() + Offset + Call + 1,
+                        uint32_t(Target - (Text.VA + Offset + Call + 5)));
+    }
+    Text.Data[Offset + 10] = 0xc3;
+  }
+  for (size_t I = 0; I != Image.Segments.size(); ++I) {
+    auto &Segment = Image.Segments[I];
+    Segment.Size = Segment.FileSz = Segment.Data.size();
+    Image.Sections[I].Size = Image.Sections[I].FileSz = Segment.Size;
+  }
+  Image.Entry = Text.VA + 0x40;
+  Image.Symbols = {Symbol::makeFunc(Image.Entry, 16 * Levels)};
+  return Image;
+}
 } // namespace
+
+TEST(RegistrationCalleeRecursion,
+     RepeatedLocalStackWitnessesStayInTheirParent) {
+  for (bool ImportedLeaf : {false, true}) {
+    SCOPED_TRACE(ImportedLeaf);
+    auto Image = makeRepeatedLocalStackImage(10);
+    if (ImportedLeaf) {
+      // Every completed local proof must keep this dependency when reused.
+      const uint8_t Leaf[] = {0x6a, 0, 0xff, 0x15, 0x10, 0x40, 0x40, 0, 0xc3};
+      auto &Bytes = Image.Segments.front().Data;
+      std::copy(std::begin(Leaf), std::end(Leaf), Bytes.end() - 16);
+    }
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    auto Low = CFGBuilder().buildIntegerFrameProof(Image, Decode, Image.Entry,
+                                                   "local-stack-diamond");
+    ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+    for (bool Reversed : {false, true}) {
+      SCOPED_TRACE(Reversed);
+      if (Reversed)
+        std::reverse(Low.Blocks.begin(), Low.Blocks.end());
+      size_t Work = 0;
+      RegistrationCallCalleeIndex Index(Image, &Work);
+      const auto Contracts = Index.stackContracts(Low);
+      ASSERT_TRUE(Contracts);
+      ASSERT_EQ(Contracts->size(), ImportedLeaf ? 10u : 9u);
+      for (const auto &Contract : *Contracts) {
+        EXPECT_EQ(Contract.StackPopBytes, Contract.Indirect ? 4u : 0u);
+        if (!Contract.Indirect)
+          EXPECT_EQ(Contract.RequiredImports, ImportedLeaf
+                                                  ? std::vector<va_t>{0x404010}
+                                                  : std::vector<va_t>{});
+        EXPECT_TRUE(Contract.PreservesImportBindings);
+      }
+      EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    }
+  }
+}
+
+TEST(RegistrationCalleeRecursion, LocalStackWitnessesDoNotCompleteCycles) {
+  for (bool Cycle : {false, true}) {
+    SCOPED_TRACE(Cycle);
+    auto Image = makeRepeatedLocalStackImage(3, Cycle);
+    if (!Cycle) {
+      auto &Bytes = Image.Segments.front().Data;
+      Bytes[Bytes.size() - 16] = 0xc2;
+      Bytes[Bytes.size() - 15] = 4;
+      Bytes[Bytes.size() - 14] = 0;
+    }
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    const auto Low = CFGBuilder().buildIntegerFrameProof(
+        Image, Decode, Image.Entry, "invalid-local-stack");
+    ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+    RegistrationCallCalleeIndex Index(Image);
+    const auto Contracts = Index.stackContracts(Low);
+    ASSERT_TRUE(Contracts);
+    if (Cycle) {
+      EXPECT_TRUE(Contracts->empty());
+    } else {
+      ASSERT_EQ(Contracts->size(), 1u);
+      EXPECT_EQ(Contracts->front().Target, Image.Entry + 32);
+      EXPECT_EQ(Contracts->front().StackPopBytes, 4u);
+    }
+  }
+}
+
+TEST(RegistrationCalleeRecursion, PendingLocalDependencyCanBeRetried) {
+  auto Image = makeRepeatedLocalStackImage(3);
+  auto &Bytes = Image.Segments.front().Data;
+  // A restores its own ESP even while B has no returning contract. B's first
+  // query therefore fails under the pending A, but must succeed after A has
+  // finished. Memoizing that incomplete refusal would lose B's valid result.
+  const uint8_t A[] = {0x55, 0x89, 0xe5, 0xe8, 8,    0,
+                       0,    0,    0x89, 0xec, 0x5d, 0xc3};
+  const uint8_t B[] = {0xe8, 0xeb, 0xff, 0xff, 0xff, 0xc3};
+  std::copy(std::begin(A), std::end(A), Bytes.begin() + 0x50);
+  std::copy(std::begin(B), std::end(B), Bytes.begin() + 0x60);
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  const auto Low = CFGBuilder().buildIntegerFrameProof(
+      Image, Decode, Image.Entry, "pending-local-stack");
+  ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+  RegistrationCallCalleeIndex Index(Image);
+  const auto Contracts = Index.stackContracts(Low);
+  ASSERT_TRUE(Contracts);
+  ASSERT_EQ(Contracts->size(), 2u);
+  for (const auto &Contract : *Contracts) {
+    EXPECT_EQ(Contract.StackPopBytes, 0u);
+    EXPECT_TRUE(Contract.RequiredImports.empty());
+  }
+}
+
+TEST(RegistrationCalleeRecursion, LocalStackCoordinatesNeedAProvenRestore) {
+  for (unsigned Variant : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Variant);
+    auto Image = makeRepeatedLocalStackImage(3);
+    auto &Bytes = Image.Segments.front().Data;
+    std::vector<uint8_t> Body;
+    if (Variant) {
+      if (Variant == 2)
+        Body.push_back(0x66); // A narrowed save cannot restore entry ESP.
+      Body.insert(Body.end(), {0x89, 0xe7}); // mov (e)di, (e)sp
+    }
+    Body.insert(Body.end(), {0x8b, 0x20}); // mov esp, [eax]
+    if (Variant)
+      Body.insert(Body.end(), {0x89, 0xfc}); // mov esp, edi
+    Body.push_back(0xe8);
+    const size_t Displacement = Body.size();
+    Body.resize(Body.size() + 4);
+    writeLE<uint32_t>(Body.data() + Displacement, 16 - Body.size());
+    Body.push_back(0xc3);
+    std::copy(Body.begin(), Body.end(), Bytes.begin() + 0x50);
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    const auto Low = CFGBuilder().buildIntegerFrameProof(
+        Image, Decode, Image.Entry, "local-stack-restore");
+    ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+    RegistrationCallCalleeIndex Index(Image);
+    const auto Contracts = Index.stackContracts(Low);
+    ASSERT_TRUE(Contracts);
+    ASSERT_EQ(Contracts->size(), Variant == 1 ? 2u : 1u);
+    for (const auto &Contract : *Contracts)
+      EXPECT_EQ(Contract.StackPopBytes, 0u);
+  }
+}
 
 TEST(RegistrationCalleeRecursion, StackImportsBelongToTheQueriedEntry) {
   for (bool Reached : {false, true})

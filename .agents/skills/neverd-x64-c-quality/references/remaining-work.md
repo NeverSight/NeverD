@@ -55,6 +55,10 @@ remain visible even when native registration closure is deferred. An explicit
 strict run of entry `0x401580` still exhausts the registration-state proof
 budget and then refuses an unproved CALL return-slot observation. This is an
 open native-reconstruction/performance gap, not a passing native C result.
+Its callee-stack closure now fits the unchanged work bound: local queries reuse
+the parent block index and completed results, and reject an irretrievably lost
+entry-stack coordinate before recursive callee discovery. The later state
+propagation and local-unwind obligations remain unresolved.
 
 The incoming-stack summary now preserves address dependence through partial
 register writes, whole-word transforms and SELECT alternatives. HighC also

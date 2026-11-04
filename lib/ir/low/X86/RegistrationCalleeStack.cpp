@@ -3,6 +3,8 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Prove returning stack effects with separate parent and standalone entries.
 
 #include "RegistrationABIPrivate.h"
 #include "RegistrationAddress.h"
@@ -207,6 +209,41 @@ struct StackBody {
       std::erase_if(Entries,
                     [&](const auto &E) { return !Reached.count(E.second); });
     }
+    collectImports(OrdinaryEntry);
+  }
+
+  StackBody(const StackBody &Parent, va_t Entry)
+      : Image(Parent.Image), Source(Parent.Source),
+        FunctionEntry(Parent.FunctionEntry), Work(Parent.Work) {
+    // The parent already validated the immutable source's complete instruction
+    // boundaries and block identities. Build only this entry's reachable view;
+    // do not copy and prune the entire parent for every local call.
+    if (!Parent.Valid || !Dec.init(Image))
+      return;
+    const auto Root = Parent.Entries.find(Entry);
+    if (Root == Parent.Entries.end())
+      return;
+    std::vector<int> Pending{Root->second};
+    while (!Pending.empty()) {
+      const int Id = Pending.back();
+      Pending.pop_back();
+      if (!chargeCalleeWork(Work, 1))
+        return;
+      const auto Found = Parent.Blocks.find(Id);
+      if (Found == Parent.Blocks.end())
+        return;
+      const LowBlock &Block = *Found->second;
+      if (!Blocks.emplace(Id, &Block).second)
+        continue;
+      if (!chargeCalleeWork(Work, Block.Succs.size() + 1) ||
+          !Entries.emplace(Block.StartAddr, Id).second)
+        return;
+      Pending.insert(Pending.end(), Block.Succs.begin(), Block.Succs.end());
+    }
+    collectImports(Entry);
+  }
+
+  void collectImports(va_t OrdinaryEntry) {
     bool HasCachedCall = false;
     bool HasCRTData = false;
     for (const auto &[Id, Block] : Blocks) {
@@ -218,7 +255,7 @@ struct StackBody {
         // A possible absolute MOV requests the complete shared instruction
         // receipt below. A literal matching an IAT address proves nothing.
         if (!HasCRTData && OrdinaryEntry != InvalidVA &&
-            !Function.ExceptionMetadata && Op.Opcode == NdOp::COPY &&
+            !Source.ExceptionMetadata && Op.Opcode == NdOp::COPY &&
             Op.NumInputs == 1)
           if (const auto Address =
                   registration_state::imageAddressConstant(Op.Inputs[0]))
@@ -409,6 +446,44 @@ struct StackBody {
         return false;
     return It->second = true;
   }
+
+  bool losesEntryStackBeforeCall(va_t Entry) {
+    FrameState State;
+    State.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+        FrameValue::frame(0);
+    FrameTransfer Transfer(State, 0);
+    std::set<int> Seen;
+    int Id = Entries.at(Entry);
+    while (Seen.insert(Id).second) {
+      if (!chargeCalleeWork(Work, 1) || !Blocks.count(Id) ||
+          !immutableBlock(Id))
+        return false;
+      const auto &Block = *Blocks.at(Id);
+      for (const auto &Op : Block.Ops) {
+        size_t Width = Op.Output.Size;
+        for (unsigned I = 0; I != Op.NumInputs; ++I)
+          Width += Op.Inputs[I].Size;
+        if (!chargeCalleeWork(Work, 1 + Width) || Op.Opcode == NdOp::CALL ||
+            Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::RETURN ||
+            (Op.Opcode == NdOp::INTRINSIC &&
+             !registration_state::isFramePreservingIntrinsic(Op)))
+          return false;
+        Transfer.beginInstruction(Op.Addr);
+        const auto Abstract = stackOperation(Op);
+        Transfer.write(Abstract, Transfer.evaluate(Abstract, false), 0);
+      }
+      // This register-only proof never stores frame coordinates in memory.
+      // Once every GPR has lost the entry coordinate, a later CALL's stack
+      // pop cannot recreate it. Instruction temporaries do not cross blocks.
+      if (llvm::none_of(State.Registers,
+                        [](const auto &Value) { return Value.Offset; }))
+        return true;
+      if (Block.Succs.size() != 1)
+        return false;
+      Id = Block.Succs.front();
+    }
+    return false;
+  }
 };
 
 struct CxxStackPaths {
@@ -500,6 +575,8 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
   if (!Body.Valid || !Body.Entries.count(Entry) ||
       (!Registration && !CxxPaths && !Body.hasOnlyReturnTerminals(Entry) &&
        !Body.hasPrecisionResultCandidate()) ||
+      (!Registration && !CxxPaths && Entry != Body.FunctionEntry &&
+       Body.losesEntryStackBeforeCall(Entry)) ||
       !Body.collectCalleeImports(NestedPop))
     return std::nullopt;
   const auto &Image = Body.Image;
@@ -1001,6 +1078,9 @@ class ReturningStackProof {
   RegistrationCallCalleeIndex &Owner;
   unsigned &Depth;
   StackBody *Parent;
+  // These witnesses belong only to this immutable parent graph. They cannot
+  // answer a standalone query or a query in another parent's entry domain.
+  std::map<va_t, std::optional<RegistrationCalleeStackContract>> LocalCache;
 
 public:
   ReturningStackProof(
@@ -1011,15 +1091,30 @@ public:
       : Image(Image), Work(Work), Cache(Cache), Owner(Owner), Depth(Depth),
         Parent(Parent) {}
 
-  std::optional<RegistrationCalleeStackContract> prove(va_t Target) {
+  std::optional<RegistrationCalleeStackContract>
+  prove(va_t Target, bool *Reusable = nullptr) {
+    if (Reusable)
+      *Reusable = false;
     const registration_abi::StackProofOwnerScope OwnerScope(Owner, Work);
     if (!chargeCalleeWork(Work, 1))
       return std::nullopt;
     // The parent may have dispatcher-entered returns. Its ordinary entry
     // cannot borrow the proof intended only for separately called interiors.
-    if (Parent && Target == Parent->FunctionEntry)
+    if (Parent && Target == Parent->FunctionEntry) {
+      if (Reusable)
+        *Reusable = true;
       return std::nullopt;
+    }
     const bool LocalEntry = Parent && Parent->Entries.count(Target);
+    if (LocalEntry)
+      if (auto It = LocalCache.find(Target); It != LocalCache.end()) {
+        if (!chargeCalleeWork(
+                Work, It->second ? It->second->RequiredImports.size() + 1 : 1))
+          return std::nullopt;
+        if (Reusable)
+          *Reusable = true;
+        return It->second;
+      }
     // Local witnesses belong to this source graph. Neither a cached standalone
     // refusal nor a local success may answer the other entry's proof domain.
     if (!LocalEntry)
@@ -1027,16 +1122,25 @@ public:
         if (It->second &&
             !chargeCalleeWork(Work, It->second->RequiredImports.size() + 1))
           return std::nullopt;
+        // A finished standalone refusal stays in this index. An in-progress
+        // entry can still acquire a contract, so it cannot close a local miss.
+        if (Reusable)
+          *Reusable = It->second ||
+                      !ActiveStackProofs.count(StackQuery{&Image, Target});
         return It->second;
       }
     const StackQuery Identity{&Image, Target};
+    if (Target > UINT32_MAX || !Image.isCodeAddress(Target)) {
+      if (Reusable)
+        *Reusable = true;
+      return std::nullopt;
+    }
     if (Depth == ::neverd::limits::ir::kMaxReturningStackProofDepth ||
         ActiveStackProofs.size() >=
             ::neverd::limits::ir::kMaxReturningStackProofDepth ||
         ActiveStackProofs.count(Identity) ||
         Cache.size() ==
-            ::neverd::limits::ir::kRegistrationCalleeStackProveCacheSizeLimit ||
-        Target > UINT32_MAX || !Image.isCodeAddress(Target))
+            ::neverd::limits::ir::kRegistrationCalleeStackProveCacheSizeLimit)
       return std::nullopt;
     if (Target <= UINT32_MAX - 6 && chargeCalleeWork(Work, 6)) {
       const auto Bytes =
@@ -1055,14 +1159,19 @@ public:
                   Image, Result.RequiredImports.front());
           if (!LocalEntry)
             Cache.emplace(Target, Result);
+          if (Reusable)
+            *Reusable = true;
           return Result;
         }
     }
     if (!LocalEntry)
       if (const auto *EH = Image.ExceptionMetadata.findFunction(Target);
           EH && (!EH->Registration || EH->Registration->RealignedFrame ||
-                 (EH->Cxx && !EH->Cxx->TryBlocks.empty())))
+                 (EH->Cxx && !EH->Cxx->TryBlocks.empty()))) {
+        if (Reusable)
+          *Reusable = true;
         return std::nullopt;
+      }
     // In-progress entries carry no fact: recursion cannot certify itself.
     // Even failed nested bodies consume the same cumulative work allowance.
     std::optional<RegistrationCalleeStackContract> LocalResult;
@@ -1075,13 +1184,18 @@ public:
       --Depth;
       ActiveStackProofs.erase(Identity);
     });
+    bool DependenciesReusable = true;
     const auto Nested = [&](va_t Callee) {
       // An independently built callee cannot export a local witness through
       // its transitive dependencies either. Its children use the same entry
       // admission as a fresh standalone query.
-      return LocalEntry ? prove(Callee)
-                        : ReturningStackProof(Image, Work, Cache, Owner, Depth)
-                              .prove(Callee);
+      bool NestedReusable = false;
+      auto Contract =
+          LocalEntry ? prove(Callee, &NestedReusable)
+                     : ReturningStackProof(Image, Work, Cache, Owner, Depth)
+                           .prove(Callee, &NestedReusable);
+      DependenciesReusable &= NestedReusable;
+      return Contract;
     };
     const auto Record = [&](StackBody &Body, std::optional<uint32_t> Pop) {
       if (Pop && chargeCalleeWork(Work, Body.ImportSlots.size() + 1)) {
@@ -1095,8 +1209,13 @@ public:
       }
     };
     if (LocalEntry) {
-      StackBody EntryBody(Image, Parent->Source, Work, Target);
-      Record(EntryBody, stackPopForBody(EntryBody, Target, Nested));
+      if (Parent->Valid) {
+        StackBody EntryBody(*Parent, Target);
+        Record(EntryBody, stackPopForBody(EntryBody, Target, Nested));
+      } else {
+        StackBody EntryBody(Image, Parent->Source, Work, Target);
+        Record(EntryBody, stackPopForBody(EntryBody, Target, Nested));
+      }
     } else {
       Decoder Dec;
       if (Dec.init(Image)) {
@@ -1126,6 +1245,18 @@ public:
     }
     if (Result && !chargeCalleeWork(Work, Result->RequiredImports.size() + 1))
       return std::nullopt;
+    // A local refusal is stable only after every dependency has finished.
+    // Depth, cycle and budget refusals must be tried again in a later context.
+    // A standalone result already stays in this index's separate cache.
+    const bool Finished =
+        Result || (Work < limits::kMaxRegistrationEHStateWork &&
+                   (!LocalEntry || DependenciesReusable));
+    if (Reusable)
+      *Reusable = Finished;
+    if (LocalEntry && Finished &&
+        LocalCache.size() <
+            ::neverd::limits::ir::kRegistrationCalleeStackProveCacheSizeLimit)
+      LocalCache.emplace(Target, Result);
     return Result;
   }
 };
