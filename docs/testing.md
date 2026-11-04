@@ -10920,6 +10920,17 @@ build-release/bin/NeverDLowUndefinedDigestTests
 an unbacked `IsImageHeader` tag; the loaded-header tests above supply the
 positive full/restricted-load checks.
 
+`PDBIdentityIntegration.RepublishedInfoAgeStillMatchesOnDbiAge`,
+`MissingDbiAgeUsesInfoAgeOnEveryPath` and
+`OlderInfoAgeRejectsIdentityOnEveryPath` compare the complete loader,
+symbol-store identity reader and indexed public-name hint. A genuine DBI
+mismatch still rejects. `PostLinkSectionHintsMatchFullLoader` edits a public
+PE/PDB fixture to distinguish permitted trailing resource growth from changed
+permissions and a non-trailing resource edit. Run `NeverDPDBIdentityTests`,
+`NeverDDebugInfoTests` and `PDBNamePreload.*` in
+`NeverDSafetyIntegrationTests`; these checks parse fixtures and export C
+without executing the images or generated code.
+
 
 `TerminalImportSpecialization.*` checks physical external-call target ordering,
 one stack push and the original return address with an independent scalar
