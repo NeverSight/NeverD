@@ -750,6 +750,16 @@ definition can also have that version. Call home areas and released frame bytes
 remain observable without explicit pointer arguments. This proof annotates only
 the source projection; it neither changes native memory effects nor supplies a
 general pointer-escape or kernel continuation contract.
+
+Native unwind footprints distinguish a saved register value from the memory it
+addresses. An SP-based unwind can restore a pointer without reading its pointee;
+that does not prove a subsequent callback cannot dereference the restored
+value. A no-read certificate must cover that later use and every admitted
+observer target, not just the unwind operations. Likewise, a guarded indirect
+target proved invalid still retains its failure effects. Neither a prototype
+nor a partial native trace supplies the complete effect contract required by
+source-frame store removal.
+
 An exact, complete mapped data-object read may cross the private-byte overwrite
 walk without being removed. Scalar numeric pointers, address fragments, ordered
 or segmented accesses and external stores do not establish that separation.
