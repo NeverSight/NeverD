@@ -3653,6 +3653,11 @@ callable-entry verification. Neither table proximity nor sharing its
 executable segment grants another address table identity. LLVM preserves
 runtime offsets when a table address escapes and rejects unresolved
 code-pointer fields instead of retaining original image addresses.
+The walk coalesces adjacent decoded byte ranges for overlap queries while
+retaining the exact visited starts separately. Backward edges may join two
+ranges; skipped bytes remain gaps. Repeated starts are accepted, overlapping
+instructions reject publication, and work is still charged per visit rather
+than per merged range.
 A two-level switch reads a byte index table laid among the code
 (`movzx r, byte [sel + table]`) before the pointer-wide jump table it
 indexes. The byte table's displacement lands in an executable segment, so a
