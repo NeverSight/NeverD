@@ -84,6 +84,14 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     F.Destination.Register = R.modRM(F.Source);
     if (F.Source.Register)
       return std::nullopt;
+  } else if (B == 0xd7) {
+    F.Operation = Op::TableLookup;
+    Width(true);
+    F.Source.Base = 3;
+    F.Source.AddressBytes = R.AddressBytes;
+    F.Source.MemorySegment = R.Segment.value_or(X86SegmentRegister::DS);
+  } else if (B == 0xc9) {
+    F.Operation = Op::Leave;
   } else if (B == 0x98 || B == 0x99) {
     F.Operation = B == 0x98 ? Op::MoveSigned : Op::SignHigh;
     F.Source.Register = 0;
@@ -162,7 +170,13 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
               B == 0xeb || B < 0x80 || F.Bytes == 2);
   } else if (B == 0x0f) {
     const uint8_t Extended = R.byte();
-    if (Extended >= 0x40 && Extended <= 0x4f) {
+    if (Extended >= 0xc8 && Extended <= 0xcf) {
+      // The architectural word form has no defined result.
+      if (F.Bytes != 4)
+        return std::nullopt;
+      F.Operation = Op::ByteSwap;
+      F.Destination.Register = Extended & 7;
+    } else if (Extended >= 0x40 && Extended <= 0x4f) {
       F.Operation = Op::ConditionalMove;
       F.Condition = Extended & 15;
       F.Destination.Register = R.modRM(F.Source);

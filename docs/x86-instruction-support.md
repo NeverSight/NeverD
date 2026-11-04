@@ -3813,7 +3813,7 @@ This internal execution interface admits the segment instructions plus
 the explicitly bound MOV/arithmetic/logic/stack/near-control scalar subset,
 full/truncated MUL/IMUL, full-dividend DIV/IDIV, NOP, CLI/STI,
 CBW/CWDE/CWD/CDQ, LAHF/SAHF, CLC/STC/CMC/CLD/STD, SETcc/CMOVcc,
-LOOP/LOOPcc/JCXZ/JECXZ, INT/INT3/INTO/INT1,
+BSWAP (dword), XLAT, LEAVE, LOOP/LOOPcc/JCXZ/JECXZ, INT/INT3/INTO/INT1,
 UD2, protected
 16/32-bit IRET/RETF and Intel SEP SYSENTER/SYSEXIT. It is not a general i386
 source dispatcher. Task/call

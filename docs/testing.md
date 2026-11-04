@@ -100,6 +100,15 @@ operand grammar, and the x64 paged execution and continuation source/export
 suites on both SDKs after changing the shared paged-RAM owner. Repeat the new
 CPU matrix on the qualified E core; retain skips as missing coverage.
 
+`LegacyImplicit/*` uses that same scalar fixture for BSWAP, XLAT and LEAVE.
+It covers every dword register, every unsigned AL index, all segment prefixes,
+address truncation before base addition, exact byte reads, read-only and
+missing pages, independent code/operand/stack widths, high ESP/EBP bits,
+word-stack wrap, and original page-handler repair/IRET/retry. Its register
+inputs initialize the software state and original CPU from one shared image.
+The BSWAP word form has no defined architectural result and is tested as an
+explicit refusal, not assigned a guessed value.
+
 `LegacyFastSystem/*` in `NeverDX86PagingTests` compares original protected
 SYSENTER/SYSEXIT under legacy paging and PAE, all CPLs, both code and stack
 sizes, nonflat entry, selector wrap, flags, caches and complete restart frames.

@@ -36,7 +36,8 @@ protected:
                uint32_t Left = 0x12345678, uint32_t Right = 0x80,
                uint32_t Flags = 0x202, uint32_t Target = 0x4000,
                uint32_t HighDividend = 0x22334455,
-               uint32_t InstructionPC = Code) {
+               uint32_t InstructionPC = Code,
+               std::optional<std::array<uint32_t, 8>> InputRegisters = {}) {
     using namespace neverd;
     SCOPED_TRACE(testing::Message()
                  << "code32=" << Code32 << " stack32=" << Stack32
@@ -156,11 +157,6 @@ protected:
       Registers.rsp = 0xabce0000u - Width;
       put(uint16_t(Registers.rsp), Left, Width);
     }
-    Registers.rax = Left;
-    Registers.rcx = Right;
-    Registers.rdx = HighDividend;
-    Registers.rbx = Registers.rdi = Registers.rbp = Offset;
-    Registers.rsi = 0;
     Registers.rflags = Flags;
     const auto Cache = [](const kvm_segment &C) {
       return X86LegacySegmentCache{uint32_t(C.base), C.limit, C.selector,
@@ -173,14 +169,17 @@ protected:
                                           &Special.ss, &Special.ds,
                                           &Special.fs, &Special.gs};
     X86LegacyExecutionState State;
-    State.Core.GPR = {Left,
-                      Right,
-                      uint32_t(Registers.rdx),
-                      Offset,
-                      uint32_t(Registers.rsp),
-                      Offset,
-                      0,
-                      Offset};
+    State.Core.GPR = InputRegisters.value_or(
+        std::array<uint32_t, 8>{Left, Right, HighDividend, Offset,
+                                uint32_t(Registers.rsp), Offset, 0, Offset});
+    Registers.rax = State.Core.GPR[0];
+    Registers.rcx = State.Core.GPR[1];
+    Registers.rdx = State.Core.GPR[2];
+    Registers.rbx = State.Core.GPR[3];
+    Registers.rsp = State.Core.GPR[4];
+    Registers.rbp = State.Core.GPR[5];
+    Registers.rsi = State.Core.GPR[6];
+    Registers.rdi = State.Core.GPR[7];
     for (unsigned I = 0; I != Segments.size(); ++I)
       State.Core.Segments[I] = Cache(*Segments[I]);
     State.Core.CPL = CPL;

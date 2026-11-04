@@ -249,6 +249,7 @@ executor to one CPU and ordinary paged RAM for these protected-mode families:
 | CBW, CWDE, CWD, CDQ | Implicit AL/AX/EAX sign extension with independent code/operand widths; other register bits and all flags are preserved. |
 | LAHF, SAHF | Exact AH/status-bit transfer, reserved bits, and preservation of OF, DF and privileged flags. |
 | CLC, STC, CMC, CLD, STD | CF or DF alone; nonprivileged execution at every CPL. |
+| BSWAP, XLAT, LEAVE | Dword byte reversal, unsigned AL table lookup through address-sized (E)BX, and an independently sized stack/frame pop. Flags are preserved. |
 | SETcc, CMOVcc | All sixteen conditions; exact byte destinations for SETcc and word/dword register destinations for CMOVcc. CMOVcc reads its source even when the condition is false. |
 | LOOP, LOOPE, LOOPNE, JCXZ, JECXZ | Independent address-sized CX/ECX and operand-sized targets, signed short displacements, unchanged flags and restartable target-limit faults. |
 | PUSH, POP | GPR, memory and PUSH immediate, with independent SS.B stack size. PUSH ESP observes old ESP; POP ESP publishes the popped value after advancement; POP memory uses incremented ESP for its explicit address. |
@@ -311,6 +312,22 @@ own CF alone, and CLD/STD own DF alone. These nonprivileged operations use the
 existing explicit scalar binding and require no undefined-flag choice. Their
 admitted operand/address/segment prefixes do not cause memory access or change
 the operation; malformed/group-one prefixes are refused by the scalar grammar.
+
+BSWAP reverses one dword GPR, including ESP, without accessing memory. Its
+undefined word form is refused explicitly. The scalar binding assumes BSWAP
+availability; it does not model pre-486 processors lacking the instruction.
+XLAT reads exactly one byte at the address-sized sum of (E)BX and unsigned AL,
+then writes AL alone. Truncation precedes segment-base addition; a segment
+override replaces DS. Operand size does not affect its byte access, and the
+usual segment/page checks precede publication.
+
+LEAVE copies EBP or BP to the stack pointer according to SS.B, then reads a
+word/dword frame according to operand size. A word stack retains the original
+high ESP bits and wraps the updated low SP. The popped word preserves the high
+EBP bits. Address-size and segment prefixes do not replace the SS-owned frame
+access. Both pointer changes are staged, so a fault exposes the original ESP
+and EBP to the handler. All three operations preserve flags apart from normal
+instruction completion clearing RF.
 
 SETcc evaluates the shared condition and stores one byte without reading the
 destination. Its ModRM reg field is ignored. CMOVcc always reads the complete
@@ -388,6 +405,16 @@ checks remain explicit skips. The same runs retain 88,064 implicit-state,
 fast-system regression comparisons. The shared fixture's new instruction-PC
 parameter is exercised at ordinary and high offsets, with independent count
 and target widths and original target-fault restart frames.
+
+The [November 3 implicit-operand qualification](evidence/x86-legacy-implicit-operands-2026-11-03.json)
+records 60,928 BSWAP/XLAT/LEAVE CPU comparisons across both SDKs, paging modes
+and P/E cores. All 658 available checks pass; two LA57 checks are explicitly
+skipped. The same runs retain 100,864 conditional, 88,064 status, 138,240
+multiplication, 185,856 division, 85,120 existing-scalar and 9,648 fast-system
+regression comparisons. The original-byte oracle covers unsigned table
+indices, exact byte accesses, nonflat segments, word-stack wrap and original
+page-handler repair/IRET/retry. Executable sources and frozen/live binaries
+are hashed and checked after all runs.
 
 ## Protected SYSENTER and SYSEXIT
 

@@ -55,6 +55,9 @@ in their respective owners, with explicit target profiles.
 addressing for selector and scalar instructions. `X86LegacyScalarEncoding`
 authenticates complete scalar extents; `X86LegacyScalarExecution` owns staged
 GPR/flag/near-control-flow changes in the explicit ordinary-RAM profile.
+BSWAP stays in that scalar owner; XLAT reuses its byte read after computing the
+address-sized (E)BX-plus-AL offset. LEAVE reuses its SS-owned stack access and
+stages ESP/EBP together, so faults retain the original frame state.
 Segment permissions and page walks remain in their existing owners. A scalar
 read/modify/write prepares write permission once, reads those exact physical
 fragments through `X86PagedMemory::loadPreparedStore`, and commits the final

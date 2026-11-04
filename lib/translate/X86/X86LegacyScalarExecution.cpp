@@ -34,6 +34,28 @@ public:
     S.EIP = Fallthrough;
     uint32_t A = 0, B = 0;
     const unsigned N = F.Bytes;
+    if (F.Operation == Op::ByteSwap) {
+      A = S.Core.GPR[*F.Destination.Register];
+      writeRegister(*F.Destination.Register, 4,
+                    (A >> 24) | ((A >> 8) & 0xff00) | ((A << 8) & 0xff0000) |
+                        (A << 24));
+      return;
+    }
+    if (F.Operation == Op::TableLookup) {
+      auto Source = F.Source;
+      Source.Displacement = uint8_t(S.Core.GPR[0]);
+      if (read(Source, 1, B))
+        writeRegister(0, 1, B);
+      return;
+    }
+    if (F.Operation == Op::Leave) {
+      writeRegister(4, stack().AddressBytes, S.Core.GPR[5]);
+      if (read(stack(), N, A)) {
+        adjustStack(N);
+        writeRegister(5, N, A);
+      }
+      return;
+    }
     if (F.Operation == Op::SetCondition) {
       write(F.Destination, 1, condition(F.Condition));
       return;
