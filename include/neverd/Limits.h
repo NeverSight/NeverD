@@ -483,9 +483,11 @@ constexpr size_t kMaxX87CallProofWork = 262144;
 /// A pipeline's CFG builds share one cache of call-proof graphs, and its
 /// selected-function runs also keep there the machine bodies that later runs
 /// of the same session reuse instead of lifting them again.  The least
-/// recently used graphs and bodies leave it beyond these bounds.
-constexpr size_t kMaxPipelineCallGraphEntries = 8192;
-constexpr size_t kMaxPipelineCallGraphBytes = 64 * 1024 * 1024;
+/// recently used graphs and bodies leave it beyond these bounds.  A graph
+/// takes a few kilobytes, and a kernel's call walks read tens of thousands:
+/// fewer entries evict graphs the next walk lifts again.
+constexpr size_t kMaxPipelineCallGraphEntries = 65536;
+constexpr size_t kMaxPipelineCallGraphBytes = 256 * 1024 * 1024;
 constexpr size_t kMaxPipelineCallBodyBytes = 256 * 1024 * 1024;
 /// Alignment no-ops between a call and the next function are fewer bytes
 /// than the widest function alignment compilers use (64); a longer run is
