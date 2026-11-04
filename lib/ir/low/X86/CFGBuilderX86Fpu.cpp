@@ -292,6 +292,9 @@ struct X87CallGraphStep {
   std::optional<va_t> Callee;
   bool Unknown = false;
   bool ChangesControl = false;
+  /// Whether Callee names an import (importCalleeName), a fact of the image
+  /// the graph was built from: every build that reads the graph shares it.
+  bool CalleeImport = false;
 };
 struct X87CallGraphBlock {
   std::vector<X87CallGraphStep> Steps;
@@ -354,13 +357,17 @@ class X87CallGraphCache {
     unsigned NoReturnDepth;
     const detail::AbsoluteRelocationRootIndex *RelocationRoots;
     const ExecutableCodeOwnerIndex *CodeOwners;
-    std::optional<std::vector<va_t>> Entries;
-    std::optional<std::vector<va_t>> ProtectedSlots;
-    std::optional<std::vector<va_t>> UnsafeBranches;
+    // Frozen copies, immutable once frozen: copies of a context share them,
+    // so a query compares them outside the lock and a request built under
+    // the cache's context freezes nothing again.
+    std::shared_ptr<const std::vector<va_t>> Entries;
+    std::shared_ptr<const std::vector<va_t>> ProtectedSlots;
+    std::shared_ptr<const std::vector<va_t>> UnsafeBranches;
     // The cache's immutable inventory, borrowed in place of Entries.
     const std::set<va_t> *EntriesSource = nullptr;
-    // Unique among the contexts this cache froze (freezeContext), so a
-    // query's earlier comparison with it stands (X87ContextMatches).
+    // Unique among the contexts this cache froze (freezeContext), and kept
+    // by the copies that share their sets, so a query's earlier comparison
+    // with it stands (X87ContextMatches).
     uint64_t Id = 0;
   };
   struct Entry {
@@ -710,9 +717,9 @@ private:
     return !Count ||
            (account(Bytes, 8, sizeof(void *)) && account(Bytes, Count, Width));
   }
-  static bool sameSet(const std::optional<std::vector<va_t>> &Frozen,
+  static bool sameSet(const std::shared_ptr<const std::vector<va_t>> &Frozen,
                       const std::set<va_t> *Live) {
-    return Frozen.has_value() == (Live != nullptr) &&
+    return (Frozen != nullptr) == (Live != nullptr) &&
            (!Live ||
             (Frozen->size() == Live->size() &&
              std::equal(Frozen->begin(), Frozen->end(), Live->begin())));
@@ -740,6 +747,18 @@ private:
            sameSet(C.ProtectedSlots, B.ProtectedJumpTableRelocationSlots) &&
            sameSet(C.UnsafeBranches, B.UnsafeJumpTableBranches);
   }
+  static std::optional<bool> knownMatch(const X87ContextMatches &Memo,
+                                        uint64_t Id) {
+    for (const auto &[Known, Same] : Memo.Known)
+      if (Known == Id)
+        return Same;
+    return std::nullopt;
+  }
+  static void rememberMatch(X87ContextMatches &Memo, uint64_t Id, bool Same) {
+    if (Memo.Known.size() >= MaxContextMatches)
+      Memo.Known.clear();
+    Memo.Known.emplace_back(Id, Same);
+  }
   /// Whether \p B builds under \p C.  \p Memo, kept by one of \p B's
   /// builds, answers the set comparison for a context it already compared.
   static bool matches(const Context &C, const CFGBuilder &B,
@@ -748,14 +767,32 @@ private:
       return false;
     if (!Memo || !C.Id)
       return setsMatch(C, B);
-    for (const auto &[Id, Same] : Memo->Known)
-      if (Id == C.Id)
-        return Same;
+    if (const auto Same = knownMatch(*Memo, C.Id))
+      return *Same;
     const bool Same = setsMatch(C, B);
-    if (Memo->Known.size() >= MaxContextMatches)
-      Memo->Known.clear();
-    Memo->Known.emplace_back(C.Id, Same);
+    rememberMatch(*Memo, C.Id, Same);
     return Same;
+  }
+  /// Compares the sets \p B borrows with the cache's context outside the
+  /// lock when \p Memo has not compared them yet: the context's frozen sets
+  /// are shared and immutable, and \p B's do not change while it builds, so
+  /// this is the answer matches would compute under the lock.  A context
+  /// replaced meanwhile is compared under the lock as before.
+  void learnMatch(std::unique_lock<std::mutex> &Lock, const CFGBuilder &B,
+                  X87ContextMatches *Memo) {
+    if (!Memo || !Inputs || !Inputs->Id || knownMatch(*Memo, Inputs->Id) ||
+        !scalarsMatch(*Inputs, B))
+      return;
+    uint64_t Id = 0;
+    bool Same = false;
+    {
+      const Context Snapshot = *Inputs;
+      Lock.unlock();
+      Id = Snapshot.Id;
+      Same = setsMatch(Snapshot, B);
+    }
+    Lock.lock();
+    rememberMatch(*Memo, Id, Same);
   }
   bool matches(const CFGBuilder &B, X87ContextMatches *Memo = nullptr) const {
     return Inputs && matches(*Inputs, B, Memo);
@@ -774,10 +811,12 @@ private:
         return std::nullopt;
     return Bytes;
   }
-  static std::optional<std::vector<va_t>> freeze(const std::set<va_t> *Values) {
+  static std::shared_ptr<const std::vector<va_t>>
+  freeze(const std::set<va_t> *Values) {
     if (!Values)
-      return std::nullopt;
-    return std::vector<va_t>(Values->begin(), Values->end());
+      return nullptr;
+    return std::make_shared<const std::vector<va_t>>(Values->begin(),
+                                                     Values->end());
   }
   std::optional<size_t> contextBytes(const Context &C) const {
     size_t Bytes = sizeof(Context);
@@ -817,7 +856,7 @@ private:
             B.NoReturnCalleeDepth + 1,
             B.AbsoluteRelocationRoots,
             B.ExecutableCodeOwners,
-            Borrowed ? std::nullopt : freeze(B.KnownFuncEntries),
+            Borrowed ? nullptr : freeze(B.KnownFuncEntries),
             freeze(B.ProtectedJumpTableRelocationSlots),
             freeze(B.UnsafeJumpTableBranches),
             Borrowed ? ImmutableEntries : nullptr,
@@ -826,7 +865,9 @@ private:
   Request acquire(const CFGBuilder &B, va_t Address,
                   X87ContextMatches *Memo = nullptr) {
     std::unique_lock<std::mutex> Lock(Mutex);
-    if (matches(B, Memo))
+    learnMatch(Lock, B, Memo);
+    const bool BuildsUnderInputs = matches(B, Memo);
+    if (BuildsUnderInputs)
       if (const auto Found = GraphIndex.find(Address);
           Found != GraphIndex.end()) {
         Graphs.splice(Graphs.begin(), Graphs, Found->second);
@@ -867,7 +908,13 @@ private:
       return {};
     }
     try {
-      Context Frozen = freezeContext(B);
+      // A request built under the cache's context shares its frozen sets and
+      // id; it holds what freezing it would copy, at the same size, and the
+      // lock stays held since the match.  Otherwise it is frozen afresh.
+      const bool SharesInputs =
+          BuildsUnderInputs &&
+          (Inputs->EntriesSource != nullptr) == borrowsEntries(B);
+      Context Frozen = SharesInputs ? *Inputs : freezeContext(B);
       const auto ContextSize = contextBytes(Frozen);
       if (!ContextSize)
         return {};
@@ -1107,6 +1154,10 @@ class X87CallEffectIndex {
   const BinaryImage &Image;
   std::map<va_t, std::shared_ptr<const Graph>> Graphs;
   std::map<va_t, std::optional<X87CallContract>> Answers;
+  /// usesContext's answer for each entry this index walked.  A walk reads
+  /// only graphs the index keeps from their first read (Graphs) and starts
+  /// with its own allowance, so walking the entry again repeats it.
+  std::unordered_map<va_t, std::optional<bool>> ContextAnswers;
   /// This build's comparisons of its builder's sets with the shared cache's
   /// contexts: the builder borrows the same sets for the whole build.
   X87ContextMatches ContextMatches;
@@ -1459,6 +1510,8 @@ class X87CallEffectIndex {
             else
               S.Callee = loadedCallSlot(F, Source, O, Op.Inputs[0]);
             S.Unknown |= !S.Callee;
+            S.CalleeImport =
+                S.Callee && !importCalleeName(Image, *S.Callee).empty();
           }
           B.Returns |= Op.Opcode == NdOp::RETURN;
         }
@@ -1662,21 +1715,35 @@ public:
     return Dependencies;
   }
   std::optional<bool> usesContext(va_t Entry) {
+    if (const auto Known = ContextAnswers.find(Entry);
+        Known != ContextAnswers.end())
+      return Known->second;
+    const auto Answer = walkContextUse(Entry);
+    ContextAnswers.emplace(Entry, Answer);
+    return Answer;
+  }
+  std::optional<bool> walkContextUse(va_t Entry) {
     Query Q;
-    std::set<va_t> Active;
-    std::map<va_t, bool> Done;
-    std::function<std::optional<bool>(va_t, unsigned)> Visit =
-        [&](va_t Address, unsigned Depth) -> std::optional<bool> {
+    // The callees on the walk's path, innermost last: one met again is a
+    // cycle.  At most kMaxX87CallProofDepth deep.
+    std::vector<va_t> Active;
+    std::unordered_map<va_t, bool> Done;
+    // A call step's graph already knows whether its callee is an import;
+    // only the entry is asked here.
+    std::function<std::optional<bool>(va_t, unsigned, std::optional<bool>)>
+        Visit = [&](va_t Address, unsigned Depth,
+                    std::optional<bool> Import) -> std::optional<bool> {
       if (!Q.pay(1) || Depth >= limits::kMaxX87CallProofDepth ||
           Active.size() >= limits::kMaxX87CallProofFunctions)
         return std::nullopt;
       if (auto It = Done.find(Address); It != Done.end())
         return It->second;
-      if (!importCalleeName(Image, Address).empty())
+      if (Import ? *Import : !importCalleeName(Image, Address).empty())
         return false;
-      if (!Active.insert(Address).second)
+      if (std::find(Active.begin(), Active.end(), Address) != Active.end())
         return std::nullopt;
-      llvm::scope_exit Leave([&] { Active.erase(Address); });
+      Active.push_back(Address);
+      llvm::scope_exit Leave([&] { Active.pop_back(); });
       const Graph &G = graph(Address);
       if (!G.Complete || !Q.pay(G.Cost))
         return std::nullopt;
@@ -1688,7 +1755,7 @@ public:
       for (const Block &B : G.Blocks)
         for (const Step &S : B.Steps)
           if (S.Callee) {
-            const auto Callee = Visit(*S.Callee, Depth + 1);
+            const auto Callee = Visit(*S.Callee, Depth + 1, S.CalleeImport);
             // Ownership needs one definite witness, unlike a net TOP proof
             // that must understand every call. An unresolved sibling cannot
             // erase an observed requirement or decide it absent.
@@ -1703,7 +1770,7 @@ public:
       Done[Address] = false;
       return false;
     };
-    return Visit(Entry, 0);
+    return Visit(Entry, 0, std::nullopt);
   }
   void prepareCalls(const LowFunc &F, bool ContextOwnership = false) {
     const auto &Cache = Settings.SharedX87CallGraphs;

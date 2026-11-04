@@ -3388,14 +3388,11 @@ private:
 /// computeCallRegisterEffects merges them into a run's FixedCallReads; with
 /// \p Converted, the calls themselves too.
 std::vector<std::pair<va_t, GPRReadWidths>>
-formattedCallReads(const BinaryImage &Img, const CallRegisterBodyView &Body,
-                   std::map<va_t, FormattedCall> *Converted) {
-  std::map<va_t, FormattedCall> Calls;
-  pipeline_detail::collectFormattedCalls(Img, Body.Blocks, Calls,
-                                         Body.HasIndependentRoots);
+formattedCallReadsOf(const BinaryImage &Img,
+                     const std::map<va_t, FormattedCall> &Calls) {
   std::vector<std::pair<va_t, GPRReadWidths>> Reads;
   Reads.reserve(Calls.size());
-  for (auto &[Address, Call] : Calls) {
+  for (const auto &[Address, Call] : Calls) {
     GPRReadWidths Widths{};
     for (const FormattedCallArgument &Argument : Call.Arguments)
       if (const auto Family = registerFamilyOf(Img.Arch, Argument.Register))
@@ -3403,9 +3400,20 @@ formattedCallReads(const BinaryImage &Img, const CallRegisterBodyView &Body,
             Widths[Family->first],
             static_cast<uint8_t>(Family->second + Argument.Bytes));
     Reads.emplace_back(Address, Widths);
-    if (Converted)
-      Converted->emplace(Address, std::move(Call));
   }
+  return Reads;
+}
+
+std::vector<std::pair<va_t, GPRReadWidths>>
+formattedCallReads(const BinaryImage &Img, const CallRegisterBodyView &Body,
+                   std::map<va_t, FormattedCall> *Converted) {
+  std::map<va_t, FormattedCall> Calls;
+  pipeline_detail::collectFormattedCalls(Img, Body.Blocks, Calls,
+                                         Body.HasIndependentRoots);
+  auto Reads = formattedCallReadsOf(Img, Calls);
+  if (Converted)
+    for (auto &[Address, Call] : Calls)
+      Converted->emplace(Address, std::move(Call));
   return Reads;
 }
 
@@ -3432,6 +3440,15 @@ consultedCallReads(llvm::ArrayRef<LowBlock> Blocks,
                                             : std::optional(Found->second));
       }
   return Consulted;
+}
+
+std::unordered_map<va_t, size_t>
+firstFunctionAudits(const std::vector<PipelineFunctionAudit> &Audits) {
+  std::unordered_map<va_t, size_t> First;
+  First.reserve(Audits.size());
+  for (size_t I = 0; I < Audits.size(); ++I)
+    First.try_emplace(Audits[I].Entry, I);
+  return First;
 }
 
 bool consultedReadsHold(const CalleeFacts &Facts,
@@ -4248,13 +4265,90 @@ void computeCallRegisterEffects(
     // most callees come from the cache.
     return ExtraCFG.build(Img, Dec, Entry, Img.getFunctionNameAt(Entry));
   };
-  for (const LowFunc &LF : Result.LowFuncs) {
-    CollectFormattedCalls(CallRegisterBodyView(LF), /*Converted=*/true);
-    auto Effect = std::make_shared<const LocalRegisterEffect>(
-        Summarize(CallRegisterBodyView(LF)));
-    Effects[LF.Entry] = Effect.get();
-    Kept.push_back(std::move(Effect));
-    if (forwardsToGuardDispatch(Img, LF.Blocks))
+  // Every function's own summary.  Each reads, at its calls, the fixed reads
+  // the functions before it and itself leave: FixedCallReads joins them in
+  // the functions' order.  Their formatted calls are read in parallel and
+  // joined in that order, then the summaries run in parallel against the
+  // joined reads; a body holding a site that a later function's reads still
+  // change reads that site as it stood after its own.
+  const size_t Own = Result.LowFuncs.size();
+  std::vector<uint64_t> OwnWeights(Own, 1);
+  for (size_t I = 0; I < Own; ++I)
+    for (const LowBlock &Block : Result.LowFuncs[I].Blocks)
+      OwnWeights[I] += Block.Ops.size();
+  std::vector<std::map<va_t, FormattedCall>> OwnCalls(Own);
+  std::vector<std::vector<std::pair<va_t, GPRReadWidths>>> OwnReads(Own);
+  parallelForEachWeighted(OwnWeights, [&](auto Claim, size_t N) {
+    ReadOnlyBytesScope ReadScope(Img);
+    for (size_t I; (I = Claim()) < N;) {
+      const CallRegisterBodyView Body(Result.LowFuncs[I]);
+      pipeline_detail::collectFormattedCalls(Img, Body.Blocks, OwnCalls[I],
+                                             Body.HasIndependentRoots);
+      OwnReads[I] = pipeline_detail::formattedCallReadsOf(Img, OwnCalls[I]);
+    }
+  });
+  // Each site's reads by function, in order, and the last function whose
+  // reads changed what the site joins.
+  std::unordered_map<va_t, std::vector<std::pair<size_t, GPRReadWidths>>>
+      SiteReads;
+  std::unordered_map<va_t, size_t> SettledBy;
+  for (size_t I = 0; I < Own; ++I) {
+    for (auto &[Address, Call] : OwnCalls[I])
+      Result.FormattedCalls.emplace(Address, std::move(Call));
+    for (const auto &[Address, Widths] : OwnReads[I]) {
+      const auto [Joined, Added] = FixedCallReads.try_emplace(Address);
+      const GPRReadWidths Before = Joined->second;
+      pipeline_detail::mergeFixedCallReads(FixedCallReads,
+                                           {std::make_pair(Address, Widths)});
+      if (Added || Joined->second != Before)
+        SettledBy[Address] = I;
+      SiteReads[Address].emplace_back(I, Widths);
+    }
+  }
+  OwnCalls.clear();
+  OwnReads.clear();
+  std::vector<std::shared_ptr<const LocalRegisterEffect>> OwnEffects(Own);
+  std::vector<uint8_t> OwnForwards(Own, 0);
+  parallelForEachWeighted(OwnWeights, [&](auto Claim, size_t N) {
+    ReadOnlyBytesScope ReadScope(Img);
+    for (size_t I; (I = Claim()) < N;) {
+      const LowFunc &LF = Result.LowFuncs[I];
+      // A summary reads the sites of its body's operations only.
+      const auto ChangedLater = [&] {
+        for (const LowBlock &Block : LF.Blocks)
+          for (const LowOp &Op : Block.Ops)
+            if (const auto Site = SettledBy.find(Op.Addr);
+                Site != SettledBy.end() && Site->second > I)
+              return true;
+        return false;
+      };
+      std::optional<std::map<va_t, GPRReadWidths>> AsThen;
+      if (!SettledBy.empty() && ChangedLater()) {
+        AsThen.emplace();
+        for (const LowBlock &Block : LF.Blocks)
+          for (const LowOp &Op : Block.Ops)
+            if (const auto Site = SiteReads.find(Op.Addr);
+                Site != SiteReads.end() && !AsThen->count(Op.Addr))
+              for (const auto &[By, Widths] : Site->second) {
+                if (By > I)
+                  break;
+                pipeline_detail::mergeFixedCallReads(
+                    *AsThen, {std::make_pair(Op.Addr, Widths)});
+              }
+      }
+      OwnEffects[I] = std::make_shared<const LocalRegisterEffect>(
+          summarizeRecoveredCallRegisters(
+              Img, CallRegisterBodyView(LF), NoReturnTargets,
+              AsThen ? *AsThen : FixedCallReads, Result.CallArgumentSources,
+              StackProbes));
+      OwnForwards[I] = forwardsToGuardDispatch(Img, LF.Blocks);
+    }
+  });
+  for (size_t I = 0; I < Own; ++I) {
+    const LowFunc &LF = Result.LowFuncs[I];
+    Effects[LF.Entry] = OwnEffects[I].get();
+    Kept.push_back(std::move(OwnEffects[I]));
+    if (OwnForwards[I])
       GuardForwarders.insert(LF.Entry);
     Depth[LF.Entry] = 0;
     Work.push_back(LF.Entry);
@@ -5483,13 +5577,15 @@ void Pipeline::buildLowIR(
   // shared.
 
   size_t FuncCount = 0;
+  // This loop changes no audit's entry and adds none.
+  const auto FirstAudits =
+      pipeline_detail::firstFunctionAudits(Result.FunctionAudits);
   for (size_t I = 0; I < Total; ++I) {
     auto &Low = AllLow[I];
-    auto AuditIt =
-        std::find_if(Result.FunctionAudits.begin(), Result.FunctionAudits.end(),
-                     [&](const PipelineFunctionAudit &Audit) {
-                       return Audit.Entry == Candidates[I].first;
-                     });
+    const auto FirstAudit = FirstAudits.find(Candidates[I].first);
+    auto AuditIt = FirstAudit == FirstAudits.end()
+                       ? Result.FunctionAudits.end()
+                       : Result.FunctionAudits.begin() + FirstAudit->second;
     if (AuditIt != Result.FunctionAudits.end()) {
       AuditIt->DecodedInstructions = Low.DecodedInstructionCount;
       AuditIt->LiftedInstructions = Low.LiftedInstructionCount;

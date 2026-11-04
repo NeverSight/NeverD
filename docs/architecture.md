@@ -9491,6 +9491,12 @@ barriers without changing admission or publication order. Read-only
 image indexes and the existing synchronized no-return cache may be shared.
 Summary publication and format-call collection retain the original order,
 depth and count limits. `NEVERD_THREADS=1` restricts this phase to one worker.
+The run's own functions are summarized in parallel before that frontier. Their
+formatted calls are read in parallel and joined in function order, which also
+decides the call each address keeps, and each summary then reads the joined
+fixed reads at its calls. A body holding a site whose joined reads a later
+function still changes reads that site as it stood after its own reads, as the
+ordered loop gave it; effects are published in function order.
 
 Restricted pipeline runs may reuse machine blocks constructed for an x87 callee
 proof as `CallRegisterBody` inputs. This type contains blocks, coverage and
@@ -10537,9 +10543,16 @@ Cache locks cover lookup
 and publication, while graph construction runs outside the lock. A lookup
 checks the builder's settings against the cache's frozen context; one CFG
 build compares the inventories its builder borrows with each context once,
-since neither changes during the build, and checks the rest every time. Each query
+since neither changes during the build, and checks the rest every time. A
+context's frozen inventories are immutable and shared by its copies, so that
+comparison runs outside the lock, and a request built under the cache's context
+shares them instead of freezing them again. Each query
 still independently bounds and pays for its complete call closure and dataflow
-work; caller-dependent answers are not shared. A completely lifted, nontruncated
+work; caller-dependent answers are not shared. Within one build, a walk for
+x87 context ownership reads only graphs the build keeps from their first read
+and starts with its own allowance, so the build answers each entry's walk once.
+A graph's call steps record whether each callee is an import, a fact of the
+image the graph was built from. A completely lifted, nontruncated
 CFG with exceptional edges, a block without any successor, return or modeled
 stop, invalid boundaries or successors, or more work than the fixed graph-size
 limit may retain an empty refusal marker: each is a fact of that CFG, so a later
