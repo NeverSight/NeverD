@@ -70,6 +70,14 @@ the parent block index and completed results, and reject an irretrievably lost
 entry-stack coordinate before recursive callee discovery. The later state
 propagation and local-unwind obligations remain unresolved.
 
+Bound plain-callee result queries now keep the current argument initialization
+and scalar inputs through their return-cleanup proof, avoiding a second,
+context-free traversal that could reject the same invocation. Only reached,
+authenticated near returns with restored frames contribute. This closes the
+input-dependent return-proof inconsistency, including the xcpt4 raise wrapper's
+local frame query. It does not establish the enclosing helper's live runtime
+bindings, callback effects or complete native reconstruction.
+
 The incoming-stack summary now preserves address dependence through partial
 register writes, whole-word transforms and SELECT alternatives. HighC also
 retains the source storage and initializer when an indirect access reconstructs

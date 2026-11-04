@@ -92,12 +92,15 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
               DiscardReturnValue, CopyObjectSize, Initializer, Initializers,
               ObjectCallbacks, CallbackStackPopBytes, ScalarArguments,
               ScalarRegisters, ReturnValue, ExcludeCalls, OriginalImage,
-              ClosedIntegerEffects] = Options;
+              ClosedIntegerEffects, StackPopBytes] = Options;
   if (ClosedIntegerEffects)
     *ClosedIntegerEffects = true;
   if (ReturnValue)
     ReturnValue->reset();
-  if ((ReturnValue || ScalarRegisters || ExcludeCalls) && !ScalarArguments)
+  if (StackPopBytes)
+    StackPopBytes->reset();
+  if ((ReturnValue || ScalarRegisters || ExcludeCalls || StackPopBytes) &&
+      !ScalarArguments)
     return false;
   if (OriginalImage && (!ScalarArguments || !ExcludeCalls || !ReturnValue))
     return false;
@@ -201,6 +204,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
     BoundIncoming[Entry->Id].push_back(Initial);
   std::map<std::pair<va_t, uint16_t>, std::optional<FrameValue>> ImageValues;
   std::optional<FrameValue> Returned;
+  std::optional<uint32_t> ReturningPop;
   bool CompleteReturns = true;
   std::deque<std::pair<int, size_t>> Pending{{Entry->Id, 0}};
   while (!Pending.empty()) {
@@ -225,6 +229,8 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
           (Op.Opcode == NdOp::INTRINSIC &&
            !registration_state::isFramePreservingIntrinsic(Op)) ||
           Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+        return false;
+      if (StackPopBytes && Op.Opcode == NdOp::INDIR_BR)
         return false;
       Transfer.beginInstruction(Op.Addr);
       BorrowTransfer.beginInstruction(Op.Addr);
@@ -604,6 +610,16 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
             return false;
         }
       if (Op.Opcode == NdOp::RETURN) {
+        if (StackPopBytes) {
+          if (!Charge(1))
+            return false;
+          const auto Pop = checkedNearReturnStackPop(Image, Op.Addr);
+          const auto &Block = *Blocks.at(Id);
+          if (!Pop || (ReturningPop && *ReturningPop != *Pop) ||
+              &Op != &Block.Ops.back() || !Block.Succs.empty())
+            return false;
+          ReturningPop = Pop;
+        }
         if (ReturnValue) {
           if (!Charge(1))
             return false;
@@ -704,6 +720,10 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
     const auto &Block = *Blocks.at(Id);
     if (!Charge(1 + Block.Succs.size()))
       return false;
+    if (StackPopBytes &&
+        (Block.Ops.empty() ||
+         (Block.Succs.empty() && Block.Ops.back().Opcode != NdOp::RETURN)))
+      return false;
     const auto KnownSuccessor = knownFrameBranchTarget(
         Block, Transfer, [&](va_t Address) -> std::optional<int> {
           const auto Found = Entries.find(Address);
@@ -748,6 +768,8 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
   }
   if (ReturnValue && CompleteReturns)
     *ReturnValue = Returned;
+  if (StackPopBytes)
+    *StackPopBytes = ReturningPop;
   return true;
 }
 

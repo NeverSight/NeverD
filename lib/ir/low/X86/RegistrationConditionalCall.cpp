@@ -107,6 +107,7 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
         return false;
   registration_abi::ImageFrameEffects Effects;
   std::optional<FrameValue> Returned;
+  std::optional<uint32_t> Pop;
   if (Callee.ExceptionMetadata || !Callee.hasCompleteLiftCoverage() ||
       !registration_abi::chargeDecodedCallee(Work, Callee) ||
       !registration_abi::hasPrivateCallerFrame(
@@ -115,7 +116,8 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
            .ScalarRegisters = &Registers,
            .ReturnValue = ReturnValue || Effect ? &Returned : nullptr,
            .ExcludeCalls = Effect != nullptr,
-           .OriginalImage = OriginalImage}) ||
+           .OriginalImage = OriginalImage,
+           .StackPopBytes = &Pop}) ||
       !Effects.Writes.empty() || !Effects.CallerPCWrites.empty() ||
       (!Effect && !Effects.Reads.empty()))
     return false;
@@ -123,14 +125,9 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
     return false;
   if (Effect && !Returned)
     return false;
-  std::optional<uint32_t> Pop;
-  if ((ReturnValue || Effect) && Returned) {
-    // A recovered RETURN is not evidence for an unresolved tail path. Reuse
-    // the closed original-body proof before projecting any result to a caller.
-    Pop = getCheckedX86CalleeStackPop(Image, Target, &Work);
-    if (!Pop)
-      return false;
-  }
+  // This invocation already proved its initialized arguments, restored frame
+  // and all reached exits together. A context-free stack query loses those
+  // premises and cannot validate an input-dependent result or cleanup.
   if (Effect) {
     if (!chargeCalleeWork(Work, Effects.Reads.size() + 1))
       return false;
