@@ -84,6 +84,23 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     F.Destination.Register = R.modRM(F.Source);
     if (F.Source.Register)
       return std::nullopt;
+  } else if (B == 0xc0 || B == 0xc1 || (B >= 0xd0 && B <= 0xd3)) {
+    Width(!(B & 1));
+    const unsigned Group = R.modRM(F.Destination);
+    if (Group == 6)
+      return std::nullopt;
+    constexpr Op Operations[]{Op::RotateLeft,      Op::RotateRight,
+                              Op::RotateCarryLeft, Op::RotateCarryRight,
+                              Op::ShiftLeft,       Op::ShiftRight,
+                              Op::ShiftLeft,       Op::SignedShiftRight};
+    F.Operation = Operations[Group];
+    F.SourceBytes = 1;
+    if (B == 0xc0 || B == 0xc1)
+      Immediate(1);
+    else if (B & 2)
+      F.Source.Register = 1;
+    else
+      F.Source.Immediate = 1;
   } else if (B == 0xd7) {
     F.Operation = Op::TableLookup;
     Width(true);

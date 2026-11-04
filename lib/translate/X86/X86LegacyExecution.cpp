@@ -104,6 +104,10 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       Options.Multiply != X86LegacyMultiplyProfile::ProductSignParity &&
       Options.Multiply != X86LegacyMultiplyProfile::ProductSignParityZero)
     return invalid("legacy multiplication requires a bound flags profile");
+  if (Scalar && Scalar->shifting() &&
+      (!Options.ShiftUndefinedFlags ||
+       (*Options.ShiftUndefinedFlags & ~kX86LegacyShiftUndefinedFlagsMask)))
+    return invalid("legacy shift requires an explicit undefined-flags image");
   if (Scalar && Scalar->Operation == detail::X86LegacyScalarOperation::Call &&
       Options.Calls != X86LegacyCallProfile::StoreBeforeTargetLimit &&
       Options.Calls != X86LegacyCallProfile::CheckBeforeTargetLimit)

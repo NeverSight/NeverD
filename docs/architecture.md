@@ -58,6 +58,10 @@ GPR/flag/near-control-flow changes in the explicit ordinary-RAM profile.
 BSWAP stays in that scalar owner; XLAT reuses its byte read after computing the
 address-sized (E)BX-plus-AL offset. LEAVE reuses its SS-owned stack access and
 stages ESP/EBP together, so faults retain the original frame state.
+Single shifts and rotates use the same operand/store owner. Their masked
+count is captured before destination publication, including CL/CH aliases.
+Undefined CF/AF/OF choices are explicit executor inputs; result bits and
+defined flags remain owned by `X86LegacyScalarExecution`.
 Segment permissions and page walks remain in their existing owners. A scalar
 read/modify/write prepares write permission once, reads those exact physical
 fragments through `X86PagedMemory::loadPreparedStore`, and commits the final

@@ -74,6 +74,7 @@ enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
 enum class X86LegacyScalarProfile : uint8_t { OrderedRAM };
 
 inline constexpr uint32_t kX86LegacyArithmeticFlagsMask = 0x8d5;
+inline constexpr uint32_t kX86LegacyShiftUndefinedFlagsMask = 0x811;
 
 /// Explicit successful MUL/IMUL undefined-flag choices. Both clear AF and
 /// derive SF/PF from the low product. ProductSignParity clears ZF;
@@ -113,6 +114,10 @@ struct X86LegacyExecutionOptions {
   /// bits are permitted. Faults preserve the original arithmetic flags.
   std::optional<uint32_t> DivisionArithmeticFlags;
   std::optional<X86LegacyMultiplyProfile> Multiply;
+  /// Explicit CF/AF/OF image for undefined shift/rotate flags only. Defined
+  /// flags and zero-count preservation never consume these bits. No other
+  /// bits are permitted; faults retain all original flags.
+  std::optional<uint32_t> ShiftUndefinedFlags;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -151,6 +156,7 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// MOV/MOVSX/MOVZX, LEA, ADD/ADC/SUB/SBB/CMP, AND/OR/XOR/TEST, INC/DEC/NEG/NOT,
 /// MUL/IMUL, DIV/IDIV, CBW/CWDE/CWD/CDQ, LAHF/SAHF, CLC/STC/CMC/CLD/STD,
 /// BSWAP (dword), XLAT, LEAVE, SETcc/CMOVcc, LOOP/LOOPcc/JCXZ/JECXZ,
+/// SHL/SAL/SHR/SAR, ROL/ROR/RCL/RCR,
 /// PUSH/POP and near CALL/JMP/Jcc/RET.
 /// Register immediates
 /// retain their unbound interface; other scalars require Scalars, CALL requires
@@ -158,6 +164,8 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// arithmetic-flags image and delivers #DE for zero divisors or an
 /// unrepresentable quotient. Multiplication requires an explicit undefined-
 /// flags profile and retains architectural CF/OF for full/truncated products.
+/// Shifts and rotates require explicit undefined CF/AF/OF choices; defined
+/// result/flag bits follow the masked count and independent operand width.
 /// The explicit FastSystem profile adds protected
 /// SYSENTER/SYSEXIT with live Sysenter inputs and fixed CS/SS caches. Ignored
 /// prefixes retain 32-bit targets; LOCK delivers #UD after original-byte fetch.

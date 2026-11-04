@@ -49,6 +49,13 @@ enum class X86LegacyScalarOperation {
   Decrement,
   Negate,
   Complement,
+  ShiftLeft,
+  ShiftRight,
+  SignedShiftRight,
+  RotateLeft,
+  RotateRight,
+  RotateCarryLeft,
+  RotateCarryRight,
   Divide,
   SignedDivide,
   Multiply,
@@ -94,6 +101,14 @@ struct X86LegacyScalarInstruction {
            Operation == X86LegacyScalarOperation::And ||
            Operation == X86LegacyScalarOperation::Xor ||
            Operation == X86LegacyScalarOperation::Test;
+  }
+
+  bool shifting() const {
+    using Op = X86LegacyScalarOperation;
+    return Operation == Op::ShiftLeft || Operation == Op::ShiftRight ||
+           Operation == Op::SignedShiftRight || Operation == Op::RotateLeft ||
+           Operation == Op::RotateRight || Operation == Op::RotateCarryLeft ||
+           Operation == Op::RotateCarryRight;
   }
 };
 

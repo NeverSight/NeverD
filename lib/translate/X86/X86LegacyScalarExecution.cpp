@@ -123,6 +123,10 @@ public:
       multiply(F);
       return;
     }
+    if (F.shifting()) {
+      shift(F);
+      return;
+    }
     if (F.Operation == Op::Push) {
       if (!read(F.Source, N, B))
         return;
@@ -225,6 +229,65 @@ private:
   X86MemoryAccessResult Result;
   std::optional<llvm::Error> Failure;
   std::optional<X86PagedMemory::PreparedStore> Store;
+
+  void shift(const X86LegacyScalarInstruction &F) {
+    uint32_t Count, Value;
+    if (!read(F.Source, 1, Count) || !read(F.Destination, F.Bytes, Value, true))
+      return;
+    Count &= 31;
+    const unsigned Bits = F.Bytes * 8;
+    const uint32_t Mask = UINT32_MAX >> (32 - Bits);
+    const uint32_t Sign = (Mask >> 1) + 1;
+    const uint32_t Original = Value;
+    const bool Left = F.Operation == Op::ShiftLeft ||
+                      F.Operation == Op::RotateLeft ||
+                      F.Operation == Op::RotateCarryLeft;
+    const bool ThroughCarry = F.Operation == Op::RotateCarryLeft ||
+                              F.Operation == Op::RotateCarryRight;
+    const bool Rotate = ThroughCarry || F.Operation == Op::RotateLeft ||
+                        F.Operation == Op::RotateRight;
+    const unsigned Steps =
+        Rotate ? Count % (Bits + unsigned(ThroughCarry)) : Count;
+    bool Carry = S.EFlags & 1;
+    // Each step stays within the operand width, including byte counts beyond
+    // that width. No C++ shift is equal to or larger than its carrier width.
+    for (unsigned I = 0; I != Steps; ++I) {
+      const bool NextCarry = Value & (Left ? Sign : 1);
+      const bool Fill =
+          ThroughCarry ? Carry
+          : Rotate     ? NextCarry
+                       : F.Operation == Op::SignedShiftRight && (Value & Sign);
+      Value = Left ? ((Value << 1) | unsigned(Fill)) & Mask
+                   : (Value >> 1) | (Fill ? Sign : 0);
+      Carry = NextCarry;
+    }
+    // Zero counts still authenticate the read/write operand and can fault.
+    if (!write(F.Destination, F.Bytes, Value) || !Count)
+      return;
+    if (Rotate && !ThroughCarry)
+      Carry = Value & (Left ? 1 : Sign);
+    uint32_t Undefined = Count == 1 ? 0 : 0x800;
+    uint32_t Changed = 0x801;
+    if (!Rotate) {
+      Undefined |= 16;
+      if (F.Operation != Op::SignedShiftRight && Count >= Bits)
+        Undefined |= 1;
+      Changed = kX86LegacyArithmeticFlagsMask;
+    }
+    const bool Overflow = Left ? bool(Value & Sign) != Carry
+                          : F.Operation == Op::SignedShiftRight ? false
+                          : F.Operation == Op::ShiftRight
+                              ? bool(Original & Sign)
+                          : F.Operation == Op::RotateCarryRight
+                              ? bool(Original & Sign) != bool(S.EFlags & 1)
+                              : bool(Value & Sign) != bool(Value & (Sign >> 1));
+    uint32_t Flags = (Carry ? 1 : 0) | (Overflow ? 0x800 : 0);
+    if (!Rotate)
+      Flags |= (!(std::popcount(uint8_t(Value)) & 1) ? 4 : 0) |
+               (!Value ? 64 : 0) | (Value & Sign ? 128 : 0);
+    Flags = (Flags & ~Undefined) | (*O.ShiftUndefinedFlags & Undefined);
+    S.EFlags = (S.EFlags & ~Changed) | Flags;
+  }
 
   void multiply(const X86LegacyScalarInstruction &F) {
     uint32_t Source;

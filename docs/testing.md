@@ -109,6 +109,19 @@ inputs initialize the software state and original CPU from one shared image.
 The BSWAP word form has no defined architectural result and is tested as an
 explicit refusal, not assigned a guessed value.
 
+`LegacyShifts/*` compares protected SHL/SAL/SHR/SAR and ROL/ROR/RCL/RCR with
+original instructions under both paging modes. It covers every byte count,
+all three count encodings, widths, register aliases, segment overrides,
+zero-count memory faults and original page repair/IRET/retry. The producer
+observes only undefined CF/AF/OF choices through a separate host instruction
+with the same count encoding; immediate and CL forms can differ in undefined
+OF. No KVM result or defined flag is fed back into the software executor.
+Unit checks vary the undefined image independently and verify that defined
+bits, zero-count preservation and fault rollback cannot be changed by it.
+The native matrix compares successful operand PTE A/D effects. Exact A/D on
+faulting walks retains the separate ordered-walk model; permission faults
+can leave a different accessed-bit image on the recorded hardware.
+
 `LegacyFastSystem/*` in `NeverDX86PagingTests` compares original protected
 SYSENTER/SYSEXIT under legacy paging and PAE, all CPLs, both code and stack
 sizes, nonflat entry, selector wrap, flags, caches and complete restart frames.

@@ -246,6 +246,7 @@ executor to one CPU and ordinary paged RAM for these protected-mode families:
 | ADD, ADC, SUB, SBB, CMP | Register/memory, accumulator-immediate and group-immediate forms, including signed imm8 and all six arithmetic flags. |
 | AND, OR, XOR, TEST | The same exact operand widths, with an explicit `LogicalAuxiliaryCarry` value for architecturally undefined AF. An absent choice refuses before fetch. |
 | INC, DEC, NEG, NOT | Register and memory forms. INC/DEC preserve CF; NOT preserves flags. |
+| SHL/SAL, SHR, SAR, ROL, ROR, RCL, RCR | Byte/word/dword registers and memory, implicit one, imm8 and CL counts, masked counts and independent code/address widths. Undefined CF/AF/OF choices are explicit. |
 | CBW, CWDE, CWD, CDQ | Implicit AL/AX/EAX sign extension with independent code/operand widths; other register bits and all flags are preserved. |
 | LAHF, SAHF | Exact AH/status-bit transfer, reserved bits, and preservation of OF, DF and privileged flags. |
 | CLC, STC, CMC, CLD, STD | CF or DF alone; nonprivileged execution at every CPL. |
@@ -300,6 +301,30 @@ a vendor-wide guarantee or selected from the executing host. Bind the native
 suite with `NEVERD_TEST_LEGACY_MULTIPLY_FLAGS=sign-parity` on the qualified P
 core or `sign-parity-zero` on its E core. An absent or unknown binding fails
 before instruction fetch in the software executor.
+
+Single shifts and rotates require `ShiftUndefinedFlags`, an image containing
+only CF/AF/OF (`kX86LegacyShiftUndefinedFlagsMask`). It supplies only bits
+that are undefined for that particular instruction, width and masked count.
+All defined result/flag bits are calculated independently. Nonzero shifts
+consume the AF choice; counts above one consume OF. SHL/SHR consume CF only
+when the masked count reaches or exceeds the operand width; SAR's carry
+remains defined. Rotates preserve SF/ZF/AF/PF. A nonzero whole RCL/RCR carry
+cycle preserves the operand and CF but still consumes undefined OF.
+
+All counts are masked to five bits before narrow rotate reduction. Only a
+zero masked count guarantees preservation of all flags. Memory destinations
+still require a writable, in-limit, mapped and appropriately aligned operand
+at zero count,
+using the same read/modify/write plan and restart handling as arithmetic.
+Input CL is captured before changing any destination, including ECX or CH.
+The producer must supply its chosen undefined image; the executor does not
+infer one from the host. Native tests observe it separately with the same
+count encoding because immediate and CL forms can produce different OF.
+The undocumented group-two `/6` alias remains explicitly refused.
+The shared page walker retains its ordered accessed-bit publication on a
+later permission fault. Exact faulting-walk A/D identity with a particular
+processor is outside this scalar binding's native qualification; successful
+operand A/D updates are compared.
 
 CBW/CWDE sign-extend AL/AX into AX/EAX; CWD/CDQ fill DX/EDX from the sign of
 AX/EAX without changing the low half of the dividend. Word operations retain
@@ -415,6 +440,16 @@ regression comparisons. The original-byte oracle covers unsigned table
 indices, exact byte accesses, nonflat segments, word-stack wrap and original
 page-handler repair/IRET/retry. Executable sources and frozen/live binaries
 are hashed and checked after all runs.
+
+The [November 3 shift/rotate qualification](evidence/x86-legacy-shifts-2026-11-03.json)
+records 218,400 CPU comparisons across both SDKs, paging modes and P/E cores.
+All 716 available checks pass; two LA57 checks remain explicit skips. The
+oracle covers every raw byte count, all count encodings, register aliases,
+segmented memory, zero-count faults and original handler repair/IRET/retry.
+Defined bits are calculated independently; only architecturally undefined
+bits use the separately observed image. Successful operand page-table A/D
+effects are compared; exact faulting-walk A/D identity remains outside this
+qualification. Source and binary hashes are verified after all four runs.
 
 ## Protected SYSENTER and SYSEXIT
 

@@ -17,6 +17,8 @@ protected:
   unsigned Comparisons = 0;
   std::optional<X86LegacyCallProfile> Calls;
   std::optional<X86LegacyMultiplyProfile> Multiply;
+  std::optional<uint32_t> ShiftUndefinedFlags;
+  bool CheckOperandPageEffects = false;
 
   void SetUp() override {
     X86PagingNativeTest::SetUp();
@@ -216,6 +218,7 @@ protected:
         Calls};
     Options.DivisionArithmeticFlags = Flags & kX86LegacyArithmeticFlagsMask;
     Options.Multiply = Multiply;
+    Options.ShiftUndefinedFlags = ShiftUndefinedFlags;
     auto Expected = executeX86LegacyInstruction(State, *Memory, Bytes, Options);
     ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
     if (Case == 12 || Case == 18) {
@@ -270,6 +273,19 @@ protected:
     EXPECT_EQ(Registers.rflags & ~uint64_t{0x10000},
               State.EFlags & ~uint32_t{0x10000});
     EXPECT_EQ(Special.cr2, State.CR2);
+    // The shared page walker deliberately sets A on each valid entry before
+    // a later permission fault. Hardware need not choose that faulting-walk
+    // image; qualify exact A/D only for successful operand translations.
+    if (CheckOperandPageEffects && Expected->InstructionCompleted) {
+      for (uint32_t Address :
+           {Offset, Offset + 3, Offset + 0x10000, Offset + 0x10003}) {
+        const uint32_t PTE = PT + (Address >> 12) * PW;
+        auto Got = Memory->physicalMemory().loadScalar(
+            PTE, Legacy ? GuestScalarWidth::I32 : GuestScalarWidth::I64);
+        ASSERT_EQ(Got.Status, GuestMemoryAccessStatus::Completed);
+        EXPECT_EQ(get(PTE, PW) & 0x60, Got.Value & 0x60) << std::hex << Address;
+      }
+    }
     if (Case == 14 || Case == 15) {
       const auto PTE = Memory->physicalMemory().loadScalar(
           PT + 13 * PW, Legacy ? GuestScalarWidth::I32 : GuestScalarWidth::I64);
