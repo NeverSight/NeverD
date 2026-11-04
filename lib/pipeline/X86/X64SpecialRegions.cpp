@@ -10,6 +10,7 @@
 
 #include "X64SpecialRegions.h"
 
+#include "X64FunctionContext.h"
 #include "X64RtmAbortRegions.h"
 #include "X64RtmRegions.h"
 
@@ -361,13 +362,14 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
 void emitX64SpecialRegionDriver(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
-    bool FollowInternalCalls) {
+    bool FollowInternalCalls, bool FunctionContext) {
   using Exit = analysis::X64ContinuationExitV1;
   // One index for the immutable selection; no per-instruction linear search.
   std::map<va_t, size_t> ByAddress;
   for (size_t I = 0; I < Units.size(); ++I)
     ByAddress.emplace(Units[I].Address, I);
   const auto Version = Units.front().StateVersion;
+  const llvm::StringRef Prefix = FunctionContext ? "function_" : "";
   OS << R"C(
 /* Direct special-region dispatch. State and budget are accessible and disjoint
  * from each other and guest RAM. Exact instruction semantics own every effect.
@@ -384,13 +386,16 @@ void emitX64SpecialRegionDriver(
          << " || status == " << uint64_t(Exit::Return);
   };
   // Prevent the C optimizer from rebuilding one enormous cyclic driver. Only
-  // this local implementation detail is noinline; instruction steps may inline
-  // into their bounded region. No machine-state fact crosses a region boundary.
+  // this local implementation detail is noinline; instruction steps may
+  // inline into their bounded region. No machine-state fact crosses a region
+  // boundary.
   for (size_t First = 0; First < Units.size(); First += Chunk) {
     const size_t End = std::min(First + Chunk, Units.size());
-    OS << "static __attribute__((noinline)) uint64_t neverd_x64_region_"
-       << First / Chunk << "(neverd_x64_state_v" << Version
-       << " *state, uint64_t *budget) {\n"
+    OS << "static __attribute__((noinline)) uint64_t neverd_x64_" << Prefix
+       << "region_" << First / Chunk << "(neverd_x64_state_v" << Version
+       << " *state, uint64_t *budget"
+       << (FunctionContext ? ", neverd_x64_function_context_v1 *function" : "")
+       << ") {\n"
           "    uint64_t last = 8, status;\n"
           "dispatch:\n    switch (state->PC) {\n";
     for (size_t I = First; I < End; ++I)
@@ -399,9 +404,12 @@ void emitX64SpecialRegionDriver(
     OS << "    default: return last;\n    }\n";
     for (size_t I = First; I < End; ++I) {
       const auto &Unit = Units[I];
-      OS << "step_" << I << ":\n    if (!*budget) return 9;\n"
-         << "    status = " << Unit.Function.Name << "((uint8_t *)state);\n"
-         << "    if (status == " << uint64_t(Exit::NativeInstruction)
+      OS << "step_" << I << ":\n    if (!*budget) return 9;\n";
+      if (FunctionContext)
+        emitX64FunctionContextStep(OS, Unit, "    ");
+      else
+        OS << "    status = " << Unit.Function.Name << "((uint8_t *)state);\n";
+      OS << "    if (status == " << uint64_t(Exit::NativeInstruction)
          << " || status == " << uint64_t(Exit::InvalidState)
          << ") return status;\n    --*budget;\n    if (!(";
       Continuing();
@@ -418,18 +426,22 @@ void emitX64SpecialRegionDriver(
     }
     OS << "}\n";
   }
-  OS << "uint64_t neverd_x64_continue_v" << Version << "(neverd_x64_state_v"
-     << Version
-     << " *state, uint64_t *budget) {\n"
-        "    uint64_t last = 8, status;\n"
+  OS << "uint64_t neverd_x64_continue_" << Prefix << "v" << Version
+     << "(neverd_x64_state_v" << Version << " *state, uint64_t *budget"
+     << (FunctionContext ? ", neverd_x64_function_context_v1 *function" : "")
+     << ") {\n";
+  if (FunctionContext)
+    emitX64FunctionContextGuard(OS);
+  OS << "    uint64_t last = 8, status;\n"
         "    if (!*budget) return 9;\n"
         "    for (;;) {\n        switch (state->PC) {\n";
   for (size_t First = 0; First < Units.size(); First += Chunk) {
     const size_t End = std::min(First + Chunk, Units.size());
     for (size_t I = First; I < End; ++I)
       OS << "        case " << hex(Units[I].Address) << "ULL:\n";
-    OS << "            status = neverd_x64_region_" << First / Chunk
-       << "(state, budget); break;\n";
+    OS << "            status = neverd_x64_" << Prefix << "region_"
+       << First / Chunk << "(state, budget"
+       << (FunctionContext ? ", function" : "") << "); break;\n";
   }
   OS << "        default:\n";
   if (FollowInternalCalls)
@@ -437,7 +449,13 @@ void emitX64SpecialRegionDriver(
        << " || last == " << uint64_t(Exit::Return) << ") return last;\n";
   OS << "            if (!*budget) return 9;\n"
      << "            return last == " << uint64_t(Exit::Jump) << " ? "
-     << uint64_t(Exit::Jump) << " : 8;\n        }\n        if (!(";
+     << uint64_t(Exit::Jump) << " : 8;\n        }\n";
+  if (FunctionContext)
+    OS << "        if (status == " << uint64_t(Exit::Return)
+       << " && function && function->Phase == NEVERD_X64_FUNCTION_RETURNED) "
+          "return "
+          "status;\n";
+  OS << "        if (!(";
   Continuing();
   OS << ")) return status;\n        last = status;\n    }\n}\n";
 }
