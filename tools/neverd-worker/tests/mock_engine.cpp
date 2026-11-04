@@ -743,6 +743,12 @@ int neverd_session_discover_functions(neverd_session_t s) {
     state.discoveryPublished = true;
     state.functions.push_back(Base + CodeSize);
   }
+  // summaries-discover.bin discovers one function too, without a gate.
+  if (state.path.find("summaries-discover") != std::string::npos &&
+      !state.discoveryPublished) {
+    state.discoveryPublished = true;
+    state.functions.push_back(Base + CodeSize);
+  }
   return neverd_func_count(s);
 }
 #ifdef NEVERD_TEST_STEPPED_DISCOVERY
@@ -1033,6 +1039,16 @@ const char *neverd_warm_functions_json(neverd_session_t s,
         {"full", false},
         {"next_entry",
          nullptr}}.dump());
+  // summaries-discover.bin's summaries describe the functions discovery
+  // finds: warming it before discovery reads another inventory.
+  if (state.path.find("summaries-discover") != std::string::npos &&
+      !state.discoveryPublished)
+    return copy(Json{
+        {"available", false},
+        {"prepared", 0},
+        {"full", false},
+        {"next_entry",
+         nullptr}}.dump());
   if (firstEntry == 0)
     state.warmed = 0;
   // warm-slow.bin takes long enough per step for heartbeats to show a pass;
@@ -1051,10 +1067,11 @@ const char *neverd_warm_functions_json(neverd_session_t s,
   if (full)
     prepared = 8 - state.warmed;
   state.warmed += prepared;
-  // Only the summaries-ready.bin and summaries-fail.bin images have call
-  // summaries to solve.
+  // Only the summaries-ready.bin, summaries-discover.bin and
+  // summaries-fail.bin images have call summaries to solve.
   const bool summaries =
       state.path.find("summaries-ready") != std::string::npos ||
+      state.path.find("summaries-discover") != std::string::npos ||
       state.path.find("summaries-fail") != std::string::npos;
   return copy(Json{
       {"available", true},
@@ -1075,7 +1092,8 @@ const char *neverd_prepare_call_summaries_json(neverd_session_t s) {
     return nullptr;
   }
   const bool available =
-      state.path.find("summaries-ready") != std::string::npos;
+      state.path.find("summaries-ready") != std::string::npos ||
+      state.path.find("summaries-discover") != std::string::npos;
   ++state.summarySolves;
   return copy(Json{{"available", available}, {"ready", available}}.dump());
 }

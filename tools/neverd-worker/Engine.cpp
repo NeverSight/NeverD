@@ -1694,8 +1694,7 @@ bool Engine::idleStep() {
       return true;
     }
   }
-  summaryStep();
-  return true;
+  return summaryStep();
 }
 bool Engine::summaryWorkPending() const {
   return summaryState_ == SummaryState::Pending ||
@@ -1707,31 +1706,55 @@ void Engine::restartSummaries() {
   // run of the job finds kept ones at once.
   summaryState_ = summaryJob_ ? SummaryState::Pending : SummaryState::Off;
   summaryCursor_ = 0;
+  summaryDiscovered_ = false;
   summaryError_.clear();
 }
-void Engine::summaryStep() {
+bool Engine::summaryStep() {
   if (!summaryWorkPending())
-    return;
+    return true;
   // A step that fails ends the job with its error rather than retrying it
   // at every idle moment.
   try {
-    summaryJobStep();
+    return summaryJobStep();
   } catch (const std::exception &failure) {
     summaryState_ = SummaryState::Unavailable;
     summaryError_ = failure.what();
   }
+  return true;
 }
-void Engine::summaryJobStep() {
+bool Engine::summaryJobStep() {
   using WarmFunction = const char *(*)(neverd_session_t, neverd_va_t, int);
   static const auto warm =
       engineSymbol<WarmFunction>("neverd_warm_functions_json");
   if (!warm) {
     summaryState_ = SummaryState::Unavailable;
-    return;
+    return true;
   }
   if (summaryState_ == SummaryState::Solving) {
     prepareCallSummaries();
-    return;
+    return true;
+  }
+  // Summaries describe the functions the session lists. Discovery adds the
+  // functions the detector finds, which retires summaries solved before:
+  // the listing discovers them in the background, and the first address no
+  // listed function starts at (functionIndex) does at once, as a replica's
+  // decompile of a function the owner discovered does. Discover them first,
+  // a step at a time, so the solve is of the inventory the replica keeps;
+  // discovery is idempotent, and those later find nothing new.
+  if (!summaryDiscovered_) {
+    using DiscoverFunction = int (*)(neverd_session_t);
+    static const auto step = engineSymbol<DiscoverFunction>(
+        "neverd_session_discover_functions_step");
+    static const auto discover =
+        engineSymbol<DiscoverFunction>("neverd_session_discover_functions");
+    const int status = step       ? step(session_)
+                       : discover ? discover(session_)
+                                  : 1;
+    // Pending: the next idle step polls again. A failure leaves the
+    // listing's discovery to report it; the summaries are still solved.
+    if (status == 0)
+      return false;
+    summaryDiscovered_ = true;
   }
   // The solve reads each function's facts, which a page at a time keeps
   // each step as short as warming's.
@@ -1741,21 +1764,23 @@ void Engine::summaryJobStep() {
   if (!raw) {
     summaryState_ = SummaryState::Unavailable;
     summaryError_ = error();
-    return;
+    return true;
   }
   const auto page = backendJson(raw);
   // The engine says at the first page whether it solves this image's
   // summaries; preparing the rest would serve nothing.
   if (!page.value("available", false) || !page.value("call_summaries", false)) {
     summaryState_ = SummaryState::Unavailable;
-    return;
+    return true;
   }
   const auto next = page.value("next_entry", Json());
   if (next.is_string())
     summaryCursor_ = parseAddress(next.get<std::string>());
   else
     summaryState_ = SummaryState::Solving;
+  return true;
 }
+
 Json Engine::prepareCallSummaries() {
   using PrepareFunction = const char *(*)(neverd_session_t);
   static const auto prepare =

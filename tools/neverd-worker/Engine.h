@@ -211,11 +211,15 @@ private:
   /// then runs again; an explicit request's summaries are only forgotten.
   bool summaryJob_ = false;
   std::uint64_t summaryCursor_ = 0;
+  /// Whether the job discovered the image's functions, whose summaries it
+  /// then solves (summaryJobStep).
+  bool summaryDiscovered_ = false;
   std::string summaryError_;
   bool summaryWorkPending() const;
   void restartSummaries();
-  void summaryStep();
-  void summaryJobStep();
+  /// False where the step only waits on discovery (summaryJobStep).
+  bool summaryStep();
+  bool summaryJobStep();
   Json summaryJson() const;
   Json prepareCallSummaries();
   /// Drop the decompiled text, views and graphs kept from before the

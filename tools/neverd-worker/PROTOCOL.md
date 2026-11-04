@@ -914,9 +914,13 @@ keeps the existing fresh-process restore path.
 
 `analysis_restore` also takes `call_summaries:true`, which the GUI adds to the
 owner's snapshot when the replica advertises `prepare_call_summaries`. The
-replica then prepares every function a page at a time while no request waits,
-as `open`'s `warm` does, and finally solves the image's call summaries, which
-its later decompiles read (`prepare_call_summaries`). Heartbeats report the job
+replica then discovers the image's functions (`neverd_session_discover_functions`,
+stepped where the engine can), prepares every function a page at a time while
+no request waits, as `open`'s `warm` does, and finally solves the image's call
+summaries, which its later decompiles read (`prepare_call_summaries`).
+Discovering first solves them for the functions the replica keeps listing: a
+later discovery, as its first decompile of a function only discovery finds
+starts, would add functions and retire summaries solved before it. Heartbeats report the job
 as `background.call_summaries.state`: `pending`, `preparing`, `solving`,
 `ready` or `unavailable`: the engine's first page says it solves none for the
 image (one that is not x86-64), or the solve stopped at the engine's limit. On

@@ -44,7 +44,8 @@ def replica(clients, executable, owner, **extra):
 def run(executable):
     with tempfile.TemporaryDirectory(prefix="neverd-summaries-") as directory, ExitStack() as clients:
         root = Path(directory)
-        for name in ("summaries-ready.bin", "summaries-unavailable.bin", "summaries-fail.bin"):
+        for name in ("summaries-ready.bin", "summaries-discover.bin",
+                     "summaries-unavailable.bin", "summaries-fail.bin"):
             (root / name).write_bytes(b"\0" * 64)
 
         owner = clients.enter_context(Client(executable))
@@ -65,6 +66,17 @@ def run(executable):
         bad = solving.call("prepare_call_summaries", {"now": True})
         assert bad["status"] == "error" and bad["error"]["code"] == "invalid_request", bad
 
+        # The replica discovers the image's functions before it solves their
+        # summaries, which a later discovery would retire: summaries-discover
+        # warms only once its discovery added a function, which the replica
+        # then lists and its owner, which does not analyze, does not.
+        ok(owner, "open", {"path": str(root / "summaries-discover.bin"), "analysis": False})
+        listed = ok(owner, "functions", {"offset": 0, "limit": 64})["total"]
+        discovering = replica(clients, executable, owner, call_summaries=True)
+        state, seen = summaries(discovering, lambda s: s not in ("pending", "preparing", "solving"))
+        assert state == "ready", seen
+        assert ok(discovering, "functions", {"offset": 0, "limit": 64})["total"] == listed + 1
+
         # An image without them ends unavailable at its first page, as one
         # that is not x86-64; a failed solve too, with the engine's message.
         for name, message in (("summaries-unavailable.bin", None),
@@ -79,7 +91,8 @@ def run(executable):
             else:
                 assert reply["status"] == "ok" and reply["payload"] == {"available": False,
                                                                          "ready": False}, reply
-        print("call summaries: off by default, replica idle solve, explicit request, unavailable, failure")
+        print("call summaries: off by default, replica idle solve after discovery, explicit request, "
+              "unavailable, failure")
 
 
 if __name__ == "__main__":
