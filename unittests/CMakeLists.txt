@@ -77,6 +77,12 @@ add_neverd_unittest(NeverDSupportThreadTests
 target_include_directories(NeverDSupportThreadTests PRIVATE
   "${CMAKE_SOURCE_DIR}/include")
 
+add_neverd_unittest(NeverDSupportSharedValueTests
+  SupportSharedValueTests.cpp
+)
+target_include_directories(NeverDSupportSharedValueTests PRIVATE
+  "${CMAKE_SOURCE_DIR}/include")
+
 add_subdirectory(acceleration)
 add_subdirectory(digest)
 

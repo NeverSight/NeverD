@@ -3483,10 +3483,14 @@ struct ImageCallSummaries {
   decltype(PipelineResult::CallUnreadGPRs) Unread;
   decltype(PipelineResult::CallEntryStackArgs) EntryStackArgs;
   decltype(PipelineResult::CallVariadicFrom) VariadicFrom;
+  /// The entries of EntryStackArgs at an import whose count is not negative
+  /// (PipelineResult::CallEntryStackArgImports).
+  std::shared_ptr<const std::vector<va_t>> StackArgImports;
 };
 
-/// The summaries a solve over every function gave \p Solved.
-ImageCallSummaries imageCallSummariesOf(PipelineResult &&Solved) {
+/// The summaries a solve over every function of \p Img gave \p Solved.
+ImageCallSummaries imageCallSummariesOf(const BinaryImage &Img,
+                                        PipelineResult &&Solved) {
   ImageCallSummaries Image;
   Image.PrototypeArguments = std::move(Solved.CallPrototypeArguments);
   Image.UserPrototypes = std::move(Solved.CallUserPrototypes);
@@ -3502,6 +3506,13 @@ ImageCallSummaries imageCallSummariesOf(PipelineResult &&Solved) {
   Image.Unread = std::move(Solved.CallUnreadGPRs);
   Image.EntryStackArgs = std::move(Solved.CallEntryStackArgs);
   Image.VariadicFrom = std::move(Solved.CallVariadicFrom);
+  // An image's summaries hold every function: listing their imports once
+  // spares each run an import query per function.
+  auto Imports = std::make_shared<std::vector<va_t>>();
+  for (const auto &[Target, Count] : Image.EntryStackArgs)
+    if (Count >= 0 && Img.findImportAt(Target))
+      Imports->push_back(Target);
+  Image.StackArgImports = std::move(Imports);
   return Image;
 }
 
@@ -3521,6 +3532,7 @@ void applyImageCallSummaries(const ImageCallSummaries &Image,
   Result.CallEntryReadGPRs = Image.EntryReads;
   Result.CallUnreadGPRs = Image.Unread;
   Result.CallEntryStackArgs = Image.EntryStackArgs;
+  Result.CallEntryStackArgImports = Image.StackArgImports;
   Result.CallVariadicFrom = Image.VariadicFrom;
 }
 } // namespace pipeline_detail
@@ -4238,6 +4250,7 @@ bool computeCallRegisterEffects(
     const ExecutableCodeOwnerIndex *CodeOwnerIndex,
     const std::shared_ptr<X87CallGraphCache> &X87Graphs,
     const std::map<va_t, PointerVariableCallee> &PointerCallees,
+    const SharedValue<std::map<va_t, va_t>> *ArgumentSources,
     pipeline_detail::CalleeFactsCache &KnownCallees, const DebugContext *Dbg,
     const std::map<va_t, std::string> *FunctionNames,
     const std::vector<va_t> *ExportStarts,
@@ -4248,9 +4261,13 @@ bool computeCallRegisterEffects(
   // routine the variable starts at (PointerCallees): another module's, whose
   // prototype is kept under the variable's address, or this image's, by its
   // entry.
-  Result.CallArgumentSources = callArgumentSourcesOf(Img, PointerCallees);
+  if (ArgumentSources)
+    Result.CallArgumentSources = *ArgumentSources;
+  else
+    Result.CallArgumentSources = callArgumentSourcesOf(Img, PointerCallees);
   Result.CallPrototypeArguments.clear();
   Result.CallUserPrototypes.clear();
+  Result.CallEntryStackArgImports.reset();
   if (Img.Arch != Arch::X64) {
     // Format bindings carry explicit operands into MedIR independently of
     // the x64-only register-effect summaries below.
@@ -4743,7 +4760,7 @@ bool computeCallRegisterEffects(
   Result.CallExitConstants = std::move(Summaries.ExitConstants);
   for (const auto &[Entry, Effect] : Effects)
     if (Effect->RegisterLeaf)
-      Result.CallRegisterLeaves.emplace(Entry, Effect->RegisterLeaf);
+      Result.CallRegisterLeaves.mutate().emplace(Entry, Effect->RegisterLeaf);
   Result.CallEntryReadGPRs = std::move(Summaries.EntryReads);
   Result.CallUnreadGPRs = std::move(Summaries.Unread);
   Result.CallEntryStackArgs = std::move(Summaries.EntryStackArgs);
@@ -4777,6 +4794,9 @@ struct PipelineAnalysisCache::Impl {
     libc::NoReturnTargetIndex Targets;
     libc::StackProbeIndex StackProbes;
     const std::map<va_t, PointerVariableCallee> PointerCallees;
+    /// What a call through each of those variables passes the arguments of
+    /// (PipelineResult::CallArgumentSources), which every run shares.
+    const SharedValue<std::map<va_t, va_t>> ArgumentSources;
     const std::map<std::string, uint16_t> X87FloatingImports;
     detail::AbsoluteRelocationRootIndex Roots;
     ExecutableCodeOwnerIndex Owners;
@@ -4797,6 +4817,7 @@ struct PipelineAnalysisCache::Impl {
                         })
                   : libc::NoReturnTargetIndex::DeclaredNoReturn()),
           StackProbes(Img), PointerCallees(collectPointerVariableCallees(Img)),
+          ArgumentSources(callArgumentSourcesOf(Img, PointerCallees)),
           X87FloatingImports(declaredX87Imports(Img, Dbg)), Roots(Img),
           Owners(Img) {}
 
@@ -5206,14 +5227,14 @@ bool Pipeline::prepareCallSummaries(const BinaryImage &Img,
   if (!computeCallRegisterEffects(
           Img, Facts.Entries, Inputs.Targets, Inputs.StackProbes, Facts.Callees,
           Inputs.Roots, &Inputs.Owners, Facts.Graphs, Inputs.PointerCallees,
-          Facts.CalleeFacts, Dbg, &Inventory.functionNames(Img),
-          &Inventory.ExportStarts,
+          &Inputs.ArgumentSources, Facts.CalleeFacts, Dbg,
+          &Inventory.functionNames(Img), &Inventory.ExportStarts,
           /*KeptImportCounts=*/nullptr, /*ImageSummaries=*/nullptr,
           /*WholeImage=*/true, Whole))
     return false;
   Facts.CallSummaries =
       std::make_shared<const pipeline_detail::ImageCallSummaries>(
-          pipeline_detail::imageCallSummariesOf(std::move(Whole)));
+          pipeline_detail::imageCallSummariesOf(Img, std::move(Whole)));
   // Runs of these entries read the summaries now, not each callee's facts.
   Facts.CalleeFacts.clear();
   if (Solved)
@@ -5796,7 +5817,8 @@ void Pipeline::buildLowIR(
   (void)computeCallRegisterEffects(
       Img, FuncEntries, NoReturnTargets, Inputs.StackProbes, NoReturnCallees,
       AbsoluteRelocationRoots, CodeOwnerIndex, X87Graphs, Inputs.PointerCallees,
-      Facts.CalleeFacts, Dbg, Shared ? &Inventory->functionNames(Img) : nullptr,
+      &Inputs.ArgumentSources, Facts.CalleeFacts, Dbg,
+      Shared ? &Inventory->functionNames(Img) : nullptr,
       Shared ? &Inventory->ExportStarts : nullptr,
       Opts.AnalysisCache ? &Opts.AnalysisCache->ImportCounts : nullptr,
       Shared && !AddsEntries ? Facts.CallSummaries.get() : nullptr,

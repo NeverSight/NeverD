@@ -22,6 +22,7 @@
 #include "neverd/loader/DataSymbolBinding.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/pipeline/Limits.h"
+#include "neverd/support/SharedValue.h"
 
 #include "llvm/ADT/ArrayRef.h"
 
@@ -321,7 +322,7 @@ private:
   const BinaryImage *Image = nullptr;
   const Symbol *SymbolData = nullptr;
   size_t SymbolCount = 0;
-  std::map<va_t, va_t> CallArgumentSources;
+  SharedValue<std::map<va_t, va_t>> CallArgumentSources;
   std::set<va_t> FunctionEntries;
   std::map<va_t, PointerVariableCallee> PointerCallees;
   std::optional<ExecutableCodeOwnerIndex> CodeOwners;

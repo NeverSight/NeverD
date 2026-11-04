@@ -713,16 +713,23 @@ LocalTypesDebugContext::definitions(const std::vector<TypeRef> &Records) const {
             }));
   };
   // The enumerators of the enumerations the decompiler displays, which a
-  // unit can spell without their enumeration's name.
-  llvm::StringMap<const types::LocalType *> Enumerators;
-  for (const auto &Entry : Given)
-    for (const TypeRef &Enum : Entry.getValue())
-      if (const types::LocalType *Local = Types->find(Entry.getKey());
-          Enum->IsEnum && Local && Local->Kind == types::TypeKind::Enum &&
-          AllAgree(*Enum, *Local))
-        for (const std::string &Name : Enum->FieldDisplayNames)
-          if (!Name.empty())
-            Enumerators.try_emplace(Name, Local);
+  // unit can spell without their enumeration's name.  They follow from the
+  // types Given holds, whose names are final once there, and the library:
+  // read again only after Given grows.
+  if (GivenEnumeratorsRead != GivenTypes.size()) {
+    GivenEnumerators.clear();
+    for (const auto &Entry : Given)
+      for (const TypeRef &Enum : Entry.getValue())
+        if (const types::LocalType *Local = Types->find(Entry.getKey());
+            Enum->IsEnum && Local && Local->Kind == types::TypeKind::Enum &&
+            AllAgree(*Enum, *Local))
+          for (const std::string &Name : Enum->FieldDisplayNames)
+            if (!Name.empty())
+              GivenEnumerators.try_emplace(Name, Local);
+    GivenEnumeratorsRead = GivenTypes.size();
+  }
+  const llvm::StringMap<const types::LocalType *> &Enumerators =
+      GivenEnumerators;
   CRecordDefinitions Result;
   std::vector<const types::LocalType *> Roots;
   for (const TypeRef &Requested : Records) {

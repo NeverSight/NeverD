@@ -310,6 +310,11 @@ private:
   /// information gave members or enumerators, by name.
   mutable llvm::StringMap<std::vector<TypeRef>> Given;
   mutable llvm::DenseSet<const NdType *> GivenTypes;
+  /// The enumerators of the enumerations in Given that a unit can spell
+  /// without their enumeration's name (definitions), read when Given held
+  /// GivenEnumeratorsRead types: Given only grows.
+  mutable llvm::StringMap<const types::LocalType *> GivenEnumerators;
+  mutable std::optional<size_t> GivenEnumeratorsRead;
   /// The library's names C spells otherwise, which a unit cannot name.
   mutable std::optional<llvm::StringSet<>> RenamedInC;
 };
