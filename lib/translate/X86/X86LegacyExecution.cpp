@@ -100,6 +100,10 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
        (*Options.DivisionArithmeticFlags & ~kX86LegacyArithmeticFlagsMask)))
     return invalid(
         "legacy division requires an explicit arithmetic-flags image");
+  if (Scalar && Scalar->multiplication() &&
+      Options.Multiply != X86LegacyMultiplyProfile::ProductSignParity &&
+      Options.Multiply != X86LegacyMultiplyProfile::ProductSignParityZero)
+    return invalid("legacy multiplication requires a bound flags profile");
   if (Scalar && Scalar->Operation == detail::X86LegacyScalarOperation::Call &&
       Options.Calls != X86LegacyCallProfile::StoreBeforeTargetLimit &&
       Options.Calls != X86LegacyCallProfile::CheckBeforeTargetLimit)

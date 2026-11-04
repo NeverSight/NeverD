@@ -192,7 +192,7 @@
         "--neverc",
         "/mnt/data/neverd-code16-far-pointer-20261103/frozen-bin/neverc",
         "--clang",
-        "/home/ad/.local/bin/clang",
+        "${CLANG}",
         "--output-dir",
         "/mnt/data/neverd-code16-far-pointer-20261103/final/p-core/x64-retry/output"
       ],
@@ -651,5 +651,6 @@
     "Nonflat/null/read-only DS and word/nonflat SS cases stop at the native boundary. Their success does not authorize returning through a compiler frame whose segment invariants were changed.",
     "The existing x64/NeverC oracle retains its own user-mode boundary and exclusions; it is not a complete protected-state continuation.",
     "Production SDK neverd-llvm-v23.0.0-r6 and gitlink 03270359c2ed8f6806533d3832a947bf883a6f69 are unchanged. General i386 dispatch, remaining scalar/state families, real/VM86/tasks/debug, software SMM/SGX and complete CET/FRED events remain open; final SDK release/pin waits for global completion."
-  ]
+  ],
+  "path_normalization": "Public commands and diagnostic paths use ${NEVERD_WORKTREE} and ${CLANG}; original commands/logs remain unchanged in the retained hashed artifacts."
 }

@@ -1343,6 +1343,46 @@ HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
             'e0b94c5b129dad727b446a0ea3d39454b5ee81060a33245152a594fcab7715d4',
         }),
     ),
+    HistoryAllowance(
+        path='docs/evidence/x86-legacy-division-2026-11-03.json',
+        rule="private-path",
+        commits=frozenset({
+            'ce262a14a757cf4a5f1fd86f2cd877bbc9e5922f',
+            '3adbe18c99869892a314f4804747f95177ddb1d5',
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of checkout and compiler paths in the "
+            "protected x86 qualification records. Exact raw commands remain "
+            "in hashed local artifacts; outcomes, counts and hashes are unchanged. "
+            "Only these exact historical line digests in the publication and "
+            "cleanup commits are covered; current and future paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '1eb199b473d03205939d59740151d90d596efdca2d483a5fb35cadd5cb5f0cc9',
+            'c3bbd6370d799d25dfd27a9e392fb4cdadb8134f25dd64b3a0e74ab618ef4e9e',
+            'dcf1c7aa9261b2f2ac94534aac3bacc15cabe6b97f0ce4826413d958c66a1dd1',
+        }),
+    ),
+    HistoryAllowance(
+        path='docs/evidence/x86-native-code16-far-pointer-2026-11-03.json',
+        rule="private-path",
+        commits=frozenset({
+            '8e9a10789811ffc08e5eb7ed7a18c3b87aba9d2a',
+            '3adbe18c99869892a314f4804747f95177ddb1d5',
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of checkout and compiler paths in the "
+            "protected x86 qualification records. Exact raw commands remain "
+            "in hashed local artifacts; outcomes, counts and hashes are unchanged. "
+            "Only these exact historical line digests in the publication and "
+            "cleanup commits are covered; current and future paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '941d6615ee64e2882403c671c7c030976a5102e8a962c0da6f2d2492e30b2111',
+        }),
+    ),
 )
 
 

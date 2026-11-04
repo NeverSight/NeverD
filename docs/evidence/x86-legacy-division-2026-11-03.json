@@ -106,7 +106,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
+        "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX86PagingTests",
         "--gtest_filter=*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-division-20261103/final/native/p-core/result.xml"
@@ -146,7 +146,7 @@
         "taskset",
         "-c",
         "0",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
+        "${NEVERD_WORKTREE}/build-x86/bin/NeverDX86PagingTests",
         "--gtest_filter=*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-division-20261103/final/r6/p-core/result.xml"
@@ -186,7 +186,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
+        "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX86PagingTests",
         "--gtest_filter=LegacyDivision/*:LegacyScalars/*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-division-20261103/final/native/e-core/result.xml"
@@ -226,7 +226,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
+        "${NEVERD_WORKTREE}/build-x86/bin/NeverDX86PagingTests",
         "--gtest_filter=LegacyDivision/*:LegacyScalars/*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-division-20261103/final/r6/e-core/result.xml"
@@ -255,12 +255,12 @@
     {
       "report": "final/native/p-core/result.xml",
       "test": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
-      "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:115\nBound KVM CPU has no LA57\n"
+      "reason": "${NEVERD_WORKTREE}/unittests/translate/x86/X86PagingNativeTests.cpp:115\nBound KVM CPU has no LA57\n"
     },
     {
       "report": "final/r6/p-core/result.xml",
       "test": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
-      "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:115\nBound KVM CPU has no LA57\n"
+      "reason": "${NEVERD_WORKTREE}/unittests/translate/x86/X86PagingNativeTests.cpp:115\nBound KVM CPU has no LA57\n"
     }
   ],
   "sdk": {
@@ -321,5 +321,6 @@
     "The software read owner covers divisor memory faults before #DE and publishes both outputs only after quotient checks. There is no new memory RMW or write permission requirement.",
     "The full paging suite and existing scalar/fast-system owners were rerun. Two LA57 tests are unavailable on this host; no general i386 exporter, real/VM86, tasks/call gates, debug producers, software SMM/enclave/AEX/EPCM or complete CET/FRED event coverage is implied.",
     "No LLVM or NeverC compiler change is needed for this software executor. Native LLVM protected code16 DIV/IDIV is a separate reproduced gap. NeverC has no i386 frontend target. Global completion and the final SDK release/pin remain open."
-  ]
+  ],
+  "path_normalization": "Public commands and diagnostic paths use ${NEVERD_WORKTREE} and ${CLANG}; original commands/logs remain unchanged in the retained hashed artifacts."
 }
