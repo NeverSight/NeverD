@@ -17326,7 +17326,10 @@ constructor sentinels, exact relocation gaps, conflicting instruction bytes,
 unreachable or non-reading operands, existing pointer-run classifications,
 out-of-line callbacks and jump-table ownership. They discard nested evidence
 when code overlaps or metadata vetoes a table. A synthetic linked PE exercises
-the loader through function discovery. LLVM cases require runtime indices in
+the loader through function discovery. Backward-edge cases join previously
+visited code ranges, retain table storage in skipped gaps, and reject an
+overlapping instruction whether its start or its operand was visited first
+on both x86 and x64. LLVM cases require runtime indices in
 escaped table addresses, including code segments beyond the embedding limit,
 and reject unrelated code identities and unresolved pointers across formats.
 The focused target also runs `PointerRelocationBatch` to check the existing
