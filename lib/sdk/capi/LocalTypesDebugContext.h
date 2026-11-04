@@ -307,8 +307,10 @@ private:
   mutable llvm::DenseSet<const NdType *> CompletedRecords;
   mutable llvm::StringSet<> Read;
   /// The records and enumerations of the library's names that the debug
-  /// information gave members or enumerators, by name.
+  /// information gave members or enumerators, by name: one of each that
+  /// reads differently (completeType), GivenCount in all.
   mutable llvm::StringMap<std::vector<TypeRef>> Given;
+  mutable size_t GivenCount = 0;
   mutable llvm::DenseSet<const NdType *> GivenTypes;
   /// The enumerators of the enumerations in Given that a unit can spell
   /// without their enumeration's name (definitions), read when Given held

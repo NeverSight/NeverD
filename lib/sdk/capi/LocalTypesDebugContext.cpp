@@ -633,16 +633,31 @@ void LocalTypesDebugContext::completeType(const TypeRef &Type) const {
   // What the debug information gave a record or an enumeration of one of
   // the library's names: a unit holds the library's definition only where
   // that agrees with it.
-  if (const types::LocalType *Local = Types->find(Record->SourceName);
+  const types::LocalType *Local = Types->find(Record->SourceName);
+  const bool Gives =
       Local &&
       (Record->IsEnum
            ? Local->Kind == types::TypeKind::Enum
            : definedRecord(Record->SourceName, Record->Size) != nullptr) &&
-      GivenTypes.insert(Record.get()).second)
-    Given[Record->SourceName].push_back(Record);
+      GivenTypes.insert(Record.get()).second;
   // The library's names in place of those it gave, which are the same
   // unless the user renamed them.
   takeLibraryNames(Record);
+  // definitions reads of a given type whether it is an enumeration and its
+  // names and offsets, as the library's names left them.  Another type of
+  // the name that reads the same changes none of its answers, and the debug
+  // information gives the same types again with every unit.
+  if (Gives) {
+    std::vector<TypeRef> &Same = Given[Record->SourceName];
+    if (llvm::none_of(Same, [&](const TypeRef &Other) {
+          return Other->IsEnum == Record->IsEnum &&
+                 Other->FieldDisplayNames == Record->FieldDisplayNames &&
+                 Other->FieldDisplayOffsets == Record->FieldDisplayOffsets;
+        })) {
+      Same.push_back(Record);
+      ++GivenCount;
+    }
+  }
 }
 
 void LocalTypesDebugContext::readRenamedInC() const {
@@ -716,7 +731,7 @@ LocalTypesDebugContext::definitions(const std::vector<TypeRef> &Records) const {
   // unit can spell without their enumeration's name.  They follow from the
   // types Given holds, whose names are final once there, and the library:
   // read again only after Given grows.
-  if (GivenEnumeratorsRead != GivenTypes.size()) {
+  if (GivenEnumeratorsRead != GivenCount) {
     GivenEnumerators.clear();
     for (const auto &Entry : Given)
       for (const TypeRef &Enum : Entry.getValue())
@@ -726,7 +741,7 @@ LocalTypesDebugContext::definitions(const std::vector<TypeRef> &Records) const {
           for (const std::string &Name : Enum->FieldDisplayNames)
             if (!Name.empty())
               GivenEnumerators.try_emplace(Name, Local);
-    GivenEnumeratorsRead = GivenTypes.size();
+    GivenEnumeratorsRead = GivenCount;
   }
   const llvm::StringMap<const types::LocalType *> &Enumerators =
       GivenEnumerators;
