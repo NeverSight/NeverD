@@ -10530,7 +10530,10 @@ Cache locks cover lookup
 and publication, while graph construction runs outside the lock. A lookup
 checks the builder's settings against the cache's frozen context; one CFG
 build compares the inventories its builder borrows with each context once,
-since neither changes during the build, and checks the rest every time. Each query
+since neither changes during the build, and checks the rest every time. A
+context's frozen inventories are immutable and shared by its copies, so that
+comparison runs outside the lock, and a request built under the cache's context
+shares them instead of freezing them again. Each query
 still independently bounds and pays for its complete call closure and dataflow
 work; caller-dependent answers are not shared.
 A graph's call steps record whether each callee is an import, a fact of the
