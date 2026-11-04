@@ -15,11 +15,13 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHBoundCall.h"
 #include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/BinaryLoading.h"
 
 #include "llvm/BinaryFormat/COFF.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <iterator>
 #include <utility>
 
@@ -250,4 +252,47 @@ TEST(RegistrationOriginalImageCaller, EarlierOrdinaryVisitCannotDisappear) {
     EXPECT_FALSE(Proof.InvocationsComplete);
   }
 }
+TEST(RegistrationOriginalImageCaller, CorpusLocalStackClosureFitsItsBudget) {
+#ifndef NEVERD_BINARY_CORPUS_ROOT
+  GTEST_SKIP() << "windows-eh corpus root is not configured";
+#else
+  const auto Path = std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                    "corpus/windows-eh/msvc/vs2019/x86/native/no-gs/o0/"
+                    "windows-seh-tests/xcpt4-msvc-x86-native-no-gs-o0.exe";
+  if (!std::filesystem::exists(Path))
+    GTEST_SKIP() << Path.string() << " is missing";
+  BinaryLoadOptions Load;
+  Load.OnlyFunctionEntries.insert(0x401580);
+  auto Image = loadBinary(Path, Load);
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(*Image));
+  const auto Low = CFGBuilder().buildIntegerFrameProof(*Image, Decode, 0x401580,
+                                                       "local-stack-closure");
+  ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+  size_t Work = 0;
+  RegistrationCallCalleeIndex Index(*Image, &Work);
+  const auto Stacks = Index.stackContracts(Low);
+  ASSERT_TRUE(Stacks);
+  bool HasFinally = false, HasRaise = false;
+  for (const auto &Contract : *Stacks) {
+    if (Contract.Target == 0x40161e && !Contract.Indirect)
+      HasFinally = Contract.StackPopBytes == 0;
+    if (Contract.Target == 0x408000 && Contract.Indirect)
+      HasRaise = Contract.StackPopBytes == 16;
+    // These callbacks abandon their physical invocation stack and jump into
+    // the parent. They have no ordinary returning-stack contract to cache.
+    EXPECT_NE(Contract.Target, 0x402cac);
+    EXPECT_NE(Contract.Target, 0x402e3a);
+  }
+  EXPECT_TRUE(HasFinally);
+  EXPECT_TRUE(HasRaise);
+  EXPECT_TRUE(Index.localUnwindContracts(Low));
+  EXPECT_TRUE(Index.sehControlContracts(Low));
+  EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+  // This checks callee closure only. The full function still has a separate
+  // registration-state/local-unwind obligation before native reconstruction.
+#endif
+}
+
 } // namespace

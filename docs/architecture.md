@@ -15781,6 +15781,16 @@ built callee proves its transitive calls under standalone admission too; a
 relay cannot export a parent's local callback witness. Both routes retain the
 same active recursion guard, cumulative work bound and import dependencies.
 
+One parent query also retains its completed local results, including refusals
+whose dependencies have finished. An active, depth-limited or budget-exhausted
+dependency cannot make a refusal reusable. Local views share the parent's
+validated block index, but collect imports and propagate registers only over
+their own reachable blocks. A call-free entry prefix that loses every exact
+entry-stack coordinate cannot obtain an ordinary returning-stack proof from a
+later callee's stack pop. That early refusal uses the same register transfer
+owner; saved full-width coordinates still permit explicit restoration. None
+of these local results populate another parent's or the standalone cache.
+
 Object, initializer and cleanup queries inside that index, and subsidiary
 queries inside a returning-stack proof, reuse its independent stack cache
 through a scoped owner. Reuse requires the same image object, the exact same
