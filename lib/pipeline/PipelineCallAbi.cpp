@@ -181,8 +181,30 @@ OmittedCalleeMemo::readAt(const PipelineResult &Result, va_t Key) {
 
 bool OmittedCalleeMemo::Conversion::readsHold(
     const PipelineResult &Result) const {
+  // readAt(Result, Read.Key) == Read, compared where the summaries hold
+  // them rather than on a copy of each.
+  const auto &StackArgs = omittedCalleeStackArgs(Result);
+  const auto &StackSlots = omittedCalleeStackSlots(Result);
+  const auto &Counts = omittedCalleeArgumentCounts(Result);
+  const auto &Integer = omittedCalleeIntegerArguments(Result);
+  const auto &Floating = omittedCalleeFloatingArguments(Result);
+  const auto &Variadic = omittedCalleeVariadicArguments(Result);
   return std::all_of(Reads.begin(), Reads.end(), [&](const SummaryRead &Read) {
-    return readAt(Result, Read.Key) == Read;
+    const va_t Key = Read.Key;
+    const auto Same = [Key](const auto &Map, const auto &Value) {
+      const auto Found = Map.find(Key);
+      return Found == Map.end() ? !Value : Value && *Value == Found->second;
+    };
+    return Same(Result.CallMayWriteGPRs, Read.MayWrite) &&
+           Same(Result.CallExitConstants, Read.ExitConstants) &&
+           Same(Result.CallEntryReadGPRs, Read.EntryReads) &&
+           Same(Result.CallUnreadGPRs, Read.Unread) &&
+           Same(StackArgs, Read.StackArgs) &&
+           (StackSlots.count(Key) != 0) == Read.StackSlot &&
+           Same(Counts, Read.ArgumentCount) &&
+           Same(Integer, Read.IntegerArguments) &&
+           Same(Floating, Read.FloatingArguments) &&
+           Same(Variadic, Read.VariadicArguments);
   });
 }
 
