@@ -4393,8 +4393,11 @@ Supplemental callee-signature recovery scopes the same immutable inventories
 and returning-stack memo to its reader. Its omitted-body and warmup paths
 therefore share the ordinary LowIR worker's reuse rules; these records retire
 when that reader ends, independently of any longer-lived signature memo.
-The signature memo lazily retains the image's exact no-return name index as
-well. Supplemental CFGs and their nested register-preservation proofs reuse it;
+The signature memo holds the conversions a session's decompiles read, up to
+`kPipelineCallAbiDetailMaxBytes`, evicting those used longest ago past it: a
+decompile reads up to 256 callees, and a smaller memo evicts the ones the next
+decompiles read again. It lazily retains the image's exact no-return name
+index as well. Supplemental CFGs and their nested register-preservation proofs reuse it;
 indexes with resolver or declaration callbacks stay outside nested proofs to
 avoid re-entry. Readers without an image memo retain the live name lookup.
 The physical C++ prologue reader delays index construction until its bounded

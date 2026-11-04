@@ -251,8 +251,10 @@ struct OmittedCalleeMemo {
   };
   /// The bodies the memo holds at most, counted by their blocks, operations
   /// and external operands (keep): bodies of a large image's every callee hold
-  /// most of its MedIR.  A mid-sized image's signature bodies, an Android
-  /// server's 6000, fit in three quarters of it.
+  /// most of its MedIR.  A session's decompiles read the same callees again,
+  /// so the memo holds what they read rather than evicting it for each one's
+  /// new callees: 600 decompiles of 300 ntoskrnl functions read 3980 callees,
+  /// 1.3 GB, which a cap of 512 MB evicted from the 48th on.
   static constexpr size_t MaxBytes =
       ::neverd::limits::pipeline::kPipelineCallAbiDetailMaxBytes;
   /// Read of \p Img with \p Result's function-pointer variables; starts

@@ -75,7 +75,7 @@ inline constexpr size_t kPipelineCallAbiMinParallelCalleeReads = 2;
 // lib/pipeline/PipelineCallAbiDetail.h
 inline constexpr size_t kPipelineCallAbiDetailMaxProbes = 4;
 inline constexpr size_t kPipelineCallAbiDetailMaxConversions = 4;
-inline constexpr size_t kPipelineCallAbiDetailMaxBytes = size_t{512} << 20;
+inline constexpr size_t kPipelineCallAbiDetailMaxBytes = size_t{2048} << 20;
 
 // lib/pipeline/PipelineFormattedCalls.cpp
 /// The distinct constants a register may hold where paths join, as the scan
