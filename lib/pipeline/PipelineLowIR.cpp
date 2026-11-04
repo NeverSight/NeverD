@@ -22,7 +22,6 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
-#include "neverd/ir/low/GuardedZeroSelect.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/InternalNoReturn.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
@@ -5630,9 +5629,6 @@ void Pipeline::buildLowIR(
       Low.OriginalSize = Low.computedSize();
       Low.SizeFromBlocks = true;
     }
-    // A `bsr` the code reaches only with a nonzero source writes its result:
-    // the kept destination is no read of it.
-    foldGuardedZeroSelects(Low);
 
     Result.LowFuncs.push_back(std::move(Low));
     if (AuditIt != Result.FunctionAudits.end())

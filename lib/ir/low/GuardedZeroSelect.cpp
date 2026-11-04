@@ -8,6 +8,8 @@
 
 #include "neverd/ir/Limits.h"
 
+#include "llvm/ADT/STLExtras.h"
+
 #include <limits>
 #include <map>
 #include <optional>
@@ -109,6 +111,13 @@ std::optional<ZeroTest> zeroTestOf(const LowBlock &Block, size_t End,
 } // namespace
 
 unsigned foldGuardedZeroSelects(LowFunc &F) {
+  // Every build gives its body here: most hold no select to fold.
+  if (llvm::none_of(F.Blocks, [](const LowBlock &Block) {
+        return llvm::any_of(Block.Ops, [](const LowOp &Op) {
+          return Op.Opcode == NdOp::SELECT;
+        });
+      }))
+    return 0;
   std::map<int, size_t> IndexOfId;
   for (size_t I = 0; I < F.Blocks.size(); ++I)
     IndexOfId[F.Blocks[I].Id] = I;

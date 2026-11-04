@@ -26,6 +26,7 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/AArch64ImmediateMemoryImage.h"
+#include "neverd/ir/low/GuardedZeroSelect.h"
 #include "neverd/ir/low/ImportedMemoryCopy.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/lift/ARM/ARMRegs.h"
@@ -1205,10 +1206,17 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   OwnInteriorTailReturns.clear();
   RegistrationCallees.reset();
   X87CallEffects.reset();
+  // A `bsr` the code reaches only with a nonzero source writes its result:
+  // the kept destination is no read of it.  Every body a build gives is
+  // folded so (foldGuardedZeroSelects), the published functions' and those
+  // of the callees whose summaries and signatures a run reads alike: an
+  // unfolded callee would read a register its callers never pass.
   for (;;) {
     LowFunc Func = buildOnce(Img, Dec, EntryAddr, FuncName);
-    if (OwnInteriorCallSites.empty())
+    if (OwnInteriorCallSites.empty()) {
+      foldGuardedZeroSelects(Func);
       return Func;
+    }
     OwnInteriorCallVerdict Verdict = classifyOwnInteriorCalls(Img, Func);
     for (va_t Address : OwnInteriorTailReturns)
       if (!Verdict.TailReturns.count(Address))
@@ -1238,6 +1246,7 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
                               *Verdict.Unproven))
         Func.UnsupportedInstructionAddresses.push_back(*Verdict.Unproven);
     }
+    foldGuardedZeroSelects(Func);
     return Func;
   }
 }

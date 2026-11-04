@@ -7288,6 +7288,10 @@ volatile XMM4/XMM5 keeps the positional contract open.
 (`NeverDWin64CallContractTests`) checks that a routine the image exports,
 whose name binds a prototype, reads the parameters it declares, a system call
 stub's fifth on the stack too, together with any its body reads past them.
+`Win64CallContract.AGuardedBsrCalleeReadsNoDestinationRegister` lifts a callee
+only for its summary: it runs `bsr r8, rcx` only on a nonzero RCX path. Every
+built body folds that select as a published one does, so the summary reads RCX
+and not the R8 its caller never sets.
 
 `NeverDMedStackDeltaTests` isolates the shared entry-stack offset worker and its
 per-recovery root cache. It checks equal and conflicting PHI chains, both query

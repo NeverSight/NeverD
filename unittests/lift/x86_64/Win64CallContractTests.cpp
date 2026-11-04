@@ -5538,6 +5538,35 @@ TEST(Win64CallContract, CallersPassWhatAnExportedRoutinesPrototypeDeclares) {
   EXPECT_EQ(Reads.at(Extra)[family(x86reg::R9)], 8u);
 }
 
+TEST(Win64CallContract, AGuardedBsrCalleeReadsNoDestinationRegister) {
+  // The callee runs `bsr r8, rcx` only where RCX is nonzero, so it always
+  // writes R8 and never reads the old value. The run lifts the callee only
+  // for its summary, and that body is folded like a published one: its
+  // summary reads RCX and not R8, which the caller never sets.
+  constexpr va_t Caller = Text, Callee = Text + 0x20;
+  std::vector<uint8_t> Code(0x40, 0xCC);
+  // sub rsp, 28h; call Callee; add rsp, 28h; ret
+  std::vector<uint8_t> CallerCode = {0x48, 0x83, 0xEC, 0x28, 0xE8};
+  for (uint8_t B : rel32(Caller + CallerCode.size() + 4, Callee))
+    CallerCode.push_back(B);
+  for (uint8_t B : {0x48, 0x83, 0xC4, 0x28, 0xC3})
+    CallerCode.push_back(B);
+  put(Code, Caller, CallerCode);
+  // test rcx, rcx; je zero; bsr r8, rcx; mov rax, r8; ret;
+  // zero: xor eax, eax; ret
+  put(Code, Callee,
+      {0x48, 0x85, 0xC9, 0x74, 0x08, 0x4C, 0x0F, 0xBD, 0xC1, 0x4C, 0x89, 0xC0,
+       0xC3, 0x31, 0xC0, 0xC3});
+  const BinaryImage Img =
+      makeImage(Code, {{Caller, "caller"}, {Callee, "highest_bit"}}, {});
+  llvm::LLVMContext Ctx;
+  const PipelineResult Result = run(Img, Ctx, {Caller});
+  const auto &Reads = Result.CallEntryReadGPRs;
+  ASSERT_TRUE(Reads.count(Callee));
+  EXPECT_EQ(Reads.at(Callee)[family(x86reg::RCX)], 8u);
+  EXPECT_EQ(Reads.at(Callee)[family(x86reg::R8)], 0u);
+}
+
 TEST(Win64CallContract, AnOutgoingArgumentMayReuseAnAddressTakenLocal) {
   constexpr va_t Initialize = Text + 0x80, Consume = Text + 0xA0;
   std::vector<uint8_t> Code(0xC0, 0xCC);
