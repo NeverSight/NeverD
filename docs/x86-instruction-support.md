@@ -197,9 +197,10 @@ The separate [paged V6 binding](x86-paged-execution.md#faultable-selector-mov-an
 authenticates the original MOV/PUSH/POP bytes and owns long-mode descriptor/cache,
 operand-fault, stack-retry and MOV-SS interruptibility semantics as one instruction.
 
-The full LLVM fork accepts i386/x64 code and ELF/COFF/Mach-O; NeverC targets x64.
-Code16 is rejected. Ambient segment/TLS/stack invariants remain the caller's
-responsibility. MOV SS's following machine instruction is compiler-chosen;
+The full LLVM fork accepts protected code16, i386/x64 code and ELF/COFF/Mach-O;
+code16 keeps the 32-bit stack/pointer ABI. NeverC targets x64. Ambient
+segment/TLS/stack invariants remain the caller's responsibility. MOV SS's
+following machine instruction is compiler-chosen;
 separate C calls do not establish an atomic stack switch or preserve original
 instruction-boundary interruptibility.
 
@@ -212,6 +213,18 @@ included. i386 execution, other CPUs, CPL0..2 descriptor faults, #AC, asynchrono
 events and complete original GPR/flags restart state are not certified by this
 native compiler qualification. The separate continuation profiles retain their
 own admission and evidence.
+
+The [November 3 protected qualification](evidence/x86-native-code16-segment-moves-2026-11-03.json)
+adds 19,296 complete state pairs in code16 and another 19,296 in code32 across
+O0/O2 and both core types. The CPL0/CPL3 matrix includes null selectors 0..3,
+descriptor types/privileges/limits, accessed writes, read-only/missing descriptor
+pages, exact two-byte operands, competing alignment/page faults and original
+#NP/#SS/#GP/#PF/#AC frames. Return checks are subsets of these pairs. Each MOV
+is immediately followed by LFENCE on both sides, so comparison occurs after
+MOV-SS inhibition ends. Corrupt pointer/selector transport is rejected. The
+same 12 x64 LLVM/NeverC/combined profiles pass after integrating current NeverC
+dev. This does not qualify events inside MOV-SS inhibition, real/VM86 execution,
+arbitrary segmented C ABIs or a NeverC i386 frontend.
 
 ## Native far-pointer compiler interfaces
 
@@ -3779,7 +3792,9 @@ error-code sets and exception pairing serve both legacy and IA-32e execution.
 This internal execution interface admits the segment instructions plus
 the explicitly bound MOV/arithmetic/logic/stack/near-control scalar subset,
 full/truncated MUL/IMUL, full-dividend DIV/IDIV, NOP, CLI/STI,
-INT/INT3/INTO/INT1, UD2, protected
+CBW/CWDE/CWD/CDQ, LAHF/SAHF, CLC/STC/CMC/CLD/STD, SETcc/CMOVcc,
+LOOP/LOOPcc/JCXZ/JECXZ, INT/INT3/INTO/INT1,
+UD2, protected
 16/32-bit IRET/RETF and Intel SEP SYSENTER/SYSEXIT. It is not a general i386
 source dispatcher. Task/call
 gates, real/VM86, debug-event production, software SMM and SGX execution/AEX/EPCM

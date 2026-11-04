@@ -149,7 +149,9 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// segment-transition owner, the explicit ordinary-RAM scalar owner, or
 /// NOP/CLI/STI/INT/INT3/INTO/INT1/UD2/IRET/RETF. Scalars include
 /// MOV/MOVSX/MOVZX, LEA, ADD/ADC/SUB/SBB/CMP, AND/OR/XOR/TEST, INC/DEC/NEG/NOT,
-/// MUL/IMUL, DIV/IDIV, PUSH/POP and near CALL/JMP/Jcc/RET. Register immediates
+/// MUL/IMUL, DIV/IDIV, CBW/CWDE/CWD/CDQ, LAHF/SAHF, CLC/STC/CMC/CLD/STD,
+/// SETcc/CMOVcc, LOOP/LOOPcc/JCXZ/JECXZ, PUSH/POP and near CALL/JMP/Jcc/RET.
+/// Register immediates
 /// retain their unbound interface; other scalars require Scalars, CALL requires
 /// Calls, and logical flags require an AF choice. Division requires an explicit
 /// arithmetic-flags image and delivers #DE for zero divisors or an

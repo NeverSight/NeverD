@@ -84,6 +84,19 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     F.Destination.Register = R.modRM(F.Source);
     if (F.Source.Register)
       return std::nullopt;
+  } else if (B == 0x98 || B == 0x99) {
+    F.Operation = B == 0x98 ? Op::MoveSigned : Op::SignHigh;
+    F.Source.Register = 0;
+    F.Destination.Register = B == 0x98 ? 0 : 2;
+    if (B == 0x98)
+      F.SourceBytes = F.Bytes / 2;
+  } else if (B == 0x9e || B == 0x9f) {
+    F.Operation = B == 0x9e ? Op::AHToFlags : Op::FlagsToAH;
+  } else if (B == 0xf5 || B == 0xf8 || B == 0xf9 || B == 0xfc || B == 0xfd) {
+    F.Operation = B == 0xf5 ? Op::ComplementFlag
+                  : B & 1   ? Op::SetFlag
+                            : Op::ClearFlag;
+    F.Source.Immediate = B >= 0xfc ? 0x400 : 1;
   } else if (B >= 0x40 && B <= 0x4f) {
     F.Operation = B & 8 ? Op::Decrement : Op::Increment;
     F.Destination.Register = B & 7;
@@ -134,6 +147,11 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     F.Operation = Op::Return;
     if (B == 0xc2)
       F.Discard = R.value(2);
+  } else if (B >= 0xe0 && B <= 0xe3) {
+    F.Operation = B == 0xe3 ? Op::CounterZeroJump : Op::Loop;
+    F.CounterBytes = R.AddressBytes;
+    F.Condition = B & 3;
+    Immediate(1, true);
   } else if (B == 0xe8 || B == 0xe9 || B == 0xeb || (B >= 0x70 && B <= 0x7f)) {
     F.Operation = B == 0xe8   ? Op::Call
                   : B >= 0xe8 ? Op::Jump
@@ -144,7 +162,16 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
               B == 0xeb || B < 0x80 || F.Bytes == 2);
   } else if (B == 0x0f) {
     const uint8_t Extended = R.byte();
-    if (Extended >= 0x80 && Extended <= 0x8f) {
+    if (Extended >= 0x40 && Extended <= 0x4f) {
+      F.Operation = Op::ConditionalMove;
+      F.Condition = Extended & 15;
+      F.Destination.Register = R.modRM(F.Source);
+    } else if (Extended >= 0x90 && Extended <= 0x9f) {
+      F.Operation = Op::SetCondition;
+      F.Condition = Extended & 15;
+      Width(true);
+      R.modRM(F.Destination); // The reg field is ignored for SETcc.
+    } else if (Extended >= 0x80 && Extended <= 0x8f) {
       F.Operation = Op::ConditionalJump;
       F.Condition = Extended & 15;
       F.Relative = true;

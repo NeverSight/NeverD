@@ -25,6 +25,14 @@ namespace neverd::translate::detail {
 enum class X86LegacyScalarOperation {
   Move,
   MoveSigned,
+  ConditionalMove,
+  SetCondition,
+  SignHigh,
+  FlagsToAH,
+  AHToFlags,
+  ClearFlag,
+  SetFlag,
+  ComplementFlag,
   Address,
   Add,
   Or,
@@ -49,6 +57,8 @@ enum class X86LegacyScalarOperation {
   Call,
   Jump,
   ConditionalJump,
+  Loop,
+  CounterZeroJump,
   Return,
 };
 
@@ -61,6 +71,7 @@ struct X86LegacyScalarInstruction {
   X86LegacyScalarOperand Destination, Source;
   std::optional<uint32_t> MultiplyImmediate;
   unsigned Bytes = 4, SourceBytes = 4, Condition = 0;
+  unsigned CounterBytes = 0;
   uint16_t Discard = 0;
   bool Relative = false;
 
