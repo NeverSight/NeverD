@@ -701,11 +701,10 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
               ? std::min(Convention->VolatileVectorFamilies,
                          kX64VectorArgumentFamilies)
               : kX64VectorArgumentFamilies;
-      if (VectorSlots &&
-          std::none_of(R->second.begin() + kX64VectorFamilyBase,
-                       R->second.begin() + kX64VectorFamilyBase +
-                           PassedVectorFamilies,
-                       [](uint8_t Width) { return Width != 0; }))
+      if (VectorSlots && std::none_of(R->second.begin() + kX64VectorFamilyBase,
+                                      R->second.begin() + kX64VectorFamilyBase +
+                                          PassedVectorFamilies,
+                                      [](uint8_t Width) { return Width != 0; }))
         MOp.CalleeVectorArgs = 0;
       // The floating arguments follow, each in the next vector register the
       // callee reads: the whole register, whose value every write reaches,
