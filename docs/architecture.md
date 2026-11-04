@@ -220,6 +220,13 @@ operands before writing either output and retains native divide errors even
 for unused results. Explicit continuation fault delivery remains owned by
 `X64ContinuationDivision.h`, before arithmetic and state publication.
 
+`backend/llvm/X86/LLVMX86BitTest.h` validates the twelve native memory
+bit-string calls before LLVM-to-C uses `render/X86/X86BitTest.h`. Recognition
+rejects weakened memory effects, wrong widths/address spaces and incompatible
+architectures. The renderer evaluates base and signed index once, prefers
+NeverC's native builtin and retains the original full-width instruction as a
+stock-compiler fallback, including unused carry and fault ordering.
+
 `X86DivisionUndefined.h` binds register and memory division to the shared
 legacy ModRM/SIB audit. Operand reads precede the division guard and every
 architectural write; all six arbitrary status bits follow successful division.

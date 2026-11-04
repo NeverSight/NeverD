@@ -19,6 +19,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
+#include "neverd/backend/llvm/X86/LLVMX86BitTest.h"
 #include "neverd/backend/llvm/X86/LLVMX86DivRem.h"
 #include "neverd/backend/llvm/X86/X86APXAtomic.h"
 #include "neverd/backend/llvm/X86/X86RepStateAsm.h"
@@ -1537,6 +1538,7 @@ static int check_fault(void (*operation)(uint64_t,uint64_t,uint64_t,void*),
 #endif
 }
 
+#include "../x86/X86NativeBitTestTests.inc"
 #include "../x86/X86NativeDivisionTests.inc"
 
 TEST(LLVMCValues, NativeAssemblyKeepsOperandSnapshotsAcrossBranches) {

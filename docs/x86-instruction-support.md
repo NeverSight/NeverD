@@ -3848,3 +3848,25 @@ The native oracle covers INT/IRQ/NMI round trips, page-repair/IRET/retry and
 descriptor/frame aliasing; shared return rules keep x64 concrete and source
 execution consistent. This closes the protected legacy return boundary;
 nested-task and VM86 returns still require their separate machine-state owners.
+
+### Native memory bit strings and protected scans
+
+The LLVM fork exposes `llvm.x86.{bt,bts,btr,btc}.mem{16,32,64}`. NeverC
+provides matching `__builtin_ia32_*` APIs and routes Microsoft `_bittest*`
+through native IR. Signed register indices retain preceding/following word
+selection even for constants; unused results retain the original access and
+faults. Machine metadata conservatively aliases unknown memory. Interlocked
+compatibility APIs retain their separate native LOCK operations.
+
+LLVM-to-C validates those contracts and emits the new builtins when available;
+its stock-compiler fallback keeps the same native instruction. The protected
+ordinary-RAM executor separately owns word/dword BT/BTS/BTR/BTC and BSF/BSR,
+including complete operand faults and original repair/IRET/retry. LOCK and
+REP-prefixed count instructions are not silently folded into that profile.
+Compiler code16 checks use LLVM's 32-bit pointer/stack ABI; compiler runtime
+checks cover i386/x64, while NeverC's frontend remains x64-only. None of these
+interfaces supplies a complete architectural flag or asynchronous-event API.
+
+[Qualification evidence](evidence/x86-legacy-bits-2026-11-03.json) records the
+native comparisons, compiler paths, retained diagnostics and open boundaries.
+The global completion and final LLVM release/pin gates remain open.

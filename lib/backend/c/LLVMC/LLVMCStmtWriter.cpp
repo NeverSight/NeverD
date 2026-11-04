@@ -19,6 +19,7 @@
 #include "../render/X86/X86APXAtomic.h"
 #include "../render/X86/X86AmxState.h"
 #include "../render/X86/X86AtomicRmw.h"
+#include "../render/X86/X86BitTest.h"
 #include "../render/X86/X86BoundedLeaf.h"
 #include "../render/X86/X86CompressExpand.h"
 #include "../render/X86/X86DivRem.h"
@@ -4102,6 +4103,15 @@ void LLVMCWriter::writeGEP(llvm::GetElementPtrInst &GEP,
 }
 
 bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
+  if (const auto BitTest = classifyX86BitTestNative(Call, Opts.TheArch)) {
+    emitIndent(Indent);
+    OS << renderX86BitTestCall(
+        *BitTest,
+        {valueStr(Call.getArgOperand(0)), valueStr(Call.getArgOperand(1))},
+        valueFeedsPrintedUse(&Call) ? getName(&Call) : "",
+        {freshVar("bit_base"), freshVar("bit_index"), freshVar("bit_carry")});
+    return true;
+  }
   if (const auto Divide = classifyX86DivRemNative(Call, Opts.TheArch)) {
     emitIndent(Indent);
     OS << renderX86DivRemCall(

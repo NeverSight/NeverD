@@ -145,6 +145,14 @@ SS inputs use their own memory, independently of DS. The shared W^X observer
 allocation and calls live in `X86LegacyScalarNativeObserverFixture.inc`;
 shift-specific encodings remain in `X86LegacyShiftNativeFixture.inc`.
 
+`NeverDLLVMCValueTests --gtest_filter=LLVMCValues.X86BitString*` rejects
+weakened native bit-string declarations and executes all twelve LLVM-to-C
+projections with live/dead results. The original-instruction oracle compares
+CF, all fixture RAM, signed/extreme indices, page-boundary and read-only
+faults, signal address/error and marker order. Set `NEVERD_TEST_NEVERC` to
+qualify the native builtin branch in addition to the stock compiler fallback.
+Run faulting fixtures in the private `/tmp` mount with core dumps disabled.
+
 `LegacyFastSystem/*` in `NeverDX86PagingTests` compares original protected
 SYSENTER/SYSEXIT under legacy paging and PAE, all CPLs, both code and stack
 sizes, nonflat entry, selector wrap, flags, caches and complete restart frames.
