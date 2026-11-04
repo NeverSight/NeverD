@@ -319,12 +319,26 @@ using the same read/modify/write plan and restart handling as arithmetic.
 Input CL is captured before changing any destination, including ECX or CH.
 The producer must supply its chosen undefined image; the executor does not
 infer one from the host. Native tests observe it separately with the same
-count encoding because immediate and CL forms can produce different OF.
+count encoding and register/memory form because either can affect undefined
+OF. Memory observation uses independent scratch storage with the actual input.
 The undocumented group-two `/6` alias remains explicitly refused.
 The shared page walker retains its ordered accessed-bit publication on a
 later permission fault. Exact faulting-walk A/D identity with a particular
 processor is outside this scalar binding's native qualification; successful
 operand A/D updates are compared.
+
+SHLD/SHRD accept word/dword register or memory destinations, a register source
+and imm8/CL counts. `DoubleShiftUndefined` supplies an explicit low-word result
+and arithmetic-flags image. For a masked count from 1 through the operand
+width, only undefined AF and (above one) OF consume that image. Count equal
+to the width remains defined. A masked word count above 16 consumes the
+supplied low-word result and all six arithmetic flags; destination upper bits
+and unrelated flags remain unchanged. A masked count of zero preserves the
+operand and flags but still requires a writable, accessible memory operand.
+The executor never derives an undefined result from a host-specific formula.
+All source, destination and count aliases use their original inputs. These
+operations reuse the staged scalar owner and its original fault/restart path;
+missing or invalid undefined-state bindings refuse before instruction fetch.
 
 CBW/CWDE sign-extend AL/AX into AX/EAX; CWD/CDQ fill DX/EDX from the sign of
 AX/EAX without changing the low half of the dividend. Word operations retain
@@ -450,6 +464,31 @@ Defined bits are calculated independently; only architecturally undefined
 bits use the separately observed image. Successful operand page-table A/D
 effects are compared; exact faulting-walk A/D identity remains outside this
 qualification. Source and binary hashes are verified after all four runs.
+
+The [November 3 double-shift qualification](evidence/x86-legacy-double-shifts-2026-11-03.json)
+records 154,624 SHLD/SHRD CPU comparisons across both SDKs, paging modes and
+P/E cores. All 772 available full-suite checks pass, with two explicit LA57
+skips. Independent arbitrary undefined images and single-bit unit calculations
+distinguish the defined word count 16 from the undefined count 17. Native
+checks cover source/destination/CL aliases, address-base aliases, segmented
+memory, zero-count faults and original page-handler repair/IRET/retry.
+
+A subsequent test-only consolidation shares the actual initial operand and
+matches register versus memory observation, using independent scratch RAM.
+The recorded P core produces different undefined OF for those forms; E does
+not for the reproduced ROL case. The original failures and independent probe
+are retained. All 292 final affected checks pass across both SDKs and cores,
+including all legacy unit checks on each SDK and an added nonflat SS matrix.
+These replays perform 154,624 double-shift and 223,776 single-shift/rotate CPU
+comparisons. Production source and both translate-library archives remain
+identical to the full-suite qualification; final test sources and binaries
+are separately hashed.
+
+The same record checks NeverC's existing x64 Microsoft-compatible
+`__shiftleft128`/`__shiftright128` interfaces at O0/O2: their LLVM funnel-shift
+intrinsics produce native SHLD/SHRD without inline assembly. Those are
+return-value code-generation checks, not a complete flag-state API or a
+general i386 frontend.
 
 ## Protected SYSENTER and SYSEXIT
 

@@ -18,6 +18,7 @@ protected:
   std::optional<X86LegacyCallProfile> Calls;
   std::optional<X86LegacyMultiplyProfile> Multiply;
   std::optional<uint32_t> ShiftUndefinedFlags;
+  std::optional<X86LegacyDoubleShiftUndefinedState> DoubleShiftUndefined;
   bool CheckOperandPageEffects = false;
 
   void SetUp() override {
@@ -219,6 +220,7 @@ protected:
     Options.DivisionArithmeticFlags = Flags & kX86LegacyArithmeticFlagsMask;
     Options.Multiply = Multiply;
     Options.ShiftUndefinedFlags = ShiftUndefinedFlags;
+    Options.DoubleShiftUndefined = DoubleShiftUndefined;
     auto Expected = executeX86LegacyInstruction(State, *Memory, Bytes, Options);
     ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
     if (Case == 12 || Case == 18) {

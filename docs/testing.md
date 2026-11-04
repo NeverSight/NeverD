@@ -114,13 +114,25 @@ original instructions under both paging modes. It covers every byte count,
 all three count encodings, widths, register aliases, segment overrides,
 zero-count memory faults and original page repair/IRET/retry. The producer
 observes only undefined CF/AF/OF choices through a separate host instruction
-with the same count encoding; immediate and CL forms can differ in undefined
-OF. No KVM result or defined flag is fed back into the software executor.
+with the same count encoding and register/memory form; those forms can differ
+in undefined OF. Memory probes use an independent initialized scratch slot.
+No KVM result or defined flag is fed back into the software executor.
 Unit checks vary the undefined image independently and verify that defined
 bits, zero-count preservation and fault rollback cannot be changed by it.
 The native matrix compares successful operand PTE A/D effects. Exact A/D on
 faulting walks retains the separate ordered-walk model; permission faults
 can leave a different accessed-bit image on the recorded hardware.
+
+`LegacyDoubleShifts/*` covers protected SHLD/SHRD at word/dword widths, every
+raw byte count, immediate/CL encodings, all destination/source GPR pairs,
+independent code/address sizes, segments and original fault repair/retry.
+`X86LegacyShiftNativeFixture.inc` owns the separate executable operand probe
+shared with single shifts; it restores host flags and supplies only undefined
+slices. Both observers use the actual initial memory operand; a dedicated
+nonflat SS matrix varies immediate/CL counts while DS and SS have different
+bases. The software unit oracle uses single-bit transfers and independent
+arbitrary images to distinguish count 16 from 17, preserve defined upper words,
+and retain original fault state even at zero or undefined counts.
 
 `LegacyFastSystem/*` in `NeverDX86PagingTests` compares original protected
 SYSENTER/SYSEXIT under legacy paging and PAE, all CPLs, both code and stack

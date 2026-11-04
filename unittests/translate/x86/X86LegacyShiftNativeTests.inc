@@ -7,9 +7,9 @@
 /// Native defined shift/rotate state, explicit undefined flags and faults.
 //===----------------------------------------------------------------------===//
 
-#include "X86LegacyScalarNativeFixture.inc"
+#include "X86LegacyShiftNativeFixture.inc"
 
-class X86LegacyShiftNativeTest : public X86LegacyScalarNativeFixture {
+class X86LegacyShiftNativeTest : public X86LegacyShiftNativeFixture {
 protected:
   struct Input {
     unsigned Group = 4, Width = 4, Form = 2, Count = 1;
@@ -19,53 +19,25 @@ protected:
     uint32_t Value = 0x87654321, Flags = 0xed7;
   };
 
-  static constexpr unsigned kObserverBytes = 4096;
-  uint8_t *Observer = nullptr;
-  std::vector<uint8_t> ObserverCode;
-
-  void SetUp() override {
-    X86LegacyScalarNativeFixture::SetUp();
-    if (HasFatalFailure() || IsSkipped())
-      return;
-    CheckOperandPageEffects = true;
-    Observer = static_cast<uint8_t *>(mmap(nullptr, kObserverBytes,
-                                           PROT_READ | PROT_WRITE,
-                                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
-    ASSERT_NE(Observer, MAP_FAILED);
-  }
-
-  void TearDown() override {
-    if (Observer && Observer != MAP_FAILED)
-      EXPECT_EQ(munmap(Observer, kObserverBytes), 0);
-    X86LegacyScalarNativeFixture::TearDown();
-  }
-
   // Supply only architecturally undefined CF/AF/OF bits from an independent
   // host instruction. No KVM result, defined flags, RAM or fault is fed back.
   void bindUndefinedFlags(const Input &I, uint32_t Value, unsigned Count) {
-    // SysV inputs: EDI=value, ESI=count, RDX=arithmetic flags. Save/restore
-    // host flags around the original register opcode. Immediate and CL forms
-    // can produce different undefined OF even with identical input values.
-    std::vector<uint8_t> Bytes{0x9c, 0x89, 0xf8, 0x89, 0xf1, 0x52, 0x9d};
+    std::vector<uint8_t> Bytes;
     if (I.Width == 2)
       Bytes.push_back(0x66);
     const uint8_t Opcode = I.Form == 0 ? 0xd0 : I.Form == 1 ? 0xc0 : 0xd2;
-    Bytes.insert(Bytes.end(), {uint8_t(Opcode + (I.Width != 1)),
-                               uint8_t(0xc0 | I.Group << 3)});
+    Bytes.insert(Bytes.end(),
+                 {uint8_t(Opcode + (I.Width != 1)),
+                  uint8_t((I.Register < 0 ? 4 : 0xc0) | I.Group << 3)});
+    if (I.Register < 0)
+      Bytes.push_back(0x24); // Independent [RSP] memory operand.
     if (I.Form == 1)
       Bytes.push_back(I.Count);
-    Bytes.insert(Bytes.end(), {0x9c, 0x58, 0x9d, 0xc3});
-    if (Bytes != ObserverCode) {
-      ASSERT_EQ(mprotect(Observer, kObserverBytes, PROT_READ | PROT_WRITE), 0);
-      std::copy(Bytes.begin(), Bytes.end(), Observer);
-      ASSERT_EQ(mprotect(Observer, kObserverBytes, PROT_READ | PROT_EXEC), 0);
-      ObserverCode = Bytes;
-    }
-    using Probe = uint64_t (*)(uint32_t, unsigned, uint64_t);
+    uint64_t Observed;
+    ASSERT_NO_FATAL_FAILURE(
+        observe(Bytes, Value, 0, Count, I.Flags, I.Register < 0, Observed));
     ShiftUndefinedFlags =
-        reinterpret_cast<Probe>(Observer)(
-            Value, Count, (I.Flags & kX86LegacyArithmeticFlagsMask) | 2) &
-        kX86LegacyShiftUndefinedFlagsMask;
+        uint32_t(Observed >> 32) & kX86LegacyShiftUndefinedFlagsMask;
   }
 
   void check(const Input &I) {
@@ -96,8 +68,10 @@ protected:
     const unsigned Count = I.Form == 0   ? 1
                            : I.Form == 1 ? I.Count
                                          : uint8_t(Registers[1]);
-    const uint32_t Value =
-        I.Width == 1 && I.Register >= 4 ? I.Value >> 8 : I.Value;
+    const uint32_t Value = I.Register < 0
+                               ? memoryInputValue(I.Case, I.Prefix, I.Value)
+                           : I.Width == 1 && I.Register >= 4 ? I.Value >> 8
+                                                             : I.Value;
     ASSERT_NO_FATAL_FAILURE(bindUndefinedFlags(I, Value, Count));
     ASSERT_NO_FATAL_FAILURE(compare(Bytes, I.Code32, true, I.CPL, I.Case,
                                     I.Value, I.Count, I.Flags, 0x4000,
@@ -197,6 +171,25 @@ TEST_P(X86LegacyShiftNativeTest, SegmentOverridesAndOriginalPageRepair) {
                                              .Case = Case,
                                              .Prefix = Prefix}));
             }
+  RecordProperty("cpu_comparisons", Comparisons);
+}
+
+TEST_P(X86LegacyShiftNativeTest, NonflatSSUsesItsOwnOriginalInput) {
+  for (bool Code32 : {false, true})
+    for (bool Address32 : {false, true})
+      for (unsigned Width : {1u, 2u, 4u})
+        for (unsigned Group : {0u, 1u, 2u, 3u, 4u, 5u, 7u})
+          for (unsigned Form : {1u, 2u})
+            for (unsigned Count : {2u, 8u, 17u, 31u})
+              ASSERT_NO_FATAL_FAILURE(check({.Group = Group,
+                                             .Width = Width,
+                                             .Form = Form,
+                                             .Count = Count,
+                                             .Code32 = Code32,
+                                             .Address32 = Address32,
+                                             .Register = -1,
+                                             .Case = 3,
+                                             .Prefix = 0x36}));
   RecordProperty("cpu_comparisons", Comparisons);
 }
 

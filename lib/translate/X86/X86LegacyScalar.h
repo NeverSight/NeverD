@@ -56,6 +56,8 @@ enum class X86LegacyScalarOperation {
   RotateRight,
   RotateCarryLeft,
   RotateCarryRight,
+  DoubleShiftLeft,
+  DoubleShiftRight,
   Divide,
   SignedDivide,
   Multiply,
@@ -80,6 +82,7 @@ struct X86LegacyScalarInstruction {
   X86LegacyScalarOperation Operation = X86LegacyScalarOperation::Move;
   X86LegacyScalarOperand Destination, Source;
   std::optional<uint32_t> MultiplyImmediate;
+  std::optional<uint8_t> ShiftImmediate;
   unsigned Bytes = 4, SourceBytes = 4, Condition = 0;
   unsigned CounterBytes = 0;
   uint16_t Discard = 0;
@@ -109,6 +112,11 @@ struct X86LegacyScalarInstruction {
            Operation == Op::SignedShiftRight || Operation == Op::RotateLeft ||
            Operation == Op::RotateRight || Operation == Op::RotateCarryLeft ||
            Operation == Op::RotateCarryRight;
+  }
+
+  bool doubleShifting() const {
+    return Operation == X86LegacyScalarOperation::DoubleShiftLeft ||
+           Operation == X86LegacyScalarOperation::DoubleShiftRight;
   }
 };
 

@@ -62,6 +62,10 @@ Single shifts and rotates use the same operand/store owner. Their masked
 count is captured before destination publication, including CL/CH aliases.
 Undefined CF/AF/OF choices are explicit executor inputs; result bits and
 defined flags remain owned by `X86LegacyScalarExecution`.
+SHLD/SHRD capture their register source and CL before writing any destination.
+Their explicit undefined-state input supplies only AF/OF for in-range counts,
+or the low-word result and arithmetic flags for masked word counts above 16.
+The shared prepared-store owner retains zero-count and undefined-count faults.
 Segment permissions and page walks remain in their existing owners. A scalar
 read/modify/write prepares write permission once, reads those exact physical
 fragments through `X86PagedMemory::loadPreparedStore`, and commits the final

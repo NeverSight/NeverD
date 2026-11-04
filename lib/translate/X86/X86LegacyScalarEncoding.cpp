@@ -207,6 +207,12 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
       F.Condition = Extended & 15;
       F.Relative = true;
       Immediate(F.Bytes, F.Bytes == 2);
+    } else if (Extended == 0xa4 || Extended == 0xa5 || Extended == 0xac ||
+               Extended == 0xad) {
+      F.Operation = Extended & 8 ? Op::DoubleShiftRight : Op::DoubleShiftLeft;
+      F.Source.Register = R.modRM(F.Destination);
+      if (!(Extended & 1))
+        F.ShiftImmediate = R.byte();
     } else if (Extended == 0xaf) {
       F.Operation = Op::SignedMultiplyLow;
       F.Destination.Register = R.modRM(F.Source);

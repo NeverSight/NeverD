@@ -76,6 +76,14 @@ enum class X86LegacyScalarProfile : uint8_t { OrderedRAM };
 inline constexpr uint32_t kX86LegacyArithmeticFlagsMask = 0x8d5;
 inline constexpr uint32_t kX86LegacyShiftUndefinedFlagsMask = 0x811;
 
+/// SHLD/SHRD consume Result and all arithmetic Flags only for a word count
+/// above 16 after masking. Otherwise only undefined AF/OF consume Flags;
+/// a zero count preserves the complete operand and flags.
+struct X86LegacyDoubleShiftUndefinedState {
+  uint16_t Result = 0;
+  uint32_t Flags = 0;
+};
+
 /// Explicit successful MUL/IMUL undefined-flag choices. Both clear AF and
 /// derive SF/PF from the low product. ProductSignParity clears ZF;
 /// ProductSignParityZero derives it from the low product. CF/OF always follow
@@ -118,6 +126,9 @@ struct X86LegacyExecutionOptions {
   /// flags and zero-count preservation never consume these bits. No other
   /// bits are permitted; faults retain all original flags.
   std::optional<uint32_t> ShiftUndefinedFlags;
+  /// Required for SHLD/SHRD. Flags may contain only arithmetic flag bits.
+  /// Faults retain the original operand and flags; no host policy is inferred.
+  std::optional<X86LegacyDoubleShiftUndefinedState> DoubleShiftUndefined;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -156,7 +167,7 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// MOV/MOVSX/MOVZX, LEA, ADD/ADC/SUB/SBB/CMP, AND/OR/XOR/TEST, INC/DEC/NEG/NOT,
 /// MUL/IMUL, DIV/IDIV, CBW/CWDE/CWD/CDQ, LAHF/SAHF, CLC/STC/CMC/CLD/STD,
 /// BSWAP (dword), XLAT, LEAVE, SETcc/CMOVcc, LOOP/LOOPcc/JCXZ/JECXZ,
-/// SHL/SAL/SHR/SAR, ROL/ROR/RCL/RCR,
+/// SHL/SAL/SHR/SAR, ROL/ROR/RCL/RCR, SHLD/SHRD,
 /// PUSH/POP and near CALL/JMP/Jcc/RET.
 /// Register immediates
 /// retain their unbound interface; other scalars require Scalars, CALL requires
@@ -166,6 +177,9 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// flags profile and retains architectural CF/OF for full/truncated products.
 /// Shifts and rotates require explicit undefined CF/AF/OF choices; defined
 /// result/flag bits follow the masked count and independent operand width.
+/// Double shifts use DoubleShiftUndefined: only a word count above 16 consumes
+/// its result and full arithmetic-flags image; other counts retain all defined
+/// bits. Count zero still checks a memory destination's write permissions.
 /// The explicit FastSystem profile adds protected
 /// SYSENTER/SYSEXIT with live Sysenter inputs and fixed CS/SS caches. Ignored
 /// prefixes retain 32-bit targets; LOCK delivers #UD after original-byte fetch.

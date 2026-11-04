@@ -127,6 +127,10 @@ public:
       shift(F);
       return;
     }
+    if (F.doubleShifting()) {
+      doubleShift(F);
+      return;
+    }
     if (F.Operation == Op::Push) {
       if (!read(F.Source, N, B))
         return;
@@ -229,6 +233,34 @@ private:
   X86MemoryAccessResult Result;
   std::optional<llvm::Error> Failure;
   std::optional<X86PagedMemory::PreparedStore> Store;
+
+  void doubleShift(const X86LegacyScalarInstruction &F) {
+    const unsigned Count = F.ShiftImmediate.value_or(S.Core.GPR[1]) & 31;
+    uint32_t A, B;
+    if (!read(F.Source, F.Bytes, B) || !read(F.Destination, F.Bytes, A, true))
+      return;
+    const unsigned Bits = F.Bytes * 8;
+    const uint32_t Mask = UINT32_MAX >> (32 - Bits);
+    const uint32_t Sign = (Mask >> 1) + 1;
+    uint32_t Value = A, Flags = S.EFlags & kX86LegacyArithmeticFlagsMask;
+    if (Count > Bits) {
+      Value = O.DoubleShiftUndefined->Result;
+      Flags = O.DoubleShiftUndefined->Flags;
+    } else if (Count) {
+      const bool Left = F.Operation == Op::DoubleShiftLeft;
+      const uint64_t Pair =
+          Left ? (uint64_t(A) << Bits) | B : (uint64_t(B) << Bits) | A;
+      Value = (Pair >> (Left ? Bits - Count : Count)) & Mask;
+      const bool Carry = (A >> (Left ? Bits - Count : Count - 1)) & 1;
+      Flags = unsigned(Carry) | (!(std::popcount(uint8_t(Value)) & 1) ? 4 : 0) |
+              (O.DoubleShiftUndefined->Flags & 16) | (!Value ? 64 : 0) |
+              (Value & Sign ? 128 : 0) |
+              (Count == 1 ? ((A ^ Value) & Sign ? 0x800 : 0)
+                          : O.DoubleShiftUndefined->Flags & 0x800);
+    }
+    if (write(F.Destination, F.Bytes, Value))
+      S.EFlags = (S.EFlags & ~kX86LegacyArithmeticFlagsMask) | Flags;
+  }
 
   void shift(const X86LegacyScalarInstruction &F) {
     uint32_t Count, Value;
