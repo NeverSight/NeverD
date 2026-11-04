@@ -35,11 +35,13 @@
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
+#include "neverd/loader/FunctionNames.h"
 #include "neverd/loader/ReadOnlyBytesScope.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -207,6 +209,7 @@ void OmittedCalleeMemo::adopt(const BinaryImage &Img,
   FunctionEntries = calleeLiftEntries(Img);
   PointerCallees = collectPointerVariableCallees(Img);
   CodeOwners.reset();
+  FunctionNames.reset();
   AbsoluteRelocationRoots.reset();
   NoReturnTargets.reset();
   RuntimeRoutineCalls.reset();
@@ -219,6 +222,16 @@ const ExecutableCodeOwnerIndex &OmittedCalleeMemo::codeOwners() {
   if (!CodeOwners)
     CodeOwners.emplace(*Image);
   return *CodeOwners;
+}
+
+const std::map<va_t, std::string> &OmittedCalleeMemo::functionNames() {
+  if (!FunctionNames || NamedExports != Image->Exports.data() ||
+      NamedExportCount != Image->Exports.size()) {
+    FunctionNames = imageFunctionNames(*Image);
+    NamedExports = Image->Exports.data();
+    NamedExportCount = Image->Exports.size();
+  }
+  return *FunctionNames;
 }
 
 const detail::AbsoluteRelocationRootIndex &
@@ -602,6 +615,7 @@ public:
     if (!Memo)
       OwnEntries = calleeLiftEntries(Img);
     Entries = Memo ? &Memo->functionEntries() : &OwnEntries;
+    Names = Memo ? &Memo->functionNames() : nullptr;
     Builder.setKnownFuncEntries(Entries);
     // The callees' builds prove each x87 call effect from the same callee
     // graphs: build each once.  A 32-bit printf engine in a call cycle with
@@ -635,6 +649,16 @@ public:
                                     OmittedCalleeMemo::Callee &Local) {
     return Memo ? *Memo->find(Target) : Local;
   }
+  /// The name \p Target's lift takes, as getFunctionNameAt gives it: from
+  /// the memo's index where the read keeps one, which read-ahead workers
+  /// share.
+  std::string nameOf(va_t Target) const {
+    if (!Names)
+      return Img.getFunctionNameAt(Target);
+    if (const auto Found = Names->find(Target); Found != Names->end())
+      return Found->second;
+    return (kAutoFuncPrefix + llvm::utohexstr(Target)).str();
+  }
   /// Lifts \p Target into \p Low, once.
   const LowFunc &lift(va_t Target, std::optional<LowFunc> &Low) {
     if (!Low) {
@@ -642,8 +666,8 @@ public:
       // in one index each: the memo's, or ones built for the first lift of
       // this read.
       lendIndexes();
-      Low.emplace(Builder.buildCallSignatureProof(
-          Img, Dec, Target, Img.getFunctionNameAt(Target)));
+      Low.emplace(
+          Builder.buildCallSignatureProof(Img, Dec, Target, nameOf(Target)));
     }
     return *Low;
   }
@@ -755,7 +779,7 @@ public:
             Ahead &Out = Computed[Item.Position];
             try {
               const LowFunc Lifted = WorkerBuilder.buildCallSignatureProof(
-                  Img, WorkerDec, Target, Img.getFunctionNameAt(Target));
+                  Img, WorkerDec, Target, nameOf(Target));
               auto Ops = blockOps(Lifted);
               // A held lift has block sizes; a needed one has them here.
               const bool Converts =
@@ -965,6 +989,8 @@ private:
   RegistrationLeafPrefixMemoScope LeafPrefixScope;
   std::set<va_t> OwnEntries;
   const std::set<va_t> *Entries = nullptr;
+  /// The memo's function names (OmittedCalleeMemo::functionNames), or null.
+  const std::map<va_t, std::string> *Names = nullptr;
   Decoder Dec;
   std::optional<ExecutableCodeOwnerIndex> Owners;
   std::optional<detail::AbsoluteRelocationRootIndex> RelocationRoots;

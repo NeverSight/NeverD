@@ -295,6 +295,11 @@ struct OmittedCalleeMemo {
   /// cache's, the index serves until the memo adopts another image or the
   /// cache is reset.
   const ExecutableCodeOwnerIndex &codeOwners();
+  /// The name of the function at each address an export or a symbol of the
+  /// image the memo adopted names (imageFunctionNames), which the callee
+  /// lifts take: getFunctionNameAt scans every export and symbol for each.
+  /// Kept like codeOwners, and read again where the exports changed.
+  const std::map<va_t, std::string> &functionNames();
   /// The absolute relocations of the image the memo adopted, indexed by
   /// target for the lifts of the callees read of it, kept like codeOwners.
   const detail::AbsoluteRelocationRootIndex &absoluteRelocationRoots();
@@ -320,6 +325,9 @@ private:
   std::set<va_t> FunctionEntries;
   std::map<va_t, PointerVariableCallee> PointerCallees;
   std::optional<ExecutableCodeOwnerIndex> CodeOwners;
+  std::optional<std::map<va_t, std::string>> FunctionNames;
+  const Export *NamedExports = nullptr;
+  size_t NamedExportCount = 0;
   std::shared_ptr<const detail::AbsoluteRelocationRootIndex>
       AbsoluteRelocationRoots;
   std::shared_ptr<const libc::NoReturnTargetIndex> NoReturnTargets;

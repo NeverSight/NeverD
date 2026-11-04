@@ -4874,14 +4874,8 @@ bool PipelineAnalysisCache::SymbolInventory::readFrom(
 const std::map<va_t, std::string> &
 PipelineAnalysisCache::SymbolInventory::functionNames(
     const BinaryImage &Img) const {
-  if (!FunctionNames) {
-    std::set<va_t> Named;
-    for (const Export &Exp : Img.Exports)
-      Named.insert(Exp.Addr);
-    for (const Symbol &Sym : Img.Symbols)
-      Named.insert(Sym.Addr);
-    FunctionNames = functionNamesAt(Img, Named);
-  }
+  if (!FunctionNames)
+    FunctionNames = imageFunctionNames(Img);
   return *FunctionNames;
 }
 
