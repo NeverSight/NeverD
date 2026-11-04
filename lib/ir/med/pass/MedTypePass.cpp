@@ -560,15 +560,145 @@ declaredFloatCallBytes(const MedOp &Op, const TargetRegInfo &TRI,
 /// inside a PHI cycle can otherwise hide an undefined arm from a later return.
 /// Arithmetic and loads retain their ordinary result widths; this tracks
 /// incoming and call-clobbered bytes, not general value/poison analysis.
+///
+/// A value's answer reads only the values it is computed from, so a query
+/// solves just those its answer reaches that no earlier query solved: the
+/// greatest fixed point of such a closed set is the whole function's there.
 class DefinedLowBytes {
   using Key = std::pair<int, int>;
   const MedFunc &Func;
   const std::map<Key, const MedOp *> &Defs;
   const std::map<Key, const PhiNode *> &Phis;
+  /// Each value's last clobber, which evaluate reads.
   std::map<Key, const MedCallClobber *> Clobbers;
-  std::map<Key, uint16_t> Bytes;
+  /// The values earlier queries solved.
+  mutable std::map<Key, uint16_t> Bytes;
+  /// The values being solved, and those a step of that solve read that it
+  /// does not hold (solve).
+  mutable std::map<Key, uint16_t> *Solving = nullptr;
+  mutable std::set<Key> *Unsolved = nullptr;
   const TargetRegInfo &TRI;
   const std::map<va_t, uint16_t> *FloatReturns;
+
+  /// The value \p K names in the solve: its last clobber's, else its PHI's,
+  /// else its definition's output; null where none defines it.
+  const MedVar *valueOf(const Key &K) const {
+    if (const auto C = Clobbers.find(K); C != Clobbers.end())
+      return &C->second->Value;
+    if (const auto P = Phis.find(K); P != Phis.end())
+      return &P->second->Output;
+    if (const auto D = Defs.find(K); D != Defs.end())
+      return &D->second->Output;
+    return nullptr;
+  }
+
+  /// Calls \p Each with every value \p K's answer reads (evaluate): its
+  /// last clobber's preserved input, else its PHI's arguments, else the
+  /// inputs of the view or merge that defines it and the wide value behind
+  /// an OR's AND mask.  Other definitions keep their width without a read.
+  template <typename EachFn>
+  void forEachInput(const Key &K, EachFn Each) const {
+    const auto Input = [&](const MedVar &V) {
+      if (!V.isConst() && V.Kind != MedVar::Unspecified)
+        Each(Key{V.Id, V.SSAVer});
+    };
+    if (const auto C = Clobbers.find(K); C != Clobbers.end()) {
+      Input(C->second->PreservedInput);
+      return;
+    }
+    if (const auto P = Phis.find(K); P != Phis.end()) {
+      for (const auto &[Pred, Arg] : P->second->Args)
+        Input(Arg);
+      if (P->second->ExceptionalEntry)
+        Input(*P->second->ExceptionalEntry);
+      return;
+    }
+    const auto D = Defs.find(K);
+    if (D == Defs.end())
+      return;
+    const MedOp &Op = *D->second;
+    switch (Op.Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+    case NdOp::SUBBYTES:
+      if (Op.NumInputs)
+        Input(Op.Inputs[0]);
+      break;
+    case NdOp::CONCAT:
+    case NdOp::SELECT:
+      for (uint8_t I = 0; I != Op.NumInputs; ++I)
+        Input(Op.Inputs[I]);
+      break;
+    case NdOp::INT_OR:
+      for (uint8_t I = 0; I != Op.NumInputs; ++I)
+        Input(Op.Inputs[I]);
+      // A partial register write observes the original wide value behind
+      // its AND mask (definedMergedLowBytes).
+      if (Op.NumInputs == 2)
+        for (const MedVar &Masked : {Op.Inputs[0], Op.Inputs[1]})
+          if (!Masked.isConst())
+            if (const auto Mask = Defs.find({Masked.Id, Masked.SSAVer});
+                Mask != Defs.end() && Mask->second->Opcode == NdOp::INT_AND &&
+                Mask->second->NumInputs == 2)
+              Input(Mask->second->Inputs[0]);
+      break;
+    default:
+      break;
+    }
+  }
+
+  /// Solves \p Root and the values its answer reads that no earlier query
+  /// solved, each from its full width to the fixed point.  A read outside
+  /// that set joins it, and the set is solved again from full widths.
+  void solve(const Key &Root) const {
+    std::set<Key> Members;
+    const auto Widen = [&](std::vector<Key> Stack) {
+      while (!Stack.empty()) {
+        const Key K = Stack.back();
+        Stack.pop_back();
+        if (Bytes.count(K) || !valueOf(K) || !Members.insert(K).second)
+          continue;
+        forEachInput(K, [&](const Key &Input) { Stack.push_back(Input); });
+      }
+    };
+    Widen({Root});
+    while (!Members.empty()) {
+      std::map<Key, uint16_t> Current;
+      std::map<Key, std::vector<Key>> Users;
+      for (const Key &K : Members) {
+        Current[K] = valueOf(K)->Size;
+        forEachInput(K, [&](const Key &Input) {
+          if (Members.count(Input))
+            Users[Input].push_back(K);
+        });
+      }
+      std::set<Key> Read;
+      Solving = &Current;
+      Unsolved = &Read;
+      std::deque<Key> Work(Members.begin(), Members.end());
+      std::set<Key> Pending = Members;
+      while (!Work.empty()) {
+        const Key K = Work.front();
+        Work.pop_front();
+        Pending.erase(K);
+        const uint16_t Next = evaluate(*valueOf(K));
+        if (Next >= Current.at(K))
+          continue;
+        Current[K] = Next;
+        if (const auto U = Users.find(K); U != Users.end())
+          for (const Key &User : U->second)
+            if (Pending.insert(User).second)
+              Work.push_back(User);
+      }
+      Solving = nullptr;
+      Unsolved = nullptr;
+      if (Read.empty()) {
+        Bytes.merge(Current);
+        return;
+      }
+      Widen(std::vector<Key>(Read.begin(), Read.end()));
+    }
+  }
 
   uint16_t evaluate(const MedVar &Value) const {
     const Key K{Value.Id, Value.SSAVer};
@@ -625,63 +755,8 @@ public:
                   const std::map<va_t, uint16_t> *FloatReturns)
       : Func(Func), Defs(Defs), Phis(Phis), TRI(TRI),
         FloatReturns(FloatReturns) {
-    std::map<Key, MedVar> Values;
-    std::map<Key, std::vector<Key>> Users;
-    const auto Add = [&](const MedVar &V) {
-      const Key K{V.Id, V.SSAVer};
-      Values[K] = V;
-      Bytes[K] = V.Size;
-    };
-    const auto Use = [&](const MedVar &Output, const MedVar &Input) {
-      if (!Input.isConst() && Input.Kind != MedVar::Unspecified)
-        Users[{Input.Id, Input.SSAVer}].push_back({Output.Id, Output.SSAVer});
-    };
-    for (const auto &[K, Op] : Defs) {
-      Add(Op->Output);
-      for (uint8_t I = 0; I != Op->NumInputs; ++I)
-        Use(Op->Output, Op->Inputs[I]);
-      // A partial register write observes the original wide value behind
-      // its AND mask, whose ordinary arithmetic width is itself complete.
-      if (Op->Opcode == NdOp::INT_OR && Op->NumInputs == 2)
-        for (const MedVar &Input : {Op->Inputs[0], Op->Inputs[1]})
-          if (!Input.isConst())
-            if (const auto Mask = Defs.find({Input.Id, Input.SSAVer});
-                Mask != Defs.end() && Mask->second->Opcode == NdOp::INT_AND &&
-                Mask->second->NumInputs == 2)
-              Use(Op->Output, Mask->second->Inputs[0]);
-    }
-    for (const auto &[K, Phi] : Phis) {
-      Add(Phi->Output);
-      for (const auto &[Pred, Input] : Phi->Args)
-        Use(Phi->Output, Input);
-      if (Phi->ExceptionalEntry)
-        Use(Phi->Output, *Phi->ExceptionalEntry);
-    }
-    for (const MedCallClobber &Clobber : Func.CallClobbers) {
+    for (const MedCallClobber &Clobber : Func.CallClobbers)
       Clobbers[{Clobber.Value.Id, Clobber.Value.SSAVer}] = &Clobber;
-      Add(Clobber.Value);
-      if (Clobber.PreservedPrefixSize)
-        Use(Clobber.Value, Clobber.PreservedInput);
-    }
-    std::deque<Key> Work;
-    std::set<Key> Pending;
-    for (const auto &[K, V] : Values) {
-      Work.push_back(K);
-      Pending.insert(K);
-    }
-    while (!Work.empty()) {
-      const Key K = Work.front();
-      Work.pop_front();
-      Pending.erase(K);
-      const uint16_t Next = evaluate(Values.at(K));
-      if (Next >= Bytes.at(K))
-        continue;
-      Bytes[K] = Next;
-      if (const auto U = Users.find(K); U != Users.end())
-        for (const Key &User : U->second)
-          if (Pending.insert(User).second)
-            Work.push_back(User);
-    }
   }
 
   uint16_t operator()(const MedVar &V) const {
@@ -700,6 +775,19 @@ public:
       if (Op == Defs.end() || EntryCopy)
         return parameterRegisterPrefix(Func, V);
     }
+    if (const auto It = Bytes.find(K); It != Bytes.end())
+      return std::min(V.Size, It->second);
+    if (Solving) {
+      if (const auto It = Solving->find(K); It != Solving->end())
+        return std::min(V.Size, It->second);
+      // A value the solve does not hold yet: it joins the set (solve).
+      if (valueOf(K))
+        Unsolved->insert(K);
+      return 0;
+    }
+    if (!valueOf(K))
+      return 0;
+    solve(K);
     const auto It = Bytes.find(K);
     return It == Bytes.end() ? 0 : std::min(V.Size, It->second);
   }
