@@ -1,0 +1,1042 @@
+{
+  "schema": 1,
+  "date": "2026-11-03",
+  "status": "qualified",
+  "global_goal_complete": false,
+  "scope": "Full LLVM native segment MOV in protected code16 with a 32-bit stack/pointer ABI; code32 and x64 LLVM/NeverC/combined compiler profiles are regressions. No NeverC i386 frontend is enabled.",
+  "commits": {
+    "llvm": "94c555d27cf861954930472602f8b5cde9f54199",
+    "neverc": "1f3a071bda81b488fa4b741cb1569b2ece464eb4"
+  },
+  "tested_source_inputs": {
+    "llvm": {
+      "base": "c560029f9473fe4832f1416bda82d65be7141f51",
+      "files": {
+        "llvm/include/llvm/IR/IntrinsicsX86.td": "476555f9ec84f4149d374a50e586017ad64da3c52a60dfe29b8e43c8932b384b",
+        "llvm/lib/Target/X86/X86ISelLowering.cpp": "2418bc1867a117dd92813af9e082231f656852b1a6b51d10ac606c6b6cebcb7e",
+        "llvm/test/CodeGen/X86/segment-move-intrinsics.ll": "af7d5c9e32136aeda71a991d96e6dd9f62c0ee653828396da38bcf3fc484c64f"
+      }
+    },
+    "neverc": {
+      "base": "c41fa3d348abaea9f1c36cdaf047ce5ca75e1112",
+      "files": {
+        "tests/neverc/X86/protected_segment_move_kvm.c": "1d7a0d87c2f3fa9628677ca7c8fe7d691dcf2caaba9e2dfad2955ba61e6b37c7",
+        "tests/neverc/X86/verify_protected_segment_moves.py": "a28b2d70191e96da3989a03b6a4912f6fdfa65dfd1d79786b5e7f83ae6ddb0a5",
+        "tests/neverc/X86/KvmProtectedFaultFixture.h": "6e90efb197081399e7588af4b8892ac09989634cea53bc697243da2993dd32eb",
+        "tests/neverc/X86/KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+        "tests/neverc/X86/verify_segment_moves.py": "04f9692d262e3a398d11f1d0a91481adb8067e2f3edd2ef9cc5ccd3bacf0ef9f",
+        "tests/neverc/X86/segment_move_harness.c": "9725b4fcb666c5c6a235c081c220e56c9e114dd3bf851fd7949727a5421111fa",
+        "tests/neverc/X86/native_qualification.py": "ba9010b38658bd134a88977643ed1c321db2739596ccb4f4b72855398278c177"
+      }
+    }
+  },
+  "source_basis": "Retained patches/source snapshots and base commits identify the executable inputs. Source/binary hashes were checked after the native runs and commit. Current NeverC dev was integrated, rebuilt and its x64/frontend/backend checks repeated.",
+  "neverc_integration": {
+    "commit": "1f3a071bda81b488fa4b741cb1569b2ece464eb4",
+    "upstream": "83ffccf21",
+    "built_targets": [
+      "neverc",
+      "neverc-tests",
+      "neverc-x86-backend-tests"
+    ],
+    "binary_sha256": {
+      "neverc": "a8439a7d11d9f8dfb4c3cd5d2fa350b24e7dfa10c5e3fc3422b9d4b32613286b",
+      "neverc-tests": "1c5526bde82ef5f6102b03abcdd200e97c492fa044122e65c1460a96da8f3ae1",
+      "neverc-x86-backend-tests": "cb33f9b2de8ab77491bb7b71d834aa60fd4bcc7e96659ff6ba0f3444528f831e"
+    },
+    "stable_binaries": true,
+    "runs": [
+      {
+        "cpu": "0",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-code16-segment-move-20261103/integration/tmp-0",
+          "taskset",
+          "-c",
+          "0",
+          "python3",
+          "tests/neverc/X86/verify_segment_moves.py",
+          "--llc",
+          "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin/llc",
+          "--opt",
+          "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin/opt",
+          "--neverc",
+          "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "--clang",
+          "${CLANG}",
+          "--output-dir",
+          "/mnt/data/neverd-code16-segment-move-20261103/integration/x64-0"
+        ],
+        "exit_code": 0,
+        "qualification": {
+          "passed": true,
+          "profiles": [
+            {
+              "profile": "llc-O0",
+              "state_observations": 2304,
+              "boundary_observations": 22,
+              "fault_observations": 124,
+              "object_sha256": "a6a29def3a8bd8d38ec412d8e69497db5ec8da616cef240ae244f9be5efa9f55",
+              "binary_sha256": "bafe03349a3eba5ca0305936010935b9897a3dc5a91bcc5756f6eda4d6ccebc9"
+            },
+            {
+              "profile": "llc-O2",
+              "state_observations": 2304,
+              "boundary_observations": 22,
+              "fault_observations": 124,
+              "object_sha256": "08afc93dea99a39abc2d7288a474a809def185b864323c2ab9934acf393f4c02",
+              "binary_sha256": "5e92bf6854f1212f3aa6a4c57e184b57a13a8d7970a88af0bd4c3b74b026fdfb"
+            },
+            {
+              "profile": "neverc-O0",
+              "state_observations": 2304,
+              "boundary_observations": 22,
+              "fault_observations": 124,
+              "object_sha256": "06865aceecd9aa22a535bcc1f31e8fab32c122cfd5a4252d6a1fda07e1c26bf6",
+              "binary_sha256": "9504d5afe1f5f21e47a68c34dfef467b7e3f670fba21cf388328e6dc4edd136c"
+            },
+            {
+              "profile": "neverc-O2",
+              "state_observations": 2304,
+              "boundary_observations": 22,
+              "fault_observations": 124,
+              "object_sha256": "4bce94c3928851dfe73135a212596f894ca6591bc515495d9b78525ad611f65b",
+              "binary_sha256": "26cdd40da039892185c31a1e086e65749ea95016ecc841b4a3dfc16f05f7daa8"
+            },
+            {
+              "profile": "neverc-llvm-O0",
+              "state_observations": 2304,
+              "boundary_observations": 22,
+              "fault_observations": 124,
+              "object_sha256": "1c4a9413c8849dc573be2b3eca2acb03be68892aa4fa3acd14fd538c3daa684b",
+              "binary_sha256": "db011712d135d8bd1462a9f13a432f23470a2cf119988ec91c7d834448a00b53"
+            },
+            {
+              "profile": "neverc-llvm-O2",
+              "state_observations": 2304,
+              "boundary_observations": 22,
+              "fault_observations": 124,
+              "object_sha256": "0510b057ae4ed8550e87e07be8174a2c923c027c930befb2e951f1108c7b4c45",
+              "binary_sha256": "2347c7fd10f32e53eab259991c05407a4b720248b94532e3c6a18e3891bbd041"
+            }
+          ],
+          "harness_sha256": "9725b4fcb666c5c6a235c081c220e56c9e114dd3bf851fd7949727a5421111fa",
+          "scripts": {
+            "${NEVERC_WORKTREE}/tests/neverc/X86/verify_segment_moves.py": "04f9692d262e3a398d11f1d0a91481adb8067e2f3edd2ef9cc5ccd3bacf0ef9f",
+            "${NEVERC_WORKTREE}/tests/neverc/X86/native_qualification.py": "ba9010b38658bd134a88977643ed1c321db2739596ccb4f4b72855398278c177"
+          },
+          "stable_inputs": true,
+          "tools": {
+            "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin/llc": "559c03c890bbf843e8a9c51b5d0913bbf20759d52bdbafed485e5ef3972ca980",
+            "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin/opt": "6e7d6dc7f3ed76f704c037fb658378958f51f014005c950e44cf74953010c30f",
+            "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "a8439a7d11d9f8dfb4c3cd5d2fa350b24e7dfa10c5e3fc3422b9d4b32613286b",
+            "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+          "files": {
+            "commands.json": {
+              "sha256": "91d5c9ec7956d25dfdb3c706f5742a68a6efd6ebebdbf4644fed856f74d582b2",
+              "bytes": 6865
+            },
+            "cpuinfo.txt": {
+              "sha256": "4a8b0d2b3849b22b1fa1c54029e58dff1e4f5ec30dff1bac302f49e30277edc4",
+              "bytes": 35136
+            },
+            "harness.c": {
+              "sha256": "9725b4fcb666c5c6a235c081c220e56c9e114dd3bf851fd7949727a5421111fa",
+              "bytes": 12573
+            },
+            "llc-O0": {
+              "sha256": "bafe03349a3eba5ca0305936010935b9897a3dc5a91bcc5756f6eda4d6ccebc9",
+              "bytes": 23416
+            },
+            "llc-O0-compile.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O0-compile.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O0-execute.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O0-execute.stdout": {
+              "sha256": "4b490ac74f1165ea36b807821e6662ebfa220a6a1281b969f2fcfa49bf6be1d4",
+              "bytes": 110320
+            },
+            "llc-O0-link.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O0-link.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O0.o": {
+              "sha256": "a6a29def3a8bd8d38ec412d8e69497db5ec8da616cef240ae244f9be5efa9f55",
+              "bytes": 3304
+            },
+            "llc-O2": {
+              "sha256": "5e92bf6854f1212f3aa6a4c57e184b57a13a8d7970a88af0bd4c3b74b026fdfb",
+              "bytes": 23416
+            },
+            "llc-O2-compile.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2-compile.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2-execute.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2-execute.stdout": {
+              "sha256": "4b490ac74f1165ea36b807821e6662ebfa220a6a1281b969f2fcfa49bf6be1d4",
+              "bytes": 110320
+            },
+            "llc-O2-link.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2-link.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2-optimize.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2-optimize.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2.ll": {
+              "sha256": "a956b9cacf21d2591b56da4f037bdfb6e2e381d42cb448fb63b93438ea4e767e",
+              "bytes": 8115
+            },
+            "llc-O2.o": {
+              "sha256": "08afc93dea99a39abc2d7288a474a809def185b864323c2ab9934acf393f4c02",
+              "bytes": 2144
+            },
+            "llc.ll": {
+              "sha256": "b3a634b94d7e10bfeaf43fcede8da47754f61a26a40594c3ccda20ace564ab74",
+              "bytes": 4676
+            },
+            "neverc-O0": {
+              "sha256": "9504d5afe1f5f21e47a68c34dfef467b7e3f670fba21cf388328e6dc4edd136c",
+              "bytes": 23440
+            },
+            "neverc-O0-compile.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O0-compile.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O0-execute.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O0-execute.stdout": {
+              "sha256": "4b490ac74f1165ea36b807821e6662ebfa220a6a1281b969f2fcfa49bf6be1d4",
+              "bytes": 110320
+            },
+            "neverc-O0-link.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O0-link.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O0.o": {
+              "sha256": "06865aceecd9aa22a535bcc1f31e8fab32c122cfd5a4252d6a1fda07e1c26bf6",
+              "bytes": 4200
+            },
+            "neverc-O2": {
+              "sha256": "26cdd40da039892185c31a1e086e65749ea95016ecc841b4a3dfc16f05f7daa8",
+              "bytes": 23440
+            },
+            "neverc-O2-compile.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O2-compile.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O2-execute.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O2-execute.stdout": {
+              "sha256": "4b490ac74f1165ea36b807821e6662ebfa220a6a1281b969f2fcfa49bf6be1d4",
+              "bytes": 110320
+            },
+            "neverc-O2-link.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O2-link.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O2.o": {
+              "sha256": "4bce94c3928851dfe73135a212596f894ca6591bc515495d9b78525ad611f65b",
+              "bytes": 3480
+            },
+            "neverc-llvm-O0": {
+              "sha256": "db011712d135d8bd1462a9f13a432f23470a2cf119988ec91c7d834448a00b53",
+              "bytes": 23448
+            },
+            "neverc-llvm-O0-compile.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0-compile.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0-execute.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0-execute.stdout": {
+              "sha256": "4b490ac74f1165ea36b807821e6662ebfa220a6a1281b969f2fcfa49bf6be1d4",
+              "bytes": 110320
+            },
+            "neverc-llvm-O0-frontend.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0-frontend.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0-link.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0-link.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0.ll": {
+              "sha256": "c62c51020fc325d094598754c1271b52819a79ae7e351e8b9d6a6e783a9706bb",
+              "bytes": 14457
+            },
+            "neverc-llvm-O0.o": {
+              "sha256": "1c4a9413c8849dc573be2b3eca2acb03be68892aa4fa3acd14fd538c3daa684b",
+              "bytes": 4128
+            },
+            "neverc-llvm-O2": {
+              "sha256": "2347c7fd10f32e53eab259991c05407a4b720248b94532e3c6a18e3891bbd041",
+              "bytes": 23448
+            },
+            "neverc-llvm-O2-compile.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2-compile.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2-execute.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2-execute.stdout": {
+              "sha256": "4b490ac74f1165ea36b807821e6662ebfa220a6a1281b969f2fcfa49bf6be1d4",
+              "bytes": 110320
+            },
+            "neverc-llvm-O2-frontend.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2-frontend.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2-link.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2-link.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2.ll": {
+              "sha256": "7854dde40522455fff859e7f4be19a2674f1ca4d86d9a4b8c6db865ccab1408f",
+              "bytes": 9257
+            },
+            "neverc-llvm-O2.o": {
+              "sha256": "0510b057ae4ed8550e87e07be8174a2c923c027c930befb2e951f1108c7b4c45",
+              "bytes": 3408
+            },
+            "neverc-llvm.c": {
+              "sha256": "f401bebbd2d782f75e80d30f7b5083d6d111d6dc4cf367ed523ae22f9315d626",
+              "bytes": 4013
+            },
+            "neverc.c": {
+              "sha256": "f401bebbd2d782f75e80d30f7b5083d6d111d6dc4cf367ed523ae22f9315d626",
+              "bytes": 4013
+            }
+          },
+          "exclusions": [
+            "other CPU models",
+            "i386 execution",
+            "code16",
+            "CPL0..2 and privileged descriptor-page faults",
+            "alignment-check and asynchronous event delivery",
+            "null selectors 1..3 normalized by Linux return",
+            "complete original GPR/flags restart state"
+          ],
+          "reference": "Intel SDM revision 093, Volume 2B: MOV. https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html"
+        }
+      },
+      {
+        "cpu": "12",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-code16-segment-move-20261103/integration/tmp-12",
+          "taskset",
+          "-c",
+          "12",
+          "python3",
+          "tests/neverc/X86/verify_segment_moves.py",
+          "--llc",
+          "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin/llc",
+          "--opt",
+          "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin/opt",
+          "--neverc",
+          "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "--clang",
+          "${CLANG}",
+          "--output-dir",
+          "/mnt/data/neverd-code16-segment-move-20261103/integration/x64-12"
+        ],
+        "exit_code": 0,
+        "qualification": {
+          "passed": true,
+          "profiles": [
+            {
+              "profile": "llc-O0",
+              "state_observations": 2304,
+              "boundary_observations": 22,
+              "fault_observations": 124,
+              "object_sha256": "a6a29def3a8bd8d38ec412d8e69497db5ec8da616cef240ae244f9be5efa9f55",
+              "binary_sha256": "bafe03349a3eba5ca0305936010935b9897a3dc5a91bcc5756f6eda4d6ccebc9"
+            },
+            {
+              "profile": "llc-O2",
+              "state_observations": 2304,
+              "boundary_observations": 22,
+              "fault_observations": 124,
+              "object_sha256": "08afc93dea99a39abc2d7288a474a809def185b864323c2ab9934acf393f4c02",
+              "binary_sha256": "5e92bf6854f1212f3aa6a4c57e184b57a13a8d7970a88af0bd4c3b74b026fdfb"
+            },
+            {
+              "profile": "neverc-O0",
+              "state_observations": 2304,
+              "boundary_observations": 22,
+              "fault_observations": 124,
+              "object_sha256": "06865aceecd9aa22a535bcc1f31e8fab32c122cfd5a4252d6a1fda07e1c26bf6",
+              "binary_sha256": "9504d5afe1f5f21e47a68c34dfef467b7e3f670fba21cf388328e6dc4edd136c"
+            },
+            {
+              "profile": "neverc-O2",
+              "state_observations": 2304,
+              "boundary_observations": 22,
+              "fault_observations": 124,
+              "object_sha256": "4bce94c3928851dfe73135a212596f894ca6591bc515495d9b78525ad611f65b",
+              "binary_sha256": "26cdd40da039892185c31a1e086e65749ea95016ecc841b4a3dfc16f05f7daa8"
+            },
+            {
+              "profile": "neverc-llvm-O0",
+              "state_observations": 2304,
+              "boundary_observations": 22,
+              "fault_observations": 124,
+              "object_sha256": "1c4a9413c8849dc573be2b3eca2acb03be68892aa4fa3acd14fd538c3daa684b",
+              "binary_sha256": "db011712d135d8bd1462a9f13a432f23470a2cf119988ec91c7d834448a00b53"
+            },
+            {
+              "profile": "neverc-llvm-O2",
+              "state_observations": 2304,
+              "boundary_observations": 22,
+              "fault_observations": 124,
+              "object_sha256": "0510b057ae4ed8550e87e07be8174a2c923c027c930befb2e951f1108c7b4c45",
+              "binary_sha256": "2347c7fd10f32e53eab259991c05407a4b720248b94532e3c6a18e3891bbd041"
+            }
+          ],
+          "harness_sha256": "9725b4fcb666c5c6a235c081c220e56c9e114dd3bf851fd7949727a5421111fa",
+          "scripts": {
+            "${NEVERC_WORKTREE}/tests/neverc/X86/verify_segment_moves.py": "04f9692d262e3a398d11f1d0a91481adb8067e2f3edd2ef9cc5ccd3bacf0ef9f",
+            "${NEVERC_WORKTREE}/tests/neverc/X86/native_qualification.py": "ba9010b38658bd134a88977643ed1c321db2739596ccb4f4b72855398278c177"
+          },
+          "stable_inputs": true,
+          "tools": {
+            "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin/llc": "559c03c890bbf843e8a9c51b5d0913bbf20759d52bdbafed485e5ef3972ca980",
+            "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin/opt": "6e7d6dc7f3ed76f704c037fb658378958f51f014005c950e44cf74953010c30f",
+            "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "a8439a7d11d9f8dfb4c3cd5d2fa350b24e7dfa10c5e3fc3422b9d4b32613286b",
+            "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+          "files": {
+            "commands.json": {
+              "sha256": "41443c8ab3c435aa2a8147e66b9eaf7d23acf8003c5011537e038d4f63609e60",
+              "bytes": 6907
+            },
+            "cpuinfo.txt": {
+              "sha256": "322ead28e370f0eb46e9e476623d4abb136ec16ac36cd86b7f2265e33e1fd547",
+              "bytes": 35136
+            },
+            "harness.c": {
+              "sha256": "9725b4fcb666c5c6a235c081c220e56c9e114dd3bf851fd7949727a5421111fa",
+              "bytes": 12573
+            },
+            "llc-O0": {
+              "sha256": "bafe03349a3eba5ca0305936010935b9897a3dc5a91bcc5756f6eda4d6ccebc9",
+              "bytes": 23416
+            },
+            "llc-O0-compile.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O0-compile.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O0-execute.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O0-execute.stdout": {
+              "sha256": "4b490ac74f1165ea36b807821e6662ebfa220a6a1281b969f2fcfa49bf6be1d4",
+              "bytes": 110320
+            },
+            "llc-O0-link.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O0-link.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O0.o": {
+              "sha256": "a6a29def3a8bd8d38ec412d8e69497db5ec8da616cef240ae244f9be5efa9f55",
+              "bytes": 3304
+            },
+            "llc-O2": {
+              "sha256": "5e92bf6854f1212f3aa6a4c57e184b57a13a8d7970a88af0bd4c3b74b026fdfb",
+              "bytes": 23416
+            },
+            "llc-O2-compile.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2-compile.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2-execute.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2-execute.stdout": {
+              "sha256": "4b490ac74f1165ea36b807821e6662ebfa220a6a1281b969f2fcfa49bf6be1d4",
+              "bytes": 110320
+            },
+            "llc-O2-link.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2-link.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2-optimize.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2-optimize.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "llc-O2.ll": {
+              "sha256": "880905e851f728429d8a9f98efa8aba94d2d2e68ad0670bcf05c148b60773b26",
+              "bytes": 8117
+            },
+            "llc-O2.o": {
+              "sha256": "08afc93dea99a39abc2d7288a474a809def185b864323c2ab9934acf393f4c02",
+              "bytes": 2144
+            },
+            "llc.ll": {
+              "sha256": "b3a634b94d7e10bfeaf43fcede8da47754f61a26a40594c3ccda20ace564ab74",
+              "bytes": 4676
+            },
+            "neverc-O0": {
+              "sha256": "9504d5afe1f5f21e47a68c34dfef467b7e3f670fba21cf388328e6dc4edd136c",
+              "bytes": 23440
+            },
+            "neverc-O0-compile.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O0-compile.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O0-execute.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O0-execute.stdout": {
+              "sha256": "4b490ac74f1165ea36b807821e6662ebfa220a6a1281b969f2fcfa49bf6be1d4",
+              "bytes": 110320
+            },
+            "neverc-O0-link.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O0-link.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O0.o": {
+              "sha256": "06865aceecd9aa22a535bcc1f31e8fab32c122cfd5a4252d6a1fda07e1c26bf6",
+              "bytes": 4200
+            },
+            "neverc-O2": {
+              "sha256": "26cdd40da039892185c31a1e086e65749ea95016ecc841b4a3dfc16f05f7daa8",
+              "bytes": 23440
+            },
+            "neverc-O2-compile.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O2-compile.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O2-execute.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O2-execute.stdout": {
+              "sha256": "4b490ac74f1165ea36b807821e6662ebfa220a6a1281b969f2fcfa49bf6be1d4",
+              "bytes": 110320
+            },
+            "neverc-O2-link.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O2-link.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-O2.o": {
+              "sha256": "4bce94c3928851dfe73135a212596f894ca6591bc515495d9b78525ad611f65b",
+              "bytes": 3480
+            },
+            "neverc-llvm-O0": {
+              "sha256": "db011712d135d8bd1462a9f13a432f23470a2cf119988ec91c7d834448a00b53",
+              "bytes": 23448
+            },
+            "neverc-llvm-O0-compile.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0-compile.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0-execute.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0-execute.stdout": {
+              "sha256": "4b490ac74f1165ea36b807821e6662ebfa220a6a1281b969f2fcfa49bf6be1d4",
+              "bytes": 110320
+            },
+            "neverc-llvm-O0-frontend.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0-frontend.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0-link.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0-link.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O0.ll": {
+              "sha256": "ec6ce7b281cff6160a2eba4a1d3d82db40c47cf5b2ec5e822f68ebe2e5b9e07a",
+              "bytes": 14459
+            },
+            "neverc-llvm-O0.o": {
+              "sha256": "1c4a9413c8849dc573be2b3eca2acb03be68892aa4fa3acd14fd538c3daa684b",
+              "bytes": 4128
+            },
+            "neverc-llvm-O2": {
+              "sha256": "2347c7fd10f32e53eab259991c05407a4b720248b94532e3c6a18e3891bbd041",
+              "bytes": 23448
+            },
+            "neverc-llvm-O2-compile.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2-compile.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2-execute.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2-execute.stdout": {
+              "sha256": "4b490ac74f1165ea36b807821e6662ebfa220a6a1281b969f2fcfa49bf6be1d4",
+              "bytes": 110320
+            },
+            "neverc-llvm-O2-frontend.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2-frontend.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2-link.stderr": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2-link.stdout": {
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "bytes": 0
+            },
+            "neverc-llvm-O2.ll": {
+              "sha256": "711425c5a6aeeb28fb0ef419de28e0604684cdfe286841779b0c413d6457c379",
+              "bytes": 9259
+            },
+            "neverc-llvm-O2.o": {
+              "sha256": "0510b057ae4ed8550e87e07be8174a2c923c027c930befb2e951f1108c7b4c45",
+              "bytes": 3408
+            },
+            "neverc-llvm.c": {
+              "sha256": "f401bebbd2d782f75e80d30f7b5083d6d111d6dc4cf367ed523ae22f9315d626",
+              "bytes": 4013
+            },
+            "neverc.c": {
+              "sha256": "f401bebbd2d782f75e80d30f7b5083d6d111d6dc4cf367ed523ae22f9315d626",
+              "bytes": 4013
+            }
+          },
+          "exclusions": [
+            "other CPU models",
+            "i386 execution",
+            "code16",
+            "CPL0..2 and privileged descriptor-page faults",
+            "alignment-check and asynchronous event delivery",
+            "null selectors 1..3 normalized by Linux return",
+            "complete original GPR/flags restart state"
+          ],
+          "reference": "Intel SDM revision 093, Volume 2B: MOV. https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html"
+        }
+      },
+      {
+        "test": "neverc-tests",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-code16-segment-move-20261103/integration/tmp-0",
+          "${NEVERC_WORKTREE}/build-neverc/bin/neverc-tests",
+          "--gtest_filter=X86SegmentMoveTest.*",
+          "--gtest_output=xml:/mnt/data/neverd-code16-segment-move-20261103/integration/neverc-tests.xml"
+        ],
+        "exit_code": 0
+      },
+      {
+        "test": "neverc-x86-backend-tests",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-code16-segment-move-20261103/integration/tmp-0",
+          "${NEVERC_WORKTREE}/build-neverc/bin/neverc-x86-backend-tests",
+          "--gtest_filter=X86SegmentMove.*",
+          "--gtest_output=xml:/mnt/data/neverd-code16-segment-move-20261103/integration/neverc-x86-backend-tests.xml"
+        ],
+        "exit_code": 0
+      }
+    ]
+  },
+  "cpu": {
+    "model": "Intel Core i9-13900H",
+    "family": 6,
+    "model_number": 186,
+    "stepping": 2,
+    "microcode": "0x6134",
+    "p_core": "0",
+    "e_core": "12",
+    "kernel": "7.0.0-42-generic"
+  },
+  "counts": {
+    "code16": {
+      "profiles": 4,
+      "complete_state_pairs": 19296,
+      "returns": 6472,
+      "gp": 6048,
+      "pf": 3784,
+      "np": 320,
+      "ss": 80,
+      "ac": 1616,
+      "faults": 11848
+    },
+    "code32": {
+      "profiles": 4,
+      "complete_state_pairs": 19296,
+      "returns": 6472,
+      "gp": 6048,
+      "pf": 3784,
+      "np": 320,
+      "ss": 80,
+      "ac": 1616,
+      "faults": 11848
+    },
+    "x64": {
+      "profiles": 12,
+      "state_observations": 27648,
+      "boundary_observations": 264,
+      "fault_observations": 1488
+    }
+  },
+  "other_checks": {
+    "llvm_codegen_tests": 9,
+    "neverc_frontend_tests": 2,
+    "neverc_backend_tests": 2,
+    "failures": 0,
+    "skips": 0
+  },
+  "count_definition": "Actual final executions across O0/O2 and P/E cores, not unique inputs. Native protected pairs compare represented GPRs/flags, system and segment state, active events and RAM. Return checks are subsets. The x64 counts use the rebuilt integrated NeverC; earlier focused and pre-integration runs are retained but not added.",
+  "native_boundary": "Each compiled MOV is immediately followed by an explicit LFENCE. The oracle authenticates both opcodes, clones the pre-MOV register/system/event/RAM state and executes an independent encoding of that same two-instruction span. LFENCE ends MOV-SS inhibition before the debugger stop without changing represented GPRs/flags/RAM. Events within the shadow are not observed.",
+  "negative_controls": "Each protected profile rejects a corrupted declared pointer or selector before an intact MOV. Used/unused reads survive O0/O2; ABI-compatible successes also check compiler returns and callee-saved registers.",
+  "fault_observation": "Original #NP/#SS/#GP/#PF/#AC handlers expose their vector through completed OUT. Both restart PCs are authenticated before normalizing only that frame PC. Stale exception payload is excluded only after proving neither pending nor injected; all other event fields remain compared.",
+  "binaries_sha256": {
+    "opt": "6e7d6dc7f3ed76f704c037fb658378958f51f014005c950e44cf74953010c30f",
+    "FileCheck": "f9bffb050e642a24ed6d8d67c57aafc62fb46461c5f40c0e889b4caa0718bf50",
+    "llvm-mc": "6a7e7cc884bc9c6269a8938a9e190769ce28e2a9377d80a231600553df0ab499",
+    "llvm-objdump": "dbbacbbc5f230935b920b7b3d7e303173586bda56cfba287d2fc361bd77a6791",
+    "llc": "559c03c890bbf843e8a9c51b5d0913bbf20759d52bdbafed485e5ef3972ca980"
+  },
+  "artifact_root": "/mnt/data/neverd-code16-segment-move-20261103",
+  "artifact_manifest_sha256": "7a1d82963a770f41adcadec82b3fc3d78d54186c8cbe76aad9e6e7ae8b4dfec1",
+  "artifact_count": 577,
+  "runs": [
+    {
+      "name": "code16",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-segment-move-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_segment_moves.py",
+        "--mode",
+        "16",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin",
+        "--output",
+        "/mnt/data/neverd-code16-segment-move-20261103/final/p-core/code16"
+      ],
+      "exit_code": 0,
+      "seconds": 7.882351636886597
+    },
+    {
+      "name": "code32",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-segment-move-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_segment_moves.py",
+        "--mode",
+        "32",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin",
+        "--output",
+        "/mnt/data/neverd-code16-segment-move-20261103/final/p-core/code32"
+      ],
+      "exit_code": 0,
+      "seconds": 8.03286075592041
+    },
+    {
+      "name": "x64",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-segment-move-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_segment_moves.py",
+        "--llc",
+        "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin/llc",
+        "--opt",
+        "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin/opt",
+        "--neverc",
+        "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "--clang",
+        "${CLANG}",
+        "--output-dir",
+        "/mnt/data/neverd-code16-segment-move-20261103/final/p-core/x64"
+      ],
+      "exit_code": 0,
+      "seconds": 1.866840124130249
+    },
+    {
+      "name": "code16",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-segment-move-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "tests/neverc/X86/verify_protected_segment_moves.py",
+        "--mode",
+        "16",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin",
+        "--output",
+        "/mnt/data/neverd-code16-segment-move-20261103/final/e-core/code16"
+      ],
+      "exit_code": 0,
+      "seconds": 11.74183964729309
+    },
+    {
+      "name": "code32",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-segment-move-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "tests/neverc/X86/verify_protected_segment_moves.py",
+        "--mode",
+        "32",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin",
+        "--output",
+        "/mnt/data/neverd-code16-segment-move-20261103/final/e-core/code32"
+      ],
+      "exit_code": 0,
+      "seconds": 11.393333196640015
+    },
+    {
+      "name": "x64",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-segment-move-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "tests/neverc/X86/verify_segment_moves.py",
+        "--llc",
+        "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin/llc",
+        "--opt",
+        "/mnt/data/neverd-code16-segment-move-20261103/frozen-bin/opt",
+        "--neverc",
+        "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "--clang",
+        "${CLANG}",
+        "--output-dir",
+        "/mnt/data/neverd-code16-segment-move-20261103/final/e-core/x64"
+      ],
+      "exit_code": 0,
+      "seconds": 2.2175049781799316
+    }
+  ],
+  "source_reference": {
+    "title": "Intel SDM Volume 2 revision 093: MOV segment registers",
+    "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
+    "local_text": "/mnt/data/neverd-paged-scheduling-20261101/intel-sdm-vol2-093.txt"
+  },
+  "retained_diagnostics": [
+    "The first reproduction omitted +sse2 for its LFENCE and failed before checking the MOV contract. Corrected GNU/code16 probes show code32 success and the pre-change code16 fatal guard. Raw probes remain retained.",
+    "The initial qualification wrapper selected the NeverC build subdirectory instead of bin/neverc and failed before executing tests. The corrected wrapper and completed final records are retained separately."
+  ],
+  "boundaries": [
+    "The protected matrix covers CPL0/CPL3, all six segment reads and five writable segments, used/dead results, null selectors 0..3, invalid/nonpresent/readonly/code/nonflat/word-stack descriptors, exact/cross-page/missing/readonly operands and descriptor-page accessed writes/faults.",
+    "Non-ABI DS/SS states stop after the instruction-plus-LFENCE boundary. Successful ABI-compatible cases additionally authenticate the compiled return; this is not an arbitrary segmented C ABI or coupled stack switch.",
+    "Real/VM86, asynchronous events, delivery inside MOV-SS inhibition, device memory, all original address/segment encodings and other CPU models remain outside this qualification.",
+    "Production SDK neverd-llvm-v23.0.0-r6 and gitlink 03270359c2ed8f6806533d3832a947bf883a6f69 are unchanged. General i386 dispatch/scalars, real/VM86/tasks/debug, software SMM/SGX and complete CET/FRED events remain open; release/pin awaits global completion."
+  ],
+  "path_normalization": "Public paths use ${LLVM_WORKTREE}, ${NEVERC_WORKTREE} and ${CLANG}; original commands/logs remain unchanged in the hashed local artifacts."
+}
