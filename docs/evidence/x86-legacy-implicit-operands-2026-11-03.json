@@ -7,7 +7,7 @@
   "tested_base_commit": "fc8a4428901270ee3ff23a2236ef714d18da4cc0",
   "tested_tree": "66ef00d1b4a4ee7057e10a0f6b3b4fd37904bc05",
   "tested_worktree_patch_sha256": "93d9381b4c59d54c14ea0b293283d09b7cffe6541b88cbde53a6ab9fd595fbcd",
-  "source_basis": "The retained tested.patch and base identify the tested change. Executable source hashes, copied binaries and live binaries were rechecked after all four runs. Later changes add documentation only.",
+  "source_basis": "The retained tested.patch and base identify the tested change. Executable source hashes, copied binaries and live binaries were rechecked after all four runs. Subsequent integration of dev modifies shared IR frame-borrow analysis; both rebuilt paging executables remain byte-identical. Separate integration tests and commits are recorded below.",
   "source_inputs_sha256": {
     "include/neverd/translate/X86/X86LegacyExecution.h": "0b518dbcebb3cd3fb4afd6bc3ace869e4ba6e2efc018352b9a79cb70739de0ef",
     "lib/translate/X86/X86LegacyScalar.h": "c6b8f007ab03292229fe1d8319fee0c19e44d9d122fc310a4495a37fa39d7b2a",
@@ -358,7 +358,155 @@
     "tested-tree.txt": "3142e9275974c5fc06d90d341ab55f64587e2bfcfdb3a5d4e11d90118d5b8f1e",
     "tested.patch": "93d9381b4c59d54c14ea0b293283d09b7cffe6541b88cbde53a6ab9fd595fbcd",
     "unit.log": "c1b92694173088acb5cf047598b9d76bea9d25c35568fbc8cc56b46827fb2f1a",
-    "unit.xml": "d149144ab680ce03f7f20e6f182c168cd54948e8f689e8069b6c6453300031a7"
+    "unit.xml": "d149144ab680ce03f7f20e6f182c168cd54948e8f689e8069b6c6453300031a7",
+    "integration/native/NeverDMedPrologueSavesTests.log": "50d115cf5f4702b73997347ea990908878be1534b742bc6bacbabb85b0230419",
+    "integration/native/NeverDMedPrologueSavesTests.xml": "5d141eb2b3e3de720dfe7abe64bb14bd859e2cd1f0502cbb7b5ca3159b87bb47",
+    "integration/native/NeverDWin64CallContractTests.log": "1b58e775e7a8416cad68b1ae29e154861932c0e62b5505789736cc4d9e090004",
+    "integration/native/NeverDWin64CallContractTests.xml": "b8303aaa9e7c09c49ae86494d1eb6603dfdae90f39982a43a0b74b5373505094",
+    "integration/native/build.log": "a65d4c01a3150a59d539ec0f61892f3cc86e97a4859c72ba14124e94577d17c8",
+    "integration/native/neverd-build-receipt.json": "98b109a118c8ecbc43407c7e1dab2ffe797b24aa89977c69f1fecc6266828ad1",
+    "integration/native/neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+    "integration/r6/NeverDMedPrologueSavesTests.log": "a8dfe942b910b26da5f771cb9904865fa50530170fd101f0d02cc1204694532c",
+    "integration/r6/NeverDMedPrologueSavesTests.xml": "984dd66969729e5ca2674c9fbf470ec448124eebe5f4e13329fcf0d007ab3063",
+    "integration/r6/NeverDWin64CallContractTests.log": "616abff003e88ec4f6c565f752509f6abf9d5638ac94e4957937a0bb22b7b409",
+    "integration/r6/NeverDWin64CallContractTests.xml": "ea08df8232556c6c7713c122003ad706a4031e52a777fe36fd959ba9ab2f248e",
+    "integration/r6/build.log": "865b5123542bb0a95be4214d6c8827dc20034a53c91e50a6b87d3b27074142d3",
+    "integration/r6/neverd-build-receipt.json": "39a8d465da0fca4743cde8f953ec751e4e5108b476f826eb8bcadc851651c795",
+    "integration/r6/neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+    "integration/results.json": "8f7a66874196742f2aa6bc8469c8151ef24228d39481225cedde3f3114151d08",
+    "integrate.py": "018994a9a74224e03f018256f2695250fbed99b0ef38efef069c093c3c70e5f9"
   },
-  "path_normalization": "Public command/diagnostic paths use ${NEVERD_WORKTREE}; original commands and logs are unchanged in the retained hashed artifact root."
+  "path_normalization": "Public command/diagnostic paths use ${NEVERD_WORKTREE}; original commands and logs are unchanged in the retained hashed artifact root.",
+  "integration": {
+    "commit": "409dec5780761c9092fcb9a74808e7e5c0a273a0",
+    "upstream_commit": "9b927c9f9e4cb595a3e92833986250cd81af6c87",
+    "qualification": "Rebuild paging and both affected IR test targets for both SDKs. Paging binaries are byte-identical to the full qualified matrix; 448 prologue-save/Win64-call tests pass separately with no skips.",
+    "tests": 448,
+    "runs": [
+      {
+        "sdk": "native",
+        "build_command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86-native",
+          "--target",
+          "NeverDX86PagingTests",
+          "NeverDMedPrologueSavesTests",
+          "NeverDWin64CallContractTests",
+          "--parallel",
+          "4"
+        ],
+        "paging_binary_sha256": "55ba18194f7d89df47f8ab225bb52270c43de7d411f4c58ab0567a754ccc794b",
+        "paging_binary_unchanged": true,
+        "tests": [
+          {
+            "target": "NeverDMedPrologueSavesTests",
+            "command": [
+              "unshare",
+              "--user",
+              "--map-root-user",
+              "--mount",
+              "python3",
+              "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+              "/mnt/data/neverd-legacy-implicit-20261103/integration/native/tmp",
+              "taskset",
+              "-c",
+              "4",
+              "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDMedPrologueSavesTests",
+              "--gtest_output=xml:/mnt/data/neverd-legacy-implicit-20261103/integration/native/NeverDMedPrologueSavesTests.xml"
+            ],
+            "exit_code": 0,
+            "tests": 115,
+            "failures": 0,
+            "skips": 0,
+            "binary_sha256": "bbee290210597e62a430973a5509b5c032a85bdf86f253ef088d484c3660b03a"
+          },
+          {
+            "target": "NeverDWin64CallContractTests",
+            "command": [
+              "unshare",
+              "--user",
+              "--map-root-user",
+              "--mount",
+              "python3",
+              "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+              "/mnt/data/neverd-legacy-implicit-20261103/integration/native/tmp",
+              "taskset",
+              "-c",
+              "4",
+              "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDWin64CallContractTests",
+              "--gtest_output=xml:/mnt/data/neverd-legacy-implicit-20261103/integration/native/NeverDWin64CallContractTests.xml"
+            ],
+            "exit_code": 0,
+            "tests": 109,
+            "failures": 0,
+            "skips": 0,
+            "binary_sha256": "41dd21e48b94323583fce90d410bd143a1bb56342091ef672ad764e0bdde653d"
+          }
+        ]
+      },
+      {
+        "sdk": "r6",
+        "build_command": [
+          "python3",
+          "scripts/build.py",
+          "build-x86",
+          "--target",
+          "NeverDX86PagingTests",
+          "NeverDMedPrologueSavesTests",
+          "NeverDWin64CallContractTests",
+          "--parallel",
+          "4"
+        ],
+        "paging_binary_sha256": "badc9238548a2b5f0811ed1dc02066c6a32c448aa612515b738e950079b161e8",
+        "paging_binary_unchanged": true,
+        "tests": [
+          {
+            "target": "NeverDMedPrologueSavesTests",
+            "command": [
+              "unshare",
+              "--user",
+              "--map-root-user",
+              "--mount",
+              "python3",
+              "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+              "/mnt/data/neverd-legacy-implicit-20261103/integration/r6/tmp",
+              "taskset",
+              "-c",
+              "4",
+              "${NEVERD_WORKTREE}/build-x86/bin/NeverDMedPrologueSavesTests",
+              "--gtest_output=xml:/mnt/data/neverd-legacy-implicit-20261103/integration/r6/NeverDMedPrologueSavesTests.xml"
+            ],
+            "exit_code": 0,
+            "tests": 115,
+            "failures": 0,
+            "skips": 0,
+            "binary_sha256": "80132047a14c7972dd64be6873f6a95c7ae4ce16489ad08f1f4160881f31a738"
+          },
+          {
+            "target": "NeverDWin64CallContractTests",
+            "command": [
+              "unshare",
+              "--user",
+              "--map-root-user",
+              "--mount",
+              "python3",
+              "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+              "/mnt/data/neverd-legacy-implicit-20261103/integration/r6/tmp",
+              "taskset",
+              "-c",
+              "4",
+              "${NEVERD_WORKTREE}/build-x86/bin/NeverDWin64CallContractTests",
+              "--gtest_output=xml:/mnt/data/neverd-legacy-implicit-20261103/integration/r6/NeverDWin64CallContractTests.xml"
+            ],
+            "exit_code": 0,
+            "tests": 109,
+            "failures": 0,
+            "skips": 0,
+            "binary_sha256": "69836d4a6c46df7ba722de78a2cf9bb8b05cb43218945efb20d04493c6b95158"
+          }
+        ]
+      }
+    ]
+  }
 }
