@@ -9484,6 +9484,12 @@ barriers without changing admission or publication order. Read-only
 image indexes and the existing synchronized no-return cache may be shared.
 Summary publication and format-call collection retain the original order,
 depth and count limits. `NEVERD_THREADS=1` restricts this phase to one worker.
+The run's own functions are summarized in parallel before that frontier. Their
+formatted calls are read in parallel and joined in function order, which also
+decides the call each address keeps, and each summary then reads the joined
+fixed reads at its calls. A body holding a site whose joined reads a later
+function still changes reads that site as it stood after its own reads, as the
+ordered loop gave it; effects are published in function order.
 
 Restricted pipeline runs may reuse machine blocks constructed for an x87 callee
 proof as `CallRegisterBody` inputs. This type contains blocks, coverage and

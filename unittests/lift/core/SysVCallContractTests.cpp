@@ -940,6 +940,53 @@ TEST(SysVCallContract, AFormatNamesTheArgumentsAFormattedCallPasses) {
   EXPECT_EQ(Source.find("unknown"), std::string::npos) << Source;
 }
 
+TEST(SysVCallContract, AnEarlierBodyReadsASharedCallAsTheBodiesBeforeItLeft) {
+  // late() = printf("%d %d\n", a, b), its call at Shared; early(x, s) takes s
+  // for the format and jumps to Shared, so its own body holds that call too.
+  // A summary reads the formatted calls of the functions before it and its
+  // own: early's call is an ordinary one, with late after it in the run or
+  // not, even though the run's own summaries are computed in parallel.
+  constexpr va_t Early = Text, Late = Text + 0x20, Stub = Text + 0x40;
+  constexpr va_t Shared = Late + 9, Format = 0x402000;
+  std::vector<uint8_t> Code(0x50, 0xCC);
+  std::vector<uint8_t> EarlyCode = {0x48, 0x89, 0xF7, // mov rdi, rsi
+                                    0xE9};            // jmp Shared
+  for (uint8_t B : rel32(Early + 8, Shared))
+    EarlyCode.push_back(B);
+  put(Code, Early, EarlyCode);
+  std::vector<uint8_t> LateCode = {0x48, 0x8D, 0x3D}; // lea rdi, [fmt]
+  for (uint8_t B : rel32(Late + 7, Format))
+    LateCode.push_back(B);
+  for (uint8_t B : {0x31, 0xC0, // xor eax, eax
+                    0xE8})      // call printf
+    LateCode.push_back(B);
+  for (uint8_t B : rel32(Late + 14, Stub))
+    LateCode.push_back(B);
+  LateCode.push_back(0xC3); // ret
+  put(Code, Late, LateCode);
+  const auto EntryReads = [&](std::set<va_t> Entries) {
+    BinaryImage Img = makeImportImage(
+        Code, {{Early, "early"}, {Late, "late"}, {Stub, "printf_stub"}},
+        {{Stub, "printf"}});
+    addReadOnlyData(Img, Format, "%d %d\n");
+    llvm::LLVMContext Ctx;
+    PipelineOptions Opts;
+    Opts.EmitDumpOutput = false;
+    Opts.OnlyFunctionEntries = std::move(Entries);
+    const PipelineResult Result = Pipeline().run(Img, Ctx, Opts);
+    EXPECT_TRUE(Result.Success) << Result.Error;
+    return Result.CallEntryReadGPRs;
+  };
+  const auto Alone = EntryReads({Early, Stub});
+  const auto Both = EntryReads({Early, Late, Stub});
+  ASSERT_TRUE(Alone.count(Early));
+  ASSERT_TRUE(Both.count(Early) && Both.count(Late));
+  // late's call reads the two integers its format names.
+  EXPECT_EQ(Both.at(Late)[x86reg::RSI / 8], 4);
+  EXPECT_EQ(Both.at(Late)[x86reg::RDX / 8], 4);
+  EXPECT_EQ(Both.at(Early), Alone.at(Early));
+}
+
 TEST(SysVCallContract, AFormattedCallFormatsTheValuesItPasses) {
   // fmt_show(buf, n, a, x) = snprintf(buf, n, "%d %.2f", a, x): the
   // recompiled call writes what the original does.
