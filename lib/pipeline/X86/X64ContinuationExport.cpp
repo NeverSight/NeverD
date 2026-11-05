@@ -12,11 +12,13 @@
 #include "X64ContinuationEnvironment.h"
 #include "X64ContinuationPagedDriver.h"
 #include "X64ContinuationSchedule.h"
+#include "X64FunctionCalls.h"
 #include "X64FunctionContext.h"
 #include "X64RtmAbortRegions.h"
 #include "X64RtmRegions.h"
 #include "X64SpecialRegions.h"
 
+#include "neverd/Limits.h"
 #include "neverd/analysis/arch/x86_64/X64ContinuationEvent.h"
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
@@ -79,6 +81,7 @@ struct Request {
   unsigned CalleeDepth = 0;
   bool DirectDispatch = false;
   bool FunctionContext = false;
+  std::vector<X64FunctionCallInterface> FunctionCalls;
 };
 
 llvm::Expected<Request> readRequest(llvm::StringRef Text) {
@@ -120,6 +123,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_hyperv_hypercall_entry",
                                        "follow_internal_calls",
                                        "function_context",
+                                       "function_calls",
                                        "follow_direct_jumps",
                                        "callee_depth",
                                        "dispatch",
@@ -312,6 +316,60 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
     if (!Unique.insert(*Address).second)
       return invalid("duplicate selected address: " + hex(*Address));
     Result.Addresses.push_back(*Address);
+  }
+  if (const auto *Value = Object->get("function_calls")) {
+    const auto *Calls = Value->getAsArray();
+    if (!Result.FunctionContext || !Calls || Calls->empty() ||
+        Calls->size() > Result.Addresses.size())
+      return invalid("function_calls requires function_context and a nonempty "
+                     "array of explicit entry interfaces");
+    std::set<va_t> Seen;
+    const auto Width =
+        [](const llvm::json::Value *Value) -> llvm::Expected<unsigned> {
+      if (Value)
+        if (const auto Bytes = Value->getAsInteger();
+            Bytes && (*Bytes == 1 || *Bytes == 2 || *Bytes == 4 || *Bytes == 8))
+          return unsigned(*Bytes);
+      return invalid("function call widths must be 1, 2, 4 or 8 bytes");
+    };
+    for (const auto &Value : *Calls) {
+      const auto *Call = Value.getAsObject();
+      if (!Call)
+        return invalid("function call interface must be an object");
+      for (const auto &[Key, Unused] : *Call)
+        if (Key != "entry" && Key != "abi" && Key != "argument_bytes" &&
+            Key != "result_bytes")
+          return invalid("unknown function call interface field: " +
+                         llvm::StringRef(Key));
+      const auto *EntryValue = Call->get("entry");
+      const auto *Arguments = Call->getArray("argument_bytes");
+      if (!EntryValue || Call->getString("abi") != "win64" || !Arguments ||
+          Arguments->size() > limits::kMaxCallArgs)
+        return invalid("function call interface requires entry, abi win64 "
+                       "and at most " +
+                       llvm::Twine(limits::kMaxCallArgs) +
+                       " scalar argument widths");
+      auto Entry = integer(*EntryValue);
+      if (!Entry)
+        return Entry.takeError();
+      if (!Unique.count(*Entry) || !Seen.insert(*Entry).second)
+        return invalid("function call interface must name a unique explicit "
+                       "entry: " +
+                       hex(*Entry));
+      auto ResultBytes = Width(Call->get("result_bytes"));
+      if (!ResultBytes)
+        return ResultBytes.takeError();
+      X64FunctionCallInterface Interface;
+      Interface.Entry = *Entry;
+      Interface.ResultBytes = *ResultBytes;
+      for (const auto &Argument : *Arguments) {
+        auto Bytes = Width(&Argument);
+        if (!Bytes)
+          return Bytes.takeError();
+        Interface.ArgumentBytes.push_back(*Bytes);
+      }
+      Result.FunctionCalls.push_back(std::move(Interface));
+    }
   }
   return Result;
 }
@@ -753,6 +811,7 @@ typedef struct neverd_x64_event_v1 {
     EVENT_FIELD(Reserved);
 #undef EVENT_FIELD
   }
+  llvm::json::Array FunctionCalls;
   if (Request->Options.PagedMemory) {
     emitX64PagedDriver(OS, *Units, Request->Options,
                        Request->FollowInternalCalls);
@@ -771,6 +830,7 @@ typedef struct neverd_x64_event_v1 {
     emitX64ContinuationEnvironment(OS, Version, false);
     if (Request->FunctionContext)
       emitX64ContinuationEnvironment(OS, Version, true);
+    FunctionCalls = emitX64FunctionCalls(OS, Request->FunctionCalls);
   }
   if (Request->Options.ScheduledEvents)
     emitX64ContinuationSchedule(OS, *Units, Request->FollowInternalCalls,
@@ -1050,6 +1110,16 @@ typedef struct neverd_x64_event_v1 {
          "original full state and RAM, including incoming stack "
          "bytes; retain context across pauses; provider completion "
          "and arbitrary frame reuse are not inferred"}};
+  if (!FunctionCalls.empty())
+    Report["function_calls"] = llvm::json::Object{
+        {"context_type", "neverd_x64_call_context_v1"},
+        {"result_type", "neverd_x64_call_result_v1"},
+        {"interfaces", std::move(FunctionCalls)},
+        {"domain", "producer-declared Win64 scalar views; entry arguments "
+                   "must match original state and accessible stack RAM; "
+                   "no argument or padding initialization; resume retains "
+                   "activation; Value is valid only when Completed is 1; "
+                   "same native-state and environment obligations"}};
   llvm::raw_string_ostream(Result.Manifest)
       << llvm::formatv("{0:2}\n", llvm::json::Value(std::move(Report)));
   return Result;
