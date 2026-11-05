@@ -108,10 +108,10 @@
             "wrong index before intact BOUND rejected"
           ],
           "tools": {
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llc": "4316545a1d6808b9257a32ea9c240dcb5019ee09aa2cbc0453cb443a42a17ffa",
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/opt": "299ad8e2c5b9869470db1947757f8732e2071e0b1e78ae87a6360099d56da915",
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
-            "/mnt/data/neverd-flags-20261104/clang-build/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
+            "<full-llvm-build>/bin/llc": "4316545a1d6808b9257a32ea9c240dcb5019ee09aa2cbc0453cb443a42a17ffa",
+            "<full-llvm-build>/bin/opt": "299ad8e2c5b9869470db1947757f8732e2071e0b1e78ae87a6360099d56da915",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "<full-clang-build>/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
             "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "affinity": [
@@ -158,10 +158,10 @@
             "wrong index before intact BOUND rejected"
           ],
           "tools": {
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llc": "4316545a1d6808b9257a32ea9c240dcb5019ee09aa2cbc0453cb443a42a17ffa",
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/opt": "299ad8e2c5b9869470db1947757f8732e2071e0b1e78ae87a6360099d56da915",
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
-            "/mnt/data/neverd-flags-20261104/clang-build/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
+            "<full-llvm-build>/bin/llc": "4316545a1d6808b9257a32ea9c240dcb5019ee09aa2cbc0453cb443a42a17ffa",
+            "<full-llvm-build>/bin/opt": "299ad8e2c5b9869470db1947757f8732e2071e0b1e78ae87a6360099d56da915",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "<full-clang-build>/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
             "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
           },
           "affinity": [
@@ -202,7 +202,7 @@
           "exported_elf_objects": 12,
           "tools": {
             "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
             "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "affinity": [
@@ -233,7 +233,7 @@
           "exported_elf_objects": 12,
           "tools": {
             "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
             "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "affinity": [
@@ -263,8 +263,8 @@
           "compiled_sources": 336,
           "exported_elf_objects": 12,
           "tools": {
-            "/mnt/data/neverd-flags-20261104/clang-build/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "<full-clang-build>/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
             "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "affinity": [
@@ -294,8 +294,8 @@
           "compiled_sources": 336,
           "exported_elf_objects": 12,
           "tools": {
-            "/mnt/data/neverd-flags-20261104/clang-build/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "<full-clang-build>/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
             "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "affinity": [
@@ -326,7 +326,7 @@
           "exported_elf_objects": 12,
           "tools": {
             "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
             "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "affinity": [
@@ -357,7 +357,7 @@
           "exported_elf_objects": 12,
           "tools": {
             "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
             "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "affinity": [
@@ -387,8 +387,8 @@
           "compiled_sources": 336,
           "exported_elf_objects": 12,
           "tools": {
-            "/mnt/data/neverd-flags-20261104/clang-build/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "<full-clang-build>/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
             "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "affinity": [
@@ -418,8 +418,8 @@
           "compiled_sources": 336,
           "exported_elf_objects": 12,
           "tools": {
-            "/mnt/data/neverd-flags-20261104/clang-build/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
-            "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "<full-clang-build>/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
             "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
           },
           "affinity": [
@@ -436,15 +436,15 @@
         "artifact": "export-equivalence-review.json",
         "sha256": "e52fc6d50e0a72d18112f03710ff90cc796199d93fa3d9dec259aac69cff5fd1",
         "r6": {
-          "previous": "/mnt/data/neverd-bound-20261104/r6-final/exports",
-          "current": "/mnt/data/neverd-bound-20261104/r6-review/exports",
+          "previous": "<artifacts>/r6-final/exports",
+          "current": "<artifacts>/r6-review/exports",
           "files": 672,
           "different": [],
           "manifest_sha256": "6c606f86292b710fbf388a0e53a1e336d2e18c9f0cee4bf11e1155b5f3e7a166"
         },
         "native": {
-          "previous": "/mnt/data/neverd-bound-20261104/native-final/exports",
-          "current": "/mnt/data/neverd-bound-20261104/native-review/exports",
+          "previous": "<artifacts>/native-final/exports",
+          "current": "<artifacts>/native-review/exports",
           "files": 672,
           "different": [],
           "manifest_sha256": "7497135b7c2bac8dd765f3d4ffbf1142279575109cba2d0d7822f302281e6485"
@@ -690,7 +690,7 @@
         "skips": [
           {
             "test": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:116\nBound KVM CPU has no LA57\n"
+            "reason": "<neverd>/unittests/translate/x86/X86PagingNativeTests.cpp:116\nBound KVM CPU has no LA57\n"
           }
         ],
         "properties": {
@@ -707,7 +707,7 @@
         "skips": [
           {
             "test": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
-            "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:116\nBound KVM CPU has no LA57\n"
+            "reason": "<neverd>/unittests/translate/x86/X86PagingNativeTests.cpp:116\nBound KVM CPU has no LA57\n"
           }
         ],
         "properties": {
@@ -803,43 +803,43 @@
       "skips": [
         {
           "test": "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5644\nHost does not provide AMX-TILE; native restart unqualified\n"
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5644\nHost does not provide AMX-TILE; native restart unqualified\n"
         },
         {
           "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
         },
         {
           "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
         },
         {
           "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
         },
         {
           "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
         },
         {
           "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
         },
         {
           "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
         },
         {
           "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
         },
         {
           "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
         },
         {
           "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
         }
       ],
       "properties": {
