@@ -8774,6 +8774,13 @@ out-of-line landing-pad paths receive the same protection because their
 unwinder entry is implicit. Returning or more complex handlers still require
 an exception flow proof; the method/export definite-assignment validator does
 not gain exception support from this liveness-only admission.
+Late skip-goto structuring builds each statement list's address index only
+when a candidate needs it. Rejected candidates reuse that index; moving or
+erasing a range invalidates it before the next candidate. Removing an
+else-only jump leaves the list's entry addresses and indices unchanged.
+The index stays local to one traversal, so child rewrites, later passes and
+other functions always read their own current lists.
+
 Iterative HighIR cleanup treats an inline candidate as progress only after the
 shared stability proof admits it and a use is replaced. Expression simplification
 reports both replacements and in-place changes to shared nodes. With candidates

@@ -11451,6 +11451,13 @@ composed expression must not become a self-assignment.
 HighIR when CFG threading leaves a sole successor without a branch operation.
 Its edge copies and transfer must run before any unrelated source-order block.
 
+`HighControlFlowSemantics.LateSkipRewritesPreserveSuccessiveAndSharedContinuations`
+executes three consecutive skip/else rewrites, with and without an external
+jump into the later work. All 96 input paths must preserve their return values
+and exact jump targets after earlier ranges move. Run `NeverDHighControlFlowTests`
+and `NeverDCPointerProjectionTests` for late address-index changes, together
+with `NeverDCFGLoopXformTests` for the four-ISA roundtrip boundary.
+
 `HighControlFlowSemantics.*` checks that moving loop exits or tails preserves labels reached by other jumps. The entered head/tail exits and break replacement execute generated C at O0/O2 against independent return-value oracles.
 `SiblingSkipsKeepSharedReadersOutsideThePrefix` checks repeated variable reads
 and an expression shared by a guard and a later return. Early and late guard
