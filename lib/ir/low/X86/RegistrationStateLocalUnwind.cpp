@@ -38,7 +38,7 @@ std::optional<FrameValue> RegistrationStateSolver::transferLocalUnwind(
       Chain.TryLevelOffset != -4 || Chain.SeededTryLevel != (EH4 ? -2 : -1) ||
       !After.Installed || After.Uninstalled || After.Unknown || Facts.Invalid ||
       !After.JumpBindingsIntact || !SP.Offset ||
-      *SP.Offset > INT32_MAX - FrameArgument - 4 || Op.Seq < 0 ||
+      *SP.Offset > INT32_MAX - FrameArgument - 8 || Op.Seq < 0 ||
       Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
       Op.MemoryOrdering != NdMemoryOrdering::None ||
       Boundary == Boundaries.end() || Boundary->second.first != Block.Id ||
@@ -73,9 +73,14 @@ std::optional<FrameValue> RegistrationStateSolver::transferLocalUnwind(
   SEHFrameOutcomes Outcomes;
   std::vector<RegistrationObjectExtent> Writes;
   std::set<std::pair<int32_t, int32_t>> Transitions;
+  // This explicit CRT call owns the live parent stack. A finally-only
+  // function need not save ESP for exception-handler resumption. Exclude the
+  // suspended runtime's arguments as well as its private stack and return PC;
+  // a stale SavedESP must not grant access to any of those bytes.
+  const int32_t ParentStackOffset = *SP.Offset + FrameArgument + 8;
   for (int32_t From : After.Levels)
     if (!runSEHUnwind(After.Frame, From, *Bound, Outcomes, Writes, nullptr,
-                      nullptr, &Transitions))
+                      nullptr, &Transitions, ParentStackOffset))
       return Refuse();
   RegistrationSEHLocalUnwind Call;
   Call.Address = Op.Addr;

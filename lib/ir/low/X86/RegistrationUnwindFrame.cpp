@@ -22,7 +22,8 @@ bool RegistrationStateSolver::runSEHUnwind(
     FrameState Frame, int32_t Level, uint32_t Bound, SEHFrameOutcomes &Outcomes,
     std::vector<RegistrationObjectExtent> &Writes, SEHJumpUnwind *Jump,
     SEHHandlerOutcomes *Selected,
-    std::set<std::pair<int32_t, int32_t>> *Transitions) {
+    std::set<std::pair<int32_t, int32_t>> *Transitions,
+    std::optional<int32_t> ParentStackOffset) {
   if (KnownCxx || !Chain.TryLevelOffset || !validLevel(Level) ||
       (Jump && Bound != uint32_t(Jump->Capture.Level)) ||
       (EH4 && (!CompleteCookies || !cookiesReady(Frame))))
@@ -162,9 +163,10 @@ bool RegistrationStateSolver::runSEHUnwind(
     if (Jump)
       Repeated.emplace(SEHUnwindJump{Jump->Captures, {}});
     if (Scope.IsFinally) {
-      if (!runLocalFinally(Scope.HandlerVA, Current.Frame, false, &Writes,
-                           Repeated ? &*Repeated : nullptr, &Returned,
-                           Selected ? &Selections : nullptr))
+      if (!runSEHCallbackFrame(Scope.HandlerVA, Current.Frame, false, &Writes,
+                               Repeated ? &*Repeated : nullptr, nullptr, 0,
+                               ParentStackOffset, &Returned,
+                               Selected ? &Selections : nullptr))
         return false;
     } else if (!mergeSEHFrameOutcome(Returned, std::move(Current.Frame))) {
       return false;
