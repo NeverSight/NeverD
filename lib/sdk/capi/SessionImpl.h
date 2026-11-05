@@ -57,6 +57,7 @@
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -498,6 +499,28 @@ struct Session {
   /// On Mach-O only, a C spelling also finds its ABI-decorated symbol after
   /// both exact-name lookups fail.
   std::optional<size_t> functionIndexNamed(llvm::StringRef Name);
+  /// Where functionIndexAt() finds an entry, read from the list as it was at
+  /// Revision: every request for a function's view asks where the list holds
+  /// it, and an image lists tens of thousands.
+  struct FunctionEntryIndex {
+    uint64_t Revision;
+    const FuncInfo *List;
+    size_t Count;
+    /// The first function listed at each entry.
+    llvm::DenseMap<va_t, size_t> FirstAt;
+  };
+  std::optional<FunctionEntryIndex> EntryIndex;
+  /// The first function listed at \p Entry.
+  std::optional<size_t> functionIndexAt(va_t Entry);
+  /// Whether Functions was in address order at Revision, as
+  /// synchronizeFunctions() asks after every run.
+  struct FunctionOrderCheck {
+    uint64_t Revision;
+    const FuncInfo *List;
+    size_t Count;
+    bool Sorted;
+  };
+  std::optional<FunctionOrderCheck> FunctionOrder;
   /// Emits the session's C (cEmitter()), keeping the image's function names
   /// from one emission to the next.  Those name the symbol table Symbols
   /// held when it read them; clearPipeline() drops them.

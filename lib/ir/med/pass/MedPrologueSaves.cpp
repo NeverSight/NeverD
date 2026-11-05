@@ -1453,6 +1453,16 @@ unobservedSourceStackParameters(const MedFunc &Func,
                                 llvm::ArrayRef<LowBlock> OriginalBlocks,
                                 const std::set<va_t> &DeclaredCallees,
                                 size_t &Budget, const BinaryImage *Image) {
+  return unobservedSourceStackParametersDeclaredBy(
+      Func, OriginalBlocks,
+      [&](va_t Target) { return DeclaredCallees.count(Target) != 0; }, Budget,
+      Image);
+}
+
+std::set<unsigned> unobservedSourceStackParametersDeclaredBy(
+    const MedFunc &Func, llvm::ArrayRef<LowBlock> OriginalBlocks,
+    llvm::function_ref<bool(va_t)> Declared, size_t &Budget,
+    const BinaryImage *Image) {
   if (!hasSourceRegisterInputBody(Func) || OriginalBlocks.empty() ||
       OriginalBlocks.front().StartAddr != Func.Entry ||
       !OriginalBlocks.front().Preds.empty() ||
@@ -1719,8 +1729,8 @@ unobservedSourceStackParameters(const MedFunc &Func,
           if (Call.Opcode != Op.Opcode || !Call.NumInputs ||
               !Call.Inputs[0].isConst() ||
               Call.Inputs[0].ConstVal != Op.Inputs[0].Offset ||
-              !DeclaredCallees.count(Op.Inputs[0].Offset) ||
-              Call.SourceCallHint || Call.IsTailCall || Call.DoesNotReturn ||
+              !Declared(Op.Inputs[0].Offset) || Call.SourceCallHint ||
+              Call.IsTailCall || Call.DoesNotReturn ||
               Call.CalleeStackArgs < 0 || Call.CalleeVectorArgs != 0 ||
               Call.CalleeVectorSlots || Stack > 0)
             return false;

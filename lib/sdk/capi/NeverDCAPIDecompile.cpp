@@ -1182,13 +1182,14 @@ const Session::FunctionSource &dialectSource(neverd_session_t Sess, va_t Entry,
 /// keys in its order, written once the page is known rather than built as a
 /// value first.  A large function's page holds a row for each of its
 /// thousands of lines.
+///
+/// \p Dialect is the language viewDialect() gives the view (none for
+/// `llvmc`), which the caller has already asked for.
 void writeSourcePage(llvm::raw_ostream &OS, neverd_session_t Sess, va_t Entry,
-                     llvm::StringRef Stage, size_t Offset, size_t Limit) {
+                     llvm::StringRef Stage, size_t Offset, size_t Limit,
+                     std::optional<SourceDialect> Dialect) {
   auto &S = *toSession(Sess);
   CSourceMap Map;
-  std::optional<SourceDialect> Dialect;
-  if (Stage != "llvmc")
-    Dialect = viewDialect(S, Entry, Stage);
   assert((Stage == "llvmc" || Dialect) && "an unoffered view reached a page");
   std::string Spelled;
   std::vector<std::string> Unread;
@@ -1954,7 +1955,10 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
         return dupStr(jsonToString(llvm::json::Value(std::move(Result))));
       }
       // Rust and Go are offered for programs written in them.
-      if (Stage != "llvmc" && !viewDialect(*S, FuncEntry, Stage)) {
+      std::optional<SourceDialect> Dialect;
+      if (Stage != "llvmc")
+        Dialect = viewDialect(*S, FuncEntry, Stage);
+      if (Stage != "llvmc" && !Dialect) {
         Result["mapping_status"] = "unsupported_representation";
         Result["reason"] = unofferedDialectReason(
             sourceDialectFromKey(Stage).value_or(SourceDialect::C),
@@ -1963,7 +1967,7 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
       }
       std::string Page;
       llvm::raw_string_ostream PageOS(Page);
-      writeSourcePage(PageOS, Sess, FuncEntry, Stage, Offset, Limit);
+      writeSourcePage(PageOS, Sess, FuncEntry, Stage, Offset, Limit, Dialect);
       PageOS.flush();
       return dupStr(Page);
     }

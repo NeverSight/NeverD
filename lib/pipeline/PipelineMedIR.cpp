@@ -314,39 +314,44 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
                                 limits::ir::kSourceEntrySpillWork);
   SourceCalleeParameterReads Facts;
   SourceCalleeParameterOverwrites Overwrites;
-  std::set<va_t> DeclaredCallees = Result.CallPrototypeArguments;
-  if (Result.OmittedCalleeIntegerArguments)
-    for (const auto &[Target, Signature] :
-         *Result.OmittedCalleeIntegerArguments)
-      DeclaredCallees.insert(Target);
-  // Fixed import arity tables also own native stack bounds, without needing
-  // a complete typed source prototype. An import rebound to an image routine
-  // must use that routine's independently checked contract instead.
-  const auto ImportDeclarations = [&](const auto &Arguments) {
-    for (const auto &[Target, Count] : Arguments) {
-      const auto Own = Result.CallArgumentSources.find(Target);
-      if (Count >= 0 && Image.findImportAt(Target) &&
-          (Own == Result.CallArgumentSources.end() || Own->second == Target))
-        DeclaredCallees.insert(Target);
+  // The callees whose declarations bound their arguments, asked of each
+  // callee a query meets rather than listed for the image's declarations:
+  // prototypes, the integer signatures omitted callees read, and the
+  // imports below, less those a variadic signature leaves open.
+  const auto Declared = [&](va_t Target) {
+    if (Result.CallEntryVariadicArguments.count(Target) ||
+        (Result.OmittedCalleeVariadicArguments &&
+         Result.OmittedCalleeVariadicArguments->count(Target)))
+      return false;
+    if (Result.CallPrototypeArguments.count(Target) ||
+        (Result.OmittedCalleeIntegerArguments &&
+         Result.OmittedCalleeIntegerArguments->count(Target)))
+      return true;
+    // Fixed import arity tables also own native stack bounds, without
+    // needing a complete typed source prototype. An import rebound to an
+    // image routine must use that routine's independently checked contract
+    // instead.
+    const auto Own = Result.CallArgumentSources.find(Target);
+    const bool Unbound =
+        Own == Result.CallArgumentSources.end() || Own->second == Target;
+    const auto ImportDeclared = [&](const std::map<va_t, int> &Arguments) {
+      const auto At = Arguments.find(Target);
+      return At != Arguments.end() && At->second >= 0 &&
+             Image.findImportAt(Target) && Unbound;
+    };
+    // An image's summaries list their imports (CallEntryStackArgImports),
+    // ascending as CallEntryStackArgs holds them.
+    if (Result.CallEntryStackArgImports) {
+      if (Unbound &&
+          std::binary_search(Result.CallEntryStackArgImports->begin(),
+                             Result.CallEntryStackArgImports->end(), Target))
+        return true;
+    } else if (ImportDeclared(Result.CallEntryStackArgs)) {
+      return true;
     }
+    return Result.OmittedCalleeStackArgs &&
+           ImportDeclared(*Result.OmittedCalleeStackArgs);
   };
-  // An image's summaries list their imports (CallEntryStackArgImports).
-  if (Result.CallEntryStackArgImports) {
-    for (const va_t Target : *Result.CallEntryStackArgImports)
-      if (const auto Own = Result.CallArgumentSources.find(Target);
-          Own == Result.CallArgumentSources.end() || Own->second == Target)
-        DeclaredCallees.insert(Target);
-  } else {
-    ImportDeclarations(Result.CallEntryStackArgs);
-  }
-  if (Result.OmittedCalleeStackArgs)
-    ImportDeclarations(*Result.OmittedCalleeStackArgs);
-  for (const auto &[Target, Signature] : Result.CallEntryVariadicArguments)
-    DeclaredCallees.erase(Target);
-  if (Result.OmittedCalleeVariadicArguments)
-    for (const auto &[Target, Signature] :
-         *Result.OmittedCalleeVariadicArguments)
-      DeclaredCallees.erase(Target);
   std::vector<std::optional<std::set<unsigned>>> StackReads(Sources.size());
   while (!Work.empty()) {
     std::vector<uint64_t> WaveWeights;
@@ -364,8 +369,8 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
           // This original-CFG fact is independent of the changing source
           // register summaries. Reuse it across this phase's dependency waves.
           if (!StackReads[I])
-            StackReads[I] = unobservedSourceStackParameters(
-                *Sources[I], At->second, DeclaredCallees, Remaining[I], &Image);
+            StackReads[I] = unobservedSourceStackParametersDeclaredBy(
+                *Sources[I], At->second, Declared, Remaining[I], &Image);
           for (unsigned P : *StackReads[I])
             Reads[W].emplace(P, 0);
           Destroyed[W] = sourceRegisterInputOverwrites(

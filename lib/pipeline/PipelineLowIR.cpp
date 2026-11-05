@@ -619,7 +619,8 @@ bool collectLowAddressUses(
     ModuleAddressEdgeTraversal EdgeTraversal =
         ModuleAddressEdgeTraversal::OrdinaryAndExceptional,
     LocalUnwindContinuationEvidence *LocalUnwind = nullptr,
-    const std::set<va_t> *OccurrenceTableAnchors = nullptr) {
+    const std::set<va_t> *OccurrenceTableAnchors = nullptr,
+    const LowSEHWritableImageRanges *SEHWritable = nullptr) {
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   const std::vector<TargetRegisterRange> PreservedRanges =
       TRI.callPreservedRanges(Img.abiFormat());
@@ -633,7 +634,10 @@ bool collectLowAddressUses(
       It->second = TRI.findWideReg(Offset, Size);
     return It->second;
   };
-  const auto SEHRuntimeMemory = collectLowSEHRuntimeMemory(Img, Funcs);
+  // The image's writable ranges, where the caller keeps them, are the ones
+  // collectLowSEHRuntimeMemory would read again.
+  const auto SEHRuntimeMemory =
+      collectLowSEHRuntimeMemory(Img, Funcs, SEHWritable);
   std::map<va_t, const LowFunc *> SEHCallees;
   if (LocalUnwind)
     for (const auto &Func : Funcs)
@@ -2342,7 +2346,8 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
     const BinaryImage &Img, const std::vector<LowFunc> &Funcs,
     const std::set<va_t> &FunctionEntries, std::optional<size_t> TestBudget,
     bool CompleteModule = true,
-    const std::vector<std::pair<va_t, va_t>> *FH4Candidates = nullptr) {
+    const std::vector<std::pair<va_t, va_t>> *FH4Candidates = nullptr,
+    const LowSEHWritableImageRanges *SEHWritable = nullptr) {
   EHContinuationRootDiscovery Result;
   Result.CxxContinuationExitsByFunction.assign(Funcs.size(), {});
   Result.CxxContinuationExitAnalysisCompleteByFunction.assign(Funcs.size(),
@@ -2428,7 +2433,8 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
     std::vector<ModuleAddressUse> ReturnedUses;
     if (!collectLowAddressUses(Img, Funcs, NoTableOwners, ReturnedUses, Budget,
                                TestBudget, &CandidateTargets, &Returned,
-                               ModuleAddressEdgeTraversal::OrdinaryOnly)) {
+                               ModuleAddressEdgeTraversal::OrdinaryOnly,
+                               nullptr, nullptr, SEHWritable)) {
       Result.AnalysisComplete = false;
       return Result;
     }
@@ -2437,7 +2443,7 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
           Img, Funcs, NoTableOwners, IgnoredUses, Budget, TestBudget,
           &CandidateTargets, nullptr,
           ModuleAddressEdgeTraversal::IndependentlyRootedOrdinaryOnly,
-          &LocalUnwind)) {
+          &LocalUnwind, nullptr, SEHWritable)) {
     Result.AnalysisComplete = false;
     return Result;
   }
@@ -5660,7 +5666,8 @@ void Pipeline::buildLowIR(
               Opts.EHContinuationEvidenceBudgetForTesting,
               Opts.OnlyFunctionEntries.empty() && !Opts.MaxFunctions &&
                   Opts.FunctionEdits.empty(),
-              Shared ? &Inventory->fh4ContinuationCandidates(Img) : nullptr);
+              Shared ? &Inventory->fh4ContinuationCandidates(Img) : nullptr,
+              Inputs.SEHWritable.get());
       if (!Discovered.AnalysisComplete) {
         clearContinuationRoots();
         return false;

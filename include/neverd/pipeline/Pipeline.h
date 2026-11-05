@@ -403,7 +403,8 @@ struct PipelineResult {
   SharedValue<std::map<va_t, int>> CallEntryStackArgs;
   /// Where the run took an image's summaries (Pipeline::prepareCallSummaries),
   /// the callees in CallEntryStackArgs at an import (BinaryImage::findImportAt)
-  /// whose count is not negative, listed once for the image; null otherwise.
+  /// whose count is not negative, listed once for the image in ascending
+  /// order; null otherwise.
   std::shared_ptr<const std::vector<va_t>> CallEntryStackArgImports;
   /// The writable ranges of the image that MedIR's SEH runtime catalog
   /// reads (collectLowSEHRuntimeMemory), kept with the image's analysis

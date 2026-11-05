@@ -18,6 +18,7 @@
 #include "neverd/ir/med/MedIR.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -125,6 +126,12 @@ std::set<unsigned> sourceRegisterInputOverwrites(
 std::set<unsigned> unobservedSourceStackParameters(
     const MedFunc &Func, llvm::ArrayRef<LowBlock> OriginalBlocks,
     const std::set<va_t> &DeclaredCallees, size_t &Remaining,
+    const BinaryImage *Image = nullptr);
+/// The same, where \p Declared tells whether a direct callee is one whose
+/// declaration bounds its arguments.
+std::set<unsigned> unobservedSourceStackParametersDeclaredBy(
+    const MedFunc &Func, llvm::ArrayRef<LowBlock> OriginalBlocks,
+    llvm::function_ref<bool(va_t)> Declared, size_t &Remaining,
     const BinaryImage *Image = nullptr);
 
 /// Extend source spill evidence through current direct calls. Identity copies

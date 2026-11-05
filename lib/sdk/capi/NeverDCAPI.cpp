@@ -115,6 +115,35 @@ std::optional<size_t> Session::functionIndexNamed(llvm::StringRef Name) {
   return std::nullopt;
 }
 
+std::optional<size_t> Session::functionIndexAt(va_t Entry) {
+  using EntryInfo = llvm::DenseMapInfo<va_t>;
+  const auto Reserved = [](va_t Address) {
+    return Address == EntryInfo::getEmptyKey() ||
+           Address == EntryInfo::getTombstoneKey();
+  };
+  if (Reserved(Entry)) {
+    for (size_t I = 0; I < Functions.size(); ++I)
+      if (Functions[I].Entry == Entry)
+        return I;
+    return std::nullopt;
+  }
+  if (!EntryIndex || EntryIndex->Revision != FunctionListRevision ||
+      EntryIndex->List != Functions.data() ||
+      EntryIndex->Count != Functions.size()) {
+    FunctionEntryIndex Index{FunctionListRevision, Functions.data(),
+                             Functions.size(),
+                             llvm::DenseMap<va_t, size_t>(Functions.size())};
+    for (size_t I = 0; I < Functions.size(); ++I)
+      if (!Reserved(Functions[I].Entry))
+        Index.FirstAt.try_emplace(Functions[I].Entry, I);
+    EntryIndex = std::move(Index);
+  }
+  if (const auto At = EntryIndex->FirstAt.find(Entry);
+      At != EntryIndex->FirstAt.end())
+    return At->second;
+  return std::nullopt;
+}
+
 uint64_t listedFunctionSize(const LowFunc &Function,
                             llvm::ArrayRef<va_t> SortedEntries) {
   if (!Function.SizeFromBlocks)
@@ -168,12 +197,24 @@ bool Session::synchronizeFunctions() {
           NameIndex->Revision = FunctionListRevision;
         if (NamesDerivedFrom && NamesDerivedFrom->Revision == PreviousRevision)
           NamesDerivedFrom->Revision = FunctionListRevision;
+        if (EntryIndex && EntryIndex->Revision == PreviousRevision)
+          EntryIndex->Revision = FunctionListRevision;
+        if (FunctionOrder && FunctionOrder->Revision == PreviousRevision)
+          FunctionOrder->Revision = FunctionListRevision;
       }
     };
     // A selected run lifts functions the list, kept in address order,
     // already holds: find those there instead of indexing and sorting a list
     // of tens of thousands after every run.
-    if (std::is_sorted(Functions.begin(), Functions.end(), ByEntry) &&
+    // The order is checked once for each revision of the list; a
+    // recovered extent below keeps it.
+    if (!FunctionOrder || FunctionOrder->Revision != FunctionListRevision ||
+        FunctionOrder->List != Functions.data() ||
+        FunctionOrder->Count != Functions.size())
+      FunctionOrder = FunctionOrderCheck{
+          FunctionListRevision, Functions.data(), Functions.size(),
+          std::is_sorted(Functions.begin(), Functions.end(), ByEntry)};
+    if (FunctionOrder->Sorted &&
         llvm::all_of(PipeResult.LowFuncs, [&](const LowFunc &Function) {
           if (isDeletedFunction(Function.Entry))
             return true;
@@ -1426,10 +1467,8 @@ int neverd_func_find_by_addr(neverd_session_t Sess, neverd_va_t Addr) {
   auto *S = toSession(Sess);
   if (!S || !S->Loaded || !S->synchronizeFunctions())
     return -1;
-  for (size_t I = 0; I < S->Functions.size(); ++I)
-    if (S->Functions[I].Entry == Addr)
-      return static_cast<int>(I);
-  return -1;
+  const std::optional<size_t> Index = S->functionIndexAt(Addr);
+  return Index ? static_cast<int>(*Index) : -1;
 }
 
 // ===--------------------------------------------------------------------===//
