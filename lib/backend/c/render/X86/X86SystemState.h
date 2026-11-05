@@ -61,6 +61,19 @@ inline constexpr const char X86SystemStateCompilerDispatch[] =
     "#ifndef NEVERD_X86_ARPL\n"
     "#define NEVERD_X86_ARPL(native, ...) __VA_ARGS__\n"
     "#endif\n"
+    "#endif\n\n"
+    "#ifndef NEVERD_X86_HRESET\n"
+    "#if defined(__NEVERSIGHT_X86_HRESET__) && "
+    "__NEVERSIGHT_X86_HRESET__ >= 1\n"
+    "#define NEVERD_X86_HRESET(native, ...) native\n"
+    "#elif defined(__has_builtin)\n"
+    "#if __has_builtin(__builtin_ia32_hreset)\n"
+    "#define NEVERD_X86_HRESET(native, ...) native\n"
+    "#endif\n"
+    "#endif\n"
+    "#ifndef NEVERD_X86_HRESET\n"
+    "#define NEVERD_X86_HRESET(native, ...) __VA_ARGS__\n"
+    "#endif\n"
     "#endif\n\n";
 
 /// Compiler builtins and inline assembly need no intrinsic header declaration.

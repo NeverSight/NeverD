@@ -36,6 +36,8 @@ inline const char *x86SystemNativeTargetFeature(std::string_view Name) {
     return "rtm";
   if (Name == "llvm.x86.clzero")
     return "clzero";
+  if (Name == "llvm.x86.hreset")
+    return "hreset";
   return nullptr;
 }
 
@@ -46,6 +48,7 @@ void applyX86SystemNativeTargetFeatures(llvm::Function &Function);
 inline constexpr Intrinsic X86SystemStateNativeInventory[] = {
     Intrinsic::X86AdjustRpl,
     Intrinsic::X86AdjustRplMemory,
+    Intrinsic::X86HistoryReset,
     Intrinsic::Xend,
     Intrinsic::Xabort,
     Intrinsic::Clac,

@@ -62,6 +62,11 @@ MedLLVM, HighC and LLVMC. Both C writers emit the same native builtin or exact
 assembly contract. Memory stays inside ARPL; its address carrier preserves DS
 and explicit FS/GS offsets. This compiler ABI does not supply original-image
 fault continuations or a general i386 state dispatcher.
+HRESET uses the same native inventory and a feature-independent compiler API
+capability. `x86SystemNativeTargetFeature` owns its function requirement for
+LLVM and both C writers. The emitted `target("hreset")` attribute remains
+separate from `__NEVERSIGHT_X86_HRESET__`, which identifies the builtin even
+when translation-unit feature queries would hide it.
 PUSHF/POPF use that owner's exact word/dword stack access. Original CPL/IOPL
 select writable flags after a successful pop; the word form retains AC/ID.
 `backend/llvm/X86/X86FlagsNative.h` separately owns native image widths and

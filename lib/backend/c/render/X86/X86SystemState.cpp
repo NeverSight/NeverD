@@ -24,6 +24,15 @@
 namespace neverd {
 namespace {
 
+const char *compilerDispatch(const X86SystemStateNative &Plan,
+                             Arch TargetArch) {
+  if (Plan.AdjustRpl)
+    return "NEVERD_X86_ARPL";
+  if (Plan.Assembly.Id == Intrinsic::X86HistoryReset)
+    return "NEVERD_X86_HRESET";
+  return TargetArch == Arch::X64 ? "NEVERD_X86_SYSTEM_STATE" : nullptr;
+}
+
 bool hasOrderedSystemEffects(const llvm::CallBase &Call) {
   // System effects and instruction-owned conditional writes cannot be reduced
   // to argument-only memory or speculated past the original fault boundary.
@@ -163,7 +172,9 @@ std::string renderInstruction(const X86SystemStateAsm &Plan, Arch TargetArch,
                               const std::vector<std::string> &Inputs) {
   const auto Assembly = renderAsm(Plan, Outputs, Inputs);
   const auto Native = x86SystemStateNative(Plan.Id, TargetArch, Width, Space);
-  if (!Native || (TargetArch != Arch::X64 && !Native->AdjustRpl))
+  const auto *Dispatch =
+      Native ? compilerDispatch(*Native, TargetArch) : nullptr;
+  if (!Dispatch)
     return Assembly;
   auto Arguments = Inputs;
   if (Native->PackMsr)
@@ -176,10 +187,9 @@ std::string renderInstruction(const X86SystemStateAsm &Plan, Arch TargetArch,
   }
   if (Native->DescriptorQuery)
     Arguments.push_back("0");
-  return std::string(Native->AdjustRpl ? "NEVERD_X86_ARPL"
-                                       : "NEVERD_X86_SYSTEM_STATE") +
-         "(({ " + nativeBody(*Native, Arguments, Outputs) + " }), ({ " +
-         Assembly + " }));";
+  return std::string(Dispatch) + "(({ " +
+         nativeBody(*Native, Arguments, Outputs) + " }), ({ " + Assembly +
+         " }));";
 }
 
 bool matchesReturn(const llvm::CallBase &Call, const X86SystemStateAsm &P) {
@@ -550,8 +560,9 @@ renderX86SystemStateNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       const auto Count = P->InputBytes.size();
       if (!Callee->isIntrinsic() || Call.getNumOperandBundles() ||
           Call.onlyReadsMemory() || Call.onlyWritesMemory() ||
-          (P->AdjustRpl && (!hasOrderedSystemEffects(Call) ||
-                            Call.getCallingConv() != llvm::CallingConv::C)) ||
+          ((P->AdjustRpl || Id == Intrinsic::X86HistoryReset) &&
+           (!hasOrderedSystemEffects(Call) ||
+            Call.getCallingConv() != llvm::CallingConv::C)) ||
           (x86SystemStateContract(Id).Kind == X86SystemStateKind::SecureLaunch
                ? !hasSecureLaunchEffects(Call)
                : Call.doesNotReturn()) ||
@@ -610,12 +621,12 @@ renderX86SystemStateNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       if (P->DescriptorQuery)
         Fallback += " " + Outputs[0] + " = " + Outputs[1] + " ? " + Outputs[0] +
                     " : __neverd_system_prior;";
-      if (TargetArch == Arch::X86 && !P->AdjustRpl)
+      const auto *Dispatch = compilerDispatch(*P, TargetArch);
+      if (!Dispatch)
         return Text + Fallback + " }\n";
-      return Text +
-             (P->AdjustRpl ? "NEVERD_X86_ARPL" : "NEVERD_X86_SYSTEM_STATE") +
-             "(({ " + nativeBody(*P, NativeArguments, Outputs) + " }), ({ " +
-             Fallback + " })); }\n";
+      return Text + Dispatch + "(({ " +
+             nativeBody(*P, NativeArguments, Outputs) + " }), ({ " + Fallback +
+             " })); }\n";
     }
   throw std::invalid_argument("unsupported native x86 system C contract");
 }

@@ -20767,7 +20767,7 @@ qualified hybrid-core profile with `NEVERD_TEST_LEGACY_ALIGNMENT=before`.
 cases with independent original bytes. Use both stock Clang and the full fork,
 at both optimization levels. `verify_protected_bound.py --mode 16|32` checks
 full compiler-frame return and original fault state in KVM. These checks are
-separate from the unavailable NeverC i386 frontend and physical MPX coverage.
+separate from NeverC's unavailable embedded i386 backend and physical MPX coverage.
 `ReturnContract.DeclaredReturnKeepsFullValueAfterNarrowRead` lifts a native
 `mov rax,rdi; mov [rsi],ax; ret` with integer/pointer declarations. It compiles
 both C routes at O0/O2 and checks the complete return plus the partial store;
@@ -20782,3 +20782,15 @@ modes. Preserve exports with `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`; NeverC's
 Clang/NeverC or stock Clang's fallback and checks original KVM instruction
 state, fault frames and compiled returns. Its boundary is the compiler ABI;
 the separate `LegacyArpl` matrix owns original-image execution and retry.
+
+`X86HresetSource` checks native/fallback dispatch and function target attributes
+on x86/x64 ELF/COFF/MachO, including ignored nonzero immediates. It also rejects
+calls with weakened effects, the wrong calling convention or the wrong mode.
+Preserve its exports with `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`; NeverC's
+`tests/neverc/X86/verify_hreset_source.py` recompiles each C file and checks the
+exported ELF objects. It decodes HRESET before replacing it with a trap to
+observe EAX and the resumed function return. Patched Clang/NeverC must use
+native calls without a global `-mhreset`; stock Clang uses `--fallback`.
+This controlled observation does not qualify physical history reset. The
+separate `verify_i386_intrinsic_headers.py` executes header operations in both
+pointer widths and PIC modes; its HRESET/AVX-512 cases remain compile-only.

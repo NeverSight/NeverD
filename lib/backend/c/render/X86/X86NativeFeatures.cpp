@@ -176,6 +176,10 @@ std::string x86NativeFunctionPreamble(const HighFunc &Function,
       Rep = true;
       Compare |= C->Compare;
     }
+    if (const auto C = x86SystemStateContract(E->IntrinsicId); C.Mnemonic)
+      if (const auto *Feature = x86SystemNativeTargetFeature(
+              std::string("llvm.x86.") + C.Mnemonic))
+        Required.insert(Feature);
     for (const auto &Operand : E->Operands)
       Visit(Operand);
   };

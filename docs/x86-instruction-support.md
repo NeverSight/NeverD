@@ -62,7 +62,7 @@ complete instruction support or semantic test coverage.
 | RDMSRLIST, WRMSRLIST | Long-mode native instructions with two linear table addresses, real RCX completion and instruction-owned memory/fault ordering. |
 | CLUI, STUI, TESTUI, SENDUIPI | Long-mode UIF effects, actual CF with the other arithmetic flags cleared, and a full-width UITT index. Native instructions own user-interrupt delivery and implicit supervisor memory. |
 | LKGS | Long-mode 16-bit register/memory selector; native GS selector and IA32_KERNEL_GS_BASE effects. Descriptor and explicit memory accesses stay inside the instruction. |
-| HRESET | Explicit EAX control on x86/x64; the ignored imm8 is canonically emitted as zero. Privilege, feature and control validation remain native. |
+| HRESET | Explicit EAX control on x86/x64 with native LLVM, Clang/NeverC builtins and both C writers; the ignored imm8 is canonically emitted as zero. Privilege, feature and control validation remain native. |
 | INVLPGB, TLBSYNC | Address-width-specific rAX plus EDX/ECX inputs, real broadcast invalidation and synchronization. The control/address value is not an ordinary memory operand. |
 | UMONITOR | Address-size wrapping and FS/GS offset ownership; no ordinary preload. |
 | UMWAIT, TPAUSE | Explicit control operand and EDX:EAX deadline; actual CF completion; other arithmetic flags cleared. |
@@ -4053,3 +4053,34 @@ instruction executor above. NeverC still uses the full LLVM fork for i386
 machine code. General original-state source dispatch, real/VM86, asynchronous
 events and the other state environments remain separate. The final LLVM
 release, production SDK pin and LLVM gitlink remain unchanged.
+
+### i386 intrinsic headers and native HRESET source
+
+NeverC's MMX/SSE and umbrella headers now admit i386 source. AMX declarations
+retain their long-mode guard, and the marker macro saves the full EBX/RBX for
+the selected target. The i386 frontend continues to use the full LLVM fork for
+object generation; the embedded machine backend is still unavailable.
+
+Clang and NeverC expose `__builtin_ia32_hreset` in both modes, and their
+`_hreset` header wrappers emit native LLVM calls. NeverD's shared system-state
+inventory now selects that API in MedLLVM, HighC and LLVMC. A function receives
+its `hreset` target attribute from the same feature owner. The compiler's
+`__NEVERSIGHT_X86_HRESET__=1` capability identifies the API independently of
+global CPU options: relying only on `__has_builtin` previously selected the
+fallback before the function's target attribute could take effect.
+
+The [header and HRESET evidence](evidence/x86-i386-headers-hreset-2026-11-05.json)
+records 1,769,472 executed header-value checks on both local core types across
+32/64-bit O0/O2 static/PIC profiles. These cover MMX/SSE/AVX2, carry/borrow,
+CRC32C, x87 after EMMS and full EBX/RBX preservation; HRESET and AVX-512 are
+only compiled in that fixture. Deliberately wrong vector arithmetic fails.
+
+Actual NeverD HRESET exports separately pass 2,752,512 controlled EAX/return
+observations across both SDKs and patched Clang, NeverC and stock Clang's
+fallback. Each run compiles 48 C exports and eight ELF objects at O0/O2.
+The verifier decodes each HRESET before replacing it with a trap; corrupting
+its input while retaining the native call is rejected. This does not execute
+prediction-history reset or establish original fault/event semantics.
+ARPL's LLVM/object exports remain byte-identical to its qualification above;
+its C output differs only by an unused HRESET dispatch definition. Global
+state/environment completion and the final LLVM release/pin remain separate.
