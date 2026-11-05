@@ -46,13 +46,7 @@ x64DispatchFrame(const BinaryImage &Image, va_t Address) {
   if (Image.Arch != Arch::X64 || Image.Bits != Bitness::Bits64 ||
       Image.Format != BinaryFormat::COFF || Image.IsRelocatable ||
       Address > InvalidVA - X64DispatchFrame::EncodedBytes ||
-      !Image.isCodeRange(Address, X64DispatchFrame::EncodedBytes) ||
-      // A PE fixup beginning before the sequence may still overlap its bytes.
-      hasRelocationProvenanceIn(Image,
-                                Address >= sizeof(uint64_t) - 1
-                                    ? Address - (sizeof(uint64_t) - 1)
-                                    : 0,
-                                Address + X64DispatchFrame::EncodedBytes))
+      !Image.isCodeRange(Address, X64DispatchFrame::EncodedBytes))
     return std::nullopt;
   const uint8_t *Bytes = Image.readVA(Address, X64DispatchFrame::EncodedBytes);
   // mov rax,rsp; cli; sub rsp,16; push rax; pushfq; push imm8;
@@ -62,6 +56,16 @@ x64DispatchFrame(const BinaryImage &Image, va_t Address) {
   if (!Bytes || !std::equal(Prefix.begin(), Prefix.end(), Bytes) ||
       Bytes[12] != 0x48 || Bytes[13] != 0x8d || Bytes[14] != 0x05 ||
       Bytes[19] != 0x50 || Bytes[20] != 0xb8 || Bytes[25] != 0xe9)
+    return std::nullopt;
+  // A PE fixup beginning before the sequence may still overlap its bytes.
+  // Asked only of the bytes that already read as the sequence: the question
+  // walks the image's base relocations, and every source emission asks for
+  // each function it writes.
+  if (hasRelocationProvenanceIn(Image,
+                                Address >= sizeof(uint64_t) - 1
+                                    ? Address - (sizeof(uint64_t) - 1)
+                                    : 0,
+                                Address + X64DispatchFrame::EncodedBytes))
     return std::nullopt;
   const auto Relative = [&](size_t Displacement,
                             size_t Next) -> std::optional<va_t> {
