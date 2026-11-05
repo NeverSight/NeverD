@@ -108,8 +108,10 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
                                                uint64_t Size, uint64_t Flags) {
   auto &Exchange = *reinterpret_cast<X64PagedExchange *>(Opaque);
   auto &T = *static_cast<Transaction *>(Exchange.Transaction);
-  const auto Kind = X64PagedAccess(Flags & ~kX64PagedStackAccess);
-  if (Kind == X64PagedAccess::BeginSse) {
+  const bool SseMemory = Flags & kX64PagedSseAccess;
+  const auto Kind =
+      X64PagedAccess(Flags & ~(kX64PagedStackAccess | kX64PagedSseAccess));
+  if (Kind == X64PagedAccess::BeginSse || SseMemory) {
     const auto &Controls = T.Memory.controls();
     if (auto Vector =
             detail::x64PagedSseEntryFault(Controls.CR0, Controls.CR4)) {
@@ -118,7 +120,7 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
       return 1;
     }
     T.SseAlignmentBytes = 1;
-    if (Address && T.CPL == 3 && (Controls.CR0 & 0x40000) &&
+    if (SseMemory && T.CPL == 3 && (Controls.CR0 & 0x40000) &&
         (Controls.RFlags & 0x40000)) {
       T.SseAlignmentBytes =
           T.SseAlignment ? detail::x64PagedSseAlignmentBytes(*T.SseAlignment)
@@ -128,7 +130,8 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
         return 1;
       }
     }
-    return 0;
+    if (!SseMemory)
+      return 0;
   }
   if (Kind == X64PagedAccess::PortIO) {
     T.PortIO = true;
@@ -199,7 +202,8 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   }
   assert((Size == 1 || Size == 2 || Size == 4 || Size == 8 ||
           (Size == 16 && T.SseAlignmentBytes)) &&
-         Flags <= (kX64PagedStackAccess | 2) && !T.Store &&
+         (Flags & ~kX64PagedSseAccess) <= (kX64PagedStackAccess | 2) &&
+         !T.Store &&
          "source admission owns operand widths and the final store boundary");
   X86LinearAccess A{Address, MemoryAccessKind::Read, T.CPL, false,
                     bool(Flags & kX64PagedStackAccess)};

@@ -105,19 +105,21 @@ typedef struct {
     uint64_t lo, hi;
     void *transaction;
     uint64_t address, flags, stored_lo, stored_hi;
-    unsigned calls, bad, memory, fail;
+    unsigned calls, operands, bad, memory, fail;
 } sse_exchange;
 uint64_t neverd_x64_paged_access_v1(void *opaque, uint64_t address,
                                   uint64_t size, uint64_t flags) {
     sse_exchange *e = opaque;
     ++e->calls;
-    e->bad |= e->transaction != e;
-    if (e->calls == 1) {
-        e->bad |= flags != 20 || size != 0 || address != e->memory;
+    e->bad |= e->transaction != e || e->calls != 1;
+    if (!e->memory) {
+        e->bad |= flags != 20 || size != 0 || address != 0;
         return e->fail == 1;
     }
-    e->bad |= e->calls != 2 || size != 16 || address != e->address
-              || flags != e->flags;
+    e->bad |= size != 16 || address != e->address || flags != (e->flags | 32);
+    // The combined callback refuses availability before touching the operand.
+    if (e->fail == 1) return 1;
+    ++e->operands;
     if (e->fail == 2) return 1;
     if (flags & 1) {
         e->stored_lo = e->lo; e->stored_hi = e->hi;
@@ -199,8 +201,8 @@ static uint64_t sse_difference(const neverd_x64_state_v6 *a,
         Probes += "uint64_t result=neverd_paged_neverd_step_v6_" +
                   llvm::utohexstr(PC) + "((uint8_t *)&s,(uint8_t *)&e);\n";
         Probes += "return result!=" + std::to_string(Fail ? 17 : 0) +
-                  " || e.bad || e.calls!=" +
-                  std::to_string(Fail == 1 || !C.Address ? 1 : 2) +
+                  " || e.bad || e.calls!=1 || e.operands!=" +
+                  std::to_string(Fail != 1 && C.Address ? 1 : 0) +
                   " || sse_difference(&s,&expected)";
         if (C.Store && !Fail)
           Probes += " || e.stored_lo!=low || e.stored_hi!=high";
