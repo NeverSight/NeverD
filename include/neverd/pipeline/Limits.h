@@ -76,6 +76,20 @@ inline constexpr size_t kPipelineCallAbiCalleeReadAhead = 64;
 /// and 8 changed three, and 32 left the EH corpus, the switch corpus and the
 /// whole units as they were too.
 inline constexpr size_t kPipelineCallAbiMaxOmittedCalleeReads = 32;
+/// Whether a replica's callee prefill goes on to solve the signatures of the
+/// bodies it read image-wide (stepGlobalCalleeSignatures), which runs then
+/// install instead of probing and recovering those callees again around
+/// their own selection.  On the 300-function ntoskrnl 19041.6456 sample the
+/// callees a run reads at 32 reads end with the summaries and recoveries an
+/// unbounded read gives them, which is what the solve gives a callee it
+/// read every callee of.
+inline constexpr bool kPipelineCallAbiGlobalSignatures = true;
+/// Bodies one step of that solve probes or recovers at least, on the
+/// pipeline's workers: about as long as a decompile of a median function.
+inline constexpr size_t kPipelineCallAbiGlobalSignatureStepBodies = 256;
+/// Rounds of forwarder propagation the solve takes at most; past them it
+/// gives no body a signature and runs read every callee themselves.
+inline constexpr size_t kPipelineCallAbiGlobalSignatureMaxRounds = 64;
 /// Fewest such callees worth a worker batch. Each is a whole function's lift
 /// and MedIR conversion, so two already outweigh starting the workers.
 inline constexpr size_t kPipelineCallAbiMinParallelCalleeReads = 2;

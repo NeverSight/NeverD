@@ -573,9 +573,13 @@ public:
   /// holds the image's call summaries (prepareCallSummaries): from the
   /// \p First'th in that order, at most \p Count.  The output of every run
   /// stays as it was; runs find the bodies read.  Stops, full, where the
-  /// memo holds three quarters of its bound.  \p Next is where a later call
-  /// continues, or nullopt once the order or the memo is done.  Nullopt
-  /// where the cache holds no summaries.
+  /// memo holds three quarters of its bound.  Past the order (\p First at
+  /// its end or beyond), each call takes a step of the image-wide solve of
+  /// the bodies read (limits::pipeline::kPipelineCallAbiGlobalSignatures),
+  /// whose signatures runs install instead of probing and recovering those
+  /// callees again.  \p Next is where a later call continues, or nullopt
+  /// once the order or the memo, and the solve, are done.  Nullopt where the
+  /// cache holds no summaries.
   std::optional<AnalysisCacheWarmup>
   prefillCalleeSignatures(const BinaryImage &Img, const PipelineOptions &Opts,
                           DebugContext *Dbg, size_t First, size_t Count,

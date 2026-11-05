@@ -4437,7 +4437,20 @@ decompile probes its kept bodies that hold no probe its summaries read the same
 as, at least `kPipelineCallAbiMinSpeculativeProbes` of them, together on the
 pipeline workers before it starts, and keeps those probes with the bodies; the
 fixed point takes one only where the summaries still read as it read them, and
-probes the body again where they do not, so the probes change no output. It lazily retains the image's exact no-return name
+probes the body again where they do not, so the probes change no output.
+After the read-ahead, the replica's prefill solves the kept bodies' signatures
+image-wide, a step at a time (`stepGlobalCalleeSignatures` in
+`PipelineCallAbiGlobal.cpp`, behind `kPipelineCallAbiGlobalSignatures`): forwarder
+propagation over every kept body at once, a batch of probes per step on the
+pipeline workers, then each body's omitted recovery under the summaries the
+fixed point leaves. Each kept conversion keeps what the solve gives its body,
+stamped with the memo adoption and declared callees the solve read. A decompile
+under that stamp installs those summaries for the omitted bodies it reads and
+takes their recoveries, so it propagates and recovers only its own selection and
+the bodies without one. A body's summaries follow from its own body and its
+callees', and how far a run reads below a callee did not change them on the
+ntoskrnl 19041.6456 sample (16 through 4096 reads), so the installed signatures
+leave its 600 decompiles as they were. It lazily retains the image's exact no-return name
 index as well. Supplemental CFGs and their nested register-preservation proofs reuse it;
 indexes with resolver or declaration callbacks stay outside nested proofs to
 avoid re-entry. Readers without an image memo retain the live name lookup.
