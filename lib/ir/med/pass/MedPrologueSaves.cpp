@@ -26,7 +26,10 @@
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -78,13 +81,36 @@ using ValueKey = std::tuple<MedVar::VarKind, int, int>;
 
 ValueKey keyOf(const MedVar &V) { return {V.Kind, V.Id, V.SSAVer}; }
 
+/// Hash-table keys for ValueKey.  No value has a kind past the last VarKind,
+/// so two such kinds mark the empty and erased slots.
+struct ValueKeyInfo {
+  static ValueKey getEmptyKey() {
+    return {static_cast<MedVar::VarKind>(0xFF), 0, 0};
+  }
+  static ValueKey getTombstoneKey() {
+    return {static_cast<MedVar::VarKind>(0xFE), 0, 0};
+  }
+  static unsigned getHashValue(const ValueKey &Key) {
+    return llvm::detail::combineHashValue(
+        llvm::detail::combineHashValue(unsigned(std::get<0>(Key)),
+                                       unsigned(std::get<1>(Key))),
+        unsigned(std::get<2>(Key)));
+  }
+  static bool isEqual(const ValueKey &Left, const ValueKey &Right) {
+    return Left == Right;
+  }
+};
+
 /// Explicit and implicit readers, shared by both source spill proofs. A
 /// clobber or PHI is not an ordinary operation that a restore can skip.
 struct ValueReads {
-  std::map<ValueKey, std::vector<const MedOp *>> Ops;
-  std::set<ValueKey> Others;
-  std::map<ValueKey, std::vector<ValueKey>> PhiOutputs;
-  std::set<ValueKey> ImplicitReads;
+  /// The operations that read each value, in the function's order.
+  llvm::DenseMap<ValueKey, llvm::SmallVector<const MedOp *, 2>, ValueKeyInfo>
+      Ops;
+  llvm::DenseSet<ValueKey, ValueKeyInfo> Others;
+  llvm::DenseMap<ValueKey, llvm::SmallVector<ValueKey, 2>, ValueKeyInfo>
+      PhiOutputs;
+  llvm::DenseSet<ValueKey, ValueKeyInfo> ImplicitReads;
 
   explicit ValueReads(const MedFunc &Func) {
     auto Note = [&](const MedVar &V, const MedOp *By) {
@@ -2075,14 +2101,17 @@ size_t valueReadsBytes(const MedValueReads &Index) {
   constexpr size_t Node = 4 * sizeof(void *);
   const ValueReads &Reads = Index.Reads;
   size_t Bytes = sizeof(MedValueReads);
-  for (const auto &[Key, Ops] : Reads.Ops)
-    Bytes += Node + sizeof(Key) + sizeof(Ops) +
-             Ops.capacity() * sizeof(const MedOp *);
-  for (const auto &[Key, Outputs] : Reads.PhiOutputs)
-    Bytes += Node + sizeof(Key) + sizeof(Outputs) +
-             Outputs.capacity() * sizeof(ValueKey);
-  Bytes += (Reads.Others.size() + Reads.ImplicitReads.size()) *
-           (Node + sizeof(ValueKey));
+  // The tables' buckets, and the readers that outgrew their inline slots.
+  const auto Spilled = [](const auto &List) {
+    using Element = typename std::decay_t<decltype(List)>::value_type;
+    return List.capacity() > 2 ? List.capacity() * sizeof(Element) : 0;
+  };
+  Bytes += Reads.Ops.getMemorySize() + Reads.PhiOutputs.getMemorySize() +
+           Reads.Others.getMemorySize() + Reads.ImplicitReads.getMemorySize();
+  for (const auto &Entry : Reads.Ops)
+    Bytes += Spilled(Entry.second);
+  for (const auto &Entry : Reads.PhiOutputs)
+    Bytes += Spilled(Entry.second);
   const SourceRegisterBody &Body = Index.Body;
   Bytes += Body.Costs.capacity() * sizeof(size_t) +
            Body.Blocks.size() * (Node + sizeof(int) + sizeof(void *)) +
