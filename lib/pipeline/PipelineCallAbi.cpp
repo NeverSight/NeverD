@@ -1552,6 +1552,75 @@ struct ReadSummaries {
   }
 };
 
+/// What recovering a copy of \p Body under the summaries the maps hold
+/// gives its callers: a forwarder probe.  The recovery writes summaries only
+/// at the body's entry.  Where \p Reads is given it receives what the
+/// recovery read under each key it noted, the entry first, as the summaries
+/// stood before it ran.
+OmittedCalleeMemo::ProbeSignature probeSignature(
+    const MedFunc &Body, const BinaryImage &Img, Arch TheArch,
+    const std::map<va_t, std::string> &FuncNames, const SummaryView &View,
+    std::map<va_t, int> &CalleeRegArity, std::map<va_t, int> &CalleeTotalArity,
+    const std::map<va_t, int> &CalleeFPArity,
+    const std::map<va_t, uint16_t> &CalleeFPReturnSize,
+    const std::map<va_t, std::vector<uint64_t>> &CalleeFPRegs,
+    const std::map<va_t, std::map<uint64_t, uint16_t>> &CalleeFPScalarBytes,
+    const std::map<va_t, bool> &CalleeHasSret,
+    std::map<va_t, bool> &CalleeIsVariadic,
+    const std::map<va_t, bool> &CalleeConsumesVaList,
+    const std::map<va_t, std::vector<uint64_t>> &CalleeIntRegs,
+    const std::set<va_t> &VectorArgumentCallees,
+    const std::map<va_t, PointerVariableCallee> &PointerCallees,
+    const std::set<va_t> &PrototypeArgumentCallees,
+    const RelocationSymbolIndex &RelocationSymbols,
+    std::vector<OmittedCalleeMemo::ProbeRead> *Reads) {
+  const auto &TRI = getTargetRegInfo(TheArch);
+  // The recovery writes summaries at the entry: read them before it runs.
+  std::optional<OmittedCalleeMemo::ProbeRead> EntryRead;
+  if (Reads)
+    EntryRead = View.read(Body.Entry);
+  MedFunc Probe = Body;
+  std::vector<va_t> Keys;
+  recoverCallAbi(Probe, TheArch, FuncNames, &Img, &CalleeRegArity,
+                 &CalleeTotalArity, &CalleeFPArity, &CalleeFPReturnSize,
+                 &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic,
+                 &CalleeConsumesVaList, /*FrameLocalLeafCallees=*/nullptr,
+                 &CalleeIntRegs, &VectorArgumentCallees, &PointerCallees,
+                 &PrototypeArgumentCallees, &RelocationSymbols,
+                 Reads ? &Keys : nullptr, &CalleeFPScalarBytes);
+  int MaxRegIdx = -1;
+  int MaxIdx = -1;
+  OmittedCalleeMemo::ProbeSignature Gives;
+  const uint64_t IRR = TRI.indirectResultReg();
+  const IntegerArgumentLayout ProbeLayout = integerArgumentLayoutOf(Probe, TRI);
+  for (const auto &P : Probe.Params) {
+    if (IRR != 0 && P.RegOff == IRR)
+      continue;
+    if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff, Img.abiFormat())) {
+      Gives.FPRegs.push_back(P.RegOff);
+    } else {
+      const int Index = integerParameterIndex(P, ProbeLayout);
+      if (P.RegOff != kNoParamReg)
+        MaxRegIdx = std::max(MaxRegIdx, Index);
+      MaxIdx = std::max(MaxIdx, Index);
+    }
+  }
+  std::sort(Gives.FPRegs.begin(), Gives.FPRegs.end());
+  Gives.RegisterArity = callRegisterArity(Probe, MaxRegIdx);
+  Gives.MaxArgumentIndex = MaxIdx;
+  Gives.RecoveryTotalArity = callRecoveryTotalArity(Probe, MaxIdx);
+  Gives.IsVariadic = Probe.IsVariadic;
+  Gives.FPScalarBytes = Probe.FPParamScalarBytes;
+  Gives.FPReturnSize = summarizeCallee(Probe, Img).FPReturnSize;
+  Gives.IntegerArgumentRegisters = Probe.IntegerArgumentRegisters;
+  Gives.EntryRegArity = valueAt(CalleeRegArity, Body.Entry);
+  Gives.EntryTotalArity = valueAt(CalleeTotalArity, Body.Entry);
+  Gives.EntryIsVariadic = valueAt(CalleeIsVariadic, Body.Entry);
+  if (Reads)
+    *Reads = View.reads(std::move(*EntryRead), std::move(Keys));
+  return Gives;
+}
+
 /// Reach a fixed point for parameters forwarded only through direct calls.
 ///
 /// Optimized wrappers can consume an incoming argument solely by passing the
@@ -1607,7 +1676,6 @@ void propagateForwardedCallArities(
   for (size_t I = 0; I < Funcs.size(); ++I)
     Work.push(I);
 
-  const auto &TRI = getTargetRegInfo(TheArch);
   // Every summary, user prototype and name the run holds.
   const SummaryView View{FuncNames,
                          CalleeRegArity,
@@ -1643,52 +1711,103 @@ void propagateForwardedCallArities(
           CalleeIsVariadic[Body.Entry] = *Gives.EntryIsVariadic;
         return Gives;
       }
-    // The recovery writes summaries at the entry: read them before it runs.
-    OmittedCalleeMemo::ProbeRead EntryRead = View.read(Body.Entry);
-    MedFunc Probe = Body;
-    std::vector<va_t> Keys;
-    recoverCallAbi(Probe, TheArch, FuncNames, &Img, &CalleeRegArity,
-                   &CalleeTotalArity, &CalleeFPArity, &CalleeFPReturnSize,
-                   &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic,
-                   &CalleeConsumesVaList, /*FrameLocalLeafCallees=*/nullptr,
-                   &CalleeIntRegs, &VectorArgumentCallees, &PointerCallees,
-                   &PrototypeArgumentCallees, &RelocationSymbols,
-                   Holder ? &Keys : nullptr, &CalleeFPScalarBytes);
-    int MaxRegIdx = -1;
-    int MaxIdx = -1;
-    OmittedCalleeMemo::ProbeSignature Gives;
-    const uint64_t IRR = TRI.indirectResultReg();
-    const IntegerArgumentLayout ProbeLayout =
-        integerArgumentLayoutOf(Probe, TRI);
-    for (const auto &P : Probe.Params) {
-      if (IRR != 0 && P.RegOff == IRR)
-        continue;
-      if (P.RegOff != kNoParamReg &&
-          TRI.isFPArgReg(P.RegOff, Img.abiFormat())) {
-        Gives.FPRegs.push_back(P.RegOff);
-      } else {
-        const int Index = integerParameterIndex(P, ProbeLayout);
-        if (P.RegOff != kNoParamReg)
-          MaxRegIdx = std::max(MaxRegIdx, Index);
-        MaxIdx = std::max(MaxIdx, Index);
-      }
-    }
-    std::sort(Gives.FPRegs.begin(), Gives.FPRegs.end());
-    Gives.RegisterArity = callRegisterArity(Probe, MaxRegIdx);
-    Gives.MaxArgumentIndex = MaxIdx;
-    Gives.RecoveryTotalArity = callRecoveryTotalArity(Probe, MaxIdx);
-    Gives.IsVariadic = Probe.IsVariadic;
-    Gives.FPScalarBytes = Probe.FPParamScalarBytes;
-    Gives.FPReturnSize = summarizeCallee(Probe, Img).FPReturnSize;
-    Gives.IntegerArgumentRegisters = Probe.IntegerArgumentRegisters;
-    Gives.EntryRegArity = valueAt(CalleeRegArity, Body.Entry);
-    Gives.EntryTotalArity = valueAt(CalleeTotalArity, Body.Entry);
-    Gives.EntryIsVariadic = valueAt(CalleeIsVariadic, Body.Entry);
+    std::vector<OmittedCalleeMemo::ProbeRead> Reads;
+    OmittedCalleeMemo::ProbeSignature Gives = probeSignature(
+        Body, Img, TheArch, FuncNames, View, CalleeRegArity, CalleeTotalArity,
+        CalleeFPArity, CalleeFPReturnSize, CalleeFPRegs, CalleeFPScalarBytes,
+        CalleeHasSret, CalleeIsVariadic, CalleeConsumesVaList, CalleeIntRegs,
+        VectorArgumentCallees, PointerCallees, PrototypeArgumentCallees,
+        RelocationSymbols, Holder ? &Reads : nullptr);
     if (Holder)
-      Memo->keepProbe(
-          *Holder, {View.reads(std::move(EntryRead), std::move(Keys)), Gives});
+      Memo->keepProbe(*Holder, {std::move(Reads), Gives});
     return Gives;
   };
+  // The probes of kept bodies the summaries hold none for yet, computed
+  // together on the pipeline's workers under the summaries as they stand
+  // before the fixed point, and kept as probes of their bodies.  The fixed
+  // point below takes one only where the summaries then read as it read
+  // them, as it takes a probe an earlier run kept, and probes the body again
+  // where they do not: a recovery gives what it gives from what it reads.
+  // Few such bodies gain less than the workers cost to start.
+  std::vector<size_t> Missing;
+  std::vector<uint64_t> Weights;
+  if (Memo && workerThreadCount() > 1)
+    for (size_t I = 0; I < Funcs.size() && I < Kept.size(); ++I) {
+      const OmittedCalleeMemo::Conversion *Holder = Kept[I];
+      if (!Holder ||
+          llvm::any_of(Holder->Probes, [&](const OmittedCalleeMemo::Probe &P) {
+            return View.holds(P.Reads);
+          }))
+        continue;
+      Missing.push_back(I);
+      uint64_t Weight = 1;
+      for (const MedBlock &Block : Funcs[I]->Blocks)
+        Weight += Block.Ops.size();
+      Weights.push_back(Weight);
+    }
+  if (Missing.size() >=
+      limits::pipeline::kPipelineCallAbiMinSpeculativeProbes) {
+    std::vector<std::optional<OmittedCalleeMemo::Probe>> Speculative(
+        Missing.size());
+    parallelForEachWeighted(
+        Weights,
+        [&](auto Claim, size_t N) {
+          // A recovery writes the summaries at its body's entry: each worker
+          // probes over its own copies of those, restored after each probe.
+          std::map<va_t, int> RegArity = CalleeRegArity;
+          std::map<va_t, int> TotalArity = CalleeTotalArity;
+          std::map<va_t, bool> IsVariadic = CalleeIsVariadic;
+          const SummaryView Local{FuncNames,
+                                  RegArity,
+                                  TotalArity,
+                                  CalleeFPArity,
+                                  CalleeFPReturnSize,
+                                  CalleeFPRegs,
+                                  CalleeFPScalarBytes,
+                                  CalleeHasSret,
+                                  IsVariadic,
+                                  CalleeConsumesVaList,
+                                  CalleeIntRegs,
+                                  VectorArgumentCallees,
+                                  PrototypeArgumentCallees};
+          // The index reads relocations on its first query, for one thread.
+          const RelocationSymbolIndex LocalRelocations(Img);
+          const auto Restore = [](auto &Map, va_t Key, const auto &Was) {
+            if (Was)
+              Map[Key] = *Was;
+            else
+              Map.erase(Key);
+          };
+          for (size_t W; (W = Claim()) < N;) {
+            const MedFunc &Body = *Funcs[Missing[W]];
+            const auto Reg = valueAt(RegArity, Body.Entry);
+            const auto Total = valueAt(TotalArity, Body.Entry);
+            const auto Variadic = valueAt(IsVariadic, Body.Entry);
+            try {
+              std::vector<OmittedCalleeMemo::ProbeRead> Reads;
+              OmittedCalleeMemo::ProbeSignature Gives = probeSignature(
+                  Body, Img, TheArch, FuncNames, Local, RegArity, TotalArity,
+                  CalleeFPArity, CalleeFPReturnSize, CalleeFPRegs,
+                  CalleeFPScalarBytes, CalleeHasSret, IsVariadic,
+                  CalleeConsumesVaList, CalleeIntRegs, VectorArgumentCallees,
+                  PointerCallees, PrototypeArgumentCallees, LocalRelocations,
+                  &Reads);
+              Speculative[W] =
+                  OmittedCalleeMemo::Probe{std::move(Reads), std::move(Gives)};
+            } catch (...) {
+              // The fixed point probes the body in its turn and meets
+              // whatever this did.
+            }
+            Restore(RegArity, Body.Entry, Reg);
+            Restore(TotalArity, Body.Entry, Total);
+            Restore(IsVariadic, Body.Entry, Variadic);
+          }
+        },
+        /*MinWorkItems=*/2);
+    for (size_t W = 0; W < Missing.size(); ++W)
+      if (Speculative[W])
+        Memo->keepProbe(*Kept[Missing[W]], std::move(*Speculative[W]));
+  }
   while (!Work.empty()) {
     const size_t I = Work.front();
     Work.pop();
