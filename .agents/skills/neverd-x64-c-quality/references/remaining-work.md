@@ -1,5 +1,13 @@
 # Remaining x64 C-quality work
 
+Checked native-context call views can now keep individual register or stack
+slots only in original state by declaring a null argument width. This permits
+known scalar arguments after a missing ordinary argument without reading,
+initializing or renumbering the retained slot. Both C routes share the same
+wrappers and unchanged instruction drivers. It closes an explicit-interface
+gap, not the two ordinary-C registry-query proofs: native state and environment
+effects are still required, and ordinary/state composition is not automatic.
+
 Identity-matched PDB section contributions now bound mixed read-only data
 inside large executable segments. Native LLVM queries can retain scalar bytes,
 relocated pointer fields and interior aliases without mirroring the entire

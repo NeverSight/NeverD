@@ -17535,6 +17535,11 @@ the wrappers check their low declared bytes against original state without
 initializing padding or private storage. A separate context binds the root and
 caches its result only after the existing function context completes. Resume
 keeps the activation and never rechecks entry arguments or resets the PC.
+Null widths retain physical slots only in native state, without a scalar
+formal or entry access. Later arguments keep their original locations; the
+stack-range guard covers only checked scalar cells. The manifest distinguishes
+these retained slots from typed scalar parameters. This is not an unread-byte
+or missing-value recovery proof: selected instructions may still use the slots.
 Ordinary C callers receive status, a completion flag and valid result bits only
 on completion. This opt-in layer appends wrappers without changing either
 instruction dispatcher; it does not infer ABI declarations, capture native RAM

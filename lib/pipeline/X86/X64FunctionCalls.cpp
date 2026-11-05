@@ -77,8 +77,15 @@ typedef struct neverd_x64_call_result_v1 {
           "    }\n"
           "    return result;\n}\n";
     OS << "neverd_x64_call_result_v1 " << Start << Parameters;
+    std::optional<uint64_t> LastStackByte;
     for (size_t P = 0; P < Call.ArgumentBytes.size(); ++P)
-      OS << ", uint" << Call.ArgumentBytes[P] * 8 << "_t arg" << P;
+      if (const auto Bytes = Call.ArgumentBytes[P]) {
+        OS << ", uint" << *Bytes * 8 << "_t arg" << P;
+        if (P >= Layout.Registers.size())
+          LastStackByte = Layout.EntryStackBase +
+                          (P - Layout.Registers.size()) * Layout.SlotBytes +
+                          *Bytes - 1;
+      }
     OS << ") {\n"
           "    neverd_x64_call_result_v1 rejected = {"
        << uint64_t(Exit::InvalidState)
@@ -87,34 +94,36 @@ typedef struct neverd_x64_call_result_v1 {
           "||\n"
           "        state->PC != 0x"
        << Entry << "ULL) return rejected;\n";
-    if (Call.ArgumentBytes.size() > Layout.Registers.size()) {
-      const auto Last =
-          Layout.EntryStackBase +
-          (Call.ArgumentBytes.size() - Layout.Registers.size() - 1) *
-              Layout.SlotBytes +
-          Call.ArgumentBytes.back() - 1;
-      OS << "    if (state->GPR[4] > UINT64_MAX - " << Last
+    if (LastStackByte)
+      OS << "    if (state->GPR[4] > UINT64_MAX - " << *LastStackByte
          << "ULL) return rejected;\n";
-    }
     llvm::json::Array Arguments;
     for (size_t P = 0; P < Call.ArgumentBytes.size(); ++P) {
-      const auto Type =
-          "uint" + std::to_string(Call.ArgumentBytes[P] * 8) + "_t";
-      llvm::json::Object Argument{{"bytes", Call.ArgumentBytes[P]}};
+      const auto Bytes = Call.ArgumentBytes[P];
+      llvm::json::Object Argument;
+      std::string Type;
+      if (Bytes) {
+        Argument["bytes"] = *Bytes;
+        Type = "uint" + std::to_string(*Bytes * 8) + "_t";
+      } else {
+        Argument["retained_in_state"] = true;
+      }
       if (P < Layout.Registers.size()) {
         const auto Index = Layout.Registers[P] / TRI.PointerSize;
-        OS << "    if ((" << Type << ")state->GPR[" << Index << "] != arg" << P
-           << ") return rejected;\n";
+        if (Bytes)
+          OS << "    if ((" << Type << ")state->GPR[" << Index << "] != arg"
+             << P << ") return rejected;\n";
         Argument["gpr_index"] = Index;
       } else {
         const auto Offset = Layout.EntryStackBase +
                             (P - Layout.Registers.size()) * Layout.SlotBytes;
-        OS << "    " << Type << " stack_arg" << P << ";\n"
-           << "    __builtin_memcpy(&stack_arg" << P
-           << ", (const void *)(uintptr_t)(state->GPR[4] + " << Offset
-           << "ULL), sizeof(stack_arg" << P << "));\n"
-           << "    if (stack_arg" << P << " != arg" << P
-           << ") return rejected;\n";
+        if (Bytes)
+          OS << "    " << Type << " stack_arg" << P << ";\n"
+             << "    __builtin_memcpy(&stack_arg" << P
+             << ", (const void *)(uintptr_t)(state->GPR[4] + " << Offset
+             << "ULL), sizeof(stack_arg" << P << "));\n"
+             << "    if (stack_arg" << P << " != arg" << P
+             << ") return rejected;\n";
         Argument["entry_sp_offset"] = Offset;
       }
       Arguments.push_back(std::move(Argument));
