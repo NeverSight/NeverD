@@ -28,8 +28,14 @@ TEST_F(X64ContinuationExportTest, FunctionCallsRejectUnboundDeclarations) {
           R"([{"entry":4096,"abi":"win64","argument_bytes":[16],"result_bytes":8}])",
           R"([{"entry":4096,"abi":"win64","argument_bytes":[-1],"result_bytes":8}])",
           R"([{"entry":4096,"abi":"win64","argument_bytes":[1.5],"result_bytes":8}])",
+          R"([{"entry":4096,"abi":"win64","argument_bytes":[null,0],"result_bytes":8}])",
+          R"([{"entry":4096,"abi":"win64","argument_bytes":[null,true],"result_bytes":8}])",
+          R"([{"entry":4096,"abi":"win64","argument_bytes":[null,"8"],"result_bytes":8}])",
+          R"([{"entry":4096,"abi":"win64","argument_bytes":[null,{}],"result_bytes":8}])",
+          R"([{"entry":4096,"abi":"win64","argument_bytes":[null,[]],"result_bytes":8}])",
           R"([{"entry":4096,"abi":"win64","argument_bytes":[],"result_bytes":0}])",
           R"([{"entry":4096,"abi":"win64","argument_bytes":[],"result_bytes":3}])",
+          R"([{"entry":4096,"abi":"win64","argument_bytes":[],"result_bytes":null}])",
           R"([{"entry":4096,"abi":"win64","argument_bytes":[],"result_bytes":8,"name":"f"}])",
           R"([{"entry":4096,"abi":"win64","argument_bytes":[],"result_bytes":8},{"entry":4096,"abi":"win64","argument_bytes":[],"result_bytes":4}])",
       }) {
@@ -49,30 +55,40 @@ TEST_F(X64ContinuationExportTest, FunctionCallsRejectUnboundDeclarations) {
                                               Unbound.size(), 0, &Report),
             nullptr);
   EXPECT_EQ(Report, nullptr);
-  std::string TooMany =
-      Prefix + R"([{"entry":4096,"abi":"win64","argument_bytes":[)";
-  for (unsigned P = 0; P < 33; ++P)
-    TooMany += P ? ",8" : "8";
-  TooMany += R"(],"result_bytes":8}])";
-  const auto Bounded = request(TooMany);
-  EXPECT_EQ(neverd_x64_continuation_source_v1(Session, Bounded.data(),
-                                              Bounded.size(), 0, &Report),
-            nullptr);
-  EXPECT_EQ(Report, nullptr);
+  for (const char *Width : {"8", "null"}) {
+    std::string TooMany =
+        Prefix + R"([{"entry":4096,"abi":"win64","argument_bytes":[)";
+    for (unsigned P = 0; P < 33; ++P) {
+      if (P)
+        TooMany += ',';
+      TooMany += Width;
+    }
+    TooMany += R"(],"result_bytes":8}])";
+    const auto Bounded = request(TooMany);
+    EXPECT_EQ(neverd_x64_continuation_source_v1(Session, Bounded.data(),
+                                                Bounded.size(), 0, &Report),
+              nullptr);
+    EXPECT_EQ(Report, nullptr);
+  }
 }
 
 TEST_F(X64ContinuationExportTest, FunctionCallsCompileAndProveBoundaries) {
   // Read original private stack bytes before returning. They are not among
   // the declared ordinary parameters and the checked view must not seed them.
-  std::vector<uint8_t> Code(17, 0x90);
+  std::vector<uint8_t> Code(49, 0x90);
   const uint8_t Read[] = {0x8b, 0x44, 0x24, 0xf8, 0xc3};
   std::copy(std::begin(Read), std::end(Read), Code.begin());
   Code[16] = 0xc3;
-  load(Code, {{0x1000, 5}, {0x1010, 1}});
+  // The context-only fifth slot and RDX are read by the selected body. A hole
+  // in the scalar interface must not be interpreted as an unused native input.
+  const uint8_t HoleRead[] = {0x8b, 0x44, 0x24, 0x2c, 0x31, 0xd0, 0xc3};
+  std::copy(std::begin(HoleRead), std::end(HoleRead), Code.begin() + 32);
+  Code[48] = 0xc3;
+  load(Code, {{0x1000, 5}, {0x1010, 1}, {0x1020, 7}, {0x1030, 1}});
   const std::string Selection =
-      R"("entries":[4096,4112],"follow_internal_calls":true,"function_context":true)";
+      R"("entries":[4096,4112,4128,4144],"follow_internal_calls":true,"function_context":true)";
   const std::string Calls =
-      R"(,"function_calls":[{"entry":4096,"abi":"win64","argument_bytes":[1,2,4,8,4],"result_bytes":4},{"entry":4112,"abi":"win64","argument_bytes":[],"result_bytes":8}])";
+      R"(,"function_calls":[{"entry":4096,"abi":"win64","argument_bytes":[1,2,4,8,4],"result_bytes":4},{"entry":4112,"abi":"win64","argument_bytes":[],"result_bytes":8},{"entry":4128,"abi":"win64","argument_bytes":[1,null,4,8,null,2,null],"result_bytes":4},{"entry":4144,"abi":"win64","argument_bytes":[null,null,null,null,null,null,null],"result_bytes":8}])";
   const char Oracle[] = R"C(
 typedef struct { uint64_t GPR[16], PC; } neverd_x64_state_v6;
 )C";
@@ -82,10 +98,14 @@ typedef struct { uint64_t GPR[16], PC; } neverd_x64_state_v6;
   const char Driver[] = R"C(
 typedef int (*neverd_x64_environment_v6)(neverd_x64_state_v6 *,uint64_t,void *);
 static unsigned attempts,mode;
+static unsigned copies;
+static uintptr_t copied_address;
+static size_t copied_bytes;
 static uint64_t model_stack[24];
 static void model_copy(void *dest,uintptr_t address,size_t bytes) {
     if(address>sizeof(model_stack) || bytes>sizeof(model_stack)-address)
         __builtin_trap();
+    ++copies;copied_address=address;copied_bytes=bytes;
     __builtin_memcpy(dest,(const uint8_t *)model_stack+address,bytes);
 }
 #define __builtin_memcpy(D,S,N) model_copy(D,(uintptr_t)(S),N)
@@ -100,6 +120,8 @@ uint64_t neverd_x64_run_function_v6(neverd_x64_state_v6 *s,uint64_t *b,
     if(mode==1)return 3; /* An external return is not entry completion. */
     if(mode==2)return 4;
     if(mode==3){--*b;s->GPR[1]^=1;return 9;}
+    if(s->PC==0x1020)
+        s->GPR[0]=(uint32_t)(model_stack[13]>>32)^(uint32_t)s->GPR[2];
     --*b;f->Phase=NEVERD_X64_FUNCTION_RETURNED;return 3;
 }
 )C";
@@ -111,7 +133,8 @@ uint64_t neverd_x64_run_function_v6(neverd_x64_state_v6 *s,uint64_t *b,
     state.PC=0x1000;state.GPR[4]=64; \
     state.GPR[1]=0x1122334455667788ULL;state.GPR[2]=0x9988776655443322ULL; \
     state.GPR[8]=0xabcdef0187654321ULL;state.GPR[9]=UINT64_MAX; \
-    stack[13]=0xfedcba9876543210ULL;attempts=0;mode=0
+    stack[13]=0xfedcba9876543210ULL;attempts=0;mode=0; \
+    copies=0;copied_address=0;copied_bytes=0
 #define CALL() neverd_x64_call_1000_v6(&state,&budget,&env_budget,&call,0,0, \
     0x88,0x3322,0x87654321,UINT64_MAX,0x76543210)
 #define RESUME() neverd_x64_resume_1000_v6(&state,&budget,&env_budget,&call,0,0)
@@ -201,6 +224,45 @@ int proof_no_arguments_full_result(uint64_t incoming) {
         &state,&budget,&env_budget,&call,0,0);
     return r.Status!=3 || !r.Completed || r.Value!=incoming || attempts!=1;
 }
+#define HOLE_PREPARE() \
+    PREPARE();state.PC=0x1020;stack[14]=0xfedcba987654beefULL
+#define HOLE_CALL() neverd_x64_call_1020_v6( \
+    &state,&budget,&env_budget,&call,0,0,0x88,0x87654321,UINT64_MAX,0xbeef)
+int proof_native_slots_are_retained(uint64_t incoming,uint64_t native_rdx) {
+    HOLE_PREPARE();stack[13]=incoming;state.GPR[2]=native_rdx;
+    neverd_x64_call_result_v1 r=HOLE_CALL();
+    return r.Status!=3 || !r.Completed ||
+        r.Value!=((uint32_t)(incoming>>32)^(uint32_t)native_rdx) ||
+        stack[13]!=incoming || state.GPR[2]!=native_rdx ||
+        stack[14]!=0xfedcba987654beefULL || budget!=1 || attempts!=1 ||
+        copies!=1 || copied_address!=112 || copied_bytes!=2;
+}
+int proof_later_scalar_still_checked(uint64_t incoming) {
+    HOLE_PREPARE();stack[13]=incoming;stack[14]^=1;
+    neverd_x64_call_result_v1 r=HOLE_CALL();
+    return r.Status!=5 || r.Completed || r.Value || attempts || budget!=2 ||
+        call.Function.Phase || call.Entry || stack[13]!=incoming ||
+        copies!=1 || copied_address!=112 || copied_bytes!=2;
+}
+int proof_native_slots_survive_pause(uint64_t first,uint64_t second) {
+    HOLE_PREPARE();stack[13]=first;state.GPR[2]=first;mode=3;
+    neverd_x64_call_result_v1 r=HOLE_CALL();
+    int bad=r.Status!=9 || r.Completed || attempts!=1 || budget!=1 ||
+        stack[13]!=first || state.GPR[2]!=first;
+    stack[13]=second;state.GPR[2]=~second;stack[14]^=1;mode=0;
+    r=neverd_x64_resume_1020_v6(&state,&budget,&env_budget,&call,0,0);
+    return bad || r.Status!=3 || !r.Completed ||
+        r.Value!=((uint32_t)(second>>32)^(uint32_t)~second) || budget ||
+        attempts!=2 || copies!=1 || stack[13]!=second || state.GPR[2]!=~second;
+}
+int proof_context_only_interface_does_not_read_slots(void) {
+    PREPARE();state.PC=0x1030;state.GPR[4]=UINT64_MAX-8;mode=2;
+    neverd_x64_call_result_v1 r=neverd_x64_call_1030_v6(
+        &state,&budget,&env_budget,&call,0,0);
+    return r.Status!=4 || r.Completed || r.Value || copies || attempts!=1 ||
+        call.Function.Phase!=NEVERD_X64_FUNCTION_ACTIVE ||
+        call.Function.ReturnSlot!=UINT64_MAX-8 || budget!=2 || env_budget!=3;
+}
 )C";
   for (bool Direct : {false, true})
     for (bool LLVM : {false, true}) {
@@ -217,7 +279,7 @@ int proof_no_arguments_full_result(uint64_t incoming) {
       ASSERT_NE(Interfaces, nullptr);
       const auto *Entries = Interfaces->getArray("interfaces");
       ASSERT_NE(Entries, nullptr);
-      ASSERT_EQ(Entries->size(), 2u);
+      ASSERT_EQ(Entries->size(), 4u);
       const auto *First = Entries->front().getAsObject();
       ASSERT_NE(First, nullptr);
       EXPECT_EQ(First->getBoolean("source_abi_inferred"), false);
@@ -229,6 +291,26 @@ int proof_no_arguments_full_result(uint64_t incoming) {
                   (std::vector<int>{1, 2, 8, 9})[P]);
       EXPECT_EQ((*Arguments)[4].getAsObject()->getInteger("entry_sp_offset"),
                 40);
+      const auto *Holes = (*Entries)[2].getAsObject()->getArray("arguments");
+      ASSERT_NE(Holes, nullptr);
+      ASSERT_EQ(Holes->size(), 7u);
+      for (size_t P : {1, 4, 6}) {
+        const auto *Slot = (*Holes)[P].getAsObject();
+        EXPECT_EQ(Slot->getBoolean("retained_in_state"), true);
+        EXPECT_FALSE(Slot->get("bytes"));
+      }
+      EXPECT_EQ((*Holes)[1].getAsObject()->getInteger("gpr_index"), 2);
+      EXPECT_EQ((*Holes)[4].getAsObject()->getInteger("entry_sp_offset"), 40);
+      EXPECT_EQ((*Holes)[5].getAsObject()->getInteger("entry_sp_offset"), 48);
+      EXPECT_EQ((*Holes)[5].getAsObject()->getInteger("bytes"), 2);
+      EXPECT_EQ((*Holes)[6].getAsObject()->getInteger("entry_sp_offset"), 56);
+      const auto SparseStart =
+          Source.find("neverd_x64_call_result_v1 neverd_x64_call_1020_v6(");
+      ASSERT_NE(SparseStart, std::string::npos);
+      const auto SparseCall = Source.substr(SparseStart);
+      EXPECT_NE(SparseCall.find("UINT64_MAX - 49ULL"), std::string::npos);
+      EXPECT_EQ(SparseCall.find("stack_arg4"), std::string::npos);
+      EXPECT_EQ(SparseCall.find("stack_arg6"), std::string::npos);
 
       const auto Marker = Source.find("/* Checked scalar call interfaces.");
       ASSERT_NE(Marker, std::string::npos);
@@ -286,7 +368,7 @@ int proof_no_arguments_full_result(uint64_t incoming) {
           ASSERT_NE(Value, nullptr);
           EXPECT_TRUE(Value->isZero());
         }
-      EXPECT_EQ(Count, 13u);
+      EXPECT_EQ(Count, 17u);
     }
 }
 
@@ -331,4 +413,39 @@ TEST_F(X64ContinuationExportTest,
         ASSERT_TRUE(Built.ok()) << Built.err;
       }
     }
+}
+
+TEST_F(X64ContinuationExportTest, FunctionCallsAdmitContextOnlyArgumentLimit) {
+  load({0xc3});
+  std::string Selection =
+      R"("entries":[4096],"follow_internal_calls":true,"function_context":true,"function_calls":[{"entry":4096,"abi":"win64","argument_bytes":[)";
+  for (unsigned P = 0; P < 32; ++P)
+    Selection += P ? ",null" : "null";
+  Selection += R"(],"result_bytes":8}])";
+  for (bool LLVM : {false, true}) {
+    auto [Source, Manifest] = source(request(Selection), LLVM);
+    auto Parsed = llvm::json::parse(Manifest);
+    ASSERT_TRUE(bool(Parsed));
+    const auto *Entries = Parsed->getAsObject()
+                              ->getObject("function_calls")
+                              ->getArray("interfaces");
+    ASSERT_NE(Entries, nullptr);
+    ASSERT_EQ(Entries->size(), 1u);
+    const auto *Arguments =
+        Entries->front().getAsObject()->getArray("arguments");
+    ASSERT_NE(Arguments, nullptr);
+    ASSERT_EQ(Arguments->size(), 32u);
+    for (const auto &Argument : *Arguments) {
+      EXPECT_EQ(Argument.getAsObject()->getBoolean("retained_in_state"), true);
+      EXPECT_FALSE(Argument.getAsObject()->get("bytes"));
+    }
+    EXPECT_EQ(Arguments->back().getAsObject()->getInteger("entry_sp_offset"),
+              256);
+    const auto File = tmpFile("context-only-call.c");
+    std::ofstream(File) << Source;
+    const auto Built =
+        exec(NEVERD_TEST_CLANG, {"-std=c11", "-O0", "-c", File.string(), "-o",
+                                 tmpFile("context-only-call.o").string()});
+    ASSERT_TRUE(Built.ok()) << Built.err;
+  }
 }

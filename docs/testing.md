@@ -10222,12 +10222,13 @@ cannot retain a previous default-space slot's result.
 `LocalReloadUsesKeepForwardingAndValueIdentity` reverses CFG and block-vector
 order and checks widening, low/high slicing, different SSA versions and value
 kinds, and width views of the same value against the previous predicate.
-`LLVMCodePointerInvariantBoundary.FatalPointerResolutionStopsLaterEmissionAndAllowsReuse`
+`LLVMCodePointerInvariantBoundary.FatalPointerResolutionStopsItsBodyAndAllowsReuse`
 checks unresolved code/data pointer mirrors across x64/AArch64 and ELF/Mach-O/COFF.
-Source observations must stop at the failed LOAD, later function bodies must
-remain unprocessed, and deleted LLVM values must leave null source handles.
+The failing body's observations stop at its LOAD; independent bodies still
+contribute diagnostics. The unmasked emission returns no module, identifies
+only the refused body, and leaves null source handles for all deleted values.
 Repairing the target and reusing the emitter must produce a valid module with
-all expected observations.
+all expected observations and no retained refusal.
 `OversizedIndexConstraintsDoNotRepeatDoomedGraphBuilds` repeats queries on
 functions above the structural proof budget across all four architectures and
 checks bounded work; a smaller guarded runtime load must still be proved.
@@ -19170,7 +19171,18 @@ segments must retain independent bytes and mutability in either access order.
 Backwards growth must preserve atomic alignment and the symbolized original
 address.
 Required unresolved pointers and shared-shard storage keep their rejection or
-whole-run contracts. Run the owning pointer and memory suites together:
+whole-run contracts. `MedLLVMDirectData.LinkedDataRegion*` verifies bounded
+mixed records, pure-byte regions, self-relative data pointers and interior
+aliases in both function orders across x86/x64/ARM/AArch64 and COFF/ELF/Mach-O.
+Oversized, unbacked or unauthenticated regions, partial/overlapping pointer
+slots and unresolved code targets retain refusal. These cases inspect and
+verify LLVM without executing generated code.
+`PDBDataContributions.*` in `NeverDPDBIdentityTests` checks overlapping and
+adjacent contributions, gaps, section conflicts, modified permissions/extents
+and OMAP/original-section headers against the public PE/PDB fixture. A matching
+PDB grants storage intervals without granting object capacities; display-only
+loading without image identity grants neither.
+Run the owning pointer and memory suites together:
 
 ```bash
 ctest --test-dir build-release --build-config Release --output-on-failure \
@@ -20164,7 +20176,7 @@ arbitrary dynamic frame ownership or a Windows environment implementation.
 entry/ABI/width admission and the shared argument bound. Its
 `FunctionCallsCompileAndProveBoundaries` companion compiles the complete source
 at O0/O2 for both routes and dispatchers, checks that existing bodies and
-drivers are unchanged, and statically proves thirteen wrapper predicates over
+drivers are unchanged, and statically proves seventeen wrapper predicates over
 independent byte-RAM and activation-outcome oracles. Incoming result words
 remain arbitrary. These are wrapper proofs using compiled C, not execution of
 generated instructions or a Windows environment. They cover mismatch refusal,
@@ -20173,7 +20185,15 @@ rebinding, active-context restart refusal, external returns versus completion,
 cached results and wrong resume roots. No generated program is executed by
 either test. `FunctionCallsAdmitScalarWidthAndArgumentLimits` additionally
 compiles every supported scalar width with zero, register-only, first-stack
-and maximum argument counts through both C routes.
+and maximum argument counts through both C routes. Null register/stack slots
+retain arbitrary original bits, including a high DWORD that the body reads.
+The wrapper oracle counts entry reads, checks the later scalar's physical
+location and padding, and proves retained bytes survive pause/resume without
+rebinding. A context-only interface adds no argument read or wrapping-range
+guard, even when trailing slots would wrap. The independent activation oracle
+does not qualify instruction execution at that address.
+`FunctionCallsAdmitContextOnlyArgumentLimit` checks all 32 slots retained in
+native state; 33 slots and malformed mixed declarations remain rejected.
 
 `EnvironmentResumesTheActualPhysicalContext`,
 `EnvironmentBudgetsBoundEveryProviderAttempt` and

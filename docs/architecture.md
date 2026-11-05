@@ -4410,8 +4410,9 @@ when that reader ends, independently of any longer-lived signature memo.
 The signature memo holds the conversions a session's decompiles read, up to a
 twelfth of the host's physical memory between `kPipelineCallAbiDetailMaxBytes`
 and `kPipelineCallAbiDetailMaxBytesCeiling` (`OmittedCalleeMemo::maxBytes`),
-evicting those used longest ago past it: a decompile reads up to 256 callees,
-and a smaller memo evicts the ones the next decompiles read again. A replica's
+evicting those used longest ago past it: a decompile reads up to
+`kPipelineCallAbiMaxOmittedCalleeReads` callees, its direct callees first, and a
+smaller memo evicts the ones the next decompiles read again. A replica's
 callee read-ahead fills three quarters of it, so a larger memo covers more of
 the callees later decompiles read first. The forwarder fixed point of a
 decompile probes its kept bodies that hold no probe its summaries read the same
@@ -7884,6 +7885,20 @@ becoming the mirror's relocatable fields and its bytes copied from the
 segment; the read GEPs into it at the slot's offset. A segment within the
 limit keeps its whole-segment mirror, and every code pointer in the run must
 still resolve to a lifted owner or the emission fails closed.
+An identity-matched RSDS PDB can also supply a read-only storage interval
+through `DebugContext::readOnlyDataRegion`. `PDBDataContributions.h` indexes
+the linker's [section contributions](https://llvm.org/docs/PDB/DbiStream.html#section-contribution-substream)
+in the existing contribution-loading phase. Only complete initialized, readable,
+nonwritable data in a fixed image section qualifies; overlapping code, writable
+or contradictory-section contributions invalidate their connected component.
+Adjacent qualifying contributions share one interval, while gaps remain gaps.
+Missing image identity, OMAP/original-section translation and the permitted
+post-link resource/relocation suffix supply no such bounds. The query is a
+binary search and does not establish C object extents or buffer capacities.
+For a large executable segment, LLVM can mirror that bounded interval with
+mixed scalar bytes and relocated pointer fields. Every interior alias uses the
+same cached storage regardless of emission order. The existing embed limit and
+target proofs remain mandatory; cut or overlapping pointer slots refuse.
 Missing or masked emitted code does not establish that an unresolved target
 is padding or data. Even runtime-replaceable code-pointer storage requires an
 authenticated static fallback; data materialization needs the loader's separate
@@ -7896,12 +7911,14 @@ symbol for that import (`importedSymbolIdentity`), since the veneer itself
 is absent from MedIR. A value the code computes from a veneer's address
 still needs a lifted owner, as the code-identity proof requires.
 
-A fatal code or data pointer resolution ends LLVM emission at the next
-operation boundary, including predicated effects, deferred dispatch stores and
-PHI inputs. The module owner then discards the partial module before emitting
-later bodies or finalizing EH. The original diagnostic remains authoritative;
-an early exit publishes no partial IR. A new emission resets the failure state
-and its generation-owned caches as usual.
+A fatal code or data pointer resolution ends that body's LLVM emission at the
+next operation boundary, including predicated effects, deferred dispatch stores
+and PHI inputs. The module owner records the refused body and still diagnoses
+independent bodies; the unmasked emission discards the module. An explicit
+omission policy may retry with those bodies declared only and account for each
+omission. The original diagnostic remains authoritative and no failed partial
+module is published. A new emission resets the failure state and its
+generation-owned caches as usual.
 
 Implicit call-clobber records share the emitter's per-function definition
 index. Variable materialization keeps the first record for the same MedIR
@@ -17531,6 +17548,11 @@ the wrappers check their low declared bytes against original state without
 initializing padding or private storage. A separate context binds the root and
 caches its result only after the existing function context completes. Resume
 keeps the activation and never rechecks entry arguments or resets the PC.
+Null widths retain physical slots only in native state, without a scalar
+formal or entry access. Later arguments keep their original locations; the
+stack-range guard covers only checked scalar cells. The manifest distinguishes
+these retained slots from typed scalar parameters. This is not an unread-byte
+or missing-value recovery proof: selected instructions may still use the slots.
 Ordinary C callers receive status, a completion flag and valid result bits only
 on completion. This opt-in layer appends wrappers without changing either
 instruction dispatcher; it does not infer ABI declarations, capture native RAM

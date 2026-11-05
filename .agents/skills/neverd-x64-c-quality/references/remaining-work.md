@@ -1,5 +1,23 @@
 # Remaining x64 C-quality work
 
+Checked native-context call views can now keep individual register or stack
+slots only in original state by declaring a null argument width. This permits
+known scalar arguments after a missing ordinary argument without reading,
+initializing or renumbering the retained slot. Both C routes share the same
+wrappers and unchanged instruction drivers. It closes an explicit-interface
+gap, not the two ordinary-C registry-query proofs: native state and environment
+effects are still required, and ordinary/state composition is not automatic.
+
+Identity-matched PDB section contributions now bound mixed read-only data
+inside large executable segments. Native LLVM queries can retain scalar bytes,
+relocated pointer fields and interior aliases without mirroring the entire
+segment or guessing an individual object's size. This removes the mixed-data
+mirror refusal encountered by the two registry roots; it does not recover their
+ordinary-C stack inputs. OMAP/original-section translation, layout conflicts,
+partial pointer storage and unresolved code targets still refuse this proof.
+The interval index is built once with the existing PDB contributions; source
+emission does not run a new analysis or scan the contribution list per query.
+
 Direct native IR and CFG queries now use the existing function-preparation
 boundary. Fresh queries no longer analyze the whole image before returning one
 function, and restricted queries can switch entries without a prior decompile.

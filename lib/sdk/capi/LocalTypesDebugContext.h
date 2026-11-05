@@ -181,6 +181,10 @@ public:
   std::vector<DataObjectSym> allDataObjects() const override {
     return Inner.allDataObjects();
   }
+  std::optional<std::pair<va_t, va_t>>
+  readOnlyDataRegion(va_t Addr) const override {
+    return Inner.readOnlyDataRegion(Addr);
+  }
   std::optional<DataObjectSym> resolveDataObject(va_t Addr) const override {
     return Inner.resolveDataObject(Addr);
   }

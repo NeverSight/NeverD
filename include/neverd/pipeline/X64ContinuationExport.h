@@ -67,6 +67,8 @@ struct X64ContinuationExport {
 /// register or RAM input is initialized. Separate resume wrappers retain the
 /// activation and cache its explicitly completed result. Declarations do not
 /// infer a native signature or remove the original environment obligations.
+/// A null argument width keeps that physical slot only in the native context,
+/// without a scalar formal or entry read. Later arguments retain their slots.
 /// V7 requires sysenter_msr_address_bits and returns a distinct V7
 /// state/driver. The intel-user-interrupt-v8 profile additionally requires
 /// uiret_restores_uif, owns UIF/monitor validity and stops UIRET at its

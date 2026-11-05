@@ -321,6 +321,14 @@ public:
 
   virtual std::vector<FunctionSym> allFunctions() const = 0;
   virtual std::vector<DataObjectSym> allDataObjects() const { return {}; }
+  /// A linked, read-only data storage interval containing Addr. The provider
+  /// validates its image identity, bounds and absence of conflicting code or
+  /// writable contributions. This does not establish a C object boundary,
+  /// buffer capacity, or any pointer relocation target.
+  virtual std::optional<std::pair<va_t, va_t>>
+  readOnlyDataRegion(va_t Addr) const {
+    return std::nullopt;
+  }
   /// Name a data public at exactly \p Addr.  The default walks
   /// allDataObjects(); providers that keep an uningested publics index
   /// override this so `--func` does not have to materialize every S_PUB32.
