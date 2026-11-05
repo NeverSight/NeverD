@@ -1,5 +1,76 @@
 # NeverD Daily Progress
 
+## Current snapshot — 2026-11-05T01:08:30Z
+
+- Reviewed dev: [707a07f60d077bd0a8c539db713e028b19a23472](https://github.com/NeverSight/NeverD/commit/707a07f60d077bd0a8c539db713e028b19a23472), committed at **2026-11-05T00:07:39Z**. Source, file blobs and open-PR state were reread before publication.
+- Since the previous daily review's verified [ce262a14a757cf4a5f1fd86f2cd877bbc9e5922f](https://github.com/NeverSight/NeverD/commit/ce262a14a757cf4a5f1fd86f2cd877bbc9e5922f): **100 commits and 186 changed non-directory paths** (68 added, 118 modified, none removed). The comparison returned 100 commits then an empty page; complete recursive trees supplied the path inventory.
+- The last progress snapshot actually present in dev is older: **2026-10-23T00:59:55Z**, at [8af58bf704285b5accac83edf5d97464dfe9a1df](https://github.com/NeverSight/NeverD/commit/8af58bf704285b5accac83edf5d97464dfe9a1df). GitHub reports 3,253 commits ahead, and complete trees show 4,563 changed paths (2,094 added, 2,097 modified, 372 removed). The 3,253 count is comparison metadata, not a claim that every commit page or source change was reviewed.
+- **One statically confirmed test defect is repaired in this proposal:** the prebuilt LLVM audit regression still required a deliberately removed scheduled trigger. No production-code defect was proved in the sampled new changes. The independent LLVM package/source mismatch remains unresolved and must continue failing.
+- Read root AGENTS.md, the sole AGENTS.md in the complete current tree, CONTRIBUTING.md, SECURITY.md, implementation principles, performance guidance, relevant architecture/testing sections and prior progress. Followed the documented topic-branch workflow. This proposal has not been merged into dev.
+
+### Bounded static review and repair
+
+Prioritized the new PGO and cache/worker changes, then rotated into the failed release-audit boundary:
+
+- Read the complete [PGO helper](cmake/NeverDProfileGuided.cmake), its root CMake inclusion and the added build documentation. Traced opt-in defaults, Clang admission, mutually exclusive modes and profile-file existence checks. The commit's speed and output-equivalence claims remain author reports; no compiler or profile was run.
+- Read [HostMemory.cpp](lib/support/HostMemory.cpp), its [interface](include/neverd/support/HostMemory.h), the host-memory test definition, relevant [pipeline limits](include/neverd/pipeline/Limits.h), and selected [callee memo](lib/pipeline/PipelineCallAbi.cpp) ownership/accounting and read-ahead paths. Traced the physical-memory share, existing lower bound, ceiling, size_t clamp and three-quarter warmup boundary. This is not a proof of a strict process RSS ceiling, container-memory accounting, all eviction paths or performance.
+- Traced replica discovery, summary preparation, reply invalidation and read-ahead ordering in selected [Engine.cpp](tools/neverd-worker/Engine.cpp) paths, the [SDK prefill entry point](lib/sdk/capi/NeverDCAPIDecompile.cpp), and [pipeline prefill](lib/pipeline/PipelineLowIR.cpp). Read the relevant worker/SDK regression additions. Read the complete [SharedValue](include/neverd/support/SharedValue.h) implementation and its test definitions. No runtime, concurrency or whole-pipeline acceptance is claimed.
+- Read the complete [audit regression](scripts/tests/test_audit_prebuilt_llvm_release.py), [audit implementation](scripts/audit_prebuilt_llvm_release.py), [workflow](.github/workflows/prebuilt-llvm-audit.yml), source gitlink and prebuilt pin declarations.
+
+The existing exact-head [audit job](https://github.com/NeverSight/NeverD/actions/runs/41939063218/job/126954865988), completed at **2026-11-05T00:08:39Z**, reports two stale schedule assertions and a separate gitlink/pin error. Commit [e45c7880](https://github.com/NeverSight/NeverD/commit/e45c7880a20816ef858ef466a8edef376483d3db) intentionally removed only the schedule and cron at **2026-10-19T06:13:53Z**, but left those assertions behind.
+
+The minimal repair renames the workflow test to describe event triggers, removes those two obsolete expectations, and explicitly checks the existing push trigger. The PR/manual triggers, dev branch, read-only permission, checkout credential behavior, pinned actions, runner, timeout, Python version, unit-test command, live-audit command and token wiring assertions remain. The production workflow, scheduling, dependency pins and all gitlink/release-integrity checks are unchanged. The full audit suite is **not expected to become green solely from this repair**, because the source/package mismatch still exists.
+
+**Not executed:** builds, tests, linters, formatters, repository scripts, benchmarks, project binaries or manual CI. Static comparison is not a test pass. No new dependency or permission, issue metadata change, merge or deployment is included.
+
+### Issue, PR and review progress
+
+Pre-publication: **59 open ordinary issues and no open PRs**, versus 55 / 2 in the older dev progress snapshot. There are 55 epic-labeled issues; only #12 has an assignee. The open issue endpoint returned 59 records then an empty page; open PRs returned empty pages.
+
+For **2026-10-23T00:59:55Z through 2026-11-05T01:08:30Z**:
+- The complete updated-item collection returned 462 records (100 + 100 + 100 + 100 + 62 + 0): 27 ordinary issues and 435 PRs.
+- Ordinary issues: eight created and four closed. Closed items are #13, #103, #1189 and #1677. Closure is external metadata, not independent verification of every acceptance criterion.
+- The all-state PR collection, sorted by update time, was read through page five, which crossed the prior cutoff: 433 created, 434 merged and one closed without merge (#1959). These are gross activity counts, not verified feature completion.
+- Prior open #1664 and #1666 merged externally at **2026-10-23T02:59:14Z** and **2026-10-23T02:54:33Z**. Prior reporting #1670 merged at **2026-10-23T01:54:03Z**; reporting-only work is excluded from implementation progress.
+- The prior static worker-output repair [#2104](https://github.com/NeverSight/NeverD/pull/2104) merged externally at **2026-11-04T05:51:34Z** as [34852a62](https://github.com/NeverSight/NeverD/commit/34852a62867174637e12ba198b12da27ca563aaf).
+- Submitted-review, inline-comment and conversation-comment endpoints for sampled merged PRs #2104, #2109 and #2110 were empty. This is not an audit of all 435 changed PR discussions.
+
+This proposal is excluded from the pre-publication counts. No issue state, labels, assignees or review assignments were changed.
+
+### Existing CI evidence
+
+Workflow state refreshed at **2026-11-05T01:08:30Z** for exact dev **707a07f60d077bd0a8c539db713e028b19a23472**. Eight workflow records and an empty next page:
+
+| Workflow | Observed result | Provider updated_at |
+| --- | --- | --- |
+| [CI 41939063372](https://github.com/NeverSight/NeverD/actions/runs/41939063372) | In progress | 2026-11-05T00:08:57Z |
+| [Mobile Decompilation 41939063215](https://github.com/NeverSight/NeverD/actions/runs/41939063215) | In progress | 2026-11-05T00:47:16Z |
+| [Prebuilt LLVM Audit 41939063218](https://github.com/NeverSight/NeverD/actions/runs/41939063218) | Failure | 2026-11-05T00:08:40Z |
+| [LLVM Style 41939063288](https://github.com/NeverSight/NeverD/actions/runs/41939063288) | Success | 2026-11-05T00:11:51Z |
+| [Lift native qualification 41939063291](https://github.com/NeverSight/NeverD/actions/runs/41939063291) | Success | 2026-11-05T00:27:45Z |
+| [Windows Web product qualification 41939063271](https://github.com/NeverSight/NeverD/actions/runs/41939063271) | Success | 2026-11-05T00:19:19Z |
+| [Required Web qualification 41939063447](https://github.com/NeverSight/NeverD/actions/runs/41939063447) | Success | 2026-11-05T01:00:07Z |
+| [Mobile Real Applications 41939134500](https://github.com/NeverSight/NeverD/actions/runs/41939134500) | Skipped | 2026-11-05T00:08:53Z |
+
+At **2026-11-05T01:07:19Z**, exact-head checks contained 33 records: 13 successful, 15 skipped, four in progress and one failed; the next page was empty. Legacy statuses were empty. CI jobs returned 13 then empty: four successful, six skipped and three platform builds/tests still running. Mobile jobs returned three then empty: Ubuntu and macOS succeeded, Windows was running. Workflow updated_at is a provider timestamp, not the time of this observation or proof that all jobs stopped changing.
+
+The audit failure still contains the real mismatch: the source gitlink is **03270359c2ed8f6806533d3832a947bf883a6f69**, while the r6 prebuilt pin is **06788fb19109851e6a6b9f109a2b8027a606f0c6**. The live package-comparison step was skipped after the regression step failed. No tag, digest or gitlink is guessed or changed to suppress that evidence.
+
+### Suggested priorities
+
+1. **Reconcile LLVM source and published package identity.** Dependency: maintainer-selected LLVM source revision and an authenticated package set. Acceptance: gitlink, pinned commit, release tag and all package digests agree; the existing audit regression and live comparison have separate explicit results. This test-only repair addresses the stale trigger expectation, not the package mismatch.
+2. **Obtain terminal integration evidence for one identified head.** Dependency: already-running normal CI and Mobile Decompilation. Acceptance: Linux, macOS and Windows results and skipped suites are recorded against the same SHA; failed, pending and skipped checks are not counted as passes. No dispatch or rerun is requested by this static review.
+3. **Qualify summary/read-ahead reuse and memory behavior.** Dependency: existing worker/SDK/support suites and controlled normal validation with stable dependency inputs. Acceptance: discovery precedes summary solving, invalidated views are reread, prefilled and cold outputs agree, and memory/latency evidence covers small hosts and relevant worker counts. PGO training and speed claims require separate same-output evidence; this review supplies no measurements.
+
+## Daily log — 2026-11-05T01:08:30Z
+
+Inventoried 100 commits / 186 paths since the previous daily code baseline and separately reconciled the older dev progress snapshot. Reviewed bounded PGO, host-memory/callee memo, shared-value and replica prefill paths, then diagnosed the exact-head prebuilt audit failure. Proposed one minimal stale-trigger regression repair while preserving the real source/package integrity failure. Recorded 59 issues / zero pre-existing PRs, paginated changes and sampled reviews, and distinguished running/skipped/failed/successful CI. Preserved all preceding progress and human edits verbatim below. No dynamic validation, workflow dispatch, merge or deployment occurred; the commit uses [skip ci].
+
+<details>
+<summary>Previous snapshots and daily history (preserved verbatim)</summary>
+
+# NeverD Daily Progress
+
 ## Current snapshot — 2026-10-23
 
 - Source and metadata cutoff: **2026-10-23T00:59:55Z**. Reviewed dev: [8af58bf704285b5accac83edf5d97464dfe9a1df](https://github.com/NeverSight/NeverD/commit/8af58bf704285b5accac83edf5d97464dfe9a1df).
@@ -2805,6 +2876,8 @@ them are author reports unless separately confirmed by linked workflow results.
 
 </details>
 
+
+</details>
 
 </details>
 
