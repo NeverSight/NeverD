@@ -1,0 +1,716 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-05",
+  "scope": "NeverC i386 intrinsic headers and native HRESET through LLVM, Clang, NeverC, MedLLVM, HighC and LLVMC",
+  "global_goal_complete": false,
+  "source_identity": {
+    "llvm_commit": "a54596fc0a85d2837026f4776febf153cf0eac7d",
+    "neverc_commit": "aaf92629576d595f91e067f82038052dc0b94760",
+    "neverd_code_commit": "b230666b5d4e848637026303c5a3e5ab6d5783c5",
+    "neverd_integration_commit": "ccb6dc728a108c30b1a4c53318d939087302651e",
+    "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69"
+  },
+  "contract": {
+    "headers": "Eleven MMX/SSE/umbrella headers accept i386 and x64. AMX stays long-mode-only. The marker saves/restores the full EBX/RBX in the target width.",
+    "hreset": "Both frontends emit effectful llvm.x86.hreset(i32), with all EAX bits and the ignored immediate canonically zero. Header wrappers use the same native builtin. Function target requirements remain hreset.",
+    "capability": "__NEVERSIGHT_X86_HRESET__=1 indicates compiler API availability independently of TU CPU features. __has_builtin alone is feature-dependent and previously selected an unwanted assembly fallback even when the generated function had target(\"hreset\").",
+    "neverd": "The shared native system inventory and C dispatch owner select HRESET in both modes. One feature-name owner now supplies LLVM and both C writers. Native calls reject weakened memory effects, speculation, noreturn, wrong calling convention and wrong architecture."
+  },
+  "qualification": {
+    "host": "Intel Core i9-13900H; CPU 2 P core and CPU 12 E core; Linux ELF32/ELF64 multilib",
+    "header_execution": {
+      "runs": [
+        {
+          "artifact": "runtime-cpu12/qualification.json",
+          "report_sha256": "4be4345fce605df0cb4c42ff2561fbf914bd71348c1da40992f40d70befcb724",
+          "checks": 884736,
+          "profile_count": 8,
+          "affinity": [
+            12
+          ],
+          "tools": {
+            "neverc": "c8efa0737e1f209a2ff5a0783f65b92161193ca713ced1805a566af8021bb582",
+            "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "llc": "dc58b98a9bf5dc346ecf16eaa013b61ad35151f7ab3ef4238fa5b631c68640e7",
+            "opt": "c97dd00a8af8efbbc027214668d22c4f84a419c10105c1417062de3c080a7976",
+            "llvm-objdump": "4e81a9420246f329f5172c46f35271c309bc976fce7150bb105b0ce80933a99f"
+          },
+          "inputs": {
+            "verify_i386_intrinsic_headers.py": "d9f17ee5a1ced320b0ab4ffdbbcfb28f36b4343ea9b895e23a4808cbf974e2a0",
+            "i386_intrinsic_headers.c": "be755d20e0cbd6d50f1c1ffdcd89be5b7b5f58de0193458de89395d6d27e1f23"
+          },
+          "negative_controls": [
+            "x32-O2-pic-wrong-add",
+            "x64-O2-pic-wrong-add"
+          ]
+        },
+        {
+          "artifact": "runtime-cpu2/qualification.json",
+          "report_sha256": "061e19ce8d4692de7e28273216391eb781478cbb4eebf400c51347b7478f3da6",
+          "checks": 884736,
+          "profile_count": 8,
+          "affinity": [
+            2
+          ],
+          "tools": {
+            "neverc": "c8efa0737e1f209a2ff5a0783f65b92161193ca713ced1805a566af8021bb582",
+            "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "llc": "dc58b98a9bf5dc346ecf16eaa013b61ad35151f7ab3ef4238fa5b631c68640e7",
+            "opt": "c97dd00a8af8efbbc027214668d22c4f84a419c10105c1417062de3c080a7976",
+            "llvm-objdump": "4e81a9420246f329f5172c46f35271c309bc976fce7150bb105b0ce80933a99f"
+          },
+          "inputs": {
+            "verify_i386_intrinsic_headers.py": "d9f17ee5a1ced320b0ab4ffdbbcfb28f36b4343ea9b895e23a4808cbf974e2a0",
+            "i386_intrinsic_headers.c": "be755d20e0cbd6d50f1c1ffdcd89be5b7b5f58de0193458de89395d6d27e1f23"
+          },
+          "negative_controls": [
+            "x32-O2-pic-wrong-add",
+            "x64-O2-pic-wrong-add"
+          ]
+        }
+      ],
+      "checks": 1769472
+    },
+    "hreset_controlled_source": {
+      "runs": [
+        {
+          "artifact": "source-native-clang-cpu2/qualification.json",
+          "report_sha256": "083cc20c8ee23b495b891b22cd014f67b57d780fe5e9f4911abea7f4807a807c",
+          "checks": 458752,
+          "profile_count": 112,
+          "affinity": [
+            2
+          ],
+          "tools": {
+            "frontend": "e8fa3d6dc4001d19a47114e6d1342048564db5a6d4a6fa244d9c10187d8d12ff",
+            "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "llc": "dc58b98a9bf5dc346ecf16eaa013b61ad35151f7ab3ef4238fa5b631c68640e7",
+            "llvm-objdump": "4e81a9420246f329f5172c46f35271c309bc976fce7150bb105b0ce80933a99f"
+          },
+          "inputs": {
+            "verify_hreset_source.py": "a0b14fb1134db81a92e74a6e5b479fc93cedd92ab95902aac053cff68cdfdb5e",
+            "hreset_source_control.c": "82db9ef023cf72ac4a2355f80126aa3b1ccdf60355b0fa68aed6d5db634921c8"
+          },
+          "negative_controls": [
+            32,
+            64
+          ]
+        },
+        {
+          "artifact": "source-native-neverc-cpu2/qualification.json",
+          "report_sha256": "26c2240d3bed6aa7e5d72df0eb29d0d4ffffd97344b478719f209e1103ad06ac",
+          "checks": 458752,
+          "profile_count": 112,
+          "affinity": [
+            2
+          ],
+          "tools": {
+            "frontend": "c8efa0737e1f209a2ff5a0783f65b92161193ca713ced1805a566af8021bb582",
+            "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "llc": "dc58b98a9bf5dc346ecf16eaa013b61ad35151f7ab3ef4238fa5b631c68640e7",
+            "llvm-objdump": "4e81a9420246f329f5172c46f35271c309bc976fce7150bb105b0ce80933a99f"
+          },
+          "inputs": {
+            "verify_hreset_source.py": "a0b14fb1134db81a92e74a6e5b479fc93cedd92ab95902aac053cff68cdfdb5e",
+            "hreset_source_control.c": "82db9ef023cf72ac4a2355f80126aa3b1ccdf60355b0fa68aed6d5db634921c8"
+          },
+          "negative_controls": [
+            32,
+            64
+          ]
+        },
+        {
+          "artifact": "source-native-stock-cpu2/qualification.json",
+          "report_sha256": "d1f5eb71263ae61e604476526dbf0225341645cc697b28e1bb168a30cc10c1a4",
+          "checks": 458752,
+          "profile_count": 112,
+          "affinity": [
+            2
+          ],
+          "tools": {
+            "frontend": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "llc": "dc58b98a9bf5dc346ecf16eaa013b61ad35151f7ab3ef4238fa5b631c68640e7",
+            "llvm-objdump": "4e81a9420246f329f5172c46f35271c309bc976fce7150bb105b0ce80933a99f"
+          },
+          "inputs": {
+            "verify_hreset_source.py": "a0b14fb1134db81a92e74a6e5b479fc93cedd92ab95902aac053cff68cdfdb5e",
+            "hreset_source_control.c": "82db9ef023cf72ac4a2355f80126aa3b1ccdf60355b0fa68aed6d5db634921c8"
+          },
+          "negative_controls": []
+        },
+        {
+          "artifact": "source-r6-clang-cpu12/qualification.json",
+          "report_sha256": "08886b93476b8c1a014f08e620ae1c256db808544ef6151c6802a0058ab6e22e",
+          "checks": 458752,
+          "profile_count": 112,
+          "affinity": [
+            12
+          ],
+          "tools": {
+            "frontend": "e8fa3d6dc4001d19a47114e6d1342048564db5a6d4a6fa244d9c10187d8d12ff",
+            "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "llc": "dc58b98a9bf5dc346ecf16eaa013b61ad35151f7ab3ef4238fa5b631c68640e7",
+            "llvm-objdump": "4e81a9420246f329f5172c46f35271c309bc976fce7150bb105b0ce80933a99f"
+          },
+          "inputs": {
+            "verify_hreset_source.py": "a0b14fb1134db81a92e74a6e5b479fc93cedd92ab95902aac053cff68cdfdb5e",
+            "hreset_source_control.c": "82db9ef023cf72ac4a2355f80126aa3b1ccdf60355b0fa68aed6d5db634921c8"
+          },
+          "negative_controls": [
+            32,
+            64
+          ]
+        },
+        {
+          "artifact": "source-r6-neverc-cpu12/qualification.json",
+          "report_sha256": "08579dffdc2bd9309601f1045919702b2a89791da8d41171c02d909b9767175e",
+          "checks": 458752,
+          "profile_count": 112,
+          "affinity": [
+            12
+          ],
+          "tools": {
+            "frontend": "c8efa0737e1f209a2ff5a0783f65b92161193ca713ced1805a566af8021bb582",
+            "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "llc": "dc58b98a9bf5dc346ecf16eaa013b61ad35151f7ab3ef4238fa5b631c68640e7",
+            "llvm-objdump": "4e81a9420246f329f5172c46f35271c309bc976fce7150bb105b0ce80933a99f"
+          },
+          "inputs": {
+            "verify_hreset_source.py": "a0b14fb1134db81a92e74a6e5b479fc93cedd92ab95902aac053cff68cdfdb5e",
+            "hreset_source_control.c": "82db9ef023cf72ac4a2355f80126aa3b1ccdf60355b0fa68aed6d5db634921c8"
+          },
+          "negative_controls": [
+            32,
+            64
+          ]
+        },
+        {
+          "artifact": "source-r6-stock-cpu12/qualification.json",
+          "report_sha256": "e21573cd8d1fbf0ac1af578e2a0e8ae74ad2f10aa061234d17e095ea8b50272a",
+          "checks": 458752,
+          "profile_count": 112,
+          "affinity": [
+            12
+          ],
+          "tools": {
+            "frontend": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "llc": "dc58b98a9bf5dc346ecf16eaa013b61ad35151f7ab3ef4238fa5b631c68640e7",
+            "llvm-objdump": "4e81a9420246f329f5172c46f35271c309bc976fce7150bb105b0ce80933a99f"
+          },
+          "inputs": {
+            "verify_hreset_source.py": "a0b14fb1134db81a92e74a6e5b479fc93cedd92ab95902aac053cff68cdfdb5e",
+            "hreset_source_control.c": "82db9ef023cf72ac4a2355f80126aa3b1ccdf60355b0fa68aed6d5db634921c8"
+          },
+          "negative_controls": []
+        }
+      ],
+      "checks": 2752512
+    },
+    "header_meaning": "8 O0/O2 static/PIC profiles per core, 4096 inputs and 110592 checks per profile. Actual MMX/SSE/AVX2, carry/borrow, CRC32C, x87 after EMMS and full EBX/RBX preservation execute. HRESET and AVX-512 are compile-only.",
+    "source_meaning": "Each of six SDK/compiler runs compiles 48 HighC/LLVMC exports and wraps eight original ELF objects at O0/O2: 112 profiles, 4096 inputs each. HRESET opcode/operands are independently decoded, then replaced by a trap which observes EAX and resumes to check the original source return. The 32-bit and 64-bit wrong-control mutations fail for both native frontends.",
+    "final_integration": {
+      "native": {
+        "snapshot": {
+          "head": "ccb6dc728a108c30b1a4c53318d939087302651e",
+          "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "binaries": {
+            "NeverDX86VirtualizationSourceTests": "82401cf46286ceb5375a37d36158852496ea286cc9cdff35c05a480c904c7a2d",
+            "NeverDX86SystemStateTests": "e47682e8ec1fbb22d9cbe48ab23d7579cea01d37a118a5db718a77fbb8d7c383"
+          },
+          "receipt": {
+            "status": "success",
+            "started_at": "2026-11-05T09:52:57.782185+00:00",
+            "options": [
+              "--target",
+              "NeverDX86VirtualizationSourceTests",
+              "NeverDX86SystemStateTests",
+              "--parallel",
+              "4"
+            ],
+            "scope": "Only the requested build targets and configuration; not all features or tests.",
+            "snapshot": {
+              "schema": 1,
+              "resolved_at": "2026-11-05T09:53:00.411007+00:00",
+              "sources": {
+                "neverd_highway": {
+                  "repository": "https://github.com/NeverSight/highway.git",
+                  "branch": "master",
+                  "commit": "1693ca7926ed12c5520623564e465cff97d93374",
+                  "archive": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/third_party/highway/1693ca7926ed12c5520623564e465cff97d93374/source.tar.gz",
+                  "sha256": "f5149df5acb77cd9730ed8e5160f2deff0b02fe49cc45443fd396fdb5f0519d2"
+                },
+                "neverd_simdutf": {
+                  "repository": "https://github.com/NeverSight/simdutf.git",
+                  "branch": "master",
+                  "commit": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+                  "archive": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/third_party/simdutf/8d82299606e675b50de8dc16fd118aae4b65bfde/source.tar.gz",
+                  "sha256": "48e9c9fc33940bcc81cdaec785ce6e21ea20f7b03b7a26bff56abb41d2cf5126"
+                },
+                "neverd_simdjson": {
+                  "repository": "https://github.com/NeverSight/simdjson.git",
+                  "branch": "master",
+                  "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+                  "archive": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/third_party/simdjson/edb7016c62efbe6155226896cdba5736307190e3/source.tar.gz",
+                  "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d"
+                },
+                "neverd_tbb": {
+                  "repository": "https://github.com/NeverSight/oneTBB.git",
+                  "branch": "master",
+                  "commit": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+                  "archive": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/third_party/oneTBB/d26e0502ca39f888c1266cbbf1e2c2226d31e41b/source.tar.gz",
+                  "sha256": "98300a443e43d047eabae27d3e30232efe7508b20d8e24a92ff2d54ef511761b"
+                },
+                "neverd_mimalloc": {
+                  "repository": "https://github.com/NeverSight/mimalloc.git",
+                  "branch": "main3",
+                  "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+                  "archive": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/third_party/mimalloc/e8e7bc41ce904b4c83fe20e87d93f24d5286315a/source.tar.gz",
+                  "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3"
+                }
+              }
+            },
+            "snapshot_sha256": "6d19e25710b382361d7a6388e96eb24723a6ada9cefe07754a0b0181ed59abfe",
+            "configuration": "Release",
+            "configure_inputs": {
+              "purpose": "configure_inputs",
+              "schema": 1,
+              "sources": {
+                "neverd_highway": {
+                  "selection": "disabled",
+                  "used": false
+                },
+                "neverd_mimalloc": {
+                  "selection": "disabled",
+                  "used": false
+                },
+                "neverd_simdjson": {
+                  "selection": "disabled",
+                  "used": false
+                },
+                "neverd_simdutf": {
+                  "selection": "disabled",
+                  "used": false
+                },
+                "neverd_tbb": {
+                  "selection": "disabled",
+                  "used": false
+                }
+              }
+            },
+            "inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+            "cache_sha256": "47525d2f95f1a2862256d0cda1309689a93d9dda5ce02737e357bd8df0496287",
+            "finished_at": "2026-11-05T09:56:21.521486+00:00"
+          }
+        },
+        "tests": {
+          "source": {
+            "tests": 5,
+            "passed": 5,
+            "skipped": [],
+            "sha256": "e6e0c11bd058fb824cdf7937ca06f3b8be82321b0024281de1e84b43ee4ac8ab"
+          },
+          "system-unit": {
+            "tests": 29,
+            "passed": 29,
+            "skipped": [],
+            "sha256": "e31f6434ddccded8c6e6e26b618c418731aa263324e858a62195187968630ab5"
+          },
+          "system-source": {
+            "tests": 29,
+            "passed": 29,
+            "skipped": [],
+            "sha256": "61ed22a701af2e269753c8f59bbf9e1352d3a684322f777157222537d3d51cd4"
+          }
+        },
+        "byte_identical_qualified_exports": 192,
+        "hreset_exports": {
+          "hreset_32_1_1_165.o": "e3eee65fbc8097908c7c4835c7cfdb875b06d7d74e8a0445a79e57079b0d54f8",
+          "hreset_32_2_1_0.llvm.c": "6f63d3b67df68f264507b5f06936dce69463de81eb4a83859b9c1b1ae8c8e89c",
+          "hreset_32_2_1_0.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_32_2_1_165.llvm.c": "6f63d3b67df68f264507b5f06936dce69463de81eb4a83859b9c1b1ae8c8e89c",
+          "hreset_64_1_1_0.o": "733d13c4a83b5d04a35f12921cf49ee797f3568dead932f86faf507d2f12d4d4",
+          "hreset_32_2_1_165.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_32_2_0_165.o": "69cd8b50614f36b297604e4637459d649fd8219464dfbb0a7cc2abcd9f6cc83a",
+          "hreset_64_2_1_0.o": "337a8dd84968a698f6a97a0d05f876b72616500f4e12812b45eaf293488992ff",
+          "hreset_32_2_0_0.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_64_0_1_0.o": "341cada9952a903aca88cf42995f05ff2ee185b3a3acb56dec6904f81ce4eb29",
+          "hreset_64_0_1_165.o": "341cada9952a903aca88cf42995f05ff2ee185b3a3acb56dec6904f81ce4eb29",
+          "hreset_32_0_0_0.llvm.c": "4c9953632a85632e5b80f903c05db7120999e471611ef0a86b43ab5aff5e4a00",
+          "hreset_64_2_0_0.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_32_1_1_165.ll": "1a788dc050eabcab45cf898b8b3e6eeaf401a001c2cd1ce22091681aa5bf0939",
+          "hreset_32_0_1_165.llvm.c": "4c9953632a85632e5b80f903c05db7120999e471611ef0a86b43ab5aff5e4a00",
+          "hreset_32_1_1_0.llvm.c": "6f63d3b67df68f264507b5f06936dce69463de81eb4a83859b9c1b1ae8c8e89c",
+          "hreset_64_2_1_0.llvm.c": "57dbc2a438264c72cd94cd277bd3101733e463a23456b6d20fdd9f70c71a14f5",
+          "hreset_64_0_1_0.llvm.c": "b4c3fe8ee837c5aea25c5b15d0841cad297a7bd2928e74aa16cc5a6eb767e2e7",
+          "hreset_64_2_0_0.llvm.c": "57dbc2a438264c72cd94cd277bd3101733e463a23456b6d20fdd9f70c71a14f5",
+          "hreset_64_0_0_165.high.c": "4badbc4c82cdaa0f79319d5e8e62c05f071f9ca14ebb29788a80e4a3818f3e56",
+          "hreset_64_2_1_165.ll": "421b4b3defcdc51048ee2984e27da8fb52cca2110d4d480d33c7f4344111c96c",
+          "hreset_64_0_1_0.ll": "1d440b2a027d71a8c510b959e860d45dbcb5e01d691379dc9ac9e05044c1214f",
+          "hreset_32_2_1_0.o": "a35c930da70094376bfe9926816323dfb1c0eaf0f2c0724db027b0678949a0be",
+          "hreset_32_0_1_0.high.c": "144d0d41b5ba5b58959a96a5ff47eadbd2768b42c5bd62cd7daf38f984bf1f9f",
+          "hreset_32_0_1_165.ll": "74f64354e34149beba26f00bf9398fdb848de7d67bd8261426dce1958149ce8e",
+          "hreset_64_2_1_0.ll": "421b4b3defcdc51048ee2984e27da8fb52cca2110d4d480d33c7f4344111c96c",
+          "hreset_32_2_0_165.llvm.c": "6f63d3b67df68f264507b5f06936dce69463de81eb4a83859b9c1b1ae8c8e89c",
+          "hreset_32_2_1_165.o": "a35c930da70094376bfe9926816323dfb1c0eaf0f2c0724db027b0678949a0be",
+          "hreset_64_2_0_0.ll": "e9db5ee60ecf8b50672f819dc3335114178756cc200f00236520a4d864cfec06",
+          "hreset_64_0_0_165.ll": "a4d6029aea5200cc50f5fae54346d69a0a92c68adb2a01fce26c5b5d957c9ece",
+          "hreset_32_2_0_0.ll": "80aee5308ca6fbc9d789c3554a81d12c99b6ffb16329459387e55e5a6e9cc78e",
+          "hreset_32_1_1_165.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_64_0_1_165.ll": "1d440b2a027d71a8c510b959e860d45dbcb5e01d691379dc9ac9e05044c1214f",
+          "hreset_64_1_1_165.llvm.c": "57dbc2a438264c72cd94cd277bd3101733e463a23456b6d20fdd9f70c71a14f5",
+          "hreset_32_1_1_0.o": "e3eee65fbc8097908c7c4835c7cfdb875b06d7d74e8a0445a79e57079b0d54f8",
+          "hreset_64_1_0_0.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_64_1_0_0.llvm.c": "57dbc2a438264c72cd94cd277bd3101733e463a23456b6d20fdd9f70c71a14f5",
+          "hreset_32_0_1_0.o": "54564f5d287c74f7edee02ec70b481da9873da7d63c99b7ccfac26733cffb5fb",
+          "hreset_32_0_0_0.high.c": "144d0d41b5ba5b58959a96a5ff47eadbd2768b42c5bd62cd7daf38f984bf1f9f",
+          "hreset_64_1_1_165.o": "733d13c4a83b5d04a35f12921cf49ee797f3568dead932f86faf507d2f12d4d4",
+          "hreset_64_1_1_0.ll": "a14a59fb1ab5251934b87624b0220cf6f2b4913d076e2397a6d7086a0b04bf22",
+          "hreset_32_0_1_165.high.c": "144d0d41b5ba5b58959a96a5ff47eadbd2768b42c5bd62cd7daf38f984bf1f9f",
+          "hreset_32_2_0_165.ll": "80aee5308ca6fbc9d789c3554a81d12c99b6ffb16329459387e55e5a6e9cc78e",
+          "hreset_64_2_1_165.llvm.c": "57dbc2a438264c72cd94cd277bd3101733e463a23456b6d20fdd9f70c71a14f5",
+          "hreset_64_0_0_0.ll": "a4d6029aea5200cc50f5fae54346d69a0a92c68adb2a01fce26c5b5d957c9ece",
+          "hreset_32_0_0_165.high.c": "144d0d41b5ba5b58959a96a5ff47eadbd2768b42c5bd62cd7daf38f984bf1f9f",
+          "hreset_32_1_1_165.llvm.c": "6f63d3b67df68f264507b5f06936dce69463de81eb4a83859b9c1b1ae8c8e89c",
+          "hreset_64_2_1_0.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_64_1_0_165.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_64_0_0_0.high.c": "4badbc4c82cdaa0f79319d5e8e62c05f071f9ca14ebb29788a80e4a3818f3e56",
+          "hreset_32_0_1_165.o": "54564f5d287c74f7edee02ec70b481da9873da7d63c99b7ccfac26733cffb5fb",
+          "hreset_64_2_0_165.ll": "e9db5ee60ecf8b50672f819dc3335114178756cc200f00236520a4d864cfec06",
+          "hreset_64_0_0_165.o": "086585180f8ce765ba8a130f1f973f5f200819e140c61cfeb344fa7cf8865377",
+          "hreset_32_0_0_165.llvm.c": "4c9953632a85632e5b80f903c05db7120999e471611ef0a86b43ab5aff5e4a00",
+          "hreset_32_2_1_0.ll": "bdf44b310568aad3f2d91668b5fff40ea6ff522bf37af4d83ba90072a295547d",
+          "hreset_64_1_0_0.ll": "3084e7249eada0d5c0aa3f13d383f8bee267bff95ddb7bc87683df6c67379c64",
+          "hreset_64_0_0_0.o": "086585180f8ce765ba8a130f1f973f5f200819e140c61cfeb344fa7cf8865377",
+          "hreset_32_2_0_165.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_64_2_0_165.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_32_1_0_165.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_64_0_0_0.llvm.c": "b4c3fe8ee837c5aea25c5b15d0841cad297a7bd2928e74aa16cc5a6eb767e2e7",
+          "hreset_32_1_0_0.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_32_1_1_0.ll": "1a788dc050eabcab45cf898b8b3e6eeaf401a001c2cd1ce22091681aa5bf0939",
+          "hreset_64_0_1_165.llvm.c": "b4c3fe8ee837c5aea25c5b15d0841cad297a7bd2928e74aa16cc5a6eb767e2e7",
+          "hreset_32_1_0_0.llvm.c": "6f63d3b67df68f264507b5f06936dce69463de81eb4a83859b9c1b1ae8c8e89c",
+          "hreset_64_0_1_0.high.c": "4badbc4c82cdaa0f79319d5e8e62c05f071f9ca14ebb29788a80e4a3818f3e56",
+          "hreset_32_2_0_0.o": "69cd8b50614f36b297604e4637459d649fd8219464dfbb0a7cc2abcd9f6cc83a",
+          "hreset_64_1_1_0.llvm.c": "57dbc2a438264c72cd94cd277bd3101733e463a23456b6d20fdd9f70c71a14f5",
+          "hreset_32_0_0_0.ll": "79cddc97fb4705228d0691b2072716ec99b5739af67b8404a99aed7c01e49fd8",
+          "hreset_64_2_0_165.o": "92a8c1060e0b607efe0d413c4723f59bb2fddee3784dcf2eccbfd1298d7c1c16",
+          "hreset_32_2_0_0.llvm.c": "6f63d3b67df68f264507b5f06936dce69463de81eb4a83859b9c1b1ae8c8e89c",
+          "hreset_32_1_0_165.o": "538a883266e541704fc20b4faf8f5d792a685ba3d71a97d413f3d9853b4a61c0",
+          "hreset_64_1_1_0.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_64_2_0_0.o": "92a8c1060e0b607efe0d413c4723f59bb2fddee3784dcf2eccbfd1298d7c1c16",
+          "hreset_64_2_1_165.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_32_0_1_0.llvm.c": "4c9953632a85632e5b80f903c05db7120999e471611ef0a86b43ab5aff5e4a00",
+          "hreset_64_1_0_0.o": "733d13c4a83b5d04a35f12921cf49ee797f3568dead932f86faf507d2f12d4d4",
+          "hreset_32_1_0_0.o": "538a883266e541704fc20b4faf8f5d792a685ba3d71a97d413f3d9853b4a61c0",
+          "hreset_64_2_0_165.llvm.c": "57dbc2a438264c72cd94cd277bd3101733e463a23456b6d20fdd9f70c71a14f5",
+          "hreset_64_1_1_165.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_32_0_0_165.o": "c5afa25bcab3757feaa1c0cee9b44830a5eb475f99103ad50575759517fbd775",
+          "hreset_64_1_0_165.o": "733d13c4a83b5d04a35f12921cf49ee797f3568dead932f86faf507d2f12d4d4",
+          "hreset_64_1_0_165.llvm.c": "57dbc2a438264c72cd94cd277bd3101733e463a23456b6d20fdd9f70c71a14f5",
+          "hreset_64_0_0_165.llvm.c": "b4c3fe8ee837c5aea25c5b15d0841cad297a7bd2928e74aa16cc5a6eb767e2e7",
+          "hreset_32_1_0_165.ll": "f9b0e6c293965d7a5be7a608b4c6ddc09b19590ab5011ede13149b062ff3f781",
+          "hreset_32_1_0_165.llvm.c": "6f63d3b67df68f264507b5f06936dce69463de81eb4a83859b9c1b1ae8c8e89c",
+          "hreset_64_2_1_165.o": "337a8dd84968a698f6a97a0d05f876b72616500f4e12812b45eaf293488992ff",
+          "hreset_32_0_0_0.o": "c5afa25bcab3757feaa1c0cee9b44830a5eb475f99103ad50575759517fbd775",
+          "hreset_32_1_0_0.ll": "f9b0e6c293965d7a5be7a608b4c6ddc09b19590ab5011ede13149b062ff3f781",
+          "hreset_32_2_1_165.ll": "bdf44b310568aad3f2d91668b5fff40ea6ff522bf37af4d83ba90072a295547d",
+          "hreset_32_0_0_165.ll": "79cddc97fb4705228d0691b2072716ec99b5739af67b8404a99aed7c01e49fd8",
+          "hreset_64_1_1_165.ll": "a14a59fb1ab5251934b87624b0220cf6f2b4913d076e2397a6d7086a0b04bf22",
+          "hreset_64_1_0_165.ll": "3084e7249eada0d5c0aa3f13d383f8bee267bff95ddb7bc87683df6c67379c64",
+          "hreset_64_0_1_165.high.c": "4badbc4c82cdaa0f79319d5e8e62c05f071f9ca14ebb29788a80e4a3818f3e56",
+          "hreset_32_0_1_0.ll": "74f64354e34149beba26f00bf9398fdb848de7d67bd8261426dce1958149ce8e",
+          "hreset_32_1_1_0.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2"
+        }
+      },
+      "r6": {
+        "snapshot": {
+          "head": "ccb6dc728a108c30b1a4c53318d939087302651e",
+          "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "binaries": {
+            "NeverDX86VirtualizationSourceTests": "d9bb69ff9959fbf8bcdbe7c6e523dc58b2229cc9521a46a609b9210fe54192fe",
+            "NeverDX86SystemStateTests": "d51e828be7e5fd34058a575b2956973a754566be34300cf706c680ace47b43ee"
+          },
+          "receipt": {
+            "status": "success",
+            "started_at": "2026-11-05T09:52:57.794522+00:00",
+            "options": [
+              "--target",
+              "NeverDX86VirtualizationSourceTests",
+              "NeverDX86SystemStateTests",
+              "--parallel",
+              "4"
+            ],
+            "scope": "Only the requested build targets and configuration; not all features or tests.",
+            "snapshot": {
+              "schema": 1,
+              "resolved_at": "2026-11-05T09:53:02.847661+00:00",
+              "sources": {
+                "neverd_highway": {
+                  "repository": "https://github.com/NeverSight/highway.git",
+                  "branch": "master",
+                  "commit": "1693ca7926ed12c5520623564e465cff97d93374",
+                  "archive": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/third_party/highway/1693ca7926ed12c5520623564e465cff97d93374/source.tar.gz",
+                  "sha256": "f5149df5acb77cd9730ed8e5160f2deff0b02fe49cc45443fd396fdb5f0519d2"
+                },
+                "neverd_simdutf": {
+                  "repository": "https://github.com/NeverSight/simdutf.git",
+                  "branch": "master",
+                  "commit": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+                  "archive": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/third_party/simdutf/8d82299606e675b50de8dc16fd118aae4b65bfde/source.tar.gz",
+                  "sha256": "48e9c9fc33940bcc81cdaec785ce6e21ea20f7b03b7a26bff56abb41d2cf5126"
+                },
+                "neverd_simdjson": {
+                  "repository": "https://github.com/NeverSight/simdjson.git",
+                  "branch": "master",
+                  "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+                  "archive": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/third_party/simdjson/edb7016c62efbe6155226896cdba5736307190e3/source.tar.gz",
+                  "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d"
+                },
+                "neverd_tbb": {
+                  "repository": "https://github.com/NeverSight/oneTBB.git",
+                  "branch": "master",
+                  "commit": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+                  "archive": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/third_party/oneTBB/d26e0502ca39f888c1266cbbf1e2c2226d31e41b/source.tar.gz",
+                  "sha256": "98300a443e43d047eabae27d3e30232efe7508b20d8e24a92ff2d54ef511761b"
+                },
+                "neverd_mimalloc": {
+                  "repository": "https://github.com/NeverSight/mimalloc.git",
+                  "branch": "main3",
+                  "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+                  "archive": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/third_party/mimalloc/e8e7bc41ce904b4c83fe20e87d93f24d5286315a/source.tar.gz",
+                  "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3"
+                }
+              }
+            },
+            "snapshot_sha256": "4d42fec4e3e23b1e505a1244160043802e8b118864246f1b53e95a493dc81df4",
+            "configuration": "Release",
+            "configure_inputs": {
+              "purpose": "configure_inputs",
+              "schema": 1,
+              "sources": {
+                "neverd_highway": {
+                  "selection": "disabled",
+                  "used": false
+                },
+                "neverd_mimalloc": {
+                  "selection": "disabled",
+                  "used": false
+                },
+                "neverd_simdjson": {
+                  "selection": "disabled",
+                  "used": false
+                },
+                "neverd_simdutf": {
+                  "selection": "disabled",
+                  "used": false
+                },
+                "neverd_tbb": {
+                  "selection": "disabled",
+                  "used": false
+                }
+              }
+            },
+            "inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+            "cache_sha256": "1bf7e75ad734ab9e16d7af098d4af139162a75ffe9e75cf6113958ed0a302f80",
+            "finished_at": "2026-11-05T09:56:12.947360+00:00"
+          }
+        },
+        "tests": {
+          "source": {
+            "tests": 5,
+            "passed": 3,
+            "skipped": [
+              "X86ArplSource.NativeCallsRejectWeakenedEffectsAndInvalidControls",
+              "X86HresetSource.NativeCallsRejectLostEffectsAndWrongMode"
+            ],
+            "sha256": "eccac44f0ee108e4508a150e2f1478ae5db6b21f8319aefcb187959c46fa6333"
+          },
+          "system-unit": {
+            "tests": 29,
+            "passed": 29,
+            "skipped": [],
+            "sha256": "c0378e9b9e379509f559fe0a9b3b8ea4fcd33ed4bf4b851a2afb81dbb1d1c08d"
+          },
+          "system-source": {
+            "tests": 29,
+            "passed": 22,
+            "skipped": [
+              "X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects",
+              "X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats",
+              "X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls",
+              "X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls",
+              "X86SystemStateSource.TransactionCommitRetainsSurroundingMemory",
+              "X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects",
+              "X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats"
+            ],
+            "sha256": "1cba79f6e49f9da736d6031c6bd1efc226b5e9434ef888b870ce8e947dd378c4"
+          }
+        },
+        "byte_identical_qualified_exports": 192,
+        "hreset_exports": {
+          "hreset_32_1_1_165.o": "e3eee65fbc8097908c7c4835c7cfdb875b06d7d74e8a0445a79e57079b0d54f8",
+          "hreset_32_2_1_0.llvm.c": "f7384dd115db3863f4799e73ff1c8d6456e7f80fbbec4bdb579ab0ca6da614e0",
+          "hreset_32_2_1_0.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_32_2_1_165.llvm.c": "f7384dd115db3863f4799e73ff1c8d6456e7f80fbbec4bdb579ab0ca6da614e0",
+          "hreset_64_1_1_0.o": "733d13c4a83b5d04a35f12921cf49ee797f3568dead932f86faf507d2f12d4d4",
+          "hreset_32_2_1_165.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_32_2_0_165.o": "69cd8b50614f36b297604e4637459d649fd8219464dfbb0a7cc2abcd9f6cc83a",
+          "hreset_64_2_1_0.o": "337a8dd84968a698f6a97a0d05f876b72616500f4e12812b45eaf293488992ff",
+          "hreset_32_2_0_0.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_64_0_1_0.o": "341cada9952a903aca88cf42995f05ff2ee185b3a3acb56dec6904f81ce4eb29",
+          "hreset_64_0_1_165.o": "341cada9952a903aca88cf42995f05ff2ee185b3a3acb56dec6904f81ce4eb29",
+          "hreset_32_0_0_0.llvm.c": "d02577ceb2770354d5d80231b2f4dd584abf6488331360fed4704661e708c00c",
+          "hreset_64_2_0_0.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_32_1_1_165.ll": "f954ec1058ed52e58704e5723a6ee8ae369d90d9225b689e67e6a47a8c1f6b63",
+          "hreset_32_0_1_165.llvm.c": "d02577ceb2770354d5d80231b2f4dd584abf6488331360fed4704661e708c00c",
+          "hreset_32_1_1_0.llvm.c": "f7384dd115db3863f4799e73ff1c8d6456e7f80fbbec4bdb579ab0ca6da614e0",
+          "hreset_64_2_1_0.llvm.c": "7e51b095bcc2dc6830bb325381761e697d1966ec0cb0a723264b47af1a0a327e",
+          "hreset_64_0_1_0.llvm.c": "b7ac8541c81793a38d9e7a0e2c868245430bae9fe719d0a8f9a07fba595bf748",
+          "hreset_64_2_0_0.llvm.c": "7e51b095bcc2dc6830bb325381761e697d1966ec0cb0a723264b47af1a0a327e",
+          "hreset_64_0_0_165.high.c": "4badbc4c82cdaa0f79319d5e8e62c05f071f9ca14ebb29788a80e4a3818f3e56",
+          "hreset_64_2_1_165.ll": "9cabaf42320fda6560d4d38e8bfcdade47ad5d10ea03461e0c99c2a5b01e7a44",
+          "hreset_64_0_1_0.ll": "b4333c24fbd3c4db395b7691e715d685aaf223469dbc968a4ff10c94e4d1b7b6",
+          "hreset_32_2_1_0.o": "a35c930da70094376bfe9926816323dfb1c0eaf0f2c0724db027b0678949a0be",
+          "hreset_32_0_1_0.high.c": "144d0d41b5ba5b58959a96a5ff47eadbd2768b42c5bd62cd7daf38f984bf1f9f",
+          "hreset_32_0_1_165.ll": "22f3334301652d0fc15fbb92cf85af87728f1f2903af1fe77047c89e5f13f6be",
+          "hreset_64_2_1_0.ll": "9cabaf42320fda6560d4d38e8bfcdade47ad5d10ea03461e0c99c2a5b01e7a44",
+          "hreset_32_2_0_165.llvm.c": "f7384dd115db3863f4799e73ff1c8d6456e7f80fbbec4bdb579ab0ca6da614e0",
+          "hreset_32_2_1_165.o": "a35c930da70094376bfe9926816323dfb1c0eaf0f2c0724db027b0678949a0be",
+          "hreset_64_2_0_0.ll": "48430dff4c6de97a35a35bc269caa118c1a45e55d932cfc6f0bd8e434018f020",
+          "hreset_64_0_0_165.ll": "4198d3fc06ab03ec31d22fea2403dbec30c08140df6d02c1487e955db85c09e5",
+          "hreset_32_2_0_0.ll": "9d624d9e523d164d0b2f26629a7ede719be92aff5e92c77bf47c0e7a63b55a6a",
+          "hreset_32_1_1_165.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_64_0_1_165.ll": "b4333c24fbd3c4db395b7691e715d685aaf223469dbc968a4ff10c94e4d1b7b6",
+          "hreset_64_1_1_165.llvm.c": "7e51b095bcc2dc6830bb325381761e697d1966ec0cb0a723264b47af1a0a327e",
+          "hreset_32_1_1_0.o": "e3eee65fbc8097908c7c4835c7cfdb875b06d7d74e8a0445a79e57079b0d54f8",
+          "hreset_64_1_0_0.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_64_1_0_0.llvm.c": "7e51b095bcc2dc6830bb325381761e697d1966ec0cb0a723264b47af1a0a327e",
+          "hreset_32_0_1_0.o": "54564f5d287c74f7edee02ec70b481da9873da7d63c99b7ccfac26733cffb5fb",
+          "hreset_32_0_0_0.high.c": "144d0d41b5ba5b58959a96a5ff47eadbd2768b42c5bd62cd7daf38f984bf1f9f",
+          "hreset_64_1_1_165.o": "733d13c4a83b5d04a35f12921cf49ee797f3568dead932f86faf507d2f12d4d4",
+          "hreset_64_1_1_0.ll": "8c49d4307c5e888e19dc8c9b690926873faa935a8df4d85d84aef4ca2a583163",
+          "hreset_32_0_1_165.high.c": "144d0d41b5ba5b58959a96a5ff47eadbd2768b42c5bd62cd7daf38f984bf1f9f",
+          "hreset_32_2_0_165.ll": "9d624d9e523d164d0b2f26629a7ede719be92aff5e92c77bf47c0e7a63b55a6a",
+          "hreset_64_2_1_165.llvm.c": "7e51b095bcc2dc6830bb325381761e697d1966ec0cb0a723264b47af1a0a327e",
+          "hreset_64_0_0_0.ll": "4198d3fc06ab03ec31d22fea2403dbec30c08140df6d02c1487e955db85c09e5",
+          "hreset_32_0_0_165.high.c": "144d0d41b5ba5b58959a96a5ff47eadbd2768b42c5bd62cd7daf38f984bf1f9f",
+          "hreset_32_1_1_165.llvm.c": "f7384dd115db3863f4799e73ff1c8d6456e7f80fbbec4bdb579ab0ca6da614e0",
+          "hreset_64_2_1_0.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_64_1_0_165.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_64_0_0_0.high.c": "4badbc4c82cdaa0f79319d5e8e62c05f071f9ca14ebb29788a80e4a3818f3e56",
+          "hreset_32_0_1_165.o": "54564f5d287c74f7edee02ec70b481da9873da7d63c99b7ccfac26733cffb5fb",
+          "hreset_64_2_0_165.ll": "48430dff4c6de97a35a35bc269caa118c1a45e55d932cfc6f0bd8e434018f020",
+          "hreset_64_0_0_165.o": "086585180f8ce765ba8a130f1f973f5f200819e140c61cfeb344fa7cf8865377",
+          "hreset_32_0_0_165.llvm.c": "d02577ceb2770354d5d80231b2f4dd584abf6488331360fed4704661e708c00c",
+          "hreset_32_2_1_0.ll": "bea47bece76c4510958f039e511bf0f3f7eda216bd72210a5d611fd3096cb4f5",
+          "hreset_64_1_0_0.ll": "890cac2ca3bbeb4ca3d4d852f492db3e021ba7d51e5217dac77f990e8518cc8a",
+          "hreset_64_0_0_0.o": "086585180f8ce765ba8a130f1f973f5f200819e140c61cfeb344fa7cf8865377",
+          "hreset_32_2_0_165.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_64_2_0_165.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_32_1_0_165.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_64_0_0_0.llvm.c": "b7ac8541c81793a38d9e7a0e2c868245430bae9fe719d0a8f9a07fba595bf748",
+          "hreset_32_1_0_0.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2",
+          "hreset_32_1_1_0.ll": "f954ec1058ed52e58704e5723a6ee8ae369d90d9225b689e67e6a47a8c1f6b63",
+          "hreset_64_0_1_165.llvm.c": "b7ac8541c81793a38d9e7a0e2c868245430bae9fe719d0a8f9a07fba595bf748",
+          "hreset_32_1_0_0.llvm.c": "f7384dd115db3863f4799e73ff1c8d6456e7f80fbbec4bdb579ab0ca6da614e0",
+          "hreset_64_0_1_0.high.c": "4badbc4c82cdaa0f79319d5e8e62c05f071f9ca14ebb29788a80e4a3818f3e56",
+          "hreset_32_2_0_0.o": "69cd8b50614f36b297604e4637459d649fd8219464dfbb0a7cc2abcd9f6cc83a",
+          "hreset_64_1_1_0.llvm.c": "7e51b095bcc2dc6830bb325381761e697d1966ec0cb0a723264b47af1a0a327e",
+          "hreset_32_0_0_0.ll": "0afe502ea4fc99a73d661ab31be347a3ca8007e5c1cc33fa052a20d01568109f",
+          "hreset_64_2_0_165.o": "92a8c1060e0b607efe0d413c4723f59bb2fddee3784dcf2eccbfd1298d7c1c16",
+          "hreset_32_2_0_0.llvm.c": "f7384dd115db3863f4799e73ff1c8d6456e7f80fbbec4bdb579ab0ca6da614e0",
+          "hreset_32_1_0_165.o": "538a883266e541704fc20b4faf8f5d792a685ba3d71a97d413f3d9853b4a61c0",
+          "hreset_64_1_1_0.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_64_2_0_0.o": "92a8c1060e0b607efe0d413c4723f59bb2fddee3784dcf2eccbfd1298d7c1c16",
+          "hreset_64_2_1_165.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_32_0_1_0.llvm.c": "d02577ceb2770354d5d80231b2f4dd584abf6488331360fed4704661e708c00c",
+          "hreset_64_1_0_0.o": "733d13c4a83b5d04a35f12921cf49ee797f3568dead932f86faf507d2f12d4d4",
+          "hreset_32_1_0_0.o": "538a883266e541704fc20b4faf8f5d792a685ba3d71a97d413f3d9853b4a61c0",
+          "hreset_64_2_0_165.llvm.c": "7e51b095bcc2dc6830bb325381761e697d1966ec0cb0a723264b47af1a0a327e",
+          "hreset_64_1_1_165.high.c": "a918df165e78dad1800c7cf383443843fb9caf262b5e4bcfa91f1e395adb2006",
+          "hreset_32_0_0_165.o": "c5afa25bcab3757feaa1c0cee9b44830a5eb475f99103ad50575759517fbd775",
+          "hreset_64_1_0_165.o": "733d13c4a83b5d04a35f12921cf49ee797f3568dead932f86faf507d2f12d4d4",
+          "hreset_64_1_0_165.llvm.c": "7e51b095bcc2dc6830bb325381761e697d1966ec0cb0a723264b47af1a0a327e",
+          "hreset_64_0_0_165.llvm.c": "b7ac8541c81793a38d9e7a0e2c868245430bae9fe719d0a8f9a07fba595bf748",
+          "hreset_32_1_0_165.ll": "4e6cd25e8daedf4de2b6a1a7c13ca490e4a1502873f8cb855c02f91a117db3b0",
+          "hreset_32_1_0_165.llvm.c": "f7384dd115db3863f4799e73ff1c8d6456e7f80fbbec4bdb579ab0ca6da614e0",
+          "hreset_64_2_1_165.o": "337a8dd84968a698f6a97a0d05f876b72616500f4e12812b45eaf293488992ff",
+          "hreset_32_0_0_0.o": "c5afa25bcab3757feaa1c0cee9b44830a5eb475f99103ad50575759517fbd775",
+          "hreset_32_1_0_0.ll": "4e6cd25e8daedf4de2b6a1a7c13ca490e4a1502873f8cb855c02f91a117db3b0",
+          "hreset_32_2_1_165.ll": "bea47bece76c4510958f039e511bf0f3f7eda216bd72210a5d611fd3096cb4f5",
+          "hreset_32_0_0_165.ll": "0afe502ea4fc99a73d661ab31be347a3ca8007e5c1cc33fa052a20d01568109f",
+          "hreset_64_1_1_165.ll": "8c49d4307c5e888e19dc8c9b690926873faa935a8df4d85d84aef4ca2a583163",
+          "hreset_64_1_0_165.ll": "890cac2ca3bbeb4ca3d4d852f492db3e021ba7d51e5217dac77f990e8518cc8a",
+          "hreset_64_0_1_165.high.c": "4badbc4c82cdaa0f79319d5e8e62c05f071f9ca14ebb29788a80e4a3818f3e56",
+          "hreset_32_0_1_0.ll": "22f3334301652d0fc15fbb92cf85af87728f1f2903af1fe77047c89e5f13f6be",
+          "hreset_32_1_1_0.high.c": "6b79717c5ed5e7c014e156b08e5d41de9d6e90b42a9a31993d6083552f217da2"
+        }
+      }
+    },
+    "arpl_continuity": {
+      "native": {
+        "files": 96,
+        "llvm_ir_and_objects_byte_identical": true,
+        "c_body_and_arpl_dispatch_identical_after_removing_unused_hreset_macro": true
+      },
+      "r6": {
+        "files": 96,
+        "llvm_ir_and_objects_byte_identical": true,
+        "c_body_and_arpl_dispatch_identical_after_removing_unused_hreset_macro": true
+      }
+    },
+    "compiler_regressions": {
+      "neverc": {
+        "tests": 174,
+        "passed": 174,
+        "skipped": [],
+        "sha256": "b7499aae1b9077ae4bd880023550d71de92715a570863b2ee6fa709eb7aeed2b"
+      },
+      "clang_unique_tests": 4,
+      "llvm_unique_tests": 3,
+      "logs": {
+        "neverc-regressions.log": "ef740020ab95d92e3f52dd744393d32541aa50b05e93f8858f60051986c3a771",
+        "clang-lit.log": "5e9142c4a5ac032b529ad4f836bf09e8342c98bdff8ab2b333619ffc0d932d4a",
+        "llvm-lit.log": "e9e688e107a60f61335265ce18b8ffbc198fdc487d7db93c864e8477e8234f23"
+      },
+      "clang_cases": [
+        "CodeGen/X86/hreset-builtins",
+        "CodeGen/X86/arpl-builtins",
+        "Sema/arpl-builtins",
+        "CodeGen/inline-asm-intel"
+      ],
+      "llvm_cases": [
+        "bounded-system-intrinsics",
+        "arpl-intrinsics",
+        "bound-intrinsics"
+      ]
+    }
+  },
+  "diagnosed_failures": [
+    "The i386 frontend admitted source, but eleven packaged intrinsic headers still rejected its architecture; unconditional AMX declarations and a long-mode-only HRESET builtin also broke inclusion.",
+    "The SSC marker used 64-bit registers in i386. Its target-width definition is now exercised in static/PIC code and also checks full-width RBX in x64.",
+    "Clang exposed _hreset only through inline assembly. Its native builtin now uses the existing effectful LLVM API.",
+    "Actual source compilation exposed feature-sensitive __has_builtin dispatch. A shared API capability fixes native selection with function-local target attributes.",
+    "Initial fixture diagnostics are preserved: an incorrectly encoded HRESET test image, a constant-logical-operand test warning, and a standalone Clang linked before the rebuilt LLVM builtin lookup table."
+  ],
+  "limitations": [
+    "NeverC i386 is a Linux source frontend using full LLVM for objects; its embedded i386 machine backend/runtime is not restored.",
+    "Controlled HRESET checks do not execute prediction-history reset and cannot establish its physical success, fault/event routing or machine-state continuations.",
+    "The MMX header value tests do not close NeverD unowned/i386 MMX or x87 original-state lifter contracts.",
+    "The wider original-machine, SMM/SGX, transaction, asynchronous-event and external-device boundaries remain as documented in x86-instruction-support.md."
+  ],
+  "release": {
+    "final_llvm_release": false,
+    "production_sdk": "r6",
+    "production_pin_changed": false,
+    "llvm_gitlink_changed": false
+  },
+  "artifacts": "/mnt/data/neverd-i386-headers-20261105",
+  "reproduction": [
+    "NeverC: verify_i386_intrinsic_headers.py --neverc NEVERC --llvm-bin LLVM_BIN --output OUT under taskset -c 2 and 12.",
+    "NeverD: scripts/build.py BUILD --target NeverDX86VirtualizationSourceTests NeverDX86SystemStateTests; NEVERD_ISA_REGRESSION_ARTIFACT_DIR=EXPORTS BUILD/bin/NeverDX86VirtualizationSourceTests --gtest_filter=X86HresetSource.*",
+    "NeverC: verify_hreset_source.py --exports EXPORTS --frontend COMPILER --llvm-bin LLVM_BIN --output OUT; add --fallback for stock Clang."
+  ]
+}
