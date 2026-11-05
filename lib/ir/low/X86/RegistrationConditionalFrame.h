@@ -80,12 +80,22 @@ struct BoundPlainCalleeEffect {
   FrameValue ReturnValue = FrameValue::taint(true);
 };
 
+/// Closed integer effects under one plain helper's current inputs. A single
+/// checked raise still requires the caller's complete local search/unwind
+/// proof. Incoming reads end at ArgumentEnd in the helper's EBP coordinates;
+/// callbacks cannot change that storage or its private suspended frame.
+struct ConditionalDispatch {
+  std::optional<SEHExceptionOrigin> Raise;
+  int32_t ArgumentEnd = 8;
+};
+
 /// One input-bound private-frame proof. Returning cleanup and physical EAX
 /// belong to this invocation, not to every call of the same target. Neither
 /// fact grants runtime-binding preservation or closed callback effects.
 struct ConditionalCallResult {
   std::optional<uint32_t> StackPopBytes;
   std::optional<FrameValue> ReturnValue;
+  std::optional<ConditionalDispatch> Dispatch;
 };
 
 /// The current source caller alone owns this storage query. It may extend a

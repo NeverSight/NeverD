@@ -12782,6 +12782,15 @@ that source helper facts cannot mutate native IR without a replacement call
 receipt. These focused checks do not establish full xcpt4 or nonlocal-jump
 support.
 
+`NestedDispatchRequiresOneAuthenticatedKnownRaise` exercises a synthetic
+wrapper at two image bases and repeated invocations with different exception
+codes. Unknown codes, repeated raises, noncontinuable flags and an unauthenticated
+caller retain no closed-dispatch receipt; a wrong provider, argument count or
+argument array refuses the frame proof itself. A plain integer helper supplies
+its separate call-free receipt. The pinned counter helper also removes only
+the dispatch receipt while keeping its valid returning-frame facts, ensuring
+that stack cleanup cannot substitute for callback-effect evidence.
+
 `RegistrationJumpRuntime` mutates each capture/resume/unwind binding in direct
 and indirect forms, including loader storage, DLL identity, delay imports,
 architecture, veneer opcode/slot and writable code. Unconditional synthetic

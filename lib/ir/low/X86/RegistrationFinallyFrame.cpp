@@ -208,9 +208,14 @@ bool RegistrationStateSolver::runSEHCallbackFrame(
         if (Conditional && Address.Offset && *Address.Offset >= 4) {
           if (!checkConditionalMemory(State, Op, Transfer))
             return false;
-          if (Op.Opcode == NdOp::STORE)
+          if (Op.Opcode == NdOp::STORE) {
             State.store(*Address.Offset, Memory.AccessSize,
                         Transfer.read(*Memory.StoredValue));
+            if (Writes)
+              Writes->push_back(
+                  {*Address.Offset,
+                   int32_t(int64_t(*Address.Offset) + Memory.AccessSize)});
+          }
         } else if (Address.CallbackAddress) {
           if (!charge(Memory.AccessSize) ||
               !State.callbackMemoryIsPrivate(*Address.CallbackAddress,
