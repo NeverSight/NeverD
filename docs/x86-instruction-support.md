@@ -385,7 +385,7 @@ families remain separate work.
 | --- | --- |
 | REP beyond the explicit paged memory-string binding | Long-mode MOVS/STOS/LODS and REPE/REPNE CMPS/SCAS now own element progress, page/alignment faults, handler repair/IRET/retry and producer-selected IRQ/NMI boundaries through both C routes. The local processor profile binds addr32 entry normalization and destination-first CMPS reads. INS/OUTS now use the explicit paged device binding below. Legacy segmented progress, physical device read-ahead, fast-string event timing and other processor profiles remain separate. Native LLVM/NeverC completion interfaces continue to own all seven families in their executing environment. |
 | SNP/RMP and VMGEXIT outside explicit native bindings | Nine appended decoder IDs and native LLVM/NeverC APIs now retain exact register/flag completion and memory effects. The [explicit SNP/SEV-ES source bindings](x86-snp-state.md) connect canonical x64 bytes to both C routes, including PVALIDATE address32 and both VMGEXIT prefixes. Unbound ordinary ABI lifting, other source prefixes/modes, faults/restart and physical RMP/SEV-ES service execution remain unqualified. The [dated census](evidence/x86-snp-census-2026-10-31.json) records the earlier missing implementation. |
-| LDS, LES, LSS, LFS, LGS | LLVM provides 13 native interfaces and NeverC the nine valid long-mode builtins. Explicit V6 owns both destinations and declared clear/preserve null FS/GS policies. The paged binding adds all CPLs, null SS at CPL0..2, ordered descriptor/page/alignment faults, handler repair/retry and event scheduling, qualified on both local hybrid core types. The [protected legacy transition](x86-legacy-segments.md#explicit-selector-instructions) now owns all five i386 LxS forms with staged cache/GPR publication over paged RAM. The [protected legacy executor](x86-legacy-segments.md#protected-instruction-and-event-execution) now connects these instructions to original-byte fetch, IDT fault delivery and IRET/RETF. General legacy/compatibility source dispatch and other processor qualification remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |
+| LDS, LES, LSS, LFS, LGS | LLVM and NeverC provide 13 native interfaces: ten valid in i386 and nine in long mode. Explicit V6 owns both destinations and declared clear/preserve null FS/GS policies. The paged binding adds all CPLs, null SS at CPL0..2, ordered descriptor/page/alignment faults, handler repair/retry and event scheduling, qualified on both local hybrid core types. The [protected legacy transition](x86-legacy-segments.md#explicit-selector-instructions) now owns all five i386 LxS forms with staged cache/GPR publication over paged RAM. The [protected legacy executor](x86-legacy-segments.md#protected-instruction-and-event-execution) now connects these instructions to original-byte fetch, IDT fault delivery and IRET/RETF. General legacy/compatibility source dispatch and other processor qualification remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |
 | Unowned and i386 3DNow! operations | All 24 operations now retain their original instruction inside the owned x64 MMX/x87 context, qualified below. Typed/unowned and i386 paths still require a state contract. Strict and portable concrete execution refuse processor-dependent values. Physical execution and pending-#MF/stack-#SS behavior remain unqualified. LLVM and NeverC provide the native packed-value interfaces. |
 | Unowned FNOP/EMMS/FEMMS | Waiting behavior and tag/payload transitions require an owned x87 context. Owned x64 native and explicit portable paths retain all three instructions, including FEMMS payload invalidation; typed/unowned and i386 paths still refuse rather than emit NOP. Portable MMX data operations remain outside the admitted profile. |
 | VMRUN outside explicit native SVM | LLVM/NeverC provide the returning fourteen-GPR/user-xstate context. The `amd-svm-v10` source profile connects canonical raw addr64/addr32 VMRUN to that API through both C routes, with explicit GPR/SIMD/MXCSR/CR2 publication and a VMEXIT stop. Ordinary function-ABI lifting and arbitrary guest supervisor/memory environments remain outside that declared domain. See [the contract and IDA counterexample](x86-vmrun-context.md). |
@@ -4010,9 +4010,9 @@ record returns and arguments, variadic access, register parameters and stdcall.
 Its X86 ABI owner classifies both ordinary arguments and `va_arg`. All four
 BOUND builtins emit native LLVM calls with their memory and fault effects;
 long-mode calls and invalid address controls fail during semantic checking.
-The frontend uses `--target=i386-unknown-linux-gnu -S -emit-llvm`, followed by
-the full LLVM fork for object code. NeverC's target metadata records this
-source capability separately from its unavailable embedded i386 backend.
+The frontend can emit LLVM IR or use the explicit full-backend machine-output
+route described below. NeverC's target metadata records source capability
+separately from its unavailable embedded i386 backend.
 
 The [i386 frontend evidence](evidence/x86-i386-frontend-2026-11-04.json)
 records 811 passing regression checks and one explicit filesystem-test skip.
@@ -4100,3 +4100,48 @@ prediction-history reset or establish original fault/event semantics.
 ARPL's LLVM/object exports remain byte-identical to its qualification above;
 its C output differs only by an unused HRESET dispatch definition. Global
 state/environment completion and the final LLVM release/pin remain separate.
+
+
+### NeverC direct i386 machine output through full LLVM
+
+NeverC now accepts ordinary `-c` and `-S` with an explicitly selected full
+NeverSight LLVM backend:
+
+```sh
+neverc --target=i386-unknown-linux-gnu -O2 -c input.c -o input.o \
+  -fllvm-backend=/path/to/neversight-llvm/bin/llc
+```
+
+The C23 frontend and optimizer retain ownership of source semantics. A private
+backend adapter serializes IR, verifies the fork's `neversight-codegen-v1 x86`
+protocol, invokes machine verification, and validates the completed ELF32
+object before publishing it. Unknown reserved LLVM intrinsic names, failed or
+incompatible backends, wrong-architecture objects and absent output fail
+explicitly. The adapter also emits AT&T/Intel assembly and accepts bitcode.
+The i386 PIC/PIE option owner now controls macros, IR module flags and relocation
+consistently; static, PIC and PIE objects can be linked by an external toolchain.
+
+The work exposed an LLVM Intel-syntax parser bug: the immediate
+`_GLOBAL_OFFSET_TABLE_+(local_label-PIC_base)` was rejected as a memory operand
+with multiple symbols. The full fork now parses the complete OFFSET immediate
+while preserving memory-operand and MASM handling. Relocation checks and actual
+assembly/assemble/link/run tests retain GOTPC and its addend.
+
+[The machine-output evidence](evidence/x86-i386-machine-output-2026-11-05.json)
+records direct C-to-object ABI, shared-library/TLS, intrinsic-header and protected
+code16/code32 far-pointer execution on both local core types. It also reuses
+explicitly hashed NeverD BOUND and ARPL export snapshots to check HighC, LLVMC
+and ELF inputs through the new compiler entry point. The matrix passes 188
+NeverC and 27 LLVM regressions, 5,120,000 ABI checks, 1,769,472 header-value
+checks, 127,680 far-pointer and 530,432 ARPL complete-state pairs, and
+22,063,776 BOUND comparisons. These are compiler-source and native execution
+contracts, separate from a general original-state i386 source dispatcher.
+
+The embedded NeverC machine backend and linker remain pruned. This route
+requires the external full fork and rejects explicit LTO, split DWARF,
+`-mllvm`, integrated linking and custom machine hooks. Textual IR input remains
+unsupported; IR output and bitcode input are available. Protected code16 retains
+32-bit pointers and stack ABI. Other platforms, real/VM86, the remaining
+machine-state/event domains and unavailable physical instruction families
+remain separate work. The final LLVM release, SDK pin and LLVM gitlink remain
+unchanged until the overall completion gate is met.
