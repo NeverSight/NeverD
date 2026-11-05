@@ -363,6 +363,10 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       Interface.Entry = *Entry;
       Interface.ResultBytes = *ResultBytes;
       for (const auto &Argument : *Arguments) {
+        if (Argument.getAsNull()) {
+          Interface.ArgumentBytes.push_back(std::nullopt);
+          continue;
+        }
         auto Bytes = Width(&Argument);
         if (!Bytes)
           return Bytes.takeError();
