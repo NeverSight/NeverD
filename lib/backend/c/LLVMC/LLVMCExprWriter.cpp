@@ -39,6 +39,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Argument.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 
@@ -4076,6 +4077,20 @@ std::string LLVMCWriter::gepExpr(const llvm::GEPOperator &GEP) {
     }
   const std::string Carrier = "uint" + std::to_string(Bits) + "_t";
   std::string Base = valueStr(GEP.getPointerOperand());
+  // LLVM's inbounds contract locates this constant displacement in the
+  // parameter's object. Keep that pointer visible to the C compiler. Named
+  // image/frame views can project another C subobject, so they retain the
+  // numeric owner below, as do dynamic and non-inbounds GEPs.
+  if (GEP.isInBounds() && Variables.empty() &&
+      llvm::isa<llvm::Argument>(GEP.getPointerOperand())) {
+    std::string Pointer = "(uint8_t*)(" + Base + ")";
+    if (!Offset.isZero()) {
+      Pointer += Offset.isNegative() ? " - 0x" : " + 0x";
+      Pointer += llvm::utohexstr(Offset.abs().getZExtValue());
+      Pointer += Bits == 32 ? "U" : "ULL";
+    }
+    return "(void*)(" + Pointer + ")";
+  }
   std::string Sum = "(" + Carrier + ")(uintptr_t)(" + Base + ")";
   const std::string Suffix = Bits == 32 ? "U" : "ULL";
   if (!Offset.isZero())

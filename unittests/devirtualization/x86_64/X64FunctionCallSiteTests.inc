@@ -321,8 +321,7 @@ int proof_second_call_site(void) {
     }
 }
 
-TEST_F(X64ContinuationExportTest,
-       FunctionCallSitesProveHighCOriginalStackTransfer) {
+TEST_F(X64ContinuationExportTest, FunctionCallSitesProveOriginalStackTransfer) {
   load({0xe8, 0x01, 0, 0, 0, 0xc3, 0xc2, 0x10, 0}, {{0x1000, 6}, {0x1006, 3}});
   const auto Request = request(
       R"("entries":[4096,4102],"follow_internal_calls":true,"function_context":true,"function_calls":[{"entry":4102,"abi":"win64","argument_bytes":[],"result_bytes":8,"call_sites":[4096]}])");
@@ -364,13 +363,9 @@ int proof_original_bridge(uint64_t result) {
         site.Callee.Function.ReturnSlot!=(uintptr_t)&stack[7];
 }
 )C";
-  // HighC preserves pointer-based state accesses, allowing this additional
-  // constant-result proof. LLVM C's integerized host pointers do not fold to
-  // the typed fixture fields in Clang. Both routes retain the controller
-  // proofs and full object compilation above; do not claim this stronger
-  // original-step proof for the LLVM C route.
-  {
-    const auto [Source, Manifest] = source(Request, false);
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    const auto [Source, Manifest] = source(Request, LLVM);
     const auto File = tmpFile("original-call-transfer.c");
     std::ofstream(File) << Source << Probes;
     const auto IR = tmpFile("original-call-transfer.ll");

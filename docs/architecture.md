@@ -8450,9 +8450,15 @@ a shared status temporary and jump label. This bounded normalization duplicates
 no call, load, store or cleanup; address-taken blocks, unsupported incoming
 terminators and native exception/control contracts retain their original CFG.
 GEP rendering retains signed index extension and unsigned address-width
-arithmetic. Width-matched unsigned constants and removal of identity casts or
-unit scales shorten the expression without substituting C array arithmetic or
-assuming that a pointer is in bounds.
+arithmetic for dynamic or non-inbounds offsets. Width-matched unsigned constants
+and removal of identity casts or unit scales shorten those expressions.
+A constant GEP directly rooted at a pointer parameter and carrying LLVM's
+existing `inbounds` contract instead retains byte-pointer arithmetic, including
+negative offsets. Zero offsets need no arithmetic. Named image and frame views
+retain their numeric owner because C projection can name a different subobject.
+This preserves parameter object identity without inferring bounds from an
+ordinary integer address. The contract is the one defined by
+the [LLVM GEP rules](https://llvm.org/docs/LangRef.html#getelementptr-instruction).
 Generic LLVM arithmetic and control builtins do not request target ISA headers.
 Both C routes reject string-literal replacement when loader fixup provenance
 overlaps any candidate byte, including its terminator. Bytes in code are no
@@ -17546,6 +17552,19 @@ a separate caller-owned budget, including declined and nonprogressing attempts;
 invalid state and exhausted translated-instruction budgets remain final stops.
 The provider owns native effects and profile reentry. This is an execution
 interface, not an inferred Windows service contract or an ordinary ABI proof.
+
+`X64StateObjectPointers` keeps the explicit continuation producer's host state
+object visible in LLVM C. Every emitted definition receives a complete state
+object at argument zero; its extent comes from the selected profile. After the
+shared scaffolding-only SSA promotion, a def/use walk projects exact 64-bit
+constant state offsets back to that pointer only when the entire load or store
+fits the object. This bound authorizes `inbounds`; argument spelling and numeric
+guest addresses do not. Narrowing, dynamic offsets, PHIs, poison-bearing
+arithmetic and ordered accesses retain their original form. Loaded guest
+addresses, pointer escapes, external effects and native RAM are not localized.
+The walk visits only the state pointer's users in the selected export module;
+it adds no ordinary source analysis or per-instruction runtime check. The shared
+LLVM context retains its existing serial mutation owner.
 
 `X64FunctionContext` separately owns the opt-in V6 entry return-cell boundary.
 The instruction-state builder authenticates near RET once; both driver emitters
