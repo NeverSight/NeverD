@@ -20129,6 +20129,21 @@ initialization. Compile-only checks
 must not be reported as passing those runtime probes. Neither set establishes
 arbitrary dynamic frame ownership or a Windows environment implementation.
 
+`X64ContinuationExportTest.FunctionCallsRejectUnboundDeclarations` checks strict
+entry/ABI/width admission and the shared argument bound. Its
+`FunctionCallsCompileAndProveBoundaries` companion compiles the complete source
+at O0/O2 for both routes and dispatchers, checks that existing bodies and
+drivers are unchanged, and statically proves thirteen wrapper predicates over
+independent byte-RAM and activation-outcome oracles. Incoming result words
+remain arbitrary. These are wrapper proofs using compiled C, not execution of
+generated instructions or a Windows environment. They cover mismatch refusal,
+narrow padding, stack-range wrap, zero budgets, pause/resume without argument
+rebinding, active-context restart refusal, external returns versus completion,
+cached results and wrong resume roots. No generated program is executed by
+either test. `FunctionCallsAdmitScalarWidthAndArgumentLimits` additionally
+compiles every supported scalar width with zero, register-only, first-stack
+and maximum argument counts through both C routes.
+
 `EnvironmentResumesTheActualPhysicalContext`,
 `EnvironmentBudgetsBoundEveryProviderAttempt` and
 `EnvironmentReceivesCompletedPrivilegeState` execute the companion run driver

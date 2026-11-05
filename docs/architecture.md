@@ -17491,6 +17491,17 @@ retained, and disabling the option adds no generated execution checks. This
 explicit input contract keeps unknown original stack bytes supplied by the
 caller instead of weakening ordinary source proofs.
 
+`X64FunctionCalls` adds producer-declared Win64 scalar call views at explicit
+roots. The shared argument-layout owner supplies register and stack positions;
+the wrappers check their low declared bytes against original state without
+initializing padding or private storage. A separate context binds the root and
+caches its result only after the existing function context completes. Resume
+keeps the activation and never rechecks entry arguments or resets the PC.
+Ordinary C callers receive status, a completion flag and valid result bits only
+on completion. This opt-in layer appends wrappers without changing either
+instruction dispatcher; it does not infer ABI declarations, capture native RAM
+or weaken ordinary missing-input proofs.
+
 Continuation source lowers `RequireAligned` through the shared
 `X64Alignment` predicate after projecting a live FS/GS base. A failed predicate
 returns unchanged-state refusal before guest memory, architectural writes or

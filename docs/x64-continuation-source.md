@@ -187,6 +187,69 @@ limited to activation entry/exit and selected near-return checks. This
 interface does not close ordinary-C argument-recovery gaps or
 qualify a full Windows execution environment.
 
+### Checked scalar call interfaces
+
+With `function_context`, an optional `function_calls` array declares scalar C
+views of explicit roots. The declarations are supplied by the producer; no
+name, debug signature or inferred argument count supplies this authority.
+
+```json
+"function_calls": [{
+  "entry": "0x1000",
+  "abi": "win64",
+  "argument_bytes": [8, 8, 8, 8, 4],
+  "result_bytes": 4
+}]
+```
+
+Only fixed Win64 integer/pointer carriers of 1, 2, 4 or 8 bytes are supported,
+up to the shared call-argument limit. Pointer arguments carry guest address
+bits, without host relocation. Floating, vector, aggregate and variadic
+interfaces are not inferred. Explicit Win64 declarations can describe linked
+ELF fixtures too; the image format alone does not supply a signature.
+
+The generated `neverd_x64_call_1000_v6` takes state, both budgets, a
+zero-initialized `neverd_x64_call_context_v1`, provider/context and the declared
+unsigned scalar arguments. It first requires the matching entry PC and an
+uninitialized call context, then checks each argument against its actual
+Win64 register or entry-SP stack cell. Narrow views compare only their declared
+bytes. No input register, padding byte, home slot or private stack byte is
+written. A mismatch or wrapping stack range returns `{5, 0, 0}` without
+starting the activation or consuming a budget. The stack cells being checked
+must already be accessible ordinary RAM under the V6 nonfaulting contract.
+This is an argument check, not allocation, memory mapping or state capture.
+
+```c
+neverd_x64_call_context_v1 call = {0};
+neverd_x64_call_result_v1 result = neverd_x64_call_1000_v6(
+    &state, &budget, &environment_budget, &call, environment, environment_data,
+    arg0, arg1, arg2, arg3, arg4);
+/* After handling a boundary or replenishing budgets: */
+result = neverd_x64_resume_1000_v6(
+    &state, &budget, &environment_budget, &call, environment, environment_data);
+/* Only result.Completed == 1 makes result.Value available. */
+```
+
+Resume does not recheck entry arguments, reset the entry PC or begin again.
+An active context cannot be passed to `call` a second time. An interface for
+another root rejects the context. `Status == 3` alone is insufficient: an
+external physical return can leave the activation active. Only the shared
+return-cell completion makes `Completed` one and captures the declared low
+result bytes from RAX. Later completed resumes return that cached value
+without inspecting state, invoking a provider or consuming budgets. An
+incomplete result has `Completed == 0`; its zero `Value` field supplies no
+machine value. Reinitialize the call context for another invocation.
+
+The manifest records parameter locations, widths and entry-point names with
+`source_abi_inferred: false`. Context storage must remain disjoint from state,
+budgets, provider storage and guest RAM. The existing native environment and
+return-cell lifetime contracts still apply. Both C routes and dispatchers
+append the same wrappers to unchanged instruction bodies and drivers. Work is
+limited to entry argument checks and completion/resume bookkeeping; there is
+no additional per-instruction work. Omitting `function_calls` retains the
+previous source and manifest. The owner is
+[`X64FunctionCalls.cpp`](../lib/pipeline/X86/X64FunctionCalls.cpp).
+
 ## Invocation
 
 Legacy SHUFPS register forms select their four 32-bit lanes through primitive

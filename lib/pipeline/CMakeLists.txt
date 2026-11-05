@@ -11,6 +11,7 @@ add_neverd_component_library(NeverDPipeline
   X86/X64ContinuationExport.cpp
   X86/X64ContinuationSchedule.cpp
   X86/X64FunctionContext.cpp
+  X86/X64FunctionCalls.cpp
   X86/X64RtmAbortRegions.cpp
   X86/X64RtmRegions.cpp
   X86/X64SpecialRegions.cpp

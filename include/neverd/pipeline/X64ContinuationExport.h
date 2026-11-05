@@ -62,6 +62,11 @@ struct X64ContinuationExport {
 /// and native RTM regions are separate contracts. Ordinary drivers are retained
 /// with their original behavior. This supplies no dynamic frame-ownership or
 /// source-ABI proof.
+/// Optional function_calls declare checked Win64 scalar entry views alongside
+/// function_context. Arguments must match the supplied original state; no
+/// register or RAM input is initialized. Separate resume wrappers retain the
+/// activation and cache its explicitly completed result. Declarations do not
+/// infer a native signature or remove the original environment obligations.
 /// V7 requires sysenter_msr_address_bits and returns a distinct V7
 /// state/driver. The intel-user-interrupt-v8 profile additionally requires
 /// uiret_restores_uif, owns UIF/monitor validity and stops UIRET at its
