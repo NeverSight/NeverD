@@ -1,5 +1,20 @@
 # Remaining x64 C-quality work
 
+Explicit function activations now compose with paged memory through
+`neverd_x64_run_paged_function_v6`. The shared return-cell owner stops only after
+an attempted successful original near RET; fault/backing/changed-code stops
+retain the activation and the paged runtime's original budget/effect rules.
+The producer must retain the same execution context and declared guest return
+cell/address-space lifetime. This removes the host-addressable-RAM restriction
+for that activation boundary, but supplies no initial snapshot or mapping
+ownership proof. Paged scalar bridges remain rejected because validation reads
+would introduce extra page-table observations. The two ordinary registry-query
+inputs, automatic state capture and complete environment effects remain open.
+The inspected six-root registry selection contains 3,526 instructions in either
+route; paged execution models 3,485 and retains 41 explicit vector-state native
+boundaries. Its scalar runtime does not gain SIMD semantics from the new
+activation controller. Non-paged coverage is a different execution domain.
+
 Explicit callers can now request `pause_call_sites` to stop before their bound
 original CALLs and hand the existing state directly to the checked bridge.
 Both drivers emit static stops only at selected sites; nested bridges and the

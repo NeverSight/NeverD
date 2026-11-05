@@ -58,20 +58,23 @@ struct X64ContinuationExport {
 /// V6 function_context adds begin/continue/run_function entry points for a
 /// producer-declared entry return cell. Successful selected near RET through
 /// that cell completes the activation even at a selected destination. It
-/// requires entries and follow_internal_calls; paged memory, scheduled events
-/// and native RTM regions are separate contracts. Ordinary drivers are retained
-/// with their original behavior. This supplies no dynamic frame-ownership or
-/// source-ABI proof.
-/// Optional function_calls declare checked Win64 scalar entry views alongside
-/// function_context. Arguments must match the supplied original state; no
-/// register or RAM input is initialized. Separate resume wrappers retain the
-/// activation and cache its explicitly completed result. Declarations do not
-/// infer a native signature or remove the original environment obligations.
-/// A null argument width keeps that physical slot only in the native context,
-/// without a scalar formal or entry read. Later arguments retain their slots.
-/// Optional call_sites on a function_calls declaration bind selected original
-/// direct CALLs to that entry. Pre-CALL checks use the shared caller layout;
-/// the original step creates the return cell before function-context entry.
+/// requires entries and follow_internal_calls. With paged_memory, the entry is
+/// neverd_x64_run_paged_function_v6: retain the same paged execution context
+/// and guest virtual return-cell lifetime across pauses. Only attempted
+/// successful near RET completes; faults, backing stops and changed code remain
+/// active. Scheduled events and native RTM regions remain separate contracts.
+/// Ordinary drivers retain their original behavior. This supplies no dynamic
+/// frame, address-space ownership or source-ABI proof. Optional function_calls
+/// declare checked Win64 scalar entry views alongside non-paged
+/// function_context. Arguments must match the original state; no register or
+/// RAM input is initialized. Separate resume wrappers retain the activation and
+/// cache its explicitly completed result. Declarations do not infer a native
+/// signature or remove the original environment obligations. A null argument
+/// width keeps that physical slot only in the native context, without a scalar
+/// formal or entry read. Later arguments retain their slots. Optional
+/// call_sites on a function_calls declaration bind selected original direct
+/// CALLs to that entry. Pre-CALL checks use the shared caller layout; the
+/// original step creates the return cell before function-context entry.
 /// Separate site contexts retain pending and active calls across budget pauses.
 /// This does not capture full native state from an ordinary C caller.
 /// pause_call_sites optionally stops both drivers with status 21 before each
@@ -100,8 +103,9 @@ struct X64ContinuationExport {
 /// V6 paged_memory selects the owned-RAM scalar instruction executor and
 /// neverd_x64_run_paged_v6. Its explicit context is X64PagedExecution; guest
 /// memory and synchronous faults use that C++ component's bridge. It cannot
-/// be combined with the host-RAM native providers, RTM regions, direct dispatch
-/// or scheduled_events. Fetch verification reports changed code as status 20;
+/// be combined with host-RAM native providers, RTM regions or direct dispatch.
+/// Its scheduled entry separately owns pending events and inhibition shadows.
+/// Fetch verification reports changed code as status 20;
 /// backing failure and shutdown are statuses 18 and 19. Partial-completion
 /// instructions retain a native boundary. This bridge is not a stable C SDK
 /// runtime interface.
