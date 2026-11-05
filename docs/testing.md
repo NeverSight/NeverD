@@ -20755,3 +20755,13 @@ separate from the unavailable NeverC i386 frontend and physical MPX coverage.
 `mov rax,rdi; mov [rsi],ax; ret` with integer/pointer declarations. It compiles
 both C routes at O0/O2 and checks the complete return plus the partial store;
 on x64 hosts outside Windows, independent original bytes provide the oracle.
+
+`X86ArplSource` in `NeverDX86VirtualizationSourceTests` checks both C writers,
+native LLVM, old-SDK assembly fallback, ELF/COFF/MachO, live selector/ZF and
+DS/FS/GS memory forms. It validates explicit native address widths and segment
+prefixes and rejects weakened memory effects, speculative calls and wrong
+modes. Preserve exports with `NEVERD_ISA_REGRESSION_ARTIFACT_DIR`; NeverC's
+`tests/neverc/X86/verify_arpl_source.py` recompiles these exports through patched
+Clang/NeverC or stock Clang's fallback and checks original KVM instruction
+state, fault frames and compiled returns. Its boundary is the compiler ABI;
+the separate `LegacyArpl` matrix owns original-image execution and retry.

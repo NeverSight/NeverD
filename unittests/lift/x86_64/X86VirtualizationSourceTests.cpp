@@ -5734,6 +5734,7 @@ void saveX86SourceArtifact(llvm::StringRef Name, llvm::StringRef Data) {
 }
 } // namespace
 
+#include "../x86/X86ArplSourceTests.inc"
 #include "../x86/X86BoundSourceTests.inc"
 #include "X86FlagsSourceTests.inc"
 #include "X86SegmentMoveSourceTests.inc"

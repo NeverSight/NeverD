@@ -114,6 +114,9 @@ llvm::Value *MedLLVMEmitter::emitX86SystemState(const MedOp &Op, Intrinsic Id,
   if (Native &&
       (Id == Intrinsic::X86Skinit
            ? llvm::Intrinsic::lookupIntrinsicID(Native->LLVMName)
+       : Native->AdjustRpl
+           // This capability also identifies DS-preserving pointer lowering.
+           ? llvm::Intrinsic::lookupIntrinsicID("llvm.x86.arpl.mem.address32")
            : Id == Intrinsic::Xabort ||
                  llvm::Intrinsic::lookupIntrinsicID(
                      Native->AddressBits ? "llvm.x86.lar.mem16.address"

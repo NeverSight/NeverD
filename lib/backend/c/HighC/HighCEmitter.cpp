@@ -1594,6 +1594,10 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
         NeedsX64WindowsSyscallHelper = true;
       else if (modeledSyscallConvention(Ex.IntrinsicId))
         LinuxSyscallHelpers.insert(Ex.IntrinsicId);
+      else if (isX86SystemStateIntrinsic(Ex.IntrinsicId))
+        HasCIntrinsics |=
+            x86SystemStateUsesCHeader(Ex.IntrinsicId, Ex.MemoryAddressSpace,
+                                      Opts.Format == BinaryFormat::COFF);
       // The x87 helpers, collected with the unit's types, need no header.
       else if (Ex.IntrinsicId != Intrinsic::None && !IsX87Helper &&
                (intrinsicCName(Ex.IntrinsicId) ||
@@ -1630,7 +1634,7 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
       if (Opts.TheArch == Arch::X64 &&
           x86VirtualizationContract(Ex.IntrinsicId).Mnemonic)
         NeedsX86VirtualizationDispatch = true;
-      if (Opts.TheArch == Arch::X64)
+      if (Opts.TheArch == Arch::X64 || Opts.TheArch == Arch::X86)
         for (const auto Id : X86SystemStateNativeInventory)
           NeedsX86SystemStateDispatch |= Id == Ex.IntrinsicId;
       if (Opts.Format != BinaryFormat::COFF &&

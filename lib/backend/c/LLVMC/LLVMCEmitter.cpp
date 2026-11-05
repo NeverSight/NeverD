@@ -1030,7 +1030,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
             }
             continue;
           }
-          if (Opts.TheArch == Arch::X64) {
+          if (Opts.TheArch == Arch::X64 || Opts.TheArch == Arch::X86) {
             const std::vector<std::string> Arguments(CI->arg_size(), "0");
             NeedsX86SystemStateDispatch |=
                 renderX86SystemStateNativeCall(Opts.TheArch, *CI, "result",
@@ -1040,15 +1040,16 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
                 renderX86SystemStateCall(Opts.TheArch, *CI, "result",
                                          !CI->getType()->isVoidTy(), Arguments)
                     .has_value();
-            NeedsX86VirtualizationDispatch |=
-                renderX86VirtualizationNativeCall(Opts.TheArch, *CI, "result",
-                                                  !CI->getType()->isVoidTy(),
-                                                  Arguments)
-                    .has_value() ||
-                renderX86VirtualizationCall(Opts.TheArch, *CI, "result",
-                                            !CI->getType()->isVoidTy(),
-                                            Arguments)
-                    .has_value();
+            if (Opts.TheArch == Arch::X64)
+              NeedsX86VirtualizationDispatch |=
+                  renderX86VirtualizationNativeCall(Opts.TheArch, *CI, "result",
+                                                    !CI->getType()->isVoidTy(),
+                                                    Arguments)
+                      .has_value() ||
+                  renderX86VirtualizationCall(Opts.TheArch, *CI, "result",
+                                              !CI->getType()->isVoidTy(),
+                                              Arguments)
+                      .has_value();
           }
           if (classifyX86ShadowStackReadAsm(*CI)) {
             const unsigned Word = CI->getType()->getIntegerBitWidth() / 8;

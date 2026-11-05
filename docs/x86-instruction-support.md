@@ -67,7 +67,7 @@ complete instruction support or semantic test coverage.
 | UMONITOR | Address-size wrapping and FS/GS offset ownership; no ordinary preload. |
 | UMWAIT, TPAUSE | Explicit control operand and EDX:EAX deadline; actual CF completion; other arithmetic flags cleared. |
 | LAR, LSL | One query returns the value and actual ZF; failure preserves the entire destination, including the upper half of a 32-bit destination in long mode. Memory selectors remain instruction-owned. |
-| ARPL | x86 lifting and full-LLVM protected code16/code32 APIs; actual ZF and adjusted selector; conditional memory write remains inside the instruction. |
+| ARPL | x86 lifting, Clang/NeverC native builtins and full-LLVM code16/code32 APIs; explicit legacy address/segment control, actual ZF and adjusted selector. Conditional memory writes remain instruction-owned. |
 | VSHA512MSG1, VSHA512MSG2, VSHA512RNDS2 | Integer LowIR, independent scalar oracle, source aliasing, upper-lane clearing and executable LLVM/HighC/LLVMC tests without SHA512 hardware. |
 | VMASKMOVPS/PD and VPMASKMOVD/Q stores | A void output replaces an invalid zero-width RAX result. Tests cover both vector widths, both architectures and inactive lanes over unmapped memory. |
 | VPCOMPRESSB/W/D/Q, VCOMPRESSPS/PD, VPEXPANDB/W/D/Q and VEXPANDPS/PD memory forms | Native contiguous masked accesses across LLVM, HighC and LLVM-to-C. Integer/FP opcode identity, merging/zeroing, segment offsets and zero-mask effects are retained; the compact-memory section below records the address boundary and qualification. |
@@ -788,7 +788,7 @@ tests. These are development checkpoints, not a released or pinned SDK.
 | `llvm.x86.{lar,lsl}.mem{16,32,64}.address`, plus `.address32` for 16/32-bit results | x86-64 and i386 respectively | Integer offset, constant address width and segment-prefix byte, followed by the prior destination. The native m16 read and value/ZF completion stay together. |
 | `llvm.x86.lkgs.address` | x86-64 | Integer offset plus constant address width and segment prefix; the actual instruction owns the selector read and privileged descriptor effects. |
 | `llvm.x86.lsl` | i386 and x86-64 | Compatibility with NeverC's Microsoft `__segmentlimit`; ordered query with a 32-bit result, unspecified on failure. |
-| `llvm.x86.arpl.reg`, `llvm.x86.arpl.mem` | i386 | Register form returns the adjusted i16 destination and i8 ZF; memory form owns m16 access, conditional update and permission checks. Native flags other than ZF are preserved. |
+| `llvm.x86.arpl.reg`, `llvm.x86.arpl.mem`, `llvm.x86.arpl.mem.address32` | i386 | Register form returns adjusted i16 destination and i8 ZF; memory forms own m16 conditional access. Explicit address width/prefix select legacy addressing; ordinary pointers retain DS independently of register allocation. Native flags other than ZF are preserved. |
 | `llvm.x86.hreset` | i386 and x86-64 | Full i32 EAX control input, canonical ignored imm8 zero and native privilege/feature validation. |
 | `llvm.x86.invlpgb`, `llvm.x86.invlpgb32` | x86-64 and i386 respectively | Integer rAX control/address, i32 EDX identifiers and i32 ECX count/page-size inputs. No compiler memory dereference; wrong-mode APIs fail explicitly. |
 | `llvm.x86.invlpgb.addr32` | x86-64 | Explicit `67` address-size override, complete EAX address/control and i32 EDX/ECX inputs, without compiler dereferencing. |
@@ -1235,9 +1235,9 @@ destination to its result and declares EFLAGS plus native memory read/write
 effects. No ordinary preload or unconditional store replaces the instruction.
 `verify-arpl-completion.py` passes 960 compiler/ISA cases across three formats
 and O0/O2, plus 16,480 real Linux IA32 result/fault comparisons. Its independent
-raw-instruction oracle includes read-only and inaccessible pages. NeverC's
-x86-64/AArch64 target set cannot encode ARPL; these two APIs belong to the full
-LLVM fork's i386 backend.
+raw-instruction oracle includes read-only and inaccessible pages. That initial
+qualification covered the full LLVM i386 backend; the later native source
+integration below adds Clang/NeverC builtins.
 
 The [protected code16 qualification](evidence/x86-native-code16-arpl-2026-11-03.json)
 extends those native APIs to 16-bit code with the 32-bit pointer/stack ABI.
@@ -1248,8 +1248,9 @@ cross-page operands, explicit DS cache states and original #GP/#PF/#AC frames.
 Input transport and returned ZF have independent corrupt-output controls.
 The three-format/IA32 oracle still passes; the shared fault-observation helper
 also passes 127,680 protected far-pointer regression pairs. These compiler
-interfaces do not enable a NeverC i386 frontend or a general NeverD i386 source
-dispatcher. Real/VM86, asynchronous events and device memory remain separate
+interfaces did not yet supply a NeverC i386 frontend. Its later source ABI and
+ARPL integration are described below; general NeverD i386 source dispatch is
+still a separate boundary. Real/VM86, asynchronous events and device memory remain separate
 contracts, and the final LLVM release/pin gate remains open.
 
 NeverC exposes `__builtin_ia32_invlpgb_addr32` with three unsigned i32 operands.
