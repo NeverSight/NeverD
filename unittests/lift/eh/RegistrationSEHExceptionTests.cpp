@@ -13,6 +13,8 @@
 #include "neverd/ir/RegistrationState.h"
 #include "neverd/lift/X86/X86Regs.h"
 
+#include <optional>
+
 using namespace neverd;
 using namespace neverd::registration_test;
 

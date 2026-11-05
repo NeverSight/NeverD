@@ -12,6 +12,7 @@
 #include "neverd/loader/RegistrationScopeGraph.h"
 
 #include <deque>
+#include <optional>
 
 namespace neverd::registration_state {
 
