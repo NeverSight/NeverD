@@ -58,7 +58,9 @@
     "pre_review_snapshot": {
       "artifact": "source-snapshot-before-review.json",
       "sha256": "fdf298131e66e5aac14c998b29fdbc163c5f6066ce02d53d258366edef5a2943"
-    }
+    },
+    "implementation_commit": "85809afa3ab70a0c7f351f584b542377e378d26d",
+    "integration_commit": "f575b5068345680c9f7f7c6b292c78153adb8e3e"
   },
   "qualification": {
     "compiler_lit": {
@@ -448,6 +450,22 @@
           "files": 672,
           "different": [],
           "manifest_sha256": "7497135b7c2bac8dd765f3d4ffbf1142279575109cba2d0d7822f302281e6485"
+        }
+      },
+      "equivalence_after_integration": {
+        "artifact": "export-equivalence-integration.json",
+        "sha256": "023fc2878b6f4b3f39fcafc227502768517c9b4847b989a995fe8ee6a7b03437",
+        "profiles": {
+          "r6": {
+            "files": 672,
+            "different": [],
+            "manifest_sha256": "6c606f86292b710fbf388a0e53a1e336d2e18c9f0cee4bf11e1155b5f3e7a166"
+          },
+          "native": {
+            "files": 672,
+            "different": [],
+            "manifest_sha256": "7497135b7c2bac8dd765f3d4ffbf1142279575109cba2d0d7822f302281e6485"
+          }
         }
       }
     },
@@ -869,7 +887,411 @@
         "native_scalar_system_c_compilations": 504
       }
     },
-    "return_cpu_witness": "DeclaredReturnKeepsFullValueAfterNarrowRead performs 16 compiled source executions x 65536 inputs = 1048576 original-byte comparisons per SDK on this Linux x64 host, checking both the whole result and the partial store."
+    "return_cpu_witness": "DeclaredReturnKeepsFullValueAfterNarrowRead performs 16 compiled source executions x 65536 inputs = 1048576 original-byte comparisons per SDK on this Linux x64 host, checking both the whole result and the partial store.",
+    "final_integration": {
+      "r6": {
+        "commit": "f575b5068345680c9f7f7c6b292c78153adb8e3e",
+        "binaries": {
+          "NeverDX86PagingTests": "416ee066f3e9a67fb558c8a6dc7c63ad39477ab5d41e6d2bda346ee4a3d2dbec",
+          "NeverDX86VirtualizationSourceTests": "c8a8b44154e858553881271c4b326845bd73729cc75aecde1b0aa25537577fa0",
+          "NeverDHighControlFlowTests": "b8bdb0b8a8b24aefd53074ab5eb73c08cd77f061c69bebcd7ce88eec296194df",
+          "NeverDHighCIntegerWidthTests": "90b9d1771c423e5a3731790318c54a8152fb1abeaa95ea6bd695a0611c1e2ed6",
+          "NeverDSysVCallContractTests": "7dc9dbec52bd0f8953eb057e389cd758a0f2c3a19587ce7d6fa256e281b88173",
+          "NeverDReturnContractTests": "7a1ccc759105c2c122bfaf8b58ed07f084e8fcaf912d562cad5218433cd5040c"
+        },
+        "build_profile": "Release; native threads; mimalloc/highway/simdjson/simdutf/TBB disabled in these focused test builds",
+        "build_receipt_sha256": "ce577d19cda5c3e6b1f18d72eea5650a5f005a66def053010e4cb2f62e9d0eff",
+        "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "results": [
+          {
+            "artifact": "integration-r6/bound-source.xml",
+            "sha256": "e2a4f0628beff49db7718276fa55d35bd23b14ae4d8941b7686ac22f86d7237e",
+            "tests": 5,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-r6/bound-cpu2.xml",
+            "sha256": "8451de63f8222c1642f945fabd8600e0f0d1cba64e7f4ac01f9ef1c8cfdf76bd",
+            "tests": 16,
+            "failures": 0,
+            "skips": [],
+            "properties": {
+              "cpu_comparisons": 5632
+            }
+          },
+          {
+            "artifact": "integration-r6/bound-cpu12.xml",
+            "sha256": "2426eb4c19d1e734b08cf7718b6701e635ffc4ad15d7e33b273bc85b95ddd1ce",
+            "tests": 16,
+            "failures": 0,
+            "skips": [],
+            "properties": {
+              "cpu_comparisons": 5632
+            }
+          },
+          {
+            "artifact": "integration-r6/NeverDHighControlFlowTests.xml",
+            "sha256": "a02e60aafba69e78ba0c563befb50c1a2e9ae4007a516983880e9d65fd24c655",
+            "tests": 526,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-r6/NeverDHighCIntegerWidthTests.xml",
+            "sha256": "fdfd46a742d925abc0265875bd6c498e6939d5b8bafcf7dffc0df2ac86dc5b28",
+            "tests": 25,
+            "failures": 0,
+            "skips": [],
+            "properties": {
+              "native_gs_loads": 40,
+              "native_executables": 2
+            }
+          },
+          {
+            "artifact": "integration-r6/NeverDSysVCallContractTests.xml",
+            "sha256": "cd9b4568b7ff3013104117ce00bc78f6400e2caccd4c862f7ee4e98ac5913560",
+            "tests": 43,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-r6/NeverDReturnContractTests.xml",
+            "sha256": "497341aca094eba00ebbbf4266728206b910df538f6b7d879bcc46c033255a80",
+            "tests": 29,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-r6/virtualization.xml",
+            "sha256": "92385dd414de45403bf3da0a4b4bbf4e8010ed0fbe3bc343f365b288c9dc0da6",
+            "tests": 384,
+            "failures": 0,
+            "skips": [
+              {
+                "test": "X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1217\nrequires the qualified native virtualization SDK\n"
+              },
+              {
+                "test": "X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1977\nrequires the native control/debug register SDK\n"
+              },
+              {
+                "test": "X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1686\nrequires the explicit descriptor-state address SDK\n"
+              },
+              {
+                "test": "X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3124\nrequires the explicit descriptor-address SDK\n"
+              },
+              {
+                "test": "X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1870\nrequires the scalar MSR/port intrinsic SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2426\nrequires the qualified native system SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2457\nrequires the qualified native system SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.TransactionCommitRetainsSurroundingMemory",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2562\nrequires the qualified native system SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2989\nrequires the qualified native system SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3124\nrequires the explicit descriptor-address SDK\n"
+              },
+              {
+                "test": "X86SgxSource.NativeContractsRejectLostEffectsAndMode",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4834\nnative SGX completion requires the qualified fork\n"
+              },
+              {
+                "test": "X86AmxSource.NativeContractsRejectLostEffectsAndControls",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5325\nlinked SDK predates explicit AMX controls\n"
+              },
+              {
+                "test": "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5644\nHost does not provide AMX-TILE; native restart unqualified\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+              }
+            ],
+            "properties": {
+              "native_c_compilations": 888,
+              "legacy_generic_and_fixed_bx_contracts": 24,
+              "transaction_abort_fixtures": 48,
+              "transaction_abort_neverc_fixtures": 24,
+              "stock_system_native_c_compilations": 48,
+              "native_system_c_compilations": 792,
+              "sgx_native_c_ir_and_object_compilations": 192,
+              "amx_native_c_compilations": 1800,
+              "amx_native_c_object_compilations": 1800,
+              "c_compilations": 288,
+              "segment_functions": 132,
+              "segment_c_compilations": 12,
+              "segment_neverc_compilations": 6,
+              "source_fixtures": 225,
+              "native_system_register_c_compilations": 936,
+              "descriptor_state_source_fixtures": 438,
+              "native_descriptor_state_c_compilations": 1680,
+              "scalar_system_source_fixtures": 126,
+              "native_scalar_system_c_compilations": 504
+            }
+          }
+        ],
+        "tests": 1044,
+        "skips": 22,
+        "failures": 0
+      },
+      "native": {
+        "commit": "f575b5068345680c9f7f7c6b292c78153adb8e3e",
+        "binaries": {
+          "NeverDX86PagingTests": "cea914a69bfb1e1570a1ec7871114ccc8341f43252bf2f00bd42e510e4b99844",
+          "NeverDX86VirtualizationSourceTests": "57978bdeb5a8cb7a0279b9fb9297a13d707e327cc588f5c48edfdbb13d09c3cc",
+          "NeverDHighControlFlowTests": "d23806455f93e8e0b9ba6ea8d4968e312fd986095547d9b16c3c7e02590f195d",
+          "NeverDHighCIntegerWidthTests": "84efaa9dd735f900c8713d840cb8f9d761647ac994909f2173c01ea0eecef3d5",
+          "NeverDSysVCallContractTests": "0b8e9dd265938a192d917f32d1f6d786b5ca00d285ffb4f18771988e528e4f18",
+          "NeverDReturnContractTests": "319dc10811299f41845baed15d576d9373d61aafeaef536154bcefd1fb30aa90"
+        },
+        "build_profile": "Release; native threads; mimalloc/highway/simdjson/simdutf/TBB disabled in these focused test builds",
+        "build_receipt_sha256": "02e2e3c466216eddaf21d79fb518734e180c86eab0e5b1f6152c4dfa2f922231",
+        "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "results": [
+          {
+            "artifact": "integration-native/bound-source.xml",
+            "sha256": "e4ccd8489d1146b1cfb31b599f6cc40e084aaf48eefda271ced7d6119972d9f5",
+            "tests": 5,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-native/bound-cpu2.xml",
+            "sha256": "1c8ad318426601f13d53d4bb683db45879b9f6be26e0690cda5351451d8cc3c5",
+            "tests": 16,
+            "failures": 0,
+            "skips": [],
+            "properties": {
+              "cpu_comparisons": 5632
+            }
+          },
+          {
+            "artifact": "integration-native/bound-cpu12.xml",
+            "sha256": "3e0de5993331ae8661bc4f173b096368c11856f775b6b2bf2ea4c4f49eb00b2e",
+            "tests": 16,
+            "failures": 0,
+            "skips": [],
+            "properties": {
+              "cpu_comparisons": 5632
+            }
+          },
+          {
+            "artifact": "integration-native/NeverDHighControlFlowTests.xml",
+            "sha256": "f7e4b57701af8c083bf92e2217ac834e99725bf02708d61f0a09d393d8ad1344",
+            "tests": 526,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-native/NeverDHighCIntegerWidthTests.xml",
+            "sha256": "c11d6dbb0851a8ab40ef8b3463cc70e681e17a7177334b8a1076da28e3166eb9",
+            "tests": 25,
+            "failures": 0,
+            "skips": [],
+            "properties": {
+              "native_gs_loads": 40,
+              "native_executables": 2
+            }
+          },
+          {
+            "artifact": "integration-native/NeverDSysVCallContractTests.xml",
+            "sha256": "6cf17fcbb0b0f3c61eb06ff563cbd87bc22b9da67a38d28c0a49e1fed75fa7e6",
+            "tests": 43,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-native/NeverDReturnContractTests.xml",
+            "sha256": "b216d536083262e574ff70e5193510f131186cb28ae3d3984d5812e0b361ad52",
+            "tests": 29,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-native/virtualization.xml",
+            "sha256": "8beb556241f84552ab6e20dfc330a52c29aa14c871b55c95c6fe44ded44d08f2",
+            "tests": 384,
+            "failures": 0,
+            "skips": [
+              {
+                "test": "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5644\nHost does not provide AMX-TILE; native restart unqualified\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+              }
+            ],
+            "properties": {
+              "native_modules": 426,
+              "native_c_compilations": 888,
+              "legacy_generic_and_fixed_bx_contracts": 24,
+              "descriptor_address_native_functions": 1722,
+              "descriptor_address_c_compilations": 24,
+              "descriptor_address_neverc_compilations": 12,
+              "native_system_modules": 312,
+              "transaction_abort_fixtures": 48,
+              "transaction_abort_neverc_fixtures": 24,
+              "stock_system_native_c_compilations": 48,
+              "native_system_c_compilations": 792,
+              "sgx_native_c_ir_and_object_compilations": 192,
+              "amx_native_c_compilations": 1800,
+              "amx_native_c_object_compilations": 1800,
+              "c_compilations": 288,
+              "segment_functions": 132,
+              "segment_c_compilations": 12,
+              "segment_neverc_compilations": 6,
+              "source_fixtures": 225,
+              "native_system_register_c_compilations": 936,
+              "descriptor_state_source_fixtures": 438,
+              "native_descriptor_state_c_compilations": 1680,
+              "scalar_system_source_fixtures": 126,
+              "native_scalar_system_c_compilations": 504
+            }
+          }
+        ],
+        "tests": 1044,
+        "skips": 10,
+        "failures": 0
+      }
+    },
+    "integration_tools": {
+      "neverc_source_commit": "967533ca06dd5122afa59e4de0ca5e8efe62ccf2",
+      "neverc_binary_sha256": "47fa7019e247db819d78f1cf998c65e36baadedbefbd969e898f4d930d351e69"
+    },
+    "final_test_only_integration": {
+      "commit": "343ea677bae4db3d6cffb38eca3f3cc9a474df44",
+      "source_sha256": "72a10ec498f8b9242ea1e4d9c4b8ed4c3faeea81ef8ffa3cd2fea28037473bd3",
+      "binaries": {
+        "r6": "478d5c412b6d7f720da20667af540eade69a596a780db0379555944e10ac2543",
+        "native": "654302a0582280f5d2b7455edc5f2e3eb3ce2160b12c333d3c0650c8ac1ce7fd"
+      },
+      "results": [
+        {
+          "artifact": "sysv-post-merge-r6.xml",
+          "sha256": "457af41bfc8353e64b800e82a36e43b89e9a00ad67259650aa7d9b50fde3869d",
+          "tests": 43,
+          "failures": 0,
+          "skips": [],
+          "properties": {}
+        },
+        {
+          "artifact": "sysv-post-merge-native.xml",
+          "sha256": "de1729be5dd0c9b293d1e31604710c4715cb1dd1d4955e1131958c72f9699036",
+          "tests": 43,
+          "failures": 0,
+          "skips": [],
+          "properties": {}
+        }
+      ],
+      "replaces": "The earlier SysVCallContractTests executions in the integration matrix",
+      "reason": "Dev 359e9aad63 changes only this test harness and documentation: direct typed calls replace incompatible function-pointer calls, and UBSan is nonrecoverable. Production sources are unchanged; both 43-test suites were rebuilt and rerun."
+    },
+    "static_checks": {
+      "clang_format": {
+        "artifact": "format-final.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "localized_docs": {
+        "artifact": "docs-final.log",
+        "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+      },
+      "source_provenance": {
+        "artifact": "provenance-final-v3.log",
+        "sha256": "6c82a1ff4343c74bfb68b0b8d119724fe4734e24e0eafe1e18a4de21a075fc35"
+      }
+    },
+    "integration_limits": "The complete source suites, 623 shared return/ABI/control-flow tests per SDK, both core BOUND matrices and all source exports were rerun after the final review fixes and merge of dev 4d23cad0da. The full 422-test paging snapshots predate the transaction admission guard; the final matrix/unit tests cover that guard. No default-acceleration or physical MPX/LA57 claim is made."
   },
   "diagnostics": [
     "Before the decoder fix, all 224 operand-access cases failed because Capstone described a BOUND register output.",
@@ -895,9 +1317,15 @@
   "reproduce": [
     "python3 scripts/build.py BUILD --target NeverDX86PagingTests NeverDX86VirtualizationSourceTests NeverDReturnContractTests --parallel 4",
     "NEVERD_THREADS=1 NEVERD_TEST_LEGACY_ALIGNMENT=before taskset -c CPU BUILD/bin/NeverDX86PagingTests --gtest_filter='X86LegacyExecutionTest.*Bound*:LegacyBound/*'",
-    "NEVERD_ISA_REGRESSION_ARTIFACT_DIR=EXPORTS BUILD/bin/NeverDX86VirtualizationSourceTests --gtest_filter='X86BoundSource.*'",
-    "NeverC tests/neverc/X86/verify_bound.py --help; run with the qualified full LLVM and Clang paths and pinned CPU",
-    "NeverC tests/neverc/X86/verify_bound_source.py --exports EXPORTS --llvm-bin LLVM_BIN --clang CLANG --output OUT",
-    "NeverC tests/neverc/X86/verify_protected_bound.py --mode 16|32 --help; run on both pinned core profiles"
-  ]
+    "NEVERD_THREADS=1 NEVERD_ISA_REGRESSION_ARTIFACT_DIR=EXPORTS BUILD/bin/NeverDX86VirtualizationSourceTests --gtest_filter='X86BoundSource.*'",
+    "From NeverC: taskset -c CPU python3 tests/neverc/X86/verify_bound.py --llvm-bin LLVM_BIN --clang FULL_CLANG --host-clang HOST_CLANG --output OUT",
+    "From NeverC: taskset -c CPU python3 tests/neverc/X86/verify_bound_source.py --exports EXPORTS --llvm-bin LLVM_BIN --clang CLANG --output OUT",
+    "From NeverC: taskset -c CPU python3 tests/neverc/X86/verify_protected_bound.py --mode MODE --llvm-bin LLVM_BIN --output OUT",
+    "Use distinct output directories for every profile. Repeat CPU=2/12, MODE=16/32 and source compilation with stock/full Clang. The drivers run O0/O2 internally; they require Linux multilib/modify_ldt or KVM respectively. The KVM driver resolves clang, ld.lld and objcopy through PATH."
+  ],
+  "artifact_commands": {
+    "assemble-evidence.py": "4974157cb9eeecda87548b7e3da1233bc878b753b95b9e988662f5e0f7c6f6a4",
+    "run-integration.py": "0af26e9b356c396386d6dbe847cc4dee763e359f676d86f742473b27511752a2",
+    "finish-evidence.py": "774654a71ae22243a8b00e87a50d9fa554393a69befe537a18cd7054a586273c"
+  }
 }
