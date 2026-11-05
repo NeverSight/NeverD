@@ -500,7 +500,7 @@ void Session::command(const QString &operation, const QJsonObject &payload,
             }
             // An opened database holds the project until it is written back.
             if (edit && openedFromDatabase_)
-              databaseDirty_ = true;
+              markDatabaseDirty();
             if (done)
               done(payload);
           } else {
@@ -558,21 +558,20 @@ void Session::open(const QString &path, LoadOptions options) {
     setError(tr("Select an existing binary file."));
     return;
   }
-  pendingFile_ = file.absoluteFilePath();
-  pendingOptions_ = options;
-  if (dirty()) {
-    // Saving or discarding would only give up the open program for a file
-    // that will not open.
-    const QString target = pendingFile_;
+  const QString target = file.absoluteFilePath();
+  // Saving or discarding would only give up the open program for a file that
+  // will not open, and an open already waiting for that answer goes on.
+  if (dirty())
     if (const QString held =
             ProjectDatabase::lockHeldElsewhere(target, filePath_);
         !held.isEmpty()) {
-      pendingFile_.clear();
-      pendingOptions_ = {};
       setError(heldMessage(target, held));
       emit openFailed();
       return;
     }
+  pendingFile_ = target;
+  pendingOptions_ = options;
+  if (dirty()) {
     requestTransition(QStringLiteral("open"));
     return;
   }
@@ -1126,14 +1125,16 @@ struct DatabaseWrite {
 };
 
 /// Runs off the GUI thread.  An empty \p expected writes whatever \p path
-/// holds.  A database that cannot be read is for save to report.
+/// holds.
 DatabaseWrite writeProjectDatabase(const QString &path, const QString &input,
                                    const QHash<QString, QByteArray> &state,
                                    const QByteArray &expected) {
   DatabaseWrite write;
+  // One that cannot be read cannot be said to hold what it did, as while
+  // another process commits to it; replacing it then reports what is wrong.
   if (!expected.isEmpty() && QFileInfo::exists(path))
     if (const auto contents = ProjectDatabase::read(path);
-        contents && ProjectDatabase::identity(*contents) != expected) {
+        !contents || ProjectDatabase::identity(*contents) != expected) {
       write.changed = true;
       return write;
     }
@@ -1145,47 +1146,66 @@ DatabaseWrite writeProjectDatabase(const QString &path, const QString &input,
 }
 } // namespace
 
+void Session::markDatabaseDirty() {
+  databaseDirty_ = true;
+  ++databaseEdits_;
+}
+
 void Session::writeDatabase(const QString &path, bool replace) {
   if (path.isEmpty())
     return;
+  if (databaseWriting_) {
+    databaseWriteWaiting_ = {path, replace};
+    return;
+  }
+  databaseWriting_ = true;
   auto state = stateProvider_ ? stateProvider_() : QHash<QString, QByteArray>{};
   insertChoices(state, loadOptions_);
   // Quitting waits for the database like it waits for an edit.
   ++pendingWrites_;
   emit stateChanged();
+  const bool opened =
+      openedFromDatabase_ && ProjectDatabase::sameFile(path, databasePath_);
   auto *watcher = new QFutureWatcher<DatabaseWrite>(this);
-  connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, path] {
-    const DatabaseWrite write = watcher->result();
-    watcher->deleteLater();
-    // The write stays pending while the user answers, so that what the save
-    // was for waits too.
-    if (write.changed) {
-      emit databaseConflict(path);
-      return;
-    }
-    --pendingWrites_;
-    if (write.error.isEmpty()) {
-      if (path == databasePath_) {
-        databaseDirty_ = false;
-        if (openedFromDatabase_)
-          databaseIdentity_ = write.identity;
-      }
-      emit message(tr("Database saved: %1").arg(path), 0);
-    } else {
-      setError(tr("Could not save the database: %1").arg(write.error));
-      // Going on to quit or to open another file would lose the edits, which
-      // the next unpack of this database replaces.
-      cancelTransition();
-    }
-    emit databaseSaved(write.error.isEmpty());
-    finishTransition();
-    emit stateChanged();
-  });
+  connect(watcher, &QFutureWatcherBase::finished, this,
+          [this, watcher, path, opened, edits = databaseEdits_] {
+            const DatabaseWrite write = watcher->result();
+            watcher->deleteLater();
+            // The write stays pending while the user answers, so that what
+            // the save was for waits too.
+            if (write.changed) {
+              emit databaseConflict(path);
+              return;
+            }
+            --pendingWrites_;
+            databaseWriting_ = false;
+            if (write.error.isEmpty()) {
+              if (opened) {
+                databaseIdentity_ = write.identity;
+                // An edit made since the write read the files is not in it.
+                if (edits == databaseEdits_)
+                  databaseDirty_ = false;
+              } else if (path == databasePath_) {
+                databaseDirty_ = false;
+              }
+              emit message(tr("Database saved: %1").arg(path), 0);
+            } else {
+              setError(tr("Could not save the database: %1").arg(write.error));
+              // Going on to quit or to open another file would lose the edits,
+              // which the next unpack of this database replaces.
+              cancelTransition();
+              databaseWriteWaiting_.reset();
+            }
+            emit databaseSaved(write.error.isEmpty());
+            if (const auto waiting =
+                    std::exchange(databaseWriteWaiting_, std::nullopt))
+              writeDatabase(waiting->first, waiting->second);
+            finishTransition();
+            emit stateChanged();
+          });
   // Changes since this workbench last saw the database are another's.
   const QByteArray expected =
-      !replace && openedFromDatabase_ && path == databasePath_
-          ? databaseIdentity_
-          : QByteArray();
+      !replace && opened ? databaseIdentity_ : QByteArray();
   watcher->setFuture(
       QtConcurrent::run([path, input = filePath_, state, expected] {
         return writeProjectDatabase(path, input, state, expected);
@@ -1194,6 +1214,9 @@ void Session::writeDatabase(const QString &path, bool replace) {
 
 void Session::resolveDatabaseConflict(const QString &path, bool replace) {
   --pendingWrites_;
+  databaseWriting_ = false;
+  // What waited was this same write of the project, which the answer settles.
+  databaseWriteWaiting_.reset();
   if (replace) {
     writeDatabase(path, true);
     return;
@@ -1249,7 +1272,7 @@ void Session::saveBookmarks(const QJsonArray &rows) {
     return;
   }
   if (openedFromDatabase_) {
-    databaseDirty_ = true;
+    markDatabaseDirty();
     emit stateChanged();
   }
 }
@@ -1345,7 +1368,7 @@ void Session::recordDebugChoices(bool loadedNow) {
   // the choices it opened with; only a newly loaded file makes it out of
   // date.
   if (openedFromDatabase_ && loadedNow) {
-    databaseDirty_ = true;
+    markDatabaseDirty();
     emit stateChanged();
   }
 }

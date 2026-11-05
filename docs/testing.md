@@ -5673,7 +5673,8 @@ receives, the edited program staying as it is, a held file bringing its workbenc
 forward over the real local socket, this workbench's own file staying here, and
 the setting turning all of it off.
 `aWorkbenchStartedToLoadAFileClosesWhenThatIsDeclined` answers `--ask-loader`'s
-question each way.
+question each way, and `aHiddenWorkbenchShowsWhenItsWorkerCannotAsk` stops or
+withholds the worker so that it can never be put.
 
 The GUI unit cases `deepLinksTakeIdasFormAndRefuseWhatTheyCannotName` and
 `aLinkGoesToTheWorkbenchThatHasItsProgram` check link syntax, hash prefixes and

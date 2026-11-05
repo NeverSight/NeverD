@@ -11721,6 +11721,16 @@ private slots:
                     ->findChild<QPlainTextEdit *>();
     QVERIFY(log);
     QSignalSpy asked(&bench.session, &Session::transitionRequested);
+    // Answered from here on, so that a question that should not come up fails
+    // this test instead of waiting for an answer.
+    QTimer answering;
+    auto answer = QMessageBox::Cancel;
+    connect(&answering, &QTimer::timeout, &answering, [&answer] {
+      if (auto *box =
+              qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+        box->button(answer)->click();
+    });
+    answering.start(5);
     // Another file goes to a new workbench, which asks how to load what a
     // drop names, and this one stays as it is, unsaved edits and all.
     QVERIFY(dropFile(bench.window.get(), second));
@@ -11765,14 +11775,6 @@ private slots:
     QCOMPARE(raisedWith, QStringLiteral("handed-token"));
 
     // The file this workbench has stays here, which asks about the edits.
-    QTimer answering;
-    auto answer = QMessageBox::Cancel;
-    connect(&answering, &QTimer::timeout, &answering, [&answer] {
-      if (auto *box =
-              qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
-        box->button(answer)->click();
-    });
-    answering.start(5);
     QVERIFY(pickRecent(first));
     QTRY_COMPARE_WITH_TIMEOUT(asked.size(), 1, OpenTimeoutMs);
     QVERIFY(standIn.received(0).isEmpty());
@@ -11786,6 +11788,60 @@ private slots:
     QCOMPARE(asked.size(), 2);
     QCOMPARE(bench.session.filePath(), second);
     QVERIFY(standIn.received(0).isEmpty());
+
+    // A file closed here is another file again, even while one is opening.
+    QSettings().setValue(settings::OpenInNewInstance, true);
+    answering.stop();
+    QTRY_VERIFY(!bench.session.dirty());
+    bench.session.closeFile();
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.connected(), OpenTimeoutMs);
+    bench.session.open(first);
+    QVERIFY(bench.session.opening());
+    QVERIFY(pickRecent(second));
+    QCOMPARE(standIn.received(), inherited + QStringList({second}));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    QCOMPARE(bench.session.filePath(), first);
+#endif
+  }
+
+  void aHiddenWorkbenchShowsWhenItsWorkerCannotAsk() {
+    QTemporaryDir directory;
+    const QString file = writeFixture(directory, QStringLiteral("asked.bin"));
+    {
+      // The worker stops while the question is on its way.
+      Workbench bench(QString::fromLocal8Bit(TEST_WORKER), false);
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.connected(), OpenTimeoutMs);
+      bench.window->askHowToLoad(file);
+      bench.session.restart();
+      QTRY_VERIFY_WITH_TIMEOUT(bench.window->isVisible(), OpenTimeoutMs);
+    }
+    // No worker can start at all: the workbench says so, and stays open.
+    const QString worker = directory.filePath(QStringLiteral("late-worker"));
+    Workbench bench(worker, false);
+    QSignalSpy closed(bench.window.get(), &MainWindow::shutdownAccepted);
+    bench.window->askHowToLoad(file);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.window->isVisible(), OpenTimeoutMs);
+    QCOMPARE(closed.size(), 0);
+#ifndef Q_OS_WIN
+    // Once one can, declining a load no longer closes it.
+    QVERIFY(QFile::link(QString::fromLocal8Bit(TEST_WORKER), worker));
+    bench.session.restart();
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.connected(), OpenTimeoutMs);
+    int declined = 0;
+    QTimer declining;
+    connect(&declining, &QTimer::timeout, &declining, [&declined] {
+      if (auto *dialog = qobject_cast<LoadFileDialog *>(
+              QApplication::activeModalWidget())) {
+        ++declined;
+        dialog->reject();
+      }
+    });
+    declining.start(10);
+    QVERIFY(dropFile(bench.window.get(), file));
+    QTRY_COMPARE_WITH_TIMEOUT(declined, 1, OpenTimeoutMs);
+    QTest::qWait(50);
+    QCOMPARE(closed.size(), 0);
+    QVERIFY(bench.window->isVisible());
 #endif
   }
 
@@ -11935,6 +11991,21 @@ private slots:
     QSignalSpy asked(&bench.session, &Session::transitionRequested);
     QSignalSpy refused(&bench.session, &Session::openFailed);
     QSignalSpy messages(&bench.session, &Session::message);
+    // Answered from here on, so that a question that should not come up fails
+    // this test instead of waiting for an answer.
+    auto answer = QMessageBox::Cancel;
+    std::function<void()> whileAsked;
+    QTimer answering;
+    connect(&answering, &QTimer::timeout, &answering, [&] {
+      auto *box =
+          qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+      if (!box)
+        return;
+      if (whileAsked)
+        std::exchange(whileAsked, {})();
+      box->button(answer)->click();
+    });
+    answering.start(5);
     // Neither question comes up, and the edited program stays as it was.
     for (const auto &[path, says] :
          {std::pair(held, QStringLiteral("This file may")),
@@ -11952,19 +12023,31 @@ private slots:
       QCOMPARE(bench.session.filePath(), edited);
     }
     // A file nobody holds still asks, and asking leaves nothing beside it.
-    QTimer answer;
-    connect(&answer, &QTimer::timeout, &answer, [] {
-      if (auto *box =
-              qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
-        box->button(QMessageBox::Cancel)->click();
-    });
-    answer.start(5);
+    refused.clear();
     bench.session.open(free);
-    answer.stop();
     QCOMPARE(asked.size(), 1);
-    QCOMPARE(refused.size(), 1);
+    QCOMPARE(refused.size(), 0);
     QVERIFY(!QFileInfo::exists(free + QStringLiteral(".neverd")));
     QCOMPARE(bench.session.filePath(), edited);
+#ifndef Q_OS_WIN
+    // Its own program under another name is not another workbench's.
+    const QString alias = directory.filePath(QStringLiteral("alias.bin"));
+    QVERIFY(QFile::link(edited, alias));
+    bench.session.open(alias);
+    QCOMPARE(asked.size(), 2);
+    QCOMPARE(refused.size(), 0);
+    QCOMPARE(bench.session.filePath(), edited);
+#endif
+    // A refused open leaves the open that is waiting for an answer.
+    answer = QMessageBox::Discard;
+    whileAsked = [&] {
+      bench.session.open(held);
+      QCOMPARE(refused.size(), 1);
+    };
+    QSignalSpy opened(&bench.session, &Session::opened);
+    bench.session.open(free);
+    QTRY_COMPARE_WITH_TIMEOUT(opened.size(), 1, OpenTimeoutMs);
+    QCOMPARE(bench.session.filePath(), free);
   }
 
   void savingADatabaseChangedSinceItOpenedAsksFirst() {
@@ -12007,6 +12090,7 @@ private slots:
     QVERIFY(packTheirs(QStringLiteral("theirs_second")));
 
     int conflicts = 0;
+    bool cancelIsDefault = true;
     QString question;
     auto answer = QMessageBox::Cancel;
     QTimer answering;
@@ -12018,7 +12102,9 @@ private slots:
       if (box->text().contains(QStringLiteral("changed after"))) {
         ++conflicts;
         question = box->text();
-        QCOMPARE(box->defaultButton(), box->button(QMessageBox::Cancel));
+        cancelIsDefault =
+            cancelIsDefault &&
+            box->defaultButton() == box->button(QMessageBox::Cancel);
         box->button(answer)->click();
       } else {
         box->button(QMessageBox::Save)->click();
@@ -12066,6 +12152,40 @@ private slots:
     QCOMPARE(conflicts, 3);
     QVERIFY(held().contains("ours_again"));
 
+    // Saves that overlap do not take each other for another workbench.
+    for (const auto &name :
+         {QStringLiteral("overlap_one"), QStringLiteral("overlap_two"),
+          QStringLiteral("overlap_three")}) {
+      bench.session.rename(Base + 0x140, name);
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(),
+                               OpenTimeoutMs);
+      bench.session.save();
+      bench.session.save();
+      bench.session.save();
+      QTRY_VERIFY_WITH_TIMEOUT(!bench.session.databaseOutOfDate() &&
+                                   held().contains(name.toUtf8()),
+                               OpenTimeoutMs);
+    }
+    QCOMPARE(conflicts, 3);
+    QTRY_VERIFY(!bench.session.dirty());
+#ifndef Q_OS_WIN
+    // So does a pack into the same database under another spelling.
+    const QString folder = directory.filePath(QStringLiteral("folder"));
+    QVERIFY(QFile::link(directory.path(), folder));
+    bench.session.rename(Base + 0x140, QStringLiteral("before_alias"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(), OpenTimeoutMs);
+    const auto packs = saved.size();
+    bench.session.packDatabase(folder + QStringLiteral("/shared.nddb"));
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), packs + 1, OpenTimeoutMs);
+    QVERIFY(saved.last().first().toBool());
+    bench.session.rename(Base + 0x140, QStringLiteral("after_alias"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(), OpenTimeoutMs);
+    bench.session.save();
+    QTRY_VERIFY_WITH_TIMEOUT(held().contains("after_alias"), OpenTimeoutMs);
+    QCOMPARE(conflicts, 3);
+    QTRY_VERIFY(!bench.session.dirty());
+#endif
+
     // A save a quit asks for can replace it too, and the quit then goes on.
     QVERIFY(packTheirs(QStringLiteral("theirs_third")));
     bench.session.rename(Base + 0x140, QStringLiteral("ours_last"));
@@ -12074,6 +12194,7 @@ private slots:
     QTRY_COMPARE_WITH_TIMEOUT(approved.size(), 1, OpenTimeoutMs);
     answering.stop();
     QCOMPARE(conflicts, 4);
+    QVERIFY(cancelIsDefault);
     QVERIFY(held().contains("ours_last"));
   }
 

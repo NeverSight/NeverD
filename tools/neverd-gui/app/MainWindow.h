@@ -421,6 +421,9 @@ private:
   std::optional<QString> loaderPromptPending_;
   /// This workbench was started to load one file, so declining it closes it.
   bool closesWithoutFile_ = false;
+  /// A question comes before this hidden workbench shows, and a worker that
+  /// stops will never put it.
+  bool asksBeforeShowing_ = false;
   bool asksForDebugInfo_ = true;
   GraphOverview *overview_ = nullptr;
   ExtensionsView *extensions_ = nullptr;

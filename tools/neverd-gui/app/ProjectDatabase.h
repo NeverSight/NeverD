@@ -91,6 +91,8 @@ public:
                         QString *error = nullptr,
                         bool *recoveredEdits = nullptr,
                         const QString &heldInput = {});
+  /// Whether \p first and \p second name one file, whatever their spelling.
+  static bool sameFile(const QString &first, const QString &second);
   /// The reason another process holds the writer lock of the project that
   /// opening \p path would write, or nothing.  \p heldInput as for unpack.
   /// A project nobody has locked yet gets no folder from asking.

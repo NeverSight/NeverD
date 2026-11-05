@@ -368,6 +368,9 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
     }
     if (loaderPromptPending_ && session_.connected())
       chooseLoader(*std::exchange(loaderPromptPending_, std::nullopt));
+    if (asksBeforeShowing_ && !session_.connected() && !session_.starting() &&
+        !debugPromptPending_ && !loaderPromptPending_)
+      showWorkbench();
   });
   // A worker that cannot start leaves no question to ask; the workbench
   // shows the error instead of staying hidden.
@@ -380,8 +383,10 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
               openNow(path, options);
             }
             if (level >= ErrorMessageLevel && loaderPromptPending_ &&
-                !session_.connected())
+                !session_.connected()) {
+              closesWithoutFile_ = false;
               openNow(*std::exchange(loaderPromptPending_, std::nullopt), {});
+            }
           });
   connectActions();
   focusSequenceTimer_.setSingleShot(true);
@@ -2901,11 +2906,18 @@ void MainWindow::openNow(const QString &path, const LoadOptions &options) {
 void MainWindow::openAskingForDebugInfo(const QString &path,
                                         LoadOptions options) {
   // Whether the worker finds PDBs is known once it has started; a file named
-  // on the command line can come first.
+  // on the command line can come first.  One that has stopped will say
+  // nothing, and opening starts another.
   if (!session_.connected()) {
-    debugPromptPending_ = {path, options};
+    if (session_.starting()) {
+      asksBeforeShowing_ = !isVisible();
+      debugPromptPending_ = {path, options};
+    } else {
+      openNow(path, options);
+    }
     return;
   }
+  asksBeforeShowing_ = !isVisible();
   // IDA asks as it makes a database, so a project keeps the answers.
   if (!asksForDebugInfo_ || ProjectDatabase::hasState(path)) {
     openNow(path, options);
@@ -3086,12 +3098,16 @@ void MainWindow::openDialog() {
 }
 
 void MainWindow::askHowToLoad(const QString &path) {
-  closesWithoutFile_ = true;
   // What the worker can tell of a file is known once it has started.
-  if (session_.connected())
+  if (session_.connected()) {
+    closesWithoutFile_ = true;
     chooseLoader(path);
-  else
+  } else if (session_.starting()) {
+    closesWithoutFile_ = true;
     loaderPromptPending_ = path;
+  } else {
+    openNow(path, {});
+  }
 }
 
 bool MainWindow::openElsewhere(const QString &path, bool askLoader) {
@@ -3102,10 +3118,10 @@ bool MainWindow::openElsewhere(const QString &path, bool askLoader) {
   // A new workbench could not have the program this one holds, which reopens
   // here, or one another workbench holds, which comes forward instead.  IDA
   // starts an instance that then asks about the locked database.
-  const QString wanted = QFileInfo(path).canonicalFilePath();
-  for (const QString &own : {session_.projectPath(), session_.openingFile()})
-    if (!own.isEmpty() && QFileInfo(own).canonicalFilePath() == wanted)
-      return false;
+  if (ProjectDatabase::sameFile(path, session_.openingFile()) ||
+      (session_.loaded() &&
+       ProjectDatabase::sameFile(path, session_.projectPath())))
+    return false;
   if (const QString held =
           ProjectDatabase::lockHeldElsewhere(path, session_.filePath());
       !held.isEmpty()) {
@@ -3154,6 +3170,7 @@ QString MainWindow::askForFile(QWidget *parent) const {
 void MainWindow::chooseLoader(const QString &path) {
   startupQuickStartPending_ = false;
   const bool closes = std::exchange(closesWithoutFile_, false);
+  asksBeforeShowing_ = !isVisible();
   // A project opens as it was saved, and an engine that cannot list its
   // loaders opens files as before.
   if (!session_.identifiesFiles() || ProjectDatabase::hasState(path)) {
@@ -6157,6 +6174,7 @@ void MainWindow::showQuickStart() {
 }
 
 void MainWindow::showWorkbench() {
+  asksBeforeShowing_ = false;
   if (isVisible())
     return;
   initializeLayout();

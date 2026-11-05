@@ -18,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
 
 namespace neverd::gui {
 class PluginServices;
@@ -101,6 +102,8 @@ public:
   QString workerPath() const { return workerPath_; }
   bool loaded() const { return loaded_; }
   bool opening() const { return opening_; }
+  /// Whether a worker is on its way, which connected() then reports.
+  bool starting() const { return starting_; }
   /// What the user is opening, while it opens.
   QString openingFile() const { return opening_ ? openingFile_ : QString(); }
   /// Whether the worker analyzes the loaded file in idle time.
@@ -482,6 +485,8 @@ private:
   /// Pack the project into the database \p path, unless it is the database
   /// the user opened and it changed since; \p replace writes over that too.
   void writeDatabase(const QString &path, bool replace = false);
+  /// The project changed in a way the opened database does not have yet.
+  void markDatabaseDirty();
   /// Forget what an action asked to save for was going to do.
   void cancelTransition();
   /// Keep the debug files chosen for the input with the project, beside it.
@@ -533,6 +538,13 @@ private:
   QHash<QString, QByteArray> databaseState_;
   /// What the opened database held when it opened or was last written here.
   QByteArray databaseIdentity_;
+  /// Writes run one at a time, as each compares what the database holds with
+  /// what the last one left there; the latest asked for waits here.
+  bool databaseWriting_ = false;
+  std::optional<std::pair<QString, bool>> databaseWriteWaiting_;
+  /// Counts markDatabaseDirty, so that a write knows what came after it read
+  /// the project's files.
+  quint64 databaseEdits_ = 0;
   std::function<QHash<QString, QByteArray>()> stateProvider_;
   QString generation_;
   std::optional<quint64> BackgroundSequence;

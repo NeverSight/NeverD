@@ -644,6 +644,14 @@ ProjectDatabase::read(const QString &database, QString *error,
   }
 }
 
+bool ProjectDatabase::sameFile(const QString &first, const QString &second) {
+  if (first == second)
+    return true;
+  const QString canonical = QFileInfo(first).canonicalFilePath();
+  return !canonical.isEmpty() &&
+         canonical == QFileInfo(second).canonicalFilePath();
+}
+
 QString ProjectDatabase::lockHeldElsewhere(const QString &path,
                                            const QString &heldInput) {
   QString input = path;
@@ -660,7 +668,7 @@ QString ProjectDatabase::lockHeldElsewhere(const QString &path,
   // start a project folder beside a file that may never open.
   std::error_code error;
   const auto canonical = std::filesystem::canonical(filePath(input), error);
-  if (input == heldInput || error ||
+  if (sameFile(input, heldInput) || error ||
       !std::filesystem::exists(
           project_files::path(canonical, project_files::File::WriterLock),
           error))
@@ -708,7 +716,7 @@ QString ProjectDatabase::unpack(const QString &database,
   // What follows replaces the working copy's files. A worker with it open
   // holds its writer lock, and edits not yet saved back live only there.
   std::optional<neverd::ProjectWriteLock> writer;
-  if (input != heldInput && QFileInfo::exists(input)) {
+  if (!sameFile(input, heldInput) && QFileInfo::exists(input)) {
     writer.emplace(filePath(input));
     if (!*writer)
       return failed(
