@@ -235,6 +235,7 @@ void compileAndRun(const std::string &Source) {
         "-std=c11",
         Optimization,
         "-fsanitize=undefined,address",
+        "-fno-sanitize-recover=undefined",
         "-Werror=uninitialized",
         "-Werror=return-type",
         SourcePath,
@@ -1016,9 +1017,7 @@ TEST(SysVCallContract, AFormattedCallFormatsTheValuesItPasses) {
 #include <string.h>
 int main(void) {
   char Text[32];
-  int (*Call)(char *, unsigned long, int, double) =
-      (int (*)(char *, unsigned long, int, double))(void *)fmt_show;
-  Call(Text, sizeof Text, 42, 3.25);
+  fmt_show((int64_t)(uintptr_t)Text, sizeof Text, 42, 3.25);
   return strcmp(Text, "42 3.25") == 0 ? 0 : 1;
 }
 )");
@@ -1386,19 +1385,19 @@ TEST(SysVCallContract, AJoinedFormatPrintsEveryArgumentOnBothPaths) {
   addReadOnlyData(Img, First, "%llu%c");
   addReadOnlyData(Img, Second, "%s%c");
   const auto Source = liftEntries(Img, {Text});
-  compileAndRun(Source + R"(
+  compileAndRun(Source + R"c(
 #include <string.h>
 int main(void) {
   char Buffer[64];
-  int (*Call)(char *, uint64_t, int, uint64_t, const char *, int) =
-      (int (*)(char *, uint64_t, int, uint64_t, const char *, int))(void *)joined_report;
-  if (Call(Buffer, sizeof Buffer, 1, UINT64_C(4294967303), "joined", '!') != 11 ||
+  if (joined_report((int64_t)(uintptr_t)Buffer, sizeof Buffer, 1,
+                    UINT64_C(4294967303), (int64_t)(uintptr_t)"joined", '!') != 11 ||
       strcmp(Buffer, "4294967303!")) return 1;
-  if (Call(Buffer, sizeof Buffer, 0, UINT64_C(4294967303), "joined", '?') != 7 ||
+  if (joined_report((int64_t)(uintptr_t)Buffer, sizeof Buffer, 0,
+                    UINT64_C(4294967303), (int64_t)(uintptr_t)"joined", '?') != 7 ||
       strcmp(Buffer, "joined?")) return 2;
   return 0;
 }
-)");
+)c");
 }
 
 TEST(SysVCallContract, AVariadicImportTakesTheParameterPassedThroughToIt) {

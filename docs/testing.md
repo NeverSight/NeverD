@@ -16722,6 +16722,12 @@ Mixed exits from a single internal call site retain both outcomes: a checked bar
 
 `SysVCallContract.ATailCallLeavesNoRegisterOfTheCallersOwn` requires the precise HighIR conversion error when an untyped tail callee leaves the high half of a wide return unproved. It must neither reuse the caller's earlier RDX constant nor publish the old trap-stub fallback as successful C.
 
+The formatted-output execution fixtures call the emitted declarations directly,
+with explicit pointer-to-integer argument transport. Their return and parameter
+types must match those declarations. Generated programs use
+`-fno-sanitize-recover=undefined` so a UBSan diagnostic fails the test even when
+the surrounding environment does not request `halt_on_error`.
+
 `ObjCCallHints.CIImageAffineValueKeepsProviderAndPhysicalCopyCarrier` checks the CoreImage provider, CIImage factory, complete 48-byte logical record and x2 pointer, rejecting missing or wrong providers, x86_64 and conflicting declarations. `ObjCImageValueCopy.OriginalFrameAndCompleteBodyAuthorizePublication` retains the original call independently of result assignments at the same machine address. `RejectsChangedCopyCallBodyAndCurrentImage` rejects 24 edits to receipts, arguments, stores, frames, metadata, imports, duplicate calls and saved IR, including consistent edits to both MedIR and HighIR. `GeneratedCExecutesAgainstIndependentPhysicalCopyABI` executes unchanged generated C at O0/O2 on ARM64 against a callee accepting the independently compiler-observed x2 pointer, checking all six floating bit patterns, selector/receiver identity, one evaluation, returned object, legal copy writes, unchanged inputs and boundary guards. Other hosts skip this physical ABI execution test.
 
 `ObjCCallHints.CurrentMethodEncodingMustAgreeWithCachedDeclaration` rejects a cached ABI that disagrees with the current nonempty method encoding or selector; declaration-only clients retain their existing contract.
