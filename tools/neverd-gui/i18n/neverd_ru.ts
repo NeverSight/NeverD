@@ -12,6 +12,14 @@
         <translation>Режим &amp;фокусировки</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>&amp;Новый экземпляр</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>Открыть новый экземпляр NeverD</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>&amp;Открыть...</translation>
     </message>
@@ -2493,6 +2501,10 @@ Double-click to go to the declaration.</source>
         <translation>В %1 нет последних изменений. Сохранить их в него перед продолжением?</translation>
     </message>
     <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>Не удалось запустить новый экземпляр: %1</translation>
+    </message>
+    <message>
         <source>Cannot jump to %1: %2</source>
         <translation>Не удалось перейти к %1: %2</translation>
     </message>
@@ -3560,6 +3572,10 @@ After:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>Файл %1 находится в папке, недоступной для записи; его база данных хранится в %2</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>Возможно, этот файл уже открыт в другом экземпляре NeverD (%1)</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

@@ -77,6 +77,14 @@ public:
   void setAsksForDebugInfo(bool asks);
   /// Use a disposable layout file (tests and benchmarks).
   void setLayoutPath(const QString &path) { layoutPath_ = path; }
+  /// Start another workbench with \p arguments, as a process of its own: this
+  /// program on this one's worker, and on a disposable layout if this one is.
+  /// Returns why it could not start, or nothing.
+  QString startWorkbench(const QStringList &arguments = {}) const;
+  /// What startWorkbench runs in place of this program (tests).
+  void setWorkbenchProgram(const QString &program) {
+    workbenchProgram_ = program;
+  }
   /// Restore the saved desktop, or lay out the default one; later calls do
   /// nothing.  Call once the window has its size so preferred dock sizes
   /// apply.
@@ -447,6 +455,7 @@ private:
   QMenu *recentMenu_ = nullptr;
   QMenu *windowsMenu_ = nullptr;
   QString layoutPath_;
+  QString workbenchProgram_;
   QByteArray focusLayout_;
   QPointer<QWidget> focusReturn_;
   QPointer<FocusSidebar> focusSidebar_;

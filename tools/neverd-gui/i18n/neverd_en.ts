@@ -12,6 +12,14 @@
         <translation>&amp;Focus mode</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>&amp;New instance</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>Open a new instance of NeverD</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>&amp;Open...</translation>
     </message>
@@ -2487,6 +2495,10 @@ Double-click to go to the declaration.</translation>
         <translation>%1 lacks the latest changes. Save them into it before continuing?</translation>
     </message>
     <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>Cannot start a new instance: %1</translation>
+    </message>
+    <message>
         <source>Cannot jump to %1: %2</source>
         <translation>Cannot jump to %1: %2</translation>
     </message>
@@ -3554,6 +3566,10 @@ After:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>%1 is in a folder you cannot write to; its database is kept in %2</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>This file may already be open in another NeverD (%1)</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

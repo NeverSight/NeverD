@@ -12,6 +12,14 @@
         <translation>집중 모드(&amp;F)</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>새 인스턴스(&amp;N)</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>NeverD의 새 인스턴스를 엽니다</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>열기(&amp;O)...</translation>
     </message>
@@ -2481,6 +2489,10 @@ Double-click to go to the declaration.</source>
         <translation>%1에 최신 변경 사항이 없습니다. 계속하기 전에 저장하시겠습니까?</translation>
     </message>
     <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>새 인스턴스를 시작할 수 없습니다: %1</translation>
+    </message>
+    <message>
         <source>Cannot jump to %1: %2</source>
         <translation>%1(으)로 이동할 수 없습니다: %2</translation>
     </message>
@@ -3548,6 +3560,10 @@ After:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>%1은(는) 쓸 수 없는 폴더에 있으므로 데이터베이스를 %2에 보관합니다</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>이 파일은 다른 NeverD에서 이미 열려 있을 수 있습니다(%1)</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

@@ -12,6 +12,14 @@
         <translation>وضع التركيز (&amp;F)</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>مثيل جديد(&amp;N)</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>فتح مثيل جديد من NeverD</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>فتح(&amp;O)...</translation>
     </message>
@@ -2511,6 +2519,10 @@ Double-click to go to the declaration.</source>
         <translation>تفتقر %1 إلى آخر التغييرات. هل تريد حفظها فيها قبل المتابعة؟</translation>
     </message>
     <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>تعذّر بدء مثيل جديد: %1</translation>
+    </message>
+    <message>
         <source>Cannot jump to %1: %2</source>
         <translation>تعذّر الانتقال إلى %1: %2</translation>
     </message>
@@ -3578,6 +3590,10 @@ After:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>يقع %1 في مجلد لا يمكنك الكتابة فيه؛ تُحفظ قاعدة بياناته في %2</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>قد يكون هذا الملف مفتوحًا بالفعل في NeverD آخر (%1)</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

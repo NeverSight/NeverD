@@ -12,6 +12,14 @@
         <translation>Mode &amp;focus</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>&amp;Nouvelle instance</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>Ouvrir une nouvelle instance de NeverD</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>&amp;Ouvrir...</translation>
     </message>
@@ -2487,6 +2495,10 @@ Double-cliquez pour aller à la déclaration.</translation>
         <translation>Il manque à %1 les dernières modifications. Les y enregistrer avant de continuer ?</translation>
     </message>
     <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>Impossible de démarrer une nouvelle instance : %1</translation>
+    </message>
+    <message>
         <source>Cannot jump to %1: %2</source>
         <translation>Impossible d&apos;aller à %1 : %2</translation>
     </message>
@@ -3554,6 +3566,10 @@ Après :
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>%1 se trouve dans un dossier où vous ne pouvez pas écrire ; sa base de données est conservée dans %2</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>Ce fichier est peut-être déjà ouvert dans un autre NeverD (%1)</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

@@ -11557,6 +11557,98 @@ private slots:
              QJsonArray{QStringLiteral("windows-kernel-x64")});
   }
 
+  void newInstanceStartsAWorkbenchOfItsOwn() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+#ifndef Q_OS_WIN
+    // A stand-in for this program records the command line it receives. It is
+    // written before the worker starts, which could inherit it open for
+    // writing and keep it from running.
+    const QString record = directory.filePath(QStringLiteral("arguments"));
+    const QString standIn = directory.filePath(QStringLiteral("workbench"));
+    QFile script(standIn);
+    QVERIFY(script.open(QIODevice::WriteOnly));
+    script.write(QStringLiteral("#!/bin/sh\n"
+                                "printf '%s\\n' \"$@\" > \"%1.part\"\n"
+                                "mv \"%1.part\" \"%1\"\n")
+                     .arg(record)
+                     .toUtf8());
+    script.close();
+    QVERIFY(script.setPermissions(script.permissions() | QFile::ExeOwner));
+#endif
+    Workbench bench;
+    auto *action = bench.action(ActionId::FileNewInstance);
+    // First in File, as IDA's, and there with or without a program open.
+    auto *file = bench.window->findChild<QMenu *>(QStringLiteral("menuFile"));
+    QVERIFY(file);
+    QCOMPARE(file->actions().first(), action);
+    QVERIFY(action->isEnabled());
+    LoadDialogAcceptor loadDialogs;
+    bench.window->openFile(writeFixture(directory, QStringLiteral("open.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    QVERIFY(action->isEnabled());
+    // A program that cannot start says why.
+    bench.window->setWorkbenchProgram(
+        directory.filePath(QStringLiteral("missing")));
+    action->trigger();
+    auto *log = bench.window->findChild<OutputWindow *>()
+                    ->findChild<QPlainTextEdit *>();
+    QVERIFY(log);
+    QTRY_VERIFY(log->toPlainText().contains(
+        QStringLiteral("Cannot start a new instance: ")));
+#ifndef Q_OS_WIN
+    bench.window->setWorkbenchProgram(standIn);
+    const auto received = [&record]() -> QStringList {
+      if (!QTest::qWaitFor([&record] { return QFile::exists(record); },
+                           OpenTimeoutMs))
+        return {};
+      QFile arguments(record);
+      if (!arguments.open(QIODevice::ReadOnly))
+        return {};
+      const QStringList lines =
+          QString::fromUtf8(arguments.readAll())
+              .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+      arguments.remove();
+      return lines;
+    };
+    // The new workbench has this one's worker and kind of layout, and not its
+    // program: it starts as a start without a file does.
+    const QStringList inherited{QStringLiteral("--worker"),
+                                bench.session.workerPath(),
+                                QStringLiteral("--fresh-layout")};
+    action->trigger();
+    QCOMPARE(received(), inherited);
+    // A link's workbench names its file and link after those.
+    const QStringList named{QStringLiteral("linked.bin"),
+                            QStringLiteral("neverd:///linked.bin")};
+    QCOMPARE(bench.window->startWorkbench(named), QString());
+    QCOMPARE(received(), inherited + named);
+#endif
+  }
+
+  void aFileOpenInAnotherWorkbenchSaysSo() {
+    QTemporaryDir directory;
+    const QString file = writeFixture(directory, QStringLiteral("held.bin"));
+    Workbench holder;
+    LoadDialogAcceptor loadDialogs;
+    holder.window->openFile(file);
+    QTRY_VERIFY_WITH_TIMEOUT(holder.session.loaded(), OpenTimeoutMs);
+    Session other(QString::fromLocal8Bit(TEST_WORKER));
+    QSignalSpy messages(&other, &Session::message);
+    other.open(file);
+    const auto refusal = [&messages] {
+      for (const auto &message : messages)
+        if (message.at(1).toInt() == 2)
+          return message.at(0).toString();
+      return QString();
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(!refusal().isEmpty(), OpenTimeoutMs);
+    QVERIFY2(refusal().contains(QStringLiteral("another NeverD")),
+             qPrintable(refusal()));
+    QVERIFY(!other.loaded());
+    QVERIFY(holder.session.loaded());
+  }
+
   void linksCopyAndOpenTheirPlaces() {
     // Copy link names the place the disassembly shows, and a link opens its
     // place in the view it asks for, as IDA's open_ida_link does; another

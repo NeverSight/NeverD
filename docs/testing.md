@@ -5620,6 +5620,14 @@ keeps its results: a search begun before the first rows arrived used to drop
 them, taking the cursor those rows bring for a move away, so searching right
 after opening a file showed nothing on a slow machine.
 
+`WorkbenchTests::newInstanceStartsAWorkbenchOfItsOwn` checks that **File → New
+instance** comes first in File and stays enabled with or without a program, that
+a program that cannot start says why in Output, and, outside Windows, the command
+line a stand-in program really receives: this workbench's worker and kind of
+layout, and not its open file. `aFileOpenInAnotherWorkbenchSaysSo` opens one file
+with a second real worker, whose lock refusal names the likely reason and leaves
+the holder loaded.
+
 The GUI unit cases `deepLinksTakeIdasFormAndRefuseWhatTheyCannotName` and
 `aLinkGoesToTheWorkbenchThatHasItsProgram` check link syntax, hash prefixes and
 instance selection. Controller cases `linksCopyAndOpenTheirPlaces` and

@@ -90,6 +90,9 @@ NEVERD_ACTION(FileProducePatchedBinary,
                                 "Replay all byte patches into a new binary"))
 
 // File.
+NEVERD_ACTION(FileNewInstance, QT_TRANSLATE_NOOP("Actions", "&New instance"),
+              "", "new_instance",
+              QT_TRANSLATE_NOOP("Actions", "Open a new instance of NeverD"))
 NEVERD_ACTION(FileOpen, QT_TRANSLATE_NOOP("Actions", "&Open..."), "", "open",
               QT_TRANSLATE_NOOP("Actions", "Open a binary for analysis"))
 NEVERD_ACTION(

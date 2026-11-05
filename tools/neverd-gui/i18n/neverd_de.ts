@@ -12,6 +12,14 @@
         <translation>&amp;Fokusmodus</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>Neue &amp;Instanz</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>Eine neue Instanz von NeverD öffnen</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>Ö&amp;ffnen...</translation>
     </message>
@@ -2487,6 +2495,10 @@ Doppelklicken, um zur Deklaration zu springen.</translation>
         <translation>%1 fehlen die neuesten Änderungen. Vor dem Fortfahren darin speichern?</translation>
     </message>
     <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>Neue Instanz kann nicht gestartet werden: %1</translation>
+    </message>
+    <message>
         <source>Cannot jump to %1: %2</source>
         <translation>Sprung zu %1 nicht möglich: %2</translation>
     </message>
@@ -3554,6 +3566,10 @@ Nachher:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>%1 liegt in einem Ordner, in den Sie nicht schreiben können; die zugehörige Datenbank wird in %2 gespeichert</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>Diese Datei ist möglicherweise bereits in einem anderen NeverD geöffnet (%1)</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

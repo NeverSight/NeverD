@@ -52,6 +52,13 @@ prompt for unsaved changes. Drop one existing file at a time; directories and
 web URLs are not opened. Opening by drag and drop leaves the source file in
 place.
 
+**File → New instance** starts another workbench, a process of its own on the
+same worker, as IDA's command does. It starts as a start without a file does,
+with Quick Start unless **Display at startup** is off, and leaves this window
+and its program as they are. Closing either workbench leaves the other running.
+A file another workbench has open does not open again, since the writer lock
+keeps a project to one workbench; **Output** says that it may be open elsewhere.
+
 PE browsing tolerates complete legacy relocation layouts and reports unusable
 entry/import metadata in **Output**. An unknown entry opens at a mapped code
 region for browsing; this does not reconstruct the program's OEP. Invalid import
