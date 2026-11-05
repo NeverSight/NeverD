@@ -171,6 +171,9 @@ namespace {
 constexpr Address Base = 0xffff800012340000ULL;
 constexpr int OpenTimeoutMs = 7000;
 constexpr int NativeOpenTimeoutMs = 30000;
+// The 600-function summary fixture deliberately sleeps between batches;
+// allow its background preparation to finish on slower CI runners.
+constexpr int SummaryReadyTimeoutMs = 30000;
 // The widest a view may insist on being: a dock's tab bar keeps the dock some
 // 130 pixels wide whatever it shows.
 constexpr int NarrowViewWidth = 160;
@@ -7130,7 +7133,7 @@ private slots:
       QTRY_VERIFY_WITH_TIMEOUT(done, OpenTimeoutMs);
     };
     read();
-    QTRY_COMPARE_WITH_TIMEOUT(refined.count(), 1, OpenTimeoutMs);
+    QTRY_COMPARE_WITH_TIMEOUT(refined.count(), 1, SummaryReadyTimeoutMs);
     // Reads go on after the refinement, which later heartbeats repeat none of.
     read();
     read();
