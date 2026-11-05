@@ -84,9 +84,13 @@ public:
   /// Unpack the input and its sidecars into \p directory, returning the
   /// input path.  An existing input with the recorded digest is reused, and
   /// sidecars with a pending crash-recovery journal are left for the worker.
+  /// A working copy whose writer lock another process holds is left as it is
+  /// and refused, unless it is \p heldInput, the file this workbench's own
+  /// worker has open.
   static QString unpack(const QString &database, const QString &directory,
                         QString *error = nullptr,
-                        bool *recoveredEdits = nullptr);
+                        bool *recoveredEdits = nullptr,
+                        const QString &heldInput = {});
   /// Retire the working copy's local recovery marker after Save or Discard.
   static QString finishRecovery(const QString &binary);
   /// Where a database without its original input is unpacked.

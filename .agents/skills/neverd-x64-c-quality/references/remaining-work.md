@@ -136,8 +136,16 @@ The enclosing private SEH state transfer now consumes that invocation's cleanup
 and EAX together, and clears initialization for popped arguments. Authored
 helpers with input-dependent zero/four-byte cleanup now pass without a
 target-wide ABI. Private SEH proofs stop after an irreversible refusal; ordinary
-analysis keeps its partial facts. The five pinned xcpt4 native-closure failures
-remain, including live runtime bindings and local-unwind obligations.
+analysis keeps its partial facts. A checked single-raise dispatch receipt now
+closes the enclosing helper/counter cases; three pinned xcpt4 main closure
+failures remain. Its earliest unproved ordinary call is the printf wrapper,
+whose writable format and runtime effects need a separate contract.
+
+Explicit local unwinds now use the current call's parent storage boundary,
+excluding the suspended runtime arguments and return PC. This fixes an
+original MSVC EH3 finally-only parent that never saved ESP and prevents stale
+SavedESP from widening the callback's access. It does not prove the complete
+xcpt4 main, asynchronous restoration or arbitrary runtime memory effects.
 
 The incoming-stack summary now preserves address dependence through partial
 register writes, whole-word transforms and SELECT alternatives. HighC also

@@ -694,6 +694,35 @@ TEST(RegistrationConditionalFrame,
 }
 
 TEST(RegistrationConditionalFrame,
+     XCPT4FinallyOnlyLocalUnwindUsesItsCurrentStack) {
+  auto Image = loadXCPT4();
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  size_t Work = 0;
+  RegistrationCallCalleeIndex Index(*Image, &Work);
+  CFGBuilder Builder;
+  Builder.setRegistrationCalleeIndex(&Index);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(*Image));
+  // The original MSVC EH3 parent has finally scopes but no SavedESP store.
+  const auto Function = Builder.build(*Image, Dec, 0x4059a0, "finally-loop");
+  ASSERT_TRUE(Function.RegistrationStates);
+  const auto &States = *Function.RegistrationStates;
+  for (const auto &Diagnostic : States.Diagnostics)
+    ADD_FAILURE() << Diagnostic;
+  EXPECT_TRUE(States.Complete);
+  ASSERT_TRUE(States.HasSEHLocalUnwinds);
+  ASSERT_TRUE(States.SEHLocalUnwindsComplete);
+  ASSERT_EQ(States.SEHLocalUnwinds.size(), 2u);
+  for (const auto &Call : States.SEHLocalUnwinds) {
+    EXPECT_TRUE(Call.Address == 0x4059fa || Call.Address == 0x405a16);
+    EXPECT_EQ(Call.StackOffset, -48);
+    EXPECT_EQ(Call.Runtime.Protocol,
+              RegistrationLocalUnwindContract::Kind::EH3);
+  }
+  EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+}
+
+TEST(RegistrationConditionalFrame,
      XCPT4SelectedFunctionRetainsItsScalarFilterRange) {
   auto Image = loadXCPT4(true);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());

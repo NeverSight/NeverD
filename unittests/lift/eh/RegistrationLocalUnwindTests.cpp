@@ -120,6 +120,48 @@ LowFunc localUnwindFrame(bool GS, unsigned Mutation) {
 
 } // namespace
 
+TEST(RegistrationLocalUnwind, CurrentCallOwnsTheParentStorageBoundary) {
+  for (bool GS : {false, true})
+    for (unsigned Saved = 0; Saved != 4; ++Saved)
+      for (int32_t Offset : {-40, -41, -48, -56, -16, 0}) {
+        SCOPED_TRACE(::testing::Message() << "GS=" << GS << " saved=" << Saved
+                                          << " offset=" << Offset);
+        auto Function = localUnwindFrame(GS, 0);
+        auto &Setup = Function.Blocks[4];
+        Setup.Ops.clear();
+        // A finally-only parent need not save ESP. An unrelated or stale
+        // saved value cannot expand or shrink this invocation's live frame.
+        emitOp(Setup, 0x1080, NdOp::INT_ADD, NdVar::tmp(0, 4),
+               {NdVar::reg(x86reg::RBP, 4), NdVar::cst(uint32_t(-24), 4)});
+        if (Saved) {
+          emitOp(Setup, 0x1080, NdOp::INT_ADD, NdVar::tmp(1, 4),
+                 {NdVar::reg(x86reg::RBP, 4),
+                  NdVar::cst(uint32_t(Saved == 2 ? -28 : -80), 4)});
+          emitOp(Setup, 0x1080, NdOp::STORE, {},
+                 {NdVar::tmp(0, 4),
+                  Saved == 1 ? NdVar::cst(0, 4) : NdVar::tmp(1, 4)});
+        }
+        Setup.InstructionBoundaries.front().OpCount = Setup.Ops.size();
+        Function.Blocks[6].Ops.front().Inputs[1] =
+            NdVar::cst(uint32_t(Offset), 4);
+        const std::vector<RegistrationLocalUnwindContract> Calls{
+            {0x2100, false, RegistrationLocalUnwindContract::Kind::EH4,
+             0x5000}};
+        const auto States = analyzeRegistrationStates(
+            Function, 0x4000, 0, nullptr, nullptr, nullptr, &Calls);
+        const bool Valid = Offset == -40;
+        EXPECT_EQ(States.Complete, Valid);
+        ASSERT_TRUE(States.HasSEHLocalUnwinds);
+        EXPECT_EQ(States.SEHLocalUnwindsComplete, Valid);
+        ASSERT_EQ(States.SEHLocalUnwinds.size(), Valid ? 1u : 0u);
+        if (Valid) {
+          EXPECT_EQ(States.SEHLocalUnwinds.front().StackOffset, -52);
+          EXPECT_EQ(States.SEHLocalUnwinds.front().Transitions,
+                    (std::vector<std::pair<int32_t, int32_t>>{{0, -2}}));
+        }
+      }
+}
+
 TEST(RegistrationLocalUnwind, EH4RequiresCookieFrameAndBoundBeforeCleanup) {
   for (bool GS : {false, true})
     for (unsigned Mutation = 0; Mutation != 17; ++Mutation) {

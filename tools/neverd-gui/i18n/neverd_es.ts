@@ -1778,6 +1778,10 @@
         <translation>%1 usa el formato de base de datos %2, que esta versión de NeverD no puede actualizar.</translation>
     </message>
     <message>
+        <source>This database may already be open in another NeverD (%1)</source>
+        <translation>Es posible que esta base de datos ya esté abierta en otro NeverD (%1)</translation>
+    </message>
+    <message>
         <source>Cannot create %1</source>
         <translation>No se puede crear %1</translation>
     </message>

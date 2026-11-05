@@ -341,7 +341,8 @@ private:
       FrameState Frame, int32_t Level, uint32_t Bound,
       SEHFrameOutcomes &Outcomes, std::vector<RegistrationObjectExtent> &Writes,
       SEHJumpUnwind *Jump = nullptr, SEHHandlerOutcomes *Selected = nullptr,
-      std::set<std::pair<int32_t, int32_t>> *Transitions = nullptr);
+      std::set<std::pair<int32_t, int32_t>> *Transitions = nullptr,
+      std::optional<int32_t> ParentStackOffset = std::nullopt);
   bool runLocalFinally(va_t Target, FrameState &Parent,
                        bool OrdinaryInvocation = false,
                        std::vector<RegistrationObjectExtent> *Writes = nullptr,

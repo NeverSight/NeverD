@@ -16137,6 +16137,14 @@ with no argument array preserves those cells, while its exception dispatch
 remains part of the language analysis. A returning call can precede a block's
 terminator; its physical fallthrough grants no memory contract by itself.
 
+Explicit EH3/EH4 local-unwind calls likewise bind parent storage to their
+current argument-area ESP. The callback interpreter excludes all runtime
+arguments, the call's return PC and the runtime's private stack. It does not
+require SavedESP or use a stale saved value to widen this boundary. The same
+bound follows nested finally calls; exception dispatch and jump resumption
+retain their separate restoration proofs. This admits finally-only MSVC
+parents without inventing a saved stack slot or changing the work budget.
+
 Checked `_controlfp_s` queries and exception-mask changes can write only a
 disjoint caller-owned DWORD or use an exact scalar null output pointer. Null
 output borrows no frame storage. PE32 SEH3 parents also admit a complete

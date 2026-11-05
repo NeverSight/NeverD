@@ -1778,6 +1778,10 @@
         <translation>يستخدم %1 تنسيق قاعدة البيانات %2، ولا يستطيع هذا الإصدار من NeverD تحديثه.</translation>
     </message>
     <message>
+        <source>This database may already be open in another NeverD (%1)</source>
+        <translation>قد تكون قاعدة البيانات هذه مفتوحة بالفعل في NeverD آخر (%1)</translation>
+    </message>
+    <message>
         <source>Cannot create %1</source>
         <translation>تعذّر إنشاء %1</translation>
     </message>

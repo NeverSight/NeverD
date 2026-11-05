@@ -78,8 +78,8 @@ public:
   /// Use a disposable layout file (tests and benchmarks).
   void setLayoutPath(const QString &path) { layoutPath_ = path; }
   /// Start another workbench with \p arguments, as a process of its own: this
-  /// program on this one's worker, and on a disposable layout if this one is.
-  /// Returns why it could not start, or nothing.
+  /// program with a worker from the same path, and on a disposable layout if
+  /// this one is.  Returns why it could not start, or nothing.
   QString startWorkbench(const QStringList &arguments = {}) const;
   /// What startWorkbench runs in place of this program (tests).
   void setWorkbenchProgram(const QString &program) {
