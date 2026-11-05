@@ -97,6 +97,30 @@ TEST(Digest, EveryAlignmentAndPaddingLength) {
   EXPECT_EQ(Bytes, Before);
 }
 
+TEST(Digest, StreamedPartsGiveTheOneShotDigest) {
+  std::vector<uint8_t> Bytes(3 * 64 + 17);
+  for (size_t I = 0; I < Bytes.size(); ++I)
+    Bytes[I] = static_cast<uint8_t>(I * 53 + I / 5);
+  const llvm::ArrayRef<uint8_t> All(Bytes);
+  SHA256Stream Stream;
+  // Every length, cut into three parts at every first cut and a spread of
+  // second ones: parts fill, cross and end on block boundaries.  Each digest
+  // also starts the stream again for the next.
+  for (size_t Size = 0; Size <= All.size(); ++Size)
+    for (size_t First = 0; First <= Size; ++First)
+      for (size_t Second = First; Second <= Size; Second += 13) {
+        Stream.update(All.slice(0, First));
+        Stream.update(All.slice(First, Second - First));
+        Stream.update(All.slice(Second, Size - Second));
+        ASSERT_EQ(Stream.final(), llvm::SHA256::hash(All.take_front(Size)))
+            << Size << ' ' << First << ' ' << Second;
+      }
+  Stream.update(llvm::StringRef("ab"));
+  Stream.update(llvm::StringRef("c"));
+  EXPECT_EQ(llvm::toHex(Stream.final(), true),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+}
+
 TEST(Digest, InaccessibleTailAndReadOnlyInput) {
 #ifdef _WIN32
   SYSTEM_INFO Info{};
