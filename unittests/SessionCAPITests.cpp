@@ -2697,6 +2697,55 @@ std::string makePE32(std::string_view Code, std::string_view Data,
   return Bytes;
 }
 
+// A 64-bit PE image based at 0x140000000 running \p Code at 0x140001000.
+std::string makePE64(std::string_view Code) {
+  constexpr uint64_t ImageBase = 0x140000000;
+  constexpr uint32_t Headers = 0x200, Raw = 0x200;
+  const auto put16 = [](std::string &Out, size_t At, uint16_t Value) {
+    Out[At] = static_cast<char>(Value);
+    Out[At + 1] = static_cast<char>(Value >> 8);
+  };
+  const auto put32 = [&](std::string &Out, size_t At, uint32_t Value) {
+    put16(Out, At, static_cast<uint16_t>(Value));
+    put16(Out, At + 2, static_cast<uint16_t>(Value >> 16));
+  };
+  const uint32_t CodeRaw =
+      static_cast<uint32_t>((Code.size() + Raw - 1) / Raw * Raw);
+  std::string Bytes(Headers + CodeRaw, '\0');
+  Bytes[0] = 'M';
+  Bytes[1] = 'Z';
+  put32(Bytes, 0x3c, 0x40);
+  Bytes.replace(0x40, 4, std::string("PE\0\0", 4));
+  put16(Bytes, 0x44, 0x8664); // Machine: x86-64
+  put16(Bytes, 0x46, 1);
+  put16(Bytes, 0x54, 0xf0);   // SizeOfOptionalHeader
+  put16(Bytes, 0x56, 0x0022); // Executable, large addresses
+  constexpr size_t Optional = 0x58;
+  put16(Bytes, Optional, 0x20b);       // PE32+
+  put32(Bytes, Optional + 16, 0x1000); // AddressOfEntryPoint
+  put32(Bytes, Optional + 24, static_cast<uint32_t>(ImageBase));
+  put32(Bytes, Optional + 28, static_cast<uint32_t>(ImageBase >> 32));
+  put32(Bytes, Optional + 32, 0x1000); // SectionAlignment
+  put32(Bytes, Optional + 36, Raw);    // FileAlignment
+  put16(Bytes, Optional + 40, 6);      // OS version
+  put16(Bytes, Optional + 48, 6);      // Subsystem version
+  put32(Bytes, Optional + 56,
+        0x1000 +
+            static_cast<uint32_t>((Code.size() + 0xfff) / 0x1000 * 0x1000));
+  put32(Bytes, Optional + 60, Headers);
+  put16(Bytes, Optional + 68, 3);   // Console
+  put32(Bytes, Optional + 108, 16); // NumberOfRvaAndSizes
+  const size_t Header = Optional + 0xf0;
+  Bytes.replace(Header, 5, ".text");
+  put32(Bytes, Header + 8, static_cast<uint32_t>(Code.size()));
+  put32(Bytes, Header + 12, 0x1000);
+  put32(Bytes, Header + 16, CodeRaw);
+  put32(Bytes, Header + 20, Headers);
+  put32(Bytes, Header + 36, 0x60000020);
+  Bytes.replace(Headers, Code.size(), Code);
+  return Bytes;
+}
+
 TEST_F(SessionCAPITest, RelocatedImmediatesAreOffsetsAndNumbersAreNot) {
   // push 0x402000; mov dword ptr [esp], 0x402000; mov eax, 0x402006; ret
   using namespace std::string_view_literals;
@@ -4311,6 +4360,65 @@ TEST_F(SessionCAPITest, PrefilledCalleesLeaveEachAnalysisAsItWas) {
   Load(Fresh);
   ASSERT_FALSE(takeString(neverd_prepare_call_summaries_json(Fresh)).empty());
   EXPECT_EQ(takeString(neverd_decompile(Fresh, Entry)), Prefilled);
+}
+
+TEST_F(SessionCAPITest, SolvedCalleeSignaturesLeaveEachAnalysisAsItWas) {
+  // PrefilledCalleesLeaveEachAnalysisAsItWas on an x64 COFF image, whose
+  // prefill goes on to solve the signatures of the bodies it read image-wide
+  // (stepGlobalCalleeSignatures) before its cursor ends.
+  constexpr unsigned Chain = neverd::limits::kMaxCallEffectCalleeDepth + 1;
+  constexpr unsigned Stride = 0x20;
+  std::string Code((Chain + 1) * Stride, '\xcc');
+  static constexpr char Forward[] =
+      "\x48\x83\xec\x08\xe8\x17\x00\x00\x00\x48\x83\xc4\x08\xc3";
+  for (unsigned I = 0; I < Chain; ++I)
+    Code.replace(I * Stride, sizeof(Forward) - 1, Forward, sizeof(Forward) - 1);
+  Code.replace(Chain * Stride, 4, "\x48\x89\xd0\xc3", 4);
+  const auto Path = write("prefill.exe", makePE64(Code));
+  const auto Load = [&](neverd_session_t Into) {
+    ASSERT_EQ(neverd_session_load(Into, Path.c_str()), 1);
+    auto &State = *neverd::sdk::toSession(Into);
+    const auto Entry = neverd_session_entry_addr(Into);
+    for (unsigned I = 0; I <= Chain; ++I)
+      State.Img.Symbols.push_back(
+          neverd::Symbol::makeFunc(Entry + I * Stride, Stride));
+    neverd::sdk::SessionTestAccess::resetFunctions(State);
+  };
+  const auto Prefill = [&](int64_t First, int Max) {
+    auto Reply = llvm::json::parse(takeString(
+        neverd_prefill_callees_json(Session, static_cast<int>(First), Max)));
+    EXPECT_TRUE(bool(Reply)) << llvm::toString(Reply.takeError());
+    return Reply ? *Reply : llvm::json::Value(nullptr);
+  };
+  Load(Session);
+  const auto Entry = neverd_session_entry_addr(Session);
+  ASSERT_FALSE(takeString(neverd_prepare_call_summaries_json(Session)).empty());
+  // The order's last page hands the cursor to the solve, which ends it.
+  auto Page = Prefill(0, 4096);
+  unsigned SolveSteps = 0;
+  for (;;) {
+    const auto *Object = Page.getAsObject();
+    ASSERT_NE(Object, nullptr);
+    EXPECT_EQ(Object->getBoolean("available"), true);
+    const auto *Following = Object->get("next");
+    ASSERT_NE(Following, nullptr);
+    if (*Following == llvm::json::Value(nullptr))
+      break;
+    ASSERT_LT(++SolveSteps, 1000u);
+    const auto Cursor = Following->getAsInteger();
+    ASSERT_TRUE(Cursor.has_value());
+    Page = Prefill(*Cursor, 4096);
+  }
+  EXPECT_GT(SolveSteps, 0u);
+  const std::string Solved = takeString(neverd_decompile(Session, Entry));
+  ASSERT_FALSE(Solved.empty());
+  // A session that reads its callees as it decompiles prints the same.
+  neverd_session_t Fresh = neverd_session_create();
+  const auto Destroy =
+      llvm::make_scope_exit([&] { neverd_session_destroy(Fresh); });
+  Load(Fresh);
+  ASSERT_FALSE(takeString(neverd_prepare_call_summaries_json(Fresh)).empty());
+  EXPECT_EQ(takeString(neverd_decompile(Fresh, Entry)), Solved);
 }
 
 TEST_F(SessionCAPITest, CallSummariesAreUnavailableForAnAArch64Image) {
