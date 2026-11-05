@@ -1,5 +1,11 @@
 # Remaining x64 C-quality work
 
+Direct native IR and CFG queries now use the existing function-preparation
+boundary. Fresh queries no longer analyze the whole image before returning one
+function, and restricted queries can switch entries without a prior decompile.
+Prepared output and completed whole-image analysis remain authoritative. This
+removes a research/navigation cost, not either registry-query input gap.
+
 Optional `function_calls` now connect producer-declared Win64 scalar C views
 to the explicit native context. Entry checks compare the requested parameters
 with their original register/stack bytes; padding and private stack storage
@@ -86,6 +92,12 @@ authenticated near returns with restored frames contribute. This closes the
 input-dependent return-proof inconsistency, including the xcpt4 raise wrapper's
 local frame query. It does not establish the enclosing helper's live runtime
 bindings, callback effects or complete native reconstruction.
+The enclosing private SEH state transfer now consumes that invocation's cleanup
+and EAX together, and clears initialization for popped arguments. Authored
+helpers with input-dependent zero/four-byte cleanup now pass without a
+target-wide ABI. Private SEH proofs stop after an irreversible refusal; ordinary
+analysis keeps its partial facts. The five pinned xcpt4 native-closure failures
+remain, including live runtime bindings and local-unwind obligations.
 
 The incoming-stack summary now preserves address dependence through partial
 register writes, whole-word transforms and SELECT alternatives. HighC also

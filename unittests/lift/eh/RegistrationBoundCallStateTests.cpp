@@ -22,99 +22,121 @@ using namespace neverd::registration_test;
 
 TEST(RegistrationBoundCallState,
      ConditionalResultsReachTheNextInitializedCall) {
-  for (bool Temporary : {false, true})
-    for (uint16_t Width : {2, 4, 8})
-      for (bool OtherVolatile : {false, true})
-        for (unsigned ResultKind = 0; ResultKind != 5; ++ResultKind) {
-          SCOPED_TRACE(Temporary);
-          SCOPED_TRACE(Width);
-          SCOPED_TRACE(OtherVolatile);
-          SCOPED_TRACE(ResultKind);
-          auto F = makeCookieFrame();
-          F.ExceptionMetadata->Registration->TryLevelStores = {
-              {0x1030, 0x1037, -2}};
-          auto Unlink = std::move(F.Blocks[3].Ops);
-          F.Blocks[3].Ops.clear();
-          addSlotStore(F.Blocks[3], -2);
-          for (auto Op : Unlink) {
-            Op.Seq = F.Blocks[3].Ops.size();
-            F.Blocks[3].Ops.push_back(Op);
-          }
-          F.Blocks[0].Succs = {1};
-          for (unsigned I : {1, 2}) {
-            auto &B = F.Blocks[I];
-            B.Ops.clear();
-            B.Succs = {int(I + 1)};
-            B.EndAddr = B.StartAddr + 8;
-            if (I == 1) {
-              emitOp(B, B.StartAddr, NdOp::INT_ADD, NdVar::tmp(40, 4),
-                     {NdVar::reg(x86reg::RBP, 4), NdVar::cst(8, 4)});
-              emitOp(B, B.StartAddr, NdOp::LOAD, NdVar::reg(x86reg::RAX, 4),
-                     {NdVar::tmp(40, 4)});
+  for (unsigned Cleanup = 0; Cleanup != 3; ++Cleanup)
+    for (bool Temporary : {false, true})
+      for (uint16_t Width : {2, 4, 8})
+        for (bool OtherVolatile : {false, true})
+          for (unsigned ResultKind = 0; ResultKind != 5; ++ResultKind) {
+            SCOPED_TRACE(Cleanup);
+            SCOPED_TRACE(Temporary);
+            SCOPED_TRACE(Width);
+            SCOPED_TRACE(OtherVolatile);
+            SCOPED_TRACE(ResultKind);
+            auto F = makeCookieFrame();
+            F.ExceptionMetadata->Registration->TryLevelStores = {
+                {0x1030, 0x1037, -2}};
+            auto Unlink = std::move(F.Blocks[3].Ops);
+            F.Blocks[3].Ops.clear();
+            addSlotStore(F.Blocks[3], -2);
+            for (auto Op : Unlink) {
+              Op.Seq = F.Blocks[3].Ops.size();
+              F.Blocks[3].Ops.push_back(Op);
             }
-            emitOp(
-                B, B.StartAddr, NdOp::STORE, {},
-                {NdVar::reg(x86reg::RSP, 4),
-                 NdVar::reg(I == 2 && OtherVolatile ? x86reg::RCX : x86reg::RAX,
-                            4)});
-            const size_t First = B.Ops.size();
-            const auto Result =
-                I == 1 && Temporary
-                    ? NdVar::tmp(64, Width)
-                    : NdVar::reg(x86reg::RAX, I == 1 ? Width : 4);
-            emitOp(B, B.StartAddr + 3, NdOp::CALL, Result,
-                   {NdVar::cst(0x5000 + I * 16, 4)});
-            if (I == 1 && Temporary && Width == 4)
-              emitOp(B, B.StartAddr + 3, NdOp::COPY, NdVar::reg(x86reg::RAX, 4),
-                     {Result});
-            B.InstructionBoundaries = {
-                {B.StartAddr, 3, 0, uint32_t(First)},
-                {B.StartAddr + 3, 5, First, uint32_t(B.Ops.size() - First)}};
-            auto &Call = B.InstructionBoundaries.back();
-            Call.Control = LowInstructionControl::Call;
-            Call.ControlFlags = LowInstructionControlFlag::Call;
-            Call.Immediate = 0x5000 + I * 16;
-          }
-          ConditionalFrame Inputs;
-          Inputs.Arguments.emplace(8, FrameValue{});
-          const auto Value = ResultKind == 0 ? FrameValue::constant(37)
-                             : ResultKind == 1
-                                 ? FrameValue::imageAddress(0x6000)
-                                 : FrameValue{};
-          unsigned Calls = 0;
-          Inputs.ProveCall = [&](const LowOp &Op, const FrameState &Frame,
-                                 const std::set<int32_t> &Initialized,
-                                 std::optional<FrameValue> &Returned) {
-            ++Calls;
-            const auto SP =
-                Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset;
-            EXPECT_TRUE(SP);
-            if (!SP)
-              return false;
-            for (int32_t Byte = *SP; Byte != *SP + 4; ++Byte)
-              EXPECT_TRUE(Initialized.count(Byte));
-            const auto Argument = Frame.load(*SP, 4);
-            if (Op.Inputs[0].Offset == 0x5010) {
-              EXPECT_EQ(Argument, FrameValue{});
-              if (ResultKind != 3)
-                Returned = Value;
-              return ResultKind != 4;
+            F.Blocks[0].Succs = {1};
+            for (unsigned I : {1, 2}) {
+              auto &B = F.Blocks[I];
+              B.Ops.clear();
+              B.Succs = {int(I + 1)};
+              B.EndAddr = B.StartAddr + 8;
+              if (I == 1) {
+                emitOp(B, B.StartAddr, NdOp::INT_ADD, NdVar::tmp(40, 4),
+                       {NdVar::reg(x86reg::RBP, 4), NdVar::cst(8, 4)});
+                emitOp(B, B.StartAddr, NdOp::LOAD, NdVar::reg(x86reg::RAX, 4),
+                       {NdVar::tmp(40, 4)});
+              }
+              emitOp(B, B.StartAddr, NdOp::STORE, {},
+                     {NdVar::reg(x86reg::RSP, 4),
+                      NdVar::reg(I == 2 && OtherVolatile ? x86reg::RCX
+                                                         : x86reg::RAX,
+                                 4)});
+              const size_t First = B.Ops.size();
+              const auto Result =
+                  I == 1 && Temporary
+                      ? NdVar::tmp(64, Width)
+                      : NdVar::reg(x86reg::RAX, I == 1 ? Width : 4);
+              emitOp(B, B.StartAddr + 3, NdOp::CALL, Result,
+                     {NdVar::cst(0x5000 + I * 16, 4)});
+              if (I == 1 && Temporary && Width == 4)
+                emitOp(B, B.StartAddr + 3, NdOp::COPY,
+                       NdVar::reg(x86reg::RAX, 4), {Result});
+              B.InstructionBoundaries = {
+                  {B.StartAddr, 3, 0, uint32_t(First)},
+                  {B.StartAddr + 3, 5, First, uint32_t(B.Ops.size() - First)}};
+              auto &Call = B.InstructionBoundaries.back();
+              Call.Control = LowInstructionControl::Call;
+              Call.ControlFlags = LowInstructionControlFlag::Call;
+              Call.Immediate = 0x5000 + I * 16;
             }
-            if (Width == 4 && !OtherVolatile && ResultKind < 3)
-              EXPECT_EQ(Argument, Value);
-            else
-              EXPECT_TRUE(Argument.MayBeFrame);
-            return true;
-          };
-          const std::vector<RegistrationCalleeStackContract> Stacks{
-              {0x5010, 0, false}, {0x5020, 0, false}};
-          RegistrationStateSolver Solver(F, 0x4000, 0, nullptr, nullptr,
-                                         &Stacks, nullptr, nullptr, &Inputs);
-          const auto States = Solver.run();
-          EXPECT_EQ(Calls, 2u);
-          EXPECT_EQ(States.Complete && Inputs.Complete, ResultKind != 4)
-              << (States.Diagnostics.empty() ? "" : States.Diagnostics.front());
-        }
+            ConditionalFrame Inputs;
+            Inputs.Arguments.emplace(8, FrameValue{});
+            const auto Value = ResultKind == 0 ? FrameValue::constant(37)
+                               : ResultKind == 1
+                                   ? FrameValue::imageAddress(0x6000)
+                                   : FrameValue{};
+            unsigned Calls = 0;
+            std::optional<int32_t> FirstSP;
+            Inputs.ProveCall = [&](const LowOp &Op, const FrameState &Frame,
+                                   const std::set<int32_t> &Initialized)
+                -> std::optional<ConditionalCallResult> {
+              ConditionalCallResult Returned;
+              if (Cleanup)
+                Returned.StackPopBytes = Cleanup == 2 ? 4 : 0;
+              ++Calls;
+              const auto SP =
+                  Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride]
+                      .Offset;
+              if (!SP) {
+                EXPECT_EQ(ResultKind, 4u);
+                EXPECT_NE(Cleanup, 0u);
+                EXPECT_EQ(Calls, 2u);
+                return std::nullopt;
+              }
+              for (int32_t Byte = *SP; Byte != *SP + 4; ++Byte)
+                EXPECT_TRUE(Initialized.count(Byte));
+              const auto Argument = Frame.load(*SP, 4);
+              if (Op.Inputs[0].Offset == 0x5010) {
+                FirstSP = SP;
+                EXPECT_EQ(Argument, FrameValue{});
+                if (ResultKind != 3)
+                  Returned.ReturnValue = Value;
+                return ResultKind != 4
+                           ? std::optional<ConditionalCallResult>(Returned)
+                           : std::nullopt;
+              }
+              EXPECT_TRUE(FirstSP);
+              if (!FirstSP)
+                return std::nullopt;
+              EXPECT_EQ(*SP, *FirstSP + (Cleanup == 2 ? 4 : 0));
+              if (Cleanup == 2)
+                for (int32_t Byte = *FirstSP; Byte != *SP; ++Byte)
+                  EXPECT_FALSE(Initialized.count(Byte));
+              if (Width == 4 && !OtherVolatile && ResultKind < 3)
+                EXPECT_EQ(Argument, Value);
+              else
+                EXPECT_TRUE(Argument.MayBeFrame);
+              return Returned;
+            };
+            const std::vector<RegistrationCalleeStackContract> Stacks{
+                {0x5010, 0, false}, {0x5020, 0, false}};
+            RegistrationStateSolver Solver(F, 0x4000, 0, nullptr, nullptr,
+                                           Cleanup ? nullptr : &Stacks, nullptr,
+                                           nullptr, &Inputs);
+            const auto States = Solver.run();
+            EXPECT_EQ(Calls, 2u);
+            EXPECT_EQ(States.Complete && Inputs.Complete, ResultKind != 4)
+                << (States.Diagnostics.empty() ? ""
+                                               : States.Diagnostics.front());
+          }
 }
 
 TEST(RegistrationBoundCallState, BorrowedObjectsCannotExposeAdministration) {

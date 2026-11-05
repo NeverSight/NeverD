@@ -298,7 +298,8 @@ bool RegistrationStateSolver::conditionalReturn(const Domain &State,
 
 bool RegistrationStateSolver::conditionalCall(
     const Domain &State, const LowOp &Op,
-    std::optional<FrameValue> &ReturnValue) {
+    std::optional<FrameValue> &ReturnValue,
+    std::optional<ConditionalCallResult> &Invocation) {
   if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
     return true;
   auto Refuse = [&] {
@@ -341,13 +342,14 @@ bool RegistrationStateSolver::conditionalCall(
   // An absent or expired borrowed capture still refuses at the transfer.
   if (JumpRuntime && JumpRuntime->Resume && JumpRuntime->Resume(Op, WorkUsed))
     return true;
-  std::optional<FrameValue> Returned;
-  if (!Conditional->ProveCall ||
-      !Conditional->ProveCall(Op, State.Frame, State.InitializedFrameBytes,
-                              Returned))
+  if (!Conditional->ProveCall)
+    return Refuse();
+  Invocation =
+      Conditional->ProveCall(Op, State.Frame, State.InitializedFrameBytes);
+  if (!Invocation)
     return Refuse();
   if (hasX86ScalarCallOutput(Op))
-    ReturnValue = Returned;
+    ReturnValue = Invocation->ReturnValue;
   return true;
 }
 

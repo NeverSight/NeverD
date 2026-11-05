@@ -155,6 +155,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
                               ? std::nullopt
                               : std::optional<va_t>{ImportLoad->second});
     std::optional<FrameValue> CallResult;
+    std::optional<ConditionalCallResult> ConditionalResult;
     if (Conditional) {
       if (Conditional->EvaluateOriginalImage)
         if (const auto Original = Conditional->EvaluateOriginalImage(
@@ -171,10 +172,11 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
       invalidateJumpRuntimeBindings(After, Transfer.read(*Memory.Address),
                                     Memory.AccessSize);
-    if (Conditional && (!checkConditionalMemory(After.Frame, Op, Transfer,
-                                                &After.InitializedFrameBytes) ||
-                        !conditionalReturn(After, Op) ||
-                        !conditionalCall(After, Op, CallResult)))
+    if (Conditional &&
+        (!checkConditionalMemory(After.Frame, Op, Transfer,
+                                 &After.InitializedFrameBytes) ||
+         !conditionalReturn(After, Op) ||
+         !conditionalCall(After, Op, CallResult, ConditionalResult)))
       Invalidate();
     if (stopRefusedConditional(&Op))
       return false;
@@ -724,6 +726,16 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     // Stack balance alone does not discharge transferCall's memory, object
     // initialization or no-return obligations. Retain their refusal while
     // recovering the independent register coordinate for ordinary flow.
+    if (!CallSP && ConditionalResult && ConditionalResult->StackPopBytes) {
+      const auto SP = parentStackOffset(After);
+      const auto Pop = *ConditionalResult->StackPopBytes;
+      if (!SP || *SP < INT32_MIN + 4 ||
+          int64_t(*SP) + Pop > *Chain.RegistrationOffset) {
+        Conditional->Complete = false;
+        Invalidate();
+      } else
+        CallSP = FrameValue::frame(int32_t(int64_t(*SP) + Pop));
+    }
     bool ImportedCall = false;
     bool PreserveImportBindings = false;
     if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
@@ -800,7 +812,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
     }
     if (CallSP) {
       After.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *CallSP;
-      if (TrackRuntimeArguments) {
+      if (TrackRuntimeArguments || Conditional) {
         if (!CallSP->Offset)
           After.InitializedFrameBytes.clear();
         else {

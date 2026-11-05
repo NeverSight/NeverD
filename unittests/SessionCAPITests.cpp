@@ -9582,6 +9582,99 @@ neverd_va_t seedAnalysisCacheSymbols(neverd_session_t Session) {
   return Entry;
 }
 
+TEST_F(SessionCAPITest, NativeIRQueriesPrepareOnlyTheirRequestedFunction) {
+  for (bool AArch64 : {false, true}) {
+    SCOPED_TRACE(AArch64);
+    std::string Code(0x50, '\0');
+    for (unsigned Offset : {0u, 0x10u, 0x40u})
+      if (AArch64)
+        Code.replace(Offset, 8, "\xe0\x00\x80\x52\xc0\x03\x5f\xd6", 8);
+      else
+        Code.replace(Offset, 6, "\xb8\x07\x00\x00\x00\xc3", 6);
+    const auto Path =
+        write("fresh-ir.elf", makeNativeELF(AArch64, 0x400000, {}, Code));
+    const auto Load = [&] {
+      neverd_session_destroy(Session);
+      Session = neverd_session_create();
+      EXPECT_NE(Session, nullptr);
+      EXPECT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+      auto &State = *neverd::sdk::toSession(Session);
+      const auto Entry = neverd_session_entry_addr(Session);
+      for (unsigned Offset : {0u, 0x10u, 0x40u})
+        State.Img.Symbols.push_back(
+            neverd::Symbol::makeFunc(Entry + Offset, AArch64 ? 8 : 6));
+      neverd::sdk::SessionTestAccess::resetFunctions(State);
+      return Entry;
+    };
+    for (const char *Stage : {"low", "med", "high", "llvm", "cfg"})
+      for (bool Paged : {false, true}) {
+        if (Paged && std::strcmp(Stage, "cfg") == 0)
+          continue;
+        SCOPED_TRACE(Stage);
+        SCOPED_TRACE(Paged);
+        const auto Read = [&](neverd_va_t Entry) {
+          if (Paged)
+            return takeString(
+                neverd_ir_view_json(Session, Entry, Stage, 0, 2048));
+          if (std::strcmp(Stage, "low") == 0)
+            return takeString(neverd_ir_low(Session, Entry));
+          if (std::strcmp(Stage, "med") == 0)
+            return takeString(neverd_ir_med(Session, Entry));
+          if (std::strcmp(Stage, "high") == 0)
+            return takeString(neverd_ir_high(Session, Entry));
+          if (std::strcmp(Stage, "llvm") == 0)
+            return takeString(neverd_ir_llvm(Session, Entry));
+          return takeString(neverd_cfg_json(Session, Entry));
+        };
+        const auto Entry = Load();
+        ASSERT_EQ(neverd_prepare_function_view(Session, Entry, Stage), 1);
+        const auto Prepared = Read(Entry);
+        ASSERT_FALSE(Prepared.empty());
+        ASSERT_EQ(neverd_prepare_function_view(Session, Entry + 0x10, Stage),
+                  1);
+        const auto Other = Read(Entry + 0x10);
+        ASSERT_FALSE(Other.empty());
+
+        Load();
+        auto &State = *neverd::sdk::toSession(Session);
+        EXPECT_EQ(Read(Entry), Prepared);
+        EXPECT_EQ(State.OnlyFunctionEntries, std::set<neverd::va_t>{Entry});
+        EXPECT_EQ(State.PipeResult.LowFuncs.size(), 1u);
+        const auto *Low = State.findLowFunc(Entry);
+        EXPECT_NE(Low, nullptr);
+        EXPECT_EQ(Read(Entry), Prepared);
+        EXPECT_EQ(State.findLowFunc(Entry), Low);
+        if (std::strcmp(Stage, "cfg") == 0) {
+          EXPECT_TRUE(State.PipeResult.MedIRDeferred);
+          EXPECT_TRUE(State.PipeResult.MedFuncs.empty());
+        } else if (std::strcmp(Stage, "high") != 0) {
+          EXPECT_TRUE(State.PipeResult.HighIRDeferred);
+          EXPECT_TRUE(State.PipeResult.HighFuncs.empty());
+        }
+        EXPECT_EQ(Read(Entry + 0x10), Other);
+        EXPECT_EQ(State.OnlyFunctionEntries,
+                  (std::set<neverd::va_t>{Entry + 0x10}));
+        EXPECT_EQ(State.findLowFunc(Entry), nullptr);
+        EXPECT_EQ(State.PipeResult.LowFuncs.size(), 1u);
+
+        // An explicitly completed whole-image analysis remains authoritative.
+        Load();
+        auto &Whole = *neverd::sdk::toSession(Session);
+        ASSERT_TRUE(Whole.ensurePipeline());
+        ASSERT_TRUE(Whole.OnlyFunctionEntries.empty());
+        const auto WholeCount = Whole.PipeResult.LowFuncs.size();
+        ASSERT_GT(WholeCount, 1u);
+        const auto *Kept = Whole.findLowFunc(Entry + 0x40);
+        EXPECT_NE(Kept, nullptr);
+        EXPECT_FALSE(Read(Entry).empty());
+        EXPECT_FALSE(Read(Entry + 0x10).empty());
+        EXPECT_TRUE(Whole.OnlyFunctionEntries.empty());
+        EXPECT_EQ(Whole.PipeResult.LowFuncs.size(), WholeCount);
+        EXPECT_EQ(Whole.findLowFunc(Entry + 0x40), Kept);
+      }
+  }
+}
+
 TEST_F(SessionCAPITest,
        NativeAnalysisViewsDeferOnlyHighIRAndPreserveLaterSource) {
   for (bool Floating : {false, true}) {

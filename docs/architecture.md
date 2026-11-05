@@ -4260,6 +4260,12 @@ index without keeping replica startup blocked.
 Function preparation uses `neverd_prepare_function_view`, which shares the
 source route's ARM mode, exception-handler discovery and analysis-scope checks
 without emitting C. Source, IR and CFG views consume that prepared pipeline.
+Native IR text, paged IR and CFG queries also enter this same preparation
+boundary when called directly. A fresh session selects the requested function;
+a restricted session can switch entries without analyzing unrelated bodies.
+An existing whole-image analysis remains intact. CFG keeps its LowIR-only
+depth, other analysis views continue through the shared ABI preparation, and
+bytecode retains its whole-program view.
 Older engines retain `neverd_prepare_function` and the decompiler-based
 preparation fallback. A failed switch
 clears the worker's prepared-entry marker before another view can reuse it.
@@ -16150,6 +16156,12 @@ registers and a consistent cleanup; unresolved indirect exits refuse. A closed
 loop supplies no ordinary result. These invocation facts never enter the
 target-only stack cache. A nested RaiseException frame proof still grants no
 runtime binding preservation, callback-effect closure or native SEH admission.
+The private SEH solver consumes the same invocation's typed cleanup and scalar
+result together. Popped argument bytes lose their initialization facts before
+the next call. Independent callback and binding checks precede that stack
+recovery; a returned stack coordinate cannot discharge them. An irreversible
+refusal stops this all-or-nothing private proof and withdraws partial receipts.
+Ordinary state analysis continues to collect its separately useful facts.
 
 A zero-argument native C++ callee query first checks its authenticated shared
 entry prefix. An incoming frame access before any ordinary call or branch

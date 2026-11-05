@@ -80,6 +80,14 @@ struct BoundPlainCalleeEffect {
   FrameValue ReturnValue = FrameValue::taint(true);
 };
 
+/// One input-bound private-frame proof. Returning cleanup and physical EAX
+/// belong to this invocation, not to every call of the same target. Neither
+/// fact grants runtime-binding preservation or closed callback effects.
+struct ConditionalCallResult {
+  std::optional<uint32_t> StackPopBytes;
+  std::optional<FrameValue> ReturnValue;
+};
+
 /// The current source caller alone owns this storage query. It may extend a
 /// scalar word into contiguous live storage after checking its allocation and
 /// runtime administration. The query bills that caller's active work counter;
@@ -116,8 +124,8 @@ struct CxxCallerProof {
 /// Positive object extents are proved caller storage, disjoint from this
 /// invocation's return PC, private frame and incoming argument slots.
 struct ConditionalFrame {
-  std::function<bool(const LowOp &, const FrameState &,
-                     const std::set<int32_t> &, std::optional<FrameValue> &)>
+  std::function<std::optional<ConditionalCallResult>(
+      const LowOp &, const FrameState &, const std::set<int32_t> &)>
       ProveCall;
   /// Replays a nested C++ invocation after binding its physical CALL and
   /// current inputs. Only the private conditional solver consumes this hook.

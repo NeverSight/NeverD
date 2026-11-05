@@ -671,11 +671,14 @@ TEST(RegistrationConditionalFrame, XCPT4HelperChecksItsBoundIncomingCounter) {
     Inputs.Objects = {{256, 260}};
     Inputs.ObjectCells = {{256, FrameValue::constant(1)}};
     Inputs.ProveCall = [&](const LowOp &Op, const FrameState &State,
-                           const std::set<int32_t> &Initialized,
-                           std::optional<FrameValue> &Returned) {
-      return Mutation != 4 &&
-             registration_abi::hasConditionalCallFrame(
-                 *Image, Op, State, Inputs.Work, &Initialized, &Returned);
+                           const std::set<int32_t> &Initialized)
+        -> std::optional<ConditionalCallResult> {
+      ConditionalCallResult Invocation;
+      if (Mutation == 4 || !registration_abi::hasConditionalCallFrame(
+                               *Image, Op, State, Inputs.Work, &Initialized,
+                               nullptr, nullptr, nullptr, &Invocation))
+        return std::nullopt;
+      return Invocation;
     };
     if (Mutation == 1)
       Inputs.Objects[0].End = 259;
