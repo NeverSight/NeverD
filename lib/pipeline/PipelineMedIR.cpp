@@ -152,6 +152,28 @@ SourceStackScan sourceStackScanOf(const MedFunc &Func,
   return Scan;
 }
 
+std::shared_ptr<OmittedCalleeMemo::Conversion::PreparedSource>
+prepareSourceStackBody(const MedFunc &Source, const BinaryImage &Image,
+                       bool KeepPrologueSaves) {
+  using PreparedSource = OmittedCalleeMemo::Conversion::PreparedSource;
+  // Marked where it is kept: the spills name its operations.
+  auto Prepared = std::make_shared<PreparedSource>(PreparedSource{Source, {}});
+  MedFunc &Func = Prepared->Body;
+  markSourceStackAccesses(Func, Image.Arch, Image.abiFormat(), Func.EntryKind,
+                          &Image, &Prepared->OverwrittenSpills);
+  // Selected bodies also carry this phase's complete borrowed-frame proof.
+  // Keep that source fact, but never promote it into an overwrite receipt.
+  if (KeepPrologueSaves)
+    for (size_t B = 0; B < Source.Blocks.size(); ++B)
+      for (size_t O = 0; O < Source.Blocks[B].Ops.size(); ++O)
+        Func.Blocks[B].Ops[O].PrologueSave |=
+            Source.Blocks[B].Ops[O].PrologueSave;
+  // Every dependency wave, and every later run's, queries the prepared
+  // body's value readers.
+  Prepared->ValueReads = valueReadsOf(Func);
+  return Prepared;
+}
+
 void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
                                          PipelineResult &Result,
                                          llvm::ArrayRef<LowFunc> Originals) {
@@ -270,24 +292,9 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
       if (OverwrittenSpills[I])
         continue;
       const auto &Source = *Sources[I];
-      // Marked where it is kept: the spills name its operations.
-      Prepared[I] =
-          std::make_shared<PreparedSource>(PreparedSource{Source, {}});
-      MedFunc &Func = Prepared[I]->Body;
-      markSourceStackAccesses(Func, Image.Arch, Image.abiFormat(),
-                              Func.EntryKind, &Image,
-                              &Prepared[I]->OverwrittenSpills);
-      // Selected bodies also carry this phase's complete borrowed-frame proof.
-      // Keep that source fact, but never promote it into an overwrite receipt.
-      if (Complete.count(Source.Entry))
-        for (size_t B = 0; B < Source.Blocks.size(); ++B)
-          for (size_t O = 0; O < Source.Blocks[B].Ops.size(); ++O)
-            Func.Blocks[B].Ops[O].PrologueSave |=
-                Source.Blocks[B].Ops[O].PrologueSave;
-      // Every dependency wave below, and every later run's, queries the
-      // prepared body's value readers.
-      Prepared[I]->ValueReads = valueReadsOf(Func);
-      Sources[I] = &Func;
+      Prepared[I] = prepareSourceStackBody(Source, Image,
+                                           Complete.count(Source.Entry) != 0);
+      Sources[I] = &Prepared[I]->Body;
     }
   });
   std::vector<const MedValueReads *> ValueReads(Sources.size(), nullptr);

@@ -2195,8 +2195,19 @@ AnalysisCacheWarmup prefillOmittedCallees(const BinaryImage &Img,
       Reader.readLift(Target, Read, Low, Ahead);
       if (!Read.BlockOps)
         continue;
-      (void)Reader.conversion(Target, Read, &Read != &Local, Low, Ahead);
+      const OmittedCalleeMemo::Conversion &Converted =
+          Reader.conversion(Target, Read, &Read != &Local, Low, Ahead);
       ++Warmup.Prepared;
+      // A kept body that source stack preparation may follow is prepared as
+      // the first run following it would prepare it, which reads only the
+      // body and the image: runs then start from the prepared body.
+      if (&Read != &Local && Converted.Body && Converted.SourceStack &&
+          Converted.SourceStack->Candidate && !Converted.Prepared)
+        if (OmittedCalleeMemo::Conversion *Held =
+                Memo->conversionOf(*Converted.Body))
+          Memo->keepPrepared(
+              *Held, prepareSourceStackBody(*Converted.Body, Img,
+                                            /*KeepPrologueSaves=*/false));
     }
   }
   return Warmup;

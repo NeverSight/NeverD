@@ -103,15 +103,16 @@ inline constexpr size_t kPipelineCallAbiMinSpeculativeProbes = 8;
 // lib/pipeline/PipelineCallAbiDetail.h
 inline constexpr size_t kPipelineCallAbiDetailMaxProbes = 16;
 inline constexpr size_t kPipelineCallAbiDetailMaxConversions = 4;
-/// The omitted-callee memo's bodies take up to a twelfth of the host's
+/// The omitted-callee memo's bodies take up to an eighth of the host's
 /// physical memory (OmittedCalleeMemo::maxBytes), between these bounds.  The
-/// ceiling lets a large host's replica read ahead every callee of an image
-/// the size of ntoskrnl: a 4 GiB memo's three-quarter mark stopped the read
-/// at 16,073 of its 19,484 callees, which a twelfth of 64 GiB holds.
+/// share and ceiling let a large host's replica read ahead every callee of an
+/// image the size of ntoskrnl, with the source stack preparation of the ones
+/// a run may follow: 5.3 GB for its 19,484 callees, under the three-quarter
+/// mark of an eighth of 64 GiB.
 inline constexpr size_t kPipelineCallAbiDetailMaxBytes = size_t{2048} << 20;
 inline constexpr uint64_t kPipelineCallAbiDetailMaxBytesCeiling = uint64_t{8192}
                                                                   << 20;
-inline constexpr uint64_t kPipelineCallAbiDetailMemoryShare = 12;
+inline constexpr uint64_t kPipelineCallAbiDetailMemoryShare = 8;
 
 // lib/pipeline/PipelineFormattedCalls.cpp
 /// The distinct constants a register may hold where paths join, as the scan

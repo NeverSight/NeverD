@@ -406,6 +406,16 @@ private:
 void copyCallSignatureFacts(const PipelineResult &Source,
                             PipelineResult &Destination);
 
+/// \p Source as source stack preparation reads a body it follows
+/// (prepareRecoveredSourceStackAccesses): a copy with its stack accesses
+/// marked, the spills found overwritten, and the readers of its values.  A
+/// run's own complete body, with \p KeepPrologueSaves, keeps the prologue
+/// saves its earlier phase proved.  An omitted callee's preparation reads
+/// only its kept body and the image; the memo keeps it with the conversion.
+std::shared_ptr<OmittedCalleeMemo::Conversion::PreparedSource>
+prepareSourceStackBody(const MedFunc &Source, const BinaryImage &Image,
+                       bool KeepPrologueSaves);
+
 /// Refine source-only integer carriers whose complete uses forward pointers
 /// to admitted imported declarations. Shared by HighC and LLVM-to-C; native
 /// lifting and patching retain their independent machine type contracts.

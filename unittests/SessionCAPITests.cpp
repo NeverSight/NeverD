@@ -4421,6 +4421,118 @@ TEST_F(SessionCAPITest, SolvedCalleeSignaturesLeaveEachAnalysisAsItWas) {
   EXPECT_EQ(takeString(neverd_decompile(Fresh, Entry)), Solved);
 }
 
+TEST_F(SessionCAPITest, PrefilledSourceStacksLeaveEachAnalysisAsItWas) {
+  // A chain of x64 COFF functions that each spill their first argument to its
+  // home slot, save RBX, read the argument back and pass it to the next:
+  // bodies source stack preparation may follow, which the prefill prepares as
+  // it reads them.
+  constexpr unsigned Chain = neverd::limits::kMaxCallEffectCalleeDepth + 1;
+  constexpr unsigned Stride = 0x20;
+  std::string Code((Chain + 1) * Stride, '\xcc');
+  // mov [rsp+8],rcx; push rbx; sub rsp,0x20; mov rbx,[rsp+0x30];
+  // mov rcx,rbx; call next; add rsp,0x20; pop rbx; ret.
+  static constexpr char Spill[] =
+      "\x48\x89\x4c\x24\x08\x53\x48\x83\xec\x20\x48\x8b\x5c\x24\x30"
+      "\x48\x89\xd9\xe8\x09\x00\x00\x00\x48\x83\xc4\x20\x5b\xc3";
+  for (unsigned I = 0; I < Chain; ++I)
+    Code.replace(I * Stride, sizeof(Spill) - 1, Spill, sizeof(Spill) - 1);
+  Code.replace(Chain * Stride, 4, "\x48\x89\xd0\xc3", 4);
+  const auto Path = write("prefill-spill.exe", makePE64(Code));
+  std::vector<neverd_va_t> Entries;
+  const auto Load = [&](neverd_session_t Into) {
+    ASSERT_EQ(neverd_session_load(Into, Path.c_str()), 1);
+    auto &State = *neverd::sdk::toSession(Into);
+    const auto Entry = neverd_session_entry_addr(Into);
+    Entries.clear();
+    for (unsigned I = 0; I <= Chain; ++I) {
+      Entries.push_back(Entry + I * Stride);
+      State.Img.Symbols.push_back(
+          neverd::Symbol::makeFunc(Entry + I * Stride, Stride));
+    }
+    neverd::sdk::SessionTestAccess::resetFunctions(State);
+  };
+  Load(Session);
+  ASSERT_FALSE(takeString(neverd_prepare_call_summaries_json(Session)).empty());
+  for (int64_t Cursor = 0, Steps = 0;; ++Steps) {
+    ASSERT_LT(Steps, 1000);
+    auto Page = llvm::json::parse(takeString(
+        neverd_prefill_callees_json(Session, static_cast<int>(Cursor), 4096)));
+    ASSERT_TRUE(bool(Page)) << llvm::toString(Page.takeError());
+    const auto *Object = Page->getAsObject();
+    ASSERT_NE(Object, nullptr);
+    EXPECT_EQ(Object->getBoolean("available"), true);
+    const auto Next = Object->getInteger("next");
+    if (!Next)
+      break;
+    Cursor = *Next;
+  }
+  // The prefill, not a run, prepared the bodies, each as the runs' own
+  // preparation of that kept body does.
+  const auto &State = *neverd::sdk::toSession(Session);
+  const neverd::OmittedCalleeMemo *Memo =
+      neverd::PipelineTestPeer::calleeSignatures(State.AnalysisCache);
+  ASSERT_NE(Memo, nullptr);
+  const auto Positions = [](const neverd::MedFunc &Function,
+                            const std::set<const neverd::MedOp *> &Ops) {
+    std::set<std::pair<size_t, size_t>> At;
+    for (size_t B = 0; B < Function.Blocks.size(); ++B)
+      for (size_t O = 0; O < Function.Blocks[B].Ops.size(); ++O)
+        if (Ops.count(&Function.Blocks[B].Ops[O]))
+          At.emplace(B, O);
+    return At;
+  };
+  size_t Prepared = 0, Marked = 0;
+  for (const auto &[Entry, Callee] : Memo->Callees)
+    for (const auto &Conversion : Callee.Conversions) {
+      if (!Conversion.Prepared)
+        continue;
+      SCOPED_TRACE(Entry);
+      ++Prepared;
+      ASSERT_TRUE(Conversion.Body);
+      const auto Expected = neverd::prepareSourceStackBody(
+          *Conversion.Body, State.Img, /*KeepPrologueSaves=*/false);
+      const neverd::MedFunc &Got = Conversion.Prepared->Body;
+      ASSERT_EQ(Got.Blocks.size(), Expected->Body.Blocks.size());
+      for (size_t B = 0; B < Got.Blocks.size(); ++B) {
+        const auto &GotOps = Got.Blocks[B].Ops;
+        const auto &ExpectedOps = Expected->Body.Blocks[B].Ops;
+        ASSERT_EQ(GotOps.size(), ExpectedOps.size());
+        for (size_t O = 0; O < GotOps.size(); ++O) {
+          EXPECT_EQ(GotOps[O].Opcode, ExpectedOps[O].Opcode);
+          EXPECT_EQ(GotOps[O].Output.display(),
+                    ExpectedOps[O].Output.display());
+          EXPECT_EQ(GotOps[O].PrologueSave, ExpectedOps[O].PrologueSave);
+          EXPECT_EQ(GotOps[O].ReturnAddressRead,
+                    ExpectedOps[O].ReturnAddressRead);
+          EXPECT_EQ(GotOps[O].SourceReturnSlotOffset,
+                    ExpectedOps[O].SourceReturnSlotOffset);
+          Marked += GotOps[O].PrologueSave !=
+                    Conversion.Body->Blocks[B].Ops[O].PrologueSave;
+        }
+      }
+      EXPECT_EQ(Positions(Got, Conversion.Prepared->OverwrittenSpills),
+                Positions(Expected->Body, Expected->OverwrittenSpills));
+      EXPECT_EQ(bool(Conversion.Prepared->ValueReads),
+                bool(Expected->ValueReads));
+    }
+  EXPECT_GT(Prepared, 0u);
+  // Preparation marked what the kept bodies leave unmarked.
+  EXPECT_GT(Marked, 0u);
+  std::vector<std::string> Prefilled;
+  for (const neverd_va_t Entry : Entries) {
+    Prefilled.push_back(takeString(neverd_decompile(Session, Entry)));
+    EXPECT_FALSE(Prefilled.back().empty()) << Entry;
+  }
+  // A session that prepares its sources as it decompiles prints the same.
+  neverd_session_t Fresh = neverd_session_create();
+  const llvm::scope_exit Destroy([&] { neverd_session_destroy(Fresh); });
+  Load(Fresh);
+  ASSERT_FALSE(takeString(neverd_prepare_call_summaries_json(Fresh)).empty());
+  for (size_t I = 0; I < Entries.size(); ++I)
+    EXPECT_EQ(takeString(neverd_decompile(Fresh, Entries[I])), Prefilled[I])
+        << Entries[I];
+}
+
 TEST_F(SessionCAPITest, CallSummariesAreUnavailableForAnAArch64Image) {
   std::ifstream Input(std::filesystem::path(__FILE__).parent_path() / "types" /
                           "fixtures" / "linux_libc_calls_arm64",
