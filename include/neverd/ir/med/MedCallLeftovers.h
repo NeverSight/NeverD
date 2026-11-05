@@ -19,8 +19,8 @@
 #include "neverd/ir/med/MedIR.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 
-#include <map>
 #include <optional>
 #include <tuple>
 
@@ -72,7 +72,7 @@ public:
 
 private:
   using ValueKey = std::tuple<int, int, int, uint16_t>;
-  std::map<ValueKey, uint64_t> Values;
+  llvm::DenseMap<ValueKey, uint64_t> Values;
 };
 
 } // namespace neverd
