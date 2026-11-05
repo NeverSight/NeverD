@@ -1983,9 +1983,75 @@ unobservedSourceStackParameters(const MedFunc &Func,
   return Result;
 }
 
+namespace {
+/// What sourceRegisterParameterReads reads of a body before its callees'
+/// facts: the work each block charges, the first block that makes the read
+/// give nothing (Costs.size() for none), and the body's blocks, block
+/// starts and values up to that block.  It depends on the body alone.
+struct SourceRegisterBody {
+  std::vector<size_t> Costs;
+  size_t FirstRefused = 0;
+  std::map<int, const MedBlock *> Blocks;
+  std::set<va_t> Entries;
+  /// Each value's first definition, by key.
+  std::vector<std::pair<ValueKey, const MedVar *>> Values;
+
+  explicit SourceRegisterBody(const MedFunc &Func)
+      : FirstRefused(Func.Blocks.size()) {
+    for (size_t B = 0; B < Func.Blocks.size(); ++B) {
+      const MedBlock &Block = Func.Blocks[B];
+      Costs.push_back(1 + Block.Ops.size() + Block.Phis.size());
+      if (FirstRefused == Func.Blocks.size() && !index(Func, Block))
+        FirstRefused = B;
+    }
+    // A definition met again keeps the first, as a map's emplace would.
+    std::stable_sort(
+        Values.begin(), Values.end(),
+        [](const auto &A, const auto &B) { return A.first < B.first; });
+    Values.erase(std::unique(Values.begin(), Values.end(),
+                             [](const auto &A, const auto &B) {
+                               return A.first == B.first;
+                             }),
+                 Values.end());
+    Values.shrink_to_fit();
+  }
+  /// The first definition of the value \p Key names, or null.
+  const MedVar *value(const ValueKey &Key) const {
+    const auto At = std::lower_bound(
+        Values.begin(), Values.end(), Key,
+        [](const auto &Entry, const ValueKey &K) { return Entry.first < K; });
+    return At != Values.end() && At->first == Key ? At->second : nullptr;
+  }
+
+private:
+  /// Indexes \p Block; false where the read gives nothing at it.
+  bool index(const MedFunc &Func, const MedBlock &Block) {
+    if (!Block.ExceptionalSuccs.empty() || !Block.ExceptionalPreds.empty())
+      return false;
+    if (!Blocks.emplace(Block.Id, &Block).second ||
+        (Block.Id != Func.Blocks.front().Id && Block.Preds.empty()))
+      return false;
+    Entries.insert(Block.StartAddr);
+    for (const auto &Phi : Block.Phis) {
+      if (Phi.ExceptionalEntry ||
+          llvm::any_of(Phi.Args, [&](const auto &Input) {
+            return Input.second.Size != Phi.Output.Size;
+          }))
+        return false;
+      Values.emplace_back(keyOf(Phi.Output), &Phi.Output);
+    }
+    for (const auto &Op : Block.Ops)
+      if (!Op.Output.isConst() && Op.Output.Size)
+        Values.emplace_back(keyOf(Op.Output), &Op.Output);
+    return true;
+  }
+};
+} // namespace
+
 struct MedValueReads {
-  explicit MedValueReads(const MedFunc &Func) : Reads(Func) {}
+  explicit MedValueReads(const MedFunc &Func) : Reads(Func), Body(Func) {}
   const ValueReads Reads;
+  const SourceRegisterBody Body;
 };
 
 std::shared_ptr<const MedValueReads> valueReadsOf(const MedFunc &Func) {
@@ -2007,6 +2073,11 @@ size_t valueReadsBytes(const MedValueReads &Index) {
              Outputs.capacity() * sizeof(ValueKey);
   Bytes += (Reads.Others.size() + Reads.ImplicitReads.size()) *
            (Node + sizeof(ValueKey));
+  const SourceRegisterBody &Body = Index.Body;
+  Bytes += Body.Costs.capacity() * sizeof(size_t) +
+           Body.Blocks.size() * (Node + sizeof(int) + sizeof(void *)) +
+           Body.Entries.size() * (Node + sizeof(va_t)) +
+           Body.Values.capacity() * sizeof(Body.Values.front());
   return Bytes;
 }
 
@@ -2019,34 +2090,21 @@ SourceRegisterParameterReads sourceRegisterParameterReads(
     return Result;
   const auto &TRI = getTargetRegInfo(Arch::X64);
   const auto Layout = TRI.integerArgumentLayout(BinaryFormat::COFF);
-  std::map<int, const MedBlock *> Blocks;
-  std::set<va_t> Entries;
-  std::map<ValueKey, const MedVar *> Values;
+  // The body's indexes, read once with the index where there is one.  Each
+  // block charges its work before it is read, as it is read.
+  std::optional<SourceRegisterBody> OwnBody;
+  const SourceRegisterBody &Body = Index ? Index->Body : OwnBody.emplace(Func);
+  for (size_t B = 0; B < Body.Costs.size(); ++B) {
+    if (Body.Costs[B] > Budget)
+      return Result;
+    Budget -= Body.Costs[B];
+    if (B == Body.FirstRefused)
+      return Result;
+  }
+  const std::map<int, const MedBlock *> &Blocks = Body.Blocks;
+  const std::set<va_t> &Entries = Body.Entries;
   std::map<const MedOp *, const MedCallInfo *> Calls;
   std::map<ValueKey, uint16_t> CallReads;
-  for (const auto &Block : Func.Blocks) {
-    const size_t Cost = 1 + Block.Ops.size() + Block.Phis.size();
-    if (Cost > Budget)
-      return Result;
-    Budget -= Cost;
-    if (!Block.ExceptionalSuccs.empty() || !Block.ExceptionalPreds.empty())
-      return Result;
-    if (!Blocks.emplace(Block.Id, &Block).second ||
-        (Block.Id != Func.Blocks.front().Id && Block.Preds.empty()))
-      return Result;
-    Entries.insert(Block.StartAddr);
-    for (const auto &Phi : Block.Phis) {
-      if (Phi.ExceptionalEntry ||
-          llvm::any_of(Phi.Args, [&](const auto &Input) {
-            return Input.second.Size != Phi.Output.Size;
-          }))
-        return Result;
-      Values.emplace(keyOf(Phi.Output), &Phi.Output);
-    }
-    for (const auto &Op : Block.Ops)
-      if (!Op.Output.isConst() && Op.Output.Size)
-        Values.emplace(keyOf(Op.Output), &Op.Output);
-  }
   for (const auto &Call : Func.CallInfos) {
     const auto Block = Blocks.find(Call.BlockId);
     const MedOp *Op = nullptr;
@@ -2123,10 +2181,10 @@ SourceRegisterParameterReads sourceRegisterParameterReads(
       }
       bool Safe = Seeded, Saved = false;
       const auto Follow = [&](ValueKey Key) {
-        const auto At = Values.find(Key);
-        if (At == Values.end())
+        const MedVar *Defined = Body.value(Key);
+        if (!Defined)
           return false;
-        const MedVar &Value = *At->second;
+        const MedVar &Value = *Defined;
         if (Value.Size <= Prefix)
           return true;
         // Moving an incoming value to another physical register can make it an

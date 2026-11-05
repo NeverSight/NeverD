@@ -91,28 +91,49 @@ struct AbiSpillContext {
 class MedBlockIdIndex {
 public:
   explicit MedBlockIdIndex(const MedFunc &Func) {
+    // Block ids are usually 0..n-1: index those by id directly, and any
+    // others in a map.  Walks look a block up at every step.
+    const size_t Dense = 2 * Func.Blocks.size() + 1;
     for (const MedBlock &Block : Func.Blocks) {
-      if (!First.emplace(Block.Id, &Block).second)
+      const MedBlock *&FirstSlot =
+          slot(FirstById, FirstSparse, Block.Id, Dense);
+      if (FirstSlot)
         Unique = false;
-      Last[Block.Id] = &Block;
+      else
+        FirstSlot = &Block;
+      slot(LastById, LastSparse, Block.Id, Dense) = &Block;
     }
   }
   /// Whether no two blocks share an id.
   bool unique() const { return Unique; }
   /// The first block with \p Id, or null.
   const MedBlock *first(int Id) const {
-    const auto It = First.find(Id);
-    return It == First.end() ? nullptr : It->second;
+    return find(FirstById, FirstSparse, Id);
   }
   /// The last block with \p Id, or null.
-  const MedBlock *last(int Id) const {
-    const auto It = Last.find(Id);
-    return It == Last.end() ? nullptr : It->second;
-  }
+  const MedBlock *last(int Id) const { return find(LastById, LastSparse, Id); }
 
 private:
-  std::map<int, const MedBlock *> First;
-  std::map<int, const MedBlock *> Last;
+  static const MedBlock *&slot(std::vector<const MedBlock *> &ById,
+                               std::map<int, const MedBlock *> &Sparse, int Id,
+                               size_t Dense) {
+    if (Id >= 0 && static_cast<size_t>(Id) < Dense) {
+      if (static_cast<size_t>(Id) >= ById.size())
+        ById.resize(static_cast<size_t>(Id) + 1, nullptr);
+      return ById[static_cast<size_t>(Id)];
+    }
+    return Sparse[Id];
+  }
+  static const MedBlock *find(const std::vector<const MedBlock *> &ById,
+                              const std::map<int, const MedBlock *> &Sparse,
+                              int Id) {
+    if (Id >= 0 && static_cast<size_t>(Id) < ById.size())
+      return ById[static_cast<size_t>(Id)];
+    const auto It = Sparse.find(Id);
+    return It == Sparse.end() ? nullptr : It->second;
+  }
+  std::vector<const MedBlock *> FirstById, LastById;
+  std::map<int, const MedBlock *> FirstSparse, LastSparse;
   bool Unique = true;
 };
 

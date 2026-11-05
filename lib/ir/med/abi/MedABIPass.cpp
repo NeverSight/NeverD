@@ -42,6 +42,7 @@
 #include "llvm/ADT/StringExtras.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <map>
@@ -49,6 +50,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 namespace neverd {
 
@@ -290,7 +292,18 @@ findReachingStackPtr(const MedFunc &Func, const TargetRegInfo &TRI, int BlockId,
     return {};
 
   std::vector<State> Worklist{{BlockId, BeforeIdx}};
-  std::set<State> Visited;
+  // Every state but the first starts at its block's end: one flag per block
+  // for those, and a set for any other.
+  std::vector<char> EndVisited(Func.Blocks.size(), 0);
+  std::set<State> OtherVisited;
+  const auto Position = [&](const MedBlock *Block) -> std::optional<size_t> {
+    const auto At = reinterpret_cast<uintptr_t>(Block);
+    const auto Begin = reinterpret_cast<uintptr_t>(Func.Blocks.data());
+    if (At < Begin || (At - Begin) % sizeof(MedBlock) ||
+        (At - Begin) / sizeof(MedBlock) >= Func.Blocks.size())
+      return std::nullopt;
+    return (At - Begin) / sizeof(MedBlock);
+  };
   std::optional<MedVar> CommonBasis;
   std::optional<int64_t> CommonDelta;
   bool BasisExact = true;
@@ -325,12 +338,18 @@ findReachingStackPtr(const MedFunc &Func, const TargetRegInfo &TRI, int BlockId,
   while (!Worklist.empty()) {
     const State Current = Worklist.back();
     Worklist.pop_back();
-    if (!Visited.insert(Current).second)
-      continue;
-
+    // A state whose block is missing ends the walk the first time it is
+    // met, so looking the block up before marking the state changes nothing.
     const MedBlock *Found = Blocks.first(Current.first);
     if (!Found)
       return {};
+    if (const auto At = Position(Found);
+        At && Current.second == static_cast<int>(Found->Ops.size())) {
+      if (std::exchange(EndVisited[*At], 1))
+        continue;
+    } else if (!OtherVisited.insert(Current).second) {
+      continue;
+    }
     const MedBlock &Block = *Found;
     if (Remaining) {
       for (size_t Work : {size_t{1}, Block.Ops.size(), Block.Phis.size(),
