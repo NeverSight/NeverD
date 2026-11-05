@@ -8452,10 +8452,12 @@ terminators and native exception/control contracts retain their original CFG.
 GEP rendering retains signed index extension and unsigned address-width
 arithmetic for dynamic or non-inbounds offsets. Width-matched unsigned constants
 and removal of identity casts or unit scales shorten those expressions.
-A constant GEP carrying LLVM's existing `inbounds` contract instead retains
-byte-pointer arithmetic, including negative offsets. Zero offsets need no
-arithmetic. This preserves object identity for the C compiler without inferring
-bounds from an ordinary integer address. The contract is the one defined by
+A constant GEP directly rooted at a pointer parameter and carrying LLVM's
+existing `inbounds` contract instead retains byte-pointer arithmetic, including
+negative offsets. Zero offsets need no arithmetic. Named image and frame views
+retain their numeric owner because C projection can name a different subobject.
+This preserves parameter object identity without inferring bounds from an
+ordinary integer address. The contract is the one defined by
 the [LLVM GEP rules](https://llvm.org/docs/LangRef.html#getelementptr-instruction).
 Generic LLVM arithmetic and control builtins do not request target ISA headers.
 Both C routes reject string-literal replacement when loader fixup provenance

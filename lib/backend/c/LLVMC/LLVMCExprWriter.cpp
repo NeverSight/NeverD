@@ -4076,11 +4076,12 @@ std::string LLVMCWriter::gepExpr(const llvm::GEPOperator &GEP) {
     }
   const std::string Carrier = "uint" + std::to_string(Bits) + "_t";
   std::string Base = valueStr(GEP.getPointerOperand());
-  // LLVM's inbounds contract already locates this constant displacement in
-  // the base object. Keep its pointer identity visible to the C compiler;
-  // integerizing it loses alias/value proofs against accesses to that object.
-  // Non-inbounds and dynamic GEPs retain the exact-width arithmetic below.
-  if (GEP.isInBounds() && Variables.empty()) {
+  // LLVM's inbounds contract locates this constant displacement in the
+  // parameter's object. Keep that pointer visible to the C compiler. Named
+  // image/frame views can project another C subobject, so they retain the
+  // numeric owner below, as do dynamic and non-inbounds GEPs.
+  if (GEP.isInBounds() && Variables.empty() &&
+      llvm::isa<llvm::Argument>(GEP.getPointerOperand())) {
     std::string Pointer = "(uint8_t*)(" + Base + ")";
     if (!Offset.isZero()) {
       Pointer += Offset.isNegative() ? " - 0x" : " + 0x";

@@ -1,5 +1,4 @@
-//===- X64StateObjectPointerTests.cpp - Bounded state pointer proofs
-//-------===//
+//===- X64StateObjectPointerTests.cpp - State pointer proofs -------------===//
 //
 // NeverD Decompiler
 //
@@ -187,6 +186,11 @@ TEST_F(StateObjectSourceTest, ConstantInboundsGEPsKeepTheirObject) {
     llvm::LLVMContext Context;
     llvm::SMDiagnostic Diagnostic;
     auto Module = llvm::parseAssemblyString(R"IR(
+@image_view = external global [32 x i8]
+define ptr @named_view() {
+  %field = getelementptr inbounds [32 x i8], ptr @image_view, i64 0, i64 8
+  ret ptr %field
+}
 define void @positive(ptr %base, i64 %value) {
   %field = getelementptr inbounds [4 x i64], ptr %base, i64 0, i64 2
   store i64 %value, ptr %field, align 1
@@ -201,12 +205,12 @@ define ptr @zero(ptr %base) {
   %field = getelementptr inbounds i8, ptr %base, i64 0
   ret ptr %field
 }
-define ptr @dynamic(ptr %base, i8 %index) {
-  %field = getelementptr inbounds i8, ptr %base, i8 %index
+define ptr @dynamic(ptr %dynamic_base, i8 %index) {
+  %field = getelementptr inbounds i8, ptr %dynamic_base, i8 %index
   ret ptr %field
 }
-define ptr @wrapping(ptr %base) {
-  %field = getelementptr i8, ptr %base, i64 -16
+define ptr @wrapping(ptr %wrapping_base) {
+  %field = getelementptr i8, ptr %wrapping_base, i64 -16
   ret ptr %field
 }
 )IR",
@@ -216,12 +220,16 @@ define ptr @wrapping(ptr %base) {
     neverd::CEmitterOptions Options;
     Options.PreserveLLVMFunctionTypes = true;
     Options.UseUnalignedPointers = false;
-    std::string Source;
+    // The test environment supplies this external storage declaration.
+    std::string Source =
+        "#include <stdint.h>\nextern uint8_t image_view[32];\n";
     llvm::raw_string_ostream OS(Source);
     ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
-    // Dynamic and wrapping expressions still have their numeric-width owner.
-    EXPECT_NE(Source.find("(uint" + std::to_string(Bits) + "_t)(uintptr_t)"),
-              std::string::npos);
+    // Named storage, dynamic and wrapping addresses retain their numeric owner.
+    for (const char *Base : {"image_view", "dynamic_base", "wrapping_base"})
+      EXPECT_NE(Source.find("(uint" + std::to_string(Bits) + "_t)(uintptr_t)(" +
+                            Base + ")"),
+                std::string::npos);
     Source += R"C(
 int proof_object(uint64_t a,uint64_t b) {
     uint64_t object[4]={11,22,33,44};
