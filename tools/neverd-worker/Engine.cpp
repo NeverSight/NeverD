@@ -1021,10 +1021,20 @@ void Engine::invalidate() {
   functionOrderKey_.clear();
   functionOrder_.clear();
 }
+void Engine::unindexNamedView(NamedViewPosition position) {
+  if (const auto key = namedViewsByKey_.find((*position)->key);
+      key != namedViewsByKey_.end() && key->second == position)
+    namedViewsByKey_.erase(key);
+  if (const auto source = namedViewsBySource_.find((*position)->sourceKey);
+      source != namedViewsBySource_.end() && source->second == position)
+    namedViewsBySource_.erase(source);
+}
 void Engine::forgetNamedViews() {
   for (auto &document : namedViews_)
     releases_.retire(std::move(document));
   namedViews_.clear();
+  namedViewsByKey_.clear();
+  namedViewsBySource_.clear();
   namedViewBytes_ = 0;
   encodedPageBytes_ = 0;
 }
@@ -1176,23 +1186,30 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
            optionText;
   };
   const auto lookupKey = cacheKey();
-  for (auto it = namedViews_.begin(); it != namedViews_.end(); ++it)
-    if ((*it)->key == lookupKey) {
-      namedViews_.splice(namedViews_.begin(), namedViews_, it);
-      return namedViews_.front();
-    }
   const auto sourceKey = hexAddress(address) + ":" + representation + ":" +
                          std::to_string(listing().generation()) + ":" +
                          optionText;
+  if (const auto cached = namedViewsByKey_.find(lookupKey);
+      cached != namedViewsByKey_.end()) {
+    namedViews_.splice(namedViews_.begin(), namedViews_, cached->second);
+    return namedViews_.front();
+  }
+  std::shared_ptr<const NamedView> reused;
+  if (const auto cached = namedViewsBySource_.find(sourceKey);
+      cached != namedViewsBySource_.end() &&
+      (!(*cached->second)->original.empty() ||
+       !(*cached->second)->enginePages.empty()))
+    reused = *cached->second;
   Json original;
-  for (const auto &cached : namedViews_)
-    if (cached->sourceKey == sourceKey && !cached->original.empty()) {
-      original = Json::parse(cached->original);
-      break;
-    }
+  if (reused && !reused->original.empty())
+    original = Json::parse(reused->original);
+  // The engine's pages of the same source build the document again as they
+  // built it the first time.
+  const std::vector<std::string> *replay =
+      reused && reused->original.empty() ? &reused->enginePages : nullptr;
   // A hit answers from its finished document without pretending the mutable
   // Session still holds this function. Graph/IR requests prepare it normally.
-  if (original.is_null() && !recovery)
+  if (original.is_null() && !replay && !recovery)
     prepareFunction(address, representation);
   // Whole-program VM preparation can analyze(), invalidating the listing and
   // advancing the revision. Rebuild aliases and stamp the prepared context;
@@ -1241,29 +1258,43 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
               {"source_available", available},
               {"recovery_report", std::move(evidence)}};
     }
-    auto backendRepresentation = representation;
+    auto backendRepresentation =
+        replay ? reused->engineRepresentation : representation;
+    std::vector<std::string> enginePages;
     for (std::size_t next = 0;
          full.is_null() || !full.value("complete", false);) {
-      auto page = backendJson(
-          sourceView && extended && !engineOptions.empty()
-              ? extended(session_, address, backendRepresentation.c_str(), next,
-                         ::neverd::limits::worker::kEngineEnginePageLines,
-                         optionText.c_str())
-              : view(session_, address, backendRepresentation.c_str(), next,
-                     ::neverd::limits::worker::kEngineEnginePageLines),
-          true);
+      std::string text;
+      if (replay) {
+        if (enginePages.size() >= replay->size())
+          return nullptr;
+        text = (*replay)[enginePages.size()];
+      } else
+        text = backendText(
+            sourceView && extended && !engineOptions.empty()
+                ? extended(session_, address, backendRepresentation.c_str(),
+                           next,
+                           ::neverd::limits::worker::kEngineEnginePageLines,
+                           optionText.c_str())
+                : view(session_, address, backendRepresentation.c_str(), next,
+                       ::neverd::limits::worker::kEngineEnginePageLines),
+            true);
+      auto page = parsedBackendText(text);
       // Older page APIs offer HighC but not the automatic source dialect.
       // Keep the Pseudocode action useful, with the actual dialect reported.
-      if (next == 0 && options.empty() && representation == "source" &&
-          page.is_object() && !page.contains("text") &&
+      if (!replay && next == 0 && options.empty() &&
+          representation == "source" && page.is_object() &&
+          !page.contains("text") &&
           page.value("mapping_status", std::string()) ==
               "unsupported_representation") {
         backendRepresentation = "c";
-        page =
-            backendJson(view(session_, address, "c", next,
+        text =
+            backendText(view(session_, address, "c", next,
                              ::neverd::limits::worker::kEngineEnginePageLines),
                         true);
+        page = parsedBackendText(text);
       }
+      if (sourceView)
+        enginePages.push_back(std::move(text));
       if (!page.is_object() || !page.contains("text") ||
           !page["text"].is_string() || !page.contains("rows") ||
           !page["rows"].is_array() ||
@@ -1302,7 +1333,10 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     full["source_options"] = options;
     if (representation == "source" && backendRepresentation == "c")
       full["dialect"] = "c";
-    if (sourceView)
+    if (sourceView && !enginePages.empty()) {
+      document->enginePages = std::move(enginePages);
+      document->engineRepresentation = backendRepresentation;
+    } else if (sourceView)
       document->original = full.dump();
     for (const auto &reason : staleVariableTypes)
       full["stale_variable_types"].push_back(reason);
@@ -1430,7 +1464,11 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     const auto jsonBytes = namedViewJsonBytes(document->value);
     auto overhead =
         sizeof(NamedView) + 8 * sizeof(void *) + document->key.capacity() + 1 +
-        document->sourceKey.capacity() + 1 + document->original.capacity() + 1;
+        document->sourceKey.capacity() + 1 + document->original.capacity() + 1 +
+        document->engineRepresentation.capacity() + 1 +
+        document->enginePages.capacity() * sizeof(std::string);
+    for (const auto &page : document->enginePages)
+      overhead += page.capacity() + 1;
     for (const auto *bounds :
          {&document->rowBounds, &document->referenceBounds,
           &document->sourceNameBounds, &document->codeNameBounds}) {
@@ -1451,14 +1489,14 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
                 sizeof(std::size_t)) {
       document->bytes = jsonBytes + overhead +
                         document->lines.capacity() * sizeof(std::size_t);
-      for (auto it = namedViews_.begin(); it != namedViews_.end();) {
-        if ((*it)->sourceKey == sourceKey) {
-          namedViewBytes_ -= (*it)->bytes;
-          encodedPageBytes_ -= (*it)->pageBytes;
-          releases_.retire(std::move(*it));
-          it = namedViews_.erase(it);
-        } else
-          ++it;
+      if (const auto same = namedViewsBySource_.find(sourceKey);
+          same != namedViewsBySource_.end()) {
+        const auto it = same->second;
+        unindexNamedView(it);
+        namedViewBytes_ -= (*it)->bytes;
+        encodedPageBytes_ -= (*it)->pageBytes;
+        releases_.retire(std::move(*it));
+        namedViews_.erase(it);
       }
       while (!namedViews_.empty() &&
              (namedViews_.size() >=
@@ -1466,6 +1504,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
               document->bytes >
                   ::neverd::limits::worker::kEngineMaxNamedViewCacheBytes -
                       namedViewBytes_)) {
+        unindexNamedView(std::prev(namedViews_.end()));
         namedViewBytes_ -= namedViews_.back()->bytes;
         encodedPageBytes_ -= namedViews_.back()->pageBytes;
         releases_.retire(std::move(namedViews_.back()));
@@ -1478,6 +1517,8 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
               namedViewBytes_ - document->bytes)
         forgetEncodedPages();
       namedViews_.push_front(document);
+      namedViewsByKey_[document->key] = namedViews_.begin();
+      namedViewsBySource_[sourceKey] = namedViews_.begin();
       namedViewBytes_ += document->bytes;
     }
   }
@@ -1930,7 +1971,10 @@ Json Engine::backgroundState() const {
   return state;
 }
 Json Engine::backendJson(const char *owned, bool checkError) const {
-  const auto text = ownedString(owned);
+  return parsedBackendText(backendText(owned, checkError));
+}
+std::string Engine::backendText(const char *owned, bool checkError) const {
+  auto text = ownedString(owned);
   if (checkError) {
     auto diagnostic = error();
     if (!diagnostic.empty())
@@ -1942,6 +1986,9 @@ Json Engine::backendJson(const char *owned, bool checkError) const {
   if (text.empty())
     throw Error("engine_error",
                 error().empty() ? "Engine returned no result" : error());
+  return text;
+}
+Json Engine::parsedBackendText(const std::string &text) const {
   try {
     auto value = transport::parseBackendJson(text);
     canonicalizeAddresses(value);

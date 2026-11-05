@@ -11,7 +11,9 @@
 #include <list>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -251,7 +253,12 @@ private:
     std::string sourceKey;
     // Retain the exact undecorated document in wire form. A second parsed
     // row tree can exceed the cache budget before the displayed one does.
+    // An engine document keeps the pages the engine wrote and the
+    // representation they were asked in, from which namedView builds it
+    // again as it did; a recovered one keeps its whole text.
     std::string original;
+    std::vector<std::string> enginePages;
+    std::string engineRepresentation;
     Json value;
     std::vector<std::size_t> lines;
     // Decide once after decoration. Older engines may return unsorted rows
@@ -277,6 +284,16 @@ private:
   DeferredRelease releases_;
   /// Newest first, bounded by retained bytes as well as document count.
   std::list<std::shared_ptr<const NamedView>> namedViews_;
+  /// Where namedViews_ holds the document of each key, and of each source
+  /// key, which no two of them share.  A document's key is read after its
+  /// function's preparation, its source key before; preparing a whole
+  /// program can change the listing between them.
+  using NamedViewPosition =
+      std::list<std::shared_ptr<const NamedView>>::iterator;
+  std::unordered_map<std::string, NamedViewPosition> namedViewsByKey_;
+  std::unordered_map<std::string, NamedViewPosition> namedViewsBySource_;
+  /// Takes \p position's document out of both indexes.
+  void unindexNamedView(NamedViewPosition position);
   std::size_t namedViewBytes_ = 0, encodedPageBytes_ = 0;
   std::uint64_t namedViewsRevision_ = 0, namedViewsListingGeneration_ = 0;
   void forgetNamedViews();
@@ -388,5 +405,10 @@ private:
   void changedAnalysisSections();
   std::string error() const;
   Json backendJson(const char *owned, bool checkError = false) const;
+  /// The text of an engine answer \p owned, checked as backendJson checks
+  /// it, before it is parsed.
+  std::string backendText(const char *owned, bool checkError) const;
+  /// \p text, an engine answer, as backendJson gives it.
+  Json parsedBackendText(const std::string &text) const;
 };
 } // namespace neverd::worker
