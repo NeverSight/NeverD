@@ -13,6 +13,7 @@
 namespace neverd::registration_state {
 
 bool RegistrationStateSolver::applySEHContinueFilters(size_t I, Domain &State,
+                                                      const LowOp &Raise,
                                                       const BlockFacts &Facts) {
   const auto SP = State.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride]
                       .CallbackAddress;
@@ -31,7 +32,7 @@ bool RegistrationStateSolver::applySEHContinueFilters(size_t I, Domain &State,
     FrameState Frame = State.Frame;
     Frame.store(*Chain.TryLevelOffset, 4,
                 FrameValue::constant(uint32_t(Level)));
-    if (!runSEHFilterSearch(Frame, nullptr, Continued,
+    if (!runSEHFilterSearch(Raise, Frame, nullptr, Continued,
                             /*RequireResume=*/false, &Selected, &Jump))
       return false;
   }

@@ -2366,6 +2366,130 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
     bool Bounds = false;
     bool PreservesDeclaration = false;
   };
+  // Whether the recovery of a kept body left its declaration as it was.
+  const auto preservesDeclaration = [](const MedFunc &Body,
+                                       const MedFunc &KeptBody) {
+    return Body.Params == KeptBody.Params && Body.CC == KeptBody.CC &&
+           Body.IntegerArgumentRegisters == KeptBody.IntegerArgumentRegisters &&
+           Body.ReturnType == KeptBody.ReturnType &&
+           Body.TypedParams.size() == KeptBody.TypedParams.size() &&
+           llvm::all_of(llvm::zip(Body.TypedParams, KeptBody.TypedParams),
+                        [](const auto &Pair) {
+                          return std::get<0>(Pair).Type ==
+                                 std::get<1>(Pair).Type;
+                        });
+  };
+  // The recoveries of kept bodies that hold no recovery these summaries read
+  // the same as, computed together on the pipeline workers under the
+  // summaries as they stand now and kept with their bodies, as the forwarder
+  // probes are.  The loop below takes one only where the summaries then read
+  // as it read them, as it takes a recovery an earlier run kept, and recovers
+  // the body again where they do not.
+  if (Remembers && workerThreadCount() > 1) {
+    std::vector<size_t> Missing;
+    std::vector<uint64_t> Weights;
+    for (size_t I = 0; I < Recovered; ++I) {
+      const MedFunc &KeptBody = *OmittedCallees[I];
+      const OmittedCalleeMemo::Conversion *Holder =
+          KeptBodies[Result.MedFuncs.size() + I];
+      if (KeptBody.ConsumesX87Argument || !Holder ||
+          llvm::any_of(Holder->Recoveries,
+                       [&](const OmittedCalleeMemo::Recovery &Kept) {
+                         return FirstSummaries.holds(Kept.Reads);
+                       }))
+        continue;
+      Missing.push_back(I);
+      uint64_t Weight = 1;
+      for (const MedBlock &Block : KeptBody.Blocks)
+        Weight += Block.Ops.size();
+      Weights.push_back(Weight);
+    }
+    if (Missing.size() >=
+        limits::pipeline::kPipelineCallAbiMinSpeculativeProbes) {
+      std::vector<std::optional<OmittedCalleeMemo::Recovery>> Speculative(
+          Missing.size());
+      parallelForEachWeighted(
+          Weights,
+          [&](auto Claim, size_t N) {
+            // A recovery writes the summaries at its body's entry: each
+            // worker recovers over its own copies of those, restored after
+            // each recovery.
+            std::map<va_t, int> RegArity = CalleeRegArity;
+            std::map<va_t, int> TotalArity = CalleeTotalArity;
+            std::map<va_t, bool> IsVariadic = CalleeIsVariadic;
+            const SummaryView Local{AllFuncNames,
+                                    RegArity,
+                                    TotalArity,
+                                    CalleeFPArity,
+                                    CalleeFPReturnSize,
+                                    CalleeFPRegs,
+                                    CalleeFPScalarBytes,
+                                    CalleeHasSret,
+                                    IsVariadic,
+                                    CalleeConsumesVaList,
+                                    CalleeIntRegs,
+                                    VectorArgumentCallees,
+                                    Result.CallPrototypeArguments};
+            // The index reads relocations on its first query, for one
+            // thread.
+            const RelocationSymbolIndex LocalRelocations(Img);
+            const auto Restore = [](auto &Map, va_t Key, const auto &Was) {
+              if (Was)
+                Map[Key] = *Was;
+              else
+                Map.erase(Key);
+            };
+            for (size_t W; (W = Claim()) < N;) {
+              const MedFunc &KeptBody = *OmittedCallees[Missing[W]];
+              const va_t Entry = KeptBody.Entry;
+              const auto Reg = valueAt(RegArity, Entry);
+              const auto Total = valueAt(TotalArity, Entry);
+              const auto Variadic = valueAt(IsVariadic, Entry);
+              try {
+                // The recovery writes summaries at the entry: read them
+                // before it runs.
+                OmittedCalleeMemo::ProbeRead EntryRead = Local.read(Entry);
+                std::vector<va_t> Keys;
+                MedFunc Body = KeptBody;
+                recoverCallAbi(Body, Img.Arch, AllFuncNames, &Img, &RegArity,
+                               &TotalArity, &CalleeFPArity, &CalleeFPReturnSize,
+                               &CalleeFPRegs, &CalleeHasSret, &IsVariadic,
+                               &CalleeConsumesVaList, &FrameLocalLeafCallees,
+                               &CalleeIntRegs, &VectorArgumentCallees,
+                               &PointerCallees, &Result.CallPrototypeArguments,
+                               &LocalRelocations, &Keys, &CalleeFPScalarBytes);
+                OmittedCalleeMemo::Recovery Kept;
+                Kept.Reads = Local.reads(std::move(EntryRead), std::move(Keys));
+                Kept.EntryRegArity = valueAt(RegArity, Entry);
+                Kept.EntryTotalArity = valueAt(TotalArity, Entry);
+                Kept.EntryIsVariadic = valueAt(IsVariadic, Entry);
+                Kept.Parameters = Body.Params.size();
+                Kept.IsVariadic = Body.IsVariadic;
+                Kept.SourceParametersBound = Body.SourceParametersBound;
+                Kept.PreservesDeclaration =
+                    preservesDeclaration(Body, KeptBody);
+                if (Regparm) {
+                  std::tie(Kept.RegisterArity, Kept.TotalArity) =
+                      secondPassArities(Body);
+                  Kept.IntegerArgumentRegisters = Body.IntegerArgumentRegisters;
+                }
+                Speculative[W] = std::move(Kept);
+              } catch (...) {
+                // The loop recovers the body in its turn and meets whatever
+                // this did.
+              }
+              Restore(RegArity, Entry, Reg);
+              Restore(TotalArity, Entry, Total);
+              Restore(IsVariadic, Entry, Variadic);
+            }
+          },
+          /*MinWorkItems=*/2);
+      for (size_t W = 0; W < Missing.size(); ++W)
+        if (Speculative[W])
+          Memo->keepRecovery(*KeptBodies[Result.MedFuncs.size() + Missing[W]],
+                             std::move(*Speculative[W]));
+    }
+  }
   std::vector<OmittedRecovery> Omitted(Recovered);
   for (size_t I = 0; I < Recovered; ++I) {
     const MedFunc &KeptBody = *OmittedCallees[I];
@@ -2407,15 +2531,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
     recover(Body, Callee.Holder ? &Keys : nullptr);
     Callee.Parameters = Body.Params.size();
     Callee.Bounds = !Body.IsVariadic && !Body.SourceParametersBound;
-    Callee.PreservesDeclaration =
-        Body.Params == KeptBody.Params && Body.CC == KeptBody.CC &&
-        Body.IntegerArgumentRegisters == KeptBody.IntegerArgumentRegisters &&
-        Body.ReturnType == KeptBody.ReturnType &&
-        Body.TypedParams.size() == KeptBody.TypedParams.size() &&
-        llvm::all_of(llvm::zip(Body.TypedParams, KeptBody.TypedParams),
-                     [](const auto &Pair) {
-                       return std::get<0>(Pair).Type == std::get<1>(Pair).Type;
-                     });
+    Callee.PreservesDeclaration = preservesDeclaration(Body, KeptBody);
     if (!Callee.Holder)
       continue;
     OmittedCalleeMemo::Recovery Kept;

@@ -13,6 +13,8 @@
 #include "neverd/ir/RegistrationState.h"
 #include "neverd/lift/X86/X86Regs.h"
 
+#include <optional>
+
 using namespace neverd;
 using namespace neverd::registration_test;
 
@@ -182,4 +184,73 @@ TEST(RegistrationSEHException, EndedAndReenteredFiltersRetainOnlyPointerTaint) {
   State.enterCallback(0x1800);
   EXPECT_FALSE(State.SEHFilterEntry);
   EXPECT_FALSE(State.sehExceptionLoad(*Record->SEHException, 4));
+}
+
+TEST(RegistrationSEHException, RaisedCodeExpiresWithItsFilterActivation) {
+  using namespace neverd::registration_state;
+  FrameState State;
+  State.enterSEHFilter(0x1800, -20, SEHExceptionOrigin{0x1850, 9, 0xe0420021});
+  const auto Pointers = State.load(-20, 4);
+  ASSERT_TRUE(Pointers.SEHException);
+  const auto Record = State.sehExceptionLoad(*Pointers.SEHException, 4);
+  ASSERT_TRUE(Record && Record->SEHException);
+  EXPECT_EQ(State.sehExceptionLoad(*Record->SEHException, 4),
+            FrameValue::constant(0xe0420021));
+  auto Flags = *Record->SEHException;
+  Flags.Offset = 4;
+  const auto UnknownFlags = State.sehExceptionLoad(Flags, 4);
+  ASSERT_TRUE(UnknownFlags);
+  EXPECT_TRUE(UnknownFlags->MayBeFrame);
+  EXPECT_FALSE(UnknownFlags->Constant);
+  State.store(-28, 4, *Record);
+  State.enterSEHFilter(0x1800, -20, SEHExceptionOrigin{0x1850, 9, 0xe0420022});
+  EXPECT_FALSE(State.load(-28, 4).SEHException);
+  EXPECT_TRUE(State.load(-28, 4).MayBeFrame);
+  const auto Current =
+      State.sehExceptionLoad(*State.load(-20, 4).SEHException, 4);
+  ASSERT_TRUE(Current && Current->SEHException);
+  EXPECT_EQ(State.sehExceptionLoad(*Current->SEHException, 4),
+            FrameValue::constant(0xe0420022));
+  State.leaveCallback();
+  EXPECT_FALSE(State.SEHOrigin);
+  EXPECT_FALSE(State.sehExceptionLoad(*Current->SEHException, 4));
+  State.enterSEHFilter(0x1800, -20);
+  EXPECT_FALSE(State.SEHOrigin);
+  const auto Unbound =
+      State.sehExceptionLoad(*State.load(-20, 4).SEHException, 4);
+  ASSERT_TRUE(Unbound && Unbound->SEHException);
+  EXPECT_FALSE(State.sehExceptionLoad(*Unbound->SEHException, 4)->Constant);
+}
+
+TEST(RegistrationSEHException, MergedSearchesCannotReuseAnotherOrigin) {
+  using namespace neverd::registration_state;
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    FrameState Left, Right;
+    const SEHExceptionOrigin Origin{0x1850, 9, 0xe0420021};
+    auto Other = Origin;
+    if (Mutation == 1)
+      Other.Address += 6;
+    if (Mutation == 2)
+      ++Other.OpSeq;
+    if (Mutation == 3)
+      ++Other.Code;
+    Left.enterSEHFilter(0x1800, -20, Origin);
+    Right.enterSEHFilter(
+        0x1800, -20, Mutation == 4 ? std::nullopt : std::make_optional(Other));
+    EXPECT_EQ(Left == Right, Mutation == 0);
+    const auto Snapshot = Left;
+    EXPECT_EQ(Left.snapshotHash(), Snapshot.snapshotHash());
+    const auto Record =
+        Left.sehExceptionLoad(*Left.load(-20, 4).SEHException, 4);
+    ASSERT_TRUE(Record && Record->SEHException);
+    EXPECT_EQ(Left.merge(Right), Mutation != 0);
+    const auto Code = Left.sehExceptionLoad(*Record->SEHException, 4);
+    ASSERT_TRUE(Code);
+    EXPECT_EQ(Code->Constant.has_value(), Mutation == 0);
+    EXPECT_EQ(Code->MayBeFrame, Mutation != 0);
+    // A second fixed-point visit cannot recover a fact lost at the join.
+    EXPECT_FALSE(Left.merge(Snapshot));
+    EXPECT_EQ(Left.sehExceptionLoad(*Record->SEHException, 4), Code);
+  }
 }

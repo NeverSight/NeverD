@@ -152,6 +152,10 @@ bool FrameState::merge(const FrameState &Other) {
     SEHFilterEntry.reset();
     Changed = true;
   }
+  if (SEHOrigin != Other.SEHOrigin && SEHOrigin) {
+    SEHOrigin.reset();
+    Changed = true;
+  }
   return Changed;
 }
 

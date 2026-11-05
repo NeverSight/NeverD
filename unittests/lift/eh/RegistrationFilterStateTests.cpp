@@ -14,11 +14,94 @@
 
 #include "llvm/ADT/STLExtras.h"
 
+#include <cstdint>
+#include <initializer_list>
 #include <utility>
+#include <vector>
 
 using namespace neverd;
 using namespace neverd::registration_filter_test;
 using namespace neverd::registration_test;
+
+TEST(RegistrationFilterState, SearchUsesOnlyItsCurrentRaisedExceptionCode) {
+  for (unsigned Protocol = 0; Protocol != 3; ++Protocol)
+    for (uint32_t Code : {0u, 0xe0420021u, UINT32_MAX})
+      for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+        SCOPED_TRACE(Protocol);
+        SCOPED_TRACE(Code);
+        SCOPED_TRACE(Mutation);
+        auto F = filterFrame(Variant::UnknownDisposition, Protocol);
+        auto &Finally = F.Blocks[9];
+        // The test runtime authenticates this call; its code still belongs to
+        // this invocation's initialized argument bytes, not to the IAT slot.
+        Finally.Ops[2].Inputs[1] =
+            Mutation == 2 ? NdVar::reg(x86reg::RDI, 4)
+                          : NdVar::cst(Code ^ (Mutation == 1 ? 1u : 0u),
+                                       Mutation == 3 ? 2 : 4);
+        if (Mutation == 5) {
+          Finally.Ops[9].Addr = 0x1851;
+          Finally.InstructionBoundaries[1].Address = 0x1851;
+          Finally.InstructionBoundaries[1].Size = 5;
+        }
+        // The unmatched arm cannot prove a disposition. A complete search
+        // must exclude it from the raised code, while generic fault roots
+        // keep both arms and do not acquire that code.
+        F.Blocks[15].Ops[0].Inputs[0] = NdVar::reg(x86reg::RDI, 4);
+        auto &Filter = F.Blocks[7];
+        Filter.Ops.clear();
+        Filter.InstructionBoundaries.clear();
+        auto Add = [&](va_t Address, uint16_t Size, NdOp Opcode, NdVar Output,
+                       std::initializer_list<NdVar> Inputs) {
+          const auto First = Filter.Ops.size();
+          emitOp(Filter, Address, Opcode, Output, Inputs);
+          Filter.InstructionBoundaries.push_back({Address, Size, First, 1});
+        };
+        Add(0x1800, 3, NdOp::INT_ADD, NdVar::reg(x86reg::RAX, 4),
+            {NdVar::reg(x86reg::RBP, 4), NdVar::cst(uint32_t(-20), 4)});
+        Add(0x1803, 2, NdOp::LOAD, NdVar::reg(x86reg::RAX, 4),
+            {NdVar::reg(x86reg::RAX, 4)});
+        Add(0x1805, 2, NdOp::LOAD, NdVar::reg(x86reg::RAX, 4),
+            {NdVar::reg(x86reg::RAX, 4)});
+        Add(0x1807, 3, NdOp::INT_ADD, NdVar::reg(x86reg::RAX, 4),
+            {NdVar::reg(x86reg::RAX, 4), NdVar::cst(Mutation == 4 ? 4 : 0, 4)});
+        if (Mutation == 6)
+          Add(0x180a, 2, NdOp::STORE, {},
+              {NdVar::reg(x86reg::RAX, 4), NdVar::cst(Code, 4)});
+        else
+          Add(0x180a, 2, NdOp::LOAD, NdVar::reg(x86reg::RAX, 4),
+              {NdVar::reg(x86reg::RAX, 4)});
+        Add(0x180c, 5, NdOp::INT_NOTEQUAL, NdVar::reg(x86reg::ZF, 1),
+            {NdVar::reg(x86reg::RAX, 4), NdVar::cst(Code, 4)});
+        Add(0x1811, 2, NdOp::COND_BR, {},
+            {NdVar::cst(0x1940, 8), NdVar::reg(x86reg::ZF, 1)});
+        Filter.EndAddr = 0x1813;
+        auto &Branch = Filter.InstructionBoundaries.back();
+        Branch.Control = LowInstructionControl::Branch;
+        Branch.ControlFlags = LowInstructionControlFlag::Branch |
+                              LowInstructionControlFlag::Conditional;
+        LowBlock Fallthrough;
+        Fallthrough.Id = F.Blocks.size();
+        Fallthrough.StartAddr = Filter.EndAddr;
+        Fallthrough.EndAddr = Filter.EndAddr + 5;
+        Fallthrough.Succs = {11};
+        emitOp(Fallthrough, Fallthrough.StartAddr, NdOp::BRANCH, {},
+               {NdVar::cst(0x1900, 8)});
+        Fallthrough.InstructionBoundaries = {{Fallthrough.StartAddr, 5, 0, 1}};
+        Fallthrough.InstructionBoundaries.back().Control =
+            LowInstructionControl::Branch;
+        Fallthrough.InstructionBoundaries.back().ControlFlags =
+            LowInstructionControlFlag::Branch;
+        Filter.Succs = {Fallthrough.Id, 12};
+        F.Blocks.push_back(std::move(Fallthrough));
+        const auto Result = analyze(std::move(F), Variant::UnknownDisposition);
+        EXPECT_EQ(Result.Complete, Mutation == 0);
+        EXPECT_EQ(Result.SEHJumpResumptionsComplete, Mutation == 0);
+        EXPECT_EQ(Result.SEHJumpResumptions.empty(), Mutation != 0);
+        if (Mutation == 0 && !Result.SEHJumpResumptions.empty())
+          EXPECT_EQ(Result.SEHJumpResumptions.front().ResumedLevels,
+                    (std::vector<int32_t>{Protocol ? -2 : -1}));
+      }
+}
 
 TEST(RegistrationFilterState, CallbackActivatedScopeHasIndependentRoots) {
   const auto Result =
