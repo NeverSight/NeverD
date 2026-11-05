@@ -1022,6 +1022,8 @@ void Engine::invalidate() {
   functionOrder_.clear();
 }
 void Engine::forgetNamedViews() {
+  for (auto &document : namedViews_)
+    releases_.retire(std::move(document));
   namedViews_.clear();
   namedViewBytes_ = 0;
   encodedPageBytes_ = 0;
@@ -1453,6 +1455,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
         if ((*it)->sourceKey == sourceKey) {
           namedViewBytes_ -= (*it)->bytes;
           encodedPageBytes_ -= (*it)->pageBytes;
+          releases_.retire(std::move(*it));
           it = namedViews_.erase(it);
         } else
           ++it;
@@ -1465,6 +1468,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
                       namedViewBytes_)) {
         namedViewBytes_ -= namedViews_.back()->bytes;
         encodedPageBytes_ -= namedViews_.back()->pageBytes;
+        releases_.retire(std::move(namedViews_.back()));
         namedViews_.pop_back();
       }
       // Keep completed documents ahead of optional encoded pages. Loading a

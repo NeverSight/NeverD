@@ -1,4 +1,5 @@
 #pragma once
+#include "DeferredRelease.h"
 #include "Protocol.h"
 #include "ResourceLimits.h"
 
@@ -271,6 +272,9 @@ private:
     mutable std::list<EncodedPage> pages;
     mutable std::size_t pageBytes = 0;
   };
+  /// Destroys the documents the cache lets go, after the request that let
+  /// them go has answered.
+  DeferredRelease releases_;
   /// Newest first, bounded by retained bytes as well as document count.
   std::list<std::shared_ptr<const NamedView>> namedViews_;
   std::size_t namedViewBytes_ = 0, encodedPageBytes_ = 0;
