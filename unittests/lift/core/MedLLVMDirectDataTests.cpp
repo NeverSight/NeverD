@@ -13,15 +13,20 @@
 #include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/backend/LLVMOriginalImageStorage.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/debug/DebugContext.h"
 #include "neverd/ir/TargetRegInfo.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 using namespace neverd;
 
@@ -243,6 +248,181 @@ TEST(MedLLVMDirectData, ARequiredPointerStillRejectsAnUnresolvedTarget) {
     finish(F, Image);
     llvm::LLVMContext Context;
     EXPECT_EQ(emit(Image, {F}, Context), nullptr);
+  }
+}
+
+namespace {
+
+class LinkedDataDebug : public NullDebugContext {
+public:
+  std::pair<va_t, va_t> Region{FlagVA, FlagVA + 32};
+  std::optional<std::pair<va_t, va_t>>
+  readOnlyDataRegion(va_t Address) const override {
+    return Address >= Region.first && Address < Region.second
+               ? std::optional(Region)
+               : std::nullopt;
+  }
+};
+
+BinaryImage mixedDataInCode(Arch A, BinaryFormat Format) {
+  BinaryImage Image = image(A, Format, false);
+  auto &Data = Image.Segments.back();
+  Data.Size = Data.FileSz = limits::kMaxSingleGlobalEmbedLen + 0x1000;
+  Data.Data.resize(Data.Size);
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Image.DataInCode.insert(FlagVA);
+  Image.DataPtrRelocSlots.insert(FlagVA + 8);
+  for (unsigned I = 0; I < Image.getPointerSize(); ++I)
+    Data.Data[FlagVA + 8 - DataVA + I] =
+        static_cast<uint8_t>((FlagVA + 24) >> (I * 8));
+  return Image;
+}
+
+std::unique_ptr<llvm::Module> emitLinkedData(const BinaryImage &Image,
+                                             llvm::LLVMContext &Context,
+                                             const DebugContext *Debug,
+                                             bool Reverse = false) {
+  MedFunc Base = function(Image), Interior = function(Image, CodeVA + 0x100);
+  auto ReturnAddress = [&](MedFunc &Function, va_t Address) {
+    MedOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Addr = Function.Entry;
+    Copy.Output.Kind = MedVar::Reg;
+    Copy.Output.TheArch = Image.Arch;
+    Copy.Output.RegOff = getTargetRegInfo(Image.Arch).IntReturnReg;
+    Copy.Output.Size = Image.getPointerSize();
+    Copy.Output.Id = 1;
+    Copy.Output.SSAVer = 1;
+    Copy.addInput(address(Image, Address));
+    Function.Blocks.front().Ops.push_back(Copy);
+    finish(Function, Image, Address);
+    Function.Blocks.front().Ops.back().Inputs[0] = Copy.Output;
+  };
+  ReturnAddress(Base, FlagVA);
+  ReturnAddress(Interior, FlagVA + 4);
+  std::vector<MedFunc> Functions{Base, Interior};
+  if (Reverse)
+    std::reverse(Functions.begin(), Functions.end());
+  MedLLVMEmitter Emitter;
+  Emitter.setDebugContext(Debug);
+  return Emitter.emit(Functions, Context, "linked-data", Image.Arch, {}, &Image,
+                      Image.Format);
+}
+
+} // namespace
+
+TEST(MedLLVMDirectData, LinkedDataRegionMirrorsMixedRecordsAndInteriorAliases) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (bool Reverse : {false, true}) {
+        for (bool Relocated : {false, true}) {
+          SCOPED_TRACE(static_cast<unsigned>(A));
+          SCOPED_TRACE(static_cast<unsigned>(Format));
+          SCOPED_TRACE(Reverse);
+          SCOPED_TRACE(Relocated);
+          BinaryImage Image = mixedDataInCode(A, Format);
+          if (!Relocated)
+            Image.DataPtrRelocSlots.clear();
+          LinkedDataDebug Debug;
+          llvm::LLVMContext Context;
+          auto Module = emitLinkedData(Image, Context, &Debug, Reverse);
+          ASSERT_NE(Module, nullptr);
+          EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          auto *Storage = Module->getNamedGlobal("__nd_codeptr_3040");
+          ASSERT_NE(Storage, nullptr);
+          EXPECT_EQ(
+              Module->getDataLayout().getTypeAllocSize(Storage->getValueType()),
+              32u);
+          for (const auto &[Name, Expected] :
+               {std::pair{"probe", 0}, std::pair{"target", 4}}) {
+            auto *Function = Module->getFunction(Name);
+            // Eliminate the emitter's register allocas before checking the
+            // returned storage identity. This transforms IR; it executes no
+            // generated instructions.
+            llvm::SmallVector<llvm::AllocaInst *> Allocas;
+            for (auto &I : Function->getEntryBlock())
+              if (auto *Alloca = llvm::dyn_cast<llvm::AllocaInst>(&I);
+                  Alloca && llvm::isAllocaPromotable(Alloca))
+                Allocas.push_back(Alloca);
+            llvm::DominatorTree Dominators(*Function);
+            llvm::PromoteMemToReg(Allocas, Dominators);
+            auto *Return =
+                llvm::cast<llvm::ReturnInst>(Function->back().getTerminator());
+            auto *Cast =
+                llvm::dyn_cast<llvm::ConstantExpr>(Return->getReturnValue());
+            ASSERT_NE(Cast, nullptr);
+            ASSERT_EQ(Cast->getOpcode(), llvm::Instruction::PtrToInt);
+            int64_t Offset = 0;
+            EXPECT_EQ(llvm::GetPointerBaseWithConstantOffset(
+                          Cast->getOperand(0), Offset, Module->getDataLayout()),
+                      Storage);
+            EXPECT_EQ(Offset, Expected);
+          }
+          // The relocated member refers to the same storage at offset 24,
+          // rather than retaining a numeric address in the original code
+          // segment.
+          auto *Initializer =
+              llvm::dyn_cast<llvm::ConstantStruct>(Storage->getInitializer());
+          ASSERT_NE(Initializer, nullptr);
+          if (Relocated) {
+            ASSERT_EQ(Initializer->getNumOperands(), 3u);
+            auto *Pointer =
+                llvm::dyn_cast<llvm::ConstantExpr>(Initializer->getOperand(1));
+            ASSERT_NE(Pointer, nullptr);
+            ASSERT_EQ(Pointer->getOpcode(), llvm::Instruction::PtrToInt);
+            int64_t Offset = 0;
+            EXPECT_EQ(
+                llvm::GetPointerBaseWithConstantOffset(
+                    Pointer->getOperand(0), Offset, Module->getDataLayout()),
+                Storage);
+            EXPECT_EQ(Offset, 24);
+          } else {
+            ASSERT_EQ(Initializer->getNumOperands(), 1u);
+            const auto *Bytes = llvm::dyn_cast<llvm::ConstantDataSequential>(
+                Initializer->getOperand(0));
+            ASSERT_NE(Bytes, nullptr);
+            for (unsigned I = 0; I != 32; ++I)
+              EXPECT_EQ(Bytes->getElementAsInteger(I),
+                        Image.Segments.back().Data[FlagVA - DataVA + I]);
+          }
+        }
+      }
+}
+
+TEST(MedLLVMDirectData, LinkedDataRegionRequiresCompletePointerStorage) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    const unsigned HalfPointer = getTargetRegInfo(A).PointerSize / 2;
+    for (va_t Slot : {FlagVA - HalfPointer, FlagVA + 8 + HalfPointer,
+                      FlagVA + 32 - HalfPointer}) {
+      BinaryImage Image = mixedDataInCode(A, BinaryFormat::COFF);
+      Image.DataPtrRelocSlots.insert(Slot);
+      LinkedDataDebug Debug;
+      llvm::LLVMContext Context;
+      EXPECT_EQ(emitLinkedData(Image, Context, &Debug), nullptr);
+    }
+  }
+}
+
+TEST(MedLLVMDirectData, LinkedDataRegionRetainsExtentAndTargetRefusals) {
+  for (unsigned Case = 0; Case != 4; ++Case) {
+    SCOPED_TRACE(Case);
+    BinaryImage Image = mixedDataInCode(Arch::X64, BinaryFormat::COFF);
+    LinkedDataDebug Debug;
+    if (Case == 1)
+      Debug.Region.second =
+          Debug.Region.first + limits::kMaxSingleGlobalEmbedLen + 1;
+    if (Case == 2)
+      Debug.Region.second = DataVA + Image.Segments.back().Data.size() + 1;
+    if (Case == 3) {
+      Image.CodePtrRelocSlots.insert(FlagVA + 16);
+      for (unsigned I = 0; I != 8; ++I)
+        Image.Segments.back().Data[FlagVA + 16 - DataVA + I] =
+            static_cast<uint8_t>(uint64_t(0x1888) >> (I * 8));
+    }
+    llvm::LLVMContext Context;
+    EXPECT_EQ(emitLinkedData(Image, Context, Case == 0 ? nullptr : &Debug),
+              nullptr);
   }
 }
 

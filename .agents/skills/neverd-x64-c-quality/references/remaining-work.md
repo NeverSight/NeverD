@@ -1,5 +1,15 @@
 # Remaining x64 C-quality work
 
+Identity-matched PDB section contributions now bound mixed read-only data
+inside large executable segments. Native LLVM queries can retain scalar bytes,
+relocated pointer fields and interior aliases without mirroring the entire
+segment or guessing an individual object's size. This removes the mixed-data
+mirror refusal encountered by the two registry roots; it does not recover their
+ordinary-C stack inputs. OMAP/original-section translation, layout conflicts,
+partial pointer storage and unresolved code targets still refuse this proof.
+The interval index is built once with the existing PDB contributions; source
+emission does not run a new analysis or scan the contribution list per query.
+
 Direct native IR and CFG queries now use the existing function-preparation
 boundary. Fresh queries no longer analyze the whole image before returning one
 function, and restricted queries can switch entries without a prior decompile.
