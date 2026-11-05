@@ -76,7 +76,10 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}${{ inputs.windows_eh_cxx_frame_only && '-cxx-frame' || '' }}${{ inputs.windows_eh_protocol_only && '-seh-protocol' || '' }}
-  cancel-in-progress: true
+  # A dev push waits for the running one, so each finished run reports a result
+  # and only the newest waiting push stays queued. Pull requests and other
+  # branches still replace their older runs.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/dev' }}
 
 jobs:
   # These checks read repository content and exercise host-independent scripts,

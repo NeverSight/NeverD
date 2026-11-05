@@ -655,6 +655,11 @@ find() { return 0; }
                 step = source.split(f"      - name: {name}\n", 1)[1].split("\n      - name:", 1)[0]
                 self.assertIn("github.event_name == 'workflow_dispatch'", step)
 
+    def test_dev_pushes_finish_instead_of_cancelling_each_other(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        concurrency = source.split("\nconcurrency:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("cancel-in-progress: ${{ github.ref != 'refs/heads/dev' }}", concurrency)
+
     def test_commits_outside_the_compiled_engine_skip_the_native_workflows(self):
         ignored = ("'**/*.md'", "'.agents/**'", "'tools/neverd-gui/**'")
         for workflow in (WORKFLOW, WORKFLOW.with_name("mobile.yml")):

@@ -15660,6 +15660,11 @@ suite only when the pin changes. Commits limited to `.agents/` or
 `tools/neverd-gui/` skip `CI` and `Mobile Decompilation`, neither of which builds
 the GUI; `Desktop GUI` owns those paths.
 
+A `dev` push waits for a running `CI` instead of cancelling it, so each finished
+run reports a result. Only the newest waiting push stays queued, and the commits
+in between share its result. Pull requests and other branches still replace
+their older runs.
+
 CI builds Release with tests enabled on Linux, macOS, and Windows, then audits
 the discovered inventory before applying platform-specific label exclusions.
 Those profiles are defined in `.github/workflows/ci.yml` and
