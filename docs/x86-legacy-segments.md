@@ -723,3 +723,66 @@ qualification. These integration results are recorded separately; the
 original qualified binaries are retained by hash.
 The architectural reference is Intel SDM revision 093, volume 2 IRET and RET,
 available from the [Intel manual page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+
+## Protected BOUND and native source projection
+
+The original-byte scalar executor admits word/dword BOUND in protected
+16/32-bit code with independent 16/32-bit address sizes. It reads the signed
+lower bound, compares the unchanged index, and only reads the upper bound
+when the lower comparison succeeds. Each field adds and wraps its own offset
+at the instruction's address width before segment and paging checks; bytes
+within a field do not wrap around a segment limit. The comparison is inclusive
+at both ends, without adding the element size to the upper value.
+
+A below-lower index therefore raises #BR even when the upper field would cause
+#GP/#SS/#PF. A lower-field access fault precedes the comparison. Alignment is
+that of the individual word/dword, and competing #AC/#PF uses the existing
+explicit alignment profile. Neither the index nor arithmetic flags change;
+ordinary completion and fault-frame RF follow the shared executor's rules.
+Original #BR and upper-field #PF handlers can repair the index or page, execute
+IRET, and retry through the same dispatcher.
+
+`X86LegacyExecutionState::Mpx` optionally binds the existing `X86MpxContext`.
+BOUND derives CPL and CR4.OSXSAVE from the executing machine, then requires a
+known, admitted MPX enable state. Without a context, CR4.OSXSAVE=0 proves MPX
+is disabled; an unknown enabled configuration is refused before fetch.
+An explicitly active transaction is also refused before fetch, even when MPX
+is disabled: the dispatcher has no transaction checkpoint/abort continuation.
+On #BR, the existing MPX owner clears enabled BNDSTATUS before IDT delivery.
+This effect survives a delivery fault or shutdown. Bounds, disabled status,
+successful checks and operand faults leave that status unchanged. This binding
+does not extend the scalar dispatcher to other MPX instructions or transactions.
+
+The full LLVM fork provides `llvm.x86.bound16`/`bound32` with index and pointer
+inputs, and `.address32` forms with index, 32-bit offset, constant address width
+and segment-prefix inputs. Matching Clang builtins use the names
+`__builtin_ia32_bound16`/`bound32` and the `_address32` suffix. All return void;
+unused calls and memory ordering remain observable. Code16 and i386 use native
+machine instructions with a read-only index; long mode and invalid address
+controls are rejected. The pointer form uses a 32-bit DS offset even in code16.
+
+NeverD's LowIR/MedIR contract keeps a normalized eight-byte offset and explicit
+address/segment controls. Both C routes render the same native builtin and
+retain an exact GNU assembly alternative for the pinned SDK/compiler. The
+shared returned-value rule preserves a propagated full-width parameter or
+register value when a later narrow register view exists. This also applies to
+explicit integer/pointer source returns. Reading AX with BOUND must not turn a
+function returning its input EAX into a signed sixteen-bit return; storing AX
+must likewise preserve a declared x64 RAX return.
+
+`LegacyBound/*` checks original CPU instruction/state/RAM behavior, fault order,
+16-bit and 32-bit address wrap, and original handler retry under both legacy
+paging and PAE. `X86BoundSource.*` exports 168 image/configuration combinations
+through both C routes, LLVM IR and object code, and rejects malformed contracts.
+The NeverC repository's `verify_bound.py`, `verify_bound_source.py` and
+`verify_protected_bound.py` retain independent byte witnesses, compiler/tool
+hashes and deliberate wrong-input/return controls. See the
+[BOUND qualification](evidence/x86-legacy-bound-2026-11-04.json) for actual
+profiles, counts, failures repaired during development and exclusions.
+
+These interfaces do not create a NeverC i386 frontend or general original-state
+execution for arbitrary generated C. MPX status has software-owner tests on
+this host; physical MPX hardware is unavailable. Global instruction/transfer
+completion and the final LLVM release/pin remain separate unfinished work.
+The architectural reference is Intel SDM revision 093, Volume 2A BOUND,
+from the [Intel manual page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).

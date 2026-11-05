@@ -13,7 +13,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86DecimalAdjustAudit.h"
+#include "X86LegacyMemoryAudit.h"
+#include "X86LegacyScalarPrefixes.h"
 #include "X86LiftDetail.h"
+#include "X86NativeMemory.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -160,26 +163,42 @@ bool liftLegacyBCD(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
     break;
   }
 
-  // BOUND — legacy range check → #BR exception (32-bit only).  Capture the
-  // index register and the bounds-pair memory base so codegen can re-emit
-  // `bound idx, (base)`.
-  case X86_INS_BOUND:
-    if (X86.op_count >= 2 && X86.operands[0].type == X86_OP_REG &&
-        X86.operands[1].type == X86_OP_MEM) {
-      if (S.memoryAddressSpace(X86.operands[1]) !=
-          NdMemoryAddressSpace::Default)
-        return false;
-      auto Idx = mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
-      uint16_t Sz = static_cast<uint16_t>(X86.operands[0].size);
-      if (Sz != 2 && Sz != 4)
-        Sz = 4;
-      S.emitIntrinsic(
-          Intrinsic::Bound, NdVar(),
-          {NdVar::reg(Idx.Offset, Sz), S.computeEA(X86.operands[1])});
-    } else {
-      S.emitIntrinsic(Intrinsic::Bound);
-    }
+  case X86_INS_BOUND: {
+    legacyvalidation::ScalarPrefixes P;
+    if (L.targetArch() != Arch::X86 || !Insn->detail || Insn->size > 15 ||
+        !legacyvalidation::scalarPrefixes(Insn, false, P) || P.F3 ||
+        P.OpcodeOffset + 2 > Insn->size || X86.op_count != 2)
+      return false;
+    const unsigned Width = P.Operand16 ? 2 : 4;
+    const unsigned AddressBytes = P.Address ? 2 : 4;
+    const auto ModRM = Insn->bytes[P.OpcodeOffset + 1];
+    const auto Index =
+        mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
+    if (Insn->bytes[P.OpcodeOffset] != 0x62 || X86.opcode[0] != 0x62 ||
+        X86.opcode[1] || X86.opcode[2] || X86.opcode[3] || ModRM >> 6 == 3 ||
+        X86.modrm != ModRM || X86.encoding.modrm_offset != P.OpcodeOffset + 1 ||
+        X86.encoding.imm_size || X86.encoding.imm_offset || X86.rex ||
+        X86.rex2 || X86.eflags || X86.prefix[0] || X86.prefix[1] != P.Segment ||
+        X86.prefix[2] != (P.Operand16 ? 0x66 : 0) ||
+        X86.prefix[3] != (P.Address ? 0x67 : 0) ||
+        X86.addr_size != AddressBytes || X86.operands[0].type != X86_OP_REG ||
+        X86.operands[0].size != Width || X86.operands[0].access != CS_AC_READ ||
+        X86.operands[1].access != CS_AC_READ || Index.Size != Width ||
+        Index.Offset != ((ModRM >> 3) & 7) * 8 ||
+        !legacyaudit::memoryOperand(
+            Insn, X86.operands[1], 2 * Width, AddressBytes, false, 0,
+            P.OpcodeOffset + 2, 0, apxvalidation::segmentRegister(P.Segment)))
+      return false;
+    const auto Prefix =
+        P.Segment ? P.Segment
+                  : x86NativeI386Segment(Arch::X86, 0, X86.operands[1]);
+    S.emitIntrinsic(Intrinsic::Bound, NdVar(),
+                    {NdVar::reg(Index.Offset, Width),
+                     S.computeEA(X86.operands[1], true, true),
+                     NdVar::scalar(AddressBytes * 8, 4),
+                     NdVar::scalar(Prefix, 4)});
     break;
+  }
   case X86_INS_INTO:
     S.emitIntrinsic(Intrinsic::Into);
     break;

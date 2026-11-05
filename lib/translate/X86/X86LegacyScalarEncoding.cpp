@@ -77,6 +77,11 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     Width(B < 0xb8);
     F.Destination.Register = B & 7;
     Immediate(F.Bytes);
+  } else if (B == 0x62) {
+    F.Operation = Op::Bound;
+    F.Destination.Register = R.modRM(F.Source);
+    if (F.Source.Register)
+      return std::nullopt;
   } else if (B == 0x63) {
     F.Operation = Op::AdjustPrivilege;
     F.Bytes = F.SourceBytes = 2; // ARPL ignores operand-size overrides.

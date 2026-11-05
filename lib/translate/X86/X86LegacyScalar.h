@@ -38,6 +38,7 @@ enum class X86LegacyScalarOperation {
   ComplementFlag,
   Address,
   AdjustPrivilege,
+  Bound,
   Exchange,
   ExchangeAdd,
   CompareExchange,

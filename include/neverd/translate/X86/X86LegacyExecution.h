@@ -11,6 +11,7 @@
 #define NEVERD_TRANSLATE_X86_X86LEGACYEXECUTION_H
 
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
+#include "neverd/ir/X86/X86MpxContext.h"
 #include "neverd/translate/X86/X86LegacySegmentExecution.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -41,6 +42,10 @@ struct X86LegacyExecutionState {
   bool SSBlocked = false;
   bool NMIBlocked = false;
   X86LegacySysenterState Sysenter;
+  /// BOUND's #BR clears BNDSTATUS only when MPX is enabled. Absence proves
+  /// nothing; CR4.OSXSAVE=0 alone can prove that no MPX state is needed.
+  /// Other MPX instructions/control transfers still need their own dispatch.
+  std::optional<X86MpxContext> Mpx;
 };
 
 using X86LegacyEventKind = X86EventKind;

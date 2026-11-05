@@ -23,15 +23,22 @@ inline bool hasExplicitIntegerReturnValue(const MedOp &Return, Arch TheArch,
          Return.Inputs[0].Size >= ReturnSize;
 }
 
-/// Copy propagation can replace a return register with a constant or assemble
-/// its overlapping writes into a temporary. That complete reaching value
-/// precedes physical register views, including a later narrow read projection.
-/// A narrow value still needs ABI reconstruction.
+/// Copy propagation can replace a return register with another register, a
+/// parameter or constant, or assemble overlapping writes into a temporary.
+/// That complete reaching value precedes physical return-register views,
+/// including a later narrow read projection. A narrow value still needs ABI
+/// reconstruction, as does a value still naming the physical return register.
 inline bool hasPropagatedIntegerReturnValue(const MedOp &Return, Arch TheArch,
                                             uint16_t ReturnSize) {
-  return hasExplicitIntegerReturnValue(Return, TheArch, ReturnSize) &&
-         (Return.Inputs[0].isConst() ||
-          (Return.Inputs[0].Kind == MedVar::Temp && Return.Inputs[0].Id >= 0));
+  if (!hasExplicitIntegerReturnValue(Return, TheArch, ReturnSize))
+    return false;
+  const auto &Value = Return.Inputs[0];
+  const auto &TRI = getTargetRegInfo(TheArch);
+  return Value.isConst() ||
+         (Value.Id >= 0 &&
+          (Value.Kind == MedVar::Temp || Value.Kind == MedVar::Param ||
+           (Value.Kind == MedVar::Reg && Value.RegOff != TRI.IntReturnReg &&
+            !TRI.isReturnControlReg(Value.RegOff))));
 }
 
 } // namespace neverd

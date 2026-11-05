@@ -21,6 +21,7 @@
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
 #include "../render/X86/X86AtomicRmw.h"
+#include "../render/X86/X86Bound.h"
 #include "../render/X86/X86DescriptorState.h"
 #include "../render/X86/X86FPStateHelpers.h"
 #include "../render/X86/X86Flags.h"
@@ -1613,6 +1614,10 @@ void HighCWriter::collectCallTargetsExpr(const HighExpr &Expr,
       if (Opts.TheArch == Arch::X64 &&
           isX86DescriptorStateIntrinsic(Ex.IntrinsicId))
         NeedsX86DescriptorStateDispatch = true;
+      if (Ex.IntrinsicId == Intrinsic::Bound) {
+        (void)x86BoundHighPlan(Opts.TheArch, Ex);
+        NeedsX86BoundDispatch = true;
+      }
       if ((Ex.IntrinsicId == Intrinsic::Pushf && Ex.Type &&
            Ex.Type->Size == 2) ||
           (Ex.IntrinsicId == Intrinsic::Popf && Ex.Operands.size() == 1 &&
@@ -5047,6 +5052,8 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
     OS << X86SegmentMoveCompilerDispatch;
   if (NeedsX86DescriptorStateDispatch)
     OS << X86DescriptorStateCompilerDispatch;
+  if (NeedsX86BoundDispatch)
+    OS << X86BoundCompilerDispatch;
   if (NeedsX86Flags16Dispatch)
     OS << X86Flags16CompilerDispatch;
   if (NeedsX86ScalarSystemDispatch)

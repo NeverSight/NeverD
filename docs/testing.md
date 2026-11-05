@@ -5668,7 +5668,13 @@ across source profiles and both view orders. `NativeAnalysisViewsDeferOnlyHighIR
 checks integer and floating call results, unchanged LowIR/MedIR/CFG/LLVM/source
 output and IR page anchors, and resumption without relifting after analysis
 views; `FunctionViewRejectsUnknown*` preserves the
-prepared function on invalid view names. `LLVMViewShowsTheFunctionInAModuleOfItsOwn`
+prepared function on invalid view names.
+`NativeIRQueriesPrepareOnlyTheirRequestedFunction` checks fresh and switched
+x64/ARM64 queries through legacy Low/Med/High/LLVM text, paged IR and CFG. It
+compares each view with explicit preparation, counts the selected output
+bodies, checks repeated-query reuse and deferred stages, and retains completed
+whole-image analyses. The fixtures are parsed only; no generated code runs.
+`LLVMViewShowsTheFunctionInAModuleOfItsOwn`
 builds a glibc PIE: `_start`'s LLVM IR must assemble and verify alone, declare
 the GOT's mirror before the definition under a comment saying what it stands
 for, and name the `__libc_start_main` slot as the listing does; pages keep the prelude, epilogue and by-line references
@@ -20720,3 +20726,20 @@ adjacent and separated entries with unordered recovered blocks.
 checks that their shared tail keeps its declared, proven owner.
 `CImageObjects.DeclaredObjectsHoldTheImageBytes` compiles and executes UTF-16
 image declarations without requiring `uchar.h`, which macOS SDKs lack.
+
+`LegacyBound/*` covers signed word/dword BOUND in both protected code widths,
+legacy paging/PAE, all CPLs, segment choices, conditional upper-field access,
+16/32-bit offset wrap and original #BR/#PF repair/IRET/retry. Repeat on each
+qualified hybrid-core profile with `NEVERD_TEST_LEGACY_ALIGNMENT=before`.
+`X86BoundSource.*` exports both C routes with
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR`; the NeverC repository's
+`tests/neverc/X86/verify_bound_source.py --exports DIR --llvm-bin LLVM_BIN
+--clang CLANG --output OUT` compiles every export and executes flat-DS/nonflat-FS
+cases with independent original bytes. Use both stock Clang and the full fork,
+at both optimization levels. `verify_protected_bound.py --mode 16|32` checks
+full compiler-frame return and original fault state in KVM. These checks are
+separate from the unavailable NeverC i386 frontend and physical MPX coverage.
+`ReturnContract.DeclaredReturnKeepsFullValueAfterNarrowRead` lifts a native
+`mov rax,rdi; mov [rsi],ax; ret` with integer/pointer declarations. It compiles
+both C routes at O0/O2 and checks the complete return plus the partial store;
+on x64 hosts outside Windows, independent original bytes provide the oracle.

@@ -64,6 +64,24 @@ public:
       write(F.Destination, 1, condition(F.Condition));
       return;
     }
+    if (F.Operation == Op::Bound) {
+      if (!read(F.Destination, N, A) || !read(F.Source, N, B))
+        return;
+      const auto Signed = [N](uint32_t V) -> int32_t {
+        return N == 2 ? int16_t(V) : int32_t(V);
+      };
+      // Original CPUs compare the lower field before accessing the upper.
+      // Each field has its own address-size wrap and segment/page checks.
+      if (Signed(A) < Signed(B)) {
+        fault(5);
+        return;
+      }
+      auto Upper = F.Source;
+      Upper.Displacement += N;
+      if (read(Upper, N, B) && Signed(A) > Signed(B))
+        fault(5);
+      return;
+    }
     if (F.Operation == Op::AdjustPrivilege) {
       if (!read(F.Destination, 2, A) || !read(F.Source, 2, B))
         return;

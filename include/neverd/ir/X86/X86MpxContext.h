@@ -93,6 +93,9 @@ public:
   /// Validate a supplied snapshot without changing the existing configuration
   /// on failure. Configuration changes do not implicitly reset BNDREGS/status.
   bool configure(const X86MpxConfiguration &C);
+  /// A dispatcher rebinds CPL/OSXSAVE from its architectural state before
+  /// executing an instruction; it must not use a stale privilege snapshot.
+  const X86MpxConfiguration &configuration() const { return Configuration; }
   std::optional<bool> enabled() const;
   /// Check this before obtaining operands or touching memory. Completed proves
   /// enabled, nontransactional state and a valid mode/bank, not instruction

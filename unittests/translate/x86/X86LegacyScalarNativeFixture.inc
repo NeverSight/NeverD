@@ -97,12 +97,12 @@ protected:
       put(PT + (Data >> 12) * PW, Data & ~4095u | 6, PW);
     if (Case == 2)
       put(PT + (Data >> 12) * PW, Data & ~4095u | 5, PW);
-    if (Case == 9 || Case == 15 || Case == 16 || Case == 21)
+    if (Case == 9 || Case == 15 || Case == 16 || Case == 21 || Case == 23)
       put(PT + 13 * PW, 0xd006, PW);
     std::vector<std::vector<uint8_t>> Repair;
     auto RetryBytes = Bytes;
-    if (Case == 12 || Case == 21) {
-      const uint32_t Page = Case == 21 ? 0xd000 : Data & ~4095u;
+    if (Case == 12 || Case == 21 || Case == 23) {
+      const uint32_t Page = (Case == 21 || Case == 23) ? 0xd000 : Data & ~4095u;
       const uint32_t PTE = PT + (Page >> 12) * PW;
       Repair = {{0xc7, 0x05, uint8_t(PTE), uint8_t(PTE >> 8),
                  uint8_t(PTE >> 16), 0, uint8_t(Page | 7), uint8_t(Page >> 8),
@@ -110,6 +110,15 @@ protected:
                 {0x83, 0xc4, 4},
                 {0xcf}};
       uint32_t PC = 0x2000 + 14 * 16;
+      for (const auto &I : Repair) {
+        std::copy(I.begin(), I.end(), RAM + PC);
+        PC += I.size();
+      }
+    }
+    if (Case == 22) {
+      Repair = {{0xb9, 0, 0, 0, 0}, {0xcf}};
+      uint32_t PC =
+          0x2000 + 5 * 16; // #BR preserves flags and has no error code.
       for (const auto &I : Repair) {
         std::copy(I.begin(), I.end(), RAM + PC);
         PC += I.size();
@@ -278,8 +287,12 @@ protected:
     ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
     // At CPL0 an unmapped original stack also prevents #PF/#DF entry.
     // Only an inner-ring stack switch can reach the Case 21 repair handler.
-    if (Case == 12 || Case == 18 || Case == 20 || (Case == 21 && CPL != 0)) {
-      ASSERT_EQ(Expected->DeliveredVector, Case == 12 || Case == 21 ? 14 : 0);
+    if (Case == 12 || Case == 18 || Case == 20 || Case == 22 || Case == 23 ||
+        (Case == 21 && CPL != 0)) {
+      ASSERT_EQ(Expected->DeliveredVector,
+                Case == 12 || Case == 21 || Case == 23 ? 14
+                : Case == 22                           ? 5
+                                                       : 0);
       for (const auto &I : Repair) {
         Expected = executeX86LegacyInstruction(State, *Memory, I, Options);
         ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());

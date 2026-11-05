@@ -71,6 +71,12 @@ inline constexpr size_t kPipelineCallAbiCalleeReadAhead = 64;
 /// Fewest such callees worth a worker batch. Each is a whole function's lift
 /// and MedIR conversion, so two already outweigh starting the workers.
 inline constexpr size_t kPipelineCallAbiMinParallelCalleeReads = 2;
+/// Fewest kept bodies without a probe their run's summaries hold that the
+/// forwarder fixed point probes together on the workers before it starts
+/// (propagateForwardedCallArities).  Each probe recovers a copy of one body;
+/// a few cost less than starting the workers and copying their summaries,
+/// as a revisit's or a small selection's usually are.
+inline constexpr size_t kPipelineCallAbiMinSpeculativeProbes = 8;
 
 // lib/pipeline/PipelineCallAbiDetail.h
 inline constexpr size_t kPipelineCallAbiDetailMaxProbes = 16;

@@ -20,6 +20,7 @@
 #include "../render/X86/X64CallRCX.h"
 #include "../render/X86/X86APXAtomic.h"
 #include "../render/X86/X86AmxState.h"
+#include "../render/X86/X86Bound.h"
 #include "../render/X86/X86BoundedLeaf.h"
 #include "../render/X86/X86CompressExpand.h"
 #include "../render/X86/X86FourSource.h"
@@ -2166,6 +2167,11 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         [this](const MedVar &V) {
           return !Analysis.DeadVars.count(varName(V));
         });
+  if (E.IntrinsicId == Intrinsic::Bound) {
+    const auto P = x86BoundHighPlan(Opts.TheArch, E);
+    return renderX86Bound(P, intrinsicOperandStr(*E.Operands[0]),
+                          intrinsicOperandStr(*E.Operands[1]));
+  }
   if (isX86BoundedLeafPending(E.IntrinsicId))
     throw std::invalid_argument(X86BoundedLeafUnproven);
   if (isX86BoundedLeafIntrinsic(E.IntrinsicId))

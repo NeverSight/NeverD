@@ -134,6 +134,20 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       Options.Calls != X86LegacyCallProfile::StoreBeforeTargetLimit &&
       Options.Calls != X86LegacyCallProfile::CheckBeforeTargetLimit)
     return invalid("legacy CALL requires a bound stack publication profile");
+  std::optional<X86MpxContext> BoundMpx;
+  if (Scalar && Scalar->Operation == detail::X86LegacyScalarOperation::Bound) {
+    BoundMpx = State.Mpx.value_or(X86MpxContext{});
+    auto Configuration = BoundMpx->configuration();
+    if (Configuration.InTransaction == true)
+      return invalid("BOUND in a transaction requires an abort continuation");
+    Configuration.OSXSAVE = bool(Memory.controls().CR4 & (uint64_t{1} << 18));
+    Configuration.PrivilegeLevel = State.Core.CPL;
+    if (!BoundMpx->configure(Configuration))
+      return invalid("BOUND requires a valid MPX configuration");
+    const auto Status = BoundMpx->operationStatus(X86MpxMode::Bits32, 0);
+    if (Status != X86MpxResult::Completed && Status != X86MpxResult::Disabled)
+      return invalid("BOUND requires known nontransactional MPX enable state");
+  }
   if (State.EFlags & 0x100)
     return invalid("legacy TF stepping requires a debug-event producer");
   if (IRET && (State.EFlags & 0x4000))
@@ -260,6 +274,12 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       Next = Staged.Core;
       NextIP = Staged.EIP;
       Flags = Staged.EFlags;
+    } else if (BoundMpx && Got->Exception && Got->Exception->Vector == 5) {
+      // This is an architectural effect of #BR, before attempting IDT entry.
+      // Unlike GPR/EIP/FLAGS staging, it survives delivery faults and #DF.
+      BoundMpx->completeLegacyBoundsFault();
+      if (State.Mpx)
+        State.Mpx = std::move(BoundMpx);
     }
   } else if (!R.Exception) {
     const auto Opcode = Body.front();

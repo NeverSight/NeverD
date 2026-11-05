@@ -11,15 +11,25 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/pipeline/PipelineReturnModelingDetail.h"
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
+
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <map>
 #include <string>
@@ -693,3 +703,132 @@ TEST(ReturnContracts, ADeclaredReturnTypeStays) {
 }
 
 } // namespace
+
+TEST(ReturnContract, PropagatedParametersOwnCompleteIntegerReturnValues) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    const auto &TRI = getTargetRegInfo(A);
+    auto Value = temporary(0);
+    Value.TheArch = A;
+    Value.Kind = MedVar::Param;
+    Value.Size = TRI.PointerSize;
+    auto Return = returning(Value);
+    EXPECT_EQ(hasPropagatedIntegerReturnValue(Return, A, TRI.PointerSize),
+              TRI.ReturnOperandIsValue);
+    // A parameter narrower than the result cannot prove its missing bytes.
+    EXPECT_FALSE(hasPropagatedIntegerReturnValue(Return, A, Value.Size + 1));
+    Return.Inputs[0].Id = -1;
+    EXPECT_FALSE(hasPropagatedIntegerReturnValue(Return, A, Value.Size));
+    Return = returning(Value);
+    Return.Opcode = NdOp::COPY;
+    EXPECT_FALSE(hasPropagatedIntegerReturnValue(Return, A, Value.Size));
+    Return = returning(Value);
+    Return.addInput(Value);
+    EXPECT_FALSE(hasPropagatedIntegerReturnValue(Return, A, Value.Size));
+    Value.Kind = MedVar::Reg;
+    Value.RegOff = x86reg::RDI;
+    Return = returning(Value);
+    EXPECT_EQ(hasPropagatedIntegerReturnValue(Return, A, Value.Size),
+              TRI.ReturnOperandIsValue);
+    Return.Inputs[0].RegOff = TRI.IntReturnReg;
+    EXPECT_FALSE(hasPropagatedIntegerReturnValue(Return, A, Value.Size));
+  }
+}
+
+TEST(ReturnContract, DeclaredReturnKeepsFullValueAfterNarrowRead) {
+  for (bool Pointer : {false, true})
+    for (bool NoOpt : {false, true}) {
+      SCOPED_TRACE(testing::Message() << Pointer << " " << NoOpt);
+      BinaryImage Image;
+      Image.Arch = Arch::X64;
+      Image.Format = BinaryFormat::MachO;
+      Image.Bits = Bitness::Bits64;
+      Image.Base = Image.Entry = CalleeEntry;
+      Segment Code;
+      Code.VA = CalleeEntry;
+      Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      // mov rax,rdi; mov [rsi],ax; ret. Reading AX leaves all of RAX intact.
+      Code.Data = {0x48, 0x89, 0xf8, 0x66, 0x89, 0x06, 0xc3};
+      Code.Size = Code.FileSz = Code.Data.size();
+      auto FunctionSymbol = Symbol::makeFunc(CalleeEntry, Code.Size);
+      FunctionSymbol.Name = "narrow_read_return";
+      Image.Symbols.push_back(std::move(FunctionSymbol));
+      Image.Segments.push_back(std::move(Code));
+      SourceFunctionTypeHint Hint;
+      Hint.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+      Hint.ReturnType = Pointer ? NdType::makePtr() : NdType::makeInt(8, false);
+      Hint.Parameters = {{"value", Hint.ReturnType},
+                         {"low", NdType::makePtr(NdType::makeInt(2, false))}};
+      std::string Error;
+      ASSERT_TRUE(assignDarwinScalarSourceABI(Hint, Arch::X64, Error)) << Error;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.NoOpt = NoOpt;
+      Options.OnlyFunctionEntries = {CalleeEntry};
+      Options.SourceTypeHints = {{CalleeEntry, Hint}};
+      llvm::LLVMContext Context;
+      auto Result = Pipeline().run(Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      std::string Dump;
+      llvm::raw_string_ostream OS(Dump);
+      Pipeline::dumpMedIR(Result.MedFuncs, OS);
+      Pipeline::dumpHighIR(Result.HighFuncs, OS);
+      SCOPED_TRACE(Dump);
+      ASSERT_EQ(Result.HighFuncs.size(), 1u);
+      const auto &Body = Result.HighFuncs.front().Body;
+      ASSERT_FALSE(Body.empty());
+      ASSERT_EQ(Body.back().Kind, StmtKind::Return);
+      ASSERT_TRUE(Body.back().RetVal);
+      ASSERT_TRUE(Body.back().RetVal->Type);
+      EXPECT_EQ(Body.back().RetVal->Type->Size, 8u);
+      CEmitterOptions COptions;
+      COptions.TheArch = Image.Arch;
+      COptions.Format = Image.Format;
+      COptions.Image = &Image;
+      for (bool LLVM : {false, true}) {
+        SCOPED_TRACE(LLVM);
+        std::string Source;
+        llvm::raw_string_ostream SourceOS(Source);
+        if (LLVM) {
+          auto Module =
+              MedLLVMEmitter().emit(Result.MedFuncs, Context, "narrow_read",
+                                    Image.Arch, {}, &Image, Image.Format);
+          ASSERT_TRUE(Module);
+          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          ASSERT_TRUE(LLVMCEmitter().emit(*Module, SourceOS, COptions));
+        } else {
+          ASSERT_TRUE(
+              HighCEmitter().emit(Result.HighFuncs, SourceOS, COptions));
+        }
+        SourceOS.flush();
+        Source += R"(
+#if defined(__x86_64__) && !defined(_WIN32)
+__attribute__((naked, noinline))
+static uint64_t original(uint64_t value, uint16_t *low) {
+  __asm__ volatile(".byte 0x48,0x89,0xf8,0x66,0x89,0x06,0xc3");
+}
+#endif
+int main(void) {
+  uint64_t value = UINT64_C(0x800012345678ffff);
+  for (unsigned i = 0; i != 65536; ++i) {
+    uint64_t expected = UINT64_C(0xabcdef0123456789), actual = expected;
+    uint64_t result = value;
+#if defined(__x86_64__) && !defined(_WIN32)
+    result = original(value, (uint16_t *)&expected);
+#else
+    expected = (expected & ~UINT64_C(0xffff)) | (value & 0xffff);
+#endif
+    uint64_t got = (uintptr_t)narrow_read_return()";
+        Source += Pointer ? "(void *)(uintptr_t)value" : "value";
+        Source += R"(, (uint16_t *)&actual);
+    if (got != result || actual != expected) return 1;
+    value ^= value << 13; value ^= value >> 7; value ^= value << 17;
+  }
+  return 0;
+}
+)";
+        for (const char *Optimization : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Source, {Optimization, "-Werror=int-conversion"});
+      }
+    }
+}

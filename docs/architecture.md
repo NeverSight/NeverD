@@ -4260,6 +4260,12 @@ index without keeping replica startup blocked.
 Function preparation uses `neverd_prepare_function_view`, which shares the
 source route's ARM mode, exception-handler discovery and analysis-scope checks
 without emitting C. Source, IR and CFG views consume that prepared pipeline.
+Native IR text, paged IR and CFG queries also enter this same preparation
+boundary when called directly. A fresh session selects the requested function;
+a restricted session can switch entries without analyzing unrelated bodies.
+An existing whole-image analysis remains intact. CFG keeps its LowIR-only
+depth, other analysis views continue through the shared ABI preparation, and
+bytecode retains its whole-program view.
 Older engines retain `neverd_prepare_function` and the decompiler-based
 preparation fallback. A failed switch
 clears the worker's prepared-entry marker before another view can reuse it.
@@ -4407,7 +4413,12 @@ and `kPipelineCallAbiDetailMaxBytesCeiling` (`OmittedCalleeMemo::maxBytes`),
 evicting those used longest ago past it: a decompile reads up to 256 callees,
 and a smaller memo evicts the ones the next decompiles read again. A replica's
 callee read-ahead fills three quarters of it, so a larger memo covers more of
-the callees later decompiles read first. It lazily retains the image's exact no-return name
+the callees later decompiles read first. The forwarder fixed point of a
+decompile probes its kept bodies that hold no probe its summaries read the same
+as, at least `kPipelineCallAbiMinSpeculativeProbes` of them, together on the
+pipeline workers before it starts, and keeps those probes with the bodies; the
+fixed point takes one only where the summaries still read as it read them, and
+probes the body again where they do not, so the probes change no output. It lazily retains the image's exact no-return name
 index as well. Supplemental CFGs and their nested register-preservation proofs reuse it;
 indexes with resolver or declaration callbacks stay outside nested proofs to
 avoid re-entry. Readers without an image memo retain the live name lookup.
