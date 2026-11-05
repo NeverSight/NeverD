@@ -5668,7 +5668,13 @@ across source profiles and both view orders. `NativeAnalysisViewsDeferOnlyHighIR
 checks integer and floating call results, unchanged LowIR/MedIR/CFG/LLVM/source
 output and IR page anchors, and resumption without relifting after analysis
 views; `FunctionViewRejectsUnknown*` preserves the
-prepared function on invalid view names. `LLVMViewShowsTheFunctionInAModuleOfItsOwn`
+prepared function on invalid view names.
+`NativeIRQueriesPrepareOnlyTheirRequestedFunction` checks fresh and switched
+x64/ARM64 queries through legacy Low/Med/High/LLVM text, paged IR and CFG. It
+compares each view with explicit preparation, counts the selected output
+bodies, checks repeated-query reuse and deferred stages, and retains completed
+whole-image analyses. The fixtures are parsed only; no generated code runs.
+`LLVMViewShowsTheFunctionInAModuleOfItsOwn`
 builds a glibc PIE: `_start`'s LLVM IR must assemble and verify alone, declare
 the GOT's mirror before the definition under a comment saying what it stands
 for, and name the `__libc_start_main` slot as the listing does; pages keep the prelude, epilogue and by-line references

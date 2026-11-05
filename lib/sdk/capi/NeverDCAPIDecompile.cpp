@@ -414,6 +414,9 @@ static int prepareFunction(neverd_session_t Sess, neverd_va_t FuncEntry,
       S->setError("no binary loaded");
       return 0;
     }
+    // Bytecode views own a whole program, not a native function selection.
+    if (S->Img.Arch == Arch::EVM || S->Img.Arch == Arch::SBF)
+      return S->ensurePipeline(Depth) ? 1 : 0;
     if (auto Reason = missingARMModeReason(S->Img, FuncEntry)) {
       S->setError(*Reason);
       return 0;
@@ -1507,7 +1510,7 @@ const char *neverd_ir_low(neverd_session_t Sess, neverd_va_t FuncEntry) {
   auto *S = toSession(Sess);
   S->clearError();
 
-  if (!S->ensurePipeline(/*NeedHighIR=*/false))
+  if (!prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/false))
     return dupStr(std::string());
 
   if (S->PipeResult.EVM)
@@ -1533,7 +1536,7 @@ const char *neverd_ir_med(neverd_session_t Sess, neverd_va_t FuncEntry) {
   auto *S = toSession(Sess);
   S->clearError();
 
-  if (!S->ensurePipeline(/*NeedHighIR=*/false))
+  if (!prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/false))
     return dupStr(std::string());
 
   if (S->PipeResult.EVM)
@@ -1965,7 +1968,7 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
       return dupStr(Page);
     }
     if (Stage == "llvm") {
-      if (!S->ensurePipeline(/*NeedHighIR=*/false))
+      if (!prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/false))
         return nullptr;
       // Bytecode keeps its whole module as its text (neverd_ir_llvm).
       if (S->PipeResult.EVM || S->PipeResult.SBF) {
@@ -1982,7 +1985,7 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
       Result["mapping_status"] = "unsupported_representation";
       return dupStr(jsonToString(llvm::json::Value(std::move(Result))));
     }
-    if (!S->ensurePipeline(/*NeedHighIR=*/Stage == "high"))
+    if (!prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/Stage == "high"))
       return nullptr;
     if (S->PipeResult.EVM || S->PipeResult.SBF) {
       Result["mapping_status"] = "unsupported_architecture";
@@ -2079,7 +2082,7 @@ const char *neverd_ir_high(neverd_session_t Sess, neverd_va_t FuncEntry) {
     return nullptr;
   S->clearError();
 
-  if (!S->ensurePipeline())
+  if (!prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/true))
     return dupStr(std::string());
 
   if (S->PipeResult.EVM)
@@ -2111,7 +2114,7 @@ const char *neverd_ir_llvm(neverd_session_t Sess, neverd_va_t FuncEntry) {
   auto *S = toSession(Sess);
   S->clearError();
 
-  if (!S->ensurePipeline(/*NeedHighIR=*/false))
+  if (!prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/false))
     return dupStr(std::string());
   if (S->PipeResult.EVM || S->PipeResult.SBF) {
     if (!S->ensureLlvmModule()) {

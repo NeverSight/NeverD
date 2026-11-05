@@ -425,6 +425,9 @@ NEVERD_API const char *neverd_ir_llvm(neverd_session_t Sess,
 /// C renders one bounded function (at most 32 MiB). Object IDs are stable for a
 /// fixed analysis snapshot, not across revisions. Free the result with
 /// neverd_free_string().
+/// Native views prepare the requested function in fresh/restricted sessions,
+/// as neverd_prepare_function_view does; completed whole-image analyses remain
+/// available. No prior preparation or decompile call is required.
 NEVERD_API const char *neverd_ir_view_json(neverd_session_t Sess,
                                            neverd_va_t FuncEntry,
                                            const char *Representation,

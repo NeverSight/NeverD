@@ -4260,6 +4260,12 @@ index without keeping replica startup blocked.
 Function preparation uses `neverd_prepare_function_view`, which shares the
 source route's ARM mode, exception-handler discovery and analysis-scope checks
 without emitting C. Source, IR and CFG views consume that prepared pipeline.
+Native IR text, paged IR and CFG queries also enter this same preparation
+boundary when called directly. A fresh session selects the requested function;
+a restricted session can switch entries without analyzing unrelated bodies.
+An existing whole-image analysis remains intact. CFG keeps its LowIR-only
+depth, other analysis views continue through the shared ABI preparation, and
+bytecode retains its whole-program view.
 Older engines retain `neverd_prepare_function` and the decompiler-based
 preparation fallback. A failed switch
 clears the worker's prepared-entry marker before another view can reuse it.
