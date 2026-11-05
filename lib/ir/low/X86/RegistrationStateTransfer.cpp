@@ -675,6 +675,12 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
       break;
     if (!CallSP && !JumpCapture && !JumpResume)
       CallSP = transferPrivateSEHCall(After, Op, Facts);
+    if (!CallSP && ConditionalResult)
+      if (auto ConditionalSP = transferConditionalDispatch(
+              I, Before, After, Op, Facts, *ConditionalResult, CallException)) {
+        CallSP = *ConditionalSP;
+        CallPreservesImportBindings = true;
+      }
     const bool UnprovedCallEffects =
         !JumpCapture && !JumpResume && !CallSP && !Facts.InvocationAtExit &&
         (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||

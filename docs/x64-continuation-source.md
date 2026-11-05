@@ -208,6 +208,22 @@ bits, without host relocation. Floating, vector, aggregate and variadic
 interfaces are not inferred. Explicit Win64 declarations can describe linked
 ELF fixtures too; the image format alone does not supply a signature.
 
+Use `null` for a physical argument slot that is supplied only by the original
+native state. For example, `"argument_bytes": [8, 8, 8, 8, null, 1]` emits
+scalar parameters `arg0`, `arg1`, `arg2`, `arg3`, `arg5`. The wrapper does not
+read, check or initialize the fifth slot; it checks `arg5` at entry SP + 48,
+without shifting it into the fifth slot at SP + 40. Register holes and trailing
+holes follow the same rule. An all-null list produces a context-only call view.
+Every slot, including a null slot, counts toward the shared argument limit.
+Zero is not a valid width, and the result width cannot be null.
+
+Null does not mean that the native input is unused or unconstrained: the
+original register and RAM bytes remain part of the supplied state, and the
+selected instructions or environment may read them. This lets a producer
+expose known scalar arguments around a missing ordinary argument without
+inventing its value or granting a no-read proof. It does not capture that state
+from an ordinary C caller or recover the caller's original ABI.
+
 The generated `neverd_x64_call_1000_v6` takes state, both budgets, a
 zero-initialized `neverd_x64_call_context_v1`, provider/context and the declared
 unsigned scalar arguments. It first requires the matching entry PC and an
@@ -241,8 +257,10 @@ incomplete result has `Completed == 0`; its zero `Value` field supplies no
 machine value. Reinitialize the call context for another invocation.
 
 The manifest records parameter locations, widths and entry-point names with
-`source_abi_inferred: false`. Context storage must remain disjoint from state,
-budgets, provider storage and guest RAM. The existing native environment and
+`source_abi_inferred: false`. Context-only slots retain their physical location
+and use `retained_in_state: true` instead of a scalar `bytes` width. They add no
+entry memory access or stack-range check. Context storage must remain disjoint
+from state, budgets, provider storage and guest RAM. The existing native environment and
 return-cell lifetime contracts still apply. Both C routes and dispatchers
 append the same wrappers to unchanged instruction bodies and drivers. Work is
 limited to entry argument checks and completion/resume bookkeeping; there is

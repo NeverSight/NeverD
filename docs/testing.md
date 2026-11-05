@@ -12782,6 +12782,15 @@ that source helper facts cannot mutate native IR without a replacement call
 receipt. These focused checks do not establish full xcpt4 or nonlocal-jump
 support.
 
+`NestedDispatchRequiresOneAuthenticatedKnownRaise` exercises a synthetic
+wrapper at two image bases and repeated invocations with different exception
+codes. Unknown codes, repeated raises, noncontinuable flags and an unauthenticated
+caller retain no closed-dispatch receipt; a wrong provider, argument count or
+argument array refuses the frame proof itself. A plain integer helper supplies
+its separate call-free receipt. The pinned counter helper also removes only
+the dispatch receipt while keeping its valid returning-frame facts, ensuring
+that stack cleanup cannot substitute for callback-effect evidence.
+
 `RegistrationJumpRuntime` mutates each capture/resume/unwind binding in direct
 and indirect forms, including loader storage, DLL identity, delay imports,
 architecture, veneer opcode/slot and writable code. Unconditional synthetic
@@ -20167,7 +20176,7 @@ arbitrary dynamic frame ownership or a Windows environment implementation.
 entry/ABI/width admission and the shared argument bound. Its
 `FunctionCallsCompileAndProveBoundaries` companion compiles the complete source
 at O0/O2 for both routes and dispatchers, checks that existing bodies and
-drivers are unchanged, and statically proves thirteen wrapper predicates over
+drivers are unchanged, and statically proves seventeen wrapper predicates over
 independent byte-RAM and activation-outcome oracles. Incoming result words
 remain arbitrary. These are wrapper proofs using compiled C, not execution of
 generated instructions or a Windows environment. They cover mismatch refusal,
@@ -20176,7 +20185,15 @@ rebinding, active-context restart refusal, external returns versus completion,
 cached results and wrong resume roots. No generated program is executed by
 either test. `FunctionCallsAdmitScalarWidthAndArgumentLimits` additionally
 compiles every supported scalar width with zero, register-only, first-stack
-and maximum argument counts through both C routes.
+and maximum argument counts through both C routes. Null register/stack slots
+retain arbitrary original bits, including a high DWORD that the body reads.
+The wrapper oracle counts entry reads, checks the later scalar's physical
+location and padding, and proves retained bytes survive pause/resume without
+rebinding. A context-only interface adds no argument read or wrapping-range
+guard, even when trailing slots would wrap. The independent activation oracle
+does not qualify instruction execution at that address.
+`FunctionCallsAdmitContextOnlyArgumentLimit` checks all 32 slots retained in
+native state; 33 slots and malformed mixed declarations remain rejected.
 
 `EnvironmentResumesTheActualPhysicalContext`,
 `EnvironmentBudgetsBoundEveryProviderAttempt` and

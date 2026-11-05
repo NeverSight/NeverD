@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationConditionalFrame.h"
 #include "RegistrationFrameBranch.h"
 #include "RegistrationFrameEffects.h"
 #include "RegistrationMemoryPermissions.h"
@@ -66,6 +67,10 @@ immutableScalar(const BinaryImage &Image, va_t Address, uint16_t Width,
 
 bool PrivateFrameState::merge(const PrivateFrameState &Other) {
   bool Changed = Frame.merge(Other.Frame);
+  if (!Raised && Other.Raised) {
+    Raised = true;
+    Changed = true;
+  }
   Changed |= Borrow.merge(Other.Borrow);
   Changed |= BorrowSpills.merge(Other.BorrowSpills);
   Changed |= CopySource.merge(Other.CopySource);
@@ -92,14 +97,17 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
               DiscardReturnValue, CopyObjectSize, Initializer, Initializers,
               ObjectCallbacks, CallbackStackPopBytes, ScalarArguments,
               ScalarRegisters, ReturnValue, ExcludeCalls, OriginalImage,
-              ClosedIntegerEffects, StackPopBytes] = Options;
+              ClosedIntegerEffects, StackPopBytes, Dispatch] = Options;
   if (ClosedIntegerEffects)
     *ClosedIntegerEffects = true;
   if (ReturnValue)
     ReturnValue->reset();
   if (StackPopBytes)
     StackPopBytes->reset();
-  if ((ReturnValue || ScalarRegisters || ExcludeCalls || StackPopBytes) &&
+  if (Dispatch)
+    Dispatch->reset();
+  if ((ReturnValue || ScalarRegisters || ExcludeCalls || StackPopBytes ||
+       Dispatch) &&
       !ScalarArguments)
     return false;
   if (OriginalImage && (!ScalarArguments || !ExcludeCalls || !ReturnValue))
@@ -206,6 +214,8 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
   std::optional<FrameValue> Returned;
   std::optional<uint32_t> ReturningPop;
   bool CompleteReturns = true;
+  ConditionalDispatch DispatchEffects;
+  bool ClosedDispatch = Dispatch != nullptr;
   std::deque<std::pair<int, size_t>> Pending{{Entry->Id, 0}};
   while (!Pending.empty()) {
     const auto [Id, StateIndex] = Pending.front();
@@ -235,6 +245,47 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
       Transfer.beginInstruction(Op.Addr);
       BorrowTransfer.beginInstruction(Op.Addr);
       CopySourceTransfer.beginInstruction(Op.Addr);
+      if (ClosedDispatch) {
+        const auto Memory = lowMemoryOperands(Op);
+        const auto Address =
+            Memory.Address ? Transfer.read(*Memory.Address) : FrameValue{};
+        const bool ArgumentRead = Op.Opcode == NdOp::LOAD && Memory.Complete &&
+                                  Address.Offset && *Address.Offset >= 8 &&
+                                  Memory.AccessSize == 4 &&
+                                  ScalarArguments->count(*Address.Offset);
+        if (ArgumentRead)
+          DispatchEffects.ArgumentEnd =
+              std::max(DispatchEffects.ArgumentEnd, *Address.Offset + 4);
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+          const auto SP =
+              State.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride]
+                  .Offset;
+          if (SP && !Charge(State.Frame.memoryAccessWork(FrameValue::frame(*SP),
+                                                         8, false) +
+                            1))
+            return false;
+          const auto Code = State.Frame.load(SP, 4).Constant;
+          ClosedDispatch = !State.Raised && SP && *SP <= INT32_MAX - 4 &&
+                           Code && State.Frame.load(*SP + 4, 4).Constant == 0;
+          // The call transfer below authenticates this occurrence and all
+          // four arguments before any invocation result can be published.
+          if (ClosedDispatch) {
+            const SEHExceptionOrigin Origin{Op.Addr, Op.Seq, *Code};
+            ClosedDispatch =
+                !DispatchEffects.Raise || *DispatchEffects.Raise == Origin;
+            DispatchEffects.Raise = Origin;
+            State.Raised = true;
+          }
+        } else {
+          ClosedDispatch =
+              hasClosedRegistrationIntegerEffect(Op) ||
+              ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
+               Memory.AccessSize <= sizeof(uint32_t) &&
+               (ArgumentRead ||
+                hasClosedOrdinaryRegistrationMemoryAccess(
+                    Image, Op, Transfer, sizeof(uint32_t), Work)));
+        }
+      }
       if (ClosedIntegerEffects && *ClosedIntegerEffects) {
         const bool ThrowCall = ThrowProof && Op.Opcode == NdOp::CALL &&
                                Op.Addr == ThrowProof->ThrowCallVA &&
@@ -770,6 +821,8 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
     *ReturnValue = Returned;
   if (StackPopBytes)
     *StackPopBytes = ReturningPop;
+  if (Dispatch && ClosedDispatch)
+    *Dispatch = std::move(DispatchEffects);
   return true;
 }
 

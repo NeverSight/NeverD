@@ -32,6 +32,102 @@
 
 using namespace neverd;
 
+TEST(RegistrationConditionalFrame,
+     NestedDispatchRequiresOneAuthenticatedKnownRaise) {
+  using namespace registration_state;
+  for (va_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Base << " " << Mutation);
+      BinaryImage Image;
+      Image.Arch = Arch::X86;
+      Image.Bits = Bitness::Bits32;
+      Image.Format = BinaryFormat::COFF;
+      Image.Base = Base;
+      Image.Entry = Base + 0x1000;
+      Segment Text;
+      Text.VA = Image.Entry;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      Text.Data = {0xe8, 0x0b, 0, 0, 0, 0xc3};
+      Text.Data.resize(16, 0xcc);
+      Text.Data.insert(Text.Data.end(), {0x55, 0x8b, 0xec});
+      if (Mutation != 9)
+        for (unsigned Raise = 0; Raise != (Mutation == 3 ? 2u : 1u); ++Raise) {
+          if (Raise)
+            Text.Data.insert(Text.Data.end(), {0x31, 0xc9, 0x31, 0xd2});
+          const std::vector<uint8_t> Body = {
+              0x6a, uint8_t(Mutation == 8), // No argument array.
+              0x6a, uint8_t(Mutation == 7), // No argument count.
+              0x6a, uint8_t(Mutation == 2), // Continuable exception.
+              0x8b, 0x45,
+              0x08, 0x50,
+              0xff, 0x15};
+          Text.Data.insert(Text.Data.end(), Body.begin(), Body.end());
+          const size_t Slot = Text.Data.size();
+          Text.Data.resize(Slot + 4);
+          writeLE<uint32_t>(Text.Data.data() + Slot, uint32_t(Base + 0x2000));
+        }
+      Text.Data.insert(Text.Data.end(), {0x31, 0xc0, 0x5d, 0xc3});
+      Text.Size = Text.FileSz = Text.Data.size();
+      Section Code;
+      Code.VA = Text.VA;
+      Code.Size = Code.FileSz = Text.Size;
+      Code.Flags = Text.Flags;
+      Image.Sections.push_back(Code);
+      Image.Segments.push_back(Text);
+      Segment Data;
+      Data.VA = Base + 0x2000;
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Data.Size = Data.FileSz = 4;
+      Data.Data.resize(4);
+      Image.Segments.push_back(Data);
+      Section Storage;
+      Storage.VA = Data.VA;
+      Storage.Size = Storage.FileSz = Data.Size;
+      Storage.Flags = Data.Flags;
+      Image.Sections.push_back(Storage);
+      Import Raise;
+      Raise.Name = "RaiseException";
+      Raise.Module = Mutation == 6 ? "untrusted.dll" : "kernel32.dll";
+      Raise.IATAddr = Data.VA;
+      Image.Imports.push_back(Raise);
+      ASSERT_TRUE(Image.recordImportStorageSlot(
+          Raise.IATAddr, Raise.Name, 0,
+          ImportStorageEvidence::ImportDirectory));
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = Image.Entry + (Mutation == 4);
+      Call.Seq = Mutation == 5 ? -1 : 0;
+      Call.addInput(NdVar::cst(Image.Entry + 16, 4));
+      FrameState Parent;
+      Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+          FrameValue::frame(-64);
+      const std::set<int32_t> Initialized{-64, -63, -62, -61};
+      for (uint32_t Code : {0xe0000011u, 0xe0000012u, 0xe0000011u}) {
+        SCOPED_TRACE(Code);
+        Parent.store(-64, 4,
+                     Mutation == 1 ? FrameValue{} : FrameValue::constant(Code));
+        size_t Work = 0;
+        ConditionalCallResult Result;
+        const bool Valid = registration_abi::hasConditionalCallFrame(
+            Image, Call, Parent, Work, &Initialized, nullptr, nullptr, nullptr,
+            &Result);
+        EXPECT_EQ(Valid, Mutation < 6 || Mutation == 9);
+        EXPECT_EQ(bool(Result.Dispatch), Mutation == 0 || Mutation == 9);
+        if (Result.Dispatch) {
+          EXPECT_EQ(Result.StackPopBytes, 0u);
+          EXPECT_EQ(Result.ReturnValue, FrameValue::constant(0));
+          EXPECT_EQ(Result.Dispatch->ArgumentEnd, Mutation == 0 ? 12 : 8);
+          ASSERT_EQ(bool(Result.Dispatch->Raise), Mutation == 0);
+          if (Result.Dispatch->Raise) {
+            EXPECT_EQ(Result.Dispatch->Raise->Address, Image.Entry + 29);
+            EXPECT_EQ(Result.Dispatch->Raise->Code, Code);
+          }
+        }
+        EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+      }
+    }
+}
+
 TEST(RegistrationConditionalFrame, VolatileInputsDoNotRequireStackArguments) {
   using namespace registration_state;
   for (va_t Base : {0x400000u, 0x18000000u})
@@ -551,8 +647,14 @@ TEST(RegistrationConditionalFrame, BoundRaiseWrapperRetainsOnlyLocalProofs) {
   EXPECT_FALSE(getCheckedX86CalleeStackPop(*Image, 0x401030));
   size_t Work = 0;
   std::optional<FrameValue> Returned;
+  ConditionalCallResult Invocation;
   EXPECT_TRUE(registration_abi::hasConditionalCallFrame(
-      *Image, Call, Parent, Work, &Initialized, &Returned));
+      *Image, Call, Parent, Work, &Initialized, &Returned, nullptr, nullptr,
+      &Invocation));
+  ASSERT_TRUE(Invocation.Dispatch);
+  ASSERT_TRUE(Invocation.Dispatch->Raise);
+  EXPECT_EQ(Invocation.Dispatch->Raise->Code, 0xc0000005u);
+  EXPECT_EQ(Invocation.Dispatch->ArgumentEnd, 12);
   ASSERT_TRUE(Returned);
   EXPECT_FALSE(Returned->Constant);
   EXPECT_TRUE(Returned->FrameOnlyFromCall);
@@ -662,8 +764,17 @@ TEST(RegistrationConditionalFrame, XCPT4HelperChecksItsBoundIncomingCounter) {
   const auto Controls = Index.sehControlContracts(Function);
   ASSERT_TRUE(Stacks && Unwinds && Controls);
   using namespace registration_state;
-  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
     SCOPED_TRACE(Mutation);
+    auto *Flags = const_cast<uint8_t *>(Image->readVA(0x401038, 1));
+    auto *Code = const_cast<uint8_t *>(Image->readVA(0x401039, 3));
+    ASSERT_TRUE(Flags && Code);
+    *Flags = Mutation == 8 ? 1 : 0;
+    // An authentic wrapper may raise a different code than its incoming
+    // scalar. That search must not borrow the caller argument as its origin.
+    Code[0] = Mutation == 9 ? 0x31 : 0x8b;
+    Code[1] = Mutation == 9 ? 0xc0 : 0x45;
+    Code[2] = Mutation == 9 ? 0x90 : 0x08;
     auto Current = Function;
     ConditionalFrame Inputs;
     Inputs.Arguments = {{8, FrameValue::constant(0xc0000005)},
@@ -678,6 +789,10 @@ TEST(RegistrationConditionalFrame, XCPT4HelperChecksItsBoundIncomingCounter) {
                                *Image, Op, State, Inputs.Work, &Initialized,
                                nullptr, nullptr, nullptr, &Invocation))
         return std::nullopt;
+      // The returning frame remains valid, but cannot stand in for the
+      // missing proof of this wrapper's exceptional dispatch effects.
+      if (Mutation == 7)
+        Invocation.Dispatch.reset();
       return Invocation;
     };
     if (Mutation == 1)

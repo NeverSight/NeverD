@@ -16,6 +16,7 @@
 #include "llvm/Support/JSON.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace llvm {
@@ -27,9 +28,11 @@ namespace neverd {
 /// A producer-declared Win64 scalar view, not an inferred native signature.
 /// Widths are 1, 2, 4 or 8 bytes. Every argument must match the existing entry
 /// state; neither register padding nor original stack storage is initialized.
+/// An absent width retains that physical slot only in native state. It has no
+/// scalar formal or entry check and does not renumber subsequent slots.
 struct X64FunctionCallInterface {
   va_t Entry = 0;
-  std::vector<unsigned> ArgumentBytes;
+  std::vector<std::optional<unsigned>> ArgumentBytes;
   unsigned ResultBytes = 0;
 };
 
