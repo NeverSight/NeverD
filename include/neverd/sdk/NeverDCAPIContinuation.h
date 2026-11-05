@@ -81,6 +81,14 @@ extern "C" {
 /// Preserve caller and nested site contexts independently across pauses.
 /// Environment providers do not handle status 21. This does not recover an
 /// initial state from ordinary arguments or capture a live native process.
+/// V6 function_context also supports paged_memory through
+/// neverd_x64_run_paged_function_v6. Initialize its caller-owned activation at
+/// an entry and retain the same paged execution context and guest virtual
+/// return-cell lifetime. An attempted successful selected near RET through
+/// that cell completes; fault, backing and changed-code stops remain active.
+/// Paged function contexts do not accept function_calls, call-site pauses,
+/// scheduled events or direct dispatch. They supply no native snapshot,
+/// inferred mapping identity or ordinary scalar inputs.
 ///
 /// On success, ManifestJSON receives an independently owned JSON manifest of
 /// exact original bytes, input bindings, state offsets and the C source hash.

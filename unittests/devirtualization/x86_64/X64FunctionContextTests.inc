@@ -18,8 +18,6 @@ TEST_F(X64ContinuationExportTest, FunctionContextRejectsUnboundContracts) {
        request(
            R"("instructions":[4096],"function_context":true,"follow_internal_calls":true)"),
        request(
-           R"("entries":[4096],"function_context":true,"follow_internal_calls":true,"paged_memory":true)"),
-       request(
            R"("entries":[4096],"function_context":true,"follow_internal_calls":true,"scheduled_events":true)"),
        request(
            R"("entries":[4096],"function_context":true,"follow_internal_calls":true,"native_rtm_regions":true)"),

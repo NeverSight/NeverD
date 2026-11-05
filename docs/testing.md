@@ -20215,6 +20215,21 @@ initialization. Compile-only checks
 must not be reported as passing those runtime probes. Neither set establishes
 arbitrary dynamic frame ownership or a Windows environment implementation.
 
+`X64PagedFunctionContextTest.*` checks paged activation admission, disabled
+source identity and O0/O2 object compilation through both C routes. Twenty
+compile-time controller predicates cover successful near RET to a selected
+target, nested return cells, pre-step versus post-step SP, completed-context
+idempotence, fault delivery/retry, attempted and unattempted backing stops,
+shutdown, changed code, native/invalid/device refusal, event-only progress,
+non-RET transfers, zero budgets and the legacy adapter. Original generated
+bodies and wrappers remain unchanged; an independent boundary oracle supplies
+the paged runtime's outcomes and retained state. Every predicate must fold to
+constant zero. These tests execute no generated program, instruction executor
+or specimen. They qualify controller composition, not page walking, original
+instruction execution, live context capture or an arbitrary fault handler.
+`X64PagedExecutionTests` separately owns the runtime's instruction/fault tests;
+compile-only checks do not replace that coverage.
+
 `X64ContinuationExportTest.FunctionCallsRejectUnboundDeclarations` checks strict
 entry/ABI/width admission and the shared argument bound. Its
 `FunctionCallsCompileAndProveBoundaries` companion compiles the complete source
