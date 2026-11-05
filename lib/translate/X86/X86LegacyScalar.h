@@ -105,6 +105,9 @@ struct X86LegacyScalarInstruction {
   uint16_t Discard = 0;
   bool Relative = false;
   bool Atomic = false;
+  /// The string owner uses this for destination-first CMPS memory reads.
+  /// Arithmetic still computes Destination - Source in the normal order.
+  bool ReadSourceFirst = false;
 
   bool lockable() const {
     using Op = X86LegacyScalarOperation;

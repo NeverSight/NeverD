@@ -26,6 +26,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #if defined(__linux__) && defined(__x86_64__)
@@ -659,6 +660,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
 #include "X86LegacyShiftNativeTests.inc"
 #include "X86LegacyStatusNativeTests.inc"
 #include "X86LegacyStepNativeTests.inc"
+#include "X86LegacyStringNativeTests.inc"
 
 INSTANTIATE_TEST_SUITE_P(PagingModes, X86PagingNativeTest,
                          testing::Values(2u, 3u, 4u, 5u));

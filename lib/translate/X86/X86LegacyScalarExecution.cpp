@@ -260,6 +260,8 @@ public:
     const bool CompareExchange = F.Operation == Op::CompareExchange;
     const bool Compare = F.Operation == Op::Compare ||
                          F.Operation == Op::Test || CompareExchange;
+    if (F.ReadSourceFirst && !read(F.Source, N, B))
+      return;
     if (!read(F.Destination, N, A, !Compare || CompareExchange))
       return;
     if (F.Operation == Op::Increment || F.Operation == Op::Decrement) {
@@ -267,7 +269,8 @@ public:
     } else if (F.Operation == Op::Negate) {
       B = A;
       A = 0;
-    } else if (F.Operation != Op::Complement && !read(F.Source, N, B)) {
+    } else if (F.Operation != Op::Complement && !F.ReadSourceFirst &&
+               !read(F.Source, N, B)) {
       return;
     }
     const uint32_t Mask = UINT32_MAX >> (32 - N * 8);

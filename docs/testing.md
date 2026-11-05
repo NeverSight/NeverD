@@ -112,6 +112,21 @@ operand grammar, and the x64 paged execution and continuation source/export
 suites on both SDKs after changing the shared paged-RAM owner. Repeat the new
 CPU matrix on the qualified E core; retain skips as missing coverage.
 
+`LegacyStrings/*` compares MOVS/STOS/LODS/CMPS/SCAS and their admitted REP
+forms against original KVM instructions under legacy paging and PAE. It covers
+code/address/operand widths, all CPLs, direction, upper-word preservation,
+index wrap, segment overrides, zero counts, conditional termination, exact
+segment/page/alignment faults, retained progress and original PTE repair/IRET.
+Bind `NEVERD_TEST_LEGACY_ALIGNMENT=before` for its competing-alignment matrix
+on the qualified P/E cores; other processors need their own measured profile.
+IRQ/NMI tests use real injection windows and replay only the observed count
+boundary; the model computes values, flags, memory and frames independently.
+The shared fixture compares usable caches and defined unusable-cache fields.
+Unit tests cover backing stops, malformed/unbound forms, fetch priority and
+event return to the remaining count. Run full paging on both SDKs after
+changes to the shared scalar element owner, and the new native matrix on both
+qualified core types. See [memory strings](x86-legacy-segments.md#protected-memory-strings).
+
 `LegacyArpl/*` uses the same original-instruction fixture for word selector
 adjustment. It covers every register alias and RPL pair, code/address widths,
 ignored operand-size prefixes, all CPLs, flat/nonflat segments and exact

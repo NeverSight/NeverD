@@ -175,8 +175,9 @@ retains the original EIP and enters the IDT. Successful execution publishes
 fallthrough, clears RF, and advances SS/STI inhibition. The admitted byte
 grammar includes the segment instructions, NOP, register-immediate MOV,
 CLI/STI with IOPL/PVI checks, INT, INT3, INTO, INT1, UD2 and the protected
-IRET/RETF returns described below. An unimplemented
-instruction returns an error; only an authenticated UD2 generates its #UD.
+IRET/RETF returns described below. An unimplemented instruction returns an
+error; guest #UD is generated only for explicitly owned invalid encodings,
+such as authenticated UD2 or LOCK on the string forms described below.
 Sequential EIP is not truncated solely because CS.D is zero. Code-base and
 limit checks still apply to each fetched byte.
 INT1/ICEBP completes before its debug trap: it clears RF, advances EIP and
@@ -588,6 +589,57 @@ The same record checks NeverC's existing x64 Microsoft-compatible
 intrinsics produce native SHLD/SHRD without inline assembly. Those are
 return-value code-generation checks, not a complete flag-state API or a
 general i386 frontend.
+
+## Protected memory strings
+
+Bind `X86LegacyExecutionOptions::Strings` to `ElementwiseDestinationFirst`
+for MOVS/STOS/LODS/CMPS/SCAS over ordinary paged RAM. The original-byte owner
+accepts byte/word/dword operands in 16/32-bit code with independent 16/32-bit
+address sizes. REP applies to moves, stores and loads; REPE/REPNE applies to
+comparisons. Unprefixed forms execute exactly one element without changing
+CX/ECX. Source overrides select the loaded CS/DS/ES/SS/FS/GS cache; the
+destination always uses ES. Address-sized indices wrap before adding the
+segment base, and word updates preserve the high halves of ECX/ESI/EDI.
+
+Each call commits at most one complete element. `RepeatContinue` reports an
+unfinished instruction with the remaining count and indices, original EIP,
+RF set and the SS/STI shadows ended. The caller can stop for its own budget,
+deliver a producer-selected IRQ/NMI through the existing IDT owner, or execute
+the next element. Zero count completes without inspecting either data
+operand. The original instruction bytes must remain immutable until completion
+or event entry; each call still authenticates fetch and reports changed code.
+This profile does not infer fast-string grouping or interrupt-arrival timing.
+
+The element operation delegates to the scalar memory and arithmetic owner.
+Segment bounds/permissions, explicit alignment priority, page walks, prepared
+stores and comparison flags therefore have one implementation. MOVS reads its
+source before preparing the destination store. The bound CMPS profile reads
+the ES destination first. Each store preflights the entire element; an element
+fault publishes neither its data bytes nor its register changes. Completed
+earlier elements and page-table effects survive later faults or missing backing.
+Comparison repeats retain entry flags until the terminating comparison, so
+fault/IRQ/NMI frames preserve the restart image. Existing handlers can repair
+the PTE, discard a fault error code and IRET to the remaining count.
+
+LOCK on an otherwise admitted string raises #UD after original-byte fetch,
+including when CX/ECX is zero. Repeated/conflicting prefixes and F2 on a
+non-comparison remain explicit refusals. Port strings INS/OUTS, MMIO, physical
+read-ahead, debug producers, real/VM86 and a general i386 source dispatcher
+remain outside this memory-string contract. LLVM and NeverC already expose
+native string interfaces; no new compiler intrinsic is needed for this runtime
+state transition. The final SDK release, pin and LLVM gitlink stay unchanged.
+
+The architecture basis is the Intel SDM REP/CMPS/SCAS/MOVS/STOS/LODS entries
+and exception/interrupt restart rules. Operand access order and intermediate
+flags are explicit processor choices, qualified against original instructions
+under KVM. See the [qualification record](evidence/x86-legacy-strings-2026-11-05.json).
+It records 142,464 string CPU comparisons across the native and pinned-r6 SDKs
+on both local P/E core types. Each SDK's full paging suite passes 447 tests;
+the one LA57 oracle skip is unrelated to protected legacy paging. The wider
+qualification also runs both C routes through Clang/NeverC, paged execution,
+continuation source and export regressions. Final test-only include/profile
+checks retain byte-identical production translate archives; the record keeps
+the distinct test-binary and source identities.
 
 ## Protected SYSENTER and SYSEXIT
 

@@ -78,6 +78,13 @@ enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
 /// stack advancement preserving high ESP on a word wrap.
 enum class X86LegacyScalarProfile : uint8_t { OrderedRAM };
 
+/// One ordinary-RAM element per step, with destination-first CMPS reads.
+/// Incomplete comparisons retain entry flags; completed elements retain their
+/// memory/register effects across faults and producer-selected IRQ/NMI entry.
+/// Original instruction bytes remain immutable until completion or an event.
+/// Fast-string timing, MMIO and external writers are outside this profile.
+enum class X86LegacyStringProfile : uint8_t { ElementwiseDestinationFirst };
+
 /// One CPU with exclusive access to the entire ordinary-RAM image for each
 /// step. No concurrent CPU, DMA, MMIO, split-lock or bus-lock trap producer.
 /// Locked operands use one prepared read/write plan, including failed
@@ -163,6 +170,7 @@ struct X86LegacyExecutionOptions {
   /// DAA/DAS OF, AAM/AAD OF/AF/CF. No other bits are permitted. AAM base
   /// zero delivers #DE before publishing AX or flags; AAD base zero is valid.
   std::optional<uint32_t> DecimalUndefinedFlags;
+  std::optional<X86LegacyStringProfile> Strings;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -172,6 +180,8 @@ enum class X86LegacyExecutionStatus : uint8_t {
   CodeChanged,
   BackingFault,
   Shutdown,
+  /// One REP element committed; EIP still names the original instruction.
+  RepeatContinue,
 };
 
 struct X86LegacyExecutionResult {
@@ -205,6 +215,13 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// BT/BTS/BTR/BTC, BSF/BSR, XCHG/XADD/CMPXCHG/CMPXCHG8B,
 /// AAA/AAS/DAA/DAS and AAM/AAD with every immediate base,
 /// PUSH/POP, PUSHF/POPF and near CALL/JMP/Jcc/RET.
+/// The explicit Strings profile adds MOVS/STOS/LODS/CMPS/SCAS, with REP or
+/// REPE/REPNE as appropriate, in both address and operand widths. Each call
+/// commits at most one element; RepeatContinue retains EIP, sets RF, ends
+/// SS/STI inhibition and leaves comparisons' entry flags available for event
+/// delivery. The caller may deliver an event at that boundary or repeat the
+/// same immutable bytes. Zero counts complete without operand access. LOCK
+/// raises #UD after fetch; duplicate prefixes and F2 on non-comparisons refuse.
 /// Register immediates
 /// retain their unbound interface; other scalars require Scalars, CALL requires
 /// Calls, and logical flags require an AF choice. Division requires an explicit
