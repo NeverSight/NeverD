@@ -1883,6 +1883,18 @@ fail the corpus test. Native far-pointer compiler interfaces are independently
 qualified in [the far-pointer record](evidence/x86-far-pointer-native-2026-10-29.json).
 They do not change the far-pointer lifter's refusal contract.
 
+The compiler-source extension uses NeverC's
+`tests/neverc/X86/verify_protected_far_pointer.py --llvm-bin LLVM_BIN --mode 32
+--frontend NEVERC --output ARTIFACTS` to compile all ten i386 word/dword builtin
+forms before the protected KVM comparison. The full fork's Clang also accepts
+`--mode 16`. Run both O0/O2 profiles on the qualified P/E cores and retain the
+direct-IR baselines. Each profile includes used and unused results, all represented
+state and descriptor effects, original #GP/#NP/#SS/#PF frames, ABI-compatible
+returns and an intact-instruction wrong-pointer negative control. Its
+`verify_far_pointer.py --frontend CLANG` additionally checks native Clang and
+Clang IR through full LLVM on x64. These source APIs neither restore NeverC's
+embedded i386 backend nor supply a general NeverD segment-state dispatcher.
+
 `X86SegmentMoveSource.*` in `NeverDX86VirtualizationSourceTests` checks the
 four native selector-MOV interfaces through both SDKs. It covers all six read
 and five write registers, both C routes, i386/x64, three object formats and both

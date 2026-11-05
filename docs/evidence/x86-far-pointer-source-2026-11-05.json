@@ -1,0 +1,904 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-05",
+  "status": "passed",
+  "scope": "Native LDS/LES/LFS/LGS/LSS source interfaces: Clang exposes 13 packed far-pointer builtins; NeverC exposes LDS/LES word/dword forms and qualifies all ten Linux i386 forms through full LLVM. Existing nine long-mode forms remain qualified.",
+  "source_revisions": {
+    "llvm": "14aa32e39ae8d56f1152aa2693f35fef2c485643",
+    "neverc": "e581f248d3c730d9e75f99c9186a050a48371eb0",
+    "neverd": "d279f76ba8075cae474db9d3d6f328cc456abf05"
+  },
+  "source_files": {
+    "llvm": {
+      "clang/include/clang/Basic/BuiltinsX86.td": "bfee9026d5976b52b94aa0ffa0a80ab4fe8ee5755252ebf60793fd38c2573487",
+      "clang/include/clang/Basic/BuiltinsX86_64.td": "ceb43040ed84bab72dced37b2c13e0da35e8a6cedd9773ca287f997daed7375d",
+      "clang/lib/Sema/SemaX86.cpp": "d378ffd1d93daac8108b6340e559c1b60ec16bc9df46790aebc6675d3faa19a6",
+      "llvm/include/llvm/IR/IntrinsicsX86.td": "b6006ee77657ab3f7c4e679611cad5e8caa9dd66969cc3d9ba58f87741b90dc1",
+      "clang/test/CodeGen/X86/far-pointer-builtins.c": "8942c0b4ddfc2f7b942e9e361774f4ab967837c2c4a89a4f3d442ae1ccdc591b",
+      "clang/test/Sema/far-pointer-builtins.c": "909e6e5d9a3bc592ca3785d0199d8dd242803670274912b6b2e8de5d433bd0ef"
+    },
+    "neverc": {
+      "neverc/include/neverc/Foundation/Builtin/BuiltinsX86.def": "77d87549b16fa56cd55183e63b902f4573d32a760504f01c85de9d18587faaac",
+      "neverc/lib/Analyze/Checking/SemaCheckingTargetX86.cpp": "ccf30698bdf59e43b6a02632d19cdde94058347810a9f9b71a0029fb72192450",
+      "neverc/lib/Emit/Builtin/BuiltinEmitterX86.cpp": "49e47d35af41161d6b875dde60c1719c45112c8028c728d77e7329ad459e5f7a",
+      "tests/neverc/X86/FarPointerFrontendTests.cpp": "27962be9cecb107a254b0ae477e7005f92b175c6fa8342ee734cc7f642d0664b",
+      "tests/neverc/X86/native_qualification.py": "559a53b127cce251408bc297244127e20773ed2719400b3b2e524f11b0eca7a3",
+      "tests/neverc/X86/verify_protected_far_pointer.py": "e526cf8f4bba0eb347635fceafe89e0950da757cee83503e466642c1a26cea1c"
+    }
+  },
+  "build_note": "Binaries were built from these source contents before the commits were created. Tool hashes identify the qualified binaries. No machine lowering or instruction-effect definition was changed.",
+  "artifact_root": "/mnt/data/neverd-far-pointer-source-20261105",
+  "host": {
+    "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+    "affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+    ],
+    "lscpu": "{\n   \"lscpu\": [\n      {\n         \"field\": \"Architecture:\",\n         \"data\": \"x86_64\"\n      },{\n         \"field\": \"CPU op-mode(s):\",\n         \"data\": \"32-bit, 64-bit\"\n      },{\n         \"field\": \"Address sizes:\",\n         \"data\": \"46 bits physical, 48 bits virtual\"\n      },{\n         \"field\": \"Byte Order:\",\n         \"data\": \"Little Endian\"\n      },{\n         \"field\": \"CPU(s):\",\n         \"data\": \"20\"\n      },{\n         \"field\": \"On-line CPU(s) list:\",\n         \"data\": \"0-19\"\n      },{\n         \"field\": \"Vendor ID:\",\n         \"data\": \"GenuineIntel\"\n      },{\n         \"field\": \"Model name:\",\n         \"data\": \"13th Gen Intel(R) Core(TM) i9-13900H\"\n      },{\n         \"field\": \"CPU family:\",\n         \"data\": \"6\"\n      },{\n         \"field\": \"Model:\",\n         \"data\": \"186\"\n      },{\n         \"field\": \"Thread(s) per core:\",\n         \"data\": \"2\"\n      },{\n         \"field\": \"Core(s) per socket:\",\n         \"data\": \"14\"\n      },{\n         \"field\": \"Socket(s):\",\n         \"data\": \"1\"\n      },{\n         \"field\": \"Stepping:\",\n         \"data\": \"2\"\n      },{\n         \"field\": \"CPU(s) scaling MHz:\",\n         \"data\": \"66%\"\n      },{\n         \"field\": \"CPU max MHz:\",\n         \"data\": \"5400.0000\"\n      },{\n         \"field\": \"CPU min MHz:\",\n         \"data\": \"400.0000\"\n      },{\n         \"field\": \"BogoMIPS:\",\n         \"data\": \"5990.40\"\n      },{\n         \"field\": \"Flags:\",\n         \"data\": \"fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb intel_pt sha_ni xsaveopt xsavec xgetbv1 xsaves split_lock_detect user_shstk avx_vnni dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp hwp_pkg_req hfi vnmi umip pku ospke waitpkg gfni vaes vpclmulqdq rdpid movdiri movdir64b fsrm md_clear serialize pconfig arch_lbr ibt flush_l1d arch_capabilities\"\n      },{\n         \"field\": \"Virtualization:\",\n         \"data\": \"VT-x\"\n      },{\n         \"field\": \"L1d cache:\",\n         \"data\": \"544 KiB (14 instances)\"\n      },{\n         \"field\": \"L1i cache:\",\n         \"data\": \"704 KiB (14 instances)\"\n      },{\n         \"field\": \"L2 cache:\",\n         \"data\": \"11.5 MiB (8 instances)\"\n      },{\n         \"field\": \"L3 cache:\",\n         \"data\": \"24 MiB (1 instance)\"\n      },{\n         \"field\": \"NUMA node(s):\",\n         \"data\": \"1\"\n      },{\n         \"field\": \"NUMA node0 CPU(s):\",\n         \"data\": \"0-19\"\n      },{\n         \"field\": \"Vulnerability Gather data sampling:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Ghostwrite:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Indirect target selection:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Itlb multihit:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability L1tf:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Mds:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Meltdown:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Mmio stale data:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Old microcode:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Reg file data sampling:\",\n         \"data\": \"Mitigation; Clear Register File\"\n      },{\n         \"field\": \"Vulnerability Retbleed:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Spec rstack overflow:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Spec store bypass:\",\n         \"data\": \"Mitigation; Speculative Store Bypass disabled via prctl\"\n      },{\n         \"field\": \"Vulnerability Spectre v1:\",\n         \"data\": \"Mitigation; usercopy/swapgs barriers and __user pointer sanitization\"\n      },{\n         \"field\": \"Vulnerability Spectre v2:\",\n         \"data\": \"Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI BHI_DIS_S\"\n      },{\n         \"field\": \"Vulnerability Srbds:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Tsa:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Tsx async abort:\",\n         \"data\": \"Not affected\"\n      },{\n         \"field\": \"Vulnerability Vmscape:\",\n         \"data\": \"Mitigation; IBPB before exit to userspace\"\n      }\n   ]\n}\n"
+  },
+  "cpuinfo_sha256": "ab7ff383b7b7de4f21def3fdfd91584cf5970247146c06708be270ac249298c2",
+  "summary": {
+    "protected_profiles": 20,
+    "protected_complete_state_pairs": 319200,
+    "protected_wrong_pointer_negative_controls": 20,
+    "x64_profiles": 20,
+    "x64_state_observations": 86400,
+    "x64_stopped_observations_included_in_state_total": 28800,
+    "x64_exact_boundary_observations": 360,
+    "x64_fault_observations": 3720,
+    "neverc_regressions": 176,
+    "clang_lit_files": 7,
+    "llvm_lit_files": 3
+  },
+  "regressions": {
+    "neverc-regressions.xml": {
+      "path": "/mnt/data/neverd-far-pointer-source-20261105/neverc-regressions.xml",
+      "sha256": "a99411f2ab39e05dd943dd12569d8b1304d754797afb47f6312d0385402b9328"
+    },
+    "neverc-regressions.log": {
+      "path": "/mnt/data/neverd-far-pointer-source-20261105/neverc-regressions.log",
+      "sha256": "c1ecf72f1e3ed0298acf51c2b2d6e8ee9410aa68f9baef29c31649b6c6b6ff42"
+    },
+    "clang-lit.log": {
+      "path": "/mnt/data/neverd-far-pointer-source-20261105/clang-lit.log",
+      "sha256": "fff86020efca9c815b93c650bfe7eb48d7bddfe2576cb18d2c042dedec24435e"
+    },
+    "llvm-lit.log": {
+      "path": "/mnt/data/neverd-far-pointer-source-20261105/llvm-lit.log",
+      "sha256": "afa755b20d8cc072c530210bff8ac92c83d8e6598d3148c20685f17450cc4d27"
+    }
+  },
+  "protected": [
+    {
+      "name": "llvm-code16-cpu2",
+      "cpu": 2,
+      "frontend": "llvm",
+      "mode": 16,
+      "report": "/mnt/data/neverd-far-pointer-source-20261105/llvm-code16-cpu2/qualification.json",
+      "report_sha256": "778397aa7da4b058943e1c80515ba7bae0100920120a1e48f4b8c1c7e89c4c16",
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "f250eaceefcd0d25fb731ec050294af253eacb10e4785a80d29595169d5a5c91",
+        "opt": "82a7cd957680bbbb84a291148d7a633aa6c675777c0b4b7f779fd785f9810ba2",
+        "llvm-objdump": "8161f1b21b1d2b6f666bbc55e2efea9e5e83d0b424607282f3b69cf08279999f"
+      },
+      "inputs": {
+        "verify_protected_far_pointer.py": "e526cf8f4bba0eb347635fceafe89e0950da757cee83503e466642c1a26cea1c",
+        "protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 16,
+          "image_sha256": "fab6bc70452331d32e45ea12be111b6ac2d9fae7e38a0c502ad59d1d8b98419b",
+          "manifest_sha256": "64b6e5cff47190eebdd6b27be87e56d75c2c79890251636031f6cbdac0afc770",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 16,
+          "image_sha256": "319fe3f4927ef2bbe65ec7e7df1552623ec881d7a079b495273a6913a5dc9171",
+          "manifest_sha256": "a7cce4026b00c419d2b788551d5fead054154ee5dd8cf351546140a0702166b5",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ],
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events."
+    },
+    {
+      "name": "llvm-code32-cpu2",
+      "cpu": 2,
+      "frontend": "llvm",
+      "mode": 32,
+      "report": "/mnt/data/neverd-far-pointer-source-20261105/llvm-code32-cpu2/qualification.json",
+      "report_sha256": "fc6e89fdafa6a2d9bbc3f22999d79850b80083aef09b21e916a362e94f5d5e76",
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "f250eaceefcd0d25fb731ec050294af253eacb10e4785a80d29595169d5a5c91",
+        "opt": "82a7cd957680bbbb84a291148d7a633aa6c675777c0b4b7f779fd785f9810ba2",
+        "llvm-objdump": "8161f1b21b1d2b6f666bbc55e2efea9e5e83d0b424607282f3b69cf08279999f"
+      },
+      "inputs": {
+        "verify_protected_far_pointer.py": "e526cf8f4bba0eb347635fceafe89e0950da757cee83503e466642c1a26cea1c",
+        "protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 32,
+          "image_sha256": "d7c0974e21dc2505b90cc58bca088926bc57b0e2b0d06b4072e0e825fdfc08d9",
+          "manifest_sha256": "8dada9d8297777dfb3c650df4889f673920b5db8493e638f6610958a5582ec6b",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 32,
+          "image_sha256": "b7dbbcb17cc8c876f67d8354eef25da278136d5a047115f21fab8df3b56c6161",
+          "manifest_sha256": "44d504b9b3c183eb4ac1e24a42f78cf160ae92e59b169f8dcfb323e08dbb4a1e",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ],
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events."
+    },
+    {
+      "name": "clang-code16-cpu2",
+      "cpu": 2,
+      "frontend": "clang",
+      "mode": 16,
+      "report": "/mnt/data/neverd-far-pointer-source-20261105/clang-code16-cpu2/qualification.json",
+      "report_sha256": "6f40b364211da5e6e6cb7dfc463532cf77a29094ca6a85120cec0e3f5bff6f15",
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "f250eaceefcd0d25fb731ec050294af253eacb10e4785a80d29595169d5a5c91",
+        "opt": "82a7cd957680bbbb84a291148d7a633aa6c675777c0b4b7f779fd785f9810ba2",
+        "llvm-objdump": "8161f1b21b1d2b6f666bbc55e2efea9e5e83d0b424607282f3b69cf08279999f",
+        "frontend": "979e2d329299dd3a33618803eb6468b919bcfe2bc9ead560fc57faf4a2394a71"
+      },
+      "inputs": {
+        "verify_protected_far_pointer.py": "e526cf8f4bba0eb347635fceafe89e0950da757cee83503e466642c1a26cea1c",
+        "protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 16,
+          "image_sha256": "1f8bd8ad759e9bda273ef81866d8f2ef9263d7e3fe377875b2d66e2b10551771",
+          "manifest_sha256": "b195e39b07badc5ecda23f3dc23d166c2bcfa8cda49dbfb28a18047c97bec82b",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 16,
+          "image_sha256": "902e2b44f4cb2cfe231be02e6c7ed7c1a5c8295e27c61d2632d2dbdecadf5c58",
+          "manifest_sha256": "a7cce4026b00c419d2b788551d5fead054154ee5dd8cf351546140a0702166b5",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ],
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events."
+    },
+    {
+      "name": "clang-code32-cpu2",
+      "cpu": 2,
+      "frontend": "clang",
+      "mode": 32,
+      "report": "/mnt/data/neverd-far-pointer-source-20261105/clang-code32-cpu2/qualification.json",
+      "report_sha256": "40ead01226a0a2130edd446de0d59394f42c2e071c33072f45c0b33738822a86",
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "f250eaceefcd0d25fb731ec050294af253eacb10e4785a80d29595169d5a5c91",
+        "opt": "82a7cd957680bbbb84a291148d7a633aa6c675777c0b4b7f779fd785f9810ba2",
+        "llvm-objdump": "8161f1b21b1d2b6f666bbc55e2efea9e5e83d0b424607282f3b69cf08279999f",
+        "frontend": "979e2d329299dd3a33618803eb6468b919bcfe2bc9ead560fc57faf4a2394a71"
+      },
+      "inputs": {
+        "verify_protected_far_pointer.py": "e526cf8f4bba0eb347635fceafe89e0950da757cee83503e466642c1a26cea1c",
+        "protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 32,
+          "image_sha256": "b36e84356cc2c25fe1e83196461a230683580eba667cb677906363208cf9ece7",
+          "manifest_sha256": "ef159764bc6f4335120a24aa25ee3584f0cc0841a20391ae27da6cb943a668de",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 32,
+          "image_sha256": "65e5ca0e36dd708804a2d1c19ea26504e6c757e1897b8385b6f9f3f28f1c1535",
+          "manifest_sha256": "44d504b9b3c183eb4ac1e24a42f78cf160ae92e59b169f8dcfb323e08dbb4a1e",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ],
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events."
+    },
+    {
+      "name": "neverc-code32-cpu2",
+      "cpu": 2,
+      "frontend": "neverc",
+      "mode": 32,
+      "report": "/mnt/data/neverd-far-pointer-source-20261105/neverc-code32-cpu2/qualification.json",
+      "report_sha256": "72697058c654c75f889a517c4e3d5b57a362e47b174e8575046bbf5d0ce70b51",
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "f250eaceefcd0d25fb731ec050294af253eacb10e4785a80d29595169d5a5c91",
+        "opt": "82a7cd957680bbbb84a291148d7a633aa6c675777c0b4b7f779fd785f9810ba2",
+        "llvm-objdump": "8161f1b21b1d2b6f666bbc55e2efea9e5e83d0b424607282f3b69cf08279999f",
+        "frontend": "318e8c4ef0ec095646a2e138284e526d955a6b9ce2d5cef91134564accebcd36"
+      },
+      "inputs": {
+        "verify_protected_far_pointer.py": "e526cf8f4bba0eb347635fceafe89e0950da757cee83503e466642c1a26cea1c",
+        "protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 32,
+          "image_sha256": "a6bd4215615a9e9a2456ea86cffb8b8cda4464e39ab30ebe097b0c39470e45c6",
+          "manifest_sha256": "ef159764bc6f4335120a24aa25ee3584f0cc0841a20391ae27da6cb943a668de",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 32,
+          "image_sha256": "841ea04e01e02d7f6ba644853d2e5b4c47c7e7112a136453f14e9159eaccf7e8",
+          "manifest_sha256": "2eabb9796181523cd8a4f4a02ac1f0e3a68519ecd6e72e45d2152bef29e9cb4a",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ],
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events."
+    },
+    {
+      "name": "llvm-code16-cpu12",
+      "cpu": 12,
+      "frontend": "llvm",
+      "mode": 16,
+      "report": "/mnt/data/neverd-far-pointer-source-20261105/llvm-code16-cpu12/qualification.json",
+      "report_sha256": "778397aa7da4b058943e1c80515ba7bae0100920120a1e48f4b8c1c7e89c4c16",
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "f250eaceefcd0d25fb731ec050294af253eacb10e4785a80d29595169d5a5c91",
+        "opt": "82a7cd957680bbbb84a291148d7a633aa6c675777c0b4b7f779fd785f9810ba2",
+        "llvm-objdump": "8161f1b21b1d2b6f666bbc55e2efea9e5e83d0b424607282f3b69cf08279999f"
+      },
+      "inputs": {
+        "verify_protected_far_pointer.py": "e526cf8f4bba0eb347635fceafe89e0950da757cee83503e466642c1a26cea1c",
+        "protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 16,
+          "image_sha256": "fab6bc70452331d32e45ea12be111b6ac2d9fae7e38a0c502ad59d1d8b98419b",
+          "manifest_sha256": "64b6e5cff47190eebdd6b27be87e56d75c2c79890251636031f6cbdac0afc770",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 16,
+          "image_sha256": "319fe3f4927ef2bbe65ec7e7df1552623ec881d7a079b495273a6913a5dc9171",
+          "manifest_sha256": "a7cce4026b00c419d2b788551d5fead054154ee5dd8cf351546140a0702166b5",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ],
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events."
+    },
+    {
+      "name": "llvm-code32-cpu12",
+      "cpu": 12,
+      "frontend": "llvm",
+      "mode": 32,
+      "report": "/mnt/data/neverd-far-pointer-source-20261105/llvm-code32-cpu12/qualification.json",
+      "report_sha256": "fc6e89fdafa6a2d9bbc3f22999d79850b80083aef09b21e916a362e94f5d5e76",
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "f250eaceefcd0d25fb731ec050294af253eacb10e4785a80d29595169d5a5c91",
+        "opt": "82a7cd957680bbbb84a291148d7a633aa6c675777c0b4b7f779fd785f9810ba2",
+        "llvm-objdump": "8161f1b21b1d2b6f666bbc55e2efea9e5e83d0b424607282f3b69cf08279999f"
+      },
+      "inputs": {
+        "verify_protected_far_pointer.py": "e526cf8f4bba0eb347635fceafe89e0950da757cee83503e466642c1a26cea1c",
+        "protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 32,
+          "image_sha256": "d7c0974e21dc2505b90cc58bca088926bc57b0e2b0d06b4072e0e825fdfc08d9",
+          "manifest_sha256": "8dada9d8297777dfb3c650df4889f673920b5db8493e638f6610958a5582ec6b",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 32,
+          "image_sha256": "b7dbbcb17cc8c876f67d8354eef25da278136d5a047115f21fab8df3b56c6161",
+          "manifest_sha256": "44d504b9b3c183eb4ac1e24a42f78cf160ae92e59b169f8dcfb323e08dbb4a1e",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ],
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events."
+    },
+    {
+      "name": "clang-code16-cpu12",
+      "cpu": 12,
+      "frontend": "clang",
+      "mode": 16,
+      "report": "/mnt/data/neverd-far-pointer-source-20261105/clang-code16-cpu12/qualification.json",
+      "report_sha256": "6f40b364211da5e6e6cb7dfc463532cf77a29094ca6a85120cec0e3f5bff6f15",
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "f250eaceefcd0d25fb731ec050294af253eacb10e4785a80d29595169d5a5c91",
+        "opt": "82a7cd957680bbbb84a291148d7a633aa6c675777c0b4b7f779fd785f9810ba2",
+        "llvm-objdump": "8161f1b21b1d2b6f666bbc55e2efea9e5e83d0b424607282f3b69cf08279999f",
+        "frontend": "979e2d329299dd3a33618803eb6468b919bcfe2bc9ead560fc57faf4a2394a71"
+      },
+      "inputs": {
+        "verify_protected_far_pointer.py": "e526cf8f4bba0eb347635fceafe89e0950da757cee83503e466642c1a26cea1c",
+        "protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 16,
+          "image_sha256": "1f8bd8ad759e9bda273ef81866d8f2ef9263d7e3fe377875b2d66e2b10551771",
+          "manifest_sha256": "b195e39b07badc5ecda23f3dc23d166c2bcfa8cda49dbfb28a18047c97bec82b",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 16,
+          "image_sha256": "902e2b44f4cb2cfe231be02e6c7ed7c1a5c8295e27c61d2632d2dbdecadf5c58",
+          "manifest_sha256": "a7cce4026b00c419d2b788551d5fead054154ee5dd8cf351546140a0702166b5",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ],
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events."
+    },
+    {
+      "name": "clang-code32-cpu12",
+      "cpu": 12,
+      "frontend": "clang",
+      "mode": 32,
+      "report": "/mnt/data/neverd-far-pointer-source-20261105/clang-code32-cpu12/qualification.json",
+      "report_sha256": "40ead01226a0a2130edd446de0d59394f42c2e071c33072f45c0b33738822a86",
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "f250eaceefcd0d25fb731ec050294af253eacb10e4785a80d29595169d5a5c91",
+        "opt": "82a7cd957680bbbb84a291148d7a633aa6c675777c0b4b7f779fd785f9810ba2",
+        "llvm-objdump": "8161f1b21b1d2b6f666bbc55e2efea9e5e83d0b424607282f3b69cf08279999f",
+        "frontend": "979e2d329299dd3a33618803eb6468b919bcfe2bc9ead560fc57faf4a2394a71"
+      },
+      "inputs": {
+        "verify_protected_far_pointer.py": "e526cf8f4bba0eb347635fceafe89e0950da757cee83503e466642c1a26cea1c",
+        "protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 32,
+          "image_sha256": "b36e84356cc2c25fe1e83196461a230683580eba667cb677906363208cf9ece7",
+          "manifest_sha256": "ef159764bc6f4335120a24aa25ee3584f0cc0841a20391ae27da6cb943a668de",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 32,
+          "image_sha256": "65e5ca0e36dd708804a2d1c19ea26504e6c757e1897b8385b6f9f3f28f1c1535",
+          "manifest_sha256": "44d504b9b3c183eb4ac1e24a42f78cf160ae92e59b169f8dcfb323e08dbb4a1e",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ],
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events."
+    },
+    {
+      "name": "neverc-code32-cpu12",
+      "cpu": 12,
+      "frontend": "neverc",
+      "mode": 32,
+      "report": "/mnt/data/neverd-far-pointer-source-20261105/neverc-code32-cpu12/qualification.json",
+      "report_sha256": "72697058c654c75f889a517c4e3d5b57a362e47b174e8575046bbf5d0ce70b51",
+      "tools": {
+        "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+        "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+        "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+        "llc": "f250eaceefcd0d25fb731ec050294af253eacb10e4785a80d29595169d5a5c91",
+        "opt": "82a7cd957680bbbb84a291148d7a633aa6c675777c0b4b7f779fd785f9810ba2",
+        "llvm-objdump": "8161f1b21b1d2b6f666bbc55e2efea9e5e83d0b424607282f3b69cf08279999f",
+        "frontend": "318e8c4ef0ec095646a2e138284e526d955a6b9ce2d5cef91134564accebcd36"
+      },
+      "inputs": {
+        "verify_protected_far_pointer.py": "e526cf8f4bba0eb347635fceafe89e0950da757cee83503e466642c1a26cea1c",
+        "protected_far_pointer_kvm.c": "ab53540cc5281292beee9df82ce7e892686c4cdb77f4c8988271e71b13ff4cb0",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33"
+      },
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 32,
+          "image_sha256": "a6bd4215615a9e9a2456ea86cffb8b8cda4464e39ab30ebe097b0c39470e45c6",
+          "manifest_sha256": "ef159764bc6f4335120a24aa25ee3584f0cc0841a20391ae27da6cb943a668de",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 32,
+          "image_sha256": "841ea04e01e02d7f6ba644853d2e5b4c47c7e7112a136453f14e9159eaccf7e8",
+          "manifest_sha256": "2eabb9796181523cd8a4f4a02ac1f0e3a68519ecd6e72e45d2152bef29e9cb4a",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ],
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events."
+    }
+  ],
+  "x64": [
+    {
+      "cpu": 2,
+      "report": "/mnt/data/neverd-far-pointer-source-20261105/x64-cpu2/qualification.json",
+      "report_sha256": "4d271965d2ba0502cba53747fe40dff8823b785af61899fad304fee6d2c4fc0e",
+      "passed": true,
+      "stable_inputs": true,
+      "profiles": [
+        {
+          "profile": "llc-O0",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "887793d99fc24a7160df1e8351105a58256594a8a7da7a24ce3c5b86e11979b3",
+          "binary_sha256": "64bf3dc551b250b51220bd201f2f0f329ee6d60c93eaa12435aff8f9724ccbcb"
+        },
+        {
+          "profile": "llc-O2",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "e351f050003868717e6a1f2445940a0fbe1e2069a52ca05f353b33fce33921d3",
+          "binary_sha256": "edb7c2bdf4e19a189f4f8984e0f182a162a65f2cae9d57274ddcf4b532698a32"
+        },
+        {
+          "profile": "neverc-O0",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "b5d47fc22a7266134be33597fb2090b5671d3b39d39765c9156cbab5c44f1558",
+          "binary_sha256": "5d5646fd9b3da97ad196574369bd7f986bf62e70442524fec9a1e8cee2c8eaba"
+        },
+        {
+          "profile": "neverc-O2",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "0a416c37ea13549f6ed0e58afa8905b7befd57913f48965c243630f6416ec639",
+          "binary_sha256": "59f76f65d6c5cc1ed13d3009fb014f369f74fc94bbe5283d487831bfdb18ddb9"
+        },
+        {
+          "profile": "frontend-O0",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "0131507b0efa12fdf5806fb8c0794d035da1e0742ddb067cddc1d9f1f215f5c1",
+          "binary_sha256": "3494269ca26b004f5f6ddbad1775c4903d8c18c3979cf7460fb20f0968f769fe"
+        },
+        {
+          "profile": "frontend-O2",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "c3b4480ec2933c36cd7cf52de73ef31a6657881c033869d4a805b607cb2ac21d",
+          "binary_sha256": "5871287af54627059613b225314dbed2dce9ef04ba1eb31464a0c1045f85ddac"
+        },
+        {
+          "profile": "neverc-llvm-O0",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "cc5686609818ff1d10df75ec2514b014408cc7db2ae8c71c0ac1a77a521c585a",
+          "binary_sha256": "69a61e9358c3cd614845eb0a8cf6760cfb4a823cbdd6a7533bfdb9941de0e954"
+        },
+        {
+          "profile": "neverc-llvm-O2",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "0cb606d5b5247921ad0d93c99ab17d88af1eff463511956c06c9c26ae5bec4ee",
+          "binary_sha256": "5a3224b7964c6b5d25fb2f2baf4fd18908a485a05ff609b57f0cb9ef20aabee2"
+        },
+        {
+          "profile": "frontend-llvm-O0",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "0aa0acea3c6ee065bd93fcf87deec6599edf6e57e57c2ea3c62a5dc0d685767b",
+          "binary_sha256": "0b24536857b92e31ac685d7f7f2eaaab84d7de954cda69b30a64d1bae7f2a42d"
+        },
+        {
+          "profile": "frontend-llvm-O2",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "e18f1f480408945f9e4ecd3bee0a4ef85975a150501c146a50ccc9b27b4d12f6",
+          "binary_sha256": "3f2db357d7ab7bdc7dd398dd9013079526de75ce14be1a86860773a846f6e002"
+        }
+      ],
+      "tools": {
+        "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llc": "f250eaceefcd0d25fb731ec050294af253eacb10e4785a80d29595169d5a5c91",
+        "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/opt": "82a7cd957680bbbb84a291148d7a633aa6c675777c0b4b7f779fd785f9810ba2",
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "318e8c4ef0ec095646a2e138284e526d955a6b9ce2d5cef91134564accebcd36",
+        "/mnt/data/neverd-flags-20261104/clang-build/bin/clang-23": "979e2d329299dd3a33618803eb6468b919bcfe2bc9ead560fc57faf4a2394a71",
+        "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+      },
+      "harness_sha256": "0d4fde5c8cd24e359a6c2a77be54137db7bb49f20a822d21bd7973a569a35e67",
+      "scripts": {
+        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/tests/neverc/X86/verify_far_pointer.py": "fbd8df10e78829890d463c96bc2f3f1fee6727be93cbb21c0870ba8c4fcd5b6a",
+        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/tests/neverc/X86/native_qualification.py": "559a53b127cce251408bc297244127e20773ed2719400b3b2e524f11b0eca7a3"
+      },
+      "exclusions": [
+        "other CPU models",
+        "i386 runtime",
+        "code16",
+        "privileged descriptor-table accessed-bit faults",
+        "alignment-check exceptions",
+        "asynchronous interrupt delivery",
+        "null selectors 1..3 after Linux interrupt/signal return",
+        "complete lifted machine-state continuation"
+      ]
+    },
+    {
+      "cpu": 12,
+      "report": "/mnt/data/neverd-far-pointer-source-20261105/x64-cpu12/qualification.json",
+      "report_sha256": "23fa85cbe25a1b851290cf21c6b5b08ab846244687cdcd0bbb9290347638283c",
+      "passed": true,
+      "stable_inputs": true,
+      "profiles": [
+        {
+          "profile": "llc-O0",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "887793d99fc24a7160df1e8351105a58256594a8a7da7a24ce3c5b86e11979b3",
+          "binary_sha256": "64bf3dc551b250b51220bd201f2f0f329ee6d60c93eaa12435aff8f9724ccbcb"
+        },
+        {
+          "profile": "llc-O2",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "e351f050003868717e6a1f2445940a0fbe1e2069a52ca05f353b33fce33921d3",
+          "binary_sha256": "edb7c2bdf4e19a189f4f8984e0f182a162a65f2cae9d57274ddcf4b532698a32"
+        },
+        {
+          "profile": "neverc-O0",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "b5d47fc22a7266134be33597fb2090b5671d3b39d39765c9156cbab5c44f1558",
+          "binary_sha256": "5d5646fd9b3da97ad196574369bd7f986bf62e70442524fec9a1e8cee2c8eaba"
+        },
+        {
+          "profile": "neverc-O2",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "0a416c37ea13549f6ed0e58afa8905b7befd57913f48965c243630f6416ec639",
+          "binary_sha256": "59f76f65d6c5cc1ed13d3009fb014f369f74fc94bbe5283d487831bfdb18ddb9"
+        },
+        {
+          "profile": "frontend-O0",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "0131507b0efa12fdf5806fb8c0794d035da1e0742ddb067cddc1d9f1f215f5c1",
+          "binary_sha256": "3494269ca26b004f5f6ddbad1775c4903d8c18c3979cf7460fb20f0968f769fe"
+        },
+        {
+          "profile": "frontend-O2",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "c3b4480ec2933c36cd7cf52de73ef31a6657881c033869d4a805b607cb2ac21d",
+          "binary_sha256": "5871287af54627059613b225314dbed2dce9ef04ba1eb31464a0c1045f85ddac"
+        },
+        {
+          "profile": "neverc-llvm-O0",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "cc5686609818ff1d10df75ec2514b014408cc7db2ae8c71c0ac1a77a521c585a",
+          "binary_sha256": "69a61e9358c3cd614845eb0a8cf6760cfb4a823cbdd6a7533bfdb9941de0e954"
+        },
+        {
+          "profile": "neverc-llvm-O2",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "0cb606d5b5247921ad0d93c99ab17d88af1eff463511956c06c9c26ae5bec4ee",
+          "binary_sha256": "5a3224b7964c6b5d25fb2f2baf4fd18908a485a05ff609b57f0cb9ef20aabee2"
+        },
+        {
+          "profile": "frontend-llvm-O0",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "0aa0acea3c6ee065bd93fcf87deec6599edf6e57e57c2ea3c62a5dc0d685767b",
+          "binary_sha256": "0b24536857b92e31ac685d7f7f2eaaab84d7de954cda69b30a64d1bae7f2a42d"
+        },
+        {
+          "profile": "frontend-llvm-O2",
+          "state_observations": 4320,
+          "stopped_observations": 1440,
+          "boundary_observations": 18,
+          "fault_observations": 186,
+          "object_sha256": "e18f1f480408945f9e4ecd3bee0a4ef85975a150501c146a50ccc9b27b4d12f6",
+          "binary_sha256": "3f2db357d7ab7bdc7dd398dd9013079526de75ce14be1a86860773a846f6e002"
+        }
+      ],
+      "tools": {
+        "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llc": "f250eaceefcd0d25fb731ec050294af253eacb10e4785a80d29595169d5a5c91",
+        "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/opt": "82a7cd957680bbbb84a291148d7a633aa6c675777c0b4b7f779fd785f9810ba2",
+        "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "318e8c4ef0ec095646a2e138284e526d955a6b9ce2d5cef91134564accebcd36",
+        "/mnt/data/neverd-flags-20261104/clang-build/bin/clang-23": "979e2d329299dd3a33618803eb6468b919bcfe2bc9ead560fc57faf4a2394a71",
+        "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+      },
+      "harness_sha256": "0d4fde5c8cd24e359a6c2a77be54137db7bb49f20a822d21bd7973a569a35e67",
+      "scripts": {
+        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/tests/neverc/X86/verify_far_pointer.py": "fbd8df10e78829890d463c96bc2f3f1fee6727be93cbb21c0870ba8c4fcd5b6a",
+        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/tests/neverc/X86/native_qualification.py": "559a53b127cce251408bc297244127e20773ed2719400b3b2e524f11b0eca7a3"
+      },
+      "exclusions": [
+        "other CPU models",
+        "i386 runtime",
+        "code16",
+        "privileged descriptor-table accessed-bit faults",
+        "alignment-check exceptions",
+        "asynchronous interrupt delivery",
+        "null selectors 1..3 after Linux interrupt/signal return",
+        "complete lifted machine-state continuation"
+      ]
+    }
+  ],
+  "source_build_diagnostics": {
+    "clang_missing_builtin": "/mnt/data/neverd-far-pointer-source-20261105/clang-before.stderr",
+    "neverc_missing_builtin": "/mnt/data/neverd-far-pointer-source-20261105/neverc-before.stderr",
+    "tablegen_prototype_repair": "/mnt/data/neverd-far-pointer-source-20261105/attempt1-clang-build.log"
+  },
+  "release_gate": {
+    "final_llvm_release_created": false,
+    "production_pin_changed": false,
+    "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69"
+  },
+  "limitations": [
+    "The protected qualification is CPL0 code16/code32 with a 32-bit stack and pointer ABI; real mode, VM86, CPL3 alignment checking and asynchronous events are excluded.",
+    "NeverC Linux i386 emits IR for the full LLVM fork. Its embedded i386 machine backend, code16 frontend and other i386 platform frontends remain unavailable.",
+    "Only ABI-compatible protected successes return through the compiler frame; arbitrary segment/stack/TLS replacement is not an ordinary C continuation.",
+    "x64 null selectors 1..3 are observed at the immediate ptrace stop; Linux signal return can clear them and is not qualified as instruction continuation.",
+    "Descriptor accessed-bit effects are observed, but privileged descriptor-write-fault and arbitrary machine-state continuation qualification is not established by this batch.",
+    "ELF/COFF/Mach-O frontend and assembly profiles passed; physical execution is Linux x64 and Linux KVM protected mode, not Windows or macOS runtime.",
+    "No NeverD execution or renderer semantics changed; its general i386 state/source dispatcher and remaining SMM/SGX/fault/event gaps are still open."
+  ],
+  "references": [
+    "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
+    "https://llvm.org/docs/LangRef.html#intrinsic-functions"
+  ]
+}
