@@ -8,22 +8,33 @@
 
 #include "RegistrationStateSolver.h"
 
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/RegistrationScopeGraph.h"
 
 #include <deque>
+#include <optional>
 
 namespace neverd::registration_state {
 
 bool RegistrationStateSolver::runSEHFilterSearch(
-    const FrameState &Parent, std::vector<RegistrationObjectExtent> *Writes,
-    SEHFrameOutcomes &Outcomes, bool RequireResume,
-    SEHHandlerOutcomes *Selected, SEHUnwindJump *Jump) {
+    const LowOp &Raise, const FrameState &Parent,
+    std::vector<RegistrationObjectExtent> *Writes, SEHFrameOutcomes &Outcomes,
+    bool RequireResume, SEHHandlerOutcomes *Selected, SEHUnwindJump *Jump) {
   if (KnownCxx || !Chain.TryLevelOffset ||
       (EH4 && (!CompleteCookies || !cookiesReady(Parent))))
     return false;
   const auto Level = Parent.load(*Chain.TryLevelOffset, 4).Constant;
   if (!Level || !validLevel(int32_t(*Level)))
     return false;
+  const auto &SP = Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride];
+  const auto Code =
+      SP.CallbackAddress
+          ? Parent.loadCallback(SP.CallbackAddress->Offset, 4).Constant
+          : Parent.load(SP.Offset, 4).Constant;
+  const std::optional<SEHExceptionOrigin> Origin =
+      Code
+          ? std::make_optional(SEHExceptionOrigin{Raise.Addr, Raise.Seq, *Code})
+          : std::nullopt;
   struct Search {
     FrameState Frame;
     int32_t Cursor;
@@ -55,8 +66,10 @@ bool RegistrationStateSolver::runSEHFilterSearch(
       continue;
     }
     SEHFilterOutcomes Returned;
-    if (!Scope.FilterVA || !runSEHCallbackFrame(Scope.FilterVA, Current.Frame,
-                                                false, Writes, Jump, &Returned))
+    if (!Scope.FilterVA ||
+        !runSEHCallbackFrame(Scope.FilterVA, Current.Frame, false, Writes, Jump,
+                             &Returned, 0, std::nullopt, nullptr, nullptr,
+                             Origin))
       return false;
     for (auto &[Disposition, Frames] : Returned)
       for (auto &[State, Frame] : Frames) {

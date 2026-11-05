@@ -16027,6 +16027,16 @@ registers and every retained frame space while preserving possible pointer taint
 Scalar fields retain possible address provenance until the current exception's
 origin has been bound; their DWORD representation cannot prove an unknown memory
 sink disjoint from the frame.
+For an authenticated `RaiseException` during a finally invocation,
+`RegistrationFilterFrame` binds its current initialized code argument to the
+local search. The filter frame retains the source call occurrence and code;
+callback exit, reentry and joins with another origin withdraw that identity.
+Only the code field becomes exact. Runtime-maintained flags and generic fault
+origins remain unknown, and every reached filter effect and search disposition
+still needs its existing proof. This does not authorize opaque wrapper calls or
+grant runtime-binding preservation from stack balance. The argument-to-record
+relationship follows Microsoft's
+[RaiseException contract](https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-raiseexception).
 `RegistrationStateSEHException` binds each access to its actual instruction slice
 and micro-operation. Conflicting observations and work exhaustion withdraw the
 access receipts. Native SEH lowering rejects these source receipts until it can

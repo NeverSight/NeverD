@@ -664,7 +664,7 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
                                            SP.CallbackAddress->Offset + 16);
         if (After.Callback && After.Activation.Entry &&
             FinallyTargets.count(*After.Activation.Entry) &&
-            !applySEHContinueFilters(I, After, Facts)) {
+            !applySEHContinueFilters(I, After, Op, Facts)) {
           Invalidate();
           Result.SEHInvocationExitsComplete = false;
         }
