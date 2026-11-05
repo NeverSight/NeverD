@@ -17575,7 +17575,12 @@ the indexed leaf summary against duplicate definitions and entries, PHIs,
 value widths and identities, authenticated stack live-ins, the depth limit,
 and reuse across functions or invocations. The index belongs to one immutable
 function; a rejected function must still count toward duplicate-entry rejection.
-The `Native pipeline compatibility` workflow runs the complete focused ABI,
+The `Native pipeline compatibility` workflow runs when dependencies, threading or
+allocator support, the C API, its worker tests or the workflow itself change, or
+on dispatch. ABI,
+lift and HighIR commits rely on `CI`'s native legs, so a problem only clang-cl,
+the native-thread baseline or the real-engine worker cases would catch shows up
+at this workflow's next run. It runs the complete focused ABI,
 pipeline-outcome, thread and HighIR control-flow owners on Linux, macOS and
 Windows x64 (MSVC and clang-cl), together with actual SDK allocation and native
 worker requests. It requires registered cases to execute without failures or

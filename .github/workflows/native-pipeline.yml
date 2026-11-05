@@ -1,31 +1,20 @@
 name: Native pipeline compatibility
 
+# Dependency, threading, allocator and C API changes run here because these
+# extra compiler and threading configurations are most likely to disagree on
+# them. The real-engine worker cases run nowhere else, so their own test files
+# start this workflow too. ABI, lift and HighIR commits rely on CI's native legs,
+# so a problem only clang-cl, the native-thread baseline or those worker cases
+# would catch shows up at the next run here, or sooner through dispatch.
 on:
   workflow_dispatch:
   push:
     branches: [dev, codex/pipeline-performance, codex/performance-libraries]
     paths:
       - '.github/workflows/native-pipeline.yml'
-      - 'lib/ir/med/abi/**'
-      - 'lib/backend/c/LLVMC/LLVMCStmtWriter.cpp'
-      - 'unittests/lift/core/LLVMCValueTests.cpp'
       - 'tools/neverd-worker/tests/call_site_types_test.py'
-      - 'lib/ir/high/**'
-      - 'lib/libc/**'
-      - 'lib/loader/ObjectExterns.cpp'
-      - 'lib/ir/low/CFGBuilderInsn.cpp'
-      - 'lib/pipeline/PipelineReturnContracts.cpp'
-      - 'unittests/lift/core/ReturnContractTests.cpp'
-      - 'unittests/lift/CMakeLists.txt'
-      - 'unittests/libc/**'
-      - 'unittests/lift/core/High*Tests.cpp'
-      - 'lib/safety/StackSlotFlow.h'
-      - 'unittests/lift/core/MedCallingConvTests.cpp'
-      - 'unittests/lift/core/FPParameterMaskTests.cpp'
-      - 'unittests/PipelineOutcomeTests.cpp'
-      - 'unittests/SessionFunctionDiscoveryTests.cpp'
-      - 'lib/sdk/capi/**'
       - 'tools/neverd-worker/tests/native_mapping_test.py'
+      - 'lib/sdk/capi/**'
       - 'cmake/NeverDPerformance.cmake'
       - 'cmake/NeverDForks*'
       - '.gitmodules'
@@ -49,26 +38,9 @@ on:
   pull_request:
     paths:
       - '.github/workflows/native-pipeline.yml'
-      - 'lib/ir/med/abi/**'
-      - 'lib/backend/c/LLVMC/LLVMCStmtWriter.cpp'
-      - 'unittests/lift/core/LLVMCValueTests.cpp'
       - 'tools/neverd-worker/tests/call_site_types_test.py'
-      - 'lib/ir/high/**'
-      - 'lib/libc/**'
-      - 'lib/loader/ObjectExterns.cpp'
-      - 'lib/ir/low/CFGBuilderInsn.cpp'
-      - 'lib/pipeline/PipelineReturnContracts.cpp'
-      - 'unittests/lift/core/ReturnContractTests.cpp'
-      - 'unittests/lift/CMakeLists.txt'
-      - 'unittests/libc/**'
-      - 'unittests/lift/core/High*Tests.cpp'
-      - 'lib/safety/StackSlotFlow.h'
-      - 'unittests/lift/core/MedCallingConvTests.cpp'
-      - 'unittests/lift/core/FPParameterMaskTests.cpp'
-      - 'unittests/PipelineOutcomeTests.cpp'
-      - 'unittests/SessionFunctionDiscoveryTests.cpp'
-      - 'lib/sdk/capi/**'
       - 'tools/neverd-worker/tests/native_mapping_test.py'
+      - 'lib/sdk/capi/**'
       - 'cmake/NeverDPerformance.cmake'
       - 'cmake/NeverDForks*'
       - '.gitmodules'

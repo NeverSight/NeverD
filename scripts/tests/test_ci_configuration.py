@@ -146,6 +146,22 @@ find() { return 0; }
                 "Linux x64", "macOS arm64", "Windows x64 MSVC", "Windows x64 clang-cl",
             ])
 
+    def test_native_pipeline_runs_on_dependency_and_threading_changes(self):
+        native = WORKFLOW.with_name("native-pipeline.yml").read_text(encoding="utf-8")
+        paths = re.findall(r"    paths:\n((?:      - .*\n)+)", native.split("\npermissions:", 1)[0])
+        self.assertEqual(len(paths), 2)
+        self.assertEqual(paths[0], paths[1])
+        for path in ("cmake/NeverDPerformance.cmake", "lib/support/**", "lib/sdk/capi/**",
+                     "third_party/oneTBB", "third_party/mimalloc",
+                     "include/neverd/support/Parallel.h",
+                     # CI does not build the worker, so these run only here.
+                     "tools/neverd-worker/tests/call_site_types_test.py",
+                     "tools/neverd-worker/tests/native_mapping_test.py"):
+            self.assertIn(f"      - '{path}'\n", paths[0])
+        # CI's native legs own these. Their changes must not start this workflow.
+        for path in ("lib/ir/high/**", "lib/libc/**", "lib/ir/med/abi/**"):
+            self.assertNotIn(f"      - '{path}'\n", paths[0])
+
     def test_msvc_test_targets_select_extended_coff_objects(self):
         for msvc_style in (False, True):
             with self.subTest(msvc_style=msvc_style), tempfile.TemporaryDirectory(
