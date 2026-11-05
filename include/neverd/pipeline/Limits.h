@@ -104,9 +104,12 @@ inline constexpr size_t kPipelineCallAbiMinSpeculativeProbes = 8;
 inline constexpr size_t kPipelineCallAbiDetailMaxProbes = 16;
 inline constexpr size_t kPipelineCallAbiDetailMaxConversions = 4;
 /// The omitted-callee memo's bodies take up to a twelfth of the host's
-/// physical memory (OmittedCalleeMemo::maxBytes), between these bounds.
+/// physical memory (OmittedCalleeMemo::maxBytes), between these bounds.  The
+/// ceiling lets a large host's replica read ahead every callee of an image
+/// the size of ntoskrnl: a 4 GiB memo's three-quarter mark stopped the read
+/// at 16,073 of its 19,484 callees, which a twelfth of 64 GiB holds.
 inline constexpr size_t kPipelineCallAbiDetailMaxBytes = size_t{2048} << 20;
-inline constexpr uint64_t kPipelineCallAbiDetailMaxBytesCeiling = uint64_t{4096}
+inline constexpr uint64_t kPipelineCallAbiDetailMaxBytesCeiling = uint64_t{8192}
                                                                   << 20;
 inline constexpr uint64_t kPipelineCallAbiDetailMemoryShare = 12;
 
