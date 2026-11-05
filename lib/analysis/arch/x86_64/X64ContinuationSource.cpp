@@ -991,7 +991,7 @@ struct Writer {
   }
 
   void pagedAccess(NdVar Address, uint64_t Bytes, X64PagedAccess Kind,
-                   bool Stack) {
+                   bool Stack, bool Sse = false) {
     if (Address.Size < 8) {
       const auto Wide = temporary();
       emit(NdOp::INT_ZEXT, Wide, {Address});
@@ -1002,7 +1002,8 @@ struct Writer {
     emit(NdOp::COPY, NdVar::reg(x86reg::RSI, 8), {Address});
     emit(NdOp::COPY, NdVar::reg(x86reg::RDX, 8), {constant(Bytes)});
     emit(NdOp::COPY, NdVar::reg(x86reg::RCX, 8),
-         {constant(uint64_t(Kind) | (Stack ? kX64PagedStackAccess : 0))});
+         {constant(uint64_t(Kind) | (Stack ? kX64PagedStackAccess : 0) |
+                   (Sse ? kX64PagedSseAccess : 0))});
     emit(NdOp::CALL, {}, {constant(kX64PagedAccessAddress)});
     const auto Bad = temporary(1);
     emit(NdOp::INT_NOTEQUAL, Bad, {NdVar::reg(x86reg::RAX, 8), constant(0)});
@@ -1052,7 +1053,8 @@ struct Writer {
                   Write                        ? X64PagedAccess::Store
                   : PagedRoles.ReadModifyWrite ? X64PagedAccess::ReadModifyWrite
                                                : X64PagedAccess::Load,
-                  Write ? PagedRoles.StackWrite : PagedRoles.StackRead);
+                  Write ? PagedRoles.StackWrite : PagedRoles.StackRead,
+                  PagedRoles.Sse);
       if (!Write)
         emit(NdOp::LOAD, Op.Output, {Context});
     } else if (divisionPreconditionIntrinsic(Op)) {
@@ -1569,8 +1571,9 @@ buildInstruction(SpecializationInstruction Instruction,
           !detail::x64InterruptFlagValue(Op, flagsProfile(Options)))
         RequireNative(
             "paged execution has no binding for this native intrinsic");
-      const auto RegisterAllowed = [](NdVar V) {
-        return !V.isReg() || V.Offset <= x86reg::RIP || bool(flagBit(V));
+      const auto RegisterAllowed = [&](NdVar V) {
+        return !V.isReg() || V.Offset <= x86reg::RIP || bool(flagBit(V)) ||
+               (PagedRoles.Sse && stateOffset(V).has_value());
       };
       if (!FarPointer && !SegmentMove && !RegisterAllowed(Op.Output))
         RequireNative("paged scalar execution requires a GPR or flags output");
@@ -1620,6 +1623,7 @@ buildInstruction(SpecializationInstruction Instruction,
     }
   const size_t MaxBlocks =
       Instruction.Ops.size() + 3 + ExtraMSRBlocks +
+      unsigned(PagedRoles.Sse && !PagedRoles.SseMemory) +
       (UserInterrupt == detail::X64UserInterrupt::Return ? 2 : 0);
   if (MaxBlocks > Options.MaxOperations ||
       Result.Address >= InvalidVA - MaxBlocks)
@@ -1947,6 +1951,8 @@ buildInstruction(SpecializationInstruction Instruction,
                     Result.UndefinedEffects);
   } else {
     Result.UndefinedEffects = Instruction.UndefinedEffects.Effects;
+    if (PagedRoles.Sse && !PagedRoles.SseMemory)
+      W.pagedAccess(constant(0), 0, X64PagedAccess::BeginSse, false);
     NdVar NextPC = constant(Instruction.Fallthrough.Address);
     auto Effects = [&](size_t After) {
       for (size_t I = 0; I != Instruction.UndefinedEffects.Effects.size(); ++I)

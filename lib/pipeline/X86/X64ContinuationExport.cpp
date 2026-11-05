@@ -27,6 +27,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
@@ -324,11 +325,6 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
     Result.Addresses.push_back(*Address);
   }
   if (const auto *Value = Object->get("function_calls")) {
-    // Scalar argument checks use the nonfaulting host-RAM contract. A paged
-    // validation read could fault or publish A/D effects absent in the original
-    // instruction stream; do not silently introduce those observations.
-    if (Options.PagedMemory)
-      return invalid("function_calls requires non-paged memory");
     const auto *Calls = Value->getAsArray();
     if (!Result.FunctionContext || !Calls || Calls->empty() ||
         Calls->size() > Result.Addresses.size())
@@ -397,6 +393,22 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
         if (!Bytes)
           return Bytes.takeError();
         Interface.ArgumentBytes.push_back(*Bytes);
+      }
+      if (Options.PagedMemory) {
+        // Register checks need no guest observation. Stack validation would
+        // add faults or page-table effects absent from the original stream;
+        // keep every such slot solely in the existing paged state.
+        const auto Layout = getTargetRegInfo(Arch::X64).integerArgumentLayout(
+            BinaryFormat::COFF);
+        for (size_t P = Layout.Registers.size();
+             P < Interface.ArgumentBytes.size(); ++P)
+          if (Interface.ArgumentBytes[P])
+            return invalid("paged function_calls requires context-only stack "
+                           "slots (null argument widths)");
+        // A fault on the original CALL needs a pending-instruction controller,
+        // not the nonfaulting bridge's pre-CALL PC/SP retry contract.
+        if (!Interface.CallSites.empty())
+          return invalid("paged function_calls does not support call_sites");
       }
       Result.FunctionCalls.push_back(std::move(Interface));
     }
@@ -880,9 +892,10 @@ typedef struct neverd_x64_event_v1 {
     emitX64ContinuationEnvironment(OS, Version, false);
     if (Request->FunctionContext)
       emitX64ContinuationEnvironment(OS, Version, true);
-    FunctionCalls = emitX64FunctionCalls(OS, Request->FunctionCalls);
-    FunctionCallSites = emitX64FunctionCallSites(OS, *CallSites);
   }
+  FunctionCalls = emitX64FunctionCalls(OS, Request->FunctionCalls,
+                                       Request->Options.PagedMemory);
+  FunctionCallSites = emitX64FunctionCallSites(OS, *CallSites);
   if (Request->Options.ScheduledEvents)
     emitX64ContinuationSchedule(OS, *Units, Request->FollowInternalCalls,
                                 Request->Options);
@@ -945,9 +958,9 @@ typedef struct neverd_x64_event_v1 {
            : "disabled"},
       {"environment_binding",
        Request->Options.PagedMemory
-           ? "owned paged RAM; scalar instruction and REP-element commit; "
-             "recursive fault "
-             "delivery"
+           ? "owned paged RAM; scalar/legacy SSE instruction and REP-element "
+             "commit; SSE/SSE2 target, explicit unaligned SSE #AC profile "
+             "when active; recursive fault delivery"
            : "explicit full-state callback; separately bounded"},
       {"call_return_policy",
        Request->FollowInternalCalls ? "follow-selected-targets" : "stop"},
@@ -1183,6 +1196,18 @@ typedef struct neverd_x64_event_v1 {
                    "no argument or padding initialization; resume retains "
                    "activation; Value is valid only when Completed is 1; "
                    "same native-state and environment obligations"}};
+  if (Request->Options.PagedMemory && !Request->FunctionCalls.empty()) {
+    auto &Contract = *Report["function_calls"].getAsObject();
+    Contract["paged_memory"] = true;
+    Contract["entry_guest_memory_reads"] = false;
+    Contract["domain"] =
+        "producer-declared Win64 register views; all stack slots retained in "
+        "original paged state; no entry guest-memory reads, argument or "
+        "padding initialization; resume retains the activation and the same "
+        "paged execution context; Value is valid only when Completed is 1; "
+        "initial state, mapping lifetime and environment effects remain "
+        "producer obligations";
+  }
   if (!FunctionCallSites.empty())
     Report["function_call_sites"] = llvm::json::Object{
         {"context_type", "neverd_x64_call_site_context_v1"},

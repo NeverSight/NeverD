@@ -41,6 +41,8 @@ inline constexpr uint64_t kX64PagedEventAccepted = 2;
 inline constexpr uint64_t kX64PagedAccessAddress = UINT64_MAX - 1;
 inline constexpr const char *kX64PagedAccessName = "neverd_x64_paged_access_v1";
 inline constexpr uint64_t kX64PagedStackAccess = 8;
+/// Attach SSE preflight to the same single 16-byte operand callback.
+inline constexpr uint64_t kX64PagedSseAccess = 32;
 inline constexpr uint64_t kX64PagedRepeatSource = 1;
 inline constexpr uint64_t kX64PagedRepeatDestination = 2;
 inline constexpr uint64_t kX64PagedRepeatCompare = 4;
@@ -68,10 +70,16 @@ enum class X64PagedAccess : uint64_t {
   BeginRepeat = 18,
   /// Original bytes own scalar/string operands; address and size are zero.
   PortIO = 19,
+  /// Legacy SSE register bitvectors; address and size are zero. Memory forms
+  /// instead carry kX64PagedSseAccess on their existing operand callback.
+  BeginSse = 20,
 };
 
 struct X64PagedExchange {
+  // Scalar bodies use only Value; legacy SSE uses the contiguous 16-byte
+  // payload. The transaction pointer is never part of a generated value store.
   uint64_t Value = 0;
+  uint64_t ValueHigh = 0;
   void *Transaction = nullptr;
 };
 

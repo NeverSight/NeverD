@@ -174,8 +174,9 @@ complete this activation, even when its post-RET SP equals entry RSP or its PC
 resembles a caller. Provider execution outside the selection cannot report
 completion implicitly; return to selected code before the completing RET, or
 use the ordinary state driver with producer-owned stopping. No post-SP/PC
-heuristic fills this gap. Paged memory, scheduled events, other profiles and
-native RTM regions have separate contracts and are rejected with this option.
+heuristic fills this gap. Paged memory uses the separate driver described
+below. Scheduled events, other profiles and native RTM regions remain rejected
+with this option.
 
 Both dispatch strategies and C routes share the same return-cell check. The
 manifest records the additional entry points, completion contract and
@@ -267,6 +268,48 @@ limited to entry argument checks and completion/resume bookkeeping; there is
 no additional per-instruction work. Omitting `function_calls` retains the
 previous source and manifest. The owner is
 [`X64FunctionCalls.cpp`](../lib/pipeline/X86/X64FunctionCalls.cpp).
+
+### Paged entry call views
+
+With `"paged_memory": true`, function activation uses
+`neverd_x64_run_paged_function_v6(state, context, budget, function)`. Its context
+is the existing `X64PagedExecution` binding. The recorded return cell is a guest
+virtual address; only an attempted successful original near RET consumes it.
+Faults, backing stops and changed code preserve the activation. The producer
+must retain the same execution context and declared return-cell/address-space
+lifetime across pauses.
+
+Paged `function_calls` may check register arguments and expose a scalar result.
+Every physical stack slot must use `null` or lie beyond the declared list. For
+example, `"argument_bytes": [8, null, 4, 8, null, null]` checks RCX, the low
+DWORD of R8 and R9, while RDX and both stack slots stay solely in native state.
+An empty or all-null list also works. None of these forms initializes any
+input or implies that an omitted input is unused.
+
+```c
+neverd_x64_call_context_v1 call = {0};
+neverd_x64_call_result_v1 result = neverd_x64_call_paged_1000_v6(
+    &state, paged_context, &budget, &call, arg0, arg2, arg3);
+/* Retain state, call and the paged binding while handling a stop. */
+result = neverd_x64_resume_paged_1000_v6(
+    &state, paged_context, &budget, &call);
+```
+
+Entry checks read only the explicit register state. The original instructions
+own all guest memory observations, translations and fault effects. There is no
+environment callback or environment-budget parameter; paged stops retain the
+existing runtime's accounting and producer-controlled continuation. Resume
+does not check arguments again. `Completed`, cached `Value` and wrong-root
+rejection follow the ordinary call-view contract above. The manifest marks
+`paged_memory: true` and `entry_guest_memory_reads: false`.
+
+Scalar stack checks remain rejected because their extra reads could fault or
+change page-table access bits. Paged `call_sites` and `pause_call_sites` remain
+unsupported; the nonfaulting pre-CALL retry contract cannot represent a CALL
+that faults before entering its callee. These interfaces do not capture the
+initial machine state, infer environment effects or recover bytes missing from
+ordinary C arguments. They add entry/resume wrappers without changing an
+instruction body or the paged dispatcher.
 
 ### Original CALL bridges
 

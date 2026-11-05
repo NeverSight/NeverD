@@ -7,6 +7,7 @@
 /// Execute continuation source against independent state and memory oracles.
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/analysis/arch/x86_64/X64PagedSse.h"
 #include "../../lift/NeverDLiftFixture.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
@@ -47,6 +48,24 @@
 namespace {
 using namespace neverd;
 using namespace neverd::analysis;
+
+// Compile-time fault-domain checks. These never run an instruction executor.
+static_assert(neverd::analysis::detail::x64PagedSseEntryFault(0, 0x200) == 0);
+static_assert(neverd::analysis::detail::x64PagedSseEntryFault(4, 0x200) == 6);
+static_assert(neverd::analysis::detail::x64PagedSseEntryFault(8, 0x200) == 7);
+static_assert(neverd::analysis::detail::x64PagedSseEntryFault(12, 0x200) == 6);
+static_assert(neverd::analysis::detail::x64PagedSseEntryFault(0, 0) == 6);
+static_assert(neverd::analysis::detail::x64PagedSseEntryFault(4, 0) == 6);
+static_assert(neverd::analysis::detail::x64PagedSseEntryFault(8, 0) == 6);
+static_assert(neverd::analysis::detail::x64PagedSseEntryFault(12, 0) == 6);
+static_assert(neverd::analysis::detail::x64PagedSseAlignmentBytes(
+                  X64PagedSseAlignment::NoCheck) == 1);
+static_assert(neverd::analysis::detail::x64PagedSseAlignmentBytes(
+                  X64PagedSseAlignment::Qword) == 8);
+static_assert(neverd::analysis::detail::x64PagedSseAlignmentBytes(
+                  X64PagedSseAlignment::FullOperand) == 16);
+static_assert(neverd::analysis::detail::x64PagedSseAlignmentBytes(
+                  static_cast<X64PagedSseAlignment>(255)) == 0);
 
 BinaryImage image(std::vector<uint8_t> Bytes) {
   BinaryImage Image;
