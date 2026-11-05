@@ -1276,6 +1276,13 @@ void MainWindow::connectSession() {
               output_->run(command);
           });
   });
+  // What waited for a file that did not open is not for the next one. A link
+  // waiting with a program open waits for that program's addresses.
+  connect(&session_, &Session::openFailed, this, [this] {
+    pendingCommands_.clear();
+    if (!session_.loaded())
+      pendingLink_.reset();
+  });
   session_.setStateProvider([this] { return projectState(); });
   connect(&session_, &Session::unloaded, this, [this] {
     pseudocodeAfterJump_.reset();

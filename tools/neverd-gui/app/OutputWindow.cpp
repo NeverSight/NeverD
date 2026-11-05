@@ -97,6 +97,8 @@ OutputWindow::OutputWindow(Session &session, QWidget *parent)
     command_->clear();
     if (line.isEmpty())
       return;
+    // Other workbenches add to the same history.
+    history_ = QSettings().value(HistoryKey).toStringList();
     history_.removeAll(line);
     history_.append(line);
     while (history_.size() > ::neverd::limits::gui::kOutputWindowMaximumHistory)

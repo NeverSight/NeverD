@@ -690,6 +690,8 @@ void Session::openPending() {
               emit stateChanged();
               if (!pendingFile_.isEmpty())
                 openPending();
+              else
+                emit openFailed();
               return;
             }
             sendOpen(requested, prepared.input, prepared.database,
@@ -901,6 +903,8 @@ void Session::sendOpen(const QString &requested, const QString &path,
         emit stateChanged();
         if (!pendingFile_.isEmpty())
           openPending();
+        else
+          emit openFailed();
       });
 }
 

@@ -5636,12 +5636,17 @@ after opening a file showed nothing on a slow machine.
 instance** comes first in File and stays enabled with or without a program, that
 a program that cannot start says why in Output, and, outside Windows, the command
 line a stand-in program really receives: this workbench's worker and kind of
-layout, and not its open file. `aFileOpenInAnotherWorkbenchSaysSo` opens one file
-with a second real worker, whose lock refusal names the likely reason and leaves
-the holder loaded. `aDatabaseOpenInAnotherWorkbenchKeepsItsEdits` checks that a
-second workbench on an open database leaves the holder's unsaved rename on disk,
-that the holder can still reopen the database under its own lock, and that the
-other workbench opens it with the edit once the holder lets go.
+layout, and not its open file, and what a link to a recent program adds through
+`LinkOpener`. `aFileOpenInAnotherWorkbenchSaysSo` opens one file with a second
+real worker, whose lock refusal names the likely reason and leaves each worker
+with the program it had. `aDatabaseOpenInAnotherWorkbenchKeepsItsEdits` checks
+that a second workbench on an open database leaves the holder's unsaved rename on
+disk, that the holder can still reopen the database under its own lock, and that
+the other workbench opens it with the edit once the holder lets go.
+`aRefusedOpenForgetsWhatWaitedForIt` checks that a command line and a link named
+with a refused file do not run on the next one, and
+`commandHistoryKeepsAnotherWorkbenchsLines` that two workbenches add to one
+command history.
 
 The GUI unit cases `deepLinksTakeIdasFormAndRefuseWhatTheyCannotName` and
 `aLinkGoesToTheWorkbenchThatHasItsProgram` check link syntax, hash prefixes and

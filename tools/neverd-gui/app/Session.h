@@ -419,6 +419,8 @@ signals:
   void bytePatchesChanged();
   void stateChanged();
   void opened();
+  /// A file did not open, and no other waits to.
+  void openFailed();
   void unloaded();
   void revisionChanged();
   void generationChanged();
