@@ -368,7 +368,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                             !Result.LibraryRecognitions.empty(),
                         Result.LibraryRecognitions, Dbg,
                         SourceViewOptions{.Symbolic = Opts.SymbolicLLVMSource},
-                        &Result.CallPrototypeArguments,
+                        &Result.CallPrototypeArguments.get(),
                         Opts.SourceProjection && !Opts.PatchMode,
                         Result.OmittedCalleeDeclarations,
                         Opts.OmitRefusedLLVMBodies && !Opts.PatchMode,
@@ -412,7 +412,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                        [](const MedFunc &F) { return F.AnalysisOnly; }));
       MedEmitter.setSourceCalleeDeclarations(Result.OmittedCalleeDeclarations);
       MedEmitter.setDebugContext(Dbg);
-      MedEmitter.setPrototypeArgumentCallees(&Result.CallPrototypeArguments);
+      MedEmitter.setPrototypeArgumentCallees(
+          &Result.CallPrototypeArguments.get());
       Result.LLVMSources.reset();
       if (Opts.RetainLLVMSourceObservations ||
           !Result.LibraryRecognitions.empty()) {

@@ -375,7 +375,7 @@ struct OmittedCalleeMemo {
   /// whose summaries declare others reads none of them.
   struct GlobalStamp {
     uint64_t Adoption = 0;
-    std::set<va_t> PrototypeArguments;
+    SharedValue<std::set<va_t>> PrototypeArguments;
   };
   std::optional<GlobalStamp> Globals;
   /// The image-wide solve in progress, or null.

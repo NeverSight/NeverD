@@ -1249,7 +1249,8 @@ struct Session {
     if (UsingAnalystCallContracts && CallVariant)
       Emitter.setSourceTargetSignatures(&CallVariant->TargetSignatures);
     Emitter.setDebugContext(decompileDebug());
-    Emitter.setPrototypeArgumentCallees(&PipeResult.CallPrototypeArguments);
+    Emitter.setPrototypeArgumentCallees(
+        &PipeResult.CallPrototypeArguments.get());
     // Native source views need surviving instruction observations even when
     // this function contains no recognized library operation.
     Sources = std::make_shared<LLVMSourceMap>();

@@ -666,11 +666,13 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     Local.setCallEntryStackArgs(&Result.CallEntryStackArgs.get());
     Local.setCallEntryStackSlots(&Result.CallEntryStackSlots);
     Local.setCallEntryArgumentCounts(&Result.CallEntryArgumentCounts);
-    Local.setCallEntryFloatingArguments(&Result.CallEntryFloatingArguments);
-    Local.setCallEntryIntegerArguments(&Result.CallEntryIntegerArguments);
-    Local.setCallEntryVariadicArguments(&Result.CallEntryVariadicArguments);
-    Local.setUserPrototypeCallees(&Result.CallUserPrototypes);
-    Local.setCallDispatchThunks(&Result.CallDispatchThunks);
+    Local.setCallEntryFloatingArguments(
+        &Result.CallEntryFloatingArguments.get());
+    Local.setCallEntryIntegerArguments(&Result.CallEntryIntegerArguments.get());
+    Local.setCallEntryVariadicArguments(
+        &Result.CallEntryVariadicArguments.get());
+    Local.setUserPrototypeCallees(&Result.CallUserPrototypes.get());
+    Local.setCallDispatchThunks(&Result.CallDispatchThunks.get());
     Local.setCallVariadicFrom(&Result.CallVariadicFrom.get());
     Local.setStackProbeIndex(Result.StackProbeIndex.get());
     Local.setFormattedCalls(&Result.FormattedCalls);

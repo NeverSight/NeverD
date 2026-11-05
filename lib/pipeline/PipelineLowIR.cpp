@@ -4756,7 +4756,8 @@ bool computeCallRegisterEffects(
     Result.CallFloatReturns = std::move(Prototyped.FloatReturns);
     Result.CallEntryFloatingArguments = std::move(Prototyped.FloatingArguments);
     Result.CallEntryIntegerArguments = std::move(FixedEntryIntegerArguments);
-    Result.CallEntryIntegerArguments.merge(Prototyped.IntegerArguments);
+    Result.CallEntryIntegerArguments.mutate().merge(
+        Prototyped.IntegerArguments);
     Result.CallEntryVariadicArguments = std::move(Prototyped.VariadicArguments);
   }
   CallRegisterSummaries Summaries =

@@ -153,15 +153,15 @@ TEST(CalleeSignatureMemo, ASourceProjectionKeepsTheCompleteReadSet) {
   Source.CallUnreadGPRs[0x1000] = 0x10;
   Source.CallEntryIntegerArguments[0x1000].Parameters = {
       {SourceABICarrierKind::IntegerRegister, 8, 0, 8}};
-  Source.OmittedCalleeIntegerArguments =
-      std::make_shared<const decltype(Source.CallEntryIntegerArguments)>(
-          Source.CallEntryIntegerArguments);
+  Source.OmittedCalleeIntegerArguments = std::make_shared<
+      decltype(Source.OmittedCalleeIntegerArguments)::element_type>(
+      Source.CallEntryIntegerArguments.get());
   Source.CallEntryIntegerArguments.clear();
   Source.CallEntryFloatingArguments[0x2000].ParameterBytes = {8, 4};
   Source.CallEntryFloatingArguments[0x2000].ReturnBytes = 8;
-  Source.OmittedCalleeFloatingArguments =
-      std::make_shared<const decltype(Source.CallEntryFloatingArguments)>(
-          Source.CallEntryFloatingArguments);
+  Source.OmittedCalleeFloatingArguments = std::make_shared<
+      decltype(Source.OmittedCalleeFloatingArguments)::element_type>(
+      Source.CallEntryFloatingArguments.get());
   Source.CallEntryFloatingArguments.clear();
   Source.CallEntryVariadicArguments[0x2000] = {8, 4};
   Source.CallEntryStackArgs[0x2000] = 2;

@@ -304,7 +304,7 @@ SourceInlineResult specializeUnavailableSourceCalls(
   Emitter.setDebugContext(Debug);
   Emitter.setSourceMap(Result.Sources.get());
   Emitter.setSourceCalleeDeclarations(Recovered.OmittedCalleeDeclarations);
-  Emitter.setPrototypeArgumentCallees(&Recovered.CallPrototypeArguments);
+  Emitter.setPrototypeArgumentCallees(&Recovered.CallPrototypeArguments.get());
   Result.Module = Emitter.emit(Recovered.MedFuncs, Initial.getContext(),
                                "neverd_source_calls", Image.Arch, Imports,
                                &Image, Image.abiFormat());

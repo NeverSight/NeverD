@@ -51,7 +51,7 @@ struct GlobalCalleeSolve {
   Stage Phase = Stage::Probing;
   /// What the solve read: the memo's adoption and the declared callees.
   uint64_t Adoption = 0;
-  std::set<va_t> PrototypeArguments;
+  decltype(PipelineResult::CallPrototypeArguments) PrototypeArguments;
   /// The kept bodies, held for the solve, and the index of each entry.
   std::vector<std::shared_ptr<const MedFunc>> Bodies;
   std::map<va_t, size_t> Index;

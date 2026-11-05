@@ -377,7 +377,7 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
     Local.setFuncNames(&AllFuncNames);
     Local.setResolvedCalleeNames(&ResolvedCalleeNames);
     Local.setVariadicVectorCallees(&VariadicVectorCallees);
-    Local.setPrototypeArgumentCallees(&Result.CallPrototypeArguments);
+    Local.setPrototypeArgumentCallees(&Result.CallPrototypeArguments.get());
     for (size_t FI; (FI = Claim()) < N;) {
       const MedFunc &MF = Result.MedFuncs[FI];
       // Explicit machine-state recovery retains fixed guest addresses, as

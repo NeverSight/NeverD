@@ -117,21 +117,21 @@ const std::map<va_t, FixedIntegerCallArguments> &
 omittedCalleeIntegerArguments(const PipelineResult &Result) {
   return Result.OmittedCalleeIntegerArguments
              ? *Result.OmittedCalleeIntegerArguments
-             : Result.CallEntryIntegerArguments;
+             : Result.CallEntryIntegerArguments.get();
 }
 
 const std::map<va_t, FloatingCallArguments> &
 omittedCalleeFloatingArguments(const PipelineResult &Result) {
   return Result.OmittedCalleeFloatingArguments
              ? *Result.OmittedCalleeFloatingArguments
-             : Result.CallEntryFloatingArguments;
+             : Result.CallEntryFloatingArguments.get();
 }
 
 const std::map<va_t, std::vector<uint16_t>> &
 omittedCalleeVariadicArguments(const PipelineResult &Result) {
   return Result.OmittedCalleeVariadicArguments
              ? *Result.OmittedCalleeVariadicArguments
-             : Result.CallEntryVariadicArguments;
+             : Result.CallEntryVariadicArguments.get();
 }
 
 const std::map<va_t, int> &
@@ -225,8 +225,12 @@ void OmittedCalleeMemo::adopt(const BinaryImage &Img,
                               const PipelineResult &Result) {
   if (Image == &Img && SymbolData == Img.Symbols.data() &&
       SymbolCount == Img.Symbols.size() &&
-      CallArgumentSources == Result.CallArgumentSources)
+      CallArgumentSources == Result.CallArgumentSources) {
+    // The same sources, perhaps another instance of them: share the run's,
+    // so that the next run holding it compares one pointer, not every entry.
+    CallArgumentSources = Result.CallArgumentSources;
     return;
+  }
   Image = &Img;
   SymbolData = Img.Symbols.data();
   SymbolCount = Img.Symbols.size();
@@ -2459,8 +2463,8 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                    &CalleeFPRegs, &CalleeHasSret, &CalleeIsVariadic,
                    &CalleeConsumesVaList, &FrameLocalLeafCallees,
                    &CalleeIntRegs, &VectorArgumentCallees, &PointerCallees,
-                   &Result.CallPrototypeArguments, &RelocationSymbols, Keys,
-                   &CalleeFPScalarBytes);
+                   &Result.CallPrototypeArguments.get(), &RelocationSymbols,
+                   Keys, &CalleeFPScalarBytes);
   };
   for (MedFunc &F : Result.MedFuncs)
     recover(F);
@@ -2604,7 +2608,8 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                                &CalleeFPRegs, &CalleeHasSret, &IsVariadic,
                                &CalleeConsumesVaList, &FrameLocalLeafCallees,
                                &CalleeIntRegs, &VectorArgumentCallees,
-                               &PointerCallees, &Result.CallPrototypeArguments,
+                               &PointerCallees,
+                               &Result.CallPrototypeArguments.get(),
                                &LocalRelocations, &Keys, &CalleeFPScalarBytes);
                 OmittedCalleeMemo::Recovery Kept;
                 Kept.Reads = Local.reads(std::move(EntryRead), std::move(Keys));
@@ -2741,8 +2746,8 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                      &CalleeHasSret, &CalleeIsVariadic, &CalleeConsumesVaList,
                      /*FrameLocalLeafCallees=*/nullptr, &CalleeIntRegs2,
                      &VectorArgumentCallees, &PointerCallees,
-                     &Result.CallPrototypeArguments, &RelocationSymbols, Keys,
-                     &CalleeFPScalarBytes);
+                     &Result.CallPrototypeArguments.get(), &RelocationSymbols,
+                     Keys, &CalleeFPScalarBytes);
     };
     for (MedFunc &F : Result.MedFuncs)
       recoverAgain(F, nullptr);

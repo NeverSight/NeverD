@@ -393,7 +393,7 @@ struct PipelineResult {
   std::shared_ptr<OmittedCalleeMemo> CalleeSignatureMemo;
   /// Bytes of the scalar float each prototyped import returns in the vector
   /// return register, keyed by the stub or slot a call names it by.
-  std::map<va_t, uint16_t> CallFloatReturns;
+  SharedValue<std::map<va_t, uint16_t>> CallFloatReturns;
   /// The calls in LowFuncs whose constant format names every argument they
   /// read, keyed by the call instruction's address.
   std::map<va_t, FormattedCall> FormattedCalls;
@@ -426,13 +426,14 @@ struct PipelineResult {
   std::map<va_t, int> CallEntryArgumentCounts;
   /// Complete fixed scalar FP import signatures, with no integer or stack
   /// parameters. Their register uses must reach SSA before call setup scans.
-  std::map<va_t, FloatingCallArguments> CallEntryFloatingArguments;
+  SharedValue<std::map<va_t, FloatingCallArguments>> CallEntryFloatingArguments;
   /// Complete fixed scalar integer operands with exact stack locations.
-  std::map<va_t, FixedIntegerCallArguments> CallEntryIntegerArguments;
+  SharedValue<std::map<va_t, FixedIntegerCallArguments>>
+      CallEntryIntegerArguments;
   std::shared_ptr<const std::map<va_t, FixedIntegerCallArguments>>
       OmittedCalleeIntegerArguments;
   /// Fixed scalar widths of header variadic imports; the tail stays open.
-  std::map<va_t, std::vector<uint16_t>> CallEntryVariadicArguments;
+  SharedValue<std::map<va_t, std::vector<uint16_t>>> CallEntryVariadicArguments;
   std::shared_ptr<const std::map<va_t, std::vector<uint16_t>>>
       OmittedCalleeVariadicArguments;
   /// The same signatures for imports reached only by omitted callees.
@@ -452,14 +453,14 @@ struct PipelineResult {
   /// Machine positions override arity tables that count source parameters.
   /// A recovered body alone cannot truncate this declared summary; exported
   /// bodies can still contribute additional reads to their entry summary.
-  std::set<va_t> CallPrototypeArguments;
+  SharedValue<std::set<va_t>> CallPrototypeArguments;
   /// Explicit user declarations among CallPrototypeArguments. Source-call
   /// binding uses this identity to override automatic Darwin SDK contracts;
   /// a header record layout alone does not override those contracts.
-  std::set<va_t> CallUserPrototypes;
+  SharedValue<std::set<va_t>> CallUserPrototypes;
   /// Entries of indirect-call dispatchers (`_guard_dispatch_icall`): a call to
   /// one passes the argument registers its caller set.
-  std::set<va_t> CallDispatchThunks;
+  SharedValue<std::set<va_t>> CallDispatchThunks;
   /// Register position of the first variadic argument of each lifted Win64
   /// variadic callee, keyed by callee entry: a call to one passes the fixed
   /// arguments and the variadic argument registers its caller set.
