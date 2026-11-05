@@ -4019,3 +4019,37 @@ frames, MC/linker/runtime support, other 32-bit platforms and the remaining
 original-machine state/event domains still require work. This frontend
 qualification does not advance the final LLVM release, production SDK pin or
 LLVM gitlink.
+
+### Native ARPL source interoperation
+
+LLVM, Clang and NeverC now expose native ARPL register, memory and explicit
+address interfaces. The register API returns the adjusted word and stores
+the actual ZF after the instruction; memory APIs retain the conditional word
+write inside ARPL. Explicit offsets select 16/32-bit addressing and a segment
+prefix. Ordinary pointers use a DS-preserving register class, so a compiler
+frame or BP-valued producer cannot silently change the operand to SS.
+
+MedLLVM, HighC and LLVMC share that contract. Both C writers select native
+builtins when available and preserve the exact assembly fallback otherwise.
+ARPL needs no intrinsic header; the shared header-selection owner also keeps
+the existing MSVC shadow-write and XABORT declarations. Native LLVM selection
+requires the new address interface, which identifies the DS-safe lowering.
+Older SDKs continue to use the validated fallback.
+
+The [ARPL source evidence](evidence/x86-arpl-native-source-2026-11-05.json)
+records 1,990,656 original-byte instruction comparisons on the local P/E cores:
+399,360 across LLVM/Clang code16/code32 and NeverC code32, plus 1,591,296 across
+actual NeverD exports. The latter covers both SDKs, both C writers, register
+and DS/FS/GS forms, O0/O2, three input formats and exported ELF objects.
+Patched Clang and NeverC use native calls; stock Clang uses assembly. Each
+matrix compares GPRs, flags, system/event state, RAM and original #GP/#PF/#AC
+frames, and checks ABI-compatible compiled returns. Deliberately wrong inputs
+and returned ZF are rejected. Final integration retains all 96 exported files
+per SDK byte-for-byte; 172 NeverC, ten LLVM/Clang and 108 NeverD regression
+checks pass, with eight explicit old-SDK skips.
+
+This is compiler-source interoperation, separate from the protected original
+instruction executor above. NeverC still uses the full LLVM fork for i386
+machine code. General original-state source dispatch, real/VM86, asynchronous
+events and the other state environments remain separate. The final LLVM
+release, production SDK pin and LLVM gitlink remain unchanged.
