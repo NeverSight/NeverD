@@ -53,9 +53,12 @@ llvm::json::Array emitX64FunctionCallArguments(
 
 /// Append checked call/resume wrappers after the V6 function context driver.
 /// No instruction body or driver is copied. Returns their manifest entries.
+/// Paged declarations have already been checked to retain every stack slot in
+/// native state. Only register comparisons precede the paged driver.
 llvm::json::Array
 emitX64FunctionCalls(llvm::raw_ostream &OS,
-                     llvm::ArrayRef<X64FunctionCallInterface> Calls);
+                     llvm::ArrayRef<X64FunctionCallInterface> Calls,
+                     bool PagedMemory = false);
 
 } // namespace neverd
 

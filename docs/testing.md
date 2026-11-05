@@ -20275,6 +20275,19 @@ instruction execution, live context capture or an arbitrary fault handler.
 `X64PagedExecutionTests` separately owns the runtime's instruction/fault tests;
 compile-only checks do not replace that coverage.
 
+`X64PagedFunctionCallTest.*` checks register-only and context-only paged entry
+views, retained physical stack positions, unchanged instruction/driver text,
+and refusal of scalar stack checks or pre-CALL bridges. Both C routes compile
+at O0/O2. Twenty-one predicates per route compile the actual MOV/XOR/RET bodies
+against an independent operand oracle and supply paged stop outcomes to the
+existing controller. They retain arbitrary incoming high-DWORD and register
+bits, reject mismatches before guest access, preserve pauses without rebinding,
+distinguish external returns from completion, and cache only completed results.
+Zero budget with an inaccessible/wrapping stack address adds no guest read.
+Every predicate must optimize to constant zero. No generated program, specimen
+or instruction executor runs; page walking, fault delivery and native CPU
+behavior remain separate runtime qualification.
+
 `X64ContinuationExportTest.FunctionCallsRejectUnboundDeclarations` checks strict
 entry/ABI/width admission and the shared argument bound. Its
 `FunctionCallsCompileAndProveBoundaries` companion compiles the complete source
