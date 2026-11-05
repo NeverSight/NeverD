@@ -19,6 +19,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/debug/DebugContext.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -452,7 +453,26 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
   // lays among its code), which is a few hundred bytes though its `.text` is
   // megabytes.
   std::optional<std::pair<uint64_t, uint64_t>> InCodeRun;
-  if (InCodeObjectAddr && Seg && Seg->isExecutable() && !Seg->Data.empty() &&
+  bool LinkedDataRegion = false;
+  if (InCodeObjectAddr && Dbg && Seg && Seg->isExecutable() &&
+      Seg->isReadable() && !Seg->isWritable() &&
+      Seg->Data.size() > limits::kMaxSingleGlobalEmbedLen) {
+    // A matching PDB can retain the linker's read-only data contributions
+    // even when its public symbols have no types or object sizes. Keep that
+    // storage interval whole: mixed scalar/pointer records and interior
+    // aliases must not depend on which address is emitted first.
+    if (const auto Region = Dbg->readOnlyDataRegion(*InCodeObjectAddr);
+        Region && Region->first >= Seg->VA &&
+        Region->first <= *InCodeObjectAddr &&
+        *InCodeObjectAddr < Region->second &&
+        Region->second - Seg->VA <= Seg->Data.size() &&
+        Region->second - Region->first <= limits::kMaxSingleGlobalEmbedLen) {
+      InCodeRun = *Region;
+      LinkedDataRegion = true;
+    }
+  }
+  if (!InCodeRun && InCodeObjectAddr && Seg && Seg->isExecutable() &&
+      !Seg->Data.empty() &&
       Seg->Data.size() > limits::kMaxSingleGlobalEmbedLen && PtrSz != 0) {
     const uint64_t SegEnd = Seg->VA + Seg->Data.size();
     const uint64_t Target = *InCodeObjectAddr;
@@ -531,7 +551,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
   }
   if (!Seg || Seg->Data.empty() ||
       (Seg->isExecutable() &&
-       (!segHasLoaderPtrRelocSlots(Seg) ||
+       ((!LinkedDataRegion && !segHasLoaderPtrRelocSlots(Seg)) ||
         (Seg->Data.size() > limits::kMaxSingleGlobalEmbedLen && !InCodeRun))))
     return nullptr;
 
@@ -557,6 +577,45 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
   }
   OutSegVA = RunStart;
+
+  if (LinkedDataRegion) {
+    // The range proof cannot authorize copying only part of a relocated
+    // pointer, including one that begins just before the range.
+    const auto CutsSlot = [&](uint64_t Slot) {
+      for (uint64_t Boundary : {RunStart, RunEnd})
+        if (Slot < Boundary && Boundary - Slot < PtrSz)
+          return true;
+      return false;
+    };
+    const auto Cuts = [&](const auto &Slots, auto Key) {
+      for (uint64_t Boundary : {RunStart, RunEnd}) {
+        auto It = Slots.lower_bound(Boundary -
+                                    std::min<uint64_t>(Boundary, PtrSz - 1));
+        if (It != Slots.end() && CutsSlot(Key(*It)))
+          return true;
+      }
+      return false;
+    };
+    const auto SlotKey = [](uint64_t Slot) { return Slot; };
+    const auto BindingKey = [](const auto &Binding) { return Binding.first; };
+    if (Cuts(Img->CodePtrRelocSlots, SlotKey) ||
+        Cuts(Img->DataPtrRelocSlots, SlotKey) ||
+        Cuts(ConflictingImportStorageSlots, SlotKey) ||
+        Cuts(EffectiveImportStorageSlots, BindingKey) ||
+        Cuts(ExternalFunctionPointerSlots, BindingKey) ||
+        llvm::any_of(Img->RuntimeCallablePointerSlots,
+                     [&](const auto &Slot) { return CutsSlot(Slot.SlotVA); })) {
+      syncError()
+          << "med_llvm_emitter: linked data region at 0x"
+          << llvm::utohexstr(RunStart)
+          << " cuts relocated pointer storage; refusing partial mirror\n";
+      FatalDataPointerResolution = true;
+      return nullptr;
+    }
+    if (auto It = CodePtrTableGlobals.find(RunStart);
+        It != CodePtrTableGlobals.end())
+      return It->second;
+  }
 
   // dyld owns signing these bytes with the process keys and, when requested,
   // the storage address. Preserve original storage as an external dependency;
@@ -674,7 +733,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     // a runtime-only null slot gets an addressable pointer-width field.
     SlotsByVA.try_emplace(S, PtrSlot{S, PtrSlotKind::RuntimeCallable, {}});
   }
-  if (SlotsByVA.empty())
+  if (SlotsByVA.empty() && !LinkedDataRegion)
     return nullptr;
   std::vector<PtrSlot> Slots;
   Slots.reserve(SlotsByVA.size());
@@ -735,6 +794,13 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
   size_t Cur = 0;
   for (const auto &Slot : Slots) {
     size_t Off = static_cast<size_t>(Slot.VA - RunStart);
+    if (Off < Cur && LinkedDataRegion) {
+      syncError() << "med_llvm_emitter: linked data region at 0x"
+                  << llvm::utohexstr(RunStart)
+                  << " has overlapping relocated pointers; refusing mirror\n";
+      FatalDataPointerResolution = true;
+      return nullptr;
+    }
     if (Off < Cur)
       continue; // overlapping/duplicate slot — skip
     uint64_t TargetVA = 0;

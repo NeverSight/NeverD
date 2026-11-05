@@ -207,6 +207,8 @@ public:
   std::optional<SourceLoc> sourceLocation(va_t Addr) const override;
   std::vector<FunctionSym> allFunctions() const override;
   std::vector<DataObjectSym> allDataObjects() const override;
+  std::optional<std::pair<va_t, va_t>>
+  readOnlyDataRegion(va_t Addr) const override;
   std::optional<DataObjectSym> resolveDataObject(va_t Addr) const override;
   std::pair<std::optional<va_t>, std::optional<va_t>>
   dataSymbolsAround(va_t Addr) const override;

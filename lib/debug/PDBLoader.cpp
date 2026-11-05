@@ -11,6 +11,7 @@
 
 #include "neverd/debug/PDBLoader.h"
 
+#include "PDBDataContributions.h"
 #include "PDBIdentity.h"
 #include "PDBSectionIdentity.h"
 
@@ -640,12 +641,9 @@ struct PDBDebugContext::Impl {
   llvm::codeview::CPUType CPU = llvm::codeview::CPUType::Unknown;
   std::vector<Section> Sections;
 
-  struct ModuleRange {
-    va_t Start = 0;
-    va_t End = 0;
-    uint16_t Module = 0;
-  };
+  using ModuleRange = pdb_loader_detail::ModuleRange;
   std::vector<ModuleRange> Contribs;
+  std::vector<std::pair<va_t, va_t>> ReadOnlyDataRegions;
 
   /// Address-map + symbol stream kept only when `--func` asked for selected
   /// entries.  Full-image loads still ingest every public and drop the index.
@@ -1821,9 +1819,14 @@ PDBDebugContext::loadImpl(const std::filesystem::path &PdbPath,
   Ctx->PImpl->Sections.assign(Image.Sections.begin(),
                               Image.Sections.begin() + SecHeaders.size());
   {
+    const size_t FixedSectionCount = pdb_loader_detail::firstPostLinkSection(
+        Ctx->PImpl->Sections.size(), [&](size_t I) {
+          return llvm::StringRef(Ctx->PImpl->Sections[I].Name);
+        });
     class Visitor : public llvm::pdb::ISectionContribVisitor {
     public:
-      explicit Visitor(Impl &Owner) : Owner(Owner) {}
+      Visitor(Impl &Owner, size_t FixedSectionCount)
+          : Owner(Owner), FixedSectionCount(FixedSectionCount) {}
       void visit(const llvm::pdb::SectionContrib &C) override {
         if (C.Size <= 0)
           return;
@@ -1833,19 +1836,46 @@ PDBDebugContext::loadImpl(const std::filesystem::path &PdbPath,
         const uint64_t Size = static_cast<uint64_t>(C.Size);
         if (Size > InvalidVA - VA)
           return;
-        Owner.Contribs.push_back({VA, VA + Size, C.Imod});
+        const Section &Section = Owner.Sections[C.ISect - 1];
+        const uint32_t Flags = C.Characteristics;
+        const bool ReadOnlyData =
+            C.ISect <= FixedSectionCount &&
+            (Flags & llvm::COFF::IMAGE_SCN_CNT_INITIALIZED_DATA) &&
+            (Flags & llvm::COFF::IMAGE_SCN_MEM_READ) &&
+            !(Flags & (llvm::COFF::IMAGE_SCN_CNT_CODE |
+                       llvm::COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA |
+                       llvm::COFF::IMAGE_SCN_MEM_EXECUTE |
+                       llvm::COFF::IMAGE_SCN_MEM_WRITE)) &&
+            Section.isReadable() && !Section.isWritable() &&
+            Size <= Section.Size - static_cast<uint32_t>(C.Off);
+        Owner.Contribs.push_back(
+            {VA, VA + Size, C.Imod, C.ISect, ReadOnlyData});
       }
       void visit(const llvm::pdb::SectionContrib2 &C) override {
         visit(C.Base);
       }
       Impl &Owner;
+      size_t FixedSectionCount;
     };
-    Visitor ContribVisitor(*Ctx->PImpl);
+    Visitor ContribVisitor(*Ctx->PImpl, FixedSectionCount);
     DBI.visitSectionContributions(ContribVisitor);
     std::sort(Ctx->PImpl->Contribs.begin(), Ctx->PImpl->Contribs.end(),
               [](const Impl::ModuleRange &A, const Impl::ModuleRange &B) {
                 return A.Start < B.Start;
               });
+    // An OMAP or original section table means contribution addresses may
+    // precede binary translation. Do not use them as current storage bounds
+    // without an authenticated translation of the complete interval.
+    const bool HasAddressTranslation =
+        DBI.getDebugStreamIndex(llvm::pdb::DbgHeaderType::OmapToSrc) !=
+            llvm::pdb::kInvalidStreamIndex ||
+        DBI.getDebugStreamIndex(llvm::pdb::DbgHeaderType::OmapFromSrc) !=
+            llvm::pdb::kInvalidStreamIndex ||
+        DBI.getDebugStreamIndex(llvm::pdb::DbgHeaderType::SectionHdrOrig) !=
+            llvm::pdb::kInvalidStreamIndex;
+    if (Ctx->PImpl->ImageIdentityAuthenticated && !HasAddressTranslation)
+      Ctx->PImpl->ReadOnlyDataRegions =
+          pdb_loader_detail::readOnlyDataRegions(Ctx->PImpl->Contribs);
   }
   // Phase B walks TPI/IPI records on first type use.  Load still does not
   // enter LLVM's SymbolCache lazy type graph.
@@ -2557,6 +2587,19 @@ std::vector<DataObjectSym> PDBDebugContext::allDataObjects() const {
   for (auto &[_, Obj] : PImpl->DataObjects)
     Result.push_back(Obj);
   return Result;
+}
+
+std::optional<std::pair<va_t, va_t>>
+PDBDebugContext::readOnlyDataRegion(va_t Addr) const {
+  if (!PImpl)
+    return std::nullopt;
+  const auto &Regions = PImpl->ReadOnlyDataRegions;
+  const auto Next = std::upper_bound(
+      Regions.begin(), Regions.end(), Addr,
+      [](va_t Address, const auto &Region) { return Address < Region.first; });
+  if (Next == Regions.begin() || Addr >= std::prev(Next)->second)
+    return std::nullopt;
+  return *std::prev(Next);
 }
 
 std::optional<DataObjectSym>

@@ -15918,7 +15918,7 @@ TEST(LLVMCodePointerInvariantBoundary,
 }
 
 TEST(LLVMCodePointerInvariantBoundary,
-     FatalPointerResolutionStopsLaterEmissionAndAllowsReuse) {
+     FatalPointerResolutionStopsItsBodyAndAllowsReuse) {
   constexpr uint64_t SlotOffset = 8;
   constexpr uint64_t MissingTarget = 0xfffffffffffffff0ULL;
   for (Arch TargetArch : {Arch::X64, Arch::AArch64})
@@ -15960,15 +15960,20 @@ TEST(LLVMCodePointerInvariantBoundary,
         EXPECT_NE(Diagnostic.find("refusing stale-address fallback"),
                   std::string::npos)
             << Diagnostic;
-        // The LOAD requests this mirror. A doomed module must not lower the
-        // following RETURN or any later function body. Source handles for
-        // the failed operation itself become null when the module is dropped.
+        // The LOAD requests this mirror. Its body's following RETURN must
+        // not be lowered. The emitter still diagnoses independent bodies so
+        // a caller can explicitly omit refused bodies in a later emission;
+        // this unmasked emission must publish no module or live source handle.
+        ASSERT_EQ(Emitter.refusedBodies().size(), 1u);
+        EXPECT_EQ(Emitter.refusedBodies().front().Index, 0u);
         EXPECT_TRUE(FailedSource.Functions.count(CallerVA));
-        EXPECT_FALSE(FailedSource.Functions.count(CodeVA));
-        ASSERT_EQ(FailedSource.Observations.size(), 1u);
+        EXPECT_TRUE(FailedSource.Functions.count(CodeVA));
+        ASSERT_EQ(FailedSource.Observations.size(), 2u);
         EXPECT_EQ(FailedSource.Observations.front().Occurrence.Address,
                   CallerVA + 4);
         EXPECT_EQ(FailedSource.Observations.front().Value, nullptr);
+        EXPECT_EQ(FailedSource.Observations.back().Occurrence.Address, CodeVA);
+        EXPECT_EQ(FailedSource.Observations.back().Value, nullptr);
 
         writeObject(Image.Segments[1].Data, SlotOffset,
                     CodeSlot ? CodeVA : CStringVA);
@@ -15979,6 +15984,7 @@ TEST(LLVMCodePointerInvariantBoundary,
                          TargetArch, {}, &Image, Format);
         ASSERT_NE(Reused, nullptr);
         expectValidModule(*Reused);
+        EXPECT_TRUE(Emitter.refusedBodies().empty());
         EXPECT_TRUE(ReusedSource.Functions.count(CallerVA));
         EXPECT_TRUE(ReusedSource.Functions.count(CodeVA));
         EXPECT_EQ(ReusedSource.Observations.size(), 3u);

@@ -10222,12 +10222,13 @@ cannot retain a previous default-space slot's result.
 `LocalReloadUsesKeepForwardingAndValueIdentity` reverses CFG and block-vector
 order and checks widening, low/high slicing, different SSA versions and value
 kinds, and width views of the same value against the previous predicate.
-`LLVMCodePointerInvariantBoundary.FatalPointerResolutionStopsLaterEmissionAndAllowsReuse`
+`LLVMCodePointerInvariantBoundary.FatalPointerResolutionStopsItsBodyAndAllowsReuse`
 checks unresolved code/data pointer mirrors across x64/AArch64 and ELF/Mach-O/COFF.
-Source observations must stop at the failed LOAD, later function bodies must
-remain unprocessed, and deleted LLVM values must leave null source handles.
+The failing body's observations stop at its LOAD; independent bodies still
+contribute diagnostics. The unmasked emission returns no module, identifies
+only the refused body, and leaves null source handles for all deleted values.
 Repairing the target and reusing the emitter must produce a valid module with
-all expected observations.
+all expected observations and no retained refusal.
 `OversizedIndexConstraintsDoNotRepeatDoomedGraphBuilds` repeats queries on
 functions above the structural proof budget across all four architectures and
 checks bounded work; a smaller guarded runtime load must still be proved.
@@ -19151,7 +19152,18 @@ segments must retain independent bytes and mutability in either access order.
 Backwards growth must preserve atomic alignment and the symbolized original
 address.
 Required unresolved pointers and shared-shard storage keep their rejection or
-whole-run contracts. Run the owning pointer and memory suites together:
+whole-run contracts. `MedLLVMDirectData.LinkedDataRegion*` verifies bounded
+mixed records, pure-byte regions, self-relative data pointers and interior
+aliases in both function orders across x86/x64/ARM/AArch64 and COFF/ELF/Mach-O.
+Oversized, unbacked or unauthenticated regions, partial/overlapping pointer
+slots and unresolved code targets retain refusal. These cases inspect and
+verify LLVM without executing generated code.
+`PDBDataContributions.*` in `NeverDPDBIdentityTests` checks overlapping and
+adjacent contributions, gaps, section conflicts, modified permissions/extents
+and OMAP/original-section headers against the public PE/PDB fixture. A matching
+PDB grants storage intervals without granting object capacities; display-only
+loading without image identity grants neither.
+Run the owning pointer and memory suites together:
 
 ```bash
 ctest --test-dir build-release --build-config Release --output-on-failure \
