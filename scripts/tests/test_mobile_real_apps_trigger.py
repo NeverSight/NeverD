@@ -275,6 +275,11 @@ class WorkflowContractTests(unittest.TestCase):
                          {"trigger", "producer", "guards", "build-linux", "build-macos", "android", "ios"})
         self.assertIn("needs.trigger.result == 'success'", jobs["release-gate"])
 
+    def test_qualification_follows_the_nightly_or_dispatched_producer(self):
+        trigger_job = self.workflow().split("\n  trigger:\n", 1)[1].split("\n    steps:", 1)[0]
+        self.assertIn("github.event.workflow_run.conclusion != 'cancelled'", trigger_job)
+        self.assertIn("github.event.workflow_run.event != 'push'", trigger_job)
+
     def test_actual_workflow_preserves_read_only_trigger_and_same_consumer_identity(self):
         self.assert_contract(self.workflow())
 

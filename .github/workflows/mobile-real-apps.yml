@@ -23,9 +23,11 @@ concurrency:
 jobs:
   trigger:
     name: Verify the upstream run identity
-    # A cancelled producer was superseded by a newer dev push, whose own
-    # completion schedules the replacement run; skip the whole graph.
-    if: ${{ github.event.workflow_run.conclusion != 'cancelled' }}
+    # A full run takes about ten runner hours, so qualification follows the
+    # nightly producer or an explicit dispatch. A mobile-path push already gets
+    # Mobile Decompilation's own result. A cancelled producer was superseded, and
+    # the next nightly run replaces it. Skip the whole graph in both cases.
+    if: ${{ github.event.workflow_run.conclusion != 'cancelled' && github.event.workflow_run.event != 'push' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
