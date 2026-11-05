@@ -1143,9 +1143,11 @@ std::vector<std::shared_ptr<const MedFunc>> omittedDirectCalleeSignatures(
   // before another direct callee can supply its signature.  The callees next
   // in line are lifted and converted together first (readAhead); the loop
   // still takes each in queue order under the same budgets.
-  while (!Pending.empty() && Inspected < limits::kMaxCallEffectExtraLifts) {
+  constexpr size_t MaxReads =
+      limits::pipeline::kPipelineCallAbiMaxOmittedCalleeReads;
+  while (!Pending.empty() && Inspected < MaxReads) {
     const size_t Wave =
-        std::min({Pending.size(), limits::kMaxCallEffectExtraLifts - Inspected,
+        std::min({Pending.size(), MaxReads - Inspected,
                   limits::pipeline::kPipelineCallAbiCalleeReadAhead});
     const std::vector<va_t> Next(
         Pending.begin(), Pending.begin() + static_cast<std::ptrdiff_t>(Wave));

@@ -4410,8 +4410,9 @@ when that reader ends, independently of any longer-lived signature memo.
 The signature memo holds the conversions a session's decompiles read, up to a
 twelfth of the host's physical memory between `kPipelineCallAbiDetailMaxBytes`
 and `kPipelineCallAbiDetailMaxBytesCeiling` (`OmittedCalleeMemo::maxBytes`),
-evicting those used longest ago past it: a decompile reads up to 256 callees,
-and a smaller memo evicts the ones the next decompiles read again. A replica's
+evicting those used longest ago past it: a decompile reads up to
+`kPipelineCallAbiMaxOmittedCalleeReads` callees, its direct callees first, and a
+smaller memo evicts the ones the next decompiles read again. A replica's
 callee read-ahead fills three quarters of it, so a larger memo covers more of
 the callees later decompiles read first. The forwarder fixed point of a
 decompile probes its kept bodies that hold no probe its summaries read the same
