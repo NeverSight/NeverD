@@ -1348,7 +1348,7 @@ checked Unicorn 使用 `MachineRunControl`：ARM64 維護、客體執行與完�
 
 `WindowsProcess.ClockServicesUseConsistentUnitsAndPreserveLastError` 執行原始 x64/ARM64 PE 中的 `QueryPerformanceFrequency`、單調計數器、FILETIME、回繞 tick 計數和相對延遲呼叫。`WindowsProcess.UnmodeledDelaysStopWithoutClaimingCompletion` 驗證警覺、正數絕對時間及 INT64_MIN 間隔在完成前遭拒絕。`NativeWindowsOracleRunsTheSameExecutable` 也在 Windows 上直接執行成功的時鐘情境；兩項客體回歸均納入停用 Unicorn 的 KVM/WHP 必測清單。 原始樣例明確污染 `BOOLEAN` 參數暫存器未使用的高位元，並以明確的 64 位元型別定義常數，防止 Windows ABI 截斷紀元值與 INT64_MIN。
 
-`ARM64 native backend build` 使用固定版本的 LLVM 原始碼，在 `ubuntu-24.04-arm`（KVM）和 `windows-11-arm`（WHP）上停用 Unicorn 並編譯 `NeverDEmulationNative`。`audit_native_backend_build.py` 核對每個宣告的原生原始檔、啟用的後端定義、編譯命令、ARM64 ELF/COFF 物件及雜湊。`probe_native_host.py` 記錄主機初始化能力與資源清理；能力不可用會明確記錄，初始化錯誤會使工作失敗。這些工作驗證編譯與主機初始化，尚不構成客體執行證據。 `NeverDCapstoneCompilerOptions.inc` 將限定詞診斷選項限定於 Clang 的 C 編譯；GCC 與 MSVC 保留各自的警告規則。 `native_arm64_only=true` 可單獨執行這些 ARM64 元件建構與初始化探測，不啟動完整 x64 CPU 驗收。 建構審計會先正規化原始碼與建構目錄，再比對路徑，包括 Windows 8.3 別名。 ARM64 元件工作會在建置稽核前明確啟用選定的 KVM 或 WHP 後端。
+`ARM64 native backend build` 使用固定版本的 LLVM 原始碼，在 `ubuntu-24.04-arm`（KVM）和 `windows-11-arm`（WHP）上停用 Unicorn 並編譯 `NeverDEmulationNative`。`audit_native_backend_build.py` 核對每個宣告的原生原始檔、啟用的後端定義、編譯命令、ARM64 ELF/COFF 物件及雜湊。`probe_native_host.py` 記錄主機初始化能力與資源清理；能力不可用會明確記錄，初始化錯誤會使工作失敗。這些工作驗證編譯與主機初始化，尚不構成客體執行證據。 `NeverDCapstoneCompilerOptions.inc` 將限定詞診斷選項限定於 Clang 的 C 編譯；GCC 與 MSVC 保留各自的警告規則。 `arm64-native-build.yml` 可單獨執行這些 ARM64 元件建構與初始化探測，不啟動完整 x64 CPU 驗收。 建構審計會先正規化原始碼與建構目錄，再比對路徑，包括 Windows 8.3 別名。 ARM64 元件工作會在建置稽核前明確啟用選定的 KVM 或 WHP 後端。
 
 `WindowsTestExecution.def` 將 Unicorn ARM64 的 `WindowsExclusive` 對照設為 `RUN_SERIAL`。CTest 策略避免它與其他客體負載爭用資源，保留原有 60 s 客體截止時間及全部結果、暫存器、權限和原生摘要檢查。
 

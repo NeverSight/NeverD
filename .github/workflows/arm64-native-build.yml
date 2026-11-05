@@ -1,0 +1,117 @@
+name: ARM64 native backend build
+
+# Compiling the native backends for ARM64 builds pinned LLVM sources on each host,
+# and the result follows these sources and the build configuration. Changes to
+# shared headers or other dependencies surface in the nightly run.
+on:
+  schedule:
+    - cron: '47 23 * * *'
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - '.github/workflows/arm64-native-build.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'lib/emulation/**'
+      - 'include/neverd/emulation/**'
+      - 'third_party/llvm-project'
+      - 'scripts/build.py'
+      - 'scripts/audit_native_backend_build.py'
+      - 'scripts/probe_native_host.*'
+      - 'scripts/NativeHostProbe.def'
+      - 'scripts/tests/test_audit_native_backend_build.py'
+  pull_request:
+    paths:
+      - '.github/workflows/arm64-native-build.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'lib/emulation/**'
+      - 'include/neverd/emulation/**'
+      - 'third_party/llvm-project'
+      - 'scripts/build.py'
+      - 'scripts/audit_native_backend_build.py'
+      - 'scripts/probe_native_host.*'
+      - 'scripts/NativeHostProbe.def'
+      - 'scripts/tests/test_audit_native_backend_build.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arm64-native-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arm64-native-build:
+    name: ARM64 native backend build (${{ matrix.backend }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: kvm
+            runner: ubuntu-24.04-arm
+          - backend: whp
+            runner: windows-11-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Initialize pinned component dependencies
+        shell: bash
+        run: git -c core.longpaths=true submodule update --init --depth 1 third_party/llvm-project third_party/capstone
+      - name: Install Linux component build tooling
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+      - name: Install Windows component build tooling
+        if: ${{ runner.os == 'Windows' }}
+        run: choco install ninja --yes --no-progress
+      - name: Select the native ARM64 MSVC compiler
+        if: ${{ runner.os == 'Windows' }}
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: arm64
+      - name: Build actual ARM64 backend components
+        shell: bash
+        run: |
+          python -m unittest scripts.tests.test_audit_native_backend_build -q
+          cmake -S . -B build-ci-arm64 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF -DNEVERD_BUILD_SHARED=OFF \
+            -DNEVERD_BUILD_GUI=OFF -DNEVERD_ENABLE_Z3=OFF \
+            -DNEVERD_ENABLE_CPU_EMULATION=ON \
+            -DNEVERD_ENABLE_DRIVER_EMULATION=OFF \
+            -DNEVERD_EMULATION_BACKEND_UNICORN=OFF \
+            -DNEVERD_EMULATION_BACKEND_KVM=${{ matrix.backend == 'kvm' && 'ON' || 'OFF' }} \
+            -DNEVERD_EMULATION_BACKEND_WHP=${{ matrix.backend == 'whp' && 'ON' || 'OFF' }} \
+            -DNEVERD_LLVM_PREBUILT=OFF
+          python scripts/build.py build-ci-arm64 --target NeverDEmulationNative --parallel 4
+          python scripts/audit_native_backend_build.py \
+            --backend ${{ matrix.backend }} --build build-ci-arm64 \
+            --output build-ci-arm64/evidence/build.json
+      - name: Observe ARM64 host setup availability
+        shell: bash
+        run: |
+          python scripts/probe_native_host.py \
+            --backend ${{ matrix.backend }} --arch ARM64 \
+            --output build-ci-arm64/host-probe
+      - name: Preserve ARM64 compilation and host setup evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-backend-arm64-${{ matrix.backend }}
+          path: |
+            build-ci-arm64/evidence/
+            build-ci-arm64/host-probe/
+            build-ci-arm64/CMakeCache.txt
+            build-ci-arm64/compile_commands.json
+            build-ci-arm64/lib/emulation/CMakeFiles/NeverDEmulationNative.dir/backends/
+          if-no-files-found: error
+          retention-days: 14

@@ -699,6 +699,18 @@ find() { return 0; }
             "scripts/tests/fixtures/mobile/**",
         ))
 
+    def test_arm64_component_builds_follow_backend_sources_and_run_nightly(self):
+        self.assert_path_filtered_and_nightly("arm64-native-build.yml", (
+            "CMakeLists.txt", "cmake/**", "lib/emulation/**",
+            "include/neverd/emulation/**", "third_party/llvm-project",
+            "scripts/audit_native_backend_build.py",
+        ))
+        arm64 = WORKFLOW.with_name("arm64-native-build.yml").read_text(encoding="utf-8")
+        for backend, runner in (("kvm", "ubuntu-24.04-arm"), ("whp", "windows-11-arm")):
+            self.assertIn(f"- backend: {backend}\n            runner: {runner}\n", arm64)
+        self.assertIn("--target NeverDEmulationNative", arm64)
+        self.assertNotIn("NeverDEmulationNative", WORKFLOW.read_text(encoding="utf-8"))
+
     def test_workflow_declares_all_three_test_profiles(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         matrix_source = source.split("        include:\n", 1)[1].split(
