@@ -20,12 +20,6 @@ bool RegistrationStateSolver::runSEHFilterSearch(
     const LowOp &Raise, const FrameState &Parent,
     std::vector<RegistrationObjectExtent> *Writes, SEHFrameOutcomes &Outcomes,
     bool RequireResume, SEHHandlerOutcomes *Selected, SEHUnwindJump *Jump) {
-  if (KnownCxx || !Chain.TryLevelOffset ||
-      (EH4 && (!CompleteCookies || !cookiesReady(Parent))))
-    return false;
-  const auto Level = Parent.load(*Chain.TryLevelOffset, 4).Constant;
-  if (!Level || !validLevel(int32_t(*Level)))
-    return false;
   const auto &SP = Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride];
   const auto Code =
       SP.CallbackAddress
@@ -35,6 +29,20 @@ bool RegistrationStateSolver::runSEHFilterSearch(
       Code
           ? std::make_optional(SEHExceptionOrigin{Raise.Addr, Raise.Seq, *Code})
           : std::nullopt;
+  return runSEHFilterSearch(Origin, Parent, Writes, Outcomes, RequireResume,
+                            Selected, Jump);
+}
+
+bool RegistrationStateSolver::runSEHFilterSearch(
+    std::optional<SEHExceptionOrigin> Origin, const FrameState &Parent,
+    std::vector<RegistrationObjectExtent> *Writes, SEHFrameOutcomes &Outcomes,
+    bool RequireResume, SEHHandlerOutcomes *Selected, SEHUnwindJump *Jump) {
+  if (KnownCxx || !Chain.TryLevelOffset ||
+      (EH4 && (!CompleteCookies || !cookiesReady(Parent))))
+    return false;
+  const auto Level = Parent.load(*Chain.TryLevelOffset, 4).Constant;
+  if (!Level || !validLevel(int32_t(*Level)))
+    return false;
   struct Search {
     FrameState Frame;
     int32_t Cursor;

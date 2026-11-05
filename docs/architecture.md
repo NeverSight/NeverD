@@ -16178,6 +16178,19 @@ recovery; a returned stack coordinate cannot discharge them. An irreversible
 refusal stops this all-or-nothing private proof and withdraws partial receipts.
 Ordinary state analysis continues to collect its separately useful facts.
 
+A separate invocation receipt can bound a plain helper to closed integer and
+private-stack effects plus at most one authenticated, continuable
+RaiseException with a known code. The receipt carries that physical raise
+occurrence and the complete incoming-read extent; it is not an import or
+callback contract. The conditional SEH transfer owner replays the caller's
+local filter search with that origin and any unwind before selection. External
+search, state-changing filters, nonlocal exits and writes into the suspended
+helper or its arguments refuse this route. Callback writes retain alias taint
+from all checked exits and discard scalar facts on ordinary and exceptional
+paths. Only this complete composition can preserve still-live import bindings.
+The same cumulative work budget bounds both parts; target-only ABI caches and
+native publication receive no additional authority.
+
 A zero-argument native C++ callee query first checks its authenticated shared
 entry prefix. An incoming frame access before any ordinary call or branch
 already contradicts that query's input contract, so it refuses before analysing

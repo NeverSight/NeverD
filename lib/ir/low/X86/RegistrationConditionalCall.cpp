@@ -116,6 +116,7 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
   registration_abi::ImageFrameEffects Effects;
   std::optional<FrameValue> Returned;
   std::optional<uint32_t> Pop;
+  std::optional<ConditionalDispatch> Dispatch;
   if (Callee.ExceptionMetadata || !Callee.hasCompleteLiftCoverage() ||
       !registration_abi::chargeDecodedCallee(Work, Callee) ||
       !registration_abi::hasPrivateCallerFrame(
@@ -126,7 +127,8 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
                ReturnValue || Effect || Invocation ? &Returned : nullptr,
            .ExcludeCalls = Effect != nullptr,
            .OriginalImage = OriginalImage,
-           .StackPopBytes = &Pop}) ||
+           .StackPopBytes = &Pop,
+           .Dispatch = Invocation ? &Dispatch : nullptr}) ||
       !Effects.Writes.empty() || !Effects.CallerPCWrites.empty() ||
       (!Effect && !Effects.Reads.empty()))
     return false;
@@ -134,6 +136,19 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
     return false;
   if (Effect && !Returned)
     return false;
+  if (Dispatch && Op.Seq >= 0 &&
+      Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+      Op.MemoryOrdering == NdMemoryOrdering::None &&
+      Op.Addr <= UINT32_MAX - 5) {
+    if (!chargeCalleeWork(Work, 5))
+      return false;
+    const auto Call = readImmutablePE32CodeBytes(Image, Op.Addr, 5, {});
+    if (!Call || (*Call)[0] != 0xe8 ||
+        uint32_t(Op.Addr + 5 + int64_t(readLE<int32_t>(Call->data() + 1))) !=
+            Target)
+      Dispatch.reset();
+  } else
+    Dispatch.reset();
   // This invocation already proved its initialized arguments, restored frame
   // and all reached exits together. A context-free stack query loses those
   // premises and cannot validate an input-dependent result or cleanup.
@@ -150,6 +165,7 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
     Invocation->StackPopBytes = Pop;
     if (Returned)
       Invocation->ReturnValue = projectX86CallReturnValue(*Returned);
+    Invocation->Dispatch = std::move(Dispatch);
   }
   return true;
 }
