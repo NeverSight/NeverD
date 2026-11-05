@@ -31,6 +31,7 @@ struct LowInstructionBoundary;
 namespace registration_state {
 struct BoundPlainCalleeEffect;
 struct ConditionalCallResult;
+struct ConditionalDispatch;
 class OriginalImageFrameProof;
 } // namespace registration_state
 } // namespace neverd
@@ -261,6 +262,9 @@ struct PrivateFrameOptions {
   /// an unresolved tail cannot supply a partial result. A closed loop has no
   /// returning cleanup. Never publish this as a target-only ABI contract.
   std::optional<uint32_t> *StackPopBytes = nullptr;
+  /// Optional invocation-only integer/raise summary. It grants no callback
+  /// effects or import preservation until the enclosing SEH search closes.
+  std::optional<registration_state::ConditionalDispatch> *Dispatch = nullptr;
 };
 
 bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,

@@ -372,12 +372,22 @@ private:
                           SEHFrameOutcomes &Outcomes, bool RequireResume,
                           SEHHandlerOutcomes *Selected = nullptr,
                           SEHUnwindJump *Jump = nullptr);
+  bool runSEHFilterSearch(std::optional<SEHExceptionOrigin> Origin,
+                          const FrameState &Parent,
+                          std::vector<RegistrationObjectExtent> *Writes,
+                          SEHFrameOutcomes &Outcomes, bool RequireResume,
+                          SEHHandlerOutcomes *Selected, SEHUnwindJump *Jump);
   bool mergeSEHJumpContinuation(const Domain &Source,
                                 const SEHJumpCapture &Saved,
                                 const FrameValue &Value,
                                 SEHFrameOutcomes Outcomes);
   bool applySEHContinueFilters(size_t I, Domain &State, const LowOp &Raise,
                                const BlockFacts &Facts);
+  std::optional<FrameValue>
+  transferConditionalDispatch(size_t I, const Domain &Before, Domain &After,
+                              const LowOp &Op, const BlockFacts &Facts,
+                              const ConditionalCallResult &Invocation,
+                              std::optional<Domain> &CallException);
   void
   recordCatchReturn(size_t I, const Domain &After, const LowOp &Op,
                     const FrameTransfer &Transfer, const BlockFacts &Facts,
