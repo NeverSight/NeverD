@@ -20186,6 +20186,25 @@ does not qualify instruction execution at that address.
 `FunctionCallsAdmitContextOnlyArgumentLimit` checks all 32 slots retained in
 native state; 33 slots and malformed mixed declarations remain rejected.
 
+`FunctionCallSitesRejectUnboundInstructions` rejects malformed, duplicate,
+unselected, indirect, non-CALL and wrong-target sites before source publication.
+`FunctionCallSitesCompileAndProveBoundaries` compiles both routes and dispatchers
+at O0/O2 and proves sixteen controller predicates with independent RAM, CALL
+equations and activation outcomes. The predicates cover physical return-cell
+creation, unknown incoming bytes, narrow argument positions, pre/post-CALL
+budget pauses, rejected-step retry, pending PC/SP guards, site identity,
+external returns, cached completion and original RET cleanup. Existing source
+before the appended bridges must remain identical. These tests execute neither
+generated instructions nor specimen code; their controller oracle does not
+establish an arbitrary runtime provider's effects.
+`FunctionCallSitesProveHighCOriginalStackTransfer` additionally proves three
+constant-result predicates using the actual emitted CALL/RET bodies and bridge,
+fixed nonfaulting RAM addresses and arbitrary result/register values. These
+predicates are compiled, never executed. Clang does not fold LLVM C's
+integerized host-state pointers into the typed fixture fields, so this stronger
+original-step proof is HighC-only; both routes retain the controller proofs and
+complete object-compilation checks above.
+
 `EnvironmentResumesTheActualPhysicalContext`,
 `EnvironmentBudgetsBoundEveryProviderAttempt` and
 `EnvironmentReceivesCompletedPrivilegeState` execute the companion run driver

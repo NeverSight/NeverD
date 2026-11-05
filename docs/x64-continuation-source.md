@@ -268,6 +268,62 @@ no additional per-instruction work. Omitting `function_calls` retains the
 previous source and manifest. The owner is
 [`X64FunctionCalls.cpp`](../lib/pipeline/X86/X64FunctionCalls.cpp).
 
+### Original CALL bridges
+
+When state is available immediately before a native CALL, add `call_sites` to
+its `function_calls` declaration:
+
+```json
+"function_calls": [{
+  "entry": "0x1020",
+  "abi": "win64",
+  "argument_bytes": [8, 8, 8, 8, null, 1],
+  "result_bytes": 4,
+  "call_sites": ["0x1000"]
+}]
+```
+
+The caller's region and callee entry must already be selected. Each site must
+decode as an original, modeled direct near CALL to that exact entry. A JMP,
+indirect CALL, unselected instruction, wrong target or duplicate site refuses
+the export. This option does not enlarge the selection or infer a signature.
+The total site count shares the request's instruction budget.
+
+`neverd_x64_call_site_1000_v6` takes the same scalar parameters and runtime
+inputs as the entry wrapper, with a zero-initialized
+`neverd_x64_call_site_context_v1` instead of a call context. It checks parameters
+against the pre-CALL state. In this example the sixth slot is at current RSP +
+40, and the fifth slot at RSP + 32 is retained without a scalar read or write.
+Mismatch or a wrapping checked range rejects before CALL or context mutation.
+
+The original instruction step then pushes its real return PC and updates RSP
+and PC. Only a successful CALL consumes one instruction unit and begins the
+shared function activation at the resulting return cell. No synthetic host
+return address, replacement frame, argument initialization or private-stack
+copy is introduced. The selected callee's RET and any `RET imm` cleanup keep
+their original effects. The existing return-cell lifetime declaration remains
+necessary; this bridge does not prove arbitrary frame ownership.
+
+Resume with `neverd_x64_resume_site_1000_v6`. Zero budget before CALL keeps a
+prepared context; the pending instruction requires the same PC and SP on
+resume. Invalid instruction state also remains pending without spending a
+step. Once CALL completes, subsequent pauses retain the callee activation and
+never replay CALL or recheck arguments. A repeated start or a resume for a
+different site rejects. The producer retains context fields and native state
+across pauses and owns any deliberate environment changes. Completion and
+cached result bits use the same rules as the entry interface.
+
+The manifest's `function_call_sites` records original sites, targets, return
+PCs, parameter widths and `call_sp_offset` locations. Both routes and
+dispatchers use the same bridges and unchanged instruction bodies. Only
+explicit requests build the small site index and decode the named CALLs; there
+is no new ordinary-source analysis or per-instruction dispatcher check.
+Omitting `call_sites` preserves the previous source and manifest. The owner is
+[`X64FunctionCallSites.cpp`](../lib/pipeline/X86/X64FunctionCallSites.cpp).
+Full pre-CALL state, accessible RAM and the environment provider are still
+required. Automatic state capture or arbitrary ordinary-C/native composition
+is not supplied by this interface.
+
 ## Invocation
 
 Legacy SHUFPS register forms select their four 32-bit lanes through primitive

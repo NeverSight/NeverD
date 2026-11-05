@@ -1459,6 +1459,7 @@ static void original(neverd_x64_state_v6 *s, void *code, uint64_t *ram) {
 #include "X64ContinuationEnvironmentTests.inc"
 #include "X64EventDeliveryExportTests.inc"
 #include "X64EventScheduleExportTests.inc"
+#include "X64FunctionCallSiteTests.inc"
 #include "X64FunctionCallTests.inc"
 #include "X64FunctionContextTests.inc"
 #include "X64HleContinuationExportTests.inc"

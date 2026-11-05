@@ -13,6 +13,7 @@
 #include "neverd/Common.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/JSON.h"
 
 #include <cstdint>
@@ -34,7 +35,21 @@ struct X64FunctionCallInterface {
   va_t Entry = 0;
   std::vector<std::optional<unsigned>> ArgumentBytes;
   unsigned ResultBytes = 0;
+  /// Optional original direct CALL instructions at which the caller's full
+  /// state is supplied. Their targets must equal Entry and be selected.
+  std::vector<va_t> CallSites;
 };
+
+/// Shared scalar declarations/checks for entry and pre-CALL stack coordinates.
+/// The parameter writer returns the last checked stack byte, if any. Checks
+/// return the caller's local `rejected` result without changing native state.
+std::optional<uint64_t>
+emitX64FunctionCallParameters(llvm::raw_ostream &OS,
+                              const X64FunctionCallInterface &Call,
+                              uint64_t StackBase);
+llvm::json::Array emitX64FunctionCallArguments(
+    llvm::raw_ostream &OS, const X64FunctionCallInterface &Call,
+    uint64_t StackBase, llvm::StringRef StackOffsetKey);
 
 /// Append checked call/resume wrappers after the V6 function context driver.
 /// No instruction body or driver is copied. Returns their manifest entries.

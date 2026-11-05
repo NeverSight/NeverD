@@ -12,6 +12,7 @@
 #include "X64ContinuationEnvironment.h"
 #include "X64ContinuationPagedDriver.h"
 #include "X64ContinuationSchedule.h"
+#include "X64FunctionCallSites.h"
 #include "X64FunctionCalls.h"
 #include "X64FunctionContext.h"
 #include "X64RtmAbortRegions.h"
@@ -323,7 +324,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
         Calls->size() > Result.Addresses.size())
       return invalid("function_calls requires function_context and a nonempty "
                      "array of explicit entry interfaces");
-    std::set<va_t> Seen;
+    std::set<va_t> Seen, SeenSites;
     const auto Width =
         [](const llvm::json::Value *Value) -> llvm::Expected<unsigned> {
       if (Value)
@@ -338,7 +339,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
         return invalid("function call interface must be an object");
       for (const auto &[Key, Unused] : *Call)
         if (Key != "entry" && Key != "abi" && Key != "argument_bytes" &&
-            Key != "result_bytes")
+            Key != "result_bytes" && Key != "call_sites")
           return invalid("unknown function call interface field: " +
                          llvm::StringRef(Key));
       const auto *EntryValue = Call->get("entry");
@@ -362,6 +363,21 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       X64FunctionCallInterface Interface;
       Interface.Entry = *Entry;
       Interface.ResultBytes = *ResultBytes;
+      if (const auto *Value = Call->get("call_sites")) {
+        const auto *Sites = Value->getAsArray();
+        if (!Sites || Sites->empty() ||
+            Sites->size() > Options.MaxInstructions - SeenSites.size())
+          return invalid("call_sites must be a nonempty array within the "
+                         "selected instruction budget");
+        for (const auto &SiteValue : *Sites) {
+          auto Site = integer(SiteValue);
+          if (!Site)
+            return Site.takeError();
+          if (!SeenSites.insert(*Site).second)
+            return invalid("duplicate function call site: " + hex(*Site));
+          Interface.CallSites.push_back(*Site);
+        }
+      }
       for (const auto &Argument : *Arguments) {
         if (Argument.getAsNull()) {
           Interface.ArgumentBytes.push_back(std::nullopt);
@@ -633,6 +649,10 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   auto Units = buildX64ContinuationSource(Image, Addresses, Request->Options);
   if (!Units)
     return Units.takeError();
+  auto CallSites =
+      bindX64FunctionCallSites(Image, Request->FunctionCalls, *Units);
+  if (!CallSites)
+    return CallSites.takeError();
   if (Request->Options.PagedMemory &&
       (Request->NativeRtmAbortRegions || Request->NativeRtmRegions ||
        Request->DirectDispatch))
@@ -816,6 +836,7 @@ typedef struct neverd_x64_event_v1 {
 #undef EVENT_FIELD
   }
   llvm::json::Array FunctionCalls;
+  llvm::json::Array FunctionCallSites;
   if (Request->Options.PagedMemory) {
     emitX64PagedDriver(OS, *Units, Request->Options,
                        Request->FollowInternalCalls);
@@ -835,6 +856,7 @@ typedef struct neverd_x64_event_v1 {
     if (Request->FunctionContext)
       emitX64ContinuationEnvironment(OS, Version, true);
     FunctionCalls = emitX64FunctionCalls(OS, Request->FunctionCalls);
+    FunctionCallSites = emitX64FunctionCallSites(OS, *CallSites);
   }
   if (Request->Options.ScheduledEvents)
     emitX64ContinuationSchedule(OS, *Units, Request->FollowInternalCalls,
@@ -1124,6 +1146,16 @@ typedef struct neverd_x64_event_v1 {
                    "no argument or padding initialization; resume retains "
                    "activation; Value is valid only when Completed is 1; "
                    "same native-state and environment obligations"}};
+  if (!FunctionCallSites.empty())
+    Report["function_call_sites"] = llvm::json::Object{
+        {"context_type", "neverd_x64_call_site_context_v1"},
+        {"result_type", "neverd_x64_call_result_v1"},
+        {"interfaces", std::move(FunctionCallSites)},
+        {"domain", "original pre-CALL state and accessible stack RAM; scalar "
+                   "checks precede any instruction effect; the original CALL "
+                   "owns the return cell; retain context across pauses; "
+                   "same function-boundary and environment obligations; "
+                   "ordinary caller state capture is not inferred"}};
   llvm::raw_string_ostream(Result.Manifest)
       << llvm::formatv("{0:2}\n", llvm::json::Value(std::move(Report)));
   return Result;
