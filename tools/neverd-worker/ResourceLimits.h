@@ -59,8 +59,11 @@ inline constexpr std::size_t kEngineMaxNamedViewBytes = 32 * 1024 * 1024;
 /// ends before the line that would pass it.
 inline constexpr std::size_t kEngineMaxCodePageBytes =
     ::neverd::limits::kMaxViewPageBytes;
-inline constexpr std::size_t kEngineMaxNamedViewCacheBytes = 32 * 1024 * 1024;
-inline constexpr std::size_t kEngineMaxNamedViews = 8;
+/// Finished view documents the worker keeps, so that returning to a function
+/// answers from its document instead of decompiling it again: a session's
+/// working set of functions, bounded by retained bytes as well as count.
+inline constexpr std::size_t kEngineMaxNamedViewCacheBytes = 256 * 1024 * 1024;
+inline constexpr std::size_t kEngineMaxNamedViews = 512;
 inline constexpr std::size_t kEngineMaxEncodedPages = 64;
 inline constexpr std::size_t kEngineMaxEncodedBytes = 8 * 1024 * 1024;
 // Decode one basic block without following its successors or inventing
