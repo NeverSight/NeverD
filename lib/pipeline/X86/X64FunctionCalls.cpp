@@ -20,6 +20,63 @@
 
 namespace neverd {
 
+std::optional<uint64_t>
+emitX64FunctionCallParameters(llvm::raw_ostream &OS,
+                              const X64FunctionCallInterface &Call,
+                              uint64_t StackBase) {
+  const auto Layout =
+      getTargetRegInfo(Arch::X64).integerArgumentLayout(BinaryFormat::COFF);
+  std::optional<uint64_t> LastStackByte;
+  for (size_t P = 0; P < Call.ArgumentBytes.size(); ++P)
+    if (const auto Bytes = Call.ArgumentBytes[P]) {
+      OS << ", uint" << *Bytes * 8 << "_t arg" << P;
+      if (P >= Layout.Registers.size())
+        LastStackByte = StackBase +
+                        (P - Layout.Registers.size()) * Layout.SlotBytes +
+                        *Bytes - 1;
+    }
+  return LastStackByte;
+}
+
+llvm::json::Array emitX64FunctionCallArguments(
+    llvm::raw_ostream &OS, const X64FunctionCallInterface &Call,
+    uint64_t StackBase, llvm::StringRef StackOffsetKey) {
+  const auto &TRI = getTargetRegInfo(Arch::X64);
+  const auto Layout = TRI.integerArgumentLayout(BinaryFormat::COFF);
+  llvm::json::Array Arguments;
+  for (size_t P = 0; P < Call.ArgumentBytes.size(); ++P) {
+    const auto Bytes = Call.ArgumentBytes[P];
+    llvm::json::Object Argument;
+    std::string Type;
+    if (Bytes) {
+      Argument["bytes"] = *Bytes;
+      Type = "uint" + std::to_string(*Bytes * 8) + "_t";
+    } else {
+      Argument["retained_in_state"] = true;
+    }
+    if (P < Layout.Registers.size()) {
+      const auto Index = Layout.Registers[P] / TRI.PointerSize;
+      if (Bytes)
+        OS << "    if ((" << Type << ")state->GPR[" << Index << "] != arg" << P
+           << ") return rejected;\n";
+      Argument["gpr_index"] = Index;
+    } else {
+      const auto Offset =
+          StackBase + (P - Layout.Registers.size()) * Layout.SlotBytes;
+      if (Bytes)
+        OS << "    " << Type << " stack_arg" << P << ";\n"
+           << "    __builtin_memcpy(&stack_arg" << P
+           << ", (const void *)(uintptr_t)(state->GPR[4] + " << Offset
+           << "ULL), sizeof(stack_arg" << P << "));\n"
+           << "    if (stack_arg" << P << " != arg" << P
+           << ") return rejected;\n";
+      Argument[StackOffsetKey] = Offset;
+    }
+    Arguments.push_back(std::move(Argument));
+  }
+  return Arguments;
+}
+
 llvm::json::Array
 emitX64FunctionCalls(llvm::raw_ostream &OS,
                      llvm::ArrayRef<X64FunctionCallInterface> Calls) {
@@ -77,15 +134,8 @@ typedef struct neverd_x64_call_result_v1 {
           "    }\n"
           "    return result;\n}\n";
     OS << "neverd_x64_call_result_v1 " << Start << Parameters;
-    std::optional<uint64_t> LastStackByte;
-    for (size_t P = 0; P < Call.ArgumentBytes.size(); ++P)
-      if (const auto Bytes = Call.ArgumentBytes[P]) {
-        OS << ", uint" << *Bytes * 8 << "_t arg" << P;
-        if (P >= Layout.Registers.size())
-          LastStackByte = Layout.EntryStackBase +
-                          (P - Layout.Registers.size()) * Layout.SlotBytes +
-                          *Bytes - 1;
-      }
+    const auto LastStackByte =
+        emitX64FunctionCallParameters(OS, Call, Layout.EntryStackBase);
     OS << ") {\n"
           "    neverd_x64_call_result_v1 rejected = {"
        << uint64_t(Exit::InvalidState)
@@ -97,37 +147,8 @@ typedef struct neverd_x64_call_result_v1 {
     if (LastStackByte)
       OS << "    if (state->GPR[4] > UINT64_MAX - " << *LastStackByte
          << "ULL) return rejected;\n";
-    llvm::json::Array Arguments;
-    for (size_t P = 0; P < Call.ArgumentBytes.size(); ++P) {
-      const auto Bytes = Call.ArgumentBytes[P];
-      llvm::json::Object Argument;
-      std::string Type;
-      if (Bytes) {
-        Argument["bytes"] = *Bytes;
-        Type = "uint" + std::to_string(*Bytes * 8) + "_t";
-      } else {
-        Argument["retained_in_state"] = true;
-      }
-      if (P < Layout.Registers.size()) {
-        const auto Index = Layout.Registers[P] / TRI.PointerSize;
-        if (Bytes)
-          OS << "    if ((" << Type << ")state->GPR[" << Index << "] != arg"
-             << P << ") return rejected;\n";
-        Argument["gpr_index"] = Index;
-      } else {
-        const auto Offset = Layout.EntryStackBase +
-                            (P - Layout.Registers.size()) * Layout.SlotBytes;
-        if (Bytes)
-          OS << "    " << Type << " stack_arg" << P << ";\n"
-             << "    __builtin_memcpy(&stack_arg" << P
-             << ", (const void *)(uintptr_t)(state->GPR[4] + " << Offset
-             << "ULL), sizeof(stack_arg" << P << "));\n"
-             << "    if (stack_arg" << P << " != arg" << P
-             << ") return rejected;\n";
-        Argument["entry_sp_offset"] = Offset;
-      }
-      Arguments.push_back(std::move(Argument));
-    }
+    auto Arguments = emitX64FunctionCallArguments(
+        OS, Call, Layout.EntryStackBase, "entry_sp_offset");
     // The exact entry above is a validated explicit root, so the shared begin
     // cannot reject. Keep return-cell initialization in its existing owner.
     OS << "    neverd_x64_begin_function_v6(state, &call->Function);\n"

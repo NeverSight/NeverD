@@ -69,6 +69,11 @@ struct X64ContinuationExport {
 /// infer a native signature or remove the original environment obligations.
 /// A null argument width keeps that physical slot only in the native context,
 /// without a scalar formal or entry read. Later arguments retain their slots.
+/// Optional call_sites on a function_calls declaration bind selected original
+/// direct CALLs to that entry. Pre-CALL checks use the shared caller layout;
+/// the original step creates the return cell before function-context entry.
+/// Separate site contexts retain pending and active calls across budget pauses.
+/// This does not capture full native state from an ordinary C caller.
 /// V7 requires sysenter_msr_address_bits and returns a distinct V7
 /// state/driver. The intel-user-interrupt-v8 profile additionally requires
 /// uiret_restores_uif, owns UIF/monitor validity and stops UIRET at its
