@@ -22,6 +22,7 @@ add_neverd_component_library(NeverDPipeline
   NativeSourceHints.cpp
   NativeSourcePreservation.cpp
   PipelineCallAbi.cpp
+  PipelineCallAbiGlobal.cpp
   PipelineDump.cpp
   PipelineFormattedCalls.cpp
   PipelineFuncDetect.cpp

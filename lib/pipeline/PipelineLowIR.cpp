@@ -5293,12 +5293,23 @@ std::optional<AnalysisCacheWarmup> Pipeline::prefillCalleeSignatures(
     Cache.CalleeSignatures = std::make_shared<OmittedCalleeMemo>();
   Summaries.CalleeSignatureMemo = Cache.CalleeSignatures;
   const std::vector<va_t> &Order = Facts.CallSummaries->CalleesByCallers;
-  First = std::min(First, Order.size());
+  // Past the order the cursor steps the image-wide solve of the bodies read
+  // (stepGlobalCalleeSignatures) until it completes.
+  if (First >= Order.size()) {
+    static const std::map<va_t, std::string> NoNames;
+    const std::map<va_t, std::string> *Names = importAddressNames(Img, &Cache);
+    if (!stepGlobalCalleeSignatures(Img, Summaries, Names ? *Names : NoNames,
+                                    Count))
+      Next = First + 1;
+    return AnalysisCacheWarmup{};
+  }
   Count = std::min(Count, Order.size() - First);
   const AnalysisCacheWarmup Warmup = prefillOmittedCallees(
       Img, Summaries, llvm::ArrayRef<va_t>(Order).slice(First, Count));
   if (!Warmup.Full && First + Count < Order.size())
     Next = First + Count;
+  else if (solvesGlobalCalleeSignatures(Img, Summaries))
+    Next = Order.size();
   return Warmup;
 }
 

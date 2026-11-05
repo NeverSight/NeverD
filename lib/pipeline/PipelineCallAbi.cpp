@@ -241,6 +241,9 @@ void OmittedCalleeMemo::adopt(const BinaryImage &Img,
   CodePointerTargets.reset();
   Callees.clear();
   Bytes = 0;
+  ++Adoptions;
+  Globals.reset();
+  Solve.reset();
 }
 
 const ExecutableCodeOwnerIndex &OmittedCalleeMemo::codeOwners() {
@@ -474,6 +477,28 @@ void OmittedCalleeMemo::keepPrepared(
   Holder.Bytes += Added;
   Bytes += Added;
   Holder.Prepared = std::move(Kept);
+}
+
+void OmittedCalleeMemo::keepGlobal(
+    Conversion &Holder, std::shared_ptr<const GlobalSignature> Kept) {
+  const auto bytesOf = [](const GlobalSignature &Signature) {
+    return sizeof(GlobalSignature) +
+           ((Signature.IntRegs ? Signature.IntRegs->size() : 0) +
+            Signature.FPRegs.size()) *
+               sizeof(uint64_t) +
+           Signature.FPScalarBytes.size() *
+               (sizeof(std::pair<uint64_t, uint16_t>) + 4 * sizeof(void *));
+  };
+  if (Holder.Global) {
+    // A later solve replaces an earlier one's signature.
+    const size_t Gone = bytesOf(*Holder.Global);
+    Holder.Bytes -= std::min(Holder.Bytes, Gone);
+    Bytes -= std::min(Bytes, Gone);
+  }
+  const size_t Added = bytesOf(*Kept);
+  Holder.Bytes += Added;
+  Bytes += Added;
+  Holder.Global = std::move(Kept);
 }
 
 namespace {
@@ -1624,6 +1649,90 @@ OmittedCalleeMemo::ProbeSignature probeSignature(
   return Gives;
 }
 
+/// What forwarder propagation (propagateForwardedCallArities) makes of
+/// \p Probe, a probe of the body at \p Entry whose entry summaries read
+/// \p PreviousRegArity, \p PreviousTotalArity and \p PreviousVariadic
+/// before the probe ran: the summaries it raises at the entry, and whether
+/// any grew.
+bool raiseForwarderSummaries(
+    va_t Entry, int PreviousRegArity, int PreviousTotalArity,
+    bool PreviousVariadic, const OmittedCalleeMemo::ProbeSignature &Probe,
+    std::map<va_t, int> &CalleeRegArity, std::map<va_t, int> &CalleeTotalArity,
+    std::map<va_t, int> &CalleeFPArity,
+    std::map<va_t, uint16_t> &CalleeFPReturnSize,
+    std::map<va_t, std::vector<uint64_t>> &CalleeFPRegs,
+    std::map<va_t, std::map<uint64_t, uint16_t>> &CalleeFPScalarBytes,
+    std::map<va_t, bool> &CalleeIsVariadic,
+    std::map<va_t, std::vector<uint64_t>> &CalleeIntRegs) {
+  const bool IsVariadicPublic =
+      Probe.IsVariadic ||
+      (CalleeIsVariadic.count(Entry) != 0 && CalleeIsVariadic.at(Entry));
+  const int TotalArity =
+      IsVariadicPublic ? Probe.MaxArgumentIndex + 1 : Probe.RecoveryTotalArity;
+  const int FPArity = static_cast<int>(Probe.FPRegs.size());
+  if (IsVariadicPublic)
+    CalleeIsVariadic[Entry] = true;
+  // A routine found variadic only here, a va_list wrapper, keeps its arity
+  // open for the overflow its callers pass, as one whose prologue says so
+  // does (callRecoveryTotalArity).
+  if (IsVariadicPublic && !PreviousVariadic)
+    CalleeTotalArity[Entry] =
+        std::max(CalleeTotalArity[Entry], limits::kMaxCallArgs);
+  bool Grew = CalleeRegArity[Entry] > PreviousRegArity ||
+              CalleeTotalArity[Entry] > PreviousTotalArity ||
+              (CalleeIsVariadic.count(Entry) != 0 &&
+               CalleeIsVariadic.at(Entry) != PreviousVariadic);
+  // A forwarder takes its parameters in the order of the function it passes
+  // them to, and its callers pass them so.
+  if (!Probe.IntegerArgumentRegisters.empty() &&
+      CalleeIntRegs[Entry] != Probe.IntegerArgumentRegisters) {
+    CalleeIntRegs[Entry] = Probe.IntegerArgumentRegisters;
+    Grew = true;
+  }
+  if (Probe.RegisterArity > CalleeRegArity[Entry]) {
+    CalleeRegArity[Entry] = Probe.RegisterArity;
+    Grew = true;
+  }
+  if (!IsVariadicPublic) {
+    if (TotalArity > CalleeTotalArity[Entry]) {
+      CalleeTotalArity[Entry] = TotalArity;
+      Grew = true;
+    }
+    if (FPArity > CalleeFPArity[Entry]) {
+      CalleeFPArity[Entry] = FPArity;
+      CalleeFPRegs[Entry] = Probe.FPRegs;
+      Grew = true;
+    }
+  }
+  if (!IsVariadicPublic) {
+    for (const auto &[Register, Bytes] : Probe.FPScalarBytes) {
+      auto &Width = CalleeFPScalarBytes[Entry][Register];
+      if (Bytes > Width) {
+        Width = Bytes;
+        Grew = true;
+      }
+    }
+    if (Probe.FPReturnSize && !CalleeFPReturnSize[Entry]) {
+      CalleeFPReturnSize[Entry] = Probe.FPReturnSize;
+      Grew = true;
+    }
+  }
+  return Grew;
+}
+
+/// Whether the recovery of a kept body, leaving \p Body, left its
+/// declaration as \p KeptBody had it.
+bool preservesDeclaration(const MedFunc &Body, const MedFunc &KeptBody) {
+  return Body.Params == KeptBody.Params && Body.CC == KeptBody.CC &&
+         Body.IntegerArgumentRegisters == KeptBody.IntegerArgumentRegisters &&
+         Body.ReturnType == KeptBody.ReturnType &&
+         Body.TypedParams.size() == KeptBody.TypedParams.size() &&
+         llvm::all_of(llvm::zip(Body.TypedParams, KeptBody.TypedParams),
+                      [](const auto &Pair) {
+                        return std::get<0>(Pair).Type == std::get<1>(Pair).Type;
+                      });
+}
+
 /// Reach a fixed point for parameters forwarded only through direct calls.
 ///
 /// Optimized wrappers can consume an incoming argument solely by passing the
@@ -1822,60 +1931,11 @@ void propagateForwardedCallArities(
     const bool PreviousVariadic =
         CalleeIsVariadic.count(Entry) != 0 && CalleeIsVariadic.at(Entry);
     const OmittedCalleeMemo::ProbeSignature Probe = probe(I);
-    const bool IsVariadicPublic =
-        Probe.IsVariadic ||
-        (CalleeIsVariadic.count(Entry) != 0 && CalleeIsVariadic.at(Entry));
-    const int TotalArity = IsVariadicPublic ? Probe.MaxArgumentIndex + 1
-                                            : Probe.RecoveryTotalArity;
-    const int FPArity = static_cast<int>(Probe.FPRegs.size());
-    if (IsVariadicPublic)
-      CalleeIsVariadic[Entry] = true;
-    // A routine found variadic only here, a va_list wrapper, keeps its arity
-    // open for the overflow its callers pass, as one whose prologue says so
-    // does (callRecoveryTotalArity).
-    if (IsVariadicPublic && !PreviousVariadic)
-      CalleeTotalArity[Entry] =
-          std::max(CalleeTotalArity[Entry], limits::kMaxCallArgs);
-    bool Grew = CalleeRegArity[Entry] > PreviousRegArity ||
-                CalleeTotalArity[Entry] > PreviousTotalArity ||
-                (CalleeIsVariadic.count(Entry) != 0 &&
-                 CalleeIsVariadic.at(Entry) != PreviousVariadic);
-    // A forwarder takes its parameters in the order of the function it passes
-    // them to, and its callers pass them so.
-    if (!Probe.IntegerArgumentRegisters.empty() &&
-        CalleeIntRegs[Entry] != Probe.IntegerArgumentRegisters) {
-      CalleeIntRegs[Entry] = Probe.IntegerArgumentRegisters;
-      Grew = true;
-    }
-    if (Probe.RegisterArity > CalleeRegArity[Entry]) {
-      CalleeRegArity[Entry] = Probe.RegisterArity;
-      Grew = true;
-    }
-    if (!IsVariadicPublic) {
-      if (TotalArity > CalleeTotalArity[Entry]) {
-        CalleeTotalArity[Entry] = TotalArity;
-        Grew = true;
-      }
-      if (FPArity > CalleeFPArity[Entry]) {
-        CalleeFPArity[Entry] = FPArity;
-        CalleeFPRegs[Entry] = Probe.FPRegs;
-        Grew = true;
-      }
-    }
-    if (!IsVariadicPublic) {
-      for (const auto &[Register, Bytes] : Probe.FPScalarBytes) {
-        auto &Width = CalleeFPScalarBytes[Entry][Register];
-        if (Bytes > Width) {
-          Width = Bytes;
-          Grew = true;
-        }
-      }
-      if (Probe.FPReturnSize && !CalleeFPReturnSize[Entry]) {
-        CalleeFPReturnSize[Entry] = Probe.FPReturnSize;
-        Grew = true;
-      }
-    }
-    if (!Grew)
+    if (!raiseForwarderSummaries(
+            Entry, PreviousRegArity, PreviousTotalArity, PreviousVariadic,
+            Probe, CalleeRegArity, CalleeTotalArity, CalleeFPArity,
+            CalleeFPReturnSize, CalleeFPRegs, CalleeFPScalarBytes,
+            CalleeIsVariadic, CalleeIntRegs))
       continue;
 
     auto CallerIt = DirectCallers.find(Entry);
@@ -1976,6 +2036,83 @@ void confirmOmittedStructReturns(
   }
 }
 
+OmittedCalleeMemo::ProbeSignature probeCalleeSignature(
+    const MedFunc &Body, const BinaryImage &Img,
+    const std::map<va_t, std::string> &Names, const CalleeSummaryMaps &Shared,
+    std::map<va_t, int> &RegArity, std::map<va_t, int> &TotalArity,
+    std::map<va_t, bool> &IsVariadic,
+    const std::map<va_t, PointerVariableCallee> &PointerCallees,
+    const std::set<va_t> &PrototypeArguments,
+    const RelocationSymbolIndex &Relocations) {
+  const SummaryView View{Names,
+                         RegArity,
+                         TotalArity,
+                         Shared.FPArity,
+                         Shared.FPReturnSize,
+                         Shared.FPRegs,
+                         Shared.FPScalarBytes,
+                         Shared.HasSret,
+                         IsVariadic,
+                         Shared.ConsumesVaList,
+                         Shared.IntRegs,
+                         Shared.VectorArguments,
+                         PrototypeArguments};
+  return probeSignature(
+      Body, Img, Img.Arch, Names, View, RegArity, TotalArity, Shared.FPArity,
+      Shared.FPReturnSize, Shared.FPRegs, Shared.FPScalarBytes, Shared.HasSret,
+      IsVariadic, Shared.ConsumesVaList, Shared.IntRegs, Shared.VectorArguments,
+      PointerCallees, PrototypeArguments, Relocations, /*Reads=*/nullptr);
+}
+
+bool applyCalleeProbe(va_t Entry,
+                      const OmittedCalleeMemo::ProbeSignature &Probe,
+                      CalleeSummaryMaps &Maps) {
+  // As the fixed point reads the entry before a probe, and as a kept probe
+  // leaves it (propagateForwardedCallArities).
+  const int PreviousRegArity = Maps.RegArity[Entry];
+  const int PreviousTotalArity = Maps.TotalArity[Entry];
+  const bool PreviousVariadic =
+      Maps.IsVariadic.count(Entry) != 0 && Maps.IsVariadic.at(Entry);
+  if (Probe.EntryRegArity)
+    Maps.RegArity[Entry] = *Probe.EntryRegArity;
+  if (Probe.EntryTotalArity)
+    Maps.TotalArity[Entry] = *Probe.EntryTotalArity;
+  if (Probe.EntryIsVariadic)
+    Maps.IsVariadic[Entry] = *Probe.EntryIsVariadic;
+  return raiseForwarderSummaries(
+      Entry, PreviousRegArity, PreviousTotalArity, PreviousVariadic, Probe,
+      Maps.RegArity, Maps.TotalArity, Maps.FPArity, Maps.FPReturnSize,
+      Maps.FPRegs, Maps.FPScalarBytes, Maps.IsVariadic, Maps.IntRegs);
+}
+
+void recoverOmittedCallee(
+    const MedFunc &Body, const BinaryImage &Img,
+    const std::map<va_t, std::string> &Names, const CalleeSummaryMaps &Shared,
+    std::map<va_t, int> &RegArity, std::map<va_t, int> &TotalArity,
+    std::map<va_t, bool> &IsVariadic,
+    const std::map<va_t, PointerVariableCallee> &PointerCallees,
+    const std::set<va_t> &PrototypeArguments,
+    const RelocationSymbolIndex &Relocations,
+    OmittedCalleeMemo::GlobalSignature &Into) {
+  // As recoverModuleCallAbi recovers an omitted body where the target keeps
+  // no frame-local leaf callees.
+  static const std::set<va_t> NoLeafCallees;
+  MedFunc Recovered = Body;
+  recoverCallAbi(Recovered, Img.Arch, Names, &Img, &RegArity, &TotalArity,
+                 &Shared.FPArity, &Shared.FPReturnSize, &Shared.FPRegs,
+                 &Shared.HasSret, &IsVariadic, &Shared.ConsumesVaList,
+                 &NoLeafCallees, &Shared.IntRegs, &Shared.VectorArguments,
+                 &PointerCallees, &PrototypeArguments, &Relocations,
+                 /*Keys=*/nullptr, &Shared.FPScalarBytes);
+  Into.Parameters = Recovered.Params.size();
+  Into.RecoveredVariadic = Recovered.IsVariadic;
+  Into.SourceParametersBound = Recovered.SourceParametersBound;
+  Into.PreservesDeclaration = preservesDeclaration(Recovered, Body);
+  Into.EntryRegArity = valueAt(RegArity, Body.Entry);
+  Into.EntryTotalArity = valueAt(TotalArity, Body.Entry);
+  Into.EntryIsVariadic = valueAt(IsVariadic, Body.Entry);
+}
+
 AnalysisCacheWarmup warmOmittedCallees(const BinaryImage &Img,
                                        const PipelineResult &Summaries,
                                        llvm::ArrayRef<va_t> Functions) {
@@ -2067,19 +2204,18 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
   Result.OmittedCalleeDeclarations.clear();
   const CallArgumentConvention *Convention =
       callArgumentConvention(Img.Arch, Img.abiFormat());
-  std::map<va_t, int> CalleeRegArity;
-  std::map<va_t, int> CalleeTotalArity;
-  std::map<va_t, int> CalleeFPArity;
-  std::map<va_t, std::vector<uint64_t>> CalleeFPRegs;
-  std::map<va_t, std::map<uint64_t, uint16_t>> CalleeFPScalarBytes;
-  std::map<va_t, uint16_t> CalleeFPReturnSize;
-  std::map<va_t, bool> CalleeHasSret;
-  std::map<va_t, bool> CalleeIsVariadic;
-  std::set<va_t> VectorArgumentCallees;
-  std::map<va_t, bool> CalleeConsumesVaList;
-  // The integer argument registers of each function that takes them in its
-  // own order (MedFunc::IntegerArgumentRegisters).
-  std::map<va_t, std::vector<uint64_t>> CalleeIntRegs;
+  CalleeSummaryMaps Maps;
+  auto &CalleeRegArity = Maps.RegArity;
+  auto &CalleeTotalArity = Maps.TotalArity;
+  auto &CalleeFPArity = Maps.FPArity;
+  auto &CalleeFPRegs = Maps.FPRegs;
+  auto &CalleeFPScalarBytes = Maps.FPScalarBytes;
+  auto &CalleeFPReturnSize = Maps.FPReturnSize;
+  auto &CalleeHasSret = Maps.HasSret;
+  auto &CalleeIsVariadic = Maps.IsVariadic;
+  auto &VectorArgumentCallees = Maps.VectorArguments;
+  auto &CalleeConsumesVaList = Maps.ConsumesVaList;
+  auto &CalleeIntRegs = Maps.IntRegs;
   std::vector<va_t> Functions;
   for (const MedFunc &F : Result.MedFuncs)
     Functions.push_back(F.Entry);
@@ -2131,19 +2267,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
         KeptBodies[I] && KeptBodies[I]->Summary
             ? *KeptBodies[I]->Summary
             : Own.emplace(summarizeCallee(MF, Img));
-    if (!Summary.IntegerArgumentRegisters.empty())
-      CalleeIntRegs[MF.Entry] = Summary.IntegerArgumentRegisters;
-    CalleeConsumesVaList[MF.Entry] = Summary.ConsumesVaList;
-    CalleeRegArity[MF.Entry] = Summary.RegArity;
-    CalleeTotalArity[MF.Entry] = Summary.TotalArity;
-    CalleeHasSret[MF.Entry] = Summary.HasSret;
-    CalleeIsVariadic[MF.Entry] = Summary.IsVariadic;
-    if (Summary.VectorArguments)
-      VectorArgumentCallees.insert(MF.Entry);
-    CalleeFPArity[MF.Entry] = Summary.FPArity;
-    CalleeFPRegs[MF.Entry] = Summary.FPRegs;
-    CalleeFPScalarBytes[MF.Entry] = Summary.FPScalarBytes;
-    CalleeFPReturnSize[MF.Entry] = Summary.FPReturnSize;
+    Maps.note(MF.Entry, Summary);
   }
 
   // A pure tail-call forwarder `T f(args){return g(args);}` lowers at -O2 to a
@@ -2158,6 +2282,8 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
   // MedFunc).  Gated to a genuine forwarder whose FP argument registers are
   // live-in (never written), so a function that locally computes the callee's
   // FP arguments is left untouched.
+  // The callees whose entry summaries the forwarder rule below writes.
+  std::set<va_t> ForwardedCallees;
   {
     const auto &TRI = getTargetRegInfo(Img.Arch);
     const auto FPParamRegs = TRI.floatingParamRegs(Img.abiFormat());
@@ -2221,6 +2347,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
               CalleeFPArity[Target] = FpArgs;
               CalleeFPRegs[Target] = std::vector<uint64_t>(
                   FPParamRegs.begin(), FPParamRegs.begin() + FpArgs);
+              ForwardedCallees.insert(Target);
             }
           }
           if (G->ReturnType && G->ReturnType->Kind == NdTypeKind::Float &&
@@ -2284,8 +2411,39 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
       }
   }
 
+  // What the image-wide solve gives the omitted bodies
+  // (stepGlobalCalleeSignatures), where it gives it: the summaries forwarder
+  // propagation leaves at their entries, and their recoveries below.  Those
+  // the run selects, those the forwarder rule above wrote, and those whose
+  // recovery binds binary80 carriers keep the run's own; regparm and
+  // frame-local leaf callees read summaries the solve does not.
+  std::vector<std::shared_ptr<const OmittedCalleeMemo::GlobalSignature>>
+      Globals(OmittedCallees.size());
+  if (Memo && Img.Arch == Arch::X64 && Img.abiFormat() == BinaryFormat::COFF &&
+      !(Convention && (Convention->RegparmOnlyForInternalCalls ||
+                       Convention->TargetSpillsSurviveLeafCalls))) {
+    std::set<va_t> Skip = ForwardedCallees;
+    for (const MedFunc &F : Result.MedFuncs)
+      Skip.insert(F.Entry);
+    for (const auto &F : OmittedCallees)
+      if (F->ConsumesX87Argument)
+        Skip.insert(F->Entry);
+    Globals = installGlobalCalleeSignatures(
+        *Memo, Result, OmittedCallees,
+        llvm::ArrayRef<OmittedCalleeMemo::Conversion *>(KeptBodies)
+            .drop_front(Result.MedFuncs.size()),
+        Skip, Maps);
+  }
+  // The bodies the solve gave nothing to reach their fixed point here.
+  std::vector<const MedFunc *> Propagated;
+  std::vector<OmittedCalleeMemo::Conversion *> PropagatedKept;
+  for (size_t I = 0; I < SignatureBodies.size(); ++I)
+    if (I < Result.MedFuncs.size() || !Globals[I - Result.MedFuncs.size()]) {
+      Propagated.push_back(SignatureBodies[I]);
+      PropagatedKept.push_back(KeptBodies[I]);
+    }
   propagateForwardedCallArities(
-      SignatureBodies, KeptBodies, Memo, Img.Arch, AllFuncNames, Img,
+      Propagated, PropagatedKept, Memo, Img.Arch, AllFuncNames, Img,
       CalleeRegArity, CalleeTotalArity, CalleeFPArity, CalleeFPReturnSize,
       CalleeFPRegs, CalleeFPScalarBytes, CalleeHasSret, CalleeIsVariadic,
       CalleeConsumesVaList, CalleeIntRegs, VectorArgumentCallees,
@@ -2369,19 +2527,6 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
     bool Bounds = false;
     bool PreservesDeclaration = false;
   };
-  // Whether the recovery of a kept body left its declaration as it was.
-  const auto preservesDeclaration = [](const MedFunc &Body,
-                                       const MedFunc &KeptBody) {
-    return Body.Params == KeptBody.Params && Body.CC == KeptBody.CC &&
-           Body.IntegerArgumentRegisters == KeptBody.IntegerArgumentRegisters &&
-           Body.ReturnType == KeptBody.ReturnType &&
-           Body.TypedParams.size() == KeptBody.TypedParams.size() &&
-           llvm::all_of(llvm::zip(Body.TypedParams, KeptBody.TypedParams),
-                        [](const auto &Pair) {
-                          return std::get<0>(Pair).Type ==
-                                 std::get<1>(Pair).Type;
-                        });
-  };
   // The recoveries of kept bodies that hold no recovery these summaries read
   // the same as, computed together on the pipeline workers under the
   // summaries as they stand now and kept with their bodies, as the forwarder
@@ -2395,7 +2540,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
       const MedFunc &KeptBody = *OmittedCallees[I];
       const OmittedCalleeMemo::Conversion *Holder =
           KeptBodies[Result.MedFuncs.size() + I];
-      if (KeptBody.ConsumesX87Argument || !Holder ||
+      if (KeptBody.ConsumesX87Argument || !Holder || Globals[I] ||
           llvm::any_of(Holder->Recoveries,
                        [&](const OmittedCalleeMemo::Recovery &Kept) {
                          return FirstSummaries.holds(Kept.Reads);
@@ -2498,6 +2643,20 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
     const MedFunc &KeptBody = *OmittedCallees[I];
     const va_t Entry = KeptBody.Entry;
     OmittedRecovery &Callee = Omitted[I];
+    // The solve's recovery, as a kept one gives its arity and bound.
+    if (const OmittedCalleeMemo::GlobalSignature *Global = Globals[I].get()) {
+      if (Global->EntryRegArity)
+        CalleeRegArity[Entry] = *Global->EntryRegArity;
+      if (Global->EntryTotalArity)
+        CalleeTotalArity[Entry] = *Global->EntryTotalArity;
+      if (Global->EntryIsVariadic)
+        CalleeIsVariadic[Entry] = *Global->EntryIsVariadic;
+      Callee.Parameters = Global->Parameters;
+      Callee.Bounds =
+          !Global->RecoveredVariadic && !Global->SourceParametersBound;
+      Callee.PreservesDeclaration = Global->PreservesDeclaration;
+      continue;
+    }
     // The cached recovery retains ordinary arity, not the final binary80
     // parameter carriers and types needed by the argument-binding boundary.
     // Preserve the complete recovery for these consumers.
