@@ -13443,6 +13443,14 @@ clobbers, nonlocal stack changes, return pops, conditional exits, trailing
 return effects, atomic writes and all-path joins with agreeing or conflicting
 finally effects. It retains the
 independent memory/native-output refusal.
+`RegistrationLocalUnwind.CurrentCallOwnsTheParentStorageBoundary` checks
+EH4 with and without GS, missing/scalar/stale SavedESP values, valid parent
+storage, partial lower-bound overlaps, runtime arguments, the return PC and
+registration administration. `XCPT4FinallyOnlyLocalUnwindUsesItsCurrentStack`
+checks both local unwinds in an original MSVC EH3 finally-only parent without
+a SavedESP store. Run `NeverDRegistrationStateTests` and
+`NeverDSEHRuntimeMemoryTests`; the full xcpt4 main's three closure failures
+remain separate from these invocation proofs.
 `LocalFinallyOwnsOnlyItsAllocatedCallbackStack` checks a saved parent EBP,
 a private callback frame, restoration and an observable parent-local write.
 Negative cases cover uninitialized and partial spills, reads below the
