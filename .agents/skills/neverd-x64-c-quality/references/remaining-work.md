@@ -5,8 +5,8 @@ The producer owns the complete state extent, and only wholly contained constant
 loads/stores gain that object proof. LLVM C preserves existing constant inbounds
 GEPs rooted at pointer parameters; guest addresses and named image/frame views
 keep their numeric owner. Both C routes now pass compile-time proofs over the
-actual original CALL/RET steps
-and switch-dispatch bridge, including return cells, cleanup and arbitrary
+actual original CALL/RET steps and switch-dispatch bridge, including return
+cells, cleanup and arbitrary
 register/result bits. The direct dispatcher retains separate controller/object
 checks. This closes the LLVM C pointer/proof gap without recovering missing
 ordinary inputs: the two registry-query stack-argument gaps, automatic state
