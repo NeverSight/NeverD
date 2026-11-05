@@ -1,5 +1,11 @@
 # Remaining x64 C-quality work
 
+Direct native IR and CFG queries now use the existing function-preparation
+boundary. Fresh queries no longer analyze the whole image before returning one
+function, and restricted queries can switch entries without a prior decompile.
+Prepared output and completed whole-image analysis remain authoritative. This
+removes a research/navigation cost, not either registry-query input gap.
+
 Optional `function_calls` now connect producer-declared Win64 scalar C views
 to the explicit native context. Entry checks compare the requested parameters
 with their original register/stack bytes; padding and private stack storage
