@@ -176,6 +176,42 @@ TEST(RegistrationConditionalSEH, PlainImageReadsRequireAnEffectOwner) {
     }
 }
 
+TEST(RegistrationConditionalSEH, NestedCleanupUsesTheCurrentScalarInput) {
+  for (uint32_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Mode = 0; Mode != 3; ++Mode) {
+      SCOPED_TRACE(::testing::Message() << Base << " " << Mode);
+      ScalarSEHFixture F(
+          Base, Mode == 1
+                    ? std::initializer_list<uint8_t>{0xff, 0x75, 8, 0xe8, 0x6c,
+                                                     1, 0, 0, 0x83, 0xc4, 4}
+                    : std::initializer_list<uint8_t>{0xff, 0x75, 8, 0xe8, 0x6c,
+                                                     1, 0, 0});
+      // The same callee returns its argument, popping that word only for 37.
+      // Its input-dependent cleanup is not a target-wide calling convention.
+      const uint8_t Helper[] = {0x8b, 0x44, 0x24, 4, 0x83, 0xf8, 37,
+                                0x75, 3,    0xc2, 4, 0,    0xc3};
+      std::copy(std::begin(Helper), std::end(Helper),
+                F.Image.Segments.front().Data.begin() + 0x180);
+      F.Image.Symbols.push_back(Symbol::makeFunc(Base + 0x1180));
+      F.Parent.store(-64, 4,
+                     Mode == 2 ? FrameValue{}
+                               : FrameValue::constant(Mode == 1 ? 0 : 37));
+      EXPECT_FALSE(getCheckedX86CalleeStackPop(F.Image, Base + 0x1180));
+      size_t Work = 0;
+      const auto Effect = proveBoundSEHCallee(F.Image, F.Call, F.Parent, Work,
+                                              nullptr, &F.Initialized);
+      ASSERT_EQ(bool(Effect), Mode != 2);
+      if (Effect) {
+        EXPECT_EQ(Effect->ReturnValue,
+                  FrameValue::constant(Mode == 1 ? 0 : 37));
+        EXPECT_EQ(Effect->StackPopBytes, 0u);
+        EXPECT_TRUE(Effect->Reads.empty());
+        EXPECT_TRUE(Effect->Writes.empty());
+      }
+      EXPECT_FALSE(getCheckedX86CalleeStackPop(F.Image, Base + 0x1180));
+    }
+}
+
 TEST(RegistrationConditionalSEH, NestedHeaderReadsCannotBecomeNativeConstants) {
   for (uint32_t Base : {0x400000u, 0x18000000u})
     for (bool FixedResult : {false, true})

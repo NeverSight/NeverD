@@ -17227,12 +17227,16 @@ call provenance; a private-frame escape still refuses. The registration state
 test `ConditionalResultsReachTheNextInitializedCall` follows these results
 through physical EAX or an instruction-local temporary into the next call,
 including partial/wide output carriers, other volatile registers, absent
-results and a refusing callee prover.
+results and a refusing callee prover. Target-wide cleanup and invocation-only
+zero/four-byte cleanup reach the next call separately; popped argument bytes
+must lose initialization before that call.
 `RegistrationConditionalReturn` in `NeverDSEHRuntimeMemoryTests` checks
 input-dependent near-return cleanup and an unselected indirect tail at two
 image bases. Reversed/repeated inputs, unknown branches, far returns, changed
 ESP/nonvolatile registers, overwritten return PCs, nonreturning loops and
-exact/one-unit-short budgets retain their separate outcomes. The pinned
+exact/one-unit-short budgets retain their separate outcomes. The typed
+invocation receipt retains cleanup and EAX together and clears both on refusal,
+including budget exhaustion. The pinned
 `BoundRaiseWrapperRetainsOnlyLocalProofs` case verifies that initialized cdecl
 arguments can prove a wrapper's returning frame without creating a target-only
 ABI or a call-free effect for its RaiseException invocation. Run registration
@@ -17252,6 +17256,9 @@ missing bytes, overlapping pointer taint, current call/code identity and exact
 work limits. Ordinary returns retain scalar/image values, join differing
 paths and erase callee-owned identities. A protected ordinary/except pair
 separately checks that a filter's result cannot enter the ordinary EAX join.
+`NestedCleanupUsesTheCurrentScalarInput` selects actual zero/four-byte RET
+cleanup from the current argument, despite an absent target-wide ABI. Unknown
+arguments still refuse inconsistent cleanup at both image bases.
 The root-call case passes an actual pushed scalar and uses the returned value
 to guard a frame escape. A joined constant-return receipt permits a complete
 native EAX observation; absent receipts, nonreturning calls, another callee kind,

@@ -112,6 +112,9 @@ proveBoundSEHCalleeImpl(const BinaryImage &Image, const BinaryImage &CallImage,
     return std::nullopt;
   const int64_t Base = int64_t(*SP) - 8;
   ConditionalFrame Inputs;
+  // This invocation publishes nothing unless its complete body is proved.
+  // A refused input or transfer cannot be repaired by another path.
+  Inputs.StopOnRefusal = true;
   Inputs.Work = Work;
   auto AccountWork = llvm::scope_exit([&] { Work = Inputs.Work; });
   for (int32_t Arg = 8;
@@ -181,18 +184,15 @@ proveBoundSEHCalleeImpl(const BinaryImage &Image, const BinaryImage &CallImage,
     };
   }
   Inputs.ProveCall = [&](const LowOp &Call, const FrameState &State,
-                         const std::set<int32_t> &Initialized,
-                         std::optional<FrameValue> &Returned) {
-    if (OriginalImage) {
-      BoundPlainCalleeEffect Plain;
-      if (!registration_abi::hasConditionalCallFrame(
-              Image, Call, State, Inputs.Work, &Initialized, &Returned, &Plain,
-              OriginalImage))
-        return false;
-      return true;
-    }
-    return registration_abi::hasConditionalCallFrame(
-        Image, Call, State, Inputs.Work, &Initialized, &Returned);
+                         const std::set<int32_t> &Initialized)
+      -> std::optional<ConditionalCallResult> {
+    ConditionalCallResult Invocation;
+    BoundPlainCalleeEffect Plain;
+    if (!registration_abi::hasConditionalCallFrame(
+            Image, Call, State, Inputs.Work, &Initialized, nullptr,
+            OriginalImage ? &Plain : nullptr, OriginalImage, &Invocation))
+      return std::nullopt;
+    return Invocation;
   };
   Decoder Dec;
   if (!Dec.init(Image))

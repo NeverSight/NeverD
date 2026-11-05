@@ -54,15 +54,23 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
                              const std::set<int32_t> *Initialized,
                              std::optional<FrameValue> *ReturnValue,
                              BoundPlainCalleeEffect *Effect,
-                             OriginalImageFrameProof *OriginalImage) {
+                             OriginalImageFrameProof *OriginalImage,
+                             ConditionalCallResult *Invocation) {
   if (ReturnValue)
     ReturnValue->reset();
   if (Effect)
     *Effect = {};
+  if (Invocation)
+    *Invocation = {};
   if (OriginalImage && !Effect)
     return false;
-  if (hasClosedRegistrationRaise(Image, Op, State))
-    return !Effect && chargeCalleeWork(Work, 10);
+  if (hasClosedRegistrationRaise(Image, Op, State)) {
+    if (Effect || !chargeCalleeWork(Work, 10))
+      return false;
+    if (Invocation)
+      Invocation->StackPopBytes = 16;
+    return true;
+  }
   if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
       Op.Inputs[0].Size != 4)
     return false;
@@ -114,7 +122,8 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
           Callee, Image, Work, Effects,
           {.ScalarArguments = &Arguments,
            .ScalarRegisters = &Registers,
-           .ReturnValue = ReturnValue || Effect ? &Returned : nullptr,
+           .ReturnValue =
+               ReturnValue || Effect || Invocation ? &Returned : nullptr,
            .ExcludeCalls = Effect != nullptr,
            .OriginalImage = OriginalImage,
            .StackPopBytes = &Pop}) ||
@@ -137,6 +146,11 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
   }
   if (ReturnValue && Returned)
     *ReturnValue = projectX86CallReturnValue(*Returned);
+  if (Invocation) {
+    Invocation->StackPopBytes = Pop;
+    if (Returned)
+      Invocation->ReturnValue = projectX86CallReturnValue(*Returned);
+  }
   return true;
 }
 

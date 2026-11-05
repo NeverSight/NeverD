@@ -86,18 +86,23 @@ TEST(RegistrationConditionalReturn, BoundPathsDoNotBorrowAnIndependentABI) {
           std::optional<FrameValue> Returned = FrameValue::constant(999);
           BoundPlainCalleeEffect Effect;
           Effect.StackPopBytes = 999;
+          ConditionalCallResult Invocation{999, FrameValue::constant(999)};
           const bool Valid = registration_abi::hasConditionalCallFrame(
               Image, Call, Parent, Work, &Initialized, &Returned,
-              EffectRequested ? &Effect : nullptr);
+              EffectRequested ? &Effect : nullptr, nullptr, &Invocation);
           const bool Expected = Input == 0 || (Input == 1 && !IndirectTail);
           ASSERT_EQ(Valid, Expected);
           if (!Expected) {
             EXPECT_FALSE(Returned);
+            EXPECT_FALSE(Invocation.StackPopBytes);
+            EXPECT_FALSE(Invocation.ReturnValue);
             if (EffectRequested)
               EXPECT_EQ(Effect.StackPopBytes, 0u);
             continue;
           }
           EXPECT_EQ(Returned, FrameValue::constant(Input ? 91 : 37));
+          EXPECT_EQ(Invocation.StackPopBytes, Input ? 4u : 0u);
+          EXPECT_EQ(Invocation.ReturnValue, Returned);
           if (EffectRequested)
             EXPECT_EQ(Effect.StackPopBytes, Input ? 4u : 0u);
           ASSERT_GT(Work, 0u);
@@ -105,13 +110,16 @@ TEST(RegistrationConditionalReturn, BoundPathsDoNotBorrowAnIndependentABI) {
           size_t Exact = limits::kMaxRegistrationEHStateWork - Work;
           EXPECT_TRUE(registration_abi::hasConditionalCallFrame(
               Image, Call, Parent, Exact, &Initialized, &Returned,
-              EffectRequested ? &Effect : nullptr));
+              EffectRequested ? &Effect : nullptr, nullptr, &Invocation));
           EXPECT_EQ(Exact, limits::kMaxRegistrationEHStateWork);
+          EXPECT_EQ(Invocation.StackPopBytes, Input ? 4u : 0u);
           size_t Short = limits::kMaxRegistrationEHStateWork - Work + 1;
           EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
               Image, Call, Parent, Short, &Initialized, &Returned,
-              EffectRequested ? &Effect : nullptr));
+              EffectRequested ? &Effect : nullptr, nullptr, &Invocation));
           EXPECT_FALSE(Returned);
+          EXPECT_FALSE(Invocation.StackPopBytes);
+          EXPECT_FALSE(Invocation.ReturnValue);
         }
       EXPECT_FALSE(getCheckedX86CalleeStackPop(Image, Image.Entry));
     }
@@ -139,13 +147,20 @@ TEST(RegistrationConditionalReturn, AllReachedReturnsMustRestoreTheFrame) {
     size_t Work = 0;
     BoundPlainCalleeEffect Effect;
     std::optional<FrameValue> Returned = FrameValue::constant(999);
+    ConditionalCallResult Invocation{999, FrameValue::constant(999)};
     const bool Valid = registration_abi::hasConditionalCallFrame(
-        Image, Call, Parent, Work, &Initialized, &Returned, &Effect);
+        Image, Call, Parent, Work, &Initialized, &Returned, &Effect, nullptr,
+        &Invocation);
     ASSERT_EQ(Valid, Mode == 0);
     if (Valid) {
       EXPECT_EQ(Effect.StackPopBytes, 0u);
       EXPECT_EQ(Returned, FrameValue{});
-    } else
+      EXPECT_EQ(Invocation.StackPopBytes, 0u);
+      EXPECT_EQ(Invocation.ReturnValue, Returned);
+    } else {
       EXPECT_FALSE(Returned);
+      EXPECT_FALSE(Invocation.StackPopBytes);
+      EXPECT_FALSE(Invocation.ReturnValue);
+    }
   }
 }
