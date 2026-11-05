@@ -672,6 +672,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     Local.setUserPrototypeCallees(&Result.CallUserPrototypes);
     Local.setCallDispatchThunks(&Result.CallDispatchThunks);
     Local.setCallVariadicFrom(&Result.CallVariadicFrom.get());
+    Local.setStackProbeIndex(Result.StackProbeIndex.get());
     Local.setFormattedCalls(&Result.FormattedCalls);
     Local.setStackProbeSlots(&StackProbeSlots);
   };
@@ -998,6 +999,7 @@ neverd::PipelineResult neverd::Pipeline::rebuildSourceCalls(
   COPY_SOURCE_FACT(OmittedCallees);
   COPY_SOURCE_FACT(CallFloatReturns);
   COPY_SOURCE_FACT(SEHWritableImageRanges);
+  COPY_SOURCE_FACT(StackProbeIndex);
 #undef COPY_SOURCE_FACT
   Result.Success = true;
   buildMedIR(Img, Opts, Result);
