@@ -51,7 +51,7 @@ complete instruction support or semantic test coverage.
 | XTEST | Retains the native transaction query, its actual ZF and the required clearing of CF/PF/AF/SF/OF; no GPR or DF modification. |
 | XABORT | Exact constant imm8 through validated native LLVM, HighC and LLVM-to-C. Missing or inconsistent decoded operands and nonconstant IR fail; enclosing RTM checkpoint recovery remains separate. |
 | BLCFILL, BLCI, BLCIC, BLCMSK, BLCS, BLSFILL, BLSIC, T1MSKC, TZMSK | Validated XOP forms with source-dependent CF, result-dependent ZF/SF, cleared OF and explicit undefined AF/PF. LLVM, HighC and LLVM-to-C consume the same arithmetic semantics; see the TBM qualification below. |
-| BOUND | Strict word/dword i386 source projection and native full-LLVM/Clang APIs; protected code16/code32 execution preserves conditional field access, signed comparisons, restart and MPX #BR status ownership. See [the BOUND contract](x86-legacy-segments.md#protected-bound-and-native-source-projection). |
+| BOUND | Strict word/dword i386 source projection and native full-LLVM/Clang APIs, also exposed through NeverC's i386 source-to-IR route; protected code16/code32 execution preserves conditional field access, signed comparisons, restart and MPX #BR status ownership. See [the BOUND contract](x86-legacy-segments.md#protected-bound-and-native-source-projection). |
 | BEXTR | Validated XOP immediate, VEX register-control and APX forms, including NF. Bounded shifts avoid out-of-range LLVM shifts; ordinary forms define CF/OF/ZF and record SF/AF/PF as undefined. See the BEXTR qualification below. |
 | TZCNT, LZCNT, POPCNT | Validated legacy, REX2 and APX/NF forms; aliased inputs, zero operands, destination width and defined/undefined flags retain their architectural meanings. See the count qualification below. |
 | ANDN, BLSI, BLSMSK, BLSR, BZHI | Validated VEX and APX/NF forms; independent value/flag semantics, source-before-destination carry and explicit undefined AF/PF. Shared address validators retain memory-tail ownership. |
@@ -3983,4 +3983,38 @@ explicit LA57 hardware skips. The paging binaries remain byte-identical after
 the later dev integration, whose FLAGS exports and call-contract checks also pass.
 Native LLVM ARPL APIs were already present; this batch
 extends original protected-state execution. General i386 source dispatch,
-NeverC's i386 frontend and the other recorded completion boundaries remain open.
+and the other original-state completion boundaries remain open. NeverC's
+separate source ABI qualification follows below.
+
+### NeverC i386 source ABI and BOUND interoperation
+
+NeverC now accepts Linux i386 C23 source with ILP32 layout, x87 long double,
+record returns and arguments, variadic access, register parameters and stdcall.
+Its X86 ABI owner classifies both ordinary arguments and `va_arg`. All four
+BOUND builtins emit native LLVM calls with their memory and fault effects;
+long-mode calls and invalid address controls fail during semantic checking.
+The frontend uses `--target=i386-unknown-linux-gnu -S -emit-llvm`, followed by
+the full LLVM fork for object code. NeverC's target metadata records this
+source capability separately from its unavailable embedded i386 backend.
+
+The [i386 frontend evidence](evidence/x86-i386-frontend-2026-11-04.json)
+records 811 passing regression checks and one explicit filesystem-test skip.
+Clang/NeverC callers and callees pass 5,120,000 ABI checks on the qualified P/E
+cores, including wide `_BitInt`, `va_copy`, register exhaustion and returned
+values. This exposed two real errors: Clang read indirect wide variadic values
+from the pointer slot itself, and the initial NeverC implementation consumed
+the wrong register slots for wide scalar register parameters. Both are fixed
+and covered by bidirectional execution.
+
+Actual NeverD exports also pass: all 336 HighC/LLVM-to-C files compile through
+NeverC without the BOUND assembly fallback. O0/O2 execution of 72 source cases
+and twelve exported ELF objects contributes 22,063,776 original-byte
+comparisons across native-SDK/P-core and r6/E-core snapshots. The separate
+direct-LLVM/NeverC builtin matrices contribute 12,605,952 comparisons, with
+wrong-index and truncated-return controls retaining the real instruction.
+
+The LLVM and NeverC changes are published. Embedded i386 machine selection,
+frames, MC/linker/runtime support, other 32-bit platforms and the remaining
+original-machine state/event domains still require work. This frontend
+qualification does not advance the final LLVM release, production SDK pin or
+LLVM gitlink.

@@ -1,0 +1,380 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-04",
+  "scope": "NeverC i386 Linux source ABI and native BOUND interfaces, Clang indirect varargs repair, and actual NeverD export interoperation",
+  "global_goal_complete": false,
+  "source_identity": {
+    "neverd_documentation_base": "9d3291ce8a8422565f5f7f7002f10bcee42cfc9f",
+    "neverc_commit": "caa058e87be1e7e6d80deb294ff0860b2481434d",
+    "llvm_clang_commit": "a746a83460b08f496fe46f47d35b92bcd0c352f3",
+    "llvm_lowering_commit": "0460a3fbb99808235c24003613eebd495f6c62d7",
+    "neverd_export_snapshot": "f575b5068345680c9f7f7c6b292c78153adb8e3e",
+    "export_provenance": "x86-legacy-bound-2026-11-04.json qualification.final_integration; preserved integration-native and integration-r6 exports",
+    "compiler_sha256": {
+      "neverc": "6b0e493854fc9273f137f196b8f9f5653dd9be7fc98be29a7792e6ce69537386",
+      "clang-23": "47edcd9319e49991429fb1ccf52e4217ecac5cd8f6e0993f53a8605610277f38",
+      "llc": "4316545a1d6808b9257a32ea9c240dcb5019ee09aa2cbc0453cb443a42a17ffa",
+      "opt": "299ad8e2c5b9869470db1947757f8732e2071e0b1e78ae87a6360099d56da915",
+      "host-clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+      "x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+    },
+    "neverc_fixture_sha256": {
+      "neverc/lib/Emit/Target/X86/SysV32.cpp": "fa490f7245349931765c12d294a3bafe710f2fdd38d947f8b5bb7af24f85f926",
+      "tests/neverc/X86/I386FrontendTests.cpp": "6ebdeed8c87a7324e7883bc18bf0ccf4160170d0808e3041ea08bb55630ab026",
+      "tests/neverc/X86/i386_abi.h": "c6df8bf93baf7631d741d271bec24821b0093bcdf70d334273fea7d5ce3e5c6b",
+      "tests/neverc/X86/i386_abi_producer.c": "d6a285561f93e71d1654371502758497019753f8b39f23e06156ca849cf74dd0",
+      "tests/neverc/X86/i386_abi_consumer.c": "5026c9f38ff6b166e0018a804142f069a2f3e7671b5f9aa6ad027816e21743e2",
+      "tests/neverc/X86/verify_i386_abi.py": "c7a42fbdffdda00e0b79d4f3b3e430433c39cd6cc5d501e48d38cc673c70062f",
+      "tests/neverc/X86/verify_bound.py": "b498f23341d280c5b10844cfcfb0ce3ce5633c1d5a78497b407aa2dfbef5e6b9",
+      "tests/neverc/X86/verify_bound_source.py": "963b3ff2372be1132ceb7b84d58900dad1e056f48313d03a6733b4d2c67fdb4e"
+    }
+  },
+  "contract": {
+    "frontend": "Linux ELF i386/i486/i586/i686, ILP32, x87 long double in 12-byte storage, correct legacy CPU defaults and shared x86 builtins. Emit LLVM IR or bitcode using --target=i386-unknown-linux-gnu.",
+    "abi": "X86/SysV32 owns scalar and aggregate classification, sret, byval, alignment, x87, complex, vectors, wide _BitInt, regparm and stdcall. Variadic extraction reuses its argument classifier; wide scalars exhaust the register bank before their indirect pointer is classified.",
+    "bound": "Four source builtins lower to effectful native LLVM BOUND calls. Long-mode use and invalid address/prefix constants fail explicitly; unused and repeated calls retain ordering and faults.",
+    "clang_repair": "X86_32ABIInfo::EmitVAArg now distinguishes indirect pointer slots from direct byval stack images. Large _BitInt values advance va_list by pointer width and load through the slot, preserving natural pointee alignment.",
+    "capabilities": "The builtin route advertises source=true, assembly=false, object=false, MC decode=false. Ordinary i386 -c/-S are rejected because the embedded backend is still pruned. Existing machine fixtures filter by object capability."
+  },
+  "qualification": {
+    "host": "Intel Core i9-13900H; CPU 2 P core and CPU 12 E core; Linux ELF32 multilib and modify_ldt available",
+    "abi": {
+      "results": [
+        {
+          "artifact": "abi-final-cpu2/summary.json",
+          "sha256": "c8614de4163409748ad8f9886972c50fe9d8bef3da4b8b92ae1b2ea5ce4a1ae0",
+          "profiles": [
+            {
+              "name": "clang-to-clang-O0",
+              "checks": 320000
+            },
+            {
+              "name": "neverc-to-clang-O0",
+              "checks": 320000
+            },
+            {
+              "name": "clang-to-neverc-O0",
+              "checks": 320000
+            },
+            {
+              "name": "neverc-to-neverc-O0",
+              "checks": 320000
+            },
+            {
+              "name": "clang-to-clang-O2",
+              "checks": 320000
+            },
+            {
+              "name": "neverc-to-clang-O2",
+              "checks": 320000
+            },
+            {
+              "name": "clang-to-neverc-O2",
+              "checks": 320000
+            },
+            {
+              "name": "neverc-to-neverc-O2",
+              "checks": 320000
+            }
+          ],
+          "checks": 2560000,
+          "negative_controls": 2
+        },
+        {
+          "artifact": "abi-final-cpu12/summary.json",
+          "sha256": "453c75910c7e29cdde93cc03b6002c2b50fb0baf40ff72a764b7ac4d6bef7dc3",
+          "profiles": [
+            {
+              "name": "clang-to-clang-O0",
+              "checks": 320000
+            },
+            {
+              "name": "neverc-to-clang-O0",
+              "checks": 320000
+            },
+            {
+              "name": "clang-to-neverc-O0",
+              "checks": 320000
+            },
+            {
+              "name": "neverc-to-neverc-O0",
+              "checks": 320000
+            },
+            {
+              "name": "clang-to-clang-O2",
+              "checks": 320000
+            },
+            {
+              "name": "neverc-to-clang-O2",
+              "checks": 320000
+            },
+            {
+              "name": "clang-to-neverc-O2",
+              "checks": 320000
+            },
+            {
+              "name": "neverc-to-neverc-O2",
+              "checks": 320000
+            }
+          ],
+          "checks": 2560000,
+          "negative_controls": 2
+        }
+      ],
+      "total_checks": 5120000,
+      "cases_per_profile": 32,
+      "inputs_per_case": 10000,
+      "meaning": "8 O0/O2 caller/callee combinations per core: Clang/Clang, NeverC/Clang, Clang/NeverC, NeverC/NeverC. NeverC uses full LLVM for object lowering. Includes bitcode verification, va_copy, 65/97-bit values, callee cleanup, register exhaustion and callback transport."
+    },
+    "bound": {
+      "results": [
+        {
+          "artifact": "bound-final-cpu2/summary.json",
+          "sha256": "009165c35b5710f3fb6c58493046a4424bd0714a7154994dbee9def8caf168e9",
+          "profiles": [
+            {
+              "compiler": "llvm",
+              "optimization": "O0",
+              "comparisons": 1575744,
+              "cases": 24
+            },
+            {
+              "compiler": "llvm",
+              "optimization": "O2",
+              "comparisons": 1575744,
+              "cases": 24
+            },
+            {
+              "compiler": "neverc",
+              "optimization": "O0",
+              "comparisons": 1575744,
+              "cases": 24
+            },
+            {
+              "compiler": "neverc",
+              "optimization": "O2",
+              "comparisons": 1575744,
+              "cases": 24
+            }
+          ],
+          "comparisons": 6302976,
+          "negative_controls": [
+            "wrong index before intact BOUND rejected"
+          ],
+          "affinity": [
+            2
+          ]
+        },
+        {
+          "artifact": "bound-final-cpu12/summary.json",
+          "sha256": "17a48caa12be20fbe401f273426ba583e5cbe85e83e833eba69a7dffb51fc39a",
+          "profiles": [
+            {
+              "compiler": "llvm",
+              "optimization": "O0",
+              "comparisons": 1575744,
+              "cases": 24
+            },
+            {
+              "compiler": "llvm",
+              "optimization": "O2",
+              "comparisons": 1575744,
+              "cases": 24
+            },
+            {
+              "compiler": "neverc",
+              "optimization": "O0",
+              "comparisons": 1575744,
+              "cases": 24
+            },
+            {
+              "compiler": "neverc",
+              "optimization": "O2",
+              "comparisons": 1575744,
+              "cases": 24
+            }
+          ],
+          "comparisons": 6302976,
+          "negative_controls": [
+            "wrong index before intact BOUND rejected"
+          ],
+          "affinity": [
+            12
+          ]
+        }
+      ],
+      "total_comparisons": 12605952,
+      "neverc_comparisons": 6302976,
+      "meaning": "Direct LLVM and actual NeverC source, O0/O2 on both cores. Independent original bytes witness signed inclusive bounds, full input return, FS/address wrapping, access/fault ordering and unused/repeated calls."
+    },
+    "neverd_exports": {
+      "results": [
+        {
+          "artifact": "source-native-cpu2/summary.json",
+          "sha256": "ab3d35b2b86eb1a4ce398ef4d5643372f704fed420b0c398055076d70afa5473",
+          "profiles": [
+            {
+              "optimization": "O0",
+              "sha256": "068df2293e4a44bc72cfc5824faa982895ad841c00da05aff4b2cf0c80780c42",
+              "comparisons": 5515944,
+              "cases": 84
+            },
+            {
+              "optimization": "O2",
+              "sha256": "fa839760affdbfb7aee8d1f2f732be2f8d737e8dd1aba8fb650cb1761083a356",
+              "comparisons": 5515944,
+              "cases": 84
+            }
+          ],
+          "comparisons": 11031888,
+          "negative_controls": [
+            "truncated return with intact BOUND rejected"
+          ],
+          "affinity": [
+            2
+          ],
+          "compiled_sources": 336,
+          "exported_elf_objects": 12,
+          "source_manifest_sha256": "dc04c246db3cc180d52eaa9b8e1c757bb23fc7c5659c36b2cabfa7a42ca0452a"
+        },
+        {
+          "artifact": "source-r6-cpu12/summary.json",
+          "sha256": "99ea9183ff0fa21e6ed81c07140909fbb5136f4fbea10a5eaa7f087718c1ff48",
+          "profiles": [
+            {
+              "optimization": "O0",
+              "sha256": "6bd848afc47b7d9d32127c30a0ea3d927aff6665c1000d97dab77e1df11d680b",
+              "comparisons": 5515944,
+              "cases": 84
+            },
+            {
+              "optimization": "O2",
+              "sha256": "4f0c160ae58c49f364d413580db9e530270ec902a4aea0c609c9dd3d8e753fb6",
+              "comparisons": 5515944,
+              "cases": 84
+            }
+          ],
+          "comparisons": 11031888,
+          "negative_controls": [
+            "truncated return with intact BOUND rejected"
+          ],
+          "affinity": [
+            12
+          ],
+          "compiled_sources": 336,
+          "exported_elf_objects": 12,
+          "source_manifest_sha256": "dd7a590fa1fe040991887b3b66e7cfed7543be9b45fa4d85da2c2c2957d90f9a"
+        }
+      ],
+      "total_comparisons": 22063776,
+      "meaning": "Native-SDK exports on CPU 2 and pinned-r6 exports on CPU 12, each at O0/O2. Each run compiles all 336 HighC/LLVMC files, executes 72 source cases plus 12 original exported ELF objects, verifies IR and machine instructions, forbids BOUND inline-asm fallback and checks 336 native BOUND instructions."
+    },
+    "regressions": [
+      {
+        "artifact": "frontend-final.xml",
+        "sha256": "849e9ea60f7a07adee54d84be9417e45bfeff05d32245203114f017e3cf7642d",
+        "tests": 169,
+        "passed": 169,
+        "skipped": []
+      },
+      {
+        "artifact": "plugin-target.xml",
+        "sha256": "5df93107974da84224f72e83cf1ea421f88b985f88f4dcd2c3f522e1f8742d3c",
+        "tests": 222,
+        "passed": 222,
+        "skipped": []
+      },
+      {
+        "artifact": "plugin-link.xml",
+        "sha256": "5ef531b4be94cb7e799696010654fd1694c27f09d59fdf19c81aee4498e5a5e0",
+        "tests": 303,
+        "passed": 302,
+        "skipped": [
+          {
+            "test": "PluginBinaryImageTest.BundleRejectsMissingCaseAliasedOutputPathsBeforePublication",
+            "reason": "NeverC/tests/neverc/OutputBundleTransactionTests.cpp:298\ncannot query case aliasing: No such file or directory\n"
+          }
+        ]
+      },
+      {
+        "artifact": "plugin-object-merge.xml",
+        "sha256": "4f315c058a877bbae6bcd56151cc86431f4c35db396dafe3c0584a9b8c03c8ed",
+        "tests": 89,
+        "passed": 89,
+        "skipped": []
+      }
+    ],
+    "clang_tests": [
+      "CodeGen/X86/bound-builtins.c",
+      "CodeGen/X86/vaarg-indirect-bitint.c",
+      "CodeGen/X86/x86_32-arguments-darwin.c",
+      "CodeGen/X86/x86_32-arguments-iamcu.c",
+      "CodeGen/X86/x86_32-arguments-linux.c",
+      "CodeGen/X86/x86_32-arguments-nommx.c",
+      "CodeGen/X86/x86_32-arguments-realign.c",
+      "CodeGen/X86/x86_32-arguments-win32.c",
+      "CodeGen/ext-int-cc.c",
+      "CodeGen/varargs.c",
+      "Sema/bound-builtins.c"
+    ],
+    "generator_tests": {
+      "native_intrinsic_synchronizer": 11,
+      "intrinsic_sorter": 7
+    },
+    "passed_checks": 811,
+    "explicit_skips": 1,
+    "documentation": "NeverC documentation facts and links checks pass; synchronized generated LLVM intrinsic/DAG tables pass their checker.",
+    "timing_note": "Target/MC regression tests precede the final ABI regparm/va_arg refinement; their route/MC inputs were unchanged. All ABI matrices and frontend tests use the final compiler hash."
+  },
+  "diagnostics": {
+    "clang_varargs": {
+      "before": {
+        "stock_O0": 1,
+        "stock_O2": 1,
+        "fork_O0": 1,
+        "fork_O2": 1
+      },
+      "after": [
+        {
+          "optimization": "O0",
+          "exit_code": 0
+        },
+        {
+          "optimization": "O2",
+          "exit_code": 0
+        }
+      ],
+      "clang_sha256": "47edcd9319e49991429fb1ccf52e4217ecac5cd8f6e0993f53a8605610277f38"
+    },
+    "regparm_before_fix": {
+      "profile": "NeverC producer to Clang consumer O0",
+      "exit_code": 1,
+      "artifact": "abi-regparm-before.log",
+      "sha256": "03d6dde5f92eb68804493ba3a291620a702d27d3f32db850a72d261dde3beaa8"
+    },
+    "controls": "All wrong-index and truncated-return controls retain native BOUND or the real call graph and fail with exit 1. Missing machine backend, unsupported platforms/fastcall, invalid controls and long-mode BOUND are rejected."
+  },
+  "remaining_boundaries": [
+    "NeverC embedded i386 machine selection, frame/calling-convention lowering, MC, linker and packaged runtime/sysroot remain unavailable. The full LLVM fork still supplies object code.",
+    "NeverC other 32-bit operating systems, fastcall/vectorcall/regcall, code16 frontend, -m32 driver shorthand and x64-only builtin families are not enabled by this batch.",
+    "This source ABI evidence does not implement NeverD general i386 original-state source dispatch, task/VM86 transitions, unimplemented software SMM/SGX events, CET/FRED or multicore/device environments.",
+    "The single skipped plugin test concerns case-alias filesystem detection. No blanket all-instruction or all-platform completion claim is made."
+  ],
+  "publication_gate": {
+    "llvm_and_neverc_changes_pushed": true,
+    "final_llvm_release_created": false,
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69"
+  },
+  "reproduce": [
+    "From NeverC: cmake --build BUILD --target neverc neverc-tests neverc-plugin-target-mc-tests neverc-plugin-link-tests neverc-plugin-object-merge-tests --parallel 4",
+    "taskset -c CPU python3 tests/neverc/X86/verify_i386_abi.py --neverc NEVERC --llvm-bin LLVM_BIN --clang PATCHED_CLANG --output OUT",
+    "taskset -c CPU python3 tests/neverc/X86/verify_bound.py --neverc NEVERC --llvm-bin LLVM_BIN --host-clang HOST_CLANG --output OUT",
+    "taskset -c CPU python3 tests/neverc/X86/verify_bound_source.py --exports NEVERD_EXPORTS --neverc NEVERC --llvm-bin LLVM_BIN --clang HOST_CLANG --output OUT",
+    "Run the filtered I386FrontendTest.*, X86*, DriverTest.RejectUnsupportedTargets and PluginBuiltinTargetProviderDriverTest.* suites, plus the three plugin test binaries.",
+    "Run llvm-lit with the configured Clang test directory, selecting the listed 11 tests. Use a patched Clang for ABI interoperation. Preserve separate outputs per core/SDK; avoid rebuilding compilers during execution."
+  ],
+  "artifact_bundle": "neverd-i386-20261104",
+  "artifact_assembly_sha256": "c875bf05626e81ae12dcd10f2dddfc22c5d06d58778c3d5af5dac4adafae8888"
+}
