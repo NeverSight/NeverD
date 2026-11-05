@@ -30,6 +30,7 @@ struct Import;
 struct LowInstructionBoundary;
 namespace registration_state {
 struct BoundPlainCalleeEffect;
+struct ConditionalCallResult;
 class OriginalImageFrameProof;
 } // namespace registration_state
 } // namespace neverd
@@ -156,13 +157,16 @@ readCallerFrameWord(const registration_state::FrameState &State, int32_t Offset,
 /// input-bound analysis; failure clears the complete effect.
 /// Image reads require Effect even when the returned value is ignored: both
 /// the result and private-frame proof may depend on those original bytes.
+/// Invocation retains independently proved normal-return transport, without
+/// granting preservation of runtime bindings or caller callback state.
 bool hasConditionalCallFrame(
     const BinaryImage &Image, const LowOp &Op,
     const registration_state::FrameState &State, size_t &Work,
     const std::set<int32_t> *Initialized = nullptr,
     std::optional<registration_state::FrameValue> *ReturnValue = nullptr,
     registration_state::BoundPlainCalleeEffect *Effect = nullptr,
-    registration_state::OriginalImageFrameProof *OriginalImage = nullptr);
+    registration_state::OriginalImageFrameProof *OriginalImage = nullptr,
+    registration_state::ConditionalCallResult *Invocation = nullptr);
 bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
                                 const registration_state::FrameState &State);
 bool hasSEHCallbackImageMemory(const BinaryImage &Image, va_t Address,

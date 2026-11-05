@@ -16150,6 +16150,12 @@ registers and a consistent cleanup; unresolved indirect exits refuse. A closed
 loop supplies no ordinary result. These invocation facts never enter the
 target-only stack cache. A nested RaiseException frame proof still grants no
 runtime binding preservation, callback-effect closure or native SEH admission.
+The private SEH solver consumes the same invocation's typed cleanup and scalar
+result together. Popped argument bytes lose their initialization facts before
+the next call. Independent callback and binding checks precede that stack
+recovery; a returned stack coordinate cannot discharge them. An irreversible
+refusal stops this all-or-nothing private proof and withdraws partial receipts.
+Ordinary state analysis continues to collect its separately useful facts.
 
 A zero-argument native C++ callee query first checks its authenticated shared
 entry prefix. An incoming frame access before any ordinary call or branch

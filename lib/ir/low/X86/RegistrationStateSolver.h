@@ -437,7 +437,8 @@ private:
                               const std::set<int32_t> *Initialized = nullptr);
   bool conditionalReturn(const Domain &State, const LowOp &Op);
   bool conditionalCall(const Domain &State, const LowOp &Op,
-                       std::optional<FrameValue> &ReturnValue);
+                       std::optional<FrameValue> &ReturnValue,
+                       std::optional<ConditionalCallResult> &Invocation);
   bool preservesCxxDispatchBindings(const Domain &State, const LowOp &Op,
                                     const FrameTransfer &Transfer,
                                     bool RuntimeMemory);
