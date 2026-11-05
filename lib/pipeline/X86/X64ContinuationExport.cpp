@@ -18,6 +18,7 @@
 #include "X64RtmAbortRegions.h"
 #include "X64RtmRegions.h"
 #include "X64SpecialRegions.h"
+#include "X64StateObjectPointers.h"
 
 #include "neverd/Limits.h"
 #include "neverd/analysis/arch/x86_64/X64ContinuationEvent.h"
@@ -772,6 +773,8 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
             ? MedLLVMEmitter().emit(Functions, Context, "paged", Arch::X64, {},
                                     nullptr, BinaryFormat::ELF, false, &Bodies)
             : MedLLVMEmitter().emit(Functions, Context);
+    if (Module)
+      preserveX64StateObjectPointers(*Module, Units->front().StateBytes);
     if (!Module || llvm::verifyModule(*Module, &llvm::errs()) ||
         !LLVMCEmitter().emit(*Module, OS, Options))
       return invalid("x64 continuation LLVM C emission failed");

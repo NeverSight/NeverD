@@ -20214,13 +20214,25 @@ external returns, cached completion and original RET cleanup. Existing source
 before the appended bridges must remain identical. These tests execute neither
 generated instructions nor specimen code; their controller oracle does not
 establish an arbitrary runtime provider's effects.
-`FunctionCallSitesProveHighCOriginalStackTransfer` additionally proves three
+`FunctionCallSitesProveOriginalStackTransfer` additionally proves three
 constant-result predicates using the actual emitted CALL/RET bodies and bridge,
-fixed nonfaulting RAM addresses and arbitrary result/register values. These
-predicates are compiled, never executed. Clang does not fold LLVM C's
-integerized host-state pointers into the typed fixture fields, so this stronger
-original-step proof is HighC-only; both routes retain the controller proofs and
-complete object-compilation checks above.
+fixed nonfaulting RAM addresses and arbitrary result/register values, through
+both C routes with the switch dispatcher. These predicates are compiled, never
+executed. They check physical return-cell creation, unchanged register bits,
+RET cleanup and completed results. The direct dispatcher's intentionally
+separate region functions retain the controller proofs and complete
+object-compilation checks above; they are not part of this constant-result
+proof.
+
+`X64StateObjectPointers.*` in `NeverDX64ContinuationSourceTests` checks bounded
+state offsets, exact access widths, scaffolding promotion and retained guest
+addresses. Negative/out-of-object, dynamic, truncated, PHI-carried, ordered and
+poison-bearing expressions supply no new state-object fact. Pointer-value
+stores remain unchanged. `StateObjectSourceTest.ConstantInboundsGEPsKeepTheirObject`
+compiles positive, negative and zero-offset LLVM C object accesses at O0/O2,
+under 32-bit and 64-bit pointer layouts, and proves the composed object update
+returns constant zero at O2. This is a host compiler proof of C values, not
+32-bit native ABI execution. Neither test executes generated code.
 
 `EnvironmentResumesTheActualPhysicalContext`,
 `EnvironmentBudgetsBoundEveryProviderAttempt` and

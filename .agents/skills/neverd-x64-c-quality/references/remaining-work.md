@@ -1,5 +1,16 @@
 # Remaining x64 C-quality work
 
+Explicit continuation LLVM C now retains bounded host-state object pointers.
+The producer owns the complete state extent, and only wholly contained constant
+loads/stores gain that object proof. LLVM C preserves existing constant inbounds
+GEPs as pointer arithmetic; guest addresses keep their numeric semantics. Both
+C routes now pass compile-time proofs over the actual original CALL/RET steps
+and switch-dispatch bridge, including return cells, cleanup and arbitrary
+register/result bits. The direct dispatcher retains separate controller/object
+checks. This closes the LLVM C pointer/proof gap without recovering missing
+ordinary inputs: the two registry-query stack-argument gaps, automatic state
+capture and complete native environment effects still remain.
+
 Optional original CALL-site bridges now connect an explicitly supplied
 pre-CALL state to the checked native-context interfaces. Known scalars use
 caller-side stack coordinates, context-only slots retain their original bytes,

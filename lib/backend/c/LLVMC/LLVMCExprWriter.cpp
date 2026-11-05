@@ -4076,6 +4076,19 @@ std::string LLVMCWriter::gepExpr(const llvm::GEPOperator &GEP) {
     }
   const std::string Carrier = "uint" + std::to_string(Bits) + "_t";
   std::string Base = valueStr(GEP.getPointerOperand());
+  // LLVM's inbounds contract already locates this constant displacement in
+  // the base object. Keep its pointer identity visible to the C compiler;
+  // integerizing it loses alias/value proofs against accesses to that object.
+  // Non-inbounds and dynamic GEPs retain the exact-width arithmetic below.
+  if (GEP.isInBounds() && Variables.empty()) {
+    std::string Pointer = "(uint8_t*)(" + Base + ")";
+    if (!Offset.isZero()) {
+      Pointer += Offset.isNegative() ? " - 0x" : " + 0x";
+      Pointer += llvm::utohexstr(Offset.abs().getZExtValue());
+      Pointer += Bits == 32 ? "U" : "ULL";
+    }
+    return "(void*)(" + Pointer + ")";
+  }
   std::string Sum = "(" + Carrier + ")(uintptr_t)(" + Base + ")";
   const std::string Suffix = Bits == 32 ? "U" : "ULL";
   if (!Offset.isZero())
