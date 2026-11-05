@@ -27,6 +27,10 @@ protected:
   /// All defined values, flags, faults and memory still come from the model.
   std::optional<uint32_t> DecimalUndefinedMask;
   bool CheckOperandPageEffects = false;
+  std::optional<X86LegacyStringProfile> Strings;
+  std::vector<std::pair<uint32_t, unsigned>> ExtraMemoryChecks;
+  std::optional<X86LegacyEventKind> PendingEvent;
+  bool STIShadow = false;
 
   void SetUp() override {
     X86PagingNativeTest::SetUp();
@@ -234,6 +238,8 @@ protected:
     State.EIP = InstructionPC;
     State.EFlags = Flags;
     State.CR2 = Special.cr2;
+    State.SSBlocked = PendingEvent && !STIShadow;
+    State.STIBlocked = PendingEvent && STIShadow;
     X86PagingState Controls{.CR0 = Special.cr0,
                             .CR3 = Special.cr3,
                             .CR4 = Special.cr4,
@@ -263,12 +269,26 @@ protected:
     Options.BitTestUndefinedFlags = BitTestUndefinedFlags;
     Options.BitScanChoices = BitScanChoices;
     Options.Atomics = Atomics;
+    Options.Strings = Strings;
+    if (PendingEvent && STIShadow)
+      Options.NMIBlockedBySTI = true;
+    const uint8_t PendingVector =
+        PendingEvent == X86LegacyEventKind::NMI ? 2 : 64;
+    if (PendingEvent) {
+      const auto Deferred = llvm::cantFail(deliverX86LegacyEvent(
+          State, *Memory, {State.EIP, 0, 0, PendingVector, *PendingEvent},
+          Options));
+      ASSERT_EQ(Deferred.Status, X86LegacyExecutionStatus::EventDeferred);
+    }
     auto Flush = Special;
     Flush.cr3 = 0x90000;
     ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &Flush), 0);
     ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &Special), 0);
     kvm_vcpu_events Events{};
     Events.flags = KVM_VCPUEVENT_VALID_NMI_PENDING | KVM_VCPUEVENT_VALID_SHADOW;
+    Events.interrupt.shadow = State.SSBlocked    ? KVM_X86_SHADOW_INT_MOV_SS
+                              : State.STIBlocked ? KVM_X86_SHADOW_INT_STI
+                                                 : 0;
     ASSERT_EQ(ioctl(CPU, KVM_SET_VCPU_EVENTS, &Events), 0);
     ASSERT_EQ(ioctl(CPU, KVM_SET_REGS, &Registers), 0);
     kvm_guest_debug Debug{};
@@ -276,15 +296,53 @@ protected:
     Debug.arch.debugreg[0] = InstructionPC + Bytes.size();
     Debug.arch.debugreg[1] = Target;
     Debug.arch.debugreg[2] = Stop;
-    Debug.arch.debugreg[7] = 0x415;
+    Debug.arch.debugreg[7] = PendingEvent ? 0x410 : 0x415;
     ASSERT_EQ(ioctl(CPU, KVM_SET_GUEST_DEBUG, &Debug), 0);
+    if (PendingEvent == X86LegacyEventKind::NMI)
+      ASSERT_EQ(ioctl(CPU, KVM_NMI, 0), 0);
+    Run->request_interrupt_window =
+        PendingEvent == X86LegacyEventKind::Interrupt;
+    if (Run->request_interrupt_window) {
+      ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
+      ASSERT_EQ(Run->exit_reason, unsigned(KVM_EXIT_IRQ_WINDOW_OPEN));
+      Run->request_interrupt_window = 0;
+      kvm_interrupt IRQ{PendingVector};
+      ASSERT_EQ(ioctl(CPU, KVM_INTERRUPT, &IRQ), 0);
+    }
     ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
     if (DecimalUndefinedMask) {
       ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &Registers), 0);
       Options.DecimalUndefinedFlags = Registers.rflags & *DecimalUndefinedMask;
     }
-    auto Expected = executeX86LegacyInstruction(State, *Memory, Bytes, Options);
+    // REP is one committed element per model call. Native code runs freely;
+    // for asynchronous cases replay its observed count boundary, without
+    // deriving operands, results, flags or memory from the native execution.
+    ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &Registers), 0);
+    const bool Address32 =
+        Code32 != (std::find(Bytes.begin(), Bytes.end(), 0x67) != Bytes.end());
+    const uint32_t CountMask = Address32 ? UINT32_MAX : UINT16_MAX;
+    const auto Execute = [&](const std::vector<uint8_t> &Instruction) {
+      uint64_t Remaining = uint64_t(State.Core.GPR[1] & CountMask) + 1;
+      auto R =
+          executeX86LegacyInstruction(State, *Memory, Instruction, Options);
+      while (R && R->Status == X86LegacyExecutionStatus::RepeatContinue &&
+             --Remaining &&
+             (!PendingEvent ||
+              (State.Core.GPR[1] & CountMask) != (Registers.rcx & CountMask)))
+        R = executeX86LegacyInstruction(State, *Memory, Instruction, Options);
+      return R;
+    };
+    auto Expected = Execute(Bytes);
     ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
+    if (PendingEvent) {
+      ASSERT_TRUE(Expected->InstructionCompleted ||
+                  Expected->Status == X86LegacyExecutionStatus::RepeatContinue);
+      Expected = deliverX86LegacyEvent(
+          State, *Memory, {State.EIP, 0, 0, PendingVector, *PendingEvent},
+          Options);
+      ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
+      ASSERT_EQ(Expected->Status, X86LegacyExecutionStatus::EventDelivered);
+    }
     // At CPL0 an unmapped original stack also prevents #PF/#DF entry.
     // Only an inner-ring stack switch can reach the Case 21 repair handler.
     if (Case == 12 || Case == 18 || Case == 20 || Case == 22 || Case == 23 ||
@@ -299,8 +357,7 @@ protected:
         ASSERT_TRUE(Expected->InstructionCompleted);
       }
       ASSERT_EQ(State.EIP, InstructionPC);
-      Expected =
-          executeX86LegacyInstruction(State, *Memory, RetryBytes, Options);
+      Expected = Execute(RetryBytes);
       ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
       ASSERT_TRUE(Expected->InstructionCompleted);
     }
@@ -328,6 +385,24 @@ protected:
     EXPECT_EQ(Registers.rflags & ~uint64_t{0x10000},
               State.EFlags & ~uint32_t{0x10000});
     EXPECT_EQ(Special.cr2, State.CR2);
+    for (unsigned I = 0; I != Segments.size(); ++I) {
+      const auto Native = Cache(*Segments[I]);
+      const auto &Model = State.Core.Segments[I];
+      EXPECT_EQ(Native.Selector, Model.Selector);
+      EXPECT_EQ(Native.Unusable, Model.Unusable);
+      // VMX can normalize an unusable cache's hidden bits. They are opaque
+      // in the owned contract; only the selector and unusable bit are defined.
+      if (Model.Unusable)
+        continue;
+      EXPECT_EQ(Native.Base, Model.Base);
+      EXPECT_EQ(Native.Limit, Model.Limit);
+      EXPECT_EQ(Native.Attributes, Model.Attributes);
+    }
+    if (PendingEvent) {
+      kvm_vcpu_events Final{};
+      ASSERT_EQ(ioctl(CPU, KVM_GET_VCPU_EVENTS, &Final), 0);
+      EXPECT_EQ(bool(Final.nmi.masked), State.NMIBlocked);
+    }
     // The shared page walker deliberately sets A on each valid entry before
     // a later permission fault. Hardware need not choose that faulting-walk
     // image; qualify exact A/D only for successful operand translations.
@@ -353,13 +428,15 @@ protected:
         FinalStack.Base + ((FinalStack.Attributes & 0x4000)
                                ? State.Core.GPR[4]
                                : uint16_t(State.Core.GPR[4]));
-    for (unsigned Begin :
-         {0xaff0u - 16, 0xc0f0u, 0xcfe0u, 0xd0e0u, 0xffe0u, 0x1c0f0u,
-          StackLinear >= 16 ? StackLinear - 16 : 0,
-          FinalStackLinear >= 16 ? FinalStackLinear - 16 : 0}) {
-      if (Begin > MemorySize - 64)
+    auto MemoryChecks = ExtraMemoryChecks;
+    for (unsigned Begin : {0xaff0u - 16, 0xc0f0u, 0xcfe0u, 0xd0e0u, 0xffe0u,
+                           0x1c0f0u, StackLinear >= 16 ? StackLinear - 16 : 0,
+                           FinalStackLinear >= 16 ? FinalStackLinear - 16 : 0})
+      MemoryChecks.emplace_back(Begin, 64);
+    for (const auto &[Begin, Size] : MemoryChecks) {
+      if (Begin > MemorySize - Size)
         continue;
-      for (unsigned I = 0; I != 64; ++I) {
+      for (unsigned I = 0; I != Size; ++I) {
         // The 16-bit wrapping stack can approach the page-directory page;
         // hardware translation caches make its A/D bits a separate contract.
         if (Begin + I >= 0x10000 && Begin + I < 0x10020)

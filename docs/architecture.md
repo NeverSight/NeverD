@@ -55,6 +55,14 @@ in their respective owners, with explicit target profiles.
 addressing for selector and scalar instructions. `X86LegacyScalarEncoding`
 authenticates complete scalar extents; `X86LegacyScalarExecution` owns staged
 GPR/flag/near-control-flow changes in the explicit ordinary-RAM profile.
+`X86LegacyString` composes those scalar moves/comparisons with address-sized
+indices and REP counts. Its decoder shares the legacy prefix grammar, and its
+element delegates all operand checks, accesses and flag arithmetic to the
+scalar owner. Destination-first CMPS is an explicit operand-order input.
+The outer legacy executor owns original-byte authentication, partial RF/EIP
+publication and persistent shadows; the existing IDT/IRET owners handle faults
+and producer-selected asynchronous boundaries. A caller never rolls back
+previously completed elements when the current element fails.
 ARPL uses that owner's word read and a conditional store. Only a required RPL
 adjustment requests write permission, and ZF is staged until the store succeeds.
 `X86SystemStateNative` owns ARPL's separate compiler APIs and C dispatch for
