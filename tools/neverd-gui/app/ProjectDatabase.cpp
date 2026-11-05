@@ -5,6 +5,7 @@
 
 #include "neverd/support/ProjectDatabase.h"
 #include "neverd/support/ProjectFiles.h"
+#include "neverd/support/ProjectWriteLock.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -645,7 +646,8 @@ ProjectDatabase::read(const QString &database, QString *error,
 
 QString ProjectDatabase::unpack(const QString &database,
                                 const QString &directory, QString *error,
-                                bool *recoveredEdits) {
+                                bool *recoveredEdits,
+                                const QString &heldInput) {
   if (recoveredEdits)
     *recoveredEdits = false;
   const auto failed = [&](const QString &message) {
@@ -667,6 +669,18 @@ QString ProjectDatabase::unpack(const QString &database,
         QCoreApplication::translate("ProjectDatabase", "Cannot create %1")
             .arg(directory));
   const QString input = QDir(directory).filePath(contents->inputName);
+  // What follows replaces the working copy's files. A worker with it open
+  // holds its writer lock, and edits not yet saved back live only there.
+  std::optional<neverd::ProjectWriteLock> writer;
+  if (input != heldInput && QFileInfo::exists(input)) {
+    writer.emplace(filePath(input));
+    if (!*writer)
+      return failed(
+          QCoreApplication::translate(
+              "ProjectDatabase",
+              "This database may already be open in another NeverD (%1)")
+              .arg(QString::fromLocal8Bit(writer->error())));
+  }
   bool preserveRecovery = false;
   QFile marker(recoveryMarker(input));
   if (marker.exists()) {

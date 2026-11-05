@@ -11649,6 +11649,65 @@ private slots:
     QVERIFY(holder.session.loaded());
   }
 
+  void aDatabaseOpenInAnotherWorkbenchKeepsItsEdits() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("team.bin"));
+    const auto database = directory.filePath(QStringLiteral("team.nddb"));
+    {
+      Workbench packer;
+      LoadDialogAcceptor loadDialogs;
+      packer.window->openFile(path);
+      QTRY_VERIFY_WITH_TIMEOUT(packer.session.loaded(), OpenTimeoutMs);
+      QSignalSpy packed(&packer.session, &Session::databaseSaved);
+      packer.session.packDatabase(database);
+      QTRY_COMPARE_WITH_TIMEOUT(packed.size(), 1, OpenTimeoutMs);
+    }
+    Workbench holder;
+    holder.window->openFile(database);
+    QTRY_VERIFY_WITH_TIMEOUT(holder.session.loaded(), OpenTimeoutMs);
+    // An edit lives beside the working copy until Save writes it back.
+    holder.session.rename(Base + 0x140, QStringLiteral("held_edit"));
+    QTRY_VERIFY_WITH_TIMEOUT(holder.session.databaseOutOfDate(), OpenTimeoutMs);
+    const QString renames =
+        holder.session.filePath() + QStringLiteral(".neverd/renames.json");
+    QVERIFY(readAll(renames).contains("held_edit"));
+
+    // Another workbench is refused before it unpacks over that working copy.
+    Session other(QString::fromLocal8Bit(TEST_WORKER));
+    QSignalSpy messages(&other, &Session::message);
+    other.open(database);
+    const auto refusal = [&messages] {
+      for (const auto &message : messages)
+        if (message.at(1).toInt() == 2)
+          return message.at(0).toString();
+      return QString();
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(!refusal().isEmpty(), OpenTimeoutMs);
+    QVERIFY2(refusal().contains(QStringLiteral("another NeverD")),
+             qPrintable(refusal()));
+    QVERIFY(!other.loaded());
+    QVERIFY(readAll(renames).contains("held_edit"));
+    QVERIFY(holder.session.databaseOutOfDate());
+
+    // The holder's own worker has the lock, so it can open the database again
+    // once its edit is saved.
+    QSignalSpy saved(&holder.session, &Session::databaseSaved);
+    holder.session.save();
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), 1, OpenTimeoutMs);
+    QTRY_VERIFY(!holder.session.dirty());
+    QSignalSpy reopened(&holder.session, &Session::opened);
+    holder.session.open(database);
+    QTRY_COMPARE_WITH_TIMEOUT(reopened.size(), 1, OpenTimeoutMs);
+    QVERIFY(holder.session.loaded());
+
+    // Once the holder lets go, the other workbench opens it with the edit.
+    holder.session.closeFile();
+    QTRY_VERIFY_WITH_TIMEOUT(holder.session.connected(), OpenTimeoutMs);
+    other.open(database);
+    QTRY_VERIFY_WITH_TIMEOUT(other.loaded(), OpenTimeoutMs);
+    QVERIFY(readAll(renames).contains("held_edit"));
+  }
+
   void linksCopyAndOpenTheirPlaces() {
     // Copy link names the place the disassembly shows, and a link opens its
     // place in the view it asks for, as IDA's open_ida_link does; another

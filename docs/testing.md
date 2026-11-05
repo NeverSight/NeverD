@@ -5638,7 +5638,10 @@ a program that cannot start says why in Output, and, outside Windows, the comman
 line a stand-in program really receives: this workbench's worker and kind of
 layout, and not its open file. `aFileOpenInAnotherWorkbenchSaysSo` opens one file
 with a second real worker, whose lock refusal names the likely reason and leaves
-the holder loaded.
+the holder loaded. `aDatabaseOpenInAnotherWorkbenchKeepsItsEdits` checks that a
+second workbench on an open database leaves the holder's unsaved rename on disk,
+that the holder can still reopen the database under its own lock, and that the
+other workbench opens it with the edit once the holder lets go.
 
 The GUI unit cases `deepLinksTakeIdasFormAndRefuseWhatTheyCannotName` and
 `aLinkGoesToTheWorkbenchThatHasItsProgram` check link syntax, hash prefixes and

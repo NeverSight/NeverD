@@ -572,13 +572,14 @@ struct PreparedOpen {
 
 /// Runs off the GUI thread: unpack a database, or bring back a binary's
 /// sidecars from its database when they are missing.
-PreparedOpen unpackOrRestore(const QString &requested) {
+PreparedOpen unpackOrRestore(const QString &requested,
+                             const QString &heldInput) {
   PreparedOpen prepared;
   if (ProjectDatabase::isDatabase(requested)) {
     prepared.database = requested;
     prepared.input = ProjectDatabase::unpack(
         requested, ProjectDatabase::workingDirectory(requested),
-        &prepared.error, &prepared.recoveredEdits);
+        &prepared.error, &prepared.recoveredEdits, heldInput);
     if (prepared.error.isEmpty())
       if (const auto contents =
               ProjectDatabase::read(requested, &prepared.error))
@@ -654,9 +655,10 @@ PreparedOpen unpackOrRestore(const QString &requested) {
 }
 
 /// Runs off the GUI thread: the files of the project \p requested opens,
-/// and the state it keeps.
-PreparedOpen prepareOpen(const QString &requested) {
-  PreparedOpen prepared = unpackOrRestore(requested);
+/// and the state it keeps.  \p heldInput is the file this workbench's worker
+/// has open, whose lock it holds.
+PreparedOpen prepareOpen(const QString &requested, const QString &heldInput) {
+  PreparedOpen prepared = unpackOrRestore(requested, heldInput);
   if (prepared.error.isEmpty() && !prepared.input.isEmpty())
     overlayProjectFiles(prepared.input, prepared.state);
   return prepared;
@@ -694,7 +696,9 @@ void Session::openPending() {
                      prepared.state, options, prepared.recoveredEdits);
           });
   watcher->setFuture(
-      QtConcurrent::run([requested] { return prepareOpen(requested); }));
+      QtConcurrent::run([requested, held = loaded_ ? filePath_ : QString()] {
+        return prepareOpen(requested, held);
+      }));
 }
 
 void Session::sendOpen(const QString &requested, const QString &path,
