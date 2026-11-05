@@ -7130,7 +7130,8 @@ private slots:
       QTRY_VERIFY_WITH_TIMEOUT(done, OpenTimeoutMs);
     };
     read();
-    QTRY_COMPARE_WITH_TIMEOUT(refined.count(), 1, OpenTimeoutMs);
+    // The job runs across idle steps: about 4 s here, 9 s on a macOS runner.
+    QTRY_COMPARE_WITH_TIMEOUT(refined.count(), 1, NativeOpenTimeoutMs);
     // Reads go on after the refinement, which later heartbeats repeat none of.
     read();
     read();
