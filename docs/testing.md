@@ -3986,6 +3986,11 @@ number boundaries, BOMs, depth and error precedence; nested/concurrent queues,
 thread limits, original exceptions and large stacks. The full build additionally
 runs `NeverDStringScanTests`, `NeverDTextEncodingTests`, pipeline, SDK and worker
 owners. Compare complete string metadata and output, not only throughput.
+`NeverDAccelerationTests` also checks the string scan's run masks on every
+target, byte value, unit boundary, alignment and guarded tail.
+`NeverDStringScanTests` checks that the string read at every offset is the one
+a scan reports first there, and that spans run as tasks in any order report
+what a serial scan does.
 `NeverDTextEncodingTests` also requires in-place normalization to retain valid
 string storage, including embedded NUL and Unicode noncharacters, while keeping
 the same malformed-byte escapes with SIMD validation enabled or disabled.

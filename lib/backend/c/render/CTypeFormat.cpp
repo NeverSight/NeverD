@@ -381,14 +381,7 @@ std::string quotedStringText(strings::Encoding Kind, llvm::StringRef Text) {
 std::optional<strings::FoundString>
 stringAtStart(llvm::ArrayRef<uint8_t> Bytes,
               const strings::ScanOptions &Options) {
-  std::optional<strings::FoundString> First;
-  strings::scan(Bytes, Options, [&](strings::FoundString &&Found) {
-    if (!First)
-      First = std::move(Found);
-  });
-  if (!First || First->Offset != 0)
-    return std::nullopt;
-  return First;
+  return strings::scanAt(Bytes, Options);
 }
 
 /// The readable, non-executable bytes from \p Addr, at most \p Window of

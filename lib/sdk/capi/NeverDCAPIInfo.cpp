@@ -511,12 +511,8 @@ const char *neverd_string_at(neverd_session_t Sess, neverd_va_t Addr,
       Seg->Data.data() + Offset,
       std::min<size_t>(kStringSearchWindowBytes,
                        Seg->Data.size() - static_cast<size_t>(Offset)));
-  std::optional<strings::FoundString> First;
-  strings::scan(Bytes, Options, [&](strings::FoundString &&Found) {
-    if (!First)
-      First = std::move(Found);
-  });
-  if (!First || First->Offset != 0) {
+  std::optional<strings::FoundString> First = strings::scanAt(Bytes, Options);
+  if (!First) {
     S->setError("no string starts at " + vaHex(Addr));
     return nullptr;
   }

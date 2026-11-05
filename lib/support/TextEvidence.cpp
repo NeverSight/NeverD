@@ -9,6 +9,7 @@
 #include "neverd/support/Limits.h"
 #include "neverd/support/StringScan.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/bit.h"
 
 #include <algorithm>
@@ -63,12 +64,30 @@ enum class Family : uint8_t {
   Korean
 };
 
-Family familyOf(uint32_t C) {
+/// The family of each code point below U+10000, as the ranges in
+/// StringEncodings.def give it, the first that holds one winning.
+class FamilyTable {
+public:
+  FamilyTable() {
+    for (uint32_t C = 0x10000; C-- > 0;)
+      Families[C] = ranged(C);
+  }
+  Family operator[](uint32_t C) const { return Families[C]; }
+  static Family ranged(uint32_t C) {
 #define NEVERD_SCRIPT_FAMILY(First, Last, Kind)                                \
   if (C >= First && C <= Last)                                                 \
     return Family::Kind;
 #include "neverd/support/StringEncodings.def"
-  return Family::None;
+    return Family::None;
+  }
+
+private:
+  Family Families[0x10000];
+};
+
+Family familyOf(uint32_t C) {
+  static const FamilyTable Table;
+  return C <= 0xffff ? Table[C] : FamilyTable::ranged(C);
 }
 
 bool isASCIILetter(uint32_t C) {
@@ -133,13 +152,18 @@ bool readsAsText(llvm::ArrayRef<uint32_t> Codes, Source From) {
   bool Han = false;
   unsigned ASCIILetters = 0, ASCIIAlnum = 0, Letters = 0, Inside = 0;
   unsigned EastAsian = 0, Ideographs = 0, Common = 0;
-  std::vector<uint32_t> Beyond;
+  llvm::SmallVector<uint32_t, 32> Beyond;
   // The current word: whether it holds ASCII letters and letters beyond,
   // and the cases of its letters so far.
   bool WordASCII = false, WordBeyond = false, CaseValid = true;
   unsigned WordLetters = 0;
   int FirstCase = 0, RestCase = 0;
   for (size_t I = 0; I <= Codes.size(); ++I) {
+    // A word that holds ASCII letters and letters beyond outside the Latin
+    // script fails where it ends.  Should the script become Latin first,
+    // its letters beyond were Han, which Latin text fails after the loop.
+    if (WordASCII && WordBeyond && Script != Family::Latin)
+      return false;
     const uint32_t C = I < Codes.size() ? Codes[I] : 0;
     const Family Kind = C >= 0x80 ? familyOf(C) : Family::None;
     const bool ASCIILetter = isASCIILetter(C);
@@ -198,7 +222,8 @@ bool readsAsText(llvm::ArrayRef<uint32_t> Codes, Source From) {
   }
   if (Han && Script != Family::None && !isEastAsian(Script))
     return false;
-  const auto longestRun = [](std::vector<uint32_t> Values) {
+  const auto longestRun = [](llvm::ArrayRef<uint32_t> Codes) {
+    llvm::SmallVector<uint32_t, 32> Values(Codes.begin(), Codes.end());
     std::sort(Values.begin(), Values.end());
     size_t Longest = 0;
     for (size_t I = 0, Run = 0; I < Values.size(); ++I) {
@@ -325,9 +350,28 @@ bool shareScripts(Encoding A, Encoding B) {
 
 } // namespace detail
 
-unsigned displayColumns(uint32_t C) {
+namespace {
+/// The code points of the Basic Multilingual Plane that displayColumns
+/// counts two columns wide, a bit each.
+struct WideColumnSet {
+  uint64_t Bits[0x10000 / 64] = {};
+};
+constexpr WideColumnSet wideColumnSet() {
+  WideColumnSet Set;
 #define NEVERD_WIDE_CHARACTERS(First, Last)                                    \
-  if (C >= (First) && C <= (Last))                                             \
+  for (uint32_t C = (First); C <= (Last) && C <= 0xffff; ++C)                  \
+    Set.Bits[C >> 6] |= uint64_t(1) << (C & 63);
+#include "neverd/support/WideCharacters.def"
+  return Set;
+}
+constexpr WideColumnSet WideColumns = wideColumnSet();
+} // namespace
+
+unsigned displayColumns(uint32_t C) {
+  if (C <= 0xffff)
+    return WideColumns.Bits[C >> 6] >> (C & 63) & 1 ? 2 : 1;
+#define NEVERD_WIDE_CHARACTERS(First, Last)                                    \
+  if ((Last) > 0xffff && C >= (First) && C <= (Last))                          \
     return 2;
 #include "neverd/support/WideCharacters.def"
   return 1;

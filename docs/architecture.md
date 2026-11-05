@@ -1082,6 +1082,20 @@ parameters select byte strings before a generic wide-string probe, so a
 one-character string beside another literal remains readable. Relocated,
 writable or oversized storage keeps its original address expression.
 
+The string scanner (`lib/support/StringScan.cpp`) reads only the runs a
+terminator ends that can hold a string: a C string ends at a NUL and holds no
+NUL or control byte, and none of its characters takes more columns than
+bytes; a wide string ends at a zero unit and takes at most two columns a unit.
+Highway block masks find those runs. A code page reads a C run only from its
+first byte after a NUL, and the scan reads the ASCII or UTF-8 text that ends at
+the NUL back from it; wide text is read back once from its zero unit, with the
+tallies retries within it need. `strings::scanAt` reads the string at one
+address from that address alone, for literals and `string_at`. Given tasks,
+`strings::scan` splits a large range after NUL bytes and zero units, which no
+string or retry crosses; the SDK's image string list runs those spans on its
+workers. Either way the scan reports what one serial pass over every start
+does.
+
 This guide describes the production boundaries a contributor needs in order to
 change NeverD safely. It intentionally covers NeverD-owned code only; the LLVM,
 Capstone, and Unicorn submodules keep their own internal architecture.

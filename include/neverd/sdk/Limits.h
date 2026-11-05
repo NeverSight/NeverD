@@ -51,6 +51,9 @@ inline constexpr int kMaxSourceEntriesPerQuery = 65536;
 inline constexpr int kMaxStringRowsPerPage = 65536;
 inline constexpr int kMaxDecodedTextBytes = 65536;
 inline constexpr size_t kStringSearchWindowBytes = 65536;
+// The fewest spans of an image string scan (strings::scan) run on several
+// workers: each span is a large task of its own.
+inline constexpr size_t kMinParallelStringScanSpans = 2;
 inline constexpr unsigned kDefaultStringMinLength =
     ::neverd::limits::support::kDefaultStringMinLength;
 inline constexpr size_t kShortInstructionByteColumnWidth = 18;
