@@ -63,6 +63,28 @@ and zero or one final scalar write, at 1/2/4/8 bytes. It includes near CALL/RET,
 indirect branches, stack operands, FS/GS bases, address-size overrides and
 full-dividend DIV/IDIV. A read-modify-write operand checks write permissions even
 before arithmetic. False CMOV conditions still perform their memory access.
+It also admits audited legacy `XORPS` register forms and `MOVUPS`/`MOVDQU`
+register or memory forms. Their existing LowIR preserves the upper vector
+lanes, flags and MXCSR; each memory operand is one 16-byte access. A store
+prepares both pages before publishing either half, and a failed load retains
+the complete destination. These steps require an SSE/SSE2-capable long-mode
+target. After authenticated fetch and before operands, `CR0.EM` or cleared
+`CR4.OSFXSR` produces #UD; otherwise `CR0.TS` produces #NM. The shared event
+owner delivers these faults with the original restart state.
+
+For these unaligned moves with CPL3/AM/AC active, bind
+`X64PagedExecutionOptions::SseAlignment` to `NoCheck`, `Qword` or `FullOperand`
+according to the target CPU. This chooses the #AC alignment requirement;
+`AlignmentPriority` independently chooses its order relative to paging.
+Absence refuses the operand before data access instead of guessing a target
+policy. Register forms and inactive alignment checking require no such binding.
+See Intel SDM Vol. 2, `MOVUPS` (including its varying #AC treatment) and
+`MOVDQU`, and Vol. 3A Table 15-1 for SSE availability
+([Intel SDM](https://cdrdv2-public.intel.com/868137/325462-089-sdm-vol-1-2abcd-3abcd-4.pdf)).
+AVX, FP arithmetic, aligned-vector memory operations and unaligned FS/GS forms
+without complete lifter audits retain explicit native boundaries. This is not
+a general SIMD executor or a concurrent-memory atomicity guarantee.
+
 CALL checks its stack write before a noncanonical target: a missing stack page
 therefore produces #PF, while successful preflight followed by #GP publishes
 neither the return address nor register changes.

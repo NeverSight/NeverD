@@ -313,6 +313,99 @@ TEST_F(X64PagedExecutionTest, CompiledLoadUsesGuestRAMAndDeliversPageFault) {
     }
 }
 
+TEST_F(X64PagedExecutionTest, SseCrossPageOperandsPublishTogether) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "No test Clang";
+  for (bool Integer : {false, true})
+    for (bool Store : {false, true}) {
+      std::vector<uint8_t> Code;
+      if (Integer)
+        Code.push_back(0xf3);
+      Code.insert(Code.end(), {0x0f,
+                               uint8_t(Integer ? (Store ? 0x7f : 0x6f)
+                                               : (Store ? 0x11 : 0x10)),
+                               0x07}); // xmm0 and [rdi].
+      for (bool LLVM : {false, true}) {
+        Run Driver = nullptr;
+        ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver));
+        for (bool Present : {false, true}) {
+          reset(Code);
+          Controls.CR4 |= 0x200;
+          auto &Core = State.Core.Core.Core.Core;
+          Core.GPR[7] = 0x20ff8;
+          for (unsigned I = 0; I != 64; ++I)
+            Core.ZMM[0][I] = 0x40 + I;
+          put(0x30ff8, 0x8877665544332211ULL);
+          put(0x31000, 0xfedcba9876543210ULL);
+          if (!Present)
+            put(0x13108, 0);
+          Memory =
+              llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+          X64PagedExecution Context(*Memory);
+          uint64_t Budget = 1;
+          const auto Exit =
+              Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget);
+          EXPECT_TRUE(Context.lastError().empty()) << Context.lastError();
+          EXPECT_EQ(Exit, Present ? 9u : 7u);
+          EXPECT_EQ(Budget, 0u);
+          EXPECT_EQ(Context.lastResult().InstructionCompleted, Present);
+          EXPECT_EQ(Memory->physicalMemory()
+                        .loadScalar(0x30ff8, GuestScalarWidth::I64)
+                        .Value,
+                    Store && Present ? 0x4746454443424140ULL
+                                     : 0x8877665544332211ULL);
+          EXPECT_EQ(Memory->physicalMemory()
+                        .loadScalar(0x31000, GuestScalarWidth::I64)
+                        .Value,
+                    Store && Present ? 0x4f4e4d4c4b4a4948ULL
+                                     : 0xfedcba9876543210ULL);
+          for (unsigned I = 0; I != 64; ++I) {
+            const uint64_t Word =
+                I < 8 ? 0x8877665544332211ULL : 0xfedcba9876543210ULL;
+            EXPECT_EQ(Core.ZMM[0][I], !Store && Present && I < 16
+                                          ? uint8_t(Word >> ((I % 8) * 8))
+                                          : 0x40 + I);
+          }
+          if (!Present) {
+            ASSERT_TRUE(Context.lastResult().Exception);
+            EXPECT_EQ(Context.lastResult().Exception->Vector, 14);
+            EXPECT_EQ(State.Core.Core.CR2, 0x21000u);
+          }
+        }
+      }
+    }
+}
+
+TEST_F(X64PagedExecutionTest, SseAvailabilityPrecedesOperandFaults) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "No test Clang";
+  const std::vector<uint8_t> Code{0x0f, 0x10, 0x07};
+  for (bool LLVM : {false, true}) {
+    Run Driver = nullptr;
+    ASSERT_NO_FATAL_FAILURE(compile(Code, LLVM, "-O2", Driver));
+    for (unsigned Bits = 0; Bits != 8; ++Bits) {
+      reset(Code);
+      Controls.CR0 |= (Bits & 3) << 2; // EM and TS.
+      if (Bits & 4)
+        Controls.CR4 |= 0x200;
+      put(0x13100, 0); // Operand is absent even when SSE is unavailable.
+      Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+      X64PagedExecution Context(*Memory);
+      uint64_t Budget = 1;
+      EXPECT_EQ(Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget),
+                7u);
+      EXPECT_TRUE(Context.lastError().empty()) << Context.lastError();
+      ASSERT_TRUE(Context.lastResult().Exception);
+      const unsigned Vector = !(Bits & 4) || (Bits & 1) ? 6
+                              : (Bits & 2)              ? 7
+                                                        : 14;
+      EXPECT_EQ(Context.lastResult().Exception->Vector, Vector);
+      EXPECT_EQ(State.Core.Core.CR2, Vector == 14 ? 0x20000u : 0u);
+      EXPECT_EQ(Budget, 0u);
+    }
+  }
+}
+
 TEST_F(X64PagedExecutionTest,
        ChangedCodeAndBackingFailureDoNotCommitTheInstruction) {
   if (!hasCrossTargetClang())

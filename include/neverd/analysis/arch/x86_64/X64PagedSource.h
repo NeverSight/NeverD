@@ -68,10 +68,16 @@ enum class X64PagedAccess : uint64_t {
   BeginRepeat = 18,
   /// Original bytes own scalar/string operands; address and size are zero.
   PortIO = 19,
+  /// Legacy SSE bitvectors; address is one for a memory operand, else zero.
+  /// Check availability before operands. Size is zero.
+  BeginSse = 20,
 };
 
 struct X64PagedExchange {
+  // Scalar bodies use only Value; legacy SSE uses the contiguous 16-byte
+  // payload. The transaction pointer is never part of a generated value store.
   uint64_t Value = 0;
+  uint64_t ValueHigh = 0;
   void *Transaction = nullptr;
 };
 

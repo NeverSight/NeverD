@@ -10,6 +10,8 @@
 #ifndef NEVERD_ANALYSIS_ARCH_X86_64_X64CONTINUATIONPAGED_H
 #define NEVERD_ANALYSIS_ARCH_X86_64_X64CONTINUATIONPAGED_H
 
+#include "X64PagedSse.h"
+
 #include "neverd/analysis/InterpreterSpecialization.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/support/X86/X86Addressing.h"
@@ -20,6 +22,8 @@ struct X64PagedMemoryRoles {
   bool StackRead = false;
   bool StackWrite = false;
   bool ReadModifyWrite = false;
+  bool Sse = false;
+  bool SseMemory = false;
 };
 
 inline X64PagedMemoryRoles
@@ -35,6 +39,7 @@ x64PagedMemoryRoles(const SpecializationInstruction &Instruction) {
       Insn.Size != Instruction.NativeBytes.size() || !Insn.Raw->detail)
     return Roles;
   const auto &X86 = Insn.Raw->detail->x86;
+  Roles.Sse = x64PagedSseInstruction(Insn.Id, X86);
   if (X86.prefix[0]) // LOCK and repeat require their instruction commit model.
     return Roles;
   const bool StackRead = Insn.Id == X86_INS_POP || Insn.Id == X86_INS_RET;
@@ -61,7 +66,9 @@ x64PagedMemoryRoles(const SpecializationInstruction &Instruction) {
     if (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) {
       const bool Write = Op.Opcode == NdOp::STORE;
       const auto Bytes = Write ? Op.Inputs[1].Size : Op.Output.Size;
-      if ((Bytes != 1 && Bytes != 2 && Bytes != 4 && Bytes != 8) || Writes)
+      if ((Bytes != 1 && Bytes != 2 && Bytes != 4 && Bytes != 8 &&
+           !(Roles.Sse && Bytes == 16)) ||
+          Writes)
         return Roles;
       Write ? ++Writes : ++Reads;
     }
@@ -74,6 +81,7 @@ x64PagedMemoryRoles(const SpecializationInstruction &Instruction) {
   if (StackWrite)
     Roles.StackRead = ExplicitStack;
   Roles.StackWrite = StackWrite || ExplicitStack;
+  Roles.SseMemory = Roles.Sse && ExplicitMemory != 0;
   Roles.Supported = true;
   return Roles;
 }

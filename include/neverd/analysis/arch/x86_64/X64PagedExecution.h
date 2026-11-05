@@ -4,8 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Execute generated scalar steps, segment loads and returns over explicit
-/// paged RAM.
+/// Execute generated scalar and admitted legacy SSE steps, segment loads and
+/// returns over explicit paged RAM.
 //===----------------------------------------------------------------------===//
 #ifndef NEVERD_ANALYSIS_ARCH_X86_64_X64PAGEDEXECUTION_H
 #define NEVERD_ANALYSIS_ARCH_X86_64_X64PAGEDEXECUTION_H
@@ -35,6 +35,14 @@ enum class X64PagedRepeatProfile : uint8_t {
   PreserveLodsCountHigh,
 };
 
+/// MOVUPS/MOVDQU #AC behavior is processor dependent. The embedding supplies
+/// the target's behavior, independently of the scalar #AC/#PF priority.
+enum class X64PagedSseAlignment : uint8_t {
+  NoCheck,
+  Qword,
+  FullOperand,
+};
+
 struct X64PagedExecutionOptions {
   /// Required when CPL3 alignment checking is active. Absence refuses the
   /// entry before fetch or RAM effects instead of inferring a host CPU policy.
@@ -55,6 +63,9 @@ struct X64PagedExecutionOptions {
   std::optional<X64PagedRepeatProfile> RepeatProfile;
   /// Required even for a zero-count port string. No host ports are accessed.
   std::optional<X64PagedPortIOBinding> PortIO;
+  /// Required only for MOVUPS/MOVDQU memory operands with CPL3/AM/AC active.
+  /// Register forms and supervisor operands do not require this binding.
+  std::optional<X64PagedSseAlignment> SseAlignment;
 };
 
 struct X64PagedExecutionResult {
@@ -73,7 +84,7 @@ struct X64PagedExecutionResult {
 };
 
 /// One confined CPU and owned ordinary RAM, without external writes while a
-/// step executes. Prepared stores are committed only after the complete scalar
+/// step executes. Prepared stores are committed only after the complete
 /// instruction succeeds. IRET/RETF retain ordered descriptor writes, and IRET
 /// also retains NMI unblocking on failure. LSS/LFS/LGS stage both destinations
 /// until their pointer reads, descriptor checks and accessed writes succeed.

@@ -945,9 +945,9 @@ typedef struct neverd_x64_event_v1 {
            : "disabled"},
       {"environment_binding",
        Request->Options.PagedMemory
-           ? "owned paged RAM; scalar instruction and REP-element commit; "
-             "recursive fault "
-             "delivery"
+           ? "owned paged RAM; scalar/legacy SSE instruction and REP-element "
+             "commit; SSE/SSE2 target, explicit unaligned SSE #AC profile "
+             "when active; recursive fault delivery"
            : "explicit full-state callback; separately bounded"},
       {"call_return_policy",
        Request->FollowInternalCalls ? "follow-selected-targets" : "stop"},

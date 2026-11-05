@@ -1569,8 +1569,9 @@ buildInstruction(SpecializationInstruction Instruction,
           !detail::x64InterruptFlagValue(Op, flagsProfile(Options)))
         RequireNative(
             "paged execution has no binding for this native intrinsic");
-      const auto RegisterAllowed = [](NdVar V) {
-        return !V.isReg() || V.Offset <= x86reg::RIP || bool(flagBit(V));
+      const auto RegisterAllowed = [&](NdVar V) {
+        return !V.isReg() || V.Offset <= x86reg::RIP || bool(flagBit(V)) ||
+               (PagedRoles.Sse && stateOffset(V).has_value());
       };
       if (!FarPointer && !SegmentMove && !RegisterAllowed(Op.Output))
         RequireNative("paged scalar execution requires a GPR or flags output");
@@ -1619,7 +1620,7 @@ buildInstruction(SpecializationInstruction Instruction,
         ExtraMSRBlocks += 3;
     }
   const size_t MaxBlocks =
-      Instruction.Ops.size() + 3 + ExtraMSRBlocks +
+      Instruction.Ops.size() + 3 + ExtraMSRBlocks + unsigned(PagedRoles.Sse) +
       (UserInterrupt == detail::X64UserInterrupt::Return ? 2 : 0);
   if (MaxBlocks > Options.MaxOperations ||
       Result.Address >= InvalidVA - MaxBlocks)
@@ -1947,6 +1948,9 @@ buildInstruction(SpecializationInstruction Instruction,
                     Result.UndefinedEffects);
   } else {
     Result.UndefinedEffects = Instruction.UndefinedEffects.Effects;
+    if (PagedRoles.Sse)
+      W.pagedAccess(constant(PagedRoles.SseMemory), 0, X64PagedAccess::BeginSse,
+                    false);
     NdVar NextPC = constant(Instruction.Fallthrough.Address);
     auto Effects = [&](size_t After) {
       for (size_t I = 0; I != Instruction.UndefinedEffects.Effects.size(); ++I)
