@@ -4094,6 +4094,28 @@ checks publication ordering independently of opaque listing generations.
 overview's generation against its executor snapshot. Keep real GUI startup
 comparisons separate from these protocol and controller checks.
 
+## Profile-guided builds
+
+A Clang build can be optimized with an execution profile. Build once with
+`NEVERD_PROFILE_GENERATE=ON`, run the instrumented `neverd`, `neverd-worker`
+and GUI on work like the release's (decompiles, whole-image runs) with
+`LLVM_PROFILE_FILE` naming where each process writes its raw profile, merge
+them, and build again with `NEVERD_PROFILE_USE`:
+
+```bash
+cmake -S . -B build-profile -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DNEVERD_PROFILE_GENERATE=ON
+cmake --build build-profile --target neverd neverd-worker
+LLVM_PROFILE_FILE="$PWD/profiles/%p-%m.profraw" build-profile/bin/neverd decompile <input> -o /dev/null
+llvm-profdata merge -output=neverd.profdata profiles/*.profraw
+cmake -S . -B build-optimized -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DNEVERD_PROFILE_USE="$PWD/neverd.profdata"
+```
+
+Neither option changes output; an optimized build passes the same tests and
+prints the same C. A profile recorded before a source change still optimizes
+the functions it saw. Train on inputs other than those a benchmark measures.
+
 ## Configure a test build
 
 `NeverDInstructionFetchTests` checks warm code reuse, operand-byte changes,

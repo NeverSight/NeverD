@@ -9,6 +9,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# Optional profile-guided optimization, before any target exists.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NeverDProfileGuided.cmake)
+
 # Select compression before LLVM discovers its dependencies. This provider is
 # built for the same target, so LLVM's configure-time probe of an installed
 # archive is unnecessary (our archive is produced during the build).
