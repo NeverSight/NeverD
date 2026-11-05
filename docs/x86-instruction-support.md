@@ -236,11 +236,13 @@ native instruction completes. One instruction owns the 4/6/10-byte image read,
 selector validation, hidden segment installation and descriptor accessed-bit
 effects. Unknown descriptor reads/writes remain separate from the exact image
 read. Segment definitions and scheduling boundaries retain the state change;
-unused integer results do not remove it. NeverC exposes the nine valid long-mode
-`__builtin_ia32_lfs*`, `__builtin_ia32_lgs*` and `__builtin_ia32_lss*` spellings
-without inline assembly. The full LLVM fork supports word/dword results in
-protected code16 with the 32-bit stack/pointer ABI. LDS/LES require 16/32-bit
-code; 64-bit results require long mode. NeverC retains its x64 target.
+unused integer results do not remove it. The fork's Clang and NeverC expose all
+thirteen corresponding `__builtin_ia32_*` spellings without inline assembly.
+Both frontends reject LDS/LES calls in long mode and restrict the 64-bit results
+to long mode. NeverC's Linux i386 frontend emits the ten word/dword forms as IR
+for the full LLVM backend; its embedded i386 machine backend remains pruned.
+The full fork also supports word/dword results in protected code16 with the
+32-bit stack/pointer ABI. This does not add a NeverC code16 frontend.
 
 The selected segment remains ambient CPU state. Callers must maintain compiler
 ABI invariants, including TLS and the stack. The interface does not carry an
@@ -274,6 +276,20 @@ tests and 82,944 protected division regression pairs also pass. Wrong-pointer
 controls fail as intended. The record retains the KVM I/O-completion and
 inactive-event-payload diagnostics; these checks do not establish real/VM86,
 CPL3 alignment, descriptor-write-fault or asynchronous-event support.
+
+The [native far-pointer source qualification](evidence/x86-far-pointer-source-2026-11-05.json)
+adds Clang's thirteen builtins and NeverC's Linux i386 source path. LLVM and
+Clang code16/code32, and NeverC code32 through full LLVM, pass O0/O2 on both
+P/E cores: 319,200 complete state pairs and twenty wrong-pointer negative
+controls. Ten x64 profiles per core cover direct LLVM, NeverC, Clang and each
+frontend's IR through full LLVM, totaling 86,400 state observations (including
+28,800 immediate debugger observations), 360 exact page boundaries and 3,720
+faults. The compiler regressions pass 176 NeverC tests, seven Clang lit files
+and three LLVM lit files. Clang additionally generates IR and native assembly
+for ELF/COFF/Mach-O. These checks retain the ambient-segment ABI boundary and
+do not establish a general NeverD state/source dispatcher or restore NeverC's
+embedded i386 backend. The final LLVM release and production pin remain gated
+on the other documented gaps.
 
 ## Explicit LSS/LFS/LGS continuation
 
