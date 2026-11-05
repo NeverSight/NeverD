@@ -459,6 +459,12 @@ QString fileHeldMessage(const QString &reason) {
 }
 } // namespace
 
+QString Session::heldMessage(const QString &path, const QString &reason) {
+  return ProjectDatabase::isDatabase(path)
+             ? ProjectDatabase::databaseHeldMessage(reason)
+             : fileHeldMessage(reason);
+}
+
 void Session::command(const QString &operation, const QJsonObject &payload,
                       Callback done, Failure failed, QString expectedRevision) {
   // Only edits and their saving make the project dirty while in flight; an
@@ -563,9 +569,7 @@ void Session::open(const QString &path, LoadOptions options) {
         !held.isEmpty()) {
       pendingFile_.clear();
       pendingOptions_ = {};
-      setError(ProjectDatabase::isDatabase(target)
-                   ? ProjectDatabase::databaseHeldMessage(held)
-                   : fileHeldMessage(held));
+      setError(heldMessage(target, held));
       emit openFailed();
       return;
     }

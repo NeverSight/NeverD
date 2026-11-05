@@ -25,6 +25,7 @@
 #include "JumpDialog.h"
 #include "Language.h"
 #include "LineageDialog.h"
+#include "LinkDispatch.h"
 #include "ListingView.h"
 #include "LoadFileDialog.h"
 #include "LocalTypesView.h"
@@ -50,6 +51,7 @@
 #include "TypeLibrariesView.h"
 #include "TypePickerDialog.h"
 #include "UnwindInfoDialog.h"
+#include "WindowActivation.h"
 #include "WindowFrame.h"
 #include "X87CapabilitiesDialog.h"
 #include "mcp/GuiSessionBroker.h"
@@ -364,6 +366,8 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
       auto [path, options] = *std::exchange(debugPromptPending_, std::nullopt);
       openAskingForDebugInfo(path, options);
     }
+    if (loaderPromptPending_ && session_.connected())
+      chooseLoader(*std::exchange(loaderPromptPending_, std::nullopt));
   });
   // A worker that cannot start leaves no question to ask; the workbench
   // shows the error instead of staying hidden.
@@ -375,6 +379,9 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
                   *std::exchange(debugPromptPending_, std::nullopt);
               openNow(path, options);
             }
+            if (level >= ErrorMessageLevel && loaderPromptPending_ &&
+                !session_.connected())
+              openNow(*std::exchange(loaderPromptPending_, std::nullopt), {});
           });
   connectActions();
   focusSequenceTimer_.setSingleShot(true);
@@ -386,12 +393,20 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
           [this] { resetFocusSequence(); });
   // Other programs find this window and open links in it, as in IDA 9.4.
   instances_.setInfo([this] { return instanceInfo(); });
+  const auto comeToFront = [this] {
+    if (isMinimized())
+      setWindowState(windowState() & ~Qt::WindowMinimized);
+    raise();
+    activateWindow();
+  };
+  instances_.setRaiseHandler([comeToFront](const QString &token) {
+    useActivationToken(token);
+    comeToFront();
+  });
   instances_.setLinkHandler(
-      [this](const DeepLink &link, std::function<void(const QString &)> done) {
-        if (isMinimized())
-          setWindowState(windowState() & ~Qt::WindowMinimized);
-        raise();
-        activateWindow();
+      [this, comeToFront](const DeepLink &link,
+                          std::function<void(const QString &)> done) {
+        comeToFront();
         openLink(link, std::move(done));
       });
   if (!instances_.start() &&
@@ -532,7 +547,7 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
         QTimer::singleShot(0, this, [this, path, start] {
           if (start)
             start->startNew(path);
-          else
+          else if (!openElsewhere(path, true))
             chooseLoader(path);
         });
       }
@@ -687,8 +702,10 @@ void MainWindow::fillPlaceholder(QMenu *menu, const QString &name) {
         auto *action =
             new QAction(QStringLiteral("&%1 %2").arg(index++).arg(file), menu);
         action->setProperty("recent", true);
-        connect(action, &QAction::triggered, this,
-                [this, file] { openFile(file); });
+        connect(action, &QAction::triggered, this, [this, file] {
+          if (!openElsewhere(file, false))
+            openFile(file);
+        });
         menu->insertAction(before, action);
       }
     });
@@ -1758,8 +1775,11 @@ QJsonObject MainWindow::instanceInfo() const {
   QJsonObject info{
       {QStringLiteral("version"), QCoreApplication::applicationVersion()},
       {QStringLiteral("loaded"), session_.loaded()}};
-  if (!session_.loaded())
+  if (!session_.loaded()) {
+    if (session_.opening())
+      info.insert(QStringLiteral("opening"), session_.openingFile());
     return info;
+  }
   info.insert(QStringLiteral("input"), session_.filePath());
   info.insert(QStringLiteral("input_name"), session_.fileName());
   info.insert(QStringLiteral("project"), session_.projectPath());
@@ -3060,8 +3080,66 @@ void MainWindow::openAskingForMap(const QString &path, LoadOptions options) {
 
 void MainWindow::openDialog() {
   startupQuickStartPending_ = false;
-  if (const QString path = askForFile(commandWindow()); !path.isEmpty())
+  if (const QString path = askForFile(commandWindow());
+      !path.isEmpty() && !openElsewhere(path, true))
     chooseLoader(path);
+}
+
+void MainWindow::askHowToLoad(const QString &path) {
+  closesWithoutFile_ = true;
+  // What the worker can tell of a file is known once it has started.
+  if (session_.connected())
+    chooseLoader(path);
+  else
+    loaderPromptPending_ = path;
+}
+
+bool MainWindow::openElsewhere(const QString &path, bool askLoader) {
+  if ((!session_.loaded() && !session_.opening()) ||
+      !QSettings().value(settings::OpenInNewInstance, true).toBool() ||
+      !QFileInfo(path).isFile())
+    return false;
+  // A new workbench could not have the program this one holds, which reopens
+  // here, or one another workbench holds, which comes forward instead.  IDA
+  // starts an instance that then asks about the locked database.
+  const QString wanted = QFileInfo(path).canonicalFilePath();
+  for (const QString &own : {session_.projectPath(), session_.openingFile()})
+    if (!own.isEmpty() && QFileInfo(own).canonicalFilePath() == wanted)
+      return false;
+  if (const QString held =
+          ProjectDatabase::lockHeldElsewhere(path, session_.filePath());
+      !held.isEmpty()) {
+    // This window has the focus, and hands it on.
+    auto *focus = QGuiApplication::focusWindow();
+    requestActivationToken(
+        focus ? focus : windowHandle(), this,
+        [this, path, held](const QString &token) {
+          auto *watcher = new QFutureWatcher<bool>(this);
+          connect(watcher, &QFutureWatcher<bool>::finished, this,
+                  [this, watcher, path, held] {
+                    const bool raised = watcher->result();
+                    watcher->deleteLater();
+                    if (raised)
+                      output_->append(
+                          tr("%1 is already open in another NeverD; switching "
+                             "to it.")
+                              .arg(QFileInfo(path).fileName()),
+                          0);
+                    else
+                      output_->append(Session::heldMessage(path, held), 2);
+                  });
+          // Its own server answers on this thread, as a link's does.
+          watcher->setFuture(QtConcurrent::run(
+              [path, token] { return raiseWorkbenchWith(path, token); }));
+        });
+    return true;
+  }
+  QStringList arguments;
+  if (askLoader)
+    arguments << QStringLiteral("--ask-loader");
+  if (const QString error = startWorkbench(arguments << path); !error.isEmpty())
+    output_->append(tr("Cannot start a new instance: %1").arg(error), 2);
+  return true;
 }
 
 QString MainWindow::askForFile(QWidget *parent) const {
@@ -3075,6 +3153,7 @@ QString MainWindow::askForFile(QWidget *parent) const {
 
 void MainWindow::chooseLoader(const QString &path) {
   startupQuickStartPending_ = false;
+  const bool closes = std::exchange(closesWithoutFile_, false);
   // A project opens as it was saved, and an engine that cannot list its
   // loaders opens files as before.
   if (!session_.identifiesFiles() || ProjectDatabase::hasState(path)) {
@@ -3084,7 +3163,7 @@ void MainWindow::chooseLoader(const QString &path) {
   const QPointer<QWidget> owner = isVisible() ? commandWindow() : nullptr;
   session_.read(
       QStringLiteral("identify"), {{"path", path}}, this,
-      [this, path, owner](const QJsonObject &payload) {
+      [this, path, owner, closes](const QJsonObject &payload) {
         // Before the workbench shows, the dialog greets alone, as IDA's
         // does for a file named at startup.
         LoadFileDialog dialog(path, payload.value("rows").toArray(),
@@ -3096,6 +3175,12 @@ void MainWindow::chooseLoader(const QString &path) {
         dialog.setBinaryProcessor(
             QSettings().value(BinaryProcessorKey).toString());
         if (dialog.exec() != QDialog::Accepted || dialog.row() < 0) {
+          // Started for this file alone, the workbench has no other use, as
+          // IDA's new instance goes when its load dialog is cancelled.
+          if (closes) {
+            emit shutdownAccepted();
+            return;
+          }
           // Without a file to open, the workbench takes its place.
           showWorkbench();
           return;
@@ -4221,6 +4306,15 @@ void MainWindow::showOptions() {
   symbolic->setObjectName(QStringLiteral("optionsSymbolicEvery"));
   symbolic->setChecked(SourceDefaults::instance().symbolic());
   form->addRow(symbolic);
+  auto *newInstance =
+      new QCheckBox(tr("Open other files in a new instance"), &dialog);
+  newInstance->setObjectName(QStringLiteral("optionsOpenInNewInstance"));
+  newInstance->setToolTip(tr("With a file open, File > Open, a recent file and "
+                             "a dropped file start a new instance instead of "
+                             "replacing it"));
+  newInstance->setChecked(
+      QSettings().value(settings::OpenInNewInstance, true).toBool());
+  form->addRow(newInstance);
   auto *buttons = new QDialogButtonBox(
       QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
   form->addRow(buttons);
@@ -4234,6 +4328,7 @@ void MainWindow::showOptions() {
   Theme::instance().setMode(theme->currentIndex() == 0 ? Theme::Mode::Dark
                                                        : Theme::Mode::Light);
   SourceDefaults::instance().setSymbolic(symbolic->isChecked());
+  QSettings().setValue(settings::OpenInNewInstance, newInstance->isChecked());
 }
 
 void MainWindow::showStringOptions() {

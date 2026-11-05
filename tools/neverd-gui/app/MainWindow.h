@@ -77,6 +77,9 @@ public:
   void setAsksForDebugInfo(bool asks);
   /// Use a disposable layout file (tests and benchmarks).
   void setLayoutPath(const QString &path) { layoutPath_ = path; }
+  /// Ask how to load \p path, as File > Open does, once the worker can say.
+  /// A workbench started for this closes when the user declines.
+  void askHowToLoad(const QString &path);
   /// Start another workbench with \p arguments, as a process of its own: this
   /// program with a worker from the same path, and on a disposable layout if
   /// this one is.  Returns why it could not start, or nothing.
@@ -284,6 +287,11 @@ private:
   /// Show the workbench and start loading \p path.
   void openNow(const QString &path, const LoadOptions &options);
   void chooseLoader(const QString &path);
+  /// With a program open, a file the user picks goes to a workbench of its
+  /// own, as IDA's File > Open, recent files and drops do: a new one, asking
+  /// how to load it if \p askLoader, or the one that already has it.  Returns
+  /// false when the file belongs here.
+  bool openElsewhere(const QString &path, bool askLoader);
   /// File, Load file, Reload the input file: read the file again, asking
   /// again how to read a binary file.
   void reloadInput();
@@ -410,6 +418,9 @@ private:
   /// A file to open once the worker has started, asking for its debug
   /// information then.
   std::optional<std::pair<QString, LoadOptions>> debugPromptPending_;
+  std::optional<QString> loaderPromptPending_;
+  /// This workbench was started to load one file, so declining it closes it.
+  bool closesWithoutFile_ = false;
   bool asksForDebugInfo_ = true;
   GraphOverview *overview_ = nullptr;
   ExtensionsView *extensions_ = nullptr;

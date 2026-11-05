@@ -2495,6 +2495,18 @@ Double-click to go to the declaration.</translation>
         <translation>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</translation>
     </message>
     <message>
+        <source>Open other files in a new instance</source>
+        <translation>Open other files in a new instance</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 is already open in another NeverD; switching to it.</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>Unsaved changes</translation>
     </message>

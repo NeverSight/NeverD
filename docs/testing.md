@@ -5667,7 +5667,13 @@ free file the user then decides against.
 `savingADatabaseChangedSinceItOpenedAsksFirst` lets a second worker pack into an
 opened database and answers the question each way, from Save and from a quit;
 `aDatabaseThatCannotBeSavedStopsTheQuit` keeps the workbench and its edit when
-the write fails.
+the write fails. `aFilePickedWithAProgramOpenGoesToAWorkbenchOfItsOwn` follows a
+drop and recent files outside Windows: the command line a stand-in program
+receives, the edited program staying as it is, a held file bringing its workbench
+forward over the real local socket, this workbench's own file staying here, and
+the setting turning all of it off.
+`aWorkbenchStartedToLoadAFileClosesWhenThatIsDeclined` answers `--ask-loader`'s
+question each way.
 
 The GUI unit cases `deepLinksTakeIdasFormAndRefuseWhatTheyCannotName` and
 `aLinkGoesToTheWorkbenchThatHasItsProgram` check link syntax, hash prefixes and

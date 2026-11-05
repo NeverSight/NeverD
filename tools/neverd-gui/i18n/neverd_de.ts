@@ -2495,6 +2495,18 @@ Doppelklicken, um zur Deklaration zu springen.</translation>
         <translation>%1 wurde geändert, nachdem dieser Arbeitsbereich es geöffnet hat, vielleicht in einem anderen NeverD. Den aktuellen Inhalt durch das Projekt dieses Arbeitsbereichs ersetzen?</translation>
     </message>
     <message>
+        <source>Open other files in a new instance</source>
+        <translation>Weitere Dateien in einer neuen Instanz öffnen</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>Bei geöffneter Datei starten Datei &gt; Öffnen, eine zuletzt verwendete und eine abgelegte Datei eine neue Instanz, statt sie zu ersetzen</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 ist bereits in einem anderen NeverD geöffnet; es wird dorthin gewechselt.</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>Ungespeicherte Änderungen</translation>
     </message>

@@ -32,6 +32,9 @@ NEVERD_SETTINGS_KEY(SymbolicSimplification, "code/symbolicSimplification")
 // Whether a workbench keeps other programs from finding it and opening links
 // in it (InstanceServer), as IDA's DisableIpcServer does.
 NEVERD_SETTINGS_KEY(InstancesDisabled, "instances/disabled")
+// Whether a file opened while another is open starts a new workbench, as IDA's
+// OPEN_IDB_IN_NEW_WINDOW does; Options > General sets it.
+NEVERD_SETTINGS_KEY(OpenInNewInstance, "instances/openInNewInstance")
 
 NEVERD_SETTINGS_KEY(PatchAssemblerDialect, "patch/assemblerDialect")
 NEVERD_SETTINGS_KEY(PatchFillNops, "patch/fillNops")

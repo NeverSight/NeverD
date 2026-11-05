@@ -23,6 +23,12 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTextStream>
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace neverd::gui {
 namespace {
@@ -118,6 +124,39 @@ Dispatched dispatchLink(const QString &text, const DeepLink &link) {
     result.message = reply->value(QStringLiteral("message")).toString();
   }
   return result;
+}
+
+bool raiseWorkbenchWith(const QString &project, const QString &token) {
+  const QString wanted = QFileInfo(project).canonicalFilePath();
+  const auto holds = [&wanted](const QJsonObject &info) {
+    for (const char *key : {"project", "opening"})
+      if (const QString path = info.value(QLatin1String(key)).toString();
+          !path.isEmpty() && QFileInfo(path).canonicalFilePath() == wanted)
+        return true;
+    return false;
+  };
+  QStringList endpoints;
+  for (const auto &instance : InstanceServer::discover())
+    endpoints << instance.server;
+  const auto replies = InstanceServer::requestMany(
+      endpoints, {{QStringLiteral("cmd"), "get_info"}},
+      ::neverd::limits::gui::kInstanceServerRequestTimeoutMs,
+      [&holds](int, const QJsonObject &info) { return holds(info); });
+  for (int index = 0; index < replies.size(); ++index)
+    if (replies[index] && holds(*replies[index])) {
+#ifdef Q_OS_WIN
+      // Only the foreground process may let another take the foreground.
+      AllowSetForegroundWindow(
+          DWORD(replies[index]->value(QStringLiteral("pid")).toInteger()));
+#endif
+      QJsonObject raise{{QStringLiteral("cmd"), "raise"}};
+      if (!token.isEmpty())
+        raise.insert(QStringLiteral("token"), token);
+      const auto reply = InstanceServer::request(endpoints[index], raise);
+      return reply && reply->value(QStringLiteral("status")).toString() ==
+                          QLatin1String("ok");
+    }
+  return false;
 }
 
 QString describeInstances() {

@@ -2519,6 +2519,18 @@ Double-click to go to the declaration.</source>
         <translation>تغيّر %1 بعد أن فتحته مساحة العمل هذه، ربما في NeverD آخر. هل تريد استبدال محتواه الحالي بمشروع مساحة العمل هذه؟</translation>
     </message>
     <message>
+        <source>Open other files in a new instance</source>
+        <translation>فتح الملفات الأخرى في مثيل جديد</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>عند فتح ملف، يبدأ ملف &gt; فتح والملف الأخير والملف المُفلت مثيلًا جديدًا بدلًا من استبداله</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 مفتوح بالفعل في NeverD آخر؛ جارٍ الانتقال إليه.</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>تغييرات غير محفوظة</translation>
     </message>

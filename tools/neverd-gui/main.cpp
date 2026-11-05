@@ -95,6 +95,10 @@ void configureOptions(QCommandLineParser &parser) {
   parser.addOption({QStringLiteral("fresh-layout"),
                     QStringLiteral("Use a temporary workbench layout")});
   parser.addOption(
+      {QStringLiteral("ask-loader"),
+       QStringLiteral("Ask how to load the binary first, as File > Open does, "
+                      "and exit if that is declined")});
+  parser.addOption(
       {QStringLiteral("command"),
        QStringLiteral("Run an output-window command line after the binary "
                       "opens, such as \"g main\" or \"graph\"; repeatable"),
@@ -414,7 +418,9 @@ int main(int argc, char **argv) {
     window.openLinkAfterOpen(*link);
   LinkOpener linkOpener(window, session);
   app.installEventFilter(&linkOpener);
-  if (openingFile)
+  if (openingFile && parser.isSet(QStringLiteral("ask-loader")))
+    window.askHowToLoad(QFileInfo(files.first()).absoluteFilePath());
+  else if (openingFile)
     window.openFile(QFileInfo(files.first()).absoluteFilePath());
   else if (greet)
     window.scheduleQuickStart();

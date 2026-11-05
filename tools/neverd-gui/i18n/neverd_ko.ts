@@ -2489,6 +2489,18 @@ Double-click to go to the declaration.</source>
         <translation>%1은(는) 이 작업 공간에서 연 뒤에 변경되었습니다. 다른 NeverD에서 변경되었을 수 있습니다. 현재 내용을 이 작업 공간의 프로젝트로 바꾸시겠습니까?</translation>
     </message>
     <message>
+        <source>Open other files in a new instance</source>
+        <translation>다른 파일을 새 인스턴스에서 열기</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>파일이 열려 있으면 파일 &gt; 열기, 최근 파일, 끌어다 놓은 파일은 바꾸지 않고 새 인스턴스를 시작합니다</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1은(는) 이미 다른 NeverD에서 열려 있습니다. 해당 창으로 전환합니다.</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>저장되지 않은 변경 사항</translation>
     </message>

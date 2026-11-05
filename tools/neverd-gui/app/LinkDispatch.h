@@ -48,6 +48,11 @@ struct Dispatched {
 /// takes it.
 Dispatched dispatchLink(const QString &text, const DeepLink &link);
 
+/// Brings to the front the running workbench that has \p project open, or is
+/// opening it, handing it \p token (WindowActivation.h), and returns whether
+/// one came.  It blocks, as dispatchLink does.
+bool raiseWorkbenchWith(const QString &project, const QString &token = {});
+
 /// The running workbenches, a line each: the process, its program and
 /// whether its analysis is done.
 QString describeInstances();

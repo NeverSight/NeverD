@@ -257,6 +257,9 @@ public:
   /// Commit staged edits and pack the project, its binary included, into
   /// the database \p path: one file to keep or send.
   void packDatabase(const QString &path);
+  /// What to say when \p reason, the lock's own error, keeps \p path from
+  /// opening.
+  static QString heldMessage(const QString &path, const QString &reason);
   /// Answers databaseConflict: write over what \p path holds now, or leave it
   /// as it is and give up whatever the save was for.
   void resolveDatabaseConflict(const QString &path, bool replace);

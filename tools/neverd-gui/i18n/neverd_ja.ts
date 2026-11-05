@@ -2489,6 +2489,18 @@ Double-click to go to the declaration.</source>
         <translation>%1 はこのワークベンチで開いた後に、別の NeverD などで変更されました。現在の内容をこのワークベンチのプロジェクトで置き換えますか？</translation>
     </message>
     <message>
+        <source>Open other files in a new instance</source>
+        <translation>他のファイルを新しいインスタンスで開く</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>ファイルを開いているとき、ファイル &gt; 開く、最近使ったファイル、ドロップしたファイルは、置き換えずに新しいインスタンスを起動します</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 は既に別の NeverD で開かれています。そちらに切り替えます。</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>未保存の変更</translation>
     </message>

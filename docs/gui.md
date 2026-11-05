@@ -47,10 +47,9 @@ worker.
 
 Open a binary or a project with **File → Open**, or drag one file from
 the system file manager onto the quick-start dialog, workbench or a floating
-view. File drops use the same open workflow, including the save/discard/cancel
-prompt for unsaved changes. Drop one existing file at a time; directories and
-web URLs are not opened. Opening by drag and drop leaves the source file in
-place.
+view. File drops use the same open workflow. Drop one existing file at a time;
+directories and web URLs are not opened. Opening by drag and drop leaves the
+source file in place.
 
 **File → New instance** starts another workbench, a process of its own with its
 own worker from the same path, as IDA's command does. It starts as a start
@@ -64,6 +63,17 @@ such a file before it asks to save or discard them, and keeps its program. A
 binary and a database packed from it are separate copies with locks of their
 own, so two workbenches can have one each; **File → Save** asks before it replaces
 what another wrote into the database.
+
+With a program open, **File → Open**, a recent file in the File menu and a dropped
+file go to a workbench of their own, as IDA's do under its default
+`OPEN_IDB_IN_NEW_WINDOW`, and this one stays as it is, unsaved edits included. For
+**File → Open** and a drop the new workbench asks how to load the file, and closes
+if that is declined (`neverd-gui --ask-loader FILE`). A file another workbench has
+open brings that workbench to the front instead of starting one that could not
+have it, and the program this workbench has reopens here. **File → Quick start**
+over the workbench replaces the program here, asking first about unsaved changes,
+as IDA's does. **Open other files in a new instance** in **Options → General** turns
+this off, and these then replace the program here too.
 
 PE browsing tolerates complete legacy relocation layouts and reports unusable
 entry/import metadata in **Output**. An unknown entry opens at a mapped code
@@ -741,8 +751,10 @@ live in the user's runtime directory, which only the user can enter, and
 refuse another user's connections, where IDA's sockets lie in `/tmp`; the
 `instances/disabled` setting keeps a workbench from serving. A server
 answers one JSON object a line: `ping`; `get_info`, the program's path, name
-and SHA-256, its analysis state and the cursor; `open_link` with `uri`; and
-`is_analysis_complete`. Running instances share places this way, not edits,
+and SHA-256, its analysis state and the cursor; `open_link` with `uri`;
+`is_analysis_complete`; and `raise`, which brings the workbench to the front, with
+the `token` that lets it take the focus on Wayland.
+Running instances share places this way, not edits,
 in IDA as in NeverD: a team shares a project's edits through git (see
 *Working in a team through git*).
 

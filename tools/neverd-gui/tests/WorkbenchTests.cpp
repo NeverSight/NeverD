@@ -126,6 +126,7 @@
 #include <QTreeWidget>
 #include <QUrl>
 #include <QWindow>
+#include <QtConcurrent/QtConcurrentRun>
 #include <cmath>
 #include <functional>
 #include <kddockwidgets/LayoutSaver.h>
@@ -442,6 +443,45 @@ private:
   QTimer timer_;
   int accepted_ = 0;
 };
+
+#ifndef Q_OS_WIN
+/// A stand-in for this program, for MainWindow::setWorkbenchProgram, that
+/// records the command line it receives.
+class WorkbenchStandIn {
+public:
+  /// Write it before starting a worker, which could inherit it open for
+  /// writing and keep it from running.
+  explicit WorkbenchStandIn(const QTemporaryDir &directory)
+      : record_(directory.filePath(QStringLiteral("arguments"))),
+        program_(directory.filePath(QStringLiteral("workbench"))) {
+    QFile script(program_);
+    if (script.open(QIODevice::WriteOnly))
+      script.write(QStringLiteral("#!/bin/sh\n"
+                                  "printf '%s\\n' \"$@\" > \"%1.part\"\n"
+                                  "mv \"%1.part\" \"%1\"\n")
+                       .arg(record_)
+                       .toUtf8());
+    script.close();
+    script.setPermissions(script.permissions() | QFile::ExeOwner);
+  }
+  QString program() const { return program_; }
+  /// The next command line, none when none comes in \p timeoutMs.
+  QStringList received(int timeoutMs = OpenTimeoutMs) const {
+    if (!QTest::qWaitFor([this] { return QFile::exists(record_); }, timeoutMs))
+      return {};
+    QFile arguments(record_);
+    if (!arguments.open(QIODevice::ReadOnly))
+      return {};
+    const QStringList lines = QString::fromUtf8(arguments.readAll())
+                                  .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    arguments.remove();
+    return lines;
+  }
+
+private:
+  QString record_, program_;
+};
+#endif
 
 bool dropFile(QWidget *target, const QString &path) {
   QMimeData mime;
@@ -10578,6 +10618,9 @@ private slots:
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
                        settingsDirectory_.path());
+    // A test binary is no workbench to start again: what replaces a program
+    // does so here, and the test of the new instance turns this back on.
+    QSettings().setValue(settings::OpenInNewInstance, false);
     configureDocking();
     WindowFrame::frameDialogs(*qApp);
     if (privateWayland()) {
@@ -11562,20 +11605,7 @@ private slots:
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
 #ifndef Q_OS_WIN
-    // A stand-in for this program records the command line it receives. It is
-    // written before the worker starts, which could inherit it open for
-    // writing and keep it from running.
-    const QString record = directory.filePath(QStringLiteral("arguments"));
-    const QString standIn = directory.filePath(QStringLiteral("workbench"));
-    QFile script(standIn);
-    QVERIFY(script.open(QIODevice::WriteOnly));
-    script.write(QStringLiteral("#!/bin/sh\n"
-                                "printf '%s\\n' \"$@\" > \"%1.part\"\n"
-                                "mv \"%1.part\" \"%1\"\n")
-                     .arg(record)
-                     .toUtf8());
-    script.close();
-    QVERIFY(script.setPermissions(script.permissions() | QFile::ExeOwner));
+    const WorkbenchStandIn standIn(directory);
 #endif
     Workbench bench;
     auto *action = bench.action(ActionId::FileNewInstance);
@@ -11598,33 +11628,20 @@ private slots:
     QTRY_VERIFY(log->toPlainText().contains(
         QStringLiteral("Cannot start a new instance: ")));
 #ifndef Q_OS_WIN
-    bench.window->setWorkbenchProgram(standIn);
-    const auto received = [&record]() -> QStringList {
-      if (!QTest::qWaitFor([&record] { return QFile::exists(record); },
-                           OpenTimeoutMs))
-        return {};
-      QFile arguments(record);
-      if (!arguments.open(QIODevice::ReadOnly))
-        return {};
-      const QStringList lines =
-          QString::fromUtf8(arguments.readAll())
-              .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-      arguments.remove();
-      return lines;
-    };
+    bench.window->setWorkbenchProgram(standIn.program());
     // The new workbench has this one's worker and kind of layout, and not its
     // program: it starts as a start without a file does.
     const QStringList inherited{QStringLiteral("--worker"),
                                 bench.session.workerPath(),
                                 QStringLiteral("--fresh-layout")};
     action->trigger();
-    QCOMPARE(received(), inherited);
+    QCOMPARE(standIn.received(), inherited);
     // A workbench on the user's own layout starts another on it.
     const QString disposable =
         bench.layout.filePath(QStringLiteral("layout.json"));
     bench.window->setLayoutPath({});
     action->trigger();
-    const QStringList arguments = received();
+    const QStringList arguments = standIn.received();
     bench.window->setLayoutPath(disposable);
     QCOMPARE(arguments, inherited.first(2));
     // A link to a recent program nobody has open starts a workbench for it,
@@ -11645,8 +11662,164 @@ private slots:
                     hexAddress(Base + 0x42));
     QFileOpenEvent event(link);
     QCoreApplication::sendEvent(qApp, &event);
-    QCOMPARE(received(), inherited + QStringList({linked, link.toString()}));
+    QCOMPARE(standIn.received(),
+             inherited + QStringList({linked, link.toString()}));
 #endif
+  }
+
+  void aFilePickedWithAProgramOpenGoesToAWorkbenchOfItsOwn() {
+#ifdef Q_OS_WIN
+    QSKIP("The stand-in for the program is a shell script.");
+#else
+    QSettings().setValue(settings::OpenInNewInstance, true);
+    const auto off = qScopeGuard(
+        [] { QSettings().setValue(settings::OpenInNewInstance, false); });
+    const auto originalRecent = QSettings().value(settings::RecentFiles);
+    const auto restoreRecent = qScopeGuard([&] {
+      if (originalRecent.isValid())
+        QSettings().setValue(settings::RecentFiles, originalRecent);
+      else
+        QSettings().remove(settings::RecentFiles);
+    });
+    QTemporaryDir directory;
+    const WorkbenchStandIn standIn(directory);
+    const QString first = writeFixture(directory, QStringLiteral("first.bin"));
+    const QString second =
+        writeFixture(directory, QStringLiteral("second.bin"));
+    const QString held = writeFixture(directory, QStringLiteral("held.bin"));
+    Session holder(QString::fromLocal8Bit(TEST_WORKER));
+    holder.open(held);
+    QTRY_VERIFY_WITH_TIMEOUT(holder.loaded(), OpenTimeoutMs);
+
+    Workbench bench;
+    bench.window->setWorkbenchProgram(standIn.program());
+    LoadDialogAcceptor loadDialogs;
+    const QStringList inherited{QStringLiteral("--worker"),
+                                bench.session.workerPath(),
+                                QStringLiteral("--fresh-layout")};
+    // With nothing open, a file opens here.
+    QVERIFY(dropFile(bench.window.get(), first));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    QVERIFY(standIn.received(0).isEmpty());
+    bench.session.setComment(Base, QStringLiteral("staged here"));
+    QTRY_VERIFY(bench.session.dirty());
+
+    const auto pickRecent = [&](const QString &path) {
+      QSettings().setValue(settings::RecentFiles,
+                           QStringList{first, second, held});
+      auto *menu = bench.window->findChild<QMenu *>(QStringLiteral("menuFile"));
+      emit menu->aboutToShow();
+      for (auto *action : menu->actions())
+        if (action->property("recent").toBool() &&
+            action->text().endsWith(path)) {
+          action->trigger();
+          return true;
+        }
+      return false;
+    };
+    auto *log = bench.window->findChild<OutputWindow *>()
+                    ->findChild<QPlainTextEdit *>();
+    QVERIFY(log);
+    QSignalSpy asked(&bench.session, &Session::transitionRequested);
+    // Another file goes to a new workbench, which asks how to load what a
+    // drop names, and this one stays as it is, unsaved edits and all.
+    QVERIFY(dropFile(bench.window.get(), second));
+    QCOMPARE(standIn.received(),
+             inherited + QStringList({QStringLiteral("--ask-loader"), second}));
+    QVERIFY(pickRecent(second));
+    QCOMPARE(standIn.received(), inherited + QStringList({second}));
+    QCOMPARE(asked.size(), 0);
+    QCOMPARE(bench.session.filePath(), first);
+    QVERIFY(bench.session.dirty());
+
+    // A file another process holds starts nothing that could not have it.
+    QVERIFY(pickRecent(held));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        log->toPlainText().contains(QStringLiteral("may already be open")),
+        OpenTimeoutMs);
+    QVERIFY(standIn.received(0).isEmpty());
+    // A workbench that says it has the file comes to the front.
+    int raises = 0;
+    QString raisedWith = QStringLiteral("unset");
+    InstanceServer responder;
+    responder.setInfo(
+        [&held] { return QJsonObject{{"loaded", true}, {"project", held}}; });
+    responder.setRaiseHandler([&](const QString &token) {
+      ++raises;
+      raisedWith = token;
+    });
+    QVERIFY(responder.start());
+    QVERIFY(pickRecent(held));
+    QTRY_COMPARE_WITH_TIMEOUT(raises, 1, OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        log->toPlainText().contains(QStringLiteral("switching to it")),
+        OpenTimeoutMs);
+    QVERIFY(standIn.received(0).isEmpty());
+    QCOMPARE(bench.session.filePath(), first);
+    // The token that lets it take the focus reaches it.
+    auto handed = QtConcurrent::run([&held] {
+      return raiseWorkbenchWith(held, QStringLiteral("handed-token"));
+    });
+    QTRY_VERIFY_WITH_TIMEOUT(handed.isFinished(), OpenTimeoutMs);
+    QVERIFY(handed.result());
+    QCOMPARE(raisedWith, QStringLiteral("handed-token"));
+
+    // The file this workbench has stays here, which asks about the edits.
+    QTimer answering;
+    auto answer = QMessageBox::Cancel;
+    connect(&answering, &QTimer::timeout, &answering, [&answer] {
+      if (auto *box =
+              qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+        box->button(answer)->click();
+    });
+    answering.start(5);
+    QVERIFY(pickRecent(first));
+    QTRY_COMPARE_WITH_TIMEOUT(asked.size(), 1, OpenTimeoutMs);
+    QVERIFY(standIn.received(0).isEmpty());
+
+    // Turned off, another file replaces the program here, as it asks first.
+    QSettings().setValue(settings::OpenInNewInstance, false);
+    answer = QMessageBox::Discard;
+    QSignalSpy opened(&bench.session, &Session::opened);
+    QVERIFY(pickRecent(second));
+    QTRY_COMPARE_WITH_TIMEOUT(opened.size(), 1, OpenTimeoutMs);
+    QCOMPARE(asked.size(), 2);
+    QCOMPARE(bench.session.filePath(), second);
+    QVERIFY(standIn.received(0).isEmpty());
+#endif
+  }
+
+  void aWorkbenchStartedToLoadAFileClosesWhenThatIsDeclined() {
+    QTemporaryDir directory;
+    const QString file = writeFixture(directory, QStringLiteral("asked.bin"));
+    {
+      Workbench bench(QString::fromLocal8Bit(TEST_WORKER), false);
+      QSignalSpy closed(bench.window.get(), &MainWindow::shutdownAccepted);
+      int declined = 0;
+      QTimer declining;
+      connect(&declining, &QTimer::timeout, &declining, [&declined] {
+        if (auto *dialog = qobject_cast<LoadFileDialog *>(
+                QApplication::activeModalWidget())) {
+          ++declined;
+          dialog->reject();
+        }
+      });
+      declining.start(10);
+      bench.window->askHowToLoad(file);
+      QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 1, OpenTimeoutMs);
+      QCOMPARE(declined, 1);
+      QVERIFY(!bench.window->isVisible());
+      QVERIFY(!bench.session.loaded());
+    }
+    // Accepted, it loads the file and shows like any other.
+    Workbench bench(QString::fromLocal8Bit(TEST_WORKER), false);
+    LoadDialogAcceptor loadDialogs;
+    QSignalSpy closed(bench.window.get(), &MainWindow::shutdownAccepted);
+    bench.window->askHowToLoad(file);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    QVERIFY(loadDialogs.accepted() > 0);
+    QTRY_VERIFY(bench.window->isVisible());
+    QCOMPARE(closed.size(), 0);
   }
 
   void commandHistoryKeepsAnotherWorkbenchsLines() {

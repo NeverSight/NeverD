@@ -2489,6 +2489,18 @@ Double-click to go to the declaration.</source>
         <translation>%1 在此工作區開啟後已被變更，可能來自另一個 NeverD。要以此工作區的專案取代其目前內容嗎？</translation>
     </message>
     <message>
+        <source>Open other files in a new instance</source>
+        <translation>在新的執行個體中開啟其他檔案</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>已開啟檔案時，「檔案 &gt; 開啟」、最近的檔案和拖入的檔案會啟動新的執行個體，而不是取代目前檔案</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 已在另一個 NeverD 中開啟，正在切換過去。</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>未儲存的變更</translation>
     </message>

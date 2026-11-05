@@ -2501,6 +2501,18 @@ Double-click to go to the declaration.</source>
         <translation>%1 изменился после открытия в этой рабочей области, возможно, в другом экземпляре NeverD. Заменить его текущее содержимое проектом этой рабочей области?</translation>
     </message>
     <message>
+        <source>Open other files in a new instance</source>
+        <translation>Открывать другие файлы в новом экземпляре</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>Если файл открыт, Файл &gt; Открыть, недавний и перетащенный файл запускают новый экземпляр, а не заменяют его</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 уже открыт в другом экземпляре NeverD; выполняется переключение на него.</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>Несохранённые изменения</translation>
     </message>

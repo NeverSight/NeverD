@@ -2495,6 +2495,18 @@ Double-cliquez pour aller à la déclaration.</translation>
         <translation>%1 a changé après son ouverture dans cet espace de travail, peut-être dans un autre NeverD. Remplacer son contenu actuel par le projet de cet espace de travail ?</translation>
     </message>
     <message>
+        <source>Open other files in a new instance</source>
+        <translation>Ouvrir les autres fichiers dans une nouvelle instance</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>Lorsqu&apos;un fichier est ouvert, Fichier &gt; Ouvrir, un fichier récent et un fichier déposé démarrent une nouvelle instance au lieu de le remplacer</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 est déjà ouvert dans un autre NeverD ; basculement vers celui-ci.</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>Modifications non enregistrées</translation>
     </message>

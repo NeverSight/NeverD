@@ -2495,6 +2495,18 @@ Haga doble clic para ir a la declaración.</translation>
         <translation>%1 cambió después de que esta área de trabajo lo abriera, quizá en otro NeverD. ¿Reemplazar su contenido actual por el proyecto de esta área de trabajo?</translation>
     </message>
     <message>
+        <source>Open other files in a new instance</source>
+        <translation>Abrir otros archivos en una nueva instancia</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>Con un archivo abierto, Archivo &gt; Abrir, un archivo reciente y un archivo soltado inician una nueva instancia en lugar de reemplazarlo</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 ya está abierto en otro NeverD; cambiando a él.</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>Cambios sin guardar</translation>
     </message>
