@@ -6,11 +6,15 @@ on:
       - dev
     paths-ignore:
       - '**/*.md'
+      - '.agents/**'
+      - 'tools/neverd-gui/**'
   pull_request:
     # closed cancels this PR's run through its concurrency group; no job runs.
     types: [opened, synchronize, reopened, closed]
     paths-ignore:
       - '**/*.md'
+      - '.agents/**'
+      - 'tools/neverd-gui/**'
   workflow_dispatch:
     inputs:
       use_prebuilt_llvm:
@@ -75,8 +79,107 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # These checks read repository content and exercise host-independent scripts,
+  # so one Linux run settles them for all three hosts before any native job
+  # spends runner time. Documentation and EVM audit checks belong to the
+  # llvm-style and evm-upstream-audit workflows.
+  repository-checks:
+    name: Repository and script checks
+    if: ${{ github.event.action != 'closed' && !inputs.native_cpu_only && !inputs.native_arm64_only && !inputs.windows_eh_only }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # check_source_provenance.py reads the most recent 16 commits.
+          fetch-depth: 32
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install script test tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang cmake ninja-build
+
+      - name: Install DIFF source-truth test dependency
+        shell: bash
+        run: '"$PYTHON" -m pip install --require-hashes -r scripts/requirements-binary-diff-bench.txt'
+        env:
+          PYTHON: python3
+
+      - name: Run repository and script checks
+        shell: bash
+        run: |
+          "$PYTHON" -m unittest \
+            scripts.tests.test_ci_configuration \
+            scripts.tests.test_audit_ci_test_inventory \
+            scripts.tests.test_audit_ci_test_results \
+            scripts.tests.test_ci_test_reuse \
+            scripts.tests.test_run_lift_qualification \
+            scripts.tests.test_run_gtest_qualification \
+            scripts.tests.test_prepare_source_dialect_corpus \
+            scripts.tests.test_run_native_cpu_ci \
+            scripts.tests.test_probe_native_host \
+            scripts.tests.test_run_native_cpu_methods \
+            scripts.tests.test_first_fatal_snapshots \
+            scripts.tests.test_neverd_bench_harness \
+            scripts.tests.test_benchmark_cpu \
+            scripts.tests.test_benchmark_binary_diff \
+            scripts.tests.test_benchmark_binary_diff_bindiff \
+            scripts.tests.test_benchmark_binary_diff_binexport \
+            scripts.tests.test_benchmark_binary_diff_corpus \
+            scripts.tests.test_benchmark_binary_diff_external \
+            scripts.tests.test_benchmark_binary_diff_qualification \
+            scripts.tests.test_radare2_cli_compare \
+            scripts.tests.test_ida_source_order \
+            scripts.tests.test_eh_signature_generation \
+            scripts.tests.test_msvc_signature_generation \
+            scripts.tests.test_generate_microsoft_windows_types \
+            scripts.tests.test_microsoft_rdbss_types \
+            scripts.tests.test_microsoft_ucrt_types \
+            scripts.tests.test_check_microsoft_provider_abis \
+            scripts.tests.test_signature_supplement \
+            scripts.tests.test_signature_metadata \
+            scripts.tests.test_vtable_context \
+            scripts.tests.test_runtime_pointer_context \
+            scripts.tests.test_generate_rich_comp_ids \
+            scripts.tests.test_generate_objc_declarations \
+            scripts.tests.test_generate_objc_framework_declarations \
+            scripts.tests.test_generate_objc_receiver_declarations \
+            scripts.tests.test_generate_objc_format_declarations \
+            scripts.tests.test_generate_objc_predicate_declarations \
+            scripts.tests.test_generate_darwin_format_declarations \
+            scripts.tests.test_generate_darwin_block_declarations \
+            scripts.tests.test_generate_darwin_declarations \
+            scripts.tests.test_generate_darwin_data_declarations \
+            scripts.tests.test_generate_swift_runtime_declarations \
+            scripts.tests.test_generate_swift_metadata_declarations \
+            -v
+          "$PYTHON" -m unittest discover \
+            -s pluginsdk/python/tests -v
+          "$PYTHON" -m unittest \
+            scripts.tests.test_check_capabilities \
+            scripts.tests.test_check_gui_icons \
+            scripts.tests.test_check_python_plugin_sdk \
+            scripts.tests.test_check_source_provenance -v
+          "$PYTHON" scripts/check_capabilities.py
+          "$PYTHON" scripts/check_python_plugin_sdk.py
+          "$PYTHON" scripts/check_source_provenance.py --history-commits 16
+        env:
+          CC: clang
+          CXX: clang++
+          PYTHON: python3
+          PYTHONPATH: pluginsdk/python
+
   build-and-test:
     name: Build and test (${{ matrix.name }})
+    needs: repository-checks
     if: ${{ github.event.action != 'closed' && !inputs.native_cpu_only && !inputs.native_arm64_only && !inputs.windows_eh_only }}
     runs-on: ${{ matrix.runner }}
     env:
@@ -221,96 +324,48 @@ jobs:
         env:
           PYTHON: ${{ matrix.python }}
 
-      - name: Install DIFF source-truth test dependency
-        if: runner.os == 'Linux'
+      # CMake composes different flags for Clang and MSVC, so each family is
+      # configured once. macOS uses the Clang flags checked on Linux.
+      - name: Verify Debug and Release target flags
+        if: runner.os != 'macOS'
         shell: bash
-        run: '"$PYTHON" -m pip install --require-hashes -r scripts/requirements-binary-diff-bench.txt'
+        run: '"$PYTHON" -m unittest scripts.tests.test_debug_build_configuration -v'
         env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
           PYTHON: ${{ matrix.python }}
 
-      - name: Verify Debug and Release target flags
+      # repository-checks covers these on Linux. They remain here because this
+      # job runs these tools and shell fragments on its own host, and because
+      # the two named macOS cases execute nowhere else.
+      - name: Verify host-specific script behavior
+        if: runner.os != 'Linux'
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             export NEVERD_TEST_BASH="$(cygpath -w "$BASH")"
           fi
-          "$PYTHON" -m unittest \
-            scripts.tests.test_debug_build_configuration \
-            scripts.tests.test_ci_configuration \
-            scripts.tests.test_audit_ci_test_inventory \
-            scripts.tests.test_audit_ci_test_results \
-            scripts.tests.test_ci_test_reuse \
-            scripts.tests.test_run_lift_qualification \
-            scripts.tests.test_run_gtest_qualification \
-            scripts.tests.test_prepare_source_dialect_corpus \
-            scripts.tests.test_run_native_cpu_ci \
-            scripts.tests.test_probe_native_host \
-            scripts.tests.test_run_native_cpu_methods \
-            scripts.tests.test_first_fatal_snapshots \
-            scripts.tests.test_neverd_bench_harness \
-            scripts.tests.test_benchmark_cpu \
-            scripts.tests.test_benchmark_binary_diff \
-            scripts.tests.test_benchmark_binary_diff_bindiff \
-            scripts.tests.test_benchmark_binary_diff_binexport \
-            scripts.tests.test_benchmark_binary_diff_corpus \
-            scripts.tests.test_benchmark_binary_diff_external \
-            scripts.tests.test_benchmark_binary_diff_qualification \
-            scripts.tests.test_radare2_cli_compare \
-            scripts.tests.test_ida_source_order \
-            scripts.tests.test_audit_evm_opcode_metadata \
-            scripts.tests.test_eh_signature_generation \
-            scripts.tests.test_msvc_signature_generation \
-            scripts.tests.test_generate_microsoft_windows_types \
-            scripts.tests.test_microsoft_rdbss_types \
-            scripts.tests.test_microsoft_ucrt_types \
-            scripts.tests.test_check_microsoft_provider_abis \
-            scripts.tests.test_signature_supplement \
-            scripts.tests.test_signature_metadata \
-            scripts.tests.test_vtable_context \
-            scripts.tests.test_runtime_pointer_context \
-            scripts.tests.test_generate_rich_comp_ids \
-            scripts.tests.test_generate_objc_declarations \
-            scripts.tests.test_generate_objc_framework_declarations \
-            scripts.tests.test_generate_objc_receiver_declarations \
-            scripts.tests.test_generate_objc_format_declarations \
-            scripts.tests.test_generate_objc_predicate_declarations \
-            scripts.tests.test_generate_darwin_format_declarations \
-            scripts.tests.test_generate_darwin_block_declarations \
-            scripts.tests.test_generate_darwin_declarations \
-            scripts.tests.test_generate_darwin_data_declarations \
-            scripts.tests.test_generate_swift_runtime_declarations \
-            scripts.tests.test_generate_swift_metadata_declarations \
-            -v
-          "$PYTHON" -m unittest discover \
-            -s pluginsdk/python/tests -v
-          "$PYTHON" -m unittest discover \
-            -s tools/neverd-gui/benchmarks/tests -p test_startup_bench.py -v
-          "$PYTHON" -m unittest \
-            scripts.tests.test_check_capabilities \
-            scripts.tests.test_check_docs_i18n \
-            scripts.tests.test_check_gui_icons \
-            scripts.tests.test_check_python_plugin_sdk \
-            scripts.tests.test_check_source_provenance -v
-          "$PYTHON" scripts/check_capabilities.py
-          "$PYTHON" scripts/check_python_plugin_sdk.py
-          "$PYTHON" scripts/check_source_provenance.py --history-commits 16
+          tests=(
+            scripts.tests.test_ci_configuration
+            scripts.tests.test_audit_ci_test_inventory
+            scripts.tests.test_audit_ci_test_results
+            scripts.tests.test_ci_test_reuse
+            scripts.tests.test_prepare_source_dialect_corpus
+            scripts.tests.test_check_capabilities
+          )
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            tests+=(
+              scripts.tests.test_audit_evm_opcode_metadata.EVMOpcodeAuditTests.test_darwin_sandbox_denies_host_sentinel_outside_capability_roots
+              scripts.tests.test_generate_objc_receiver_declarations.ObjCReceiverDeclarationTests.test_compiler_distinguishes_interfaces_forwards_and_category_owners
+            )
+          fi
+          "$PYTHON" -m unittest "${tests[@]}" -v
+          "$PYTHON" -m unittest discover -s pluginsdk/python/tests -v
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
           PYTHON: ${{ matrix.python }}
           PYTHONPATH: pluginsdk/python
-
-      # Ten locales plus the English source is one shared set of files, and
-      # which host reads them cannot change the answer, so one leg settles it
-      # for all three.  It runs before the configure below because a broken
-      # link is worth hearing about in seconds rather than after a build.
-      - name: Check the localized documentation matrix
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          "$PYTHON" scripts/check_docs_i18n.py
-        env:
-          PYTHON: ${{ matrix.python }}
 
       # The corpus is a submodule of pinned real binaries, and the configure
       # below turns its tests on unconditionally so that a checkout which did
@@ -1942,7 +1997,7 @@ jobs:
             --completed-junit build-ci/emulation-focused/results.xml \
             --completed-junit build-ci/mobile-native-focused/results.xml \
             --exclude-tests build-ci/ctest-reused-names.txt \
-            --prior-passes build-ci/ctest-prior-passes.xml \
+            --prior-results build-ci/ctest-prior-results.xml \
             --output build-ci/ctest-reuse.json
         env:
           EXCLUDE_LABELS: ${{ steps.inventory.outputs.label_exclude }}
@@ -1984,7 +2039,7 @@ jobs:
           "$PYTHON" scripts/audit_ci_test_results.py audit \
             --inventory build-ci/ctest-inventory.json \
             --junit build-ci/ctest-results.xml \
-            --prior-passes build-ci/ctest-prior-passes.xml \
+            --prior-results build-ci/ctest-prior-results.xml \
             --ctest-status build-ci/ctest-exit-status.txt \
             --profile "$TEST_PROFILE" \
             --exclude-label-regex "$EXCLUDE_LABELS" \
@@ -2008,7 +2063,7 @@ jobs:
             build-ci/ctest-outcomes.json
             build-ci/ctest-reuse.json
             build-ci/ctest-reused-names.txt
-            build-ci/ctest-prior-passes.xml
+            build-ci/ctest-prior-results.xml
             build-ci/source-dialects/
             ctest.log
           if-no-files-found: error
@@ -2021,12 +2076,14 @@ jobs:
           path: build-ci/neverd-*.json
           if-no-files-found: ignore
 
+      # Diagnostic snapshots of known failures, not test coverage: this repeats
+      # those cases at 12-37 minutes per host, so it runs only when dispatched.
       - name: Capture the existing first-fatal semantic failures
         id: first_fatal_snapshot
         # Two bounded discovery/execution pairs need up to 60 minutes, with
         # additional room for process cleanup and retained artifact checks.
         timeout-minutes: 65
-        if: ${{ !cancelled() && steps.inventory.outcome == 'success' }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && steps.inventory.outcome == 'success' }}
         shell: bash
         run: |
           "$PYTHON" scripts/collect_first_fatal_snapshots.py \
@@ -2037,7 +2094,7 @@ jobs:
           PYTHON: ${{ matrix.python }}
 
       - name: Upload first-fatal semantic evidence
-        if: ${{ always() && steps.inventory.outcome == 'success' }}
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && steps.inventory.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: first-fatal-snapshots-${{ matrix.test_profile }}

@@ -9,11 +9,15 @@ on:
     branches: [dev]
     paths-ignore:
       - '**/*.md'
+      - '.agents/**'
+      - 'tools/neverd-gui/**'
   pull_request:
     # closed cancels this PR's run through its concurrency group; no job runs.
     types: [opened, synchronize, reopened, closed]
     paths-ignore:
       - '**/*.md'
+      - '.agents/**'
+      - 'tools/neverd-gui/**'
   workflow_dispatch:
 
 permissions:

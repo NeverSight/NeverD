@@ -15644,6 +15644,22 @@ functions when a small opcode, CFG, or observable-state assertion is enough.
 
 ## CI relationship
 
+`CI` first runs one `Repository and script checks` job on Linux. Repository
+content and host-independent scripts give the same answer on every host, so this
+job settles them once and the native matrix waits for it. A failure here stops
+the matrix before it spends runner time. Native legs repeat only what depends on
+their host: Clang and MSVC Debug and Release flags, the tools and workflow shell
+fragments that job runs on that host, and the two macOS cases that execute nowhere
+else. Tests of benchmark and generator tools that CI does not run on those hosts
+execute only on Linux.
+
+Documentation translation checks stay in `LLVM Style`, which also sees
+Markdown-only pushes. The EVM audit tests stay in `EVM Upstream Audit`, apart from
+its macOS sandbox case. `Capstone fork contract` runs the pinned decoder's own
+suite only when the pin changes. Commits limited to `.agents/` or
+`tools/neverd-gui/` skip `CI` and `Mobile Decompilation`, neither of which builds
+the GUI; `Desktop GUI` owns those paths.
+
 CI builds Release with tests enabled on Linux, macOS, and Windows, then audits
 the discovered inventory before applying platform-specific label exclusions.
 Those profiles are defined in `.github/workflows/ci.yml` and
@@ -15666,15 +15682,21 @@ failure. Each matrix leg uploads its inventory, JUnit, exit status, outcome
 JSON, and log as `ctest-evidence-<profile>`.
 
 The same job first executes its focused emulation and mobile contracts. The
-`reuse` command retains only their passed results with matching inventory
-identities, so the main profile does not run those cases twice. Failed, skipped
-and incomplete cases remain in the main execution. A name registered by several
-owners moves only when every selected owner has passed. The final audit combines
-the retained JUnit cases with fresh results against the unchanged complete
-profile, rejects overlaps and missing identities, and keeps the original exit
-status. Reuse names, JUnit and input hashes accompany the outcome artifact.
+`reuse` command retains their passed and explicitly skipped results with matching
+inventory identities, so the main profile does not run those cases twice. A skip
+gives the same answer when the same job repeats it on the same products, and the
+final audit still rejects one in a required suite. Failed, disabled, not-run and
+incomplete cases remain in the main execution. A name registered by several
+owners moves only when every selected owner has a retained result. The final
+audit combines the retained JUnit cases with fresh results against the unchanged
+complete profile, rejects overlaps and missing identities, and keeps the original
+exit status. Reuse names, JUnit and input hashes accompany the outcome artifact.
 This avoids repeated native work within the hosted job's time limit without
 reducing its required coverage.
+
+`Capture the existing first-fatal semantic failures` repeats known failures to
+retain diagnostic snapshots. It adds no coverage, so it runs only on
+`workflow_dispatch`.
 
 The original WHP file-transfer matrix contains eighteen separately bounded
 five-second guests, so its complete CTest method has a 120-second allowance.

@@ -131,6 +131,22 @@ find() { return 0; }
         for owner in owners:
             self.assertIn("('" + owner + "',", audit)
 
+    def test_capstone_fork_suite_runs_on_pin_changes_for_every_compiler(self):
+        native = WORKFLOW.with_name("native-pipeline.yml").read_text(encoding="utf-8")
+        contract = WORKFLOW.with_name("capstone-contract.yml").read_text(encoding="utf-8")
+        self.assertNotIn("build-capstone-core", native)
+        self.assertIn("build-capstone-core", contract)
+        push, pull_request = contract.split("  pull_request:\n", 1)
+        for trigger in (push.split("  push:\n", 1)[1], pull_request.split("\npermissions:", 1)[0]):
+            self.assertIn("- 'third_party/capstone'", trigger)
+            self.assertIn("- '.github/workflows/capstone-contract.yml'", trigger)
+        for source in (native, contract):
+            matrix = source.split("        include:\n", 1)[1].split("\n    env:", 1)[0]
+            matrix = matrix.split("\n    defaults:", 1)[0]
+            self.assertEqual(re.findall(r"- name: (.*)", matrix), [
+                "Linux x64", "macOS arm64", "Windows x64 MSVC", "Windows x64 clang-cl",
+            ])
+
     def test_msvc_test_targets_select_extended_coff_objects(self):
         for msvc_style in (False, True):
             with self.subTest(msvc_style=msvc_style), tempfile.TemporaryDirectory(
@@ -570,9 +586,9 @@ find() { return 0; }
 
     def test_workflow_executes_this_configuration_contract(self):
         source = WORKFLOW.read_text(encoding="utf-8")
-        step_marker = "      - name: Verify Debug and Release target flags\n"
+        step_marker = "      - name: Run repository and script checks\n"
         self.assertEqual(source.count(step_marker), 1)
-        verify_step = source.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
+        verify_step = source.split(step_marker, 1)[1].split("\n  build-and-test:", 1)[0]
         self.assertEqual(verify_step.count("scripts.tests.test_ci_configuration"), 1)
         self.assertEqual(
             verify_step.count("scripts.tests.test_audit_ci_test_inventory"), 1
@@ -584,6 +600,79 @@ find() { return 0; }
         self.assertEqual(
             verify_step.count("scripts.tests.test_neverd_bench_harness"), 1
         )
+
+    def test_host_independent_checks_run_once_and_gate_the_native_matrix(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        checks = source.split("  repository-checks:\n", 1)[1].split(
+            "\n  build-and-test:\n", 1
+        )[0]
+        self.assertIn("    runs-on: ubuntu-24.04\n", checks)
+        # Nothing here reads a submodule, and the provenance audit needs history.
+        self.assertNotIn("submodules:", checks)
+        self.assertIn("fetch-depth: 32", checks)
+        self.assertIn("scripts/check_source_provenance.py --history-commits 16", checks)
+
+        build = source.split("\n  build-and-test:\n", 1)[1].split("\n  native-cpu:\n", 1)[0]
+        self.assertIn("    needs: repository-checks\n", build)
+        self.assertEqual(
+            re.search(r"(?m)^    if: (.*)$", checks).group(1),
+            re.search(r"(?m)^    if: (.*)$", build).group(1),
+        )
+        # Linux gets these from the gate; the other hosts repeat only their own.
+        host_step = self.workflow_step_containing(build, "Verify host-specific script behavior")
+        self.assertIn("if: runner.os != 'Linux'", host_step)
+        for module in ("test_ci_configuration", "test_audit_ci_test_inventory",
+                       "test_audit_ci_test_results", "test_ci_test_reuse",
+                       "test_prepare_source_dialect_corpus", "test_check_capabilities"):
+            with self.subTest(module=module):
+                self.assertRegex(checks, rf"scripts\.tests\.{module}\b")
+                self.assertRegex(host_step, rf"scripts\.tests\.{module}\b")
+        # MSVC composes its own flags; macOS uses the Clang flags Linux checks.
+        flags_step = self.workflow_step_containing(build, "Verify Debug and Release target flags")
+        self.assertIn("if: runner.os != 'macOS'", flags_step)
+        self.assertIn("scripts.tests.test_debug_build_configuration", flags_step)
+
+    def test_cases_that_execute_only_on_macos_stay_on_the_macos_leg(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        step = self.workflow_step_containing(source, "Verify host-specific script behavior")
+        macos = step.split('if [[ "$RUNNER_OS" == "macOS" ]]; then', 1)[1].split("fi\n", 1)[0]
+        for module, case in (
+            ("test_audit_evm_opcode_metadata",
+             "EVMOpcodeAuditTests.test_darwin_sandbox_denies_host_sentinel_outside_capability_roots"),
+            ("test_generate_objc_receiver_declarations",
+             "ObjCReceiverDeclarationTests.test_compiler_distinguishes_interfaces_forwards_and_category_owners"),
+        ):
+            with self.subTest(case=case):
+                self.assertIn(f"scripts.tests.{module}.{case}\n", macos)
+                self.assertIn("def " + case.split(".", 1)[1] + "(",
+                              (ROOT / "scripts" / "tests" / f"{module}.py").read_text(encoding="utf-8"))
+
+    def test_known_failure_snapshots_run_only_when_dispatched(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        for name in ("Capture the existing first-fatal semantic failures",
+                     "Upload first-fatal semantic evidence"):
+            with self.subTest(name=name):
+                step = source.split(f"      - name: {name}\n", 1)[1].split("\n      - name:", 1)[0]
+                self.assertIn("github.event_name == 'workflow_dispatch'", step)
+
+    def test_commits_outside_the_compiled_engine_skip_the_native_workflows(self):
+        ignored = ("'**/*.md'", "'.agents/**'", "'tools/neverd-gui/**'")
+        for workflow in (WORKFLOW, WORKFLOW.with_name("mobile.yml")):
+            source = workflow.read_text(encoding="utf-8")
+            triggers = re.findall(r"paths-ignore:\n((?:      - .*\n)+)", source)
+            self.assertEqual(len(triggers), 2, workflow.name)
+            for trigger in triggers:
+                self.assertEqual(
+                    tuple(line.strip().removeprefix("- ") for line in trigger.splitlines()),
+                    ignored,
+                )
+            # Ignoring the GUI is only correct while these builds leave it out.
+            self.assertNotIn("NEVERD_BUILD_GUI=ON", source)
+        # The GUI workflow owns the GUI's Python test and its checks.
+        gui = WORKFLOW.with_name("gui.yml").read_text(encoding="utf-8")
+        self.assertIn("'tools/neverd-gui/**'", gui.split("\njobs:", 1)[0])
+        self.assertIn("-s tools/neverd-gui/benchmarks/tests -p test_startup_bench.py", gui)
+        self.assertNotIn("test_startup_bench", WORKFLOW.read_text(encoding="utf-8"))
 
     def test_workflow_declares_all_three_test_profiles(self):
         source = WORKFLOW.read_text(encoding="utf-8")
