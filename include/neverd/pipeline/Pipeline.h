@@ -71,6 +71,9 @@ struct AnalysisCacheWarmup {
 struct OmittedCalleeMemo;
 struct ImageImportCounts;
 struct LowSEHWritableImageRanges;
+namespace libc {
+class StackProbeIndex;
+} // namespace libc
 
 /// Optional facts for consecutive restricted x64, i386, AArch64 and ARM
 /// analyses of an unchanged image. Owns the indexes borrowed by bounded
@@ -406,6 +409,9 @@ struct PipelineResult {
   /// reads (collectLowSEHRuntimeMemory), kept with the image's analysis
   /// inputs and set by buildLowIR.
   std::shared_ptr<const LowSEHWritableImageRanges> SEHWritableImageRanges;
+  /// The image's stack-probe helpers, kept with its analysis inputs and set
+  /// by buildLowIR, which MedIR's converters ask about each call.
+  std::shared_ptr<const libc::StackProbeIndex> StackProbeIndex;
   /// The callees in CallEntryStackArgs whose count a typed prototype gives
   /// slot by slot where every argument is on the stack (i386): a call to one
   /// passes those slots and no register.

@@ -12,6 +12,14 @@
         <translation>专注模式(&amp;F)</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>新建实例(&amp;N)</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>打开一个新的 NeverD 实例</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>打开(&amp;O)...</translation>
     </message>
@@ -2481,6 +2489,10 @@ Double-click to go to the declaration.</source>
         <translation>%1 尚未包含最新的更改。继续之前将其保存到其中吗？</translation>
     </message>
     <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>无法启动新实例：%1</translation>
+    </message>
+    <message>
         <source>Cannot jump to %1: %2</source>
         <translation>无法跳转到 %1：%2</translation>
     </message>
@@ -3548,6 +3560,10 @@ After:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>%1 所在的文件夹不可写；其数据库保存在 %2</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>此文件可能已在另一个 NeverD 中打开（%1）</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

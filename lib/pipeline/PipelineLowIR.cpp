@@ -4799,7 +4799,9 @@ struct PipelineAnalysisCache::Impl {
     const std::shared_ptr<const SymbolInventory> Inventory;
     const std::set<uint64_t> VerifiedEntries;
     libc::NoReturnTargetIndex Targets;
-    libc::StackProbeIndex StackProbes;
+    /// Shared with each run (PipelineResult::StackProbeIndex).
+    const std::shared_ptr<const libc::StackProbeIndex> SharedStackProbes;
+    const libc::StackProbeIndex &StackProbes;
     const std::map<va_t, PointerVariableCallee> PointerCallees;
     /// What a call through each of those variables passes the arguments of
     /// (PipelineResult::CallArgumentSources), which every run shares.
@@ -4826,7 +4828,9 @@ struct PipelineAnalysisCache::Impl {
                               cNameOfStatedName(Name, Img.Format, Img.Arch));
                         })
                   : libc::NoReturnTargetIndex::DeclaredNoReturn()),
-          StackProbes(Img), PointerCallees(collectPointerVariableCallees(Img)),
+          SharedStackProbes(std::make_shared<const libc::StackProbeIndex>(Img)),
+          StackProbes(*SharedStackProbes),
+          PointerCallees(collectPointerVariableCallees(Img)),
           ArgumentSources(callArgumentSourcesOf(Img, PointerCallees)),
           X87FloatingImports(declaredX87Imports(Img, Dbg)), Roots(Img),
           Owners(Img),
@@ -5868,6 +5872,7 @@ void Pipeline::buildLowIR(
   }
 
   Result.SEHWritableImageRanges = Inputs.SEHWritable;
+  Result.StackProbeIndex = Inputs.SharedStackProbes;
   // A run of a symbol start reads the image's summaries once a session
   // solved them (prepareCallSummaries); one that adds its own entry keys
   // other facts.

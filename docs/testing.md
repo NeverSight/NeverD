@@ -5620,6 +5620,14 @@ keeps its results: a search begun before the first rows arrived used to drop
 them, taking the cursor those rows bring for a move away, so searching right
 after opening a file showed nothing on a slow machine.
 
+`WorkbenchTests::newInstanceStartsAWorkbenchOfItsOwn` checks that **File → New
+instance** comes first in File and stays enabled with or without a program, that
+a program that cannot start says why in Output, and, outside Windows, the command
+line a stand-in program really receives: this workbench's worker and kind of
+layout, and not its open file. `aFileOpenInAnotherWorkbenchSaysSo` opens one file
+with a second real worker, whose lock refusal names the likely reason and leaves
+the holder loaded.
+
 The GUI unit cases `deepLinksTakeIdasFormAndRefuseWhatTheyCannotName` and
 `aLinkGoesToTheWorkbenchThatHasItsProgram` check link syntax, hash prefixes and
 instance selection. Controller cases `linksCopyAndOpenTheirPlaces` and
@@ -20194,6 +20202,25 @@ guard, even when trailing slots would wrap. The independent activation oracle
 does not qualify instruction execution at that address.
 `FunctionCallsAdmitContextOnlyArgumentLimit` checks all 32 slots retained in
 native state; 33 slots and malformed mixed declarations remain rejected.
+
+`FunctionCallSitesRejectUnboundInstructions` rejects malformed, duplicate,
+unselected, indirect, non-CALL and wrong-target sites before source publication.
+`FunctionCallSitesCompileAndProveBoundaries` compiles both routes and dispatchers
+at O0/O2 and proves sixteen controller predicates with independent RAM, CALL
+equations and activation outcomes. The predicates cover physical return-cell
+creation, unknown incoming bytes, narrow argument positions, pre/post-CALL
+budget pauses, rejected-step retry, pending PC/SP guards, site identity,
+external returns, cached completion and original RET cleanup. Existing source
+before the appended bridges must remain identical. These tests execute neither
+generated instructions nor specimen code; their controller oracle does not
+establish an arbitrary runtime provider's effects.
+`FunctionCallSitesProveHighCOriginalStackTransfer` additionally proves three
+constant-result predicates using the actual emitted CALL/RET bodies and bridge,
+fixed nonfaulting RAM addresses and arbitrary result/register values. These
+predicates are compiled, never executed. Clang does not fold LLVM C's
+integerized host-state pointers into the typed fixture fields, so this stronger
+original-step proof is HighC-only; both routes retain the controller proofs and
+complete object-compilation checks above.
 
 `EnvironmentResumesTheActualPhysicalContext`,
 `EnvironmentBudgetsBoundEveryProviderAttempt` and

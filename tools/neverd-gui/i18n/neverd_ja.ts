@@ -12,6 +12,14 @@
         <translation>集中モード(&amp;F)</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>新しいインスタンス(&amp;N)</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>NeverD の新しいインスタンスを開きます</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>開く(&amp;O)...</translation>
     </message>
@@ -2481,6 +2489,10 @@ Double-click to go to the declaration.</source>
         <translation>%1 には最新の変更が含まれていません。続行する前に保存しますか？</translation>
     </message>
     <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>新しいインスタンスを起動できません：%1</translation>
+    </message>
+    <message>
         <source>Cannot jump to %1: %2</source>
         <translation>%1 へジャンプできません：%2</translation>
     </message>
@@ -3548,6 +3560,10 @@ After:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>%1 は書き込みできないフォルダーにあるため、そのデータベースは %2 に保存されます</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>このファイルは別の NeverD で既に開かれている可能性があります（%1）</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

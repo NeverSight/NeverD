@@ -38,6 +38,7 @@
 #endif
 
 // File.
+NEVERD_IDA_ACTION("NewInstance", "", FileNewInstance)
 NEVERD_IDA_ACTION("LoadNewFile", "", FileOpen)
 NEVERD_IDA_ACTION("ReloadFile", "", FileReload)
 NEVERD_IDA_ACTION("LoadPdbFile", "", FileLoadPdb)

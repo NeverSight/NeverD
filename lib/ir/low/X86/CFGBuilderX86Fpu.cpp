@@ -455,6 +455,17 @@ class X87CallGraphCache {
       ::neverd::limits::ir::kCFGBuilderX86FpuMaxRefusalDependencies;
   std::optional<Context> RefusalInputs;
   std::unordered_map<va_t, CallRefusal> Refusals;
+  /// Whether a call to a target reaches a use of the x87 context
+  /// (X87CallEffectIndex::usesContext), with the no-return answers of every
+  /// incomplete lift its walk read.  Kept under ContextUseInputs while those
+  /// answers hold, as refusals are, so each run of a session need not walk
+  /// the same callees again.
+  struct ContextUse {
+    std::optional<bool> Uses;
+    std::vector<X87NoReturnAnswer> Dependencies;
+  };
+  std::optional<Context> ContextUseInputs;
+  std::unordered_map<va_t, ContextUse> ContextUses;
 
 public:
   X87CallGraphCache(const NoReturnCalleeProver *Prover,
@@ -700,6 +711,9 @@ private:
   /// where the image owns the x87 context the callee uses it, or the call
   /// pops a register.  An answer the queries cannot give refuses nothing.
   bool refusesCall(const CFGBuilder &B, va_t Target);
+  /// X87CallEffectIndex::usesContext for \p B, kept as refusesCall keeps its
+  /// answers.
+  std::optional<bool> usesContext(const CFGBuilder &B, va_t Target);
   std::shared_ptr<const SummaryFacts> validatedSummary(
       const std::shared_ptr<X87CallGraphCache> &Cache, const BinaryImage &Img,
       va_t Entry, const std::set<va_t> *Entries,
@@ -1947,6 +1961,48 @@ bool X87CallGraphCache::refusesCall(const CFGBuilder &B, va_t Target) {
   return Refuses;
 }
 
+std::optional<bool> X87CallGraphCache::usesContext(const CFGBuilder &B,
+                                                   va_t Target) {
+  std::optional<ContextUse> Kept;
+  {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    if (ContextUseInputs && matches(*ContextUseInputs, B))
+      if (const auto Found = ContextUses.find(Target);
+          Found != ContextUses.end())
+        Kept = Found->second;
+  }
+  // The answer holds while the prover answers as it did for the incomplete
+  // lifts the walk read, as a kept refusal's does.
+  if (Kept && llvm::all_of(Kept->Dependencies, [&](const auto &Answer) {
+        return B.NoReturnCallees &&
+               B.NoReturnCallees->neverReturns(Answer.Target, Answer.Depth) ==
+                   Answer.NeverReturns;
+      }))
+    return Kept->Uses;
+  // The walk runs as the builder's own index would run it.
+  X87CallEffectIndex Effects(B);
+  const std::optional<bool> Uses = Effects.usesContext(Target);
+  auto Dependencies = Effects.liftDependencies();
+  if (!Dependencies || Dependencies->size() > MaxRefusalDependencies)
+    return Uses;
+  try {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    if (!ContextUseInputs || !matches(*ContextUseInputs, B)) {
+      Context Next = freezeContext(B);
+      if (!contextBytes(Next))
+        return Uses;
+      ContextUses.clear();
+      ContextUseInputs = std::move(Next);
+    }
+    if (ContextUses.size() < MaxRefusals || ContextUses.count(Target))
+      ContextUses.insert_or_assign(Target,
+                                   ContextUse{Uses, std::move(*Dependencies)});
+  } catch (const std::bad_alloc &) {
+    // Remembering is optional; the answer itself stands.
+  }
+  return Uses;
+}
+
 CFGBuilder::CallGraphWarmup CFGBuilder::warmCallGraphs(
     const std::shared_ptr<X87CallGraphCache> &Cache, const BinaryImage &Img,
     llvm::ArrayRef<va_t> Functions, const std::set<va_t> *Entries,
@@ -2300,7 +2356,11 @@ void CFGBuilder::fixupFpuStack(
             continue;
           if (!X87CallEffects)
             X87CallEffects = std::make_shared<X87CallEffectIndex>(*this);
-          HasContext |= X87CallEffects->usesContext(*Target).value_or(false);
+          // A session's runs share what walks of the same callees found.
+          HasContext |= (SharedX87CallGraphs
+                             ? SharedX87CallGraphs->usesContext(*this, *Target)
+                             : X87CallEffects->usesContext(*Target))
+                            .value_or(false);
         }
       }
     if (HasContext) {

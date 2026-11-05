@@ -54,6 +54,7 @@
 #include "neverd/ir/med/X86/X86RegistrationSEHRegisters.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/LibCVariant.h"
+#include "neverd/libc/StackProbeIndex.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
@@ -1211,7 +1212,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
               LowInstructionControl::TailCall;
       if (Image && LOp.Opcode == NdOp::CALL && LOp.NumInputs > 0 &&
           LOp.Inputs[0].isConst() && !TailCall &&
-          libc::stackProbeEffect(*Image, LOp.Inputs[0].Offset) ==
+          libc::stackProbeEffect(*Image, LOp.Inputs[0].Offset, StackProbes) ==
               libc::StackProbeEffect::Probe)
         continue;
 

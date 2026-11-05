@@ -1,5 +1,15 @@
 # Remaining x64 C-quality work
 
+Optional original CALL-site bridges now connect an explicitly supplied
+pre-CALL state to the checked native-context interfaces. Known scalars use
+caller-side stack coordinates, context-only slots retain their original bytes,
+and the actual CALL creates the return cell. Pending and active pauses resume
+without replaying CALL or reconstructing a frame. This closes the manual
+pre-CALL/entry-state handoff, not the two ordinary-C registry-query proofs:
+full caller state and external effects remain required, and arbitrary ordinary
+source does not automatically acquire that state. No new ordinary-query work
+or per-instruction dispatch check is introduced.
+
 Checked native-context call views can now keep individual register or stack
 slots only in original state by declaring a null argument width. This permits
 known scalar arguments after a missing ordinary argument without reading,

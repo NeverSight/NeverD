@@ -35,6 +35,7 @@
 #endif
 
 NEVERD_MENU(File, None, QT_TRANSLATE_NOOP("Menus", "&File"))
+NEVERD_MENU_ITEM(File, FileNewInstance)
 NEVERD_MENU_ITEM(File, FileOpen)
 NEVERD_MENU_ITEM(File, FilePackageReview)
 NEVERD_MENU_ITEM(File, FileCompare)

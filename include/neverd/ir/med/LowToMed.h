@@ -33,6 +33,9 @@
 #include <vector>
 
 namespace neverd {
+namespace libc {
+class StackProbeIndex;
+} // namespace libc
 class LowSEHRuntimeMemory;
 
 struct BinaryImage;
@@ -218,6 +221,12 @@ public:
   /// Without them a converter reads its own from its image.
   void setCodePointerTargets(const std::vector<va_t> *Targets) {
     SharedCodePointerTargets = Targets;
+  }
+  /// The image's stack-probe helpers (libc::StackProbeIndex), read once for
+  /// every converter of a run.  Without them a converter asks the image
+  /// about each call (libc::stackProbeEffect).
+  void setStackProbeIndex(const libc::StackProbeIndex *Index) {
+    StackProbes = Index;
   }
 
   /// Provide the set of direct-call targets proven to return a 64-bit integer
@@ -493,6 +502,8 @@ private:
   /// Null/empty until the pipeline (which has the loaded import tables)
   /// provides it.  Mach-O only.
   const std::set<va_t> *StackProbeSlots = nullptr;
+  /// The image's stack-probe helpers (setStackProbeIndex), or null.
+  const libc::StackProbeIndex *StackProbes = nullptr;
 
   /// The addresses that name a runtime routine one intrinsic models (its
   /// imports' stubs and slots, and its symbols), with that intrinsic: those

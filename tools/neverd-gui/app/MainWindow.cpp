@@ -98,6 +98,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QScopeGuard>
@@ -1508,6 +1509,18 @@ void MainWindow::reportLinkError(const QString &error) {
     output_->append(error, 2);
 }
 
+QString MainWindow::startWorkbench(const QStringList &arguments) const {
+  QStringList command{QStringLiteral("--worker"), session_.workerPath()};
+  if (!layoutPath_.isEmpty())
+    command << QStringLiteral("--fresh-layout");
+  QProcess launcher;
+  launcher.setProgram(workbenchProgram_.isEmpty()
+                          ? QCoreApplication::applicationFilePath()
+                          : workbenchProgram_);
+  launcher.setArguments(command + arguments);
+  return launcher.startDetached() ? QString() : launcher.errorString();
+}
+
 void MainWindow::jumpToLink() {
   // A link on the clipboard, as one pasted from a chat, is offered.
   const QString clipboard = QApplication::clipboard()->text().trimmed();
@@ -2019,6 +2032,10 @@ void MainWindow::connectActions() {
   const auto on = [this](ActionId id, auto slot) {
     connect(actions_.action(id), &QAction::triggered, this, slot);
   };
+  on(ActionId::FileNewInstance, [this] {
+    if (const QString error = startWorkbench(); !error.isEmpty())
+      output_->append(tr("Cannot start a new instance: %1").arg(error), 2);
+  });
   on(ActionId::FileOpen, [this] { openDialog(); });
   on(ActionId::FileLineage, [this] {
     if (!lineage_)
@@ -2602,6 +2619,7 @@ void MainWindow::updateActions() {
     const bool always = name.startsWith(QStringLiteral("Options")) ||
                         name.startsWith(QStringLiteral("Windows")) ||
                         name.startsWith(QStringLiteral("Help")) ||
+                        name == QLatin1String("FileNewInstance") ||
                         name == QLatin1String("FileOpen") ||
                         name == QLatin1String("FilePackageReview") ||
                         name == QLatin1String("FileCompare") ||

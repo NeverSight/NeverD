@@ -493,10 +493,17 @@ void Session::command(const QString &operation, const QJsonObject &payload,
             // noticed: it takes them now, and the edit can be made again.
             if (code == QLatin1String("foreign_edits"))
               projectSync_.start();
+            const QString reason = error.value("message").toString(code);
+            // A workbench holding the project is the usual reason for a lock
+            // the worker cannot take, which its message does not say.
             if (!silentFailure(status, code))
-              setError(error.value("message").toString(code));
+              setError(code == QLatin1String("project_locked")
+                           ? tr("This file may already be open in another "
+                                "NeverD (%1)")
+                                 .arg(reason)
+                           : reason);
             if (failed)
-              failed(code, error.value("message").toString(code));
+              failed(code, reason);
             if (operation == QLatin1String("save")) {
               transition_.clear();
               transitionReady_ = false;

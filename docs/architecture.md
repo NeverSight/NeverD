@@ -17568,6 +17568,19 @@ on completion. This opt-in layer appends wrappers without changing either
 instruction dispatcher; it does not infer ABI declarations, capture native RAM
 or weaken ordinary missing-input proofs.
 
+`X64FunctionCallSites` binds optional original direct CALL sites to those
+interfaces. A lazily built index contains only the requested sites, and the
+decoder authenticates each target against selected original bytes. It neither
+discovers callees nor interprets optimized ordinary CALLs. Entry and call-site
+wrappers share scalar widths, physical holes and argument-layout emission;
+only the stack coordinate differs. Checks precede all original CALL effects.
+A prepared site context retains a pending CALL when budget is zero or the
+instruction rejects state. After the actual instruction creates its return
+cell, the shared function context owns completion and result capture. Resume
+never repeats a completed CALL. This adds no per-step dispatcher check or
+implicit state capture from ordinary C, and disabled requests retain identical
+source and manifests.
+
 Continuation source lowers `RequireAligned` through the shared
 `X64Alignment` predicate after projecting a live FS/GS base. A failed predicate
 returns unchanged-state refusal before guest memory, architectural writes or
