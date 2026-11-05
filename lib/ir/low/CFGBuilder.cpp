@@ -1251,6 +1251,41 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   }
 }
 
+namespace {
+/// The first primary record of \p Metadata, in its table's order, whose range
+/// starts at \p Entry.  The table's index lists every record by its start,
+/// so only the records starting there are read, not a table that holds one
+/// for each function of the image; without an index covering the table, the
+/// table is read in order.
+const ExceptionFunction *firstPrimaryRecordAt(const ExceptionInfo &Metadata,
+                                              va_t Entry) {
+  const auto Primary = [&](const ExceptionFunction &Candidate) {
+    return Candidate.CodeRange.Begin == Entry &&
+           Candidate.Kind == RuntimeFunctionKind::Primary;
+  };
+  const std::vector<ExceptionFunction> &Records = Metadata.Functions;
+  if (Metadata.FunctionIndex.size() != Records.size()) {
+    for (const ExceptionFunction &Candidate : Records)
+      if (Primary(Candidate))
+        return &Candidate;
+    return nullptr;
+  }
+  const auto Start = std::partition_point(
+      Metadata.FunctionIndex.begin(), Metadata.FunctionIndex.end(),
+      [&](size_t I) {
+        return I >= Records.size() || Records[I].CodeRange.Begin < Entry;
+      });
+  size_t First = Records.size();
+  for (auto It = Start;
+       It != Metadata.FunctionIndex.end() && *It < Records.size() &&
+       Records[*It].CodeRange.Begin == Entry;
+       ++It)
+    if (Primary(Records[*It]) && *It < First)
+      First = *It;
+  return First < Records.size() ? &Records[First] : nullptr;
+}
+} // namespace
+
 LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
                               va_t EntryAddr, const std::string &FuncName) {
   AnalysisRecoveryUsed = false;
@@ -1388,14 +1423,8 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   OrdinaryCFGRoots.insert(EntryAddr);
   DurableCFGRoots.insert(EntryAddr);
 
-  const ExceptionFunction *Exception = nullptr;
-  for (const ExceptionFunction &Candidate : Img.ExceptionMetadata.Functions) {
-    if (Candidate.CodeRange.Begin == EntryAddr &&
-        Candidate.Kind == RuntimeFunctionKind::Primary) {
-      Exception = &Candidate;
-      break;
-    }
-  }
+  const ExceptionFunction *Exception =
+      firstPrimaryRecordAt(Img.ExceptionMetadata, EntryAddr);
   if (!Exception) {
     Exception = Img.ExceptionMetadata.findFunction(EntryAddr);
     // A registration record is its installer's alone; its range also covers
