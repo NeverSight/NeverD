@@ -25,6 +25,7 @@ class raw_ostream;
 namespace neverd {
 struct BinaryImage;
 class DebugContext;
+class X64FunctionCallSitePauses;
 namespace analysis {
 struct X64ContinuationInstructionSource;
 struct X64ContinuationSourceOptions;
@@ -69,7 +70,8 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
 void emitX64SpecialRegionDriver(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
-    bool FollowInternalCalls, bool FunctionContext);
+    bool FollowInternalCalls, bool FunctionContext,
+    const X64FunctionCallSitePauses &CallSitePauses);
 
 } // namespace neverd
 
