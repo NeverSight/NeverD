@@ -15657,8 +15657,13 @@ Documentation translation checks stay in `LLVM Style`, which also sees
 Markdown-only pushes. The EVM audit tests stay in `EVM Upstream Audit`, apart from
 its macOS sandbox case. `Capstone fork contract` runs the pinned decoder's own
 suite only when the pin changes. Commits limited to `.agents/` or
-`tools/neverd-gui/` skip `CI` and `Mobile Decompilation`, neither of which builds
-the GUI; `Desktop GUI` owns those paths.
+`tools/neverd-gui/` skip `CI`, which does not build the GUI; `Desktop GUI` owns
+those paths.
+
+`Mobile Decompilation` runs when mobile frontends, the `neverd mobile` command or
+their tests change, and every night on `dev`. Core loader, IR and backend changes
+also affect mobile recovery, so a regression from one of those commits surfaces
+in that night's run. `Mobile Real Applications` follows each completed run.
 
 A `dev` push waits for a running `CI` instead of cancelling it, so each finished
 run reports a result. Only the newest waiting push stays queued, and the commits

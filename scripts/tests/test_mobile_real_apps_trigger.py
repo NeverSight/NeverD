@@ -106,6 +106,11 @@ class TriggerTests(unittest.TestCase):
         event["workflow_run"]["event"] = run["event"] = "workflow_dispatch"
         self.verify(event, run=run)
 
+    def test_nightly_schedule_is_a_valid_producer_event(self):
+        event, run = deepcopy(EVENT), deepcopy(RUN)
+        event["workflow_run"]["event"] = run["event"] = "schedule"
+        self.verify(event, run=run)
+
     def test_missing_scalar_and_noninteger_fields_never_coerce_into_a_valid_identity(self):
         for key in ("id", "run_attempt", "workflow_id", "head_sha", "head_repository", "status", "conclusion"):
             event = deepcopy(EVENT)

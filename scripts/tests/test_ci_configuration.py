@@ -662,22 +662,42 @@ find() { return 0; }
 
     def test_commits_outside_the_compiled_engine_skip_the_native_workflows(self):
         ignored = ("'**/*.md'", "'.agents/**'", "'tools/neverd-gui/**'")
-        for workflow in (WORKFLOW, WORKFLOW.with_name("mobile.yml")):
-            source = workflow.read_text(encoding="utf-8")
-            triggers = re.findall(r"paths-ignore:\n((?:      - .*\n)+)", source)
-            self.assertEqual(len(triggers), 2, workflow.name)
-            for trigger in triggers:
-                self.assertEqual(
-                    tuple(line.strip().removeprefix("- ") for line in trigger.splitlines()),
-                    ignored,
-                )
-            # Ignoring the GUI is only correct while these builds leave it out.
-            self.assertNotIn("NEVERD_BUILD_GUI=ON", source)
+        source = WORKFLOW.read_text(encoding="utf-8")
+        triggers = re.findall(r"paths-ignore:\n((?:      - .*\n)+)", source)
+        self.assertEqual(len(triggers), 2)
+        for trigger in triggers:
+            self.assertEqual(
+                tuple(line.strip().removeprefix("- ") for line in trigger.splitlines()),
+                ignored,
+            )
+        # Ignoring the GUI is only correct while this build leaves it out.
+        self.assertNotIn("NEVERD_BUILD_GUI=ON", source)
         # The GUI workflow owns the GUI's Python test and its checks.
         gui = WORKFLOW.with_name("gui.yml").read_text(encoding="utf-8")
         self.assertIn("'tools/neverd-gui/**'", gui.split("\njobs:", 1)[0])
         self.assertIn("-s tools/neverd-gui/benchmarks/tests -p test_startup_bench.py", gui)
         self.assertNotIn("test_startup_bench", WORKFLOW.read_text(encoding="utf-8"))
+
+    def assert_path_filtered_and_nightly(self, workflow, required):
+        triggers = WORKFLOW.with_name(workflow).read_text(encoding="utf-8").split(
+            "\npermissions:", 1
+        )[0]
+        self.assertRegex(triggers, r"(?m)^  schedule:\n    - cron: '\d+ \d+ \* \* \*'$")
+        self.assertIn("  workflow_dispatch:", triggers)
+        self.assertNotIn("paths-ignore", triggers)
+        paths = re.findall(r"    paths:\n((?:      - .*\n)+)", triggers)
+        self.assertEqual(len(paths), 2, workflow)
+        self.assertEqual(paths[0], paths[1], workflow)
+        for path in (f".github/workflows/{workflow}", *required):
+            self.assertIn(f"      - '{path}'\n", paths[0], workflow)
+
+    def test_mobile_runs_on_its_own_sources_and_every_night(self):
+        self.assert_path_filtered_and_nightly("mobile.yml", (
+            "tools/neverd/mobile/**", "tools/neverd/cmd/NeverDCmdMobile.cpp",
+            "lib/dalvik/**", "lib/loader/ObjC/**", "lib/loader/Swift/**",
+            "lib/backend/swift/**", "unittests/mobile/**", "scripts/*mobile*",
+            "scripts/tests/fixtures/mobile/**",
+        ))
 
     def test_workflow_declares_all_three_test_profiles(self):
         source = WORKFLOW.read_text(encoding="utf-8")

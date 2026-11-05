@@ -2,22 +2,51 @@ name: Mobile Decompilation
 
 # These self-owned regression suites run entirely in Actions. The separate
 # real-application workflow supplies the stricter release qualification gate.
-# Core loader/IR/backend changes also affect mobile recovery, so do not filter
-# this workflow to mobile frontend paths.
+# Core loader/IR/backend changes also affect mobile recovery, so the nightly run
+# covers those commits. A regression from one reaches a result within a day
+# without spending this workflow's runner hours on every commit.
 on:
+  schedule:
+    - cron: '17 23 * * *'
   push:
     branches: [dev]
-    paths-ignore:
-      - '**/*.md'
-      - '.agents/**'
-      - 'tools/neverd-gui/**'
+    paths:
+      - '.github/workflows/mobile.yml'
+      - '.github/workflows/mobile-real-apps.yml'
+      - 'tools/neverd/mobile/**'
+      - 'tools/neverd/neverd.cpp'
+      - 'tools/neverd/cmd/NeverDCmdMobile.cpp'
+      - 'lib/dalvik/**'
+      - 'include/neverd/dalvik/**'
+      - 'lib/loader/ObjC/**'
+      - 'include/neverd/loader/ObjC/**'
+      - 'lib/loader/Swift/**'
+      - 'include/neverd/loader/Swift/**'
+      - 'lib/backend/swift/**'
+      - 'unittests/mobile/**'
+      - 'scripts/*mobile*'
+      - 'scripts/tests/*mobile*'
+      - 'scripts/tests/fixtures/mobile/**'
   pull_request:
     # closed cancels this PR's run through its concurrency group; no job runs.
     types: [opened, synchronize, reopened, closed]
-    paths-ignore:
-      - '**/*.md'
-      - '.agents/**'
-      - 'tools/neverd-gui/**'
+    paths:
+      - '.github/workflows/mobile.yml'
+      - '.github/workflows/mobile-real-apps.yml'
+      - 'tools/neverd/mobile/**'
+      - 'tools/neverd/neverd.cpp'
+      - 'tools/neverd/cmd/NeverDCmdMobile.cpp'
+      - 'lib/dalvik/**'
+      - 'include/neverd/dalvik/**'
+      - 'lib/loader/ObjC/**'
+      - 'include/neverd/loader/ObjC/**'
+      - 'lib/loader/Swift/**'
+      - 'include/neverd/loader/Swift/**'
+      - 'lib/backend/swift/**'
+      - 'unittests/mobile/**'
+      - 'scripts/*mobile*'
+      - 'scripts/tests/*mobile*'
+      - 'scripts/tests/fixtures/mobile/**'
   workflow_dispatch:
 
 permissions:
