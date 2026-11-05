@@ -44,6 +44,16 @@ struct SEHExceptionAddress {
   auto operator<=>(const SEHExceptionAddress &) const = default;
 };
 
+/// A checked RaiseException occurrence and its current scalar argument. This
+/// only refines the code read by its local search filters; it proves neither
+/// callback effects nor the flags later maintained by the exception runtime.
+struct SEHExceptionOrigin {
+  va_t Address = InvalidVA;
+  int OpSeq = -1;
+  uint32_t Code = 0;
+  auto operator<=>(const SEHExceptionOrigin &) const = default;
+};
+
 /// The current thread block, named by the exact FS Self read. It is neither
 /// the registration chain nor a source-frame or callback-frame coordinate.
 struct SEHThreadAddress {
@@ -275,6 +285,7 @@ struct FrameState {
   std::set<int32_t> InitializedCallbackBytes;
   std::optional<va_t> CallbackEntry;
   std::optional<va_t> SEHFilterEntry;
+  std::optional<SEHExceptionOrigin> SEHOrigin;
   size_t cellCount() const {
     return Cells.size() + EntryCells.size() + CallbackCells.size() +
            InitializedCallbackBytes.size();
@@ -305,7 +316,8 @@ struct FrameState {
   /// pointer retained from an earlier callback. Old pointers keep only taint.
   void enterCallback(va_t Entry);
   void leaveCallback();
-  void enterSEHFilter(va_t Entry, int32_t ExceptionPointersOffset);
+  void enterSEHFilter(va_t Entry, int32_t ExceptionPointersOffset,
+                      std::optional<SEHExceptionOrigin> Origin = std::nullopt);
   /// Only the record link and the scalar code/flags are modeled. An absent
   /// value means this invocation, field, or access width has no authority.
   std::optional<FrameValue> sehExceptionLoad(const SEHExceptionAddress &Address,

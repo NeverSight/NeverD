@@ -24,6 +24,10 @@ static hash_code hash_value(const SEHExceptionAddress &Address) {
   return hash_combine(Address.Storage, Address.Filter, Address.Offset);
 }
 
+static hash_code hash_value(const SEHExceptionOrigin &Origin) {
+  return hash_combine(Origin.Address, Origin.OpSeq, Origin.Code);
+}
+
 static hash_code hash_value(const SEHThreadAddress &Address) {
   return hash_combine(Address.RootAddress, Address.RootOpSeq, Address.Offset);
 }
@@ -47,7 +51,7 @@ static hash_code hash_value(const FrameState &Frame) {
       hash_combine_range(Frame.EntryCells),
       hash_combine_range(Frame.CallbackCells),
       hash_combine_range(Frame.InitializedCallbackBytes), Frame.CallbackEntry,
-      Frame.SEHFilterEntry);
+      Frame.SEHFilterEntry, Frame.SEHOrigin);
 }
 
 size_t FrameState::snapshotHash() const { return hash_value(*this); }
