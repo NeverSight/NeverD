@@ -236,9 +236,12 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   if (CurMedFunc && CurMedFunc->FPReturnViaX87 &&
       CurMedFunc->ExplicitX87ReturnValue && Op.NumInputs == 1)
     RetVal = GetInput(0);
-  if (RetTy->isIntegerTy() && !(CurMedFunc && CurMedFunc->FPReturnViaX87) &&
-      hasPropagatedIntegerReturnValue(Op, TargetArch,
-                                      (RetTy->getIntegerBitWidth() + 7) / 8))
+  if ((RetTy->isIntegerTy() || RetTy->isPointerTy()) &&
+      !(CurMedFunc && CurMedFunc->FPReturnViaX87) &&
+      hasPropagatedIntegerReturnValue(
+          Op, TargetArch,
+          RetTy->isPointerTy() ? getTargetRegInfo(TargetArch).PointerSize
+                               : (RetTy->getIntegerBitWidth() + 7) / 8))
     RetVal = GetInput(0);
   if (CurMedFunc && !RetVal) {
     const auto &TRI = getTargetRegInfo(TargetArch);

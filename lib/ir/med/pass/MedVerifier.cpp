@@ -156,6 +156,8 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
               !x86SgxShapeIsValid(Id, x86SgxMedShape(Op)))
             Err("x86 SGX intrinsic has an invalid completion contract", Blk.Id,
                 Op.Addr);
+          if (Id == Intrinsic::Bound && !x86BoundMedShapeIsValid(Op))
+            Err(X86BoundMalformed, Blk.Id, Op.Addr);
           const bool IsDescriptorState = isX86DescriptorStateIntrinsic(Id);
           if (IsDescriptorState && !x86DescriptorStateMedShapeIsValid(Op))
             Err("x86 descriptor state intrinsic has an invalid shape", Blk.Id,

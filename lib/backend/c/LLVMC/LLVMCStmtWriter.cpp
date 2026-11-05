@@ -20,6 +20,7 @@
 #include "../render/X86/X86AmxState.h"
 #include "../render/X86/X86AtomicRmw.h"
 #include "../render/X86/X86BitTest.h"
+#include "../render/X86/X86Bound.h"
 #include "../render/X86/X86BoundedLeaf.h"
 #include "../render/X86/X86CompressExpand.h"
 #include "../render/X86/X86DivRem.h"
@@ -4300,6 +4301,14 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
     return true;
   }
 
+  if (isX86BoundNativeName(Callee->getName())) {
+    const auto P = x86BoundCallPlan(Opts.TheArch, Call);
+    emitIndent(Indent);
+    OS << renderX86Bound(*P, valueStr(Call.getArgOperand(0)),
+                         valueStr(Call.getArgOperand(1)))
+       << ";\n";
+    return true;
+  }
   if (x86FlagsNative(Callee->getName()) ||
       isX86VirtualizationNativeName(Callee->getName()) ||
       isX86SystemStateNativeName(Callee->getName()) ||
@@ -5685,6 +5694,11 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
           renderX64CallRCX(Opts.TheArch, Call, Name, ResultLive, ArgStrs)) {
     emitIndent(Indent);
     OS << *NativeCall;
+    return true;
+  }
+  if (const auto P = x86BoundCallPlan(Opts.TheArch, Call)) {
+    emitIndent(Indent);
+    OS << renderX86Bound(*P, ArgStrs.at(0), ArgStrs.at(1)) << ";\n";
     return true;
   }
   if (auto BoundedLeaf = renderX86BoundedLeafCall(Opts.TheArch, Call, Name,

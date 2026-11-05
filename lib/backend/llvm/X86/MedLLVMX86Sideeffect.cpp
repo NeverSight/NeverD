@@ -19,6 +19,7 @@
 #include "neverd/backend/llvm/X86/LLVMX86StackEffects.h"
 #include "neverd/backend/llvm/X86/LLVMX86X87StateAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX87NativeState.h"
+#include "neverd/backend/llvm/X86/X86BoundNative.h"
 #include "neverd/backend/llvm/X86/X86DescriptorStateNative.h"
 #include "neverd/backend/llvm/X86/X86FlagsNative.h"
 #include "neverd/backend/llvm/X86/X86ScalarSystemNative.h"
@@ -458,19 +459,24 @@ bool MedLLVMEmitter::emitX86SystemAsm(const MedOp &Op, Intrinsic IC,
     return true;
   }
 
-  // BOUND idx, (base) — 32-bit range check (side-effect).
   if (IC == I::Bound) {
-    if (Op.NumInputs >= 3) {
-      auto *Idx = getVar(Op.Inputs[1], Builder);
-      auto *Base = getVar(Op.Inputs[2], Builder);
-      auto *PtrTy = llvm::PointerType::get(*Ctx, 0);
-      auto *P = Builder.CreateIntToPtr(Base, PtrTy, "bound_ptr");
-      auto *VoidTy = llvm::Type::getVoidTy(*Ctx);
-      auto *FnTy =
-          llvm::FunctionType::get(VoidTy, {Idx->getType(), PtrTy}, false);
-      auto *IA = llvm::InlineAsm::get(FnTy, "bound $0, ($1)", "r,r,~{memory}",
-                                      /*hasSideEffects=*/true);
-      Builder.CreateCall(IA, {Idx, P});
+    if (!x86BoundMedShapeIsValid(Op, TargetArch))
+      llvm::report_fatal_error(X86BoundMalformed);
+    const X86BoundNative P{Op.Inputs[1].Size, unsigned(Op.Inputs[3].ConstVal),
+                           unsigned(Op.Inputs[4].ConstVal)};
+    auto *Index = getVar(Op.Inputs[1], Builder);
+    auto *Offset = Builder.CreateZExtOrTrunc(getVar(Op.Inputs[2], Builder),
+                                             Builder.getInt32Ty());
+    const auto ID = llvm::Intrinsic::lookupIntrinsicID(P.llvmName());
+    if (ID != llvm::Intrinsic::not_intrinsic) {
+      Builder.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(Mod, ID),
+                         {Index, Offset, Builder.getInt32(P.AddressBits),
+                          Builder.getInt32(P.Prefix)});
+    } else {
+      auto *Ty = llvm::FunctionType::get(
+          Builder.getVoidTy(), {Index->getType(), Offset->getType()}, false);
+      auto *Asm = llvm::InlineAsm::get(Ty, P.assembly(), P.constraints(), true);
+      Builder.CreateCall(Asm, {Index, Offset});
     }
     return true;
   }

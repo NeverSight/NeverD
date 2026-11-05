@@ -30,6 +30,7 @@
 #include "neverd/ir/intrinsics/X86/X64CallRCX.h"
 #include "neverd/ir/intrinsics/X86/X86AmxState.h"
 #include "neverd/ir/intrinsics/X86/X86AtomicMemory.h"
+#include "neverd/ir/intrinsics/X86/X86Bound.h"
 #include "neverd/ir/intrinsics/X86/X86BoundedLeaf.h"
 #include "neverd/ir/intrinsics/X86/X86DescriptorState.h"
 #include "neverd/ir/intrinsics/X86/X86Hle.h"
@@ -226,6 +227,31 @@ inline bool aarch64PAuthLoadMedShapeIsValid(const MedOp &Op) {
       Op.Output.Size, Op.Inputs[1].Size, Op.Inputs[2].Size,
       Op.Inputs[2].isConst() ? std::optional<uint64_t>(Op.Inputs[2].ConstVal)
                              : std::nullopt);
+}
+
+inline bool x86BoundMedShapeIsValid(const MedOp &Op,
+                                    Arch Target = Arch::Unknown) {
+  if (!hasValidMedIntrinsicId(Op) || Op.NumInputs != 5 ||
+      Op.Inputs[0].Size != 2 ||
+      Op.Inputs[0].ConstVal != unsigned(Intrinsic::Bound) ||
+      !Op.IntrinsicOutputs.empty() || !Op.Inputs[3].isConst() ||
+      !Op.Inputs[4].isConst() || isAddressProvenance(Op.Inputs[3].Provenance) ||
+      isAddressProvenance(Op.Inputs[4].Provenance))
+    return false;
+  for (unsigned I = 1; I != 3; ++I) {
+    const auto &V = Op.Inputs[I];
+    if (!V.isConst() && V.Kind != MedVar::Reg && V.Kind != MedVar::Temp &&
+        V.Kind != MedVar::Param)
+      return false;
+    if (V.Kind == MedVar::Reg && V.TheArch != Arch::Unknown &&
+        V.TheArch != Arch::X86)
+      return false;
+  }
+  return x86BoundShapeIsValid(Target, Op.NumInputs - 1, Op.Output.Size,
+                              {Op.Inputs[1].Size, Op.Inputs[2].Size,
+                               Op.Inputs[3].Size, Op.Inputs[4].Size},
+                              Op.Inputs[3].ConstVal, Op.Inputs[4].ConstVal,
+                              Op.MemoryAddressSpace, Op.MemoryOrdering);
 }
 
 inline bool x86DescriptorStateMedShapeIsValid(const MedOp &Op,

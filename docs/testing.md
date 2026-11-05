@@ -20697,3 +20697,20 @@ adjacent and separated entries with unordered recovered blocks.
 checks that their shared tail keeps its declared, proven owner.
 `CImageObjects.DeclaredObjectsHoldTheImageBytes` compiles and executes UTF-16
 image declarations without requiring `uchar.h`, which macOS SDKs lack.
+
+`LegacyBound/*` covers signed word/dword BOUND in both protected code widths,
+legacy paging/PAE, all CPLs, segment choices, conditional upper-field access,
+16/32-bit offset wrap and original #BR/#PF repair/IRET/retry. Repeat on each
+qualified hybrid-core profile with `NEVERD_TEST_LEGACY_ALIGNMENT=before`.
+`X86BoundSource.*` exports both C routes with
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR`; the NeverC repository's
+`tests/neverc/X86/verify_bound_source.py --exports DIR --llvm-bin LLVM_BIN
+--clang CLANG --output OUT` compiles every export and executes flat-DS/nonflat-FS
+cases with independent original bytes. Use both stock Clang and the full fork,
+at both optimization levels. `verify_protected_bound.py --mode 16|32` checks
+full compiler-frame return and original fault state in KVM. These checks are
+separate from the unavailable NeverC i386 frontend and physical MPX coverage.
+`ReturnContract.DeclaredReturnKeepsFullValueAfterNarrowRead` lifts a native
+`mov rax,rdi; mov [rsi],ax; ret` with integer/pointer declarations. It compiles
+both C routes at O0/O2 and checks the complete return plus the partial store;
+on x64 hosts outside Windows, independent original bytes provide the oracle.

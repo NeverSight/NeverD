@@ -27,6 +27,7 @@
 #include "../pass/LLVMC/LLVMCScalarLoopRecovery.h"
 #include "../render/X86/X86AmxState.h"
 #include "../render/X86/X86AtomicRmw.h"
+#include "../render/X86/X86Bound.h"
 #include "../render/X86/X86CompressExpand.h"
 #include "../render/X86/X86DescriptorState.h"
 #include "../render/X86/X86FPStateHelpers.h"
@@ -865,6 +866,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   bool NeedsX86SystemRegisterDispatch = false;
   bool NeedsX86ScalarSystemDispatch = false;
   bool NeedsX86Flags16Dispatch = false;
+  bool NeedsX86BoundDispatch = false;
   bool NeedsX86DescriptorStateDispatch = false;
   bool NeedsX86SegmentMoveDispatch = false;
   bool NeedsX86VirtualizationDispatch = false;
@@ -968,6 +970,10 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
                                Opts.ScalarPointers)
                    .empty();
         if (auto *CI = llvm::dyn_cast<llvm::CallInst>(&Inst)) {
+          if (x86BoundCallPlan(Opts.TheArch, *CI)) {
+            NeedsX86BoundDispatch = true;
+            continue;
+          }
           if (const auto *Target = CI->getCalledFunction();
               Target && x86FlagsNative(Target->getName())) {
             const auto Flags = renderX86FlagsCall(
@@ -1234,6 +1240,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     OS << X86SegmentMoveCompilerDispatch;
   if (NeedsX86DescriptorStateDispatch)
     OS << X86DescriptorStateCompilerDispatch;
+  if (NeedsX86BoundDispatch)
+    OS << X86BoundCompilerDispatch;
   if (NeedsX86Flags16Dispatch)
     OS << X86Flags16CompilerDispatch;
   if (NeedsX86ScalarSystemDispatch)
