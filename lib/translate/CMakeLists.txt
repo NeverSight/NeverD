@@ -25,6 +25,8 @@ add_neverd_component_library(NeverDTranslate
   X86/X86TranslationBlockLowerer.cpp
   X86/X86Paging.cpp
   X86/X86PagedMemory.cpp
+  X86/X86PortIO.cpp
+  X86/X86LegacyPortIO.cpp
   X86/X86LegacySegmentExecution.cpp
   X86/X86LegacyExecution.cpp
   X86/X86LegacyScalarEncoding.cpp

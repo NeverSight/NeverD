@@ -623,9 +623,9 @@ the PTE, discard a fault error code and IRET to the remaining count.
 
 LOCK on an otherwise admitted string raises #UD after original-byte fetch,
 including when CX/ECX is zero. Repeated/conflicting prefixes and F2 on a
-non-comparison remain explicit refusals. Port strings INS/OUTS, MMIO, physical
-read-ahead, debug producers, real/VM86 and a general i386 source dispatcher
-remain outside this memory-string contract. LLVM and NeverC already expose
+non-comparison remain explicit refusals. Port strings use the separate binding
+below. MMIO, physical read-ahead, debug producers, real/VM86 and a general
+i386 source dispatcher remain outside this memory-string contract. LLVM and NeverC already expose
 native string interfaces; no new compiler intrinsic is needed for this runtime
 state transition. The final SDK release, pin and LLVM gitlink stay unchanged.
 
@@ -640,6 +640,71 @@ qualification also runs both C routes through Clang/NeverC, paged execution,
 continuation source and export regressions. Final test-only include/profile
 checks retain byte-identical production translate archives; the record keeps
 the distinct test-binary and source identities.
+
+## Protected port devices
+
+Bind `X86LegacyExecutionOptions::PortIO` to an `X86PortIOBinding` for scalar
+IN/OUT (DX or imm8) and single/F3 INS/OUTS. Original-byte decoding accepts
+byte/word/dword operands in either protected code width, independent 16/32-bit
+address sizes, and source segment overrides. INS always uses ES. Word index
+and count updates preserve their upper halves and wrap before segment-base
+addition. Scalar input preserves the unaffected accumulator bits. LOCK raises
+#UD after fetch; F2, repeated prefixes and REP scalar port forms refuse.
+
+The common `X86PortIO` owner also serves the existing x64 paged source binding.
+It checks the two-byte I/O permission window as implicit supervisor memory,
+including its terminator and unwrapped port extent. CPL <= IOPL bypasses the
+TSS; otherwise a 16-bit TSS raises #GP because it has no bitmap. Legacy table
+addresses wrap at 32 bits. Permission checks precede zero-count completion;
+zero count leaves high count/index halves intact and performs no operand or
+device access. Segment checks precede the explicitly bound #AC/#PF order.
+
+Each call commits one element. `RepeatContinue` retains the original EIP and
+sets RF; completion advances EIP and clears RF. `DeviceUnavailable` retains
+registers, flags and shadows, with no transfer. `InputBeforeWrite` may retain
+one input on a destination exception, `InputAfterWriteChecks` preflights the
+whole destination, and `InputBeforeWriteFragments` additionally retains earlier
+4 KiB store fragments. `DeviceTransferCompleted` and `PortInputBytesWritten`
+report effects independently of instruction completion. Faulted elements do
+not advance indices/count; handler repair and IRET may consume a new input.
+Backing stops before the transfer consume nothing. Callback errors also
+guarantee no device effect; callbacks cannot access guest state or RAM.
+
+An accepted event retains `PendingEvent` while its entry is stopped on missing
+backing, including secondary fault/#DF state. Repair backing and call
+`resumeX86LegacyEvent`; new instructions and events refuse while it is pending.
+Resume retries the current entry against retained ordinary RAM and preserves
+earlier descriptor/frame stores. It does not replay the triggering device
+operation or reapply NMI eligibility. Completion/shutdown clears the pending
+entry. While pending, the caller may repair backing but must not execute guest
+code or change the architectural state. This continuation is an internal C++
+binding, not a serialized source ABI or an instruction-level debugger.
+
+Qualification distinguishes **KVM-intercepted device emulation** from bare CPU
+execution. Native byte INS and all OUTS widths qualify original-handler repair;
+software checks qualify the elementwise input policies at all widths. On the
+recorded KVM, a forward two-element word/dword REP INS across a missing page
+reads four values over fault/retry and replaces the first element, while the
+explicit elementwise model reads three and retains the completed first element.
+A dedicated regression independently checks both images and records this
+discrepancy separately from equivalence counts. KVM may also expose an input
+batch-completion interrupt before final EIP/RF publication. Output IRQ/NMI
+boundaries have native checks; both directions have explicit software
+delivery/IRET/resume checks. Single-step injection changes saved TF and is not
+used to disguise these differences. KVM's missing port #AC checks remain
+separate from architectural alignment unit checks.
+
+The basis is the [Intel SDM](https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf)
+IN/OUT/INS/OUTS, REP, I/O bitmap and 16-bit TSS contracts. Historical
+[KVM emulator code](https://github.com/torvalds/linux/blob/v6.17/arch/x86/kvm/emulate.c)
+documents input read-ahead and separate writeback/progress publication; it is
+not the source identity of the measured host kernel. See the actual runtime
+observations in the [qualification record](evidence/x86-legacy-ports-2026-11-05.json).
+The profiles bind ordinary RAM and an isolated synchronous device. They do
+not predict device read-ahead, physical bus or interrupt timing, MMIO,
+self-modifying page-table fragment behavior, real/VM86, or general i386 source
+dispatch. LLVM/NeverC already own native port APIs; this change adds runtime
+state ownership and does not publish a new LLVM SDK or alter its pin/gitlink.
 
 ## Protected SYSENTER and SYSEXIT
 

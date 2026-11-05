@@ -63,6 +63,16 @@ The outer legacy executor owns original-byte authentication, partial RF/EIP
 publication and persistent shadows; the existing IDT/IRET owners handle faults
 and producer-selected asynchronous boundaries. A caller never rolls back
 previously completed elements when the current element fails.
+`translate/X86/X86PortIO` owns the shared permission bitmap reads and confined
+device/RAM transaction for both execution modes. `X86LegacyPortIO` composes
+that owner with the strict legacy grammar, TSS kind, segment checks and
+16/32-bit indices. The x64 adapter keeps its existing names as aliases and
+supplies long-mode addressing; neither mode duplicates device commit rules.
+Legacy event acceptance now retains the current delivery vector, saved flags
+and restart PC across backing stops. `resumeX86LegacyEvent` retries that entry
+against retained RAM, including a recursive #DF, without repeating the
+instruction or accepting its event again. Pending delivery blocks new
+instructions/events; eligibility and NMI inhibition are applied only once.
 ARPL uses that owner's word read and a conditional store. Only a required RPL
 adjustment requests write permission, and ZF is staged until the store succeeds.
 `X86SystemStateNative` owns ARPL's separate compiler APIs and C dispatch for

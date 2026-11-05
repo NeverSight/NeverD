@@ -7,6 +7,7 @@
 /// Instruction authentication, event admission and persistent restart state.
 //===----------------------------------------------------------------------===//
 
+#include "X86PortDevice.h"
 #include "gtest/gtest.h"
 
 #include "neverd/translate/X86/X86LegacyExecution.h"
@@ -35,6 +36,7 @@ protected:
   std::unique_ptr<X86PagedMemory> M;
 
   void SetUp() override {
+    S = {};
     O.Scalars = X86LegacyScalarProfile::OrderedRAM;
     O.Calls = X86LegacyCallProfile::StoreBeforeTargetLimit;
     auto RAM =
@@ -729,6 +731,7 @@ TEST_F(X86LegacyExecutionTest, ScalarMalformedFormsFailBeforeFetch) {
 #include "X86LegacyFlagsTests.inc"
 #include "X86LegacyImplicitTests.inc"
 #include "X86LegacyMultiplyTests.inc"
+#include "X86LegacyPortIOTests.inc"
 #include "X86LegacyShiftTests.inc"
 #include "X86LegacyStatusTests.inc"
 #include "X86LegacyStringTests.inc"

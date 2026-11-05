@@ -13,6 +13,7 @@
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 #include "neverd/ir/X86/X86MpxContext.h"
 #include "neverd/translate/X86/X86LegacySegmentExecution.h"
+#include "neverd/translate/X86/X86PortIO.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
@@ -28,6 +29,25 @@ struct X86LegacySysenterState {
   uint32_t CS = 0;
   uint32_t ESP = 0;
   uint32_t EIP = 0;
+};
+
+using X86LegacyEventKind = X86EventKind;
+
+struct X86LegacyEvent {
+  uint32_t SavedEIP = 0;
+  uint32_t ErrorCode = 0;
+  uint32_t FaultAddress = 0;
+  uint8_t Vector = 0;
+  X86LegacyEventKind Kind = X86LegacyEventKind::Fault;
+};
+
+/// Accepted event retained across backing stops. Repair backing before resume;
+/// do not edit the architectural state or begin another instruction/event.
+struct X86LegacyEventContinuation {
+  X86LegacyEvent Event;
+  uint32_t FaultEIP = 0;
+  uint32_t SavedFlags = 0;
+  std::optional<X86MemoryException> LastException;
 };
 
 struct X86LegacyExecutionState {
@@ -46,16 +66,7 @@ struct X86LegacyExecutionState {
   /// nothing; CR4.OSXSAVE=0 alone can prove that no MPX state is needed.
   /// Other MPX instructions/control transfers still need their own dispatch.
   std::optional<X86MpxContext> Mpx;
-};
-
-using X86LegacyEventKind = X86EventKind;
-
-struct X86LegacyEvent {
-  uint32_t SavedEIP = 0;
-  uint32_t ErrorCode = 0;
-  uint32_t FaultAddress = 0;
-  uint8_t Vector = 0;
-  X86LegacyEventKind Kind = X86LegacyEventKind::Fault;
+  std::optional<X86LegacyEventContinuation> PendingEvent;
 };
 
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
@@ -171,6 +182,7 @@ struct X86LegacyExecutionOptions {
   /// zero delivers #DE before publishing AX or flags; AAD base zero is valid.
   std::optional<uint32_t> DecimalUndefinedFlags;
   std::optional<X86LegacyStringProfile> Strings;
+  std::optional<X86PortIOBinding> PortIO;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -182,6 +194,7 @@ enum class X86LegacyExecutionStatus : uint8_t {
   Shutdown,
   /// One REP element committed; EIP still names the original instruction.
   RepeatContinue,
+  DeviceUnavailable,
 };
 
 struct X86LegacyExecutionResult {
@@ -189,6 +202,8 @@ struct X86LegacyExecutionResult {
   bool InstructionAttempted = false;
   bool InstructionCompleted = false;
   bool EventAccepted = false;
+  bool DeviceTransferCompleted = false;
+  uint8_t PortInputBytesWritten = 0;
   uint8_t DeliveredVector = 0;
   unsigned DeliveryAttempts = 0;
   std::optional<X86MemoryException> Exception;
@@ -204,6 +219,13 @@ llvm::Expected<X86LegacyExecutionResult>
 deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                       const X86LegacyEvent &Event,
                       const X86LegacyExecutionOptions &Options);
+
+/// Resume a previously accepted event without refetching or repeating its
+/// triggering instruction/device effects. The result counts only this call's
+/// delivery attempts; EventAccepted and device-completion fields remain false.
+llvm::Expected<X86LegacyExecutionResult>
+resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
+                     const X86LegacyExecutionOptions &Options);
 
 /// Authenticates original bytes through CS and paging, then executes the
 /// segment-transition owner, the explicit ordinary-RAM scalar owner, or
@@ -222,6 +244,10 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// delivery. The caller may deliver an event at that boundary or repeat the
 /// same immutable bytes. Zero counts complete without operand access. LOCK
 /// raises #UD after fetch; duplicate prefixes and F2 on non-comparisons refuse.
+/// PortIO adds IN/OUT and single/REP INS/OUTS with explicit device effects.
+/// DeviceUnavailable preserves indices/count/flags; an input fault may retain
+/// a read and RAM fragments according to the bound profile. Pending event
+/// delivery must be resumed before executing another instruction.
 /// Register immediates
 /// retain their unbound interface; other scalars require Scalars, CALL requires
 /// Calls, and logical flags require an AF choice. Division requires an explicit

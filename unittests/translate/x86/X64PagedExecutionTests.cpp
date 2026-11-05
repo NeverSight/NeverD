@@ -9,7 +9,7 @@
 
 #include "../../lift/NeverDLiftFixture.h"
 #include "X64PagedNativeCPU.h"
-#include "X64PagedPortDevice.h"
+#include "X86PortDevice.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"
 #include "neverd/lift/X86/X86Regs.h"

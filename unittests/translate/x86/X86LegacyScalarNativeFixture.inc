@@ -31,6 +31,9 @@ protected:
   std::vector<std::pair<uint32_t, unsigned>> ExtraMemoryChecks;
   std::optional<X86LegacyEventKind> PendingEvent;
   bool STIShadow = false;
+  std::optional<X86PortIOProfile> PortIO;
+  bool KnownPortBatchRestart = false;
+  unsigned PortBatchDiscrepancies = 0;
 
   void SetUp() override {
     X86PagingNativeTest::SetUp();
@@ -270,6 +273,10 @@ protected:
     Options.BitScanChoices = BitScanChoices;
     Options.Atomics = Atomics;
     Options.Strings = Strings;
+    PagedPortTape Tape, NativeTape;
+    if (PortIO)
+      Options.PortIO =
+          X86PortIOBinding{*PortIO, PagedPortTape::transfer, &Tape};
     if (PendingEvent && STIShadow)
       Options.NMIBlockedBySTI = true;
     const uint8_t PendingVector =
@@ -298,18 +305,30 @@ protected:
     Debug.arch.debugreg[2] = Stop;
     Debug.arch.debugreg[7] = PendingEvent ? 0x410 : 0x415;
     ASSERT_EQ(ioctl(CPU, KVM_SET_GUEST_DEBUG, &Debug), 0);
+    const auto RunToBoundary = [&] {
+      do {
+        ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
+        if (Run->exit_reason != KVM_EXIT_IO)
+          return;
+        ASSERT_TRUE(PortIO.has_value());
+        PagedPortTape::kvm(&NativeTape, Run->io.direction == KVM_EXIT_IO_IN,
+                           Run->io.port, Run->io.size, Run->io.count,
+                           reinterpret_cast<uint8_t *>(Run) +
+                               Run->io.data_offset);
+      } while (true);
+    };
     if (PendingEvent == X86LegacyEventKind::NMI)
       ASSERT_EQ(ioctl(CPU, KVM_NMI, 0), 0);
     Run->request_interrupt_window =
         PendingEvent == X86LegacyEventKind::Interrupt;
     if (Run->request_interrupt_window) {
-      ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
+      ASSERT_NO_FATAL_FAILURE(RunToBoundary());
       ASSERT_EQ(Run->exit_reason, unsigned(KVM_EXIT_IRQ_WINDOW_OPEN));
       Run->request_interrupt_window = 0;
       kvm_interrupt IRQ{PendingVector};
       ASSERT_EQ(ioctl(CPU, KVM_INTERRUPT, &IRQ), 0);
     }
-    ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
+    ASSERT_NO_FATAL_FAILURE(RunToBoundary());
     if (DecimalUndefinedMask) {
       ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &Registers), 0);
       Options.DecimalUndefinedFlags = Registers.rflags & *DecimalUndefinedMask;
@@ -360,6 +379,37 @@ protected:
       Expected = Execute(RetryBytes);
       ASSERT_TRUE(bool(Expected)) << llvm::toString(Expected.takeError());
       ASSERT_TRUE(Expected->InstructionCompleted);
+    }
+    unsigned BatchBytes = 0;
+    uint32_t BatchAddress = 0;
+    if (KnownPortBatchRestart) {
+      // KVM batches a cross-page REP INS write, then retries the whole batch
+      // after the handler. This is deliberately not a model/CPU equivalence.
+      ASSERT_EQ(Tape.Transfers.size(), 3u);
+      ASSERT_EQ(NativeTape.Transfers.size(), 4u);
+      BatchBytes = Tape.Transfers.front().Bytes;
+      BatchAddress = InputRegisters->at(7) & CountMask;
+      PagedPortTape ExpectedTape;
+      for (unsigned I = 0; I != 4; ++I)
+        ExpectedTape.exchange(true, uint16_t(InputRegisters->at(2)), BatchBytes,
+                              0);
+      EXPECT_EQ(NativeTape.Transfers, ExpectedTape.Transfers);
+      ExpectedTape.Transfers.pop_back();
+      EXPECT_EQ(Tape.Transfers, ExpectedTape.Transfers);
+      const uint32_t Mask = BatchBytes == 4 ? UINT32_MAX : UINT16_MAX;
+      for (unsigned I = 0; I != 2; ++I) {
+        const uint32_t Address = BatchAddress + I * BatchBytes;
+        EXPECT_EQ(get(Address, BatchBytes),
+                  (0x87654321u + (I + 2) * 0x123u) & Mask);
+        auto Got = Memory->physicalMemory().loadScalar(
+            Address,
+            BatchBytes == 4 ? GuestScalarWidth::I32 : GuestScalarWidth::I16);
+        ASSERT_EQ(Got.Status, GuestMemoryAccessStatus::Completed);
+        EXPECT_EQ(Got.Value, (0x87654321u + I * 2 * 0x123u) & Mask);
+      }
+      ++PortBatchDiscrepancies;
+    } else if (PortIO) {
+      EXPECT_EQ(Tape.Transfers, NativeTape.Transfers);
     }
     if (Expected->Status == X86LegacyExecutionStatus::Shutdown) {
       ASSERT_EQ(Run->exit_reason, unsigned(KVM_EXIT_SHUTDOWN));
@@ -437,6 +487,10 @@ protected:
       if (Begin > MemorySize - Size)
         continue;
       for (unsigned I = 0; I != Size; ++I) {
+        // Both different batch images were independently checked above.
+        if (KnownPortBatchRestart && Begin + I >= BatchAddress &&
+            Begin + I < BatchAddress + 2 * BatchBytes)
+          continue;
         // The 16-bit wrapping stack can approach the page-directory page;
         // hardware translation caches make its A/D bits a separate contract.
         if (Begin + I >= 0x10000 && Begin + I < 0x10020)
@@ -447,7 +501,8 @@ protected:
         EXPECT_EQ(get(Begin + I, 1), Got.Value) << std::hex << Begin + I;
       }
     }
-    ++Comparisons;
+    if (!KnownPortBatchRestart)
+      ++Comparisons;
   }
 };
 

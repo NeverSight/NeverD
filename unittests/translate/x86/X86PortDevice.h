@@ -1,4 +1,4 @@
-//===- X64PagedPortDevice.h - Independent synthetic port tape ---*- C++ -*-===//
+//===- X86PortDevice.h - Independent synthetic port tape ---*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -7,10 +7,10 @@
 /// Feed KVM and the paged executor independent copies of the same device.
 //===----------------------------------------------------------------------===//
 
-#ifndef NEVERD_UNITTESTS_TRANSLATE_X86_X64PAGEDPORTDEVICE_H
-#define NEVERD_UNITTESTS_TRANSLATE_X86_X64PAGEDPORTDEVICE_H
+#ifndef NEVERD_UNITTESTS_TRANSLATE_X86_X86PORTDEVICE_H
+#define NEVERD_UNITTESTS_TRANSLATE_X86_X86PORTDEVICE_H
 
-#include "neverd/analysis/arch/x86_64/X64PagedPortIO.h"
+#include "neverd/translate/X86/X86PortIO.h"
 
 #include "llvm/Support/Error.h"
 
@@ -38,7 +38,7 @@ struct PagedPortTape {
     return Value;
   }
   static llvm::Expected<std::optional<uint32_t>>
-  transfer(void *Context, const neverd::analysis::X64PortIORequest &Request) {
+  transfer(void *Context, const neverd::translate::X86PortIORequest &Request) {
     auto &T = *static_cast<PagedPortTape *>(Context);
     if (T.Fail)
       return llvm::createStringError(llvm::inconvertibleErrorCode(),
@@ -66,4 +66,4 @@ struct PagedPortTape {
 
 } // namespace
 
-#endif // NEVERD_UNITTESTS_TRANSLATE_X86_X64PAGEDPORTDEVICE_H
+#endif // NEVERD_UNITTESTS_TRANSLATE_X86_X86PORTDEVICE_H

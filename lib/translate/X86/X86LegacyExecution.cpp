@@ -11,6 +11,7 @@
 
 #include "X86LegacyExecutionInternal.h"
 #include "X86LegacyFastSystem.h"
+#include "X86LegacyPortIO.h"
 #include "X86LegacyScalar.h"
 #include "X86LegacySegmentEncoding.h"
 #include "X86LegacyString.h"
@@ -60,6 +61,9 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
                             X86PagedMemory &Memory,
                             llvm::ArrayRef<uint8_t> Instruction,
                             const X86LegacyExecutionOptions &Options) {
+  if (State.PendingEvent)
+    return invalid(
+        "resume the pending legacy event before another instruction");
   if (Instruction.empty() || Instruction.size() > 15)
     return invalid("invalid legacy instruction length");
   const bool Code32 = State.Core.Segments[1].Attributes & 0x4000;
@@ -69,6 +73,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       detail::decodeLegacyScalarInstruction(Instruction, Code32);
   const auto FastSystem = detail::decodeLegacyFastSystem(Instruction, Code32);
   const auto String = detail::decodeLegacyString(Instruction, Code32);
+  const auto Port = detail::decodeLegacyPortIO(Instruction, Code32);
   auto Body = Instruction;
   unsigned Width = Code32 ? 4 : 2;
   if (Body.front() == 0x66) {
@@ -85,9 +90,15 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   const bool IRET = Body.size() == 1 && Body[0] == 0xcf;
   const bool RETF = (Body.size() == 1 && Body[0] == 0xcb) ||
                     (Body.size() == 3 && Body[0] == 0xca);
-  if (!Segment && !Scalar && !FastSystem && !String && !Single && !INT &&
-      !UD2 && !IRET && !RETF)
+  if (!Segment && !Scalar && !FastSystem && !String && !Port && !Single &&
+      !INT && !UD2 && !IRET && !RETF)
     return invalid("unsupported or malformed legacy step instruction");
+  if (Port) {
+    if (!Options.PortIO)
+      return invalid("legacy port step requires a bound device profile");
+    if (auto Error = validateX86PortIOBinding(*Options.PortIO))
+      return std::move(Error);
+  }
   if (String &&
       Options.Strings != X86LegacyStringProfile::ElementwiseDestinationFirst)
     return invalid(
@@ -168,7 +179,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
        (State.Core.CPL == 3 && (Memory.controls().CR0 & 0x40000) &&
         (State.EFlags & 0x40000) && !Options.Segments.AlignmentPriority)))
     return invalid("legacy return requires a bound return/alignment profile");
-  if ((Segment || Scalar || String) &&
+  if ((Segment || Scalar || String || (Port && Port->String)) &&
       (Options.Segments.Profile !=
            X86LegacySegmentProfile::WordStackOffsetFirst ||
        (Options.Segments.AlignmentPriority &&
@@ -198,6 +209,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     auto Delivered = deliverX86LegacyEvent(State, Memory, Event, Options);
     if (!Delivered)
       return Delivered.takeError();
+    Delivered->DeviceTransferCompleted = R.DeviceTransferCompleted;
+    Delivered->PortInputBytesWritten = R.PortInputBytesWritten;
     Delivered->InstructionAttempted = true;
     Delivered->InstructionCompleted =
         Completed &&
@@ -270,6 +283,23 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       return Got.takeError();
     Accept(*Got);
     SS = Got->LoadsSSWithInhibition && !State.SSBlocked;
+  } else if (!R.Exception && Port) {
+    auto Staged = State;
+    auto Got =
+        detail::executeLegacyPortIO(Staged, Memory, *Port, NextIP, Options);
+    if (!Got)
+      return Got.takeError();
+    R.DeviceTransferCompleted = Got->DeviceTransferCompleted;
+    R.PortInputBytesWritten = Got->InputBytesWritten;
+    if (Accept(Got->Access)) {
+      if (Got->DeviceUnavailable) {
+        R.Status = X86LegacyExecutionStatus::DeviceUnavailable;
+        return R;
+      }
+      Next = Staged.Core;
+      NextIP = Staged.EIP;
+      RepeatContinue = Got->RepeatContinue;
+    }
   } else if (!R.Exception && String) {
     auto Staged = State;
     auto Got =

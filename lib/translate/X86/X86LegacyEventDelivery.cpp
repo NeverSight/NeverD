@@ -274,43 +274,16 @@ private:
   }
 };
 
-} // namespace
-
 llvm::Expected<X86LegacyExecutionResult>
-deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
-                      const X86LegacyEvent &Input,
-                      const X86LegacyExecutionOptions &Options) {
-  if (!validEvent(Input))
-    return invalid("invalid legacy event classification or frame data");
-  if (Input.Kind == Kind::NMI && State.STIBlocked && !State.SSBlocked &&
-      !State.NMIBlocked && !Options.NMIBlockedBySTI)
-    return invalid("legacy NMI under STI requires a bound inhibition policy");
-  if (auto Error = detail::admitLegacyExecution(State, Memory, Options))
-    return std::move(Error);
+continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
+              const X86LegacyExecutionOptions &Options, bool Accepted) {
+  auto &Pending = *State.PendingEvent;
+  auto &Event = Pending.Event;
+  auto &SavedFlags = Pending.SavedFlags;
+  const uint32_t FaultEIP = Pending.FaultEIP;
   X86LegacyExecutionResult R;
-  const bool Debug = Input.Vector == 1 &&
-                     (Input.Kind == Kind::Fault || Input.Kind == Kind::Trap ||
-                      Input.Kind == Kind::InstructionBreakpoint);
-  if ((Input.Kind == Kind::Interrupt &&
-       (!(State.EFlags & 0x200) || State.STIBlocked || State.SSBlocked)) ||
-      (Input.Kind == Kind::NMI &&
-       (State.NMIBlocked || State.SSBlocked ||
-        (State.STIBlocked && Options.NMIBlockedBySTI.value_or(false)))) ||
-      (Debug && State.SSBlocked) ||
-      (Input.Kind == Kind::InstructionBreakpoint && (State.EFlags & 0x10000))) {
-    R.Status = X86LegacyExecutionStatus::EventDeferred;
-    return R;
-  }
-  R.EventAccepted = true;
-  State.STIBlocked = State.SSBlocked = false;
-  if (Input.Kind == Kind::NMI)
-    State.NMIBlocked = true;
-  if (Input.Kind == Kind::Fault && Input.Vector == 14)
-    State.CR2 = Input.FaultAddress;
-  const auto FaultEIP =
-      Input.Kind == Kind::Software ? State.EIP : Input.SavedEIP;
-  auto Event = Input;
-  auto SavedFlags = State.EFlags;
+  R.EventAccepted = Accepted;
+  R.Exception = Pending.LastException;
   for (;;) {
     // OrderedFrame preserves the failed fault entry's RF image if the next
     // attempt becomes #DF. The architectural state after #DF is undefined;
@@ -334,6 +307,7 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     if (Got->Status == X86PageWalkStatus::Completed) {
       R.Status = X86LegacyExecutionStatus::EventDelivered;
       R.DeliveredVector = Event.Vector;
+      State.PendingEvent.reset();
       auto Controls = Memory.controls();
       Controls.RFlags = State.EFlags;
       if (auto Error = Memory.bindControls(Controls))
@@ -341,10 +315,12 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       return R;
     }
     R.Exception = Got->Exception;
+    Pending.LastException = Got->Exception;
     const auto Vector = Got->Exception->Vector;
     if (Event.Kind == Kind::Abort && Event.Vector == 8 &&
         (x86ContributoryException(Vector) || x86PageClassException(Vector))) {
       R.Status = X86LegacyExecutionStatus::Shutdown;
+      State.PendingEvent.reset();
       return R;
     }
     const bool Double =
@@ -353,6 +329,56 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
              Double ? 0 : uint32_t(Got->Exception->CR2.value_or(0)),
              uint8_t(Double ? 8 : Vector), Double ? Kind::Abort : Kind::Fault};
   }
+}
+} // namespace
+
+llvm::Expected<X86LegacyExecutionResult>
+deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
+                      const X86LegacyEvent &Input,
+                      const X86LegacyExecutionOptions &Options) {
+  if (State.PendingEvent)
+    return invalid("resume the pending legacy event before accepting another");
+  if (!validEvent(Input))
+    return invalid("invalid legacy event classification or frame data");
+  if (Input.Kind == Kind::NMI && State.STIBlocked && !State.SSBlocked &&
+      !State.NMIBlocked && !Options.NMIBlockedBySTI)
+    return invalid("legacy NMI under STI requires a bound inhibition policy");
+  if (auto Error = detail::admitLegacyExecution(State, Memory, Options))
+    return std::move(Error);
+  X86LegacyExecutionResult R;
+  const bool Debug = Input.Vector == 1 &&
+                     (Input.Kind == Kind::Fault || Input.Kind == Kind::Trap ||
+                      Input.Kind == Kind::InstructionBreakpoint);
+  if ((Input.Kind == Kind::Interrupt &&
+       (!(State.EFlags & 0x200) || State.STIBlocked || State.SSBlocked)) ||
+      (Input.Kind == Kind::NMI &&
+       (State.NMIBlocked || State.SSBlocked ||
+        (State.STIBlocked && Options.NMIBlockedBySTI.value_or(false)))) ||
+      (Debug && State.SSBlocked) ||
+      (Input.Kind == Kind::InstructionBreakpoint && (State.EFlags & 0x10000))) {
+    R.Status = X86LegacyExecutionStatus::EventDeferred;
+    return R;
+  }
+  State.STIBlocked = State.SSBlocked = false;
+  if (Input.Kind == Kind::NMI)
+    State.NMIBlocked = true;
+  if (Input.Kind == Kind::Fault && Input.Vector == 14)
+    State.CR2 = Input.FaultAddress;
+  const auto FaultEIP =
+      Input.Kind == Kind::Software ? State.EIP : Input.SavedEIP;
+  State.PendingEvent =
+      X86LegacyEventContinuation{Input, FaultEIP, State.EFlags, {}};
+  return continueEvent(State, Memory, Options, true);
+}
+
+llvm::Expected<X86LegacyExecutionResult>
+resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
+                     const X86LegacyExecutionOptions &Options) {
+  if (!State.PendingEvent || !validEvent(State.PendingEvent->Event))
+    return invalid("no valid pending legacy event to resume");
+  if (auto Error = detail::admitLegacyExecution(State, Memory, Options))
+    return std::move(Error);
+  return continueEvent(State, Memory, Options, false);
 }
 
 } // namespace neverd::translate

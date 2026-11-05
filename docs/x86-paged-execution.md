@@ -528,6 +528,11 @@ and interrupt inhibition, and volume 3B protected-mode virtual interrupts;
 
 ## Explicit port devices
 
+`translate/X86/X86PortIO` now owns device effects and bitmap reads for this
+adapter and the [protected legacy binding](x86-legacy-segments.md#protected-port-devices).
+Existing `X64PagedPortIO*` type names remain aliases of the common types.
+The mode adapters still own addressing, TSS admission and register progress.
+
 Paged V6 exports admit long-mode scalar `IN/OUT` (DX or imm8) and single or
 F3-repeated `INS/OUTS`, at byte/word/dword widths and 32/64-bit address widths.
 REX.W overrides 66 but the transfer remains capped at a dword; without

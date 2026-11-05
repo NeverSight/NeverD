@@ -41,6 +41,21 @@ CR2 and retained ordinary RAM remain checked. Repeat these tests on the
 qualified P/E cores and both SDKs; preserve raw failing probes as diagnostics.
 See [the legacy execution contract](x86-legacy-segments.md#protected-instruction-and-event-execution).
 
+`LegacyPorts/*` adds protected IN/OUT/INS/OUTS to that fixture with independent
+device tapes. These are KVM-intercepted I/O comparisons, not bare CPU device
+execution. They cover code/address/operand widths, CPL/IOPL, 16-bit TSS
+denial, bitmap extent/permissions, nonflat segment overrides, page/segment
+faults, split input stores, original handler repair, address wrap, LOCK and
+output IRQ/NMI boundaries. The dedicated input-batch restart regression
+checks both different RAM/device images independently and records them as
+`kvm_input_batch_restart_discrepancies`, outside `kvm_port_comparisons`.
+Unit checks retain architectural #AC ordering, device wait/error/backing
+boundaries, both-direction event resume, and input consumption across a
+fault-delivery backing stop or recursive #DF. Build and run full paging,
+paged execution and continuation source/export suites on both SDKs after
+changing the shared port/event owners; repeat the port matrix on P/E cores.
+See [protected port devices](x86-legacy-segments.md#protected-port-devices).
+
 `LegacyDivision/*` reuses the original protected scalar CPU fixture for byte,
 word and dword DIV/IDIV. It checks complete dividends, signed quotient bounds,
 all operand registers and byte aliases, explicit undefined flag choices,

@@ -8,6 +8,7 @@
 /// success, #PF error codes and CR2 with the software page walker.
 //===----------------------------------------------------------------------===//
 
+#include "X86PortDevice.h"
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedEventDelivery.h"
@@ -653,6 +654,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
 #include "X86LegacyFlagsNativeTests.inc"
 #include "X86LegacyImplicitNativeTests.inc"
 #include "X86LegacyMultiplyNativeTests.inc"
+#include "X86LegacyPortIONativeTests.inc"
 #include "X86LegacyReturnNativeTests.inc"
 #include "X86LegacyScalarNativeTests.inc"
 #include "X86LegacySegmentLoadNativeTests.inc"
