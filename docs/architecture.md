@@ -17637,10 +17637,9 @@ Only successful completion stops before a selected return target. The producer
 must retain the same paged execution context and declared cell/address-space
 lifetime; numeric SP alone does not prove mapping ownership. The original
 paged driver remains a null-context adapter. Disabled requests retain identical
-source. Paged scalar call views remain rejected: extra argument-validation
-reads could fault or publish page-table effects absent from the instruction
-stream. This option does not add native state capture or scheduled-event
-composition.
+source. Paged stack-argument checks remain rejected: extra validation reads
+could fault or publish page-table effects absent from the instruction stream.
+This option does not add native state capture or scheduled-event composition.
 
 `X64FunctionCalls` adds producer-declared Win64 scalar call views at explicit
 roots. The shared argument-layout owner supplies register and stack positions;
@@ -17657,6 +17656,17 @@ Ordinary C callers receive status, a completion flag and valid result bits only
 on completion. This opt-in layer appends wrappers without changing either
 instruction dispatcher; it does not infer ABI declarations, capture native RAM
 or weaken ordinary missing-input proofs.
+
+The same call-view owner emits paged entry/resume wrappers when every physical
+stack slot is context-only. The shared Win64 layout supplies that admission
+boundary, and register checks reuse the existing argument writer. No wrapper
+reads guest RAM, prepares a translation or initializes an input. The existing
+paged function driver owns all original operand accesses and fault accounting;
+the wrapper captures a result only after its authenticated return-cell
+completion. The producer retains the paged context and address-space lifetime
+across resumes. Paged pre-CALL bridges remain unsupported because the pending
+CALL would need its own fault/retry controller. These entry views neither
+capture a native snapshot nor recover ordinary-source stack arguments.
 
 `X64FunctionCallSites` binds optional original direct CALL sites to those
 interfaces. A lazily built index contains only the requested sites, and the

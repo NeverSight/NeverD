@@ -79,7 +79,8 @@ llvm::json::Array emitX64FunctionCallArguments(
 
 llvm::json::Array
 emitX64FunctionCalls(llvm::raw_ostream &OS,
-                     llvm::ArrayRef<X64FunctionCallInterface> Calls) {
+                     llvm::ArrayRef<X64FunctionCallInterface> Calls,
+                     bool PagedMemory) {
   llvm::json::Array Manifest;
   if (Calls.empty())
     return Manifest;
@@ -92,8 +93,13 @@ emitX64FunctionCalls(llvm::raw_ostream &OS,
  * Zero-initialize call context; retain it and state across pauses. Resume does
  * not check entry arguments again. Value is valid only when Completed is 1.
  * Context, state, budgets and provider storage must be mutually disjoint and
- * disjoint from guest RAM. Declared stack arguments require accessible RAM. */
-typedef struct neverd_x64_call_context_v1 {
+)C";
+  OS << (PagedMemory
+             ? " * disjoint from guest RAM. Stack slots stay in paged state; "
+               "entry checks read no guest RAM. */\n"
+             : " * disjoint from guest RAM. Declared stack arguments require "
+               "accessible RAM. */\n");
+  OS << R"C(typedef struct neverd_x64_call_context_v1 {
     neverd_x64_function_context_v1 Function;
     uint64_t Entry, Value;
 } neverd_x64_call_context_v1;
@@ -103,15 +109,23 @@ typedef struct neverd_x64_call_result_v1 {
 )C";
   for (const auto &Call : Calls) {
     const auto Entry = llvm::utohexstr(Call.Entry);
-    const std::string Start = "neverd_x64_call_" + Entry + "_v6";
-    const std::string Resume = "neverd_x64_resume_" + Entry + "_v6";
+    const std::string Start =
+        (PagedMemory ? "neverd_x64_call_paged_" : "neverd_x64_call_") + Entry +
+        "_v6";
+    const std::string Resume =
+        (PagedMemory ? "neverd_x64_resume_paged_" : "neverd_x64_resume_") +
+        Entry + "_v6";
     const auto ResultType =
         "uint" + std::to_string(Call.ResultBytes * 8) + "_t";
     const auto Parameters =
-        "(neverd_x64_state_v6 *state, uint64_t *budget, "
-        "uint64_t *environment_budget,\n"
-        "    neverd_x64_call_context_v1 *call, neverd_x64_environment_v6 "
-        "environment, void *environment_context";
+        PagedMemory
+            ? "(neverd_x64_state_v6 *state, uint8_t *context, uint64_t "
+              "*budget,\n"
+              "    neverd_x64_call_context_v1 *call"
+            : "(neverd_x64_state_v6 *state, uint64_t *budget, "
+              "uint64_t *environment_budget,\n"
+              "    neverd_x64_call_context_v1 *call, neverd_x64_environment_v6 "
+              "environment, void *environment_context";
     OS << "\nneverd_x64_call_result_v1 " << Resume << Parameters << ") {\n"
        << "    neverd_x64_call_result_v1 result = {"
        << uint64_t(Exit::InvalidState) << ", 0, 0};\n"
@@ -123,10 +137,14 @@ typedef struct neverd_x64_call_result_v1 {
        << "; result.Completed = 1; result.Value = call->Value;\n"
           "        return result;\n"
           "    }\n"
-          "    result.Status = neverd_x64_run_function_v6(state, budget, "
-          "environment_budget,\n"
-          "        &call->Function, environment, environment_context);\n"
-          "    if (call->Function.Phase == NEVERD_X64_FUNCTION_RETURNED) {\n"
+          "    result.Status = ";
+    if (PagedMemory)
+      OS << "neverd_x64_run_paged_function_v6(state, context, budget, "
+            "&call->Function);\n";
+    else
+      OS << "neverd_x64_run_function_v6(state, budget, environment_budget,\n"
+            "        &call->Function, environment, environment_context);\n";
+    OS << "    if (call->Function.Phase == NEVERD_X64_FUNCTION_RETURNED) {\n"
           "        call->Value = ("
        << ResultType << ")state->GPR[" << TRI.IntReturnReg / TRI.PointerSize
        << "];\n"
@@ -155,8 +173,10 @@ typedef struct neverd_x64_call_result_v1 {
           "    call->Entry = 0x"
        << Entry << "ULL;\n"
        << "    return " << Resume
-       << "(state, budget, environment_budget, "
-          "call, environment, environment_context);\n}\n";
+       << (PagedMemory
+               ? "(state, context, budget, call);\n}\n"
+               : "(state, budget, environment_budget, call, environment, "
+                 "environment_context);\n}\n");
     Manifest.push_back(llvm::json::Object{{"entry", "0x" + Entry},
                                           {"abi", "win64"},
                                           {"arguments", std::move(Arguments)},

@@ -1,5 +1,15 @@
 # Remaining x64 C-quality work
 
+Paged function-call views now admit register checks with every stack slot
+retained in the original state. Both C routes reuse the existing activation,
+result-cache and paged instruction owners, with no entry guest-memory read or
+per-instruction check. Static value/composition proofs preserve arbitrary
+incoming upper-DWORD bits through real generated MOV/XOR/RET bodies and model
+fault/backing/resume outcomes separately. This removes the blanket paged-view
+refusal; it does not recover the two ordinary registry inputs, capture native
+state or qualify complete environment effects. Scalar stack checks and paged
+pre-CALL bridges still need separate observation/fault contracts.
+
 Explicit function activations now compose with paged memory through
 `neverd_x64_run_paged_function_v6`. The shared return-cell owner stops only after
 an attempted successful original near RET; fault/backing/changed-code stops
@@ -7,8 +17,8 @@ retain the activation and the paged runtime's original budget/effect rules.
 The producer must retain the same execution context and declared guest return
 cell/address-space lifetime. This removes the host-addressable-RAM restriction
 for that activation boundary, but supplies no initial snapshot or mapping
-ownership proof. Paged scalar bridges remain rejected because validation reads
-would introduce extra page-table observations. The two ordinary registry-query
+ownership proof. Paged scalar stack checks remain rejected because validation
+reads would introduce extra page-table observations. The two ordinary registry-query
 inputs, automatic state capture and complete environment effects remain open.
 The inspected six-root registry selection now contains 3,526 modeled instructions
 in either paged route, with no native refusals or unknown-value traps. The 41
