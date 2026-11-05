@@ -91,6 +91,25 @@ namespace descriptor_source {
 #include "../x86/X86DescriptorSourceExpectations.def"
 } // namespace descriptor_source
 
+// The synthetic debug records deliberately point to themselves through a
+// next-node field. Their owner drops those display edges after all source
+// consumers finish, including when a fatal test assertion returns early.
+class RecursiveDisplayRecords {
+  mutable std::vector<TypeRef> Types;
+
+public:
+  ~RecursiveDisplayRecords() {
+    for (const auto &Type : Types)
+      Type->FieldDisplayTypes.clear();
+  }
+
+  TypeRef makeRecord(std::string Name, uint16_t Bytes) const {
+    auto Type = NdType::makeNamedRecord(std::move(Name), Bytes);
+    Types.push_back(Type);
+    return Type;
+  }
+};
+
 ExprPtr parameter(unsigned Id, TypeRef ExprType = NdType::makeInt(8)) {
   MedVar Var;
   Var.Kind = MedVar::Param;
@@ -16500,13 +16519,15 @@ int main(void) {
 
 TEST(LLVMCPointerAddresses, CursorFieldIncrementStaysInForHeader) {
   class NodeDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140015100)
         return std::nullopt;
       auto Rank = NdType::makeNamedRecord("eRecordRank", 0);
       Rank->IsEnum = true;
-      auto Node = NdType::makeNamedRecord(
+      auto Node = Records.makeRecord(
           "ATL::CAtlMap<enum eRecordRank,unsigned long>::CNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
@@ -17463,11 +17484,13 @@ TEST(LLVMCPointerAddresses, KeepsSkipRegionWhenSideExitFollowsJoin) {
 
 TEST(LLVMCPointerAddresses, PrintsDefaultColorOnCursorMiss) {
   class NodeDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140000620)
         return std::nullopt;
-      auto Node = NdType::makeNamedRecord("CursorNode", 24);
+      auto Node = Records.makeRecord("CursorNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
       Node->FieldDisplayOffsets = {0, 4, 8, 16};
@@ -17654,11 +17677,13 @@ TEST(LLVMCPointerAddresses, PrintsDefaultColorOnCursorMiss) {
 
 TEST(LLVMCPointerAddresses, BreaksCursorLoopAtSharedTail) {
   class NodeDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140000610)
         return std::nullopt;
-      auto Node = NdType::makeNamedRecord("CursorNode", 24);
+      auto Node = Records.makeRecord("CursorNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
       Node->FieldDisplayOffsets = {0, 4, 8, 16};
@@ -17781,11 +17806,13 @@ TEST(LLVMCPointerAddresses, OmitsElseContinueWhenHitBreaks) {
   // in the loop is printed after that if, so the else continue is omitted.
   // The hash miss stays a bare continue.
   class NodeDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140000620)
         return std::nullopt;
-      auto Node = NdType::makeNamedRecord("CursorNode", 24);
+      auto Node = Records.makeRecord("CursorNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
       Node->FieldDisplayOffsets = {0, 4, 8, 16};
@@ -17905,11 +17932,13 @@ TEST(LLVMCPointerAddresses, ForwardsSingleCursorCopy) {
   // One composed field value copied into the cursor prints on the cursor.
   // The source temp is omitted. A second use of that temp keeps the assign.
   class NodeDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140000640 && Addr != 0x140000650)
         return std::nullopt;
-      auto Node = NdType::makeNamedRecord("CursorNode", 24);
+      auto Node = Records.makeRecord("CursorNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
       Node->FieldDisplayOffsets = {0, 4, 8, 16};
@@ -18008,11 +18037,13 @@ TEST(LLVMCPointerAddresses, ForwardsSingleCursorCopy) {
 
 TEST(LLVMCPointerAddresses, KeepsElseContinueWhenMissCalls) {
   class NodeDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140000630)
         return std::nullopt;
-      auto Node = NdType::makeNamedRecord("CursorNode", 24);
+      auto Node = Records.makeRecord("CursorNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
       Node->FieldDisplayOffsets = {0, 4, 8, 16};
@@ -26463,7 +26494,8 @@ TEST(HighCPointerAddresses, Win64CopyFromTempAfterParamCopyIsNotParam) {
 }
 
 TEST(HighCPointerAddresses, TypedPointerIndexLoadPrintsBucketsAndNodeFields) {
-  auto Node = NdType::makeNamedRecord("CNode", 24);
+  RecursiveDisplayRecords Records;
+  auto Node = Records.makeRecord("CNode", 24);
   auto NodePtr = NdType::makePtr(Node);
   Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
   Node->FieldDisplayOffsets = {0, 4, 8, 16};
@@ -26630,11 +26662,12 @@ TEST(HighCPointerAddresses, TypedPointerIndexLoadPrintsBucketsAndNodeFields) {
 }
 
 TEST(HighCPointerAddresses, TypedMapCursorComposesHashKeyNextValue) {
+  RecursiveDisplayRecords Records;
   // Guest LookupColor HighIR: untyped temps, RenameTag cursor, nested
   // `(i64)(eRecord % nBins) * 8`, and `v1 = t22` hidden by CopyForward.
   // Collect must still type the cursor so hash/next/value assigns fold.
   auto Rank = NdType::makeNamedRecord("eRecordRank", 4, true);
-  auto Node = NdType::makeNamedRecord(
+  auto Node = Records.makeRecord(
       "ATL::CAtlMap<enum eRecordRank,unsigned long>::CNode", 24);
   auto NodePtr = NdType::makePtr(Node);
   Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
@@ -40914,13 +40947,15 @@ TEST(LLVMCPointerAddresses, WideFrameCopyPrintsSyntheticSlot) {
 
 TEST(LLVMCPointerAddresses, TypedMapCursorPrintsHashNextValue) {
   class MapDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140014f80)
         return std::nullopt;
       auto Rank = NdType::makeNamedRecord("eRecordRank", 0);
       Rank->IsEnum = true;
-      auto Node = NdType::makeNamedRecord(
+      auto Node = Records.makeRecord(
           "ATL::CAtlMap<enum eRecordRank,unsigned long>::CNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
@@ -41084,13 +41119,15 @@ TEST(LLVMCPointerAddresses, TypedMapCursorPrintsHashNextValue) {
 
 TEST(LLVMCPointerAddresses, SplitPhiCursorWalkPrintsFor) {
   class MapDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140014fd0)
         return std::nullopt;
       auto Rank = NdType::makeNamedRecord("eRecordRank", 0);
       Rank->IsEnum = true;
-      auto Node = NdType::makeNamedRecord(
+      auto Node = Records.makeRecord(
           "ATL::CAtlMap<enum eRecordRank,unsigned long>::CNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
@@ -41326,13 +41363,15 @@ TEST(LLVMCPointerAddresses, SplitPhiCursorWalkPrintsFor) {
 
 TEST(LLVMCPointerAddresses, ForwardedCursorFieldLoadIsNotDeclared) {
   class MapDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140014f80)
         return std::nullopt;
       auto Rank = NdType::makeNamedRecord("eRecordRank", 0);
       Rank->IsEnum = true;
-      auto Node = NdType::makeNamedRecord(
+      auto Node = Records.makeRecord(
           "ATL::CAtlMap<enum eRecordRank,unsigned long>::CNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
@@ -41434,11 +41473,13 @@ TEST(LLVMCPointerAddresses, ForwardedCursorFieldLoadIsNotDeclared) {
 
 TEST(LLVMCPointerAddresses, CursorNextStoreDoesNotRecurse) {
   class MapDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140014f80)
         return std::nullopt;
-      auto Node = NdType::makeNamedRecord(
+      auto Node = Records.makeRecord(
           "ATL::CAtlMap<enum eRecordRank,unsigned long>::CNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
