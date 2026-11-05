@@ -15691,7 +15691,7 @@ sufficient either. The audit runs even after CTest fails and preserves that
 failure. Each matrix leg uploads its inventory, JUnit, exit status, outcome
 JSON, and log as `ctest-evidence-<profile>`.
 
-The same job first executes its focused emulation and mobile contracts. The
+The same job first executes its focused emulation contracts. The
 `reuse` command retains their passed and explicitly skipped results with matching
 inventory identities, so the main profile does not run those cases twice. A skip
 gives the same answer when the same job repeats it on the same products, and the
