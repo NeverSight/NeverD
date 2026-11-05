@@ -257,6 +257,9 @@ public:
   /// Commit staged edits and pack the project, its binary included, into
   /// the database \p path: one file to keep or send.
   void packDatabase(const QString &path);
+  /// Answers databaseConflict: write over what \p path holds now, or leave it
+  /// as it is and give up whatever the save was for.
+  void resolveDatabaseConflict(const QString &path, bool replace);
   /// Remember where the user is: in the database the user opened, or in a
   /// file of the user's own beside a binary.
   void saveDatabaseState();
@@ -446,6 +449,9 @@ signals:
   void commented(Address address, const QString &text);
   void contributionsChanged();
   void databaseSaved(bool ok);
+  /// \p path, the database this workbench opened, changed since it opened or
+  /// last wrote it.  Nothing is written until resolveDatabaseConflict.
+  void databaseConflict(const QString &path);
   void contributionResult(const QJsonObject &result);
   /// The worker searches strings with new options; string views reload.
   void stringOptionsChanged();
@@ -467,10 +473,14 @@ private:
   void openPending();
   void sendOpen(const QString &requested, const QString &path,
                 const QString &database,
-                const QHash<QString, QByteArray> &state, LoadOptions options,
+                const QHash<QString, QByteArray> &state,
+                const QByteArray &databaseIdentity, LoadOptions options,
                 bool recoveredEdits);
-  /// Pack the project into the database \p path.
-  void writeDatabase(const QString &path);
+  /// Pack the project into the database \p path, unless it is the database
+  /// the user opened and it changed since; \p replace writes over that too.
+  void writeDatabase(const QString &path, bool replace = false);
+  /// Forget what an action asked to save for was going to do.
+  void cancelTransition();
   /// Keep the debug files chosen for the input with the project, beside it.
   /// \p loadedNow is a file the user loaded into the open project, which
   /// a database the user opened then lacks.
@@ -518,6 +528,8 @@ private:
   QString openingFile_;
   QString projectPath_, databasePath_;
   QHash<QString, QByteArray> databaseState_;
+  /// What the opened database held when it opened or was last written here.
+  QByteArray databaseIdentity_;
   std::function<QHash<QString, QByteArray>()> stateProvider_;
   QString generation_;
   std::optional<quint64> BackgroundSequence;

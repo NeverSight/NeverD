@@ -2487,6 +2487,14 @@ Doppelklicken, um zur Deklaration zu springen.</translation>
         <translation>Hintergrundanalyse: Referenzen und Labels werden während des Navigierens indiziert</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>Datenbank geändert</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1 wurde geändert, nachdem dieser Arbeitsbereich es geöffnet hat, vielleicht in einem anderen NeverD. Den aktuellen Inhalt durch das Projekt dieses Arbeitsbereichs ersetzen?</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>Ungespeicherte Änderungen</translation>
     </message>
@@ -3574,6 +3582,10 @@ Nachher:
     <message>
         <source>This file may already be open in another NeverD (%1)</source>
         <translation>Diese Datei ist möglicherweise bereits in einem anderen NeverD geöffnet (%1)</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1 blieb unverändert; die Änderungen dieses Arbeitsbereichs sind nicht darin enthalten.</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

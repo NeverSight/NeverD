@@ -2487,6 +2487,14 @@ Double-click to go to the declaration.</translation>
         <translation>Background analysis: references and labels are indexed while you browse</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>Database changed</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>Unsaved changes</translation>
     </message>
@@ -3574,6 +3582,10 @@ After:
     <message>
         <source>This file may already be open in another NeverD (%1)</source>
         <translation>This file may already be open in another NeverD (%1)</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1 was left as it is; this workbench&apos;s changes are not in it.</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

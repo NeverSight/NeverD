@@ -2481,6 +2481,14 @@ Double-click to go to the declaration.</source>
         <translation>バックグラウンド解析：閲覧中に参照とラベルのインデックスを作成します</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>データベースが変更されました</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1 はこのワークベンチで開いた後に、別の NeverD などで変更されました。現在の内容をこのワークベンチのプロジェクトで置き換えますか？</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>未保存の変更</translation>
     </message>
@@ -3568,6 +3576,10 @@ After:
     <message>
         <source>This file may already be open in another NeverD (%1)</source>
         <translation>このファイルは別の NeverD で既に開かれている可能性があります（%1）</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1 は変更しませんでした。このワークベンチの変更は含まれていません。</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

@@ -2487,6 +2487,14 @@ Fai doppio clic per andare alla dichiarazione.</translation>
         <translation>Analisi in background: riferimenti ed etichette vengono indicizzati durante la navigazione</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>Database modificato</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1 è cambiato dopo l&apos;apertura in quest&apos;area di lavoro, forse in un altro NeverD. Sostituire il contenuto attuale con il progetto di quest&apos;area di lavoro?</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>Modifiche non salvate</translation>
     </message>
@@ -3574,6 +3582,10 @@ Dopo:
     <message>
         <source>This file may already be open in another NeverD (%1)</source>
         <translation>Questo file potrebbe essere già aperto in un altro NeverD (%1)</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1 è rimasto invariato; non contiene le modifiche di quest&apos;area di lavoro.</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

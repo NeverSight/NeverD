@@ -2481,6 +2481,14 @@ Double-click to go to the declaration.</source>
         <translation>백그라운드 분석: 탐색하는 동안 참조와 레이블의 색인을 생성합니다</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>데이터베이스가 변경됨</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1은(는) 이 작업 공간에서 연 뒤에 변경되었습니다. 다른 NeverD에서 변경되었을 수 있습니다. 현재 내용을 이 작업 공간의 프로젝트로 바꾸시겠습니까?</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>저장되지 않은 변경 사항</translation>
     </message>
@@ -3568,6 +3576,10 @@ After:
     <message>
         <source>This file may already be open in another NeverD (%1)</source>
         <translation>이 파일은 다른 NeverD에서 이미 열려 있을 수 있습니다(%1)</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1은(는) 그대로 두었습니다. 이 작업 공간의 변경 사항은 포함되지 않았습니다.</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

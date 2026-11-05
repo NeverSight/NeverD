@@ -59,9 +59,11 @@ leaves this window and its program as they are. Closing either workbench leaves
 the other running. A file another workbench has open does not open again, since
 its writer lock keeps it to one workbench; **Output** says that it may be open
 elsewhere, and a database is refused before anything is unpacked over the other
-workbench's unsaved edits. A binary and a database packed from it are separate
-copies with locks of their own: two workbenches can have one each, and whichever
-saves or packs into the database last replaces what it held.
+workbench's unsaved edits. With unsaved edits of its own, a workbench refuses
+such a file before it asks to save or discard them, and keeps its program. A
+binary and a database packed from it are separate copies with locks of their
+own, so two workbenches can have one each; **File → Save** asks before it replaces
+what another wrote into the database.
 
 PE browsing tolerates complete legacy relocation layouts and reports unusable
 entry/import metadata in **Output**. An unknown entry opens at a mapped code
@@ -1280,9 +1282,13 @@ and checked against its SHA-256 digest, and a damaged database is reported
 instead of loaded. Edits made in an opened database are kept beside its
 unpacked copy at once, and **File → Save** writes them back into the database.
 Quitting, opening another file or reloading first asks to save them when the
-database lacks them. Opening a binary whose `.nddb` sits beside it restores the
-saved location, bookmarks and desktop unless the project's own files say
-otherwise; when its comment files are missing they are restored from the
+database lacks them. If the project in the database changed after this workbench
+opened it or last wrote it, Save asks before it replaces that; the default leaves
+the database as it is and the edits unsaved, and **File → Pack database** can
+write them to another file. A save that does not reach the database also stops
+the quit or the opening it was for. Opening a binary whose `.nddb` sits beside it
+restores the saved location, bookmarks and desktop unless the project's own files
+say otherwise; when its comment files are missing they are restored from the
 database, and a database that describes a different version of the file is
 reported and left unused until the next pack replaces it. Closing the window
 updates the saved location of a database you opened.

@@ -1325,6 +1325,17 @@ void MainWindow::connectSession() {
                                                  : QStringLiteral("cancel"));
             Q_UNUSED(action);
           });
+  connect(&session_, &Session::databaseConflict, this,
+          [this](const QString &path) {
+            const auto choice = QMessageBox::warning(
+                commandWindow(), tr("Database changed"),
+                tr("%1 changed after this workbench opened it, perhaps in "
+                   "another NeverD. Replace what it holds now with this "
+                   "workbench's project?")
+                    .arg(QFileInfo(path).fileName()),
+                QMessageBox::Save | QMessageBox::Cancel, QMessageBox::Cancel);
+            session_.resolveDatabaseConflict(path, choice == QMessageBox::Save);
+          });
   // Bookmarks a pull or another tool changed show as the file has them.
   connect(&session_, &Session::projectFileChanged, this,
           [this](const QString &suffix) {

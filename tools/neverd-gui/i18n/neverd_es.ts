@@ -2487,6 +2487,14 @@ Haga doble clic para ir a la declaración.</translation>
         <translation>Análisis en segundo plano: las referencias y las etiquetas se indexan mientras navega</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>Base de datos modificada</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1 cambió después de que esta área de trabajo lo abriera, quizá en otro NeverD. ¿Reemplazar su contenido actual por el proyecto de esta área de trabajo?</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>Cambios sin guardar</translation>
     </message>
@@ -3574,6 +3582,10 @@ Después:
     <message>
         <source>This file may already be open in another NeverD (%1)</source>
         <translation>Es posible que este archivo ya esté abierto en otro NeverD (%1)</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1 se dejó como estaba; no contiene los cambios de esta área de trabajo.</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

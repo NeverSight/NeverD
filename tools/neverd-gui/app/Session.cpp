@@ -448,6 +448,17 @@ void Session::produceBinary(const QString &operation,
       });
 }
 
+namespace {
+/// What to say when \p reason keeps a file from opening.  A workbench holding
+/// the project is the usual reason, which the lock's own error does not say.
+QString fileHeldMessage(const QString &reason) {
+  return QCoreApplication::translate(
+             "neverd::gui::Session",
+             "This file may already be open in another NeverD (%1)")
+      .arg(reason);
+}
+} // namespace
+
 void Session::command(const QString &operation, const QJsonObject &payload,
                       Callback done, Failure failed, QString expectedRevision) {
   // Only edits and their saving make the project dirty while in flight; an
@@ -494,20 +505,14 @@ void Session::command(const QString &operation, const QJsonObject &payload,
             if (code == QLatin1String("foreign_edits"))
               projectSync_.start();
             const QString reason = error.value("message").toString(code);
-            // A workbench holding the project is the usual reason for a lock
-            // the worker cannot take, which its message does not say.
             if (!silentFailure(status, code))
               setError(code == QLatin1String("project_locked")
-                           ? tr("This file may already be open in another "
-                                "NeverD (%1)")
-                                 .arg(reason)
+                           ? fileHeldMessage(reason)
                            : reason);
             if (failed)
               failed(code, reason);
-            if (operation == QLatin1String("save")) {
-              transition_.clear();
-              transitionReady_ = false;
-            }
+            if (operation == QLatin1String("save"))
+              cancelTransition();
           }
         } else if (failed) {
           failed(QStringLiteral("context_changed"),
@@ -532,6 +537,7 @@ void Session::resetState() {
   openedFromDatabase_ = false;
   databaseDirty_ = false;
   databaseState_.clear();
+  databaseIdentity_.clear();
   metadata_ = {};
   history_ = {};
   background_ = {};
@@ -549,6 +555,20 @@ void Session::open(const QString &path, LoadOptions options) {
   pendingFile_ = file.absoluteFilePath();
   pendingOptions_ = options;
   if (dirty()) {
+    // Saving or discarding would only give up the open program for a file
+    // that will not open.
+    const QString target = pendingFile_;
+    if (const QString held =
+            ProjectDatabase::lockHeldElsewhere(target, filePath_);
+        !held.isEmpty()) {
+      pendingFile_.clear();
+      pendingOptions_ = {};
+      setError(ProjectDatabase::isDatabase(target)
+                   ? ProjectDatabase::databaseHeldMessage(held)
+                   : fileHeldMessage(held));
+      emit openFailed();
+      return;
+    }
     requestTransition(QStringLiteral("open"));
     return;
   }
@@ -567,6 +587,8 @@ struct PreparedOpen {
   QString input, database, error;
   QStringList notes, warnings;
   QHash<QString, QByteArray> state;
+  /// Of a database the user opened.
+  QByteArray databaseIdentity;
   bool recoveredEdits = false;
 };
 
@@ -582,8 +604,10 @@ PreparedOpen unpackOrRestore(const QString &requested,
         &prepared.error, &prepared.recoveredEdits, heldInput);
     if (prepared.error.isEmpty())
       if (const auto contents =
-              ProjectDatabase::read(requested, &prepared.error))
+              ProjectDatabase::read(requested, &prepared.error)) {
         prepared.state = contents->state;
+        prepared.databaseIdentity = ProjectDatabase::identity(*contents);
+      }
     return prepared;
   }
   prepared.input = requested;
@@ -695,7 +719,8 @@ void Session::openPending() {
               return;
             }
             sendOpen(requested, prepared.input, prepared.database,
-                     prepared.state, options, prepared.recoveredEdits);
+                     prepared.state, prepared.databaseIdentity, options,
+                     prepared.recoveredEdits);
           });
   watcher->setFuture(
       QtConcurrent::run([requested, held = loaded_ ? filePath_ : QString()] {
@@ -706,7 +731,8 @@ void Session::openPending() {
 void Session::sendOpen(const QString &requested, const QString &path,
                        const QString &database,
                        const QHash<QString, QByteArray> &state,
-                       LoadOptions options, bool recoveredEdits) {
+                       const QByteArray &databaseIdentity, LoadOptions options,
+                       bool recoveredEdits) {
   if (options.pdb.isEmpty())
     options.pdb =
         QJsonDocument::fromJson(state.value(QLatin1String(PdbInputState)))
@@ -755,7 +781,7 @@ void Session::sendOpen(const QString &requested, const QString &path,
   }
   command(
       QStringLiteral("open"), payload,
-      [this, requested, path, database, state, options,
+      [this, requested, path, database, state, databaseIdentity, options,
        recoveredEdits](const QJsonObject &payload) {
         opening_ = false;
         resetState();
@@ -768,6 +794,7 @@ void Session::sendOpen(const QString &requested, const QString &path,
         projectPath_ = requested;
         databasePath_ = database;
         databaseState_ = state;
+        databaseIdentity_ = databaseIdentity;
         loaded_ = true;
         openedFromDatabase_ = ProjectDatabase::isDatabase(requested);
         databaseDirty_ = openedFromDatabase_ && recoveredEdits;
@@ -980,10 +1007,7 @@ void Session::resolveTransition(const QString &choice) {
   if (transition_.isEmpty())
     return;
   if (choice == QLatin1String("cancel")) {
-    transition_.clear();
-    transitionReady_ = false;
-    pendingFile_.clear();
-    reloadOptions_.reset();
+    cancelTransition();
     return;
   }
   if (choice == QLatin1String("save")) {
@@ -1009,6 +1033,13 @@ void Session::resolveTransition(const QString &choice) {
   databaseDirty_ = false;
   transitionReady_ = true;
   finishTransition();
+}
+
+void Session::cancelTransition() {
+  transition_.clear();
+  transitionReady_ = false;
+  pendingFile_.clear();
+  reloadOptions_.reset();
 }
 
 void Session::finishTransition() {
@@ -1080,7 +1111,37 @@ void Session::packDatabase(const QString &path) {
   });
 }
 
-void Session::writeDatabase(const QString &path) {
+namespace {
+/// What writing a database came to.
+struct DatabaseWrite {
+  QString error;
+  /// What it holds now, once written.
+  QByteArray identity;
+  /// It no longer holds what the caller expected, and was left as it is.
+  bool changed = false;
+};
+
+/// Runs off the GUI thread.  An empty \p expected writes whatever \p path
+/// holds.  A database that cannot be read is for save to report.
+DatabaseWrite writeProjectDatabase(const QString &path, const QString &input,
+                                   const QHash<QString, QByteArray> &state,
+                                   const QByteArray &expected) {
+  DatabaseWrite write;
+  if (!expected.isEmpty() && QFileInfo::exists(path))
+    if (const auto contents = ProjectDatabase::read(path);
+        contents && ProjectDatabase::identity(*contents) != expected) {
+      write.changed = true;
+      return write;
+    }
+  write.error = ProjectDatabase::save(path, input, state);
+  if (write.error.isEmpty())
+    if (const auto contents = ProjectDatabase::read(path))
+      write.identity = ProjectDatabase::identity(*contents);
+  return write;
+}
+} // namespace
+
+void Session::writeDatabase(const QString &path, bool replace) {
   if (path.isEmpty())
     return;
   auto state = stateProvider_ ? stateProvider_() : QHash<QString, QByteArray>{};
@@ -1088,25 +1149,58 @@ void Session::writeDatabase(const QString &path) {
   // Quitting waits for the database like it waits for an edit.
   ++pendingWrites_;
   emit stateChanged();
-  auto *watcher = new QFutureWatcher<QString>(this);
+  auto *watcher = new QFutureWatcher<DatabaseWrite>(this);
   connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, path] {
-    const QString error = watcher->result();
+    const DatabaseWrite write = watcher->result();
     watcher->deleteLater();
+    // The write stays pending while the user answers, so that what the save
+    // was for waits too.
+    if (write.changed) {
+      emit databaseConflict(path);
+      return;
+    }
     --pendingWrites_;
-    if (error.isEmpty()) {
-      if (path == databasePath_)
+    if (write.error.isEmpty()) {
+      if (path == databasePath_) {
         databaseDirty_ = false;
+        if (openedFromDatabase_)
+          databaseIdentity_ = write.identity;
+      }
       emit message(tr("Database saved: %1").arg(path), 0);
     } else {
-      setError(tr("Could not save the database: %1").arg(error));
+      setError(tr("Could not save the database: %1").arg(write.error));
+      // Going on to quit or to open another file would lose the edits, which
+      // the next unpack of this database replaces.
+      cancelTransition();
     }
-    emit databaseSaved(error.isEmpty());
+    emit databaseSaved(write.error.isEmpty());
     finishTransition();
     emit stateChanged();
   });
-  watcher->setFuture(QtConcurrent::run([path, input = filePath_, state] {
-    return ProjectDatabase::save(path, input, state);
-  }));
+  // Changes since this workbench last saw the database are another's.
+  const QByteArray expected =
+      !replace && openedFromDatabase_ && path == databasePath_
+          ? databaseIdentity_
+          : QByteArray();
+  watcher->setFuture(
+      QtConcurrent::run([path, input = filePath_, state, expected] {
+        return writeProjectDatabase(path, input, state, expected);
+      }));
+}
+
+void Session::resolveDatabaseConflict(const QString &path, bool replace) {
+  --pendingWrites_;
+  if (replace) {
+    writeDatabase(path, true);
+    return;
+  }
+  cancelTransition();
+  emit message(tr("%1 was left as it is; this workbench's changes are not in "
+                  "it.")
+                   .arg(QFileInfo(path).fileName()),
+               1);
+  emit databaseSaved(false);
+  emit stateChanged();
 }
 
 void Session::saveDatabaseState() {

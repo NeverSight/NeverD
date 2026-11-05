@@ -11736,6 +11736,219 @@ private slots:
     QVERIFY(holder.session.loaded());
   }
 
+  void aHeldFileIsRefusedBeforeAskingToSaveOrDiscard() {
+    QTemporaryDir directory;
+    const QString held = writeFixture(directory, QStringLiteral("held.bin"));
+    const QString free = writeFixture(directory, QStringLiteral("free.bin"));
+    const QString database = directory.filePath(QStringLiteral("held.nddb"));
+    Session holder(QString::fromLocal8Bit(TEST_WORKER));
+    holder.open(held);
+    QTRY_VERIFY_WITH_TIMEOUT(holder.loaded(), OpenTimeoutMs);
+    QSignalSpy packed(&holder, &Session::databaseSaved);
+    holder.packDatabase(database);
+    QTRY_COMPARE_WITH_TIMEOUT(packed.size(), 1, OpenTimeoutMs);
+    Session databaseHolder(QString::fromLocal8Bit(TEST_WORKER));
+    databaseHolder.open(database);
+    QTRY_VERIFY_WITH_TIMEOUT(databaseHolder.loaded(), OpenTimeoutMs);
+
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("edited.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    const QString edited = bench.session.filePath();
+    bench.session.setComment(Base, QStringLiteral("staged here"));
+    QTRY_VERIFY(bench.session.dirty());
+    QSignalSpy asked(&bench.session, &Session::transitionRequested);
+    QSignalSpy refused(&bench.session, &Session::openFailed);
+    QSignalSpy messages(&bench.session, &Session::message);
+    // Neither question comes up, and the edited program stays as it was.
+    for (const auto &[path, says] :
+         {std::pair(held, QStringLiteral("This file may")),
+          std::pair(database, QStringLiteral("This database may"))}) {
+      messages.clear();
+      refused.clear();
+      bench.session.open(path);
+      QCOMPARE(refused.size(), 1);
+      QCOMPARE(asked.size(), 0);
+      QCOMPARE(messages.size(), 1);
+      QVERIFY2(messages.first().first().toString().contains(says),
+               qPrintable(messages.first().first().toString()));
+      QVERIFY(bench.session.loaded());
+      QVERIFY(bench.session.dirty());
+      QCOMPARE(bench.session.filePath(), edited);
+    }
+    // A file nobody holds still asks, and asking leaves nothing beside it.
+    QTimer answer;
+    connect(&answer, &QTimer::timeout, &answer, [] {
+      if (auto *box =
+              qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+        box->button(QMessageBox::Cancel)->click();
+    });
+    answer.start(5);
+    bench.session.open(free);
+    answer.stop();
+    QCOMPARE(asked.size(), 1);
+    QCOMPARE(refused.size(), 1);
+    QVERIFY(!QFileInfo::exists(free + QStringLiteral(".neverd")));
+    QCOMPARE(bench.session.filePath(), edited);
+  }
+
+  void savingADatabaseChangedSinceItOpenedAsksFirst() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("shared.bin"));
+    const auto database = directory.filePath(QStringLiteral("shared.nddb"));
+    // Another workbench, on the binary, packs into the database.
+    Session other(QString::fromLocal8Bit(TEST_WORKER));
+    other.open(path);
+    QTRY_VERIFY_WITH_TIMEOUT(other.loaded(), OpenTimeoutMs);
+    QSignalSpy packed(&other, &Session::databaseSaved);
+    const auto packTheirs = [&](const QString &name) -> bool {
+      const auto before = packed.size();
+      other.rename(Base + 0x140, name);
+      if (!QTest::qWaitFor(
+              [&] {
+                return readAll(path + ".neverd/renames.json")
+                    .contains(name.toUtf8());
+              },
+              OpenTimeoutMs))
+        return false;
+      other.packDatabase(database);
+      return QTest::qWaitFor([&] { return packed.size() > before; },
+                             OpenTimeoutMs);
+    };
+    QVERIFY(packTheirs(QStringLiteral("theirs_first")));
+    const auto held = [&] {
+      QString error;
+      const auto contents = ProjectDatabase::read(database, &error);
+      return contents ? contents->sidecars.value(
+                            QStringLiteral(".neverd-renames.json"))
+                      : QByteArray();
+    };
+
+    Workbench bench;
+    bench.window->openFile(database);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    bench.session.rename(Base + 0x140, QStringLiteral("ours"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(), OpenTimeoutMs);
+    QVERIFY(packTheirs(QStringLiteral("theirs_second")));
+
+    int conflicts = 0;
+    QString question;
+    auto answer = QMessageBox::Cancel;
+    QTimer answering;
+    connect(&answering, &QTimer::timeout, &answering, [&] {
+      auto *box =
+          qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+      if (!box)
+        return;
+      if (box->text().contains(QStringLiteral("changed after"))) {
+        ++conflicts;
+        question = box->text();
+        QCOMPARE(box->defaultButton(), box->button(QMessageBox::Cancel));
+        box->button(answer)->click();
+      } else {
+        box->button(QMessageBox::Save)->click();
+      }
+    });
+    answering.start(5);
+    QSignalSpy saved(&bench.session, &Session::databaseSaved);
+
+    // Cancelling leaves the database as the other workbench left it.
+    bench.session.save();
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), 1, OpenTimeoutMs);
+    QVERIFY(!saved.last().first().toBool());
+    QCOMPARE(conflicts, 1);
+    QVERIFY2(question.contains(QStringLiteral("shared.nddb")),
+             qPrintable(question));
+    QVERIFY(held().contains("theirs_second"));
+    QVERIFY(!held().contains("ours"));
+    QVERIFY(bench.session.databaseOutOfDate());
+
+    // Quitting stops with it, and so can go on being asked.
+    QSignalSpy approved(&bench.session, &Session::quitApproved);
+    QVERIFY(!bench.session.requestQuit());
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), 2, OpenTimeoutMs);
+    QVERIFY(!saved.last().first().toBool());
+    QCOMPARE(conflicts, 2);
+    QTest::qWait(50);
+    QCOMPARE(approved.size(), 0);
+    QVERIFY(bench.session.databaseOutOfDate());
+
+    // Replacing writes this workbench's project, which it then knows the
+    // database holds: the next save asks nothing.
+    answer = QMessageBox::Save;
+    bench.session.save();
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), 3, OpenTimeoutMs);
+    QVERIFY(saved.last().first().toBool());
+    QCOMPARE(conflicts, 3);
+    QVERIFY(held().contains("ours"));
+    QVERIFY(!held().contains("theirs_second"));
+    QTRY_VERIFY(!bench.session.databaseOutOfDate());
+    bench.session.rename(Base + 0x140, QStringLiteral("ours_again"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(), OpenTimeoutMs);
+    bench.session.save();
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), 4, OpenTimeoutMs);
+    QVERIFY(saved.last().first().toBool());
+    QCOMPARE(conflicts, 3);
+    QVERIFY(held().contains("ours_again"));
+
+    // A save a quit asks for can replace it too, and the quit then goes on.
+    QVERIFY(packTheirs(QStringLiteral("theirs_third")));
+    bench.session.rename(Base + 0x140, QStringLiteral("ours_last"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(), OpenTimeoutMs);
+    QVERIFY(!bench.session.requestQuit());
+    QTRY_COMPARE_WITH_TIMEOUT(approved.size(), 1, OpenTimeoutMs);
+    answering.stop();
+    QCOMPARE(conflicts, 4);
+    QVERIFY(held().contains("ours_last"));
+  }
+
+  void aDatabaseThatCannotBeSavedStopsTheQuit() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("stuck.bin"));
+    const auto database = directory.filePath(QStringLiteral("stuck.nddb"));
+    {
+      Workbench packer;
+      packer.window->openFile(path);
+      QTRY_VERIFY_WITH_TIMEOUT(packer.session.loaded(), OpenTimeoutMs);
+      QSignalSpy packed(&packer.session, &Session::databaseSaved);
+      packer.session.packDatabase(database);
+      QTRY_COMPARE_WITH_TIMEOUT(packed.size(), 1, OpenTimeoutMs);
+    }
+    Workbench bench;
+    bench.window->openFile(database);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    bench.session.rename(Base + 0x140, QStringLiteral("kept_edit"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(), OpenTimeoutMs);
+    // Something else takes the database's name.
+    {
+      QFile replaced(database);
+      QVERIFY(replaced.open(QIODevice::WriteOnly | QIODevice::Truncate));
+      replaced.write("no longer a database, and too short to be taken for one");
+    }
+    QTimer answering;
+    connect(&answering, &QTimer::timeout, &answering, [] {
+      if (auto *box =
+              qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+        box->button(QMessageBox::Save)->click();
+    });
+    answering.start(5);
+    QSignalSpy saved(&bench.session, &Session::databaseSaved);
+    QSignalSpy approved(&bench.session, &Session::quitApproved);
+    QVERIFY(!bench.session.requestQuit());
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), 1, OpenTimeoutMs);
+    answering.stop();
+    QVERIFY(!saved.first().first().toBool());
+    QTest::qWait(50);
+    QCOMPARE(approved.size(), 0);
+    QVERIFY(bench.session.loaded());
+    QVERIFY(bench.session.databaseOutOfDate());
+    QVERIFY(readAll(bench.session.filePath() +
+                    QStringLiteral(".neverd/renames.json"))
+                .contains("kept_edit"));
+  }
+
   void aDatabaseOpenInAnotherWorkbenchKeepsItsEdits() {
     QTemporaryDir directory;
     const auto path = writeFixture(directory, QStringLiteral("team.bin"));

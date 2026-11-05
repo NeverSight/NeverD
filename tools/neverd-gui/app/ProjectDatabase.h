@@ -91,6 +91,16 @@ public:
                         QString *error = nullptr,
                         bool *recoveredEdits = nullptr,
                         const QString &heldInput = {});
+  /// The reason another process holds the writer lock of the project that
+  /// opening \p path would write, or nothing.  \p heldInput as for unpack.
+  /// A project nobody has locked yet gets no folder from asking.
+  static QString lockHeldElsewhere(const QString &path,
+                                   const QString &heldInput = {});
+  /// What to say when \p reason keeps a database from opening.
+  static QString databaseHeldMessage(const QString &reason);
+  /// What a database holds of its project: the input's digest and the project
+  /// files, without the workbench state that closing a workbench updates.
+  static QByteArray identity(const Contents &contents);
   /// Retire the working copy's local recovery marker after Save or Discard.
   static QString finishRecovery(const QString &binary);
   /// Where a database without its original input is unpacked.

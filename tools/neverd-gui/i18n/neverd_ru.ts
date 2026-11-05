@@ -2493,6 +2493,14 @@ Double-click to go to the declaration.</source>
         <translation>Фоновый анализ: ссылки и метки индексируются во время просмотра</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>База данных изменена</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1 изменился после открытия в этой рабочей области, возможно, в другом экземпляре NeverD. Заменить его текущее содержимое проектом этой рабочей области?</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>Несохранённые изменения</translation>
     </message>
@@ -3580,6 +3588,10 @@ After:
     <message>
         <source>This file may already be open in another NeverD (%1)</source>
         <translation>Возможно, этот файл уже открыт в другом экземпляре NeverD (%1)</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1 оставлен без изменений; изменения этой рабочей области в него не вошли.</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

@@ -2511,6 +2511,14 @@ Double-click to go to the declaration.</source>
         <translation>التحليل في الخلفية: تُفهرَس المراجع والتسميات أثناء التصفح</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>تغيّرت قاعدة البيانات</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>تغيّر %1 بعد أن فتحته مساحة العمل هذه، ربما في NeverD آخر. هل تريد استبدال محتواه الحالي بمشروع مساحة العمل هذه؟</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>تغييرات غير محفوظة</translation>
     </message>
@@ -3598,6 +3606,10 @@ After:
     <message>
         <source>This file may already be open in another NeverD (%1)</source>
         <translation>قد يكون هذا الملف مفتوحًا بالفعل في NeverD آخر (%1)</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>تُرك %1 كما هو؛ فهو لا يتضمن تغييرات مساحة العمل هذه.</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

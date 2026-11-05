@@ -2481,6 +2481,14 @@ Double-click to go to the declaration.</source>
         <translation>后台分析：浏览期间为引用和标签建立索引</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>数据库已更改</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1 在此工作台打开后已被更改，可能是另一个 NeverD 所为。要用此工作台的项目替换其当前内容吗？</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>未保存的更改</translation>
     </message>
@@ -3568,6 +3576,10 @@ After:
     <message>
         <source>This file may already be open in another NeverD (%1)</source>
         <translation>此文件可能已在另一个 NeverD 中打开（%1）</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1 保持原样；此工作台的更改未写入其中。</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>

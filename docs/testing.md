@@ -5661,7 +5661,13 @@ the other workbench opens it with the edit once the holder lets go.
 `aRefusedOpenForgetsWhatWaitedForIt` checks that a command line and a link named
 with a refused file do not run on the next one, and
 `commandHistoryKeepsAnotherWorkbenchsLines` that two workbenches add to one
-command history.
+command history. `aHeldFileIsRefusedBeforeAskingToSaveOrDiscard` keeps an edited
+program open when a held file or database is refused, and leaves nothing beside a
+free file the user then decides against.
+`savingADatabaseChangedSinceItOpenedAsksFirst` lets a second worker pack into an
+opened database and answers the question each way, from Save and from a quit;
+`aDatabaseThatCannotBeSavedStopsTheQuit` keeps the workbench and its edit when
+the write fails.
 
 The GUI unit cases `deepLinksTakeIdasFormAndRefuseWhatTheyCannotName` and
 `aLinkGoesToTheWorkbenchThatHasItsProgram` check link syntax, hash prefixes and

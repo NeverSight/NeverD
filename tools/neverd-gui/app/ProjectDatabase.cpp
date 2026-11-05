@@ -644,6 +644,42 @@ ProjectDatabase::read(const QString &database, QString *error,
   }
 }
 
+QString ProjectDatabase::lockHeldElsewhere(const QString &path,
+                                           const QString &heldInput) {
+  QString input = path;
+  if (isDatabase(path)) {
+    // A database that cannot be read says so as it opens.
+    const auto contents = read(path, nullptr, ReadScope::InputIdentity);
+    if (!contents)
+      return {};
+    input = QDir(workingDirectory(path)).filePath(contents->inputName);
+  } else if (!canKeepBeside(path)) {
+    input = QDir(workingDirectory(path)).filePath(QFileInfo(path).fileName());
+  }
+  // A project nobody has locked has no lock file, and trying for one would
+  // start a project folder beside a file that may never open.
+  std::error_code error;
+  const auto canonical = std::filesystem::canonical(filePath(input), error);
+  if (input == heldInput || error ||
+      !std::filesystem::exists(
+          project_files::path(canonical, project_files::File::WriterLock),
+          error))
+    return {};
+  const neverd::ProjectWriteLock writer(filePath(input));
+  return writer ? QString() : QString::fromLocal8Bit(writer.error());
+}
+
+QString ProjectDatabase::databaseHeldMessage(const QString &reason) {
+  return QCoreApplication::translate(
+             "ProjectDatabase",
+             "This database may already be open in another NeverD (%1)")
+      .arg(reason);
+}
+
+QByteArray ProjectDatabase::identity(const Contents &contents) {
+  return sidecarIdentity(contents);
+}
+
 QString ProjectDatabase::unpack(const QString &database,
                                 const QString &directory, QString *error,
                                 bool *recoveredEdits,
@@ -676,10 +712,7 @@ QString ProjectDatabase::unpack(const QString &database,
     writer.emplace(filePath(input));
     if (!*writer)
       return failed(
-          QCoreApplication::translate(
-              "ProjectDatabase",
-              "This database may already be open in another NeverD (%1)")
-              .arg(QString::fromLocal8Bit(writer->error())));
+          databaseHeldMessage(QString::fromLocal8Bit(writer->error())));
   }
   bool preserveRecovery = false;
   QFile marker(recoveryMarker(input));
