@@ -633,6 +633,13 @@ The architecture basis is the Intel SDM REP/CMPS/SCAS/MOVS/STOS/LODS entries
 and exception/interrupt restart rules. Operand access order and intermediate
 flags are explicit processor choices, qualified against original instructions
 under KVM. See the [qualification record](evidence/x86-legacy-strings-2026-11-05.json).
+It records 142,464 string CPU comparisons across the native and pinned-r6 SDKs
+on both local P/E core types. Each SDK's full paging suite passes 447 tests;
+the one LA57 oracle skip is unrelated to protected legacy paging. The wider
+qualification also runs both C routes through Clang/NeverC, paged execution,
+continuation source and export regressions. Final test-only include/profile
+checks retain byte-identical production translate archives; the record keeps
+the distinct test-binary and source identities.
 
 ## Protected SYSENTER and SYSEXIT
 
