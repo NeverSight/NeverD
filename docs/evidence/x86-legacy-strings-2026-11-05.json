@@ -902,5 +902,83 @@
   "artifacts": {
     "orchestrator_sha256": "e9374cfb80408c091b5d07e89ef9a5d2ab781876bb93db5629bb417e69758a0e"
   },
-  "release_note": "No LLVM or NeverC source change required for this runtime binding. Final LLVM release, SDK pin and gitlink remain deferred until the remaining global gaps close."
+  "release_note": "No LLVM or NeverC source change required for this runtime binding. Final LLVM release, SDK pin and gitlink remain deferred until the remaining global gaps close.",
+  "final_dev_integration": {
+    "integration_commit": "c6331a9e6e2329829193a5e6aeece48d3da64919",
+    "remote_dev_commit": "70b0f4680d9f33ae977b15d79df080b0e6a0f924",
+    "sdk": "native",
+    "reports": [
+      {
+        "name": "global-signatures-session",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-legacy-strings-20261105/global-signatures-session/tmp",
+          "taskset",
+          "-c",
+          "2",
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDSessionCAPITests",
+          "--gtest_filter=SessionCAPITest.PrefilledCalleesLeaveEachAnalysisAsItWas:SessionCAPITest.SolvedCalleeSignaturesLeaveEachAnalysisAsItWas",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-strings-20261105/global-signatures-session/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-strings-20261105/global-signatures-session/exports"
+        },
+        "binary_sha256": "4d9d805c177a83a2d0e74ebc931bc3d79969a91f631765131b45e31a972326aa",
+        "exit_code": 0,
+        "tests": 2,
+        "passed": 2,
+        "skipped": 0,
+        "failed": 0,
+        "result_sha256": "99104b289edad868f7d2452f5197d7999e2d7197d4ad6e93f0221cf59d82cd88",
+        "log_sha256": "2ae370ab5431f9f99890099a4634cf5903c172355caeb9568bf19a98cb6826a7"
+      },
+      {
+        "name": "global-signatures-export",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-legacy-strings-20261105/global-signatures-export/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationExportTests",
+          "--gtest_filter=*",
+          "--gtest_break_on_failure",
+          "--gtest_output=xml:/mnt/data/neverd-legacy-strings-20261105/global-signatures-export/result.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-strings-20261105/global-signatures-export/exports"
+        },
+        "binary_sha256": "4bbad1022e59414b7ebe0938e07f816f0a193096e3cfad7a4bdc34db0de094c7",
+        "exit_code": 0,
+        "tests": 94,
+        "passed": 94,
+        "skipped": 0,
+        "failed": 0,
+        "result_sha256": "c3609cb91dc5b03d92a64729a29af3276feb6709e031acad2dc82621b94e74ea",
+        "log_sha256": "9fec1c7de4ed49c7b2403208a7883a966d1f24a711ebb0745e79a1d91ca6055d"
+      }
+    ],
+    "translate_archive_sha256": "d2e806e2b290fc4b1151d89b48f2460b16cd84bedf1bc63cff1c189eb4efd65b",
+    "build_log_sha256": "3c492c7225b6ede5e35b71a9775465bc220561781a8fe07e036d4390786ad8c5",
+    "note": "Final dev integration changes omitted-callee signature analysis, not the protected-string owner. All owned source hashes and the native production translate archive match the earlier qualification. The r6 results remain qualified at the separately recorded prior integration."
+  }
 }
