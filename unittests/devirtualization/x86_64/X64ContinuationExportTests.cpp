@@ -1473,6 +1473,7 @@ static void original(neverd_x64_state_v6 *s, void *code, uint64_t *ram) {
 #include "X64MpxContinuationExportTests.inc"
 #include "X64NativeRegisterExportTests.inc"
 #include "X64PagedFunctionContextTests.inc"
+#include "X64PagedSseTests.inc"
 #include "X64RtmAbortExportTests.inc"
 #include "X64RtmPrefixExportTests.inc"
 #include "X64RtmRegionExportTests.inc"

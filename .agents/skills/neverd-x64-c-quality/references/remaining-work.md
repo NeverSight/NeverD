@@ -10,10 +10,17 @@ for that activation boundary, but supplies no initial snapshot or mapping
 ownership proof. Paged scalar bridges remain rejected because validation reads
 would introduce extra page-table observations. The two ordinary registry-query
 inputs, automatic state capture and complete environment effects remain open.
-The inspected six-root registry selection contains 3,526 instructions in either
-route; paged execution models 3,485 and retains 41 explicit vector-state native
-boundaries. Its scalar runtime does not gain SIMD semantics from the new
-activation controller. Non-paged coverage is a different execution domain.
+The inspected six-root registry selection now contains 3,526 modeled instructions
+in either paged route, with no native refusals or unknown-value traps. The 41
+legacy XORPS/MOVUPS/MOVDQU boundaries are owned by a separate SSE preflight and
+the existing whole-instruction paged transaction. Both routes pass static
+value/access proofs; complete generated exports compile at O0/O2. Runtime
+cross-page and availability cases are compiled but must not be reported as
+executed under the user's static-only restriction. This closes the selected
+vector admission gap, not the two ordinary-C registry inputs, automatic state
+capture or complete environment effects. Unaligned SSE #AC behavior requires
+an explicit target profile when CPL3/AM/AC is active. Non-paged coverage remains
+a different execution domain.
 
 Explicit callers can now request `pause_call_sites` to stop before their bound
 original CALLs and hand the existing state directly to the checked bridge.

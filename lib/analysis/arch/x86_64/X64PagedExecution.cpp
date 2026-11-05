@@ -10,6 +10,8 @@
 
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"
 
+#include "X64PagedSse.h"
+
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 
@@ -17,6 +19,7 @@
 
 #include <array>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -41,6 +44,8 @@ struct Transaction {
   X64PagedAlignmentPriority AlignmentPriority;
   std::optional<X64PagedRepeatProfile> RepeatProfile;
   X64ContinuationStateV6 &StagedState;
+  std::optional<X64PagedSseAlignment> SseAlignment;
+  unsigned SseAlignmentBytes = 0;
   bool Repeated = false, PortIO = false;
   uint8_t RepeatRegisters = 0, RepeatAddressBytes = 0;
   X86MemoryAccessResult Access;
@@ -75,6 +80,8 @@ struct Transaction {
   }
 
   bool alignmentFault(uint64_t Address, unsigned Bytes) {
+    if (Bytes == 16)
+      Bytes = SseAlignmentBytes;
     const auto &Controls = Memory.controls();
     if (CPL == 3 && (Controls.CR0 & 0x40000) && (Controls.RFlags & 0x40000) &&
         (Address & (Bytes - 1))) {
@@ -101,7 +108,31 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
                                                uint64_t Size, uint64_t Flags) {
   auto &Exchange = *reinterpret_cast<X64PagedExchange *>(Opaque);
   auto &T = *static_cast<Transaction *>(Exchange.Transaction);
-  const auto Kind = X64PagedAccess(Flags & ~kX64PagedStackAccess);
+  const bool SseMemory = Flags & kX64PagedSseAccess;
+  const auto Kind =
+      X64PagedAccess(Flags & ~(kX64PagedStackAccess | kX64PagedSseAccess));
+  if (Kind == X64PagedAccess::BeginSse || SseMemory) {
+    const auto &Controls = T.Memory.controls();
+    if (auto Vector =
+            detail::x64PagedSseEntryFault(Controls.CR0, Controls.CR4)) {
+      T.Access.Status = X86PageWalkStatus::Exception;
+      T.Access.Exception = X86MemoryException{Vector, 0, std::nullopt};
+      return 1;
+    }
+    T.SseAlignmentBytes = 1;
+    if (SseMemory && T.CPL == 3 && (Controls.CR0 & 0x40000) &&
+        (Controls.RFlags & 0x40000)) {
+      T.SseAlignmentBytes =
+          T.SseAlignment ? detail::x64PagedSseAlignmentBytes(*T.SseAlignment)
+                         : 0;
+      if (!T.SseAlignmentBytes) {
+        T.Error = invalid("paged unaligned SSE requires a target #AC binding");
+        return 1;
+      }
+    }
+    if (!SseMemory)
+      return 0;
+  }
   if (Kind == X64PagedAccess::PortIO) {
     T.PortIO = true;
     return 1;
@@ -169,9 +200,11 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
     T.Access.Exception = X86MemoryException{uint8_t(Address), 0, std::nullopt};
     return 1;
   }
-  assert((Size == 1 || Size == 2 || Size == 4 || Size == 8) &&
-         Flags <= (kX64PagedStackAccess | 2) && !T.Store &&
-         "source admission owns scalar widths and the final store boundary");
+  assert((Size == 1 || Size == 2 || Size == 4 || Size == 8 ||
+          (Size == 16 && T.SseAlignmentBytes)) &&
+         (Flags & ~kX64PagedSseAccess) <= (kX64PagedStackAccess | 2) &&
+         !T.Store &&
+         "source admission owns operand widths and the final store boundary");
   X86LinearAccess A{Address, MemoryAccessKind::Read, T.CPL, false,
                     bool(Flags & kX64PagedStackAccess)};
   if (T.AlignmentPriority == X64PagedAlignmentPriority::BeforePaging &&
@@ -199,19 +232,22 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
       T.Store = std::move(*Prepared);
       T.Bytes.resize(Size);
       for (unsigned I = 0; I != Size; ++I)
-        T.Bytes[I] = Exchange.Value >> (I * 8);
+        T.Bytes[I] =
+            (I < 8 ? Exchange.Value : Exchange.ValueHigh) >> ((I % 8) * 8);
       return 0;
     }
   }
-  std::array<uint8_t, 8> Bytes{};
+  std::array<uint8_t, 16> Bytes{};
   A.Kind = MemoryAccessKind::Read;
   if (!T.accept(
           T.Memory.load(A, llvm::MutableArrayRef(Bytes).take_front(Size))) ||
       T.alignmentFault(Address, Size))
     return 1;
   Exchange.Value = 0;
+  Exchange.ValueHigh = 0;
   for (unsigned I = 0; I != Size; ++I)
-    Exchange.Value |= uint64_t(Bytes[I]) << (I * 8);
+    (I < 8 ? Exchange.Value : Exchange.ValueHigh) |= uint64_t(Bytes[I])
+                                                     << ((I % 8) * 8);
   return 0;
 }
 
@@ -293,11 +329,17 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
   const auto &Original = State.Core.Core.Core.Core;
   const auto CPL = uint8_t(State.Core.CS.Selector & 3);
   auto Next = State;
-  Transaction T{Memory, CPL,
+  Transaction T{Memory,
+                CPL,
                 Options.AlignmentPriority.value_or(
                     X64PagedAlignmentPriority::AfterPaging),
-                Options.RepeatProfile, Next};
-  X64PagedExchange Exchange{0, &T};
+                Options.RepeatProfile,
+                Next,
+                Options.SseAlignment};
+  // Generated 128-bit exchange accesses cover only the adjacent value words.
+  static_assert(offsetof(X64PagedExchange, ValueHigh) == 8);
+  static_assert(offsetof(X64PagedExchange, Transaction) == 16);
+  X64PagedExchange Exchange{0, 0, &T};
   auto *NextBytes = reinterpret_cast<uint8_t *>(&Next);
   auto *ExchangeBytes = reinterpret_cast<uint8_t *>(&Exchange);
   Controls.RFlags = Original.RFlags;

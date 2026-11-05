@@ -15,6 +15,18 @@ lifetime. A userspace IRQ must wait for KVM's injection window: an immediate
 `KVM_INTERRUPT` while IF=0 is not a valid pending-event oracle.
 See [the generated execution contract](x86-paged-execution.md).
 
+`X64PagedSseTest.*` in `NeverDX64ContinuationExportTests` is safe for static-only
+qualification: it compiles actual HighC/LLVM-to-C vector bodies at O0/O2 and
+asks LLVM to prove value, full-state preservation, single-16-byte operand and
+fault-stop predicates. The independent operand oracle checks call ordering,
+access widths, stack identity and the exchange's retained context pointer.
+It never runs the generated C, an instruction executor or a VM. The source
+test translation unit also checks all EM/TS/OSFXSR combinations at compile time.
+`SseCrossPageOperandsPublishTogether` and `SseAvailabilityPrecedesOperandFaults`
+in `NeverDX64PagedExecutionTests` exercise the runtime transaction and fault
+delivery; compiling those cases alone does not qualify their execution or an
+original-CPU comparison. Keep that limitation explicit in static-only runs.
+
 `X86LegacyExecutionTest`, `LegacyEvents/*` and `LegacySteps/*` in
 `NeverDX86PagingTests` cover original-byte protected legacy execution and
 16/32-bit IDT entry. The independent KVM oracle compares code/stack caches,

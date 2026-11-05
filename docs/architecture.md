@@ -160,7 +160,13 @@ publication remains staged. RETF's compatibility-IP validation differs across
 the qualified hybrid core types, so the profile is explicit and the test oracle
 pins its processor. Scalar rollback cannot erase completed transition effects;
 backing stops after such effects charge an attempt. The existing LowIR remains the arithmetic authority;
-both C routes share an explicit imported-call ABI. Faultable LSS/LFS/LGS reuse
+both C routes share an explicit imported-call ABI. `X64PagedSse` confines the
+legacy XORPS/MOVUPS/MOVDQU fault domain; it reuses that LowIR and the existing
+prepared-store transaction with a 16-byte exchange payload. Memory steps fold
+availability into their existing operand callback; register steps use one
+preflight. Checks precede guest data access, while processor-dependent #AC
+behavior stays an explicit runtime binding. No scalar or non-paged instruction gains a vector
+preflight call. Faultable LSS/LFS/LGS reuse
 that evaluator and the existing far-pointer template: explicit operand access
 keeps its current CPL and original stack/data fault class, while descriptor
 access remains implicit supervisor. A qualified offset-first profile controls
