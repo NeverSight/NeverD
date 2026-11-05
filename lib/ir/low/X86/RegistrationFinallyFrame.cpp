@@ -29,7 +29,7 @@ bool RegistrationStateSolver::runSEHCallbackFrame(
     std::vector<RegistrationObjectExtent> *Writes, SEHUnwindJump *Jump,
     SEHFilterOutcomes *FilterOutcomes, unsigned Depth,
     std::optional<int32_t> ParentStackOffset, SEHFrameOutcomes *Outcomes,
-    SEHHandlerOutcomes *Selected) {
+    SEHHandlerOutcomes *Selected, std::optional<SEHExceptionOrigin> Origin) {
   // A filter may leave through a jump; only its actual returns contribute
   // dispositions and restore the suspended callback frame.
   if (FilterOutcomes && (OrdinaryInvocation || Outcomes || Selected))
@@ -59,7 +59,7 @@ bool RegistrationStateSolver::runSEHCallbackFrame(
         FrameValue::frame(0);
   }
   if (FilterOutcomes)
-    Initial.enterSEHFilter(Target, *Chain.RegistrationOffset - 4);
+    Initial.enterSEHFilter(Target, *Chain.RegistrationOffset - 4, Origin);
   else
     Initial.enterCallback(Target);
   const auto InitialLevel = Initial.load(Chain.TryLevelOffset, 4).Constant;
@@ -121,7 +121,7 @@ bool RegistrationStateSolver::runSEHCallbackFrame(
             !State.callbackMemoryIsPrivate(*SP, 16, true) ||
             !JumpRuntime->Raise(Op, State, WorkUsed) ||
             State.loadCallback(SP->Offset + 4, 4).Constant != 0 ||
-            !runSEHFilterSearch(State, Writes, Continued,
+            !runSEHFilterSearch(Op, State, Writes, Continued,
                                 /*RequireResume=*/true,
                                 Selected ? &SelectedHandlers : nullptr, Jump))
           return false;

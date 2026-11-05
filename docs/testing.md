@@ -13791,6 +13791,16 @@ pairs. Native installation mutations change the reload address, volatility,
 atomicity, alignment, selector, projection keys/results, uses and placement
 before the capture. They also remove a projection or compare another value.
 
+`SearchUsesOnlyItsCurrentRaisedExceptionCode` adds 63 combinations of those
+three protocols, zero/high-bit/all-bit exception codes and matched, mismatched,
+unknown, narrow, unauthenticated, flags-read and record-write paths. A checked
+code can exclude an otherwise unproved filter disposition only in its own
+RaiseException search. `RegistrationSEHException` checks that reentry, ended
+callbacks and joins with a different source occurrence or code discard the
+origin; unknown origins retain pointer taint and flags never become exact.
+These checks do not establish native closure for wrappers around RaiseException
+or the remaining xcpt4 helper and parent cases.
+
 `registration_filter_state.s` supplies thirty runtime cases. Five handler-selection
 cases (`longjmp-handler-selected`, `longjmp-handler-cleanup`,
 `longjmp-handler-captured-cursor`, `longjmp-handler-nested-finally` and

@@ -355,7 +355,8 @@ private:
                       unsigned Depth = 0,
                       std::optional<int32_t> ParentStackOffset = std::nullopt,
                       SEHFrameOutcomes *Outcomes = nullptr,
-                      SEHHandlerOutcomes *Selected = nullptr);
+                      SEHHandlerOutcomes *Selected = nullptr,
+                      std::optional<SEHExceptionOrigin> Origin = std::nullopt);
   bool runSEHNestedFinallyFrame(size_t I, const LowOp &Op, FrameState &State,
                                 int32_t ParentStackOffset,
                                 std::vector<RegistrationObjectExtent> *Writes,
@@ -364,7 +365,9 @@ private:
                                 SEHHandlerOutcomes *Selected);
   bool recordSEHUnwindJump(size_t I, const LowOp &Op, const FrameState &State,
                            va_t Callback, SEHUnwindJump &Jump);
-  bool runSEHFilterSearch(const FrameState &Parent,
+  /// Called only after authenticating the RaiseException occurrence and its
+  /// current initialized arguments. Generic fault dispatch has no such origin.
+  bool runSEHFilterSearch(const LowOp &Raise, const FrameState &Parent,
                           std::vector<RegistrationObjectExtent> *Writes,
                           SEHFrameOutcomes &Outcomes, bool RequireResume,
                           SEHHandlerOutcomes *Selected = nullptr,
@@ -373,7 +376,7 @@ private:
                                 const SEHJumpCapture &Saved,
                                 const FrameValue &Value,
                                 SEHFrameOutcomes Outcomes);
-  bool applySEHContinueFilters(size_t I, Domain &State,
+  bool applySEHContinueFilters(size_t I, Domain &State, const LowOp &Raise,
                                const BlockFacts &Facts);
   void
   recordCatchReturn(size_t I, const Domain &After, const LowOp &Op,

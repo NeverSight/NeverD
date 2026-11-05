@@ -41,6 +41,7 @@ void FrameState::leaveCallback() {
   InitializedCallbackBytes.clear();
   CallbackEntry.reset();
   SEHFilterEntry.reset();
+  SEHOrigin.reset();
 }
 
 bool FrameState::callbackMemoryIsPrivate(const CallbackFrameAddress &Address,

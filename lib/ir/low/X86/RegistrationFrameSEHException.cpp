@@ -11,9 +11,11 @@
 
 namespace neverd::registration_state {
 
-void FrameState::enterSEHFilter(va_t Entry, int32_t ExceptionPointersOffset) {
+void FrameState::enterSEHFilter(va_t Entry, int32_t ExceptionPointersOffset,
+                                std::optional<SEHExceptionOrigin> Origin) {
   enterCallback(Entry);
   SEHFilterEntry = Entry;
+  SEHOrigin = Origin;
   store(ExceptionPointersOffset, 4,
         FrameValue::sehException(
             {SEHExceptionAddress::Kind::Pointers, Entry, 0}));
@@ -30,11 +32,14 @@ FrameState::sehExceptionLoad(const SEHExceptionAddress &Address,
     return FrameValue::sehException(
         {SEHExceptionAddress::Kind::Record, Address.Filter, 0});
   if (Address.Storage == SEHExceptionAddress::Kind::Record &&
-      (Address.Offset == 0 || Address.Offset == 4))
-    // No concrete exception origin or RaiseException argument has been bound.
-    // The DWORD is unknown and may carry pointer bits. A later memory sink
-    // needs its own address proof; field width alone cannot exclude an alias.
+      (Address.Offset == 0 || Address.Offset == 4)) {
+    if (Address.Offset == 0 && SEHOrigin)
+      return FrameValue::constant(SEHOrigin->Code);
+    // Generic faults have no bound code. Runtime-maintained flags remain
+    // unknown even for an exact RaiseException. An unknown DWORD may carry
+    // pointer bits, so memory sinks still need an independent address proof.
     return FrameValue::taint(true, true);
+  }
   return std::nullopt;
 }
 
