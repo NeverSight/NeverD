@@ -20259,6 +20259,23 @@ separate region functions retain the controller proofs and complete
 object-compilation checks above; they are not part of this constant-result
 proof.
 
+`X64CallPauseTest.*` validates `pause_call_sites` requests and checks disabled
+requests against byte-identical source and equal manifests except the echoed
+request's explicit false field. It compiles both C
+routes and both dispatchers at O0/O2. Compile-time predicates use the actual
+prefix, CALL, observer load and RET bodies to check pre-CALL state, retained
+high-DWORD input, budget precedence, repeated stops, instruction validation,
+parent completion and nested return-cell ownership. They also prove that the
+environment provider is not invoked for a handoff. For these small predicates
+only, the proof copy removes the direct-region `noinline` performance
+annotation and raises the cold-call inlining threshold to allow value folding;
+exact annotated production source is compiled separately. The fixture's bounded,
+disjoint guest RAM is represented as one object for constant-address loads and
+stores after inlining; integer addresses and instruction effects remain intact.
+No generated program, instruction emulator or specimen
+is executed. These checks do not supply native entry state or certify an
+arbitrary environment provider.
+
 `X64StateObjectPointers.*` in `NeverDX64ContinuationSourceTests` checks bounded
 state offsets, exact access widths, scaffolding promotion and retained guest
 addresses. Negative/out-of-object, dynamic, truncated, PHI-carried, ordered and

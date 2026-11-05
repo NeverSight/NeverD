@@ -74,6 +74,13 @@ extern "C" {
 /// Invalid state and exhausted instruction budgets never invoke it; a null
 /// provider retains the original stopping behavior. This supplies no missing
 /// ordinary arguments or Windows service implementation.
+/// Optional pause_call_sites requires bound function_calls.call_sites and
+/// stops with status 21 before their original CALLs. The driver retains the
+/// full pre-CALL state and spends no budget at that stop; zero instruction
+/// budget still returns 9. The named bridge validates and performs the CALL.
+/// Preserve caller and nested site contexts independently across pauses.
+/// Environment providers do not handle status 21. This does not recover an
+/// initial state from ordinary arguments or capture a live native process.
 ///
 /// On success, ManifestJSON receives an independently owned JSON manifest of
 /// exact original bytes, input bindings, state offsets and the C source hash.

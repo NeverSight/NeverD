@@ -28,6 +28,31 @@
 
 namespace neverd {
 
+X64FunctionCallSitePauses::X64FunctionCallSitePauses(
+    llvm::ArrayRef<X64FunctionCallSite> Sites) {
+  Addresses.reserve(Sites.size());
+  for (const auto &Site : Sites)
+    Addresses.insert(Site.Instruction->Address);
+}
+
+void X64FunctionCallSitePauses::declare(llvm::raw_ostream &OS) const {
+  if (!Addresses.empty())
+    OS << "\n/* A bound original CALL has not executed. Retain the caller "
+          "activation\n"
+          " * and use its call-site bridge with this unchanged native state. "
+          "*/\n"
+          "enum { NEVERD_X64_CALL_SITE_READY_V1 = "
+       << uint64_t(analysis::X64ContinuationExitV1::CallSiteReady) << " };\n";
+}
+
+bool X64FunctionCallSitePauses::emit(llvm::raw_ostream &OS, va_t Address,
+                                     llvm::StringRef Indent) const {
+  if (!Addresses.contains(Address))
+    return false;
+  OS << Indent << "return NEVERD_X64_CALL_SITE_READY_V1;\n";
+  return true;
+}
+
 llvm::Expected<std::vector<X64FunctionCallSite>> bindX64FunctionCallSites(
     const BinaryImage &Image, llvm::ArrayRef<X64FunctionCallInterface> Calls,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units) {

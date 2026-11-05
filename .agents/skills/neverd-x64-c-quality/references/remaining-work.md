@@ -1,5 +1,13 @@
 # Remaining x64 C-quality work
 
+Explicit callers can now request `pause_call_sites` to stop before their bound
+original CALLs and hand the existing state directly to the checked bridge.
+Both drivers emit static stops only at selected sites; nested bridges and the
+parent activation retain independent return cells. This closes the manual
+pre-CALL positioning gap for state-driven callers. It does not reconstruct
+entry state from ordinary C, infer environment effects or recover the two
+registry-query scalar inputs. Those obligations remain open.
+
 Explicit continuation LLVM C now retains bounded host-state object pointers.
 The producer owns the complete state extent, and only wholly contained constant
 loads/stores gain that object proof. LLVM C preserves existing constant inbounds

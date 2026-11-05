@@ -16,6 +16,15 @@ from transport_test import BASE, Client
 A = BASE
 B = hex(int(BASE, 16) + 16)
 C = hex(int(BASE, 16) + 32)
+# The worker keeps this many finished documents, within this many retained
+# bytes (limits::worker::kEngineMaxNamedViews and
+# kEngineMaxNamedViewCacheBytes in ResourceLimits.h).
+NAMED_VIEWS = 512
+NAMED_VIEW_BYTES = 256 * 1024 * 1024
+# The mock's budget fixture: 9000 lines of 516 bytes.  A document retains
+# its text at least twice (the document and its wire-form original), so
+# this many of them pass the byte budget.
+BUDGET_DOCUMENTS = NAMED_VIEW_BYTES // (2 * 9000 * 516) + 2
 
 
 def ok(client, operation, payload=None):
@@ -179,14 +188,14 @@ def run(executable):
         assert "renamed_source" not in clean["text"]
         assert "current source comment" not in clean["text"]
 
-        # Count-bounded LRU: touch A after filling eight slots, then introduce
-        # the ninth. A survives; the older B must be generated again.
-        entries = [hex(int(A, 16) + index * 16) for index in range(9)]
+        # Count-bounded LRU: touch A after filling every slot, then introduce
+        # one more. A survives; the older B must be generated again.
+        entries = [hex(int(A, 16) + index * 16) for index in range(NAMED_VIEWS + 1)]
         previous_b = source(client, entries[1])
-        for entry in entries[2:8]:
+        for entry in entries[2:NAMED_VIEWS]:
             source(client, entry)
         reused(source(client), clean)
-        source(client, entries[8])
+        source(client, entries[NAMED_VIEWS])
         reused(source(client), clean)
         rebuilt_b = source(client, B)
         assert rebuilt_b["fixture_prepares"] > previous_b["fixture_prepares"]
@@ -227,7 +236,7 @@ def run(executable):
                                     item["end_byte"] > begin_byte]
                         assert page[field] == expected, (ordering, offset, field)
 
-        # The byte budget applies before the eight-document count limit.
+        # The byte budget applies before the document count limit.
         # Each document includes thousands of row objects as well as text.
         big = root / "source-cache-budget.bin"
         big.write_bytes(b"source cache byte budget fixture")
@@ -244,7 +253,8 @@ def run(executable):
                 source(bounded, offset=offset, limit=width)
             assert source(bounded, offset=100, limit=width) == original_page
             reused(source(bounded, limit=1), large)
-        for entry in entries[1:4]:
+        assert BUDGET_DOCUMENTS < NAMED_VIEWS
+        for entry in entries[1:BUDGET_DOCUMENTS]:
             source(bounded, entry, limit=1)
         rebuilt = source(bounded, limit=1)
         assert rebuilt["fixture_prepares"] > large["fixture_prepares"], rebuilt
