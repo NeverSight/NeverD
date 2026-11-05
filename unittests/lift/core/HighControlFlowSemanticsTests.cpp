@@ -7763,6 +7763,76 @@ ExprPtr loadSlot() {
   return HighExpr::makeLoad(HighExpr::makeConst(0x100, 8), NdType::makeInt(8));
 }
 
+TEST(HighControlFlowSemantics,
+     LateSkipRewritesPreserveSuccessiveAndSharedContinuations) {
+  // Several candidates share one statement list. Moving an earlier range
+  // shifts later joins; a jump from outside a range must still enter it.
+  // Exercise both moving rewrites and removal of else-only fallthroughs.
+  for (unsigned Shape : {0, 1, 2})
+    for (bool Shared : {false, true}) {
+      SCOPED_TRACE(Shape);
+      SCOPED_TRACE(Shared);
+      HighFunc F;
+      F.Entry = 0x800;
+      F.Body = {storeSlot(0x800, HighExpr::makeConst(0, 8))};
+      auto TestBit = [](unsigned Bit) {
+        return HighExpr::makeBinop(NdOp::INT_AND, local(0),
+                                   HighExpr::makeConst(uint64_t{1} << Bit, 8));
+      };
+      auto Add = [](va_t Address, uint64_t Value) {
+        return storeSlot(Address,
+                         HighExpr::makeBinop(NdOp::INT_ADD, loadSlot(),
+                                             HighExpr::makeConst(Value, 8)));
+      };
+      if (Shared) {
+        HighStmt Entry;
+        Entry.Kind = StmtKind::If;
+        Entry.Addr = 0x804;
+        Entry.Cond = TestBit(3);
+        Entry.Body = {jump(0x808, Shape == 2 ? 0x1100 : 0x1110)};
+        F.Body.push_back(std::move(Entry));
+      }
+      for (unsigned I = 0; I < 3; ++I) {
+        const va_t Address = 0x1000 + I * 0x100;
+        const va_t Next = Address + 0x100;
+        HighStmt Guard;
+        Guard.Kind = Shape == 2 ? StmtKind::IfElse : StmtKind::If;
+        Guard.Addr = Address;
+        Guard.Cond = TestBit(I);
+        if (Shape == 0)
+          Guard.Body = {jump(Address + 4, 0x2000)};
+        else {
+          Guard.Body = {Add(Address + 4, uint64_t{1} << I)};
+          if (Shape == 1)
+            Guard.Body.push_back(jump(Address + 8, Next));
+          else
+            Guard.ElseBody = {jump(Address + 8, Next)};
+        }
+        F.Body.push_back(std::move(Guard));
+        if (Shape != 2) {
+          F.Body.push_back(Add(Address + 0x10, uint64_t{8} << I));
+          if (Shape == 0)
+            F.Body.push_back(jump(Address + 0x14, Next));
+        }
+      }
+      F.Body.push_back(result(0x1300, loadSlot()));
+      F.Body.push_back(
+          result(0x2000, HighExpr::makeBinop(NdOp::INT_ADD, loadSlot(),
+                                             HighExpr::makeConst(100, 8))));
+      std::vector<uint64_t> Expected;
+      for (uint64_t Input = 0; Input < 16; ++Input) {
+        const auto Value = execute(F, Input, /*RequireExactTargets=*/true);
+        ASSERT_TRUE(Value.has_value());
+        Expected.push_back(*Value);
+      }
+      invertSkipGotos(F);
+      for (uint64_t Input = 0; Input < Expected.size(); ++Input)
+        EXPECT_EQ(execute(F, Input, /*RequireExactTargets=*/true),
+                  Expected[Input])
+            << Input;
+    }
+}
+
 TEST(HighControlFlowSemantics, StoreThroughAnAliasKeepsAFieldRetest) {
   // p = q = 0x100; p->f = 1; t = p->f; v = 0;
   // if (t) { q->f = x; if (p->f) v = 7; }  return v;
