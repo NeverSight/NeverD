@@ -1,0 +1,915 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-05",
+  "scope": "NeverC direct i386 machine output via an explicit checked full LLVM backend; PIC/PIE and Intel OFFSET repair",
+  "global_goal_complete": false,
+  "source_identity": {
+    "llvm": {
+      "commit": "f2370bdd646363455b8a3c3f69b8e7ba86aeea33",
+      "base_commit": "14aa32e39ae8d56f1152aa2693f35fef2c485643",
+      "changed_files": {
+        "llvm/lib/Target/X86/AsmParser/X86AsmParser.cpp": "75ff9c51c9d5a32d012063b0f586b14792ccd615682474cf87c74d4ade3450b2",
+        "llvm/test/CodeGen/X86/i386-intel-pic-roundtrip.ll": "e2f72b3b84138cbcf03b4da43bb5f40e05f04dab7658e6a92d61cf6885fc16c8",
+        "llvm/test/MC/X86/intel-offset-expression.s": "119b350e6a3c2c867a597bd93ecfbad3b16889e75b299b9c01fa5f74f6e397b0",
+        "llvm/test/tools/llc/neversight-codegen-protocol.ll": "959b6b2392af3c6dc960d8dbec3bbef5e12e9d2747efe41c2b226c81de2a6dc6",
+        "llvm/tools/llc/llc.cpp": "67785e85e49e29dbfcc5f1a274fa998b819c14d936ea17e5276b80a4c392e619"
+      }
+    },
+    "neverc": {
+      "commit": "3328cbcda463f50ba86784ba6edb49ea08d85794",
+      "base_commit": "e581f248d3c730d9e75f99c9186a050a48371eb0",
+      "changed_files": {
+        "development.md": "7f495bf666b4ec6a3d543f6e79f68076a5403eec63ee92462479797d5737da4d",
+        "neverc/include/neverc/Foundation/LangOpts/CodeGenOptions.h": "4d2579c17bcac5b077385a52f5d4ab1104edc0dcddab5198d716a9e0f776c741",
+        "neverc/include/neverc/Foundation/LangOpts/LangOptions.def": "95e0bb3ec8722171237aec8a10f2f371c9b2380aa3fcbecdec85b5a6e528a2fc",
+        "neverc/include/neverc/Invoke/Options.td.h": "c09a833d207eaf2538693509ec736eb146cb9b426db4b37313b4ba2a36e5d422",
+        "neverc/lib/Compiler/Core/CompilerInvocationCodeGen.cpp": "8efabd0a750efb7fe488fa366a37839a2de2531ca3849baf7074c338bd7b8012",
+        "neverc/lib/Compiler/Core/CompilerInvocationLang.cpp": "7a4d001e23a16a7b236f1517c4d87df37d8f845f3a797223ced12032a881c93d",
+        "neverc/lib/Compiler/Preprocessor/InitPredefinedMacros.cpp": "f13ad36eea94c265df01fdef25dff1a231907051840b32b67e1c6d93e3c6a36d",
+        "neverc/lib/Emit/Backend/BackendUtil.cpp": "e22dd9a4e5ed5f3f94241b86eb07973c8ededa327d98f510c0ec2721625142f2",
+        "neverc/lib/Emit/Backend/FullLLVMBackend.cpp": "c361b7acdeefe09658e4f6a7cb518072260e1a56eb2470ad31fbb6eee619e054",
+        "neverc/lib/Emit/Backend/FullLLVMBackend.h": "b4cecebfe365e160a8ae68c8881f42a5e82570cc1d5ec849f70cc17b6eaa9a31",
+        "neverc/lib/Emit/CMakeLists.txt": "0b7046e2dfd3118dff9b5996302bc247a0910c24a9d6d3c1f2ed6d24792794cd",
+        "neverc/lib/Emit/Core/ModuleEmitter.cpp": "ca3db9f7c6b1fb5dba3357fdf9a95f6fbfff1a0959668ca583d7a2fb0f56a01a",
+        "neverc/lib/Invoke/Core/Driver.cpp": "00481ad1b63b538456c7885d6bbf07bd9ae242231f1b2b7eb445127ac051c398",
+        "neverc/lib/Invoke/ToolChains/NeverC.cpp": "a4412b970cec6776db60433ae021a7ee3bfcf42042cf7c4907ef6b2b266936d6",
+        "tests/neverc/X86/I386FrontendTests.cpp": "2f0d0aae96955c3915a22a324618b7c70adf313897cc4618ae7e09c6ea01b63d",
+        "tests/neverc/X86/verify_arpl_source.py": "6861500b21de96a63d28dc84c9f2802e453156e3c010c706f6ef8e5acb594da7",
+        "tests/neverc/X86/verify_bound_source.py": "2356ef0504a1c37e17805721e55e1cde91c83b0dbfa81c3d578345d5b22c7cbe",
+        "tests/neverc/X86/verify_i386_abi.py": "63daa2f3294eef62da098678face48b556e4aafd356ad0005fed07aee23dbca3",
+        "tests/neverc/X86/verify_i386_intrinsic_headers.py": "5219d811a25104c02bc96747933991f7f76f62cc86c3e7104167bd2473a50fd8",
+        "tests/neverc/X86/verify_i386_machine_backend.py": "c072e57368bcc8f55fe821c7df29031b1261298c665843266a32a7fe68bb2c96",
+        "tests/neverc/X86/verify_protected_far_pointer.py": "db030b3aa873fda0788012d56aa17fe75213eebe117e46d95f41c64a22365602"
+      }
+    },
+    "neverd_documentation_base": "bbe6dd363bdbe8ea4fe8a87970ab89451bb82295"
+  },
+  "build_note": "Qualified binaries were built from the recorded source contents before the commits were created. The NeverD source/object export snapshots below are immutable prior fixtures, not regenerated from the current dev documentation base. NeverD receives evidence/documentation only in this change.",
+  "artifact_root": "/mnt/data/neverd-i386-machine-output-20261105",
+  "host": {
+    "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+    "processor": "Intel Core i9-13900H",
+    "qualified_cpus": {
+      "2": "P core",
+      "12": "E core"
+    },
+    "kvm": true
+  },
+  "tools": {
+    "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc": "242c7f4fd11cceb9acde5fc2415d179ca28f5a14e0a781d4ec243253a64edc4f",
+    "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llc": "612849a935a8a40a03faee39f6dbbea084c59e545402199bc4a3c9b4fe7c2a10",
+    "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/opt": "daf0c16b6f8da0039f15d0edcf684755902dcc490a39eb838f33e7df86237d76",
+    "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-mc": "2df63433681fc3ff1999121bfeeb9dc5f6f396ab6f5d918fde4198186b2d1d31",
+    "/mnt/data/neverd-sgx-transfer-20261101/build-intrinsics/bin/llvm-objdump": "c49f344952837ba58221a330bec7dec5551231756b55f98844e695811b022014",
+    "/mnt/data/neverd-flags-20261104/clang-build/bin/clang-23": "5f042da5b891ab1c34711b8246490f8c59c91bf109bd17274103864f6f8bd1f7"
+  },
+  "summary": {
+    "neverc_regressions": 188,
+    "llvm_regressions": 27,
+    "backend_profiles": 20,
+    "backend_runtime_checks": 200000,
+    "backend_negative_controls": 22,
+    "abi_profiles": 16,
+    "abi_checks": 5120000,
+    "abi_negative_controls": 4,
+    "header_profiles": 16,
+    "header_checks": 1769472,
+    "header_negative_controls": 4,
+    "far_pointer_profiles": 8,
+    "far_pointer_complete_state_pairs": 127680,
+    "far_pointer_negative_controls": 8,
+    "arpl_profiles": 224,
+    "arpl_complete_state_pairs": 530432,
+    "arpl_negative_controls": 4,
+    "bound_profiles": 4,
+    "bound_comparisons": 22063776,
+    "bound_negative_controls": 2
+  },
+  "qualification": [
+    {
+      "group": "backend",
+      "artifact": "backend-qualified-cpu2/qualification.json",
+      "sha256": "a1cab7cb0c0b58134df043dd0895d98669b71bd7299d31f54b753e7c9b0ec96c",
+      "schema_version": 1,
+      "negative_controls": [
+        "textual-ir-input",
+        "lto",
+        "mllvm",
+        "split-dwarf",
+        "wrong-target",
+        "missing",
+        "unknown-intrinsic",
+        "bad-protocol",
+        "backend-failure",
+        "wrong-object",
+        "no-object"
+      ],
+      "checks": 100000,
+      "affinity": [
+        2
+      ],
+      "boundary": "Explicit full backend, Linux i386; no embedded-backend, integrated linker, LTO, split DWARF or custom machine-hook claim",
+      "profiles": [
+        {
+          "name": "O0-static",
+          "checks": 10000,
+          "object_sha256": "d4d05b23dddf736289b53ff1b939d36d9cb725f272372e23b83ab2c205fdd023"
+        },
+        {
+          "name": "O0-pic",
+          "checks": 10000,
+          "object_sha256": "1e0be2507009ecd180a47597b6e09c652649f8d8395b335561e3cb64f8748309"
+        },
+        {
+          "name": "O0-pie",
+          "checks": 10000,
+          "object_sha256": "ad43f4c522eb960f04650aac0a6e9f453a399b04fb5cd31bb465ac9540eabf12"
+        },
+        {
+          "name": "O0-att",
+          "checks": 10000
+        },
+        {
+          "name": "O0-intel",
+          "checks": 10000
+        },
+        {
+          "name": "O2-static",
+          "checks": 10000,
+          "object_sha256": "7f7ad59f4b753e2a517f3a5eab7709757f092482eb333e39b0a3c95a18c029f1"
+        },
+        {
+          "name": "O2-pic",
+          "checks": 10000,
+          "object_sha256": "7a14c54326ede4e4ea8df099053099b71ea51fab62da3285646215a45adf70a2"
+        },
+        {
+          "name": "O2-pie",
+          "checks": 10000,
+          "object_sha256": "8a94d04a1ff826f6f45b8a63fb09485f15daa9ad2629f69f8115afd36f02a2eb"
+        },
+        {
+          "name": "O2-att",
+          "checks": 10000
+        },
+        {
+          "name": "O2-intel",
+          "checks": 10000
+        }
+      ]
+    },
+    {
+      "group": "backend",
+      "artifact": "final-backend-cpu12/qualification.json",
+      "sha256": "da73dc7c9ca7852a7714e370a05a35b90aa30bc39a507622152451019f5921a4",
+      "schema_version": 1,
+      "negative_controls": [
+        "textual-ir-input",
+        "lto",
+        "mllvm",
+        "split-dwarf",
+        "wrong-target",
+        "missing",
+        "unknown-intrinsic",
+        "bad-protocol",
+        "backend-failure",
+        "wrong-object",
+        "no-object"
+      ],
+      "checks": 100000,
+      "affinity": [
+        12
+      ],
+      "boundary": "Explicit full backend, Linux i386; no embedded-backend, integrated linker, LTO, split DWARF or custom machine-hook claim",
+      "profiles": [
+        {
+          "name": "O0-static",
+          "checks": 10000,
+          "object_sha256": "e5c1d3b832b043c96f60d52f3ea57b7d56070b257a8f3a622f4da6acadd1a65d"
+        },
+        {
+          "name": "O0-pic",
+          "checks": 10000,
+          "object_sha256": "b35375caeb9da6f7e7d253d94b0a0399c99de346043166068903312c8fe1e0b9"
+        },
+        {
+          "name": "O0-pie",
+          "checks": 10000,
+          "object_sha256": "3bc3cdfdb6601c849a4d40e30fcfb7135b9c47800fa0a036adf30bf42f696a0a"
+        },
+        {
+          "name": "O0-att",
+          "checks": 10000
+        },
+        {
+          "name": "O0-intel",
+          "checks": 10000
+        },
+        {
+          "name": "O2-static",
+          "checks": 10000,
+          "object_sha256": "e246f25736a981f84621a19fd2503913f7396ca267673033d75e9b88522ec4fd"
+        },
+        {
+          "name": "O2-pic",
+          "checks": 10000,
+          "object_sha256": "967708458c9dd80eaf03476b2515f764cc2982f1c4c9d17a30629ab84dcd369f"
+        },
+        {
+          "name": "O2-pie",
+          "checks": 10000,
+          "object_sha256": "1487d0e6939e22efb5b437884ce780abc8388aa2d5bf1d4e0904b799e1370f4b"
+        },
+        {
+          "name": "O2-att",
+          "checks": 10000
+        },
+        {
+          "name": "O2-intel",
+          "checks": 10000
+        }
+      ]
+    },
+    {
+      "group": "abi",
+      "artifact": "final-abi-cpu2/summary.json",
+      "sha256": "faa74a8dcd955b897f4629ce3b1bc52713a23446c5f02a2818855b54af1b7640",
+      "scope": "i386 Linux C23 ABI through full LLVM; embedded backend remains x64-only",
+      "machine_backend": true,
+      "total_checks": 2560000,
+      "negative_controls": 2,
+      "profiles": [
+        {
+          "name": "clang-to-clang-O0",
+          "checks": 320000
+        },
+        {
+          "name": "neverc-to-clang-O0",
+          "checks": 320000
+        },
+        {
+          "name": "clang-to-neverc-O0",
+          "checks": 320000
+        },
+        {
+          "name": "neverc-to-neverc-O0",
+          "checks": 320000
+        },
+        {
+          "name": "clang-to-clang-O2",
+          "checks": 320000
+        },
+        {
+          "name": "neverc-to-clang-O2",
+          "checks": 320000
+        },
+        {
+          "name": "clang-to-neverc-O2",
+          "checks": 320000
+        },
+        {
+          "name": "neverc-to-neverc-O2",
+          "checks": 320000
+        }
+      ]
+    },
+    {
+      "group": "abi",
+      "artifact": "final-abi-cpu12/summary.json",
+      "sha256": "750249ababd5736b122116d99d50b1df84d1de3f1050b75f5c233dd90d4bba74",
+      "scope": "i386 Linux C23 ABI through full LLVM; embedded backend remains x64-only",
+      "machine_backend": true,
+      "total_checks": 2560000,
+      "negative_controls": 2,
+      "profiles": [
+        {
+          "name": "clang-to-clang-O0",
+          "checks": 320000
+        },
+        {
+          "name": "neverc-to-clang-O0",
+          "checks": 320000
+        },
+        {
+          "name": "clang-to-neverc-O0",
+          "checks": 320000
+        },
+        {
+          "name": "neverc-to-neverc-O0",
+          "checks": 320000
+        },
+        {
+          "name": "clang-to-clang-O2",
+          "checks": 320000
+        },
+        {
+          "name": "neverc-to-clang-O2",
+          "checks": 320000
+        },
+        {
+          "name": "clang-to-neverc-O2",
+          "checks": 320000
+        },
+        {
+          "name": "neverc-to-neverc-O2",
+          "checks": 320000
+        }
+      ]
+    },
+    {
+      "group": "headers",
+      "artifact": "final-headers-cpu2/qualification.json",
+      "sha256": "0db780d7b4ea1e2be8a348cae11518ca7d5f8447fba9fe0f233f9828b30003f8",
+      "schema_version": 1,
+      "machine_backend": true,
+      "affinity": [
+        2
+      ],
+      "checks": 884736,
+      "negative_controls": [
+        "x32-O2-pic-wrong-add",
+        "x64-O2-pic-wrong-add"
+      ],
+      "boundary": "Linux i386/x64 C23, O0/O2, static/PIC objects via full LLVM; MMX/SSE/AVX2 values, carry/borrow, CRC32C, x87 after EMMS and marker preservation of full-width EBX/RBX. HRESET and AVX-512 are compile-only. No original-machine state/fault/event claim.",
+      "profiles": [
+        {
+          "name": "x32-O0-static",
+          "bits": 32,
+          "optimization": "O0",
+          "pic": false,
+          "ir_sha256": "2b1fec0b28e9aa34dd348f4873971455cff9d6aafbbd8d89c2d6a9369767ad1a",
+          "object_sha256": "58c2798d5b635224496d7a9ff714161073df51a701767aaba0e9cf792f085b80",
+          "executable_sha256": "a4e8c0b94d6a16589641281f4531ee8d65bb3aa79a613c0a6883cd93e8aafd43",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x32-O0-pic",
+          "bits": 32,
+          "optimization": "O0",
+          "pic": true,
+          "ir_sha256": "65030279f04043e7d224d83e3548620472927a97568df682e9219145481880a9",
+          "object_sha256": "8c3d3af436703a2feb4904632a80fdc50f78d0ed4d34b8f2005fa64ed4f15905",
+          "executable_sha256": "9aee40f43586d3d8382b11904721f26c8462066cfe0ff57e16984b59d9551f0a",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x32-O2-static",
+          "bits": 32,
+          "optimization": "O2",
+          "pic": false,
+          "ir_sha256": "3591a01aad6d6651cb9c270cbbe9b36d051d09a0d6fd65e3000b57e199b6309d",
+          "object_sha256": "6697c92c74aacba5eda5ac3a43d313ffa356d56665c769a59d2a434011095b13",
+          "executable_sha256": "de27e8862268294bf96fd3216c6917aef1ba4a8f4fb0589535fc156a87e035b5",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x32-O2-pic",
+          "bits": 32,
+          "optimization": "O2",
+          "pic": true,
+          "ir_sha256": "3bd968ba787776a7376f5755577ffbecd709f251e2570c45a8e8481678358413",
+          "object_sha256": "739b183eaf119fb68b5142a99501b0907ba951d1cad4052c9def6ee43a771419",
+          "executable_sha256": "65df390340bdb259d283580442dddf07e18f056fc3f2ebc0d006993953a5f739",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x64-O0-static",
+          "bits": 64,
+          "optimization": "O0",
+          "pic": false,
+          "ir_sha256": "88e17d0c351a6a96403ee44e3a6ba5e866d3a148b7f073d83635a091c26ce80c",
+          "object_sha256": "dcf50678261aa87481179cce569221f2d011ae2c10ae61d8be2e9a5255e41c4a",
+          "executable_sha256": "30455b241a7a879f021669934a28d2565155c6552ba04ad78976308887563e7b",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x64-O0-pic",
+          "bits": 64,
+          "optimization": "O0",
+          "pic": true,
+          "ir_sha256": "88e17d0c351a6a96403ee44e3a6ba5e866d3a148b7f073d83635a091c26ce80c",
+          "object_sha256": "f4dcb0a414e9345c13bd4c530a1da269be0c38c34767094a3a716cb39b5ce9bf",
+          "executable_sha256": "7fe26d5480f5123270676d6773658818acaca1d0c3f6707f8cc0e45c28e8eec9",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x64-O2-static",
+          "bits": 64,
+          "optimization": "O2",
+          "pic": false,
+          "ir_sha256": "539f2d7141b154e2a4e12c48abfd87be061ac8e94f01cd9e30f28e939e56bd3e",
+          "object_sha256": "d2a8c3d9147afc2888cbbe67330273d6e9fb8e533be6a639603c62a2ab06235b",
+          "executable_sha256": "671f95798d4a60e29ff663608e65baea76d397c25fd54636305c5689dcc1013b",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x64-O2-pic",
+          "bits": 64,
+          "optimization": "O2",
+          "pic": true,
+          "ir_sha256": "539f2d7141b154e2a4e12c48abfd87be061ac8e94f01cd9e30f28e939e56bd3e",
+          "object_sha256": "9ff027c9423503a2a0da362cd52d15c05a8c0d65ec058604e5aea143bbaca351",
+          "executable_sha256": "ddb197801bebfef70c09526c81c9899209b024c791c8a03e9dda20e122b97f81",
+          "cases": 4096,
+          "checks": 110592
+        }
+      ]
+    },
+    {
+      "group": "headers",
+      "artifact": "final-headers-cpu12/qualification.json",
+      "sha256": "c5081d4f720f58e71ae08eba39b43eb1389c6c4e34ef9ace65e749b7cfd1b4b2",
+      "schema_version": 1,
+      "machine_backend": true,
+      "affinity": [
+        12
+      ],
+      "checks": 884736,
+      "negative_controls": [
+        "x32-O2-pic-wrong-add",
+        "x64-O2-pic-wrong-add"
+      ],
+      "boundary": "Linux i386/x64 C23, O0/O2, static/PIC objects via full LLVM; MMX/SSE/AVX2 values, carry/borrow, CRC32C, x87 after EMMS and marker preservation of full-width EBX/RBX. HRESET and AVX-512 are compile-only. No original-machine state/fault/event claim.",
+      "profiles": [
+        {
+          "name": "x32-O0-static",
+          "bits": 32,
+          "optimization": "O0",
+          "pic": false,
+          "ir_sha256": "2b1fec0b28e9aa34dd348f4873971455cff9d6aafbbd8d89c2d6a9369767ad1a",
+          "object_sha256": "58c2798d5b635224496d7a9ff714161073df51a701767aaba0e9cf792f085b80",
+          "executable_sha256": "a4e8c0b94d6a16589641281f4531ee8d65bb3aa79a613c0a6883cd93e8aafd43",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x32-O0-pic",
+          "bits": 32,
+          "optimization": "O0",
+          "pic": true,
+          "ir_sha256": "65030279f04043e7d224d83e3548620472927a97568df682e9219145481880a9",
+          "object_sha256": "8c3d3af436703a2feb4904632a80fdc50f78d0ed4d34b8f2005fa64ed4f15905",
+          "executable_sha256": "9aee40f43586d3d8382b11904721f26c8462066cfe0ff57e16984b59d9551f0a",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x32-O2-static",
+          "bits": 32,
+          "optimization": "O2",
+          "pic": false,
+          "ir_sha256": "3591a01aad6d6651cb9c270cbbe9b36d051d09a0d6fd65e3000b57e199b6309d",
+          "object_sha256": "6697c92c74aacba5eda5ac3a43d313ffa356d56665c769a59d2a434011095b13",
+          "executable_sha256": "de27e8862268294bf96fd3216c6917aef1ba4a8f4fb0589535fc156a87e035b5",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x32-O2-pic",
+          "bits": 32,
+          "optimization": "O2",
+          "pic": true,
+          "ir_sha256": "3bd968ba787776a7376f5755577ffbecd709f251e2570c45a8e8481678358413",
+          "object_sha256": "739b183eaf119fb68b5142a99501b0907ba951d1cad4052c9def6ee43a771419",
+          "executable_sha256": "65df390340bdb259d283580442dddf07e18f056fc3f2ebc0d006993953a5f739",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x64-O0-static",
+          "bits": 64,
+          "optimization": "O0",
+          "pic": false,
+          "ir_sha256": "88e17d0c351a6a96403ee44e3a6ba5e866d3a148b7f073d83635a091c26ce80c",
+          "object_sha256": "dcf50678261aa87481179cce569221f2d011ae2c10ae61d8be2e9a5255e41c4a",
+          "executable_sha256": "30455b241a7a879f021669934a28d2565155c6552ba04ad78976308887563e7b",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x64-O0-pic",
+          "bits": 64,
+          "optimization": "O0",
+          "pic": true,
+          "ir_sha256": "88e17d0c351a6a96403ee44e3a6ba5e866d3a148b7f073d83635a091c26ce80c",
+          "object_sha256": "f4dcb0a414e9345c13bd4c530a1da269be0c38c34767094a3a716cb39b5ce9bf",
+          "executable_sha256": "7fe26d5480f5123270676d6773658818acaca1d0c3f6707f8cc0e45c28e8eec9",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x64-O2-static",
+          "bits": 64,
+          "optimization": "O2",
+          "pic": false,
+          "ir_sha256": "539f2d7141b154e2a4e12c48abfd87be061ac8e94f01cd9e30f28e939e56bd3e",
+          "object_sha256": "d2a8c3d9147afc2888cbbe67330273d6e9fb8e533be6a639603c62a2ab06235b",
+          "executable_sha256": "671f95798d4a60e29ff663608e65baea76d397c25fd54636305c5689dcc1013b",
+          "cases": 4096,
+          "checks": 110592
+        },
+        {
+          "name": "x64-O2-pic",
+          "bits": 64,
+          "optimization": "O2",
+          "pic": true,
+          "ir_sha256": "539f2d7141b154e2a4e12c48abfd87be061ac8e94f01cd9e30f28e939e56bd3e",
+          "object_sha256": "9ff027c9423503a2a0da362cd52d15c05a8c0d65ec058604e5aea143bbaca351",
+          "executable_sha256": "ddb197801bebfef70c09526c81c9899209b024c791c8a03e9dda20e122b97f81",
+          "cases": 4096,
+          "checks": 110592
+        }
+      ]
+    },
+    {
+      "group": "far_pointer",
+      "artifact": "final-far16-cpu2/qualification.json",
+      "sha256": "414482f53675a13bd857da36ac8cf6e599752ab9636898e1411ee25e713b9616",
+      "schema_version": 2,
+      "frontend": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+      "machine_backend": true,
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events.",
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 16,
+          "image_sha256": "1f8bd8ad759e9bda273ef81866d8f2ef9263d7e3fe377875b2d66e2b10551771",
+          "manifest_sha256": "b195e39b07badc5ecda23f3dc23d166c2bcfa8cda49dbfb28a18047c97bec82b",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 16,
+          "image_sha256": "0393a9400daf0639fbae7452080a4f9c62fa682bdb5f705ed2c35be0413bec16",
+          "manifest_sha256": "cd6b08f0275102ee65c2fa235fdcb7ea1e52557860611ae8bb864aa7364273b7",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ]
+    },
+    {
+      "group": "far_pointer",
+      "artifact": "final-far16-cpu12/qualification.json",
+      "sha256": "414482f53675a13bd857da36ac8cf6e599752ab9636898e1411ee25e713b9616",
+      "schema_version": 2,
+      "frontend": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+      "machine_backend": true,
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events.",
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 16,
+          "image_sha256": "1f8bd8ad759e9bda273ef81866d8f2ef9263d7e3fe377875b2d66e2b10551771",
+          "manifest_sha256": "b195e39b07badc5ecda23f3dc23d166c2bcfa8cda49dbfb28a18047c97bec82b",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 16,
+          "image_sha256": "0393a9400daf0639fbae7452080a4f9c62fa682bdb5f705ed2c35be0413bec16",
+          "manifest_sha256": "cd6b08f0275102ee65c2fa235fdcb7ea1e52557860611ae8bb864aa7364273b7",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ]
+    },
+    {
+      "group": "far_pointer",
+      "artifact": "final-far32-cpu2/qualification.json",
+      "sha256": "5edba73256537cc5096edccf11821c141da4a78034d616a4c504a4b753029da0",
+      "schema_version": 2,
+      "frontend": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+      "machine_backend": true,
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events.",
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 32,
+          "image_sha256": "a6bd4215615a9e9a2456ea86cffb8b8cda4464e39ab30ebe097b0c39470e45c6",
+          "manifest_sha256": "ef159764bc6f4335120a24aa25ee3584f0cc0841a20391ae27da6cb943a668de",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 32,
+          "image_sha256": "841ea04e01e02d7f6ba644853d2e5b4c47c7e7112a136453f14e9159eaccf7e8",
+          "manifest_sha256": "2eabb9796181523cd8a4f4a02ac1f0e3a68519ecd6e72e45d2152bef29e9cb4a",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ]
+    },
+    {
+      "group": "far_pointer",
+      "artifact": "final-far32-cpu12/qualification.json",
+      "sha256": "5edba73256537cc5096edccf11821c141da4a78034d616a4c504a4b753029da0",
+      "schema_version": 2,
+      "frontend": "/mnt/data/neverd-native-system-returns-20261029/build-neverc/bin/neverc",
+      "machine_backend": true,
+      "comparisons": 31920,
+      "boundary": "CPL0 protected code16/code32 with a 32-bit stack/pointer ABI; native offset/segment loads, descriptor effects and #GP/#NP/#SS/#PF frames. Original fault handlers expose their vector with OUT. ABI-compatible successful cases also return through the compiler frame. Frontend C, when selected, is compiled through the full LLVM backend. No embedded NeverC i386 backend, real/VM86, CPL3 #AC, MOV-SS shadows or asynchronous events.",
+      "profiles": [
+        {
+          "optimization": "O0",
+          "mode": 32,
+          "image_sha256": "a6bd4215615a9e9a2456ea86cffb8b8cda4464e39ab30ebe097b0c39470e45c6",
+          "manifest_sha256": "ef159764bc6f4335120a24aa25ee3584f0cc0841a20391ae27da6cb943a668de",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        },
+        {
+          "optimization": "O2",
+          "mode": 32,
+          "image_sha256": "841ea04e01e02d7f6ba644853d2e5b4c47c7e7112a136453f14e9159eaccf7e8",
+          "manifest_sha256": "2eabb9796181523cd8a4f4a02ac1f0e3a68519ecd6e72e45d2152bef29e9cb4a",
+          "negative_control": "wrong pointer before intact far load rejected",
+          "functions": 20,
+          "complete_state_pairs": 15960,
+          "returns": 4920,
+          "np": 480,
+          "ss": 120,
+          "gp": 4560,
+          "pf": 4680
+        }
+      ]
+    },
+    {
+      "group": "arpl_exports",
+      "artifact": "final-arpl-native-cpu2/qualification.json",
+      "sha256": "c533ccefb5d41b1d397fb3df6f7f3944d4086ad5b7911cdfcb259ffc6d946eda",
+      "schema_version": 1,
+      "machine_backend": true,
+      "fallback": false,
+      "comparisons": 265216,
+      "negative_controls": "Intact ARPL with inverted returned ZF rejected at O0/O2",
+      "boundary": "Actual NeverD HighC/LLVMC exports from ELF/COFF/MachO recompiled for i386 SysV32; native instruction, complete GPR/flags/system/event/RAM and original #GP/#PF/#AC frames against independent bytes; ordinary pointer DS and nonflat FS/GS. No original-image fault dispatcher, real/VM86 or asynchronous events.",
+      "profiles": {
+        "count": 112,
+        "complete_state_pairs": 265216,
+        "first": {
+          "source": "arpl_0_0_0.high.c",
+          "optimization": "O0",
+          "image_sha256": "f8e305d9b79bc30c0658c8763b319917f096153b136bfdedcb86d955ae11ecae",
+          "functions": 1,
+          "complete_state_pairs": 256,
+          "returns": 256,
+          "changed": 96,
+          "unchanged": 160,
+          "gp": 0,
+          "pf": 0,
+          "ac": 0
+        },
+        "last": {
+          "source": "arpl_0_1_3.o",
+          "optimization": "O2",
+          "image_sha256": "b82e613fc3d384ddd814e7a295f93c1daba6311fd7009d3b6c160b018df4aab8",
+          "functions": 1,
+          "complete_state_pairs": 3072,
+          "returns": 1336,
+          "changed": 336,
+          "unchanged": 1000,
+          "gp": 864,
+          "pf": 616,
+          "ac": 256
+        }
+      }
+    },
+    {
+      "group": "arpl_exports",
+      "artifact": "final-arpl-r6-cpu12/qualification.json",
+      "sha256": "7412bae2b34baa59d1fc50685da9667702d6888752f91974e81a90f247e9b606",
+      "schema_version": 1,
+      "machine_backend": true,
+      "fallback": false,
+      "comparisons": 265216,
+      "negative_controls": "Intact ARPL with inverted returned ZF rejected at O0/O2",
+      "boundary": "Actual NeverD HighC/LLVMC exports from ELF/COFF/MachO recompiled for i386 SysV32; native instruction, complete GPR/flags/system/event/RAM and original #GP/#PF/#AC frames against independent bytes; ordinary pointer DS and nonflat FS/GS. No original-image fault dispatcher, real/VM86 or asynchronous events.",
+      "profiles": {
+        "count": 112,
+        "complete_state_pairs": 265216,
+        "first": {
+          "source": "arpl_0_0_0.high.c",
+          "optimization": "O0",
+          "image_sha256": "f8e305d9b79bc30c0658c8763b319917f096153b136bfdedcb86d955ae11ecae",
+          "functions": 1,
+          "complete_state_pairs": 256,
+          "returns": 256,
+          "changed": 96,
+          "unchanged": 160,
+          "gp": 0,
+          "pf": 0,
+          "ac": 0
+        },
+        "last": {
+          "source": "arpl_0_1_3.o",
+          "optimization": "O2",
+          "image_sha256": "bde8fc7635903b6d5e56914f19fc43b757e8966df113207af97600ebb95719b0",
+          "functions": 1,
+          "complete_state_pairs": 3072,
+          "returns": 1336,
+          "changed": 336,
+          "unchanged": 1000,
+          "gp": 864,
+          "pf": 616,
+          "ac": 256
+        }
+      }
+    },
+    {
+      "group": "bound_exports",
+      "artifact": "final-bound-native-cpu2/summary.json",
+      "sha256": "f689044de230299800719fb57325eeb39839bd755330989836030316cb069c00",
+      "machine_backend": true,
+      "compiler": "neverc-ir-full-llvm",
+      "compiled_sources": 336,
+      "exported_elf_objects": 12,
+      "affinity": [
+        2
+      ],
+      "negative_controls": [
+        "truncated return with intact BOUND rejected"
+      ],
+      "profiles": [
+        {
+          "optimization": "O0",
+          "sha256": "068df2293e4a44bc72cfc5824faa982895ad841c00da05aff4b2cf0c80780c42",
+          "comparisons": 5515944,
+          "cases": 84
+        },
+        {
+          "optimization": "O2",
+          "sha256": "fa839760affdbfb7aee8d1f2f732be2f8d737e8dd1aba8fb650cb1761083a356",
+          "comparisons": 5515944,
+          "cases": 84
+        }
+      ]
+    },
+    {
+      "group": "bound_exports",
+      "artifact": "final-bound-r6-cpu12/summary.json",
+      "sha256": "d30085030129395c210837691ed4281d4769819dcb7438826055e144ac88f57b",
+      "machine_backend": true,
+      "compiler": "neverc-ir-full-llvm",
+      "compiled_sources": 336,
+      "exported_elf_objects": 12,
+      "affinity": [
+        12
+      ],
+      "negative_controls": [
+        "truncated return with intact BOUND rejected"
+      ],
+      "profiles": [
+        {
+          "optimization": "O0",
+          "sha256": "6bd848afc47b7d9d32127c30a0ea3d927aff6665c1000d97dab77e1df11d680b",
+          "comparisons": 5515944,
+          "cases": 84
+        },
+        {
+          "optimization": "O2",
+          "sha256": "4f0c160ae58c49f364d413580db9e530270ec902a4aea0c609c9dd3d8e753fb6",
+          "comparisons": 5515944,
+          "cases": 84
+        }
+      ]
+    }
+  ],
+  "regression_xml": [
+    {
+      "artifact": "neverc-regressions.xml",
+      "sha256": "40023c5598caf60ac9cdf772457d4f27c5076b8c1731ff5387b61e9b7a7003ac",
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0
+    },
+    {
+      "artifact": "neverc-plugin-regressions.xml",
+      "sha256": "0c652bf25efa2ceb0b1c1d5503910a760650486d6504e5d794d6e4111c32da11",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0
+    },
+    {
+      "artifact": "neverc-pipeline-regressions.xml",
+      "sha256": "cec46a4271c223252c911dc37bed0a6d0eaf640548848d03850620c487929a84",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0
+    }
+  ],
+  "llvm_regressions": {
+    "artifact": "llvm-qualified.log",
+    "sha256": "6bdafcc691613b13e964884f46c87cb1c69e61f61cf08a2ce1ff02d5107a8c7f",
+    "passed": 27,
+    "includes": "21 existing Intel syntax tests, new immediate/memory OFFSET and PIC roundtrip tests, checked llc protocol, ARPL, BOUND and far-pointer lowering"
+  },
+  "export_snapshots": {
+    "arpl": [
+      {
+        "path": "/mnt/data/neverd-arpl-source-20261104/integration-native-integrated/exports",
+        "manifest": "arpl-integration-native-integrated-export-hashes.json",
+        "manifest_sha256": "31c686b305c63fb66ae82ee6fd4cca4be8bb3f870d9b61e682835fc8089b8805",
+        "files": 96
+      },
+      {
+        "path": "/mnt/data/neverd-arpl-source-20261104/integration-r6-integrated/exports",
+        "manifest": "arpl-integration-r6-integrated-export-hashes.json",
+        "manifest_sha256": "83906e41a706b0ac452362d1190f52f3371e0d6b96ecd4fc11f637125d86f864",
+        "files": 96
+      }
+    ],
+    "bound": [
+      {
+        "path": "/mnt/data/neverd-bound-20261104/native-final/exports",
+        "manifest": "bound-native-final-export-hashes.json",
+        "manifest_sha256": "ca8f4d6d516bf8886f9ca81241324aee1dbf01e8f2fb2ce18ce1bacfb448ca8f",
+        "files": 672
+      },
+      {
+        "path": "/mnt/data/neverd-bound-20261104/r6-final/exports",
+        "manifest": "bound-r6-final-export-hashes.json",
+        "manifest_sha256": "4e7eb9ee1a29bef64195370831b7d2cd6cf246c24b4a989922edfae04bd8ea73",
+        "files": 672
+      }
+    ]
+  },
+  "matrix_commands": {
+    "artifact": "matrix.json",
+    "sha256": "41a657f20ff864941d23eacc9af233fb4c03016615fb500cd0b87c6b1517eb1c"
+  },
+  "reproduction_driver": {
+    "artifact": "run-matrix.py",
+    "sha256": "541aee058ed6da3b9af6d5e3d7ec8917624cb568a228f149ed0d5834cda8049a"
+  },
+  "remaining_boundaries": [
+    "Embedded NeverC i386 register/frame/MC/linker backend is still pruned; the explicit full LLVM process owns native output.",
+    "Integrated linking, LTO, split DWARF and custom machine hooks are not implemented by this adapter and are rejected.",
+    "Textual LLVM IR input remains unsupported by NeverC; textual IR output and bitcode input work.",
+    "Code16 uses 32-bit pointers and stack ABI. Other OS/ABI targets, real/VM86 and general original-machine-state source dispatch are not established.",
+    "SMM/SGX/SVM environments, remaining fault/asynchronous-event/state families and unavailable physical-instruction qualification remain open."
+  ],
+  "publication_gate": {
+    "final_release_created": false,
+    "production_sdk_pin": "neverd-llvm-v23.0.0-r6",
+    "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "reason": "Global instruction/state/environment completion is still open; no release, production pin or submodule revision changed."
+  }
+}
