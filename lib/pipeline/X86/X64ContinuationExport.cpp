@@ -304,11 +304,11 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
   if (Result.FunctionContext &&
       (!Result.Entries || !Result.FollowInternalCalls ||
        Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
-       Options.PagedMemory || Options.ScheduledEvents ||
-       Result.NativeRtmRegions || Result.NativeRtmAbortRegions))
+       Options.ScheduledEvents || Result.NativeRtmRegions ||
+       Result.NativeRtmAbortRegions))
     return invalid("function_context requires kernel-events-v6 entries with "
-                   "follow_internal_calls, without paged memory, scheduled "
-                   "events or native RTM regions");
+                   "follow_internal_calls, without scheduled events or "
+                   "native RTM regions");
   const auto *Addresses =
       Object->getArray(Result.Entries ? "entries" : "instructions");
   if (!Addresses || Addresses->empty() ||
@@ -324,6 +324,11 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
     Result.Addresses.push_back(*Address);
   }
   if (const auto *Value = Object->get("function_calls")) {
+    // Scalar argument checks use the nonfaulting host-RAM contract. A paged
+    // validation read could fault or publish A/D effects absent in the original
+    // instruction stream; do not silently introduce those observations.
+    if (Options.PagedMemory)
+      return invalid("function_calls requires non-paged memory");
     const auto *Calls = Value->getAsArray();
     if (!Result.FunctionContext || !Calls || Calls->empty() ||
         Calls->size() > Result.Addresses.size())
@@ -855,8 +860,10 @@ typedef struct neverd_x64_event_v1 {
   llvm::json::Array FunctionCalls;
   llvm::json::Array FunctionCallSites;
   if (Request->Options.PagedMemory) {
+    if (Request->FunctionContext)
+      emitX64FunctionContext(OS, Version, Request->Addresses);
     emitX64PagedDriver(OS, *Units, Request->Options,
-                       Request->FollowInternalCalls);
+                       Request->FollowInternalCalls, Request->FunctionContext);
   } else {
     CallSitePauses.declare(OS);
     if (Request->FunctionContext)
@@ -1143,8 +1150,12 @@ typedef struct neverd_x64_event_v1 {
     Report["function_context"] = llvm::json::Object{
         {"context_type", "neverd_x64_function_context_v1"},
         {"begin", "neverd_x64_begin_function_v6"},
-        {"driver", "neverd_x64_continue_function_v6"},
-        {"environment_driver", "neverd_x64_run_function_v6"},
+        {"driver", Request->Options.PagedMemory
+                       ? "neverd_x64_run_paged_function_v6"
+                       : "neverd_x64_continue_function_v6"},
+        {"environment_driver", Request->Options.PagedMemory
+                                   ? "neverd_x64_run_paged_function_v6"
+                                   : "neverd_x64_run_function_v6"},
         {"completion",
          "successful selected near RET consuming entry RSP; "
          "stop before following its target or invoking a provider"},
@@ -1154,6 +1165,14 @@ typedef struct neverd_x64_event_v1 {
          "original full state and RAM, including incoming stack "
          "bytes; retain context across pauses; provider completion "
          "and arbitrary frame reuse are not inferred"}};
+  if (Request->FunctionContext && Request->Options.PagedMemory)
+    Report["function_context"].getAsObject()->insert(
+        {"paged_domain",
+         "entry RSP names a guest virtual return cell; retain the same paged "
+         "execution context and its declared cell lifetime across pauses; "
+         "only an attempted successful selected near RET completes; faults, "
+         "backing stops and changed code retain the activation; no initial "
+         "state capture, mapping-identity inference or scalar argument reads"});
   if (!FunctionCalls.empty())
     Report["function_calls"] = llvm::json::Object{
         {"context_type", "neverd_x64_call_context_v1"},

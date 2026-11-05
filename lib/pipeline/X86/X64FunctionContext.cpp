@@ -10,6 +10,7 @@
 #include "X64FunctionContext.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/analysis/arch/x86_64/X64PagedSource.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -60,20 +61,28 @@ void emitX64FunctionContextGuard(llvm::raw_ostream &OS) {
 void emitX64FunctionContextStep(
     llvm::raw_ostream &OS,
     const analysis::X64ContinuationInstructionSource &Unit,
-    llvm::StringRef Indent) {
+    llvm::StringRef Indent, bool PagedMemory) {
   if (Unit.IsNearReturn)
     OS << Indent << "{\n"
        << Indent << "    uint64_t return_slot = state->GPR[4];\n";
-  OS << Indent << "status = " << Unit.Function.Name << "((uint8_t *)state);\n";
-  if (Unit.IsNearReturn)
+  OS << Indent << "status = " << Unit.Function.Name
+     << (PagedMemory ? "_paged_step(state, context);\n"
+                     : "((uint8_t *)state);\n");
+  if (Unit.IsNearReturn) {
     OS << Indent << "    if (status == "
        << uint64_t(analysis::X64ContinuationExitV1::Return)
-       << " && function && return_slot == function->ReturnSlot) {\n"
+       << " && function && return_slot == function->ReturnSlot";
+    if (PagedMemory)
+      OS << " &&\n"
+         << Indent << "        (neverd_x64_paged_progress_v1(context) & "
+         << analysis::kX64PagedInstructionAttempted << ")";
+    OS << ") {\n"
        << Indent << "        --*budget;\n"
        << Indent << "        function->Phase = NEVERD_X64_FUNCTION_RETURNED;\n"
        << Indent << "        return status;\n"
        << Indent << "    }\n"
        << Indent << "}\n";
+  }
 }
 
 void emitX64FunctionContextAdapter(llvm::raw_ostream &OS, unsigned Version) {

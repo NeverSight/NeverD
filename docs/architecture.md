@@ -17594,6 +17594,21 @@ retained, and disabling the option adds no generated execution checks. This
 explicit input contract keeps unknown original stack bytes supplied by the
 caller instead of weakening ordinary source proofs.
 
+The same owner emits `neverd_x64_run_paged_function_v6` when paged memory is
+selected. Entry RSP then names a guest virtual return cell. Completion requires
+both the authenticated near RET and the paged executor's instruction-attempt
+bit; the original runtime owns fetch verification, operand access, fault
+delivery and retained side effects. Fault, backing and changed-code stops keep
+the activation active and preserve the runtime's existing budget accounting.
+Only successful completion stops before a selected return target. The producer
+must retain the same paged execution context and declared cell/address-space
+lifetime; numeric SP alone does not prove mapping ownership. The original
+paged driver remains a null-context adapter. Disabled requests retain identical
+source. Paged scalar call views remain rejected: extra argument-validation
+reads could fault or publish page-table effects absent from the instruction
+stream. This option does not add native state capture or scheduled-event
+composition.
+
 `X64FunctionCalls` adds producer-declared Win64 scalar call views at explicit
 roots. The shared argument-layout owner supplies register and stack positions;
 the wrappers check their low declared bytes against original state without

@@ -9,6 +9,8 @@
 #ifndef NEVERD_PIPELINE_X86_X64CONTINUATIONPAGEDDRIVER_H
 #define NEVERD_PIPELINE_X86_X64CONTINUATIONPAGEDDRIVER_H
 
+#include "X64FunctionContext.h"
+
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
 
@@ -20,7 +22,8 @@ namespace neverd {
 inline void emitX64PagedDriver(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
-    const analysis::X64ContinuationSourceOptions &Options, bool FollowCalls) {
+    const analysis::X64ContinuationSourceOptions &Options, bool FollowCalls,
+    bool FunctionContext) {
   OS << R"C(
 /* Link the NeverD paged execution bridge. Context points to X64PagedExecution.
  * Each instruction verifies its original bytes through guest fetch permissions,
@@ -59,10 +62,15 @@ extern uint64_t neverd_x64_paged_progress_v1(uint8_t *);
        << "_paged_adapter, " << *Options.MXCSRMask << ", "
        << *Options.PagingAddressBits << ");\n}\n";
   }
-  OS << R"C(
-uint64_t neverd_x64_run_paged_v6(neverd_x64_state_v6 *state, uint8_t *context,
-                                uint64_t *budget) {
-    uint64_t last = 8;
+  OS << "\nuint64_t neverd_x64_run_paged"
+     << (FunctionContext ? "_function" : "")
+     << "_v6(neverd_x64_state_v6 *state, uint8_t *context,\n"
+        "                                uint64_t *budget"
+     << (FunctionContext ? ", neverd_x64_function_context_v1 *function" : "")
+     << ") {\n";
+  if (FunctionContext)
+    emitX64FunctionContextGuard(OS);
+  OS << R"C(    uint64_t last = 8;
     while (*budget) {
         uint64_t status;
         switch (state->PC) {
@@ -72,7 +80,11 @@ uint64_t neverd_x64_run_paged_v6(neverd_x64_state_v6 *state, uint8_t *context,
     if (Unit.IsMovSS && !Unit.RequiresNativeExecution)
       OS << "return 5; /* Persistent MOV-SS inhibition needs the scheduler. "
             "*/\n";
-    else
+    else if (FunctionContext && Unit.IsNearReturn) {
+      OS << "\n";
+      emitX64FunctionContextStep(OS, Unit, "            ", true);
+      OS << "            break;\n";
+    } else
       OS << "status = " << Unit.Function.Name
          << "_paged_step(state, context); break;\n";
   }
@@ -96,6 +108,13 @@ uint64_t neverd_x64_run_paged_v6(neverd_x64_state_v6 *state, uint8_t *context,
   }
   OS << "        if (status != 0 && status != 2) return status;\n"
         "        last = status;\n    }\n    return 9;\n}\n";
+  if (FunctionContext)
+    OS << R"C(
+uint64_t neverd_x64_run_paged_v6(neverd_x64_state_v6 *state, uint8_t *context,
+                                uint64_t *budget) {
+    return neverd_x64_run_paged_function_v6(state, context, budget, 0);
+}
+)C";
 }
 } // namespace neverd
 #endif // NEVERD_PIPELINE_X86_X64CONTINUATIONPAGEDDRIVER_H

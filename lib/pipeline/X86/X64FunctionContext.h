@@ -23,9 +23,9 @@ namespace analysis {
 struct X64ContinuationInstructionSource;
 }
 
-/// Begin only at an explicitly requested root. Record its physical return-cell
-/// address, not the cell's value; guest writes still own the eventual return
-/// PC.
+/// Begin only at an explicitly requested root. Record its entry return-cell
+/// address (guest virtual in paged mode), not the cell's value; guest writes
+/// still own the eventual return PC.
 void emitX64FunctionContext(llvm::raw_ostream &OS, unsigned Version,
                             llvm::ArrayRef<va_t> Entries);
 
@@ -36,10 +36,12 @@ void emitX64FunctionContextGuard(llvm::raw_ostream &OS);
 /// Only a successful, authenticated near RET through the entry cell completes
 /// this activation. It consumes one instruction unit before stopping. All
 /// other steps use the ordinary driver's budget and boundary handling.
+/// Paged steps additionally require the executor's attempted-instruction bit;
+/// its fault/backing/code-change outcomes never complete the activation.
 void emitX64FunctionContextStep(
     llvm::raw_ostream &OS,
     const analysis::X64ContinuationInstructionSource &Unit,
-    llvm::StringRef Indent);
+    llvm::StringRef Indent, bool PagedMemory = false);
 
 /// Keep the original context-free entry point without duplicating its driver.
 void emitX64FunctionContextAdapter(llvm::raw_ostream &OS, unsigned Version);
