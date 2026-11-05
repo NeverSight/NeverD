@@ -1,5 +1,14 @@
 # Remaining x64 C-quality work
 
+Optional `function_calls` now connect producer-declared Win64 scalar C views
+to the explicit native context. Entry checks compare the requested parameters
+with their original register/stack bytes; padding and private stack storage
+are never initialized. Separate resume entries retain the activation and cache
+the result only after its declared return cell completes. This is a checked
+context interface, not recovery of the two ordinary registry-query inputs or
+an inferred Windows API effect contract. Native environment coverage and
+automatic ordinary/state composition remain separate obligations.
+
 The opt-in V6 `function_context` interface now retains a caller-declared entry
 return cell across continuation pauses and stops when a selected successful
 near RET consumes it. Both C routes and dispatchers share the check; the

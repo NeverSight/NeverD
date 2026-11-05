@@ -15,8 +15,14 @@
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IRReader/IRReader.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/SHA256.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -1453,6 +1459,7 @@ static void original(neverd_x64_state_v6 *s, void *code, uint64_t *ram) {
 #include "X64ContinuationEnvironmentTests.inc"
 #include "X64EventDeliveryExportTests.inc"
 #include "X64EventScheduleExportTests.inc"
+#include "X64FunctionCallTests.inc"
 #include "X64FunctionContextTests.inc"
 #include "X64HleContinuationExportTests.inc"
 #include "X64HyperVContinuationExportTests.inc"
