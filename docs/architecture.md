@@ -17608,6 +17608,22 @@ never repeats a completed CALL. This adds no per-step dispatcher check or
 implicit state capture from ordinary C, and disabled requests retain identical
 source and manifests.
 
+The optional `pause_call_sites` request connects a state-driven caller to those
+bridges. `X64FunctionCallSitePauses` indexes only authenticated bindings once
+and emits a static return at each selected CALL label in both dispatchers.
+Status 21 (`NEVERD_X64_CALL_SITE_READY_V1`) preserves the pre-CALL PC, registers,
+RAM and caller activation. It spends neither instruction nor environment
+budget, invokes no provider, and does not certify valid instruction inputs.
+Zero instruction budget takes precedence and returns 9. The site's existing
+bridge performs the original validation and CALL; after it completes, resume
+the retained caller activation. Nested handoffs retain independent site
+contexts and return cells. Re-entering a paused driver without invoking its
+bridge reports the same stop. Existing requests emit identical source and
+manifests; an explicit false field changes only the manifest's request echo.
+Ordinary source queries do not use this index. Entry state and
+environment effects remain explicit inputs; this handoff does not capture
+them from an ordinary C activation or recover missing scalar arguments.
+
 Continuation source lowers `RequireAligned` through the shared
 `X64Alignment` predicate after projecting a live FS/GS base. A failed predicate
 returns unchanged-state refusal before guest memory, architectural writes or

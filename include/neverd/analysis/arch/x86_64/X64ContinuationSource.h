@@ -242,6 +242,11 @@ enum class X64ContinuationExitV1 : uint64_t {
   /// The optional instruction-boundary scheduler needs another producer poll.
   /// No instruction or event was executed at this boundary.
   EventBudgetExhausted = 16,
+  /// An opt-in driver stopped before a bound original CALL. The instruction
+  /// has not validated or changed state/RAM and consumes no budget. The
+  /// call-site bridge owns the next step; this is not an environment request.
+  /// Values 17..20 belong to the separate paged-memory driver.
+  CallSiteReady = 21,
 };
 
 enum class X64ContinuationProfile : uint8_t {

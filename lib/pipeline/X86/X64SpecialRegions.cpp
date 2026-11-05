@@ -10,6 +10,7 @@
 
 #include "X64SpecialRegions.h"
 
+#include "X64FunctionCallSites.h"
 #include "X64FunctionContext.h"
 #include "X64RtmAbortRegions.h"
 #include "X64RtmRegions.h"
@@ -362,7 +363,8 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
 void emitX64SpecialRegionDriver(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
-    bool FollowInternalCalls, bool FunctionContext) {
+    bool FollowInternalCalls, bool FunctionContext,
+    const X64FunctionCallSitePauses &CallSitePauses) {
   using Exit = analysis::X64ContinuationExitV1;
   // One index for the immutable selection; no per-instruction linear search.
   std::map<va_t, size_t> ByAddress;
@@ -405,6 +407,8 @@ void emitX64SpecialRegionDriver(
     for (size_t I = First; I < End; ++I) {
       const auto &Unit = Units[I];
       OS << "step_" << I << ":\n    if (!*budget) return 9;\n";
+      if (CallSitePauses.emit(OS, Unit.Address, "    "))
+        continue;
       if (FunctionContext)
         emitX64FunctionContextStep(OS, Unit, "    ");
       else

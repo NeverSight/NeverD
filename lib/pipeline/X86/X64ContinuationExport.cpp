@@ -33,6 +33,7 @@
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Verifier.h"
@@ -83,6 +84,7 @@ struct Request {
   unsigned CalleeDepth = 0;
   bool DirectDispatch = false;
   bool FunctionContext = false;
+  bool PauseCallSites = false;
   std::vector<X64FunctionCallInterface> FunctionCalls;
 };
 
@@ -126,6 +128,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "follow_internal_calls",
                                        "function_context",
                                        "function_calls",
+                                       "pause_call_sites",
                                        "follow_direct_jumps",
                                        "callee_depth",
                                        "dispatch",
@@ -229,6 +232,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       {"scheduled_events", &Options.ScheduledEvents},
       {"follow_internal_calls", &Result.FollowInternalCalls},
       {"function_context", &Result.FunctionContext},
+      {"pause_call_sites", &Result.PauseCallSites},
       {"follow_direct_jumps", &Result.FollowDirectJumps}};
   if (const auto *Value = Object->get("uiret_restores_uif")) {
     const auto Flag = Value->getAsBoolean();
@@ -392,6 +396,10 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       Result.FunctionCalls.push_back(std::move(Interface));
     }
   }
+  if (Result.PauseCallSites &&
+      llvm::none_of(Result.FunctionCalls,
+                    [](const auto &Call) { return !Call.CallSites.empty(); }))
+    return invalid("pause_call_sites requires a bound function call site");
   return Result;
 }
 
@@ -560,7 +568,8 @@ typedef struct {
 
 void driver(llvm::raw_ostream &OS,
             llvm::ArrayRef<X64ContinuationInstructionSource> Units,
-            bool FollowInternalCalls, bool FunctionContext) {
+            bool FollowInternalCalls, bool FunctionContext,
+            const X64FunctionCallSitePauses &CallSitePauses) {
   OS << R"C(
 /* State and budget are accessible and disjoint from each other and guest RAM.
  * Every successful instruction consumes one step, including exiting transfers.
@@ -593,6 +602,8 @@ void driver(llvm::raw_ostream &OS,
 )C";
   for (const auto &Unit : Units) {
     OS << "        case " << hex(Unit.Address) << "ULL: ";
+    if (CallSitePauses.emit(OS, Unit.Address, ""))
+      continue;
     if (FunctionContext) {
       OS << "\n";
       emitX64FunctionContextStep(OS, Unit, "            ");
@@ -654,6 +665,9 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       bindX64FunctionCallSites(Image, Request->FunctionCalls, *Units);
   if (!CallSites)
     return CallSites.takeError();
+  const X64FunctionCallSitePauses CallSitePauses(
+      Request->PauseCallSites ? llvm::ArrayRef(*CallSites)
+                              : llvm::ArrayRef<X64FunctionCallSite>());
   if (Request->Options.PagedMemory &&
       (Request->NativeRtmAbortRegions || Request->NativeRtmRegions ||
        Request->DirectDispatch))
@@ -844,14 +858,15 @@ typedef struct neverd_x64_event_v1 {
     emitX64PagedDriver(OS, *Units, Request->Options,
                        Request->FollowInternalCalls);
   } else {
+    CallSitePauses.declare(OS);
     if (Request->FunctionContext)
       emitX64FunctionContext(OS, Version, Request->Addresses);
     if (Request->DirectDispatch) {
       emitX64SpecialRegionDriver(OS, *Units, Request->FollowInternalCalls,
-                                 Request->FunctionContext);
+                                 Request->FunctionContext, CallSitePauses);
     } else {
-      driver(OS, *Units, Request->FollowInternalCalls,
-             Request->FunctionContext);
+      driver(OS, *Units, Request->FollowInternalCalls, Request->FunctionContext,
+             CallSitePauses);
     }
     if (Request->FunctionContext)
       emitX64FunctionContextAdapter(OS, Version);
@@ -1159,6 +1174,15 @@ typedef struct neverd_x64_event_v1 {
                    "owns the return cell; retain context across pauses; "
                    "same function-boundary and environment obligations; "
                    "ordinary caller state capture is not inferred"}};
+  if (Request->PauseCallSites)
+    Report["call_site_pause"] = llvm::json::Object{
+        {"status", uint64_t(X64ContinuationExitV1::CallSiteReady)},
+        {"interfaces", "function_call_sites"},
+        {"domain", "stop before each bound original CALL without instruction "
+                   "effects, state validation or budget consumption; zero "
+                   "instruction budget still returns 9; retain the caller "
+                   "activation and resume through its call-site bridge; "
+                   "environment callbacks do not handle this stop"}};
   llvm::raw_string_ostream(Result.Manifest)
       << llvm::formatv("{0:2}\n", llvm::json::Value(std::move(Report)));
   return Result;
