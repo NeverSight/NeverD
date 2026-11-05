@@ -4911,12 +4911,17 @@ struct PipelineAnalysisCache::Impl {
         Entries(std::move(Entries)),
         Callees(*this->Inputs->Image, &this->Entries, &this->Inputs->Targets,
                 &this->Inputs->Roots, &this->Inputs->Owners),
-        Graphs(createX87CallGraphCache(
-            &Callees, &this->Inputs->Targets, RetainBodies,
-            {limits::kMaxPipelineCallGraphEntries,
-             limits::kMaxPipelineCallGraphBytes,
-             limits::kMaxPipelineCallBodyBytes},
-            &this->Entries, this->Inputs->X87FloatingImports)) {}
+        Graphs(createGraphCache(RetainBodies)) {}
+
+  /// A cache of x87 call graphs for builders that borrow these facts: Graphs,
+  /// and the one a run's jump-table rebuilds keep (buildLowIR).
+  std::shared_ptr<X87CallGraphCache> createGraphCache(bool RetainBodies) const {
+    return createX87CallGraphCache(&Callees, &Inputs->Targets, RetainBodies,
+                                   {limits::kMaxPipelineCallGraphEntries,
+                                    limits::kMaxPipelineCallGraphBytes,
+                                    limits::kMaxPipelineCallBodyBytes},
+                                   &Entries, Inputs->X87FloatingImports);
+  }
 
   /// The facts a selected-function run of a symbol start keeps (buildLowIR),
   /// with what every run reads of the image's names, runtime routines and
@@ -4958,6 +4963,11 @@ struct PipelineAnalysisCache::Impl {
                        CandidateEntries.end()));
   }
 };
+
+std::shared_ptr<X87CallGraphCache>
+Pipeline::x87CallGraphsForTesting(const PipelineAnalysisCache &Cache) {
+  return Cache.Facts ? Cache.Facts->Graphs : nullptr;
+}
 
 std::map<va_t, std::string> *
 Pipeline::importAddressNames(const BinaryImage &Img,
@@ -5505,8 +5515,15 @@ void Pipeline::buildLowIR(
           Img, AllLow, Opts.JumpTableEvidenceBudgetForTesting);
     return *CachedArbitration;
   };
+  // Rebuilt owners build under this run's protected relocation slots, and
+  // their x87 graphs and answers hold for those slots alone.  They keep them
+  // in a cache of their own: the facts' cache keeps one context, and theirs
+  // would replace every graph and answer the image's later runs read.
+  std::shared_ptr<X87CallGraphCache> RebuildGraphs;
   auto rebuildFunctions = [&](const std::vector<bool> &Rebuild) {
     CachedArbitration.reset();
+    if (!RebuildGraphs)
+      RebuildGraphs = Facts.createGraphCache(/*RetainBodies=*/false);
     parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
       ReadOnlyBytesScope ReadScope(Img);
       RegistrationStackPopMemoScope StackPopScope(StackPops);
@@ -5521,7 +5538,7 @@ void Pipeline::buildLowIR(
       LocalCFG.setNoReturnCalleeProver(&NoReturnCallees);
       LocalCFG.setAbsoluteRelocationRootIndex(&AbsoluteRelocationRoots);
       LocalCFG.setExecutableCodeOwnerIndex(CodeOwnerIndex);
-      LocalCFG.setX87CallGraphCache(X87Graphs);
+      LocalCFG.setX87CallGraphCache(RebuildGraphs);
       LocalCFG.setX87CallProofThreads(X87ProofThreads);
       LocalCFG.setProtectedJumpTableRelocationSlots(&ProtectedRelocationSlots);
       LocalCFG.setUnsafeJumpTableBranches(&UnsafeJumpTableBranches);

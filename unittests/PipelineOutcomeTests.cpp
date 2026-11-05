@@ -25,6 +25,8 @@
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/COFFLoaderUtils.h"
+#include "neverd/loader/PointerRelocation.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryLoading.h"
 #include "neverd/support/Parallel.h"
@@ -37,6 +39,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -45,6 +48,7 @@
 #include <filesystem>
 #include <initializer_list>
 #include <iterator>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -58,6 +62,14 @@
 #endif
 
 namespace neverd {
+
+namespace detail {
+struct X87CallGraphCacheTestAccess {
+  static std::array<size_t, 3> stats(const CFGBuilder &Builder) {
+    return Builder.x87CallGraphCacheStatsForTesting();
+  }
+};
+} // namespace detail
 
 class PipelineTestPeer {
 public:
@@ -86,11 +98,16 @@ public:
     Pipeline().buildHighIR(Image, {}, Result);
   }
 
-  static void buildLowIR(const BinaryImage &Image, PipelineResult &Result,
-                         const std::vector<va_t> &Entries,
-                         PipelineAnalysisCache *Cache = nullptr) {
+  static void
+  buildLowIR(const BinaryImage &Image, PipelineResult &Result,
+             const std::vector<va_t> &Entries,
+             PipelineAnalysisCache *Cache = nullptr,
+             std::optional<size_t> JumpTableEvidenceBudget = std::nullopt,
+             bool LiftMode = false) {
     PipelineOptions Options;
     Options.AnalysisCache = Cache;
+    Options.JumpTableEvidenceBudgetForTesting = JumpTableEvidenceBudget;
+    Options.LiftMode = LiftMode;
     Options.OnlyFunctionEntries.insert(Entries.begin(), Entries.end());
     std::vector<std::pair<va_t, std::string>> Candidates;
     for (va_t Entry : Entries)
@@ -111,6 +128,15 @@ public:
   static std::shared_ptr<const void>
   symbolInventory(const PipelineAnalysisCache &Cache) {
     return Cache.Inventory;
+  }
+
+  /// Hits, graphs and retained bytes of the x87 call graph cache the symbol
+  /// inventory's runs share.
+  static std::array<size_t, 3>
+  x87CallGraphStats(const PipelineAnalysisCache &Cache) {
+    CFGBuilder Reader;
+    Reader.setX87CallGraphCache(Pipeline::x87CallGraphsForTesting(Cache));
+    return detail::X87CallGraphCacheTestAccess::stats(Reader);
   }
 
   static void buildLowIR(const BinaryImage &Image, PipelineResult &Result) {
@@ -277,6 +303,103 @@ TEST(PipelineOutcome, AnalysisCachePreservesFloatingAndIntegerCallChains) {
         }
       }
   }
+}
+
+/// A linked i386 PE whose switch dispatches through the relocated table MSVC
+/// places in .text after the function.  Two cases call an x87 leaf
+/// (fld1; fstp st0; ret), and another caller reaches the leaf through a
+/// wrapper.
+BinaryImage switchCallingFloatingLeafImage() {
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  Image.Format = BinaryFormat::COFF;
+  Image.IsRelocatable = false;
+  Image.Base = 0x400000;
+  Image.Entry = 0x401000;
+  std::vector<uint8_t> Text(0x70, 0xcc);
+  const auto Emit = [&](va_t At, std::initializer_list<uint8_t> Bytes) {
+    std::copy(Bytes.begin(), Bytes.end(), Text.begin() + (At - 0x401000));
+  };
+  // push ebp; mov ebp, esp; mov eax, [ebp+8]; cmp eax, 2; ja 0x401028;
+  // jmp [eax*4+0x40102e].
+  Emit(0x401000, {0x55, 0x8b, 0xec, 0x8b, 0x45, 0x08, 0x83, 0xf8, 0x02, 0x77,
+                  0x1d, 0xff, 0x24, 0x85, 0x2e, 0x10, 0x40, 0x00});
+  Emit(0x401012, {0xe8, 0x39, 0x00, 0x00, 0x00, 0x5d, 0xc3}); // call leaf
+  Emit(0x401019, {0xe8, 0x32, 0x00, 0x00, 0x00, 0x5d, 0xc3}); // call leaf
+  Emit(0x401020, {0xb8, 0x1e, 0x00, 0x00, 0x00, 0x5d, 0xc3}); // mov eax, 30
+  Emit(0x401027, {0x90, 0x33, 0xc0, 0x5d, 0xc3, 0x8b, 0xc0}); // default
+  Emit(0x40102e, {0x12, 0x10, 0x40, 0x00, 0x19, 0x10, 0x40, 0x00, 0x20, 0x10,
+                  0x40, 0x00}); // the table
+  // 0x401040 calls the leaf; 0x401060 calls 0x401040.
+  // push ebp; mov ebp, esp; call; pop ebp; ret.
+  Emit(0x401040, {0x55, 0x8b, 0xec, 0xe8, 0x08, 0x00, 0x00, 0x00, 0x5d, 0xc3});
+  Emit(0x401050, {0xd9, 0xe8, 0xdd, 0xd8, 0xc3}); // fld1; fstp st0; ret
+  Emit(0x401060, {0x55, 0x8b, 0xec, 0xe8, 0xd8, 0xff, 0xff, 0xff, 0x5d, 0xc3});
+  Segment Seg;
+  Seg.Name = ".text";
+  Seg.VA = 0x401000;
+  Seg.Size = Seg.FileSz = Text.size();
+  Seg.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Seg.Data = std::move(Text);
+  Section Sec;
+  Sec.Name = Seg.Name;
+  Sec.VA = Seg.VA;
+  Sec.Size = Sec.FileSz = Seg.Size;
+  Sec.Flags = Seg.Flags;
+  Image.Segments.push_back(std::move(Seg));
+  Image.Sections.push_back(std::move(Sec));
+  recordAbsolutePointerRelocations(Image, {{0x40100e, 0x40102e, InvalidVA},
+                                           {0x40102e, 0x401012, InvalidVA},
+                                           {0x401032, 0x401019, InvalidVA},
+                                           {0x401036, 0x401020, InvalidVA}});
+  coff_loader::recordRelocatedPointerRunsInCode(Image);
+  for (const auto &[Entry, Size] : {std::pair<va_t, uint64_t>{0x401000, 0x2e},
+                                    {0x401040, 10},
+                                    {0x401050, 5},
+                                    {0x401060, 10}})
+    Image.Symbols.push_back(Symbol::makeFunc(Entry, Size));
+  return Image;
+}
+
+TEST(PipelineOutcome, JumpTableRebuildsKeepTheImageX87Graphs) {
+  // A run whose jump-table arbitration rebuilds its functions builds them
+  // under protected relocation slots of its own.  The x87 call graphs the
+  // symbol inventory's runs read stay in the facts' cache, and every run
+  // still reads what a cold run does.  Lift runs keep the switch's table
+  // exact (display recovery would leave it to the presentation alone).
+  const BinaryImage Image = switchCallingFloatingLeafImage();
+  const auto Run = [&](PipelineResult &Result, va_t Entry,
+                       PipelineAnalysisCache *Cache,
+                       std::optional<size_t> Budget = std::nullopt) {
+    PipelineTestPeer::buildLowIR(Image, Result, {Entry}, Cache, Budget,
+                                 /*LiftMode=*/true);
+  };
+  PipelineAnalysisCache Cache;
+  for (va_t Entry : {0x401060, 0x401000}) {
+    PipelineResult Warm;
+    Run(Warm, Entry, &Cache);
+  }
+  const std::array<size_t, 3> Kept = PipelineTestPeer::x87CallGraphStats(Cache);
+  // The runs' walks keep the graphs of the chains they read.
+  ASSERT_GE(Kept[1], 2u);
+
+  // An exhausted evidence budget protects every relocation slot and
+  // rebuilds the switch, which calls the leaf again: the facts' graphs stay
+  // as they were.
+  PipelineResult Rebuilt, ColdRebuilt;
+  Run(Rebuilt, 0x401000, &Cache, /*Budget=*/0);
+  Run(ColdRebuilt, 0x401000, nullptr, /*Budget=*/0);
+  expectSameSelection(Rebuilt, ColdRebuilt);
+  const std::array<size_t, 3> After =
+      PipelineTestPeer::x87CallGraphStats(Cache);
+  EXPECT_EQ(After[1], Kept[1]);
+  EXPECT_EQ(After[2], Kept[2]);
+
+  PipelineResult Again, Cold;
+  Run(Again, 0x401060, &Cache);
+  Run(Cold, 0x401060, nullptr);
+  expectSameSelection(Again, Cold);
 }
 
 BinaryImage aarch64SelectionCacheImage() {

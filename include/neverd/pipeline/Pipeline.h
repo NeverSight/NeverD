@@ -59,6 +59,7 @@ class PipelineTestPeer;
 
 class Decoder;
 class LLVMSourceMap;
+class X87CallGraphCache;
 
 /// What Pipeline::warmAnalysisCache left in a session's analysis cache.
 struct AnalysisCacheWarmup {
@@ -845,6 +846,11 @@ private:
   friend class PipelineTestPeer;
 
   struct LLVMEmissionResult;
+
+  /// The x87 call graph cache the runs of \p Cache's symbol inventory share,
+  /// or null before a run kept its facts.
+  static std::shared_ptr<X87CallGraphCache>
+  x87CallGraphsForTesting(const PipelineAnalysisCache &Cache);
 
   /// Interior basic-block addresses are module-local LLVM blockaddress
   /// constants and cannot be split from their owner into another emission
