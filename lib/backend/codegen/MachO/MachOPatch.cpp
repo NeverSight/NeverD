@@ -1383,10 +1383,13 @@ uint64_t MachOPatcher::appendExecSegmentImpl(std::vector<uint8_t> &Binary,
   }
   const uint64_t Avail = FirstDataOff - HdrPlusCmds;
   uint32_t Freed = 0;
+  std::set<uint64_t> DroppedCommands;
   for (const CmdInfo &Command : Cmds)
-    if (shouldDropLoadCommand(Command.Cmd) &&
-        !checkedAddU32(Freed, Command.Size, Freed))
-      return 0;
+    if (shouldDropLoadCommand(Command.Cmd)) {
+      if (!checkedAddU32(Freed, Command.Size, Freed))
+        return 0;
+      DroppedCommands.insert(Command.Off);
+    }
   uint64_t AvailableWithFreed = 0;
   if (!macho_patch_detail::checkedAdd(Avail, Freed, AvailableWithFreed))
     return 0;
@@ -1397,8 +1400,32 @@ uint64_t MachOPatcher::appendExecSegmentImpl(std::vector<uint8_t> &Binary,
       Needed <= Avail &&
       llvm::all_of(llvm::ArrayRef<uint8_t>(Binary).slice(HdrPlusCmds, Needed),
                    [](uint8_t B) { return B == 0; });
-  if (SegmentNameConflict || AvailableWithFreed < Needed ||
-      (Needed > Freed && !CleanPadding)) {
+  bool NoRoom = SegmentNameConflict || AvailableWithFreed < Needed ||
+                (Needed > Freed && !CleanPadding);
+  if (NoRoom && !SegmentNameConflict && !WritableOffset &&
+      InputKind == RewriteInputKind::LiftedIR) {
+    // The table reaches into the padding only by what its dropped commands do
+    // not cover, and the padding it reaches into must be unused.
+    const auto Fits = [&] {
+      const uint64_t FromPadding = Needed > Freed ? Needed - Freed : 0;
+      return FromPadding <= Avail &&
+             llvm::all_of(llvm::ArrayRef<uint8_t>(Binary).slice(HdrPlusCmds,
+                                                                FromPadding),
+                          [](uint8_t B) { return B == 0; });
+    };
+    for (uint32_t ToolOnly : kToolOnlyLoadCmds) {
+      if (Fits())
+        break;
+      for (const CmdInfo &Command : Cmds)
+        if (Command.Cmd == ToolOnly) {
+          if (!checkedAddU32(Freed, Command.Size, Freed))
+            return 0;
+          DroppedCommands.insert(Command.Off);
+        }
+    }
+    NoRoom = !Fits();
+  }
+  if (NoRoom) {
     // With no command capacity, grow an adjacent existing RX mapping instead.
     // The Mach header and every live original VA stay fixed. Only __LINKEDIT
     // moves; a DATA segment between the RX tail and __LINKEDIT prevents this
@@ -1439,7 +1466,7 @@ uint64_t MachOPatcher::appendExecSegmentImpl(std::vector<uint8_t> &Binary,
   uint32_t TotCmds = 0, TotSize = 0;
   unsigned InsertedSegments = 0;
   for (const CmdInfo &Command : Cmds) {
-    if (shouldDropLoadCommand(Command.Cmd))
+    if (DroppedCommands.count(Command.Off))
       continue;
     bool IsLinkedit = false;
     if (Command.Cmd == SegCmdID) {

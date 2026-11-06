@@ -1659,6 +1659,124 @@ TEST(MachOPatchSegmentInstall, HeaderSpaceFailureRollsBackTheWholeCandidate) {
   EXPECT_EQ(Fixture.Binary, Before);
 }
 
+// Apple's linker can leave less than a segment command after the table. A whole
+// image rewrite gives up the commands only tools read, as few as fit, in order.
+TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
+  using namespace llvm::MachO;
+  struct Case {
+    uint32_t Padding;
+    std::vector<uint32_t> Dropped;
+  };
+  const std::vector<Case> Cases = {
+      {72, {}},
+      {71, {LC_SOURCE_VERSION}},
+      {56, {LC_SOURCE_VERSION}},
+      {55, {LC_SOURCE_VERSION, LC_DATA_IN_CODE}},
+      {40, {LC_SOURCE_VERSION, LC_DATA_IN_CODE}},
+      {39, {LC_SOURCE_VERSION, LC_DATA_IN_CODE, LC_FUNCTION_STARTS}},
+      {24, {LC_SOURCE_VERSION, LC_DATA_IN_CODE, LC_FUNCTION_STARTS}},
+  };
+  const auto Build = [](uint32_t Padding) {
+    MachOPatchTransactionFixture Fixture =
+        makeMachOPatchTransactionFixture(/*CompactCapacity=*/0x2000);
+    auto *Header = reinterpret_cast<mach_header_64 *>(Fixture.Binary.data());
+    uint8_t *End = Fixture.Binary.data() + sizeof(*Header) + Header->sizeofcmds;
+    auto *Source = reinterpret_cast<source_version_command *>(End);
+    Source->cmd = LC_SOURCE_VERSION;
+    Source->cmdsize = sizeof(*Source);
+    End += sizeof(*Source);
+    uint32_t Payload = kTransactionLinkeditOff + kTransactionLinkeditSize - 16;
+    for (uint32_t Command : {LC_DATA_IN_CODE, LC_FUNCTION_STARTS}) {
+      auto *Data = reinterpret_cast<linkedit_data_command *>(End);
+      Data->cmd = Command;
+      Data->cmdsize = sizeof(*Data);
+      Data->dataoff = Payload;
+      Data->datasize = 8;
+      Payload += 8;
+      End += sizeof(*Data);
+    }
+    Header->ncmds += 3;
+    Header->sizeofcmds +=
+        sizeof(source_version_command) + 2 * sizeof(linkedit_data_command);
+    auto *TextSegment = reinterpret_cast<segment_command_64 *>(Header + 1);
+    auto *TextSection = reinterpret_cast<section_64 *>(TextSegment + 1);
+    const uint32_t First = sizeof(*Header) + Header->sizeofcmds + Padding;
+    TextSection->offset = First;
+    TextSection->addr = kImageBase + First;
+    return Fixture;
+  };
+  const auto Commands = [](const std::vector<uint8_t> &Binary) {
+    std::vector<uint32_t> Out;
+    forEachMachOLoadCommand(Binary.data(), Binary.size(),
+                            [&](const uint8_t *, uint32_t ID, uint32_t, bool) {
+                              Out.push_back(ID);
+                            });
+    return Out;
+  };
+
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Padding);
+    auto Fixture = Build(C.Padding);
+    ASSERT_FALSE(Fixture.Binary.empty());
+    const auto Before = Commands(Fixture.Binary);
+    MachOPatcher Patcher;
+    EXPECT_EQ(Patcher.appendExecSegment(Fixture.Binary,
+                                        {0xd6, 0x5f, 0x03, 0xc0},
+                                        kDefaultNdTextSegment, Arch::AArch64),
+              kImageBase + kTransactionLinkeditOff);
+    const auto After = Commands(Fixture.Binary);
+    EXPECT_EQ(After.size(), Before.size() + 1 - C.Dropped.size());
+    for (uint32_t Command :
+         {LC_SOURCE_VERSION, LC_DATA_IN_CODE, LC_FUNCTION_STARTS})
+      EXPECT_EQ(llvm::is_contained(After, Command),
+                !llvm::is_contained(C.Dropped, Command));
+    // The live commands the loader reads all remain.
+    for (uint32_t Command : {LC_SYMTAB, LC_DYSYMTAB})
+      EXPECT_TRUE(llvm::is_contained(After, Command));
+  }
+
+  // Giving up all three leaves 48 bytes of commands for 72 needed.
+  {
+    auto Fixture = Build(23);
+    const auto Before = Fixture.Binary;
+    MachOPatcher Patcher;
+    EXPECT_EQ(Patcher.appendExecSegment(Fixture.Binary,
+                                        {0xd6, 0x5f, 0x03, 0xc0},
+                                        kDefaultNdTextSegment, Arch::AArch64),
+              0u);
+    EXPECT_EQ(Fixture.Binary, Before);
+  }
+  // A nonzero byte is not unused padding: dropping one command would reach it
+  // here, so a second is given up and the table stops 40 bytes in.
+  {
+    auto Fixture = Build(56);
+    const auto *Header =
+        reinterpret_cast<const mach_header_64 *>(Fixture.Binary.data());
+    Fixture.Binary[sizeof(*Header) + Header->sizeofcmds + 55] = 0x5a;
+    MachOPatcher Patcher;
+    EXPECT_NE(Patcher.appendExecSegment(Fixture.Binary,
+                                        {0xd6, 0x5f, 0x03, 0xc0},
+                                        kDefaultNdTextSegment, Arch::AArch64),
+              0u);
+    const auto After = Commands(Fixture.Binary);
+    EXPECT_FALSE(llvm::is_contained(After, LC_SOURCE_VERSION));
+    EXPECT_FALSE(llvm::is_contained(After, LC_DATA_IN_CODE));
+    EXPECT_TRUE(llvm::is_contained(After, LC_FUNCTION_STARTS));
+  }
+  // A source patch keeps every command the image has.
+  {
+    auto Fixture = Build(56);
+    const auto Before = Fixture.Binary;
+    MachOPatcher Patcher;
+    Patcher.setInputKind(RewriteInputKind::ReplacementIR);
+    EXPECT_EQ(Patcher.appendExecSegment(Fixture.Binary,
+                                        {0xd6, 0x5f, 0x03, 0xc0},
+                                        kDefaultNdTextSegment, Arch::AArch64),
+              0u);
+    EXPECT_EQ(Fixture.Binary, Before);
+  }
+}
+
 TEST(MachOPatchSegmentInstall,
      RejectsTruncatedOrConflictingSegmentNamesWithoutMutation) {
   const std::array<llvm::StringRef, 2> InvalidNames = {

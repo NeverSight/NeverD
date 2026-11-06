@@ -13763,6 +13763,12 @@ entry point, and C-source ARM Mach-O patching all fail closed before output
 mutation. Stripped inputs whose only function discovery source is
 `LC_FUNCTION_STARTS` are not yet supported.
 
+A whole-image Mach-O rewrite adds one segment command. Apple's linker can leave
+less room than that after the load commands, so the rewrite gives up
+`LC_SOURCE_VERSION`, `LC_DATA_IN_CODE` and `LC_FUNCTION_STARTS`, in that order and
+only as far as it must. dyld reads none of them. A source patch keeps them and
+grows the header instead.
+
 PE, ELF, and Mach-O each have format-specific exception components, but NeverD
 does not yet publish an all-formats, all-exception-types end-to-end rewrite
 pipeline. Unsupported encodings or unresolved registration/layout requirements
