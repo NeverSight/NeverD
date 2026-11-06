@@ -668,7 +668,7 @@ class RealCTestOutcomeTests(unittest.TestCase):
             (build / "ctest-reused-names.txt").write_text("")
             (build / "CTestTestfile.cmake").write_text(
                 f'add_test(failure [=[{sys.executable}]=] -c "import sys;sys.exit(1)")\n'
-                f'add_test(unstarted [=[{sys.executable}]=] -c "print(42)")\n'
+                f'add_test(after_failure [=[{sys.executable}]=] -c "print(42)")\n'
             )
             for name in (
                 "ctest-results.xml",
@@ -687,8 +687,10 @@ class RealCTestOutcomeTests(unittest.TestCase):
             self.assertEqual(run.returncode, 8, run.stdout + run.stderr)
             self.assertEqual(read_exit_status(build / "ctest-exit-status.txt"), 8)
             outcomes = parse_junit(ET.parse(build / "ctest-results.xml").getroot())
-            self.assertEqual(len(outcomes), 1)
-            self.assertEqual(outcomes[0].outcome, "failed")
+            self.assertEqual(
+                {outcome.test.name: outcome.outcome for outcome in outcomes},
+                {"failure": "failed", "after_failure": "passed"},
+            )
             self.assertFalse((build / "ctest-outcomes.json").exists())
             self.assertTrue((root / "ctest.log").is_file())
 

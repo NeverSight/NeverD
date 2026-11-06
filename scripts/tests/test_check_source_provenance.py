@@ -777,12 +777,6 @@ class ProvenanceOfThisRepositoryTests(unittest.TestCase):
             "scripts/check_source_provenance.py --history-commits 16", workflow
         )
 
-    def test_no_unreviewed_finding_in_pending_worktree(self) -> None:
-        """Tracked and pending source have no unreviewed provenance finding."""
-
-        findings = provenance.scan(provenance.worktree_files())
-        self.assertEqual(findings, [], "\n".join(findings))
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -129,8 +129,10 @@ def verify_event(event, environ, api_get):
         same_repository(value.get("head_repository"))
         require(isinstance(value.get("head_sha"), str) and re.fullmatch(r"[0-9a-f]{40}", value["head_sha"]),
                 "Producer head SHA is missing or invalid")
-        require(value.get("head_branch") == "dev" and value.get("event") in ("push", "workflow_dispatch"),
-                "Producer must be a dev push or explicit dispatch in the same repository")
+        # GitHub runs schedule events only on the default branch, which this
+        # script requires to remain dev below.
+        require(value.get("head_branch") == "dev" and value.get("event") in ("push", "schedule", "workflow_dispatch"),
+                "Producer must be a dev push, nightly schedule or explicit dispatch in the same repository")
         require(value.get("status") == "completed" and isinstance(value.get("conclusion"), str)
                 and value["conclusion"] in CONCLUSIONS, "Producer attempt is not completed with a recognized conclusion")
         return value

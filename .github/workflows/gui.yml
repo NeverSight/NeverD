@@ -157,6 +157,7 @@ jobs:
         run: |
           python scripts/check_gui_i18n.py --check-sources
           python scripts/check_gui_icons.py
+          python -m unittest discover -s tools/neverd-gui/benchmarks/tests -p test_startup_bench.py -v
           if [ '${{ runner.os }}' != Linux ]; then
             mkdir -p build-gui/ci-diagnostics
             set +e

@@ -742,8 +742,8 @@
       },
       "harness_sha256": "0d4fde5c8cd24e359a6c2a77be54137db7bb49f20a822d21bd7973a569a35e67",
       "scripts": {
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/tests/neverc/X86/verify_far_pointer.py": "fbd8df10e78829890d463c96bc2f3f1fee6727be93cbb21c0870ba8c4fcd5b6a",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/tests/neverc/X86/native_qualification.py": "559a53b127cce251408bc297244127e20773ed2719400b3b2e524f11b0eca7a3"
+        "${NEVERC_WORKTREE}/tests/neverc/X86/verify_far_pointer.py": "fbd8df10e78829890d463c96bc2f3f1fee6727be93cbb21c0870ba8c4fcd5b6a",
+        "${NEVERC_WORKTREE}/tests/neverc/X86/native_qualification.py": "559a53b127cce251408bc297244127e20773ed2719400b3b2e524f11b0eca7a3"
       },
       "exclusions": [
         "other CPU models",
@@ -863,8 +863,8 @@
       },
       "harness_sha256": "0d4fde5c8cd24e359a6c2a77be54137db7bb49f20a822d21bd7973a569a35e67",
       "scripts": {
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/tests/neverc/X86/verify_far_pointer.py": "fbd8df10e78829890d463c96bc2f3f1fee6727be93cbb21c0870ba8c4fcd5b6a",
-        "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/tests/neverc/X86/native_qualification.py": "559a53b127cce251408bc297244127e20773ed2719400b3b2e524f11b0eca7a3"
+        "${NEVERC_WORKTREE}/tests/neverc/X86/verify_far_pointer.py": "fbd8df10e78829890d463c96bc2f3f1fee6727be93cbb21c0870ba8c4fcd5b6a",
+        "${NEVERC_WORKTREE}/tests/neverc/X86/native_qualification.py": "559a53b127cce251408bc297244127e20773ed2719400b3b2e524f11b0eca7a3"
       },
       "exclusions": [
         "other CPU models",

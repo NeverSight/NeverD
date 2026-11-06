@@ -31,7 +31,7 @@
   "neverc_commit": "3328cbcda463f50ba86784ba6edb49ea08d85794",
   "compiler_sha256": {
     "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
-    "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "242c7f4fd11cceb9acde5fc2415d179ca28f5a14e0a781d4ec243253a64edc4f"
+    "${NEVERC_WORKTREE}/build-neverc/bin/neverc": "242c7f4fd11cceb9acde5fc2415d179ca28f5a14e0a781d4ec243253a64edc4f"
   },
   "host": {
     "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
@@ -172,7 +172,7 @@
         "taskset",
         "-c",
         "2",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/native-paged/result.xml"
@@ -185,7 +185,7 @@
         "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
         "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
         "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-        "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
         "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/native-paged/exports"
       },
       "binary_sha256": "2378fd7e6968c6de3e688ae905de729c98ac2fe4bf172737343c5309a96f2ba7",
@@ -257,7 +257,7 @@
         "taskset",
         "-c",
         "2",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
+        "build-x86-native/bin/NeverDX86PagingTests",
         "--gtest_filter=*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/native-paging-p/result.xml"
@@ -270,7 +270,7 @@
         "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
         "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
         "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-        "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
         "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/native-paging-p/exports"
       },
       "binary_sha256": "e5f6adeff776bf2550c2ba99243ad55b94fbbc0374d50f462f56f155c6dc3869",
@@ -280,7 +280,7 @@
       "skipped": [
         {
           "test": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:118\nBound KVM CPU has no LA57\n"
+          "reason": "unittests/translate/x86/X86PagingNativeTests.cpp:118\nBound KVM CPU has no LA57\n"
         }
       ],
       "properties": {
@@ -310,7 +310,7 @@
         "taskset",
         "-c",
         "4",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
+        "build-x86/bin/NeverDX86PagingTests",
         "--gtest_filter=*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/r6-paging-p/result.xml"
@@ -323,7 +323,7 @@
         "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
         "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
         "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-        "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
         "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/r6-paging-p/exports"
       },
       "binary_sha256": "54d92ba020b187d75843b04593346ea418f8d68054f67d4a8836d1163d1b862b",
@@ -333,7 +333,7 @@
       "skipped": [
         {
           "test": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
-          "reason": "/home/ad/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp:118\nBound KVM CPU has no LA57\n"
+          "reason": "unittests/translate/x86/X86PagingNativeTests.cpp:118\nBound KVM CPU has no LA57\n"
         }
       ],
       "properties": {
@@ -363,7 +363,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
+        "build-x86-native/bin/NeverDX86PagingTests",
         "--gtest_filter=LegacyPorts/*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/native-ports-e/result.xml"
@@ -376,7 +376,7 @@
         "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
         "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
         "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-        "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
         "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/native-ports-e/exports"
       },
       "binary_sha256": "e5f6adeff776bf2550c2ba99243ad55b94fbbc0374d50f462f56f155c6dc3869",
@@ -408,7 +408,7 @@
         "taskset",
         "-c",
         "2",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationSourceTests",
+        "build-x86-native/bin/NeverDX64ContinuationSourceTests",
         "--gtest_filter=*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/native-source/result.xml"
@@ -421,7 +421,7 @@
         "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
         "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
         "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-        "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
         "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/native-source/exports"
       },
       "binary_sha256": "83c9da25cba4cb1dd2534ec52d4071ac3f6a3807b8f12a850da99386af922c52",
@@ -450,7 +450,7 @@
         "taskset",
         "-c",
         "12",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
+        "build-x86/bin/NeverDX86PagingTests",
         "--gtest_filter=LegacyPorts/*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/r6-ports-e/result.xml"
@@ -463,7 +463,7 @@
         "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
         "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
         "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-        "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
         "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/r6-ports-e/exports"
       },
       "binary_sha256": "54d92ba020b187d75843b04593346ea418f8d68054f67d4a8836d1163d1b862b",
@@ -495,7 +495,7 @@
         "taskset",
         "-c",
         "4",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
         "--gtest_filter=*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/r6-paged/result.xml"
@@ -508,7 +508,7 @@
         "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
         "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
         "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-        "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
         "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/r6-paged/exports"
       },
       "binary_sha256": "81794fd4b2c8f81db444308957303fab50b7efee59d6879b25097ec2e96eb8f3",
@@ -580,7 +580,7 @@
         "taskset",
         "-c",
         "4",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationSourceTests",
+        "build-x86/bin/NeverDX64ContinuationSourceTests",
         "--gtest_filter=*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/r6-source/result.xml"
@@ -593,7 +593,7 @@
         "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
         "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
         "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-        "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
         "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/r6-source/exports"
       },
       "binary_sha256": "449db16a7c265460ec377649242819e47999d5b096ba03bb0bcec6a511ba7e9f",
@@ -622,7 +622,7 @@
         "taskset",
         "-c",
         "2",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationExportTests",
+        "build-x86-native/bin/NeverDX64ContinuationExportTests",
         "--gtest_filter=*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/native-export/result.xml"
@@ -635,7 +635,7 @@
         "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
         "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
         "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-        "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
         "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/native-export/exports"
       },
       "binary_sha256": "4bbad1022e59414b7ebe0938e07f816f0a193096e3cfad7a4bdc34db0de094c7",
@@ -670,7 +670,7 @@
         "taskset",
         "-c",
         "4",
-        "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationExportTests",
+        "build-x86/bin/NeverDX64ContinuationExportTests",
         "--gtest_filter=*",
         "--gtest_break_on_failure",
         "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/r6-export/result.xml"
@@ -683,7 +683,7 @@
         "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
         "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
         "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-        "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
         "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/r6-export/exports"
       },
       "binary_sha256": "c429aa99c4da041aae2ab61ec137bb49cee750daca892ecc31904e4d82157ae3",
@@ -719,7 +719,7 @@
       "taskset",
       "-c",
       "4",
-      "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
+      "build-x86/bin/NeverDX86PagingTests",
       "--gtest_filter=X86LegacyExecutionTest.*:LegacyPorts/*",
       "--gtest_break_on_failure",
       "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/r6-focused/result.xml"
@@ -732,7 +732,7 @@
       "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
       "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
       "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-      "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+      "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
       "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/r6-focused/exports"
     },
     "binary_sha256": "54d92ba020b187d75843b04593346ea418f8d68054f67d4a8836d1163d1b862b",
@@ -923,7 +923,7 @@
           "taskset",
           "-c",
           "2",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX86PagingTests",
+          "build-x86-native/bin/NeverDX86PagingTests",
           "--gtest_filter=X86LegacyExecutionTest.*:LegacyPorts/*",
           "--gtest_break_on_failure",
           "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/integrated-native-legacy/result.xml"
@@ -936,7 +936,7 @@
           "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
           "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
           "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/integrated-native-legacy/exports"
         },
         "binary_sha256": "e5f6adeff776bf2550c2ba99243ad55b94fbbc0374d50f462f56f155c6dc3869",
@@ -967,7 +967,7 @@
           "taskset",
           "-c",
           "4",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX86PagingTests",
+          "build-x86/bin/NeverDX86PagingTests",
           "--gtest_filter=X86LegacyExecutionTest.*:LegacyPorts/*",
           "--gtest_break_on_failure",
           "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/integrated-r6-legacy/result.xml"
@@ -980,7 +980,7 @@
           "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
           "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
           "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/integrated-r6-legacy/exports"
         },
         "binary_sha256": "54d92ba020b187d75843b04593346ea418f8d68054f67d4a8836d1163d1b862b",
@@ -1011,7 +1011,7 @@
           "taskset",
           "-c",
           "2",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "build-x86-native/bin/NeverDX64PagedExecutionTests",
           "--gtest_filter=*",
           "--gtest_break_on_failure",
           "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/integrated-native-paged/result.xml"
@@ -1024,7 +1024,7 @@
           "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
           "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
           "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/integrated-native-paged/exports"
         },
         "binary_sha256": "84112011d780b238fe74b078a069b0c9a0aab5014c483d82819cf6a8c2d937fa",
@@ -1095,7 +1095,7 @@
           "taskset",
           "-c",
           "4",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64PagedExecutionTests",
+          "build-x86/bin/NeverDX64PagedExecutionTests",
           "--gtest_filter=*",
           "--gtest_break_on_failure",
           "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/integrated-r6-paged/result.xml"
@@ -1108,7 +1108,7 @@
           "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
           "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
           "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/integrated-r6-paged/exports"
         },
         "binary_sha256": "7a031f38e8e4dfc5fb4b953061d0245e37b62066f6c24a67bdf712856a80baaf",
@@ -1179,7 +1179,7 @@
           "taskset",
           "-c",
           "2",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationSourceTests",
+          "build-x86-native/bin/NeverDX64ContinuationSourceTests",
           "--gtest_filter=*",
           "--gtest_break_on_failure",
           "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/integrated-native-source/result.xml"
@@ -1192,7 +1192,7 @@
           "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
           "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
           "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/integrated-native-source/exports"
         },
         "binary_sha256": "e5535bf5e0cffdc342c14e59258081508a89deb0038e2c01f61d13b29996432c",
@@ -1220,7 +1220,7 @@
           "taskset",
           "-c",
           "4",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationSourceTests",
+          "build-x86/bin/NeverDX64ContinuationSourceTests",
           "--gtest_filter=*",
           "--gtest_break_on_failure",
           "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/integrated-r6-source/result.xml"
@@ -1233,7 +1233,7 @@
           "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
           "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
           "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/integrated-r6-source/exports"
         },
         "binary_sha256": "7312cb41f696415b1c1cbe2c266a42527f5395310e95c1eb19bb12dfca8d44dc",
@@ -1261,7 +1261,7 @@
           "taskset",
           "-c",
           "2",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86-native/bin/NeverDX64ContinuationExportTests",
+          "build-x86-native/bin/NeverDX64ContinuationExportTests",
           "--gtest_filter=*",
           "--gtest_break_on_failure",
           "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/integrated-native-export/result.xml"
@@ -1274,7 +1274,7 @@
           "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
           "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
           "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/integrated-native-export/exports"
         },
         "binary_sha256": "7c8f4ff48dbbeee33c0da398fca566ef84845979df31e731dcb5a975410d0724",
@@ -1308,7 +1308,7 @@
           "taskset",
           "-c",
           "4",
-          "/home/ad/code/NeverD-worktrees/x86-instruction-completion/build-x86/bin/NeverDX64ContinuationExportTests",
+          "build-x86/bin/NeverDX64ContinuationExportTests",
           "--gtest_filter=*",
           "--gtest_break_on_failure",
           "--gtest_output=xml:/mnt/data/neverd-legacy-ports-20261105/integrated-r6-export/result.xml"
@@ -1321,7 +1321,7 @@
           "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
           "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
           "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
-          "NEVERD_TEST_NEVERC": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
           "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-ports-20261105/integrated-r6-export/exports"
         },
         "binary_sha256": "655b4dc5931ac340be3e4dfe79bc45a3550657b42555c11084049343854ba429",

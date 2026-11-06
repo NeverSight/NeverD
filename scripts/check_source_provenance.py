@@ -1383,6 +1383,114 @@ HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
             '941d6615ee64e2882403c671c7c030976a5102e8a962c0da6f2d2492e30b2111',
         }),
     ),
+    HistoryAllowance(
+        path='docs/evidence/x86-arpl-native-source-2026-11-05.json',
+        rule="private-path",
+        commits=frozenset({
+            '3f08f4196c9d24c8791669fa05a3fbafd2c8b10a',
+            'cf6c030b9878c588c8492286f597698f56ce4839',
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of checkout paths in the protected x86 "
+            "qualification records. Outcomes, counts and hashes are unchanged. "
+            "Only these exact historical line digests in the publication and "
+            "cleanup commits are covered; current and future paths remain findings."
+        ),
+        line_sha256=frozenset({
+            'd401c61bd6affc1de4ad4998c152931af255365832a1e16714a6a3594c12a308',
+        }),
+    ),
+    HistoryAllowance(
+        path='docs/evidence/x86-far-pointer-source-2026-11-05.json',
+        rule="private-path",
+        commits=frozenset({
+            '4075586cb8bbf764a36fbf280237d3aa50702a8e',
+            'cf6c030b9878c588c8492286f597698f56ce4839',
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of checkout paths in the protected x86 "
+            "qualification records. Outcomes, counts and hashes are unchanged. "
+            "Only these exact historical line digests in the publication and "
+            "cleanup commits are covered; current and future paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '3bf897eac66f00814274f2a915d1716a4fb885077f36fc03fb8dfa80a5175d70',
+            '9a3ef86d7b670c68054860f75df726930cf9931e4cc1e68fc70c4321eaf6e0cc',
+        }),
+    ),
+    HistoryAllowance(
+        path='docs/evidence/x86-legacy-ports-2026-11-05.json',
+        rule="private-path",
+        commits=frozenset({
+            '0f5165b8ebd4a4bdaf69351f0148748c817fa287',
+            'cf6c030b9878c588c8492286f597698f56ce4839',
+            'f43c7a4a6623ca81ce81f54531c84292e1f6fa39',
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of checkout paths in the protected x86 "
+            "qualification records. Outcomes, counts and hashes are unchanged. "
+            "Only these exact historical line digests in the publication and "
+            "cleanup commits are covered; current and future paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '1de9ca5c3044961425b18b5e6619d49f7d4c3c262f1a96f8058f99bdf28befab',
+            '1eb199b473d03205939d59740151d90d596efdca2d483a5fb35cadd5cb5f0cc9',
+            '406ea76bc2795b7b4e86b959534abab31c0022e175ceb83e9efff0ae125b28ba',
+            '470cb642f5cf48a86851f44f21793c9b2f38c5ccc6e35f7d77e86e12ad30446a',
+            '57d07f2a2a4daea6ddddaa0c3176aaf1d287c824e60dad3837e84f7642f3229b',
+            '592b5c1814af561afab0e9cbc7e56b18aaf233238eb7150eefe524998bada98f',
+            '6183e44c56335a50cb4cd5b39364ead3ec9fdce92f24db32a970606bd885de8b',
+            '66c4755a8d6150d8489e64a50660226bef58f6d1da8cad13f013d2feff6b26ea',
+            '6ea8177fdb28fa5770a96526375d7606e074b24ec8e09d85fc19723c7277a5ad',
+            '7ac8e12b2b7fea63e96697be4f028dbb930854ec4331ff2f8fb81443fdcab2a3',
+            '81f03eaf68ac406b15b03ba433ef4e6676115841973649cc07b19a6cd254e088',
+            '8507f9dd32a05243f4878770a6f932d5712d9cd9f705846a506ecd83482cdbdd',
+            '8d719206964881010b7d9472acb23f16e80c5d6ea8f3ab0605d42dc39c58c658',
+            '94e262ef999b9626d5c173d90e09fc288279d596eaa9363b968d579ec9ec932f',
+            '968bbb2f869b26cf02bcf5988fa73fa1e4368cef0e3484e80d678e9cebe59998',
+            'c3bbd6370d799d25dfd27a9e392fb4cdadb8134f25dd64b3a0e74ab618ef4e9e',
+            'c41295a354819f2134cf4f962fb538dd474a56cf68b8ba699bd05e3cf0968a99',
+            'e0b94c5b129dad727b446a0ea3d39454b5ee81060a33245152a594fcab7715d4',
+            'f268079360e5a25a1a3d40f959cc48011db985a72878f88a87f2834f1b234316',
+            'f4e1f7306dc71cdb8f205fde8827a93ad14c4e708a0f50279369639535a7ccfd',
+            'f9322b10f188bc84856a2724a028515a1351ff7eb11ffe966c2783449b9a2294',
+            'faa3dc524b7bdba0f54917027d2b4671ffe6353c7e60a7ba234b51c61a2a167a',
+        }),
+    ),
+    HistoryAllowance(
+        path='docs/evidence/x86-legacy-strings-2026-11-05.json',
+        rule="private-path",
+        commits=frozenset({
+            '9c88cfa8d74c1dbe053faab2cfb203dd53c8de0c',
+            'b40721d9cd68029fe53b2d513726f8790dc9f2fb',
+            'cf6c030b9878c588c8492286f597698f56ce4839',
+        }),
+        line="",
+        reason=(
+            "Reviewed normalization of checkout paths in the protected x86 "
+            "qualification records. Outcomes, counts and hashes are unchanged. "
+            "Only these exact historical line digests in the publication and "
+            "cleanup commits are covered; current and future paths remain findings."
+        ),
+        line_sha256=frozenset({
+            '1de9ca5c3044961425b18b5e6619d49f7d4c3c262f1a96f8058f99bdf28befab',
+            '1eb199b473d03205939d59740151d90d596efdca2d483a5fb35cadd5cb5f0cc9',
+            '3b88cf5de72eb26c5727ae02eae62e0701599a2fca4d14059cdf51dc59413313',
+            '6183e44c56335a50cb4cd5b39364ead3ec9fdce92f24db32a970606bd885de8b',
+            '81f03eaf68ac406b15b03ba433ef4e6676115841973649cc07b19a6cd254e088',
+            '8507f9dd32a05243f4878770a6f932d5712d9cd9f705846a506ecd83482cdbdd',
+            '8d719206964881010b7d9472acb23f16e80c5d6ea8f3ab0605d42dc39c58c658',
+            '968bbb2f869b26cf02bcf5988fa73fa1e4368cef0e3484e80d678e9cebe59998',
+            'c3bbd6370d799d25dfd27a9e392fb4cdadb8134f25dd64b3a0e74ab618ef4e9e',
+            'c41295a354819f2134cf4f962fb538dd474a56cf68b8ba699bd05e3cf0968a99',
+            'db2f90060eea0622fb1c2888de682545ccfed1985896d5e633db73364b26b26f',
+            'e0b94c5b129dad727b446a0ea3d39454b5ee81060a33245152a594fcab7715d4',
+            'f4e1f7306dc71cdb8f205fde8827a93ad14c4e708a0f50279369639535a7ccfd',
+        }),
+    ),
 )
 
 
