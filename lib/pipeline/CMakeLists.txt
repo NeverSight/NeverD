@@ -47,6 +47,7 @@ add_neverd_component_library(NeverDPipeline
   PipelineReturnContracts.cpp
   PipelineWideIntReturn.cpp
   PipelineWideIntReturnEvidence.cpp
+  X86/X64FunctionCallSchedule.cpp
 
   LINK_COMPONENTS
   BinaryInterpreterSpecialization

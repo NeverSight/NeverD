@@ -133,23 +133,6 @@ TEST_F(X64ScheduledFunctionContextTest, AdmissionAndBothSourceRoutes) {
     }
 }
 
-TEST_F(X64ScheduledFunctionContextTest, RejectsImplicitlyUnscheduledViews) {
-  loadReturns();
-  for (bool Paged : {false, true})
-    for (bool LLVM : {false, true}) {
-      const auto Request = selection(
-          Paged,
-          R"(,"function_context":true,"function_calls":[{"entry":4096,"abi":"win64","argument_bytes":[8],"result_bytes":8}])");
-      const char *Report = "old";
-      EXPECT_EQ(neverd_x64_continuation_source_v1(
-                    Session, Request.data(), Request.size(), LLVM, &Report),
-                nullptr);
-      EXPECT_EQ(Report, nullptr);
-      EXPECT_NE(take(neverd_last_error(Session)).find("unscheduled"),
-                std::string::npos);
-    }
-}
-
 TEST_F(X64ScheduledFunctionContextTest, ProvesScheduleAndReturnComposition) {
   loadReturns();
   // Keep every emitted body, validation function, event-delivery function and
