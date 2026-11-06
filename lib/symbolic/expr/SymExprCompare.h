@@ -10,6 +10,10 @@
 
 namespace neverd::symbolic::detail {
 
+/// Decode equality with a literal when an OR packs disjoint zero-extended
+/// predicates into individual bits. Unsupported or overlapping lanes stay.
+SymRef recoverPackedEquality(SymContext &Ctx, SymRef Word, SymRef Literal);
+
 /// Recover a predicate for the highest bit of a word. A failed match does not
 /// intern nodes; the original full-width word always retains its meaning.
 SymRef recoverSignComparison(SymContext &Ctx, SymRef Word);

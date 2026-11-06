@@ -2275,4 +2275,143 @@ TEST(HighSymSimplify, ConstantDivisorProofKeepsTrapsAndOperandEffects) {
   }
 }
 
+TEST(HighSymSimplify, NegatedPackedComparisonKeepsOnlyObservedFlags) {
+  auto Parameter = [](int Id) {
+    auto V = tempOfSize(Id, 4);
+    V.Kind = MedVar::Param;
+    return HighExpr::makeVar(V, NdType::makeInt(4, false));
+  };
+  const auto X = Parameter(0), Y = Parameter(1);
+  const auto Captured = HighExpr::makeVar(tempOfSize(10, 4), X->Type);
+  const auto Call = HighExpr::makeCall("capture_noise", 0x401000, {});
+  Call->Type = X->Type;
+  const auto A =
+      HighExpr::makeBinop(NdOp::INT_EQUAL, X, HighExpr::makeConst(7, 4));
+  const auto B =
+      HighExpr::makeBinop(NdOp::INT_LESS, Y, HighExpr::makeConst(13, 4));
+  auto Packed = HighExpr::makeBinop(NdOp::INT_AND, Captured,
+                                    HighExpr::makeConst(0xfffff77f, 4));
+  for (auto [Flag, Bit] : {std::pair{A, 0x80}, std::pair{B, 0x800}})
+    Packed = HighExpr::makeBinop(
+        NdOp::INT_OR, Packed,
+        HighExpr::makeBinop(NdOp::INT_MULT, integerCast(Flag, 4),
+                            HighExpr::makeConst(Bit, 4)));
+  const auto Encoded = HighExpr::makeBinop(
+      NdOp::INT_SUB, HighExpr::makeConst(0, 4),
+      HighExpr::makeBinop(NdOp::INT_OR, HighExpr::makeConst(0xfffff77f, 4),
+                          HighExpr::makeUnary(NdOp::INT_NOT, Packed)));
+  HighFunc F;
+  F.Name = "packed_condition";
+  F.Entry = kEntry;
+  F.ReturnType = X->Type;
+  F.Params = {{"x", X->Type, kNoParamReg, 0}, {"y", Y->Type, kNoParamReg, 1}};
+  F.Body = {assignValue(Captured, Call),
+            returnValue(HighExpr::makeBinop(NdOp::INT_EQUAL, Encoded,
+                                            HighExpr::makeConst(0x801, 4)))};
+  simplifyExprSemantics(F.Body);
+  EXPECT_FALSE(containsNode(F.Body.back().RetVal, Captured))
+      << F.Body.back().RetVal->str();
+  EXPECT_EQ(F.Body.front().Val.get(), Call.get());
+  EXPECT_EQ(F.Body.back().RetVal->str().find('*'), std::string::npos);
+  EXPECT_EQ(F.Body.back().RetVal->str().find('~'), std::string::npos);
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options));
+  OS.flush();
+  const std::string Program = C + R"C(
+static unsigned calls;
+static uint32_t noise;
+int capture_noise(void) { ++calls; return (int)noise; }
+int main(void) {
+  for (unsigned n = 0; n != 16; ++n) {
+    noise = noise * 1664525u + 1013904223u;
+    for (uint32_t x = 0; x != 32; ++x)
+      for (uint32_t y = 0; y != 32; ++y) {
+        calls = 0;
+        const uint32_t flags = (noise & 0xfffff77fu) |
+                               (0x80u * (x == 7)) | (0x800u * (y < 13));
+        const uint32_t encoded = 0u - (0xfffff77fu | ~flags);
+        if (packed_condition(x, y) != (encoded == 0x801u) || calls != 1)
+          return 1;
+      }
+  }
+  return 0;
+}
+)C";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
+TEST(HighSymSimplify, RecoveredPackedPredicatesExecuteAtTheirOriginalWidths) {
+  std::vector<HighFunc> Functions;
+  std::string Checks;
+  for (uint16_t Bytes : {1, 2, 4, 8})
+    for (NdOp Op : {NdOp::INT_EQUAL, NdOp::INT_NOTEQUAL, NdOp::INT_LESS,
+                    NdOp::INT_LESSEQUAL, NdOp::INT_SLESS, NdOp::INT_SLESSEQUAL})
+      for (bool Invert : {false, true})
+        for (bool MaskResult : {false, true}) {
+          auto V = tempOfSize(0, Bytes);
+          V.Kind = MedVar::Param;
+          auto X = HighExpr::makeVar(V, NdType::makeInt(Bytes, false));
+          auto Predicate =
+              HighExpr::makeBinop(Op, X, HighExpr::makeConst(17, Bytes));
+          auto Packed = HighExpr::makeBinop(
+              NdOp::INT_OR, HighExpr::makeConst(0x100, 4),
+              HighExpr::makeBinop(NdOp::INT_MULT, extendInteger(Predicate, 4),
+                                  HighExpr::makeConst(0x40, 4)));
+          auto Result =
+              extendInteger(HighExpr::makeBinop(
+                                NdOp::INT_EQUAL, Packed,
+                                HighExpr::makeConst(Invert ? 0x100 : 0x140, 4)),
+                            4);
+          if (MaskResult)
+            Result = HighExpr::makeBinop(NdOp::INT_SUB,
+                                         HighExpr::makeConst(0, 4), Result);
+          HighFunc F;
+          F.Name = "predicate_" + std::to_string(Functions.size());
+          F.Entry = kEntry + Functions.size() * 16;
+          F.ReturnType = NdType::makeInt(4, false);
+          F.Params = {{"x", X->Type, kNoParamReg, 0}};
+          F.Body = {returnValue(Result)};
+          simplifyExprSemantics(F.Body);
+          EXPECT_EQ(F.Body.back().RetVal->str().find('*'), std::string::npos)
+              << F.Name << ": " << F.Body.back().RetVal->str();
+          const bool Signed =
+              Op == NdOp::INT_SLESS || Op == NdOp::INT_SLESSEQUAL;
+          const std::string Type =
+              (Signed ? "int" : "uint") + std::to_string(Bytes * 8) + "_t";
+          const char *Compare = Op == NdOp::INT_EQUAL      ? "=="
+                                : Op == NdOp::INT_NOTEQUAL ? "!="
+                                : Op == NdOp::INT_LESS || Op == NdOp::INT_SLESS
+                                    ? "<"
+                                    : "<=";
+          std::string Expected = "((" + Type + ")x " + Compare + " 17)";
+          if (Invert)
+            Expected = "!(" + Expected + ")";
+          if (MaskResult)
+            Expected = "(0u - (uint32_t)(" + Expected + "))";
+          Checks += "if (" + F.Name + "(x) != (uint32_t)(" + Expected +
+                    ")) return 1;\n";
+          Functions.push_back(std::move(F));
+        }
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+  OS.flush();
+  const auto Program = C + R"C(
+int main(void) {
+  const uint64_t values[] = {0, 1, 16, 17, 18, 127, 128, 255, 32767, 32768,
+      65535, 0x7fffffff, 0x80000000, 0xffffffff, 0x7fffffffffffffffULL,
+      0x8000000000000000ULL, ~0ULL};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i) {
+    uint64_t x = values[i];
+)C" + Checks + "}\nreturn 0;\n}\n";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
 } // namespace

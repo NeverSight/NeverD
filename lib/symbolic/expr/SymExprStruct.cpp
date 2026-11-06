@@ -648,6 +648,50 @@ SymRef SymContext::mkEq(SymRef A, SymRef B) {
       return mkNot(operand(Selected, 0));
     return mkFalse();
   }
+  if (isConst(A))
+    std::swap(A, B);
+  // Complement and modular negation are bijections at the operand width.
+  // Peel them at the observation, keeping the original word available to
+  // other consumers. Exposing a packed-word equality lets its existing mask
+  // rules discard unrelated flag lanes before deeper rewriting.
+  while (isConst(B)) {
+    if (op(A) == SymOp::Not) {
+      A = operand(A, 0);
+      B = mkConst(~constValue(B));
+    } else if (op(A) == SymOp::Mul && numOperands(A) == 2 &&
+               isConstOnes(operand(A, 0))) {
+      A = operand(A, 1);
+      B = mkConst(-constValue(B));
+    } else if (op(A) == SymOp::And && numOperands(A) == 2 &&
+               isConst(operand(A, 0)) && op(operand(A, 1)) == SymOp::Not) {
+      const auto Mask = constValue(operand(A, 0));
+      const auto Target = constValue(B);
+      if (!(Target & ~Mask).isZero())
+        return mkFalse();
+      const auto Word = operand(operand(A, 1), 0);
+      A = mkAnd(Word, mkConst(Mask));
+      B = mkConst(~Target & Mask);
+    } else {
+      break;
+    }
+  }
+  if (isConst(A) && isConst(B))
+    return constValue(A) == constValue(B) ? mkTrue() : mkFalse();
+  if (auto Predicate = detail::recoverPackedEquality(*this, A, B))
+    return Predicate;
+  // Forced OR bits must agree with a literal and do not constrain the input.
+  // Keep only its other bits, so differently tagged words retain their common
+  // masked-word condition.
+  if (op(A) == SymOp::Or && isConst(operand(A, 0)) && isConst(B)) {
+    const auto Forced = constValue(operand(A, 0));
+    const auto Target = constValue(B);
+    if ((Target & Forced) != Forced)
+      return mkFalse();
+    llvm::SmallVector<SymRef, 8> Terms(operands(A).begin() + 1,
+                                       operands(A).end());
+    const auto Word = Terms.size() == 1 ? Terms.front() : mkOr(Terms);
+    return mkEq(mkAnd(Word, mkConst(~Forced)), mkConst(Target & ~Forced));
+  }
   // Equality is commutative, so order the operands for canonicity.
   if (B < A)
     std::swap(A, B);
