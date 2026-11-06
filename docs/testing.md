@@ -20440,6 +20440,14 @@ stores to the fixture's RAM object. The blocked-NMI predicate retains the real
 event delivery body and its producer-declared event pointer. No generated
 program, instruction executor or guest runs.
 
+`X64ContinuationExportParallel.HighCIsStableAcrossThreadCounts` in
+`NeverDX64ContinuationSourceTests` compares complete HighC source and manifests
+with one and four workers. Its mixed register and memory instructions reach
+the shared parallel batch threshold under plain/paged and scheduled/unscheduled
+V6 requests. The test links the pipeline directly so its thread override owns
+the converter on every host. Repeat it with `NEVERD_ENABLE_TBB=OFF` to cover
+the native-thread scheduler; neither case executes the generated instructions.
+
 `X64PagedFunctionCallTest.*` checks register-only and context-only paged entry
 views, retained physical stack positions, unchanged instruction/driver text,
 and refusal of scalar stack checks. Both C routes compile
