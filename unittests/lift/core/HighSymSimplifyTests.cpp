@@ -2723,6 +2723,10 @@ TEST(HighCTruthValue, GreaterThanZeroComparesTheWidthTheTestsRead) {
   auto And = [](const ExprPtr &A, const ExprPtr &B) {
     return HighExpr::makeBinop(NdOp::BOOL_AND, A, B);
   };
+  auto AtLeastZero = [](const ExprPtr &X) {
+    return HighExpr::makeBinop(NdOp::INT_SLESSEQUAL,
+                               HighExpr::makeConst(0, X->Type->Size), X);
+  };
   auto AtMostZero = [](const ExprPtr &X) {
     return HighExpr::makeBinop(NdOp::INT_SLESSEQUAL, X,
                                HighExpr::makeConst(0, X->Type->Size));
@@ -2771,12 +2775,19 @@ TEST(HighCTruthValue, GreaterThanZeroComparesTheWidthTheTestsRead) {
   const std::string S("(int32_t)v"), W("(int64_t)v"), H("(int16_t)v");
 
   // `test; jle` at each width: the test keeps every byte it reads.
+  Add("s32_ge", S32, And(NotZero(S32), AtLeastZero(S32)), S + " > 0");
   Add("s32_above", S32, And(NotZero(S32), Not(Below(S32))), S + " > 0");
+  Add("s32_equal", S32, And(NotZero(S32), IsZero(Below(S32))), S + " > 0");
+  Add("u32_ge", U32, And(NotZero(U32), AtLeastZero(U32)), S + " > 0");
   Add("u32_above", U32, And(NotZero(U32), Not(Below(U32))), S + " > 0");
+  Add("u64_ge", U64, And(NotZero(U64), AtLeastZero(U64)), W + " > 0");
   Add("u64_above", U64, And(NotZero(U64), Not(Below(U64))), W + " > 0");
+  Add("u64_equal", U64, And(NotZero(U64), IsZero(Below(U64))), W + " > 0");
   Add("s64_above", S64, And(NotZero(S64), Not(Below(S64))), W + " > 0");
   Add("u64_not_either", U64, Not(Or(IsZero(U64), Below(U64))), W + " > 0");
   Add("u64_not_most", U64, Not(AtMostZero(U64)), W + " > 0");
+  Add("s32_not_ge", S32, Not(AtLeastZero(S32)), S + " < 0");
+  Add("u64_not_ge", U64, Not(AtLeastZero(U64)), W + " < 0");
   Add("u64_either", U64, Or(IsZero(U64), Below(U64)), W + " <= 0");
   Add("s32_not_either", S32, Not(Or(IsZero(S32), Below(S32))), S + " > 0");
   Add("u16_not_either", U16, Not(Or(IsZero(U16), Below(U16))), H + " > 0");
@@ -2820,7 +2831,9 @@ TEST(HighCTruthValue, GreaterThanZeroComparesTheWidthTheTestsRead) {
   // A view read above a wider test: the signed view does not decide zero, so
   // no one comparison means this.
   const std::string Mixed = "v != 0 && " + S + " >= 0";
+  Add("mixed_ge", U64, And(NotZero(U64), AtLeastZero(Low)), Mixed);
   Add("mixed_above", U64, And(NotZero(U64), Not(Below(Low))), Mixed);
+  Add("mixed_equal", U64, And(NotZero(U64), IsZero(Below(Low))), Mixed);
   Add("mixed_not_either", U64, Not(Or(IsZero(U64), Below(Low))), Mixed);
   Add("mixed_either", U64, Or(IsZero(U64), Below(Low)),
       "v == 0 || " + S + " < 0");
@@ -2867,8 +2880,10 @@ TEST(HighCTruthValue, GreaterThanZeroComparesTheWidthTheTestsRead) {
   ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
   OS.flush();
   // The readable spelling survives wherever it is correct.
-  EXPECT_EQ(llvm::StringRef(C).count("if (x > 0) {"), 4u) << C;
-  EXPECT_EQ(llvm::StringRef(C).count("if ((int64_t)x > 0) {"), 3u) << C;
+  EXPECT_EQ(C.find("x && x >= 0"), std::string::npos) << C;
+  EXPECT_EQ(C.find("!(x >= 0)"), std::string::npos) << C;
+  EXPECT_EQ(llvm::StringRef(C).count("if (x > 0) {"), 6u) << C;
+  EXPECT_EQ(llvm::StringRef(C).count("if ((int64_t)x > 0) {"), 5u) << C;
   const auto Program = C + R"C(
 #define CHECK(call, want) \
   if ((uint32_t)(call) != (uint32_t)(want)) return __LINE__ % 200 + 1;

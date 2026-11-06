@@ -8724,15 +8724,29 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
         }
         return nullptr;
       };
-      // The value tested by `!(x < 0)`, and the width of that test.
+      // The value tested by `!(x < 0)`, `(x < 0) == 0`, or the normalized
+      // `0 <= x`, and the width of that test.
       auto NonNegativeValue = [&](const HighExpr *E,
                                   uint16_t &Bytes) -> ExprPtr {
         E = unwrapIntegerView(forwardedExpr(E));
         if (!E || E->Operands.empty() || !E->Operands[0])
           return nullptr;
-        if (E->Kind != ExprKind::UnaryOp || E->Op != NdOp::BOOL_NOT)
+        if (E->Kind == ExprKind::BinOp && E->Op == NdOp::INT_SLESSEQUAL &&
+            E->Operands.size() == 2 && E->Operands[1] &&
+            IsZeroLike(E->Operands[0])) {
+          Bytes = zeroTestBytes(*E->Operands[1], *E->Operands[0]);
+          return E->Operands[1];
+        }
+        const HighExpr *Below = nullptr;
+        if (E->Kind == ExprKind::UnaryOp && E->Op == NdOp::BOOL_NOT)
+          Below = E->Operands[0].get();
+        else if (E->Kind == ExprKind::BinOp && E->Op == NdOp::INT_EQUAL &&
+                 E->Operands.size() == 2 && E->Operands[1])
+          Below = IsZeroLike(E->Operands[1])   ? E->Operands[0].get()
+                  : IsZeroLike(E->Operands[0]) ? E->Operands[1].get()
+                                               : nullptr;
+        if (!Below)
           return nullptr;
-        const HighExpr *Below = E->Operands[0].get();
         const HighExpr *Cmp = unwrapIntegerView(forwardedExpr(Below));
         if (!Cmp || Cmp->Kind != ExprKind::BinOp ||
             Cmp->Op != NdOp::INT_SLESS || Cmp->Operands.size() != 2 ||
@@ -9120,6 +9134,10 @@ std::string HighCWriter::invertCondStrImpl(const HighExpr &E) {
         return S;
       }
     }
+    // `!(x >= 0)` reads as `x < 0`.
+    if (Cur->Op == NdOp::INT_SLESSEQUAL && IsZeroLike(Cur->Operands[0]))
+      return exprStr(*HighExpr::makeBinop(NdOp::INT_SLESS, Cur->Operands[1],
+                                          Cur->Operands[0]));
     NdOp Inv = NdOp::NOP;
     switch (Cur->Op) {
     case NdOp::INT_EQUAL:
