@@ -2244,37 +2244,6 @@ int main(void) {
   source_call_execution_test::compileAndRun(Program, {"-O2"});
 }
 
-TEST(HighSymSimplify, ConstantDivisorProofKeepsTrapsAndOperandEffects) {
-  const auto X = HighExpr::makeVar(tempOfSize(0, 4), NdType::makeInt(4, false));
-  const auto Dynamic = HighExpr::makeVar(tempOfSize(1, 4), X->Type);
-  for (const auto Op : {NdOp::INT_DIV, NdOp::INT_REM}) {
-    const auto Safe = HighExpr::makeBinop(Op, X, HighExpr::makeConst(100, 4));
-    const auto SafeDifference = HighExpr::makeBinop(NdOp::INT_SUB, Safe, Safe);
-    const auto Reduced = simplified(SafeDifference);
-    ASSERT_EQ(Reduced->Kind, ExprKind::Const) << Reduced->str();
-    EXPECT_EQ(Reduced->ConstVal, 0u);
-    for (const auto Divisor : {Dynamic, HighExpr::makeConst(0, 4),
-                               HighExpr::makeConst(0x100000000, 8)}) {
-      const auto Unsafe = HighExpr::makeBinop(Op, X, Divisor);
-      const auto Difference =
-          HighExpr::makeBinop(NdOp::INT_SUB, Unsafe, Unsafe);
-      EXPECT_TRUE(containsNode(simplified(Difference), Unsafe));
-    }
-    const auto Call = HighExpr::makeCall("read_word", 0x401000, {});
-    Call->Type = X->Type;
-    const auto Effect =
-        HighExpr::makeBinop(Op, Call, HighExpr::makeConst(100, 4));
-    const auto Difference = HighExpr::makeBinop(NdOp::INT_SUB, Effect, Effect);
-    EXPECT_TRUE(containsNode(simplified(Difference), Call));
-  }
-  for (const auto Op : {NdOp::INT_SDIV, NdOp::INT_SREM}) {
-    const auto Unsafe =
-        HighExpr::makeBinop(Op, X, HighExpr::makeConst(0xffffffff, 4));
-    const auto Difference = HighExpr::makeBinop(NdOp::INT_SUB, Unsafe, Unsafe);
-    EXPECT_TRUE(containsNode(simplified(Difference), Unsafe));
-  }
-}
-
 TEST(HighSymSimplify, RepackedByteFlagsBecomeOneMaskedWord) {
   auto V = tempOfSize(0, 8);
   V.Kind = MedVar::Param;
@@ -2321,6 +2290,37 @@ int main(void) {
 )C";
   source_call_execution_test::compileAndRun(Program, {"-O0"});
   source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
+TEST(HighSymSimplify, ConstantDivisorProofKeepsTrapsAndOperandEffects) {
+  const auto X = HighExpr::makeVar(tempOfSize(0, 4), NdType::makeInt(4, false));
+  const auto Dynamic = HighExpr::makeVar(tempOfSize(1, 4), X->Type);
+  for (const auto Op : {NdOp::INT_DIV, NdOp::INT_REM}) {
+    const auto Safe = HighExpr::makeBinop(Op, X, HighExpr::makeConst(100, 4));
+    const auto SafeDifference = HighExpr::makeBinop(NdOp::INT_SUB, Safe, Safe);
+    const auto Reduced = simplified(SafeDifference);
+    ASSERT_EQ(Reduced->Kind, ExprKind::Const) << Reduced->str();
+    EXPECT_EQ(Reduced->ConstVal, 0u);
+    for (const auto Divisor : {Dynamic, HighExpr::makeConst(0, 4),
+                               HighExpr::makeConst(0x100000000, 8)}) {
+      const auto Unsafe = HighExpr::makeBinop(Op, X, Divisor);
+      const auto Difference =
+          HighExpr::makeBinop(NdOp::INT_SUB, Unsafe, Unsafe);
+      EXPECT_TRUE(containsNode(simplified(Difference), Unsafe));
+    }
+    const auto Call = HighExpr::makeCall("read_word", 0x401000, {});
+    Call->Type = X->Type;
+    const auto Effect =
+        HighExpr::makeBinop(Op, Call, HighExpr::makeConst(100, 4));
+    const auto Difference = HighExpr::makeBinop(NdOp::INT_SUB, Effect, Effect);
+    EXPECT_TRUE(containsNode(simplified(Difference), Call));
+  }
+  for (const auto Op : {NdOp::INT_SDIV, NdOp::INT_SREM}) {
+    const auto Unsafe =
+        HighExpr::makeBinop(Op, X, HighExpr::makeConst(0xffffffff, 4));
+    const auto Difference = HighExpr::makeBinop(NdOp::INT_SUB, Unsafe, Unsafe);
+    EXPECT_TRUE(containsNode(simplified(Difference), Unsafe));
+  }
 }
 
 } // namespace
