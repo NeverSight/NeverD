@@ -40,9 +40,14 @@ struct ResolverPendingWalks {
     std::array<uint64_t, 4> Bits{};
     bool empty() const { return LastIdentity == 0; }
   };
+  static constexpr uint32_t NoComputation =
+      std::numeric_limits<uint32_t>::max();
   struct Frame {
     uint64_t Identity;
     Pending Dependencies;
+    // The deepest active walk, this one or an enclosing one, reading the inputs
+    // of a definition that computes.
+    uint32_t DeepestComputation;
   };
 
   std::vector<Frame> Frames;
@@ -68,6 +73,14 @@ struct ResolverPendingWalks {
       P.LastIdentity = R.LastIdentity;
     }
   }
+  /// Whether returning to \p Target from here crosses a definition that
+  /// computes. Such a backedge is that definition's update, and not a value
+  /// passing through unchanged, so a merge must not drop it.
+  bool closesThroughComputation(const Pending &Target) const {
+    return !Target.empty() && !Frames.empty() &&
+           Frames.back().DeepestComputation != NoComputation &&
+           Frames.back().DeepestComputation >= Target.First;
+  }
   struct Scope {
     ResolverPendingWalks &Owner;
     Pending Self;
@@ -78,7 +91,9 @@ struct ResolverPendingWalks {
       Self = {++Owner.NextIdentity, Depth, Depth};
       if (Depth < Self.Bits.size() * 64)
         Self.Bits[Depth / 64] = uint64_t{1} << (Depth % 64);
-      Owner.Frames.push_back({Self.LastIdentity, {}});
+      const uint32_t Enclosing =
+          Depth ? Owner.Frames.back().DeepestComputation : NoComputation;
+      Owner.Frames.push_back({Self.LastIdentity, {}, Enclosing});
     }
     Scope(const Scope &) = delete;
     Scope &operator=(const Scope &) = delete;
@@ -87,6 +102,10 @@ struct ResolverPendingWalks {
         assert(Owner.Frames.size() == Self.Last + 1);
         Owner.Frames.pop_back();
       }
+    }
+    /// This walk now reads the inputs of a definition that computes.
+    void readComputationInputs() {
+      Owner.Frames[Self.Last].DeepestComputation = Self.Last;
     }
     Pending finish() {
       assert(Owner.Frames.size() == Self.Last + 1);

@@ -7475,7 +7475,8 @@ bool CFGBuilder::inferBoundsFromBitTestClamp(const BinaryImage &Img,
     }
     // Reading a sized byte program is safe only when the runtime index is
     // confined to that exact object, not merely when its bit-test sibling
-    // uses the same register. A guard on the dispatch path may establish it.
+    // uses the same register. A guard on the dispatch path may establish it,
+    // and an index advanced around a loop has nothing else to bound it.
     if (ByteIndexFrom + 1 >= static_cast<int>(Ops.size()))
       return false;
     const LowOp &ByteIndexUse = Ops[ByteIndexFrom + 1];
@@ -7483,9 +7484,7 @@ bool CFGBuilder::inferBoundsFromBitTestClamp(const BinaryImage &Img,
     IndexBound.Candidate = ByteIndex;
     IndexBound.UseAddr = ByteIndexUse.Addr;
     IndexBound.UseSeq = ByteIndexUse.Seq;
-    IndexBound.Relation = Img.Arch == Arch::X64
-                              ? JumpTableValueRelation::UnsignedFeasibleSet
-                              : JumpTableValueRelation::UnsignedLessThan;
+    IndexBound.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
     IndexBound.UnsignedUpperBound = ProgSize;
     Queries.push_back(std::move(IndexBound));
     bool Complete = false;

@@ -8249,6 +8249,15 @@ transparent cycles retain the existing shared generation guard; memory-context
 resets also invalidate those entries in the value memo. Neither cache bypasses
 incomplete-proof rejection.
 
+A backedge that closes through a definition which computes is that definition's
+update, not a value passing through it. Walking from the update of
+`i = merge(0, i + 1)` must not read `i` as `{0, 1}`, so the closing read returns
+one unknown value named by its state: a numeric proof sees every value there,
+and a proof of the arithmetic around the merge, such as an `x % N` recipe, still
+reads one dividend. A bound such as `i < 30` then has to come from the guard on
+the backedge. A taint query keeps the transparent closure, because it only asks
+what a value reaches and that arm is the walk already under way.
+
 Edge refinement shares one predicate policy with its local shape inspection.
 An exact, unguarded byte producer can establish that the current query cannot
 use a condition, avoiding reconstruction of its operands. Exact COPY and NOT
