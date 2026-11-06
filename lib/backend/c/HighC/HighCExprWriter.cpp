@@ -3387,6 +3387,8 @@ const HighExpr *HighCWriter::printedPointerSource(const HighExpr &Value) const {
 
 bool HighCWriter::printsPointer(const HighExpr &Value,
                                 llvm::StringRef Text) const {
+  std::string Storage;
+  Text = plainText(Text, Storage);
   if (const HighExpr *Shown = forwardedExpr(&Value);
       Shown && isBarePointerName(*Shown, Text))
     return true;
@@ -3860,6 +3862,8 @@ std::string HighCWriter::addrStr(const HighExpr &E, int ParentPrec,
 
 bool HighCWriter::isBarePointerName(const HighExpr &E,
                                     llvm::StringRef Text) const {
+  std::string Storage;
+  Text = plainText(Text, Storage);
   return (E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) &&
          !Text.empty() &&
          (llvm::isAlpha(Text.front()) || Text.front() == '_') &&
@@ -4663,6 +4667,8 @@ HighCWriter::typedArgumentText(const HighExpr &E, const TypeRef &Expected,
 
 bool HighCWriter::printsAsInteger(const HighExpr &E,
                                   llvm::StringRef Text) const {
+  std::string Storage;
+  Text = plainText(Text, Storage);
   auto Integer = [](const TypeRef &Type) {
     return Type && (Type->Kind == NdTypeKind::Int ||
                     (Type->Kind == NdTypeKind::Struct && Type->IsEnum));
