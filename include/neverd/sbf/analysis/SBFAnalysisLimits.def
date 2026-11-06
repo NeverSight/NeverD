@@ -32,7 +32,7 @@ SBF_ANALYSIS_LIMIT(MaxModeledScratchBytes, 1'024)
 // snapshot, so adversarial block layouts cannot amplify a 10 MiB program into
 // unbounded host memory. Recovery falls back to block-local scratch facts once
 // this budget is reached.
-SBF_ANALYSIS_LIMIT(ScratchFlowRetainedByteBudget, 8'388'608)
+SBF_ANALYSIS_LIMIT(ScratchFlowRetainedByteBudget, 16'777'216)
 
 // Function-size synchronization serves an untrusted CFG through the public C
 // API. Exact semantic size can require a distinct reachability query for every
