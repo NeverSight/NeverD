@@ -84,6 +84,10 @@ inline constexpr size_t kMaxTypeFitTextBytes = 256;
 inline constexpr int64_t kMaxTypeFitCandidates = 500;
 inline constexpr int64_t kMaxTypeFitAccessBytes = 1 << 16;
 inline constexpr unsigned kMaxLocalTypeConversionDepth = 16;
+/// Records a library record may reach for a session to convert them once
+/// and share them (LocalTypesDebugContext::libraryRecord); a record that
+/// reaches more is converted afresh for each record it completes.
+inline constexpr size_t kMaxLocalTypeSharedClosure = 4096;
 /// Admission and persistence use the same bound for function declarations.
 inline constexpr size_t kMaxFunctionDeclarationBytes = 4096;
 inline constexpr size_t kMaxUserNameBytes = 4096;

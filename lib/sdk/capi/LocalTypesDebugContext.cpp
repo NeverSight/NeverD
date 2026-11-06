@@ -16,11 +16,14 @@
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSet.h"
 
 #include <limits>
+#include <map>
 #include <set>
 
 namespace neverd::sdk {
@@ -66,13 +69,36 @@ displayedEnumerators(const types::EnumDef &Enum, unsigned Bytes) {
   return Shown;
 }
 
+/// The records a session shares (LocalTypesDebugContext::libraryRecord): a
+/// conversion names each record by its one node instead of converting it
+/// again.  Pending holds the records named and not yet converted.
+struct SharedRecordBuild {
+  llvm::StringMap<TypeRef> &Records;
+  std::vector<std::pair<TypeRef, const types::RecordDef *>> Pending;
+};
+
 class Converter {
 public:
   explicit Converter(const types::TypeLibrary &Library,
                      const types::TypeSpeller *PrototypeSpeller = nullptr,
-                     bool CompleteValues = false, bool BorrowRecords = false)
+                     bool CompleteValues = false, bool BorrowRecords = false,
+                     SharedRecordBuild *Shared = nullptr)
       : Library(Library), PrototypeSpeller(PrototypeSpeller),
-        CompleteValues(CompleteValues), BorrowRecords(BorrowRecords) {}
+        CompleteValues(CompleteValues), BorrowRecords(BorrowRecords),
+        Shared(Shared) {}
+
+  /// Converts the members of \p Named, a record a shared conversion named,
+  /// as record() converts those of a record it names.
+  void fillShared(NdType &Named, const types::RecordDef &Record) {
+    if (Record.Defined)
+      members(Named, Record, 0, 0);
+  }
+  /// The scalars of \p Named, a record a shared conversion filled, as
+  /// record() finds them once the records it holds have theirs.
+  void sharedLeaves(NdType &Named, const types::RecordDef &Record) {
+    if (Record.Defined)
+      leaves(Named, Record, 0);
+  }
 
   TypeRef convert(const types::TypeExpr &Type, unsigned Depth) {
     if (Depth > kMaxLocalTypeConversionDepth)
@@ -182,6 +208,8 @@ private:
         return nullptr;
       if (!Type->Record)
         return nullptr;
+      if (Shared)
+        return sharedRecord(Name, *Type->Record);
       if (auto Done = Records.find(Name); Done != Records.end())
         return Done->second;
       return record(Name, *Type->Record, Depth);
@@ -216,7 +244,7 @@ private:
       return NdType::makeVoid();
     // A callback needs borrowed record identities, not member reconstruction
     // or recursive ownership through a record's own callback fields.
-    Converter Borrowed(Library, PrototypeSpeller, false, true);
+    Converter Borrowed(Library, PrototypeSpeller, false, true, Shared);
     const auto scalar = [&](const types::TypeExpr *Type) -> TypeRef {
       TypeRef Converted = Type ? Borrowed.convert(*Type, Depth + 1) : nullptr;
       if (!Converted)
@@ -246,12 +274,8 @@ private:
                             Function.Convention);
   }
 
-  /// A record by its name, its members named for display where they lie, as
-  /// a PDB's flat member list gives them: through records in place, which
-  /// have no names of their own.  Bitfields share their storage's bytes and
-  /// are left out.
-  TypeRef record(llvm::StringRef Name, const types::RecordDef &Record,
-                 unsigned Depth) {
+  /// A record's node before its members: its name, size and alignment.
+  TypeRef recordNode(llvm::StringRef Name, const types::RecordDef &Record) {
     if (Record.Size > std::numeric_limits<uint16_t>::max())
       return nullptr;
     TypeRef Named = NdType::makeNamedRecord(Name.str(), uint16_t(Record.Size));
@@ -263,6 +287,50 @@ private:
       Named->Alignment = static_cast<uint16_t>(Alignment);
       Named->FieldDisplayAlignment = static_cast<uint16_t>(Alignment);
     }
+    return Named;
+  }
+
+  /// The shared node of the record \p Name; one not yet converted is
+  /// converted after this conversion (SharedRecordBuild::Pending).
+  TypeRef sharedRecord(llvm::StringRef Name, const types::RecordDef &Record) {
+    if (const auto Found = Shared->Records.find(Name);
+        Found != Shared->Records.end())
+      return Found->second;
+    TypeRef Named = recordNode(Name, Record);
+    if (!Named)
+      return nullptr;
+    Shared->Records[Name] = Named;
+    Shared->Pending.emplace_back(Named, &Record);
+    return Named;
+  }
+
+  /// The scalars \p Named holds, through every member of \p Record, or
+  /// none where one of them has no complete layout.
+  void leaves(NdType &Named, const types::RecordDef &Record, unsigned Depth) {
+    unsigned Budget = 256;
+    bool Complete = true;
+    for (const auto &Field : Record.Members) {
+      if (!Field.Type || Field.isBitfield() || Field.BitOffset % 8 ||
+          !scalarLeaves(Named, convert(*Field.Type, Depth + 1),
+                        Field.BitOffset / 8, Budget)) {
+        Complete = false;
+        break;
+      }
+    }
+    if (!Complete)
+      Named.ScalarLeaves.clear();
+  }
+
+  /// A record by its name, its members named for display where they lie, as
+  /// a PDB's flat member list gives them: through records in place, which
+  /// have no names of their own.  Bitfields share their storage's bytes and
+  /// are left out.
+  TypeRef record(llvm::StringRef Name, const types::RecordDef &Record,
+                 unsigned Depth) {
+    TypeRef Named = recordNode(Name, Record);
+    if (!Named)
+      return nullptr;
+    const uint32_t Alignment = Library.alignOf(Record);
     if (!Name.empty())
       Records[Name] = Named;
     // A recursive member refers to this identity, not ownership of the
@@ -276,18 +344,7 @@ private:
     });
     if (Record.Defined) {
       members(*Named, Record, 0, Depth);
-      unsigned Budget = 256;
-      bool Complete = true;
-      for (const auto &Field : Record.Members) {
-        if (!Field.Type || Field.isBitfield() || Field.BitOffset % 8 ||
-            !scalarLeaves(*Named, convert(*Field.Type, Depth + 1),
-                          Field.BitOffset / 8, Budget)) {
-          Complete = false;
-          break;
-        }
-      }
-      if (!Complete)
-        Named->ScalarLeaves.clear();
+      leaves(*Named, Record, Depth);
     }
     if (CompleteValues) {
       if (!Record.Defined)
@@ -391,9 +448,152 @@ private:
   const types::TypeSpeller *PrototypeSpeller;
   bool CompleteValues;
   bool BorrowRecords;
+  SharedRecordBuild *Shared;
   llvm::StringMap<TypeRef> Records;
   llvm::StringSet<> ActiveRecords;
 };
+
+/// The records \p Type holds in place, by name: through arrays, typedefs and
+/// records of no name, never through a pointer.
+void heldRecords(const types::TypeLibrary &Library, const types::TypeExpr &Type,
+                 llvm::SmallVectorImpl<llvm::StringRef> &Held, unsigned Depth) {
+  if (Depth > kMaxLocalTypeConversionDepth)
+    return;
+  switch (Type.Kind) {
+  case types::TypeExprKind::Array:
+    if (Type.Element)
+      heldRecords(Library, *Type.Element, Held, Depth + 1);
+    return;
+  case types::TypeExprKind::Record:
+    if (Type.Record)
+      for (const types::Member &Field : Type.Record->Members)
+        if (Field.Type)
+          heldRecords(Library, *Field.Type, Held, Depth + 1);
+    return;
+  case types::TypeExprKind::Named:
+    if (const types::LocalType *Named = Library.find(Type.Name)) {
+      if (Named->Kind == types::TypeKind::Typedef && Named->Target)
+        heldRecords(Library, *Named->Target, Held, Depth + 1);
+      else if (Named->Kind == types::TypeKind::Struct ||
+               Named->Kind == types::TypeKind::Union)
+        Held.push_back(Named->Name);
+    }
+    return;
+  default:
+    return;
+  }
+}
+
+/// Converts the records a session shares: a record and every record it
+/// reaches, each once, as one node that the others name.  Each node's
+/// members and scalars read the library and the names alone, whichever
+/// record the session converted first.
+class SharedRecordConversion {
+public:
+  SharedRecordConversion(const types::TypeLibrary &Library,
+                         llvm::StringMap<TypeRef> &Records)
+      : Library(Library), Build{Records, {}},
+        Convert(Library, nullptr, false, false, &Build) {}
+
+  /// The shared node of the library's record \p Local, with every record it
+  /// reaches converted.
+  TypeRef convert(const types::LocalType &Local) {
+    const TypeRef Root =
+        Convert.convert(*types::makeNamed(Local.Name, Local.Kind), 0);
+    // Finding a record's scalars can name records no member did.
+    while (fillPending(), !Unfinished.empty())
+      finish(Unfinished.begin()->second.first);
+    return Root;
+  }
+
+private:
+  void fillPending() {
+    while (!Build.Pending.empty()) {
+      auto [Node, Def] = std::move(Build.Pending.back());
+      Build.Pending.pop_back();
+      Convert.fillShared(*Node, *Def);
+      Unfinished.try_emplace(Node.get(), std::move(Node), Def);
+    }
+  }
+  /// Finds \p Node's scalars after those of the records it holds in place.
+  void finish(TypeRef Node) {
+    const auto Found = Unfinished.find(Node.get());
+    if (Found == Unfinished.end())
+      return;
+    const types::RecordDef &Def = *Found->second.second;
+    // Taken first: a record that holds itself has no complete layout.
+    Unfinished.erase(Found);
+    llvm::SmallVector<llvm::StringRef, 8> Held;
+    for (const types::Member &Field : Def.Members)
+      if (Field.Type)
+        heldRecords(Library, *Field.Type, Held, 0);
+    for (llvm::StringRef Name : Held) {
+      const types::LocalType *Type = Library.find(Name);
+      if (!Type || !Type->Record)
+        continue;
+      const TypeRef Part =
+          Convert.convert(*types::makeNamed(Type->Name, Type->Kind), 0);
+      fillPending();
+      if (Part)
+        finish(Part);
+    }
+    Convert.sharedLeaves(*Node, Def);
+  }
+
+  const types::TypeLibrary &Library;
+  SharedRecordBuild Build;
+  Converter Convert;
+  /// Records whose members are converted and whose scalars are not found.
+  std::map<const NdType *, std::pair<TypeRef, const types::RecordDef *>>
+      Unfinished;
+};
+
+/// Each node \p Type reaches through its parts, in \p Nodes.
+void collectTypeNodes(const TypeRef &Type,
+                      llvm::DenseSet<const NdType *> &Nodes) {
+  llvm::SmallVector<const NdType *, 64> Work;
+  if (Type)
+    Work.push_back(Type.get());
+  while (!Work.empty()) {
+    const NdType *Node = Work.pop_back_val();
+    if (!Nodes.insert(Node).second)
+      continue;
+    for (const NdType *Part :
+         {Node->Pointee.get(), Node->ElemType.get(), Node->RetType.get()})
+      if (Part)
+        Work.push_back(Part);
+    for (const auto *Parts :
+         {&Node->Fields, &Node->ParamTypes, &Node->FieldDisplayTypes})
+      for (const TypeRef &Part : *Parts)
+        if (Part)
+          Work.push_back(Part.get());
+  }
+}
+
+/// Whether the library's record \p Name reaches more than \p Limit records
+/// through the types its definitions name.
+bool reachesMoreRecords(const types::TypeLibrary &Library, llvm::StringRef Name,
+                        size_t Limit) {
+  std::vector<std::string> Work{Name.str()};
+  llvm::StringSet<> Seen;
+  size_t Records = 0;
+  while (!Work.empty()) {
+    const std::string Next = std::move(Work.back());
+    Work.pop_back();
+    if (!Seen.insert(Next).second)
+      continue;
+    const types::LocalType *Type = Library.find(Next);
+    if (!Type)
+      continue;
+    if ((Type->Kind == types::TypeKind::Struct ||
+         Type->Kind == types::TypeKind::Union) &&
+        ++Records > Limit)
+      return true;
+    for (std::string &Named : types::mentionedTypeNames(*Type))
+      Work.push_back(std::move(Named));
+  }
+  return false;
+}
 
 /// Whether every member \p Record names for display is one \p Def has
 /// where the name says, and is no bitfield, which C reads otherwise than
@@ -533,6 +733,55 @@ LocalTypesDebugContext::~LocalTypesDebugContext() {
     Type.Type->FieldDisplayTypes = std::move(Type.Types);
     Type.Type->FieldDisplayAlignment = Type.Alignment;
   }
+  // What this context completed holds its parts no longer.
+  Completed.clear();
+  KeptTypes.clear();
+  Given.clear();
+  releaseSharedRecords();
+}
+
+void LocalTypesDebugContext::releaseSharedRecords() const {
+  // The shared records name each other.  Where nothing outside them holds
+  // one of their nodes any more, their parts let go of each other; a node
+  // still held keeps its parts.
+  llvm::DenseMap<const NdType *, long> Held;
+  for (const NdType *Node : SharedNodes) {
+    for (const NdType *Part :
+         {Node->Pointee.get(), Node->ElemType.get(), Node->RetType.get()})
+      if (Part)
+        ++Held[Part];
+    for (const auto *Parts :
+         {&Node->Fields, &Node->ParamTypes, &Node->FieldDisplayTypes})
+      for (const TypeRef &Part : *Parts)
+        if (Part)
+          ++Held[Part.get()];
+  }
+  for (const auto &Entry : SharedRecords)
+    if (Entry.second)
+      ++Held[Entry.second.get()];
+  // shared_from_this is unavailable: each node's count is read through a
+  // part that holds it.
+  bool Outside = false;
+  const auto Check = [&](const TypeRef &Part) {
+    if (Part && Part.use_count() > Held.lookup(Part.get()))
+      Outside = true;
+  };
+  for (const NdType *Node : SharedNodes) {
+    Check(Node->Pointee);
+    Check(Node->ElemType);
+    Check(Node->RetType);
+    for (const auto *Parts :
+         {&Node->Fields, &Node->ParamTypes, &Node->FieldDisplayTypes})
+      for (const TypeRef &Part : *Parts)
+        Check(Part);
+  }
+  for (const auto &Entry : SharedRecords)
+    Check(Entry.second);
+  if (Outside)
+    return;
+  for (const auto &Entry : SharedRecords)
+    if (Entry.second)
+      Entry.second->FieldDisplayTypes.clear();
 }
 
 const types::LocalType *
@@ -544,6 +793,29 @@ LocalTypesDebugContext::definedRecord(llvm::StringRef Name,
        Type->Kind != types::TypeKind::Union))
     return nullptr;
   return !Size || Size == Type->Record->Size ? Type : nullptr;
+}
+
+TypeRef
+LocalTypesDebugContext::libraryRecord(const types::LocalType &Local) const {
+  if (UnsharedRecords.contains(Local.Name))
+    return Converter(*Types).convert(*types::makeNamed(Local.Name, Local.Kind),
+                                     0);
+  if (const auto Found = SharedRecords.find(Local.Name);
+      Found != SharedRecords.end() && SharedNodes.contains(Found->second.get()))
+    return Found->second;
+  // Each record decides by what it reaches alone, so that a record another
+  // conversion shared reads as its own decides it.
+  if (reachesMoreRecords(*Types, Local.Name, kMaxLocalTypeSharedClosure)) {
+    UnsharedRecords.insert(Local.Name);
+    return Converter(*Types).convert(*types::makeNamed(Local.Name, Local.Kind),
+                                     0);
+  }
+  const TypeRef Root =
+      SharedRecordConversion(*Types, SharedRecords).convert(Local);
+  for (const auto &Entry : SharedRecords)
+    if (!SharedNodes.contains(Entry.second.get()))
+      collectTypeNodes(Entry.second, SharedNodes);
+  return Root;
 }
 
 bool LocalTypesDebugContext::takeLibraryNames(const TypeRef &Type) const {
@@ -563,10 +835,7 @@ bool LocalTypesDebugContext::takeLibraryNames(const TypeRef &Type) const {
     }
   } else {
     Local = definedRecord(Type->SourceName, Type->Size);
-    const TypeRef From =
-        Local ? Converter(*Types).convert(
-                    *types::makeNamed(Local->Name, Local->Kind), 0)
-              : nullptr;
+    const TypeRef From = Local ? libraryRecord(*Local) : nullptr;
     if (!From || From->Kind != NdTypeKind::Struct)
       return false;
     // Each member the debug information gave lies where one of the
@@ -584,7 +853,8 @@ bool LocalTypesDebugContext::takeLibraryNames(const TypeRef &Type) const {
     Members = From->FieldDisplayTypes;
     Alignment = From->FieldDisplayAlignment;
   }
-  CompletedRecords.insert(Type.get());
+  if (CompletedRecords.insert(Type.get()).second)
+    KeptTypes.push_back(Type);
   Read.insert(Local->Name);
   // A bounded conversion can retain every name and offset while leaving
   // member types incomplete. The matching library must complete those too;
@@ -616,7 +886,9 @@ void LocalTypesDebugContext::completeType(const TypeRef &Type) const {
   }
   {
     std::lock_guard<std::mutex> Guard(Mutex);
-    if (CompletedRecords.contains(Record.get()))
+    // A record libraryRecord shared is complete as converted.
+    if (CompletedRecords.contains(Record.get()) ||
+        SharedNodes.contains(Record.get()))
       return;
     // The library's members, which a record none has been given members
     // takes whole.
@@ -640,6 +912,8 @@ void LocalTypesDebugContext::completeType(const TypeRef &Type) const {
            ? Local->Kind == types::TypeKind::Enum
            : definedRecord(Record->SourceName, Record->Size) != nullptr) &&
       GivenTypes.insert(Record.get()).second;
+  if (Gives)
+    KeptTypes.push_back(Record);
   // The library's names in place of those it gave, which are the same
   // unless the user renamed them.
   takeLibraryNames(Record);

@@ -12,6 +12,7 @@
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/types/TypeParse.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <optional>
@@ -282,6 +283,139 @@ TEST(LocalTypesDebugContext, RecursiveRecordBorrowsReleaseAndComplete) {
   }
   EXPECT_TRUE(RootLifetime.expired());
   EXPECT_TRUE(BorrowLifetime.expired());
+}
+
+namespace {
+
+/// A library whose records reach each other through pointers, as a kernel's
+/// do, and hold a record in place.
+std::shared_ptr<neverd::types::TypeLibrary> recursiveRecordLibrary() {
+  auto Library = std::make_shared<neverd::types::TypeLibrary>(
+      neverd::types::DataModel::LLP64);
+  EXPECT_TRUE(neverd::types::parseCTypes(R"c(
+    struct Left;
+    struct Inner { unsigned short Kind; unsigned short Size; };
+    struct Right { struct Left *Back; struct Inner Header; unsigned Tag; };
+    struct Left { struct Right *Next; struct Left *Self; unsigned Value; };
+  )c",
+                                         *Library)
+                  .ok());
+  return Library;
+}
+
+/// The display members of \p Type, and of the records it reaches, to
+/// \p Depth records: names, offsets and the named records they point to.
+std::string displayLayout(const neverd::TypeRef &Type, unsigned Depth) {
+  if (!Type)
+    return "null";
+  std::string Out = Type->SourceName + "{";
+  for (size_t I = 0; I < Type->FieldDisplayNames.size(); ++I) {
+    Out += Type->FieldDisplayNames[I] + "@" +
+           std::to_string(Type->FieldDisplayOffsets[I]) + ":";
+    neverd::TypeRef Member = Type->FieldDisplayTypes[I];
+    while (Member && Member->Kind == neverd::NdTypeKind::Ptr) {
+      Out += "*";
+      Member = Member->Pointee;
+    }
+    if (Member && Member->Kind == neverd::NdTypeKind::Struct && Depth)
+      Out += displayLayout(Member, Depth - 1);
+    else if (Member)
+      Out += Member->SourceName.empty() ? std::to_string(Member->Size)
+                                        : Member->SourceName;
+    Out += ";";
+  }
+  return Out + "}";
+}
+
+} // namespace
+
+TEST(LocalTypesDebugContext, RecordsOfOneNameShareTheirLibraryMembers) {
+  // Each record the debug information gives of a library name takes the
+  // library's members, converted once: two of them read the same members,
+  // and completing those changes nothing.
+  using namespace neverd;
+  const auto Library = recursiveRecordLibrary();
+  NamesOnlyDebugContext Names;
+  sdk::LocalTypesDebugContext Context(Names, Library);
+  const TypeRef First = NdType::makeNamedRecord("Left", 0);
+  const TypeRef Second = NdType::makeNamedRecord("Left", 0);
+  Context.completeType(First);
+  Context.completeType(Second);
+  EXPECT_EQ(First->FieldDisplayNames,
+            (std::vector<std::string>{"Next", "Self", "Value"}));
+  EXPECT_EQ(First->FieldDisplayTypes, Second->FieldDisplayTypes);
+  const TypeRef Right = First->FieldDisplayTypes[0]->Pointee;
+  ASSERT_TRUE(Right);
+  EXPECT_EQ(Right->FieldDisplayNames,
+            (std::vector<std::string>{"Back", "Header", "Tag"}));
+  // A record a member reaches is complete as converted, and stays so.
+  const std::string Before = displayLayout(First, 4);
+  Context.completeType(Right);
+  Context.completeType(Right->FieldDisplayTypes[0]);
+  Context.completeType(Right->FieldDisplayTypes[1]);
+  EXPECT_EQ(displayLayout(First, 4), Before);
+  EXPECT_EQ(Right->FieldDisplayTypes[0]->Pointee->FieldDisplayNames,
+            (std::vector<std::string>{"Next", "Self", "Value"}));
+}
+
+TEST(LocalTypesDebugContext, CompletedRecordsReadTheSameInEitherOrder) {
+  // What a completed record reads, to any depth, is a function of the
+  // library and its name: never of what the context completed before.
+  using namespace neverd;
+  const auto Library = recursiveRecordLibrary();
+  std::vector<std::string> Layouts[2];
+  for (unsigned Order = 0; Order < 2; ++Order) {
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library);
+    std::vector<TypeRef> Records{NdType::makeNamedRecord("Left", 0),
+                                 NdType::makeNamedRecord("Right", 0),
+                                 NdType::makeNamedRecord("Inner", 0)};
+    if (Order)
+      std::reverse(Records.begin(), Records.end());
+    for (const TypeRef &Record : Records)
+      Context.completeType(Record);
+    // Members completed through their parents as the writer does.
+    for (const TypeRef &Record : Records)
+      for (const TypeRef &Member : Record->FieldDisplayTypes)
+        Context.completeType(Member);
+    if (Order)
+      std::reverse(Records.begin(), Records.end());
+    for (const TypeRef &Record : Records)
+      Layouts[Order].push_back(displayLayout(Record, 5));
+  }
+  EXPECT_EQ(Layouts[0], Layouts[1]);
+  EXPECT_NE(Layouts[0][0].find("Header@8:Inner{Kind@0:"), std::string::npos)
+      << Layouts[0][0];
+}
+
+TEST(LocalTypesDebugContext, CompletedTypesLiveAsLongAsTheContextNamesThem) {
+  // A type the writer copied for one unit and completed is held while the
+  // context remembers it as completed: another type allocated where it was
+  // must not read as completed.  The shared records go with the context.
+  using namespace neverd;
+  const auto Library = recursiveRecordLibrary();
+  std::weak_ptr<NdType> Copy, Shared;
+  {
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library);
+    const TypeRef Record = NdType::makeNamedRecord("Left", 0);
+    Context.completeType(Record);
+    {
+      // The first copy is also the variant of its name the debug
+      // information gave; the second reads as it does, and nothing else
+      // holds it.
+      auto First = std::make_shared<NdType>(*Record);
+      auto Second = std::make_shared<NdType>(*Record);
+      Context.completeType(First);
+      Context.completeType(Second);
+      Copy = Second;
+      Shared = Record->FieldDisplayTypes[0]->Pointee;
+    }
+    EXPECT_FALSE(Copy.expired());
+    EXPECT_FALSE(Shared.expired());
+  }
+  EXPECT_TRUE(Copy.expired());
+  EXPECT_TRUE(Shared.expired());
 }
 
 TEST(LocalTypesDebugContext, PortablePrototypesRetainIntegerKeywordIdentity) {

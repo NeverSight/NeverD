@@ -247,6 +247,15 @@ private:
   /// where each one it has lies where one of the library's does.  False
   /// where the library has none to give.  Holds Mutex.
   bool takeLibraryNames(const TypeRef &Type) const;
+  /// The library's record \p Local as takeLibraryNames gives it: converted
+  /// once in a session together with every record it reaches, each of them
+  /// one node that the others name, none changed afterwards.  A conversion
+  /// of its own where those are more than kMaxLocalTypeSharedClosure.  Holds
+  /// Mutex.
+  TypeRef libraryRecord(const types::LocalType &Local) const;
+  /// Lets the records libraryRecord shared release each other when
+  /// nothing outside them holds them.  Holds Mutex.
+  void releaseSharedRecords() const;
   /// The names the image states for the function at \p Entry, the one it
   /// is shown under first (BinaryImage::statedFunctionNamesAt).
   std::vector<std::string> statedNames(va_t Entry) const;
@@ -309,6 +318,16 @@ private:
   };
   mutable std::vector<Named> Completed;
   mutable llvm::DenseSet<const NdType *> CompletedRecords;
+  /// The types CompletedRecords and GivenTypes name, kept while they name
+  /// them: a type the writer copied for one unit is otherwise freed, and
+  /// another type allocated where it was would read as completed.
+  mutable std::vector<TypeRef> KeptTypes;
+  /// The records libraryRecord converted, by name, and every node of their
+  /// types: complete as converted, so completing one changes nothing.
+  mutable llvm::StringMap<TypeRef> SharedRecords;
+  mutable llvm::DenseSet<const NdType *> SharedNodes;
+  /// The records that reach too many to share.
+  mutable llvm::StringSet<> UnsharedRecords;
   mutable llvm::StringSet<> Read;
   /// The records and enumerations of the library's names that the debug
   /// information gave members or enumerators, by name: one of each that
