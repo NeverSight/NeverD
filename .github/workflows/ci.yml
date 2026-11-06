@@ -90,8 +90,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # check_source_provenance.py reads the most recent 16 commits.
-          fetch-depth: 32
           persist-credentials: false
 
       - name: Set up Python
@@ -168,12 +166,34 @@ jobs:
             scripts.tests.test_check_source_provenance -v
           "$PYTHON" scripts/check_capabilities.py
           "$PYTHON" scripts/check_python_plugin_sdk.py
-          "$PYTHON" scripts/check_source_provenance.py --history-commits 16
         env:
           CC: clang
           CXX: clang++
           PYTHON: python3
           PYTHONPATH: pluginsdk/python
+
+  # A private path in published content says nothing about the build, so this
+  # reports on its own and the native matrix does not wait for it.
+  source-provenance:
+    name: Source provenance
+    if: ${{ github.event.action != 'closed' && !inputs.native_cpu_only && !inputs.windows_eh_only }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # check_source_provenance.py reads the most recent 16 commits.
+          fetch-depth: 32
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Check source provenance
+        run: python3 scripts/check_source_provenance.py --history-commits 16
 
   build-and-test:
     name: Build and test (${{ matrix.name }})

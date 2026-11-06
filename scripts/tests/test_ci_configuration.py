@@ -540,13 +540,12 @@ find() { return 0; }
     def test_host_independent_checks_run_once_and_gate_the_native_matrix(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         checks = source.split("  repository-checks:\n", 1)[1].split(
-            "\n  build-and-test:\n", 1
+            "\n  source-provenance:\n", 1
         )[0]
         self.assertIn("    runs-on: ubuntu-24.04\n", checks)
-        # Nothing here reads a submodule, and the provenance audit needs history.
+        # Nothing here reads a submodule or commit history.
         self.assertNotIn("submodules:", checks)
-        self.assertIn("fetch-depth: 32", checks)
-        self.assertIn("scripts/check_source_provenance.py --history-commits 16", checks)
+        self.assertNotIn("fetch-depth:", checks)
 
         build = source.split("\n  build-and-test:\n", 1)[1].split("\n  native-cpu:\n", 1)[0]
         self.assertIn("    needs: repository-checks\n", build)
@@ -567,6 +566,23 @@ find() { return 0; }
         flags_step = self.workflow_step_containing(build, "Verify Debug and Release target flags")
         self.assertIn("if: runner.os != 'macOS'", flags_step)
         self.assertIn("scripts.tests.test_debug_build_configuration", flags_step)
+
+    def test_source_provenance_reports_without_holding_back_the_native_matrix(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        job = source.split("\n  source-provenance:\n", 1)[1].split(
+            "\n  build-and-test:\n", 1
+        )[0]
+        build = source.split("\n  build-and-test:\n", 1)[1].split("\n  native-cpu:\n", 1)[0]
+        # The audit runs once and reads the newest 16 commits.
+        self.assertEqual(source.count("scripts/check_source_provenance.py --"), 1)
+        self.assertIn("scripts/check_source_provenance.py --history-commits 16", job)
+        self.assertIn("fetch-depth: 32", job)
+        self.assertNotIn("\n    needs:", job)
+        self.assertNotIn("source-provenance", build)
+        self.assertEqual(
+            re.search(r"(?m)^    if: (.*)$", job).group(1),
+            re.search(r"(?m)^    if: (.*)$", build).group(1),
+        )
 
     def test_cases_that_execute_only_on_macos_stay_on_the_macos_leg(self):
         source = WORKFLOW.read_text(encoding="utf-8")

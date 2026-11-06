@@ -15653,6 +15653,10 @@ fragments that job runs on that host, and the two macOS cases that execute nowhe
 else. Tests of benchmark and generator tools that CI does not run on those hosts
 execute only on Linux.
 
+`Source provenance` scans the tree and the newest 16 commits in its own Linux job,
+and the native matrix does not wait for it. A private path in published content
+fails the run, while compilation and tests still report.
+
 Documentation translation checks stay in `LLVM Style`, which also sees
 Markdown-only pushes. The EVM audit tests stay in `EVM Upstream Audit`, apart from
 its macOS sandbox case. `Capstone fork contract` runs the pinned decoder's own
