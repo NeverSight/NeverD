@@ -260,6 +260,11 @@ No new LLVM intrinsic, SDK release or pin change is needed for this runtime
 binding. Reference: Intel SDM revision 093, volume 3 §§7.9, 20.2.1–20.2.5 and
 20.3.1.1.
 
+Native debug comparisons use the shared Intel host gate. The evidence records
+the complete P/E regression and the subsequent `dev` integration separately,
+including rebuilt runtime tests and byte-for-byte generated-source comparison.
+The gate does not change software execution or infer its profile from the host.
+
 ## Faultable LSS, LFS and LGS
 
 The paged V6 binding executes 16/32/64-bit far-pointer loads through the shared

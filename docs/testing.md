@@ -31,7 +31,9 @@ paged-execution and continuation source/export regressions. See the
 `X64PagedExecutionBreakpointTest.*`, `X86LegacyExecutionBreakpointTest.*` and
 `LegacyExecutionBreakpoint/*` qualify enabled DR0–DR3 execution comparators.
 Native tests disable debugger interception and compare all RAM and represented
-state, including DR6/DR7. They cover all enable pairs, RF/TF, coincident causes,
+state, including DR6/DR7. The shared Intel host gate bounds those native
+comparisons; software admission tests retain their ordinary host coverage.
+They cover all enable pairs, RF/TF, coincident causes,
 MOV/POP SS, original linear addresses, fetch/operand/PVI faults and failed
 debug entry. x64 adds eligible/masked IRQ/NMI and IRET/RETF targets, including
 nonflat compatibility code, linear-address wrap and all three frame widths.

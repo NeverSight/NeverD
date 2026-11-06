@@ -10,6 +10,12 @@
 
 class X86LegacyDebugNativeTest : public X86PagingNativeTest {
 protected:
+  void SetUp() override {
+    if (!neverd::test::hostCpuIsIntel())
+      GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
+    X86PagingNativeTest::SetUp();
+  }
+
   unsigned Comparisons = 0;
   unsigned RoundTrips = 0;
 

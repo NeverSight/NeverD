@@ -132,6 +132,8 @@ TEST_F(X64PagedExecutionBreakpointTest,
 
 #if defined(__linux__) && defined(__x86_64__)
 TEST_F(X64PagedExecutionBreakpointTest, OriginalComparatorsAndFaultPriority) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;
@@ -317,6 +319,8 @@ TEST_F(X64PagedExecutionBreakpointTest, OriginalComparatorsAndFaultPriority) {
 }
 
 TEST_F(X64PagedExecutionBreakpointTest, OriginalHandlerResumesAndRepairsOnce) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;
@@ -432,6 +436,8 @@ TEST_F(X64PagedExecutionBreakpointTest, OriginalHandlerResumesAndRepairsOnce) {
 }
 
 TEST_F(X64PagedExecutionBreakpointTest, CompatibilityReturnMatchesLinearPC) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;
@@ -548,6 +554,8 @@ TEST_F(X64PagedExecutionBreakpointTest, CompatibilityReturnMatchesLinearPC) {
 }
 
 TEST_F(X64PagedExecutionBreakpointTest, OriginalExternalEventPriority) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;
