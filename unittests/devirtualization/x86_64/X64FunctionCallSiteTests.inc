@@ -71,8 +71,6 @@ typedef struct { uint64_t GPR[16], PC; } neverd_x64_state_v6;
 )C";
   const char Driver[] = R"C(
 typedef int (*neverd_x64_environment_v6)(neverd_x64_state_v6 *,uint64_t,void *);
-/* These controller-only predicates do not invoke selected-handler resumes. */
-uint64_t neverd_x64_continue_v6(neverd_x64_state_v6 *,uint64_t *);
 static uint64_t ram[24];
 static unsigned copies,steps,runs,mode,invalid;
 static uintptr_t copied_address;

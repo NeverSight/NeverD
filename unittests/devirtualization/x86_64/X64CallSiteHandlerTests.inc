@@ -30,10 +30,12 @@ protected:
   }
 
   std::pair<std::string, std::string> exportHandlers(bool Paged, bool Scheduled,
-                                                     bool LLVM, bool Direct) {
+                                                     bool LLVM, bool Direct,
+                                                     bool Pause = true) {
     const auto Request = request(
-        (R"("entries":[4096,4112,4128,4144],"follow_internal_calls":true,"function_context":true,"pause_call_sites":true,"paged_memory":)" +
-         llvm::Twine(Paged ? "true" : "false") +
+        (R"("entries":[4096,4112,4128,4144],"follow_internal_calls":true,"function_context":true,"pause_call_sites":)" +
+         llvm::Twine(Pause ? "true" : "false") + R"(,"paged_memory":)" +
+         (Paged ? "true" : "false") +
          (Paged ? "" : R"(,"event_delivery":true)") +
          R"(,"scheduled_events":)" + (Scheduled ? "true" : "false") +
          (Direct ? R"(,"dispatch":"direct")" : "") +
@@ -85,6 +87,33 @@ TEST_F(X64CallSiteHandlerTest, CompileOnlyAndManifest) {
                                    "-o", tmpFile("call-handler.o").string()});
           ASSERT_TRUE(Built.ok()) << Built.err;
         }
+      }
+}
+
+TEST_F(X64CallSiteHandlerTest, HandlerInterfaceRequiresCallSitePauses) {
+  loadHandler();
+  for (bool Paged : {false, true})
+    for (bool Scheduled : {false, true})
+      for (bool LLVM : {false, true}) {
+        SCOPED_TRACE(Paged);
+        SCOPED_TRACE(Scheduled);
+        SCOPED_TRACE(LLVM);
+        const auto [Source, Report] =
+            exportHandlers(Paged, Scheduled, LLVM, false, false);
+        ASSERT_FALSE(Source.empty());
+        auto Manifest = llvm::json::parse(Report);
+        ASSERT_TRUE(bool(Manifest));
+        const auto *Sites =
+            Manifest->getAsObject()->getObject("function_call_sites");
+        ASSERT_NE(Sites, nullptr);
+        EXPECT_FALSE(Sites->get("handler_context_type"));
+        EXPECT_FALSE(Sites->get("begin_handler"));
+        EXPECT_FALSE(Sites->get("handler_domain"));
+        for (const auto &Site : *Sites->getArray("interfaces"))
+          EXPECT_FALSE(Site.getAsObject()->get("resume_handler"));
+        EXPECT_EQ(Source.find("neverd_x64_call_site_handler_context_v1"),
+                  std::string::npos);
+        EXPECT_EQ(Source.find("neverd_x64_resume_handler_"), std::string::npos);
       }
 }
 

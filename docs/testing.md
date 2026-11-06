@@ -20411,7 +20411,8 @@ HighIR structuring contract; it requires no external source interface.
 
 ### Explicit x64 continuation export
 
-`X64CallSiteHandlerTest.*` compiles both C routes at O0/O2 and uses optimizer
+`X64CallSiteHandlerTest.*` verifies that handler interfaces require call-site
+pauses, compiles both C routes at O0/O2 and uses optimizer
 predicates over the actual generated controller and instruction bodies. The
 proofs override helper/direct-driver inlining attributes; instruction/controller
 bodies and effects are unchanged, and ordinary O0/O2 compilation uses unmodified

@@ -1,7 +1,9 @@
 # Remaining x64 C-quality work
 
 Pending original CALLs now have a separate selected-handler resume interface in
-both V6 memory modes, with and without scheduling. A producer explicitly binds
+both V6 memory modes, with and without scheduling, when call-site pauses are
+enabled. Those pauses prevent a near RET/fallthrough from executing CALL before
+a privilege return is observed. A producer explicitly binds
 the delivered handler context. Existing region instructions retain its original
 RAM/register effects, and only an actual successful privilege return to the
 pending CALL PC/SP permits retry; paged returns need attempted progress too.

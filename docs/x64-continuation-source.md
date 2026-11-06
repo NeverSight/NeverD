@@ -488,8 +488,11 @@ for guest addresses or ordinary parameters.
 
 ### Resuming selected handlers before an original CALL
 
-Each call-site interface also exports `resume_handler_<mode>site_<address>_v6`.
-Use it when a pending CALL has stopped at a delivered event/fault handler and
+With `pause_call_sites: true`, each call-site interface also exports
+`resume_handler_<mode>site_<address>_v6`. The pauses prevent a near RET or
+fallthrough from executing the pending CALL before a privilege return is
+observed. Without them the handler context and interfaces are not exported.
+Use this interface when a pending CALL has stopped at a delivered event/fault handler and
 that handler's instructions are selected. This is an explicit handler-context
 declaration by the producer; a matching PC/SP does not establish it. Retain a
 separate `neverd_x64_call_site_handler_context_v1` alongside the site:
@@ -542,7 +545,7 @@ inferred, and `paged_debug` retains its separate function-context refusal.
 
 The manifest records `handler_context_type`, `begin_handler`, `handler_domain`
 and each site's `resume_handler`. Existing start/resume interfaces and every
-instruction driver remain unchanged. Only requests with call sites emit these
+instruction driver remain unchanged. Only requests with call sites and their pauses emit these
 additional helpers; ordinary decompilation and site-free exports do not gain
 analysis or per-instruction checks. This closes selected-handler/pending-CALL
 composition, not initial state capture, frame/address-space lifetime proof,
