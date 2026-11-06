@@ -150,15 +150,26 @@ std::optional<LLVMArgumentBinding> bindResolvedLLVMArguments(
       Floating > Count - Integers)
     return std::nullopt;
   const auto [WantedIntegers, WantedFloating] = *Banks;
-  if (WantedIntegers > Integers || WantedFloating > Floating)
+  const bool TakesStackValues = WantedIntegers + WantedFloating < Fixed;
+  if ((WantedIntegers > Integers && !TakesStackValues) ||
+      WantedFloating > Floating)
     return std::nullopt;
   LLVMArgumentBinding Binding;
   auto Append = [&](unsigned I) {
     Binding.Values.push_back(Values[I]);
     Binding.SourceIndices.push_back(I);
   };
-  for (unsigned I = 0; I < WantedIntegers; ++I)
-    Append(I);
+  for (unsigned I = 0; I < WantedIntegers; ++I) {
+    if (I < Integers) {
+      Append(I);
+      continue;
+    }
+    if (!Binding.FirstUnsetInteger)
+      Binding.FirstUnsetInteger = I;
+    Binding.Values.push_back(llvm::Constant::getNullValue(
+        Target.getFunctionType()->getParamType(I)));
+    Binding.SourceIndices.push_back(-1);
+  }
   for (unsigned I = 0; I < WantedFloating; ++I)
     Append(Integers + I);
 
@@ -339,6 +350,7 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
     llvm::IRBuilder<> Builder(Call);
     std::vector<int> Indices;
     std::vector<llvm::Value *> Values;
+    std::optional<unsigned> FirstUnset;
     for (unsigned I = 0; I < Call->arg_size(); ++I) {
       Indices.push_back(I);
       Values.push_back(Call->getArgOperand(I));
@@ -354,6 +366,7 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
         return Refuse("lacks recovered argument bank or stack values");
       Indices = std::move(Bound->SourceIndices);
       Values = std::move(Bound->Values);
+      FirstUnset = Bound->FirstUnsetInteger;
     }
     if (Values.size() < Fixed)
       return Refuse("lacks recovered arguments");
@@ -403,6 +416,8 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
     if (CallerBanks && TargetBanks && !Target->isVarArg())
       setLLVMArgumentBanks(*Replacement, TargetBanks->first,
                            TargetBanks->second);
+    if (FirstUnset)
+      setLLVMFirstUnsetInteger(*Replacement, *FirstUnset);
     if (Replacement->getType() != Call->getType())
       for (unsigned Kind :
            {llvm::LLVMContext::MD_range, llvm::LLVMContext::MD_nonnull,
@@ -429,15 +444,39 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
 bool validateResolvedLLVMCallSignatures(llvm::Module &Module,
                                         bool AnalystSourceProjection) {
   const auto &Layout = Module.getDataLayout();
+  // Binding passed zero for integer positions the call does not set. Now that
+  // the body is known, it must not read them. A callee defined in another
+  // shard answers when the linked module is validated.
+  auto ReadsUnsetInteger = [](const llvm::CallBase &Call,
+                              const llvm::Function &Target) {
+    const auto First = getLLVMFirstUnsetInteger(Call);
+    const auto Banks = getLLVMArgumentBanks(Target);
+    if (!First || Target.isDeclaration())
+      return false;
+    if (!Banks)
+      return true;
+    for (unsigned I = *First; I < Banks->first; ++I)
+      if (!Target.getArg(I)->use_empty())
+        return true;
+    return false;
+  };
   for (auto &Function : Module)
     for (auto &Block : Function)
       for (auto &Instruction : Block)
         if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
           if (auto *Target = llvm::dyn_cast_or_null<llvm::Function>(
                   constantCallIdentity(Call->getCalledOperand(), Layout,
-                                       Layout.getPointerSizeInBits()));
-              Target && (Call->getFunctionType() != Target->getFunctionType() ||
-                         Call->getCallingConv() != Target->getCallingConv())) {
+                                       Layout.getPointerSizeInBits()))) {
+            if (ReadsUnsetInteger(*Call, *Target)) {
+              syncError() << "med_llvm_emitter: resolved call in "
+                          << Function.getName()
+                          << " does not set a register argument "
+                          << Target->getName() << " reads\n";
+              return false;
+            }
+            if (Call->getFunctionType() == Target->getFunctionType() &&
+                Call->getCallingConv() == Target->getCallingConv())
+              continue;
             if (AnalystSourceProjection &&
                 Call->getMetadata("neverd.source.analyst-call"))
               continue;
@@ -1589,6 +1628,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   for (unsigned I = 0; I < Args.size(); ++I)
     ArgumentIndices.push_back(I);
   bool BoundArgumentBanks = false;
+  std::optional<unsigned> FirstUnsetInteger;
   if (Target && Callee && CI && CI->IntegerRegisterArgCount >= 0 &&
       CI->FloatingRegisterArgCount >= 0 && getLLVMArgumentBanks(*Callee) &&
       !Callee->isVarArg()) {
@@ -1631,6 +1671,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     }
     Args = std::move(Bound->Values);
     BoundArgumentBanks = true;
+    FirstUnsetInteger = Bound->FirstUnsetInteger;
   }
   if (Op.ScalarCallSignature &&
       !Op.ScalarCallSignature->ParameterElements.empty()) {
@@ -1983,6 +2024,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (BoundArgumentBanks) {
       const auto Banks = getLLVMArgumentBanks(*Callee);
       setLLVMArgumentBanks(*Emitted, Banks->first, Banks->second);
+      if (FirstUnsetInteger)
+        setLLVMFirstUnsetInteger(*Emitted, *FirstUnsetInteger);
     } else if (CI && CI->IntegerRegisterArgCount >= 0 &&
                CI->FloatingRegisterArgCount >= 0 &&
                static_cast<unsigned>(CI->IntegerRegisterArgCount) <=

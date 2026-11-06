@@ -1799,6 +1799,43 @@ TEST(PipelineOutcome, ResolvedCallsKeepIndependentArgumentBanksAndStackSlots) {
   }
 }
 
+TEST(PipelineOutcome, ResolvedCallsReachStackValuesPastUnsetIntegers) {
+  // `f(float x12)` recovers no integer register at its call, while its callee
+  // declares every integer position below its stack parameters. Those positions
+  // pass as zero only for a body that does not read them.
+  for (bool Reads : {false, true}) {
+    SCOPED_TRACE(Reads);
+    llvm::LLVMContext C;
+    llvm::Module Module("unset_integers", C);
+    Module.setDataLayout("e-p:64:64");
+    auto *I64 = llvm::Type::getInt64Ty(C);
+    auto *Target = llvm::Function::Create(
+        llvm::FunctionType::get(I64, {I64, I64, I64}, false),
+        llvm::GlobalValue::ExternalLinkage, "target", Module);
+    setLLVMArgumentBanks(*Target, 2, 0);
+    llvm::IRBuilder<> Body(llvm::BasicBlock::Create(C, "entry", Target));
+    Body.CreateRet(Reads ? Body.CreateAdd(Target->getArg(1), Target->getArg(2))
+                         : static_cast<llvm::Value *>(Target->getArg(2)));
+    auto *Caller = llvm::Function::Create(llvm::FunctionType::get(I64, false),
+                                          llvm::GlobalValue::ExternalLinkage,
+                                          "caller", Module);
+    llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", Caller));
+    auto *Call = B.CreateCall(llvm::FunctionType::get(I64, {I64}, false),
+                              Target, {B.getInt64(31)});
+    setLLVMArgumentBanks(*Call, 0, 0, {0}, 8);
+    B.CreateRet(Call);
+
+    ASSERT_TRUE(normalizeResolvedLLVMCalls(Module));
+    auto *Bound = llvm::cast<llvm::CallBase>(&Caller->getEntryBlock().front());
+    ASSERT_EQ(Bound->arg_size(), 3u);
+    EXPECT_EQ(Bound->getArgOperand(0), B.getInt64(0));
+    EXPECT_EQ(Bound->getArgOperand(1), B.getInt64(0));
+    EXPECT_EQ(Bound->getArgOperand(2), B.getInt64(31));
+    EXPECT_EQ(getLLVMFirstUnsetInteger(*Bound), 0u);
+    EXPECT_EQ(validateResolvedLLVMCallSignatures(Module), !Reads);
+  }
+}
+
 TEST(PipelineOutcome, ResolvedCallsRefuseMissingValuesInEitherArgumentBank) {
   for (bool MissingFloating : {false, true}) {
     SCOPED_TRACE(MissingFloating);
