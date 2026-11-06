@@ -265,4 +265,86 @@ TEST_F(X64PagedEventTest, FREDControlCannotUseLegacyIDTDelivery) {
   EXPECT_EQ(get(0x1000), 0x2007u);
 }
 
+TEST_F(X64PagedEventTest, AcceptedNMIResumesWithoutRecheckingItsOwnBlocker) {
+  put(0x4030, 0x800003);
+  const auto R = deliver(2, X64ContinuationEventKind::NMI);
+  ASSERT_EQ(R.Status, X64PagedEventStatus::BackingFault);
+  ASSERT_TRUE(R.Continuation);
+  EXPECT_TRUE(R.InputAccepted);
+  EXPECT_EQ(State.NMIBlocked, 1);
+  ASSERT_EQ(Memory->physicalMemory()
+                .storeScalar(0x4030, GuestScalarWidth::I64, 0x6003)
+                .Status,
+            GuestMemoryAccessStatus::Completed);
+  const auto Resumed = llvm::cantFail(
+      resumeX64PagedEvent(State, *Memory, *R.Continuation, 0xffff));
+  EXPECT_EQ(Resumed.Status, X64PagedEventStatus::Delivered);
+  EXPECT_EQ(Resumed.DeliveredVector, 2);
+  EXPECT_TRUE(Resumed.InputAccepted);
+  EXPECT_FALSE(Resumed.Continuation);
+  EXPECT_EQ(State.NMIBlocked, 1);
+  EXPECT_EQ(get(State.Core.Core.Core.Core.GPR[4]), 0x9000u);
+}
+
+TEST_F(X64PagedEventTest, ResumeRetainsSecondaryFaultAndSoftwareRestartPC) {
+  State.IDTR.Base = 0x6f80;
+  for (unsigned V = 0; V != 256; ++V)
+    gate(V);
+  gate(3, 0x0e);
+  put(0x4038, 0x800003); // The secondary #NP gate has no backing.
+  Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+  X64ContinuationEventV1 Event;
+  Event.Vector = 3;
+  Event.Kind = X64ContinuationEventKind::Software;
+  Event.SavedPC = 0x9001;
+  const auto R =
+      llvm::cantFail(deliverX64PagedEvent(State, *Memory, Event, 0xffff));
+  ASSERT_EQ(R.Status, X64PagedEventStatus::BackingFault);
+  ASSERT_TRUE(R.Continuation);
+  EXPECT_EQ(R.Continuation->Event.Vector, 11);
+  EXPECT_EQ(R.Continuation->FaultPC, 0x9000u);
+  ASSERT_EQ(Memory->physicalMemory()
+                .storeScalar(0x4038, GuestScalarWidth::I64, 0x7003)
+                .Status,
+            GuestMemoryAccessStatus::Completed);
+  // Repairing the original gate must not replace the already selected #NP.
+  ASSERT_EQ(Memory->physicalMemory()
+                .storeScalar(0x6fb5, GuestScalarWidth::I8, 0x8e)
+                .Status,
+            GuestMemoryAccessStatus::Completed);
+  const auto Resumed = llvm::cantFail(
+      resumeX64PagedEvent(State, *Memory, *R.Continuation, 0xffff));
+  EXPECT_EQ(Resumed.Status, X64PagedEventStatus::Delivered);
+  EXPECT_EQ(Resumed.DeliveredVector, 11);
+  const auto SP = State.Core.Core.Core.Core.GPR[4];
+  EXPECT_EQ(get(SP), 26u);
+  EXPECT_EQ(get(SP + 8), 0x9000u);
+  EXPECT_EQ(get(SP + 24), 0x10202u);
+}
+
+TEST_F(X64PagedEventTest,
+       ResumeDoesNotRereadDescriptorOverwrittenByPartialFrame) {
+  State.Core.Core.Core.Core.GPR[4] = 0x5020;
+  put(0x4020, 0x800003); // Final PC slot crosses into unbacked page four.
+  const auto R = deliver(1, X64ContinuationEventKind::Trap);
+  ASSERT_EQ(R.Status, X64PagedEventStatus::BackingFault);
+  ASSERT_TRUE(R.Continuation);
+  EXPECT_EQ(get(0x5008),
+            0x202u); // Saved flags have overwritten the CS descriptor.
+  EXPECT_EQ(get(0x5010), 0x5020u);
+  EXPECT_EQ(get(0x5018), 16u);
+  ASSERT_EQ(Memory->physicalMemory()
+                .storeScalar(0x4020, GuestScalarWidth::I64, 0x14003)
+                .Status,
+            GuestMemoryAccessStatus::Completed);
+  const auto Resumed = llvm::cantFail(
+      resumeX64PagedEvent(State, *Memory, *R.Continuation, 0xffff));
+  EXPECT_EQ(Resumed.Status, X64PagedEventStatus::Delivered);
+  EXPECT_EQ(Resumed.DeliveredVector, 1);
+  EXPECT_EQ(State.Core.Core.Core.Core.PC, 0x10010u);
+  EXPECT_EQ(State.Core.CS.Attributes, 0xa09bu);
+  EXPECT_EQ(State.Core.Core.Core.Core.GPR[4], 0x4ff8u);
+  EXPECT_EQ(get(0x14ff8), 0x9000u);
+}
+
 } // namespace

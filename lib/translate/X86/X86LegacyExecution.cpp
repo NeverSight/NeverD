@@ -17,6 +17,7 @@
 #include "X86LegacySegmentEncoding.h"
 #include "X86LegacyString.h"
 
+#include "neverd/ir/X86/X86DebugRules.h"
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 
 #include "llvm/Support/Errc.h"
@@ -39,9 +40,8 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                                          const X86LegacyExecutionOptions &O) {
   if (bool(S.Debug) != bool(O.Debug) ||
       (O.Debug && O.Debug != X86LegacyDebugProfile::InstructionStep) ||
-      (S.Debug && (S.Debug->DR7 != 0x400 || S.Debug->DebugCTL != 0 ||
-                   (S.Debug->DR6 & 0xfffe07f0u) != 0xfffe07f0u ||
-                   (S.Debug->DR6 & 0x1000))))
+      (S.Debug && !x86InstructionDebugValid(S.Debug->DR6, S.Debug->DR7,
+                                            S.Debug->DebugCTL)))
     return invalid("legacy debug state requires the instruction-step profile, "
                    "valid DR6, inactive DR7 and zero DEBUGCTL");
   auto Controls = M.controls();
@@ -242,8 +242,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     // Publish the debug cause before IDT entry: it survives a failed #DB
     // delivery and a backing stop. Software INT 1 does not update DR6.
     if (State.Debug)
-      State.Debug->DR6 = (State.Debug->DR6 & ~0xfu) | 0x10000u |
-                         (FromSingleStep ? 0x4000u : 0);
+      State.Debug->DR6 =
+          x86InstructionDebugStatus(State.Debug->DR6, FromSingleStep);
     State.SSBlocked = State.STIBlocked = false;
     return Enter({State.EIP, 0, 0, 1, X86LegacyEventKind::Trap}, Completed);
   };

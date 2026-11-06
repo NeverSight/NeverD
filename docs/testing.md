@@ -15,6 +15,19 @@ lifetime. A userspace IRQ must wait for KVM's injection window: an immediate
 `KVM_INTERRUPT` while IF=0 is not a valid pending-event oracle.
 See [the generated execution contract](x86-paged-execution.md).
 
+`X64PagedDebugTest.*` in `NeverDX64PagedExecutionTests` qualifies the opt-in
+instruction-step bank. Both C routes compile with Clang and optional NeverC at
+O0/O2; the original KVM CPU runs without guest-debug interception. Cases cover
+TF/RF, DR6 sticky inputs, CPL0..3, POPFQ/IRET changes, MOV SS/LSS, ICEBP/software
+INT, REP elements, near control, faults and failed debug entry. Native handlers
+count traps, IRET and repair a page before retry. Full RAM equality includes
+preseeded page tables. Admission/backing tests check producer and budget
+accounting. `X64PagedEventTest.*` additionally checks accepted NMI and secondary
+fault resume, including partial frames that overwrite earlier descriptors.
+Run debug comparisons on both qualified P/E cores and SDKs, then paging,
+paged-execution and continuation source/export regressions. See the
+[debug contract](x86-paged-execution.md#instruction-step-debug-events).
+
 `NeverDInstructionRelocationsTests` checks address-field selection against an
 independent linear membership oracle on x86, x64, ARM and AArch64 metadata in
 COFF, ELF and Mach-O. It covers disjoint and touching ranges, included first

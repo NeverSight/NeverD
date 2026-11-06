@@ -63,6 +63,7 @@ public:
   uint8_t PhysicalBits = 0;
   bool SMAP = false;
   uint8_t InterruptShadow = 0;
+  std::optional<kvm_debugregs> DebugRegisters;
   unsigned ReturnCoreType = 0;
   int ReturnProcessor = -1;
   std::optional<cpu_set_t> OriginalAffinity;
@@ -216,6 +217,8 @@ public:
     R.rip = Core.PC;
     R.rflags = Core.RFlags;
     ASSERT_EQ(ioctl(CPU, KVM_SET_REGS, &R), 0);
+    if (DebugRegisters)
+      ASSERT_EQ(ioctl(CPU, KVM_SET_DEBUGREGS, &*DebugRegisters), 0);
     kvm_guest_debug Debug{};
     Debug.control =
         DisableDebugStop ? 0 : KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_HW_BP;
@@ -252,6 +255,8 @@ public:
         << "KVM exit " << Run->exit_reason;
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &R), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &S), 0);
+    if (DebugRegisters)
+      ASSERT_EQ(ioctl(CPU, KVM_GET_DEBUGREGS, &*DebugRegisters), 0);
     if (CaptureReturn && NormalizeReturnBreakpoint && R.rip == 0x1801) {
       // Restored RF suppresses the first execution breakpoint. The original
       // target NOP advances RIP and clears RF, with no other architectural

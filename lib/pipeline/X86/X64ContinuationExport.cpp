@@ -124,6 +124,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
                                        "native_sev_guest_exit",
                                        "event_delivery",
                                        "paged_memory",
+                                       "paged_debug",
                                        "scheduled_events",
                                        "native_hyperv_hypercall_entry",
                                        "follow_internal_calls",
@@ -230,6 +231,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
       {"native_sev_guest_exit", &Options.NativeSevGuestExit},
       {"event_delivery", &Options.EventDelivery},
       {"paged_memory", &Options.PagedMemory},
+      {"paged_debug", &Options.PagedDebug},
       {"scheduled_events", &Options.ScheduledEvents},
       {"follow_internal_calls", &Result.FollowInternalCalls},
       {"function_context", &Result.FunctionContext},
@@ -300,6 +302,9 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
   if (bool(Object->get("entries")) == bool(Object->get("instructions")))
     return invalid("select exactly one of entries or instructions");
   Result.Entries = Object->get("entries") != nullptr;
+  if (Options.PagedDebug && Result.FunctionContext)
+    return invalid("paged_debug requires instruction-region dispatch; "
+                   "function completion across debug handlers is not bound");
   if (Object->get("follow_direct_jumps") && !Result.Entries)
     return invalid("follow_direct_jumps requires entries");
   if (Result.FunctionContext &&
@@ -933,6 +938,7 @@ typedef struct neverd_x64_event_v1 {
            : "neverd_x64_run_v" + std::to_string(Version)},
       {"event_delivery", Request->Options.EventDelivery},
       {"paged_memory", Request->Options.PagedMemory},
+      {"paged_debug", Request->Options.PagedDebug},
       {"scheduled_events", Request->Options.ScheduledEvents},
       {"scheduled_event_driver",
        Request->Options.ScheduledEvents
@@ -1126,11 +1132,17 @@ typedef struct neverd_x64_event_v1 {
         "state and operand data, retained paging/progress effects and "
         "recursive "
         "IDT faults; explicit MOVS/STOS/LODS/CMPS/SCAS progress profile; "
-        "no TF, native providers, port-string/gather/XSAVE partial completion, "
+        "no native providers, gather/XSAVE partial completion, "
         "LOCK, intra-element asynchronous events, MMIO, CET/FRED, SMM or "
         "enclave "
         "execution; "
         "state, context and budgets are disjoint from guest RAM";
+    Report["instruction_debug"] =
+        Request->Options.PagedDebug
+            ? "explicit nontransactional TF/ICEBP bank; DR7=0x400, DEBUGCTL=0; "
+              "entry TF, committed REP elements and MOV-SS inhibition; DR6 "
+              "published before #DB IDT entry; region dispatch only"
+            : "TF excluded; no instruction-debug producer";
     Report["event_delivery_domain"] =
         "automatic synchronous #PF/#GP/#SS/#AC/#DE/#UD and software "
         "interrupts; shared paged IA-32e IDT entry, recursive faults, #DF and "

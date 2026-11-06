@@ -16,6 +16,7 @@
 #include "neverd/translate/X86/X86PagedMemory.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
@@ -63,6 +64,24 @@ enum class X64PagedEventStatus : uint8_t {
   Shutdown,
 };
 
+/// Accepted event at a physical backing stop, including a secondary fault.
+/// Keep the architectural state and existing RAM effects; repair backing and
+/// resume this record instead of re-executing the instruction or reselecting
+/// the original event. Completed reads are retained and completed writes are
+/// not replayed: frame writes can alias earlier descriptor/TSS inputs.
+struct X64PagedEventContinuation {
+  struct Access {
+    uint64_t Address = 0;
+    uint64_t Value = 0;
+    uint8_t Bytes = 0;
+    bool Write = false;
+  };
+  X64ContinuationEventV1 Event;
+  uint64_t FaultPC = 0;
+  std::optional<translate::X86MemoryException> LastException;
+  llvm::SmallVector<Access> CompletedAccesses;
+};
+
 struct X64PagedEventResult {
   X64PagedEventStatus Status = X64PagedEventStatus::InvalidState;
   /// The original event passed admission and inhibition before its first IDT
@@ -73,6 +92,7 @@ struct X64PagedEventResult {
   unsigned DeliveryAttempts = 0;
   std::optional<translate::X86MemoryException> LastException;
   std::optional<translate::GuestMemoryFault> BackingFault;
+  std::optional<X64PagedEventContinuation> Continuation;
 };
 
 /// Legacy IA-32e IDT entry with explicit RAM and control-register bindings.
@@ -97,6 +117,10 @@ llvm::Expected<X64PagedEventResult>
 deliverX64PagedEvent(X64ContinuationStateV6 &State,
                      translate::X86PagedMemory &Memory,
                      const X64ContinuationEventV1 &Event, uint32_t MXCSRMask);
+
+llvm::Expected<X64PagedEventResult> resumeX64PagedEvent(
+    X64ContinuationStateV6 &State, translate::X86PagedMemory &Memory,
+    const X64PagedEventContinuation &Continuation, uint32_t MXCSRMask);
 
 struct X64PagedInstructionTransitionResult {
   bool Completed = false;

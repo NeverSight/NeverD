@@ -1078,6 +1078,17 @@ struct Writer {
       append(Transition->Ops);
       rejectIf(*Transition->Rejected);
     } else if (flagIntrinsic(Op)) {
+      if (Options.PagedDebug && eventIntrinsic(Op, Intrinsic::Popf, 2)) {
+        pagedAccess(read(Op.Inputs[1]), 0, X64PagedAccess::PopFlags, false);
+        const auto System = temporary(), Split = temporary(),
+                   Packed = temporary();
+        emit(NdOp::LOAD, System, {NdVar::tmp(PagedContextPointer, 8)});
+        emit(NdOp::INT_AND, Split,
+             {load(offsetof(State, RFlags)), constant(Flags::SplitMask)});
+        emit(NdOp::INT_OR, Packed, {System, Split});
+        store(offsetof(State, RFlags), Packed);
+        return;
+      }
       std::optional<NdVar> InterruptMask;
       if (Options.PagedMemory)
         if (auto Set =
@@ -1382,6 +1393,11 @@ buildInstruction(SpecializationInstruction Instruction,
   const bool FarReturn = Return && !Return->Interrupt;
   const auto Interrupt =
       Events ? softwareInterruptVector(Instruction) : std::nullopt;
+  const bool DebugTrap =
+      Options.PagedDebug &&
+      Instruction.NativeBytes == std::vector<uint8_t>{0xf1} &&
+      Instruction.Ops.size() == 1 &&
+      eventIntrinsic(Instruction.Ops.front(), Intrinsic::Int1, 1);
   const auto FarPointer =
       Events && Instruction.ProfileProjection ==
                     InterpreterProfileProjection::X64FarPointerLoadV1
@@ -1464,14 +1480,14 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.UndefinedEffects.Effects.empty();
   if ((!FarPointer && !SegmentMove && !Repeated && !PortIO && !UserInterrupt &&
        !FredReturn && !Vmrun && !Mpx && !Hypercall && !Snp && !Hle &&
-       !SmmReturn && !SgxTransfer && !UndefinedInstruction &&
+       !SmmReturn && !SgxTransfer && !UndefinedInstruction && !DebugTrap &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
                                   LowUndefinedCoverage::Complete))) ||
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
        !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn && !Interrupt &&
        !UserInterrupt && !FredReturn && !Vmrun && !Hypercall && !Snp && !Hle &&
-       !SmmReturn && !SgxTransfer && !UndefinedInstruction))
+       !SmmReturn && !SgxTransfer && !UndefinedInstruction && !DebugTrap))
     RequireNative("instruction requires an explicit native environment");
   if (Instruction.UndefinedEffects.Effects.size() >
       std::size(State{}.Undefined))
@@ -1535,7 +1551,7 @@ buildInstruction(SpecializationInstruction Instruction,
                      Op.MemoryOrdering != NdMemoryOrdering::None;
     if (!Timestamp && !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn &&
         !Interrupt && !SmmReturn && !SgxTransfer && !UndefinedInstruction &&
-        !PortIO && !supportedOperation(Op, Options, Division)) {
+        !PortIO && !DebugTrap && !supportedOperation(Op, Options, Division)) {
       std::string Detail = "unsupported continuation operation: ";
       Detail += ndOpName(Op.Opcode);
       if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
@@ -1568,6 +1584,10 @@ buildInstruction(SpecializationInstruction Instruction,
       if (Op.Opcode == NdOp::INTRINSIC && !divisionPreconditionIntrinsic(Op) &&
           !alignmentIntrinsic(Op) && !UndefinedInstruction && !Interrupt &&
           !Iret && !FarReturn && !FarPointer && !SegmentMove && !PortIO &&
+          !DebugTrap &&
+          !(Options.PagedDebug &&
+            (PoppedFlags ||
+             Instruction.NativeBytes == std::vector<uint8_t>{0x9c})) &&
           !detail::x64InterruptFlagValue(Op, flagsProfile(Options)))
         RequireNative(
             "paged execution has no binding for this native intrinsic");
@@ -1656,6 +1676,7 @@ buildInstruction(SpecializationInstruction Instruction,
       Options.PagedMemory
           ? Flags::EntryMask | Flags::AlignmentCheckMask | Flags::ResumeMask |
                 Flags::IOPLMask | Flags::VirtualInterruptMask |
+                (Options.PagedDebug ? 0x100 : 0) |
                 ((Iret || FarReturn || FarPointer || SegmentMove || Repeated ||
                   PortIO)
                      ? 0x4000
@@ -1916,6 +1937,10 @@ buildInstruction(SpecializationInstruction Instruction,
     W.pagedAccess(constant(*Interrupt), Instruction.Fallthrough.Address,
                   X64PagedAccess::SoftwareInterrupt, false);
     W.leave(static_cast<Exit>(X64PagedExit::AccessFault));
+  } else if (DebugTrap) {
+    W.pagedAccess(constant(0), Instruction.Fallthrough.Address,
+                  X64PagedAccess::DebugTrap, false);
+    W.leave(static_cast<Exit>(X64PagedExit::AccessFault));
   } else if (Options.PagedMemory && (FarPointer || SegmentMove)) {
     const uint64_t NullBase =
         !Options.NullSegmentBasePolicy                                      ? 0
@@ -2009,6 +2034,8 @@ buildX64ContinuationSource(const BinaryImage &Image,
                            llvm::ArrayRef<va_t> Addresses,
                            const X64ContinuationSourceOptions &Options) {
   const bool Controls = hasControlState(Options);
+  if (Options.PagedDebug && !Options.PagedMemory)
+    return invalid("paged_debug requires paged_memory");
   if (Options.PagedMemory &&
       (Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
        Options.EventDelivery || Options.NativeTimestampReads ||

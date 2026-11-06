@@ -73,6 +73,10 @@ enum class X64PagedAccess : uint64_t {
   /// Legacy SSE register bitvectors; address and size are zero. Memory forms
   /// instead carry kX64PagedSseAccess on their existing operand callback.
   BeginSse = 20,
+  /// ICEBP has completed at size (fallthrough); address is unused.
+  DebugTrap = 21,
+  /// Address transports the POPFQ image; result is its system-flags portion.
+  PopFlags = 22,
 };
 
 struct X64PagedExchange {

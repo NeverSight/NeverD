@@ -509,6 +509,10 @@ struct X64ContinuationSourceOptions {
   /// belong to that executor. ScheduledEvents selects its faultable scheduler;
   /// native bindings and the no-fault EventDelivery interface remain separate.
   bool PagedMemory = false;
+  /// Bind TF/ICEBP to the paged runtime's explicit debug bank. Distinct
+  /// bridges carry current MOV-SS inhibition and require the bank before
+  /// polling/fetch. Ordinary no-fault profiles retain their earlier domain.
+  bool PagedDebug = false;
   /// Export instruction-entry validation and interrupt-shadow attribution for
   /// the optional bounded IRQ/NMI scheduler. Requires V6 EventDelivery or
   /// PagedMemory, which selects the corresponding memory and event owner.

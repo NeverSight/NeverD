@@ -43,6 +43,16 @@ enum class X64PagedSseAlignment : uint8_t {
   FullOperand,
 };
 
+/// Explicit nontransactional instruction-step bank. DR7 must be 0x400 and
+/// DEBUGCTL zero; hardware address/I/O breakpoints, GD and BTF need their own
+/// producer. This bank is disjoint from V6 state and guest RAM and outlives
+/// its execution context. External event producers own their own DR6 causes.
+struct X64PagedDebugState {
+  uint64_t DR6 = 0xffff0ff0;
+  uint64_t DR7 = 0x400;
+  uint64_t DebugCTL = 0;
+};
+
 struct X64PagedExecutionOptions {
   /// Required when CPL3 alignment checking is active. Absence refuses the
   /// entry before fetch or RAM effects instead of inferring a host CPU policy.
@@ -66,13 +76,14 @@ struct X64PagedExecutionOptions {
   /// Required only for MOVUPS/MOVDQU memory operands with CPL3/AM/AC active.
   /// Register forms and supervisor operands do not require this binding.
   std::optional<X64PagedSseAlignment> SseAlignment;
+  X64PagedDebugState *Debug = nullptr;
 };
 
 struct X64PagedExecutionResult {
   uint64_t Exit = uint64_t(X64ContinuationExitV1::InvalidState);
   bool InstructionAttempted = false;
-  /// Includes successful software interrupt entry; a delivery fault or an
-  /// intermediate REP element is false.
+  /// A completed instruction remains complete if its subsequent #DB entry
+  /// fails. Software INT requires successful entry; intermediate REP is false.
   bool InstructionCompleted = false;
   /// One irreversible device transfer, also retained on an INS guest fault.
   bool DeviceTransferCompleted = false;
@@ -105,17 +116,24 @@ public:
   /// the generated validator nor this check touches guest RAM.
   llvm::Expected<bool> validate(X64ContinuationStateV6 &State, uint64_t Address,
                                 X64PagedBody Validate,
-                                unsigned PagingAddressBits);
+                                unsigned PagingAddressBits,
+                                bool InstructionDebug = false);
 
   llvm::Expected<X64PagedExecutionResult>
   deliver(X64ContinuationStateV6 &State, const X64ContinuationEventV1 &Event,
           uint32_t MXCSRMask);
 
+  /// Resume lastResult().Delivery->Continuation after repairing backing.
+  /// The instruction/cause and any external producer acceptance stay consumed.
+  llvm::Expected<X64PagedExecutionResult>
+  resume(X64ContinuationStateV6 &State, X64PagedEventContinuation Continuation,
+         uint32_t MXCSRMask);
+
   llvm::Expected<X64PagedExecutionResult>
   execute(X64ContinuationStateV6 &State, uint64_t Address,
           llvm::ArrayRef<uint8_t> Bytes, X64PagedBody Body,
-          X64PagedBody Validate, uint32_t MXCSRMask,
-          unsigned PagingAddressBits);
+          X64PagedBody Validate, uint32_t MXCSRMask, unsigned PagingAddressBits,
+          std::optional<bool> DebugSSBlocked = std::nullopt);
 
   const X64PagedExecutionResult &lastResult() const { return Last; }
   const std::string &lastError() const { return Error; }
@@ -123,8 +141,11 @@ public:
   void recordError(llvm::Error Failure);
 
 private:
-  llvm::Error deliverEvent(X64ContinuationStateV6 &State,
-                           const X64ContinuationEventV1 &Event,
+  llvm::Error
+  deliverEvent(X64ContinuationStateV6 &State,
+               const X64ContinuationEventV1 &Event, uint32_t MXCSRMask,
+               const X64PagedEventContinuation *Continuation = nullptr);
+  llvm::Error deliverDebug(X64ContinuationStateV6 &State, bool SingleStep,
                            uint32_t MXCSRMask);
   translate::X86PagedMemory &Memory;
   X64PagedExecutionOptions Options;
@@ -143,6 +164,16 @@ neverd_x64_paged_step_v1(uint8_t *Context, uint8_t *State, uint64_t Address,
 extern "C" uint64_t
 neverd_x64_paged_validate_v1(uint8_t *Context, uint8_t *State, uint64_t Address,
                              X64PagedBody Validate, uint64_t PagingAddressBits);
+/// Debug exports use distinct bridges so an older runtime cannot silently
+/// omit a trap. The scheduler supplies its current MOV-SS shadow on each step.
+extern "C" uint64_t neverd_x64_paged_debug_step_v1(
+    uint8_t *Context, uint8_t *State, uint64_t Address, const uint8_t *Bytes,
+    uint64_t Size, X64PagedBody Body, X64PagedBody Validate, uint64_t MXCSRMask,
+    uint64_t PagingAddressBits, uint64_t SSBlocked);
+extern "C" uint64_t
+neverd_x64_paged_debug_validate_v1(uint8_t *Context, uint8_t *State,
+                                   uint64_t Address, X64PagedBody Validate,
+                                   uint64_t PagingAddressBits);
 extern "C" uint64_t neverd_x64_paged_event_v1(uint8_t *Context, uint8_t *State,
                                               const uint8_t *Event,
                                               uint64_t MXCSRMask);

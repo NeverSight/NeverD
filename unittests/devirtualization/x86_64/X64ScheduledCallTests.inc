@@ -193,7 +193,9 @@ TEST_F(X64ScheduledCallTest, RetainsArgumentAndProducerAdmission) {
         {request(
              R"("entries":[4128],"follow_internal_calls":true,"function_context":true,"scheduled_events":true,"function_calls":[{"entry":4128,"abi":"win64","argument_bytes":[8],"result_bytes":4}])"),
          request(
-             R"("entries":[4128],"follow_internal_calls":true,"function_context":true,"paged_memory":true,"scheduled_events":true,"function_calls":[{"entry":4128,"abi":"win64","argument_bytes":[8,8,8,8,4],"result_bytes":4}])")}) {
+             R"("entries":[4128],"follow_internal_calls":true,"function_context":true,"paged_memory":true,"scheduled_events":true,"function_calls":[{"entry":4128,"abi":"win64","argument_bytes":[8,8,8,8,4],"result_bytes":4}])"),
+         request(
+             R"("entries":[4128],"follow_internal_calls":true,"function_context":true,"paged_memory":true,"paged_debug":true,"scheduled_events":true,"function_calls":[{"entry":4128,"abi":"win64","argument_bytes":[8],"result_bytes":4}])")}) {
       const char *Report = "old";
       EXPECT_EQ(neverd_x64_continuation_source_v1(Session, Bad.data(),
                                                   Bad.size(), LLVM, &Report),
