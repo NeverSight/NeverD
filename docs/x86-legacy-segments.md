@@ -949,3 +949,11 @@ No LLVM release, SDK pin or submodule change is made for this boundary.
 Architectural references are Intel SDM Volume 2A CALL/JMP and Volume 3A's
 protection and call-gate chapters, from the
 [Intel manual page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+
+The [November 5 far-transfer qualification](evidence/x86-legacy-far-transfers-2026-11-05.json)
+records 1,700 tests across the native LLVM SDK and pinned r6: 1,698 passed,
+two explicit LA57 skips and no failures. The new far-transfer matrix performs
+10,912 original-CPU comparisons across both SDKs and qualified P/E cores.
+The source/export suites are regression checks for existing execution paths;
+they do not qualify a new i386 far-transfer source compiler. Diagnostic logs
+retain the parameter-copy ordering mismatch and the Capstone alias probe.
