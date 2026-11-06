@@ -908,7 +908,8 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     auto get = [&](sym::SymRef Child) -> ExprPtr {
       auto It = Built.find(Child.index());
       assert(It != Built.end() && "iterative HighIR rebuild lost an operand");
-      return It->second;
+      // A lost operand abandons this rewrite and keeps the source expression.
+      return It == Built.end() ? nullptr : It->second;
     };
     auto binop = [&](NdOp Op, llvm::ArrayRef<sym::SymRef> Operands) -> ExprPtr {
       if (Operands.empty())
@@ -945,7 +946,10 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       // `p - 8` rather than `-8 + p`.
       llvm::SmallVector<sym::SymRef, 8> Plus, Minus, Constants;
       for (sym::SymRef Term : Ctx.operands(Item.Ref)) {
-        if (Ctx.op(Term) == sym::SymOp::Mul) {
+        // A term spelled by an available local was built as that local, without
+        // its factors, so it cannot be rewritten as a subtraction of them.
+        if (Ctx.op(Term) == sym::SymOp::Mul &&
+            DefinitionViews.find(Term.index()) == DefinitionViews.end()) {
           llvm::ArrayRef<sym::SymRef> Factors = Ctx.operands(Term);
           if (Factors.size() == 2 && Ctx.isConst(Factors[0]) &&
               Ctx.constValue(Factors[0]).isAllOnes()) {

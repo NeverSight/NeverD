@@ -26,6 +26,7 @@
 #include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <string>
@@ -2458,6 +2459,44 @@ int main(void) {
   for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i) {
     uint64_t x = values[i];
 )C" + Checks + "}\nreturn 0;\n}\n";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
+TEST(HighSymSimplify, NegatedTermKeepsItsAvailableDefinition) {
+  auto Parameter = [](int Id) {
+    auto V = tempOfSize(Id, 4);
+    V.Kind = MedVar::Param;
+    return HighExpr::makeVar(V, NdType::makeInt(4, false));
+  };
+  const auto X = Parameter(0), Y = Parameter(1);
+  const auto Negated = HighExpr::makeVar(tempOfSize(10, 4), X->Type);
+  HighFunc F;
+  F.Name = "negated_definition";
+  F.Entry = kEntry;
+  F.ReturnType = X->Type;
+  F.Params = {{"x", X->Type, kNoParamReg, 0}, {"y", Y->Type, kNoParamReg, 1}};
+  F.Body = {
+      assignValue(Negated, HighExpr::makeBinop(NdOp::INT_SUB,
+                                               HighExpr::makeConst(0, 4), X)),
+      returnValue(HighExpr::makeBinop(NdOp::INT_ADD, Y, Negated))};
+  simplifyExprSemantics(F.Body);
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options));
+  OS.flush();
+  const std::string Program = C + R"C(
+int main(void) {
+  const uint32_t values[] = {0, 1, 2, 0x7fffffffu, 0x80000000u, 0xffffffffu};
+  for (unsigned i = 0; i != 6; ++i)
+    for (unsigned j = 0; j != 6; ++j)
+      if (negated_definition(values[i], values[j]) != values[j] - values[i])
+        return 1;
+  return 0;
+}
+)C";
   source_call_execution_test::compileAndRun(Program, {"-O0"});
   source_call_execution_test::compileAndRun(Program, {"-O2"});
 }
