@@ -87,14 +87,13 @@ TEST_F(X64PagedFunctionCallTest, RegisterViewsRetainAllStackInputs) {
   }
 }
 
-TEST_F(X64PagedFunctionCallTest, RejectsExtraStackObservationsAndCallSites) {
+TEST_F(X64PagedFunctionCallTest, RejectsExtraStackObservations) {
   loadInputs();
   for (bool LLVM : {false, true})
     for (
         const char *Call :
         {R"({"entry":4096,"abi":"win64","argument_bytes":[8,8,8,8,1],"result_bytes":8})",
-         R"({"entry":4096,"abi":"win64","argument_bytes":[null,null,null,null,null,8],"result_bytes":8})",
-         R"({"entry":4096,"abi":"win64","argument_bytes":[],"result_bytes":8,"call_sites":[4096]})"}) {
+         R"({"entry":4096,"abi":"win64","argument_bytes":[null,null,null,null,null,8],"result_bytes":8})"}) {
       SCOPED_TRACE(LLVM);
       SCOPED_TRACE(Call);
       const auto Request =

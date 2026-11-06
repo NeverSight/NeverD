@@ -15,6 +15,15 @@ lifetime. A userspace IRQ must wait for KVM's injection window: an immediate
 `KVM_INTERRUPT` while IF=0 is not a valid pending-event oracle.
 See [the generated execution contract](x86-paged-execution.md).
 
+`NeverDInstructionRelocationsTests` checks address-field selection against an
+independent linear membership oracle on x86, x64, ARM and AArch64 metadata in
+COFF, ELF and Mach-O. It covers disjoint and touching ranges, included first
+and last records, zero/wrapping extents, physical field widths, mutation of
+tree extrema, invalid owners and instruction-end relative adjustments. It
+does not execute instructions. The existing
+`X86_32_FunctionDiscovery.ANarrowLoadBaseAmongCodeIsData` check separately
+decodes original bytes to retain narrow-memory data provenance.
+
 `X64PagedSseTest.*` in `NeverDX64ContinuationExportTests` is safe for static-only
 qualification: it compiles actual HighC/LLVM-to-C vector bodies at O0/O2 and
 asks LLVM to prove value, full-state preservation, single-16-byte operand and
@@ -20349,7 +20358,7 @@ compile-only checks do not replace that coverage.
 
 `X64PagedFunctionCallTest.*` checks register-only and context-only paged entry
 views, retained physical stack positions, unchanged instruction/driver text,
-and refusal of scalar stack checks or pre-CALL bridges. Both C routes compile
+and refusal of scalar stack checks. Both C routes compile
 at O0/O2. Twenty-one predicates per route compile the actual MOV/XOR/RET bodies
 against an independent operand oracle and supply paged stop outcomes to the
 existing controller. They retain arbitrary incoming high-DWORD and register
@@ -20359,6 +20368,18 @@ Zero budget with an inaccessible/wrapping stack address adds no guest read.
 Every predicate must optimize to constant zero. No generated program, specimen
 or instruction executor runs; page walking, fault delivery and native CPU
 behavior remain separate runtime qualification.
+
+`X64PagedFunctionCallSiteTest.*` adds original direct CALL binding, unchanged
+disabled/omitted driver source, retained stack-slot coordinates and O0/O2
+compilation through both routes. Twenty-seven predicates per route compile the
+actual CALL/MOV/XOR/RET/SUB bodies, driver and bridges against independent
+operand equations and paged stop outcomes. They prove pre-CALL pause/budget
+ordering, unchanged arbitrary incoming bits, one return-cell store across
+resumes, RET cleanup, parent completion, cached results, fault/backing attempt
+accounting and pending retry only after producer restoration of the CALL PC/SP.
+A fault reaching the callee address cannot start its activation. Every
+predicate must fold to constant zero. These tests execute no generated code
+or guest handler and do not replace paging/fault-runtime qualification.
 
 `X64ContinuationExportTest.FunctionCallsRejectUnboundDeclarations` checks strict
 entry/ABI/width admission and the shared argument bound. Its

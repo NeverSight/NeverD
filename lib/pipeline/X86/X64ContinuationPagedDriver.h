@@ -9,6 +9,7 @@
 #ifndef NEVERD_PIPELINE_X86_X64CONTINUATIONPAGEDDRIVER_H
 #define NEVERD_PIPELINE_X86_X64CONTINUATIONPAGEDDRIVER_H
 
+#include "X64FunctionCallSites.h"
 #include "X64FunctionContext.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
@@ -23,7 +24,7 @@ inline void emitX64PagedDriver(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
     const analysis::X64ContinuationSourceOptions &Options, bool FollowCalls,
-    bool FunctionContext) {
+    bool FunctionContext, const X64FunctionCallSitePauses &CallSitePauses) {
   OS << R"C(
 /* Link the NeverD paged execution bridge. Context points to X64PagedExecution.
  * Each instruction verifies its original bytes through guest fetch permissions,
@@ -77,6 +78,8 @@ extern uint64_t neverd_x64_paged_progress_v1(uint8_t *);
 )C";
   for (const auto &Unit : Units) {
     OS << "        case 0x" << llvm::utohexstr(Unit.Address) << "ULL: ";
+    if (CallSitePauses.emit(OS, Unit.Address, ""))
+      continue;
     if (Unit.IsMovSS && !Unit.RequiresNativeExecution)
       OS << "return 5; /* Persistent MOV-SS inhibition needs the scheduler. "
             "*/\n";
