@@ -2244,6 +2244,54 @@ int main(void) {
   source_call_execution_test::compileAndRun(Program, {"-O2"});
 }
 
+TEST(HighSymSimplify, RepackedByteFlagsBecomeOneMaskedWord) {
+  auto V = tempOfSize(0, 8);
+  V.Kind = MedVar::Param;
+  const auto X = HighExpr::makeVar(V, NdType::makeInt(8, false));
+  auto Packed =
+      HighExpr::makeBinop(NdOp::INT_AND, X, HighExpr::makeConst(0x3c7300, 8));
+  for (unsigned Bit : {0u, 2u, 4u, 6u, 7u, 11u}) {
+    const auto Shifted =
+        HighExpr::makeBinop(NdOp::INT_RIGHT, X, HighExpr::makeConst(Bit, 8));
+    const auto Byte = integerCast(Shifted, 1);
+    const auto Flag =
+        HighExpr::makeBinop(NdOp::INT_AND, Byte, HighExpr::makeConst(1, 1));
+    Packed = HighExpr::makeBinop(
+        NdOp::INT_OR, Packed,
+        HighExpr::makeBinop(NdOp::INT_MULT, integerCast(Flag, 8),
+                            HighExpr::makeConst(uint64_t(1) << Bit, 8)));
+  }
+  HighFunc F;
+  F.Name = "repacked_flags";
+  F.Entry = kEntry;
+  F.ReturnType = X->Type;
+  F.Params = {{"x", X->Type, kNoParamReg, 0}};
+  F.Body = {returnValue(
+      HighExpr::makeBinop(NdOp::INT_OR, Packed, HighExpr::makeConst(2, 8)))};
+  simplifyExprSemantics(F.Body);
+  EXPECT_EQ(F.Body.front().RetVal->str().find(" >> "), std::string::npos);
+  EXPECT_EQ(F.Body.front().RetVal->str().find('*'), std::string::npos);
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options));
+  OS.flush();
+  const std::string Program = C + R"C(
+int main(void) {
+  uint64_t x = 0;
+  for (unsigned i = 0; i != 100000; ++i) {
+    if (repacked_flags(x) != ((x & 0x3c7bd5u) | 2u))
+      return 1;
+    x = x * UINT64_C(6364136223846793005) + 1442695040888963407u;
+  }
+  return 0;
+}
+)C";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
 TEST(HighSymSimplify, ConstantDivisorProofKeepsTrapsAndOperandEffects) {
   const auto X = HighExpr::makeVar(tempOfSize(0, 4), NdType::makeInt(4, false));
   const auto Dynamic = HighExpr::makeVar(tempOfSize(1, 4), X->Type);
