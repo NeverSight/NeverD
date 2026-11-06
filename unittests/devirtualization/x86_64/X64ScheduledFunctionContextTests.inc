@@ -41,6 +41,9 @@ protected:
 
   void prove(bool Paged, bool LLVM, llvm::StringRef Source,
              llvm::StringRef Probes, unsigned Expected) {
+    if (!neverd::test::compilerReadsCurrentIR(NEVERD_TEST_CLANG))
+      GTEST_SKIP() << "folding this model to a constant needs a current "
+                      "optimizer, and this Clang is older";
     const auto File = tmpFile("scheduled-function-proof.c");
     const auto InitialIR = tmpFile("scheduled-function-initial.ll");
     const auto IR = tmpFile("scheduled-function-proof.ll");

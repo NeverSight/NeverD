@@ -44,6 +44,9 @@ protected:
 
   void prove(bool LLVM, llvm::StringRef Source, llvm::StringRef Probes,
              unsigned Expected) {
+    if (!neverd::test::compilerReadsCurrentIR(NEVERD_TEST_CLANG))
+      GTEST_SKIP() << "folding this model to a constant needs a current "
+                      "optimizer, and this Clang is older";
     const auto File = tmpFile("paged-call-sites-proof.c");
     const auto InitialIR = tmpFile("paged-call-sites-initial.ll");
     const auto IR = tmpFile("paged-call-sites-proof.ll");

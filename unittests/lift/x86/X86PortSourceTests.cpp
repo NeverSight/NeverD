@@ -195,8 +195,14 @@ TEST(X86PortSource, ImmediateAndDxSelectorsKeepTheirUnsignedWidths) {
   const auto Clang = llvm::sys::findProgramByName("clang");
   ASSERT_TRUE(Clang) << "clang is required to compile the operand observers";
   std::vector<std::string> Compilers{*Clang};
-  if (auto GCC = llvm::sys::findProgramByName("gcc"))
-    Compilers.push_back(*GCC);
+  // GCC reads the emitted C23 from version 14. An older one is no observer.
+  if (auto GCC = llvm::sys::findProgramByName("gcc")) {
+    const std::optional<llvm::StringRef> Silent[] = {"", "", ""};
+    if (llvm::sys::ExecuteAndWait(
+            *GCC, {*GCC, "-std=gnu23", "-fsyntax-only", "-x", "c", "/dev/null"},
+            std::nullopt, Silent) == 0)
+      Compilers.push_back(*GCC);
+  }
   llvm::SmallString<128> Temporary;
   ASSERT_FALSE(
       llvm::sys::fs::createUniqueDirectory("neverd-port-source", Temporary));

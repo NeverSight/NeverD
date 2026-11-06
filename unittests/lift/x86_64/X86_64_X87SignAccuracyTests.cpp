@@ -651,31 +651,39 @@ TEST(X87SignContract, EveryIncomingBranchAndLoopRetainsTheRuntimeContext) {
 
 TEST(X87SignContract, AStaticFunctionBoundaryProvesNoSourceValue) {
   // An unconsumed entry read cannot establish the checked i386 consumer
-  // contract, so a sign change or FXAM still has no proven source value.
+  // contract, so a sign change or FXAM still has no proven source value. The
+  // instruction stays named as unsupported on every route. PE32 display
+  // recovery may keep the body for reading; machine lifting never does.
   for (BinaryFormat Format :
        {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
-    for (unsigned Opcode : {0xe0U, 0xe1U, 0xe5U}) {
-      auto Image = signControlFlowImage({0xd9, uint8_t(Opcode), 0xc3}, Format);
-      Image.Arch = Arch::X86;
-      Image.Bits = Bitness::Bits32;
-      llvm::LLVMContext Context;
-      PipelineOptions Options;
-      Options.EmitDumpOutput = false;
-      Options.LiftMode = true;
-      Options.SourceProjection = true;
-      Options.OnlyFunctionEntries = {Entry};
-      auto Result = Pipeline().run(Image, Context, Options);
-      ASSERT_EQ(Result.FunctionAudits.size(), 1U);
-      const auto &Audit = Result.FunctionAudits[0];
-      EXPECT_EQ(Audit.Disposition,
-                PipelineFunctionDisposition::RejectedIncomplete)
-          << Opcode;
-      EXPECT_NE(std::find(Audit.UnsupportedInstructions.begin(),
-                          Audit.UnsupportedInstructions.end(), Entry),
-                Audit.UnsupportedInstructions.end())
-          << Opcode;
-      EXPECT_FALSE(Audit.HasLLVMDefinition);
-    }
+    for (unsigned Opcode : {0xe0U, 0xe1U, 0xe5U})
+      for (bool SourceProjection : {false, true}) {
+        SCOPED_TRACE(testing::Message() << int(Format) << " " << Opcode << " "
+                                        << SourceProjection);
+        auto Image =
+            signControlFlowImage({0xd9, uint8_t(Opcode), 0xc3}, Format);
+        Image.Arch = Arch::X86;
+        Image.Bits = Bitness::Bits32;
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.LiftMode = true;
+        Options.SourceProjection = SourceProjection;
+        Options.OnlyFunctionEntries = {Entry};
+        auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_EQ(Result.FunctionAudits.size(), 1U);
+        const auto &Audit = Result.FunctionAudits[0];
+        EXPECT_NE(std::find(Audit.UnsupportedInstructions.begin(),
+                            Audit.UnsupportedInstructions.end(), Entry),
+                  Audit.UnsupportedInstructions.end());
+        if (SourceProjection && Format == BinaryFormat::COFF) {
+          EXPECT_EQ(Audit.Disposition, PipelineFunctionDisposition::Accepted);
+          continue;
+        }
+        EXPECT_EQ(Audit.Disposition,
+                  PipelineFunctionDisposition::RejectedIncomplete);
+        EXPECT_FALSE(Audit.HasLLVMDefinition);
+      }
 }
 
 TEST(X87SignContract, AStaticNativeEntryCannotUseTheInternalConsumerABI) {
