@@ -18028,7 +18028,7 @@ later accesses through the escaped address.
 
 Image storage classifies operand uses separately from shared expression nodes. A local memory use cannot hide a later escaping use, in either traversal order; the same classification controls bounded table extents.
 
-If an escaping unsized address has no admissible storage extent, including an extent beyond the shared embedding limit, emission fails explicitly before publishing source. It must not substitute a smaller scalar object.
+If an escaping unsized address has no admissible storage extent, including an extent beyond the shared embedding limit, emission fails explicitly before publishing source. It must not substitute a smaller scalar object. Data the image places among code (`BinaryImage::DataInCode`), as a kernel keeps constants in its paged code, has the extent any other data has, from its own start to the next symbol or function.
 
 ## Native x64 dispatch frame source
 

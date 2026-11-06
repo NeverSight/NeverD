@@ -5208,6 +5208,14 @@ HighCImageDataObjects collectImageDataObjects(const BinaryImage &Image) {
   DataSymbolStarts.erase(
       std::unique(DataSymbolStarts.begin(), DataSymbolStarts.end()),
       DataSymbolStarts.end());
+  auto &CodeSymbolStarts = Objects.CodeSymbolStarts;
+  for (const Symbol &Sym : Image.Symbols)
+    if (Sym.IsFunc)
+      CodeSymbolStarts.push_back(Sym.Addr);
+  llvm::sort(CodeSymbolStarts);
+  CodeSymbolStarts.erase(
+      std::unique(CodeSymbolStarts.begin(), CodeSymbolStarts.end()),
+      CodeSymbolStarts.end());
   return Objects;
 }
 

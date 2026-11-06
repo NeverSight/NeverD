@@ -5929,6 +5929,8 @@ truth tests too. `PipelineOutcome.HighCRefusesOnlyTheFunctionKeepingAnUnbackedAd
 omits one function, not the unit, when an escaped image address has no storage
 extent. `CSourceAnchors.SignedZeroPairSpellsTheSameWhenMarked` requires a marked
 render to spell that comparison as the ordinary one does, or the map is refused.
+`PipelineOutcome.HighCBacksAnAddressOfDataPlacedAmongCode` declares data the image
+places in an executable section whole, up to the next function.
 
 `NeverDHighSymSimplifyTests` provides the focused HighIR suite, including
 8–256-bit affine and quadratic synthesis, synthesis inside signed/unsigned

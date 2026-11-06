@@ -8174,9 +8174,12 @@ HighCWriter::indexedObjectAt(va_t Addr) const {
   const Segment *Seg = Opts.Image->getSegmentFor(Addr);
   // A layout-authenticated segment with no section table still owns data.
   // Keep the common symbol/object bounds below; a gap in an existing section
-  // table cannot acquire this route.
+  // table cannot acquire this route.  An executable section holds data only
+  // where the image says it does, as a kernel keeps constants in its paged
+  // code.
+  const bool AmongCode = isCodeSectionData(Opts.Image, Addr);
   if ((!Sec && (!Seg || Opts.Image->layoutAddressOwner(Addr) != Seg->VA)) ||
-      (Sec ? !Sec->isReadable() || Sec->isExecutable()
+      (Sec ? !Sec->isReadable() || (Sec->isExecutable() && !AmongCode)
            : !Seg->isReadable() || Seg->isExecutable()))
     return std::nullopt;
   va_t Begin = Sec ? Sec->VA : Seg->VA;
@@ -8212,6 +8215,15 @@ HighCWriter::indexedObjectAt(va_t Addr) const {
       End = *After;
     if (Before && *Before <= Addr && *Before > Begin)
       Begin = *Before;
+  }
+  // Among code, the object starts where the image says, and the next function
+  // ends it as a next object would.
+  if (AmongCode) {
+    Begin = std::max(Begin, Addr);
+    const auto &CodeStarts = dataObjects().CodeSymbolStarts;
+    const auto NextCode = llvm::upper_bound(CodeStarts, Addr);
+    if (NextCode != CodeStarts.end() && *NextCode < End)
+      End = *NextCode;
   }
   if (Begin > Addr || End <= Addr ||
       End - Begin > limits::kMaxSingleGlobalEmbedLen)
