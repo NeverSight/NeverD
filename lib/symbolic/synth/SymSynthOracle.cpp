@@ -164,6 +164,10 @@ OpSemantics::OpSemantics(SymContext &Ctx, uint32_t Width)
     // one that no node would ever have.
     if (Op == GramOp::Sub || Op == GramOp::Neg)
       continue;
+    // One bit is its own sign, so the builder answers with the operand and no
+    // node says what this operator does at this width.
+    if (Op == GramOp::AShr && Width == 1)
+      continue;
     SymRef Args[] = {A, B};
     Template[I] = buildGramOp(
         Ctx, Op, llvm::ArrayRef<SymRef>(Args, isUnaryGramOp(Op) ? 1 : 2));
@@ -183,9 +187,57 @@ llvm::APInt OpSemantics::apply(GramOp Op,
     llvm::APInt Sum[] = {Args[0], apply(GramOp::Neg, Args.drop_front())};
     return evalNodeAP(Ctx, Template[unsigned(GramOp::Add)], Sum);
   }
+  case GramOp::AShr:
+    if (Ones.getBitWidth() == 1)
+      return Args[0];
+    return evalNodeAP(Ctx, Template[unsigned(Op)], Args);
   default:
     return evalNodeAP(Ctx, Template[unsigned(Op)], Args);
   }
+}
+
+void OpSemantics::applyColumn(GramOp Op, const uint64_t *A, const uint64_t *B,
+                              uint64_t *Out, size_t Count) const {
+  const uint64_t Width = Ones.getBitWidth();
+  const uint64_t Mask = Ones.getZExtValue();
+  const auto Each = [&](auto Value) {
+    for (size_t I = 0; I != Count; ++I)
+      Out[I] = Value(I);
+  };
+  switch (Op) {
+  case GramOp::Add:
+    return Each([=](size_t I) { return (A[I] + B[I]) & Mask; });
+  case GramOp::Sub:
+    return Each([=](size_t I) { return (A[I] - B[I]) & Mask; });
+  case GramOp::Mul:
+    return Each([=](size_t I) { return (A[I] * B[I]) & Mask; });
+  case GramOp::And:
+    return Each([=](size_t I) { return A[I] & B[I]; });
+  case GramOp::Or:
+    return Each([=](size_t I) { return A[I] | B[I]; });
+  case GramOp::Xor:
+    return Each([=](size_t I) { return A[I] ^ B[I]; });
+  case GramOp::Shl:
+    return Each([=](size_t I) {
+      return B[I] >= Width ? uint64_t(0) : (A[I] << B[I]) & Mask;
+    });
+  case GramOp::LShr:
+    return Each(
+        [=](size_t I) { return B[I] >= Width ? uint64_t(0) : A[I] >> B[I]; });
+  case GramOp::AShr:
+    return Each([=](size_t I) {
+      // The value's sign fills the word, so shifting past its width leaves that
+      // sign, and the amount only needs to stay a defined shift.
+      const unsigned Spare = 64 - unsigned(Width);
+      const int64_t Signed = int64_t(A[I] << Spare) >> Spare;
+      return uint64_t(Signed >> std::min<uint64_t>(B[I], 63)) & Mask;
+    });
+  case GramOp::Not:
+    return Each([=](size_t I) { return ~A[I] & Mask; });
+  case GramOp::Neg:
+    return Each([=](size_t I) { return (0 - A[I]) & Mask; });
+  }
+  llvm_unreachable("unhandled grammar operator");
 }
 
 //===----------------------------------------------------------------------===//
@@ -194,16 +246,6 @@ llvm::APInt OpSemantics::apply(GramOp Op,
 
 bool signaturesEqual(const Signature &A, const Signature &B) {
   return A.size() == B.size() && std::equal(A.begin(), A.end(), B.begin());
-}
-
-uint64_t hashSignature(const Signature &S) {
-  uint64_t Hash = 0xCBF29CE484222325ull;
-  for (const llvm::APInt &V : S)
-    for (unsigned I = 0, N = V.getNumWords(); I < N; ++I) {
-      Hash ^= V.getRawData()[I];
-      Hash *= 0x100000001B3ull;
-    }
-  return Hash;
 }
 
 size_t agreeingBits(const Signature &A, const Signature &B) {

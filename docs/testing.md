@@ -3074,7 +3074,10 @@ existing synthesis contract suite without building the CLI. It covers
 coefficients, root conversions, signed one-bit inputs, an exhaustive byte-pair
 arithmetic oracle, full-width sampling collisions, refusal on incomplete proofs,
 and cost/work ceilings. An equal-budget comparison disables affine fitting to
-isolate its contribution. Enable `NEVERD_ENABLE_Z3` to run the independent Z3 cases;
+isolate its contribution. `SymSynth.ColumnSemanticsAgreeWithNodes` holds the
+search's native column evaluation to the node semantics for every grammar
+operator from 1 to 64 bits, exhaustively where a width allows.
+Enable `NEVERD_ENABLE_Z3` to run the independent Z3 cases;
 unavailable Z3 is explicitly skipped and is not proof coverage.
 `SymSimplifyGuard.SemanticAffineSynthesisAcrossBlocksAndAtCallArguments` checks
 the production LLVM pass across a dominated block boundary and at an observable
