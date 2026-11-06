@@ -79,6 +79,16 @@
 #include <tuple>
 #include <utility>
 
+#ifdef _WIN32
+// The Windows SDK macros collide with LLVM's namespaced COFF section flags.
+#undef IMAGE_SCN_CNT_INITIALIZED_DATA
+#undef IMAGE_SCN_MEM_READ
+#undef IMAGE_SCN_CNT_CODE
+#undef IMAGE_SCN_CNT_UNINITIALIZED_DATA
+#undef IMAGE_SCN_MEM_EXECUTE
+#undef IMAGE_SCN_MEM_WRITE
+#endif
+
 namespace neverd {
 
 llvm::Expected<std::vector<pdb_loader_detail::IndexedSymbolRecord>>
