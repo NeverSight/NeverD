@@ -3,6 +3,7 @@
 #include "EngineClient.h"
 #include "QueryService.h"
 
+#include <QElapsedTimer>
 #include <array>
 #include <memory>
 #include <optional>
@@ -39,6 +40,8 @@ private:
   void reset();
   void requestSnapshot();
   void stopWorker();
+  /// Leaves what the worker is answering to run to its end, unanswered.
+  void abandonRunningRead();
   void receive(const QJsonObject &message);
   void dispatch();
   void finish(QJsonObject response);
@@ -48,6 +51,10 @@ private:
   EngineClient client_;
   QueryService queries_;
   QString workerPath_, active_, operation_, wire_, restore_, workerRevision_;
+  /// The read the worker runs for nobody, and what restoring the worker took.
+  QString abandoned_;
+  QElapsedTimer restoring_;
+  qint64 restoreMilliseconds_ = 0;
   QJsonObject payload_, snapshot_;
   QueryService::SubscriptionId snapshotRequest_ = 0;
   quint64 serial_ = 0, next_ = 0;
@@ -111,6 +118,8 @@ private:
   };
   std::array<Lane, 2> lanes_;
   QHash<QObject *, Binding> bindings_;
+  /// The project those bindings are of.
+  QString boundProject_;
   QObject preparationOwner_;
   quint64 preparationSerial_ = 0;
   bool preparing_ = false;

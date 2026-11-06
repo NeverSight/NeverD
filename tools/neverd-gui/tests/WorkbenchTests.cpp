@@ -6792,7 +6792,7 @@ private slots:
       QCOMPARE(graphChanges.count(), 0);
       QCOMPARE(functions->currentAddress(), selectedFunction);
     }
-    // A source comment still takes the existing full invalidation path.
+    // A source comment takes effect in the same replica.
     const auto revision = bench.session.revision();
     const auto row = first.value("rows").toArray().first().toObject();
     bench.session.editCode({{"address", hexAddress(Base)},
@@ -6810,8 +6810,41 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(!changed.isEmpty(), OpenTimeoutMs);
     QVERIFY(
         changed.value("text").toString().contains("checked source comment"));
-    QVERIFY(changed.value("fixture_instance") !=
-            first.value("fixture_instance"));
+    for (const auto *field :
+         {"fixture_instance", "fixture_prepares", "fixture_pages"})
+      QCOMPARE(changed.value(field), first.value(field));
+    // So does a new name of another function, and a comment on the image.
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    auto current = bench.session.revision();
+    bench.session.rename(Base + 16, QStringLiteral("renamed_in_place"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != current,
+                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    current = bench.session.revision();
+    bench.session.setComment(Base, QStringLiteral("in place"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != current,
+                             OpenTimeoutMs);
+    QJsonObject kept;
+    bench.session.read("decompile", payload, &reader,
+                       [&](const QJsonObject &page) { kept = page; });
+    QTRY_VERIFY_WITH_TIMEOUT(!kept.isEmpty(), OpenTimeoutMs);
+    for (const auto *field :
+         {"fixture_instance", "fixture_prepares", "fixture_pages"})
+      QCOMPARE(kept.value(field), first.value(field));
+    // An edit to what the engine reads restores a fresh replica.
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    current = bench.session.revision();
+    bench.session.deleteFunction(Base + 32);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != current,
+                             OpenTimeoutMs);
+    QJsonObject fresh;
+    bench.session.read("decompile", payload, &reader,
+                       [&](const QJsonObject &page) { fresh = page; });
+    QTRY_VERIFY_WITH_TIMEOUT(!fresh.isEmpty(), OpenTimeoutMs);
+    QVERIFY(fresh.value("fixture_instance") != first.value("fixture_instance"));
   }
 
   void functionsClicksKeepTheLoadedListAndDocument_data() {
@@ -7101,6 +7134,72 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(replacementFinished, 1500);
     QTRY_VERIFY_WITH_TIMEOUT(secondFinished, 5000);
     QVERIFY(!firstFinished);
+  }
+
+  void analysisReplicaOutlivesAReadNobodyWaitsFor() {
+    // Going to another function while a read runs must not lose what the
+    // replica has analyzed.  This read ends before starting over would pay.
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(writeFixture(directory,
+                              QStringLiteral("slow-prepare-source-cache.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    const auto instance = [&](quint64 address, QObject &owner) {
+      QString found;
+      session.read(
+          "decompile",
+          {{"address", hexAddress(address)}, {"representation", "source"}},
+          &owner, [&](const QJsonObject &page) {
+            found = page.value("fixture_instance").toString();
+          });
+      QTest::qWaitFor([&] { return !found.isEmpty(); }, OpenTimeoutMs);
+      return found;
+    };
+    QObject first, abandoned, next;
+    const auto replica = instance(Base, first);
+    QVERIFY(!replica.isEmpty());
+    bool answered = false;
+    session.read(
+        "decompile",
+        {{"address", hexAddress(Base + 16)}, {"representation", "source"}},
+        &abandoned, [&](const QJsonObject &) { answered = true; });
+    QTest::qWait(30);
+    session.cancelAnalysisReads(&abandoned);
+    QCOMPARE(instance(Base + 32, next), replica);
+    QVERIFY(!answered);
+  }
+
+  void analysisFunctionStaysWithItsReplicaAcrossAnEdit() {
+    // Two functions read at once hold their analyses in two replicas, and an
+    // edit each takes in place leaves them there.
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(writeFixture(directory,
+                              QStringLiteral("slow-prepare-source-cache.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject firstOwner, secondOwner;
+    const auto read = [&](quint64 address, QObject &owner, QJsonObject &page) {
+      page = {};
+      session.read(
+          "decompile",
+          {{"address", hexAddress(address)}, {"representation", "source"}},
+          &owner, [&page](const QJsonObject &result) { page = result; });
+    };
+    QJsonObject first, second, again;
+    read(Base, firstOwner, first);
+    read(Base + 16, secondOwner, second);
+    QTRY_VERIFY_WITH_TIMEOUT(!first.isEmpty() && !second.isEmpty(),
+                             OpenTimeoutMs);
+    QVERIFY(first.value("fixture_instance") !=
+            second.value("fixture_instance"));
+    const auto current = session.revision();
+    session.setComment(Base, QStringLiteral("in place"));
+    QTRY_VERIFY_WITH_TIMEOUT(session.revision() != current, OpenTimeoutMs);
+    read(Base + 16, secondOwner, again);
+    QTRY_VERIFY_WITH_TIMEOUT(!again.isEmpty(), OpenTimeoutMs);
+    for (const auto *field :
+         {"fixture_instance", "fixture_prepares", "fixture_pages"})
+      QCOMPARE(again.value(field), second.value(field));
   }
 
   void ownerDoesNotWarmPipelinesUsedOnlyByAnalysisReplicas() {

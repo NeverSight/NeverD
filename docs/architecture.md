@@ -4459,10 +4459,16 @@ What the job renders also goes to the project's `local/render-ahead`
 each session, so a later session over the same inputs reads it from its first
 request, renders only what no session reached, and, once a job has reached every
 function, leaves the summaries and read-ahead until a request needs more than
-those renders answer. The inputs are the browse cache's identity without a local
-name's edits, which redecorate pages and leave them as they are. A session whose
-job starts over after it began no longer reads as a new session does, and stops
-reading and adding to the store.
+those renders answer. The inputs are the browse cache's identity without code
+edits, which are options of a function's own view and so in its key, comments and
+function names, which a view's decoration reads and the pages do not spell, and
+operand formats, which source does not show. A session whose job starts over after
+it began no longer reads as a new session does, and stops reading and adding to the
+store.
+A replica takes those edits in place (`analysis_update_names`), since no analysis
+reads them: what it keeps of a view stays the view's, and only a new name of data
+or a data item, which pages spell, forgets the renders and moves to a store of its
+own.
 The GUI owner no longer requests that pipeline warmup: source/CFG views use
 separate analysis sessions and cannot consume the owner's pipeline cache.
 With idle analysis enabled, native images with 4096–65536 functions and at most

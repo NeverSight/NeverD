@@ -6085,9 +6085,12 @@ including matches that overlap their output, under arbitrary damage.
 `NeverDWorkerRenderStore` reopens a project: the second session's first requests
 read as the first session's did with no engine page written, a complete store
 leaves the summaries deferred until a request the store does not answer, a graph
-does not start them, a local rename keeps the store, a comment and another build
-of the worker start over, a job that starts over stops reading and adding, a
-record cut short is rendered again alone, and a damaged one reads the engine.
+does not start them, comments and local and function names keep the store both in
+a running replica and across sessions, a function's own view states its new name
+without the engine and asks it only once a name is taken away, operand formats keep
+it, a new name of data, a data item and another build of the worker start over,
+a job that starts over stops reading and adding, a record cut short is rendered
+again alone, and a damaged one reads the engine.
 `WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
 through a real view.
 
@@ -6357,8 +6360,12 @@ repeated local renames, clearing aliases, readonly replica updates, rejected
 collisions and obsolete targets. Changed input identities, annotations and
 source comments cannot enter the name-only refresh path, and a stale committed
 sidecar is refused without changing the replica. The workbench's
-`localNameEditsReuseTheIdleAnalysisReplica` also checks the process identity,
-unchanged preparation counters and full retirement after a source comment.
+`localNameEditsReuseTheIdleAnalysisReplica` also checks the process identity and
+unchanged preparation counters through a source comment, a function's new name and
+an image comment, and full retirement after a deleted function.
+`analysisReplicaOutlivesAReadNobodyWaitsFor` checks that going to another function
+during a read keeps the replica, and `cancellingOneAnalysisLeavesTheOtherRunning`
+that one still running well past what restoring took is stopped.
 `localNameLatencyOnOptionalNativeInput` accepts `NEVERD_RENAME_BENCH_WORKER`,
 `NEVERD_RENAME_BENCH_INPUT`, optional `NEVERD_RENAME_BENCH_PDB`, the function's
 `NEVERD_RENAME_BENCH_TARGET` and selected `NEVERD_RENAME_BENCH_LOCAL`. It reports

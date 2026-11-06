@@ -900,17 +900,24 @@ A successful local-name commit adds `local_names_only:true` to its response.
 Other code edits continue through full invalidation.
 
 `analysis_update_names` accepts an owner `analysis_snapshot` only in an existing
-readonly replica created by `analysis_restore`. Every input, option and
-non-name state must match the restored snapshot. The worker also checks input
-stamps, committed user tables, loaded type declarations and library choices
-before replacing display-name state. A pending recovery transaction also
+readonly replica created by `analysis_restore`. Every input and option, and all
+state but code edits, names, comments, operand formats and data items, must match
+the restored snapshot. The worker also checks input stamps, committed user tables
+apart from comments, which the owner can hold staged, loaded type declarations and
+library choices before taking the new values. A pending recovery transaction also
 refuses reuse.
-Success returns `{updated:true}` and advances the replica's local revision;
-retained source is redecorated without rerunning the pipeline. This operation
-never writes sidecars or history. A changed snapshot or racing sidecar is
-`stale_snapshot`; a changed input is `input_changed`. The GUI uses the capability
-only for an idle replica after a confirmed local-name commit and otherwise
-keeps the existing fresh-process restore path.
+Success returns `{updated:true}` and advances the replica's local revision. No
+analysis reads these, so nothing is analyzed again, and retained source is
+redecorated: local and function names and comments are read as a view is decorated,
+with a kept page's own statement of a function's name brought up to date unless a
+name was taken away, which only the engine can answer; operand formats are not in
+source; and a function's other code edits are options of its own view, whose key
+they change. A new name of data or a data item is spelled in the pages that name
+it, so it forgets the documents and renders and starts the job over, under a store
+of its own. This operation never writes sidecars or history. A changed snapshot or racing
+sidecar is `stale_snapshot`; a changed input is `input_changed`. The GUI tries it
+on every change to the project of an idle replica, and restores a fresh process
+when it refuses.
 
 `analysis_restore` also takes `call_summaries:true`, which the GUI adds to the
 owner's snapshot when the replica advertises `prepare_call_summaries`. The
@@ -962,9 +969,10 @@ and `read` to the others. A replica then
 reads what earlier sessions rendered over the same inputs, from the project's
 `local/render-ahead`, from its first request on, and `write` adds what its own job
 renders. `kept` counts the store's records. The inputs are the engine and worker
-files, the snapshot apart from local names, the project's shared files apart from
-`code.json`, and the debug files' stamps; anything else starts a store of its
-own, and the first render under one removes the others. A session whose job
+files, the snapshot apart from code edits, comments, function names and operand
+formats, the project's shared files apart from the ones that hold those, and the
+debug files' stamps; a change to any of them starts a store of its own, and the
+first render under one removes the others. A session whose job
 starts over after it began neither reads nor adds to the store from then on, since
 its engine no longer reads as a new session's does. Once a job has reached every
 function, a later session's `call_summaries` stops at `deferred` after discovery,

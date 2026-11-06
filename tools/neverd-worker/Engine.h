@@ -269,9 +269,26 @@ private:
   }
   /// Opens the store a restore asks for by \p mode: "read", "write" or empty.
   void openRenderStore(const std::string &mode);
-  /// What renders depend on: browseCacheIdentity without a local name's edits,
-  /// which redecorate pages and leave them as they are.
+  std::string renderStoreMode_;
+  /// What renders depend on: browseCacheIdentity without what a view's
+  /// decoration reads, local and function names and comments.
   Json renderStoreIdentity();
+  /// A view's key in the store: its source key without the generation, which
+  /// counts this session's listing builds.
+  std::string renderStoreKey(std::uint64_t address,
+                             const std::string &representation,
+                             const std::string &optionText);
+  /// Only functions' names changed, in a replica: what it keeps of a view stays
+  /// the view's.  Taking a name away from one (\p unnamed) changes what the
+  /// listing shows it as, and the others are read as a view is decorated.
+  void functionNamesChanged(bool unnamed);
+  /// Whether a kept \p page of a view can state the functions it names as they
+  /// are named now: it states them as the engine knew them when it rendered,
+  /// and a new name replaces those, but what one was called before a name was
+  /// taken away is only the engine's to say.
+  bool keptPageReadsCurrentNames(const Json &page) const;
+  /// States the names of \p view's functions as they are named now.
+  void currentNamesInView(Json &view) const;
   /// When the last request was answered.
   std::chrono::steady_clock::time_point lastRequest_{};
   /// The function a request last prepared and how long that took.

@@ -1140,6 +1140,9 @@ const char *neverd_prefill_callees_json(neverd_session_t s, int first,
       state.summarySolves > 0 &&
       (state.path.find("summaries-ready") != std::string::npos ||
        state.path.find("summaries-discover") != std::string::npos);
+  // Long enough for a request to come while it reads ahead.
+  if (state.path.find("slow-prefill") != std::string::npos)
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
   const size_t total = state.functions.size();
   const size_t from = std::min<size_t>(std::max(first, 0), total);
   const size_t count =
@@ -2673,27 +2676,41 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
         std::reverse(references.begin(), references.end());
       }
     }
-    return copy(Json{{"schema_version", 1},
-                     {"address", hexAddress(address)},
-                     {"representation", representation},
-                     {"dialect", "c"},
-                     {"text", text},
-                     {"rows", rows},
-                     {"offset", first},
-                     {"byte_offset", begin},
-                     {"total_lines", total},
-                     {"complete", end == total},
-                     {"next_offset", end == total ? Json(nullptr) : Json(end)},
-                     {"library_regions", Json::array()},
-                     {"source_names", names},
-                     {"code_names", names},
-                     {"references", references},
-                     {"fixture_prepares", state.sourcePrepares},
-                     {"fixture_instance", std::to_string(Instance)},
-                     {"fixture_prepared_view", state.preparedView},
-                     {"fixture_pages", state.sourcePages},
-                     {"fixture_renders", state.sourceRenders}}
-                    .dump());
+    Json view{{"schema_version", 1},
+              {"address", hexAddress(address)},
+              {"representation", representation},
+              {"dialect", "c"},
+              {"text", text},
+              {"rows", rows},
+              {"offset", first},
+              {"byte_offset", begin},
+              {"total_lines", total},
+              {"complete", end == total},
+              {"next_offset", end == total ? Json(nullptr) : Json(end)},
+              {"library_regions", Json::array()},
+              {"source_names", names},
+              {"code_names", names},
+              {"references", references},
+              {"fixture_prepares", state.sourcePrepares},
+              {"fixture_instance", std::to_string(Instance)},
+              {"fixture_prepared_view", state.preparedView},
+              {"fixture_pages", state.sourcePages},
+              {"fixture_renders", state.sourceRenders}};
+    // The fixtures that state a function's names, as a real page does.
+    if (state.path.find("render-store") != std::string::npos) {
+      const auto named = state.names.find(address);
+      const bool renamed = named != state.names.end();
+      const auto origin = renamed ? "user" : "stated";
+      const auto own = "function_" + std::to_string((address - Base) / 16);
+      view["function_identity"] = {
+          {"addr", hexAddress(address)},
+          {"name", renamed ? named->second : own},
+          {"display_name", renamed ? named->second : own},
+          {"linkage_name", own},
+          {"name_origin", origin},
+          {"display_origin", origin}};
+    }
+    return copy(view.dump());
   }
   if (session(s)->path.ends_with("code-edits.bin") ||
       session(s)->path.ends_with("code-edits-cpp.bin") ||

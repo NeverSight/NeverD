@@ -89,6 +89,9 @@ public:
   /// Names or the user's data items changed: the next query reads them again
   /// without scanning strings or reading imports and exports again.
   void namesChanged();
+  /// Only functions' names changed.  The next query reads them again, and a
+  /// kept view of a function stays what its pages are (viewGeneration).
+  void functionNamesChanged();
   /// Comments changed. Rendering reads them live, but they are part of the
   /// browse cache identity, so cached documents start a new namespace.
   void commentsChanged();
@@ -158,6 +161,9 @@ public:
   Json indexState() const;
   /// Changes whenever published listing text can change.
   std::uint64_t generation() const;
+  /// generation() but for what only functions' names change, which a function's
+  /// engine pages do not spell: a view reads them as its decoration runs.
+  std::uint64_t viewGeneration() const;
 
 private:
   Json uncachedPage(const Json &payload);

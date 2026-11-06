@@ -602,6 +602,10 @@ struct Listing::Impl {
   /// The names, or the user's items, changed since the listing was built:
   /// the next query reads them again over what the build scanned.
   bool namesStale = false;
+  /// All that made the names stale since the last build is functions' names,
+  /// and the generations those advanced, which views do not read.
+  bool functionNamesStale = false;
+  std::uint64_t functionNameGenerations = 0;
   /// What the last full build read that names and the user's items do not
   /// change: the string scan, and the import, import slot and export rows.
   std::vector<StringItem> scannedStrings;
@@ -795,6 +799,7 @@ struct Listing::Impl {
     }
     built = true;
     namesStale = false;
+    functionNamesStale = false;
     builtFunctionCount = count;
     ++generation;
     const auto arch = takeString(neverd_session_arch_name(session));
@@ -848,6 +853,9 @@ struct Listing::Impl {
   void rebuildNames(int count) {
     namesStale = false;
     ++generation;
+    if (functionNamesStale)
+      ++functionNameGenerations;
+    functionNamesStale = false;
     buildFunctions(count);
     buildInventoryKey();
     buildNames(/*Rescan=*/false);
@@ -4883,7 +4891,16 @@ void Listing::invalidate() {
 void Listing::namesChanged() {
   impl_->cache.invalidate();
   impl_->namesStale = true;
+  impl_->functionNamesStale = false;
   ++impl_->generation;
+}
+
+void Listing::functionNamesChanged() {
+  impl_->cache.invalidate();
+  impl_->functionNamesStale = !impl_->namesStale || impl_->functionNamesStale;
+  impl_->namesStale = true;
+  ++impl_->generation;
+  ++impl_->functionNameGenerations;
 }
 
 void Listing::commentsChanged() { impl_->cache.invalidate(); }
@@ -5019,6 +5036,9 @@ void Listing::setPdbDisplayNames(const Json &names) {
 }
 
 std::uint64_t Listing::generation() const { return impl_->generation; }
+std::uint64_t Listing::viewGeneration() const {
+  return impl_->generation - impl_->functionNameGenerations;
+}
 
 std::optional<std::string> Listing::pdbDataName(std::uint64_t address) {
   impl_->build();

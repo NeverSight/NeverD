@@ -8,7 +8,7 @@ import sys
 import tempfile
 
 from analysis_snapshot_test import durable_files
-from source_cache_test import A, B, ok, source
+from source_cache_test import A, B, C, ok, source
 from transport_test import Client
 
 
@@ -50,7 +50,6 @@ def run(executable):
                     ("renames.json", [{"addr": A, "original": "function_0",
                                        "renamed": "foreign_name"}]),
                     ("functions.json", [{"addr": B, "state": "deleted"}]),
-                    ("annotations.json", [{"addr": A, "text": "foreign comment"}]),
                     ("types.json", [{"language": "c",
                                      "source": "typedef unsigned int ReviewWord;"}]),
                     ("libraries.json", {"added": ["foreign"], "removed": []}),
@@ -79,25 +78,65 @@ def run(executable):
                 assert updated[field] == first[field], (field, updated, first)
             assert durable_files(directory) == before_files
             assert owner.call("analysis_update_names", snapshot)["error"]["code"] == "invalid_request"
-        # Snapshots do not authorize a different image, stale sidecar, options,
-        # comments, or type policy to reuse the retained analysis.
+        # Snapshots do not authorize a different image, stale sidecar, options or
+        # type policy to reuse the retained analysis.
         wrong = copy.deepcopy(snapshot)
         wrong["input_sha256"] = "another input"
         assert replica.call("analysis_update_names", wrong)["error"]["code"] == "stale_snapshot"
-        changed = copy.deepcopy(snapshot)
-        changed["state"]["annotations"] = [{"addr": A, "text": "changed"}]
-        assert replica.call("analysis_update_names", changed)["error"]["code"] == "stale_snapshot"
+        racing = copy.deepcopy(snapshot)
         ok(owner, "code_edit", request(source(owner), "new_name"))
-        assert replica.call("analysis_update_names", snapshot)["error"]["code"] == "stale_snapshot"
+        assert replica.call("analysis_update_names", racing)["error"]["code"] == "stale_snapshot"
+        # Failed refreshes leave the earlier replica document unchanged.
+        assert source(replica)["text"] == updated["text"]
+        # A comment takes effect in place, and a source comment as one on the
+        # image does, with nothing asked of the engine.
         current = source(owner)
         ok(owner, "code_edit", {"address": A, "representation": "source", "kind": "comment",
                                  "line": 0, "anchor": current["rows"][0]["code_anchor"],
                                  "text": "new source comment"})
-        changed = ok(owner, "analysis_snapshot")
-        assert replica.call("analysis_update_names", changed)["error"]["code"] == "stale_snapshot"
-        assert source(owner)["fixture_pages"] > original["fixture_pages"]
-        # Failed refreshes leave the earlier replica document unchanged.
-        assert source(replica)["text"] == updated["text"]
+        ok(owner, "annotation_set", {"address": A, "text": "new image comment"})
+        current = source(owner)
+        assert "new source comment" in current["text"], current
+        assert ok(replica, "analysis_update_names", ok(owner, "analysis_snapshot"))["updated"]
+        commented = source(replica)
+        assert commented["text"] == current["text"], (commented, current)
+        for field in ("fixture_instance", "fixture_prepares", "fixture_pages"):
+            assert commented[field] == first[field], (field, commented, first)
+        ok(owner, "save")
+        # A function's new name, the same way but for its own view.
+        other = source(replica, B)
+        ok(owner, "rename", {"address": B, "name": "renamed_function"})
+        current = source(owner, C)
+        assert ok(replica, "analysis_update_names", ok(owner, "analysis_snapshot"))["updated"]
+        for field in ("fixture_instance", "fixture_prepares", "fixture_pages"):
+            assert source(replica)[field] == commented[field], field
+        assert source(replica, C)["text"] == current["text"]
+        renamed = source(replica, B)
+        assert renamed["text"] == source(owner, B)["text"]
+        assert "function_identity" not in renamed or renamed != other
+        # A number format does not ask the analysis to start over.
+        ok(owner, "operand_format", {"address": "0xffff800012340051", "operand": 1, "action": "decimal"})
+        assert ok(replica, "analysis_update_names", ok(owner, "analysis_snapshot"))["updated"]
+        assert source(replica)["text"] == source(owner)["text"]
+        assert source(replica)["fixture_instance"] == first["fixture_instance"]
+        # Taking a name away shows what the listing calls the function again,
+        # which a replica restored under that name has not read.
+        ordered = Path(directory) / "source-cache-ordered.bin"
+        ordered.write_bytes(b"source cache fixture")
+        named_owner = clients.enter_context(Client(executable))
+        ok(named_owner, "open", {"path": str(ordered), "analysis": False, "warm": False})
+        ok(named_owner, "rename", {"address": A, "name": "named_for_now"})
+        named = clients.enter_context(Client(executable))
+        ok(named, "analysis_restore", ok(named_owner, "analysis_snapshot"))
+        listed = lambda client: json.dumps(ok(client, "listing", {"address": A, "before": 0, "after": 8}))
+        assert "named_for_now" in source(named)["text"] and "named_for_now" in listed(named)
+        ok(named_owner, "undo")
+        assert ok(named, "analysis_update_names", ok(named_owner, "analysis_snapshot"))["updated"]
+        assert source(named)["text"] == source(named_owner)["text"]
+        assert "named_for_now" not in source(named)["text"] and "named_for_now" not in listed(named)
+        # An edit to what the engine reads is refused: the caller restores afresh.
+        ok(owner, "function_delete", {"address": C})
+        assert replica.call("analysis_update_names", ok(owner, "analysis_snapshot"))["error"]["code"] == "stale_snapshot"
         signature = Path(directory) / "input.pat"
         signature.write_text("signature fixture")
         ok(owner, "signatures_load", {"path": str(signature)})

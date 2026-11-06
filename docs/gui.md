@@ -1533,16 +1533,19 @@ function first, one function at a time, and only after no view has asked it for
 anything for a while, longer for a larger function. A function it has rendered
 opens without being decompiled, with the text decompiling it gave when the job
 reached it. One it has not reached, or one it left to the visit because it is
-very large or its size is unknown, is decompiled when you open it. A local rename keeps the renders; an edit that changes what the engine
-reads starts over. The job takes idle time on one core and disk for the compact
+very large or its size is unknown, is decompiled when you open it. A comment, a new
+name for a local or a function, or a number format keeps the renders and the
+analysis, so the view reads it at once; a type you give a local or a call changes
+that function alone; a new name for data or a data item forgets the renders, and
+any other edit also starts the analysis over. The job takes idle time on one core and disk for the compact
 text: on a Windows kernel of 25,800 functions, about ten minutes and 200 MB, in
 the project's `local/render-ahead`, which you can delete at any time. Opening the
 file again reads those renders from the first function you open, and renders only
 what the job had not reached. With all of them there, the worker also skips
 solving call summaries until you open something the renders do not answer, such
-as an IR view or a function that was too large to render. Any other change to the
-inputs (a comment, a new build of NeverD, a changed PDB) starts over, but not a
-rename of a local. It is not repeated for a project in which a worker ended during it, and
+as an IR view or a function that was too large to render. A change to the inputs
+(a new build of NeverD, a changed PDB, an edit to what the engine reads) starts
+over. It is not repeated for a project in which a worker ended during it, and
 it does not run when views open every function under symbolic simplification,
 because they would read none of it.
 

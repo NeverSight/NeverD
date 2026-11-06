@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 
+from call_summaries_test import prefill
 from local_name_cache_test import request
 from render_ahead_test import done, latest, render_ahead, unfixtured
 from source_cache_test import A, B, C, ok, source
@@ -113,6 +114,63 @@ def run(executable):
         asks_engine_first(renamed)
         end(renamed, owner)
 
+        # A comment and a function's name take effect in a running replica with
+        # its renders, and a later session keeps reading them.
+        owner, running = session(clients, executable, binary)
+        assert unfixtured(source(running, B)) == fresh[B]
+        ok(owner, "rename", {"address": C, "name": "renamed_function"})
+        anchor = source(owner, B)["rows"][0]["code_anchor"]
+        ok(owner, "code_edit", {"address": B, "representation": "source", "kind": "comment",
+                                "line": 0, "anchor": anchor, "text": "a running note"})
+        ok(owner, "annotation_set", {"address": B, "text": "an image note"})
+        ok(owner, "save")
+        assert ok(running, "analysis_update_names", ok(owner, "analysis_snapshot"))["updated"]
+        view = source(running, B)
+        assert "a running note" in view["text"], view
+        # Other functions and the renamed one still read the store.
+        source(running, A)
+        renamed_view = source(running, C)
+        assert render_ahead(running, lambda s: s and s["hits"] == 3)
+        direct = source(owner, C)
+        assert renamed_view["text"] == direct["text"], (renamed_view, direct)
+        assert renamed_view["function_identity"] == direct["function_identity"], renamed_view
+        assert renamed_view["function_identity"]["name"] == "renamed_function", renamed_view
+        asks_engine_first(running)
+        end(running, owner)
+        owner, next_session = session(clients, executable, binary)
+        assert "a running note" in source(next_session, B)["text"]
+        # The replica's own revision counts the updates it took.
+        kept = {**unfixtured(source(next_session, C)), "revision": renamed_view["revision"]}
+        assert kept == unfixtured(renamed_view)
+        assert summaries(next_session, lambda s: s == "deferred") == "deferred"
+        asks_engine_first(next_session)
+        end(next_session, owner)
+
+        # What a function was called before a name was taken away is the engine's
+        # to say, so its kept page does not answer.
+        unnaming = root / ("unnaming-" + NAME)
+        unnaming.write_bytes(b"render store fixture")
+        owner = clients.enter_context(Client(executable))
+        ok(owner, "open", {"path": str(unnaming), "analysis": False, "warm": False})
+        ok(owner, "rename", {"address": C, "name": "named_for_now"})
+        end(owner)
+        owner, named = session(clients, executable, unnaming)
+        state = render_ahead(named, done)
+        kept_name = source(named, C)
+        assert kept_name["function_identity"]["name_origin"] == "user", kept_name
+        assert kept_name["fixture_pages"] <= state["total"], kept_name
+        ok(owner, "undo")
+        assert ok(named, "analysis_update_names", ok(owner, "analysis_snapshot"))["updated"]
+        original_name = source(named, C)
+        direct = source(owner, C)
+        assert original_name["function_identity"] == direct["function_identity"], original_name
+        assert original_name["fixture_pages"] > state["total"], original_name
+        assert original_name["text"] == direct["text"], (original_name, direct)
+        # The other functions' renders stay.
+        other = source(named, A)
+        assert other["fixture_pages"] <= state["total"], other
+        end(named, owner)
+
         # A session's job that started over keeps nothing further, and neither
         # reads nor changes the store from then on.
         cut = root / ("cut-" + NAME)
@@ -186,9 +244,9 @@ def run(executable):
         assert summaries(visitor, lambda s: True) == "deferred"
         end(visitor, owner)
 
-        # A function visited before the job reaches it is rendered too: its
-        # document answers this session alone.
-        visited = root / ("visited-" + NAME)
+        # A function visited before the job reaches it and before renders settle
+        # is rendered too: its document answers this session alone.
+        visited = root / ("slow-prefill-" + NAME)
         visited.write_bytes(b"render store fixture")
         owner, early = session(clients, executable, visited)
         heartbeat = lambda m: m.get("type") == "heartbeat"
@@ -258,16 +316,26 @@ def run(executable):
 
         # A change to what the engine reads starts a store of its own, whose
         # first render removes the one that no longer applies.
-        anchor = source(owner)["rows"][0]["code_anchor"]
-        ok(owner, "code_edit", {"address": A, "representation": "source", "kind": "comment",
-                                "line": 0, "anchor": anchor, "text": "a note"})
+        ok(owner, "function_delete", {"address": C})
         end(owner)
         before = files(binary)
         owner, edited = session(clients, executable, binary)
         state = render_ahead(edited, done)
-        assert state["rendered"] == total and state["kept"] == total + 1, state
+        assert state["rendered"] == state["total"] == total - 1, state
+        assert state["kept"] == total, state
         after = files(binary)
-        assert len(after) == 1 and after[0].parent != before[0].parent, (before, after)
+        assert after[0].parent != before[0].parent and {p.parent for p in after} == {after[0].parent}, (before, after)
+
+        # So does a new name of data, which pages spell, in a running replica.
+        # Its renders go, and what it renders now goes to the new store.
+        data = hex(int(BASE, 16) + 4)
+        ok(owner, "rename", {"address": data, "name": "renamed_data"})
+        assert ok(edited, "analysis_update_names", ok(owner, "analysis_snapshot"))["updated"]
+        state = render_ahead(edited, lambda s: s and s["state"] == "pending" and not s["rendered"] and not s["kept"])
+        state = render_ahead(edited, done)
+        assert state["rendered"] == state["total"] and state["kept"] == state["total"] + 1, state
+        changed = files(binary)
+        assert changed[0].parent != after[0].parent and {p.parent for p in changed} == {changed[0].parent}, (after, changed)
         end(edited, owner)
 
         # Another build of the worker or engine reads none of it.

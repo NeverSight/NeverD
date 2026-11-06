@@ -27,13 +27,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "BrowseCache.h"
-#include "CodeEdits.h"
 #include "Engine.h"
 #include "Listing.h"
 #include "PageCodec.h"
 #include "RenderStore.h"
 
 #include "neverd/sdk/NeverDCAPIDisasm.h"
+#include "neverd/sdk/NeverDCAPIPersist.h"
 #include "neverd/support/ProjectFiles.h"
 
 #include <algorithm>
@@ -54,13 +54,6 @@ std::chrono::milliseconds holdOff(std::uint64_t size) {
           limits::kRenderAheadHoldOffMillisecondsPerKilobyte / 1024);
 }
 
-/// A view's key in the store: its source key without the generation, which
-/// counts this session's listing builds.
-std::string storeKey(std::uint64_t address, const std::string &representation,
-                     const std::string &optionText) {
-  return hexAddress(address) + ":" + representation + ":" + optionText;
-}
-
 /// Kept once a job has reached every function.
 const std::string CompleteKey = "complete";
 } // namespace
@@ -68,11 +61,86 @@ const std::string CompleteKey = "complete";
 Json Engine::renderStoreIdentity() {
   auto identity = browseCacheIdentity();
   auto &state = identity.at("state");
-  state["code_edits"] =
-      CodeEdits::analysisState(state.value("code_edits", Json::array()));
-  identity.at("shared").erase(
-      std::string(project_files::describe(project_files::File::Code).Path));
+  state.erase("code_edits");
+  state.erase("annotations");
+  state.erase("operands");
+  // Data's names are spelled in the pages that name it; a function's are not.
+  Json dataNames = Json::array();
+  for (auto row : state.value("renames", Json::array()))
+    if (neverd_func_find_by_addr(
+            session_, parseAddress(row.at("addr").get<std::string>())) < 0) {
+      row.erase("original");
+      dataNames.push_back(std::move(row));
+    }
+  state["renames"] = std::move(dataNames);
+  for (const auto file :
+       {project_files::File::Code, project_files::File::Annotations,
+        project_files::File::Renames, project_files::File::Operands})
+    identity.at("shared").erase(
+        std::string(project_files::describe(file).Path));
   return identity;
+}
+
+std::string Engine::renderStoreKey(std::uint64_t address,
+                                   const std::string &representation,
+                                   const std::string &optionText) {
+  return hexAddress(address) + ":" + representation + ":" + optionText;
+}
+
+namespace {
+/// What a page says of a function's name, for each function it says it of.
+template <typename Page, typename Each>
+void eachStatedFunction(Page &page, Each each) {
+  const auto address = [](const auto &json, const char *field) {
+    const auto at = json.find(field);
+    return at != json.end() && at->is_string()
+               ? std::optional(parseAddress(at->template get<std::string>()))
+               : std::nullopt;
+  };
+  if (const auto identity = page.find("function_identity");
+      identity != page.end() && identity->is_object())
+    if (const auto entry = address(*identity, "addr"))
+      each(*entry, *identity);
+  if (const auto regions = page.find("library_regions");
+      regions != page.end() && regions->is_array())
+    for (auto &region : *regions)
+      if (const auto identity = region.find("callee_identity");
+          identity != region.end() && identity->is_object())
+        if (const auto entry = address(*identity, "addr"))
+          each(*entry, *identity);
+}
+} // namespace
+
+bool Engine::keptPageReadsCurrentNames(const Json &page) const {
+  bool current = true;
+  const auto names = backendJson(neverd_renames_json(session_));
+  eachStatedFunction(page, [&](std::uint64_t address, const Json &identity) {
+    if (identity.value("name_origin", std::string()) != "user")
+      return;
+    current =
+        current &&
+        std::any_of(names.begin(), names.end(), [&](const auto &row) {
+          return parseAddress(row.at("addr").template get<std::string>()) ==
+                 address;
+        });
+  });
+  return current;
+}
+
+void Engine::currentNamesInView(Json &view) const {
+  const auto rows = backendJson(neverd_renames_json(session_));
+  if (rows.empty())
+    return;
+  std::unordered_map<std::uint64_t, std::string> names;
+  for (const auto &row : rows)
+    names.emplace(parseAddress(row.at("addr").get<std::string>()),
+                  row.at("renamed").get<std::string>());
+  eachStatedFunction(view, [&](std::uint64_t address, Json &identity) {
+    if (const auto name = names.find(address); name != names.end()) {
+      identity["name"] = identity["display_name"] = name->second;
+      identity["name_origin"] = identity["display_origin"] = "user";
+    }
+  });
 }
 
 void Engine::openRenderStore(const std::string &mode) {
@@ -211,8 +279,9 @@ void Engine::renderFunctionAhead(std::uint64_t address) {
   const auto sourceKey =
       namedViewSourceKey(address, representation, optionText);
   auto *store = liveRenderStore();
-  const auto keptKey =
-      store ? storeKey(address, representation, optionText) : std::string();
+  const auto keptKey = store
+                           ? renderStoreKey(address, representation, optionText)
+                           : std::string();
   // A kept document answers a visit already, but not one in a later session.
   if (renderedAhead_.contains(sourceKey) ||
       (store ? store->contains(keptKey)
@@ -224,7 +293,7 @@ void Engine::renderFunctionAhead(std::uint64_t address) {
     if (store)
       store->write(keptKey, {});
   };
-  const auto generation = listing().generation();
+  const auto generation = listing().viewGeneration();
   std::vector<std::string> pages;
   std::size_t raw = 0, compact = 0, textBytes = 0;
   try {
@@ -234,7 +303,7 @@ void Engine::renderFunctionAhead(std::uint64_t address) {
       ~EndRendering() { flag = false; }
     } end{renderingAhead_};
     prepareFunction(address, representation);
-    if (listing().generation() != generation)
+    if (listing().viewGeneration() != generation)
       return;
     for (std::size_t next = 0;;) {
       auto text = engineViewPage(address, representation, next, true,
@@ -286,7 +355,7 @@ void Engine::keepVisitedRender(std::uint64_t address,
   if (!store || !store->writable() || !rendersSettled() ||
       store->bytes() >= ::neverd::limits::worker::kRenderAheadMaxStoredBytes)
     return;
-  const auto key = storeKey(address, representation, optionText);
+  const auto key = renderStoreKey(address, representation, optionText);
   if (store->contains(key))
     return;
   std::vector<std::string> compact;
@@ -304,7 +373,7 @@ std::vector<std::string> Engine::renderedAheadPages(
   const auto kept = renderedAhead_.find(sourceKey);
   if (kept == renderedAhead_.end()) {
     if (auto *store = liveRenderStore()) {
-      const auto key = storeKey(address, representation, optionText);
+      const auto key = renderStoreKey(address, representation, optionText);
       stored = store->read(key);
       if (stored.empty() && store->contains(key))
         renderFailedAddress_ = address;

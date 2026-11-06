@@ -1,5 +1,6 @@
 #include "AnalysisService.h"
 
+#include "../ResourceLimits.h"
 #include "CodeView.h"
 
 #include <QJsonArray>
@@ -26,6 +27,8 @@ AnalysisService::AnalysisService(QueryService &owner, QString workerPath,
   });
   connect(&client_, &EngineClient::stopped, this, [this] {
     ready_ = false;
+    refreshingNames_ = false;
+    abandoned_.clear();
     renderAheadState_.clear();
     if (!active_.isEmpty())
       fail(QStringLiteral("analysis_failed"), tr("Analysis worker stopped."));
@@ -50,6 +53,7 @@ void AnalysisService::stopWorker() {
   if (snapshotRequest_)
     owner_.unsubscribe(std::exchange(snapshotRequest_, 0));
   wire_.clear();
+  abandoned_.clear();
   restore_.clear();
   ready_ = false;
   startingReplica_ = false;
@@ -60,17 +64,45 @@ void AnalysisService::stopWorker() {
 }
 
 void AnalysisService::reset() {
-  const bool retain = ready_ && active_.isEmpty() && updatesNames_ &&
-                      owner_.localNamesOnly() &&
+  // The replica takes a change of names or comments in place, and refuses any
+  // other (receive), which restores a fresh one.
+  const bool retain = (ready_ || refreshingNames_) && updatesNames_ &&
                       queries_.projectId() == owner_.projectId();
   active_.clear();
   if (retain) {
     ++serial_;
     ready_ = false;
     refreshingNames_ = true;
+    // What it is still answering belongs to the state before this change, and
+    // the next update replaces any it is taking.
+    if (snapshotRequest_)
+      owner_.unsubscribe(std::exchange(snapshotRequest_, 0));
+    startingReplica_ = false;
+    restore_.clear();
+    abandonRunningRead();
+    snapshot_ = {};
   } else
     stopWorker();
   queries_.resetReadContext(owner_.projectId(), owner_.revision());
+}
+
+void AnalysisService::abandonRunningRead() {
+  if (wire_.isEmpty())
+    return;
+  abandoned_ = std::exchange(wire_, {});
+  namespace limits = ::neverd::limits::gui;
+  const auto grace = std::max<qint64>(
+      limits::kAnalysisAbandonedReadMinimumMilliseconds,
+      limits::kAnalysisAbandonedReadRestores * restoreMilliseconds_);
+  QTimer::singleShot(grace, this, [this, read = abandoned_] {
+    if (abandoned_ != read)
+      return;
+    // Starting over costs less than this read still may.
+    const QString waiting = std::exchange(active_, {});
+    stopWorker();
+    active_ = waiting;
+    requestSnapshot();
+  });
 }
 
 QString AnalysisService::send(const QString &operation,
@@ -80,9 +112,7 @@ QString AnalysisService::send(const QString &operation,
     if (payload.value("request_id").toString() == active_) {
       const QString cancelled = std::exchange(active_, {});
       const QString op = operation_;
-      stopWorker();
-      // Release this dispatcher's active slot only after the executor has
-      // been retired. EngineClient filters all replies from its old epoch.
+      abandonRunningRead();
       QTimer::singleShot(0, this, [this, cancelled, op] {
         queries_.receive({{"type", "response"},
                           {"request_id", cancelled},
@@ -126,11 +156,10 @@ void AnalysisService::requestSnapshot() {
     return;
   startingReplica_ = true;
   const auto serial = serial_;
-  const auto id = active_;
   snapshotRequest_ = owner_.subscribe(
       {QStringLiteral("analysis_snapshot"), {}}, this,
-      [this, serial, id](const QJsonObject &response) {
-        if (serial != serial_ || active_ != id)
+      [this, serial](const QJsonObject &response) {
+        if (serial != serial_)
           return;
         snapshotRequest_ = 0;
         if (response.value("status") != QLatin1String("ok")) {
@@ -139,11 +168,15 @@ void AnalysisService::requestSnapshot() {
           return;
         }
         snapshot_ = response.value("payload").toObject();
+        // An update it is still taking moves the revision: the snapshot itself
+        // says what this one applies to.
         if (refreshingNames_)
           restore_ = client_.request(QStringLiteral("analysis_update_names"),
-                                     snapshot_, workerRevision_);
-        else
+                                     snapshot_);
+        else {
+          restoring_.start();
           client_.start(workerPath_);
+        }
       });
 }
 
@@ -169,8 +202,6 @@ void AnalysisService::receive(const QJsonObject &message) {
     }
     return;
   }
-  if (active_.isEmpty())
-    return;
   if (message.value("type") == QLatin1String("hello")) {
     updatesNames_ = message.value("capabilities")
                         .toArray()
@@ -221,6 +252,7 @@ void AnalysisService::receive(const QJsonObject &message) {
         // the existing full-restore contract and its input/sidecar checks.
         refreshingNames_ = false;
         startingReplica_ = true;
+        restoring_.start();
         client_.start(workerPath_);
         return;
       }
@@ -229,6 +261,8 @@ void AnalysisService::receive(const QJsonObject &message) {
       return;
     }
     snapshot_ = {};
+    if (!refreshingNames_ && restoring_.isValid())
+      restoreMilliseconds_ = restoring_.elapsed();
     refreshingNames_ = false;
     workerRevision_ = message.value("revision").toString();
     ready_ = true;
@@ -236,11 +270,19 @@ void AnalysisService::receive(const QJsonObject &message) {
   } else if (!wire_.isEmpty() && id == wire_) {
     workerRevision_ = message.value("revision").toString();
     finish(message);
+  } else if (!abandoned_.isEmpty() && id == abandoned_) {
+    abandoned_.clear();
+    workerRevision_ = message.value("revision").toString();
   }
 }
 
 void AnalysisService::dispatch() {
-  wire_ = client_.request(operation_, payload_, workerRevision_);
+  if (active_.isEmpty())
+    return;
+  // A read that still runs can move the worker's revision before this reaches
+  // it.
+  wire_ = client_.request(operation_, payload_,
+                          abandoned_.isEmpty() ? workerRevision_ : QString());
 }
 
 void AnalysisService::finish(QJsonObject response) {
@@ -287,7 +329,9 @@ AnalysisPool::AnalysisPool(QueryService &owner, const QString &workerPath,
   connect(&owner, &QueryService::contextChanged, this, [this, &owner] {
     ++preparationSerial_;
     preparing_ = false;
-    if (owner.localNamesOnly())
+    // A function stays with the replica that holds its analysis, which takes
+    // a change to the same project in place where it can.
+    if (std::exchange(boundProject_, owner.projectId()) == owner.projectId())
       return;
     for (auto &lane : lanes_)
       lane.function.reset();
