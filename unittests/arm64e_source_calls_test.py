@@ -1,7 +1,8 @@
 """Compile explicit arm64e value calls through the public SDK and both C routes.
 
-This checks declaration admission and source projection. It does not execute
-PAC, authenticate a supplied prototype, or qualify native Apple arm64e.
+This checks declaration admission and source projection. Raw variadic cases
+also execute against independently compiled va_arg callbacks on Apple arm64.
+It does not execute PAC or authenticate a supplied prototype.
 """
 
 import argparse
@@ -9,6 +10,8 @@ import ctypes
 import hashlib
 import json
 from pathlib import Path
+import platform
+import re
 import subprocess
 
 
@@ -26,17 +29,20 @@ def main():
     args.artifacts.mkdir(parents=True, exist_ok=True)
     assembly = FIXTURES["assembly_prefix"]
     for case in FIXTURES["cases"]:
-        assembly += FIXTURES["assembly_entry"].format(name=case["name"])
+        variadic = "variadic_types" in case
+        assembly += FIXTURES["assembly_variadic_entry" if variadic else
+                             "assembly_entry"].format(name=case["name"])
         assembly += FIXTURES["arguments"][case["arguments"]]
-        assembly += FIXTURES["call"]
+        assembly += FIXTURES[case.get("call", "call")]
         assembly += FIXTURES["results"][case["result"]]
-        assembly += FIXTURES["assembly_exit"]
-    source = args.artifacts / "calls.S"
+        assembly += FIXTURES["assembly_variadic_exit" if variadic else
+                             "assembly_exit"]
+    original = args.artifacts / "calls.S"
     binary = args.artifacts / "calls.dylib"
-    source.write_text(assembly)
+    original.write_text(assembly)
     subprocess.run(
         [args.compiler, "-target", FIXTURES["triple"], "-dynamiclib",
-         "-nostdlib", "-lSystem", str(source), "-o", str(binary)],
+         "-nostdlib", "-lSystem", str(original), "-o", str(binary)],
         check=True,
     )
 
@@ -80,6 +86,49 @@ def main():
             session, address, route.encode(), 0, FIXTURES["page_size"],
             json.dumps(request).encode() if request else None)))
 
+    native = [platform.system(), platform.machine()] == FIXTURES["native_host"]
+
+    def execute_variadic(case, source, route):
+        if "callback" not in case or not native:
+            return 0
+        parameter_types = [FIXTURES["native_parameter"]] * (len(case["inputs"]) + 2)
+        prototype = FIXTURES["native_prototype"].format(
+            name=case["name"], parameters=", ".join(parameter_types[2:]))
+        if source != original:
+            signature = re.search(FIXTURES["native_signature"].format(
+                name=re.escape(case["name"])), source.read_text())
+            assert signature, source
+            prototype = signature[1] + ";\n"
+            parameter_types = [re.sub(FIXTURES["native_parameter_name"], "", p).strip()
+                               for p in signature[2].split(",")]
+            assert len(parameter_types) == len(case["inputs"]) + 2, prototype
+            assert all(t in FIXTURES["native_entry_types"] for t in parameter_types), prototype
+        values = ["(uintptr_t)&callback", "0", *case["inputs"]]
+        arguments = ", ".join(f"({t})({value})" for t, value
+                              in zip(parameter_types, values))
+        harness = args.artifacts / (case["name"] + "-callback.c")
+        harness.write_text(
+            FIXTURES["native_header"] + FIXTURES["declarations"] + "\n" +
+            prototype +
+            case["callback"] + FIXTURES["native_main"].format(
+                name=case["name"], arguments=arguments,
+                expected=case["expected"]))
+        for optimization in FIXTURES["optimizations"]:
+            stem = case["name"] + "-" + route + optimization
+            executable = args.artifacts / stem
+            compiled = subprocess.run(
+                [args.compiler, "-target", FIXTURES["native_triple"],
+                 *FIXTURES["native_flags"], optimization, str(source),
+                 str(harness), "-o", str(executable)], stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True)
+            (args.artifacts / (stem + ".log")).write_text(compiled.stdout)
+            assert compiled.returncode == 0, (stem, compiled.stdout)
+            executed = subprocess.run([str(executable)], stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, text=True)
+            assert executed.returncode == 0, (stem, executed.returncode,
+                                              executed.stdout)
+        return len(FIXTURES["optimizations"])
+
     try:
         assert library.neverd_session_load(session, str(binary).encode()) == 1, (
             library.neverd_last_error(session))
@@ -101,7 +150,13 @@ def main():
                 "id": page["source_calls"][0]["id"],
                 "snapshot": page["call_snapshot"],
                 "declaration": case["declaration"],
+                "variadic_types": case.get("variadic_types", []),
             }]}
+            if "callback" in case:
+                summary.append({"name": case["name"], "route": "original",
+                                "native_executions": execute_variadic(
+                                    case, original, "original"),
+                                "native_execution_available": native})
             for route in FIXTURES["routes"]:
                 result = view(address, route, request)
                 stem = case["name"] + "-" + route
@@ -126,15 +181,19 @@ def main():
                     assert compiled.returncode == 0, (stem, compiled.stdout)
                 summary.append({"name": case["name"], "route": route,
                                 "applied": True,
+                                "native_executions": execute_variadic(
+                                    case, source, route),
                                 "source_sha256": hashlib.sha256(
                                     source.read_bytes()).hexdigest()})
         address = symbols[FIXTURES["cases"][0]["name"]]
         page = view(address, FIXTURES["routes"][0])
         for declaration in FIXTURES["refused"]:
+            edit = ({"declaration": declaration} if isinstance(declaration, str)
+                    else declaration)
             request = {"call_types": [{
                 "id": page["source_calls"][0]["id"],
                 "snapshot": page["call_snapshot"],
-                "declaration": declaration,
+                **edit,
             }]}
             for route in FIXTURES["routes"]:
                 result = view(address, route, request)

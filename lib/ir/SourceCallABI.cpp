@@ -74,10 +74,14 @@ bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
            Signature.Parameters.size()))
     return refuse(Error, "A variadic call-site needs a nonempty fixed prefix "
                          "within its actual operands");
-  if (Architecture == Arch::AArch64 && Format == BinaryFormat::MachO &&
-      Hint.AnalystFixedCount < 0) {
+  if (Architecture == Arch::AArch64 && Format == BinaryFormat::MachO) {
     Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
-    if (!assignDarwinFixedSourceABI(Signature, Architecture, Error))
+    const bool Assigned =
+        Hint.AnalystFixedCount < 0
+            ? assignDarwinFixedSourceABI(Signature, Architecture, Error)
+            : assignDarwinVariadicSourceABI(Signature, Hint.AnalystFixedCount,
+                                            Architecture, Error);
+    if (!Assigned)
       return false;
     if (hasIndirectSourceParameters(Signature))
       return refuse(Error, kIndirectAnalystCopy);

@@ -1422,25 +1422,32 @@ GP/FP registers, mixed operands, exact result bits and Darwin variadic tails
 across both keys, zero/dynamic discriminators and raw controls. The matrix also
 checks signed/unsigned 128-bit values, single/pair integer and pointer records,
 a padded 32-bit/64-bit pair, and one-to-four-member f32/f64 HFAs with nested and
-whole-stack cases. CTest registers each of the 40 type shapes separately,
+whole-stack cases. Eighteen shapes additionally cover complete variadic
+values, higher alignment, fixed aggregate spills and padded fixed prefixes. CTest registers each of the 58 type shapes separately,
 retaining all five authentication variants and both C routes at O0/O2 within
 the ordinary per-test timeout. Stable shape names identify failures and permit
-parallel scheduling. All 200 typed groups emit actual Mach-O objects on five
+parallel scheduling. All 290 typed groups emit actual Mach-O objects on five
 routes. Narrow register arguments
 and results require the correct LLVM extension attribute; stack arguments
 retain their source width. The outer fixture explicitly writes the complete
 X0 return carrier, and a constant result cannot stand in for the callback's
 value. Set `NEVERD_ARM64E_CALL_ABI_ARTIFACT_DIR` to retain the nine integer
-groups and 200 typed groups with all five object routes. Composite result
+groups and 290 typed groups with all five object routes. Composite result
 oracles consume every logical member, excluding padding; pointer and integer
 members remain raw bits. The independent callback poisons record return padding.
 On macOS, `NeverDArm64eSourceCallSDK` loads a real arm64e dylib through the
 public C API, declares named integer/pointer records, a padded pair, a nested
 HFA and signed/unsigned 128-bit values, and applies complete call prototypes.
-Both C routes must compile all ten argument/result shapes at O0/O2, including
-record names matching the renderer's preferred temporary names.
-Packed/union values and indirect copies/results must refuse explicitly.
-These compiler checks execute no arm64e fixture code.
+Both C routes must compile all seventeen argument/result shapes at O0/O2,
+including record names matching the renderer's preferred temporary names.
+Seven raw variadic fixtures also execute as native arm64 on Apple arm64:
+original assembly and both C projections call independent C `va_arg` readers
+at O0/O2 (42 executions). These readers check signed/unsigned 128-bit values,
+16-byte alignment following a promoted int, named records, padding, HFA and
+nested HFA members, and a fixed record prefix. Other hosts retain compilation
+and explicitly record that native execution is unavailable. Packed/union values,
+indirect copies/results, and unpromoted scalar tails must refuse explicitly.
+Raw native execution does not qualify PAC behavior.
 `NativeTypesKeepTheOriginalIndirectTarget` separately retains recovered native
 C prototypes and refuses unsupported authenticated language bindings. Its five
 HighC variants must compile at O0/O2 with the original target and authentication.
