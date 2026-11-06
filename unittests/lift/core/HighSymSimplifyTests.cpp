@@ -2463,6 +2463,107 @@ int main(void) {
   source_call_execution_test::compileAndRun(Program, {"-O2"});
 }
 
+TEST(HighSymSimplify, PeeledComparisonsKeepTheirValueAtEverySignedness) {
+  std::vector<HighFunc> Functions;
+  std::string Checks;
+  for (uint16_t Bytes : {1, 2, 4, 8})
+    for (bool Signed : {false, true}) {
+      const unsigned Bits = Bytes * 8;
+      const uint64_t Mask =
+          Bytes == 8 ? ~uint64_t(0) : (uint64_t(1) << Bits) - 1;
+      const uint64_t Sign = uint64_t(1) << (Bits - 1);
+      const std::string Word = "uint" + std::to_string(Bits) + "_t";
+      for (uint64_t Literal :
+           {uint64_t(5), Sign - 1, Sign, Sign + 1, -uint64_t(5) & Mask, Mask})
+        for (unsigned Shape = 0; Shape != 5; ++Shape) {
+          auto V = tempOfSize(0, Bytes);
+          V.Kind = MedVar::Param;
+          auto X = HighExpr::makeVar(V, NdType::makeInt(Bytes, Signed));
+          const auto Zero = HighExpr::makeConst(0, Bytes);
+          const auto L = HighExpr::makeConst(Literal, Bytes);
+          const auto Minus = HighExpr::makeBinop(NdOp::INT_SUB, Zero, X);
+          ExprPtr Predicate;
+          std::string Expected;
+          const std::string U = "(" + Word + ")v";
+          const std::string Lit =
+              "(" + Word + ")UINT64_C(" + std::to_string(Literal) + ")";
+          switch (Shape) {
+          case 0:
+            Predicate = HighExpr::makeBinop(NdOp::INT_EQUAL, Minus, L);
+            Expected = "(" + Word + ")(0u - " + U + ") == " + Lit;
+            break;
+          case 1:
+            Predicate = HighExpr::makeBinop(
+                NdOp::INT_EQUAL, HighExpr::makeUnary(NdOp::INT_NOT, Minus), L);
+            Expected =
+                "(" + Word + ")~(" + Word + ")(0u - " + U + ") == " + Lit;
+            break;
+          case 2:
+            Predicate = HighExpr::makeBinop(
+                NdOp::INT_NOTEQUAL, HighExpr::makeUnary(NdOp::INT_NOT, Minus),
+                L);
+            Expected =
+                "(" + Word + ")~(" + Word + ")(0u - " + U + ") != " + Lit;
+            break;
+          case 3:
+            Predicate = HighExpr::makeBinop(
+                NdOp::INT_EQUAL,
+                HighExpr::makeBinop(NdOp::INT_SUB, Zero,
+                                    HighExpr::makeUnary(NdOp::INT_NOT, Minus)),
+                L);
+            Expected = "(" + Word + ")(0u - (" + Word + ")~(" + Word +
+                       ")(0u - " + U + ")) == " + Lit;
+            break;
+          default:
+            // The literal's top bit must survive a sign-extending promotion of
+            // the operand when the mask is peeled away.
+            Predicate = HighExpr::makeBinop(
+                NdOp::INT_EQUAL,
+                HighExpr::makeBinop(NdOp::INT_AND,
+                                    HighExpr::makeConst(Sign | 0xf, Bytes),
+                                    HighExpr::makeUnary(NdOp::INT_NOT, Minus)),
+                L);
+            Expected = "(" + Word + ")(" + Word + ")(UINT64_C(" +
+                       std::to_string(Sign | 0xf) + ") & ~(" + Word +
+                       ")(0u - " + U + ")) == " + Lit;
+            break;
+          }
+          HighFunc F;
+          F.Name = "peeled_" + std::to_string(Functions.size());
+          F.Entry = kEntry + Functions.size() * 16;
+          F.ReturnType = NdType::makeInt(4, false);
+          F.Params = {{"x", X->Type, kNoParamReg, 0}};
+          F.Body = {returnValue(extendInteger(Predicate, 4))};
+          simplifyExprSemantics(F.Body);
+          Checks += "    if (" + F.Name + "((" + (Signed ? "int" : "uint") +
+                    std::to_string(Bits) + "_t)v) != (uint32_t)(" + Expected +
+                    ")) return 1;\n";
+          Functions.push_back(std::move(F));
+        }
+    }
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+  OS.flush();
+  const auto Program = C + R"C(
+int main(void) {
+  uint64_t values[1024];
+  unsigned count = 0;
+  for (unsigned i = 0; i != 256; ++i) {
+    values[count++] = i;
+    values[count++] = i << 8 | i;
+    values[count++] = UINT64_C(0x8000000000000000) >> (i % 64);
+    values[count++] = ~UINT64_C(0) - i;
+  }
+  for (unsigned i = 0; i != count; ++i) {
+    const uint64_t v = values[i];
+)C" + Checks + "  }\n  return 0;\n}\n";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
 TEST(HighSymSimplify, NegatedTermKeepsItsAvailableDefinition) {
   auto Parameter = [](int Id) {
     auto V = tempOfSize(Id, 4);

@@ -1029,6 +1029,39 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
 
     case sym::SymOp::Not: {
       ExprPtr Operand = get(Ctx.operand(Item.Ref, 0));
+      // The complement of a comparison is a comparison. Spell it directly: a
+      // source reader expects `x != y`, not `!(x == y)`.
+      if (NodeWidth == 1 && Operand && Operand->Kind == ExprKind::BinOp &&
+          Operand->Operands.size() == 2) {
+        std::optional<NdOp> Negated;
+        bool Swap = true;
+        switch (Operand->Op) {
+        case NdOp::INT_EQUAL:
+          Negated = NdOp::INT_NOTEQUAL;
+          Swap = false;
+          break;
+        case NdOp::INT_LESS:
+          Negated = NdOp::INT_LESSEQUAL;
+          break;
+        case NdOp::INT_LESSEQUAL:
+          Negated = NdOp::INT_LESS;
+          break;
+        case NdOp::INT_SLESS:
+          Negated = NdOp::INT_SLESSEQUAL;
+          break;
+        case NdOp::INT_SLESSEQUAL:
+          Negated = NdOp::INT_SLESS;
+          break;
+        default:
+          break;
+        }
+        if (Negated) {
+          Result =
+              HighExpr::makeBinop(*Negated, Operand->Operands[Swap ? 1 : 0],
+                                  Operand->Operands[Swap ? 0 : 1]);
+          break;
+        }
+      }
       Result = Operand ? HighExpr::makeUnary(NodeWidth == 1 ? NdOp::BOOL_NOT
                                                             : NdOp::INT_NOT,
                                              Operand)
