@@ -133,6 +133,81 @@ entry:
   EXPECT_EQ(Stores, 3u);
 }
 
+TEST(X64StateObjectPointers, ProjectsOnlyTheDeclaredEventObject) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"IR(
+target datalayout = "e-p:64:64"
+define void @declared_event(ptr %state, ptr %event, i64 %index) {
+  %bits = ptrtoint ptr %event to i64
+  %last_bits = add i64 %bits, 24
+  %last_ptr = inttoptr i64 %last_bits to ptr
+  %last = load i64, ptr %last_ptr, align 1
+  %byte_bits = add i64 %bits, 31
+  %byte_ptr = inttoptr i64 %byte_bits to ptr
+  %byte = load i8, ptr %byte_ptr, align 1
+  %end_bits = add i64 %bits, 32
+  %end_ptr = inttoptr i64 %end_bits to ptr
+  %end = load i8, ptr %end_ptr, align 1
+  %wide_bits = add i64 %bits, 28
+  %wide_ptr = inttoptr i64 %wide_bits to ptr
+  %wide = load i64, ptr %wide_ptr, align 1
+  %dynamic_bits = add i64 %bits, %index
+  %dynamic_ptr = inttoptr i64 %dynamic_bits to ptr
+  %dynamic = load i8, ptr %dynamic_ptr, align 1
+  %guest_ptr = inttoptr i64 %last to ptr
+  %guest = load i64, ptr %guest_ptr, align 1
+  %ordered = load atomic i64, ptr %last_ptr acquire, align 8
+  %volatile = load volatile i64, ptr %last_ptr, align 8
+  ret void
+}
+define i64 @other(ptr %state, ptr %foreign) {
+  %bits = ptrtoint ptr %foreign to i64
+  %field_bits = add i64 %bits, 24
+  %field_ptr = inttoptr i64 %field_bits to ptr
+  %field = load i64, ptr %field_ptr, align 1
+  ret i64 %field
+}
+)IR",
+                                          Diagnostic, Context);
+  ASSERT_NE(Module, nullptr);
+  auto &Event = *Module->getFunction("declared_event");
+  auto &Other = *Module->getFunction("other");
+  const auto Load = [](llvm::Function &Function, const char *Name) {
+    return llvm::cast<llvm::LoadInst>(
+        Function.getValueSymbolTable()->lookup(Name));
+  };
+  neverd::preserveX64StateObjectPointers(*Module, 32);
+  ASSERT_FALSE(llvm::verifyModule(*Module));
+  for (const char *Name : {"last", "byte"})
+    EXPECT_TRUE(
+        llvm::isa<llvm::IntToPtrInst>(Load(Event, Name)->getPointerOperand()));
+
+  neverd::preserveX64StateObjectPointers(*Module, 32, "declared_event");
+  ASSERT_FALSE(llvm::verifyModule(*Module));
+  for (const auto &[Name, Offset] : {std::pair{"last", 24}, {"byte", 31}}) {
+    SCOPED_TRACE(Name);
+    const auto *Access = Load(Event, Name);
+    const auto *GEP =
+        llvm::dyn_cast<llvm::GetElementPtrInst>(Access->getPointerOperand());
+    ASSERT_NE(GEP, nullptr);
+    EXPECT_TRUE(GEP->isInBounds());
+    EXPECT_EQ(GEP->getPointerOperand(), Event.getArg(1));
+    EXPECT_EQ(llvm::cast<llvm::ConstantInt>(GEP->getOperand(1))->getZExtValue(),
+              uint64_t(Offset));
+    EXPECT_EQ(Access->getType()->getIntegerBitWidth(), Offset == 24 ? 64u : 8u);
+    EXPECT_EQ(Access->getAlign().value(), 1u);
+  }
+  for (const char *Name :
+       {"end", "wide", "dynamic", "guest", "ordered", "volatile"}) {
+    SCOPED_TRACE(Name);
+    EXPECT_TRUE(
+        llvm::isa<llvm::IntToPtrInst>(Load(Event, Name)->getPointerOperand()));
+  }
+  EXPECT_TRUE(
+      llvm::isa<llvm::IntToPtrInst>(Load(Other, "field")->getPointerOperand()));
+}
+
 TEST(X64StateObjectPointers, PromotesOnlyScaffoldingBeforeProjection) {
   llvm::LLVMContext Context;
   llvm::SMDiagnostic Diagnostic;

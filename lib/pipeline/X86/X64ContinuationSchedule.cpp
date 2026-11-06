@@ -9,6 +9,8 @@
 
 #include "X64ContinuationSchedule.h"
 
+#include "X64FunctionCallSchedule.h"
+#include "X64FunctionCallSites.h"
 #include "X64FunctionContext.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
@@ -18,6 +20,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
+#include <string>
 
 namespace neverd {
 
@@ -33,63 +36,19 @@ void emitCompletedShadows(llvm::raw_ostream &OS, llvm::StringRef Indent,
         "!shadows->SSBlocked);\n";
 }
 
-} // namespace
-
-void emitX64ContinuationSchedule(
+void emitScheduledDriver(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
     bool FollowInternalCalls, bool FunctionContext,
-    const analysis::X64ContinuationSourceOptions &Options) {
+    const analysis::X64ContinuationSourceOptions &Options, llvm::StringRef Name,
+    const X64FunctionCallSitePauses *CallSitePauses) {
   const bool Paged = Options.PagedMemory;
-  OS << R"C(
-/* Instruction-boundary IRQ/NMI producer. peek returns 0=no event, 1=pending;
- * every peek consumes one poll-budget unit. It must not acknowledge the event
- * or mutate state, shadows, budgets, selected code or guest RAM. The producer
- * owns priority/APIC/PIC eligibility (including CR8), coalescing and arrival.
-)C";
-  OS << (Paged ? " * accepted consumes the event once after admission, "
-                 "including failed IDT entry.\n"
-               : " * accepted is called exactly once after successful "
-                 "delivery; it cannot fail.\n");
-  OS << R"C( * Its only effect is acknowledging that event in the producer's context.
- * State, shadows, budgets and context are mutually disjoint and accessible.
- * No callback runs when entry validation, selection or a budget stops execution.
- * 16=poll budget exhausted. Other statuses retain the continuation contract.
- * Successful event entry consumes no instruction budget and stops at the handler.
- * Shadows survive all rejected/unexecuted steps and expire on completion or
- * delivered exceptions. Paged MOV SS can start a new inhibition window;
- * an already active MOV-SS window is consumed, not renewed. */
-typedef struct neverd_x64_interruptibility_v1 {
-    uint8_t STIBlocked, SSBlocked, NMIBlockedBySTI, Reserved[5];
-} neverd_x64_interruptibility_v1;
-typedef struct neverd_x64_pending_interrupt_v1 {
-    uint8_t Vector, Kind; /* Kind=2 (IRQ) or 3 (NMI, Vector=2). */
-} neverd_x64_pending_interrupt_v1;
-typedef int (*neverd_x64_peek_interrupt_v1)(
-    const neverd_x64_state_v6 *, const neverd_x64_interruptibility_v1 *,
-    neverd_x64_pending_interrupt_v1 *, void *);
-typedef void (*neverd_x64_accept_interrupt_v1)(
-    const neverd_x64_pending_interrupt_v1 *, void *);
-
-static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
-    switch (pc) {
-)C";
-  for (const auto &Unit : Units)
-    OS << "    case 0x" << llvm::utohexstr(Unit.Address) << "ULL:\n";
-  OS << R"C(        return 1;
-    default: return 0;
-    }
-}
-
-)C";
   if (FunctionContext)
     OS << "/* Retain the activation across event and instruction boundaries.\n"
           " * Its storage is disjoint from state, shadows, budgets, both\n"
           " * contexts and guest RAM; the producer owns return-cell lifetime. "
           "*/\n";
-  OS << "uint64_t neverd_x64_continue_" << (Paged ? "paged_" : "") << "events"
-     << (FunctionContext ? "_function" : "")
-     << "_v6(\n    neverd_x64_state_v6 *state, "
+  OS << "uint64_t " << Name << "(\n    neverd_x64_state_v6 *state, "
      << (Paged ? "uint8_t *memory_context, " : "") << R"C(uint64_t *budget,
     neverd_x64_interruptibility_v1 *shadows, uint64_t *poll_budget,
     neverd_x64_peek_interrupt_v1 peek,
@@ -111,8 +70,10 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
         switch (state->PC) {
 )C";
   for (const auto &Unit : Units) {
-    OS << "        case 0x" << llvm::utohexstr(Unit.Address)
-       << "ULL: status = ";
+    OS << "        case 0x" << llvm::utohexstr(Unit.Address) << "ULL: ";
+    if (CallSitePauses && CallSitePauses->emit(OS, Unit.Address, ""))
+      continue;
+    OS << "status = ";
     if (Paged)
       OS << "neverd_x64_paged_validate_v1(memory_context, (uint8_t *)state, 0x"
          << llvm::utohexstr(Unit.Address) << "ULL, "
@@ -205,6 +166,66 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
     return 9;
 }
 )C";
+}
+
+} // namespace
+
+void emitX64ContinuationSchedule(
+    llvm::raw_ostream &OS,
+    llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
+    bool FollowInternalCalls, bool FunctionContext,
+    const analysis::X64ContinuationSourceOptions &Options,
+    llvm::ArrayRef<X64FunctionCallSite> CallSites,
+    const X64FunctionCallSitePauses *CallSitePauses) {
+  const bool Paged = Options.PagedMemory;
+  OS << R"C(
+/* Instruction-boundary IRQ/NMI producer. peek returns 0=no event, 1=pending;
+ * every peek consumes one poll-budget unit. It must not acknowledge the event
+ * or mutate state, shadows, budgets, selected code or guest RAM. The producer
+ * owns priority/APIC/PIC eligibility (including CR8), coalescing and arrival.
+)C";
+  OS << (Paged ? " * accepted consumes the event once after admission, "
+                 "including failed IDT entry.\n"
+               : " * accepted is called exactly once after successful "
+                 "delivery; it cannot fail.\n");
+  OS << R"C( * Its only effect is acknowledging that event in the producer's context.
+ * State, shadows, budgets and context are mutually disjoint and accessible.
+ * No callback runs when entry validation, selection or a budget stops execution.
+ * 16=poll budget exhausted. Other statuses retain the continuation contract.
+ * Successful event entry consumes no instruction budget and stops at the handler.
+ * Shadows survive all rejected/unexecuted steps and expire on completion or
+ * delivered exceptions. Paged MOV SS can start a new inhibition window;
+ * an already active MOV-SS window is consumed, not renewed. */
+typedef struct neverd_x64_interruptibility_v1 {
+    uint8_t STIBlocked, SSBlocked, NMIBlockedBySTI, Reserved[5];
+} neverd_x64_interruptibility_v1;
+typedef struct neverd_x64_pending_interrupt_v1 {
+    uint8_t Vector, Kind; /* Kind=2 (IRQ) or 3 (NMI, Vector=2). */
+} neverd_x64_pending_interrupt_v1;
+typedef int (*neverd_x64_peek_interrupt_v1)(
+    const neverd_x64_state_v6 *, const neverd_x64_interruptibility_v1 *,
+    neverd_x64_pending_interrupt_v1 *, void *);
+typedef void (*neverd_x64_accept_interrupt_v1)(
+    const neverd_x64_pending_interrupt_v1 *, void *);
+
+static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
+    switch (pc) {
+)C";
+  for (const auto &Unit : Units)
+    OS << "    case 0x" << llvm::utohexstr(Unit.Address) << "ULL:\n";
+  OS << R"C(        return 1;
+    default: return 0;
+    }
+}
+
+)C";
+  const llvm::StringRef Name =
+      Paged ? (FunctionContext ? "neverd_x64_continue_paged_events_function_v6"
+                               : "neverd_x64_continue_paged_events_v6")
+            : (FunctionContext ? "neverd_x64_continue_events_function_v6"
+                               : "neverd_x64_continue_events_v6");
+  emitScheduledDriver(OS, Units, FollowInternalCalls, FunctionContext, Options,
+                      Name, CallSitePauses);
   if (FunctionContext)
     OS << "uint64_t neverd_x64_continue_" << (Paged ? "paged_" : "")
        << "events_v6(\n    neverd_x64_state_v6 *state, "
@@ -216,6 +237,15 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
        << (Paged ? "paged_" : "") << "events_function_v6(state, "
        << (Paged ? "memory_context, " : "")
        << "budget, shadows, poll_budget, peek, accepted, context, 0);\n}\n";
+  // The same scheduler stops after each authenticated original CALL. These
+  // helpers have no pause marker or callee activation: the bridge establishes
+  // the activation only after attempted CALL success and never replays it.
+  for (const auto &Site : CallSites) {
+    OS << "static ";
+    emitScheduledDriver(
+        OS, llvm::ArrayRef(Site.Instruction, 1), false, false, Options,
+        x64ScheduledCallSiteStepName(Site.Instruction->Address), nullptr);
+  }
 }
 
 } // namespace neverd

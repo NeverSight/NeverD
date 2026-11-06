@@ -9,6 +9,7 @@
 
 #include "X64StateObjectPointers.h"
 
+#include "neverd/analysis/arch/x86_64/X64ContinuationEvent.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
@@ -49,20 +50,23 @@ std::optional<uint64_t> displacement(const llvm::BinaryOperator &Op,
   return Delta <= Bytes - Offset ? std::optional(Offset + Delta) : std::nullopt;
 }
 
-/// This worklist follows only the state pointer's exact-width def/use graph.
+/// This worklist follows only the declared pointer's exact-width def/use graph.
 /// A loaded guest address, a variable index or a PHI supplies no object proof.
-void projectFunction(llvm::Function &Function, uint64_t StateBytes) {
-  if (Function.isDeclaration() || Function.arg_empty())
+void projectArgument(llvm::Function &Function, unsigned Argument,
+                     uint64_t ObjectBytes) {
+  if (Function.isDeclaration() || Argument >= Function.arg_size())
     return;
-  auto *State = Function.getArg(0);
-  const auto *PointerType = llvm::dyn_cast<llvm::PointerType>(State->getType());
+  auto *Object = Function.getArg(Argument);
+  const auto *PointerType =
+      llvm::dyn_cast<llvm::PointerType>(Object->getType());
   if (!PointerType || PointerType->getAddressSpace() != 0)
     return;
   const auto &Layout = Function.getParent()->getDataLayout();
-  llvm::SmallVector<std::pair<llvm::Value *, uint64_t>, 32> Pending{{State, 0}};
+  llvm::SmallVector<std::pair<llvm::Value *, uint64_t>, 32> Pending{
+      {Object, 0}};
   llvm::SmallPtrSet<llvm::Value *, 32> Seen;
   llvm::SmallVector<std::pair<llvm::Instruction *, uint64_t>, 32> Accesses;
-  Seen.insert(State);
+  Seen.insert(Object);
   while (!Pending.empty()) {
     const auto [Value, Offset] = Pending.pop_back_val();
     for (auto *User : Value->users()) {
@@ -81,7 +85,7 @@ void projectFunction(llvm::Function &Function, uint64_t StateBytes) {
           Next = Offset;
       } else if (const auto *Op =
                      llvm::dyn_cast<llvm::BinaryOperator>(Instruction)) {
-        Next = displacement(*Op, Value, Offset, StateBytes);
+        Next = displacement(*Op, Value, Offset, ObjectBytes);
       }
       if (Next && Seen.insert(Instruction).second)
         Pending.emplace_back(Instruction, *Next);
@@ -99,7 +103,7 @@ void projectFunction(llvm::Function &Function, uint64_t StateBytes) {
       if (!AccessType || !AccessType->isSized())
         continue;
       const auto Width = Layout.getTypeStoreSize(AccessType);
-      if (!Width.isScalable() && Width.getFixedValue() <= StateBytes - Offset)
+      if (!Width.isScalable() && Width.getFixedValue() <= ObjectBytes - Offset)
         Accesses.emplace_back(Instruction, Offset);
     }
   }
@@ -107,10 +111,11 @@ void projectFunction(llvm::Function &Function, uint64_t StateBytes) {
     llvm::IRBuilder<> Builder(Access);
     // The complete access is inside the producer-declared live object. This
     // is the authority for inbounds, not a numeric guest-address inference.
-    llvm::Value *Pointer = State;
+    llvm::Value *Pointer = Object;
     if (Offset)
-      Pointer = Builder.CreateConstInBoundsGEP1_64(Builder.getInt8Ty(), State,
-                                                   Offset, "state_field");
+      Pointer = Builder.CreateConstInBoundsGEP1_64(
+          Builder.getInt8Ty(), Object, Offset,
+          Argument == 0 ? "state_field" : "event_field");
     const unsigned Index = llvm::isa<llvm::LoadInst>(Access) ? 0 : 1;
     auto *Old = Access->getOperand(Index);
     Access->setOperand(Index, Pointer);
@@ -121,7 +126,8 @@ void projectFunction(llvm::Function &Function, uint64_t StateBytes) {
 
 } // namespace
 
-void preserveX64StateObjectPointers(llvm::Module &Module, uint64_t StateBytes) {
+void preserveX64StateObjectPointers(llvm::Module &Module, uint64_t StateBytes,
+                                    llvm::StringRef EventFunction) {
   if (!StateBytes || StateBytes > uint64_t(INT64_MAX) ||
       Module.getDataLayout().getPointerSizeInBits(0) != 64 ||
       Module.getDataLayout().getIndexSizeInBits(0) != 64)
@@ -130,7 +136,10 @@ void preserveX64StateObjectPointers(llvm::Module &Module, uint64_t StateBytes) {
   // Guest loads, stores, ordering and effects are not optimized away here.
   Pipeline::promoteScaffoldingAllocas(Module);
   for (auto &Function : Module)
-    projectFunction(Function, StateBytes);
+    projectArgument(Function, 0, StateBytes);
+  if (!EventFunction.empty())
+    if (auto *Function = Module.getFunction(EventFunction))
+      projectArgument(*Function, 1, sizeof(analysis::X64ContinuationEventV1));
 }
 
 } // namespace neverd

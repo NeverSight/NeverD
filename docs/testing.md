@@ -20374,8 +20374,8 @@ instruction execution, live context capture or an arbitrary fault handler.
 compile-only checks do not replace that coverage.
 
 `X64ScheduledFunctionContextTest.*` checks scheduled activation admission,
-disabled source/manifest identity, explicit rejection of unscheduled scalar
-views and O0/O2 compilation in both C routes. Each route has 22 nonpaged and
+disabled source/manifest identity and O0/O2 compilation in both C routes.
+Each route has 22 nonpaged and
 44 paged compile-time predicates. They retain
 the actual RET/RET-immediate/STI bodies and scheduler, covering return-cell
 ownership, nested returns, phase guards before runtime access, budget and poll
@@ -20389,6 +20389,23 @@ fault entry or handlers. Memory and producer contexts remain separate. Every
 predicate must simplify to a single `ret i32 0` through ordinary LLVM
 optimization. These tests run no generated program, instruction executor or
 guest. Set `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to retain the proof C and IR.
+
+`X64ScheduledCallTest.*` compiles checked entry and original-CALL views at O0/O2
+in both C routes, with and without pre-CALL handoff pauses. Twenty nonpaged and
+forty paged predicates per route retain the actual CALL/MOV/XOR/RET/SUB bodies
+and schedulers. They check retained upper-DWORD inputs, argument holes,
+instruction/poll budgets, pending retry coordinates, parent/child return cells,
+shadow expiry, cached results and event/fault stops without CALL replay.
+Paged stop/acceptance outcomes and operand exchanges are independently modeled.
+Nonpaged proofs declare accessible RAM at `[0x10000, 0x10040)`; after bounded
+loop unrolling, only contained constant memory operands are bound to one object
+before LLVM value folding. Integer addresses and controllers are retained.
+This supplies the fixture's memory-alias contract, not a live mapping or an
+ordinary-input recovery proof. Unmodified full exports compile separately;
+each predicate has a single block returning constant zero, possibly retaining
+stores to the fixture's RAM object. The blocked-NMI predicate retains the real
+event delivery body and its producer-declared event pointer. No generated
+program, instruction executor or guest runs.
 
 `X64PagedFunctionCallTest.*` checks register-only and context-only paged entry
 views, retained physical stack positions, unchanged instruction/driver text,
@@ -20478,7 +20495,9 @@ arbitrary environment provider.
 
 `X64StateObjectPointers.*` in `NeverDX64ContinuationSourceTests` checks bounded
 state offsets, exact access widths, scaffolding promotion and retained guest
-addresses. Negative/out-of-object, dynamic, truncated, PHI-carried, ordered and
+addresses. A separately declared event input receives its exact object extent;
+other second arguments remain unchanged. Negative/out-of-object, dynamic,
+truncated, PHI-carried, ordered and
 poison-bearing expressions supply no new state-object fact. Pointer-value
 stores remain unchanged. `StateObjectSourceTest.ConstantInboundsGEPsKeepTheirObject`
 compiles positive, negative and zero-offset LLVM C object accesses at O0/O2,
