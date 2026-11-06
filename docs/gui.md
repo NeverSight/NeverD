@@ -1032,8 +1032,8 @@ wrong processor, base or offset changes without starting over; a processor or
 platform the engine read from the bytes is read again.
 
 **Analysis → Enabled**
-turns idle-time analysis (function discovery and the reference index) on or off
-for the file, **Indicator enabled** shows or hides the status line's analysis
+turns idle-time analysis (function discovery, the reference index and rendering
+functions ahead) on or off for the file, **Indicator enabled** shows or hides the status line's analysis
 indicator, and **Options → Load debug information** reads the PDB, DWARF or
 linker map that belongs to the input. Projects, recent files and files opened
 from the command line skip the dialog. The command line lists the same rows with
@@ -1526,6 +1526,19 @@ image-relative tables), `switch 54 cases` on the instruction that loads it,
 dispatch and a data reference from the table. A table is laid out only when
 the engine has checked that every slot holds its target. Cancel removes
 queued work; a running engine call finishes unless the worker is restarted.
+
+With idle-time analysis on, the first analysis worker also renders pseudocode
+ahead of your first visit, once it has solved its call summaries: smallest
+function first, one function at a time, and only after no view has asked it for
+anything for a while, longer for a larger function. A function it has rendered
+opens without being decompiled, with the text decompiling it gave when the job
+reached it. One it has not reached, or one it left to the visit because it is
+very large or its size is unknown, is decompiled when you open it. A local rename keeps the renders; an edit that changes what the engine
+reads starts over. The job takes idle time on one core and memory for the
+compact text: on a Windows kernel of 25,800 functions, about ten minutes and
+500 MB. It is not repeated for a project in which a worker ended during it, and
+it does not run when views open every function under symbolic simplification,
+because they would read none of it.
 
 ## Call-site types
 

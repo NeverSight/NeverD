@@ -233,6 +233,7 @@ Json hello() {
                 "analysis_restore",
                 "analysis_update_names",
                 "prepare_call_summaries",
+                "render_ahead",
                 "functions",
                 "disasm",
                 "bytes",

@@ -5844,6 +5844,8 @@ const Json &Listing::uncachedFunctionRows() {
   return d.functionRowsCache;
 }
 
+void Listing::build() { impl_->build(); }
+
 const std::unordered_map<std::string, std::string> &Listing::functionAliases() {
   impl_->build();
   return impl_->aliases;

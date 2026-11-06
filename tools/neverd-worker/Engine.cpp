@@ -1037,6 +1037,7 @@ void Engine::forgetNamedViews() {
   namedViewsBySource_.clear();
   namedViewBytes_ = 0;
   encodedPageBytes_ = 0;
+  restartRenderAhead();
 }
 
 void Engine::localNamesChanged() {
@@ -1044,6 +1045,7 @@ void Engine::localNamesChanged() {
   // pipeline. Keep original documents for checked, lazy redecoration; encoded
   // pages and already decorated documents still belong to their old revision.
   ++revision_;
+  ++localNameRevisions_;
   namedViewsRevision_ = revision_;
   forgetEncodedPages();
 }
@@ -1054,6 +1056,132 @@ void Engine::forgetEncodedPages() {
     document->pageBytes = 0;
   }
   encodedPageBytes_ = 0;
+}
+
+Json Engine::namedViewEngineOptions(std::uint64_t address,
+                                    const std::string &representation,
+                                    const Json &options,
+                                    const Json *variableEdits,
+                                    const Json *callTypes,
+                                    const Json *stackFrame, Json &stale) {
+  Json engineOptions = options;
+  std::optional<std::string> typeImage;
+  auto currentTypeImage = [&](const Json &type) {
+    if (!typeImage)
+      typeImage = inputHash();
+    return type.value("input_sha256", std::string()) == *typeImage;
+  };
+  const auto row = codeEditRow(address);
+  const auto route = representation == "source" ? "c" : representation;
+  const auto edits =
+      row.is_object()
+          ? row.value("views", Json::object()).value(route, Json::object())
+          : Json::object();
+  if (stackFrame || (row.is_object() && row.contains("stack_frame"))) {
+    const auto &Frame = stackFrame ? *stackFrame : row.at("stack_frame");
+    if (currentTypeImage(Frame))
+      engineOptions["stack_frame"] = Frame;
+    else
+      stale.push_back(
+          "A saved stack correction belongs to a different input image; "
+          "reset or reapply it");
+  }
+  const auto calls = callTypes         ? *callTypes
+                     : row.is_object() ? row.value("call_types", Json::object())
+                                       : Json::object();
+  Json bindings = Json::array();
+  for (const auto &[id, type] : calls.items()) {
+    if (!currentTypeImage(type)) {
+      stale.push_back(
+          "A saved call-site declaration belongs to a different input image; "
+          "reset or reapply it");
+      continue;
+    }
+    Json binding = type;
+    binding["id"] = id;
+    bindings.push_back(std::move(binding));
+  }
+  if (!bindings.empty())
+    engineOptions["call_types"] = std::move(bindings);
+  const auto associations = variableEdits
+                                ? *variableEdits
+                                : edits.value("variable_edits", Json::array());
+  bool Foreign = false;
+  for (const auto &Association : associations)
+    Foreign |= !currentTypeImage(Association);
+  if (Foreign)
+    stale.push_back(
+        "Saved variable associations belong to a different input image; "
+        "reset or reapply them");
+  else if (!associations.empty())
+    engineOptions["variable_edits"] = associations;
+  Json types = Json::array();
+  const Json variableTypes = edits.value("variable_types", Json::object());
+  for (const auto &[id, type] : variableTypes.items()) {
+    if (!currentTypeImage(type)) {
+      stale.push_back(id +
+                      ": the saved type belongs to a different input image");
+      continue;
+    }
+    Json binding = type;
+    binding["id"] = id;
+    binding["function"] = hexAddress(address);
+    types.push_back(std::move(binding));
+  }
+  for (const auto &row : codeEdits_)
+    if (row.contains("object_type")) {
+      if (!currentTypeImage(row.at("object_type"))) {
+        if (stale.empty())
+          stale.push_back(
+              "Saved object types belong to a different input image");
+        continue;
+      }
+      Json binding = row.at("object_type");
+      binding["function"] = hexAddress(address);
+      binding["address"] = row.at("addr");
+      binding["id"] =
+          "global:" +
+          std::to_string(parseAddress(row.at("addr").get<std::string>()));
+      binding["snapshot"] = "";
+      types.push_back(std::move(binding));
+    }
+  if (!types.empty())
+    engineOptions["variable_types"] = std::move(types);
+  return engineOptions;
+}
+
+std::string Engine::engineViewPage(std::uint64_t address,
+                                   const std::string &representation,
+                                   std::size_t next, bool sourceView,
+                                   const Json &engineOptions,
+                                   const std::string &optionText) {
+  const auto view = irViewFunction();
+  const auto extended = irViewExFunction();
+  return backendText(
+      sourceView && extended && !engineOptions.empty()
+          ? extended(session_, address, representation.c_str(), next,
+                     ::neverd::limits::worker::kEngineEnginePageLines,
+                     optionText.c_str())
+          : view(session_, address, representation.c_str(), next,
+                 ::neverd::limits::worker::kEngineEnginePageLines),
+      true);
+}
+
+void Engine::syncNamedViews() {
+  const auto generation = listing().generation();
+  if (namedViewsRevision_ != revision_ ||
+      namedViewsListingGeneration_ != generation) {
+    forgetNamedViews();
+    namedViewsRevision_ = revision_;
+    namedViewsListingGeneration_ = generation;
+  }
+}
+
+std::string Engine::namedViewSourceKey(std::uint64_t address,
+                                       const std::string &representation,
+                                       const std::string &optionText) {
+  return hexAddress(address) + ":" + representation + ":" +
+         std::to_string(listing().generation()) + ":" + optionText;
 }
 
 std::shared_ptr<const Engine::NamedView>
@@ -1084,111 +1212,24 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
   }
   if (!sourceView && !options.empty())
     throw Error("invalid_request", "Source options require a source view");
-  Json engineOptions = options;
   Json staleVariableTypes = Json::array();
-  std::optional<std::string> typeImage;
-  auto currentTypeImage = [&](const Json &type) {
-    if (!typeImage)
-      typeImage = inputHash();
-    return type.value("input_sha256", std::string()) == *typeImage;
-  };
-  if (sourceView && !recovery) {
-    const auto row = codeEditRow(address);
-    const auto route = representation == "source" ? "c" : representation;
-    const auto edits =
-        row.is_object()
-            ? row.value("views", Json::object()).value(route, Json::object())
-            : Json::object();
-    if (stackFrame || (row.is_object() && row.contains("stack_frame"))) {
-      const auto &Frame = stackFrame ? *stackFrame : row.at("stack_frame");
-      if (currentTypeImage(Frame))
-        engineOptions["stack_frame"] = Frame;
-      else
-        staleVariableTypes.push_back(
-            "A saved stack correction belongs to a different input image; "
-            "reset or reapply it");
-    }
-    const auto calls = callTypes ? *callTypes
-                       : row.is_object()
-                           ? row.value("call_types", Json::object())
-                           : Json::object();
-    Json bindings = Json::array();
-    for (const auto &[id, type] : calls.items()) {
-      if (!currentTypeImage(type)) {
-        staleVariableTypes.push_back(
-            "A saved call-site declaration belongs to a different input image; "
-            "reset or reapply it");
-        continue;
-      }
-      Json binding = type;
-      binding["id"] = id;
-      bindings.push_back(std::move(binding));
-    }
-    if (!bindings.empty())
-      engineOptions["call_types"] = std::move(bindings);
-    const auto associations =
-        variableEdits ? *variableEdits
-                      : edits.value("variable_edits", Json::array());
-    bool Foreign = false;
-    for (const auto &Association : associations)
-      Foreign |= !currentTypeImage(Association);
-    if (Foreign)
-      staleVariableTypes.push_back(
-          "Saved variable associations belong to a different input image; "
-          "reset or reapply them");
-    else if (!associations.empty())
-      engineOptions["variable_edits"] = associations;
-    Json types = Json::array();
-    const Json variableTypes = edits.value("variable_types", Json::object());
-    for (const auto &[id, type] : variableTypes.items()) {
-      if (!currentTypeImage(type)) {
-        staleVariableTypes.push_back(
-            id + ": the saved type belongs to a different input image");
-        continue;
-      }
-      Json binding = type;
-      binding["id"] = id;
-      binding["function"] = hexAddress(address);
-      types.push_back(std::move(binding));
-    }
-    for (const auto &row : codeEdits_)
-      if (row.contains("object_type")) {
-        if (!currentTypeImage(row.at("object_type"))) {
-          if (staleVariableTypes.empty())
-            staleVariableTypes.push_back(
-                "Saved object types belong to a different input image");
-          continue;
-        }
-        Json binding = row.at("object_type");
-        binding["function"] = hexAddress(address);
-        binding["address"] = row.at("addr");
-        binding["id"] =
-            "global:" +
-            std::to_string(parseAddress(row.at("addr").get<std::string>()));
-        binding["snapshot"] = "";
-        types.push_back(std::move(binding));
-      }
-    if (!types.empty())
-      engineOptions["variable_types"] = std::move(types);
-  }
+  const Json engineOptions =
+      sourceView && !recovery
+          ? namedViewEngineOptions(address, representation, options,
+                                   variableEdits, callTypes, stackFrame,
+                                   staleVariableTypes)
+          : options;
   const auto optionText = engineOptions.dump();
   (void)listing().functionAliases();
   const auto cacheKey = [&] {
-    const auto generation = listing().generation();
-    if (namedViewsRevision_ != revision_ ||
-        namedViewsListingGeneration_ != generation) {
-      forgetNamedViews();
-      namedViewsRevision_ = revision_;
-      namedViewsListingGeneration_ = generation;
-    }
+    syncNamedViews();
     return hexAddress(address) + ":" + representation + ":" +
-           std::to_string(revision_) + ":" + std::to_string(generation) + ":" +
-           optionText;
+           std::to_string(revision_) + ":" +
+           std::to_string(listing().generation()) + ":" + optionText;
   };
   const auto lookupKey = cacheKey();
-  const auto sourceKey = hexAddress(address) + ":" + representation + ":" +
-                         std::to_string(listing().generation()) + ":" +
-                         optionText;
+  const auto sourceKey =
+      namedViewSourceKey(address, representation, optionText);
   if (const auto cached = namedViewsByKey_.find(lookupKey);
       cached != namedViewsByKey_.end()) {
     namedViews_.splice(namedViews_.begin(), namedViews_, cached->second);
@@ -1203,10 +1244,16 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
   Json original;
   if (reused && !reused->original.empty())
     original = Json::parse(reused->original);
+  // A first visit to a function rendered ahead reads those pages.
+  const std::vector<std::string> renderedPages =
+      reused || recovery ? std::vector<std::string>()
+                         : renderedAheadPages(sourceKey);
   // The engine's pages of the same source build the document again as they
   // built it the first time.
   const std::vector<std::string> *replay =
-      reused && reused->original.empty() ? &reused->enginePages : nullptr;
+      reused && reused->original.empty() ? &reused->enginePages
+      : !renderedPages.empty()           ? &renderedPages
+                                         : nullptr;
   // A hit answers from its finished document without pretending the mutable
   // Session still holds this function. Graph/IR requests prepare it normally.
   if (original.is_null() && !replay && !recovery)
@@ -1259,7 +1306,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
               {"recovery_report", std::move(evidence)}};
     }
     auto backendRepresentation =
-        replay ? reused->engineRepresentation : representation;
+        replay && reused ? reused->engineRepresentation : representation;
     std::vector<std::string> enginePages;
     for (std::size_t next = 0;
          full.is_null() || !full.value("complete", false);) {
@@ -1269,15 +1316,8 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
           return nullptr;
         text = (*replay)[enginePages.size()];
       } else
-        text = backendText(
-            sourceView && extended && !engineOptions.empty()
-                ? extended(session_, address, backendRepresentation.c_str(),
-                           next,
-                           ::neverd::limits::worker::kEngineEnginePageLines,
-                           optionText.c_str())
-                : view(session_, address, backendRepresentation.c_str(), next,
-                       ::neverd::limits::worker::kEngineEnginePageLines),
-            true);
+        text = engineViewPage(address, backendRepresentation, next, sourceView,
+                              engineOptions, optionText);
       auto page = parsedBackendText(text);
       // Older page APIs offer HighC but not the automatic source dialect.
       // Keep the Pseudocode action useful, with the actual dialect reported.
@@ -1657,6 +1697,7 @@ void Engine::prepareFunction(std::uint64_t address,
   // Never leave its old address marked prepared after the call fails.
   preparedFunction_.reset();
   textKey_.clear();
+  const auto prepareStart = std::chrono::steady_clock::now();
   // Preparation shares the decompiler's entry/handler checks but emits no
   // discarded PlainC text before the requested source, IR or CFG view.
   using PrepareFunction = int (*)(neverd_session_t, neverd_va_t);
@@ -1686,6 +1727,10 @@ void Engine::prepareFunction(std::uint64_t address,
     (void)ownedString(neverd_decompile(session_, address));
   }
   preparedFunction_ = address;
+  if (!renderingAhead_) {
+    requestPrepared_ = address;
+    requestPrepareTime_ = std::chrono::steady_clock::now() - prepareStart;
+  }
 }
 Listing &Engine::newListing() {
   listing_ = std::make_unique<Listing>(session_);
@@ -1713,7 +1758,7 @@ Listing &Engine::listing() {
   return *listing_;
 }
 bool Engine::hasIdleWork() const {
-  if ((summaryWorkPending() || prefillPending()) &&
+  if ((summaryWorkPending() || prefillPending() || renderAheadPending()) &&
       neverd_session_is_loaded(session_))
     return true;
   if (!listing_ || !neverd_session_is_loaded(session_))
@@ -1801,6 +1846,8 @@ bool Engine::summaryStep() {
     }
     return true;
   }
+  if (renderAheadPending())
+    return renderAheadStep();
   if (!summaryWorkPending())
     return true;
   // A step that fails ends the job with its error rather than retrying it
@@ -1968,6 +2015,8 @@ Json Engine::backgroundState() const {
   state["warm"] = warmJson();
   if (summaryState_ != SummaryState::Off)
     state["call_summaries"] = summaryJson();
+  if (renderAheadState_ != RenderAheadState::Off)
+    state["render_ahead"] = renderAheadJson();
   return state;
 }
 Json Engine::backendJson(const char *owned, bool checkError) const {
@@ -2479,8 +2528,11 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
   // owner's state, which later name updates compare.
   restoredSnapshot_ = snapshot;
   restoredSnapshot_.erase("call_summaries");
+  restoredSnapshot_.erase("render_ahead");
   summaryJob_ = snapshot.value("call_summaries", false);
+  renderAheadRequested_ = snapshot.value("render_ahead", false);
   restartSummaries();
+  restartRenderAhead();
   return metadata();
 }
 
@@ -2630,13 +2682,15 @@ Json Engine::execute(const std::string &operation, const Json &p) {
 
 Engine::Reply Engine::executeResponse(const std::string &operation,
                                       const Json &p) {
-  // A change to the project can drop the engine's prepared functions.
-  const auto before = revision_;
+  // A change to the project can drop the engine's prepared functions; a
+  // change of local display names alone drops nothing it prepared.
+  const auto before = revision_ - localNameRevisions_;
   struct RestartOnChange {
     Engine &engine;
     std::uint64_t before;
     ~RestartOnChange() {
-      if (engine.revision_ != before) {
+      engine.lastRequest_ = std::chrono::steady_clock::now();
+      if (engine.revision_ - engine.localNameRevisions_ != before) {
         engine.restartWarming();
         engine.restartSummaries();
       }

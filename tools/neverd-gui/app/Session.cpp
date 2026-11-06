@@ -907,6 +907,9 @@ void Session::sendOpen(const QString &requested, const QString &path,
                 ::neverd::limits::gui::
                     kSessionSendOpenLargeQFileInfoFilePathSizeLimit;
         analysis_.setSnapshotBlocked(options.analysis && native && large);
+        // Idle-time work, which a file opened without idle analysis asks for
+        // none of.
+        analysis_.setRendersAhead(options.analysis);
         if (options.analysis && native && !large &&
             functionCount_ >=
                 ::neverd::limits::gui::kSessionSendOpenFunctionCountLimit) {
