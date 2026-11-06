@@ -33,8 +33,9 @@ bool hasCheckedX86RegistrationDirectCallBytes(const BinaryImage &Image,
                                               va_t Address, va_t Target,
                                               size_t &Work, size_t Limit) {
   if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
-      Image.Format != BinaryFormat::COFF || Address > UINT32_MAX - 5 ||
-      Target > UINT32_MAX)
+      (Image.Format != BinaryFormat::COFF &&
+       Image.Format != BinaryFormat::ELF) ||
+      Address > UINT32_MAX - 5 || Target > UINT32_MAX)
     return false;
   // The byte reader separately owns mapping and fixup charges. Pay the
   // executable-owner classification before entering its inventory queries.
@@ -57,7 +58,9 @@ bool hasCheckedX86RegistrationDirectCallBytes(const BinaryImage &Image,
     return false;
   // E8 has no absolute operand: every overlapping fixup remains forbidden.
   const auto Bytes =
-      readImmutablePE32CodeBytes(Image, Address, 5, {}, Work, Limit);
+      Image.Format == BinaryFormat::COFF
+          ? readImmutablePE32CodeBytes(Image, Address, 5, {}, Work, Limit)
+          : readImmutableCodeBytes(Image, Address, 5);
   return Bytes && (*Bytes)[0] == 0xe8 &&
          uint32_t(Address + 5 + int64_t(readLE<int32_t>(Bytes->data() + 1))) ==
              Target;

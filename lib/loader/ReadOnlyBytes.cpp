@@ -231,7 +231,11 @@ bool supportedPEImage(const BinaryImage &Image) {
 bool supportedImmutableCodeImage(const BinaryImage &Image) {
   return supportedImage(Image) || supportedPEImage(Image) ||
          (Image.Format == BinaryFormat::ELF && !Image.IsRelocatable &&
-          Image.Arch == Arch::ARM && Image.Bits == Bitness::Bits32);
+          Image.Arch == Arch::ARM && Image.Bits == Bitness::Bits32) ||
+         // Bytes with no relocation record over them are the same in any link,
+         // so an i386 object answers as well as a linked image does.
+         (Image.Format == BinaryFormat::ELF && Image.Arch == Arch::X86 &&
+          Image.Bits == Bitness::Bits32);
 }
 
 bool overlaps(va_t Address, uint64_t Extent, va_t Base, uint64_t Width) {
@@ -297,8 +301,11 @@ const uint8_t *mappedBytes(const BinaryImage &Image, va_t Address,
         Type == llvm::MachO::S_THREAD_LOCAL_ZEROFILL)
       return nullptr;
   }
+  // An unmapped section, such as an object's string table, has address zero
+  // and occupies none.
   for (const auto &Other : Image.Sections)
-    if (&Other != Section && overlaps(Address, Extent, Other.VA, Other.Size))
+    if (&Other != Section && Other.Flags != SegmentFlags::None &&
+        overlaps(Address, Extent, Other.VA, Other.Size))
       return nullptr;
   for (const auto &Other : Image.Segments)
     if (&Other != Segment && overlaps(Address, Extent, Other.VA, Other.Size))

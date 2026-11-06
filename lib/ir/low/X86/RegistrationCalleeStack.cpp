@@ -861,6 +861,14 @@ bool isPE32(const BinaryImage &Image) {
          Image.Format == BinaryFormat::COFF;
 }
 
+// What a body does to ESP can be read from the body in either format. The SEH,
+// import and callback contracts built on top of it stay PE32's.
+bool hasStackProvableBodies(const BinaryImage &Image) {
+  return isPE32(Image) ||
+         (Image.Arch == Arch::X86 && Image.Bits == Bitness::Bits32 &&
+          Image.Format == BinaryFormat::ELF);
+}
+
 bool preservesFinallyFrame(StackBody &Body, va_t Entry) {
   if (!Body.Valid || !Body.Entries.count(Entry))
     return false;
@@ -1514,7 +1522,7 @@ std::optional<uint32_t> RegistrationCallCalleeIndex::stackPop(va_t Target) {
 
 std::optional<RegistrationCalleeStackContract>
 RegistrationCallCalleeIndex::stackContract(va_t Target) {
-  if (!isPE32(Image))
+  if (!hasStackProvableBodies(Image))
     return std::nullopt;
   return ReturningStackProof(Image, Work, StackCache, *this, StackDepth)
       .prove(Target);
@@ -1523,7 +1531,8 @@ RegistrationCallCalleeIndex::stackContract(va_t Target) {
 std::optional<uint32_t> getCheckedX86IndependentCalleeStackPop(
     const BinaryImage &Image, va_t Target, size_t &Work, size_t Limit,
     const detail::AbsoluteRelocationRootIndex *Roots) {
-  if (!isPE32(Image) || Work >= Limit || !ActiveStackProofs.empty() ||
+  if (!hasStackProvableBodies(Image) || Work >= Limit ||
+      !ActiveStackProofs.empty() ||
       registration_abi::StackProofOwnerScope::active() ||
       registration_abi::hasActiveCxxCalleeProof() || x86SEHStateAnalysisLevel())
     return std::nullopt;

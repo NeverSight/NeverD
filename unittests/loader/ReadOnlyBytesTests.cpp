@@ -214,6 +214,37 @@ TEST(ImmutableImageScalar, RelroKeepsPartialPagesAndStaticStartupWritable) {
   }
 }
 
+TEST(ImmutableCode, AnI386ObjectsUnmappedSectionsOccupyNoAddresses) {
+  BinaryImage Image = codeImage();
+  Image.Format = BinaryFormat::ELF;
+  Image.IsRelocatable = true;
+  Image.BaseRelocations.clear();
+  EXPECT_TRUE(readImmutableCodeBytes(Image, TextVA + 0x10, 5));
+
+  // An object's string table has no address of its own: it lies at zero even
+  // where the object's own code does.
+  Section Strings;
+  Strings.VA = TextVA;
+  Strings.Size = Strings.FileSz = 0x100;
+  Image.Sections.push_back(Strings);
+  EXPECT_TRUE(readImmutableCodeBytes(Image, TextVA + 0x10, 5));
+
+  // A mapped section overlapping the same bytes still makes them ambiguous.
+  Image.Sections.back().Flags = SegmentFlags::Readable;
+  EXPECT_FALSE(readImmutableCodeBytes(Image, TextVA + 0x10, 5));
+  Image.Sections.pop_back();
+
+  // A relocation over the bytes still refuses, as in a linked image.
+  Image.CodePtrRelocSlots.insert(TextVA + 0x11);
+  EXPECT_FALSE(readImmutableCodeBytes(Image, TextVA + 0x10, 5));
+  EXPECT_TRUE(readImmutableCodeBytes(Image, TextVA + 0x20, 5));
+
+  // Only i386 gained this.
+  Image.CodePtrRelocSlots.clear();
+  Image.Arch = Arch::ARM;
+  EXPECT_FALSE(readImmutableCodeBytes(Image, TextVA + 0x10, 5));
+}
+
 TEST(ImmutablePE32Code, IndexedAndOrdinaryReadersKeepEveryFixupBoundary) {
   for (unsigned Mutation = 0; Mutation != 29; ++Mutation) {
     SCOPED_TRACE(Mutation);

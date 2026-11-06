@@ -9872,6 +9872,9 @@ latter, without granting ordinary callable entry identity.
 ABI receipt in scalar and affine modes, cold/warm budget boundaries and
 refusals for local names, data imports, ambiguous owners, indirect calls,
 native-byte mismatches, target addends, other formats and later clobbers.
+`JTE_X86_32.CalleeBodyAnswersForEspAcrossACallInALoop` compares ELF object
+callees that pop nothing, reach another callee that pops nothing, pop their
+argument, return from elsewhere on the stack or reach an undefined callee.
 `JTE_X86_32.StackMemcpyTableNeedsDedicatedEvidenceCeiling` exercises the real
 loader and compiler-produced PIC stack table through the full consumer audit.
 Aligned and GOTOFF spill fixtures restore ESP explicitly after an unproved

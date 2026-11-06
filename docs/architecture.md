@@ -8192,6 +8192,11 @@ must agree. A local name, indirect import slot, different format, target
 addend or later unproved call cannot borrow this receipt. Its evidence work
 and query cache obey the same immutable-image and budget contract as the
 surrounding resolver.
+A direct native call in an i386 PE32 or ELF image can also take the receipt
+from the callee's body, when the returning-stack proof shows every ordinary
+return restores the entry ESP and pops nothing. A body that pops, leaves ESP
+unbalanced or makes a call with no receipt of its own supplies none. In an ELF
+object those bytes count as immutable where no relocation record covers them.
 The x64 and ARM preserved ranges retain their existing stack-pointer rule.
 
 Register and memory value reconstruction share a stack of active walks. A

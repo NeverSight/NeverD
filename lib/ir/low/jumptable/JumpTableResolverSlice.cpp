@@ -5758,7 +5758,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   };
   std::map<std::pair<va_t, int>, std::optional<int64_t>> IndependentCallPops;
   auto independentCallPop = [&](const LowOp &Call) -> std::optional<int64_t> {
-    if (CurrentImg->Arch != Arch::X86 || !CurrentImg->isCOFF() ||
+    if (CurrentImg->Arch != Arch::X86 ||
+        (!CurrentImg->isCOFF() && CurrentImg->Format != BinaryFormat::ELF) ||
         CurrentImg->getPointerSize() != sizeof(uint32_t) ||
         Call.Opcode != NdOp::CALL || Call.NumInputs != 1 ||
         !Call.Inputs[0].isConst() || Call.Inputs[0].Size != sizeof(uint32_t) ||

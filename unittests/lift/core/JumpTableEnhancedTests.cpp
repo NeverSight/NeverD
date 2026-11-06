@@ -1292,6 +1292,122 @@ TEST_F(JTE_X86_32, AdjacentGOTOFFTablesEvidenceExhaustionFailsClosed) {
   EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 4u);
 }
 
+// A loop writes through ESP between calls, so the spilled GOT register is only
+// safe from those writes if each call returned with ESP where it was. In an ELF
+// object the callee's own body can say so; nothing else about the call can.
+TEST_F(JTE_X86_32, CalleeBodyAnswersForEspAcrossACallInALoop) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target Clang unavailable";
+  struct Case {
+    const char *Name;
+    const char *Helper;
+    bool Recovered;
+  };
+  const Case Cases[] = {
+      {"pops nothing",
+       "pushl %ebp\n movl %esp, %ebp\n movl 8(%ebp), %eax\n"
+       " andl $3, %eax\n popl %ebp\n retl\n",
+       true},
+      {"its callee pops nothing",
+       "calll leaf\n retl\nleaf:\n xorl %eax, %eax\n retl\n", true},
+      {"pops its argument", "xorl %eax, %eax\n retl $4\n", false},
+      {"returns from elsewhere on the stack",
+       "xorl %eax, %eax\n addl $4, %esp\n retl\n", false},
+      {"its callee is undefined",
+       "subl $12, %esp\n calll elsewhere@PLT\n addl $12, %esp\n retl\n", false},
+  };
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    const fs::path Source = tmpFile("callee_stack.s");
+    const fs::path Object = tmpFile("callee_stack.o");
+    {
+      std::ofstream File(Source);
+      File << R"(.text
+.globl loop_dispatch
+.type loop_dispatch,@function
+loop_dispatch:
+  pushl %ebp
+  movl %esp, %ebp
+  pushl %ebx
+  subl $0x24, %esp
+  calll .Lpc
+.Lpc:
+  popl %eax
+.Lgot:
+  addl $_GLOBAL_OFFSET_TABLE_+(.Lgot-.Lpc), %eax
+  movl %eax, -0x1c(%ebp)
+  movl $0, -0x10(%ebp)
+.Lloop:
+  cmpl $120, -0x10(%ebp)
+  jge .Ldone
+  movl -0x1c(%ebp), %ebx
+  movl 8(%ebp), %ecx
+  movl %esp, %eax
+  movl %ecx, (%eax)
+  calll helper
+  movl %eax, -0x20(%ebp)
+  subl $3, %eax
+  ja .Lnext
+  movl -0x1c(%ebp), %eax
+  movl -0x20(%ebp), %ecx
+  movl .Ltable@GOTOFF(%eax,%ecx,4), %ecx
+  addl %ecx, %eax
+  jmpl *%eax
+.Lcase0:
+  movl $1, -0x18(%ebp)
+  jmp .Lnext
+.Lcase1:
+  movl $3, -0x18(%ebp)
+  jmp .Lnext
+.Lcase2:
+  movl $5, -0x18(%ebp)
+  jmp .Lnext
+.Lcase3:
+  movl $7, -0x18(%ebp)
+.Lnext:
+  incl -0x10(%ebp)
+  jmp .Lloop
+.Ldone:
+  movl -0x18(%ebp), %eax
+  addl $0x24, %esp
+  popl %ebx
+  popl %ebp
+  retl
+.size loop_dispatch, .-loop_dispatch
+.type helper,@function
+helper:
+)" << C.Helper
+           << R"(.size helper, .-helper
+.section .rodata
+.p2align 2
+.Ltable:
+  .long .Lcase0@GOTOFF
+  .long .Lcase1@GOTOFF
+  .long .Lcase2@GOTOFF
+  .long .Lcase3@GOTOFF
+)";
+    }
+    auto Compiled =
+        exec(NEVERD_TEST_CLANG, {"-target", "i386-linux-gnu", "-c",
+                                 Source.string(), "-o", Object.string()});
+    ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+    auto ImageOrErr = neverd::loadBinary(Object);
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    const auto &Image = *ImageOrErr;
+    const auto *Function = Image.findSymbol("loop_dispatch");
+    ASSERT_NE(Function, nullptr);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const auto Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    EXPECT_EQ(Low.JumpTables.size() == 1 &&
+                  Low.JumpTables.front().Targets.size() == 4,
+              C.Recovered);
+  }
+}
+
 TEST_F(JTE_X86_32, StackMemcpyTableNeedsDedicatedEvidenceCeiling) {
   auto ImageOrErr = neverd::loadBinary(i386StackPICObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
