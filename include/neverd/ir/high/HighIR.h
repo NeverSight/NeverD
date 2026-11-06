@@ -23,6 +23,7 @@
 #include "neverd/ir/med/AArch64/AArch64ReturnProtection.h"
 #include "neverd/ir/med/MedIR.h"
 
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
 #include <algorithm>
@@ -43,7 +44,9 @@ using VarKey = std::pair<int, int>;
 
 struct VarKeyHash {
   size_t operator()(const VarKey &K) const {
-    return std::hash<int>()(K.first) ^ (std::hash<int>()(K.second) << 16);
+    // Power-of-two hash tables select buckets from the low bits. Mixing both
+    // fields keeps versions of one physical carrier out of the same chain.
+    return llvm::hash_combine(K.first, K.second);
   }
 };
 
