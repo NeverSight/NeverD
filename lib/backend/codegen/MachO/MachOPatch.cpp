@@ -1402,12 +1402,16 @@ uint64_t MachOPatcher::appendExecSegmentImpl(std::vector<uint8_t> &Binary,
                    [](uint8_t B) { return B == 0; });
   bool NoRoom = SegmentNameConflict || AvailableWithFreed < Needed ||
                 (Needed > Freed && !CleanPadding);
-  if (NoRoom && !SegmentNameConflict && !WritableOffset &&
+  if (!SegmentNameConflict && !WritableOffset &&
       InputKind == RewriteInputKind::LiftedIR) {
-    // The table reaches into the padding only by what its dropped commands do
-    // not cover, and the padding it reaches into must be unused.
+    // A rewritten image is signed again, and codesign writes its command after
+    // the table without looking at what is there. That room is part of the
+    // table: the signature command dropped above freed nothing for long. The
+    // table reaches into the padding only by what its dropped commands do not
+    // cover, and the padding it reaches into must be unused.
+    const uint64_t Reach = Needed + sizeof(linkedit_data_command);
     const auto Fits = [&] {
-      const uint64_t FromPadding = Needed > Freed ? Needed - Freed : 0;
+      const uint64_t FromPadding = Reach > Freed ? Reach - Freed : 0;
       return FromPadding <= Avail &&
              llvm::all_of(llvm::ArrayRef<uint8_t>(Binary).slice(HdrPlusCmds,
                                                                 FromPadding),
