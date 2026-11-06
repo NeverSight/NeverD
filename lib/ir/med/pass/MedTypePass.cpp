@@ -1131,8 +1131,12 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
         if (Rit2->Output.Kind != MedVar::Reg || Rit2->Output.Size == 0)
           continue;
 
+        // A SUBBYTES is usually a narrower view of the register, which writes
+        // nothing. One that fills the whole register is a write: a division's
+        // quotient comes out of its double-width result that way.
         if (Rit2->Output.RegOff == TRI.IntReturnReg &&
-            Rit2->Opcode != NdOp::SUBBYTES &&
+            (Rit2->Opcode != NdOp::SUBBYTES ||
+             Rit2->Output.Size == TRI.PointerSize) &&
             !(FilterRestore &&
               isReturnRegRestore(Defs, *ScanBlk, *Rit2, TRI))) {
           if (IntDist < 0)
