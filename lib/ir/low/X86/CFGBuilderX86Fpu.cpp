@@ -2227,9 +2227,10 @@ void CFGBuilder::recordSkippedFpuFixup(const LowFunc &Func) {
         Witness.Complete = false;
         return;
       }
-      if (hasLowInstructionControlFlag(Boundary.ControlFlags,
-                                       LowInstructionControlFlag::NoReturn))
-        continue;
+      // A no-return call binds no x87 result, but the ordinary fixup still
+      // asks whether its callee uses the x87 context, which the whole body
+      // then keeps, and refuses an x87 CRT import there: validatedSummary
+      // asks the same of every call.
       for (size_t O = Boundary.FirstOp;
            O < Boundary.FirstOp + Boundary.OpCount && O < Block.Ops.size();
            ++O) {

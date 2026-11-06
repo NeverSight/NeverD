@@ -305,6 +305,42 @@ TEST(PipelineOutcome, AnalysisCachePreservesFloatingAndIntegerCallChains) {
   }
 }
 
+TEST(PipelineOutcome, CachedBodiesKeepANoReturnCalleesX87Context) {
+  // A wrapper calls a routine that stores the x87 control word and never
+  // returns.  Its own build keeps the x87 context for that call; the raw body
+  // a caller's walk retains for it must not stand in for that build.
+  BinaryImage Image = selectionCacheImage(/*Floating=*/false);
+  Image.X87ContextOverride = true;
+  Segment &Text = Image.Segments.front();
+  // 0x1000 calls 0x1800, which calls 0x2000: fnstcw [rsp-8]; jmp $.
+  const uint8_t Leaf[] = {0xd9, 0x7c, 0x24, 0xf8, 0xeb, 0xfe};
+  std::copy(std::begin(Leaf), std::end(Leaf),
+            Text.Data.begin() + (0x2000 - Text.VA));
+  for (Symbol &Function : Image.Symbols)
+    if (Function.Addr == 0x2000)
+      Function.Size = sizeof(Leaf);
+  const auto Contexts = [](const PipelineResult &Result) {
+    unsigned Count = 0;
+    for (const LowFunc &Function : Result.LowFuncs)
+      for (const LowBlock &Block : Function.Blocks)
+        for (const LowOp &Op : Block.Ops)
+          Count += Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+                   Op.Inputs[0].isConst() &&
+                   Op.Inputs[0].Offset == unsigned(Intrinsic::X87ContextBegin);
+    return Count;
+  };
+  PipelineResult Cold;
+  PipelineTestPeer::buildLowIR(Image, Cold, {0x1800});
+  ASSERT_EQ(Contexts(Cold), 1u);
+
+  PipelineAnalysisCache Cache;
+  PipelineResult Caller, Kept;
+  PipelineTestPeer::buildLowIR(Image, Caller, {0x1000}, &Cache);
+  PipelineTestPeer::buildLowIR(Image, Kept, {0x1800}, &Cache);
+  expectSameSelection(Kept, Cold);
+  EXPECT_EQ(Contexts(Kept), 1u);
+}
+
 /// A linked i386 PE whose switch dispatches through the relocated table MSVC
 /// places in .text after the function.  Two cases call an x87 leaf
 /// (fld1; fstp st0; ret), and another caller reaches the leaf through a
