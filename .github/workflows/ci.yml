@@ -214,8 +214,8 @@ jobs:
         include:
           - name: Linux x64
             runner: ubuntu-24.04
-            cc: clang
-            cxx: clang++
+            cc: clang-18
+            cxx: clang++-18
             parallel: 4
             test_profile: linux-semantic
             exclude_labels: '^NeverDPatchFullTests$'
@@ -284,10 +284,30 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          # Tests build generated IR and C, which need a Clang as new as the LLVM
+          # that emits them. Ubuntu's Clang 18 still builds NeverD, which keeps the
+          # compiler cache valid across LLVM's package updates.
+          curl --fail --silent --show-error --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key \
+            --output "$RUNNER_TEMP/neverd-llvm.asc"
+          gpg --show-keys --with-colons "$RUNNER_TEMP/neverd-llvm.asc" \
+            | grep '^fpr:.*6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:'
+          sudo install -m 0644 "$RUNNER_TEMP/neverd-llvm.asc" /usr/share/keyrings/neverd-llvm.asc
+          echo 'deb [signed-by=/usr/share/keyrings/neverd-llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main' \
+            | sudo tee /etc/apt/sources.list.d/neverd-llvm.list > /dev/null
           sudo apt-get update
-          sudo apt-get install --yes clang cmake lld ninja-build gcc-multilib
-          # Ubuntu 24.04 exposes the unversioned Mach-O linker here.
-          printf '%s\n' /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
+          sudo apt-get install --yes clang clang-23 cmake libclang-rt-23-dev lld-23 llvm-23 ninja-build gcc-multilib
+          # The unversioned clang and linkers tests and CMake find, the Mach-O one included.
+          printf '%s\n' /usr/lib/llvm-23/bin >> "$GITHUB_PATH"
+
+      - name: Report the Linux host and stop collecting test crashes
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          # Hosted runners mix AMD and Intel, and the KVM differentials depend on which.
+          lscpu | grep -E 'Vendor ID|Model name|^CPU\(s\)'
+          # systemd-coredump reads the image of every expected crash, which costs a
+          # death test about a second and takes the larger contracts past their limit.
+          sudo sysctl -w kernel.core_pattern=/dev/null
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
@@ -319,6 +339,7 @@ jobs:
           cmake --version
           ninja --version
           "$CC" --version
+          clang --version
           ld.lld --version
           lld-link --version
           ld64.lld --version
