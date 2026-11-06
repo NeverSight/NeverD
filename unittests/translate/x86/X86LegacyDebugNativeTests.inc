@@ -13,6 +13,16 @@ protected:
   unsigned Comparisons = 0;
   unsigned RoundTrips = 0;
 
+  struct ExecutionBreakpoint {
+    uint32_t DR7 = 0x401;
+    uint32_t Flags = 0x202;
+    unsigned Offset = 0;
+    bool FetchFault = false;
+    uint32_t CSBase = 0;
+    bool Resume = false;
+    bool VirtualInterrupt = false;
+  };
+
   enum Case {
     Nop,
     Increment,
@@ -60,7 +70,8 @@ protected:
   };
 
   void compare(bool Code32, bool Stack32, bool Gate32, unsigned CPL, Case Which,
-               uint32_t DR6, bool RF) {
+               uint32_t DR6, bool RF,
+               std::optional<ExecutionBreakpoint> Execute = std::nullopt) {
     SCOPED_TRACE(testing::Message()
                  << "case=" << Which << " code32=" << Code32 << " stack32="
                  << Stack32 << " gate32=" << Gate32 << " cpl=" << CPL
@@ -68,7 +79,8 @@ protected:
     const bool Legacy = GetParam() == 2;
     const unsigned PW = Legacy ? 4 : 8;
     const uint32_t PT = Legacy ? 0x11000 : 0x12000;
-    const bool RoundTrip = Which >= ReturnAndStepAgain;
+    const bool RoundTrip =
+        Which >= ReturnAndStepAgain || (Execute && Execute->Resume);
     constexpr uint32_t GDT = 0x7000, IDT = 0x6000, TSS = 0x5800;
     constexpr uint32_t Target = 0x1800;
     std::memset(RAM, 0, MemorySize);
@@ -109,6 +121,8 @@ protected:
     }
     if (Which == OperandFault || Which == RepairAndRetry)
       put(PT + 8 * PW, 0x8006, PW);
+    if (Execute && Execute->FetchFault)
+      put(PT + ((Code + Execute->CSBase) / 4096) * PW, 0, PW);
     put(0x8000, 0x89abcdef, 4);
     const unsigned OperandBytes = Which == IretResume ? 4 : Code32 ? 4 : 2;
     put(0x9000, 0xc000, OperandBytes);
@@ -118,10 +132,14 @@ protected:
     Special.cr0 = 0x80010011;
     Special.cr3 = 0x10000;
     Special.cr4 = Legacy ? 0 : 0x20;
+    if (Execute && Execute->VirtualInterrupt)
+      Special.cr4 |= 2;
     Special.efer = Legacy ? 0 : 0x800;
     Special.cr2 = 0x76543210;
     Special.cs = segment(24 | CPL, true, false, CPL);
     Special.cs.db = Code32;
+    if (Execute)
+      Special.cs.base = Execute->CSBase;
     Special.ss = Special.ds = Special.es = Special.fs = Special.gs =
         segment(32 | CPL, false, false, CPL);
     Special.ss.db = Stack32;
@@ -141,6 +159,10 @@ protected:
         (Stack32 ? 0 : 0xabcd0000) |
         (Which == DebugStackFault ? 0xd000 + (Gate32 ? 4 : 2) : 0xd000);
     Registers.rflags = (RF ? 0x10000 : 0) | 0x302;
+    if (Execute)
+      Registers.rflags = Execute->Flags;
+    if (Execute && Execute->VirtualInterrupt)
+      Registers.rflags |= 0x180000;
     Registers.rax = 0x12340000 | (32 | CPL);
     Registers.rbx = 0x33445566;
     Registers.rcx = Which == ZeroRepeat ? 0 : 3;
@@ -297,7 +319,9 @@ protected:
     default:
       break;
     }
-    uint32_t End = Code;
+    if (Execute)
+      Instructions.push_back({0xcd, 64});
+    uint32_t End = Code + Special.cs.base;
     for (const auto &Bytes : Instructions) {
       std::copy(Bytes.begin(), Bytes.end(), RAM + End);
       End += Bytes.size();
@@ -315,7 +339,20 @@ protected:
       std::copy(Count.begin(), Count.end(), RAM + 0x4010);
       std::copy(Return.begin(), Return.end(), RAM + 0x4010 + Count.size());
       Steps.clear();
-      if (Which == RepairAndRetry) {
+      if (Execute && Execute->Resume) {
+        // The 32-bit #DB frame keeps RF clear. The handler sets it explicitly
+        // before IRETD so the original instruction executes once on retry.
+        ASSERT_TRUE(Gate32);
+        std::vector<uint8_t> SetRF{0x81, 0x0d};
+        for (uint32_t Value : {CPL ? 0xdff4u : 0xcffcu, 0x10000u})
+          for (unsigned I = 0; I != 4; ++I)
+            SetRF.push_back(Value >> (I * 8));
+        std::copy(SetRF.begin(), SetRF.end(), RAM + 0x4010);
+        std::copy(Count.begin(), Count.end(), RAM + 0x4010 + SetRF.size());
+        std::copy(Return.begin(), Return.end(),
+                  RAM + 0x4010 + SetRF.size() + Count.size());
+        Steps = {Instructions[0], SetRF, Count, Return, Instructions[0]};
+      } else if (Which == RepairAndRetry) {
         std::vector<uint8_t> Repair{0xc7, 0x05};
         for (uint32_t Value : {PT + 8 * PW, 0x8007u})
           for (unsigned I = 0; I != 4; ++I)
@@ -332,8 +369,9 @@ protected:
       const unsigned Traps = Which == ReturnAndStepAgain ? 2
                              : Which == RepeatAndReturn  ? 3
                                                          : 1;
-      for (unsigned I = 0; I != Traps; ++I)
-        Steps.insert(Steps.end(), {Instructions[0], Count, Return});
+      if (!Execute || !Execute->Resume)
+        for (unsigned I = 0; I != Traps; ++I)
+          Steps.insert(Steps.end(), {Instructions[0], Count, Return});
       Steps.push_back({0xcd, 64});
     }
 
@@ -366,6 +404,11 @@ protected:
     State.TR = Cache(Special.tr);
     State.Sysenter = {8, 0xb000, Target};
     State.Debug = X86LegacyDebugState{DR6, 0x400, 0};
+    if (Execute) {
+      State.Debug->DR7 = Execute->DR7;
+      State.Debug->DR.fill(Code + Execute->CSBase + Execute->Offset);
+    }
+    const auto InitialDebug = *State.Debug;
     State.NMIBlocked =
         Which == IretClear || Which == IretSet || Which == IretResume;
     const bool InitialNMI = State.NMIBlocked;
@@ -394,7 +437,10 @@ protected:
     Options.Calls = X86LegacyCallProfile::StoreBeforeTargetLimit;
     Options.FarTransfers = X86LegacyFarTransferProfile::OrderedFrame;
     Options.FastSystem = X86LegacyFastSystemProfile::IntelSEP;
-    Options.Debug = X86LegacyDebugProfile::InstructionStep;
+    Options.Debug = Execute ? X86LegacyDebugProfile::ExecuteBreakpoints
+                            : X86LegacyDebugProfile::InstructionStep;
+    if (Execute && Execute->Resume)
+      Options.LogicalAuxiliaryCarry = false;
     X86LegacyExecutionResult Result;
     for (const auto &Bytes : Steps) {
       auto Got = executeX86LegacyInstruction(State, *Memory, Bytes, Options);
@@ -441,8 +487,10 @@ protected:
     // following bytes. They must not invent active hardware-breakpoint causes.
     for (unsigned I = 0; I != 4; ++I)
       Debug.db[I] = Code + I;
-    Debug.dr6 = DR6;
-    Debug.dr7 = 0x400;
+    if (Execute)
+      std::copy(InitialDebug.DR.begin(), InitialDebug.DR.end(), Debug.db);
+    Debug.dr6 = InitialDebug.DR6;
+    Debug.dr7 = InitialDebug.DR7;
     ASSERT_EQ(ioctl(CPU, KVM_SET_DEBUGREGS, &Debug), 0);
     kvm_vcpu_events Events{};
     Events.flags = KVM_VCPUEVENT_VALID_NMI_PENDING | KVM_VCPUEVENT_VALID_SHADOW;
