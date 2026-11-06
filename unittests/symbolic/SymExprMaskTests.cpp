@@ -573,4 +573,88 @@ TEST(SymExprMask, ComposedMaskRulesDoNotReenterDeepSources) {
   }
 }
 
+TEST(SymExprMask, ReassembledBitFieldsMergeWithWordMasks) {
+  for (unsigned W : {16u, 32u, 64u, 128u}) {
+    SCOPED_TRACE(W);
+    SymContext C;
+    const auto X = C.mkVar("x", W);
+    llvm::APInt Mask(W, 0x3c7300);
+    llvm::SmallVector<SymRef, 8> Fields{C.mkAnd(X, C.mkConst(Mask))};
+    for (unsigned Bit : {0u, 2u, 4u, 7u, 11u}) {
+      const auto Byte = C.mkExtract(C.mkLShr(X, C.mkConst(32, Bit)), 0, 8);
+      const auto Flag = C.mkAnd(Byte, C.mkConst(8, 1));
+      Fields.push_back(C.mkShl(C.mkZExt(Flag, W), C.mkConst(32, Bit)));
+      Mask.setBit(Bit);
+    }
+    const auto Expected = C.mkAnd(X, C.mkConst(Mask));
+    EXPECT_EQ(C.mkOr(Fields), Expected) << C.toString(C.mkOr(Fields));
+    for (auto Packed : {C.mkOr(Fields), C.mkXor(Fields), C.mkAdd(Fields)}) {
+      for (unsigned I = 0; I != 256; ++I) {
+        const auto Value =
+            llvm::APInt(W, I) * llvm::APInt::getAllOnes(W).udiv(255);
+        EXPECT_EQ(C.eval(Packed, {Value}), Value & Mask);
+      }
+    }
+  }
+}
+
+TEST(SymExprMask, FieldReassemblyKeepsMovedBitsSignedBitsAndUnknownCounts) {
+  SymContext C;
+  const auto X = C.mkVar("x", 16), Count = C.mkVar("count", 32);
+  const auto Upper = C.mkAnd(X, C.mkConst(16, 0xff00));
+  const auto Byte = C.mkExtract(X, 0, 8);
+  const auto LowBit = C.mkAnd(Byte, C.mkConst(8, 1));
+  const auto Moved =
+      C.mkOr(Upper, C.mkShl(C.mkZExt(LowBit, 16), C.mkConst(32, 1)));
+  const auto Signed = C.mkOr(Upper, C.mkSExt(Byte, 16));
+  const auto DynamicByte = C.mkExtract(C.mkLShr(X, Count), 0, 8);
+  const auto Dynamic =
+      C.mkOr(Upper, C.mkZExt(C.mkAnd(DynamicByte, C.mkConst(8, 1)), 16));
+  for (unsigned I = 0; I != 65536; ++I) {
+    const llvm::APInt Value(16, I), Shift(32, I % 19);
+    const llvm::APInt Values[] = {Value, Shift};
+    EXPECT_EQ(C.eval(Moved, Values),
+              llvm::APInt(16, (I & 0xff00) | ((I & 1) << 1)));
+    EXPECT_EQ(C.eval(Signed, Values),
+              (Value & llvm::APInt(16, 0xff00)) | Value.trunc(8).sext(16));
+    EXPECT_EQ(C.eval(Dynamic, Values),
+              llvm::APInt(16, (I & 0xff00) |
+                                  (I % 19 >= 16 ? 0 : (I >> (I % 19)) & 1)));
+  }
+  // A projection back onto a compound AND keeps its complete source factors.
+  const auto Y = C.mkVar("y", 16), Word = C.mkAnd(X, Y);
+  const auto High =
+      C.mkShl(C.mkZExt(C.mkExtract(Word, 8, 8), 16), C.mkConst(32, 8));
+  EXPECT_EQ(C.mkOr(C.mkAnd(Word, C.mkConst(16, 0xff)), High), Word);
+}
+
+TEST(SymExprMask, ReassembledFieldsPreserveOverlapCarriesAndWideLanes) {
+  for (unsigned Width : {16u, 64u, 128u}) {
+    SymContext C;
+    const auto X = C.mkVar("x", Width);
+    const llvm::APInt LowMask(Width, 0xff);
+    const auto Low = C.mkAnd(X, C.mkConst(LowMask));
+    const auto Upper = C.mkAnd(X, C.mkConst(~LowMask));
+    const auto Field = C.mkZExt(C.mkExtract(X, 0, 8), Width);
+    const auto Sum = C.mkAdd({Low, Upper, Field});
+    const auto Xor = C.mkXor({Low, Upper, Field});
+    EXPECT_EQ(C.mkOr({Low, Upper, Field}), X);
+    for (unsigned I = 0; I != 256; ++I) {
+      const auto Value =
+          llvm::APInt(Width, I) * llvm::APInt::getAllOnes(Width).udiv(255);
+      EXPECT_EQ(C.eval(Sum, {Value}), Value + (Value & LowMask));
+      EXPECT_EQ(C.eval(Xor, {Value}), Value & ~LowMask);
+    }
+  }
+  SymContext C;
+  const auto X = C.mkVar("x", 128);
+  auto Mask = llvm::APInt::getOneBitSet(128, 119);
+  const auto High = C.mkAnd(X, C.mkConst(Mask));
+  const auto Field =
+      C.mkShl(C.mkZExt(C.mkAnd(C.mkExtract(X, 93, 8), C.mkConst(8, 3)), 128),
+              C.mkConst(32, 93));
+  Mask |= llvm::APInt(128, 3).shl(93);
+  EXPECT_EQ(C.mkOr(High, Field), C.mkAnd(X, C.mkConst(Mask)));
+}
+
 } // namespace

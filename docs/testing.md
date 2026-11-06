@@ -20608,6 +20608,14 @@ The repeated-image regression also covers unrelated function-pointer relocations
 
 `SymExprMask.ConstantCover*` checks exhaustive four-bit masks and inputs, 8–257-bit words, live high bits, shared deep sources, and word/term budget refusal. `FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` checks a constant displacement with zero solver queries and rejects an input-dependent neighbor. Run `NeverDSymbolicTests` and `NeverDInterpreterSpecializationTests`.
 
+`SymExprMask.Reassembled*` and `FieldReassembly*` cover zero-extended fields
+restored to their original bit positions, compound AND sources, high lanes of
+128-bit words and overlapping arithmetic. Moved bits, signed extensions and
+dynamic shifts are checked against independent values over all 16-bit inputs.
+`HighSymSimplify.RepackedByteFlagsBecomeOneMaskedWord` requires compact HighIR
+and executes its emitted C against 100,000 inputs at O0/O2. Run
+`NeverDSymbolicTests` and `NeverDHighSymSimplifyTests` for this mask owner.
+
 ## Image storage reached through advancing cursors
 
 `CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` executes forward/backward cursor loops, intermediate copies, same-width casts and read/write or store-only paths for COFF/ELF/Mach-O at O0/O2 with ASan/UBSan. `CursorStorageNeedsAnAddressPreservingMemoryPath` rejects scalar constants, loaded pointers, narrowing conversions and arithmetic without a memory consumer; `DirectBoundedTablesKeepTheirExtent` retains the bounded direct-index path. Build `NeverDLiftTests`, then run `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`.

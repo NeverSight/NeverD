@@ -7,6 +7,7 @@
 #include "SymExprMask.h"
 
 #include <map>
+#include <optional>
 #include <vector>
 
 namespace neverd::symbolic {
@@ -14,6 +15,57 @@ namespace {
 
 bool hasConstantMask(const SymContext &Ctx, SymRef R) {
   return Ctx.op(R) == SymOp::And && Ctx.isConst(Ctx.operand(R, 0));
+}
+
+bool mayRestoreField(const SymContext &C, SymRef R) {
+  if (C.op(R) == SymOp::Mul && C.numOperands(R) == 2 &&
+      C.isConst(C.operand(R, 0)))
+    R = C.operand(R, 1);
+  return C.op(R) == SymOp::ZExt;
+}
+
+struct RestoredField {
+  SymRef Source;
+  llvm::APInt Mask;
+};
+
+// A narrowed field shifted back to its original position is a masked view of
+// the complete word. Inspect only these immediate wrappers, without expanding
+// the word or asking a solver. Signed extension and moved/dynamic fields keep
+// their original expression.
+std::optional<RestoredField> restoredField(const SymContext &C, SymRef R) {
+  const auto Width = C.width(R);
+  unsigned Position = 0;
+  if (C.op(R) == SymOp::Mul && C.numOperands(R) == 2 &&
+      C.isConst(C.operand(R, 0))) {
+    const auto Factor = C.constValue(C.operand(R, 0));
+    if (!Factor.isPowerOf2())
+      return {};
+    Position = Factor.logBase2();
+    R = C.operand(R, 1);
+  }
+  if (C.op(R) != SymOp::ZExt)
+    return {};
+  R = C.operand(R, 0);
+  auto Mask = llvm::APInt::getLowBitsSet(Width, C.width(R));
+  if (hasConstantMask(C, R) && C.numOperands(R) == 2) {
+    Mask &= C.constValue(C.operand(R, 0)).zext(Width);
+    R = C.operand(R, 1);
+  }
+  if (C.op(R) != SymOp::Extract)
+    return {};
+  uint64_t Low = C.node(R).Aux;
+  R = C.operand(R, 0);
+  if (C.op(R) == SymOp::LShr && C.isConst(C.operand(R, 1))) {
+    const auto Count = C.constValue(C.operand(R, 1));
+    if (Count.uge(C.width(R)))
+      return {};
+    Low += Count.getZExtValue();
+    R = C.operand(R, 0);
+  }
+  if (C.width(R) != Width || Low != Position)
+    return {};
+  return RestoredField{R, Mask.shl(Position)};
 }
 
 struct MaskGroup {
@@ -42,22 +94,27 @@ bool SymContext::mergeMaskedOperands(llvm::SmallVectorImpl<SymRef> &Terms,
                                      bool RequireDisjoint) {
   unsigned MaskedCount = 0;
   uint64_t CommonBits = ~uint64_t(0);
+  bool HasFields = false;
   for (SymRef R : Terms) {
-    if (!hasConstantMask(*this, R))
+    if (hasConstantMask(*this, R)) {
+      if (RequireDisjoint) {
+        const SymNode &Mask = node(operand(R, 0));
+        CommonBits &=
+            Mask.Width <= 64 ? Mask.Aux : WideConsts[Mask.Aux].getRawData()[0];
+      }
+    } else if (mayRestoreField(*this, R)) {
+      HasFields = true;
+    } else {
       continue;
-    if (RequireDisjoint) {
-      const SymNode &Mask = node(operand(R, 0));
-      CommonBits &=
-          Mask.Width <= 64 ? Mask.Aux : WideConsts[Mask.Aux].getRawData()[0];
     }
     ++MaskedCount;
-    if (MaskedCount >= 2 && (!RequireDisjoint || CommonBits == 0))
+    if (MaskedCount >= 2 && (!RequireDisjoint || HasFields || CommonBits == 0))
       break;
   }
   // A common low-word bit prevents every pair from being disjoint. Ignoring
   // higher words keeps this sufficient check allocation-free; its failure
   // still requires grouping rather than assuming masks are disjoint.
-  if (MaskedCount < 2 || (RequireDisjoint && CommonBits != 0))
+  if (MaskedCount < 2 || (RequireDisjoint && !HasFields && CommonBits != 0))
     return false;
 
   // AND is variadic, so its non-constant operand list identifies the source.
@@ -65,11 +122,26 @@ bool SymContext::mergeMaskedOperands(llvm::SmallVectorImpl<SymRef> &Terms,
   std::map<std::vector<SymRef>, MaskGroup> Groups;
   for (size_t I = 0; I < Terms.size(); ++I) {
     SymRef R = Terms[I];
-    if (!hasConstantMask(*this, R))
+    std::vector<SymRef> Source;
+    llvm::APInt Mask(width(R), 0);
+    if (hasConstantMask(*this, R)) {
+      const auto Ops = operands(R);
+      Source.assign(Ops.begin() + 1, Ops.end());
+      Mask = constValue(Ops[0]);
+    } else if (auto Field = restoredField(*this, R)) {
+      Mask = std::move(Field->Mask);
+      if (op(Field->Source) == SymOp::And) {
+        for (auto Factor : operands(Field->Source))
+          if (isConst(Factor))
+            Mask &= constValue(Factor);
+          else
+            Source.push_back(Factor);
+      } else {
+        Source.push_back(Field->Source);
+      }
+    } else {
       continue;
-    auto Ops = operands(R);
-    std::vector<SymRef> Source(Ops.begin() + 1, Ops.end());
-    llvm::APInt Mask = constValue(Ops[0]);
+    }
     auto [It, Inserted] =
         Groups.try_emplace(std::move(Source), MaskGroup{Mask, {}, false});
     MaskGroup &Group = It->second;
