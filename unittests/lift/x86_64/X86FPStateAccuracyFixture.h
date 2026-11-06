@@ -128,6 +128,16 @@ protected:
       retain(Name, contents(Source));
   }
 
+  /// Arguments that build x86 objects from \p Arguments on any macOS host. The
+  /// emitted C keeps x86 instructions, which arm64's Clang would otherwise
+  /// reject.
+  static std::vector<std::string> forX86(std::vector<std::string> Arguments) {
+#if defined(__APPLE__) && !defined(__x86_64__)
+    Arguments.insert(Arguments.begin(), {"-arch", "x86_64"});
+#endif
+    return Arguments;
+  }
+
   CommandResult command(llvm::StringRef Program,
                         const std::vector<std::string> &Arguments) {
     const auto Stdout = file("stdout-" + std::to_string(Files.size()));

@@ -20,6 +20,9 @@ protected:
   void
   expectBothRoutesRunLikeSource(const char *Kernel, bool BothModels,
                                 std::initializer_list<const char *> Names) {
+#ifndef __linux__
+    GTEST_SKIP() << "the C names ELF symbols, which only a Linux host links";
+#endif
     for (const bool Direct : {false, true}) {
       if (Direct && !BothModels)
         continue;

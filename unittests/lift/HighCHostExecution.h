@@ -14,6 +14,7 @@
 #ifndef NEVERD_UNITTESTS_LIFT_HIGHCHOSTEXECUTION_H
 #define NEVERD_UNITTESTS_LIFT_HIGHCHOSTEXECUTION_H
 
+#include "../HostCompiler.h"
 #include "NeverDLiftFixture.h"
 
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
@@ -79,6 +80,8 @@ protected:
     const auto Compiled = exec(Compiler, Args);
     if (Compiled.exitCode != 0 && Compiler != NEVERD_TEST_CLANG)
       GTEST_SKIP() << Compiler << " cannot build the kernel: " << Compiled.err;
+    if (Compiled.exitCode != 0 && neverd::test::lacksCrossHeaders(Compiled.err))
+      GTEST_SKIP() << "no headers for the kernel's target: " << Compiled.err;
     ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
 
     const auto Decompiled =
@@ -89,6 +92,13 @@ protected:
     ASSERT_TRUE(Input.good());
     const std::string C((std::istreambuf_iterator<char>(Input)),
                         std::istreambuf_iterator<char>());
+    const bool X86Kernel = llvm::any_of(TargetFlags, [](llvm::StringRef Flag) {
+      return Flag.contains("x86_64") || Flag.contains("i386") ||
+             Flag.contains("i686") || Flag == "-m32";
+    });
+    if (X86Kernel)
+      if (const auto Reason = neverd::test::cannotRunX86C(C))
+        GTEST_SKIP() << *Reason;
     ASSERT_EQ(C.find("unknown"), std::string::npos) << C;
 
     // AArch64 C retains each original register-offset memory instruction as
@@ -138,6 +148,12 @@ protected:
     ReferenceArgs.insert(ReferenceArgs.end(), {"-c", ReferenceSource.string(),
                                                "-o", ReferenceObject.string()});
     const auto ReferenceBuilt = exec(NEVERD_TEST_CLANG, ReferenceArgs);
+    // The reference is the test's own source. An x86 kernel may need an x86
+    // host, whatever became of the C NeverD wrote from it.
+    if (ReferenceBuilt.exitCode != 0 && X86Kernel &&
+        !neverd::test::hostRunsX86())
+      GTEST_SKIP() << "the x86 kernel needs an x86 host: "
+                   << ReferenceBuilt.err;
     ASSERT_EQ(ReferenceBuilt.exitCode, 0) << ReferenceBuilt.err;
     // The C reads and writes scalars through plain pointer casts, which its
     // header says to build with -fno-strict-aliasing, as the semantic grid

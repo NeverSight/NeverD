@@ -8,6 +8,7 @@
 /// Checks exact recognition and native execution of physical dispatch bridges.
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCompiler.h"
 #include "NeverDLiftFixture.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -278,6 +279,8 @@ TEST_F(X64DispatchFrameSource, BothRoutesRetainThePhysicalMachineInterface) {
                    {"--target=x86_64-linux-gnu",
                     std::string("-") + Optimization, "-ffreestanding", "-c",
                     Source.string(), "-o", tmpFile("bridge.o").string()});
+          if (!Built.ok() && neverd::test::lacksCrossHeaders(Built.err))
+            GTEST_SKIP() << "no headers for x86-64 Linux: " << Built.err;
           ASSERT_TRUE(Built.ok()) << Built.err << Text;
 #endif
         }

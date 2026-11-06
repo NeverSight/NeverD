@@ -427,7 +427,8 @@ TEST_P(X86ThreeDNowEmissionTest,
       retain(Stem + ".c", Source);
       for (const char *Opt : {"-O0", "-O2"}) {
         const auto Output = file(Stem + Opt + ".o");
-        const auto Built = command(Compiler, {Opt, "-c", Unit, "-o", Output});
+        const auto Built =
+            command(Compiler, forX86({Opt, "-c", Unit, "-o", Output}));
         ASSERT_EQ(Built.Status, 0) << Built.Error << Source;
         checkObject(contents(Output), E.Id);
         retainFile(Stem + Opt + ".o", Output);

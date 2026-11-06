@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCompiler.h"
 #include "LLVMHostFixture.h"
 #include "gtest/gtest.h"
 
@@ -368,6 +369,8 @@ TEST_F(X86SourceAccuracy,
   const auto Path = file("wide-slices.c");
   write(Path, Source + Checks);
   retain("wide-slices.c", Source + Checks);
+  if (!neverd::test::compilerHasWideBitInt(Compiler))
+    GTEST_SKIP() << "this Clang lacks the _BitInt width the C spells";
   for (const char *Optimization : {"-O0", "-O2"}) {
     SCOPED_TRACE(Optimization);
     const auto Executable = file(std::string("wide") + Optimization + ".exe");

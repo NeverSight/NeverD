@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCompiler.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/RewriteSourceIdentity.h"
@@ -164,6 +165,13 @@ void compileAndCheck(const std::string &Source, bool LLVMOnly = false,
                      llvm::ArrayRef<llvm::StringRef> ExtraFlags = {}) {
   auto Compiler = llvm::sys::findProgramByName("clang");
   ASSERT_TRUE(static_cast<bool>(Compiler)) << "clang is required";
+  if (!LLVMOnly) {
+    if (const auto Reason = neverd::test::cannotRunC(Source))
+      GTEST_SKIP() << *Reason;
+  }
+  if (Source.find("_BitInt(") != std::string::npos &&
+      !neverd::test::compilerHasWideBitInt(*Compiler))
+    GTEST_SKIP() << "this Clang lacks the _BitInt width the C spells";
   llvm::SmallString<128> Input, Output, Errors;
   ASSERT_FALSE(
       llvm::sys::fs::createTemporaryFile("neverd-intrinsic", "c", Input));

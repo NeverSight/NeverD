@@ -1,3 +1,4 @@
+#include "../../HostCompiler.h"
 #include "CSourceText.h"
 #include "HighCHostExecution.h"
 #include "NeverDLiftFixture.h"
@@ -1112,6 +1113,8 @@ TEST_F(X86_64_SystemRegister, AStoredSelectorIsTheValueReturned) {
   EXPECT_NE(C.find("__asm__ volatile(\"str %0\" : \"=r\"("), std::string::npos)
       << C;
   EXPECT_EQ(C.find("void str32"), std::string::npos) << C;
+  if (const auto Reason = neverd::test::cannotRunX86C(C))
+    GTEST_SKIP() << *Reason;
   const auto HostSource = tmpFile("host.c");
   std::ofstream(HostSource) << C;
   const auto Built =

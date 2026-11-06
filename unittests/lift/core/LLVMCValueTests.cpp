@@ -9,6 +9,7 @@
 #include "../../../lib/backend/c/pass/LLVMC/LLVMCBitTests.h"
 #include "../../../lib/backend/c/pass/LLVMC/LLVMCCommonBranches.h"
 #include "../../../lib/backend/c/render/X86/X86Virtualization.h"
+#include "../../HostCompiler.h"
 #include "SourceCallExecution.h"
 #include "WindowsQualifiedFixture.h"
 #include "gtest/gtest.h"
@@ -71,6 +72,11 @@ void compileAndRun(const std::string &Source,
 #endif
   if (!CompilerOverride.empty())
     Compiler = CompilerOverride;
+  if (const auto Reason = neverd::test::cannotRunC(Source))
+    GTEST_SKIP() << *Reason;
+  if (Source.find("_BitInt(") != std::string::npos &&
+      !neverd::test::compilerHasWideBitInt(Compiler))
+    GTEST_SKIP() << "this Clang lacks the _BitInt width the C spells";
   llvm::SmallString<128> SourcePath, BinaryPath, ErrorPath;
   llvm::SmallString<128> ReferencePath;
   ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-llvmc-value", "ll",
@@ -221,6 +227,8 @@ int main(void) {
 }
 
 TEST(LLVMCValues, PrefetchKeepsComputedAndSegmentedMemoryOperands) {
+  if (!neverd::test::hostRunsX86())
+    GTEST_SKIP() << "the prefetch instructions need an x86 host";
   llvm::LLVMContext Context;
   llvm::Module Module("prefetch_addresses", Context);
   Module.setDataLayout("e-p:64:64");

@@ -94,6 +94,8 @@ protected:
     Module->print(Stream, nullptr);
     std::ofstream(MappedIR) << Mapped;
     const auto OptimizedIR = tmpFile("call-pause-proved.ll");
+    if (!neverd::test::compilerReadsCurrentIR(NEVERD_TEST_CLANG))
+      GTEST_SKIP() << "this Clang cannot read the linked LLVM's IR";
     const auto Optimized =
         exec(NEVERD_TEST_CLANG, {"-O2", "-S", "-emit-llvm", MappedIR.string(),
                                  "-o", OptimizedIR.string()});

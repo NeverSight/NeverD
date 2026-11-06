@@ -7,6 +7,7 @@
 /// Execute exported C and verify the real SDK and CLI retain exact boundaries.
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCompiler.h"
 #include "../../lift/NeverDLiftFixture.h"
 #include "../../lift/x86/X86HleTestCases.h"
 #include "../../lift/x86/X86TransactionTestCases.h"
@@ -181,6 +182,8 @@ protected:
   }
   void execute(llvm::StringRef Source, llvm::StringRef Harness) {
     ASSERT_FALSE(Source.empty());
+    if (const auto Reason = neverd::test::cannotRunX86C(Source.str()))
+      GTEST_SKIP() << *Reason;
     const auto File = tmpFile("run.c");
     std::ofstream(File) << Source.str() << Harness.str();
     for (const char *Level : {"-O0", "-O2"}) {
