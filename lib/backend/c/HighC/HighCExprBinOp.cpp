@@ -1151,6 +1151,11 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
     if (!Enumerator && Width && Width->Kind == NdTypeKind::Int &&
         Width->Size < sizeof(int))
       NeedsUnsignedCast = true;
+    // The same width is what a name declared wider must be read at: `cmp $1,
+    // %esi` of an `int64_t arg1` says nothing about the upper half.
+    if (!Enumerator && (printsWiderThanItsValue(*E.Operands[0]) ||
+                        printsWiderThanItsValue(*E.Operands[1])))
+      NeedsUnsignedCast = true;
   }
 
   if (NeedsUnsignedCast || NeedsSignedCast) {

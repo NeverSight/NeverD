@@ -721,6 +721,9 @@ public:
   /// (`(int32_t)(int8_t)v` is not `v`).
   const HighExpr *sameWidthVariable(const HighExpr &E) const;
   const HighExpr *forwardedExpr(const HighExpr *E) const;
+  /// exprStr last printed the variable \p E as a name declared wider than its
+  /// value, so that reading only the value takes a cast.
+  bool printsWiderThanItsValue(const HighExpr &E) const;
   /// The width a comparison of \p Value with the constant \p Zero tests: the
   /// narrower of the two, since a variable can be typed wider than its test and
   /// a zero wider than a 16-bit value.

@@ -2820,6 +2820,17 @@ TEST(HighCTruthValue, GreaterThanZeroComparesTheWidthTheTestsRead) {
   Add("declared_signed_not_most", S32, Not(AtMostZero(U32)), S + " > 0");
 
 
+  // A parameter declared wider than what the tests read: C reads every byte of
+  // the declaration, so its name alone is not the value tested.
+  Add("declared_wide_truth", U64, NotZero(S32), "(uint32_t)v != 0");
+  Add("declared_wide_zero", U64, IsZero(S32), "(uint32_t)v == 0");
+  Add("declared_wide_above", U64, And(NotZero(S32), Not(Below(S32))),
+      S + " > 0");
+  Add("declared_wide_not_either", U64, Not(Or(IsZero(S32), Below(S32))),
+      S + " > 0");
+  // The inverted spelling of a chain prints each term on its own.
+  Add("declared_wide_chain", U64,
+      Not(Or(Or(IsZero(S32), Below(S32)), IsZero(S32))), S + " > 0");
 
   // A zero narrower than the variable states the test's width.
   const auto ZeroAt4 = HighExpr::makeConst(0, 4);

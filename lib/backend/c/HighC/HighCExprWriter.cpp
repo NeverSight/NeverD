@@ -6369,6 +6369,14 @@ unsigned HighCWriter::lowBytesRead(const HighExpr *E) const {
   return 0;
 }
 
+bool HighCWriter::printsWiderThanItsValue(const HighExpr &E) const {
+  if (E.Kind != ExprKind::Var && E.Kind != ExprKind::Phi)
+    return false;
+  const auto Printed = printedIntegerType(E);
+  return Printed && E.Type && E.Type->Kind == NdTypeKind::Int && E.Type->Size &&
+         Printed->first > E.Type->Size;
+}
+
 bool HighCWriter::readsSameBytes(const HighExpr *A, const HighExpr *B) const {
   const unsigned Bytes = lowBytesRead(A);
   return Bytes && Bytes == lowBytesRead(B);
@@ -8819,6 +8827,10 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
   TruthTested = Tested;
   std::string Text = exprStr(*Tested);
   TruthTested = Enclosing;
+  // A name declared wider than its value has bytes the test does not read.
+  if (printsWiderThanItsValue(*Tested))
+    return "(" + typeToC(NdType::makeInt(Tested->Type->Size, false)) + ")" +
+           castOperandText(std::move(Text));
   return Text;
 }
 
