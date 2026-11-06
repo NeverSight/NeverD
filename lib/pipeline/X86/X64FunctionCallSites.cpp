@@ -9,6 +9,7 @@
 
 #include "X64FunctionCallSites.h"
 
+#include "X64FunctionCallSchedule.h"
 #include "X64FunctionCalls.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
@@ -19,6 +20,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -96,7 +98,7 @@ llvm::Expected<std::vector<X64FunctionCallSite>> bindX64FunctionCallSites(
 llvm::json::Array
 emitX64FunctionCallSites(llvm::raw_ostream &OS,
                          llvm::ArrayRef<X64FunctionCallSite> Sites,
-                         bool PagedMemory) {
+                         bool PagedMemory, bool ScheduledEvents) {
   llvm::json::Array Manifest;
   if (Sites.empty())
     return Manifest;
@@ -116,8 +118,10 @@ emitX64FunctionCallSites(llvm::raw_ostream &OS,
  * original stack bytes. Checks never initialize arguments or padding.
  * Zero-initialize this context and retain it across pauses. Prepared with an
  * uninitialized Callee.Function means CALL has not yet completed; ReturnSlot
- * then holds the checked pre-CALL SP. No provider runs before that CALL.
- * The selected CALL creates its real return cell; the shared function context
+ * then holds the checked pre-CALL SP.)C";
+  OS << (ScheduledEvents ? " The scheduler polls before that CALL.\n"
+                         : " No provider runs before that CALL.\n");
+  OS << R"C( * The selected CALL creates its real return cell; the shared function context
  * owns completion. Context, state, budgets and provider storage are disjoint
  * from each other and guest RAM. Never infer caller state from C parameters. */
 typedef struct neverd_x64_call_site_context_v1 {
@@ -130,18 +134,24 @@ typedef struct neverd_x64_call_site_context_v1 {
     const auto &Unit = *Site.Instruction;
     const auto Address = llvm::utohexstr(Unit.Address);
     const auto Entry = llvm::utohexstr(Call.Entry);
-    const std::string Prefix = PagedMemory ? "paged_site_" : "site_";
-    const std::string Start = "neverd_x64_call_" + Prefix + Address + "_v6";
-    const std::string Resume = "neverd_x64_resume_" + Prefix + Address + "_v6";
-    const char *Parameters =
-        PagedMemory ? "(neverd_x64_state_v6 *state, uint8_t *context, uint64_t "
-                      "*budget,\n"
-                      "    neverd_x64_call_site_context_v1 *site"
-                    : "(neverd_x64_state_v6 *state, uint64_t *budget, "
-                      "uint64_t *environment_budget,\n"
-                      "    neverd_x64_call_site_context_v1 *site, "
-                      "neverd_x64_environment_v6 "
-                      "environment, void *environment_context";
+    const llvm::StringRef Prefix =
+        PagedMemory ? (ScheduledEvents ? "paged_events_site_" : "paged_site_")
+                    : (ScheduledEvents ? "events_site_" : "site_");
+    const std::string Start =
+        (llvm::Twine("neverd_x64_call_") + Prefix + Address + "_v6").str();
+    const std::string Resume =
+        (llvm::Twine("neverd_x64_resume_") + Prefix + Address + "_v6").str();
+    const llvm::StringRef Parameters =
+        ScheduledEvents ? x64ScheduledCallParameters(PagedMemory, true)
+        : PagedMemory
+            ? "(neverd_x64_state_v6 *state, uint8_t *context, uint64_t "
+              "*budget,\n"
+              "    neverd_x64_call_site_context_v1 *site"
+            : "(neverd_x64_state_v6 *state, uint64_t *budget, "
+              "uint64_t *environment_budget,\n"
+              "    neverd_x64_call_site_context_v1 *site, "
+              "neverd_x64_environment_v6 "
+              "environment, void *environment_context";
     OS << "\nneverd_x64_call_result_v1 " << Resume << Parameters << ") {\n"
        << "    neverd_x64_call_result_v1 rejected = {"
        << uint64_t(Exit::InvalidState) << ", 0, 0};\n"
@@ -154,29 +164,43 @@ typedef struct neverd_x64_call_site_context_v1 {
        << "ULL || state->GPR[4] != "
           "site->Callee.Function.ReturnSlot) return rejected;\n"
           "        if (!*budget) { rejected.Status = 9; return rejected; }\n"
-          "        rejected.Status = "
-       << Unit.Function.Name;
-    if (PagedMemory)
-      OS << "_paged_step(state, context);\n"
-            "        if (!(neverd_x64_paged_progress_v1(context) & "
-         << analysis::kX64PagedInstructionAttempted
-         << ")) return rejected;\n"
-            "        --*budget;\n";
-    else
-      OS << "((uint8_t *)state);\n";
+          "        rejected.Status = ";
+    if (ScheduledEvents) {
+      OS << x64ScheduledCallSiteStepName(Unit.Address);
+      emitX64ScheduledCallArguments(OS, PagedMemory, "");
+      OS << ";\n";
+    } else {
+      OS << Unit.Function.Name;
+      if (PagedMemory)
+        OS << "_paged_step(state, context);\n"
+              "        if (!(neverd_x64_paged_progress_v1(context) & "
+           << analysis::kX64PagedInstructionAttempted
+           << ")) return rejected;\n"
+              "        --*budget;\n";
+      else
+        OS << "((uint8_t *)state);\n";
+    }
     OS << "        if (rejected.Status != " << uint64_t(Exit::Call)
        << ") return rejected;\n";
-    if (!PagedMemory)
+    if (ScheduledEvents && PagedMemory)
+      OS << "        if (!(neverd_x64_paged_progress_v1(memory_context) & "
+         << analysis::kX64PagedInstructionAttempted << ")) return rejected;\n";
+    if (!PagedMemory && !ScheduledEvents)
       OS << "        --*budget;\n";
     OS << "        neverd_x64_begin_function_v6(state, "
           "&site->Callee.Function);\n"
           "    }\n"
        << "    return neverd_x64_resume_" << (PagedMemory ? "paged_" : "")
-       << Entry
-       << (PagedMemory
-               ? "_v6(state, context, budget, &site->Callee);\n}\n"
-               : "_v6(state, budget, environment_budget, &site->Callee,\n"
-                 "        environment, environment_context);\n}\n");
+       << (ScheduledEvents ? "events_" : "") << Entry;
+    if (ScheduledEvents) {
+      OS << "_v6";
+      emitX64ScheduledCallArguments(OS, PagedMemory, "&site->Callee");
+      OS << ";\n}\n";
+    } else
+      OS << (PagedMemory
+                 ? "_v6(state, context, budget, &site->Callee);\n}\n"
+                 : "_v6(state, budget, environment_budget, &site->Callee,\n"
+                   "        environment, environment_context);\n}\n");
     OS << "neverd_x64_call_result_v1 " << Start << Parameters;
     const auto LastStackByte =
         emitX64FunctionCallParameters(OS, Call, Layout.CallStackBase);
@@ -195,10 +219,14 @@ typedef struct neverd_x64_call_site_context_v1 {
     OS << "    site->Callee.Function.ReturnSlot = state->GPR[4];\n"
        << "    site->Callee.Entry = 0x" << Entry << "ULL;\n"
        << "    site->Site = 0x" << Address << "ULL; site->Prepared = 1;\n"
-       << "    return " << Resume
-       << (PagedMemory ? "(state, context, budget, site);\n}\n"
-                       : "(state, budget, environment_budget, site,\n"
-                         "        environment, environment_context);\n}\n");
+       << "    return " << Resume;
+    if (ScheduledEvents) {
+      emitX64ScheduledCallArguments(OS, PagedMemory, "site");
+      OS << ";\n}\n";
+    } else
+      OS << (PagedMemory ? "(state, context, budget, site);\n}\n"
+                         : "(state, budget, environment_budget, site,\n"
+                           "        environment, environment_context);\n}\n");
     Manifest.push_back(llvm::json::Object{
         {"instruction", "0x" + Address},
         {"entry", "0x" + Entry},

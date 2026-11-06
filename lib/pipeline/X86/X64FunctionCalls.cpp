@@ -9,10 +9,13 @@
 
 #include "X64FunctionCalls.h"
 
+#include "X64FunctionCallSchedule.h"
+
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/ir/TargetRegInfo.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <string>
@@ -80,7 +83,7 @@ llvm::json::Array emitX64FunctionCallArguments(
 llvm::json::Array
 emitX64FunctionCalls(llvm::raw_ostream &OS,
                      llvm::ArrayRef<X64FunctionCallInterface> Calls,
-                     bool PagedMemory) {
+                     bool PagedMemory, bool ScheduledEvents) {
   llvm::json::Array Manifest;
   if (Calls.empty())
     return Manifest;
@@ -109,16 +112,18 @@ typedef struct neverd_x64_call_result_v1 {
 )C";
   for (const auto &Call : Calls) {
     const auto Entry = llvm::utohexstr(Call.Entry);
+    const llvm::StringRef Prefix =
+        PagedMemory ? (ScheduledEvents ? "paged_events_" : "paged_")
+                    : (ScheduledEvents ? "events_" : "");
     const std::string Start =
-        (PagedMemory ? "neverd_x64_call_paged_" : "neverd_x64_call_") + Entry +
-        "_v6";
+        (llvm::Twine("neverd_x64_call_") + Prefix + Entry + "_v6").str();
     const std::string Resume =
-        (PagedMemory ? "neverd_x64_resume_paged_" : "neverd_x64_resume_") +
-        Entry + "_v6";
+        (llvm::Twine("neverd_x64_resume_") + Prefix + Entry + "_v6").str();
     const auto ResultType =
         "uint" + std::to_string(Call.ResultBytes * 8) + "_t";
-    const auto Parameters =
-        PagedMemory
+    const llvm::StringRef Parameters =
+        ScheduledEvents ? x64ScheduledCallParameters(PagedMemory, false)
+        : PagedMemory
             ? "(neverd_x64_state_v6 *state, uint8_t *context, uint64_t "
               "*budget,\n"
               "    neverd_x64_call_context_v1 *call"
@@ -138,7 +143,13 @@ typedef struct neverd_x64_call_result_v1 {
           "        return result;\n"
           "    }\n"
           "    result.Status = ";
-    if (PagedMemory)
+    if (ScheduledEvents)
+      OS << "neverd_x64_continue_" << (PagedMemory ? "paged_" : "")
+         << "events_function_v6(state, "
+         << (PagedMemory ? "memory_context, " : "")
+         << "budget, shadows, poll_budget, peek, accepted, event_context, "
+            "&call->Function);\n";
+    else if (PagedMemory)
       OS << "neverd_x64_run_paged_function_v6(state, context, budget, "
             "&call->Function);\n";
     else
@@ -172,11 +183,15 @@ typedef struct neverd_x64_call_result_v1 {
     OS << "    neverd_x64_begin_function_v6(state, &call->Function);\n"
           "    call->Entry = 0x"
        << Entry << "ULL;\n"
-       << "    return " << Resume
-       << (PagedMemory
-               ? "(state, context, budget, call);\n}\n"
-               : "(state, budget, environment_budget, call, environment, "
-                 "environment_context);\n}\n");
+       << "    return " << Resume;
+    if (ScheduledEvents) {
+      emitX64ScheduledCallArguments(OS, PagedMemory, "call");
+      OS << ";\n}\n";
+    } else
+      OS << (PagedMemory
+                 ? "(state, context, budget, call);\n}\n"
+                 : "(state, budget, environment_budget, call, environment, "
+                   "environment_context);\n}\n");
     Manifest.push_back(llvm::json::Object{{"entry", "0x" + Entry},
                                           {"abi", "win64"},
                                           {"arguments", std::move(Arguments)},

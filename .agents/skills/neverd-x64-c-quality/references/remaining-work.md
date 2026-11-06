@@ -10,6 +10,23 @@ rejections. This closes a withdrawn-control-flow defect, not automatic entry
 state recovery or general Windows driver execution. The same-base request
 controls establish unchanged output, not a speedup over IDA.
 
+Checked entry and original-CALL views now compose with scheduled events in
+both V6 memory modes. The same scheduler emits bounded CALL-site steps;
+accepted events and faults retain a pending site, and only attempted successful
+CALL begins the callee. Active resumes never push another return cell.
+Scheduled pre-CALL handoffs precede instruction validation and polling after
+scheduler entry checks. Existing argument/result owners retain context-only
+slots and cached completion. Both C routes compile the full source and have
+static value/controller predicates over original instruction bodies, declared
+nonpaged fixture RAM and independent paged outcomes. No generated program or
+guest is executed. Unscheduled and call-view-free drivers remain unchanged.
+Nonpaged LLVM C event delivery now retains its producer-declared event object
+pointer, closing the blocked-NMI value-proof gap. Only wholly contained constant
+field accesses gain that fact; guest and undeclared argument addresses do not.
+This closes scheduled call-view composition; it does not recover the two
+ordinary registry inputs, capture initial state, prove return-cell lifetime
+or implement complete external environment and handler effects.
+
 Explicit function contexts now compose with IRQ/NMI scheduling in both the
 nonpaged and paged V6 drivers. The shared near-RET owner charges completion
 and emits the scheduler's shadow-expiry rule before returning; event delivery,
@@ -18,8 +35,8 @@ event-acceptance progress stay distinct. Compile-time predicates retain the
 actual generated instruction/controller bodies and separately model paged
 boundary outcomes. No generated program, instruction executor or guest is run.
 Disabled source is unchanged and additional generated checks are confined to
-selected near returns. Scalar/call-site views remain unscheduled and are
-explicitly rejected in a scheduled request. Handler resumption, return-cell
+selected near returns. Scheduled scalar/call-site composition is described
+above. Handler resumption, return-cell
 lifetime, state capture, the two ordinary registry inputs and complete external
 effects remain open; this closes the scheduled activation admission/composition
 gap only.

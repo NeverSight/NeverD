@@ -17664,15 +17664,18 @@ The provider owns native effects and profile reentry. This is an execution
 interface, not an inferred Windows service contract or an ordinary ABI proof.
 
 `X64StateObjectPointers` keeps the explicit continuation producer's host state
-object visible in LLVM C. Every emitted definition receives a complete state
-object at argument zero; its extent comes from the selected profile. After the
+and event objects visible in LLVM C. Every emitted definition receives a complete
+state object at argument zero; its extent comes from the selected profile. The
+producer additionally identifies its event delivery definition, whose argument
+one is the complete `X64ContinuationEventV1` input. No other second argument
+receives that contract. After the
 shared scaffolding-only SSA promotion, a def/use walk projects exact 64-bit
-constant state offsets back to that pointer only when the entire load or store
+constant object offsets back to that pointer only when the entire load or store
 fits the object. This bound authorizes `inbounds`; argument spelling and numeric
 guest addresses do not. Narrowing, dynamic offsets, PHIs, poison-bearing
 arithmetic and ordered accesses retain their original form. Loaded guest
 addresses, pointer escapes, external effects and native RAM are not localized.
-The walk visits only the state pointer's users in the selected export module;
+The walk visits only declared object-pointer users in the selected export module;
 it adds no ordinary source analysis or per-instruction runtime check. The shared
 LLVM context retains its existing serial mutation owner.
 
@@ -17712,8 +17715,8 @@ event producer context. Event delivery retains the activation and the original
 acceptance/acknowledgment protocol; only an attempted successful near RET can
 complete it. Completed or invalid phases stop before scheduler runtime access.
 The context-free scheduled driver is a null-activation adapter. Disabled source
-is unchanged. Scalar/call-site views still require unscheduled drivers and are
-explicitly rejected when scheduled events are requested. Handler resumption,
+is unchanged. Scalar/call-site views select the same scheduled owner when
+scheduled events are requested. Handler resumption,
 return-cell lifetime and mapping ownership remain producer obligations.
 
 `X64FunctionCalls` adds producer-declared Win64 scalar call views at explicit
@@ -17731,6 +17734,19 @@ Ordinary C callers receive status, a completion flag and valid result bits only
 on completion. This opt-in layer appends wrappers without changing either
 instruction dispatcher; it does not infer ABI declarations, capture native RAM
 or weaken ordinary missing-input proofs.
+
+`X64FunctionCallSchedule` shares scheduled view parameters and CALL-step names
+between the entry, site and scheduler emitters. `X64ContinuationSchedule` emits
+a bounded specialization for each authenticated CALL site, sharing its exact
+validation, polling, progress, budget and shadow rules with the main driver.
+The specialization stops after CALL and has no handoff pause; only attempted
+success starts the callee context. Event/fault stops retain the pending site,
+and active resumes never replay CALL. Scheduled pre-CALL markers are static
+returns before instruction validation and polling, after scheduler entry
+checks. No per-instruction site lookup or ordinary-source analysis is added.
+Unselected call views retain the previous drivers. Nonpaged LLVM C event
+delivery separately retains the declared event object's pointer; its generated
+field accesses change from integer arithmetic to bounded object offsets.
 
 The same call-view owner emits paged entry/resume wrappers when every physical
 stack slot is context-only. The shared Win64 layout supplies that admission
