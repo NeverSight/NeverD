@@ -20412,8 +20412,14 @@ HighIR structuring contract; it requires no external source interface.
 ### Explicit x64 continuation export
 
 `X64CallSiteHandlerTest.*` compiles both C routes at O0/O2 and uses optimizer
-predicates over the actual generated controller and instruction bodies. Plain
-proofs retain MOV, IRETQ, CALL, the upper-DWORD load, XOR and RET-immediate with
+predicates over the actual generated controller and instruction bodies. The
+proofs override helper/direct-driver inlining attributes; instruction/controller
+bodies and effects are unchanged, and ordinary O0/O2 compilation uses unmodified
+source.
+Only predicates are public in the proof module, so unused exports can be removed
+before optimization. Bounded fixture RAM is bound in successive frame, descriptor,
+resumed-CALL and callee phases; only wholly contained constant operands qualify.
+Plain proofs retain MOV, IRETQ, CALL, the upper-DWORD load, XOR and RET-immediate with
 bounded fixture RAM; paged proofs independently model privilege-return and
 fault/backing outcomes and retain the ordinary instruction bodies. Both
 scheduled and unscheduled interfaces, plus the direct plain dispatcher, check

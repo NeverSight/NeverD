@@ -108,7 +108,8 @@ TEST_F(X64CallSiteHandlerTest, ProvesReturnsAndPendingRetries) {
                             "\n#define SCHEDULED " + std::to_string(Scheduled) +
                             "\n" + CallSiteHandlerProbes;
         provePredicates(Paged, Name, Source, Probes,
-                        14 + unsigned(Scheduled) + (Paged ? 5 : 0), 0x800);
+                        14 + unsigned(Scheduled) + (Paged ? 5 : 0), 0x800, 4,
+                        true);
       }
 }
 
@@ -125,6 +126,6 @@ TEST_F(X64CallSiteHandlerTest, DirectDriverUsesTheSameReturnBoundary) {
         Source,
         std::string("\n#define PAGED 0\n#define SCHEDULED 0\n") +
             CallSiteHandlerProbes,
-        14, 0x800);
+        14, 0x800, 4, true);
   }
 }

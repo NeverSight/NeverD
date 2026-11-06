@@ -24,6 +24,7 @@ static neverd_x64_state_v6 seed_handler(void) {
 }
 typedef struct { unsigned polls,acks; } handler_producer;
 #if SCHEDULED
+#define HANDLER_SHADOWS neverd_x64_interruptibility_v1 shadows={0}
 static int handler_peek(const neverd_x64_state_v6 *s,
     const neverd_x64_interruptibility_v1 *shadows,
     neverd_x64_pending_interrupt_v1 *event,void *opaque) {
@@ -34,6 +35,7 @@ static void handler_accept(const neverd_x64_pending_interrupt_v1 *event,void *op
 }
 #define EVENT_ARGS &shadows,&poll_budget,handler_peek,handler_accept,&events
 #else
+#define HANDLER_SHADOWS
 static int handler_environment(neverd_x64_state_v6 *s,uint64_t status,void *opaque) {
     ++*(unsigned *)opaque;return 0;
 }
@@ -146,7 +148,7 @@ static void put_handler_frame_at(uint64_t frame,uint64_t pc,uint64_t sp) {
     neverd_x64_state_v6 state=seed_handler();neverd_x64_call_site_context_v1 site={0}; \
     neverd_x64_call_site_handler_context_v1 handler={0}; \
     uint64_t budget=0,environment_budget=23,poll_budget=20;unsigned providers=0; \
-    handler_producer events={0};neverd_x64_interruptibility_v1 shadows={0}; \
+    handler_producer events={0};HANDLER_SHADOWS; \
     START_SITE(ARGS,0x44,0x12345678,0x87654321); \
     if(!neverd_x64_begin_call_site_handler_v1(&site,&handler))return 99; \
     state.PC=0x1030;state.GPR[4]=FRAME;budget=10
@@ -215,10 +217,13 @@ int proof_handler_completed_cache(uint64_t incoming) {
         budget!=4||CHECK_MEMORY||CHECK_POLLS(6);
 }
 int proof_handler_near_return_is_not_privilege_return(void) {
-    PREPARE();state.PC=0x100e;state.GPR[4]=STACK-8;CELL=0x1005;
-    neverd_x64_call_result_v1 r=RESUME();
-    return r.Status!=21||r.Completed||handler.Ready||site.Callee.Function.Phase||
-        budget!=9||CELL!=0x1005||state.PC!=0x1005||state.GPR[4]!=STACK||CHECK_POLLS(1);
+    PREPARE();state.PC=0x100e;state.GPR[4]=STACK-8;CELL=0x1005;budget=1;
+    neverd_x64_call_result_v1 a=RESUME();
+    if(a.Status!=9||a.Completed||handler.Ready||site.Callee.Function.Phase||
+       budget||CELL!=0x1005||state.PC!=0x1005||state.GPR[4]!=STACK)return 1;
+    budget=1;neverd_x64_call_result_v1 b=RESUME();
+    return b.Status!=21||b.Completed||handler.Ready||site.Callee.Function.Phase||
+        budget!=1||CELL!=0x1005||state.PC!=0x1005||state.GPR[4]!=STACK||CHECK_POLLS(1);
 }
 int proof_handler_nested_privilege_returns(uint64_t incoming) {
     PREPARE();SET_INPUT(incoming);SET_RETURN(0x1030,FRAME+64);
