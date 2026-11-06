@@ -27,6 +27,7 @@
 #include "llvm/Support/StringSaver.h"
 
 #include <functional>
+#include <utility>
 
 namespace neverd::types {
 namespace {
@@ -2081,7 +2082,13 @@ private:
       }
       break;
     }
-    return [Pointers, Inner, Suffixes](TypeExprRef T) {
+    // A declarator without modifiers already has its complete composition.
+    // Keep the nested result and transfer owned modifiers instead of cloning
+    // their vectors and any nested callable for each parameter.
+    if (Pointers.empty() && Suffixes.empty())
+      return Inner;
+    return [Pointers = std::move(Pointers), Inner = std::move(Inner),
+            Suffixes = std::move(Suffixes)](TypeExprRef T) {
       for (const Pointer &P : Pointers)
         T = qualified(makePointer(T, P.Bytes, P.Reference), P.Const,
                       P.Volatile);

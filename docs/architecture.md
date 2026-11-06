@@ -3095,6 +3095,10 @@ their existing typed handling before the ignored-annotation path.
 Named specifiers resolve their type and kind in one library lookup. Builtin
 spellings keep precedence, declared aliases keep their names, and pointer-sized
 and va_list fallback types apply only when the library has no declaration.
+Declarators with no added pointer, array or function modifiers reuse the inner
+composition directly. Composed declarators take ownership of their modifier
+lists and nested callable, keeping the same binding order and qualifiers
+without copying those temporary structures.
 
 `importPDBTypes` reads every named record and enumeration of a PDB's TPI
 stream. MSVC flattens anonymous members into their parent, so
