@@ -465,6 +465,55 @@ TEST(SymMBAWidePairs, ExhaustsNarrowProductSignaturesAndCorrections) {
       }
 }
 
+TEST(SymMBAWidePairs, NarrowParityNeighborsFinishWithCompleteResidualWords) {
+  std::mt19937_64 Random(0x4e45494748424f52);
+  for (unsigned Width : {8u, 16u, 32u, 64u, 65u, 128u, 257u})
+    for (unsigned Complement : {0u, 1u, 2u}) {
+      SCOPED_TRACE(::testing::Message() << Width << ':' << Complement);
+      SymContext Ctx;
+      const auto F = partialFixture(Ctx, Width, 47, true, 7, 4, Complement,
+                                    Complement == 2);
+      const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+      const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+      const auto Input =
+          Ctx.mkAdd({F.Input, Ctx.mkXor(X, Y),
+                     Ctx.mkMul(Ctx.mkConst(Width, 2), Ctx.mkAnd(X, Y)),
+                     Ctx.mkOr(Z, W), Ctx.mkAnd(Z, W)});
+      MBAOptions Options;
+      Options.MaxWork = 65536;
+      Options.VerifySamples = 0;
+      const auto Result = simplifyMBADeep(Ctx, Input, Options);
+      ASSERT_TRUE(Result.Changed);
+      EXPECT_LT(Result.Work, Options.MaxWork);
+      EXPECT_LE(Result.SizeAfter, 128u);
+      EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+      if (Complement == 2) {
+        // The first two complete assignments make this product zero. The
+        // third must reevaluate the cached wide plan with its new inputs.
+        for (unsigned I = 0; I < 3; ++I) {
+          const std::array V{llvm::APInt(Width, I), llvm::APInt(Width, I),
+                             llvm::APInt(Width, I)};
+          EXPECT_EQ(F.oracle(V).isZero(), I < 2);
+        }
+      }
+      SymEvalPlan Reduced(Ctx, Result.Expr);
+      for (unsigned Trial = 0; Trial < 256; ++Trial) {
+        std::array<llvm::APInt, 4> Values;
+        for (auto &Value : Values) {
+          Value = llvm::APInt(Width, 0);
+          for (unsigned Bit = 0; Bit < Width; Bit += 64)
+            Value |= llvm::APInt(Width, Random()).shl(Bit);
+          if (Trial < 4)
+            Value = Trial == 3 ? llvm::APInt::getAllOnes(Width)
+                               : llvm::APInt(Width, Trial);
+        }
+        const auto Expected = F.oracle({Values[0], Values[1], Values[2]}) +
+                              Values[0] + Values[1] + Values[2] + Values[3];
+        ASSERT_EQ(Reduced.eval(Values), Expected);
+      }
+    }
+}
+
 TEST(SymMBAWidePairs, PreparedParityPrefixesKeepTheirProductAndContext) {
   auto Run = [](unsigned Width, bool Prepare) {
     SymContext Ctx;
