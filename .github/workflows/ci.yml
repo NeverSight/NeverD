@@ -601,7 +601,6 @@ jobs:
             --output-junit "$PWD/build-ci/ctest-results.xml" \
             --output-log "$PWD/ctest.log" \
             --no-tests=error \
-            --stop-on-failure \
             --output-on-failure \
             --progress \
             --parallel "$TEST_PARALLEL"

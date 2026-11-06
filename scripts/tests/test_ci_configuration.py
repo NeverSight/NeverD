@@ -754,7 +754,7 @@ find() { return 0; }
             self.assertIn(expected, artifact_step)
         self.assertNotIn("continue-on-error", run_step)
 
-    def test_workflow_stops_each_failed_profile_but_keeps_other_hosts_running(self):
+    def test_workflow_runs_each_profile_past_failures_on_every_host(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         strategy = source.split("    strategy:\n", 1)[1].split("\n    steps:", 1)[0]
         self.assertIn("      fail-fast: false\n", strategy)
@@ -763,7 +763,8 @@ find() { return 0; }
         self.assertEqual(source.count(step_marker), 1)
         run_step = source.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
         self.assertIn("set -o pipefail", run_step)
-        self.assertIn("--stop-on-failure", run_step)
+        # One failure must not hide the results of the cases behind it.
+        self.assertNotIn("--stop-on-failure", run_step)
         self.assertIn("--output-on-failure", run_step)
 
     # The corpus is several hundred pinned real binaries, and the only thing

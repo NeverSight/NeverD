@@ -15689,9 +15689,10 @@ disabled, infrastructure-not-run, failed, and missing results remain separate.
 In particular, CTest can encode a missing executable as a JUnit `<skipped>`;
 that is an execution failure, not an optional-backend skip. A stopped run can
 omit unstarted tests entirely, so matching only the XML summary count is not
-sufficient either. The audit runs even after CTest fails and preserves that
-failure. Each matrix leg uploads its inventory, JUnit, exit status, outcome
-JSON, and log as `ctest-evidence-<profile>`.
+sufficient either. The main profile continues past a failing test, so one failure
+does not hide the results behind it. The audit runs even after CTest fails and
+preserves that failure. Each matrix leg uploads its inventory, JUnit, exit status,
+outcome JSON, and log as `ctest-evidence-<profile>`.
 
 The same job first executes its focused emulation contracts. The
 `reuse` command retains their passed and explicitly skipped results with matching
