@@ -93,6 +93,17 @@ llvm::Error X86PagedMemory::bindControls(const X86PagingState &State) {
   return llvm::Error::success();
 }
 
+X86PagedMemory::AccessObserver
+X86PagedMemory::exchangeAccessObserver(AccessObserver Next) {
+  return std::exchange(Observer, Next);
+}
+
+void X86PagedMemory::observe(const X86LinearAccess &Access,
+                             uint64_t Bytes) const {
+  if (Observer.Observe && Access.Kind != MemoryAccessKind::Execute)
+    Observer.Observe(Observer.Context, Access, Bytes);
+}
+
 llvm::Expected<X86PagedMemory::Plan>
 X86PagedMemory::plan(const X86LinearAccess &Access, uint64_t Bytes) {
   Plan P;
@@ -152,6 +163,7 @@ X86PagedMemory::load(const X86LinearAccess &Access,
     Offset += Fragment.Size;
   }
   std::copy(Bytes.begin(), Bytes.end(), Output.begin());
+  observe(Access, Output.size());
   return P->Result;
 }
 
@@ -177,6 +189,7 @@ X86PagedMemory::prepareStore(const X86LinearAccess &Access, uint64_t Bytes) {
   Store.Fragments = std::move(P->Fragments);
   Store.Owner = this;
   Store.Bytes = Bytes;
+  Store.Access = Access;
   return Store;
 }
 
@@ -196,6 +209,9 @@ X86PagedMemory::loadPreparedStore(const PreparedStore &Store,
     Offset += Fragment.Size;
   }
   std::copy(Bytes.begin(), Bytes.end(), Output.begin());
+  auto Access = Store.Access;
+  Access.Kind = MemoryAccessKind::Read;
+  observe(Access, Output.size());
   return static_cast<const X86MemoryAccessResult &>(Store);
 }
 
@@ -214,6 +230,7 @@ void X86PagedMemory::commitStore(const PreparedStore &Store,
     (void)R;
     Offset += Fragment.Size;
   }
+  observe(Store.Access, Input.size());
 }
 
 llvm::Expected<X86MemoryAccessResult>

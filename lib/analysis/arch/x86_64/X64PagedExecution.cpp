@@ -19,6 +19,7 @@
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 #include "neverd/ir/X86/X86PopFlagsRules.h"
 #include "neverd/lift/X86/X86DebugRegisterEncoding.h"
+#include "neverd/translate/X86/X86WatchpointObservation.h"
 
 #include "llvm/Support/Errc.h"
 
@@ -50,6 +51,8 @@ struct Transaction {
   std::optional<X64PagedRepeatProfile> RepeatProfile;
   X64ContinuationStateV6 &StagedState;
   std::optional<X64PagedSseAlignment> SseAlignment;
+  const X86RepeatDebugBinding *RepeatDebug = nullptr;
+  bool Watchpoints = false;
   unsigned SseAlignmentBytes = 0;
   bool Repeated = false, PortIO = false, DebugRegister = false;
   uint8_t RepeatRegisters = 0, RepeatAddressBytes = 0;
@@ -144,6 +147,10 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
     return 1;
   }
   if (Kind == X64PagedAccess::BeginRepeat) {
+    if (T.Watchpoints && (!T.RepeatDebug || !T.RepeatDebug->EndGroup)) {
+      T.Error = invalid("paged REP watchpoints require a debug-group binding");
+      return 1;
+    }
     if (!T.RepeatProfile ||
         (*T.RepeatProfile != X64PagedRepeatProfile::ClearLodsCountHigh &&
          *T.RepeatProfile != X64PagedRepeatProfile::PreserveLodsCountHigh)) {
@@ -294,14 +301,18 @@ llvm::Expected<bool> X64PagedExecution::validate(X64ContinuationStateV6 &State,
       PagingAddressBits != (Controls.CR4 & 0x1000 ? 57u : 48u))
     return invalid("paged instruction binding disagrees with IA-32e controls");
   auto &Original = State.Core.Core.Core.Core;
+  if (!Options.EventDelivery.MaxAttempts)
+    return invalid("event delivery requires a positive work budget");
   if ((InstructionDebug && !Options.Debug) ||
-      (Options.Debug && !x86InstructionDebugValid(
-                            Options.Debug->DR6, Options.Debug->DR7,
-                            Options.Debug->DebugCTL, Options.DebugProfile)))
+      (Options.Debug &&
+       !x86InstructionDebugValid(Options.Debug->DR6, Options.Debug->DR7,
+                                 Options.Debug->DebugCTL, Options.DebugProfile,
+                                 Controls.CR4, Options.Debug->PendingData)))
     return invalid("paged instruction debug requires a valid profile, DR6, "
                    "supported DR7 and zero DEBUGCTL");
   if (!InstructionDebug && ((Original.RFlags & 0x100) ||
-                            (Options.Debug && (Options.Debug->DR7 & 0x20ff))))
+                            (Options.Debug && ((Options.Debug->DR7 & 0x20ff) ||
+                                               Options.Debug->PendingData))))
     return invalid(
         "paged TF and breakpoints require the instruction-debug bridge");
   if (Original.PC != Address)
@@ -319,13 +330,13 @@ llvm::Error X64PagedExecution::deliverEvent(
     uint32_t MXCSRMask, const X64PagedEventContinuation *Continuation) {
   auto Delivered =
       Continuation
-          ? resumeX64PagedEvent(State, Memory, *Continuation, MXCSRMask)
-          : deliverX64PagedEvent(State, Memory, Event, MXCSRMask);
+          ? resumeX64PagedEvent(State, Memory, *Continuation, MXCSRMask,
+                                Options.Debug, Options.DebugProfile,
+                                Options.EventDelivery)
+          : deliverX64PagedEvent(State, Memory, Event, MXCSRMask, Options.Debug,
+                                 Options.DebugProfile, Options.EventDelivery);
   if (!Delivered)
     return Delivered.takeError();
-  if (!Continuation && Delivered->InputAccepted && Options.Debug &&
-      x86DebugException(Event.Kind, Event.Vector))
-    Options.Debug->DR7 &= ~uint64_t{0x2000};
   Last.Delivery = *Delivered;
   Last.BackingFault = Delivered->BackingFault;
   switch (Delivered->Status) {
@@ -343,14 +354,18 @@ llvm::Error X64PagedExecution::deliverEvent(
   case X64PagedEventStatus::Shutdown:
     Last.Exit = uint64_t(X64PagedExit::Shutdown);
     break;
+  case X64PagedEventStatus::BudgetExhausted:
+    Last.Exit = uint64_t(X64PagedExit::EventBudgetExhausted);
+    break;
   }
   return llvm::Error::success();
 }
 
 llvm::Error X64PagedExecution::deliverDebug(X64ContinuationStateV6 &State,
                                             bool SingleStep, uint32_t MXCSRMask,
-                                            uint8_t Breakpoints) {
-  if (SingleStep) {
+                                            uint8_t Breakpoints,
+                                            bool InstructionFault, bool Icebp) {
+  if (!InstructionFault && !Icebp && (SingleStep || Breakpoints)) {
     const auto &Core = State.Core.Core.Core.Core;
     const auto &CS = State.Core.CS;
     // A completed return may select compatibility code, where PC is an
@@ -365,7 +380,7 @@ llvm::Error X64PagedExecution::deliverDebug(X64ContinuationStateV6 &State,
   X64ContinuationEventV1 Event;
   Event.SavedPC = State.Core.Core.Core.Core.PC;
   Event.Vector = 1;
-  Event.Kind = Breakpoints && !SingleStep
+  Event.Kind = InstructionFault
                    ? X64ContinuationEventKind::InstructionBreakpoint
                    : X64ContinuationEventKind::Trap;
   if (auto Failure = deliverEvent(State, Event, MXCSRMask))
@@ -424,7 +439,10 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
                     X64PagedAlignmentPriority::AfterPaging),
                 Options.RepeatProfile,
                 Next,
-                Options.SseAlignment};
+                Options.SseAlignment,
+                Options.RepeatDebug ? &*Options.RepeatDebug : nullptr,
+                Options.DebugProfile ==
+                    X86InstructionDebugProfile::Watchpoints};
   // Generated 128-bit exchange accesses cover only the adjacent value words.
   static_assert(offsetof(X64PagedExchange, ValueHigh) == 8);
   static_assert(offsetof(X64PagedExchange, Transaction) == 16);
@@ -445,7 +463,7 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
                                 Original.RFlags, *DebugSSBlocked);
     if (Matches) {
       Last.InstructionAttempted = true;
-      if (auto Failure = deliverDebug(State, false, MXCSRMask, Matches))
+      if (auto Failure = deliverDebug(State, false, MXCSRMask, Matches, true))
         return std::move(Failure);
       return Last;
     }
@@ -466,6 +484,22 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     }
   }
   uint64_t Exit = uint64_t(X64PagedExit::AccessFault);
+  translate::X86WatchpointObservation Observation(Memory, Options.Debug,
+                                                  Options.DebugProfile);
+  const auto FinishDebug =
+      [&](bool Step, bool NewSSShadow = false, bool Icebp = false,
+          bool RepeatGroupContinues = false) -> llvm::Error {
+    Observation.stop();
+    const uint8_t Data =
+        Options.Debug
+            ? x86CompleteDataBreakpoints(*Options.Debug, Observation.Matches,
+                                         NewSSShadow, RepeatGroupContinues)
+            : 0;
+    if ((Step && !NewSSShadow) || Data || Icebp)
+      return deliverDebug(State, Step && !NewSSShadow, MXCSRMask, Data, false,
+                          Icebp);
+    return llvm::Error::success();
+  };
   if (!T.Error && T.Access.Status == X86PageWalkStatus::Completed)
     Exit = Body(NextBytes, ExchangeBytes);
   if (T.Error)
@@ -476,13 +510,14 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     State.Core.Core.Core.Core.PC = *T.DebugPC;
     State.Core.Core.Core.Core.RFlags &= ~uint64_t{0x10000};
     Last.InstructionAttempted = Last.InstructionCompleted = true;
-    if (auto Failure = deliverDebug(State, false, MXCSRMask))
+    if (auto Failure = FinishDebug(false, false, true))
       return std::move(Failure);
     return Last;
   }
   if (T.DebugRegister) {
     if (!DebugSSBlocked ||
-        Options.DebugProfile != X86InstructionDebugProfile::DebugRegisters)
+        (Options.DebugProfile != X86InstructionDebugProfile::DebugRegisters &&
+         Options.DebugProfile != X86InstructionDebugProfile::Watchpoints))
       return invalid("MOV-DR requires the debug-register profile and bridge");
     const auto Move = x86DebugRegisterEncoding(Bytes, true);
     if (!Move || Move->Size != Bytes.size())
@@ -490,7 +525,8 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     auto &Core = Next.Core.Core.Core.Core;
     auto Bank = *Options.Debug;
     const auto Result = x86AccessDebugRegister(
-        Bank, Core.GPR[Move->Access.General], Move->Access, Controls.CR4, CPL);
+        Bank, Core.GPR[Move->Access.General], Move->Access, Controls.CR4, CPL,
+        Options.DebugProfile);
     using Status = X86DebugRegisterResult;
     if (Result == Status::UnsupportedControl)
       return invalid("MOV-DR requests unbound debug controls");
@@ -527,6 +563,8 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
       return IO.takeError();
     Last.DeviceTransferCompleted = IO->DeviceTransferCompleted;
     Last.PortInputBytesWritten = IO->InputBytesWritten;
+    if (IO->DeviceTransferCompleted)
+      Observation.port(IO->Port, IO->TransferBytes);
     T.Access = IO->Access;
     if (IO->DeviceUnavailable) {
       Last.Exit = uint64_t(X64PagedExit::DeviceUnavailable);
@@ -554,9 +592,8 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     if (Returned->Completed) {
       Last.InstructionCompleted = true;
       Last.Exit = uint64_t(X64ContinuationExitV1::PrivilegeReturn);
-      if (SingleStep)
-        if (auto Failure = deliverDebug(State, true, MXCSRMask))
-          return std::move(Failure);
+      if (auto Failure = FinishDebug(SingleStep))
+        return std::move(Failure);
       return Last;
     }
     if (Returned->BackingFault) {
@@ -617,14 +654,13 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
       Event.FaultAddress = T.Access.Exception->CR2.value_or(0);
     }
     Last.InstructionAttempted = true;
+    Observation.stop();
     if (auto Failure = deliverEvent(State, Event, MXCSRMask))
       return std::move(Failure);
     if (T.Event) {
       Last.Exception = Last.Delivery->LastException;
       Last.InstructionCompleted =
-          !T.DebugRegister &&
-          Last.Delivery->Status == X64PagedEventStatus::Delivered &&
-          !Last.Exception;
+          !T.DebugRegister && Last.Delivery->SoftwareCompleted;
     }
     return Last;
   }
@@ -640,6 +676,23 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
   if (T.Store)
     Memory.commitStore(*T.Store, T.Bytes);
   const auto EntryFlags = State.Core.Core.Core.Core.RFlags;
+  bool RepeatGroupContinues = false;
+  if (Partial && !T.PortIO && T.Watchpoints) {
+    const auto &Before = State.Core.Core.Core.Core.GPR;
+    const auto &After = Next.Core.Core.Core.Core.GPR;
+    const uint64_t Mask = T.RepeatAddressBytes == 4 ? UINT32_MAX : UINT64_MAX;
+    const bool Source = T.RepeatRegisters & kX64PagedRepeatSource;
+    const bool Destination = T.RepeatRegisters & kX64PagedRepeatDestination;
+    const unsigned Index = Destination ? 7 : 6;
+    const auto Bytes =
+        uint8_t(EntryFlags & 0x400 ? Before[Index] - After[Index]
+                                   : After[Index] - Before[Index]);
+    RepeatGroupContinues = x86RepeatDebugDefers(
+        *T.RepeatDebug,
+        {Address, EntryFlags, After[1] & Mask, After[6] & Mask, After[7] & Mask,
+         T.RepeatAddressBytes, Bytes, Source, Destination,
+         bool(T.RepeatRegisters & kX64PagedRepeatCompare)});
+  }
   State = Next;
   // The bound processor retains the pre-instruction flags during unfinished
   // CMPS/SCAS, including interrupt entry. Only a terminal comparison publishes
@@ -664,9 +717,9 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
                   Move->SegmentRegister == X86SegmentRegister::SS &&
                   !*DebugSSBlocked;
   }
-  if (SingleStep && !NewSSShadow)
-    if (auto Failure = deliverDebug(State, true, MXCSRMask))
-      return std::move(Failure);
+  if (auto Failure =
+          FinishDebug(SingleStep, NewSSShadow, false, RepeatGroupContinues))
+    return std::move(Failure);
   return Last;
 }
 

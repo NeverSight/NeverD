@@ -164,11 +164,11 @@ public:
     NdVar PC, CS, Flags;
     if constexpr (Writer::FaultableMemory) {
       Flags = ReadFrame(op(NdOp::INT_ADD, {SP, k(2 * Bytes)}));
-      CS = masked(ReadFrame(op(NdOp::INT_ADD, {SP, k(Bytes)})), 0xffff);
+      CS = readStackMemory(op(NdOp::INT_ADD, {SP, k(Bytes)}), 2);
       PC = ReadFrame(SP);
     } else {
       PC = ReadFrame(SP);
-      CS = masked(ReadFrame(op(NdOp::INT_ADD, {SP, k(Bytes)})), 0xffff);
+      CS = readStackMemory(op(NdOp::INT_ADD, {SP, k(Bytes)}), 2);
       Flags = ReadFrame(op(NdOp::INT_ADD, {SP, k(2 * Bytes)}));
     }
     if constexpr (!Writer::FaultableMemory)
@@ -188,11 +188,11 @@ public:
       W.rejectIf(both(Compatibility, less(segmentLimit(Code.Value), TargetPC)));
     NdVar NewSP, SS;
     if constexpr (Writer::FaultableMemory) {
-      SS = masked(ReadFrame(op(NdOp::INT_ADD, {SP, k(4 * Bytes)})), 0xffff);
+      SS = readStackMemory(op(NdOp::INT_ADD, {SP, k(4 * Bytes)}), 2);
       NewSP = ReadFrame(op(NdOp::INT_ADD, {SP, k(3 * Bytes)}));
     } else {
       NewSP = ReadFrame(op(NdOp::INT_ADD, {SP, k(3 * Bytes)}));
-      SS = masked(ReadFrame(op(NdOp::INT_ADD, {SP, k(4 * Bytes)})), 0xffff);
+      SS = readStackMemory(op(NdOp::INT_ADD, {SP, k(4 * Bytes)}), 2);
     }
     const auto NullSS = eq(masked(SS, 0xfffc), k(0));
     faultIf(both(Compatibility, NullSS), 13, k(0));
@@ -246,13 +246,12 @@ public:
     const auto SP = load(offsetof(State, GPR) + x86reg::RSP);
     NdVar PC, CS;
     if constexpr (Writer::FaultableMemory) {
-      CS = masked(readStackMemory(op(NdOp::INT_ADD, {SP, k(Bytes)}), Bytes),
-                  0xffff);
+      CS = readStackMemory(op(NdOp::INT_ADD, {SP, k(Bytes)}), 2);
       PC = readStackMemory(SP, Bytes);
     } else {
       range(SP, 2 * Bytes - 1);
       PC = readMemory(SP, Bytes);
-      CS = masked(readMemory(op(NdOp::INT_ADD, {SP, k(Bytes)}), Bytes), 0xffff);
+      CS = readMemory(op(NdOp::INT_ADD, {SP, k(Bytes)}), 2);
       canonical(PC);
     }
     const auto CPL = masked(CS, 3);
@@ -278,20 +277,15 @@ public:
         choose(Outer, op(NdOp::INT_ADD, {SP, k(2 * Bytes + Discard)}), SP);
     NdVar NewSP, SS;
     if constexpr (Writer::FaultableMemory) {
-      SS = masked(
-          readStackMemory(op(NdOp::INT_ADD, {Frame, k(Bytes)}), Bytes, Outer),
-          0xffff);
+      SS = readStackMemory(op(NdOp::INT_ADD, {Frame, k(Bytes)}), 2, Outer);
       NewSP = choose(Outer, readStackMemory(Frame, Bytes, Outer),
                      op(NdOp::INT_ADD, {SP, k(2 * Bytes)}));
     } else {
       // The no-fault source uses validated RAM for its unused SELECT arm.
       NewSP = choose(Outer, readMemory(Frame, Bytes),
                      op(NdOp::INT_ADD, {SP, k(2 * Bytes)}));
-      SS =
-          choose(Outer,
-                 masked(readMemory(op(NdOp::INT_ADD, {Frame, k(Bytes)}), Bytes),
-                        0xffff),
-                 k(0));
+      SS = choose(Outer, readMemory(op(NdOp::INT_ADD, {Frame, k(Bytes)}), 2),
+                  k(0));
     }
     const auto NullSS = eq(masked(SS, 0xfffc), k(0));
     faultIf(both(Compatibility, both(Outer, NullSS)), 13, k(0));

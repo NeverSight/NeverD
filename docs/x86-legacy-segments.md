@@ -277,7 +277,12 @@ BS. A software `INT 1` leaves DR6 unchanged, as do other software entries and
 faults that prevent instruction completion. Causes publish before IDT entry:
 a missing #DB gate, a later frame fault or an accepted-event backing stop
 retains the completed instruction and its debug status. Event resume does
-not execute that instruction again. An external debug-event producer remains
+not execute that instruction again. `PendingEvent.CompletedAccesses` retains
+consumed table/TSS inputs and skips already committed frame/descriptor stores.
+This matters when a partial event frame aliases and overwrites its own TSS
+stack pointer or selector before a backing stop. Architectural secondary
+faults and newly generated data traps start fresh access records while keeping
+the previous RAM effects. An external debug-event producer remains
 responsible for its own DR6 cause; event delivery does not infer one.
 
 Each completed REP element can trap. Remaining iterations save the original
@@ -314,8 +319,26 @@ instruction once. Unit checks cover linear-address wrap, competing CS limits,
 malformed controls and accepted-event backing continuation. See the shared
 [execution-breakpoint evidence](evidence/x86-execution-breakpoints-2026-11-06.json).
 
+`X86LegacyDebugProfile::Watchpoints` adds shared data/I/O comparators and
+MOV/POP-SS delayed causes. It observes committed linear operands and event
+accesses, excluding page walks, and retains accepted-entry causes across
+backing stops. The same profile owns protected MOV-DR control writes. Read the
+[shared contract and oracle limitations](x86-paged-execution.md#data-and-io-watchpoints)
+for matching, software-entry status, recursive #DB and device receipts.
+`X86LegacyWatchpointTest.*` covers backing/fault priority and synthetic I/O;
+its event-work cases retain pending software/debug and secondary-fault chains
+across `EventBudgetExhausted`. `Options.EventDelivery.MaxAttempts` must be
+positive; resume `PendingEvent` without repeating the original instruction.
+`LegacyDebug/*OriginalDataWatchpoint*` and `*OriginalStackOperandsAndEventTables*`
+compare original 16/32-bit code, stack and gate combinations in legacy/PAE RAM.
+Repeated memory strings also require `Options.RepeatDebug`: the shared explicit
+group decision accumulates MOVS/STOS causes across host pauses, preserves them
+on backing stops, and discards them on an accepted ordinary fault. A default
+binding selects each element; fast-string grouping is supplied by the target,
+not inferred from the host. TF and final completion still force publication.
+
 This internal protected executor still does not provide general i386 source
-dispatch, hardware watchpoints, task switching, real/VM86, or the other open
+dispatch, task switching, real/VM86, or the other open
 machine-environment contracts. The LLVM release, SDK pin and gitlink remain
 unchanged until global completion.
 
@@ -584,8 +607,9 @@ or register adjustment between these instructions. This covers legacy paging
 and PAE, CPL0..3, and independent code/stack sizes. It closes that earlier
 handler boundary for the admitted scalar instructions; it does not supply a
 general i386 source exporter, a TLB/cache model, devices, concurrent shared-memory
-synchronization, HLE, task gates, real/VM86 state, data/I/O watchpoints or other
-unlisted instructions. Exclusive-RAM LOCK forms use the additional binding above.
+synchronization, HLE, task gates, real/VM86 state or other unlisted instructions.
+Data/I/O causes use the separate watchpoint profile above. Exclusive-RAM LOCK
+forms use the additional binding above.
 
 The [November 3 scalar qualification](evidence/x86-legacy-scalars-2026-11-03.json)
 records both CALL counterexamples, 85,120 scalar CPU comparisons across two
@@ -707,8 +731,9 @@ the PTE, discard a fault error code and IRET to the remaining count.
 LOCK on an otherwise admitted string raises #UD after original-byte fetch,
 including when CX/ECX is zero. Repeated/conflicting prefixes and F2 on a
 non-comparison remain explicit refusals. Port strings use the separate binding
-below. MMIO, physical read-ahead, data/I/O watchpoints, real/VM86 and a general
-i386 source dispatcher remain outside this memory-string contract. LLVM and NeverC already expose
+below, and data/I/O causes use the watchpoint profile above. MMIO, physical
+read-ahead, real/VM86 and a general i386 source dispatcher remain outside this
+memory-string contract. LLVM and NeverC already expose
 native string interfaces; no new compiler intrinsic is needed for this runtime
 state transition. The final SDK release, pin and LLVM gitlink stay unchanged.
 

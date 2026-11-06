@@ -118,7 +118,8 @@ restore RF from the return frame.
 
 Existing status identities 0..16 remain unchanged. Internal status 17 is
 consumed by the executor. Status 18 reports physical backing failure, 19 reports
-shutdown, and 20 reports changed code requiring relift. A completed instruction
+shutdown, and 20 reports changed code requiring relift. Status 23 reports the
+separate event-delivery work budget described below. A completed instruction
 or an architectural fault attempt consumes one instruction-budget unit;
 native/invalid/changed-code stops and scalar operand backing failures do not.
 Once IRET begins, its NMI and descriptor effects prevent that rollback rule;
@@ -144,9 +145,10 @@ passes its current MOV-SS shadow to each step.
 The default `DebugProfile = InstructionStep` is nontransactional with DR7=0x400
 and DEBUGCTL=0. `ExecuteBreakpoints` additionally enables the hardware execution
 comparators described below; `DebugRegisters` also owns MOV-DR and GD.
-Data/I/O watchpoints, BTF, task traps and other
-debug producers require their own state; incompatible controls refuse before
-effects. DR6's high half and reserved bits are checked. Historical BLD/RTM status
+`Watchpoints` adds data/I/O comparators and delayed causes as described below.
+BTF, task traps and other debug producers require their own state;
+incompatible controls refuse before effects. DR6's high half and reserved bits
+are checked. Historical BLD/RTM status
 inputs assume a target that can represent them. The local native oracle uses canonical BLD=RTM=1
 inputs because its CPU lacks those optional facilities.
 
@@ -188,8 +190,8 @@ confined ordinary-RAM binding, not device replay or concurrent mutation.
 
 `function_context` is currently refused with `paged_debug`: function completion
 across an intervening debug handler needs its own activation contract. Default
-paged and no-fault exports keep their existing TF admission. Hardware watchpoints,
-branch stepping, general compatibility/i386 source dispatch, SMM/SGX and
+paged and no-fault exports keep their existing TF admission.
+Branch stepping, general compatibility/i386 source dispatch, SMM/SGX and
 transactional debug events remain separate work. Native LLVM/NeverC ICEBP and
 flags instructions already exist; this extension adds the software execution
 and event contract without changing the production LLVM pin.
@@ -255,8 +257,9 @@ fetch/operand/PVI faults, failed debug gates/stacks, external events and IRET
 targets, including nonflat compatibility code and all three return widths.
 Original handlers set RF, clear TF, count entry and return; a separate
 case repairs a subsequent page fault before retry. Both C routes compile
-through Clang and NeverC at O0/O2. Data/I/O watchpoints,
-BTF, task traps and transactional debug production remain separate contracts.
+through Clang and NeverC at O0/O2. The watchpoint profile below has its own
+qualification. BTF, task traps and transactional debug production remain
+separate contracts.
 No new LLVM intrinsic, SDK release or pin change is needed for this runtime
 binding. Reference: Intel SDM revision 093, volume 3 §§7.9, 20.2.1–20.2.5 and
 20.3.1.1.
@@ -321,6 +324,117 @@ comparisons, including original handler/IRET/retry. No new intrinsic or LLVM
 release is needed for this runtime binding. References: Intel SDM revision 093,
 volume 2 MOV to/from Debug Registers; volume 3 §§20.2 and 20.3.1.3, and the
 [Linux VMX debug-access owner](https://github.com/torvalds/linux/blob/master/arch/x86/kvm/vmx/vmx.c).
+
+### Data and I/O watchpoints
+
+`DebugProfile = Watchpoints` extends the register profile with local/global
+read/write and write-only data comparators. Length encodings select 1, 2, 8
+and 4 bytes. The explicitly bound Intel target masks low DR address bits to
+that length; this is not a portable promise for architecturally undefined
+unaligned breakpoint addresses. Execution comparators still require LEN=0.
+I/O comparators require CR4.DE=1 and 1/2/4-byte lengths. Undefined controls,
+RTM/BTF, PT triggers and other unbound extensions refuse before effects.
+
+`ir/X86/X86DebugRules` owns matching and cause publication for both execution
+modes. Comparisons use linear addresses, including protected-mode 32-bit wrap,
+not physical aliases. The four-slot observation requires no allocation per
+access. Completed operand loads, RMW reads and committed stores participate;
+preparing a store alone does not. Descriptor, TSS, IDT and event-frame accesses
+also participate. Instruction fetch and physical page-table walks do not.
+The existing operand/event owners retain their access order and fault priority.
+
+Data causes trap after the instruction or a bound REP debug group. RF does not
+suppress them. TF and enabled next-PC execution matches can contribute to the
+same DR6 update; ICEBP retains its own cause rules. A newly established MOV/POP
+SS window retains data causes in `PendingData`, separate from DR6. The following
+completed instruction releases them. An ordinary accepted exception discards
+those delayed causes; a physical backing stop retains them for retry.
+
+Repeated memory strings additionally require `Options.RepeatDebug`, including
+at zero count. An explicitly default-constructed `X86RepeatDebugBinding`
+selects one element per debug group. A supplied `EndGroup` decision can retain
+MOVS/STOS data causes across completed elements, matching a target's fast-string
+grouping. Its input describes the completed element, address-width indices and
+remaining count; it cannot perform guest effects. TF, other memory strings,
+port strings and final instruction completion keep their own boundaries.
+Instruction budgets can pause within a group without publishing its causes.
+Operand backing stops retain them; an accepted architectural fault discards
+them while preserving earlier committed elements. Missing/null group decisions
+refuse before operand effects, instead of choosing a policy from the host.
+
+The original-byte probe found a real P/E difference: the recorded P core reports
+each matched element, whereas aligned forward MOVS/STOS on the recorded E core
+can complete a 16-byte group before #DB. Both reverse-direction and TF probes
+report individual elements. Intel explicitly allows delayed debug delivery
+through a fast-string group. `NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES` binds the
+native fixture to `1` or `16`; these measurements qualify the tested shapes,
+not all alignments, processors or arbitrary fast-string implementations. The
+runtime accepts an explicit boundary producer rather than generalizing that
+measurement into a built-in CPU model.
+
+Software INT/INT3/INTO preserves the pending trap request across its successful
+entry. On the qualified target its B0–B3 report comes from new accesses during
+that entry, rather than the earlier SS operand; a delayed trap may therefore
+report zero B bits. The rule is shared across legacy and x64. Event-entry
+accesses can themselves cause a new #DB, including after an ordinary fault.
+A breakpoint on #DB's own tables may recurse through frame exhaustion to
+shutdown. A fixed IST stack can instead repeat successful entries indefinitely.
+Every failed entry discards its speculative data causes before the
+next fault attempt. `SoftwareCompleted` distinguishes a committed software
+entry from a subsequent #DB entry failure.
+
+Accepted-event continuations retain data matches from completed reads/stores,
+along with the existing captured inputs and frame effects. Repair backing and
+resume the same record and bank. Do not replay the original instruction or
+change its debug profile while an event is pending. The x64 execution API also
+passes the bank into direct event delivery and resume.
+
+`X86EventDeliveryOptions::MaxAttempts` bounds entry attempts per delivery or
+resume call, independently of the instruction budget. Both execution adapters
+expose it as `Options.EventDelivery`; its default is 4096 and zero is invalid.
+Exhaustion preserves all committed state, RAM effects, original acceptance,
+software completion and the next event. It returns `BudgetExhausted` from the
+x64 event API, status 23 (`EventBudgetExhausted`) from the x64 executor, or
+`X86LegacyExecutionStatus::EventBudgetExhausted` from the legacy executor.
+The scheduler's existing status 16 still means its producer-poll budget ended
+before executing an instruction or selecting an event; it is a different stop.
+Resume the returned x64 continuation or legacy `PendingEvent` with the same
+state and RAM; do not rerun the original instruction or acknowledge its event
+again. The x64 record has `EventAccepted=false` at this boundary: the next
+event must still perform normal admission and has no captured accesses yet.
+This is a host work boundary, not a synthetic #DF or shutdown. Fixed-IST loop
+tests verify repeated pauses and continuation after the comparator is disabled;
+secondary-fault tests compare bounded delivery with uninterrupted delivery.
+
+The port transaction owner returns the actual completed port and width. Its
+receipt drives I/O comparison, including unfinished REP INS/OUTS. Permission
+faults, zero counts and unavailable devices create no transfer cause. A later
+architectural INS fault discards debug causes while retaining the device/RAM
+progress already specified by its port profile. Port addresses are zero
+extended; an access crossing FFFFh does not wrap comparison at 16 bits.
+
+[Qualification and retained artifacts](evidence/x86-data-watchpoints-2026-11-06.json)
+separate original-CPU data comparisons from software I/O checks. The local KVM
+port emulator omits I/O-breakpoint delivery even with CR4.DE and matching DR7;
+its result is recorded as an oracle limitation, not masked into a match or
+claimed as physical I/O qualification. Data tests compare represented GPRs,
+segments, flags, debug banks and complete RAM. Byte-level return tests also
+exposed and fixed full-slot CS/SS reads: IRET/RETF now read only each two-byte
+selector, including when unused slot padding lies on an unmapped page.
+The data oracle requires
+[KVM pre-fault memory](https://docs.kernel.org/virt/kvm/api.html#kvm-pre-fault-memory)
+to populate second-level mappings before execution. A cold EPT fault during
+software interrupt entry can lose the MOV-SS delayed trap in this oracle.
+Independent repeated probes reproduced that loss on the initial run and no
+loss after preparing mappings; a fresh-vCPU regression retains full state/RAM
+comparison. Guest page tables and instruction sequences are unchanged.
+
+This profile applies to the admitted paged/protected instruction sets. It does
+not provide debug-aware function activation, a general i386/compatibility
+source dispatcher, task/transaction debug, FRED/CET, SMM or SGX execution.
+No new native intrinsic or production LLVM pin is required for this runtime
+extension. Reference: Intel SDM revision 093, volume 3 §§20.2.4–20.2.5 and
+20.3.1.2; the unaligned and delayed-status choices are separately measured.
 
 ## Faultable LSS, LFS and LGS
 
@@ -463,6 +577,7 @@ Bind `X64PagedExecutionOptions::IretAccessOrder` to the target processor's
 qualified order. The currently qualified `FlagsFirst` profile reads FLAGS,
 CS and IP, validates and updates CS's descriptor, then reads SS and SP,
 validates and updates SS's descriptor, and finally validates the target IP.
+CS and SS read only their two-byte selectors, independently of frame-slot width.
 Descriptor reads precede RPL validation, so a missing descriptor page wins over
 a simultaneous RPL error. A compatibility target is truncated before the final
 canonical-address check. Accessed writes

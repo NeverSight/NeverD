@@ -14,6 +14,7 @@
 
 #include "llvm/Support/Error.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -727,6 +728,7 @@ TEST_F(X86LegacyExecutionTest, ScalarMalformedFormsFailBeforeFetch) {
 #include "X86LegacyDecimalTests.inc"
 #include "X86LegacyDivisionTests.inc"
 #include "X86LegacyDoubleShiftTests.inc"
+#include "X86LegacyEventReplayTests.inc"
 #include "X86LegacyExchangeTests.inc"
 #include "X86LegacyExecutionBreakpointTests.inc"
 #include "X86LegacyFarTests.inc"
@@ -739,5 +741,6 @@ TEST_F(X86LegacyExecutionTest, ScalarMalformedFormsFailBeforeFetch) {
 #include "X86LegacyShiftTests.inc"
 #include "X86LegacyStatusTests.inc"
 #include "X86LegacyStringTests.inc"
+#include "X86LegacyWatchpointTests.inc"
 
 } // namespace

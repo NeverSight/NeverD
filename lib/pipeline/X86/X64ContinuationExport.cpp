@@ -1158,15 +1158,18 @@ typedef struct neverd_x64_event_v1 {
         "state, context and budgets are disjoint from guest RAM";
     Report["instruction_debug"] =
         Request->Options.PagedDebug
-            ? "explicit nontransactional TF/ICEBP bank; DR7=0x400, DEBUGCTL=0; "
-              "entry TF, committed REP elements and MOV-SS inhibition; DR6 "
-              "published before #DB IDT entry; region dispatch only"
+            ? "explicit nontransactional runtime debug profile: TF/ICEBP, "
+              "execution comparators, MOV-DR/GD, or data/I/O watchpoints; "
+              "DEBUGCTL=0; entry TF, explicit REP data-debug groups and MOV-SS "
+              "inhibition; DR6 published before #DB IDT entry; region dispatch "
+              "only"
             : "TF excluded; no instruction-debug producer";
     Report["event_delivery_domain"] =
         "automatic synchronous #PF/#GP/#SS/#AC/#DE/#UD and software "
         "interrupts; shared paged IA-32e IDT entry, recursive faults, #DF and "
         "shutdown; software entry faults restart INT/INT3; stop at handler "
-        "entry";
+        "entry; runtime event-work exhaustion returns status 23 with a "
+        "resumable pending event";
     Report["interrupt_flags"] =
         "CLI/STI CPL/IOPL checks; CPL3 PVI targets VIF and virtual STI checks "
         "VIP; pre-instruction CPL3/PVI/VIF/VIP #GP precedes fetch; only an "

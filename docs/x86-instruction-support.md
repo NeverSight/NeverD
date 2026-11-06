@@ -378,8 +378,11 @@ breakpoints, DR6, MOV-SS inhibition, POPFQ/PUSHFQ,
 REP single stepping and debug delivery after IRET/RETF. Its accepted-event
 continuation retains secondary faults and already consumed memory inputs over
 physical backing stops. MOV-DR/GD now has the explicit [register-access binding](x86-paged-execution.md#debug-register-transfers-and-general-detect).
-Data/I/O watchpoints, BTF, debug-aware function
-activation completion, general i386/compatibility source dispatch and the other
+The [watchpoint profile](x86-paged-execution.md#data-and-io-watchpoints) now owns
+data/I/O comparison, delayed SS causes and event-access traps for the admitted
+instruction sets; physical I/O qualification remains unavailable through the
+local KVM port emulator. BTF, debug-aware function activation completion,
+general i386/compatibility source dispatch and the other
 state families below remain open. This does not satisfy the global LLVM release
 gate; the production SDK and LLVM gitlink remain unchanged.
 
@@ -3864,7 +3867,7 @@ LOOP/LOOPcc/JCXZ/JECXZ, INT/INT3/INTO/INT1,
 UD2, protected
 16/32-bit IRET/RETF and Intel SEP SYSENTER/SYSEXIT. It is not a general i386
 source dispatcher. Protected call gates have the separate far-transfer binding.
-Task gates, real/VM86, data/I/O and other unbound debug producers, software SMM and SGX execution/AEX/EPCM
+Task gates, real/VM86, other unbound debug producers, software SMM and SGX execution/AEX/EPCM
 remain separate incomplete contracts. Unsupported input returns an explicit
 error. [The execution contract](x86-legacy-segments.md#protected-instruction-and-event-execution)
 records the bound processor behavior and native evidence. The global
@@ -3879,9 +3882,9 @@ complete state. The additional [execution-breakpoint profile](x86-paged-executio
 shares DR0–DR3 matching and DR6 status with paged x64, including RF/SS inhibition,
 coincident single stepping, pending virtual-interrupt priority and accepted
 fault continuation. The shared MOV-DR/GD binding adds protected register
-access and restart, including explicit saved-RF choices. Data/I/O watchpoints,
-branch stepping and task traps
-remain outside these bindings.
+access and restart, including explicit saved-RF choices. The shared watchpoint
+profile adds data/I/O causes and delayed/event-entry state. Branch stepping and
+task traps remain outside these bindings.
 
 [Protected legacy returns](x86-legacy-segments.md#protected-iret-and-far-returns)
 now connect IDT entry back to the interrupted code. The explicit return profile

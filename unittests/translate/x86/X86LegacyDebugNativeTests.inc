@@ -36,6 +36,12 @@ protected:
     bool DE = false, SS = false, FetchFault = false, Resume = false;
   };
 
+  struct Watchpoint {
+    std::vector<std::vector<uint8_t>> Instructions;
+    std::array<uint32_t, 4> DR{};
+    uint32_t DR7 = 0x400, Flags = 0x202;
+  };
+
   enum Case {
     Nop,
     Increment,
@@ -85,7 +91,8 @@ protected:
   void compare(bool Code32, bool Stack32, bool Gate32, unsigned CPL, Case Which,
                uint32_t DR6, bool RF,
                std::optional<ExecutionBreakpoint> Execute = std::nullopt,
-               std::optional<RegisterAccess> RegistersAccess = std::nullopt) {
+               std::optional<RegisterAccess> RegistersAccess = std::nullopt,
+               std::optional<Watchpoint> Watch = std::nullopt) {
     SCOPED_TRACE(testing::Message()
                  << "case=" << Which << " code32=" << Code32 << " stack32="
                  << Stack32 << " gate32=" << Gate32 << " cpl=" << CPL
@@ -215,6 +222,8 @@ protected:
           Registers.rflags &= ~uint64_t{0x100};
       }
     }
+    if (Watch)
+      Registers.rflags = Watch->Flags;
     std::vector<std::vector<uint8_t>> Instructions{{0x90}};
     const auto Immediate = [](uint8_t Opcode, uint32_t Value, unsigned Bytes) {
       std::vector<uint8_t> Result{Opcode};
@@ -378,7 +387,17 @@ protected:
         }
       }
     }
-    if (Execute || RegistersAccess)
+    if (Watch) {
+      if (!Watch->Instructions.empty()) {
+        Instructions = Watch->Instructions;
+        if (!Code32)
+          for (auto &Bytes : Instructions)
+            if (Bytes.size() >= 2 && Bytes[1] == 0x07)
+              Bytes.insert(Bytes.begin(), 0x67);
+      }
+      put(0x8100, 32 | CPL, 4);
+    }
+    if (Execute || RegistersAccess || Watch)
       Instructions.push_back({0xcd, 64});
     uint32_t End = Code + Special.cs.base;
     for (const auto &Bytes : Instructions) {
@@ -475,6 +494,10 @@ protected:
           RegistersAccess->SS && !CPL ? 0x400 : RegistersAccess->DR7;
       State.Debug->DR = {0x9000, 0x9100, 0x9200, 0x9300};
     }
+    if (Watch) {
+      State.Debug->DR7 = Watch->DR7;
+      State.Debug->DR = Watch->DR;
+    }
     const auto InitialDebug = *State.Debug;
     State.NMIBlocked =
         Which == IretClear || Which == IretSet || Which == IretResume;
@@ -510,6 +533,8 @@ protected:
       Options.Debug = X86LegacyDebugProfile::DebugRegisters;
       Options.GeneralDetectFrame = neverd::X86GeneralDetectFrame::ClearResume;
     }
+    if (Watch)
+      Options.Debug = X86LegacyDebugProfile::Watchpoints;
     if (Execute && Execute->Resume)
       Options.LogicalAuxiliaryCarry = false;
     X86LegacyExecutionResult Result;
@@ -541,6 +566,9 @@ protected:
     Flush.cr3 = 0x14000;
     ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &Flush), 0) << errno;
     ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &Special), 0) << errno;
+    if (Watch)
+      ASSERT_NO_FATAL_FAILURE(
+          neverd::test::prefaultX86KVMBacking(CPU, MemorySize));
     struct {
       uint32_t Count = 4;
       uint32_t Reserved = 0;
@@ -558,7 +586,7 @@ protected:
     // following bytes. They must not invent active hardware-breakpoint causes.
     for (unsigned I = 0; I != 4; ++I)
       Debug.db[I] = Code + I;
-    if (Execute || RegistersAccess)
+    if (Execute || RegistersAccess || Watch)
       std::copy(InitialDebug.DR.begin(), InitialDebug.DR.end(), Debug.db);
     Debug.dr6 = InitialDebug.DR6;
     Debug.dr7 = InitialDebug.DR7;
@@ -579,7 +607,7 @@ protected:
     EXPECT_EQ(Special.cr2, State.CR2);
     EXPECT_EQ(Debug.dr6, State.Debug->DR6);
     EXPECT_EQ(Debug.dr7, State.Debug->DR7);
-    if (RegistersAccess)
+    if (RegistersAccess || Watch)
       for (unsigned Slot = 0; Slot != 4; ++Slot)
         EXPECT_EQ(Debug.db[Slot], State.Debug->DR[Slot]);
     EXPECT_EQ(bool(Events.nmi.masked), State.NMIBlocked);

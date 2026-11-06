@@ -53,6 +53,19 @@ The paged continuation provider retains these bytes with a dedicated projection
 only when its debug bridge is selected, without certifying general LowIR or
 changing native intrinsic emission. Legacy and x64 adapters use that same
 register owner, then the existing event owner clears GD on accepted #DB.
+`X86InstructionDebugProfile::Watchpoints` composes the same rules with scoped
+`translate/X86/X86WatchpointObservation`. `X86PagedMemory` reports completed
+linear data reads and committed stores; physical page walks and fetches are
+excluded. Instruction and event owners scope observations and retain delayed
+MOV/POP-SS and accepted-entry causes across backing stops. Event failure resets
+its speculative matches; successful software entry can release a delayed trap.
+The port transaction supplies a completed transfer receipt for I/O comparison.
+The same debug owner accepts an explicit REP group-boundary decision: target
+fast-string grouping can postpone MOVS/STOS data causes across completed
+elements without changing the existing elementwise memory/attempt owner.
+`X86EventDeliveryOptions` owns the shared entry-attempt budget. Event owners
+retain a resumable next event when host work is exhausted, independently of
+instruction budgets and without replacing an architectural event by #DF.
 The event owner stages registers and caches while retaining descriptor/frame RAM
 effects and CR2 on later faults.
 TSS stack selection, conforming code and privilege changes stay in that owner;

@@ -55,6 +55,36 @@ saved-RF GD frame is an explicit target choice; software tests separately
 cover the architectural fault-RF choice, unbound writes and accepted backing
 resume. See [the contract and evidence](x86-paged-execution.md#debug-register-transfers-and-general-detect).
 
+`X64PagedWatchpointTest.*`, `X86LegacyWatchpointTest.*` and the watchpoint
+cases in `LegacyDebug/*` qualify the data/I/O profile. Original CPU data tests
+compare represented registers, debug banks, shadows and all RAM; return byte
+footprints and selector-page boundaries have separate cases. Recursive #DB
+compares the shutdown endpoint, whose undefined register bank is not a full-state
+comparison. Software tests cover pending causes, accepted-entry backing resume,
+secondary faults and actual port receipts. Event-work tests bound fixed-IST
+recursion, retain the next event across repeated resumes, compare paused
+software-entry/fault chains with uninterrupted delivery, and reject zero work
+or inconsistent continuation inputs before effects. KVM's intercepted port emulator
+omits I/O debug traps; keep that measured limitation separate from CPU data
+qualification. These data-oracle tests require `KVM_PRE_FAULT_MEMORY` to prepare
+second-level mappings without executing guest code or altering guest page
+tables. A cold mapping fault during software entry can otherwise lose a delayed
+MOV-SS trap; a fresh-vCPU regression checks that first sequence explicitly.
+`X86LegacyEventReplayTest.*` compares interrupted and uninterrupted delivery
+when a partial frame overwrites its TSS inputs with either 16-bit or 32-bit
+gates, including retained data causes and event-work pauses. It also rejects
+changed access-record shapes before replaying memory effects.
+REP debug tests bind `NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES` explicitly. The
+recorded P/E profiles use `1`/`16` respectively for aligned forward MOVS/STOS;
+the original CPU may retire a group before reporting a data breakpoint.
+Width/direction/count cases compare full state and RAM, and software tests
+retain grouped causes over budgets/backing stops, discard them on faults and
+reject a missing group binding before operand effects. Do not convert a
+fast-string difference into an elementwise equality or silently retry it.
+Run both SDKs and qualified P/E cores, plus affected paging,
+paged execution and source/export regressions. See the
+[watchpoint contract](x86-paged-execution.md#data-and-io-watchpoints).
+
 `NeverDInstructionRelocationsTests` checks address-field selection against an
 independent linear membership oracle on x86, x64, ARM and AArch64 metadata in
 COFF, ELF and Mach-O. It covers disjoint and touching ranges, included first

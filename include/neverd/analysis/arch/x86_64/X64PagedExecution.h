@@ -45,19 +45,6 @@ enum class X64PagedSseAlignment : uint8_t {
   FullOperand,
 };
 
-/// Explicit nontransactional debug bank. The selected profile admits either
-/// inactive DR7 or canonical execution comparators, with DEBUGCTL zero.
-/// DebugRegisters additionally owns MOV-DR/GD. Data/I/O watchpoints and
-/// BTF need their own producer. This bank is
-/// disjoint from V6 state and guest RAM and outlives its execution context.
-/// External event producers own their own DR6 causes.
-struct X64PagedDebugState {
-  uint64_t DR6 = 0xffff0ff0;
-  uint64_t DR7 = 0x400;
-  uint64_t DebugCTL = 0;
-  std::array<uint64_t, 4> DR{};
-};
-
 struct X64PagedExecutionOptions {
   /// Required when CPL3 alignment checking is active. Absence refuses the
   /// entry before fetch or RAM effects instead of inferring a host CPU policy.
@@ -76,6 +63,11 @@ struct X64PagedExecutionOptions {
   /// Each completed string element consumes one attempt; zero count consumes
   /// one completion attempt. Earlier elements survive later faults/stops.
   std::optional<X64PagedRepeatProfile> RepeatProfile;
+  /// Required for Watchpoints with repeated memory strings, including zero
+  /// count. A default-constructed binding selects one element per debug group.
+  /// Host budget/backing stops retain accumulated causes; accepted ordinary
+  /// events discard them. The decision never performs guest effects.
+  std::optional<X86RepeatDebugBinding> RepeatDebug;
   /// Required even for a zero-count port string. No host ports are accessed.
   std::optional<X64PagedPortIOBinding> PortIO;
   /// Required only for MOVUPS/MOVDQU memory operands with CPL3/AM/AC active.
@@ -85,6 +77,7 @@ struct X64PagedExecutionOptions {
   X86InstructionDebugProfile DebugProfile =
       X86InstructionDebugProfile::InstructionStep;
   std::optional<X86GeneralDetectFrame> GeneralDetectFrame;
+  translate::X86EventDeliveryOptions EventDelivery;
 };
 
 struct X64PagedExecutionResult {
@@ -131,7 +124,8 @@ public:
   deliver(X64ContinuationStateV6 &State, const X64ContinuationEventV1 &Event,
           uint32_t MXCSRMask);
 
-  /// Resume lastResult().Delivery->Continuation after repairing backing.
+  /// Resume lastResult().Delivery->Continuation after a work-budget stop or
+  /// after repairing backing.
   /// The instruction/cause and any external producer acceptance stay consumed.
   llvm::Expected<X64PagedExecutionResult>
   resume(X64ContinuationStateV6 &State, X64PagedEventContinuation Continuation,
@@ -154,7 +148,8 @@ private:
                const X64ContinuationEventV1 &Event, uint32_t MXCSRMask,
                const X64PagedEventContinuation *Continuation = nullptr);
   llvm::Error deliverDebug(X64ContinuationStateV6 &State, bool SingleStep,
-                           uint32_t MXCSRMask, uint8_t Breakpoints = 0);
+                           uint32_t MXCSRMask, uint8_t Breakpoints = 0,
+                           bool InstructionFault = false, bool Icebp = false);
   translate::X86PagedMemory &Memory;
   X64PagedExecutionOptions Options;
   X64PagedExecutionResult Last;
