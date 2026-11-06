@@ -10272,9 +10272,14 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       ++ResolverMemoGeneration;
     }
     MemoScalarConstantFoldMode = Query.FoldScalarConstantOps;
+    // Taint reaches memory only through a store, and a taint query's batch asks
+    // about the stored values themselves, so looking through reads adds nothing
+    // to its answer. It would only spell every load of a loop-carried cell as
+    // that loop's whole merge, which spends the batch's shared match budget.
     AllowFrameReadObservations =
         Query.Relation != JumpTableValueRelation::AuthenticatedFrameMemory &&
-        Query.Relation != JumpTableValueRelation::FrameMemoryMatches;
+        Query.Relation != JumpTableValueRelation::FrameMemoryMatches &&
+        Query.Relation != JumpTableValueRelation::MayDepend;
     if (MemoFrameReadMode && *MemoFrameReadMode != AllowFrameReadObservations) {
       ValueMemo.clear();
       MemoryMemo.clear();

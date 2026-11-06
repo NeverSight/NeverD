@@ -8271,7 +8271,8 @@ pass has its own memory and value memo identities; nested value reconstruction
 inside a store-only pass also keeps observations disabled. Switching between ordinary value
 queries and frame-writer queries retires value and memory memos. Neither
 authenticated initialization nor outgoing stack-argument binding can use a
-read as its writer.
+read as its writer. A taint query also stays store-only: taint reaches memory
+only through a store, and its batch asks about each stored value.
 The frame resolver can also project an exact PE32 shared C++ entry call. The
 loader's existing caller/helper instruction parser owns its physical protocol;
 a budgeted reader rechecks current immutable storage and fixups. LowIR relifts
