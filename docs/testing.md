@@ -6727,6 +6727,10 @@ similar identifiers and transactional diagnostics across all three data models.
 `TypeParse.NamedSpecifiersKeepPrecedenceAndUnknownWordPositions` checks named
 record/enum kinds, declared size_t and va_list, fixed builtin precedence, and
 recovery after unknown or incompatible type words across those models.
+`TypeParse.NestedDeclaratorsKeepTheirCompositionAndQualifiers` covers plain
+and parenthesized names, pointer arrays, callbacks returning array pointers,
+array references and calling conventions on ILP32, LP64 and LLP64, including
+published types after the declaration input is overwritten.
 
 `HeaderLibrary.LayoutComparisonsFollowEachMergeAndGrowingConflicts` checks
 same-size, different-alignment overrides across ILP32, LP64 and LLP64. Reverse

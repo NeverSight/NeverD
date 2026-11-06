@@ -27,6 +27,7 @@
 #include "llvm/Support/StringSaver.h"
 
 #include <functional>
+#include <utility>
 
 namespace neverd::types {
 namespace {
@@ -2081,20 +2082,28 @@ private:
       }
       break;
     }
-    return [Pointers, Inner, Suffixes](TypeExprRef T) {
+    // A declarator without modifiers already has its complete composition.
+    // Keep the nested result and transfer owned modifiers instead of cloning
+    // their vectors and any nested callable for each parameter.
+    if (Pointers.empty() && Suffixes.empty())
+      return Inner;
+    return [Pointers = std::move(Pointers), Inner = std::move(Inner),
+            Suffixes = std::move(Suffixes)](TypeExprRef T) mutable {
       for (const Pointer &P : Pointers)
-        T = qualified(makePointer(T, P.Bytes, P.Reference), P.Const,
+        T = qualified(makePointer(std::move(T), P.Bytes, P.Reference), P.Const,
                       P.Volatile);
       for (auto It = Suffixes.rbegin(); It != Suffixes.rend(); ++It) {
         if (It->Array) {
-          T = makeArray(T, It->Count);
+          T = makeArray(std::move(T), It->Count);
           continue;
         }
-        auto Function = std::make_shared<FunctionDef>(*It->Function);
-        Function->Return = T;
+        // declarator() applies each composition once. Its freshly parsed
+        // parameter list can become the published function directly.
+        auto Function = std::move(It->Function);
+        Function->Return = std::move(T);
         T = makeFunction(std::move(Function));
       }
-      return Inner(T);
+      return Inner(std::move(T));
     };
   }
 
