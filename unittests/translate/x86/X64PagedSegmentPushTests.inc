@@ -150,6 +150,8 @@ TEST_F(X64PagedExecutionTest, PagedSegmentPushMatchesOriginalCPU) {
 }
 
 TEST_F(X64PagedExecutionTest, PagedSegmentPushPopAndPendingEvents) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;

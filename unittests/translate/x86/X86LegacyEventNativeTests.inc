@@ -335,6 +335,8 @@ protected:
 };
 
 TEST_P(X86LegacyEventNativeTest, OriginalGateWidthsPrivilegesAndFrames) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned CPL = 0; CPL != 4; ++CPL)
     for (unsigned TargetCPL = 0; TargetCPL <= CPL; ++TargetCPL)
       for (bool Gate32 : {false, true})
@@ -350,6 +352,8 @@ TEST_P(X86LegacyEventNativeTest, OriginalGateWidthsPrivilegesAndFrames) {
 }
 
 TEST_P(X86LegacyEventNativeTest, OriginalDescriptorAndDeliveryFaults) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned CPL : {0u, 3u})
     for (bool Gate32 : {false, true})
       for (unsigned Event = 0; Event != 5; ++Event)
@@ -366,6 +370,8 @@ TEST_P(X86LegacyEventNativeTest, OriginalDescriptorAndDeliveryFaults) {
 }
 
 TEST_P(X86LegacyEventNativeTest, OriginalTSSAccessExtent) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Gate32 : {false, true})
     for (bool TSS32 : {false, true})
       for (unsigned Event = 0; Event != 5; ++Event)
@@ -376,6 +382,8 @@ TEST_P(X86LegacyEventNativeTest, OriginalTSSAccessExtent) {
 }
 
 TEST_P(X86LegacyEventNativeTest, OriginalEntryFlagsAndStackState) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned CPL : {0u, 3u})
     for (bool Gate32 : {false, true})
       for (bool Stack32 : {false, true})
@@ -392,6 +400,8 @@ TEST_P(X86LegacyEventNativeTest, OriginalEntryFlagsAndStackState) {
 }
 
 TEST_P(X86LegacyEventNativeTest, OriginalTargetLimitFaultRetainsFrameWrites) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Gate32 : {false, true})
     for (unsigned Event = 0; Event != 5; ++Event)
       for (unsigned Case : {17u, 37u, 38u})

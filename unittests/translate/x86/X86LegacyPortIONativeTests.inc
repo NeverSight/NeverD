@@ -271,6 +271,8 @@ TEST_P(X86LegacyPortIONativeTest, LockFaultPrecedesPermissionsAndOperands) {
 
 TEST_P(X86LegacyPortIONativeTest,
        OutputProgressKeepsProducerSelectedIRQAndNMI) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (auto Kind : {X86LegacyEventKind::Interrupt, X86LegacyEventKind::NMI})
     for (bool STI : {false, true})
       for (unsigned Form : {7u})

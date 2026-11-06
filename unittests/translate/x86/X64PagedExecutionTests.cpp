@@ -7,6 +7,7 @@
 /// Compile both source routes and execute their actual memory/fault bridges.
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCpu.h"
 #include "../../lift/NeverDLiftFixture.h"
 #include "X64PagedNativeCPU.h"
 #include "X86PortDevice.h"

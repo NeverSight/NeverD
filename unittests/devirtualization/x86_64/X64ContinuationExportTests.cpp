@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../HostCompiler.h"
+#include "../../HostCpu.h"
 #include "../../lift/NeverDLiftFixture.h"
 #include "../../lift/x86/X86HleTestCases.h"
 #include "../../lift/x86/X86TransactionTestCases.h"

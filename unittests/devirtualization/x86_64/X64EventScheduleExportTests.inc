@@ -300,6 +300,8 @@ TEST_F(X64ContinuationExportTest,
 }
 
 TEST_F(X64ContinuationExportTest, ScheduledEventsMatchNativeInterruptWindows) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
 #if !defined(__linux__) || !defined(__x86_64__)
   GTEST_SKIP() << "native interrupt scheduling requires Linux x64 KVM";
 #else

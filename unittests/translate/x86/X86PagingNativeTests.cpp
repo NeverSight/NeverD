@@ -8,6 +8,7 @@
 /// success, #PF error codes and CR2 with the software page walker.
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCpu.h"
 #include "X86PortDevice.h"
 #include "gtest/gtest.h"
 
@@ -546,6 +547,8 @@ protected:
 };
 
 TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   const unsigned Levels = GetParam() >= 4 ? GetParam() : 2;
   unsigned Comparisons = 0;
   for (unsigned Level = 0; Level != Levels; ++Level)

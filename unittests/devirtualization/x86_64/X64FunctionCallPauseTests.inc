@@ -201,6 +201,8 @@ TEST_F(X64CallPauseTest, RequiresBoundSitesAndPreservesDisabledSource) {
 }
 
 TEST_F(X64CallPauseTest, PreservesOriginalPrefixStackAndCompletion) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   std::vector<uint8_t> Code(37, 0x90);
   const uint8_t Prefix[] = {0xb9, 0x44, 0, 0, 0, 0xe8, 0x16, 0, 0, 0, 0xc3};
   const uint8_t Body[] = {0x8b, 0x44, 0x24, 0x2c, 0xc3};
@@ -270,6 +272,8 @@ int proof_original_bridge_and_parent(uint64_t word) {
 }
 
 TEST_F(X64CallPauseTest, NestedBridgesKeepTheirOwnReturnCells) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   std::vector<uint8_t> Code(68, 0x90);
   const uint8_t Prefix[] = {0xb9, 0x44, 0, 0, 0, 0xe8, 0x16, 0, 0, 0, 0xc3};
   const uint8_t Body[] = {0xe8, 0x1b, 0, 0, 0, 0xc3};

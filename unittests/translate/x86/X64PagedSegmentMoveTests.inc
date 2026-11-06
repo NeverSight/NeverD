@@ -9,6 +9,8 @@
 
 #if defined(__linux__) && defined(__x86_64__)
 TEST_F(X64PagedExecutionTest, PagedSegmentLoadsMatchOriginalCPU) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;
@@ -375,6 +377,8 @@ TEST_F(X64PagedExecutionTest,
 }
 
 TEST_F(X64PagedExecutionTest, PagedMovSSOwnsItsOriginalInhibitionBoundary) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;

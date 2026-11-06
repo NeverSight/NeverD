@@ -48,6 +48,8 @@ TEST_P(X86LegacyBoundNativeTest, SignedExtremesWidthsSegmentsAndPrivileges) {
 
 TEST_P(X86LegacyBoundNativeTest,
        LowerComparisonPrecedesUpperPageAndSegmentFaults) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Code32 : {false, true})
     for (bool Address32 : {false, true})
       for (unsigned Width : {2u, 4u})
@@ -85,6 +87,8 @@ TEST_P(X86LegacyBoundNativeTest,
 }
 
 TEST_P(X86LegacyBoundNativeTest, UpperFieldAddressWrapAndSeparateFieldLimits) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Code32 : {false, true})
     for (bool Address32 : {false, true})
       for (unsigned Width : {2u, 4u})
