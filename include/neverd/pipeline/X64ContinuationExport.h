@@ -62,10 +62,11 @@ struct X64ContinuationExport {
 /// neverd_x64_run_paged_function_v6: retain the same paged execution context
 /// and guest virtual return-cell lifetime across pauses. Only attempted
 /// successful near RET completes; faults, backing stops and changed code remain
-/// active. Scheduled events and native RTM regions remain separate contracts.
+/// active. Scheduled contexts retain their pending-event and inhibition state
+/// across pauses; native RTM regions remain a separate contract.
 /// Ordinary drivers retain their original behavior. This supplies no dynamic
 /// frame, address-space ownership or source-ABI proof. Optional function_calls
-/// declare checked Win64 scalar entry views alongside non-paged
+/// declare checked Win64 scalar entry views alongside plain or paged
 /// function_context. Arguments must match the original state; no register or
 /// RAM input is initialized. Separate resume wrappers retain the activation and
 /// cache its explicitly completed result. Declarations do not infer a native

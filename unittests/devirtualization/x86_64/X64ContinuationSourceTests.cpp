@@ -24,9 +24,12 @@
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/pipeline/X64ContinuationExport.h"
+#include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Intrinsics.h"
@@ -83,6 +86,49 @@ BinaryImage image(std::vector<uint8_t> Bytes) {
   S.Data = std::move(Bytes);
   Image.Segments.push_back(std::move(S));
   return Image;
+}
+
+TEST(X64ContinuationExportParallel, HighCIsStableAcrossThreadCounts) {
+  // Different instruction shapes exercise worker-local expression state and
+  // paged callee names. Select enough functions to enter the parallel batch.
+  const std::vector<std::vector<uint8_t>> Steps{
+      {0x48, 0x89, 0xc8},       // mov rax, rcx
+      {0x48, 0x83, 0xc0, 0x07}, // add rax, 7
+      {0x48, 0x89, 0x01},       // mov [rcx], rax
+      {0x48, 0x8b, 0x11}};      // mov rdx, [rcx]
+  std::vector<uint8_t> Code;
+  std::string Selection = "\"instructions\":[";
+  for (size_t I = 0; I < neverd::limits::kMinParallelIRWorkItems; ++I) {
+    if (I)
+      Selection += ",";
+    Selection += std::to_string(0x1000 + Code.size());
+    const auto &Step = Steps[I % Steps.size()];
+    Code.insert(Code.end(), Step.begin(), Step.end());
+  }
+  Selection += "]";
+  const auto Image = image(std::move(Code));
+  const auto Previous = neverd::workerThreadOverride().load();
+  const auto Restore =
+      llvm::scope_exit([&] { neverd::setWorkerThreadCount(Previous); });
+  for (bool Paged : {false, true})
+    for (bool Scheduled : {false, true}) {
+      SCOPED_TRACE(Paged);
+      SCOPED_TRACE(Scheduled);
+      const auto Request =
+          ("{\"profile\":\"kernel-events-v6\",\"mxcsr_mask\":\"0xffbf\","
+           "\"paging_address_bits\":48," +
+           Selection + (Paged ? ",\"paged_memory\":true" : "") +
+           (Scheduled ? ",\"scheduled_events\":true" : "") +
+           (Scheduled && !Paged ? ",\"event_delivery\":true" : "") + "}");
+      setWorkerThreadCount(1);
+      auto Serial = exportX64Continuation(Image, Request, false);
+      ASSERT_TRUE(bool(Serial)) << llvm::toString(Serial.takeError());
+      setWorkerThreadCount(4);
+      auto Parallel = exportX64Continuation(Image, Request, false);
+      ASSERT_TRUE(bool(Parallel)) << llvm::toString(Parallel.takeError());
+      EXPECT_EQ(Serial->Source, Parallel->Source);
+      EXPECT_EQ(Serial->Manifest, Parallel->Manifest);
+    }
 }
 
 X64ContinuationSourceOptions options() {

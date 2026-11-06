@@ -16,6 +16,8 @@ namespace llvm {
 class raw_ostream;
 }
 namespace neverd {
+struct X64FunctionCallSite;
+class X64FunctionCallSitePauses;
 namespace analysis {
 struct X64ContinuationInstructionSource;
 struct X64ContinuationSourceOptions;
@@ -25,7 +27,9 @@ void emitX64ContinuationSchedule(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
     bool FollowInternalCalls, bool FunctionContext,
-    const analysis::X64ContinuationSourceOptions &Options);
+    const analysis::X64ContinuationSourceOptions &Options,
+    llvm::ArrayRef<X64FunctionCallSite> CallSites,
+    const X64FunctionCallSitePauses *CallSitePauses);
 
 } // namespace neverd
 
