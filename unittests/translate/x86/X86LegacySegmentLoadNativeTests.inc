@@ -521,6 +521,8 @@ protected:
 
 TEST_P(X86LegacySegmentLoadNativeTest,
        OriginalSelectorTransfersMatchProtectedState) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Segment = 0; Segment != 6; ++Segment)
     for (unsigned Form = 0; Form != 7; ++Form)
       for (unsigned Bytes : {2u, 4u})
@@ -595,6 +597,8 @@ TEST_P(X86LegacySegmentLoadNativeTest,
 
 TEST_P(X86LegacySegmentLoadNativeTest,
        OriginalAccessedWriteSpansBothDescriptorPages) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Segment : {0u, 2u, 3u, 4u, 5u})
     for (unsigned Form : {0u, 1u, 2u, 3u})
       for (unsigned Bytes : {2u, 4u})

@@ -294,9 +294,18 @@ TEST(X86InstructionCoverage, PinnedDecoderCorpusHasExplicitLiftResults) {
       // Far, interrupt and syscall returns take the ordinary lift path through
       // analysis-only terminal intrinsics. This census does not qualify native
       // restoration or continuation. SYSENTER and RSM enter through an
-      // MSR/SMRAM target with no named operand and stay refused.
-      if (I.Id == X86_INS_SYSENTER || I.Id == X86_INS_RSM || LegacyGap ||
-          UnownedX87State) {
+      // MSR/SMRAM target with no named operand and stay refused. UIRET and
+      // FRED's returns leave the ordinary call and return domain too, and
+      // SNP/RMP and VMGEXIT need their explicit native bindings.
+      const bool NativeBindingOnly =
+          I.Id == X86_INS_UIRET || I.Id == X86_INS_ERETS ||
+          I.Id == X86_INS_ERETU || I.Id == X86_INS_PSMASH ||
+          I.Id == X86_INS_PVALIDATE || I.Id == X86_INS_RMPADJUST ||
+          I.Id == X86_INS_RMPUPDATE || I.Id == X86_INS_RMPQUERY ||
+          I.Id == X86_INS_RMPREAD || I.Id == X86_INS_RMPOPT ||
+          I.Id == X86_INS_RMPCHKD || I.Id == X86_INS_VMGEXIT;
+      if (I.Id == X86_INS_SYSENTER || I.Id == X86_INS_RSM ||
+          NativeBindingOnly || LegacyGap || UnownedX87State) {
         EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
         EXPECT_TRUE(Ops.empty());
         ++Refused;

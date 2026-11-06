@@ -3322,10 +3322,16 @@ void recoverCallAbi(
                                        K >= Op.CalleeRegisterArgs &&
                                        K < StackArgBase;
         const bool Gap = !FoundMask[K] || SummarizedPadding;
+        // A register position the callee does not read ends nothing where its
+        // known arity continues on the stack: a callee with no integer register
+        // argument (a long double, a record passed in memory, a tenth double)
+        // still takes the slots its caller stored.
         const bool UnreadRegisterPosition =
             SummarizedPadding ||
-            (UseExternalArity && PrototypeArguments && CalleeRegArgs >= 0 &&
-             K >= CalleeRegArgs && K < StackArgBase &&
+            (((UseExternalArity && PrototypeArguments) ||
+              (!CI.IsIndirect && !PositionalSlots && !HeaderVariadic &&
+               !OpenVariadicArity)) &&
+             CalleeRegArgs >= 0 && K >= CalleeRegArgs && K < StackArgBase &&
              CalleeArgs > StackArgBase);
         // A known fixed signature can consume a later stack slot even when
         // no store defines an interior slot. Keep that missing machine value
@@ -3475,6 +3481,11 @@ void recoverCallAbi(
               MedVar::makeConst(0, static_cast<uint16_t>(TRI.PointerSize));
         }
       }
+      // A callee's stack parameters follow all of its register positions, read
+      // or not, so a call that reaches them passes those positions too.
+      if (!CI.IsIndirect && !PositionalSlots && !HeaderVariadic &&
+          !OpenVariadicArity && !StackPart.empty() && CalleeArgs > StackArgBase)
+        ZeroedRegArgs = std::max(ZeroedRegArgs, StackArgBase);
       while (static_cast<int>(IntPart.size()) < ZeroedRegArgs)
         IntPart.push_back(
             MedVar::makeConst(0, static_cast<uint16_t>(TRI.PointerSize)));

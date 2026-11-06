@@ -84,6 +84,8 @@ int main(void) {
 
 TEST_F(X64ContinuationSourceTest,
        NarrowFrameReturnsMatchNativeFramesFlagsAndStackWidths) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Width : {2u, 4u}) {
     for (unsigned Kind = 0; Kind != 4; ++Kind) {
       const unsigned Discard = Kind == 2 ? 7 : Kind == 3 ? 65535 : 0;
@@ -273,6 +275,8 @@ int main(void) {
 
 TEST_F(X64ContinuationSourceTest,
        CompatibilityFrameReturnsMatchNativeStateAndStackWidths) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Kind = 0; Kind != 4; ++Kind) {
     const unsigned Discard = Kind == 2 ? 7 : Kind == 3 ? 65535 : 0;
     std::vector<uint8_t> Bytes{0x48, uint8_t(Kind == 0   ? 0xcf

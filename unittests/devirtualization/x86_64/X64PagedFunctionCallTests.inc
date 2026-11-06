@@ -109,6 +109,8 @@ TEST_F(X64PagedFunctionCallTest, RejectsExtraStackObservations) {
 }
 
 TEST_F(X64PagedFunctionCallTest, ProvesValuesAndPagedBoundaryComposition) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   loadInputs();
   // Normal paths compile the actual MOV/XOR/RET bodies against independent
   // operand equations. Stop paths supply the paged runtime's documented

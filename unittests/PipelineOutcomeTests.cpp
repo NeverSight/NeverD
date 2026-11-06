@@ -21,6 +21,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -128,6 +129,19 @@ public:
   static std::shared_ptr<const void>
   symbolInventory(const PipelineAnalysisCache &Cache) {
     return Cache.Inventory;
+  }
+
+  /// The addresses a run sharing \p Cache reads as importCallAddresses
+  /// (\p Image), and whether \p Cache kept them with its import names.
+  static std::set<va_t> keptImportCallAddresses(const BinaryImage &Image,
+                                                PipelineAnalysisCache &Cache,
+                                                bool &Kept) {
+    Pipeline Reader;
+    const std::set<va_t> *Calls = nullptr;
+    Reader.importAddressNames(Image, &Cache, &Calls);
+    Kept = Calls;
+    std::set<va_t> Own;
+    return Reader.importCallAddressesOf(Image, &Cache, Own);
   }
 
   /// Hits, graphs and retained bytes of the x87 call graph cache the symbol
@@ -303,6 +317,45 @@ TEST(PipelineOutcome, AnalysisCachePreservesFloatingAndIntegerCallChains) {
         }
       }
   }
+}
+
+TEST(PipelineOutcome, KeptImportCallAddressesFollowTheImagesStubs) {
+  // A selected run keeps the image's import-address names with its inputs,
+  // and with them the addresses calls reach imports through: an import's
+  // named slot, not an unnamed one or a name without a slot.  A stub the
+  // image registers afterwards is read with them.
+  BinaryImage Image = selectionCacheImage(/*Floating=*/false);
+  Segment Got;
+  Got.Name = ".got";
+  Got.VA = 0x4000;
+  Got.Size = Got.FileSz = 0x18;
+  Got.Flags = SegmentFlags::Readable;
+  Got.Data.assign(Got.Size, 0);
+  Image.Segments.push_back(std::move(Got));
+  for (auto [Name, Slot] :
+       {std::pair{"exit", va_t{0x4000}}, std::pair{"", va_t{0x4008}},
+        std::pair{"abort", va_t{0}}}) {
+    Import Imp;
+    Imp.Name = Name;
+    Imp.IATAddr = Slot;
+    Image.Imports.push_back(std::move(Imp));
+  }
+  PipelineAnalysisCache Cache;
+  PipelineResult Run;
+  PipelineTestPeer::buildLowIR(Image, Run, {0x1000}, &Cache);
+  bool Kept = false;
+  // The first read keeps them; a second reads the kept ones.
+  for (unsigned Read = 0; Read != 2; ++Read) {
+    EXPECT_EQ(PipelineTestPeer::keptImportCallAddresses(Image, Cache, Kept),
+              (std::set<va_t>{0x4000}));
+    EXPECT_TRUE(Kept) << Read;
+  }
+  EXPECT_EQ(importCallAddresses(Image), (std::set<va_t>{0x4000}));
+  ASSERT_TRUE(Image.recordImportStub(0x1300, 0));
+  ASSERT_EQ(importCallAddresses(Image), (std::set<va_t>{0x1300, 0x4000}));
+  EXPECT_EQ(PipelineTestPeer::keptImportCallAddresses(Image, Cache, Kept),
+            importCallAddresses(Image));
+  EXPECT_TRUE(Kept);
 }
 
 TEST(PipelineOutcome, CachedBodiesKeepANoReturnCalleesX87Context) {

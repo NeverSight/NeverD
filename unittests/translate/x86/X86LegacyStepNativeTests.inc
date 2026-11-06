@@ -247,6 +247,8 @@ protected:
 };
 
 TEST_P(X86LegacyStepNativeTest, OriginalFetchCompletionAndPendingEvents) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Code32 : {false, true})
     for (unsigned Case = 0; Case != 14; ++Case)
       ASSERT_NO_FATAL_FAILURE(compare(Code32, Case));
@@ -254,6 +256,8 @@ TEST_P(X86LegacyStepNativeTest, OriginalFetchCompletionAndPendingEvents) {
 }
 
 TEST_P(X86LegacyStepNativeTest, OriginalSoftwareDebugAndOverflow) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Code32 : {false, true})
     for (unsigned Case = 14; Case != 20; ++Case)
       ASSERT_NO_FATAL_FAILURE(compare(Code32, Case));

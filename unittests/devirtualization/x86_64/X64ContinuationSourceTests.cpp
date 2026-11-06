@@ -9,6 +9,7 @@
 
 #include "../../../lib/analysis/arch/x86_64/X64PagedSse.h"
 #include "../../HostCompiler.h"
+#include "../../HostCpu.h"
 #include "../../lift/NeverDLiftFixture.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
@@ -424,6 +425,8 @@ TEST_F(X64ContinuationSourceTest, VmrunNativeObjectRequiresMatchingSdk) {
 } // namespace
 
 TEST_F(X64ContinuationSourceTest, IretMatchesNativeFramesFlagsAndSegments) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   run({0x48, 0xcf}, {0x1000}, std::string(EventHarness) + R"C(
 int main(void) {
   unsigned char before[4096],after[4096];
@@ -544,6 +547,8 @@ INSTANTIATE_TEST_SUITE_P(UnsignedCleanup, X64FarReturnTest,
 
 TEST_F(X64ContinuationSourceTest,
        FarReturnMatchesNativeDescriptorsAndAliasing) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   run({0x48, 0xcb}, {0x1000}, std::string(EventHarness) + R"C(
 static void compare_return(event_state_t s) {
   unsigned char before[4096],after[4096];event_state_t want=s;
@@ -788,6 +793,8 @@ int main(void) {
 
 TEST_F(X64ContinuationSourceTest,
        Int3DescriptorWritesPrecedeIstReadsAndFrameStores) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   run({0x90, 0xcc}, {0x1001}, std::string(EventHarness) + R"C(
 int main(void) {
   unsigned char before[4096],after[4096],stack_before[512],stack_after[512];
@@ -1026,6 +1033,8 @@ TEST_F(X64ContinuationSourceTest, SysretKeepsEarlierLayoutsUnsupported) {
 }
 
 TEST_F(X64ContinuationSourceTest, SysretMatchesNativePrivilegeTransition) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   auto O = smapOptions();
   O.Profile = X64ContinuationProfile::KernelReturnNoFaultV5;
   O.PagingAddressBits = 48;
@@ -1226,6 +1235,8 @@ int main(void) {
 }
 
 TEST_F(X64ContinuationSourceTest, SyscallStarMsrsMatchSupervisorState) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Events : {false, true}) {
     auto O = eventOptions();
     if (!Events)

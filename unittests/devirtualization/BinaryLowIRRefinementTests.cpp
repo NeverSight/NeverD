@@ -3595,24 +3595,22 @@ TEST(BinaryLowIRRefinement, RawCmpxchgDoesNotGrantNativeProof) {
         EXPECT_EQ(Op.MemoryOrdering, NdMemoryOrdering::SequentiallyConsistent);
       }
   ASSERT_EQ(Atomics, 1u);
-  // The architecture has not audited LOCK CMPXCHG undefined outputs. Native
-  // collection refuses that coverage before the ordered-memory proof guard.
+  // LOCK CMPXCHG defines all its flags, so its undefined-output audit passes.
+  // The ordered-memory guard is what keeps the proof from covering it.
   const auto Relation = P.check(R.Residual);
   refused(Relation, Status::Unsupported);
-  EXPECT_NE(
-      Relation.Proof.Diagnostic.find(
-          "original instruction lacks complete undefined-output evidence"),
-      std::string::npos)
+  EXPECT_NE(Relation.Proof.Diagnostic.find(
+                "ordered or nondefault memory is unsupported"),
+            std::string::npos)
       << Relation.Proof.Diagnostic;
   const auto Independence =
       checkBinaryUndefinedIndependence(P.Image, Entry, P.Options, P.Contract);
   EXPECT_EQ(Independence.Proof.Status, LowIRIndependenceStatus::Unsupported);
   EXPECT_FALSE(Independence.Certificate);
   EXPECT_FALSE(Independence.Proof.Certificate);
-  EXPECT_NE(
-      Independence.Proof.Diagnostic.find(
-          "original instruction lacks complete undefined-output evidence"),
-      std::string::npos)
+  EXPECT_NE(Independence.Proof.Diagnostic.find(
+                "ordered or nondefault memory is unsupported"),
+            std::string::npos)
       << Independence.Proof.Diagnostic;
 }
 

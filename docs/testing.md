@@ -15730,7 +15730,18 @@ Tests that build generated C or IR on the host state what that host cannot do
 (`unittests/HostCompiler.h`). x86 instructions need an x86 host, and Apple Clang
 can lag the LLVM NeverD links in its IR syntax, `_BitInt` widths and newest
 assembler mnemonics. Such a test skips with that reason, and Linux still builds
-and runs the same output.
+and runs the same output. Linux builds NeverD with Ubuntu's Clang 18, which keeps
+the compiler cache valid, and runs its tests with Clang 23 from LLVM's signed
+packages, as new as the LLVM that emits the IR.
+
+Hosted Linux runners mix AMD and Intel processors, and the job log records which
+one ran. The KVM differentials compare the x86 model, which follows Intel, with the
+processor running the original bytes. A test whose comparison reaches a difference
+between vendors in hidden segment state, fault addresses or accessed-bit writes
+runs only on Intel and otherwise skips with that reason (`unittests/HostCpu.h`), so
+an AMD run leaves those comparisons to an Intel host. The Linux job also turns off
+the runner's core dump handler: death tests crash on purpose, and the handler cost
+each about a second.
 
 Documentation translation checks stay in `LLVM Style`, which also sees
 Markdown-only pushes. The EVM audit tests stay in `EVM Upstream Audit`, apart from

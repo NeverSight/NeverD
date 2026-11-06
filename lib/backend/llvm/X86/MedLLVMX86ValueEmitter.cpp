@@ -777,7 +777,15 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
     auto *Status =
         Entry.CreateAlloca(Builder.getInt16Ty(), nullptr, "x87_value_status");
     Builder.CreateStore(getVar(Op.Inputs[1], Builder), Source);
-    Builder.CreateStore(getVar(Op.Inputs[2], Builder), Control);
+    // A control word the function has not written is the processor's own. The
+    // guard must judge that one, not the zero an unset register reads as.
+    const MedVar &ControlWord = Op.Inputs[2];
+    const bool Incoming = ControlWord.Kind == MedVar::Reg &&
+                          ControlWord.RegOff == x86reg::FPU_CW &&
+                          ControlWord.SSAVer == 0;
+    Builder.CreateStore(Incoming ? emitX87ControlRead(Builder)
+                                 : getVar(ControlWord, Builder),
+                        Control);
     auto *Ptr = llvm::PointerType::get(*Ctx, 0);
     auto *Type = llvm::FunctionType::get(Builder.getVoidTy(),
                                          {Ptr, Ptr, Ptr, Ptr}, false);

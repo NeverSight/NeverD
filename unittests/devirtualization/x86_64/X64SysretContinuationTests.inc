@@ -77,6 +77,8 @@ int main(void) {
 }
 
 TEST_F(X64ContinuationSourceTest, SysretCompatibilityMatchesNativeTransition) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   auto O = eventOptions();
   O.Profile = X64ContinuationProfile::KernelReturnNoFaultV5;
   run({0x0f, 0x07}, {0x1000}, R"C(

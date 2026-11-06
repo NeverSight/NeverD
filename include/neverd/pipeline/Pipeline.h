@@ -940,8 +940,17 @@ private:
   /// The import-address names of \p Img kept with \p Cache's image inputs, or
   /// null when \p Cache is null or those inputs are not built yet. Additions
   /// a run makes belong to that run and must not remain on the kept map.
-  std::map<va_t, std::string> *importAddressNames(const BinaryImage &Img,
-                                                  PipelineAnalysisCache *Cache);
+  /// \p CallAddresses, when given, receives the addresses they name as the
+  /// image gives them (importCallAddresses), kept with them, or null.
+  std::map<va_t, std::string> *
+  importAddressNames(const BinaryImage &Img, PipelineAnalysisCache *Cache,
+                     const std::set<va_t> **CallAddresses = nullptr);
+  /// importCallAddresses(\p Img): those \p Cache keeps with the names, or
+  /// read into \p Own.  Every run that propagates internal no-return reads
+  /// them, and the names they come from copy every import's name.
+  const std::set<va_t> &importCallAddressesOf(const BinaryImage &Img,
+                                              PipelineAnalysisCache *Cache,
+                                              std::set<va_t> &Own);
 
   /// Phase 3: convert MedIR -> HighIR in parallel.
   void buildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,

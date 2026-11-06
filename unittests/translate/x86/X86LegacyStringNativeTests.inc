@@ -155,6 +155,8 @@ TEST_P(X86LegacyStringNativeTest, WidthsCountsFlagsAndConditionalTermination) {
 }
 
 TEST_P(X86LegacyStringNativeTest, PartialFaultsAndOriginalPageRepair) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Code32 : {false, true})
     for (bool Address32 : {false, true})
       for (unsigned Width : {1u, 2u, 4u})
@@ -265,6 +267,8 @@ TEST_P(X86LegacyStringNativeTest, OverlappingMovesObserveEarlierElements) {
 }
 
 TEST_P(X86LegacyStringNativeTest, PendingIRQAndNMIKeepOriginalRestartFrames) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (auto Kind : {X86LegacyEventKind::Interrupt, X86LegacyEventKind::NMI})
     for (bool STI : {false, true}) {
       PendingEvent = Kind;

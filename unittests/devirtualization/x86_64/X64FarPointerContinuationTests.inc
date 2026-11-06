@@ -65,6 +65,8 @@ static void compare_far(unsigned index,event_state_t s) {
 
 TEST_F(X64ContinuationSourceTest,
        FarPointerMatchesNativeRegistersAndDescriptors) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Width : {2u, 4u, 8u}) {
     SCOPED_TRACE(Width);
     FarPointerFixture F;
@@ -129,6 +131,8 @@ int main(void) {
 
 TEST_F(X64ContinuationSourceTest,
        FarPointerMatchesNativeAddressingAndOldBases) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool SS : {false, true}) {
     SCOPED_TRACE(SS);
     FarPointerFixture F;
@@ -202,6 +206,8 @@ int main(void) {
 
 TEST_F(X64ContinuationSourceTest,
        FarPointerWrapsEachAddress32FieldBeforeSegmentBase) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   FarPointerFixture F;
   for (uint8_t Opcode : {0xb4, 0xb5, 0xb2})
     for (unsigned Width : {2u, 4u, 8u}) {
@@ -351,6 +357,8 @@ TEST_F(X64ContinuationSourceTest,
 
 TEST_F(X64ContinuationSourceTest,
        FarPointerLSSMatchesNativeStateWithoutShadow) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Width : {2u, 4u, 8u}) {
     SCOPED_TRACE(Width);
     FarPointerFixture F;
@@ -412,6 +420,8 @@ int main(void) {
 }
 
 TEST_F(X64ContinuationSourceTest, FarPointerNullFSAndGSMatchNativeClearPolicy) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   FarPointerFixture F;
   for (uint8_t Opcode : {0xb4, 0xb5})
     for (unsigned Width : {2u, 4u, 8u})

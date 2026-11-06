@@ -32,6 +32,8 @@ TEST_F(X64PagedExecutionTest, PagedRepeatedTransfersRejectUnboundForms) {
 }
 
 TEST_F(X64PagedExecutionTest, PagedRepeatedTransfersSuspendForEvents) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;
@@ -343,6 +345,8 @@ TEST_F(X64PagedExecutionTest, PagedRepeatedTransfersRetainProgressAcrossStops) {
 }
 
 TEST_F(X64PagedExecutionTest, PagedRepeatedTransfersRepairPageFaultAndResume) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;

@@ -29,6 +29,7 @@
 #include <set>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace neverd::libc {
 namespace {
@@ -595,12 +596,16 @@ NoReturnTargetIndex::NoReturnTargetIndex(const BinaryImage &Img,
   // export at an address proves it too: the image's own code calls the
   // routines it exports, such as the kernel's ExRaiseStatus.
   if (SymbolsIndexed) {
-    std::set<va_t> SymbolAddresses;
+    // Which symbol is first at an address is all the sets answer: hashed,
+    // they cost a fraction of ordered ones over an image's symbols.
+    std::unordered_set<va_t> SymbolAddresses;
+    SymbolAddresses.reserve(Img.Symbols.size());
     for (const Symbol &Sym : Img.Symbols)
       if (!Sym.IsSection && SymbolAddresses.insert(Sym.Addr).second &&
           NoReturn(Sym.Name))
         Targets.insert(Sym.Addr);
-    std::set<va_t> ExportAddresses;
+    std::unordered_set<va_t> ExportAddresses;
+    ExportAddresses.reserve(Img.Exports.size());
     for (const Export &Exp : Img.Exports)
       if (ExportAddresses.insert(Exp.Addr).second && NoReturn(Exp.Name))
         Targets.insert(Exp.Addr);

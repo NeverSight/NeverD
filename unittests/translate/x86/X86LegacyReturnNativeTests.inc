@@ -431,6 +431,8 @@ protected:
 };
 
 TEST_P(X86LegacyReturnNativeTest, WidthsPrivilegesAndDescriptors) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned CPL = 0; CPL != 4; ++CPL)
     for (unsigned TargetCPL = CPL; TargetCPL != 4; ++TargetCPL)
       for (bool Code32 : {false, true})
@@ -447,12 +449,16 @@ TEST_P(X86LegacyReturnNativeTest, WidthsPrivilegesAndDescriptors) {
 }
 
 TEST_P(X86LegacyReturnNativeTest, AccessedDescriptorAliasesAnOuterStackField) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Kind : {0u, 1u, 2u})
     ASSERT_NO_FATAL_FAILURE(compare(0, 3, true, true, true, true, Kind, 35));
   RecordProperty("cpu_comparisons", Comparisons);
 }
 
 TEST_P(X86LegacyReturnNativeTest, PageRepairIRETAndRetryOriginalReturn) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Operand32 : {false, true})
     for (unsigned Kind : {0u, 1u, 2u})
       ASSERT_NO_FATAL_FAILURE(
@@ -461,6 +467,8 @@ TEST_P(X86LegacyReturnNativeTest, PageRepairIRETAndRetryOriginalReturn) {
 }
 
 TEST_P(X86LegacyReturnNativeTest, ReturnFaultsAndCompetingFrameAccesses) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned CPL : {0u, 3u})
     for (unsigned TargetCPL : {0u, 3u})
       for (bool Operand32 : {false, true})
@@ -485,6 +493,8 @@ TEST_P(X86LegacyReturnNativeTest, FlagsStackWidthsAndWrapping) {
 }
 
 TEST_P(X86LegacyReturnNativeTest, SelectorFieldExtentsAndStackLimits) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Code32 : {false, true})
     for (bool Operand32 : {false, true})
       for (bool Stack32 : {false, true})

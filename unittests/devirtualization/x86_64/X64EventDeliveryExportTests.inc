@@ -136,6 +136,8 @@ int main(void) {
 }
 
 TEST_F(X64ContinuationExportTest, EventDeliveryMatchesNativeFaultsNmiAndIrq) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
 #if !defined(__linux__) || !defined(__x86_64__)
   GTEST_SKIP() << "native event qualification requires Linux x64 KVM";
 #else

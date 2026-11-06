@@ -192,6 +192,8 @@ TEST_F(X64PagedExecutionTest, ScheduledConsumptionSurvivesFailedEntry) {
 
 #if defined(__linux__) && defined(__x86_64__)
 TEST_F(X64PagedExecutionTest, ScheduledEventsMatchOriginalCPU) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;
@@ -468,6 +470,8 @@ TEST_F(X64PagedExecutionTest, VirtualInterruptFaultAndExternalEventPriority) {
   RecordProperty("cpu_comparisons", Comparisons);
 }
 TEST_F(X64PagedExecutionTest, PagedSchedulingMatchesNativeInstructionWindows) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;

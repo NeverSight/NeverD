@@ -4856,6 +4856,10 @@ struct PipelineAnalysisCache::Impl {
       size_t DataInCodeCount = 0;
       size_t ContinuationCount = 0;
       std::shared_ptr<std::map<va_t, std::string>> Names;
+      /// The addresses Names names as the image gives them, before any run
+      /// lays its own names over them: every address a call reaches an
+      /// import through (importCallAddresses).
+      std::shared_ptr<const std::set<va_t>> CallAddresses;
 
       bool matches(const BinaryImage &Img) const {
         return Names &&
@@ -4971,7 +4975,10 @@ Pipeline::x87CallGraphsForTesting(const PipelineAnalysisCache &Cache) {
 
 std::map<va_t, std::string> *
 Pipeline::importAddressNames(const BinaryImage &Img,
-                             PipelineAnalysisCache *Cache) {
+                             PipelineAnalysisCache *Cache,
+                             const std::set<va_t> **CallAddresses) {
+  if (CallAddresses)
+    *CallAddresses = nullptr;
   if (!Cache)
     return nullptr;
   // Facts and a selection can each hold image inputs. Prefer a memo that
@@ -4994,10 +5001,16 @@ Pipeline::importAddressNames(const BinaryImage &Img,
     return nullptr;
   PipelineAnalysisCache::Impl::ImageInputs::ImportNameMemo &Memo =
       Inputs->ImportNames;
-  if (Memo.matches(Img))
+  if (Memo.matches(Img)) {
+    if (CallAddresses)
+      *CallAddresses = Memo.CallAddresses.get();
     return Memo.Names.get();
+  }
   auto Built = std::make_shared<std::map<va_t, std::string>>(
       Img.getImportAddressNames());
+  auto Calls = std::make_shared<std::set<va_t>>();
+  for (const auto &[Addr, Name] : *Built)
+    Calls->insert(Calls->end(), Addr);
   Memo.Names.reset();
   Memo.ImportData = static_cast<const void *>(Img.Imports.data());
   Memo.ImportCount = Img.Imports.size();
@@ -5005,7 +5018,20 @@ Pipeline::importAddressNames(const BinaryImage &Img,
   Memo.DataInCodeCount = Img.DataInCode.size();
   Memo.ContinuationCount = Img.ContinuationCodeStarts.size();
   Memo.Names = std::move(Built);
+  Memo.CallAddresses = std::move(Calls);
+  if (CallAddresses)
+    *CallAddresses = Memo.CallAddresses.get();
   return Memo.Names.get();
+}
+
+const std::set<va_t> &Pipeline::importCallAddressesOf(
+    const BinaryImage &Img, PipelineAnalysisCache *Cache, std::set<va_t> &Own) {
+  const std::set<va_t> *Kept = nullptr;
+  importAddressNames(Img, Cache, &Kept);
+  if (Kept)
+    return *Kept;
+  Own = importCallAddresses(Img);
+  return Own;
 }
 
 namespace {

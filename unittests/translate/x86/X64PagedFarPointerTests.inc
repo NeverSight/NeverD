@@ -9,6 +9,8 @@
 
 #if defined(__linux__) && defined(__x86_64__)
 TEST_F(X64PagedExecutionTest, PagedFarPointerLoadsMatchOriginalCPU) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;
@@ -285,6 +287,8 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerLoadsMatchOriginalCPU) {
 }
 
 TEST_F(X64PagedExecutionTest, PagedFarPointerWrapsFieldsAndCapturesOldBases) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;
@@ -503,6 +507,8 @@ TEST_F(X64PagedExecutionTest, PagedFarPointerAdmissionBackingAndNullPolicies) {
 }
 
 TEST_F(X64PagedExecutionTest, PagedLssComposesWithScheduledIRQAndNMI) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;
@@ -572,6 +578,8 @@ TEST_F(X64PagedExecutionTest, PagedLssComposesWithScheduledIRQAndNMI) {
 }
 
 TEST_F(X64PagedExecutionTest, PagedFarPointerHandlerRepairsMappingAndRetries) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
   X64PagedNativeCPU CPU;

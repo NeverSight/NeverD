@@ -114,10 +114,7 @@ TEST(X86EncodingAccuracy, DecodersAfterOneWithoutDetailOrTextDecodeInFull) {
 }
 
 TEST(X86EncodingAccuracy, LegalMemoryLockAndSegmentMovesStillLift) {
-  const std::vector<std::vector<uint8_t>> Valid = {{0xf0, 0x31, 0x02},
-                                                   {0xf2, 0xf0, 0x31, 0x02},
-                                                   {0xf0, 0xf2, 0x31, 0x02},
-                                                   {0xf0, 0x01, 0x02},
+  const std::vector<std::vector<uint8_t>> Valid = {{0xf0, 0x01, 0x02},
                                                    {0xf0, 0x0f, 0xab, 0x02},
                                                    {0xf0, 0x0f, 0xb1, 0x02},
                                                    {0xf0, 0x0f, 0xc1, 0x02},
@@ -138,6 +135,37 @@ TEST(X86EncodingAccuracy, LegalMemoryLockAndSegmentMovesStillLift) {
       EXPECT_NO_THROW(Decode.liftToLow(Instruction, Ops));
       EXPECT_FALSE(Ops.empty());
     }
+  }
+}
+
+// These are legal encodings the decoder accepts. The ordinary lift still
+// refuses them instead of printing a plain read-modify-write.
+TEST(X86EncodingAccuracy, LockedLogicWithoutAnOrderedModelIsRefused) {
+  const std::vector<uint8_t> Logic = {0xf0, 0x31, 0x02};
+  const std::vector<std::vector<uint8_t>> Elided = {{0xf2, 0xf0, 0x31, 0x02},
+                                                    {0xf0, 0xf2, 0x31, 0x02}};
+  const auto Lifts = [](Arch Target, const std::vector<uint8_t> &Bytes) {
+    Decoder Decode;
+    EXPECT_TRUE(Decode.init(Target));
+    DecodedInsn Instruction;
+    EXPECT_EQ(Decode.decodeOne(Bytes.data(), Bytes.size(), 0x1000, Instruction),
+              static_cast<int>(Bytes.size()));
+    std::vector<LowOp> Ops;
+    try {
+      Decode.liftToLow(Instruction, Ops);
+    } catch (const UnliftedInstruction &) {
+      EXPECT_TRUE(Ops.empty());
+      return false;
+    }
+    EXPECT_FALSE(Ops.empty());
+    return true;
+  };
+  EXPECT_TRUE(Lifts(Arch::X64, Logic));
+  EXPECT_FALSE(Lifts(Arch::X86, Logic));
+  for (const auto &Bytes : Elided) {
+    SCOPED_TRACE(testing::PrintToString(Bytes));
+    EXPECT_FALSE(Lifts(Arch::X86, Bytes));
+    EXPECT_FALSE(Lifts(Arch::X64, Bytes));
   }
 }
 
