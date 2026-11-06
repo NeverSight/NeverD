@@ -24,7 +24,7 @@ struct X64ContinuationSourceOptions;
 void emitX64ContinuationSchedule(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
-    bool FollowInternalCalls,
+    bool FollowInternalCalls, bool FunctionContext,
     const analysis::X64ContinuationSourceOptions &Options);
 
 } // namespace neverd

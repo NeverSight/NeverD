@@ -61,24 +61,28 @@ void emitX64FunctionContextGuard(llvm::raw_ostream &OS) {
 void emitX64FunctionContextStep(
     llvm::raw_ostream &OS,
     const analysis::X64ContinuationInstructionSource &Unit,
-    llvm::StringRef Indent, bool PagedMemory) {
+    llvm::StringRef Indent, bool PagedMemory, llvm::StringRef PagedContext,
+    llvm::function_ref<void(llvm::StringRef)> OnReturn) {
   if (Unit.IsNearReturn)
     OS << Indent << "{\n"
        << Indent << "    uint64_t return_slot = state->GPR[4];\n";
-  OS << Indent << "status = " << Unit.Function.Name
-     << (PagedMemory ? "_paged_step(state, context);\n"
-                     : "((uint8_t *)state);\n");
+  OS << Indent << "status = " << Unit.Function.Name;
+  if (PagedMemory)
+    OS << "_paged_step(state, " << PagedContext << ");\n";
+  else
+    OS << "((uint8_t *)state);\n";
   if (Unit.IsNearReturn) {
     OS << Indent << "    if (status == "
        << uint64_t(analysis::X64ContinuationExitV1::Return)
        << " && function && return_slot == function->ReturnSlot";
     if (PagedMemory)
       OS << " &&\n"
-         << Indent << "        (neverd_x64_paged_progress_v1(context) & "
-         << analysis::kX64PagedInstructionAttempted << ")";
-    OS << ") {\n"
-       << Indent << "        --*budget;\n"
-       << Indent << "        function->Phase = NEVERD_X64_FUNCTION_RETURNED;\n"
+         << Indent << "        (neverd_x64_paged_progress_v1(" << PagedContext
+         << ") & " << analysis::kX64PagedInstructionAttempted << ")";
+    OS << ") {\n" << Indent << "        --*budget;\n";
+    if (OnReturn)
+      OnReturn((Indent + "        ").str());
+    OS << Indent << "        function->Phase = NEVERD_X64_FUNCTION_RETURNED;\n"
        << Indent << "        return status;\n"
        << Indent << "    }\n"
        << Indent << "}\n";

@@ -17678,7 +17678,20 @@ lifetime; numeric SP alone does not prove mapping ownership. The original
 paged driver remains a null-context adapter. Disabled requests retain identical
 source. Paged stack-argument checks remain rejected: extra validation reads
 could fault or publish page-table effects absent from the instruction stream.
-This option does not add native state capture or scheduled-event composition.
+This option does not add native state capture.
+
+Scheduled V6 function drivers reuse that same return-cell owner. Its completion
+callback emits the scheduler's existing shadow-expiry rule after instruction
+accounting and before publishing the returned phase. The callback is a source
+emission hook, not a generated runtime callback; only selected near RET cases
+gain completion checks. Paged steps use the memory context, distinct from the
+event producer context. Event delivery retains the activation and the original
+acceptance/acknowledgment protocol; only an attempted successful near RET can
+complete it. Completed or invalid phases stop before scheduler runtime access.
+The context-free scheduled driver is a null-activation adapter. Disabled source
+is unchanged. Scalar/call-site views still require unscheduled drivers and are
+explicitly rejected when scheduled events are requested. Handler resumption,
+return-cell lifetime and mapping ownership remain producer obligations.
 
 `X64FunctionCalls` adds producer-declared Win64 scalar call views at explicit
 roots. The shared argument-layout owner supplies register and stack positions;

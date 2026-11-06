@@ -175,8 +175,7 @@ resembles a caller. Provider execution outside the selection cannot report
 completion implicitly; return to selected code before the completing RET, or
 use the ordinary state driver with producer-owned stopping. No post-SP/PC
 heuristic fills this gap. Paged memory uses the separate driver described
-below. Scheduled events, other profiles and native RTM regions remain rejected
-with this option.
+below. Other profiles and native RTM regions remain rejected with this option.
 
 Both dispatch strategies and C routes share the same return-cell check. The
 manifest records the additional entry points, completion contract and
@@ -187,6 +186,47 @@ the original entry point delegates with no activation context. Added work is
 limited to activation entry/exit and selected near-return checks. This
 interface does not close ordinary-C argument-recovery gaps or
 qualify a full Windows execution environment.
+
+### Scheduled function contexts
+
+Combining `"scheduled_events": true` with `function_context` adds
+`neverd_x64_continue_events_function_v6`. With paged memory, use
+`neverd_x64_continue_paged_events_function_v6` instead:
+
+```c
+uint64_t status = neverd_x64_continue_paged_events_function_v6(
+    &state, paged_context, &instruction_budget, &shadows, &poll_budget,
+    peek, accepted, event_context, &function);
+```
+
+The nonpaged signature omits `paged_context` and requires `"event_delivery": true`
+as for the original scheduler. Initialize `function` at an
+explicit root with `begin_function`, and retain it, the machine state and the
+interruptibility state across pauses. The activation storage, state, shadows,
+budgets, memory context and producer context must be accessible and mutually
+disjoint. The producer must preserve the declared return-cell lifetime across
+event handlers and address-space changes; the driver cannot infer it.
+
+The scheduler polls before each admitted instruction under its existing event
+contract. A successful original near RET through the entry cell consumes one
+instruction, expires STI/SS inhibition and marks the activation returned before
+following its selected target or polling again. `NMIBlockedBySTI` remains a
+producer policy. Paged completion additionally requires instruction-attempt
+progress. Accepted events stop at their delivery boundary with the activation
+still active; they consume no instruction budget and are acknowledged once,
+including an accepted paged event whose entry faults. Faults, backing stops and
+changed code retain the activation and the runtime's original accounting.
+The producer supplies handler effects and restores an appropriate continuation
+before resumption. No handler completion or IRET is synthesized.
+
+A completed or invalid activation is checked before any runtime state, budget
+or callback access. The original scheduled entry point remains an adapter with
+no activation boundary. The manifest's `function_context.scheduled_driver`
+names the new entry point. Other drivers do not acquire implicit event polling.
+`function_calls` and its call-site views remain rejected with scheduled events:
+those wrappers use the unscheduled drivers. Omitting `function_context` retains
+the previous scheduler source. This composition adds checks only to selected
+near returns; it adds no scan, guest-memory observation or ordinary-C analysis.
 
 ### Checked scalar call interfaces
 
