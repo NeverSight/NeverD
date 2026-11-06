@@ -83,6 +83,18 @@ TEST_F(X86_64_SSEAVX, CvtSs2SdLifts) {
                 neverd::Intrinsic::X86FPScalarConvertState, 4);
 }
 
-TEST_F(X86_64_SSEAVX, NoUnreachableInFunctions) {
-  verifyLLVMIRNotContains(testObj(), "", "unreachable");
+// MOVNTDQ faults on an unaligned address, on a path of its own. That is the
+// only control flow that may end without a return.
+TEST_F(X86_64_SSEAVX, NoUnreachableOutsideAlignmentFaults) {
+  const auto R = liftToLLVMIR(testObj(), "");
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Trap = "\n\nalignment.trap:";
+  size_t Faults = 0;
+  for (size_t At = R.out.find("unreachable"); At != std::string::npos;
+       At = R.out.find("unreachable", At + 1), ++Faults) {
+    const size_t Block = R.out.rfind("\n\n", At);
+    ASSERT_NE(Block, std::string::npos) << R.out;
+    EXPECT_EQ(R.out.compare(Block, Trap.size(), Trap), 0) << R.out;
+  }
+  EXPECT_GT(Faults, 0u) << R.out;
 }

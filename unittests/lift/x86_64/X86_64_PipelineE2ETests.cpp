@@ -198,23 +198,23 @@ TEST_F(X86_64_PipelineE2E, DecompileC_MemAtomicSupportedFunctions) {
     }
 }
 
-// LOCK OR has no ordered model (X86LegacyAtomic): selecting it fails at the
-// instruction instead of printing a plain read-modify-write.
-TEST_F(X86_64_PipelineE2E, DecompileC_MemAtomicLockOrIsRefused) {
+// LOCK OR keeps its native instruction (X86LegacyAtomic), and never becomes a
+// plain read-modify-write.
+TEST_F(X86_64_PipelineE2E, DecompileC_MemAtomicLockOrStaysLocked) {
   for (bool NoOpt : {false, true}) {
     SCOPED_TRACE(NoOpt);
-    std::vector<std::string> Args = {"decompile",
-                                     "--llvm",
-                                     "--func=test_lock_or",
-                                     "-o",
-                                     tmpFile("test_lock_or.c").string(),
-                                     obj("test_mem_atomic.o").string()};
+    const auto Output = tmpFile("test_lock_or.c");
+    std::vector<std::string> Args = {
+        "decompile", "--llvm",        "--func=test_lock_or",
+        "-o",        Output.string(), obj("test_mem_atomic.o").string()};
     if (NoOpt)
       Args.push_back("--no-opt");
     const auto Result = exec(ndBin(), Args);
-    EXPECT_NE(Result.exitCode, 0);
-    EXPECT_TRUE(Result.errContains("unsupported instruction at 0xC2"))
-        << Result.err;
+    ASSERT_EQ(Result.exitCode, 0) << Result.err;
+    std::ifstream Input(Output);
+    const std::string C((std::istreambuf_iterator<char>(Input)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_NE(C.find("lock orl"), std::string::npos) << C;
   }
 }
 

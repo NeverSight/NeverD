@@ -94,16 +94,23 @@ MedFunc scan(unsigned Width) {
 TEST(MedImmutableTableScans, FoldsScalarReadsAmongImmutableInstructionBytes) {
   for (unsigned Width : {4u, 8u}) {
     for (bool WritableSection : {false, true}) {
+      SCOPED_TRACE(Width);
+      SCOPED_TRACE(WritableSection);
+      // 32-bit Mach-O has no immutable code reads to compare with.
+      if (WritableSection && Width != 8)
+        continue;
       auto Image = table(Width, 4);
       Image.Segments[0].Flags =
           Image.Segments[0].Flags | SegmentFlags::Executable;
       Image.Sections[0].Flags =
           Image.Sections[0].Flags | SegmentFlags::Executable;
-      // Runtime mapping permissions own immutability. A section attribute
-      // alone cannot make bytes writable inside a read-only mapping.
-      if (WritableSection)
+      // Outside PE, runtime mapping permissions own immutability: a section
+      // attribute alone cannot make bytes writable inside a read-only mapping.
+      if (WritableSection) {
+        Image.Format = BinaryFormat::MachO;
         Image.Sections[0].Flags =
             Image.Sections[0].Flags | SegmentFlags::Writable;
+      }
       MedFunc F;
       F.Blocks.resize(1);
       F.Blocks[0].Id = 0;
@@ -121,6 +128,20 @@ TEST(MedImmutableTableScans, FoldsScalarReadsAmongImmutableInstructionBytes) {
       EXPECT_EQ(F.Blocks[0].Ops[2].Opcode, NdOp::LOAD);
       EXPECT_EQ(F.Blocks[0].Ops[3].Opcode, NdOp::INT_XOR);
     }
+  }
+}
+
+TEST(MedImmutableTableScans, PESectionsSupplyTheirMappingsWritePermission) {
+  for (unsigned Width : {4u, 8u}) {
+    auto Image = table(Width, 4);
+    Image.Sections[0].Flags = Image.Sections[0].Flags | SegmentFlags::Writable;
+    MedFunc F;
+    F.Blocks.resize(1);
+    F.Blocks[0].Id = 0;
+    F.Blocks[0].Ops = {
+        op(NdOp::LOAD, var(1, 4), {MedVar::makeConst(0x5000 + Width, Width)})};
+    EXPECT_FALSE(foldImmutableTableScans(F, Image));
+    EXPECT_EQ(F.Blocks[0].Ops[0].Opcode, NdOp::LOAD);
   }
 }
 

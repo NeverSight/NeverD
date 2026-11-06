@@ -935,8 +935,8 @@ TEST_F(X86_64_CallAbi, AVariadicForwarderPassesItsVaListOn) {
   const std::string Caller = C.substr(C.find(" forward(int32_t arg0) {"));
   EXPECT_NE(Caller.find("sum(0)"), std::string::npos) << C;
   EXPECT_EQ(Caller.find("0.0"), std::string::npos) << C;
-  EXPECT_EQ(Caller.find(", 0, 0)"), std::string::npos) << C;
-  EXPECT_NE(Caller.find(", 4, 0)"), std::string::npos) << C;
+  EXPECT_EQ(Caller.find(", (uint64_t)0, (uint64_t)0)"), std::string::npos) << C;
+  EXPECT_NE(Caller.find(", (int64_t)4, (uint64_t)0)"), std::string::npos) << C;
   // Clang keeps x across the first dsum call in [rsp], below the stack
   // arguments: no integer argument.
   EXPECT_NE(Caller.find("dsum(2, 1.5, "), std::string::npos) << C;

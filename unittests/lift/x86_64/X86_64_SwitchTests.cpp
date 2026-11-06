@@ -30,9 +30,21 @@ TEST_F(X86_64_SwitchTest, BreakOnlyCasesKeepTheDefaultArm) {
   ASSERT_NE(Default, std::string::npos) << C;
   const size_t End = C.find('}', Default);
   ASSERT_NE(End, std::string::npos) << C;
-  EXPECT_NE(C.substr(Default, End - Default).find("convert_error("),
-            std::string::npos)
-      << C;
+  // The arm holds the source's error path, or jumps to it where the
+  // out-of-range check shares that block.
+  const std::string Arm = C.substr(Default, End - Default);
+  size_t Path = Arm.find("convert_error(") == std::string::npos ? End : Default;
+  if (Path == End) {
+    const size_t Goto = Arm.find("goto ");
+    ASSERT_NE(Goto, std::string::npos) << C;
+    const size_t Semicolon = Arm.find(';', Goto);
+    ASSERT_NE(Semicolon, std::string::npos) << C;
+    const std::string Label = Arm.substr(Goto + 5, Semicolon - Goto - 5) + ":";
+    Path = C.find(Label, End);
+    ASSERT_NE(Path, std::string::npos) << C;
+    EXPECT_NE(C.find("convert_error(", Path), std::string::npos) << C;
+  }
+  EXPECT_EQ(Arm.find("__builtin_trap"), std::string::npos) << C;
 }
 
 TEST_F(X86_64_SwitchTest, LowIRProduced) {
