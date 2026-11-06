@@ -41,7 +41,10 @@
 
 #include "SymSynthDetail.h"
 
+#include "neverd/symbolic/Limits.h"
+
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
@@ -59,11 +62,21 @@ using Behaviour = llvm::ArrayRef<uint64_t>;
 
 uint64_t hashBehaviour(Behaviour Words) {
   uint64_t Hash = 0xCBF29CE484222325ull;
-  for (const uint64_t Word : Words) {
-    Hash ^= Word;
+  const size_t Step = std::max<size_t>(
+      Words.size() / limits::symbolic::kSynthBehaviourHashWords, 1);
+  for (size_t I = 0; I < Words.size(); I += Step) {
+    Hash ^= Words[I];
     Hash *= 0x100000001B3ull;
   }
-  return Hash;
+  // Clear of the two keys a DenseMap keeps for itself.
+  return Hash >> 1;
+}
+
+/// The behaviour array this thread keeps between searches.  Growing a new one
+/// for each search copies it repeatedly and faults in fresh pages.
+std::vector<uint64_t> &retainedBehaviours() {
+  static thread_local std::vector<uint64_t> Words;
+  return Words;
 }
 
 void appendSignature(const Signature &Sig, std::vector<uint64_t> &Words) {
@@ -82,30 +95,44 @@ void appendSignature(const Signature &Sig, std::vector<uint64_t> &Words) {
 /// measuring a candidate reads its operands' at every point.
 class TermBank {
 public:
-  explicit TermBank(size_t BehaviourWords) : BehaviourWords(BehaviourWords) {}
+  explicit TermBank(size_t BehaviourWords) : BehaviourWords(BehaviourWords) {
+    Flat.swap(retainedBehaviours());
+    Flat.clear();
+  }
+
+  ~TermBank() {
+    if (Flat.capacity() <= limits::symbolic::kSynthRetainedBehaviourWords)
+      Flat.swap(retainedBehaviours());
+  }
+
+  TermBank(const TermBank &) = delete;
+  TermBank &operator=(const TermBank &) = delete;
 
   /// Record \p Node under \p Words at \p Cost, unless something already behaves
   /// that way.  True when it was recorded.
   bool insert(SymRef Node, Behaviour Words, size_t Cost) {
     const uint64_t Hash = hashBehaviour(Words);
-    llvm::SmallVector<size_t, 2> &Bucket = ByHash[Hash];
-    for (size_t I : Bucket)
-      if (behaviour(I) == Words)
-        return false;
+    if (contains(Hash, Words))
+      return false;
+    add(Hash, Node, Words, Cost);
+    return true;
+  }
 
+  /// Record \p Node under a behaviour \c contains did not find for this \p
+  /// Hash.
+  void add(uint64_t Hash, SymRef Node, Behaviour Words, size_t Cost) {
     const size_t Index = Nodes.size();
     Nodes.push_back(Node);
     Flat.insert(Flat.end(), Words.begin(), Words.end());
-    Bucket.push_back(Index);
+    ByHash[Hash].push_back(Index);
     std::vector<size_t> &Tier = ByCost[Cost];
     if (Tier.empty())
       Costs.push_back(Cost);
     Tier.push_back(Index);
-    return true;
   }
 
-  bool contains(Behaviour Words) const {
-    auto It = ByHash.find(hashBehaviour(Words));
+  bool contains(uint64_t Hash, Behaviour Words) const {
+    auto It = ByHash.find(Hash);
     if (It == ByHash.end())
       return false;
     for (size_t I : It->second)
@@ -136,7 +163,7 @@ private:
   /// visits them the same way on every run.
   std::unordered_map<size_t, std::vector<size_t>> ByCost;
   std::vector<size_t> Costs;
-  std::unordered_map<uint64_t, llvm::SmallVector<size_t, 2>> ByHash;
+  llvm::DenseMap<uint64_t, llvm::SmallVector<size_t, 2>> ByHash;
 };
 
 } // namespace
@@ -281,7 +308,8 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
     measure(Op, Operands);
 
     const bool Matches = Behaviour(Measured) == Behaviour(Target);
-    const bool Fresh = !Bank.contains(Measured);
+    const uint64_t Hash = hashBehaviour(Measured);
+    const bool Fresh = !Bank.contains(Hash, Measured);
     if (!Matches && !Fresh)
       return true;
 
@@ -291,7 +319,7 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
     SymRef Node = buildGramOp(Ctx, Op, ArgNodes);
 
     if (Fresh)
-      Bank.insert(Node, Measured, Cost);
+      Bank.add(Hash, Node, Measured, Cost);
     return !Matches || offer(Node, Cost);
   };
 
