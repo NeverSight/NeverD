@@ -1502,7 +1502,7 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
             "MaxModeledScratchBytes",
             "1,024",
             "ScratchFlowRetainedByteBudget",
-            "8,388,608",
+            "16,777,216",
             "ScratchRecoveryPrecision::BlockLocal",
             "recovery scratch-precision=block-local",
             "disable_deploy_of_alloc_free_syscall",
