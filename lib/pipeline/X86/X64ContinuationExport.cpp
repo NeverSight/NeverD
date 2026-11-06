@@ -328,10 +328,6 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
     Result.Addresses.push_back(*Address);
   }
   if (const auto *Value = Object->get("function_calls")) {
-    if (Options.ScheduledEvents)
-      return invalid(
-          "function_calls uses unscheduled drivers; scheduled "
-          "activations require the explicit function_context driver");
     const auto *Calls = Value->getAsArray();
     if (!Result.FunctionContext || !Calls || Calls->empty() ||
         Calls->size() > Result.Addresses.size())
@@ -808,7 +804,13 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                                     nullptr, BinaryFormat::ELF, false, &Bodies)
             : MedLLVMEmitter().emit(Functions, Context);
     if (Module)
-      preserveX64StateObjectPointers(*Module, Units->front().StateBytes);
+      // The event producer is first. Borrow its name only after vector growth
+      // and only on the LLVM route that consumes the declared object contract.
+      preserveX64StateObjectPointers(
+          *Module, Units->front().StateBytes,
+          Request->Options.EventDelivery
+              ? llvm::StringRef(Functions.front().Name)
+              : llvm::StringRef());
     if (!Module || llvm::verifyModule(*Module, &llvm::errs()) ||
         !LLVMCEmitter().emit(*Module, OS, Options))
       return invalid("x64 continuation LLVM C emission failed");
@@ -897,13 +899,17 @@ typedef struct neverd_x64_event_v1 {
     if (Request->FunctionContext)
       emitX64ContinuationEnvironment(OS, Version, true);
   }
-  FunctionCalls = emitX64FunctionCalls(OS, Request->FunctionCalls,
-                                       Request->Options.PagedMemory);
-  FunctionCallSites =
-      emitX64FunctionCallSites(OS, *CallSites, Request->Options.PagedMemory);
   if (Request->Options.ScheduledEvents)
-    emitX64ContinuationSchedule(OS, *Units, Request->FollowInternalCalls,
-                                Request->FunctionContext, Request->Options);
+    emitX64ContinuationSchedule(
+        OS, *Units, Request->FollowInternalCalls, Request->FunctionContext,
+        Request->Options, *CallSites,
+        Request->PauseCallSites ? &CallSitePauses : nullptr);
+  FunctionCalls = emitX64FunctionCalls(OS, Request->FunctionCalls,
+                                       Request->Options.PagedMemory,
+                                       Request->Options.ScheduledEvents);
+  FunctionCallSites =
+      emitX64FunctionCallSites(OS, *CallSites, Request->Options.PagedMemory,
+                               Request->Options.ScheduledEvents);
   llvm::json::Array RtmAborts;
   if (Request->NativeRtmAbortRegions)
     RtmAborts = emitX64RtmAbortEnvironment(OS, Image, *Units,
@@ -1256,6 +1262,26 @@ typedef struct neverd_x64_event_v1 {
         "active resumes never replay CALL; initial state, address-space "
         "lifetime and external effects remain producer obligations";
   }
+  if (Request->Options.ScheduledEvents && !Request->FunctionCalls.empty()) {
+    auto &Contract = *Report["function_calls"].getAsObject();
+    Contract["scheduled_events"] = true;
+    Contract["scheduled_domain"] =
+        "checked call/resume interfaces use the scheduled function driver; "
+        "retain interruptibility, instruction and poll budgets, producer and "
+        "memory contexts across pauses; cached completion accesses none of "
+        "them; no environment callback or handler resumption is implicit";
+    if (!CallSites->empty()) {
+      auto &Sites = *Report["function_call_sites"].getAsObject();
+      Sites["scheduled_events"] = true;
+      Sites["scheduled_domain"] =
+          "the shared scheduler validates and polls before the original CALL; "
+          "only attempted CALL success begins the callee; event entry and "
+          "faults retain the pending site and their actual state effects; "
+          "restore the original CALL PC/SP before retrying a pending site; "
+          "active resumes never replay CALL; the scheduler owns budgets and "
+          "shadow expiry";
+    }
+  }
   if (Request->PauseCallSites)
     Report["call_site_pause"] = llvm::json::Object{
         {"status", uint64_t(X64ContinuationExitV1::CallSiteReady)},
@@ -1265,6 +1291,16 @@ typedef struct neverd_x64_event_v1 {
                    "instruction budget still returns 9; retain the caller "
                    "activation and resume through its call-site bridge; "
                    "environment callbacks do not handle this stop"}};
+  if (Request->PauseCallSites && Request->Options.ScheduledEvents) {
+    auto &Contract = *Report["call_site_pause"].getAsObject();
+    Contract["scheduled_events"] = true;
+    Contract["domain"] =
+        "scheduler entry validates its producer and shadow fields; a selected "
+        "CALL pause precedes instruction validation, event polling and all "
+        "budget charges; zero instruction budget still returns 9; retain the "
+        "caller activation and resume through its call-site bridge, which "
+        "performs that original boundary once";
+  }
   llvm::raw_string_ostream(Result.Manifest)
       << llvm::formatv("{0:2}\n", llvm::json::Value(std::move(Report)));
   return Result;

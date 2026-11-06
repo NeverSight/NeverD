@@ -223,8 +223,8 @@ A completed or invalid activation is checked before any runtime state, budget
 or callback access. The original scheduled entry point remains an adapter with
 no activation boundary. The manifest's `function_context.scheduled_driver`
 names the new entry point. Other drivers do not acquire implicit event polling.
-`function_calls` and its call-site views remain rejected with scheduled events:
-those wrappers use the unscheduled drivers. Omitting `function_context` retains
+`function_calls` and its call-site views use the scheduled interfaces described
+below when scheduled events are requested. Omitting `function_context` retains
 the previous scheduler source. This composition adds checks only to selected
 near returns; it adds no scan, guest-memory observation or ordinary-C analysis.
 
@@ -440,6 +440,51 @@ bridge, then resume it after the callee completes. With pauses disabled, the
 complete existing dispatcher remains unchanged. The manifest marks paged site
 interfaces with `paged_memory: true` and `entry_guest_memory_reads: false` and
 records the producer's pending-retry obligation.
+
+### Scheduled checked calls and original CALL sites
+
+With `scheduled_events`, checked entry and call-site views take the scheduler's
+interruptibility state, poll budget and producer callbacks. Their names include
+`events`, for example:
+
+```c
+neverd_x64_call_result_v1 result = neverd_x64_call_paged_events_site_1005_v6(
+    &state, paged_context, &instruction_budget, &site,
+    &shadows, &poll_budget, peek, accepted, event_context,
+    arg0, arg2, arg3);
+```
+
+This example has declared widths `[1, null, 4, 8, null, null]`; omitted slots
+remain in original state. Nonpaged signatures omit `paged_context`. Entry views
+use `call_events_<entry>_v6` or `call_paged_events_<entry>_v6`; matching `resume`
+views omit scalar arguments. Resume retains the activation and result cache.
+A cached result needs no machine state, budget, producer, shadows or memory
+context. No ordinary environment callback is invoked implicitly.
+
+The original CALL uses a specialized instance of the same scheduler and stops
+after that CALL. It validates, polls, charges attempts and expires inhibition
+under the shared rules. Only successful CALL status, plus instruction-attempt
+progress in paged mode, starts the callee activation. An accepted event or
+fault leaves the CALL pending, even if the handler's PC/SP equal the callee's
+coordinates. The producer handles the boundary and restores the original CALL
+PC/SP before retrying. Once active, resumption never repeats the CALL or pushes
+another return cell. Callee events and faults retain that activation.
+
+`pause_call_sites` also applies to the scheduled function driver. Its entry
+checks validate producer and shadow fields; selected CALL labels then return
+21 before instruction validation, polling or budget consumption. The bridge
+performs that boundary when invoked. Zero instruction budget still returns 9.
+Retain the parent activation and the same shadows, contexts and budgets across
+handoff; they and the call/site contexts must be mutually disjoint from guest
+RAM. Handler resumption and return-cell/address-space lifetime remain producer
+obligations. Paged scalar stack checks remain rejected.
+
+These wrappers add no ordinary-source analysis. Specialized CALL schedulers
+are emitted only for declared sites; unscheduled requests and scheduled
+requests without call views retain their previous drivers. Nonpaged LLVM C
+event delivery also preserves the producer-declared event object's pointer,
+using bounded object offsets for its fields. This supplies no object bounds
+for guest addresses or ordinary parameters.
 
 ## Invocation
 
