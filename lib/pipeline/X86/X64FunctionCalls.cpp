@@ -15,6 +15,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <string>
@@ -111,10 +112,13 @@ typedef struct neverd_x64_call_result_v1 {
 )C";
   for (const auto &Call : Calls) {
     const auto Entry = llvm::utohexstr(Call.Entry);
-    const std::string Prefix = std::string(PagedMemory ? "paged_" : "") +
-                               (ScheduledEvents ? "events_" : "");
-    const std::string Start = "neverd_x64_call_" + Prefix + Entry + "_v6";
-    const std::string Resume = "neverd_x64_resume_" + Prefix + Entry + "_v6";
+    const llvm::StringRef Prefix =
+        PagedMemory ? (ScheduledEvents ? "paged_events_" : "paged_")
+                    : (ScheduledEvents ? "events_" : "");
+    const std::string Start =
+        (llvm::Twine("neverd_x64_call_") + Prefix + Entry + "_v6").str();
+    const std::string Resume =
+        (llvm::Twine("neverd_x64_resume_") + Prefix + Entry + "_v6").str();
     const auto ResultType =
         "uint" + std::to_string(Call.ResultBytes * 8) + "_t";
     const llvm::StringRef Parameters =

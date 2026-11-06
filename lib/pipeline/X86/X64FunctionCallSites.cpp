@@ -20,6 +20,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -133,10 +134,13 @@ typedef struct neverd_x64_call_site_context_v1 {
     const auto &Unit = *Site.Instruction;
     const auto Address = llvm::utohexstr(Unit.Address);
     const auto Entry = llvm::utohexstr(Call.Entry);
-    const std::string Prefix = std::string(PagedMemory ? "paged_" : "") +
-                               (ScheduledEvents ? "events_site_" : "site_");
-    const std::string Start = "neverd_x64_call_" + Prefix + Address + "_v6";
-    const std::string Resume = "neverd_x64_resume_" + Prefix + Address + "_v6";
+    const llvm::StringRef Prefix =
+        PagedMemory ? (ScheduledEvents ? "paged_events_site_" : "paged_site_")
+                    : (ScheduledEvents ? "events_site_" : "site_");
+    const std::string Start =
+        (llvm::Twine("neverd_x64_call_") + Prefix + Address + "_v6").str();
+    const std::string Resume =
+        (llvm::Twine("neverd_x64_resume_") + Prefix + Address + "_v6").str();
     const llvm::StringRef Parameters =
         ScheduledEvents ? x64ScheduledCallParameters(PagedMemory, true)
         : PagedMemory

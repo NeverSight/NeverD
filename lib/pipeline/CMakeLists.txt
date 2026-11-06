@@ -12,7 +12,6 @@ add_neverd_component_library(NeverDPipeline
   X86/X64ContinuationSchedule.cpp
   X86/X64FunctionContext.cpp
   X86/X64FunctionCalls.cpp
-  X86/X64FunctionCallSchedule.cpp
   X86/X64FunctionCallSites.cpp
   X86/X64RtmAbortRegions.cpp
   X86/X64RtmRegions.cpp
@@ -48,6 +47,7 @@ add_neverd_component_library(NeverDPipeline
   PipelineReturnContracts.cpp
   PipelineWideIntReturn.cpp
   PipelineWideIntReturnEvidence.cpp
+  X86/X64FunctionCallSchedule.cpp
 
   LINK_COMPONENTS
   BinaryInterpreterSpecialization

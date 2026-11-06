@@ -684,7 +684,6 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
        Request->DirectDispatch))
     return invalid("paged memory requires its bounded paged dispatcher");
   std::vector<MedFunc> Functions;
-  std::string EventFunctionName;
   const std::map<va_t, SourceFunctionTypeHint> PagedCallees{
       {kX64PagedAccessAddress, x64PagedAccessSourceABI()}};
   const std::map<va_t, std::string> PagedNames{
@@ -729,7 +728,6 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
     auto Event = buildX64ContinuationEventSource(Request->Options);
     if (!Event)
       return Event.takeError();
-    EventFunctionName = Event->Function.Name;
     if (auto Error = AddFunction(Event->Function, Event->SourceABI))
       return std::move(Error);
   }
@@ -801,8 +799,13 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                                     nullptr, BinaryFormat::ELF, false, &Bodies)
             : MedLLVMEmitter().emit(Functions, Context);
     if (Module)
-      preserveX64StateObjectPointers(*Module, Units->front().StateBytes,
-                                     EventFunctionName);
+      // The event producer is first. Borrow its name only after vector growth
+      // and only on the LLVM route that consumes the declared object contract.
+      preserveX64StateObjectPointers(
+          *Module, Units->front().StateBytes,
+          Request->Options.EventDelivery
+              ? llvm::StringRef(Functions.front().Name)
+              : llvm::StringRef());
     if (!Module || llvm::verifyModule(*Module, &llvm::errs()) ||
         !LLVMCEmitter().emit(*Module, OS, Options))
       return invalid("x64 continuation LLVM C emission failed");

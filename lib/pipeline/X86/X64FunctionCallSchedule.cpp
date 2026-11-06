@@ -10,6 +10,7 @@
 #include "X64FunctionCallSchedule.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace neverd {
@@ -55,7 +56,9 @@ void emitX64ScheduledCallArguments(llvm::raw_ostream &OS, bool PagedMemory,
 }
 
 std::string x64ScheduledCallSiteStepName(va_t Address) {
-  return "neverd_x64_scheduled_call_site_" + llvm::utohexstr(Address) + "_v6";
+  return (llvm::Twine("neverd_x64_scheduled_call_site_") +
+          llvm::utohexstr(Address) + "_v6")
+      .str();
 }
 
 } // namespace neverd
