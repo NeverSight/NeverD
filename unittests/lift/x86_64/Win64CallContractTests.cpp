@@ -5830,6 +5830,65 @@ TEST(Win64CallContract, ADataImportReadsAsItsSlot) {
   EXPECT_EQ(Source.find("refptr"), std::string::npos) << Source;
 }
 
+TEST(Win64CallContract, PreparedImageNamesNameEveryDataSlotAsTheImageDoes) {
+  // Three data imports read through their slots: one with a label and two
+  // `__imp_` symbols at its slot (the first names it), one whose `__imp_`
+  // name a symbol elsewhere holds (it keeps no slot identifier), and one the
+  // format's prefix and its name alone name.  An emitter that prepared the
+  // image's names writes what one reading the image writes.
+  constexpr va_t First = Text, Second = Text + 0x20, Third = Text + 0x40;
+  std::vector<uint8_t> Code(0x60, 0xCC);
+  for (auto [At, Index] :
+       {std::pair{First, size_t{0}}, std::pair{Second, size_t{1}},
+        std::pair{Third, size_t{2}}}) {
+    std::vector<uint8_t> Read = {0x48, 0x8B, 0x05}; // mov rax, [rip + slot]
+    for (uint8_t B : rel32(At + 7, slot(Index)))
+      Read.push_back(B);
+    Read.push_back(0xC3); // ret
+    put(Code, At, Read);
+  }
+  BinaryImage Img = makeImage(Code,
+                              {{First, "read_commode"},
+                               {Second, "read_fmode"},
+                               {Third, "read_environ"}},
+                              {"_commode", "_fmode", "_environ"});
+  for (auto [Name, Address] : {std::pair{"commode_cell", slot(0)},
+                               std::pair{"__imp_commode_first", slot(0)},
+                               std::pair{"__imp_commode_second", slot(0)},
+                               std::pair{"__imp__fmode", Text + 0x58}}) {
+    Symbol Sym;
+    Sym.Name = Name;
+    Sym.Addr = Address;
+    Img.Symbols.push_back(std::move(Sym));
+  }
+  llvm::LLVMContext Ctx;
+  const PipelineResult Result = run(Img, Ctx, {First, Second, Third});
+  const auto Emit = [&](HighCEmitter &Emitter) {
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Img.Arch;
+    Options.Format = Img.Format;
+    Options.Image = &Img;
+    EXPECT_TRUE(Emitter.emit(Result.HighFuncs, OS, Options));
+    return Source;
+  };
+  HighCEmitter Plain;
+  HighCEmitter Prepared;
+  Prepared.prepareImageFunctionNames(Img);
+  const std::string Source = Emit(Prepared);
+  EXPECT_EQ(Source, Emit(Plain));
+  EXPECT_NE(body(Source, "read_commode").find("__imp_commode_first"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("__imp_commode_second"), std::string::npos) << Source;
+  EXPECT_EQ(body(Source, "read_fmode").find("__imp__fmode"), std::string::npos)
+      << Source;
+  EXPECT_NE(body(Source, "read_environ").find("__imp__environ"),
+            std::string::npos)
+      << Source;
+}
+
 TEST(Win64CallContract, AFloatArgumentTakesItsSlotsVectorRegister) {
   // scale(x, n) = x * n reads x in xmm0, the first slot's vector register,
   // and n in edx, the second slot's integer one. twice(x) = x + x;

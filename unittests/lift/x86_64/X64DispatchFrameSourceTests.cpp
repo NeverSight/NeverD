@@ -103,6 +103,85 @@ TEST(X64DispatchFrame, RequiresEveryOriginalByteAndCodeTarget) {
   EXPECT_FALSE(x64DispatchFrame(Image, InvalidVA - 10));
 }
 
+TEST(X64DispatchFrame, PreparedImageNamesReadTheBridgeAsTheImageDoes) {
+  auto Image = bridgeImage();
+  for (Symbol &Sym : Image.Symbols)
+    Sym.Origin = NameOrigin::Stated;
+  // Names getFunctionNameAt chooses among, ahead of the bridge's own: a label
+  // and a synthesized start at the linkage, which rank below its function
+  // symbol, and a section's own symbol there, which names nothing.
+  Symbol Label;
+  Label.Name = "linkage_label";
+  Label.Addr = Linkage;
+  Symbol Started = Symbol::makeFunc(Linkage);
+  Symbol Section;
+  Section.Name = "text_section";
+  Section.Addr = Linkage;
+  Section.IsSection = true;
+  Image.Symbols.insert(Image.Symbols.begin(), {Label, Started, Section});
+  // A function symbol of the same rank after the linkage's own; a second
+  // function of the dispatcher's name, which shared numbering names apart;
+  // and addresses only a section's symbol or an unnamed one marks.
+  for (auto [Address, Name] : {std::pair{Linkage, "linkage_twin"},
+                               std::pair{Caller, "native_dispatch"}}) {
+    auto Function = Symbol::makeFunc(Address);
+    Function.Name = Name;
+    Function.Origin = NameOrigin::Stated;
+    Image.Symbols.push_back(std::move(Function));
+  }
+  constexpr va_t SectionOnly = 0x1240, Unnamed = 0x1250;
+  Section.Addr = SectionOnly;
+  Image.Symbols.push_back(Section);
+  auto Nameless = Symbol::makeFunc(Unnamed);
+  Nameless.Name.clear();
+  Nameless.Origin = NameOrigin::Stated;
+  Image.Symbols.push_back(std::move(Nameless));
+  Image.numberSharedFunctionNames();
+  // An unnamed export ahead of a named one at the dispatcher: the name is
+  // the first export's or a symbol's.
+  Export First, Second;
+  First.Addr = Second.Addr = Dispatcher;
+  Second.Name = "exported_dispatch";
+  Image.Exports = {First, Second};
+  ASSERT_EQ(Image.getFunctionNameAt(Linkage), "native_linkage");
+  ASSERT_EQ(Image.getFunctionNameAt(Dispatcher), "native_dispatch");
+  ASSERT_NE(Image.getFunctionNameAt(Caller), "native_dispatch");
+  const HighCImageNameIndex Index = collectImageNameIndex(Image);
+  for (va_t Address :
+       {Entry, Linkage, Dispatcher, Caller, SectionOnly, Unnamed, va_t{0x1234}})
+    EXPECT_EQ(Index.functionNameAt(Image, Address),
+              Image.getFunctionNameAt(Address))
+        << std::hex << Address;
+
+  // The bridge an emitter that prepared the image's names writes is the
+  // one an emitter reading the image writes.
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  Options.OnlyFunctionEntries = {Entry};
+  Options.SourceProjection = true;
+  const auto Result = Pipeline().run(Image, Context, Options);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  const auto Emit = [&](HighCEmitter &Emitter) {
+    CEmitterOptions Emit;
+    Emit.Image = &Image;
+    Emit.TheArch = Arch::X64;
+    Emit.Format = BinaryFormat::COFF;
+    std::string Text;
+    llvm::raw_string_ostream Stream(Text);
+    EXPECT_TRUE(Emitter.emit(Result.HighFuncs, Stream, Emit));
+    return Text;
+  };
+  HighCEmitter Plain;
+  HighCEmitter Prepared;
+  Prepared.prepareImageFunctionNames(Image);
+  const std::string Text = Emit(Prepared);
+  EXPECT_EQ(Text, Emit(Plain));
+  EXPECT_NE(Text.find("neverd.native-bridge"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("native_linkage"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("native_dispatch"), std::string::npos) << Text;
+}
+
 TEST(X64DispatchFrame, RejectsForeignImagesRelocationsAndAssemblyNames) {
   for (unsigned Case = 0; Case < 9; ++Case) {
     auto Image = bridgeImage();

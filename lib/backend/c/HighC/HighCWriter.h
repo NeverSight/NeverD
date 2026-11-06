@@ -30,6 +30,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/DataSymbolBinding.h"
+#include "neverd/loader/X86/X64DispatchFrame.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -148,14 +149,16 @@ public:
       const HighCImageDataObjects *SharedDataObjects = nullptr,
       const HighCImageFunctionSymbols *SharedFunctionSymbols = nullptr,
       const PreparedPortableX87Function *PortableInterface = nullptr,
-      const std::unordered_set<std::string_view> *SharedLinkNames = nullptr)
+      const std::unordered_set<std::string_view> *SharedLinkNames = nullptr,
+      const HighCImageNameIndex *SharedNameIndex = nullptr)
       : OS(Stream), Opts(Opts), Dbg(Dbg),
         GuardAnalysisOnlyFunctions(GuardAnalysisOnlyFunctions),
         SharedImageFunctionNames(SharedNames), SourceRecorder(Recorder),
         SharedDataObjects(SharedDataObjects),
         SharedFunctionSymbols(SharedFunctionSymbols),
         PortableInterface(PortableInterface),
-        SharedFunctionLinkNames(SharedLinkNames) {}
+        SharedFunctionLinkNames(SharedLinkNames),
+        SharedNameIndex(SharedNameIndex) {}
 
   //--- Module-level (HighCEmitter.cpp) ---
   void writeAll(const std::vector<HighFunc> &Funcs);
@@ -487,6 +490,15 @@ public:
   /// import's own slot in the import address table, not a stub that jumps
   /// through it; empty otherwise.
   std::string importDataSlotIdentifier(va_t Addr) const;
+  /// importSlotIdentifier's answers, by call address: the image does not
+  /// change while a unit is written.
+  mutable std::unordered_map<va_t, std::string> ImportSlotIdentifierAt;
+  /// The physical dispatch bridge (x64DispatchFrame) at the entry of a
+  /// function the unit writes, read once: a definition asks three times, and
+  /// a bridge names two functions of the image.
+  const std::optional<X64DispatchFrame> &dispatchFrame(va_t Entry) const;
+  mutable std::unordered_map<va_t, std::optional<X64DispatchFrame>>
+      DispatchFrames;
   /// The import slot a read of \p Size bytes at \p Address reads as data, a
   /// data import's address: the slot at a constant address, or the slot a
   /// read-only pointer holds (MinGW's `.refptr.__imp__fmode`).
@@ -1735,6 +1747,10 @@ public:
   /// on the first query (imageFunctionOwnsLinkIdentifier).
   const std::unordered_set<std::string_view> *SharedFunctionLinkNames;
   std::optional<std::unordered_set<std::string_view>> ImageFunctionLinkNames;
+  /// The image's name lookups by address, which the emitter prepared for
+  /// the image, or null: a unit written alone scans the image for the few
+  /// names it asks.
+  const HighCImageNameIndex *SharedNameIndex;
   bool imageFunctionOwnsLinkIdentifier(llvm::StringRef Name);
   /// The symbols of those functions this output does not define, declared as
   /// the functions it calls are.

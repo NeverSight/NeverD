@@ -5219,6 +5219,49 @@ collectImageFunctionSymbols(const BinaryImage &Image) {
   return Symbols;
 }
 
+HighCImageNameIndex collectImageNameIndex(const BinaryImage &Image) {
+  HighCImageNameIndex Index;
+  for (const Export &Exp : Image.Exports)
+    Index.FirstExports.try_emplace(Exp.Addr, &Exp);
+  std::unordered_set<va_t> Slots;
+  for (const Import &Imp : Image.Imports)
+    if (Imp.IATAddr)
+      Slots.insert(Imp.IATAddr);
+  std::vector<llvm::StringRef> SlotPrefixes;
+#define NEVERD_IMPORT_SLOT_PREFIX(FormatId, Prefix)                            \
+  SlotPrefixes.push_back(Prefix);
+#include "neverd/loader/SymbolDecorations.def"
+  for (const Symbol &Sym : Image.Symbols) {
+    // As functionNameSymbolAt chooses: the first of the highest rank.
+    if (!Sym.Name.empty() && !Sym.IsSection) {
+      auto [Best, Fresh] =
+          Index.FunctionNameSymbols.try_emplace(Sym.Addr, &Sym);
+      if (!Fresh && BinaryImage::functionNameRank(Sym) >
+                        BinaryImage::functionNameRank(*Best->second))
+        Best->second = &Sym;
+    }
+    if (Slots.count(Sym.Addr))
+      Index.ImportSlotSymbols[Sym.Addr].push_back(&Sym);
+    if (llvm::any_of(SlotPrefixes, [&](llvm::StringRef Prefix) {
+          return llvm::StringRef(Sym.Name).starts_with(Prefix);
+        }))
+      Index.ImportSlotNamed.try_emplace(Sym.Name, &Sym);
+  }
+  return Index;
+}
+
+std::string HighCImageNameIndex::functionNameAt(const BinaryImage &Image,
+                                                va_t Addr) const {
+  // As BinaryImage::getFunctionNameAt reads the image.
+  if (const auto Exp = FirstExports.find(Addr);
+      Exp != FirstExports.end() && !Exp->second->Name.empty())
+    return Exp->second->Name;
+  if (const auto Best = FunctionNameSymbols.find(Addr);
+      Best != FunctionNameSymbols.end())
+    return Image.functionListName(Addr, Best->second->Name);
+  return (kAutoFuncPrefix + llvm::utohexstr(Addr)).str();
+}
+
 std::unordered_set<std::string_view>
 collectImageFunctionLinkNames(const BinaryImage &Image, BinaryFormat Format,
                               Arch Target) {
@@ -5237,6 +5280,7 @@ void HighCEmitter::prepareImageFunctionNames(const BinaryImage &Image) {
   PreparedImageFunctionNames = collectImageFunctionNameViews(Image);
   PreparedDataObjects = collectImageDataObjects(Image);
   PreparedFunctionSymbols = collectImageFunctionSymbols(Image);
+  PreparedNameIndex = collectImageNameIndex(Image);
   PreparedLinkFormat = Image.abiFormat();
   PreparedLinkArch = Image.Arch;
   PreparedFunctionLinkNames = collectImageFunctionLinkNames(
@@ -5419,7 +5463,8 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
                   Prepared ? &PreparedDataObjects : nullptr,
                   Prepared ? &PreparedFunctionSymbols : nullptr,
                   Portable ? PortableInterface : nullptr,
-                  PreparedLinks ? &PreparedFunctionLinkNames : nullptr);
+                  PreparedLinks ? &PreparedFunctionLinkNames : nullptr,
+                  Prepared ? &PreparedNameIndex : nullptr);
     W.ExtraRecords = Extra;
     W.WantedRecords = Wanted;
     W.prepareFunctionReturns(Working);

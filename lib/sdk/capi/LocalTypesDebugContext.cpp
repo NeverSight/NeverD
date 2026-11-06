@@ -966,6 +966,34 @@ void LocalTypesDebugContext::makeCRenderer() const {
   CRenderer = std::make_unique<types::EmbeddedCRenderer>(*Types, Options);
 }
 
+std::shared_ptr<const types::EmbeddedC> LocalTypesDebugContext::renderedC(
+    const std::vector<const types::LocalType *> &Roots) const {
+  if (const auto Known = Rendered.find(Roots); Known != Rendered.end())
+    return Known->second;
+  makeCRenderer();
+  auto Embedded =
+      std::make_shared<const types::EmbeddedC>(CRenderer->render(Roots));
+  size_t Bytes = Embedded->Text.size();
+  for (const auto *Names :
+       {&Embedded->Identifiers, &Embedded->Types, &Embedded->DeclaredTypes,
+        &Embedded->HeaderTypes, &Embedded->HeaderTypedefs})
+    for (const std::string &Name : *Names)
+      Bytes += Name.size();
+  for (const auto *Records :
+       {&Embedded->Records, &Embedded->Declared, &Embedded->HeaderRecords})
+    for (const auto &[Name, Union] : *Records)
+      Bytes += Name.size();
+  if (Bytes > kMaxLocalTypeRenderedBytes)
+    return Embedded;
+  if (RenderedBytes + Bytes > kMaxLocalTypeRenderedBytes) {
+    Rendered.clear();
+    RenderedBytes = 0;
+  }
+  Rendered.emplace(Roots, Embedded);
+  RenderedBytes += Bytes;
+  return Embedded;
+}
+
 void LocalTypesDebugContext::prepareDefinitions() const {
   std::lock_guard<std::mutex> Guard(Mutex);
   readRenamedInC();
@@ -1070,8 +1098,8 @@ LocalTypesDebugContext::definitions(const std::vector<TypeRef> &Records) const {
   }
   if (Roots.empty())
     return Result;
-  makeCRenderer();
-  const types::EmbeddedC Embedded = CRenderer->render(Roots);
+  const std::shared_ptr<const types::EmbeddedC> Kept = renderedC(Roots);
+  const types::EmbeddedC &Embedded = *Kept;
   Result.Text = Embedded.Text;
   for (const auto &[Name, Union] : Embedded.Records)
     Result.Records[Name] = Result.Tags[Name] = Union;

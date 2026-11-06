@@ -88,6 +88,10 @@ inline constexpr unsigned kMaxLocalTypeConversionDepth = 16;
 /// and share them (LocalTypesDebugContext::libraryRecord); a record that
 /// reaches more is converted afresh for each record it completes.
 inline constexpr size_t kMaxLocalTypeSharedClosure = 4096;
+/// Bytes of rendered record definitions a session keeps to give units that
+/// embed the same records again (LocalTypesDebugContext::definitions);
+/// past them it starts over.
+inline constexpr size_t kMaxLocalTypeRenderedBytes = 16u << 20;
 /// Admission and persistence use the same bound for function declarations.
 inline constexpr size_t kMaxFunctionDeclarationBytes = 4096;
 inline constexpr size_t kMaxUserNameBytes = 4096;

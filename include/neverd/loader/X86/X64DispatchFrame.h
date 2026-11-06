@@ -13,6 +13,7 @@
 #include "neverd/loader/RelocationProvenance.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Endian.h"
@@ -41,8 +42,11 @@ struct X64DispatchFrame {
   std::string TargetSymbol;
 };
 
+/// The bridge at \p Address, if one is there.  \p FunctionNameAt, when given,
+/// answers as Image.getFunctionNameAt does, from an index of the image.
 inline std::optional<X64DispatchFrame>
-x64DispatchFrame(const BinaryImage &Image, va_t Address) {
+x64DispatchFrame(const BinaryImage &Image, va_t Address,
+                 llvm::function_ref<std::string(va_t)> FunctionNameAt = {}) {
   if (Image.Arch != Arch::X64 || Image.Bits != Bitness::Bits64 ||
       Image.Format != BinaryFormat::COFF || Image.IsRelocatable ||
       Address > InvalidVA - X64DispatchFrame::EncodedBytes ||
@@ -86,13 +90,16 @@ x64DispatchFrame(const BinaryImage &Image, va_t Address) {
   const auto Linkage = Relative(15, 19), Target = Relative(26, 30);
   if (!Linkage || !Target)
     return std::nullopt;
+  const auto NameAt = [&](va_t At) {
+    return FunctionNameAt ? FunctionNameAt(At) : Image.getFunctionNameAt(At);
+  };
   X64DispatchFrame Result{Address,
                           *Linkage,
                           *Target,
                           llvm::support::endian::read32le(Bytes + 21),
                           static_cast<int8_t>(Bytes[11]),
-                          Image.getFunctionNameAt(*Linkage),
-                          Image.getFunctionNameAt(*Target)};
+                          NameAt(*Linkage),
+                          NameAt(*Target)};
   // Assembly operands name code symbols. Reject non-identifiers instead of
   // letting a display name introduce assembler syntax or choose a new target.
   const auto Symbol = [](llvm::StringRef Name) {
