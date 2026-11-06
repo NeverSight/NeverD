@@ -20356,6 +20356,23 @@ instruction execution, live context capture or an arbitrary fault handler.
 `X64PagedExecutionTests` separately owns the runtime's instruction/fault tests;
 compile-only checks do not replace that coverage.
 
+`X64ScheduledFunctionContextTest.*` checks scheduled activation admission,
+disabled source/manifest identity, explicit rejection of unscheduled scalar
+views and O0/O2 compilation in both C routes. Each route has 22 nonpaged and
+44 paged compile-time predicates. They retain
+the actual RET/RET-immediate/STI bodies and scheduler, covering return-cell
+ownership, nested returns, phase guards before runtime access, budget and poll
+ordering, shadow expiry, producer validation and context-free
+adapter behavior. Paged predicates additionally distinguish instruction-attempt
+and event-acceptance progress, IRQ/NMI admission and inhibition fields, blocked
+events, faults, backing/code-change stops, and explicit
+producer restoration before retry. Its independent boundary model supplies
+operand reads and paged outcomes; it does not implement or qualify page walks,
+fault entry or handlers. Memory and producer contexts remain separate. Every
+predicate must simplify to a single `ret i32 0` through ordinary LLVM
+optimization. These tests run no generated program, instruction executor or
+guest. Set `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to retain the proof C and IR.
+
 `X64PagedFunctionCallTest.*` checks register-only and context-only paged entry
 views, retained physical stack positions, unchanged instruction/driver text,
 and refusal of scalar stack checks. Both C routes compile

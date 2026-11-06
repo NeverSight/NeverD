@@ -1,5 +1,19 @@
 # Remaining x64 C-quality work
 
+Explicit function contexts now compose with IRQ/NMI scheduling in both the
+nonpaged and paged V6 drivers. The shared near-RET owner charges completion
+and emits the scheduler's shadow-expiry rule before returning; event delivery,
+faults and backing stops retain the activation. Paged instruction-attempt and
+event-acceptance progress stay distinct. Compile-time predicates retain the
+actual generated instruction/controller bodies and separately model paged
+boundary outcomes. No generated program, instruction executor or guest is run.
+Disabled source is unchanged and additional generated checks are confined to
+selected near returns. Scalar/call-site views remain unscheduled and are
+explicitly rejected in a scheduled request. Handler resumption, return-cell
+lifetime, state capture, the two ordinary registry inputs and complete external
+effects remain open; this closes the scheduled activation admission/composition
+gap only.
+
 Paged original-CALL bridges now reuse the faultable instruction owner and
 start a callee only after an attempted successful CALL. Faults and backing
 stops retain the pending site and the runtime's effects; the producer must

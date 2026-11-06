@@ -82,8 +82,8 @@ TEST_F(X64PagedFunctionContextTest, AdmissionAndBothSourceRoutes) {
     }
     for (
         const char *Extra :
-        {R"(,"dispatch":"direct")", R"(,"scheduled_events":true)",
-         R"(,"native_rtm_regions":true)", R"(,"pause_call_sites":true)",
+        {R"(,"dispatch":"direct")", R"(,"native_rtm_regions":true)",
+         R"(,"pause_call_sites":true)",
          R"(,"function_calls":[{"entry":4096,"abi":"win64","argument_bytes":[8,8,8,8,8],"result_bytes":8}])"}) {
       const auto Bad = pagedRequest(
           (",\"function_context\":true" + llvm::StringRef(Extra)).str());

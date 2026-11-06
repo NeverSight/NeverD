@@ -305,11 +305,9 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
   if (Result.FunctionContext &&
       (!Result.Entries || !Result.FollowInternalCalls ||
        Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
-       Options.ScheduledEvents || Result.NativeRtmRegions ||
-       Result.NativeRtmAbortRegions))
+       Result.NativeRtmRegions || Result.NativeRtmAbortRegions))
     return invalid("function_context requires kernel-events-v6 entries with "
-                   "follow_internal_calls, without scheduled events or "
-                   "native RTM regions");
+                   "follow_internal_calls, without native RTM regions");
   const auto *Addresses =
       Object->getArray(Result.Entries ? "entries" : "instructions");
   if (!Addresses || Addresses->empty() ||
@@ -325,6 +323,10 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
     Result.Addresses.push_back(*Address);
   }
   if (const auto *Value = Object->get("function_calls")) {
+    if (Options.ScheduledEvents)
+      return invalid(
+          "function_calls uses unscheduled drivers; scheduled "
+          "activations require the explicit function_context driver");
     const auto *Calls = Value->getAsArray();
     if (!Result.FunctionContext || !Calls || Calls->empty() ||
         Calls->size() > Result.Addresses.size())
@@ -896,7 +898,7 @@ typedef struct neverd_x64_event_v1 {
       emitX64FunctionCallSites(OS, *CallSites, Request->Options.PagedMemory);
   if (Request->Options.ScheduledEvents)
     emitX64ContinuationSchedule(OS, *Units, Request->FollowInternalCalls,
-                                Request->Options);
+                                Request->FunctionContext, Request->Options);
   llvm::json::Array RtmAborts;
   if (Request->NativeRtmAbortRegions)
     RtmAborts = emitX64RtmAbortEnvironment(OS, Image, *Units,
@@ -1184,6 +1186,19 @@ typedef struct neverd_x64_event_v1 {
          "only an attempted successful selected near RET completes; faults, "
          "backing stops and changed code retain the activation; no initial "
          "state capture, mapping-identity inference or scalar argument reads"});
+  if (Request->FunctionContext && Request->Options.ScheduledEvents) {
+    auto &Contract = *Report["function_context"].getAsObject();
+    Contract["scheduled_driver"] =
+        Request->Options.PagedMemory
+            ? "neverd_x64_continue_paged_events_function_v6"
+            : "neverd_x64_continue_events_function_v6";
+    Contract["scheduled_domain"] =
+        "successful selected near RET charges its instruction and expires "
+        "STI/SS inhibition before completing; paged completion requires "
+        "instruction-attempt progress; event entry, faults and backing stops "
+        "retain the activation; the producer owns handler state, return-cell "
+        "lifetime and resumption; no implicit event polling by other drivers";
+  }
   if (!FunctionCalls.empty())
     Report["function_calls"] = llvm::json::Object{
         {"context_type", "neverd_x64_call_context_v1"},

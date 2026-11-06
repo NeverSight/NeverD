@@ -13,6 +13,7 @@
 #include "neverd/Common.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringRef.h"
 
 namespace llvm {
@@ -38,10 +39,14 @@ void emitX64FunctionContextGuard(llvm::raw_ostream &OS);
 /// other steps use the ordinary driver's budget and boundary handling.
 /// Paged steps additionally require the executor's attempted-instruction bit;
 /// its fault/backing/code-change outcomes never complete the activation.
+/// OnReturn emits the enclosing driver's completion effects after charging
+/// the instruction and before publishing the returned phase.
 void emitX64FunctionContextStep(
     llvm::raw_ostream &OS,
     const analysis::X64ContinuationInstructionSource &Unit,
-    llvm::StringRef Indent, bool PagedMemory = false);
+    llvm::StringRef Indent, bool PagedMemory = false,
+    llvm::StringRef PagedContext = "context",
+    llvm::function_ref<void(llvm::StringRef)> OnReturn = {});
 
 /// Keep the original context-free entry point without duplicating its driver.
 void emitX64FunctionContextAdapter(llvm::raw_ostream &OS, unsigned Version);

@@ -9,6 +9,8 @@
 
 #include "X64ContinuationSchedule.h"
 
+#include "X64FunctionContext.h"
+
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
 
@@ -19,10 +21,24 @@
 
 namespace neverd {
 
+namespace {
+
+void emitCompletedShadows(llvm::raw_ostream &OS, llvm::StringRef Indent,
+                          bool Paged) {
+  OS << Indent
+     << "shadows->STIBlocked = (status == 0 && sti && !(old_flags & 512)"
+     << (Paged ? " && (state->RFlags & 512)" : "") << ");\n";
+  OS << Indent
+     << "shadows->SSBlocked = (status == 0 && mov_ss && "
+        "!shadows->SSBlocked);\n";
+}
+
+} // namespace
+
 void emitX64ContinuationSchedule(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
-    bool FollowInternalCalls,
+    bool FollowInternalCalls, bool FunctionContext,
     const analysis::X64ContinuationSourceOptions &Options) {
   const bool Paged = Options.PagedMemory;
   OS << R"C(
@@ -66,13 +82,23 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
 }
 
 )C";
-  OS << "uint64_t neverd_x64_continue_" << (Paged ? "paged_" : "")
-     << "events_v6(\n    neverd_x64_state_v6 *state, "
+  if (FunctionContext)
+    OS << "/* Retain the activation across event and instruction boundaries.\n"
+          " * Its storage is disjoint from state, shadows, budgets, both\n"
+          " * contexts and guest RAM; the producer owns return-cell lifetime. "
+          "*/\n";
+  OS << "uint64_t neverd_x64_continue_" << (Paged ? "paged_" : "") << "events"
+     << (FunctionContext ? "_function" : "")
+     << "_v6(\n    neverd_x64_state_v6 *state, "
      << (Paged ? "uint8_t *memory_context, " : "") << R"C(uint64_t *budget,
     neverd_x64_interruptibility_v1 *shadows, uint64_t *poll_budget,
     neverd_x64_peek_interrupt_v1 peek,
-    neverd_x64_accept_interrupt_v1 accepted, void *context) {
-    uint64_t last = 8;
+    neverd_x64_accept_interrupt_v1 accepted, void *context)C";
+  OS << (FunctionContext ? ", neverd_x64_function_context_v1 *function" : "")
+     << ") {\n";
+  if (FunctionContext)
+    emitX64FunctionContextGuard(OS);
+  OS << R"C(    uint64_t last = 8;
     if (!*budget) return 9;
     if (!peek || !accepted || shadows->STIBlocked > 1 || shadows->SSBlocked > 1 ||
         shadows->NMIBlockedBySTI > 1 ||
@@ -138,11 +164,20 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
         const uint64_t old_flags = state->RFlags;
         switch (state->PC) {
 )C";
-  for (const auto &Unit : Units)
-    OS << "        case 0x" << llvm::utohexstr(Unit.Address)
-       << "ULL: status = " << Unit.Function.Name
-       << (Paged ? "_paged_step(state, memory_context); break;\n"
-                 : "((uint8_t *)state); break;\n");
+  for (const auto &Unit : Units) {
+    OS << "        case 0x" << llvm::utohexstr(Unit.Address) << "ULL:";
+    if (FunctionContext && Unit.IsNearReturn) {
+      OS << "\n";
+      emitX64FunctionContextStep(OS, Unit, "            ", Paged,
+                                 "memory_context", [&](llvm::StringRef Indent) {
+                                   emitCompletedShadows(OS, Indent, Paged);
+                                 });
+      OS << "            break;\n";
+    } else
+      OS << " status = " << Unit.Function.Name
+         << (Paged ? "_paged_step(state, memory_context); break;\n"
+                   : "((uint8_t *)state); break;\n");
+  }
   OS << R"C(        default: return 5;
         }
 )C";
@@ -153,11 +188,7 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
     OS << "        if (status == 4 || status == 5) return status;\n";
   OS << R"C(        --*budget;
 )C";
-  OS << "        shadows->STIBlocked = (status == 0 && sti && !(old_flags & "
-        "512)"
-     << (Paged ? " && (state->RFlags & 512)" : "") << ");\n";
-  OS << R"C(        shadows->SSBlocked = (status == 0 && mov_ss && !shadows->SSBlocked);
-)C";
+  emitCompletedShadows(OS, "        ", Paged);
   if (Paged)
     OS << "        if (status == "
        << uint64_t(analysis::X64PagedExit::RepeatContinue) << ") status = 0;\n";
@@ -174,6 +205,17 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
     return 9;
 }
 )C";
+  if (FunctionContext)
+    OS << "uint64_t neverd_x64_continue_" << (Paged ? "paged_" : "")
+       << "events_v6(\n    neverd_x64_state_v6 *state, "
+       << (Paged ? "uint8_t *memory_context, " : "") << R"C(uint64_t *budget,
+    neverd_x64_interruptibility_v1 *shadows, uint64_t *poll_budget,
+    neverd_x64_peek_interrupt_v1 peek,
+    neverd_x64_accept_interrupt_v1 accepted, void *context) {
+    return neverd_x64_continue_)C"
+       << (Paged ? "paged_" : "") << "events_function_v6(state, "
+       << (Paged ? "memory_context, " : "")
+       << "budget, shadows, poll_budget, peek, accepted, context, 0);\n}\n";
 }
 
 } // namespace neverd
