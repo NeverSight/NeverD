@@ -53,6 +53,19 @@ CR2 and retained ordinary RAM remain checked. Repeat these tests on the
 qualified P/E cores and both SDKs; preserve raw failing probes as diagnostics.
 See [the legacy execution contract](x86-legacy-segments.md#protected-instruction-and-event-execution).
 
+`LegacyFar/*` in `NeverDX86PagingTests` compares protected far CALL/JMP and
+16/32-bit call gates against original KVM instructions. It checks independent
+code/operand/address/gate/TSS/stack widths, CPL/RPL/DPL, conforming targets,
+GDT/LDT caches, descriptor writes, parameter/frame memory, page faults and
+original handler repair/IRET/retry. Overlapping old/new stacks distinguish an
+ordered copy from prefetching arguments. Unit tests add RETF parameter cleanup,
+backing-stop/event resume and malformed/unbound admission. The ordinary-lift
+boundary is covered by `NeverDX86NonlocalControlTests`: strict and permissive,
+fast and detailed decoders must all refuse an unbound far branch without
+publishing partial operations. Repeat the native matrix on both qualified
+core classes and SDKs; run full paging and nonlocal-control checks after changes.
+See [protected far transfers](x86-legacy-segments.md#protected-far-transfers).
+
 `LegacyPorts/*` adds protected IN/OUT/INS/OUTS to that fixture with independent
 device tapes. These are KVM-intercepted I/O comparisons, not bare CPU device
 execution. They cover code/address/operand widths, CPL/IOPL, 16-bit TSS

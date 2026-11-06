@@ -16,6 +16,7 @@ class X86LegacyScalarNativeFixture : public X86PagingNativeTest {
 protected:
   unsigned Comparisons = 0;
   std::optional<X86LegacyCallProfile> Calls;
+  std::optional<X86LegacyFarTransferProfile> FarTransfers;
   std::optional<X86LegacyMultiplyProfile> Multiply;
   std::optional<uint32_t> ShiftUndefinedFlags;
   std::optional<X86LegacyDoubleShiftUndefinedState> DoubleShiftUndefined;
@@ -232,12 +233,12 @@ protected:
     for (unsigned I = 0; I != Segments.size(); ++I)
       State.Core.Segments[I] = Cache(*Segments[I]);
     State.Core.CPL = CPL;
-    State.Core.GDTRBase = GDT;
-    State.Core.GDTRLimit = 0xff;
+    State.Core.GDTRBase = Special.gdt.base;
+    State.Core.GDTRLimit = Special.gdt.limit;
     State.Core.LDTR = Cache(Special.ldt);
     State.TR = Cache(Special.tr);
-    State.IDTRBase = IDT;
-    State.IDTRLimit = 0x7ff;
+    State.IDTRBase = Special.idt.base;
+    State.IDTRLimit = Special.idt.limit;
     State.EIP = InstructionPC;
     State.EFlags = Flags;
     State.CR2 = Special.cr2;
@@ -273,6 +274,7 @@ protected:
     Options.BitScanChoices = BitScanChoices;
     Options.Atomics = Atomics;
     Options.Strings = Strings;
+    Options.FarTransfers = FarTransfers;
     PagedPortTape Tape, NativeTape;
     if (PortIO)
       Options.PortIO =

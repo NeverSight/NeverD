@@ -650,6 +650,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
 #include "X86LegacyDoubleShiftNativeTests.inc"
 #include "X86LegacyEventNativeTests.inc"
 #include "X86LegacyExchangeNativeTests.inc"
+#include "X86LegacyFarNativeTests.inc"
 #include "X86LegacyFastSystemNativeTests.inc"
 #include "X86LegacyFlagsNativeTests.inc"
 #include "X86LegacyImplicitNativeTests.inc"

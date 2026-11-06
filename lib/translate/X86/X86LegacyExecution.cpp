@@ -10,6 +10,7 @@
 #include "neverd/translate/X86/X86LegacyExecution.h"
 
 #include "X86LegacyExecutionInternal.h"
+#include "X86LegacyFarTransfer.h"
 #include "X86LegacyFastSystem.h"
 #include "X86LegacyPortIO.h"
 #include "X86LegacyScalar.h"
@@ -74,6 +75,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   const auto FastSystem = detail::decodeLegacyFastSystem(Instruction, Code32);
   const auto String = detail::decodeLegacyString(Instruction, Code32);
   const auto Port = detail::decodeLegacyPortIO(Instruction, Code32);
+  const auto Far = detail::decodeLegacyFarTransfer(Instruction, Code32);
   auto Body = Instruction;
   unsigned Width = Code32 ? 4 : 2;
   if (Body.front() == 0x66) {
@@ -90,9 +92,11 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   const bool IRET = Body.size() == 1 && Body[0] == 0xcf;
   const bool RETF = (Body.size() == 1 && Body[0] == 0xcb) ||
                     (Body.size() == 3 && Body[0] == 0xca);
-  if (!Segment && !Scalar && !FastSystem && !String && !Port && !Single &&
-      !INT && !UD2 && !IRET && !RETF)
+  if (!Segment && !Scalar && !FastSystem && !String && !Port && !Far &&
+      !Single && !INT && !UD2 && !IRET && !RETF)
     return invalid("unsupported or malformed legacy step instruction");
+  if (Far && Options.FarTransfers != X86LegacyFarTransferProfile::OrderedFrame)
+    return invalid("legacy far transfer requires a bound transfer profile");
   if (Port) {
     if (!Options.PortIO)
       return invalid("legacy port step requires a bound device profile");
@@ -179,7 +183,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
        (State.Core.CPL == 3 && (Memory.controls().CR0 & 0x40000) &&
         (State.EFlags & 0x40000) && !Options.Segments.AlignmentPriority)))
     return invalid("legacy return requires a bound return/alignment profile");
-  if ((Segment || Scalar || String || (Port && Port->String)) &&
+  if ((Segment || Scalar || String || Far || (Port && Port->String)) &&
       (Options.Segments.Profile !=
            X86LegacySegmentProfile::WordStackOffsetFirst ||
        (Options.Segments.AlignmentPriority &&
@@ -276,6 +280,16 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (!R.Exception && FastSystem) {
     R.Exception = detail::executeLegacyFastSystem(Next, Flags, NextIP,
                                                   State.Sysenter, *FastSystem);
+  } else if (!R.Exception && Far) {
+    auto Staged = State;
+    auto Got =
+        detail::executeLegacyFarTransfer(Staged, Memory, *Far, NextIP, Options);
+    if (!Got)
+      return Got.takeError();
+    if (Accept(*Got)) {
+      Next = Staged.Core;
+      NextIP = Staged.EIP;
+    }
   } else if (!R.Exception && Segment) {
     auto Got = executeX86LegacySegmentInstruction(Next, Memory, Instruction,
                                                   Options.Segments);

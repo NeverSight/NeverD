@@ -55,7 +55,7 @@ frame delivery. The tests separately exercise the instruction integrations,
 mask suppression, byte wrap, fault preservation and expired bindings.
 
 The cached-operand layer does not complete the legacy instruction dispatcher,
-task/call gates, real/VM86 modes, software SMM, enclave
+task gates, real/VM86 modes, software SMM, enclave
 execution/AEX/EPCM, CET/FRED or the remaining partial-progress and device
 contracts. LLVM and NeverC already transport these native instruction controls;
 this change adds no compiler builtin, LLVM release, SDK pin or submodule update.
@@ -903,3 +903,49 @@ this host; physical MPX hardware is unavailable. Global instruction/transfer
 completion and the final LLVM release/pin remain separate unfinished work.
 The architectural reference is Intel SDM revision 093, Volume 2A BOUND,
 from the [Intel manual page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+
+## Protected far transfers
+
+`X86LegacyExecutionOptions::FarTransfers=OrderedFrame` adds protected far
+CALL/JMP to the original-byte execution boundary. It accepts immediate
+ptr16:16/32 and memory m16:16/32 forms, with independent operand/address sizes
+and segment overrides. The memory pointer's offset is read before its selector;
+each field's starting offset wraps at the address size. Complete fields still
+obey the common segment extent checks. Effective addresses are captured before
+any call-frame write, including ESP-based pointers that alias the frame.
+
+The owner validates null selectors, GDT/LDT extents, code type, conforming and
+nonconforming privilege rules, gate DPL/RPL, presence and target limits. Direct
+branches retain CPL. A call gate takes its destination and width from the gate,
+ignoring the operand's offset and operand-size prefix. JMP through a gate cannot
+enter a more privileged nonconforming segment. CALL can select a 16/32-bit TSS
+stack for an inner ring and copy the gate's zero-to-31 parameters. Target SS.B
+controls stack address size independently of gate/TSS width; word stacks retain
+the old ESP high word.
+
+The explicitly bound ordinary-RAM profile retains code/stack descriptor accessed
+writes and ordered frame stores on later faults. It saves old SS:SP before
+reading the highest parameter, then reads and pushes each parameter downward,
+followed by old CS and the return offset. Overlapping stacks therefore observe
+earlier writes. The target limit is checked after frame stores. Registers and
+caches publish together on success; faults enter the existing IDT owner with
+the original instruction PC. Missing backing can stop the transfer or a pending
+event; the latter resumes through `resumeX86LegacyEvent`. RETF imm16 composes
+with gate entry and removes parameters from both stack contexts.
+
+LOCK delivers #UD only after authenticated fetch. Duplicate prefixes, REP/BND
+prefixes and register forms of FF /3 or /5 refuse explicitly. Task-gate/TSS
+transfers, reserved L-bit targets, VM86, CET/FRED and debug-event production
+remain outside this boundary. They do not become guessed near calls or NOPs.
+
+The ordinary lifter previously mapped far calls/jumps to near control flow,
+discarding the selector and possible stack/privilege transition. It now refuses
+them before publication in both strict and permissive modes. This includes
+Capstone's CALL/JMP aliases for FF /3 and /5. Native LLVM/NeverC far-transfer
+intrinsics and general i386 source execution are still separate unfinished
+work; this executor is not evidence that either compiler can generate them.
+No LLVM release, SDK pin or submodule change is made for this boundary.
+
+Architectural references are Intel SDM Volume 2A CALL/JMP and Volume 3A's
+protection and call-gate chapters, from the
+[Intel manual page](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
