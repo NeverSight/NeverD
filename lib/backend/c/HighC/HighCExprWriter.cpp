@@ -6369,6 +6369,14 @@ unsigned HighCWriter::lowBytesRead(const HighExpr *E) const {
   return 0;
 }
 
+bool HighCWriter::isNotBelowZeroOf(llvm::StringRef Not,
+                                   llvm::StringRef Value) const {
+  std::string NotStorage, ValueStorage;
+  llvm::StringRef Plain = plainText(Not, NotStorage);
+  return Plain.consume_front("!(") && Plain.consume_back(" < 0)") &&
+         Plain == plainText(Value, ValueStorage);
+}
+
 bool HighCWriter::printsWiderThanItsValue(const HighExpr &E) const {
   if (E.Kind != ExprKind::Var && E.Kind != ExprKind::Phi)
     return false;
@@ -8792,14 +8800,9 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
     std::string L = condStr(*Cur->Operands[0]);
     std::string R = condStr(*Cur->Operands[1]);
     if (Cur->Op == NdOp::BOOL_AND) {
-      // Without a cast, the expression is signed at its own width. A signed
-      // view of it could be narrower and differs from it above bit 31 or 63.
-      auto NotLessZero = [](const std::string &Expr, const std::string &Not) {
-        return Not == "!(" + Expr + " < 0)";
-      };
-      if (NotLessZero(L, R))
+      if (isNotBelowZeroOf(R, L))
         return L + " > 0";
-      if (NotLessZero(R, L))
+      if (isNotBelowZeroOf(L, R))
         return R + " > 0";
       if (L.find(" || ") != std::string::npos)
         L = "(" + L + ")";
@@ -9122,11 +9125,10 @@ std::string HighCWriter::invertCondStrImpl(const HighExpr &E) {
       std::string L = invertCondStr(*Cur->Operands[0]);
       std::string R = invertCondStr(*Cur->Operands[1]);
       if (BoolOr) {
-        // `x == 0 || x < 0` inverts to `x > 0`. Without a cast, the expression
-        // is signed at its own width.
-        if (R == "!(" + L + " < 0)")
+        // `x == 0 || x < 0` inverts to `x > 0`.
+        if (isNotBelowZeroOf(R, L))
           return L + " > 0";
-        if (L == "!(" + R + " < 0)")
+        if (isNotBelowZeroOf(L, R))
           return R + " > 0";
         if (L.find(" || ") != std::string::npos)
           L = "(" + L + ")";

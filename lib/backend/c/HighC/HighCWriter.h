@@ -721,6 +721,11 @@ public:
   /// (`(int32_t)(int8_t)v` is not `v`).
   const HighExpr *sameWidthVariable(const HighExpr &E) const;
   const HighExpr *forwardedExpr(const HighExpr *E) const;
+  /// The text \p Not is `!(x < 0)` of the text \p Value, which is then `x > 0`
+  /// with it: without a cast, `x` is signed at its own width. Both are read
+  /// without source markers, so a marked render spells what the ordinary one
+  /// does.
+  bool isNotBelowZeroOf(llvm::StringRef Not, llvm::StringRef Value) const;
   /// exprStr last printed the variable \p E as a name declared wider than its
   /// value, so that reading only the value takes a cast.
   bool printsWiderThanItsValue(const HighExpr &E) const;

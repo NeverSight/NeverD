@@ -126,6 +126,54 @@ TEST(CSourceEvidence, HighCallExpressionRequiresSurvivingIdentityAndKind) {
   EXPECT_TRUE(Map.Anchors.empty());
 }
 
+// A marked render must spell what the ordinary one does, or the map is refused.
+TEST(CSourceAnchors, SignedZeroPairSpellsTheSameWhenMarked) {
+  HighFunc Function;
+  Function.Name = "mapped_pair";
+  Function.Entry = 0x1000;
+  Function.ReturnType = NdType::makeInt(4);
+  auto Call = HighExpr::makeCall("resolver", 0x2000, {});
+  Call->Type = NdType::makeInt(4, true);
+  const auto Zero = HighExpr::makeConst(0, 4);
+  HighStmt Taken;
+  Taken.Kind = StmtKind::Return;
+  Taken.Addr = 0x1020;
+  Taken.RetVal = HighExpr::makeConst(1, 4);
+  HighStmt If;
+  If.Kind = StmtKind::If;
+  If.Addr = 0x1010;
+  If.Cond = HighExpr::makeUnary(
+      NdOp::BOOL_NOT,
+      HighExpr::makeBinop(NdOp::BOOL_OR,
+                          HighExpr::makeBinop(NdOp::INT_EQUAL, Call, Zero),
+                          HighExpr::makeBinop(NdOp::INT_SLESS, Call, Zero)));
+  If.Body = {Taken};
+  HighStmt Otherwise = Taken;
+  Otherwise.Addr = 0x1030;
+  Otherwise.RetVal = HighExpr::makeConst(0, 4);
+  Function.Body = {If, Otherwise};
+  const HighSourceMap Sources = {
+      {Function.Entry, {0x1010, 3}, Call, HighSourceKind::CallExpression, {}}};
+  // Library evidence is what makes the emitter render with markers at all.
+  const std::vector<sigs::LibraryRecognition> Recognitions(1);
+  CEmitterOptions Options;
+  std::string Ordinary;
+  llvm::raw_string_ostream OrdinaryOS(Ordinary);
+  ASSERT_TRUE(HighCEmitter().emit({Function}, OrdinaryOS, Options));
+  OrdinaryOS.flush();
+  EXPECT_NE(Ordinary.find("> 0"), std::string::npos) << Ordinary;
+  CSourceMap Map;
+  Map.HighSources = &Sources;
+  Map.Recognitions = &Recognitions;
+  Options.SourceMap = &Map;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit({Function}, OS, Options));
+  OS.flush();
+  EXPECT_EQ(Source, Ordinary);
+  EXPECT_FALSE(Map.Anchors.empty()) << Source;
+}
+
 TEST(CSourceAnchors, HighStatementRequiresObservedAddressAndKind) {
   HighFunc Function;
   Function.Name = "mapped_return";

@@ -5894,7 +5894,8 @@ one variable, and the comparison takes the width of the test rather than the
 variable's. A variable declared wider than its value is cast in equality and
 truth tests too. `PipelineOutcome.HighCRefusesOnlyTheFunctionKeepingAnUnbackedAddress`
 omits one function, not the unit, when an escaped image address has no storage
-extent.
+extent. `CSourceAnchors.SignedZeroPairSpellsTheSameWhenMarked` requires a marked
+render to spell that comparison as the ordinary one does, or the map is refused.
 
 `NeverDHighSymSimplifyTests` provides the focused HighIR suite, including
 8–256-bit affine and quadratic synthesis, synthesis inside signed/unsigned
