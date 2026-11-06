@@ -1602,6 +1602,10 @@ target_include_directories(NeverDLiftTests PRIVATE
 )
 target_link_libraries(NeverDLiftTests PRIVATE LLVMAsmParser)
 
+add_neverd_unittest(NeverDHighVariableIdentityTests
+  core/HighVariableIdentityTests.cpp
+  LINK_COMPONENTS IRHigh)
+
 add_neverd_unittest(NeverDHighSymSimplifyTests
   core/HighSymSimplifyTests.cpp
   LINK_COMPONENTS BackendC Solver)

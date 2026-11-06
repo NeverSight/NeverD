@@ -5844,6 +5844,13 @@ ordered-memory ancestors that must remain intact. The x87 classification test
 executes ordinary HighC against native extended-precision encodings; ARM mode
 tests execute both ordinary and explicitly enhanced source.
 
+`NeverDHighVariableIdentityTests` checks HighIR variable-key identity and hash
+distribution for repeated SSA versions, synthetic parameter versions and
+spaced carrier IDs. Its power-of-two bucket projection reproduces the Windows
+collision pattern without asserting machine-dependent timings. Run
+`NeverDHighControlFlowTests` and `NeverDHighSymSimplifyTests` after changing the
+shared variable-key hash.
+
 `NeverDHighSymSimplifyTests` provides the focused HighIR suite, including
 8–256-bit affine and quadratic synthesis, synthesis inside signed/unsigned
 width conversions
