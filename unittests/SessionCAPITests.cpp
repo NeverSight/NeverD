@@ -9090,6 +9090,37 @@ TEST_F(SessionCAPITest, LazyNativeAnalysisRetainsRecoveredNamesAcrossReload) {
   EXPECT_EQ(neverd_func_find_by_name(Session, "reviewed_entry"), -1);
 }
 
+TEST_F(SessionCAPITest, OnlyARequestedRestrictionOutlivesALoad) {
+  const std::string Path = write("selection.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  const neverd_va_t Entry = neverd_session_entry_addr(Session);
+  auto &State = *neverd::sdk::toSession(Session);
+
+  // A query's selection belongs to the image it read.
+  ASSERT_FALSE(takeString(neverd_ir_low(Session, Entry)).empty());
+  EXPECT_EQ(State.OnlyFunctionEntries, std::set<neverd::va_t>{Entry});
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  EXPECT_TRUE(State.OnlyFunctionEntries.empty());
+
+  // A failed load publishes nothing, so the current selection still stands.
+  ASSERT_FALSE(takeString(neverd_ir_low(Session, Entry)).empty());
+  const std::string Missing = Path + ".missing";
+  ASSERT_EQ(neverd_session_load(Session, Missing.c_str()), 0);
+  EXPECT_EQ(State.OnlyFunctionEntries, std::set<neverd::va_t>{Entry});
+
+  // A requested restriction stays until it is cleared, whatever is selected.
+  neverd_session_restrict_function(Session, Entry);
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  EXPECT_EQ(State.OnlyFunctionEntries, std::set<neverd::va_t>{Entry});
+  State.selectFunction(Entry + 1);
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  EXPECT_EQ(State.OnlyFunctionEntries, std::set<neverd::va_t>{Entry});
+
+  neverd_session_restrict_function(Session, 0);
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  EXPECT_TRUE(State.OnlyFunctionEntries.empty());
+}
+
 TEST_F(SessionCAPITest, NativeDisassemblyUsesRecoveredExtentAfterLazyAnalysis) {
   for (bool AArch64 : {false, true}) {
     SCOPED_TRACE(AArch64 ? "aarch64" : "x86_64");

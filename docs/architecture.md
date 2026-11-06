@@ -4327,7 +4327,10 @@ boundary when called directly. A fresh session selects the requested function;
 a restricted session can switch entries without analyzing unrelated bodies.
 An existing whole-image analysis remains intact. CFG keeps its LowIR-only
 depth, other analysis views continue through the shared ABI preparation, and
-bytecode retains its whole-program view.
+bytecode retains its whole-program view. A query's selection ends with the image
+it read: a later load starts from the restriction the caller requested, or from
+none, so analysis of a replacement image cannot be limited to the previous
+image's addresses.
 Older engines retain `neverd_prepare_function` and the decompiler-based
 preparation fallback. A failed switch
 clears the worker's prepared-entry marker before another view can reuse it.

@@ -407,6 +407,9 @@ struct Session {
     }
   }
   std::set<va_t> OnlyFunctionEntries;
+  /// What neverd_session_restrict_function() asked for. A load starts from
+  /// this: the functions queries selected belong to the image they read.
+  std::set<va_t> RestrictedFunctionEntries;
   /// Whole-program source simplifies symbolically
   /// (neverd_session_set_source_symbolic).
   bool SourceSymbolic = false;

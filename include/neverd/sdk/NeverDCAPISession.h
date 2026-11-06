@@ -440,6 +440,8 @@ NEVERD_API void neverd_session_set_symbol_path(neverd_session_t Sess,
 /// entry on demand.  Changing the restriction after an analysis ran discards
 /// that analysis, so a later query (including neverd_session_analyze())
 /// recomputes it for the new restriction instead of reusing stale results.
+/// A restriction applies to every load until it is cleared. The functions that
+/// queries select do not outlast the image they read.
 NEVERD_API void neverd_session_restrict_function(neverd_session_t Sess,
                                                  neverd_va_t Entry);
 

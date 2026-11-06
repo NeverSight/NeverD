@@ -523,6 +523,7 @@ int finishSessionLoad(neverd_session_t Sess, Session &S, BinaryImage Image,
   // Dispose analysis while the image/debug objects it was built from still
   // exist. clearPipeline also releases LLVM modules before their context.
   S.clearPipeline();
+  S.OnlyFunctionEntries = S.RestrictedFunctionEntries;
   auto PreviousProject = std::move(S.PackedProject);
   S.Img = std::move(Image);
   auto *SavedPatches = ProjectState ? ProjectState.get() : PatchState.get();
@@ -872,7 +873,7 @@ int neverd_session_load_cancellable(neverd_session_t Sess, const char *Path,
     Progress.report("image", 0, 1, "reading binary");
     BinaryLoadOptions LoadOpts;
     LoadOpts.Progress = Progress;
-    LoadOpts.OnlyFunctionEntries = S->OnlyFunctionEntries;
+    LoadOpts.OnlyFunctionEntries = S->RestrictedFunctionEntries;
     LoadOpts.ARMFunctionModes = S->ARMFunctionModes;
     LoadOpts.ReadStaticSymbols = ProjectSettings
                                      ? ProjectSettings->ReadStaticSymbols
@@ -1145,6 +1146,7 @@ void neverd_session_restrict_function(neverd_session_t Sess,
   // this one.
   if (S->PipeRan && Next != S->OnlyFunctionEntries)
     S->invalidatePipeline();
+  S->RestrictedFunctionEntries = Next;
   S->OnlyFunctionEntries = std::move(Next);
 }
 

@@ -5784,6 +5784,8 @@ x64/ARM64 queries through legacy Low/Med/High/LLVM text, paged IR and CFG. It
 compares each view with explicit preparation, counts the selected output
 bodies, checks repeated-query reuse and deferred stages, and retains completed
 whole-image analyses. The fixtures are parsed only; no generated code runs.
+`OnlyARequestedRestrictionOutlivesALoad` separates a query's selection, which
+ends with the image, from a requested restriction, which stays until cleared.
 `LLVMViewShowsTheFunctionInAModuleOfItsOwn`
 builds a glibc PIE: `_start`'s LLVM IR must assemble and verify alone, declare
 the GOT's mirror before the definition under a comment saying what it stands
