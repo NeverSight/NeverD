@@ -3360,6 +3360,11 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       return Finish({finishValueMerge(std::move(Combined)), Complete});
     }
 
+    // An original AArch64 load's result is what it reads, as a LOAD's is. The
+    // table its base names gives that value no identity of its own.
+    if (aarch64AddressLoadMedShapeIsValid(*Def))
+      return Finish(completeProof({.SawUnresolved = true}));
+
     // Calls, atomic old values and pointer authentication do not inherit a
     // static identity from all their operands. PAC keys/modifiers are scalar;
     // treating a zero modifier as a null target rejects valid arm64e calls.
