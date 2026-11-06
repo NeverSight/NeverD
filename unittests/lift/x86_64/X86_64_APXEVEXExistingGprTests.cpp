@@ -708,6 +708,9 @@ TEST(X86APXEVEXExistingGpr,
     Emulator.setStrictMode(true);
     Emulator.setMXCSR(0x5f00); // Round up; invalid is unmasked.
     Emulator.setRegister(x86reg::K3, UINT64_MAX);
+    // Every lane is active, so the merge destination's old value must go.
+    Emulator.setRegisterBytes(
+        x86reg::XMM1, bytes(std::vector<uint32_t>(16, UINT32_C(0xa0000000))));
     Emulator.setRegisterBytes(x86reg::XMM2, bytes(Left));
     Emulator.setRegisterBytes(x86reg::XMM3, bytes(Right));
     ASSERT_EQ(Emulator.run(Ops), Ops.size());
@@ -1782,6 +1785,7 @@ TEST(X86APXEVEXExistingGpr,
     Emulator.setMXCSR(0x0f80); // Precision remains unmasked.
     Emulator.setRegister(x86reg::K3, 1);
     Emulator.setRegisterBytes(x86reg::XMM2, bytes(Source));
+    Emulator.setRegisterBytes(x86reg::XMM1, bytes(std::vector<uint32_t>(16)));
     ASSERT_EQ(Emulator.run(Ops), Ops.size());
     EXPECT_EQ(Emulator.getRegisterBytes(x86reg::XMM1), bytes(Expected));
     EXPECT_EQ(Emulator.getMXCSR() & 0x20U, 0U);
@@ -1959,6 +1963,7 @@ TEST(X86APXEVEXExistingGpr,
     Emulator.setRegister(x86reg::K3, 1);
     Emulator.setRegisterBytes(x86reg::XMM2, bytes(Merge));
     Emulator.setRegisterBytes(x86reg::XMM3, bytes(Source));
+    Emulator.setRegisterBytes(x86reg::XMM1, bytes(std::vector<uint32_t>(16)));
     ASSERT_EQ(Emulator.run(Ops), Ops.size());
     EXPECT_EQ(Emulator.getRegisterBytes(x86reg::XMM1), Expected);
     EXPECT_EQ(Emulator.getMXCSR(), 0x1f00U);
@@ -2016,6 +2021,7 @@ TEST(X86APXEVEXExistingGpr,
     Emulator.setRegister(x86reg::K3, 1);
     Emulator.setRegisterBytes(x86reg::XMM2, bytes(Merge));
     Emulator.setRegisterBytes(x86reg::XMM3, bytes(Source));
+    Emulator.setRegisterBytes(x86reg::XMM1, bytes(std::vector<uint32_t>(16)));
     ASSERT_EQ(Emulator.run(Ops), Ops.size());
     EXPECT_EQ(Emulator.getRegisterBytes(x86reg::XMM1), Expected);
     EXPECT_EQ(Emulator.getMXCSR(), 0x1f00U);
@@ -3635,7 +3641,7 @@ TEST(X86APXEVEXExistingGpr,
     auto intrinsic = [](Intrinsic Id) {
       LowOp Op;
       Op.Opcode = NdOp::INTRINSIC;
-      Op.addInput(NdVar::cst(static_cast<uint64_t>(Id), 8));
+      Op.addInput(NdVar::cst(static_cast<uint64_t>(Id), 2));
       return Op;
     };
     auto remainder = [&](Intrinsic Id) {

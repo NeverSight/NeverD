@@ -389,9 +389,10 @@ TEST(X86ScalarMoveAudit, StringModernAndExtraPrefixFormsStayUnaudited) {
   Decoder Dec;
   ASSERT_TRUE(Dec.init(Arch::X64));
   Dec.setStrict(true);
+  // REP MOVS has its own audit (X86NativeStateAudit); plain and REPNE forms
+  // have none.
   const std::vector<std::vector<uint8_t>> Cases = {
       {0xa5},
-      {0xf3, 0xa5},
       {0xf2, 0xa5},
       {0xc5, 0xfa, 0x10, 0xc1},
       {0xc5, 0xfb, 0x10, 0xc1},

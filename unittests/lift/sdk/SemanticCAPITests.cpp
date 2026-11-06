@@ -414,10 +414,14 @@ TEST(NeverDSemanticCAPI, SolverCounterexampleIsCanonicalAndFinal) {
   EXPECT_EQ(Counterexample.getString("candidate"), "x");
   const llvm::json::Array *Variables = Counterexample.getArray("variables");
   ASSERT_NE(Variables, nullptr);
-  ASSERT_EQ(Variables->size(), 2u);
-  const llvm::json::Object *Y = (*Variables)[1].getAsObject();
-  ASSERT_NE(Y, nullptr);
-  EXPECT_EQ(Y->getString("name"), "y");
+  // x cancels out of the difference, so a model need not give it a value. y is
+  // what tells the two apart.
+  const llvm::json::Object *Y = nullptr;
+  for (const llvm::json::Value &Variable : *Variables)
+    if (const llvm::json::Object *Object = Variable.getAsObject();
+        Object && Object->getString("name") == "y")
+      Y = Object;
+  ASSERT_NE(Y, nullptr) << Result.counterexample_json;
   EXPECT_EQ(Y->getString("value"), "0x00000004");
 
   const char *JSON = neverd_synthesize_expr_json_v1(Expression, &Options);
