@@ -2053,6 +2053,11 @@ std::optional<va_t> HighCWriter::importDataSlotRead(const HighExpr &Address,
   return Slot;
 }
 
+const Symbol *HighCWriter::imageSymbolAt(va_t Addr) const {
+  return SharedNameIndex ? SharedNameIndex->symbolAt(Addr)
+                         : Opts.Image->findSymbolAt(Addr);
+}
+
 const std::string &HighCWriter::imageFunctionNameAt(va_t Addr) const {
   auto [It, Inserted] = ListedFunctionNames.try_emplace(Addr);
   if (Inserted)
@@ -8214,7 +8219,7 @@ HighCWriter::ImageSymbolName HighCWriter::imageSymbolName(va_t Addr) const {
       Named.Raw = Data->Name;
   }
   if (Named.Raw.empty() && Opts.Image) {
-    if (const Symbol *Sym = Opts.Image->findSymbolAt(Addr);
+    if (const Symbol *Sym = imageSymbolAt(Addr);
         Sym && !Sym->IsFunc && !Sym->Name.empty() &&
         llvm::StringRef(Sym->Name).find(kAutoFuncPrefix) != 0) {
       // A mangled name keeps the underscores its scheme starts with

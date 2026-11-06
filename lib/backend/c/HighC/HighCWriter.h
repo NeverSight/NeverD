@@ -480,6 +480,9 @@ public:
   /// does not change while a unit is written, and each lookup scans every
   /// export and symbol it holds.
   const std::string &imageFunctionNameAt(va_t Addr) const;
+  /// BinaryImage::findSymbolAt(\p Addr), from the emitter's index of the
+  /// image where it prepared one.
+  const Symbol *imageSymbolAt(va_t Addr) const;
   /// The C identifier a direct call names; see HighCExprWriter.cpp.
   std::string callIdentifier(const HighExpr &E) const;
   /// The C name of the import slot call \p E goes through, itself or by the

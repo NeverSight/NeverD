@@ -532,8 +532,13 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     return Result;
   }
   Trace.start(NativePipelineTrace::Stage::NoReturnVerify);
-  propagateInternalNoReturn(Result.MedFuncs, Img.Arch, Img.UserNoReturn,
-                            importCallAddresses(Img));
+  {
+    std::set<va_t> OwnImportCalls;
+    propagateInternalNoReturn(
+        Result.MedFuncs, Img.Arch, Img.UserNoReturn,
+        importCallAddressesOf(Img, sharedAnalysisCache(Img, Opts),
+                              OwnImportCalls));
+  }
 
   // One read-only proof boundary serves both C routes. Neither annotation nor
   // its display name becomes input to ABI recovery or instruction semantics.
@@ -640,8 +645,13 @@ bool Pipeline::resumeMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     return false;
   }
   Trace.start(NativePipelineTrace::Stage::NoReturnVerify);
-  propagateInternalNoReturn(Result.MedFuncs, Img.Arch, Img.UserNoReturn,
-                            importCallAddresses(Img));
+  {
+    std::set<va_t> OwnImportCalls;
+    propagateInternalNoReturn(
+        Result.MedFuncs, Img.Arch, Img.UserNoReturn,
+        importCallAddressesOf(Img, sharedAnalysisCache(Img, Opts),
+                              OwnImportCalls));
+  }
   recognizeLibraries(Img, Opts, Result, Dbg);
   Trace.start(NativePipelineTrace::Stage::HighIR);
   if (Opts.DeferHighIR)

@@ -458,9 +458,9 @@ void HighCWriter::prepareFunctionIdentifiers(
       }
       if ((SourceName.empty() || isSynthesizedFuncName(SourceName)) &&
           Opts.Image) {
-        std::string FromImage = Opts.Image->getFunctionNameAt(Func.Entry);
+        const std::string &FromImage = imageFunctionNameAt(Func.Entry);
         if (!FromImage.empty() && !isSynthesizedFuncName(FromImage))
-          SourceName = std::move(FromImage);
+          SourceName = FromImage;
       }
     }
     if (SourceName.empty())
@@ -4014,7 +4014,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
           Named = true;
       }
       if (!Named && Opts.Image) {
-        if (const Symbol *Sym = Opts.Image->findSymbolAt(E.ConstVal);
+        if (const Symbol *Sym = imageSymbolAt(E.ConstVal);
             Sym && !Sym->IsFunc && !Sym->Name.empty() &&
             llvm::StringRef(Sym->Name).find(kAutoFuncPrefix) != 0)
           Named = true;
@@ -5232,6 +5232,9 @@ HighCImageNameIndex collectImageNameIndex(const BinaryImage &Image) {
   SlotPrefixes.push_back(Prefix);
 #include "neverd/loader/SymbolDecorations.def"
   for (const Symbol &Sym : Image.Symbols) {
+    // As findSymbolAt finds: the first that is not a section's own.
+    if (!Sym.IsSection)
+      Index.FirstSymbols.try_emplace(Sym.Addr, &Sym);
     // As functionNameSymbolAt chooses: the first of the highest rank.
     if (!Sym.Name.empty() && !Sym.IsSection) {
       auto [Best, Fresh] =

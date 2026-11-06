@@ -49,19 +49,26 @@ HighCImageFunctionSymbols collectImageFunctionSymbols(const BinaryImage &Image);
 /// What \p Image's name lookups read at each address, which go through its
 /// symbols one by one, for emissions that ask them over and over: the first
 /// export there, the symbol BinaryImage::functionNameSymbolAt chooses there,
-/// every symbol at an import's slot in the order of the image's symbols, and
-/// the first symbol of each name a format's linker gives an import's slot
-/// (importSlotPrefix).  Pointers into the image, valid while it stays
-/// unchanged.
+/// the one BinaryImage::findSymbolAt finds there, every symbol at an
+/// import's slot in the order of the image's symbols, and the first symbol
+/// of each name a format's linker gives an import's slot (importSlotPrefix).
+/// Pointers into the image, valid while it stays unchanged.
 struct HighCImageNameIndex {
   std::unordered_map<va_t, const Export *> FirstExports;
   std::unordered_map<va_t, const Symbol *> FunctionNameSymbols;
+  std::unordered_map<va_t, const Symbol *> FirstSymbols;
   std::unordered_map<va_t, std::vector<const Symbol *>> ImportSlotSymbols;
   std::unordered_map<std::string_view, const Symbol *> ImportSlotNamed;
 
   /// \p Image.getFunctionNameAt(\p Addr), \p Image the image the index was
   /// read from.
   std::string functionNameAt(const BinaryImage &Image, va_t Addr) const;
+  /// BinaryImage::findSymbolAt(\p Addr) of the image the index was read
+  /// from.
+  const Symbol *symbolAt(va_t Addr) const {
+    const auto First = FirstSymbols.find(Addr);
+    return First == FirstSymbols.end() ? nullptr : First->second;
+  }
 };
 HighCImageNameIndex collectImageNameIndex(const BinaryImage &Image);
 

@@ -147,11 +147,16 @@ TEST(X64DispatchFrame, PreparedImageNamesReadTheBridgeAsTheImageDoes) {
   ASSERT_EQ(Image.getFunctionNameAt(Dispatcher), "native_dispatch");
   ASSERT_NE(Image.getFunctionNameAt(Caller), "native_dispatch");
   const HighCImageNameIndex Index = collectImageNameIndex(Image);
-  for (va_t Address :
-       {Entry, Linkage, Dispatcher, Caller, SectionOnly, Unnamed, va_t{0x1234}})
+  for (va_t Address : {Entry, Linkage, Dispatcher, Caller, SectionOnly, Unnamed,
+                       va_t{0x1234}}) {
     EXPECT_EQ(Index.functionNameAt(Image, Address),
               Image.getFunctionNameAt(Address))
         << std::hex << Address;
+    EXPECT_EQ(Index.symbolAt(Address), Image.findSymbolAt(Address))
+        << std::hex << Address;
+  }
+  ASSERT_NE(Image.findSymbolAt(Linkage), nullptr);
+  EXPECT_EQ(Image.findSymbolAt(Linkage)->Name, "linkage_label");
 
   // The bridge an emitter that prepared the image's names writes is the
   // one an emitter reading the image writes.
