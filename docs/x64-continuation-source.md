@@ -304,12 +304,10 @@ rejection follow the ordinary call-view contract above. The manifest marks
 `paged_memory: true` and `entry_guest_memory_reads: false`.
 
 Scalar stack checks remain rejected because their extra reads could fault or
-change page-table access bits. Paged `call_sites` and `pause_call_sites` remain
-unsupported; the nonfaulting pre-CALL retry contract cannot represent a CALL
-that faults before entering its callee. These interfaces do not capture the
-initial machine state, infer environment effects or recover bytes missing from
-ordinary C arguments. They add entry/resume wrappers without changing an
-instruction body or the paged dispatcher.
+change page-table access bits. Paged original-CALL bridges are described below.
+These interfaces do not capture the initial machine state, infer environment
+effects or recover bytes missing from ordinary C arguments. Entry views append
+wrappers without changing an instruction body or the paged dispatcher.
 
 ### Original CALL bridges
 
@@ -366,6 +364,42 @@ Omitting `call_sites` preserves the previous source and manifest. The owner is
 Full pre-CALL state, accessible RAM and the environment provider are still
 required. Automatic state capture or arbitrary ordinary-C/native composition
 is not supplied by this interface.
+
+### Paged original CALL bridges
+
+Paged views may also declare `call_sites`, with the same original direct-CALL
+authentication and context-only stack-slot restriction. The generated names
+are `neverd_x64_call_paged_site_1000_v6` and
+`neverd_x64_resume_paged_site_1000_v6`. They take state, paged context, instruction
+budget and site context; only the start entry takes scalar register parameters.
+The original CALL performs its own fetch, translation and return-cell store
+through the existing paged executor. Register checks add no guest-memory access.
+
+A prepared context with an uninitialized callee retains the original pre-CALL
+SP. Only status 1 **and** the runtime's instruction-attempt bit begin the callee
+activation. Every attempted instruction spends one budget unit, including a
+fault or failed fault entry; backing stops before an attempt, changed code and
+refused state spend none. A delivered fault remains a pending CALL even if its
+handler PC happens to equal the callee entry. The bridge preserves the runtime's
+state, RAM and diagnostics and returns that boundary to the producer.
+
+The producer handles faults and backing recovery using the retained paged
+binding. Before retrying a pending CALL it must restore that original CALL's
+PC and pre-CALL SP; resume refuses a handler context or another stack without
+changing it. The bridge neither runs a handler nor rolls back fault effects.
+After CALL succeeds, resume uses the active callee context and never pushes a
+second return cell. Scalar arguments are checked only at start, including
+across a pending retry; deliberate environment changes remain producer-owned.
+Completion, RET cleanup and cached results use the existing function owner.
+
+`pause_call_sites` also works with the paged switch dispatcher. Each selected
+CALL label returns status 21 directly, before a paged step or progress query;
+this is the pre-CALL handoff, not the runtime's internal REP-continue status 21.
+Zero budget still returns 9. Keep the caller activation while invoking the site
+bridge, then resume it after the callee completes. With pauses disabled, the
+complete existing dispatcher remains unchanged. The manifest marks paged site
+interfaces with `paged_memory: true` and `entry_guest_memory_reads: false` and
+records the producer's pending-retry obligation.
 
 ## Invocation
 

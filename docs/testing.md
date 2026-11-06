@@ -20292,7 +20292,7 @@ compile-only checks do not replace that coverage.
 
 `X64PagedFunctionCallTest.*` checks register-only and context-only paged entry
 views, retained physical stack positions, unchanged instruction/driver text,
-and refusal of scalar stack checks or pre-CALL bridges. Both C routes compile
+and refusal of scalar stack checks. Both C routes compile
 at O0/O2. Twenty-one predicates per route compile the actual MOV/XOR/RET bodies
 against an independent operand oracle and supply paged stop outcomes to the
 existing controller. They retain arbitrary incoming high-DWORD and register
@@ -20302,6 +20302,18 @@ Zero budget with an inaccessible/wrapping stack address adds no guest read.
 Every predicate must optimize to constant zero. No generated program, specimen
 or instruction executor runs; page walking, fault delivery and native CPU
 behavior remain separate runtime qualification.
+
+`X64PagedFunctionCallSiteTest.*` adds original direct CALL binding, unchanged
+disabled/omitted driver source, retained stack-slot coordinates and O0/O2
+compilation through both routes. Twenty-seven predicates per route compile the
+actual CALL/MOV/XOR/RET/SUB bodies, driver and bridges against independent
+operand equations and paged stop outcomes. They prove pre-CALL pause/budget
+ordering, unchanged arbitrary incoming bits, one return-cell store across
+resumes, RET cleanup, parent completion, cached results, fault/backing attempt
+accounting and pending retry only after producer restoration of the CALL PC/SP.
+A fault reaching the callee address cannot start its activation. Every
+predicate must fold to constant zero. These tests execute no generated code
+or guest handler and do not replace paging/fault-runtime qualification.
 
 `X64ContinuationExportTest.FunctionCallsRejectUnboundDeclarations` checks strict
 entry/ABI/width admission and the shared argument bound. Its

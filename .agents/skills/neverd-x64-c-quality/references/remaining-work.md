@@ -1,5 +1,16 @@
 # Remaining x64 C-quality work
 
+Paged original-CALL bridges now reuse the faultable instruction owner and
+start a callee only after an attempted successful CALL. Faults and backing
+stops retain the pending site and the runtime's effects; the producer must
+handle the boundary and restore the original CALL PC/SP before retry. Active
+resumes cannot push a second return cell. Paged pre-CALL pauses use static
+selected labels without additional per-instruction checks, and all stack
+slots remain context-only. Both C routes have compile-time value/controller
+proofs over the actual generated instructions. This closes the paged bridge
+and handoff admission gap, not handler execution, initial state capture,
+the two ordinary registry inputs or complete external environment effects.
+
 Paged function-call views now admit register checks with every stack slot
 retained in the original state. Both C routes reuse the existing activation,
 result-cache and paged instruction owners, with no entry guest-memory read or
@@ -7,8 +18,8 @@ per-instruction check. Static value/composition proofs preserve arbitrary
 incoming upper-DWORD bits through real generated MOV/XOR/RET bodies and model
 fault/backing/resume outcomes separately. This removes the blanket paged-view
 refusal; it does not recover the two ordinary registry inputs, capture native
-state or qualify complete environment effects. Scalar stack checks and paged
-pre-CALL bridges still need separate observation/fault contracts.
+state or qualify complete environment effects. Scalar stack checks still need
+a separate observation contract.
 
 Explicit function activations now compose with paged memory through
 `neverd_x64_run_paged_function_v6`. The shared return-cell owner stops only after

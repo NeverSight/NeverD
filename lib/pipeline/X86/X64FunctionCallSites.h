@@ -55,9 +55,12 @@ llvm::Expected<std::vector<X64FunctionCallSite>> bindX64FunctionCallSites(
 
 /// Append pre-CALL/resume bridges sharing the existing instruction bodies and
 /// function wrappers. Bound sites borrow Calls/Units until emission completes.
+/// Paged bridges retain pending CALLs until the producer restores their PC/SP;
+/// only attempted success begins the callee, and every attempt is charged.
 llvm::json::Array
 emitX64FunctionCallSites(llvm::raw_ostream &OS,
-                         llvm::ArrayRef<X64FunctionCallSite> Sites);
+                         llvm::ArrayRef<X64FunctionCallSite> Sites,
+                         bool PagedMemory);
 
 } // namespace neverd
 

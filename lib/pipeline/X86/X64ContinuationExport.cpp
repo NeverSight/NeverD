@@ -405,10 +405,6 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
           if (Interface.ArgumentBytes[P])
             return invalid("paged function_calls requires context-only stack "
                            "slots (null argument widths)");
-        // A fault on the original CALL needs a pending-instruction controller,
-        // not the nonfaulting bridge's pre-CALL PC/SP retry contract.
-        if (!Interface.CallSites.empty())
-          return invalid("paged function_calls does not support call_sites");
       }
       Result.FunctionCalls.push_back(std::move(Interface));
     }
@@ -871,13 +867,14 @@ typedef struct neverd_x64_event_v1 {
   }
   llvm::json::Array FunctionCalls;
   llvm::json::Array FunctionCallSites;
+  CallSitePauses.declare(OS);
   if (Request->Options.PagedMemory) {
     if (Request->FunctionContext)
       emitX64FunctionContext(OS, Version, Request->Addresses);
     emitX64PagedDriver(OS, *Units, Request->Options,
-                       Request->FollowInternalCalls, Request->FunctionContext);
+                       Request->FollowInternalCalls, Request->FunctionContext,
+                       CallSitePauses);
   } else {
-    CallSitePauses.declare(OS);
     if (Request->FunctionContext)
       emitX64FunctionContext(OS, Version, Request->Addresses);
     if (Request->DirectDispatch) {
@@ -895,7 +892,8 @@ typedef struct neverd_x64_event_v1 {
   }
   FunctionCalls = emitX64FunctionCalls(OS, Request->FunctionCalls,
                                        Request->Options.PagedMemory);
-  FunctionCallSites = emitX64FunctionCallSites(OS, *CallSites);
+  FunctionCallSites =
+      emitX64FunctionCallSites(OS, *CallSites, Request->Options.PagedMemory);
   if (Request->Options.ScheduledEvents)
     emitX64ContinuationSchedule(OS, *Units, Request->FollowInternalCalls,
                                 Request->Options);
@@ -1218,6 +1216,19 @@ typedef struct neverd_x64_event_v1 {
                    "owns the return cell; retain context across pauses; "
                    "same function-boundary and environment obligations; "
                    "ordinary caller state capture is not inferred"}};
+  if (Request->Options.PagedMemory && !CallSites->empty()) {
+    auto &Contract = *Report["function_call_sites"].getAsObject();
+    Contract["paged_memory"] = true;
+    Contract["entry_guest_memory_reads"] = false;
+    Contract["domain"] =
+        "original pre-CALL state and retained paged binding; register checks "
+        "add no guest-memory access; every attempted CALL spends one step; "
+        "only attempted success starts the callee; faults and backing stops "
+        "retain the pending CALL and runtime effects; producer handles the "
+        "boundary and restores original CALL PC/SP before pending retry; "
+        "active resumes never replay CALL; initial state, address-space "
+        "lifetime and external effects remain producer obligations";
+  }
   if (Request->PauseCallSites)
     Report["call_site_pause"] = llvm::json::Object{
         {"status", uint64_t(X64ContinuationExitV1::CallSiteReady)},

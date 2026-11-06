@@ -17677,9 +17677,8 @@ reads guest RAM, prepares a translation or initializes an input. The existing
 paged function driver owns all original operand accesses and fault accounting;
 the wrapper captures a result only after its authenticated return-cell
 completion. The producer retains the paged context and address-space lifetime
-across resumes. Paged pre-CALL bridges remain unsupported because the pending
-CALL would need its own fault/retry controller. These entry views neither
-capture a native snapshot nor recover ordinary-source stack arguments.
+across resumes. These entry views neither capture a native snapshot nor
+recover ordinary-source stack arguments.
 
 `X64FunctionCallSites` binds optional original direct CALL sites to those
 interfaces. A lazily built index contains only the requested sites, and the
@@ -17694,9 +17693,20 @@ never repeats a completed CALL. This adds no per-step dispatcher check or
 implicit state capture from ordinary C, and disabled requests retain identical
 source and manifests.
 
+The same site owner emits paged bridges through the existing instruction step
+and progress interfaces. It charges every attempted CALL, including faults,
+but starts the callee only on attempted success. Fault/backing/changed-code
+stops retain a pending CALL and the runtime's state and effects. The producer
+handles that boundary and restores the original CALL PC/SP before retry;
+handler execution and fault rollback do not belong to the bridge. An active
+callee resumes without another CALL or argument check. All paged stack slots
+remain context-only, so entry checking adds no guest-memory observation.
+
 The optional `pause_call_sites` request connects a state-driven caller to those
 bridges. `X64FunctionCallSitePauses` indexes only authenticated bindings once
-and emits a static return at each selected CALL label in both dispatchers.
+and emits a static return at each selected CALL label in the nonpaged drivers
+and paged switch driver. The paged return precedes the instruction step and
+progress query, keeping it separate from the runtime's internal REP status.
 Status 21 (`NEVERD_X64_CALL_SITE_READY_V1`) preserves the pre-CALL PC, registers,
 RAM and caller activation. It spends neither instruction nor environment
 budget, invokes no provider, and does not certify valid instruction inputs.

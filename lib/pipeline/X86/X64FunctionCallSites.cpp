@@ -12,6 +12,7 @@
 #include "X64FunctionCalls.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/analysis/arch/x86_64/X64PagedSource.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/BinaryImage.h"
@@ -94,13 +95,22 @@ llvm::Expected<std::vector<X64FunctionCallSite>> bindX64FunctionCallSites(
 
 llvm::json::Array
 emitX64FunctionCallSites(llvm::raw_ostream &OS,
-                         llvm::ArrayRef<X64FunctionCallSite> Sites) {
+                         llvm::ArrayRef<X64FunctionCallSite> Sites,
+                         bool PagedMemory) {
   llvm::json::Array Manifest;
   if (Sites.empty())
     return Manifest;
   using Exit = analysis::X64ContinuationExitV1;
   const auto Layout =
       getTargetRegInfo(Arch::X64).integerArgumentLayout(BinaryFormat::COFF);
+  if (PagedMemory)
+    OS << R"C(
+/* Paged CALL: retain the same execution binding and its fault/RAM effects.
+ * An attempted fault spends one step but leaves CALL pending. The producer
+ * handles the boundary and restores the original CALL PC/SP before retrying;
+ * this bridge neither runs the handler nor rolls back fault-entry state.
+ * Only attempted CALL success starts the callee. Entry checks read no stack. */
+)C";
   OS << R"C(
 /* Original CALL bridges. Supply the full pre-CALL native state, including
  * original stack bytes. Checks never initialize arguments or padding.
@@ -120,13 +130,18 @@ typedef struct neverd_x64_call_site_context_v1 {
     const auto &Unit = *Site.Instruction;
     const auto Address = llvm::utohexstr(Unit.Address);
     const auto Entry = llvm::utohexstr(Call.Entry);
-    const std::string Start = "neverd_x64_call_site_" + Address + "_v6";
-    const std::string Resume = "neverd_x64_resume_site_" + Address + "_v6";
+    const std::string Prefix = PagedMemory ? "paged_site_" : "site_";
+    const std::string Start = "neverd_x64_call_" + Prefix + Address + "_v6";
+    const std::string Resume = "neverd_x64_resume_" + Prefix + Address + "_v6";
     const char *Parameters =
-        "(neverd_x64_state_v6 *state, uint64_t *budget, "
-        "uint64_t *environment_budget,\n"
-        "    neverd_x64_call_site_context_v1 *site, neverd_x64_environment_v6 "
-        "environment, void *environment_context";
+        PagedMemory ? "(neverd_x64_state_v6 *state, uint8_t *context, uint64_t "
+                      "*budget,\n"
+                      "    neverd_x64_call_site_context_v1 *site"
+                    : "(neverd_x64_state_v6 *state, uint64_t *budget, "
+                      "uint64_t *environment_budget,\n"
+                      "    neverd_x64_call_site_context_v1 *site, "
+                      "neverd_x64_environment_v6 "
+                      "environment, void *environment_context";
     OS << "\nneverd_x64_call_result_v1 " << Resume << Parameters << ") {\n"
        << "    neverd_x64_call_result_v1 rejected = {"
        << uint64_t(Exit::InvalidState) << ", 0, 0};\n"
@@ -140,16 +155,28 @@ typedef struct neverd_x64_call_site_context_v1 {
           "site->Callee.Function.ReturnSlot) return rejected;\n"
           "        if (!*budget) { rejected.Status = 9; return rejected; }\n"
           "        rejected.Status = "
-       << Unit.Function.Name << "((uint8_t *)state);\n"
-       << "        if (rejected.Status != " << uint64_t(Exit::Call)
-       << ") return rejected;\n"
-          "        --*budget;\n"
-          "        neverd_x64_begin_function_v6(state, "
+       << Unit.Function.Name;
+    if (PagedMemory)
+      OS << "_paged_step(state, context);\n"
+            "        if (!(neverd_x64_paged_progress_v1(context) & "
+         << analysis::kX64PagedInstructionAttempted
+         << ")) return rejected;\n"
+            "        --*budget;\n";
+    else
+      OS << "((uint8_t *)state);\n";
+    OS << "        if (rejected.Status != " << uint64_t(Exit::Call)
+       << ") return rejected;\n";
+    if (!PagedMemory)
+      OS << "        --*budget;\n";
+    OS << "        neverd_x64_begin_function_v6(state, "
           "&site->Callee.Function);\n"
           "    }\n"
-       << "    return neverd_x64_resume_" << Entry
-       << "_v6(state, budget, environment_budget, &site->Callee,\n"
-          "        environment, environment_context);\n}\n";
+       << "    return neverd_x64_resume_" << (PagedMemory ? "paged_" : "")
+       << Entry
+       << (PagedMemory
+               ? "_v6(state, context, budget, &site->Callee);\n}\n"
+               : "_v6(state, budget, environment_budget, &site->Callee,\n"
+                 "        environment, environment_context);\n}\n");
     OS << "neverd_x64_call_result_v1 " << Start << Parameters;
     const auto LastStackByte =
         emitX64FunctionCallParameters(OS, Call, Layout.CallStackBase);
@@ -169,8 +196,9 @@ typedef struct neverd_x64_call_site_context_v1 {
        << "    site->Callee.Entry = 0x" << Entry << "ULL;\n"
        << "    site->Site = 0x" << Address << "ULL; site->Prepared = 1;\n"
        << "    return " << Resume
-       << "(state, budget, environment_budget, site,\n"
-          "        environment, environment_context);\n}\n";
+       << (PagedMemory ? "(state, context, budget, site);\n}\n"
+                       : "(state, budget, environment_budget, site,\n"
+                         "        environment, environment_context);\n}\n");
     Manifest.push_back(llvm::json::Object{
         {"instruction", "0x" + Address},
         {"entry", "0x" + Entry},
