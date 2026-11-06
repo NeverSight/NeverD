@@ -12,6 +12,7 @@
 
 #include "../../../lib/ir/low/LowScalarTargets.h"
 #include "../../../lib/ir/low/X86/FrameEffects.h"
+#include "../../HostCompiler.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/CEmitterOptions.h"
@@ -137,6 +138,8 @@ void compileAndRun(const std::string &Source, bool Loops = false) {
   ASSERT_FALSE(
       llvm::sys::fs::createTemporaryFile("neverd-own-call", "c", SourcePath));
   llvm::FileRemover RemoveSource(SourcePath);
+  if (const auto Reason = neverd::test::cannotRunC(Source))
+    GTEST_SKIP() << *Reason;
   ASSERT_FALSE(
       llvm::sys::fs::createTemporaryFile("neverd-own-call", "exe", BinaryPath));
   llvm::FileRemover RemoveBinary(BinaryPath);

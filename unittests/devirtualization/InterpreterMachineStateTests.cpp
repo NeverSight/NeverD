@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../lib/analysis/arch/x86_64/X64StreamStore.h"
+#include "../HostCompiler.h"
 #include "../lift/NeverDLiftFixture.h"
 #include "../web/NativeFixture.h"
 
@@ -172,6 +173,8 @@ protected:
           EXPECT_NE(Source.find(ExpectedAtomic.str()), std::string::npos);
         }
       }
+      if (const auto Reason = neverd::test::cannotRunX86C(Source))
+        GTEST_SKIP() << *Reason;
       const auto SourceFile =
           tmpFile(LLVM ? "machine-llvm.c" : "machine-high.c");
       std::ofstream(SourceFile) << Preamble.str() << Source

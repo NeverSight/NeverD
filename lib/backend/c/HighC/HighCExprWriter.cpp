@@ -1966,6 +1966,10 @@ std::vector<size_t> HighCWriter::printedCallOperands(const HighExpr &E) const {
 std::string HighCWriter::importSlotIdentifier(const HighExpr &E) const {
   if (!Opts.Image || !E.CallAddr)
     return {};
+  auto [Known, Fresh] = ImportSlotIdentifierAt.try_emplace(E.CallAddr);
+  if (!Fresh)
+    return Known->second;
+  std::string &Answer = Known->second;
   // The call goes through an import's slot, or to a stub that jumps through
   // it, which the linker names on formats that name slots.
   const Import *Imp = Opts.Image->findImportAt(E.CallAddr);
@@ -1978,19 +1982,36 @@ std::string HighCWriter::importSlotIdentifier(const HighExpr &E) const {
   // slot is the prefix and the import's symbol, `__imp_calloc` or
   // `__imp___initterm` on 32-bit Windows, unless that names another object.
   // C spells it without the format's underscore.
+  // The index the emitter prepared holds the symbols these scans find.
   std::string SlotSymbol;
-  for (const Symbol &Sym : Opts.Image->Symbols)
-    if (Sym.Addr == Imp->IATAddr &&
-        llvm::StringRef(Sym.Name).starts_with(Prefix)) {
-      SlotSymbol = Sym.Name;
-      break;
-    }
+  if (SharedNameIndex) {
+    if (const auto At = SharedNameIndex->ImportSlotSymbols.find(Imp->IATAddr);
+        At != SharedNameIndex->ImportSlotSymbols.end())
+      for (const Symbol *Sym : At->second)
+        if (llvm::StringRef(Sym->Name).starts_with(Prefix)) {
+          SlotSymbol = Sym->Name;
+          break;
+        }
+  } else {
+    for (const Symbol &Sym : Opts.Image->Symbols)
+      if (Sym.Addr == Imp->IATAddr &&
+          llvm::StringRef(Sym.Name).starts_with(Prefix)) {
+        SlotSymbol = Sym.Name;
+        break;
+      }
+  }
   if (SlotSymbol.empty()) {
     SlotSymbol =
         (Prefix + symbolOfImportName(Imp->Name, Opts.Format, Opts.TheArch))
             .str();
-    if (const Symbol *Other = Opts.Image->findSymbol(SlotSymbol);
-        Other && Other->Addr != Imp->IATAddr)
+    const Symbol *Other = nullptr;
+    if (!SharedNameIndex)
+      Other = Opts.Image->findSymbol(SlotSymbol);
+    else if (const auto Named =
+                 SharedNameIndex->ImportSlotNamed.find(SlotSymbol);
+             Named != SharedNameIndex->ImportSlotNamed.end())
+      Other = Named->second;
+    if (Other && Other->Addr != Imp->IATAddr)
       return {};
   }
   std::string Identifier =
@@ -1998,6 +2019,7 @@ std::string HighCWriter::importSlotIdentifier(const HighExpr &E) const {
   for (char &Ch : Identifier)
     if (!isCProjectionIdentifierByte(static_cast<unsigned char>(Ch)))
       Ch = '_';
+  Answer = Identifier;
   return Identifier;
 }
 
@@ -2034,7 +2056,9 @@ std::optional<va_t> HighCWriter::importDataSlotRead(const HighExpr &Address,
 const std::string &HighCWriter::imageFunctionNameAt(va_t Addr) const {
   auto [It, Inserted] = ListedFunctionNames.try_emplace(Addr);
   if (Inserted)
-    It->second = Opts.Image->getFunctionNameAt(Addr);
+    It->second = SharedNameIndex
+                     ? SharedNameIndex->functionNameAt(*Opts.Image, Addr)
+                     : Opts.Image->getFunctionNameAt(Addr);
   return It->second;
 }
 

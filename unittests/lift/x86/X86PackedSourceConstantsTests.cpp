@@ -10,6 +10,7 @@
 
 #include "../../../lib/backend/c/render/X86/X86CompressExpand.h"
 #include "../../../lib/backend/c/render/X86/X86FourSource.h"
+#include "../../HostCompiler.h"
 #include "../x86_64/X86FPStateAccuracyFixture.h"
 
 namespace {
@@ -120,6 +121,8 @@ static void check(const void *data, unsigned bytes, unsigned first) {
   const auto Input = file("packed-constants.c");
   write(Input, Source);
   retain("packed-constants.c", Source);
+  if (!neverd::test::compilerHasWideBitInt(Compiler))
+    GTEST_SKIP() << "this Clang lacks the _BitInt width the C spells";
   for (const auto *Opt : {"-O0", "-O2"}) {
     const auto Output = file(std::string("constants") + Opt);
     auto Built = command(Compiler,

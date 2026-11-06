@@ -91,6 +91,14 @@ int window(int a) {
 // FMAX and FMIN are IEEE 754-2019 maximum and minimum: a NaN operand gives a
 // NaN, and -0 orders below +0, unlike fmaxf and fminf.
 TEST_F(AArch64_HighCExecution, FMaxAndFMinPropagateANaN) {
+  // The C spells these with a builtin Apple's Clang can lack.
+  if (!neverd::test::compilerAccepts(
+          NEVERD_TEST_CLANG, "c",
+          "float f(float a, float b) {\n"
+          "  return __builtin_elementwise_minimum(a, b);\n"
+          "}\n",
+          {}))
+    GTEST_SKIP() << "this Clang lacks __builtin_elementwise_minimum";
   expectRunsLikeSource(R"C(
 int extremes(int a) {
   float nan = __builtin_nanf("");

@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/analysis/arch/x86_64/X64PagedSse.h"
+#include "../../HostCompiler.h"
 #include "../../lift/NeverDLiftFixture.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
@@ -255,6 +256,8 @@ protected:
                   (ArtifactStem.str() + (LLVM ? "-llvm.c" : "-high.c")),
               std::filesystem::copy_options::overwrite_existing);
         }
+      if (const auto Reason = neverd::test::cannotRunX86C(Source))
+        GTEST_SKIP() << *Reason;
       for (const char *Optimization : {"-O0", "-O2"}) {
         SCOPED_TRACE(Optimization);
         if (NativeKernel) {

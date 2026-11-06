@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCompiler.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
@@ -134,6 +135,8 @@ void compileSourceAndRun(const std::string &Source, size_t MaxSourceBytes,
   ASSERT_TRUE(bool(Program)) << "clang is required for mutable source checks";
   const std::string Compiler = *Program;
 #endif
+  if (const auto Reason = neverd::test::cannotRunC(Source))
+    GTEST_SKIP() << *Reason;
   llvm::SmallString<128> SourcePath, BinaryPath, ErrorPath;
   ASSERT_FALSE(
       llvm::sys::fs::createTemporaryFile("mutable-source", "c", SourcePath));
@@ -161,8 +164,10 @@ void compileSourceAndRun(const std::string &Source, size_t MaxSourceBytes,
         // unaligned access, without strict aliasing.
         "-fno-sanitize=alignment", "-fno-strict-aliasing",
         "-fno-sanitize-recover=all", SourcePath, "-o", BinaryPath};
+    // A large graph with its checks takes macOS's slower hosted runner over
+    // 30 s to build. The bound only has to catch a hang.
     int Status = llvm::sys::ExecuteAndWait(Compiler, Args, std::nullopt,
-                                           Redirects, 30, 0, &Error);
+                                           Redirects, 180, 0, &Error);
     auto Errors = llvm::MemoryBuffer::getFile(ErrorPath);
     ASSERT_EQ(Status, 0) << Error
                          << (Errors ? (*Errors)->getBuffer().str() : "");

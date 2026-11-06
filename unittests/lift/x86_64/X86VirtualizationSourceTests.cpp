@@ -13,6 +13,7 @@
 #include "../../../lib/backend/c/render/X86/X86Sgx.h"
 #include "../../../lib/backend/c/render/X86/X86SystemState.h"
 #include "../../../lib/backend/c/render/X86/X86Virtualization.h"
+#include "../../HostCompiler.h"
 #include "X86AMXFixtures.h"
 #include "X86SHA512Reference.h"
 #include "X86SystemStateFixtures.h"
@@ -871,7 +872,8 @@ void compileRoutes(BinaryImage &Image, bool NoOpt, va_t Address,
     // sourceRoutes already compiles these with the linked SDK, and the native
     // object execution below uses that result. Both C routes still compile at
     // O0/O2 with stock Clang to check their assembly fallback.
-    if (IR && UsesForkNative)
+    if (IR &&
+        (UsesForkNative || !neverd::test::compilerReadsCurrentIR(Compiler)))
       continue;
     if (!IR)
       Source = freestandingC(std::move(Source));
@@ -5302,6 +5304,11 @@ class X86AmxEncodingSource : public testing::TestWithParam<size_t> {};
 
 TEST_P(X86AmxEncodingSource, EveryRouteCompilesAcrossNativeFormats) {
   const auto &E = amxEncodings()[GetParam()];
+  // Apple's assembler lags the newest AMX instructions the C spells.
+  if (!neverd::test::compilerAccepts(NEVERD_TEST_CLANG, "s",
+                                     std::string(E.Assembly) + "\n",
+                                     {"--target=x86_64-unknown-linux-gnu"}))
+    GTEST_SKIP() << "this Clang's assembler lacks " << E.Assembly;
   for (const auto Format :
        {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
     for (bool NoOpt : {false, true}) {

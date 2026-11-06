@@ -16,6 +16,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCompiler.h"
 #include "NeverDLiftFixture.h"
 
 #include <fstream>
@@ -78,6 +79,8 @@ TEST_F(X86_64_DebugParams, ParametersAreNamedWhereTheConventionPassesThem) {
 #endif
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "no C compiler to build the callers";
+  if (const auto Reason = neverd::test::cannotRunX86C(Source))
+    GTEST_SKIP() << *Reason;
   const auto Callers = tmpFile("debug_params_callers.c");
   std::ofstream(Callers) << SourceCallers;
   const auto Executable =

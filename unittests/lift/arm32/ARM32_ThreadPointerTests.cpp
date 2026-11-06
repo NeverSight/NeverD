@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCompiler.h"
 #include "CSourceText.h"
 #include "NeverDLiftFixture.h"
 
@@ -73,6 +74,8 @@ TEST_F(ARM32_ThreadPointer, CallsAreTheThreadPointerRead) {
             "clang", {"--target=armv7a-linux-gnueabihf", "-mcpu=cortex-a15",
                       "-ffreestanding", "-c", File.string(), "-o",
                       tmpFile(LLVM ? "tp_llvm.o" : "tp_high.o").string()});
+        if (Built.exitCode != 0 && neverd::test::lacksCrossHeaders(Built.err))
+          GTEST_SKIP() << "no headers for ARM Linux: " << Built.err;
         EXPECT_EQ(Built.exitCode, 0) << Built.err << "\n" << C;
       }
     }

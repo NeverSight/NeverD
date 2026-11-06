@@ -459,6 +459,46 @@ TEST(LocalTypesDebugContext, PortablePrototypesRetainIntegerKeywordIdentity) {
   }
 }
 
+TEST(LocalTypesDebugContext, RenderedDefinitionsReadTheSameInEveryOrder) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+  ASSERT_TRUE(types::parseCTypes(R"(
+    struct Inner { int Value; };
+    struct Pair { struct Inner Left; long long Right; };
+    struct Other { short Count; };
+  )",
+                                 *Library)
+                  .ok());
+  const auto Pair = NdType::makeNamedRecord("Pair");
+  const auto Inner = NdType::makeNamedRecord("Inner");
+  const auto Other = NdType::makeNamedRecord("Other");
+  // Two units that name the same first record and differ after it, then the
+  // first again: each reads as a context that defined it alone does.
+  const std::vector<std::vector<TypeRef>> Units = {
+      {Pair, Inner}, {Pair, Other}, {Pair, Inner}, {Other}};
+  NamesOnlyDebugContext Names;
+  sdk::LocalTypesDebugContext Context(Names, Library);
+  for (const auto &Unit : Units) {
+    const CRecordDefinitions Defined = Context.definitions(Unit);
+    NamesOnlyDebugContext FreshNames;
+    sdk::LocalTypesDebugContext Fresh(FreshNames, Library);
+    const CRecordDefinitions Alone = Fresh.definitions(Unit);
+    EXPECT_FALSE(Defined.Text.empty());
+    EXPECT_EQ(Defined.Text, Alone.Text);
+    EXPECT_EQ(Defined.Records, Alone.Records);
+    EXPECT_EQ(Defined.Tags, Alone.Tags);
+    EXPECT_EQ(Defined.Types, Alone.Types);
+    EXPECT_EQ(Defined.Identifiers, Alone.Identifiers);
+    EXPECT_EQ(Defined.DeclaredTypes, Alone.DeclaredTypes);
+    EXPECT_EQ(Defined.Enumerations, Alone.Enumerations);
+    for (const auto &Name : Fresh.readTypes())
+      EXPECT_TRUE(Context.readTypes().contains(Name.getKey()))
+          << Name.getKey().str();
+  }
+  EXPECT_NE(Context.definitions({Pair, Other}).Text.find("Count"),
+            std::string::npos);
+}
+
 TEST(LocalTypesDebugContext, PointerDeclarationsDoNotRequireRecordLayouts) {
   using namespace neverd;
   auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);

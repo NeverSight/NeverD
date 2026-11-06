@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCompiler.h"
 #include "HighCHostExecution.h"
 
 class X86_32_CallAbi : public HighCHostExecutionTest {
@@ -26,6 +27,9 @@ protected:
   void expectGccRunsLikeSource(const std::string &Kernel,
                                const std::string &Entry,
                                std::initializer_list<const char *> Names) {
+    // -m32 selects i386 only from an x86 host's driver.
+    if (!neverd::test::hostRunsX86())
+      GTEST_SKIP() << "gcc -m32 builds i386 only on an x86 host";
     expectHighCRunsLikeSource("gcc", {"-m32"}, Kernel, Entry, Names,
                               {-3, 0, 1, 77});
   }

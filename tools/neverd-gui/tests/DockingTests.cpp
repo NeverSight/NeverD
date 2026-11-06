@@ -393,6 +393,28 @@ struct Desktop {
     Source.setFloating(true);
     Source.QWidget::window()->resize(std::min(450, screen.width() / 3),
                                      std::min(350, screen.height() / 2));
+    // A window manager may map a new window below the focused one. Without a
+    // compositor, one entirely behind the workbench would never be exposed.
+    Source.QWidget::window()->raise();
+  }
+
+  /// What a test saw of \p Widget's top-level window when it was not exposed.
+  static QByteArray windowState(const QWidget *Widget) {
+    const QWindow *Handle = Widget->windowHandle();
+    const QRect Frame = Widget->frameGeometry();
+    return QStringLiteral(
+               "%1: widget visible %2, handle %3, handle visible %4, exposed "
+               "%5, frame %6,%7 %8x%9")
+        .arg(QString::fromLatin1(Widget->metaObject()->className()))
+        .arg(Widget->isVisible())
+        .arg(Handle != nullptr)
+        .arg(Handle && Handle->isVisible())
+        .arg(Handle && Handle->isExposed())
+        .arg(Frame.x())
+        .arg(Frame.y())
+        .arg(Frame.width())
+        .arg(Frame.height())
+        .toUtf8();
   }
 
   KD::QtWidgets::TitleBar *titleBar() const {
@@ -449,7 +471,12 @@ private slots:
     QSettings().setValue(settings::NativeTitleBar, nativeCaption);
     Desktop desktop;
     auto *floating = desktop.Source.QWidget::window();
-    QVERIFY(QTest::qWaitForWindowExposed(floating));
+    // The process's first windows also load its fonts and platform plugins,
+    // which can take a hosted runner past QTest's default five seconds.
+    QVERIFY2(QTest::qWaitForWindowExposed(floating, 30000),
+             (Desktop::windowState(floating) + "; " +
+              Desktop::windowState(&desktop.Window))
+                 .constData());
     QVERIFY(desktop.titleBar());
     auto *maximize = floating->findChild<QAbstractButton *>(
         QStringLiteral("floatingMaximizeButton"));

@@ -452,7 +452,9 @@ jobs:
         id: default_build
         shell: bash
         run: |
-          python scripts/build.py build-ci --config Release --parallel "$BUILD_PARALLEL"
+          # A single failing target should not hide the others behind a build this
+          # long. A broken header still stops after a few failures.
+          python scripts/build.py build-ci --config Release --parallel "$BUILD_PARALLEL" -- -k 20
           cmake -E touch build-ci/.neverd-capability-build-complete
         env:
           BUILD_PARALLEL: ${{ matrix.parallel }}

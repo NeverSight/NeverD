@@ -3,6 +3,7 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+#include "../../HostCompiler.h"
 #include "NeverDLiftFixture.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -552,6 +553,8 @@ TEST_F(DataSymbolBindingTest, PICObjectsKeepTheirIdentityAcrossArchitectures) {
             {"--target=" + std::string(Target), "-ffreestanding",
              "-fno-strict-aliasing", "-Werror=implicit-function-declaration",
              "-c", Output.string(), "-o", Output.string() + ".o"});
+        if (!Compile.ok() && neverd::test::lacksCrossHeaders(Compile.err))
+          GTEST_SKIP() << "no headers for " << Target << ": " << Compile.err;
         EXPECT_TRUE(Compile.ok()) << Compile.err << C;
       }
     }
@@ -653,6 +656,8 @@ TEST_F(DataSymbolBindingTest, WritableSlotsRetainStorageAndSymbolInitializer) {
         Args.push_back("-fno-sanitize-recover=undefined");
       }
       auto Compile = exec(NEVERD_TEST_CLANG, Args);
+      if (!Compile.ok() && neverd::test::lacksCrossHeaders(Compile.err))
+        GTEST_SKIP() << "no headers for this target: " << Compile.err;
       ASSERT_TRUE(Compile.ok()) << Compile.err << C;
       if (RunNative)
         EXPECT_TRUE(exec(Program.string(), {}).ok());

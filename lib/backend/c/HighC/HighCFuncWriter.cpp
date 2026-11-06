@@ -1128,6 +1128,21 @@ void HighCWriter::writeExceptionAnnotation(const HighFunc &Func) {
   OS << " */\n";
 }
 
+const std::optional<X64DispatchFrame> &
+HighCWriter::dispatchFrame(va_t Entry) const {
+  auto [Known, Fresh] = DispatchFrames.try_emplace(Entry);
+  if (Fresh)
+    Known->second =
+        SharedNameIndex
+            ? x64DispatchFrame(*Opts.Image, Entry,
+                               [&](va_t Addr) {
+                                 return SharedNameIndex->functionNameAt(
+                                     *Opts.Image, Addr);
+                               })
+            : x64DispatchFrame(*Opts.Image, Entry);
+  return Known->second;
+}
+
 void HighCWriter::writeFunction(const HighFunc &Func) {
   const auto SourceBody = sourceBodyOrigin(Func);
   llvm::SaveAndRestore<CSourceMap *> SourceMapScope(
@@ -1137,8 +1152,7 @@ void HighCWriter::writeFunction(const HighFunc &Func) {
   if (SourceBody && Opts.EmitComments)
     OS << "/* Specialized C body of 0x" << llvm::utohexstr(*SourceBody)
        << "; signature belongs to this source helper. */\n";
-  if (Opts.Image && !Func.SourceTypeHint &&
-      x64DispatchFrame(*Opts.Image, Func.Entry) &&
+  if (Opts.Image && !Func.SourceTypeHint && dispatchFrame(Func.Entry) &&
       (!EmitFunctionWrapper || Opts.TheArch != Arch::X64))
     throw std::invalid_argument(
         "physical dispatch bridges require a complete x64 function");
@@ -6346,7 +6360,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
 
   if (EmitFunctionWrapper) {
     if (Opts.Image && !Func.SourceTypeHint)
-      if (x64DispatchFrame(*Opts.Image, Func.Entry))
+      if (dispatchFrame(Func.Entry))
         c_stub::writeDispatchFramePreamble(OS);
     std::string TargetFeatures =
         Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64
@@ -6459,7 +6473,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       Declarator += "void";
     OS << declaredAs(ReturnType, Declarator + ")") << " {\n";
     if (Opts.Image && !Func.SourceTypeHint)
-      if (const auto Frame = x64DispatchFrame(*Opts.Image, Func.Entry)) {
+      if (const auto &Frame = dispatchFrame(Func.Entry)) {
         c_stub::writeDispatchFrameBody(OS, x64DispatchFrameAssembly(*Frame));
         return;
       }

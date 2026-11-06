@@ -588,9 +588,12 @@ TEST(CSymbolNames, StartupPassesMainThroughItsPrototype) {
             NotFound)
       << Source;
   EXPECT_EQ(Source.find("0x1150"), NotFound) << Source;
+  // Linking resolves ELF and glibc names, which only a Linux host has.
+#ifdef __linux__
   source_call_execution_test::compileAndRun(
       Source + "int main(void) { return 0; }\n",
       {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+#endif
 }
 
 TEST(CSymbolNames, FunctionAddressesReadAsTheirFunctions) {
@@ -703,11 +706,14 @@ TEST(CSymbolNames, CxxRuntimeRoutinesTakeTheirPrototypes) {
                         "hook, 0, 0);"),
             NotFound)
       << Source;
+  // Linking resolves ELF and glibc names, which only a Linux host has.
+#ifdef __linux__
   source_call_execution_test::compileAndRun(
       Source + "int on_exit_hook(void *Object) { return Object != 0; }\n"
                "void __cxa_end_catch(void) {}\n"
                "int main(void) { return (int)install(); }\n",
       {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+#endif
 }
 
 TEST(CSymbolNames, APointerResultKeepsTheMachineInteger) {
@@ -721,6 +727,8 @@ TEST(CSymbolNames, APointerResultKeepsTheMachineInteger) {
       << Source;
   EXPECT_NE(Source.find("return (uintptr_t)__errno_location();"), NotFound)
       << Source;
+  // Linking resolves ELF and glibc names, which only a Linux host has.
+#ifdef __linux__
   source_call_execution_test::compileAndRun(
       Source + "int main(void) {\n"
                "  int *Errno = (int *)errno_slot();\n"
@@ -728,6 +736,7 @@ TEST(CSymbolNames, APointerResultKeepsTheMachineInteger) {
                "  return *Errno == 7 ? 0 : 1;\n"
                "}\n",
       {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+#endif
 }
 
 TEST(CSymbolNames, HeaderFunctionsTakeFunctionsAsTheirParameterTypes) {

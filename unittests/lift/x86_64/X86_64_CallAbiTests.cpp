@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCompiler.h"
 #include "HighCHostExecution.h"
 
 #include <fstream>
@@ -60,6 +61,8 @@ protected:
                                   const std::string &Callee) {
     if (!hasCrossTargetClang())
       GTEST_SKIP() << "cross-target compilation requires Clang";
+    if (!neverd::test::compilerReadsCurrentIR(NEVERD_TEST_CLANG))
+      GTEST_SKIP() << "this Clang cannot read the linked LLVM's IR";
     const auto SourceFile = tmpFile(Entry + ".c");
     const auto Object = tmpFile(Entry + ".o");
     const auto IR = tmpFile(Entry + ".ll");

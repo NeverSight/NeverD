@@ -15696,6 +15696,15 @@ execute only on Linux.
 and the native matrix does not wait for it. A private path in published content
 fails the run, while compilation and tests still report.
 
+The main build keeps going until 20 targets have failed, and the main profile runs
+past a failing test, so one failure does not hide what lies behind it.
+
+Tests that build generated C or IR on the host state what that host cannot do
+(`unittests/HostCompiler.h`). x86 instructions need an x86 host, and Apple Clang
+can lag the LLVM NeverD links in its IR syntax, `_BitInt` widths and newest
+assembler mnemonics. Such a test skips with that reason, and Linux still builds
+and runs the same output.
+
 Documentation translation checks stay in `LLVM Style`, which also sees
 Markdown-only pushes. The EVM audit tests stay in `EVM Upstream Audit`, apart from
 its macOS sandbox case. `Capstone fork contract` runs the pinned decoder's own

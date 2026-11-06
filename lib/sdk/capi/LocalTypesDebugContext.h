@@ -44,6 +44,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace neverd::sdk {
 
@@ -293,6 +294,17 @@ private:
   /// What renders the records a unit embeds: spelling the library's names
   /// for each unit would name every type again.
   mutable std::unique_ptr<types::EmbeddedCRenderer> CRenderer;
+  /// What CRenderer rendered for each list of roots: it reads a library
+  /// that stays as it is, so the same roots render the same C, and units
+  /// keep embedding the same few records.  RenderedBytes counts their text,
+  /// up to kMaxLocalTypeRenderedBytes.
+  mutable std::map<std::vector<const types::LocalType *>,
+                   std::shared_ptr<const types::EmbeddedC>>
+      Rendered;
+  mutable size_t RenderedBytes = 0;
+  /// CRenderer's C of \p Roots, rendered once.  Holds Mutex.
+  std::shared_ptr<const types::EmbeddedC>
+  renderedC(const std::vector<const types::LocalType *> &Roots) const;
   /// The names the image states for each function entry that has any, read
   /// at the first statedNames(): one pass over the image's exports and
   /// symbols, where reading them for each entry scans them all again.
