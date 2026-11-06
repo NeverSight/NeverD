@@ -1,0 +1,709 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-05",
+  "scope": "Protected legacy far CALL/JMP and 16/32-bit call gates, with explicit ordinary-lift refusal for unbound selector/stack transfers",
+  "global_goal_complete": false,
+  "base_commit": "bfeb02b14f0f9381f93059a2caf3ba0c8e926676",
+  "implementation_commit": "a15800c06d2ded5bee7bdaf4580f76d05fe01b11",
+  "qualified_commit": "578514bf374d666ef13c6270fdb437c7d18d5493",
+  "artifact_root": "/mnt/data/neverd-legacy-far-transfers-20261105",
+  "upstream_integration": {
+    "dev_commit": "bec78a1c0dc0681dcf24065a41f96a197da31b7d",
+    "qualified_source_unchanged": true
+  },
+  "changed_source_sha256": {
+    "include/neverd/translate/X86/X86LegacyExecution.h": "46df413426180acee59724cb5f0706843b6f13b18ac95301e5e1cb60cd0c7cd1",
+    "lib/lift/X86/X86LiftControl.cpp": "d0a334e00bf9d0cda13cc4f2f770eeea02e0d8db68e9a371258aa2909139c703",
+    "lib/lift/X86/X86Lifter.cpp": "b447da54bf21c8e302385fa713fb707b6d06900e49387d4048c3a244d12d2daa",
+    "lib/translate/CMakeLists.txt": "0fb106a5f281fc96753d4f590f9cc2ab80edaa786f8f49497317bfccfd887a34",
+    "lib/translate/X86/X86LegacyExecution.cpp": "d2633031b85efba2ca090b9d523f02ce9b60bb756638a4365198344181e238ce",
+    "lib/translate/X86/X86LegacyFarTransfer.cpp": "a02c612ad4ed33fbed2d5ce3f56e5cd75a443ac8dff80da89791dbb66347dc3c",
+    "lib/translate/X86/X86LegacyFarTransfer.h": "afc0e6b4e39a6d3293ac811f18324838b487d8105cd067fcf7282a1d11681771",
+    "unittests/lift/x86/X86NonlocalControlTests.cpp": "f59b9a28f64e1cf3ef3967599d2d903767bbd4188c04d470ac452224b480f351",
+    "unittests/translate/x86/X86LegacyExecutionTests.cpp": "1810cb2f1c039d04a633c1d917e5d19cb655af4f348bcd750a06ab38442e0534",
+    "unittests/translate/x86/X86LegacyFarNativeTests.inc": "b2bac3e170a5b640cc109b88a5121bc3592f26d12f50cd2b1e3feff90cb848cd",
+    "unittests/translate/x86/X86LegacyFarTests.inc": "02f4ca293a14dfcccaab190b67c3a37c3e7abfe8602ba8153c7eb9c1bb22a4f7",
+    "unittests/translate/x86/X86LegacyScalarNativeFixture.inc": "59bbe61424259cefa6a3d7457f69ea7b46a8c8908f6c0a94a54c04dcde06664d",
+    "unittests/translate/x86/X86PagingNativeTests.cpp": "2c9ea399a7426ad44dadc9e6dad493b6d28117292847e6825770b453162c1830"
+  },
+  "host": {
+    "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+    "cpus": {
+      "2": "P core",
+      "4": "P core",
+      "12": "E core"
+    },
+    "processor": "13th Gen Intel(R) Core(TM) i9-13900H"
+  },
+  "production_sdk": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "llvm_commit": "f2370bdd646363455b8a3c3f69b8e7ba86aeea33",
+  "neverc_commit": "3328cbcda463f50ba86784ba6edb49ea08d85794",
+  "compiler_sha256": {
+    "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+    "${NEVERC_WORKTREE}/build-neverc/bin/neverc": "242c7f4fd11cceb9acde5fc2415d179ca28f5a14e0a781d4ec243253a64edc4f"
+  },
+  "contract": {
+    "profile": "X86LegacyFarTransferProfile::OrderedFrame",
+    "oracle": "Original protected instructions under KVM, with independently initialized identical RAM/state. Native target/fault handlers stop through hardware execution breakpoints; they never execute the model.",
+    "environments": [
+      "16/32-bit protected code",
+      "legacy paging and PAE",
+      "CPL0..3",
+      "GDT/LDT",
+      "16/32-bit operand/address/gate/TSS/stack widths"
+    ],
+    "state": [
+      "all eight GPRs",
+      "EIP",
+      "defined EFLAGS",
+      "CR2",
+      "usable segment caches",
+      "selector/unusable for unusable caches",
+      "descriptor bytes",
+      "old/new stack and parameter bytes",
+      "fault vector and frame"
+    ],
+    "ordering": [
+      "pointer offset before selector, each field address-size wrapped",
+      "code/stack accessed writes before later faults",
+      "TSS stack offset before selector",
+      "complete destination stack segment extent before frame writes",
+      "old SS:SP before highest parameter",
+      "descending interleaved parameter read/store",
+      "old CS:return offset after parameters",
+      "target limit after frame writes",
+      "register/cache publication only on full completion"
+    ],
+    "software_checks": [
+      "missing/invalid profile and malformed forms before fetch",
+      "LOCK UD after authenticated fetch",
+      "gate width independent of operand prefix",
+      "RETF imm16 outer-stack parameter cleanup",
+      "fault delivery backing stop/resume without replaying the accepted event",
+      "original handler IRET and instruction retry",
+      "retained partial call frame and highest-parameter CR2"
+    ],
+    "ordinary_lifting": "Unbound immediate or memory far branches refuse atomically in strict/permissive and fast/detailed routes. The removed near-call/branch lowering discarded architectural selector and gate state.",
+    "exclusions": [
+      "native LLVM/NeverC far-transfer intrinsics and general i386 source dispatcher",
+      "task gates/TSS task switches",
+      "real/VM86/IA-32e far execution",
+      "reserved L-bit target caches",
+      "CET/FRED and hardware debug producers",
+      "REP/BND/duplicate prefixes",
+      "concurrent CPUs, MMIO and external writers",
+      "debugger RF and opaque unusable cache payload",
+      "processor-dependent A/D on faulting walks",
+      "other CPUs without a separately qualified binding"
+    ]
+  },
+  "final_totals": {
+    "tests": 1700,
+    "passed": 1698,
+    "failed": 0,
+    "skipped": 2,
+    "legacy_far_cpu_comparisons": 10912,
+    "counting_note": "Only the twelve final reports contribute to these totals. Far-transfer comparisons are counted only from LegacyFar cpu_comparisons; diagnostic/focused replays are excluded."
+  },
+  "builds": {
+    "native": {
+      "directory": "/mnt/data/neverd-mpx-source-20261031/build-x86-native",
+      "configuration": "Release",
+      "last_command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX86PagingTests",
+        "--parallel",
+        "4"
+      ],
+      "receipt_sha256": "abe61198b0b327f83ad1bf74d8419156206bb85b845e4b63eb2e33ebb1532ea5",
+      "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "translate_archive_sha256": "0e966b92770e1810a00742b9d571e65afde64a6e805fd5af41a873936aab72f9",
+      "qualification_log_sha256": "b84191fc1edaa3393be12d299f42b8e4af06202a4feb09836239ac90d87bf15f",
+      "supplemental_log_sha256": "96b26b6f3df1053dca0bef8d6093bafe9261633b12e6a960c8c9f20018552250"
+    },
+    "r6": {
+      "directory": "/mnt/data/neverd-sgx-transfer-20261101/build-x86",
+      "configuration": "Release",
+      "last_command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX86PagingTests",
+        "NeverDX86NonlocalControlTests",
+        "NeverDX64PagedExecutionTests",
+        "NeverDX64ContinuationSourceTests",
+        "NeverDX64ContinuationExportTests",
+        "--parallel",
+        "8"
+      ],
+      "receipt_sha256": "3b1757cae661589cdc7d6b2e2a116c0c56efd766dfc0157ebc98cc10bfe67a87",
+      "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "translate_archive_sha256": "fc875b37756248e9bd1d6ddca7026f8f696c26405631881d2ae06ad8c10cf81f",
+      "qualification_log_sha256": "fd4f3a070cbcb21fcec1f9c58baf6b4a5e9f63d1a34730d9581ccbadcf535d4f",
+      "supplemental_log_sha256": "d02828b079386198cac6f4261bbce9bd57cf63e9788b1918cd6e7cfef823dab4"
+    }
+  },
+  "reports": [
+    {
+      "name": "native-paging-p",
+      "sdk": "native",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-far-transfers-20261105/native-paging-p/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:/mnt/data/neverd-legacy-far-transfers-20261105/native-paging-p/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-far-transfers-20261105/native-paging-p/exports"
+      },
+      "binary_sha256": "15f2253242cda1a5924b6c72280da69bd50851d58d732484da60fd2a9dfb6518",
+      "exit_code": 0,
+      "tests": 511,
+      "failed": 0,
+      "skipped": [
+        {
+          "test": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+          "reason": "unittests/translate/x86/X86PagingNativeTests.cpp:118\nBound KVM CPU has no LA57\n"
+        }
+      ],
+      "result_sha256": "4c9b36d2a864b09ae933774f5dc0e10a94b1e9c36372c12f703363686ab4ac1a",
+      "log_sha256": "e94522b67806831d4ccec8ffe83b69d72b93b3528918c1df4d6871a2cc886a79",
+      "passed": 510,
+      "legacy_far_cpu_comparisons": 2728
+    },
+    {
+      "name": "r6-paging-p",
+      "sdk": "r6",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-far-transfers-20261105/r6-paging-p/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:/mnt/data/neverd-legacy-far-transfers-20261105/r6-paging-p/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-far-transfers-20261105/r6-paging-p/exports"
+      },
+      "binary_sha256": "d0eddf8cd5197e36ebbad03dd269b7cc6d59a4392d1a301fc66acb9b9f6a60d6",
+      "exit_code": 0,
+      "tests": 511,
+      "failed": 0,
+      "skipped": [
+        {
+          "test": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+          "reason": "unittests/translate/x86/X86PagingNativeTests.cpp:118\nBound KVM CPU has no LA57\n"
+        }
+      ],
+      "result_sha256": "d493e0e80257c645856a045625d303d6669114a2966aaf693e297be3b61669e8",
+      "log_sha256": "6aa698ee7efd4c38d8555a18a64075494a6c93f1c1854a364b000dd65cf810dc",
+      "passed": 510,
+      "legacy_far_cpu_comparisons": 2728
+    },
+    {
+      "name": "native-far-e",
+      "sdk": "native",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-far-transfers-20261105/native-far-e/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyFar/*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:/mnt/data/neverd-legacy-far-transfers-20261105/native-far-e/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-far-transfers-20261105/native-far-e/exports"
+      },
+      "binary_sha256": "15f2253242cda1a5924b6c72280da69bd50851d58d732484da60fd2a9dfb6518",
+      "exit_code": 0,
+      "tests": 30,
+      "failed": 0,
+      "skipped": [],
+      "result_sha256": "a365de00b601b6b0e1a5eee224ad5f083a1c0cc6da1ea6b3404f8a37dea5af53",
+      "log_sha256": "ff0595d576b7bca0364098dde73f6583a462216bcea56b169b319c761e216fad",
+      "passed": 30,
+      "legacy_far_cpu_comparisons": 2728
+    },
+    {
+      "name": "r6-far-e",
+      "sdk": "r6",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-far-transfers-20261105/r6-far-e/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyFar/*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:/mnt/data/neverd-legacy-far-transfers-20261105/r6-far-e/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-far-transfers-20261105/r6-far-e/exports"
+      },
+      "binary_sha256": "d0eddf8cd5197e36ebbad03dd269b7cc6d59a4392d1a301fc66acb9b9f6a60d6",
+      "exit_code": 0,
+      "tests": 30,
+      "failed": 0,
+      "skipped": [],
+      "result_sha256": "e7c706a8627470791612ed07f160b816593bc5941964980378c35b7b549e6413",
+      "log_sha256": "4b8867de61ebdba3070074c4caa0e27b09eb7f2aea3c4585795763cb31398738",
+      "passed": 30,
+      "legacy_far_cpu_comparisons": 2728
+    },
+    {
+      "name": "native-nonlocal",
+      "sdk": "native",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-far-transfers-20261105/native-nonlocal/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX86NonlocalControlTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:/mnt/data/neverd-legacy-far-transfers-20261105/native-nonlocal/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-far-transfers-20261105/native-nonlocal/exports"
+      },
+      "binary_sha256": "967e1322d47f80760db69b42c8ae00d0cf9e54a7d64edaaa3e98209b4e54472b",
+      "exit_code": 0,
+      "tests": 7,
+      "failed": 0,
+      "skipped": [],
+      "result_sha256": "d66048d38b80715aa3d888efb2de7299852b2b8fa98d4dbbeeaea164a805c595",
+      "log_sha256": "d9a5668523181e8325e64bef6ab6ff501da28b2ce09be5c68089ff5669bd1b5d",
+      "passed": 7,
+      "legacy_far_cpu_comparisons": 0
+    },
+    {
+      "name": "r6-nonlocal",
+      "sdk": "r6",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-far-transfers-20261105/r6-nonlocal/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "build-x86/bin/NeverDX86NonlocalControlTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:/mnt/data/neverd-legacy-far-transfers-20261105/r6-nonlocal/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-far-transfers-20261105/r6-nonlocal/exports"
+      },
+      "binary_sha256": "544ccf624d60162ee335594007f1c9bec891af810131b61f328d803ea683ebb5",
+      "exit_code": 0,
+      "tests": 7,
+      "failed": 0,
+      "skipped": [],
+      "result_sha256": "3d8856aef10a17d41c8ebb8e3266ab04a9fab79f73e5ebed277b0841edd2f076",
+      "log_sha256": "1af5fa679bc3f7d424974dfd6569fc0efe9d82e2468726e6c11acfc8aa8b46a0",
+      "passed": 7,
+      "legacy_far_cpu_comparisons": 0
+    },
+    {
+      "name": "native-paged",
+      "sdk": "native",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-far-transfers-20261105/native-paged/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:/mnt/data/neverd-legacy-far-transfers-20261105/native-paged/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-far-transfers-20261105/native-paged/exports"
+      },
+      "binary_sha256": "8805dafeb29f24dfc3912ac9435b24a97570d5951510c52c0a1579c9ce24ce9e",
+      "exit_code": 0,
+      "tests": 52,
+      "failed": 0,
+      "skipped": [],
+      "result_sha256": "ad8940306474099b0f5f6bcabf9f626b0adb33916abd63580ab88ecb31b193af",
+      "log_sha256": "c2529c495b037d31301d67a0a2799c5241d40998a7cb7f9f2343a519291326f8",
+      "passed": 52,
+      "legacy_far_cpu_comparisons": 0
+    },
+    {
+      "name": "r6-paged",
+      "sdk": "r6",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-far-transfers-20261105/r6-paged/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:/mnt/data/neverd-legacy-far-transfers-20261105/r6-paged/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-far-transfers-20261105/r6-paged/exports"
+      },
+      "binary_sha256": "ef2c2ff2d3b00d7698798f185f5d3b1d72ace1395c1f01363be5b410a62a6ee5",
+      "exit_code": 0,
+      "tests": 52,
+      "failed": 0,
+      "skipped": [],
+      "result_sha256": "73da9dccd64e3a3929d519fa327961ff38123b2b203a804851cc92bcd1be11bf",
+      "log_sha256": "344129b4d375fe6f223f52140055b50051e5455cede67c3cd281a156dc10f259",
+      "passed": 52,
+      "legacy_far_cpu_comparisons": 0
+    },
+    {
+      "name": "native-source",
+      "sdk": "native",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-far-transfers-20261105/native-source/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX64ContinuationSourceTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:/mnt/data/neverd-legacy-far-transfers-20261105/native-source/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-far-transfers-20261105/native-source/exports"
+      },
+      "binary_sha256": "9bd04bc4358cfa1537f366aa2e85c461493953f36c551c60502267a682c3db18",
+      "exit_code": 0,
+      "tests": 150,
+      "failed": 0,
+      "skipped": [],
+      "result_sha256": "9e7706c9d806f8b11a24e60037c40edffd7c5b0a216c1f732bf8d9575a52aba5",
+      "log_sha256": "50a689c1cc242104107ada96dec840ad4519d3d07f144ed59a24d16636f630f1",
+      "passed": 150,
+      "legacy_far_cpu_comparisons": 0
+    },
+    {
+      "name": "r6-source",
+      "sdk": "r6",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-far-transfers-20261105/r6-source/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "build-x86/bin/NeverDX64ContinuationSourceTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:/mnt/data/neverd-legacy-far-transfers-20261105/r6-source/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-far-transfers-20261105/r6-source/exports"
+      },
+      "binary_sha256": "faac0a9344ff699fa4c7ebac6292c5a76964ff06bcd41c50fccf09512d7cf9e1",
+      "exit_code": 0,
+      "tests": 150,
+      "failed": 0,
+      "skipped": [],
+      "result_sha256": "4c1c47986eeb00bbfaaa8d894e69b8391e5a78880d0639f11bee0d50411942e5",
+      "log_sha256": "b61bbf839654bc876ef62eb66c08be804045a3093b1c60bf8f360acb47533a26",
+      "passed": 150,
+      "legacy_far_cpu_comparisons": 0
+    },
+    {
+      "name": "native-export",
+      "sdk": "native",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-far-transfers-20261105/native-export/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX64ContinuationExportTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:/mnt/data/neverd-legacy-far-transfers-20261105/native-export/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-far-transfers-20261105/native-export/exports"
+      },
+      "binary_sha256": "7c8f4ff48dbbeee33c0da398fca566ef84845979df31e731dcb5a975410d0724",
+      "exit_code": 0,
+      "tests": 100,
+      "failed": 0,
+      "skipped": [],
+      "result_sha256": "10938ec000af027e6d362f7d9629abd799c726aa22a9583e745dc75f9bf1db5f",
+      "log_sha256": "c0e85dd69c97f689b6262db923d295dae9d83bb50200668806f483af95905a97",
+      "passed": 100,
+      "legacy_far_cpu_comparisons": 0
+    },
+    {
+      "name": "r6-export",
+      "sdk": "r6",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-far-transfers-20261105/r6-export/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "build-x86/bin/NeverDX64ContinuationExportTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:/mnt/data/neverd-legacy-far-transfers-20261105/r6-export/result.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-far-transfers-20261105/r6-export/exports"
+      },
+      "binary_sha256": "655b4dc5931ac340be3e4dfe79bc45a3550657b42555c11084049343854ba429",
+      "exit_code": 0,
+      "tests": 100,
+      "failed": 0,
+      "skipped": [],
+      "result_sha256": "3dd48219264c9b888bdcb0f60341874589c4e89fccb97f3417ce3efbf342df85",
+      "log_sha256": "7abecac66aa8ff078c5eb43bd8c06c6a64381957a45d02a1ebbc49e4b5d50a1b",
+      "passed": 100,
+      "legacy_far_cpu_comparisons": 0
+    }
+  ],
+  "diagnostic_history": [
+    {
+      "logs": {
+        "initial-far-p/run.log": {
+          "sha256": "d2bb21c1ce61f836cc7b81f29c01eb682b06441d7afcb32928d863a5d20c5856"
+        },
+        "parameter-fault-probe.log": {
+          "sha256": "0bfd1147fccf75c17aeb365c92ea251ece812531a528bae8f44fd98952a4d0b9"
+        }
+      },
+      "cause": "The first implementation prefetched parameters upward before any inner-stack stores. Original hardware saved old SS:SP first, then faulted on the highest parameter address.",
+      "fix": "Push old SS:SP, then interleave descending parameter reads and stores. Independent overlapping-stack and competing-fault tests qualify this order. The ring-0 fault stack is kept separate from the deliberately faulty ring-1 stack."
+    },
+    {
+      "logs": {
+        "nonlocal-native/run.log": {
+          "sha256": "e82dd1fdcbbc43cf53fea2b7bee05c76dda0b9908a43b8d49c4df1221720e146"
+        },
+        "capstone-far-probe.log": {
+          "sha256": "0434f35f7d0a03a0dd5ca5cb948bc2f5a87eda838c69ce59f79c8879d73321e6"
+        }
+      },
+      "cause": "Capstone reports some FF /3 and /5 instructions with ordinary CALL/JMP identities, bypassing an identity-only far-transfer refusal.",
+      "fix": "Check decoded opcode/ModRM as well as LCALL/LJMP identities before publishing operations. Strict/permissive and full/fast decode routes are tested."
+    }
+  ],
+  "sources": [
+    {
+      "url": "https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf",
+      "basis": "Intel SDM CALL/JMP and protected call-gate privilege, TSS, parameter and frame rules. The explicitly bound fault-publication order is separately qualified by the original CPU matrix."
+    }
+  ],
+  "artifacts": {
+    "run-check.py": {
+      "sha256": "dc8f7e1cd37cce6fe1a276758ad290010d865d1977a6e0e4c20585347aa55c2d"
+    },
+    "qualified-source.json": {
+      "sha256": "793decbcc0e4acf53347530fb8cc23475028a92132de0e4c182a0e4bce048410"
+    },
+    "base-and-compilers.json": {
+      "sha256": "9699ad9924c302bad9e482386c6ce441628932fad3471e9d00928e6fb666a9b3"
+    },
+    "lscpu.txt": {
+      "sha256": "7f4109c239e5c5ba677df617efec96dd1b8b697962bc31fe1d5def9a2c99d82f"
+    },
+    "docs-check.log": {
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+    },
+    "source-provenance.log": {
+      "sha256": "38d5a65733120543aec44836aed51088f7878f93794b644902ecc95a9534daa1"
+    },
+    "capstone-far-probe.c": {
+      "sha256": "89804e9d8980ec0a70defbd69ba572b0a187999ce735a3cdadbdf0822a85d6ef"
+    },
+    "capstone-far-probe.log": {
+      "sha256": "0434f35f7d0a03a0dd5ca5cb948bc2f5a87eda838c69ce59f79c8879d73321e6"
+    },
+    "docs-final-check.log": {
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+    },
+    "provenance-final-check.log": {
+      "sha256": "7b32158d821dcf6cc0674beb99ac28dd8cb67c2e9e4ea65a585d6a27af6a804e"
+    }
+  },
+  "release_note": "This batch changes NeverD only. Native compiler far-transfer APIs remain a separate gap. Global completion, the final LLVM release, SDK pin and gitlink update are not claimed.",
+  "published_path_note": "Repository paths are relative; ${NEVERC_WORKTREE} identifies the independently hashed compiler checkout. Raw local reports retain original invocation paths."
+}

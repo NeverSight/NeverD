@@ -2382,10 +2382,18 @@ class LocalizedDocumentationMatrixTests(unittest.TestCase):
     # A check nobody runs drifts until it is red for reasons nobody chose, so
     # the workflow's own text is what says this one is still wired in.
     def test_continuous_integration_runs_the_check(self) -> None:
-        workflow = (i18n.REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        workflow = (i18n.REPO_ROOT / ".github" / "workflows" / "llvm-style.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn('"$PYTHON" scripts/check_docs_i18n.py', workflow)
+        self.assertIn("python -m unittest scripts.tests.test_check_docs_i18n", workflow)
+        self.assertIn("python scripts/check_docs_i18n.py", workflow)
+        # The style workflow also sees the Markdown-only pushes CI ignores, so
+        # running the check in CI again would only repeat it.
+        main = (i18n.REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn('"$PYTHON" scripts/check_docs_i18n.py', main)
+        self.assertNotIn("scripts.tests.test_check_docs_i18n", main)
 
 
 if __name__ == "__main__":

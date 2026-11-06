@@ -62,6 +62,19 @@ CR2 and retained ordinary RAM remain checked. Repeat these tests on the
 qualified P/E cores and both SDKs; preserve raw failing probes as diagnostics.
 See [the legacy execution contract](x86-legacy-segments.md#protected-instruction-and-event-execution).
 
+`LegacyFar/*` in `NeverDX86PagingTests` compares protected far CALL/JMP and
+16/32-bit call gates against original KVM instructions. It checks independent
+code/operand/address/gate/TSS/stack widths, CPL/RPL/DPL, conforming targets,
+GDT/LDT caches, descriptor writes, parameter/frame memory, page faults and
+original handler repair/IRET/retry. Overlapping old/new stacks distinguish an
+ordered copy from prefetching arguments. Unit tests add RETF parameter cleanup,
+backing-stop/event resume and malformed/unbound admission. The ordinary-lift
+boundary is covered by `NeverDX86NonlocalControlTests`: strict and permissive,
+fast and detailed decoders must all refuse an unbound far branch without
+publishing partial operations. Repeat the native matrix on both qualified
+core classes and SDKs; run full paging and nonlocal-control checks after changes.
+See [protected far transfers](x86-legacy-segments.md#protected-far-transfers).
+
 `LegacyPorts/*` adds protected IN/OUT/INS/OUTS to that fixture with independent
 device tapes. These are KVM-intercepted I/O comparisons, not bare CPU device
 execution. They cover code/address/operand widths, CPL/IOPL, 16-bit TSS
@@ -15653,6 +15666,38 @@ functions when a small opcode, CFG, or observable-state assertion is enough.
 
 ## CI relationship
 
+`CI` first runs one `Repository and script checks` job on Linux. Repository
+content and host-independent scripts give the same answer on every host, so this
+job settles them once and the native matrix waits for it. A failure here stops
+the matrix before it spends runner time. Native legs repeat only what depends on
+their host: Clang and MSVC Debug and Release flags, the tools and workflow shell
+fragments that job runs on that host, and the two macOS cases that execute nowhere
+else. Tests of benchmark and generator tools that CI does not run on those hosts
+execute only on Linux.
+
+`Source provenance` scans the tree and the newest 16 commits in its own Linux job,
+and the native matrix does not wait for it. A private path in published content
+fails the run, while compilation and tests still report.
+
+Documentation translation checks stay in `LLVM Style`, which also sees
+Markdown-only pushes. The EVM audit tests stay in `EVM Upstream Audit`, apart from
+its macOS sandbox case. `Capstone fork contract` runs the pinned decoder's own
+suite only when the pin changes. Commits limited to `.agents/` or
+`tools/neverd-gui/` skip `CI`, which does not build the GUI; `Desktop GUI` owns
+those paths.
+
+`Mobile Decompilation` runs when mobile frontends, the `neverd mobile` command or
+their tests change, and every night on `dev`. Core loader, IR and backend changes
+also affect mobile recovery, so a regression from one of those commits surfaces
+in that night's run. `Mobile Real Applications` takes about ten runner hours, so it
+follows only the nightly or a dispatched run, and a mobile-path push gets `Mobile
+Decompilation`'s own result. A completion it skips does not cancel a run in flight.
+
+A `dev` push waits for a running `CI` instead of cancelling it, so each finished
+run reports a result. Only the newest waiting push stays queued, and the commits
+in between share its result. Pull requests and other branches still replace
+their older runs.
+
 CI builds Release with tests enabled on Linux, macOS, and Windows, then audits
 the discovered inventory before applying platform-specific label exclusions.
 Those profiles are defined in `.github/workflows/ci.yml` and
@@ -15670,20 +15715,27 @@ disabled, infrastructure-not-run, failed, and missing results remain separate.
 In particular, CTest can encode a missing executable as a JUnit `<skipped>`;
 that is an execution failure, not an optional-backend skip. A stopped run can
 omit unstarted tests entirely, so matching only the XML summary count is not
-sufficient either. The audit runs even after CTest fails and preserves that
-failure. Each matrix leg uploads its inventory, JUnit, exit status, outcome
-JSON, and log as `ctest-evidence-<profile>`.
+sufficient either. The main profile continues past a failing test, so one failure
+does not hide the results behind it. The audit runs even after CTest fails and
+preserves that failure. Each matrix leg uploads its inventory, JUnit, exit status,
+outcome JSON, and log as `ctest-evidence-<profile>`.
 
-The same job first executes its focused emulation and mobile contracts. The
-`reuse` command retains only their passed results with matching inventory
-identities, so the main profile does not run those cases twice. Failed, skipped
-and incomplete cases remain in the main execution. A name registered by several
-owners moves only when every selected owner has passed. The final audit combines
-the retained JUnit cases with fresh results against the unchanged complete
-profile, rejects overlaps and missing identities, and keeps the original exit
-status. Reuse names, JUnit and input hashes accompany the outcome artifact.
+The same job first executes its focused emulation contracts. The
+`reuse` command retains their passed and explicitly skipped results with matching
+inventory identities, so the main profile does not run those cases twice. A skip
+gives the same answer when the same job repeats it on the same products, and the
+final audit still rejects one in a required suite. Failed, disabled, not-run and
+incomplete cases remain in the main execution. A name registered by several
+owners moves only when every selected owner has a retained result. The final
+audit combines the retained JUnit cases with fresh results against the unchanged
+complete profile, rejects overlaps and missing identities, and keeps the original
+exit status. Reuse names, JUnit and input hashes accompany the outcome artifact.
 This avoids repeated native work within the hosted job's time limit without
 reducing its required coverage.
+
+`Capture the existing first-fatal semantic failures` repeats known failures to
+retain diagnostic snapshots. It adds no coverage, so it runs only on
+`workflow_dispatch`.
 
 The original WHP file-transfer matrix contains eighteen separately bounded
 five-second guests, so its complete CTest method has a 120-second allowance.
@@ -16535,7 +16587,7 @@ Input-file bytes and aggregate image extents each share `memory_limit`; runtime 
 
 `WindowsProcess.ClockServicesUseConsistentUnitsAndPreserveLastError` runs original x64/ARM64 PE calls for `QueryPerformanceFrequency`, the monotonic counter, FILETIME, wrapping tick count and a relative delay. `WindowsProcess.UnmodeledDelaysStopWithoutClaimingCompletion` checks alertable, positive absolute and INT64_MIN intervals before completion. `NativeWindowsOracleRunsTheSameExecutable` also executes the successful clock scenario directly on Windows; both guest regressions are mandatory in Unicorn-free KVM/WHP acceptance. The original fixture explicitly poisons unused `BOOLEAN` register bits and uses typed 64-bit constants, preserving the epoch and INT64_MIN under the Windows ABI.
 
-`ARM64 native backend build` compiles `NeverDEmulationNative` with Unicorn disabled on `ubuntu-24.04-arm` (KVM) and `windows-11-arm` (WHP), using the pinned LLVM sources. `audit_native_backend_build.py` checks every declared native source, its active backend definition, compile recipe, ARM64 ELF/COFF object and hashes. `probe_native_host.py` records setup availability and resource cleanup; unavailable facilities are explicit and setup failures fail the job. This verifies compilation and host setup; guest execution remains unverified. `NeverDCapstoneCompilerOptions.inc` scopes the qualifier diagnostic option to Clang C compilations; GCC and MSVC retain their own warning policies. `native_arm64_only=true` selects these ARM64 component builds and setup probes without the full x64 CPU acceptance profile. Build audits canonicalize source and build roots before matching paths, including Windows 8.3 aliases. The ARM64 component job explicitly enables its selected KVM or WHP backend before the build audit.
+`ARM64 native backend build` compiles `NeverDEmulationNative` with Unicorn disabled on `ubuntu-24.04-arm` (KVM) and `windows-11-arm` (WHP), using the pinned LLVM sources. `audit_native_backend_build.py` checks every declared native source, its active backend definition, compile recipe, ARM64 ELF/COFF object and hashes. `probe_native_host.py` records setup availability and resource cleanup; unavailable facilities are explicit and setup failures fail the job. This verifies compilation and host setup; guest execution remains unverified. `NeverDCapstoneCompilerOptions.inc` scopes the qualifier diagnostic option to Clang C compilations; GCC and MSVC retain their own warning policies. `arm64-native-build.yml` runs these ARM64 component builds and setup probes without the full x64 CPU acceptance profile, on commits that change the native backends or build configuration and every night on `dev`. Build audits canonicalize source and build roots before matching paths, including Windows 8.3 aliases. The ARM64 component job explicitly enables its selected KVM or WHP backend before the build audit.
 
 `WindowsTestExecution.def` selects the Unicorn ARM64 `WindowsExclusive` comparison for `RUN_SERIAL`. The CTest policy avoids contention with other guest workloads while retaining the original 60 s guest deadline and all result, register, permission and native-digest checks.
 
@@ -17552,7 +17604,12 @@ the indexed leaf summary against duplicate definitions and entries, PHIs,
 value widths and identities, authenticated stack live-ins, the depth limit,
 and reuse across functions or invocations. The index belongs to one immutable
 function; a rejected function must still count toward duplicate-entry rejection.
-The `Native pipeline compatibility` workflow runs the complete focused ABI,
+The `Native pipeline compatibility` workflow runs when dependencies, threading or
+allocator support, the C API, its worker tests or the workflow itself change, or
+on dispatch. ABI,
+lift and HighIR commits rely on `CI`'s native legs, so a problem only clang-cl,
+the native-thread baseline or the real-engine worker cases would catch shows up
+at this workflow's next run. It runs the complete focused ABI,
 pipeline-outcome, thread and HighIR control-flow owners on Linux, macOS and
 Windows x64 (MSVC and clang-cl), together with actual SDK allocation and native
 worker requests. It requires registered cases to execute without failures or

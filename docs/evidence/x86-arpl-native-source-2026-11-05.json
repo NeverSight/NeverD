@@ -535,7 +535,7 @@
           "sha256": "af842f7fdb86f02a2659e88068a681bc0da187d40f80de665dd55f8ca5a352bb",
           "report": {
             "schema_version": 2,
-            "frontend": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+            "frontend": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
             "tools": {
               "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
               "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
@@ -598,7 +598,7 @@
           "sha256": "af842f7fdb86f02a2659e88068a681bc0da187d40f80de665dd55f8ca5a352bb",
           "report": {
             "schema_version": 2,
-            "frontend": "/home/ad/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+            "frontend": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
             "tools": {
               "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
               "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",

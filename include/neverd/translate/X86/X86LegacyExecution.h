@@ -142,6 +142,12 @@ enum class X86LegacyCallProfile : uint8_t {
   CheckBeforeTargetLimit,
 };
 
+/// Protected far CALL/JMP, ordinary RAM and one CPU. Descriptor accessed
+/// writes and ordered frame stores survive a later transfer fault. Call gates
+/// use their own width, independently of CS.D, SS.B and the operand prefix.
+/// Task switching, VM86 and CET require separate state bindings.
+enum class X86LegacyFarTransferProfile : uint8_t { OrderedFrame };
+
 /// Intel SEP with explicit MSRs, no CET/FRED and no debug-event producer.
 /// Transfers install fixed caches without reading descriptors or either stack.
 enum class X86LegacyFastSystemProfile : uint8_t { IntelSEP };
@@ -183,6 +189,7 @@ struct X86LegacyExecutionOptions {
   std::optional<uint32_t> DecimalUndefinedFlags;
   std::optional<X86LegacyStringProfile> Strings;
   std::optional<X86PortIOBinding> PortIO;
+  std::optional<X86LegacyFarTransferProfile> FarTransfers;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -237,6 +244,9 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// BT/BTS/BTR/BTC, BSF/BSR, XCHG/XADD/CMPXCHG/CMPXCHG8B,
 /// AAA/AAS/DAA/DAS and AAM/AAD with every immediate base,
 /// PUSH/POP, PUSHF/POPF and near CALL/JMP/Jcc/RET.
+/// FarTransfers adds direct and memory far CALL/JMP and 16/32-bit call gates,
+/// including inner-ring stack switches and parameter copying. Transfers stop
+/// before fetching the destination. Task gates and TSS transfers refuse.
 /// The explicit Strings profile adds MOVS/STOS/LODS/CMPS/SCAS, with REP or
 /// REPE/REPNE as appropriate, in both address and operand widths. Each call
 /// commits at most one element; RepeatContinue retains EIP, sets RF, ends

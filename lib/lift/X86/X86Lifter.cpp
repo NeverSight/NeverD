@@ -921,6 +921,13 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   if (hasHardwareLockElisionPrefix(Insn, TargetArch == Arch::X64))
     throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
 
+  auto &X86 = Detail->x86;
+  // Capstone can label FF /3 and /5 as CALL/JMP rather than LCALL/LJMP.
+  // Their selector-bearing memory operands still require a far-transfer owner.
+  if (X86.opcode[0] == 0xff &&
+      ((X86.modrm & 0x38) == 0x18 || (X86.modrm & 0x38) == 0x28))
+    throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
+
   // These instructions leave the ordinary call/return domain and have no
   // faithful ordinary-C projection yet. Refuse before publishing any
   // operations, including when permissive lifting was asked for: a NOP or
@@ -937,12 +944,15 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   case X86_INS_UIRET:
   case X86_INS_ERETS:
   case X86_INS_ERETU:
+  // Far branches can select a call gate or task and change CPL/SS/SP. Only
+  // the explicit legacy machine-state executor owns that descriptor state.
+  case X86_INS_LCALL:
+  case X86_INS_LJMP:
     throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
   default:
     break;
   }
 
-  auto &X86 = Detail->x86;
   LiftState S(Insn->address, static_cast<uint16_t>(Insn->size), Ops);
   // Each decoded instruction is one publication transaction. A refused
   // handler may already have computed an address or emitted a partial result.

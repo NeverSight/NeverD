@@ -108,6 +108,41 @@ TEST(X86NonlocalControl, UserInterruptReturnRequiresItsStateOwner) {
     }
 }
 
+TEST(X86NonlocalControl, FarBranchesRequireDescriptorAndStackState) {
+  for (Arch Target : {Arch::X86, Arch::X64})
+    for (bool Strict : {false, true})
+      for (bool Fast : {false, true}) {
+        Decoder D;
+        ASSERT_TRUE(D.init(Target));
+        D.setStrict(Strict);
+        std::vector<std::vector<uint8_t>> Forms{
+            {0xff, 0x18}, {0xff, 0x28}, {0x66, 0xff, 0x18}, {0x66, 0xff, 0x28}};
+        if (Target == Arch::X86) {
+          Forms.push_back({0x9a, 0, 0x40, 0, 0, 27, 0});
+          Forms.push_back({0xea, 0, 0x40, 0, 0, 27, 0});
+          Forms.push_back({0x66, 0x9a, 0, 0x40, 27, 0});
+          Forms.push_back({0x66, 0xea, 0, 0x40, 27, 0});
+        }
+        for (const auto &Bytes : Forms) {
+          SCOPED_TRACE(testing::PrintToString(Bytes));
+          DecodedInsn Insn{};
+          ASSERT_EQ(
+              Fast
+                  ? D.decodeOneForLift(Bytes.data(), Bytes.size(), kEntry, Insn)
+                  : D.decodeOne(Bytes.data(), Bytes.size(), kEntry, Insn),
+              Bytes.size());
+          SCOPED_TRACE(testing::Message()
+                       << "arch=" << unsigned(Target) << " strict=" << Strict
+                       << " fast=" << Fast << " id=" << Insn.Id);
+          std::vector<LowOp> Ops(1);
+          Ops.front().Opcode = NdOp::COPY;
+          EXPECT_THROW(D.liftToLow(Insn, Ops), UnliftedInstruction);
+          ASSERT_EQ(Ops.size(), 1u);
+          EXPECT_EQ(Ops.front().Opcode, NdOp::COPY);
+        }
+      }
+}
+
 TEST(X86NonlocalControl, FredReturnsRequireTheirStateOwner) {
   for (bool User : {false, true}) {
     const std::vector<uint8_t> Bytes{uint8_t(User ? 0xf3 : 0xf2), 0x0f, 0x01,

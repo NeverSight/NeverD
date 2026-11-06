@@ -10,7 +10,6 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -130,6 +129,38 @@ find() { return 0; }
         audit = self.workflow_step_containing(native, "Require every focused C++ case")
         for owner in owners:
             self.assertIn("('" + owner + "',", audit)
+
+    def test_capstone_fork_suite_runs_on_pin_changes_for_every_compiler(self):
+        native = WORKFLOW.with_name("native-pipeline.yml").read_text(encoding="utf-8")
+        contract = WORKFLOW.with_name("capstone-contract.yml").read_text(encoding="utf-8")
+        self.assertNotIn("build-capstone-core", native)
+        self.assertIn("build-capstone-core", contract)
+        push, pull_request = contract.split("  pull_request:\n", 1)
+        for trigger in (push.split("  push:\n", 1)[1], pull_request.split("\npermissions:", 1)[0]):
+            self.assertIn("- 'third_party/capstone'", trigger)
+            self.assertIn("- '.github/workflows/capstone-contract.yml'", trigger)
+        for source in (native, contract):
+            matrix = source.split("        include:\n", 1)[1].split("\n    env:", 1)[0]
+            matrix = matrix.split("\n    defaults:", 1)[0]
+            self.assertEqual(re.findall(r"- name: (.*)", matrix), [
+                "Linux x64", "macOS arm64", "Windows x64 MSVC", "Windows x64 clang-cl",
+            ])
+
+    def test_native_pipeline_runs_on_dependency_and_threading_changes(self):
+        native = WORKFLOW.with_name("native-pipeline.yml").read_text(encoding="utf-8")
+        paths = re.findall(r"    paths:\n((?:      - .*\n)+)", native.split("\npermissions:", 1)[0])
+        self.assertEqual(len(paths), 2)
+        self.assertEqual(paths[0], paths[1])
+        for path in ("cmake/NeverDPerformance.cmake", "lib/support/**", "lib/sdk/capi/**",
+                     "third_party/oneTBB", "third_party/mimalloc",
+                     "include/neverd/support/Parallel.h",
+                     # CI does not build the worker, so these run only here.
+                     "tools/neverd-worker/tests/call_site_types_test.py",
+                     "tools/neverd-worker/tests/native_mapping_test.py"):
+            self.assertIn(f"      - '{path}'\n", paths[0])
+        # CI's native legs own these. Their changes must not start this workflow.
+        for path in ("lib/ir/high/**", "lib/libc/**", "lib/ir/med/abi/**"):
+            self.assertNotIn(f"      - '{path}'\n", paths[0])
 
     def test_msvc_test_targets_select_extended_coff_objects(self):
         for msvc_style in (False, True):
@@ -319,85 +350,6 @@ find() { return 0; }
                     self.assertEqual(props["TIMEOUT"], previous.get(name, 30))
                 self.assertFalse(props.get("RUN_SERIAL", False))
 
-    def test_mobile_focused_inventory_executes_on_every_runner(self):
-        source = WORKFLOW.read_text(encoding="utf-8")
-        step = self.workflow_step_containing(source, "focused contract has missing")
-        script = step.split("<<'PY'\n", 1)[1]
-        # Exercise the actual declarative inventory and its identity checks.
-        # Stop before the first filesystem mutation or CTest invocation.
-        inventory = textwrap.dedent(script.split('          evidence = Path(', 1)[0])
-        body = ast.parse(textwrap.dedent(script.split('\n          PY\n', 1)[0]))
-        owner_start = next(index for index, node in enumerate(body.body)
-                           if isinstance(node, ast.Assign) and any(
-                               isinstance(target, ast.Name) and target.id == "owners"
-                               for target in node.targets))
-        owner_end = next(index for index, node in enumerate(body.body)
-                         if isinstance(node, ast.Assign) and any(
-                             isinstance(target, ast.Name) and target.id == "common"
-                             for target in node.targets))
-        owners = body.body[owner_start:owner_end]
-        for runner, profile in (("Linux", "linux-semantic"),
-                                ("macOS", "macos-patch"),
-                                ("Windows", "windows-focused")):
-            with self.subTest(runner=runner), patch.dict(
-                    "os.environ", {"RUNNER_OS": runner, "TEST_PROFILE": profile}):
-                scope = {}
-                exec(compile(inventory, str(WORKFLOW), "exec"), scope)
-                self.assertEqual(len(scope["expected"]), scope["expected_count"])
-                exec(compile(ast.Module(body=owners, type_ignores=[]),
-                             str(WORKFLOW), "exec"), scope)
-                for item in scope["expected"]:
-                    self.assertTrue(item.labels.intersection(scope["owners"]),
-                                    f"selector omits {runner}: {item.name}")
-                code_owners = [item for item in scope["expected"]
-                               if item.name.startswith("ExecutableCodeOwnerIndex.")]
-                self.assertEqual(len(code_owners), 6)
-                for item in code_owners:
-                    self.assertEqual(item.labels,
-                                     frozenset({"NeverDExecutableCodeOwnerTests"}))
-
-                # One GTest name can be registered by the aggregate and by
-                # focused binaries. Exercise CTest itself so coverage labels
-                # cannot accidentally select the other executable copies.
-                cases = {
-                    "SourceABI.PartialFPRegisterPreservationDoesNotInventArguments": (
-                        "NeverDLiftTests", "NeverDObjCSourceCallTests",
-                        "NeverDSourceEntryBindingTests"),
-                    "LowInstructionBoundary.AArch64BarePageBaseCompletesOnlyForExactDereference": (
-                        "NeverDLiftTests", "NeverDLowInstructionBoundaryTests"),
-                    "ExecutableCodeOwnerIndex.PreservesMetadataBoundariesAndRawThumbSpelling": (
-                        "NeverDExecutableCodeOwnerTests",),
-                }
-                required = {scope["TestRecord"](name, frozenset(labels))
-                            for name, labels in cases.items()}
-                self.assertTrue(required <= set(scope["expected"]))
-                with tempfile.TemporaryDirectory(prefix="neverd-focused-owners-") as directory:
-                    root = Path(directory)
-                    subdirectories = []
-                    for name, labels in cases.items():
-                        for index, label in enumerate(labels):
-                            subdir = root / f"owner{len(subdirectories)}"
-                            subdir.mkdir()
-                            subdirectories.append(subdir.name)
-                            actual_labels = labels if index == 0 else (label,)
-                            (subdir / "CTestTestfile.cmake").write_text(
-                                f'add_test("{name}" "${{CMAKE_COMMAND}}" "-E" "true")\n'
-                                f'set_tests_properties("{name}" PROPERTIES LABELS '
-                                f'"{";".join(actual_labels)}")\n')
-                    (root / "CTestTestfile.cmake").write_text(
-                        "".join(f'subdirs("{name}")\n' for name in subdirectories))
-                    names = root / "tests.txt"
-                    names.write_text("".join(name + "\n" for name in cases))
-                    result = subprocess.run(
-                        ["ctest", "--test-dir", str(root), "--label-regex",
-                         scope["owner_regex"], "--tests-from-file", str(names),
-                         "--show-only=json-v1"], capture_output=True, text=True,
-                        timeout=30)
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    selected = scope["parse_inventory"](json.loads(result.stdout))
-                    self.assertEqual(len(selected), len(required))
-                    self.assertEqual(set(selected), required)
-
     def test_med_ir_exports_source_abi_and_objc_dependencies(self):
         with tempfile.TemporaryDirectory(prefix="neverd-med-ir-link-") as directory:
             root = Path(directory)
@@ -570,9 +522,9 @@ find() { return 0; }
 
     def test_workflow_executes_this_configuration_contract(self):
         source = WORKFLOW.read_text(encoding="utf-8")
-        step_marker = "      - name: Verify Debug and Release target flags\n"
+        step_marker = "      - name: Run repository and script checks\n"
         self.assertEqual(source.count(step_marker), 1)
-        verify_step = source.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
+        verify_step = source.split(step_marker, 1)[1].split("\n  build-and-test:", 1)[0]
         self.assertEqual(verify_step.count("scripts.tests.test_ci_configuration"), 1)
         self.assertEqual(
             verify_step.count("scripts.tests.test_audit_ci_test_inventory"), 1
@@ -584,6 +536,132 @@ find() { return 0; }
         self.assertEqual(
             verify_step.count("scripts.tests.test_neverd_bench_harness"), 1
         )
+
+    def test_host_independent_checks_run_once_and_gate_the_native_matrix(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        checks = source.split("  repository-checks:\n", 1)[1].split(
+            "\n  source-provenance:\n", 1
+        )[0]
+        self.assertIn("    runs-on: ubuntu-24.04\n", checks)
+        # Nothing here reads a submodule or commit history.
+        self.assertNotIn("submodules:", checks)
+        self.assertNotIn("fetch-depth:", checks)
+
+        build = source.split("\n  build-and-test:\n", 1)[1].split("\n  native-cpu:\n", 1)[0]
+        self.assertIn("    needs: repository-checks\n", build)
+        self.assertEqual(
+            re.search(r"(?m)^    if: (.*)$", checks).group(1),
+            re.search(r"(?m)^    if: (.*)$", build).group(1),
+        )
+        # Linux gets these from the gate; the other hosts repeat only their own.
+        host_step = self.workflow_step_containing(build, "Verify host-specific script behavior")
+        self.assertIn("if: runner.os != 'Linux'", host_step)
+        for module in ("test_ci_configuration", "test_audit_ci_test_inventory",
+                       "test_audit_ci_test_results", "test_ci_test_reuse",
+                       "test_prepare_source_dialect_corpus", "test_check_capabilities"):
+            with self.subTest(module=module):
+                self.assertRegex(checks, rf"scripts\.tests\.{module}\b")
+                self.assertRegex(host_step, rf"scripts\.tests\.{module}\b")
+        # MSVC composes its own flags; macOS uses the Clang flags Linux checks.
+        flags_step = self.workflow_step_containing(build, "Verify Debug and Release target flags")
+        self.assertIn("if: runner.os != 'macOS'", flags_step)
+        self.assertIn("scripts.tests.test_debug_build_configuration", flags_step)
+
+    def test_source_provenance_reports_without_holding_back_the_native_matrix(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        job = source.split("\n  source-provenance:\n", 1)[1].split(
+            "\n  build-and-test:\n", 1
+        )[0]
+        build = source.split("\n  build-and-test:\n", 1)[1].split("\n  native-cpu:\n", 1)[0]
+        # The audit runs once and reads the newest 16 commits.
+        self.assertEqual(source.count("scripts/check_source_provenance.py --"), 1)
+        self.assertIn("scripts/check_source_provenance.py --history-commits 16", job)
+        self.assertIn("fetch-depth: 32", job)
+        self.assertNotIn("\n    needs:", job)
+        self.assertNotIn("source-provenance", build)
+        self.assertEqual(
+            re.search(r"(?m)^    if: (.*)$", job).group(1),
+            re.search(r"(?m)^    if: (.*)$", build).group(1),
+        )
+
+    def test_cases_that_execute_only_on_macos_stay_on_the_macos_leg(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        step = self.workflow_step_containing(source, "Verify host-specific script behavior")
+        macos = step.split('if [[ "$RUNNER_OS" == "macOS" ]]; then', 1)[1].split("fi\n", 1)[0]
+        for module, case in (
+            ("test_audit_evm_opcode_metadata",
+             "EVMOpcodeAuditTests.test_darwin_sandbox_denies_host_sentinel_outside_capability_roots"),
+            ("test_generate_objc_receiver_declarations",
+             "ObjCReceiverDeclarationTests.test_compiler_distinguishes_interfaces_forwards_and_category_owners"),
+        ):
+            with self.subTest(case=case):
+                self.assertIn(f"scripts.tests.{module}.{case}\n", macos)
+                self.assertIn("def " + case.split(".", 1)[1] + "(",
+                              (ROOT / "scripts" / "tests" / f"{module}.py").read_text(encoding="utf-8"))
+
+    def test_known_failure_snapshots_run_only_when_dispatched(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        for name in ("Capture the existing first-fatal semantic failures",
+                     "Upload first-fatal semantic evidence"):
+            with self.subTest(name=name):
+                step = source.split(f"      - name: {name}\n", 1)[1].split("\n      - name:", 1)[0]
+                self.assertIn("github.event_name == 'workflow_dispatch'", step)
+
+    def test_dev_pushes_finish_instead_of_cancelling_each_other(self):
+        source = WORKFLOW.read_text(encoding="utf-8")
+        concurrency = source.split("\nconcurrency:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("cancel-in-progress: ${{ github.ref != 'refs/heads/dev' }}", concurrency)
+
+    def test_commits_outside_the_compiled_engine_skip_the_native_workflows(self):
+        ignored = ("'**/*.md'", "'.agents/**'", "'tools/neverd-gui/**'")
+        source = WORKFLOW.read_text(encoding="utf-8")
+        triggers = re.findall(r"paths-ignore:\n((?:      - .*\n)+)", source)
+        self.assertEqual(len(triggers), 2)
+        for trigger in triggers:
+            self.assertEqual(
+                tuple(line.strip().removeprefix("- ") for line in trigger.splitlines()),
+                ignored,
+            )
+        # Ignoring the GUI is only correct while this build leaves it out.
+        self.assertNotIn("NEVERD_BUILD_GUI=ON", source)
+        # The GUI workflow owns the GUI's Python test and its checks.
+        gui = WORKFLOW.with_name("gui.yml").read_text(encoding="utf-8")
+        self.assertIn("'tools/neverd-gui/**'", gui.split("\njobs:", 1)[0])
+        self.assertIn("-s tools/neverd-gui/benchmarks/tests -p test_startup_bench.py", gui)
+        self.assertNotIn("test_startup_bench", WORKFLOW.read_text(encoding="utf-8"))
+
+    def assert_path_filtered_and_nightly(self, workflow, required):
+        triggers = WORKFLOW.with_name(workflow).read_text(encoding="utf-8").split(
+            "\npermissions:", 1
+        )[0]
+        self.assertRegex(triggers, r"(?m)^  schedule:\n    - cron: '\d+ \d+ \* \* \*'$")
+        self.assertIn("  workflow_dispatch:", triggers)
+        self.assertNotIn("paths-ignore", triggers)
+        paths = re.findall(r"    paths:\n((?:      - .*\n)+)", triggers)
+        self.assertEqual(len(paths), 2, workflow)
+        self.assertEqual(paths[0], paths[1], workflow)
+        for path in (f".github/workflows/{workflow}", *required):
+            self.assertIn(f"      - '{path}'\n", paths[0], workflow)
+
+    def test_mobile_runs_on_its_own_sources_and_every_night(self):
+        self.assert_path_filtered_and_nightly("mobile.yml", (
+            "tools/neverd/mobile/**", "tools/neverd/cmd/NeverDCmdMobile.cpp",
+            "lib/dalvik/**", "lib/loader/ObjC/**", "lib/loader/Swift/**",
+            "lib/backend/swift/**", "unittests/mobile/**", "scripts/*mobile*",
+            "scripts/tests/fixtures/mobile/**",
+        ))
+
+    def test_arm64_component_builds_follow_backend_sources_and_run_nightly(self):
+        self.assert_path_filtered_and_nightly("arm64-native-build.yml", (
+            "CMakeLists.txt", "cmake/**", "lib/emulation/**",
+            "include/neverd/emulation/**", "third_party/llvm-project",
+            "scripts/audit_native_backend_build.py",
+        ))
+        arm64 = WORKFLOW.with_name("arm64-native-build.yml").read_text(encoding="utf-8")
+        for backend, runner in (("kvm", "ubuntu-24.04-arm"), ("whp", "windows-11-arm")):
+            self.assertIn(f"- backend: {backend}\n            runner: {runner}\n", arm64)
+        self.assertIn("--target NeverDEmulationNative", arm64)
+        self.assertNotIn("NeverDEmulationNative", WORKFLOW.read_text(encoding="utf-8"))
 
     def test_workflow_declares_all_three_test_profiles(self):
         source = WORKFLOW.read_text(encoding="utf-8")
@@ -692,7 +770,7 @@ find() { return 0; }
             self.assertIn(expected, artifact_step)
         self.assertNotIn("continue-on-error", run_step)
 
-    def test_workflow_stops_each_failed_profile_but_keeps_other_hosts_running(self):
+    def test_workflow_runs_each_profile_past_failures_on_every_host(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         strategy = source.split("    strategy:\n", 1)[1].split("\n    steps:", 1)[0]
         self.assertIn("      fail-fast: false\n", strategy)
@@ -701,7 +779,8 @@ find() { return 0; }
         self.assertEqual(source.count(step_marker), 1)
         run_step = source.split(step_marker, 1)[1].split("\n      - name:", 1)[0]
         self.assertIn("set -o pipefail", run_step)
-        self.assertIn("--stop-on-failure", run_step)
+        # One failure must not hide the results of the cases behind it.
+        self.assertNotIn("--stop-on-failure", run_step)
         self.assertIn("--output-on-failure", run_step)
 
     # The corpus is several hundred pinned real binaries, and the only thing

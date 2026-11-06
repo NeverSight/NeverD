@@ -1454,29 +1454,6 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     break;
   }
 
-  // --- LCALL (far call) ---
-  case X86_INS_LCALL: {
-    if (X86.op_count < 1)
-      break;
-    NdVar Target = operandRead(S, X86.operands[0]);
-    S.emit(NdOp::INDIR_CALL, NdVar::reg(x86reg::RAX, 4), {Target});
-    break;
-  }
-
-  // --- LJMP (far jump) ---
-  case X86_INS_LJMP: {
-    if (X86.op_count < 1)
-      break;
-    if (X86.operands[0].type == X86_OP_IMM) {
-      S.emit(NdOp::BRANCH, {},
-             {NdVar::cst(static_cast<uint64_t>(X86.operands[0].imm), 8)});
-    } else {
-      NdVar Target = operandRead(S, X86.operands[0]);
-      S.emit(NdOp::INDIR_BR, {}, {Target});
-    }
-    break;
-  }
-
   // --- ENTER imm16, imm8 ---
   // imm8 is the lexical nesting level (taken mod 32).  Intel SDM:
   //   Push(RBP); FrameTemp = RSP

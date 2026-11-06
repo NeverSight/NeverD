@@ -51,6 +51,14 @@ faults. `ir/X86/X86ReturnRules` shares code-return privilege checks, inaccessibl
 data-cache invalidation and IRET flag restoration with the x64 source and
 faultable owners. Frame access order and mode-specific stack transitions remain
 in their respective owners, with explicit target profiles.
+`translate/X86/X86LegacyFarTransfer` owns protected far CALL/JMP and 16/32-bit
+call-gate entry in the same executor. It authenticates descriptors, stages
+coupled CS/SS/CPL/SP/EIP publication and retains ordered descriptor/frame/argument
+RAM effects on faults. Gate width, caller operand size, TSS width and stack
+address size are independent. The ordinary lifter refuses LCALL/LJMP before
+publishing any operations: a near call/branch cannot represent a descriptor-
+selected transfer. General source export and native compiler intrinsics for
+these far transfers still require their own complete state boundary.
 `translate/X86/X86LegacyEncoding` owns strict legacy prefixes and ModRM/SIB
 addressing for selector and scalar instructions. `X86LegacyScalarEncoding`
 authenticates complete scalar extents; `X86LegacyScalarExecution` owns staged
