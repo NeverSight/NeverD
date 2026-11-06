@@ -14,8 +14,12 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -428,7 +432,19 @@ TEST_F(X86StateAccuracy, InlinedStackWritingFlagsStillRequireACompilerFrame) {
     const auto Object =
         Generator.compile(*Result.LlvmModule, Arch::X64, BinaryFormat::ELF);
     ASSERT_TRUE(Object.Success);
-    EXPECT_TRUE(Caller->hasFnAttribute(llvm::Attribute::NoRedZone));
+    // LLVM's flags intrinsics reserve their own frame when it selects them. The
+    // assembly fallback relies on the attribute following its body here.
+    const bool LLVMReservesFrame = llvm::any_of(
+        llvm::instructions(*Caller), [](const llvm::Instruction &Instruction) {
+          const auto *Intrinsic =
+              llvm::dyn_cast<llvm::IntrinsicInst>(&Instruction);
+          return Intrinsic && (Intrinsic->getIntrinsicID() ==
+                                   llvm::Intrinsic::x86_flags_read_u64 ||
+                               Intrinsic->getIntrinsicID() ==
+                                   llvm::Intrinsic::x86_flags_write_u64);
+        });
+    EXPECT_TRUE(LLVMReservesFrame ||
+                Caller->hasFnAttribute(llvm::Attribute::NoRedZone));
   }
 }
 

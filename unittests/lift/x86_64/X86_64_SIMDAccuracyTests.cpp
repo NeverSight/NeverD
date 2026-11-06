@@ -326,8 +326,10 @@ int main(void) {
     // patterns, including high-bit shuffle controls and sign bits.
     Append({0x31, 0xc0, 0xb8, 4, 0, 0, 0, 0xba, 3, 0, 0, 0});
     Append(Instruction);
+    // The driver restores the x87 state, so no EMMS is needed: outside an owned
+    // x87 context one is refused, which is not what these probes compare.
     if (MMX)
-      Append({0x41, 0x0f, 0x7f, 0x02, 0x0f, 0x77});
+      Append({0x41, 0x0f, 0x7f, 0x02});
     else if (Width == 32)
       Append({0xc4, 0xc1, 0x7e, 0x7f, 0x02});
     else
@@ -356,8 +358,7 @@ TEST_F(X86SIMDAccuracy, SIMDScalarMovesKeepDefinedUpperBytes) {
   compareSIMD({0xc5, 0xf2, 0x11, 0xd0}); // VMOVSS xmm0,xmm1,xmm2
   compareSIMD({0xc5, 0xf3, 0x11, 0xd0}); // VMOVSD xmm0,xmm1,xmm2
   // CVTPI2PS preserves xmm0[127:64]. Load an independent MMX source first.
-  compareSIMD(
-      {0x41, 0x0f, 0x6f, 0x8a, 0x20, 4, 0, 0, 0x0f, 0x2a, 0xc1, 0x0f, 0x77});
+  compareSIMD({0x41, 0x0f, 0x6f, 0x8a, 0x20, 4, 0, 0, 0x0f, 0x2a, 0xc1});
 }
 
 TEST_F(X86SIMDAccuracy, SIMDWideBroadcastAndBlendRepeatWithinLanes) {
