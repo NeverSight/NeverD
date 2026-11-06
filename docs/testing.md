@@ -15669,7 +15669,7 @@ their tests change, and every night on `dev`. Core loader, IR and backend change
 also affect mobile recovery, so a regression from one of those commits surfaces
 in that night's run. `Mobile Real Applications` takes about ten runner hours, so it
 follows only the nightly or a dispatched run, and a mobile-path push gets `Mobile
-Decompilation`'s own result.
+Decompilation`'s own result. A completion it skips does not cancel a run in flight.
 
 A `dev` push waits for a running `CI` instead of cancelling it, so each finished
 run reports a result. Only the newest waiting push stays queued, and the commits

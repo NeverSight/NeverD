@@ -14,10 +14,12 @@ on:
 permissions:
   contents: read
 
-# Qualify only the newest dev producer: each completion supersedes the older
-# in-flight run, as a newer push does for every other workflow.
+# Qualify only the newest nightly or dispatched producer, which supersedes the
+# older in-flight run. Concurrency applies before job conditions, so a completion
+# that qualifies nothing takes its own group or its skipped run would cancel that
+# qualification too.
 concurrency:
-  group: mobile-real-apps-${{ github.event.workflow_run.head_branch }}
+  group: mobile-real-apps-${{ github.event.workflow_run.head_branch }}${{ (github.event.workflow_run.conclusion == 'cancelled' || github.event.workflow_run.event == 'push') && format('-skipped-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:

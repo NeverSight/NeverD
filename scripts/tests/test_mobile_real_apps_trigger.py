@@ -280,6 +280,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("github.event.workflow_run.conclusion != 'cancelled'", trigger_job)
         self.assertIn("github.event.workflow_run.event != 'push'", trigger_job)
 
+    def test_a_completion_that_qualifies_nothing_cannot_cancel_the_run_in_flight(self):
+        group = re.search(r"(?m)^concurrency:\n  group: (.*)$", self.workflow()).group(1)
+        self.assertIn("github.event.workflow_run.conclusion == 'cancelled'", group)
+        self.assertIn("github.event.workflow_run.event == 'push'", group)
+        self.assertIn("format('-skipped-{0}', github.run_id)", group)
+
     def test_actual_workflow_preserves_read_only_trigger_and_same_consumer_identity(self):
         self.assert_contract(self.workflow())
 
