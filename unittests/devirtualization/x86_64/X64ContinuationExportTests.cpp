@@ -1484,6 +1484,7 @@ static void original(neverd_x64_state_v6 *s, void *code, uint64_t *ram) {
 #include "X64RtmPrefixExportTests.inc"
 #include "X64RtmRegionExportTests.inc"
 #include "X64ScheduledCallTests.inc"
+#include "X64CallSiteHandlerTests.inc"
 #include "X64ScheduledFunctionContextTests.inc"
 #include "X64SgxContinuationExportTests.inc"
 #include "X64SmmContinuationExportTests.inc"

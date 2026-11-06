@@ -17599,6 +17599,17 @@ same work allowance before returning.
 
 ### Explicit x64 continuation export
 
+`X64FunctionCallHandlers` composes a producer-declared delivered handler context
+with a pending original CALL. It uses the existing region driver without a
+callee activation and admits retry only after an actual privilege-return
+boundary to the original CALL PC/SP; paged returns also need attempted progress.
+A separate context retains that completed return through budgets/backing stops
+and returns to handler continuation if the retried CALL delivers another fault.
+Instruction effects, event polling, shadows, budgets, CALL and near-RET
+completion stay in their existing owners. Existing drivers and ordinary source
+are unchanged. The helper supplies neither initial state nor arbitrary handler,
+frame-lifetime or external-service proofs.
+
 `X64ContinuationSvm` owns V10's raw VMRUN state exchange. It maps the fourteen
 software-managed registers through `ir/X86/X86SvmContext.h`, imports/exports
 the represented XMM/YMM and MXCSR cells through standard XSAVE images, captures

@@ -1,5 +1,20 @@
 # Remaining x64 C-quality work
 
+Pending original CALLs now have a separate selected-handler resume interface in
+both V6 memory modes, with and without scheduling. A producer explicitly binds
+the delivered handler context. Existing region instructions retain its original
+RAM/register effects, and only an actual successful privilege return to the
+pending CALL PC/SP permits retry; paged returns need attempted progress too.
+The separate controller remembers a completed return across budgets/backing
+stops, and a new CALL fault switches back to the new handler state. Existing
+CALL/activation owners prevent double pushes and cache completion. Both routes
+have static predicates over original nonpaged MOV/IRET/CALL/RET bodies and
+independent paged boundary outcomes; no generated program or guest is executed.
+Existing drivers and site-free/ordinary exports are unchanged. This closes the
+selected-handler/pending-CALL composition gap, not the two ordinary registry
+inputs, initial capture, return-cell/address-space lifetime or complete external
+environment and arbitrary handler effects.
+
 Durable relative jump-table replay now shares the initial exact finite-domain
 proof when a conditional selector cannot be expressed as a mask transform.
 The existing `x64cly_statemachine` execution regression recovers its complete

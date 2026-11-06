@@ -73,6 +73,11 @@ struct X64ContinuationExport {
 /// signature or remove the original environment obligations. A null argument
 /// width keeps that physical slot only in the native context, without a scalar
 /// formal or entry read. Later arguments retain their slots. Optional
+/// Separate handler-resume entries can continue producer-declared delivered
+/// handlers while CALL remains pending. They reuse the region driver and retry
+/// only after a successful privilege return to the original CALL PC/SP (also
+/// attempted in paged mode). Budgets preserve the return; new CALL faults keep
+/// the new handler state. This grants no initial capture or lifetime proof.
 /// call_sites on a function_calls declaration bind selected original direct
 /// CALLs to that entry. Pre-CALL checks use the shared caller layout; the
 /// original step creates the return cell before function-context entry.

@@ -486,6 +486,68 @@ event delivery also preserves the producer-declared event object's pointer,
 using bounded object offsets for its fields. This supplies no object bounds
 for guest addresses or ordinary parameters.
 
+### Resuming selected handlers before an original CALL
+
+Each call-site interface also exports `resume_handler_<mode>site_<address>_v6`.
+Use it when a pending CALL has stopped at a delivered event/fault handler and
+that handler's instructions are selected. This is an explicit handler-context
+declaration by the producer; a matching PC/SP does not establish it. Retain a
+separate `neverd_x64_call_site_handler_context_v1` alongside the site:
+
+```c
+/* result.Status == 7, with the original CALL still pending. */
+neverd_x64_call_site_handler_context_v1 handler;
+if (!neverd_x64_begin_call_site_handler_v1(&site, &handler))
+    return INVALID_PHASE;
+result = neverd_x64_resume_handler_paged_events_site_1005_v6(
+    &state, paged_context, &instruction_budget, &site,
+    &shadows, &poll_budget, peek, accepted, event_context, &handler);
+```
+
+`begin_call_site_handler` binds the site and its original pre-CALL SP without
+reading or altering machine state or RAM. It rejects an unprepared or already
+active/completed site without changing the handler context. Do not begin again
+when merely replenishing a budget: retain both objects and call the same handler
+resume interface. The context storage has the same disjointness and lifetime
+requirements as the site context. An invocation needs its own handler context.
+
+The helper runs the existing region driver without a callee activation. The
+original handler instructions own register, memory and return-frame effects;
+no PC, SP, argument, padding or frame byte is synthesized. Only a successful
+privilege-return boundary (status 6) whose actual PC/SP equal the pending CALL
+coordinates permits the ordinary bridge to retry. Paged returns additionally
+require instruction-attempt progress. Merely entering the handler at matching
+coordinates, reaching another selected CALL, a near RET, fault delivery or an
+unattempted boundary cannot start the callee. Nested returns to other
+coordinates stop with their actual status; resume continues the selected
+handler from that state. Other selected CALL pauses can be handled with their
+own bridges and then this handler resumed.
+
+A matching return is retained across instruction/poll-budget exhaustion or a
+backing stop before CALL, so resumption does not replay the handler. If retrying
+CALL delivers another exception before starting the callee, the helper switches
+back to handler continuation with that new native state. Successful CALL and
+all active/completed resumes reuse the original site/activation owner and cached
+result; they cannot push the CALL return cell twice. Scalar checks retain their
+existing start-only contract, including producer-owned handler effects.
+
+Unscheduled plain helpers run `continue_v6` while in the handler, so an
+ordinary environment callback cannot consume the privilege-return boundary
+before the helper sees it. The supplied environment is used by the existing
+callee resume after CALL succeeds. Scheduled and paged helpers reuse their
+existing region drivers, budgets, shadows and boundary accounting. Outside
+selection, unsupported instructions, faults and other external boundaries still
+stop for the producer. No missing handler instruction or external service is
+inferred, and `paged_debug` retains its separate function-context refusal.
+
+The manifest records `handler_context_type`, `begin_handler`, `handler_domain`
+and each site's `resume_handler`. Existing start/resume interfaces and every
+instruction driver remain unchanged. Only requests with call sites emit these
+additional helpers; ordinary decompilation and site-free exports do not gain
+analysis or per-instruction checks. This closes selected-handler/pending-CALL
+composition, not initial state capture, frame/address-space lifetime proof,
+complete environment effects or recovery of missing ordinary-C arguments.
+
 ## Invocation
 
 Legacy SHUFPS register forms select their four 32-bit lanes through primitive

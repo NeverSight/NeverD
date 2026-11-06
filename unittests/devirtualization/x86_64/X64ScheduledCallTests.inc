@@ -35,15 +35,13 @@ protected:
     return {std::move(Source), take(Report)};
   }
 
-  void proveCalls(bool Paged, bool LLVM, llvm::StringRef Source) {
-    const std::string Name = std::string("scheduled-calls-") +
-                             (Paged ? "paged-" : "plain-") +
-                             (LLVM ? "llvm" : "high");
+  void provePredicates(bool Paged, const std::string &Name,
+                       llvm::StringRef Source, llvm::StringRef Probes,
+                       unsigned Expected, uint64_t RAMBytes) {
     const auto File = tmpFile(Name + ".c");
     const auto InitialIR = tmpFile(Name + ".initial.ll");
     const auto IR = tmpFile(Name + ".ll");
-    std::ofstream(File) << Source.str() << "\n#define PAGED " << Paged << "\n"
-                        << ScheduledCallProbes;
+    std::ofstream(File) << Source.str() << Probes.str();
     auto Built = exec(NEVERD_TEST_CLANG,
                       {"-std=c11", "-O2", "-funroll-loops", "-mllvm",
                        "-unroll-count=16", "-mllvm", "-unroll-threshold=100000",
@@ -58,10 +56,11 @@ protected:
       const auto Module =
           llvm::parseIRFile(InitialIR.string(), Diagnostic, Context);
       ASSERT_NE(Module, nullptr);
-      // The fixture declares accessible, disjoint RAM at [0x10000,0x10040).
+      // The fixture declares accessible, disjoint RAM beginning at 0x10000.
       // Bind only contained constant memory operands to one object. Original
       // integer addresses, instruction bodies and control flow stay intact.
-      constexpr uint64_t Base = 0x10000, Bytes = 64;
+      constexpr uint64_t Base = 0x10000;
+      const uint64_t Bytes = RAMBytes;
       auto *Type = llvm::ArrayType::get(llvm::Type::getInt8Ty(Context), Bytes);
       auto *Stack = new llvm::GlobalVariable(*Module, Type, false,
                                              llvm::GlobalValue::ExternalLinkage,
@@ -138,7 +137,17 @@ protected:
         ASSERT_NE(Value, nullptr);
         EXPECT_TRUE(Value->isZero());
       }
-    EXPECT_EQ(Count, Paged ? 40u : 20u);
+    EXPECT_EQ(Count, Expected);
+  }
+
+  void proveCalls(bool Paged, bool LLVM, llvm::StringRef Source) {
+    const std::string Name = std::string("scheduled-calls-") +
+                             (Paged ? "paged-" : "plain-") +
+                             (LLVM ? "llvm" : "high");
+    provePredicates(Paged, Name, Source,
+                    "\n#define PAGED " + std::to_string(Paged) + "\n" +
+                        ScheduledCallProbes,
+                    Paged ? 40u : 20u, 64);
   }
 };
 

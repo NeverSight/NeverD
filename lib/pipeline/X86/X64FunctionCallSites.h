@@ -59,6 +59,8 @@ llvm::Expected<std::vector<X64FunctionCallSite>> bindX64FunctionCallSites(
 /// only attempted success begins the callee, and every attempt is charged.
 /// Scheduled bridges use the shared scheduler for the original CALL and the
 /// callee; accepted events and faults never establish a callee activation.
+/// Separate handler resumes reuse region drivers before retrying a pending
+/// CALL; existing site resumes retain their explicit PC/SP restore contract.
 llvm::json::Array
 emitX64FunctionCallSites(llvm::raw_ostream &OS,
                          llvm::ArrayRef<X64FunctionCallSite> Sites,

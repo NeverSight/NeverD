@@ -1261,6 +1261,15 @@ typedef struct neverd_x64_event_v1 {
   if (!FunctionCallSites.empty())
     Report["function_call_sites"] = llvm::json::Object{
         {"context_type", "neverd_x64_call_site_context_v1"},
+        {"handler_context_type", "neverd_x64_call_site_handler_context_v1"},
+        {"begin_handler", "neverd_x64_begin_call_site_handler_v1"},
+        {"handler_domain",
+         "explicitly declared delivered handler context; selected "
+         "instructions retain original state and RAM; only a "
+         "successful privilege return to the pending CALL PC/SP "
+         "permits retry, with attempted progress in paged mode; "
+         "budgets and external stops retain the handler; no "
+         "implicit provider, restored frame or initial capture"},
         {"result_type", "neverd_x64_call_result_v1"},
         {"interfaces", std::move(FunctionCallSites)},
         {"domain", "original pre-CALL state and accessible stack RAM; scalar "
