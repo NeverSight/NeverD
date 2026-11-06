@@ -87,38 +87,46 @@ def cancel_saved_restore(args, root, base, saved):
     target = root / "已有-比较.nddiff"
     for stage in ("restore:read", "restore:parse", "restore:write"):
         target.write_text("existing review must survive\n")
-        process = subprocess.Popen(base + ["--json", "--reopen", str(report), "--save", str(target)],
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        messages, captured = queue.Queue(), []
+        # A file, not a pipe: a signal that comes after the commit leaves the
+        # whole report to print, far more than a pipe holds until it is read.
+        output = root / f"restore-stopped-{stage.replace(':', '-')}.json"
+        with output.open("w") as stdout:
+            process = subprocess.Popen(base + ["--json", "--reopen", str(report), "--save", str(target)],
+                                       stdout=stdout, stderr=subprocess.PIPE, text=True)
+            messages, captured = queue.Queue(), []
 
-        def drain():
-            for line in process.stderr:
-                captured.append(line)
-                messages.put(line)
-            messages.put(None)
+            def drain():
+                for line in process.stderr:
+                    captured.append(line)
+                    messages.put(line)
+                messages.put(None)
 
-        reader = threading.Thread(target=drain, daemon=True)
-        reader.start()
-        try:
-            deadline = time.monotonic() + 20
-            while True:
-                line = messages.get(timeout=max(0.1, deadline - time.monotonic()))
-                assert line is not None and time.monotonic() < deadline, captured
-                if line.startswith(f"diff: {stage} "):
-                    process.send_signal(signal.SIGINT)
-                    break
-            process.wait(timeout=20)
-            output = process.stdout.read()
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=15)
-            reader.join(timeout=5)
-            process.stderr.close()
-            process.stdout.close()
+            reader = threading.Thread(target=drain, daemon=True)
+            reader.start()
+            try:
+                deadline = time.monotonic() + 20
+                while True:
+                    line = messages.get(timeout=max(0.1, deadline - time.monotonic()))
+                    assert line is not None and time.monotonic() < deadline, captured
+                    if line.startswith(f"diff: {stage} "):
+                        process.send_signal(signal.SIGINT)
+                        break
+                process.wait(timeout=20)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=15)
+                reader.join(timeout=5)
+                process.stderr.close()
+        # The write's last cancellation point is just before it commits. A later
+        # signal finds the review already replaced, and that is what it reports.
+        if stage == "restore:write" and process.returncode != 3:
+            assert target.read_text() != "existing review must survive\n", captured
+            assert json.loads(output.read_text()), captured
+            continue
         assert process.returncode == 3, (stage, process.returncode, captured)
         assert "restore cancelled; no output was published" in "".join(captured), captured
-        assert output == "", output
+        assert output.read_text() == "", output.read_text()
         assert target.read_text() == "existing review must survive\n"
     assert json.loads(run(base + ["--json", "--reopen", str(saved)], {2, 3}).stdout) == json.loads(saved.read_text())
 
