@@ -943,6 +943,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 }
 #endif
 #include "X64PagedDebugTests.inc"
+#include "X64PagedExecutionBreakpointTests.inc"
 #include "X64PagedFarPointerTests.inc"
 #include "X64PagedFarReturnTests.inc"
 #include "X64PagedPortIOBoundaryTests.inc"

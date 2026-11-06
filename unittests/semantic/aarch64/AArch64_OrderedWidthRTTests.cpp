@@ -24,8 +24,10 @@ class A64OrderedWidthRT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(A64OrderedWidthRT, Verify) { roundTripAArch64(GetParam()); }
 
-// Fields: Category, OptLevel, ExtraFlags, NoOpt, ClangTargetOverride, UcCpuModel
-#define A64V84 "OrderedWidth", 1, "-march=armv8.4-a", false, "", UC_CPU_ARM64_MAX
+// Fields: Category, OptLevel, ExtraFlags, NoOpt, ClangTargetOverride,
+// UcCpuModel
+#define A64V84                                                                 \
+  "OrderedWidth", 1, "-march=armv8.4-a", false, "", UC_CPU_ARM64_MAX
 
 // clang-format off
 
@@ -52,9 +54,13 @@ static const std::vector<RoundTripTC> kA64OrderedWidth = {
    " __asm__ volatile(\"ldtrh %w0,[%1]\":\"=r\"(r):\"r\"(m):\"memory\"); return r; }\n",
    {0}, A64V84},
 
+  // An ordered access stays the original instruction, which takes no rebuilt
+  // frame as its base, so its address comes from the caller.
   {"ldapurb",
-   "long ldapurb(long a){ unsigned char m[4]={0x11,0x22,0x33,0x44}; unsigned r;"
-   " __asm__ volatile(\"ldapurb %w0,[%1]\":\"=r\"(r):\"r\"(m):\"memory\"); return r; }\n",
+   "static unsigned ldapurb_read(const unsigned char *p) __attribute__((noinline));\n"
+   "long ldapurb(long a){ unsigned char m[4]={0x11,0x22,0x33,0x44}; return ldapurb_read(m); }\n"
+   "static unsigned ldapurb_read(const unsigned char *p){ unsigned r;"
+   " __asm__ volatile(\"ldapurb %w0,[%1]\":\"=r\"(r):\"r\"(p):\"memory\"); return r; }\n",
    {0}, A64V84},
 
   // Byte/half stores (pointer arg into the DATA region -> plain memory, not a

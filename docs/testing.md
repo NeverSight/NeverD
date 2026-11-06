@@ -28,6 +28,22 @@ Run debug comparisons on both qualified P/E cores and SDKs, then paging,
 paged-execution and continuation source/export regressions. See the
 [debug contract](x86-paged-execution.md#instruction-step-debug-events).
 
+`X64PagedExecutionBreakpointTest.*`, `X86LegacyExecutionBreakpointTest.*` and
+`LegacyExecutionBreakpoint/*` qualify enabled DR0–DR3 execution comparators.
+Native tests disable debugger interception and compare all RAM and represented
+state, including DR6/DR7. The shared Intel host gate bounds those native
+comparisons; software admission tests retain their ordinary host coverage.
+They cover all enable pairs, RF/TF, coincident causes,
+MOV/POP SS, original linear addresses, fetch/operand/PVI faults and failed
+debug entry. x64 adds eligible/masked IRQ/NMI and IRET/RETF targets, including
+nonflat compatibility code, linear-address wrap and all three frame widths.
+Original handlers set saved RF, count entry and return; a later #PF can repair
+the page before retry. Admission/backing cases verify no instruction effects and retained
+causes. Run on both qualified P/E cores and SDKs, then the affected complete
+paging, paged-execution and continuation source/export suites. See the
+[shared breakpoint contract](x86-paged-execution.md#hardware-execution-breakpoints)
+and its evidence. These checks do not qualify data/I/O watchpoints or GD.
+
 `NeverDInstructionRelocationsTests` checks address-field selection against an
 independent linear membership oracle on x86, x64, ARM and AArch64 metadata in
 COFF, ELF and Mach-O. It covers disjoint and touching ranges, included first

@@ -283,13 +283,15 @@ llvm::Expected<bool> X64PagedExecution::validate(X64ContinuationStateV6 &State,
     return invalid("paged instruction binding disagrees with IA-32e controls");
   auto &Original = State.Core.Core.Core.Core;
   if ((InstructionDebug && !Options.Debug) ||
-      (Options.Debug &&
-       !x86InstructionDebugValid(Options.Debug->DR6, Options.Debug->DR7,
-                                 Options.Debug->DebugCTL)))
-    return invalid("paged instruction debug requires valid DR6, inactive DR7 "
-                   "and zero DEBUGCTL");
-  if ((Original.RFlags & 0x100) && !InstructionDebug)
-    return invalid("paged TF requires the instruction-debug bridge");
+      (Options.Debug && !x86InstructionDebugValid(
+                            Options.Debug->DR6, Options.Debug->DR7,
+                            Options.Debug->DebugCTL, Options.DebugProfile)))
+    return invalid("paged instruction debug requires a valid profile, DR6, "
+                   "supported DR7 and zero DEBUGCTL");
+  if (!InstructionDebug && ((Original.RFlags & 0x100) ||
+                            (Options.Debug && (Options.Debug->DR7 & 0xff))))
+    return invalid(
+        "paged TF and breakpoints require the instruction-debug bridge");
   if (Original.PC != Address)
     return false;
   const auto CPL = uint8_t(State.Core.CS.Selector & 3);
@@ -331,14 +333,26 @@ llvm::Error X64PagedExecution::deliverEvent(
 }
 
 llvm::Error X64PagedExecution::deliverDebug(X64ContinuationStateV6 &State,
-                                            bool SingleStep,
-                                            uint32_t MXCSRMask) {
+                                            bool SingleStep, uint32_t MXCSRMask,
+                                            uint8_t Breakpoints) {
+  if (SingleStep) {
+    const auto &Core = State.Core.Core.Core.Core;
+    const auto &CS = State.Core.CS;
+    // A completed return may select compatibility code, where PC is an
+    // offset and the original linear address includes the loaded CS base.
+    const uint64_t LinearPC =
+        CS.Attributes & 0x2000 ? Core.PC : uint32_t(CS.Base + Core.PC);
+    Breakpoints |= x86ExecutionBreakpoints(
+        Options.Debug->DR, Options.Debug->DR7, LinearPC, Core.RFlags, false);
+  }
   Options.Debug->DR6 =
-      x86InstructionDebugStatus(Options.Debug->DR6, SingleStep);
+      x86InstructionDebugStatus(Options.Debug->DR6, SingleStep, Breakpoints);
   X64ContinuationEventV1 Event;
   Event.SavedPC = State.Core.Core.Core.Core.PC;
   Event.Vector = 1;
-  Event.Kind = X64ContinuationEventKind::Trap;
+  Event.Kind = Breakpoints && !SingleStep
+                   ? X64ContinuationEventKind::InstructionBreakpoint
+                   : X64ContinuationEventKind::Trap;
   if (auto Failure = deliverEvent(State, Event, MXCSRMask))
     return Failure;
   Last.Exception = Last.Delivery->LastException;
@@ -405,16 +419,25 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
   Controls.RFlags = Original.RFlags;
   if (auto Failure = Memory.bindControls(Controls))
     return std::move(Failure);
-  // Stop at the first changed byte before fetching a later old instruction
-  // byte. The environment must relift changed code; it is never executed as
-  // the stale source instruction or skipped as a NOP.
-  // Protected-mode virtual interrupts raise #GP at instruction entry when
-  // VIF and VIP are both set, independent of IOPL and of the opcode. External
-  // event selection has already happened at the scheduler boundary.
+  // PVI's pending interrupt condition precedes instruction breakpoints and
+  // fetch. External event selection already happened at the scheduler boundary.
   if (x86PendingVirtualInterrupt(CPL, Controls.CR4, Controls.RFlags)) {
     T.Access.Status = X86PageWalkStatus::Exception;
     T.Access.Exception = X86MemoryException{13, 0, std::nullopt};
+  } else if (DebugSSBlocked) {
+    const auto Matches =
+        x86ExecutionBreakpoints(Options.Debug->DR, Options.Debug->DR7, Address,
+                                Original.RFlags, *DebugSSBlocked);
+    if (Matches) {
+      Last.InstructionAttempted = true;
+      if (auto Failure = deliverDebug(State, false, MXCSRMask, Matches))
+        return std::move(Failure);
+      return Last;
+    }
   }
+  // Stop at the first changed byte before fetching a later old instruction
+  // byte. The environment must relift changed code; it is never executed as
+  // the stale source instruction or skipped as a NOP.
   for (unsigned I = 0;
        T.Access.Status == X86PageWalkStatus::Completed && I != Bytes.size();
        ++I) {

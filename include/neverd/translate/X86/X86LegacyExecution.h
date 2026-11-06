@@ -10,6 +10,7 @@
 #ifndef NEVERD_TRANSLATE_X86_X86LEGACYEXECUTION_H
 #define NEVERD_TRANSLATE_X86_X86LEGACYEXECUTION_H
 
+#include "neverd/ir/X86/X86DebugRules.h"
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 #include "neverd/ir/X86/X86MpxContext.h"
 #include "neverd/translate/X86/X86LegacySegmentExecution.h"
@@ -18,6 +19,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -51,12 +53,13 @@ struct X86LegacyEventContinuation {
 };
 
 /// Architectural debug status and explicit controls for the instruction-step
-/// binding. Enabled address breakpoints, GD and DEBUGCTL features require a
-/// separate producer; they cannot be silently ignored by this binding.
+/// binding. ExecuteBreakpoints also owns the four linear-address comparators;
+/// data/I/O watchpoints, GD and DEBUGCTL features require separate producers.
 struct X86LegacyDebugState {
   uint32_t DR6 = 0xffff0ff0;
   uint32_t DR7 = 0x400;
   uint64_t DebugCTL = 0;
+  std::array<uint32_t, 4> DR{};
 };
 
 struct X86LegacyExecutionState {
@@ -162,11 +165,10 @@ enum class X86LegacyFarTransferProfile : uint8_t { OrderedFrame };
 /// Transfers install fixed caches without reading descriptors or either stack.
 enum class X86LegacyFastSystemProfile : uint8_t { IntelSEP };
 
-/// TF and ICEBP outside transactions, with DR7=0x400 and DEBUGCTL=0. Native
-/// #DB generation clears inactive B0..B3, sets RTM and retains sticky status;
-/// TF additionally sets BS. MOV/POP SS suppresses its own single-step trap.
-/// External debug causes, hardware watchpoints and task traps are not inferred.
-enum class X86LegacyDebugProfile : uint8_t { InstructionStep };
+/// Shared legacy/x64 instruction-step and execute-comparator profiles. MOV/POP
+/// SS suppresses its own TF trap and the following instruction breakpoint.
+/// Data/I/O watchpoints, general detect and task traps are not inferred.
+using X86LegacyDebugProfile = X86InstructionDebugProfile;
 
 struct X86LegacyExecutionOptions {
   X86LegacySegmentExecutionOptions Segments;
@@ -300,7 +302,7 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// inhibition. Changed code returns CodeChanged at the first mismatch.
 /// Unimplemented or malformed instructions return Error, never a synthesized
 /// #UD or NOP. The explicit Debug binding supplies instruction-entry TF
-/// sampling and TF/ICEBP DR6 causes; hardware debug producers remain external.
+/// sampling and instruction #DB causes; data/I/O producers remain external.
 /// Returns stop at their destination, preserve RF restored by IRETD, and
 /// end SS/STI inhibition. IRET unblocks NMI after fetch, including on a later
 /// fault; RETF preserves NMI blocking.

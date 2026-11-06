@@ -373,10 +373,11 @@ C++ runtime. Ordinary no-fault dispatchers retain their successful-RAM contract.
 The distinction applies to the memory/fault gaps listed below.
 
 The opt-in [paged x64 instruction-debug binding](x86-paged-execution.md#instruction-step-debug-events)
-now owns nontransactional TF/ICEBP causes, DR6, MOV-SS inhibition, POPFQ/PUSHFQ,
+now owns nontransactional TF/ICEBP causes, optional canonical DR0–DR3 execution
+breakpoints, DR6, MOV-SS inhibition, POPFQ/PUSHFQ,
 REP single stepping and debug delivery after IRET/RETF. Its accepted-event
 continuation retains secondary faults and already consumed memory inputs over
-physical backing stops. Hardware watchpoints/GD/BTF, debug-aware function
+physical backing stops. Data/I/O watchpoints, GD/BTF, debug-aware function
 activation completion, general i386/compatibility source dispatch and the other
 state families below remain open. This does not satisfy the global LLVM release
 gate; the production SDK and LLVM gitlink remain unchanged.
@@ -3862,7 +3863,7 @@ LOOP/LOOPcc/JCXZ/JECXZ, INT/INT3/INTO/INT1,
 UD2, protected
 16/32-bit IRET/RETF and Intel SEP SYSENTER/SYSEXIT. It is not a general i386
 source dispatcher. Protected call gates have the separate far-transfer binding.
-Task gates, real/VM86, hardware debug producers, software SMM and SGX execution/AEX/EPCM
+Task gates, real/VM86, data/I/O and other unbound debug producers, software SMM and SGX execution/AEX/EPCM
 remain separate incomplete contracts. Unsupported input returns an explicit
 error. [The execution contract](x86-legacy-segments.md#protected-instruction-and-event-execution)
 records the bound processor behavior and native evidence. The global
@@ -3873,8 +3874,11 @@ adds TF and ICEBP causes with explicit DR6/DR7/DEBUGCTL state. It samples entry
 TF across POPF/IRET, respects MOV/POP SS suppression, preserves REP progress,
 and retains debug status through failed IDT entry and backing resume. Native
 checks disable debugger interception and compare real exception frames and
-complete state. Enabled hardware breakpoints, branch stepping and task traps
-remain outside this binding.
+complete state. The additional [execution-breakpoint profile](x86-paged-execution.md#hardware-execution-breakpoints)
+shares DR0–DR3 matching and DR6 status with paged x64, including RF/SS inhibition,
+coincident single stepping, pending virtual-interrupt priority and accepted
+fault continuation. Data/I/O watchpoints, GD, branch stepping and task traps
+remain outside these bindings.
 
 [Protected legacy returns](x86-legacy-segments.md#protected-iret-and-far-returns)
 now connect IDT entry back to the interrupted code. The explicit return profile
@@ -3993,7 +3997,7 @@ original word-POPF comparisons on the qualified P/E cores. The separate
 protected-state matrices contribute 96,512 FLAGS comparisons, including
 privilege and fault state; these counts do not mix ordinary compiler ABI
 observations with original-machine arithmetic flags. General i386 source ABI,
-hardware debug producers, task/VM86 state,
+data/I/O and other unbound debug producers, task/VM86 state,
 software SMM/SGX and the other unqualified environments remain open. This
 batch does not advance the final LLVM release, SDK pin or LLVM gitlink.
 

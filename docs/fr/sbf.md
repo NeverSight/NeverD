@@ -298,7 +298,7 @@ CPI/PDA n’est construit que lorsqu’un vrai `scratch consumer` existe ; les p
 sans ce consumer ignorent le `whole-CFG fixed point`. `SBFAnalysisLimits.def` décrit
 l’`analysis policy` de l’hôte, pas les `protocol limits` : `MaxModeledScratchBytes`
 représente 1,024 octets par `program point`, et `ScratchFlowRetainedByteBudget` est
-une `logical retained estimate` de 8,388,608 octets. Au dépassement du budget, la
+une `logical retained estimate` de 16,777,216 octets. Au dépassement du budget, la
 récupération élargit explicitement vers `ScratchRecoveryPrecision::BlockLocal`.
 Seuls les `cross-block must-facts` sont abandonnés ; le `block-local replay` reste
 `sound` et peut encore récupérer les `same-block stores`. Le printer émet toujours la ligne `recovery scratch-precision=block-local`,

@@ -265,7 +265,7 @@ scratch 복구는 demand-driven입니다. Solana CPI/PDA scratch의 fixed point�
 실제 `scratch consumer`가 있을 때만 구성하며, 그런 consumer가 없는 프로그램은
 `whole-CFG fixed point`를 건너뜁니다. `SBFAnalysisLimits.def`는 호스트의
 `analysis policy`를 정의할 뿐 `protocol limits`가 아닙니다. `MaxModeledScratchBytes`는
-`program point`마다 1,024 bytes이고, `ScratchFlowRetainedByteBudget`은 8,388,608 bytes의
+`program point`마다 1,024 bytes이고, `ScratchFlowRetainedByteBudget`은 16,777,216 bytes의
 `logical retained estimate`입니다. 예산을 넘으면 복구는 명시적으로
 `ScratchRecoveryPrecision::BlockLocal`로 widening합니다. `cross-block must-facts`만
 버리고 `block-local replay`는 `sound`를 유지하며 `same-block stores`도 복구할 수 있습니다. printer는 안정적으로

@@ -23,4 +23,10 @@ target_include_directories(NeverDX64ContinuationExportTests PRIVATE
 if(NOT APPLE)
   target_link_libraries(NeverDX64ContinuationExportTests PRIVATE LLVMSupport)
 endif()
+if(WIN32)
+  # These tests read the IR the SDK returns, and the shared engine exports only
+  # the SDK on Windows.
+  target_link_libraries(NeverDX64ContinuationExportTests PRIVATE
+    LLVMCore LLVMIRReader)
+endif()
 add_dependencies(NeverDX64ContinuationExportTests neverd)

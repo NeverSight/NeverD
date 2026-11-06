@@ -288,7 +288,7 @@ CPI/PDA строится только при наличии настоящего
 пропускают `whole-CFG fixed point`. `SBFAnalysisLimits.def` задаёт хостовую
 `analysis policy`, а не `protocol limits`: `MaxModeledScratchBytes` ограничивает
 1,024 bytes на каждый `program point`, а `ScratchFlowRetainedByteBudget` — это
-`logical retained estimate` в 8,388,608 bytes. При превышении бюджета восстановление
+`logical retained estimate` в 16,777,216 bytes. При превышении бюджета восстановление
 явно выполняет widening к `ScratchRecoveryPrecision::BlockLocal`. Теряются только
 `cross-block must-facts`; `block-local replay` остаётся `sound` и может восстановить
 `same-block stores`. Printer стабильно

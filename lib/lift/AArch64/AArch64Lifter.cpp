@@ -322,7 +322,11 @@ void AArch64Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
   // A decoded spelling is still useful for inspection, but an illegal or
   // architecturally unpredictable encoding has no ordinary LowIR semantics.
   // Refuse it even in permissive mode, before emitting any operations.
-  if (Insn->illegal)
+  // The decoder soft-fails a load whose transfer register is its base when
+  // bits 11:10 are nonzero, taking them for writeback. An unprivileged
+  // LDTR sets them too, but writes nothing back, so that pair is well defined.
+  if (Insn->illegal && !aarch64_decode::isUnprivilegedLoadStore(
+                           llvm::support::endian::read32le(Insn->bytes)))
     throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
   auto *Detail = Insn->detail;
 

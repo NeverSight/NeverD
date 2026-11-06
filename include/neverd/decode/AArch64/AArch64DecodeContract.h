@@ -32,6 +32,12 @@ namespace aarch64_decode {
   inline constexpr const char *Name = Text;
 #include "neverd/decode/AArch64/AArch64DecodeContract.def"
 
+/// Load/store register (unprivileged): LDTR, STTR and their sized forms, with
+/// bits 29:24 == 0b111000, bit 21 clear and bits 11:10 == 0b10.
+constexpr bool isUnprivilegedLoadStore(uint32_t Word) {
+  return (Word & 0x3f200c00U) == 0x38000800U;
+}
+
 } // namespace aarch64_decode
 } // namespace neverd
 

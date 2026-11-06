@@ -54,6 +54,10 @@ using GPRFamilyMask = uint32_t;
 /// The family of XMM0, the first of the eight vector argument registers.
 constexpr unsigned kX64VectorFamilyBase = 16;
 constexpr unsigned kX64VectorArgumentFamilies = 8;
+/// A System V aggregate returns in the first two vector registers.
+constexpr unsigned kX64VectorReturnFamilies = 2;
+/// The bytes of a vector family a summary tracks.
+constexpr uint8_t kX64VectorFamilyBytes = 16;
 
 /// In a may-write mask, a write to the x86-64 floating-point return register
 /// (any view of XMM0, which is its family).  A callee that leaves RAX alone
