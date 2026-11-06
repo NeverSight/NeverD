@@ -2602,4 +2602,98 @@ int main(void) {
   source_call_execution_test::compileAndRun(Program, {"-O2"});
 }
 
+TEST(HighCTruthValue, InvertedEqualityHasAZeroOrOneValue) {
+  std::vector<HighFunc> Functions;
+  auto Make = [&](const std::string &Name, std::vector<HighStmt> Body,
+                  const ExprPtr &X, TypeRef Return) {
+    HighFunc F;
+    F.Name = Name;
+    F.Entry = kEntry + Functions.size() * 16;
+    F.ReturnType = Return;
+    F.Params = {{"x", X->Type, kNoParamReg, 0}};
+    F.Body = std::move(Body);
+    Functions.push_back(std::move(F));
+  };
+  auto V = tempOfSize(0, 4);
+  V.Kind = MedVar::Param;
+  const auto X = HighExpr::makeVar(V, NdType::makeInt(4, false));
+  const auto Zero = HighExpr::makeConst(0, 4);
+  const auto Zero1 = HighExpr::makeConst(0, 1);
+  const auto One = HighExpr::makeConst(1, 4);
+  const auto Five = HighExpr::makeConst(5, 4);
+  const auto IsZero = HighExpr::makeBinop(NdOp::INT_EQUAL, X, Zero);
+  const auto IsFive = HighExpr::makeBinop(NdOp::INT_EQUAL, X, Five);
+  const auto Less = HighExpr::makeBinop(NdOp::INT_LESS, X, Five);
+  const auto U32 = NdType::makeInt(4, false);
+  const auto U8 = NdType::makeInt(1, false);
+  auto Not = [](const ExprPtr &P) {
+    return HighExpr::makeUnary(NdOp::BOOL_NOT, P);
+  };
+  auto IsFalse = [&](const ExprPtr &P) {
+    return HighExpr::makeBinop(NdOp::INT_EQUAL, P, Zero1);
+  };
+  auto Plus1 = [&](const ExprPtr &P) {
+    return HighExpr::makeBinop(NdOp::INT_ADD, extendInteger(P, 4), One);
+  };
+  // Values.
+  Make("not_zero_wide", {returnValue(extendInteger(Not(IsZero), 4))}, X, U32);
+  Make("not_zero_byte", {returnValue(Not(IsZero))}, X, U8);
+  Make("not_zero_sum", {returnValue(Plus1(Not(IsZero)))}, X, U32);
+  Make("false_zero_wide", {returnValue(extendInteger(IsFalse(IsZero), 4))}, X,
+       U32);
+  Make("false_zero_sum", {returnValue(Plus1(IsFalse(IsZero)))}, X, U32);
+  Make("false_five_sum", {returnValue(Plus1(IsFalse(IsFive)))}, X, U32);
+  Make("false_less_sum", {returnValue(Plus1(IsFalse(Less)))}, X, U32);
+  Make("not_less_sum", {returnValue(Plus1(Not(Less)))}, X, U32);
+  const auto T = HighExpr::makeVar(tempOfSize(10, 1), U8);
+  Make("not_local",
+       {assignValue(T, IsZero), returnValue(extendInteger(Not(T), 4))}, X, U32);
+  // Conditions read only the truth of the operand.
+  auto Branch = [&](const ExprPtr &Condition) {
+    HighStmt If;
+    If.Kind = StmtKind::If;
+    If.Cond = Condition;
+    If.Body = {returnValue(One)};
+    return std::vector<HighStmt>{std::move(If), returnValue(Zero)};
+  };
+  Make("if_not_zero", Branch(Not(IsZero)), X, U32);
+  Make("if_false_zero", Branch(IsFalse(IsZero)), X, U32);
+  Make("if_both",
+       Branch(HighExpr::makeBinop(NdOp::BOOL_AND, Not(IsZero), Not(Less))), X,
+       U32);
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+  OS.flush();
+  // The shortest test of a value stays the value itself.
+  EXPECT_NE(C.find("if (x) {"), std::string::npos) << C;
+  const auto Program = C + R"C(
+#define CHECK(call, want) \
+  if ((uint32_t)(call) != (uint32_t)(want)) return __LINE__ % 200 + 1;
+int main(void) {
+  const uint32_t values[] = {0, 1, 2, 3, 4, 5, 6, 256, 0x80000000u, 0xffffffffu};
+  for (unsigned i = 0; i != 10; ++i) {
+    const uint32_t x = values[i];
+    CHECK(not_zero_wide(x), x != 0)
+    CHECK((uint8_t)not_zero_byte(x), x != 0)
+    CHECK(not_zero_sum(x), (x != 0) + 1)
+    CHECK(false_zero_wide(x), x != 0)
+    CHECK(false_zero_sum(x), (x != 0) + 1)
+    CHECK(false_five_sum(x), (x != 5) + 1)
+    CHECK(false_less_sum(x), (x >= 5) + 1)
+    CHECK(not_less_sum(x), (x >= 5) + 1)
+    CHECK(not_local(x), x != 0)
+    CHECK(if_not_zero(x), x != 0)
+    CHECK(if_false_zero(x), x != 0)
+    CHECK(if_both(x), x >= 5)
+  }
+  return 0;
+}
+)C";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
 } // namespace

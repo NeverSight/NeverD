@@ -1543,14 +1543,8 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
         Inner->Op == NdOp::INT_SLESSEQUAL && Inner->Operands.size() == 2 &&
         IsZero(Inner->Operands[1]) && Inner->Operands[0])
       return PrintGtZero(Inner->Operands[0]);
-    if (Inner) {
-      // The inverse is a condition of its own, `!a && !b` of `!(a || b)` or
-      // `a >= b` of `!(a < b)`: as an operand it keeps its grouping.
-      std::string Inverted = invertCondStr(*Inner);
-      if (ParentPrec > 0 && hasTopLevelBinaryOperator(Inverted))
-        Inverted = "(" + Inverted + ")";
-      return Inverted;
-    }
+    if (Inner)
+      return invertedTruthValue(*Inner, E, ParentPrec);
     return "!" + exprStr(*E.Operands[0], 99);
   }
   case NdOp::INT_ZEXT: {
@@ -8693,16 +8687,57 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
   }
   // Boolean context: a view the test keeps whether it reads zero through is
   // no sanitizer wrap. Keep wraps on add/sub/mul.
-  if (Cur && Cur != &E &&
-      (Cur->Kind == ExprKind::Var || Cur->Kind == ExprKind::Phi ||
-       Cur->Kind == ExprKind::Call ||
-       (Cur->Kind == ExprKind::UnaryOp && Cur->Op == NdOp::BOOL_NOT) ||
-       (Cur->Kind == ExprKind::BinOp &&
-        (Cur->Op == NdOp::INT_EQUAL || Cur->Op == NdOp::INT_NOTEQUAL ||
-         Cur->Op == NdOp::INT_LESS || Cur->Op == NdOp::INT_LESSEQUAL ||
-         Cur->Op == NdOp::INT_SLESS || Cur->Op == NdOp::INT_SLESSEQUAL))))
-    return exprStr(*Cur);
-  return exprStr(E);
+  const HighExpr *Tested =
+      Cur && Cur != &E &&
+              (Cur->Kind == ExprKind::Var || Cur->Kind == ExprKind::Phi ||
+               Cur->Kind == ExprKind::Call ||
+               (Cur->Kind == ExprKind::UnaryOp && Cur->Op == NdOp::BOOL_NOT) ||
+               (Cur->Kind == ExprKind::BinOp &&
+                (Cur->Op == NdOp::INT_EQUAL || Cur->Op == NdOp::INT_NOTEQUAL ||
+                 Cur->Op == NdOp::INT_LESS || Cur->Op == NdOp::INT_LESSEQUAL ||
+                 Cur->Op == NdOp::INT_SLESS ||
+                 Cur->Op == NdOp::INT_SLESSEQUAL)))
+          ? Cur
+          : &E;
+  const HighExpr *Enclosing = TruthTested;
+  TruthTested = Tested;
+  std::string Text = exprStr(*Tested);
+  TruthTested = Enclosing;
+  return Text;
+}
+
+std::string HighCWriter::invertedTruthValue(const HighExpr &Test,
+                                            const HighExpr &Node,
+                                            int ParentPrec) {
+  // Inverting `x == 0` leaves the condition `x`, whose value is not 0 or 1.
+  const HighExpr *Compare = unwrapIntegerView(forwardedExpr(&Test));
+  if (&Node != TruthTested && Compare && Compare->Kind == ExprKind::BinOp &&
+      Compare->Op == NdOp::INT_EQUAL && Compare->Operands.size() == 2 &&
+      Compare->Operands[0] && Compare->Operands[1]) {
+    const auto IsZero = [&](const ExprPtr &Op) {
+      const HighExpr *Literal = unwrapIntegerView(Op.get());
+      return Literal && Literal->Kind == ExprKind::Const &&
+             Literal->ConstVal == 0;
+    };
+    const HighExpr *Value =
+        IsZero(Compare->Operands[1])   ? Compare->Operands[0].get()
+        : IsZero(Compare->Operands[0]) ? Compare->Operands[1].get()
+                                       : nullptr;
+    const HighExpr *Shown =
+        Value ? unwrapIntegerView(forwardedExpr(Value)) : nullptr;
+    if (Value && (!Shown || !printsTruthValue(*Shown))) {
+      auto NotZero = HighExpr::makeBinop(
+          NdOp::INT_NOTEQUAL, Compare->Operands[0], Compare->Operands[1]);
+      NotZero->Type = Compare->Type;
+      return renderBinOp(*NotZero, ParentPrec);
+    }
+  }
+  // The inverse is a condition of its own, `!a && !b` of `!(a || b)` or
+  // `a >= b` of `!(a < b)`: as an operand it keeps its grouping.
+  std::string Inverted = invertCondStr(Test);
+  if (ParentPrec > 0 && hasTopLevelBinaryOperator(Inverted))
+    Inverted = "(" + Inverted + ")";
+  return Inverted;
 }
 
 std::optional<std::string>

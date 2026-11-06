@@ -395,7 +395,7 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
     if (Cmp) {
       if (E.Op == NdOp::INT_NOTEQUAL)
         return exprStr(*Cmp, ParentPrec);
-      return invertCondStr(*Cmp);
+      return invertedTruthValue(*Cmp, E, ParentPrec);
     }
   }
   if (E.Operands.size() == 2 && E.Operands[0] && E.Operands[1] &&

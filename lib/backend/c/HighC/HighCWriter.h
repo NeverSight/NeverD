@@ -1016,6 +1016,11 @@ public:
   std::string condStr(const HighExpr &E);
   std::string condStrImpl(const HighExpr &E);
   std::string invertCondStrImpl(const HighExpr &E);
+  /// The logical inverse of \p Test as the rendering of \p Node. A value is 0
+  /// or 1 and keeps its grouping; only the node a condition is currently
+  /// testing may read `!(x == 0)` as plain `x`.
+  std::string invertedTruthValue(const HighExpr &Test, const HighExpr &Node,
+                                 int ParentPrec);
   /// `!(a <= b && a != b)` is `a >= b`. When both IfElse arms print, Hex-Rays
   /// prefers `if (b > a) else-arm else then-arm`.
   std::optional<std::string> preferGreaterIfElseCond(const HighExpr &E);
@@ -1534,6 +1539,8 @@ public:
   std::map<std::string, TypeRef> PointerArgDestTypes;
   /// Single-use call / image-global loads print at the use, not as a temp.
   std::map<std::string, const HighExpr *> ValueForward;
+  /// The node whose truth, not value, the enclosing condition reads.
+  const HighExpr *TruthTested = nullptr;
   /// Values assigned to each printed variable name in the current function,
   /// built on first use by incrementBaseMatchesAddr.
   mutable std::unordered_map<std::string, std::vector<const HighExpr *>>
