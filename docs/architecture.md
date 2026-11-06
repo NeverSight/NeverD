@@ -4413,6 +4413,24 @@ The GUI's analysis replicas restore with `call_summaries:true`: they discover
 the image's functions, warm a page of functions per idle step, solve, drop
 their cached replies so the shown source is read again, and then read ahead
 callees a batch per idle step.
+The first replica of a file opened with idle-time analysis also restores with
+`render_ahead:true`, unless views open functions under options: after the
+read-ahead
+it renders each function's engine pages an idle step at a time, smallest
+function first, and keeps them compact, up to `kRenderAheadMaxStoredBytes`
+(`tools/neverd-worker/EngineRenderAhead.cpp`, `PageCodec.cpp`). A first visit
+then builds its document from those pages without preparing the function, by the
+path that redecorates a kept document after a local rename, and reads as asking
+the engine does. The pages have a kept document's identity and lifetime, so a
+local rename keeps them and whatever forgets the documents forgets them and
+starts the job over. A render cannot be interrupted, so the job renders a
+function only after no request has come for a while, longer for a larger
+function, leaves a function a request took long to prepare prepared until the
+reader has paused for much longer, and leaves the largest functions and any of
+unknown size to their visits. Like a kept document, a render reads what the engine knew when it ran:
+`BinaryImage::CodeRefTargets` is additive, so an address a function rendered
+earlier took, such as a funclet's `_local_unwind` continuation in its parent, can
+make the render differ from a first visit to that function in a new session.
 The GUI owner no longer requests that pipeline warmup: source/CFG views use
 separate analysis sessions and cannot consume the owner's pipeline cache.
 With idle analysis enabled, native images with 4096–65536 functions and at most

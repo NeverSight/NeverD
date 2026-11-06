@@ -7176,6 +7176,146 @@ private slots:
     read();
     read();
     QCOMPARE(refined.count(), 1);
+    // Then the replica reads start in renders functions ahead.
+    QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                              QStringLiteral("done"), NativeOpenTimeoutMs);
+  }
+
+  void pseudocodeViewReadsWhatItsReplicaRenderedAhead() {
+    // A view asks under the options a function opens with.  If the job rendered
+    // under any others, its work would reach nobody, and nothing else shows it.
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(writeFixture(
+        directory, QStringLiteral("summaries-ready-source-cache.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject owner;
+    // Asking for C goes to the engine, which reports the pages it has answered.
+    int pages = 0;
+    const auto readPages = [&](quint64 address) {
+      pages = 0;
+      const QJsonObject function{{"address", hexAddress(address)},
+                                 {"representation", "c"}};
+      session.analysisQueries(function, &owner)
+          .subscribe({"decompile", function}, &owner,
+                     [&](const QJsonObject &response) {
+                       pages = response.value("payload")
+                                   .toObject()
+                                   .value("fixture_pages")
+                                   .toInt(-1);
+                     });
+      QTRY_VERIFY_WITH_TIMEOUT(pages != 0, OpenTimeoutMs);
+    };
+    readPages(Base);
+    QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                              QStringLiteral("done"), NativeOpenTimeoutMs);
+    readPages(Base + 16);
+    const int before = pages;
+    QVERIFY(before > 0);
+    CodeText code(session);
+    code.resize(900, 700);
+    code.show();
+    code.load(Base + 32, QStringLiteral("source"));
+    QTRY_VERIFY_WITH_TIMEOUT(code.complete(), NativeOpenTimeoutMs);
+    QVERIFY(!code.allText().isEmpty());
+    readPages(Base + 48);
+    QCOMPARE(pages, before + 1);
+  }
+
+  void analysisReplicaRendersNothingAheadForViewsOpeningUnderOptions() {
+    // Such views read none of the job's renders.
+    const auto forget = qScopeGuard(
+        [] { QSettings().remove(settings::SymbolicSimplification); });
+    SourceDefaults::instance().setSymbolic(true);
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    QSignalSpy refined(&session, &Session::sourceRefined);
+    session.open(
+        writeFixture(directory, QStringLiteral("summaries-ready.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject owner;
+    const QJsonObject payload{{"address", hexAddress(Base)},
+                              {"representation", "source"}};
+    bool done = false;
+    session.analysisQueries(payload, &owner)
+        .subscribe({"decompile", payload}, &owner,
+                   [&](const QJsonObject &response) {
+                     done = response.value("status") == QLatin1String("ok");
+                   });
+    QTRY_VERIFY_WITH_TIMEOUT(done, OpenTimeoutMs);
+    // Heartbeats report the job from its start, well before the summaries end.
+    QTRY_COMPARE_WITH_TIMEOUT(refined.count(), 1, NativeOpenTimeoutMs);
+    QVERIFY(session.analysisRenderAheadState().isEmpty());
+  }
+
+  void analysisReplicaRendersNothingAheadWithoutIdleAnalysis() {
+    // Analysis > Enabled turned off asks for no idle-time work on the file.
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    QSignalSpy refined(&session, &Session::sourceRefined);
+    LoadOptions options;
+    options.analysis = false;
+    session.open(writeFixture(directory, QStringLiteral("summaries-ready.bin")),
+                 options);
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject owner;
+    const QJsonObject payload{{"address", hexAddress(Base)},
+                              {"representation", "source"}};
+    bool done = false;
+    session.analysisQueries(payload, &owner)
+        .subscribe({"decompile", payload}, &owner,
+                   [&](const QJsonObject &response) {
+                     done = response.value("status") == QLatin1String("ok");
+                   });
+    QTRY_VERIFY_WITH_TIMEOUT(done, OpenTimeoutMs);
+    // Heartbeats report the job from its start, well before the summaries end.
+    QTRY_COMPARE_WITH_TIMEOUT(refined.count(), 1, NativeOpenTimeoutMs);
+    QVERIFY(session.analysisRenderAheadState().isEmpty());
+  }
+
+  void analysisReplicaRendersNothingAheadOnceThatEndedOne() {
+    // The fixture ends the worker when it prepares the second function, which
+    // only the job asks for here.  The replica that replaces it answers reads
+    // and does not render ahead, which would end it the same way.
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-crash-source-cache.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject owner;
+    QString status;
+    const auto read = [&](quint64 address) {
+      status.clear();
+      const QJsonObject function{{"address", hexAddress(address)},
+                                 {"representation", "source"}};
+      session.analysisQueries(function, &owner)
+          .subscribe({"decompile", function}, &owner,
+                     [&](const QJsonObject &response) {
+                       status = response.value("status").toString();
+                     });
+      QTRY_VERIFY_WITH_TIMEOUT(!status.isEmpty(), OpenTimeoutMs);
+    };
+    read(Base);
+    QCOMPARE(status, QStringLiteral("ok"));
+    QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                              QStringLiteral("pending"), NativeOpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(session.analysisRenderAheadState().isEmpty(),
+                             NativeOpenTimeoutMs);
+    // Another function, which no cached reply answers, starts a new replica.
+    read(Base + 32);
+    QCOMPARE(status, QStringLiteral("ok"));
+    // A replica asked to render ahead reports the job from its first
+    // heartbeats, until the render that ends it: watch for as long as that
+    // takes, not only at the end.
+    QElapsedTimer watched;
+    watched.start();
+    while (watched.elapsed() < 12000) {
+      QVERIFY(session.analysisRenderAheadState().isEmpty());
+      QTest::qWait(50);
+    }
+    read(Base + 48);
+    QCOMPARE(status, QStringLiteral("ok"));
   }
 
   void prefetchedSourceAndForegroundUseTheSameAnalysisReplica() {

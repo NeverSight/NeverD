@@ -6019,6 +6019,21 @@ checks that the session refreshes shown source once when a replica's job is
 ready. `localNameEditsReuseTheIdleAnalysisReplica` checks that the option is
 not part of the snapshot that later name updates compare.
 
+`WorkbenchTests::pseudocodeViewReadsWhatItsReplicaRenderedAhead` counts the
+mock engine's pages around a real view's first visit, which reads what the job
+rendered only while the job renders under the options views open with.
+`analysisReplicaRendersNothingAheadWithoutIdleAnalysis`,
+`analysisReplicaRendersNothingAheadForViewsOpeningUnderOptions` and
+`analysisReplicaRendersNothingAheadOnceThatEndedOne` check when the session
+does not ask for the job.
+`NeverDWorkerRenderAhead` reads the mock's page and preparation counters: a first
+visit to a function rendered ahead asks the engine for nothing and reads as one
+that does, a local rename keeps the renders and starts nothing over, forgetting
+kept documents forgets them, requests hold the job off, an expensive prepared
+function stays prepared, the smallest function goes first, and the largest and
+one of unknown size are left to their visits. `NeverDWorkerPageCodec` round-trips the compact page form,
+including matches that overlap their output, under arbitrary damage.
+
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and
 distinct target stack-pointer references. Build that target for the focused

@@ -5,6 +5,7 @@
 
 #include "neverd/sdk/NeverDCAPISession.h"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -228,6 +229,38 @@ private:
   std::uint64_t prefillPrepared_ = 0;
   bool prefillPending() const;
   void prefillStep();
+  /// A replica restored with render_ahead renders each function's engine
+  /// pages in idle time, once its summaries and read-ahead are done, smallest
+  /// function first (EngineRenderAhead.cpp).  namedView builds a first visit's
+  /// document from them as it builds a later visit's from a kept document's.
+  /// They have a kept document's lifetime: forgetNamedViews drops them.
+  enum class RenderAheadState { Off, Pending, Done, Full };
+  bool renderAheadRequested_ = false;
+  RenderAheadState renderAheadState_ = RenderAheadState::Off;
+  /// Each function's size and entry, smallest first, once read.
+  std::vector<std::pair<std::uint64_t, std::uint64_t>> renderAheadOrder_;
+  bool renderAheadOrdered_ = false;
+  std::size_t renderAheadCursor_ = 0;
+  unsigned renderAheadStarts_ = 0;
+  std::uint64_t renderAheadRendered_ = 0, renderAheadFailed_ = 0,
+                renderAheadHits_ = 0;
+  std::size_t renderAheadBytes_ = 0, renderAheadRawBytes_ = 0;
+  /// Compact engine pages by namedView's source key.
+  std::unordered_map<std::string, std::vector<std::string>> renderedAhead_;
+  /// When the last request was answered.
+  std::chrono::steady_clock::time_point lastRequest_{};
+  /// The function a request last prepared and how long that took.
+  std::optional<std::uint64_t> requestPrepared_;
+  std::chrono::steady_clock::duration requestPrepareTime_{};
+  bool renderingAhead_ = false;
+  bool renderAheadPending() const;
+  /// False while the step only waits for the reader to pause.
+  bool renderAheadStep();
+  void renderFunctionAhead(std::uint64_t address);
+  void restartRenderAhead();
+  Json renderAheadJson() const;
+  /// The pages kept under \p sourceKey, or none.
+  std::vector<std::string> renderedAheadPages(const std::string &sourceKey);
   bool summaryWorkPending() const;
   void restartSummaries();
   /// False where the step only waits on discovery (summaryJobStep).
@@ -296,6 +329,27 @@ private:
   void unindexNamedView(NamedViewPosition position);
   std::size_t namedViewBytes_ = 0, encodedPageBytes_ = 0;
   std::uint64_t namedViewsRevision_ = 0, namedViewsListingGeneration_ = 0;
+  /// Revisions that changed local display names alone, which drop nothing the
+  /// engine prepared (localNamesChanged).
+  std::uint64_t localNameRevisions_ = 0;
+  /// Forgets the documents of another revision or listing generation.
+  void syncNamedViews();
+  std::string namedViewSourceKey(std::uint64_t address,
+                                 const std::string &representation,
+                                 const std::string &optionText);
+  /// \p options with what the project's edits add to a source view of
+  /// \p address; \p stale receives why it leaves any out.
+  Json namedViewEngineOptions(std::uint64_t address,
+                              const std::string &representation,
+                              const Json &options, const Json *variableEdits,
+                              const Json *callTypes, const Json *stackFrame,
+                              Json &stale);
+  /// The engine's page of \p address from line \p next, its text checked.
+  std::string engineViewPage(std::uint64_t address,
+                             const std::string &representation,
+                             std::size_t next, bool sourceView,
+                             const Json &engineOptions,
+                             const std::string &optionText);
   void forgetNamedViews();
   void forgetEncodedPages();
   std::shared_ptr<const NamedView>

@@ -1,5 +1,7 @@
 #include "AnalysisService.h"
 
+#include "CodeView.h"
+
 #include <QJsonArray>
 #include <QTimer>
 #include <utility>
@@ -17,10 +19,14 @@ AnalysisService::AnalysisService(QueryService &owner, QString workerPath,
   connect(&client_, &EngineClient::diagnostic, this,
           &AnalysisService::diagnostic);
   connect(&client_, &EngineClient::failure, this, [this](const QString &text) {
+    // Rendering ahead visits every function, and one the worker cannot survive
+    // would end every replica of this project the same way.
+    renderCrashProject_ = queries_.projectId();
     fail(QStringLiteral("analysis_failed"), text);
   });
   connect(&client_, &EngineClient::stopped, this, [this] {
     ready_ = false;
+    renderAheadState_.clear();
     if (!active_.isEmpty())
       fail(QStringLiteral("analysis_failed"), tr("Analysis worker stopped."));
   });
@@ -144,6 +150,12 @@ void AnalysisService::requestSnapshot() {
 void AnalysisService::receive(const QJsonObject &message) {
   // The replica solves the image's call summaries while no read waits.
   if (message.value("type") == QLatin1String("heartbeat")) {
+    renderAheadState_ = message.value("background")
+                            .toObject()
+                            .value("render_ahead")
+                            .toObject()
+                            .value("state")
+                            .toString();
     if (solvesSummaries_ && !summariesReady_ &&
         message.value("background")
                 .toObject()
@@ -176,6 +188,15 @@ void AnalysisService::receive(const QJsonObject &message) {
     auto restore = snapshot_;
     if (solvesSummaries_)
       restore["call_summaries"] = true;
+    // The job renders what a view reads under no options; one that opens its
+    // functions under others would read none of it.
+    if (solvesSummaries_ && rendersAhead_ &&
+        owner_.projectId() != renderCrashProject_ &&
+        SourceDefaults::options(QStringLiteral("source")).isEmpty() &&
+        message.value("capabilities")
+            .toArray()
+            .contains(QStringLiteral("render_ahead")))
+      restore["render_ahead"] = true;
     restore_ = client_.request(QStringLiteral("analysis_restore"), restore);
     return;
   }
