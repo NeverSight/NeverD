@@ -5860,6 +5860,18 @@ ordered-memory ancestors that must remain intact. The x87 classification test
 executes ordinary HighC against native extended-precision encodings; ARM mode
 tests execute both ordinary and explicitly enhanced source.
 
+`SymExprCompare` covers literal observations of complemented, negated and
+masked packed predicates, including 128-bit lanes, impossible constants and
+overlapping lanes. `HighSymSimplify.NegatedPackedComparisonKeepsOnlyObservedFlags`
+compiles and executes emitted C at O0/O2 against an independent packed-word
+oracle; discarded value dependencies must not discard the producing call.
+`RecoveredPackedPredicatesExecuteAtTheirOriginalWidths` executes signed and
+unsigned 8/16/32/64-bit comparisons, their complements and full-word Boolean
+masks at boundary inputs. The output bridge retains one-bit arithmetic it
+cannot represent faithfully as a byte-valued predicate.
+Run `NeverDSymbolicTests` and `NeverDHighSymSimplifyTests` for these shared
+expression-builder changes.
+
 `NeverDHighSymSimplifyTests` provides the focused HighIR suite, including
 8–256-bit affine and quadratic synthesis, synthesis inside signed/unsigned
 width conversions

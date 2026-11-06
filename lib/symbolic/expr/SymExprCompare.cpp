@@ -277,6 +277,59 @@ SymRef observedWord(const SymContext &Ctx, SymRef R) {
 
 } // namespace
 
+SymRef recoverPackedEquality(SymContext &Ctx, SymRef Word, SymRef Literal) {
+  if (!Ctx.isConst(Literal))
+    return {};
+  const unsigned Width = Ctx.width(Word);
+  auto Observed = llvm::APInt::getAllOnes(Width);
+  if (Ctx.op(Word) == SymOp::And && Ctx.numOperands(Word) == 2 &&
+      Ctx.isConst(Ctx.operand(Word, 0))) {
+    Observed = Ctx.constValue(Ctx.operand(Word, 0));
+    Word = Ctx.operand(Word, 1);
+  }
+  if (Ctx.op(Word) != SymOp::Or)
+    return {};
+  llvm::APInt Forced(Width, 0), Used(Width, 0);
+  struct Lane {
+    SymRef Predicate;
+    llvm::APInt Bit;
+  };
+  llvm::SmallVector<Lane, 8> Lanes;
+  for (auto Value : Ctx.operands(Word)) {
+    if (Ctx.isConst(Value)) {
+      Forced |= Ctx.constValue(Value) & Observed;
+      continue;
+    }
+    llvm::APInt Bit(Width, 1);
+    if (Ctx.op(Value) == SymOp::Mul && Ctx.numOperands(Value) == 2 &&
+        Ctx.isConst(Ctx.operand(Value, 0))) {
+      Bit = Ctx.constValue(Ctx.operand(Value, 0));
+      Value = Ctx.operand(Value, 1);
+    }
+    if (Ctx.op(Value) == SymOp::ZExt)
+      Value = Ctx.operand(Value, 0);
+    if (Ctx.width(Value) != 1 || !Bit.isPowerOf2())
+      return {};
+    Bit &= Observed;
+    if (Bit.isZero())
+      continue;
+    if (!(Used & Bit).isZero())
+      return {};
+    Used |= Bit;
+    Lanes.push_back({Value, std::move(Bit)});
+  }
+  if (!(Used & Forced).isZero())
+    return {};
+  const auto Target = Ctx.constValue(Literal);
+  if ((Target & Forced) != Forced || !(Target & ~(Used | Forced)).isZero())
+    return Ctx.mkFalse();
+  llvm::SmallVector<SymRef, 8> Conditions;
+  for (const auto &L : Lanes)
+    Conditions.push_back((Target & L.Bit).isZero() ? Ctx.mkNot(L.Predicate)
+                                                   : L.Predicate);
+  return Conditions.empty() ? Ctx.mkTrue() : Ctx.mkAnd(Conditions);
+}
+
 SymRef recoverSignComparison(SymContext &Ctx, SymRef Word) {
   if (!isBitwise(Ctx.op(Word)))
     return {};

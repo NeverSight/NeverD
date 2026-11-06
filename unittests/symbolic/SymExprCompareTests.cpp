@@ -8,6 +8,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/symbolic/SymExpr.h"
+#include "neverd/symbolic/SymMBA.h"
 
 using namespace neverd::symbolic;
 
@@ -175,6 +176,121 @@ TEST(SymExprCompare, FullShiftCountAndBooleanCarrierWidthsRemainObservable) {
   EXPECT_FALSE(detail::recoverObservedComparison(
       C, SymOp::Xor, {Sign, WideFlag}, llvm::APInt(1, 0)));
   EXPECT_EQ(C.numNodes(), Before);
+}
+
+TEST(SymExprCompare, NegatedPackedEqualityDiscardsUnobservedLanes) {
+  for (unsigned W : {8u, 32u, 64u, 128u}) {
+    SCOPED_TRACE(W);
+    SymContext C;
+    const auto Noise = C.mkVar("noise", W);
+    const auto A = C.mkVar("a", 1), B = C.mkVar("b", 1);
+    const llvm::APInt Mask(W, 0x90), Target(W, 0x80);
+    const auto Packed = C.mkOr({C.mkAnd(Noise, C.mkConst(~Mask)),
+                                C.mkMul(C.mkZExt(A, W), C.mkConst(W, 0x10)),
+                                C.mkMul(C.mkZExt(B, W), C.mkConst(W, 0x80))});
+    const auto Encoded = C.mkNeg(C.mkOr(C.mkConst(~Mask), C.mkNot(Packed)));
+    const auto Result =
+        simplifyMBADeep(C, C.mkEq(Encoded, C.mkConst(Target + 1))).Expr;
+    EXPECT_EQ(Result, C.mkAnd(C.mkNot(A), B)) << C.toString(Result);
+    for (unsigned N = 0; N != 256; ++N)
+      for (unsigned Bits = 0; Bits != 4; ++Bits) {
+        const llvm::APInt Values[] = {llvm::APInt(W, N),
+                                      llvm::APInt(1, Bits & 1),
+                                      llvm::APInt(1, Bits >> 1)};
+        EXPECT_EQ(C.eval(Result, Values), llvm::APInt(1, Bits == 2));
+        // The original word still has all its bits for a full-value consumer.
+        const auto Word =
+            (llvm::APInt(W, N) & ~Mask) |
+            llvm::APInt(W, (Bits & 1 ? 0x10 : 0) | (Bits & 2 ? 0x80 : 0));
+        EXPECT_EQ(C.eval(Packed, Values), Word);
+      }
+  }
+}
+
+TEST(SymExprCompare, LiteralEqualityPeelsBijectiveWordOperations) {
+  for (unsigned W : {1u, 4u, 8u, 64u, 128u}) {
+    SCOPED_TRACE(W);
+    SymContext C;
+    const auto X = C.mkVar("x", W);
+    for (unsigned Mode = 0; Mode != 4; ++Mode) {
+      auto Encoded = X;
+      if (Mode & 1)
+        Encoded = C.mkNot(Encoded);
+      if (Mode & 2)
+        Encoded = C.mkNeg(Encoded);
+      const auto Top = llvm::APInt::getSignMask(W);
+      for (auto Target : {llvm::APInt(W, 0), llvm::APInt(W, 1), Top,
+                          llvm::APInt::getAllOnes(W)}) {
+        const auto Equal = C.mkEq(Encoded, C.mkConst(Target));
+        const auto Unequal = C.mkNe(C.mkConst(Target), Encoded);
+        for (unsigned I = 0; I != 256; ++I) {
+          auto Value = llvm::APInt(W, I) ^ (I & 1 ? Top : llvm::APInt(W, 0));
+          auto Expected = Value;
+          if (Mode & 1)
+            Expected = ~Expected;
+          if (Mode & 2)
+            Expected = -Expected;
+          EXPECT_EQ(C.eval(Equal, {Value}), llvm::APInt(1, Expected == Target));
+          EXPECT_EQ(C.eval(Unequal, {Value}),
+                    llvm::APInt(1, Expected != Target));
+        }
+      }
+    }
+    // Multiplication by two is not injective, including when it wraps to
+    // zero in a one-bit word. It cannot use the negation rule.
+    const auto Doubled = C.mkMul(X, C.mkConst(W, 2));
+    const auto IsZero = C.mkEq(Doubled, C.mkZero(W));
+    const auto Half = llvm::APInt::getSignMask(W);
+    EXPECT_EQ(C.eval(IsZero, {Half}), llvm::APInt(1, 1));
+  }
+}
+
+TEST(SymExprCompare, MaskedPackedEqualityKeepsOverlappingObservedLanes) {
+  SymContext C;
+  const auto A = C.mkVar("a", 1), B = C.mkVar("b", 1), D = C.mkVar("d", 1);
+  const auto Packed = C.mkOr({C.mkMul(C.mkZExt(A, 32), C.mkConst(32, 0x10)),
+                              C.mkMul(C.mkZExt(B, 32), C.mkConst(32, 0x10)),
+                              C.mkMul(C.mkZExt(D, 32), C.mkConst(32, 0x80))});
+  for (unsigned Mask : {0x10u, 0x80u, 0x90u})
+    for (unsigned Target : {0u, 0x10u, 0x80u, 0x90u, 0x100u}) {
+      const auto Predicate = C.mkEq(
+          C.mkAnd(C.mkNot(Packed), C.mkConst(32, Mask)), C.mkConst(32, Target));
+      for (unsigned Bits = 0; Bits != 8; ++Bits) {
+        const llvm::APInt Values[] = {llvm::APInt(1, Bits & 1),
+                                      llvm::APInt(1, (Bits >> 1) & 1),
+                                      llvm::APInt(1, Bits >> 2)};
+        const auto Word = (Bits & 3 ? 0x10 : 0) | (Bits & 4 ? 0x80 : 0);
+        EXPECT_EQ(C.eval(Predicate, Values),
+                  llvm::APInt(1, ((~Word) & Mask) == Target));
+      }
+    }
+}
+
+TEST(SymExprCompare, LiteralPackedEqualityChecksForcedAndWideBits) {
+  SymContext C;
+  const auto A = C.mkVar("a", 1), B = C.mkVar("b", 1);
+  const auto Low = llvm::APInt::getOneBitSet(128, 3);
+  const auto High = llvm::APInt::getOneBitSet(128, 93);
+  const llvm::APInt Forced(128, 2);
+  const auto Packed =
+      C.mkOr({C.mkConst(Forced), C.mkMul(C.mkZExt(A, 128), C.mkConst(Low)),
+              C.mkMul(C.mkZExt(B, 128), C.mkConst(High))});
+  EXPECT_EQ(C.mkEq(Packed, C.mkConst(Forced | High)), C.mkAnd(C.mkNot(A), B));
+  EXPECT_EQ(C.mkNe(C.mkConst(Forced | Low), Packed),
+            C.mkNot(C.mkAnd(A, C.mkNot(B))));
+  EXPECT_EQ(C.mkEq(Packed, C.mkConst(High)), C.mkFalse());
+  EXPECT_EQ(C.mkEq(Packed, C.mkConst(Forced | llvm::APInt(128, 1))),
+            C.mkFalse());
+  const auto Overlap = C.mkOr(Packed, C.mkConst(Low));
+  for (unsigned Bits = 0; Bits != 4; ++Bits) {
+    const llvm::APInt Values[] = {llvm::APInt(1, Bits & 1),
+                                  llvm::APInt(1, Bits >> 1)};
+    const auto Expected =
+        Forced | Low | (Bits & 2 ? High : llvm::APInt(128, 0));
+    EXPECT_EQ(C.eval(Overlap, Values), Expected);
+    EXPECT_EQ(C.eval(C.mkEq(Overlap, C.mkConst(Forced | Low | High)), Values),
+              llvm::APInt(1, (Bits & 2) != 0));
+  }
 }
 
 } // namespace

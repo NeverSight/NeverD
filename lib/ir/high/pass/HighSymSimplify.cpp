@@ -886,11 +886,24 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
 
     Active.erase(Index);
     const uint32_t NodeWidth = Ctx.width(Item.Ref);
-    if (NodeWidth == 0 || NodeWidth % 8 != 0) {
+    if (NodeWidth == 0 || (NodeWidth != 1 && NodeWidth % 8 != 0)) {
       Built.emplace(Index, nullptr);
       continue;
     }
-    const auto ByteSize = static_cast<uint16_t>(NodeWidth / 8);
+    const auto ByteSize = static_cast<uint16_t>((NodeWidth + 7) / 8);
+    // HighIR carries predicates as byte-valued 0/1. Only Boolean operations
+    // and comparisons may use that view; one-bit arithmetic has different
+    // wrapping semantics from byte arithmetic.
+    if (NodeWidth == 1 && Ctx.op(Item.Ref) != sym::SymOp::Const &&
+        Ctx.op(Item.Ref) != sym::SymOp::Var &&
+        Ctx.op(Item.Ref) != sym::SymOp::And &&
+        Ctx.op(Item.Ref) != sym::SymOp::Or &&
+        Ctx.op(Item.Ref) != sym::SymOp::Xor &&
+        Ctx.op(Item.Ref) != sym::SymOp::Not &&
+        !sym::isPredicate(Ctx.op(Item.Ref))) {
+      Built.emplace(Index, nullptr);
+      continue;
+    }
 
     auto get = [&](sym::SymRef Child) -> ExprPtr {
       auto It = Built.find(Child.index());
@@ -998,18 +1011,60 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       break;
     }
     case sym::SymOp::And:
-      Result = binop(NdOp::INT_AND, Ctx.operands(Item.Ref));
+      Result = binop(NodeWidth == 1 ? NdOp::BOOL_AND : NdOp::INT_AND,
+                     Ctx.operands(Item.Ref));
       break;
     case sym::SymOp::Or:
-      Result = binop(NdOp::INT_OR, Ctx.operands(Item.Ref));
+      Result = binop(NodeWidth == 1 ? NdOp::BOOL_OR : NdOp::INT_OR,
+                     Ctx.operands(Item.Ref));
       break;
     case sym::SymOp::Xor:
-      Result = binop(NdOp::INT_XOR, Ctx.operands(Item.Ref));
+      Result = binop(NodeWidth == 1 ? NdOp::BOOL_XOR : NdOp::INT_XOR,
+                     Ctx.operands(Item.Ref));
       break;
 
     case sym::SymOp::Not: {
       ExprPtr Operand = get(Ctx.operand(Item.Ref, 0));
-      Result = Operand ? HighExpr::makeUnary(NdOp::INT_NOT, Operand) : nullptr;
+      Result = Operand ? HighExpr::makeUnary(NodeWidth == 1 ? NdOp::BOOL_NOT
+                                                            : NdOp::INT_NOT,
+                                             Operand)
+                       : nullptr;
+      break;
+    }
+
+    case sym::SymOp::Eq:
+    case sym::SymOp::Ult:
+    case sym::SymOp::Ule:
+    case sym::SymOp::Slt:
+    case sym::SymOp::Sle: {
+      const auto A = Ctx.operand(Item.Ref, 0), B = Ctx.operand(Item.Ref, 1);
+      ExprPtr Left = get(A), Right = get(B);
+      if (!Left || !Right)
+        break;
+      NdOp Op = NdOp::INT_EQUAL;
+      switch (Ctx.op(Item.Ref)) {
+      case sym::SymOp::Ult:
+        Op = NdOp::INT_LESS;
+        break;
+      case sym::SymOp::Ule:
+        Op = NdOp::INT_LESSEQUAL;
+        break;
+      case sym::SymOp::Slt:
+        Op = NdOp::INT_SLESS;
+        break;
+      case sym::SymOp::Sle:
+        Op = NdOp::INT_SLESSEQUAL;
+        break;
+      default:
+        break;
+      }
+      // A signed one-bit value denotes 0/-1, not the byte carrier's 0/1.
+      if (Ctx.width(A) == 1 &&
+          (Op == NdOp::INT_SLESS || Op == NdOp::INT_SLESSEQUAL)) {
+        Left = HighExpr::makeUnary(NdOp::INT_NEG2, Left);
+        Right = HighExpr::makeUnary(NdOp::INT_NEG2, Right);
+      }
+      Result = HighExpr::makeBinop(Op, std::move(Left), std::move(Right));
       break;
     }
 
@@ -1082,11 +1137,15 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       }
       ExprPtr Operand = get(Ctx.operand(Item.Ref, 0));
       if (Operand) {
-        Result = HighExpr::makeUnary(Ctx.op(Item.Ref) == sym::SymOp::ZExt
-                                         ? NdOp::INT_ZEXT
-                                         : NdOp::INT_SEXT,
-                                     Operand);
+        const bool SignedBit = Ctx.op(Item.Ref) == sym::SymOp::SExt &&
+                               Ctx.width(Ctx.operand(Item.Ref, 0)) == 1;
+        Result = HighExpr::makeUnary(
+            Ctx.op(Item.Ref) == sym::SymOp::ZExt || SignedBit ? NdOp::INT_ZEXT
+                                                              : NdOp::INT_SEXT,
+            Operand);
         Result->Type = NdType::makeInt(ByteSize, false);
+        if (SignedBit)
+          Result = HighExpr::makeUnary(NdOp::INT_NEG2, std::move(Result));
       }
       break;
     }
@@ -1104,7 +1163,7 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     }
 
     default:
-      // Selects and predicates have no output spelling here.
+      // Unsupported operators retain the source expression.
       Result = nullptr;
       break;
     }
