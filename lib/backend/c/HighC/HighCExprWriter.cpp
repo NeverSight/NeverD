@@ -9122,6 +9122,12 @@ std::string HighCWriter::invertCondStrImpl(const HighExpr &E) {
       std::string L = invertCondStr(*Cur->Operands[0]);
       std::string R = invertCondStr(*Cur->Operands[1]);
       if (BoolOr) {
+        // `x == 0 || x < 0` inverts to `x > 0`. Without a cast, the expression
+        // is signed at its own width.
+        if (R == "!(" + L + " < 0)")
+          return L + " > 0";
+        if (L == "!(" + R + " < 0)")
+          return R + " > 0";
         if (L.find(" || ") != std::string::npos)
           L = "(" + L + ")";
         if (R.find(" || ") != std::string::npos)

@@ -2819,6 +2819,9 @@ TEST(HighCTruthValue, GreaterThanZeroComparesTheWidthTheTestsRead) {
       S + " > 0");
   Add("declared_signed_not_most", S32, Not(AtMostZero(U32)), S + " > 0");
 
+  // The inverted spelling of a chain reads its signed pair as one comparison.
+  Add("s32_chain", S32, Not(Or(Or(IsZero(S32), Below(S32)), IsZero(S32))),
+      S + " > 0");
 
   // A parameter declared wider than what the tests read: C reads every byte of
   // the declaration, so its name alone is not the value tested.
@@ -2895,6 +2898,7 @@ TEST(HighCTruthValue, GreaterThanZeroComparesTheWidthTheTestsRead) {
   EXPECT_EQ(C.find("!(x >= 0)"), std::string::npos) << C;
   EXPECT_EQ(llvm::StringRef(C).count("if (x > 0) {"), 6u) << C;
   EXPECT_EQ(llvm::StringRef(C).count("if ((int64_t)x > 0) {"), 5u) << C;
+  EXPECT_NE(C.find("if (x > 0 && x) {"), std::string::npos) << C;
   const auto Program = C + R"C(
 #define CHECK(call, want) \
   if ((uint32_t)(call) != (uint32_t)(want)) return __LINE__ % 200 + 1;
