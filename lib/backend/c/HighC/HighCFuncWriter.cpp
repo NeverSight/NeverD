@@ -1144,6 +1144,11 @@ HighCWriter::dispatchFrame(va_t Entry) const {
 }
 
 void HighCWriter::writeFunction(const HighFunc &Func) {
+  if (const auto Unbacked = UnbackedEscapes.find(&Func);
+      Unbacked != UnbackedEscapes.end())
+    throw std::invalid_argument("escaped image address 0x" +
+                                llvm::utohexstr(Unbacked->second) +
+                                " has no materializable storage extent");
   const auto SourceBody = sourceBodyOrigin(Func);
   llvm::SaveAndRestore<CSourceMap *> SourceMapScope(
       Opts.SourceMap, SourceBody ? nullptr : Opts.SourceMap);

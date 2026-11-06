@@ -2686,6 +2686,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
 
 void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   ImageObjects.clear();
+  UnbackedEscapes.clear();
   ImageBackings.clear();
   ReachesImageBase = false;
   ReachedObjectExterns.clear();
@@ -3133,13 +3134,6 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     ImageObject &Obj = ImageObjects[Object->first];
     Obj.IndexedBytes = std::max(Obj.IndexedBytes, Object->second);
     return true;
-  };
-  // An escaping address needs backing for every byte its object owns. A
-  // missing or over-limit extent cannot fall back to a guessed scalar.
-  const auto NoteEscapingStorage = [&](va_t Addr) {
-    if (!NoteWhole(Addr, nullptr, false))
-      throw std::invalid_argument(
-          "escaped image address has no materializable storage extent");
   };
   // A cursor can keep its image base outside the expression that reads it:
   // `p = &table; while (...) { use(*p); p += stride; }`. Follow storage
@@ -3925,6 +3919,13 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   std::vector<va_t> Values;
   std::set<const HighExpr *> ValueExpressions, SeenAddresses, SeenValues;
   const HighFunc *ValueFunction = nullptr;
+  // An escaping address needs backing for every byte its object owns. A
+  // missing or over-limit extent cannot fall back to a guessed scalar. This
+  // scan serves the whole unit, so the function refuses when it renders.
+  const auto NoteEscapingStorage = [&](va_t Addr) {
+    if (!NoteWhole(Addr, nullptr, false))
+      UnbackedEscapes.try_emplace(ValueFunction, Addr);
+  };
   std::function<void(const HighExpr &, bool)> NoteValues =
       [&](const HighExpr &E, bool Addressing) {
         auto &Seen = Addressing ? SeenAddresses : SeenValues;

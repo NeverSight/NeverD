@@ -8,6 +8,7 @@
 #include "PipelineLLVMDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
@@ -1260,6 +1261,59 @@ TEST(PipelineOutcome, HighCRefusesAFunctionWhoseConversionFailed) {
             std::string("HighIR conversion failed: ") + Reason);
   EXPECT_NE(Source.find("converted(void) {"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("skeleton(void) {"), std::string::npos) << Source;
+  Options.RefusedDefinitions = nullptr;
+  std::string View;
+  llvm::raw_string_ostream ViewOS(View);
+  EXPECT_THROW(HighCEmitter().emit({Functions.back()}, ViewOS, Options),
+               std::invalid_argument);
+}
+
+// An escaping image address no storage can back refuses the function keeping
+// it. The scan that finds it serves the whole unit, which must not fail with
+// it.
+TEST(PipelineOutcome, HighCRefusesOnlyTheFunctionKeepingAnUnbackedAddress) {
+  constexpr va_t Address = 0x100000;
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Segment Data;
+  Data.Name = ".rodata";
+  Data.VA = Address;
+  // Unsized data this long bounds no object C could declare for the address.
+  Data.Size = Data.FileSz = ::neverd::limits::kMaxSingleGlobalEmbedLen + 1;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.assign(Data.Size, 0);
+  Image.Segments.push_back(std::move(Data));
+  std::vector<HighFunc> Functions = {
+      convertedIdentity(sourceFunction(0x1200, "unaffected")),
+      convertedIdentity(sourceFunction(0x1300, "keeps_address"))};
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal =
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress);
+  Functions.back().ReturnType = NdType::makeInt(8, false);
+  Functions.back().Body = {Return};
+  const std::map<va_t, std::string> Names = {{Address, "named_data"}};
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.TheArch = Arch::X64;
+  Options.StructuredExceptionSyntax = false;
+  Options.Image = &Image;
+  Options.UserNames = &Names;
+  std::vector<CEmitterOptions::RefusedDefinition> Refused;
+  Options.RefusedDefinitions = &Refused;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+  ASSERT_EQ(Refused.size(), 1u) << Source;
+  EXPECT_EQ(Refused.front().Entry, Functions.back().Entry);
+  EXPECT_NE(Refused.front().Reason.find("no materializable storage extent"),
+            std::string::npos)
+      << Refused.front().Reason;
+  EXPECT_NE(Source.find("unaffected(void) {"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("keeps_address(void) {"), std::string::npos) << Source;
+  // Asked for alone, the function still fails with its reason.
   Options.RefusedDefinitions = nullptr;
   std::string View;
   llvm::raw_string_ostream ViewOS(View);
