@@ -21051,3 +21051,34 @@ native calls without a global `-mhreset`; stock Clang uses `--fallback`.
 This controlled observation does not qualify physical history reset. The
 separate `verify_i386_intrinsic_headers.py` executes header operations in both
 pointer widths and PIC modes; its HRESET/AVX-512 cases remain compile-only.
+
+The LLVM/NeverC native far-transfer compiler checks live in the forks:
+`llvm/test/CodeGen/X86/native-far-transfers.ll` covers O0/O2, code16/32/64,
+x32, ELF/COFF/Mach-O, mode/type/immediate diagnostics and terminal adjacency.
+NeverC's `X86FarTransferTest.*` checks C23 identities, returning/nonreturning
+control, all six x64 memory builtins and the eight i386 forms. The generated
+instruction-table checker is `utils/lint/sync-x86-far-transfers.py`.
+
+For native execution, run NeverC's
+`tests/neverc/X86/verify_far_transfers.py --llvm-bin LLVM_BIN --neverc NEVERC
+--mode 16|32|64 --output OUTPUT` on a KVM-capable x86 host. Code16 and
+`--mode 64 --x32` execute the full LLVM profiles. The fixture executes
+LLVM IR, NeverC source and NeverC IR through full LLVM at O0/O2. On i386,
+NeverC's direct source profile uses its checked full-LLVM backend. It checks
+packed targets, terminal stack transport, complete represented transfer state
+and RAM, direct far entries, zero-parameter 16/32-bit call gates, and compiled
+continuations after caller-saved register clobbers and memory mutations.
+It requires native execution and separate rejected return-value and terminal
+stack corruption controls; compile success alone is insufficient. The oracle
+imports complete XSAVE state so live vector components survive vCPU transfer.
+Nonzero gate parameters, task switching, CET, faults
+and asynchronous unwinding are outside this compiler fixture. Keep raw logs
+local and normalize checkout paths in published evidence.
+
+The [2026-11-05 native far-transfer
+qualification](evidence/x86-native-far-transfers-2026-11-05.json) records 32
+O0/O2 profiles across P/E cores: 4,512 state pairs, 2,112 returning ABI checks
+and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
+frontend regressions and 91 generated-table tests passed. NeverC's strict
+global-state audit still reports the same 90 source-global findings as the
+recorded baseline; this change adds none and does not weaken the audit.

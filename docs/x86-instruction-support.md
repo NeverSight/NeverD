@@ -4145,3 +4145,49 @@ unsupported; IR output and bitcode input are available. Protected code16 retains
 machine-state/event domains and unavailable physical instruction families
 remain separate work. The final LLVM release, SDK pin and LLVM gitlink remain
 unchanged until the overall completion gate is met.
+
+## Native far CALL/JMP compiler interfaces
+
+The LLVM fork and NeverC now expose ten native far-transfer interfaces:
+`lcall16/32/64` and `ljmp16/32/64` take packed memory targets, while the
+16/32-bit `_imm` variants retain immediate offset/selector encodings. The
+suffix is the instruction operand width. Immediate forms require legacy
+code; 64-bit operands require code64. These APIs generate real far
+instructions without inline assembly or near-branch substitution.
+
+A returning `lcall` takes no C arguments and returns AX/EAX/RAX. The far
+entry must obey the platform C callee-saved register contract and restore
+CS/SS/exact SP with RETF; call gates must copy zero parameters. Gate frame
+width remains independent of the instruction width. LLVM creates a real call
+sequence, preserves live values, reserves Win64 outgoing home space and
+prevents leaf red-zone allocation. The actual native frame must represent the
+generated continuation offset, including narrow direct calls in code64. These
+constraints are part of the source interface, not assumptions applied to
+arbitrary lifted binaries.
+
+The `ljmp` interfaces take an explicit destination stack and terminate the C
+function. A backend terminal keeps the final ESP/RSP assignment adjacent to
+the far jump, and its memory target cannot occupy the stack register. The
+CPU owns target reads, descriptors, privilege transitions and faults. Other
+register values are compiler-selected; this is not an original-image context
+restore or asynchronous unwind ABI.
+
+Native target identity and compiler ABI qualification are documented in the
+LLVM fork's `llvm/docs/X86NativeFarTransfers.rst` and NeverC's
+`tests/neverc/X86/verify_far_transfers.py`. Linux i386 NeverC source uses its
+checked full-LLVM backend; the embedded backend handles x64. This compiler
+interface complements the [protected far-transfer execution
+owner](x86-legacy-segments.md#protected-far-transfers). Generic lifting still
+refuses far CALL/JMP until a complete machine-state continuation is bound;
+these zero-argument source contracts do not justify guessing the original
+binary's ABI. Nonzero native gate parameters, task switching and arbitrary
+source machine-context transport remain separate work. The final LLVM
+release, production SDK pin and submodule update stay gated on global
+completion.
+
+The [2026-11-05 qualification evidence](evidence/x86-native-far-transfers-2026-11-05.json)
+records 32 O0/O2 profiles across P/E cores, including code16 and x32:
+4,512 native state comparisons, 2,112 returning ABI checks and 64 rejected
+value/stack corruption controls. The direct NeverC and NeverC-IR profiles
+both pass in i386 and x64. These counts qualify the source contract above;
+they do not close the separate original-image context and event domains.
