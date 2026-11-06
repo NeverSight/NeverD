@@ -13,10 +13,12 @@
 #include "neverd/analysis/arch/x86_64/X64PagedEventDelivery.h"
 #include "neverd/analysis/arch/x86_64/X64PagedPortIO.h"
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
+#include "neverd/ir/X86/X86DebugRules.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -43,14 +45,16 @@ enum class X64PagedSseAlignment : uint8_t {
   FullOperand,
 };
 
-/// Explicit nontransactional instruction-step bank. DR7 must be 0x400 and
-/// DEBUGCTL zero; hardware address/I/O breakpoints, GD and BTF need their own
-/// producer. This bank is disjoint from V6 state and guest RAM and outlives
-/// its execution context. External event producers own their own DR6 causes.
+/// Explicit nontransactional debug bank. The selected profile admits either
+/// inactive DR7 or canonical execution comparators, with DEBUGCTL zero.
+/// Data/I/O watchpoints, GD and BTF need their own producer. This bank is
+/// disjoint from V6 state and guest RAM and outlives its execution context.
+/// External event producers own their own DR6 causes.
 struct X64PagedDebugState {
   uint64_t DR6 = 0xffff0ff0;
   uint64_t DR7 = 0x400;
   uint64_t DebugCTL = 0;
+  std::array<uint64_t, 4> DR{};
 };
 
 struct X64PagedExecutionOptions {
@@ -77,6 +81,8 @@ struct X64PagedExecutionOptions {
   /// Register forms and supervisor operands do not require this binding.
   std::optional<X64PagedSseAlignment> SseAlignment;
   X64PagedDebugState *Debug = nullptr;
+  X86InstructionDebugProfile DebugProfile =
+      X86InstructionDebugProfile::InstructionStep;
 };
 
 struct X64PagedExecutionResult {
@@ -146,7 +152,7 @@ private:
                const X64ContinuationEventV1 &Event, uint32_t MXCSRMask,
                const X64PagedEventContinuation *Continuation = nullptr);
   llvm::Error deliverDebug(X64ContinuationStateV6 &State, bool SingleStep,
-                           uint32_t MXCSRMask);
+                           uint32_t MXCSRMask, uint8_t Breakpoints = 0);
   translate::X86PagedMemory &Memory;
   X64PagedExecutionOptions Options;
   X64PagedExecutionResult Last;

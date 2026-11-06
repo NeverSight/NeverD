@@ -247,7 +247,10 @@ a processor capable of representing it; this profile does not generate those
 historical causes. Incompatible or incomplete bindings
 refuse before instruction fetch. This profile has no enabled address/I/O
 breakpoints, GD, branch stepping, bus-lock detection or task-trap producer.
-Those controls cannot be supplied and silently ignored.
+Those controls cannot be supplied and silently ignored. The additional
+`X86LegacyDebugProfile::ExecuteBreakpoints` profile owns four canonical
+execution comparators in `X86LegacyDebugState::DR`; its control and priority
+rules are shared with [paged x64](x86-paged-execution.md#hardware-execution-breakpoints).
 
 The executor samples TF before the instruction. A successful instruction
 produces #DB even when POPF or IRET clears TF; setting TF takes effect on the
@@ -291,6 +294,15 @@ matrix uses canonical BLD=RTM=1. Incoming historical BLD=0/RTM=0 preservation
 has software coverage only. Raw KVM debug-register injection can retain an
 image that an architectural register read later normalizes; those exploratory
 runs are diagnostics, not native qualification.
+
+`LegacyExecutionBreakpoint/*` adds enabled local/global DR0–DR3 matches, RF/TF
+combinations, MOV/POP-SS inhibition, nonzero CS bases, pending virtual
+interrupts, original fetch/operand faults and failed debug entry across both
+paging modes and independent code/stack/gate widths. It also compares original
+handlers that set saved RF, count #DB and IRETD before executing the interrupted
+instruction once. Unit checks cover linear-address wrap, competing CS limits,
+malformed controls and accepted-event backing continuation. See the shared
+[execution-breakpoint evidence](evidence/x86-execution-breakpoints-2026-11-06.json).
 
 This internal protected executor still does not provide general i386 source
 dispatch, hardware watchpoints, task switching, real/VM86, or the other open
@@ -562,7 +574,7 @@ or register adjustment between these instructions. This covers legacy paging
 and PAE, CPL0..3, and independent code/stack sizes. It closes that earlier
 handler boundary for the admitted scalar instructions; it does not supply a
 general i386 source exporter, a TLB/cache model, devices, concurrent shared-memory
-synchronization, HLE, task gates, real/VM86 state, hardware debug producers or other
+synchronization, HLE, task gates, real/VM86 state, data/I/O watchpoints or other
 unlisted instructions. Exclusive-RAM LOCK forms use the additional binding above.
 
 The [November 3 scalar qualification](evidence/x86-legacy-scalars-2026-11-03.json)
@@ -685,7 +697,7 @@ the PTE, discard a fault error code and IRET to the remaining count.
 LOCK on an otherwise admitted string raises #UD after original-byte fetch,
 including when CX/ECX is zero. Repeated/conflicting prefixes and F2 on a
 non-comparison remain explicit refusals. Port strings use the separate binding
-below. MMIO, physical read-ahead, hardware debug producers, real/VM86 and a general
+below. MMIO, physical read-ahead, data/I/O watchpoints, real/VM86 and a general
 i386 source dispatcher remain outside this memory-string contract. LLVM and NeverC already expose
 native string interfaces; no new compiler intrinsic is needed for this runtime
 state transition. The final SDK release, pin and LLVM gitlink stay unchanged.

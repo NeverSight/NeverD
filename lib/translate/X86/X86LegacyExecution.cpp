@@ -39,11 +39,10 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                                          X86PagedMemory &M,
                                          const X86LegacyExecutionOptions &O) {
   if (bool(S.Debug) != bool(O.Debug) ||
-      (O.Debug && O.Debug != X86LegacyDebugProfile::InstructionStep) ||
       (S.Debug && !x86InstructionDebugValid(S.Debug->DR6, S.Debug->DR7,
-                                            S.Debug->DebugCTL)))
-    return invalid("legacy debug state requires the instruction-step profile, "
-                   "valid DR6, inactive DR7 and zero DEBUGCTL");
+                                            S.Debug->DebugCTL, *O.Debug)))
+    return invalid("legacy debug state requires a valid instruction-debug "
+                   "profile, DR6, supported DR7 and zero DEBUGCTL");
   auto Controls = M.controls();
   Controls.RFlags = S.EFlags;
   if (auto Error = validateX86LegacySegmentState(S.Core, Controls))
@@ -241,15 +240,36 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
           bool Completed) -> llvm::Expected<X86LegacyExecutionResult> {
     // Publish the debug cause before IDT entry: it survives a failed #DB
     // delivery and a backing stop. Software INT 1 does not update DR6.
-    if (State.Debug)
+    if (State.Debug) {
+      const auto Matches =
+          FromSingleStep
+              ? x86ExecutionBreakpoints(
+                    State.Debug->DR, State.Debug->DR7,
+                    uint32_t(State.Core.Segments[1].Base + State.EIP),
+                    State.EFlags, false)
+              : 0;
       State.Debug->DR6 =
-          x86InstructionDebugStatus(State.Debug->DR6, FromSingleStep);
+          x86InstructionDebugStatus(State.Debug->DR6, FromSingleStep, Matches);
+    }
     State.SSBlocked = State.STIBlocked = false;
     return Enter({State.EIP, 0, 0, 1, X86LegacyEventKind::Trap}, Completed);
   };
   if (x86PendingVirtualInterrupt(State.Core.CPL, Memory.controls().CR4,
                                  State.EFlags))
     R.Exception = X86MemoryException{13, 0, {}};
+  if (State.Debug && !R.Exception) {
+    const auto Matches = x86ExecutionBreakpoints(
+        State.Debug->DR, State.Debug->DR7,
+        uint32_t(State.Core.Segments[1].Base + State.EIP), State.EFlags,
+        State.SSBlocked);
+    if (Matches) {
+      State.Debug->DR6 =
+          x86InstructionDebugStatus(State.Debug->DR6, false, Matches);
+      return Enter(
+          {State.EIP, 0, 0, 1, X86LegacyEventKind::InstructionBreakpoint},
+          false);
+    }
+  }
   for (unsigned I = 0; !R.Exception && I != Instruction.size(); ++I) {
     uint8_t Byte = 0;
     auto Got =

@@ -43,6 +43,10 @@ for its admitted instruction subset. Its optional instruction-step debug
 binding samples entry TF and publishes TF/ICEBP causes to DR6 before event
 entry. It composes existing instruction commit, REP progress, IDT and return
 owners; external debug producers retain their separate cause ownership. Its
+execute-breakpoint profile compares original linear instruction starts before
+fetch, after pending virtual-interrupt selection. `ir/X86/X86DebugRules` owns
+the shared legacy/x64 control validation, RF/SS suppression, matching and DR6
+status, including coincident single-step and next-PC breakpoint causes. Its
 event owner stages registers and caches while retaining descriptor/frame RAM
 effects and CR2 on later faults.
 TSS stack selection, conforming code and privilege changes stay in that owner;
@@ -183,7 +187,7 @@ publication remains staged. RETF's compatibility-IP validation differs across
 the qualified hybrid core types, so the profile is explicit and the test oracle
 pins its processor. Scalar rollback cannot erase completed transition effects;
 backing stops after such effects charge an attempt. The optional `paged_debug`
-source contract binds an external DR6/DR7/DEBUGCTL bank to that same executor.
+source contract binds an external DR0–DR3/DR6/DR7/DEBUGCTL bank to that same executor.
 It samples entry TF, commits the instruction/REP element and its debug cause
 before IDT entry. The scheduler supplies the MOV-SS shadow; C renderers do not
 implement debug status or event policy. `ir/X86/X86DebugRules` and

@@ -134,18 +134,19 @@ are available through the context's `lastResult()` and `lastError()`.
 
 Add `"paged_debug": true` to a paged V6 instruction-region export and bind a
 live `X64PagedDebugState` through `X64PagedExecutionOptions::Debug`. The bank
-contains DR6, DR7 and IA32_DEBUGCTL and stays disjoint from V6 state, guest RAM
-and the execution context. Its lifetime covers every call. V6's wire layout
-does not change. Debug exports use distinct `neverd_x64_paged_debug_*_v1`
+contains DR0–DR3, DR6, DR7 and IA32_DEBUGCTL and stays disjoint from V6 state,
+guest RAM and the execution context. Its lifetime covers every call. V6's wire
+layout does not change. Debug exports use distinct `neverd_x64_paged_debug_*_v1`
 bridges, so linking an older runtime cannot silently omit debug delivery.
 The scheduled bridge validates the bank before producer polling or fetch and
 passes its current MOV-SS shadow to each step.
 
-This binding is nontransactional with DR7=0x400 and DEBUGCTL=0. Enabled hardware
-address/I/O breakpoints, GD, BTF, task traps and other debug producers require
-their own state; incompatible controls refuse before effects. DR6's high half
-and reserved bits are checked. Historical BLD/RTM status inputs assume a target
-that can represent them. The local native oracle uses canonical BLD=RTM=1
+The default `DebugProfile = InstructionStep` is nontransactional with DR7=0x400
+and DEBUGCTL=0. `ExecuteBreakpoints` additionally enables the hardware execution
+comparators described below. Data/I/O watchpoints, GD, BTF, task traps and other
+debug producers require their own state; incompatible controls refuse before
+effects. DR6's high half and reserved bits are checked. Historical BLD/RTM status
+inputs assume a target that can represent them. The local native oracle uses canonical BLD=RTM=1
 inputs because its CPU lacks those optional facilities.
 
 The executor samples TF before the original instruction, commits its register
@@ -204,6 +205,65 @@ qualify the tested processor bindings, not every x86 implementation.
 References: [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
 revision 093, volume 3 §§7.8.3, 20.2.3 and 20.3.1.4;
 [KVM debug-register API](https://docs.kernel.org/virt/kvm/api.html).
+
+### Hardware execution breakpoints
+
+Select `X86InstructionDebugProfile::ExecuteBreakpoints` through
+`X64PagedExecutionOptions::DebugProfile`, retain `paged_debug`, and bind the
+four original linear instruction addresses in `X64PagedDebugState::DR`.
+The [protected i386 executor](x86-legacy-segments.md#protected-instruction-step-debug-events)
+uses the same profile and matching/status owner through its existing debug
+option. This is an explicit processor binding; the runtime does not infer it
+from its host.
+
+All four DR7 local/global enable pairs are supported. LE/GE are retained but
+ignored on this profile; bit 10 stays one, every RW/LEN field must be zero, and
+the remaining bits and DEBUGCTL must be zero. An enabled comparator matches
+only the first byte of an instruction, including its first prefix. i386
+matches the wrapped 32-bit `CS.base + EIP`; x64 compares the full original
+linear address. Physical aliases and addresses inside an instruction do not
+match. After IRET/RETF selects compatibility code, next-PC single-step matching
+uses the returned CS base plus the IP offset, with 32-bit linear wrap. The
+saved exception PC remains that original IP offset. Noncanonical DR addresses
+themselves are legal values, not an admission error; they cannot equal an
+admitted canonical instruction address.
+
+Eligible external IRQ/NMI selection and PVI's pending-interrupt #GP precede
+the execute fault. The fault precedes instruction fetch, its page/segment
+faults, byte authentication and execution. RF or an incoming MOV/POP-SS window
+suppresses matching. This suppression does not defer a cause. A normal completed
+instruction clears RF; IRETD/IRETQ use the restored RF and unfinished REP retains
+it. A single-step trap can also report enabled comparators at the next PC when
+RF does not inhibit them. ICEBP retains its separate cause. The bound processor
+reports only enabled matching B0–B3 slots, preserves sticky DR6 status and does
+not set BS for a pure execute fault. Disabled-slot status is not a universal
+x86 guarantee; it is qualified here on the recorded processors.
+
+An execute fault saves the original instruction PC and the entry RF image
+(zero), without executing the instruction or automatically setting saved RF.
+The handler must set saved RF or change its breakpoint before retrying.
+The existing IDT continuation retains the published DR6 cause across secondary
+faults and missing physical backing; resuming it neither refetches the original
+instruction nor generates another cause. The old non-debug bridge refuses an
+enabled comparator even with TF clear, so it cannot silently omit this check.
+
+The [execution-breakpoint qualification](evidence/x86-execution-breakpoints-2026-11-06.json)
+compares original CPU DR6/DR7, registers, caches, frames and complete RAM with
+the executor. It covers local/global/all-slot matches, RF/TF, SS inhibition,
+fetch/operand/PVI faults, failed debug gates/stacks, external events and IRET
+targets, including nonflat compatibility code and all three return widths.
+Original handlers set RF, clear TF, count entry and return; a separate
+case repairs a subsequent page fault before retry. Both C routes compile
+through Clang and NeverC at O0/O2. Data/I/O watchpoints, MOV-DR/GD execution,
+BTF, task traps and transactional debug production remain separate contracts.
+No new LLVM intrinsic, SDK release or pin change is needed for this runtime
+binding. Reference: Intel SDM revision 093, volume 3 §§7.9, 20.2.1–20.2.5 and
+20.3.1.1.
+
+Native debug comparisons use the shared Intel host gate. The evidence records
+the complete P/E regression and the subsequent `dev` integration separately,
+including rebuilt runtime tests and byte-for-byte generated-source comparison.
+The gate does not change software execution or infer its profile from the host.
 
 ## Faultable LSS, LFS and LGS
 
