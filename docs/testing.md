@@ -20426,6 +20426,27 @@ HighIR structuring contract; it requires no external source interface.
 
 ### Explicit x64 continuation export
 
+`X64CallSiteHandlerTest.*` verifies that handler interfaces require call-site
+pauses, compiles both C routes at O0/O2 and uses optimizer
+predicates over the actual generated controller and instruction bodies. The
+proofs override helper/direct-driver inlining attributes; instruction/controller
+bodies and effects are unchanged, and ordinary O0/O2 compilation uses unmodified
+source.
+Only predicates are public in the proof module, so unused exports can be removed
+before optimization. Bounded fixture RAM is bound in successive frame, descriptor,
+resumed-CALL and callee phases; only wholly contained constant operands qualify.
+Plain proofs retain MOV, IRETQ, CALL, the upper-DWORD load, XOR and RET-immediate with
+bounded fixture RAM; paged proofs independently model privilege-return and
+fault/backing outcomes and retain the ordinary instruction bodies. Both
+scheduled and unscheduled interfaces, plus the direct plain dispatcher, check
+arbitrary incoming upper bits, handler register effects, nested returns,
+wrong/merely coincident PC/SP, near-RET refusal, zero final budgets, poll budgets,
+bindings, cached completion, attempted progress and fault/backing retry without
+replaying a handler or CALL. These tests execute no generated program,
+instruction executor, specimen or guest. They do not qualify an arbitrary
+Windows handler or page walker. The existing scheduled-call proof helper is
+shared; its prior fixture domain and expected predicate counts are unchanged.
+
 `NeverDX64ContinuationExportTests` exercises the actual size-delimited C SDK
 and CLI through both C routes. Generated C runs at O0/O2 with ASan/UBSan,
 including physical CALL bytes, callback-selected replacement stacks, reentry,

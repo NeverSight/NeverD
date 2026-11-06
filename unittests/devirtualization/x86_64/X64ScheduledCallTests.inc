@@ -35,91 +35,156 @@ protected:
     return {std::move(Source), take(Report)};
   }
 
-  void proveCalls(bool Paged, bool LLVM, llvm::StringRef Source) {
-    const std::string Name = std::string("scheduled-calls-") +
-                             (Paged ? "paged-" : "plain-") +
-                             (LLVM ? "llvm" : "high");
+  unsigned bindProofRAM(llvm::Module &Module, uint64_t Bytes) {
+    // One declared, accessible RAM object, disjoint from compiler storage.
+    // Only fully contained constant memory operands acquire its provenance.
+    // Later IRET descriptor addresses can become constant after frame loads.
+    constexpr uint64_t Base = 0x10000;
+    auto &Context = Module.getContext();
+    auto *Type = llvm::ArrayType::get(llvm::Type::getInt8Ty(Context), Bytes);
+    auto *Stack = Module.getNamedGlobal("scheduled_test_stack");
+    if (!Stack) {
+      Stack = new llvm::GlobalVariable(Module, Type, false,
+                                       llvm::GlobalValue::ExternalLinkage,
+                                       nullptr, "scheduled_test_stack");
+      Stack->setAlignment(llvm::Align(64));
+    }
+    unsigned Bound = 0;
+    for (auto &Function : Module)
+      if (Function.getName().starts_with("proof_"))
+        for (auto &Block : Function)
+          for (auto &Instruction : Block) {
+            const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+            const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Instruction);
+            if (!Load && !Store)
+              continue;
+            const unsigned Index = Load ? 0 : 1;
+            const auto *Pointer = llvm::dyn_cast<llvm::ConstantExpr>(
+                Instruction.getOperand(Index));
+            if (!Pointer || Pointer->getOpcode() != llvm::Instruction::IntToPtr)
+              continue;
+            const auto *Address =
+                llvm::dyn_cast<llvm::ConstantInt>(Pointer->getOperand(0));
+            if (!Address) {
+              ADD_FAILURE() << "non-integer constant RAM address";
+              return Bound;
+            }
+            const auto At = Address->getZExtValue();
+            const auto Width =
+                Module.getDataLayout()
+                    .getTypeStoreSize(Load
+                                          ? Load->getType()
+                                          : Store->getValueOperand()->getType())
+                    .getFixedValue();
+            if (At < Base || At > Base + Bytes || Width > Base + Bytes - At) {
+              ADD_FAILURE() << "memory outside declared fixture RAM: " << At;
+              return Bound;
+            }
+            llvm::IRBuilder<> Builder(&Instruction);
+            Instruction.setOperand(
+                Index, Builder.CreateInBoundsGEP(
+                           Type, Stack,
+                           {Builder.getInt64(0), Builder.getInt64(At - Base)}));
+            ++Bound;
+          }
+    return Bound;
+  }
+
+  void provePredicates(bool Paged, const std::string &Name,
+                       llvm::StringRef Source, llvm::StringRef Probes,
+                       unsigned Expected, uint64_t RAMBytes,
+                       unsigned BindingPasses = 1, bool CloseHelpers = false) {
     const auto File = tmpFile(Name + ".c");
     const auto InitialIR = tmpFile(Name + ".initial.ll");
     const auto IR = tmpFile(Name + ".ll");
-    std::ofstream(File) << Source.str() << "\n#define PAGED " << Paged << "\n"
-                        << ScheduledCallProbes;
-    auto Built = exec(NEVERD_TEST_CLANG,
-                      {"-std=c11", "-O2", "-funroll-loops", "-mllvm",
-                       "-unroll-count=16", "-mllvm", "-unroll-threshold=100000",
-                       "-mllvm", "-inline-threshold=10000", "-mllvm",
-                       "-inline-cold-callsite-threshold=10000", "-S",
-                       "-emit-llvm", File.string(), "-o", InitialIR.string()});
+    std::vector<fs::path> Artifacts{File, InitialIR, IR};
+    std::ofstream(File) << Source.str() << Probes.str();
+    auto Built =
+        CloseHelpers
+            ? exec(NEVERD_TEST_CLANG,
+                   {"-std=c11", "-O1", "-funroll-loops", "-Xclang",
+                    "-disable-llvm-passes", "-S", "-emit-llvm", File.string(),
+                    "-o", InitialIR.string()})
+            : exec(NEVERD_TEST_CLANG,
+                   {"-std=c11", "-O2", "-funroll-loops", "-mllvm",
+                    "-unroll-count=16", "-mllvm", "-unroll-threshold=100000",
+                    "-mllvm", "-inline-threshold=10000", "-mllvm",
+                    "-inline-cold-callsite-threshold=10000", "-S", "-emit-llvm",
+                    File.string(), "-o", InitialIR.string()});
     ASSERT_TRUE(Built.ok()) << Built.err;
     auto InputIR = InitialIR;
-    if (!Paged) {
+    const auto Save = [&](const llvm::Module &Module, const fs::path &Path) {
+      std::string Text;
+      llvm::raw_string_ostream Stream(Text);
+      Module.print(Stream, nullptr);
+      std::ofstream(Path) << Text;
+      Artifacts.push_back(Path);
+    };
+    if (CloseHelpers) {
       llvm::LLVMContext Context;
       llvm::SMDiagnostic Diagnostic;
       const auto Module =
-          llvm::parseIRFile(InitialIR.string(), Diagnostic, Context);
+          llvm::parseIRFile(InputIR.string(), Diagnostic, Context);
       ASSERT_NE(Module, nullptr);
-      // The fixture declares accessible, disjoint RAM at [0x10000,0x10040).
-      // Bind only contained constant memory operands to one object. Original
-      // integer addresses, instruction bodies and control flow stay intact.
-      constexpr uint64_t Base = 0x10000, Bytes = 64;
-      auto *Type = llvm::ArrayType::get(llvm::Type::getInt8Ty(Context), Bytes);
-      auto *Stack = new llvm::GlobalVariable(*Module, Type, false,
-                                             llvm::GlobalValue::ExternalLinkage,
-                                             nullptr, "scheduled_test_stack");
-      Stack->setAlignment(llvm::Align(64));
-      unsigned Bound = 0;
+      // The fixture's only public entry points are its predicates. This lets
+      // ordinary global DCE discard unused exports before optimizing IRET;
+      // no function body, effect, access or predicate is replaced.
       for (auto &Function : *Module)
-        if (Function.getName().starts_with("proof_"))
-          for (auto &Block : Function)
-            for (auto &Instruction : Block) {
-              const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction);
-              const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Instruction);
-              if (!Load && !Store)
-                continue;
-              const unsigned Index = Load ? 0 : 1;
-              const auto *Pointer = llvm::dyn_cast<llvm::ConstantExpr>(
-                  Instruction.getOperand(Index));
-              if (!Pointer ||
-                  Pointer->getOpcode() != llvm::Instruction::IntToPtr)
-                continue;
-              const auto *Address =
-                  llvm::dyn_cast<llvm::ConstantInt>(Pointer->getOperand(0));
-              ASSERT_NE(Address, nullptr);
-              const auto At = Address->getZExtValue();
-              const auto Width =
-                  Module->getDataLayout()
-                      .getTypeStoreSize(
-                          Load ? Load->getType()
-                               : Store->getValueOperand()->getType())
-                      .getFixedValue();
-              ASSERT_GE(At, Base);
-              ASSERT_LE(At, Base + Bytes);
-              ASSERT_LE(Width, Base + Bytes - At);
-              llvm::IRBuilder<> Builder(&Instruction);
-              Instruction.setOperand(Index, Builder.CreateInBoundsGEP(
-                                                Type, Stack,
-                                                {Builder.getInt64(0),
-                                                 Builder.getInt64(At - Base)}));
-              ++Bound;
-            }
-      EXPECT_GT(Bound, 0u);
-      InputIR = tmpFile(Name + ".bound.ll");
-      std::string Mapped;
-      llvm::raw_string_ostream Stream(Mapped);
-      Module->print(Stream, nullptr);
-      std::ofstream(InputIR) << Mapped;
+        if (!Function.isDeclaration() &&
+            !Function.getName().starts_with("proof_")) {
+          Function.setLinkage(llvm::GlobalValue::InternalLinkage);
+          // Direct drivers deliberately suppress inlining in public output.
+          // Expand them and the handler helper only for these predicates;
+          // retain every body and effect. Unmodified C is compiled separately.
+          if (Function.hasFnAttribute(llvm::Attribute::NoInline) ||
+              Function.getName().starts_with("neverd_x64_resume_handler_")) {
+            Function.removeFnAttr(llvm::Attribute::NoInline);
+            Function.addFnAttr(llvm::Attribute::AlwaysInline);
+          }
+        }
+      const auto Closed = tmpFile(Name + ".closed.ll");
+      Save(*Module, Closed);
+      InputIR = tmpFile(Name + ".expanded.ll");
+      const auto Expanded =
+          exec(NEVERD_TEST_CLANG,
+               {"-O2", "-funroll-loops", "-mllvm", "-unroll-count=16", "-mllvm",
+                "-unroll-threshold=100000", "-mllvm", "-inline-threshold=10000",
+                "-mllvm", "-inline-cold-callsite-threshold=10000", "-S",
+                "-emit-llvm", Closed.string(), "-o", InputIR.string()});
+      ASSERT_TRUE(Expanded.ok()) << Expanded.err;
+      Artifacts.push_back(InputIR);
     }
-    auto Simplified =
-        exec(NEVERD_TEST_CLANG,
-             {"-O2", "-S", "-emit-llvm", InputIR.string(), "-o", IR.string()});
+    for (unsigned Pass = 0; Pass < BindingPasses; ++Pass) {
+      if (!Paged) {
+        llvm::LLVMContext Context;
+        llvm::SMDiagnostic Diagnostic;
+        const auto Module =
+            llvm::parseIRFile(InputIR.string(), Diagnostic, Context);
+        ASSERT_NE(Module, nullptr);
+        const auto Bound = bindProofRAM(*Module, RAMBytes);
+        if (!Pass)
+          EXPECT_GT(Bound, 0u);
+        else if (!Bound)
+          break;
+        InputIR = tmpFile(Name + ".bound" + (Pass ? std::to_string(Pass) : "") +
+                          ".ll");
+        Save(*Module, InputIR);
+      }
+      const auto Simplified =
+          exec(NEVERD_TEST_CLANG, {"-O2", "-S", "-emit-llvm", InputIR.string(),
+                                   "-o", IR.string()});
+      ASSERT_TRUE(Simplified.ok()) << Simplified.err;
+      InputIR = IR;
+      if (Paged)
+        break;
+    }
     if (const char *Root = std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
       fs::create_directories(Root);
-      for (const auto &Path : {File, InitialIR, InputIR, IR})
+      for (const auto &Path : Artifacts)
         if (fs::exists(Path))
           fs::copy_file(Path, fs::path(Root) / Path.filename(),
                         fs::copy_options::overwrite_existing);
     }
-    ASSERT_TRUE(Simplified.ok()) << Simplified.err;
     llvm::LLVMContext Context;
     llvm::SMDiagnostic Diagnostic;
     const auto Module = llvm::parseIRFile(IR.string(), Diagnostic, Context);
@@ -138,7 +203,17 @@ protected:
         ASSERT_NE(Value, nullptr);
         EXPECT_TRUE(Value->isZero());
       }
-    EXPECT_EQ(Count, Paged ? 40u : 20u);
+    EXPECT_EQ(Count, Expected);
+  }
+
+  void proveCalls(bool Paged, bool LLVM, llvm::StringRef Source) {
+    const std::string Name = std::string("scheduled-calls-") +
+                             (Paged ? "paged-" : "plain-") +
+                             (LLVM ? "llvm" : "high");
+    provePredicates(Paged, Name, Source,
+                    "\n#define PAGED " + std::to_string(Paged) + "\n" +
+                        ScheduledCallProbes,
+                    Paged ? 40u : 20u, 64);
   }
 };
 

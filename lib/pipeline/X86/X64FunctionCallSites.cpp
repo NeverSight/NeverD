@@ -9,6 +9,7 @@
 
 #include "X64FunctionCallSites.h"
 
+#include "X64FunctionCallHandlers.h"
 #include "X64FunctionCallSchedule.h"
 #include "X64FunctionCalls.h"
 
@@ -95,10 +96,9 @@ llvm::Expected<std::vector<X64FunctionCallSite>> bindX64FunctionCallSites(
   return Sites;
 }
 
-llvm::json::Array
-emitX64FunctionCallSites(llvm::raw_ostream &OS,
-                         llvm::ArrayRef<X64FunctionCallSite> Sites,
-                         bool PagedMemory, bool ScheduledEvents) {
+llvm::json::Array emitX64FunctionCallSites(
+    llvm::raw_ostream &OS, llvm::ArrayRef<X64FunctionCallSite> Sites,
+    bool PagedMemory, bool ScheduledEvents, bool PauseCallSites) {
   llvm::json::Array Manifest;
   if (Sites.empty())
     return Manifest;
@@ -129,6 +129,8 @@ typedef struct neverd_x64_call_site_context_v1 {
     uint64_t Site, Prepared;
 } neverd_x64_call_site_context_v1;
 )C";
+  if (PauseCallSites)
+    emitX64FunctionCallHandlerContext(OS);
   for (const auto &Site : Sites) {
     const auto &Call = *Site.Interface;
     const auto &Unit = *Site.Instruction;
@@ -227,7 +229,7 @@ typedef struct neverd_x64_call_site_context_v1 {
       OS << (PagedMemory ? "(state, context, budget, site);\n}\n"
                          : "(state, budget, environment_budget, site,\n"
                            "        environment, environment_context);\n}\n");
-    Manifest.push_back(llvm::json::Object{
+    llvm::json::Object Interface{
         {"instruction", "0x" + Address},
         {"entry", "0x" + Entry},
         {"return_pc", "0x" + llvm::utohexstr(Unit.Address + Unit.Bytes.size())},
@@ -236,7 +238,19 @@ typedef struct neverd_x64_call_site_context_v1 {
         {"result_bytes", Call.ResultBytes},
         {"call", Start},
         {"resume", Resume},
-        {"source_abi_inferred", false}});
+        {"source_abi_inferred", false}};
+    if (PauseCallSites) {
+      // Without these pauses a near RET/fallthrough could execute the pending
+      // CALL inside the region driver before a privilege return was observed.
+      const auto Handler =
+          (llvm::Twine("neverd_x64_resume_handler_") + Prefix + Address + "_v6")
+              .str();
+      emitX64FunctionCallHandlerResume(OS, Unit.Address, Handler, Resume,
+                                       Parameters, PagedMemory,
+                                       ScheduledEvents);
+      Interface["resume_handler"] = Handler;
+    }
+    Manifest.push_back(std::move(Interface));
   }
   return Manifest;
 }

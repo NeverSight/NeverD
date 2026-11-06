@@ -926,9 +926,9 @@ typedef struct neverd_x64_event_v1 {
   FunctionCalls = emitX64FunctionCalls(OS, Request->FunctionCalls,
                                        Request->Options.PagedMemory,
                                        Request->Options.ScheduledEvents);
-  FunctionCallSites =
-      emitX64FunctionCallSites(OS, *CallSites, Request->Options.PagedMemory,
-                               Request->Options.ScheduledEvents);
+  FunctionCallSites = emitX64FunctionCallSites(
+      OS, *CallSites, Request->Options.PagedMemory,
+      Request->Options.ScheduledEvents, Request->PauseCallSites);
   llvm::json::Array RtmAborts;
   if (Request->NativeRtmAbortRegions)
     RtmAborts = emitX64RtmAbortEnvironment(OS, Image, *Units,
@@ -1268,6 +1268,18 @@ typedef struct neverd_x64_event_v1 {
                    "owns the return cell; retain context across pauses; "
                    "same function-boundary and environment obligations; "
                    "ordinary caller state capture is not inferred"}};
+  if (Request->PauseCallSites) {
+    auto &Sites = *Report["function_call_sites"].getAsObject();
+    Sites["handler_context_type"] = "neverd_x64_call_site_handler_context_v1";
+    Sites["begin_handler"] = "neverd_x64_begin_call_site_handler_v1";
+    Sites["handler_domain"] =
+        "call-site pauses enabled; explicitly declared delivered handler "
+        "context; selected instructions retain original state and RAM; only a "
+        "successful privilege return to the pending CALL PC/SP permits retry, "
+        "with attempted progress in paged mode; budgets and external stops "
+        "retain the handler; no implicit provider, restored frame or initial "
+        "capture";
+  }
   if (Request->Options.PagedMemory && !CallSites->empty()) {
     auto &Contract = *Report["function_call_sites"].getAsObject();
     Contract["paged_memory"] = true;
