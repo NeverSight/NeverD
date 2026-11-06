@@ -3897,6 +3897,45 @@ TEST(NativeSourceHints, IntegerPairsRequireBothCompleteReturnCarriers) {
     }
 }
 
+TEST(NativeSourceHints, GenericIntegerPairsAreDemandAndStillProveBothWords) {
+  for (auto Architecture : {Arch::AArch64, Arch::X64})
+    for (unsigned Mutation = 0; Mutation < 5; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      const auto &Registers = getTargetRegInfo(Architecture).IntReturnRegs;
+      auto F = nativePairFixture(Architecture);
+      // As generic recovery leaves them: MedIR keeps the first word's scalar
+      // type and HighIR holds the pair as one double-word integer.
+      F.Med.MultiReturn = {{Registers[0], 8, false}, {Registers[1], 8, false}};
+      F.High.ReturnType = NdType::makeInt(16);
+      if (Mutation == 1)
+        F.Med.MultiReturn[1].IsFP = true;
+      if (Mutation == 2)
+        F.Med.MultiReturn[1].RegOff = Registers[0];
+      if (Mutation == 3)
+        F.Med.MultiReturn[1].Size = 4;
+      if (Mutation == 4)
+        F.Med.Blocks[0].Ops.erase(F.Med.Blocks[0].Ops.begin() + 1);
+      std::string Error;
+      const auto Hint = F.infer(Error);
+      if (Mutation == 0) {
+        ASSERT_TRUE(Hint) << Error;
+        EXPECT_EQ(Hint->ReturnType->Kind, NdTypeKind::Struct);
+        ASSERT_EQ(Hint->ReturnComponents.size(), 2U);
+        for (unsigned I = 0; I < 2; ++I) {
+          EXPECT_EQ(Hint->ReturnComponents[I].RegisterOffset, Registers[I]);
+          EXPECT_EQ(Hint->ReturnComponents[I].ValueBytes, 8U);
+        }
+      } else if (Mutation == 4) {
+        // The body does not supply the second word, whatever callers read.
+        EXPECT_TRUE(!Hint || Hint->ReturnType->Kind != NdTypeKind::Struct);
+      } else {
+        EXPECT_FALSE(Hint);
+        EXPECT_EQ(Error,
+                  "native function has a non-scalar or non-returning ABI");
+      }
+    }
+}
+
 TEST(NativeSourceHints,
      IntegerPairReturnsAllowScalarBitReverseAndSeparateTrapPaths) {
   auto Fixture = nativePairFixture(Arch::AArch64);

@@ -9103,6 +9103,9 @@ and returns. A later dependency iteration may extend an inferred native scalar
 contract when its second word becomes provable; external and declared source
 contracts are never extended. Re-lifting and the normal source body/closure
 checks remain mandatory, and an unproved second result remains unresolved.
+Generic recovery may already have published the pair from a direct caller's
+reads. That is the same demand and proves nothing further: inference still
+states the scalar first and proves both result registers.
 
 Block consumer escape analysis also uses this graph. A bounded fixed point carries pointer identities and private frame spills across branches and loops. Joins retain possible context addresses; only complete overwrites erase them. Unknown edges, exceptional flow, and exhausted proof budgets reject the binding.
 
