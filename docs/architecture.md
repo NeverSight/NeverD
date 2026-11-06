@@ -13795,7 +13795,9 @@ mutation. Stripped inputs whose only function discovery source is
 A whole-image Mach-O rewrite adds one segment command. Apple's linker can leave
 less room than that after the load commands, so the rewrite gives up
 `LC_SOURCE_VERSION`, `LC_DATA_IN_CODE` and `LC_FUNCTION_STARTS`, in that order and
-only as far as it must. dyld reads none of them. A source patch keeps them and
+only as far as it must. dyld reads none of them. The signature command that
+`codesign` writes back after the table counts as part of what must fit, since
+`codesign` overwrites whatever follows the table. A source patch keeps them and
 grows the header instead.
 
 PE, ELF, and Mach-O each have format-specific exception components, but NeverD

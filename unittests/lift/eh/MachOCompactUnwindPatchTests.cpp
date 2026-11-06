@@ -1668,15 +1668,15 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
     std::vector<uint32_t> Dropped;
   };
   const std::vector<Case> Cases = {
-      {72, {}},
-      {71, {LC_SOURCE_VERSION}},
-      {56, {LC_SOURCE_VERSION}},
-      {55, {LC_SOURCE_VERSION, LC_DATA_IN_CODE}},
-      {40, {LC_SOURCE_VERSION, LC_DATA_IN_CODE}},
-      {39, {LC_SOURCE_VERSION, LC_DATA_IN_CODE, LC_FUNCTION_STARTS}},
-      {24, {LC_SOURCE_VERSION, LC_DATA_IN_CODE, LC_FUNCTION_STARTS}},
+      {88, {}},
+      {87, {LC_SOURCE_VERSION}},
+      {72, {LC_SOURCE_VERSION}},
+      {71, {LC_SOURCE_VERSION, LC_DATA_IN_CODE}},
+      {56, {LC_SOURCE_VERSION, LC_DATA_IN_CODE}},
+      {55, {LC_SOURCE_VERSION, LC_DATA_IN_CODE, LC_FUNCTION_STARTS}},
+      {40, {LC_SOURCE_VERSION, LC_DATA_IN_CODE, LC_FUNCTION_STARTS}},
   };
-  const auto Build = [](uint32_t Padding) {
+  const auto Build = [](uint32_t Padding, bool Signed = false) {
     MachOPatchTransactionFixture Fixture =
         makeMachOPatchTransactionFixture(/*CompactCapacity=*/0x2000);
     auto *Header = reinterpret_cast<mach_header_64 *>(Fixture.Binary.data());
@@ -1698,6 +1698,15 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
     Header->ncmds += 3;
     Header->sizeofcmds +=
         sizeof(source_version_command) + 2 * sizeof(linkedit_data_command);
+    if (Signed) {
+      auto *Signature = reinterpret_cast<linkedit_data_command *>(End);
+      Signature->cmd = LC_CODE_SIGNATURE;
+      Signature->cmdsize = sizeof(*Signature);
+      Signature->dataoff = Payload - 24;
+      Signature->datasize = 8;
+      ++Header->ncmds;
+      Header->sizeofcmds += sizeof(*Signature);
+    }
     auto *TextSegment = reinterpret_cast<segment_command_64 *>(Header + 1);
     auto *TextSection = reinterpret_cast<section_64 *>(TextSegment + 1);
     const uint32_t First = sizeof(*Header) + Header->sizeofcmds + Padding;
@@ -1735,9 +1744,9 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
       EXPECT_TRUE(llvm::is_contained(After, Command));
   }
 
-  // Giving up all three leaves 48 bytes of commands for 72 needed.
+  // Giving up all three leaves 48 bytes of commands for 72 and a signature.
   {
-    auto Fixture = Build(23);
+    auto Fixture = Build(39);
     const auto Before = Fixture.Binary;
     MachOPatcher Patcher;
     EXPECT_EQ(Patcher.appendExecSegment(Fixture.Binary,
@@ -1747,12 +1756,12 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
     EXPECT_EQ(Fixture.Binary, Before);
   }
   // A nonzero byte is not unused padding: dropping one command would reach it
-  // here, so a second is given up and the table stops 40 bytes in.
+  // here, so a second is given up and the table stops 56 bytes in.
   {
-    auto Fixture = Build(56);
+    auto Fixture = Build(72);
     const auto *Header =
         reinterpret_cast<const mach_header_64 *>(Fixture.Binary.data());
-    Fixture.Binary[sizeof(*Header) + Header->sizeofcmds + 55] = 0x5a;
+    Fixture.Binary[sizeof(*Header) + Header->sizeofcmds + 71] = 0x5a;
     MachOPatcher Patcher;
     EXPECT_NE(Patcher.appendExecSegment(Fixture.Binary,
                                         {0xd6, 0x5f, 0x03, 0xc0},
@@ -1763,6 +1772,36 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
     EXPECT_FALSE(llvm::is_contained(After, LC_DATA_IN_CODE));
     EXPECT_TRUE(llvm::is_contained(After, LC_FUNCTION_STARTS));
   }
+  // Signing writes its command after the table, so the table must leave it room
+  // whether or not the input had one: anything else runs into the first
+  // instructions. Apple's linker leaves 32 bytes after a small signed program's
+  // commands, and such a program must still get its segment.
+  for (const bool Signed : {false, true})
+    for (uint32_t Padding = 0; Padding <= 96; ++Padding) {
+      SCOPED_TRACE(testing::Message() << Signed << " " << Padding);
+      auto Fixture = Build(Padding, Signed);
+      ASSERT_FALSE(Fixture.Binary.empty());
+      const auto *Header =
+          reinterpret_cast<const mach_header_64 *>(Fixture.Binary.data());
+      const auto *Text = reinterpret_cast<const section_64 *>(
+          reinterpret_cast<const segment_command_64 *>(Header + 1) + 1);
+      const uint32_t First = Text->offset;
+      MachOPatcher Patcher;
+      const uint64_t Placed =
+          Patcher.appendExecSegment(Fixture.Binary, {0xd6, 0x5f, 0x03, 0xc0},
+                                    kDefaultNdTextSegment, Arch::AArch64);
+      // A signed input also gives back its old signature's 16 bytes.
+      EXPECT_EQ(Placed != 0, Padding >= (Signed ? 24u : 40u));
+      if (Placed) {
+        Header =
+            reinterpret_cast<const mach_header_64 *>(Fixture.Binary.data());
+        EXPECT_LE(sizeof(*Header) + Header->sizeofcmds +
+                      sizeof(linkedit_data_command),
+                  First);
+        EXPECT_FALSE(llvm::is_contained(Commands(Fixture.Binary),
+                                        uint32_t(LC_CODE_SIGNATURE)));
+      }
+    }
   // A source patch keeps every command the image has.
   {
     auto Fixture = Build(56);
