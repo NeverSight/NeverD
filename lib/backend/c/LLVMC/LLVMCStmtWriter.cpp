@@ -6055,6 +6055,11 @@ LLVMCWriter::preservedIndirectCalleeStr(const llvm::CallBase &Call) {
   // instruction owns the exact result, parameter widths and convention.
   std::string Type = indirectCalleeType(Call, /*Strict=*/true);
   if (const auto *Hint = analystCallHint(Call)) {
+    // The call passes and returns these by value, which takes their
+    // definitions, however else the unit only points to them.
+    noteRecordValue(Hint->Signature.ReturnType);
+    for (const auto &Parameter : Hint->Signature.Parameters)
+      noteRecordValue(Parameter.Type);
     std::string Params;
     const unsigned Fixed = Hint->AnalystFixedCount < 0
                                ? Hint->Signature.Parameters.size()
