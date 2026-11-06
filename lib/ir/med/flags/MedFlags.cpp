@@ -533,6 +533,11 @@ bool condFlagsComeFromCmp(const std::vector<MedOp> &Ops, int ConsumerIdx,
       --J;
     if (J < 0 || Ops[J].Addr != CmpAddr)
       return false;
+    // The instruction itself can restore a flag after computing it: a shift
+    // by a zero count keeps the old flags, through a SELECT that folds to a
+    // COPY when the count is constant.
+    if (J > Cmp.FlagOpIndex && Ops[J].Opcode == NdOp::COPY)
+      return false;
   }
   return true;
 }
