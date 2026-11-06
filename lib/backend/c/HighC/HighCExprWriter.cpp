@@ -78,6 +78,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 namespace neverd {
 
@@ -1472,7 +1473,7 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
       }
       return false;
     };
-    auto AsSignedLtZero = [&](const HighExpr *Op, ExprPtr &X) {
+    auto AsSignedLtZero = [&](const HighExpr *Op, ExprPtr &X, uint16_t &Bytes) {
       Op = forwardedExpr(Op);
       Op = unwrapIntegerView(Op);
       if (Op && Op->Kind == ExprKind::BinOp && Op->Op == NdOp::INT_NOTEQUAL &&
@@ -1491,9 +1492,12 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
           !Op->Operands[0])
         return false;
       X = Op->Operands[0];
-      return true;
+      Bytes = zeroTestBytes(*Op->Operands[0], *Op->Operands[1]);
+      return Bytes != 0;
     };
-    auto PrintGtZero = [&](const ExprPtr &X) {
+    // `Sz` is the width the test reads, whatever the variable it views: a
+    // 64-bit `test rax, rax` is not `(int32_t)rax > 0`.
+    auto PrintGtZero = [&](const ExprPtr &X, uint16_t Sz) {
       const HighExpr *V = forwardedExpr(X.get());
       V = unwrapIntegerView(V);
       if (V && V->Kind == ExprKind::BinOp && V->Operands.size() == 2 &&
@@ -1501,25 +1505,33 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
           V->Op != NdOp::INT_SLESS && V->Op != NdOp::INT_SLESSEQUAL &&
           IsZero(V->Operands[1]) && V->Operands[0])
         V = unwrapIntegerView(V->Operands[0].get());
-      const uint16_t Sz = V && V->Type && V->Type->Size && V->Type->Size <= 4
-                              ? V->Type->Size
-                              : 4;
-      std::string LHS;
-      const HighExpr *Print = V ? V : X.get();
-      if (const HighExpr *Call = typedCallResult(Print)) {
+      // A value narrower than the test keeps the extension X reads it through.
+      const HighExpr *Print =
+          V && (!V->Type || V->Type->Size >= Sz) && lowBytesRead(X.get()) >= Sz
+              ? V
+              : X.get();
+      // What the text certainly prints as decides over the IR's type: a call
+      // has its declared type, not the carrier's, and a declared local can read
+      // in the other signedness.
+      TypeRef Printed = Print->Type;
+      const HighExpr *Call = typedCallResult(Print);
+      if (Call) {
         TypeRef Ret = knownCallReturnType(*Call);
         if (!Ret)
           Ret = Call->Type;
         if (Ret && Ret->Kind == NdTypeKind::Int && Ret->Size == Sz)
           Print = Call;
+        Printed = Ret;
       }
-      if (Print->Type && Print->Type->Kind == NdTypeKind::Int &&
-          Print->Type->Size == Sz && Print->Type->IsSigned)
+      bool SignedAtWidth = Printed && Printed->Kind == NdTypeKind::Int &&
+                           Printed->Size == Sz && Printed->IsSigned;
+      std::string LHS;
+      if (!Call || SignedAtWidth)
         LHS = exprStr(*Print, 7);
-      else if (const HighExpr *Call = typedCallResult(Print);
-               Call && Call == Print)
-        LHS = exprStr(*Print, 7);
-      else
+      if (!Call)
+        if (const auto Certain = printedIntegerType(*Print))
+          SignedAtWidth = Certain->first == Sz && Certain->second;
+      if (!SignedAtWidth)
         LHS = "(" + typeToC(NdType::makeInt(Sz, true)) + ")" +
               exprStr(*Print, 99);
       std::string Result = LHS + " > 0";
@@ -1532,17 +1544,21 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
         Inner->Operands.size() == 2) {
       ExprPtr XEq;
       ExprPtr XLt;
+      uint16_t Bytes = 0;
       const bool LeftEq = AsEqZero(Inner->Operands[0].get(), XEq) &&
-                          AsSignedLtZero(Inner->Operands[1].get(), XLt);
+                          AsSignedLtZero(Inner->Operands[1].get(), XLt, Bytes);
       const bool RightEq = AsEqZero(Inner->Operands[1].get(), XEq) &&
-                           AsSignedLtZero(Inner->Operands[0].get(), XLt);
-      if ((LeftEq || RightEq) && SameScalar(XEq.get(), XLt.get()))
-        return PrintGtZero(XEq);
+                           AsSignedLtZero(Inner->Operands[0].get(), XLt, Bytes);
+      if ((LeftEq || RightEq) && SameScalar(XEq.get(), XLt.get()) &&
+          readsSameBytes(Inner->Operands[0].get(), Inner->Operands[1].get()))
+        return PrintGtZero(XLt, Bytes);
     }
     if (Inner && Inner->Kind == ExprKind::BinOp &&
         Inner->Op == NdOp::INT_SLESSEQUAL && Inner->Operands.size() == 2 &&
         IsZero(Inner->Operands[1]) && Inner->Operands[0])
-      return PrintGtZero(Inner->Operands[0]);
+      if (const uint16_t Bytes =
+              zeroTestBytes(*Inner->Operands[0], *Inner->Operands[1]))
+        return PrintGtZero(Inner->Operands[0], Bytes);
     if (Inner)
       return invertedTruthValue(*Inner, E, ParentPrec);
     return "!" + exprStr(*E.Operands[0], 99);
@@ -6282,6 +6298,82 @@ const HighExpr *HighCWriter::forwardedExpr(const HighExpr *E) const {
   return E;
 }
 
+uint16_t HighCWriter::zeroTestBytes(const HighExpr &Value,
+                                    const HighExpr &Zero) {
+  const uint16_t ValueBytes = Value.Type ? Value.Type->Size : 0;
+  const uint16_t ZeroBytes = Zero.Type ? Zero.Type->Size : 0;
+  return ValueBytes && ZeroBytes ? std::min(ValueBytes, ZeroBytes)
+                                 : std::max(ValueBytes, ZeroBytes);
+}
+
+unsigned HighCWriter::lowBytesRead(const HighExpr *E) const {
+  constexpr unsigned Unknown = std::numeric_limits<unsigned>::max();
+  unsigned Bytes = Unknown;
+  const auto Narrow = [&Bytes](const TypeRef &Type) {
+    if (Type && Type->Size)
+      Bytes = std::min<unsigned>(Bytes, Type->Size);
+  };
+  const auto IsZero = [this](const ExprPtr &Op) {
+    const HighExpr *Value = unwrapIntegerView(Op.get());
+    return Value && Value->Kind == ExprKind::Const && Value->ConstVal == 0;
+  };
+  for (unsigned Depth = 0; E && Depth < limits::kMaxIntegerViewUnwrapDepth;
+       ++Depth) {
+    if (E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi) {
+      if (E->Type && E->Type->Size)
+        Narrow(E->Type);
+      else if (E->Var.Size)
+        Bytes = std::min<unsigned>(Bytes, E->Var.Size);
+      const auto It = ValueForward.find(varName(E->Var));
+      if (It == ValueForward.end() || !It->second || It->second == E)
+        return Bytes == Unknown ? 0 : Bytes;
+      E = It->second;
+      continue;
+    }
+    if (E->Kind == ExprKind::UnaryOp && E->Op == NdOp::BOOL_NOT &&
+        !E->Operands.empty()) {
+      Bytes = Unknown;
+      E = E->Operands[0].get();
+      continue;
+    }
+    if ((E->Kind == ExprKind::Cast || E->Kind == ExprKind::BitCast ||
+         (E->Kind == ExprKind::UnaryOp &&
+          (E->Op == NdOp::INT_ZEXT || E->Op == NdOp::INT_SEXT))) &&
+        !E->Operands.empty()) {
+      Narrow(E->Type);
+      E = E->Operands[0].get();
+      continue;
+    }
+    if (E->Kind == ExprKind::BinOp && E->Operands.size() == 2 &&
+        E->Operands[0] && E->Operands[1]) {
+      const bool ZeroRight = IsZero(E->Operands[1]);
+      if (ZeroRight || IsZero(E->Operands[0])) {
+        if (E->Op == NdOp::INT_EQUAL || E->Op == NdOp::INT_NOTEQUAL ||
+            E->Op == NdOp::INT_LESS || E->Op == NdOp::INT_LESSEQUAL ||
+            E->Op == NdOp::INT_SLESS || E->Op == NdOp::INT_SLESSEQUAL) {
+          // A test reads what its value does, whatever views its result passes
+          // through, and its zero states how much of that value.
+          Bytes = Unknown;
+          Narrow(E->Operands[ZeroRight ? 1 : 0]->Type);
+        } else {
+          // Any other operation with zero keeps the value at its own width.
+          Narrow(E->Type);
+        }
+        E = E->Operands[ZeroRight ? 0 : 1].get();
+        continue;
+      }
+    }
+    Narrow(E->Type);
+    return Bytes == Unknown ? 0 : Bytes;
+  }
+  return 0;
+}
+
+bool HighCWriter::readsSameBytes(const HighExpr *A, const HighExpr *B) const {
+  const unsigned Bytes = lowBytesRead(A);
+  return Bytes && Bytes == lowBytesRead(B);
+}
+
 const HighExpr *HighCWriter::sameWidthVariable(const HighExpr &E) const {
   // Integers and pointers, which convert by their bits; a float converts by
   // its value.
@@ -8632,19 +8724,22 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
         }
         return nullptr;
       };
-      auto NotSignedNeg = [&](const HighExpr *E) -> const HighExpr * {
-        E = forwardedExpr(E);
-        E = unwrapIntegerView(E);
-        if (!E || E->Kind != ExprKind::UnaryOp || E->Op != NdOp::BOOL_NOT ||
-            E->Operands.empty() || !E->Operands[0])
+      // The value tested by `!(x < 0)`, and the width of that test.
+      auto NonNegativeValue = [&](const HighExpr *E,
+                                  uint16_t &Bytes) -> ExprPtr {
+        E = unwrapIntegerView(forwardedExpr(E));
+        if (!E || E->Operands.empty() || !E->Operands[0])
           return nullptr;
-        const HighExpr *Cmp = forwardedExpr(E->Operands[0].get());
-        Cmp = unwrapIntegerView(Cmp);
+        if (E->Kind != ExprKind::UnaryOp || E->Op != NdOp::BOOL_NOT)
+          return nullptr;
+        const HighExpr *Below = E->Operands[0].get();
+        const HighExpr *Cmp = unwrapIntegerView(forwardedExpr(Below));
         if (!Cmp || Cmp->Kind != ExprKind::BinOp ||
             Cmp->Op != NdOp::INT_SLESS || Cmp->Operands.size() != 2 ||
-            !IsZeroLike(Cmp->Operands[1]) || !Cmp->Operands[0])
+            !Cmp->Operands[0] || !IsZeroLike(Cmp->Operands[1]))
           return nullptr;
-        return ScalarOf(Cmp->Operands[0].get());
+        Bytes = zeroTestBytes(*Cmp->Operands[0], *Cmp->Operands[1]);
+        return Cmp->Operands[0];
       };
       auto SameScalar = [&](const HighExpr *A, const HighExpr *B) {
         if (!A || !B ||
@@ -8656,22 +8751,29 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
         return copyForwardName(varName(A->Var)) ==
                copyForwardName(varName(B->Var));
       };
-      const HighExpr *Pos = ScalarOf(Cur->Operands[0].get());
-      const HighExpr *Neg = NotSignedNeg(Cur->Operands[1].get());
-      if (!SameScalar(Pos, Neg)) {
-        Pos = ScalarOf(Cur->Operands[1].get());
-        Neg = NotSignedNeg(Cur->Operands[0].get());
+      for (unsigned Truth = 0; Truth != 2; ++Truth) {
+        uint16_t Bytes = 0;
+        const ExprPtr Value =
+            NonNegativeValue(Cur->Operands[1 - Truth].get(), Bytes);
+        if (!Value || !Bytes ||
+            !SameScalar(ScalarOf(Cur->Operands[Truth].get()),
+                        ScalarOf(Value.get())) ||
+            !readsSameBytes(Cur->Operands[0].get(), Cur->Operands[1].get()))
+          continue;
+        // Printed as the negated comparison, which spells the view it reads.
+        return exprStr(*HighExpr::makeUnary(
+            NdOp::BOOL_NOT,
+            HighExpr::makeBinop(NdOp::INT_SLESSEQUAL, Value,
+                                HighExpr::makeConst(0, Bytes))));
       }
-      if (SameScalar(Pos, Neg))
-        return exprStr(*Pos) + " > 0";
     }
     std::string L = condStr(*Cur->Operands[0]);
     std::string R = condStr(*Cur->Operands[1]);
     if (Cur->Op == NdOp::BOOL_AND) {
+      // Without a cast, the expression is signed at its own width. A signed
+      // view of it could be narrower and differs from it above bit 31 or 63.
       auto NotLessZero = [](const std::string &Expr, const std::string &Not) {
-        return Not == "!(" + Expr + " < 0)" ||
-               Not == "!((int32_t)" + Expr + " < 0)" ||
-               Not == "!((int64_t)" + Expr + " < 0)";
+        return Not == "!(" + Expr + " < 0)";
       };
       if (NotLessZero(L, R))
         return L + " > 0";

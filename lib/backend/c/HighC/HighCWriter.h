@@ -721,6 +721,17 @@ public:
   /// (`(int32_t)(int8_t)v` is not `v`).
   const HighExpr *sameWidthVariable(const HighExpr &E) const;
   const HighExpr *forwardedExpr(const HighExpr *E) const;
+  /// The width a comparison of \p Value with the constant \p Zero tests: the
+  /// narrower of the two, since a variable can be typed wider than its test and
+  /// a zero wider than a 16-bit value.
+  static uint16_t zeroTestBytes(const HighExpr &Value, const HighExpr &Zero);
+  /// How many low bytes of the value under \p E reach it, or 0 if unknown. A
+  /// comparison with zero reads what its value does.
+  unsigned lowBytesRead(const HighExpr *E) const;
+  /// Whether two tests of one variable read the same low bytes of it, so that
+  /// either's zero test decides the other's. `v` and `(int32_t)v` do not when
+  /// `v` is wider.
+  bool readsSameBytes(const HighExpr *A, const HighExpr *B) const;
   /// \p Operand's text as an operand of a floating-point operator.  An
   /// operation whose type C may compute wider (CFloatTypes.def) is cast to
   /// that type, which rounds it where the instruction rounded.
