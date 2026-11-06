@@ -1627,6 +1627,39 @@ namespace {
 /// Bytes of each family live on entry to \p F, given the current callee
 /// summaries.  A call to one of \p VectorArgumentCallees reads the vector
 /// registers its AL counts.
+/// A return hands its caller the return registers, which is no read: a function
+/// that leaves XMM0 alone does not read it. A whole copy of another register
+/// into XMM0 is the result's value, so a returning block keeps it live. So is
+/// one into XMM1 beside such a copy, the second half of a pair: all that
+/// `return (SD){b, a}` does with its arguments. A copy into XMM1 alone is
+/// scratch.
+static GPRReadWidths returnedVectorCopies(const RegisterBlock &Block) {
+  GPRReadWidths Live{};
+  GPRFamilyMask Settled = 0;
+  for (auto It = Block.Steps.rbegin(); It != Block.Steps.rend(); ++It) {
+    const RegisterStep &Step = *It;
+    if (Step.Exits || Step.TailCallee || Step.UnknownTailCall ||
+        Step.FixedTailCall)
+      return {};
+    if (Step.Callee != InvalidVA || Step.ImportCallee != InvalidVA ||
+        Step.UnknownCall || Step.FixedArguments)
+      break;
+    for (unsigned Family = kX64VectorFamilyBase;
+         Family < kX64VectorFamilyBase + kX64VectorReturnFamilies; ++Family) {
+      const GPRFamilyMask Bit = GPRFamilyMask(1) << Family;
+      if (Settled & Bit)
+        continue;
+      if (Step.VectorCopy && Step.VectorCopy->first == Family)
+        Live[Family] = kX64VectorFamilyBytes;
+      if ((Step.Kills & Bit) || Step.LowWrites[Family])
+        Settled |= Bit;
+    }
+  }
+  if (!Live[kX64VectorFamilyBase])
+    Live[kX64VectorFamilyBase + 1] = 0;
+  return Live;
+}
+
 GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
                               const std::map<va_t, GPRFamilyMask> &MayWrite,
                               const std::map<va_t, GPRReadWidths> &EntryReads,
@@ -1718,6 +1751,8 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
       for (size_t S : F.Blocks[B].Succs)
         if (S < LiveIn.size())
           joinReads(LiveOut, LiveIn[S]);
+      if (F.Blocks[B].Succs.empty())
+        LiveOut = returnedVectorCopies(F.Blocks[B]);
       const GPRReadWidths In = Transfer(F.Blocks[B], LiveOut);
       if (In != LiveIn[B]) {
         LiveIn[B] = In;
