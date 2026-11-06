@@ -282,6 +282,8 @@ TEST_F(X64ScheduledCallTest, RetainsArgumentAndProducerAdmission) {
 }
 
 TEST_F(X64ScheduledCallTest, ProvesOriginalCallsAndScheduledResumption) {
+  if (!neverd::test::compilerReadsCurrentIR(NEVERD_TEST_CLANG))
+    GTEST_SKIP() << "this Clang cannot read the linked LLVM's IR";
   loadCalls();
   for (bool Paged : {false, true})
     for (bool LLVM : {false, true}) {
