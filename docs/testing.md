@@ -15617,7 +15617,7 @@ round trip alone is insufficient. `AndroidJNI.Parcel*` runs ordinary/V/A calls
 at O0/O2 across relocation variants and available CPU backends.
 `ProcessPublic.AndroidParcelDataAndBoundariesMatchSDKAndCLI` compares 54 complete
 report pairs, including token/name writes, explicit null-token refusal and the
-next `BinderProxy.transact` method-resolution boundary.
+raw `BinderProxy.transact` native-object boundary.
 Binder/token unit cases check exact gather-bit bytes, high/sign bits, raw UTF-16,
 empty descriptors, missing services, propagated service stops, budget admission,
 partial headers and DEX/library sharing. `AndroidJNI.BinderStrictMode*` checks
@@ -15625,6 +15625,15 @@ ordinary/V/A calls, native thread isolation, fresh child policies and retained
 policy across JNI detach/reattach; it writes through one globally retained
 Parcel from parent and child threads. `ProcessPublic.AndroidBinderThreadPolicyMatchesSDKAndCLI`
 compares twelve complete reports in single-thread and scheduled modes at O0/O2.
+`AndroidBinderTest.*` checks transaction declarations, admission, warning and
+tracing order, direct native entry, null-data exceptions, owned/recycled Parcel
+validation, retained bytes/positions and DEX interface dispatch/catching.
+`AndroidJNI.BinderTransaction*` executes eleven entry cases through ordinary/V/A
+calls; `AndroidJNI.BinderTracing*` checks methods/field aliases and process state
+across native threads and JNI attachments. The matching
+`ProcessPublic.AndroidBinderEntryAndTracingMatchSDKAndCLI` compares 78 full
+report pairs at O0/O2. Successful cases check a real caught null-data exception
+or tracing state; none claims a completed Binder transaction.
 Run full Dalvik, Android JNI, thread/callback and native/Linux Binder suites,
 plus these focused public tests after changing this owner. These are original synthetic tests;
 they establish no live Binder service or whole-MVM restoration.

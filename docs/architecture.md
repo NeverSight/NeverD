@@ -17034,9 +17034,24 @@ resource stops just like ordinary Parcel writes. This follows API 28
 [Binder natives](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/jni/android_util_Binder.cpp)
 and [IPCThreadState](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/IPCThreadState.cpp).
 
-The ServiceManagerProxy sequence now has shared obtain, token and name-writing
-semantics. Its next transport boundary is `BinderProxy.transact`: Java proxy
-keys do not identify native handles, peer state or reply object translations.
+The ServiceManagerProxy sequence has shared obtain, token and name-writing
+semantics. `AndroidBinder.cpp` owns the API 28 `IBinder`/`BinderProxy.transact`
+entry and `transactNative` Parcel validation. The wrapper preserves the order
+of blocking warnings, transaction tracing and native entry. A synchronous call
+clears a supplied true `mWarnOnBlocking` before stopping at the unmodeled
+`Log.w`/stack-trace boundary; one-way calls skip that warning. Binder's
+`enableTracing`, `disableTracing`, `isTracingEnabled` and `sTracingEnabled`
+share process state, initially false, independent of native thread policy.
+Enabled transaction tracing stops explicitly before native validation.
+Direct native calls skip the Java wrapper. Null data throws a catchable
+NullPointerException with a null message before inspecting the optional reply;
+non-null Parcels reuse the owned/recycled lifecycle checks without changing
+bytes or positions. Local Binder dispatch remains unsupported.
+
+The next transport boundary requires an explicit native Binder binding:
+Java proxy keys do not identify native handles, peer state or reply object
+translations. An absent model binding is not evidence that a Binder was
+finalized or died. No transaction success, native error or reply is fabricated.
 `enforceInterface` also remains unmodeled: its incoming transaction flags and
 Java StrictMode policy-change upcall cannot be omitted. Borrowed native Parcels,
 object/FD translation, custom string helpers, capacity/size mutation, floating

@@ -34,6 +34,15 @@ ExecutionResult unsupported(std::string text) {
 }
 } // namespace
 
+ExecutionResult AndroidFramework::parcelStatus(uint64_t receiver) const {
+  const auto entry = parcels.find(receiver);
+  if (entry == parcels.end())
+    return unsupported("Android Parcel owned native state is not supplied");
+  if (entry->second.recycled)
+    return unsupported("Android Parcel access after recycle is unsupported");
+  return {};
+}
+
 ExecutionResult AndroidFramework::parcel(Heap &heap,
                                          const LibraryMethod &method,
                                          uint64_t receiver,
@@ -72,12 +81,10 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       parcels.emplace(object->Identity, ParcelState{});
       return returned(object->Identity);
     }
-    auto entry = parcels.find(receiver);
-    if (entry == parcels.end())
-      return unsupported("Android Parcel owned native state is not supplied");
-    auto &state = entry->second;
-    if (state.recycled)
-      return unsupported("Android Parcel access after recycle is unsupported");
+    auto status = parcelStatus(receiver);
+    if (status.stop != ExecutionStop::Returned)
+      return status;
+    auto &state = parcels.at(receiver);
     auto object = heap.get(receiver); // Library validated the receiver.
     auto &bytes = object->Bytes;
     auto &position = state.position;

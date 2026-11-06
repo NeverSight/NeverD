@@ -98,14 +98,72 @@ TEST_P(AndroidJNI, BinderStrictModeIsNativeThreadLocalAcrossAttachments) {
     }
   }
 }
-TEST_P(AndroidJNI, ParcelNativeStateAndUndefinedRangesRemainExplicit) {
-  const char *diagnostics[] = {"owned native state",
+TEST_P(AndroidJNI, BinderTracingMethodsAndFieldsShareStateAcrossThreads) {
+  for (unsigned threaded = 0; threaded != 2; ++threaded) {
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(threaded);
+      SCOPED_TRACE(form);
+      Options.Android->Arguments = {form, threaded};
+      auto result = run("jni_binder_tracing");
+      EXPECT_EQ(result.Stop, ProcessStopReason::Returned) << result.Diagnostic;
+      EXPECT_EQ(result.ReturnValue, 0u);
+    }
+  }
+}
+TEST_P(AndroidJNI, BinderTransactionEntryPreservesValidationOrderAndEffects) {
+  const char *diagnostics[] = {"",
+                               "",
+                               "blocking warning requires Log.w",
+                               "warning state is not supplied",
+                               "",
+                               "transaction tracing requires",
+                               "",
+                               "explicit native Binder binding",
+                               "native object is not supplied",
                                "after recycle",
-                               "uninitialized bytes",
-                               "native abort",
-                               "native array range",
-                               "nonnull native String",
-                               "android/os/BinderProxy.transact"};
+                               "owned native state"};
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
+  Options.Android->ObserveJavaState = true;
+  for (unsigned mode = 0; mode != 11; ++mode) {
+    auto &state =
+        Options.Android->Application.emplace().service_manager.emplace();
+    std::optional<bool> warning = mode == 2 || mode == 6;
+    if (mode == 3 || mode == 4)
+      warning.reset();
+    state.binder_proxies = {{7, warning}};
+    state.cache.emplace().push_back({"alpha", 7});
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(mode);
+      SCOPED_TRACE(form);
+      Options.Android->Arguments = {form, mode};
+      const auto result = run("jni_binder_transaction");
+      const bool stopped = diagnostics[mode][0];
+      EXPECT_EQ(result.Stop, stopped ? ProcessStopReason::UnsupportedService
+                                     : ProcessStopReason::Returned)
+          << result.Diagnostic;
+      if (stopped)
+        EXPECT_NE(result.Diagnostic.find(diagnostics[mode]), std::string::npos)
+            << result.Diagnostic;
+      else
+        EXPECT_EQ(result.ReturnValue, 0u);
+      if (mode != 8) {
+        ASSERT_TRUE(result.JavaState);
+        ASSERT_TRUE(result.JavaState->framework.service_manager);
+        const auto &proxies =
+            result.JavaState->framework.service_manager->binder_proxies;
+        ASSERT_EQ(proxies.size(), 1u);
+        EXPECT_EQ(proxies[0].warn_on_blocking,
+                  mode == 2 ? std::optional<bool>(false) : warning);
+      }
+    }
+  }
+}
+TEST_P(AndroidJNI, ParcelNativeStateAndUndefinedRangesRemainExplicit) {
+  const char *diagnostics[] = {
+      "owned native state",           "after recycle",
+      "uninitialized bytes",          "native abort",
+      "native array range",           "nonnull native String",
+      "native object is not supplied"};
   for (unsigned mode = 2; mode != 9; ++mode) {
     for (unsigned form = 0; form != 3; ++form) {
       SCOPED_TRACE(mode);
