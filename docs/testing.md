@@ -5880,8 +5880,21 @@ oracle; discarded value dependencies must not discard the producing call.
 unsigned 8/16/32/64-bit comparisons, their complements and full-word Boolean
 masks at boundary inputs. The output bridge retains one-bit arithmetic it
 cannot represent faithfully as a byte-valued predicate.
+`PeeledComparisonsKeepTheirValueAtEverySignedness` executes those predicates for
+literals around each sign boundary, and `NegatedTermKeepsItsAvailableDefinition`
+covers a sum whose negated term is spelled by an available local.
 Run `NeverDSymbolicTests` and `NeverDHighSymSimplifyTests` for these shared
 expression-builder changes.
+
+`HighCTruthValue.InvertedEqualityHasAZeroOrOneValue` executes `!(x == 0)` as a
+value, where it must stay 0 or 1, and as a condition, where it reads as `x`.
+`HighCTruthValue.GreaterThanZeroComparesTheWidthTheTestsRead` executes the
+`test; jle` spellings at each width: both tests must read the same low bytes of
+one variable, and the comparison takes the width of the test rather than the
+variable's. A variable declared wider than its value is cast in equality and
+truth tests too. `PipelineOutcome.HighCRefusesOnlyTheFunctionKeepingAnUnbackedAddress`
+omits one function, not the unit, when an escaped image address has no storage
+extent.
 
 `NeverDHighSymSimplifyTests` provides the focused HighIR suite, including
 8–256-bit affine and quadratic synthesis, synthesis inside signed/unsigned
