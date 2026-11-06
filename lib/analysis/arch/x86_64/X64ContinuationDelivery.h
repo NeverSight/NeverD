@@ -73,9 +73,11 @@ public:
     const auto Software = Is(Kind::Software);
     const auto Breakpoint = Is(Kind::InstructionBreakpoint);
     const auto Abort = Is(Kind::Abort);
+    const auto DebugAccess = Is(Kind::DebugRegisterFault);
     auto Valid = either(Interrupt, Software);
     Valid = either(Valid, both(NMI, eq(Vector, k(2))));
-    Valid = either(Valid, both(Breakpoint, eq(Vector, k(1))));
+    Valid =
+        either(Valid, both(either(Breakpoint, DebugAccess), eq(Vector, k(1))));
     Valid = either(Valid, both(Trap, member(Vector, kX86TrapVectors)));
     Valid = either(Valid, both(Abort, member(Vector, kX86AbortVectors)));
     Valid = either(Valid, both(Fault, member(Vector, kX86FaultVectors)));
@@ -130,7 +132,8 @@ public:
                both(STI, ne(event(Pointer, offsetof(Event, NMIBlockedBySTI)),
                             k(0)))));
     const auto Debug =
-        both(eq(Vector, k(1)), either(either(Fault, Trap), Breakpoint));
+        both(eq(Vector, k(1)),
+             either(either(Fault, Trap), either(Breakpoint, DebugAccess)));
     const auto Blocked =
         either(either(BlockInterrupt, BlockNMI), both(SS, Debug));
     if constexpr (Writer::FaultableMemory) {
@@ -153,7 +156,7 @@ public:
           less(load(offsetof(V5, CS) + offsetof(Segment, Limit), 4), SavedPC)));
     }
     const auto SavedFlags =
-        choose(Software, masked(Flags, ~uint64_t{0x10000}),
+        choose(either(Software, DebugAccess), masked(Flags, ~uint64_t{0x10000}),
                choose(either(Fault, Repeated),
                       op(NdOp::INT_OR, {Flags, k(0x10000)}), Flags));
     W.beginEvent(NMI);

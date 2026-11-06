@@ -29,6 +29,13 @@ protected:
     bool VirtualInterrupt = false;
   };
 
+  struct RegisterAccess {
+    std::vector<uint8_t> Bytes;
+    unsigned General = 0;
+    uint32_t Value = 0x2305, DR7 = 0x400, Flags = 0x2d7;
+    bool DE = false, SS = false, FetchFault = false, Resume = false;
+  };
+
   enum Case {
     Nop,
     Increment,
@@ -77,7 +84,8 @@ protected:
 
   void compare(bool Code32, bool Stack32, bool Gate32, unsigned CPL, Case Which,
                uint32_t DR6, bool RF,
-               std::optional<ExecutionBreakpoint> Execute = std::nullopt) {
+               std::optional<ExecutionBreakpoint> Execute = std::nullopt,
+               std::optional<RegisterAccess> RegistersAccess = std::nullopt) {
     SCOPED_TRACE(testing::Message()
                  << "case=" << Which << " code32=" << Code32 << " stack32="
                  << Stack32 << " gate32=" << Gate32 << " cpl=" << CPL
@@ -85,8 +93,9 @@ protected:
     const bool Legacy = GetParam() == 2;
     const unsigned PW = Legacy ? 4 : 8;
     const uint32_t PT = Legacy ? 0x11000 : 0x12000;
-    const bool RoundTrip =
-        Which >= ReturnAndStepAgain || (Execute && Execute->Resume);
+    const bool RoundTrip = Which >= ReturnAndStepAgain ||
+                           (Execute && Execute->Resume) ||
+                           (RegistersAccess && RegistersAccess->Resume);
     constexpr uint32_t GDT = 0x7000, IDT = 0x6000, TSS = 0x5800;
     constexpr uint32_t Target = 0x1800;
     std::memset(RAM, 0, MemorySize);
@@ -129,6 +138,8 @@ protected:
       put(PT + 8 * PW, 0x8006, PW);
     if (Execute && Execute->FetchFault)
       put(PT + ((Code + Execute->CSBase) / 4096) * PW, 0, PW);
+    if (RegistersAccess && RegistersAccess->FetchFault)
+      put(PT + (Code / 4096) * PW, 0, PW);
     put(0x8000, 0x89abcdef, 4);
     const unsigned OperandBytes = Which == IretResume ? 4 : Code32 ? 4 : 2;
     put(0x9000, 0xc000, OperandBytes);
@@ -140,6 +151,8 @@ protected:
     Special.cr4 = Legacy ? 0 : 0x20;
     if (Execute && Execute->VirtualInterrupt)
       Special.cr4 |= 2;
+    if (RegistersAccess && RegistersAccess->DE)
+      Special.cr4 |= 8;
     Special.efer = Legacy ? 0 : 0x800;
     Special.cr2 = 0x76543210;
     Special.cs = segment(24 | CPL, true, false, CPL);
@@ -190,6 +203,18 @@ protected:
     if (Which == Sysexit)
       Registers.rcx = 0xc000;
 
+    if (RegistersAccess) {
+      std::array<decltype(Registers.rax) *, 8> General{
+          &Registers.rax, &Registers.rcx, &Registers.rdx, &Registers.rbx,
+          &Registers.rsp, &Registers.rbp, &Registers.rsi, &Registers.rdi};
+      *General[RegistersAccess->General] = RegistersAccess->Value;
+      Registers.rflags = RegistersAccess->Flags;
+      if (RegistersAccess->SS) {
+        Registers.rbx = 32 | CPL;
+        if (!CPL)
+          Registers.rflags &= ~uint64_t{0x100};
+      }
+    }
     std::vector<std::vector<uint8_t>> Instructions{{0x90}};
     const auto Immediate = [](uint8_t Opcode, uint32_t Value, unsigned Bytes) {
       std::vector<uint8_t> Result{Opcode};
@@ -325,7 +350,35 @@ protected:
     default:
       break;
     }
-    if (Execute)
+    if (RegistersAccess) {
+      Instructions = {RegistersAccess->Bytes};
+      if (RegistersAccess->SS) {
+        // Execute MOV SS itself: an injected shadow plus TF lacks VMX's
+        // pending-debug state. At CPL0, first release KVM's lazy MOV-DR
+        // interception with GD clear, then set GD in the guest. POPFD sets
+        // TF immediately before MOV SS, whose own TF trap is suppressed.
+        if (!CPL) {
+          auto SetCX = Immediate(0xb9, RegistersAccess->DR7, 4);
+          auto PushFlags = Immediate(0x68, RegistersAccess->Flags, 4);
+          std::vector<uint8_t> PopFlags{0x9d};
+          if (!Code32) {
+            SetCX.insert(SetCX.begin(), 0x66);
+            PushFlags.insert(PushFlags.begin(), 0x66);
+            PopFlags.insert(PopFlags.begin(), 0x66);
+          }
+          Instructions = {{0x0f, 0x21, 0xf9},
+                          SetCX,
+                          {0x0f, 0x23, 0xf9},
+                          PushFlags,
+                          PopFlags,
+                          {0x8e, 0xd3},
+                          RegistersAccess->Bytes};
+        } else {
+          Instructions = {{0x8e, 0xd3}, RegistersAccess->Bytes};
+        }
+      }
+    }
+    if (Execute || RegistersAccess)
       Instructions.push_back({0xcd, 64});
     uint32_t End = Code + Special.cs.base;
     for (const auto &Bytes : Instructions) {
@@ -358,6 +411,8 @@ protected:
         std::copy(Return.begin(), Return.end(),
                   RAM + 0x4010 + SetRF.size() + Count.size());
         Steps = {Instructions[0], SetRF, Count, Return, Instructions[0]};
+      } else if (RegistersAccess && RegistersAccess->Resume) {
+        Steps = {Instructions[0], Count, Return, Instructions[0]};
       } else if (Which == RepairAndRetry) {
         std::vector<uint8_t> Repair{0xc7, 0x05};
         for (uint32_t Value : {PT + 8 * PW, 0x8007u})
@@ -375,7 +430,8 @@ protected:
       const unsigned Traps = Which == ReturnAndStepAgain ? 2
                              : Which == RepeatAndReturn  ? 3
                                                          : 1;
-      if (!Execute || !Execute->Resume)
+      if ((!Execute || !Execute->Resume) &&
+          (!RegistersAccess || !RegistersAccess->Resume))
         for (unsigned I = 0; I != Traps; ++I)
           Steps.insert(Steps.end(), {Instructions[0], Count, Return});
       Steps.push_back({0xcd, 64});
@@ -414,6 +470,11 @@ protected:
       State.Debug->DR7 = Execute->DR7;
       State.Debug->DR.fill(Code + Execute->CSBase + Execute->Offset);
     }
+    if (RegistersAccess) {
+      State.Debug->DR7 =
+          RegistersAccess->SS && !CPL ? 0x400 : RegistersAccess->DR7;
+      State.Debug->DR = {0x9000, 0x9100, 0x9200, 0x9300};
+    }
     const auto InitialDebug = *State.Debug;
     State.NMIBlocked =
         Which == IretClear || Which == IretSet || Which == IretResume;
@@ -445,6 +506,10 @@ protected:
     Options.FastSystem = X86LegacyFastSystemProfile::IntelSEP;
     Options.Debug = Execute ? X86LegacyDebugProfile::ExecuteBreakpoints
                             : X86LegacyDebugProfile::InstructionStep;
+    if (RegistersAccess) {
+      Options.Debug = X86LegacyDebugProfile::DebugRegisters;
+      Options.GeneralDetectFrame = neverd::X86GeneralDetectFrame::ClearResume;
+    }
     if (Execute && Execute->Resume)
       Options.LogicalAuxiliaryCarry = false;
     X86LegacyExecutionResult Result;
@@ -493,7 +558,7 @@ protected:
     // following bytes. They must not invent active hardware-breakpoint causes.
     for (unsigned I = 0; I != 4; ++I)
       Debug.db[I] = Code + I;
-    if (Execute)
+    if (Execute || RegistersAccess)
       std::copy(InitialDebug.DR.begin(), InitialDebug.DR.end(), Debug.db);
     Debug.dr6 = InitialDebug.DR6;
     Debug.dr7 = InitialDebug.DR7;
@@ -514,6 +579,9 @@ protected:
     EXPECT_EQ(Special.cr2, State.CR2);
     EXPECT_EQ(Debug.dr6, State.Debug->DR6);
     EXPECT_EQ(Debug.dr7, State.Debug->DR7);
+    if (RegistersAccess)
+      for (unsigned Slot = 0; Slot != 4; ++Slot)
+        EXPECT_EQ(Debug.db[Slot], State.Debug->DR[Slot]);
     EXPECT_EQ(bool(Events.nmi.masked), State.NMIBlocked);
     EXPECT_EQ(bool(Events.interrupt.shadow & KVM_X86_SHADOW_INT_MOV_SS),
               State.SSBlocked);

@@ -38,7 +38,9 @@ bool validEvent(const X86LegacyEvent &E) {
   };
   const bool Valid = E.Kind == Kind::Software || E.Kind == Kind::Interrupt ||
                      (E.Kind == Kind::NMI && E.Vector == 2) ||
-                     (E.Kind == Kind::InstructionBreakpoint && E.Vector == 1) ||
+                     ((E.Kind == Kind::InstructionBreakpoint ||
+                       E.Kind == Kind::DebugRegisterFault) &&
+                      E.Vector == 1) ||
                      (E.Kind == Kind::Fault && Member(kX86FaultVectors)) ||
                      (E.Kind == Kind::Trap && Member(kX86TrapVectors)) ||
                      (E.Kind == Kind::Abort && Member(kX86AbortVectors));
@@ -290,7 +292,8 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     // this behavior is part of the explicitly bound processor profile.
     if (Event.Kind == Kind::Fault)
       SavedFlags |= 0x10000u;
-    else if (Event.Kind == Kind::Software)
+    else if (Event.Kind == Kind::Software ||
+             Event.Kind == Kind::DebugRegisterFault)
       SavedFlags &= ~0x10000u;
     ++R.DeliveryAttempts;
     auto Got = Entry(State, Memory, Event, Options, SavedFlags).run();
@@ -346,9 +349,7 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   if (auto Error = detail::admitLegacyExecution(State, Memory, Options))
     return std::move(Error);
   X86LegacyExecutionResult R;
-  const bool Debug = Input.Vector == 1 &&
-                     (Input.Kind == Kind::Fault || Input.Kind == Kind::Trap ||
-                      Input.Kind == Kind::InstructionBreakpoint);
+  const bool Debug = x86DebugException(Input.Kind, Input.Vector);
   if ((Input.Kind == Kind::Interrupt &&
        (!(State.EFlags & 0x200) || State.STIBlocked || State.SSBlocked)) ||
       (Input.Kind == Kind::NMI &&
@@ -359,6 +360,8 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     R.Status = X86LegacyExecutionStatus::EventDeferred;
     return R;
   }
+  if (Debug && State.Debug)
+    State.Debug->DR7 &= ~uint64_t{0x2000};
   State.STIBlocked = State.SSBlocked = false;
   if (Input.Kind == Kind::NMI)
     State.NMIBlocked = true;

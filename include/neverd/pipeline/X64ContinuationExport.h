@@ -106,8 +106,9 @@ struct X64ContinuationExport {
 /// memory and synchronous faults use that C++ component's bridge. It cannot
 /// be combined with host-RAM native providers, RTM regions or direct dispatch.
 /// Its scheduled entry separately owns pending events and inhibition shadows.
-/// paged_debug adds an explicit nontransactional TF/ICEBP bank to instruction
-/// regions; function_context currently requires its separate completion ABI.
+/// paged_debug adds a nontransactional instruction-debug bank; runtime profiles
+/// additionally bind execution comparators and MOV-DR/GD. Function contexts
+/// currently require their separate debug completion ABI.
 /// Fetch verification reports changed code as status 20;
 /// backing failure and shutdown are statuses 18 and 19. Partial-completion
 /// instructions retain a native boundary. This bridge is not a stable C SDK

@@ -22,7 +22,8 @@ namespace analysis {
 
 llvm::Expected<std::vector<SpecializationInstruction>>
 readBinaryX64ContinuationInstructions(const BinaryImage &Image,
-                                      llvm::ArrayRef<va_t> Addresses);
+                                      llvm::ArrayRef<va_t> Addresses,
+                                      bool PagedDebug = false);
 
 } // namespace analysis
 } // namespace neverd

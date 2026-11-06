@@ -19,6 +19,7 @@
 
 #include "neverd/ir/X86/X86DebugRules.h"
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
+#include "neverd/lift/X86/X86DebugRegisterEncoding.h"
 
 #include "llvm/Support/Errc.h"
 
@@ -73,6 +74,9 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
         "resume the pending legacy event before another instruction");
   if (Instruction.empty() || Instruction.size() > 15)
     return invalid("invalid legacy instruction length");
+  const auto DebugRegister = x86DebugRegisterEncoding(Instruction, false);
+  if (DebugRegister && DebugRegister->Size != Instruction.size())
+    return invalid("MOV-DR binding contains trailing bytes");
   const bool Code32 = State.Core.Segments[1].Attributes & 0x4000;
   const auto Segment =
       detail::decodeLegacySegmentInstruction(Instruction, Code32);
@@ -99,8 +103,11 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   const bool RETF = (Body.size() == 1 && Body[0] == 0xcb) ||
                     (Body.size() == 3 && Body[0] == 0xca);
   if (!Segment && !Scalar && !FastSystem && !String && !Port && !Far &&
-      !Single && !INT && !UD2 && !IRET && !RETF)
+      !Single && !INT && !UD2 && !IRET && !RETF && !DebugRegister)
     return invalid("unsupported or malformed legacy step instruction");
+  if (DebugRegister &&
+      Options.Debug != X86InstructionDebugProfile::DebugRegisters)
+    return invalid("MOV-DR requires the debug-register profile");
   if (Far && Options.FarTransfers != X86LegacyFarTransferProfile::OrderedFrame)
     return invalid("legacy far transfer requires a bound transfer profile");
   if (Port) {
@@ -318,7 +325,34 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   uint32_t Flags = State.EFlags;
   bool SS = false, STI = false, RepeatContinue = false;
   auto NextIP = uint32_t(State.EIP + Instruction.size());
-  if (!R.Exception && FastSystem) {
+  if (!R.Exception && DebugRegister) {
+    auto Bank = *State.Debug;
+    const auto Result = x86AccessDebugRegister(
+        Bank, Next.GPR[DebugRegister->Access.General], DebugRegister->Access,
+        Memory.controls().CR4, State.Core.CPL);
+    using Status = X86DebugRegisterResult;
+    if (Result == Status::UnsupportedControl)
+      return invalid("MOV-DR requests unbound debug controls");
+    if (Result == Status::GeneralDetect) {
+      if (Options.GeneralDetectFrame != X86GeneralDetectFrame::FaultResume &&
+          Options.GeneralDetectFrame != X86GeneralDetectFrame::ClearResume)
+        return invalid("general detect requires a saved-RF binding");
+      State.Debug->DR6 =
+          x86InstructionDebugStatus(State.Debug->DR6, false) | 0x2000;
+      State.SSBlocked = State.STIBlocked = false;
+      return Enter(
+          {State.EIP, 0, 0, 1,
+           Options.GeneralDetectFrame == X86GeneralDetectFrame::FaultResume
+               ? X86LegacyEventKind::Fault
+               : X86LegacyEventKind::DebugRegisterFault},
+          false);
+    }
+    if (Result == Status::Completed)
+      *State.Debug = Bank;
+    else
+      R.Exception = X86MemoryException{
+          uint8_t(Result == Status::UndefinedOpcode ? 6 : 13), 0, {}};
+  } else if (!R.Exception && FastSystem) {
     R.Exception = detail::executeLegacyFastSystem(Next, Flags, NextIP,
                                                   State.Sysenter, *FastSystem);
   } else if (!R.Exception && Far) {

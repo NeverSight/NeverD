@@ -46,8 +46,14 @@ owners; external debug producers retain their separate cause ownership. Its
 execute-breakpoint profile compares original linear instruction starts before
 fetch, after pending virtual-interrupt selection. `ir/X86/X86DebugRules` owns
 the shared legacy/x64 control validation, RF/SS suppression, matching and DR6
-status, including coincident single-step and next-PC breakpoint causes. Its
-event owner stages registers and caches while retaining descriptor/frame RAM
+status, including coincident single-step and next-PC breakpoint causes.
+`ir/X86/X86DebugRegisterRules` owns MOV-DR access priority and normalization;
+`lift/X86/X86DebugRegisterEncoding` owns its register-only byte grammar.
+The paged continuation provider retains these bytes with a dedicated projection
+only when its debug bridge is selected, without certifying general LowIR or
+changing native intrinsic emission. Legacy and x64 adapters use that same
+register owner, then the existing event owner clears GD on accepted #DB.
+The event owner stages registers and caches while retaining descriptor/frame RAM
 effects and CR2 on later faults.
 TSS stack selection, conforming code and privilege changes stay in that owner;
 `ir/X86/X86ExceptionDelivery` shares event kinds, error-code vector sets and

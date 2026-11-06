@@ -692,8 +692,11 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   std::vector<MedFunc> Functions;
   const std::map<va_t, SourceFunctionTypeHint> PagedCallees{
       {kX64PagedAccessAddress, x64PagedAccessSourceABI()}};
+  const char *PagedAccessName = Request->Options.PagedDebug
+                                    ? kX64PagedDebugAccessName
+                                    : kX64PagedAccessName;
   const std::map<va_t, std::string> PagedNames{
-      {kX64PagedAccessAddress, kX64PagedAccessName}};
+      {kX64PagedAccessAddress, PagedAccessName}};
   llvm::json::Array Manifest;
   size_t Native = 0;
   uint64_t Work = Units->size();
@@ -783,7 +786,7 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
       const auto &ABI = PagedCallees.begin()->second;
       MedFunc Import;
       Import.Entry = kX64PagedAccessAddress;
-      Import.Name = kX64PagedAccessName;
+      Import.Name = PagedAccessName;
       Import.ReturnType = ABI.ReturnType;
       Import.SourceTypeHint = ABI;
       for (const auto &P : ABI.Parameters) {

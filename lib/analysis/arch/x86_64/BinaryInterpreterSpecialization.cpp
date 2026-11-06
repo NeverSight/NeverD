@@ -19,6 +19,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/lift/X86/X86DebugRegisterEncoding.h"
 #include "neverd/lift/X86/X86HleEncoding.h"
 #include "neverd/lift/X86/X86HypercallEncoding.h"
 #include "neverd/lift/X86/X86MpxEncoding.h"
@@ -77,6 +78,7 @@ class ImageProvider final : public SpecializationProvider {
   // at runtime. It never claims a Windows loader/fixed-image theorem and never
   // folds data reads. Other users retain the complete PE evidence boundary.
   const bool ContinuationSnapshot;
+  const bool PagedDebug;
   std::map<va_t, SpecializationTerminalImport> TerminalImports;
   std::shared_ptr<const SpecializationRawEnvironment> RawDomain;
 
@@ -138,10 +140,10 @@ class ImageProvider final : public SpecializationProvider {
 public:
   ImageProvider(const BinaryImage &Image, const SpecializationOptions &Options,
                 bool PreserveOpaqueState = false,
-                bool ContinuationSnapshot = false)
+                bool ContinuationSnapshot = false, bool PagedDebug = false)
       : Image(Image), Options(Options),
         PreserveOpaqueState(PreserveOpaqueState),
-        ContinuationSnapshot(ContinuationSnapshot) {
+        ContinuationSnapshot(ContinuationSnapshot), PagedDebug(PagedDebug) {
     Decode.init(Arch::X64);
     Decode.setStrict(true);
     auto RawCost = x64::validateRawEnvironmentDeclarations(Options);
@@ -265,8 +267,15 @@ public:
     }
     const size_t Size = std::min<size_t>(15, Window.size());
     DecodedInsn Insn{};
-    if (!Decode.decodeOneForLift(Window.data(), Size, Cursor.Address, Insn) ||
-        !Insn.Size || Insn.Size > Window.size() ||
+    const auto DebugRegister =
+        PagedDebug ? x86DebugRegisterEncoding(Window.take_front(Size), true)
+                   : std::nullopt;
+    const bool Decoded =
+        DebugRegister ||
+        Decode.decodeOneForLift(Window.data(), Size, Cursor.Address, Insn);
+    if (DebugRegister)
+      Insn.Size = DebugRegister->Size;
+    if (!Decoded || !Insn.Size || Insn.Size > Window.size() ||
         (Supplemental.empty() &&
          !immutableMapping(Cursor.Address, Insn.Size, true)))
       return llvm::createStringError(llvm::errc::invalid_argument,
@@ -286,6 +295,19 @@ public:
         return llvm::createStringError(
             llvm::errc::not_supported,
             "exception edges require a recovery contract");
+    if (DebugRegister) {
+      SpecializationInstruction Result;
+      Result.NativeBytes.assign(Window.begin(), Window.begin() + Insn.Size);
+      Result.Origin.Address = Cursor.Address;
+      Result.Origin.Size = Insn.Size;
+      Result.Origin.Mode = Cursor.Mode;
+      Result.Fallthrough = {Cursor.Address + Insn.Size, Cursor.Mode};
+      Result.ProfileProjection =
+          InterpreterProfileProjection::X64DebugRegisterV1;
+      Result.UndefinedEffects.Diagnostic =
+          "MOV-DR requires the paged debug-register profile";
+      return Result;
+    }
     // x87 and other sequence-dependent lifter state are outside this adapter's
     // integer contract; the core rejects their opaque/FP LowOps.
     Decode.resetX86FpuState();
@@ -384,7 +406,8 @@ public:
         Result.ProfileProjection =
             InterpreterProfileProjection::X64SegmentMoveV1;
         Result.UndefinedEffects.Diagnostic =
-            "selector transfer requires explicit descriptor and stack ownership";
+            "selector transfer requires explicit descriptor and stack "
+            "ownership";
       } else {
         if (Options.ExplicitMachineState && Options.X64CetDisabled)
           LoadedMemoryCall = Decode.liftX64MemoryCallToLow(
@@ -642,7 +665,8 @@ validateBinaryImage(const BinaryImage &Image,
 
 llvm::Expected<std::vector<SpecializationInstruction>>
 readBinaryX64ContinuationInstructions(const BinaryImage &Image,
-                                      llvm::ArrayRef<va_t> Addresses) {
+                                      llvm::ArrayRef<va_t> Addresses,
+                                      bool PagedDebug) {
   SpecializationOptions Options;
   Options.ExplicitMachineState = true;
   Options.NormalNonfaultingExecution = true;
@@ -650,7 +674,7 @@ readBinaryX64ContinuationInstructions(const BinaryImage &Image,
   if (auto Failure = validateBinaryImage(Image, Options))
     return llvm::createStringError(llvm::errc::not_supported,
                                    Failure->Diagnostic);
-  ImageProvider Provider(Image, Options, false, true);
+  ImageProvider Provider(Image, Options, false, true, PagedDebug);
   SpecializationResult Preparation;
   if (Provider.preparationFailed(Preparation))
     return llvm::createStringError(llvm::errc::not_supported,

@@ -167,7 +167,8 @@ enum class X86LegacyFastSystemProfile : uint8_t { IntelSEP };
 
 /// Shared legacy/x64 instruction-step and execute-comparator profiles. MOV/POP
 /// SS suppresses its own TF trap and the following instruction breakpoint.
-/// Data/I/O watchpoints, general detect and task traps are not inferred.
+/// DebugRegisters additionally owns MOV-DR/GD with a bound frame policy.
+/// Data/I/O watchpoints and task traps are not inferred.
 using X86LegacyDebugProfile = X86InstructionDebugProfile;
 
 struct X86LegacyExecutionOptions {
@@ -209,6 +210,7 @@ struct X86LegacyExecutionOptions {
   std::optional<X86PortIOBinding> PortIO;
   std::optional<X86LegacyFarTransferProfile> FarTransfers;
   std::optional<X86LegacyDebugProfile> Debug;
+  std::optional<X86GeneralDetectFrame> GeneralDetectFrame;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {

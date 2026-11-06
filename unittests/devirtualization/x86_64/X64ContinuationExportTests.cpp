@@ -1516,6 +1516,27 @@ TEST_F(X64ContinuationExportTest,
   }
 }
 
+TEST_F(X64ContinuationExportTest, PagedDebugRegistersRequireTheirRuntime) {
+  load({0x0f, 0x21, 0xc0, 0x0f, 0x23, 0xf8, 0xf0, 0x0f, 0x21, 0xc0, 0x44, 0x0f,
+        0x21, 0xc0, 0x0f, 0x21, 0x04});
+  const auto Request = request("\"instructions\":[4096,4099,4102,4106,4110],"
+                               "\"paged_memory\":true,\"paged_debug\":true");
+  for (bool LLVM : {false, true}) {
+    const char *Report = nullptr;
+    const auto Source = take(neverd_x64_continuation_source_v1(
+        Session, Request.data(), Request.size(), LLVM, &Report));
+    ASSERT_FALSE(Source.empty()) << take(neverd_last_error(Session));
+    auto Manifest = llvm::json::parse(take(Report));
+    ASSERT_TRUE(bool(Manifest)) << llvm::toString(Manifest.takeError());
+    ASSERT_TRUE(Manifest->getAsObject());
+    EXPECT_EQ(Manifest->getAsObject()->getInteger("native_requests"), 0);
+    EXPECT_EQ(Manifest->getAsObject()->getInteger("modeled"), 5);
+    EXPECT_NE(Source.find("neverd_x64_paged_debug_access_v1"),
+              std::string::npos);
+    EXPECT_EQ(Source.find("neverd_x64_paged_access_v1"), std::string::npos);
+  }
+}
+
 TEST_F(X64ContinuationExportTest, PagedSchedulingUsesTheFaultableEventOwner) {
   load({0xfb, 0x90});
   const auto Request = request("\"instructions\":[4096,4097],\"paged_memory\":"

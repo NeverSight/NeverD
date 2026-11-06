@@ -40,6 +40,9 @@ inline constexpr uint64_t kX64PagedEventAccepted = 2;
 // the reserved final addresses used by continuation helpers.
 inline constexpr uint64_t kX64PagedAccessAddress = UINT64_MAX - 1;
 inline constexpr const char *kX64PagedAccessName = "neverd_x64_paged_access_v1";
+/// Debug exports require the runtime that also owns authenticated MOV-DR.
+inline constexpr const char *kX64PagedDebugAccessName =
+    "neverd_x64_paged_debug_access_v1";
 inline constexpr uint64_t kX64PagedStackAccess = 8;
 /// Attach SSE preflight to the same single 16-byte operand callback.
 inline constexpr uint64_t kX64PagedSseAccess = 32;
@@ -77,6 +80,8 @@ enum class X64PagedAccess : uint64_t {
   DebugTrap = 21,
   /// Address transports the POPFQ image; result is its system-flags portion.
   PopFlags = 22,
+  /// Authenticated original MOV-DR bytes are executed by the debug bank owner.
+  DebugRegister = 23,
 };
 
 struct X64PagedExchange {

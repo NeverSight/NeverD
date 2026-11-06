@@ -1393,6 +1393,10 @@ buildInstruction(SpecializationInstruction Instruction,
   const bool FarReturn = Return && !Return->Interrupt;
   const auto Interrupt =
       Events ? softwareInterruptVector(Instruction) : std::nullopt;
+  const bool DebugRegister =
+      Options.PagedDebug &&
+      Instruction.ProfileProjection ==
+          InterpreterProfileProjection::X64DebugRegisterV1;
   const bool DebugTrap =
       Options.PagedDebug &&
       Instruction.NativeBytes == std::vector<uint8_t>{0xf1} &&
@@ -1481,13 +1485,15 @@ buildInstruction(SpecializationInstruction Instruction,
   if ((!FarPointer && !SegmentMove && !Repeated && !PortIO && !UserInterrupt &&
        !FredReturn && !Vmrun && !Mpx && !Hypercall && !Snp && !Hle &&
        !SmmReturn && !SgxTransfer && !UndefinedInstruction && !DebugTrap &&
+       !DebugRegister &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
                                   LowUndefinedCoverage::Complete))) ||
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
        !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn && !Interrupt &&
        !UserInterrupt && !FredReturn && !Vmrun && !Hypercall && !Snp && !Hle &&
-       !SmmReturn && !SgxTransfer && !UndefinedInstruction && !DebugTrap))
+       !SmmReturn && !SgxTransfer && !UndefinedInstruction && !DebugTrap &&
+       !DebugRegister))
     RequireNative("instruction requires an explicit native environment");
   if (Instruction.UndefinedEffects.Effects.size() >
       std::size(State{}.Undefined))
@@ -1551,7 +1557,8 @@ buildInstruction(SpecializationInstruction Instruction,
                      Op.MemoryOrdering != NdMemoryOrdering::None;
     if (!Timestamp && !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn &&
         !Interrupt && !SmmReturn && !SgxTransfer && !UndefinedInstruction &&
-        !PortIO && !DebugTrap && !supportedOperation(Op, Options, Division)) {
+        !PortIO && !DebugTrap && !DebugRegister &&
+        !supportedOperation(Op, Options, Division)) {
       std::string Detail = "unsupported continuation operation: ";
       Detail += ndOpName(Op.Opcode);
       if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
@@ -1572,7 +1579,7 @@ buildInstruction(SpecializationInstruction Instruction,
   }
   detail::X64PagedMemoryRoles PagedRoles;
   if (Options.PagedMemory) {
-    PagedRoles = (Repeated || PortIO)
+    PagedRoles = (Repeated || PortIO || DebugRegister)
                      ? detail::X64PagedMemoryRoles{.Supported = true}
                      : detail::x64PagedMemoryRoles(Instruction);
     if ((!PagedRoles.Supported && !Iret && !FarReturn && !FarPointer &&
@@ -1937,6 +1944,9 @@ buildInstruction(SpecializationInstruction Instruction,
     W.pagedAccess(constant(*Interrupt), Instruction.Fallthrough.Address,
                   X64PagedAccess::SoftwareInterrupt, false);
     W.leave(static_cast<Exit>(X64PagedExit::AccessFault));
+  } else if (DebugRegister) {
+    W.pagedAccess(constant(0), 0, X64PagedAccess::DebugRegister, false);
+    W.leave(static_cast<Exit>(X64PagedExit::AccessFault));
   } else if (DebugTrap) {
     W.pagedAccess(constant(0), Instruction.Fallthrough.Address,
                   X64PagedAccess::DebugTrap, false);
@@ -2130,7 +2140,8 @@ buildX64ContinuationSource(const BinaryImage &Image,
   for (va_t Address : Addresses)
     if (Address >= InvalidVA - 3 || !Unique.insert(Address).second)
       return invalid("invalid or duplicate continuation instruction address");
-  auto Instructions = readBinaryX64ContinuationInstructions(Image, Addresses);
+  auto Instructions = readBinaryX64ContinuationInstructions(Image, Addresses,
+                                                            Options.PagedDebug);
   if (!Instructions)
     return Instructions.takeError();
   uint64_t Work = Addresses.size();

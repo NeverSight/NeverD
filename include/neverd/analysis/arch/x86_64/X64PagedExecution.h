@@ -47,7 +47,8 @@ enum class X64PagedSseAlignment : uint8_t {
 
 /// Explicit nontransactional debug bank. The selected profile admits either
 /// inactive DR7 or canonical execution comparators, with DEBUGCTL zero.
-/// Data/I/O watchpoints, GD and BTF need their own producer. This bank is
+/// DebugRegisters additionally owns MOV-DR/GD. Data/I/O watchpoints and
+/// BTF need their own producer. This bank is
 /// disjoint from V6 state and guest RAM and outlives its execution context.
 /// External event producers own their own DR6 causes.
 struct X64PagedDebugState {
@@ -83,6 +84,7 @@ struct X64PagedExecutionOptions {
   X64PagedDebugState *Debug = nullptr;
   X86InstructionDebugProfile DebugProfile =
       X86InstructionDebugProfile::InstructionStep;
+  std::optional<X86GeneralDetectFrame> GeneralDetectFrame;
 };
 
 struct X64PagedExecutionResult {
@@ -162,6 +164,10 @@ private:
 /// Source-only bridge. This is not part of NeverD's stable SDK C ABI.
 extern "C" uint64_t neverd_x64_paged_access_v1(void *Exchange, uint64_t Address,
                                                uint64_t Bytes, uint64_t Flags);
+extern "C" uint64_t neverd_x64_paged_debug_access_v1(void *Exchange,
+                                                     uint64_t Address,
+                                                     uint64_t Bytes,
+                                                     uint64_t Flags);
 extern "C" uint64_t
 neverd_x64_paged_step_v1(uint8_t *Context, uint8_t *State, uint64_t Address,
                          const uint8_t *Bytes, uint64_t Size, X64PagedBody Body,

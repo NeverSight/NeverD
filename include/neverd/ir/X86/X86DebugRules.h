@@ -14,15 +14,20 @@
 
 namespace neverd {
 
-/// ExecuteBreakpoints additionally owns all four canonical instruction
-/// comparators (RW=LEN=0). Data/I/O watchpoints, GD, RTM and DEBUGCTL features
-/// require other producers. Both profiles clear inactive B0..B3 on #DB.
-/// The execute profile reports only enabled matching slots; a single-step
-/// trap can also report comparators at its next PC unless restored RF inhibits
-/// them. These choices are qualified processor behavior, not host detection.
+/// Intel's fault-class RF rule and the clear-RF result observed through VMX
+/// are separate bindings. Absence refuses an actual GD cause, not other MOVs.
+enum class X86GeneralDetectFrame : uint8_t { FaultResume, ClearResume };
+
+/// The comparator profiles own canonical instruction comparators (RW=LEN=0).
+/// All profiles clear inactive B0..B3 on #DB. Single-step traps also report
+/// enabled comparators at the next PC unless restored RF inhibits them.
+/// These are explicit target choices, never inferred from the executing host.
 enum class X86InstructionDebugProfile : uint8_t {
   InstructionStep,
   ExecuteBreakpoints,
+  /// MOV-DR with preserved arithmetic flags, fixed DR6 BLD/RTM, and GD.
+  /// Other debug extensions and data/I/O comparators remain unbound.
+  DebugRegisters,
 };
 
 inline bool
@@ -30,10 +35,12 @@ x86InstructionDebugValid(uint64_t DR6, uint64_t DR7, uint64_t DebugCTL,
                          X86InstructionDebugProfile Profile =
                              X86InstructionDebugProfile::InstructionStep) {
   const bool Controls =
-      Profile == X86InstructionDebugProfile::InstructionStep
-          ? DR7 == 0x400
-          : Profile == X86InstructionDebugProfile::ExecuteBreakpoints &&
-                (DR7 & ~uint64_t{0x3ff}) == 0x400;
+      Profile == X86InstructionDebugProfile::InstructionStep ? DR7 == 0x400
+      : Profile == X86InstructionDebugProfile::ExecuteBreakpoints
+          ? (DR7 & ~uint64_t{0x3ff}) == 0x400
+          : Profile == X86InstructionDebugProfile::DebugRegisters &&
+                (DR7 & ~uint64_t{0x23ff}) == 0x400 &&
+                (DR6 & 0x10800) == 0x10800;
   return Controls && DebugCTL == 0 && (DR6 & 0xffffffff00000000ULL) == 0 &&
          (DR6 & 0xfffe07f0u) == 0xfffe07f0u && !(DR6 & 0x1000);
 }

@@ -252,6 +252,16 @@ Those controls cannot be supplied and silently ignored. The additional
 execution comparators in `X86LegacyDebugState::DR`; its control and priority
 rules are shared with [paged x64](x86-paged-execution.md#hardware-execution-breakpoints).
 
+`X86LegacyDebugProfile::DebugRegisters` additionally owns MOV-DR and GD,
+sharing [the x64 register rules and explicit GD frame choices](x86-paged-execution.md#debug-register-transfers-and-general-detect).
+The protected executor always transfers full dwords, independently of CS.D,
+SS.B and 66; non-64-bit writes zero the architecture's upper halves. Both legacy
+and PAE paging preserve original fetch priority and handler frame widths.
+All GPRs, ignored mod bits, aliases, DE, CPL, RF/TF, SS inhibition and original
+GD handler/IRET/retry have dedicated software and original-byte regressions.
+The register profile fixes BLD/RTM and preserves the undefined arithmetic
+flags; it does not infer data/I/O watchpoint or transactional debug semantics.
+
 The executor samples TF before the instruction. A successful instruction
 produces #DB even when POPF or IRET clears TF; setting TF takes effect on the
 following instruction. RF does not suppress instruction stepping. MOV/POP SS

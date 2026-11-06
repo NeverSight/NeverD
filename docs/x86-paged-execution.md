@@ -143,7 +143,8 @@ passes its current MOV-SS shadow to each step.
 
 The default `DebugProfile = InstructionStep` is nontransactional with DR7=0x400
 and DEBUGCTL=0. `ExecuteBreakpoints` additionally enables the hardware execution
-comparators described below. Data/I/O watchpoints, GD, BTF, task traps and other
+comparators described below; `DebugRegisters` also owns MOV-DR and GD.
+Data/I/O watchpoints, BTF, task traps and other
 debug producers require their own state; incompatible controls refuse before
 effects. DR6's high half and reserved bits are checked. Historical BLD/RTM status
 inputs assume a target that can represent them. The local native oracle uses canonical BLD=RTM=1
@@ -254,7 +255,7 @@ fetch/operand/PVI faults, failed debug gates/stacks, external events and IRET
 targets, including nonflat compatibility code and all three return widths.
 Original handlers set RF, clear TF, count entry and return; a separate
 case repairs a subsequent page fault before retry. Both C routes compile
-through Clang and NeverC at O0/O2. Data/I/O watchpoints, MOV-DR/GD execution,
+through Clang and NeverC at O0/O2. Data/I/O watchpoints,
 BTF, task traps and transactional debug production remain separate contracts.
 No new LLVM intrinsic, SDK release or pin change is needed for this runtime
 binding. Reference: Intel SDM revision 093, volume 3 §§7.9, 20.2.1–20.2.5 and
@@ -264,6 +265,62 @@ Native debug comparisons use the shared Intel host gate. The evidence records
 the complete P/E regression and the subsequent `dev` integration separately,
 including rebuilt runtime tests and byte-for-byte generated-source comparison.
 The gate does not change software execution or infer its profile from the host.
+
+### Debug-register transfers and general detect
+
+Select `DebugProfile = X86InstructionDebugProfile::DebugRegisters` and retain
+`paged_debug`. This explicit nontransactional target preserves MOV-DR's six
+architecturally undefined arithmetic flags, fixes DR6.BLD/RTM to one and has
+no RTM, bus-lock, BTF, Intel PT breakpoint-trigger tracing or data/I/O
+watchpoint producer. `NativeDebugRegisterAccess`
+remains the separate native execution option; paged exports call the bound
+runtime bank instead of executing a host MOV-DR.
+
+Paged debug exports import `neverd_x64_paged_debug_access_v1` for their operand
+callback. This distinct symbol requires a runtime with the debug-register
+operation; an older runtime fails to link instead of interpreting the new
+operation as an older memory request. Existing ordinary paged exports retain
+`neverd_x64_paged_access_v1`.
+
+The shared byte owner accepts 0F 21/23, every GPR and debug register index,
+all four ModR/M mod values, one prefix from each legacy group and one final
+REX. Mod does not describe memory: only the r/m register is accessed. REX.B
+selects R8–R15; 66, REX.W and address-size overrides do not alter the 64-bit
+width. LOCK and REX.R are retained as faulting encodings. Duplicate prefix
+classes and nonfinal REX remain explicit unsupported source boundaries.
+
+After original-byte authentication, LOCK/REX.R and CR4.DE with DR4/DR5 produce
+#UD before CPL's #GP; a remaining CPL0 access checks GD before any transfer or
+value validation. CR4.DE=0 aliases DR4/DR5 to DR6/DR7. Writes to DR6/DR7 with
+nonzero high halves fault without publication; DR0–DR3 accept all 64 bits,
+including noncanonical values. The target normalizes reserved DR6/DR7 bits.
+A valid DR7 write requesting RTM or unowned comparators refuses the environment
+without manufacturing #GP or modifying the bank. Successful writes feed the
+same instruction-step and next-PC comparator owner immediately.
+
+GD publishes DR6.BD and the original PC before entry, clears GD on accepted
+#DB and retains both effects through secondary faults and backing stops.
+The instruction is incomplete and can be retried after the original handler's
+IRET. RF does not suppress GD. A synchronous GD access consumes the incoming
+SS window. TF/ICEBP/execution-breakpoint and external architectural #DB entry
+also clear GD; software INT 1 leaves it unchanged.
+
+An actual GD cause additionally requires `GeneralDetectFrame`. `FaultResume`
+uses the SDM's fault-class saved RF=1 rule. `ClearResume` binds the saved RF=0
+observed on the recorded Intel VMX/KVM host. This difference is explicit:
+the oracle's saved frame is never masked or silently rewritten. Native
+qualification uses `ClearResume`; software backing/resume tests cover both
+choices. Missing or invalid choices refuse before publishing a GD cause.
+The VMX oracle executes original bytes with guest debugging disabled; KVM can
+intercept debug accesses and reinject #DB, so these runs do not establish an
+unvirtualized general-detect frame rule.
+
+The [MOV-DR qualification](evidence/x86-debug-registers-2026-11-06.json) records
+both C routes, Clang/NeverC, O0/O2, SDK/core combinations and full state/RAM
+comparisons, including original handler/IRET/retry. No new intrinsic or LLVM
+release is needed for this runtime binding. References: Intel SDM revision 093,
+volume 2 MOV to/from Debug Registers; volume 3 §§20.2 and 20.3.1.3, and the
+[Linux VMX debug-access owner](https://github.com/torvalds/linux/blob/master/arch/x86/kvm/vmx/vmx.c).
 
 ## Faultable LSS, LFS and LGS
 

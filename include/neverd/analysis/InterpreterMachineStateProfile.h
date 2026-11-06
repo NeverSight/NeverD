@@ -73,6 +73,8 @@ enum class InterpreterProfileProjection : uint8_t {
   X64SgxTransferV1,
   /// Selector MOV/POP requires the explicit descriptor and stack-state owner.
   X64SegmentMoveV1,
+  /// Raw MOV-DR requires the paged debug bank and fault owner.
+  X64DebugRegisterV1,
 };
 
 } // namespace neverd::analysis

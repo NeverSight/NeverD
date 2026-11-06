@@ -42,7 +42,18 @@ the page before retry. Admission/backing cases verify no instruction effects and
 causes. Run on both qualified P/E cores and SDKs, then the affected complete
 paging, paged-execution and continuation source/export suites. See the
 [shared breakpoint contract](x86-paged-execution.md#hardware-execution-breakpoints)
-and its evidence. These checks do not qualify data/I/O watchpoints or GD.
+and its evidence. These checks do not qualify data/I/O watchpoints.
+
+`X64PagedDebugRegisterTest.*`, `X86LegacyDebugRegisterTest.*` and
+`LegacyDebugRegister/*` cover the separate MOV-DR/GD binding. Compare all GPRs,
+DR0–DR3/6/7, represented flags/caches and complete RAM for original instructions,
+including aliases, ignored mod/operand prefixes, invalid forms, CPL/DE/GD,
+fetch priority and real handler/IRET/retry. Both C routes compile through
+Clang/NeverC at O0/O2. Run both SDKs and qualified P/E cores, then complete
+paging, paged execution and source/export suites. The VMX/KVM oracle's clear
+saved-RF GD frame is an explicit target choice; software tests separately
+cover the architectural fault-RF choice, unbound writes and accepted backing
+resume. See [the contract and evidence](x86-paged-execution.md#debug-register-transfers-and-general-detect).
 
 `NeverDInstructionRelocationsTests` checks address-field selection against an
 independent linear membership oracle on x86, x64, ARM and AArch64 metadata in

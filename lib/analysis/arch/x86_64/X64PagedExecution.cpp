@@ -18,6 +18,7 @@
 #include "neverd/ir/X86/X86DebugRules.h"
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 #include "neverd/ir/X86/X86PopFlagsRules.h"
+#include "neverd/lift/X86/X86DebugRegisterEncoding.h"
 
 #include "llvm/Support/Errc.h"
 
@@ -50,7 +51,7 @@ struct Transaction {
   X64ContinuationStateV6 &StagedState;
   std::optional<X64PagedSseAlignment> SseAlignment;
   unsigned SseAlignmentBytes = 0;
-  bool Repeated = false, PortIO = false;
+  bool Repeated = false, PortIO = false, DebugRegister = false;
   uint8_t RepeatRegisters = 0, RepeatAddressBytes = 0;
   X86MemoryAccessResult Access;
   std::optional<llvm::Error> Error;
@@ -200,6 +201,10 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
     T.Event->Kind = X64ContinuationEventKind::Software;
     return 1;
   }
+  if (Kind == X64PagedAccess::DebugRegister) {
+    T.DebugRegister = true;
+    return 1;
+  }
   if (Kind == X64PagedAccess::DebugTrap) {
     T.DebugPC = Size;
     return 1;
@@ -268,6 +273,13 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   return 0;
 }
 
+extern "C" uint64_t neverd_x64_paged_debug_access_v1(void *Exchange,
+                                                     uint64_t Address,
+                                                     uint64_t Size,
+                                                     uint64_t Flags) {
+  return neverd_x64_paged_access_v1(Exchange, Address, Size, Flags);
+}
+
 llvm::Expected<bool> X64PagedExecution::validate(X64ContinuationStateV6 &State,
                                                  uint64_t Address,
                                                  X64PagedBody Validate,
@@ -289,7 +301,7 @@ llvm::Expected<bool> X64PagedExecution::validate(X64ContinuationStateV6 &State,
     return invalid("paged instruction debug requires a valid profile, DR6, "
                    "supported DR7 and zero DEBUGCTL");
   if (!InstructionDebug && ((Original.RFlags & 0x100) ||
-                            (Options.Debug && (Options.Debug->DR7 & 0xff))))
+                            (Options.Debug && (Options.Debug->DR7 & 0x20ff))))
     return invalid(
         "paged TF and breakpoints require the instruction-debug bridge");
   if (Original.PC != Address)
@@ -311,6 +323,9 @@ llvm::Error X64PagedExecution::deliverEvent(
           : deliverX64PagedEvent(State, Memory, Event, MXCSRMask);
   if (!Delivered)
     return Delivered.takeError();
+  if (!Continuation && Delivered->InputAccepted && Options.Debug &&
+      x86DebugException(Event.Kind, Event.Vector))
+    Options.Debug->DR7 &= ~uint64_t{0x2000};
   Last.Delivery = *Delivered;
   Last.BackingFault = Delivered->BackingFault;
   switch (Delivered->Status) {
@@ -465,6 +480,43 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
       return std::move(Failure);
     return Last;
   }
+  if (T.DebugRegister) {
+    if (!DebugSSBlocked ||
+        Options.DebugProfile != X86InstructionDebugProfile::DebugRegisters)
+      return invalid("MOV-DR requires the debug-register profile and bridge");
+    const auto Move = x86DebugRegisterEncoding(Bytes, true);
+    if (!Move || Move->Size != Bytes.size())
+      return invalid("invalid paged MOV-DR byte binding");
+    auto &Core = Next.Core.Core.Core.Core;
+    auto Bank = *Options.Debug;
+    const auto Result = x86AccessDebugRegister(
+        Bank, Core.GPR[Move->Access.General], Move->Access, Controls.CR4, CPL);
+    using Status = X86DebugRegisterResult;
+    if (Result == Status::UnsupportedControl)
+      return invalid("MOV-DR requests unbound debug controls");
+    if (Result == Status::GeneralDetect) {
+      if (Options.GeneralDetectFrame != X86GeneralDetectFrame::FaultResume &&
+          Options.GeneralDetectFrame != X86GeneralDetectFrame::ClearResume)
+        return invalid("general detect requires a saved-RF binding");
+      Options.Debug->DR6 =
+          x86InstructionDebugStatus(Options.Debug->DR6, false) | 0x2000;
+      T.Event.emplace();
+      T.Event->Vector = 1;
+      T.Event->SavedPC = Address;
+      T.Event->Kind =
+          Options.GeneralDetectFrame == X86GeneralDetectFrame::FaultResume
+              ? X64ContinuationEventKind::Fault
+              : X64ContinuationEventKind::DebugRegisterFault;
+    } else if (Result != Status::Completed) {
+      T.Access.Status = X86PageWalkStatus::Exception;
+      T.Access.Exception = X86MemoryException{
+          uint8_t(Result == Status::UndefinedOpcode ? 6 : 13), 0, std::nullopt};
+    } else {
+      *Options.Debug = Bank;
+      Core.PC = Address + Bytes.size();
+      Exit = uint64_t(X64ContinuationExitV1::Continue);
+    }
+  }
   if (T.PortIO) {
     if (!Options.PortIO)
       return invalid(
@@ -570,6 +622,7 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     if (T.Event) {
       Last.Exception = Last.Delivery->LastException;
       Last.InstructionCompleted =
+          !T.DebugRegister &&
           Last.Delivery->Status == X64PagedEventStatus::Delivered &&
           !Last.Exception;
     }

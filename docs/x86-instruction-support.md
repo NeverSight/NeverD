@@ -377,7 +377,8 @@ now owns nontransactional TF/ICEBP causes, optional canonical DR0–DR3 executio
 breakpoints, DR6, MOV-SS inhibition, POPFQ/PUSHFQ,
 REP single stepping and debug delivery after IRET/RETF. Its accepted-event
 continuation retains secondary faults and already consumed memory inputs over
-physical backing stops. Data/I/O watchpoints, GD/BTF, debug-aware function
+physical backing stops. MOV-DR/GD now has the explicit [register-access binding](x86-paged-execution.md#debug-register-transfers-and-general-detect).
+Data/I/O watchpoints, BTF, debug-aware function
 activation completion, general i386/compatibility source dispatch and the other
 state families below remain open. This does not satisfy the global LLVM release
 gate; the production SDK and LLVM gitlink remain unchanged.
@@ -3877,7 +3878,9 @@ checks disable debugger interception and compare real exception frames and
 complete state. The additional [execution-breakpoint profile](x86-paged-execution.md#hardware-execution-breakpoints)
 shares DR0–DR3 matching and DR6 status with paged x64, including RF/SS inhibition,
 coincident single stepping, pending virtual-interrupt priority and accepted
-fault continuation. Data/I/O watchpoints, GD, branch stepping and task traps
+fault continuation. The shared MOV-DR/GD binding adds protected register
+access and restart, including explicit saved-RF choices. Data/I/O watchpoints,
+branch stepping and task traps
 remain outside these bindings.
 
 [Protected legacy returns](x86-legacy-segments.md#protected-iret-and-far-returns)
