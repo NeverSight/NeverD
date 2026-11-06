@@ -192,6 +192,10 @@ bool literalFixture(neverd_session_t s) {
   return session(s)->path.ends_with("literal-names.bin");
 }
 std::uint64_t codeSize(neverd_session_t s) {
+  // The last function of these is far larger than the others.
+  if (session(s)->path.find("render-sizes") != std::string::npos ||
+      session(s)->path.find("render-late") != std::string::npos)
+    return CodeSize + 1024 * 1024;
   return session(s)->path.ends_with("make-code.bin")
              ? CodeBase + sizeof(CodeBytes) - Base
              : CodeSize;
@@ -786,6 +790,16 @@ int neverd_func_size(neverd_session_t s, int index) {
   const auto &functions = session(s)->functions;
   if (index < 0 || index >= static_cast<int>(functions.size()))
     return 16;
+  if (session(s)->path.find("render-late") != std::string::npos &&
+      index + 1 == static_cast<int>(functions.size()))
+    return 900;
+  // Functions of several sizes, none in the order of their addresses: the last
+  // is far larger than the others, and the engine knows no size for the one
+  // before it.
+  if (session(s)->path.find("render-sizes") != std::string::npos) {
+    const int fromEnd = static_cast<int>(functions.size()) - index;
+    return fromEnd == 1 ? 1024 * 1024 : fromEnd == 2 ? 0 : 16 - (index * 5) % 8;
+  }
   const auto end = index + 1 < static_cast<int>(functions.size())
                        ? functions[index + 1]
                        : Base + codeSize(s);
@@ -2102,6 +2116,11 @@ static int prepareMockFunction(neverd_session_t s, neverd_va_t address) {
     }
     if (address == Base + 16 && session(s)->path.ends_with("source-export.bin"))
       std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    if (session(s)->path.find("slow-prepare") != std::string::npos)
+      std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    if (address == Base + 16 &&
+        session(s)->path.find("render-crash") != std::string::npos)
+      std::_Exit(3);
     if (session(s)->path.ends_with("source-cache-prepare-fail.bin") &&
         address == Base + 16 && !session(s)->rejectedPreparation) {
       session(s)->rejectedPreparation = true;

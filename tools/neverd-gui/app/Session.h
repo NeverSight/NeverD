@@ -81,6 +81,11 @@ public:
 
   QueryService &queries() { return queries_; }
   PluginServices &pluginServices();
+  /// The render-ahead job of the replica reads start in, empty where it
+  /// reports none.
+  QString analysisRenderAheadState() const {
+    return analysis_.renderAheadState();
+  }
   QueryService &analysisQueries(const QJsonObject &payload, QObject *owner) {
     return analysis_.queries(payload, owner);
   }

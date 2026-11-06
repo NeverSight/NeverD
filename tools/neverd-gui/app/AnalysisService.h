@@ -21,6 +21,11 @@ public:
   QueryService &queries() { return queries_; }
   bool ready() const { return ready_; }
   void setSnapshotBlocked(bool blocked);
+  /// Asks the replica to render functions ahead in idle time.
+  void setRendersAhead(bool renders) { rendersAhead_ = renders; }
+  /// That job's state as the replica's last heartbeat reports it; empty where
+  /// it reports none.
+  const QString &renderAheadState() const { return renderAheadState_; }
   static bool handles(const QString &operation);
 
 signals:
@@ -50,6 +55,11 @@ private:
   bool snapshotBlocked_ = false, startingReplica_ = false;
   bool updatesNames_ = false, refreshingNames_ = false;
   bool solvesSummaries_ = false, summariesReady_ = false;
+  bool rendersAhead_ = false;
+  QString renderAheadState_;
+  /// The project whose replica last exited abnormally, whose replicas render
+  /// nothing ahead from then on.
+  std::optional<QString> renderCrashProject_;
 };
 
 /// Bounded independent replicas. A function's pages and graph transaction stay
@@ -60,6 +70,17 @@ public:
   AnalysisPool(QueryService &owner, const QString &workerPath,
                QObject *parent = nullptr);
   QueryService &queries(const QJsonObject &payload, QObject *owner);
+  /// The first replica's render-ahead job, as its last heartbeat reports it;
+  /// empty where it reports none.
+  /// Whether the replica reads start in renders functions ahead.  A second one
+  /// serves only overlapping reads, and rendering every function again there
+  /// would double the memory and the work.
+  void setRendersAhead(bool renders) {
+    lanes_.front().service->setRendersAhead(renders);
+  }
+  QString renderAheadState() const {
+    return lanes_.front().service->renderAheadState();
+  }
   /// Prepare one native entry in the same replica later source reads use.
   /// This is speculative read-only work; context changes cancel it normally.
   void prefetchSource(quint64 address);

@@ -933,6 +933,29 @@ image (one that is not x86-64), or the solve stopped at the engine's limit. On
 the GUI drops the replica's cached replies and reads the shown source again;
 earlier replies used each function's own callee summaries.
 
+`analysis_restore` also takes `render_ahead:true`, which the GUI adds for the
+first replica of a file opened with idle-time analysis when that replica
+advertises `render_ahead`, views open functions under no source options and no
+worker of the project has ended abnormally. With
+`call_summaries:true`, once the summaries and the read-ahead are done, the
+replica renders each function's engine pages in idle time, smallest function
+first, and keeps them compact, up to a byte limit. A first `decompile` of such a
+function builds its document from those pages without preparing the function,
+as a `decompile` after `analysis_update_names` builds one from a kept document's,
+and answers exactly what asking the engine answers. The pages have a kept
+document's lifetime: a local rename keeps them, and whatever forgets the kept
+documents forgets them and starts the job over. A render cannot be interrupted,
+so the job renders a function only after no request has come for a while, longer
+for a larger function, leaves a function a request took long to prepare prepared
+until the reader has paused for much longer, leaves the largest functions and any
+of unknown size to their visits, and ends after starting over a few times.
+A render reads what the engine knew when it ran, as a kept document does: code
+addresses the functions rendered before it published can make it differ from a
+first visit to that function in a new session. Heartbeats report it as
+`background.render_ahead`: `{state, total, rendered, failed, hits, raw_bytes,
+bytes}` with `pending`, `done` or `full`. A function the job failed to render, or
+has not reached, is decompiled as usual.
+
 Source pages with edit metadata carry `code_names`, half-open UTF-8 spans in
 the complete displayed document. An address target has `kind:"address"`,
 `address` and `original`; a local target has `kind:"local"`, `original` and
@@ -1280,9 +1303,11 @@ same results either way. `background.warm` reports `{state,prepared}`: `off`,
 discarding what it holds) or `unavailable` (an engine or image whose
 decompiles keep no such state, such as one that is not x86-64), and
 `prepared` counts the functions it holds. Every revision change starts the preparation over, since
-the engine may have dropped it. A replica restored with `call_summaries:true`
-adds `call_summaries:{state}` (see `analysis_restore`); without a listing it
-has no other background fields.
+the engine may have dropped it. A change of local display names alone drops
+nothing it prepared and starts nothing over. A replica restored with
+`call_summaries:true` adds `call_summaries:{state}`, and one restored with
+`render_ahead:true` adds `render_ahead:{state,...}` (see `analysis_restore`);
+without a listing it has no other background fields.
 
 
 ### Interactive byte and source patches
