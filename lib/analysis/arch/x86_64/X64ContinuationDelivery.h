@@ -131,8 +131,16 @@ public:
                             k(0)))));
     const auto Debug =
         both(eq(Vector, k(1)), either(either(Fault, Trap), Breakpoint));
-    W.exitIf(either(either(BlockInterrupt, BlockNMI), both(SS, Debug)),
-             [&] { W.leave(Exit::EventDeferred); });
+    const auto Blocked =
+        either(either(BlockInterrupt, BlockNMI), both(SS, Debug));
+    if constexpr (Writer::FaultableMemory) {
+      // A backing stop retains acceptance, including NMI's newly set blocker.
+      // Resuming it must not turn that already consumed event into a deferral.
+      if (!W.Resuming)
+        W.exitIf(Blocked, [&] { W.leave(Exit::EventDeferred); });
+    } else {
+      W.exitIf(Blocked, [&] { W.leave(Exit::EventDeferred); });
+    }
 
     const auto SavedPC = event(Pointer, offsetof(Event, SavedPC), 8);
     // A saved PC is frame data, not a target. Sequential execution can fault

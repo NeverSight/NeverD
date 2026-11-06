@@ -66,7 +66,10 @@ protected:
   using Validate = decltype(&neverd_x64_paged_validate_v1);
   using Event = decltype(&neverd_x64_paged_event_v1);
   using Progress = decltype(&neverd_x64_paged_progress_v1);
-  using Bind = void (*)(Access, Step, Validate, Event, Progress);
+  using DebugStep = decltype(&neverd_x64_paged_debug_step_v1);
+  using DebugValidate = decltype(&neverd_x64_paged_debug_validate_v1);
+  using Bind = void (*)(Access, Step, Validate, Event, Progress, DebugStep,
+                        DebugValidate);
   struct Shadows {
     uint8_t STIBlocked = 0, SSBlocked = 0, NMIBlockedBySTI = 0, Reserved[5]{};
   };
@@ -166,7 +169,7 @@ protected:
           const std::string &Compiler = NEVERD_TEST_CLANG,
           uint64_t Base = 0x1000, Schedule *Scheduled = nullptr,
           std::optional<X64NullSegmentBasePolicy> NullBasePolicy = std::nullopt,
-          bool ExpectNative = false) {
+          bool ExpectNative = false, bool Debug = false) {
     llvm::json::Array PCs;
     for (auto PC : Addresses)
       PCs.push_back(PC);
@@ -176,6 +179,7 @@ protected:
                                 {"mxcsr_mask", "0xffff"},
                                 {"paging_address_bits", 48},
                                 {"paged_memory", true},
+                                {"paged_debug", Debug},
                                 {"scheduled_events", Scheduled != nullptr},
                                 {"follow_internal_calls", Scheduled != nullptr},
                                 {"instructions", std::move(PCs)}};
@@ -208,15 +212,24 @@ static uint64_t (*validate_bridge)(uint8_t *, uint8_t *, uint64_t,
     neverd_x64_paged_body_v1, uint64_t);
 static uint64_t (*event_bridge)(uint8_t *, uint8_t *, const uint8_t *, uint64_t);
 static uint64_t (*progress_bridge)(uint8_t *);
+static uint64_t (*debug_step_bridge)(uint8_t *, uint8_t *, uint64_t, const uint8_t *,
+    uint64_t, neverd_x64_paged_body_v1, neverd_x64_paged_body_v1, uint64_t, uint64_t, uint64_t);
+static uint64_t (*debug_validate_bridge)(uint8_t *, uint8_t *, uint64_t,
+    neverd_x64_paged_body_v1, uint64_t);
 void bind_paged(uint64_t (*access)(void *, uint64_t, uint64_t, uint64_t),
     uint64_t (*step)(uint8_t *, uint8_t *, uint64_t, const uint8_t *, uint64_t,
         neverd_x64_paged_body_v1, neverd_x64_paged_body_v1, uint64_t, uint64_t),
     uint64_t (*validate)(uint8_t *, uint8_t *, uint64_t,
         neverd_x64_paged_body_v1, uint64_t),
     uint64_t (*event)(uint8_t *, uint8_t *, const uint8_t *, uint64_t),
-    uint64_t (*progress)(uint8_t *)) {
+    uint64_t (*progress)(uint8_t *),
+    uint64_t (*debug_step)(uint8_t *, uint8_t *, uint64_t, const uint8_t *, uint64_t,
+        neverd_x64_paged_body_v1, neverd_x64_paged_body_v1, uint64_t, uint64_t, uint64_t),
+    uint64_t (*debug_validate)(uint8_t *, uint8_t *, uint64_t,
+        neverd_x64_paged_body_v1, uint64_t)) {
     access_bridge = access; step_bridge = step;
     validate_bridge = validate; event_bridge = event; progress_bridge = progress;
+    debug_step_bridge = debug_step; debug_validate_bridge = debug_validate;
 }
 uint64_t neverd_x64_paged_access_v1(void *exchange, uint64_t address,
                                    uint64_t bytes, uint64_t flags) {
@@ -238,6 +251,17 @@ uint64_t neverd_x64_paged_event_v1(uint8_t *context, uint8_t *state,
 }
 uint64_t neverd_x64_paged_progress_v1(uint8_t *context) {
     return progress_bridge(context);
+}
+uint64_t neverd_x64_paged_debug_step_v1(uint8_t *context, uint8_t *state,
+    uint64_t address, const uint8_t *bytes, uint64_t size,
+    neverd_x64_paged_body_v1 body, neverd_x64_paged_body_v1 validate,
+    uint64_t mask, uint64_t bits, uint64_t ss_blocked) {
+    return debug_step_bridge(context, state, address, bytes, size, body, validate,
+                             mask, bits, ss_blocked);
+}
+uint64_t neverd_x64_paged_debug_validate_v1(uint8_t *context, uint8_t *state,
+    uint64_t address, neverd_x64_paged_body_v1 validate, uint64_t bits) {
+    return debug_validate_bridge(context, state, address, validate, bits);
 }
 )C";
     File.close();
@@ -263,7 +287,8 @@ uint64_t neverd_x64_paged_progress_v1(uint8_t *context) {
     ASSERT_NE(Binder, nullptr);
     Binder(&neverd_x64_paged_access_v1, &neverd_x64_paged_step_v1,
            &neverd_x64_paged_validate_v1, &neverd_x64_paged_event_v1,
-           &neverd_x64_paged_progress_v1);
+           &neverd_x64_paged_progress_v1, &neverd_x64_paged_debug_step_v1,
+           &neverd_x64_paged_debug_validate_v1);
     if (Scheduled) {
       *Scheduled = reinterpret_cast<Schedule>(
           DL.getAddressOfSymbol("neverd_x64_continue_paged_events_v6"));
@@ -916,6 +941,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
   RecordProperty("software_completion_cpu_comparisons", SoftwareCompletions);
 }
 #endif
+#include "X64PagedDebugTests.inc"
 #include "X64PagedFarPointerTests.inc"
 #include "X64PagedFarReturnTests.inc"
 #include "X64PagedPortIOBoundaryTests.inc"

@@ -91,6 +91,10 @@ public:
   std::optional<X64PagedAlignmentPriority> AlignmentPriority;
   bool Stopped = false;
   bool InstructionEffects = false;
+  bool Resuming = false;
+  bool CaptureAccesses = false;
+  llvm::SmallVector<X64PagedEventContinuation::Access> CompletedAccesses;
+  size_t AccessCursor = 0;
 
   TransitionWriter(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                    const X64ContinuationEventV1 &Event, uint32_t MXCSRMask)
@@ -296,6 +300,16 @@ private:
         value(*Inputs.begin()),
         Write ? MemoryAccessKind::Write : MemoryAccessKind::Read,
         Explicit ? AccessCPL : uint8_t(0), !Explicit, Stack};
+    if (AccessCursor < CompletedAccesses.size()) {
+      const auto &Completed = CompletedAccesses[AccessCursor++];
+      assert(Completed.Address == Access.Address && Completed.Bytes == Size &&
+             Completed.Write == Write &&
+             (!Write || Completed.Value == value(Inputs.begin()[1])) &&
+             "resume preserves accepted state and access order");
+      if (!Write)
+        Values[Output.Offset] = Completed.Value;
+      return;
+    }
     const bool AlignmentFault =
         AlignmentPriority && Explicit && AccessCPL == 3 &&
         (Memory.controls().CR0 & 0x40000) &&
@@ -347,13 +361,20 @@ private:
     } else if (AlignmentFault) {
       Fault = X86MemoryException{17, 0, std::nullopt};
       Stopped = true;
-    } else if (!Write) {
-      uint64_t Value = 0;
-      for (unsigned I = 0; I != Size; ++I)
-        Value |= uint64_t(Bytes[I]) << (I * 8);
-      Values[Output.Offset] = Value;
-    } else if (AlignmentPriority) {
-      InstructionEffects = true;
+    } else {
+      uint64_t Value = Write ? value(Inputs.begin()[1]) : 0;
+      if (!Write) {
+        for (unsigned I = 0; I != Size; ++I)
+          Value |= uint64_t(Bytes[I]) << (I * 8);
+        Values[Output.Offset] = Value;
+      } else if (AlignmentPriority) {
+        InstructionEffects = true;
+      }
+      if (CaptureAccesses) {
+        CompletedAccesses.push_back(
+            {Access.Address, Value, uint8_t(Size), Write});
+        ++AccessCursor;
+      }
     }
   }
 
@@ -365,11 +386,12 @@ private:
   uint8_t AccessCPL = 0;
 };
 
-} // namespace
-
-llvm::Expected<X64PagedEventResult>
-deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
-                     const X64ContinuationEventV1 &Input, uint32_t MXCSRMask) {
+llvm::Expected<X64PagedEventResult> deliverEventSequence(
+    X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+    const X64ContinuationEventV1 &Input, uint32_t MXCSRMask, uint64_t FaultPC,
+    std::optional<X86MemoryException> LastException = {}, bool Accepted = false,
+    llvm::SmallVector<X64PagedEventContinuation::Access> CompletedAccesses =
+        {}) {
   if (!(Memory.controls().EFER & 0x400))
     return llvm::createStringError(
         llvm::errc::not_supported,
@@ -382,26 +404,30 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   if (auto Error = Memory.bindControls(Controls))
     return std::move(Error);
   X64PagedEventResult Result;
+  Result.InputAccepted = Accepted;
+  Result.LastException = LastException;
   auto Event = Input;
-  // Software entry saves its fallthrough only when entry completes. A fault
-  // while executing INT/INT3 restarts the original instruction, including a
-  // second fault while delivering that exception.
-  const uint64_t FaultPC = Input.Kind == X64ContinuationEventKind::Software
-                               ? State.Core.Core.Core.Core.PC
-                               : Input.SavedPC;
   for (;;) {
     TransitionWriter W(State, Memory, Event, MXCSRMask);
+    W.Resuming = Accepted && Result.DeliveryAttempts == 0;
+    W.CaptureAccesses = true;
+    W.CompletedAccesses = std::move(CompletedAccesses);
     detail::X64ContinuationDelivery<TransitionWriter>(
         W, Controls.CR4 & 0x1000 ? 57 : 48)
         .execute(NdVar::scalar(0, 8));
     if (Result.DeliveryAttempts == 0)
-      Result.InputAccepted = W.Result.InputAccepted;
+      Result.InputAccepted |= W.Result.InputAccepted;
     ++Result.DeliveryAttempts;
     if (W.Error)
       return std::move(*W.Error);
     if (!W.Fault) {
       Result.Status = W.Result.Status;
       Result.BackingFault = W.Result.BackingFault;
+      if (Result.Status == X64PagedEventStatus::BackingFault &&
+          Result.InputAccepted)
+        Result.Continuation =
+            X64PagedEventContinuation{Event, FaultPC, Result.LastException,
+                                      std::move(W.CompletedAccesses)};
       if (Result.Status == X64PagedEventStatus::Delivered)
         Result.DeliveredVector = Event.Vector;
       Controls.RFlags = State.Core.Core.Core.Core.RFlags;
@@ -429,6 +455,28 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
     Event.ErrorCode = Double ? 0 : W.Fault->ErrorCode;
     Event.FaultAddress = Double ? 0 : W.Fault->CR2.value_or(0);
   }
+}
+
+} // namespace
+
+llvm::Expected<X64PagedEventResult>
+deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+                     const X64ContinuationEventV1 &Input, uint32_t MXCSRMask) {
+  // Software entry saves fallthrough only on success. Its secondary faults
+  // retain the original instruction PC, also across a physical backing stop.
+  const uint64_t FaultPC = Input.Kind == X64ContinuationEventKind::Software
+                               ? State.Core.Core.Core.Core.PC
+                               : Input.SavedPC;
+  return deliverEventSequence(State, Memory, Input, MXCSRMask, FaultPC);
+}
+
+llvm::Expected<X64PagedEventResult>
+resumeX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+                    const X64PagedEventContinuation &Continuation,
+                    uint32_t MXCSRMask) {
+  return deliverEventSequence(State, Memory, Continuation.Event, MXCSRMask,
+                              Continuation.FaultPC, Continuation.LastException,
+                              true, Continuation.CompletedAccesses);
 }
 
 namespace {

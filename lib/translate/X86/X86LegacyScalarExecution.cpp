@@ -9,6 +9,8 @@
 
 #include "X86LegacyScalar.h"
 
+#include "neverd/ir/X86/X86PopFlagsRules.h"
+
 #include "llvm/ADT/APInt.h"
 
 #include <array>
@@ -204,15 +206,7 @@ public:
     if (F.Operation == Op::PopFlags) {
       if (!read(stack(), N, A))
         return;
-      // Original CPL/IOPL govern IF, even when the same pop changes IOPL.
-      // PVI does not redirect POPF to VIF. Word POPF also preserves AC/ID.
-      uint32_t Mask = 0x4dd5;
-      if (S.Core.CPL == 0)
-        Mask |= 0x3000;
-      if (S.Core.CPL <= ((S.EFlags >> 12) & 3))
-        Mask |= 0x200;
-      if (N == 4)
-        Mask |= 0x240000;
+      const auto Mask = x86PopFlagsMask(S.Core.CPL, S.EFlags, N);
       S.EFlags = (S.EFlags & ~Mask) | (A & Mask);
       adjustStack(N);
       return;

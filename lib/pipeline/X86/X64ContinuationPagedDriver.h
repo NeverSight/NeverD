@@ -45,6 +45,15 @@ extern uint64_t neverd_x64_paged_event_v1(
     uint8_t *, uint8_t *, const uint8_t *, uint64_t);
 extern uint64_t neverd_x64_paged_progress_v1(uint8_t *);
 )C";
+  if (Options.PagedDebug)
+    OS << R"C(
+extern uint64_t neverd_x64_paged_debug_step_v1(
+    uint8_t *, uint8_t *, uint64_t, const uint8_t *, uint64_t,
+    neverd_x64_paged_body_v1, neverd_x64_paged_body_v1, uint64_t, uint64_t,
+    uint64_t);
+extern uint64_t neverd_x64_paged_debug_validate_v1(
+    uint8_t *, uint8_t *, uint64_t, neverd_x64_paged_body_v1, uint64_t);
+)C";
   for (const auto &Unit : Units)
     for (const auto *Name : {&Unit.Function.Name, &Unit.EntryValidation->Name})
       OS << "static uint64_t " << *Name
@@ -52,16 +61,27 @@ extern uint64_t neverd_x64_paged_progress_v1(uint8_t *);
          << "    return " << *Name << "(state, exchange);\n}\n";
   for (const auto &Unit : Units) {
     OS << "static uint64_t " << Unit.Function.Name
-       << "_paged_step(neverd_x64_state_v6 *state, uint8_t *context) {\n"
+       << (Options.PagedDebug ? "_paged_debug_step" : "_paged_step")
+       << "(neverd_x64_state_v6 *state, uint8_t *context"
+       << (Options.PagedDebug ? ", uint64_t ss_blocked" : "") << ") {\n"
        << "    static const uint8_t bytes[] = {";
     for (auto Byte : Unit.Bytes)
       OS << unsigned(Byte) << ',';
-    OS << "};\n    return neverd_x64_paged_step_v1(context, (uint8_t *)state, "
+    OS << "};\n    return "
+       << (Options.PagedDebug ? "neverd_x64_paged_debug_step_v1"
+                              : "neverd_x64_paged_step_v1")
+       << "(context, (uint8_t *)state, "
           "0x"
        << llvm::utohexstr(Unit.Address) << "ULL, bytes, sizeof(bytes), "
        << Unit.Function.Name << "_paged_adapter, " << Unit.EntryValidation->Name
        << "_paged_adapter, " << *Options.MXCSRMask << ", "
-       << *Options.PagingAddressBits << ");\n}\n";
+       << *Options.PagingAddressBits
+       << (Options.PagedDebug ? ", ss_blocked" : "") << ");\n}\n";
+    if (Options.PagedDebug)
+      OS << "static uint64_t " << Unit.Function.Name
+         << "_paged_step(neverd_x64_state_v6 *state, uint8_t *context) {\n"
+         << "    return " << Unit.Function.Name
+         << "_paged_debug_step(state, context, 0);\n}\n";
   }
   OS << "\nuint64_t neverd_x64_run_paged"
      << (FunctionContext ? "_function" : "")

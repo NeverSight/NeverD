@@ -114,7 +114,9 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
     OS << "        case 0x" << llvm::utohexstr(Unit.Address)
        << "ULL: status = ";
     if (Paged)
-      OS << "neverd_x64_paged_validate_v1(memory_context, (uint8_t *)state, 0x"
+      OS << (Options.PagedDebug ? "neverd_x64_paged_debug_validate_v1"
+                                : "neverd_x64_paged_validate_v1")
+         << "(memory_context, (uint8_t *)state, 0x"
          << llvm::utohexstr(Unit.Address) << "ULL, "
          << Unit.EntryValidation->Name << "_paged_adapter, "
          << *Options.PagingAddressBits << ")";
@@ -175,8 +177,10 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
       OS << "            break;\n";
     } else
       OS << " status = " << Unit.Function.Name
-         << (Paged ? "_paged_step(state, memory_context); break;\n"
-                   : "((uint8_t *)state); break;\n");
+         << (Options.PagedDebug ? "_paged_debug_step(state, memory_context, "
+                                  "shadows->SSBlocked); break;\n"
+             : Paged            ? "_paged_step(state, memory_context); break;\n"
+                                : "((uint8_t *)state); break;\n");
   }
   OS << R"C(        default: return 5;
         }

@@ -182,7 +182,16 @@ IRET also unblocks NMI, while RETF retains inhibition. Register/segment
 publication remains staged. RETF's compatibility-IP validation differs across
 the qualified hybrid core types, so the profile is explicit and the test oracle
 pins its processor. Scalar rollback cannot erase completed transition effects;
-backing stops after such effects charge an attempt. The existing LowIR remains the arithmetic authority;
+backing stops after such effects charge an attempt. The optional `paged_debug`
+source contract binds an external DR6/DR7/DEBUGCTL bank to that same executor.
+It samples entry TF, commits the instruction/REP element and its debug cause
+before IDT entry. The scheduler supplies the MOV-SS shadow; C renderers do not
+implement debug status or event policy. `ir/X86/X86DebugRules` and
+`X86PopFlagsRules` own the shared legacy/x64 status and writable-mask rules.
+The paged event owner's backing continuation retains the selected secondary
+event and completed memory accesses, so frame/descriptor aliases cannot change
+earlier inputs on resume. It also preserves accepted NMI inhibition. The
+existing LowIR remains the arithmetic authority;
 both C routes share an explicit imported-call ABI. `X64PagedSse` confines the
 legacy XORPS/MOVUPS/MOVDQU fault domain; it reuses that LowIR and the existing
 prepared-store transaction with a 16-byte exchange payload. Memory steps fold

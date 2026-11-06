@@ -42,8 +42,10 @@ x64PagedMemoryRoles(const SpecializationInstruction &Instruction) {
   Roles.Sse = x64PagedSseInstruction(Insn.Id, X86);
   if (X86.prefix[0]) // LOCK and repeat require their instruction commit model.
     return Roles;
-  const bool StackRead = Insn.Id == X86_INS_POP || Insn.Id == X86_INS_RET;
-  const bool StackWrite = Insn.Id == X86_INS_PUSH || Insn.Id == X86_INS_CALL;
+  const bool StackRead = Insn.Id == X86_INS_POP || Insn.Id == X86_INS_RET ||
+                         Insn.Id == X86_INS_POPFQ;
+  const bool StackWrite = Insn.Id == X86_INS_PUSH || Insn.Id == X86_INS_CALL ||
+                          Insn.Id == X86_INS_PUSHFQ;
   unsigned ExplicitMemory = 0;
   bool ExplicitStack = false;
   for (unsigned I = 0; I != X86.op_count; ++I) {

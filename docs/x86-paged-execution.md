@@ -104,8 +104,8 @@ PC is always frame data for paged entry: a sequential fetch beyond canonical
 addresses or a compatibility CS limit must retain that faulting PC, and an IRQ
 can preempt the bad fetch. Native NOP-boundary and POPFQ/IRQ cases verify these
 paths; the old successful-RAM event API retains its narrower input contract.
-POPFQ constructs the original CPU's interrupt window in that fixture; its
-execution is not newly admitted by the paged source binding. The compatibility
+POPFQ constructs the original CPU's interrupt window in that fixture. The
+separate `paged_debug` binding below now admits its generated execution. The compatibility
 cases qualify event entry, not a complete legacy instruction dispatcher.
 
 #PF, #GP, #SS, #AC, #DE and canonical UD2's #UD retain the original restart PC.
@@ -129,6 +129,81 @@ A fault whose IDT entry subsequently hits a backing failure still consumes its a
 `InstructionAttempted` and `Delivery.InputAccepted` retain these distinctions
 independently of the final status. Full fault and backing details
 are available through the context's `lastResult()` and `lastError()`.
+
+## Instruction-step debug events
+
+Add `"paged_debug": true` to a paged V6 instruction-region export and bind a
+live `X64PagedDebugState` through `X64PagedExecutionOptions::Debug`. The bank
+contains DR6, DR7 and IA32_DEBUGCTL and stays disjoint from V6 state, guest RAM
+and the execution context. Its lifetime covers every call. V6's wire layout
+does not change. Debug exports use distinct `neverd_x64_paged_debug_*_v1`
+bridges, so linking an older runtime cannot silently omit debug delivery.
+The scheduled bridge validates the bank before producer polling or fetch and
+passes its current MOV-SS shadow to each step.
+
+This binding is nontransactional with DR7=0x400 and DEBUGCTL=0. Enabled hardware
+address/I/O breakpoints, GD, BTF, task traps and other debug producers require
+their own state; incompatible controls refuse before effects. DR6's high half
+and reserved bits are checked. Historical BLD/RTM status inputs assume a target
+that can represent them. The local native oracle uses canonical BLD=RTM=1
+inputs because its CPU lacks those optional facilities.
+
+The executor samples TF before the original instruction, commits its register
+and memory effects, publishes the #DB cause, and enters the existing IDT owner.
+RF does not suppress this single-step cause. IRET and RETF use entry TF even
+when the return clears TF; IRET retains restored RF. Setting TF with IRET or
+POPFQ starts stepping with the next instruction. Canonical PUSHFQ/POPFQ use
+the original stack and entry CPL/IOPL, including silent privilege masking of
+IF/IOPL and preservation of VIF/VIP. Their writable-mask rule is shared with
+the protected legacy executor. The word flag-stack forms retain their existing
+native boundary in this source binding.
+
+MOV SS suppresses its own TF trap when it starts an inhibition window. It
+does not defer BS; a consecutive MOV SS consumes the old window. LSS creates
+no such window. ICEBP (`F1`) has its own completed trap, including after MOV SS.
+Both producers clear inactive B0..B3, set RTM and preserve sticky status;
+only TF sets BS. The status rule is shared with i386. Software INT 1, INT3,
+faults before completion and externally selected IRQ/NMI do not synthesize
+DR6 causes. External producers remain responsible for their own cause banks.
+
+Each completed REP element can single-step. An unfinished element saves the
+original PC and RF; the terminal or zero-count element saves fallthrough.
+The existing REP flags/progress policy remains authoritative. Synchronous #DB
+delivery completes before the scheduler can poll another external event.
+Execution stops at handler entry, or at the existing IRET privilege-return
+boundary; the embedding may continue selected handler/return-target bodies.
+
+Instruction completion and DR6 survive failed #DB entry, including secondary
+faults and physical backing stops. `Delivery.Continuation` retains the actual
+accepted event and its original fault PC. After repairing backing, pass that
+record to `X64PagedExecution::resume` or `resumeX64PagedEvent`; do not rerun the
+instruction or acknowledge the external event again. The record retains
+completed memory reads and skips completed writes. This matters when a partial
+exception frame overwrites a descriptor or TSS input. Accepted NMI also retains
+its blocker without treating it as a new eligibility check on resume. Preserve
+the state and record while repairing backing. This continuation is for the
+confined ordinary-RAM binding, not device replay or concurrent mutation.
+
+`function_context` is currently refused with `paged_debug`: function completion
+across an intervening debug handler needs its own activation contract. Default
+paged and no-fault exports keep their existing TF admission. Hardware watchpoints,
+branch stepping, general compatibility/i386 source dispatch, SMM/SGX and
+transactional debug events remain separate work. Native LLVM/NeverC ICEBP and
+flags instructions already exist; this extension adds the software execution
+and event contract without changing the production LLVM pin.
+
+See the [qualification record](evidence/x86-x64-paged-debug-2026-11-06.json).
+The original-byte matrix disables KVM guest debugging and uses real handlers
+ending in HLT. It compares DR6/DR7, represented GPR/segment state, flags, CR2,
+inhibition and complete RAM. Page A/D bits are preseeded so the final handler
+HLT fetch adds no unmatched page-table effects. Original handlers count #DB
+events, IRET through REP elements, and repair a #PF before retrying the load.
+Both source routes compile through Clang and NeverC at O0/O2. These results
+qualify the tested processor bindings, not every x86 implementation.
+
+References: [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
+revision 093, volume 3 §§7.8.3, 20.2.3 and 20.3.1.4;
+[KVM debug-register API](https://docs.kernel.org/virt/kvm/api.html).
 
 ## Faultable LSS, LFS and LGS
 
@@ -298,8 +373,8 @@ handler boundary. Tests compose these calls through IRQ/NMI entry, generated
 IRET and resumed code, and execute a generated #PF handler that repairs the
 page table, removes the error code, returns to the faulting IRET and retries it.
 Returning to compatibility mode produces the correct state and explicit exit;
-it does not add a legacy-mode instruction dispatcher. Restored TF likewise
-remains an explicit boundary before later instructions without a debug owner.
+it does not add a legacy-mode instruction dispatcher. Restored TF remains an
+explicit boundary unless the instruction-region export binds `paged_debug`.
 
 The IRET CPU matrix compares CS/SS caches, data selectors, unusable bits,
 NMI blocking, flags, GPRs, restart frames and ordinary RAM. It covers all operand
@@ -466,9 +541,9 @@ outputs. The 186 earlier no-fault C/header outputs remain byte-identical.
 
 This binding owns scalar commits, long-mode selector MOV/PUSH/POP and far-pointer
 loads, faultable long-mode interrupt/far returns, and the bound REP memory-string
-iterations below. Port strings, gather/scatter, XSAVE and
-other partial-completion instructions need their own progress models. LOCK,
-native system providers, TF, SMI/AEX, legacy i386 dispatch,
+and port-device iterations below. Gather/scatter, XSAVE and other
+partial-completion instructions need their own progress models. LOCK,
+native system providers, unbound debug events, SMI/AEX, legacy i386 dispatch,
 CET/FRED, MMIO, TLB and concurrent writers remain outside this binding.
 Intra-element events, device arrival and interrupt-controller selection
 remain separate. Combining paged memory with `event_delivery`, direct dispatch
