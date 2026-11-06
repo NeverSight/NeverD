@@ -33,6 +33,7 @@
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
@@ -815,12 +816,27 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
         !LLVMCEmitter().emit(*Module, OS, Options))
       return invalid("x64 continuation LLVM C emission failed");
   } else {
-    std::vector<HighFunc> High;
-    MedToHighConverter Converter;
-    if (Request->Options.PagedMemory)
-      Converter.setFuncNames(&PagedNames);
-    for (const auto &Function : Functions)
-      High.push_back(Converter.convert(Function, Arch::X64));
+    std::vector<HighFunc> High(Functions.size());
+    const auto Convert = [&](auto Claim, size_t Total) {
+      MedToHighConverter Converter;
+      if (Request->Options.PagedMemory)
+        Converter.setFuncNames(&PagedNames);
+      for (size_t I = Claim(); I < Total; I = Claim())
+        High[I] = Converter.convert(Functions[I], Arch::X64);
+    };
+    if (Functions.size() < limits::kMinParallelIRWorkItems ||
+        workerThreadCount() <= 1) {
+      size_t Next = 0;
+      Convert([&] { return Next++; }, Functions.size());
+    } else {
+      // Event delivery and instruction guards vary in cost. Each worker owns
+      // its converter and result slots; emission keeps the original order.
+      std::vector<uint64_t> Weight(Functions.size(), 1);
+      for (size_t I = 0; I < Functions.size(); ++I)
+        for (const auto &Block : Functions[I].Blocks)
+          Weight[I] += Block.Ops.size() + Block.Phis.size();
+      parallelForEachWeighted(Weight, Convert);
+    }
     if (!HighCEmitter().emit(High, OS, Options))
       return invalid("x64 continuation HighC emission failed");
   }
