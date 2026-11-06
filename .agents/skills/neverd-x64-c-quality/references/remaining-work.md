@@ -1,5 +1,15 @@
 # Remaining x64 C-quality work
 
+Durable relative jump-table replay now shares the initial exact finite-domain
+proof when a conditional selector cannot be expressed as a mask transform.
+The existing `x64cly_statemachine` execution regression recovers its complete
+loop through native LLVM, HighC and LLVM C. The prior storage certificate only
+sets a query ceiling; the closed current graph must prove every feasible value
+again. Unknown reentry, unbounded states and incomplete evidence remain
+rejections. This closes a withdrawn-control-flow defect, not automatic entry
+state recovery or general Windows driver execution. The same-base request
+controls establish unchanged output, not a speedup over IDA.
+
 Explicit function contexts now compose with IRQ/NMI scheduling in both the
 nonpaged and paged V6 drivers. The shared near-RET owner charges completion
 and emits the scheduler's shadow-expiry rule before returning; event delivery,
