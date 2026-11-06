@@ -37,6 +37,13 @@ llvm::Error invalid(const char *Message) {
 llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                                          X86PagedMemory &M,
                                          const X86LegacyExecutionOptions &O) {
+  if (bool(S.Debug) != bool(O.Debug) ||
+      (O.Debug && O.Debug != X86LegacyDebugProfile::InstructionStep) ||
+      (S.Debug && (S.Debug->DR7 != 0x400 || S.Debug->DebugCTL != 0 ||
+                   (S.Debug->DR6 & 0xfffe07f0u) != 0xfffe07f0u ||
+                   (S.Debug->DR6 & 0x1000))))
+    return invalid("legacy debug state requires the instruction-step profile, "
+                   "valid DR6, inactive DR7 and zero DEBUGCTL");
   auto Controls = M.controls();
   Controls.RFlags = S.EFlags;
   if (auto Error = validateX86LegacySegmentState(S.Core, Controls))
@@ -169,7 +176,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     if (Status != X86MpxResult::Completed && Status != X86MpxResult::Disabled)
       return invalid("BOUND requires known nontransactional MPX enable state");
   }
-  if (State.EFlags & 0x100)
+  const bool SingleStep = State.EFlags & 0x100;
+  if (SingleStep && (!State.Debug || !Options.Debug))
     return invalid("legacy TF stepping requires a debug-event producer");
   if (IRET && (State.EFlags & 0x4000))
     return invalid("legacy nested-task IRET requires task-switch state");
@@ -228,6 +236,17 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
                                         R.SelfModifications.end());
     return Delivered;
   };
+  const auto EnterDebug =
+      [&](bool FromSingleStep,
+          bool Completed) -> llvm::Expected<X86LegacyExecutionResult> {
+    // Publish the debug cause before IDT entry: it survives a failed #DB
+    // delivery and a backing stop. Software INT 1 does not update DR6.
+    if (State.Debug)
+      State.Debug->DR6 = (State.Debug->DR6 & ~0xfu) | 0x10000u |
+                         (FromSingleStep ? 0x4000u : 0);
+    State.SSBlocked = State.STIBlocked = false;
+    return Enter({State.EIP, 0, 0, 1, X86LegacyEventKind::Trap}, Completed);
+  };
   if (x86PendingVirtualInterrupt(State.Core.CPL, Memory.controls().CR4,
                                  State.EFlags))
     R.Exception = X86MemoryException{13, 0, {}};
@@ -268,6 +287,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       if (auto Error = Memory.bindControls(Controls))
         return std::move(Error);
       R.InstructionCompleted = true;
+      if (SingleStep)
+        return EnterDebug(true, true);
       return R;
     }
     if (R.BackingFault)
@@ -358,7 +379,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       }
     } else if (INT || Opcode == 0xcc || Opcode == 0xf1 ||
                (Opcode == 0xce && (Flags & 0x800))) {
-      if (Opcode == 0xf1 && State.SSBlocked)
+      if (Opcode == 0xf1 && State.SSBlocked && !State.Debug)
         return invalid(
             "ICEBP under MOV-SS inhibition requires deferred debug state");
       const uint8_t Vector = INT              ? Instruction[1]
@@ -370,12 +391,9 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
         // the fallthrough and must not restore pre-instruction RF or STI.
         State.EIP = NextIP;
         State.EFlags = Flags & ~0x10000u;
-        State.STIBlocked = false;
+        return EnterDebug(false, true);
       }
-      return Enter({NextIP, 0, 0, Vector,
-                    Opcode == 0xf1 ? X86LegacyEventKind::Trap
-                                   : X86LegacyEventKind::Software},
-                   true);
+      return Enter({NextIP, 0, 0, Vector, X86LegacyEventKind::Software}, true);
     } else if (UD2) {
       R.Exception = X86MemoryException{6, 0, {}};
     }
@@ -400,6 +418,11 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   R.InstructionCompleted = !RepeatContinue;
   if (RepeatContinue)
     R.Status = X86LegacyExecutionStatus::RepeatContinue;
+  // Sample TF at instruction entry, before POPF/IRET can change it. A MOV/POP
+  // SS that establishes a shadow suppresses this trap, rather than postponing
+  // it. A REP iteration traps at its retained PC with RF set until completion.
+  if (SingleStep && !SS)
+    return EnterDebug(true, !RepeatContinue);
   return R;
 }
 

@@ -62,6 +62,21 @@ CR2 and retained ordinary RAM remain checked. Repeat these tests on the
 qualified P/E cores and both SDKs; preserve raw failing probes as diagnostics.
 See [the legacy execution contract](x86-legacy-segments.md#protected-instruction-and-event-execution).
 
+`X86LegacyDebugTest.*` and `LegacyDebug/*` in `NeverDX86PagingTests` cover the
+explicit TF/ICEBP binding. The native matrix disables KVM guest debugging,
+executes original instruction sequences and halts in real exception handlers.
+It compares DR6/DR7, full GPR/segment state, flags, CR2, inhibition and all RAM
+under legacy/PAE paging, independent code/stack/gate widths, CPL0/3, RF and
+sticky DR6 inputs. Disabled breakpoint comparators deliberately match the
+instruction addresses. Cases include POPF/IRET TF transitions, MOV/POP SS and
+LSS, REP progress, near/far control, SYSENTER/SYSEXIT, faults, software entries
+and failed #DB gate/frame/target entry. Original handlers count #DB events,
+IRET through every REP element and repair #PF before retry. Unit checks add
+malformed control admission and backing-stop/event continuation. Run on both qualified core
+classes and SDKs, then full paging and affected paged-execution regressions.
+See [the debug contract](x86-legacy-segments.md#protected-instruction-step-debug-events)
+and its evidence; skips do not count as native qualification.
+
 `LegacyFar/*` in `NeverDX86PagingTests` compares protected far CALL/JMP and
 16/32-bit call gates against original KVM instructions. It checks independent
 code/operand/address/gate/TSS/stack widths, CPL/RPL/DPL, conforming targets,

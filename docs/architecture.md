@@ -39,8 +39,12 @@ type, privilege, present and cache-field decisions with the x64 continuation
 writer. The legacy transition stages coupled cache/GPR/stack publication over
 paged RAM. `translate/X86/X86LegacyExecution` supplies original-byte CS fetch,
 EIP/RF completion, persistent SS/STI/NMI state and 16/32-bit IDT gate entry
-for its admitted instruction subset. Its event owner stages registers and
-caches while retaining descriptor/frame RAM effects and CR2 on later faults.
+for its admitted instruction subset. Its optional instruction-step debug
+binding samples entry TF and publishes TF/ICEBP causes to DR6 before event
+entry. It composes existing instruction commit, REP progress, IDT and return
+owners; external debug producers retain their separate cause ownership. Its
+event owner stages registers and caches while retaining descriptor/frame RAM
+effects and CR2 on later faults.
 TSS stack selection, conforming code and privilege changes stay in that owner;
 `ir/X86/X86ExceptionDelivery` shares event kinds, error-code vector sets and
 recursive-fault classification with IA-32e. The legacy entry is an internal
@@ -57,8 +61,9 @@ coupled CS/SS/CPL/SP/EIP publication and retains ordered descriptor/frame/argume
 RAM effects on faults. Gate width, caller operand size, TSS width and stack
 address size are independent. The ordinary lifter refuses LCALL/LJMP before
 publishing any operations: a near call/branch cannot represent a descriptor-
-selected transfer. General source export and native compiler intrinsics for
-these far transfers still require their own complete state boundary.
+selected transfer. Native LLVM/NeverC far-transfer APIs have a separately
+qualified compiler ABI; general original-state source export still requires
+its own complete state boundary.
 `translate/X86/X86LegacyEncoding` owns strict legacy prefixes and ModRM/SIB
 addressing for selector and scalar instructions. `X86LegacyScalarEncoding`
 authenticates complete scalar extents; `X86LegacyScalarExecution` owns staged

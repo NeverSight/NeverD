@@ -723,6 +723,7 @@ TEST_F(X86LegacyExecutionTest, ScalarMalformedFormsFailBeforeFetch) {
 #include "X86LegacyBitTests.inc"
 #include "X86LegacyBoundTests.inc"
 #include "X86LegacyConditionTests.inc"
+#include "X86LegacyDebugTests.inc"
 #include "X86LegacyDecimalTests.inc"
 #include "X86LegacyDivisionTests.inc"
 #include "X86LegacyDoubleShiftTests.inc"

@@ -3852,12 +3852,20 @@ AAA/AAS/DAA/DAS/AAM/AAD,
 LOOP/LOOPcc/JCXZ/JECXZ, INT/INT3/INTO/INT1,
 UD2, protected
 16/32-bit IRET/RETF and Intel SEP SYSENTER/SYSEXIT. It is not a general i386
-source dispatcher. Task/call
-gates, real/VM86, debug-event production, software SMM and SGX execution/AEX/EPCM
+source dispatcher. Protected call gates have the separate far-transfer binding.
+Task gates, real/VM86, hardware debug producers, software SMM and SGX execution/AEX/EPCM
 remain separate incomplete contracts. Unsupported input returns an explicit
 error. [The execution contract](x86-legacy-segments.md#protected-instruction-and-event-execution)
 records the bound processor behavior and native evidence. The global
 completion, final LLVM release/pin and submodule-update gates remain open.
+
+The optional [instruction-step debug binding](x86-legacy-segments.md#protected-instruction-step-debug-events)
+adds TF and ICEBP causes with explicit DR6/DR7/DEBUGCTL state. It samples entry
+TF across POPF/IRET, respects MOV/POP SS suppression, preserves REP progress,
+and retains debug status through failed IDT entry and backing resume. Native
+checks disable debugger interception and compare real exception frames and
+complete state. Enabled hardware breakpoints, branch stepping and task traps
+remain outside this binding.
 
 [Protected legacy returns](x86-legacy-segments.md#protected-iret-and-far-returns)
 now connect IDT entry back to the interrupted code. The explicit return profile
@@ -3957,8 +3965,9 @@ Protected PUSHF/PUSHFD and POPF/POPFD now use the ordinary-RAM legacy executor,
 including independent code/operand/stack widths, original CPL/IOPL checks,
 RF/VM snapshot rules, CR4.PVI behavior, old-AC fault priority and restartable
 stack faults. Completion updates flags, stack state and interruptibility
-together. Newly restored TF remains subject to the existing debug-producer
-boundary on the following instruction.
+together. Newly restored TF takes effect on the following instruction through
+the optional instruction-step binding; clearing TF still traps when entry TF
+was set.
 
 Word POPF previously widened to POPFD/POPFQ in native LLVM and C output,
 incorrectly replacing AC/ID. The LLVM fork now provides native
@@ -3975,7 +3984,7 @@ original word-POPF comparisons on the qualified P/E cores. The separate
 protected-state matrices contribute 96,512 FLAGS comparisons, including
 privilege and fault state; these counts do not mix ordinary compiler ABI
 observations with original-machine arithmetic flags. General i386 source ABI,
-debug producers, task/VM86 state,
+hardware debug producers, task/VM86 state,
 software SMM/SGX and the other unqualified environments remain open. This
 batch does not advance the final LLVM release, SDK pin or LLVM gitlink.
 

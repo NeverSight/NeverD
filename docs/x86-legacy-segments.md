@@ -165,8 +165,9 @@ locally and makes no whole-decompilation performance claim.
 an internal protected-mode execution state: EIP, EFLAGS, CR2, IDTR, loaded TR,
 and persistent SS/STI/NMI inhibition accompany the existing GPR/segment state.
 That state owns flags; execution binds the paging provider to it before
-accesses and again after completion. Event selection and APIC/debug producer
-state remain the embedding caller's responsibility.
+accesses and again after completion. External event selection and APIC state
+remain the embedding caller's responsibility; the optional instruction-step
+binding below owns TF/ICEBP causes and DR6 publication.
 
 A step authenticates each original instruction byte through CS and paging.
 It stops at the first changed byte, preserving earlier page-walk effects and
@@ -216,8 +217,8 @@ window. LSS does not establish that window. External IRQ, NMI and debug-event
 eligibility is checked before table reads. The STI/NMI relationship requires
 an explicit policy when it affects eligibility; it is not inferred from the
 host. TF instruction stepping and ICEBP while an SS window is active require
-a debug producer and are refused by this step interface. Native debug
-registers and delayed data-breakpoint state are not silently approximated.
+the explicit debug binding below. Hardware breakpoint producers and delayed
+data-breakpoint state are not silently approximated.
 
 The architecture basis is Intel SDM revision 093, volume 2 INT/MOV/POP/STI/CLI
 and volume 3A chapter 7. Target-specific access ordering and stack high-bit
@@ -230,11 +231,71 @@ matrices, corrected probes and regression results.
 
 This is a bounded internal execution interface. The scalar binding below
 extends its ordinary instruction execution. General i386 source
-dispatch, task/call-gate transitions, real/VM86, CET/FRED, software
+dispatch, task transitions, real/VM86, CET/FRED, software
 SMM, enclave/AEX/EPCM and the remaining device/partial-progress contracts are
 not completed by it. No new LLVM or NeverC intrinsic is required for these
 runtime state transitions. The final LLVM release, SDK pin and NeverD LLVM
 gitlink remain unchanged pending global completion.
+
+## Protected instruction-step debug events
+
+Bind both `X86LegacyExecutionOptions::Debug` and
+`X86LegacyExecutionState::Debug` to use `InstructionStep`. This is an explicit
+nontransactional processor profile: DR7 is 0x400, DEBUGCTL is zero, and DR6
+has the profile's reserved-bit image. Incoming sticky BLD/RTM status asserts
+a processor capable of representing it; this profile does not generate those
+historical causes. Incompatible or incomplete bindings
+refuse before instruction fetch. This profile has no enabled address/I/O
+breakpoints, GD, branch stepping, bus-lock detection or task-trap producer.
+Those controls cannot be supplied and silently ignored.
+
+The executor samples TF before the instruction. A successful instruction
+produces #DB even when POPF or IRET clears TF; setting TF takes effect on the
+following instruction. RF does not suppress instruction stepping. MOV/POP SS
+that establishes an inhibition window suppresses its own TF trap, without
+retaining a postponed BS cause. The following instruction can trap, including
+a consecutive MOV SS under the existing window profile. LSS does not create
+that window. ICEBP after MOV SS delivers at its own fallthrough and retains
+its own cause even when TF was set.
+
+An instruction-step cause clears inactive DR6.B0..B3, sets RTM and BS, and
+retains other sticky status. ICEBP has the same status update without setting
+BS. A software `INT 1` leaves DR6 unchanged, as do other software entries and
+faults that prevent instruction completion. Causes publish before IDT entry:
+a missing #DB gate, a later frame fault or an accepted-event backing stop
+retains the completed instruction and its debug status. Event resume does
+not execute that instruction again. An external debug-event producer remains
+responsible for its own DR6 cause; event delivery does not infer one.
+
+Each completed REP element can trap. Remaining iterations save the original
+instruction PC and RF=1, while completion or a zero count saves fallthrough
+with RF cleared. IRET restores the frame's RF before any entry-TF trap;
+SYSENTER/SYSEXIT trap from their committed target context. Existing IDT,
+frame-return, paging and partial-progress owners perform these transitions.
+This adds no separate exception engine or compiler intrinsic.
+
+`LegacyDebug/*` executes original instructions with KVM guest debugging
+disabled and stops in real IDT handlers through HLT. It compares DR6/DR7,
+all eight GPRs, all six segment caches, EIP/EFLAGS/CR2, inhibition and complete
+RAM, including page-table and partial-frame effects. Code, stack and gate
+widths vary independently under legacy and PAE paging. Original #DB handlers
+count traps and IRET to the next instruction or remaining REP elements; a #PF
+handler repairs the missing PTE, discards its error slot and retries before
+the instruction-step event. No host repair occurs between those steps. Unit
+cases cover unbound controls, backing continuation and instruction authentication.
+The [debug qualification](evidence/x86-legacy-debug-2026-11-05.json) records
+actual runs and retained diagnostics. The architectural reference is Intel
+SDM revision 093, volume 3 sections 7.8.3, 20.2.3 and 20.3.1.4, plus volume 2 INT1.
+The recorded KVM CPU exposes neither RTM nor bus-lock detection; its native
+matrix uses canonical BLD=RTM=1. Incoming historical BLD=0/RTM=0 preservation
+has software coverage only. Raw KVM debug-register injection can retain an
+image that an architectural register read later normalizes; those exploratory
+runs are diagnostics, not native qualification.
+
+This internal protected executor still does not provide general i386 source
+dispatch, hardware watchpoints, task switching, real/VM86, or the other open
+machine-environment contracts. The LLVM release, SDK pin and gitlink remain
+unchanged until global completion.
 
 ## Protected scalar execution
 
@@ -304,7 +365,7 @@ Word POPF preserves AC/ID; neither width changes VM/VIF/VIP. CR4.PVI does not
 redirect these instructions to VIF. Old AC governs operand alignment faults.
 Successful POPF ends existing SS/STI inhibition without starting an STI window;
 NMI blocking is retained. Newly restored TF does not trap on the POPF itself,
-but the next step still requires the separate debug-event producer.
+and the next step uses the bound instruction-step debug producer.
 
 The word native LLVM and C projections preserve this width through
 `llvm.x86.flags.{read,write}.u16` and the matching builtin. Extending a word
@@ -501,7 +562,7 @@ or register adjustment between these instructions. This covers legacy paging
 and PAE, CPL0..3, and independent code/stack sizes. It closes that earlier
 handler boundary for the admitted scalar instructions; it does not supply a
 general i386 source exporter, a TLB/cache model, devices, concurrent shared-memory
-synchronization, HLE, task gates, real/VM86 state, debug producers or other
+synchronization, HLE, task gates, real/VM86 state, hardware debug producers or other
 unlisted instructions. Exclusive-RAM LOCK forms use the additional binding above.
 
 The [November 3 scalar qualification](evidence/x86-legacy-scalars-2026-11-03.json)
@@ -624,7 +685,7 @@ the PTE, discard a fault error code and IRET to the remaining count.
 LOCK on an otherwise admitted string raises #UD after original-byte fetch,
 including when CX/ECX is zero. Repeated/conflicting prefixes and F2 on a
 non-comparison remain explicit refusals. Port strings use the separate binding
-below. MMIO, physical read-ahead, debug producers, real/VM86 and a general
+below. MMIO, physical read-ahead, hardware debug producers, real/VM86 and a general
 i386 source dispatcher remain outside this memory-string contract. LLVM and NeverC already expose
 native string interfaces; no new compiler intrinsic is needed for this runtime
 state transition. The final SDK release, pin and LLVM gitlink stay unchanged.
@@ -712,7 +773,8 @@ Bind `X86LegacyExecutionOptions::FastSystem` to `IntelSEP` and supply
 `X86LegacyExecutionState::Sysenter` with the low 32-bit CS, ESP and EIP MSR
 inputs. This binding asserts an Intel processor supporting SEP; it does not
 derive feature or MSR state from the host. Existing protected-state admission
-continues to exclude CET/FRED, real/VM86, IA-32e and TF debug production.
+continues to exclude CET/FRED, real/VM86 and IA-32e. TF requires the separate
+instruction-step binding described above.
 
 SYSENTER can enter from CPL0..3. It installs EIP/ESP from those MSRs, selects
 CPL0 and clears IF/VM/RF. SYSEXIT requires CPL0, takes its full 32-bit EIP/ESP
@@ -798,7 +860,8 @@ increment. The fault path enters the existing IDT owner with the original EIP.
 Nested-task IRET is refused before execution because task-switch state is
 not owned. A CPL0 frame requesting VM86 is refused after reading its flags,
 retaining NMI unblocking; it is not misreported as an ordinary protected
-return. Restored TF is preserved, and the next step requires a debug producer.
+return. Restored TF is preserved; the instruction-step binding samples entry
+TF independently of the restored frame.
 Reserved legacy descriptor bits, CET/FRED and unbound profiles remain explicit
 errors. The error holders in selector, event and return transitions preserve
 LLVM's checked-error contract, including these dynamically discovered refusals.
@@ -935,15 +998,17 @@ with gate entry and removes parameters from both stack contexts.
 
 LOCK delivers #UD only after authenticated fetch. Duplicate prefixes, REP/BND
 prefixes and register forms of FF /3 or /5 refuse explicitly. Task-gate/TSS
-transfers, reserved L-bit targets, VM86, CET/FRED and debug-event production
-remain outside this boundary. They do not become guessed near calls or NOPs.
+transfers, reserved L-bit targets, VM86 and CET/FRED remain outside this
+boundary. TF requires the separate instruction-step debug binding. They do not become guessed near calls or NOPs.
 
 The ordinary lifter previously mapped far calls/jumps to near control flow,
 discarding the selector and possible stack/privilege transition. It now refuses
 them before publication in both strict and permissive modes. This includes
 Capstone's CALL/JMP aliases for FF /3 and /5. Native LLVM/NeverC far-transfer
-intrinsics and general i386 source execution are still separate unfinished
-work; this executor is not evidence that either compiler can generate them.
+intrinsics are independently qualified in the
+[native compiler evidence](evidence/x86-native-far-transfers-2026-11-05.json).
+Their declared compiler ABI does not supply general original-state i386 source
+execution, which still requires its complete dispatch boundary.
 No LLVM release, SDK pin or submodule change is made for this boundary.
 
 Architectural references are Intel SDM Volume 2A CALL/JMP and Volume 3A's

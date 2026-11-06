@@ -50,6 +50,15 @@ struct X86LegacyEventContinuation {
   std::optional<X86MemoryException> LastException;
 };
 
+/// Architectural debug status and explicit controls for the instruction-step
+/// binding. Enabled address breakpoints, GD and DEBUGCTL features require a
+/// separate producer; they cannot be silently ignored by this binding.
+struct X86LegacyDebugState {
+  uint32_t DR6 = 0xffff0ff0;
+  uint32_t DR7 = 0x400;
+  uint64_t DebugCTL = 0;
+};
+
 struct X86LegacyExecutionState {
   X86LegacySegmentState Core;
   uint32_t EIP = 0;
@@ -67,6 +76,7 @@ struct X86LegacyExecutionState {
   /// Other MPX instructions/control transfers still need their own dispatch.
   std::optional<X86MpxContext> Mpx;
   std::optional<X86LegacyEventContinuation> PendingEvent;
+  std::optional<X86LegacyDebugState> Debug;
 };
 
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
@@ -152,6 +162,12 @@ enum class X86LegacyFarTransferProfile : uint8_t { OrderedFrame };
 /// Transfers install fixed caches without reading descriptors or either stack.
 enum class X86LegacyFastSystemProfile : uint8_t { IntelSEP };
 
+/// TF and ICEBP outside transactions, with DR7=0x400 and DEBUGCTL=0. Native
+/// #DB generation clears inactive B0..B3, sets RTM and retains sticky status;
+/// TF additionally sets BS. MOV/POP SS suppresses its own single-step trap.
+/// External debug causes, hardware watchpoints and task traps are not inferred.
+enum class X86LegacyDebugProfile : uint8_t { InstructionStep };
+
 struct X86LegacyExecutionOptions {
   X86LegacySegmentExecutionOptions Segments;
   std::optional<X86LegacyEventProfile> Events;
@@ -190,6 +206,7 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacyStringProfile> Strings;
   std::optional<X86PortIOBinding> PortIO;
   std::optional<X86LegacyFarTransferProfile> FarTransfers;
+  std::optional<X86LegacyDebugProfile> Debug;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -282,8 +299,9 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// success, commits fallthrough/branch state, clears RF and advances SS/STI
 /// inhibition. Changed code returns CodeChanged at the first mismatch.
 /// Unimplemented or malformed instructions return Error, never a synthesized
-/// #UD or NOP. TF stepping and hardware debug event production are not supplied
-/// here. Returns stop at their destination, preserve RF restored by IRETD, and
+/// #UD or NOP. The explicit Debug binding supplies instruction-entry TF
+/// sampling and TF/ICEBP DR6 causes; hardware debug producers remain external.
+/// Returns stop at their destination, preserve RF restored by IRETD, and
 /// end SS/STI inhibition. IRET unblocks NMI after fetch, including on a later
 /// fault; RETF preserves NMI blocking.
 llvm::Expected<X86LegacyExecutionResult>
