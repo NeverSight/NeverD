@@ -99,6 +99,11 @@ add_neverd_unittest(NeverDLowUndefinedDigestTests
   LINK_COMPONENTS IRLowValidation
 )
 
+add_neverd_unittest(NeverDInstructionRelocationsTests
+  InstructionRelocationsTests.cpp
+  LINK_COMPONENTS Decode Loader
+)
+
 add_neverd_unittest(NeverDStringScanTests
   StringScanTests.cpp
   LINK_COMPONENTS Support

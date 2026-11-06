@@ -3,6 +3,9 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Select authenticated relocation fields within one decoded instruction.
+//===----------------------------------------------------------------------===//
 
 #include "neverd/decode/InstructionRelocations.h"
 
@@ -22,6 +25,11 @@ InstructionRelocations instructionRelocations(const BinaryImage &Img,
   auto selectRelocatedOperand =
       [&](const std::map<va_t, RelocatedAddressField> &Occurrences,
           ConstantAddressProvenance Provenance) {
+        // Most code does not intersect image-wide relocation inventories.
+        // The tree retains its extrema; a disjoint range needs no search.
+        if (Occurrences.empty() || Next <= Occurrences.begin()->first ||
+            Cur > Occurrences.rbegin()->first)
+          return;
         auto It = Occurrences.lower_bound(Cur);
         for (; It != Occurrences.end() && It->first < Next; ++It) {
           va_t TargetVA = It->second.TargetVA;

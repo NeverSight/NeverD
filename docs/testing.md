@@ -15,6 +15,15 @@ lifetime. A userspace IRQ must wait for KVM's injection window: an immediate
 `KVM_INTERRUPT` while IF=0 is not a valid pending-event oracle.
 See [the generated execution contract](x86-paged-execution.md).
 
+`NeverDInstructionRelocationsTests` checks address-field selection against an
+independent linear membership oracle on x86, x64, ARM and AArch64 metadata in
+COFF, ELF and Mach-O. It covers disjoint and touching ranges, included first
+and last records, zero/wrapping extents, physical field widths, mutation of
+tree extrema, invalid owners and instruction-end relative adjustments. It
+does not execute instructions. The existing
+`X86_32_FunctionDiscovery.ANarrowLoadBaseAmongCodeIsData` check separately
+decodes original bytes to retain narrow-memory data provenance.
+
 `X64PagedSseTest.*` in `NeverDX64ContinuationExportTests` is safe for static-only
 qualification: it compiles actual HighC/LLVM-to-C vector bodies at O0/O2 and
 asks LLVM to prove value, full-state preservation, single-16-byte operand and

@@ -3808,6 +3808,12 @@ yet a load narrower than a pointer cannot read a code pointer: such a base is
 data among the code, an index table, not a code address
 (`instructionRelocations`, `addFixedImageDisplacement`). The pointer-wide
 jump table beside it stays a code address.
+The shared instruction-relocation selector checks each address inventory's
+current tree extrema before searching it. An empty inventory or a disjoint
+instruction range needs no tree traversal. Intersecting ranges retain the
+same half-open field-start selection, target-owner checks and instruction-end
+relative adjustment on every architecture and format. No cached range or
+mutation invalidation is introduced.
 The jump-table resolver shares complete guest-address COPY/ZEXT tracing across
 ordinary, unscaled and two-level loads. Resolver lane projection retains an
 existing exact address when a wider internal container supplies the complete
