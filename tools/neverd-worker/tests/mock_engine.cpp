@@ -502,6 +502,25 @@ int neverd_session_analyze(neverd_session_t s) {
 const char *neverd_session_file_path(neverd_session_t s) {
   return copy(session(s)->path);
 }
+// The fixtures with a project to keep renders in.
+const char *neverd_project_json(neverd_session_t s) {
+  const auto &path = session(s)->path;
+  return copy(path.find("render-store") == std::string::npos
+                  ? std::string()
+                  : Json{{"folder", path + ".neverd"}}.dump());
+}
+// Names files here; nothing compares it with a real SHA-256.
+const char *neverd_sha256_hex(const unsigned char *data, size_t size) {
+  std::uint64_t hash = 0xcbf29ce484222325ULL;
+  char text[17];
+  for (size_t index = 0; index != size; ++index) {
+    hash ^= data[index];
+    hash *= 0x100000001b3ULL;
+  }
+  std::snprintf(text, sizeof(text), "%016llx",
+                static_cast<unsigned long long>(hash));
+  return copy(text);
+}
 const char *neverd_session_arch_name(neverd_session_t s) {
   if (session(s)->path.ends_with("source-cache-evm.bin"))
     return copy("evm");
@@ -2112,6 +2131,11 @@ static int prepareMockFunction(neverd_session_t s, neverd_va_t address) {
     if (address == Base + 16 &&
         session(s)->path.ends_with("source-export-fail.bin")) {
       session(s)->error = "fixture export preparation failed";
+      return 0;
+    }
+    if (address == Base + 16 &&
+        session(s)->path.find("render-fails") != std::string::npos) {
+      session(s)->error = "fixture render failure";
       return 0;
     }
     if (address == Base + 16 && session(s)->path.ends_with("source-export.bin"))

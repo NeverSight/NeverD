@@ -1,6 +1,7 @@
 #pragma once
 #include "DeferredRelease.h"
 #include "Protocol.h"
+#include "RenderStore.h"
 #include "ResourceLimits.h"
 
 #include "neverd/sdk/NeverDCAPISession.h"
@@ -208,7 +209,8 @@ private:
     Preparing,
     Solving,
     Ready,
-    Unavailable
+    Unavailable,
+    Deferred
   };
   SummaryState summaryState_ = SummaryState::Off;
   /// Whether the restore asked for the job, which a change to the project
@@ -233,7 +235,9 @@ private:
   /// pages in idle time, once its summaries and read-ahead are done, smallest
   /// function first (EngineRenderAhead.cpp).  namedView builds a first visit's
   /// document from them as it builds a later visit's from a kept document's.
-  /// They have a kept document's lifetime: forgetNamedViews drops them.
+  /// They have a kept document's lifetime: forgetNamedViews drops them.  What
+  /// the job renders also goes to renderStore_, for later sessions over the
+  /// same inputs, and a function kept there is not kept here.
   enum class RenderAheadState { Off, Pending, Done, Full };
   bool renderAheadRequested_ = false;
   RenderAheadState renderAheadState_ = RenderAheadState::Off;
@@ -247,6 +251,27 @@ private:
   std::size_t renderAheadBytes_ = 0, renderAheadRawBytes_ = 0;
   /// Compact engine pages by namedView's source key.
   std::unordered_map<std::string, std::vector<std::string>> renderedAhead_;
+  std::unique_ptr<RenderStore> renderStore_;
+  /// The compact bytes in renderedAhead_, which count against the job's limit
+  /// with the store's.
+  std::size_t renderAheadHeldBytes_ = 0;
+  /// The job started over after it began: this session's engine no longer
+  /// reads as a new session's does, whatever the store keeps for those.
+  bool renderStoreStale_ = false;
+  /// Earlier sessions rendered every function, so the summaries and read-ahead
+  /// wait for a request that asks for more than their renders answer.
+  bool summariesDeferred_ = false;
+  /// The function a view last asked for that no session could render: asking
+  /// the engine again reports the same, and does not need the summaries.
+  std::optional<std::uint64_t> renderFailedAddress_;
+  RenderStore *liveRenderStore() const {
+    return renderStoreStale_ ? nullptr : renderStore_.get();
+  }
+  /// Opens the store a restore asks for by \p mode: "read", "write" or empty.
+  void openRenderStore(const std::string &mode);
+  /// What renders depend on: browseCacheIdentity without a local name's edits,
+  /// which redecorate pages and leave them as they are.
+  Json renderStoreIdentity();
   /// When the last request was answered.
   std::chrono::steady_clock::time_point lastRequest_{};
   /// The function a request last prepared and how long that took.
@@ -257,10 +282,22 @@ private:
   /// False while the step only waits for the reader to pause.
   bool renderAheadStep();
   void renderFunctionAhead(std::uint64_t address);
+  /// Whether what the engine renders now reads as it will from here on.
+  bool rendersSettled() const;
+  /// Keeps the engine pages of a view a request rendered, once they read as a
+  /// render of the job does: a function the job leaves to its visit, or has not
+  /// reached, costs the next session nothing.
+  void keepVisitedRender(std::uint64_t address,
+                         const std::string &representation,
+                         const std::string &optionText,
+                         const std::vector<std::string> &pages);
   void restartRenderAhead();
   Json renderAheadJson() const;
-  /// The pages kept under \p sourceKey, or none.
-  std::vector<std::string> renderedAheadPages(const std::string &sourceKey);
+  /// The pages kept of the view \p sourceKey names, or none.
+  std::vector<std::string> renderedAheadPages(std::uint64_t address,
+                                              const std::string &representation,
+                                              const std::string &optionText,
+                                              const std::string &sourceKey);
   bool summaryWorkPending() const;
   void restartSummaries();
   /// False where the step only waits on discovery (summaryJobStep).

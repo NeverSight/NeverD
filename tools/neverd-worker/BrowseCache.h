@@ -40,6 +40,8 @@ public:
   void flush() noexcept;
   Json stats() const;
   static std::string digest(std::string_view bytes);
+  /// Names the engine and worker files this process runs.
+  static const std::string &runtimeIdentity();
 
 private:
   bool initialize();

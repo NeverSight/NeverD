@@ -7222,6 +7222,57 @@ private slots:
     QCOMPARE(pages, before + 1);
   }
 
+  void pseudocodeViewReadsWhatAnEarlierSessionRendered() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-store-source-cache.bin"));
+    // Asking for C goes to the engine, which reports the pages it has answered.
+    const auto readPages = [](Session &session, quint64 address) {
+      QObject owner;
+      int pages = 0;
+      const QJsonObject function{{"address", hexAddress(address)},
+                                 {"representation", "c"}};
+      session.analysisQueries(function, &owner)
+          .subscribe({"decompile", function}, &owner,
+                     [&](const QJsonObject &response) {
+                       pages = response.value("payload")
+                                   .toObject()
+                                   .value("fixture_pages")
+                                   .toInt(-1);
+                     });
+      return QTest::qWaitFor([&] { return pages != 0; }, OpenTimeoutMs) ? pages
+                                                                        : -1;
+    };
+    QString rendered;
+    {
+      Session session(QString::fromLocal8Bit(TEST_WORKER));
+      session.open(path);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+      QVERIFY(readPages(session, Base) > 0);
+      QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                                QStringLiteral("done"), NativeOpenTimeoutMs);
+      CodeText code(session);
+      code.resize(900, 700);
+      code.show();
+      code.load(Base + 32, QStringLiteral("source"));
+      QTRY_VERIFY_WITH_TIMEOUT(code.complete(), NativeOpenTimeoutMs);
+      rendered = code.allText();
+      QVERIFY(!rendered.isEmpty());
+    }
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(path);
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    CodeText code(session);
+    code.resize(900, 700);
+    code.show();
+    code.load(Base + 32, QStringLiteral("source"));
+    QTRY_VERIFY_WITH_TIMEOUT(code.complete(), NativeOpenTimeoutMs);
+    QCOMPARE(code.allText(), rendered);
+    // The first page this session's engine writes is for this request.
+    QCOMPARE(readPages(session, Base + 48), 1);
+  }
+
   void analysisReplicaRendersNothingAheadForViewsOpeningUnderOptions() {
     // Such views read none of the job's renders.
     const auto forget = qScopeGuard(

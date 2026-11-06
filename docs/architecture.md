@@ -4454,6 +4454,15 @@ unknown size to their visits. Like a kept document, a render reads what the engi
 `BinaryImage::CodeRefTargets` is additive, so an address a function rendered
 earlier took, such as a funclet's `_local_unwind` continuation in its parent, can
 make the render differ from a first visit to that function in a new session.
+What the job renders also goes to the project's `local/render-ahead`
+(`RenderStore.cpp`), one folder for each set of inputs and one append-only file for
+each session, so a later session over the same inputs reads it from its first
+request, renders only what no session reached, and, once a job has reached every
+function, leaves the summaries and read-ahead until a request needs more than
+those renders answer. The inputs are the browse cache's identity without a local
+name's edits, which redecorate pages and leave them as they are. A session whose
+job starts over after it began no longer reads as a new session does, and stops
+reading and adding to the store.
 The GUI owner no longer requests that pipeline warmup: source/CFG views use
 separate analysis sessions and cannot consume the owner's pipeline cache.
 With idle analysis enabled, native images with 4096–65536 functions and at most

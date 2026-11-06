@@ -197,6 +197,14 @@ void AnalysisService::receive(const QJsonObject &message) {
             .toArray()
             .contains(QStringLiteral("render_ahead")))
       restore["render_ahead"] = true;
+    // Any replica reads what earlier sessions rendered; the one that renders
+    // adds to it.
+    if (message.value("capabilities")
+            .toArray()
+            .contains(QStringLiteral("render_store")))
+      restore["render_store"] = restore.contains(QStringLiteral("render_ahead"))
+                                    ? QStringLiteral("write")
+                                    : QStringLiteral("read");
     restore_ = client_.request(QStringLiteral("analysis_restore"), restore);
     return;
   }

@@ -1246,8 +1246,9 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     original = Json::parse(reused->original);
   // A first visit to a function rendered ahead reads those pages.
   const std::vector<std::string> renderedPages =
-      reused || recovery ? std::vector<std::string>()
-                         : renderedAheadPages(sourceKey);
+      reused || recovery
+          ? std::vector<std::string>()
+          : renderedAheadPages(address, representation, optionText, sourceKey);
   // The engine's pages of the same source build the document again as they
   // built it the first time.
   const std::vector<std::string> *replay =
@@ -1374,6 +1375,8 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     if (representation == "source" && backendRepresentation == "c")
       full["dialect"] = "c";
     if (sourceView && !enginePages.empty()) {
+      if (!replay && backendRepresentation == representation)
+        keepVisitedRender(address, representation, optionText, enginePages);
       document->enginePages = std::move(enginePages);
       document->engineRepresentation = backendRepresentation;
     } else if (sourceView)
@@ -1685,6 +1688,13 @@ void Engine::analyze() {
 }
 void Engine::prepareFunction(std::uint64_t address,
                              std::string_view representation) {
+  // Kept renders do not answer this request.  A graph reads the function's
+  // LowIR, which no summary changes.
+  if (summariesDeferred_ && representation != "cfg" &&
+      renderFailedAddress_ != address) {
+    summariesDeferred_ = false;
+    restartSummaries();
+  }
   if (analyzed_ || preparedFunction_ == address)
     return;
   // VM images analyze the whole program as one unit.
@@ -1894,6 +1904,10 @@ bool Engine::summaryJobStep() {
       return false;
     summaryDiscovered_ = true;
   }
+  if (summariesDeferred_) {
+    summaryState_ = SummaryState::Deferred;
+    return true;
+  }
   // The solve reads each function's facts, which a page at a time keeps
   // each step as short as warming's.
   summaryState_ = SummaryState::Preparing;
@@ -1947,7 +1961,8 @@ void Engine::forgetDecompiledViews() {
 }
 Json Engine::summaryJson() const {
   static constexpr const char *Names[] = {"off",     "pending", "preparing",
-                                          "solving", "ready",   "unavailable"};
+                                          "solving", "ready",   "unavailable",
+                                          "deferred"};
   Json state = {{"state", Names[static_cast<int>(summaryState_)]}};
   if (!summaryError_.empty())
     state["error"] = summaryError_;
@@ -2015,7 +2030,7 @@ Json Engine::backgroundState() const {
   state["warm"] = warmJson();
   if (summaryState_ != SummaryState::Off)
     state["call_summaries"] = summaryJson();
-  if (renderAheadState_ != RenderAheadState::Off)
+  if (renderAheadState_ != RenderAheadState::Off || renderStore_)
     state["render_ahead"] = renderAheadJson();
   return state;
 }
@@ -2529,8 +2544,10 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
   restoredSnapshot_ = snapshot;
   restoredSnapshot_.erase("call_summaries");
   restoredSnapshot_.erase("render_ahead");
+  restoredSnapshot_.erase("render_store");
   summaryJob_ = snapshot.value("call_summaries", false);
   renderAheadRequested_ = snapshot.value("render_ahead", false);
+  openRenderStore(snapshot.value("render_store", std::string()));
   restartSummaries();
   restartRenderAhead();
   return metadata();

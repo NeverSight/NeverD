@@ -6080,6 +6080,14 @@ kept documents forgets them, requests hold the job off, an expensive prepared
 function stays prepared, the smallest function goes first, and the largest and
 one of unknown size are left to their visits. `NeverDWorkerPageCodec` round-trips the compact page form,
 including matches that overlap their output, under arbitrary damage.
+`NeverDWorkerRenderStore` reopens a project: the second session's first requests
+read as the first session's did with no engine page written, a complete store
+leaves the summaries deferred until a request the store does not answer, a graph
+does not start them, a local rename keeps the store, a comment and another build
+of the worker start over, a job that starts over stops reading and adding, a
+record cut short is rendered again alone, and a damaged one reads the engine.
+`WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
+through a real view.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and

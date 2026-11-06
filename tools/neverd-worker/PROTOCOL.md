@@ -953,8 +953,24 @@ A render reads what the engine knew when it ran, as a kept document does: code
 addresses the functions rendered before it published can make it differ from a
 first visit to that function in a new session. Heartbeats report it as
 `background.render_ahead`: `{state, total, rendered, failed, hits, raw_bytes,
-bytes}` with `pending`, `done` or `full`. A function the job failed to render, or
-has not reached, is decompiled as usual.
+bytes, kept}` with `pending`, `done` or `full`. A function the job failed to
+render, or has not reached, is decompiled as usual.
+
+It also takes `render_store`, `read` or `write`, which the GUI gives every replica
+of a worker that advertises `render_store`: `write` to the one that renders ahead,
+and `read` to the others. A replica then
+reads what earlier sessions rendered over the same inputs, from the project's
+`local/render-ahead`, from its first request on, and `write` adds what its own job
+renders. `kept` counts the store's records. The inputs are the engine and worker
+files, the snapshot apart from local names, the project's shared files apart from
+`code.json`, and the debug files' stamps; anything else starts a store of its
+own, and the first render under one removes the others. A session whose job
+starts over after it began neither reads nor adds to the store from then on, since
+its engine no longer reads as a new session's does. Once a job has reached every
+function, a later session's `call_summaries` stops at `deferred` after discovery,
+and a `decompile` or IR view the store does not answer starts the rest. A graph
+does not, since it reads no summary. A damaged or cut-short record is a render
+not kept; removing the folder only costs the renders.
 
 Source pages with edit metadata carry `code_names`, half-open UTF-8 spans in
 the complete displayed document. An address target has `kind:"address"`,
