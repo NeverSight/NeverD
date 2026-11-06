@@ -3098,7 +3098,8 @@ and va_list fallback types apply only when the library has no declaration.
 Declarators with no added pointer, array or function modifiers reuse the inner
 composition directly. Composed declarators take ownership of their modifier
 lists and nested callable, keeping the same binding order and qualifiers
-without copying those temporary structures.
+without copying those temporary structures. Each composition is applied once,
+so its freshly parsed parameter lists become the resulting functions directly.
 
 `importPDBTypes` reads every named record and enumeration of a PDB's TPI
 stream. MSVC flattens anonymous members into their parent, so
