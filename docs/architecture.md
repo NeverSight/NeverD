@@ -7786,8 +7786,13 @@ values beyond that ceiling cannot be silently discarded. After adding
 destinations, the resolver must replay the proof on the expanded graph; a
 newly reached backedge cannot reuse an entry-only domain. A complete
 single-consumer finite proof is not
-widened or vetoed by a weaker mask search. Module-wide storage mutation checks
-still run before source publication.
+widened or vetoed by a weaker mask search. When a durable relative-table
+self replay cannot express the selector as a mask transform, it reuses the
+exact finite occurrence query on the complete current graph. The prior storage
+certificate supplies only the query ceiling. Unknown transfers or reentry,
+unbounded values and incomplete evidence cannot authorize coordinates; normal
+mask proofs retain their existing path and cost. Module-wide storage mutation
+checks still run before source publication.
 Structural modulo recipes retain x86's complete double-width dividend. The
 symbolic adapter admits 128-bit words only for these bounded structural queries;
 ordinary SAT and finite-set symbolization retain their word-width limit.
