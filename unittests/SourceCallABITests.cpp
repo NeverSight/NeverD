@@ -210,12 +210,16 @@ TEST(SourceCallABI, DarwinVariadicValuesRetainPromotionAndIndirectRefusals) {
     EXPECT_FALSE(
         assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error));
   }
-  for (const auto Type :
-       {NdType::makeInt(kDarwinWideBytes), NdType::makeStruct({Float, Float})})
+  for (const auto Type : {NdType::makeInt(kDarwinWideBytes),
+                          NdType::makeStruct({Float, Float})}) {
+    auto DarwinX64 = contract({Word, Type}, 1);
+    EXPECT_FALSE(
+        assignAnalystCallABI(DarwinX64, Arch::X64, BinaryFormat::MachO, Error));
     for (const auto Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
       auto Hint = contract({Word, Type}, 1);
       EXPECT_FALSE(assignAnalystCallABI(Hint, Arch::AArch64, Format, Error));
     }
+  }
 }
 
 TEST(SourceCallABI, DarwinEmptyVariadicTailKeepsTheFixedValueContract) {
