@@ -9112,7 +9112,7 @@ TEST_F(SessionCAPITest, OnlyARequestedRestrictionOutlivesALoad) {
   neverd_session_restrict_function(Session, Entry);
   ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
   EXPECT_EQ(State.OnlyFunctionEntries, std::set<neverd::va_t>{Entry});
-  State.selectFunction(Entry + 1);
+  neverd::sdk::SessionTestAccess::selectFunction(State, Entry + 1);
   ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
   EXPECT_EQ(State.OnlyFunctionEntries, std::set<neverd::va_t>{Entry});
 
@@ -9911,7 +9911,7 @@ TEST_F(SessionCAPITest, NativeIRQueriesPrepareOnlyTheirRequestedFunction) {
         // An explicitly completed whole-image analysis remains authoritative.
         Load();
         auto &Whole = *neverd::sdk::toSession(Session);
-        ASSERT_TRUE(Whole.ensurePipeline());
+        ASSERT_EQ(neverd_session_analyze(Session), 1);
         ASSERT_TRUE(Whole.OnlyFunctionEntries.empty());
         const auto WholeCount = Whole.PipeResult.LowFuncs.size();
         ASSERT_GT(WholeCount, 1u);
