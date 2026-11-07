@@ -425,7 +425,7 @@
       "binary_sha256": "532b2c75f44749d4c6db3e5f578a76488bfcd7a261289a89675d2ced24a0bd3c",
       "version_output": "qemu-aarch64 version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)\nCopyright (c) 2003-2025 Fabrice Bellard and the QEMU Project developers\n",
       "environment": {
-        "PATH": "/mnt/data/neverd-debug-function-integration-20261106/qemu-package/runtime/usr/bin:/home/ad/.codex/tmp/arg0/codex-arg0BFws8v:/home/ad/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/home/ad/tools/ida94:/home/ad/.grok/bin:/home/ad/bin:/home/ad/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin:/home/ad/tools/ida94/tools/teams:/home/ad/tools/ida94/tools/teams:/home/ad/tools/ida94/tools/teams:/home/ad/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/usr/lib/chatgpt/resources"
+        "PATH": "/mnt/data/neverd-debug-function-integration-20261106/qemu-package/runtime/usr/bin:<user-home>/.codex/tmp/arg0/codex-arg0BFws8v:<user-home>/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:<user-home>/tools/ida94:<user-home>/.grok/bin:<user-home>/bin:<user-home>/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin:<user-home>/tools/ida94/tools/teams:<user-home>/tools/ida94/tools/teams:<user-home>/tools/ida94/tools/teams:<user-home>/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/usr/lib/chatgpt/resources"
       },
       "command": [
         "python3",
