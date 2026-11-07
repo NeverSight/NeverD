@@ -51,30 +51,6 @@ bool isAddressAddOp(const neverd::MedOp &Op) {
   return Op.Inputs[0].isConst() != Op.Inputs[1].isConst();
 }
 
-const neverd::MedOp *uniqueSsaDef(const neverd::MedFunc *Func,
-                                  const neverd::MedVar &V) {
-  if (!Func || V.Id < 0)
-    return nullptr;
-  const neverd::MedOp *Def = nullptr;
-  for (const auto &Blk : Func->Blocks)
-    for (const auto &Op : Blk.Ops)
-      if (Op.Output.Id == V.Id && Op.Output.SSAVer == V.SSAVer) {
-        if (Def)
-          return nullptr;
-        Def = &Op;
-      }
-  return Def;
-}
-
-bool isLeaLikeCallSetup(const neverd::MedFunc *Func, const neverd::MedOp &Op) {
-  if (isAddressAddOp(Op))
-    return true;
-  if (Op.Opcode != neverd::NdOp::COPY || Op.NumInputs < 1)
-    return false;
-  const neverd::MedOp *Src = uniqueSsaDef(Func, Op.Inputs[0]);
-  return Src && isAddressAddOp(*Src);
-}
-
 } // namespace
 
 namespace neverd {
@@ -435,13 +411,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
   // reaching it is: a loop's running value is, but not one whose entry edge
   // brings the register's incoming value.
   auto JoinOf = [&](const MedVar &Arg) -> const PhiNode * {
-    if (!CurMed)
-      return nullptr;
-    for (const MedBlock &Block : CurMed->Blocks)
-      for (const PhiNode &Phi : Block.Phis)
-        if (varKey(Phi.Output) == varKey(Arg))
-          return &Phi;
-    return nullptr;
+    return uniqueMedPhi(Arg);
   };
   auto ParameterRegister = [&](const MedVar &Arg) {
     return Arg.Kind == MedVar::Reg && CurMed &&
@@ -847,6 +817,8 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
   auto opToExpr = [this](const MedOp &Op) { return medOpToExpr(Op); };
   auto argIdx = [this](uint64_t RegOff) { return regToArgIdx(RegOff); };
   auto paramIdx = [this](const MedVar &V) { return abiParamIndex(V); };
+  auto uniqueDef = [this](const MedVar &V) { return uniqueMedDefinition(V); };
+  auto uniquePhi = [this](const MedVar &V) { return uniqueMedPhi(V); };
   call_args_detail::CallArgContext Ctx{Found,
                                        MaxArgs,
                                        ParamRegs,
@@ -859,7 +831,9 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                                        paramIdx,
                                        reachingAtEntry,
                                        exprFromWindowValue,
-                                       takePrecedingSetup};
+                                       takePrecedingSetup,
+                                       uniqueDef,
+                                       uniquePhi};
 
   // A block boundary (an EH state change, a split `cmp/jnz`) can isolate the
   // CALL from setup at the end of its single predecessor; the convention
@@ -1039,15 +1013,9 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
   auto uniqueLoadDef = [&](const MedVar &V) -> const MedOp * {
     if (!CurMed || V.Id < 0)
       return nullptr;
-    const MedOp *UniqueLoad = nullptr;
-    for (const auto &Blk : CurMed->Blocks)
-      for (const auto &Op : Blk.Ops)
-        if (Op.Opcode == NdOp::LOAD && sameSsaDef(Op.Output, V)) {
-          if (UniqueLoad)
-            return nullptr;
-          UniqueLoad = &Op;
-        }
-    return UniqueLoad;
+    const MedOp *Definition = uniqueMedDefinition(V);
+    return Definition && Definition->Opcode == NdOp::LOAD ? Definition
+                                                          : nullptr;
   };
   std::function<ExprPtr(ExprPtr, int)> inlineUniqueLoadVars =
       [&](ExprPtr E, int Depth) -> ExprPtr {
@@ -1801,8 +1769,9 @@ MedToHighConverter::untouchedParamRegister(uint64_t RegOff) const {
     for (const auto &Op : Blk.Ops) {
       if (Writes(Op.Output))
         return std::nullopt;
-      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
-        ++Calls;
+      if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+          ++Calls > 1)
+        return std::nullopt;
     }
   }
   if (Calls != 1)
@@ -1826,7 +1795,7 @@ bool MedToHighConverter::reachingRegAtBlockEntry(const MedBlock &B,
 
 bool MedToHighConverter::isCallArgSetupDef(const MedBlock &CallBlk,
                                            const MedVar &LiveIn,
-                                           uint64_t RegOff) const {
+                                           uint64_t RegOff) {
   if (!CurMed)
     return false;
   for (int PredId : CallBlk.Preds) {
@@ -1856,8 +1825,13 @@ bool MedToHighConverter::isCallArgSetupDef(const MedBlock &CallBlk,
   }
   // `lea rcx` before `ja` / `test; jz` sits in a dominating ancestor, not
   // the immediate pred. Leftover r9 from an earlier Find is not a lea.
-  const MedOp *Unique = uniqueSsaDef(CurMed, LiveIn);
-  if (!Unique || !isLeaLikeCallSetup(CurMed, *Unique))
+  const MedOp *Unique = uniqueMedDefinition(LiveIn);
+  if (!Unique)
+    return false;
+  const MedOp *AddressSetup = Unique;
+  if (Unique->Opcode == NdOp::COPY && Unique->NumInputs >= 1)
+    AddressSetup = uniqueMedDefinition(Unique->Inputs[0]);
+  if (!AddressSetup || !isAddressAddOp(*AddressSetup))
     return false;
   if (Unique->Opcode == NdOp::COPY && Unique->NumInputs >= 1 &&
       Unique->Inputs[0].Kind == MedVar::Reg &&

@@ -61,6 +61,11 @@ public:
     return Found == Definitions.end() ? nullptr : Found->second;
   }
 
+  const PhiNode *uniquePhi(const MedVar &Value) const {
+    const auto Found = Phis.find(identity(Value));
+    return Found == Phis.end() ? nullptr : Found->second;
+  }
+
   std::optional<int64_t> offset(const MedVar &Value) {
     // Only an offset from the incoming stack pointer is an entry offset.
     const auto At = coordinate(Value);

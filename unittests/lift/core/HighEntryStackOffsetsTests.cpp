@@ -560,3 +560,34 @@ TEST(HighEntryStackOffsets, ReliableRecursiveDomainMatchesEveryQueryOrder) {
       EXPECT_EQ(Offsets.offset(V), legacyOffset(F, V)) << Seed << ':' << V.Id;
   }
 }
+
+TEST(HighEntryStackOffsets, SharedIndexesKeepDefinitionAndPhiIdentities) {
+  Fixture F;
+  const auto Value = F.add(1, F.SP, 8);
+  const auto Join = F.phi(2, {Value, Value});
+  const auto Ambiguous = F.phi(3, {Value, Value});
+  F.phi(3, {F.SP, F.SP});
+  auto Register = Value;
+  Register.Kind = MedVar::Reg;
+  Register.RegOff = getTargetRegInfo(F.Architecture).IntReturnReg;
+  MedOp Copy;
+  Copy.Opcode = NdOp::COPY;
+  Copy.Output = Register;
+  Copy.addInput(F.SP);
+  F.Function.Blocks.front().Ops.push_back(Copy);
+  {
+    HighEntryStackOffsets Index(F.Function, F.Architecture);
+    ASSERT_NE(Index.uniqueDefinition(Value), nullptr);
+    EXPECT_EQ(Index.uniqueDefinition(Value)->Opcode, NdOp::INT_ADD);
+    ASSERT_NE(Index.uniqueDefinition(Register), nullptr);
+    EXPECT_EQ(Index.uniqueDefinition(Register)->Opcode, NdOp::COPY);
+    ASSERT_NE(Index.uniquePhi(Join), nullptr);
+    EXPECT_EQ(Index.uniquePhi(Join)->Args.size(), 2u);
+    EXPECT_EQ(Index.uniquePhi(Ambiguous), nullptr);
+    EXPECT_EQ(Index.uniqueDefinition(Join), nullptr);
+  }
+  // A new conversion of the same object must see its new contents.
+  F.Function.Blocks.front().Phis.clear();
+  HighEntryStackOffsets Next(F.Function, F.Architecture);
+  EXPECT_EQ(Next.uniquePhi(Join), nullptr);
+}

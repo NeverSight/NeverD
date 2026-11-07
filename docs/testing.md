@@ -21411,3 +21411,5 @@ global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
 
 `NeverDHighCallParameterForwardingTests` checks Win64 argument value identity. Full-width copies and agreeing PHIs may name an incoming parameter; masks, shifts and narrowing copies must retain their computed argument.
+
+`HighEntryStackOffsets.SharedIndexesKeepDefinitionAndPhiIdentities` checks register/temporary identities, ambiguous PHIs and a new conversion after mutation. Win64 forwarding checks use the same converter-owned definition and PHI indexes as production calls.
