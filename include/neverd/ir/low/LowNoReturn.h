@@ -22,6 +22,19 @@ inline bool isUnconditionalNoReturn(const LowInstructionBoundary &Insn) {
                                        LowInstructionControlFlag::Conditional);
 }
 
+/// Whether a handler may resume a function where its graph has no edge to show
+/// it. A registration frame without a complete proof has none: display recovery
+/// defers the proof and those edges together. A frame with no scope or try
+/// block only runs cleanups, which continue unwinding.
+inline bool hasUnmodeledRegistrationResumption(
+    const std::optional<ExceptionFunction> &Metadata,
+    const std::optional<RegistrationStateAnalysis> &States) {
+  if (!States || States->Complete || !Metadata || !Metadata->Registration)
+    return false;
+  return !Metadata->Registration->Scopes.empty() ||
+         (Metadata->Cxx && !Metadata->Cxx->TryBlocks.empty());
+}
+
 bool isArchitecturalNoReturn(const LowOp &Op);
 inline bool isArchitecturalNoReturn(const LowOp &Op, Arch) {
   return isArchitecturalNoReturn(Op);

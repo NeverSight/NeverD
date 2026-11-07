@@ -1144,6 +1144,11 @@ HighCWriter::dispatchFrame(va_t Entry) const {
 }
 
 void HighCWriter::writeFunction(const HighFunc &Func) {
+  if (const auto Unbacked = UnbackedEscapes.find(&Func);
+      Unbacked != UnbackedEscapes.end())
+    throw std::invalid_argument("escaped image address 0x" +
+                                llvm::utohexstr(Unbacked->second) +
+                                " has no materializable storage extent");
   const auto SourceBody = sourceBodyOrigin(Func);
   llvm::SaveAndRestore<CSourceMap *> SourceMapScope(
       Opts.SourceMap, SourceBody ? nullptr : Opts.SourceMap);
@@ -3404,7 +3409,7 @@ void HighCWriter::foldSignedJleConds(std::vector<HighStmt> &Stmts) {
     }
     return false;
   };
-  auto AsSignedLtZero = [&](const HighExpr *Op, ExprPtr &X) {
+  auto AsSignedLtZero = [&](const HighExpr *Op, ExprPtr &X, uint16_t &Bytes) {
     Op = forwardedExpr(Op);
     Op = unwrapIntegerView(Op);
     if (Op && Op->Kind == ExprKind::BinOp && Op->Op == NdOp::INT_NOTEQUAL &&
@@ -3423,7 +3428,8 @@ void HighCWriter::foldSignedJleConds(std::vector<HighStmt> &Stmts) {
         !Op->Operands[0])
       return false;
     X = Op->Operands[0];
-    return true;
+    Bytes = zeroTestBytes(*Op->Operands[0], *Op->Operands[1]);
+    return Bytes != 0;
   };
   std::function<void(ExprPtr &)> Fold = [&](ExprPtr &E) {
     if (!E)
@@ -3441,16 +3447,17 @@ void HighCWriter::foldSignedJleConds(std::vector<HighStmt> &Stmts) {
       return;
     ExprPtr XEq;
     ExprPtr XLt;
+    uint16_t Bytes = 0;
     const bool LeftEq = AsEqZero(Inner->Operands[0].get(), XEq) &&
-                        AsSignedLtZero(Inner->Operands[1].get(), XLt);
+                        AsSignedLtZero(Inner->Operands[1].get(), XLt, Bytes);
     const bool RightEq = AsEqZero(Inner->Operands[1].get(), XEq) &&
-                         AsSignedLtZero(Inner->Operands[0].get(), XLt);
-    if (!(LeftEq || RightEq) || !SameScalar(XEq.get(), XLt.get()))
+                         AsSignedLtZero(Inner->Operands[0].get(), XLt, Bytes);
+    if (!(LeftEq || RightEq) || !SameScalar(XEq.get(), XLt.get()) ||
+        !readsSameBytes(Inner->Operands[0].get(), Inner->Operands[1].get()))
       return;
-    const uint16_t Sz = XEq->Type && XEq->Type->Size ? XEq->Type->Size : 4;
     E = HighExpr::makeUnary(NdOp::BOOL_NOT,
-                            HighExpr::makeBinop(NdOp::INT_SLESSEQUAL, XEq,
-                                                HighExpr::makeConst(0, Sz)));
+                            HighExpr::makeBinop(NdOp::INT_SLESSEQUAL, XLt,
+                                                HighExpr::makeConst(0, Bytes)));
   };
   std::function<void(std::vector<HighStmt> &)> Walk =
       [&](std::vector<HighStmt> &Body) {

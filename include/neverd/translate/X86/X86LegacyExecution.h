@@ -13,10 +13,12 @@
 #include "neverd/ir/X86/X86DebugRules.h"
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 #include "neverd/ir/X86/X86MpxContext.h"
+#include "neverd/translate/X86/X86EventDeliveryOptions.h"
 #include "neverd/translate/X86/X86LegacySegmentExecution.h"
 #include "neverd/translate/X86/X86PortIO.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 
 #include <array>
@@ -43,24 +45,29 @@ struct X86LegacyEvent {
   X86LegacyEventKind Kind = X86LegacyEventKind::Fault;
 };
 
-/// Accepted event retained across backing stops. Repair backing before resume;
-/// do not edit the architectural state or begin another instruction/event.
+/// Pending event retained across backing or work-budget stops. Repair backing
+/// if necessary before resume; retain architectural state and RAM effects and
+/// do not begin another instruction or accept another external event.
+/// Completed inputs are retained and writes are not replayed: a partial frame
+/// can already have overwritten the descriptor or TSS that selected it.
 struct X86LegacyEventContinuation {
+  struct Access {
+    uint32_t Address = 0;
+    uint8_t Bytes = 0;
+    bool Write = false;
+    uint64_t Value = 0;
+  };
   X86LegacyEvent Event;
   uint32_t FaultEIP = 0;
   uint32_t SavedFlags = 0;
   std::optional<X86MemoryException> LastException;
+  uint8_t DataBreakpoints = 0;
+  bool SoftwareCompleted = false;
+  llvm::SmallVector<Access> CompletedAccesses;
 };
 
-/// Architectural debug status and explicit controls for the instruction-step
-/// binding. ExecuteBreakpoints also owns the four linear-address comparators;
-/// data/I/O watchpoints, GD and DEBUGCTL features require separate producers.
-struct X86LegacyDebugState {
-  uint32_t DR6 = 0xffff0ff0;
-  uint32_t DR7 = 0x400;
-  uint64_t DebugCTL = 0;
-  std::array<uint32_t, 4> DR{};
-};
+/// Debug bank shared with the paged x64 owner, with 32-bit address wrap.
+using X86LegacyDebugState = X86InstructionDebugState<uint32_t>;
 
 struct X86LegacyExecutionState {
   X86LegacySegmentState Core;
@@ -168,7 +175,8 @@ enum class X86LegacyFastSystemProfile : uint8_t { IntelSEP };
 /// Shared legacy/x64 instruction-step and execute-comparator profiles. MOV/POP
 /// SS suppresses its own TF trap and the following instruction breakpoint.
 /// DebugRegisters additionally owns MOV-DR/GD with a bound frame policy.
-/// Data/I/O watchpoints and task traps are not inferred.
+/// Watchpoints additionally owns data/I/O causes and delayed SS state. Task
+/// traps and branch stepping are not inferred.
 using X86LegacyDebugProfile = X86InstructionDebugProfile;
 
 struct X86LegacyExecutionOptions {
@@ -207,10 +215,14 @@ struct X86LegacyExecutionOptions {
   /// zero delivers #DE before publishing AX or flags; AAD base zero is valid.
   std::optional<uint32_t> DecimalUndefinedFlags;
   std::optional<X86LegacyStringProfile> Strings;
+  /// Explicit memory-string debug grouping, shared with paged x64. Required
+  /// for Watchpoints plus REP even at zero count; {} selects one element.
+  std::optional<X86RepeatDebugBinding> RepeatDebug;
   std::optional<X86PortIOBinding> PortIO;
   std::optional<X86LegacyFarTransferProfile> FarTransfers;
   std::optional<X86LegacyDebugProfile> Debug;
   std::optional<X86GeneralDetectFrame> GeneralDetectFrame;
+  X86EventDeliveryOptions EventDelivery;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -223,6 +235,8 @@ enum class X86LegacyExecutionStatus : uint8_t {
   /// One REP element committed; EIP still names the original instruction.
   RepeatContinue,
   DeviceUnavailable,
+  /// Resume PendingEvent; this is a host work boundary, not a CPU exception.
+  EventBudgetExhausted,
 };
 
 struct X86LegacyExecutionResult {
@@ -230,6 +244,7 @@ struct X86LegacyExecutionResult {
   bool InstructionAttempted = false;
   bool InstructionCompleted = false;
   bool EventAccepted = false;
+  bool SoftwareCompleted = false;
   bool DeviceTransferCompleted = false;
   uint8_t PortInputBytesWritten = 0;
   uint8_t DeliveredVector = 0;

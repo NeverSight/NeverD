@@ -11,6 +11,7 @@
 #ifndef NEVERD_UNITTESTS_TRANSLATE_X86_X64PAGEDNATIVECPU_H
 #define NEVERD_UNITTESTS_TRANSLATE_X86_X64PAGEDNATIVECPU_H
 
+#include "X86KVMBacking.h"
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationEvent.h"
@@ -62,6 +63,7 @@ public:
   kvm_sregs Initial{};
   uint8_t PhysicalBits = 0;
   bool SMAP = false;
+  bool PrefaultMemory = false;
   uint8_t InterruptShadow = 0;
   std::optional<kvm_debugregs> DebugRegisters;
   unsigned ReturnCoreType = 0;
@@ -158,7 +160,8 @@ public:
           bool DisableDebugStop = false,
           const neverd::analysis::X64ContinuationEventV1 *Pending = nullptr,
           uint64_t CR4 = 0x20, bool CaptureReturn = false,
-          bool NormalizeReturnBreakpoint = true, bool InjectPending = true) {
+          bool NormalizeReturnBreakpoint = true, bool InjectPending = true,
+          bool CaptureShutdown = false) {
     ASSERT_EQ(Input.size(), Size);
     std::copy(Input.begin(), Input.end(), RAM);
     const auto &Core = State.Core.Core.Core.Core;
@@ -200,6 +203,8 @@ public:
     Flush.cr3 = 0x3f000;
     ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &Flush), 0);
     ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &S), 0);
+    if (PrefaultMemory)
+      ASSERT_NO_FATAL_FAILURE(neverd::test::prefaultX86KVMBacking(CPU, Size));
     kvm_vcpu_events Events{};
     Events.flags = KVM_VCPUEVENT_VALID_NMI_PENDING | KVM_VCPUEVENT_VALID_SHADOW;
     Events.nmi.masked = State.NMIBlocked;
@@ -251,7 +256,8 @@ public:
       ASSERT_NO_FATAL_FAILURE(run());
     }
     ASSERT_TRUE(Run->exit_reason == KVM_EXIT_DEBUG ||
-                Run->exit_reason == KVM_EXIT_HLT)
+                Run->exit_reason == KVM_EXIT_HLT ||
+                (CaptureShutdown && Run->exit_reason == KVM_EXIT_SHUTDOWN))
         << "KVM exit " << Run->exit_reason;
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &R), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &S), 0);

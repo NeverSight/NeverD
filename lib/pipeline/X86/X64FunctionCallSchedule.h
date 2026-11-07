@@ -22,7 +22,8 @@ class raw_ostream;
 
 namespace neverd {
 
-llvm::StringRef x64ScheduledCallParameters(bool PagedMemory, bool CallSite);
+std::string x64ScheduledCallParameters(bool PagedMemory, bool CallSite,
+                                       bool Debug = false);
 
 /// Emit a call argument list. An empty context selects the scheduler itself;
 /// call/resume wrappers additionally receive their retained activation context.

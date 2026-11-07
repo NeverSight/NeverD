@@ -53,6 +53,19 @@ The paged continuation provider retains these bytes with a dedicated projection
 only when its debug bridge is selected, without certifying general LowIR or
 changing native intrinsic emission. Legacy and x64 adapters use that same
 register owner, then the existing event owner clears GD on accepted #DB.
+`X86InstructionDebugProfile::Watchpoints` composes the same rules with scoped
+`translate/X86/X86WatchpointObservation`. `X86PagedMemory` reports completed
+linear data reads and committed stores; physical page walks and fetches are
+excluded. Instruction and event owners scope observations and retain delayed
+MOV/POP-SS and accepted-entry causes across backing stops. Event failure resets
+its speculative matches; successful software entry can release a delayed trap.
+The port transaction supplies a completed transfer receipt for I/O comparison.
+The same debug owner accepts an explicit REP group-boundary decision: target
+fast-string grouping can postpone MOVS/STOS data causes across completed
+elements without changing the existing elementwise memory/attempt owner.
+`X86EventDeliveryOptions` owns the shared entry-attempt budget. Event owners
+retain a resumable next event when host work is exhausted, independently of
+instruction budgets and without replacing an architectural event by #DF.
 The event owner stages registers and caches while retaining descriptor/frame RAM
 effects and CR2 on later faults.
 TSS stack selection, conforming code and privilege changes stay in that owner;
@@ -1427,6 +1440,11 @@ Objective-C scalar table binding relocates only a proved immutable base,
 retaining the raw index, encoded extension, access width and memory effects.
 Every occurrence needs a bounded complete access range and the original
 instruction owner's address proof; publication rechecks the current uses.
+A computed branch through such a load keeps its one table role: the value
+resolver reads the load as defining its own occurrence, as it reads a LOAD with
+a computed address, so a loop through the index cannot change what the branch
+compares. The raw index bound may come from the cheap query, a guarded query or
+the finite proof of the same use, whose coordinates stay with the domain proof.
 Byte and halfword stores slice the encoded W value explicitly; the tracer
 requires those source bytes to be known before publishing the slice. Unknown
 unused upper bytes do not prevent a known narrow store.
@@ -3095,6 +3113,11 @@ their existing typed handling before the ignored-annotation path.
 Named specifiers resolve their type and kind in one library lookup. Builtin
 spellings keep precedence, declared aliases keep their names, and pointer-sized
 and va_list fallback types apply only when the library has no declaration.
+Declarators with no added pointer, array or function modifiers reuse the inner
+composition directly. Composed declarators take ownership of their modifier
+lists and nested callable, keeping the same binding order and qualifiers
+without copying those temporary structures. Each composition is applied once,
+so its freshly parsed parameter lists become the resulting functions directly.
 
 `importPDBTypes` reads every named record and enumeration of a PDB's TPI
 stream. MSVC flattens anonymous members into their parent, so
@@ -7913,6 +7936,9 @@ the current graph may propose a small finite query envelope. Only the shared
 all-path value proof can establish the exact use's complete dense domain;
 unrelated literals, physical table capacity and provisional group edges grant
 no selector bound. Incomplete queries retain an unsafe unresolved branch.
+A dense prefix smaller than a relocation-owned table bounds that use but not
+the table, whose other slots another dispatch may select. The finite-domain
+route then keeps every consumer of the object together.
 For a narrow comparison over a merged wide index, the value resolver first
 proves every incoming value has zero high bytes, then matches the exact low
 lane. It applies the constraint to the original wide graph, retaining all
@@ -8231,6 +8257,15 @@ transparent cycles retain the existing shared generation guard; memory-context
 resets also invalidate those entries in the value memo. Neither cache bypasses
 incomplete-proof rejection.
 
+A backedge that closes through a definition which computes is that definition's
+update, not a value passing through it. Walking from the update of
+`i = merge(0, i + 1)` must not read `i` as `{0, 1}`, so the closing read returns
+one unknown value named by its state: a numeric proof sees every value there,
+and a proof of the arithmetic around the merge, such as an `x % N` recipe, still
+reads one dividend. A bound such as `i < 30` then has to come from the guard on
+the backedge. A taint query keeps the transparent closure, because it only asks
+what a value reaches and that arm is the walk already under way.
+
 Edge refinement shares one predicate policy with its local shape inspection.
 An exact, unguarded byte producer can establish that the current query cannot
 use a condition, avoiding reconstruction of its operands. Exact COPY and NOT
@@ -8266,7 +8301,8 @@ pass has its own memory and value memo identities; nested value reconstruction
 inside a store-only pass also keeps observations disabled. Switching between ordinary value
 queries and frame-writer queries retires value and memory memos. Neither
 authenticated initialization nor outgoing stack-argument binding can use a
-read as its writer.
+read as its writer. A taint query also stays store-only: taint reaches memory
+only through a store, and its batch asks about each stored value.
 The frame resolver can also project an exact PE32 shared C++ entry call. The
 loader's existing caller/helper instruction parser owns its physical protocol;
 a budgeted reader rechecks current immutable storage and fixups. LowIR relifts
@@ -10386,6 +10422,8 @@ no authenticated table-load or relocation-suppression permission.
 Display registration frames retain original instructions, handler roots and
 loader metadata without running native frame/callback closure. Their state
 receipt remains incomplete with an explicit deferred-proof diagnostic.
+Those frames have no exceptional edges either, so a no-return proof reads a
+scope or try block in one as a handler that may resume the function.
 `PipelineAnalysis.cpp` enumerates checked external PE32 C++ callback and handler
 entries for the current analysis selection. They remain separate analysis
 bodies rather than new ordinary ABI entries in the image. Post-lift native
@@ -17632,6 +17670,18 @@ same work allowance before returning.
 
 ### Explicit x64 continuation export
 
+`X64FunctionCallHandlers` composes a producer-declared delivered handler context
+with a pending original CALL. The interface requires call-site pauses so that
+near RET/fallthrough cannot execute the pending CALL first. It uses the existing
+region driver without a callee activation and admits retry only after an actual privilege-return
+boundary to the original CALL PC/SP; paged returns also need attempted progress.
+A separate context retains that completed return through budgets/backing stops
+and returns to handler continuation if the retried CALL delivers another fault.
+Instruction effects, event polling, shadows, budgets, CALL and near-RET
+completion stay in their existing owners. Existing drivers and ordinary source
+are unchanged. The helper supplies neither initial state nor arbitrary handler,
+frame-lifetime or external-service proofs.
+
 `X64ContinuationSvm` owns V10's raw VMRUN state exchange. It maps the fourteen
 software-managed registers through `ir/X86/X86SvmContext.h`, imports/exports
 the represented XMM/YMM and MXCSR cells through standard XSAVE images, captures
@@ -17739,7 +17789,8 @@ explicit input contract keeps unknown original stack bytes supplied by the
 caller instead of weakening ordinary source proofs.
 
 The same owner emits `neverd_x64_run_paged_function_v6` when paged memory is
-selected. Entry RSP then names a guest virtual return cell. Completion requires
+selected without instruction debug. Entry RSP then names a guest virtual return
+cell. Completion requires
 both the authenticated near RET and the paged executor's instruction-attempt
 bit; the original runtime owns fetch verification, operand access, fault
 delivery and retained side effects. Fault, backing and changed-code stops keep
@@ -17764,6 +17815,23 @@ The context-free scheduled driver is a null-activation adapter. Disabled source
 is unchanged. Scalar/call-site views select the same scheduled owner when
 scheduled events are requested. Handler resumption,
 return-cell lifetime and mapping ownership remain producer obligations.
+
+For `paged_debug`, `X64PagedExecution` owns a completed near-transfer record
+captured before post-instruction event delivery. It contains the original
+instruction, transfer kind and committed PC/SP/RAX. The distinct
+`neverd_x64_paged_transfer_v1` symbol exposes that record without changing
+`progress_v1`; new operations and entry refusals replace it. Final execution
+status and live handler coordinates cannot substitute for completion evidence.
+`X64FunctionContext` owns the V2 context names, entry-cell check and cached
+completion stop/value shared by both C routes. `X64FunctionCalls` projects the
+declared result width from that captured value. `X64FunctionCallSites` begins
+the callee from the completed CALL coordinates before returning a post-CALL
+event stop; scheduler-owned attempt accounting prevents stale receipt reuse
+after an entry refusal. The scheduled RET path carries its actual SS shadow.
+Consumed root RETs stay completed through backing/work stops or shutdown;
+event/handler resumption is separate. Pre-completion faults retain the active
+or pending context. V1 context layouts and flat pending-handler contexts remain
+unchanged; debug controllers have distinct names and nested V2 types.
 
 `X64FunctionCalls` adds producer-declared Win64 scalar call views at explicit
 roots. The shared argument-layout owner supplies register and stack positions;

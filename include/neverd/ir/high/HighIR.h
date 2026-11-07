@@ -23,10 +23,10 @@
 #include "neverd/ir/med/AArch64/AArch64ReturnProtection.h"
 #include "neverd/ir/med/MedIR.h"
 
-#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <memory>
@@ -44,9 +44,13 @@ using VarKey = std::pair<int, int>;
 
 struct VarKeyHash {
   size_t operator()(const VarKey &K) const {
-    // Power-of-two hash tables select buckets from the low bits. Mixing both
-    // fields keeps versions of one physical carrier out of the same chain.
-    return llvm::hash_combine(K.first, K.second);
+    // Power-of-two hash tables select buckets from the low bits, so both fields
+    // must reach them. Versions of one carrier stay in neighboring buckets, and
+    // the product's high half brings spaced carrier IDs down. This runs on
+    // every HighIR variable lookup, so it stays one inline multiply.
+    uint64_t Mixed = uint64_t(uint32_t(K.first)) * 0x9E3779B97F4A7C15ull;
+    Mixed ^= uint32_t(K.second);
+    return size_t(Mixed ^ (Mixed >> 32));
   }
 };
 

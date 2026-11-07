@@ -33,6 +33,8 @@
 #include <vector>
 
 #if defined(__linux__) && defined(__x86_64__)
+#include "X86KVMBacking.h"
+
 #include <cerrno>
 #include <fcntl.h>
 #include <linux/kvm.h>
@@ -671,6 +673,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
 #include "X86LegacyStatusNativeTests.inc"
 #include "X86LegacyStepNativeTests.inc"
 #include "X86LegacyStringNativeTests.inc"
+#include "X86LegacyWatchpointNativeTests.inc"
 
 INSTANTIATE_TEST_SUITE_P(PagingModes, X86PagingNativeTest,
                          testing::Values(2u, 3u, 4u, 5u));

@@ -1618,7 +1618,12 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
           Masks.size() == 1 && Results[0] && Masks[0] &&
           (Masks[0] & (Masks[0] + 1)) == 0) {
         const uint32_t Bound = std::bit_width(Masks[0]);
-        if (Bound >= limits::kMinJumpTableEntries) {
+        // Relocations own the whole object, whose other slots may belong to
+        // another dispatch of this function. Selecting a prefix bounds this
+        // use but not that object, so the finite owner keeps them together.
+        const bool PrefixOfOwnedObject =
+            Info.RelocAbsolute && Bound < Info.PhysicalCapacity;
+        if (Bound >= limits::kMinJumpTableEntries && !PrefixOfOwnedObject) {
           if (Info.MaxEntries == 0 || Bound < Info.MaxEntries)
             Info.MaxEntries = Bound;
           Info.IncompleteGuardDomain = false;

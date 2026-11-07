@@ -40,6 +40,7 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -1082,6 +1083,18 @@ void recoverCallAbi(
   // The loop adds no blocks, so one index serves every call's walks.
   const MedBlockIdIndex BlockIds(Func);
   auto lookupDefinition = [&](const MedVar &V) { return Definitions.find(V); };
+  // A value in an FP/vector register, or its low scalar: `movsd [rsp], xmm9`
+  // stores a slice of the register where AArch64's `str d9, [sp]` names it.
+  auto holdsFPRegisterValue = [&](const MedVar &V) {
+    if (V.Kind == MedVar::Reg)
+      return isFPValueReg(V.RegOff);
+    const MedOp *Def = V.Kind == MedVar::Temp ? lookupDefinition(V) : nullptr;
+    const bool LowSlice = Def && Def->Opcode == NdOp::SUBBYTES &&
+                          Def->NumInputs == 2 && Def->Inputs[1].isConst() &&
+                          Def->Inputs[1].ConstVal == 0;
+    return LowSlice && Def->Inputs[0].Kind == MedVar::Reg &&
+           isFPValueReg(Def->Inputs[0].RegOff);
+  };
   for (auto &Blk : Func.Blocks) {
     for (size_t OI = 0; OI < Blk.Ops.size(); ++OI) {
       auto &Op = Blk.Ops[OI];
@@ -2357,8 +2370,7 @@ void recoverCallAbi(
         // granularity so packed floats are not collapsed by the slot model.
         // The reverse scan visits later stores first; keep the first seen
         // (= last in program order, the value live at the call) per offset.
-        if (CI.IsIndirect && Prev.Inputs[1].Kind == MedVar::Reg &&
-            isFPValueReg(Prev.Inputs[1].RegOff) &&
+        if (CI.IsIndirect && holdsFPRegisterValue(Prev.Inputs[1]) &&
             FPStackByOff.find(StackOff) == FPStackByOff.end())
           FPStackByOff[StackOff] = Prev.Inputs[1];
 
@@ -3148,12 +3160,12 @@ void recoverCallAbi(
       // value, spilled past v0-v7 / xmm0-7) as scalar FP arguments in offset
       // order, so the emitter places them on the stack exactly as the callee
       // reads them (two AAPCS64-packed floats per 8-byte slot, doubles one per
-      // slot).  Only when the FP argument registers are full (overflow is
-      // possible) and the run is contiguous from the call SP -- a higher store
-      // is a local spill, and an integer stack argument at offset 0 (mixed
-      // int+FP overflow) leaves the run empty, falling back to the 8-byte-slot
-      // model below.  The covered slots are cleared so that model does not also
-      // emit them.
+      // slot, and a float alone in its slot elsewhere).  Only when the FP
+      // argument registers are full (overflow is possible) and the run is
+      // contiguous from the call SP -- a higher store is a local spill, and an
+      // integer stack argument at offset 0 (mixed int+FP overflow) leaves the
+      // run empty, falling back to the 8-byte-slot model below.  The covered
+      // slots are cleared so that model does not also emit them.
       // The stack offset of each value the overflow run appends to FoundFP.
       std::vector<int64_t> FPOverflowOffsets;
       if (!PositionalFP && CI.IsIndirect && !FPStackByOff.empty() &&
@@ -3164,7 +3176,11 @@ void recoverCallAbi(
         const int SlotSize = TRI.PointerSize;
         int64_t Next = 0;
         for (auto &Entry : FPStackByOff) {
-          if (Entry.first != Next)
+          // The rest of a slot a narrower value leaves empty is no gap.
+          if (Entry.first != Next &&
+              (SlotSize <= 0 ||
+               Entry.first !=
+                   static_cast<int64_t>(llvm::alignTo(Next, SlotSize))))
             break; // gap ends the contiguous overflow run
           FoundFP.push_back(Entry.second);
           FPOverflowOffsets.push_back(Entry.first - CallLayout.CallStackBase);

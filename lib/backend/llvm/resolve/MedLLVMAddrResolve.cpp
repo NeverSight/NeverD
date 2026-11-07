@@ -3670,6 +3670,16 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
 
     if (Def->Opcode == NdOp::CONCAT && !concatHasExactWidths(*Def))
       return stableOffsetFailure("malformed-concat", Start, Depth);
+    // `shr eax, cl` masks its count to CL's low bits. The upper bytes a write
+    // to CL leaves in ECX, whatever they last held, do not reach the result.
+    if (Def->Opcode == NdOp::INT_AND && Def->NumInputs == 2 &&
+        Def->Inputs[1].isConst())
+      if (const MedOp *Pieces = lookupDef(Def->Inputs[0]);
+          Pieces && Pieces->Opcode == NdOp::CONCAT &&
+          concatHasExactWidths(*Pieces) && Pieces->Inputs[1].Size < 8 &&
+          (Def->Inputs[1].ConstVal >> (Pieces->Inputs[1].Size * 8u)) == 0)
+        return prove(Pieces->Inputs[1], Depth + 1, Seen, ActiveFrameSlots,
+                     AnchoredPhis);
     bool CarriesArithmeticValue = false;
     switch (Def->Opcode) {
     case NdOp::COPY:

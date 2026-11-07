@@ -1079,6 +1079,8 @@ struct ResolverValueExpr {
   std::optional<ResolverScalarModelOrigin> ScalarModelOrigin;
   ResolverValue Input;
   std::vector<ResolverValue> Inputs;
+  // On a SELECT's two arms read as a predicate, what chooses the first arm.
+  ResolverValue SelectCondition;
 
   void includePropertiesOf(const ResolverValue &Value) {
     if (!Value) {
@@ -5963,6 +5965,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   std::optional<bool> MemoScalarConstantFoldMode;
   std::optional<bool> MemoFrameReadMode;
   bool AllowFrameReadObservations = false;
+  std::optional<bool> MemoTaintMode;
+  bool ResolvingTaint = false;
   std::optional<ResolverPredicateMode> MemoEdgeConstraintMode;
   auto predicateMode = [](const JumpTableValueQuery *Query) {
     if (Query &&
@@ -6176,6 +6180,42 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   // constraints belong to the joined-guard query, whose symbolic owner keeps
   // predecessor predicates separate. Ordinary mask/group queries retain their
   // existing domain/publication protocol.
+  // What a boolean evaluates to once another is known, where that decides it.
+  std::function<std::optional<bool>(const ResolverValue &,
+                                    const ResolverValue &, bool, unsigned)>
+      booleanGiven;
+  booleanGiven = [&](const ResolverValue &Expression,
+                     const ResolverValue &Known, bool KnownValue,
+                     unsigned Depth) -> std::optional<bool> {
+    if (!Expression || Depth > MaxResolverDepth || !consumeEvidence())
+      return std::nullopt;
+    if (sameResolverValueForEdge(Expression, Known, 0))
+      return KnownValue;
+    if (Expression->K != ResolverValueExpr::Kind::Transform ||
+        !Expression->HasOpcode)
+      return std::nullopt;
+    if (Expression->Opcode == NdOp::BOOL_NOT &&
+        Expression->Inputs.size() == 1) {
+      const auto Input =
+          booleanGiven(Expression->Inputs[0], Known, KnownValue, Depth + 1);
+      return Input ? std::optional<bool>(!*Input) : std::nullopt;
+    }
+    if ((Expression->Opcode != NdOp::BOOL_AND &&
+         Expression->Opcode != NdOp::BOOL_OR) ||
+        Expression->Inputs.size() != 2)
+      return std::nullopt;
+    const bool Absorbing = Expression->Opcode == NdOp::BOOL_OR;
+    const auto Left =
+        booleanGiven(Expression->Inputs[0], Known, KnownValue, Depth + 1);
+    if (Left == Absorbing)
+      return Absorbing;
+    const auto Right =
+        booleanGiven(Expression->Inputs[1], Known, KnownValue, Depth + 1);
+    if (Right == Absorbing)
+      return Absorbing;
+    return Left && Right ? std::optional<bool>(!Absorbing) : std::nullopt;
+  };
+
   std::function<ResolverResult(ResolverResult, ResolverResult, bool, unsigned)>
       constrainPredicate;
   constrainPredicate = [&](ResolverResult Value, ResolverResult Condition,
@@ -6201,6 +6241,19 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       }
       Taken = !Taken;
       Predicate = Predicate->Inputs.front();
+    }
+    // A conditional compare keeps the earlier flag when its condition fails.
+    // ARM's `cmp a, #n; cmpls b, #m; bhs` runs the second compare whenever the
+    // first flag has the outcome this edge needs, so reaching the edge with
+    // that flag unchanged is impossible and the compare alone decides it.
+    if (Predicate && Predicate->K == ResolverValueExpr::Kind::Merge &&
+        Predicate->SelectCondition && Predicate->Inputs.size() == 2) {
+      if (booleanGiven(Predicate->SelectCondition, Predicate->Inputs[1], Taken,
+                       Depth + 1) != true)
+        return Value;
+      return constrainPredicate(std::move(Value),
+                                resolverValue(Predicate->Inputs[0]), Taken,
+                                Depth + 1);
     }
     if (Predicate && Predicate->K == ResolverValueExpr::Kind::Transform &&
         Predicate->HasOpcode && Predicate->Inputs.size() == 2 && JoinedGuard &&
@@ -7529,16 +7582,26 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     auto MemoIt = MemoryMemo.find(Key);
     if (MemoIt != MemoryMemo.end()) {
       const auto &Entry = MemoIt->second;
+      const auto closedCycle = [&] {
+        return !ResolvingTaint && Walks.closesThroughComputation(Entry.Pending)
+                   ? resolverValue(namedResolverRoot(
+                         Size, "CM",
+                         {Graph.Blocks[Block].Start,
+                          static_cast<uint64_t>(Before), SlotBase,
+                          static_cast<uint64_t>(SlotOffset), Size}))
+                   : resolverCycle();
+      };
       if (!Entry.Result) {
         Walks.observe(Entry.Pending);
-        return resolverCycle();
+        return closedCycle();
       }
       if (Walks.live(Entry.Pending) &&
           (Entry.Result->Kind != ResolverResultKind::Cycle ||
            !Entry.Pending.empty() ||
            Entry.Generation == ResolverMemoGeneration)) {
         Walks.observe(Entry.Pending);
-        return *Entry.Result;
+        return Entry.Result->Kind == ResolverResultKind::Cycle ? closedCycle()
+                                                               : *Entry.Result;
       }
     }
     if (Depth > MaxResolverDepth) {
@@ -7971,16 +8034,32 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     auto MemoIt = ValueMemo.find(Key);
     if (MemoIt != ValueMemo.end()) {
       const auto &Entry = MemoIt->second;
+      // A cycle a merge may drop is a value passing through unchanged. Reached
+      // through a computation it is that computation's update, so
+      // `i = merge(0, i + 1)` has an arm of unknown value and cannot read as
+      // {0, 1}. Naming the arm by this state keeps every read of the merge the
+      // same value for a proof of the arithmetic around it. A taint query only
+      // asks what a value reaches, and this arm is the walk already under way.
+      const auto closedCycle = [&] {
+        return !ResolvingTaint && Walks.closesThroughComputation(Entry.Pending)
+                   ? resolverValue(namedResolverRoot(
+                         V.Size, "CV",
+                         {Graph.Blocks[Block].Start,
+                          static_cast<uint64_t>(Before),
+                          static_cast<uint64_t>(V.Space), V.Offset, V.Size}))
+                   : resolverCycle();
+      };
       if (!Entry.Result) {
         Walks.observe(Entry.Pending);
-        return resolverCycle();
+        return closedCycle();
       }
       if (Walks.live(Entry.Pending) &&
           (Entry.Result->Kind != ResolverResultKind::Cycle ||
            !Entry.Pending.empty() ||
            Entry.Generation == ResolverMemoGeneration)) {
         Walks.observe(Entry.Pending);
-        return *Entry.Result;
+        return Entry.Result->Kind == ResolverResultKind::Cycle ? closedCycle()
+                                                               : *Entry.Result;
       }
     }
     // A bounded recursive walk may revisit an exact active state at the depth
@@ -8065,6 +8144,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       if (!Overlaps && !DefinesZeroLane && !DefinesFullWide)
         continue;
       Found = true;
+      if (Def.Opcode != NdOp::COPY && Def.Opcode != NdOp::INT_ZEXT &&
+          Def.Opcode != NdOp::INT_SEXT && Def.Opcode != NdOp::SUBBYTES &&
+          Def.Opcode != NdOp::LOAD && !originalAArch64TableLoad(Def))
+        Walk.readComputationInputs();
 
       ResolverValue Full;
       bool MatchedDefinedAlternative = false;
@@ -8474,7 +8557,22 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
               consumeEvidence, &EvidenceBudgetExhausted);
           if (Merged.Kind == ResolverResultKind::Value)
             Full = Merged.Value;
+          if (ResolvingPredicate && Full && Condition.Value &&
+              Full->K == ResolverValueExpr::Kind::Merge && consumeEvidence(5)) {
+            auto Chosen = std::make_shared<ResolverValueExpr>(*Full);
+            Chosen->SelectCondition = Condition.Value;
+            Full = std::move(Chosen);
+          }
         }
+      } else if (originalAArch64TableLoad(Def)) {
+        // A register-offset LOAD keeps its address check in this form. Like a
+        // LOAD with a computed address, it defines its own occurrence: its
+        // index belongs to the address role, and may close a loop that later
+        // uses of this value do not depend on.
+        Full = namedResolverRoot(Def.Output.Size, "D",
+                                 {Def.Addr, static_cast<uint64_t>(Def.Seq),
+                                  static_cast<unsigned>(Def.Output.Space),
+                                  Def.Output.Offset, Def.Output.Size});
       } else if (Def.Opcode == NdOp::LOAD && Def.NumInputs >= 1) {
         const NdVar &Address =
             Def.NumInputs >= 2 ? Def.Inputs[1] : Def.Inputs[0];
@@ -10272,15 +10370,27 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       ++ResolverMemoGeneration;
     }
     MemoScalarConstantFoldMode = Query.FoldScalarConstantOps;
+    // Taint reaches memory only through a store, and a taint query's batch asks
+    // about the stored values themselves, so looking through reads adds nothing
+    // to its answer. It would only spell every load of a loop-carried cell as
+    // that loop's whole merge, which spends the batch's shared match budget.
     AllowFrameReadObservations =
         Query.Relation != JumpTableValueRelation::AuthenticatedFrameMemory &&
-        Query.Relation != JumpTableValueRelation::FrameMemoryMatches;
+        Query.Relation != JumpTableValueRelation::FrameMemoryMatches &&
+        Query.Relation != JumpTableValueRelation::MayDepend;
     if (MemoFrameReadMode && *MemoFrameReadMode != AllowFrameReadObservations) {
       ValueMemo.clear();
       MemoryMemo.clear();
       ++ResolverMemoGeneration;
     }
     MemoFrameReadMode = AllowFrameReadObservations;
+    ResolvingTaint = Query.Relation == JumpTableValueRelation::MayDepend;
+    if (MemoTaintMode && *MemoTaintMode != ResolvingTaint) {
+      ValueMemo.clear();
+      MemoryMemo.clear();
+      ++ResolverMemoGeneration;
+    }
+    MemoTaintMode = ResolvingTaint;
     if (Query.Relation == JumpTableValueRelation::ReadonlyUnsignedEnvelope) {
       // These facts also depend on immutable image contents. The ordinary
       // batch cache authenticates graph facts only, so retain no such result.

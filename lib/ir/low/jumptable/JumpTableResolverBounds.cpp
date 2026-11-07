@@ -5768,7 +5768,14 @@ bool CFGBuilder::inferBoundsFromModulo(
   // Each phase retains its historic local cap, but all four debit the same
   // candidate-wide account.  Replaying modulo evidence across candidates or
   // final-root stages therefore cannot refresh four unmetered 4096-unit pools.
-  size_t LocalAggregateEvidenceBudget = limits::kMaxJumpTableEvidenceWork;
+  // The local account holds every cap in full: proposal discovery on a table
+  // with many cases must not spend the replay that decides the table.
+  size_t LocalAggregateEvidenceBudget =
+      ::neverd::limits::ir::kJumpTableResolverBoundsModuloProposalWork +
+      ::neverd::limits::ir::
+          kJumpTableResolverBoundsModuloStructuralRetentionWork +
+      ::neverd::limits::ir::kJumpTableResolverBoundsModuloDirectWork +
+      ::neverd::limits::ir::kJumpTableResolverBoundsModuloReplayWork;
   ModuloEvidenceBudget ProposalBudget(
       ::neverd::limits::ir::kJumpTableResolverBoundsModuloProposalWork,
       &LocalAggregateEvidenceBudget, AggregateEvidenceBudget);
@@ -7475,7 +7482,8 @@ bool CFGBuilder::inferBoundsFromBitTestClamp(const BinaryImage &Img,
     }
     // Reading a sized byte program is safe only when the runtime index is
     // confined to that exact object, not merely when its bit-test sibling
-    // uses the same register. A guard on the dispatch path may establish it.
+    // uses the same register. A guard on the dispatch path may establish it,
+    // and an index advanced around a loop has nothing else to bound it.
     if (ByteIndexFrom + 1 >= static_cast<int>(Ops.size()))
       return false;
     const LowOp &ByteIndexUse = Ops[ByteIndexFrom + 1];
@@ -7483,9 +7491,7 @@ bool CFGBuilder::inferBoundsFromBitTestClamp(const BinaryImage &Img,
     IndexBound.Candidate = ByteIndex;
     IndexBound.UseAddr = ByteIndexUse.Addr;
     IndexBound.UseSeq = ByteIndexUse.Seq;
-    IndexBound.Relation = Img.Arch == Arch::X64
-                              ? JumpTableValueRelation::UnsignedFeasibleSet
-                              : JumpTableValueRelation::UnsignedLessThan;
+    IndexBound.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
     IndexBound.UnsignedUpperBound = ProgSize;
     Queries.push_back(std::move(IndexBound));
     bool Complete = false;

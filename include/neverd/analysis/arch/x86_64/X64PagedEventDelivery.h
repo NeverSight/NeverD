@@ -13,6 +13,8 @@
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationEvent.h"
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/ir/X86/X86DebugRules.h"
+#include "neverd/translate/X86/X86EventDeliveryOptions.h"
 #include "neverd/translate/X86/X86PagedMemory.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -24,13 +26,17 @@
 
 namespace neverd::analysis {
 
+/// Runtime-owned bank, disjoint from continuation state and guest RAM.
+using X64PagedDebugState = X86InstructionDebugState<uint64_t>;
+
 /// Canonical-address checks precede either order. Concurrent data-fault
 /// priority is processor-specific, not specified by the boundary-event table.
 using X64PagedAlignmentPriority = translate::X86AlignmentPriority;
 
 /// Bound processor observation for competing IRET stack faults. The qualified
 /// order reads FLAGS, CS, IP, then SS and SP, and updates accessed descriptors
-/// as qwords. This is not inferred from the host or the ISA pseudocode.
+/// as qwords. CS/SS slots read only the selector word. This is not inferred
+/// from the host or the ISA pseudocode.
 enum class X64PagedIretAccessOrder : uint8_t { FlagsFirst };
 /// Both profiles read CS then IP, validate and update the code descriptor,
 /// then read outer SS and SP. SelectorFirst checks the original saved IP for
@@ -62,13 +68,15 @@ enum class X64PagedEventStatus : uint8_t {
   InvalidState,
   BackingFault,
   Shutdown,
+  BudgetExhausted,
 };
 
-/// Accepted event at a physical backing stop, including a secondary fault.
-/// Keep the architectural state and existing RAM effects; repair backing and
-/// resume this record instead of re-executing the instruction or reselecting
-/// the original event. Completed reads are retained and completed writes are
-/// not replayed: frame writes can alias earlier descriptor/TSS inputs.
+/// Pending event at a physical backing or work-budget stop, including a
+/// secondary fault. Keep the architectural state and existing RAM effects;
+/// repair backing if necessary and resume this record instead of re-executing
+/// the instruction or reselecting the original event. An accepted event keeps
+/// completed reads and skips completed writes: frame writes can alias earlier
+/// descriptor/TSS inputs. A work-budget stop retains the next unaccepted event.
 struct X64PagedEventContinuation {
   struct Access {
     uint64_t Address = 0;
@@ -80,6 +88,11 @@ struct X64PagedEventContinuation {
   uint64_t FaultPC = 0;
   std::optional<translate::X86MemoryException> LastException;
   llvm::SmallVector<Access> CompletedAccesses;
+  uint8_t DataBreakpoints = 0;
+  bool SoftwareCompleted = false;
+  /// False at a work-budget boundary before the next event is accepted.
+  /// Such a record has no completed accesses or speculative data matches.
+  bool EventAccepted = true;
 };
 
 struct X64PagedEventResult {
@@ -88,6 +101,8 @@ struct X64PagedEventResult {
   /// access. A secondary fault does not put that external event back in a
   /// queue.
   bool InputAccepted = false;
+  /// Software entry committed even if a subsequent data #DB entry stops.
+  bool SoftwareCompleted = false;
   uint8_t DeliveredVector = 0;
   unsigned DeliveryAttempts = 0;
   std::optional<translate::X86MemoryException> LastException;
@@ -101,6 +116,8 @@ struct X64PagedEventResult {
 /// the handler privilege. CR2 is published whenever #PF is detected, including
 /// a fault while delivering #DF. Already completed descriptor/page-table/frame
 /// RAM writes remain visible. Shutdown is reported, never implemented as reset.
+/// Options bounds entry attempts per call. BudgetExhausted preserves a
+/// continuation without inventing a guest exception or executing the handler.
 /// For Software events, State.PC identifies the original INT/INT3 while
 /// Event.SavedPC supplies its successful fallthrough. Delivery faults restart
 /// State.PC, not that fallthrough; the numeric vector does not imply an error
@@ -116,11 +133,20 @@ struct X64PagedEventResult {
 llvm::Expected<X64PagedEventResult>
 deliverX64PagedEvent(X64ContinuationStateV6 &State,
                      translate::X86PagedMemory &Memory,
-                     const X64ContinuationEventV1 &Event, uint32_t MXCSRMask);
+                     const X64ContinuationEventV1 &Event, uint32_t MXCSRMask,
+                     X64PagedDebugState *Debug = nullptr,
+                     X86InstructionDebugProfile DebugProfile =
+                         X86InstructionDebugProfile::InstructionStep,
+                     const translate::X86EventDeliveryOptions &Options = {});
 
-llvm::Expected<X64PagedEventResult> resumeX64PagedEvent(
-    X64ContinuationStateV6 &State, translate::X86PagedMemory &Memory,
-    const X64PagedEventContinuation &Continuation, uint32_t MXCSRMask);
+llvm::Expected<X64PagedEventResult>
+resumeX64PagedEvent(X64ContinuationStateV6 &State,
+                    translate::X86PagedMemory &Memory,
+                    const X64PagedEventContinuation &Continuation,
+                    uint32_t MXCSRMask, X64PagedDebugState *Debug = nullptr,
+                    X86InstructionDebugProfile DebugProfile =
+                        X86InstructionDebugProfile::InstructionStep,
+                    const translate::X86EventDeliveryOptions &Options = {});
 
 struct X64PagedInstructionTransitionResult {
   bool Completed = false;

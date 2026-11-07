@@ -41,7 +41,10 @@
 
 #include "SymSynthDetail.h"
 
+#include "neverd/symbolic/Limits.h"
+
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
@@ -54,47 +57,94 @@ namespace neverd::symbolic::synth {
 
 namespace {
 
+/// The raw words of a behaviour, one after another.
+using Behaviour = llvm::ArrayRef<uint64_t>;
+
+uint64_t hashBehaviour(Behaviour Words) {
+  uint64_t Hash = 0xCBF29CE484222325ull;
+  const size_t Step = std::max<size_t>(
+      Words.size() / limits::symbolic::kSynthBehaviourHashWords, 1);
+  for (size_t I = 0; I < Words.size(); I += Step) {
+    Hash ^= Words[I];
+    Hash *= 0x100000001B3ull;
+  }
+  // Clear of the two keys a DenseMap keeps for itself.
+  return Hash >> 1;
+}
+
+/// The behaviour array this thread keeps between searches.  Growing a new one
+/// for each search copies it repeatedly and faults in fresh pages.
+std::vector<uint64_t> &retainedBehaviours() {
+  static thread_local std::vector<uint64_t> Words;
+  return Words;
+}
+
+void appendSignature(const Signature &Sig, std::vector<uint64_t> &Words) {
+  for (const llvm::APInt &Value : Sig)
+    Words.insert(Words.end(), Value.getRawData(),
+                 Value.getRawData() + Value.getNumWords());
+}
+
 /// The terms built so far, one per distinct behaviour, grouped by cost.
 ///
 /// Lookup goes through a hash of the behaviour to the terms carrying that
 /// hash, with the candidates in a bucket compared outright.  Storing the hash
 /// rather than the behaviour as the key keeps one copy of each signature —
 /// they are the bulk of the memory here — and matches how the expression
-/// context interns its own nodes.
+/// context interns its own nodes.  Behaviours share one flat array, since
+/// measuring a candidate reads its operands' at every point.
 class TermBank {
 public:
-  /// Record \p Node under \p Sig at \p Cost, unless something already behaves
-  /// that way.  True when it was recorded.
-  bool insert(SymRef Node, Signature Sig, size_t Cost) {
-    const uint64_t Hash = hashSignature(Sig);
-    llvm::SmallVector<size_t, 2> &Bucket = ByHash[Hash];
-    for (size_t I : Bucket)
-      if (signaturesEqual(Sigs[I], Sig))
-        return false;
+  explicit TermBank(size_t BehaviourWords) : BehaviourWords(BehaviourWords) {
+    Flat.swap(retainedBehaviours());
+    Flat.clear();
+  }
 
+  ~TermBank() {
+    if (Flat.capacity() <= limits::symbolic::kSynthRetainedBehaviourWords)
+      Flat.swap(retainedBehaviours());
+  }
+
+  TermBank(const TermBank &) = delete;
+  TermBank &operator=(const TermBank &) = delete;
+
+  /// Record \p Node under \p Words at \p Cost, unless something already behaves
+  /// that way.  True when it was recorded.
+  bool insert(SymRef Node, Behaviour Words, size_t Cost) {
+    const uint64_t Hash = hashBehaviour(Words);
+    if (contains(Hash, Words))
+      return false;
+    add(Hash, Node, Words, Cost);
+    return true;
+  }
+
+  /// Record \p Node under a behaviour \c contains did not find for this \p
+  /// Hash.
+  void add(uint64_t Hash, SymRef Node, Behaviour Words, size_t Cost) {
     const size_t Index = Nodes.size();
     Nodes.push_back(Node);
-    Sigs.push_back(std::move(Sig));
-    Bucket.push_back(Index);
+    Flat.insert(Flat.end(), Words.begin(), Words.end());
+    ByHash[Hash].push_back(Index);
     std::vector<size_t> &Tier = ByCost[Cost];
     if (Tier.empty())
       Costs.push_back(Cost);
     Tier.push_back(Index);
-    return true;
   }
 
-  bool contains(const Signature &Sig) const {
-    auto It = ByHash.find(hashSignature(Sig));
+  bool contains(uint64_t Hash, Behaviour Words) const {
+    auto It = ByHash.find(Hash);
     if (It == ByHash.end())
       return false;
     for (size_t I : It->second)
-      if (signaturesEqual(Sigs[I], Sig))
+      if (behaviour(I) == Words)
         return true;
     return false;
   }
 
   SymRef node(size_t I) const { return Nodes[I]; }
-  const Signature &signature(size_t I) const { return Sigs[I]; }
+  Behaviour behaviour(size_t I) const {
+    return Behaviour(Flat.data() + I * BehaviourWords, BehaviourWords);
+  }
 
   llvm::ArrayRef<size_t> atCost(size_t Cost) const {
     auto It = ByCost.find(Cost);
@@ -106,13 +156,14 @@ public:
   size_t costAt(size_t I) const { return Costs[I]; }
 
 private:
+  size_t BehaviourWords;
   std::vector<SymRef> Nodes;
-  std::vector<Signature> Sigs;
+  std::vector<uint64_t> Flat;
   /// Term indices by cost, in the order they were built, so that the search
   /// visits them the same way on every run.
   std::unordered_map<size_t, std::vector<size_t>> ByCost;
   std::vector<size_t> Costs;
-  std::unordered_map<uint64_t, llvm::SmallVector<size_t, 2>> ByHash;
+  llvm::DenseMap<uint64_t, llvm::SmallVector<size_t, 2>> ByHash;
 };
 
 } // namespace
@@ -129,7 +180,8 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
     return Result;
 
   const size_t Points = P.Grid.size();
-  TermBank Bank;
+  const size_t ValueWords = llvm::APInt::getNumWords(P.Width);
+  TermBank Bank(Points * ValueWords);
 
   // Charge a grid's worth of work per offer, including candidates whose
   // refutation is cached.  This preserves the work limit and search order
@@ -165,10 +217,14 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
   // them is the shortest answer there is, so they are checked like anything
   // else rather than assumed uninteresting.
   const llvm::SmallVector<SymRef, 16> Terminals = terminalsOf(P);
-  std::vector<Signature> TerminalSigs = terminalSignatures(Ctx, P);
+  const std::vector<Signature> TerminalSigs = terminalSignatures(Ctx, P);
+  std::vector<uint64_t> Target, Measured;
+  appendSignature(P.Target, Target);
   for (size_t I = 0; I < Terminals.size(); ++I) {
-    const bool Matches = signaturesEqual(TerminalSigs[I], P.Target);
-    Bank.insert(Terminals[I], std::move(TerminalSigs[I]), 1);
+    Measured.clear();
+    appendSignature(TerminalSigs[I], Measured);
+    const bool Matches = Behaviour(Measured) == Behaviour(Target);
+    Bank.insert(Terminals[I], Measured, 1);
     if (Matches && !offer(Terminals[I], 1))
       return Result;
   }
@@ -215,9 +271,31 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
     if (Ctx.isConst(Bank.node(I)))
       LiteralTerms.push_back(I);
 
-  Signature Sig(Points, llvm::APInt(P.Width, 0));
+  Measured.resize(Points * ValueWords);
   llvm::SmallVector<llvm::APInt, 2> Args;
   llvm::SmallVector<SymRef, 2> ArgNodes;
+
+  // Read a candidate's behaviour off its operands'.  Nearly every search is at
+  // a machine width, where a column of words needs no per-point interpretation.
+  auto measure = [&](GramOp Op, llvm::ArrayRef<size_t> Operands) {
+    if (ValueWords == 1) {
+      Sem.applyColumn(Op, Bank.behaviour(Operands[0]).data(),
+                      Operands.size() > 1 ? Bank.behaviour(Operands[1]).data()
+                                          : nullptr,
+                      Measured.data(), Points);
+      return;
+    }
+    Args.resize(Operands.size());
+    for (size_t Pt = 0; Pt < Points; ++Pt) {
+      for (size_t K = 0; K < Operands.size(); ++K)
+        Args[K] = llvm::APInt(
+            P.Width,
+            Bank.behaviour(Operands[K]).slice(Pt * ValueWords, ValueWords));
+      const llvm::APInt Value = Sem.apply(Op, Args);
+      std::copy_n(Value.getRawData(), ValueWords,
+                  Measured.data() + Pt * ValueWords);
+    }
+  };
 
   // Consider one candidate: read its behaviour off its operands', and build it
   // only if that behaviour is worth having.  Returns false to say the caller
@@ -227,15 +305,11 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
     if (!Effort.spend())
       return false;
 
-    Args.resize(Operands.size());
-    for (size_t Pt = 0; Pt < Points; ++Pt) {
-      for (size_t K = 0; K < Operands.size(); ++K)
-        Args[K] = Bank.signature(Operands[K])[Pt];
-      Sig[Pt] = Sem.apply(Op, Args);
-    }
+    measure(Op, Operands);
 
-    const bool Matches = signaturesEqual(Sig, P.Target);
-    const bool Fresh = !Bank.contains(Sig);
+    const bool Matches = Behaviour(Measured) == Behaviour(Target);
+    const uint64_t Hash = hashBehaviour(Measured);
+    const bool Fresh = !Bank.contains(Hash, Measured);
     if (!Matches && !Fresh)
       return true;
 
@@ -245,7 +319,7 @@ SearchOutcome enumerateShortest(SymContext &Ctx, const SynthProblem &P,
     SymRef Node = buildGramOp(Ctx, Op, ArgNodes);
 
     if (Fresh)
-      Bank.insert(Node, Sig, Cost);
+      Bank.add(Hash, Node, Measured, Cost);
     return !Matches || offer(Node, Cost);
   };
 

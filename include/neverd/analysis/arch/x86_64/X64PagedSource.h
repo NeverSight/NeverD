@@ -28,6 +28,8 @@ enum class X64PagedExit : uint64_t {
   RepeatContinue = 21,
   /// No device effect or element completion; restore availability and retry.
   DeviceUnavailable = 22,
+  /// Resume the retained event before executing another instruction.
+  EventBudgetExhausted = 23,
 };
 
 /// Progress of the last runtime operation, independent of its final status.

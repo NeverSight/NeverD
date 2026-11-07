@@ -43,6 +43,7 @@ void emitScheduledDriver(
     const analysis::X64ContinuationSourceOptions &Options, llvm::StringRef Name,
     const X64FunctionCallSitePauses *CallSitePauses) {
   const bool Paged = Options.PagedMemory;
+  const auto Names = x64FunctionContextNames(Options.PagedDebug);
   if (FunctionContext)
     OS << "/* Retain the activation across event and instruction boundaries.\n"
           " * Its storage is disjoint from state, shadows, budgets, both\n"
@@ -53,10 +54,11 @@ void emitScheduledDriver(
     neverd_x64_interruptibility_v1 *shadows, uint64_t *poll_budget,
     neverd_x64_peek_interrupt_v1 peek,
     neverd_x64_accept_interrupt_v1 accepted, void *context)C";
-  OS << (FunctionContext ? ", neverd_x64_function_context_v1 *function" : "")
-     << ") {\n";
   if (FunctionContext)
-    emitX64FunctionContextGuard(OS);
+    OS << ", " << Names.Context << " *function";
+  OS << ") {\n";
+  if (FunctionContext)
+    emitX64FunctionContextGuard(OS, Options.PagedDebug);
   OS << R"C(    uint64_t last = 8;
     if (!*budget) return 9;
     if (!peek || !accepted || shadows->STIBlocked > 1 || shadows->SSBlocked > 1 ||
@@ -131,10 +133,12 @@ void emitScheduledDriver(
     OS << "        case 0x" << llvm::utohexstr(Unit.Address) << "ULL:";
     if (FunctionContext && Unit.IsNearReturn) {
       OS << "\n";
-      emitX64FunctionContextStep(OS, Unit, "            ", Paged,
-                                 "memory_context", [&](llvm::StringRef Indent) {
-                                   emitCompletedShadows(OS, Indent, Paged);
-                                 });
+      emitX64FunctionContextStep(
+          OS, Unit, "            ", Paged, "memory_context",
+          [&](llvm::StringRef Indent) {
+            emitCompletedShadows(OS, Indent, Paged);
+          },
+          Options.PagedDebug ? "shadows->SSBlocked" : "");
       OS << "            break;\n";
     } else
       OS << " status = " << Unit.Function.Name
@@ -224,8 +228,9 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
 
 )C";
   const llvm::StringRef Name =
-      Paged ? (FunctionContext ? "neverd_x64_continue_paged_events_function_v6"
-                               : "neverd_x64_continue_paged_events_v6")
+      Paged ? (FunctionContext
+                   ? x64FunctionContextNames(Options.PagedDebug).ScheduledDriver
+                   : "neverd_x64_continue_paged_events_v6")
             : (FunctionContext ? "neverd_x64_continue_events_function_v6"
                                : "neverd_x64_continue_events_v6");
   emitScheduledDriver(OS, Units, FollowInternalCalls, FunctionContext, Options,
@@ -237,9 +242,8 @@ static int neverd_x64_scheduled_pc_v6(uint64_t pc) {
     neverd_x64_interruptibility_v1 *shadows, uint64_t *poll_budget,
     neverd_x64_peek_interrupt_v1 peek,
     neverd_x64_accept_interrupt_v1 accepted, void *context) {
-    return neverd_x64_continue_)C"
-       << (Paged ? "paged_" : "") << "events_function_v6(state, "
-       << (Paged ? "memory_context, " : "")
+    return )C"
+       << Name << "(state, " << (Paged ? "memory_context, " : "")
        << "budget, shadows, poll_budget, peek, accepted, context, 0);\n}\n";
   // The same scheduler stops after each authenticated original CALL. These
   // helpers have no pause marker or callee activation: the bridge establishes

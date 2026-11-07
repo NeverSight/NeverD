@@ -25,6 +25,7 @@ inline void emitX64PagedDriver(
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
     const analysis::X64ContinuationSourceOptions &Options, bool FollowCalls,
     bool FunctionContext, const X64FunctionCallSitePauses &CallSitePauses) {
+  const auto Names = x64FunctionContextNames(Options.PagedDebug);
   OS << R"C(
 /* Link the NeverD paged execution bridge. Context points to X64PagedExecution.
  * Each instruction verifies its original bytes through guest fetch permissions,
@@ -83,14 +84,15 @@ extern uint64_t neverd_x64_paged_debug_validate_v1(
          << "    return " << Unit.Function.Name
          << "_paged_debug_step(state, context, 0);\n}\n";
   }
-  OS << "\nuint64_t neverd_x64_run_paged"
-     << (FunctionContext ? "_function" : "")
-     << "_v6(neverd_x64_state_v6 *state, uint8_t *context,\n"
-        "                                uint64_t *budget"
-     << (FunctionContext ? ", neverd_x64_function_context_v1 *function" : "")
-     << ") {\n";
+  OS << "\nuint64_t "
+     << (FunctionContext ? Names.PagedDriver : "neverd_x64_run_paged_v6")
+     << "(neverd_x64_state_v6 *state, uint8_t *context,\n"
+        "                                uint64_t *budget";
   if (FunctionContext)
-    emitX64FunctionContextGuard(OS);
+    OS << ", " << Names.Context << " *function";
+  OS << ") {\n";
+  if (FunctionContext)
+    emitX64FunctionContextGuard(OS, Options.PagedDebug);
   OS << R"C(    uint64_t last = 8;
     while (*budget) {
         uint64_t status;
@@ -105,7 +107,8 @@ extern uint64_t neverd_x64_paged_debug_validate_v1(
             "*/\n";
     else if (FunctionContext && Unit.IsNearReturn) {
       OS << "\n";
-      emitX64FunctionContextStep(OS, Unit, "            ", true);
+      emitX64FunctionContextStep(OS, Unit, "            ", true, "context", {},
+                                 Options.PagedDebug ? "0" : "");
       OS << "            break;\n";
     } else
       OS << "status = " << Unit.Function.Name
@@ -135,7 +138,8 @@ extern uint64_t neverd_x64_paged_debug_validate_v1(
     OS << R"C(
 uint64_t neverd_x64_run_paged_v6(neverd_x64_state_v6 *state, uint8_t *context,
                                 uint64_t *budget) {
-    return neverd_x64_run_paged_function_v6(state, context, budget, 0);
+    return )C"
+       << Names.PagedDriver << R"C((state, context, budget, 0);
 }
 )C";
 }

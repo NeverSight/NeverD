@@ -19,6 +19,7 @@
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/translate/X86/X86WatchpointObservation.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Errc.h"
@@ -389,14 +390,38 @@ private:
 llvm::Expected<X64PagedEventResult> deliverEventSequence(
     X64ContinuationStateV6 &State, X86PagedMemory &Memory,
     const X64ContinuationEventV1 &Input, uint32_t MXCSRMask, uint64_t FaultPC,
+    const translate::X86EventDeliveryOptions &Options,
     std::optional<X86MemoryException> LastException = {}, bool Accepted = false,
-    llvm::SmallVector<X64PagedEventContinuation::Access> CompletedAccesses =
-        {}) {
+    llvm::SmallVector<X64PagedEventContinuation::Access> CompletedAccesses = {},
+    X64PagedDebugState *Debug = nullptr,
+    X86InstructionDebugProfile DebugProfile =
+        X86InstructionDebugProfile::InstructionStep,
+    uint8_t DataBreakpoints = 0, bool SoftwareCompleted = false,
+    bool InputAccepted = false) {
+  if (!Options.MaxAttempts)
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        "event delivery requires a positive work budget");
+  if (!Accepted && (!CompletedAccesses.empty() || DataBreakpoints))
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        "unaccepted event cannot retain partial accesses");
   if (!(Memory.controls().EFER & 0x400))
     return llvm::createStringError(
         llvm::errc::not_supported,
         "paged V6 event delivery requires IA-32e mode");
   auto Controls = Memory.controls();
+  if (DataBreakpoints &&
+      (!Debug || DebugProfile != X86InstructionDebugProfile::Watchpoints ||
+       (DataBreakpoints & 0xf0)))
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        "event continuation requires its watchpoint bank");
+  if (Debug &&
+      !x86InstructionDebugValid(Debug->DR6, Debug->DR7, Debug->DebugCTL,
+                                DebugProfile, Controls.CR4, Debug->PendingData))
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "invalid event debug bank or profile");
   if (Controls.CR4 & (uint64_t(1) << 32))
     return llvm::createStringError(llvm::errc::not_supported,
                                    "paged V6 IDT delivery requires CR4.FRED=0");
@@ -404,10 +429,24 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
   if (auto Error = Memory.bindControls(Controls))
     return std::move(Error);
   X64PagedEventResult Result;
-  Result.InputAccepted = Accepted;
+  Result.InputAccepted = Accepted || InputAccepted;
   Result.LastException = LastException;
+  Result.SoftwareCompleted = SoftwareCompleted;
+  translate::X86WatchpointObservation Observation(Memory, Debug, DebugProfile,
+                                                  DataBreakpoints);
   auto Event = Input;
   for (;;) {
+    if (Result.DeliveryAttempts == Options.MaxAttempts) {
+      Result.Status = X64PagedEventStatus::BudgetExhausted;
+      Result.Continuation = X64PagedEventContinuation{Event,
+                                                      FaultPC,
+                                                      Result.LastException,
+                                                      {},
+                                                      Observation.Matches,
+                                                      Result.SoftwareCompleted,
+                                                      false};
+      return Result;
+    }
     TransitionWriter W(State, Memory, Event, MXCSRMask);
     W.Resuming = Accepted && Result.DeliveryAttempts == 0;
     W.CaptureAccesses = true;
@@ -420,22 +459,55 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
     ++Result.DeliveryAttempts;
     if (W.Error)
       return std::move(*W.Error);
+    if (Debug && (W.Result.InputAccepted || W.Resuming)) {
+      if (x86DebugException(Event.Kind, Event.Vector))
+        Debug->DR7 &= ~uint64_t{0x2000};
+      if (Event.Kind != X64ContinuationEventKind::Software)
+        Debug->PendingData = 0;
+    }
     if (!W.Fault) {
       Result.Status = W.Result.Status;
       Result.BackingFault = W.Result.BackingFault;
       if (Result.Status == X64PagedEventStatus::BackingFault &&
           Result.InputAccepted)
         Result.Continuation =
-            X64PagedEventContinuation{Event, FaultPC, Result.LastException,
-                                      std::move(W.CompletedAccesses)};
-      if (Result.Status == X64PagedEventStatus::Delivered)
+            X64PagedEventContinuation{Event,
+                                      FaultPC,
+                                      Result.LastException,
+                                      std::move(W.CompletedAccesses),
+                                      Observation.Matches,
+                                      Result.SoftwareCompleted};
+      if (Result.Status == X64PagedEventStatus::Delivered) {
         Result.DeliveredVector = Event.Vector;
+        const bool Software = Event.Kind == X64ContinuationEventKind::Software;
+        Result.SoftwareCompleted |= Software;
+        auto &Core = State.Core.Core.Core.Core;
+        const auto &CS = State.Core.CS;
+        const uint64_t LinearPC =
+            CS.Attributes & 0x2000 ? Core.PC : uint32_t(CS.Base + Core.PC);
+        if (Debug &&
+            x86EventDataBreakpoints(*Debug, Software, Observation.Matches,
+                                    LinearPC, Core.RFlags)) {
+          Observation.Matches = 0;
+          Event = {};
+          Event.Kind = X64ContinuationEventKind::Trap;
+          Event.Vector = 1;
+          Event.SavedPC = FaultPC = Core.PC;
+          Controls.RFlags = Core.RFlags;
+          if (auto Error = Memory.bindControls(Controls))
+            return std::move(Error);
+          continue;
+        }
+      }
       Controls.RFlags = State.Core.Core.Core.Core.RFlags;
       if (auto Error = Memory.bindControls(Controls))
         return std::move(Error);
       return Result;
     }
     Result.LastException = W.Fault;
+    Observation.Matches = 0;
+    if (Debug)
+      Debug->PendingData = 0;
     const bool FirstFault = Event.Kind == X64ContinuationEventKind::Fault;
     const bool FirstDouble =
         Event.Kind == X64ContinuationEventKind::Abort && Event.Vector == 8;
@@ -461,22 +533,30 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
 
 llvm::Expected<X64PagedEventResult>
 deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
-                     const X64ContinuationEventV1 &Input, uint32_t MXCSRMask) {
+                     const X64ContinuationEventV1 &Input, uint32_t MXCSRMask,
+                     X64PagedDebugState *Debug,
+                     X86InstructionDebugProfile DebugProfile,
+                     const translate::X86EventDeliveryOptions &Options) {
   // Software entry saves fallthrough only on success. Its secondary faults
   // retain the original instruction PC, also across a physical backing stop.
   const uint64_t FaultPC = Input.Kind == X64ContinuationEventKind::Software
                                ? State.Core.Core.Core.Core.PC
                                : Input.SavedPC;
-  return deliverEventSequence(State, Memory, Input, MXCSRMask, FaultPC);
+  return deliverEventSequence(State, Memory, Input, MXCSRMask, FaultPC, Options,
+                              {}, false, {}, Debug, DebugProfile);
 }
 
 llvm::Expected<X64PagedEventResult>
 resumeX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                     const X64PagedEventContinuation &Continuation,
-                    uint32_t MXCSRMask) {
-  return deliverEventSequence(State, Memory, Continuation.Event, MXCSRMask,
-                              Continuation.FaultPC, Continuation.LastException,
-                              true, Continuation.CompletedAccesses);
+                    uint32_t MXCSRMask, X64PagedDebugState *Debug,
+                    X86InstructionDebugProfile DebugProfile,
+                    const translate::X86EventDeliveryOptions &Options) {
+  return deliverEventSequence(
+      State, Memory, Continuation.Event, MXCSRMask, Continuation.FaultPC,
+      Options, Continuation.LastException, Continuation.EventAccepted,
+      Continuation.CompletedAccesses, Debug, DebugProfile,
+      Continuation.DataBreakpoints, Continuation.SoftwareCompleted, true);
 }
 
 namespace {
