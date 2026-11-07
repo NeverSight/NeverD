@@ -176,6 +176,11 @@ BinKind binKindOf(NdOp Op) {
   }
 }
 
+bool readsLowIntegerPrefixes(NdOp Op) {
+  return Op == NdOp::INT_ADD || Op == NdOp::INT_SUB || Op == NdOp::INT_MULT ||
+         Op == NdOp::INT_AND || Op == NdOp::INT_OR || Op == NdOp::INT_XOR;
+}
+
 /// A conversion is numeric only when both sides explicitly describe integers.
 /// Widening a C cast extends according to its source signedness; the target's
 /// signedness only interprets the resulting bits. Machine extensions instead
@@ -191,6 +196,8 @@ bool isIntegerConversion(const ExprPtr &E) {
     return E->CastTo && E->CastTo->Kind == NdTypeKind::Int &&
            E->CastTo->Size == E->Type->Size &&
            E->CastTo->IsSigned == E->Type->IsSigned;
+  if (E->Kind == ExprKind::BitCast)
+    return E->Type->Size == E->Operands[0]->Type->Size;
   return E->Kind == ExprKind::UnaryOp &&
          (E->Op == NdOp::INT_ZEXT || E->Op == NdOp::INT_SEXT) &&
          E->Type->Size >= E->Operands[0]->Type->Size;
@@ -226,6 +233,10 @@ bool isIntegerPredicate(NdOp Op) {
   }
 }
 
+bool isBooleanBinary(NdOp Op) {
+  return Op == NdOp::BOOL_AND || Op == NdOp::BOOL_OR || Op == NdOp::BOOL_XOR;
+}
+
 /// Rewriting arithmetic must not erase an observation or manufacture pointer
 /// or unknown-value facts. Descendants are checked separately by the DAG walk.
 bool isRewriteableNode(const ExprPtr &E) {
@@ -240,6 +251,7 @@ bool isRewriteableNode(const ExprPtr &E) {
   case ExprKind::Var:
     return E->Operands.empty();
   case ExprKind::Cast:
+  case ExprKind::BitCast:
     return isIntegerConversion(E);
   case ExprKind::BinOp:
     if (E->Op == NdOp::SUBBYTES && !isIntegerSlice(E))
@@ -265,10 +277,6 @@ bool isRewriteableNode(const ExprPtr &E) {
   case ExprKind::UnaryOp:
     return (E->Op != NdOp::INT_ZEXT && E->Op != NdOp::INT_SEXT) ||
            isIntegerConversion(E);
-  case ExprKind::BitCast:
-    return E->Type && E->Operands.size() == 1 && E->Operands[0] &&
-           E->Operands[0]->Type && E->Type->Size != 0 &&
-           E->Type->Size == E->Operands[0]->Type->Size;
   default:
     return false;
   }
@@ -281,15 +289,24 @@ bool canTranslateOperands(const ExprPtr &E, const WidthFn &WidthOf) {
     return false;
   if (isIntegerConversion(E) || isIntegerSlice(E))
     return true;
+  if (E->Kind == ExprKind::BinOp && E->Op == NdOp::SELECT)
+    return E->Operands.size() == 3 && E->Operands[0] && E->Operands[1] &&
+           E->Operands[2] && WidthOf(E->Operands[0]) &&
+           WidthOf(E->Operands[1]) == Width && WidthOf(E->Operands[2]) == Width;
   if (E->Kind == ExprKind::BinOp && E->Operands.size() == 2 && E->Operands[0] &&
       E->Operands[1]) {
     const uint32_t Left = WidthOf(E->Operands[0]);
     const uint32_t Right = WidthOf(E->Operands[1]);
     if (E->Op == NdOp::CONCAT)
       return Left && Right && Left + Right == Width;
+    if (isBooleanBinary(E->Op))
+      return Width == 8 && Left && Right;
     if (isIntegerPredicate(E->Op))
       return Width == 8 && Left && Left == Right;
   }
+  if (E->Kind == ExprKind::UnaryOp && E->Operands.size() == 1 &&
+      E->Op == NdOp::BOOL_NOT)
+    return Width == 8 && WidthOf(E->Operands[0]);
   if (E->Kind == ExprKind::UnaryOp && E->Operands.size() == 1 &&
       (E->Op == NdOp::INT_NOT || E->Op == NdOp::INT_NEGATE ||
        E->Op == NdOp::INT_NEG2))
@@ -302,6 +319,9 @@ bool canTranslateOperands(const ExprPtr &E, const WidthFn &WidthOf) {
       return false;
     const uint32_t Have = WidthOf(Operand);
     if (Have == Width)
+      continue;
+    if (Have > Width && readsLowIntegerPrefixes(E->Op) &&
+        (Operand->Kind != ExprKind::Const || literalAt(*Operand, Have, Width)))
       continue;
     if (Operand->Kind != ExprKind::Const || Have == 0 || Have >= Width ||
         !literalAt(*Operand, Have, Width))
@@ -404,7 +424,8 @@ private:
   /// or a non-literal of the wrong width — is a conversion HighIR left
   /// implicit, and picking one of its meanings is how a rewrite silently
   /// becomes wrong.
-  std::optional<sym::SymRef> operandAt(const ExprPtr &E, uint32_t Width);
+  std::optional<sym::SymRef> operandAt(const ExprPtr &E, uint32_t Width,
+                                       bool ReadLowPrefix);
 
   uint32_t widthOf(const ExprPtr &E) {
     auto Cached = Widths.find(E.get());
@@ -501,12 +522,16 @@ private:
   std::unordered_map<uint32_t, ExprPtr> DefinitionViews;
 };
 
-std::optional<sym::SymRef> Translator::operandAt(const ExprPtr &E,
-                                                 uint32_t Width) {
+std::optional<sym::SymRef>
+Translator::operandAt(const ExprPtr &E, uint32_t Width, bool ReadLowPrefix) {
   const uint32_t Have = widthOf(E);
   if (Have == Width)
     return in(E);
-  if (E->Kind != ExprKind::Const || Have == 0 || Have >= Width)
+  if (E->Kind != ExprKind::Const)
+    return ReadLowPrefix && Have > Width
+               ? std::optional<sym::SymRef>(Ctx.mkExtract(in(E), 0, Width))
+               : std::nullopt;
+  if (Have == 0 || (Have > Width && !ReadLowPrefix))
     return std::nullopt;
   std::optional<llvm::APInt> Val = literalAt(*E, Have, Width);
   if (!Val)
@@ -593,22 +618,33 @@ sym::SymRef Translator::in(const ExprPtr &E) {
         Dependencies.push_back(Definition);
       } else if (isIntegerConversion(Current) || isIntegerSlice(Current)) {
         Dependencies.push_back(Current->Operands[0]);
+      } else if (Current->Kind == ExprKind::BinOp &&
+                 Current->Op == NdOp::SELECT &&
+                 canTranslateOperands(Current, [&](const ExprPtr &Operand) {
+                   return widthOf(Operand);
+                 })) {
+        Dependencies.append(Current->Operands.begin(), Current->Operands.end());
       } else if (Width != 0 && Current->Kind == ExprKind::BinOp &&
                  (binKindOf(Current->Op) != BinKind::None ||
-                  Current->Op == NdOp::CONCAT ||
+                  Current->Op == NdOp::CONCAT || isBooleanBinary(Current->Op) ||
                   isIntegerPredicate(Current->Op)) &&
                  Current->Operands.size() == 2) {
         for (const ExprPtr &Operand : Current->Operands)
           if (widthOf(Operand) != 0 &&
               (widthOf(Operand) == Width || Current->Op == NdOp::CONCAT ||
-               isIntegerPredicate(Current->Op)))
+               (readsLowIntegerPrefixes(Current->Op) &&
+                widthOf(Operand) > Width) ||
+               isBooleanBinary(Current->Op) || isIntegerPredicate(Current->Op)))
             Dependencies.push_back(Operand);
       } else if (Width != 0 && Current->Kind == ExprKind::UnaryOp &&
                  (Current->Op == NdOp::INT_NOT ||
                   Current->Op == NdOp::INT_NEGATE ||
-                  Current->Op == NdOp::INT_NEG2) &&
+                  Current->Op == NdOp::INT_NEG2 ||
+                  Current->Op == NdOp::BOOL_NOT) &&
                  Current->Operands.size() == 1 &&
-                 widthOf(Current->Operands[0]) == Width) {
+                 widthOf(Current->Operands[0]) &&
+                 (widthOf(Current->Operands[0]) == Width ||
+                  Current->Op == NdOp::BOOL_NOT)) {
         Dependencies.push_back(Current->Operands[0]);
       }
       for (auto It = Dependencies.rbegin(); It != Dependencies.rend(); ++It)
@@ -683,6 +719,30 @@ sym::SymRef Translator::in(const ExprPtr &E) {
       break;
 
     case ExprKind::BinOp: {
+      if (Current->Op == NdOp::SELECT &&
+          canTranslateOperands(Current, [&](const ExprPtr &Operand) {
+            return widthOf(Operand);
+          })) {
+        const auto Condition = in(Current->Operands[0]);
+        Result =
+            Ctx.mkIte(Ctx.mkNe(Condition, Ctx.mkZero(Ctx.width(Condition))),
+                      in(Current->Operands[1]), in(Current->Operands[2]));
+        break;
+      }
+      if (isBooleanBinary(Current->Op) &&
+          canTranslateOperands(Current, [&](const ExprPtr &Operand) {
+            return widthOf(Operand);
+          })) {
+        const auto A = in(Current->Operands[0]), B = in(Current->Operands[1]);
+        const auto Left = Ctx.mkNe(A, Ctx.mkZero(Ctx.width(A)));
+        const auto Right = Ctx.mkNe(B, Ctx.mkZero(Ctx.width(B)));
+        auto Predicate = Current->Op == NdOp::BOOL_AND ? Ctx.mkAnd(Left, Right)
+                         : Current->Op == NdOp::BOOL_OR
+                             ? Ctx.mkOr(Left, Right)
+                             : Ctx.mkXor(Left, Right);
+        Result = Ctx.mkZExt(Predicate, Width);
+        break;
+      }
       if (isIntegerSlice(Current)) {
         Result = Ctx.mkExtract(in(Current->Operands[0]),
                                Current->Operands[1]->ConstVal * 8, Width);
@@ -736,8 +796,11 @@ sym::SymRef Translator::in(const ExprPtr &E) {
         Result = opaque(Current, Width);
         break;
       }
-      std::optional<sym::SymRef> Lhs = operandAt(Current->Operands[0], Width);
-      std::optional<sym::SymRef> Rhs = operandAt(Current->Operands[1], Width);
+      const bool ReadLowPrefix = readsLowIntegerPrefixes(Current->Op);
+      std::optional<sym::SymRef> Lhs =
+          operandAt(Current->Operands[0], Width, ReadLowPrefix);
+      std::optional<sym::SymRef> Rhs =
+          operandAt(Current->Operands[1], Width, ReadLowPrefix);
       if (!Lhs || !Rhs) {
         Result = opaque(Current, Width);
         break;
@@ -746,7 +809,8 @@ sym::SymRef Translator::in(const ExprPtr &E) {
       break;
     }
 
-    case ExprKind::Cast: {
+    case ExprKind::Cast:
+    case ExprKind::BitCast: {
       if (!isIntegerConversion(Current)) {
         Result = opaque(Current, Width);
         break;
@@ -762,6 +826,15 @@ sym::SymRef Translator::in(const ExprPtr &E) {
     }
 
     case ExprKind::UnaryOp: {
+      if (Current->Op == NdOp::BOOL_NOT &&
+          canTranslateOperands(Current, [&](const ExprPtr &Operand) {
+            return widthOf(Operand);
+          })) {
+        const auto Operand = in(Current->Operands[0]);
+        Result = Ctx.mkZExt(Ctx.mkEq(Operand, Ctx.mkZero(Ctx.width(Operand))),
+                            Width);
+        break;
+      }
       if (isIntegerConversion(Current)) {
         sym::SymRef Operand = in(Current->Operands[0]);
         Result = Current->Op == NdOp::INT_SEXT ? Ctx.mkSExt(Operand, Width)
@@ -896,10 +969,13 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     // wrapping semantics from byte arithmetic.
     if (NodeWidth == 1 && Ctx.op(Item.Ref) != sym::SymOp::Const &&
         Ctx.op(Item.Ref) != sym::SymOp::Var &&
+        Ctx.op(Item.Ref) != sym::SymOp::Add &&
+        Ctx.op(Item.Ref) != sym::SymOp::Mul &&
         Ctx.op(Item.Ref) != sym::SymOp::And &&
         Ctx.op(Item.Ref) != sym::SymOp::Or &&
         Ctx.op(Item.Ref) != sym::SymOp::Xor &&
         Ctx.op(Item.Ref) != sym::SymOp::Not &&
+        Ctx.op(Item.Ref) != sym::SymOp::Ite &&
         !sym::isPredicate(Ctx.op(Item.Ref))) {
       Built.emplace(Index, nullptr);
       continue;
@@ -940,6 +1016,10 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     }
 
     case sym::SymOp::Add: {
+      if (NodeWidth == 1) {
+        Result = binop(NdOp::BOOL_XOR, Ctx.operands(Item.Ref));
+        break;
+      }
       // A sum whose term carries a negative coefficient reads far better as a
       // subtraction, and the C backend has no other way to be told so.  For
       // the same reason a constant term comes last, a negative one subtracted:
@@ -1001,6 +1081,10 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     }
 
     case sym::SymOp::Mul: {
+      if (NodeWidth == 1) {
+        Result = binop(NdOp::BOOL_AND, Ctx.operands(Item.Ref));
+        break;
+      }
       // The engine stores negation as a product with all-ones.  Emitting that
       // literally gives `-1 * x`, where every reader wants `-x`.
       llvm::ArrayRef<sym::SymRef> Factors = Ctx.operands(Item.Ref);
@@ -1199,6 +1283,20 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       break;
     }
 
+    case sym::SymOp::Ite: {
+      auto Condition = get(Ctx.operand(Item.Ref, 0));
+      auto Yes = get(Ctx.operand(Item.Ref, 1));
+      auto No = get(Ctx.operand(Item.Ref, 2));
+      if (!Condition || !Yes || !No)
+        break;
+      Result = std::make_shared<HighExpr>();
+      Result->Kind = ExprKind::BinOp;
+      Result->Op = NdOp::SELECT;
+      Result->Type = NdType::makeInt(ByteSize, false);
+      Result->Operands = {std::move(Condition), std::move(Yes), std::move(No)};
+      break;
+    }
+
     default:
       // Unsupported operators retain the source expression.
       Result = nullptr;
@@ -1280,7 +1378,13 @@ void simplifyOne(ExprPtr &E, const AvailableDefinitions &Definitions) {
   // larger default budget. Exhausted regions remain unchanged.
   sym::MBAOptions Options;
   Options.MaxWork = ::neverd::limits::ir::kHighSymSimplifySimplifyOneMaxWork;
-  sym::MBAResult Result = sym::simplifyMBADeep(Ctx, Before, Options);
+  const sym::SymRef Query = Ctx.op(Before) == sym::SymOp::ZExt &&
+                                    Ctx.width(Ctx.operand(Before, 0)) == 1
+                                ? Ctx.operand(Before, 0)
+                                : Before;
+  sym::MBAResult Result = sym::simplifyMBADeep(Ctx, Query, Options);
+  if (Query != Before)
+    Result.Expr = Ctx.mkZExt(Result.Expr, Width);
   if (Result.Changed && Result.Evidence != sym::MBAEvidence::Derivation)
     return;
 
@@ -1341,7 +1445,10 @@ void simplifyOne(ExprPtr &E, const AvailableDefinitions &Definitions) {
       Synth.Verification == sym::SynthVerification::Equivalent &&
       Publish(Synth.Expr))
     return;
-  Publish(Result.Expr);
+  // A deeper sub-byte form may have no source spelling. Builder
+  // normalization remains an independent exact candidate.
+  if (!Publish(Result.Expr))
+    Publish(Before);
 }
 
 /// Simplify maximal numeric regions, including those beneath opaque operators
@@ -1590,6 +1697,18 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
         S.EHClauseBodies.empty() && !S.IsPhiCopy &&
         S.MemoryOrdering == NdMemoryOrdering::None &&
         S.MemoryAddressSpace == NdMemoryAddressSpace::Default;
+    const bool PhiRead = S.Kind == StmtKind::Assign && S.IsPhiCopy &&
+                         S.Body.empty() && S.ElseBody.empty() &&
+                         S.Cases.empty() && S.DefaultBody.empty() &&
+                         S.EHClauses.empty() && S.EHClauseBodies.empty() &&
+                         S.MemoryOrdering == NdMemoryOrdering::None &&
+                         S.MemoryAddressSpace == NdMemoryAddressSpace::Default;
+    const bool OneShotCondition =
+        (S.Kind == StmtKind::If || S.Kind == StmtKind::IfElse ||
+         S.Kind == StmtKind::Switch) &&
+        S.EHClauses.empty() && S.EHClauseBodies.empty() &&
+        S.MemoryOrdering == NdMemoryOrdering::None &&
+        S.MemoryAddressSpace == NdMemoryAddressSpace::Default;
     bool Pure = true;
     uint64_t Weight = 1;
     const HighExpr *OnlyRoot = nullptr;
@@ -1619,7 +1738,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
         ReadsBeforeMutation &= expressionCost(Child).has_value();
       });
     return StatementProperties{
-        !Straight || Entries.count(S.Addr) ||
+        (!Straight && !PhiRead && !OneShotCondition) || Entries.count(S.Addr) ||
             (S.Kind == StmtKind::Assign && !isScalarLocal(S.Dst)),
         !Straight || S.Kind == StmtKind::Return, !Pure, ReadsBeforeMutation,
         Weight};
@@ -1706,12 +1825,12 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
             ::neverd::limits::ir::
                 kHighSymSimplifyStatementRegionsSimplifyDefinitionsSizeLimit &&
         S.Val && S.Val->Type && S.Val->Type->Kind == NdTypeKind::Int &&
-        S.Val->Type->Size == S.Dst->Type->Size) {
-      // A same-width assignment keeps the word's bits even when the emitted
-      // local has the other signedness. Retain the conversion explicitly so
-      // later widening reads the destination's signedness, not the source's.
+        widthFromBytes(S.Val->Type->Size)) {
+      // Retain the assignment conversion, including its source width and
+      // signedness. Later reads use the destination integer type.
       ExprPtr Value = S.Val;
-      if (Value->Type->IsSigned != S.Dst->Type->IsSigned) {
+      if (Value->Type->Size != S.Dst->Type->Size ||
+          Value->Type->IsSigned != S.Dst->Type->IsSigned) {
         auto Converted = std::make_shared<HighExpr>();
         Converted->Kind = ExprKind::Cast;
         Converted->Type = S.Dst->Type;

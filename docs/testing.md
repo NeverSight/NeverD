@@ -21409,3 +21409,5 @@ and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
 frontend regressions and 91 generated-table tests passed. NeverC's strict
 global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
+
+HighSymSimplify bitcast, low-prefix, Boolean/selection and incoming-PHI regressions compare exact APInt results and compiled C at O0/O2. Control splits, labels, ambiguous widths, calls, loads and assignment conversions retain their original scope and effect boundaries.
