@@ -70,6 +70,7 @@ void AnalysisService::reset() {
   const bool retain = (ready_ || refreshingNames_) && updatesNames_ &&
                       queries_.projectId() == owner_.projectId();
   active_.clear();
+  preparedRead_.reset();
   forgetKeptRequests();
   if (retain) {
     ++serial_;
@@ -217,9 +218,37 @@ void AnalysisService::setSnapshotBlocked(bool blocked) {
     requestSnapshot();
 }
 
+void AnalysisService::prepareRead(quint64 address) {
+  preparedRead_ = address;
+  if (ready_)
+    sendPreparedRead();
+  else
+    startReplica();
+}
+
+void AnalysisService::sendPreparedRead() {
+  if (!preparedRead_)
+    return;
+  const auto address = *std::exchange(preparedRead_, std::nullopt);
+  // It runs to its end as a read let go of does: a read sent meanwhile does not
+  // ask for the revision it leaves.
+  abandoned_ = client_.request(
+      QStringLiteral("decompile"),
+      {{"address", QStringLiteral("0x") + QString::number(address, 16)},
+       {"representation", QStringLiteral("source")},
+       {"source_options", QJsonObject{}},
+       {"offset", 0},
+       {"limit", 1}});
+}
+
 void AnalysisService::requestSnapshot() {
-  if (snapshotBlocked_ || startingReplica_ || ready_ || active_.isEmpty() ||
-      !handles(operation_))
+  if (active_.isEmpty() || !handles(operation_))
+    return;
+  startReplica();
+}
+
+void AnalysisService::startReplica() {
+  if (snapshotBlocked_ || startingReplica_ || ready_)
     return;
   startingReplica_ = true;
   const auto serial = serial_;
@@ -337,6 +366,7 @@ void AnalysisService::receive(const QJsonObject &message) {
     if (keptRead_)
       owner_.unsubscribe(std::exchange(keptRead_, 0));
     dispatch();
+    sendPreparedRead();
   } else if (!wire_.isEmpty() && id == wire_) {
     workerRevision_ = message.value("revision").toString();
     finish(message);

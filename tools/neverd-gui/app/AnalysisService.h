@@ -24,6 +24,10 @@ public:
   /// Whether a replica runs, or is on its way.
   bool replicaStarted() const { return ready_ || startingReplica_; }
   void setSnapshotBlocked(bool blocked);
+  /// The user is making an edit a replica will render: it starts now, if it has
+  /// not, and reads \p address, so that the read after the edit finds what this
+  /// one left.  Nothing waits for this read, and nobody hears its answer.
+  void prepareRead(quint64 address);
   /// Asks the replica to render functions ahead in idle time.
   void setRendersAhead(bool renders) { rendersAhead_ = renders; }
   /// The owner can answer a read from what earlier sessions kept, so that a
@@ -44,6 +48,8 @@ private:
   QString send(const QString &operation, const QJsonObject &payload);
   void reset();
   void requestSnapshot();
+  void startReplica();
+  void sendPreparedRead();
   /// Asks the owner for the running read from what is kept, and starts the
   /// replica for what is not.
   void readKept();
@@ -58,6 +64,7 @@ private:
 
   QueryService &owner_;
   EngineClient client_;
+  std::optional<quint64> preparedRead_;
   QueryService queries_;
   QString workerPath_, active_, operation_, wire_, restore_, workerRevision_;
   /// The read the worker runs for nobody, and what restoring the worker took.
@@ -117,6 +124,10 @@ public:
   }
   QString renderAheadState() const {
     return lanes_.front().service->renderAheadState();
+  }
+  /// AnalysisService::prepareRead, in the replica that takes reads first.
+  void prepareRead(quint64 address) {
+    lanes_.front().service->prepareRead(address);
   }
   /// Prepare one native entry in the same replica later source reads use.
   /// This is speculative read-only work; context changes cancel it normally.
