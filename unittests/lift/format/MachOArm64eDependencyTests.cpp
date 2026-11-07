@@ -132,7 +132,7 @@ TEST(MachOArm64eDependencies, RetainsSigningABIWhileRepackingChainMetadata) {
     SCOPED_TRACE(Chain.Format);
     const auto Original = linkedImage(Chain);
     auto Before = readMachODependencyState(Original);
-    ASSERT_TRUE(Before) << llvm::toString(Before.takeError());
+    ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
     ASSERT_EQ(Before->Slots.size(), 2u);
     auto Repacked = Original;
     auto *Payload = Repacked.data() + kChains;
@@ -142,7 +142,7 @@ TEST(MachOArm64eDependencies, RetainsSigningABIWhileRepackingChainMetadata) {
                           offsetof(dyld_chained_fixups_header, starts_offset),
                       kStarts + kSlotBytes);
     auto After = readMachODependencyState(Repacked);
-    ASSERT_TRUE(After) << llvm::toString(After.takeError());
+    ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
     EXPECT_EQ(Before->Slots, After->Slots);
     EXPECT_EQ(Before->Digest, After->Digest);
     auto Error = preserveMachODependencyState(*Before, *After);
@@ -156,13 +156,13 @@ TEST(MachOArm64eDependencies, RejectsChangesToTargetsAndSigningSchemas) {
     SCOPED_TRACE(Chain.Format);
     const auto Original = linkedImage(Chain);
     auto Before = readMachODependencyState(Original);
-    ASSERT_TRUE(Before) << llvm::toString(Before.takeError());
+    ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
     const auto Check = [&](unsigned Offset, uint64_t Mask) {
       auto Changed = Original;
       writeLE<uint64_t>(Changed.data() + Offset,
                         readLE<uint64_t>(Changed.data() + Offset) ^ Mask);
       auto After = readMachODependencyState(Changed);
-      ASSERT_TRUE(After) << llvm::toString(After.takeError());
+      ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
       auto Error = preserveMachODependencyState(*Before, *After);
       EXPECT_TRUE(bool(Error));
       llvm::consumeError(std::move(Error));
@@ -177,7 +177,7 @@ TEST(MachOArm64eDependencies, RejectsChangesToTargetsAndSigningSchemas) {
     writeLE<uint32_t>(ChangedABI.data() + offsetof(mach_header_64, cpusubtype),
                       macho_loader::arm64e::kCPUSubtypeX1);
     auto After = readMachODependencyState(ChangedABI);
-    ASSERT_TRUE(After) << llvm::toString(After.takeError());
+    ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
     auto Error = preserveMachODependencyState(*Before, *After);
     EXPECT_TRUE(bool(Error));
     llvm::consumeError(std::move(Error));
@@ -191,14 +191,14 @@ TEST(MachOArm64eDependencies, RejectsWrongCPUAndCrossPageStorage) {
     writeLE<uint32_t>(WrongCPU.data() + offsetof(mach_header_64, cputype),
                       CPU_TYPE_X86_64);
     auto CPUState = readMachODependencyState(WrongCPU);
-    EXPECT_FALSE(CPUState);
+    EXPECT_FALSE(bool(CPUState));
     llvm::consumeError(CPUState.takeError());
     auto CrossPage = Original;
     writeLE<uint16_t>(CrossPage.data() + kChains + kSegmentStart +
                           offsetof(dyld_chained_starts_in_segment, page_start),
                       kPageEnd);
     auto PageState = readMachODependencyState(CrossPage);
-    EXPECT_FALSE(PageState);
+    EXPECT_FALSE(bool(PageState));
     llvm::consumeError(PageState.takeError());
   }
 }
@@ -208,7 +208,7 @@ TEST(MachOArm64eDependencies, UsesFormatAlignmentAndRetainsSlotAddresses) {
     SCOPED_TRACE(Chain.Format);
     const auto Original = linkedImage(Chain);
     auto Before = readMachODependencyState(Original);
-    ASSERT_TRUE(Before) << llvm::toString(Before.takeError());
+    ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
     auto Moved = Original;
     writeLE<uint16_t>(Moved.data() + kChains + kSegmentStart +
                           offsetof(dyld_chained_starts_in_segment, page_start),
@@ -217,11 +217,11 @@ TEST(MachOArm64eDependencies, UsesFormatAlignmentAndRetainsSlotAddresses) {
     writeLE<uint64_t>(Moved.data() + kSecondSlot + kWordBytes, Chain.Second);
     auto After = readMachODependencyState(Moved);
     if (macho_loader::arm64e::chainFormat(Chain.Format)->Stride != kWordBytes) {
-      EXPECT_FALSE(After);
+      EXPECT_FALSE(bool(After));
       llvm::consumeError(After.takeError());
       continue;
     }
-    ASSERT_TRUE(After) << llvm::toString(After.takeError());
+    ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
     EXPECT_EQ(After->Slots.size(), Before->Slots.size());
     auto Error = preserveMachODependencyState(*Before, *After);
     EXPECT_TRUE(bool(Error));
