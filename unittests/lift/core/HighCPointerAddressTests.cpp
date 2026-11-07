@@ -38,6 +38,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
@@ -50314,6 +50315,81 @@ TEST(HighCPointerAddresses, PointerObjectsReturnAsTheirIntegers) {
   EXPECT_NE(Source.find("int8_t* variable_buffer"), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("return variable_buffer;"), std::string::npos)
+      << Source;
+  expectCSyntax(Source);
+}
+
+TEST(HighCPointerAddresses, ImmutableSlotLoadsConvertTheirAddressOnce) {
+  // A read-only GOT slot prints as the address the loader gives it, already
+  // the integer the load reads. The pointer the slot itself is declared as is
+  // not what that text is, so an integer local takes the text as printed.
+  constexpr va_t Slot = 0x6000;
+  BinaryImage Img =
+      makeImageObjectFixture(Slot, std::vector<uint8_t>(8), false);
+  Img.Format = BinaryFormat::ELF;
+  Img.Base = 0;
+  RelocationEntry Relocation;
+  Relocation.Address = Slot;
+  Relocation.Type = llvm::ELF::R_X86_64_GLOB_DAT;
+  Relocation.HasExplicitAddend = true;
+  Relocation.ELF.emplace();
+  auto &Bound = Relocation.ELF->Symbol.emplace();
+  Bound.Name = "shared_table";
+  Bound.Type = llvm::ELF::STT_OBJECT;
+  Img.Relocations.push_back(Relocation);
+  // The code keeps the slot's address too, which declares the slot a pointer.
+  const auto Pointer = NdType::makePtr();
+  HighFunc Keep;
+  Keep.Name = "slot_address";
+  Keep.Entry = 0x1100;
+  Keep.ReturnType = NdType::makePtr(Pointer);
+  auto Kept = std::make_shared<HighExpr>();
+  Kept->Kind = ExprKind::Addr;
+  Kept->Type = Keep.ReturnType;
+  Kept->Operands.push_back(
+      HighExpr::makeLoad(HighExpr::makeConst(Slot, 8), Pointer));
+  returnValue(Keep, std::move(Kept));
+  const auto Signed = NdType::makeInt(8);
+  const auto Unsigned = NdType::makeInt(8, false);
+  HighFunc Func;
+  Func.Name = "table_addresses";
+  Func.Entry = 0x1000;
+  Func.ReturnType = Signed;
+  // Assigned twice, so the loads stay in assignments of their own.
+  const MedVar First = temporary(1);
+  const MedVar Second = temporary(2);
+  auto Advanced = [](const MedVar &Var, const TypeRef &Type) {
+    auto Next = HighExpr::makeBinop(NdOp::INT_ADD, HighExpr::makeVar(Var, Type),
+                                    HighExpr::makeConst(1, 8));
+    Next->Type = Type;
+    return Next;
+  };
+  Func.Body = {
+      assignTo(First, HighExpr::makeLoad(HighExpr::makeConst(Slot, 8), Signed)),
+      assignTo(Second,
+               HighExpr::makeLoad(HighExpr::makeConst(Slot, 8), Unsigned)),
+      assignTo(First, Advanced(First, Signed)),
+      assignTo(Second, Advanced(Second, Unsigned))};
+  for (size_t I = 0; I < Func.Body.size(); ++I)
+    Func.Body[I].Dst->Type = I % 2 ? Unsigned : Signed;
+  auto Sum =
+      HighExpr::makeBinop(NdOp::INT_ADD, HighExpr::makeVar(First, Signed),
+                          HighExpr::makeVar(Second, Unsigned));
+  Sum->Type = Signed;
+  returnValue(Func, std::move(Sum));
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::ELF;
+  Options.Image = &Img;
+  ASSERT_TRUE(HighCEmitter().emit({Keep, Func}, OS, Options));
+  OS.flush();
+  EXPECT_NE(Source.find("t1 = (int64_t)(uintptr_t)neverd_data_shared_table;"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("t2 = (uint64_t)(uintptr_t)neverd_data_shared_table;"),
+            std::string::npos)
       << Source;
   expectCSyntax(Source);
 }

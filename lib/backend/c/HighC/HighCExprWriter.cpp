@@ -3443,6 +3443,10 @@ TypeRef HighCWriter::printedPointerType(const HighExpr &Value) const {
   const auto Address = constAddress(*Value.Operands[0]);
   if (!Address)
     return nullptr;
+  // An integer load of a read-only slot prints as the address the slot holds,
+  // converted already, and not as the pointer the slot is declared.
+  if (Value.Type->Kind != NdTypeKind::Ptr && immutableSlotAddress(Value))
+    return nullptr;
   const auto Object = ImageObjects.find(*Address);
   if (Object == ImageObjects.end() || !Object->second.Type)
     return nullptr;
@@ -7322,14 +7326,8 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         return Text;
       return typedText(E, std::move(Text), E.Type->Size, E.Type->IsSigned);
     };
-    if (E.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
-        E.MemoryOrdering == NdMemoryOrdering::None && E.Type && Opts.Image &&
-        E.Type->Size == Opts.Image->getPointerSize())
-      if (auto Slot = constAddress(*E.Operands[0]))
-        if (const auto It = DataSymbolBindings.find(*Slot);
-            It != DataSymbolBindings.end() && It->second.Immutable)
-          if (const auto Address = dataSymbolAddress(*Slot))
-            return "(" + typeToC(E.Type) + ")" + *Address;
+    if (const auto Address = immutableSlotAddress(E))
+      return "(" + typeToC(E.Type) + ")" + *Address;
     if (E.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
       if (auto VA = constAddress(*E.Operands[0])) {
         if (imageBackingAddress(*VA))

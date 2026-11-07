@@ -4750,6 +4750,21 @@ std::optional<std::string> HighCWriter::dataSymbolAddress(va_t Slot) const {
   return Value;
 }
 
+std::optional<std::string>
+HighCWriter::immutableSlotAddress(const HighExpr &Load) const {
+  if (Load.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      Load.MemoryOrdering != NdMemoryOrdering::None || !Load.Type ||
+      !Opts.Image || Load.Type->Size != Opts.Image->getPointerSize())
+    return std::nullopt;
+  const auto Slot = constAddress(*Load.Operands[0]);
+  if (!Slot)
+    return std::nullopt;
+  const auto It = DataSymbolBindings.find(*Slot);
+  if (It == DataSymbolBindings.end() || !It->second.Immutable)
+    return std::nullopt;
+  return dataSymbolAddress(*Slot);
+}
+
 std::optional<std::string> HighCWriter::relocatedSlotTarget(va_t Slot) const {
   if (auto Address = dataSymbolAddress(Slot))
     return Address;
