@@ -667,10 +667,20 @@ class LowWordDecisions {
       Failed = true;
       return R;
     }
-    const uint64_t Key = (uint64_t(R.index()) << 8) | Count;
+    const auto Op = Ctx.op(R);
+    uint64_t Key = (uint64_t(R.index()) << 8) | Count;
+    if ((Op == SymOp::Add || Op == SymOp::And || Op == SymOp::Or ||
+         Op == SymOp::Xor) &&
+        Ctx.numOperands(R) == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
+      // Projection observes only this residue of the constant. Reuse the
+      // complete projected representative before visiting its children or
+      // interning another copy with a different full-width source offset.
+      Key = constantWordKey(R, Count);
+      if (Failed)
+        return R;
+    }
     if (auto It = Cache.find(Key); It != Cache.end())
       return It->second;
-    const auto Op = Ctx.op(R);
     auto Result = R;
     if (Ctx.isConst(R)) {
       const auto Value = literal(R);
@@ -923,17 +933,20 @@ class LowWordDecisions {
       }
     } else if (Op == SymOp::Add && Ctx.numOperands(R) == 2 &&
                Ctx.isConst(Ctx.operand(R, 0))) {
-      const auto Literal = literal(Ctx.operand(R, 0));
-      if (!Literal)
-        return Empty;
+      const auto Low = (Key >> 8) & 255;
       const auto &Value = word(Ctx.operand(R, 1), Count, Depth + 1);
-      // A constant carry is AND or OR, rather than a three-input majority.
-      // Avoid constructing a constant word and caching a generic word sum.
-      uint32_t Carry = 0;
-      for (unsigned I = 0; I < Count && !Failed; ++I) {
-        Result[I] = apply<Xor>(Value[I], Carry ^ uint32_t((*Literal)[I]));
+      // The normalized key already holds the complete observed literal.
+      // Its first set bit starts the carry; every lower bit stays unchanged.
+      // The zero residue returned above, so First is inside this word.
+      const unsigned First = std::countr_zero(Low);
+      std::copy_n(Value.begin(), First, Result.begin());
+      Result[First] = Value[First] ^ 1;
+      uint32_t Carry = Value[First];
+      for (unsigned I = First + 1; I < Count && !Failed; ++I) {
+        const bool Bit = (Low >> I) & 1;
+        Result[I] = apply<Xor>(Value[I], Carry ^ uint32_t(Bit));
         if (I + 1 < Count)
-          Carry = apply((*Literal)[I] ? Or : And, Value[I], Carry);
+          Carry = apply(Bit ? Or : And, Value[I], Carry);
       }
     } else if (Op == SymOp::Add || Op == SymOp::Mul || Op == SymOp::And ||
                Op == SymOp::Or || Op == SymOp::Xor) {
@@ -1665,22 +1678,31 @@ class LowWordDecisions {
     if (auto It = Words.find(Key); It != Words.end())
       return It->second.back();
     if (Ctx.numOperands(R) == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
-      if (Ctx.op(R) == SymOp::And || Ctx.op(R) == SymOp::Add) {
+      if (Ctx.op(R) == SymOp::And) {
         const auto Literal = literal(Ctx.operand(R, 0));
         if (!Literal)
           return 0;
+        return (*Literal)[Count - 1]
+                   ? highestBit(Ctx.operand(R, 1), Count, Depth + 1)
+                   : 0;
+      }
+      if (Ctx.op(R) == SymOp::Add) {
+        const uint64_t TopKey = constantWordKey(R, Count);
+        if (Failed)
+          return 0;
+        const auto Low = (TopKey >> 8) & 255;
         const auto Other = Ctx.operand(R, 1);
-        if (Ctx.op(R) == SymOp::And)
-          return (*Literal)[Count - 1] ? highestBit(Other, Count, Depth + 1)
-                                       : 0;
-        // A constant addend only needs the carry into the requested bit.
-        // Do not construct all lower sum bits when no caller observes them.
+        const auto Flip = uint32_t((Low >> (Count - 1)) & 1);
+        const unsigned First = std::countr_zero(Low);
+        if (First >= Count - 1)
+          return highestBit(Other, Count, Depth + 1) ^ Flip;
+        // Only the carry into the requested bit is observed. Lower zero
+        // addend bits cannot start that carry or affect the requested bit.
         const auto &Value = word(Other, Count, Depth + 1);
-        uint32_t Carry = 0;
-        for (unsigned I = 0; I + 1 < Count; ++I)
-          Carry = apply((*Literal)[I] ? Or : And, Value[I], Carry);
-        return apply<Xor>(Value.back(),
-                          Carry ^ uint32_t((*Literal)[Count - 1]));
+        uint32_t Carry = Value[First];
+        for (unsigned I = First + 1; I + 1 < Count; ++I)
+          Carry = apply((Low >> I) & 1 ? Or : And, Value[I], Carry);
+        return apply<Xor>(Value.back(), Carry ^ Flip);
       }
     }
     return word(R, Count, Depth + 1).back();
@@ -2030,11 +2052,16 @@ class LowWordDecisions {
     llvm::SmallVector<SymRef, 16> Pairs, Rest;
     Bits Correction(2, 0);
     llvm::SmallVector<Bits, 16> Corrections;
+    llvm::SmallVector<uint64_t, 16> RepeatedCorrections;
     unsigned LiteralCorrection = 0;
     if constexpr (BatchCorrections) {
       if (!charge(1, (Factors.size() / 2) * sizeof(Bits)))
         return {};
       Corrections.reserve(Factors.size() / 2);
+    } else {
+      if (!charge(1, (Factors.size() / 2) * sizeof(uint64_t)))
+        return {};
+      RepeatedCorrections.reserve(Factors.size() / 2);
     }
     for (auto Factor : Factors) {
       auto S = wideSignature(*State.Wide, Factor, Count);
@@ -2070,7 +2097,10 @@ class LowWordDecisions {
           else
             Corrections.push_back(std::move(Change));
         } else {
-          Correction = sumCorrection(Correction, Change);
+          if (!charge())
+            return {};
+          RepeatedCorrections.push_back((uint64_t(Change[0]) << 32) |
+                                        Change[1]);
         }
       }
     }
@@ -2089,6 +2119,31 @@ class LowWordDecisions {
                    : Corrections.size() == 2
                        ? sumCorrection(Corrections[0], Corrections[1])
                        : sumWords(Corrections, 2);
+    } else {
+      // A complete two-bit correction repeated four times vanishes modulo
+      // four. Coalesce its exact edges before building transient carry graphs;
+      // two copies contribute only their low edge to the high column.
+      if (!charge(RepeatedCorrections.size() *
+                  (1 + std::bit_width(RepeatedCorrections.size()))))
+        return {};
+      std::sort(RepeatedCorrections.begin(), RepeatedCorrections.end());
+      for (size_t I = 0; I < RepeatedCorrections.size();) {
+        size_t End = I + 1;
+        while (End < RepeatedCorrections.size() &&
+               RepeatedCorrections[End] == RepeatedCorrections[I])
+          ++End;
+        const auto Copies = (End - I) & 3;
+        const auto Low = uint32_t(RepeatedCorrections[I] >> 32);
+        const auto High = uint32_t(RepeatedCorrections[I]);
+        Bits Change{Copies & 1 ? Low : 0, Copies & 1 ? High : 0};
+        if (Copies & 2)
+          Change[1] = apply<Xor>(Change[1], Low);
+        if (Copies)
+          Correction = sumCorrection(Correction, Change);
+        if (Failed)
+          return {};
+        I = End;
+      }
     }
     auto Inner = widePairedProduct<BatchCorrections>(State, Pairs, Count - 1);
     if (Failed || Inner.empty())
@@ -2553,8 +2608,8 @@ public:
               : nullptr;
       if (Wide) {
         // Complete blocks and odd residual blocks combine their correction
-        // columns. Partial even blocks retain streaming work so an unfinished
-        // graph leaves the established allowance for ordinary child rewrites.
+        // columns. Partial even blocks first cancel repeated complete
+        // corrections, then accumulate the distinct remaining words.
         Product = FullBlock || (Nonconstants.size() & 1)
                       ? widePairedProduct<true>(State, Nonconstants, Observed,
                                                 Unpaired)

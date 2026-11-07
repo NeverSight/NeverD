@@ -5147,9 +5147,12 @@ throughout reconstruction.
 Constant binary operands use exact low-word cache keys containing the other
 operand, operation, literal residue and precision. Native literals need no
 temporary expression nodes; wide literal prefixes are copied and charged once
-per search. Word and pairing-signature caches share this normalization without
-changing any source constant or wider reading. Neutral observed constants
-reuse the operand directly.
+per search. Word, projected-representative and pairing-signature caches share
+this normalization without changing any source constant or wider reading.
+Neutral observed constants reuse the operand directly.
+Constant additions reuse the literal residue already present in the word key.
+Bits below its first set bit remain unchanged and cannot start a carry; a
+single-bit query constructs only the carry into its requested position.
 Native key construction reads inline constants without entering the wide
 literal reader.
 Decision identity hits and terminal two-input Boolean operations return before
@@ -5180,6 +5183,11 @@ Products spanning the complete observed domain also normalize their factors
 once. Each operand needs only the bits still observable after the other
 factors' proved trailing zeros; the projection cache includes that precision.
 Neutral low-word constants bypass reconstruction of identity operations.
+Partial even pairing blocks coalesce exact two-bit correction words before
+constructing their sum. Four equal corrections vanish modulo four; two copies
+move their low bit into the high column. This avoids transient carry graphs
+for repetitions that cancel, while retaining every distinct correction and
+charging the sort, storage and remaining decisions to the same allowance.
 For a partial block of XOR factors, narrow nonlinear products can use
 exact lower decision bits as pairing identities. Their two actual upper bits
 form the additive correction, including cross terms that cannot be discarded
