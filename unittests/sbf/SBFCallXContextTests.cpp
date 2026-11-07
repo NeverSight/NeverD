@@ -3986,8 +3986,7 @@ TEST(SBFCallXContexts, RedundantPublishedTargetsDoNotDisplaceNewTargets) {
           // by its callers. Equal CALLX targets alone do not authorize
           // replacement.
           const bool Replaced =
-              NewImageArgument &&
-              (!KnownFirstTarget || (OpaqueReturn && !DistinctDescendants));
+              NewImageArgument && (!KnownFirstTarget || !DistinctDescendants);
           if (KnownFirstTarget)
             for (size_t I = 0; I < kCallXContextSpecializationsPerEntry; ++I)
               EXPECT_TRUE(llvm::any_of(Report->Contexts, [&](const auto &Site) {
@@ -6767,6 +6766,156 @@ TEST(SBFCallXContexts, NonReturningCallsExcludeOnlyTheirDeadContinuations) {
   }
 }
 
+TEST(SBFCallXContexts,
+     EqualFiniteResultsRetainCallersAcrossFurtherImageInputs) {
+  for (bool DistinctResults : {false, true})
+    for (bool KnownField : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "distinct=" << DistinctResults
+                                        << ", field=" << KnownField);
+      std::vector<test::EncodedInstruction> Text{encode(Opcode::EXIT)};
+      const auto Literal = [&](unsigned Register, uint64_t Value) {
+        const auto Words = test::loadImm64(Register, Value);
+        Text.insert(Text.end(), Words.begin(), Words.end());
+      };
+      const size_t Count = kCallXContextSpecializationsPerEntry + 2;
+      std::vector<size_t> Entries, Calls;
+      for (size_t I = 0; I < Count; ++I) {
+        Entries.push_back(Text.size());
+        Literal(1, kRodataStartV3 + I * 16);
+        Literal(4, kInputStart);
+        if (I + 1 == Count && KnownField)
+          Literal(2, kRodataStartV3 + Count * 16);
+        else
+          Text.push_back(encode(Opcode::LD_DW_REG, 2, 4, 16));
+        Text.push_back(encode(Opcode::ST_DW_REG, 10, 2, -56));
+        Text.push_back(encode(Opcode::MOV64_IMM, 2));
+        Text.push_back(encode(Opcode::MOV64_REG, 7, 10));
+        Text.push_back(encode(Opcode::ADD64_IMM, 7, 0, 0, -96));
+        Calls.push_back(Text.size());
+        Text.push_back({});
+        Text.push_back(encode(Opcode::EXIT));
+      }
+      const size_t Wrapper = Text.size();
+      Text.push_back(encode(Opcode::MOV64_REG, 6, 4));
+      Text.push_back(encode(Opcode::LD_DW_REG, 8, 1, 8));
+      Text.push_back(encode(Opcode::LD_DW_REG, 9, 1));
+      Text.push_back(encode(Opcode::JEQ64_IMM, 9, 0, 1));
+      const size_t ChildCall = Text.size();
+      Text.push_back({});
+      Text.push_back(encode(Opcode::LD_DW_REG, 3, 6));
+      Text.push_back(encode(Opcode::ST_DW_REG, 3, 8));
+      Text.push_back(encode(Opcode::LD_DW_REG, 3, 6, 8));
+      Text.push_back(encode(Opcode::MOV64_IMM, 0));
+      Text.push_back(encode(Opcode::JEQ64_IMM, 3, 0, 1));
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 1));
+      Text.push_back(encode(Opcode::ADD64_REG, 0, 8));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Child = Text.size();
+      Text.push_back(encode(Opcode::LD_DW_REG, 1, 7, 40));
+      Text.push_back(encode(Opcode::LD_DW_REG, 5, 1, 24));
+      const size_t CallX = Text.size();
+      Text.push_back(encode(Opcode::CALL_REG, 5));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Target = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+      Text.push_back(encode(Opcode::EXIT));
+      for (size_t Call : Calls)
+        Text[Call] = encode(Opcode::CALL_IMM, 0, 1, 0, Wrapper - Call - 1);
+      Text[ChildCall] =
+          encode(Opcode::CALL_IMM, 0, 1, 0, Child - ChildCall - 1);
+      std::vector<uint8_t> Table(Count * 16 + 32);
+      for (size_t I = 0; I < Count; ++I) {
+        llvm::support::endian::write64le(Table.data() + I * 16, I + 1 == Count);
+        llvm::support::endian::write64le(Table.data() + I * 16 + 8,
+                                         DistinctResults ? I * 2 : 0);
+      }
+      llvm::support::endian::write64le(Table.data() + Count * 16 + 24,
+                                       kBytecodeStart + Target * 8);
+      auto Image = test::makeImage(Text, Table);
+      for (size_t Entry : Entries) {
+        Symbol Function;
+        Function.Name = "finite_caller_" + std::to_string(Entry);
+        Function.Addr = kBytecodeStart + Entry * kInstructionSize;
+        Function.IsFunc = true;
+        Image.Symbols.push_back(std::move(Function));
+      }
+      auto Program = analyze(Image);
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      checkSummaryReferences(*Report);
+      EXPECT_EQ(llvm::any_of(Report->SummaryEdges,
+                             [&](const auto &Edge) {
+                               return Edge.CallerSlot == Calls.back() &&
+                                      !Edge.GeneralizedInputs;
+                             }),
+                !DistinctResults);
+      EXPECT_EQ(llvm::any_of(Report->Contexts,
+                             [&](const auto &Site) {
+                               return Site.CallerSlot == ChildCall &&
+                                      Site.CallXSlot == CallX &&
+                                      Site.TargetSlot == Target;
+                             }),
+                !DistinctResults && KnownField);
+      EXPECT_LE(llvm::count_if(Report->Summaries,
+                               [&](const auto &Summary) {
+                                 return Summary.EntrySlot == Wrapper &&
+                                        !Summary.GeneralizedInputs;
+                               }),
+                kCallXContextSpecializationsPerEntry);
+      // Every retained completed caller must still see its own finite return
+      // set, including through rewritten edges. Distinct results cannot share
+      // a summary even when both scalar singleton views are unknown.
+      for (size_t I = 0; I < Count; ++I) {
+        if (I < kCallXContextSpecializationsPerEntry || !DistinctResults) {
+          const auto Edge =
+              llvm::find_if(Report->SummaryEdges, [&](const auto &E) {
+                return E.CallerSlot == Calls[I] && !E.GeneralizedInputs;
+              });
+          ASSERT_NE(Edge, Report->SummaryEdges.end());
+          const auto Summary =
+              llvm::find_if(Report->Summaries, [&](const auto &S) {
+                return Edge->CalleeSummaryID == S.ID;
+              });
+          ASSERT_NE(Summary, Report->Summaries.end());
+          std::set<uint64_t> Values;
+          for (const auto &V : Summary->ReturnAlternatives.values()) {
+            EXPECT_EQ(V.ValueKind, RegisterValue::Kind::Constant);
+            Values.insert(V.Value);
+          }
+          const uint64_t Bias = DistinctResults ? I * 2 : 0;
+          EXPECT_EQ(Values, (std::set<uint64_t>{Bias, Bias + 1}));
+        }
+        for (uint64_t Selector : {0u, 1u}) {
+          Image.Entry = kBytecodeStart + Entries[I] * kInstructionSize;
+          auto Selected = analyze(Image);
+          ASSERT_TRUE(static_cast<bool>(Selected))
+              << llvm::toString(Selected.takeError());
+          ExecutionEnvironment Environment;
+          std::vector<uint8_t> Input(24);
+          llvm::support::endian::write64le(Input.data(), kHeapStart);
+          llvm::support::endian::write64le(Input.data() + 8, Selector);
+          llvm::support::endian::write64le(Input.data() + 16,
+                                           kRodataStartV3 + Count * 16);
+          Environment.Memory.push_back({kInputStart, Input, false, "inputs"});
+          Environment.Memory.push_back(
+              {kHeapStart, std::vector<uint8_t>(8), true, "output"});
+          auto Raw = executeRaw(*Selected, std::move(Environment));
+          ASSERT_TRUE(static_cast<bool>(Raw))
+              << llvm::toString(Raw.takeError());
+          EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+          EXPECT_EQ(Raw->ReturnValue, (DistinctResults ? I * 2 : 0) + Selector);
+          EXPECT_EQ(llvm::any_of(
+                        Raw->Trace,
+                        [&](const auto &Step) { return Step.Slot == Target; }),
+                    I + 1 == Count);
+        }
+      }
+    }
+}
+
 TEST(SBFCallXContexts, NewCapturedInputCanUseEquivalentCompletedResults) {
   for (bool CapturedInput : {false, true})
     for (bool OpaqueReturn : {false, true}) {
@@ -6843,7 +6992,7 @@ TEST(SBFCallXContexts, NewCapturedInputCanUseEquivalentCompletedResults) {
       ASSERT_TRUE(static_cast<bool>(Report))
           << llvm::toString(Report.takeError());
       checkSummaryReferences(*Report);
-      const bool Coalesced = CapturedInput && OpaqueReturn;
+      const bool Coalesced = CapturedInput;
       EXPECT_EQ(llvm::any_of(Report->SummaryEdges,
                              [&](const auto &Edge) {
                                return Edge.CallerSlot == Calls.back() &&
@@ -7162,8 +7311,7 @@ TEST(SBFCallXContexts, RepeatedFrameBindingsCanMakeRoomForANewDescriptor) {
         ASSERT_TRUE(static_cast<bool>(Report))
             << llvm::toString(Report.takeError());
         checkSummaryReferences(*Report);
-        const bool Replaced =
-            NewFrameBinding && OpaqueReturn && !MixedRetainedBindings;
+        const bool Replaced = NewFrameBinding && !MixedRetainedBindings;
         EXPECT_EQ(Report->GeneralizedPublishedSummaries > 0, Replaced);
         EXPECT_LE(llvm::count_if(Report->Summaries,
                                  [&](const auto &Summary) {

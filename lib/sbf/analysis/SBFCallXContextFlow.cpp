@@ -1015,6 +1015,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   const auto &Variants = Specializations.at(Entry);
   auto &Generic = *GenericContexts.at(Entry);
   bool NewImageArgument = false;
+  bool UnrepresentedImageBinding = false;
   uint16_t NewImageRegisters = 0;
   uint16_t NewCapturedRegisters = 0;
   uint16_t NewFrameRegisters = 0;
@@ -1064,6 +1065,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
         });
     if (!Absent)
       continue;
+    UnrepresentedImageBinding |= Generic.Sites.empty();
     const auto Known = std::find_if(
         Variants.begin(), Variants.end(), [&](const auto *Variant) {
           return !Variant->Input.Registers[R].unknown();
@@ -1078,8 +1080,10 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
         !(Generic.ExploredImageRegisters & registerBit(R)))
       NewImageRegisters |= registerBit(R);
   }
-  if (!Retry && !NewImageArgument && !NewImageRegisters &&
-      !NewCapturedRegisters && !NewFrameRegisters)
+  const bool OnlyPreciseSiblingResult =
+      !Retry && !NewImageArgument && !NewImageRegisters &&
+      !NewCapturedRegisters && !NewFrameRegisters;
+  if (OnlyPreciseSiblingResult && !UnrepresentedImageBinding)
     return false;
   // Replacing an old incoming edge must leave the caller transfer unchanged.
   // Start with the opaque-memory case: no returned cells or affine return
@@ -1248,9 +1252,15 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     if ((Retry && Candidate != Retry->Summary) ||
         (!Retry && (!Candidate->Published ||
                     Candidate->RootGeneration == RootGeneration)) ||
-        Candidate->IsRoot || !OpaqueReturn(*Candidate) ||
-        Candidate->Return->Registers[0] != Generic.Return->Registers[0] ||
-        Candidate->Return->Origins[0] != Generic.Return->Origins[0])
+        Candidate->IsRoot || !OpaqueReturn(*Candidate))
+      continue;
+    const bool GenericKeepsResult =
+        Candidate->Return->Registers[0] == Generic.Return->Registers[0] &&
+        Candidate->Return->Origins[0] == Generic.Return->Origins[0];
+    // Further image inputs can use redundant, more precise completed results.
+    // Repeated opaque results keep the original once-per-register demand.
+    if ((Retry && !GenericKeepsResult) ||
+        (OnlyPreciseSiblingResult && GenericKeepsResult))
       continue;
     // A generic replacement must preserve the node's own caller proofs.
     // Otherwise only an already computed, independently published sibling
@@ -1267,7 +1277,8 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
                               Replacement.TargetAddress == Site.TargetAddress;
                      });
         });
-    if (!GenericKeepsSites && Retry)
+    const bool GenericEquivalent = GenericKeepsResult && GenericKeepsSites;
+    if (!GenericEquivalent && Retry)
       continue;
     const auto SameSites = [&](const FunctionContext &Sibling) {
       if (Candidate->Sites.size() != Sibling.Sites.size())
@@ -1296,14 +1307,14 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
       return Collected.takeError();
     if (!*Collected)
       continue;
-    bool Redundant = GenericKeepsSites && Required.empty();
+    bool Redundant = GenericEquivalent && Required.empty();
     FunctionContext *Replacement = &Generic;
     for (auto *Sibling : Specializations.at(Entry)) {
       if (Redundant)
         break;
       if (Sibling == Candidate || !Sibling->Complete || !Sibling->Published)
         continue;
-      if (!GenericKeepsSites &&
+      if (!GenericEquivalent &&
           (!OpaqueReturn(*Sibling) ||
            Sibling->Return->Registers[0] != Candidate->Return->Registers[0] ||
            Sibling->Return->Origins[0] != Candidate->Return->Origins[0] ||
@@ -1321,7 +1332,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
           !IndependentlyPublished(*Sibling, Candidate->ID))
         continue;
       Redundant = true;
-      if (!GenericKeepsSites)
+      if (!GenericEquivalent)
         Replacement = Sibling;
     }
     if (!Redundant)

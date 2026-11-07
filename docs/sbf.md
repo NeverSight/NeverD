@@ -489,11 +489,15 @@ expression proofs must retain the same expression, input values and loaded
 values; matching target addresses from different fields do not cover each
 other's conditions. The comparison borrows existing bounded witnesses and
 charges its target index to the retained-state budget. A node's own proven
-targets must also be established by the generic replacement. If they are not,
+targets must also be established by the generic replacement. If the generic
+summary cannot preserve either the return alternatives or those targets,
 a completed independently published sibling may instead receive the old
-incoming edges only when its opaque return, own site results, expressions and
-missing-fact diagnostics agree exactly. Descendant proof coverage is still
-required. This coalesces results already computed for those callers; it does
+incoming edges only when its opaque memory transfer, complete return values
+and origins, own site results, expressions and missing-fact diagnostics agree
+exactly. Equal finite return sets remain eligible even when the generic return
+is unknown; different finite sets cannot be merged just because neither has a
+singleton return value. Descendant proof coverage is still required. This
+coalesces results already computed for those callers; it does
 not broaden the sibling's input cache key or authorize reuse for new inputs.
 Those edges record `coalesced_proven_equivalent_summary_results`. A first
 captured input binding absent from all retained variants can demand one such
@@ -502,6 +506,9 @@ A forwarding wrapper can also explore one different frame descriptor per entry
 register when all retained known bindings repeat the same descriptor. The
 completed-result and descendant-proof preservation checks still apply; frame
 membership alone provides no alias fact.
+A forwarding wrapper can admit further unrepresented image bindings by
+coalescing these equal, more precise sibling results. Results already equal to
+the generic summary retain the original once-per-register exploration rule.
 Complete target alternatives, roots and active caller graphs are not discarded. Image membership selects work; it does not prove a target or alias
 relationship. Old incoming edges distinguish specialization-limit generalization
 from equivalent-result coalescing; `generalized_redundant_published_summaries`
