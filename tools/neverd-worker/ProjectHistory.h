@@ -73,6 +73,19 @@ public:
   Json next(bool redo) const;
   void advance(bool redo);
   void persist(Json state);
+  /// As persist, but the history holds the state at once and a thread of its
+  /// own writes it: the same transaction, in order, joined with what is queued
+  /// behind one already writing, a few milliseconds after the caller goes on.
+  /// What the files say of it holds from finishWrites, and a process that ends
+  /// sooner leaves them as they were before it, or a journal that completes it.
+  /// A write that fails stays queued and fails the next edit that finds it.
+  void persistLater(Json state);
+  /// Waits for the writes persistLater queued.  Throws what fails them, and the
+  /// next call tries them again.
+  void finishWrites();
+  /// As finishWrites, for a caller about to read what the files hold whatever
+  /// that is: a write that fails is given up.
+  void settleWrites() noexcept;
   /// Reuse admitted rows, retaining all other tables. Sequence ordering,
   /// uniqueness, file checks and transaction budgets still apply.
   void persistPatches(PatchRows rows);
@@ -107,6 +120,11 @@ private:
   std::vector<std::shared_ptr<const Command>> commands_;
   struct Snapshot;
   struct State;
+  struct Transaction;
+  class Writes;
+  /// Shared with copies used for rollback: what the files have yet to take does
+  /// not roll back with an edit that failed after it.
+  std::shared_ptr<Writes> writes_;
   // Copies used for rollback share only immutable, validated committed data.
   std::shared_ptr<const Snapshot> snapshot_;
   /// A journal this live history published before a failed sidecar write.
@@ -118,7 +136,7 @@ private:
   std::size_t commandTextSize() const;
   std::string document(std::string_view encodedState) const;
   void recover();
-  void persist(Json state, std::optional<PatchRows> patches);
+  void persist(Json state, std::optional<PatchRows> patches, bool later);
 };
 } // namespace neverd::worker
 

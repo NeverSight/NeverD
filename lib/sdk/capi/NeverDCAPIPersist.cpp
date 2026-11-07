@@ -246,10 +246,12 @@ std::optional<std::string> nameProblem(const Session &S, va_t Addr,
   for (const auto &[Other, Renamed] : S.Renames)
     if (Other != Addr && Renamed == Name)
       return usedAt(Other);
-  for (const Symbol &Sym : S.Img.Symbols)
-    if (Sym.Addr != Addr && Sym.Name == Name && !S.Renames.count(Sym.Addr) &&
-        !importing(Sym.Addr))
-      return usedAt(Sym.Addr);
+  const auto &Named = S.symbolNames().ByName;
+  for (auto [Sym, End] = Named.equal_range({Name.data(), Name.size()});
+       Sym != End; ++Sym)
+    if (Sym->second->Addr != Addr && !S.Renames.count(Sym->second->Addr) &&
+        !importing(Sym->second->Addr))
+      return usedAt(Sym->second->Addr);
   return std::nullopt;
 }
 } // namespace
@@ -390,6 +392,142 @@ int neverd_renames_save(neverd_session_t Sess) {
   return saveSidecar(S, Path, std::move(Arr), "renames") ? 0 : -1;
 }
 
+namespace {
+/// Whether the list holds the names refreshFunctionNames derives from the
+/// session's names and \p Signatures, so that only what moves changes.
+bool namesAreDerived(
+    const Session &S,
+    const std::unordered_map<uint64_t, std::string> &Signatures) {
+  const auto &Derived = S.NamesDerivedFrom;
+  return Derived && Derived->Revision == S.FunctionListRevision &&
+         Derived->List == S.Functions.data() &&
+         Derived->Count == S.Functions.size() &&
+         Derived->Renames == S.Renames && Derived->Signatures == Signatures;
+}
+
+/// What the list shows of the function at \p Addr, if one is there, now that
+/// the user calls it \p Name, or nothing for null.  Whether it was one.
+bool functionNameMoved(Session &S, va_t Addr, const std::string *Name) {
+  const auto Function = S.functionIndexAt(Addr);
+  if (!Function)
+    return false;
+  FuncInfo &F = S.Functions[*Function];
+  // What finds it by name takes the name, where the list has no other of the
+  // name given up.
+  if (S.NameIndex && S.NameIndex->Revision == S.FunctionListRevision &&
+      S.NameIndex->List == S.Functions.data() &&
+      S.NameIndex->Count == S.Functions.size()) {
+    const auto Others = llvm::count_if(S.Functions, [&](const FuncInfo &Other) {
+      return Other.Name == F.Name;
+    });
+    if (Others == 1)
+      S.NameIndex->FirstNamed.erase(F.Name);
+    else
+      S.NameIndex.reset();
+  } else {
+    S.NameIndex.reset();
+  }
+  if (Name) {
+    F.Name = *Name;
+    F.Origin = NameOrigin::User;
+  } else {
+    const auto Original = S.OriginalNames.find(Addr);
+    F.Name =
+        Original != S.OriginalNames.end() ? Original->second : F.LinkageName;
+    F.Origin = F.ResolvedOrigin;
+  }
+  if (S.NameIndex) {
+    // The first of the name in the list.
+    const auto [Named, Inserted] =
+        S.NameIndex->FirstNamed.try_emplace(F.Name, *Function);
+    if (!Inserted && *Function < Named->second)
+      Named->second = *Function;
+  }
+  return true;
+}
+
+/// A name changes neither the list's entries nor their order, so what finds
+/// them stands, and what finds them by name took it (functionNameMoved).
+void functionNamesMoved(Session &S) {
+  const auto Previous = S.FunctionListRevision;
+  S.functionListChanged();
+  if (S.EntryIndex && S.EntryIndex->Revision == Previous)
+    S.EntryIndex->Revision = S.FunctionListRevision;
+  if (S.FunctionOrder && S.FunctionOrder->Revision == Previous)
+    S.FunctionOrder->Revision = S.FunctionListRevision;
+  if (S.NameIndex && S.NameIndex->Revision == Previous)
+    S.NameIndex->Revision = S.FunctionListRevision;
+  if (S.FunctionPages && S.FunctionPages->Revision == Previous)
+    S.FunctionPages->Revision = S.FunctionListRevision;
+  S.NamesDerivedFrom->Revision = S.FunctionListRevision;
+}
+
+/// Takes \p Renames as the session's names.
+void takeRenames(Session &S, std::map<va_t, std::string> Renames) {
+  S.forgetEmittedSources();
+  auto Signatures = S.SigDB.buildNameMap();
+  if (!namesAreDerived(S, Signatures)) {
+    S.Renames = std::move(Renames);
+    S.refreshFunctionNames(std::move(Signatures));
+    return;
+  }
+  bool FunctionNamed = false;
+  const auto Moved = [&](va_t Addr, const std::string *Name) {
+    FunctionNamed |= functionNameMoved(S, Addr, Name);
+  };
+  for (auto Old = S.Renames.begin(), New = Renames.begin();
+       Old != S.Renames.end() || New != Renames.end();) {
+    if (New == Renames.end() ||
+        (Old != S.Renames.end() && Old->first < New->first)) {
+      Moved(Old->first, nullptr);
+      ++Old;
+    } else if (Old == S.Renames.end() || New->first < Old->first) {
+      Moved(New->first, &New->second);
+      ++New;
+    } else {
+      if (Old->second != New->second)
+        Moved(New->first, &New->second);
+      ++Old;
+      ++New;
+    }
+  }
+  if (FunctionNamed)
+    functionNamesMoved(S);
+  S.NamesDerivedFrom->Renames = Renames;
+  S.Renames = std::move(Renames);
+}
+} // namespace
+
+int neverd_rename_take(neverd_session_t Sess, neverd_va_t Addr,
+                       const char *Name) {
+  auto *S = toSession(Sess);
+  if (!S || !S->Loaded)
+    return -1;
+  S->clearError();
+  S->forgetEmittedSources();
+  auto Signatures = S->SigDB.buildNameMap();
+  if (!namesAreDerived(*S, Signatures)) {
+    if (Name)
+      S->Renames[Addr] = Name;
+    else
+      S->Renames.erase(Addr);
+    S->refreshFunctionNames(std::move(Signatures));
+    return 0;
+  }
+  if (Name) {
+    const std::string &Taken = S->Renames[Addr] = Name;
+    S->NamesDerivedFrom->Renames[Addr] = Taken;
+    if (functionNameMoved(*S, Addr, &Taken))
+      functionNamesMoved(*S);
+  } else {
+    S->Renames.erase(Addr);
+    S->NamesDerivedFrom->Renames.erase(Addr);
+    if (functionNameMoved(*S, Addr, nullptr))
+      functionNamesMoved(*S);
+  }
+  return 0;
+}
+
 int neverd_renames_load(neverd_session_t Sess) {
   auto *S = toSession(Sess);
   S->clearError();
@@ -399,19 +537,6 @@ int neverd_renames_load(neverd_session_t Sess) {
     return -1;
   const auto Path =
       project_files::path(S->projectInputPath(), project_files::File::Renames);
-  auto Reset = [&] {
-    for (auto &F : S->Functions) {
-      if (S->Renames.find(F.Entry) == S->Renames.end())
-        continue;
-      if (auto Original = S->OriginalNames.find(F.Entry);
-          Original != S->OriginalNames.end())
-        F.Name = Original->second;
-    }
-    S->functionListChanged();
-    S->Renames.clear();
-    S->forgetEmittedSources();
-    S->refreshFunctionNames();
-  };
   std::error_code EC;
   const bool Exists = std::filesystem::exists(Path, EC);
   if (EC) {
@@ -419,7 +544,7 @@ int neverd_renames_load(neverd_session_t Sess) {
     return -1;
   }
   if (!Exists) {
-    Reset();
+    takeRenames(*S, {});
     return 0;
   }
   std::ifstream In(Path);
@@ -449,18 +574,7 @@ int neverd_renames_load(neverd_session_t Sess) {
       return -1;
     }
   }
-  Reset();
-  S->Renames = std::move(Renames);
-  for (const auto &[Addr, Renamed] : S->Renames) {
-    for (auto &F : S->Functions) {
-      if (F.Entry == Addr) {
-        F.Name = Renamed;
-        F.Origin = NameOrigin::User;
-        break;
-      }
-    }
-  }
-  S->functionListChanged();
+  takeRenames(*S, std::move(Renames));
   return 0;
 }
 

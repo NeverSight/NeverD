@@ -173,6 +173,13 @@ def binary_file(executable, directory):
         ok(client, "xrefs", {"address": text})
         anchors = [start, callee, text]
         same_as_full_rebuild(client, anchors, "binary file open")
+        # A first name in the padding between functions stops what decodes there.
+        padding = hex(BINARY_BASE + 0xd)
+        spotted = anchors + [padding]
+        ok(client, "rename", {"address": padding, "name": "in_the_padding"})
+        same_as_full_rebuild(client, spotted, "binary file name in padding", ("in_the_padding",))
+        ok(client, "undo")
+        same_as_full_rebuild(client, spotted, "binary file name in padding undone")
         rename_in_place(client, anchors, callee, "add_seven", start)
         view = ok(client, "decompile", {"address": start, "representation": "source",
                                         "offset": 0, "limit": 200})
@@ -252,11 +259,107 @@ def run(executable):
             assert resolves(client, "main") == main
             ok(client, "rename", {"address": main, "name": "report_main"})
             same_as_full_rebuild(client, anchors, "function rename", ("main", "report_main"))
+            # A first name of data, and a name again, read nothing again.
+            builds = name_builds(client)
+            ok(client, "rename", {"address": data, "name": "program_first"})
+            assert resolves(client, "program_first") == data
             ok(client, "rename", {"address": data, "name": "program_state"})
-            same_as_full_rebuild(client, anchors, "data rename")
+            assert resolves(client, "program_state") == data
+            assert resolves(client, "program_first") is None
+            # What takes either name leads to it, and the name given up is free.
+            taken = client.call("rename", {"address": main, "name": "program_state"})
+            assert taken["status"] != "ok" and "is used at" in taken["error"]["message"], taken
+            light = snapshot(client, anchors)
+            assert "program_state" in str(light[data]), light[data]
+            assert name_builds(client) == builds, "a name of data read the names again"
+            same_as_full_rebuild(client, anchors, "data rename", ("program_state", "program_first"))
+            # A first name among loose bytes and in an unwritten run stops them there,
+            # as a data item does and no longer does once it is gone.
+            regions = {row["name"]: int(row.get("start") or row["address"], 16)
+                       for row in ok(client, "regions", {})["items"]}
+            loose = hex(regions[".data"] + 3)
+            lines = ok(client, "listing", {"address": data, "before": 12, "after": 12})["lines"]
+            aligned = next(int(line["address"], 16) for line in lines
+                           if line["kind"] == "data" and line["text"].split()[:1] == ["align"])
+            unwritten = hex(aligned + 2)
+            spots = [loose, unwritten]
+            spotted = anchors + spots
+            snapshot(client, spotted)
+            builds = name_builds(client)
+            ok(client, "rename", {"address": loose, "name": "program_loose"})
+            light = snapshot(client, spotted)
+            assert name_builds(client) == builds, f"a first name at {loose} read the names again"
+            ok(client, "rename", {"address": unwritten, "name": "program_unwritten"})
+            light = snapshot(client, spotted)
+            assert name_builds(client) == builds, f"a first name at {unwritten} read the names again"
+            same_as_full_rebuild(client, spotted, "names among bytes",
+                                 ("program_loose", "program_unwritten"))
+            ok(client, "undo")
+            ok(client, "undo")
+            same_as_full_rebuild(client, spotted, "names among bytes undone")
+            snapshot(client, spotted)
+            builds = name_builds(client)
+            ok(client, "item_define", {"address": hex(regions[".data"] + 2), "action": "data", "size": 2})
+            ok(client, "item_define", {"address": unwritten, "action": "data", "size": 2})
+            light = snapshot(client, spotted)
+            assert name_builds(client) == builds, "a data item among bytes read the names again"
+            same_as_full_rebuild(client, spotted, "items among bytes")
+            snapshot(client, spotted)
+            builds = name_builds(client)
+            ok(client, "item_define", {"address": hex(regions[".data"] + 2), "action": "undefine"})
+            ok(client, "item_define", {"address": unwritten, "action": "undefine"})
+            light = snapshot(client, spotted)
+            assert name_builds(client) == builds, "a data item going read the names again"
+            same_as_full_rebuild(client, spotted, "items among bytes gone")
+            for _ in range(4):
+                ok(client, "undo")
+            same_as_full_rebuild(client, spotted, "items among bytes undone")
+            # And in the padding code's gaps align.
+            code = ok(client, "listing", {"address": hex(regions[".text"]), "before": 0, "after": 200})["lines"]
+            padding = next((int(line["address"], 16) for line in code
+                            if line["text"].split()[:1] == ["align"] and int(line["item_size"], 16) > 2), None)
+            assert padding is not None, "the program's code has no padding"
+            spotted = anchors + [hex(padding)]
+            ok(client, "rename", {"address": hex(padding + 1), "name": "program_padding"})
+            same_as_full_rebuild(client, spotted, "name in padding", ("program_padding",))
+            ok(client, "undo")
+            same_as_full_rebuild(client, spotted, "name in padding undone")
+            # A name inside an item ends it: the item is laid out again.
+            builds = name_builds(client)
+            inner = hex(int(data, 16) + 2)
+            ok(client, "rename", {"address": inner, "name": "program_inner"})
+            light = snapshot(client, anchors)
+            assert name_builds(client) == builds + 1, "a name inside an item stayed in place"
+            same_as_full_rebuild(client, anchors, "name inside an item", ("program_inner",))
+            ok(client, "undo")
+            same_as_full_rebuild(client, anchors, "name inside an item undone")
+            # A string's first name moves the numbers of those named after it.
+            builds = name_builds(client)
             ok(client, "rename", {"address": text["address"], "name": "usage_text"})
+            light = snapshot(client, anchors)
+            assert name_builds(client) == builds + 1, "a string's first name stayed in place"
             same_as_full_rebuild(client, anchors, "string rename")
+            # A data item over bytes no string holds reads nothing else again,
+            # and neither does it going, or one that stops a neighbour.
+            builds = name_builds(client)
+            ok(client, "item_define", {"address": data, "action": "data", "size": 4})
+            light = snapshot(client, anchors)
+            assert name_builds(client) == builds, "a data item read the names again"
+            same_as_full_rebuild(client, anchors, "data item")
+            builds = name_builds(client)
+            ok(client, "item_define", {"address": hex(int(data, 16) + 4), "action": "data", "size": 2})
+            ok(client, "item_define", {"address": data, "action": "undefine"})
+            light = snapshot(client, anchors)
+            assert name_builds(client) == builds, "a data item going read the names again"
+            same_as_full_rebuild(client, anchors, "data item gone")
+            ok(client, "undo")
+            ok(client, "undo")
+            same_as_full_rebuild(client, anchors, "data items undone")
+            # One over a string's bytes takes the string with it: names read again.
+            builds = name_builds(client)
             ok(client, "item_define", {"address": text["address"], "action": "data", "size": 4})
+            light = snapshot(client, anchors)
+            assert name_builds(client) == builds + 1, "a string went without its names"
             same_as_full_rebuild(client, anchors, "string made data")
             ok(client, "undo")
             same_as_full_rebuild(client, anchors, "undo")

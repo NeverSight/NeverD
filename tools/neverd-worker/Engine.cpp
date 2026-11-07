@@ -903,6 +903,20 @@ void Engine::namesChanged() {
   functionOrderKey_.clear();
   functionOrder_.clear();
 }
+void Engine::dataNameChanged() {
+  renameRowsRevision_.reset();
+  forgetNamedViews();
+  graphs_.clear();
+  textKey_.clear();
+  textCache_.clear();
+  textLines_.clear();
+}
+void Engine::dataItemsChanged() {
+  graphs_.clear();
+  textKey_.clear();
+  textCache_.clear();
+  textLines_.clear();
+}
 void Engine::functionNamesChanged(bool unnamed) {
   renameRowsRevision_.reset();
   graphs_.clear();
@@ -1299,6 +1313,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
   Json original;
   if (reused && !reused->original.empty())
     original = Json::parse(reused->original);
+  keptRenamed_ = nullptr;
   // A first visit to a function rendered ahead reads those pages.
   const std::vector<std::string> renderedPages =
       reused || recovery
@@ -1377,14 +1392,20 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
         text = engineViewPage(address, backendRepresentation, next, sourceView,
                               engineOptions, optionText);
       auto page = parsedBackendText(text);
-      if (replay && next == 0 && !keptPageReadsCurrentNames(page)) {
-        if (keptOnly_)
-          throw Error("not_kept", "A kept view reads a name since taken away");
-        replay = nullptr;
-        prepareFunction(address, representation);
-        text = engineViewPage(address, backendRepresentation, next, sourceView,
-                              engineOptions, optionText);
-        page = parsedBackendText(text);
+      if (replay && next == 0) {
+        const bool respelled = !keptRenamed_.is_null();
+        if (!keptPageReadsCurrentNames(page) ||
+            (respelled && !CodeEdits::respell(page, keptRenamed_))) {
+          if (keptOnly_)
+            throw Error("not_kept", "A kept view reads a name since changed");
+          replay = nullptr;
+          prepareFunction(address, representation);
+          text = engineViewPage(address, backendRepresentation, next,
+                                sourceView, engineOptions, optionText);
+          page = parsedBackendText(text);
+        } else if (respelled)
+          // The document builds again from the page that reads as it does.
+          text = page.dump();
       }
       // Older page APIs offer HighC but not the automatic source dialect.
       // Keep the Pseudocode action useful, with the actual dialect reported.
@@ -1903,6 +1924,17 @@ bool Engine::renderReadsHold(const std::string &compact) {
   return reads && hold(session_, reads->c_str()) != 0;
 }
 
+Json Engine::renderReadsRenamed(const std::string &compact) {
+  using Renamed = const char *(*)(neverd_session_t, const char *);
+  static const auto renamed =
+      engineSymbol<Renamed>("neverd_user_reads_renamed_json");
+  const auto reads = renamed ? decompressPage(compact) : std::nullopt;
+  if (!reads)
+    return nullptr;
+  const char *text = renamed(session_, reads->c_str());
+  return text ? backendJson(text) : Json();
+}
+
 void Engine::restartSummaries() {
   // The engine may have dropped them with the analysis a change drops; a
   // run of the job finds kept ones at once.
@@ -2302,6 +2334,13 @@ void Engine::reloadCodeEdits() {
   codeEdits_ = readCodeEdits(ownedString(neverd_session_file_path(session_)));
 }
 
+void Engine::persistEdit(ProjectHistory &store, Json state) {
+  if (writeBehind_)
+    store.persistLater(std::move(state));
+  else
+    store.persist(std::move(state));
+}
+
 void Engine::recordProject() {
   // The engine records which build of the input the project's files describe;
   // an older engine keeps no record, and a record that fails fails no edit.
@@ -2513,9 +2552,10 @@ Json Engine::browseCacheIdentity() {
     if (!fs::exists(path))
       continue;
     std::ifstream input(path, std::ios::binary);
-    std::string bytes(static_cast<std::size_t>(fs::file_size(path)), '\0');
-    if (!input.read(bytes.data(), static_cast<std::streamsize>(bytes.size())))
+    if (!input)
       throw Error("cache_unavailable", "Cannot read project cache identity");
+    // As it is when opened: a queued edit may replace it at any moment.
+    const std::string bytes((std::istreambuf_iterator<char>(input)), {});
     shared[std::string(file.Path)] = BrowseCache::digest(bytes);
   }
   identity["shared"] = std::move(shared);
@@ -2805,8 +2845,24 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
       restartSummaries();
     if (declared)
       declarationsChanged();
-    if (dataRenamed || itemsChanged)
-      namesChanged();
+    if (dataRenamed || itemsChanged) {
+      // Names of data and data items alone, each as the listing can take it.
+      bool inPlace = listing_ && !unnamed;
+      for (const auto &[address, name] : newNames) {
+        const auto before = oldNames.find(address);
+        if (!inPlace || (before != oldNames.end() && before->second == name))
+          continue;
+        inPlace = neverd_func_find_by_addr(session_, address) < 0 &&
+                  listing_->dataRenamed(address, name);
+      }
+      inPlace = inPlace && (!itemsChanged || listing_->dataItemsChanged());
+      if (!inPlace)
+        namesChanged();
+      else if (dataRenamed)
+        dataNameChanged();
+      else
+        dataItemsChanged();
+    }
   } else if (oldNames != newNames)
     functionNamesChanged(unnamed);
   localNamesChanged();
@@ -2946,10 +3002,40 @@ Engine::resolvedName(const std::string &name) {
   return std::nullopt;
 }
 
+namespace {
+/// What an edit has queued to write stays out of these, which read the session
+/// and the listing alone, or queue their own.  Anything else may read the
+/// project's files, and sees them written.
+bool readsNoProjectFile(std::string_view operation) {
+  static constexpr std::string_view Operations[] = {"annotation_set",
+                                                    "cfg_summary",
+                                                    "cfg_viewport",
+                                                    "decompile",
+                                                    "function_edit",
+                                                    "function_type",
+                                                    "functions",
+                                                    "item_define",
+                                                    "kept_renders",
+                                                    "listing",
+                                                    "local_types_declare",
+                                                    "metadata",
+                                                    "names",
+                                                    "rename",
+                                                    "resolve",
+                                                    "strings",
+                                                    "xrefs"};
+  return std::find(std::begin(Operations), std::end(Operations), operation) !=
+         std::end(Operations);
+}
+} // namespace
+
 Json Engine::executeImpl(const std::string &operation, const Json &p,
                          EncodedPayload *encoded) {
   if (encoded)
     encoded->reset();
+  if (history_ && !readsNoProjectFile(operation) && operation != "reload" &&
+      operation != "open")
+    history_->finishWrites();
   if (operation == "x87_capabilities") {
     if (!p.is_object() || !p.empty())
       throw Error("invalid_request", "x87_capabilities accepts no parameters");
@@ -3164,6 +3250,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                                query.at("payload"))}};
   }
   if (operation == "open") {
+    if (history_)
+      history_->settleWrites();
     const auto pathText =
         stringField(p, "path", {},
                     ::neverd::limits::worker::
@@ -3175,7 +3263,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (ec || !fs::is_regular_file(path, ec))
       throw Error("load_failed", "Input is not an accessible regular file");
     for (const char *flag : {"read_only", "debug_info", "analysis", "warm",
-                             "step_discovery", "browse_cache"})
+                             "step_discovery", "browse_cache", "write_behind"})
       if (p.contains(flag) && !p[flag].is_boolean())
         throw Error("invalid_request", std::string(flag) + " must be boolean");
     if (p.contains("pdb") && !p.at("pdb").is_object())
@@ -3370,6 +3458,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     symbolsInput_ = symbolsDeclined ? Json{{"mode", "none"}} : Json(nullptr);
     pdbDisplayNames_ = Json::array();
     backgroundAnalysis_ = p.value("analysis", true);
+    writeBehind_ = p.value("write_behind", false);
     steppedDiscovery_ = backgroundAnalysis_ && p.value("step_discovery", false);
     // Preparing functions is the last step of idle-time analysis.
     warmFunctions_ = backgroundAnalysis_ && p.value("warm", false);
@@ -4178,7 +4267,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                      {"before", nullptr},
                      {"after", declared.back()}});
         state["types"] = std::move(declared);
-        store.persist(state);
+        persistEdit(store, state);
       } catch (...) {
         store = checkpoint;
         (void)load(session_);
@@ -4976,6 +5065,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
   if (operation == "save") {
     requireWriter();
     auto &store = history();
+    // What saves reads the project's files after this, written or not.
+    store.finishWrites();
     auto state = store.committedState();
     state["annotations"] = backendJson(neverd_annotations_json(session_));
     saveAnalysisSections();
@@ -4985,6 +5076,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     return {{"saved", true}, {"dirty", false}};
   }
   if (operation == "reload") {
+    if (history_)
+      history_->settleWrites();
     const auto sections =
         engineSymbol<AnalysisSections>("neverd_analysis_sections_json");
     if (sections &&
@@ -5276,22 +5369,32 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     for (const auto &item : renames)
       if (parseAddress(item.at("addr").get<std::string>()) == address)
         after = item;
+    // The session takes the name from here, so the reply need not wait for the
+    // disk (ProjectHistory::persistLater).
+    using RenameTake = int (*)(neverd_session_t, neverd_va_t, const char *);
+    static const auto take = engineSymbol<RenameTake>("neverd_rename_take");
     const auto checkpoint = store;
     store.stage({{"kind", "rename"},
                  {"address", hexAddress(address)},
                  {"before", before},
                  {"after", after}});
     try {
-      store.persist(state);
+      if (take)
+        persistEdit(store, state);
+      else
+        store.persist(state);
     } catch (...) {
       store = checkpoint;
       throw;
     }
-    if (neverd_renames_load(session_) != 0)
+    if ((take ? take(session_, address, name.c_str())
+              : neverd_renames_load(session_)) != 0)
       throw Error("reload_failed", "Rename was saved but could not be reloaded",
                   {{"saved", true}});
     if (listing_ && listing_->functionRenamed(address))
       functionNamesChanged(false);
+    else if (listing_ && index < 0 && listing_->dataRenamed(address, name))
+      dataNameChanged();
     else
       namesChanged();
     ++revision_;
@@ -5383,7 +5486,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                  {"before", before},
                  {"after", after}});
     try {
-      store.persist(state);
+      persistEdit(store, state);
     } catch (...) {
       store = checkpoint;
       // The sidecar still holds the edits before this one.
@@ -5600,7 +5703,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     const auto checkpoint = store;
     try {
       store.stage(std::move(command));
-      store.persist(state);
+      persistEdit(store, state);
     } catch (...) {
       store = checkpoint;
       // The sidecar still holds the items before this one.
@@ -5608,7 +5711,10 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       namesChanged();
       throw;
     }
-    namesChanged();
+    if (listing_ && listing_->dataItemsChanged())
+      dataItemsChanged();
+    else
+      namesChanged();
     ++revision_;
     return {{"address", hexAddress(start)},
             {"kind", after.at("kind")},
