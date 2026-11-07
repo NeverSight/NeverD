@@ -21409,3 +21409,5 @@ and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
 frontend regressions and 91 generated-table tests passed. NeverC's strict
 global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
+
+`X86CMov` regressions cover ordinary x86/x64 CMOV through the shared SELECT representation: all 16 conditions, all flag inputs, partial and zero-extending destination writes, unchanged source/flags, and unconditional memory reads that can fault before destination writes.
