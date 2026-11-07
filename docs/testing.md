@@ -21460,3 +21460,5 @@ recorded baseline; this change adds none and does not weaken the audit.
 `SymExpr` variable-membership checks compare structural membership with full variable collection, including context copies and missing IDs. Substitution checks retain unrelated shared payloads, exact root order, non-variable keys and simultaneous replacement semantics.
 
 `SymState` memory-view regressions check whole-word overwrite node counts, independent byte-store equivalence, endian order, partial overwrites, modular relative coordinates and non-allocating materialized reads. Scalar snapshot and restore tests check that memory operations do not fork or replace unrelated scalar state.
+
+`ActivityQueue.StrictPrioritySurvivesPrefixConsumptionAndReinsertion` uses an independent ordered-set oracle through queue copies, activity increases and reinsertion. The assumption-assigned queue regression checks every variable is restored after backtracking, with unchanged model and conflict behavior.

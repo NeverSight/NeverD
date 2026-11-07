@@ -72,10 +72,11 @@ SatEngine::SatEngine(const SatEngine &Other)
       LearntScratch(Other.LearntScratch), ToClear(Other.ToClear),
       RedundancyStack(Other.RedundancyStack),
       ClauseScratch(Other.ClauseScratch), LevelScratch(Other.LevelScratch) {
-  // A pristine encoding can already have many root assignments. Remove them
-  // once from this independent copy instead of repeatedly popping them during
-  // search. Strict activity/index priority preserves every actual decision.
-  Order.discardRootAssigned(Value, Level);
+  // A sorted prefix skips assignments with one cursor increment. A general
+  // heap still benefits from removing permanent roots once before search.
+  // Both forms retain the same strict activity/index decision priority.
+  if (!Order.hasSortedPriorities())
+    Order.discardRootAssigned(Value, Level);
 }
 
 //===----------------------------------------------------------------------===//
