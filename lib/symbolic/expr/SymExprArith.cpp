@@ -52,8 +52,8 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
   uint32_t W = width(Ops[0]);
 
   // A literal and one already-canonical term need no coefficient map. Keep
-  // nested sums, masked terms and coefficient-bearing long products on the
-  // collector path, where flattening or mask recovery can expose more terms.
+  // nested sums, masked/packed words and coefficient-bearing long products
+  // on the collector path, where flattening or no-borrow identities apply.
   if (Ops.size() == 2) {
     SymRef A = Ops[0], B = Ops[1];
     assert(width(B) == W && "mkAdd operands must share a width");
@@ -63,7 +63,7 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
       if (isConst(B))
         return mkConst(constValue(A) + constValue(B));
       const auto Op = op(B);
-      if (Op != SymOp::Add && Op != SymOp::And &&
+      if (Op != SymOp::Add && Op != SymOp::And && Op != SymOp::Or &&
           (Op != SymOp::Mul || numOperands(B) == 2)) {
         if (constValue(A).isZero())
           return B;
@@ -73,10 +73,11 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
     } else {
       // Distinct coefficient bases cannot combine. The collector would keep
       // each original term and order it by that base, without changing either
-      // coefficient. Masks and nested sums still need the complete collector.
+      // coefficient. Masks, unions and nested sums need the complete collector.
       auto BaseOf = [&](SymRef R) {
         const auto Op = op(R);
-        if (Op == SymOp::Add || (Op == SymOp::And && isConst(operand(R, 0))))
+        if (Op == SymOp::Add || Op == SymOp::Or ||
+            (Op == SymOp::And && isConst(operand(R, 0))))
           return SymRef();
         if (Op == SymOp::Mul && isConst(operand(R, 0)))
           return numOperands(R) == 2 ? operand(R, 1) : SymRef();

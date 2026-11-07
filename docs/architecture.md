@@ -4836,8 +4836,8 @@ The compact two-word hash key uses one 64-bit bucket mix, without hashing its
 halves independently. A sum of a literal and one canonical term reuses that
 literal and term directly. Two nonliteral addends with distinct coefficient
 bases likewise retain their original terms in base-index order. Equal bases,
-nested sums, masked terms and long coefficient products retain the full
-collector, preserving coefficient cancellation, flattening and mask recovery.
+nested sums, masked or packed words and long coefficient products retain the
+full collector, preserving coefficient cancellation and no-borrow identities.
 Other sums collect small coefficient maps in inline storage and sort completed
 entries by base-node index before rebuilding.
 Larger sums retain hashed lookup; cancellation, recollection and canonical node
@@ -4864,6 +4864,16 @@ word remains opaque; unrelated residual words must cancel exactly. Finite
 work, storage and literal-chain depth limits preserve the original region on
 refusal. This derivation uses the existing symbolic switch in both source
 emitters without an additional GUI or CLI option.
+For a single carrier, separately folded literals participate in the same XOR
+orientation choice and independent equality check. They leave the residual sum
+only after that complete group proof succeeds.
+When its offset equals its sole word coefficient, the group emits the exact
+complement form before an enclosing residual sum can flatten that opportunity.
+Arithmetic factor verification also recognizes a literal OR a masked word as
+their sum when the complete masks prove them disjoint. It retains the masked
+word as an opaque coordinate, so canonical packing cannot hide a valid common
+coefficient. Traversal, flat-product admission and memoized polynomials use
+that same reading within the existing work and storage bounds.
 When enclosing arithmetic interleaves several such words, the same layer
 certifies each changed group and independently proves distribution against
 the original region using modular arithmetic normalization. This composition

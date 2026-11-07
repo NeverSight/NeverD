@@ -1284,6 +1284,19 @@ TEST(SymExpr, BatchedSubstitutionPreservesDifferentOperandArities) {
   }
 }
 
+TEST(SymExpr, AdditionFastPathsKeepPackedWordIdentities) {
+  for (unsigned Width : {8u, 64u, 257u}) {
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Forced = Ctx.mkConst(Width, 3);
+    const auto Packed = Ctx.mkOr(Forced, X);
+    EXPECT_EQ(Ctx.mkAdd(Ctx.mkConst(-llvm::APInt(Width, 3)), Packed),
+              Ctx.mkAnd(X, Ctx.mkConst(~llvm::APInt(Width, 3))));
+    const auto Union = Ctx.mkOr(X, Y);
+    EXPECT_EQ(Ctx.mkAdd(Union, Ctx.mkNeg(X)), Ctx.mkXor(Union, X));
+  }
+}
+
 TEST(SymExpr, RebuildingMergedMasksRetainsDemandedSimplification) {
   for (unsigned Width : {8u, 64u, 257u}) {
     SCOPED_TRACE(Width);

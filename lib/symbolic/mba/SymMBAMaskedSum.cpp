@@ -429,6 +429,22 @@ SymRef solveWeightedMasks(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
     Distributed = Ctx.mkAdd(Originals);
   }
 
+  SymRef GroupLiteral;
+  if (Groups.size() == 1 &&
+      llvm::any_of(Kept, [&](SymRef R) { return Ctx.isConst(R); })) {
+    if (!Resources.array(Kept.size(), sizeof(SymRef)) ||
+        !Resources.charge(1 + Words, 128 + 2 * Words * sizeof(uint64_t)))
+      return E;
+    llvm::SmallVector<SymRef, 4> Literals;
+    for (SymRef R : Kept)
+      if (Ctx.isConst(R))
+        Literals.push_back(R);
+    // Early word normalization may fold forced bits into a separate literal.
+    // Let a single carrier choose its XOR orientation with that same offset.
+    // Keep the original terms until their complete equality is proved below.
+    GroupLiteral = Ctx.mkAdd(Literals);
+  }
+
   bool Changed = false;
   for (const auto &[Index, Terms] : Groups) {
     auto retain = [&] {
@@ -444,7 +460,8 @@ SymRef solveWeightedMasks(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
     if (!Resources.array(Width, 256 + 8 * Words * sizeof(uint64_t)))
       return E;
     std::vector<llvm::APInt> Coefficients(Width, llvm::APInt(Width, 0));
-    llvm::APInt Constant(Width, 0);
+    llvm::APInt Constant =
+        GroupLiteral ? Ctx.constValue(GroupLiteral) : llvm::APInt(Width, 0);
     for (const auto &Term : Terms) {
       if (!Resources.product(Words, Words))
         return E;
@@ -470,6 +487,7 @@ SymRef solveWeightedMasks(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
     }
     SymRef Carrier(Index);
     llvm::SmallVector<SymRef, 8> Parts, Originals;
+    SymRef SingleScale, SingleWord;
     while (!Buckets.empty()) {
       auto K = Buckets.begin()->first;
       auto Mask = Buckets.begin()->second;
@@ -499,14 +517,30 @@ SymRef solveWeightedMasks(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
       // those bits can eliminate a mask altogether without modular division.
       auto ExpandedMask =
           Mask | llvm::APInt::getHighBitsSet(Width, K.countr_zero());
-      Parts.push_back(Ctx.mkMul(Ctx.mkConst(K),
-                                Ctx.mkAnd(Ctx.mkXor(Carrier, Ctx.mkConst(Flip)),
-                                          Ctx.mkConst(ExpandedMask))));
+      SingleScale = Ctx.mkConst(K);
+      SingleWord = Ctx.mkAnd(Ctx.mkXor(Carrier, Ctx.mkConst(Flip)),
+                             Ctx.mkConst(ExpandedMask));
+      Parts.push_back(Ctx.mkMul(SingleScale, SingleWord));
+    }
+    if (Parts.size() == 1 && !Constant.isZero()) {
+      if (!Resources.charge(1 + Words, 2 * Words * sizeof(uint64_t)))
+        return E;
+      if (Constant == Ctx.constValue(SingleScale)) {
+        if (!Resources.charge(3, 384 + 2 * Words * sizeof(uint64_t)))
+          return E;
+        // K + K*word == -K*~word. Emit the compact group before adding
+        // unrelated residuals, whose flat sum would hide this completion.
+        Parts.front() =
+            Ctx.mkMul(Ctx.mkConst(-Constant), Ctx.mkNot(SingleWord));
+        Constant.clearAllBits();
+      }
     }
     if (!Constant.isZero())
       Parts.push_back(Ctx.mkConst(Constant));
     for (const auto &Term : Terms)
       Originals.push_back(Term.Original);
+    if (GroupLiteral)
+      Originals.push_back(GroupLiteral);
     SymRef Before = Ctx.mkAdd(Originals);
     SymRef Candidate = Parts.empty() ? Ctx.mkZero(Width) : Ctx.mkAdd(Parts);
     if (readingScore(Ctx, Candidate) >= readingScore(Ctx, Before) ||
@@ -514,6 +548,11 @@ SymRef solveWeightedMasks(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
          !proveMaskIdentity(Ctx, Before, Candidate, Carrier, Resources))) {
       retain();
       continue;
+    }
+    if (GroupLiteral) {
+      if (!Resources.charge(Kept.size()))
+        return E;
+      llvm::erase_if(Kept, [&](SymRef R) { return Ctx.isConst(R); });
     }
     Kept.push_back(Candidate);
     Changed = true;

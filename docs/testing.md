@@ -3434,6 +3434,14 @@ constant-only plans and unchanged step counts at every width from 1 through
 `SharedRootSubstitutionKeepsSimultaneousReplacements` covers shared descendants,
 repeated roots, and overlapping replacement keys at native and wide widths.
 Independent arithmetic checks that replacement values are not substituted again.
+`AdditionFastPathsKeepPackedWordIdentities` retains forced-bit and union
+subtraction identities through the additive constructor's short paths.
+`PackedOffsetsPreserveCoefficientProofs` checks repeated coefficient extraction
+when canonical construction packs a disjoint offset into a masked word.
+`FoldedLiteralKeepsTheShortestCarrierOrientation` keeps folded constants in the
+single-word mask proof, including unscaled opaque residuals. Both synthesis
+regressions disable verification sampling and check independent full-width
+arithmetic at 8/16/32/64/65/128/257 bits.
 `NativeProductsKeepAllInputsAfterModularOverflow` checks repeated even and odd
 factors against APInt arithmetic at 1–64 bits and counts every input lookup.
 `PreparedWideArithmeticKeepsEveryInputAcrossEvaluations` alternates zero,
