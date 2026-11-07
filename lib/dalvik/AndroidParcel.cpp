@@ -43,6 +43,22 @@ ExecutionResult AndroidFramework::parcelStatus(uint64_t receiver) const {
   return {};
 }
 
+ExecutionResult AndroidFramework::readParcelBuffer(Heap &heap,
+                                                   uint64_t receiver) {
+  const auto &state = parcels.at(receiver);
+  if (!state.view)
+    return {};
+  std::span<const uint8_t> bytes;
+  auto result = state.view(bytes);
+  if (result.stop != ExecutionStop::Returned)
+    return result;
+  auto &storage = heap.get(receiver)->Bytes;
+  if (bytes.size() != storage.size())
+    return unsupported("Android Parcel Binder buffer size changed");
+  std::copy(bytes.begin(), bytes.end(), storage.begin());
+  return {};
+}
+
 ExecutionResult AndroidFramework::parcel(Heap &heap,
                                          const LibraryMethod &method,
                                          uint64_t receiver,
@@ -89,6 +105,11 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
     auto &bytes = object->Bytes;
     auto &position = state.position;
     if (name == "recycle") {
+      if (state.release)
+        state.release();
+      state.release = {};
+      state.view = {};
+      state.error = 0;
       heap.resizeBytes(*object, 0);
       position = 0;
       state.recycled = true;
@@ -113,8 +134,19 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       position = next;
       return returned();
     }
+    std::span<const uint8_t> readable = bytes;
+    if (name != "unmarshall" && state.view) {
+      auto result = state.view(readable);
+      if (result.stop != ExecutionStop::Returned)
+        return result;
+      if (readable.size() != bytes.size())
+        return unsupported("Android Parcel Binder buffer size changed");
+    }
     // No allocator bytes are invented for a cursor beyond initialized data.
     auto write = [&](std::span<const uint8_t> input, size_t zeros = 0) {
+      if (state.release)
+        throw Stop{unsupported("Android Parcel writes to a Binder-owned reply "
+                               "require native capacity semantics")};
       if (position > bytes.size())
         throw Stop{
             unsupported("Android Parcel write crosses an uninitialized gap")};
@@ -136,9 +168,9 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       write(std::span(encoded).first(size));
     };
     auto readInteger = [&](size_t size) -> uint64_t {
-      if (uint64_t(position) + size > bytes.size())
+      if (uint64_t(position) + size > readable.size())
         return 0; // API 28 short scalar reads do not advance the cursor.
-      const auto *data = bytes.data() + position;
+      const auto *data = readable.data() + position;
       position += size;
       return size == 4 ? llvm::support::endian::read32le(data)
                        : llvm::support::endian::read64le(data);
@@ -173,7 +205,7 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       const uint64_t raw = (uint64_t(length) + 1) * 2;
       const uint64_t padded = (raw + 3) & ~uint64_t(3);
       if (length >= INT32_MAX || raw > INT32_MAX ||
-          uint64_t(position) + padded > bytes.size())
+          uint64_t(position) + padded > readable.size())
         return returned();
       work(raw);
       const auto start = position;
@@ -183,19 +215,19 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       if (!string)
         return storage();
       // API 28 reads the declared UTF-16 units without checking the terminator.
-      std::copy_n(bytes.begin() + start, length * 2, string->Bytes.begin());
+      std::copy_n(readable.begin() + start, length * 2, string->Bytes.begin());
       string->Length = length;
       return returned(string->Identity);
     }
     if (name == "marshall") {
-      if (position > bytes.size())
+      if (position > readable.size())
         return unsupported(
             "Android Parcel marshall requires uninitialized bytes");
-      work(bytes.size());
-      auto array = heap.allocateArray("[B", bytes.size());
+      work(readable.size());
+      auto array = heap.allocateArray("[B", readable.size());
       if (!array)
         return storage();
-      std::copy(bytes.begin(), bytes.end(), array->Bytes.begin());
+      std::copy(readable.begin(), readable.end(), array->Bytes.begin());
       return returned(array->Identity);
     }
     if (name == "unmarshall") {
@@ -209,6 +241,11 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
             "Android Parcel unmarshall requires a valid native array range");
       const uint64_t padded = (uint64_t(length) + 3) & ~uint64_t(3);
       work(length);
+      if (state.release)
+        state.release();
+      state.release = {};
+      state.view = {};
+      state.error = 0;
       if (!heap.resizeBytes(*object, padded))
         return storage();
       std::copy_n(array->Bytes.begin() + offset, length, bytes.begin());

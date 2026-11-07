@@ -4507,6 +4507,9 @@ found there too, under the functions it scanned, so a later session finishes its
 index from those rows once its discovery ends. A store's session writes where its
 records lie beside its file (`.ndri`) when it ends or its job reaches the last
 function, so a later session reads that and walks only what it leaves out.
+An index entry's page table must fit its record, as it must in the store file.
+An invalid index is discarded before reading pages; the original file still
+recovers every complete record.
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's, and only a new name of data
 or a data item, which pages spell, forgets the renders and moves to a store of its
@@ -9003,6 +9006,15 @@ reports both replacements and in-place changes to shared nodes. With candidates
 present, another cleanup round requires a statement deletion, inlining or
 simplification; rejected candidates alone do not repeat the same analysis. The
 existing stopping point without candidates and iteration limits remain unchanged.
+Copy and control-flow cleanup share use counts saturated at two. Each read
+root contributes a use even when roots share one expression object. The
+expression-identity table belongs to one immutable walk, and a new walk starts
+after rewrites. Small visits tables use inline storage and grow normally
+when needed. Lookup storage never decides traversal or rewrite order; the
+pending walk keeps its existing operand order. Non-variable leaves have no
+read to count and need no identity-table entry; an indirect target is a child
+even when a call has no arguments.
+
 Med-to-High lowering preserves CFG successors after branch threading, including
 sole successors with no remaining branch operation. When source order differs,
 it emits an explicit transfer after that edge's PHI copies.
@@ -17143,14 +17155,41 @@ NullPointerException with a null message before inspecting the optional reply;
 non-null Parcels reuse the owned/recycled lifecycle checks without changing
 bytes or positions. Local Binder dispatch remains unsupported.
 
-The next transport boundary requires an explicit native Binder binding:
-Java proxy keys do not identify native handles, peer state or reply object
-translations. An absent model binding is not evidence that a Binder was
-finalized or died. No transaction success, native error or reply is fabricated.
-`enforceInterface` also remains unmodeled: its incoming transaction flags and
-Java StrictMode policy-change upcall cannot be omitted. Borrowed native Parcels,
-object/FD translation, custom string helpers, capacity/size mutation, floating
-methods and RPC remain unsupported.
+Each supplied proxy may independently declare `native_binding` with a positive
+signed `fd`, a uint32 `handle`, and explicit `alive`. The native adapter resolves
+the fd on first use to an existing shared Linux Binder open description and
+rejects closure/reuse. Java keys still imply no native endpoint. The guest must
+establish any context manager and read-only reply arenas itself. Object-free,
+synchronous handle-zero calls use the existing protocol-8 ioctl routing;
+replies are computed by guest service code. Missing managers return the kernel's
+DEAD_REPLY, which sets the BpBinder dead cache and a checked DeadObjectException.
+A declared dead proxy short-circuits before IPC. Status replies retain old Parcel
+bytes/cursors, set its error state and return false for UNKNOWN_TRANSACTION.
+Other modeled statuses reuse Java exceptions; remaining logging/error dispatch
+stops explicitly after the driver result.
+The native lifetime contract follows API 28
+[BpBinder](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/BpBinder.cpp)
+and [Parcel](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/Parcel.cpp).
+
+Runtime's authenticated external-call continuations cover both DEX invocation
+and direct JNI intrinsics. A resumed wait may retain its original import while
+installing the next wait or entering a guest callback. Callback completion may
+likewise suspend before returning to that import; ordinary and resumed calls
+share one callback-entry helper. The native adapter suspends on the existing guest
+scheduler until thread-specific Binder work arrives. Shared Linux memory owns
+reply arena bytes; Parcel retains a live read-only view and queues BC_FREE_BUFFER
+on replacement, unmarshalling or recycle. Thread exit flushes pending frees and
+uses the same BINDER_THREAD_EXIT owner. API 28 freeBuffer selects the current
+native thread, ignoring its cookie, so that thread flushes the queued frees at
+its next Binder exchange. Null Java replies use the temporary-reply release
+path. Neither cursor motion nor reading frees the buffer. An invalidated or unreadable mapping
+stops explicitly, and scalar reads do not copy the entire retained buffer.
+
+`enforceInterface` still requires incoming flags and the Java StrictMode upcall.
+Local Binder dispatch, nested/one-way transactions, translated handles, Binder
+objects/FDs, and writes/capacity growth in borrowed reply storage remain explicit
+boundaries. ServiceManager `lookup_results` remain a separate semantic input;
+this transport does not turn those entries into kernel peers or replies.
 
 
 `KernelFileSystem` owns the validated volume/node state; `KernelModel` owns canonical device topology and references. `DriverFileSystemJSON` is transport only. `DeviceOwnerKind` distinguishes Guest, PnpProvider and FileSystemProvider; only PnP routes use `isPnpProviderDevice`. Volume devices exist before DriverEntry, and four shared route guards reject unimplemented file I/O before publication. Owner snapshots remain independent of guest object projections and configuration.

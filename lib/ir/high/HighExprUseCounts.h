@@ -12,17 +12,20 @@
 
 #include "neverd/ir/high/HighIR.h"
 
-#include <unordered_map>
+#include "llvm/ADT/DenseMap.h"
+
+#include <cstdint>
 
 namespace neverd {
+
+using HighExprUseVisits = llvm::SmallDenseMap<const HighExpr *, uint8_t, 8>;
 
 /// Count a shared expression once per use site, saturating at two. Reuse
 /// Visits across read roots in the same immutable graph to bound the complete
 /// walk by its nodes and edges without mistaking multiple uses for one.
-void countExprVarUsesUpToTwo(
-    const ExprPtr &E, VarKeyMap<int> &Uses,
-    std::unordered_map<const HighExpr *, uint8_t> &Visits);
+void countExprVarUsesUpToTwo(const ExprPtr &E, VarKeyMap<int> &Uses,
+                             HighExprUseVisits &Visits);
 
 } // namespace neverd
 
-#endif
+#endif // NEVERD_IR_HIGH_HIGHEXPRUSECOUNTS_H

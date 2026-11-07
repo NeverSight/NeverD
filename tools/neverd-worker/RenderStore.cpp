@@ -162,7 +162,8 @@ void RenderStore::readIndex(File &file, std::uint64_t size) {
     at += sizeof(row);
     if (row.keyBytes > limits::kRenderStoreMaxKeyBytes ||
         row.keyBytes > bytes.size() - at || row.offset > covered ||
-        row.dataBytes > covered - row.offset)
+        row.dataBytes > covered - row.offset ||
+        row.pages > row.dataBytes / sizeof(std::uint64_t))
       return;
     rows.emplace_back(
         bytes.substr(at, row.keyBytes),

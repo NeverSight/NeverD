@@ -248,6 +248,18 @@ def run(executable):
         assert render_ahead(reader, lambda s: s and s["hits"] == 1)
         end(reader, owner)
 
+        # An index's page table must fit inside its record before any pages
+        # are read. The intact file still recovers every original render.
+        bad_pages = bytearray(listed)
+        data_bytes = int.from_bytes(listed[at + 8:at + 16], "little")
+        bad_pages[at + 24:at + 28] = (data_bytes // 8 + 1).to_bytes(4, "little")
+        index.write_bytes(bad_pages)
+        owner, reader = session(clients, executable, indexed, store="read")
+        for address in (A, B, C):
+            assert unfixtured(source(reader, address)) == fresh_indexed[address]
+        assert render_ahead(reader, lambda s: s and s["hits"] == 3)
+        end(reader, owner)
+
         # A damaged record is a render not kept: the visit reads the engine.
         damaged = root / ("damaged-" + NAME)
         damaged.write_bytes(b"render store fixture")

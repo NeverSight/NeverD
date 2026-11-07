@@ -6138,7 +6138,9 @@ it, a new name of data, a data item and another build of the worker start over,
 a job that starts over stops reading and adding, a record cut short is rendered
 again alone, and a damaged one reads the engine. A session reads past a record it
 could not walk through the index a finished job wrote, walks a file whose index does
-not fit it, and loses only the record an index misplaces.
+not fit it, and loses only the record an index misplaces. An index whose page
+count exceeds its record's length is discarded; complete records in the original
+file still reproduce their exact source without asking the engine.
 `WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
 through a real view.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
@@ -15761,9 +15763,24 @@ across native threads and JNI attachments. The matching
 `ProcessPublic.AndroidBinderEntryAndTracingMatchSDKAndCLI` compares 78 full
 report pairs at O0/O2. Successful cases check a real caught null-data exception
 or tracing state; none claims a completed Binder transaction.
+`AndroidBinderTest` also checks authenticated native reply continuation,
+retained bytes/cursors, UNKNOWN_TRANSACTION error propagation, dead-object
+caching and checked exception ancestry, live arena reads, temporary replies and
+DEX catch/resume. `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
+executes real guest services through all three JNI forms, including three-round
+buffer retention/reuse, a reply recycled and reused by another native thread,
+missing managers, declared dead proxies, invalid/reused descriptors and explicit
+borrowed-write/unmapped-arena/PROT_NONE boundaries. The corresponding public test
+compares 90 complete SDK/CLI reports at O0/O2, including native thread exit with queued
+frees and a supplied DEX caller spanning consecutive transactions, a guest
+native callback and another transaction. Linux tests check the same raw buffer
+view, dup aliases, delivered-buffer release and descriptor lifetime. JSON parser
+regressions require complete explicit bindings and share the C++ fd validator.
 Run full Dalvik, Android JNI, thread/callback and native/Linux Binder suites,
-plus these focused public tests after changing this owner. These are original synthetic tests;
-they establish no live Binder service or whole-MVM restoration.
+plus these focused public tests after changing this owner. The shared scheduler
+also requires the stream-wait, receive, readiness and poll regressions. These are
+original synthetic tests; they establish no live Binder service or whole-MVM
+restoration.
 
 `AndroidServiceManagerTest.*` covers slow/statistics record bytes, strict versus
 inclusive timing, signed wrapping/division, ART strings/nulls, ignored negative
@@ -20539,6 +20556,22 @@ The focused NeverDCOFFExceptionModelTests target runs exception model and decode
 `NeverDX86LockedLogicTests` compares 96 x64 `LOCK AND/OR/XOR` functions against original native bytes. Every scalar width, register and signed-immediate sources, live/dead flags, unaligned default/GS addresses and whole neighboring memory are checked through HighC and LLVMC, with and without NeverD optimization, at Clang O0/O2 under ASan/UBSan. Shape negatives require a sequentially consistent intrinsic transaction. The legacy atomic tests retain refusal for i386 non-neutral logical forms and other unowned operations.
 
 `X86LegacyAtomic.NeutralLogic*` checks neutral locked logic across widths and FS/GS, preserving memory, defined flags and DF while refusing denied writes, incomplete accesses and HLE. Non-neutral immediates keep the x64 native transaction and remain refused on i386. `NeverDX86NeutralAtomicSourceTests` executes both C routes for COFF/ELF/MachO at O0/O2 with UBSan, high-bit inputs and eight byte offsets; it requires an x64 host. Pair it with `NeverDHighControlFlowTests` and `NeverDHighCIntegerWidthTests` for declared-type changes.
+
+### Shared expression use counts
+
+`HighControlFlowSemantics.SharedExpressionKeepsItsRepeatedInputUse`,
+`CopyChainKeepsItsSharedSourceDefinition` and
+`CopyChainCountsUsesInEverySwitchArm` retain the independent interpreter and
+source-flow checks for shared reads. A shared expression must not become a
+single use merely because the counter has already seen its address. Run
+`NeverDHighControlFlowTests`, `NeverDHighCStoreForwardingTests`,
+`NeverDWindowsEHSourceTests` and `NeverDCPointerProjectionTests` for changes to
+this counter, together with the acceleration/allocator opt-out configuration.
+Performance checks include table construction/destruction and complete worker
+responses; a primitive improvement alone does not establish GUI latency.
+`NeverDHighExprUseCountsTests` compares shared graphs with independently
+expanded tree reads, retains distinct variable identities and repeated reads,
+and checks an indirect target when a call has no arguments.
 
 ### Predicate cleanup and independent call effects
 

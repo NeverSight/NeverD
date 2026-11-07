@@ -158,9 +158,18 @@ public:
 };
 class GuestThreads;
 /// Native libbinder TLS, independent of JNI attachments and kernel handles.
+struct BinderBufferRelease {
+  std::shared_ptr<linux_model::LinuxDeviceState> Device;
+  uint32_t FD;
+  uint64_t Address;
+};
 struct BinderThreadState {
   // API 28 IPCThreadState construction starts a new native thread at zero.
   uint32_t StrictModePolicy = 0;
+  bool UsesBinder = false;
+  // API 28 freeBuffer uses self(), ignoring the originating thread cookie.
+  // Recycle queues a free on the current thread's next driver exchange.
+  std::vector<BinderBufferRelease> PendingFrees;
 };
 class Bionic {
 public:
@@ -181,6 +190,7 @@ public:
                const std::optional<SleepContinuation> &Sleep = std::nullopt);
   BionicResult resumeSemaphore(uint64_t Address, bool Shared);
   llvm::Error jniThreadExit();
+  BionicResult binderThreadExit();
   llvm::Error initializeDex();
 
 private:
@@ -193,6 +203,11 @@ private:
   const LinkedImage &Linked;
   GuestThreads *Threads;
   BinderThreadState SingleThreadBinder;
+  std::shared_ptr<linux_model::LinuxDeviceState> BinderConnection;
+  uint32_t BinderFD = 0;
+  class BinderWait;
+  BionicResult binderTransact(const mobile::dalvik::ExternalCall &Call,
+                              std::shared_ptr<DexContinuation> Continuation);
   BinderThreadState &binderThread();
   uint64_t tlsAddress() const;
   uint64_t threadID() const;

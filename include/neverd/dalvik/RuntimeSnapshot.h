@@ -26,6 +26,9 @@ struct AndroidServiceManagerState {
   struct BinderProxy {
     uint32_t key = 0, identity = 0;
     std::optional<bool> warn_on_blocking;
+    std::optional<
+        AndroidApplicationSnapshot::ServiceManager::BinderProxy::NativeBinding>
+        native_binding;
     bool operator==(const BinderProxy &) const = default;
   };
   std::vector<BinderProxy> binder_proxies;

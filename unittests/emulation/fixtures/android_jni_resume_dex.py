@@ -6,7 +6,7 @@ import zlib
 from benchmark_mobile_inventory import uleb128
 
 
-def resume_dex():
+def resume_dex(binder_only=False):
     owner, obj = 'Lresumption/Library;', 'Ljava/lang/Object;'
     string, system = 'Ljava/lang/String;', 'Ljava/lang/System;'
     # owner, name, result, parameters, access, registers, code factory
@@ -46,6 +46,18 @@ def resume_dex():
         add(name, result, params, 0x109, 0)
     add('loadLibrary', 'V', [string], cls=system)
     add('<init>', 'V', [], cls=obj)
+    if binder_only:
+        declarations.clear()
+        owner = 'Lresumption/Binder;'
+        binder, parcel = 'Landroid/os/IBinder;', 'Landroid/os/Parcel;'
+        def transactions(mid, si):
+            tx = [0x5172, mid[(binder, 'transact')], 0x6504, 0x020a]
+            return ([0xf012, 0x0112] + tx + tx +
+                    [0x1071, mid[(owner, 'step')], 2, 0x020a] + tx + [0x020f])
+        add('run', 'I', [binder, parcel, parcel], regs=7,
+            code=transactions, cls=owner)
+        add('step', 'I', ['I'], 0x109, 0, cls=owner)
+        add('transact', 'Z', ['I', parcel, parcel, 'I'], cls=binder)
     types = sorted({owner, obj, string, system, 'I', *[d[2] for d in declarations],
                     *[t for d in declarations for t in d[3]]})
     ti = {t: i for i, t in enumerate(types)}
@@ -99,7 +111,7 @@ def resume_dex():
             data.extend(bytes(-len(data) % 4))
             code[i] = len(data)
             incoming = len(args) + (not flags & 8)
-            data.extend(struct.pack('<HHHHII', regs, incoming, 1, 0, 0, len(words)))
+            data.extend(struct.pack('<HHHHII', regs, incoming, 5 if binder_only else 1, 0, 0, len(words)))
             data.extend(struct.pack('<' + 'H'*len(words), *words))
     sections.append((0x2001, len(code), min(code.values())))
     at = len(data)
