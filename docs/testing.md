@@ -6955,6 +6955,10 @@ similar identifiers and transactional diagnostics across all three data models.
 `TypeParse.NamedSpecifiersKeepPrecedenceAndUnknownWordPositions` checks named
 record/enum kinds, declared size_t and va_list, fixed builtin precedence, and
 recovery after unknown or incompatible type words across those models.
+`TypeParse.IdentifierRunsKeepBoundariesAndSourcePositions` checks identifiers
+containing underscores, digits and dollar signs, quoted encoding prefixes,
+CRLF and tab positions, macro invocation diagnostics, and identifiers ending
+at EOF on all three data models. Failed declarations keep the library intact.
 `TypeParse.NestedDeclaratorsKeepTheirCompositionAndQualifiers` covers plain
 and parenthesized names, pointer arrays, callbacks returning array pointers,
 array references and calling conventions on ILP32, LP64 and LLP64, including
