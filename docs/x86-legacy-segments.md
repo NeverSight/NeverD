@@ -1301,4 +1301,15 @@ The reference is the POPCNT/LZCNT/TZCNT/ADCX/ADOX entries in
 Original-CPU checks require those features and cover the current Intel host.
 Feature-disabled aliases and #UD priority are separately qualified software
 contracts, not physical execution on a processor missing those features.
+
+The [November 7 integer qualification](evidence/x86-legacy-integer-2026-11-07.json)
+passes 1,098 tests across the native SDK, pinned r6 and qualified P/E cores,
+including 33,696 original integer-state comparisons, 960 original data-debug
+comparisons and 48 new compiled-source cases. Decoder and ordinary-lift checks
+also cover the integrated Capstone revision and the preceding stack fixes.
+After a later Android-only merge, both rebuilt shared libraries pass another
+130 source checks; the paging executables remain byte-identical. The archive
+retains each actual source commit, tool/binary hash and generated source/library,
+with the pre-integration receipts recorded separately.
+
 The other state banks and the global LLVM release gate remain open.

@@ -4041,7 +4041,9 @@ absent POPCNT/ADX delivers #UD after fetch. Count undefined flags remain
 producer inputs, while CF/ZF and unsigned ADX chains are computed. Operand
 faults, guest repair/IRET/retry and data breakpoints compose with their existing
 owners. Ordinary lifting and LLVM/NeverC computation support already existed;
-the global state gaps and LLVM release gate remain open.
+the [integer evidence](evidence/x86-legacy-integer-2026-11-07.json) records
+both SDKs, CPU core types and post-integration checks. The global state gaps
+and LLVM release gate remain open.
 
 ### Protected ARPL conditional completion
 
