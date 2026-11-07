@@ -26,6 +26,15 @@
 
 namespace neverd::symbolic {
 
+namespace {
+
+bool preservesLowBits(SymOp Op) {
+  return Op == SymOp::Add || Op == SymOp::Mul || Op == SymOp::And ||
+         Op == SymOp::Or || Op == SymOp::Xor || Op == SymOp::Not;
+}
+
+} // namespace
+
 bool SymContext::fitsU64(SymRef R) const {
   llvm::DenseSet<uint32_t> Seen;
   llvm::SmallVector<SymRef, 32> Work{R};
@@ -104,6 +113,34 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
       Work.emplace_back(C, false);
   }
 
+  // A scaled wide product observes only a prefix of each remaining factor.
+  // Propagate the largest demand from every user in reverse topological
+  // order. Other operators retain complete operands: a high bit can affect
+  // even the lowest result bit of a comparison, division or right shift.
+  // Native plans already use word arithmetic and need no precision analysis.
+  llvm::SmallVector<unsigned, 64> Needed;
+  if (!FitsU64) {
+    Needed.resize(NextSlot, 1);
+    Needed[Slot.find(Root.index())->second - 1] = Ctx.width(Root);
+    for (auto [R, OutputSlot] : llvm::reverse(PostOrder)) {
+      const auto Op = Ctx.op(R);
+      const bool Prefix = preservesLowBits(Op);
+      unsigned Zeros = 0;
+      if (Op == SymOp::Mul && Ctx.isConst(Ctx.operand(R, 0)))
+        Zeros = Ctx.constValue(Ctx.operand(R, 0)).countr_zero();
+      for (SymRef C : Ctx.operands(R)) {
+        unsigned Bits = Ctx.width(C);
+        if (Prefix) {
+          Bits = Needed[OutputSlot];
+          if (Zeros && !Ctx.isConst(C))
+            Bits -= std::min(Bits - 1, Zeros);
+        }
+        auto &Demand = Needed[Slot.find(C.index())->second - 1];
+        Demand = std::max(Demand, Bits);
+      }
+    }
+  }
+
   // Lower to flat steps.  Operand slots are resolved here, once, so the
   // evaluation loops never touch the hash map or the DAG.
   Steps.reserve(NextSlot);
@@ -113,6 +150,8 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
     Step S;
     S.Op = N.Op;
     S.Width = N.Width;
+    if (!FitsU64 && preservesLowBits(N.Op) && Needed[OutputSlot] <= 64)
+      S.Width = Needed[OutputSlot];
     S.Aux = N.Aux;
     // A native product has no node payload. Prepare its exact modulus once
     // for the long fold, without increasing the per-step storage.
@@ -460,6 +499,12 @@ llvm::APInt SymEvalPlan::evalWith(
     // A lookup may throw; the same plan must remain usable on the next call.
     for (const auto &[Slot, Node] : ConstantSlots)
       ScratchAP[Slot] = Ctx.constValue(Node);
+    // Keep the declared slot width even when only its prefix is observed.
+    // Assigning a native value below then reuses the wide allocation, and
+    // full-width consumers can keep the shared APInt operator semantics.
+    for (const Step &St : Steps)
+      if (St.Width <= 64 && preservesLowBits(St.Op))
+        ScratchAP[St.OutputSlot] = llvm::APInt(Ctx.width(St.Node), 0);
   }
   for (const Step &St : Steps) {
     const auto I = St.OutputSlot;
@@ -471,6 +516,40 @@ llvm::APInt SymEvalPlan::evalWith(
         ScratchAP[I] = *V;
       else
         ScratchAP[I] = V ? V->zextOrTrunc(St.Width) : llvm::APInt(St.Width, 0);
+      continue;
+    }
+
+    if (St.Width <= 64 && preservesLowBits(St.Op)) {
+      auto Word = [&](size_t K) { return ScratchAP[A[K]].getRawData()[0]; };
+      uint64_t Value = Word(0);
+      switch (St.Op) {
+      case SymOp::Add:
+        for (size_t K = 1; K < St.NumArgs; ++K)
+          Value += Word(K);
+        break;
+      case SymOp::Mul:
+        for (size_t K = 1; K < St.NumArgs; ++K)
+          Value *= Word(K);
+        break;
+      case SymOp::And:
+        for (size_t K = 1; K < St.NumArgs; ++K)
+          Value &= Word(K);
+        break;
+      case SymOp::Or:
+        for (size_t K = 1; K < St.NumArgs; ++K)
+          Value |= Word(K);
+        break;
+      case SymOp::Xor:
+        for (size_t K = 1; K < St.NumArgs; ++K)
+          Value ^= Word(K);
+        break;
+      case SymOp::Not:
+        Value = ~Value;
+        break;
+      default:
+        llvm_unreachable("not a low-prefix operator");
+      }
+      ScratchAP[I] = Value & (~uint64_t(0) >> (64 - St.Width));
       continue;
     }
 

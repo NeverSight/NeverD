@@ -4869,8 +4869,15 @@ Prepared arbitrary-width evaluation reuses each output slot's allocation for
 associative arithmetic and bitwise operations, starting from the first operand.
 A product stops multiplying after its complete word becomes zero; all input
 steps have already been evaluated. Standalone and prepared evaluation use the
-same operator implementation. Validation keeps its original full-width input
-assignments and sample count.
+same general operator implementation. Wide plans propagate the largest observed
+low-bit prefix from every use through modular arithmetic and bitwise operations.
+A constant product coefficient reduces the required factor prefix by its
+trailing-zero count. Prefixes fitting a native word use modular word arithmetic
+while retaining the original slot width; other consumers demand complete
+operands, including divisions, comparisons and shifts. A shared full-width use
+therefore prevents truncation. This analysis changes only evaluation, keeps
+all input lookups, and is unnecessary for native-only plans. Validation keeps
+its original full-width input assignments, sample count and work charges.
 Native long products stop when the initial operand pair is zero modulo the
 declared width, retaining the tight fold for other inputs. Their prepared steps
 keep the width mask in the unused product payload, without enlarging a step

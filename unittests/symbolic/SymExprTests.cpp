@@ -2018,6 +2018,70 @@ TEST(SymExpr, NativeProductsKeepAllInputsAfterModularOverflow) {
   }
 }
 
+TEST(SymExpr, WideScaledProductsObserveEveryDemandedPrefixAndSharedUse) {
+  std::mt19937_64 Random(0x7072656669786573);
+  for (unsigned Width : {65u, 128u, 257u, 513u})
+    for (unsigned Bits : {1u, 7u, 32u, 63u, 64u, 65u}) {
+      SCOPED_TRACE(Width);
+      SCOPED_TRACE(Bits);
+      SymContext C;
+      const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+      const auto Z = C.mkVar("z", Width);
+      const auto Scale = llvm::APInt(Width, 3).shl(Width - Bits);
+      const auto Mask = llvm::APInt::getAllOnes(Width).shl(4);
+      llvm::SmallVector<SymRef, 16> Factors{C.mkConst(Scale)};
+      for (unsigned I = 0; I < 12; ++I) {
+        const auto Left = C.mkAdd(C.mkXor(X, C.mkConst(Width, 1)),
+                                  C.mkConst(Width, 2 * I + 1));
+        const auto Right =
+            C.mkMul(C.mkAnd(C.mkAdd(Y, C.mkConst(Width, I)), C.mkConst(Mask)),
+                    C.mkOr(C.mkNot(Z), C.mkConst(Width, 4 * I + 1)));
+        Factors.push_back(C.mkXor(Left, Right));
+      }
+      const auto Product = C.mkMul(Factors);
+      const auto Shifted = C.mkLShr(Factors[3], C.mkConst(Width, Width - 1));
+      // A second user can demand the whole word or expose a high bit through
+      // a non-prefix operation. Neither may inherit the product's precision.
+      SymEvalPlan ProductPlan(C, Product);
+      SymEvalPlan SharedPlan(C, C.mkAdd(Product, Factors[3]));
+      SymEvalPlan ShiftPlan(C, C.mkAdd(Product, Shifted));
+      for (unsigned Trial = 0; Trial < 128; ++Trial) {
+        std::array<llvm::APInt, 3> Inputs;
+        for (unsigned J = 0; J < Inputs.size(); ++J) {
+          auto &V = Inputs[J];
+          V = llvm::APInt(Width, 0);
+          for (unsigned Bit = 0; Bit < Width; Bit += 64)
+            V |= llvm::APInt(Width, Random()).shl(Bit);
+          if (Trial < 4)
+            V = Trial == 0   ? llvm::APInt(Width, 0)
+                : Trial == 1 ? llvm::APInt::getAllOnes(Width)
+                : Trial == 2 ? llvm::APInt::getOneBitSet(Width, Bits - 1)
+                             : llvm::APInt::getSignMask(Width) + J;
+        }
+        auto Expected = Scale;
+        llvm::APInt Shared(Width, 0);
+        for (unsigned I = 0; I < 12; ++I) {
+          const auto Left = (Inputs[0] ^ llvm::APInt(Width, 1)) + 2 * I + 1;
+          const auto Right = ((Inputs[1] + I) & Mask) *
+                             (~Inputs[2] | llvm::APInt(Width, 4 * I + 1));
+          const auto Factor = Left ^ Right;
+          Expected *= Factor;
+          if (I == 2)
+            Shared = Factor;
+        }
+        std::array<unsigned, 3> Reads{};
+        EXPECT_EQ(ProductPlan.evalWith([&](uint32_t Id) {
+          ++Reads[Id];
+          return &Inputs[Id];
+        }),
+                  Expected);
+        EXPECT_EQ(Reads, (std::array<unsigned, 3>{1, 1, 1}));
+        EXPECT_EQ(SharedPlan.eval(Inputs), Expected + Shared);
+        EXPECT_EQ(ShiftPlan.eval(Inputs), Expected + Shared.lshr(Width - 1));
+      }
+    }
+}
+
 TEST(SymExpr, IncrementalProductsKeepCanonicalCoefficientsAndRepeatedFactors) {
   for (unsigned Width : {1u, 3u, 8u, 32u, 64u, 128u, 257u})
     for (uint64_t Coefficient : {0u, 1u, 6u, 37u}) {
