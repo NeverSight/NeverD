@@ -282,6 +282,8 @@ SymRef projectBitWindow(SymContext &Ctx, SymRef Source, unsigned Low,
     // bits below Low would lose the carry demonstrated by x=63, y=1, Low=6.
     for (auto Child : Inputs)
       Values.push_back(Part(Child, 0, Low + Width));
+    if (Low == 0 && Width == 1)
+      return Ctx.mkXor(Values);
     return Ctx.mkExtract(Ctx.mkAdd(Values), Low, Width);
   }
   if (isBitwise(Op) &&

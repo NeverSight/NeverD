@@ -21411,3 +21411,5 @@ global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
 
 HighSymSimplify bitcast, low-prefix, Boolean/selection and incoming-PHI regressions compare exact APInt results and compiled C at O0/O2. Control splits, labels, ambiguous widths, calls, loads and assignment conversions retain their original scope and effect boundaries.
+
+HighSymSimplify expanded-byte-parity tests preserve every input bit at 8/32/64-bit carrier widths and reject repeated-bit impostors. The generated source runs all 65536 signed-byte input pairs at O0 and O2. SymExec and the source bridge share the same population-count value definition; no additional x86 intrinsic capabilities are part of this fix.
