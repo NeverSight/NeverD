@@ -277,6 +277,7 @@
   "native_parameter_name": "\\s*\\barg\\d+$",
   "native_entry_types": [
     "long long",
+    "int32_t",
     "int64_t",
     "uint64_t",
     "void*",
