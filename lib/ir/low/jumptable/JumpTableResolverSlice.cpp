@@ -12222,6 +12222,9 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     std::vector<size_t> SelectQueries;
     std::vector<JumpTableValueOccurrence> DynamicAlternatives;
     bool OriginalCheckedAddress = false;
+    // A register-offset load from a table the frame holds: the load itself
+    // forms the address, so its operands stand in for the address ADD.
+    bool OriginalFrameAddress = false;
   };
   std::vector<RoleState> Roles;
   if (!consumeWork(2) || !consumeProduct(WorkingLoadRoles.size(), 2))
@@ -12292,16 +12295,29 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     const bool HasDisplacedAddress = Displaced.RuntimeBaseUse.Value.Size != 0;
     if (HasFrameStorage && HasDisplacedAddress)
       return false;
+    const bool OriginalFrameAddress =
+        HasFrameStorage && originalAArch64TableLoad(*Load);
+    if (OriginalFrameAddress) {
+      if (FrameStorage.RuntimeBase.ByteAddend != 0 ||
+          FrameStorage.CompleteAddress.Value.Size != 0 ||
+          FrameStorage.RuntimeBase.Use.DefinedAtPoint ||
+          FrameStorage.RuntimeBase.Use.Addr != Load->Addr ||
+          FrameStorage.RuntimeBase.Use.Seq != Load->Seq ||
+          !sameVar(FrameStorage.RuntimeBase.Use.Value,
+                   Load->Inputs[kAddressMemoryBaseOperand + 1]))
+        return false;
+    } else if (HasFrameStorage &&
+               (FrameStorage.RuntimeBase.Use.DefinedAtPoint ||
+                FrameStorage.RuntimeBase.Use.Addr == InvalidVA ||
+                FrameStorage.RuntimeBase.Use.Seq < 0 ||
+                !FrameStorage.CompleteAddress.DefinedAtPoint ||
+                FrameStorage.CompleteAddress.Addr == InvalidVA ||
+                FrameStorage.CompleteAddress.Seq < 0 ||
+                guestAddressView(FrameStorage.CompleteAddress.Value).Size !=
+                    guestAddressView(LoadAddress).Size))
+      return false;
     if (HasFrameStorage) {
-      if (FrameStorage.RuntimeBase.Use.DefinedAtPoint ||
-          FrameStorage.RuntimeBase.Use.Addr == InvalidVA ||
-          FrameStorage.RuntimeBase.Use.Seq < 0 ||
-          !FrameStorage.CompleteAddress.DefinedAtPoint ||
-          FrameStorage.CompleteAddress.Addr == InvalidVA ||
-          FrameStorage.CompleteAddress.Seq < 0 ||
-          FrameStorage.Initializers.empty() ||
-          guestAddressView(FrameStorage.CompleteAddress.Value).Size !=
-              guestAddressView(LoadAddress).Size)
+      if (FrameStorage.Initializers.empty())
         return false;
       for (const JumpTableFrameInitializerChunk &Initializer :
            FrameStorage.Initializers) {
@@ -12399,7 +12415,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
           sameVar(Role.AddressIndex.Value,
                   Load->Inputs[kAddressMemoryIndexOperand + 1]);
       if (Role.IsLiteralCoordinate || Role.HasBaseMaskBlend ||
-          HasFrameStorage || HasDisplacedAddress ||
+          (HasFrameStorage && SelectedBase) || HasDisplacedAddress ||
           (!SelectedBase &&
            (Role.AllowedBases.size() != 1 || Role.HasBaseSelect ||
             Role.AddressIndex.Value.Size)) ||
@@ -12428,17 +12444,21 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
             !ArmResults[1])
           return false;
       }
-      bool AddressComplete = false;
-      if (!aarch64OriginalTableLoadMatches(
-              *Load, Role,
-              Info.PhysicalCapacity ? Info.PhysicalCapacity
-                                    : limits::kMaxJumpTableEntries,
-              AggregateEvidenceBudget, AddressComplete, &QueryScope,
-              CertifiedEdgeOverrides, UseGroupContext)) {
-        Complete &= AddressComplete;
-        return false;
+      if (OriginalFrameAddress) {
+        Roles.back().OriginalFrameAddress = true;
+      } else {
+        bool AddressComplete = false;
+        if (!aarch64OriginalTableLoadMatches(
+                *Load, Role,
+                Info.PhysicalCapacity ? Info.PhysicalCapacity
+                                      : limits::kMaxJumpTableEntries,
+                AggregateEvidenceBudget, AddressComplete, &QueryScope,
+                CertifiedEdgeOverrides, UseGroupContext)) {
+          Complete &= AddressComplete;
+          return false;
+        }
+        Roles.back().OriginalCheckedAddress = true;
       }
-      Roles.back().OriginalCheckedAddress = true;
     }
   }
 
@@ -12524,7 +12544,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     const JumpTableLoadRole &Role = *State.Role;
     if (State.OriginalCheckedAddress)
       continue;
-    if (Role.AddressScale == 1) {
+    if (Role.AddressScale == 1 || State.OriginalFrameAddress) {
       if (!consumeProduct(Role.Indices.size(), 3))
         return false;
       State.DynamicAlternatives.reserve(Role.Indices.size());
@@ -13362,33 +13382,43 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       const JumpTableValueOccurrence &CompleteAddress =
           FrameStorage.CompleteAddress;
       const LowOp *CompleteAdd =
-          exactOpAt(CompleteAddress.Addr, CompleteAddress.Seq);
-      if (!RuntimeAdd || !CompleteAdd || RuntimeAdd->Opcode != NdOp::INT_ADD ||
-          RuntimeAdd->NumInputs < 2 ||
-          !sameVar(guestAddressView(CompleteAdd->Output),
-                   guestAddressView(CompleteAddress.Value)))
-        return false;
-
-      int BaseSide = -1;
-      for (int Side = 0; Side < 2; ++Side)
-        if (sameVar(guestAddressView(RuntimeAdd->Inputs[Side]),
-                    guestAddressView(RuntimeUse.Value))) {
-          if (BaseSide >= 0)
-            return false;
-          BaseSide = Side;
-        }
-      if (BaseSide < 0)
-        return false;
-      const NdVar DynamicValue =
-          guestAddressView(RuntimeAdd->Inputs[1 - BaseSide]);
+          State.OriginalFrameAddress
+              ? State.Load
+              : exactOpAt(CompleteAddress.Addr, CompleteAddress.Seq);
+      NdVar DynamicValue;
+      if (State.OriginalFrameAddress) {
+        if (RuntimeAdd != State.Load)
+          return false;
+        DynamicValue = guestAddressView(
+            State.Load->Inputs[kAddressMemoryIndexOperand + 1]);
+      } else {
+        if (!RuntimeAdd || !CompleteAdd ||
+            RuntimeAdd->Opcode != NdOp::INT_ADD || RuntimeAdd->NumInputs < 2 ||
+            !sameVar(guestAddressView(CompleteAdd->Output),
+                     guestAddressView(CompleteAddress.Value)))
+          return false;
+        int BaseSide = -1;
+        for (int Side = 0; Side < 2; ++Side)
+          if (sameVar(guestAddressView(RuntimeAdd->Inputs[Side]),
+                      guestAddressView(RuntimeUse.Value))) {
+            if (BaseSide >= 0)
+              return false;
+            BaseSide = Side;
+          }
+        if (BaseSide < 0)
+          return false;
+        DynamicValue = guestAddressView(RuntimeAdd->Inputs[1 - BaseSide]);
+      }
       if (!consumeWork(State.DynamicAlternatives.size()))
         return false;
-      const bool LocallyAuthenticatedIndex = std::any_of(
-          State.DynamicAlternatives.begin(), State.DynamicAlternatives.end(),
-          [&](const JumpTableValueOccurrence &Alternative) {
-            return localCopyChainMatchesUse(Alternative, DynamicValue,
-                                            *RuntimeAdd);
-          });
+      const bool LocallyAuthenticatedIndex =
+          State.OriginalFrameAddress ||
+          std::any_of(State.DynamicAlternatives.begin(),
+                      State.DynamicAlternatives.end(),
+                      [&](const JumpTableValueOccurrence &Alternative) {
+                        return localCopyChainMatchesUse(
+                            Alternative, DynamicValue, *RuntimeAdd);
+                      });
       std::vector<size_t> ProofQueries;
       if (!consumeWork(2))
         return false;
@@ -13723,7 +13753,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       const bool CompleteIsInner =
           CompleteAdd == RuntimeAdd &&
           sameVar(guestAddressView(CompleteAdd->Output), InnerAddress.Value);
-      if (CompleteIsInner) {
+      if (State.OriginalFrameAddress || CompleteIsInner) {
         if (FrameStorage.RuntimeBase.ByteAddend != 0)
           return false;
       } else {
@@ -14142,7 +14172,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     if (!consumeWork())
       return false;
     const RoleState &State = Roles[RoleIndex];
-    if (State.OriginalCheckedAddress) {
+    if (State.OriginalCheckedAddress || State.OriginalFrameAddress) {
       LoadMatches[RoleIndex] = true;
       continue;
     }

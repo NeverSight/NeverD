@@ -428,7 +428,8 @@ va_t CFGBuilder::resolveStackMaterializedTableSource(
       FuncOps.push_back(Op);
       if (Op.Output.isReg() || Op.Output.isTemp())
         FuncLinearDefs[{Op.Output.Space, Op.Output.Offset}].push_back(OpIndex);
-      if (DispatchLoad && Op.Opcode == NdOp::LOAD &&
+      if (DispatchLoad &&
+          (Op.Opcode == NdOp::LOAD || originalAArch64TableLoad(Op)) &&
           Op.Addr == DispatchLoad->Addr && Op.Seq == DispatchLoad->Seq &&
           Op.Output == DispatchLoad->Output) {
         if (LoadPosInFunc >= 0)

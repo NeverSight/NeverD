@@ -2359,29 +2359,56 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
           EvidenceBudget, BaseComplete, false, &AddressScope);
       if (!BaseComplete)
         return false;
-      if (!Base)
+      // A base with no constant may name a table this frame was given. As for
+      // a LOAD, only a load feeding this branch through its predecessors asks.
+      JumpTableFrameStorageRole FrameStorage;
+      std::vector<JumpTableValueOccurrence> StackStorageConsumers;
+      bool StackTableMutated = false;
+      std::optional<va_t> TableBase = Base;
+      if (!TableBase && BaseValue.isReg() &&
+          !DecoupledPredecessorLoadAddrs.empty()) {
+        if (!consume(DecoupledPredecessorLoadAddrs.size()))
+          return false;
+        if (!llvm::is_contained(DecoupledPredecessorLoadAddrs, L.Addr))
+          continue;
+        std::vector<JumpTableFrameInitializerChunk> Initializers;
+        const va_t StackSource = resolveStackMaterializedTableSource(
+            Img, Rec, Ops, I, BaseValue.Offset, W, /*TableDisp=*/0,
+            &StackTableMutated, &Initializers, &StackStorageConsumers);
+        if (StackTableEvidenceIncompleteBranches.count(Rec.Addr))
+          return false;
+        if (StackSource == InvalidVA || Initializers.empty())
+          continue;
+        FrameStorage.RuntimeBase = {{BaseValue, L.Addr, L.Seq,
+                                     /*DefinedAtPoint=*/false},
+                                    /*ByteAddend=*/0};
+        FrameStorage.Initializers = std::move(Initializers);
+        TableBase = StackSource;
+      }
+      if (!TableBase)
         continue;
-      const auto Run = boundedRelocationRun(*Base, W, true);
+      const auto Run = boundedRelocationRun(*TableBase, W, true);
       if (!Run)
         return false;
       const bool Relocated = *Run >= limits::kMinJumpTableEntries;
-      if (!Relocated && (*Run != 0 || W != Img.getPointerSize() ||
-                         !BranchLocalPointerLoadAddr ||
-                         *BranchLocalPointerLoadAddr != L.Addr ||
-                         !Img.readVA(*Base, W * limits::kMinJumpTableEntries)))
+      if (!Relocated &&
+          (*Run != 0 || W != Img.getPointerSize() ||
+           !BranchLocalPointerLoadAddr ||
+           *BranchLocalPointerLoadAddr != L.Addr ||
+           !Img.readVA(*TableBase, W * limits::kMinJumpTableEntries)))
         continue;
       // Discovery proposes a recipe only. The address-role owner replays
       // both exact operands and the CPA2 proof before any stable adoption.
       if (FoundModel &&
-          (*Base != ModelBase || W != ModelWidth || *Run != ModelRun))
+          (*TableBase != ModelBase || W != ModelWidth || *Run != ModelRun))
         continue;
       const NdVar Index = L.Inputs[kAddressMemoryIndexOperand + 1];
       if (!FoundModel) {
         FoundModel = true;
-        ModelBase = *Base;
+        ModelBase = *TableBase;
         ModelWidth = W;
         ModelRun = *Run;
-        Info.setBaseAddr(*Base);
+        Info.setBaseAddr(*TableBase);
         Info.EntrySize = W;
         Info.IsRelative = false;
         Info.IsSigned = false;
@@ -2398,9 +2425,27 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
         // slots. Zero capacity grants no storage or selector authority: the
         // common guard, exact role and target proofs must certify it.
         Info.RelocAbsolute = Relocated;
+        if (!FrameStorage.Initializers.empty()) {
+          size_t StaticSourceCount = 0;
+          for (const JumpTableFrameInitializerChunk &Initializer :
+               FrameStorage.Initializers) {
+            if (Initializer.StaticSources.size() >
+                std::numeric_limits<size_t>::max() - StaticSourceCount)
+              return false;
+            StaticSourceCount += Initializer.StaticSources.size();
+          }
+          if (!consumeProducts({{FrameStorage.Initializers.size(), 5},
+                                {StaticSourceCount, 3},
+                                {StackStorageConsumers.size(), 3}}))
+            return false;
+          Info.AuthenticatedFrameStorage = FrameStorage;
+          Info.AuthenticatedStorageConsumers = StackStorageConsumers;
+          Info.MutatedUnsafe = StackTableMutated;
+        }
       }
-      if (!appendOccurrence(*Base, Index, L.Addr, L.Seq, *Base, Index, L.Addr,
-                            L.Seq, W, std::nullopt))
+      if (!appendOccurrence(*TableBase, Index, L.Addr, L.Seq, *TableBase, Index,
+                            L.Addr, L.Seq, W, std::nullopt,
+                            std::move(FrameStorage)))
         return false;
       continue;
     }

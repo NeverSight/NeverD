@@ -1460,6 +1460,11 @@ A load through a SELECT of two table bases keeps the same operands: the base mus
 be that exact SELECT, whose arms name the two tables, and every index of both
 must have one address. Its selector counts entries rather than bytes, because
 the load scales its own index.
+A load from a table its frame holds has no constant base to check AddressAdd
+against. The frame storage proof names every slot the load can reach, each one
+written through the same frame address, so an in-bounds index stays in the region
+the frame occupies whichever check control applies. The load stays in the
+output; the switch only replaces the branch that consumed it.
 Byte and halfword stores slice the encoded W value explicitly; the tracer
 requires those source bytes to be known before publishing the slice. Unknown
 unused upper bytes do not prevent a known narrow store.
