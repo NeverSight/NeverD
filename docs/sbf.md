@@ -924,12 +924,23 @@ can discard that capture's definition on the null branch. This relation follows
 exact register copies, ends at calls, backedges and incompatible joins, and
 does not apply to a capture already introduced on an earlier path or iteration.
 It does not assume that allocation succeeds.
+A full-width store of a bounded heap value that feeds the return can introduce
+one immutable identity for that value. Predecessor ranges join before the store,
+so separate bounds checks and covered literals do not split its identity.
+A null/non-null return join retains those stores conditionally; a forwarding
+summary can carry
+them to a caller that tests the returned value. The non-null branch restores
+only surviving stored-identity facts. Overlapping and unknown writes invalidate
+them through the typed-memory owner; calls and backedges discard the older
+relation. Equal numerical ranges of separately obtained pointers never equate
+their identities. Conditional stores and temporary composition use the existing
+retained-state budget, with no allocation-success or non-overlap assumption.
 
-Concrete functions whose
-completed generic summary contains CALLX sites process CFG joins in reverse
-postorder. Generic summaries and concrete forwarding wrappers retain FIFO
-scheduling, including the order in which they request the four cached
-specializations.
+Functions without calls process CFG joins in reverse postorder, so acyclic
+predecessors merge before naming a stored return value. Concrete functions whose
+completed generic summary contains CALLX sites also use reverse postorder.
+Other generic summaries and concrete forwarding wrappers retain FIFO scheduling,
+including the order in which they request the four cached specializations.
 The scalar value lattice and resource limits remain unchanged.
 A concrete summary's proven target can also retain an independently instantiated
 generic input-expression witness when their actual target addresses agree.
