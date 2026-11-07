@@ -275,8 +275,10 @@ borrows a `translate::X86LegacySourceExecution`. Construct that C++ context
 with the complete `X86LegacyExecutionState`, `X86PagedMemory` and explicit
 `X86LegacyExecutionOptions`. Retain the state, RAM, borrowed device/debug
 callbacks and their contexts across pauses. Link the private bridge from the
-matching NeverD source build. There is no serialized C++ object layout or
-stable C state-construction ABI. The SDK exports source and a manifest; it
+matching NeverD source build. The budget is a separate host cell, disjoint from
+state/RAM and never modified by device/debug callbacks. There is no serialized
+C++ object layout or stable C state-construction ABI. The SDK exports source
+and a manifest; it
 does not capture a native CPU, infer a service ABI or construct a guest machine.
 
 This is one **runtime-backed C dispatch route**: instruction arithmetic,

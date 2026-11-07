@@ -214,7 +214,7 @@ TEST_P(X86LegacySourceTest, ModesAliasesAndBudgetsUseLiveCaches) {
                {0x1000, 32, {0xb8, 0x34, 0x12, 0x78, 0x56}}},
               Run));
   for (bool Code32 : {false, true})
-    for (uint32_t Base : {0x800u, 0xffffff00u}) {
+    for (uint32_t Base : {0x800u, 0xffffff00u, 0xffff1001u}) {
       resetLegacyState();
       put(0x1000, 0x56781234b8ULL);
       auto &CS = S.Core.Segments[1];

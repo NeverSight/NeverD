@@ -122,6 +122,7 @@ exportX86LegacySource(const BinaryImage &Image, llvm::StringRef RequestJSON) {
  * Context borrows X86LegacySourceExecution with complete state and profiles.
  * Calls/returns follow selected targets. Events stop before handler execution.
  * Retain all state and RAM on every stop; resume a pending event before retry.
+ * Budget is separate host storage, disjoint from state/RAM and callback writes.
  * This is runtime-backed C, not an inferred ordinary function ABI. */
 #include <stdint.h>
 extern uint32_t neverd_x86_legacy_select_v1(void *, uint64_t *);
