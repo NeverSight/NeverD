@@ -6564,5 +6564,87 @@ TEST(SBFCallXContexts, CoveredAllocatorLiteralKeepsOneReturnedPointer) {
   }
 }
 
+TEST(SBFCallXContexts, NonReturningCallsExcludeOnlyTheirDeadContinuations) {
+  for (unsigned Mode : {0u, 1u, 2u, 3u}) {
+    SCOPED_TRACE(Mode);
+    std::vector<test::EncodedInstruction> Text;
+    const auto Literal = [&](unsigned Register, uint64_t Value) {
+      const size_t Slot = Text.size();
+      const auto Words = test::loadImm64(Register, Value);
+      Text.insert(Text.end(), Words.begin(), Words.end());
+      return Slot;
+    };
+    Literal(8, kInputStart);
+    Literal(3, kInputStart);
+    const size_t TargetLiteral = Literal(4, 0);
+    Text.push_back(encode(Opcode::MOV64_IMM, 9, 0, 0, 91));
+    const size_t RootCall = Text.size();
+    Text.push_back({});
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Wrapper = Text.size();
+    const size_t TerminalCall = Text.size();
+    Text.push_back({});
+    Text.push_back(encode(Opcode::LD_DW_REG, 5, 8));
+    const size_t DeadCallX = Text.size();
+    Text.push_back(encode(Opcode::CALL_REG, 5));
+    Text.push_back(encode(Opcode::MOV64_REG, 0, 9));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Terminal = Text.size();
+    if (Mode == 1)
+      Text.push_back(encode(Opcode::LD_DW_REG, 0, 3));
+    const size_t LiveCallX = Text.size();
+    if (Mode == 2)
+      Text.push_back(encode(Opcode::CALL_REG, 4));
+    Text.push_back(Mode == 3 ? encode(Opcode::EXIT)
+                             : encode(Opcode::JA, 0, 0, -1));
+    const size_t Target = Text.size();
+    Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+    Text.push_back(encode(Opcode::EXIT));
+    Text[RootCall] = encode(Opcode::CALL_IMM, 0, 1, 0, Wrapper - RootCall - 1);
+    Text[TerminalCall] =
+        encode(Opcode::CALL_IMM, 0, 1, 0, Terminal - TerminalCall - 1);
+    const auto TargetAddress = test::loadImm64(4, kBytecodeStart + Target * 8);
+    std::copy(TargetAddress.begin(), TargetAddress.end(),
+              Text.begin() + TargetLiteral);
+    auto Program = analyze(test::makeImage(Text, {}));
+    ASSERT_TRUE(static_cast<bool>(Program))
+        << llvm::toString(Program.takeError());
+    auto Report = recoverCallXContexts(*Program);
+    ASSERT_TRUE(static_cast<bool>(Report))
+        << llvm::toString(Report.takeError());
+    checkSummaryReferences(*Report);
+    const auto Summary = llvm::find_if(Report->Summaries, [&](const auto &S) {
+      return S.EntrySlot == Wrapper && S.GeneralizedInputs;
+    });
+    ASSERT_NE(Summary, Report->Summaries.end());
+    EXPECT_EQ(bool(Summary->InputRegisterMask & (uint16_t{1} << 8)), Mode >= 2);
+    EXPECT_EQ(bool(Summary->InputRegisterMask & (uint16_t{1} << 9)), Mode >= 2);
+    EXPECT_EQ(Summary->ReadsInputMemory, Mode != 0);
+    if (Mode == 1)
+      EXPECT_TRUE(Summary->InputRegisterMask & (uint16_t{1} << 3));
+    if (Mode == 2)
+      EXPECT_TRUE(llvm::any_of(Report->Contexts, [&](const auto &Site) {
+        return Site.CallXSlot == LiveCallX && Site.TargetSlot == Target;
+      }));
+    ExecutionEnvironment Environment;
+    std::vector<uint8_t> Input(8);
+    llvm::support::endian::write64le(Input.data(), kBytecodeStart + Target * 8);
+    Environment.Memory.push_back({kInputStart, Input, false, "target"});
+    InterpreterOptions Options;
+    Options.MaxSteps = 100;
+    auto Raw = executeRaw(*Program, std::move(Environment), Options);
+    ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+    EXPECT_EQ(Raw->Status, Mode == 3 ? ExecutionStatus::Returned
+                                     : ExecutionStatus::StepLimit)
+        << Raw->Error;
+    EXPECT_EQ(
+        llvm::any_of(Raw->Trace,
+                     [&](const auto &Step) { return Step.Slot == DeadCallX; }),
+        Mode == 3);
+    if (Mode == 3)
+      EXPECT_EQ(Raw->ReturnValue, 91u);
+  }
+}
+
 } // namespace
 } // namespace neverd::sbf

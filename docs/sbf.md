@@ -332,7 +332,11 @@ input dependencies and missing-fact attribution.
 Resolved syscalls depend on their five exposed host-ABI argument carriers;
 unexposed return, callee-saved and frame registers do not create new summary
 variants unless the function itself reads them. Unknown calls still depend on
-all registers and memory.
+all registers and memory. Dependency propagation stops at a statically proven
+nonreturning direct call: unreachable continuation loads and CALLX sites do
+not consume inputs or specialization demand. Dependencies and target evidence
+inside the nonreturning callee still participate, including calls executed
+before a mandatory loop or recursion cycle.
 
 Contextual joins retain complete sets of up to four register/stored-word
 alternatives. Numeric literals already contained in an unsigned range are

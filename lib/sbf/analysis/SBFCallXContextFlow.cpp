@@ -1335,6 +1335,15 @@ llvm::Error ContextFlow::computeInputDependencies() {
               Program.isSyscallRegistered(
                   static_cast<uint32_t>(I->Immediate)))) {
           const size_t Entry = ByEntry.at(*I->CallTarget);
+          if (!MayReturnFromBlock[Entry]) {
+            // A matched nonreturning call makes the continuation unreachable.
+            // Its own dependencies still participate in the fixed point.
+            Uses = 0;
+            ReturnUses = 0;
+            Memory = false;
+            CallX = false;
+            LiveCallReturns[I->Slot] = false;
+          }
           Callee = {InputRegisters[Entry], ReadsMemory[Entry]};
           CallX |= ReachesCallX[Entry];
         } else {
@@ -3888,9 +3897,9 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
   }
   if (Report.UnresolvedCallXSlots.empty())
     return Report;
-  if (auto Error = computeInputDependencies())
-    return std::move(Error);
   if (auto Error = computeReturnReachability())
+    return std::move(Error);
+  if (auto Error = computeInputDependencies())
     return std::move(Error);
   if (auto Error = collectEntryPrefixes(Report))
     return std::move(Error);
