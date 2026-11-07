@@ -12103,3 +12103,21 @@ TEST(HighControlFlowDAG, SharedPurePrefixCannotHideAnEffectfulSibling) {
   EXPECT_EQ(Body.front().Val, Value);
   EXPECT_TRUE(containsVariable(Body));
 }
+
+TEST(HighControlFlowSemantics, UnusedValuesKeepPlainReadsAndTheirAddresses) {
+  for (bool Nested : {false, true}) {
+    SCOPED_TRACE(Nested);
+    auto Load = HighExpr::makeLoad(local(0), NdType::makeInt(8, false));
+    auto Copy = assign(0x1000, 1, 0);
+    Copy.Val = Nested ? HighExpr::makeBinop(NdOp::INT_ADD, Load,
+                                            HighExpr::makeConst(3, 8))
+                      : Load;
+    HighFunc F;
+    F.Body = {Copy, result(0x1004, HighExpr::makeConst(7, 8))};
+    eliminateUnusedValues(F.Body);
+    ASSERT_EQ(F.Body.size(), 2u);
+    EXPECT_EQ(F.Body[0].Kind, StmtKind::Assign);
+    EXPECT_EQ(F.Body[0].Val, Copy.Val);
+    EXPECT_EQ(Load->Operands[0]->Var, local(0)->Var);
+  }
+}
