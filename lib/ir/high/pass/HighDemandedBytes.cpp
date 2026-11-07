@@ -232,11 +232,14 @@ private:
   /// Every operand of every observable evaluation, and every root a
   /// statement reads for anything but a variable's value, is demanded whole.
   void seed() {
+    // Observable operand demand depends only on the node, not on the root
+    // that reaches it. The graph is unchanged throughout this seed phase.
+    HighExprSet Seen;
     walkStmts(Func.Body, [&](HighStmt &S) {
       const bool DefinesVar =
           S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var;
       forEachExpr(S, [&](const ExprPtr &Root) {
-        seedObservableEvaluations(Root);
+        seedObservableEvaluations(Root, Seen);
         if (DefinesVar && &Root == &S.Dst)
           return;
         // Assignment can itself extend or truncate a value. Keep that whole
@@ -280,18 +283,25 @@ private:
     });
   }
 
-  void seedObservableEvaluations(const ExprPtr &Root) {
-    std::vector<const HighExpr *> Stack{Root.get()};
-    std::unordered_set<const HighExpr *> Seen;
+  void seedObservableEvaluations(const ExprPtr &Root, HighExprSet &Seen) {
+    llvm::SmallVector<const HighExpr *, 16> Stack;
+    const auto Enqueue = [&](const ExprPtr &E) {
+      if (!E || (E->Operands.empty() && !E->IndirectTarget))
+        return; // No operand demand to seed, even for an observable leaf.
+      // Edges and roots retain shared ownership during this unchanged walk.
+      // A sole owner needs no visited entry: repeated paths or a reachable
+      // cycle must first pass a node with more than one owning reference.
+      if (E.use_count() == 1 || Seen.insert(E.get()).second)
+        Stack.push_back(E.get());
+    };
+    Enqueue(Root);
     while (!Stack.empty() && Budget) {
       const HighExpr *E = Stack.back();
       Stack.pop_back();
-      if (!E || !Seen.insert(E).second)
-        continue;
       --Budget;
       if (observableEvaluation(*E))
         demandOperandsOf(*E);
-      E->forEachChildExpr([&](const ExprPtr &C) { Stack.push_back(C.get()); });
+      E->forEachChildExpr(Enqueue);
     }
   }
 

@@ -6064,6 +6064,16 @@ ordered-memory ancestors that must remain intact. The x87 classification test
 executes ordinary HighC against native extended-precision encodings; ARM mode
 tests execute both ordinary and explicitly enhanced source.
 
+`HighExprSimplify.SharedObservableSeedsDoNotSpendBudgetPerRoot` shares a deep
+expression across 4,096 assignments. Demanded-bit analysis must remove unread
+unknown bits within its existing budget while retaining an unknown load address
+or indirect call target. `SharedSeedsStillDemandEachRootsValue` keeps the union
+of each root's value demand in either root order. Observable-node discovery is
+shared only within one unchanged seeding phase; value propagation and later
+invocations retain their own state. Run `NeverDHighSymSimplifyTests` and the
+HighIR/source suites for changes to this traversal, including the sanitizer
+configuration with acceleration libraries and the process allocator disabled.
+
 `SymExprCompare` covers literal observations of complemented, negated and
 masked packed predicates, including 128-bit lanes, impossible constants and
 overlapping lanes. `HighSymSimplify.NegatedPackedComparisonKeepsOnlyObservedFlags`
