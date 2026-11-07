@@ -30,6 +30,10 @@ def facts(client):
     return ok(client, "metadata")["listing_facts"]
 
 
+def scan_kept(client):
+    return client.call("metadata")["background"]["scan_kept"]
+
+
 def owner_of(clients, worker, binary, **options):
     owner = clients.enter_context(Client(worker))
     ok(owner, "open", {"path": str(binary), "analysis": False, "warm": False, **options})
@@ -154,6 +158,36 @@ def run(worker):
         listed(reading, ADDRESSES[1:])
         assert facts(reading)["kept"] == kept["kept"], facts(reading)
         reading.close()
+
+        # What the code scan found serves a later session, whatever that session
+        # has looked at first, and a read-only one keeps nothing.
+        scan = root / "scan.dll"
+        scan.write_bytes(fixture())
+        references = lambda client: [ok(client, "xrefs", {"address": hex(address)})["items"]
+                                     for address in ADDRESSES]
+        scanner = owner_of(clients, worker, scan, read_only=True)
+        assert references(scanner)
+        assert not scan_kept(scanner) and not facts(scanner)["kept"], facts(scanner)
+        scanner.close()
+        scanner = owner_of(clients, worker, scan)
+        found = references(scanner)
+        assert not scan_kept(scanner) and facts(scanner)["kept"] == 1, facts(scanner)
+        scanner.close()
+        for first_look in (False, True):
+            again = owner_of(clients, worker, scan)
+            if first_look:
+                listed(again)
+            assert references(again) == found
+            assert scan_kept(again), facts(again)
+            again.close()
+        files = stores(scan)
+        data = bytearray(files[0].read_bytes())
+        data[-1] ^= 0xff
+        files[0].write_bytes(data)
+        damaged_scan = owner_of(clients, worker, scan)
+        assert references(damaged_scan) == found
+        assert not scan_kept(damaged_scan), facts(damaged_scan)
+        damaged_scan.close()
 
         # Damage is a fact not kept: the look asks the engine.
         files = stores(binary)

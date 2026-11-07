@@ -1781,7 +1781,10 @@ Listing &Engine::newListing() {
                   [](const Json &row) { return row.contains("stack_frame"); });
   listing_->setStackFrames(codeEdits_, frames ? inputHash() : std::string());
   listing_->setKeptFacts(
-      [this](const std::string &key) { return keptListingFacts(key); });
+      [this](const std::string &key) { return keptListingFacts(key); },
+      [this](const std::string &key, std::string bytes) {
+        keepListingFact(key, std::move(bytes));
+      });
   const auto project = projectJson();
   if (browseCacheEnabled_ && project.is_object() && project.contains("folder"))
     listing_->configureCache(

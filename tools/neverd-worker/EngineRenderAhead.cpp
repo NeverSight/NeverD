@@ -209,7 +209,7 @@ std::vector<std::string> Engine::keptListingFacts(const std::string &key) {
       if (name.empty())
         factsStore_.reset();
       else if (name != factsStoreName_)
-        openFactsStore(name, false);
+        openFactsStore(name, !readOnly_);
       if (name.empty())
         factsStoreName_.clear();
     } catch (const std::exception &) {
@@ -220,7 +220,7 @@ std::vector<std::string> Engine::keptListingFacts(const std::string &key) {
   if (!factsStore_)
     return {};
   auto compact = factsStore_->read(key);
-  if (compact.empty() && !factsStore_->writable()) {
+  if (compact.empty() && renderStoreMode_ != "write") {
     const auto now = std::chrono::steady_clock::now();
     if (now - factsRefreshed_ >=
         std::chrono::milliseconds(limits::kListingFactsRefreshMilliseconds)) {
@@ -241,6 +241,13 @@ std::vector<std::string> Engine::keptListingFacts(const std::string &key) {
   }
   ++(pages.empty() ? factsMisses_ : factsHits_);
   return pages;
+}
+
+void Engine::keepListingFact(const std::string &key, std::string bytes) {
+  namespace limits = ::neverd::limits::worker;
+  if (factsStore_ && factsStore_->writable() && !factsStore_->contains(key) &&
+      factsStore_->bytes() < limits::kListingFactsMaxStoredBytes)
+    factsStore_->write(key, std::vector<std::string>{compressPage(bytes)});
 }
 
 void Engine::keepListingFacts(std::uint64_t address) {
@@ -338,8 +345,12 @@ bool Engine::renderAheadStep() {
   auto *store = liveRenderStore();
   if (renderAheadCursor_ >= renderAheadOrder_.size()) {
     renderAheadState_ = RenderAheadState::Done;
-    if (store)
+    if (store) {
       store->write(CompleteKey, {});
+      store->writeIndex();
+    }
+    if (factsStore_)
+      factsStore_->writeIndex();
     return true;
   }
   if (renderAheadHeldBytes_ + (store ? store->bytes() : 0) >=

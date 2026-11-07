@@ -741,6 +741,7 @@ struct Listing::Impl {
   /// and the generations those advanced, which views do not read.
   bool functionNamesStale = false;
   Listing::KeptFacts keptFacts;
+  Listing::KeepFact keepFact;
   std::uint64_t functionNameGenerations = 0, nameBuilds = 0;
   /// What the last full build read that names and the user's items do not
   /// change: the string scan, and the import, import slot and export rows.
@@ -814,6 +815,8 @@ struct Listing::Impl {
   /// What the scan gathers until the index is Ready.
   std::vector<Reference> references;
   ReferenceIndex referenceIndex;
+  /// This session's scan was read from what an earlier one kept.
+  bool scanKept = false;
   /// Recovered bodies replace a linear scan's references in their own extent.
   /// Keep these across decode-cache eviction and an unfinished background scan.
   struct RecoveredReferences {
@@ -4650,6 +4653,11 @@ struct Listing::Impl {
       references.clear();
       referenceIndex.clear();
       accessWidths.clear();
+      scanKept = readKeptScan();
+      if (scanKept) {
+        finishIndex();
+        return;
+      }
     }
     if (indexState != IndexState::Building)
       return;
@@ -4693,6 +4701,59 @@ struct Listing::Impl {
           static_cast<std::size_t>(std::max<std::ptrdiff_t>(1, to - from));
       return;
     }
+    keepScan();
+    finishIndex();
+  }
+
+  /// What the code scan found depends on the image and on the functions it
+  /// scanned, which the key names; a session that has read the rest of this
+  /// identity's facts reads it as a scan would have found it.
+  std::string scanFactsKey() const { return "references:" + inventoryKey; }
+
+  /// Each row is the target, the source, the kind and the width.
+  static constexpr std::size_t ScanRowBytes = 2 * sizeof(std::uint64_t) + 2;
+
+  void keepScan() {
+    if (!keepFact)
+      return;
+    std::string bytes(references.size() * ScanRowBytes, '\0');
+    auto *at = bytes.data();
+    for (const auto &row : references) {
+      std::memcpy(at, &row.to, sizeof(row.to));
+      std::memcpy(at + sizeof(row.to), &row.from, sizeof(row.from));
+      at[2 * sizeof(std::uint64_t)] = static_cast<char>(row.kind);
+      at[2 * sizeof(std::uint64_t) + 1] = static_cast<char>(row.width);
+      at += ScanRowBytes;
+    }
+    keepFact(scanFactsKey(), std::move(bytes));
+  }
+
+  bool readKeptScan() {
+    if (!keptFacts)
+      return false;
+    const auto pages = keptFacts(scanFactsKey());
+    if (pages.size() != 1 || pages.front().size() % ScanRowBytes)
+      return false;
+    const auto &bytes = pages.front();
+    references.resize(bytes.size() / ScanRowBytes);
+    const auto *at = bytes.data();
+    for (auto &row : references) {
+      std::memcpy(&row.to, at, sizeof(row.to));
+      std::memcpy(&row.from, at + sizeof(row.to), sizeof(row.from));
+      row.kind = static_cast<RefKind>(
+          static_cast<unsigned char>(at[2 * sizeof(std::uint64_t)]));
+      if (refKindName(row.kind).empty()) {
+        references.clear();
+        return false;
+      }
+      row.width = static_cast<std::uint8_t>(at[2 * sizeof(std::uint64_t) + 1]);
+      at += ScanRowBytes;
+    }
+    return true;
+  }
+
+  /// The scan's rows, whichever session found them, as the finished index.
+  void finishIndex() {
     applyRecoveredReferences();
     // Each relocated data slot refers to its pointer. These storage facts
     // survive instruction recovery even for slots embedded inside code.
@@ -5040,8 +5101,9 @@ std::uint64_t Listing::cacheGeneration() const {
   return impl_->cache.generation();
 }
 
-void Listing::setKeptFacts(KeptFacts kept) {
+void Listing::setKeptFacts(KeptFacts kept, KeepFact keep) {
   impl_->keptFacts = std::move(kept);
+  impl_->keepFact = std::move(keep);
 }
 
 std::vector<std::pair<std::string, std::vector<std::string>>>
@@ -5371,6 +5433,7 @@ Json Listing::indexState() const {
                 {"discovery_complete", impl_->discovered},
                 {"done", impl_->indexDone},
                 {"total", impl_->indexTotal},
+                {"scan_kept", impl_->scanKept},
                 {"references", impl_->indexState == Impl::IndexState::Ready
                                    ? impl_->referenceIndex.size()
                                    : 0},

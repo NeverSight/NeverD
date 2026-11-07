@@ -8,8 +8,11 @@
 /// user's own project files for later sessions over the same inputs.  Every
 /// identity has a folder, and every session appends to a file of its own, so a
 /// session that ends at any point leaves each render it finished and no two
-/// writers share a file.  Disposable, as the browse cache is: a damaged record
-/// is a render not kept, and removing the folder only costs the renders.
+/// writers share a file.  A session that ends cleanly, or a job that reaches
+/// its last function, also writes where each record lies beside its file, so a
+/// later session need not walk it.  Disposable, as the browse cache is: a
+/// damaged record is a render not kept, and removing the folder only costs the
+/// renders.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_TOOLS_NEVERD_WORKER_RENDERSTORE_H
@@ -33,7 +36,10 @@ public:
   /// the folder keeps of other identities.
   RenderStore(std::filesystem::path folder, const std::string &identity,
               bool writable);
+  ~RenderStore();
 
+  /// Writes where this session's records lie, for later sessions to read.
+  void writeIndex();
   /// Takes up what other sessions have added to the folder since.
   void refresh();
   bool contains(const std::string &key) const { return records_.contains(key); }
@@ -61,6 +67,8 @@ private:
     std::uint64_t walked = 0;
   };
   void walkFile(File &file);
+  /// Takes up what \p file's index says of it, if that fits the file.
+  void readIndex(File &file, std::uint64_t size);
   bool startFile();
 
   std::filesystem::path folder_, directory_;
@@ -71,6 +79,8 @@ private:
   std::ofstream output_;
   std::size_t outputFile_ = 0;
   std::uint64_t outputBytes_ = 0;
+  /// How many records this session wrote, and how many of them an index holds.
+  std::size_t outputRecords_ = 0, indexedRecords_ = 0;
 };
 
 } // namespace neverd::worker

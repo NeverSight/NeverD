@@ -6090,14 +6090,19 @@ a running replica and across sessions, a function's own view states its new name
 without the engine and asks it only once a name is taken away, operand formats keep
 it, a new name of data, a data item and another build of the worker start over,
 a job that starts over stops reading and adding, a record cut short is rendered
-again alone, and a damaged one reads the engine.
+again alone, and a damaged one reads the engine. A session reads past a record it
+could not walk through the index a finished job wrote, walks a file whose index does
+not fit it, and loses only the record an index misplaces.
 `WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
 through a real view.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a function's new name keeps the facts, a new
 name of data, another image and a damaged store ask the engine, and a corrected
-stack frame reads under what corrects it.
+stack frame reads under what corrects it. A store another session is still writing
+answers up to its last whole record and the rest once it is there, and a later
+session reads what the code scan found, whatever it looked at first, while a
+read-only one keeps nothing and damage scans again.
 `NeverDWorkerNamesRebuild` also renames functions, exported and not, without the
 names being read again, and each page, table and resolved name then reads as after a
 reload.

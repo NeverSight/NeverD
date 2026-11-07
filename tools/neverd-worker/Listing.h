@@ -55,7 +55,9 @@ public:
   /// a function's first look asks: the pages under \p key, or none.
   using KeptFacts =
       std::function<std::vector<std::string>(const std::string &)>;
-  void setKeptFacts(KeptFacts kept);
+  /// Keeps \p bytes for later sessions, as what is asked by that key.
+  using KeepFact = std::function<void(const std::string &, std::string)>;
+  void setKeptFacts(KeptFacts kept, KeepFact keep = nullptr);
   /// The engine's answers to what a first look at the function at \p entry
   /// asks, for setKeptFacts to give back, without those \p wanted refuses by
   /// their key.  None for an answer the look would not take.

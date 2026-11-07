@@ -202,6 +202,52 @@ def run(executable):
         assert len(files(cut)) == 2
         end(resumed, owner)
 
+        # A job that reached its last function says where its records lie, so a
+        # later session reads no record to find the next.
+        indexed = root / ("indexed-" + NAME)
+        indexed.write_bytes(b"render store fixture")
+        owner, writer = session(clients, executable, indexed)
+        kept = render_ahead(writer, done)
+        fresh_indexed = {address: unfixtured(source(writer, address)) for address in (A, B, C)}
+        end(writer, owner)
+        path = files(indexed)[0]
+        index = path.with_suffix(".ndri")
+        assert index.exists(), index
+        whole, listed = path.read_bytes(), index.read_bytes()
+        # The second record's header no longer reads: only the index gets past it.
+        first_key = 32 + int.from_bytes(whole[10:14], "little")
+        first_end = 6 + first_key + int.from_bytes(whole[14:22], "little")
+        assert whole[first_end:first_end + 4] == b"NDRR", whole[:64]
+        path.write_bytes(whole[:first_end] + b"XXXX" + whole[first_end + 4:])
+        owner, reader = session(clients, executable, indexed, store="read")
+        state = render_ahead(reader, lambda s: s is not None)
+        assert state["kept"] == kept["kept"], (state, kept)
+        end(reader, owner)
+        # An index that does not fit its file is not read: the file is walked, up
+        # to that header.
+        first_row = 14 + 32 + int.from_bytes(listed[14 + 28:14 + 32], "little")
+        for damaged_index in (listed[:first_row + 5], b"NDRI9\n" + listed[6:],
+                              listed[:6] + (len(whole) + 1).to_bytes(8, "little") + listed[14:]):
+            index.write_bytes(damaged_index)
+            owner, reader = session(clients, executable, indexed, store="read")
+            state = render_ahead(reader, lambda s: s is not None)
+            assert state["kept"] == 1, (state, kept)
+            end(reader, owner)
+        path.write_bytes(whole)
+        # One that says the wrong thing costs the record it misplaces, as damage
+        # does.
+        misplaced, at = bytearray(listed), 14
+        while not bytes(listed[at + 32:at + 32 + int.from_bytes(listed[at + 28:at + 32], "little")]
+                        ).decode().startswith(A):
+            at += 32 + int.from_bytes(listed[at + 28:at + 32], "little")
+        misplaced[at:at + 8] = (int.from_bytes(listed[at:at + 8], "little") + 1).to_bytes(8, "little")
+        index.write_bytes(misplaced)
+        owner, reader = session(clients, executable, indexed, store="read")
+        assert unfixtured(source(reader, A)) == fresh_indexed[A]
+        assert unfixtured(source(reader, B)) == fresh_indexed[B]
+        assert render_ahead(reader, lambda s: s and s["hits"] == 1)
+        end(reader, owner)
+
         # A damaged record is a render not kept: the visit reads the engine.
         damaged = root / ("damaged-" + NAME)
         damaged.write_bytes(b"render store fixture")

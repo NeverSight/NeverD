@@ -984,7 +984,9 @@ A job also keeps what a function's first look in `listing` asks the engine, in t
 project's `local/listing-facts` under the same inputs, and any worker of that project
 reads it there. An owner takes up what its replica adds at most once a second.
 `metadata.listing_facts` and `background.render_ahead.facts` report `{kept, bytes,
-hits, misses}`. A look the store does not answer asks the engine.
+hits, misses}`. A look the store does not answer asks the engine. The owner keeps
+what its reference scan found there too, and `background.scan_kept` says this
+session's index was finished from that.
 `metadata.listing_name_builds` counts how many times the listing has read its names
 again; a function's new name usually does not.
 

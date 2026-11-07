@@ -284,6 +284,7 @@ private:
   std::string renderStoreName();
   void openFactsStore(const std::string &name, bool writable);
   std::vector<std::string> keptListingFacts(const std::string &key);
+  void keepListingFact(const std::string &key, std::string bytes);
   Json listingFactsJson() const;
   void keepListingFacts(std::uint64_t address);
   std::string renderStoreMode_;

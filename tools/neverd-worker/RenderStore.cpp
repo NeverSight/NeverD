@@ -28,6 +28,8 @@ namespace {
 constexpr std::string_view FileMagic = "NDRS1\n";
 constexpr std::string_view FileExtension = ".ndrs";
 constexpr std::string_view RecordMagic = "NDRR";
+constexpr std::string_view IndexExtension = ".ndri";
+constexpr std::string_view IndexMagic = "NDRI1\n";
 
 struct RecordHeader {
   char magic[4];
@@ -50,6 +52,14 @@ std::uint64_t checksum(std::string_view key, std::string_view data) {
     }
   return hash;
 }
+
+/// One record in an index, before its key.  A record's checksum covers its key,
+/// so an index that says the wrong thing costs that record, as damage does.
+struct IndexRow {
+  std::uint64_t offset, dataBytes, checksum;
+  std::uint32_t pages, keyBytes;
+};
+static_assert(sizeof(IndexRow) == 32);
 } // namespace
 
 RenderStore::RenderStore(fs::path folder, const std::string &identity,
@@ -92,6 +102,7 @@ void RenderStore::walkFile(File &file) {
       return;
     file.input = std::move(input);
     file.walked = FileMagic.size();
+    readIndex(file, size);
   }
   auto &input = file.input;
   input->clear();
@@ -121,6 +132,84 @@ void RenderStore::walkFile(File &file) {
     input->seekg(static_cast<std::streamoff>(at));
   }
 }
+
+void RenderStore::readIndex(File &file, std::uint64_t size) {
+  namespace limits = ::neverd::limits::worker;
+  auto path = file.path;
+  path.replace_extension(IndexExtension);
+  std::ifstream input(path, std::ios::binary);
+  std::string bytes;
+  std::error_code error;
+  const auto indexBytes = fs::file_size(path, error);
+  if (error || !input || indexBytes < IndexMagic.size() + sizeof(std::uint64_t))
+    return;
+  bytes.resize(static_cast<std::size_t>(indexBytes));
+  if (!input.read(bytes.data(), static_cast<std::streamsize>(bytes.size())) ||
+      !std::string_view(bytes).starts_with(IndexMagic))
+    return;
+  std::size_t at = IndexMagic.size();
+  std::uint64_t covered;
+  std::memcpy(&covered, bytes.data() + at, sizeof(covered));
+  at += sizeof(covered);
+  if (covered < file.walked || covered > size)
+    return;
+  const auto index = static_cast<std::size_t>(&file - files_.data());
+  std::vector<std::pair<std::string, Record>> rows;
+  std::uint64_t kept = 0;
+  while (bytes.size() - at >= sizeof(IndexRow)) {
+    IndexRow row;
+    std::memcpy(&row, bytes.data() + at, sizeof(row));
+    at += sizeof(row);
+    if (row.keyBytes > limits::kRenderStoreMaxKeyBytes ||
+        row.keyBytes > bytes.size() - at || row.offset > covered ||
+        row.dataBytes > covered - row.offset)
+      return;
+    rows.emplace_back(
+        bytes.substr(at, row.keyBytes),
+        Record{index, row.offset, row.dataBytes, row.checksum, row.pages});
+    kept += row.dataBytes;
+    at += row.keyBytes;
+  }
+  if (at != bytes.size())
+    return;
+  records_.reserve(records_.size() + rows.size());
+  for (auto &[key, record] : rows)
+    records_.insert_or_assign(std::move(key), record);
+  bytes_ += kept;
+  file.walked = covered;
+}
+
+void RenderStore::writeIndex() {
+  if (!output_.is_open() || indexedRecords_ == outputRecords_)
+    return;
+  // Written whole and then moved, so a session never reads a part of one.
+  auto path = files_[outputFile_].path;
+  path.replace_extension(IndexExtension);
+  auto temporary = path;
+  temporary += ".tmp";
+  std::string bytes(IndexMagic);
+  bytes.append(reinterpret_cast<const char *>(&outputBytes_),
+               sizeof(outputBytes_));
+  for (const auto &[key, record] : records_)
+    if (record.file == outputFile_) {
+      const IndexRow row{record.offset, record.dataBytes, record.checksum,
+                         record.pages, static_cast<std::uint32_t>(key.size())};
+      bytes.append(reinterpret_cast<const char *>(&row), sizeof(row));
+      bytes += key;
+    }
+  std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  output.close();
+  std::error_code error;
+  if (output)
+    fs::rename(temporary, path, error);
+  else
+    fs::remove(temporary, error);
+  if (!error)
+    indexedRecords_ = outputRecords_;
+}
+
+RenderStore::~RenderStore() { writeIndex(); }
 
 std::vector<std::string> RenderStore::read(const std::string &key) {
   const auto found = records_.find(key);
@@ -228,6 +317,7 @@ bool RenderStore::write(const std::string &key,
   outputBytes_ = offset + data.size();
   records_.insert_or_assign(key, Record{outputFile_, offset, data.size(),
                                         header.checksum, header.pages});
+  ++outputRecords_;
   return true;
 }
 

@@ -4470,7 +4470,11 @@ recovered instructions and its stack frame, in `local/listing-facts` under the s
 identity. The owner reads them there (`Listing::setKeptFacts`) and takes up what its
 replica adds as the job goes, so a first look at a function the job has reached
 prepares no LowIR. What misses, or no longer reads as it was written, asks the
-engine and the browse cache as before.
+engine and the browse cache as before. The owner keeps what its reference scan
+found there too, under the functions it scanned, so a later session finishes its
+index from those rows once its discovery ends. A store's session writes where its
+records lie beside its file (`.ndri`) when it ends or its job reaches the last
+function, so a later session reads that and walks only what it leaves out.
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's, and only a new name of data
 or a data item, which pages spell, forgets the renders and moves to a store of its
