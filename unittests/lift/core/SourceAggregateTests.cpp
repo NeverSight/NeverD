@@ -405,11 +405,17 @@ TEST(SourceAggregate, ThreeWordResultsUseOnlyTheDarwinArm64IndirectPointer) {
        {NdType::makeInt(8, false), NdType::makePtr(NdType::makeVoid())}) {
     for (const auto &Fields : {std::vector<TypeRef>{Other, Other, Other},
                                std::vector<TypeRef>{Signed, Other, Signed}}) {
-      auto Bad = *Hint;
-      Bad.ReturnType = NdType::makeStruct(Fields);
-      EXPECT_TRUE(sourceAggregateMembers(Bad.ReturnType).empty());
-      EXPECT_FALSE(validateSourceABI(Bad, Error));
-      EXPECT_FALSE(assignDarwinFixedSourceABI(Bad, Arch::AArch64, Error));
+      auto Indirect = *Hint;
+      Indirect.ReturnType = NdType::makeStruct(Fields);
+      EXPECT_TRUE(sourceAggregateMembers(Indirect.ReturnType).empty());
+      ASSERT_TRUE(validateSourceABI(Indirect, Error)) << Error;
+      ASSERT_TRUE(assignDarwinFixedSourceABI(Indirect, Arch::AArch64, Error))
+          << Error;
+      EXPECT_EQ(Indirect.ReturnLocation.Kind,
+                SourceABICarrierKind::IndirectResultPointer);
+      EXPECT_EQ(Indirect.ReturnLocation.RegisterOffset,
+                TRI.indirectResultReg());
+      EXPECT_TRUE(Indirect.ReturnComponents.empty());
     }
   }
   auto Unsupported = *Hint;
@@ -1059,7 +1065,14 @@ TEST(SourceAggregate, SwiftBooleanTupleKeepsOneBitAndExcludesPadding) {
         EXPECT_FALSE(assignDarwinSwiftSourceABI(Bad, A, Error)) << Mutation;
     }
     auto Bad = Hint;
-    EXPECT_FALSE(assignDarwinFixedSourceABI(Bad, A, Error));
+    EXPECT_EQ(assignDarwinFixedSourceABI(Bad, A, Error), A == Arch::AArch64);
+    if (A == Arch::AArch64) {
+      EXPECT_EQ(Bad.ReturnLocation.Kind,
+                SourceABICarrierKind::IndirectResultPointer);
+      EXPECT_EQ(Bad.ReturnLocation.RegisterOffset,
+                getTargetRegInfo(A).indirectResultReg());
+      EXPECT_TRUE(Bad.ReturnComponents.empty());
+    }
     EXPECT_FALSE(assignDarwinObjCSourceABI(Bad, A, Error));
     Bad.ReturnType = NdType::makeVoid();
     Bad.Parameters = {{"tuple", Hint.ReturnType}};
@@ -1236,13 +1249,27 @@ TEST(SourceAggregate, SwiftMixedResultKeepsIndependentFloatingAndObjectBanks) {
       EXPECT_TRUE(sourceABIParameters(Bad).empty()) << Mutation;
     }
     auto Ordinary = mixedSwiftDeclaration();
-    EXPECT_FALSE(assignDarwinFixedSourceABI(Ordinary, A, Error));
+    EXPECT_EQ(assignDarwinFixedSourceABI(Ordinary, A, Error),
+              A == Arch::AArch64);
+    if (A == Arch::AArch64) {
+      EXPECT_EQ(Ordinary.ReturnLocation.Kind,
+                SourceABICarrierKind::IndirectResultPointer);
+      EXPECT_EQ(Ordinary.ReturnLocation.RegisterOffset,
+                TRI.indirectResultReg());
+      EXPECT_TRUE(Ordinary.ReturnComponents.empty());
+    }
     Ordinary = mixedSwiftDeclaration();
     EXPECT_FALSE(assignDarwinObjCSourceABI(Ordinary, A, Error));
     auto Parameter = mixedSwiftDeclaration();
     Parameter.Parameters.push_back({"record", Parameter.ReturnType});
     EXPECT_FALSE(assignDarwinSwiftSourceABI(Parameter, A, Error));
-    EXPECT_FALSE(assignDarwinFixedSourceABI(Parameter, A, Error));
+    EXPECT_EQ(assignDarwinFixedSourceABI(Parameter, A, Error),
+              A == Arch::AArch64);
+    if (A == Arch::AArch64) {
+      EXPECT_EQ(Parameter.ReturnLocation.Kind,
+                SourceABICarrierKind::IndirectResultPointer);
+      EXPECT_TRUE(Parameter.Parameters.back().IndirectByValue);
+    }
   }
 }
 

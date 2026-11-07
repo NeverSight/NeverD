@@ -1,0 +1,15 @@
+[
+  {
+    "path": "docs/evidence/x86-legacy-descriptors-2026-11-07.json",
+    "rule": "private-path",
+    "commits": [
+      "64fabf148536754daf9d0ee06098bf4faa1a82bb",
+      "1925b09416653b4fbd7f242cef937d831809a909"
+    ],
+    "line": "",
+    "reason": "Reviewed normalization of eight host compiler command paths in the inherited x86 descriptor qualification. Commands, test results and artifact hashes are unchanged. Only the exact original and cleanup commits and line digest are covered; current files, new commits, changed lines and external policy rules remain findings.",
+    "line_sha256": [
+      "9f2463284ee759353271a78bc7610cbd87a0811d1471250e92c04bcf8a85e38e"
+    ]
+  }
+]

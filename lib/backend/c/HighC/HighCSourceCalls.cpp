@@ -6,6 +6,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
+#include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/high/HighSwiftErrorProjection.h"
@@ -16,6 +17,7 @@
 #include "neverd/loader/ObjC/ObjCCallHints.h"
 #include "neverd/loader/ObjC/ObjCSourceDeclarations.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -197,6 +199,74 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     }
     return Callee;
   };
+  if (sourceCallRetainsResultStorage(Hint)) {
+    std::string Diagnostic;
+    const auto Bindings = sourceABIParameters(Signature);
+    if (!Hint.AnalystSite || Hint.AnalystSite->Instruction != E.CallSiteAddr ||
+        Signature.Architecture != Opts.TheArch ||
+        !validateSourceABI(Signature, Diagnostic) ||
+        E.Operands.size() != Bindings.size() + 1 ||
+        (E.IsIndirectCall && !E.IndirectTarget))
+      throw std::invalid_argument(kResultCallError);
+    std::optional<unsigned> Key;
+    std::string Target, Modifier = std::to_string(0);
+    if (AuthenticatedTarget) {
+      const auto &Auth = *E.IndirectTarget;
+      if (Auth.Kind != ExprKind::Call || Auth.Operands.size() != 3 ||
+          !Auth.Operands[0] || !Auth.Operands[1] || !Auth.Operands[2] ||
+          Auth.Operands[1]->Kind != ExprKind::Const ||
+          Auth.Operands[1]->ConstVal > kAArch64PAuthKeyIB)
+        throw std::invalid_argument(kAArch64PAuthMalformedCall);
+      Key = Auth.Operands.at(1)->ConstVal;
+      Target = exprStr(*Auth.Operands.at(0));
+      Modifier = exprStr(*Auth.Operands.at(2));
+    } else if (E.IsIndirectCall) {
+      Target = exprStr(*E.IndirectTarget);
+    } else {
+      Target = llvm::formatv(kResultCallDirectC,
+                             functionIdentifier(!E.CallTarget.empty()
+                                                    ? E.CallTarget
+                                                    : Hint.TargetName))
+                   .str();
+    }
+    std::vector<std::string> Arguments;
+    for (const auto &Operand : E.Operands) {
+      if (!Operand)
+        throw std::invalid_argument(kResultCallError);
+      Arguments.push_back(exprStr(*Operand));
+    }
+    Arguments.push_back(Target);
+    Arguments.push_back(Modifier);
+    const llvm::SmallVector<llvm::StringRef, 4> Names(Arguments.begin(),
+                                                      Arguments.end());
+    const auto Packet = aarch64PAuthTemporary(kResultCallPacket, Names);
+    const auto ValueName = aarch64PAuthTemporary(kResultCallValue, Names);
+    const auto Storage =
+        sourceValue(Arguments[Bindings.size()], E.Operands.back()->Type,
+                    NdType::makeInt(kResultCallWordBytes, false));
+    if (!Storage)
+      throw std::invalid_argument(kResultCallError);
+    std::string Result =
+        llvm::formatv(kResultCallPacketC, Packet,
+                      kResultCallHeaderWords + Bindings.size(), Target,
+                      Modifier, *Storage, sourceResultCallStackBytes(Bindings))
+            .str();
+    for (unsigned I = 0; I < Bindings.size(); ++I) {
+      const auto Value =
+          sourceValue(Arguments[I], E.Operands[I]->Type, Bindings[I].Type);
+      if (!Value)
+        throw std::invalid_argument(kResultCallError);
+      Result += llvm::formatv(kResultCallArgumentC,
+                              declarationToC(Bindings[I].Type, ValueName),
+                              *Value, Packet, kResultCallHeaderWords + I,
+                              ValueName, Bindings[I].Type->Size)
+                    .str();
+    }
+    return Result +
+           sourceResultCallAsmC(sourceResultCallAsm(Bindings, Key), Packet,
+                                kResultCallFrameC) +
+           kResultCallEndC;
+  }
   if (Hint.CallKind == SourceCallTypeHint::Kind::Analyst) {
     std::string Diagnostic;
     if (!Hint.AnalystSite || Hint.AnalystSite->Instruction != E.CallSiteAddr ||

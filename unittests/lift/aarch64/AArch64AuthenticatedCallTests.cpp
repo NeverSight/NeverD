@@ -13,6 +13,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/codegen/CodeGen.h"
+#include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/SourceCallABI.h"
@@ -20,10 +21,13 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/AArch64/AArch64AuthenticatedCall.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
@@ -245,7 +249,8 @@ void checkBundle(llvm::Module &Module, unsigned Key, bool Zero,
 
 void compile(const std::string &Source,
              const std::function<void(llvm::Module &)> &Inspect,
-             llvm::StringRef Case, bool LLVMRoute, bool DarwinObject = false) {
+             llvm::StringRef Case, bool LLVMRoute, bool DarwinObject = false,
+             llvm::ArrayRef<llvm::StringRef> ExtraFlags = {}) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -269,22 +274,24 @@ void compile(const std::string &Source,
   Out << Source;
   Out.close();
   for (llvm::StringRef Optimization : {kNoOptimize, kOptimize}) {
-    const llvm::StringRef Arguments[] = {Compiler,
-                                         kTargetOption,
-                                         kTriple,
-                                         kFreestandingOption,
-                                         kResourceHeadersOption,
-                                         kIncludeOption,
-                                         NEVERD_ARM64E_TEST_HEADERS,
-                                         kStandardOption,
-                                         kUnwindOption,
-                                         kAsyncUnwindOption,
-                                         Optimization,
-                                         kAssemblyOption,
-                                         kLLVMOption,
-                                         SourcePath,
-                                         kOutputOption,
-                                         LLVMPath};
+    llvm::SmallVector<llvm::StringRef, 24> Arguments = {
+        Compiler,
+        kTargetOption,
+        kTriple,
+        kFreestandingOption,
+        kResourceHeadersOption,
+        kIncludeOption,
+        NEVERD_ARM64E_TEST_HEADERS,
+        kStandardOption,
+        kUnwindOption,
+        kAsyncUnwindOption,
+        Optimization,
+        kAssemblyOption,
+        kLLVMOption,
+        SourcePath,
+        kOutputOption,
+        LLVMPath};
+    Arguments.append(ExtraFlags.begin(), ExtraFlags.end());
     const std::optional<llvm::StringRef> Redirects[] = {
         std::nullopt, std::nullopt, ErrorPath.str()};
     std::string Diagnostic;
@@ -847,3 +854,119 @@ TEST(AArch64AuthenticatedCall, OriginalLinkRegisterOperandsSurviveTheNewLink) {
   }
 }
 } // namespace
+
+TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
+  for (const auto &Variant : TypedVariants) {
+    auto Function = function(Variant.Key, false, 2, Variant.Raw);
+    auto &Block = Function.Blocks.front();
+    auto &Call = Block.Ops[Variant.Raw ? 0 : 1];
+    Call.Addr = kEntryAddress;
+    Call.OriginSeq = 0;
+    // AArch64 RETURN can name the return address. Model the actual x0 write
+    // so both value and register-based consumers see the dispatcher's result.
+    MedOp Result;
+    Result.Opcode = NdOp::COPY;
+    Result.Output = Call.Output;
+    Result.addInput(MedVar::makeConst(0, kPointerBytes));
+    Call.Output = {};
+    for (unsigned I = 2; I < Function.Params.size(); ++I)
+      Call.addInput(Function.Params[I]);
+    if (!Variant.Raw && Variant.Zero)
+      Block.Ops.front().Inputs[3] = MedVar::makeConst(0, kPointerBytes);
+    auto Hint = std::make_shared<SourceCallTypeHint>();
+    Hint->CallKind = SourceCallTypeHint::Kind::Analyst;
+    Hint->Signature.ReturnType = NdType::makeStruct(
+        {NdType::makeInt(kPointerBytes), NdType::makeFloat(kPointerBytes),
+         NdType::makePtr(NdType::makeVoid())});
+    Hint->Signature.Parameters = {{kTypedArgument, Hint->Signature.ReturnType}};
+    Hint->AnalystSite =
+        SourceCallOccurrenceKey{Call.Addr, Call.OriginSeq, NdOp::INDIR_CALL, 0};
+    std::string Diagnostic;
+    ASSERT_TRUE(assignAnalystCallABI(*Hint, Arch::AArch64, BinaryFormat::MachO,
+                                     Diagnostic))
+        << Diagnostic;
+    Call.SourceCallHint = Hint;
+    Block.Ops.insert(Block.Ops.end() - 1, std::move(Result));
+    recoverCallAbi(Function, Arch::AArch64, {});
+    ASSERT_EQ(Function.CallInfos.size(), 1U);
+    ASSERT_EQ(Function.CallInfos.front().SourceCallHint, Hint);
+    ASSERT_EQ(Function.CallInfos.front().Args.size(),
+              sourceABIParameters(Hint->Signature).size() + 1);
+    MedLLVMEmitter Emitter;
+    Emitter.setAnalystSourceProjection(true);
+    llvm::LLVMContext Context;
+    auto Module = Emitter.emit({Function}, Context, kFunction, Arch::AArch64,
+                               {}, nullptr, BinaryFormat::MachO);
+    ASSERT_TRUE(Module);
+    const auto Inspect = [&](llvm::Module &Candidate) {
+      EXPECT_FALSE(llvm::verifyModule(Candidate));
+      unsigned Calls = 0;
+      const auto *Fn = Candidate.getFunction(kFunction);
+      ASSERT_TRUE(Fn);
+      EXPECT_FALSE(Fn->hasFnAttribute(llvm::Attribute::NoUnwind));
+      for (unsigned I = 0; I < Fn->arg_size(); ++I) {
+#define A64_CALL_INDIRECT_FORBIDDEN_ATTRIBUTE(Name)                            \
+  EXPECT_FALSE(Fn->hasParamAttribute(I, llvm::Attribute::Name));
+#include "AArch64AuthenticatedCallFixtures.def"
+        EXPECT_FALSE(Fn->hasParamAttribute(I, llvm::Attribute::StructRet));
+      }
+      for (const auto &B : *Fn)
+        for (const auto &I : B)
+          if (const auto *C = llvm::dyn_cast<llvm::CallBase>(&I)) {
+            EXPECT_NE(C->getIntrinsicID(), llvm::Intrinsic::trap);
+            if (const auto *Assembly =
+                    llvm::dyn_cast<llvm::InlineAsm>(C->getCalledOperand());
+                Assembly && llvm::StringRef(Assembly->getAsmString())
+                                .starts_with(kResultCallMarker)) {
+              ++Calls;
+              EXPECT_TRUE(Assembly->canThrow());
+              EXPECT_FALSE(C->hasFnAttr(llvm::Attribute::NoUnwind));
+              EXPECT_TRUE(C->getType()->isVoidTy());
+              const char *Branch = Variant.Raw ? kResultCallRaw
+                                   : Variant.Key == kAArch64PAuthKeyIA
+                                       ? kResultCallIA
+                                       : kResultCallIB;
+              EXPECT_NE(Assembly->getAsmString().find(Branch),
+                        std::string::npos);
+            }
+          }
+      EXPECT_EQ(Calls, 1U);
+    };
+    Inspect(*Module);
+    optimize(*Module);
+    Inspect(*Module);
+    const auto Case = llvm::formatv(kResultStorageDirectory, Variant.Key,
+                                    Variant.Zero, Variant.Raw)
+                          .str();
+    std::string IR;
+    llvm::raw_string_ostream IRStream(IR);
+    Module->print(IRStream, nullptr);
+    save(Case, kLLVMIR, IR);
+    const auto Object =
+        Codegen().compile(*Module, Arch::AArch64, BinaryFormat::MachO, kTriple);
+    ASSERT_TRUE(Object.Success);
+    save(Case, kMachOObject,
+         llvm::StringRef(
+             reinterpret_cast<const char *>(Object.ObjectData.data()),
+             Object.ObjectData.size()));
+    for (const bool LLVMRoute : {false, true}) {
+      CEmitterOptions Options;
+      Options.TheArch = Arch::AArch64;
+      Options.Format = BinaryFormat::MachO;
+      Options.PreserveLLVMFunctionTypes = true;
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      if (LLVMRoute)
+        ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options));
+      else {
+        const auto High = MedToHighConverter().convert(Function, Arch::AArch64);
+        ASSERT_TRUE(HighCEmitter().emit({High}, Out, Options));
+      }
+      save(Case, LLVMRoute ? kLLVMSource : kHighSource, Source);
+      // The FVP guest consumes the unchanged text without a Darwin runtime.
+      // Public SDK executions independently retain the compiler's defaults.
+      compile(Source, Inspect, Case, LLVMRoute, /*DarwinObject=*/true,
+              {kExceptionsOption, kNoStackProtectorOption});
+    }
+  }
+}

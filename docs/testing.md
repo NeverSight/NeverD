@@ -1764,6 +1764,60 @@ indirect argument addresses and existing image signing recipes; logical copies,
 hidden result buffers, new authenticated storage/imports, relocation emission
 and native signed unwinding still require their separate contracts.
 
+`SourceCallABI.DarwinIndirectResultKeepsItsOriginalStorageContract` checks the
+x8 result classifier and separates physical storage from native logical values.
+The `SourceFrameAnalysis.Logical*` cases cover fixed and variadic stacked copy
+pointers, missing effect certificates, partial pointer bytes, expired copies
+and overlap with another outgoing stack value. The public
+`arm64e_source_calls_test.py` adds original x8 storage, parameter/result aliases,
+callee writes visible during the call, clobbered x8, floating and stacked
+operands, variadics, mixed records, five-float results and direct/A-key/B-key
+calls. Native callbacks are independent assembly and inspect storage guards;
+C routes compile at O0/O2 with `-fexceptions`. The original and both C routes
+also execute ordinary C++ exception unwinding across an x8 call at O0/O2.
+The complete SDK profile passes 82 projections, 164 arm64e object compilations,
+180 ordinary arm64 executions, six ordinary unwind checks and 14 refusals.
+Independent A/B signing controls in the ordinary arm64 host process leave the
+pointer unchanged, so its authenticated transport checks are not active PAC
+evidence. Native signed unwinding remains unqualified.
+
+`AArch64AuthenticatedCall.IndirectResultsKeepOriginalStorageAndPAC` exports
+five key/modifier variants for direct LLVM and HighC/LLVMC at O0/O2. The
+synthetic MedIR explicitly defines x0 before returning and rejects projected
+traps. Freestanding C exports use `-fexceptions -fno-stack-protector` because
+the controlled guest has no Darwin stack-check runtime. The extractor still
+requires unchanged, relocation-free text; ordinary SDK executables retain
+normal host compiler defaults.
+
+The [logical-copy and original-x8 receipt](evidence/arm64e-copy-result-abi-2026-11-07.json)
+records 30 passing controlled PAC guests for this original-storage fixture:
+600 valid original/projected pairs and 1,440 invalid-signature pairs across
+LLVM and both C routes. Every route requires the original exception class;
+there is no C O0 allowance in this profile. The callback reads through a
+parameter alias during result writes, records the exact buffer address and
+clobbers x8. This execution scope is smaller than the SDK's stack/FP/variadic
+transport matrix. The receipt distinguishes the actual model producer from
+later integrated exports and records their object hashes.
+After dev integration, all 25 original-x8 objects and all 1,625 objects from
+the earlier typed-call matrix retain their recorded bytes. The final Release
+regression covers 4,892 instances from twelve rebuilt executables: 4,815 pass
+and 77 explicitly skip for recorded host or fixture prerequisites. Two
+parallel timeouts pass serially with the unchanged CTest limits; both initial
+and retry reports remain bound by the receipt. The public SDK rerun records
+the tested revision and library hash independently of the model producer.
+The earlier non-x8 typed-call matrix retains the C O0 exception-class
+differences recorded in its own receipt; byte-identical exports preserve
+that qualification and its limits.
+After integrating dev `64fabf148`, the additional qualification at `ad229f65e`
+rebuilds the same targets and repeats the complete public SDK matrix. Of 1,334
+affected call, frame, type and HighIR test instances, 1,308 pass and 26 explicitly
+skip; none fail or time out. All 25 original-x8 and 1,625 earlier typed-call
+objects again match the recorded model inputs. The receipt retains this
+integration check separately from the earlier complete owner regression.
+`ImmutableNativeCalls.Generated*` checks ordinary and loop-frame image
+publication after dead private reads and their initializers disappear. The
+relocation validator still rejects unbound live image addresses.
+
 `NeverDLanguageEHTests` checks the unified signing query's image/function
 provenance, exact PCs, source scopes and bounded CIE lookup.
 `NeverDUnwindFrameCAPITests` loads independent Mach-O fixtures through the
@@ -16187,6 +16241,13 @@ and EventLog public-interface cases after changing this boundary.
 
 Build the owning executable first, then select its label. This avoids relinking
 unrelated large semantic targets.
+
+In a reused build tree, duplicate GoogleTest names can carry labels from
+several executables. Inspect `ctest --show-only=json-v1` and its `command`
+fields before treating a label selection as a rebuilt-owner run. If it also
+selects stale or unbuilt executables, select the matching test indices with
+`ctest -I` or run the rebuilt executable with a GoogleTest filter. Preserve
+the inventory with the test report.
 
 On macOS, a standalone Clang (including Homebrew LLVM) may need an explicit
 SDK when a fixture links generated source. Run CTest with

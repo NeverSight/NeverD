@@ -1801,7 +1801,7 @@ TEST(SourceFrameAnalysis, CopyEffectsKeepPointerAndRecordPermissionsDistinct) {
     if (Case == 8)
       ABI.Parameters[2].IndirectByValue = false;
     if (Case == 9) {
-      ABI.Parameters[2].Location.Kind = SourceABICarrierKind::Stack;
+      ABI.Parameters[2].Location.Kind = SourceABICarrierKind::None;
       ABI.Parameters[2].Location.RegisterOffset = 0;
     }
     EXPECT_FALSE(sourceFrameEffectsMatchABI(Effects, ABI));
@@ -2997,4 +2997,135 @@ TEST(SourceFrameAnalysis,
           SourceFrameScratchEffect::Action::Initialize, 0, 48};
     EXPECT_EQ(sourceFrameEffectsMatchABI(E, S), Mutation == 0);
   }
+}
+
+namespace {
+#define SOURCE_COPY_VALUE(Name, Value) constexpr unsigned Name = Value;
+#include "SourceCopyStorageFixtures.def"
+
+void putRecordCopyOnStack(RecordCopyFixture &F, bool Variadic) {
+  const auto Record = F.Consumer.Parameters.back().Type;
+  const auto Prefix = Variadic ? kCopyVariadicPrefix : kCopyGPRegisters;
+  F.Consumer.Parameters.assign(Prefix, {"", NdType::makeInt(kCopyWordBytes)});
+  F.Consumer.Parameters.push_back({"", Record});
+  std::string Error;
+  ASSERT_TRUE(
+      Variadic ? assignDarwinVariadicSourceABI(F.Consumer, Prefix,
+                                               Arch::AArch64, Error)
+               : assignDarwinFixedSourceABI(F.Consumer, Arch::AArch64, Error))
+      << Error;
+  auto &Contract = F.Calls.at(F.Site);
+  Contract.ByValueFrameParameters = {Prefix};
+  auto &Ops = F.Low.Blocks.front().Ops;
+  auto At = std::find_if(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+    return nativeSourceCallKey(Op) == F.Site;
+  });
+  const auto Index = At - Ops.begin();
+  std::vector<LowOp> Setup{
+      op(NdOp::INT_SUB, SP,
+         {SP, NdVar::scalar(kCopyOutgoingBytes, kCopyWordBytes)},
+         F.Site.Instruction),
+      op(NdOp::STORE, {}, {SP, F.X2}, F.Site.Instruction)};
+  for (unsigned I = kCopyVariadicPrefix; I < Prefix; ++I)
+    Setup.push_back(
+        op(NdOp::COPY,
+           NdVar::reg(getTargetRegInfo(Arch::AArch64).IntParamRegs[I],
+                      kCopyWordBytes),
+           {NdVar::scalar(I, kCopyWordBytes)}, F.Site.Instruction));
+  Ops.insert(Ops.begin() + Index, Setup.begin(), Setup.end());
+  Ops.insert(Ops.begin() + Index + Setup.size() + 1,
+             op(NdOp::INT_ADD, SP,
+                {SP, NdVar::scalar(kCopyOutgoingBytes, kCopyWordBytes)},
+                F.Site.Instruction));
+}
+} // namespace
+
+TEST(SourceFrameAnalysis, LogicalCopiesAcceptFixedAndVariadicStackPointers) {
+  for (const bool Variadic : {false, true}) {
+    RecordCopyFixture F;
+    putRecordCopyOnStack(F, Variadic);
+    const auto Copies = F.query();
+    ASSERT_TRUE(Copies);
+    ASSERT_EQ(Copies->size(), 1U);
+    EXPECT_TRUE(restoresNativeSourceState(F.Low, Arch::AArch64, F.Calls));
+    EXPECT_EQ(Copies->front().Parameter,
+              Variadic ? kCopyVariadicPrefix : kCopyGPRegisters);
+    EXPECT_EQ(Copies->front().FrameOffset, -int64_t(kCopyOriginalFrameBytes));
+    EXPECT_EQ(Copies->front().Bytes, kCopyRecordBytes);
+    // Type and placement alone never establish nonescape or copy lifetime.
+    F.Calls.at(F.Site).ByValueFrameParameters.clear();
+    EXPECT_FALSE(F.query());
+  }
+}
+
+TEST(SourceFrameAnalysis, LogicalStackCopyRejectsPartialPointerAndLaterRead) {
+  for (const bool LaterRead : {false, true}) {
+    RecordCopyFixture F;
+    putRecordCopyOnStack(F, false);
+    ASSERT_TRUE(F.query());
+    auto &Ops = F.Low.Blocks.front().Ops;
+    auto At = std::find_if(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+      return nativeSourceCallKey(Op) == F.Site;
+    });
+    if (LaterRead) {
+      const auto Index = At - Ops.begin();
+      Ops.insert(Ops.begin() + Index + 1,
+                 {op(NdOp::INT_ADD, F.X9,
+                     {SP, NdVar::scalar(kCopyOutgoingBytes, kCopyWordBytes)},
+                     F.Site.Instruction),
+                  op(NdOp::LOAD, X0, {F.X9}, F.Site.Instruction)});
+    } else {
+      auto Store = std::find_if(Ops.begin(), At, [&](const LowOp &Op) {
+        return Op.Opcode == NdOp::STORE && Op.Inputs[0] == SP;
+      });
+      ASSERT_NE(Store, At);
+      Store->Inputs[1].Size = kCopyPartialPointerBytes;
+    }
+    EXPECT_FALSE(F.query());
+  }
+}
+
+TEST(SourceFrameAnalysis, LogicalStackCopyCannotOverlapAnotherStackValue) {
+  RecordCopyFixture F;
+  putRecordCopyOnStack(F, false);
+  ASSERT_TRUE(F.query());
+  for (unsigned I = 0; I < kCopyOverlappingValues; ++I)
+    F.Consumer.Parameters.push_back({"", NdType::makeInt(kCopyWordBytes)});
+  std::string Error;
+  ASSERT_TRUE(assignDarwinFixedSourceABI(F.Consumer, Arch::AArch64, Error));
+  auto &Ops = F.Low.Blocks.front().Ops;
+  auto At = std::find_if(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+    return nativeSourceCallKey(Op) == F.Site;
+  });
+  std::vector<LowOp> Setup;
+  for (unsigned I = 1; I <= kCopyOverlappingValues; ++I) {
+    Setup.push_back(op(NdOp::INT_ADD, F.X9,
+                       {SP, NdVar::scalar(I * kCopyWordBytes, kCopyWordBytes)},
+                       F.Site.Instruction));
+    Setup.push_back(op(NdOp::STORE, {},
+                       {F.X9, NdVar::scalar(I, kCopyWordBytes)},
+                       F.Site.Instruction));
+  }
+  Ops.insert(At, Setup.begin(), Setup.end());
+  EXPECT_FALSE(F.query());
+}
+
+TEST(SourceFrameAnalysis, LogicalStackCopyRejectsUnrelatedFramePointerSpills) {
+  RecordCopyFixture F;
+  putRecordCopyOnStack(F, false);
+  ASSERT_TRUE(F.query());
+  auto &Ops = F.Low.Blocks.front().Ops;
+  auto At = std::find_if(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+    return nativeSourceCallKey(Op) == F.Site;
+  });
+  Ops.insert(
+      At, {op(NdOp::INT_ADD, F.X8,
+              {SP, NdVar::scalar(kCopyUnrelatedPointerOffset, kCopyWordBytes)},
+              F.Site.Instruction),
+           op(NdOp::INT_ADD, F.X9,
+              {SP, NdVar::scalar(kCopyOutgoingBytes, kCopyWordBytes)},
+              F.Site.Instruction),
+           op(NdOp::STORE, {}, {F.X8, F.X9}, F.Site.Instruction)});
+  EXPECT_FALSE(F.query());
+  EXPECT_FALSE(restoresNativeSourceState(F.Low, Arch::AArch64, F.Calls));
 }

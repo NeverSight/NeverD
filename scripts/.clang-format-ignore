@@ -1,0 +1,2 @@
+# Structured JSON rule data; C++ formatting would invalidate adjacent strings.
+check_source_provenance.def

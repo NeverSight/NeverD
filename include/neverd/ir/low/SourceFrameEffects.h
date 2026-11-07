@@ -157,8 +157,10 @@ sourceFrameEffectsMatchABI(const SourceFrameEffects &Effects,
   for (size_t Index : Effects.ByValueFrameParameters)
     if (Index >= Signature.Parameters.size() ||
         !Signature.Parameters[Index].IndirectByValue ||
-        Signature.Parameters[Index].Location.Kind !=
-            SourceABICarrierKind::IntegerRegister ||
+        (Signature.Parameters[Index].Location.Kind !=
+             SourceABICarrierKind::IntegerRegister &&
+         Signature.Parameters[Index].Location.Kind !=
+             SourceABICarrierKind::Stack) ||
         Effects.ReadOnlyFrameParameters.count(Index) ||
         Effects.WritableFrameParameters.count(Index))
       return false;
