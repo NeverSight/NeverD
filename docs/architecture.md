@@ -17438,9 +17438,16 @@ making spare bytes readable. In-capacity borrowed writes use the native memory
 owner and retain read-only faults. `AndroidBinderObjects.cpp` tracks native-only
 remote references across copied Parcels independently of Java proxy creation;
 final release uses the existing Linux strong/weak reference commands.
-Local Binder dispatch, nested/one-way transactions, weak objects/FDs, and direct
-reallocation of a borrowed offset table remain explicit boundaries. ServiceManager `lookup_results` remain a separate semantic input;
+In-capacity strong writes preserve JNI Binder conversion order before attempting
+the received offset-table pointer's realloc. The native adapter and C import use
+one `Bionic::reallocate` implementation. Binder arena pointers fail its allocation
+ownership check before memory access, even with zero offsets. Local Binder
+dispatch, nested/one-way transactions and weak objects/FDs remain explicit
+boundaries. ServiceManager `lookup_results` remain a separate semantic input;
 this transport does not turn those entries into kernel peers or replies.
+
+JNI propagates runtime-service failure diagnostics unchanged. The error owner
+supplies native context; the bridge does not add a second native prefix.
 
 
 `KernelFileSystem` owns the validated volume/node state; `KernelModel` owns canonical device topology and references. `DriverFileSystemJSON` is transport only. `DeviceOwnerKind` distinguishes Guest, PnpProvider and FileSystemProvider; only PnP routes use `isPnpProviderDevice`. Volume devices exist before DriverEntry, and four shared route guards reject unimplemented file I/O before publication. Owner snapshots remain independent of guest object projections and configuration.

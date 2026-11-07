@@ -86,33 +86,38 @@ BionicResult Bionic::calloc(const NativeCallEvent &Call) {
   return value(*Address);
 }
 
-BionicResult Bionic::realloc(const NativeCallEvent &Call) {
-  const auto &A = Call.Arguments;
-  uint64_t Size = A[1];
+llvm::Expected<uint64_t> Bionic::reallocate(uint64_t Address, uint64_t Size) {
   std::vector<uint8_t> Saved;
-  if (A[0]) {
-    auto I = Allocations.find(A[0]);
+  if (Address) {
+    auto I = Allocations.find(Address);
     if (I == Allocations.end())
       return failure(diagnostic::ReallocationOwnership);
     uint64_t Copy = std::min(Size, I->second.Size);
-    if (auto E = access(A[0], Copy, Read))
+    if (auto E = access(Address, Copy, Read))
       return std::move(E);
     Saved.resize(Copy);
     if (Copy)
-      if (auto E = CPU.read(A[0], Saved))
+      if (auto E = CPU.read(Address, Saved))
         return std::move(E);
   }
-  auto Address = allocate(Size, Options.Android->MallocFillByte);
-  if (!Address)
-    return Address.takeError();
-  if (!*Address)
-    return value(0);
+  auto Resized = allocate(Size, Options.Android->MallocFillByte);
+  if (!Resized)
+    return Resized.takeError();
+  if (!*Resized)
+    return uint64_t(0);
   // Preserve the old prefix; the caller-selected fill remains in new bytes.
   if (!Saved.empty())
-    if (auto E = CPU.write(*Address, Saved))
+    if (auto E = CPU.write(*Resized, Saved))
       return std::move(E);
-  if (auto E = release(A[0]))
+  if (auto E = release(Address))
     return std::move(E);
+  return *Resized;
+}
+
+BionicResult Bionic::realloc(const NativeCallEvent &Call) {
+  auto Address = reallocate(Call.Arguments[0], Call.Arguments[1]);
+  if (!Address)
+    return Address.takeError();
   return value(*Address);
 }
 

@@ -790,8 +790,13 @@ release queues strong then weak driver release unless a Java proxy still owns
 the endpoint. Later `readStrongBinder` reuses the native reference when creating
 its Java proxy. Local entries use the same native-to-Java registry as strong
 writes. Subsequent writes to detached storage use the ordinary Parcel owner.
-In-capacity `writeStrongBinder` on a borrowed offset table still requires native
-allocator handling; grow the capacity first for supported object writes.
+In-capacity `writeStrongBinder` converts the Java Binder, then passes the received
+offset-table pointer to the shared Bionic realloc owner before any buffer write.
+Binder mmap storage fails the live-allocation check with a native runtime failure.
+An empty table still retains its received nonnull pointer. The allocator check
+precedes reads or writes even after the arena is protected or freed. Growing data
+capacity first detaches the Parcel and permits ordinary owned object writes.
+Other external owners whose borrowed table realloc succeeds remain unsupported.
 Weak/FD object translation, one-way/nested transactions, local Binder dispatch,
 remaining native error/logging cases and `enforceInterface` remain unsupported.
 ServiceManager semantic lookup replies still do not execute this transport.

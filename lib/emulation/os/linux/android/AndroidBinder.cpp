@@ -262,6 +262,27 @@ public:
           Reply.fd = FD;
           Reply.bytes.emplace(Buffer->Bytes.begin(), Buffer->Bytes.end());
           Reply.release = std::move(Release);
+          Reply.reallocate_objects =
+              [&LibC, OffsetsAddress](
+                  uint64_t Size) -> mobile::dalvik::ExecutionResult {
+            using mobile::dalvik::ExecutionStop;
+            // Preserve the received pointer even for zero offsets. Binder's
+            // mmap storage is subject to the same ownership check as realloc.
+            auto Reallocated = LibC.reallocate(OffsetsAddress, Size);
+            if (!Reallocated)
+              return {ExecutionStop::Invalid,
+                      0,
+                      {},
+                      llvm::toString(Reallocated.takeError())};
+            if (!*Reallocated)
+              return {ExecutionStop::Thrown, 0, "java/lang/OutOfMemoryError"};
+            return {
+                ExecutionStop::Unsupported,
+                0,
+                {},
+                "Android Parcel reallocated external object-table ownership "
+                "is not modeled"};
+          };
           Reply.write = [&LibC, Device = Device, Address, Length,
                          Lease = Buffer->Lease](uint64_t Offset,
                                                 std::span<const uint8_t> Data)

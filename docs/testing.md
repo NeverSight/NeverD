@@ -16003,7 +16003,15 @@ lifetime, retained `unmarshall` metadata and bounded storage reservations.
 ordinary/V/A calls through real guest peers: automatic/explicit growth, arena
 slot reuse, scalar and strong writes, native-only remote handle retention and
 retirement, empty replies, read-only faults, stale leases and unreadable mappings.
-`ProcessPublic.AndroidParcelBorrowedGrowthMatchesSDKAndCLI` compares 54 complete
+It also compares ordinary/V/A strong-write allocator failures with direct native
+realloc on the identical received table addresses, including empty tables,
+protected/freed arenas and conversion before allocation. Empty replies and
+data-capacity growth provide successful strong-write controls.
+`AndroidParcelBufferTest` checks literal object-table allocation sizes, untouched
+buffers/cursors, owner retention and missing allocator services.
+`AndroidAllocation.ReallocChecksOwnershipBeforeReadingStorage` contrasts external,
+interior, freed and unreadable foreign pointers with an unreadable owned allocation.
+`ProcessPublic.AndroidParcelBorrowedGrowthMatchesSDKAndCLI` compares 108 complete
 reports at O0/O2, including all explicit failure outcomes.
 Run full Dalvik, Android JNI, thread/callback and native/Linux Binder suites,
 plus these focused public tests after changing this owner. The shared scheduler
