@@ -17139,8 +17139,8 @@ Each supplied proxy may independently declare `native_binding` with a positive
 signed `fd`, a uint32 `handle`, and explicit `alive`. The native adapter resolves
 the fd on first use to an existing shared Linux Binder open description and
 rejects closure/reuse. Java keys still imply no native endpoint. The guest must
-establish any context manager and read-only reply arenas itself. Object-free,
-synchronous handle-zero calls use the existing protocol-8 ioctl routing;
+establish any context manager and read-only reply arenas itself. Synchronous
+handle-zero and owned strong-handle calls use the shared protocol-8 ioctl routing;
 replies are computed by guest service code. Missing managers return the kernel's
 DEAD_REPLY, which sets the BpBinder dead cache and a checked DeadObjectException.
 A declared dead proxy short-circuits before IPC. Status replies retain old Parcel
@@ -17165,9 +17165,20 @@ its next Binder exchange. Null Java replies use the temporary-reply release
 path. Neither cursor motion nor reading frees the buffer. An invalidated or unreadable mapping
 stops explicitly, and scalar reads do not copy the entire retained buffer.
 
+`LinuxBinderObjects.cpp` owns strong flat-object translation, process-local handle
+identity, reference commands and node-control work. Buffer allocation leases
+retain object metadata and distinguish address reuse. Final device-open retirement
+drops process references; nodes weakly identify their owner. The native adapter
+only queues libbinder reference/free commands through that owner. Parcel validates
+object reads and protects scalar reads; `AndroidBinder.cpp` caches remote Java
+proxies by endpoint and rejects duplicate input endpoint identities. Dynamic
+proxies have no invented input key in snapshots. Reference acquisition is ordered
+before Parcel release on the current native thread. No private service response
+or application-specific object conversion belongs in these shared models.
+
 `enforceInterface` still requires incoming flags and the Java StrictMode upcall.
-Local Binder dispatch, nested/one-way transactions, translated handles, Binder
-objects/FDs, and writes/capacity growth in borrowed reply storage remain explicit
+Local Binder dispatch, nested/one-way transactions, weak objects/FDs, and
+writes/capacity growth in borrowed reply storage remain explicit
 boundaries. ServiceManager `lookup_results` remain a separate semantic input;
 this transport does not turn those entries into kernel peers or replies.
 

@@ -171,6 +171,10 @@ inline constexpr int
 inline constexpr int kLinuxBinderLinuxFilesBinderIoctlWriteSizeLimit = 4096;
 
 // lib/emulation/os/linux/kernel/LinuxBinderTransactions.cpp
+// Retained object identities and handle descriptions per Binder open. These
+// bound metadata across repeated transactions independently of the arena size.
+inline constexpr uint32_t kMaxBinderNodesPerOpen = 4096;
+inline constexpr uint32_t kMaxBinderHandlesPerOpen = 4096;
 inline constexpr int
     kLinuxBinderTransactionsLinuxFilesBinderCommandOwnQueueSizeLimit = 64;
 inline constexpr int

@@ -58,9 +58,9 @@ public:
   std::shared_ptr<LinuxDeviceState>
   binderConnection(uint32_t FD, ProcessResult &Result) const;
   // Kernel-owned bytes; native readers separately check guest permissions.
-  std::optional<llvm::ArrayRef<uint8_t>>
-  binderBuffer(const LinuxDeviceState &Device, uint64_t Address,
-               uint64_t Size) const;
+  std::optional<BinderBufferView> binderBuffer(const LinuxDeviceState &Device,
+                                               uint64_t Address,
+                                               uint64_t Size) const;
   bool isSocket(uint32_t FD) const;
   llvm::Expected<std::optional<uint64_t>>
   network(ServiceKind Kind, const ProcessServiceEvent &Event,
@@ -323,6 +323,27 @@ private:
   llvm::Expected<std::optional<uint64_t>>
   binderReadWork(LinuxDeviceState &Device, uint64_t Address, uint64_t Size,
                  ProcessResult &Result);
+  std::shared_ptr<LinuxDeviceState> binderOwner(LinuxDeviceState &Device) const;
+  uint32_t binderRetainHandle(LinuxDeviceState &Device,
+                              const std::shared_ptr<BinderNode> &Node,
+                              bool Strong,
+                              std::optional<uint32_t> OwnerThread = {});
+  void binderReleaseHandle(LinuxDeviceState &Device, uint32_t Handle,
+                           bool Strong);
+  bool binderReleaseBuffer(LinuxDeviceState &Device, const BinderBuffer &Buffer,
+                           ProcessResult &Result);
+  std::optional<uint64_t> binderReferenceCommand(LinuxDeviceState &Device,
+                                                 uint32_t Command,
+                                                 llvm::ArrayRef<uint8_t> Data,
+                                                 ProcessResult &Result);
+  bool binderTranslateObjects(LinuxDeviceState &Source,
+                              LinuxDeviceState &Target,
+                              std::vector<uint8_t> &Payload,
+                              BinderBuffer &Buffer, ProcessResult &Result);
+  uint8_t binderNodeCommands(const BinderNode &Node,
+                             std::vector<uint8_t> &Output) const;
+  void binderCommitNode(const std::shared_ptr<BinderNode> &Node,
+                        uint8_t Events);
   llvm::Expected<std::optional<uint64_t>> contextIoctl(LinuxDeviceState &Device,
                                                        uint32_t Request,
                                                        uint64_t Argument,

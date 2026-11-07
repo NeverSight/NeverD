@@ -1278,7 +1278,7 @@ llvm::json::Object androidResultJSON(const ProcessResult &Result) {
                                              {"binder", bits(Entry.binder)}});
       for (const auto &Proxy : State.binder_proxies) {
         llvm::json::Object Object{
-            {"key", Proxy.key},
+            {"key", Proxy.key ? llvm::json::Value(*Proxy.key) : nullptr},
             {"identity", bits(Proxy.identity)},
             {"warn_on_blocking",
              Proxy.warn_on_blocking ? llvm::json::Value(*Proxy.warn_on_blocking)

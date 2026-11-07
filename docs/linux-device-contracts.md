@@ -246,8 +246,8 @@ smaller retry. A larger mapping does not raise the 64 KiB per-transaction limit.
 Requests beyond 4 MiB still stop: the driver's oversized-VMA truncation is not
 modeled. The arena bound follows the pinned driver's `binder_mmap` limit above.
 
-BC_TRANSACTION to handle zero copies an object-free payload into the registered
-peer's arena. An entered/registered guest looper receives BR_TRANSACTION, runs
+BC_TRANSACTION to handle zero copies a payload into the registered peer's
+arena; an owned nonzero strong handle routes to its node's live owner. An entered/registered guest looper receives BR_TRANSACTION, runs
 its native service code, and sends BC_REPLY. The original caller receives
 BR_TRANSACTION_COMPLETE and BR_REPLY; no service result is supplied by the model.
 Complete LP64 records retain code, sender identity, data size, aligned offsets,
@@ -262,22 +262,43 @@ to resume from write_consumed. A delivered transaction can request a new looper
 through the leading BR_SPAWN_LOOPER word, under the same thread-pool rules as
 control reads. Private thread work and process work retain kernel read eligibility.
 
-Object-free synchronous requests also accept TF_ACCEPT_FDS, as emitted by
-libbinder's ordinary `transact`. The bit is delivered intact; it does not
-authorize FD translation, and a nonempty object-offset table still stops.
+Synchronous requests also accept TF_ACCEPT_FDS, as emitted by libbinder's
+ordinary `transact`. The bit is delivered intact; descriptor translation is
+still unsupported.
 Replies accept TF_STATUS_CODE only with exactly four guest-provided bytes.
 They preserve the flag and payload in the caller's read-only arena; no service
 error or success value is invented. Other request/reply flags remain unsupported.
-Rejected flags, objects and status sizes report the command, target, transaction
-code, flags and lengths before allocating a reply buffer or consuming the call.
+Rejected flags and status sizes retain command/target/code/flag/length diagnostics.
+These and malformed object tables stop before allocating a reply buffer or
+consuming the call.
 These transport conventions follow the pinned
 [Binder UAPI](https://android.googlesource.com/kernel/msm/+/a80b2e0035e75c0460b54e2217ca0104631d547d/include/uapi/linux/android/binder.h)
 and [libbinder producer/consumer](https://android.googlesource.com/platform/frameworks/native/+/2d5e05b44248e445af986ca8410c6e98c6ba3533/libs/binder/IPCThreadState.cpp).
 
-This subset admits synchronous, offsets-free messages, at most one
-transaction per write batch, 64 live buffers/work items per queue, and 64 KiB per
-payload. Object/FD translation, one-way or nested calls, security policies,
-peer-death processing and blocking scheduling remain explicit gaps. Partial
+Strong LP64 flat Binder objects carry a validated, four-byte-aligned,
+non-overlapping uint64 offset table. The shared kernel translates a sender's
+pointer/cookie node into a receiver-local handle, reuses handles for the same
+node, and restores the original pointer/cookie when an object returns to its
+owner. Forwarding to a third open allocates that open's own handle. Payload and
+offset bytes share the arena allocation; buffers retain their object references
+and the transaction target independently of userspace references.
+BC_INCREFS/ACQUIRE/RELEASE/DECREFS and the two *_DONE acknowledgments share node
+and handle counters. BR_INCREFS/ACQUIRE/RELEASE/DECREFS preserve native ordering
+and pointer/cookie fields. Exported-node notifications stay deferred until a
+reply/error activates the synchronous caller's thread queue. Final open retirement
+drops its handle references;
+remote handles do not keep a dead owner alive. A call through such a handle
+returns BR_DEAD_REPLY. Buffer views carry allocation identity, so address and
+size reuse do not make a released view live again. Malformed reference commands,
+over-release, unknown strong handles and unsupported object kinds stop explicitly.
+These semantics follow the Android P
+[Binder driver](https://android.googlesource.com/kernel/common/+/01d7587c4f03aa97c8d618a3e067923f932e0c60/drivers/android/binder.c).
+
+This subset admits at most one synchronous transaction per write batch, 64 live
+buffers/transaction work items per queue, 64 KiB per payload and 4096 nodes and
+handles per open. Node-control work is bounded by retained nodes. Weak-object,
+FD/pointer/scatter-gather translation, one-way or nested calls, security policies,
+death-recipient notification and blocking raw-driver scheduling remain explicit gaps. Partial
 copies, exhausted model budgets and missing peer arenas stop rather than
 fabricating data. Pending work prevents final owner retirement. Existing ioctl
 observations cannot replace these stateful operations.

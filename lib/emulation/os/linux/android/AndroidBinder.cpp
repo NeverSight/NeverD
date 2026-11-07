@@ -36,8 +36,7 @@ public:
   uint64_t Scratch;
 
   bool ready() const override {
-    auto I = Device->BinderThreadWork.find(Continuation->Thread);
-    return I != Device->BinderThreadWork.end() && !I->second.empty();
+    return Device->hasReadyBinderThreadWork(Continuation->Thread);
   }
   std::optional<uint64_t> nextWake() const override { return std::nullopt; }
   BionicResult resume(Bionic &LibC) override { return run(LibC); }
@@ -63,26 +62,47 @@ public:
     llvm::support::endian::write64le(Record + 40, Scratch + 256);
     if (auto E = LibC.CPU.write(Scratch, Record))
       return std::move(E);
-    return LibC.kernelService(linux_model::ServiceKind::Ioctl,
-                              {0, 0, {Descriptor, 0xc0306201, Scratch}, {}});
+    auto Sent =
+        LibC.kernelService(linux_model::ServiceKind::Ioctl,
+                           {0, 0, {Descriptor, 0xc0306201, Scratch}, {}});
+    if (!Sent || !*Sent || **Sent || Commands.empty())
+      return Sent;
+    uint8_t Consumed[8];
+    if (auto E = LibC.CPU.read(Scratch + 8, Consumed))
+      return std::move(E);
+    if (llvm::support::endian::read64le(Consumed) != Commands.size())
+      return unsupported(
+          LibC.Result,
+          "Android Binder pending driver error left commands unconsumed");
+    return Sent;
   }
   BionicResult flush(Bionic &LibC) {
-    auto &Frees = LibC.binderThread().PendingFrees;
-    for (const auto &Free : Frees) {
+    auto &Commands = LibC.binderThread().PendingCommands;
+    for (const auto &Command : Commands) {
+      if (Command.Lease) {
+        auto Current = LibC.Kernel.binderBuffer(*Command.Device, Command.Value,
+                                                Command.Lease->Size);
+        if (!Current || Current->Lease != Command.Lease)
+          return unsupported(
+              LibC.Result,
+              "Android Binder release buffer lease is no longer live");
+      }
       uint8_t Bytes[12];
-      llvm::support::endian::write32le(Bytes, 0x40086303);
-      llvm::support::endian::write64le(Bytes + 4, Free.Address);
-      auto Sent = exchange(LibC, Free.FD, Free.Device, Bytes, false);
+      llvm::support::endian::write32le(Bytes, Command.Command);
+      llvm::support::endian::write64le(Bytes + 4, Command.Value);
+      auto Sent = exchange(LibC, Command.FD, Command.Device,
+                           llvm::ArrayRef(Bytes).take_front(
+                               Command.Command == 0x40086303 ? 12 : 8),
+                           false);
       if (!Sent)
         return Sent.takeError();
       if (!*Sent)
         return std::nullopt;
       if (**Sent)
-        return unsupported(
-            LibC.Result,
-            "Android Binder buffer release returned an unmodeled errno");
+        return unsupported(LibC.Result, "Android Binder reference or release "
+                                        "command returned an unmodeled errno");
     }
-    Frees.clear();
+    Commands.clear();
     return value(0);
   }
   BionicResult run(Bionic &LibC) {
@@ -126,43 +146,62 @@ public:
           return unsupported(
               LibC.Result,
               "Android Binder delivered buffer ownership was lost");
-        auto Release = [&LibC, Device = Device, FD = FD, Address] {
+        auto Release = [&LibC, Device = Device, FD = FD, Address,
+                        Lease = Buffer->Lease] {
           auto &Thread = LibC.binderThread();
           Thread.UsesBinder = true;
-          Thread.PendingFrees.push_back({Device, FD, Address});
+          Thread.PendingCommands.push_back(
+              {Device, FD, 0x40086303, Address, Lease});
         };
         if (Flags & 8) {
           if (auto E = LibC.access(Address, Length, Read))
             return std::move(E);
           Reply.status =
-              int32_t(llvm::support::endian::read32le(Buffer->data()));
+              int32_t(llvm::support::endian::read32le(Buffer->Bytes.data()));
           Release();
         } else {
-          Reply.bytes.emplace(Buffer->begin(), Buffer->end());
+          const auto OffsetsAddress =
+              llvm::support::endian::read64le(Bytes + At + 56);
+          if (!Buffer->Lease->Objects.empty()) {
+            if (auto E = LibC.access(OffsetsAddress,
+                                     Buffer->Lease->Objects.size() * 8, Read))
+              return std::move(E);
+            for (auto Offset : Buffer->Lease->Objects)
+              if (auto E = LibC.access(Address + Offset, 4, Read))
+                return std::move(E);
+          }
+          Reply.objects = Buffer->Lease->Objects;
+          Reply.fd = FD;
+          Reply.bytes.emplace(Buffer->Bytes.begin(), Buffer->Bytes.end());
           Reply.release = std::move(Release);
-          Reply.view = [&LibC, Device = Device, Address,
-                        Length](std::span<const uint8_t> &View)
+          Reply.view = [&LibC, Device = Device, Address, Length, OffsetsAddress,
+                        Lease = Buffer->Lease](std::span<const uint8_t> &View)
               -> mobile::dalvik::ExecutionResult {
             using mobile::dalvik::ExecutionStop;
             auto Bytes = LibC.Kernel.binderBuffer(*Device, Address, Length);
-            if (!Bytes)
+            if (!Bytes || Bytes->Lease != Lease)
               return {ExecutionStop::Unsupported,
                       0,
                       {},
                       "Android Parcel Binder buffer mapping is no longer live"};
             auto Readable =
                 LibC.CPU.canAccess(Address, Length, Read | UserAccessible);
+            const char *Diagnostic =
+                "Android Parcel Binder buffer is not readable";
+            if (Readable && *Readable && !Lease->Objects.empty()) {
+              Diagnostic = "Android Parcel Binder object table is not readable";
+              Readable =
+                  LibC.CPU.canAccess(OffsetsAddress, Lease->Objects.size() * 8,
+                                     Read | UserAccessible);
+            }
             if (!Readable)
               return {ExecutionStop::Invalid,
                       0,
                       {},
                       llvm::toString(Readable.takeError())};
             if (!*Readable)
-              return {ExecutionStop::Unsupported,
-                      0,
-                      {},
-                      "Android Parcel Binder buffer is not readable"};
-            View = std::span(Bytes->data(), Bytes->size());
+              return {ExecutionStop::Unsupported, 0, {}, Diagnostic};
+            View = std::span(Bytes->Bytes.data(), Bytes->Bytes.size());
             return {};
           };
         }
@@ -193,7 +232,7 @@ Bionic::binderTransact(const mobile::dalvik::ExternalCall &Call,
   auto Device = Kernel.binderConnection(FD);
   if (!Device)
     return std::nullopt;
-  if (BinderConnection && BinderConnection != Device)
+  if (BinderConnection && (BinderConnection != Device || BinderFD != FD))
     return unsupported(Result,
                        "Android native Binder descriptor was closed and reused "
                        "or names a different ProcessState connection");
@@ -203,7 +242,8 @@ Bionic::binderTransact(const mobile::dalvik::ExternalCall &Call,
   }
   binderThread().UsesBinder = true;
   const auto &Payload = JNI.Heap->get(Request.data)->Bytes;
-  auto Scratch = allocate(512 + Payload.size());
+  const auto OffsetsAt = (Payload.size() + 7) & ~uint64_t(7);
+  auto Scratch = allocate(512 + OffsetsAt + Request.objects.size() * 8);
   if (!Scratch)
     return Scratch.takeError();
   if (!*Scratch)
@@ -221,13 +261,23 @@ Bionic::binderTransact(const mobile::dalvik::ExternalCall &Call,
     return std::nullopt;
   if (auto E = CPU.write(*Scratch + 512, Payload))
     return std::move(E);
+  if (!Request.objects.empty()) {
+    std::vector<uint8_t> Offsets(Request.objects.size() * 8);
+    for (size_t I = 0; I != Request.objects.size(); ++I)
+      llvm::support::endian::write64le(Offsets.data() + I * 8,
+                                       Request.objects[I]);
+    if (auto E = CPU.write(*Scratch + 512 + OffsetsAt, Offsets))
+      return std::move(E);
+  }
   uint8_t Command[68]{};
   llvm::support::endian::write32le(Command, 0x40406300);
   llvm::support::endian::write32le(Command + 4, Request.handle);
   llvm::support::endian::write32le(Command + 20, Request.code);
   llvm::support::endian::write32le(Command + 24, Request.flags | 0x10);
   llvm::support::endian::write64le(Command + 36, Payload.size());
+  llvm::support::endian::write64le(Command + 44, Request.objects.size() * 8);
   llvm::support::endian::write64le(Command + 52, *Scratch + 512);
+  llvm::support::endian::write64le(Command + 60, *Scratch + 512 + OffsetsAt);
   auto Sent = Pending->exchange(*this, FD, Device, Command, false);
   if (!Sent)
     return Sent.takeError();

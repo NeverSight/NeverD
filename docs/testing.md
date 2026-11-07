@@ -15758,6 +15758,22 @@ frees and a supplied DEX caller spanning consecutive transactions, a guest
 native callback and another transaction. Linux tests check the same raw buffer
 view, dup aliases, delivered-buffer release and descriptor lifetime. JSON parser
 regressions require complete explicit bindings and share the C++ fd validator.
+`ReadStrongBinder*` and related Dalvik cases cover retained proxy identity,
+null/short/malformed reads, scalar/String object protection, marshalling exceptions,
+unmarshalling without metadata and duplicate native endpoint validation.
+`LinuxBinder.StrongObjects*`, `RepeatedExport*`, `ForwardedHandles*`,
+`FinalOpenRetirement*` and `MalformedObjectTables*` independently exercise LP64
+offset bytes, buffer references,
+node acknowledgments, pointer/cookie restoration, third-open handle renumbering,
+owner retirement, dead handles, pending node notifications across two owner threads
+and rejection before payload effects on x64/AArch64.
+`AndroidJNI.BinderObjectsRetainProxyIdentityAndDriverOwnership` executes an original
+guest service through ordinary/V/A JNI at O0/O2 and all relocation/backend variants.
+It checks proxy reuse after recycle, forwarding a borrowed object table, null Binder
+replies, payload-only and object-table-only PROT_NONE pages, and raw free/reallocation
+of an identical arena slot, including rejection of a stale queued free.
+`AndroidBinderObjectTransportMatchesSDKAndCLI`
+compares 36 complete public report pairs, including dynamic proxy `key:null`.
 Run full Dalvik, Android JNI, thread/callback and native/Linux Binder suites,
 plus these focused public tests after changing this owner. The shared scheduler
 also requires the stream-wait, receive, readiness and poll regressions. These are
@@ -18933,7 +18949,7 @@ exits at O0. They test the synchronous model, not hardware scheduling or shaders
 `AndroidBinder.GuestServicesExecuteSynchronousTransactionsAndReplies` runs
 ordinary and TF_ACCEPT_FDS requests with both data and guest-computed
 TF_STATUS_CODE replies, including exact guards and buffer release. The LP64
-`LinuxBinder` test checks rejected flags/status sizes/objects, unchanged arenas
+`LinuxBinder` test checks rejected flags/status sizes/object tables, unchanged arenas
 and consumed counts, and a successful retry of the same pending call. These
 checks validate message transport, not any Android service's response policy.
 `LinuxBinder` also checks page-rounded arenas through 4 MiB, both ends' read-only

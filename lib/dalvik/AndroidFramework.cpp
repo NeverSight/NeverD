@@ -744,6 +744,12 @@ AndroidFramework::AndroidFramework(
   validateAndroidClassLoaderPaths(*snapshot);
   validateAndroidMessageQueue(*snapshot);
   validateAndroidServiceManager(*snapshot);
+  if (snapshot->service_manager)
+    for (const auto &proxy : snapshot->service_manager->binder_proxies)
+      if (proxy.native_binding)
+        binder_input_keys.emplace(std::make_pair(proxy.native_binding->fd,
+                                                 proxy.native_binding->handle),
+                                  proxy.key);
   if (snapshot->initial_main_queue)
     main_queue_blocked = snapshot->initial_main_queue->blocked;
   validateAndroidURLHandlers(*snapshot);
@@ -1171,7 +1177,8 @@ AndroidFrameworkState AndroidFramework::inspect(const Heap &heap,
   result.system_loader = system_loader;
   result.application_loader = app_loader;
   result.instrumentation = instrumentation;
-  if (!service_fields.empty() || !binder_identities.empty()) {
+  if (!service_fields.empty() || !binder_identities.empty() ||
+      !binder_handles.empty()) {
     auto &state = result.service_manager.emplace();
     state.initialized = service_manager_initialized;
     for (const auto &[field, value] : service_fields) {
@@ -1196,6 +1203,9 @@ AndroidFrameworkState AndroidFramework::inspect(const Heap &heap,
           binding != binder_bindings.end())
         proxy.native_binding = binding->second;
     }
+    for (const auto &[endpoint, id] : binder_handles)
+      state.binder_proxies.push_back(
+          {std::nullopt, id, binder_warnings.at(id), binder_bindings.at(id)});
   }
   if (main_queue && snapshot->initial_main_queue) {
     auto &queue = result.main_message_queue.emplace();

@@ -372,6 +372,8 @@ static const LibraryMethod Methods[] = {
     {"android/os/Parcel", "readInt", "()I", ParcelData, false, true},
     {"android/os/Parcel", "writeLong", "(J)V", ParcelData, false, true},
     {"android/os/Parcel", "readLong", "()J", ParcelData, false, true},
+    {"android/os/Parcel", "readStrongBinder", "()Landroid/os/IBinder;",
+     ParcelData, false, true},
     {"android/os/Parcel", "writeString", "(Ljava/lang/String;)V", ParcelData,
      false, true},
     {"android/os/Parcel", "readString", "()Ljava/lang/String;", ParcelData,
