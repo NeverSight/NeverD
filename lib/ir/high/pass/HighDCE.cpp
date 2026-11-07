@@ -17,6 +17,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "HighDCEDetail.h"
+#include "HighFrameAddress.h"
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/high/MedToHigh.h"
@@ -139,6 +140,74 @@ static bool assignmentCanBeRemoved(const HighStmt &S) {
 // reverse edges also handles cycles without giving an unfinished traversal a
 // pure result.
 namespace {
+/// Reads of this function's own frame. Those bytes exist for as long as it
+/// runs, so reading them cannot fault, and the unused reload of a saved
+/// register must not keep that register's save alive. Other reads stay
+/// observable.
+class PrivateFrameReads {
+  const HighFunc *Func;
+  Arch Architecture = Arch::Unknown;
+  VarKeyMap<int64_t> Offsets;
+  size_t Budget = ::neverd::limits::ir::
+      kHighDeadStoreElimElimUnreadPrivateFrameStoresBudget;
+  bool Indexed = false;
+
+  std::optional<int64_t> offset(const ExprPtr &E) {
+    const auto Known = [&](const MedVar &V,
+                           unsigned) -> std::optional<int64_t> {
+      const auto It = Offsets.find(VK(V));
+      return It == Offsets.end() ? std::nullopt
+                                 : std::optional<int64_t>(It->second);
+    };
+    return high_detail::frameAddressOffsetFrom(E, *Func, Architecture, Budget,
+                                               0, Known);
+  }
+
+  // Stack adjustments form long chains of single definitions, so resolve them
+  // once in statement order instead of walking the chain from every read.
+  void index() {
+    Indexed = true;
+    VarKeyMap<unsigned> Definitions;
+    walkStmts(Func->Body, [&](const HighStmt &S) {
+      const HighExpr *Call =
+          S.Kind == StmtKind::Call ? S.CallExpr.get() : S.Val.get();
+      if (Call && Call->Kind == ExprKind::Call)
+        for (const MedVar &Output : Call->IntrinsicOutputs)
+          ++Definitions[VK(Output)];
+      if (S.Kind != StmtKind::Assign || !S.Dst || !isLocalExpr(*S.Dst))
+        return;
+      ++Definitions[VK(S.Dst->Var)];
+      if (Architecture == Arch::Unknown)
+        Architecture = S.Dst->Var.TheArch;
+    });
+    if (Architecture == Arch::Unknown)
+      return;
+    walkStmts(Func->Body, [&](const HighStmt &S) {
+      if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
+          S.Dst->Kind != ExprKind::Var || Definitions[VK(S.Dst->Var)] != 1)
+        return;
+      if (const auto At = offset(S.Val))
+        Offsets.emplace(VK(S.Dst->Var), *At);
+    });
+  }
+
+public:
+  explicit PrivateFrameReads(const HighFunc *Func) : Func(Func) {}
+
+  bool contains(const HighExpr &Load) {
+    if (!Func || Func->FrameSize <= 0 || !Load.Type || !Load.Type->Size ||
+        Load.Operands.size() != 1)
+      return false;
+    if (!Indexed)
+      index();
+    if (Architecture == Arch::Unknown)
+      return false;
+    const auto At = offset(Load.Operands[0]);
+    return At && *At >= -Func->FrameSize &&
+           *At + int64_t(Load.Type->Size) <= Func->FrameHeadroom;
+  }
+};
+
 class AssignmentEffects {
   struct Node {
     const HighExpr *Expr;
@@ -156,7 +225,9 @@ class AssignmentEffects {
   }
 
 public:
-  explicit AssignmentEffects(const std::vector<HighStmt> &Stmts) {
+  explicit AssignmentEffects(const std::vector<HighStmt> &Stmts,
+                             const HighFunc *Func = nullptr) {
+    PrivateFrameReads FrameReads(Func);
     walkStmts(Stmts, [&](const HighStmt &S) {
       // Deleting the last child can make a parent assignment removable in a
       // later iteration. Its RHS is immutable too and needs a classification.
@@ -173,7 +244,7 @@ public:
           !E->IsIndirectCall &&
           intrinsicHasDiscardableStateRead(E->IntrinsicId, 1, E->Type->Size);
       if ((E->Kind == ExprKind::Call && !DiscardableRead) ||
-          E->Kind == ExprKind::Load ||
+          (E->Kind == ExprKind::Load && !FrameReads.contains(*E)) ||
           E->Kind == ExprKind::Store ||
           E->MemoryOrdering != NdMemoryOrdering::None ||
           E->MemoryAddressSpace != NdMemoryAddressSpace::Default) {
@@ -473,9 +544,10 @@ void removeUnreachableCode(std::vector<HighStmt> &Stmts) {
 
 static void preDCE(std::vector<HighStmt> &Stmts,
                    const std::unordered_set<va_t> &Entries,
-                   const MedVar *SourceCapture = nullptr) {
+                   const MedVar *SourceCapture = nullptr,
+                   const HighFunc *Func = nullptr) {
   size_t Before = Stmts.size();
-  const AssignmentEffects Effects(Stmts);
+  const AssignmentEffects Effects(Stmts, Func);
   for (int PreIter = 0;
        PreIter < ::neverd::limits::ir::kHighDCEPreDCEPreIterLimit; ++PreIter) {
     VarKeySet Refs;
@@ -496,7 +568,7 @@ void eliminateUnusedValues(std::vector<HighStmt> &Stmts) {
 void eliminateUnusedValues(HighFunc &Func) {
   coalesceBranchEntryStatements(Func.Body);
   preDCE(Func.Body, referencedStatementEntries(Func.Body),
-         Func.SwiftErrorEntry ? &Func.SwiftErrorEntry->Input : nullptr);
+         Func.SwiftErrorEntry ? &Func.SwiftErrorEntry->Input : nullptr, &Func);
 }
 
 //===----------------------------------------------------------------------===//
@@ -813,7 +885,7 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   removeUnreachableCode(Func.Body, Entries);
 
   preDCE(Func.Body, Entries,
-         Func.SwiftErrorEntry ? &Func.SwiftErrorEntry->Input : nullptr);
+         Func.SwiftErrorEntry ? &Func.SwiftErrorEntry->Input : nullptr, &Func);
 
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 1: alias (" << Func.Name << ", "
                           << Func.Body.size() << " stmts)\n");

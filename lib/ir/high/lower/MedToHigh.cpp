@@ -1411,6 +1411,10 @@ std::set<va_t> MedToHighConverter::dispatcherEntries() const {
     if (!Block.ExceptionalPreds.empty() && Block.StartAddr != 0 &&
         Block.StartAddr != InvalidVA)
       Entries.insert(Block.StartAddr);
+  // A termination handler's own local unwind lands here too, as the `goto` its
+  // `__finally` clause makes of it.
+  Entries.insert(CurMed->SEHHandlerUnwindTargets.begin(),
+                 CurMed->SEHHandlerUnwindTargets.end());
   return Entries;
 }
 
@@ -1436,6 +1440,96 @@ void MedToHighConverter::anchorDispatcherEntries(HighFunc &Func) const {
     Anchor.Addr = Block.StartAddr;
     Func.Body.insert(First, std::move(Anchor));
     Present.insert(Block.StartAddr);
+  }
+  // A local unwind resumes at the start of its target's block, which folding
+  // can leave without a statement: the `goto` a `__finally` clause makes of it
+  // lands there, wherever the block's code printed.
+  std::set<va_t> Unwinds = Func.SEHHandlerUnwindTargets;
+  for (const MedSEHLocalUnwindExit &Exit : Func.SEHLocalUnwindExits)
+    Unwinds.insert(Exit.Target);
+  for (const MedBlock &Block : CurMed->Blocks) {
+    if (!Unwinds.count(Block.StartAddr) || Present.count(Block.StartAddr) ||
+        Block.EndAddr <= Block.StartAddr)
+      continue;
+    std::function<bool(std::vector<HighStmt> &)> Place =
+        [&](std::vector<HighStmt> &Stmts) {
+          for (size_t I = 0; I < Stmts.size(); ++I) {
+            HighStmt &S = Stmts[I];
+            if (S.Addr > Block.StartAddr && S.Addr < Block.EndAddr) {
+              HighStmt Anchor;
+              Anchor.Kind = StmtKind::Block;
+              Anchor.Addr = Block.StartAddr;
+              Stmts.insert(Stmts.begin() + static_cast<ptrdiff_t>(I),
+                           std::move(Anchor));
+              return true;
+            }
+            if (Place(S.Body) || Place(S.ElseBody) || Place(S.DefaultBody))
+              return true;
+            for (SwitchCase &Case : S.Cases)
+              if (Place(Case.Body))
+                return true;
+            for (std::vector<HighStmt> &Clause : S.EHClauseBodies)
+              if (Place(Clause))
+                return true;
+          }
+          return false;
+        };
+    if (Place(Func.Body)) {
+      Present.insert(Block.StartAddr);
+      continue;
+    }
+    // Nothing of the block printed: it only runs on, from inside each try that
+    // guards it and past the end of the others.
+    const va_t Target = Block.StartAddr;
+    auto Guards = [&](const HighStmt &Try) {
+      if (Try.EHRange.isValid() && Try.EHRange.contains(Target))
+        return true;
+      if (!CurMed->ExceptionMetadata || !CurMed->ExceptionMetadata->SEH)
+        return false;
+      const ExceptionFunction &EH = *CurMed->ExceptionMetadata;
+      return llvm::any_of(EH.SEH->Scopes, [&](const SEHScopeRecord &Scope) {
+        const auto Range = getSemanticSEHGuardedRange(Scope, TargetArch, EH);
+        return Range && Range->contains(Target) &&
+               llvm::any_of(Try.EHClauses, [&](const HighEHClause &Clause) {
+                 return Clause.HandlerVA == Scope.HandlerVA &&
+                        Clause.FilterOrActionVA == Scope.FilterOrFinallyVA;
+               });
+      });
+    };
+    std::function<bool(std::vector<HighStmt> &)> PlaceAtRunOn =
+        [&](std::vector<HighStmt> &Stmts) {
+          HighStmt Anchor;
+          Anchor.Kind = StmtKind::Block;
+          Anchor.Addr = Target;
+          for (size_t I = 0; I < Stmts.size(); ++I) {
+            HighStmt &S = Stmts[I];
+            if (S.Addr > Target && S.Addr != InvalidVA) {
+              Stmts.insert(Stmts.begin() + static_cast<ptrdiff_t>(I),
+                           std::move(Anchor));
+              return true;
+            }
+            if (S.Kind == StmtKind::SEHTry && Guards(S)) {
+              if (!PlaceAtRunOn(S.Body))
+                S.Body.push_back(std::move(Anchor));
+              return true;
+            }
+            if (S.Kind == StmtKind::SEHTry)
+              continue;
+            // An arm that goes on past the block holds it.
+            bool Holds = false;
+            for (std::vector<HighStmt> *Arm : {&S.Body, &S.ElseBody})
+              walkStmts(static_cast<const std::vector<HighStmt> &>(*Arm),
+                        [&](const HighStmt &Inner) {
+                          Holds |=
+                              Inner.Addr > Target && Inner.Addr != InvalidVA;
+                        });
+            if (Holds && (PlaceAtRunOn(S.Body) || PlaceAtRunOn(S.ElseBody)))
+              return true;
+          }
+          return false;
+        };
+    if (PlaceAtRunOn(Func.Body))
+      Present.insert(Target);
   }
 }
 
@@ -1671,7 +1765,9 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   Func.AnalysisOnly = Med.AnalysisOnly;
   Func.HasUnresolvedSEHFrame = Med.HasUnresolvedSEHFrame;
   Func.SEHTerminationFrameBytes = Med.SEHTerminationFrameBytes;
+  Func.SEHHomedArguments = Med.SEHHomedArguments;
   Func.SEHFuncletRegisters = Med.SEHFuncletRegisters;
+  Func.SEHHandlerUnwindTargets = Med.SEHHandlerUnwindTargets;
   Func.SEHLocalUnwindExits = Med.SEHLocalUnwindExits;
   for (const auto &Entry : Med.CxxContinuationEntries)
     Func.CxxContinuationTargets.insert(Entry.Target);

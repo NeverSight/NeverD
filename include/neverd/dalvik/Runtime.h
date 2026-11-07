@@ -38,10 +38,13 @@ struct BinderReply {
   std::optional<std::vector<uint8_t>> bytes;
   std::function<ExecutionResult(std::span<const uint8_t> &)> view;
   std::function<void()> release;
+  std::vector<uint64_t> objects;
+  std::optional<uint32_t> fd;
 };
 struct BinderTransactionRequest {
   uint64_t receiver = 0, data = 0, reply = 0;
   uint32_t code = 0, flags = 0, fd = 0, handle = 0;
+  std::vector<uint64_t> objects;
   bool operator==(const BinderTransactionRequest &) const = default;
 };
 struct ExternalCall {
@@ -84,6 +87,9 @@ struct RuntimeServices {
   // Java int bits survive JNI detach/reattach; Java BlockGuard is separate.
   std::function<ExecutionResult()> binder_thread_policy;
   std::function<ExecutionResult(uint32_t)> set_binder_thread_policy;
+  // Retain a newly materialized proxy on its existing Linux connection.
+  // Libbinder queues weak then strong acquisition before freeing its Parcel.
+  std::function<ExecutionResult(uint32_t, uint32_t)> retain_binder_handle;
 };
 class Program {
 public:

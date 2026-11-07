@@ -23,6 +23,7 @@ add_neverd_component_library(NeverDEmulationLinuxKernel
   LinuxDeviceFiles.cpp
   LinuxIoctlTrace.cpp
   LinuxBinder.cpp
+  LinuxBinderObjects.cpp
   LinuxBinderTransactions.cpp
   LinuxKGSL.cpp
   LinuxGPUCommands.cpp

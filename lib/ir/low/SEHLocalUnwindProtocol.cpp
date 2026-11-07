@@ -18,13 +18,16 @@
 #include "SEHLocalUnwindProtocolDetail.h"
 
 #include "neverd/Common.h"
+#include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/RuntimeProviders.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 
+#include <algorithm>
 #include <deque>
 #include <optional>
 #include <set>
@@ -111,6 +114,23 @@ struct Val {
     return V;
   }
 };
+
+/// \p V of the function's own frame as a handler sees it, relative to the
+/// EstablisherFrame it receives, \p Frame bytes from the entry stack
+/// pointer.
+Val rebase(const Val &V, int64_t Frame) {
+  switch (V.K) {
+  case Val::Frame:
+    return Val::at(Base::Parent, V.Off - Frame);
+  case Val::Masked:
+    return Val::masked(Base::Parent, V.Off - Frame);
+  case Val::Inexact:
+  case Val::Load:
+    return Val::inexact(V.B == Base::Own ? Base::Parent : V.B);
+  default:
+    return V;
+  }
+}
 
 Val join(const Val &A, const Val &B) {
   if (A == B)
@@ -204,6 +224,78 @@ struct SlotView {
   Val Holds;
 };
 
+/// Whether \p Op may raise an exception.  Register arithmetic, comparisons,
+/// copies, direct branches and the return do not.
+bool mayRaise(const LowOp &Op) {
+  switch (Op.Opcode) {
+  case NdOp::COPY:
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB:
+  case NdOp::INT_AND:
+  case NdOp::INT_OR:
+  case NdOp::INT_XOR:
+  case NdOp::INT_LEFT:
+  case NdOp::INT_RIGHT:
+  case NdOp::INT_ASHR:
+  case NdOp::INT_MULT:
+  case NdOp::INT_EQUAL:
+  case NdOp::INT_NOTEQUAL:
+  case NdOp::INT_LESS:
+  case NdOp::INT_SLESS:
+  case NdOp::INT_LESSEQUAL:
+  case NdOp::INT_SLESSEQUAL:
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+  case NdOp::INT_NEGATE:
+  case NdOp::INT_NOT:
+  case NdOp::INT_CARRY:
+  case NdOp::INT_SOVF:
+  case NdOp::INT_SBOR:
+  case NdOp::INT_NEG2:
+  case NdOp::BOOL_AND:
+  case NdOp::BOOL_OR:
+  case NdOp::BOOL_XOR:
+  case NdOp::BOOL_NOT:
+  case NdOp::CONCAT:
+  case NdOp::SUBBYTES:
+  case NdOp::POPCOUNT:
+  case NdOp::LZCOUNT:
+  case NdOp::SELECT:
+  case NdOp::INSERT:
+  case NdOp::EXTRACT:
+  case NdOp::BRANCH:
+  case NdOp::COND_BR:
+  case NdOp::RETURN:
+  case NdOp::NOP:
+    return false;
+  default:
+    return true;
+  }
+}
+
+/// Whether \p Op leaves the body for code its CFG does not name: a call or a
+/// branch through a register.
+bool leaves(const LowOp &Op) {
+  return Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+         Op.Opcode == NdOp::INDIR_BR;
+}
+
+/// The ranges \p F's scopes guard, as the runtime reads them; a range that
+/// does not read exactly guards the whole function.
+std::vector<ExceptionAddressRange> protectedRanges(const LowFunc &F,
+                                                   Arch TargetArch) {
+  std::vector<ExceptionAddressRange> Ranges;
+  if (!F.ExceptionMetadata || !F.ExceptionMetadata->SEH)
+    return Ranges;
+  const ExceptionFunction &EH = *F.ExceptionMetadata;
+  for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+    const std::optional<ExceptionAddressRange> Range =
+        getSemanticSEHGuardedRange(Scope, TargetArch, EH);
+    Ranges.push_back(Range ? *Range : ExceptionAddressRange{0, InvalidVA});
+  }
+  return Ranges;
+}
+
 /// One body's interpretation: its stores and uses, at a fixed point of its
 /// ordinary CFG with every independent root entered from \p Root.
 class Interpreter {
@@ -211,9 +303,11 @@ public:
   Interpreter(const LowFunc &F, const TargetRegInfo &TRI,
               const BinaryImage &Img, llvm::StringRef Routine,
               std::optional<SlotView> Slot, std::optional<SlotView> Cookie,
-              va_t BodyStart, size_t &Work)
+              va_t BodyStart, std::vector<ExceptionAddressRange> Protected,
+              size_t &Work)
       : F(F), TRI(TRI), Img(Img), Routine(Routine), Slot(Slot), Cookie(Cookie),
-        BodyStart(BodyStart), Work(Work), Pointer(TRI.PointerSize) {}
+        BodyStart(BodyStart), Protected(std::move(Protected)), Work(Work),
+        Pointer(TRI.PointerSize) {}
 
   llvm::Error run(const State &Entry, const State &Root);
 
@@ -221,6 +315,21 @@ public:
   std::vector<UseEvent> Uses;
   /// What the integer return register holds at each return.
   std::vector<Val> Returns;
+  /// The registers the body itself puts a frame address in.
+  std::set<uint64_t> FrameWrittenTo;
+  /// The preserved registers every root is entered with, at the fixed point.
+  State RootRegisters;
+  /// Each instruction past the prologue that may leave for a root, and the
+  /// stack pointer it runs on: a call, a branch through a register, and
+  /// anything inside a protected range that may raise an exception, which
+  /// only there reaches the function's own handlers.
+  struct Exit {
+    va_t At = InvalidVA;
+    /// Where the next instruction starts: a call's return address.
+    va_t Next = InvalidVA;
+    Val SP;
+  };
+  std::vector<Exit> Exits;
 
 private:
   const LowFunc &F;
@@ -232,9 +341,13 @@ private:
   std::optional<SlotView> Cookie;
   /// Where the body starts past the prologue.
   va_t BodyStart;
+  /// The ranges the function's scopes guard.
+  std::vector<ExceptionAddressRange> Protected;
   size_t &Work;
   uint16_t Pointer;
   std::map<std::pair<uint64_t, uint16_t>, Val> Temps;
+  /// Whether this round's collection has seen any place yet.
+  bool Collected = false;
 
   bool isRuntime(const LowOp &Op) const;
   /// Whether a call keeps the register at \p Reg, the stack pointer
@@ -256,8 +369,10 @@ private:
 llvm::StringRef runtimeRoutine(const BinaryImage &Img, const LowOp &Op) {
   if (Op.Opcode != NdOp::CALL || !Op.NumInputs || !Op.Inputs[0].isConst())
     return {};
-  const Import *Imported =
-      Img.findImportStubAt(static_cast<va_t>(Op.Inputs[0].Offset));
+  const va_t Callee = static_cast<va_t>(Op.Inputs[0].Offset);
+  const Import *Imported = Img.findImportStubAt(Callee);
+  if (!Imported)
+    Imported = seh_local_unwind::aarch64VeneerImport(Img, Callee);
   if (!Imported ||
       !coff_loader::isX86ContinuationRuntimeProvider(Imported->Module))
     return {};
@@ -310,6 +425,8 @@ void Interpreter::write(State &S, const NdVar &V, const Val &X) {
   if (!V.isReg() || !V.Size)
     return;
   const uint64_t Reg = V.Offset - V.Offset % Pointer;
+  if (X.frame())
+    FrameWrittenTo.insert(Reg);
   for (auto It = S.Narrow.begin(); It != S.Narrow.end();)
     if (It->first.first - It->first.first % Pointer == Reg)
       It = S.Narrow.erase(It);
@@ -335,11 +452,45 @@ bool Interpreter::transfer(const LowBlock &Block, State &S, bool Record,
                            State *Seen) {
   va_t Instruction = InvalidVA;
   size_t Boundary = 0;
-  // A register absent from either state holds no frame address there.  A
-  // root resumes only where the body runs, past the prologue.
-  auto Collect = [&](va_t At) {
-    if (!Seen || At < BodyStart)
+  // A root is entered with the registers the body holds where it may leave
+  // for a root: at the start of an instruction past the prologue that may,
+  // running on the stack pointer the roots resume on.  A register absent
+  // from either state holds no frame address there.
+  auto Collect = [&](size_t First) {
+    const va_t At = Block.Ops[First].Addr;
+    if (At < BodyStart)
       return;
+    bool Leaves = false, Raises = false;
+    size_t K = First;
+    for (; K < Block.Ops.size() && Block.Ops[K].Addr == At; ++K) {
+      Leaves = Leaves || leaves(Block.Ops[K]);
+      Raises = Raises || mayRaise(Block.Ops[K]);
+    }
+    if (!Leaves &&
+        !(Raises &&
+          llvm::any_of(Protected, [&](const ExceptionAddressRange &R) {
+            return R.contains(At);
+          })))
+      return;
+    if (Record)
+      Exits.push_back({At,
+                       K < Block.Ops.size() ? Block.Ops[K].Addr : Block.EndAddr,
+                       read(S, NdVar::reg(TRI.StackPointer, Pointer))});
+    if (!Seen)
+      return;
+    if (const auto RootSP = Seen->Regs.find(TRI.StackPointer);
+        RootSP != Seen->Regs.end()) {
+      const auto SP = S.Regs.find(TRI.StackPointer);
+      if (SP == S.Regs.end() || SP->second != RootSP->second)
+        return;
+    }
+    if (!Collected) {
+      Collected = true;
+      for (const auto &[Reg, V] : S.Regs)
+        if (Reg != TRI.StackPointer && preserved(Reg))
+          Seen->Regs[Reg] = V;
+      return;
+    }
     for (auto &[Reg, V] : Seen->Regs)
       if (Reg != TRI.StackPointer && !S.Regs.count(Reg))
         V = join(V, Val{});
@@ -349,13 +500,12 @@ bool Interpreter::transfer(const LowBlock &Block, State &S, bool Record,
         Seen->Regs[Reg] = join(It == Seen->Regs.end() ? Val{} : It->second, V);
       }
   };
-  Collect(Block.StartAddr);
   for (size_t I = 0; I < Block.Ops.size(); ++I) {
-    Collect(Block.Ops[I].Addr);
     if (!charge(Work))
       return false;
     const LowOp &Op = Block.Ops[I];
     if (Op.Addr != Instruction) {
+      Collect(I);
       Temps.clear();
       Instruction = Op.Addr;
     }
@@ -367,6 +517,19 @@ bool Interpreter::transfer(const LowBlock &Block, State &S, bool Record,
     auto Input = [&](size_t K) {
       return K < Op.NumInputs ? read(S, Op.Inputs[K]) : Val{};
     };
+    // A constant built in two instructions (`movw`, `movt`).
+    if ((Op.Opcode == NdOp::INT_AND || Op.Opcode == NdOp::INT_OR ||
+         Op.Opcode == NdOp::INT_LEFT) &&
+        Input(0).K == Val::Const && Input(1).K == Val::Const) {
+      const uint64_t A = Input(0).C, B = Input(1).C;
+      write(S, Op.Output,
+            Val::constant(truncate(Op.Opcode == NdOp::INT_AND  ? A & B
+                                   : Op.Opcode == NdOp::INT_OR ? A | B
+                                   : B < 64                    ? A << B
+                                                               : 0,
+                                   Op.Output.Size)));
+      continue;
+    }
     switch (Op.Opcode) {
     case NdOp::COPY:
       write(S, Op.Output, Input(0));
@@ -453,6 +616,10 @@ bool Interpreter::transfer(const LowBlock &Block, State &S, bool Record,
       } else if (A.frame()) {
         // An unknown frame address may read the saved frame.
         X = Val::inexact(A.B);
+      } else if (A.K == Val::Const) {
+        if (const auto Held =
+                seh_local_unwind::armLiteralPoolValue(Img, A.C, Op.Output.Size))
+          X = Val::constant(*Held);
       }
       write(S, Op.Output, X);
       break;
@@ -524,7 +691,6 @@ bool Interpreter::transfer(const LowBlock &Block, State &S, bool Record,
     }
     }
   }
-  Collect(Block.EndAddr);
   Temps.clear();
   return true;
 }
@@ -541,13 +707,16 @@ llvm::Error Interpreter::run(const State &Entry, const State &RootTemplate) {
                 F.ModuleAnalysisRoots.count(Block.StartAddr) ||
                 F.OrdinaryModuleAnalysisRoots.count(Block.StartAddr);
   }
-  // A root is entered with the registers the function holds somewhere: each
-  // round seeds the roots with every value a callee-saved register takes
-  // anywhere in the previous round, until that stops growing.
-  State Root = RootTemplate;
-  for (unsigned Round = 0; Round < 4; ++Round) {
-    // Every value a preserved register takes after any operation.
+  // A root is entered with the registers the function holds where it may
+  // leave for one: the first round enters no root, and each later one seeds
+  // the roots with every value a callee-saved register takes at such a place
+  // in the previous round, until that stops growing.
+  std::optional<State> Root;
+  for (unsigned Round = 0; Round < 5; ++Round) {
+    // Every value a preserved register takes where the body may leave for
+    // a root.
     State Seen = RootTemplate;
+    Collected = false;
     std::vector<std::optional<State>> In(N), Out(N);
     std::deque<size_t> Queue;
     std::vector<bool> Queued(N, false);
@@ -569,8 +738,8 @@ llvm::Error Interpreter::run(const State &Entry, const State &RootTemplate) {
       std::optional<State> Input;
       if (B == 0)
         Input = Entry;
-      else if (IsRoot[B])
-        Input = Root;
+      else if (IsRoot[B] && Root)
+        Input = *Root;
       for (int P : F.Blocks[B].Preds) {
         if (P < 0 || static_cast<size_t>(P) >= N)
           return refuse("invalid CFG in " + hex(F.Entry));
@@ -596,9 +765,11 @@ llvm::Error Interpreter::run(const State &Entry, const State &RootTemplate) {
         It = Seen.Regs.erase(It);
       else
         ++It;
-    if (Seen == Root) {
+    if (Root && Seen == *Root) {
+      RootRegisters = *Root;
       Stores.clear();
       Uses.clear();
+      Exits.clear();
       for (size_t B = 0; B < N; ++B)
         if (In[B]) {
           State Replay = *In[B];
@@ -617,28 +788,17 @@ llvm::Error Interpreter::run(const State &Entry, const State &RootTemplate) {
 /// it.
 bool passesArgument(const UseEvent &Use, size_t Index,
                     llvm::ArrayRef<uint64_t> Registers,
-                    const std::map<va_t, GPRFamilyMask> *Unread) {
+                    const std::map<va_t, GPRFamilyMask> *Unread,
+                    Arch TargetArch) {
   if (!Use.Call || !Unread || Use.Callee == InvalidVA ||
       Index >= Registers.size())
     return true;
   const auto Proof = Unread->find(Use.Callee);
+  // An architecture without register families has no proof.
   const std::optional<unsigned> Family =
-      gprFamilyOf(Arch::X64, Registers[Index]);
+      gprFamilyOf(TargetArch, Registers[Index]);
   return Proof == Unread->end() || !Family ||
          !((Proof->second >> *Family) & 1u);
-}
-
-/// Whether \p F's handler has any independent entry, which would need its
-/// own frame convention.
-bool hasIndependentEntry(const LowFunc &F) {
-  for (size_t B = 1; B < F.Blocks.size(); ++B) {
-    const LowBlock &Block = F.Blocks[B];
-    if (Block.Preds.empty() || !Block.ExceptionalPreds.empty() ||
-        F.ModuleAnalysisRoots.count(Block.StartAddr) ||
-        F.OrdinaryModuleAnalysisRoots.count(Block.StartAddr))
-      return true;
-  }
-  return false;
 }
 
 /// Check one out-of-line handler of the function against the saved-frame
@@ -648,12 +808,12 @@ llvm::Error checkHandler(const LowFunc &Handler, const TargetRegInfo &TRI,
                          const BinaryImage &Img, llvm::StringRef Routine,
                          int64_t SlotFromFrame, int64_t TargetFromFrame,
                          size_t &Work,
-                         const std::map<va_t, GPRFamilyMask> *Unread) {
+                         const std::map<va_t, GPRFamilyMask> *Unread,
+                         const State *ParentRegisters,
+                         std::map<va_t, unsigned> &UnwindTargets) {
   const std::string Name = hex(Handler.Entry);
   if (Handler.Blocks.empty() || !Handler.hasCompleteLiftCoverage())
     return refuse("handler " + Name + " is not completely decoded");
-  if (hasIndependentEntry(Handler))
-    return refuse("handler " + Name + " has an independent entry");
   const llvm::ArrayRef<uint64_t> Args =
       TRI.integerParamRegs(BinaryFormat::COFF);
   if (Args.size() < 2)
@@ -664,12 +824,24 @@ llvm::Error checkHandler(const LowFunc &Handler, const TargetRegInfo &TRI,
   Slot.Off = SlotFromFrame;
   Slot.Holds = Val::at(Base::Parent, TargetFromFrame);
   Interpreter Interp(Handler, TRI, Img, Routine, Slot, std::nullopt,
-                     Handler.Entry, Work);
+                     Handler.Entry, protectedRanges(Handler, TRI.TheArch),
+                     Work);
   State Entry;
+  if (ParentRegisters)
+    Entry = *ParentRegisters;
   Entry.Regs[TRI.StackPointer] = Val::at(Base::Own, 0);
-  Entry.Regs[Args[1]] = Val::at(Base::Parent, 0);
+  Entry.Regs.try_emplace(Args[1], Val::at(Base::Parent, 0));
   if (auto Error = Interp.run(Entry, State{}))
     return Error;
+  // The prologue saves those registers in the handler's own frame, from
+  // where only the epilogue restores them.
+  const va_t PrologueEnd =
+      Handler.Entry + (ParentRegisters && Handler.ExceptionMetadata
+                           ? Handler.ExceptionMetadata->PrologueSize
+                           : 0);
+  // The register the runtime passed the frame in, which a call of the handler
+  // inherits when nothing writes it, passes nothing the handler chose to.
+  const Val FrameArrived = Val::at(Base::Parent, 0);
   // The frame's own base, its TargetFrame and the slot's address may leave
   // the handler only toward the runtime.
   auto Escapes = [&](const Val &V) {
@@ -690,34 +862,244 @@ llvm::Error checkHandler(const LowFunc &Handler, const TargetRegInfo &TRI,
         overlaps(Store.Addr.Off, Store.Size, SlotFromFrame, Pointer))
       return refuse("handler " + Name + " writes the saved-frame slot at " +
                     hex(Store.At));
-    if (Escapes(Store.Value))
+    if (Store.At < PrologueEnd && Store.Addr.K == Val::Frame &&
+        Store.Addr.B == Base::Own)
+      continue;
+    // A handler with handlers of its own homes the frame in its own frame for
+    // them, as any function homes an argument.
+    const bool OwnHome = Store.Addr.K == Val::Frame &&
+                         Store.Addr.B == Base::Own && Store.Addr.Off > 0 &&
+                         Handler.ExceptionMetadata &&
+                         Handler.ExceptionMetadata->SEH;
+    if (Escapes(Store.Value) && !OwnHome)
       return refuse("handler " + Name + " stores the frame at " +
                     hex(Store.At));
   }
   for (const UseEvent &Use : Interp.Uses) {
     if (!charge(Work, Use.Args.size() + 1))
       return refuse("work budget exhausted in " + Name);
+    // The handler's own unwind of this frame to an exact address.
+    if (Use.Runtime && Use.Args.size() >= 2 &&
+        Use.Args[0] == Val::at(Base::Parent, TargetFromFrame) &&
+        Use.Args[1].K == Val::Const)
+      ++UnwindTargets[static_cast<va_t>(Use.Args[1].C)];
     if (Use.TakesFrame)
       continue;
     for (size_t K = 0; K < Use.Args.size(); ++K)
-      if (passesArgument(Use, K, Args, Unread) && Escapes(Use.Args[K]))
+      if (passesArgument(Use, K, Args, Unread, TRI.TheArch) &&
+          Escapes(Use.Args[K]) &&
+          !(K < Args.size() && Use.Call && Use.Args[K] == FrameArrived &&
+            !Interp.FrameWrittenTo.count(Args[K])))
         return refuse("handler " + Name + " passes the frame on at " +
                       hex(Use.At));
   }
   return llvm::Error::success();
 }
 
+/// Whether something may read \p Reg where control resumes at \p Target
+/// before anything writes it whole: a read, a call, which may take it as an
+/// argument, or a return or any other way out of the function, which may
+/// hand it back.  With \p CallsKeepIt, \p Reg is one that calls preserve and
+/// the function's epilogue restores, which neither reads.  True as well when
+/// the work runs out.
+bool readBeforeWritten(const LowFunc &F, va_t Target, uint64_t Reg,
+                       uint16_t Pointer, size_t &Work,
+                       bool CallsKeepIt = false) {
+  std::map<va_t, int> Starts;
+  for (const LowBlock &Block : F.Blocks)
+    Starts.emplace(Block.StartAddr, Block.Id);
+  const auto First = Starts.find(Target);
+  if (First == Starts.end())
+    return true;
+  auto Overlaps = [&](const NdVar &V) {
+    return V.isReg() && V.Size && V.Offset < Reg + Pointer &&
+           Reg < V.Offset + V.Size;
+  };
+  std::set<int> Seen;
+  std::vector<int> Pending{First->second};
+  while (!Pending.empty()) {
+    const int B = Pending.back();
+    Pending.pop_back();
+    if (B < 0 || static_cast<size_t>(B) >= F.Blocks.size() ||
+        !Seen.insert(B).second)
+      continue;
+    const LowBlock &Block = F.Blocks[B];
+    if (!charge(Work, Block.Ops.size() + 1))
+      return true;
+    bool Written = false;
+    for (const LowOp &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::INDIR_BR)
+        return true;
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+          Op.Opcode == NdOp::RETURN) {
+        if (!CallsKeepIt)
+          return true;
+        continue;
+      }
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        if (Overlaps(Op.Inputs[I]))
+          return true;
+      // A 32-bit write clears the upper half too.
+      if (Op.Output.isReg() && Op.Output.Offset == Reg && Op.Output.Size >= 4) {
+        Written = true;
+        break;
+      }
+    }
+    if (Written)
+      continue;
+    // A block that leaves the function another way, such as a tail branch,
+    // may hand the register on.
+    if (Block.Succs.empty() && !CallsKeepIt)
+      return true;
+    Pending.insert(Pending.end(), Block.Succs.begin(), Block.Succs.end());
+  }
+  return false;
+}
+
 } // namespace
+
+bool handlersCallLowSEHLocalUnwind(
+    const LowFunc &Function, const BinaryImage &Image,
+    const std::map<va_t, const LowFunc *> &Bodies) {
+  if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->SEH)
+    return false;
+  for (const SEHScopeRecord &Scope : Function.ExceptionMetadata->SEH->Scopes)
+    if (Scope.Kind == SEHScopeKind::Finally && Scope.FilterOrFinallyVA)
+      if (const auto Body = Bodies.find(Scope.FilterOrFinallyVA);
+          Body != Bodies.end() && Body->second &&
+          callsLowSEHLocalUnwind(*Body->second, Image))
+        return true;
+  return false;
+}
 
 bool callsLowSEHLocalUnwind(const LowFunc &Function, const BinaryImage &Image) {
   for (const LowBlock &Block : Function.Blocks)
     for (const LowOp &Op : Block.Ops)
       if (Op.Opcode == NdOp::CALL) {
-        const llvm::StringRef Name = runtimeRoutine(Image, Op);
-        if (Name == "local_unwind" || Name == "jump_unwind")
+        if (isLowSEHLocalUnwindRoutine(runtimeRoutine(Image, Op)))
           return true;
       }
   return false;
+}
+
+namespace seh_local_unwind {
+
+std::optional<DecodedPrologue> decodedPrologue(const LowFunc &Function,
+                                               const TargetRegInfo &TRI,
+                                               size_t &WorkRemaining) {
+  if (Function.Blocks.empty() || !Function.ExceptionMetadata)
+    return std::nullopt;
+  const LowBlock &First = Function.Blocks.front();
+  const va_t End = Function.Entry + Function.ExceptionMetadata->PrologueSize;
+  if (First.StartAddr != Function.Entry || First.EndAddr < End ||
+      !charge(WorkRemaining, First.Ops.size()))
+    return std::nullopt;
+  const NdVar SP = NdVar::reg(TRI.StackPointer, TRI.PointerSize);
+  // Each value's distance below the entry stack pointer: pre-indexed saves
+  // compute it in a temporary first.
+  int64_t Below = 0;
+  std::map<std::pair<uint64_t, uint16_t>, int64_t> Temps;
+  auto Distance = [&](const NdVar &V) -> std::optional<int64_t> {
+    if (V == SP)
+      return Below;
+    if (V.isTemp())
+      if (const auto It = Temps.find({V.Offset, V.Size}); It != Temps.end())
+        return It->second;
+    return std::nullopt;
+  };
+  DecodedPrologue Prologue;
+  bool InPrologue = true;
+  unsigned Calls = 0;
+  for (const LowOp &Op : First.Ops) {
+    if (InPrologue && Op.Addr >= End) {
+      InPrologue = false;
+      Prologue.Allocation = static_cast<uint64_t>(std::max<int64_t>(Below, 0));
+      Prologue.Calls = Calls;
+    }
+    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+      ++Calls;
+    std::optional<int64_t> Value;
+    if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
+      Value = Distance(Op.Inputs[0]);
+    } else if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+               Op.NumInputs == 2 && Op.Inputs[1].isConst()) {
+      if (const auto Base = Distance(Op.Inputs[0])) {
+        const int64_t Step =
+            signedConstant(Op.Inputs[1].Offset, Op.Inputs[1].Size);
+        Value = Op.Opcode == NdOp::INT_ADD ? *Base - Step : *Base + Step;
+      }
+    }
+    if (Op.Output.isTemp()) {
+      if (Value)
+        Temps[{Op.Output.Offset, Op.Output.Size}] = *Value;
+      else
+        Temps.erase({Op.Output.Offset, Op.Output.Size});
+      continue;
+    }
+    if (!Op.Output.isReg() || !Op.Output.Size ||
+        Op.Output.Offset >= TRI.StackPointer + TRI.PointerSize ||
+        Op.Output.Offset + Op.Output.Size <= TRI.StackPointer)
+      continue;
+    if (Op.Output != SP || !Value) {
+      if (InPrologue)
+        return std::nullopt;
+      break;
+    }
+    // An epilogue in the same block gives back what the body allocated.
+    if (!InPrologue && *Value < Below)
+      break;
+    Below = *Value;
+    if (!InPrologue)
+      Prologue.Calls = Calls;
+  }
+  if (Below < 0)
+    return std::nullopt;
+  if (InPrologue) {
+    Prologue.Allocation = static_cast<uint64_t>(Below);
+    Prologue.Calls = Calls;
+  }
+  Prologue.BodyAllocation = static_cast<uint64_t>(Below);
+  return Prologue;
+}
+
+std::set<va_t> surveyUnwindTargets(const LowFunc &Function,
+                                   const BinaryImage &Image,
+                                   const TargetRegInfo &TRI,
+                                   llvm::StringRef Routine) {
+  std::set<va_t> Targets;
+  if (Function.Blocks.empty() || !callsLowSEHLocalUnwind(Function, Image))
+    return Targets;
+  size_t Work = limits::kMaxSEHEstablisherFrameWork;
+  Interpreter Survey(Function, TRI, Image, Routine, std::nullopt, std::nullopt,
+                     Function.Entry, {}, Work);
+  State Entry;
+  Entry.Regs[TRI.StackPointer] = Val::at(Base::Own, 0);
+  if (auto Error = Survey.run(Entry, State{})) {
+    llvm::consumeError(std::move(Error));
+    return Targets;
+  }
+  for (const UseEvent &Use : Survey.Uses)
+    if (Use.Runtime && Use.Args.size() >= 2 && Use.Args[1].K == Val::Const)
+      Targets.insert(static_cast<va_t>(normalizeCodeAddress(
+          Use.Args[1].C, TRI.TheArch, InstructionMode::Thumb)));
+  return Targets;
+}
+
+} // namespace seh_local_unwind
+
+std::set<va_t> collectLowSEHLocalUnwindTargets(const LowFunc &Function,
+                                               const BinaryImage &Image,
+                                               const TargetRegInfo &TRI) {
+  if (Image.Format != BinaryFormat::COFF)
+    return {};
+  switch (TRI.TheArch) {
+  case Arch::AArch64:
+    return seh_local_unwind::aarch64UnwindTargets(Function, Image, TRI);
+  case Arch::ARM:
+    return seh_local_unwind::armUnwindTargets(Function, Image, TRI);
+  default:
+    return {};
+  }
 }
 
 llvm::Expected<SEHLocalUnwindConvention>
@@ -726,6 +1108,10 @@ sehLocalUnwindConvention(const LowFunc &Function, const TargetRegInfo &TRI,
   switch (TRI.TheArch) {
   case Arch::X64:
     return seh_local_unwind::x64Convention(Function, TRI, WorkRemaining);
+  case Arch::AArch64:
+    return seh_local_unwind::aarch64Convention(Function, TRI, WorkRemaining);
+  case Arch::ARM:
+    return seh_local_unwind::armConvention(Function, TRI, WorkRemaining);
   default:
     return refuse("no convention for this architecture");
   }
@@ -734,7 +1120,9 @@ sehLocalUnwindConvention(const LowFunc &Function, const TargetRegInfo &TRI,
 llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
     const LowFunc &Function, const BinaryImage &Image, const TargetRegInfo &TRI,
     const std::map<va_t, const LowFunc *> &Bodies, size_t &WorkRemaining,
-    const std::map<va_t, GPRFamilyMask> *Unread) {
+    const std::map<va_t, GPRFamilyMask> *Unread,
+    std::vector<LowSEHLocalUnwindRefusal> *Refused,
+    std::set<va_t> *HandlerTargets) {
   if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->SEH ||
       Function.Blocks.empty() || !Function.hasCompleteLiftCoverage())
     return refuse("no complete SEH body");
@@ -747,6 +1135,11 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
       TRI.integerParamRegs(BinaryFormat::COFF);
   if (Args.size() < 2 || !Pointer)
     return refuse("no argument registers");
+  // Windows on ARM runs only Thumb code, whose addresses carry the low bit.
+  auto CodeAddress = [&](uint64_t Value) {
+    return static_cast<va_t>(
+        normalizeCodeAddress(Value, TRI.TheArch, InstructionMode::Thumb));
+  };
   std::set<va_t> Starts;
   for (const LowBlock &Block : Function.Blocks)
     Starts.insert(Block.StartAddr);
@@ -760,7 +1153,7 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
 
   // The GS data places the cookie slot, which holds the masked frame.
   std::optional<SlotView> Cookie;
-  if (EH.GSCookie &&
+  if (EH.GSCookie && !Convention->CookieInCallee &&
       EH.GSCookie->ParseStatus == ExceptionParseStatus::Complete &&
       !EH.GSCookie->HasAlignment) {
     Cookie.emplace();
@@ -772,8 +1165,10 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
   // The calls of the routine and what frame each passes: the frame itself,
   // or a reload of one slot.
   const va_t BodyStart = Function.Entry + EH.PrologueSize;
+  const std::vector<ExceptionAddressRange> Protected =
+      protectedRanges(Function, TRI.TheArch);
   Interpreter Survey(Function, TRI, Image, Convention->Routine, std::nullopt,
-                     Cookie, BodyStart, WorkRemaining);
+                     Cookie, BodyStart, Protected, WorkRemaining);
   if (auto Error = Survey.run(Entry, Root))
     return std::move(Error);
   std::set<int64_t> Slots;
@@ -781,6 +1176,29 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
     if (Use.Runtime && Use.Args.front().K == Val::Load &&
         Use.Args.front().B == Base::Own)
       Slots.insert(Use.Args.front().Off);
+  // The routine may be called by this frame's termination handlers alone,
+  // through the same slot.
+  if (Slots.empty())
+    for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+      if (Scope.Kind != SEHScopeKind::Finally || !Scope.FilterOrFinallyVA)
+        continue;
+      const auto Body = Bodies.find(Scope.FilterOrFinallyVA);
+      if (Body == Bodies.end() || !Body->second || Body->second->Blocks.empty())
+        continue;
+      Interpreter Handler(*Body->second, TRI, Image, Convention->Routine,
+                          std::nullopt, std::nullopt, Body->second->Entry,
+                          protectedRanges(*Body->second, TRI.TheArch),
+                          WorkRemaining);
+      State HandlerEntry;
+      HandlerEntry.Regs[TRI.StackPointer] = Val::at(Base::Own, 0);
+      HandlerEntry.Regs[Args[1]] = Val::at(Base::Parent, 0);
+      if (auto Error = Handler.run(HandlerEntry, State{}))
+        return std::move(Error);
+      for (const UseEvent &Use : Handler.Uses)
+        if (Use.Runtime && Use.Args.front().K == Val::Load &&
+            Use.Args.front().B == Base::Parent)
+          Slots.insert(Use.Args.front().Off + Convention->HandlerFrame);
+    }
   if (Slots.size() > 1)
     return refuse("the frame reaches the routine from several slots in " +
                   hex(Function.Entry));
@@ -792,22 +1210,55 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
     Slot->Off = *Slots.begin();
     Slot->Holds = Val::at(Base::Own, Convention->TargetFrame);
   }
+  // What each out-of-line handler's own local unwinds of this frame name.
+  std::map<va_t, std::map<va_t, unsigned>> HandlerUnwinds;
   Interpreter Interp(Function, TRI, Image, Convention->Routine, Slot, Cookie,
-                     BodyStart, WorkRemaining);
+                     BodyStart, Protected, WorkRemaining);
   if (auto Error = Interp.run(Entry, Root))
     return std::move(Error);
+
+  // The registers a handler starts with, relative to its EstablisherFrame: the
+  // function's callee-saved registers as its roots see them, and the frame
+  // pointer where the runtime passes that as the frame.
+  std::optional<State> HandlerRegisters;
+  if (Convention->HandlersSeeParentRegisters) {
+    const bool ByFramePointer = Convention->FramePointerIsHandlerFrame;
+    if (ByFramePointer && Slot) {
+      const auto FP = Interp.RootRegisters.Regs.find(TRI.FramePointer);
+      if (!TRI.FramePointer || FP == Interp.RootRegisters.Regs.end() ||
+          FP->second != Val::at(Base::Own, Convention->HandlerFrame))
+        return refuse(
+            "the frame pointer the handlers receive is not fixed in " +
+            hex(Function.Entry));
+    }
+    HandlerRegisters.emplace();
+    for (const auto &[Reg, V] : Interp.RootRegisters.Regs)
+      if (Reg != TRI.StackPointer && Reg != TRI.LinkRegister &&
+          (!ByFramePointer || Reg != TRI.FramePointer))
+        HandlerRegisters->Regs[Reg] = rebase(V, Convention->HandlerFrame);
+    // The handler's own frame pointer is the runtime's.
+    if (ByFramePointer)
+      HandlerRegisters->Regs[TRI.FramePointer] = Val::inexact(Base::Parent);
+    // The funclet model reads the frame pointer as the establisher frame only
+    // where it is the body's stack pointer; elsewhere the frame the handler
+    // receives may be any address of the parent's frame.
+    HandlerRegisters->Regs[Args[1]] =
+        !ByFramePointer || Convention->HandlerFrame == Convention->BodySP
+            ? Val::at(Base::Parent, 0)
+            : Val::inexact(Base::Parent);
+  }
 
   if (Slot) {
     const int64_t S = Slot->Off;
     // The function's own frame values reach memory and callees only as
-    // pointers to its other objects.
+    // pointers to its other objects, which the body's stack pointer is where
+    // the frame lies elsewhere (it addresses the lowest local there).
     auto Escapes = [&](const Val &V) {
       if (V.K == Val::Inexact || V.K == Val::Masked)
         return true;
-      return V.K == Val::Frame &&
-             (V.Off == Convention->TargetFrame || V.Off == Convention->BodySP ||
-              V.Off == Convention->HandlerFrame ||
-              overlaps(V.Off, 1, S, Pointer));
+      return V.K == Val::Frame && (V.Off == Convention->TargetFrame ||
+                                   V.Off == Convention->HandlerFrame ||
+                                   overlaps(V.Off, 1, S, Pointer));
     };
     bool Saved = false;
     for (const StoreEvent &Store : Interp.Stores) {
@@ -854,8 +1305,22 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
       if (Use.TakesFrame)
         continue;
       for (size_t K = 0; K < Use.Args.size(); ++K)
-        if (passesArgument(Use, K, Args, Unread) && Escapes(Use.Args[K]))
+        if (passesArgument(Use, K, Args, Unread, TRI.TheArch) &&
+            Escapes(Use.Args[K]))
           return refuse("the frame is passed on at " + hex(Use.At));
+    }
+    // The runtime enters the function's roots and its handlers with the
+    // registers of where it left the body inside a protected range, which
+    // the roots' registers cover only where the body runs on their stack
+    // pointer.
+    for (const auto &Exit : Interp.Exits) {
+      if (!charge(WorkRemaining, Protected.size() + 1))
+        return refuse("work budget exhausted in " + hex(Function.Entry));
+      for (const ExceptionAddressRange &Range : Protected)
+        if ((Range.contains(Exit.At) || Range.contains(Exit.Next)) &&
+            Exit.SP != Val::at(Base::Own, Convention->BodySP))
+          return refuse("the protected code at " + hex(Exit.At) +
+                        " runs on another stack pointer");
     }
     // Every handler this frame passes its EstablisherFrame to.
     std::set<va_t> Handlers;
@@ -872,12 +1337,81 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
       const auto Body = Bodies.find(Handler);
       if (Body == Bodies.end() || !Body->second)
         return refuse("handler " + hex(Handler) + " is not available");
-      if (auto Error =
-              checkHandler(*Body->second, TRI, Image, Convention->Routine,
-                           S - Convention->HandlerFrame,
-                           Convention->TargetFrame - Convention->HandlerFrame,
-                           WorkRemaining, Unread))
+      std::map<va_t, unsigned> Targets;
+      if (auto Error = checkHandler(
+              *Body->second, TRI, Image, Convention->Routine,
+              S - Convention->HandlerFrame,
+              Convention->TargetFrame - Convention->HandlerFrame, WorkRemaining,
+              Unread, HandlerRegisters ? &*HandlerRegisters : nullptr, Targets))
         return std::move(Error);
+      for (const auto &[Target, Calls] : Targets)
+        if (EH.ownsCode(Target) && Starts.count(Target))
+          HandlerUnwinds[Handler][Target] += Calls;
+    }
+  }
+
+  // Without a saved slot the frame reaches a handler's call as its own
+  // EstablisherFrame, or at the frame's distance from it.
+  if (!Slot)
+    for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+      if (Scope.Kind != SEHScopeKind::Finally || !Scope.FilterOrFinallyVA)
+        continue;
+      const auto Body = Bodies.find(Scope.FilterOrFinallyVA);
+      if (Body == Bodies.end() || !Body->second || Body->second->Blocks.empty())
+        continue;
+      Interpreter Handler(*Body->second, TRI, Image, Convention->Routine,
+                          std::nullopt, std::nullopt, Body->second->Entry,
+                          protectedRanges(*Body->second, TRI.TheArch),
+                          WorkRemaining);
+      State HandlerEntry;
+      if (HandlerRegisters)
+        HandlerEntry = *HandlerRegisters;
+      HandlerEntry.Regs[TRI.StackPointer] = Val::at(Base::Own, 0);
+      HandlerEntry.Regs[Args[1]] = Val::at(Base::Parent, 0);
+      if (auto Error = Handler.run(HandlerEntry, State{}))
+        return std::move(Error);
+      for (const UseEvent &Use : Handler.Uses)
+        if (Use.Runtime && Use.Args.size() >= 2 &&
+            Use.Args[0] ==
+                Val::at(Base::Parent,
+                        Convention->TargetFrame - Convention->HandlerFrame) &&
+            Use.Args[1].K == Val::Const &&
+            EH.ownsCode(CodeAddress(Use.Args[1].C)) &&
+            Starts.count(CodeAddress(Use.Args[1].C)))
+          ++HandlerUnwinds[Scope.FilterOrFinallyVA][CodeAddress(Use.Args[1].C)];
+    }
+
+  // A handler nested in a handler, or one whose `__try` the compiler left with
+  // no range and so no scope, names a target of this function the same way: a
+  // local unwind resumes only the frame of the code it names.
+  std::set<va_t> OtherHandlers;
+  if (!Slots.empty() || Convention->TargetFrame == Convention->HandlerFrame) {
+    if (!charge(WorkRemaining, Bodies.size()))
+      return refuse("work budget exhausted in " + hex(Function.Entry));
+    for (const auto &[Entry, Body] : Bodies) {
+      if (!Body || Body == &Function || HandlerUnwinds.count(Entry) ||
+          Body->Blocks.empty() || Starts.count(Entry))
+        continue;
+      if (llvm::none_of(Body->CodeRefTargets, [&](va_t Target) {
+            return Starts.count(CodeAddress(Target)) &&
+                   EH.ownsCode(CodeAddress(Target));
+          }))
+        continue;
+      Interpreter Other(*Body, TRI, Image, Convention->Routine, std::nullopt,
+                        std::nullopt, Entry,
+                        protectedRanges(*Body, TRI.TheArch), WorkRemaining);
+      State OtherEntry;
+      OtherEntry.Regs[TRI.StackPointer] = Val::at(Base::Own, 0);
+      if (auto Error = Other.run(OtherEntry, State{}))
+        return std::move(Error);
+      for (const UseEvent &Use : Other.Uses)
+        if (Use.Runtime && Use.Args.size() >= 2 &&
+            Use.Args[1].K == Val::Const &&
+            EH.ownsCode(CodeAddress(Use.Args[1].C)) &&
+            Starts.count(CodeAddress(Use.Args[1].C))) {
+          ++HandlerUnwinds[Entry][CodeAddress(Use.Args[1].C)];
+          OtherHandlers.insert(Entry);
+        }
     }
   }
 
@@ -887,17 +1421,39 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
       continue;
     const Val &Frame = Use.Args[0];
     const Val &Target = Use.Args[1];
-    if (Frame != Val::at(Base::Own, Convention->TargetFrame) ||
-        Use.SP != Val::at(Base::Own, Convention->BodySP) ||
-        Target.K != Val::Const || !Starts.count(Target.C) ||
-        !EH.ownsCode(Target.C) || Target.C == Function.Entry)
+    const va_t TargetVA = CodeAddress(Target.C);
+    const char *Why = nullptr;
+    if (Frame != Val::at(Base::Own, Convention->TargetFrame))
+      Why = "the frame it passes is not the function's own";
+    else if (Use.SP != Val::at(Base::Own, Convention->BodySP))
+      Why = "it runs on another stack pointer than the body's";
+    else if (Target.K != Val::Const || !EH.ownsCode(TargetVA) ||
+             TargetVA == Function.Entry)
+      Why = "its target is no exact address in the function's body";
+    else if (!Starts.count(TargetVA))
+      Why = "its target starts no block";
+    else if (!Convention->ResumeReturnValue &&
+             readBeforeWritten(Function, TargetVA, TRI.IntReturnReg, Pointer,
+                               WorkRemaining))
+      // The routine fixes no resume value: the target must not read the one
+      // the call left.
+      Why = "the target reads the result register, which the routine leaves "
+            "unknown";
+    if (Why) {
+      if (Refused)
+        Refused->push_back({Use.At, Why});
       continue;
+    }
     LowSEHLocalUnwind Site;
     Site.CallAddr = Use.At;
     Site.CallSeq = Use.Seq;
     Site.ControlPc = Convention->ControlPcIsReturnAddress ? Use.Return : Use.At;
-    Site.Target = Target.C;
+    Site.Target = TargetVA;
     Site.HandlerFrameFromSP = Convention->HandlerFrame - Convention->BodySP;
+    // A frame pointer the body's stack pointer equals is that stack pointer.
+    if (Convention->FramePointerIsHandlerFrame &&
+        Convention->HandlerFrame != Convention->BodySP)
+      Site.HandlerFrameRegister = TRI.FramePointer;
     Site.ResumeReturnValue = Convention->ResumeReturnValue;
     Site.TargetFrame = Convention->TargetFrame;
     Sites.push_back(Site);
@@ -908,8 +1464,11 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
   std::map<va_t, bool> Alone;
   for (const LowSEHLocalUnwind &Site : Sites)
     Alone.emplace(Site.Target, true);
+  for (const auto &[Handler, Targets] : HandlerUnwinds)
+    for (const auto &[Target, Calls] : Targets)
+      Alone.emplace(Target, true);
   auto Name = [&](uint64_t Value) {
-    if (const auto It = Alone.find(static_cast<va_t>(Value)); It != Alone.end())
+    if (const auto It = Alone.find(CodeAddress(Value)); It != Alone.end())
       It->second = false;
   };
   auto NameAll = [&] {
@@ -919,6 +1478,14 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
   // Every constant operand of a handler \p F but a branch or call target,
   // and every code address it takes PC-relatively.
   auto NameIn = [&](const LowFunc &F) {
+    // A handler's own unwind of this frame runs as its `__finally` clause's
+    // `goto`, so it names its target for no entry of its own: each mention
+    // that is such a call's argument goes uncounted.
+    std::map<va_t, unsigned> Calls;
+    if (const auto It = HandlerUnwinds.find(F.Entry);
+        It != HandlerUnwinds.end())
+      Calls = It->second;
+    std::map<va_t, unsigned> Mentions;
     for (const LowBlock &Block : F.Blocks) {
       if (!charge(WorkRemaining, Block.Ops.size() + 1))
         return false;
@@ -928,11 +1495,17 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
                               Op.Opcode == NdOp::CALL;
         for (unsigned I = Transfer ? 1 : 0; I < Op.NumInputs; ++I)
           if (Op.Inputs[I].isConst())
-            Name(Op.Inputs[I].Offset);
+            ++Mentions[CodeAddress(Op.Inputs[I].Offset)];
       }
     }
+    for (const auto &[Value, Count] : Mentions) {
+      const auto Call = Calls.find(Value);
+      if (Call == Calls.end() || Count > Call->second)
+        Name(Value);
+    }
     for (va_t Target : F.CodeRefTargets)
-      Name(Target);
+      if (!Calls.count(CodeAddress(Target)))
+        Name(Target);
     return true;
   };
   if (!Alone.empty()) {
@@ -956,22 +1529,32 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
     // them: a finally that local-unwinds to a target names it too.
     std::set<va_t> Seen;
     std::vector<va_t> Pending;
+    // A filter expression is not a function of its own unless it has a frame:
+    // an unframed leaf the pipeline holds no body of calls nothing, and C gives
+    // an expression no way to name a label.
+    std::set<va_t> Filters;
     auto AddHandlers = [&](const ExceptionFunction &E) {
       if (!E.SEH)
         return;
       for (const SEHScopeRecord &Scope : E.SEH->Scopes)
         if ((Scope.Kind == SEHScopeKind::Filter ||
              Scope.Kind == SEHScopeKind::Finally) &&
-            Scope.FilterOrFinallyVA && !E.ownsCode(Scope.FilterOrFinallyVA))
+            Scope.FilterOrFinallyVA && !E.ownsCode(Scope.FilterOrFinallyVA)) {
           Pending.push_back(Scope.FilterOrFinallyVA);
+          if (Scope.Kind == SEHScopeKind::Filter)
+            Filters.insert(Scope.FilterOrFinallyVA);
+        }
     };
     AddHandlers(EH);
+    Pending.insert(Pending.end(), OtherHandlers.begin(), OtherHandlers.end());
     while (!Pending.empty()) {
       const va_t Handler = Pending.back();
       Pending.pop_back();
       if (!Seen.insert(Handler).second)
         continue;
       const auto Body = Bodies.find(Handler);
+      if (Filters.count(Handler) && (Body == Bodies.end() || !Body->second))
+        continue;
       if (Body == Bodies.end() || !Body->second || !NameIn(*Body->second)) {
         NameAll();
         break;
@@ -980,8 +1563,50 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
         AddHandlers(*Body->second->ExceptionMetadata);
     }
   }
+  // A handler resumes the function with the callee-saved registers it held
+  // where the runtime called the handler: the code at the target cannot read
+  // one the ranges the handler ends write, whose value there it cannot know.
+  for (const auto &[Handler, Targets] : HandlerUnwinds) {
+    std::set<uint64_t> Written;
+    for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+      if (Scope.Kind != SEHScopeKind::Finally ||
+          Scope.FilterOrFinallyVA != Handler)
+        continue;
+      const std::optional<ExceptionAddressRange> Range =
+          getSemanticSEHGuardedRange(Scope, TRI.TheArch, EH);
+      if (!Range) {
+        for (const auto &[Target, Calls] : Targets)
+          Alone[Target] = false;
+        break;
+      }
+      for (const LowBlock &Block : Function.Blocks)
+        if (Block.StartAddr < Range->End && Block.EndAddr > Range->Begin) {
+          if (!charge(WorkRemaining, Block.Ops.size() + 1))
+            return refuse("work budget exhausted in " + hex(Function.Entry));
+          for (const LowOp &Op : Block.Ops)
+            if (Op.Addr >= Range->Begin && Op.Addr < Range->End &&
+                Op.Output.isReg() && Op.Output.Size &&
+                Op.Output.Offset != TRI.StackPointer &&
+                TRI.isCallPreserved(Op.Output.Offset -
+                                        Op.Output.Offset % Pointer,
+                                    Pointer, BinaryFormat::COFF))
+              Written.insert(Op.Output.Offset - Op.Output.Offset % Pointer);
+        }
+    }
+    for (const auto &[Target, Calls] : Targets)
+      for (uint64_t Reg : Written)
+        if (Alone[Target] &&
+            readBeforeWritten(Function, Target, Reg, Pointer, WorkRemaining,
+                              /*CallsKeepIt=*/true))
+          Alone[Target] = false;
+  }
   for (LowSEHLocalUnwind &Site : Sites)
     Site.OnlyExitsName = Alone[Site.Target];
+  if (HandlerTargets)
+    for (const auto &[Handler, Targets] : HandlerUnwinds)
+      for (const auto &[Target, Calls] : Targets)
+        if (Alone[Target])
+          HandlerTargets->insert(Target);
   return Sites;
 }
 

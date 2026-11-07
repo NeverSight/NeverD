@@ -332,8 +332,7 @@ LinuxFiles::open(uint64_t Address, uint32_t Flags, uint32_t Mode,
       return std::optional<uint64_t>(uint64_t(0) - Device.OpenErrno);
     std::erase_if(DeviceDescriptions,
                   [](const auto &D) { return D.expired(); });
-    auto Description =
-        std::make_shared<LinuxDeviceState>(LinuxDeviceState{&Device});
+    auto Description = std::make_shared<LinuxDeviceState>(&Device);
     Description->OpenFlags = Flags;
     if (Device.KGSL &&
         (Device.KGSL->SynchronousA3xx || Device.KGSL->MemoryObjects)) {

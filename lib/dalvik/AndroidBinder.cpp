@@ -9,10 +9,65 @@
 
 #include "AndroidFramework.h"
 
+#include "neverd/dalvik/Limits.h"
+
 #include <cstdint>
 #include <span>
 
 namespace neverd::mobile::dalvik {
+ExecutionResult AndroidFramework::binderHandle(Heap &heap, uint32_t fd,
+                                               uint32_t handle,
+                                               const AdmitInstruction &admit) {
+  const auto endpoint = std::make_pair(fd, handle);
+  if (auto found = binder_handles.find(endpoint); found != binder_handles.end())
+    return {ExecutionStop::Returned, found->second};
+  // An explicitly supplied proxy already denotes a live ProcessState cache
+  // entry, including handle zero. Do not replace its declared warning state.
+  if (auto found = binder_input_keys.find(endpoint);
+      found != binder_input_keys.end())
+    return binderProxy(heap, found->second, admit);
+  if (!handle)
+    return {ExecutionStop::Unsupported,
+            0,
+            {},
+            "Android uncached Binder handle zero requires a native ping"};
+  if (!services.retain_binder_handle)
+    return {ExecutionStop::Unsupported,
+            0,
+            {},
+            "Android Binder handle ownership service is not supplied"};
+  const auto supplied = snapshot && snapshot->service_manager
+                            ? snapshot->service_manager->binder_proxies.size()
+                            : 0;
+  if (binder_handles.size() + supplied >=
+      ::neverd::limits::dalvik::kMaxAndroidBinderProxies)
+    return {ExecutionStop::HeapLimit,
+            0,
+            {},
+            "Android Binder proxy budget exhausted"};
+  auto stop = admit();
+  if (stop != ExecutionStop::Returned)
+    return {stop};
+  auto object = heap.allocate(
+      Object::Instance, "android/os/BinderProxy", 0,
+      ::neverd::limits::dalvik::kFrameworkFieldStateOverheadBytes);
+  if (!object)
+    return {ExecutionStop::HeapLimit,
+            0,
+            {},
+            "Android Binder proxy storage budget exhausted"};
+  auto retained = services.retain_binder_handle(fd, handle);
+  if (retained.stop != ExecutionStop::Returned)
+    return retained;
+  binder_handles.emplace(endpoint, object->Identity);
+  binder_warnings.emplace(object->Identity, false); // API 28 sWarnOnBlocking.
+  binder_bindings.emplace(
+      object->Identity,
+      AndroidApplicationSnapshot::ServiceManager::BinderProxy::NativeBinding{
+          fd, handle, true});
+  return {ExecutionStop::Returned, object->Identity};
+}
+
 ExecutionResult
 AndroidFramework::binderTransact(Heap &heap, const Program &program,
                                  const LibraryMethod &method, uint64_t receiver,
@@ -72,6 +127,13 @@ AndroidFramework::binderTransact(Heap &heap, const Program &program,
             {},
             "Android BinderProxy.transactNative requires an explicit native "
             "Binder binding"};
+  const auto &source = parcels.at(arguments[1]);
+  if (!source.objects.empty() && source.fd != binding->second.fd)
+    return {
+        ExecutionStop::Unsupported,
+        0,
+        {},
+        "Android Binder data objects belong to a different native connection"};
   ExternalCall call;
   call.kind = ExternalCall::BinderTransaction;
   // Native adapter sees shared identities and the explicit fd/handle only.
@@ -81,7 +143,8 @@ AndroidFramework::binderTransact(Heap &heap, const Program &program,
                                          uint32_t(arguments[0]),
                                          uint32_t(arguments[3]),
                                          binding->second.fd,
-                                         binding->second.handle};
+                                         binding->second.handle,
+                                         parcels.at(arguments[1]).objects};
   if (!binding->second.alive)
     return {ExecutionStop::Thrown, 0, "android/os/DeadObjectException"};
   if (parcels.at(arguments[1]).error)
@@ -113,6 +176,16 @@ ExecutionResult AndroidFramework::completeBinder(Heap &heap,
               {},
               "Android Binder reply Parcel was recycled during transaction"};
     if (reply.bytes) {
+      uint64_t minimum = 0;
+      for (auto offset : reply.objects) {
+        if (offset < minimum || offset % 4 || offset > reply.bytes->size() ||
+            reply.bytes->size() - offset < 24)
+          return {ExecutionStop::Invalid,
+                  0,
+                  {},
+                  "Android Binder reply object table is malformed"};
+        minimum = offset + 24;
+      }
       auto object = heap.get(destination);
       if (!heap.resizeBytes(*object, reply.bytes->size()))
         return {ExecutionStop::HeapLimit,
@@ -126,6 +199,8 @@ ExecutionResult AndroidFramework::completeBinder(Heap &heap,
       state.error = 0;
       state.view = std::move(reply.view);
       state.release = std::move(reply.release);
+      state.objects = std::move(reply.objects);
+      state.fd = reply.fd;
     }
     if (reply.status)
       state.error = reply.status;

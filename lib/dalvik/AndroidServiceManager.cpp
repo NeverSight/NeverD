@@ -58,12 +58,19 @@ void validateAndroidServiceManager(const AndroidApplicationSnapshot &input) {
       ::neverd::limits::dalvik::kMaxAndroidBinderProxies)
     throw Error("Android Binder proxy snapshot exceeds its budget");
   std::set<uint32_t> keys;
+  std::set<std::pair<uint32_t, uint32_t>> bindings;
   for (const auto &proxy : state.binder_proxies) {
     if (!proxy.key || !keys.insert(proxy.key).second)
       throw Error("Android Binder proxy keys must be positive and unique");
     if (proxy.native_binding &&
         (!proxy.native_binding->fd || proxy.native_binding->fd > INT32_MAX))
       throw Error("Android native Binder fd must be a positive signed int");
+    if (proxy.native_binding &&
+        !bindings
+             .emplace(proxy.native_binding->fd, proxy.native_binding->handle)
+             .second)
+      throw Error(
+          "Android native Binder endpoints must have a unique proxy identity");
   }
   auto binder = [&](std::optional<uint32_t> key) {
     if (key && !keys.contains(*key))

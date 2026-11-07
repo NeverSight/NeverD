@@ -10,6 +10,7 @@
 #include "AndroidFramework.h"
 
 #include "neverd/dalvik/Limits.h"
+#include "neverd/support/SortedSearch.h"
 
 #include "llvm/Support/Endian.h"
 
@@ -110,6 +111,8 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       state.release = {};
       state.view = {};
       state.error = 0;
+      state.objects.clear();
+      state.fd.reset();
       heap.resizeBytes(*object, 0);
       position = 0;
       state.recycled = true;
@@ -133,6 +136,22 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
             "Android Parcel negative position requires native abort");
       position = next;
       return returned();
+    }
+    if (name == "marshall" && !state.objects.empty()) {
+      const auto exception =
+          heap.allocate(Object::Throwable, "java/lang/RuntimeException", 0);
+      if (!exception)
+        return storage();
+      auto message = stringValue(
+          heap, "Tried to marshall a Parcel that contained Binder objects.",
+          admit);
+      if (message.stop != ExecutionStop::Returned)
+        return message;
+      exception->Message = message.value;
+      ExecutionResult result{ExecutionStop::Thrown, 0,
+                             "java/lang/RuntimeException"};
+      result.throwable = exception->Identity;
+      return result;
     }
     std::span<const uint8_t> readable = bytes;
     if (name != "unmarshall" && state.view) {
@@ -167,14 +186,52 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       llvm::support::endian::write64le(encoded.data(), value);
       write(std::span(encoded).first(size));
     };
+    auto protectedRange = [&](uint64_t start, uint64_t size) {
+      const auto index = neverd::sorted::lowerBound64(
+          state.objects.data(), state.objects.size(),
+          start > 23 ? start - 23 : 0);
+      return index != state.objects.size() &&
+             state.objects[index] < start + size;
+    };
     auto readInteger = [&](size_t size) -> uint64_t {
       if (uint64_t(position) + size > readable.size())
         return 0; // API 28 short scalar reads do not advance the cursor.
       const auto *data = readable.data() + position;
+      const bool denied = protectedRange(position, size);
       position += size;
+      if (denied)
+        return 0; // validateReadData fails after readAligned advances.
       return size == 4 ? llvm::support::endian::read32le(data)
                        : llvm::support::endian::read64le(data);
     };
+    if (name == "readStrongBinder") {
+      if (uint64_t(position) + 24 > readable.size())
+        return returned();
+      const auto start = position;
+      position +=
+          24; // readObject consumes a complete record before validation.
+      const auto *data = readable.data() + start;
+      const auto type = llvm::support::endian::read32le(data);
+      const auto pointer = llvm::support::endian::read64le(data + 8);
+      const auto cookie = llvm::support::endian::read64le(data + 16);
+      if ((pointer || cookie) &&
+          !neverd::sorted::contains64(state.objects.data(),
+                                      state.objects.size(), start))
+        return returned(); // Bytes alone cannot confer Binder ownership.
+      if (type == 0x73622a85) {
+        if (!cookie)
+          return returned();
+        return unsupported("Android local Binder object requires a native Java "
+                           "object association");
+      }
+      if (type != 0x73682a85)
+        return returned(); // Native no-argument readStrongBinder ignores
+                           // BAD_TYPE.
+      if (!state.fd)
+        return unsupported(
+            "Android Parcel Binder handle has no native connection");
+      return binderHandle(heap, *state.fd, uint32_t(pointer), admit);
+    }
     if (name == "writeInt" || name == "writeLong") {
       integer(arguments[0], name == "writeInt" ? 4 : 8);
       return returned();
@@ -210,6 +267,8 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       work(raw);
       const auto start = position;
       position += padded;
+      if (protectedRange(start, padded))
+        return returned();
       auto string =
           heap.allocate(Object::String, "java/lang/String", length * 2);
       if (!string)
@@ -246,6 +305,8 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       state.release = {};
       state.view = {};
       state.error = 0;
+      state.objects.clear();
+      state.fd.reset();
       if (!heap.resizeBytes(*object, padded))
         return storage();
       std::copy_n(array->Bytes.begin() + offset, length, bytes.begin());
