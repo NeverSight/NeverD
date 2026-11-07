@@ -714,7 +714,7 @@ llvm::StringSet<> prototypeTypeNames(const types::TypeLibrary &Library) {
 }
 
 LocalTypesDebugContext::LocalTypesDebugContext(
-    const DebugContext &Inner, std::shared_ptr<const types::TypeLibrary> Types,
+    const DebugContext &Inner, std::shared_ptr<types::TypeLibrary> Types,
     std::map<va_t, std::string> Declarations, const BinaryImage *Image,
     std::vector<types::HeaderLibrary> Headers,
     std::unordered_map<uint64_t, std::string> Recognized, std::string EntryType,
@@ -738,6 +738,39 @@ LocalTypesDebugContext::~LocalTypesDebugContext() {
   KeptTypes.clear();
   Given.clear();
   releaseSharedRecords();
+}
+
+bool LocalTypesDebugContext::takeDeclarations(
+    std::map<va_t, std::string> Next) {
+  std::vector<va_t> Changed;
+  for (const auto &[Entry, Text] : Declarations)
+    if (const auto Same = Next.find(Entry);
+        Same == Next.end() || Same->second != Text)
+      Changed.push_back(Entry);
+  for (const auto &[Entry, Text] : Next)
+    if (!Declarations.count(Entry))
+      Changed.push_back(Entry);
+  if (llvm::any_of(Changed, [&](va_t Entry) { return hidesPrototype(Entry); }))
+    return false;
+  std::lock_guard<std::mutex> Guard(Mutex);
+  Declarations = std::move(Next);
+  for (const va_t Entry : Changed)
+    DeclaredSignatures.erase(Entry);
+  return true;
+}
+
+void LocalTypesDebugContext::takeNewTypes(const types::TypeLibrary &Library) {
+  std::lock_guard<std::mutex> Guard(Mutex);
+  for (const types::LocalType *Type : Library.types())
+    if (!Types->find(Type->Name))
+      Types->define(*Type);
+  // These read every name of the library they were made of.
+  Spellers.clear();
+  PortablePrototypeSpeller.reset();
+  Rendered.clear();
+  RenderedBytes = 0;
+  CRenderer.reset();
+  RenamedInC.reset();
 }
 
 void LocalTypesDebugContext::releaseSharedRecords() const {
@@ -1285,6 +1318,8 @@ std::string LocalTypesDebugContext::importName(va_t Addr) const {
 }
 
 std::optional<FunctionSym> LocalTypesDebugContext::declared(va_t Entry) const {
+  if (DeclarationReads)
+    DeclarationReads->note(Entry);
   const auto Declaration = Declarations.find(Entry);
   if (Declaration == Declarations.end())
     return std::nullopt;
@@ -1319,6 +1354,17 @@ LocalTypesDebugContext::resolveFunction(va_t Addr) const {
     Declared.ParamEntryLocations.clear();
     return Declared;
   }
+  return undeclared(Addr);
+}
+
+bool LocalTypesDebugContext::hidesPrototype(va_t Entry) const {
+  const std::optional<FunctionSym> Function = undeclared(Entry);
+  return Function && !Function->PrototypeLibrary.empty();
+}
+
+std::optional<FunctionSym> LocalTypesDebugContext::undeclared(va_t Addr) const {
+  std::optional<FunctionSym> Function = Inner.resolveFunction(Addr);
+  const bool AtEntry = Function && Function->Addr == Addr;
   // A declaration of the program's own describes its build.
   if (AtEntry && (Function->ReturnType || !Function->Params.empty()))
     return Function;

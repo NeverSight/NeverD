@@ -171,9 +171,9 @@ std::vector<SymRef>
 SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
                           const std::unordered_map<uint32_t, SymRef> &Map) {
   // Builders can grow operand storage while any root is rebuilt.
-  const std::vector<SymRef> OwnedRoots(Roots.begin(), Roots.end());
+  std::vector<SymRef> Results(Roots.begin(), Roots.end());
   if (Map.empty())
-    return OwnedRoots;
+    return Results;
   std::optional<uint32_t> ReplacedVariable;
   if (Map.size() == 1) {
     const auto Key = Map.begin()->first;
@@ -188,53 +188,52 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
                       limits::symbolic::kSymExprTraversalInlineBuckets>
       Done;
 
+  llvm::SmallVector<SymRef, 8> NewOps;
   llvm::SmallVector<std::pair<SymRef, bool>, 32> Work;
-  for (SymRef R : OwnedRoots)
+  for (SymRef R : Results)
     Work.emplace_back(R, false);
   while (!Work.empty()) {
     auto [Cur, Expanded] = Work.pop_back_val();
-    if (Done.count(Cur.index()))
-      continue;
-
-    auto Hit = Map.find(Cur.index());
-    if (Hit != Map.end()) {
-      Done.try_emplace(Cur.index(), Hit->second);
-      continue;
-    }
-    // Every variable below this node comes after the replaced one. A walk per
-    // node would be quadratic on a chain; the rebuild below already keeps a
-    // node none of whose operands changed.
-    if (ReplacedVariable && minimumVariableId(Cur) > *ReplacedVariable) {
-      Done.try_emplace(Cur.index(), Cur);
-      continue;
-    }
-
     if (!Expanded) {
+      // A null result marks a scheduled node. Check replacements only on
+      // this first visit; replacement values themselves are not rewritten.
+      auto [Position, Inserted] = Done.try_emplace(Cur.index(), SymRef());
+      if (!Inserted)
+        continue;
+      if (auto Hit = Map.find(Cur.index()); Hit != Map.end()) {
+        Position->second = Hit->second;
+        continue;
+      }
+      // Every variable here follows the replaced one. Use the cached lower
+      // bound only on this first visit; a membership walk per node would be
+      // quadratic on a chain. Uncertain subtrees are rebuilt once below.
+      if (ReplacedVariable && minimumVariableId(Cur) > *ReplacedVariable) {
+        Position->second = Cur;
+        continue;
+      }
+      if (numOperands(Cur) == 0) {
+        Position->second = Cur;
+        continue;
+      }
       Work.emplace_back(Cur, true);
       for (SymRef C : operands(Cur))
-        if (!Done.count(C.index()))
-          Work.emplace_back(C, false);
+        Work.emplace_back(C, false);
       continue;
     }
 
-    llvm::SmallVector<SymRef, 8> NewOps;
+    NewOps.clear();
+    NewOps.reserve(numOperands(Cur));
     bool Changed = false;
     for (SymRef C : operands(Cur)) {
       SymRef NC = Done.find(C.index())->second;
       Changed |= (NC != C);
       NewOps.push_back(NC);
     }
-    if (!Changed) {
-      Done.try_emplace(Cur.index(), Cur);
-      continue;
-    }
-    Done.try_emplace(Cur.index(), rebuild(Cur, NewOps));
+    Done.find(Cur.index())->second = Changed ? rebuild(Cur, NewOps) : Cur;
   }
 
-  std::vector<SymRef> Results;
-  Results.reserve(OwnedRoots.size());
-  for (SymRef R : OwnedRoots)
-    Results.push_back(Done.find(R.index())->second);
+  for (SymRef &R : Results)
+    R = Done.find(R.index())->second;
   return Results;
 }
 

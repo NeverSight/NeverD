@@ -411,9 +411,8 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
         llvm::errc::not_supported,
         "paged V6 event delivery requires IA-32e mode");
   auto Controls = Memory.controls();
-  if (DataBreakpoints &&
-      (!Debug || DebugProfile != X86InstructionDebugProfile::Watchpoints ||
-       (DataBreakpoints & 0xf0)))
+  if (DataBreakpoints && (!Debug || !x86DebugWatchpoints(DebugProfile) ||
+                          (DataBreakpoints & 0xf0)))
     return llvm::createStringError(
         llvm::errc::invalid_argument,
         "event continuation requires its watchpoint bank");
@@ -461,7 +460,7 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
       return std::move(*W.Error);
     if (Debug && (W.Result.InputAccepted || W.Resuming)) {
       if (x86DebugException(Event.Kind, Event.Vector))
-        Debug->DR7 &= ~uint64_t{0x2000};
+        x86AcceptDebugException(*Debug);
       if (Event.Kind != X64ContinuationEventKind::Software)
         Debug->PendingData = 0;
     }

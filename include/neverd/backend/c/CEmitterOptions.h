@@ -19,10 +19,53 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
 namespace neverd {
+
+/// The addresses a result asked the user's facts of, stated or not: another
+/// fact at any other leaves that result as it is.
+class UserFactReads {
+public:
+  void note(va_t Addr) {
+    std::lock_guard<std::mutex> Guard(Mutex);
+    Addresses.insert(Addr);
+  }
+  void clear() {
+    std::lock_guard<std::mutex> Guard(Mutex);
+    Addresses.clear();
+  }
+  std::vector<va_t> addresses() const {
+    std::lock_guard<std::mutex> Guard(Mutex);
+    return std::vector<va_t>(Addresses.begin(), Addresses.end());
+  }
+  /// While it lives, work that serves every result reads what it reads apart
+  /// from the result so far.
+  class Held {
+  public:
+    explicit Held(UserFactReads &Reads) : Reads(Reads) {
+      std::lock_guard<std::mutex> Guard(Reads.Mutex);
+      Kept.swap(Reads.Addresses);
+    }
+    ~Held() {
+      std::lock_guard<std::mutex> Guard(Reads.Mutex);
+      Reads.Addresses.swap(Kept);
+    }
+    Held(const Held &) = delete;
+    Held &operator=(const Held &) = delete;
+
+  private:
+    UserFactReads &Reads;
+    std::set<va_t> Kept;
+  };
+
+private:
+  mutable std::mutex Mutex;
+  std::set<va_t> Addresses;
+};
 
 struct BinaryImage;
 struct CSourceMap;
@@ -122,8 +165,19 @@ struct CEmitterOptions {
     return Image ? libc::libcVariantOf(*Image) : libc::libcVariantOf(Format);
   }
   /// The names the user gave addresses, which name image data ahead of debug
-  /// information and symbols.
+  /// information and symbols.  Read through userName().
   const std::map<va_t, std::string> *UserNames = nullptr;
+  /// Where the C notes each address it asks a user's name of, named or not.
+  UserFactReads *UserNameReads = nullptr;
+  /// The name the user gave \p Addr, or null.
+  const std::string *userName(va_t Addr) const {
+    if (UserNameReads)
+      UserNameReads->note(Addr);
+    if (!UserNames)
+      return nullptr;
+    const auto Found = UserNames->find(Addr);
+    return Found != UserNames->end() ? &Found->second : nullptr;
+  }
   /// The widths of the reads and writes the code of the whole image states
   /// at each address, which name unnamed image data as the listing names it
   /// (neverd/DataNames.def): `qword_` for data every such access reads or

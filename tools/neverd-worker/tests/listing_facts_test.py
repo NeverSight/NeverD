@@ -205,15 +205,20 @@ def run(worker):
         assert state["hits"] == 0 and state["misses"] > 0, state
         damaged.close()
 
-        # What the engine reads is: a data item starts a new set.
+        # A data item reaches only the listing, which lists what it did with it:
+        # what the engine answered holds.
         defined = owner_of(clients, worker, binary)
         listed(defined, ADDRESSES[1:2])
-        assert facts(defined)["kept"] > 0, facts(defined)
+        before = facts(defined)
+        assert before["kept"] > 0, before
         ok(defined, "item_define", {"address": hex(DATA), "action": "data", "size": 4})
-        listed(defined, ADDRESSES[1:2])
+        shown = listed(defined, ADDRESSES[1:2])
         state = facts(defined)
-        assert state["kept"] == 0 and state["misses"] > 0, state
+        assert state["kept"] == before["kept"], state
         defined.close()
+        plain = owner_of(clients, worker, binary, browse_cache=False)
+        assert listed(plain, ADDRESSES[1:2]) == shown
+        plain.close()
     print("Listing facts kept by a job, read by later listings, and refused when damaged passed")
 
 

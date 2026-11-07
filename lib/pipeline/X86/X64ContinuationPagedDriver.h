@@ -48,11 +48,11 @@ extern uint64_t neverd_x64_paged_progress_v1(uint8_t *);
 )C";
   if (Options.PagedDebug)
     OS << R"C(
-extern uint64_t neverd_x64_paged_debug_step_v1(
+extern uint64_t neverd_x64_paged_debug_step_v2(
     uint8_t *, uint8_t *, uint64_t, const uint8_t *, uint64_t,
     neverd_x64_paged_body_v1, neverd_x64_paged_body_v1, uint64_t, uint64_t,
     uint64_t);
-extern uint64_t neverd_x64_paged_debug_validate_v1(
+extern uint64_t neverd_x64_paged_debug_validate_v2(
     uint8_t *, uint8_t *, uint64_t, neverd_x64_paged_body_v1, uint64_t);
 )C";
   for (const auto &Unit : Units)
@@ -69,7 +69,7 @@ extern uint64_t neverd_x64_paged_debug_validate_v1(
     for (auto Byte : Unit.Bytes)
       OS << unsigned(Byte) << ',';
     OS << "};\n    return "
-       << (Options.PagedDebug ? "neverd_x64_paged_debug_step_v1"
+       << (Options.PagedDebug ? "neverd_x64_paged_debug_step_v2"
                               : "neverd_x64_paged_step_v1")
        << "(context, (uint8_t *)state, "
           "0x"

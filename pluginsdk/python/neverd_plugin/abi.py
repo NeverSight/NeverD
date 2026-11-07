@@ -1606,6 +1606,28 @@ _declare(
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
+    "neverd_call_summaries_held",
+    "int",
+    ["neverd_session_t"],
+)
+_declare(
+    "neverd_user_reads",
+    "const char *",
+    ["neverd_session_t"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_user_reads_hold",
+    "int",
+    ["neverd_session_t", "const char *"],
+)
+_declare(
+    "neverd_user_facts_analysis_reads_json",
+    "const char *",
+    ["neverd_session_t"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_prefill_callees_json",
     "const char *",
     ["neverd_session_t", "int", "int"],

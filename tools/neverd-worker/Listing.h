@@ -109,6 +109,9 @@ public:
   /// taken it, keeping what it decoded.  Otherwise the caller says
   /// namesChanged.
   bool functionRenamed(std::uint64_t address);
+  /// A declaration changed.  What the listing decoded shows what a function was
+  /// declared as, and reads it again; nothing else it has read changes.
+  void declarationsChanged();
   /// How many times names were read again over a built listing.
   std::uint64_t nameBuilds() const;
   /// Only functions' names changed.  The next query reads them again, and a

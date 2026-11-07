@@ -241,10 +241,16 @@ struct Session {
   /// decompiler type, and its calling convention is one NeverD places the
   /// image's parameters by.  False, with \p Error, otherwise.
   bool checkFunctionDeclaration(const std::string &Text, std::string &Error);
+  /// The addresses whose user names and declarations what the pipeline and the
+  /// emitters have made since the last result read.
+  UserFactReads UserReads;
   /// After the user's declarations change: the decompiler reads them anew,
-  /// and only what it made of them goes.  Analysis never reads them.
+  /// and only what it made of them goes.  Analysis reads them only through
+  /// what the context turns down.
   void declarationsChanged() {
-    dropLocalTypesDebug();
+    if (!LocalTypesDbg ||
+        !LocalTypesDbg->takeDeclarations(functionDeclarations()))
+      dropLocalTypesDebug();
     clearPipelineResult();
   }
   /// The program's local types, read when first asked for; null with the
@@ -256,6 +262,14 @@ struct Session {
   /// changes.
   bool typesChanged(const types::TypeLibrary &Library,
                     llvm::ArrayRef<std::string> Changed, bool Prototypes);
+  /// After a declaration adds \p Names to \p Library, which spelled
+  /// \p RenamedBefore otherwise before it: whether nothing read names them or
+  /// is spelled otherwise for them, so that everything read and printed stays,
+  /// and only the next context would have told them apart.  The context then
+  /// takes them.
+  bool takeUnreadTypes(
+      const types::TypeLibrary &Library, llvm::ArrayRef<std::string> Names,
+      const std::vector<std::pair<std::string, std::string>> &RenamedBefore);
   void dropLocalTypesDebug() {
     // The text it printed stays, and with it what that read.
     if (LocalTypesDbg)
@@ -1024,6 +1038,7 @@ struct Session {
   }
 
   void clearPipelineResult() {
+    UserReads.clear();
     // Every module lives in the context.
     FunctionLlvmModules.clear();
     FunctionSources.clear();

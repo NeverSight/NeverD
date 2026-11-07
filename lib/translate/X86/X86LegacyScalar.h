@@ -186,7 +186,12 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32);
 
 /// Caller discards the staged state on a fault; earlier page-table effects
 /// remain. A final store uses the same plan as its operand read.
-llvm::Expected<X86MemoryAccessResult>
+struct X86LegacyScalarResult : X86MemoryAccessResult {
+  /// Successful branch decision, independent of target/fallthrough equality.
+  bool TakenBranch = false;
+};
+
+llvm::Expected<X86LegacyScalarResult>
 executeLegacyScalar(X86LegacyExecutionState &Staged, X86PagedMemory &Memory,
                     const X86LegacyScalarInstruction &Instruction,
                     uint32_t Fallthrough,

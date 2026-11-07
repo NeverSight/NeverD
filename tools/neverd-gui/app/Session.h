@@ -86,6 +86,10 @@ public:
   QString analysisRenderAheadState() const {
     return analysis_.renderAheadState();
   }
+  /// Whether a replica runs for reads, or is on its way: the owner answers what
+  /// earlier sessions kept without one.
+  bool analysisReplicaStarted() const { return analysis_.replicaStarted(); }
+  bool analysisReplicaReady() const { return analysis_.replicaReady(); }
   QueryService &analysisQueries(const QJsonObject &payload, QObject *owner) {
     return analysis_.queries(payload, owner);
   }

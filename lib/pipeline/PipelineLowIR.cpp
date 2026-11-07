@@ -4900,6 +4900,9 @@ struct PipelineAnalysisCache::Impl {
     };
     ImportNameMemo ImportNames;
 
+    bool readsFrom(const BinaryImage &Img, const DebugContext *Dbg) const {
+      return Image == &Img && Debug == Dbg;
+    }
     bool matches(const BinaryImage &Img, DebugContext *Dbg,
                  const SymbolInventory *CandidateInventory) const {
       return Image == &Img && Debug == Dbg &&
@@ -5340,6 +5343,15 @@ bool Pipeline::prepareCallSummaries(const BinaryImage &Img,
   if (Solved)
     *Solved = true;
   return true;
+}
+
+bool Pipeline::holdsCallSummaries(const BinaryImage &Img,
+                                  const PipelineOptions &Opts,
+                                  const DebugContext *Dbg) {
+  if (!Opts.AnalysisCache || !Opts.AnalysisCache->Facts)
+    return false;
+  const auto &Facts = *Opts.AnalysisCache->Facts;
+  return Facts.CallSummaries && Facts.Inputs->readsFrom(Img, Dbg);
 }
 
 std::optional<AnalysisCacheWarmup> Pipeline::prefillCalleeSignatures(

@@ -1494,12 +1494,14 @@ void dropUnreadValues(std::vector<HighStmt> &Body) {
 bool localizeHandlerFrame(std::vector<HighStmt> &Body, Arch TargetArch) {
   const uint64_t SP = getTargetRegInfo(TargetArch).StackPointer;
   // What the names of the moved stack pointer hold, where one assignment gives
-  // each: a handler that passes stack arguments addresses them through one.
+  // each: a handler that passes stack arguments addresses them through one, and
+  // AArch64's `str x0, [sp, #-16]!` through the temporary of its writeback.
   std::map<PrintedName, std::optional<int64_t>> Moved;
   walkStmts(Body, [&](const HighStmt &S) {
     if (S.Kind != StmtKind::Assign || !S.Dst || S.Dst->Kind != ExprKind::Var ||
-        S.Dst->Var.Kind != MedVar::Reg || S.Dst->Var.RegOff != SP ||
-        S.Dst->Var.RenameTag < 0)
+        (S.Dst->Var.Kind != MedVar::Temp &&
+         (S.Dst->Var.Kind != MedVar::Reg || S.Dst->Var.RegOff != SP ||
+          S.Dst->Var.RenameTag < 0)))
       return;
     const auto Offset = ownFrameOffset(S.Val.get(), SP, Moved);
     const auto [It, First] = Moved.try_emplace(printedName(S.Dst->Var), Offset);

@@ -178,6 +178,12 @@ NEVERD_API const char *neverd_type_declarations_json(neverd_session_t Sess);
 NEVERD_API int neverd_type_declarations_save(neverd_session_t Sess);
 NEVERD_API int neverd_type_declarations_load(neverd_session_t Sess);
 
+/// What analysis reads of the user's function declarations, which a result's
+/// reads do not cover: {"hiding_prototypes":[address,...],
+/// "declarations_make_the_context":bool}.
+NEVERD_API const char *
+neverd_user_facts_analysis_reads_json(neverd_session_t Sess);
+
 /// The type libraries NeverD ships (HeaderLibraries.def), as IDA's type
 /// libraries window lists them: {"libraries":[{"name","dataModel",
 /// "recordABI","compatible"?:bool,"image":bool,"joined":bool,"types"?,

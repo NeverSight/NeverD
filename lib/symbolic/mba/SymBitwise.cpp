@@ -335,26 +335,35 @@ TruthTable coverage(Implicant P, unsigned NumVars) {
 /// only invisible while the arity keeps that number in the dozens — exactly
 /// the assumption this file no longer makes.
 LLVM_ATTRIBUTE_NOINLINE
-std::vector<Implicant> primeImplicants(const TruthTable &Table,
-                                       unsigned NumVars, size_t &Work,
-                                       size_t Budget) {
+llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
+                                                 unsigned NumVars, size_t &Work,
+                                                 size_t Budget) {
   const auto Full = static_cast<uint32_t>((size_t(1) << NumVars) - 1);
-  llvm::SmallVector<Implicant, 16> Current;
+  llvm::SmallVector<Implicant, 16> Frontiers[2];
   for (size_t K = 0, E = Table.entries(); K < E; ++K)
     if (Table.at(K))
-      Current.push_back(Implicant{static_cast<uint32_t>(K), Full});
+      Frontiers[0].push_back(Implicant{static_cast<uint32_t>(K), Full});
 
-  std::vector<Implicant> Primes;
-  while (!Current.empty()) {
+  llvm::SmallVector<Implicant, 16> Primes;
+  // Reuse each round's scratch storage. The current and next frontiers stay
+  // distinct and alternate without copying their inline elements. Clearing
+  // the lookup tables preserves discovery order.
+  llvm::SmallVector<char, 16> Merged;
+  llvm::SmallDenseSet<uint64_t, 64> Seen;
+  std::optional<llvm::SmallDenseMap<uint64_t, size_t, 64>> IndexedPositions;
+  unsigned Active = 0;
+  while (!Frontiers[Active].empty()) {
+    auto &Current = Frontiers[Active];
+    auto &Next = Frontiers[Active ^ 1];
     Work = saturatingAdd(Work, saturatingMul(Current.size(), Current.size()));
     if (Work > Budget)
       return {};
 
     // Small cover rounds stay inline; larger tables retain ordinary growth.
     // Deduplication keeps both complete 32-bit fields in one integer key.
-    llvm::SmallVector<char, 16> Merged(Current.size(), 0);
-    llvm::SmallVector<Implicant, 16> Next;
-    llvm::SmallDenseSet<uint64_t, 64> Seen;
+    Merged.assign(Current.size(), 0);
+    Next.clear();
+    Seen.clear();
     auto grow = [&](size_t I, size_t J, uint32_t Diff) {
       Merged[I] = Merged[J] = 1;
       Implicant Grown{Current[I].Value & ~Diff, Current[I].Care & ~Diff};
@@ -370,7 +379,11 @@ std::vector<Implicant> primeImplicants(const TruthTable &Table,
       auto key = [](uint32_t Value, uint32_t Care) {
         return (uint64_t(Care) << 32) | Value;
       };
-      llvm::SmallDenseMap<uint64_t, size_t, 64> Positions;
+      if (!IndexedPositions)
+        IndexedPositions.emplace();
+      else
+        IndexedPositions->clear();
+      auto &Positions = *IndexedPositions;
       Positions.reserve(Current.size());
       for (size_t I = 0; I < Current.size(); ++I)
         Positions.try_emplace(key(Current[I].Value, Current[I].Care), I);
@@ -411,7 +424,7 @@ std::vector<Implicant> primeImplicants(const TruthTable &Table,
     for (size_t I = 0; I < Current.size(); ++I)
       if (!Merged[I])
         Primes.push_back(Current[I]);
-    Current = std::move(Next);
+    Active ^= 1;
   }
   return Primes;
 }
@@ -435,8 +448,7 @@ std::optional<Cover> sumOfProductsCover(const TruthTable &Table,
   // An empty result here is a budget answer as much as a structural one: a
   // non-constant function always has primes, so nothing to cover with means
   // the merge rounds were stopped, and either way there is no cover to offer.
-  std::vector<Implicant> Primes =
-      primeImplicants(Table, NumVars, Work, WorkBudget);
+  auto Primes = primeImplicants(Table, NumVars, Work, WorkBudget);
   if (Primes.empty())
     return std::nullopt;
 

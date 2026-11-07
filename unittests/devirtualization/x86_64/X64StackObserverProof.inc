@@ -28,8 +28,8 @@ static neverd_x64_state_v6 observer_seed(uint32_t low, uint64_t saved) {
 #if PAGED
 #if DEBUG
 #define ACCESS neverd_x64_paged_debug_access_v1
-#define VALIDATE neverd_x64_paged_debug_validate_v1
-#define STEP neverd_x64_paged_debug_step_v1
+#define VALIDATE neverd_x64_paged_debug_validate_v2
+#define STEP neverd_x64_paged_debug_step_v2
 #define SHADOW_PARAMETER , uint64_t ss_blocked
 #else
 #define ACCESS neverd_x64_paged_access_v1

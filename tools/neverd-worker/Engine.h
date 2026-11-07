@@ -269,6 +269,19 @@ private:
   }
   /// Opens the store a restore asks for by \p mode: "read", "write" or empty.
   void openRenderStore(const std::string &mode);
+  /// A request that takes only what is kept (kept_only): what no session kept
+  /// is refused as "not_kept", and the engine is not asked.
+  bool keptOnly_ = false;
+  /// The store a view reads.  A restored one follows its job.  An owner holds
+  /// one to read only, and follows what the identity reads, as for the facts.
+  RenderStore *storeOfViews();
+  std::string rendersStoreName_;
+  std::uint64_t rendersStoreGeneration_ = 0;
+  bool rendersStoreRead_ = false;
+  std::chrono::steady_clock::time_point rendersRefreshed_{};
+  /// `kept_renders`: how many renders the store keeps, and whether a job
+  /// reached every function.
+  Json keptRendersJson();
   /// What the job keeps of what a function's first look in the listing asks
   /// the engine, under the same identity as the renders and for the same
   /// sessions.  The owner reads it too, and takes up what its replica adds.
@@ -285,6 +298,22 @@ private:
     std::string renders, facts;
   };
   StoreNames storeNames();
+  /// What the render just made read of what the user states, kept as the first
+  /// page of its record, and whether what is kept under a record still reads
+  /// the same.  Empty, and holding, for an engine that does not tell.
+  std::string renderReads();
+  bool renderReadsHold(const std::string &compact);
+  bool keptRenderHolds(RenderStore &store, const std::string &key);
+  /// Whether an engine says what each render read, so that the stores do not
+  /// move for what the user states of one address.
+  bool rendersSayTheirReads() const;
+  /// What analysis reads of the user's declarations, which no render's reads
+  /// say.
+  Json userFactsAnalysisReads() const;
+  /// The job goes over a whole store for what the user changed.
+  bool renderAheadVerifying_ = false;
+  /// Says that what the stores keep under \p before holds for the state now.
+  void keepStoresFor(const StoreNames &before);
   void openFactsStore(const std::string &name, bool writable);
   std::vector<std::string> keptListingFacts(const std::string &key);
   void keepListingFact(const std::string &key, std::string bytes);
@@ -299,6 +328,13 @@ private:
   std::string renderStoreKey(std::uint64_t address,
                              const std::string &representation,
                              const std::string &optionText);
+  /// The rows of the function table without what the user notes of a function,
+  /// which nothing analyzed or rendered reads, and, unless \p declarations,
+  /// what the user declares, which only the decompiler reads.
+  static Json functionRowsRead(const Json &rows, bool declarations);
+  /// A function's or a type's declaration changed: the engine has let go of
+  /// what read it, and every view reads anew over what the replica still holds.
+  void declarationsChanged();
   /// Only functions' names changed, in a replica: what it keeps of a view stays
   /// the view's.  Taking a name away from one (\p unnamed) changes what the
   /// listing shows it as, and the others are read as a view is decorated.
@@ -308,6 +344,11 @@ private:
   /// and a new name replaces those, but what one was called before a name was
   /// taken away is only the engine's to say.
   bool keptPageReadsCurrentNames(const Json &page) const;
+  /// The session's renames as neverd_renames_json lists them, read once for all
+  /// a revision's views: a project can hold thousands.
+  const Json &renameRows() const;
+  mutable Json renameRows_;
+  mutable std::optional<std::uint64_t> renameRowsRevision_;
   /// States the names of \p view's functions as they are named now.
   void currentNamesInView(Json &view) const;
   /// When the last request was answered.

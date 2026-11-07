@@ -102,6 +102,8 @@ public:
 };
 
 class ArithmeticNormalizer {
+  enum class Reading { General, FlatProduct, LiteralUnion };
+
   SymContext &Ctx;
   ArithmeticResources &Resources;
   uint32_t Width;
@@ -222,15 +224,16 @@ class ArithmeticNormalizer {
     Memo.emplace(Index, &It->second);
   }
 
-  bool chooseCoordinates(const std::map<uint32_t, bool> &Reachable) {
+  bool chooseCoordinates(const std::map<uint32_t, Reading> &Reachable) {
     CoordinatesReady = true;
     if (ComplementCoordinates.empty())
       return true;
     // Both coordinates remain algebraically valid. Prefer the old basis if
     // the uncomplemented word also appears as an arithmetic operand.
-    for (const auto &[Index, FlatProduct] : Reachable) {
+    for (const auto &[Index, Form] : Reachable) {
       SymRef R(Index);
-      if (Ctx.op(R) != SymOp::Add && Ctx.op(R) != SymOp::Mul)
+      if (Ctx.op(R) != SymOp::Add && Ctx.op(R) != SymOp::Mul &&
+          Form != Reading::LiteralUnion)
         continue;
       if (!Resources.charge(Ctx.numOperands(R)))
         return false;
@@ -246,6 +249,14 @@ class ArithmeticNormalizer {
     return ExpandComplements && Ctx.op(R) == SymOp::Not &&
            (!CoordinatesReady ||
             !ComplementCoordinates.contains(Ctx.operand(R, 0).index()));
+  }
+
+  bool hasLiteralUnionShape(SymRef R) const {
+    if (Ctx.op(R) != SymOp::Or || Ctx.numOperands(R) != 2 ||
+        !Ctx.isConst(Ctx.operand(R, 0)))
+      return false;
+    const auto Word = Ctx.operand(R, 1);
+    return Ctx.op(Word) == SymOp::And && Ctx.isConst(Ctx.operand(Word, 0));
   }
 
 public:
@@ -441,6 +452,7 @@ public:
         return false;
       SymOp Op = Ctx.op(Child);
       if (Op == SymOp::Add || Op == SymOp::Mul || expandsComplement(Child) ||
+          hasLiteralUnionShape(Child) ||
           ComplementCoordinates.contains(Child.index()))
         return false;
     }
@@ -531,12 +543,17 @@ public:
       for (SymRef Term : Ctx.operands(Root)) {
         if (!Resources.charge(1))
           return nullptr;
+        if (hasLiteralUnionShape(Term)) {
+          Flat = false;
+          break;
+        }
         if (Ctx.op(Term) != SymOp::Mul)
           continue;
         if (!Resources.charge(Ctx.numOperands(Term)))
           return nullptr;
         for (SymRef Factor : Ctx.operands(Term))
-          if (Ctx.op(Factor) == SymOp::Add || Ctx.op(Factor) == SymOp::Mul) {
+          if (Ctx.op(Factor) == SymOp::Add || Ctx.op(Factor) == SymOp::Mul ||
+              hasLiteralUnionShape(Factor)) {
             Flat = false;
             break;
           }
@@ -584,7 +601,7 @@ public:
     }
     const bool ReuseMemo = !Memo.empty();
     bool ReusedPolynomial = false;
-    std::map<uint32_t, bool> Reachable;
+    std::map<uint32_t, Reading> Reachable;
     std::vector<SymRef> Pending;
     if (!Resources.charge(1, 128))
       return nullptr;
@@ -602,23 +619,35 @@ public:
             return nullptr;
           Memo.try_emplace(R.index(), Cached);
           ReusedPolynomial |= Ctx.op(R) == SymOp::Add ||
-                              Ctx.op(R) == SymOp::Mul || expandsComplement(R);
+                              Ctx.op(R) == SymOp::Mul ||
+                              Ctx.op(R) == SymOp::Or || expandsComplement(R);
           continue;
         }
       if (!Resources.charge(1, 128))
         return nullptr;
-      auto Position = Reachable.emplace(R.index(), false).first;
+      auto Position = Reachable.emplace(R.index(), Reading::General).first;
       if (Ctx.width(R) != Width)
         return nullptr;
+      if (hasLiteralUnionShape(R)) {
+        if (!Resources.array(Words, 3 * sizeof(uint64_t)))
+          return nullptr;
+        const auto Literal = Ctx.operand(R, 0);
+        const auto Mask = Ctx.operand(Ctx.operand(R, 1), 0);
+        // A disjoint literal and masked word also form an exact sum when
+        // expressed as OR. Recover that sum independently for input and
+        // emitted factors, keeping the complete masked word as a coordinate.
+        if ((Ctx.constValue(Literal) & Ctx.constValue(Mask)).isZero())
+          Position->second = Reading::LiteralUnion;
+      }
       if (Ctx.op(R) != SymOp::Add && Ctx.op(R) != SymOp::Mul &&
-          !expandsComplement(R))
+          !expandsComplement(R) && Position->second != Reading::LiteralUnion)
         continue;
       llvm::ArrayRef<SymRef> Children = Ctx.operands(R);
       // Flat products build their monomial directly from operand identities.
       // A proof does not count atoms, so these leaves need neither separate
       // memo entries nor repeated stack slots for every product occurrence.
       if (Ctx.op(R) == SymOp::Mul && isFlatProduct(R)) {
-        Position->second = true;
+        Position->second = Reading::FlatProduct;
         continue;
       }
       if (!Resources.array(Children.size(), sizeof(SymRef)))
@@ -659,10 +688,11 @@ public:
     // subexpressions contain arithmetic or have a different width.
     unsigned Atoms = 0;
     ExpandedInput = !ReusedPolynomial;
-    for (const auto &[Index, FlatProduct] : Reachable) {
+    for (const auto &[Index, Form] : Reachable) {
       SymRef Node(Index);
       ExpandedInput &= !(Index != Root.index() && Ctx.op(Node) == SymOp::Add) &&
                        !expandsComplement(Node) &&
+                       Form != Reading::LiteralUnion &&
                        !ComplementCoordinates.contains(Index);
       if (const Polynomial *Cached = known(Index)) {
         if (!Resources.charge(1, 128))
@@ -671,7 +701,8 @@ public:
         SymOp Op = Ctx.op(SymRef(Index));
         Atoms += !ComplementCoordinates.contains(Index) &&
                  !Ctx.isConst(SymRef(Index)) && Op != SymOp::Add &&
-                 Op != SymOp::Mul && !expandsComplement(SymRef(Index));
+                 Op != SymOp::Mul && Form != Reading::LiteralUnion &&
+                 !expandsComplement(SymRef(Index));
         continue;
       }
       if (!Resources.charge(1, 128))
@@ -688,7 +719,7 @@ public:
       } else if (Ctx.isConst(R)) {
         if (!add(P, {}, Ctx.constValue(R)))
           return nullptr;
-      } else if (Ctx.op(R) == SymOp::Add) {
+      } else if (Ctx.op(R) == SymOp::Add || Form == Reading::LiteralUnion) {
         for (SymRef Child : Ctx.operands(R))
           if (!copy(*Memo.at(Child.index()), P))
             return nullptr;
@@ -698,7 +729,7 @@ public:
         // a time. Arithmetic children retain the general expansion below.
         // Proof traversal already checked this product's complete structure.
         // Atom-counting walks retain their leaves and classify it here.
-        if (FlatProduct || (AtomCount && isFlatProduct(R))) {
+        if (Form == Reading::FlatProduct || (AtomCount && isFlatProduct(R))) {
           if (!Resources.array(Ctx.numOperands(R), sizeof(Factor)) ||
               !Resources.array(Words, sizeof(uint64_t)))
             return nullptr;

@@ -337,6 +337,16 @@ on backing stops, and discards them on an accepted ordinary fault. A default
 binding selects each element; fast-string grouping is supplied by the target,
 not inferred from the host. TF and final completion still force publication.
 
+`X86LegacyDebugProfile::BranchWatchpoints` adds the shared
+[BTF contract](x86-paged-execution.md#branch-single-stepping). The scalar owner
+returns its actual taken decision, including zero-displacement Jcc and LOOP;
+near/far transfers and frame returns retain their existing state owners.
+Raw TF and DEBUGCTL remain separate REP group inputs. Hardware debug causes
+clear BTF before entry and retain that effect across backing/event stops;
+software INT 1 has no such effect. Original ptrace comparisons cover selected
+branch/GPR/stack outcomes in protected16/32 user code, while raw debug-bank
+and frame effects have separate software checks.
+
 This internal protected executor still does not provide general i386 source
 dispatch, task switching, real/VM86, or the other open
 machine-environment contracts. The LLVM release, SDK pin and gitlink remain
