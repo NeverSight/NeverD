@@ -392,8 +392,22 @@ SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
   llvm::SmallVector<SymRef, 8> Unabsorbed;
   for (SymRef R : Rest) {
     bool Absorbed =
-        op(R) == SymOp::And && llvm::any_of(operands(R), [&](SymRef C) {
-          return std::binary_search(Rest.begin(), Rest.end(), C);
+        op(R) == SymOp::And && llvm::any_of(operands(R), [&](SymRef Factor) {
+          if (std::binary_search(Rest.begin(), Rest.end(), Factor))
+            return true;
+          // The outer OR has flattened a compound cover: (a | b) |
+          // (mask & (a | b)) still absorbs the masked copy. Every inner
+          // term must be covered; a missing term or work refusal keeps R.
+          if (op(Factor) != SymOp::Or)
+            return false;
+          return llvm::all_of(operands(Factor), [&](SymRef Term) {
+            if (!SubsetWork)
+              return false;
+            --SubsetWork;
+            if (isConst(Term))
+              return (constValue(Term) & ~Acc).isZero();
+            return std::binary_search(Rest.begin(), Rest.end(), Term);
+          });
         });
     Absorbed |= CoveredXor(R);
     // A masked value cannot add any bit already set by the folded constant.
