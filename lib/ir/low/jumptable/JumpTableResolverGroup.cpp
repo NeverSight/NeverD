@@ -719,9 +719,8 @@ bool CFGBuilder::finiteGOTOFFGroupClaimed() const {
   return GuardedGroupIdentity &&
          GuardedGroupIdentity->Kind ==
              GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF &&
-         GuardedGroupIdentity->MemberCount >= 4 &&
-         GuardedGroupIdentity->MemberCount <= 8 &&
-         GuardedGroupIdentity->MemberCount % 2 == 0;
+         GuardedGroupIdentity->MemberCount >= 3 &&
+         GuardedGroupIdentity->MemberCount <= 8;
 }
 
 bool CFGBuilder::finiteAbsoluteGroupClaimed() const {
@@ -1231,8 +1230,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
       Img.Format != BinaryFormat::ELF || Img.Arch != Arch::X86 ||
       Img.getPointerSize() != 4 || !AuthoritativeCurrentFuncRange ||
       Img.I386GOTPCFields.empty() ||
-      (Img.DataAddressRelocOperands.size() < 2 &&
-       (Candidates.size() < 4 || Candidates.size() % 2 != 0)) ||
+      (Img.DataAddressRelocOperands.size() < 2 && Candidates.size() < 3) ||
       Candidates.size() < 2 || Candidates.size() > 8 ||
       !ResolvedTableInfo.empty() || !PriorStrongJumpTableProposals.empty() ||
       !NextStrongJumpTableProposals.empty() ||
@@ -1305,7 +1303,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
     }
     if (!Valid)
       continue;
-    if (Candidates.size() >= 4 && Candidates.size() % 2 == 0) {
+    if (Candidates.size() >= 3) {
       // ELF ET_REL keeps RelocationEntry::Address as the encoded r_offset,
       // local to the relocation section's target. Bind that raw field to one
       // uniquely named executable section before comparing it with a decoded
@@ -1480,8 +1478,10 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
         // that keeps this branch opaque during that failure.
         ++ShapedBases[Shape->Base];
       }
-      ExactClaim &= ShapedBases.size() * 2 == Candidates.size() &&
-                    ShapedBases.count(Section.VA) != 0;
+      // A peeled copy gives a table a second consumer; a run dispatched once
+      // has one. Each candidate named its one base above.
+      ExactClaim &=
+          ShapedBases.size() >= 2 && ShapedBases.count(Section.VA) != 0;
       for (auto Base = ShapedBases.begin();
            ExactClaim && Base != ShapedBases.end(); ++Base) {
         const auto Next = std::next(Base);
@@ -1489,8 +1489,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
         const size_t Capacity = (Bound - Base->first) / 4;
         if (!Budget.products({{Img.Symbols.size(), 2}}))
           return Incomplete();
-        ExactClaim = Base->second == 2 &&
-                     Capacity >= limits::kMinJumpTableEntries &&
+        ExactClaim = Capacity >= limits::kMinJumpTableEntries &&
                      Capacity <= 64 && Img.dataObjectSizeAt(Base->first) == 0;
       }
       if (ExactClaim) {
@@ -1594,7 +1593,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
   std::map<va_t, va_t> FiniteBranchBases;
   if (Key.Kind == GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF) {
     bool CompletePartition =
-        Bases.size() * 2 == Candidates.size() && *Bases.begin() == Section.VA;
+        Bases.size() <= Candidates.size() && *Bases.begin() == Section.VA;
     for (const auto &[Base, Capacity] : Capacities) {
       if (!Budget.products({{Img.Symbols.size(), 2}}))
         return Incomplete();
@@ -1695,10 +1694,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
       (void)Branch;
       ++ConsumersPerBase[Base];
     }
-    const bool CompleteConsumers =
-        ConsumersPerBase.size() == Bases.size() &&
-        std::all_of(ConsumersPerBase.begin(), ConsumersPerBase.end(),
-                    [](const auto &Entry) { return Entry.second == 2; });
+    const bool CompleteConsumers = ConsumersPerBase.size() == Bases.size();
     if (!Exact || FiniteBranchBases.size() != Candidates.size() ||
         !CompleteConsumers) {
       GuardedGroupRejected = true;

@@ -2190,7 +2190,8 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
             Info.PhysicalCapacity == CandidateCapacity &&
             CandidateCapacity <= 64 && IndexOccurrences.size() == 1 &&
             Authorized.size() < CandidateCapacity &&
-            hasTwoSameObjectIndirectConsumers()) {
+            ((GuardedGroupProofContext && finiteGOTOFFGroupClaimed()) ||
+             hasTwoSameObjectIndirectConsumers())) {
           const bool PreviousIncomplete =
               IncompleteIndexDomain && *IncompleteIndexDomain;
           if (ExactFiniteSeedIncomplete && IncompleteIndexDomain)
@@ -2206,8 +2207,7 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
                   : nullptr;
           const size_t GroupMembers =
               RoundCertificate ? GuardedGroupIdentity->MemberCount : 0;
-          if (RoundCertificate &&
-              (GroupMembers < 4 || GroupMembers > 8 || GroupMembers % 2 != 0))
+          if (RoundCertificate && (GroupMembers < 3 || GroupMembers > 8))
             return 0;
           if (RoundCertificate && RoundCertificate->JointProof) {
             bool ReuseIncomplete = false;

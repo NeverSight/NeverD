@@ -7923,6 +7923,8 @@ owner graph. It retains separate physical, preceding-phase and restricted edge
 sets, exact selector/LOAD/target use points and an owned source snapshot. Round
 reuse compares the current operations, occurrence inventories, boundaries and
 borrowed protection sets by value; a changed member revokes the whole result.
+Adjacent tables form one group however many consumers each has: a peeled copy
+gives a table a second consumer, and a table dispatched once has one.
 Both joint graph replays require each supplied root to be an exact real block
 entry and each reachable ordinary indirect branch to belong to the complete
 member edge map. A nonmember's nonempty raw target vector cannot establish

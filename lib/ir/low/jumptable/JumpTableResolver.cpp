@@ -328,8 +328,7 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
           Relocation.TargetVA < *OwnerEnd)
         Bases.insert(Relocation.TargetVA);
     }
-    if (Bases.size() < 2 || Bases.size() > 4 ||
-        Bases.size() * 2 != GuardedGroupIdentity->MemberCount ||
+    if (Bases.size() < 2 || Bases.size() > GuardedGroupIdentity->MemberCount ||
         *Bases.begin() != GuardedGroupIdentity->OwnerBegin ||
         !Bases.count(Info.BaseAddr))
       return false;
@@ -351,7 +350,9 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
     if (RunCapacities.at(Info.BaseAddr) != SlotCount)
       return false;
   }
-  const size_t ExpectedConsumers = RunCapacities.size() * 2;
+  const size_t ExpectedConsumers = AdjacentTables
+                                       ? GuardedGroupIdentity->MemberCount
+                                       : RunCapacities.size() * 2;
   if (!Charge(RunCapacities.size() * 16))
     return false;
   std::vector<JumpTableStorageRange> JointStorage;
@@ -511,9 +512,7 @@ bool CFGBuilder::proveCandidateFiniteAbsoluteSiblings(
       (void)Branch;
       ++ConsumersPerBase[Base];
     }
-    if (ConsumersPerBase.size() != RunCapacities.size() ||
-        !std::all_of(ConsumersPerBase.begin(), ConsumersPerBase.end(),
-                     [](const auto &Entry) { return Entry.second == 2; }))
+    if (ConsumersPerBase.size() != RunCapacities.size())
       return false;
     if (!Charge(TotalSlotCount * 4 + 8))
       return Incomplete();
