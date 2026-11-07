@@ -542,6 +542,15 @@ generalized unknown. Cached input fields outside the conditional mask are not
 additional requirements on such an edge. The four-summary and resource budgets
 remain unchanged.
 
+Branch bounds also constrain live copies with the same singleton entry-relative
+origin or immutable capture. Identical numeric ranges alone do not establish
+this relation. An adjacent full-width left/right shift pair can preserve the
+origin when the input bounds prove that the left shift discards no bits. The
+transfer witness stays within one basic block and is discarded across any
+intervening instruction. Truncated high bits, independent origins and alternate
+entries do not acquire equality. Solver and evidence replay share this rule;
+it adds no retained context state or additional specialization slots.
+
 At the four-variant limit, a completed specialized summary can also cover a
 narrower, nonwrapping numeric interval. Only an unknown or containing numeric
 input permits this reuse; pointer identities and other input facts still agree,

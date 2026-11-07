@@ -256,6 +256,13 @@ void widenCapturedValues(ContextState &State,
   State.Postconditions.transformSymbols(Widen);
 }
 
+// Formal entry-relative origins and immutable captures name one value.
+// Equal scalar ranges or independent finite alternatives do not prove equality.
+bool hasValueIdentity(const RegisterValue &Origin) {
+  return Origin.ValueKind == RegisterValue::Kind::StackAddress ||
+         Origin.ValueKind == RegisterValue::Kind::SymbolicAddress;
+}
+
 /// Narrow only scalar, unsigned comparisons. Unknown scalars acquire bounds
 /// here only when the comparison constrains a potential heap address. This
 /// domain does not introduce ordinary integer-range fixed points.
@@ -370,13 +377,20 @@ bool refineAddressBranch(const MedInstruction *Last, size_t Successor,
       Refined->join(Narrowed);
   }
   if (Reachable) {
-    State.Registers[Register] = *Refined;
-    if (llvm::all_of(Refined->values(), [](const RegisterValue &Value) {
+    const auto Origin = State.Origins[Register].singleton();
+    const bool ScalarOrigin =
+        llvm::all_of(Refined->values(), [](const RegisterValue &Value) {
           return Value.ValueKind == RegisterValue::Kind::Constant ||
                  Value.ValueKind == RegisterValue::Kind::UnsignedRange ||
                  Value.ValueKind == RegisterValue::Kind::SymbolicAddress;
-        }))
-      State.Origins[Register] = *Refined;
+        });
+    for (unsigned R = 0; R < kRegisterCount; ++R)
+      if (R == Register || (hasValueIdentity(Origin) &&
+                            State.Origins[R].singleton() == Origin)) {
+        State.Registers[R] = *Refined;
+        if (ScalarOrigin)
+          State.Origins[R] = *Refined;
+      }
   }
   return Reachable;
 }
@@ -3516,6 +3530,16 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
                                          size_t BlockID, ContextState &State,
                                          uint16_t &Defined, bool Collect) {
   const MedBlock &Block = Program.Med.Blocks[BlockID];
+  struct ShiftedOrigin {
+    size_t Slot;
+    unsigned Register;
+    uint64_t Amount;
+    RegisterValue Origin;
+  };
+  // An adjacent inverse shift pair in this block can preserve an origin when
+  // the left shift loses no bits. Keep only this local transfer witness; an
+  // alternate block entry or intervening instruction cannot inherit it.
+  std::optional<ShiftedOrigin> PreviousShift;
   MissingRegisters Missing;
   if (Collect)
     for (unsigned R = 0; R < kRegisterCount; ++R)
@@ -3534,6 +3558,31 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
     if (auto Error = visit())
       return std::move(Error);
     refineOrigins(Context, State);
+    const auto Shift = std::exchange(PreviousShift, std::nullopt);
+    std::optional<RegisterValue> RestoredOrigin;
+    if (Instruction->Width == kDoubleWordBitWidth &&
+        Instruction->Form == OperandForm::DstImm &&
+        (Instruction->Op == Operation::LSh ||
+         Instruction->Op == Operation::RSh)) {
+      const uint64_t Amount = normalizeImmediate(
+          Instruction->Immediate, Instruction->Semantics.Immediate);
+      if (Instruction->Op == Operation::RSh && Shift &&
+          Shift->Slot + 1 == Slot && Shift->Register == Instruction->Dst &&
+          Shift->Amount == Amount)
+        RestoredOrigin = Shift->Origin;
+      if (Instruction->Op == Operation::LSh) {
+        const auto Origin = State.Origins[Instruction->Dst].singleton();
+        const auto &Values = State.Registers[Instruction->Dst];
+        // The owning instruction validator bounds immediate shifts to 0..63.
+        if (hasValueIdentity(Origin) && !Values.unknown() &&
+            llvm::all_of(Values.values(), [&](const RegisterValue &Value) {
+              const auto Bounds =
+                  unsignedValueRange(Value, CapturedAddresses.get());
+              return Bounds && Bounds->Upper <= (UINT64_MAX >> Amount);
+            }))
+          PreviousShift = ShiftedOrigin{Slot, Instruction->Dst, Amount, Origin};
+      }
+    }
     if (Collect && Instruction->Op == Operation::CallX &&
         Instruction->Call == CallKind::Indirect) {
       auto Site = evidence(Context, *Instruction, State, Missing,
@@ -3622,6 +3671,8 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
         if (auto Error = transferInputExpression(*Instruction, State))
           return std::move(Error);
       transfer(*Instruction, State, Collect ? &Missing : nullptr);
+      if (RestoredOrigin)
+        State.Origins[Instruction->Dst] = *RestoredOrigin;
     }
   }
   return true;
