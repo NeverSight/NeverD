@@ -121,6 +121,84 @@ static bool isTrapFreeIntegerUnaryOp(NdOp Op) {
   }
 }
 
+// This node's evaluation is discardable exactly when its operands are too.
+// Both the bounded query and the shared cleanup analysis use this contract.
+static bool discardableIntegerNode(const HighExpr *E) {
+  if (!E)
+    return false;
+  if (!E->Type || !E->Type->Size || E->IntrinsicId != Intrinsic::None ||
+      !E->IntrinsicOutputs.empty() || E->IndirectTarget ||
+      E->MemoryOrdering != NdMemoryOrdering::None ||
+      E->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return false;
+  switch (E->Kind) {
+  case ExprKind::Var:
+  case ExprKind::Const:
+  case ExprKind::Undef:
+    if (!E->Operands.empty())
+      return false;
+    break;
+  case ExprKind::BitCast:
+    // A reinterpretation of the same bytes.
+    if (E->Operands.size() != 1 || !E->Operands[0] || !E->Operands[0]->Type ||
+        E->Operands[0]->Type->Size != E->Type->Size)
+      return false;
+    break;
+  case ExprKind::Cast:
+  case ExprKind::UnaryOp:
+    if (E->Kind == ExprKind::UnaryOp && isTrapFreeFloatOp(E->Op) &&
+        E->Operands.size() == 1 && E->Operands[0])
+      break;
+    if (E->Type->Kind != NdTypeKind::Int || E->Operands.size() != 1 ||
+        !E->Operands[0] || !E->Operands[0]->Type ||
+        E->Operands[0]->Type->Kind != NdTypeKind::Int)
+      return false;
+    if (E->Kind == ExprKind::UnaryOp &&
+        (!isTrapFreeIntegerUnaryOp(E->Op) ||
+         ((E->Op == NdOp::INT_ZEXT || E->Op == NdOp::INT_SEXT) &&
+          E->Type->Size < E->Operands[0]->Type->Size)))
+      return false;
+    break;
+  case ExprKind::BinOp:
+    if (E->Op == NdOp::SELECT) {
+      if (E->Type->Kind != NdTypeKind::Int || E->Operands.size() != 3)
+        return false;
+      for (unsigned I = 0; I < 3; ++I) {
+        const auto &Operand = E->Operands[I];
+        if (!Operand || !Operand->Type ||
+            Operand->Type->Kind != NdTypeKind::Int || !Operand->Type->Size ||
+            (I && Operand->Type->Size != E->Type->Size))
+          return false;
+      }
+      break;
+    }
+    if (isTrapFreeFloatOp(E->Op) && E->Operands.size() == 2 && E->Operands[0] &&
+        E->Operands[1])
+      break;
+    if (E->Type->Kind != NdTypeKind::Int || E->Operands.size() != 2 ||
+        !E->Operands[0] || !E->Operands[0]->Type ||
+        E->Operands[0]->Type->Kind != NdTypeKind::Int || !E->Operands[1] ||
+        !E->Operands[1]->Type || E->Operands[1]->Type->Kind != NdTypeKind::Int)
+      return false;
+    if (E->Op == NdOp::CONCAT) {
+      if (E->Type->Size !=
+          E->Operands[0]->Type->Size + E->Operands[1]->Type->Size)
+        return false;
+    } else if (E->Op == NdOp::SUBBYTES) {
+      if (E->Operands[1]->Kind != ExprKind::Const ||
+          E->Operands[1]->ConstVal > E->Operands[0]->Type->Size ||
+          E->Type->Size > E->Operands[0]->Type->Size - E->Operands[1]->ConstVal)
+        return false;
+    } else if (!isTrapFreeIntegerBinOp(E->Op)) {
+      return false;
+    }
+    break;
+  default:
+    return false;
+  }
+  return true;
+}
+
 // Only remove or slice values whose evaluation cannot read memory, trap or
 // call another function. Unknown bits may be discarded only when their exact
 // bytes have no reads; this never supplies a replacement bit value.
@@ -135,70 +213,43 @@ bool discardableIntegerValue(const ExprPtr &Root, size_t &Budget) {
     if (!Seen.insert(E).second)
       continue;
     --Budget;
-    if (!E->Type || !E->Type->Size || E->IntrinsicId != Intrinsic::None ||
-        !E->IntrinsicOutputs.empty() ||
-        E->MemoryOrdering != NdMemoryOrdering::None ||
-        E->MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    if (!discardableIntegerNode(E))
       return false;
-    switch (E->Kind) {
-    case ExprKind::Var:
-    case ExprKind::Const:
-    case ExprKind::Undef:
-      if (!E->Operands.empty())
-        return false;
-      break;
-    case ExprKind::BitCast:
-      // A reinterpretation of the same bytes.
-      if (E->Operands.size() != 1 || !E->Operands[0] || !E->Operands[0]->Type ||
-          E->Operands[0]->Type->Size != E->Type->Size)
-        return false;
-      break;
-    case ExprKind::Cast:
-    case ExprKind::UnaryOp:
-      if (E->Kind == ExprKind::UnaryOp && isTrapFreeFloatOp(E->Op) &&
-          E->Operands.size() == 1 && E->Operands[0])
-        break;
-      if (E->Type->Kind != NdTypeKind::Int || E->Operands.size() != 1 ||
-          !E->Operands[0] || !E->Operands[0]->Type ||
-          E->Operands[0]->Type->Kind != NdTypeKind::Int)
-        return false;
-      if (E->Kind == ExprKind::UnaryOp &&
-          (!isTrapFreeIntegerUnaryOp(E->Op) ||
-           ((E->Op == NdOp::INT_ZEXT || E->Op == NdOp::INT_SEXT) &&
-            E->Type->Size < E->Operands[0]->Type->Size)))
-        return false;
-      break;
-    case ExprKind::BinOp:
-      if (isTrapFreeFloatOp(E->Op) && E->Operands.size() == 2 &&
-          E->Operands[0] && E->Operands[1])
-        break;
-      if (E->Type->Kind != NdTypeKind::Int || E->Operands.size() != 2 ||
-          !E->Operands[0] || !E->Operands[0]->Type ||
-          E->Operands[0]->Type->Kind != NdTypeKind::Int || !E->Operands[1] ||
-          !E->Operands[1]->Type ||
-          E->Operands[1]->Type->Kind != NdTypeKind::Int)
-        return false;
-      if (E->Op == NdOp::CONCAT) {
-        if (E->Type->Size !=
-            E->Operands[0]->Type->Size + E->Operands[1]->Type->Size)
-          return false;
-      } else if (E->Op == NdOp::SUBBYTES) {
-        if (E->Operands[1]->Kind != ExprKind::Const ||
-            E->Operands[1]->ConstVal > E->Operands[0]->Type->Size ||
-            E->Type->Size >
-                E->Operands[0]->Type->Size - E->Operands[1]->ConstVal)
-          return false;
-      } else if (!isTrapFreeIntegerBinOp(E->Op)) {
-        return false;
-      }
-      break;
-    default:
-      return false;
-    }
     for (const auto &Operand : E->Operands)
       Pending.push_back(Operand.get());
   }
   return true;
+}
+
+bool DiscardableIntegerValues::canDiscard(const ExprPtr &Root) {
+  if (!Root)
+    return false;
+  std::vector<std::pair<ExprPtr, bool>> Pending{{Root, false}};
+  while (!Pending.empty()) {
+    auto [Value, After] = std::move(Pending.back());
+    Pending.pop_back();
+    if (After) {
+      bool Discardable = true;
+      for (const auto &Operand : Value->Operands) {
+        const auto It = States.find(Operand);
+        Discardable &= It != States.end() && It->second == State::Discardable;
+      }
+      States.at(Value) = Discardable ? State::Discardable : State::Required;
+      continue;
+    }
+    auto [It, Added] = States.try_emplace(Value, State::Visiting);
+    if (!Added)
+      continue;
+    if (!discardableIntegerNode(Value.get())) {
+      It->second = State::Required;
+      continue;
+    }
+    Pending.emplace_back(Value, true);
+    for (const auto &Operand : Value->Operands)
+      if (!States.count(Operand))
+        Pending.emplace_back(Operand, false);
+  }
+  return States.at(Root) == State::Discardable;
 }
 
 bool harmlessIntegerValue(const ExprPtr &Root, size_t &Budget) {

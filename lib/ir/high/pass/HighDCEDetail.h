@@ -85,12 +85,22 @@ void narrowSourceConcatLocals(HighFunc &Func);
 /// that zero-extended prefix, dropping only pure upper bytes.
 void narrowUnreadRegisterBytes(HighFunc &Func,
                                Arch Architecture = Arch::Unknown);
-/// Replace with zero each unknown entry register or undefined value that no
-/// observable result reads a byte of (HighDemandedBytes.cpp).
+/// Propagate exact observed bits through definitions, project unread integer
+/// computations, and zero unknown leaves with no observed bit. Effects stay.
 void zeroUndemandedUnknownBytes(HighFunc &Func, Arch Architecture);
 /// Whether evaluating an unused integer value can be discarded without a
 /// memory access, call, or trap. This never supplies values for unknown bits.
 bool discardableIntegerValue(const ExprPtr &Root, size_t &Budget);
+/// Reuse the same discardability proof across an expression-cleanup pass.
+/// Classified nodes stay alive; rewrites may discard effects but must not
+/// introduce an effect into a value already proved discardable.
+class DiscardableIntegerValues {
+  enum class State { Visiting, Required, Discardable };
+  std::unordered_map<ExprPtr, State> States;
+
+public:
+  bool canDiscard(const ExprPtr &Root);
+};
 /// Whether an integer value may go unevaluated: arithmetic, bit operations,
 /// comparisons and selections of locals and constants, which cannot access
 /// memory, call, divide or trap.

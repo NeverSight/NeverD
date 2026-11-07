@@ -21411,3 +21411,5 @@ global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
 
 `HighControlFlowSemantics.SimplifierPublishesSharedReplacementAtEveryUse` checks shared DAG replacement publication in both root orders, independent return values and a stable second cleanup invocation.
+
+HighExprSimplify exact-demand regressions independently check multiple readers, renamed local identities, loop arrivals, integer conversions, predicate scaling and compiled source. Deep discardability retains loads, calls, ordered accesses, malformed selections and possibly trapping division even when their result is unused. The current upstream wrapped-difference equality semantics are preserved.

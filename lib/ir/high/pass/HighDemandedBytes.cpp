@@ -1,4 +1,4 @@
-//===- HighDemandedBytes.cpp - Bytes no observable result reads -----------===//
+//===- HighDemandedBytes.cpp - Demanded integer bits ----------------------===//
 //
 // NeverD Decompiler
 //
@@ -9,12 +9,12 @@
 // upper half an SSE conversion keeps, prints its unknown bytes as a trap even
 // where no store, call, return, branch or trap ever depends on them.
 //
-// This pass finds which bytes of each value an observable use depends on,
+// This pass finds which bits of each value an observable use depends on,
 // walking back from those uses through truncations, extensions, byte merges,
 // constant masks, constant shifts and carries, and through each variable to
-// its definitions.  An unknown leaf none of whose bytes any use depends on
-// becomes zero.  A leaf with one demanded byte keeps its trap: the pass never
-// supplies a value a result can observe.
+// its definitions. An unknown leaf with no observed bit becomes zero; other
+// pure definitions reuse integer bit projection. Observed unknown bits, calls,
+// loads and possible traps retain their evaluation.
 //
 //===----------------------------------------------------------------------===//
 
@@ -22,14 +22,19 @@
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/high/HighIR.h"
+#include "neverd/ir/high/HighIntegerProjection.h"
+#include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/intrinsics/X86/X86VectorLaneReads.h"
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/bit.h"
 
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -37,11 +42,14 @@
 namespace neverd {
 namespace {
 
-/// One bit per byte of a value; a value wider than 64 bytes demands all.
-using ByteMask = uint64_t;
+/// Keep the previous 64-byte extent, but retain each bit within that extent.
+/// Coalescing a flag read to a byte would keep PF/AF/SF alive with CF and ZF.
+using BitMask = llvm::APInt;
+constexpr unsigned kDemandBits = 64 * 8;
 
-ByteMask allBytes(uint16_t Bytes) {
-  return Bytes == 0 || Bytes >= 64 ? ~ByteMask{0} : (ByteMask{1} << Bytes) - 1;
+BitMask allBytes(uint16_t Bytes) {
+  return BitMask::getLowBitsSet(kDemandBits, !Bytes || Bytes >= 64 ? kDemandBits
+                                                                   : Bytes * 8);
 }
 
 uint16_t exprBytes(const HighExpr &E) {
@@ -50,66 +58,42 @@ uint16_t exprBytes(const HighExpr &E) {
   return E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi ? E.Var.Size : 0;
 }
 
-/// The bytes at or below the highest demanded one: a sum, difference,
+/// The bits at or below the highest demanded one: a sum, difference,
 /// product or negation carries only upward.
-ByteMask carryFill(ByteMask Demand) {
-  return Demand
-             ? allBytes(static_cast<uint16_t>(64 - llvm::countl_zero(Demand)))
-             : 0;
+BitMask carryFill(const BitMask &Demand) {
+  return BitMask::getLowBitsSet(kDemandBits, Demand.getActiveBits());
 }
 
-/// The bytes of \p Value that are not zero, in a \p Bytes wide operand.
-ByteMask nonzeroBytes(uint64_t Value, uint16_t Bytes) {
-  ByteMask Mask = 0;
-  for (unsigned I = 0; I < 8 && I < Bytes; ++I)
-    if ((Value >> (8 * I)) & 0xFF)
-      Mask |= ByteMask{1} << I;
-  // A constant wider than 8 bytes zero-extends.
-  return Mask;
+/// The nonzero bits of \p Value, in a \p Bytes wide operand.
+BitMask nonzeroBytes(uint64_t Value, uint16_t Bytes) {
+  return BitMask(kDemandBits, Value) & allBytes(Bytes);
 }
 
-/// The operand bytes a left shift by \p Bits reads for the result bytes in
+/// The operand bits a left shift by \p Bits reads for the result bits in
 /// \p Demand: result bit b is operand bit b - Bits.
-ByteMask leftShiftSource(ByteMask Demand, uint64_t Bits, uint16_t Bytes) {
-  ByteMask Source = 0;
-  for (unsigned I = 0; I < 64 && I < Bytes; ++I) {
-    if (!(Demand >> I & 1))
-      continue;
-    const int64_t Low = int64_t(8 * I) - int64_t(Bits);
-    const int64_t High = Low + 7;
-    for (int64_t Bit = std::max<int64_t>(Low, 0); Bit <= High; Bit += 8)
-      Source |= ByteMask{1} << (Bit / 8);
-    if (High >= 0)
-      Source |= ByteMask{1} << (High / 8);
-  }
-  return Source & allBytes(Bytes);
+BitMask leftShiftSource(const BitMask &Demand, uint64_t Bits, uint16_t Bytes) {
+  return Bits >= kDemandBits ? BitMask(kDemandBits, 0)
+                             : Demand.lshr(Bits) & allBytes(Bytes);
 }
 
-/// The operand bytes a right shift by \p Bits reads for the result bytes in
+/// The operand bits a right shift by \p Bits reads for the result bits in
 /// \p Demand: result bit b is operand bit b + Bits, or the sign for an
 /// arithmetic shift past the top.
-ByteMask rightShiftSource(ByteMask Demand, uint64_t Bits, uint16_t Bytes,
-                          bool Arithmetic) {
-  ByteMask Source = 0;
+BitMask rightShiftSource(const BitMask &Demand, uint64_t Bits, uint16_t Bytes,
+                         bool Arithmetic) {
+  BitMask Source(kDemandBits, 0);
   const uint64_t Top = uint64_t(Bytes) * 8;
-  for (unsigned I = 0; I < 64 && I < Bytes; ++I) {
-    if (!(Demand >> I & 1))
-      continue;
-    const uint64_t Low = uint64_t(8 * I) + Bits;
-    const uint64_t High = Low + 7;
-    if (Low < Top)
-      Source |= ByteMask{1} << (Low / 8);
-    if (High < Top)
-      Source |= ByteMask{1} << (High / 8);
-    if (Arithmetic && High >= Top)
-      Source |= ByteMask{1} << (Bytes - 1);
-  }
+  if (Bits < kDemandBits)
+    Source = Demand.shl(Bits) & allBytes(Bytes);
+  if (Arithmetic && Top && Top <= kDemandBits &&
+      (Bits >= Top ? !Demand.isZero() : Demand.getActiveBits() > Top - Bits))
+    Source.setBit(Top - 1);
   return Source & allBytes(Bytes);
 }
 
-class DemandedBytes {
+class DemandedBits {
 public:
-  DemandedBytes(HighFunc &Func, Arch Architecture)
+  DemandedBits(HighFunc &Func, Arch Architecture)
       : Func(Func), Architecture(Architecture) {}
 
   void run() {
@@ -123,19 +107,20 @@ public:
     if (!Budget)
       return;
     replaceUndemandedLeaves();
+    projectDefinitions();
   }
 
 private:
   HighFunc &Func;
   Arch Architecture;
   size_t Budget = ::neverd::limits::ir::kHighDemandedBytesVisitBudget;
-  std::unordered_map<const HighExpr *, ByteMask> NodeDemand;
-  VarKeyMap<ByteMask> VarDemand;
-  VarKeyMap<std::vector<const HighExpr *>> Definitions;
-  VarKeySet Assigned;
+  std::unordered_map<const HighExpr *, BitMask> NodeDemand;
+  std::map<HighSourceLocalIdentity, BitMask> VarDemand;
+  std::map<HighSourceLocalIdentity, std::vector<const HighExpr *>> Definitions;
+  std::set<HighSourceLocalIdentity> Assigned;
   /// Variables a join copy assigns: their definitions need not cover every
   /// path that reaches a use.
-  VarKeySet JoinCopied;
+  std::set<HighSourceLocalIdentity> JoinCopied;
   std::vector<const HighExpr *> Pending;
 
   /// A register, flag or temporary, which only its uses read.  A stack slot
@@ -150,11 +135,11 @@ private:
     walkStmts(Func.Body, [&](HighStmt &S) {
       if (S.Kind != StmtKind::Assign || !S.Dst || S.Dst->Kind != ExprKind::Var)
         return;
-      Assigned.insert(varKey(S.Dst->Var));
+      Assigned.insert(highSourceLocalIdentity(S.Dst->Var));
       if (S.IsPhiCopy)
-        JoinCopied.insert(varKey(S.Dst->Var));
+        JoinCopied.insert(highSourceLocalIdentity(S.Dst->Var));
       if (S.Val && readOnlyByUses(S.Dst->Var))
-        Definitions[varKey(S.Dst->Var)].push_back(S.Val.get());
+        Definitions[highSourceLocalIdentity(S.Dst->Var)].push_back(S.Val.get());
     });
   }
 
@@ -162,8 +147,8 @@ private:
   /// a concatenation or zero extension of constants, or a variable assigned
   /// once to one (a vector mask built from two halves, `vand q, q9` after
   /// `vmov.i32 q9, #0xff`).
-  std::optional<ByteMask> constantNonzeroBytes(const HighExpr &E,
-                                               unsigned Depth) const {
+  std::optional<BitMask> constantNonzeroBits(const HighExpr &E,
+                                             unsigned Depth) const {
     if (Depth > ::neverd::limits::ir::kHighDemandedBytesMaxConstantMaskDepth)
       return std::nullopt;
     if (E.Kind == ExprKind::Const)
@@ -173,31 +158,31 @@ private:
       const uint16_t LowBytes = exprBytes(*E.Operands[1]);
       if (!LowBytes || LowBytes >= 64)
         return std::nullopt;
-      const auto High = constantNonzeroBytes(*E.Operands[0], Depth + 1);
-      const auto Low = constantNonzeroBytes(*E.Operands[1], Depth + 1);
+      const auto High = constantNonzeroBits(*E.Operands[0], Depth + 1);
+      const auto Low = constantNonzeroBits(*E.Operands[1], Depth + 1);
       if (!High || !Low)
         return std::nullopt;
-      return (*Low & allBytes(LowBytes)) | (*High << LowBytes);
+      return (*Low & allBytes(LowBytes)) | (*High << (LowBytes * 8));
     }
     if (E.Kind == ExprKind::UnaryOp && E.Op == NdOp::INT_ZEXT &&
         E.Operands.size() == 1 && E.Operands[0])
-      return constantNonzeroBytes(*E.Operands[0], Depth + 1);
+      return constantNonzeroBits(*E.Operands[0], Depth + 1);
     // One assignment defines the variable everywhere: an incoming value has
     // none, and a join whose entry edge brings one is a join copy.
     if ((E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) &&
-        !JoinCopied.count(varKey(E.Var))) {
-      const auto It = Definitions.find(varKey(E.Var));
+        !JoinCopied.count(highSourceLocalIdentity(E.Var))) {
+      const auto It = Definitions.find(highSourceLocalIdentity(E.Var));
       if (It != Definitions.end() && It->second.size() == 1 && It->second[0])
-        return constantNonzeroBytes(*It->second[0], Depth + 1);
+        return constantNonzeroBits(*It->second[0], Depth + 1);
     }
     return std::nullopt;
   }
 
-  void demand(const HighExpr *E, ByteMask Mask) {
-    if (!E || !Mask || !Budget)
+  void demand(const HighExpr *E, BitMask Mask) {
+    if (!E || Mask.isZero() || !Budget)
       return;
     --Budget;
-    ByteMask &Current = NodeDemand[E];
+    auto &Current = NodeDemand.try_emplace(E, kDemandBits, 0).first->second;
     if ((Current | Mask) == Current)
       return;
     Current |= Mask;
@@ -254,7 +239,10 @@ private:
         seedObservableEvaluations(Root);
         if (DefinesVar && &Root == &S.Dst)
           return;
-        if (DefinesVar && &Root == &S.Val && readOnlyByUses(S.Dst->Var))
+        // Assignment can itself extend or truncate a value. Keep that whole
+        // value unless its bit positions match the destination's exactly.
+        if (DefinesVar && &Root == &S.Val && readOnlyByUses(S.Dst->Var) &&
+            Root && exprBytes(*S.Dst) == exprBytes(*Root))
           return;
         // A function returns its value as its return type: `return v;` of
         // an int32_t v in an int8_t function reads v's low byte.
@@ -281,7 +269,11 @@ private:
       if (C && E.Kind == ExprKind::Call && E.IntrinsicId != Intrinsic::None)
         if (const auto Read =
                 x86VectorOperandReadBytes(E.IntrinsicId, exprBytes(*C))) {
-          demand(C.get(), *Read);
+          BitMask Bits(kDemandBits, 0);
+          for (unsigned I = 0; I != 64; ++I)
+            if ((*Read >> I) & 1)
+              Bits.setBits(I * 8, (I + 1) * 8);
+          demand(C.get(), std::move(Bits));
           return;
         }
       demandAll(C);
@@ -304,9 +296,17 @@ private:
   }
 
   void propagate(const HighExpr &E) {
-    const ByteMask D = NodeDemand[&E];
+    const auto &D = NodeDemand.at(&E);
     if (observableEvaluation(E)) {
       demandOperandsOf(E);
+      return;
+    }
+    if (E.Kind != ExprKind::Var && E.Kind != ExprKind::Phi &&
+        (exprBytes(E) > 64 || std::any_of(E.Operands.begin(), E.Operands.end(),
+                                          [](const ExprPtr &P) {
+                                            return P && exprBytes(*P) > 64;
+                                          }))) {
+      E.forEachChildExpr([&](const ExprPtr &C) { demandAll(C); });
       return;
     }
     switch (E.Kind) {
@@ -315,11 +315,13 @@ private:
       E.forEachChildExpr([&](const ExprPtr &C) { demand(C.get(), D); });
       [[fallthrough]];
     case ExprKind::Var: {
-      ByteMask &Current = VarDemand[varKey(E.Var)];
+      auto &Current =
+          VarDemand.try_emplace(highSourceLocalIdentity(E.Var), kDemandBits, 0)
+              .first->second;
       if ((Current | D) == Current)
         return;
       Current |= D;
-      const auto It = Definitions.find(varKey(E.Var));
+      const auto It = Definitions.find(highSourceLocalIdentity(E.Var));
       if (It != Definitions.end())
         for (const HighExpr *Value : It->second)
           demand(Value, Current);
@@ -349,7 +351,7 @@ private:
     return E && E->Type && E->Type->Kind == NdTypeKind::Int;
   }
 
-  void propagateUnary(const HighExpr &E, ByteMask D) {
+  void propagateUnary(const HighExpr &E, BitMask D) {
     const ExprPtr Only = E.Operands.size() == 1 ? E.Operands[0] : nullptr;
     if (!integer(Only) || !E.Type || E.Type->Kind != NdTypeKind::Int) {
       E.forEachChildExpr([&](const ExprPtr &C) { demandAll(C); });
@@ -360,11 +362,12 @@ private:
     case NdOp::INT_ZEXT:
       demand(Only.get(), D & allBytes(Bytes));
       return;
-    case NdOp::INT_SEXT:
-      demand(
-          Only.get(),
-          (D & allBytes(Bytes)) |
-              (D & ~allBytes(Bytes) && Bytes ? ByteMask{1} << (Bytes - 1) : 0));
+    case NdOp::INT_SEXT: {
+      auto Source = D & allBytes(Bytes);
+      if (Bytes && Bytes <= 64 && !(D & ~allBytes(Bytes)).isZero())
+        Source.setBit(Bytes * 8 - 1);
+      demand(Only.get(), std::move(Source));
+    }
       return;
     case NdOp::INT_NOT:
       demand(Only.get(), D & allBytes(Bytes));
@@ -378,7 +381,7 @@ private:
     }
   }
 
-  void propagateCast(const HighExpr &E, ByteMask D) {
+  void propagateCast(const HighExpr &E, BitMask D) {
     const ExprPtr Only = E.Operands.size() == 1 ? E.Operands[0] : nullptr;
     if (!integer(Only) || !E.Type || E.Type->Kind != NdTypeKind::Int) {
       E.forEachChildExpr([&](const ExprPtr &C) { demandAll(C); });
@@ -392,13 +395,23 @@ private:
     }
     // A truncation keeps the low bytes; an extension adds bytes made of the
     // operand's sign (or of zero), which its top byte decides.
-    ByteMask Source = D & allBytes(std::min(From, To));
-    if (To > From && (D & ~allBytes(From)))
-      Source |= ByteMask{1} << (From - 1);
+    BitMask Source = D & allBytes(std::min(From, To));
+    if (To > From && From <= 64 && !(D & ~allBytes(From)).isZero())
+      Source.setBit(From * 8 - 1);
     demand(Only.get(), Source);
   }
 
-  void propagateBinary(const HighExpr &E, ByteMask D) {
+  void propagateBinary(const HighExpr &E, BitMask D) {
+    if (E.Op == NdOp::SELECT && E.Operands.size() == 3 &&
+        integer(E.Operands[1]) && integer(E.Operands[2]) && E.Type &&
+        E.Type->Kind == NdTypeKind::Int &&
+        exprBytes(*E.Operands[1]) == exprBytes(E) &&
+        exprBytes(*E.Operands[2]) == exprBytes(E)) {
+      demandAll(E.Operands[0]);
+      demand(E.Operands[1].get(), D);
+      demand(E.Operands[2].get(), D);
+      return;
+    }
     if (E.Operands.size() != 2 || !integer(E.Operands[0]) || !E.Operands[1] ||
         !E.Type || E.Type->Kind != NdTypeKind::Int) {
       E.forEachChildExpr([&](const ExprPtr &C) { demandAll(C); });
@@ -413,7 +426,7 @@ private:
     switch (E.Op) {
     case NdOp::SUBBYTES:
       if (Constant(R) && R->ConstVal < 64) {
-        demand(L.get(), (D << R->ConstVal) & allBytes(Bytes));
+        demand(L.get(), (D << (R->ConstVal * 8)) & allBytes(Bytes));
         return;
       }
       break;
@@ -423,19 +436,20 @@ private:
       if (!Low || !integer(R))
         break;
       demand(R.get(), D & allBytes(Low));
-      demand(L.get(), Low < 64 ? (D >> Low) & allBytes(Bytes) : 0);
+      demand(L.get(), Low < 64 ? D.lshr(Low * 8) & allBytes(Bytes)
+                               : BitMask(kDemandBits, 0));
       return;
     }
     case NdOp::INT_AND:
       // A byte a constant mask clears is no byte of the other operand.
-      if (const auto Mask = constantNonzeroBytes(*R, 0)) {
+      if (const auto Mask = constantNonzeroBits(*R, 0)) {
         demand(L.get(), D & *Mask);
         if (!Constant(R))
           demand(R.get(), D & allBytes(exprBytes(*R)));
         return;
       }
       if (integer(R))
-        if (const auto Mask = constantNonzeroBytes(*L, 0)) {
+        if (const auto Mask = constantNonzeroBits(*L, 0)) {
           demand(R.get(), D & *Mask);
           if (!Constant(L))
             demand(L.get(), D & allBytes(Bytes));
@@ -449,9 +463,28 @@ private:
       demand(L.get(), D & allBytes(Bytes));
       demand(R.get(), D & allBytes(exprBytes(*R)));
       return;
+    case NdOp::INT_MULT:
+      // An exact same-width power-of-two product is a left shift. General
+      // carry demand would keep every lower predicate bit alive even when
+      // the consumer reads only higher fields of a packed word.
+      for (unsigned I = 0; I != 2; ++I) {
+        const auto &Factor = E.Operands[I];
+        const auto &Value = E.Operands[1 - I];
+        if (!exprBytes(E) || !Constant(Factor) || !Factor->Operands.empty() ||
+            !integer(Factor) || !integer(Value) ||
+            exprBytes(*Factor) != exprBytes(E) ||
+            exprBytes(*Value) != exprBytes(E))
+          continue;
+        const BitMask Scale = nonzeroBytes(Factor->ConstVal, exprBytes(E));
+        if (!Scale.isPowerOf2())
+          continue;
+        demand(Value.get(),
+               leftShiftSource(D, Scale.countr_zero(), exprBytes(*Value)));
+        return;
+      }
+      [[fallthrough]];
     case NdOp::INT_ADD:
     case NdOp::INT_SUB:
-    case NdOp::INT_MULT:
       demand(L.get(), carryFill(D) & allBytes(Bytes));
       demand(R.get(), carryFill(D) & allBytes(exprBytes(*R)));
       return;
@@ -463,7 +496,7 @@ private:
       llvm::SmallVector<uint64_t, 2> Amounts;
       if (!shiftAmounts(*R, Amounts, 0))
         break;
-      ByteMask Source = 0;
+      BitMask Source(kDemandBits, 0);
       for (const uint64_t Amount : Amounts)
         Source |=
             E.Op == NdOp::INT_LEFT
@@ -506,7 +539,7 @@ private:
     }
     if (Count.Kind != ExprKind::Var || !readOnlyByUses(Count.Var))
       return false;
-    const auto It = Definitions.find(varKey(Count.Var));
+    const auto It = Definitions.find(highSourceLocalIdentity(Count.Var));
     if (It == Definitions.end() || It->second.empty())
       return false;
     for (const HighExpr *Value : It->second)
@@ -522,7 +555,8 @@ private:
       return true;
     if (E.Kind != ExprKind::Var ||
         (E.Var.Kind != MedVar::Reg && E.Var.Kind != MedVar::Flag) ||
-        E.Var.SSAVer != 0 || E.Var.Id < 0 || Assigned.count(varKey(E.Var)) ||
+        E.Var.SSAVer != 0 || E.Var.Id < 0 ||
+        Assigned.count(highSourceLocalIdentity(E.Var)) ||
         isSyntheticEntryStackPointer(E.Var, Func, Architecture))
       return false;
     for (const HighParam &Param : Func.Params)
@@ -544,7 +578,7 @@ private:
       if (!Slot || !unknownLeaf(*Slot) || !exprBytes(*Slot))
         return;
       const auto It = NodeDemand.find(Slot.get());
-      if (It != NodeDemand.end() && It->second)
+      if (It != NodeDemand.end() && !It->second.isZero())
         return;
       Slot = Zero(Slot);
     };
@@ -566,11 +600,28 @@ private:
       if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var &&
           readOnlyByUses(S.Dst->Var) && S.Val && unknownLeaf(*S.Val) &&
           exprBytes(*S.Val)) {
-        const auto It = VarDemand.find(varKey(S.Dst->Var));
-        if (It == VarDemand.end() || !It->second)
+        const auto It = VarDemand.find(highSourceLocalIdentity(S.Dst->Var));
+        if (It == VarDemand.end() || It->second.isZero())
           S.Val = Zero(S.Val);
       }
       forEachExpr(S, [&](const ExprPtr &Root) { Visit(Root); });
+    });
+  }
+
+  void projectDefinitions() {
+    walkStmts(Func.Body, [&](HighStmt &S) {
+      if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
+          S.Dst->Kind != ExprKind::Var || !readOnlyByUses(S.Dst->Var) ||
+          !integer(S.Val) || !exprBytes(*S.Val) || exprBytes(*S.Val) > 8 ||
+          exprBytes(*S.Dst) != exprBytes(*S.Val))
+        return;
+      const auto At = VarDemand.find(highSourceLocalIdentity(S.Dst->Var));
+      if (At == VarDemand.end())
+        return; // Ordinary DCE owns definitions without any readers.
+      const auto Mask = At->second & allBytes(exprBytes(*S.Val));
+      if (Mask == allBytes(exprBytes(*S.Val)))
+        return;
+      S.Val = projectHighIntegerBits(S.Val, Mask.getZExtValue());
     });
   }
 };
@@ -580,7 +631,7 @@ private:
 void zeroUndemandedUnknownBytes(HighFunc &Func, Arch Architecture) {
   if (Architecture == Arch::Unknown)
     return;
-  DemandedBytes(Func, Architecture).run();
+  DemandedBits(Func, Architecture).run();
 }
 
 } // namespace neverd
