@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../core/SourceCallExecution.h"
+#include "SEHFinallyBodiesDetail.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
@@ -53,6 +54,11 @@ enum class Shape {
   /// A termination handler that ignores the abnormal flag: it increments the
   /// parent's Counter the same way on either exit.
   Flagless,
+  /// `lea rbp, [rsp + 0x20]` after the allocation: the establisher is that
+  /// register less its offset, the allocations' stack pointer.
+  FrameRegister,
+  /// A termination handler that calls a function with a stack argument.
+  HandlerPassesAStackArgument,
 };
 
 struct ParentImage {
@@ -85,7 +91,7 @@ BinaryImage makeTerminationImage(Shape Kind) {
   Segment Text;
   Text.Name = ".text";
   Text.VA = Entry;
-  Text.Size = 0xa0;
+  Text.Size = 0xc0;
   Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Text.Data.assign(Text.Size, 0xcc);
   auto &D = Text.Data;
@@ -95,6 +101,7 @@ BinaryImage makeTerminationImage(Shape Kind) {
   ExceptionAddressRange Guarded{Entry + 0x0d, Entry + 0x13};
   switch (Kind) {
   case Shape::Plain:
+  case Shape::HandlerPassesAStackArgument:
     // mov rbx,rdx; call foo; nop; mov dword [rbx],100; add rsp,0x20;
     // pop rbx; ret
     place(D, 0x0a,
@@ -128,10 +135,33 @@ BinaryImage makeTerminationImage(Shape Kind) {
     End = Entry + 0x1f;
     Guarded = {Entry + 0x0d, Entry + 0x13};
     break;
+  case Shape::FrameRegister:
+    // push rbp in place of push rbx; lea rbp,[rsp+0x20]; call foo; nop;
+    // mov rax,[rbp+0x18]; mov dword [rax],100; add rsp,0x20; pop rbp; ret
+    place(D, 0x05, {0x55});
+    place(D, 0x0a, {0x48, 0x8d, 0x6c, 0x24, 0x20, 0xe8, 0x2c, 0,    0,
+                    0,    0x90, 0x48, 0x8b, 0x45, 0x18, 0xc7, 0x00, 0x64,
+                    0,    0,    0,    0x48, 0x83, 0xc4, 0x20, 0x5d, 0xc3});
+    End = Entry + 0x25;
+    Guarded = {Entry + 0x0f, Entry + 0x15};
+    break;
   }
   // foo: ret
   place(D, 0x40, {0xc3});
-  if (Kind == Shape::Flagless)
+  if (Kind == Shape::HandlerPassesAStackArgument) {
+    // bar: mov rax,[rsp+0x28]; ret
+    place(D, 0x50, {0x48, 0x8b, 0x44, 0x24, 0x28, 0xc3});
+    // push rbp; sub rsp,0x30; mov rbp,rdx; test cl,cl; je done;
+    // mov rax,[rbp+0x38]; test rax,rax; jne skip; call foo |
+    // skip: mov rax,[rbp+0x38]; mov [rsp+0x20],rax; xor r9d,r9d; xor r8d,r8d;
+    // xor edx,edx; xor ecx,ecx; call bar | done: add rsp,0x30; pop rbp; ret
+    place(D, 0x80, {0x40, 0x55, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0xea, 0x84,
+                    0xc9, 0x74, 0x26, 0x48, 0x8b, 0x45, 0x38, 0x48, 0x85, 0xc0,
+                    0x75, 0x05, 0xe8, 0xa5, 0xff, 0xff, 0xff, 0x48, 0x8b, 0x45,
+                    0x38, 0x48, 0x89, 0x44, 0x24, 0x20, 0x45, 0x33, 0xc9, 0x45,
+                    0x33, 0xc0, 0x33, 0xd2, 0x33, 0xc9, 0xe8, 0x9d, 0xff, 0xff,
+                    0xff, 0x48, 0x83, 0xc4, 0x30, 0x5d, 0xc3});
+  } else if (Kind == Shape::Flagless)
     // A flag-independent handler: push rbp; sub rsp,0x20; mov rbp,rdx;
     // mov rax,[rbp+0x38]; mov dword [rax],7; add rsp,0x20; pop rbp; ret
     place(D, 0x80, {0x40, 0x55, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xea,
@@ -149,12 +179,15 @@ BinaryImage makeTerminationImage(Shape Kind) {
   Section Code;
   Code.Name = ".text";
   Code.VA = Entry;
-  Code.Size = 0xa0;
+  Code.Size = 0xc0;
   Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
   Img.Sections.push_back(std::move(Code));
   Img.Symbols.push_back(Symbol::makeFunc(Entry, End - Entry));
   Img.Symbols.push_back(Symbol::makeFunc(Entry + 0x40, 1));
-  Img.Symbols.push_back(Symbol::makeFunc(Funclet, 0x1f));
+  if (Kind == Shape::HandlerPassesAStackArgument)
+    Img.Symbols.push_back(Symbol::makeFunc(Entry + 0x50, 6));
+  Img.Symbols.push_back(Symbol::makeFunc(
+      Funclet, Kind == Shape::HandlerPassesAStackArgument ? 0x39 : 0x1f));
 
   ExceptionFunction Parent;
   Parent.CodeRange = {Entry, End};
@@ -163,10 +196,18 @@ BinaryImage makeTerminationImage(Shape Kind) {
   Parent.UnwindFlags = 3;
   Parent.PrologueSize = 0x0a;
   Parent.Personality = ExceptionPersonality::CSpecificHandler;
+  if (Kind == Shape::FrameRegister) {
+    Parent.PrologueSize = 0x0f;
+    Parent.FrameRegister = 5;
+    Parent.FrameOffset = 0x20;
+    Parent.UnwindOperations.push_back(
+        unwindOp(UnwindOperationKind::SetFramePointer, 0x0f));
+  }
   Parent.UnwindOperations.push_back(
       unwindOp(UnwindOperationKind::AllocateSmall, 0x0a, 0x20));
   Parent.UnwindOperations.push_back(
-      unwindOp(UnwindOperationKind::PushNonVolatile, 6, 0, 3));
+      unwindOp(UnwindOperationKind::PushNonVolatile, 6, 0,
+               Kind == Shape::FrameRegister ? 5 : 3));
   Parent.SEH.emplace();
   if (Kind == Shape::NestedExcept) {
     SEHScopeRecord Except;
@@ -185,12 +226,13 @@ BinaryImage makeTerminationImage(Shape Kind) {
   Img.ExceptionMetadata.Functions.push_back(std::move(Parent));
 
   ExceptionFunction Handler;
-  Handler.CodeRange = {Funclet, Funclet + 0x1f};
+  const bool PassesArgument = Kind == Shape::HandlerPassesAStackArgument;
+  Handler.CodeRange = {Funclet, Funclet + (PassesArgument ? 0x39 : 0x1f)};
   Handler.Encoding = ExceptionEncoding::X64UnwindV1;
   Handler.UnwindVersion = 1;
   Handler.PrologueSize = 6;
-  Handler.UnwindOperations.push_back(
-      unwindOp(UnwindOperationKind::AllocateSmall, 6, 0x20));
+  Handler.UnwindOperations.push_back(unwindOp(
+      UnwindOperationKind::AllocateSmall, 6, PassesArgument ? 0x30 : 0x20));
   Handler.UnwindOperations.push_back(
       unwindOp(UnwindOperationKind::PushNonVolatile, 2, 0, 5));
   Img.ExceptionMetadata.Functions.push_back(std::move(Handler));
@@ -269,9 +311,9 @@ TEST(SEHTerminationFrame, RejectsUnwindDataTheDecodedPrologueContradicts) {
       << terminationFrameError(Low, Funclet);
 }
 
-TEST(SEHTerminationFrame, RejectsAFrameRegister) {
+TEST(SEHTerminationFrame, RejectsAFrameRegisterThePrologueDoesNotSet) {
   // The establisher of a frame-register function is that register less its
-  // scaled offset, not the prologue's SP.
+  // scaled offset, not the prologue's SP: the decoded prologue must set it.
   BinaryImage Img = makeTerminationImage(Shape::Plain);
   ExceptionFunction &Parent = Img.ExceptionMetadata.Functions.front();
   Parent.FrameRegister = 5;
@@ -281,9 +323,16 @@ TEST(SEHTerminationFrame, RejectsAFrameRegister) {
   Img.ExceptionMetadata.rebuildIndex();
   const LowFunc Low = decodeParent(Img);
   EXPECT_NE(terminationFrameError(Low, Funclet)
-                .find("unsupported unwind or frame-register contract"),
+                .find("frame register is not set once by the prologue"),
             std::string::npos)
       << terminationFrameError(Low, Funclet);
+}
+
+TEST(SEHTerminationFrame, AFrameRegisterLocatesTheEstablisherBelowItsOffset) {
+  // `push rbp; sub rsp, 0x20; lea rbp, [rsp + 0x20]`: rbp less its offset is
+  // the stack pointer the allocations leave.
+  const LowFunc Low = decodeParent(makeTerminationImage(Shape::FrameRegister));
+  EXPECT_EQ(terminationFrameError(Low, Funclet), "proved 40");
 }
 
 TEST(SEHTerminationFrame, RejectsAHandlerThatTerminatesNoScope) {
@@ -385,7 +434,19 @@ TEST(SEHFinallyBody, FlagIndependentHandlerFillsTheClauseAndDropsTheCopy) {
   EXPECT_NE(P.find("= 7", Finally), std::string::npos) << P;
 }
 
-TEST(SEHFinallyBody, FrameRegisterHandlerKeepsTheComment) {
+TEST(SEHFinallyBody, AFrameRegisterParentFillsTheClause) {
+  const std::string P =
+      parentText(decompileHighC(makeTerminationImage(Shape::FrameRegister)));
+  ASSERT_FALSE(P.empty());
+  const size_t Finally = P.find("} __finally {");
+  ASSERT_NE(Finally, std::string::npos) << P;
+  EXPECT_NE(P.find("if (AbnormalTermination())", Finally), std::string::npos)
+      << P;
+  EXPECT_NE(P.find("= 99", Finally), std::string::npos) << P;
+  EXPECT_NE(P.find("= 100", Finally), std::string::npos) << P;
+}
+
+TEST(SEHFinallyBody, AFrameRegisterThePrologueDoesNotSetKeepsTheComment) {
   BinaryImage Img = makeTerminationImage(Shape::Plain);
   ExceptionFunction &Parent = Img.ExceptionMetadata.Functions.front();
   Parent.FrameRegister = 5;
@@ -400,11 +461,97 @@ TEST(SEHFinallyBody, FrameRegisterHandlerKeepsTheComment) {
   EXPECT_EQ(P.find("AbnormalTermination"), std::string::npos) << P;
 }
 
-TEST(SEHFinallyBody, LocalUnwindInTheProtectedBodyKeepsTheComment) {
-  // A `return` out of a `__try` guarded by a finally compiles to
-  // `_local_unwind`, which runs the handler with the flag set; C would read it
-  // as an ordinary call followed by a normal exit, so the clause stays out of
-  // line until that call is a structured jump.
+/// The stack pointer a handler's prologue leaves, under a name renaming gave
+/// it.
+MedVar movedStackPointer() {
+  MedVar Moved;
+  Moved.Kind = MedVar::Reg;
+  Moved.TheArch = Arch::X64;
+  Moved.Id = 50000;
+  Moved.RenameTag = 0;
+  Moved.RegOff = getTargetRegInfo(Arch::X64).StackPointer;
+  Moved.Size = 8;
+  return Moved;
+}
+
+HighStmt movesTheStackPointer(const MedVar &Moved) {
+  MedVar Incoming = Moved;
+  Incoming.Id = 12;
+  Incoming.RenameTag = -1;
+  HighStmt Move;
+  Move.Kind = StmtKind::Assign;
+  Move.Addr = Entry + 0x10;
+  Move.Dst = HighExpr::makeVar(Moved, NdType::makeInt(8, false));
+  Move.Val = HighExpr::makeBinop(
+      NdOp::INT_SUB, HighExpr::makeVar(Incoming, NdType::makeInt(8, false)),
+      HighExpr::makeConst(0x30, 8));
+  return Move;
+}
+
+ExprPtr slotAddress(const MedVar &Moved, uint64_t Offset) {
+  return HighExpr::makeBinop(
+      NdOp::INT_ADD, HighExpr::makeVar(Moved, NdType::makeInt(8, false)),
+      HighExpr::makeConst(Offset, 8));
+}
+
+TEST(SEHFinallyBody, ANameOfTheMovedStackPointerAddressesTheHandlersFrame) {
+  // FsRtlPrivateLock$fin$0 reaches its stack arguments through such a name: the
+  // store is a slot of the clause, and nothing is left of the handler's frame.
+  const MedVar Moved = movedStackPointer();
+  HighStmt Store;
+  Store.Kind = StmtKind::Store;
+  Store.Addr = Entry + 0x20;
+  Store.StoreAddr = slotAddress(Moved, 0x20);
+  Store.StoreVal = HighExpr::makeConst(7, 8);
+  std::vector<HighStmt> Body = {movesTheStackPointer(Moved), Store};
+  ASSERT_TRUE(seh_finally::localizeHandlerFrame(Body, Arch::X64));
+  EXPECT_TRUE(Body.empty());
+
+  // Two assignments leave the name no one value to address.
+  Body = {movesTheStackPointer(Moved), movesTheStackPointer(Moved), Store};
+  ASSERT_TRUE(seh_finally::localizeHandlerFrame(Body, Arch::X64));
+  EXPECT_EQ(Body.size(), 3u);
+}
+
+TEST(SEHFinallyBody, ARenamedVariableIsNotTheNameItsNumberShares) {
+  // The name a nested clause reads does not keep the handler's own alive.
+  MedVar Unread = movedStackPointer();
+  Unread.RegOff = 0;
+  MedVar Read = Unread;
+  Read.RenameTag = 1;
+  HighStmt Dead;
+  Dead.Kind = StmtKind::Assign;
+  Dead.Addr = Entry + 0x10;
+  Dead.Dst = HighExpr::makeVar(Unread, NdType::makeInt(8, false));
+  Dead.Val = HighExpr::makeConst(1, 8);
+  HighStmt Live = Dead;
+  Live.Dst = HighExpr::makeVar(Read, NdType::makeInt(8, false));
+  HighStmt Use;
+  Use.Kind = StmtKind::Return;
+  Use.Addr = Entry + 0x20;
+  Use.RetVal = HighExpr::makeVar(Read, NdType::makeInt(8, false));
+  std::vector<HighStmt> Body = {Dead, Live, Use};
+  seh_finally::dropUnreadValues(Body);
+  ASSERT_EQ(Body.size(), 2u);
+  EXPECT_EQ(Body.front().Dst->Var.RenameTag, 1);
+}
+
+TEST(SEHFinallyBody, AHandlerPassingAStackArgumentFillsTheClause) {
+  // The call holds the argument; what the handler moved its stack pointer for
+  // goes with the store, and leaves nothing of its own frame in the clause.
+  const std::string P = parentText(
+      decompileHighC(makeTerminationImage(Shape::HandlerPassesAStackArgument)));
+  ASSERT_FALSE(P.empty());
+  const size_t Guard = P.find("if (AbnormalTermination())");
+  ASSERT_NE(Guard, std::string::npos) << P;
+  const size_t Call = P.find("sub_140001050(", Guard);
+  ASSERT_NE(Call, std::string::npos) << P;
+  EXPECT_NE(P.find("arg1", Call), std::string::npos) << P;
+}
+
+TEST(SEHFinallyBody, AnUncertifiedLocalUnwindStaysBesideTheFilledClause) {
+  // A call the protocol cannot certify keeps its runtime form, and it runs the
+  // clause as the runtime runs the handler: the clause says what that does.
   BinaryImage Img = makeTerminationImage(Shape::Plain);
   for (Symbol &S : Img.Symbols)
     if (S.Addr == Entry + 0x40) {
@@ -413,21 +560,29 @@ TEST(SEHFinallyBody, LocalUnwindInTheProtectedBodyKeepsTheComment) {
     }
   const std::string P = parentText(decompileHighC(Img));
   ASSERT_FALSE(P.empty());
-  EXPECT_NE(P.find("_local_unwind"), std::string::npos) << P;
+  const size_t Finally = P.find("} __finally {");
+  ASSERT_NE(Finally, std::string::npos) << P;
+  EXPECT_LT(P.find("_local_unwind"), Finally) << P;
   EXPECT_NE(P.find("/* finally handler @ 0x140001080 */"), std::string::npos)
       << P;
-  EXPECT_EQ(P.find("AbnormalTermination"), std::string::npos) << P;
+  EXPECT_NE(P.find("if (AbnormalTermination())", Finally), std::string::npos)
+      << P;
 }
 
-TEST(SEHFinallyBody, NestedExceptInTheProtectedBodyKeepsTheComment) {
-  // The finally guards a `__try`/`__except`; a filled finally could run on the
-  // goto that leaves the inner handler, so the body is left out of line.
+TEST(SEHFinallyBody, NestedExceptInTheProtectedBodyFillsTheClause) {
+  // The finally guards a `__try`/`__except`: the arm rejoins the protected
+  // body, and the clause runs the abnormal work once while the copy stays.
   const std::string P =
       parentText(decompileHighC(makeTerminationImage(Shape::NestedExcept)));
   ASSERT_FALSE(P.empty());
+  const size_t Finally = P.find("} __finally {");
+  ASSERT_NE(Finally, std::string::npos) << P;
   EXPECT_NE(P.find("/* finally handler @ 0x140001080 */"), std::string::npos)
       << P;
-  EXPECT_EQ(P.find("AbnormalTermination"), std::string::npos) << P;
+  EXPECT_NE(P.find("if (AbnormalTermination())", Finally), std::string::npos)
+      << P;
+  EXPECT_NE(P.find("__except", 0), std::string::npos) << P;
+  EXPECT_LT(P.find("__except", 0), Finally) << P;
 }
 
 /// A `return` out of a `__try` guarded by a `__finally`, as MSVC x64 compiles
@@ -448,6 +603,8 @@ enum class LocalUnwindShape {
   /// The handler branches on the flag, a shape the x64 projection keeps out
   /// of line.
   Branchy,
+  /// The handler reads R8, the runtime's scratch.
+  ReadsAScratchRegister,
   /// The Guarded parent whose `__finally` returns as well: the handler
   /// local-unwinds the parent's frame to the same epilogue.
   ReturningFinally,
@@ -531,6 +688,13 @@ BinaryImage makeLocalUnwindImage(LocalUnwindShape Kind) {
     place(D, 0x80, {0x40, 0x55, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xea, 0x84,
                     0xc9, 0x74, 0x0a, 0x48, 0x8b, 0x45, 0x38, 0xc7, 0x00, 0x63,
                     0,    0,    0,    0x48, 0x83, 0xc4, 0x20, 0x5d, 0xc3});
+    break;
+  case LocalUnwindShape::ReadsAScratchRegister:
+    // push rbp; sub rsp,0x20; mov rbp,rdx; mov rax,[rbp+0x38]; mov [rax],r8d;
+    // add rsp,0x20; pop rbp; ret
+    place(D, 0x80,
+          {0x40, 0x55, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xea, 0x48, 0x8b,
+           0x45, 0x38, 0x44, 0x89, 0x00, 0x48, 0x83, 0xc4, 0x20, 0x5d, 0xc3});
     break;
   case LocalUnwindShape::ReturningFinally:
     // push rbp; sub rsp,0x20; mov rbp,rdx; mov rcx,rdx; lea rdx,[done];
@@ -915,12 +1079,28 @@ TEST(SEHLocalUnwind, AJumpToWhereTheTryEndsStaysAJump) {
       << P;
 }
 
-TEST(SEHLocalUnwind, AnUnfilledFinallyRunsAsAnExplicitHandlerCall) {
-  // A handler shape the clause cannot hold keeps its address comment; the
-  // jump then calls the handler itself, as the runtime did, with the
-  // abnormal flag set and the frame, so it still runs exactly once.
+TEST(SEHLocalUnwind, ABranchyHandlerFillsTheClause) {
+  // The handler's own branch on the flag folds away while unwinding.
   const std::string P = parentText(
       decompileHighC(makeLocalUnwindImage(LocalUnwindShape::Branchy)));
+  ASSERT_FALSE(P.empty());
+  EXPECT_EQ(P.find("_local_unwind"), std::string::npos) << P;
+  EXPECT_EQ(P.find("sub_140001080("), std::string::npos) << P;
+  const size_t Finally = P.find("} __finally {");
+  ASSERT_NE(Finally, std::string::npos) << P;
+  EXPECT_NE(P.find("if (AbnormalTermination())", Finally), std::string::npos)
+      << P;
+  EXPECT_EQ(occurrences(P, "= 99"), 1u) << P;
+  EXPECT_GT(P.find("= 99"), Finally) << P;
+}
+
+TEST(SEHLocalUnwind, AnUnfilledFinallyRunsAsAnExplicitHandlerCall) {
+  // A handler that reads what the runtime left in a register the clause cannot
+  // spell keeps its address comment; the jump then calls the handler itself,
+  // as the runtime did, with the abnormal flag set and the frame, so it still
+  // runs exactly once.
+  const std::string P = parentText(decompileHighC(
+      makeLocalUnwindImage(LocalUnwindShape::ReadsAScratchRegister)));
   ASSERT_FALSE(P.empty());
   EXPECT_EQ(P.find("_local_unwind"), std::string::npos) << P;
   EXPECT_EQ(P.find("AbnormalTermination"), std::string::npos) << P;
@@ -994,15 +1174,13 @@ TEST(SEHLocalUnwind, AFrameItsCalleeNeverObservesPassesNothing) {
   EXPECT_EQ(P.find("_local_unwind"), std::string::npos) << P;
 }
 
-TEST(SEHLocalUnwind, AFinallyThatUnwindsToTheTargetKeepsItARoot) {
-  // Only the parent's own exit names its epilogue in the Guarded shape, so
-  // the exit owns it and no proof over the decoded CFG takes it as an
-  // independent entry.  A `__finally` that returns too local-unwinds to the
-  // same epilogue from the handler: the target stays a root.
-  for (const auto &[Kind, Owns] :
-       {std::pair{LocalUnwindShape::Guarded, true},
-        std::pair{LocalUnwindShape::ReturningFinally, false}}) {
-    SCOPED_TRACE(Owns);
+TEST(SEHLocalUnwind, AFinallyThatUnwindsToTheTargetLandsThereAsAJump) {
+  // Only the parent's own exit names its epilogue in the Guarded shape, so the
+  // exit owns it and no proof over the decoded CFG takes it as an independent
+  // entry.  A `__finally` that returns too local-unwinds to the same epilogue
+  // from the handler: its call becomes the jump, and names no entry either.
+  for (const LocalUnwindShape Kind :
+       {LocalUnwindShape::Guarded, LocalUnwindShape::ReturningFinally}) {
     llvm::LLVMContext Ctx;
     PipelineOptions Opts;
     Opts.EmitDumpOutput = false;
@@ -1014,8 +1192,17 @@ TEST(SEHLocalUnwind, AFinallyThatUnwindsToTheTargetKeepsItARoot) {
     ASSERT_NE(Parent, Result.HighFuncs.end());
     ASSERT_EQ(Parent->SEHLocalUnwindExits.size(), 1u);
     EXPECT_EQ(Parent->SEHLocalUnwindExits.front().Target, Entry + 0x2d);
-    EXPECT_EQ(Parent->SEHLocalUnwindExits.front().OwnsTarget, Owns);
+    EXPECT_TRUE(Parent->SEHLocalUnwindExits.front().OwnsTarget);
   }
+  const std::string P = parentText(
+      decompileHighC(makeLocalUnwindImage(LocalUnwindShape::ReturningFinally)));
+  ASSERT_FALSE(P.empty());
+  EXPECT_EQ(P.find("_local_unwind"), std::string::npos) << P;
+  const size_t Finally = P.find("} __finally {");
+  ASSERT_NE(Finally, std::string::npos) << P;
+  const bool Leaves = P.find("goto ", Finally) != std::string::npos ||
+                      P.find("return", Finally) != std::string::npos;
+  EXPECT_TRUE(Leaves) << P;
 }
 
 } // namespace

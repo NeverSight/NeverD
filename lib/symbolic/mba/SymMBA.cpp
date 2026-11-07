@@ -1765,9 +1765,9 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
                        .Work = Result.Work};
     if (Result.Evidence == MBAEvidence::Derivation &&
         Finished.Outcome != MBAOutcome::BudgetExhausted &&
-        !Budget.exhausted() && Cache.Rewrites.size() < Cache.Capacity &&
+        !Budget.exhausted() && Cache.Capacity &&
         readingScore(Ctx, Result.Expr) < readingScore(Ctx, E))
-      Cache.Rewrites.try_emplace(E.index(), Result.Expr);
+      remember(Cache, E.index(), Result.Expr);
     return Result;
   }
   SolveReport FastRep;

@@ -118,6 +118,8 @@ proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med, va_t Handler,
     if (Exit.OwnsTarget)
       Exits.push_back(
           {Exit.CallAddr, Exit.CallSeq, Exit.Target, Exit.TargetFrame});
+  for (va_t Target : Med.SEHHandlerUnwindTargets)
+    Exits.push_back({InvalidVA, -1, Target, 0});
   auto Proof = proveLowSEHEstablisherFrame(
       Low, Handler, TRI, OrdinaryEntry, WorkRemaining, LocalUnwindDigest,
       CxxContinuation,

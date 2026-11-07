@@ -368,9 +368,14 @@ inline constexpr unsigned kMedImmutableTableScansMaxScanIterations = 4096;
 inline constexpr unsigned kMedImmutableTableScansMaxFoldRounds = 4;
 
 // lib/ir/med/pass/MedSSA.cpp
-// COPY and constant-step definitions one termination handler register value
-// is traced through before it has no stable form.
-inline constexpr unsigned kMedSSASEHFuncletRegisterChainLimit = 32;
+// COPY, constant-step and PHI definitions one termination handler register
+// value is traced through before it has no stable form.  A long function joins
+// each `__except` arm back into that value: xcpt4's main does so about 200
+// times.
+inline constexpr unsigned kMedSSASEHFuncletRegisterWalkLimit = 4096;
+// PHI and COPY definitions one function walks to settle the handler roots whose
+// protected blocks hold a restored register under several SSA names.
+inline constexpr size_t kMedSSASEHRestoredJoinWork = size_t(1) << 20;
 
 // lib/ir/med/pass/MedMutableSource.cpp
 // Block count, storage matrix size and propagation work have independent

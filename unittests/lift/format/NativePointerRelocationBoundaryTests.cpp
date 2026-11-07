@@ -1363,7 +1363,7 @@ int main(void) {
   ASSERT_EQ(Med.exitCode, 0) << Med.err;
   EXPECT_NE(Med.out.find("PHI RAX"), std::string::npos) << Med.out;
   EXPECT_NE(Med.out.find("PHI RDX"), std::string::npos) << Med.out;
-  EXPECT_NE(Med.out.find("INT_OR RAX"), std::string::npos) << Med.out;
+  EXPECT_NE(Med.out.find("SELECT RAX"), std::string::npos) << Med.out;
   auto Lifted = liftToLLVMIRUnopt(Object);
   ASSERT_EQ(Lifted.exitCode, 0) << Lifted.err;
   EXPECT_NE(Lifted.out.find("@__nd_codeptr_"), std::string::npos);

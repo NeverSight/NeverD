@@ -108,6 +108,50 @@ std::optional<bool> lowBlockBindsFunctionTemporaries(const LowFunc &F,
   return Bound.size() == F.FunctionTemporaries.size();
 }
 
+/// Whether operation \p Index of \p Block, in the instruction \p Boundary, is
+/// the prologue's `lea fp, [rsp + FrameOffset]` (`mov fp, rsp` for a zero
+/// offset).
+static bool setsLowFramePointer(const LowBlock &Block,
+                                const LowInstructionBoundary &Boundary,
+                                size_t Index, uint64_t FrameRegister,
+                                uint64_t FrameOffset,
+                                const TargetRegInfo &TRI) {
+  const LowOp &Op = Block.Ops[Index];
+  if (Op.Opcode != NdOp::COPY || Op.Output != NdVar::reg(FrameRegister, 8) ||
+      Op.NumInputs != 1)
+    return false;
+  const NdVar SP = NdVar::reg(TRI.StackPointer, 8);
+  std::map<uint64_t, std::optional<uint64_t>> TempDisplacement;
+  auto displacement = [&](const NdVar &V) -> std::optional<uint64_t> {
+    if (V == SP)
+      return 0;
+    if (!V.isTemp() || V.Size != 8)
+      return std::nullopt;
+    auto It = TempDisplacement.find(V.Offset);
+    return It == TempDisplacement.end() ? std::nullopt : It->second;
+  };
+  for (size_t I = Boundary.FirstOp; I < Index; ++I) {
+    const LowOp &Def = Block.Ops[I];
+    if (!Def.Output.isTemp())
+      continue;
+    std::optional<uint64_t> Value;
+    if (Def.Output.Size == 8 && Def.Opcode == NdOp::COPY &&
+        Def.NumInputs == 1) {
+      Value = displacement(Def.Inputs[0]);
+    } else if (Def.Output.Size == 8 &&
+               (Def.Opcode == NdOp::INT_ADD || Def.Opcode == NdOp::INT_SUB) &&
+               Def.NumInputs == 2 && Def.Inputs[1].isConst() &&
+               Def.Inputs[1].Size == 8) {
+      if (auto Base = displacement(Def.Inputs[0]))
+        Value = Def.Opcode == NdOp::INT_ADD ? *Base + Def.Inputs[1].Offset
+                                            : *Base - Def.Inputs[1].Offset;
+    }
+    TempDisplacement[Def.Output.Offset] = Value;
+  }
+  const std::optional<uint64_t> Displacement = displacement(Op.Inputs[0]);
+  return Displacement && *Displacement == FrameOffset;
+}
+
 /// Windows resumes an in-function __except body with its establisher SP, not
 /// with the entry SP used for an independent ordinary machine-code root.
 /// Certify the fixed-frame case against both normalized unwind actions and the
@@ -231,6 +275,8 @@ proveInFrameCFG(const LowFunc &Low, va_t Handler, const TargetRegInfo &TRI,
 
   std::map<int, std::vector<std::pair<int, int64_t>>> LocalUnwindSources;
   std::vector<std::vector<int>> LocalUnwindSuccessors(N);
+  // A handler's unwind resumes on the frame its protected block runs on.
+  constexpr int64_t HandlerUnwindFrame = std::numeric_limits<int64_t>::min();
   if (!CxxContinuation)
     for (const auto &Entry : Low.SEHLocalUnwindContinuations) {
       if (!Charge(N + 1))
@@ -266,6 +312,27 @@ proveInFrameCFG(const LowFunc &Low, va_t Handler, const TargetRegInfo &TRI,
       if (!Charge(N + 1))
         return Fail("frame propagation budget exhausted");
       int Target = -1, Source = -1;
+      if (Exit.CallAddr == InvalidVA) {
+        const auto At = CachedCFG->Starts.find(Exit.Target);
+        if (At == CachedCFG->Starts.end() || At->second <= 0 || !EH.SEH)
+          return Fail("stale local-unwind exit");
+        for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+          if (Scope.Kind != SEHScopeKind::Finally)
+            continue;
+          const auto Range = getSemanticSEHGuardedRange(Scope, Arch::X64, EH);
+          if (Scope.ParseStatus != ExceptionParseStatus::Complete || !Range ||
+              !Charge(N))
+            return Fail("stale local-unwind exit");
+          for (size_t B = 0; B < N; ++B)
+            if (Low.Blocks[B].StartAddr < Range->End &&
+                Low.Blocks[B].EndAddr > Range->Begin) {
+              LocalUnwindSources[At->second].emplace_back(static_cast<int>(B),
+                                                          HandlerUnwindFrame);
+              LocalUnwindSuccessors[B].push_back(At->second);
+            }
+        }
+        continue;
+      }
       for (size_t B = 0; B < N; ++B) {
         if (Low.Blocks[B].StartAddr == Exit.Target)
           Target = static_cast<int>(B);
@@ -659,40 +726,8 @@ proveInFrameCFG(const LowFunc &Low, va_t Handler, const TargetRegInfo &TRI,
   auto SetsFramePointer = [&](const LowBlock &Block,
                               const LowInstructionBoundary &Boundary,
                               size_t Index) {
-    const LowOp &Op = Block.Ops[Index];
-    if (Op.Opcode != NdOp::COPY || Op.Output != NdVar::reg(FrameRegister, 8) ||
-        Op.NumInputs != 1)
-      return false;
-    const NdVar SP = NdVar::reg(TRI.StackPointer, 8);
-    std::map<uint64_t, std::optional<uint64_t>> TempDisplacement;
-    auto displacement = [&](const NdVar &V) -> std::optional<uint64_t> {
-      if (V == SP)
-        return 0;
-      if (!V.isTemp() || V.Size != 8)
-        return std::nullopt;
-      auto It = TempDisplacement.find(V.Offset);
-      return It == TempDisplacement.end() ? std::nullopt : It->second;
-    };
-    for (size_t I = Boundary.FirstOp; I < Index; ++I) {
-      const LowOp &Def = Block.Ops[I];
-      if (!Def.Output.isTemp())
-        continue;
-      std::optional<uint64_t> Value;
-      if (Def.Output.Size == 8 && Def.Opcode == NdOp::COPY &&
-          Def.NumInputs == 1) {
-        Value = displacement(Def.Inputs[0]);
-      } else if (Def.Output.Size == 8 &&
-                 (Def.Opcode == NdOp::INT_ADD || Def.Opcode == NdOp::INT_SUB) &&
-                 Def.NumInputs == 2 && Def.Inputs[1].isConst() &&
-                 Def.Inputs[1].Size == 8) {
-        if (auto Base = displacement(Def.Inputs[0]))
-          Value = Def.Opcode == NdOp::INT_ADD ? *Base + Def.Inputs[1].Offset
-                                              : *Base - Def.Inputs[1].Offset;
-      }
-      TempDisplacement[Def.Output.Offset] = Value;
-    }
-    const std::optional<uint64_t> Displacement = displacement(Op.Inputs[0]);
-    return Displacement && *Displacement == EH.FrameOffset;
+    return setsLowFramePointer(Block, Boundary, Index, FrameRegister,
+                               EH.FrameOffset, TRI);
   };
   unsigned FramePointerWrites = 0;
   std::map<uint32_t, uint64_t> ActualAdjustments;
@@ -768,7 +803,8 @@ proveInFrameCFG(const LowFunc &Low, va_t Handler, const TargetRegInfo &TRI,
       Result.HasRelevantLocalUnwind = true;
       for (const auto &[Source, Offset] : Sources)
         if (DynamicSP || !Relevant[Source] || !Reachable[Source] ||
-            Offset != -static_cast<int64_t>(FrameBytes))
+            (Offset != HandlerUnwindFrame &&
+             Offset != -static_cast<int64_t>(FrameBytes)))
           return Fail("local-unwind call does not carry the protected frame");
     }
   // Ordinary flow into a shared handler is not proven to bring the SP the
@@ -805,6 +841,10 @@ struct TerminationFrame {
   std::map<uint32_t, uint64_t> ExpectedAdjustments;
   uint64_t FrameBytes = 0;
   va_t PrologueEnd = 0;
+  /// The frame register and the end of the prologue instruction that sets it,
+  /// by unwind-code offset, in a function that has one.
+  std::optional<uint64_t> FrameRegister;
+  uint32_t SetFramePointerOffset = 0;
 };
 
 llvm::Error terminationFrameError(const std::string &Why) {
@@ -830,7 +870,8 @@ bool chargeTerminationWork(size_t &WorkRemaining, size_t Amount = 1) {
 /// above, and the unit tests require both to agree.
 llvm::Expected<TerminationFrame>
 prepareTerminationFrame(const LowFunc &Low, const TargetRegInfo &TRI,
-                        size_t &WorkRemaining) {
+                        size_t &WorkRemaining,
+                        bool AllowFrameRegister = false) {
   auto Fail = terminationFrameError;
   auto Charge = [&](size_t Amount = 1) {
     return chargeTerminationWork(WorkRemaining, Amount);
@@ -845,11 +886,13 @@ prepareTerminationFrame(const LowFunc &Low, const TargetRegInfo &TRI,
       EH.Encoding == ExceptionEncoding::X64UnwindV2 && EH.UnwindVersion == 2;
   // A frame register establishes the frame from that register instead; its
   // allocations after UWOP_SET_FPREG do not move the establisher.
+  const bool HasFrameRegister = EH.FrameRegister != 0;
   if (EH.ParseStatus != ExceptionParseStatus::Complete ||
       (!UnwindV1 && !UnwindV2) || EH.Kind != RuntimeFunctionKind::Primary ||
       EH.ChainedPrimaryRange || EH.ChainedUnwindInfoRVA ||
-      EH.PrimaryFunctionIndex || (EH.UnwindFlags & ~3u) || EH.FrameRegister ||
-      EH.FrameOffset || EH.CodeRange.Begin != Low.Entry)
+      EH.PrimaryFunctionIndex || (EH.UnwindFlags & ~3u) ||
+      (HasFrameRegister && !AllowFrameRegister) ||
+      (!HasFrameRegister && EH.FrameOffset) || EH.CodeRange.Begin != Low.Entry)
     return Fail("unsupported unwind or frame-register contract");
   if (!Low.hasCompleteLiftCoverage() || Low.Blocks.empty() ||
       Low.Blocks.front().StartAddr != Low.Entry ||
@@ -869,7 +912,10 @@ prepareTerminationFrame(const LowFunc &Low, const TargetRegInfo &TRI,
       return Fail("noncanonical block identity");
     Positions.emplace(Low.Blocks[B].Id, B);
   }
-  if (!completeLowSEHFrameCFG(Low, Positions, WorkRemaining))
+  // What the proof with a frame register gives only ever spells a `__finally`
+  // clause, as source text may follow a checked jump table.
+  if (!completeLowSEHFrameCFG(Low, Positions, WorkRemaining,
+                              AllowFrameRegister))
     return Fail("incomplete decoded CFG");
   Frame.Preds.resize(N);
   for (size_t B = 0; B < N; ++B) {
@@ -884,8 +930,10 @@ prepareTerminationFrame(const LowFunc &Low, const TargetRegInfo &TRI,
   if (!Frame.Preds[0].empty())
     return Fail("ordinary control flow re-enters the prologue");
 
-  // X64 CodeOffset is the byte offset of the prologue instruction end.
+  // X64 CodeOffset is the byte offset of the prologue instruction end.  The
+  // codes run from the prologue's last instruction back to its first.
   uint32_t PreviousOffset = EH.PrologueSize;
+  bool SawSetFramePointer = false;
   for (const UnwindOperation &Op : EH.UnwindOperations) {
     if (!Charge())
       return Fail("work budget exhausted");
@@ -910,6 +958,13 @@ prepareTerminationFrame(const LowFunc &Low, const TargetRegInfo &TRI,
     case UnwindOperationKind::SaveXMM128:
     case UnwindOperationKind::SaveXMM128Far:
       break;
+    case UnwindOperationKind::SetFramePointer:
+      if (!HasFrameRegister || SawSetFramePointer)
+        return Fail("frame register disagrees with UWOP_SET_FPREG");
+      SawSetFramePointer = true;
+      Frame.FrameRegister = x86reg::generalReg(EH.FrameRegister);
+      Frame.SetFramePointerOffset = Op.CodeOffset;
+      break;
     default:
       return Fail("unwind action has no certified fixed SP effect");
     }
@@ -918,19 +973,23 @@ prepareTerminationFrame(const LowFunc &Low, const TargetRegInfo &TRI,
          Bytes >
              uint64_t(std::numeric_limits<int64_t>::max()) - Frame.FrameBytes))
       return Fail("conflicting or overflowing allocation");
-    Frame.FrameBytes += Bytes;
+    // Below the frame register the establisher does not move.
+    if (!HasFrameRegister || SawSetFramePointer)
+      Frame.FrameBytes += Bytes;
   }
+  if (HasFrameRegister && !SawSetFramePointer)
+    return Fail("frame register disagrees with UWOP_SET_FPREG");
   return Frame;
 }
 
 /// One handler's half of the proof against \p Frame: the scopes it
 /// terminates, every ordinary path into their guarded code, and the SP writes
 /// on those paths.
-llvm::Expected<uint64_t> proveTerminationHandler(const LowFunc &Low,
-                                                 const TerminationFrame &Frame,
-                                                 va_t Handler,
-                                                 const TargetRegInfo &TRI,
-                                                 size_t &WorkRemaining) {
+llvm::Expected<uint64_t>
+proveTerminationHandler(const LowFunc &Low, const TerminationFrame &Frame,
+                        va_t Handler, const TargetRegInfo &TRI,
+                        size_t &WorkRemaining,
+                        const std::set<va_t> &HandlerUnwindTargets = {}) {
   auto Fail = terminationFrameError;
   auto Charge = [&](size_t Amount = 1) {
     return chargeTerminationWork(WorkRemaining, Amount);
@@ -986,6 +1045,7 @@ llvm::Expected<uint64_t> proveTerminationHandler(const LowFunc &Low,
   // dispatcher resumes is an __except handler of this function, entered with
   // the SP of its own scope, whose instructions then join the proof.
   std::vector<bool> Relevant(N, false);
+  bool HandlerUnwindRoot = false;
   while (!Work.empty()) {
     if (!Charge())
       return Fail("work budget exhausted");
@@ -1000,6 +1060,21 @@ llvm::Expected<uint64_t> proveTerminationHandler(const LowFunc &Low,
     if (B == 0 || !Preds[B].empty())
       continue;
     const va_t Start = Low.Blocks[B].StartAddr;
+    // A handler's certified unwind resumes on the frame its scope runs on: the
+    // code of every termination scope joins the proof once.
+    if (HandlerUnwindTargets.count(Start)) {
+      if (!HandlerUnwindRoot)
+        for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+          if (!Charge())
+            return Fail("work budget exhausted");
+          if (Scope.Kind != SEHScopeKind::Finally)
+            continue;
+          if (auto Error = AddScope(Scope))
+            return std::move(Error);
+        }
+      HandlerUnwindRoot = true;
+      continue;
+    }
     if (Low.OrdinaryModuleAnalysisRoots.count(Start) ||
         llvm::any_of(Low.SEHLocalUnwindContinuations,
                      [&](const auto &Entry) { return Entry.Target == Start; }))
@@ -1024,6 +1099,7 @@ llvm::Expected<uint64_t> proveTerminationHandler(const LowFunc &Low,
   // the way to or inside the guarded code writes SP; after the last guarded
   // instruction of a block that leads nowhere relevant, an epilogue may.
   std::map<uint32_t, uint64_t> ActualAdjustments;
+  unsigned FramePointerWrites = 0;
   for (size_t B = 0; B < N; ++B) {
     if (!Relevant[B])
       continue;
@@ -1041,6 +1117,20 @@ llvm::Expected<uint64_t> proveTerminationHandler(const LowFunc &Low,
       for (size_t I = Boundary.FirstOp; I < Boundary.FirstOp + Boundary.OpCount;
            ++I) {
         const LowOp &Op = Block.Ops[I];
+        // The establisher is the frame register's one value from the prologue
+        // on.
+        if (Frame.FrameRegister && Op.Output.isReg() && Op.Output.Size &&
+            Op.Output.Offset < *Frame.FrameRegister + 8 &&
+            *Frame.FrameRegister < Op.Output.Offset + Op.Output.Size) {
+          if (B != 0 || Boundary.Address + Boundary.Size > PrologueEnd ||
+              Boundary.Address + Boundary.Size - Low.Entry !=
+                  Frame.SetFramePointerOffset ||
+              !setsLowFramePointer(Block, Boundary, I, *Frame.FrameRegister,
+                                   EH.FrameOffset, TRI))
+            return Fail("frame register is not set once by the prologue");
+          ++FramePointerWrites;
+          continue;
+        }
         if (!Op.Output.isReg() || !Op.Output.Size ||
             Op.Output.Offset >= TRI.StackPointer + 8 ||
             Op.Output.Offset + Op.Output.Size <= TRI.StackPointer)
@@ -1058,6 +1148,8 @@ llvm::Expected<uint64_t> proveTerminationHandler(const LowFunc &Low,
       }
     }
   }
+  if (Frame.FrameRegister && FramePointerWrites != 1)
+    return Fail("frame register is not set once by the prologue");
   if (Frame.ExpectedAdjustments != ActualAdjustments)
     return Fail("decoded prologue disagrees with unwind allocation");
   return Frame.FrameBytes;
@@ -1068,7 +1160,8 @@ llvm::Expected<uint64_t> proveLowSEHTerminationFrame(const LowFunc &Low,
                                                      va_t Handler,
                                                      const TargetRegInfo &TRI,
                                                      size_t &WorkRemaining) {
-  auto Frame = prepareTerminationFrame(Low, TRI, WorkRemaining);
+  auto Frame = prepareTerminationFrame(Low, TRI, WorkRemaining,
+                                       /*AllowFrameRegister=*/true);
   if (!Frame)
     return Frame.takeError();
   return proveTerminationHandler(Low, *Frame, Handler, TRI, WorkRemaining);
@@ -1119,8 +1212,180 @@ llvm::Expected<uint64_t> proveLowSEHFixedFrame(const LowFunc &Low,
   return Frame->FrameBytes;
 }
 
-std::map<va_t, uint64_t> collectLowSEHTerminationFrames(const LowFunc &Low,
+namespace {
+
+/// A word the entry-block walk tracks: an argument register's incoming value,
+/// or an address at a displacement from the entry stack pointer.
+struct HomedWord {
+  enum Kind : uint8_t { Unknown, Argument, StackAddress };
+  Kind K = Unknown;
+  unsigned Position = 0;
+  int64_t Displacement = 0;
+};
+
+/// The words each operation's result holds, over one block's operations.
+class HomedWalk {
+public:
+  explicit HomedWalk(const TargetRegInfo &TRI) : TRI(TRI) {}
+
+  void setRegister(uint64_t Reg, HomedWord Word) { Registers[Reg] = Word; }
+
+  HomedWord read(const NdVar &V) const {
+    if (V.Size != TRI.PointerSize)
+      return {};
+    const auto &Words = V.isTemp() ? Temps : Registers;
+    if (!V.isTemp() && !V.isReg())
+      return {};
+    const auto It = Words.find(V.Offset);
+    return It == Words.end() ? HomedWord{} : It->second;
+  }
+
+  /// Run a value operation; a store is the caller's to read before this.
+  void step(const LowOp &Op) {
+    HomedWord Result;
+    if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
+      Result = read(Op.Inputs[0]);
+    } else if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+               Op.NumInputs == 2 && Op.Inputs[1].isConst() &&
+               Op.Output.Size == TRI.PointerSize) {
+      Result = read(Op.Inputs[0]);
+      if (Result.K == HomedWord::StackAddress) {
+        const int64_t Step = static_cast<int64_t>(Op.Inputs[1].Offset);
+        Result.Displacement += Op.Opcode == NdOp::INT_ADD ? Step : -Step;
+      } else {
+        Result = {};
+      }
+    }
+    write(Op.Output, Result);
+  }
+
+private:
+  const TargetRegInfo &TRI;
+  std::map<uint64_t, HomedWord> Registers;
+  std::map<uint64_t, HomedWord> Temps;
+
+  void write(const NdVar &V, const HomedWord &Word) {
+    if (V.isTemp()) {
+      Temps[V.Offset] = V.Size == TRI.PointerSize ? Word : HomedWord{};
+      return;
+    }
+    if (!V.isReg() || !V.Size)
+      return;
+    // Any write that overlaps a register ends what the walk knows of it.
+    const uint64_t Base = V.Offset - V.Offset % TRI.PointerSize;
+    Registers[Base] =
+        V.Offset == Base && V.Size == TRI.PointerSize ? Word : HomedWord{};
+  }
+};
+
+} // namespace
+
+std::map<int64_t, unsigned> collectLowSEHHomedArguments(const LowFunc &Low,
                                                         Arch TargetArch) {
+  std::map<int64_t, unsigned> Homed;
+  if (TargetArch != Arch::X64 || !Low.ExceptionMetadata ||
+      !Low.ExceptionMetadata->SEH || Low.Blocks.empty())
+    return Homed;
+  const ExceptionFunction &EH = *Low.ExceptionMetadata;
+  va_t FirstProtected = InvalidVA;
+  bool Finally = false;
+  for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+    Finally |= Scope.Kind == SEHScopeKind::Finally;
+    FirstProtected = std::min(FirstProtected, Scope.GuardedRange.Begin);
+  }
+  if (!Finally)
+    return Homed;
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  const llvm::ArrayRef<uint64_t> Arguments =
+      TRI.integerParamRegs(BinaryFormat::COFF);
+  // The stores of the entry block, up to the first code that can leave it.
+  HomedWalk Entry(TRI);
+  HomedWord SP;
+  SP.K = HomedWord::StackAddress;
+  Entry.setRegister(TRI.StackPointer, SP);
+  for (size_t I = 0; I < Arguments.size(); ++I) {
+    HomedWord Word;
+    Word.K = HomedWord::Argument;
+    Word.Position = static_cast<unsigned>(I);
+    Entry.setRegister(Arguments[I], Word);
+  }
+  size_t Budget = limits::kMaxSEHEstablisherFrameWork;
+  std::optional<int64_t> BodySP;
+  for (const LowOp &Op : Low.Blocks.front().Ops) {
+    if (!Budget--)
+      return {};
+    if (Op.Addr >= FirstProtected || Op.Opcode == NdOp::CALL ||
+        Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INTRINSIC ||
+        Op.Opcode == NdOp::RETURN || Op.Opcode == NdOp::BRANCH ||
+        Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::INDIR_BR)
+      break;
+    if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2) {
+      const HomedWord Address = Entry.read(Op.Inputs[0]);
+      const HomedWord Value = Entry.read(Op.Inputs[1]);
+      if (Address.K == HomedWord::StackAddress &&
+          Value.K == HomedWord::Argument)
+        Homed.emplace(Address.Displacement, Value.Position);
+      continue;
+    }
+    Entry.step(Op);
+  }
+  if (Homed.empty())
+    return Homed;
+
+  // Nothing else the function computes from its stack pointer writes a slot.
+  size_t WorkRemaining = limits::kMaxSEHEstablisherFrameWork;
+  auto Bytes = proveLowSEHFixedFrame(Low, TRI, WorkRemaining);
+  if (!Bytes) {
+    llvm::consumeError(Bytes.takeError());
+    return {};
+  }
+  BodySP = -static_cast<int64_t>(*Bytes);
+  std::map<int64_t, unsigned> Seen;
+  for (size_t B = 0; B < Low.Blocks.size(); ++B) {
+    HomedWalk Walk(TRI);
+    HomedWord Start;
+    Start.K = HomedWord::StackAddress;
+    Start.Displacement = B ? *BodySP : 0;
+    Walk.setRegister(TRI.StackPointer, Start);
+    if (!B)
+      for (size_t I = 0; I < Arguments.size(); ++I) {
+        HomedWord Word;
+        Word.K = HomedWord::Argument;
+        Word.Position = static_cast<unsigned>(I);
+        Walk.setRegister(Arguments[I], Word);
+      }
+    for (const LowOp &Op : Low.Blocks[B].Ops) {
+      if (!Budget--)
+        return {};
+      if (Op.Opcode != NdOp::STORE || Op.NumInputs != 2) {
+        Walk.step(Op);
+        continue;
+      }
+      const HomedWord Address = Walk.read(Op.Inputs[0]);
+      if (Address.K != HomedWord::StackAddress)
+        continue;
+      const int64_t Size = Op.Inputs[1].Size;
+      for (auto It = Homed.begin(); It != Homed.end();) {
+        const bool Touches =
+            Address.Displacement < It->first + TRI.PointerSize &&
+            It->first < Address.Displacement + Size;
+        const HomedWord Value = Walk.read(Op.Inputs[1]);
+        const bool Same = Address.Displacement == It->first &&
+                          Value.K == HomedWord::Argument &&
+                          Value.Position == It->second && !B;
+        if (Touches && !Same)
+          It = Homed.erase(It);
+        else
+          ++It;
+      }
+    }
+  }
+  return Homed;
+}
+
+std::map<va_t, uint64_t>
+collectLowSEHTerminationFrames(const LowFunc &Low, Arch TargetArch,
+                               const std::set<va_t> &HandlerUnwindTargets) {
   std::map<va_t, uint64_t> Frames;
   if (TargetArch != Arch::X64 || !Low.ExceptionMetadata ||
       !Low.ExceptionMetadata->SEH)
@@ -1135,15 +1400,16 @@ std::map<va_t, uint64_t> collectLowSEHTerminationFrames(const LowFunc &Low,
   // handler then has its own budget for the code its scopes guard.
   const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
   size_t PrepareWork = limits::kMaxSEHEstablisherFrameWork;
-  auto Frame = prepareTerminationFrame(Low, TRI, PrepareWork);
+  auto Frame = prepareTerminationFrame(Low, TRI, PrepareWork,
+                                       /*AllowFrameRegister=*/true);
   if (!Frame) {
     llvm::consumeError(Frame.takeError());
     return Frames;
   }
   for (va_t Handler : Handlers) {
     size_t WorkRemaining = limits::kMaxSEHEstablisherFrameWork;
-    auto Bytes =
-        proveTerminationHandler(Low, *Frame, Handler, TRI, WorkRemaining);
+    auto Bytes = proveTerminationHandler(Low, *Frame, Handler, TRI,
+                                         WorkRemaining, HandlerUnwindTargets);
     if (!Bytes) {
       llvm::consumeError(Bytes.takeError());
       continue;

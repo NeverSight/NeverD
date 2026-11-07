@@ -541,11 +541,18 @@ struct MedSEHLocalUnwindExit {
 /// removes: a fixed offset from the entry stack pointer, the register an
 /// incoming argument arrives in, or a constant.
 struct SEHFuncletRegisterValue {
-  enum class Kind : uint8_t { EntryStackOffset, EntryArgument, Constant };
+  enum class Kind : uint8_t {
+    EntryStackOffset,
+    EntryArgument,
+    /// What a callee-saved register held when the function was entered, which
+    /// C can only print as the unknown register it is.
+    EntryRegister,
+    Constant
+  };
   Kind ValueKind = Kind::Constant;
   /// EntryStackOffset: bytes from the entry stack pointer.
   int64_t Offset = 0;
-  /// EntryArgument: the argument register's offset.
+  /// EntryArgument, EntryRegister: the register's offset.
   uint64_t RegOff = 0;
   /// Constant: the register's bits, and the address they name if any.
   uint64_t Value = 0;
@@ -782,6 +789,12 @@ struct MedFunc {
   /// they receive lies (proveLowSEHTerminationFrame). A handler whose frame
   /// LowIR did not certify is absent.
   std::map<va_t, uint64_t> SEHTerminationFrameBytes;
+  /// Windows x64: where this function's prologue saves its argument registers
+  /// for its termination handlers, which read them back through their
+  /// EstablisherFrame though nothing in the function does: entry-SP
+  /// displacement to argument position.  The function writes no other value
+  /// there (collectLowSEHHomedArguments).
+  std::map<int64_t, unsigned> SEHHomedArguments;
   /// ARM and AArch64 termination handlers read the parent's callee-saved
   /// registers, which the unwinder restores to their values where the
   /// exception struck. By handler entry and register offset: a full-width
@@ -790,6 +803,9 @@ struct MedFunc {
   /// (buildSsa). A register absent here has no such value.
   std::map<va_t, std::map<uint64_t, SEHFuncletRegisterValue>>
       SEHFuncletRegisters;
+  /// The addresses in this function its termination handlers local-unwind to:
+  /// a `goto` in the `__finally` that holds such a handler lands on one.
+  std::set<va_t> SEHHandlerUnwindTargets;
   /// The certified same-frame local unwinds this function makes, each
   /// already replaced by its handler calls and jump, by call address.
   std::vector<MedSEHLocalUnwindExit> SEHLocalUnwindExits;

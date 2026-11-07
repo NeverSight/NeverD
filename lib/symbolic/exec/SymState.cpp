@@ -292,6 +292,26 @@ SymRef SymState::readBank(Bank &B, uint64_t Offset, uint16_t Bytes) {
     return Input;
   }
 
+  // An unread run of bytes is one input, as a word nothing has touched is. Its
+  // value can then carry a relation across the run: below known upper bytes,
+  // the low half of a word is one number, not two unrelated bytes.
+  const uint64_t End = Offset + Bytes;
+  for (uint64_t At = Offset; At < End;) {
+    uint64_t RunEnd = End;
+    const auto Held = B.Bytes.lower_bound(At);
+    if (Held != B.Bytes.end())
+      RunEnd = std::min(RunEnd, Held->first);
+    if (B.Unknowns) {
+      const auto Unknown = B.Unknowns->Values.lower_bound(At);
+      if (Unknown != B.Unknowns->Values.end())
+        RunEnd = std::min(RunEnd, Unknown->first);
+    }
+    if (RunEnd - At > 1 && !readBank(B, At, static_cast<uint16_t>(RunEnd - At)))
+      return {};
+    At = std::max(RunEnd, At + 1);
+  }
+  Next = B.Bytes.lower_bound(Offset);
+
   // Byte keys are ordered and this range does not wrap. Visit retained bytes
   // once; materializing a gap does not invalidate the next map iterator.
   auto ReadByte = [&](uint64_t At) {
