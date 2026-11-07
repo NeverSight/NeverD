@@ -19,6 +19,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 
 #include "../../../loader/Swift/SwiftErrorSourceProjection.h"
+#include "../pass/HighDCEDetail.h"
 #include "AnalysisCall.h"
 #include "HighEntryStackOffsets.h"
 #include "MedMutableToHigh.h"
@@ -1832,6 +1833,11 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
     if (!EarlyCxxRegions)
       structureExceptionRegions(Func, Med);
     attachSEHHandlerEntryCopies(Func, Med);
+    // Keep value/effect cleanup independent of CFG structuring.
+    simplifyAllExprs(Func.Body);
+    zeroUndemandedUnknownBytes(Func, TargetArch);
+    simplifyAllExprs(Func.Body);
+    eliminateUnusedValues(Func);
     reduceLateGotos(Func);
     anchorDispatcherEntries(Func);
     Trace.high(Func, "after-exceptions");
