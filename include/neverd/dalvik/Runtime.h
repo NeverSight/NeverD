@@ -71,6 +71,13 @@ struct ExecutionResult {
 using AdmitInstruction = std::function<ExecutionStop()>;
 // Workload services retain their existing OS owner and return explicit stops.
 // Callbacks remain valid for the Runtime's lifetime; no host state is inferred.
+enum class BinderIdentityOperation { Allocate, Validate, Release };
+enum class BinderReferenceOperation {
+  AcquireWeak,
+  AcquireStrong,
+  DeferStrongRelease,
+  DeferWeakRelease
+};
 struct RuntimeServices {
   // Nonnegative Java longs; elapsed realtime has its own boot-time epoch.
   std::function<ExecutionResult()> uptime_milliseconds;
@@ -90,6 +97,10 @@ struct RuntimeServices {
   // Retain a newly materialized proxy on its existing Linux connection.
   // Libbinder queues weak then strong acquisition before freeing its Parcel.
   std::function<ExecutionResult(uint32_t, uint32_t)> retain_binder_handle;
+  // Allocate returns opaque native storage for two pointer-sized identities,
+  // not a JavaBBinder/RefBase C++ layout. Other operations take its base.
+  std::function<ExecutionResult(BinderIdentityOperation, uint64_t)>
+      binder_identity;
 };
 class Program {
 public:
@@ -191,6 +202,9 @@ public:
   // No guest allocation, initialization, loader lookup or budget consumption.
   // Available after terminal stops as well as ordinary Java returns/throws.
   RuntimeSnapshot snapshot() const;
+  // Native libbinder reference notifications; no Java callback is dispatched.
+  ExecutionResult binderReference(BinderReferenceOperation operation,
+                                  uint64_t pointer, uint64_t cookie);
 
 private:
   struct State;

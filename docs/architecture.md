@@ -17198,10 +17198,11 @@ missing values. Contracts follow API 28
 and [Binder](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/android/os/Binder.java).
 See [application runtime inputs](android-application-runtime.md) for the schema.
 
-`AndroidParcel.cpp` owns the API 28 Java owned-Parcel lifecycle and object-free
-data subset. DEX and JNI use the same catalogue, heap identities and bounded
-byte storage; JNI adds no Parcel semantics. `obtain` and `recycle` retain the
-six-slot owned pool in slot order. Recycle clears the bytes and cursor; accessing
+`AndroidParcel.cpp` owns the API 28 Java owned-Parcel lifecycle, scalar/string
+data and strong-object encoding. DEX and JNI use the same catalogue, heap
+identities and bounded byte storage; JNI adds no Parcel semantics. `obtain` and
+`recycle` retain the six-slot owned pool in slot order. Recycle clears the bytes
+and cursor; accessing
 a recycled object before another obtain, or a raw Java allocation without owned
 native state, stops explicitly. Heap growth is admitted before resizing, using
 the existing conservative retained-storage budget.
@@ -17293,6 +17294,20 @@ proxies by endpoint and rejects duplicate input endpoint identities. Dynamic
 proxies have no invented input key in snapshots. Reference acquisition is ordered
 before Parcel release on the current native thread. No private service response
 or application-specific object conversion belongs in these shared models.
+
+`dalvik/AndroidBinderObjects.cpp` owns Java Binder holders, native-to-Java identity
+and owned-Parcel strong references. Exact-key maps retain holders by Java identity
+and native objects by cookie. A holder keeps a weak cache, replacing an expired
+native object on the next conversion. The native adapter supplies bounded opaque
+allocations through the existing Linux memory owner; no guest C++ layout or Java
+heap ID is substituted for a native pointer. Retained `MemoryView` allocation
+identity prevents same-address replacement from reviving an opaque object.
+Strong writes use the shared Parcel data owner and feed the existing Linux
+object translator, including null and
+handle-zero records without metadata. Native reference notifications enter this
+same registry. The response reader queues pointer/cookie acknowledgments and
+flushes them only before another driver read; synchronous native release work
+remains deferred until the currently unsupported top-level dispatch path.
 
 `enforceInterface` still requires incoming flags and the Java StrictMode upcall.
 Local Binder dispatch, nested/one-way transactions, weak objects/FDs, and

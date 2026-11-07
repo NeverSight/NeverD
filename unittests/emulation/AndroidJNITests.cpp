@@ -217,6 +217,44 @@ TEST_P(AndroidJNI, BinderObjectsRetainProxyIdentityAndDriverOwnership) {
       }
     }
 }
+TEST_P(AndroidJNI, BinderLocalObjectsAndOwnedParcelWritesUseSharedTransport) {
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
+  Options.LinuxTime->AdvanceOnIdle = true;
+  Options.Android->ObserveJavaState = true;
+  auto &device = Options.LinuxFiles.emplace().Devices["/dev/binder"];
+  device.Binder = true;
+  device.AccessMode = 2;
+  auto &state =
+      Options.Android->Application.emplace().service_manager.emplace();
+  state.cache.emplace().push_back({"alpha", 7});
+  using Binding = mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::
+      BinderProxy::NativeBinding;
+  state.binder_proxies = {{7, false, Binding{3, 0, true}}};
+  const char *diagnostics[] = {"",
+                               "",
+                               "storage must remain opaque",
+                               "original native holder",
+                               "native capacity semantics",
+                               "non-append Binder metadata",
+                               "identity allocation was replaced"};
+  for (unsigned mode = 0; mode != 7; ++mode)
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(mode);
+      SCOPED_TRACE(form);
+      Options.Android->Arguments = {form, mode};
+      auto result = run("jni_binder_local");
+      if (*diagnostics[mode]) {
+        EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
+            << result.Diagnostic;
+        EXPECT_NE(result.Diagnostic.find(diagnostics[mode]), std::string::npos)
+            << result.Diagnostic;
+      } else {
+        EXPECT_EQ(result.Stop, ProcessStopReason::Returned)
+            << result.Diagnostic;
+        EXPECT_EQ(result.ReturnValue, 0u);
+      }
+    }
+}
 TEST_P(AndroidJNI, BinderTransactionEntryPreservesValidationOrderAndEffects) {
   const char *diagnostics[] = {"",
                                "",

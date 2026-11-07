@@ -513,8 +513,6 @@ inline constexpr int
 
 // lib/ir/high/lower/X86/CallArgCollectionWin64.cpp
 inline constexpr int
-    kCallArgCollectionWin64ResolvePassThroughParamsIsConstLikeDepthLimit = 8;
-inline constexpr int
     kCallArgCollectionWin64ResolvePassThroughParamsIsSlotDepthLimit = 8;
 
 // lib/ir/high/lower/MedToHigh.cpp

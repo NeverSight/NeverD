@@ -674,8 +674,8 @@ Slow/statistics EventLog branches require the separate, ordered
 [`android.event_log_writes` contract](android-log-reader.md#event-write-contract).
 Its bytes, truncation rules and signed results are shared with the five
 `EventLog.writeEvent` overloads and native `__android_log_bwrite`;
-missing writes remain unsupported. Local Binder objects, native object
-translation and remote exceptions remain outside this subset. With
+missing writes remain unsupported. These semantic replies do not construct
+local Binder objects or propagate remote exceptions. With
 `observe_java_state`, the optional
 `java_state.framework.service_manager` report retains cache completeness,
 entry identities, manager/logger identities and proxy warning state. Report
@@ -684,7 +684,8 @@ A proxy first created by native transport has report `key:null`.
 
 The shared API 28 `Parcel` subset supports `obtain`, `recycle`, `dataSize`,
 `dataPosition`, `dataAvail`, `setDataPosition`, int/long/String reads and writes,
-`readStrongBinder`, `marshall` and valid-range `unmarshall`. Owned objects reuse a six-slot pool;
+`readStrongBinder`, `writeStrongBinder`, `marshall` and valid-range `unmarshall`.
+Owned objects reuse a six-slot pool;
 recycled buffers are empty. Strings preserve UTF-16 units and native four-byte
 padding. Imported slices are padded and leave the cursor at the padded end;
 negative lengths leave the Parcel unchanged. Byte-array exports are independent
@@ -746,8 +747,30 @@ reads cannot expose object fields; complete denied reads retain native cursor
 advancement. Marshalling a Parcel with objects throws RuntimeException with the
 API 28 message; unmarshalling bytes never creates Binder ownership.
 A supplied handle-zero proxy is reusable; creating an uncached one still needs
-native PING_TRANSACTION. Local Binder cookies require an explicit native-to-Java
-object association and are never interpreted as Java heap IDs.
+native PING_TRANSACTION. A local cookie resolves only through a live native-to-Java
+association and is never interpreted as a Java heap ID.
+
+`Binder()` and DEX subclass constructors establish the original native holder
+in `mObject`. Native identities use bounded, inaccessible guest allocations;
+they do not expose a fabricated JavaBBinder or RefBase C++ layout. Standalone
+Dalvik callers supply the identity allocation/validation service. JNI raw
+allocation without construction, a changed holder field, or changed storage
+permissions cannot establish an association. The shared memory owner also checks
+the original allocation; remapping the same address cannot revive its identity.
+The holder weakly caches its native
+Binder; after the last strong reference disappears, the next conversion creates
+a new native identity while retaining the same Java object.
+
+`writeStrongBinder` writes local objects, bound remote proxies and null values
+into owned Parcels. API 28 cold-thread flags are `0x113`; null and handle-zero
+records have no object-table entry. Owned local entries retain native strong
+references until recycle, unmarshalling or successful reply replacement. The
+same Linux Binder owner translates local objects to handles and restores their
+cookies on return, preserving Java identity. Synchronous response processing
+queues pointer/cookie ACKs and flushes them at the next driver exchange. Release
+notifications remain deferred, as in native `waitForResponse`; top-level
+thread-pool/polling dispatch that drains those releases is not yet modeled.
+Overwriting object bytes or inserting non-append metadata stops explicitly.
 Borrowed reply writes/capacity growth, weak/FD object translation, one-way/nested
 transactions, local Binder dispatch, remaining native error/logging cases and
 `enforceInterface` remain unsupported.

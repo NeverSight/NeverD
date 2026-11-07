@@ -28,6 +28,56 @@ std::nullopt_t unsupported(ProcessResult &Result, llvm::StringRef Message) {
   return std::nullopt;
 }
 } // namespace
+mobile::dalvik::ExecutionResult
+Bionic::binderIdentity(mobile::dalvik::BinderIdentityOperation Operation,
+                       uint64_t Address) {
+  using mobile::dalvik::BinderIdentityOperation;
+  using mobile::dalvik::ExecutionStop;
+  if (Operation == BinderIdentityOperation::Allocate) {
+    auto Storage = allocate(2 * sizeof(uint64_t));
+    if (!Storage)
+      return {
+          ExecutionStop::Invalid, 0, {}, llvm::toString(Storage.takeError())};
+    if (!*Storage)
+      return {ExecutionStop::HeapLimit,
+              0,
+              {},
+              "Android Binder opaque identity storage budget exhausted"};
+    auto Protected = kernelService(linux_model::ServiceKind::Mprotect,
+                                   {0, 0, {*Storage, PageSize, 0}, {}});
+    if (!Protected)
+      return {
+          ExecutionStop::Invalid, 0, {}, llvm::toString(Protected.takeError())};
+    if (!*Protected || **Protected)
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Android Binder identity storage could not be made opaque"};
+    auto Backing = CPU.pinBacking(*Storage, 2 * sizeof(uint64_t));
+    if (!Backing)
+      return {
+          ExecutionStop::Invalid, 0, {}, llvm::toString(Backing.takeError())};
+    BinderIdentities.try_emplace(*Storage, std::move(*Backing));
+    return {ExecutionStop::Returned, *Storage};
+  }
+  if (auto E = opaqueHandle(Address, "Binder"))
+    return {ExecutionStop::Unsupported, 0, {}, llvm::toString(std::move(E))};
+  auto Current = CPU.pinBacking(Address, 2 * sizeof(uint64_t));
+  if (!Current)
+    return {ExecutionStop::Invalid, 0, {}, llvm::toString(Current.takeError())};
+  if (!BinderIdentities.find(Address)->second.describesSameBytes(*Current))
+    return {ExecutionStop::Unsupported,
+            0,
+            {},
+            "Android Binder identity allocation was replaced"};
+  if (Operation == BinderIdentityOperation::Release) {
+    if (auto E = release(Address))
+      return {ExecutionStop::Invalid, 0, {}, llvm::toString(std::move(E))};
+    BinderIdentities.erase(Address);
+  }
+  return {};
+}
+
 class Bionic::BinderWait final : public NativeWait {
 public:
   std::shared_ptr<linux_model::LinuxDeviceState> Device;
@@ -87,13 +137,18 @@ public:
               LibC.Result,
               "Android Binder release buffer lease is no longer live");
       }
-      uint8_t Bytes[12];
+      const bool Acknowledgment =
+          Command.Command == 0x40106308 || Command.Command == 0x40106309;
+      uint8_t Bytes[20];
       llvm::support::endian::write32le(Bytes, Command.Command);
       llvm::support::endian::write64le(Bytes + 4, Command.Value);
-      auto Sent = exchange(LibC, Command.FD, Command.Device,
-                           llvm::ArrayRef(Bytes).take_front(
-                               Command.Command == 0x40086303 ? 12 : 8),
-                           false);
+      llvm::support::endian::write64le(Bytes + 12, Command.Cookie);
+      auto Sent = exchange(
+          LibC, Command.FD, Command.Device,
+          llvm::ArrayRef(Bytes).take_front(Acknowledgment                  ? 20
+                                           : Command.Command == 0x40086303 ? 12
+                                                                           : 8),
+          false);
       if (!Sent)
         return Sent.takeError();
       if (!*Sent)
@@ -106,7 +161,14 @@ public:
     return value(0);
   }
   BionicResult run(Bionic &LibC) {
-    while (ready()) {
+    while (true) {
+      // An exhausted input buffer flushes mOut even when the next read waits.
+      // Returning a reply above that boundary leaves its queued ACKs intact.
+      auto Flushed = flush(LibC);
+      if (!Flushed || !*Flushed)
+        return Flushed;
+      if (!ready())
+        break;
       auto ReadResult = exchange(LibC, FD, Device, {}, true);
       if (!ReadResult)
         return ReadResult.takeError();
@@ -129,6 +191,32 @@ public:
         At += 4;
         if (Command == 0x720c || Command == 0x7206)
           continue;
+        if (Command >= 0x80107207 && Command <= 0x8010720a) {
+          const uint64_t Pointer = llvm::support::endian::read64le(Bytes + At);
+          const uint64_t Cookie =
+              llvm::support::endian::read64le(Bytes + At + 8);
+          At += 16;
+          using mobile::dalvik::BinderReferenceOperation;
+          const auto Operation =
+              Command == 0x80107207   ? BinderReferenceOperation::AcquireWeak
+              : Command == 0x80107208 ? BinderReferenceOperation::AcquireStrong
+              : Command == 0x80107209
+                  ? BinderReferenceOperation::DeferStrongRelease
+                  : BinderReferenceOperation::DeferWeakRelease;
+          auto Applied =
+              LibC.JNI.DexRuntime->binderReference(Operation, Pointer, Cookie);
+          if (Applied.stop != mobile::dalvik::ExecutionStop::Returned)
+            return unsupported(LibC.Result, Applied.diagnostic);
+          if (Command == 0x80107207 || Command == 0x80107208)
+            LibC.binderThread().PendingCommands.push_back(
+                {Device,
+                 FD,
+                 Command == 0x80107207 ? 0x40106308u : 0x40106309u,
+                 Pointer,
+                 {},
+                 Cookie});
+          continue;
+        }
         if (Command == 0x7205 || Command == 0x7211) {
           Reply.status = Command == 0x7205 ? -32 : INT32_MIN + 2;
           Finished = true;

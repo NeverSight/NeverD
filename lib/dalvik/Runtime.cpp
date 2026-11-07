@@ -1690,6 +1690,11 @@ ExecutionResult Runtime::resume(uint64_t id, uint64_t owner,
   it->second->completion = std::move(completion);
   return state->advance(id);
 }
+ExecutionResult Runtime::binderReference(BinderReferenceOperation operation,
+                                         uint64_t pointer, uint64_t cookie) {
+  return state->framework.binderReference(operation, pointer, cookie);
+}
+
 ExecutionResult Runtime::library(const LibraryMethod &method, uint64_t receiver,
                                  std::span<const uint64_t> args,
                                  const AdmitInstruction &admit, bool nonvirtual,

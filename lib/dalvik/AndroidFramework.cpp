@@ -532,6 +532,10 @@ void Program::addAndroidFramework() {
       field.access = {"private", "static", "volatile"};
       field.value = false;
       type.fields.push_back(std::move(field));
+      Field holder;
+      holder.reference = {type.name, "mObject", "J"};
+      holder.access = {"private", "final"};
+      type.fields.push_back(std::move(holder));
     }
     if (std::string_view(name) == "android/os/IServiceManager")
       type.interfaces = {"Landroid/os/IInterface;"};
@@ -1077,6 +1081,18 @@ ExecutionResult AndroidFramework::field(Heap &heap, const Field &field,
       binder_tracing_enabled = bool(*write);
     return {ExecutionStop::Returned, binder_tracing_enabled};
   }
+  if (ref.owner == "Landroid/os/Binder;" && ref.name == "mObject") {
+    auto object = heap.get(receiver);
+    auto entry = object->Fields.find(&field);
+    if (entry == object->Fields.end())
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Android Binder holder field storage is not supplied"};
+    if (write)
+      entry->second = *write;
+    return {ExecutionStop::Returned, entry->second};
+  }
   if (ref.owner == "Ljava/lang/Float;") {
     // The projected immutable value is an IEEE-754 bit carrier. This does not
     // admit floating-point DEX arithmetic or writes to final fields.
@@ -1554,7 +1570,10 @@ ExecutionResult AndroidFramework::execute(Heap &heap, const Program &program,
                                           std::span<const uint64_t> arguments,
                                           const AdmitInstruction &admit) {
   if (method.Op == ParcelData)
-    return parcel(heap, method, receiver, arguments, admit);
+    return parcel(heap, program, method, receiver, arguments, admit);
+  if (method.Op == Construct &&
+      std::string_view(method.Class) == "android/os/Binder")
+    return constructBinder(heap, program, receiver, admit);
   if (method.Op == BinderTransact || method.Op == BinderTransactNative)
     return binderTransact(heap, program, method, receiver, arguments, admit);
   if (method.Op == BinderTracing) {
