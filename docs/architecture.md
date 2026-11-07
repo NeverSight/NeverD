@@ -5129,6 +5129,11 @@ parity operations keep their cache lookup and recursive expansion in one
 function, avoiding another call frame on the frequent cache misses. Lookup,
 depth admission, charging and insertion keep their original order, including
 failure paths.
+XOR and three-input parity reuse a completed low cofactor when every high
+cofactor has the same complete decision identity apart from its complement
+edge. Their complement flags combine exactly, avoiding a repeated recursive
+lookup. Any changed decision identity retains the general recursion; only
+the queries actually performed consume work.
 Application keys pack both complete bounded edges and their operation into
 one 32-bit word, halving the application-cache bucket size. The 64-bit integer
 mixer includes every identity bit in small tables' bucket selection. Full edge

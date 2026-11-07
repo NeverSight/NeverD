@@ -3517,6 +3517,11 @@ at most 128 and derivation evidence with verification sampling disabled.
 Independent full-width multiplication checks both parity branches and retained
 factors. A complemented case is zero at the first two witness assignments and
 nonzero at the third, checking that cached wide plans use the new inputs.
+`ComplementCofactorsExposeAWidePerturbedResidual` covers a degree-126 neighbor
+at 257 bits with surrounding linear MBA terms. With verification sampling
+disabled and the same 65,536-work limit, the result must have derivation
+evidence and cost at most 256. Independent full-width arithmetic checks the
+retained nonlinear residual and all four inputs on boundary and random values.
 Real worker and CLI source tests also execute degree-47 and degree-95
 nonlinear neighbors through all six source routes at O0/O2.
 `DenseFrequenciesFinishWidePartialProducts` checks degree-62 partial products

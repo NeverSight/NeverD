@@ -514,6 +514,42 @@ TEST(SymMBAWidePairs, NarrowParityNeighborsFinishWithCompleteResidualWords) {
     }
 }
 
+TEST(SymMBAWidePairs, ComplementCofactorsExposeAWidePerturbedResidual) {
+  constexpr unsigned Width = 257;
+  SymContext Ctx;
+  const auto F = partialFixture(Ctx, Width, 126, true, 8, 5);
+  const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+  const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+  const auto Input =
+      Ctx.mkAdd({F.Input, Ctx.mkXor(X, Y),
+                 Ctx.mkMul(Ctx.mkConst(Width, 2), Ctx.mkAnd(X, Y)),
+                 Ctx.mkOr(Z, W), Ctx.mkAnd(Z, W)});
+  MBAOptions Options;
+  Options.MaxWork = 65536;
+  Options.VerifySamples = 0;
+  const auto Result = simplifyMBADeep(Ctx, Input, Options);
+  ASSERT_TRUE(Result.Changed);
+  EXPECT_LE(Result.SizeAfter, 256u);
+  EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+
+  SymEvalPlan Reduced(Ctx, Result.Expr);
+  std::mt19937_64 Random(0x434f464143544f52);
+  for (unsigned Trial = 0; Trial < 256; ++Trial) {
+    std::array<llvm::APInt, 4> Values;
+    for (auto &Value : Values) {
+      Value = llvm::APInt(Width, 0);
+      for (unsigned Bit = 0; Bit < Width; Bit += 64)
+        Value |= llvm::APInt(Width, Random()).shl(Bit);
+      if (Trial < 4)
+        Value = Trial == 3 ? llvm::APInt::getAllOnes(Width)
+                           : llvm::APInt(Width, Trial);
+    }
+    const auto Expected = F.oracle({Values[0], Values[1], Values[2]}) +
+                          Values[0] + Values[1] + Values[2] + Values[3];
+    ASSERT_EQ(Reduced.eval(Values), Expected);
+  }
+}
+
 TEST(SymMBAWidePairs, PreparedParityPrefixesKeepTheirProductAndContext) {
   auto Run = [](unsigned Width, bool Prepare) {
     SymContext Ctx;

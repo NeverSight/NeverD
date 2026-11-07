@@ -228,12 +228,26 @@ class LowWordDecisions {
     // Recursive insertion may reallocate Nodes; copy both decisions first.
     const auto Left = decision(A), Right = decision(B);
     const auto Variable = std::min(Left.Variable, Right.Variable);
-    const auto Low =
-        apply<Op>(Left.Variable == Variable ? Left.Low : A,
-                  Right.Variable == Variable ? Right.Low : B, Depth + 1);
-    const auto High =
-        apply<Op>(Left.Variable == Variable ? Left.High : A,
-                  Right.Variable == Variable ? Right.High : B, Depth + 1);
+    const auto ALow = Left.Variable == Variable ? Left.Low : A;
+    const auto AHigh = Left.Variable == Variable ? Left.High : A;
+    const auto BLow = Right.Variable == Variable ? Right.Low : B;
+    const auto BHigh = Right.Variable == Variable ? Right.High : B;
+    // Keep one combined relation across recursion, rather than retaining
+    // every low cofactor until the high branch is considered.
+    uint32_t Change = 0;
+    if constexpr (Op == Xor) {
+      const auto DA = ALow ^ AHigh, DB = BLow ^ BHigh;
+      Change = ((DA | DB) & ~uint32_t(1)) | ((DA ^ DB) & 1);
+    }
+    const auto Low = apply<Op>(ALow, BLow, Depth + 1);
+    uint32_t High;
+    if constexpr (Op == Xor) {
+      // Identical complete cofactors may differ only by their complement
+      // edge. XOR combines those flags without another recursive lookup.
+      High = Change <= 1 ? Low ^ Change : apply<Op>(AHigh, BHigh, Depth + 1);
+    } else {
+      High = apply<Op>(AHigh, BHigh, Depth + 1);
+    }
     const auto Result = node(Variable, Low, High);
     if (!charge(1, sizeof(Key) + sizeof(uint32_t) + 4 * sizeof(void *)) ||
         !reserveEntry(Applied))
@@ -473,12 +487,21 @@ class LowWordDecisions {
     }
     const auto DA = decision(A), DB = decision(B), DC = decision(C);
     const auto V = std::min({DA.Variable, DB.Variable, DC.Variable});
-    const auto L =
-        parity(DA.Variable == V ? DA.Low : A, DB.Variable == V ? DB.Low : B,
-               DC.Variable == V ? DC.Low : C, Depth + 1);
+    const auto ALow = DA.Variable == V ? DA.Low : A;
+    const auto AHigh = DA.Variable == V ? DA.High : A;
+    const auto BLow = DB.Variable == V ? DB.Low : B;
+    const auto BHigh = DB.Variable == V ? DB.High : B;
+    const auto CLow = DC.Variable == V ? DC.Low : C;
+    const auto CHigh = DC.Variable == V ? DC.High : C;
+    const auto ChangeA = ALow ^ AHigh, ChangeB = BLow ^ BHigh,
+               ChangeC = CLow ^ CHigh;
+    const auto Change = ((ChangeA | ChangeB | ChangeC) & ~uint32_t(1)) |
+                        ((ChangeA ^ ChangeB ^ ChangeC) & 1);
+    const auto L = parity(ALow, BLow, CLow, Depth + 1);
+    // This is a relation between complete decision edges, not just their
+    // leading bits. Any changed node identity retains the general recursion.
     const auto H =
-        parity(DA.Variable == V ? DA.High : A, DB.Variable == V ? DB.High : B,
-               DC.Variable == V ? DC.High : C, Depth + 1);
+        Change <= 1 ? L ^ Change : parity(AHigh, BHigh, CHigh, Depth + 1);
     const auto R = node(V, L, H);
     if (!charge(1, sizeof(Key) + sizeof(uint32_t) + 4 * sizeof(void *)) ||
         !reserveEntry(Parities))
