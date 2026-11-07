@@ -12290,3 +12290,71 @@ TEST(HighControlFlowSemantics, LargeSourceNamesDeepConditionalValues) {
   };
   runWithLargeStackThreads(1, Work);
 }
+
+TEST(HighControlFlowSemantics, ConsecutiveExternalSkipsKeepEachPathValue) {
+  HighFunc F;
+  F.Entry = 0x1000;
+  F.ReturnType = NdType::makeInt(8);
+  F.Body.push_back(assign(F.Entry, 1, 0));
+  for (unsigned I = 0; I != 8; ++I) {
+    const va_t Address = 0x1100 + I * 0x100;
+    const uint64_t Bit = uint64_t{1} << I;
+    auto Choice = conditional(Address, Address + 0x80);
+    Choice.Cond = HighExpr::makeBinop(NdOp::INT_AND, local(0),
+                                      HighExpr::makeConst(Bit, 8));
+    auto Add = [&](va_t At, uint64_t Value) {
+      auto S = assign(At, 1, 0);
+      S.Val = HighExpr::makeBinop(NdOp::INT_ADD, local(1),
+                                  HighExpr::makeConst(Value, 8));
+      return S;
+    };
+    F.Body.push_back(std::move(Choice));
+    F.Body.push_back(Add(Address + 0x10, Bit));
+    F.Body.push_back(jump(Address + 0x14, Address + 0x100));
+    F.Body.push_back(Add(Address + 0x80, 2 * Bit));
+    F.Body.push_back(jump(Address + 0x84, Address + 0x100));
+  }
+  F.Body.push_back(result(0x1900, local(1)));
+  for (uint64_t Input = 0; Input != 256; ++Input)
+    ASSERT_EQ(execute(F, Input, true), 255 + Input);
+
+  invertSkipGotos(F);
+  for (uint64_t Input = 0; Input != 256; ++Input)
+    EXPECT_EQ(execute(F, Input, true), 255 + Input);
+}
+
+TEST(HighControlFlowSemantics, ExternalSkipsKeepEarlierNestedIncomingEdges) {
+  HighFunc F;
+  F.Entry = 0x1000;
+  F.ReturnType = NdType::makeInt(8);
+  auto First = conditional(0x1004, 0x1040);
+  First.Cond =
+      HighExpr::makeBinop(NdOp::INT_EQUAL, local(0), HighExpr::makeConst(1, 8));
+  auto Inner = conditional(0x1010, 0x1060);
+  Inner.Cond =
+      HighExpr::makeBinop(NdOp::INT_EQUAL, local(0), HighExpr::makeConst(2, 8));
+  auto Second = conditional(0x1040, 0x1080);
+  Second.Cond =
+      HighExpr::makeBinop(NdOp::INT_EQUAL, local(0), HighExpr::makeConst(1, 8));
+  auto Shared = assign(0x1060, 1, 0);
+  Shared.Val =
+      HighExpr::makeBinop(NdOp::INT_ADD, local(1), HighExpr::makeConst(7, 8));
+  F.Body = {assign(0x1000, 1, 0),
+            First,
+            Inner,
+            assign(0x1014, 1, 3),
+            jump(0x1018, 0x1040),
+            Second,
+            assign(0x1050, 1, 5),
+            Shared,
+            jump(0x1064, 0x1090),
+            result(0x1080, local(1)),
+            result(0x1090, local(1))};
+  ASSERT_EQ(execute(F, 0, true), 12u);
+  ASSERT_EQ(execute(F, 1, true), 0u);
+  ASSERT_EQ(execute(F, 2, true), 7u);
+  invertSkipGotos(F);
+  EXPECT_EQ(execute(F, 0, true), 12u);
+  EXPECT_EQ(execute(F, 1, true), 0u);
+  EXPECT_EQ(execute(F, 2, true), 7u);
+}

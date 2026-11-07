@@ -21480,3 +21480,5 @@ MedStackAlignment reusable-entry query regressions exercise the existing scoped 
 `CDisplayFrameRecord` index regressions check duplicate-name owner precedence, layout replacement, current propagated types and disabled storage projection. The index is rebuilt with its layout snapshot; mutable types are read from their current slots.
 
 `HighEntryStackOffsets.SharedIndexesKeepDefinitionAndPhiIdentities` checks register/temporary identities, ambiguous PHIs and a new conversion after mutation. Win64 forwarding checks use the same converter-owned definition and PHI indexes as production calls.
+
+HighControlFlowSemantics external-skip tests independently execute all 256 branch choices and preserve earlier nested incoming edges. Batched external-skip ownership must retain statement order and reject outside entries; the current upstream goto-splice and entry-label indexes are retained. Windows exception regressions qualify exceptional control flow.
