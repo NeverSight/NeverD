@@ -13,6 +13,8 @@ extern void *realloc(void *, U64);
 extern void free(void *);
 extern void *memcpy(void *, const void *, U64);
 extern int *__errno(void);
+extern void *mmap(void *, U64, int, int, int, long);
+extern int mprotect(void *, U64, int);
 
 U64 allocation_contents(unsigned char *Out) {
   unsigned char *First = malloc(4099);
@@ -55,3 +57,21 @@ U64 allocation_contents(unsigned char *Out) {
 }
 
 U64 allocation_hold(void) { return (U64)malloc(4099); }
+
+U64 allocation_foreign(unsigned char *Out, unsigned Mode) {
+  void *Pointer = Out;
+  if (Mode == 1)
+    Pointer = (unsigned char *)malloc(16) + 1;
+  if (Mode == 2) {
+    Pointer = malloc(16);
+    free(Pointer);
+  }
+  if (Mode == 3)
+    Pointer = mmap(0, 4096, 0, 0x22, -1, 0);
+  if (Mode == 4) {
+    Pointer = malloc(16);
+    if (!Pointer || mprotect(Pointer, 4096, 0))
+      return 1;
+  }
+  return (U64)realloc(Pointer, 32);
+}

@@ -22,6 +22,8 @@ protected:
   std::optional<X86LegacyDoubleShiftUndefinedState> DoubleShiftUndefined;
   std::optional<uint32_t> BitTestUndefinedFlags;
   std::optional<X86LegacyBitScanChoices> BitScanChoices;
+  std::optional<X86LegacyIntegerExtensions> IntegerExtensions;
+  std::optional<uint32_t> BitCountUndefinedFlags;
   std::optional<X86LegacyAtomicProfile> Atomics;
   std::optional<uint32_t> MemoryHigh;
   /// Bind only architectural undefined bits from the independent original CPU.
@@ -272,6 +274,8 @@ protected:
     Options.DoubleShiftUndefined = DoubleShiftUndefined;
     Options.BitTestUndefinedFlags = BitTestUndefinedFlags;
     Options.BitScanChoices = BitScanChoices;
+    Options.IntegerExtensions = IntegerExtensions;
+    Options.BitCountUndefinedFlags = BitCountUndefinedFlags;
     Options.Atomics = Atomics;
     Options.Strings = Strings;
     Options.FarTransfers = FarTransfers;

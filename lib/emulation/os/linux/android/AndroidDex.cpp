@@ -13,6 +13,8 @@
 #include "neverd/dalvik/Runtime.h"
 #include "neverd/emulation/Limits.h"
 
+#include "llvm/Support/Error.h"
+
 #include <cstdint>
 #include <utility>
 
@@ -314,7 +316,9 @@ BionicResult Bionic::finishDex(mobile::dalvik::ExecutionResult Executed,
     return value(0);
   }
   if (Executed.stop == ExecutionStop::Invalid)
-    return failure(Executed.diagnostic);
+    // Runtime services already own their diagnostics, including native context.
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   Executed.diagnostic);
   Result.Diagnostic = Executed.diagnostic;
   if (Executed.stop == ExecutionStop::Timeout) {
     Expired = true;

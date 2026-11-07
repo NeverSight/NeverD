@@ -114,6 +114,7 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       state.release = {};
       state.view = {};
       state.write = {};
+      state.reallocate_objects = {};
       state.capacity = 0;
       state.error = 0;
       state.objects.clear();
@@ -168,6 +169,7 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         state.release = {};
         state.view = {};
         state.write = {};
+        state.reallocate_objects = {};
       }
       state.capacity = desired;
     };
@@ -298,9 +300,6 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       return binderHandle(heap, *state.fd, uint32_t(pointer), admit);
     }
     if (name == "writeStrongBinder") {
-      if (state.release && uint64_t(position) + 24 <= state.capacity)
-        return unsupported("Android Parcel borrowed object-table growth "
-                           "requires native allocator handling");
       std::array<uint8_t, 24> encoded{};
       uint32_t type = 0x73622a85;
       uint64_t pointer = 0, cookie = 0;
@@ -327,6 +326,18 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         } else
           return unsupported("Android custom IBinder conversion requires "
                              "native warning logging");
+      }
+      if (state.release &&
+          uint64_t(position) + encoded.size() <= state.capacity) {
+        if (!state.reallocate_objects)
+          return unsupported(
+              "Android Parcel borrowed object-table allocator is not supplied");
+        // ipcSetDataReference makes mObjectsCapacity equal mObjectsSize, even
+        // for an empty table. JNI converts the Java Binder before writeObject
+        // attempts realloc; the allocator failure precedes data/metadata
+        // writes.
+        const auto allocation = ((state.objects.size() + 2) * 3 / 2) * 8;
+        return state.reallocate_objects(allocation);
       }
       if (pointer && !state.objects.empty() &&
           position < state.objects.back() + 24)
@@ -450,6 +461,7 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       state.release = {};
       state.view = {};
       state.write = {};
+      state.reallocate_objects = {};
       state.error = 0;
       state.objects.clear();
       state.fd.reset();

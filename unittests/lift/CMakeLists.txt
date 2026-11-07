@@ -944,6 +944,17 @@ target_compile_definitions(NeverDX86LegacyEncodingSourceTests PRIVATE
   NEVERD_TEST_LEGACY_ATOMIC=1
 )
 
+add_neverd_unittest(NeverDX86StackFrameTests
+  x86/X86StackFrameTests.cpp
+  x86_64/X86_64_StackMemorySemanticTests.cpp
+  LINK_COMPONENTS Pipeline Symbolic
+)
+target_compile_definitions(NeverDX86StackFrameTests PRIVATE
+  NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}"
+  NEVERD_BINARY="$<TARGET_FILE:neverd>"
+  TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_dependencies(NeverDX86StackFrameTests neverd)
+
 add_neverd_unittest(NeverDX86HleSourceTests
   x86/X86HleSourceTests.cpp
   LINK_COMPONENTS BackendC CodeGen)

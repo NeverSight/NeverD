@@ -268,14 +268,17 @@ TEST_P(AndroidJNI, ParcelBorrowedRepliesGrowWithSharedBinderOwnership) {
   using Binding = mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::
       BinderProxy::NativeBinding;
   state.binder_proxies = {{7, false, Binding{3, 0, true}}};
-  for (unsigned mode = 0; mode != 9; ++mode)
+  std::optional<std::string> allocationDiagnostic;
+  for (unsigned mode = 0; mode != 18; ++mode)
     for (unsigned form = 0; form != 3; ++form) {
       SCOPED_TRACE(mode);
       SCOPED_TRACE(form);
       Options.Android->Arguments = {form, mode};
       auto result = run("jni_parcel_reply_growth");
-      const auto expected = mode == 2 ? ProcessStopReason::RuntimeFailure
-                            : mode == 3 || mode == 4 || mode == 8
+      const bool reallocFailure = mode >= 8 && mode <= 14;
+      const auto expected = mode == 2 || reallocFailure
+                                ? ProcessStopReason::RuntimeFailure
+                            : mode == 3 || mode == 4 || mode == 15
                                 ? ProcessStopReason::UnsupportedService
                                 : ProcessStopReason::Returned;
       EXPECT_EQ(result.Stop, expected) << result.Diagnostic;
@@ -287,8 +290,19 @@ TEST_P(AndroidJNI, ParcelBorrowedRepliesGrowWithSharedBinderOwnership) {
       else if (mode == 4)
         EXPECT_NE(result.Diagnostic.find("buffer is not readable"),
                   std::string::npos);
-      else if (mode == 8)
-        EXPECT_NE(result.Diagnostic.find("borrowed object-table growth"),
+      else if (reallocFailure) {
+        EXPECT_NE(
+            result.Diagnostic.find("realloc does not name a live allocation"),
+            std::string::npos);
+        if (!allocationDiagnostic)
+          allocationDiagnostic = result.Diagnostic;
+        EXPECT_EQ(result.Diagnostic, *allocationDiagnostic);
+        size_t calls = 0;
+        for (const auto &call : result.NativeCalls)
+          calls += call.Name == "realloc";
+        EXPECT_EQ(calls, mode == 13 || mode == 14 ? 1u : 0u);
+      } else if (mode == 15)
+        EXPECT_NE(result.Diagnostic.find("original native holder"),
                   std::string::npos);
       else
         EXPECT_NE(result.Diagnostic.find("guest pointer"), std::string::npos)

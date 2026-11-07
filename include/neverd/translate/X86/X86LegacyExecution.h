@@ -66,6 +66,27 @@ struct X86LegacyEventContinuation {
   llvm::SmallVector<Access> CompletedAccesses;
 };
 
+/// PUSHA/POPA/ENTER progress across a physical-backing stop. Retain this
+/// state, the CPU/profile bindings and RAM; repair only unavailable backing
+/// before calling the same instruction again. Completed accesses are not
+/// repeated, even if an earlier push overwrote its own input or code bytes.
+/// Architectural faults clear this continuation and restart at the original
+/// PC after event delivery. POPA's already loaded registers remain visible.
+struct X86LegacyStackContinuation {
+  struct Access {
+    uint32_t Offset = 0;
+    uint32_t Value = 0;
+    bool Write = false;
+  };
+  X86LegacySegmentState Entry;
+  std::array<uint32_t, 8> ExpectedGPR{};
+  uint32_t EIP = 0;
+  uint32_t EFlags = 0;
+  llvm::SmallVector<uint8_t> Instruction;
+  llvm::SmallVector<Access> CompletedAccesses;
+  uint8_t DataBreakpoints = 0;
+};
+
 /// Debug bank shared with the paged x64 owner, with 32-bit address wrap.
 using X86LegacyDebugState = X86InstructionDebugState<uint32_t>;
 
@@ -87,6 +108,7 @@ struct X86LegacyExecutionState {
   std::optional<X86MpxContext> Mpx;
   std::optional<X86LegacyEventContinuation> PendingEvent;
   std::optional<X86LegacyDebugState> Debug;
+  std::optional<X86LegacyStackContinuation> PendingStack;
 };
 
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
@@ -106,7 +128,12 @@ enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
 enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
 
 /// Confined ordinary RAM. POP memory uses incremented ESP, with SS.B-sized
-/// stack advancement preserving high ESP on a word wrap.
+/// stack advancement preserving high ESP on a word wrap. PUSHA/ENTER stores
+/// and POPA register loads publish in order; ESP and ENTER's EBP commit only
+/// after completion. POPA reads and discards the saved SP slot. ENTER's frame
+/// value uses operand-sized entry-SP subtraction, independently of SS.B.
+/// ENTER checks an operand-sized write at its final SP
+/// without storing data. Host backing stops retain PendingStack.
 enum class X86LegacyScalarProfile : uint8_t { OrderedRAM };
 
 /// One ordinary-RAM element per step, with destination-first CMPS reads.
@@ -126,6 +153,17 @@ inline constexpr uint32_t kX86LegacyArithmeticFlagsMask = 0x8d5;
 inline constexpr uint32_t kX86LegacyShiftUndefinedFlagsMask = 0x811;
 inline constexpr uint32_t kX86LegacyBitTestUndefinedFlagsMask = 0x894;
 inline constexpr uint32_t kX86LegacyBitScanChoiceFlagsMask = 0x895;
+inline constexpr uint32_t kX86LegacyBitCountUndefinedFlagsMask = 0x894;
+
+/// Producer-selected instruction availability, independently of host CPUID.
+/// Missing POPCNT/ADX delivers #UD; missing LZCNT/BMI1 selects BSR/BSF and
+/// their existing result/flag choices. Other ISA banks are not implied.
+struct X86LegacyIntegerExtensions {
+  bool POPCNT = false;
+  bool LZCNT = false;
+  bool BMI1 = false;
+  bool ADX = false;
+};
 
 /// Explicit CPU choices for BSF/BSR's zero-source result and non-ZF flags.
 /// Current Intel documentation specifies preservation of the zero result;
@@ -223,6 +261,11 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacyDebugProfile> Debug;
   std::optional<X86GeneralDetectFrame> GeneralDetectFrame;
   X86EventDeliveryOptions EventDelivery;
+  /// Required for POPCNT/LZCNT/TZCNT/ADCX/ADOX, even when unavailable.
+  std::optional<X86LegacyIntegerExtensions> IntegerExtensions;
+  /// OF/SF/AF/PF after successful LZCNT/TZCNT with the feature enabled.
+  /// CF/ZF are computed. Feature-disabled aliases use BitScanChoices instead.
+  std::optional<uint32_t> BitCountUndefinedFlags;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -253,6 +296,14 @@ struct X86LegacyExecutionResult {
   std::optional<GuestMemoryFault> BackingFault;
   std::vector<SelfModificationExit> SelfModifications;
 };
+
+/// Authenticate a complete instruction extent with the executor's own byte
+/// grammar. This performs no accesses and binds no runtime state or profiles.
+/// An accepted encoding can still require an explicit execution option or
+/// raise an owned architectural fault. Used by original-byte source export.
+llvm::Error
+validateX86LegacyInstructionEncoding(llvm::ArrayRef<uint8_t> Instruction,
+                                     bool Code32);
 
 /// Persistent shadows determine eligibility before any table access. Fault
 /// delivery retains CR2, NMI blocking, descriptor writes and earlier frame

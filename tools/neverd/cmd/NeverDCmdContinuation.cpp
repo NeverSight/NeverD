@@ -1,4 +1,4 @@
-//===- NeverDCmdContinuation.cpp - Explicit x64 state source -------------===//
+//===- NeverDCmdContinuation.cpp - Explicit x86 state source -------------===//
 //
 // NeverD Decompiler
 //
@@ -9,6 +9,7 @@
 
 #include "../NeverDCLI.h"
 
+#include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/X64ContinuationExport.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -22,8 +23,11 @@
 #include <string>
 
 namespace neverd::cli {
-int runX64Continuation(neverd_session_t Sess) {
-  if (X64Continuation.empty() || ContinuationReport.empty() ||
+int runContinuation(neverd_session_t Sess) {
+  const bool Legacy = X86LegacySource.getNumOccurrences();
+  const auto &Request = Legacy ? X86LegacySource : X64Continuation;
+  if (Request.empty() || (Legacy && X64Continuation.getNumOccurrences()) ||
+      (Legacy && LlvmRoute.getNumOccurrences()) || ContinuationReport.empty() ||
       OutputLanguage != NEVERD_OUTPUT_C || !ExportFunc.empty() || NoOpt ||
       Devirtualize || DecompileCallees || StackFrameInfo ||
       StackFrameFile.getNumOccurrences() ||
@@ -32,9 +36,11 @@ int runX64Continuation(neverd_session_t Sess) {
       SourceLLVMLevel.getNumOccurrences() ||
       SourceLLVMPasses.getNumOccurrences() || MaxFunc.getNumOccurrences()) {
     llvm::WithColor::error()
-        << "--x64-continuation requires a request JSON and "
+        << "select --x64-continuation or --x86-legacy-source with a request "
+           "JSON and "
            "--continuation-report; "
-           "use C output with optional --llvm, without ordinary function, "
+           "use C output (--llvm is only valid for --x64-continuation), "
+           "without ordinary function, "
            "frame, devirtualization or source-optimization options\n";
     return 1;
   }
@@ -48,9 +54,8 @@ int runX64Continuation(neverd_session_t Sess) {
            (!ErrorA && !ErrorB && CanonicalA == CanonicalB);
   };
   if (SameFile(OutputFile, ContinuationReport) ||
-      SameFile(OutputFile, X64Continuation) ||
-      SameFile(OutputFile, InputFile) ||
-      SameFile(ContinuationReport, X64Continuation) ||
+      SameFile(OutputFile, Request) || SameFile(OutputFile, InputFile) ||
+      SameFile(ContinuationReport, Request) ||
       SameFile(ContinuationReport, InputFile)) {
     llvm::WithColor::error()
         << "continuation source and manifest must use distinct output files, "
@@ -58,12 +63,15 @@ int runX64Continuation(neverd_session_t Sess) {
     return 1;
   }
   uint64_t Size = 0;
-  if (llvm::sys::fs::file_size(X64Continuation, Size) || !Size ||
-      Size > limits::pipeline::kX64ContinuationRequestBytes) {
+  const auto RequestLimit =
+      Legacy ? limits::pipeline::kX86LegacySourceRequestBytes
+             : limits::pipeline::kX64ContinuationRequestBytes;
+  if (llvm::sys::fs::file_size(Request, Size) || !Size || Size > RequestLimit) {
     llvm::WithColor::error() << "cannot read a bounded continuation request\n";
     return 1;
   }
-  auto Buffer = llvm::MemoryBuffer::getFile(X64Continuation);
+  auto Buffer = llvm::MemoryBuffer::getFile(Request, /*IsText=*/false,
+                                            /*RequiresNullTerminator=*/false);
   if (!Buffer) {
     llvm::WithColor::error()
         << "cannot read continuation request: " << Buffer.getError().message()
@@ -71,9 +79,13 @@ int runX64Continuation(neverd_session_t Sess) {
     return 1;
   }
   const char *Manifest = nullptr;
-  const char *Source = neverd_x64_continuation_source_v1(
-      Sess, (*Buffer)->getBufferStart(), (*Buffer)->getBufferSize(), LlvmRoute,
-      &Manifest);
+  const char *Source =
+      Legacy
+          ? neverd_x86_legacy_source_v1(Sess, (*Buffer)->getBufferStart(),
+                                        (*Buffer)->getBufferSize(), &Manifest)
+          : neverd_x64_continuation_source_v1(Sess, (*Buffer)->getBufferStart(),
+                                              (*Buffer)->getBufferSize(),
+                                              LlvmRoute, &Manifest);
   auto Free = llvm::scope_exit([&] {
     neverd_free_string(Source);
     neverd_free_string(Manifest);

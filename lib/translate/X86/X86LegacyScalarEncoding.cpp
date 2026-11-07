@@ -9,6 +9,8 @@
 
 #include "X86LegacyScalar.h"
 
+#include "neverd/ir/X86/X86StackFrameRules.h"
+
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -19,7 +21,7 @@ std::optional<X86LegacyScalarInstruction>
 decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   using Op = X86LegacyScalarOperation;
   X86LegacyEncoding R(Bytes, Code32);
-  if (R.Group1Prefix && R.Group1Prefix != 0xf0)
+  if (R.Group1Prefix == 0xf2)
     return std::nullopt;
   X86LegacyScalarInstruction F;
   F.Bytes = F.SourceBytes = R.OperandBytes;
@@ -77,6 +79,8 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     Width(B < 0xb8);
     F.Destination.Register = B & 7;
     Immediate(F.Bytes);
+  } else if (B == 0x60 || B == 0x61) {
+    F.Operation = B == 0x60 ? Op::PushAll : Op::PopAll;
   } else if (B == 0x62) {
     F.Operation = Op::Bound;
     F.Destination.Register = R.modRM(F.Source);
@@ -132,6 +136,10 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     F.Source.Base = 3;
     F.Source.AddressBytes = R.AddressBytes;
     F.Source.MemorySegment = R.Segment.value_or(X86SegmentRegister::DS);
+  } else if (B == 0xc8) {
+    F.Operation = Op::Enter;
+    F.Discard = R.value(2);
+    F.Nesting = x86EnterNestingLevel(R.byte());
   } else if (B == 0xc9) {
     F.Operation = Op::Leave;
   } else if (B == 0x98 || B == 0x99) {
@@ -264,8 +272,23 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
         F.Operation = Operations[(Extended - 0xa3) >> 3];
         F.Source.Register = R.modRM(F.Destination);
       }
+    } else if (Extended == 0xb8 && R.Group1Prefix == 0xf3) {
+      F.Operation = Op::CountPopulation;
+      F.Destination.Register = R.modRM(F.Source);
     } else if (Extended == 0xbc || Extended == 0xbd) {
-      F.Operation = Extended & 1 ? Op::BitScanReverse : Op::BitScanForward;
+      F.Operation =
+          R.Group1Prefix == 0xf3
+              ? (Extended & 1 ? Op::CountLeadingZeros : Op::CountTrailingZeros)
+              : (Extended & 1 ? Op::BitScanReverse : Op::BitScanForward);
+      F.Destination.Register = R.modRM(F.Source);
+    } else if (Extended == 0x38) {
+      if (R.byte() != 0xf6 || (R.Group1Prefix != 0xf3 && !R.OperandOverride))
+        return std::nullopt;
+      F.Operation =
+          R.Group1Prefix == 0xf3 ? Op::CarryChainOF : Op::CarryChainCF;
+      // 66 selects ADCX; it never creates a word-sized ADX operand, including
+      // code16 and the independently present ignored 66 on ADOX.
+      F.Bytes = F.SourceBytes = 4;
       F.Destination.Register = R.modRM(F.Source);
     } else if (Extended == 0xaf) {
       F.Operation = Op::SignedMultiplyLow;
@@ -283,9 +306,12 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   }
   if (!R.done())
     return std::nullopt;
-  if (R.Group1Prefix && !F.lockable())
+  if (R.Group1Prefix == 0xf3 && !F.bitCounting() &&
+      F.Operation != Op::CarryChainOF)
     return std::nullopt;
-  F.Atomic = R.Group1Prefix ||
+  if (R.Group1Prefix == 0xf0 && !F.lockable())
+    return std::nullopt;
+  F.Atomic = R.Group1Prefix == 0xf0 ||
              (F.Operation == Op::Exchange && !F.Destination.Register);
   return F;
 }

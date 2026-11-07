@@ -301,6 +301,7 @@ private:
   llvm::Expected<uint8_t> byte(uint64_t Address);
   llvm::Expected<std::string> string(uint64_t Address);
   llvm::Expected<uint64_t> allocate(uint64_t Size, uint8_t FillByte = 0);
+  llvm::Expected<uint64_t> reallocate(uint64_t Address, uint64_t Size);
   llvm::Error release(uint64_t Address);
   llvm::Error setErrno(uint32_t Value);
   llvm::Expected<uint32_t> errnoValue();

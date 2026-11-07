@@ -93,6 +93,7 @@ private:
     std::function<ExecutionResult(std::span<const uint8_t> &)> view;
     std::function<void()> release;
     std::function<ExecutionResult(uint64_t, std::span<const uint8_t>)> write;
+    std::function<ExecutionResult(uint64_t)> reallocate_objects;
     std::vector<uint64_t> objects;
     struct Reference {
       uint64_t cookie = 0; // Nonzero denotes a local native object.

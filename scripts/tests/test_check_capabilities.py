@@ -3219,6 +3219,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "analysis.materialized-image-sections": "experimental",
                 "analysis.external-bytecode-recovery": "experimental",
                 "analysis.interpreter-source-recovery": "experimental",
+                "analysis.x86-legacy-source": "experimental",
                 "debug.hardware": "unsupported",
                 "debug.local": "unsupported",
                 "debug.remote": "unsupported",
@@ -3405,6 +3406,12 @@ class RepositoryCapabilityTests(unittest.TestCase):
                     "neverd decompile --x64-continuation",
                     "neverd decompile --continuation-report",
                 ],
+                "json": [],
+            },
+            "analysis.x86-legacy-source": {
+                "c": ["neverd_x86_legacy_source_v1"],
+                "python": [],
+                "cli": ["neverd decompile --x86-legacy-source"],
                 "json": [],
             },
             "analysis.ir-view.instruction-anchors": {

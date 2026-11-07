@@ -98,6 +98,26 @@ TEST_P(AndroidAllocation, RequestedBytesExcludeMappedPagePadding) {
   EXPECT_EQ(R->MemorySnapshots[0].Bytes, Expected);
 }
 
+TEST_P(AndroidAllocation, ReallocChecksOwnershipBeforeReadingStorage) {
+  Options.Android->EntrySymbol = "allocation_foreign";
+  Options.Android->ObserveMemoryOnFailure = true;
+  for (unsigned Mode = 0; Mode != 5; ++Mode) {
+    SCOPED_TRACE(Mode);
+    Options.Android->Arguments = {Buffer, Mode};
+    auto R =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(R)) << llvm::toString(R.takeError());
+    EXPECT_EQ(R->Stop, ProcessStopReason::RuntimeFailure);
+    EXPECT_NE(R->Diagnostic.find(
+                  Mode == 4 ? "invalid guest pointer"
+                            : "realloc does not name a live allocation"),
+              std::string::npos)
+        << R->Diagnostic;
+    ASSERT_EQ(R->MemorySnapshots.size(), 1u);
+    EXPECT_EQ(R->MemorySnapshots[0].Bytes, std::vector<uint8_t>(12288, 0xc7));
+  }
+}
+
 TEST(AndroidAllocationOptions, ByteRangeAndDefaultAreExplicit) {
   auto Default = processOptionsFromJSON(R"({"android":{}})");
   ASSERT_TRUE(bool(Default)) << llvm::toString(Default.takeError());

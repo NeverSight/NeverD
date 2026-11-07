@@ -53,6 +53,36 @@ TEST_P(X86LegacyDebugNativeTest, OriginalDataWatchpointRangesAndShadows) {
   RecordProperty("original_comparisons", Comparisons);
 }
 
+TEST_P(X86LegacyDebugNativeTest, OriginalIntegerExtensionReadWatchpoints) {
+  if (!neverd::test::supportsX86KVMPrefault(KVM))
+    GTEST_SKIP() << "Data-watchpoint oracle requires KVM pre-fault memory";
+  if (!__builtin_cpu_supports("popcnt") || !__builtin_cpu_supports("lzcnt") ||
+      !__builtin_cpu_supports("bmi") || !__builtin_cpu_supports("adx"))
+    GTEST_SKIP() << "Original integer oracle requires POPCNT/LZCNT/BMI1/ADX";
+  for (bool Code32 : {false, true})
+    for (bool Stack32 : {false, true})
+      for (unsigned CPL : {0u, 3u})
+        for (const auto &Bytes : {std::vector<uint8_t>{0xf3, 0x0f, 0xb8, 0x07},
+                                  {0xf3, 0x0f, 0xbc, 0x07},
+                                  {0xf3, 0x0f, 0xbd, 0x07},
+                                  {0x66, 0x0f, 0x38, 0xf6, 0x07},
+                                  {0xf3, 0x0f, 0x38, 0xf6, 0x07}})
+          for (unsigned Kind : {0u, 1u, 2u}) {
+            Watchpoint W;
+            W.Instructions = {Bytes};
+            W.IntegerExtensions = {true, true, true, true};
+            W.BitCountUndefinedFlags = 0; // Explicit measured Intel image.
+            W.Flags = Kind == 2 ? 0x302 : 0x202;
+            W.DR7 = Kind == 1 ? 0x10401 : 0x30401;
+            W.DR[0] = 0x8100;
+            ASSERT_NO_FATAL_FAILURE(compare(Code32, Stack32, true, CPL, Nop,
+                                            0xffff0ff0, false, {}, {}, W));
+            if (HasFailure())
+              return;
+          }
+  RecordProperty("original_comparisons", Comparisons);
+}
+
 TEST_P(X86LegacyDebugNativeTest, OriginalStackOperandsAndEventTables) {
   if (!neverd::test::supportsX86KVMPrefault(KVM))
     GTEST_SKIP() << "Data-watchpoint oracle requires KVM pre-fault memory";
@@ -73,6 +103,43 @@ TEST_P(X86LegacyDebugNativeTest, OriginalStackOperandsAndEventTables) {
               ASSERT_NO_FATAL_FAILURE(compare(Code32, Stack32, Gate32, CPL,
                                               Which, 0xffff0ff0, false, {}, {},
                                               W));
+              if (HasFailure())
+                return;
+            }
+  RecordProperty("original_comparisons", Comparisons);
+}
+
+TEST_P(X86LegacyDebugNativeTest, OriginalStackFramesAndPermissionProbes) {
+  if (!neverd::test::supportsX86KVMPrefault(KVM))
+    GTEST_SKIP() << "Data-watchpoint oracle requires KVM pre-fault memory";
+  for (bool Code32 : {false, true})
+    for (bool Stack32 : {false, true})
+      for (unsigned Width : {2u, 4u})
+        for (unsigned CPL : {0u, 3u})
+          for (uint8_t Opcode : {0x60, 0x61, 0xc8})
+            for (unsigned Slot = 0; Slot != 10; ++Slot) {
+              SCOPED_TRACE(testing::Message() << "opcode=" << unsigned(Opcode)
+                                              << " slot=" << Slot);
+              Watchpoint W;
+              W.Instructions = {{0xbd, 0, 0xc1, 0, 0}, {Opcode}};
+              if (!Code32)
+                W.Instructions.front().insert(W.Instructions.front().begin(),
+                                              0x66);
+              if ((Width == 4) != Code32)
+                W.Instructions.back().insert(W.Instructions.back().begin(),
+                                             0x66);
+              if (Opcode == 0xc8)
+                W.Instructions.back().insert(W.Instructions.back().end(),
+                                             {0, 0x10, 3});
+              W.DR7 = 0x30401; // Exact byte, read or write.
+              W.DR[0] = Opcode == 0x61 ? 0xd000 + Slot * Width
+                        : Opcode == 0xc8 && Slot == 8
+                            ? 0xd000 - 4 * Width - 0x1000 // Final probe.
+                        : Opcode == 0xc8 && Slot == 9
+                            ? 0xc100 - Width
+                            : 0xd000 - (Slot + 1) * Width;
+              ASSERT_NO_FATAL_FAILURE(compare(Code32, Stack32, true, CPL, Nop,
+                                              0xffff0ff0, false, {}, {}, W));
               if (HasFailure())
                 return;
             }

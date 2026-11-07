@@ -1,4 +1,4 @@
-//===- NeverDCAPIContinuation.h - Explicit x64 state C ------------*- C -*-===//
+//===- NeverDCAPIContinuation.h - Explicit x86 state C ------------*- C -*-===//
 //
 // NeverD Decompiler
 //
@@ -99,6 +99,22 @@ NEVERD_API const char *
 neverd_x64_continuation_source_v1(neverd_session_t Sess,
                                   const char *RequestJSON, size_t RequestSize,
                                   int UseLLVM, const char **ManifestJSON);
+
+/// Export an i386 image's selected protected 16/32-bit original instructions.
+/// RequestJSON declares profile protected-legacy-v1 and instructions containing
+/// address (linear uint32), code_bits (16/32) and size (1..15). The executor's
+/// grammar authenticates every complete extent; unsupported encodings fail.
+/// The single runtime-backed C route calls X86LegacySourceExecution from the
+/// matching source build. Its state, RAM, runtime profiles, devices and event
+/// arbitration are supplied by the C++ embedding caller, not inferred here.
+/// Generated code follows selected targets and stops for every event/backing
+/// failure. Its opaque context must remain alive across pauses. This is not a
+/// portable C state ABI, ordinary-function decompilation or native CPU capture.
+/// ManifestJSON follows the ownership and failure rules documented above.
+NEVERD_API const char *neverd_x86_legacy_source_v1(neverd_session_t Sess,
+                                                   const char *RequestJSON,
+                                                   size_t RequestSize,
+                                                   const char **ManifestJSON);
 
 #ifdef __cplusplus
 }

@@ -63,7 +63,7 @@ class Fixture:
                 field("env.regs", "uint64", 8, array_len=16),
                 field("env.eip", "uint64", 8),
                 field("signed", "int32", 4),
-                field("little", "int32 le", 4),
+                field("bounded", "int32 le", 4),
                 field("seg", "struct", 15, struct={
                     "vmsd_name": "segment", "version": 1,
                     "fields": [field("base", "uint64", 8)],
@@ -85,7 +85,7 @@ class Fixture:
                               "fields": [field("tpr", "uint32", 4)]}],
         }
         self.cpu = (b"".join(be(0x8000000000000000 + i, 8) for i in range(16)) +
-                    be(PC, 8) + b"\xff\xff\xff\xfe" + b"\x78\x56\x34\x12" +
+                    be(PC, 8) + b"\xff\xff\xff\xfe" + b"\x12\x34\x56\x78" +
                     be(0xffff800012340000, 8) + subsection("s", 1, b"") +
                     be(0xf123456789abcdef, 8) + be(0x4321, 2) + b"\x00\x80\xff" +
                     b"\x91" + subsection("cpu/extra", 2, b"\x12\x34"))
@@ -141,7 +141,7 @@ class QemuSaveSnapshotTests(unittest.TestCase):
         self.assertEqual(cpu["env.regs"], [0x8000000000000000 + i for i in range(16)])
         self.assertEqual(cpu["env.eip"], PC)
         self.assertEqual(cpu["signed"], -2)
-        self.assertEqual(cpu["little"], 0x12345678)
+        self.assertEqual(cpu["bounded"], 0x12345678)
         self.assertEqual(cpu["seg"]["base"], 0xffff800012340000)
         self.assertEqual(cpu["fp"], {"mant": 0xf123456789abcdef, "exp": 0x4321})
         self.assertEqual(cpu["opaque"], b"\0\x80\xff")
@@ -149,6 +149,22 @@ class QemuSaveSnapshotTests(unittest.TestCase):
         self.assertEqual(cpu["subsections"]["cpu/extra"]["flag"], 0x1234)
         self.assertEqual(snapshot.apics[3]["fields"]["tpr"], 0xf0)
         snapshot.expect_pc(3, PC)
+
+    def test_comparison_integer_tags_keep_big_endian_wire_encoding(self):
+        cpu = self.fixture.description["devices"][0]
+        cpu["fields"] = [field("bounded", "int32 le", 4, array_len=2),
+                         field("equal", "int64 equal", 8),
+                         field("high", "uint16 equal", 2),
+                         field("unknown", "uint32 le", 4)]
+        cpu["subsections"] = []
+        # QEMU's `int32 le` means a destination-side <= check, not little endian.
+        self.fixture.cpu = (b"\0\0\0\x02\x12\x34\x56\x78" + b"\xff" * 7 + b"\xfd" +
+                            b"\x80\x01" + b"\x01\x02\x03\x04")
+        saved = self.open().cpus[3]["fields"]
+        self.assertEqual(saved["bounded"], [2, 0x12345678])
+        self.assertEqual(saved["equal"], -3)
+        self.assertEqual(saved["high"], 0x8001)
+        self.assertEqual(saved["unknown"], b"\x01\x02\x03\x04")
 
     def test_big_endian_libvirt_header_cookie_and_xml(self):
         self.fixture.endian = ">"
