@@ -70,8 +70,8 @@ int runContinuation(neverd_session_t Sess) {
     llvm::WithColor::error() << "cannot read a bounded continuation request\n";
     return 1;
   }
-  auto Buffer = llvm::MemoryBuffer::getFile(
-      Request, /*IsText=*/false, /*RequiresNullTerminator=*/false);
+  auto Buffer = llvm::MemoryBuffer::getFile(Request, /*IsText=*/false,
+                                            /*RequiresNullTerminator=*/false);
   if (!Buffer) {
     llvm::WithColor::error()
         << "cannot read continuation request: " << Buffer.getError().message()

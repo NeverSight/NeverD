@@ -2296,6 +2296,12 @@ _declare(
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
+    "neverd_x86_legacy_source_v1",
+    "const char *",
+    ["neverd_session_t", "const char *", "size_t", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_decompile_all",
     "const char *",
     ["neverd_session_t", "const char *", "int", "int", "int"],

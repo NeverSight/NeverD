@@ -63,6 +63,7 @@ add_neverd_component_library(NeverDPipeline
   BackendLLVM
   CodeGen
   DebugInfo
+  Digest
   EVM
   SBF
 )

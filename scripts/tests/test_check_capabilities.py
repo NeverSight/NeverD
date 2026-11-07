@@ -3407,6 +3407,12 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 ],
                 "json": [],
             },
+            "analysis.x86-legacy-source": {
+                "c": ["neverd_x86_legacy_source_v1"],
+                "python": [],
+                "cli": ["neverd decompile --x86-legacy-source"],
+                "json": [],
+            },
             "analysis.ir-view.instruction-anchors": {
                 "c": ["neverd_ir_view_json"],
                 "python": [],
