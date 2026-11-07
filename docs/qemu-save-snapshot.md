@@ -53,8 +53,93 @@ CPU state and external environment effects remain the producer's obligations.
 In particular, a save with a matching kernel at an unrelated pause cannot
 recover the incoming private stack bytes of the two unresolved ordinary
 registry functions. No bytes are synthesized and no ordinary parameters are
-removed. This tool does not yet import a complete
-[V6 continuation context](x64-continuation-source.md).
+removed. The companion adapter below projects the captured V6 register banks;
+it does not import a complete [continuation environment](x64-continuation-source.md).
+
+## V6 register-bank projection
+
+[`scripts/qemu_save_x64.py`](../scripts/qemu_save_x64.py) converts the captured
+banks to the existing `neverd_x64_state_v6` fields. It is a separate offline
+adapter, with no SDK/decompiler work or generated instruction-loop checks.
+It requires an explicitly bound QEMU 10.2 KVM/x64 interpretation profile,
+CPU v12/APIC v3 layouts, captured 64-bit code and an exact PC match:
+
+```sh
+python3 -m scripts.qemu_save_x64 paused.save \
+  --profile qemu-10.2-kvm-x64 --cpu 0 --apic 0 \
+  --expect-pc 0xffff800000001000 --undefined 0 0 0 0 0 0 0 0
+```
+
+The producer supplies the QEMU profile and the CPU's associated APIC instance;
+matching migration instance numbers alone do not prove that association.
+The profile is an interpretation contract, not automatic authentication of the
+saving executable's version. The address above is illustrative. CS.L and
+EFER.LMA must identify 64-bit code; a segmented `env.eip` cannot become a linear
+V6 PC. No PC/SP adjustment or relocation is performed.
+
+The adapter preserves all 16 GPRs in x86 encoding order, flags, CR2, STAR,
+MXCSR, KernelGSBase, segment caches and descriptor tables. CR8 comes from the
+bound APIC's TPR priority class. FS/GS bases retain their single V6 owner.
+Segment attributes use the V6 encoding and limits remain effective byte
+limits. Unusable bits follow QEMU's KVM restoration-equivalent representation
+of the present flag; ignored cache bytes remain intact. NMI blocking comes
+from the saved masking bit, independently of pending/injected NMI state.
+
+Mandatory XMM/YMM lanes must be present even when XCR0 disables their use. An
+AVX-512 subsection must use version 1 and supply both its upper-lane and high
+register arrays. Under the selected QEMU format, omission of this subsection
+proves those banks zero because any nonzero lane, high register or opmask causes
+it to be emitted. This conditional format rule does not permit filling missing
+mandatory fields with zero. The raw reader now retains direct device
+`subsection_versions` alongside its decoded fields.
+
+`--undefined` explicitly supplies the eight architectural arbitrary-effect
+choices. They are not captured inputs or replacements for missing stack bytes.
+Choosing zeros selects one permitted set of choices for the first dynamic
+instruction; the continuation contract still governs subsequent choices.
+Only reserved V6 storage is otherwise initialized to zero.
+
+JSON output contains projected fields, their producer bindings and the original
+CPU/APIC/common state as `environment`. That environment retains CR0/CR3/CR4,
+debug and other banks, opmasks, pending events and halted state. Projection
+does not certify that these inputs are supported by an execution provider.
+It does not wake a halted CPU, consume pending events, supply physical mappings
+or run a page walk. A consumer still needs the original RAM/return-cell lifetime,
+page-table/features binding and complete external effects.
+
+`--c-initializer` emits a constant `neverd_captured_state_v6` bank image. Include
+the selected source export's V6 declaration before it. Field names use that
+declaration directly; the adapter does not maintain a competing table of byte
+offsets. Keep the JSON environment when composing this image with a provider;
+the C initializer alone is not a complete runnable context. With Python, a
+single indexed save can provide both outputs:
+
+```python
+from scripts.qemu_save_x64 import PROFILE, project_v6
+
+with QemuSaveSnapshot("paused.save") as snapshot:
+    projection = project_v6(snapshot, profile=PROFILE, cpu=cpu_instance,
+                            apic=associated_apic_instance, expected_pc=captured_pc,
+                            undefined=explicit_choices)
+    register_and_environment_evidence = projection.summary()
+    c_bank_initializer = projection.c_initializer()
+```
+
+Projection touches only the selected saved banks, with fixed-size vector work;
+it neither rebuilds the RAM index nor copies guest RAM. The independent byte
+fixtures cover vector lane order and omission, explicit choices, descriptor
+encoding, unusable-bit order, separate NMI masking/pending state, layout/version
+errors and rejection of an unrelated entry PC:
+
+```sh
+python3 -m unittest scripts.tests.test_qemu_save_snapshot scripts.tests.test_qemu_save_x64 -v
+```
+
+The interpretation references are QEMU 10.2's
+[x86 VMState fields and omission predicates](https://github.com/qemu/qemu/blob/v10.2.0/target/i386/machine.c),
+[register and flag encodings](https://github.com/qemu/qemu/blob/v10.2.0/target/i386/cpu.h),
+and [KVM bank/event conversion](https://github.com/qemu/qemu/blob/v10.2.0/target/i386/kvm/kvm.c).
+This adapter is independently authored from those format contracts.
 
 ## Supported save format
 
