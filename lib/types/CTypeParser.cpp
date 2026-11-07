@@ -26,7 +26,6 @@
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/StringSaver.h"
 
-#include <functional>
 #include <utility>
 
 namespace neverd::types {
@@ -1940,42 +1939,72 @@ private:
     return makeNamed(Name, TypeKind::Enum);
   }
 
+  struct DeclaratorPointer {
+    bool Const = false, Volatile = false, Reference = false;
+    uint32_t Bytes = 0;
+  };
+
+  struct DeclaratorPart {
+    enum class Kind { Pointer, Array, Function };
+    Kind TheKind = Kind::Pointer;
+    DeclaratorPointer Pointer;
+    std::optional<uint64_t> Count;
+    std::shared_ptr<FunctionDef> Function;
+  };
+
   /// A declarator over \p Base: pointers, the name, arrays and parameters,
   /// with parentheses binding as C binds them.
   TypeExprRef declarator(TypeExprRef Base, std::string &Name, Token &NameToken,
                          bool Abstract) {
     Declared = Attributes();
-    std::function<TypeExprRef(TypeExprRef)> Wrap =
-        parseDeclarator(Name, NameToken, Abstract);
+    llvm::SmallVector<DeclaratorPart> Parts;
+    parseDeclarator(Name, NameToken, Parts);
     if (Failed)
       return nullptr;
-    TypeExprRef Type = Wrap(std::move(Base));
+    TypeExprRef Type = std::move(Base);
+    for (auto It = Parts.rbegin(); It != Parts.rend(); ++It) {
+      switch (It->TheKind) {
+      case DeclaratorPart::Kind::Pointer:
+        Type = qualified(makePointer(std::move(Type), It->Pointer.Bytes,
+                                     It->Pointer.Reference),
+                         It->Pointer.Const, It->Pointer.Volatile);
+        break;
+      case DeclaratorPart::Kind::Array:
+        Type = makeArray(std::move(Type), It->Count);
+        break;
+      case DeclaratorPart::Kind::Function:
+        // Each parameter list is freshly parsed and applied once.
+        It->Function->Return = std::move(Type);
+        Type = makeFunction(std::move(It->Function));
+        break;
+      }
+    }
     if (!Abstract && Name.empty() && !Failed)
       fail(NameToken, "expected a name");
     return Type;
   }
 
-  std::function<TypeExprRef(TypeExprRef)>
-  parseDeclarator(std::string &Name, Token &NameToken, bool Abstract) {
+  /// Append modifiers from the declared object toward its base type. Nested
+  /// declarators bind first, then suffixes in source order, then pointers in
+  /// reverse source order. Applying the list backward constructs the type
+  /// without allocating a callable and captured vectors at every nesting level.
+  void parseDeclarator(std::string &Name, Token &NameToken,
+                       llvm::SmallVectorImpl<DeclaratorPart> &Parts) {
     // Microsoft places this access annotation before the pointer too,
     // including after a comma in a list of typedef declarators.
     while (isWord("__unaligned") &&
            (isPunct("*", 1) || isWord("__unaligned", 1)))
       take();
-    struct Pointer {
-      bool Const = false, Volatile = false, Reference = false;
-      uint32_t Bytes = 0;
-    };
-    std::vector<Pointer> Pointers;
+    llvm::SmallVector<DeclaratorPointer> Pointers;
     while (isPunct("*") || (Cpp && (isPunct("&") || isPunct("&&")))) {
-      Pointer P;
+      DeclaratorPointer P;
       P.Reference = !isPunct("*");
       P.Bytes = pointerSize();
       take();
       while (peek().Kind == TokenKind::Word || startsAttribute()) {
         if (startsAttribute()) {
           if (!attributes(Declared))
-            return Identity;
+            return;
           continue;
         }
         const llvm::StringRef W = peek().Text;
@@ -1995,7 +2024,6 @@ private:
       }
       Pointers.push_back(P);
     }
-    std::function<TypeExprRef(TypeExprRef)> Inner = Identity;
     while ((peek().Kind == TokenKind::Word && conventionWord(peek().Text)) ||
            startsAttribute()) {
       if (!startsAttribute()) {
@@ -2003,7 +2031,7 @@ private:
         continue;
       }
       if (!attributes(Declared))
-        return Identity;
+        return;
     }
     if (isPunct("(") && nestedDeclaratorFollows()) {
       take();
@@ -2012,7 +2040,7 @@ private:
              startsAttribute()) {
         if (startsAttribute()) {
           if (!attributes(Declared))
-            return Identity;
+            return;
           continue;
         }
         if (std::optional<CallingConvention> Convention =
@@ -2020,9 +2048,9 @@ private:
           PendingConvention = Convention;
         take();
       }
-      Inner = parseDeclarator(Name, NameToken, Abstract);
+      parseDeclarator(Name, NameToken, Parts);
       if (Failed || !expect(")", "after a declarator"))
-        return Inner;
+        return;
     } else if (peek().Kind == TokenKind::Word && !reservedWord(peek().Text)) {
       // A type's name may be declared again: typedef uint8_t UCHAR.
       NameToken = peek();
@@ -2035,12 +2063,6 @@ private:
       }
     }
     // Arrays and parameters, in their order.
-    struct Suffix {
-      bool Array = false;
-      std::optional<uint64_t> Count;
-      std::shared_ptr<FunctionDef> Function;
-    };
-    std::vector<Suffix> Suffixes;
     while (!Failed) {
       // GNU puts attributes and assembler names after a declarator too.
       if (startsAttribute()) {
@@ -2049,8 +2071,8 @@ private:
         continue;
       }
       if (accept("[")) {
-        Suffix S;
-        S.Array = true;
+        DeclaratorPart S;
+        S.TheKind = DeclaratorPart::Kind::Array;
         // C99 lets a parameter's array qualify the pointer it adjusts to and
         // promise its least size ([restrict], [static 4], bionic's
         // [_Nonnull 2]), which change no layout local types hold.
@@ -2075,13 +2097,14 @@ private:
           S.Count = uint64_t(*Count);
         }
         expect("]", "after an array's size");
-        Suffixes.push_back(std::move(S));
+        Parts.push_back(std::move(S));
         continue;
       }
       if (isPunct("(")) {
-        Suffix S;
+        DeclaratorPart S;
+        S.TheKind = DeclaratorPart::Kind::Function;
         S.Function = parameters();
-        Suffixes.push_back(std::move(S));
+        Parts.push_back(std::move(S));
         // C++ const and noexcept after parameters say nothing of the type.
         while (isWord("const") || isWord("noexcept") || isWord("override"))
           take();
@@ -2089,29 +2112,11 @@ private:
       }
       break;
     }
-    // A declarator without modifiers already has its complete composition.
-    // Keep the nested result and transfer owned modifiers instead of cloning
-    // their vectors and any nested callable for each parameter.
-    if (Pointers.empty() && Suffixes.empty())
-      return Inner;
-    return [Pointers = std::move(Pointers), Inner = std::move(Inner),
-            Suffixes = std::move(Suffixes)](TypeExprRef T) mutable {
-      for (const Pointer &P : Pointers)
-        T = qualified(makePointer(std::move(T), P.Bytes, P.Reference), P.Const,
-                      P.Volatile);
-      for (auto It = Suffixes.rbegin(); It != Suffixes.rend(); ++It) {
-        if (It->Array) {
-          T = makeArray(std::move(T), It->Count);
-          continue;
-        }
-        // declarator() applies each composition once. Its freshly parsed
-        // parameter list can become the published function directly.
-        auto Function = std::move(It->Function);
-        Function->Return = std::move(T);
-        T = makeFunction(std::move(Function));
-      }
-      return Inner(std::move(T));
-    };
+    for (auto It = Pointers.rbegin(); It != Pointers.rend(); ++It) {
+      DeclaratorPart P;
+      P.Pointer = *It;
+      Parts.push_back(std::move(P));
+    }
   }
 
   /// Whether '(' begins a parenthesized declarator rather than parameters.
@@ -2569,9 +2574,6 @@ private:
   Attributes Declared;
   /// Whether the declarator being read is a parameter's.
   bool InParameter = false;
-  const std::function<TypeExprRef(TypeExprRef)> Identity = [](TypeExprRef T) {
-    return T;
-  };
   llvm::StringMap<int64_t> Enumerators;
 };
 

@@ -1,5 +1,26 @@
 # Remaining x64 C-quality work
 
+Offline event-boundary interpretation now distinguishes QEMU post-load
+exception reinjection from pending payloads and stale error codes. The
+separate `scripts/qemu_save_events.py` retains NMI phases/masking, injected
+software interrupts, halted/MP/crash/triple-fault state and APIC bit banks.
+Unsaved instruction shadows stay unknown unless explicitly bound; no event is
+selected, acknowledged or delivered. Shared CPU/APIC/subsection checks keep
+existing V6/control exports consistent, with no ordinary-decompiler or
+instruction-loop work. This closes event evidence interpretation only:
+arbitration, delivery composition, complete environment import and both
+ordinary registry inputs remain open.
+
+Offline paging/debug bank projection now emits the existing C++ state types
+through `scripts/qemu_save_controls.py`. It shares CPU/version/PC validation
+with the V6 bank adapter, retains saved controls and requires separate bindings
+for unsaved DEBUGCTL, pending data causes and absent cached PDPTEs. PKRU/PKRS
+omissions alone prove zero. The conversion reads no RAM and emits constant
+initializers; runtime feature/admission rules keep their existing owner.
+QEMU's selected KVM event-copy path does not preserve interrupt.shadow, so a
+clear saved hflags bit does not recover STI/MOV-SS state. Scheduler/event
+bindings, complete environment import and both ordinary inputs remain open.
+
 An optional Q35 main-RAM consistency check now validates the complete supplied
 map against selected captured MCH state and explicit unsaved machine-property
 bindings. It rejects wrong original block offsets, split/gap errors, active

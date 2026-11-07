@@ -42,6 +42,8 @@ protected:
     uint32_t DR7 = 0x400, Flags = 0x202;
     std::optional<X86LegacyIntegerExtensions> IntegerExtensions;
     std::optional<uint32_t> BitCountUndefinedFlags;
+    std::optional<uint32_t> BMIUndefinedFlags;
+    std::optional<X86LegacyDescriptorProfile> DescriptorQueries;
   };
 
   enum Case {
@@ -539,6 +541,8 @@ protected:
       Options.Debug = X86LegacyDebugProfile::Watchpoints;
       Options.IntegerExtensions = Watch->IntegerExtensions;
       Options.BitCountUndefinedFlags = Watch->BitCountUndefinedFlags;
+      Options.BMIUndefinedFlags = Watch->BMIUndefinedFlags;
+      Options.DescriptorQueries = Watch->DescriptorQueries;
     }
     if (Execute && Execute->Resume)
       Options.LogicalAuxiliaryCarry = false;

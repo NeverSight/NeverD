@@ -42,7 +42,12 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   };
   constexpr Op Arithmetic[]{Op::Add, Op::Or,       Op::AddCarry, Op::SubBorrow,
                             Op::And, Op::Subtract, Op::Xor,      Op::Compare};
-  if (const auto Adjust = x86DecimalAdjustOperation(B)) {
+  if (B == 0xc4) {
+    F.BMI = decodeLegacyBMI(R);
+    if (!F.BMI)
+      return std::nullopt;
+    F.Bytes = F.SourceBytes = 4;
+  } else if (const auto Adjust = x86DecimalAdjustOperation(B)) {
     F.Operation = Op::DecimalAdjust;
     F.Adjustment = X86DecimalAdjustInstruction{*Adjust};
     if (F.Adjustment->hasBase())
@@ -222,8 +227,22 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
               B == 0xeb || B < 0x80 || F.Bytes == 2);
   } else if (B == 0x0f) {
     const uint8_t Extended = R.byte();
-    if (Extended == 0xb0 || Extended == 0xb1 || Extended == 0xc0 ||
-        Extended == 0xc1) {
+    if (Extended == 0x00 || Extended == 0x02 || Extended == 0x03) {
+      if (R.Group1Prefix)
+        return std::nullopt;
+      const unsigned Reg = R.modRM(F.Source);
+      using Query = X86LegacyDescriptorQuery;
+      if (Extended == 0x00) {
+        if (Reg != 4 && Reg != 5)
+          return std::nullopt;
+        F.DescriptorQuery = Reg == 4 ? Query::Read : Query::Write;
+      } else {
+        F.Destination.Register = Reg;
+        F.DescriptorQuery = Extended == 2 ? Query::AccessRights : Query::Limit;
+      }
+      F.SourceBytes = 2;
+    } else if (Extended == 0xb0 || Extended == 0xb1 || Extended == 0xc0 ||
+               Extended == 0xc1) {
       Width(!(Extended & 1));
       F.Operation = Extended < 0xc0 ? Op::CompareExchange : Op::ExchangeAdd;
       Binary(false);

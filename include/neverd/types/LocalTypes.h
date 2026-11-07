@@ -280,9 +280,10 @@ public:
   explicit TypeLibrary(DataModel Model = DataModel::LLP64)
       : Model(Model), ABI(defaultRecordABI(Model)) {}
   /// Copies are whole libraries of their own, which share the definitions,
-  /// so that a change can be tried on one and kept or dropped.
-  TypeLibrary(const TypeLibrary &Other);
-  TypeLibrary &operator=(const TypeLibrary &Other);
+  /// so that a change can be tried on one and kept or dropped.  A definition
+  /// never changes once made: a new one takes its place.
+  TypeLibrary(const TypeLibrary &Other) = default;
+  TypeLibrary &operator=(const TypeLibrary &Other) = default;
   TypeLibrary(TypeLibrary &&) = default;
   TypeLibrary &operator=(TypeLibrary &&) = default;
 
@@ -342,7 +343,7 @@ private:
   RecordABI ABI;
   llvm::StringMap<std::shared_ptr<const FunctionDef>> Prototypes;
   /// By ordinal - 1; null where a type was removed.
-  std::vector<std::unique_ptr<LocalType>> ByOrdinal;
+  std::vector<std::shared_ptr<const LocalType>> ByOrdinal;
   llvm::StringMap<uint32_t> ByName;
 };
 

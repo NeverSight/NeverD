@@ -149,7 +149,8 @@ def run(executable):
         kept = Path(directory) / "kept.dll"
         kept.write_bytes(functions_fixture())
         with Client(executable) as owner, Client(executable) as replica:
-            ok(owner, "open", {"path": str(kept), "analysis": False, "warm": False})
+            ok(owner, "open", {"path": str(kept), "analysis": False, "warm": False,
+                               "write_behind": True})
             restore = ok(owner, "analysis_snapshot")
             restore.update(call_summaries=True, render_ahead=True, render_store="write")
             ok(replica, "analysis_restore", restore)
@@ -161,6 +162,9 @@ def run(executable):
             reply = declare(owner, "struct KEPT_FRESH { unsigned long long first; };")
             assert reply["unread"], reply
             assert ok(owner, "kept_renders")["complete"]
+            # Whether or not its file has been written by then.
+            ok(owner, "analysis_snapshot")
+            assert ok(owner, "kept_renders")["complete"]
             assert len(stores(kept)) == 2 and renders[0] in stores(kept), stores(kept)
             assert ok(replica, "analysis_update_names", ok(owner, "analysis_snapshot"))["updated"]
             # Heartbeats from before the update may still come first.
@@ -169,7 +173,8 @@ def run(executable):
             assert kept_views(replica) == before
         # A later session finds them, and writing them keeps what leads to them.
         with Client(executable) as owner, Client(executable) as replica:
-            ok(owner, "open", {"path": str(kept), "analysis": False, "warm": False})
+            ok(owner, "open", {"path": str(kept), "analysis": False, "warm": False,
+                               "write_behind": True})
             assert ok(owner, "kept_renders")["complete"]
             restore = ok(owner, "analysis_snapshot")
             restore.update(call_summaries=True, render_ahead=True, render_store="write")

@@ -280,7 +280,7 @@ constexpr const char *RustPrimitives[] = {
 };
 
 NameSpelling::NameSpelling(const TypeLibrary &Library, Language Lang,
-                           bool CppToo)
+                           bool CppToo, llvm::StringSet<> *TakenNames)
     : Lang(Lang),
       Reserved(CppToo && Lang == Language::C ? Language::Cpp : Lang) {
   const std::vector<const LocalType *> All = Library.types();
@@ -303,6 +303,8 @@ NameSpelling::NameSpelling(const TypeLibrary &Library, Language Lang,
     if (Type->Record)
       inlineEnums(*Type->Record, type(Type->Name), Taken);
   }
+  if (TakenNames)
+    *TakenNames = std::move(Taken);
 }
 
 std::string NameSpelling::identifier(llvm::StringRef Name,
@@ -836,6 +838,14 @@ EmbeddedC renderEmbeddedC(const TypeLibrary &Library,
 std::vector<std::pair<std::string, std::string>>
 renamedNames(const TypeLibrary &Library, Language Lang) {
   return render::NameSpelling(Library, Lang, /*CppToo=*/true).renamed();
+}
+
+SpelledNames spelledNames(const TypeLibrary &Library, Language Lang) {
+  SpelledNames Spelled;
+  Spelled.Renamed =
+      render::NameSpelling(Library, Lang, /*CppToo=*/true, &Spelled.Taken)
+          .renamed();
+  return Spelled;
 }
 
 std::string spellType(const TypeLibrary &Library, const TypeExpr &Type,

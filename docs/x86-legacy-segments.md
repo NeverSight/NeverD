@@ -1313,3 +1313,108 @@ retains each actual source commit, tool/binary hash and generated source/library
 with the pre-integration receipts recorded separately.
 
 The other state banks and the global LLVM release gate remain open.
+
+## Protected BMI1/BMI2
+
+The `OrderedRAM` scalar binding admits the thirteen VEX GPR forms ANDN,
+BEXTR, BLSI, BLSMSK, BLSR, BZHI, MULX, PDEP, PEXT, RORX, SARX, SHLX and SHRX.
+All use dword operands in both code16 and code32. The shared address reader
+retains code-default addressing, 67, segment overrides, ModRM/SIB, displacement
+wrap and implicit SS. Non-64-bit W, B and the high encoded register bit do not
+extend operands. RORX requires its reserved vvvv field. C4 with a legacy
+memory ModRM remains LES. Reserved maps/selectors/L, legacy 66/F2/F3/LOCK
+prefixes, duplicate prefixes and truncated/trailing extents remain explicit
+grammar refusals before fetch, rather than guessed instruction semantics.
+
+`IntegerExtensions` now also binds BMI2. BMI1 selects ANDN/BEXTR/BLSI/BLSMSK/BLSR;
+BMI2 selects the other eight forms. Missing features deliver guest #UD after
+the original instruction fetch and before any operand access. No AVX state,
+XCR0 or host CPUID is inferred. Enabled flag-writing forms require
+`BMIUndefinedFlags`: AF/PF for the logic/lowest-bit/BZHI forms, and SF/AF/PF
+for BEXTR. Defined flags cannot be supplied by that image. BEXTR preserves
+control flags, computes ZF and clears CF/OF. BZHI uses the low eight index bits;
+an out-of-range index preserves the source and sets CF. The seven remaining
+BMI2 forms preserve the complete entry flag image.
+
+MULX captures EDX and the source before either destination changes. Its low
+half is committed before the high half, so the high half wins when both
+destinations name the same register. A source fault or backing stop publishes
+neither destination. All forms use the existing segmented, paged, aligned
+source-read boundary and data-debug owner. Original guest handlers can repair
+the page and IRET to retry the same bytes. Generated C uses this same owner
+and attempt budget; ordinary LLVM and NeverC BMI computations already existed.
+
+The reference is the VEX GPR section, Type 13 exception table and corresponding
+instruction entries in [Intel SDM Volume 2](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf).
+The reference has contradictory prose for BEXTR W and BLSI carry; the operation
+definitions, non-64-bit width rules and independent original CPU comparisons
+determine the admitted behavior. Original comparisons cover the available
+Intel BMI1/BMI2 host. Disabled-feature #UD is a separate software contract,
+not physical qualification on a processor missing BMI.
+
+The [November 7 BMI qualification](evidence/x86-legacy-bmi-2026-11-07.json)
+passes 1,084 checks with no failures or skips across the native SDK, pinned
+r6 and qualified P/E cores. It includes 131,264 original BMI state comparisons,
+2,496 original data-debug comparisons and 48 new compiled-source cases, plus
+shared scalar/integer/segment, decoder and ordinary BMI/BEXTR regressions.
+The retained archive binds the actual clean source commit, dependency inputs,
+compiler and executable hashes, generated sources, libraries and raw results.
+
+Global completion remains open, including other unbound state banks, task
+switching, real/VM86 and general compatibility execution, software SMM/SGX
+transitions and external-event producers. LLVM release and pin remain at r6.
+
+## Protected descriptor queries
+
+`DescriptorQueries = X86LegacyDescriptorProfile::TableImage` enables LAR,
+LSL, VERR and VERW under `OrderedRAM`. Code and address widths are independent;
+66 changes LAR/LSL destination width and 67 changes memory addressing. The
+selector is always a word, including the low word of a register source. LAR
+and LSL preserve the full destination on failure; a successful word result
+preserves its high half. Only ZF changes. Register aliases capture the selector
+before publishing a destination.
+
+Null selectors, an unusable LDT, descriptors extending past the table limit,
+invisible privilege levels and disallowed types clear ZF. Conforming code
+bypasses the CPL/RPL versus DPL comparison. LAR admits data/code, LDT, 16/32-bit
+TSS and call/task gates; LSL excludes gates. VERR admits readable code/data,
+while VERW admits only writable data. Presence does not affect these queries,
+and no query sets the descriptor accessed bit or changes a segment cache.
+
+The explicit source word uses ordinary segment, page and alignment checks.
+Table reads are implicit supervisor accesses and remain faultable, even when
+a later type/privilege check would fail. An architectural fault enters the
+shared event owner with the original PC/GPR/flags; a physical backing stop
+preserves them for retry. Completed page-walk effects remain observable.
+Generated protected C uses the same dispatcher and attempt budget, including
+original handler repair followed by IRET and retry.
+
+The table profile returns the original descriptor limit nibble in LAR bits
+19:16. Intel defines these four result bits as undefined; this profile is an
+explicit CPU choice rather than an ISA-wide claim. LSL computes the granular
+byte limit before destination truncation. Prefix and exact-extent admission
+remains strict: LOCK/F2/F3, duplicate prefixes, truncated and trailing bytes
+are rejected before fetch. Unbound query profiles also refuse before fetch.
+
+The architectural reference is LAR, LSL and VERR/VERW in
+[Intel SDM Volume 2](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf).
+This query owner does not load LDTR/TR or implement task switching. Existing
+native LLVM descriptor interfaces are independent of this owned-RAM execution
+path. NeverC now exposes 28 previously x64-only descriptor/machine builtin
+forms to i386 source through the common registry, preserving seven x64-only
+wide forms. Its explicit full LLVM backend emits the original instructions;
+privileged forms are checked for code generation, and unprivileged queries
+also execute in original Linux i386/x64 processes at O0/O2.
+
+The [November 7 descriptor qualification](evidence/x86-legacy-descriptors-2026-11-07.json)
+records 1,154 passing checks, 196,608 original descriptor-state comparisons,
+1,792 original data-debug comparisons and 48 new compiled-source cases across
+both SDKs and qualified P/E cores. Another 566 post-integration checks pass,
+including both complete type suites with the existing kernel PDB and all four
+generated-C suites. The paging executables remain byte-identical. Initial
+type runs without the PDB binding are retained as superseded records, with
+their skips excluded from the final counts. NeverC separately passes 10,560
+native query comparisons and 252 code-generation form checks across P/E cores.
+The archive binds actual source commits, compiler/dependency inputs, binaries,
+generated sources/libraries and raw result hashes. The LLVM release gate
+remains open and the pin remains r6.

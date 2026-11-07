@@ -83,6 +83,65 @@ TEST_P(X86LegacyDebugNativeTest, OriginalIntegerExtensionReadWatchpoints) {
   RecordProperty("original_comparisons", Comparisons);
 }
 
+TEST_P(X86LegacyDebugNativeTest, OriginalDescriptorQueryReadWatchpoints) {
+  if (!neverd::test::supportsX86KVMPrefault(KVM))
+    GTEST_SKIP() << "Data-watchpoint oracle requires KVM pre-fault memory";
+  for (bool Code32 : {false, true})
+    for (bool Stack32 : {false, true})
+      for (unsigned CPL : {0u, 3u})
+        for (unsigned Form = 0; Form != 4; ++Form)
+          for (unsigned Kind = 0; Kind != 7; ++Kind) {
+            Watchpoint W;
+            auto Bytes = neverd::test::legacyDescriptorBytes(Form, Code32, true,
+                                                             true, 0, -1);
+            Bytes.back() = (Bytes.back() & ~7u) | 7; // [EDI].
+            W.Instructions = {Bytes};
+            W.DescriptorQueries = X86LegacyDescriptorProfile::TableImage;
+            W.Flags = Kind == 2 ? 0x302 : 0x202;
+            W.DR7 = Kind == 1 ? 0x10401 : 0x30401;
+            W.DR[0] = Kind == 3   ? 0x8102
+                      : Kind == 4 ? 0x7020
+                      : Kind == 5 ? 0x7024
+                      : Kind == 6 ? 0x7027
+                                  : 0x8100;
+            ASSERT_NO_FATAL_FAILURE(compare(Code32, Stack32, true, CPL, Nop,
+                                            0xffff0ff0, false, {}, {}, W));
+            if (HasFailure())
+              return;
+          }
+  RecordProperty("original_comparisons", Comparisons);
+}
+
+TEST_P(X86LegacyDebugNativeTest, OriginalBMIReadWatchpoints) {
+  if (!neverd::test::supportsX86KVMPrefault(KVM))
+    GTEST_SKIP() << "Data-watchpoint oracle requires KVM pre-fault memory";
+  if (!__builtin_cpu_supports("bmi") || !__builtin_cpu_supports("bmi2"))
+    GTEST_SKIP() << "Original BMI oracle requires BMI1/BMI2";
+  for (bool Code32 : {false, true})
+    for (bool Stack32 : {false, true})
+      for (unsigned CPL : {0u, 3u})
+        for (unsigned Form = 0; Form != neverd::test::LegacyBMIForms.size();
+             ++Form)
+          for (unsigned Kind : {0u, 1u, 2u}) {
+            Watchpoint W;
+            auto Bytes = neverd::test::legacyBMIBytes(Form, 0, 1, -1);
+            Bytes[4] = (Bytes[4] & ~7u) | 7; // [EDI] / [BX].
+            if (!Code32)
+              Bytes.insert(Bytes.begin(), 0x67); // Always [EDI].
+            W.Instructions = {Bytes};
+            W.IntegerExtensions = {false, false, true, false, true};
+            W.BMIUndefinedFlags = 0; // Explicit Intel image for these inputs.
+            W.Flags = Kind == 2 ? 0x302 : 0x202;
+            W.DR7 = Kind == 1 ? 0x10401 : 0x30401;
+            W.DR[0] = 0x8100;
+            ASSERT_NO_FATAL_FAILURE(compare(Code32, Stack32, true, CPL, Nop,
+                                            0xffff0ff0, false, {}, {}, W));
+            if (HasFailure())
+              return;
+          }
+  RecordProperty("original_comparisons", Comparisons);
+}
+
 TEST_P(X86LegacyDebugNativeTest, OriginalStackOperandsAndEventTables) {
   if (!neverd::test::supportsX86KVMPrefault(KVM))
     GTEST_SKIP() << "Data-watchpoint oracle requires KVM pre-fault memory";

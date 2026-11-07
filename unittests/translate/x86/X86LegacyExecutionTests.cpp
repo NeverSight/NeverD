@@ -9,6 +9,8 @@
 
 #include "../../HostCpu.h"
 #include "X86BranchDebugOracle.h"
+#include "X86LegacyBMITestEncoding.h"
+#include "X86LegacyDescriptorTestEncoding.h"
 #include "X86LegacyTestState.h"
 #include "X86PortDevice.h"
 #include "gtest/gtest.h"
@@ -659,11 +661,13 @@ TEST_F(X86LegacyExecutionTest, ScalarMalformedFormsFailBeforeFetch) {
 }
 
 #include "X86LegacyArplTests.inc"
+#include "X86LegacyBMITests.inc"
 #include "X86LegacyBitTests.inc"
 #include "X86LegacyBoundTests.inc"
 #include "X86LegacyConditionTests.inc"
 #include "X86LegacyDebugTests.inc"
 #include "X86LegacyDecimalTests.inc"
+#include "X86LegacyDescriptorTests.inc"
 #include "X86LegacyDivisionTests.inc"
 #include "X86LegacyDoubleShiftTests.inc"
 #include "X86LegacyEventReplayTests.inc"
