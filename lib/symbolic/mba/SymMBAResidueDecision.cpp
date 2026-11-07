@@ -110,7 +110,9 @@ class LowWordDecisions {
   llvm::DenseMap<uint64_t, uint32_t> Parities;
   std::unordered_map<uint64_t, Bits> Words;
   std::unordered_map<uint32_t, uint64_t> WideLiteralPrefixes;
-  std::unordered_map<uint32_t, unsigned> Zeros;
+  // Facts are copied out before recursion. Widening the node index keeps
+  // every valid key separate from both dense-map sentinel values.
+  llvm::DenseMap<uint64_t, unsigned> Zeros;
   struct WordOperation {
     SymOp Op;
     Bits A, B;
@@ -651,8 +653,9 @@ class LowWordDecisions {
           break;
       }
     }
-    if (charge(1, 2 * sizeof(uint32_t) + 4 * sizeof(void *)))
-      Zeros.emplace(R.index(), Result);
+    if (charge(1, sizeof(uint64_t) + sizeof(unsigned) + 4 * sizeof(void *)) &&
+        reserveEntry(Zeros))
+      Zeros.try_emplace(R.index(), Result);
     return Result;
   }
 
@@ -661,7 +664,7 @@ class LowWordDecisions {
   // replaced by one of them. Normalize ring and bitwise operations recursively
   // so high constants do not give identical low words distinct outer nodes.
   SymRef projectLowWord(SymRef R, unsigned Count,
-                        std::unordered_map<uint64_t, SymRef> &Cache,
+                        llvm::DenseMap<uint64_t, SymRef> &Cache,
                         unsigned Depth = 0) {
     if (!charge() || Depth >= limits::kMaxResidueDecisionDepth) {
       Failed = true;
@@ -712,10 +715,11 @@ class LowWordDecisions {
           const size_t Limbs = (size_t(Ctx.width(R)) - 1) / 64 + 1;
           if (!charge(Limbs, sizeof(SymNode) + Limbs * sizeof(uint64_t) +
                                  sizeof(uint64_t) + sizeof(SymRef) +
-                                 4 * sizeof(void *)))
+                                 4 * sizeof(void *)) ||
+              !reserveEntry(Cache))
             return R;
           Result = Ctx.mkZero(Ctx.width(R));
-          Cache.emplace(Key, Result);
+          Cache.try_emplace(Key, Result);
           return Result;
         }
       }
@@ -766,8 +770,9 @@ class LowWordDecisions {
                                     : Ctx.mkNot(Operands.front());
       }
     }
-    if (charge(1, sizeof(uint64_t) + sizeof(SymRef) + 4 * sizeof(void *)))
-      Cache.emplace(Key, Result);
+    if (charge(1, sizeof(uint64_t) + sizeof(SymRef) + 4 * sizeof(void *)) &&
+        reserveEntry(Cache))
+      Cache.try_emplace(Key, Result);
     return Result;
   }
 
@@ -2248,7 +2253,10 @@ public:
                   2 * Ctx.numOperands(Root) * sizeof(SymRef)))
         return Root;
       Factors.assign(Ctx.operands(Root).begin(), Ctx.operands(Root).end());
-      std::unordered_map<uint64_t, SymRef> Projections;
+      // Projection returns handles by value. A dense table can therefore
+      // move its buckets without invalidating any recursive caller's view.
+      // Every key ends in its observed precision, below either sentinel.
+      llvm::DenseMap<uint64_t, SymRef> Projections;
       for (auto &Factor : Factors) {
         if (Ctx.isConst(Factor))
           continue;
