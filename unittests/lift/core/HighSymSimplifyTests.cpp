@@ -3572,6 +3572,70 @@ int main(void) {
   source_call_execution_test::compileAndRun(Program, {"-O2"});
 }
 
+TEST(HighExprSimplify, SharedObservableSeedsDoNotSpendBudgetPerRoot) {
+  for (const bool IndirectCall : {false, true}) {
+    SCOPED_TRACE(IndirectCall);
+    auto Unread = HighExpr::makeUndef(8);
+    auto Address = HighExpr::makeUndef(8);
+    auto Effect = HighExpr::makeLoad(Address, Unread->Type);
+    if (IndirectCall) {
+      Effect = HighExpr::makeCall("indirect", 0, {});
+      Effect->IsIndirectCall = true;
+      Effect->IndirectTarget = Address;
+      Effect->Type = Unread->Type;
+    }
+    auto Shared = HighExpr::makeBinop(NdOp::INT_OR, Unread, Effect);
+    const auto Zero = HighExpr::makeConst(0, 8);
+    for (unsigned I = 0; I < 512; ++I)
+      Shared = HighExpr::makeBinop(NdOp::INT_XOR, Shared, Zero);
+    HighFunc F;
+    for (unsigned I = 0; I < 4096; ++I)
+      F.Body.push_back(
+          assignValue(HighExpr::makeVar(tempOfSize(I, 8)), Shared));
+    // None of these temporary results is read, but the memory address or
+    // indirect target is observed at every evaluation of the shared graph.
+    zeroUndemandedUnknownBytes(F, Arch::X64);
+    EXPECT_FALSE(containsNode(F.Body.front().Val, Unread));
+    EXPECT_TRUE(containsNode(F.Body.front().Val, Effect));
+    EXPECT_EQ(IndirectCall ? Effect->IndirectTarget : Effect->Operands.front(),
+              Address);
+    EXPECT_EQ(Address->Kind, ExprKind::Undef);
+    for (const auto &Stmt : F.Body)
+      EXPECT_EQ(Stmt.Val, Shared);
+  }
+}
+
+TEST(HighExprSimplify, SharedSeedsStillDemandEachRootsValue) {
+  for (const bool Reverse : {false, true}) {
+    auto Unknown = HighExpr::makeUndef(8);
+    auto Shared =
+        HighExpr::makeBinop(NdOp::INT_OR, Unknown, HighExpr::makeConst(0, 8));
+    auto Unread = assignValue(HighExpr::makeVar(tempOfSize(1, 8)), Shared);
+    auto Read = returnValue(Shared);
+    HighFunc F;
+    F.ReturnType = Unknown->Type;
+    F.Body = Reverse ? std::vector<HighStmt>{Read, Unread}
+                     : std::vector<HighStmt>{Unread, Read};
+    zeroUndemandedUnknownBytes(F, Arch::X64);
+    EXPECT_TRUE(containsNode(Shared, Unknown));
+    EXPECT_EQ(Unknown->Kind, ExprKind::Undef);
+  }
+}
+
+TEST(HighExprSimplify, SharedObservableSeedsTerminateCycles) {
+  auto Address = HighExpr::makeUndef(8);
+  const auto Load = HighExpr::makeLoad(Address, Address->Type);
+  auto Cycle =
+      HighExpr::makeBinop(NdOp::INT_OR, HighExpr::makeConst(0, 8), Load);
+  Cycle->Operands.front() = Cycle;
+  HighFunc F;
+  F.Body = {assignValue(HighExpr::makeVar(tempOfSize(1, 8)), Cycle)};
+  zeroUndemandedUnknownBytes(F, Arch::X64);
+  EXPECT_EQ(Load->Operands.front(), Address);
+  EXPECT_EQ(Address->Kind, ExprKind::Undef);
+  Cycle->Operands.front().reset();
+}
+
 TEST(HighExprSimplify, CrossDefinitionFlagDemandDoesNotKeepTheWholeByte) {
   auto X = HighExpr::makeVar(tempOfSize(1, 4));
   auto Noise = HighExpr::makeVar(tempOfSize(2, 4));
