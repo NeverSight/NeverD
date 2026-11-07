@@ -251,6 +251,11 @@ void HighCWriter::writeSourceRecordDeclarations(
         Visit(Parameter);
     } else if (Type->Kind == NdTypeKind::Array) {
       Visit(Type->ElemType);
+    } else if (Type->Kind == NdTypeKind::Struct) {
+      // Indirect anonymous records still declare their fields. Any opaque
+      // pointee named by a field needs the same declaration as a parameter.
+      for (const auto &Field : Type->Fields)
+        Visit(Field);
     }
   };
   auto Signature = [&](const FunctionSym &Function) {

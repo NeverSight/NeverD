@@ -77,6 +77,9 @@ TypeRef typedParameter(char Kind) {
   if (Kind == kPointerKind)
     return NdType::makePtr(NdType::makeVoid());
   switch (Kind) {
+#define A64_CALL_NAMED_POINTER_TYPE(Kind, Name)                                \
+  case Kind:                                                                   \
+    return NdType::makePtr(NdType::makeNamedRecord(Name));
 #define A64_CALL_RECORD_TYPE(Kind, Fields)                                     \
   case Kind: {                                                                 \
     std::vector<TypeRef> Members;                                              \
