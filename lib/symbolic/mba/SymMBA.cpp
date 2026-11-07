@@ -1520,7 +1520,61 @@ MBAResult simplifyMBA(SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
 namespace detail {
 
 class MBADeepSimplifier {
+  static void makeRoom(MBARewriteCache &Cache) {
+    while (Cache.size() >= Cache.Capacity) {
+      assert(Cache.OrderFront < Cache.Order.size());
+      const auto Entry = Cache.Order[Cache.OrderFront++];
+      const auto Removed = Entry.IsRewrite ? Cache.Rewrites.erase(Entry.Index)
+                                           : Cache.Completed.erase(Entry.Index);
+      Cache.EvictedEntries += Removed;
+    }
+  }
+  static void append(MBARewriteCache &Cache, uint32_t Index, bool IsRewrite) {
+    if (Cache.OrderFront && Cache.OrderFront >= Cache.Order.size() / 2) {
+      Cache.Order.erase(Cache.Order.begin(),
+                        Cache.Order.begin() + Cache.OrderFront);
+      Cache.OrderFront = 0;
+    }
+    Cache.Order.push_back({Index, IsRewrite});
+  }
+  static void remember(MBARewriteCache &Cache, uint32_t Index, SymRef Value) {
+    if (!Cache.Capacity || Cache.Rewrites.contains(Index))
+      return;
+    Cache.Completed.erase(Index);
+    makeRoom(Cache);
+    Cache.Rewrites.emplace(Index, Value);
+    append(Cache, Index, true);
+  }
+  static void rememberCompletion(MBARewriteCache &Cache, uint32_t Index,
+                                 const MBAResult &Result) {
+    if (!Cache.Capacity || Cache.Rewrites.contains(Index))
+      return;
+    if (auto Found = Cache.Completed.find(Index);
+        Found != Cache.Completed.end()) {
+      Found->second = Result;
+      return;
+    }
+    makeRoom(Cache);
+    Cache.Completed.emplace(Index, Result);
+    append(Cache, Index, false);
+  }
+
 public:
+  static void prepare(SymContext &Ctx, MBARewriteCache &Cache,
+                      const MBAOptions &Opts) {
+    if (Cache.Owner != &Ctx)
+      throw std::invalid_argument(
+          "MBA rewrite cache belongs to another context");
+    if (!Cache.CompletedOptions || *Cache.CompletedOptions != Opts) {
+      Cache.Completed.clear();
+      Cache.Order.erase(Cache.Order.begin(),
+                        Cache.Order.begin() + Cache.OrderFront);
+      Cache.OrderFront = 0;
+      std::erase_if(Cache.Order,
+                    [](const auto &Entry) { return !Entry.IsRewrite; });
+      Cache.CompletedOptions = Opts;
+    }
+  }
   static MBAResult run(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
                        MBARewriteCache &Cache, WorkBudget &Budget);
 };
@@ -1534,6 +1588,7 @@ MBAResult simplifyMBADeep(SymContext &Ctx, SymRef E, const MBAOptions &Opts) {
 
 MBAResult simplifyMBADeep(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
                           MBARewriteCache &Cache) {
+  detail::MBADeepSimplifier::prepare(Ctx, Cache, Opts);
   WorkBudget Budget(Opts.MaxWork);
   Budget.MemoOwner = &Ctx;
   Budget.MemoCapacity = Opts.MaxTableBytes /
@@ -1555,6 +1610,8 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
   Result.SizeBefore = readingCost(Ctx, E);
   Result.SizeAfter = Result.SizeBefore;
   const size_t WorkStart = Budget.used();
+  const bool ReuseCompleted = Cache.Capacity && Cache.CompletedOptions &&
+                              *Cache.CompletedOptions == Opts;
   if (auto Hit = Cache.Rewrites.find(E.index());
       Hit != Cache.Rewrites.end() && Budget.consume()) {
     if ((Opts.AllowGrowth || doesNotGrow(Ctx, Hit->second, E)) &&
@@ -1569,6 +1626,14 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
       return Result;
     }
   }
+  if (ReuseCompleted)
+    if (const auto Hit = Cache.Completed.find(E.index());
+        Hit != Cache.Completed.end() && Budget.consume()) {
+      Result = Hit->second;
+      Result.Work = Budget.used() - WorkStart;
+      ++Cache.ReusedCompletions;
+      return Result;
+    }
   SolveReport FastRep;
   if (SymRef Fast = tryFastComplementarySum(Ctx, E, Opts, Budget, FastRep);
       Fast != E) {
@@ -1596,9 +1661,8 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
     Result.Work = Budget.used() - WorkStart;
     if (Result.Evidence == MBAEvidence::Derivation &&
         Words.Outcome != MBAOutcome::BudgetExhausted && !Budget.exhausted() &&
-        Cache.Rewrites.size() < Cache.Capacity &&
-        readingScore(Ctx, Words.Expr) < readingScore(Ctx, E))
-      Cache.Rewrites.try_emplace(E.index(), Words.Expr);
+        Cache.Capacity && readingScore(Ctx, Words.Expr) < readingScore(Ctx, E))
+      remember(Cache, E.index(), Words.Expr);
     return Result;
   }
 
@@ -1682,8 +1746,8 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
           Result.Outcome = MBAOutcome::Rewritten;
           Result.Evidence =
               Sampled ? MBAEvidence::Samples : MBAEvidence::Derivation;
-          if (!Sampled && !Incomplete && Cache.Rewrites.size() < Cache.Capacity)
-            Cache.Rewrites.try_emplace(E.index(), Combined);
+          if (!Sampled && !Incomplete && Cache.Capacity)
+            remember(Cache, E.index(), Combined);
           return Result;
         }
       }
@@ -1814,20 +1878,74 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
   // over the result of the one beneath rather than over the obfuscation that
   // was wrapped around it.  It also keeps the walk iterative: obfuscated
   // expressions nest deeply enough that recursion is a real hazard.
-  const std::vector<uint32_t> Order = reachableInOrder(Ctx, WalkRoot);
   llvm::DenseMap<uint32_t, SymRef> Solved;
+  llvm::DenseMap<uint32_t, SolveReport> FinishedReports;
+  llvm::SmallDenseSet<uint32_t, 8> CompletedFrontier;
+  bool Reused = false;
+  const std::vector<uint32_t> Order = [&] {
+    if (Cache.Rewrites.empty() && (!ReuseCompleted || Cache.Completed.empty()))
+      return reachableInOrder(Ctx, WalkRoot);
+    llvm::SmallDenseSet<uint32_t, 32> Seen;
+    llvm::SmallVector<SymRef, 32> Pending{WalkRoot};
+    std::vector<uint32_t> Nodes;
+    while (!Pending.empty()) {
+      const auto R = Pending.pop_back_val();
+      if (!Seen.insert(R.index()).second)
+        continue;
+      Nodes.push_back(R.index());
+      if (const auto Hit = Cache.Rewrites.find(R.index());
+          Hit != Cache.Rewrites.end() && Budget.consume()) {
+        // This exact replacement owns the whole subtree. Its original
+        // descendants need work only when reached independently elsewhere.
+        Solved.try_emplace(R.index(), Hit->second);
+        CompletedFrontier.insert(R.index());
+        Reused = true;
+        continue;
+      }
+      if (ReuseCompleted)
+        if (const auto Hit = Cache.Completed.find(R.index());
+            Hit != Cache.Completed.end() && Budget.consume()) {
+          Solved.try_emplace(R.index(), R);
+          CompletedFrontier.insert(R.index());
+          Result.NumAtoms = std::max(Result.NumAtoms, Hit->second.NumAtoms);
+          if (Result.Outcome == MBAOutcome::NotApplicable)
+            Result.Outcome = Hit->second.Outcome;
+          FinishedReports[R.index()].NumAtoms = Hit->second.NumAtoms;
+          FinishedReports[R.index()].Outcome = Hit->second.Outcome;
+          ++Cache.ReusedCompletions;
+          continue;
+        }
+      const auto Children = Ctx.operands(R);
+      Pending.append(Children.begin(), Children.end());
+    }
+    llvm::sort(Nodes);
+    return Nodes;
+  }();
   CompletedRegions Regions;
   bool Skipped = WholeRep.BudgetExhausted;
   size_t RefinementStorage = Opts.MaxTableBytes;
   SymKnownBits Known(Ctx);
   std::vector<std::pair<uint32_t, SymRef>> PendingRewrites;
-  bool Reused = false;
+  std::vector<std::pair<uint32_t, SolveReport>> PendingCompletions;
   llvm::DenseMap<uint32_t, bool> PreservedReadings;
   SymRef RebuiltInput;
   bool PreservedChildren = false;
-  auto Remember = [&](uint32_t Index, SymRef Value, bool Complete) {
+  SolveReport CurrentReport;
+  size_t NodeWorkStart = 0;
+  auto MergeReport = [](SolveReport &Into, const SolveReport &From) {
+    Into.NumAtoms = std::max(Into.NumAtoms, From.NumAtoms);
+    Into.BudgetExhausted |= From.BudgetExhausted;
+    if (Into.Outcome == MBAOutcome::NotApplicable &&
+        (From.Outcome == MBAOutcome::AlreadyShortest ||
+         From.Outcome == MBAOutcome::TooManyInputs))
+      Into.Outcome = From.Outcome;
+  };
+  auto Remember = [&](uint32_t Index, SymRef Value, bool Complete,
+                      bool PreserveBoundary = true) {
     Solved[Index] = Value;
-    if (RefinementStorage >= 64) {
+    if (ReuseCompleted)
+      FinishedReports[Index] = CurrentReport;
+    if (PreserveBoundary && RefinementStorage >= 64) {
       RefinementStorage -= 64;
       PreservedReadings[Index] =
           Value == SymRef(Index) ||
@@ -1837,18 +1955,28 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
     }
     constexpr size_t CacheEntryBytes = 128;
     if (Complete && Value != SymRef(Index) &&
-        PendingRewrites.size() < Cache.Capacity - Cache.Rewrites.size() &&
+        PendingRewrites.size() < Cache.Capacity &&
         RefinementStorage >= CacheEntryBytes && Budget.consume() &&
         readingScore(Ctx, Value) < readingScore(Ctx, SymRef(Index))) {
       RefinementStorage -= CacheEntryBytes;
       PendingRewrites.emplace_back(Index, Value);
     }
+    if (ReuseCompleted && Complete && !Skipped && !Budget.exhausted() &&
+        Value == SymRef(Index) && Ctx.numOperands(Value) &&
+        Budget.used() - NodeWorkStart >=
+            detail::limits::kMinCompletedRegionCacheWork &&
+        PendingCompletions.size() < Cache.Capacity &&
+        RefinementStorage >= CacheEntryBytes && Budget.consume()) {
+      RefinementStorage -= CacheEntryBytes;
+      PendingCompletions.emplace_back(Index, CurrentReport);
+    }
     // A replacement root was also visited by this layer. Remember it under
     // its own identity so a later candidate does not measure that same root
     // again merely because it was emitted under another original node.
     constexpr size_t EntryBytes = 128;
-    if (Complete && !Budget.exhausted() && !Solved.contains(Value.index()) &&
-        RefinementStorage >= EntryBytes && Budget.consume()) {
+    if (PreserveBoundary && Complete && !Budget.exhausted() &&
+        !Solved.contains(Value.index()) && RefinementStorage >= EntryBytes &&
+        Budget.consume()) {
       RefinementStorage -= EntryBytes;
       Solved.try_emplace(Value.index(), Value);
     }
@@ -1859,13 +1987,16 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
 
   for (uint32_t Index : Order) {
     SymRef R(Index);
-    if (auto Hit = Cache.Rewrites.find(Index);
-        Hit != Cache.Rewrites.end() && Budget.consume()) {
-      Solved[Index] = Hit->second;
-      Reused = true;
+    if (CompletedFrontier.contains(Index))
       continue;
-    }
     llvm::ArrayRef<SymRef> Ops = Ctx.operands(R);
+    NodeWorkStart = Budget.used();
+    CurrentReport = {};
+    if (ReuseCompleted)
+      for (const auto Child : Ops)
+        if (const auto At = FinishedReports.find(Child.index());
+            At != FinishedReports.end())
+          MergeReport(CurrentReport, At->second);
 
     SymRef Rebuilt = R;
     PreservedChildren = true;
@@ -1899,7 +2030,10 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
     Rebuilt = foldConditionalControls(Ctx, Rebuilt, Budget, RefinementStorage);
     PreservedChildren &= Rebuilt == RebuiltInput;
     if (!canMeasureAtRoot(Ctx, Rebuilt)) {
-      Solved[Index] = Rebuilt;
+      // Rewriting an opaque word changes its abstraction identity even when
+      // only children changed. Parents still need their original reading.
+      Remember(Index, Rebuilt, !Skipped && !Budget.exhausted(),
+               /*PreserveBoundary=*/false);
       continue;
     }
     if (Rebuilt == R && hasCompletedResidueReading(Ctx, R, Budget)) {
@@ -1920,6 +2054,8 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
         // retry can beat this bound. Preserve the budget for larger parents.
         if (Result.Outcome == MBAOutcome::NotApplicable)
           Result.Outcome = MBAOutcome::AlreadyShortest;
+        if (CurrentReport.Outcome == MBAOutcome::NotApplicable)
+          CurrentReport.Outcome = MBAOutcome::AlreadyShortest;
         Remember(Index, Rebuilt, true);
         continue;
       }
@@ -1927,11 +2063,13 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
       SolveReport Rep;
       SymRef Measured = solveRegionOrSplit(Ctx, Rebuilt, Opts, Budget, Rep,
                                            &Regions, &RefinementStorage);
+      MergeReport(CurrentReport, Rep);
       Complete = !Rep.BudgetExhausted;
       if (Measured != Rebuilt) {
         SolveReport Refined;
         Rebuilt = refineCandidate(Ctx, Measured, Opts, Order, Solved, Regions,
                                   Budget, RefinementStorage, Refined);
+        MergeReport(CurrentReport, Refined);
         Result.NumAtoms = std::max(Result.NumAtoms, Rep.NumAtoms);
         Result.NumAtoms = std::max(Result.NumAtoms, Refined.NumAtoms);
         AnySampled |= Rep.Evidence == MBAEvidence::Samples;
@@ -1961,11 +2099,13 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
                                             &Regions, &RefinementStorage)
                        : solveArithmetic(Ctx, R, Opts, Budget, OriginalRep);
       Skipped |= OriginalRep.BudgetExhausted;
+      MergeReport(CurrentReport, OriginalRep);
       Complete &= !OriginalRep.BudgetExhausted;
       if (Original != R && !Budget.exhausted()) {
         SolveReport Refined;
         Original = refineCandidate(Ctx, Original, Opts, Order, Solved, Regions,
                                    Budget, RefinementStorage, Refined);
+        MergeReport(CurrentReport, Refined);
         OriginalRep.NumAtoms = std::max(OriginalRep.NumAtoms, Refined.NumAtoms);
         if (Refined.Evidence == MBAEvidence::Samples)
           OriginalRep.Evidence = MBAEvidence::Samples;
@@ -1981,6 +2121,7 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
           Original = solveRegionOrSplit(Ctx, Original, Opts, Budget, Refined,
                                         &Regions, &RefinementStorage);
         Rebuilt = Original;
+        MergeReport(CurrentReport, Refined);
         Result.NumAtoms =
             std::max({Result.NumAtoms, OriginalRep.NumAtoms, Refined.NumAtoms});
         AnySampled |= Refined.Evidence == MBAEvidence::Samples;
@@ -1996,6 +2137,7 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
       // Use the original node: a child rewrite may already have expanded one
       // occurrence of a complemented factor while leaving its products whole.
       SymRef Candidate = solveStructuralFactors(Ctx, R, Opts, Budget, Factored);
+      MergeReport(CurrentReport, Factored);
       if (readingScore(Ctx, Candidate) < readingScore(Ctx, Rebuilt)) {
         Rebuilt = Candidate;
         Result.NumAtoms = std::max(Result.NumAtoms, Factored.NumAtoms);
@@ -2055,21 +2197,45 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
     assert(Verified && "a layered MBA rewrite disagreed with what it replaces");
     Kept = Verified;
   }
+  auto RememberCompletions = [&] {
+    // Each record was completed before it was queued. A later sibling's
+    // resource refusal does not invalidate that finished work.
+    for (const auto &[Index, Report] : PendingCompletions) {
+      MBAResult Finished;
+      Finished.Expr = SymRef(Index);
+      Finished.SizeBefore = Finished.SizeAfter =
+          readingCost(Ctx, Finished.Expr);
+      Finished.NumAtoms = Report.NumAtoms;
+      Finished.Outcome = Report.Outcome;
+      rememberCompletion(Cache, Index, Finished);
+    }
+  };
   if (!Kept) {
     // Running out of budget with regions left unvisited is the one refusal that
     // says nothing about the expression, so it outranks the others.
     if (Skipped)
       Result.Outcome = MBAOutcome::BudgetExhausted;
+    if (Out == E)
+      RememberCompletions();
+    constexpr size_t CompletionBytes = 128;
+    if (ReuseCompleted && Out == E && !Skipped && !Budget.exhausted() &&
+        Ctx.numOperands(E) && RefinementStorage >= CompletionBytes &&
+        Budget.consume()) {
+      Result.Work = Budget.used() - WorkStart;
+      rememberCompletion(Cache, E.index(), Result);
+    }
     return Result;
   }
 
   if (!AnySampled) {
     for (auto [Index, Value] : PendingRewrites)
-      if (Cache.Rewrites.size() < Cache.Capacity)
-        Cache.Rewrites.try_emplace(Index, Value);
-    if (WalkRoot != E && !Skipped && !Budget.exhausted() &&
-        Cache.Rewrites.size() < Cache.Capacity)
-      Cache.Rewrites.try_emplace(E.index(), Out);
+      remember(Cache, Index, Value);
+    // Opaque roots also inherit the completed exact derivations of their
+    // children. Retain that final composition, not only whole-root rewrites.
+    if (!Skipped && !Budget.exhausted() && Cache.Capacity &&
+        readingScore(Ctx, Out) < readingScore(Ctx, E))
+      remember(Cache, E.index(), Out);
+    RememberCompletions();
     if (Reused)
       ++Cache.ReusedRoots;
   }
