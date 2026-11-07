@@ -9,6 +9,7 @@
 
 #include <array>
 #include <bit>
+#include <random>
 
 namespace {
 using namespace neverd::symbolic;
@@ -163,6 +164,50 @@ TEST(SymMBAArithmetic, ExtractsRepeatedWordCoefficients) {
       EXPECT_LT(Ctx.readabilityCost(R), Ctx.readabilityCost(P.Root));
     }
   }
+}
+
+TEST(SymMBAArithmetic, PackedOffsetsPreserveCoefficientProofs) {
+  std::mt19937_64 Random(0x5041434b45445355);
+  for (unsigned Width : {8u, 16u, 32u, 64u, 65u, 128u, 257u})
+    for (unsigned Coefficient : {7u, 14u})
+      for (bool Packed : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Width << ':' << Coefficient << ':' << Packed);
+        SymContext Ctx;
+        const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+        const auto Mask = llvm::APInt::getSignMask(Width);
+        const auto K = Ctx.mkConst(Width, Coefficient);
+        const auto Offset = Ctx.mkConst(Width, 13);
+        const auto Masked = Ctx.mkAnd(X, Ctx.mkConst(Mask));
+        const auto Word =
+            Packed ? Ctx.mkOr(Offset, Masked) : Ctx.mkAdd(Offset, Masked);
+        const auto Input = Ctx.mkAdd({Word, Ctx.mkMul(K, X), Ctx.mkMul(K, Y)});
+        MBAOptions Opts;
+        Opts.VerifySamples = 0;
+        detail::WorkBudget Budget(Opts.MaxWork);
+        detail::SolveReport Report;
+        const auto Result =
+            detail::solveCoefficientFactors(Ctx, Input, Opts, Budget, Report);
+        ASSERT_NE(Result, Input);
+        EXPECT_LE(Ctx.readabilityCost(Result), 11u) << Ctx.toString(Result);
+        EXPECT_EQ(Report.Evidence, MBAEvidence::Derivation);
+        EXPECT_FALSE(Report.BudgetExhausted);
+        for (unsigned Trial = 0; Trial != 128; ++Trial) {
+          std::array<llvm::APInt, 2> Values;
+          for (auto &V : Values) {
+            V = llvm::APInt(Width, 0);
+            for (unsigned Bit = 0; Bit < Width; Bit += 64)
+              V |= llvm::APInt(Width, Random()).shl(Bit);
+            if (Trial < 3)
+              V = Trial == 2 ? llvm::APInt::getAllOnes(Width)
+                             : llvm::APInt(Width, Trial);
+          }
+          const auto Expected = llvm::APInt(Width, 13) +
+                                Coefficient * (Values[0] + Values[1]) +
+                                (Mask & Values[0]);
+          EXPECT_EQ(Ctx.eval(Result, Values), Expected);
+        }
+      }
 }
 
 TEST(SymMBAArithmetic, CompletesSmallComplementSumsInSelectedAnswer) {

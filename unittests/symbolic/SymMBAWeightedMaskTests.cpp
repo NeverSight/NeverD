@@ -148,6 +148,54 @@ TEST(SymMBAWeightedMask, CompletesSixteenPartitionsWithinSmallWorkAllowance) {
   EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
 }
 
+TEST(SymMBAWeightedMask, FoldedLiteralKeepsTheShortestCarrierOrientation) {
+  std::mt19937_64 Random(0x464f4c4445444d41);
+  for (unsigned Width : {8u, 16u, 32u, 64u, 65u, 128u, 257u})
+    for (bool Residual : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Width << ':' << Residual);
+      SymContext C;
+      const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+      const auto Z = C.mkVar("z", Width), Carrier = C.mkMul(X, Y);
+      const auto Scale = llvm::APInt(Width, 182).shl(Width - 8);
+      const auto Bias = llvm::APInt(Width, 162).shl(Width - 8);
+      llvm::SmallVector<SymRef, 8> Terms{C.mkConst(Bias)};
+      for (const auto &[Mask, Flip] :
+           {std::pair{32u, 50u}, std::pair{132u, 56u}, std::pair{8u, 19u},
+            std::pair{16u, 17u}})
+        Terms.push_back(C.mkMul(
+            C.mkConst(Scale),
+            C.mkAnd(C.mkConst(Width, Mask),
+                    C.mkNot(C.mkXor(Carrier, C.mkConst(Width, Flip))))));
+      if (Residual)
+        Terms.push_back(Z);
+      const auto Input = C.mkAdd(Terms);
+      auto Expected =
+          C.mkMul(C.mkConst(Scale),
+                  C.mkNot(C.mkAnd(C.mkConst(Width, 188),
+                                  C.mkXor(Carrier, C.mkConst(Width, 48)))));
+      if (Residual)
+        Expected = C.mkAdd(Expected, Z);
+      MBAOptions Options;
+      Options.VerifySamples = 0;
+      const auto Result = simplifyMBADeep(C, Input, Options);
+      EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+      EXPECT_LE(Result.SizeAfter, C.readabilityCost(Expected))
+          << C.toString(Result.Expr);
+      for (unsigned Trial = 0; Trial != 128; ++Trial) {
+        std::vector<llvm::APInt> Values(C.numVars(), llvm::APInt(Width, 0));
+        for (auto &V : Values)
+          V = randomWord(Width, Random);
+        const auto Word = Values[0] * Values[1];
+        auto Want = Scale * ~(llvm::APInt(Width, 188) &
+                              (llvm::APInt(Width, 48) ^ Word));
+        if (Residual)
+          Want += Values[2];
+        EXPECT_EQ(C.eval(Input, Values), Want);
+        EXPECT_EQ(C.eval(Result.Expr, Values), Want);
+      }
+    }
+}
+
 TEST(SymMBAWeightedMask, RecoversScaledAndNegatedGroupsWithOpaqueResiduals) {
   for (unsigned Width : {8u, 16u, 32u, 64u, 128u, 257u}) {
     SCOPED_TRACE(Width);
