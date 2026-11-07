@@ -140,9 +140,8 @@ void applyStore(const MedInstruction &Instruction, MachineState &State,
     return;
   }
   State.Scratch.Values.invalidate(*Address, ByteWidth);
-  if (TrackValues && ByteWidth == sizeof(uint64_t) &&
-      State.Scratch.Values.canModelRange(*Address, ByteWidth))
-    State.Scratch.Values.writeValues(*Address, Value);
+  if (TrackValues && State.Scratch.Values.canModelRange(*Address, ByteWidth))
+    State.Scratch.Values.writeValues(*Address, Value, ByteWidth);
   if (Address->ValueKind == RegisterValue::Kind::SymbolicAddress) {
     State.Scratch.Memory.clear();
     return;
@@ -381,9 +380,10 @@ void applyRegisterTransfer(const MedInstruction &Instruction,
     const auto Address = effectiveAddress(Base, Instruction.Offset);
     State[Instruction.Dst] = {};
     const unsigned Width = Instruction.Semantics.MemoryWidth;
-    if (Scratch && Width == kDoubleWordBitWidth)
+    if (Scratch)
       if (const auto Key = memoryAddress(Base, Instruction.Offset))
-        State[Instruction.Dst] = Scratch->readValues(*Key).singleton();
+        State[Instruction.Dst] =
+            Scratch->readValues(*Key, Width / kBitsPerByte).singleton();
     if (Address && Base.ValueKind != RegisterValue::Kind::StackAddress &&
         (Width == kBitsPerByte || Width == kHalfWordBitWidth ||
          Width == kWordBitWidth || Width == kDoubleWordBitWidth)) {

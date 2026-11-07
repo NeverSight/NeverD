@@ -1491,6 +1491,24 @@ HISTORY_ALLOWED: tuple[HistoryAllowance, ...] = (
             'f4e1f7306dc71cdb8f205fde8827a93ad14c4e708a0f50279369639535a7ccfd',
         }),
     ),
+    HistoryAllowance(
+        path="docs/evidence/x86-debug-function-integration-2026-11-06.json",
+        rule="private-path",
+        commits=frozenset({
+            "62df9c959d6491c5ad1db386d2bc6d309246ede7",
+            "bd64d1d36c93bc256f51d336ef05769d9254ae8a",
+        }),
+        line="",
+        reason=(
+            "Reviewed redaction of personal PATH entries in the existing x86 "
+            "integration evidence. Test outcomes, binary hashes and command "
+            "order are unchanged. Only the original and cleanup commits' exact "
+            "line digest is covered; new path disclosures remain findings."
+        ),
+        line_sha256=frozenset({
+            "babb2a9a88efdce5ec4b5dc7ad997b064ce243740880f9318ff8d671e0d32dab",
+        }),
+    ),
 )
 
 
