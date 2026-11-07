@@ -2113,7 +2113,7 @@ private:
   struct GuardedJumpTableGroupKey {
     va_t OwnerBegin = InvalidVA;
     va_t OwnerEnd = InvalidVA;
-    std::array<va_t, 8> Members{};
+    std::array<va_t, limits::kMaxJumpTableGroupMembers> Members{};
     size_t MemberCount = 0;
     GuardedJumpTableGroupKind Kind = GuardedJumpTableGroupKind::DenseGuard;
     bool operator==(const GuardedJumpTableGroupKey &) const = default;

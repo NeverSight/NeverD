@@ -2209,7 +2209,9 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
                   : nullptr;
           const size_t GroupMembers =
               RoundCertificate ? GuardedGroupIdentity->MemberCount : 0;
-          if (RoundCertificate && (GroupMembers < 3 || GroupMembers > 8))
+          if (RoundCertificate &&
+              (GroupMembers < 3 ||
+               GroupMembers > limits::kMaxJumpTableGroupMembers))
             return 0;
           if (RoundCertificate && RoundCertificate->JointProof) {
             bool ReuseIncomplete = false;

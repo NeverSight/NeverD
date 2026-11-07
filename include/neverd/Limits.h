@@ -293,6 +293,9 @@ constexpr size_t kMaxJumpTableGuardSolverGates = size_t(1) << 18;
 
 /// Minimum number of resolved targets for a table to be accepted.
 constexpr uint32_t kMinJumpTableEntries = 2;
+/// Most indirect branches one adjacent-table group proves together: tail
+/// duplication can give a switch one dispatch per case.
+constexpr uint32_t kMaxJumpTableGroupMembers = 16;
 
 /// Maximum byte distance from function entry at which a jump-table
 /// target is still considered valid.

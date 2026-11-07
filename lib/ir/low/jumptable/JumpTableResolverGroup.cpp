@@ -720,7 +720,7 @@ bool CFGBuilder::finiteGOTOFFGroupClaimed() const {
          GuardedGroupIdentity->Kind ==
              GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF &&
          GuardedGroupIdentity->MemberCount >= 3 &&
-         GuardedGroupIdentity->MemberCount <= 8;
+         GuardedGroupIdentity->MemberCount <= limits::kMaxJumpTableGroupMembers;
 }
 
 bool CFGBuilder::finiteAbsoluteGroupClaimed() const {
@@ -866,7 +866,7 @@ void CFGBuilder::markGuardedJumpTableGroupIncomplete(
     const auto &Key = *GuardedGroupIdentity;
     Members = llvm::ArrayRef<va_t>(Key.Members.data(), Key.MemberCount);
   }
-  if (Members.empty() || Members.size() > 8) {
+  if (Members.empty() || Members.size() > limits::kMaxJumpTableGroupMembers) {
     IncompleteBranchMarkerEvidenceIncomplete = true;
     return;
   }
@@ -1231,7 +1231,8 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
       Img.getPointerSize() != 4 || !AuthoritativeCurrentFuncRange ||
       Img.I386GOTPCFields.empty() ||
       (Img.DataAddressRelocOperands.size() < 2 && Candidates.size() < 3) ||
-      Candidates.size() < 2 || Candidates.size() > 8 ||
+      Candidates.size() < 2 ||
+      Candidates.size() > limits::kMaxJumpTableGroupMembers ||
       !ResolvedTableInfo.empty() || !PriorStrongJumpTableProposals.empty() ||
       !NextStrongJumpTableProposals.empty() ||
       !PriorProvisionalRelativeEdges.empty() ||
