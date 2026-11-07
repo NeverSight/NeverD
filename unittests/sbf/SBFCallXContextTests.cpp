@@ -7963,14 +7963,22 @@ TEST(SBFCallXContexts,
       ASSERT_TRUE(static_cast<bool>(Report))
           << llvm::toString(Report.takeError());
       checkSummaryReferences(*Report);
+      const auto Root =
+          llvm::find_if(Report->Summaries, [](const auto &Summary) {
+            return Summary.EntrySlot == 0 && !Summary.GeneralizedInputs;
+          });
+      ASSERT_NE(Root, Report->Summaries.end());
       EXPECT_EQ(llvm::any_of(Report->Contexts,
                              [&](const auto &Evidence) {
-                               return Evidence.CallXSlot == Site &&
+                               return Evidence.SummaryID == Root->ID &&
+                                      Evidence.CallXSlot == Site &&
                                       Evidence.TargetSlot == Target;
                              }),
                 Mode == 0);
       EXPECT_TRUE(llvm::any_of(Report->SummaryEdges, [&](const auto &Edge) {
-        return Edge.CallerSlot == Calls.back() &&
+        return Edge.CallerSummaryID == Root->ID &&
+               Edge.CallerSlot == Calls.back() &&
+               Edge.GeneralizedInputs == (WarmCalls == 4) &&
                Edge.InstantiatedMemoryPathStores ==
                    (Mode == 0 || Mode == 4 ? 6 : 0);
       }));
