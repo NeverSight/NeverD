@@ -750,6 +750,20 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
 
 MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
                                    BinaryFormat Fmt) {
+  SEHLocalUnwindExitsEnabled = true;
+  ModeledSEHLocalUnwindExits = false;
+  try {
+    return convertFunction(SourceLow, TheArch, Fmt);
+  } catch (const LowToMedConversionError &) {
+    if (!ModeledSEHLocalUnwindExits)
+      throw;
+  }
+  SEHLocalUnwindExitsEnabled = false;
+  return convertFunction(SourceLow, TheArch, Fmt);
+}
+
+MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
+                                           Arch TheArch, BinaryFormat Fmt) {
   TargetArch = TheArch;
   TargetFormat = Fmt;
   auto Physical = Image && TheArch == Arch::X86 && Fmt == BinaryFormat::COFF
@@ -1011,6 +1025,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
   Func.CompleteLiftCoverage = Low.hasCompleteLiftCoverage();
   Func.ExceptionMetadata = Low.ExceptionMetadata;
   Func.SEHTerminationFrameBytes = collectLowSEHTerminationFrames(Low, TheArch);
+  Func.SEHHomedArguments = collectLowSEHHomedArguments(Low, TheArch);
   Func.RegistrationStates = Low.RegistrationStates;
   Func.RegistrationPhysicalFrame = PhysicalFrame;
   if (SEHPhysical)

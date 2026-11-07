@@ -42,6 +42,7 @@ constexpr va_t Entry = 0x140001000;
 constexpr va_t Callee = Entry + 0x40;
 constexpr va_t Funclet = Entry + 0x80;
 constexpr va_t OuterFunclet = Entry + 0x90;
+constexpr va_t Forwarded = Entry + 0x50;
 
 enum class Parent {
   /// `x19 = sp + 0x10` before the range, which only calls foo.
@@ -67,6 +68,9 @@ enum class Parent {
   /// clang-cl's shape: `sub sp,sp,#0x30; stp x29,x30,[sp,#0x10];
   /// add x29,sp,#0x10`, so the frame pointer is 0x10 above the stack pointer.
   FramePointerAboveTheStack,
+  /// xcpt4's nested handler at /O2: the range runs past the epilogue that a
+  /// branch around the `__try` skips to.
+  RangeRunsPastTheEpilogue,
 };
 
 enum class Handler {
@@ -77,6 +81,11 @@ enum class Handler {
   /// `if (abnormal) **(int **)(x1 + 0x18) = 99`, through the establisher
   /// frame.
   StoresThroughTheFrame,
+  /// Only `b forwarded`, whose code reads x0 and x1: a shared helper, which a
+  /// parent with no frame pointer has no value for in x1.
+  TailCallsWithItsArguments,
+  /// Only `ret`.
+  DoesNothing,
 };
 
 constexpr uint32_t Ret = 0xd65f03c0;
@@ -122,6 +131,13 @@ BinaryImage makeImage(Parent P, Handler H) {
             0xaa0103f3, 0x9400000a, 0xaa1303e0, 0xa8c27bf3, Ret};
     Finally = {Entry + 0x18, Entry + 0x1c};
     break;
+  case Parent::RangeRunsPastTheEpilogue:
+    // stp x29,x30,[sp,#-0x10]!; cbnz w0,tail; ldr w8,[x19]; add w8,w8,#3;
+    // str w8,[x19] | tail: ldp x29,x30,[sp],#0x10; ret
+    Body = {0xa9bf7bfd, 0x35000080, 0xb9400268, 0x11000d08,
+            0xb9000268, 0xa8c17bfd, Ret};
+    Finally = {Entry + 0x08, Entry + 0x1c};
+    break;
   case Parent::FramePointerAboveTheStack:
     // sub sp,sp,#0x30; stp x29,x30,[sp,#0x10]; add x29,sp,#0x10;
     // stur x1,[x29,#-8]; bl foo; ldur x8,[x29,#-8]; mov w9,#100;
@@ -156,6 +172,17 @@ BinaryImage makeImage(Parent P, Handler H) {
   // ldr x8,[x1,#0x18]; cbz w0,done; mov w9,#99; str w9,[x8] | done: ret
   if (H == Handler::StoresThroughTheFrame)
     HandlerCode = {0xf9400c28, 0x34000060, 0x52800c69, 0xb9000109, Ret};
+  // add x0,x0,x1; ret
+  const uint32_t ForwardedCode[] = {0x8b010000, Ret};
+  std::copy(std::begin(ForwardedCode), std::end(ForwardedCode),
+            Words.begin() + (Forwarded - Entry) / 4);
+  if (H == Handler::DoesNothing)
+    HandlerCode = {Ret};
+  // b forwarded
+  if (H == Handler::TailCallsWithItsArguments)
+    HandlerCode = {
+        0x14000000u |
+        ((static_cast<uint32_t>(Forwarded - Funclet) / 4) & 0x03ffffffu)};
   std::copy(HandlerCode.begin(), HandlerCode.end(),
             Words.begin() + (Funclet - Entry) / 4);
   // cbz w0,done; mov w8,#7; str w8,[x19] | done: ret
@@ -179,6 +206,7 @@ BinaryImage makeImage(Parent P, Handler H) {
   Img.Sections.push_back(std::move(Code));
   Img.Symbols.push_back(Symbol::makeFunc(Entry, End - Entry));
   Img.Symbols.push_back(Symbol::makeFunc(Callee, 4));
+  Img.Symbols.push_back(Symbol::makeFunc(Forwarded, 8));
   Img.Symbols.push_back(Symbol::makeFunc(Funclet, 0x10));
   Img.Symbols.push_back(Symbol::makeFunc(OuterFunclet, 0x10));
 
@@ -308,7 +336,7 @@ TEST(ARMSEHFinallyRegisters, AFrameAddressSetBeforeTheRangeIsPublished) {
   ASSERT_NE(X19, nullptr);
   EXPECT_EQ(X19->ValueKind, SEHFuncletRegisterValue::Kind::EntryStackOffset);
   EXPECT_EQ(X19->Offset, -0x10);
-  // x20 holds the caller's value throughout, which has no stable form.
+  // The parent never names x20.
   EXPECT_EQ(registerValue(Med, a64reg::X20), nullptr);
 }
 
@@ -461,13 +489,45 @@ TEST(ARMSEHFinallyBody, StoresThroughTheEstablisherFrame) {
   EXPECT_EQ(P.find("unknown"), std::string::npos) << P;
 }
 
-TEST(ARMSEHFinallyBody, AFrameTheUnwindCodesContradictKeepsTheComment) {
+TEST(ARMSEHFinallyBody, AHandlersX1IsTheFramePointerWhateverTheCodesGive) {
+  // The runtime passes the parent's frame pointer in x1, which the parent sets
+  // itself: unwind codes that give another allocation do not move it.
   const std::string P = parentText(decompileHighC(makeImage(
       Parent::EstablisherFrameMismatch, Handler::StoresThroughTheFrame)));
   ASSERT_FALSE(P.empty());
-  EXPECT_NE(P.find("/* finally handler @ 0x140001080 */"), std::string::npos)
-      << P;
-  EXPECT_EQ(P.find("AbnormalTermination"), std::string::npos) << P;
+  const size_t Guard = P.find("if (AbnormalTermination())");
+  ASSERT_NE(Guard, std::string::npos) << P;
+  EXPECT_NE(P.find("var_m8", Guard), std::string::npos) << P;
+  EXPECT_NE(P.find("= 99;", Guard), std::string::npos) << P;
+}
+
+TEST(ARMSEHFinallyBody, ARangeRunningPastTheEpilogueStillStructures) {
+  // The epilogue restores what nothing reads, and the branch enters the range
+  // only there: the `__try` holds what can raise.
+  const std::string P = parentText(decompileHighC(
+      makeImage(Parent::RangeRunsPastTheEpilogue, Handler::DoesNothing)));
+  ASSERT_FALSE(P.empty());
+  EXPECT_EQ(P.find("unstructured"), std::string::npos) << P;
+  const size_t Branch = P.find("if (");
+  const size_t Try = P.find("__try {");
+  const size_t Clause = P.find("} __finally {");
+  ASSERT_NE(Branch, std::string::npos) << P;
+  ASSERT_NE(Try, std::string::npos) << P;
+  ASSERT_NE(Clause, std::string::npos) << P;
+  EXPECT_LT(Branch, Try) << P;
+  EXPECT_NE(P.substr(Try, Clause - Try).find("+ 3"), std::string::npos) << P;
+}
+
+TEST(ARMSEHFinallyBody, AFrameTheParentCannotNameIsAnUnknownCallArgument) {
+  // The clause holds the handler's call; only the value in x1 is unknown.
+  const std::string P = parentText(decompileHighC(
+      makeImage(Parent::FrameAddress, Handler::TailCallsWithItsArguments)));
+  ASSERT_FALSE(P.empty());
+  const size_t Guard = P.find("if (AbnormalTermination())");
+  ASSERT_NE(Guard, std::string::npos) << P;
+  const size_t Call = P.find("sub_140001050(", Guard);
+  ASSERT_NE(Call, std::string::npos) << P;
+  EXPECT_NE(P.find("unknown value", Call), std::string::npos) << P;
 }
 
 constexpr va_t ThumbEntry = 0x401000;

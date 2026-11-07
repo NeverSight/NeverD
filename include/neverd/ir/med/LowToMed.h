@@ -454,6 +454,12 @@ private:
   const std::map<va_t, SourceFunctionTypeHint> *SourceCalleeTypeHints = nullptr;
   const std::map<va_t, const LowFunc *> *SourceCalleeFunctions = nullptr;
   const std::map<va_t, const LowFunc *> *SEHFrameCallees = nullptr;
+  /// A proof over the decoded frame that refuses the local unwinds modeled as
+  /// jumps leaves them runtime calls: the conversion runs again without them.
+  bool SEHLocalUnwindExitsEnabled = true;
+  bool ModeledSEHLocalUnwindExits = false;
+  MedFunc convertFunction(const LowFunc &SourceLow, Arch TheArch,
+                          BinaryFormat Fmt);
   const LowSEHRuntimeMemory *SEHRuntimeMemory = nullptr;
   const std::map<va_t, ObjCBlockCaptureCallFields> *ObjCBlockCaptureFields =
       nullptr;

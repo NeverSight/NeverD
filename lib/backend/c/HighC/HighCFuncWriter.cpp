@@ -458,7 +458,7 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
   EmittedLabels.clear();
   GotoTargetUses.clear();
   walkStmts(Func.Body, [&](const HighStmt &Stmt) {
-    if (Stmt.Kind == StmtKind::Goto)
+    if (Stmt.Kind == StmtKind::Goto && !Stmt.LeavesTry)
       ++GotoTargetUses[Stmt.GotoTarget];
   });
   decideExceptArms(Func);

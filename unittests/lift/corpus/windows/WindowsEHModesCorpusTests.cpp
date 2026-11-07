@@ -33,6 +33,7 @@
 #include <array>
 #include <filesystem>
 #include <optional>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -760,6 +761,47 @@ TEST(WindowsEHModesCorpus, LocalUnwindExitAgreesAloneAndInTheWholeUnit) {
   EXPECT_EQ(definitionOf(*AloneOrErr, "0x1400011E0"), Whole);
 }
 
+// The same on ARM64: xcpt4's loop with two nested `__try/__finally`, whose
+// `return` and `continue` local-unwind through MSVC's import veneer.  The
+// `--func` view, where discovery records no veneer, reads the exits as the
+// whole unit does.
+TEST(WindowsEHModesCorpus, AArch64LocalUnwindExitAgreesAloneAndInTheWholeUnit) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  auto ExpectationOrErr = selectUnique(
+      *ExpectationsOrErr, {"xcpt4", "msvc", "aarch64", "native", false, "o0"});
+  ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+      << toString(ExpectationOrErr.takeError());
+  const std::filesystem::path Input =
+      std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+      (*ExpectationOrErr)->Path;
+  auto WholeOrErr = decompileToSource(Input, 240);
+  ASSERT_TRUE(static_cast<bool>(WholeOrErr))
+      << toString(WholeOrErr.takeError());
+  const std::array<StringRef, 1> Alone{"--func=0x140007D68"};
+  auto AloneOrErr = decompileToSource(Input, 120, Alone);
+  ASSERT_TRUE(static_cast<bool>(AloneOrErr))
+      << toString(AloneOrErr.takeError());
+  const std::string Whole = definitionOf(*WholeOrErr, "0x140007D68");
+  ASSERT_FALSE(Whole.empty());
+  EXPECT_EQ(Whole.find("_local_unwind"), std::string::npos) << Whole;
+  EXPECT_NE(Whole.find("fallback_regions=0"), std::string::npos) << Whole;
+  // The whole unit lays the globals out in their section's bytes; a view of one
+  // function names the one it reads.
+  auto OneGlobalSpelling = [](const std::string &Source) {
+    return std::regex_replace(
+        std::regex_replace(
+            Source,
+            std::regex(
+                R"(\*\(u?int32_t \*\)\(uintptr_t\)\(&g_140011000_bytes\.b\[5520\]\))"),
+            "G"),
+        std::regex(R"(unk_140012590)"), "G");
+  };
+  EXPECT_EQ(OneGlobalSpelling(definitionOf(*AloneOrErr, "0x140007D68")),
+            OneGlobalSpelling(Whole));
+}
+
 // xcpt4's O2 loop exits: `return` out of two nested `__try/__finally` and
 // `continue` out of the inner one, both local unwinds. The inner and outer
 // finally scopes each have two ranges, and the outer one's first range holds
@@ -793,6 +835,109 @@ TEST(WindowsEHModesCorpus, LocalUnwindExitsKeepTheirLoopRegionsStructured) {
         Function.contains(("highir.structured_regions" + Regions).str()))
         << Function.str();
     EXPECT_FALSE(Function.contains("_local_unwind")) << Function.str();
+  }
+}
+
+// xcpt4's Test85 and Test86 at /O2. Test85's three termination handlers end a
+// `__try` the compiler split around the return path of a loop, which its ranges
+// start and end inside; two of its scopes share one range of those parts and
+// differ on the other. Test86's `__except` arm holds a `__try` of its own that
+// returns: the local unwind runs out of the arm and past the scopes around it.
+TEST(WindowsEHModesCorpus, SplitTriesAndArmsKeepTheirSourceShape) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  auto ExpectationOrErr = selectUnique(
+      *ExpectationsOrErr, {"xcpt4", "msvc", "x86_64", "fh4", true, "o2"});
+  ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+      << toString(ExpectationOrErr.takeError());
+  auto OutputOrErr =
+      decompileToSource(std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                        (*ExpectationOrErr)->Path);
+  ASSERT_TRUE(static_cast<bool>(OutputOrErr))
+      << toString(OutputOrErr.takeError());
+  const std::string Test85 = definitionOf(*OutputOrErr, "0x140003930");
+  ASSERT_FALSE(Test85.empty());
+  for (StringRef Handler : {"0x140005E20", "0x140005E4A", "0x140005E74"})
+    EXPECT_TRUE(StringRef(Test85).contains(
+        ("/* finally handler @ " + Handler + " */").str()))
+        << Handler.str() << "\n"
+        << Test85;
+  const std::string Test86 = definitionOf(*OutputOrErr, "0x140003A10");
+  ASSERT_FALSE(Test86.empty());
+  EXPECT_EQ(Test86.find("_local_unwind"), std::string::npos) << Test86;
+  EXPECT_EQ(occurrencesIn(Test86, "} __finally {"), 4u) << Test86;
+  const size_t Arm = Test86.find("} __except (");
+  ASSERT_NE(Arm, std::string::npos) << Test86;
+  const size_t Inner = Test86.find("__try {", Arm);
+  const size_t Clause = Test86.find("} __finally {", Arm);
+  ASSERT_NE(Inner, std::string::npos) << Test86;
+  EXPECT_LT(Inner, Clause) << Test86;
+  // The arm's own `__try` returns past every scope around it.
+  const StringRef Body = StringRef(Test86).slice(Inner, Clause);
+  EXPECT_TRUE(Body.contains("goto ") || Body.contains("return")) << Test86;
+}
+
+/// Whether the `__finally` clause whose brace ends at \p Open holds nothing but
+/// a comment.
+bool clauseIsOnlyAComment(StringRef Source, size_t Open) {
+  StringRef Rest = Source.substr(Open).ltrim();
+  if (!Rest.consume_front("/*"))
+    return false;
+  const size_t End = Rest.find("*/");
+  return End != StringRef::npos &&
+         Rest.substr(End + 2).ltrim().starts_with("}");
+}
+
+// Every termination handler of xcpt4, x64 and ARM, optimized or not, prints as
+// real statements in its `__finally`, and the unwinds that leave those clauses
+// are the jumps they make: its 90 tests hold every shape the corpus has.
+TEST(WindowsEHModesCorpus, EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  for (const ArtifactSelector &Selector :
+       {ArtifactSelector{"xcpt4", "msvc", "x86_64", "fh4", true, "o2"},
+        ArtifactSelector{"xcpt4", "msvc", "x86_64", "fh4", true, "o0"},
+        ArtifactSelector{"xcpt4", "msvc", "arm", "native", true, "o2"},
+        ArtifactSelector{"xcpt4", "msvc", "arm", "native", true, "o0"},
+        ArtifactSelector{"xcpt4", "msvc", "aarch64", "native", true, "o2"},
+        ArtifactSelector{"xcpt4", "msvc", "aarch64", "native", true, "o0"},
+        ArtifactSelector{"xcpt4", "clang-cl", "aarch64", "native", true,
+                         "o2"}}) {
+    SCOPED_TRACE(Selector.Architecture.str() + " " +
+                 Selector.Optimization.str());
+    auto ExpectationOrErr = selectUnique(*ExpectationsOrErr, Selector);
+    ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+        << toString(ExpectationOrErr.takeError());
+    auto OutputOrErr =
+        decompileToSource(std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                              (*ExpectationOrErr)->Path,
+                          /*TimeoutSeconds=*/600);
+    ASSERT_TRUE(static_cast<bool>(OutputOrErr))
+        << toString(OutputOrErr.takeError());
+    const StringRef Source(*OutputOrErr);
+    const StringRef Finally = "__finally {";
+    size_t Clauses = 0;
+    for (size_t At = Source.find(Finally); At != StringRef::npos;
+         At = Source.find(Finally, At + 1)) {
+      ++Clauses;
+      EXPECT_FALSE(clauseIsOnlyAComment(Source, At + Finally.size()))
+          << Source.substr(At, 120).str();
+    }
+    EXPECT_GT(Clauses, 20u);
+    // A handler listed in an unstructured region's comment is as far from code.
+    EXPECT_FALSE(Source.contains("* finally: action @"));
+    const StringRef Entry = "/* neverd.entry: ";
+    for (size_t At = Source.find(Entry); At != StringRef::npos;) {
+      const size_t Next = Source.find(Entry, At + 1);
+      const StringRef Function = Source.slice(At, Next);
+      if (Function.contains("seh.scope[")) {
+        EXPECT_FALSE(Function.contains("_local_unwind(")) << Function.str();
+        EXPECT_FALSE(Function.contains("__jump_unwind(")) << Function.str();
+      }
+      At = Next;
+    }
   }
 }
 

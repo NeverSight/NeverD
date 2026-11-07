@@ -42059,9 +42059,9 @@ TEST(HighCPointerAddresses, CorpusArmPredicatedBranchesStayForwardJumps) {
   const std::string ImageCheck = Emit(0x40386C);
   EXPECT_NE(ImageCheck.find("!= 0x5A4D) {"), std::string::npos) << ImageCheck;
   EXPECT_EQ(ImageCheck.find("do {"), std::string::npos) << ImageCheck;
-  // `bne` past a local unwind jumps forward once.
+  // `bne` past a local unwind, which is a jump now, branches forward once.
   const std::string Unwinds = Emit(0x4031F4);
-  EXPECT_NE(Unwinds.find("!= 10) {"), std::string::npos) << Unwinds;
+  EXPECT_NE(Unwinds.find("== 10) {"), std::string::npos) << Unwinds;
   EXPECT_EQ(Unwinds.find("do {"), std::string::npos) << Unwinds;
 }
 
