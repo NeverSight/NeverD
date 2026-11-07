@@ -159,27 +159,13 @@ void resolvePassThroughParams(CallArgContext &C) {
         }
     return Def;
   };
-  std::function<bool(const MedVar &, int)> IsConstLike =
-      [&](const MedVar &V, int Depth) -> bool {
-    if (Depth >
-        ::neverd::limits::ir::
-            kCallArgCollectionWin64ResolvePassThroughParamsIsConstLikeDepthLimit)
-      return false;
-    if (V.isConst())
-      return true;
-    const MedOp *Def = UniqueDef(V);
-    if (!Def || Def->NumInputs < 1)
-      return false;
-    if (Def->Opcode == NdOp::COPY)
-      return IsConstLike(Def->Inputs[0], Depth + 1);
-    return false;
-  };
   std::function<bool(const MedVar &, int, int)> IsSlot =
       [&](const MedVar &V, int Slot, int Depth) -> bool {
     if (Depth >
             ::neverd::limits::ir::
                 kCallArgCollectionWin64ResolvePassThroughParamsIsSlotDepthLimit ||
-        Slot < 0)
+        Slot < 0 || static_cast<size_t>(Slot) >= CurMed->Params.size() ||
+        V.Size != CurMed->Params[Slot].Size)
       return false;
     if (V.Kind == MedVar::Param)
       return C.AbiParamIndex(V) == Slot;
@@ -200,19 +186,8 @@ void resolvePassThroughParams(CallArgContext &C) {
       return false;
     if (Def->Opcode == NdOp::COPY && Def->NumInputs >= 1)
       return IsSlot(Def->Inputs[0], Slot, Depth + 1);
-    if ((Def->Opcode == NdOp::INT_LEFT || Def->Opcode == NdOp::INT_RIGHT ||
-         Def->Opcode == NdOp::INT_OR || Def->Opcode == NdOp::INT_AND) &&
-        Def->NumInputs >= 1) {
-      bool Any = false;
-      for (uint8_t I = 0; I < Def->NumInputs; ++I) {
-        if (IsConstLike(Def->Inputs[I], 0))
-          continue;
-        if (!IsSlot(Def->Inputs[I], Slot, Depth + 1))
-          return false;
-        Any = true;
-      }
-      return Any;
-    }
+    // Depending on a parameter does not mean preserving its value.
+    // Only full-width copies and agreeing PHIs name the same argument.
     return false;
   };
   const int Limit =
