@@ -1,3 +1,12 @@
+//===- X86_64_StackMemorySemanticTests.cpp - Stack address/data widths ----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Concrete symbolic execution of original x86/x64 stack instructions.
+//===----------------------------------------------------------------------===//
+
 #include "gtest/gtest.h"
 
 #include "neverd/decode/Decoder.h"
@@ -293,4 +302,49 @@ TEST(X86StackMemorySemantics, EnterWOnX86WritesOnlyBp) {
   EXPECT_EQ(M.getReg(x86reg::RBP, 4),
             (OrigEbp & ~UINT64_C(0xffff)) | ((InitialSp - 2) & 0xffff));
 }
+
+TEST(X86StackMemorySemantics, WordPushAllUsesFullStackAddressAndOriginalSP) {
+  Machine M;
+  for (uint64_t Reg : {x86reg::RAX, x86reg::RCX, x86reg::RDX, x86reg::RBX,
+                       x86reg::RBP, x86reg::RSI, x86reg::RDI})
+    M.reg(Reg, 0xaabb1234);
+  M.reg(x86reg::RSP, 0x17800);
+  M.run(Arch::X86, {0x66, 0x60});
+  EXPECT_EQ(M.getReg(x86reg::RSP, 4), 0x177f0u);
+  EXPECT_EQ(M.getMemory(0x177fe, 2), 0x1234u);
+  EXPECT_EQ(M.getMemory(0x177f6, 2), 0x7800u);
+  EXPECT_EQ(M.getMemory(0x177f0, 2), 0x1234u);
+}
+
+TEST(X86StackMemorySemantics, WordPopAllUsesFullStackAddressAndKeepsHighGPR) {
+  Machine M;
+  for (uint64_t Reg : {x86reg::RAX, x86reg::RCX, x86reg::RDX, x86reg::RBX,
+                       x86reg::RBP, x86reg::RSI, x86reg::RDI})
+    M.reg(Reg, 0xaabb1234);
+  M.reg(x86reg::RSP, 0x17800);
+  for (unsigned I = 0; I != 8; ++I)
+    M.memory(0x17800 + I * 2, 0x9000 + I, 2);
+  M.run(Arch::X86, {0x66, 0x61});
+  EXPECT_EQ(M.getReg(x86reg::RSP, 4), 0x17810u);
+  EXPECT_EQ(M.getReg(x86reg::RAX, 4), 0xaabb9007u);
+  EXPECT_EQ(M.getReg(x86reg::RBP, 4), 0xaabb9002u);
+  EXPECT_EQ(M.getReg(x86reg::RDI, 4), 0xaabb9000u);
+}
+
+TEST(X86StackMemorySemantics, WordEnterDisplayUsesFullAddressBorrow) {
+  for (Arch Target : {Arch::X86, Arch::X64}) {
+    Machine M;
+    M.reg(x86reg::RSP, 0x18000);
+    M.reg(x86reg::RBP, 0x20002);
+    M.memory(0x20000, 17, 2);
+    M.memory(0x1fffe, 42, 2);
+    M.memory(0x2fffe, 99, 2);
+    M.run(Target, {0x66, 0xc8, 0, 0, 3});
+    EXPECT_EQ(M.getReg(x86reg::RSP), 0x17ff8u);
+    EXPECT_EQ(M.getReg(x86reg::RBP), 0x27ffeu);
+    EXPECT_EQ(M.getMemory(0x17ffa, 2), 42u);
+    EXPECT_EQ(M.getMemory(0x17ffc, 2), 17u);
+  }
+}
+
 } // namespace

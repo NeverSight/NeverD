@@ -9,6 +9,8 @@
 
 #include "X86LegacyScalar.h"
 
+#include "neverd/ir/X86/X86StackFrameRules.h"
+
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -77,6 +79,8 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     Width(B < 0xb8);
     F.Destination.Register = B & 7;
     Immediate(F.Bytes);
+  } else if (B == 0x60 || B == 0x61) {
+    F.Operation = B == 0x60 ? Op::PushAll : Op::PopAll;
   } else if (B == 0x62) {
     F.Operation = Op::Bound;
     F.Destination.Register = R.modRM(F.Source);
@@ -132,6 +136,10 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
     F.Source.Base = 3;
     F.Source.AddressBytes = R.AddressBytes;
     F.Source.MemorySegment = R.Segment.value_or(X86SegmentRegister::DS);
+  } else if (B == 0xc8) {
+    F.Operation = Op::Enter;
+    F.Discard = R.value(2);
+    F.Nesting = x86EnterNestingLevel(R.byte());
   } else if (B == 0xc9) {
     F.Operation = Op::Leave;
   } else if (B == 0x98 || B == 0x99) {

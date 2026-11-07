@@ -4019,6 +4019,18 @@ data/I/O and other unbound debug producers, task/VM86 state,
 software SMM/SGX and the other unqualified environments remain open. This
 batch does not advance the final LLVM release, SDK pin or LLVM gitlink.
 
+### Ordered protected stack frames
+
+The protected stack subset also admits PUSHA/PUSHAD, POPA/POPAD and ENTER
+through [ordered stack execution](x86-legacy-segments.md#ordered-pusha-popa-and-enter).
+It retains partial memory/register effects, exact operand/stack widths, ENTER's
+final permission probe and host-backing progress through generated C. Native
+POPA reads the discarded SP slot in the bound profile; this is covered by both
+fault and hardware-watchpoint comparisons. Ordinary lifting separately fixes
+word stack addresses and nested ENTER word-address borrow. See the
+[stack evidence](evidence/x86-legacy-stack-2026-11-07.json). This does not close
+the other full-machine execution gaps or advance the LLVM release gate.
+
 ### Protected ARPL conditional completion
 
 The protected ordinary-RAM executor now runs original ARPL register and memory

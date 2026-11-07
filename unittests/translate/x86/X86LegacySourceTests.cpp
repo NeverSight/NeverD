@@ -59,7 +59,10 @@ BinaryImage image(llvm::ArrayRef<SourceUnit> Units) {
   S.Name = ".text";
   S.VA = 0x1000;
   S.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
-  S.Data.resize(0x2000, 0xcc);
+  size_t Size = 0x2000;
+  for (const auto &U : Units)
+    Size = std::max(Size, size_t(U.Address - S.VA) + U.Bytes.size());
+  S.Data.resize(Size, 0xcc);
   S.Size = S.FileSz = S.Data.size();
   for (const auto &U : Units)
     std::copy(U.Bytes.begin(), U.Bytes.end(),
@@ -301,6 +304,92 @@ TEST_P(X86LegacySourceTest, OriginalHandlerRepairsPageAndReturnsToRetry) {
   EXPECT_EQ(S.Core.CPL, Original.Core.CPL);
   EXPECT_EQ(S.EFlags, Original.EFlags & ~0x10000u);
   EXPECT_EQ(S.CR2, 0xd004u);
+}
+
+TEST_P(X86LegacySourceTest, StackFramesRoundTripAtBothOperandWidths) {
+  for (bool Word : {false, true}) {
+    resetLegacyState();
+    std::vector<SourceUnit> Units;
+    uint32_t PC = 0x1000;
+    for (std::vector<uint8_t> Bytes :
+         {std::vector<uint8_t>{0x60}, {0x61}, {0xc8, 0x20, 0, 3}, {0xc9}}) {
+      if (Word)
+        Bytes.insert(Bytes.begin(), 0x66);
+      Units.push_back({PC, 32, Bytes});
+      PC += Bytes.size();
+    }
+    Driver Run = nullptr;
+    ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
+    S.Core.GPR = {0x11223344, 0x22334455, 0x33445566, 0x44556677,
+                  0xd100,     0xc100,     0x66778899, 0x778899aa};
+    const auto Before = S.Core.GPR;
+    X86LegacySourceExecution Context(S, *M, O);
+    uint64_t Budget = 4;
+    ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+    EXPECT_EQ(S.EIP, PC);
+    EXPECT_EQ(S.Core.GPR, Before);
+    EXPECT_EQ(S.EFlags, 0x202u);
+    EXPECT_EQ(Budget, 0u);
+    EXPECT_FALSE(S.PendingStack);
+  }
+}
+
+TEST_P(X86LegacySourceTest, StackBackingContinuationRetainsAliasedCodeAndRAM) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile({{0xd00c, 32, {0xc8, 0, 0, 4}}}, Run));
+  S.EIP = 0xd00c;
+  S.Core.GPR[4] = 0xd010;
+  S.Core.GPR[5] = 0xd008;
+  put(0xd004, 0x11223344, GuestScalarWidth::I32);
+  put(0xd000, 0x55667788, GuestScalarWidth::I32);
+  put(0xcffc, 0x99aabbcc, GuestScalarWidth::I32);
+  put(0x11030, 0x40007, GuestScalarWidth::I32);
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 2;
+  ASSERT_EQ(Run(&Context, &Budget), 4u) << Context.lastError().str();
+  ASSERT_TRUE(S.PendingStack);
+  EXPECT_EQ(Budget, 1u);
+  EXPECT_EQ(get(0xd004), 0x55667788u);
+  EXPECT_EQ(get(0xd00c), 0xd008u);
+  put(0x11030, 0xc007, GuestScalarWidth::I32);
+  ASSERT_EQ(Run(&Context, &Budget), 257u) << Context.lastError().str();
+  EXPECT_EQ(Budget, 1u); // Resuming one attempted instruction is not another.
+  EXPECT_TRUE(Context.lastResult().InstructionCompleted);
+  EXPECT_FALSE(S.PendingStack);
+  EXPECT_EQ(get(0xd008), 0x11223344u);
+  EXPECT_EQ(get(0xd004), 0x55667788u);
+  EXPECT_EQ(get(0xd000), 0x99aabbccu);
+  EXPECT_EQ(get(0xcffc), 0xd00cu);
+  EXPECT_EQ(S.Core.GPR[4], 0xcffcu);
+  EXPECT_EQ(S.Core.GPR[5], 0xd00cu);
+}
+
+TEST_P(X86LegacySourceTest, PartialPopAllFaultHandlerRepairsAndRetries) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(
+      compile({{0x1000, 32, {0x61}},
+               {0x2000, 32, {0xc7, 0x05, 0x34, 0x10, 1, 0, 7, 0xd0, 0, 0}},
+               {0x200a, 32, {0x83, 0xc4, 4}},
+               {0x200d, 32, {0xcf}}},
+              Run));
+  S.Core.GPR[4] = 0xcff0;
+  put(0x5804, 0xb000, GuestScalarWidth::I32);
+  for (unsigned I = 0; I != 8; ++I)
+    put(0xcff0 + I * 4, 0x12340000 + I, GuestScalarWidth::I32);
+  put(0x11034, 0xd006, GuestScalarWidth::I32);
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 6;
+  ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+  EXPECT_EQ(Context.lastResult().DeliveredVector, 14);
+  EXPECT_EQ(S.Core.GPR[7], 0x12340000u);
+  EXPECT_EQ(S.Core.GPR[5], 0x12340002u);
+  EXPECT_FALSE(S.PendingStack);
+  ASSERT_EQ(Run(&Context, &Budget), 257u) << Context.lastError().str();
+  EXPECT_EQ(S.EIP, 0x1001u);
+  EXPECT_EQ(S.Core.GPR[4], 0xd010u);
+  EXPECT_EQ(S.Core.GPR[0], 0x12340007u);
+  EXPECT_EQ(S.Core.CPL, 3);
+  EXPECT_EQ(Budget, 1u);
 }
 
 TEST_P(X86LegacySourceTest, FarCallAndReturnRedispatchAcrossCodeModes) {

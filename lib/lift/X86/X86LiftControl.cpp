@@ -12,6 +12,7 @@
 
 #include "X86LiftAPXValidation.h"
 
+#include "neverd/ir/X86/X86StackFrameRules.h"
 #include "neverd/lift/X86/X86Lifter.h"
 
 #include "llvm/Support/Debug.h"
@@ -1419,12 +1420,13 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
   case X86_INS_PUSHAW:
   case X86_INS_PUSHAL: {
     uint16_t PtSz = (InsnId == X86_INS_PUSHAL) ? 4 : 2;
-    NdVar Rsp = NdVar::reg(x86reg::RSP, PtSz);
+    const uint16_t PtrSize = stackPointerSize(TargetArch);
+    NdVar Rsp = NdVar::reg(x86reg::RSP, PtrSize);
     NdVar EntrySP = S.makeTemp(PtSz);
-    S.emit(NdOp::COPY, EntrySP, {Rsp});
+    S.emit(NdOp::COPY, EntrySP, {NdVar::reg(x86reg::RSP, PtSz)});
     for (uint64_t Reg : {x86reg::RAX, x86reg::RCX, x86reg::RDX, x86reg::RBX,
                          x86reg::RSP, x86reg::RBP, x86reg::RSI, x86reg::RDI}) {
-      S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(PtSz, PtSz)});
+      S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(PtSz, PtrSize)});
       S.emit(NdOp::STORE, {},
              {Rsp, Reg == x86reg::RSP ? EntrySP : NdVar::reg(Reg, PtSz)});
     }
@@ -1435,14 +1437,15 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
   case X86_INS_POPAW:
   case X86_INS_POPAL: {
     uint16_t PtSz = (InsnId == X86_INS_POPAL) ? 4 : 2;
-    NdVar Rsp = NdVar::reg(x86reg::RSP, PtSz);
+    const uint16_t PtrSize = stackPointerSize(TargetArch);
+    NdVar Rsp = NdVar::reg(x86reg::RSP, PtrSize);
     for (uint64_t Reg : {x86reg::RDI, x86reg::RSI, x86reg::RBP, x86reg::RSP,
                          x86reg::RBX, x86reg::RDX, x86reg::RCX, x86reg::RAX}) {
       NdVar Val = S.makeTemp(PtSz);
       S.emit(NdOp::LOAD, Val, {Rsp});
       if (Reg != x86reg::RSP)
         S.emit(NdOp::COPY, NdVar::reg(Reg, PtSz), {Val});
-      S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::scalar(PtSz, PtSz)});
+      S.emit(NdOp::INT_ADD, Rsp, {Rsp, NdVar::scalar(PtSz, PtrSize)});
     }
     break;
   }
@@ -1464,9 +1467,8 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     NdVar RbpWide = NdVar::reg(x86reg::RBP, PtrSize);
     uint64_t AllocSz =
         (X86.op_count >= 1) ? static_cast<uint64_t>(X86.operands[0].imm) : 0;
-    uint64_t Level = (X86.op_count >= 2)
-                         ? (static_cast<uint64_t>(X86.operands[1].imm) % 32)
-                         : 0;
+    const unsigned Level =
+        X86.op_count >= 2 ? x86EnterNestingLevel(X86.operands[1].imm) : 0;
     // Push(BP) at OperandSize; RSP stays pointer-width.
     S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(DataSize, PtrSize)});
     S.emit(NdOp::STORE, {}, {Rsp, RbpData});
@@ -1474,14 +1476,16 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     NdVar FrameTemp = S.makeTemp(PtrSize);
     S.emit(NdOp::COPY, FrameTemp, {Rsp});
     if (Level > 0) {
-      // Display copy: FOR i = 1 TO level-1: BP -= OperandSize; Push([RBP]).
-      // The address is the full RBP after a DataSize write to BP, so a 16-bit
-      // subtract preserves RBP's high bits (no 64-bit borrow).
+      // Display addresses follow the stack width, including a word form's
+      // borrow across bit 16. The temporary keeps original high RBP intact
+      // for ENTERW's final partial-register write.
+      NdVar Cursor = S.makeTemp(PtrSize);
+      S.emit(NdOp::COPY, Cursor, {RbpWide});
       for (uint64_t I = 1; I < Level; ++I) {
-        S.emit(NdOp::INT_SUB, RbpData,
-               {RbpData, NdVar::scalar(DataSize, DataSize)});
+        S.emit(NdOp::INT_SUB, Cursor,
+               {Cursor, NdVar::scalar(DataSize, PtrSize)});
         NdVar Disp = S.makeTemp(DataSize);
-        S.emit(NdOp::LOAD, Disp, {RbpWide});
+        S.emit(NdOp::LOAD, Disp, {Cursor});
         S.emit(NdOp::INT_SUB, Rsp, {Rsp, NdVar::scalar(DataSize, PtrSize)});
         S.emit(NdOp::STORE, {}, {Rsp, Disp});
       }

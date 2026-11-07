@@ -390,6 +390,8 @@ llvm::Expected<X86LegacyExecutionResult>
 deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                       const X86LegacyEvent &Input,
                       const X86LegacyExecutionOptions &Options) {
+  if (State.PendingStack)
+    return invalid("resume the pending legacy stack instruction before events");
   if (State.PendingEvent)
     return invalid("resume the pending legacy event before accepting another");
   if (!validEvent(Input))
@@ -430,6 +432,8 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 llvm::Expected<X86LegacyExecutionResult>
 resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                      const X86LegacyExecutionOptions &Options) {
+  if (State.PendingStack)
+    return invalid("resume the pending legacy stack instruction before events");
   if (!State.PendingEvent || !validEvent(State.PendingEvent->Event))
     return invalid("no valid pending legacy event to resume");
   if (auto Error = detail::admitLegacyExecution(State, Memory, Options))

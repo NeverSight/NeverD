@@ -349,6 +349,24 @@ inputs initialize the software state and original CPU from one shared image.
 The BSWAP word form has no defined architectural result and is tested as an
 explicit refusal, not assigned a guessed value.
 
+`LegacyStack/*` in `NeverDX86PagingTests` compares original PUSHA/POPA/ENTER
+against the protected executor under legacy paging and PAE. It varies CS.D,
+operand width, SS.B, privilege, nesting, nonzero SS base, word-stack wrapping,
+every faulting frame slot, overlapping displays, final write probes and original
+PTE-repair/IRET/retry. `OriginalStackFramesAndPermissionProbes` in `LegacyDebug`
+independently checks the discarded POPA slot and ENTER's probe with hardware
+data comparators. `X86LegacyStackTest.*` covers physical-backing continuation,
+code/input aliases, partial POPA publication, retained/discarded debug causes,
+exact grammar and refusal of redirected execution/events while suspended.
+
+Build `NeverDX86StackFrameTests` for focused ordinary-lifter checks. It executes
+LowIR stack semantics and compares original and identity-patched ELF32/ELF64
+programs on the host CPU. `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` retains the three
+original/rewritten binaries, assembly and patch logs. The protected source suite
+also compiles stack round trips, partial-fault handlers and aliased backing
+continuations with Clang and NeverC at O0/O2. Its i386 object checks remain
+compile-only; they do not qualify a 32-bit host runtime library.
+
 `LegacyShifts/*` compares protected SHL/SAL/SHR/SAR and ROL/ROR/RCL/RCR with
 original instructions under both paging modes. It covers every byte count,
 all three count encodings, widths, register aliases, segment overrides,

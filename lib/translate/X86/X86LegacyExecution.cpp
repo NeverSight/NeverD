@@ -143,12 +143,17 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (State.PendingEvent)
     return invalid(
         "resume the pending legacy event before another instruction");
+  if (auto Error = detail::validateLegacyStackContinuation(State, Instruction))
+    return std::move(Error);
+  const bool ResumingStack = State.PendingStack.has_value();
   const bool Code32 = State.Core.Segments[1].Attributes & 0x4000;
   auto Decoded = decodeInstruction(Instruction, Code32);
   if (!Decoded)
     return Decoded.takeError();
   const auto &[DebugRegister, Segment, Scalar, FastSystem, String, Port, Far,
                Body, Width, IRET, RETF, INT, UD2] = *Decoded;
+  if (ResumingStack && (!Scalar || !Scalar->stackFrame()))
+    return invalid("pending legacy stack state requires a stack instruction");
   if (DebugRegister && (!Options.Debug || !x86DebugRegisters(*Options.Debug)))
     return invalid("MOV-DR requires the debug-register profile");
   if (Far && Options.FarTransfers != X86LegacyFarTransferProfile::OrderedFrame)
@@ -262,6 +267,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   X86WatchpointObservation Observation(
       Memory, State.Debug ? &*State.Debug : nullptr,
       Options.Debug.value_or(X86InstructionDebugProfile::InstructionStep));
+  if (ResumingStack)
+    Observation.Matches = State.PendingStack->DataBreakpoints;
   const auto Accept = [&](const X86MemoryAccessResult &Got) {
     R.SelfModifications.insert(R.SelfModifications.end(),
                                Got.SelfModifications.begin(),
@@ -281,7 +288,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       return Delivered.takeError();
     Delivered->DeviceTransferCompleted = R.DeviceTransferCompleted;
     Delivered->PortInputBytesWritten = R.PortInputBytesWritten;
-    Delivered->InstructionAttempted = true;
+    Delivered->InstructionAttempted = !ResumingStack;
     Delivered->InstructionCompleted =
         Completed && (Event.Kind == X86LegacyEventKind::Trap ||
                       Delivered->SoftwareCompleted);
@@ -310,10 +317,11 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     State.SSBlocked = State.STIBlocked = false;
     return Enter({State.EIP, 0, 0, 1, X86LegacyEventKind::Trap}, Completed);
   };
-  if (x86PendingVirtualInterrupt(State.Core.CPL, Memory.controls().CR4,
+  if (!ResumingStack &&
+      x86PendingVirtualInterrupt(State.Core.CPL, Memory.controls().CR4,
                                  State.EFlags))
     R.Exception = X86MemoryException{13, 0, {}};
-  if (State.Debug && !R.Exception) {
+  if (State.Debug && !R.Exception && !ResumingStack) {
     const auto Matches = x86ExecutionBreakpoints(
         State.Debug->DR, State.Debug->DR7,
         uint32_t(State.Core.Segments[1].Base + State.EIP), State.EFlags,
@@ -325,7 +333,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
           false);
     }
   }
-  for (unsigned I = 0; !R.Exception && I != Instruction.size(); ++I) {
+  for (unsigned I = 0;
+       !ResumingStack && !R.Exception && I != Instruction.size(); ++I) {
     uint8_t Byte = 0;
     auto Got =
         Memory.loadSegment({X86SegmentRegister::CS, State.Core.Segments[1],
@@ -459,6 +468,17 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       Flags = Staged.EFlags;
       RepeatContinue = Got->RepeatContinue;
     }
+  } else if (!R.Exception && Scalar && Scalar->stackFrame()) {
+    auto Got = detail::executeLegacyStack(State, Memory, *Scalar, Instruction,
+                                          NextIP, Options);
+    if (State.PendingStack)
+      State.PendingStack->DataBreakpoints = Observation.Matches;
+    if (!Got)
+      return Got.takeError();
+    if (Accept(*Got)) {
+      Next = State.Core;
+      NextIP = State.EIP;
+    }
   } else if (!R.Exception && Scalar) {
     auto Staged = State;
     auto Got =
@@ -515,7 +535,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       R.Exception = X86MemoryException{6, 0, {}};
     }
   }
-  R.InstructionAttempted = true;
+  R.InstructionAttempted = !ResumingStack;
   if (R.Exception)
     return Enter({State.EIP, R.Exception->ErrorCode,
                   uint32_t(R.Exception->CR2.value_or(0)), R.Exception->Vector,

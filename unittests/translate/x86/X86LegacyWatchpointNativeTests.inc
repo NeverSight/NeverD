@@ -78,3 +78,40 @@ TEST_P(X86LegacyDebugNativeTest, OriginalStackOperandsAndEventTables) {
             }
   RecordProperty("original_comparisons", Comparisons);
 }
+
+TEST_P(X86LegacyDebugNativeTest, OriginalStackFramesAndPermissionProbes) {
+  if (!neverd::test::supportsX86KVMPrefault(KVM))
+    GTEST_SKIP() << "Data-watchpoint oracle requires KVM pre-fault memory";
+  for (bool Code32 : {false, true})
+    for (bool Stack32 : {false, true})
+      for (unsigned Width : {2u, 4u})
+        for (unsigned CPL : {0u, 3u})
+          for (uint8_t Opcode : {0x60, 0x61, 0xc8})
+            for (unsigned Slot = 0; Slot != 10; ++Slot) {
+              SCOPED_TRACE(testing::Message() << "opcode=" << unsigned(Opcode)
+                                              << " slot=" << Slot);
+              Watchpoint W;
+              W.Instructions = {{0xbd, 0, 0xc1, 0, 0}, {Opcode}};
+              if (!Code32)
+                W.Instructions.front().insert(W.Instructions.front().begin(),
+                                              0x66);
+              if ((Width == 4) != Code32)
+                W.Instructions.back().insert(W.Instructions.back().begin(),
+                                             0x66);
+              if (Opcode == 0xc8)
+                W.Instructions.back().insert(W.Instructions.back().end(),
+                                             {0, 0x10, 3});
+              W.DR7 = 0x30401; // Exact byte, read or write.
+              W.DR[0] = Opcode == 0x61 ? 0xd000 + Slot * Width
+                        : Opcode == 0xc8 && Slot == 8
+                            ? 0xd000 - 4 * Width - 0x1000 // Final probe.
+                        : Opcode == 0xc8 && Slot == 9
+                            ? 0xc100 - Width
+                            : 0xd000 - (Slot + 1) * Width;
+              ASSERT_NO_FATAL_FAILURE(compare(Code32, Stack32, true, CPL, Nop,
+                                              0xffff0ff0, false, {}, {}, W));
+              if (HasFailure())
+                return;
+            }
+  RecordProperty("original_comparisons", Comparisons);
+}

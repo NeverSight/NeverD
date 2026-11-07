@@ -294,8 +294,12 @@ live target, including a selected IRET target. No ordinary function completion
 is inferred from RET. Each attempted instruction consumes one budget unit;
 REP consumes one per completed element, including its zero-count completion.
 Faulting attempts consume a unit even when fault entry subsequently stops.
-Changed code, scalar backing stops and refused steps consume none. IRET
-retains its existing attempted-frame semantics. Zero budget returns 258
+Changed code, pre-attempt fetch backing stops and refused steps consume none.
+An ordered stack instruction consumes one unit when first attempted, including
+when an operand subsequently stops on host backing. Resuming `PendingStack`
+does not consume another unit; an architectural fault followed by handler
+retry is a new attempt. IRET retains its existing attempted-frame semantics.
+Zero budget returns 258
 without selection or guest accesses; a null context/budget returns 256.
 
 Every delivered event stops before executing its handler. A caller can then
@@ -1194,3 +1198,63 @@ two explicit LA57 skips and no failures. The new far-transfer matrix performs
 The source/export suites are regression checks for existing execution paths;
 they do not qualify a new i386 far-transfer source compiler. Diagnostic logs
 retain the parameter-copy ordering mismatch and the Capstone alias probe.
+
+## Ordered PUSHA, POPA and ENTER
+
+The bound `OrderedRAM` scalar profile executes original PUSHA/PUSHAD,
+POPA/POPAD and ENTER bytes in protected 16/32-bit code. Operand prefixes select
+word/dword data independently of CS.D and SS.B. Segment/address overrides do
+not change their implicit SS references. Malformed/trailing bytes, duplicate
+prefixes and LOCK/REP forms are explicit grammar errors before fetch.
+
+PUSHA pushes registers in encoding order and saves the entry SP/ESP value.
+POPA loads them in reverse order, discarding the saved SP value. In the
+qualified ordered-RAM model that discarded slot is still read: original P/E
+cores produce both its page fault and its data breakpoint. Treating the SDM's
+discard operation as an absent memory access gives the wrong CR2/debug result.
+Completed PUSHA/ENTER stores survive later faults. Completed POPA register loads
+also survive; ESP remains the entry value until the whole instruction succeeds.
+The existing event owner delivers faults with the original instruction PC and
+entry stack pointer, preserving those partial effects.
+
+ENTER masks nesting to five bits. It copies the previous display in order,
+including aliases of its earlier pushes. Display addresses subtract at the
+SS.B stack width. The saved frame value uses operand-width subtraction of
+entry ESP, including a borrow across bit 16 on a word stack; final word BP
+publication preserves the original EBP high word. Allocation adjusts SP/ESP
+at the stack width. The final pointer receives an operand-sized write-permission
+and alignment check: this can set page A/D bits or fault, but stores no data and
+does not trigger a data-write comparator. The entire frame is not preflighted.
+These order/partial-publication choices are explicit target bindings, measured
+on the qualified Intel cores, not inferred from the executing host.
+
+A physical backing failure retains `PendingStack`, independently of the guest
+exception mechanism. Keep the same architectural state, profiles and RAM;
+repair unavailable backing, then call the same original instruction again.
+Completed reads retain their values and completed stores are skipped. The
+original authenticated bytes also remain retained when a push has overwritten
+them. Resumption cannot accept different bytes, register/cache state or external
+events. Debug matches survive a backing stop and are published only at normal
+completion; an architectural fault discards the speculative cause. A fault
+clears `PendingStack` before IDT delivery, so handler repair/IRET starts a new
+attempt. The generated protected C dispatcher uses this same owner and charges
+the retained instruction only once.
+
+The ordinary lifter separately fixes word PUSHA/POPA to use a complete flat
+i386 stack address. Its ENTER display cursor now subtracts at pointer width,
+while final word BP publication preserves the original high bits. These
+operations already lower through ordinary LLVM IR and compile with the pinned
+r6 and current native SDK; no new inline-assembly fallback, LLVM intrinsic or
+NeverC builtin is needed for this change. This successful-memory projection
+does not acquire the protected executor's fault or continuation contract.
+
+The architectural reference is the ENTER/PUSHA/POPA entries in
+[Intel SDM Volume 2](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf).
+The [stack qualification](evidence/x86-legacy-stack-2026-11-07.json) retains
+the original-CPU experiments and the final test/build receipts. The initial
+CR2, discarded-slot breakpoint and frame-borrow mismatches are kept as
+diagnostics, separate from passing qualification.
+Real/VM86, compatibility execution, task switching, other unbound i386 banks,
+software SMM/SGX transitions and general external-event production remain
+outside this boundary. Global completion is still open; LLVM release, SDK pin
+and the LLVM submodule stay at r6.

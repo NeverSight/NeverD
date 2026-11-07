@@ -53,6 +53,15 @@ The paged continuation provider retains these bytes with a dedicated projection
 only when its debug bridge is selected, without certifying general LowIR or
 changing native intrinsic emission. Legacy and x64 adapters use that same
 register owner, then the existing event owner clears GD on accepted #DB.
+`translate/X86/X86LegacyStackExecution` owns ordered PUSHA/POPA/ENTER accesses,
+including POPA's partial register publication. `PendingStack` retains completed
+reads, writes and debug matches across host backing stops. Resumption uses
+already authenticated bytes and retained inputs, so self-modifying code and
+overlapping ENTER frames cannot cause replay. Architectural faults release this
+continuation before entering the existing event owner. New external events
+cannot interrupt a suspended host access. `ir/X86/X86StackFrameRules` shares
+ENTER nesting selection with the ordinary lifter; the paged owner additionally
+owns segment/page faults and the final stack permission probe.
 `X86InstructionDebugProfile::Watchpoints` composes the same rules with scoped
 `translate/X86/X86WatchpointObservation`. `X86PagedMemory` reports completed
 linear data reads and committed stores; physical page walks and fetches are

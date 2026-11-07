@@ -66,6 +66,27 @@ struct X86LegacyEventContinuation {
   llvm::SmallVector<Access> CompletedAccesses;
 };
 
+/// PUSHA/POPA/ENTER progress across a physical-backing stop. Retain this
+/// state, the CPU/profile bindings and RAM; repair only unavailable backing
+/// before calling the same instruction again. Completed accesses are not
+/// repeated, even if an earlier push overwrote its own input or code bytes.
+/// Architectural faults clear this continuation and restart at the original
+/// PC after event delivery. POPA's already loaded registers remain visible.
+struct X86LegacyStackContinuation {
+  struct Access {
+    uint32_t Offset = 0;
+    uint32_t Value = 0;
+    bool Write = false;
+  };
+  X86LegacySegmentState Entry;
+  std::array<uint32_t, 8> ExpectedGPR{};
+  uint32_t EIP = 0;
+  uint32_t EFlags = 0;
+  llvm::SmallVector<uint8_t> Instruction;
+  llvm::SmallVector<Access> CompletedAccesses;
+  uint8_t DataBreakpoints = 0;
+};
+
 /// Debug bank shared with the paged x64 owner, with 32-bit address wrap.
 using X86LegacyDebugState = X86InstructionDebugState<uint32_t>;
 
@@ -87,6 +108,7 @@ struct X86LegacyExecutionState {
   std::optional<X86MpxContext> Mpx;
   std::optional<X86LegacyEventContinuation> PendingEvent;
   std::optional<X86LegacyDebugState> Debug;
+  std::optional<X86LegacyStackContinuation> PendingStack;
 };
 
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
@@ -106,7 +128,12 @@ enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
 enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
 
 /// Confined ordinary RAM. POP memory uses incremented ESP, with SS.B-sized
-/// stack advancement preserving high ESP on a word wrap.
+/// stack advancement preserving high ESP on a word wrap. PUSHA/ENTER stores
+/// and POPA register loads publish in order; ESP and ENTER's EBP commit only
+/// after completion. POPA reads and discards the saved SP slot. ENTER's frame
+/// value uses operand-sized entry-SP subtraction, independently of SS.B.
+/// ENTER checks an operand-sized write at its final SP
+/// without storing data. Host backing stops retain PendingStack.
 enum class X86LegacyScalarProfile : uint8_t { OrderedRAM };
 
 /// One ordinary-RAM element per step, with destination-first CMPS reads.
