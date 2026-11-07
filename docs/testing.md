@@ -18,6 +18,16 @@ declarations and inspect its object bytes. Compile only; no generated program
 or guest execution is required. This establishes bank transport, not invocation
 capture, RAM mappings, paging or complete environment semantics.
 
+Add `scripts.tests.test_qemu_save_memory` for physical observations through an
+explicit producer map. Independent byte fixtures cover original block offsets,
+aliases, byte-aligned adjacent regions, cross-page/block reads, zero updates,
+holes, absent pages, uint64 endpoints/overflow, strict map bindings/schema,
+caller mutation and inspection bounds. CLI errors publish no partial result.
+Real-save checks should compare selected mapped bytes with existing capture
+receipts. They qualify those observations, not an inferred full machine map or
+CPU page-walk, permission and device semantics. The adapter runs no guest and
+adds no work to ordinary decompilation.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU

@@ -1,5 +1,16 @@
 # Remaining x64 C-quality work
 
+Offline physical observations now accept an explicit producer-supplied map in
+`scripts/qemu_save_memory.py`. A sorted interval index reuses the original RAM
+page index, preserving aliases and cross-region reads without copying guest
+RAM. Holes, absent pages, overlapping mappings and malformed bindings fail.
+Machine/block-size checks do not authenticate physical topology: the producer
+must flatten chipset/device overlays for the captured address space. A Q35
+low/high RAM split alone is not a complete map. This closes mapped read
+transport, not topology recovery, CPU paging/permissions or mutable environment
+import. Both ordinary registry inputs and target invocation capture remain
+open. The adapter adds no ordinary-decompilation or instruction-loop work.
+
 The offline save adapter now projects captured QEMU/KVM x64 register banks
 into the existing V6 source declaration. Producer-bound CPU/APIC association,
 exact captured PC, all GPR/vector bits, descriptor caches and independent NMI

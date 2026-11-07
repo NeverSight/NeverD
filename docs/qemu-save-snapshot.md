@@ -45,6 +45,8 @@ or virtual addresses: a machine can split `pc.ram` around a physical address
 hole, and aliases/devices have separate mappings. A consumer must supply and
 validate the machine's physical mappings and, for virtual addresses, the saved
 page tables. The reader performs neither mapping nor permission simulation.
+The physical-memory adapter below accepts an explicit mapping for offline
+observations; it does not discover that mapping from the RAM inventory.
 
 A PC match is a necessary check for using a capture at a selected function
 entry, not a complete proof of invocation state. Image identity, runtime
@@ -55,6 +57,80 @@ recover the incoming private stack bytes of the two unresolved ordinary
 registry functions. No bytes are synthesized and no ordinary parameters are
 removed. The companion adapter below projects the captured V6 register banks;
 it does not import a complete [continuation environment](x64-continuation-source.md).
+
+## Explicit physical-memory observations
+
+[`scripts/qemu_save_memory.py`](../scripts/qemu_save_memory.py) reads bounded
+physical intervals through a producer-supplied, flattened map. Each interval
+binds a physical start and size to a named RAM block and its original offset.
+The producer must establish the **effective read mapping for the captured
+address space**, resolving overlays and excluding MMIO, holes and unavailable
+regions. Partial maps are allowed; unmapped addresses always fail. A RAM-block
+inventory alone cannot establish physical addresses or device behavior.
+
+For example, a map containing one independently established RAM fragment has
+this shape (the addresses are illustrative, not a default Q35 map):
+
+```json
+{
+  "schema": 1,
+  "machine": "pc-q35-10.2",
+  "ram_blocks": {"pc.ram": "0x100000000"},
+  "regions": [
+    {"physical_start": "0x12345000", "size": "0x1000",
+     "ram_block": "pc.ram", "block_offset": "0x12345000"}
+  ]
+}
+```
+
+The machine must match the save and every referenced block needs its exact
+captured size binding. These checks catch obvious mismatches; they do not
+authenticate topology, save identity or the producer's mapping. Bind the map
+to the same capture and address-space view as the register/environment data.
+In particular, Q35's below/above-4G split is insufficient: VGA/ROM, PAM,
+SMRAM/TSEG and device mappings can override RAM. See QEMU's
+[memory regions and aliases](https://github.com/qemu/qemu/blob/v10.2.0/docs/devel/memory.rst),
+[Q35 RAM split](https://github.com/qemu/qemu/blob/v10.2.0/hw/i386/pc_q35.c),
+and [chipset overlays](https://github.com/qemu/qemu/blob/v10.2.0/hw/pci-host/q35.c).
+No machine-specific mapping is guessed by this adapter.
+
+Map extents and offsets accept unsigned JSON integers or `0x`-prefixed hex
+strings with at most 16 digits. Booleans, floats, unknown fields, duplicate
+keys, zero-size regions, physical overlaps and overflowing/out-of-block
+extents fail. Distinct physical intervals may alias the same saved bytes.
+Boundaries can be byte-aligned; a read may cross adjacent regions and RAM
+blocks. Missing saved pages remain unavailable even inside declared regions.
+An empty read checks its uint64 address and requires no mapped byte.
+
+```sh
+python3 -m scripts.qemu_save_memory paused.save --map physical-map.json \
+  --physical 0x12345000 64
+```
+
+Successful JSON includes the normalized supplied mapping and the complete read.
+A failed observation returns status 2 with no JSON or partial bytes. The Python
+API reuses the same open snapshot as register-bank projection:
+
+```python
+from scripts.qemu_save_memory import QemuPhysicalMemory
+
+with QemuSaveSnapshot("paused.save") as snapshot:
+    snapshot.expect_pc(cpu_instance, captured_pc)
+    memory = QemuPhysicalMemory.from_file(snapshot, "physical-map.json")
+    original_bytes = memory.read_physical(physical_address, 8)
+```
+
+`QemuPhysicalMemory(snapshot, description)` also accepts a decoded map. The
+validated map is detached from caller mutation. Construction sorts its regions
+once; a read uses one binary search and visits only the touched fragments and
+saved pages. It borrows the existing RAM index without copying or caching RAM.
+`SnapshotLimits` owns the JSON-byte, region-count and total-read bounds. Keep
+the snapshot open and its save immutable throughout the view's lifetime.
+
+This is a read-only observation adapter, not a mutable execution provider or a
+page walker. It does not update page-table A/D bits, simulate faults or certify
+CPU/device access permissions. Ordinary decompilation does not import it, and
+it cannot recover an invocation that was not captured.
 
 ## V6 register-bank projection
 
@@ -132,7 +208,7 @@ encoding, unusable-bit order, separate NMI masking/pending state, layout/version
 errors and rejection of an unrelated entry PC:
 
 ```sh
-python3 -m unittest scripts.tests.test_qemu_save_snapshot scripts.tests.test_qemu_save_x64 -v
+python3 -m unittest scripts.tests.test_qemu_save_snapshot scripts.tests.test_qemu_save_x64 scripts.tests.test_qemu_save_memory -v
 ```
 
 The interpretation references are QEMU 10.2's
