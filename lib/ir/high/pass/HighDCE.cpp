@@ -250,6 +250,11 @@ public:
           E->MemoryAddressSpace != NdMemoryAddressSpace::Default) {
         Nodes[I].Observable = true;
         Work.push_back(I);
+        // This node already makes every parent observable. Its children cannot
+        // change that answer; classify them only if another assignment or
+        // non-observable parent needs their own answer. Liveness still follows
+        // all children of every retained assignment below.
+        continue;
       }
       E->forEachChildExpr([&](const ExprPtr &Child) {
         if (Child) {
