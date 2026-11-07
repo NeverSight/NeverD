@@ -218,7 +218,7 @@
           },
           {
             "command": [
-              "/home/ad/.local/bin/clang",
+              "${HOME}/.local/bin/clang",
               "-m32",
               "-O2",
               "-Wall",
@@ -319,7 +319,7 @@
           },
           {
             "command": [
-              "/home/ad/.local/bin/clang",
+              "${HOME}/.local/bin/clang",
               "-m32",
               "-O2",
               "-Wall",
@@ -417,7 +417,7 @@
           },
           {
             "command": [
-              "/home/ad/.local/bin/clang",
+              "${HOME}/.local/bin/clang",
               "-m64",
               "-O2",
               "-Wall",
@@ -515,7 +515,7 @@
           },
           {
             "command": [
-              "/home/ad/.local/bin/clang",
+              "${HOME}/.local/bin/clang",
               "-m64",
               "-O2",
               "-Wall",
@@ -685,7 +685,7 @@
           },
           {
             "command": [
-              "/home/ad/.local/bin/clang",
+              "${HOME}/.local/bin/clang",
               "-m32",
               "-O2",
               "-Wall",
@@ -786,7 +786,7 @@
           },
           {
             "command": [
-              "/home/ad/.local/bin/clang",
+              "${HOME}/.local/bin/clang",
               "-m32",
               "-O2",
               "-Wall",
@@ -884,7 +884,7 @@
           },
           {
             "command": [
-              "/home/ad/.local/bin/clang",
+              "${HOME}/.local/bin/clang",
               "-m64",
               "-O2",
               "-Wall",
@@ -982,7 +982,7 @@
           },
           {
             "command": [
-              "/home/ad/.local/bin/clang",
+              "${HOME}/.local/bin/clang",
               "-m64",
               "-O2",
               "-Wall",
