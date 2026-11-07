@@ -6097,8 +6097,8 @@ not fit it, and loses only the record an index misplaces.
 through a real view.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
-lists what asking the engine lists, a function's new name keeps the facts, a new
-name of data, another image and a damaged store ask the engine, and a corrected
+lists what asking the engine lists, a new name of a function or of data keeps the
+facts, a data item, another image and a damaged store ask the engine, and a corrected
 stack frame reads under what corrects it. A store another session is still writing
 answers up to its last whole record and the rest once it is there, and a later
 session reads what the code scan found, whatever it looked at first, while a

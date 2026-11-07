@@ -144,13 +144,19 @@ void Engine::currentNamesInView(Json &view) const {
   });
 }
 
-std::string Engine::renderStoreName() {
+Engine::StoreNames Engine::storeNames() {
   const auto project = projectJson();
   if (!browseCacheEnabled_ || !project.is_object() ||
       !project.contains("folder"))
     return {};
-  return BrowseCache::digest(BrowseCache::runtimeIdentity() +
-                             renderStoreIdentity().dump());
+  auto identity = renderStoreIdentity();
+  const auto &runtime = BrowseCache::runtimeIdentity();
+  StoreNames names;
+  names.renders = BrowseCache::digest(runtime + identity.dump());
+  // What a look asks the engine spells no name of data either.
+  identity.at("state").erase("renames");
+  names.facts = BrowseCache::digest(runtime + identity.dump());
+  return names;
 }
 
 namespace {
@@ -165,8 +171,6 @@ std::filesystem::path projectLocalFolder(const Json &project,
 
 void Engine::openRenderStore(const std::string &mode) {
   renderStore_.reset();
-  factsStore_.reset();
-  factsStoreName_.clear();
   renderStoreStale_ = false;
   summariesDeferred_ = false;
   if (mode.empty())
@@ -174,13 +178,14 @@ void Engine::openRenderStore(const std::string &mode) {
   if (mode != "read" && mode != "write")
     throw Error("invalid_request", "render_store is read or write");
   try {
-    const auto name = renderStoreName();
-    if (name.empty())
+    const auto names = storeNames();
+    if (names.renders.empty())
       return;
     renderStore_ = std::make_unique<RenderStore>(
-        projectLocalFolder(projectJson(), "render-ahead"), name,
+        projectLocalFolder(projectJson(), "render-ahead"), names.renders,
         mode == "write");
-    openFactsStore(name, mode == "write");
+    if (names.facts != factsStoreName_)
+      openFactsStore(names.facts, mode == "write");
   } catch (const std::exception &) {
     // The job keeps what it renders in memory, and later sessions render it
     // again.
@@ -205,7 +210,7 @@ std::vector<std::string> Engine::keptListingFacts(const std::string &key) {
     factsStoreRead_ = true;
     factsStoreGeneration_ = listing_->cacheGeneration();
     try {
-      const auto name = renderStoreName();
+      const auto name = storeNames().facts;
       if (name.empty())
         factsStore_.reset();
       else if (name != factsStoreName_)

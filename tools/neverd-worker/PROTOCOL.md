@@ -981,8 +981,8 @@ does not, since it reads no summary. A damaged or cut-short record is a render
 not kept; removing the folder only costs the renders.
 
 A job also keeps what a function's first look in `listing` asks the engine, in the
-project's `local/listing-facts` under the same inputs, and any worker of that project
-reads it there. An owner takes up what its replica adds at most once a second.
+project's `local/listing-facts` under the same inputs apart from the names of data,
+and any worker of that project reads it there. An owner takes up what its replica adds at most once a second.
 `metadata.listing_facts` and `background.render_ahead.facts` report `{kept, bytes,
 hits, misses}`. A look the store does not answer asks the engine. The owner keeps
 what its reference scan found there too, and `background.scan_kept` says this

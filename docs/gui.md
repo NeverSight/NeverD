@@ -1536,8 +1536,9 @@ reached it. One it has not reached, or one it left to the visit because it is
 very large or its size is unknown, is decompiled when you open it. A comment, a new
 name for a local or a function, or a number format keeps the renders and the
 analysis, so the view reads it at once; a type you give a local or a call changes
-that function alone; a new name for data or a data item forgets the renders, and
-any other edit also starts the analysis over. The job takes idle time on one core and disk for the compact
+that function alone; a new name for data or a data item forgets the renders, a data
+item also forgets what the disassembly keeps, and any other edit also starts the
+analysis over. The job takes idle time on one core and disk for the compact
 text: on a Windows kernel of 25,800 functions, about ten minutes and 200 MB, in
 the project's `local/render-ahead`, which you can delete at any time. It also keeps
 what the disassembly reads of each function, about 170 MB in

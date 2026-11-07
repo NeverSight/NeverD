@@ -280,8 +280,11 @@ private:
   bool factsStoreRead_ = false;
   std::chrono::steady_clock::time_point factsRefreshed_{};
   std::uint64_t factsHits_ = 0, factsMisses_ = 0;
-  /// The store's folder name for what this session reads, or none.
-  std::string renderStoreName();
+  /// The folder names of the stores this session reads, or none.
+  struct StoreNames {
+    std::string renders, facts;
+  };
+  StoreNames storeNames();
   void openFactsStore(const std::string &name, bool writable);
   std::vector<std::string> keptListingFacts(const std::string &key);
   void keepListingFact(const std::string &key, std::string bytes);

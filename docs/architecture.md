@@ -4467,7 +4467,8 @@ it began no longer reads as a new session does, and stops reading and adding to 
 store.
 The job also keeps what a function's first look in the listing asks the engine, its
 recovered instructions and its stack frame, in `local/listing-facts` under the same
-identity. The owner reads them there (`Listing::setKeptFacts`) and takes up what its
+identity without the names of data, which those answers do not spell either. The
+owner reads them there (`Listing::setKeptFacts`) and takes up what its
 replica adds as the job goes, so a first look at a function the job has reached
 prepares no LowIR. What misses, or no longer reads as it was written, asks the
 engine and the browse cache as before. The owner keeps what its reference scan

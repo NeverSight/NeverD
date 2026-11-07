@@ -3,8 +3,8 @@
 
 A first look asks the engine for the function's recovered instructions and stack
 frame.  An owner reads what a replica's job kept of them, from the same session on,
-and lists what asking the engine lists.  Function names keep the facts; a change to
-what the engine reads, and damage, send a look back to the engine.
+and lists what asking the engine lists.  Names keep the facts; a change to what the
+engine reads, and damage, send a look back to the engine.
 """
 from contextlib import ExitStack
 from pathlib import Path
@@ -112,15 +112,17 @@ def run(worker):
         ok(later, "undo")
         later.close()
 
-        # What the engine reads is: a name for data starts a new set.
+        # Nor is a name for data.
         named = owner_of(clients, worker, binary)
         assert listed(named, ADDRESSES[1:2]) == reference[1:2]
         state = facts(named)
         assert state["hits"] >= 2 and state["kept"] == kept["kept"], state
         ok(named, "rename", {"address": hex(DATA), "name": "named_data"})
-        listed(named, ADDRESSES[2:])
+        hits = state["hits"]
+        assert "named_data" in str(listed(named, [DATA]))
+        assert listed(named, ADDRESSES[2:]) == reference[2:]
         state = facts(named)
-        assert state["kept"] == 0 and state["misses"] > 0, state
+        assert state["hits"] > hits and state["kept"] == kept["kept"], state
         ok(named, "undo")
         named.close()
 
@@ -202,6 +204,16 @@ def run(worker):
         state = facts(damaged)
         assert state["hits"] == 0 and state["misses"] > 0, state
         damaged.close()
+
+        # What the engine reads is: a data item starts a new set.
+        defined = owner_of(clients, worker, binary)
+        listed(defined, ADDRESSES[1:2])
+        assert facts(defined)["kept"] > 0, facts(defined)
+        ok(defined, "item_define", {"address": hex(DATA), "action": "data", "size": 4})
+        listed(defined, ADDRESSES[1:2])
+        state = facts(defined)
+        assert state["kept"] == 0 and state["misses"] > 0, state
+        defined.close()
     print("Listing facts kept by a job, read by later listings, and refused when damaged passed")
 
 
