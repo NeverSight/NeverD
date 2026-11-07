@@ -20577,6 +20577,18 @@ HighIR structuring contract; it requires no external source interface.
 
 ### Explicit x64 continuation export
 
+`X64StackObserverTest.CompileAndProveOriginalMemoryObservers` compiles both
+routes at O0/O2 and proves four predicates for each plain, paged and paged-debug
+configuration, with scheduling enabled and disabled. Original PUSH, partial
+MOV, LEA, CALL, saved-pointer reload, indirect DWORD load, POP and RET bodies
+retain arbitrary upper input bits. Paused cases change the original pointee or
+saved pointer before resume; completion caches only the value from the actual
+RET. Plain proofs bind wholly contained constant operands to fixture RAM.
+Paged proofs use independent accessible-RAM and successful-transfer equations,
+not the page walker or debug-event implementation. All 48 predicates must
+optimize to constant zero. These checks execute no specimen, generated code,
+instruction executor or guest, and add no product-side analysis or runtime work.
+
 `X64CallSiteHandlerTest.*` verifies that handler interfaces require call-site
 pauses, compiles both C routes at O0/O2 and uses optimizer
 predicates over the actual generated controller and instruction bodies. The
