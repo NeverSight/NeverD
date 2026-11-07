@@ -24,6 +24,7 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Allocator.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/StringSaver.h"
 
 #include <functional>
@@ -563,9 +564,9 @@ const llvm::StringMap<Builtin> &builtinWords() {
 }
 
 /// The words that make builtin types together: unsigned long long int.
-bool builtinKeyword(llvm::StringRef Word) {
+LLVM_ATTRIBUTE_ALWAYS_INLINE bool builtinKeyword(llvm::StringRef Word) {
   // Group exact spellings by length so ordinary names skip unrelated
-  // keywords. Keep each match a boolean rather than an optional value.
+  // keywords. Keep the boolean checks in their callers' parsing loops.
   switch (Word.size()) {
   case 3:
     return Word == "int";
