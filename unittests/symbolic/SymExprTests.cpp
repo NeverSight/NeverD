@@ -1768,3 +1768,28 @@ TEST(SymExpr, IncrementalProductsKeepCanonicalCoefficientsAndRepeatedFactors) {
 }
 
 } // namespace
+
+TEST(SymExpr, DiscardedPackedFieldsDoNotGrowAcrossUpdates) {
+  for (unsigned Width : {16u, 32u, 64u, 128u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto Mask = C.mkConst(Width, 0x7300);
+    const auto Input = C.mkVar("status", Width);
+    const auto Preserved = C.mkAnd(Input, Mask);
+    auto Status = Preserved;
+    for (unsigned I = 0; I < 128; ++I) {
+      const auto Bit = C.mkVar("bit" + std::to_string(I), 1);
+      const auto Field = C.mkMul(C.mkConst(Width, 16), C.mkZExt(Bit, Width));
+      EXPECT_EQ(C.mkAnd(Field, Mask), C.mkZero(Width));
+      Status = C.mkAnd(C.mkOr(Status, Field), Mask);
+    }
+    EXPECT_EQ(Status, Preserved) << C.toString(Status);
+    // Observed bits and carries must survive; zero-extension is essential.
+    const auto Wide = C.mkVar("wide", Width);
+    const auto Field = C.mkMul(C.mkConst(Width, 16), Wide);
+    EXPECT_FALSE(C.isConst(C.mkAnd(Field, Mask)));
+    const auto Low = C.mkZExt(C.mkVar("low", 4), Width);
+    EXPECT_FALSE(
+        C.isConst(C.mkAnd(C.mkAdd(Low, C.mkOne(Width)), C.mkConst(Width, 16))));
+  }
+}

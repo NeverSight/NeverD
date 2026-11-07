@@ -19,6 +19,7 @@
 
 #include "neverd/symbolic/Limits.h"
 #include "neverd/symbolic/SymExpr.h"
+#include "neverd/symbolic/SymKnownBits.h"
 
 #include <algorithm>
 #include <cassert>
@@ -155,6 +156,10 @@ SymRef SymContext::mkAnd(llvm::ArrayRef<SymRef> Ops) {
         op(R) == SymOp::Or && llvm::any_of(operands(R), [&](SymRef C) {
           return std::binary_search(Rest.begin(), Rest.end(), C);
         });
+    // The constant is folded separately from Rest. An OR that sets every
+    // bit retained by this AND cannot constrain the remaining result.
+    Absorbed |= op(R) == SymOp::Or && isConst(operand(R, 0)) &&
+                (constValue(operand(R, 0)) & Acc) == Acc;
     if (!Absorbed)
       Unabsorbed.push_back(R);
   }
@@ -174,6 +179,19 @@ SymRef SymContext::mkAnd(llvm::ArrayRef<SymRef> Ops) {
 
   if (auto Narrow = contractZeroExtensions(*this, SymOp::And, Rest, Acc))
     return Narrow;
+
+  // Packed fields are commonly written as a shifted or scaled narrow value.
+  // Resolve a constant observed slice before it can become another operand
+  // of a growing status word. The shared fact transfer includes overflow and
+  // shift semantics; an exhausted query leaves the original expression.
+  if (W <= SymKnownBits::MaxWidth && !Acc.isAllOnes() && Rest.size() == 1 &&
+      (op(Rest[0]) == SymOp::Mul || op(Rest[0]) == SymOp::Shl)) {
+    unsigned Work = ::neverd::limits::symbolic::kSymExprLogicSubsetWork;
+    SymKnownBits Known(*this);
+    if (auto Bits = Known.query(Rest[0], Work))
+      if (((Bits->Zero | Bits->One) & Acc) == Acc)
+        return mkConst(Bits->One & Acc);
+  }
 
   // OR/XOR cannot set a bit that is zero in every operand. Explicit masks
   // provide this fact without distributing AND or recursively walking the
@@ -202,23 +220,34 @@ SymRef SymContext::mkAnd(llvm::ArrayRef<SymRef> Ops) {
   if (!Acc.isAllOnes() && Rest.size() == 1 && op(Rest[0]) == SymOp::Or) {
     llvm::ArrayRef<SymRef> OrTerms = operands(Rest[0]);
     llvm::SmallVector<SymRef, 8> Terms(OrTerms.begin(), OrTerms.end());
+    unsigned MaskWork = ::neverd::limits::symbolic::kSymExprLogicSubsetWork;
+    SymKnownBits Known(*this);
     const auto IsDisjoint = [&](SymRef Term) {
       if (isConst(Term))
         return (constValue(Term) & Acc).isZero();
-      if (op(Term) != SymOp::And)
-        return false;
-      for (SymRef Factor : operands(Term))
-        if (isConst(Factor) && (constValue(Factor) & Acc).isZero())
-          return true;
+      if (op(Term) == SymOp::And)
+        for (SymRef Factor : operands(Term))
+          if (isConst(Factor) && (constValue(Factor) & Acc).isZero())
+            return true;
+      // Scaled narrow fields can be disjoint from any observed mask. Keeping
+      // them until a later MBA pass makes repeated packed-word updates grow
+      // a new dead arithmetic cone at every instruction. The bounded known-
+      // bits query proves all observed bits zero without distributing AND.
+      if (auto Bits = Known.query(Term, MaskWork))
+        return (Bits->Zero & Acc) == Acc;
       return false;
     };
-    if (Terms.size() <= 8 &&
-        std::any_of(Terms.begin(), Terms.end(), IsDisjoint)) {
+    llvm::SmallVector<bool, 8> Disjoint;
+    if (Terms.size() <= 8)
+      for (auto Term : Terms)
+        Disjoint.push_back(IsDisjoint(Term));
+    if (llvm::is_contained(Disjoint, true)) {
       llvm::SmallVector<SymRef, 8> Masked;
       const SymRef Mask = mkConst(Acc);
-      for (SymRef Term : Terms)
-        Masked.push_back(mkAnd(Mask, Term));
-      return mkOr(Masked);
+      for (size_t I = 0; I != Terms.size(); ++I)
+        if (!Disjoint[I])
+          Masked.push_back(mkAnd(Mask, Terms[I]));
+      return Masked.empty() ? mkZero(W) : mkOr(Masked);
     }
   }
 
@@ -367,6 +396,9 @@ SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
           return std::binary_search(Rest.begin(), Rest.end(), C);
         });
     Absorbed |= CoveredXor(R);
+    // A masked value cannot add any bit already set by the folded constant.
+    Absorbed |= op(R) == SymOp::And && isConst(operand(R, 0)) &&
+                (constValue(operand(R, 0)) & ~Acc).isZero();
     if (!Absorbed)
       Unabsorbed.push_back(R);
   }
@@ -463,6 +495,67 @@ SymRef SymContext::mkXor(llvm::ArrayRef<SymRef> Ops) {
   if (auto Narrow = contractZeroExtensions(*this, SymOp::Xor, Rest, Acc))
     return Narrow;
 
+  // x ^ (x & mask) == x & ~mask. The captured x can be a complete word;
+  // its unobserved fields need not be expanded to prove this identity.
+  if (Rest.size() == 2) {
+    for (unsigned I = 0; I != 2; ++I) {
+      SymRef Value = Rest[I], Masked = Rest[1 - I];
+      if (op(Masked) != SymOp::And)
+        continue;
+      llvm::SmallVector<SymRef, 8> Mask;
+      bool ContainsValue = false;
+      for (SymRef Factor : operands(Masked)) {
+        if (Factor == Value)
+          ContainsValue = true;
+        else
+          Mask.push_back(Factor);
+      }
+      if (ContainsValue) {
+        SymRef Bits = Mask.size() == 1 ? Mask.front() : mkAnd(Mask);
+        SymRef Difference = mkAnd(Value, mkNot(Bits));
+        return Acc.isZero() ? Difference : mkXor(Difference, mkConst(Acc));
+      }
+    }
+  }
+
+  // (x | a) ^ (x | b) == ~x & (a ^ b), for constant masks a and b.
+  // Canonical ORs keep their optional constant first and all other factors
+  // sorted. Compare those factors directly; do not expand the shared word
+  // or enumerate the atoms that compute it.
+  if (Rest.size() == 2 && op(Rest[0]) == SymOp::Or &&
+      op(Rest[1]) == SymOp::Or) {
+    auto Left = operands(Rest[0]), Right = operands(Rest[1]);
+    llvm::APInt ChangedMask(W, 0);
+    llvm::APInt LeftMask(W, 0), RightMask(W, 0);
+    if (isConst(Left.front())) {
+      LeftMask = constValue(Left.front());
+      ChangedMask ^= LeftMask;
+      Left = Left.drop_front();
+    }
+    if (isConst(Right.front())) {
+      RightMask = constValue(Right.front());
+      ChangedMask ^= RightMask;
+      Right = Right.drop_front();
+    }
+    if (Left == Right) {
+      SymRef Shared = Left.size() == 1 ? Left.front() : mkOr(Left);
+      SymRef Difference = mkAnd(mkNot(Shared), mkConst(ChangedMask));
+      return Acc.isZero() ? Difference : mkXor(Difference, mkConst(Acc));
+    }
+    // (k | x) ^ (k | y) == ~k & (x ^ y). Copy both remaining factor
+    // lists before rebuilding either word, since builders may move the pool.
+    if (!LeftMask.isZero() && LeftMask == RightMask) {
+      llvm::SmallVector<SymRef, 8> LeftFactors(Left.begin(), Left.end());
+      llvm::SmallVector<SymRef, 8> RightFactors(Right.begin(), Right.end());
+      SymRef A =
+          LeftFactors.size() == 1 ? LeftFactors.front() : mkOr(LeftFactors);
+      SymRef B =
+          RightFactors.size() == 1 ? RightFactors.front() : mkOr(RightFactors);
+      SymRef Difference = mkAnd(mkConst(~LeftMask), mkXor(A, B));
+      return Acc.isZero() ? Difference : mkXor(Difference, mkConst(Acc));
+    }
+  }
+
   if (W == 1 || !isVar(Rest[0]))
     if (SymRef Predicate =
             detail::recoverObservedComparison(*this, SymOp::Xor, Rest, Acc))
@@ -503,6 +596,15 @@ SymRef SymContext::mkNot(SymRef A) {
     return mkConst(~constValue(A));
   if (op(A) == SymOp::Not)
     return operand(A, 0);
+  // ~(k | ~x) == ~k & x, and its AND/OR dual. Keep the captured word
+  // intact while exposing the constant observation mask before deep work.
+  if ((op(A) == SymOp::Or || op(A) == SymOp::And) && numOperands(A) == 2 &&
+      isConst(operand(A, 0)) && op(operand(A, 1)) == SymOp::Not) {
+    const bool IsOr = op(A) == SymOp::Or;
+    const llvm::APInt Mask = ~constValue(operand(A, 0));
+    const SymRef Value = operand(operand(A, 1), 0);
+    return IsOr ? mkAnd(Value, mkConst(Mask)) : mkOr(Value, mkConst(Mask));
+  }
   // A negated free input needs one fewer operation as x - 1. Keep compound
   // sources opaque, since their complement can identify a shared factor.
   if (W > 1 && op(A) == SymOp::Mul && numOperands(A) == 2 &&
