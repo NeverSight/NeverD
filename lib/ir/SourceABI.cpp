@@ -1342,8 +1342,11 @@ bool assignDarwinVariadicSourceABI(SourceFunctionTypeHint &Hint,
       // Darwin variadic objects start on eight-byte slots (or their higher
       // natural alignment). Members retain their in-object offsets: an HFA
       // of floats does not become one eight-byte slot per float.
-      const int64_t Alignment =
-          std::max<unsigned>(kDarwinWordBytes, P.Type->Alignment);
+      // NdType's architecture-neutral integer alignment is capped at a word.
+      // The Darwin scalar ABI instead aligns i128 to its complete width.
+      const int64_t Alignment = std::max<unsigned>(
+          kDarwinWordBytes,
+          P.Type->Kind == NdTypeKind::Int ? P.Type->Size : P.Type->Alignment);
       StackOffset = (StackOffset + Alignment - 1) & -Alignment;
       P.Location = {};
       P.Components.clear();

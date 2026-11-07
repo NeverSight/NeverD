@@ -199,6 +199,28 @@ TEST(SourceCallABI, DarwinVariadicTailFollowsFixedAggregateSpills) {
               kDarwinPairWords * kDarwinWideBytes + I * kDarwinFloatBytes);
 }
 
+TEST(SourceCallABI, DarwinVariadicWideValuesSkipHalfAlignedSlots) {
+  const auto Word = NdType::makeInt(kDarwinRegisterBytes);
+  for (const auto Preceding :
+       {NdType::makeInt(kDarwinFloatBytes), Word,
+        NdType::makeStruct({NdType::makeFloat(kDarwinFloatBytes)})})
+    for (const bool Signed : {false, true}) {
+      auto Hint = contract(
+          {Word, Preceding, NdType::makeInt(kDarwinWideBytes, Signed)}, 1);
+      std::string Error;
+      ASSERT_TRUE(
+          assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error))
+          << Error;
+      const auto &Parts = Hint.Signature.Parameters.back().Components;
+      ASSERT_EQ(Parts.size(), kDarwinPairWords);
+      for (unsigned I = 0; I < Parts.size(); ++I) {
+        EXPECT_EQ(Parts[I].Kind, SourceABICarrierKind::Stack);
+        EXPECT_EQ(Parts[I].EntryStackOffset,
+                  kDarwinWideBytes + I * kDarwinRegisterBytes);
+      }
+    }
+}
+
 TEST(SourceCallABI, DarwinVariadicValuesRetainPromotionAndIndirectRefusals) {
   const auto Word = NdType::makeInt(kDarwinRegisterBytes);
   const auto Float = NdType::makeFloat(kDarwinFloatBytes);

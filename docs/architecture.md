@@ -1278,7 +1278,11 @@ type and complete physical members. LLVM uses arrays for HFA and word-record
 arguments so register exhaustion cannot split a logical value. Results flatten
 back to the declared source offsets, preserving padding as non-value bytes.
 LLVM C admits these grouped Darwin parameters independently of the register
-count; ELF/x86 array restrictions remain in place.
+count, including the unnamed variadic tail. Its boundary validator checks
+every actual operand, the ordinary C convention and all ABI attributes; raw
+non-promoted scalar tails cannot accompany admitted variadic arrays. ELF/x86
+array restrictions remain in place. Integer alignment uses the Darwin scalar
+width rather than the architecture-neutral `NdType` alignment cap.
 
 `sourceCallTypeOf` retains natural C record fields from the SDK's type library
 without changing the ordinary display conversion. Names, sizes, alignment and

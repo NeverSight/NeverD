@@ -1448,6 +1448,11 @@ nested HFA members, and a fixed record prefix. Other hosts retain compilation
 and explicitly record that native execution is unavailable. Packed/union values,
 indirect copies/results, and unpromoted scalar tails must refuse explicitly.
 Raw native execution does not qualify PAC behavior.
+`LLVMCValues.DarwinVariadicArraysValidateEveryActualOperand` also admits word
+and HFA arrays in the prefix/tail while refusing non-C conventions, tail
+`inreg` attributes, unpromoted scalar companions, nested/oversized arrays and
+non-Darwin platforms. Source ABI regressions check an i128 after exactly one
+eight-byte variadic slot, including both signednesses and scalar/HFA predecessors.
 `NativeTypesKeepTheOriginalIndirectTarget` separately retains recovered native
 C prototypes and refuses unsupported authenticated language bindings. Its five
 HighC variants must compile at O0/O2 with the original target and authentication.
