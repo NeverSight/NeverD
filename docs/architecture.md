@@ -1352,6 +1352,12 @@ This remains an independently authenticated frame-effect proof; an analyst
 prototype alone cannot grant nonescape, copy lifetime or logical call
 reconstruction.
 
+Every HighIR DCE phase uses the same private-frame read proof. When the final
+liveness pass removes a frame read, private-store cleanup runs again so an
+unobserved initializer cannot retain an otherwise dead image address. Unknown
+reads, escaping frame addresses and unvalidated calls still prevent that
+cleanup; image relocation validation remains independent.
+
 Narrow integer
 register parameters and AArch64 narrow results retain the ABI's 32-bit
 sign/zero-extension guarantee separately from their source width. LLVM source

@@ -1702,6 +1702,19 @@ the controlled guest has no Darwin stack-check runtime. The extractor still
 requires unchanged, relocation-free text; ordinary SDK executables retain
 normal host compiler defaults.
 
+The [logical-copy and original-x8 receipt](evidence/arm64e-copy-result-abi-2026-11-07.json)
+records 30 passing controlled PAC guests for this original-storage fixture:
+600 valid original/projected pairs and 1,440 invalid-signature pairs across
+LLVM and both C routes. Every route requires the original exception class;
+there is no C O0 allowance in this profile. The callback reads through a
+parameter alias during result writes, records the exact buffer address and
+clobbers x8. This execution scope is smaller than the SDK's stack/FP/variadic
+transport matrix. The receipt distinguishes the actual model producer from
+later integrated exports and records their object hashes.
+`ImmutableNativeCalls.Generated*` checks ordinary and loop-frame image
+publication after dead private reads and their initializers disappear. The
+relocation validator still rejects unbound live image addresses.
+
 `NeverDLanguageEHTests` checks the unified signing query's image/function
 provenance, exact PCs, source scopes and bounded CIE lookup.
 `NeverDUnwindFrameCAPITests` loads independent Mach-O fixtures through the
@@ -16086,6 +16099,13 @@ and EventLog public-interface cases after changing this boundary.
 
 Build the owning executable first, then select its label. This avoids relinking
 unrelated large semantic targets.
+
+In a reused build tree, duplicate GoogleTest names can carry labels from
+several executables. Inspect `ctest --show-only=json-v1` and its `command`
+fields before treating a label selection as a rebuilt-owner run. If it also
+selects stale or unbuilt executables, select the matching test indices with
+`ctest -I` or run the rebuilt executable with a GoogleTest filter. Preserve
+the inventory with the test report.
 
 On macOS, a standalone Clang (including Homebrew LLVM) may need an explicit
 SDK when a fixture links generated source. Run CTest with
