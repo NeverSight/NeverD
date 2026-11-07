@@ -21474,3 +21474,5 @@ recorded baseline; this change adds none and does not weaken the audit.
 `HighSymSimplify.LargeConversionHonorsSymbolicOptInAndKeepsLoads` checks the symbolic option on the large-function route, with the option both on and off and with or without a real LOAD.
 
 `HighControlFlowSemantics.LargeSourceNamesDeepConditionalValues` uses a reachable 1025-block function and deep conditional values. Independent HighIR execution checks both selected and unselected paths, and emitted C must contain no depth truncation or unknown-value placeholder.
+
+MedStackAlignment reusable-entry query regressions exercise the existing scoped MedEntryStackOffsets owner after changed definitions, PHI relocation, new incoming edges and duplicate definitions. Repeated known/unknown queries cover four ISAs and three formats. These qualify the upstream implementation from 5b5e901d2 instead of adding a second proof cache.
