@@ -21409,3 +21409,5 @@ and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
 frontend regressions and 91 generated-table tests passed. NeverC's strict
 global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
+
+SymConditionalControls and SymMBASelector Boolean-word tests use exhaustive small input tables and an independent solver check through 257 bits. Partial-mask and nonfitting-constant controls retain their data semantics; a large opaque predicate must not consume the budget before a complete root choice is recognized.

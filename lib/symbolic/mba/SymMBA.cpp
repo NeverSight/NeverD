@@ -49,7 +49,9 @@
 #include <cassert>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace neverd::symbolic {
@@ -469,9 +471,91 @@ SymRef foldKnownBits(SymContext &Ctx, SymRef Root, SymKnownBits &Known,
              : Root;
 }
 
+std::optional<std::pair<SymRef, bool>> booleanWordMask(SymContext &Ctx,
+                                                       SymRef Mask,
+                                                       WorkBudget &Budget,
+                                                       size_t &Storage) {
+  if (Ctx.width(Mask) == 1 || Storage < 128 || !Budget.consume())
+    return {};
+  bool Inverted = false;
+  if (Ctx.op(Mask) == SymOp::Not) {
+    Inverted = true;
+    Mask = Ctx.operand(Mask, 0);
+  }
+  SymRef Control;
+  if (Ctx.op(Mask) == SymOp::SExt && Ctx.width(Ctx.operand(Mask, 0)) == 1) {
+    Control = Ctx.operand(Mask, 0);
+  } else if ((Ctx.op(Mask) == SymOp::Mul || Ctx.op(Mask) == SymOp::Add) &&
+             Ctx.numOperands(Mask) == 2 && Ctx.isConst(Ctx.operand(Mask, 0))) {
+    const auto Bit = Ctx.operand(Mask, 1);
+    if (Ctx.op(Bit) != SymOp::ZExt || Ctx.width(Ctx.operand(Bit, 0)) != 1 ||
+        !Budget.consume(1 + (Ctx.width(Mask) - 1) / 64) ||
+        !Ctx.isConstOnes(Ctx.operand(Mask, 0)))
+      return {};
+    Control = Ctx.operand(Bit, 0);
+    Inverted ^= Ctx.op(Mask) == SymOp::Add;
+  }
+  if (!Control)
+    return {};
+  if (Ctx.op(Control) == SymOp::Not) {
+    Control = Ctx.operand(Control, 0);
+    Inverted = !Inverted;
+  }
+  Storage -= 128;
+  return std::pair{Control, Inverted};
+}
+
 SymRef foldConditionalControls(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                                size_t &Storage) {
   auto Op = Ctx.op(Root);
+  // Complementary Boolean word masks select the complete data operands.
+  // Normalize them before linear MBA rewriting hides the OR as an XOR blend.
+  if (Op == SymOp::Or && Ctx.numOperands(Root) == 2) {
+    const auto A = Ctx.operand(Root, 0), B = Ctx.operand(Root, 1);
+    if (Ctx.op(A) == SymOp::And && Ctx.numOperands(A) == 2 &&
+        Ctx.op(B) == SymOp::And && Ctx.numOperands(B) == 2) {
+      const SymRef Left[] = {Ctx.operand(A, 0), Ctx.operand(A, 1)};
+      const SymRef Right[] = {Ctx.operand(B, 0), Ctx.operand(B, 1)};
+      for (unsigned I = 0; I != 2; ++I) {
+        auto L = booleanWordMask(Ctx, Left[I], Budget, Storage);
+        if (!L)
+          continue;
+        for (unsigned J = 0; J != 2; ++J) {
+          auto R = booleanWordMask(Ctx, Right[J], Budget, Storage);
+          if (!R || L->first != R->first || L->second == R->second ||
+              !Budget.consume(4))
+            continue;
+          return Ctx.mkIte(L->first, L->second ? Right[1 - J] : Left[1 - I],
+                           L->second ? Left[1 - I] : Right[1 - J]);
+        }
+      }
+    }
+  }
+  // x ^ ((x ^ y) & mask) has the same complete-word choice contract.
+  if (Op == SymOp::Xor && Ctx.numOperands(Root) == 2) {
+    for (unsigned I = 0; I != 2; ++I) {
+      const auto Base = Ctx.operand(Root, I);
+      const auto Masked = Ctx.operand(Root, 1 - I);
+      if (Ctx.op(Masked) != SymOp::And || Ctx.numOperands(Masked) != 2)
+        continue;
+      for (unsigned J = 0; J != 2; ++J) {
+        const auto Mask = Ctx.operand(Masked, J);
+        const auto Mix = Ctx.operand(Masked, 1 - J);
+        if (Ctx.op(Mix) != SymOp::Xor || Ctx.numOperands(Mix) != 2)
+          continue;
+        const auto A = Ctx.operand(Mix, 0), B = Ctx.operand(Mix, 1);
+        if (A != Base && B != Base)
+          continue;
+        auto Control = booleanWordMask(Ctx, Mask, Budget, Storage);
+        if (!Control || !Budget.consume(4))
+          continue;
+        const auto Other = A == Base ? B : A;
+        return Ctx.mkIte(Control->first, Control->second ? Base : Other,
+                         Control->second ? Other : Base);
+      }
+    }
+  }
+
   if (Op == SymOp::Eq) {
     for (unsigned I = 0; I != 2; ++I) {
       auto Literal = Ctx.operand(Root, I), Sum = Ctx.operand(Root, 1 - I);
@@ -545,6 +629,17 @@ SymRef foldConditionalControls(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       auto N = No.lookup(Root.index()), Y = Yes.lookup(Root.index());
       if (Ctx.isConst(N) && Ctx.isConst(Y))
         return Ctx.mkIte(Control, Y, N);
+    }
+  }
+  if (Op == SymOp::Eq) {
+    for (unsigned I = 0; I < 2; ++I) {
+      auto Value = Ctx.operand(Root, I), Literal = Ctx.operand(Root, 1 - I);
+      if (Ctx.op(Value) != SymOp::Ite || !Ctx.isConst(Literal))
+        continue;
+      auto T = Ctx.operand(Value, 1), E = Ctx.operand(Value, 2);
+      if (Ctx.isConst(T) && Ctx.isConst(E) && Budget.consume(3))
+        return Ctx.mkIte(Ctx.operand(Value, 0), Ctx.mkEq(T, Literal),
+                         Ctx.mkEq(E, Literal));
     }
   }
   if (Op != SymOp::Ite || Budget.exhausted() || Storage < 128)
@@ -1568,6 +1663,45 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
       ++Cache.ReusedRoots;
       return Result;
     }
+  }
+  // Recognize a full-word Boolean choice before its opaque predicate can
+  // consume the shared deep-walk allowance. Keep simplifying its descendants
+  // through the existing path without losing the completed root derivation.
+  size_t ControlStorage = Opts.MaxTableBytes;
+  const auto Choice =
+      Ctx.op(E) == SymOp::Or || Ctx.op(E) == SymOp::Xor
+          ? foldConditionalControls(Ctx, E, Budget, ControlStorage)
+          : E;
+  if (Choice != E) {
+    auto Inner = Opts;
+    Inner.MaxWork = Budget.unlimited()
+                        ? Opts.MaxWork
+                        : Opts.MaxWork - (Budget.used() - WorkStart);
+    Inner.MaxTableBytes = ControlStorage;
+    const auto Finished = run(Ctx, Choice, Inner, Cache, Budget);
+    Result.Expr = Finished.Expr;
+    Result.SizeAfter = readingCost(Ctx, Result.Expr);
+    Result.Changed = Result.Expr != E;
+    Result.NumAtoms = Finished.NumAtoms;
+    Result.Outcome = Result.Changed ? MBAOutcome::Rewritten : Finished.Outcome;
+    Result.Evidence = Finished.Evidence == MBAEvidence::Samples
+                          ? MBAEvidence::Samples
+                          : MBAEvidence::Derivation;
+    Result.Work = Budget.used() - WorkStart;
+    const bool Verified =
+        agreeOnSamples(Ctx, E, Result.Expr, Opts.VerifySamples);
+    assert(Verified && "word choice disagreed with its source");
+    if (!Verified)
+      return MBAResult{.Expr = E,
+                       .SizeBefore = Result.SizeBefore,
+                       .SizeAfter = Result.SizeBefore,
+                       .Work = Result.Work};
+    if (Result.Evidence == MBAEvidence::Derivation &&
+        Finished.Outcome != MBAOutcome::BudgetExhausted &&
+        !Budget.exhausted() && Cache.Rewrites.size() < Cache.Capacity &&
+        readingScore(Ctx, Result.Expr) < readingScore(Ctx, E))
+      Cache.Rewrites.try_emplace(E.index(), Result.Expr);
+    return Result;
   }
   SolveReport FastRep;
   if (SymRef Fast = tryFastComplementarySum(Ctx, E, Opts, Budget, FastRep);
