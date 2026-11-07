@@ -2,7 +2,8 @@
 
 [`scripts/qemu_save_snapshot.py`](../scripts/qemu_save_snapshot.py) reads a
 completed libvirt save without restoring a VM or executing guest instructions.
-It exposes captured CPU/APIC fields and bounded reads of named RAM blocks.
+It exposes captured CPU/APIC fields, selected device state and bounded reads
+of named RAM blocks.
 Use it when an existing save contains native inputs that a binary image alone
 cannot provide. It is a separate inspection tool; ordinary decompilation and
 generated continuation drivers do not invoke it.
@@ -37,6 +38,53 @@ Keep the save immutable for the lifetime of the reader. It opens the input
 read-only, writes no output files and never treats RAM-block names as paths.
 Normal filesystem permissions apply. It requires only Python's standard
 library, not an installed QEMU or libvirt service.
+
+## Selected device evidence
+
+[`scripts/qemu_save_devices.py`](../scripts/qemu_save_devices.py) lists the
+described non-RAM sections and optionally decodes selected devices:
+
+```sh
+python3 -m scripts.qemu_save_devices paused.save
+python3 -m scripts.qemu_save_devices paused.save \
+  --device '0000:00:00.0/mch' 0 --device ioapic 0
+```
+
+Select identities from that save's inventory; the example names are not
+defaults. Selection uses the exact migration name and instance ID, never the
+VMState layout name, section ID or list position. Repeated selectors return
+one record in first-request order. An absent or invalid selection returns
+status 2 without publishing a partial result.
+
+Inventory rows retain migration identity, section ID, VMState name/version
+and serialized byte count. Selected records additionally contain `fields`
+and direct `subsection_versions`. Field integers use hex strings in JSON;
+unknown field types remain `raw_hex`. QEMU's `int32 le` means a **less than or
+equal restore check**, not little-endian storage: like `int32 equal`, its
+wire bytes are big-endian. The reader preserves the saved integer, without
+running the restore check against an invented current device version. See
+QEMU's [VMState field serialization](https://github.com/qemu/qemu/blob/v10.2.0/migration/vmstate-types.c).
+
+```python
+with QemuSaveSnapshot("paused.save") as snapshot:
+    identities = snapshot.device_inventory()
+    mch = snapshot.read_device("0000:00:00.0/mch", 0)
+    original_pci_config = mch["fields"]["parent_obj"]["config[0]"]
+```
+
+Construction validates all sections and retains their layouts and file
+offsets. CPU/APIC/common fields keep their existing eager decoding; other
+device fields are decoded only when requested. Inventory needs no payload
+read. Each `read_device` performs an exact-key lookup and decodes only that
+section, without rebuilding the RAM index. It returns a fresh record from
+the original save, including when the caller has mutated a public CPU
+dictionary or an earlier result. Retain returned records explicitly for reuse.
+All layouts share the existing aggregate state and metadata limits.
+
+The reader runs no device model or post-load callback. These fields can
+support chipset and interrupt-controller inspection, but do not establish
+effective physical mappings, device behavior or a complete execution
+environment. Device state cannot recover an uncaptured function invocation.
 
 ## Address and invocation boundaries
 
@@ -208,7 +256,9 @@ encoding, unusable-bit order, separate NMI masking/pending state, layout/version
 errors and rejection of an unrelated entry PC:
 
 ```sh
-python3 -m unittest scripts.tests.test_qemu_save_snapshot scripts.tests.test_qemu_save_x64 scripts.tests.test_qemu_save_memory -v
+python3 -m unittest scripts.tests.test_qemu_save_snapshot \
+  scripts.tests.test_qemu_save_x64 scripts.tests.test_qemu_save_memory \
+  scripts.tests.test_qemu_save_devices -v
 ```
 
 The interpretation references are QEMU 10.2's
@@ -225,7 +275,8 @@ footers and 4096-byte target pages. Libvirt header byte order is detected.
 Device fields, arrays and nested/subsection layouts come from that save's
 description; stream versions, subsection headers and serialized sizes must
 agree. The captured `cpu`, `cpu_common` and `apic` fields are retained. Other
-described devices are traversed without constructing device models.
+described devices are validated and indexed for optional reads without
+constructing device models.
 
 RAM version 4 supports block inventories, full page records, single-byte fill
 records and continuation records across sections. Later records replace earlier
@@ -256,11 +307,13 @@ and [VMState serialization](https://github.com/qemu/qemu/blob/v10.2.0/migration/
 QEMU documents its own offline inspector in
 [migration best practices](https://www.qemu.org/docs/master/devel/migration/best-practices.html).
 
-The unit fixtures independently encode register bits, signed/little-endian
-fields, arrays, nested/subsection layouts, RAM updates/fills and missing pages.
+The unit fixtures independently encode register bits, signed and comparison
+integer fields, arrays, nested/subsection layouts, RAM updates/fills and missing
+pages. Device fixtures cover exact identities, lazy field decoding, raw PCI
+bytes, interleaved RAM reads, mutation isolation and aggregate limits.
 Negative cases cover invocation mismatch, format/version/extent errors,
 truncation, duplicate JSON keys, invalid Unicode and inspection bounds.
-Real-save qualification should additionally compare CPU/APIC fields with an
+Real-save qualification should additionally compare CPU/APIC/device fields with an
 independent offline decoder and selected RAM bytes with existing capture
 receipts. Keep saves, raw register/memory output and timing receipts local;
 these tests require no guest or generated-program execution.

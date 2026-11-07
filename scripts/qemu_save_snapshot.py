@@ -63,6 +63,13 @@ class _RamBlock:
     records: int = 0
 
 
+@dataclass(frozen=True)
+class _DeviceSection:
+    section_id: int
+    offset: int
+    layout: _Layout
+
+
 def _integer(value, label: str, maximum: int) -> int:
     if type(value) is not int or not 0 <= value <= maximum:
         raise SnapshotError(f"invalid {label}")
@@ -131,11 +138,14 @@ def _layout(description: dict, limits: SnapshotLimits, depth: int = 0) -> _Layou
             if child.size != width:
                 raise SnapshotError(f"VMState size mismatch for {key!r}")
         else:
-            match = re.fullmatch(r"(u?int)(8|16|32|64)( le| equal)?", kind)
+            # QEMU's "int32 le" performs a <= check on restore. Its wire
+            # representation is the same big-endian int32 as "int32 equal".
+            match = re.fullmatch(r"(u?int)(8|16|32|64)( equal)?",
+                                 "int32" if kind == "int32 le" else kind)
             if match:
                 if width != int(match[2]) // 8:
                     raise SnapshotError(f"integer width mismatch for {key!r}")
-                integer = ("little" if match[3] == " le" else "big", match[1] == "int")
+                integer = ("big", match[1] == "int")
             elif kind == "bool":
                 if width != 1:
                     raise SnapshotError(f"boolean width mismatch for {key!r}")
@@ -205,6 +215,7 @@ class QemuSaveSnapshot:
             self.cpus: dict[int, dict] = {}
             self.apics: dict[int, dict] = {}
             self.cpu_common: dict[int, dict] = {}
+            self._devices: dict[tuple[str, int], _DeviceSection] = {}
             self._read_stream(configuration, devices)
         except BaseException:
             self._file.close()
@@ -326,6 +337,10 @@ class QemuSaveSnapshot:
             result["subsections"] = subsections
         return result
 
+    def _device_state(self, layout: _Layout) -> dict:
+        return {"version": layout.version, "fields": self._state(layout, True),
+                "subsection_versions": {sub.name: sub.version for sub in layout.subsections}}
+
     def _read_stream(self, configuration: _Layout, devices: dict):
         if self._read(8) != b"QEVM\0\0\0\x03" or self._uint(1) != 7:
             raise SnapshotError("expected QEMU v3 stream with configuration")
@@ -378,14 +393,13 @@ class QemuSaveSnapshot:
             if key == ("ram", 0):
                 self._read_ram_section()
             else:
+                layout = devices[key]
+                self._devices[key] = _DeviceSection(section_id, self._file.tell(), layout)
                 destination = destinations.get(key[0])
-                value = self._state(devices[key], destination is not None)
-                if destination is not None:
-                    destination[key[1]] = {
-                        "version": devices[key].version, "fields": value,
-                        "subsection_versions": {sub.name: sub.version
-                                                for sub in devices[key].subsections},
-                    }
+                if destination is None:
+                    self._state(layout, False)
+                else:
+                    destination[key[1]] = self._device_state(layout)
             if self._uint(1) != 0x7e or self._uint(4) != section_id:
                 raise SnapshotError("migration section footer mismatch")
             if kind in (3, 4):
@@ -430,6 +444,29 @@ class QemuSaveSnapshot:
                 block.present += 1
             block.pages[page] = location
             block.records += 1
+
+    def device_inventory(self) -> list[dict]:
+        """List described non-RAM sections without reading their field payloads."""
+        return [{"name": name, "instance_id": instance, "section_id": section.section_id,
+                 "vmsd_name": section.layout.name, "version": section.layout.version,
+                 "serialized_bytes": section.layout.size}
+                for (name, instance), section in sorted(self._devices.items())]
+
+    def read_device(self, name: str, instance: int) -> dict:
+        """Read a fresh section record by exact migration name/instance identity.
+
+        Only the selected, already validated layout is decoded. The caller may
+        retain the result for reuse; this method does not cache mutable records
+        or interpret device behavior. Keep the save open and immutable.
+        """
+        name = _name(name, "device name")
+        instance = _integer(instance, "device instance", 0xffffffff)
+        section = self._devices.get((name, instance))
+        if section is None:
+            raise SnapshotError(f"device {name!r} instance {instance} is absent")
+        self._file.seek(section.offset)
+        return {"name": name, "instance_id": instance, "section_id": section.section_id,
+                "vmsd_name": section.layout.name, **self._device_state(section.layout)}
 
     def expect_pc(self, cpu: int, pc: int):
         """Require captured env.eip (RIP in 64-bit code); never reposition it."""
