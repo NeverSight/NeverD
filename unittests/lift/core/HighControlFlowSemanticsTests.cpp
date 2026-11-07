@@ -9,6 +9,7 @@
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
@@ -268,6 +269,10 @@ std::optional<uint64_t> execute(const HighFunc &F, uint64_t Condition,
                                       : V.zextOrTrunc(OutputBits))
           .getZExtValue();
     }
+    if (E->Kind == ExprKind::BinOp && E->Op == NdOp::SELECT &&
+        E->Operands.size() == 3)
+      return Value(E->Operands[0]) ? Value(E->Operands[1])
+                                   : Value(E->Operands[2]);
     if (E->Kind == ExprKind::BinOp && E->Operands.size() == 2) {
       if (E->Op == NdOp::BOOL_AND)
         return uint64_t(Value(E->Operands[0]) && Value(E->Operands[1]));
@@ -12102,4 +12107,79 @@ TEST(HighControlFlowDAG, SharedPurePrefixCannotHideAnEffectfulSibling) {
   EXPECT_EQ(Body.front().Kind, StmtKind::Assign);
   EXPECT_EQ(Body.front().Val, Value);
   EXPECT_TRUE(containsVariable(Body));
+}
+
+TEST(HighControlFlowSemantics, LargeSourceNamesDeepConditionalValues) {
+  auto Work = [&] {
+    MedFunc F;
+    F.Entry = 0x1000;
+    F.Name = "large_conditional_values";
+    F.ReturnType = NdType::makeInt(8, false);
+    F.CC = CallingConv::Win64;
+    MedVar Input;
+    Input.Kind = MedVar::Param;
+    Input.Id = 0;
+    Input.Size = 8;
+    Input.RegOff = getTargetRegInfo(Arch::X64)
+                       .integerArgumentLayout(BinaryFormat::COFF)
+                       .Registers.front();
+    Input.TheArch = Arch::X64;
+    F.Params.push_back(Input);
+    // A reachable chain selects the large-CFG path without a large arithmetic
+    // workload. Its final value must survive the same presentation as a small
+    // function, rather than reaching the C writer's recursion placeholder.
+    F.Blocks.resize(limits::kMaxStructurableMedBlocks + 1);
+    for (unsigned I = 0; I < F.Blocks.size(); ++I) {
+      auto &B = F.Blocks[I];
+      B.Id = I;
+      B.StartAddr = F.Entry + I * 0x10;
+      B.EndAddr = B.StartAddr + 0x10;
+      if (I)
+        B.Preds.push_back(I - 1);
+      if (I + 1 < F.Blocks.size()) {
+        B.Succs.push_back(I + 1);
+        B.Ops.push_back(operation(NdOp::BRANCH, B.StartAddr, {},
+                                  {MedVar::makeConst(B.StartAddr + 0x10, 8)}));
+      }
+    }
+    auto &B = F.Blocks.back();
+    auto Temp = [](int Id, uint16_t Bytes) {
+      MedVar V;
+      V.Kind = MedVar::Temp;
+      V.Id = Id;
+      V.SSAVer = 1;
+      V.Size = Bytes;
+      V.TheArch = Arch::X64;
+      return V;
+    };
+    MedVar Value = MedVar::makeConst(0, 8);
+    for (unsigned I = 0; I < 300; ++I) {
+      const auto Condition = Temp(1 + 3 * I, 1);
+      const auto Choice = Temp(2 + 3 * I, 8);
+      const auto Masked = Temp(3 + 3 * I, 8);
+      B.Ops.push_back(operation(NdOp::INT_EQUAL, B.StartAddr + B.Ops.size(),
+                                Condition, {Input, MedVar::makeConst(I, 8)}));
+      B.Ops.push_back(operation(NdOp::SELECT, B.StartAddr + B.Ops.size(),
+                                Choice,
+                                {Condition, MedVar::makeConst(I, 8), Value}));
+      B.Ops.push_back(operation(NdOp::INT_AND, B.StartAddr + B.Ops.size(),
+                                Masked, {Choice, MedVar::makeConst(3, 8)}));
+      Value = Masked;
+    }
+    B.Ops.push_back(
+        operation(NdOp::RETURN, B.StartAddr + B.Ops.size(), {}, {Value}));
+    B.EndAddr = B.StartAddr + B.Ops.size();
+    auto High = MedToHighConverter().convert(F, Arch::X64);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::COFF;
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(HighCEmitter().emit({High}, Out, Options));
+    EXPECT_EQ(Text.find("truncated:"), std::string::npos);
+    EXPECT_EQ(Text.find("unknown value"), std::string::npos);
+    for (uint64_t Value : {0u, 1u, 17u, 127u, 298u, 299u, 300u, 999u})
+      EXPECT_EQ(execute(High, Value, true), Value < 300 ? Value & 3 : 0);
+  };
+  runWithLargeStackThreads(1, Work);
 }

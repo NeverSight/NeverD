@@ -1833,6 +1833,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
       structureExceptionRegions(Func, Med);
     attachSEHHandlerEntryCopies(Func, Med);
     reduceLateGotos(Func);
+    nameRepeatedValues(Func);
     anchorDispatcherEntries(Func);
     Trace.high(Func, "after-exceptions");
     return Func;
