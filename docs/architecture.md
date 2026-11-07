@@ -10405,6 +10405,8 @@ no authenticated table-load or relocation-suppression permission.
 Display registration frames retain original instructions, handler roots and
 loader metadata without running native frame/callback closure. Their state
 receipt remains incomplete with an explicit deferred-proof diagnostic.
+Those frames have no exceptional edges either, so a no-return proof reads a
+scope or try block in one as a handler that may resume the function.
 `PipelineAnalysis.cpp` enumerates checked external PE32 C++ callback and handler
 entries for the current analysis selection. They remain separate analysis
 bodies rather than new ordinary ABI entries in the image. Post-lift native

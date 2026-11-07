@@ -80,7 +80,9 @@ bool endsItsPath(const MedBlock &Block, const MedOp &Op) {
 
 bool provesNoReturn(const MedFunc &Func, Arch TheArch,
                     const std::set<va_t> &KnownNoReturn) {
-  if (Func.Blocks.empty())
+  if (Func.Blocks.empty() ||
+      hasUnmodeledRegistrationResumption(Func.ExceptionMetadata,
+                                         Func.RegistrationStates))
     return false;
 
   std::map<int, const MedBlock *> BlocksById;
