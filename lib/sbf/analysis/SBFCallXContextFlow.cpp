@@ -458,6 +458,19 @@ uint64_t stateBytes(const ContextState &State) {
   return Bytes;
 }
 
+std::optional<uint64_t> maximumCopyLength(const ProvenValueSet &Lengths) {
+  if (Lengths.unknown())
+    return std::nullopt;
+  uint64_t Maximum = 0;
+  for (const auto &Length : Lengths.values()) {
+    if (Length.ValueKind != RegisterValue::Kind::Constant ||
+        Length.Value > kMaxModeledScratchBytes)
+      return std::nullopt;
+    Maximum = std::max(Maximum, Length.Value);
+  }
+  return Maximum;
+}
+
 void profileInput(llvm::FoldingSetNodeID &ID, size_t Block, bool Generic,
                   const ContextState &Input) {
   ID.AddInteger(Block);
@@ -2763,10 +2776,71 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
   if (ActiveEntries.contains(EntrySlot) ||
       ActiveEntries.size() >= Program.Config.MaxCallDepth - 1)
     return std::optional<MemoryTransferInstantiation>{};
-  const auto Requested = Input.Registers[3].singleton();
-  if (Requested.ValueKind != RegisterValue::Kind::Constant ||
-      Requested.Value > kMaxModeledScratchBytes)
+  if (!maximumCopyLength(Input.Registers[3]))
     return std::optional<MemoryTransferInstantiation>{};
+  if (Input.Registers[3].values().size() > 1) {
+    std::optional<MemoryTransferInstantiation> Joined;
+    uint64_t JoinedBytes = 0;
+    const auto InstantiationBytes =
+        [](const MemoryTransferInstantiation &Path) {
+          return stateBytes(Path.Output) + sizeof(MemoryTransferInstantiation) -
+                 sizeof(ContextState) +
+                 Path.Effects.Writes.capacity() * sizeof(MemoryWrite);
+        };
+    const auto ReleaseJoined =
+        llvm::scope_exit([&] { RetainedBytes -= JoinedBytes; });
+    // Prove all members of the existing finite domain. Source/destination
+    // alternatives remain independent: no length/address correlation is
+    // guessed.
+    for (const auto &Length : Input.Registers[3].values()) {
+      const uint64_t AlternativeBytes = stateBytes(Input);
+      if (auto Error = retain(AlternativeBytes))
+        return std::move(Error);
+      const auto ReleaseAlternative =
+          llvm::scope_exit([&] { RetainedBytes -= AlternativeBytes; });
+      ContextState Alternative = Input;
+      Alternative.Registers[3] = Length;
+      Alternative.Origins[3] = Length;
+      auto Path = instantiateMemoryTransferPath(Owner, Entry, Alternative);
+      if (!Path)
+        return Path.takeError();
+      if (!*Path)
+        return std::optional<MemoryTransferInstantiation>{};
+      // The completed child is still live while its result is joined. Charge
+      // it until its storage is released or transferred to the joined result.
+      uint64_t PathBytes = InstantiationBytes(**Path);
+      if (auto Error = retain(PathBytes))
+        return std::move(Error);
+      const auto ReleasePath =
+          llvm::scope_exit([&] { RetainedBytes -= PathBytes; });
+      if (Joined) {
+        // The syscall witness describes one actual copy size and location.
+        // Do not invent one when the proven cases execute different syscalls.
+        if (Joined->CopySlot != (**Path).CopySlot ||
+            Joined->CopySize != (**Path).CopySize)
+          return std::optional<MemoryTransferInstantiation>{};
+        if (auto Error = joinStates(Joined->Output, (**Path).Output))
+          return std::move(Error);
+        Joined->Effects.include((**Path).Effects, symbolicInputs(), Program);
+        Joined->Instructions += (**Path).Instructions;
+        Joined->Stores += (**Path).Stores;
+      } else {
+        Joined = std::move(**Path);
+        JoinedBytes = PathBytes;
+        PathBytes = 0;
+      }
+      const uint64_t Bytes = InstantiationBytes(*Joined);
+      if (Bytes > JoinedBytes) {
+        if (auto Error = retain(Bytes - JoinedBytes))
+          return std::move(Error);
+      } else {
+        RetainedBytes -= JoinedBytes - Bytes;
+      }
+      JoinedBytes = Bytes;
+    }
+    return Joined;
+  }
+  const auto Requested = Input.Registers[3].singleton();
   constexpr uint64_t ResultOverhead = sizeof(MemoryTransferInstantiation) -
                                       sizeof(ContextState) + sizeof(size_t) +
                                       4 * sizeof(void *);
@@ -3159,15 +3233,14 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     }
     return false;
   }
-  const auto CopyLength = State.Registers[3].singleton();
+  const auto CopyLength = maximumCopyLength(State.Registers[3]);
   bool CopiesCapturedValue = false;
   bool CopiesKnownFrameRange = false;
   bool UpdatesKnownDescriptor = false;
   // A specialized loop can also widen its destination to unknown. The
   // generic body identifies the transfer wrapper even when the specialized
   // path uses only inline stores and never reaches its copy syscall.
-  if (Callee && (Callee->Generic || Callee->Effects.Unknown) &&
-      CopyLength.ValueKind == RegisterValue::Kind::Constant &&
+  if (Callee && (Callee->Generic || Callee->Effects.Unknown) && CopyLength &&
       GenericContexts.at(Callee->EntryBlock)->HasMemoryTransfer) {
     for (unsigned R : {1u, 2u})
       CopiesCapturedValue |= llvm::any_of(
@@ -3176,10 +3249,10 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
           });
     const auto Source = memoryAddress(State.Registers[2].singleton());
     const auto Destination = memoryAddress(State.Registers[1].singleton());
-    // A zero-length append can still read and update a descriptor. Admit
-    // only a known holder here; replay proves every branch and nested call.
+    // A bounded append can read and update a descriptor before returning.
+    // Admit only a known holder; replay proves every branch and nested call.
     UpdatesKnownDescriptor =
-        CopyLength.Value == 0 && Callee->HasInlineStores && Destination &&
+        Callee->HasInlineStores && Destination &&
         State.Scratch.Values.readValues(*Destination).singleton().ValueKind ==
             RegisterValue::Kind::StackAddress;
     // An inline stack-copy loop can erase unrelated saved pointers when its
@@ -3191,26 +3264,25 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
         Callee->HasInlineStores && Source && Destination &&
         Source->ValueKind == RegisterValue::Kind::StackAddress &&
         Destination->ValueKind == RegisterValue::Kind::StackAddress &&
-        State.Scratch.Values.canModelRange(*Source, CopyLength.Value) &&
-        State.Scratch.Values.canModelRange(*Destination, CopyLength.Value) &&
+        State.Scratch.Values.canModelRange(*Source, *CopyLength) &&
+        State.Scratch.Values.canModelRange(*Destination, *CopyLength) &&
         (!State.Scratch.Values.empty() || !State.OriginScratch.Values.empty());
     if (Source && !CopiesCapturedValue)
-      State.Scratch.Values.visitCells(
-          [&](const RegisterValue &Address, const ProvenValueSet &Value) {
-            if (Address.ValueKind != Source->ValueKind ||
-                Address.ValueKind == RegisterValue::Kind::SymbolicAddress)
-              return;
-            const uint64_t Offset = Address.Value - Source->Value;
-            CopiesCapturedValue |=
-                Offset < CopyLength.Value &&
-                sizeof(uint64_t) <= CopyLength.Value - Offset &&
-                llvm::any_of(
-                    Value.values(),
-                    [](const RegisterValue &Stored) {
-                      return Stored.ValueKind ==
-                             RegisterValue::Kind::SymbolicAddress;
-                    });
-          });
+      State.Scratch.Values.visitCells([&](const RegisterValue &Address,
+                                          const ProvenValueSet &Value) {
+        if (Address.ValueKind != Source->ValueKind ||
+            Address.ValueKind == RegisterValue::Kind::SymbolicAddress)
+          return;
+        const uint64_t Offset = Address.Value - Source->Value;
+        CopiesCapturedValue |=
+            Offset < *CopyLength && sizeof(uint64_t) <= *CopyLength - Offset &&
+            llvm::any_of(
+                Value.values(),
+                [](const RegisterValue &Stored) {
+                  return Stored.ValueKind ==
+                         RegisterValue::Kind::SymbolicAddress;
+                });
+      });
   }
   if ((CopiesCapturedValue || CopiesKnownFrameRange ||
        UpdatesKnownDescriptor) &&

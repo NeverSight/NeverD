@@ -785,7 +785,9 @@ copy syscalls and repeated block/register states cannot establish a returning
 path. Ignoring memory in the repeated-state check can
 reject a memory-driven loop, but cannot prove a path that did not return.
 `instantiated_memory_path_instructions` and `instantiated_memory_path_stores`
-record successful inline paths; `instantiated_copy_syscall_slot` and
+record analysis work across successful inline paths, including all proven
+length alternatives; these are not runtime execution counts.
+`instantiated_copy_syscall_slot` and
 `instantiated_copy_bytes` still refer only to an actual `memcpy`/`memmove`
 syscall. Store effects include every complete destination alternative, without
 assuming that different captures are disjoint. This propagation is demanded by
@@ -795,8 +797,13 @@ stores. The latter lets a short stack-copy loop preserve fields outside its
 actual writes even when the copied bytes are unknown. Plain syscall wrappers
 keep their existing summary path: eagerly preserving their unrelated caller
 snapshots can displace useful later specializations. Unknown addresses do not
-authorize the frame-range path. A zero-length append through a known holder
-can also demand this proof: its nested copy must reach a matched return, and
+authorize the frame-range path. A bounded append through a known holder can
+also demand this proof. For a finite set of lengths, every member of the
+existing value domain must complete its own proof before results are joined;
+source and destination alternatives remain independent. Unknown branches or
+inconsistent copy-syscall witnesses reject the entire joined proof. All cases
+share the original work, retained-memory and call-depth limits. An empty
+nested copy must still reach a matched return, and
 the wrapper's descriptor loads and stores still execute through the canonical
 memory owner. A zero argument alone does not establish preservation or erase
 an unknown branch or write.
