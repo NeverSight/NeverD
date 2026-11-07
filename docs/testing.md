@@ -21448,3 +21448,5 @@ recorded baseline; this change adds none and does not weaken the audit.
 `HighControlFlowSemantics.UnusedValuesKeepPlainReadsAndTheirAddresses` checks that unused direct and nested ordinary loads retain their original address and evaluation in HighIR dead-value cleanup.
 
 `HighControlFlowSemantics.SimplifierPublishesSharedReplacementAtEveryUse` checks shared DAG replacement publication in both root orders, independent return values and a stable second cleanup invocation.
+
+`SymExpr.ConditionalConstantWindowsIgnorePredicatesAndRespectWork` and `ConditionalSlicesKeepDifferentAndUnknownArms` check branch-common constant windows, exact work refusal and differing or unknown arms.

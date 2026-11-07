@@ -1768,3 +1768,53 @@ TEST(SymExpr, IncrementalProductsKeepCanonicalCoefficientsAndRepeatedFactors) {
 }
 
 } // namespace
+
+TEST(SymExpr, ConditionalConstantWindowsIgnorePredicatesAndRespectWork) {
+  SymContext C;
+  const auto A = C.mkVar("first", 64), B = C.mkVar("second", 64);
+  auto PredicateValue = A;
+  for (unsigned I = 0; I < 256; ++I)
+    PredicateValue = C.mkXor(C.mkAdd(PredicateValue, B),
+                             C.mkLShr(PredicateValue, C.mkConst(64, 7)));
+  const auto Predicate = C.mkEq(PredicateValue, C.mkZero(64));
+  const auto Inner =
+      C.mkIte(Predicate, C.mkConst(64, 0xEE49), C.mkConst(64, 0xEE4B));
+  const auto Value =
+      C.mkIte(C.mkEq(B, C.mkZero(64)), Inner, C.mkConst(64, 0xEE48));
+  const auto Before = C.numNodes();
+  unsigned Remaining = 256;
+  EXPECT_EQ(C.constantWindow(Value, 32, 32, Remaining), llvm::APInt(32, 0));
+  EXPECT_EQ(C.numNodes(), Before);
+  const auto Used = 256 - Remaining;
+  ASSERT_GT(Used, 0u);
+  ASSERT_LT(Used, 32u);
+  unsigned Exact = Used, Short = Used - 1;
+  EXPECT_EQ(C.constantWindow(Value, 32, 32, Exact), llvm::APInt(32, 0));
+  EXPECT_EQ(Exact, 0u);
+  EXPECT_FALSE(C.constantWindow(Value, 32, 32, Short));
+  EXPECT_EQ(C.mkExtract(Value, 32, 32), C.mkZero(32));
+  EXPECT_FALSE(C.constantWindow(Value, 0, 8));
+}
+
+TEST(SymExpr, ConditionalSlicesKeepDifferentAndUnknownArms) {
+  SymContext C;
+  const auto Condition = C.mkVar("condition", 1);
+  const auto Unknown = C.mkVar("unknown", 64);
+  const auto Same = C.mkIte(Condition, C.mkConst(64, 0x12345678000000AA),
+                            C.mkConst(64, 0x12345678000000BB));
+  EXPECT_EQ(C.mkExtract(Same, 32, 32), C.mkConst(32, 0x12345678));
+  const auto Different = C.mkIte(Condition, C.mkConst(64, 0x12345678000000AA),
+                                 C.mkConst(64, 0xFEDCBA98000000BB));
+  const auto Partial =
+      C.mkIte(Condition, C.mkConst(64, 0x12345678000000AA), Unknown);
+  for (const auto Value : {Different, Partial}) {
+    EXPECT_FALSE(C.constantWindow(Value, 32, 32));
+    const auto Slice = C.mkExtract(Value, 32, 32);
+    EXPECT_FALSE(C.isConst(Slice));
+    for (uint64_t Selected : {0u, 1u})
+      for (uint64_t Input : {UINT64_C(0), UINT64_C(0xA5A5A5A512345678)}) {
+        const uint64_t Values[] = {Selected, Input};
+        EXPECT_EQ(C.evalU64(Slice, Values), C.evalU64(Value, Values) >> 32);
+      }
+  }
+}
