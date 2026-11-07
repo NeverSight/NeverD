@@ -1,0 +1,353 @@
+{
+  "scope": "Native LDS/LES/LSS/LFS/LGS compiler interfaces; NeverD admission census correction",
+  "qualification_driver": {
+    "path": "make-evidence.py",
+    "sha256": "bdf6e9879fe1cf4b87074d91a6ef0bdd084dc395492725e73b2c922c1316d6c5",
+    "bytes": 8575
+  },
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-far-pointer-20261028",
+  "sources": {
+    "llvm": "a7738f3f28e71edc72651e475ea930a9e8946d27",
+    "neverc": "a65b031277ba86c103ebff22d2450b3b4b4ab891",
+    "neverd_base": "25616f534ed055582f5645dde1fbb5ce14977815",
+    "manifests": [
+      {
+        "path": "llvm-published-source.json",
+        "sha256": "7d4532170112eee204562368ceb7a2a37da79f0598dde9da095fb812fe4246e1",
+        "bytes": 900
+      },
+      {
+        "path": "neverc-published-source.json",
+        "sha256": "453e0606b2dfb8a101fa42216a4d1eaaf88df1af88a27b9bcd3a4109738600de",
+        "bytes": 3125
+      },
+      {
+        "path": "neverd-final-source.json",
+        "sha256": "a46f01f0640c34603c7a3f6e56acf8af19b43780f879627600d021356da5c6dc",
+        "bytes": 401
+      }
+    ],
+    "neverd_patch": {
+      "path": "neverd-final.patch",
+      "sha256": "5be5c1d0828de81eb03b649fc96e0a1697640ebdd2d79eb5da7969f5e1254947",
+      "bytes": 7553
+    },
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "release_and_pins_changed": false
+  },
+  "contract": {
+    "llvm_interfaces": {
+      "llvm.x86.lds16": {
+        "image_bytes": 4,
+        "result_bits": 16
+      },
+      "llvm.x86.lds32": {
+        "image_bytes": 6,
+        "result_bits": 32
+      },
+      "llvm.x86.les16": {
+        "image_bytes": 4,
+        "result_bits": 16
+      },
+      "llvm.x86.les32": {
+        "image_bytes": 6,
+        "result_bits": 32
+      },
+      "llvm.x86.lfs16": {
+        "image_bytes": 4,
+        "result_bits": 16
+      },
+      "llvm.x86.lfs32": {
+        "image_bytes": 6,
+        "result_bits": 32
+      },
+      "llvm.x86.lfs64": {
+        "image_bytes": 10,
+        "result_bits": 64
+      },
+      "llvm.x86.lgs16": {
+        "image_bytes": 4,
+        "result_bits": 16
+      },
+      "llvm.x86.lgs32": {
+        "image_bytes": 6,
+        "result_bits": 32
+      },
+      "llvm.x86.lgs64": {
+        "image_bytes": 10,
+        "result_bits": 64
+      },
+      "llvm.x86.lss16": {
+        "image_bytes": 4,
+        "result_bits": 16
+      },
+      "llvm.x86.lss32": {
+        "image_bytes": 6,
+        "result_bits": 32
+      },
+      "llvm.x86.lss64": {
+        "image_bytes": 10,
+        "result_bits": 64
+      }
+    },
+    "neverc_interfaces": 9,
+    "signature": "One const pointer to a packed image; unsigned 16/32/64-bit offset result. No frontend inline assembly.",
+    "effects": "One instruction owns image read, selector checks, hidden segment installation and descriptor accessed-bit writes. Exact volatile image read and separate unknown volatile descriptor read/write MMOs; implicit segment definitions, scheduling boundaries, unchanged arithmetic flags.",
+    "mode_guards": "LDS/LES require 32-bit code; 64-bit results require long mode; code16 refused. NeverC does not advertise LDS/LES C builtins and diagnoses their IR on its x64 backend.",
+    "neverd": "Strict and permissive far-pointer lifting remain refused. Coupled offset/selector/hidden state and original-instruction continuation are still missing.",
+    "caller": "Maintain compiler ABI segment invariants. No automatic TLS restoration or stack switching. Original addressing/segment/default-stack provenance and LSS successor adjacency are not represented."
+  },
+  "compiler_validation": {
+    "llvm": {
+      "test_files_passed": 10,
+      "initial_run": {
+        "path": "llvm-focused.log",
+        "sha256": "22feda0f71ce59b9349e34d75e2cc9ea73ee6eac3c298bac2e1ee069aa5fe1ee",
+        "bytes": 19384
+      },
+      "initial_failure": "Stale CPUID fixture expected EBX store; current lowering transports EBX via an RBX exchange. Corrected independent of far-pointer lowering.",
+      "recheck": {
+        "path": "llvm-system-recheck.log",
+        "sha256": "07ed15037c5f1bf09918e2ec6b0fb5bc87a0c6998a5c848e51b1686ba44b614c",
+        "bytes": 16002
+      },
+      "positive_compilations": 24,
+      "function_profiles": 114,
+      "formats": [
+        "ELF",
+        "COFF",
+        "Mach-O"
+      ],
+      "code_modes": [
+        "i386",
+        "x86_64"
+      ],
+      "optimizations": [
+        "O0",
+        "O2"
+      ],
+      "checks": [
+        "native opcode",
+        "unused call retained",
+        "MIR image extent and segment defs",
+        "unknown descriptor effects",
+        "invalid mode/signature diagnostics"
+      ]
+    },
+    "neverc": {
+      "passed": 96,
+      "failed": 0,
+      "junit": {
+        "path": "neverc-final.xml",
+        "sha256": "da8a373e92ae256b36599daff62b6bb07607e30ebcc0f0a12e8493f3fc925165",
+        "bytes": 91632
+      },
+      "build": {
+        "path": "neverc-build-formatted.log",
+        "sha256": "3eb01e6088eae99b73209ddaf198f1870ca85fed7f88c9ba32ffdff181beba8a",
+        "bytes": 925028
+      },
+      "far_pointer_frontend_profiles": 18,
+      "malformed_C_calls": 27,
+      "backend_IR_signatures": 13,
+      "backend_opcodes": 9
+    },
+    "generators": {
+      "baseline_passed": 60,
+      "baseline": {
+        "path": "generator-tests.log",
+        "sha256": "d82f0d52edcba39f637a2bed61f607a6264c34046898e6c13221e618dd7e1026",
+        "bytes": 160
+      },
+      "affected_rerun_passed": 10,
+      "includes_two_new_cases": true
+    },
+    "shared_driver_x87": {
+      "path": "shared-driver-x87/qualification.json",
+      "sha256": "0b071781dba53338f1d9ee5bd600fd64788e9aff10e07349554867b19e37e33c",
+      "bytes": 5090
+    }
+  },
+  "native_validation": {
+    "record": {
+      "path": "qualified-final/qualification.json",
+      "sha256": "e199992e23e82442f04f8c58ec032dc93c6466c1bbb7f9833d710bdb09dc0732",
+      "bytes": 12610
+    },
+    "passed": true,
+    "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "profiles": [
+      {
+        "profile": "llc-O0",
+        "state_observations": 4320,
+        "stopped_observations": 1440,
+        "boundary_observations": 18,
+        "fault_observations": 186,
+        "object_sha256": "887793d99fc24a7160df1e8351105a58256594a8a7da7a24ce3c5b86e11979b3",
+        "binary_sha256": "64bf3dc551b250b51220bd201f2f0f329ee6d60c93eaa12435aff8f9724ccbcb"
+      },
+      {
+        "profile": "llc-O2",
+        "state_observations": 4320,
+        "stopped_observations": 1440,
+        "boundary_observations": 18,
+        "fault_observations": 186,
+        "object_sha256": "e351f050003868717e6a1f2445940a0fbe1e2069a52ca05f353b33fce33921d3",
+        "binary_sha256": "edb7c2bdf4e19a189f4f8984e0f182a162a65f2cae9d57274ddcf4b532698a32"
+      },
+      {
+        "profile": "neverc-O0",
+        "state_observations": 4320,
+        "stopped_observations": 1440,
+        "boundary_observations": 18,
+        "fault_observations": 186,
+        "object_sha256": "b5d47fc22a7266134be33597fb2090b5671d3b39d39765c9156cbab5c44f1558",
+        "binary_sha256": "5d5646fd9b3da97ad196574369bd7f986bf62e70442524fec9a1e8cee2c8eaba"
+      },
+      {
+        "profile": "neverc-O2",
+        "state_observations": 4320,
+        "stopped_observations": 1440,
+        "boundary_observations": 18,
+        "fault_observations": 186,
+        "object_sha256": "0a416c37ea13549f6ed0e58afa8905b7befd57913f48965c243630f6416ec639",
+        "binary_sha256": "59f76f65d6c5cc1ed13d3009fb014f369f74fc94bbe5283d487831bfdb18ddb9"
+      },
+      {
+        "profile": "neverc-llvm-O0",
+        "state_observations": 4320,
+        "stopped_observations": 1440,
+        "boundary_observations": 18,
+        "fault_observations": 186,
+        "object_sha256": "cc5686609818ff1d10df75ec2514b014408cc7db2ae8c71c0ac1a77a521c585a",
+        "binary_sha256": "69a61e9358c3cd614845eb0a8cf6760cfb4a823cbdd6a7533bfdb9941de0e954"
+      },
+      {
+        "profile": "neverc-llvm-O2",
+        "state_observations": 4320,
+        "stopped_observations": 1440,
+        "boundary_observations": 18,
+        "fault_observations": 186,
+        "object_sha256": "0cb606d5b5247921ad0d93c99ab17d88af1eff463511956c06c9c26ae5bec4ee",
+        "binary_sha256": "5a3224b7964c6b5d25fb2f2baf4fd18908a485a05ff609b57f0cb9ef20aabee2"
+      }
+    ],
+    "stable_inputs": true,
+    "state_pairs_total": 25920,
+    "stopped_pairs_within_state_total": 8640,
+    "exact_boundary_completions_total": 108,
+    "fault_observations_total": 1116,
+    "observation_stream_comparison": {
+      "path": "observation-stream-comparison.json",
+      "sha256": "55ff5dbc2bf88bf2b48049668d965d21a5020b286a476cd5b6c6db090108768e",
+      "bytes": 595
+    },
+    "state": "Original independently encoded instructions versus each compiler path; full offset/selector/FSbase/GSbase/SS comparisons, image canaries, all 16 alignments, five offset values, GDT/LDT/null selectors, readable and execute-only code, writable/read-only/absent data.",
+    "stopped_state": "Null FS/GS selectors 1..3 are captured at a TRAP_TRACE ptrace stop immediately after the native instruction, before userspace interrupt return. Full GPR preservation and partial/zero-extension writes plus arithmetic flags/DF are checked. The stopped child is terminated, not resumed.",
+    "faults": "Single-step records the actual pre-instruction GPR bank and flags. #PF/#GP/#NP/#SS retain all GPRs, flags/DF and incoming selector/base state; PC is the actual far load, marker remains pre-operation, and page faults check CR2.",
+    "negative_control": {
+      "path": "negative-final.json",
+      "sha256": "672e21566f8d7c3b4d8bff12bed84c6583437e814e4eaaa428d549cbf2559a8a",
+      "bytes": 126
+    },
+    "exclusions": [
+      "other CPU models",
+      "i386 runtime",
+      "code16",
+      "privileged descriptor-table accessed-bit faults",
+      "alignment-check exceptions",
+      "LSS interrupt/debug shadow",
+      "null selectors 1..3 after Linux interrupt/signal return",
+      "complete lifted machine-state continuation"
+    ]
+  },
+  "host_boundary_diagnosis": {
+    "initial_failure": {
+      "path": "qualified.log",
+      "sha256": "9435f2579ef50fcc9e756d969f92056038aa78160c80f1983df795bde76bb94f",
+      "bytes": 1530
+    },
+    "repeated_diagnostic": {
+      "path": "null-selector-diagnostic.json",
+      "sha256": "caa207cc412f44dba3dacc823f4fce148d0750e03263287e514d9d75ba6eebc4",
+      "bytes": 1194
+    },
+    "independent_failure": "Original raw LGS64, selector 2, observed zero; 1 failure in 20 complete repetitions. This was not specific to generated code.",
+    "controlled_reproduction": {
+      "source": {
+        "path": "null-selector-boundary.c",
+        "sha256": "92b07943a3847bcb5107dff61d8884744a8dbb849a744cbeb6cda8c92d62f4d2",
+        "bytes": 1859
+      },
+      "results": {
+        "path": "null-selector-boundary.jsonl",
+        "sha256": "f71083464d2e6da6e0c61c7b56f4c3a22b5c1023b101425341b133872fcd295b",
+        "bytes": 1272
+      },
+      "cases": 16000,
+      "result": "For each null selector 1/2/3, all 1000 SIGTRAP-return observations cleared the selector. All 1000 direct/getpid/sched_yield controls per selector retained it. Selector zero remained zero."
+    },
+    "ptrace_control": {
+      "source": {
+        "path": "null-selector-ptrace.c",
+        "sha256": "b149c04bed0cbbfee3557491e0417deab5c51b5bc7b198f45cb460ced102a584",
+        "bytes": 1027
+      },
+      "results": {
+        "path": "null-selector-ptrace.jsonl",
+        "sha256": "49a62f9803e23b04348c2cc8c0a8cf0a1d255ec0e310b0bea32fe2a040078ac9",
+        "bytes": 244
+      },
+      "result": "All four null selector bit patterns retained at the single-step stop before userspace return."
+    },
+    "fix": "Change the oracle observation boundary. No retries, selector masking or removed matrix entries.",
+    "reference": "https://github.com/torvalds/linux/blob/master/arch/x86/kernel/signal_64.c"
+  },
+  "neverd_validation": {
+    "pinned_sdk_initial": {
+      "passed": 96,
+      "failed": 1,
+      "junit": {
+        "path": "neverd-pinned.xml",
+        "sha256": "51f195064e3aa10ffcb19fe1c4717f478b10fa07cbbdc131e3d416c476846af4",
+        "bytes": 96494
+      }
+    },
+    "correction": "Unowned FNOP/EMMS/FEMMS census samples require the x87-state contract and must be counted as explicit refusals. Production lifter is unchanged.",
+    "focused_recheck": {
+      "passed": 12,
+      "failed": 0,
+      "junit": {
+        "path": "neverd-corpus-recheck.xml",
+        "sha256": "dd52a9199ae621066195398cf88a761020e4430e72ca72024f35e67c71c3962a",
+        "bytes": 12355
+      }
+    },
+    "unique_tests_passing_after_correction": 97,
+    "x87_convert_state_passed": 85,
+    "far_pointer_admission_checks": 456,
+    "native_SDK_build_rerun": false
+  },
+  "documentation_validation": {
+    "neverd_i18n": {
+      "path": "neverd-docs-final.log",
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+      "bytes": 69
+    },
+    "neverc_links": {
+      "path": "neverc-docs-final.log",
+      "sha256": "125529d1a9a46607a5341c15e641a1b96abdc6af34c1749b990638171483521f",
+      "bytes": 128
+    },
+    "neverc_facts": {
+      "path": "neverc-facts-final.log",
+      "sha256": "c301ac6b3b5369439af026074cbb2a50ec8c8bf63d8cc21e3aceaf5b03e10d52",
+      "bytes": 167
+    }
+  },
+  "reference": "Intel SDM 325462, Vol. 2A: LDS/LES/LFS/LGS/LSS. https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf"
+}

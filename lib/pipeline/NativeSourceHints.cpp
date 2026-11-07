@@ -1622,6 +1622,19 @@ bool definedReturnPaths(const MedFunc &Function, Arch Architecture,
   return !Returns.empty();
 }
 
+// Generic recovery publishes an integer pair once a direct caller reads both
+// words and the body supplies them. Source inference asks for the same words
+// itself: it still states the scalar first and proves each carrier below, so
+// this is demand for the record and proves no part of it.
+bool hasGenericIntegerPairReturn(const MedFunc &Med, Arch Architecture) {
+  const auto &Registers = getTargetRegInfo(Architecture).IntReturnRegs;
+  return Med.MultiReturn.size() == 2 && Registers.size() >= 2 &&
+         !Med.MultiReturn[0].IsFP && !Med.MultiReturn[1].IsFP &&
+         Med.MultiReturn[0].RegOff == Registers[0] &&
+         Med.MultiReturn[1].RegOff == Registers[1] &&
+         Med.MultiReturn[0].Size == 8 && Med.MultiReturn[1].Size == 8;
+}
+
 std::optional<SourceFunctionTypeHint>
 nativeRecordReturn(const MedFunc &Med, const SourceFunctionTypeHint &Scalar,
                    SourceABICarrierKind Kind, unsigned Count = 2) {
@@ -1644,7 +1657,9 @@ nativeRecordReturn(const MedFunc &Med, const SourceFunctionTypeHint &Scalar,
       Scalar.ReturnLocation.Kind != Kind || Registers.size() < Count ||
       Med.DoesNotReturn || Med.IsVariadic ||
       Scalar.ReturnLocation.RegisterOffset != Registers[0] ||
-      Scalar.ReturnLocation.ValueBytes != 8 || !Med.MultiReturn.empty() ||
+      Scalar.ReturnLocation.ValueBytes != 8 ||
+      (!Med.MultiReturn.empty() &&
+       (Floating || !hasGenericIntegerPairReturn(Med, Architecture))) ||
       Med.FPReturnViaX87)
     return std::nullopt;
   size_t Remaining =
@@ -2104,16 +2119,21 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
   }
   const bool NoReturn = Med.DoesNotReturn && High.DoesNotReturn &&
                         hasProvenNoReturnExit(Med, Image.Arch);
-  if (Med.IsVariadic || !Med.MultiReturn.empty() || Med.FPReturnViaX87 ||
+  const bool GenericIntegerPair = hasGenericIntegerPairReturn(Med, Image.Arch);
+  if (Med.IsVariadic || (!Med.MultiReturn.empty() && !GenericIntegerPair) ||
+      Med.FPReturnViaX87 ||
       ((Med.DoesNotReturn || High.DoesNotReturn) && !NoReturn))
     return Reject("native function has a non-scalar or non-returning ABI");
+  // HighIR holds a generic pair as one double-word integer; only MedIR still
+  // has the first word's scalar type.
   if (Med.Blocks.empty() || High.Body.empty() ||
       Med.Params.size() != Med.TypedParams.size() ||
       Med.Params.size() >
           ::neverd::limits::pipeline::
               kNativeSourceHintsInferNativeSourceTypeHintMedParamsSizeLimit ||
       Med.Params.size() != High.Params.size() ||
-      !sameScalar(Med.ReturnType, High.ReturnType))
+      !sameScalar(Med.ReturnType,
+                  GenericIntegerPair ? Med.ReturnType : High.ReturnType))
     return Reject("native scalar parameter or return types are incomplete");
 
   const auto &TRI = getTargetRegInfo(Image.Arch);
@@ -2343,14 +2363,15 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
       Hint.ReturnLocation = {};
     }
   }
-  const auto PointerParameters = inferMedSourcePointerParameters(Med);
+  const auto PointerParameters =
+      inferMedSourcePointerParameterTypes(Med, Image.Arch);
   size_t SourceIndex = 0;
   for (size_t Index = 0; Index < Med.Params.size(); ++Index) {
     if (Med.Params[Index].Id < 0)
       continue;
     auto &Parameter = Hint.Parameters[SourceIndex++];
     if (PointerParameters[Index] && Parameter.Type->Kind == NdTypeKind::Int)
-      Parameter.Type = NdType::makePtr(NdType::makeVoid());
+      Parameter.Type = PointerParameters[Index];
   }
   if (!validateSourceABI(Hint, Diagnostic))
     return std::nullopt;
@@ -2385,7 +2406,7 @@ std::optional<SourceFunctionTypeHint> inferNativeSourceTypeHint(
   auto Exact = compilerRTPlatformVersionContract(Image, Med, Hint, Diagnostic);
   if (Exact.Recognized)
     return Exact.Signature;
-  if (ObserveIntegerPair)
+  if (ObserveIntegerPair || GenericIntegerPair)
     if (auto Pair = nativeRecordReturn(Med, Hint,
                                        SourceABICarrierKind::IntegerRegister))
       return Pair;

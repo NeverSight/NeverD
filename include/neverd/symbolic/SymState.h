@@ -312,6 +312,12 @@ public:
   std::optional<llvm::SmallVector<MaterializedRange, 8>>
   materializedRegionRanges(SymRef Base, uint64_t &WorkBudget) const;
 
+  /// Whether every byte is already materialized in this relative region.
+  /// Does not read, create inputs, or promise constant values. Offsets use
+  /// the same modular coordinates as the region's load/store operations.
+  bool hasMaterializedRegionRange(SymRef Base, uint64_t Offset,
+                                  uint16_t Bytes) const;
+
   /// Current absolute-memory extents, with the same read-only projection and
   /// work accounting as materializedRegionRanges(). No initial bytes appear.
   std::optional<llvm::SmallVector<MaterializedRange, 8>>

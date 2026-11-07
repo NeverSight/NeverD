@@ -1,0 +1,454 @@
+//===- PipelineSourceInline.cpp - Source call-body specialization ---------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Bounded expansion of actual source bodies at unavailable call operands.
+//===----------------------------------------------------------------------===//
+
+#include "PipelineSourceInline.h"
+
+#include "PipelineCallAbiDetail.h"
+#include "PipelineSourceCallHelpers.h"
+#include "PipelineSourceCallObservations.h"
+#include "PipelineSourceInlineHigh.h"
+#include "PipelineSourceStackAccesses.h"
+
+#include "neverd/backend/LLVMSourceUnknownValue.h"
+#include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/LLVMSourceMap.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
+#include "neverd/loader/BinaryImage.h"
+#include "neverd/pipeline/Limits.h"
+#include "neverd/pipeline/Pipeline.h"
+
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Transforms/Utils/Cloning.h"
+
+#include <map>
+#include <optional>
+#include <set>
+#include <utility>
+#include <vector>
+
+namespace neverd {
+namespace {
+
+std::optional<va_t> address(const llvm::Function &Function) {
+  auto Address = rewrite_source::getOriginalVA(Function);
+  if (!Address) {
+    llvm::consumeError(Address.takeError());
+    return std::nullopt;
+  }
+  return *Address;
+}
+
+bool unavailable(const llvm::Value *Value) {
+  for (unsigned I = 0; I != limits::pipeline::kSourceInlineOperandDepth; ++I) {
+    if (llvm_source_unknown::isValue(Value))
+      return true;
+    const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Value);
+    if (!Cast)
+      return false;
+    Value = Cast->getOperand(0);
+  }
+  return false;
+}
+
+bool sameSourceCarriers(const llvm::Function &Before,
+                        const llvm::Function &After) {
+  if (Before.arg_size() != After.arg_size() ||
+      Before.isVarArg() != After.isVarArg() ||
+      Before.getCallingConv() != After.getCallingConv())
+    return false;
+  // Joint source recovery may recognize an integer carrier as a pointer.
+  // It must not add inputs or alter their physical Win64 widths.
+  const auto Same = [](const llvm::Type *A, const llvm::Type *B) {
+    const auto Pointer = [](const llvm::Type *T) {
+      return T->isPointerTy() && T->getPointerAddressSpace() == 0;
+    };
+    return A == B || (Pointer(A) && B->isIntegerTy(64)) ||
+           (A->isIntegerTy(64) && Pointer(B));
+  };
+  if (!Same(Before.getReturnType(), After.getReturnType()))
+    return false;
+  for (unsigned P = 0; P < Before.arg_size(); ++P)
+    if (!Same(Before.getArg(P)->getType(), After.getArg(P)->getType()))
+      return false;
+  return true;
+}
+
+/// This is a candidate filter, never an unused-native-parameter proof. A
+/// pointer can still observe the physical slot. Only expanding the validated
+/// body below lets the source optimizer discard an unused formal operand.
+std::set<unsigned>
+absentStackFormals(const MedFunc &Function,
+                   const std::set<unsigned> *Requested = nullptr) {
+  if (Function.CC != CallingConv::Win64 || Function.SkippedSSA ||
+      Function.SourceParametersBound || Function.IsVariadic ||
+      Function.AnalystStackFrame ||
+      !Function.IntegerArgumentRegisters.empty() ||
+      !Function.FPParamScalarBytes.empty() ||
+      Function.EntryKind != StackEntryKind::Call ||
+      (Function.ExceptionMetadata &&
+       (Function.ExceptionMetadata->Personality != ExceptionPersonality::None ||
+        Function.ExceptionMetadata->ParseStatus !=
+            ExceptionParseStatus::Complete)))
+    return {};
+  const auto Layout =
+      getTargetRegInfo(Arch::X64).integerArgumentLayout(BinaryFormat::COFF);
+  std::set<unsigned> Candidates;
+  for (unsigned P = Layout.Registers.size(); P < Function.Params.size(); ++P)
+    if (!Requested || Requested->count(P))
+      Candidates.insert(P);
+  // These implicit entry stores consume the formal even when no MedOp names
+  // it. This source expansion does not prove their physical bytes unread.
+  for (const auto &[Parameter, Offset] : Function.MutableStackParamHomes)
+    if (Parameter >= 0)
+      Candidates.erase(unsigned(Parameter));
+  if (Candidates.empty())
+    return {};
+  // This scan includes raw register/flag SSA and PHI operands. The smaller
+  // body bound applies to the emitted observable graph, before expansion.
+  size_t Remaining = limits::pipeline::kSourceInlineExpansionOperations;
+  const auto Observe = [&](const MedVar &Value) {
+    if (Value.Kind == MedVar::Param && Value.Id >= 0)
+      Candidates.erase(unsigned(Value.Id));
+  };
+  for (const auto &Block : Function.Blocks) {
+    if (!Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty())
+      return {};
+    for (const auto &Phi : Block.Phis) {
+      if (Phi.Args.size() >= Remaining || Phi.ExceptionalEntry)
+        return {};
+      Remaining -= Phi.Args.size() + 1;
+      for (const auto &[Pred, Value] : Phi.Args)
+        Observe(Value);
+      if (Candidates.empty())
+        return {};
+    }
+    for (const auto &Op : Block.Ops) {
+      if (!Remaining)
+        return {};
+      --Remaining;
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        Observe(Op.Inputs[I]);
+      if (Candidates.empty())
+        return {};
+    }
+  }
+  for (const auto &Call : Function.CallInfos) {
+    if (Call.Args.size() > Remaining)
+      return {};
+    Remaining -= Call.Args.size();
+    for (const auto &Arg : Call.Args)
+      Observe(Arg);
+    if (Candidates.empty())
+      return {};
+  }
+  return Candidates;
+}
+
+/// Only an already admitted source query asks for descendants. Signature
+/// recovery has retained these bodies and original blocks; this does not lift
+/// another image region or add an interprocedural scan to the cheap gate.
+void addSourceInlineDependencies(const PipelineResult &Original,
+                                 const std::set<va_t> &Roots,
+                                 std::set<va_t> &Supports) {
+  if (Supports.size() == limits::pipeline::kSourceInlineCallees)
+    return;
+  llvm::DenseMap<va_t, const MedFunc *> Bodies;
+  Bodies.reserve(Original.OmittedCallees->Bodies.size());
+  for (const auto &Body : Original.OmittedCallees->Bodies)
+    Bodies.try_emplace(Body->Entry, Body.get());
+  std::vector<va_t> Pending(Supports.begin(), Supports.end());
+  std::set<va_t> Inspected = Supports;
+  size_t Remaining = limits::pipeline::kSourceInlineExpansionOperations;
+  for (size_t I = 0; I < Pending.size(); ++I) {
+    const auto At = Bodies.find(Pending[I]);
+    if (At == Bodies.end())
+      continue;
+    for (const auto &Block : At->second->Blocks)
+      for (const auto &Op : Block.Ops) {
+        if (!Remaining)
+          return;
+        --Remaining;
+        if (Op.Opcode != NdOp::CALL || !Op.NumInputs ||
+            !Op.Inputs[0].isConst() || Op.SourceCallHint)
+          continue;
+        const va_t Target = Op.Inputs[0].ConstVal;
+        if (Roots.count(Target) || !Inspected.insert(Target).second ||
+            Original.CallPrototypeArguments.count(Target) ||
+            !Original.OmittedCallees->SourceOriginalBlocks.count(Target))
+          continue;
+        const auto Body = Bodies.find(Target);
+        if (Body == Bodies.end() || absentStackFormals(*Body->second).empty())
+          continue;
+        Supports.insert(Target);
+        Pending.push_back(Target);
+        if (Supports.size() == limits::pipeline::kSourceInlineCallees)
+          return;
+      }
+  }
+}
+
+} // namespace
+
+bool supportsSourceCallSpecialization(const BinaryImage &Image,
+                                      const PipelineResult &Original,
+                                      const SourceViewOptions &View) {
+  return Image.Arch == Arch::X64 && Image.abiFormat() == BinaryFormat::COFF &&
+         Original.OmittedCallees && View.CallTypes.empty() &&
+         View.StackFrame.empty() && View.VariableTypes.empty() &&
+         View.VariableEdits.empty();
+}
+
+std::set<va_t> sourceInlineSupports(const PipelineResult &Original,
+                                    const SourceInlineRequests &Requests,
+                                    const std::set<va_t> &Roots) {
+  if (!Original.OmittedCallees)
+    return {};
+  std::set<va_t> Supports;
+  for (const auto &Body : Original.OmittedCallees->Bodies) {
+    const auto At = Requests.find(Body->Entry);
+    if (At == Requests.end() || Roots.count(Body->Entry) ||
+        !Original.OmittedCallees->SourceOriginalBlocks.count(Body->Entry))
+      continue;
+    const auto Absent = absentStackFormals(*Body, &At->second);
+    for (unsigned P : At->second)
+      if (Absent.count(P)) {
+        Supports.insert(Body->Entry);
+        break;
+      }
+    if (Supports.size() == limits::pipeline::kSourceInlineCallees)
+      break;
+  }
+  return Supports;
+}
+
+SourceInlineResult specializeUnavailableSourceCalls(
+    const BinaryImage &Image, const PipelineResult &Original,
+    const llvm::Module &Initial, DebugContext *Debug,
+    const PipelineOptions &AnalysisOptions, const SourceViewOptions &View,
+    const SourceInlineHighView *High) {
+  if (!supportsSourceCallSpecialization(Image, Original, View))
+    return {};
+
+  std::set<va_t> Roots;
+  std::map<va_t, const llvm::Function *> RootFunctions;
+  std::map<va_t, std::set<unsigned>> Requests;
+  for (const auto &Function : Initial) {
+    if (Function.isDeclaration())
+      continue;
+    const auto Entry = address(Function);
+    if (!Entry)
+      return {};
+    Roots.insert(*Entry);
+    RootFunctions.emplace(*Entry, &Function);
+    for (const auto &Instruction : llvm::instructions(Function)) {
+      const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction);
+      const auto *Callee = Call ? Call->getCalledFunction() : nullptr;
+      if (!Callee || !Callee->isDeclaration() || Call->hasOperandBundles())
+        continue;
+      const auto Target = address(*Callee);
+      if (!Target || Original.CallPrototypeArguments.count(*Target))
+        continue;
+      for (unsigned P = 0; P < Call->arg_size(); ++P)
+        if (unavailable(Call->getArgOperand(P)))
+          Requests[*Target].insert(P);
+    }
+  }
+  if (Requests.empty() || Roots.empty() ||
+      Roots.size() > limits::pipeline::kSourceInlineRoots)
+    return {};
+
+  auto Supports = sourceInlineSupports(Original, Requests, Roots);
+  if (Supports.empty())
+    return {};
+  addSourceInlineDependencies(Original, Roots, Supports);
+
+  // Reuse the normal source admission path. A signature-reader body alone
+  // does not authorize emission: frame, return, exception and ABI validation
+  // must all run with the actual caller and callee selected together.
+  PipelineOptions Options = AnalysisOptions;
+  Options.EmitDumpOutput = false;
+  Options.DeferHighIR = true;
+  Options.OnlyFunctionEntries = Roots;
+  Options.OnlyFunctionEntries.insert(Supports.begin(), Supports.end());
+  auto Recovered = Pipeline().run(Image, Initial.getContext(), Options, Debug);
+  if (!Recovered.Success ||
+      Recovered.MedFuncs.size() != Options.OnlyFunctionEntries.size())
+    return {};
+  std::map<va_t, std::string> Names;
+  for (const auto &Function : Recovered.MedFuncs)
+    Names.emplace(Function.Entry, Function.Name);
+  std::vector<std::pair<va_t, std::string>> Imports;
+  for (const auto &[Entry, Name] : Image.getImportAddressNames()) {
+    Names.insert_or_assign(Entry, Name);
+    Imports.emplace_back(Entry, Name);
+  }
+  recoverModuleCallAbi(Image, Recovered, Names, true, true);
+  prepareRecoveredSourceStackAccesses(Image, Recovered, Recovered.LowFuncs);
+
+  SourceInlineResult Result;
+  Result.Sources = std::make_shared<LLVMSourceMap>();
+  MedLLVMEmitter Emitter;
+  Emitter.setOriginalImageStorageForSource(true);
+  Emitter.setPreserveUnknownSourceValues(true);
+  Emitter.setDebugContext(Debug);
+  Emitter.setSourceMap(Result.Sources.get());
+  Emitter.setSourceCalleeDeclarations(Recovered.OmittedCalleeDeclarations);
+  Emitter.setPrototypeArgumentCallees(&Recovered.CallPrototypeArguments.get());
+  Result.Module = Emitter.emit(Recovered.MedFuncs, Initial.getContext(),
+                               "neverd_source_calls", Image.Arch, Imports,
+                               &Image, Image.abiFormat());
+  if (!Result.Module || llvm::verifyModule(*Result.Module))
+    return {};
+  Result.Sources->preserveExpressionOrigins(Recovered.LibraryRecognitions);
+  Pipeline::promoteScaffoldingAllocas(*Result.Module);
+
+  size_t Remaining = limits::pipeline::kSourceInlineExpansionOperations;
+  std::map<const llvm::Function *, source_inline::BodyObservations> Bodies;
+  for (auto &Function : *Result.Module) {
+    const auto Entry = address(Function);
+    if (!Entry)
+      continue;
+    if (auto Root = RootFunctions.find(*Entry); Root != RootFunctions.end()) {
+      if (Function.isDeclaration() ||
+          !sameSourceCarriers(*Root->second, Function))
+        return {};
+    } else if (Supports.count(*Entry)) {
+      if (!Function.isDeclaration())
+        if (const auto Body = source_inline::compactSourceBody(Function))
+          Bodies.emplace(&Function, *Body);
+    }
+  }
+  unsigned Expanded = 0;
+  std::map<const llvm::Function *, source_inline::SharedBody> SharedBodies;
+  std::map<va_t, SourceInlineBody> ExpandedBodies;
+  std::map<llvm::Function *, bool> Prepared;
+  std::set<llvm::Function *> Active;
+  const auto Expand = [&](auto &&Self, llvm::Function &Function) -> bool {
+    if (const auto At = Prepared.find(&Function); At != Prepared.end())
+      return At->second;
+    if (!Active.insert(&Function).second)
+      return false;
+    llvm::SmallVector<llvm::CallInst *, 16> Calls;
+    for (auto &Instruction : llvm::instructions(Function)) {
+      auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction);
+      auto *Callee = Call ? Call->getCalledFunction() : nullptr;
+      if (!Callee || Callee->isDeclaration() || Call->hasOperandBundles() ||
+          Call->isMustTailCall() || !Bodies.count(Callee) ||
+          Callee->arg_size() != Call->arg_size())
+        continue;
+      Calls.push_back(Call);
+    }
+    bool DependenciesReady = true;
+    bool Changed = false;
+    for (auto *Call : Calls) {
+      auto *Callee = Call->getCalledFunction();
+      // A missing argument can be discarded only after every nested input
+      // observation has been checked. Visiting each bounded support body once
+      // also keeps shared descendants from being expanded per caller.
+      if (!Self(Self, *Callee)) {
+        DependenciesReady = false;
+        continue;
+      }
+      bool Unused = false;
+      for (unsigned P = 0; P < Call->arg_size(); ++P)
+        if (Callee->getArg(P)->use_empty() &&
+            unavailable(Call->getArgOperand(P))) {
+          Unused = true;
+          break;
+        }
+      if (!Unused)
+        continue;
+      const size_t Size = Bodies.at(Callee).Instructions;
+      if (Size > limits::pipeline::kSourceInlineBodyOperations ||
+          Size > Remaining)
+        continue;
+      Remaining -= Size;
+      SourceInlineBody Body;
+      Body.Parameters = Callee->arg_size();
+      for (unsigned P = 0; P < Call->arg_size(); ++P)
+        if (Callee->getArg(P)->use_empty() &&
+            unavailable(Call->getArgOperand(P)))
+          Body.Unused.insert(P);
+      const auto Target = address(*Callee);
+      const auto Entry = address(Function);
+      const bool Root = Entry && Roots.count(*Entry);
+      bool Replaced = false;
+      // Keep the existing one-call expansion. Sharing pays for a definition
+      // only when more than one use would duplicate the admitted body.
+      if (Root && (!Callee->hasOneUse() || SharedBodies.count(Callee))) {
+        auto At = SharedBodies.find(Callee);
+        if (At == SharedBodies.end())
+          At = SharedBodies
+                   .emplace(Callee,
+                            source_inline::shareBody(*Callee, *Result.Sources))
+                   .first;
+        source_inline::callSharedBody(*Call, At->second);
+        Replaced = true;
+      } else {
+        llvm::InlineFunctionInfo Info;
+        Replaced = llvm::InlineFunction(*Call, Info).isSuccess();
+      }
+      if (Replaced) {
+        Changed = true;
+        if (Root)
+          ++Expanded;
+        if (Target) {
+          auto &Saved = ExpandedBodies[*Target];
+          Saved.Parameters = Body.Parameters;
+          Saved.Unused.insert(Body.Unused.begin(), Body.Unused.end());
+        }
+      }
+    }
+    Active.erase(&Function);
+    // Only support bodies need this admission proof. A root's remaining
+    // unknown inputs stay in its source; no caller consumes its Ready flag.
+    const auto Known = Bodies.find(&Function);
+    if (Known == Bodies.end())
+      return true;
+    // A leaf's immutable observation graph was already checked above. Only
+    // expanding one of its calls invalidates that request-local result.
+    const auto Body = Changed ? source_inline::compactSourceBody(Function)
+                              : std::optional(Known->second);
+    const bool Ready = DependenciesReady && Body && !Body->Unavailable;
+    if (Ready)
+      Known->second = *Body;
+    Prepared.emplace(&Function, Ready);
+    return Ready;
+  };
+  for (auto &Function : *Result.Module)
+    if (const auto Entry = address(Function); Entry && Roots.count(*Entry))
+      Expand(Expand, Function);
+  if (!Expanded)
+    return {};
+  for (auto &Function : *Result.Module)
+    if (const auto Entry = address(Function); Entry && Supports.count(*Entry)) {
+      Function.deleteBody();
+      Function.setSubprogram(nullptr);
+    }
+  if (llvm::verifyModule(*Result.Module))
+    return {};
+  const auto Optimized = Pipeline::optimizeOrPromoteModule(
+      *Result.Module, Result.Sources.get(), View);
+  if (Optimized.Stop == OptimizationStopReason::VerificationFailed ||
+      llvm::verifyModule(*Result.Module))
+    return {};
+  Result.Sources->refreshExpressionOrigins();
+  Result.PreparedHigh =
+      prepareSpecializedHighSourceCalls(Recovered, std::move(ExpandedBodies));
+  if (High && Result.PreparedHigh)
+    Result.High = projectSpecializedHighSourceCalls(Image, *Result.PreparedHigh,
+                                                    Options, Debug, *High);
+  return Result;
+}
+} // namespace neverd

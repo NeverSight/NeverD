@@ -8,6 +8,7 @@
 
 #include "RegistrationStateSolver.h"
 
+#include "neverd/ir/RegistrationCRTControl.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 namespace neverd::registration_state {
@@ -25,26 +26,35 @@ std::optional<FrameValue> RegistrationStateSolver::transferControlFP(
   const auto Output = After.Frame.load(*SP.Offset, 4);
   const auto Control = After.Frame.load(*SP.Offset + 4, 4);
   const auto Mask = After.Frame.load(*SP.Offset + 8, 4);
-  // Only exception-mask changes and queries are admitted. They cannot select
-  // invalid precision/rounding encodings or invoke a parameter-error hook.
-  if (!Output.Offset || Output.ReturnPC || Output.CallbackAddress ||
-      Output.EntryOffset || Output.SEHException || Control.MayBeFrame ||
-      Mask.MayBeFrame || !Mask.Constant ||
-      (*Mask.Constant & ~uint32_t(0x8001f)) ||
-      *Output.Offset < int64_t(*SP.Offset) + 12 ||
-      !frameObjectIsDisjointFromAdministration(*Output.Offset,
-                                               int64_t(*Output.Offset) + 4) ||
-      *Output.Offset > -4 || !JumpRuntime->ControlFP(Op, WorkUsed) ||
+  const bool NullOutput = Output == FrameValue::constant(0);
+  // Exception masks cannot invoke a parameter-error hook. Null-output calls
+  // additionally admit a complete, valid PE32 precision setting. Keep its
+  // actual scalar arguments in the native recipe and retain the FP effects.
+  if (Control.MayBeFrame || Mask.MayBeFrame || !Mask.Constant ||
+      ((*Mask.Constant & ~registration_crt::kControlFPExceptionMask) &&
+       !(NullOutput && Control.Constant &&
+         registration_crt::isX86ControlFPPrecisionSetting(*Control.Constant,
+                                                          *Mask.Constant))) ||
+      (!NullOutput &&
+       (!Output.Offset || Output.ReturnPC || Output.CallbackAddress ||
+        Output.EntryOffset || Output.SEHException ||
+        *Output.Offset < int64_t(*SP.Offset) + 12 ||
+        !frameObjectIsDisjointFromAdministration(*Output.Offset,
+                                                 int64_t(*Output.Offset) + 4) ||
+        *Output.Offset > -4)) ||
+      !JumpRuntime->ControlFP(Op, WorkUsed) ||
       !charge(Before.Frame.cellCount() + After.Frame.cellCount() + 4))
     return std::nullopt;
   if (!CallException)
     CallException = Before;
   recordSEHRuntimeCall(After, Op, RegistrationSEHBoundCall::Kind::ControlFP,
                        Output.Offset);
-  invalidateJumpCaptures(After, Output, 4);
-  invalidateJumpCaptures(*CallException, Output, 4);
-  After.Frame.store(*Output.Offset, 4, {});
-  CallException->Frame.store(*Output.Offset, 4, {});
+  if (!NullOutput) {
+    invalidateJumpCaptures(After, Output, 4);
+    invalidateJumpCaptures(*CallException, Output, 4);
+    After.Frame.store(*Output.Offset, 4, {});
+    CallException->Frame.store(*Output.Offset, 4, {});
+  }
   Result.HasBoundSEHCallees = true;
   // The original CALL remains in LowIR, including its floating-point state
   // effects. This returning memory fact is distinct from native admission.

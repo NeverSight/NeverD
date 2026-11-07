@@ -9,15 +9,19 @@
 #include "../../../lib/backend/c/pass/LLVMC/LLVMCBitTests.h"
 #include "../../../lib/backend/c/pass/LLVMC/LLVMCCommonBranches.h"
 #include "../../../lib/backend/c/render/X86/X86Virtualization.h"
+#include "../../HostCompiler.h"
+#include "SourceCallExecution.h"
 #include "WindowsQualifiedFixture.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
+#include "neverd/backend/Limits.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
-#include "neverd/backend/llvm/X86/LLVMX86DivRemAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX86BitTest.h"
+#include "neverd/backend/llvm/X86/LLVMX86DivRem.h"
 #include "neverd/backend/llvm/X86/X86APXAtomic.h"
 #include "neverd/backend/llvm/X86/X86RepStateAsm.h"
 #include "neverd/backend/llvm/X86/X86SgxAsm.h"
@@ -39,12 +43,14 @@
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ModRef.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 
 #include <cstdlib>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <tuple>
@@ -66,6 +72,11 @@ void compileAndRun(const std::string &Source,
 #endif
   if (!CompilerOverride.empty())
     Compiler = CompilerOverride;
+  if (const auto Reason = neverd::test::cannotRunC(Source))
+    GTEST_SKIP() << *Reason;
+  if (Source.find("_BitInt(") != std::string::npos &&
+      !neverd::test::compilerHasWideBitInt(Compiler))
+    GTEST_SKIP() << "this Clang lacks the _BitInt width the C spells";
   llvm::SmallString<128> SourcePath, BinaryPath, ErrorPath;
   llvm::SmallString<128> ReferencePath;
   ASSERT_FALSE(llvm::sys::fs::createTemporaryFile("neverd-llvmc-value", "ll",
@@ -216,6 +227,8 @@ int main(void) {
 }
 
 TEST(LLVMCValues, PrefetchKeepsComputedAndSegmentedMemoryOperands) {
+  if (!neverd::test::hostRunsX86())
+    GTEST_SKIP() << "the prefetch instructions need an x86 host";
   llvm::LLVMContext Context;
   llvm::Module Module("prefetch_addresses", Context);
   Module.setDataLayout("e-p:64:64");
@@ -266,6 +279,64 @@ int main(void) {
     EXPECT_NE(Source.find(std::string("prefetchw %%") + Segment + ":(%0)"),
               std::string::npos)
         << Source;
+}
+
+// An atomic store keeps its order in C, as an atomic load does: through a
+// pointer, and into a local whose address the function publishes.
+TEST(LLVMCValues, AtomicStoresKeepTheirOrder) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("atomic_stores", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *F = llvm::Function::Create(
+      llvm::FunctionType::get(
+          B.getInt32Ty(), {B.getPtrTy(), B.getPtrTy(), B.getInt32Ty()}, false),
+      llvm::GlobalValue::ExternalLinkage, "publish", Module);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", F));
+  auto Store = [&](llvm::Value *Value, llvm::Value *Address,
+                   llvm::AtomicOrdering Ordering) {
+    auto *Instruction = B.CreateStore(Value, Address);
+    Instruction->setAtomic(Ordering);
+    Instruction->setAlignment(llvm::Align(4));
+  };
+  llvm::Value *Words = F->getArg(0);
+  llvm::Value *Value = F->getArg(2);
+  Store(Value, Words, llvm::AtomicOrdering::Release);
+  Store(B.CreateAdd(Value, B.getInt32(1)),
+        B.CreateConstInBoundsGEP1_64(B.getInt32Ty(), Words, 1),
+        llvm::AtomicOrdering::SequentiallyConsistent);
+  Store(B.CreateAdd(Value, B.getInt32(2)),
+        B.CreateConstInBoundsGEP1_64(B.getInt32Ty(), Words, 2),
+        llvm::AtomicOrdering::Monotonic);
+  auto *Local = B.CreateAlloca(B.getInt32Ty(), nullptr, "local");
+  B.CreateStore(Local, F->getArg(1));
+  Store(B.CreateAdd(Value, B.getInt32(3)), Local,
+        llvm::AtomicOrdering::Release);
+  auto *Load = B.CreateLoad(B.getInt32Ty(), Local);
+  Load->setAtomic(llvm::AtomicOrdering::Acquire);
+  Load->setAlignment(llvm::Align(4));
+  B.CreateRet(Load);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.TheArch = neverd::Arch::X64;
+  std::string Source;
+  llvm::raw_string_ostream Stream(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Stream, Options));
+  EXPECT_EQ(llvm::StringRef(Source).count("__atomic_store("), 4u) << Source;
+  EXPECT_EQ(llvm::StringRef(Source).count("__ATOMIC_RELEASE"), 2u) << Source;
+  EXPECT_EQ(llvm::StringRef(Source).count("__ATOMIC_SEQ_CST"), 1u) << Source;
+  EXPECT_EQ(llvm::StringRef(Source).count("__ATOMIC_RELAXED"), 1u) << Source;
+  Source += R"(
+int main(void) {
+  uint32_t words[3] = {0, 0, 0};
+  void *published = 0;
+  if (publish(words, &published, 40) != 43)
+    return 1;
+  return words[0] != 40 || words[1] != 41 || words[2] != 42;
+}
+)";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    compileAndRun(Source, Level, {}, true);
 }
 
 TEST(LLVMCValues, PrefetchRejectsChangedAssemblyContracts) {
@@ -663,6 +734,82 @@ TEST(LLVMCValues, VectorTrailingZeroElementsPreserveLaneOrderAndZeroPolicy) {
   EXPECT_EQ(Source.find("experimental_cttz"), std::string::npos);
   for (llvm::StringRef Level : {"-O0", "-O2"})
     compileAndRun(Source + Main, Level, {}, true);
+}
+
+TEST(LLVMCValues, VmrunContextKeepsGuestRegisterOutputs) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+declare void @llvm.x86.vmrun.context(ptr, i32) convergent noduplicate
+define i64 @vmrun_rcx_result(ptr %context) {
+  %rcx = getelementptr i8, ptr %context, i64 40
+  store i64 4660, ptr %rcx, align 8
+  call void @llvm.x86.vmrun.context(ptr %context, i32 64)
+  %result = load i64, ptr %rcx, align 8
+  ret i64 %result
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  Module->setTargetTriple(llvm::Triple("x86_64-linux-gnu"));
+  Module->setDataLayout("e-p:64:64-i64:64-i128:128");
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.TheArch = neverd::Arch::X64;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  neverd::LLVMCEmitter Emitter;
+  ASSERT_TRUE(Emitter.emit(*Module, OS, Options));
+  if (const char *Directory =
+          std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
+    std::error_code EC;
+    llvm::raw_fd_ostream Artifact(std::string(Directory) + "/vmrun-context.c",
+                                  EC);
+    ASSERT_FALSE(EC);
+    Artifact << Source;
+  }
+  EXPECT_NE(Source.find("__builtin_ia32_vmrun_context"), std::string::npos);
+  EXPECT_EQ(Source.find("__asm__"), std::string::npos);
+  // A controlled completion checks the C projection's data dependency. The
+  // separate SVM guest fixture executes the native compiler-owned transition.
+  const std::string Harness = R"c(
+#include <stdint.h>
+#include <stdlib.h>
+static void complete_vmrun(void *context, unsigned width) {
+  uint64_t *state=(uint64_t *)context;
+  if (width!=64 || state[5]!=0x1234) abort();
+  state[5]=0x5678;
+}
+#define __builtin_ia32_vmrun_context complete_vmrun
+)c" + Source + R"c(
+int main(void) {
+  uint64_t context[18]={0};
+  return vmrun_rcx_result(context)!=0x5678;
+}
+)c";
+  for (const char *Opt : {"-O0", "-O2"})
+    compileAndRun(Harness, Opt);
+  auto &Block = Module->getFunction("vmrun_rcx_result")->getEntryBlock();
+  auto *Call = llvm::cast<llvm::CallInst>(&*std::next(Block.begin(), 2));
+  EXPECT_THROW((void)neverd::renderX86VirtualizationNativeCall(
+                   neverd::Arch::X86, *Call, "", false, {"context", "64"}),
+               std::invalid_argument);
+  Call->setArgOperand(
+      1, llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), 16));
+  EXPECT_THROW((void)neverd::renderX86VirtualizationNativeCall(
+                   neverd::Arch::X64, *Call, "", false, {"context", "16"}),
+               std::invalid_argument);
+  Call->setArgOperand(
+      1, llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), 64));
+  Call->setMemoryEffects(llvm::MemoryEffects::readOnly());
+  EXPECT_THROW((void)neverd::renderX86VirtualizationNativeCall(
+                   neverd::Arch::X64, *Call, "", false, {"context", "64"}),
+               std::invalid_argument);
+  Call->setMemoryEffects(llvm::MemoryEffects::argMemOnly());
+  EXPECT_THROW((void)neverd::renderX86VirtualizationNativeCall(
+                   neverd::Arch::X64, *Call, "", false, {"context", "64"}),
+               std::invalid_argument);
 }
 
 TEST(LLVMCValues, NativeVirtualizationKeepsStatusAndFailedReadPrior) {
@@ -1399,6 +1546,109 @@ static int check_fault(void (*operation)(uint64_t,uint64_t,uint64_t,void*),
 #endif
 }
 
+#include "../x86/X86NativeBitTestTests.inc"
+#include "../x86/X86NativeDivisionTests.inc"
+
+TEST(LLVMCValues, NativeAssemblyKeepsOperandSnapshotsAcrossBranches) {
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "requires native Linux i386/x64 execution";
+#else
+  for (bool NativeI386 : {false, true}) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("native-operand-snapshot", Context);
+    Module.setTargetTriple(
+        llvm::Triple(NativeI386 ? "i386-linux-gnu" : "x86_64-linux-gnu"));
+    Module.setDataLayout(NativeI386 ? "e-p:32:32" : "e-p:64:64-i128:128");
+    llvm::IRBuilder<> Builder(Context);
+    std::string Prototypes, Body;
+    for (unsigned Bits : {32U, 64U}) {
+      if (NativeI386 && Bits == 64)
+        continue;
+      auto *Word = Builder.getIntNTy(Bits);
+      auto *Wide = Builder.getIntNTy(Bits * 2);
+      const uint64_t Mask = Bits == 32 ? UINT32_MAX : UINT64_MAX;
+      for (bool Signed : {false, true}) {
+        const std::string Name =
+            "snapshot_" + std::to_string(Bits) + "_" + std::to_string(Signed);
+        auto *Function = llvm::Function::Create(
+            llvm::FunctionType::get(Builder.getInt64Ty(),
+                                    {Builder.getPtrTy(), Builder.getInt1Ty()},
+                                    false),
+            llvm::GlobalValue::ExternalLinkage, Name, Module);
+        auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+        auto *Left = llvm::BasicBlock::Create(Context, "left", Function);
+        auto *Right = llvm::BasicBlock::Create(Context, "right", Function);
+        auto *Join = llvm::BasicBlock::Create(Context, "join", Function);
+        Builder.SetInsertPoint(Entry);
+        auto *Slot = Builder.CreateAlloca(Wide);
+        auto *Source =
+            Builder.CreateLoad(Builder.getInt64Ty(), Function->getArg(0));
+        auto *Divisor = Builder.CreateZExtOrTrunc(Source, Wide);
+        Builder.CreateStore(Divisor, Slot);
+        // The source is overwritten after the snapshot. Re-reading guest
+        // memory at the asm call would divide by zero instead of by Source.
+        Builder.CreateStore(Builder.getInt64(0), Function->getArg(0));
+        Builder.CreateCondBr(Function->getArg(1), Left, Right);
+        for (auto *Block : {Left, Right}) {
+          Builder.SetInsertPoint(Block);
+          auto *Marker = Builder.CreateConstGEP1_64(Builder.getInt64Ty(),
+                                                    Function->getArg(0), 1);
+          Builder
+              .CreateStore(Builder.getInt64(Block == Left ? 71 : 73), Marker)
+              ->setVolatile(true);
+          Builder.CreateBr(Join);
+        }
+        Builder.SetInsertPoint(Join);
+        auto *Pair = llvm::StructType::get(Context, {Word, Word});
+        auto *Assembly = llvm::InlineAsm::get(
+            llvm::FunctionType::get(Pair, {Word, Word, Word}, false),
+            neverd::x86DivRemAssembly({Bits, Signed}),
+            neverd::X86DivRemAsmConstraints, true);
+        auto *Result = Builder.CreateCall(
+            Assembly,
+            {llvm::ConstantInt::get(Word, (Signed ? uint64_t(-43) : 43) & Mask),
+             llvm::ConstantInt::get(Word, Signed ? Mask : 0),
+             Builder.CreateTrunc(Builder.CreateLoad(Wide, Slot), Word)});
+        auto *Quotient = Builder.CreateZExtOrTrunc(
+            Builder.CreateExtractValue(Result, 0), Builder.getInt64Ty());
+        auto *Remainder = Builder.CreateZExtOrTrunc(
+            Builder.CreateExtractValue(Result, 1), Builder.getInt64Ty());
+        Builder.CreateRet(Builder.CreateXor(
+            Quotient, Builder.CreateShl(Remainder, Builder.getInt64(8))));
+        Prototypes += "extern uint64_t ref_" + Name + "(void*, uint8_t);\n";
+        Body += "for(unsigned choose=0;choose<2;++choose) {\n"
+                "uint64_t actual[2]={6,0}, expected[2]={6,0};\n"
+                "uint64_t a=" +
+                Name + "(actual,choose), b=ref_" + Name +
+                "(expected,choose);\nif(a!=b || a!=" +
+                std::to_string(((Signed ? uint64_t(-7) : 7) & Mask) ^
+                               (((Signed ? UINT64_MAX : 1) & Mask) << 8)) +
+                "ULL || actual[0]!=0 || expected[0]!=0 || "
+                "actual[1]!=(choose?71:73) || expected[1]!=actual[1]) return "
+                "1;\n}\n";
+      }
+    }
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    neverd::CEmitterOptions Options;
+    Options.TheArch = NativeI386 ? neverd::Arch::X86 : neverd::Arch::X64;
+    Options.PreserveLLVMFunctionTypes = true;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, Options));
+    for (auto &Function : Module)
+      Function.setName("ref_" + Function.getName());
+    std::string Reference;
+    llvm::raw_string_ostream ReferenceOut(Reference);
+    Module.print(ReferenceOut, nullptr);
+    const std::string Main =
+        Prototypes + "\nint main(void) {\n" + Body + "return 0;\n}\n";
+    for (const char *Optimization : {"-O0", "-O2"})
+      compileAndRun(Source + Main, Optimization, Reference,
+                    /*CheckUndefinedBehavior=*/true, NativeI386);
+  }
+#endif
+}
+
 TEST(LLVMCValues, RepeatedParameterFieldAddressesPreserveMemoryObservations) {
   const char *IR = R"ir(
 target datalayout = "e-p:64:64"
@@ -1605,6 +1855,44 @@ int main(void) {
     for (StringRef Level : {"-O0", "-O2"})
       compileAndRun(Source + Driver, Level, Reference, true);
   }
+}
+
+TEST(LLVMCValues, AbsoluteGuestStoresDoNotInventHostObjectBounds) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"(
+target datalayout = "e-p:64:64"
+define i32 @guest_store(i1 %enabled, i32 %value) {
+entry:
+  br i1 %enabled, label %write, label %done
+write:
+  store i32 %value, ptr inttoptr (i64 -140737488351232 to ptr), align 1
+  br label %done
+done:
+  ret i32 %value
+}
+)",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module);
+  Module->setTargetTriple(llvm::Triple(llvm::sys::getDefaultTargetTriple()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  Options.UseUnalignedPointers = false;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options));
+  // The guest mapping belongs to its invocation environment. The host test
+  // only executes the disabled path; its compiler must retain the write
+  // without claiming the numeric address names a zero-sized host object.
+  const std::string Driver = R"(
+int main(void) {
+  return guest_store(0, 731) != 731;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun("#pragma clang diagnostic error \"-Wfortify-source\"\n" +
+                      Source + Driver,
+                  Optimization, {}, true);
 }
 
 TEST(LLVMCValues, RawMemoryUpdatesRetainObserversAliasesAndOrderedAccesses) {
@@ -4851,6 +5139,510 @@ TEST(LLVMCValues, ConstantHomesStayInitializedAcrossRepeatedDiamonds) {
     compileAndRun(Source, Optimization, {}, true);
 }
 
+TEST(LLVMCValues, LargeMutableFieldHomesKeepEveryObservedAssignment) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("bounded-field-defaults", Context);
+  auto *Word = llvm::Type::getInt64Ty(Context);
+  const unsigned Large =
+      2 * neverd::limits::backend::kLLVMCFieldDefaultShapeWork;
+  for (unsigned Rounds : {3u, Large}) {
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(
+            Word, {llvm::PointerType::getUnqual(Context), Word}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        Rounds == Large ? "large_field_defaults" : "small_field_defaults",
+        Module);
+    llvm::IRBuilder<> B(llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Home = B.CreateAlloca(Word);
+    auto *Sum = B.CreateAlloca(Word);
+    llvm::SmallVector<llvm::AllocaInst *, 8> Unread;
+    for (unsigned I = 0; I < 8; ++I)
+      Unread.push_back(B.CreateAlloca(Word));
+    B.CreateStore(B.getInt64(0), Sum);
+    for (unsigned I = 0; I < Rounds; ++I) {
+      auto *Field = llvm::BasicBlock::Create(Context, "field", Function);
+      auto *Join = llvm::BasicBlock::Create(Context, "join", Function);
+      auto *Default = llvm::BasicBlock::Create(Context, "default", Function);
+      auto *Bit = B.CreateAnd(B.CreateLShr(Function->getArg(1), I % 64), 1);
+      B.CreateCondBr(B.CreateICmpNE(Bit, B.getInt64(0)), Field, Default);
+      B.SetInsertPoint(Field);
+      auto *Address = B.CreateGEP(Word, Function->getArg(0), B.getInt64(1));
+      B.CreateStore(B.CreateLoad(Word, Address), Home);
+      B.CreateBr(Join);
+      B.SetInsertPoint(Default);
+      B.CreateStore(B.getInt64(7), Home);
+      B.CreateBr(Join);
+      B.SetInsertPoint(Join);
+      for (auto *Slot : Unread)
+        B.CreateStore(B.getInt64(I + 1), Slot);
+      B.CreateStore(
+          B.CreateAdd(B.CreateLoad(Word, Sum), B.CreateLoad(Word, Home)), Sum);
+    }
+    B.CreateRet(B.CreateLoad(Word, Sum));
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+  Source += "\n#define LARGE_ROUNDS " + std::to_string(Large) + R"(
+int main(void) {
+  const uint64_t patterns[]={0,1,2,UINT64_MAX,UINT64_C(0x12870fed5432abcd)};
+  const uint64_t values[]={0,9,UINT64_MAX,UINT64_C(0xfedcba9876543210)};
+  for(unsigned p=0;p<sizeof(patterns)/sizeof(*patterns);++p)
+    for(unsigned v=0;v<sizeof(values)/sizeof(*values);++v) {
+      uint64_t record[]={19,values[v],23}, small=0, large=0;
+      for(unsigned i=0;i<LARGE_ROUNDS;++i) {
+        uint64_t term=((patterns[p]>>(i%64))&1)?record[1]:7;
+        large+=term; if(i<3) small+=term;
+      }
+      if(small_field_defaults(record,patterns[p])!=small) return 1;
+      if(large_field_defaults(record,patterns[p])!=large) return 2;
+      if(record[0]!=19 || record[1]!=values[v] || record[2]!=23) return 3;
+    }
+  return 0;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization, {}, true);
+}
+
+TEST(LLVMCValues, LargeMutableHomesKeepSnapshotsAcrossAliasedWrites) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("bounded-storage-uses", Context);
+  auto *Word = llvm::Type::getInt64Ty(Context);
+  auto *Pointer = llvm::PointerType::getUnqual(Context);
+  const unsigned Large = 2 * neverd::limits::backend::kLLVMCStorageUseQueryWork;
+  for (unsigned Rounds : {3u, Large}) {
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(Word, {Pointer, Pointer, Word}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        Rounds == Large ? "large_home_snapshot" : "small_home_snapshot",
+        Module);
+    llvm::IRBuilder<llvm::NoFolder> B(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Home = B.CreateAlloca(Word);
+    auto *Sum = B.CreateAlloca(Word);
+    B.CreateStore(B.CreateLoad(Word, Function->getArg(0)), Home);
+    B.CreateStore(B.getInt64(0), Sum);
+    for (unsigned I = 0; I < Rounds; ++I) {
+      auto *Before = B.CreateLoad(Word, Home);
+      if (I == Rounds / 2)
+        B.CreateStore(Function->getArg(2), Function->getArg(1));
+      B.CreateStore(B.CreateAdd(Before, B.getInt64(1)), Home);
+      B.CreateStore(B.CreateAdd(B.CreateLoad(Word, Sum), Before), Sum);
+    }
+    B.CreateRet(B.CreateXor(B.CreateLoad(Word, Sum), B.CreateLoad(Word, Home)));
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+  Source += "\n#define LARGE_ROUNDS " + std::to_string(Large) + R"(
+static uint64_t expected_snapshot(uint64_t value, unsigned rounds) {
+  uint64_t sum=0;
+  for(unsigned i=0;i<rounds;++i) sum+=value++;
+  return sum^value;
+}
+int main(void) {
+  const uint64_t values[]={0,9,UINT64_MAX,UINT64_C(0xfedcba9876543210)};
+  for(unsigned v=0;v<sizeof(values)/sizeof(*values);++v)
+    for(unsigned alias=0;alias<2;++alias) {
+      uint64_t replacement=values[v]^UINT64_C(0x123456789abcdef0);
+      uint64_t source=values[v], other=23;
+      if(small_home_snapshot(&source,alias?&source:&other,replacement)!=
+         expected_snapshot(values[v],3)) return 1;
+      if(source!=(alias?replacement:values[v]) ||
+         other!=(alias?23:replacement)) return 2;
+      source=values[v]; other=23;
+      if(large_home_snapshot(&source,alias?&source:&other,replacement)!=
+         expected_snapshot(values[v],LARGE_ROUNDS)) return 3;
+      if(source!=(alias?replacement:values[v]) ||
+         other!=(alias?23:replacement)) return 4;
+    }
+  return 0;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization, {}, true);
+}
+
+TEST(LLVMCValues, LargeConditionFeedGraphsKeepBothControlOutcomes) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("bounded-branch-feeds", Context);
+  auto *Word = llvm::Type::getInt64Ty(Context);
+  const unsigned Large =
+      neverd::limits::backend::kLLVMCBranchFeedQueryWork / 2 + 8;
+  for (unsigned Rounds : {3u, Large}) {
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(Word, {Word, Word}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        Rounds == Large ? "large_condition_feed" : "small_condition_feed",
+        Module);
+    auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+    auto *Chain = llvm::BasicBlock::Create(Context, "chain", Function);
+    auto *Taken = llvm::BasicBlock::Create(Context, "taken", Function);
+    auto *Other = llvm::BasicBlock::Create(Context, "other", Function);
+    llvm::IRBuilder<llvm::NoFolder> B(Entry);
+    B.CreateCondBr(B.CreateICmpNE(Function->getArg(1), B.getInt64(0)), Taken,
+                   Chain);
+    B.SetInsertPoint(Chain);
+    llvm::Value *Value = Function->getArg(0);
+    for (unsigned I = 0; I < Rounds; ++I)
+      Value = B.CreateXor(B.CreateAdd(Value, B.getInt64(I + 1)),
+                          B.getInt64((I % 17) + 19));
+    B.CreateCondBr(B.CreateICmpULT(Value, B.getInt64(UINT64_C(1) << 63)), Taken,
+                   Other);
+    B.SetInsertPoint(Taken);
+    B.CreateRet(B.getInt64(17));
+    B.SetInsertPoint(Other);
+    B.CreateRet(B.getInt64(29));
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+  Source += "\n#define LARGE_ROUNDS " + std::to_string(Large) + R"(
+static uint64_t expected_condition(uint64_t value, unsigned rounds) {
+  for(unsigned i=0;i<rounds;++i) value=(value+i+1)^((i%17)+19);
+  return value<(UINT64_C(1)<<63)?17:29;
+}
+int main(void) {
+  const uint64_t values[]={0,UINT64_MAX,UINT64_C(0x7ffffffffffff000),
+                           UINT64_C(0x8000000000001000)};
+  for(unsigned v=0;v<sizeof(values)/sizeof(*values);++v)
+    for(unsigned force=0;force<2;++force) {
+      if(small_condition_feed(values[v],force)!=
+         (force?17:expected_condition(values[v],3))) return 1;
+      if(large_condition_feed(values[v],force)!=
+         (force?17:expected_condition(values[v],LARGE_ROUNDS))) return 2;
+    }
+  return 0;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization, {}, true);
+}
+
+TEST(LLVMCValues, FrameFreeCarrierGraphsKeepEveryExternalMemoryUpdate) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("frame-free-carriers", Context);
+  Module.setDataLayout("e-p:64:64");
+  auto *Word = llvm::Type::getInt64Ty(Context);
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(
+          Word, {llvm::PointerType::getUnqual(Context), Word}, false),
+      llvm::GlobalValue::ExternalLinkage, "carrier_updates", Module);
+  llvm::IRBuilder<llvm::NoFolder> B(
+      llvm::BasicBlock::Create(Context, "entry", Function));
+  auto *Home = B.CreateAlloca(Word);
+  B.CreateStore(B.CreatePtrToInt(Function->getArg(0), Word), Home);
+  constexpr unsigned Rounds = 256;
+  for (unsigned I = 0; I < Rounds; ++I) {
+    auto *Address = B.CreateIntToPtr(B.CreateLoad(Word, Home), B.getPtrTy());
+    auto *Before = B.CreateLoad(Word, Address);
+    auto *Next = B.CreateXor(B.CreateAdd(Before, B.getInt64(I + 1)),
+                             Function->getArg(1));
+    B.CreateStore(Next, Address);
+    B.CreateStore(B.CreateAdd(B.CreateLoad(Word, Home), B.getInt64(0)), Home);
+  }
+  B.CreateRet(B.CreateLoad(Word, Function->getArg(0)));
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+  Source += "\n#define CARRIER_ROUNDS " + std::to_string(Rounds) + R"(
+int main(void) {
+  const uint64_t values[]={0,9,UINT64_MAX,UINT64_C(0xfedcba9876543210)};
+  const uint64_t masks[]={0,1,UINT64_MAX,UINT64_C(0x8000000000000000)};
+  for(unsigned v=0;v<sizeof(values)/sizeof(*values);++v)
+    for(unsigned m=0;m<sizeof(masks)/sizeof(*masks);++m) {
+      uint64_t words[]={19,values[v],23}, expected=values[v];
+      for(unsigned i=0;i<CARRIER_ROUNDS;++i) expected=(expected+i+1)^masks[m];
+      if(carrier_updates(words+1,masks[m])!=expected) return 1;
+      if(words[0]!=19 || words[1]!=expected || words[2]!=23) return 2;
+    }
+  return 0;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization, {}, true);
+}
+
+TEST(LLVMCValues, ReorderedConditionalBlocksRetainEveryExit) {
+  for (bool SharedReturn : {false, true})
+    for (bool ReverseArms : {false, true})
+      for (bool EarlyDispatch : {false, true})
+        for (bool PreserveTypes : {false, true}) {
+          SCOPED_TRACE(SharedReturn);
+          SCOPED_TRACE(ReverseArms);
+          SCOPED_TRACE(EarlyDispatch);
+          SCOPED_TRACE(PreserveTypes);
+          std::string IR = R"(
+            target datalayout = "e-p:64:64"
+            define i64 @guarded_read(i1 %skip, i1 %read, ptr %out) {
+            entry:
+              br label %guard
+            dispatch:
+              br i1 %read, label %loaded, label %stored
+            guard:
+              br i1 %skip, label %done, label %dispatch
+            stored:
+              store i64 41, ptr %out
+              STORE_EXIT
+            loaded:
+              %value = load i64, ptr %out
+              ret i64 %value
+            done:
+              ret i64 23
+            }
+          )";
+          IR.replace(IR.find("STORE_EXIT"),
+                     llvm::StringRef("STORE_EXIT").size(),
+                     SharedReturn ? "br label %loaded" : "ret i64 17");
+          llvm::LLVMContext Context;
+          llvm::SMDiagnostic Diagnostic;
+          auto Module = llvm::parseAssemblyString(IR, Diagnostic, Context);
+          ASSERT_TRUE(Module);
+          auto *Function = Module->getFunction("guarded_read");
+          llvm::BasicBlock *Dispatch = nullptr;
+          llvm::BasicBlock *Guard = nullptr;
+          for (auto &Block : *Function) {
+            if (Block.getName() == "dispatch")
+              Dispatch = &Block;
+            if (Block.getName() == "guard")
+              Guard = &Block;
+          }
+          ASSERT_TRUE(Dispatch && Guard);
+          if (!EarlyDispatch)
+            Dispatch->moveAfter(Guard);
+          if (ReverseArms)
+            llvm::cast<llvm::CondBrInst>(Dispatch->getTerminator())
+                ->swapSuccessors();
+          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          neverd::CEmitterOptions Options;
+          Options.PreserveLLVMFunctionTypes = PreserveTypes;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Output, Options));
+          Source += "\n#define SHARED_RETURN " + std::to_string(SharedReturn) +
+                    "\n#define REVERSE_ARMS " + std::to_string(ReverseArms) +
+                    R"(
+int main(void) {
+  const uint64_t values[] = {0, 1, UINT64_MAX, UINT64_C(0xfedcba9876543210)};
+  for (unsigned skip = 0; skip != 2; ++skip)
+    for (unsigned read = 0; read != 2; ++read)
+      for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i) {
+        uint64_t words[] = {19, values[i], 29};
+        int loads = REVERSE_ARMS ? !read : read;
+        uint64_t expected = skip ? 23 : loads ? values[i] : SHARED_RETURN ? 41 : 17;
+        if (guarded_read(skip, read, words + 1) != expected) return 1;
+        if (words[1] != (skip || loads ? values[i] : 41)) return 2;
+        if (words[0] != 19 || words[2] != 29) return 3;
+      }
+  if (guarded_read(1, 0, 0) != 23 || guarded_read(1, 1, 0) != 23) return 4;
+  return 0;
+}
+)";
+          for (const char *Level : {"-O0", "-O2"})
+            compileAndRun(Source, Level, {}, true);
+        }
+}
+
+TEST(LLVMCValues, CursorLoopsKeepHeaderEffectsAndEntryLabels) {
+  for (bool HeaderEffects : {false, true})
+    for (bool ReloadCurrent : {false, true})
+      for (bool ReorderBlocks : {false, true})
+        for (bool PreserveTypes : {false, true}) {
+          SCOPED_TRACE(HeaderEffects);
+          SCOPED_TRACE(ReloadCurrent);
+          SCOPED_TRACE(ReorderBlocks);
+          SCOPED_TRACE(PreserveTypes);
+          std::string IR = R"(
+          target datalayout = "e-p:64:64"
+          declare void @record_cursor(i64)
+          define i64 @cursor_loop(i64 %limit, i1 %run, ptr %out, ptr %seen) {
+          entry:
+            %cursor = alloca i64
+            store i64 0, ptr %cursor
+            br i1 %run, label %header, label %early
+          header:
+            %current = load i64, ptr %cursor
+            HEADER_EFFECTS
+            %more = icmp ult i64 %current, %limit
+            br i1 %more, label %body, label %exit
+          body:
+            store i64 %current, ptr %out
+            br label %latch
+          latch:
+            %next = add i64 %current, 1
+            store i64 %next, ptr %cursor
+            br label %header
+          exit:
+            ret i64 %current
+          early:
+            ret i64 19
+          }
+        )";
+          IR.replace(IR.find("HEADER_EFFECTS"),
+                     llvm::StringRef("HEADER_EFFECTS").size(),
+                     HeaderEffects ? "call void @record_cursor(i64 %current)\n"
+                                     "store i64 %current, ptr %seen"
+                                   : "");
+          if (ReloadCurrent) {
+            auto Replace = [&](llvm::StringRef Before, llvm::StringRef After) {
+              auto At = IR.find(Before.str());
+              ASSERT_NE(At, std::string::npos);
+              IR.replace(At, Before.size(), After.str());
+            };
+            Replace("store i64 %current, ptr %out",
+                    "%body_current = load i64, ptr %cursor\n"
+                    "store i64 %body_current, ptr %out");
+            Replace("%next = add i64 %current, 1",
+                    "%latch_current = load i64, ptr %cursor\n"
+                    "%next = add i64 %latch_current, 1");
+            Replace("ret i64 %current",
+                    "%exit_current = load i64, ptr %cursor\n"
+                    "ret i64 %exit_current");
+          }
+          llvm::LLVMContext Context;
+          llvm::SMDiagnostic Diagnostic;
+          auto Module = llvm::parseAssemblyString(IR, Diagnostic, Context);
+          ASSERT_TRUE(Module);
+          auto *Function = Module->getFunction("cursor_loop");
+          if (ReorderBlocks) {
+            Function->back().moveAfter(&Function->getEntryBlock());
+            for (auto &Block : *Function)
+              if (Block.getName() == "exit") {
+                Block.moveAfter(&Function->getEntryBlock());
+                break;
+              }
+          }
+          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          neverd::CEmitterOptions Options;
+          Options.PreserveLLVMFunctionTypes = PreserveTypes;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Output, Options));
+          Source +=
+              "\n#define HEADER_EFFECTS " + std::to_string(HeaderEffects) + R"(
+static uint64_t visits, trace;
+void record_cursor(uint64_t value) {
+  ++visits;
+  trace = trace * UINT64_C(31) + value;
+}
+int main(void) {
+  for (uint64_t limit = 0; limit < 8; ++limit)
+    for (unsigned run = 0; run != 2; ++run) {
+      uint64_t out = 71, seen = 73, expected_trace = 0;
+      visits = trace = 0;
+      uint64_t result = cursor_loop(limit, run, &out, &seen);
+      if (result != (run ? limit : 19)) return 1;
+      if (out != (run && limit ? limit - 1 : 71)) return 2;
+      if (seen != (HEADER_EFFECTS && run ? limit : 73)) return 3;
+      if (visits != (HEADER_EFFECTS && run ? limit + 1 : 0)) return 4;
+      if (HEADER_EFFECTS && run)
+        for (uint64_t i = 0; i <= limit; ++i)
+          expected_trace = expected_trace * UINT64_C(31) + i;
+      if (trace != expected_trace) return 5;
+    }
+  return 0;
+}
+)";
+          for (const char *Level : {"-O0", "-O2"})
+            compileAndRun(Source, Level, {}, true);
+        }
+}
+
+TEST(LLVMCValues, LargeLoopProjectionPreservesAliasedObservations) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("loop-projection", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<llvm::NoFolder> B(Context);
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(
+          B.getInt64Ty(), {B.getPtrTy(), B.getPtrTy(), B.getInt64Ty()}, false),
+      llvm::GlobalValue::ExternalLinkage, "projected_loop", Module);
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  constexpr unsigned Steps = 96;
+  llvm::SmallVector<llvm::BasicBlock *> Headers, Odd, Even;
+  for (unsigned I = 0; I < Steps; ++I) {
+    Headers.push_back(llvm::BasicBlock::Create(Context, "header", Function));
+    Odd.push_back(llvm::BasicBlock::Create(Context, "odd", Function));
+    Even.push_back(llvm::BasicBlock::Create(Context, "even", Function));
+  }
+  auto *Latch = llvm::BasicBlock::Create(Context, "latch", Function);
+  auto *Exit = llvm::BasicBlock::Create(Context, "exit", Function);
+  B.SetInsertPoint(Entry);
+  auto *Home = B.CreateAlloca(B.getInt64Ty());
+  auto *Pass = B.CreateAlloca(B.getInt64Ty());
+  B.CreateStore(Function->getArg(2), Home);
+  B.CreateStore(B.getInt64(0), Pass);
+  B.CreateBr(Headers.front());
+  for (unsigned I = 0; I < Steps; ++I) {
+    auto *Next = I + 1 == Steps ? Latch : Headers[I + 1];
+    B.SetInsertPoint(Headers[I]);
+    auto *Before = B.CreateLoad(B.getInt64Ty(), Function->getArg(0));
+    auto *Value = B.CreateLoad(B.getInt64Ty(), Home);
+    B.CreateStore(B.CreateXor(Before, Value), Function->getArg(1));
+    B.CreateCondBr(
+        B.CreateICmpNE(B.CreateAnd(Value, B.getInt64(1)), B.getInt64(0)),
+        Odd[I], Even[I]);
+    B.SetInsertPoint(Odd[I]);
+    B.CreateStore(B.CreateAdd(Value, B.getInt64(I + 1)), Home);
+    B.CreateStore(B.CreateAdd(Before, B.getInt64(I + 3)), Function->getArg(0));
+    B.CreateBr(Next);
+    B.SetInsertPoint(Even[I]);
+    B.CreateStore(B.CreateXor(Value, B.getInt64(I + 7)), Home);
+    B.CreateStore(B.CreateXor(Before, B.getInt64(I + 5)), Function->getArg(0));
+    B.CreateBr(Next);
+  }
+  B.SetInsertPoint(Latch);
+  auto *Count = B.CreateAdd(B.CreateLoad(B.getInt64Ty(), Pass), B.getInt64(1));
+  B.CreateStore(Count, Pass);
+  B.CreateCondBr(B.CreateICmpULT(Count, B.getInt64(2)), Headers.front(), Exit);
+  B.SetInsertPoint(Exit);
+  B.CreateRet(B.CreateLoad(B.getInt64Ty(), Home));
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  llvm::raw_string_ostream Output(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Output, Options));
+  Source += "\n#define PROJECTION_STEPS " + std::to_string(Steps) + R"(
+static uint64_t reference_loop(uint64_t *p, uint64_t *q, uint64_t value) {
+  for(unsigned pass=0;pass<2;++pass)
+    for(unsigned i=0;i<PROJECTION_STEPS;++i) {
+      uint64_t before=*p;
+      *q=before^value;
+      if(value&1) { value+=i+1; *p=before+i+3; }
+      else { value^=i+7; *p=before^(i+5); }
+    }
+  return value;
+}
+int main(void) {
+  const uint64_t seeds[]={0,1,UINT64_MAX,UINT64_C(0x8000000000000000)};
+  for(unsigned s=0;s<sizeof(seeds)/sizeof(*seeds);++s)
+    for(unsigned alias=0;alias<2;++alias) {
+      uint64_t actual[]={seeds[s]^23,19}, expected[]={actual[0],actual[1]};
+      if(projected_loop(actual,actual+(alias?0:1),seeds[s])!=
+         reference_loop(expected,expected+(alias?0:1),seeds[s])) return 1;
+      if(actual[0]!=expected[0] || actual[1]!=expected[1]) return 2;
+    }
+  return 0;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization, {}, true);
+}
+
 TEST(LLVMCValues, PreservedIndirectCallsKeepSignatureAndABI) {
   for (auto Convention : {llvm::CallingConv::C, llvm::CallingConv::Win64,
                           llvm::CallingConv::X86_64_SysV}) {
@@ -6038,6 +6830,63 @@ int main(void) {
     compileAndRun(Source, Optimization, {}, true);
 }
 
+TEST(LLVMCValues, WideFrameStoreRetainsBothRuntimeSelectedWords) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("wide-frame-storage", Context);
+  Module.setDataLayout("e-p:64:64-i128:128");
+  llvm::IRBuilder<> B(Context);
+  for (bool UseOr : {false, true}) {
+    auto *Word = B.getInt64Ty();
+    auto *Wide = B.getInt128Ty();
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(Word, {Word, Word, Word}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        UseOr ? "select_frame_or" : "select_frame_add", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Frame = B.CreateAlloca(llvm::ArrayType::get(B.getInt8Ty(), 96),
+                                 nullptr, "frame");
+    Frame->setAlignment(llvm::Align(16));
+    auto *End = B.CreateGEP(B.getInt8Ty(), Frame, B.getInt64(72), "frame_end");
+    auto *Base = B.CreatePtrToInt(End, Word, "rsp_init");
+    auto *Address = B.CreateAdd(Base, B.getInt64(-24));
+    auto *Pair =
+        B.CreateOr(B.CreateZExt(Function->getArg(0), Wide),
+                   B.CreateShl(B.CreateZExt(Function->getArg(1), Wide), 64));
+    B.CreateAlignedStore(Pair, B.CreateIntToPtr(Address, B.getPtrTy()),
+                         llvm::Align(16));
+    auto *Offset = B.CreateShl(B.CreateAnd(Function->getArg(2), 1), 3);
+    auto *Selected =
+        UseOr ? B.CreateOr(Address, Offset) : B.CreateAdd(Address, Offset);
+    B.CreateRet(B.CreateAlignedLoad(
+        Word, B.CreateIntToPtr(Selected, B.getPtrTy()), llvm::Align(8)));
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+  Source += R"c(
+int main(void) {
+  const uint64_t values[] = {0, 1, UINT64_MAX, UINT64_C(0x123456789abcdef0),
+                            UINT64_C(0xfedcba9876543210)};
+  const uint64_t indices[] = {0, 1, 2, 3, 255, 256, UINT64_MAX};
+  for (unsigned a = 0; a < sizeof(values) / sizeof(values[0]); ++a)
+    for (unsigned b = 0; b < sizeof(values) / sizeof(values[0]); ++b)
+      for (unsigned i = 0; i < sizeof(indices) / sizeof(indices[0]); ++i) {
+        uint64_t expected = indices[i] & 1 ? values[b] : values[a];
+        if (select_frame_add(values[a], values[b], indices[i]) != expected)
+          return 1;
+        if (select_frame_or(values[a], values[b], indices[i]) != expected)
+          return 2;
+      }
+  return 0;
+}
+)c";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(
+        Source, {Optimization, "-fsanitize=address,undefined",
+                 "-fno-sanitize-recover=all"});
+}
+
 TEST(LLVMCValues, BulkFrameMemoryKeepsContiguousBackingStorage) {
   llvm::LLVMContext Context;
   llvm::SMDiagnostic Error;
@@ -6934,4 +7783,59 @@ int main(void) { return call_site() != 7 || calls != 1 || errors; }
     for (llvm::StringRef Optimization : {"-O0", "-O2"})
       compileAndRun(Source, Optimization, {}, false, false, {}, Harness);
   }
+}
+
+TEST(LLVMCValues, AUnitLeavesOutOnlyTheDefinitionItCannotWrite) {
+  // LLVM C refuses a compare-exchange whose synchronization scope the C
+  // builtin cannot state: a unit that lists what it leaves out keeps the
+  // others.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+define i64 @before_exchange(i64 %x) {
+  %r = add i64 %x, 1
+  ret i64 %r
+}
+define i1 @scoped_exchange(ptr %p, i64 %expected, i64 %desired) {
+  %exchange = cmpxchg ptr %p, i64 %expected, i64 %desired syncscope("singlethread") seq_cst seq_cst
+  %ok = extractvalue { i64, i1 } %exchange, 1
+  ret i1 %ok
+}
+define i64 @after_exchange(i64 %x) {
+  %r = mul i64 %x, 3
+  ret i64 %r
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  Module->setTargetTriple(llvm::Triple("aarch64-linux-gnu"));
+  Module->setDataLayout("e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128");
+  neverd::CEmitterOptions Options;
+  Options.TheArch = neverd::Arch::AArch64;
+  Options.EmitIncludes = false;
+  std::vector<neverd::CEmitterOptions::RefusedDefinition> Refused;
+  Options.RefusedDefinitions = &Refused;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+  ASSERT_EQ(Refused.size(), 1u) << Source;
+  EXPECT_EQ(Refused.front().Name, "scoped_exchange");
+  EXPECT_EQ(Refused.front().Reason, "unsupported LLVM C cmpxchg shape");
+  // Each kept definition is written; the left-out one is only declared.
+  const auto Defines = [&](llvm::StringRef Name) {
+    llvm::SmallVector<llvm::StringRef> Lines;
+    llvm::StringRef(Source).split(Lines, '\n');
+    return llvm::any_of(Lines, [&](llvm::StringRef Line) {
+      return Line.contains((Name + "(").str()) && Line.ends_with(") {");
+    });
+  };
+  EXPECT_TRUE(Defines("before_exchange")) << Source;
+  EXPECT_TRUE(Defines("after_exchange")) << Source;
+  EXPECT_FALSE(Defines("scoped_exchange")) << Source;
+  // Without the list, the definition fails the unit.
+  Options.RefusedDefinitions = nullptr;
+  std::string Unit;
+  llvm::raw_string_ostream UnitOS(Unit);
+  EXPECT_THROW(neverd::LLVMCEmitter().emit(*Module, UnitOS, Options),
+               std::runtime_error);
 }

@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -234,6 +235,7 @@ void compileAndRun(const std::string &Source) {
         "-std=c11",
         Optimization,
         "-fsanitize=undefined,address",
+        "-fno-sanitize-recover=undefined",
         "-Werror=uninitialized",
         "-Werror=return-type",
         SourcePath,
@@ -940,6 +942,53 @@ TEST(SysVCallContract, AFormatNamesTheArgumentsAFormattedCallPasses) {
   EXPECT_EQ(Source.find("unknown"), std::string::npos) << Source;
 }
 
+TEST(SysVCallContract, AnEarlierBodyReadsASharedCallAsTheBodiesBeforeItLeft) {
+  // late() = printf("%d %d\n", a, b), its call at Shared; early(x, s) takes s
+  // for the format and jumps to Shared, so its own body holds that call too.
+  // A summary reads the formatted calls of the functions before it and its
+  // own: early's call is an ordinary one, with late after it in the run or
+  // not, even though the run's own summaries are computed in parallel.
+  constexpr va_t Early = Text, Late = Text + 0x20, Stub = Text + 0x40;
+  constexpr va_t Shared = Late + 9, Format = 0x402000;
+  std::vector<uint8_t> Code(0x50, 0xCC);
+  std::vector<uint8_t> EarlyCode = {0x48, 0x89, 0xF7, // mov rdi, rsi
+                                    0xE9};            // jmp Shared
+  for (uint8_t B : rel32(Early + 8, Shared))
+    EarlyCode.push_back(B);
+  put(Code, Early, EarlyCode);
+  std::vector<uint8_t> LateCode = {0x48, 0x8D, 0x3D}; // lea rdi, [fmt]
+  for (uint8_t B : rel32(Late + 7, Format))
+    LateCode.push_back(B);
+  for (uint8_t B : {0x31, 0xC0, // xor eax, eax
+                    0xE8})      // call printf
+    LateCode.push_back(B);
+  for (uint8_t B : rel32(Late + 14, Stub))
+    LateCode.push_back(B);
+  LateCode.push_back(0xC3); // ret
+  put(Code, Late, LateCode);
+  const auto EntryReads = [&](std::set<va_t> Entries) {
+    BinaryImage Img = makeImportImage(
+        Code, {{Early, "early"}, {Late, "late"}, {Stub, "printf_stub"}},
+        {{Stub, "printf"}});
+    addReadOnlyData(Img, Format, "%d %d\n");
+    llvm::LLVMContext Ctx;
+    PipelineOptions Opts;
+    Opts.EmitDumpOutput = false;
+    Opts.OnlyFunctionEntries = std::move(Entries);
+    const PipelineResult Result = Pipeline().run(Img, Ctx, Opts);
+    EXPECT_TRUE(Result.Success) << Result.Error;
+    return Result.CallEntryReadGPRs;
+  };
+  const auto Alone = EntryReads({Early, Stub});
+  const auto Both = EntryReads({Early, Late, Stub});
+  ASSERT_TRUE(Alone.count(Early));
+  ASSERT_TRUE(Both.count(Early) && Both.count(Late));
+  // late's call reads the two integers its format names.
+  EXPECT_EQ(Both.at(Late)[x86reg::RSI / 8], 4);
+  EXPECT_EQ(Both.at(Late)[x86reg::RDX / 8], 4);
+  EXPECT_EQ(Both.at(Early), Alone.at(Early));
+}
+
 TEST(SysVCallContract, AFormattedCallFormatsTheValuesItPasses) {
   // fmt_show(buf, n, a, x) = snprintf(buf, n, "%d %.2f", a, x): the
   // recompiled call writes what the original does.
@@ -968,9 +1017,7 @@ TEST(SysVCallContract, AFormattedCallFormatsTheValuesItPasses) {
 #include <string.h>
 int main(void) {
   char Text[32];
-  int (*Call)(char *, unsigned long, int, double) =
-      (int (*)(char *, unsigned long, int, double))(void *)fmt_show;
-  Call(Text, sizeof Text, 42, 3.25);
+  fmt_show((int64_t)(uintptr_t)Text, sizeof Text, 42, 3.25);
   return strcmp(Text, "42 3.25") == 0 ? 0 : 1;
 }
 )");
@@ -1338,19 +1385,19 @@ TEST(SysVCallContract, AJoinedFormatPrintsEveryArgumentOnBothPaths) {
   addReadOnlyData(Img, First, "%llu%c");
   addReadOnlyData(Img, Second, "%s%c");
   const auto Source = liftEntries(Img, {Text});
-  compileAndRun(Source + R"(
+  compileAndRun(Source + R"c(
 #include <string.h>
 int main(void) {
   char Buffer[64];
-  int (*Call)(char *, uint64_t, int, uint64_t, const char *, int) =
-      (int (*)(char *, uint64_t, int, uint64_t, const char *, int))(void *)joined_report;
-  if (Call(Buffer, sizeof Buffer, 1, UINT64_C(4294967303), "joined", '!') != 11 ||
+  if (joined_report((int64_t)(uintptr_t)Buffer, sizeof Buffer, 1,
+                    UINT64_C(4294967303), (int64_t)(uintptr_t)"joined", '!') != 11 ||
       strcmp(Buffer, "4294967303!")) return 1;
-  if (Call(Buffer, sizeof Buffer, 0, UINT64_C(4294967303), "joined", '?') != 7 ||
+  if (joined_report((int64_t)(uintptr_t)Buffer, sizeof Buffer, 0,
+                    UINT64_C(4294967303), (int64_t)(uintptr_t)"joined", '?') != 7 ||
       strcmp(Buffer, "joined?")) return 2;
   return 0;
 }
-)");
+)c");
 }
 
 TEST(SysVCallContract, AVariadicImportTakesTheParameterPassedThroughToIt) {
@@ -1388,7 +1435,9 @@ TEST(SysVCallContract, AVariadicImportTakesTheParameterPassedThroughToIt) {
   EXPECT_EQ(Read.find("open()"), std::string::npos) << Read;
   EXPECT_TRUE(llvm::Regex("open\\([^,]*arg0[^,]*, [^,]*arg1").match(Read))
       << Read;
-  EXPECT_TRUE(llvm::Regex("open\\([^,]*arg0[^,]*, [^,]*arg1[^,]*, 0x1A4\\)")
+  // Variadic constants retain the complete machine-word carrier.
+  EXPECT_TRUE(llvm::Regex("open\\([^,]*arg0[^,]*, [^,]*arg1[^,]*, "
+                          "\\(uint64_t\\)0x1A4\\)")
                   .match(Write))
       << Write;
   EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
@@ -1435,10 +1484,12 @@ TEST(SysVCallContract, AVariadicImportReadsTheParametersPassedOnToIt) {
       llvm::Regex("opener\\([^)]*arg0, [^)]*arg1, [^)]*arg2\\)").match(Open))
       << Open;
   EXPECT_TRUE(llvm::Regex("openat\\([^,]*arg0[^,]*, [^,]*arg1[^,]*, "
-                          "[^,]*arg2[^,]*, 0\\)")
+                          "[^,]*arg2[^,]*, \\(uint64_t\\)0\\)")
                   .match(Open))
       << Open;
-  EXPECT_TRUE(llvm::Regex("printf\\([^,]*arg0[^,]*, 7\\)").match(Log)) << Log;
+  EXPECT_TRUE(
+      llvm::Regex("printf\\([^,]*arg0[^,]*, \\(uint64_t\\)7\\)").match(Log))
+      << Log;
   EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
 }
 
@@ -1807,6 +1858,114 @@ TEST(SysVCallContract, ACopyOfEaxAfterSeteIsNoVectorCount) {
   EXPECT_EQ(Line.find(','), std::string::npos) << Line;
 }
 
+TEST(SysVCallContract, ADoubleAVariadicCallPassesOnIsAParameter) {
+  // note(fmt, ...) tests AL and saves the vector registers for va_arg, and
+  // each forwarder loads its format into RDI and AL with the doubles it
+  // passes: two jump to note and one calls it, passing on its own XMM0
+  // untouched (`long gd(double x){return logv("y", x);}`), and one sets
+  // XMM1 before AL counts two.  AL counts what the call passes, so each
+  // reads XMM0 at entry, a double, as its parameter, and caller passes it
+  // the double it computes.  A forwarder that leaves AL alone passes no
+  // count of its own, and its XMM0 stays no argument.
+  constexpr va_t Note = Text, Jumps = Text + 0x40, Calls = Text + 0x60,
+                 Sets = Text + 0x80, Unset = Text + 0xA0, Caller = Text + 0xC0;
+  std::vector<uint8_t> Code(0xE0, 0xCC);
+  const std::vector<uint8_t> NoteCode = {
+      0x48, 0x81, 0xEC, 0xD8, 0x00, 0x00, 0x00, // sub rsp, 0xd8
+      0x48, 0x89, 0x74, 0x24, 0x28,             // mov [rsp+0x28], rsi
+      0x48, 0x89, 0x54, 0x24, 0x30,             // mov [rsp+0x30], rdx
+      0x48, 0x89, 0x4C, 0x24, 0x38,             // mov [rsp+0x38], rcx
+      0x4C, 0x89, 0x44, 0x24, 0x40,             // mov [rsp+0x40], r8
+      0x4C, 0x89, 0x4C, 0x24, 0x48,             // mov [rsp+0x48], r9
+      0x84, 0xC0,                               // test al, al
+      0x74, 0x0A,                               // je spilled
+      0x0F, 0x29, 0x44, 0x24, 0x50,             // movaps [rsp+0x50], xmm0
+      0x0F, 0x29, 0x4C, 0x24, 0x60,             // movaps [rsp+0x60], xmm1
+      0x31, 0xC0,                               // spilled: xor eax, eax
+      0x48, 0x81, 0xC4, 0xD8, 0x00, 0x00, 0x00, // add rsp, 0xd8
+      0xC3};                                    // ret
+  put(Code, Note, NoteCode);
+  // mov edi, fmt; the count and other setup; jmp or call note.
+  auto Forwarder = [&](va_t At, std::vector<uint8_t> Setup, bool Call) {
+    std::vector<uint8_t> Bytes;
+    if (Call)
+      Bytes = {0x48, 0x83, 0xEC, 0x08}; // sub rsp, 8
+    for (uint8_t B : {0xBF, 0x00, 0x20, 0x40, 0x00})
+      Bytes.push_back(B);
+    llvm::append_range(Bytes, Setup);
+    Bytes.push_back(Call ? 0xE8 : 0xE9);
+    for (uint8_t B : rel32(At + Bytes.size() + 4, Note))
+      Bytes.push_back(B);
+    if (Call)
+      for (uint8_t B : {0x48, 0x83, 0xC4, 0x08, // add rsp, 8
+                        0xC3})                  // ret
+        Bytes.push_back(B);
+    put(Code, At, Bytes);
+  };
+  const std::vector<uint8_t> CountsOne = {0xB0, 0x01}; // mov al, 1
+  Forwarder(Jumps, CountsOne, false);
+  Forwarder(Calls, CountsOne, true);
+  Forwarder(Sets,
+            {0x0F, 0x57, 0xC9, // xorps xmm1, xmm1
+             0xB0, 0x02},      // mov al, 2
+            false);
+  Forwarder(Unset, {}, false);
+  std::vector<uint8_t> CallerCode = {
+      0x48, 0x83, 0xEC, 0x08, // sub rsp, 8
+      0xF2, 0x0F, 0x2A, 0xC7, // cvtsi2sd xmm0, edi
+      0xE8};                  // call jumps
+  for (uint8_t B : rel32(Caller + CallerCode.size() + 4, Jumps))
+    CallerCode.push_back(B);
+  for (uint8_t B : {0x48, 0x83, 0xC4, 0x08, // add rsp, 8
+                    0xC3})                  // ret
+    CallerCode.push_back(B);
+  put(Code, Caller, CallerCode);
+  const BinaryImage Img = makeImportImage(Code,
+                                          {{Note, "note"},
+                                           {Jumps, "jumps"},
+                                           {Calls, "calls"},
+                                           {Sets, "sets"},
+                                           {Unset, "unset"},
+                                           {Caller, "caller"}},
+                                          {});
+  llvm::LLVMContext Ctx;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries = {Jumps, Calls, Sets, Unset, Caller};
+  const PipelineResult Result = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  const std::pair<va_t, bool> Forwarders[] = {
+      {Jumps, true}, {Calls, true}, {Sets, true}, {Unset, false}};
+  for (const auto &[Entry, Passed] : Forwarders) {
+    SCOPED_TRACE(Entry);
+    const auto Reads = Result.CallEntryReadGPRs.find(Entry);
+    ASSERT_NE(Reads, Result.CallEntryReadGPRs.end());
+    EXPECT_EQ(Reads->second[kX64VectorFamilyBase], Passed ? 8 : 0);
+    EXPECT_EQ(Reads->second[kX64VectorFamilyBase + 1], 0);
+    const auto Func = llvm::find_if(
+        Result.MedFuncs, [&](const MedFunc &F) { return F.Entry == Entry; });
+    ASSERT_NE(Func, Result.MedFuncs.end());
+    auto Takes = [&](uint64_t Register) {
+      return llvm::any_of(
+          Func->Params, [&](const MedVar &P) { return P.RegOff == Register; });
+    };
+    EXPECT_EQ(Takes(x86reg::XMM0), Passed);
+    EXPECT_FALSE(Takes(x86reg::XMM1));
+  }
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Img.Arch;
+  Options.Format = Img.Format;
+  Options.Image = &Img;
+  ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, OS, Options));
+  EXPECT_NE(Source.find("jumps(double arg0)"), std::string::npos) << Source;
+  const std::string Body = body(Source, "caller");
+  ASSERT_FALSE(Body.empty()) << Source;
+  EXPECT_EQ(Body.find("jumps()"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("jumps("), std::string::npos) << Body;
+}
+
 TEST(SysVCallContract, GccSplitVaStartMarksTheFunctionVariadic) {
   // fatal(fmt, ...) as GCC builds it: va_start stores gp_offset and fp_offset
   // as two 32-bit constants where Clang stores one 64-bit word.  Either marks
@@ -2082,7 +2241,8 @@ TEST(SysVCallContract, ATailCallLeavesNoRegisterOfTheCallersOwn) {
   // g adds RDX to what f returns in RAX, so f returns the pair.  f sets
   // EDX to 11 and tail-jumps to an import no declaration describes: RDX
   // then holds what the import leaves there, not 11.  Nothing forwards the
-  // pair such an import returns yet, so f refuses to return one.
+  // pair such an import returns yet, so HighC must refuse the failed
+  // conversion instead of emitting the old trap-stub fallback.
   constexpr va_t F = Text, G = Text + 0x20, Stub = Text + 0x40;
   std::vector<uint8_t> Code(0x50, 0xCC);
   std::vector<uint8_t> FCode = {0xBA, 0x0B, 0x00, 0x00, 0x00, // mov edx, 11
@@ -2099,12 +2259,14 @@ TEST(SysVCallContract, ATailCallLeavesNoRegisterOfTheCallersOwn) {
   put(Code, G, GCode);
   const BinaryImage Img = makeImportImage(Code, {{F, "f"}, {G, "g"}},
                                           {{Stub, "neverd_pair_source"}});
-  const std::string Source = liftEntries(Img, {F, G, Stub});
-  EXPECT_EQ(Source.find("(11)) << 64"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("int64_t f(void) {\n    __builtin_trap(); /* unknown "
-                        "return value */"),
-            std::string::npos)
-      << Source;
+  try {
+    (void)liftEntries(Img, {F, G, Stub});
+    FAIL() << "an unproved high return register must refuse source emission";
+  } catch (const std::invalid_argument &Error) {
+    EXPECT_EQ(std::string(Error.what()),
+              "HighIR conversion failed: cannot recover the high register "
+              "of a wide integer return");
+  }
 }
 
 TEST(SysVCallContract, AByteSetAfterAFloatCallLeavesNoUnknownBytes) {
@@ -2264,7 +2426,7 @@ TEST(SysVCallContract, ErrorCheckingWrapperEndsAtItsExitHelper) {
       Body.find("fputs((void *)(uintptr_t)arg0, (void *)(uintptr_t)arg1)"),
       std::string::npos)
       << Body;
-  EXPECT_NE(Body.find("die(3)"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("die((uint64_t)3)"), std::string::npos) << Body;
   EXPECT_EQ(Body.find("next("), std::string::npos) << Body;
   EXPECT_EQ(Body.find("unknown value"), std::string::npos) << Body;
 }

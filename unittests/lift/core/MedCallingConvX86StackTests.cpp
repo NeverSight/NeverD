@@ -13,19 +13,17 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/ir/med/MedIR.h"
 
 #include <algorithm>
 #include <utility>
 #include <vector>
 
-namespace neverd {
-void detectCdeclStackParams(MedFunc &, Arch);
-} // namespace neverd
-
 namespace {
 
 using namespace neverd;
+using med_calling_conv_detail::detectCdeclStackParams;
 
 MedVar temp(int Id, int SSAVer, uint16_t Size, Arch TheArch) {
   MedVar V;
@@ -89,7 +87,7 @@ TEST(MedCallingConvX86Stack, ForwardedAddressesRequireAProvenOutput) {
           Forward.addInput(MedVar::makeConst(0, 4));
         B.Ops.push_back(Forward);
 
-        detectCdeclStackParams(F, Arch::X86);
+        detectCdeclStackParams(F, Arch::X86, BinaryFormat::ELF);
 
         ASSERT_EQ(F.Params.size(), 1u);
         const bool Escapes = RegisterOutput || EarlierOpaqueDefinition ||
@@ -145,7 +143,7 @@ TEST(MedCallingConvX86Stack, PhiCycleOffsetsRemainSpecificToEachQueryRoot) {
     if (ReverseBlocks)
       std::reverse(F.Blocks.begin(), F.Blocks.end());
 
-    detectCdeclStackParams(F, Arch::X86);
+    detectCdeclStackParams(F, Arch::X86, BinaryFormat::ELF);
 
     ASSERT_EQ(F.Params.size(), 2u);
     // Each root reaches the other PHI's outside arm after cutting its own

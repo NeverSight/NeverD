@@ -4285,6 +4285,9 @@ static void foldJoinValueGotoChainNested(std::vector<HighStmt> &Body) {
 /// sibling label stays put. Cond may contain a call.
 static bool invertExternalSkipGoto(std::vector<HighStmt> &Body) {
   bool Changed = false;
+  // Rejected candidates leave every statement index unchanged. Build once
+  // when needed and retire the map after moving a range into an arm.
+  std::optional<AddrMap> AM;
   for (int I = 0; I < static_cast<int>(Body.size()); ++I) {
     HighStmt &Stmt = Body[I];
     if (Stmt.Kind != StmtKind::If || !Stmt.Cond || !bodyIsSkipGoto(Stmt.Body))
@@ -4310,9 +4313,10 @@ static bool invertExternalSkipGoto(std::vector<HighStmt> &Body) {
     const size_t TargetInRest = findSkipTargetInList(Body, NextI, Target);
     if (TargetInRest != SIZE_MAX && TargetInRest <= CleanupI)
       continue;
-    AddrMap AM;
-    AM.rebuild(Body);
-    if (!ownsRunHighIR(Body, AM, {NextI, CleanupI + 1}, static_cast<size_t>(I)))
+    if (!AM)
+      AM.emplace().rebuild(Body);
+    if (!ownsRunHighIR(Body, *AM, {NextI, CleanupI + 1},
+                       static_cast<size_t>(I)))
       continue;
     std::vector<HighStmt> ThenBody;
     for (size_t K = NextI; K <= CleanupI; ++K)
@@ -4323,6 +4327,7 @@ static bool invertExternalSkipGoto(std::vector<HighStmt> &Body) {
     Stmt.Body = std::move(ThenBody);
     Body.erase(Body.begin() + static_cast<long>(NextI),
                Body.begin() + static_cast<long>(CleanupI + 1));
+    AM.reset();
     Changed = true;
   }
   return Changed;
@@ -4497,7 +4502,8 @@ static bool moveRestToElseAtFallthrough(std::vector<HighStmt> &Body,
 static bool flattenElseGotoNextLabel(std::vector<HighStmt> &Body,
                                      va_t FallthroughTarget) {
   bool Changed = false;
-  AddrMap AM;
+  // Dropping an else-arm jump changes no entry address or index in Body.
+  std::optional<AddrMap> AM;
   for (int I = 0; I < static_cast<int>(Body.size()); ++I) {
     HighStmt &Stmt = Body[I];
     if (Stmt.Kind != StmtKind::IfElse || !ifBodyIsOnlyGoto(Stmt.ElseBody))
@@ -4505,8 +4511,9 @@ static bool flattenElseGotoNextLabel(std::vector<HighStmt> &Body,
     const va_t Target = uniqueExitGoto(Stmt.ElseBody);
     if (!Target || Target == InvalidVA)
       continue;
-    AM.rebuild(Body);
-    const size_t TargetIndex = findTargetIndex(AM, Target);
+    if (!AM)
+      AM.emplace().rebuild(Body);
+    const size_t TargetIndex = findTargetIndex(*AM, Target);
     const size_t NextI = nextNonNopIndex(Body, static_cast<size_t>(I) + 1);
     const bool ParentFallthrough =
         TargetIndex == SIZE_MAX && NextI >= Body.size() &&
@@ -4719,7 +4726,7 @@ bool elseArmsForFallthroughJumps(HighFunc &Func) {
 /// elsework into the inner If.
 static bool foldThenSkipOver(std::vector<HighStmt> &Body) {
   bool Changed = false;
-  AddrMap AM;
+  std::optional<AddrMap> AM;
   for (int I = 0; I < static_cast<int>(Body.size()); ++I) {
     HighStmt &Stmt = Body[I];
     HighStmt *Inner = nullptr;
@@ -4742,8 +4749,9 @@ static bool foldThenSkipOver(std::vector<HighStmt> &Body) {
     const va_t Join = Inner->Body.back().GotoTarget;
     if (!Join || Join == InvalidVA)
       continue;
-    AM.rebuild(Body);
-    const size_t JoinIdx = findTargetIndex(AM, Join);
+    if (!AM)
+      AM.emplace().rebuild(Body);
+    const size_t JoinIdx = findTargetIndex(*AM, Join);
     const size_t NextI = static_cast<size_t>(I) + 1;
     if (JoinIdx == SIZE_MAX || JoinIdx <= NextI)
       continue;
@@ -4752,7 +4760,7 @@ static bool foldThenSkipOver(std::vector<HighStmt> &Body) {
       continue;
     if (!rangeHasObservableWork(Body, NextI, ElseEnd))
       continue;
-    if (!ownsRun(Body, AM, {NextI, ElseEnd}, static_cast<size_t>(I), nullptr))
+    if (!ownsRun(Body, *AM, {NextI, ElseEnd}, static_cast<size_t>(I), nullptr))
       continue;
     const bool JoinFollowsElse = ElseEnd == JoinIdx;
     size_t ElseTake = ElseEnd;
@@ -4771,6 +4779,8 @@ static bool foldThenSkipOver(std::vector<HighStmt> &Body) {
       Inner->ElseBody.push_back(std::move(Body[K]));
     Body.erase(Body.begin() + static_cast<long>(NextI),
                Body.begin() + static_cast<long>(ElseTake));
+    // Erasing the moved statements shifts every following join's index.
+    AM.reset();
     Changed = true;
   }
   return Changed;

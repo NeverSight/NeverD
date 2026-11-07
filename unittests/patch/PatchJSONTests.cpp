@@ -14,8 +14,11 @@
 #include "neverd/patch/PatchIO.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/JSON.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -93,6 +96,70 @@ TEST(PatchJSON, RetainsLegacyIntegerAdmissionWithoutRoundingDecimals) {
   }
 }
 
+TEST(PatchJSON, AddressFieldsKeepUnsignedHexValuesAndLeadingZeroes) {
+  const auto Check = [](llvm::StringRef Spelling, uint64_t Expected) {
+    SCOPED_TRACE(Spelling.str());
+    const auto Quoted = llvm::formatv("{0}", llvm::json::Value(Spelling)).str();
+    auto Rows = parsePatchRows("[" +
+                               row("1", ",\"file_off\":" + Quoted + ",\"va\":" +
+                                            Quoted + ",\"addr\":" + Quoted) +
+                               "]");
+    ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+    ASSERT_EQ(Rows->size(), 1u);
+    EXPECT_EQ(Rows->front().FileOffset, Expected);
+    EXPECT_EQ(Rows->front().Address, Expected);
+  };
+  Check("0x0", 0);
+  Check("0x000000000000000000000000000002", 2);
+  Check("0xABCDEF", 0xabcdef);
+  Check("0x" + std::string(8192, '0'), 0);
+  Check("0xfFfFfFfFfFfFfFfF", UINT64_MAX);
+  Check("0x" + std::string(4096, '0') + "ffffffffffffffff", UINT64_MAX);
+
+  // Equal numeric keys need not have identical spelling.
+  auto Rows = parsePatchRows(
+      "[" + row("1", R"(,"file_off":"0x000a","addr":"0xA")") + "]");
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  ASSERT_EQ(Rows->size(), 1u);
+  EXPECT_EQ(Rows->front().FileOffset, 10u);
+  EXPECT_EQ(Rows->front().Address, 0x1002u);
+}
+
+TEST(PatchJSON, AddressFieldsRejectPartialSignedAndOverflowingHex) {
+  const std::vector<std::string> Invalid{"",
+                                         "0x",
+                                         "0X2",
+                                         " 0x2",
+                                         "0x+2",
+                                         "0x-0",
+                                         "0x-2",
+                                         "0x 2",
+                                         "0x2 ",
+                                         "0x2.0",
+                                         "0x2p1",
+                                         "0x2g",
+                                         "0x0x2",
+                                         "0x2\n",
+                                         std::string("0x2\0", 4),
+                                         "0x2\xc3\xa9",
+                                         "0x10000000000000000",
+                                         "0x00010000000000000000",
+                                         "0xFFFFFFFFFFFFFFFFF",
+                                         "0x" + std::string(8192, 'f'),
+                                         "0x" + std::string(8192, '0') +
+                                             std::string(17, 'f')};
+  for (const auto &Spelling : Invalid) {
+    SCOPED_TRACE(Spelling);
+    const auto Quoted = llvm::formatv("{0}", llvm::json::Value(Spelling)).str();
+    for (llvm::StringRef Key : {"file_off", "va", "addr"}) {
+      SCOPED_TRACE(Key.str());
+      expectRejected("[" + row("1", ",\"" + Key.str() + "\":" + Quoted) + "]",
+                     Key == "addr" ? "patch row key differs from file offset"
+                                   : "invalid patch row fields");
+    }
+  }
+}
+
 TEST(PatchJSON, OwnsDecodedBytesBeyondInputAndParserLifetime) {
   auto Rows = [] {
     std::string Text = "[" + row() + "]";
@@ -150,6 +217,18 @@ TEST(PatchJSON, UnknownFieldsKeepLegacyParsingAndCannotHideSyntaxErrors) {
   expectRejected("[" + row() + ",]");
   expectRejected("[" + row() + "] false");
   expectRejected({});
+}
+
+TEST(PatchJSON, EmptyInputRetainsLegacySyntaxDiagnostics) {
+  for (llvm::StringRef Text :
+       {llvm::StringRef(), llvm::StringRef(""), llvm::StringRef(" \n\t")}) {
+    auto Legacy = llvm::json::parse(Text);
+    ASSERT_FALSE(bool(Legacy));
+    const auto Diagnostic = llvm::toString(Legacy.takeError());
+    auto Rows = parsePatchRows(Text);
+    ASSERT_FALSE(bool(Rows));
+    EXPECT_EQ(llvm::toString(Rows.takeError()), Diagnostic);
+  }
 }
 
 TEST(PatchJSON, EnforcesRowLimitBeforeReturningPartialState) {

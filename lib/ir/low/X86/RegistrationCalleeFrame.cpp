@@ -4,8 +4,16 @@
 //
 //===----------------------------------------------------------------------===//
 
+/// \file
+/// Check private callee frames and invocation-specific scalar effects.
+//===----------------------------------------------------------------------===//
+
 #include "RegistrationABIPrivate.h"
+#include "RegistrationConditionalFrame.h"
+#include "RegistrationFrameBranch.h"
 #include "RegistrationFrameEffects.h"
+#include "RegistrationMemoryPermissions.h"
+#include "RegistrationOriginalImage.h"
 #include "RegistrationPrivateFrame.h"
 
 #include "neverd/Limits.h"
@@ -14,15 +22,55 @@
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
-#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <deque>
+#include <map>
+#include <optional>
 #include <set>
+#include <utility>
+#include <vector>
 
 namespace neverd::registration_abi {
+namespace {
+size_t stateWork(const PrivateFrameState &State) {
+  return State.Frame.cellCount() + State.Frame.OtherRegisterBytes.size() +
+         State.Borrow.cellCount() + State.Borrow.OtherRegisterBytes.size() +
+         State.BorrowSpills.cellCount() +
+         State.BorrowSpills.OtherRegisterBytes.size() +
+         State.CopySource.cellCount() +
+         State.CopySource.OtherRegisterBytes.size() +
+         State.CopySourceSpills.cellCount() +
+         State.CopySourceSpills.OtherRegisterBytes.size() +
+         State.ObjectInitialized.size() + State.Initialized.size() +
+         State.Frame.Registers.size() + State.Borrow.Registers.size() +
+         State.BorrowSpills.Registers.size() +
+         State.CopySource.Registers.size() +
+         State.CopySourceSpills.Registers.size();
+}
+
+/// A bound invocation may use immutable scalar bytes to prove its memory
+/// footprint. The loader still owns mappings and conflicting fixups. No raw
+/// byte pattern acquires an address identity here.
+std::optional<registration_state::FrameValue>
+immutableScalar(const BinaryImage &Image, va_t Address, uint16_t Width,
+                size_t &Work) {
+  const auto Read =
+      readImmutableRegistrationScalar(Image, Address, Width, Work);
+  if (Read && Read->Value)
+    return registration_state::FrameValue::constant(*Read->Value);
+  return std::nullopt;
+}
+} // namespace
+
 bool PrivateFrameState::merge(const PrivateFrameState &Other) {
   bool Changed = Frame.merge(Other.Frame);
+  if (!Raised && Other.Raised) {
+    Raised = true;
+    Changed = true;
+  }
   Changed |= Borrow.merge(Other.Borrow);
   Changed |= BorrowSpills.merge(Other.BorrowSpills);
   Changed |= CopySource.merge(Other.CopySource);
@@ -47,8 +95,23 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                            const PrivateFrameOptions &Options) {
   const auto [BorrowECX, ThrowProof, IndependentScalarReturn,
               DiscardReturnValue, CopyObjectSize, Initializer, Initializers,
-              ObjectCallbacks, CallbackStackPopBytes, ScalarArguments] =
-      Options;
+              ObjectCallbacks, CallbackStackPopBytes, ScalarArguments,
+              ScalarRegisters, ReturnValue, ExcludeCalls, OriginalImage,
+              ClosedIntegerEffects, StackPopBytes, Dispatch] = Options;
+  if (ClosedIntegerEffects)
+    *ClosedIntegerEffects = true;
+  if (ReturnValue)
+    ReturnValue->reset();
+  if (StackPopBytes)
+    StackPopBytes->reset();
+  if (Dispatch)
+    Dispatch->reset();
+  if ((ReturnValue || ScalarRegisters || ExcludeCalls || StackPopBytes ||
+       Dispatch) &&
+      !ScalarArguments)
+    return false;
+  if (OriginalImage && (!ScalarArguments || !ExcludeCalls || !ReturnValue))
+    return false;
   if (ScalarArguments &&
       (BorrowECX || ThrowProof || DiscardReturnValue || CopyObjectSize ||
        Initializer || Initializers || ObjectCallbacks || CallbackStackPopBytes))
@@ -73,13 +136,16 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
   if (IndependentScalarReturn)
     *IndependentScalarReturn = true;
   using namespace registration_state;
-  auto Charge = [&](size_t Amount) {
-    if (Amount > limits::kMaxRegistrationEHStateWork - Work)
-      return false;
-    Work += Amount;
-    return true;
-  };
+  auto Charge = [&](size_t Amount) { return chargeCalleeWork(Work, Amount); };
+  Decoder Dec;
+  if (!Dec.init(Image))
+    return false;
+  for (const auto &Block : Function.Blocks)
+    for (const auto &Insn : Block.InstructionBoundaries)
+      if (!Charge(1) || !hasImmutableCalleeInstruction(Image, Insn, Dec))
+        return false;
   std::map<int, const LowBlock *> Blocks;
+  std::map<va_t, int> Entries;
   PrivateFrameState Initial;
   for (unsigned Index = 0; Index != Initial.Frame.Registers.size(); ++Index)
     Initial.Frame.Registers[Index] = {{},   {},    false,
@@ -88,10 +154,20 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
       FrameValue::frame(4);
   FrameValue CallerPC;
   CallerPC.MayBeFrame = CallerPC.ReturnPC = true;
-  Initial.Frame.Cells[4] = CallerPC;
+  Initial.Frame.Cells.set(4, CallerPC);
+  if (ScalarRegisters)
+    for (const auto &[Index, Value] : *ScalarRegisters) {
+      if (!Charge(1) || !isX86VolatileFrameRegister(Index) || Value.MayBeFrame)
+        return false;
+      Initial.Frame.Registers[Index] = Value;
+    }
   if (ScalarArguments)
     for (const auto &[Offset, Value] : *ScalarArguments) {
-      if (Offset < 8 || Offset > 128 || (Offset & 3) || Value.MayBeFrame)
+      if (Offset < 8 ||
+          Offset >
+              ::neverd::limits::ir::
+                  kRegistrationConditionalCallHasConditionalCallFrameOffsetLimit ||
+          (Offset & 3) || Value.MayBeFrame)
         return false;
       Initial.Frame.store(Offset, 4, Value);
       for (int Byte = 0; Byte != 4; ++Byte)
@@ -103,9 +179,11 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
         FrameValue::frame(0);
   }
   if (CopyObjectSize)
-    Initial.CopySourceSpills.Cells[8] = FrameValue::frame(0);
+    Initial.CopySourceSpills.Cells.set(8, FrameValue::frame(0));
   for (const auto &Block : Function.Blocks) {
-    Blocks.emplace(Block.Id, &Block);
+    if (!Charge(1) || !Blocks.emplace(Block.Id, &Block).second ||
+        !Entries.emplace(Block.StartAddr, Block.Id).second)
+      return false;
     for (const auto &Op : Block.Ops)
       for (unsigned Index = 0; Index != Op.NumInputs; ++Index) {
         const auto &Input = Op.Inputs[Index];
@@ -124,23 +202,31 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
     return false;
   std::map<int, PrivateFrameState> Incoming;
   Incoming.emplace(Entry->Id, Initial);
-  std::deque<int> Pending{Entry->Id};
+  // Ordinary contracts join incoming states. Exact bound invocations retain
+  // each reached state, so a finite table loop does not lose its induction
+  // value at the first backedge. Repeated states close a fixed point; the
+  // shared work limit bounds new states and comparisons without guessing an
+  // iteration count from the amount of mapped storage.
+  std::map<int, std::vector<PrivateFrameState>> BoundIncoming;
+  if (ScalarArguments)
+    BoundIncoming[Entry->Id].push_back(Initial);
+  std::map<std::pair<va_t, uint16_t>, std::optional<FrameValue>> ImageValues;
+  std::optional<FrameValue> Returned;
+  std::optional<uint32_t> ReturningPop;
+  bool CompleteReturns = true;
+  ConditionalDispatch DispatchEffects;
+  bool ClosedDispatch = Dispatch != nullptr;
+  std::deque<std::pair<int, size_t>> Pending{{Entry->Id, 0}};
   while (!Pending.empty()) {
-    const int Id = Pending.front();
+    const auto [Id, StateIndex] = Pending.front();
     Pending.pop_front();
-    if (!Blocks.count(Id) ||
-        !Charge(1 + Incoming.at(Id).Frame.Cells.size() +
-                Incoming.at(Id).Frame.OtherRegisterBytes.size() +
-                Incoming.at(Id).Borrow.Cells.size() +
-                Incoming.at(Id).BorrowSpills.Cells.size() +
-                Incoming.at(Id).Borrow.OtherRegisterBytes.size() +
-                Incoming.at(Id).CopySource.Cells.size() +
-                Incoming.at(Id).CopySourceSpills.Cells.size() +
-                Incoming.at(Id).CopySource.OtherRegisterBytes.size() +
-                Incoming.at(Id).ObjectInitialized.size() +
-                Incoming.at(Id).Initialized.size()))
+    if (!Blocks.count(Id))
       return false;
-    PrivateFrameState State = Incoming.at(Id);
+    const auto &Before =
+        ScalarArguments ? BoundIncoming.at(Id).at(StateIndex) : Incoming.at(Id);
+    if (!Charge(1 + stateWork(Before)))
+      return false;
+    PrivateFrameState State = Before;
     FrameTransfer Transfer(State.Frame, 0);
     FrameTransfer BorrowTransfer(State.Borrow, 0);
     FrameTransfer CopySourceTransfer(State.CopySource, 0);
@@ -154,11 +240,78 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
            !registration_state::isFramePreservingIntrinsic(Op)) ||
           Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         return false;
+      if (StackPopBytes && Op.Opcode == NdOp::INDIR_BR)
+        return false;
       Transfer.beginInstruction(Op.Addr);
       BorrowTransfer.beginInstruction(Op.Addr);
       CopySourceTransfer.beginInstruction(Op.Addr);
+      if (ClosedDispatch) {
+        const auto Memory = lowMemoryOperands(Op);
+        const auto Address =
+            Memory.Address ? Transfer.read(*Memory.Address) : FrameValue{};
+        const bool ArgumentRead = Op.Opcode == NdOp::LOAD && Memory.Complete &&
+                                  Address.Offset && *Address.Offset >= 8 &&
+                                  Memory.AccessSize == 4 &&
+                                  ScalarArguments->count(*Address.Offset);
+        if (ArgumentRead)
+          DispatchEffects.ArgumentEnd =
+              std::max(DispatchEffects.ArgumentEnd, *Address.Offset + 4);
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+          const auto SP =
+              State.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride]
+                  .Offset;
+          if (SP && !Charge(State.Frame.memoryAccessWork(FrameValue::frame(*SP),
+                                                         8, false) +
+                            1))
+            return false;
+          const auto Code = State.Frame.load(SP, 4).Constant;
+          ClosedDispatch = !State.Raised && SP && *SP <= INT32_MAX - 4 &&
+                           Code && State.Frame.load(*SP + 4, 4).Constant == 0;
+          // The call transfer below authenticates this occurrence and all
+          // four arguments before any invocation result can be published.
+          if (ClosedDispatch) {
+            const SEHExceptionOrigin Origin{Op.Addr, Op.Seq, *Code};
+            ClosedDispatch =
+                !DispatchEffects.Raise || *DispatchEffects.Raise == Origin;
+            DispatchEffects.Raise = Origin;
+            State.Raised = true;
+          }
+        } else {
+          ClosedDispatch =
+              hasClosedRegistrationIntegerEffect(Op) ||
+              ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
+               Memory.AccessSize <= sizeof(uint32_t) &&
+               (ArgumentRead ||
+                hasClosedOrdinaryRegistrationMemoryAccess(
+                    Image, Op, Transfer, sizeof(uint32_t), Work)));
+        }
+      }
+      if (ClosedIntegerEffects && *ClosedIntegerEffects) {
+        const bool ThrowCall = ThrowProof && Op.Opcode == NdOp::CALL &&
+                               Op.Addr == ThrowProof->ThrowCallVA &&
+                               Op.Seq == ThrowProof->ThrowOpSeq;
+        const auto Memory = lowMemoryOperands(Op);
+        const auto Object = Memory.Address
+                                ? BorrowTransfer.read(*Memory.Address)
+                                : FrameValue{};
+        const bool BoundObject =
+            BorrowECX && Memory.Complete && Object.Offset &&
+            Object == FrameValue::frame(*Object.Offset) &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+            Op.MemoryOrdering == NdMemoryOrdering::None;
+        // This frame uses entry SP = 4, with the caller PC at [4, 8).
+        // The private-frame proof below separately excludes incoming storage
+        // and writes to that PC. Image permissions exclude every IAT write.
+        *ClosedIntegerEffects =
+            ThrowCall || hasClosedRegistrationIntegerEffect(Op) ||
+            ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
+             Memory.AccessSize <= sizeof(uint32_t) &&
+             (BoundObject || hasClosedOrdinaryRegistrationMemoryAccess(
+                                 Image, Op, Transfer, sizeof(uint32_t), Work)));
+      }
       auto BorrowValue = BorrowTransfer.evaluate(Op, false);
       auto CopySourceValue = CopySourceTransfer.evaluate(Op, false);
+      std::optional<FrameValue> ImageValue;
       const auto Memory = lowMemoryOperands(Op);
       if (Memory.Address) {
         if (!Memory.Complete ||
@@ -168,6 +321,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                     State.CopySourceSpills.Cells.size() + Memory.AccessSize))
           return false;
         const auto Address = Transfer.read(*Memory.Address);
+        const auto ImageVA = Address.preferredAddress();
         const auto Object = BorrowTransfer.read(*Memory.Address);
         const auto CopySource = CopySourceTransfer.read(*Memory.Address);
         if ((Object.MayBeFrame && !Object.Offset) ||
@@ -176,7 +330,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
           return false;
         if (BorrowECX && Object.Offset) {
           const int64_t End = int64_t(*Object.Offset) + Memory.AccessSize;
-          if (Address.Offset || Address.Constant || Address.MayBeFrame ||
+          if (Address.Offset || ImageVA || Address.MayBeFrame ||
               *Object.Offset < 0 || End > INT32_MAX ||
               End > limits::kMaxSourceCallBorrowedBytes ||
               (CopyObjectSize && uint64_t(End) > CopyObjectSize))
@@ -202,7 +356,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
           }
         } else if (CopyObjectSize && CopySource.Offset) {
           const int64_t End = int64_t(*CopySource.Offset) + Memory.AccessSize;
-          if (Address.Offset || Address.Constant || Address.MayBeFrame ||
+          if (Address.Offset || ImageVA || Address.MayBeFrame ||
               *CopySource.Offset < 0 || uint64_t(End) > CopyObjectSize ||
               Op.Opcode != NdOp::LOAD || Memory.StoredValue)
             return false;
@@ -221,7 +375,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                   uint64_t(8) + ScalarArgumentBytes &&
               Op.Opcode == NdOp::LOAD && Memory.AccessSize <= 4 &&
               (*Address.Offset - 8) % 4 + Memory.AccessSize <= 4;
-          if ((!Address.Offset && !Address.Constant) ||
+          if ((!Address.Offset && !ImageVA) ||
               (Address.MayBeFrame && !Address.Offset) ||
               (Address.Offset && !CopyArgument && !ScalarArgument &&
                int64_t(*Address.Offset) + Memory.AccessSize > 8 &&
@@ -229,20 +383,43 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                 !ScalarArguments->count(*Address.Offset) ||
                 Op.Opcode != NdOp::LOAD)))
             return false;
-          if (Address.Constant && *Address.Constant != 0) {
-            const auto *Owner = Image.getSegmentFor(*Address.Constant);
-            if (!Owner || *Address.Constant < Owner->VA ||
-                uint64_t(*Address.Constant) - Owner->VA > Owner->Size ||
+          if (ImageVA && *ImageVA != 0) {
+            const auto *Owner = Image.getSegmentFor(*ImageVA);
+            if (!Owner || *ImageVA < Owner->VA ||
+                uint64_t(*ImageVA) - Owner->VA > Owner->Size ||
                 Memory.AccessSize >
-                    Owner->Size - (uint64_t(*Address.Constant) - Owner->VA))
+                    Owner->Size - (uint64_t(*ImageVA) - Owner->VA))
               return false;
           }
-          if (Address.Constant && Op.Opcode != NdOp::STORE)
-            Effects.Reads.emplace(*Address.Constant,
-                                  va_t(*Address.Constant) + Memory.AccessSize);
-          if (Address.Constant && Memory.StoredValue)
-            Effects.Writes.emplace(*Address.Constant,
-                                   va_t(*Address.Constant) + Memory.AccessSize);
+          if (ImageVA && Op.Opcode != NdOp::STORE) {
+            Effects.Reads.emplace(*ImageVA, va_t(*ImageVA) + Memory.AccessSize);
+            if (OriginalImage && !OriginalImage->recordReadAddress(
+                                     Address, Memory.AccessSize, Work))
+              return false;
+          }
+          if (ScalarArguments && ImageVA && !Address.MayBeFrame &&
+              Op.MemoryOrdering == NdMemoryOrdering::None &&
+              Op.Opcode == NdOp::LOAD && Memory.AccessSize == Op.Output.Size) {
+            const auto Key = std::make_pair(va_t(*ImageVA), Memory.AccessSize);
+            if (!Charge(1 + ImageValues.size()))
+              return false;
+            const auto [It, New] = ImageValues.try_emplace(Key);
+            if (New) {
+              if (OriginalImage &&
+                  !OriginalImage->permitsRead(Key.first, Key.second, Work))
+                return false;
+              It->second =
+                  OriginalImage
+                      ? OriginalImage->readScalar(Key.first, Key.second, Work)
+                      : immutableScalar(Image, Key.first, Key.second, Work);
+            }
+            if (Work >= limits::kMaxRegistrationEHStateWork)
+              return false;
+            ImageValue = It->second;
+          }
+          if (ImageVA && Memory.StoredValue)
+            Effects.Writes.emplace(*ImageVA,
+                                   va_t(*ImageVA) + Memory.AccessSize);
           if (Address.Offset) {
             const int64_t End = int64_t(*Address.Offset) + Memory.AccessSize;
             if (End > INT32_MAX)
@@ -287,8 +464,9 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                      Transfer.read(*Memory.StoredValue).MayBeFrame) {
             if (!Transfer.read(*Memory.StoredValue).ReturnPC)
               return false;
-            Effects.CallerPCWrites.emplace(
-                *Address.Constant, va_t(*Address.Constant) + Memory.AccessSize);
+            Effects.CallerPCWrites.emplace(*ImageVA,
+                                           va_t(*Address.preferredAddress()) +
+                                               Memory.AccessSize);
           }
           if (Memory.StoredValue && !Address.Offset &&
               (BorrowTransfer.read(*Memory.StoredValue).MayBeFrame ||
@@ -301,6 +479,8 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
       std::optional<FrameValue> AfterCallObject;
       bool AfterCallScalar = false;
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        if (ExcludeCalls)
+          return false;
         if (BorrowECX && !Initializer && !ObjectCallbacks)
           return false;
         const RegistrationInitializerCalleeABI *Init = nullptr;
@@ -363,10 +543,10 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
             break;
           }
           if (!Object.Offset || Object.ReturnPC || Object.FrameOnlyFromCall ||
-              !Table.Constant || Table.MayBeFrame)
+              !Table.preferredAddress() || Table.MayBeFrame)
             return false;
           auto ObjectABI = getCheckedX86RegistrationThrowObjectABI(
-              Image, *Table.Constant, &Work);
+              Image, *Table.preferredAddress(), &Work);
           if (!ObjectABI ||
               !Charge(ObjectABI->Info.ObjectSize + State.Frame.Cells.size()))
             return false;
@@ -381,6 +561,8 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
             if (Value.MayBeFrame && int64_t(Cell) < End &&
                 int64_t(*Object.Offset) < int64_t(Cell) + 4)
               return false;
+          if (ClosedIntegerEffects)
+            *ClosedIntegerEffects &= ObjectABI->PreservesDispatchBindings;
           for (const auto &Range : Info.ReadOnlyRanges)
             Effects.Reads.emplace(Range.Begin, Range.End);
           Effects.Reads.emplace(Info.TypeDescriptorRange.Begin,
@@ -479,6 +661,26 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
             return false;
         }
       if (Op.Opcode == NdOp::RETURN) {
+        if (StackPopBytes) {
+          if (!Charge(1))
+            return false;
+          const auto Pop = checkedNearReturnStackPop(Image, Op.Addr);
+          const auto &Block = *Blocks.at(Id);
+          if (!Pop || (ReturningPop && *ReturningPop != *Pop) ||
+              &Op != &Block.Ops.back() || !Block.Succs.empty())
+            return false;
+          ReturningPop = Pop;
+        }
+        if (ReturnValue) {
+          if (!Charge(1))
+            return false;
+          if (Op.NumInputs != 1 || Op.Inputs[0].Size != 4)
+            CompleteReturns = false;
+          else {
+            const auto Value = Transfer.read(Op.Inputs[0]);
+            Returned = Returned ? join(*Returned, Value) : Value;
+          }
+        }
         if (Initializer) {
           if (Op.NumInputs != 1 || Op.Inputs[0].Size != 4 ||
               Transfer.read(Op.Inputs[0]).MayBeFrame ||
@@ -518,7 +720,11 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
             return false;
         }
       }
-      Transfer.write(Op, Transfer.evaluate(Op, false));
+      if (OriginalImage && Op.Opcode != NdOp::LOAD)
+        ImageValue = OriginalImage->evaluate(Op, Transfer, Work);
+      if (OriginalImage && Work >= limits::kMaxRegistrationEHStateWork)
+        return false;
+      Transfer.write(Op, ImageValue.value_or(Transfer.evaluate(Op, false)));
       if (BorrowECX)
         BorrowTransfer.write(Op, BorrowValue);
       if (CopyObjectSize)
@@ -562,25 +768,61 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
     }
     if (Threw)
       continue;
+    const auto &Block = *Blocks.at(Id);
+    if (!Charge(1 + Block.Succs.size()))
+      return false;
+    if (StackPopBytes &&
+        (Block.Ops.empty() ||
+         (Block.Succs.empty() && Block.Ops.back().Opcode != NdOp::RETURN)))
+      return false;
+    const auto KnownSuccessor = knownFrameBranchTarget(
+        Block, Transfer, [&](va_t Address) -> std::optional<int> {
+          const auto Found = Entries.find(Address);
+          return Found == Entries.end() ? std::nullopt
+                                        : std::optional<int>{Found->second};
+        });
     for (int Successor : Blocks.at(Id)->Succs) {
+      if (!Blocks.count(Successor))
+        return false;
+      // Both physical edges must exist. Ordinary joins can lose a constant
+      // on a later visit, in which case both successors are checked again.
+      if (KnownSuccessor && *KnownSuccessor != Blocks.at(Successor)->StartAddr)
+        continue;
+      if (ScalarArguments) {
+        if (!Charge(1 + stateWork(State)))
+          return false;
+        auto &Reached = BoundIncoming[Successor];
+        bool Found = false;
+        for (const auto &Existing : Reached) {
+          if (!Charge(1 + stateWork(State) + stateWork(Existing)))
+            return false;
+          if (Existing == State) {
+            Found = true;
+            break;
+          }
+        }
+        if (!Found) {
+          Pending.emplace_back(Successor, Reached.size());
+          Reached.push_back(State);
+        }
+        continue;
+      }
       const auto Existing = Incoming.find(Successor);
-      const auto StateSize = [](const PrivateFrameState &S) {
-        return S.Frame.Cells.size() + S.Frame.OtherRegisterBytes.size() +
-               S.Borrow.Cells.size() + S.BorrowSpills.Cells.size() +
-               S.Borrow.OtherRegisterBytes.size() + S.Initialized.size() +
-               S.CopySource.Cells.size() + S.CopySourceSpills.Cells.size() +
-               S.CopySource.OtherRegisterBytes.size() +
-               S.ObjectInitialized.size();
-      };
       if (!Charge(
-              1 + StateSize(State) +
-              (Existing == Incoming.end() ? 0 : StateSize(Existing->second))))
+              1 + stateWork(State) +
+              (Existing == Incoming.end() ? 0 : stateWork(Existing->second))))
         return false;
       auto [It, New] = Incoming.emplace(Successor, State);
       if (New || It->second.merge(State))
-        Pending.push_back(Successor);
+        Pending.emplace_back(Successor, 0);
     }
   }
+  if (ReturnValue && CompleteReturns)
+    *ReturnValue = Returned;
+  if (StackPopBytes)
+    *StackPopBytes = ReturningPop;
+  if (Dispatch && ClosedDispatch)
+    *Dispatch = std::move(DispatchEffects);
   return true;
 }
 

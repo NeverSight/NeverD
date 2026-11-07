@@ -292,7 +292,7 @@ CPI/PDA viene costruito solo quando esiste un vero `scratch consumer`; i program
 senza tale consumer saltano il `whole-CFG fixed point`. `SBFAnalysisLimits.def`
 definisce l’`analysis policy` dell’host, non i `protocol limits`:
 `MaxModeledScratchBytes` vale 1,024 byte per `program point`, mentre
-`ScratchFlowRetainedByteBudget` è una `logical retained estimate` di 8,388,608 byte.
+`ScratchFlowRetainedByteBudget` è una `logical retained estimate` di 16,777,216 byte.
 Quando il budget è superato, il recupero applica widening esplicito a
 `ScratchRecoveryPrecision::BlockLocal`. Vanno persi solo i `cross-block must-facts`;
 `block-local replay` resta `sound` e può ancora recuperare i `same-block stores`.

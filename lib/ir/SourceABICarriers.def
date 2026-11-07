@@ -1,0 +1,33 @@
+//===- SourceABICarriers.def - Multi-carrier source ABI --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Widths and diagnostics for complete Darwin value carriers.
+//===----------------------------------------------------------------------===//
+
+#ifndef SOURCE_ABI_CARRIER_VALUE
+#define SOURCE_ABI_CARRIER_VALUE(Type, Name, Value)
+#endif
+#ifndef SOURCE_ABI_CARRIER_TEXT
+#define SOURCE_ABI_CARRIER_TEXT(Name, Text)
+#endif
+
+SOURCE_ABI_CARRIER_VALUE(unsigned, kDarwinWordBytes, 8)
+SOURCE_ABI_CARRIER_VALUE(unsigned, kDarwinWideBytes, 16)
+SOURCE_ABI_CARRIER_VALUE(unsigned, kDarwinPairWords, 2)
+SOURCE_ABI_CARRIER_VALUE(unsigned, kDarwinPromotedIntegerBytes, 4)
+SOURCE_ABI_CARRIER_TEXT(kUnsupportedDarwinValue,
+                        "Unsupported complete Darwin parameter value")
+SOURCE_ABI_CARRIER_TEXT(kIncompleteDarwinPlacement,
+                        "Darwin cannot place every complete parameter")
+SOURCE_ABI_CARRIER_TEXT(kInvalidWideParameter,
+                        "Unsupported source integer-pair parameter carriers")
+SOURCE_ABI_CARRIER_TEXT(kIndirectAnalystCopy,
+                        "An indirect by-value call needs a copy storage proof")
+SOURCE_ABI_CARRIER_TEXT(kIndirectAnalystResult,
+                        "An indirect call result needs a complete storage ABI")
+
+#undef SOURCE_ABI_CARRIER_VALUE
+#undef SOURCE_ABI_CARRIER_TEXT

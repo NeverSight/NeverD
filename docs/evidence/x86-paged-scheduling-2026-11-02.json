@@ -1,0 +1,496 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-02",
+  "feature": "paged instruction-boundary IRQ/NMI scheduling, accepted-event consumption through secondary entry faults, architectural-attempt accounting, CLI/STI CPL/IOPL/PVI semantics and pre-instruction virtual-interrupt #GP",
+  "commits": {
+    "neverd_scheduling_implementation": "d747605c87db65e778d87b87f1bf94bdda4c09de",
+    "neverd_saved_pc_fix": "166cd4e0741a1da254d7b897a42c48f0fd841ce4",
+    "llvm": "1c67e6be645fd373c0820179c7849f52c5d723f9",
+    "neverc": "64b3d564921808a96066732e066130076424d7ea"
+  },
+  "production_sdk": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "artifact_root": "/mnt/data/neverd-paged-scheduling-20261101",
+  "regressions": [
+    {
+      "sdk": "native",
+      "target": "NeverDX64PagedExecutionTests",
+      "passed": 17,
+      "failed": 0,
+      "skipped": 0,
+      "report": "native.xml",
+      "sha256": "165727796ace3b8c19c2c679bc0426caa527172b951c84e31cfce0762a0b7998",
+      "log_sha256": "f8c1fbdaf547f450af03049dc64021a6b791d6da31fa9aa32df8606e2a5572b1",
+      "skips": []
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX86PagingTests",
+      "passed": 40,
+      "failed": 0,
+      "skipped": 1,
+      "report": "native-paging.xml",
+      "sha256": "f8daca3b926fbe3b80bcf564fdde8cd550dbfbfe65270162832eaa5d15ebe8e2",
+      "log_sha256": "58bffc2226a57a7a4a04b558a4590209b68fb15fe4218eab89725e1d2689a9e4",
+      "skips": [
+        {
+          "name": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+          "reason": "Bound KVM CPU has no LA57"
+        }
+      ]
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64ContinuationSourceTests",
+      "passed": 144,
+      "failed": 0,
+      "skipped": 0,
+      "report": "native/qualified-NeverDX64ContinuationSourceTests.xml",
+      "sha256": "fe64d80d37c695b1cbdb6cb736fc2094fc0396e5d492b0d23e0ab26009cffa76",
+      "log_sha256": "c1bd8384fe8c60e75745c657f474f6fe37c3457b1d98e1b22973b9a005dc2d30",
+      "skips": []
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64ContinuationExportTests",
+      "passed": 78,
+      "failed": 0,
+      "skipped": 0,
+      "report": "native/qualified-NeverDX64ContinuationExportTests.xml",
+      "sha256": "b6900b915eeb7775e7c6846c584ec24f4f8fb4950a5533b68883e1ed5e51b077",
+      "log_sha256": "8409a48e819a1ed983fd8e12b1491ac2d3acf0b86650a087fd3a2e371163653d",
+      "skips": []
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64PagedExecutionTests",
+      "passed": 17,
+      "failed": 0,
+      "skipped": 0,
+      "report": "r6.xml",
+      "sha256": "41b930bfad4ebc19c5f40f6e67b63bc1a6c736659259094f16c6525539390569",
+      "log_sha256": "7f2ed5b7d013cd1b3b13c27e09d507be2836bdf9719f44d28e99a77a0f3fcba8",
+      "skips": []
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX86PagingTests",
+      "passed": 40,
+      "failed": 0,
+      "skipped": 1,
+      "report": "r6-paging.xml",
+      "sha256": "deab313df715ba3ac36394459f4ae68e094b438e37d634ffb67b4d28a34d583f",
+      "log_sha256": "307bdfbfc74561e29adfcc85e284ab0e7449e88dcc1d7a35391392e275ad6ea2",
+      "skips": [
+        {
+          "name": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+          "reason": "Bound KVM CPU has no LA57"
+        }
+      ]
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64ContinuationSourceTests",
+      "passed": 144,
+      "failed": 0,
+      "skipped": 0,
+      "report": "r6/qualified-NeverDX64ContinuationSourceTests.xml",
+      "sha256": "66fda3e860f758c8b11b6c48ed4d09f37760f5bb3d72229d6036c1996905d057",
+      "log_sha256": "80c7de4384b5963f3d9cd7d689b0cfb636cc556075025c3fc3414042cbf18891",
+      "skips": []
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64ContinuationExportTests",
+      "passed": 78,
+      "failed": 0,
+      "skipped": 0,
+      "report": "r6/qualified-NeverDX64ContinuationExportTests.xml",
+      "sha256": "8165329554277f5c39924175dd72206ec37fdf3c12be7351bd95b6ac0fb0d82e",
+      "log_sha256": "acf93ae8d70a231fd3992d92deedb67c0f188b08c5ac8711fb7bc164bca1e811",
+      "skips": []
+    }
+  ],
+  "native_cpu_comparisons": [
+    {
+      "sdk": "native",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "SoftwareEntryAtTheLastCanonicalInstructionByte",
+      "cpu_comparisons": 16
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "GeneratedInstructionsMatchOriginalCPU",
+      "cpu_comparisons": 35400,
+      "fault_cpu_comparisons": 14936,
+      "handler_cpu_comparisons": 33440,
+      "software_interrupt_cpu_comparisons": 30840,
+      "software_completion_cpu_comparisons": 18504
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "ScheduledEventsMatchOriginalCPU",
+      "cpu_comparisons": 16432,
+      "accepted_cpu_comparisons": 14376,
+      "secondary_fault_cpu_comparisons": 2040
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "PagedCliStiMatchPrivilegeAndVirtualFlags",
+      "cpu_comparisons": 4096
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "VirtualInterruptFaultAndExternalEventPriority",
+      "cpu_comparisons": 96
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "PagedSchedulingMatchesNativeInstructionWindows",
+      "cpu_comparisons": 2304
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "SequentialFetchFaultSavesNoncanonicalPC",
+      "cpu_comparisons": 8
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "EventFramesPreserveFaultingAndInterruptedPCData",
+      "cpu_comparisons": 3
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX86PagingTests",
+      "test": "OriginalInstructionsMatchPagingFaultsAndCommit/0",
+      "cpu_comparisons": 180,
+      "event_cpu_comparisons": 0
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX86PagingTests",
+      "test": "OriginalInstructionsMatchPagingFaultsAndCommit/1",
+      "cpu_comparisons": 192,
+      "event_cpu_comparisons": 0
+    },
+    {
+      "sdk": "native",
+      "target": "NeverDX86PagingTests",
+      "test": "OriginalInstructionsMatchPagingFaultsAndCommit/2",
+      "cpu_comparisons": 528,
+      "event_cpu_comparisons": 292
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "SoftwareEntryAtTheLastCanonicalInstructionByte",
+      "cpu_comparisons": 16
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "GeneratedInstructionsMatchOriginalCPU",
+      "cpu_comparisons": 35400,
+      "fault_cpu_comparisons": 14936,
+      "handler_cpu_comparisons": 33440,
+      "software_interrupt_cpu_comparisons": 30840,
+      "software_completion_cpu_comparisons": 18504
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "ScheduledEventsMatchOriginalCPU",
+      "cpu_comparisons": 16432,
+      "accepted_cpu_comparisons": 14376,
+      "secondary_fault_cpu_comparisons": 2040
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "PagedCliStiMatchPrivilegeAndVirtualFlags",
+      "cpu_comparisons": 4096
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "VirtualInterruptFaultAndExternalEventPriority",
+      "cpu_comparisons": 96
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "PagedSchedulingMatchesNativeInstructionWindows",
+      "cpu_comparisons": 2304
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "SequentialFetchFaultSavesNoncanonicalPC",
+      "cpu_comparisons": 8
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX64PagedExecutionTests",
+      "test": "EventFramesPreserveFaultingAndInterruptedPCData",
+      "cpu_comparisons": 3
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX86PagingTests",
+      "test": "OriginalInstructionsMatchPagingFaultsAndCommit/0",
+      "cpu_comparisons": 180,
+      "event_cpu_comparisons": 0
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX86PagingTests",
+      "test": "OriginalInstructionsMatchPagingFaultsAndCommit/1",
+      "cpu_comparisons": 192,
+      "event_cpu_comparisons": 0
+    },
+    {
+      "sdk": "r6",
+      "target": "NeverDX86PagingTests",
+      "test": "OriginalInstructionsMatchPagingFaultsAndCommit/2",
+      "cpu_comparisons": 528,
+      "event_cpu_comparisons": 292
+    }
+  ],
+  "comparison_subsets_are_not_additional_totals": true,
+  "generated_profiles": {
+    "source_routes": [
+      "HighC",
+      "LLVM-to-C"
+    ],
+    "compilers": [
+      "Clang",
+      "NeverC"
+    ],
+    "optimization": [
+      "O0",
+      "O2"
+    ],
+    "sdk_builds": [
+      "native-intrinsic fork",
+      "pinned r6"
+    ],
+    "scheduler_inputs": 257,
+    "scheduler_variants": 8,
+    "scheduler_exclusions": "two absent-gate variants avoid undefined recursive #NP/#GP double-fault frames",
+    "cli_sti": "2 instructions x 4 CPL x 4 IOPL x 8 IF/VIF/VIP x 2 PVI = 512 inputs/profile",
+    "virtual_fault_priority": "12 no-event/IRQ/NMI, IF and code-page-presence inputs/profile",
+    "instruction_windows": "9 STI/NOP, STI/STI, STI/CLI/STI, STI/JMP, STI/CALL or supplied STI/MOV-SS IRQ/NMI programs x 32 stack/flags/gate variants/profile"
+  },
+  "oracle": {
+    "host_cpu": "Intel Core i9-13900H",
+    "kernel": "7.0.0-38-generic",
+    "hypervisor": "KVM",
+    "irq_injection": "request_interrupt_window; inject only at KVM_EXIT_IRQ_WINDOW_OPEN with ready_for_interrupt_injection; no candidate scheduler chooses the native instruction boundary",
+    "nmi_injection": "KVM_NMI with explicit initial native inhibition/NMI-blocked state",
+    "comparison": [
+      "all 16 GPRs",
+      "RFLAGS",
+      "PC",
+      "CR2",
+      "CS/SS selectors",
+      "NMI blocking",
+      "physical RAM except paging-table pages, including descriptor, frame and CALL return-slot bytes"
+    ],
+    "new_matrix_undefined_outputs": "none",
+    "regression_undefined_outputs": "architecturally undefined division flags use independent native witnesses; fault-time page-table A/D publication is excluded",
+    "software_contract_checks": [
+      "producer acknowledgment exactly once after original acceptance, including secondary faults, backing failure and shutdown",
+      "invalid/blocked events never acknowledge",
+      "instruction budget and inhibition distinguish pre-instruction stops from an attempted fault whose delivery subsequently fails",
+      "source validators and runtime binding checks precede polling and guest RAM",
+      "same behavior through generated SDK exports"
+    ]
+  },
+  "saved_pc_comparisons": {
+    "generated_noncanonical_sequential_fetch_per_sdk": 8,
+    "native_event_frames_per_sdk": 3,
+    "cases": [
+      "64-bit sequential fetch #GP",
+      "16-bit compatibility CS-limit #GP",
+      "32-bit compatibility CS-limit #GP",
+      "POPFQ enables an IRQ before noncanonical fetch"
+    ]
+  },
+  "negative_controls": [
+    {
+      "case": "noncanonical or out-of-limit saved event PCs",
+      "diagnostics": [
+        "canonical-red.log",
+        "saved-pc-red.log"
+      ],
+      "diagnostic_sha256": {
+        "canonical-red.log": "a3fb53864ed8cea18c11c0a7775b0f85165fefaa3f1707f9d572ece593076085",
+        "saved-pc-red.log": "91370f0cf21c56b152f1c2d63f9892582f284eeb2d919b3c54fc38fb7dc49c43"
+      },
+      "before": "original CPU delivered #GP or IRQ and preserved the saved PC as data; model refused with InvalidState",
+      "fix": "the shared faultable event owner validates handler targets independently and does not apply fetch/transfer preconditions to saved frame data; the no-fault API remains unchanged"
+    },
+    {
+      "case": "CPL3 CR4.PVI with VIF and VIP both set",
+      "diagnostic": "second.log",
+      "diagnostic_sha256": "6864cd4d2f55f05447d197fb78d466f2296b7e4131957c1bcac5a94452b8f3c1",
+      "failed_native_inputs": 40,
+      "failed_assertions": 276,
+      "before": "instruction-local CLI/STI checks missed the pre-instruction #GP, including IOPL=3; original CPU preserved restart state instead of updating flags",
+      "fix": "the shared paged executor checks virtual-interrupt entry before fetch; IRQ/NMI selection precedes that entry fault; new priority tests include absent code pages"
+    },
+    {
+      "case": "KVM immediate IRQ injection while IF=0",
+      "diagnostic": "first.log",
+      "diagnostic_sha256": "7d6f58fb64a9ec6916ec98a209ff77bf38a54e71f0e02c8306a22e1e683706c0",
+      "classification": "test-oracle correction, not a product semantic failure",
+      "before": "KVM_EXIT_FAIL_ENTRY from immediate KVM_INTERRUPT",
+      "fix": "the original CPU selects the injection point using its architectural interrupt window"
+    }
+  ],
+  "cross_sdk_exports": {
+    "identical_files": 422,
+    "extensions": [
+      ".c",
+      ".h",
+      ".json"
+    ],
+    "manifest_sha256": "cdbafe152587f0c3ac7c711b3fc32d720cfc28b255b08a72850aa8965ca17e21",
+    "unchanged_prior_source_header_files": 186
+  },
+  "source_sha256": {
+    "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h": "be9f6d3d37c3f793ed1729478174e08952d5d6a4de04ff5df726844074c164f7",
+    "include/neverd/analysis/arch/x86_64/X64PagedEventDelivery.h": "6e899a0a4bb0db82c5903837a3bcb93272bed9e3fa3510dd628d3d6c9b923273",
+    "include/neverd/analysis/arch/x86_64/X64PagedExecution.h": "124dd53d412abde42b885d926e3c662985b6eba1f3c94bf61abf847abd312815",
+    "include/neverd/analysis/arch/x86_64/X64PagedSource.h": "460f2ed139ad4b3943f85318dfaea1f03458e61c681215f69ef8430b3d91ef53",
+    "lib/analysis/arch/x86_64/X64ContinuationDelivery.h": "19c57ea556df5ad266cd2ca4fc69d66e2062d85cf510cafbd8d950cc3754031a",
+    "lib/analysis/arch/x86_64/X64ContinuationSource.cpp": "5c2661976d7ac82d04a8f1af82a06fa7d22f6ec7ee84dbc897bebc0d02034b9a",
+    "lib/analysis/arch/x86_64/X64MachineFlags.h": "35eb66bae7925811b12fa55ec455fb798e7ef44400ef5adc419622c104f770ec",
+    "lib/analysis/arch/x86_64/X64PagedEventDelivery.cpp": "e9997946c17adaecb398425b3fca160cc41e44837d8c3152e728d4f5830eb94f",
+    "lib/analysis/arch/x86_64/X64PagedExecution.cpp": "e6198bdee01164dd26c76615242f682fdc55086bd8172725b4c94fd72855d890",
+    "lib/pipeline/X86/X64ContinuationExport.cpp": "bbb8c78b7a3b8a768fade621f951ea18f7753ef2b54fdb73b5cbe161613225a2",
+    "lib/pipeline/X86/X64ContinuationPagedDriver.h": "28395f9d144c72c166f844979752ae3e7135dac515ae3033cc268967e56fc200",
+    "lib/pipeline/X86/X64ContinuationSchedule.cpp": "e496c894236d8369011ab3410120f96c9e1511d22587756cb1d99b1f17bf4b3f",
+    "lib/pipeline/X86/X64ContinuationSchedule.h": "3d3f8a1254ecb56239b91b785c7eacbdb5816d2f28d45da916f6a1c3d6a04afa",
+    "unittests/devirtualization/x86_64/X64ContinuationExportTests.cpp": "24d264bca2e61c3c3c50c83996f6972649dbfb4f1071c351664e5c0b39d30dd0",
+    "unittests/translate/x86/X64PagedExecutionTests.cpp": "bbcea9117c0fd801e64a93af74447d4996833dc45edfb82db1120cca2f0b7c11",
+    "unittests/translate/x86/X64PagedNativeCPU.h": "57215e3670503a65efd91b7a2fb86335275f2019d7471f766d102720a2911eec",
+    "unittests/translate/x86/X64PagedScheduleTests.inc": "efad588f7371f90a843804d316adba185f399ccaebe668caf7a080ee9ce85f4d"
+  },
+  "specifications": [
+    {
+      "title": "Intel SDM volume 2, revision 093: CLI/STI decision tables and pseudocode",
+      "url": "https://cdrdv2.intel.com/v1/dl/getContent/671110",
+      "sha256": "d137a7887787bbb06c1a8b8bafd51958d8d2e16b4dff987a03226c845cca1516"
+    },
+    {
+      "title": "Intel SDM volume 3A, revision 093: interrupt inhibition, boundary-event priority and APIC IRR/ISR",
+      "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
+      "sha256": "310c6a64513e8095abfc32b6a158539560f499d53444050343022f7dda240211"
+    },
+    {
+      "title": "Intel SDM volume 3B, revision 093, section 23.4: protected-mode virtual interrupts",
+      "url": "https://cdrdv2.intel.com/v1/dl/getContent/671427",
+      "sha256": "a8335f8ccb8b2e82ac51a8ff31360699fc33f334e66133e822038702f52cd276"
+    },
+    {
+      "title": "KVM API: interrupt injection, interrupt windows and vCPU event state",
+      "url": "https://www.kernel.org/doc/html/latest/virt/kvm/api.html"
+    }
+  ],
+  "limitations": [
+    "instruction-boundary producer owns arrival, interrupt-controller priority and coalescing; acknowledgment is not APIC EOI",
+    "owned ordinary RAM, one CPU, fresh walks; no MMIO, TLB or concurrent writers",
+    "REP/gather/XSAVE partial completion, intra-instruction asynchronous events, native providers and LOCK remain separate",
+    "complete legacy i386 dispatch, SMI/software SMM and SGX enclave/AEX/EPCM remain open",
+    "active unsupported TF/CET/FRED/LAM/LASS domains remain refused",
+    "generated runtime binding is internal C++ plus source-only C bridges, not stable SDK C construction API",
+    "Linux x64 KVM qualification; native LA57 is unavailable on this host",
+    "no LLVM or NeverC source change is required for this portable lowering; no LLVM release or pin completion is claimed"
+  ],
+  "build_receipts": [
+    {
+      "sdk": "native",
+      "report": "native-neverd-build-receipt.json",
+      "sha256": "b17309cfe39a3722d126a071d1fa1a0acc550db06dbbbccb20d7c5edb9d5600b",
+      "configuration": "Release",
+      "requested_options": [
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "NeverDX86PagingTests",
+        "NeverDX64ContinuationSourceTests",
+        "NeverDX64ContinuationExportTests",
+        "--parallel",
+        "8"
+      ],
+      "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "accelerators": {
+        "neverd_highway": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_mimalloc": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_simdjson": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_simdutf": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_tbb": {
+          "selection": "disabled",
+          "used": false
+        }
+      }
+    },
+    {
+      "sdk": "r6",
+      "report": "r6-neverd-build-receipt.json",
+      "sha256": "eab67086f50d57f38a01bc4231c63e9002fc058621b15e76dd1f1be00c0a3794",
+      "configuration": "Release",
+      "requested_options": [
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "NeverDX86PagingTests",
+        "NeverDX64ContinuationSourceTests",
+        "NeverDX64ContinuationExportTests",
+        "--parallel",
+        "8"
+      ],
+      "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "accelerators": {
+        "neverd_highway": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_mimalloc": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_simdjson": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_simdutf": {
+          "selection": "disabled",
+          "used": false
+        },
+        "neverd_tbb": {
+          "selection": "disabled",
+          "used": false
+        }
+      }
+    }
+  ]
+}

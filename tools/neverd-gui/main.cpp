@@ -1,5 +1,6 @@
 #include "Config.h"
 #include "ResourceLimits.h"
+#include "app/AnalysisPlugins.h"
 #include "app/DeepLink.h"
 #include "app/DialogReturnKey.h"
 #include "app/DisassemblyView.h"
@@ -20,6 +21,7 @@
 #include "mcp/McpConnectionManager.h"
 
 #include <QApplication>
+#include <QByteArray>
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QDir>
@@ -30,6 +32,7 @@
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QTimer>
+#include <QVector>
 #include <algorithm>
 #include <memory>
 
@@ -48,7 +51,7 @@ constexpr int SmokeDelayMs = 1500;
 
 void restoreGeometry(MainWindow &window) {
   const auto geometry = QSettings().value(GeometryKey).toByteArray();
-  if (!geometry.isEmpty() && window.restoreGeometry(geometry))
+  if (!geometry.isEmpty() && window.restoreWindowedGeometry(geometry))
     return;
   const QRect available = window.screen()->availableGeometry();
   const QSize size(
@@ -69,6 +72,10 @@ void configureOptions(QCommandLineParser &parser) {
       QStringLiteral("NeverD interactive disassembler and decompiler"));
   parser.addHelpOption();
   parser.addVersionOption();
+  parser.addOption(
+      {{QStringLiteral("process-plugin"), QStringLiteral("plugin")},
+       QStringLiteral("Load an external GUI plugin manifest; repeatable"),
+       QStringLiteral("path")});
   parser.addPositionalArgument(QStringLiteral("binary"),
                                QStringLiteral("Binary file to open"),
                                QStringLiteral("[binary]"));
@@ -87,6 +94,10 @@ void configureOptions(QCommandLineParser &parser) {
        QStringLiteral("Exit after loading the UI (for build verification)")});
   parser.addOption({QStringLiteral("fresh-layout"),
                     QStringLiteral("Use a temporary workbench layout")});
+  parser.addOption(
+      {QStringLiteral("ask-loader"),
+       QStringLiteral("Ask how to load the binary first, as File > Open does, "
+                      "and exit if that is declined")});
   parser.addOption(
       {QStringLiteral("command"),
        QStringLiteral("Run an output-window command line after the binary "
@@ -155,6 +166,24 @@ int main(int argc, char **argv) {
   QApplication::setOrganizationDomain(QStringLiteral("neversight.dev"));
   QApplication::setApplicationName(QStringLiteral("NeverD"));
   QApplication::setApplicationVersion(QStringLiteral("3389.0.1"));
+  // QApplication consumes --plugin as a Qt generic-plugin argument. Normalize
+  // our compatibility spelling before Qt sees argv, retaining the bytes for
+  // the application lifetime. Arguments after -- are positional file names.
+  QVector<QByteArray> normalizedArguments;
+  normalizedArguments.reserve(argc);
+  bool options = true;
+  for (int index = 0; index < argc; ++index) {
+    QByteArray argument(argv[index]);
+    if (argument == "--")
+      options = false;
+    if (options && argument == "--plugin")
+      argument = "--process-plugin";
+    else if (options && argument.startsWith("--plugin="))
+      argument.replace(0, int(sizeof("--plugin") - 1), "--process-plugin");
+    normalizedArguments.append(std::move(argument));
+  }
+  for (int index = 0; index < argc; ++index)
+    argv[index] = normalizedArguments[index].data();
   QCommandLineParser parser;
   configureOptions(parser);
   QStringList arguments;
@@ -318,6 +347,14 @@ int main(int argc, char **argv) {
     startupMetrics->record("services_created_ms");
 
   MainWindow window(session, mcp, broker);
+  for (const auto &path : parser.values(QStringLiteral("process-plugin"))) {
+    QString error;
+    if (!window.analysisPlugins()->installPlugin(
+            QFileInfo(path).absoluteFilePath(), error)) {
+      qCritical("Cannot load plugin: %s", qPrintable(error));
+      return 2;
+    }
+  }
   QTemporaryDir testLayout;
   if (automated || parser.isSet(QStringLiteral("fresh-layout")))
     window.setLayoutPath(testLayout.filePath(QStringLiteral("layout.json")));
@@ -360,7 +397,7 @@ int main(int argc, char **argv) {
   if (!greet && !asksFirst)
     window.showWorkbench();
   QObject::connect(&app, &QApplication::aboutToQuit, &window, [&window] {
-    QSettings().setValue(GeometryKey, window.saveGeometry());
+    QSettings().setValue(GeometryKey, window.saveWindowedGeometry());
   });
   // Cocoa can close the window while already handling an application quit.
   // Do not reenter native termination from inside that close event.
@@ -381,7 +418,9 @@ int main(int argc, char **argv) {
     window.openLinkAfterOpen(*link);
   LinkOpener linkOpener(window, session);
   app.installEventFilter(&linkOpener);
-  if (openingFile)
+  if (openingFile && parser.isSet(QStringLiteral("ask-loader")))
+    window.askHowToLoad(QFileInfo(files.first()).absoluteFilePath());
+  else if (openingFile)
     window.openFile(QFileInfo(files.first()).absoluteFilePath());
   else if (greet)
     window.scheduleQuickStart();

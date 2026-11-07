@@ -36,6 +36,12 @@ symbol when one no longer matches.
 
 ## In-house fast paths
 
+- **C declaration lexer**: punctuation retains literal lengths and rejects a
+  different first character before comparing its spelling. Only known object
+  macros enter recursive expansion; ordinary identifiers append directly.
+  Expansion depth, token ownership, longest matching and diagnostic positions
+  retain their parser contracts. This reduces first-use header parsing in the
+  worker as well as direct type-library imports; it adds no retained cache.
 - **Ordered u64 search**: `neverd::sorted::lowerBound64` and `contains64`
   (`include/neverd/support/SortedSearch.h:30`, `:36`;
   `lib/support/SortedSearch.cpp`).

@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCompiler.h"
 #include "LocalTypesDebugContext.h"
 #include "gtest/gtest.h"
 
@@ -275,6 +276,15 @@ TEST(RecordCallContract, LinkedLibCRecordsExecuteThroughBothCEmitters) {
   GTEST_SKIP() << "Native glibc x86-64 headers and execution are required";
 #else
   const std::string Compiler = NEVERD_TEST_CLANG;
+  // Generated C checks each record it names against the host's header. The
+  // Linux header library describes a current glibc's FILE.
+  if (!neverd::test::compilerAccepts(
+          Compiler, "c",
+          "#include <stdio.h>\n"
+          "unsigned long long written(FILE *F) { return F->_total_written; }\n",
+          {"-std=gnu11"}))
+    GTEST_SKIP()
+        << "this host's glibc headers predate the header library's FILE";
   llvm::SmallString<128> Directory;
   ASSERT_FALSE(
       llvm::sys::fs::createUniqueDirectory("neverd-record-call", Directory));
@@ -634,10 +644,6 @@ TEST(RecordCallContract, CachedImportsInvalidateDenseStackArgumentsAndPadding) {
       Parameters.push_back(Float);
       const auto Signature = floatingCallArguments(
           Arch::AArch64, F.Image.abiFormat(), Float, Parameters);
-      if (Format == BinaryFormat::MachO) {
-        EXPECT_FALSE(Signature); // Apple stack packing remains undescribed.
-        continue;
-      }
       ASSERT_TRUE(Signature);
       F.Signatures[0x2000] = *Signature;
       auto &Ops = F.Function.Blocks[0].Ops;

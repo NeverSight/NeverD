@@ -52,6 +52,33 @@
 
 namespace neverd {
 
+static bool supportsX86NativeExtensions(const llvm::Module &Mod) {
+  for (const auto *Name : {
+           "llvm.x86.rsm.context",
+           "llvm.x86.enclu.transfer.at.context",
+           "llvm.x86.vmrun.context",
+           "llvm.x86.vmcall.kvm",
+           "llvm.x86.vmmcall.kvm",
+           "llvm.x86.vmcall.kvm32",
+           "llvm.x86.vmmcall.kvm32",
+           "llvm.x86.hyperv.call",
+           "llvm.x86.hle.context",
+           "llvm.x86.vmgexit.sev",
+#define NEVERD_X86_SNP(Id, Name, ...) "llvm.x86." #Name ".context",
+#include "neverd/ir/intrinsics/X86/X86Snp.def"
+#undef NEVERD_X86_SNP
+       }) {
+    const auto *Function = Mod.getFunction(Name);
+    if (Function && !Function->use_empty() && !Function->getIntrinsicID()) {
+      llvm::WithColor::error()
+          << "native x86 execution requires an LLVM SDK with " << Name
+          << " support\n";
+      return false;
+    }
+  }
+  return true;
+}
+
 /// Reapply the frame requirement after optimization, including inlining into
 /// a function that originally had no stack-writing architectural operations.
 static void reserveX86StackTemporaries(llvm::Module &Mod, Arch TargetArch) {
@@ -334,6 +361,8 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
                                llvm::StringRef TargetTriple) {
   CodegenResult Result;
   ensureTargets();
+  if (!supportsX86NativeExtensions(Mod))
+    return Result;
   if (Mod.getModuleFlag(macho_loader::cache_load::kAnalysisFlag)) {
     llvm::WithColor::error() << macho_loader::cache_load::kRebuildUnsupported;
     return Result;
@@ -565,6 +594,10 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     llvm::StringRef TargetTriple, RewriteInputKind InputKind) {
   llvm::mc_rewrite::RewriteResult Result;
   ensureTargets();
+  if (!supportsX86NativeExtensions(Mod)) {
+    Result.ImageValid = false;
+    return Result;
+  }
   if (Mod.getModuleFlag(macho_loader::cache_load::kAnalysisFlag)) {
     llvm::WithColor::error() << macho_loader::cache_load::kRebuildUnsupported;
     Result.ImageValid = false;

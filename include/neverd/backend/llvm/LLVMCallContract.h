@@ -55,6 +55,9 @@ void setLLVMArgumentBanks(llvm::CallBase &Call, unsigned Integers,
                           unsigned Floating,
                           llvm::ArrayRef<int64_t> StackOffsets = {},
                           unsigned SlotBytes = 0);
+/// The first integer position of \p Call's target that it passes as zero.
+void setLLVMFirstUnsetInteger(llvm::CallBase &Call, unsigned Position);
+std::optional<unsigned> getLLVMFirstUnsetInteger(const llvm::CallBase &Call);
 /// Map physical integer/stack positions to this call's actual LLVM operands.
 /// Recorded banks may omit unused registers before stack arguments. Each
 /// record piece must still name a complete carrier at its original byte offset.
@@ -70,9 +73,17 @@ struct LLVMArgumentBinding {
   /// Original argument index, or -1 for a packed/sliced stack value whose
   /// source pointer interpretation and parameter attributes cannot be reused.
   std::vector<int> SourceIndices;
+  /// The first integer position the call does not set, where it has any.
+  std::optional<unsigned> FirstUnsetInteger;
 };
 /// A stack value placed by \p StackOffsets owns the bytes up to the end of
 /// its last slot, or to the next value: padding a narrower store leaves.
+///
+/// A callee's stack parameters follow all of its integer register positions,
+/// read or not, so a call that reaches them with fewer recovered integers
+/// passes the rest as zero. That holds only where the callee does not read
+/// them, which its body has yet to show: record the first such position on the
+/// call with setLLVMFirstUnsetInteger, for validateResolvedLLVMCallSignatures.
 std::optional<LLVMArgumentBinding> bindResolvedLLVMArguments(
     const llvm::Function &Target, llvm::ArrayRef<llvm::Value *> Values,
     unsigned Integers, unsigned Floating, llvm::IRBuilderBase &Builder,

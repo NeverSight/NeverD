@@ -121,7 +121,7 @@ continues to reject reserved bits, invalid addressing forms and prefixes.
 | FDIVP | ST(i),ST(0) | DE | F8–FF | 0 | true | portable-value-projection |
 | FLD | ST(i) | D9 | C0–C7 | 0 | true | portable-value-projection |
 | FXCH | ST(i) | D9 | C8–CF | 0 | true | portable-value-projection |
-| FNOP | implicit | D9 | D0 | 0 | false | owned-only-state |
+| FNOP | implicit | D9 | D0 | 0 | false | portable-owned-state |
 | FCHS | implicit | D9 | E0 | 0 | true | portable-exact-value-projection |
 | FABS | implicit | D9 | E1 | 0 | true | portable-exact-value-projection |
 | FTST | implicit | D9 | E4 | 0 | true | portable-value-projection |
@@ -173,8 +173,8 @@ continues to reject reserved bits, invalid addressing forms and prefixes.
 | FUCOMP | ST(i) | DD | E8–EF | 0 | true | portable-value-projection |
 | FFREEP | ST(i) | DF | C0–C7 | 0 | true | state-only |
 | WAIT | implicit | 9B | 00 | 0 | true | portable-state-only |
-| EMMS | MMX aliases | 0F | 77 | 0 | false | owned-only-state |
-| FEMMS | MMX aliases | 0F | 0E | 0 | false | owned-only-state |
+| EMMS | MMX aliases | 0F | 77 | 0 | false | portable-owned-state |
+| FEMMS | MMX aliases | 0F | 0E | 0 | false | portable-owned-state |
 
 Unlisted/reserved and legacy FSTPNCE/FSETPM/FDISI/FENI forms remain
 unsupported by this inventory; recognition elsewhere is not admission.
@@ -302,28 +302,28 @@ unknown or unsupported until separately qualified.
 | portable-value-projection | owned-context | symbolic | none | false | ? | ? |
 | portable-value-projection | owned-context | checked-refinement | none | false | ? | ? |
 | portable-value-projection | owned-context | translation | native-x86 | false | U | U |
-| owned-only-state | typed-stack | lift | none | false | U | U |
-| owned-only-state | typed-stack | ir-analysis | none | false | U | U |
-| owned-only-state | typed-stack | llvm | native-x86 | false | U | U |
-| owned-only-state | typed-stack | high-c | native-x86 | false | U | U |
-| owned-only-state | typed-stack | llvm-c | native-x86 | false | U | U |
-| owned-only-state | typed-stack | concrete | native-x86 | false | U | U |
-| owned-only-state | typed-stack | concrete | portable | false | U | U |
-| owned-only-state | typed-stack | concrete | native-reference | false | U | U |
-| owned-only-state | typed-stack | symbolic | none | false | U | U |
-| owned-only-state | typed-stack | checked-refinement | none | false | U | U |
-| owned-only-state | typed-stack | translation | native-x86 | false | U | U |
-| owned-only-state | owned-context | lift | none | true | ? | ? |
-| owned-only-state | owned-context | ir-analysis | none | true | ? | ? |
-| owned-only-state | owned-context | llvm | native-x86 | true | ? | ? |
-| owned-only-state | owned-context | high-c | native-x86 | true | ? | ? |
-| owned-only-state | owned-context | llvm-c | native-x86 | true | ? | ? |
-| owned-only-state | owned-context | concrete | native-x86 | true | ? | ? |
-| owned-only-state | owned-context | concrete | portable | false | U | U |
-| owned-only-state | owned-context | concrete | native-reference | true | ? | ? |
-| owned-only-state | owned-context | symbolic | none | false | ? | ? |
-| owned-only-state | owned-context | checked-refinement | none | false | ? | ? |
-| owned-only-state | owned-context | translation | native-x86 | false | U | U |
+| portable-owned-state | typed-stack | lift | none | false | U | U |
+| portable-owned-state | typed-stack | ir-analysis | none | false | U | U |
+| portable-owned-state | typed-stack | llvm | native-x86 | false | U | U |
+| portable-owned-state | typed-stack | high-c | native-x86 | false | U | U |
+| portable-owned-state | typed-stack | llvm-c | native-x86 | false | U | U |
+| portable-owned-state | typed-stack | concrete | native-x86 | false | U | U |
+| portable-owned-state | typed-stack | concrete | portable | false | U | U |
+| portable-owned-state | typed-stack | concrete | native-reference | false | U | U |
+| portable-owned-state | typed-stack | symbolic | none | false | U | U |
+| portable-owned-state | typed-stack | checked-refinement | none | false | U | U |
+| portable-owned-state | typed-stack | translation | native-x86 | false | U | U |
+| portable-owned-state | owned-context | lift | none | true | ? | ? |
+| portable-owned-state | owned-context | ir-analysis | none | true | ? | ? |
+| portable-owned-state | owned-context | llvm | native-x86 | true | ? | ? |
+| portable-owned-state | owned-context | high-c | native-x86 | true | ? | ? |
+| portable-owned-state | owned-context | llvm-c | native-x86 | true | ? | ? |
+| portable-owned-state | owned-context | concrete | native-x86 | true | ? | ? |
+| portable-owned-state | owned-context | concrete | portable | true | ? | ? |
+| portable-owned-state | owned-context | concrete | native-reference | true | ? | ? |
+| portable-owned-state | owned-context | symbolic | none | false | ? | ? |
+| portable-owned-state | owned-context | checked-refinement | none | false | ? | ? |
+| portable-owned-state | owned-context | translation | native-x86 | false | U | U |
 | exact-value-projection | typed-stack | lift | none | true | ? | ? |
 | exact-value-projection | typed-stack | ir-analysis | none | true | ? | ? |
 | exact-value-projection | typed-stack | llvm | native-x86 | true | E | ? |
@@ -455,16 +455,16 @@ qualification; scoped execution observations are recorded separately.
 | portable-value-projection | concrete | arm64 | true | E | ? | admitted-portable-instruction-slice; excluded-effects-refuse |
 | portable-value-projection | translation | x86-64 | false | U | U | portable-translation-requires-linux-aarch64 |
 | portable-value-projection | translation | arm64 | true | E | ? | explicit-portable-x87-translation-v1; excluded-effects-refuse |
-| owned-only-state | llvm | x86-64 | false | U | U | instruction-outside-portable-runtime-profile |
-| owned-only-state | llvm | arm64 | false | U | U | instruction-outside-portable-runtime-profile |
-| owned-only-state | high-c | x86-64 | false | U | U | instruction-outside-portable-runtime-profile |
-| owned-only-state | high-c | arm64 | false | U | U | instruction-outside-portable-runtime-profile |
-| owned-only-state | llvm-c | x86-64 | false | U | U | instruction-outside-portable-runtime-profile |
-| owned-only-state | llvm-c | arm64 | false | U | U | instruction-outside-portable-runtime-profile |
-| owned-only-state | concrete | x86-64 | false | U | U | instruction-outside-portable-profile |
-| owned-only-state | concrete | arm64 | false | U | U | instruction-outside-portable-profile |
-| owned-only-state | translation | x86-64 | false | U | U | portable-translation-requires-linux-aarch64 |
-| owned-only-state | translation | arm64 | false | U | U | instruction-outside-portable-runtime-profile |
+| portable-owned-state | llvm | x86-64 | true | ? | ? | explicit-portable-generated-interface; ordinary-emission-unchanged |
+| portable-owned-state | llvm | arm64 | true | ? | ? | explicit-portable-generated-interface; ordinary-emission-unchanged |
+| portable-owned-state | high-c | x86-64 | true | ? | ? | explicit-portable-generated-interface; ordinary-emission-unchanged |
+| portable-owned-state | high-c | arm64 | true | ? | ? | explicit-portable-generated-interface; ordinary-emission-unchanged |
+| portable-owned-state | llvm-c | x86-64 | true | ? | ? | explicit-portable-generated-interface; ordinary-emission-unchanged |
+| portable-owned-state | llvm-c | arm64 | true | ? | ? | explicit-portable-generated-interface; ordinary-emission-unchanged |
+| portable-owned-state | concrete | x86-64 | true | ? | ? | admitted-portable-instruction-slice; excluded-effects-refuse |
+| portable-owned-state | concrete | arm64 | true | ? | ? | admitted-portable-instruction-slice; excluded-effects-refuse |
+| portable-owned-state | translation | x86-64 | false | U | U | portable-translation-requires-linux-aarch64 |
+| portable-owned-state | translation | arm64 | true | ? | ? | explicit-portable-x87-translation-v1; excluded-effects-refuse |
 | exact-value-projection | llvm | x86-64 | false | U | U | instruction-outside-portable-runtime-profile |
 | exact-value-projection | llvm | arm64 | false | U | U | instruction-outside-portable-runtime-profile |
 | exact-value-projection | high-c | x86-64 | false | U | U | instruction-outside-portable-runtime-profile |
@@ -535,9 +535,9 @@ test_sources are regression source references, not passing results, CPU qualific
 - explicit incoming state; validated encoding, memory and CFG/call contract.
 - x86 GCC/Clang GNU assembly and target x87; actual source/target ABI and long-double layout; FBLD numerical scope requires decimal digits 0-9; typed BCD guards require valid CW and all exception masks; out-of-scope typed BCD inputs trap before conversion; typed FPTAN/FSINCOS/FXTRACT pairs require proved source/destination tags, canonical finite input and valid all-masked CW; FPTAN/FSINCOS require abs(input) < 2^63; other pair inputs trap before execution; HighC sampled-status helpers require initialized TLS; typed C value operations require 64-bit significand long double; admitted CFG/tag/control and call preconditions.
 - x86-64 GCC/Clang; FXSAVE/FXRSTOR; SSE3 for FISTTP; known CW/SW, tags and demanded payloads; valid PC/RC; no pending unmasked exception at waiting boundaries; authenticated ordinary memory; FBLD requires decimal digits 0-9 (undefined digits are not native-reference inputs); processor-dependent operations require explicit non-strict native-reference mode.
-- explicit C++ preparePortableX87Function/emitPortableX87; Linux little-endian x64/AArch64, LLVM/Clang 23; recovered x64 owned integer ABI with numeric guest arguments, explicit context and source-result pointer, uint32 status return; version-matched neverd_x87_runtime; authenticated state and exact-span memory; masked finite instruction domain; raw transport preserves encodings; no integer-flag x87 forms, floating/call ABI, ordinary guest memory operations, MMX or general environment handoffs; failure preserves completed prefix and leaves source result unpublished.
-- explicit setX87PortableMode(true); x64 owned state; known CW/SW and read payloads; authenticated ordinary memory; no pending waiting exception or stack fault; data instructions require all exception masks; FLDCW admits only all-masked input; arithmetic/comparisons/integer stores require canonical finite operands; raw m80/register moves retain encodings; undefined C0/C2/C3/FOP/register FDP are not CPU identity.
-- explicit C++ TranslationRuntimeProfileV1::PortableX87; native Linux AArch64 ELF; x64 owned state with authenticated neverd.x87.portable-v1 extension; version-matched runtime; checked object/registry/credential binding; exact-span memory; raw transport preserves encodings; RejectExecutableWrites or InvalidateOnExecutableWrite; RejectExecutableWrites requires no writable executable mappings; masked finite instruction domain; no integer-flag x87 forms, floating call ABI, MMX or general environment operations; legacy C/Python/CLI translation object interfaces remain scalar-only.
+- explicit C++ preparePortableX87Function/emitPortableX87; Linux little-endian x64/AArch64, LLVM/Clang 23; recovered x64 owned integer ABI with numeric guest arguments, explicit context and source-result pointer, uint32 status return; version-matched neverd_x87_runtime; authenticated state and exact-span memory; masked finite instruction domain; raw transport preserves encodings; no integer-flag x87 forms, floating/call ABI, ordinary guest memory operations, MMX data operations or general environment handoffs; FNOP/EMMS/FEMMS retain their state effects; failure preserves completed prefix and leaves source result unpublished.
+- explicit setX87PortableMode(true); x64 owned state; known CW/SW and read payloads; authenticated ordinary memory; no pending waiting exception or stack fault; data instructions require all exception masks; FLDCW admits only all-masked input; arithmetic/comparisons/integer stores require canonical finite operands; raw m80/register moves retain encodings; FNOP retains undefined condition codes, EMMS preserves payload provenance and FEMMS invalidates it; undefined C0/C2/C3/FOP/register FDP are not CPU identity.
+- explicit C++ TranslationRuntimeProfileV1::PortableX87; native Linux AArch64 ELF; x64 owned state with authenticated neverd.x87.portable-v1 extension; version-matched runtime; checked object/registry/credential binding; exact-span memory; raw transport preserves encodings; RejectExecutableWrites or InvalidateOnExecutableWrite; RejectExecutableWrites requires no writable executable mappings; masked finite instruction domain; no integer-flag x87 forms, floating call ABI, MMX data operations or general environment operations; FNOP/EMMS/FEMMS retain their state effects; legacy C/Python/CLI translation object interfaces remain scalar-only.
 
 Test sources referenced by this inventory:
 

@@ -27,10 +27,13 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64SVEVector.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/X86/X64CallRCX.h"
 #include "neverd/ir/intrinsics/X86/X86AmxState.h"
 #include "neverd/ir/intrinsics/X86/X86AtomicMemory.h"
+#include "neverd/ir/intrinsics/X86/X86Bound.h"
 #include "neverd/ir/intrinsics/X86/X86BoundedLeaf.h"
 #include "neverd/ir/intrinsics/X86/X86DescriptorState.h"
+#include "neverd/ir/intrinsics/X86/X86Hle.h"
 #include "neverd/ir/intrinsics/X86/X86RepState.h"
 #include "neverd/ir/intrinsics/X86/X86Sgx.h"
 #include "neverd/ir/intrinsics/X86/X86SystemState.h"
@@ -224,6 +227,31 @@ inline bool aarch64PAuthLoadMedShapeIsValid(const MedOp &Op) {
       Op.Output.Size, Op.Inputs[1].Size, Op.Inputs[2].Size,
       Op.Inputs[2].isConst() ? std::optional<uint64_t>(Op.Inputs[2].ConstVal)
                              : std::nullopt);
+}
+
+inline bool x86BoundMedShapeIsValid(const MedOp &Op,
+                                    Arch Target = Arch::Unknown) {
+  if (!hasValidMedIntrinsicId(Op) || Op.NumInputs != 5 ||
+      Op.Inputs[0].Size != 2 ||
+      Op.Inputs[0].ConstVal != unsigned(Intrinsic::Bound) ||
+      !Op.IntrinsicOutputs.empty() || !Op.Inputs[3].isConst() ||
+      !Op.Inputs[4].isConst() || isAddressProvenance(Op.Inputs[3].Provenance) ||
+      isAddressProvenance(Op.Inputs[4].Provenance))
+    return false;
+  for (unsigned I = 1; I != 3; ++I) {
+    const auto &V = Op.Inputs[I];
+    if (!V.isConst() && V.Kind != MedVar::Reg && V.Kind != MedVar::Temp &&
+        V.Kind != MedVar::Param)
+      return false;
+    if (V.Kind == MedVar::Reg && V.TheArch != Arch::Unknown &&
+        V.TheArch != Arch::X86)
+      return false;
+  }
+  return x86BoundShapeIsValid(Target, Op.NumInputs - 1, Op.Output.Size,
+                              {Op.Inputs[1].Size, Op.Inputs[2].Size,
+                               Op.Inputs[3].Size, Op.Inputs[4].Size},
+                              Op.Inputs[3].ConstVal, Op.Inputs[4].ConstVal,
+                              Op.MemoryAddressSpace, Op.MemoryOrdering);
 }
 
 inline bool x86DescriptorStateMedShapeIsValid(const MedOp &Op,
@@ -754,6 +782,33 @@ apxAtomicMedShape(const MedOp &Op, Arch TargetArch = Arch::Unknown) {
   };
 }
 
+inline X86HleShape x86HleMedShape(const MedOp &Op, Arch A = Arch::Unknown) {
+  X86HleShape S;
+  S.TargetArch = A;
+  S.ValidId = Op.NumInputs && Op.NumInputs <= Op.Inputs.size() &&
+              Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
+              Op.Inputs[0].ConstVal == uint16_t(Intrinsic::X86HleState) &&
+              Op.IntrinsicOutputs.empty();
+  S.OutputSize = Op.Output.Size;
+  S.Arguments = Op.NumInputs ? Op.NumInputs - 1 : 0;
+  S.MemoryOrdering = Op.MemoryOrdering;
+  S.MemoryAddressSpace = Op.MemoryAddressSpace;
+  for (unsigned I = 0; I < S.Arguments && I < S.InputSizes.size(); ++I) {
+    const auto &V = Op.Inputs[I + 1];
+    S.InputSizes[I] = V.Size;
+    S.ScalarInputs[I] = isMedIntrinsicScalarInput(V) ||
+                        V.Kind == MedVar::Param || V.Kind == MedVar::Stack ||
+                        V.Kind == MedVar::RetVal;
+    if (I == 4 && V.isConst())
+      S.Control = V.ConstVal;
+    if (V.Kind == MedVar::Reg && S.TargetArch == Arch::Unknown)
+      S.TargetArch = V.TheArch;
+    else if (V.Kind == MedVar::Reg && V.TheArch != S.TargetArch)
+      S.ValidId = false;
+  }
+  return S;
+}
+
 inline X86VirtualizationShape
 x86VirtualizationMedShape(const MedOp &Op, Arch TargetArch = Arch::Unknown) {
   X86VirtualizationShape Shape;
@@ -781,6 +836,14 @@ x86VirtualizationMedShape(const MedOp &Op, Arch TargetArch = Arch::Unknown) {
     Shape.ScalarInputs[I] =
         isMedIntrinsicScalarInput(Input) || Input.Kind == MedVar::Param ||
         Input.Kind == MedVar::Stack || Input.Kind == MedVar::RetVal;
+    if (I == 1 && Input.isConst()) {
+      Shape.AddressWidth = Input.ConstVal;
+      Shape.OriginalPC = Input.ConstVal;
+    }
+    if (I == 2 && Input.isConst())
+      Shape.SnpControl = Input.ConstVal;
+    if (I == 3 && Input.isConst())
+      Shape.VectorStride = Input.ConstVal;
     // TheArch names physical registers. EA/arithmetic temporaries are neutral
     // scalars, including the canonical 64-bit address carrier used on i386.
     if (Input.Kind == MedVar::Reg && Shape.TargetArch == Arch::Unknown)
@@ -933,6 +996,51 @@ inline X86SgxShape x86SgxMedShape(const MedOp &Op,
   if (Op.IntrinsicOutputs.size() == X86SgxAuxiliaryOutputs &&
       Op.IntrinsicOutputs[0].Id == Op.IntrinsicOutputs[1].Id)
     S.ValidId = false;
+  return S;
+}
+
+inline X64CallRCXShape x64CallRCXMedShape(const MedOp &Op,
+                                          Arch TargetArch = Arch::Unknown) {
+  X64CallRCXShape S;
+  S.Architecture = TargetArch;
+  S.Ordering = Op.MemoryOrdering;
+  S.AddressSpace = Op.MemoryAddressSpace;
+  S.ValidId = Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+              Op.NumInputs <= Op.Inputs.size() && Op.Inputs[0].isConst() &&
+              Op.Inputs[0].Size == 2 &&
+              Op.Inputs[0].ConstVal == uint64_t(Intrinsic::X64CallRCX) &&
+              !Op.SourceCallHint && !Op.ScalarCallSignature &&
+              !Op.IntegerCallSignature && !Op.IsTailCall && !Op.DoesNotReturn;
+  if (!S.ValidId)
+    return S;
+  S.WritableOutput =
+      (Op.Output.Kind == MedVar::Reg || Op.Output.Kind == MedVar::Temp) &&
+      Op.Output.Id >= 0;
+  S.OutputBytes = Op.Output.Size;
+  S.Arguments = Op.NumInputs ? Op.NumInputs - 1 : 0;
+  const auto CheckArch = [&](const MedVar &V) {
+    if (V.Kind != MedVar::Reg)
+      return;
+    if (S.Architecture == Arch::Unknown)
+      S.Architecture = V.TheArch;
+    else if (V.TheArch != S.Architecture)
+      S.ValidId = false;
+  };
+  CheckArch(Op.Output);
+  for (unsigned I = 0; I < S.Arguments && I < S.InputBytes.size(); ++I) {
+    const auto &V = Op.Inputs[I + 1];
+    S.InputBytes[I] = V.Size;
+    S.ScalarInputs[I] = isMedIntrinsicScalarInput(V) ||
+                        V.Kind == MedVar::Param || V.Kind == MedVar::Stack ||
+                        V.Kind == MedVar::RetVal;
+    CheckArch(V);
+  }
+  if (Op.IntrinsicOutputs.size() == 1) {
+    const auto &V = Op.IntrinsicOutputs.front();
+    S.WritableRCX = V.Kind == MedVar::Temp && V.Id >= 0 &&
+                    !(Op.Output.Kind == MedVar::Temp && V.Id == Op.Output.Id);
+    S.RCXBytes = V.Size;
+  }
   return S;
 }
 

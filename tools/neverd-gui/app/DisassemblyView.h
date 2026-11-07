@@ -32,10 +32,14 @@ public:
   /// A code window can supply its own origin when it is pinned elsewhere.
   void navigate(Address address, bool record = true,
                 std::optional<Address> from = {});
-  void goBack();
-  void goForward();
+  /// Go \p steps stops back or forward at once, as picking a stop from the
+  /// Back or Forward button's list does.
+  void goBack(std::size_t steps = 1);
+  void goForward(std::size_t steps = 1);
   bool canGoBack() const { return historyIndex_ > 0; }
   bool canGoForward() const { return historyIndex_ + 1 < history_.size(); }
+  /// The stops Back, or Forward, reaches, nearest first.
+  std::vector<Address> stops(bool forward) const;
 
   std::optional<Address> currentAddress() const;
   std::optional<Address> currentItem() const;
@@ -72,6 +76,12 @@ signals:
 private:
   void updateStatus();
   void remember(Address address);
+  /// Take the current history stop to the cursor, as IDA's history does: a
+  /// move since the jump that made the stop does not add one of its own.
+  void moveStopToCursor();
+  /// Go to the stop at \p index of the history, leaving the stops on both
+  /// sides of it.
+  void goToStop(std::size_t index);
   Session &session_;
   const AddressSpace &space_;
   QStackedWidget *stack_;

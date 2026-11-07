@@ -19,7 +19,9 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/X86/X86FPState.h"
+#include "neverd/ir/med/MedScalarSelection.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
+#include "neverd/ir/med/X86/X86RepAddresses.h"
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/RelocationProvenance.h"
 #include "neverd/support/Diagnostic.h"
@@ -167,11 +169,81 @@ bool sameIndexValue(const MedVar &A, const MedVar &B) {
   return A.Kind != MedVar::Stack || A.StackOff == B.StackOff;
 }
 
+template <typename NumericFn>
+bool isConstraintConstant(const MedVar &V, NumericFn &&IsNumeric) {
+  return V.isConst() && V.Size > 0 && V.Size <= 8 && IsNumeric(V) &&
+         (V.Size == 8 || V.ConstVal < (uint64_t(1) << (V.Size * 8)));
+}
+
+// The scalar relation carried by this exact truth edge. Both local table
+// bounds and whole-function non-null proofs use this one comparison decoder.
+template <typename LookupDefFn, typename NumericFn>
+std::optional<LoadIndexConstraint>
+conditionIndexConstraint(MedVar Condition, bool Truth, LookupDefFn &&LookupDef,
+                         NumericFn &&IsNumeric) {
+  const MedOp *Compare = nullptr;
+  for (unsigned Depth = 0;
+       Depth != ::neverd::limits::backend::kMaxGuardedScalarOffsetDepth;
+       ++Depth) {
+    Compare = LookupDef(Condition);
+    if (!Compare || !sameIndexValue(Compare->Output, Condition))
+      return std::nullopt;
+    if ((Compare->Opcode == NdOp::COPY || Compare->Opcode == NdOp::BOOL_NOT) &&
+        Compare->NumInputs == 1 && Compare->Inputs[0].Size == Condition.Size) {
+      Truth ^= Compare->Opcode == NdOp::BOOL_NOT;
+      Condition = Compare->Inputs[0];
+      Compare = nullptr;
+      continue;
+    }
+    break;
+  }
+  if (!Compare || Compare->NumInputs != 2 || Compare->Output.Size != 1)
+    return std::nullopt;
+  MedVar Left = Compare->Inputs[0], Right = Compare->Inputs[1];
+  auto constant = [&](const MedVar &V) {
+    return isConstraintConstant(V, IsNumeric);
+  };
+  if (Left.Size == 0 || Left.Size > 8 || Left.Size != Right.Size)
+    return std::nullopt;
+  if (Compare->Opcode == NdOp::INT_LESS) {
+    if (!Truth && constant(Left) && !Right.isConst())
+      return LoadIndexConstraint{Right, Left.ConstVal, std::nullopt};
+    if (Truth && constant(Right) && Right.ConstVal != 0 && !Left.isConst())
+      return LoadIndexConstraint{Left, Right.ConstVal - 1, std::nullopt};
+    return std::nullopt;
+  }
+  if (Compare->Opcode != NdOp::INT_EQUAL &&
+      Compare->Opcode != NdOp::INT_NOTEQUAL)
+    return std::nullopt;
+  Truth ^= Compare->Opcode == NdOp::INT_NOTEQUAL;
+  if (constant(Left) && !Right.isConst())
+    std::swap(Left, Right);
+  if (Truth || !constant(Right))
+    return std::nullopt;
+  // Keep the selector constraint when equality was lowered through SUB;
+  // constraining the difference first would lose the excluded selector value.
+  if (Right.ConstVal == 0) {
+    const MedOp *Difference = LookupDef(Left);
+    if (Difference && Difference->Opcode == NdOp::INT_SUB &&
+        Difference->NumInputs == 2 &&
+        sameIndexValue(Difference->Output, Left) &&
+        Difference->Inputs[0].Size == Left.Size &&
+        Difference->Inputs[1].Size == Left.Size &&
+        !Difference->Inputs[0].isConst() && constant(Difference->Inputs[1])) {
+      Left = Difference->Inputs[0];
+      Right = Difference->Inputs[1];
+    }
+  }
+  if (!Left.isConst())
+    return LoadIndexConstraint{Left, std::nullopt, Right.ConstVal};
+  return std::nullopt;
+}
+
 template <typename LookupDefFn, typename NumericFn>
 std::optional<LoadIndexConstraint>
 predecessorIndexConstraint(const MedFunc *Func, const MedOp *Load,
                            const BinaryImage *Image, LookupDefFn &&LookupDef,
-                           NumericFn &&IsNumeric) {
+                           NumericFn &&IsNumeric, uint64_t &VisitedNodes) {
   if (!Func || !Load)
     return std::nullopt;
   size_t Remaining = static_cast<size_t>(limits::kMaxSSANodes);
@@ -179,6 +251,7 @@ predecessorIndexConstraint(const MedFunc *Func, const MedOp *Load,
     if (Remaining == 0)
       return false;
     --Remaining;
+    ++VisitedNodes;
     return true;
   };
   std::map<int, const MedBlock *> Blocks;
@@ -269,69 +342,22 @@ predecessorIndexConstraint(const MedFunc *Func, const MedOp *Load,
   if (!Taken)
     return std::nullopt;
   bool Truth = *Taken == Site->Id;
-  MedVar Condition = Branch.Inputs[1];
-  const MedOp *Compare = nullptr;
-  for (unsigned Depth = 0;
-       Depth != ::neverd::limits::backend::kMaxGuardedScalarOffsetDepth;
-       ++Depth) {
-    Compare = LookupDef(Condition);
-    if (!Compare || !sameIndexValue(Compare->Output, Condition))
-      return std::nullopt;
-    if ((Compare->Opcode == NdOp::COPY || Compare->Opcode == NdOp::BOOL_NOT) &&
-        Compare->NumInputs == 1 && Compare->Inputs[0].Size == Condition.Size) {
-      Truth ^= Compare->Opcode == NdOp::BOOL_NOT;
-      Condition = Compare->Inputs[0];
-      Compare = nullptr;
-      continue;
-    }
-    break;
-  }
-  if (!Compare || Compare->NumInputs != 2 || Compare->Output.Size != 1)
+  auto Constraint =
+      conditionIndexConstraint(Branch.Inputs[1], Truth, LookupDef, IsNumeric);
+  if (!Constraint || (Countdown && Constraint->Maximum))
     return std::nullopt;
-  MedVar Left = Compare->Inputs[0], Right = Compare->Inputs[1];
+  if (!Countdown)
+    return Constraint;
+  const MedVar &Left = Constraint->Value;
   auto constant = [&](const MedVar &V) {
-    return V.isConst() && V.Size > 0 && V.Size <= 8 && IsNumeric(V) &&
-           (V.Size == 8 || V.ConstVal < (uint64_t(1) << (V.Size * 8)));
+    return isConstraintConstant(V, IsNumeric);
   };
-  if (Left.Size == 0 || Left.Size > 8 || Left.Size != Right.Size)
-    return std::nullopt;
-  if (Compare->Opcode == NdOp::INT_LESS) {
-    if (Countdown)
-      return std::nullopt;
-    if (!Truth && constant(Left) && !Right.isConst())
-      return LoadIndexConstraint{Right, Left.ConstVal, std::nullopt};
-    if (Truth && constant(Right) && Right.ConstVal != 0 && !Left.isConst())
-      return LoadIndexConstraint{Left, Right.ConstVal - 1, std::nullopt};
-    return std::nullopt;
-  }
-  if (Compare->Opcode != NdOp::INT_EQUAL &&
-      Compare->Opcode != NdOp::INT_NOTEQUAL)
-    return std::nullopt;
-  Truth ^= Compare->Opcode == NdOp::INT_NOTEQUAL;
-  if (constant(Left) && !Right.isConst())
-    std::swap(Left, Right);
-  if (Truth || !constant(Right))
-    return std::nullopt;
-  // Keep the selector constraint when equality was lowered through SUB;
-  // constraining the difference first would lose the excluded selector value.
-  if (Right.ConstVal == 0) {
-    const MedOp *Difference = LookupDef(Left);
-    if (Difference && Difference->Opcode == NdOp::INT_SUB &&
-        Difference->NumInputs == 2 &&
-        sameIndexValue(Difference->Output, Left) &&
-        Difference->Inputs[0].Size == Left.Size &&
-        Difference->Inputs[1].Size == Left.Size &&
-        !Difference->Inputs[0].isConst() && constant(Difference->Inputs[1])) {
-      Left = Difference->Inputs[0];
-      Right = Difference->Inputs[1];
-    }
-  }
   if (Countdown) {
     // The load executes before the backedge test. A full-width scalar count
     // N, decrement by one, and repeat while the old count differs from one
     // prove that every visit uses an index in [1, N]. No section layout or
     // target-role assumption participates in this control-flow certificate.
-    if (Right.ConstVal != 1 || !Site->ExceptionalSuccs.empty())
+    if (Constraint->Excluded != uint64_t{1} || !Site->ExceptionalSuccs.empty())
       return std::nullopt;
     for (const PhiNode &Phi : Site->Phis) {
       if (!consume())
@@ -367,8 +393,6 @@ predecessorIndexConstraint(const MedFunc *Func, const MedOp *Load,
     }
     return std::nullopt;
   }
-  if (!Left.isConst())
-    return LoadIndexConstraint{Left, std::nullopt, Right.ConstVal};
   return std::nullopt;
 }
 
@@ -381,7 +405,7 @@ template <typename LookupDefFn, typename NumericFn>
 std::optional<LoadIndexConstraint>
 postTestedIndexConstraint(const MedFunc *Func, const MedOp *SiteOp,
                           const BinaryImage *Image, LookupDefFn &&LookupDef,
-                          NumericFn &&IsNumeric) {
+                          NumericFn &&IsNumeric, uint64_t &VisitedNodes) {
   if (!Func || !SiteOp || Func->Blocks.empty())
     return std::nullopt;
   size_t Budget = static_cast<size_t>(limits::kMaxSSANodes);
@@ -389,6 +413,7 @@ postTestedIndexConstraint(const MedFunc *Func, const MedOp *SiteOp,
     if (!Budget)
       return false;
     --Budget;
+    ++VisitedNodes;
     return true;
   };
   auto key = [](const MedVar &V) {
@@ -661,11 +686,16 @@ template <typename LookupDefFn, typename NumericFn>
 std::optional<LoadIndexConstraint>
 operationIndexConstraint(const MedFunc *Func, const MedOp *Op,
                          const BinaryImage *Image, LookupDefFn &&LookupDef,
-                         NumericFn &&IsNumeric) {
-  if (auto Bound =
-          predecessorIndexConstraint(Func, Op, Image, LookupDef, IsNumeric))
+                         NumericFn &&IsNumeric, uint64_t &VisitedNodes) {
+  // Both proofs visit every block before returning a constraint. When the
+  // blocks alone exceed their budget, building per-query maps cannot succeed.
+  if (Func && Func->Blocks.size() > static_cast<size_t>(limits::kMaxSSANodes))
+    return std::nullopt;
+  if (auto Bound = predecessorIndexConstraint(Func, Op, Image, LookupDef,
+                                              IsNumeric, VisitedNodes))
     return Bound;
-  return postTestedIndexConstraint(Func, Op, Image, LookupDef, IsNumeric);
+  return postTestedIndexConstraint(Func, Op, Image, LookupDef, IsNumeric,
+                                   VisitedNodes);
 }
 
 /// Recover the one record lane selected by a conventional `base + index`
@@ -1620,6 +1650,8 @@ void MedLLVMEmitter::invalidateFeasibleEdgeDependentCaches() const {
   FrameDerivedCache.clear();
   FrameAddressCacheFor = nullptr;
   FrameAddressCache.clear();
+  FrameDependencyIndexFor = nullptr;
+  FrameDependencyComponents.clear();
   FrameReloadCacheFor = nullptr;
   FrameReloadCache.clear();
   ++FrameReloadCacheGeneration;
@@ -1949,26 +1981,163 @@ bool MedLLVMEmitter::valueIsAuthenticatedModelZero(const MedVar &V) const {
 
 bool MedLLVMEmitter::valueHasNonNullIndirectCallGuards(
     const MedVar &Value) const {
-  if (!CurMedFunc || !Img || Value.isConst())
+  if (!CurMedFunc || CurMedFunc->Blocks.empty() || !Img || Value.isConst() ||
+      CurMedFunc->SkippedSSA)
     return false;
   size_t Budget = static_cast<size_t>(limits::kMaxSSANodes);
-  bool FoundCall = false;
-  for (const MedBlock &Block : CurMedFunc->Blocks)
-    for (const MedOp &Op : Block.Ops) {
-      if (Budget == 0)
+  auto consume = [&](size_t Amount = 1) {
+    if (Amount > Budget)
+      return false;
+    Budget -= Amount;
+    return true;
+  };
+  using Key = std::tuple<MedVar::VarKind, int, int>;
+  auto key = [](const MedVar &V) { return Key{V.Kind, V.Id, V.SSAVer}; };
+  std::map<Key, const MedOp *> Definitions;
+  std::map<int, const MedBlock *> Blocks;
+  std::map<int, std::set<int>> Incoming;
+  std::set<int> ExceptionalRoots;
+  auto define = [&](const MedVar &Output, const MedOp *Op) {
+    return Output.isConst() || Output.Id < 0 || !Output.Size ||
+           Definitions.emplace(key(Output), Op).second;
+  };
+  auto terminates = [](const MedOp &Op) {
+    return Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::BRANCH ||
+           Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN;
+  };
+  for (const MedBlock &Block : CurMedFunc->Blocks) {
+    if (!consume(1 + Block.Ops.size() + Block.Phis.size() + Block.Preds.size() +
+                 Block.Succs.size() + Block.ExceptionalPreds.size() +
+                 Block.ExceptionalSuccs.size()) ||
+        !Blocks.emplace(Block.Id, &Block).second)
+      return false;
+    for (const PhiNode &Phi : Block.Phis)
+      if (!define(Phi.Output, nullptr))
         return false;
-      --Budget;
-      if (Op.Opcode != NdOp::INDIR_CALL || Op.NumInputs < 1 ||
-          !sameIndexValue(Op.Inputs[0], Value))
-        continue;
-      FoundCall = true;
-      auto Constraint = operationIndexConstraint(
-          CurMedFunc, &Op, Img, [&](const MedVar &V) { return lookupDef(V); },
-          [&](const MedVar &V) { return constantIsStableAddressOffset(V); });
-      if (!Constraint || !Constraint->Excluded || *Constraint->Excluded != 0 ||
-          !sameIndexValue(Constraint->Value, Value))
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.NumInputs > Op.Inputs.size() ||
+          !define(Op.Output, Op.Dead ? nullptr : &Op) ||
+          (!Op.Dead && (Op.Opcode == NdOp::INDIR_BR ||
+                        (terminates(Op) && &Op != &Block.Ops.back()))))
         return false;
     }
+    if (std::set<int>(Block.Succs.begin(), Block.Succs.end()).size() !=
+        Block.Succs.size())
+      return false;
+    for (int Successor : Block.Succs)
+      Incoming[Successor].insert(Block.Id);
+    if (!Block.ExceptionalPreds.empty())
+      ExceptionalRoots.insert(Block.Id);
+    for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs)
+      ExceptionalRoots.insert(Edge.BlockId);
+  }
+  for (const auto &[Id, Predecessors] : Incoming)
+    if (!Blocks.count(Id))
+      return false;
+  for (const auto &[Id, Block] : Blocks) {
+    const std::set<int> Recorded(Block->Preds.begin(), Block->Preds.end());
+    if (Recorded.size() != Block->Preds.size() || Recorded != Incoming[Id])
+      return false;
+  }
+  auto lookup = [&](const MedVar &V) -> const MedOp * {
+    const auto It = Definitions.find(key(V));
+    return V.isConst() || It == Definitions.end() ? nullptr : It->second;
+  };
+
+  // The fact belongs to this loaded SSA value, so an intervening call or a
+  // write to its old storage does not change it. A reload has another value;
+  // this query supplies no memory-preservation or reload-equivalence proof.
+  // Keep both incoming truth states. A loop may revisit a definition, which
+  // starts a new dynamic value and must lose the earlier iteration's guard.
+  const int Entry = CurMedFunc->Blocks.front().Id;
+  std::vector<int> Structural{Entry};
+  std::set<int> Reachable{Entry};
+  while (!Structural.empty()) {
+    const auto &Block = *Blocks.at(Structural.back());
+    Structural.pop_back();
+    if (!consume(1 + Block.Succs.size() + Block.ExceptionalSuccs.size()))
+      return false;
+    auto add = [&](int Id) {
+      if (Blocks.count(Id) && Reachable.insert(Id).second)
+        Structural.push_back(Id);
+    };
+    for (int Id : Block.Succs)
+      add(Id);
+    for (const ExceptionalEdge &Edge : Block.ExceptionalSuccs)
+      add(Edge.BlockId);
+  }
+  std::vector<std::pair<int, bool>> Pending;
+  std::set<std::pair<int, bool>> Visited;
+  auto enqueue = [&](int Id, bool Known) {
+    if (Blocks.count(Id) && Visited.emplace(Id, Known).second)
+      Pending.emplace_back(Id, Known);
+  };
+  for (const auto &[Id, Block] : Blocks) {
+    if (!consume())
+      return false;
+    auto contains = [&](const std::set<va_t> &Roots) {
+      const auto It = Roots.lower_bound(Block->StartAddr);
+      return It != Roots.end() &&
+             (*It == Block->StartAddr || *It < Block->EndAddr);
+    };
+    if (Id == Entry || !Reachable.count(Id) || ExceptionalRoots.count(Id) ||
+        contains(CurMedFunc->ModuleAnalysisRoots) ||
+        contains(Img->CodeRefTargets))
+      enqueue(Id, false);
+  }
+  bool FoundCall = false;
+  while (!Pending.empty()) {
+    auto [Id, Known] = Pending.back();
+    Pending.pop_back();
+    const auto &Block = *Blocks.at(Id);
+    if (!consume(1 + Block.Phis.size() + Block.Ops.size() + Block.Succs.size()))
+      return false;
+    for (const PhiNode &Phi : Block.Phis)
+      if (sameIndexValue(Phi.Output, Value))
+        Known = false;
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Dead)
+        continue;
+      if (sameIndexValue(Op.Output, Value))
+        Known = false;
+      if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs >= 1 &&
+          sameIndexValue(Op.Inputs[0], Value)) {
+        FoundCall = true;
+        if (!Known)
+          return false;
+      }
+    }
+    const MedOp *Branch = Block.Ops.empty() ? nullptr : &Block.Ops.back();
+    std::optional<int> Taken;
+    if (Branch && !Branch->Dead && Branch->Opcode == NdOp::COND_BR &&
+        Branch->NumInputs == 2 && Branch->Inputs[0].isConst() &&
+        Branch->Inputs[0].ConstVal && Block.Succs.size() == 2) {
+      for (int Successor : Block.Succs) {
+        const auto &Target = *Blocks.at(Successor);
+        const va_t Address = Target.StartAddr || Target.Ops.empty()
+                                 ? Target.StartAddr
+                                 : Target.Ops.front().Addr;
+        if (Address == Branch->Inputs[0].ConstVal) {
+          if (Taken)
+            return false;
+          Taken = Successor;
+        }
+      }
+    }
+    for (int Successor : Block.Succs) {
+      bool Next = Known;
+      if (Taken) {
+        if (!consume(::neverd::limits::backend::kMaxGuardedScalarOffsetDepth))
+          return false;
+        const auto Constraint = conditionIndexConstraint(
+            Branch->Inputs[1], Successor == *Taken, lookup,
+            [&](const MedVar &V) { return constantIsStableAddressOffset(V); });
+        Next |= Constraint && Constraint->Excluded == uint64_t{0} &&
+                sameIndexValue(Constraint->Value, Value);
+      }
+      enqueue(Successor, Next);
+    }
+  }
   return FoundCall;
 }
 
@@ -2008,7 +2177,8 @@ bool MedLLVMEmitter::valueIsGuardedScalarOffset(const MedVar &Value) const {
     return false;
   const auto Constraint = operationIndexConstraint(
       CurMedFunc, Scale, Img, [&](const MedVar &V) { return lookupDef(V); },
-      [&](const MedVar &V) { return constantIsStableAddressOffset(V); });
+      [&](const MedVar &V) { return constantIsStableAddressOffset(V); },
+      AddressProvenanceWork.IndexConstraintNodes);
   if (!Constraint || !Constraint->Maximum ||
       *Constraint->Maximum >= limits::kMaxJumpTableEntries ||
       Constraint->Value.Size == 0 || Constraint->Value.Size > PointerSize)
@@ -2057,7 +2227,8 @@ bool MedLLVMEmitter::valueIsGuardedScalarOffset(const MedVar &Value) const {
   return valueIsOpaqueRuntimeOffset(Constraint->Value);
 }
 
-bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value) const {
+bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value,
+                                                bool AllowEscapedFrame) const {
   if (!CurMedFunc || !Img)
     return false;
   const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
@@ -2067,9 +2238,10 @@ bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value) const {
   // Exact spill recovery can itself consult scalar provenance. Keep a
   // re-entered source query incomplete until its outer proof has finished.
   using QueryKey = std::tuple<const MedLLVMEmitter *, const MedFunc *,
-                              AddressProvenanceVarKey>;
+                              AddressProvenanceVarKey, bool>;
   static thread_local std::set<QueryKey> ActiveQueries;
-  const QueryKey Query{this, CurMedFunc, addressProvenanceVarKey(Value)};
+  const QueryKey Query{this, CurMedFunc, addressProvenanceVarKey(Value),
+                       AllowEscapedFrame};
   if (!ActiveQueries.insert(Query).second)
     return false;
   auto LeaveQuery = llvm::make_scope_exit([&] { ActiveQueries.erase(Query); });
@@ -2090,13 +2262,13 @@ bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value) const {
     const auto OwnerEnd = Img->mappedObjectOwnerEnd(VA);
     if (!Seg || !Seg->isReadable() || !Seg->isWritable() ||
         Seg->isExecutable() || Img->isCodeAddress(VA) ||
-        isReadOnlyAfterReloc(Seg) || Seg->Size > InvalidVA - Seg->VA ||
+        Img->readOnlyAfterRelocations(VA, Width) ||
+        Seg->Size > InvalidVA - Seg->VA ||
         !rangeInBounds(VA - Seg->VA, Width, Seg->Size) ||
         !rangeInBounds(VA - Seg->VA, Width, Seg->Data.size()) ||
         LayoutOwner == InvalidVA || !OwnerEnd || *OwnerEnd < VA + Width ||
         (OwnerVA != InvalidVA && OwnerVA != LayoutOwner) ||
-        (Sec && (!Sec->isWritable() || Sec->isExecutable() ||
-                 section_names::isReadOnlyAfterRelocSectionName(Sec->Name))))
+        (Sec && Sec->isExecutable()))
       return false;
     auto overlaps = [&](va_t Start, uint64_t Size) {
       return Size && (Start <= VA ? VA - Start < Size : Start - VA < Width);
@@ -2146,12 +2318,15 @@ bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value) const {
   // A nested runtime load retains its address dependencies, and a private
   // reload retains every exact reaching STORE source. Neither may hide image
   // pointers behind an otherwise ordinary arithmetic or merge operation.
-  unsigned Budget = 256;
-  std::set<AddressProvenanceVarKey> Active, Done;
+  unsigned Budget = limits::backend::kMaxRuntimeOffsetSourceNodes;
+  std::map<AddressProvenanceVarKey, unsigned> Active;
+  std::set<AddressProvenanceVarKey> Done;
+  unsigned RuntimeFrameDepth = 0;
   bool SawRuntimeLoad = false;
   std::function<bool(const MedVar &, unsigned)> scalarSource =
       [&](const MedVar &V, unsigned Depth) {
-        if (Depth > 32 || Budget == 0 || V.Size == 0 || V.Size > 8)
+        if (Depth > limits::backend::kMaxRuntimeOffsetSourceDepth ||
+            Budget == 0 || V.Size == 0 || V.Size > 8)
           return false;
         --Budget;
         if (V.isConst())
@@ -2159,8 +2334,21 @@ bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value) const {
         const auto Key = addressProvenanceVarKey(V);
         if (Done.count(Key))
           return true;
-        if (!Active.insert(Key).second || varMayBeFrameAddress(V))
+        if (varMayBeFrameAddress(V))
           return false;
+        const auto [ActiveIt, Entered] = Active.emplace(Key, RuntimeFrameDepth);
+        if (!Entered) {
+          // A memory-carried recurrence can close only through a runtime LOAD
+          // whose all-path initialization has already been proved. Pure SSA
+          // cycles, and cycles merely nested under such a load, stay unproved.
+          return AllowEscapedFrame && RuntimeFrameDepth > ActiveIt->second;
+        }
+        bool RuntimeFrameAnchor = false;
+        auto Leave = llvm::scope_exit([&] {
+          Active.erase(Key);
+          if (RuntimeFrameAnchor)
+            --RuntimeFrameDepth;
+        });
         auto finish = [&] {
           Active.erase(Key);
           Done.insert(Key);
@@ -2199,11 +2387,35 @@ bool MedLLVMEmitter::valueIsOpaqueRuntimeOffset(const MedVar &Value) const {
           const MedVar &Address = Def->Inputs[0];
           if (varMayBeFrameAddress(Address)) {
             std::vector<MedVar> Sources;
-            if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
-              return false;
-            for (const MedVar &Source : Sources)
-              if (Source.Size != V.Size || !scalarSource(Source, Depth + 1))
+            // An original-image consumer can keep the actual loaded word
+            // after an escape. Its query audits the visible possible writes
+            // and initialization, but never substitutes a reaching value or
+            // claims that a call preserves this slot.
+            bool RuntimeFrame = false;
+            if (!collectFrameReloadSources(*Def, Sources)) {
+              if (!AllowEscapedFrame ||
+                  !collectFrameReloadSources(*Def, Sources,
+                                             FrameReloadSourceMode::Runtime))
                 return false;
+              RuntimeFrame = true;
+            }
+            if (Sources.empty())
+              return false;
+            if (RuntimeFrame) {
+              RuntimeFrameAnchor = true;
+              ++RuntimeFrameDepth;
+            }
+            for (const MedVar &Source : Sources) {
+              if (!Source.Size || Source.Size > V.Size ||
+                  (!RuntimeFrame && Source.Size != V.Size) ||
+                  varMayBeFrameAddress(Source))
+                return false;
+              if (RuntimeFrame && valueIsStableAddressOffset(Source))
+                continue;
+              if (!scalarSource(Source, Depth + 1))
+                return false;
+            }
+            SawRuntimeLoad |= RuntimeFrame;
           } else {
             if (traceValueVA(Address)) {
               if (!mutableRuntimeWord(Address, V.Size))
@@ -2365,16 +2577,18 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
   };
   int RemainingFrameRootNodes =
       ::neverd::limits::backend::kMedLLVMAddrResolveRemainingFrameRootNodes;
-  std::function<FrameRootProof(const MedVar &, int, std::set<Key>)>
+  std::function<FrameRootProof(const MedVar &, int, std::set<Key> &)>
       frameRootProof = [&](const MedVar &Start, int Depth,
-                           std::set<Key> Seen) -> FrameRootProof {
+                           std::set<Key> &Seen) -> FrameRootProof {
     if (Start.isConst() || RemainingFrameRootNodes-- <= 0)
       return {};
     if (auto Exact = canonicalFrameSlotKey(Start))
       return {true, false, Exact->first};
     const MedOp *Def = lookupDef(Start);
-    if (!Seen.insert(keyOf(Start)).second)
+    const auto [Position, Inserted] = Seen.insert(keyOf(Start));
+    if (!Inserted)
       return {true, true, std::nullopt, {keyOf(Start)}};
+    auto RestorePath = llvm::scope_exit([&] { Seen.erase(Position); });
 
     auto mergeProofs = [](const FrameRootProof &A,
                           const FrameRootProof &B) -> FrameRootProof {
@@ -2504,7 +2718,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
     if (IndependentQuery)
       if (auto It = FrameRootMemo.find(CacheKey); It != FrameRootMemo.end())
         return It->second;
-    FrameRootProof Proof = frameRootProof(Start, Depth, std::move(Seen));
+    FrameRootProof Proof = frameRootProof(Start, Depth, Seen);
     // Reuse only complete acyclic root proofs. Recurrence and rejected paths
     // can depend on the calling DFS or an exhausted budget.
     if (IndependentQuery && Proof.Valid && !Proof.SawCycle && Proof.Root)
@@ -3456,6 +3670,16 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
 
     if (Def->Opcode == NdOp::CONCAT && !concatHasExactWidths(*Def))
       return stableOffsetFailure("malformed-concat", Start, Depth);
+    // `shr eax, cl` masks its count to CL's low bits. The upper bytes a write
+    // to CL leaves in ECX, whatever they last held, do not reach the result.
+    if (Def->Opcode == NdOp::INT_AND && Def->NumInputs == 2 &&
+        Def->Inputs[1].isConst())
+      if (const MedOp *Pieces = lookupDef(Def->Inputs[0]);
+          Pieces && Pieces->Opcode == NdOp::CONCAT &&
+          concatHasExactWidths(*Pieces) && Pieces->Inputs[1].Size < 8 &&
+          (Def->Inputs[1].ConstVal >> (Pieces->Inputs[1].Size * 8u)) == 0)
+        return prove(Pieces->Inputs[1], Depth + 1, Seen, ActiveFrameSlots,
+                     AnchoredPhis);
     bool CarriesArithmeticValue = false;
     switch (Def->Opcode) {
     case NdOp::COPY:
@@ -3635,13 +3859,16 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                                 ExactFrameSlot->second, Def->Output.Size);
         };
 
-        bool DomainInvalid = false;
+        // One escaping address or untracked writer invalidates the whole
+        // domain. Later stores cannot repair that all-domain certificate.
+        // Stop at that refusal instead of auditing every remaining write.
         for (const auto &Call : CurMedFunc->CallInfos)
           for (size_t ArgIndex = 0; ArgIndex < Call.Args.size(); ++ArgIndex) {
             const MedVar &Arg = Call.Args[ArgIndex];
             if (sameOrUnknownFrameRoot(Arg)) {
               if (!boundedCallFrameArgIsSafe(Call, ArgIndex))
-                DomainInvalid = true;
+                return stableOffsetFailure("incomplete-frame-reload", Start,
+                                           Depth);
             }
           }
 
@@ -3656,7 +3883,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
               if (sameOrUnknownFrameRoot(Write.Inputs[1])) {
                 auto DestinationRoot = frameRoot(Write.Inputs[0], 0, {});
                 if (!DestinationRoot || *DestinationRoot != Root)
-                  DomainInvalid = true;
+                  return stableOffsetFailure("incomplete-frame-reload", Start,
+                                             Depth);
               }
               if (!sameOrUnknownFrameRoot(Write.Inputs[0]))
                 continue;
@@ -3665,7 +3893,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                                               Def->Inputs[0], Def->Output.Size))
                 continue;
               if (Write.Inputs[1].Size == 0)
-                DomainInvalid = true;
+                return stableOffsetFailure("incomplete-frame-reload", Start,
+                                           Depth);
               else
                 DomainSources.push_back(Write.Inputs[1]);
               continue;
@@ -3682,7 +3911,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                                               Write.Output.Size, Def->Inputs[0],
                                               Def->Output.Size))
                 continue;
-              DomainInvalid = true;
+              return stableOffsetFailure("incomplete-frame-reload", Start,
+                                         Depth);
             }
             // An x86 floating-state memory operand is a source the operation
             // reads as a LOAD would (`addss -0x54(%ebp), %xmm0`); only the
@@ -3703,11 +3933,12 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
               for (uint8_t I = 1; I < Write.NumInputs; ++I)
                 if (!(I == 1 && ReadsAddressOperand) &&
                     sameOrUnknownFrameRoot(Write.Inputs[I]))
-                  DomainInvalid = true;
+                  return stableOffsetFailure("incomplete-frame-reload", Start,
+                                             Depth);
           }
         }
 
-        if (!DomainInvalid && !DomainSources.empty()) {
+        if (!DomainSources.empty()) {
           ActiveFrameDomains.insert(Root);
           bool DomainStable = true;
           bool SawInitializer = false;
@@ -3824,7 +4055,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                 [&](const MedVar &V) { return lookupDef(V); },
                 [&](const MedVar &V) {
                   return constantIsStableAddressOffset(V);
-                }));
+                },
+                AddressProvenanceWork.IndexConstraintNodes));
       };
       IndexedPointerLaneSummary ScalarLane = scalarLanes(Def, nullptr, nullptr);
       std::vector<MedVar> PointerIndexTerms;
@@ -4707,8 +4939,12 @@ const MedOp *MedLLVMEmitter::memoryAddressSumDef(const MedVar &Address) const {
 
 std::optional<MedVar>
 MedLLVMEmitter::pointerPreservingInput(const MedOp &Op) const {
+  // A transport must be a complete operation, not merely have a usable first
+  // operand. Extra operands cannot be discarded by a provenance proof.
+  const unsigned ExpectedInputs = Op.Opcode == NdOp::SUBBYTES ? 2 : 1;
   if (Op.RegistrationRoot != MedOp::RegistrationRootKind::None ||
-      Op.NumInputs < 1 || Op.Output.Size == 0 || Op.Inputs[0].Size == 0)
+      Op.NumInputs != ExpectedInputs || Op.Output.Size == 0 ||
+      Op.Inputs[0].Size == 0)
     return std::nullopt;
 
   const MedVar &Input = Op.Inputs[0];
@@ -4775,16 +5011,8 @@ bool MedLLVMEmitter::selectPreservesPointerValues(const MedOp &Op) const {
 
 bool MedLLVMEmitter::isMaskedSelectOr(const MedOp &Or, MedVar &Cond,
                                       MedVar &ArmT, MedVar &ArmF) const {
-  if (Or.Opcode != NdOp::INT_OR || Or.NumInputs < 2)
+  if (Or.Opcode != NdOp::INT_OR)
     return false;
-  const MedOp *A = lookupDef(Or.Inputs[0]);
-  const MedOp *B = lookupDef(Or.Inputs[1]);
-  if (!A || !B || A->Opcode != NdOp::INT_AND || B->Opcode != NdOp::INT_AND ||
-      A->NumInputs < 2 || B->NumInputs < 2)
-    return false;
-  auto sameVar = [](const MedVar &Left, const MedVar &Right) {
-    return sameIndexValue(Left, Right);
-  };
   std::function<bool(const MedVar &, int)> isBooleanValue = [&](const MedVar &V,
                                                                 int Depth) {
     if (Depth >
@@ -4817,54 +5045,15 @@ bool MedLLVMEmitter::isMaskedSelectOr(const MedOp &Or, MedVar &Cond,
       return false;
     }
   };
-  // Every operation in the blend must execute at one exact width. The emitter
-  // zero-extends narrower AND operands before applying the mask; an i32
-  // `-cond` therefore is not an all-ones mask for an i64 pointer.
-  uint16_t BlendSize = Or.Output.Size;
-  if (BlendSize == 0 || Or.Inputs[0].Size != BlendSize ||
-      Or.Inputs[1].Size != BlendSize || A->Output.Size != BlendSize ||
-      B->Output.Size != BlendSize)
+  const auto Selection = matchMaskedScalarSelection(
+      Or, [&](const MedVar &V) { return lookupDef(V); }, sameIndexValue,
+      [&](const MedVar &V) { return isBooleanValue(V, 0); });
+  if (!Selection)
     return false;
-
-  auto maskCond = [&](const MedVar &Mask,
-                      bool &Positive) -> std::optional<MedVar> {
-    if (Mask.Size != BlendSize)
-      return std::nullopt;
-    const MedOp *Def = lookupDef(Mask);
-    Positive = true;
-    if (Def && Def->Opcode == NdOp::INT_NOT && Def->NumInputs >= 1) {
-      if (Def->Output.Size != BlendSize || Def->Inputs[0].Size != BlendSize)
-        return std::nullopt;
-      Positive = false;
-      Def = lookupDef(Def->Inputs[0]);
-    }
-    if (!Def || Def->Opcode != NdOp::INT_NEG2 || Def->NumInputs < 1 ||
-        Def->Output.Size != BlendSize || Def->Inputs[0].Size != BlendSize)
-      return std::nullopt;
-    Def = lookupDef(Def->Inputs[0]);
-    if (!Def || Def->Opcode != NdOp::INT_ZEXT || Def->NumInputs < 1 ||
-        Def->Output.Size != BlendSize || !isBooleanValue(Def->Inputs[0], 0))
-      return std::nullopt;
-    return Def->Inputs[0];
-  };
-  for (int Ai = 0; Ai < 2; ++Ai)
-    for (int Bi = 0; Bi < 2; ++Bi) {
-      bool APositive = false;
-      bool BPositive = false;
-      auto ACond = maskCond(A->Inputs[Ai], APositive);
-      auto BCond = maskCond(B->Inputs[Bi], BPositive);
-      const MedVar &AValue = A->Inputs[1 - Ai];
-      const MedVar &BValue = B->Inputs[1 - Bi];
-      if (AValue.Size != BlendSize || BValue.Size != BlendSize)
-        continue;
-      if (ACond && BCond && sameVar(*ACond, *BCond) && APositive != BPositive) {
-        Cond = *ACond;
-        ArmT = APositive ? AValue : BValue;
-        ArmF = APositive ? BValue : AValue;
-        return true;
-      }
-    }
-  return false;
+  Cond = Selection->Condition;
+  ArmT = Selection->TrueValue;
+  ArmF = Selection->FalseValue;
+  return true;
 }
 
 void MedLLVMEmitter::failAmbiguousDataPointerPhi(const PhiNode &Phi) const {
@@ -4899,6 +5088,8 @@ std::optional<uint64_t> MedLLVMEmitter::traceSSAConst(const MedVar &V) const {
     const MedOp *Def = lookupDef(Cur);
     if (!Def)
       return std::nullopt;
+    if (auto Address = x86RepConstantAddressOutput(*Def, Cur, TargetArch))
+      return Address;
     if (Def->Opcode == NdOp::COPY && Def->NumInputs >= 1) {
       if (Def->Output.Size == 0 || Def->Inputs[0].Size == 0 ||
           Def->Output.Size < Def->Inputs[0].Size)
@@ -6281,7 +6472,8 @@ MedLLVMEmitter::classifyPointerTableLoadRoles(const MedVar &V,
         operationIndexConstraint(
             CurMedFunc, Result.Load, Img,
             [&](const MedVar &V) { return lookupDef(V); },
-            [&](const MedVar &V) { return isStableNumericOffset(V); }));
+            [&](const MedVar &V) { return isStableNumericOffset(V); },
+            AddressProvenanceWork.IndexConstraintNodes));
   };
   if (!Domain.Complete || Domain.Seeds.empty()) {
     IndexedPointerLaneSummary Lane;
@@ -7026,6 +7218,9 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseUncached(
     // all-arms audit, while the caller still rejects mixed/multiple bases.
     const bool LoaderOwnedPointerTable =
         Seg && !Seg->isExecutable() && segHasPtrRelocSlots(Seg);
+    // A table grants data identity only to its own object/slots, never
+    // to every address sharing the executable mapping.
+    const bool ExecutableTableDomain = isInCodePointerTableAddress(V.ConstVal);
     bool HasOwnedBytes = false;
     if (Owner && Seg) {
       const Section *OwnerSec = Img->getSectionFor(*Owner);
@@ -7034,9 +7229,13 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseUncached(
       HasOwnedBytes = Size <= InvalidVA - Begin && V.ConstVal >= Begin &&
                       V.ConstVal <= Begin + Size;
     }
-    if (!Seg || Img->hasExecutableCodeOwnerAt(Owner.value_or(V.ConstVal)) ||
+    if (!Seg ||
+        (Img->hasExecutableCodeOwnerAt(Owner.value_or(V.ConstVal)) &&
+         !ExecutableTableDomain) ||
         (Seg->isWritable() && !LoaderOwnedPointerTable) ||
-        !(Owner ? HasOwnedBytes : hasObjectDataProvenance(V.ConstVal)) ||
+        !(Owner ? HasOwnedBytes
+                : (hasObjectDataProvenance(V.ConstVal) ||
+                   ExecutableTableDomain)) ||
         (HaveBase && Base != V.ConstVal))
       return false;
     Base = V.ConstVal;
@@ -7256,9 +7455,11 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseUncached(
     if (OwnerConflict || (*C == 0 && !Owner))
       return false;
     if (!Owner)
-      return hasObjectDataProvenance(*C);
+      return hasObjectDataProvenance(*C) || isInCodePointerTableAddress(*C);
     const Segment *Seg = Img ? Img->getSegmentFor(*Owner) : nullptr;
-    if (!Seg || !Seg->isReadable() || Img->hasExecutableCodeOwnerAt(*Owner))
+    if (!Seg || !Seg->isReadable() ||
+        (Img->hasExecutableCodeOwnerAt(*Owner) &&
+         !isInCodePointerTableAddress(*C)))
       return false;
     const Section *OwnerSec = Img->getSectionFor(*Owner);
     const uint64_t Begin = OwnerSec ? OwnerSec->VA : Seg->VA;

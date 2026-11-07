@@ -177,6 +177,47 @@ void runWithLargeStackThreads(unsigned Count, Fn &Worker) {
     Worker();
 }
 
+/// Run \p Body on a thread with the 128 MiB stack runWithLargeStack gives a
+/// main function, and join it.  The pipeline phases \p Body runs coordinate
+/// their workers on that stack instead of starting a thread with one for
+/// each phase (runTaskWorkers), as a long-lived request loop would.  Falls
+/// back to a direct call if thread creation fails; exceptions propagate
+/// after the join, as they do for the direct call.
+template <typename Fn> void runWithMainStack(Fn &Body) {
+  detail::LargeStackWorkerArgs<Fn> Args{&Body, {}};
+#ifdef _WIN32
+  auto Thread =
+      ::_beginthreadex(nullptr, static_cast<unsigned>(kDecompilerMainStackSize),
+                       detail::largeStackWorkerEntry<Fn>, &Args,
+                       STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+  if (Thread == 0) {
+    Body();
+    return;
+  }
+  HANDLE Handle = reinterpret_cast<HANDLE>(Thread);
+  ::WaitForSingleObject(Handle, INFINITE);
+  ::CloseHandle(Handle);
+#else
+  pthread_t Tid;
+  pthread_attr_t Attr;
+  if (pthread_attr_init(&Attr) != 0) {
+    Body();
+    return;
+  }
+  if (pthread_attr_setstacksize(&Attr, kDecompilerMainStackSize) != 0 ||
+      pthread_create(&Tid, &Attr, detail::largeStackWorkerEntry<Fn>, &Args) !=
+          0) {
+    pthread_attr_destroy(&Attr);
+    Body();
+    return;
+  }
+  pthread_attr_destroy(&Attr);
+  pthread_join(Tid, nullptr);
+#endif
+  if (Args.Failure)
+    std::rethrow_exception(Args.Failure);
+}
+
 /// Run \p RealMain on a thread with a 128 MiB stack.  Falls back to a
 /// direct call if thread creation fails. Exceptions propagate to the caller
 /// after the thread is joined, just as they do for the direct call.

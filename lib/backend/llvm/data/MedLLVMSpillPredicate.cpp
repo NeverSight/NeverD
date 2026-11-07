@@ -17,6 +17,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/med/X86/X86RepAddresses.h"
 #include "neverd/object/SectionNames.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-global-data"
@@ -58,7 +59,7 @@ void MedLLVMEmitter::ensureAddrPredCache() const {
   SlotAddressEscapesCache.clear();
   SlotMatchingKeyLoadCache.clear();
   EscapingSlotKeys.reset();
-  LoadedSlotKeys.reset();
+  LoadedSlotValues.reset();
   SlotReloadUsedLocallyCache.clear();
   WritableDataSegCache.clear();
   PtrTableUniqueSegCache.clear();
@@ -119,16 +120,16 @@ bool MedLLVMEmitter::frameSlotHasMatchingKeyLoad(
   if (auto It = SlotMatchingKeyLoadCache.find(*SK);
       It != SlotMatchingKeyLoadCache.end())
     return It->second;
-  if (!LoadedSlotKeys) {
-    LoadedSlotKeys.emplace();
+  if (!LoadedSlotValues) {
+    LoadedSlotValues.emplace();
     for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops)
         if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
             Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
           if (auto LK = keyOf(Op.Inputs[0]))
-            LoadedSlotKeys->insert(*LK);
+            (*LoadedSlotValues)[*LK].push_back(Op.Output);
   }
-  const bool Result = LoadedSlotKeys->count(*SK) != 0;
+  const bool Result = LoadedSlotValues->count(*SK) != 0;
   SlotMatchingKeyLoadCache[*SK] = Result;
   return Result;
 }
@@ -1137,11 +1138,23 @@ void MedLLVMEmitter::ensureFrameReloadAnalysis() const {
     if (It == DeclaredPreds.end() || It->second != Block.StructuralPreds)
       return;
   }
+  std::vector<int> Pending{FrameReloadIndex.EntryBlockId};
+  while (!Pending.empty()) {
+    const int Id = Pending.back();
+    Pending.pop_back();
+    auto &Block = FrameReloadIndex.Blocks.at(Id);
+    if (Block.EntryReachable)
+      continue;
+    Block.EntryReachable = true;
+    Pending.insert(Pending.end(), Block.Successors.begin(),
+                   Block.Successors.end());
+  }
   FrameReloadIndex.Valid = true;
 }
 
 bool MedLLVMEmitter::collectFrameReloadSources(
-    const MedOp &Load, std::vector<MedVar> &Sources) const {
+    const MedOp &Load, std::vector<MedVar> &Sources,
+    FrameReloadSourceMode Mode) const {
   Sources.clear();
   ++FrameReloadSourceWork.Queries;
 
@@ -1195,7 +1208,8 @@ bool MedLLVMEmitter::collectFrameReloadSources(
     FrameReloadBuildSawReentrantQuery = true;
     return false;
   }
-  if (auto It = FrameReloadSourceCache.find(*Key);
+  const auto CacheKey = std::make_pair(*Key, Mode);
+  if (auto It = FrameReloadSourceCache.find(CacheKey);
       It != FrameReloadSourceCache.end()) {
     ++FrameReloadSourceWork.Hits;
     Sources = It->second.Sources;
@@ -1206,7 +1220,8 @@ bool MedLLVMEmitter::collectFrameReloadSources(
   FrameReloadBuildSawReentrantQuery = false;
   ++FrameReloadSourceWork.Builds;
   std::vector<MedVar> NextSources;
-  const bool Proven = collectFrameReloadSourcesUncached(Load, NextSources);
+  const bool Proven =
+      collectFrameReloadSourcesUncached(Load, NextSources, Mode);
 
   const bool CanPublish =
       FrameReloadSourceCacheFor == CurMedFunc &&
@@ -1226,7 +1241,7 @@ bool MedLLVMEmitter::collectFrameReloadSources(
   }
 
   auto [Published, Inserted] = FrameReloadSourceCache.emplace(
-      *Key, FrameReloadSourceResult{Proven, NextSources});
+      CacheKey, FrameReloadSourceResult{Proven, NextSources});
   (void)Inserted;
   FrameReloadSourceState = FrameReloadCacheState::Ready;
   Sources = Published->second.Sources;
@@ -1368,15 +1383,31 @@ bool MedLLVMEmitter::frameReloadHasAllPathInitializer(const MedOp &Load) const {
 }
 
 bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
-    const MedOp &Load, std::vector<MedVar> &Sources) const {
+    const MedOp &Load, std::vector<MedVar> &Sources,
+    FrameReloadSourceMode Mode) const {
   Sources.clear();
   const bool Escapes = CurMedFunc && Load.Opcode == NdOp::LOAD &&
                        Load.NumInputs >= 1 &&
                        stackSlotAddressEscapes(Load.Inputs[0]);
   if (!CurMedFunc || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
       Load.Output.Size == 0 ||
-      Load.MemoryAddressSpace != NdMemoryAddressSpace::Default || Escapes)
+      Load.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      (Mode == FrameReloadSourceMode::Exact && Escapes) ||
+      (Mode == FrameReloadSourceMode::Runtime && !Escapes))
     return false;
+
+  // A runtime-source audit does not project effects at an internal throw
+  // point. Escaping exceptional exits cannot reach this load again, while a
+  // handler that resumes in this function needs its own ordered edge proof.
+  if (Mode == FrameReloadSourceMode::Runtime)
+    for (const MedBlock &Block : CurMedFunc->Blocks) {
+      auto Internal = [](const ExceptionalEdge &Edge) {
+        return Edge.BlockId >= 0;
+      };
+      if (llvm::any_of(Block.ExceptionalSuccs, Internal) ||
+          llvm::any_of(Block.ExceptionalPreds, Internal))
+        return false;
+    }
 
   const auto Target = canonicalFrameSlotKey(Load.Inputs[0]);
   if (!Target)
@@ -1410,13 +1441,23 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
     std::vector<MedVar> Values;
   };
   auto addUnique = [](std::vector<MedVar> &Values, const MedVar &Value) {
-    if (std::find(Values.begin(), Values.end(), Value) == Values.end())
-      Values.push_back(Value);
+    if (std::find(Values.begin(), Values.end(), Value) != Values.end())
+      return false;
+    Values.push_back(Value);
+    return true;
   };
   auto sameState = [](const ReachingState &A, const ReachingState &B) {
     if (A.Reachable != B.Reachable || A.Uninitialized != B.Uninitialized ||
-        A.Invalid != B.Invalid || A.Values.size() != B.Values.size())
+        A.Invalid != B.Invalid)
       return false;
+    // These states cannot produce a reload value. Only a full-width exact
+    // STORE can recover them, and that STORE replaces every reaching source.
+    if (!A.Reachable || A.Uninitialized || A.Invalid)
+      return true;
+    if (A.Values.size() != B.Values.size())
+      return false;
+    if (A.Values == B.Values)
+      return true;
     for (const MedVar &Value : A.Values)
       if (std::find(B.Values.begin(), B.Values.end(), Value) == B.Values.end())
         return false;
@@ -1425,25 +1466,49 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
   auto mergeInto = [&](ReachingState &Dst, const ReachingState &Src) {
     if (!Src.Reachable)
       return false;
-    ReachingState Before = Dst;
+    bool Changed = !Dst.Reachable ||
+                   (!Dst.Uninitialized && Src.Uninitialized) ||
+                   (!Dst.Invalid && Src.Invalid);
     Dst.Reachable = true;
     Dst.Uninitialized |= Src.Uninitialized;
     Dst.Invalid |= Src.Invalid;
+    if (Dst.Uninitialized || Dst.Invalid) {
+      Dst.Values.clear();
+      return Changed;
+    }
+    // The flags and union only grow. Record additions directly instead of
+    // copying the old set and searching the enlarged set for every old value.
     for (const MedVar &Value : Src.Values)
-      addUnique(Dst.Values, Value);
-    return !sameState(Before, Dst);
+      Changed |= addUnique(Dst.Values, Value);
+    return Changed;
   };
   // The reload is fixed for this query. Reaching values and edge bindings
   // change during iteration, but the unbound alias proof for an exact write
   // footprint does not. Keep this cache within the enclosing immutable CFG
   // transaction; a reentrant or invalidated query cannot publish its result.
   std::map<std::pair<AddressProvenanceVarKey, uint16_t>, bool> DisjointWrites;
+  size_t RuntimeWork = limits::backend::kMaxFrameRuntimeSourceWork;
+  bool Exhausted = false;
+  auto consume = [&] {
+    if (Mode == FrameReloadSourceMode::Exact)
+      return true;
+    if (!RuntimeWork) {
+      Exhausted = true;
+      return false;
+    }
+    --RuntimeWork;
+    return true;
+  };
   auto transfer = [&](const FrameReloadBlock &Block, std::size_t Boundary,
                       ReachingState State,
                       const ControlValueBindings *Bindings = nullptr) {
     if (!State.Reachable)
       return State;
     for (const FrameReloadWrite &Write : Block.Writes) {
+      if (!consume()) {
+        State.Invalid = true;
+        return State;
+      }
       if (Write.Index >= Boundary)
         break;
       if (!Write.HasAddress) {
@@ -1452,8 +1517,23 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
         continue;
       }
       const MedVar &WriteAddr = Write.Address;
-      if (!varMayBeFrameAddress(WriteAddr))
+      if (!varMayBeFrameAddress(WriteAddr)) {
+        if (Mode == FrameReloadSourceMode::Exact)
+          continue;
+        // A known image object is disjoint from this frame. After an escape,
+        // any other indirect write can overlap the reload; retain its source
+        // as a possible runtime value, without treating it as initialization.
+        uint64_t ImageVA = 0;
+        if (resolveMaterializableDataAddress(WriteAddr, ImageVA))
+          continue;
+        if (Write.IsStore && Write.HasValue && Write.Size != 0 &&
+            Write.Size <= Load.Output.Size) {
+          addUnique(State.Values, Write.Value);
+        } else {
+          State.Invalid = true;
+        }
         continue;
+      }
       const uint16_t WriteSize = Write.Size;
       const auto WriteKey = canonicalFrameSlotKey(
           WriteAddr, /*RequireEntryStackPointer=*/false, Bindings);
@@ -1489,12 +1569,41 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
         addUnique(State.Values, Write.Value);
         continue;
       }
-      State.Uninitialized = false;
-      State.Invalid = true;
-      State.Values.clear();
+      if (Mode == FrameReloadSourceMode::Runtime && Write.IsStore &&
+          Write.HasValue && WriteSize != 0 && WriteSize <= Load.Output.Size) {
+        // A partial write cannot initialize a whole word. Once a full store
+        // has initialized it, keep both the old bytes and this new source in
+        // the provenance audit instead of pretending to recover an exact word.
+        addUnique(State.Values, Write.Value);
+      } else {
+        State.Uninitialized = false;
+        State.Invalid = true;
+        State.Values.clear();
+      }
     }
     return State;
   };
+
+  // A full-width local STORE replaces every possible incoming state. Reuse
+  // the same transfer with an uninitialized input: success then needs no
+  // predecessor values. Keep structural entry reachability, including
+  // exceptional edges, rather than admitting a disconnected local store.
+  // Runtime queries retain their complete bounded traversal and work charge.
+  const auto &LoadBlock = FrameReloadIndex.Blocks.at(Site.BlockId);
+  if (Mode == FrameReloadSourceMode::Exact && LoadBlock.EntryReachable) {
+    ReachingState Unknown;
+    Unknown.Reachable = true;
+    Unknown.Uninitialized = true;
+    const auto Local = transfer(LoadBlock, Site.Index, std::move(Unknown));
+    // A local kill after the last exact STORE invalidates every incoming
+    // source. Earlier blocks cannot repair a write that executes after them.
+    if (Local.Invalid)
+      return false;
+    if (!Local.Uninitialized && !Local.Invalid && !Local.Values.empty()) {
+      Sources = Local.Values;
+      return true;
+    }
+  }
 
   // Forward may-reach dataflow over the exact slot. The immutable snapshot
   // keeps CFG and write construction out of this per-occurrence proof.
@@ -1550,16 +1659,116 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
       }
     }
   }
+  if (Mode == FrameReloadSourceMode::Exact) {
+    // Exact transfer is identity until a full STORE or a kill replaces every
+    // incoming state. Follow every structural predecessor only while that
+    // suffix is transparent, keeping the same outgoing-edge equality facts.
+    // Edge identities distinguish the facts of two exits from one block.
+    if (!LoadBlock.EntryReachable)
+      return false;
+    std::vector<MedVar> Found;
+    std::vector<std::pair<int, int>> PendingEdges;
+    std::set<std::pair<int, int>> VisitedEdges;
+    auto visit = [&](int BlockId, std::size_t Boundary,
+                     const ControlValueBindings *Bindings) {
+      const auto &Block = FrameReloadIndex.Blocks.at(BlockId);
+      if (!Block.EntryReachable)
+        return true;
+      ReachingState Unknown;
+      Unknown.Reachable = true;
+      Unknown.Uninitialized = true;
+      const auto Local =
+          transfer(Block, Boundary, std::move(Unknown), Bindings);
+      if (Local.Invalid)
+        return false;
+      if (!Local.Uninitialized && !Local.Values.empty()) {
+        for (const auto &Value : Local.Values)
+          addUnique(Found, Value);
+        return true;
+      }
+      // Entry contributes the first invocation even when a loop also enters
+      // that block. Backedges can contribute different initialized sources.
+      if (BlockId == FrameReloadIndex.EntryBlockId) {
+        if (Entry.Uninitialized || Entry.Invalid || Entry.Values.empty())
+          return false;
+        for (const auto &Value : Entry.Values)
+          addUnique(Found, Value);
+      }
+      for (int Pred : Block.StructuralPreds)
+        PendingEdges.emplace_back(Pred, BlockId);
+      return true;
+    };
+    if (!visit(Site.BlockId, Site.Index, nullptr))
+      return false;
+    while (!PendingEdges.empty()) {
+      const auto Edge = PendingEdges.back();
+      PendingEdges.pop_back();
+      if (!VisitedEdges.insert(Edge).second)
+        continue;
+      const auto &Block = FrameReloadIndex.Blocks.at(Edge.first);
+      const auto Facts = Block.EqualityFacts.find(Edge.second);
+      const ControlValueBindings *Bindings =
+          Facts == Block.EqualityFacts.end() ? nullptr : &Facts->second;
+      if (!visit(Edge.first, std::numeric_limits<std::size_t>::max(), Bindings))
+        return false;
+    }
+    if (Found.empty())
+      return false;
+    Sources = std::move(Found);
+    return true;
+  }
+
+  // Only predecessors of this exact LOAD can contribute a reaching source.
+  // Structural predecessors include backedges and exceptional edges, so
+  // later writes remain visible whenever control can return to the LOAD.
+  std::set<int> Relevant{Site.BlockId};
+  std::vector<int> Pending{Site.BlockId};
+  while (!Pending.empty()) {
+    const int Id = Pending.back();
+    Pending.pop_back();
+    for (int Pred : FrameReloadIndex.Blocks.at(Id).StructuralPreds)
+      if (Relevant.insert(Pred).second)
+        Pending.push_back(Pred);
+  }
+  if (!Relevant.count(FrameReloadIndex.EntryBlockId))
+    return false;
   InStates[FrameReloadIndex.EntryBlockId] = Entry;
-  std::vector<int> Work{FrameReloadIndex.EntryBlockId};
+  // Process forward joins after their acyclic predecessors. A LIFO worklist
+  // reaches a long chain of joins before each delayed STORE arm, repeatedly
+  // propagating every partial source set through the remaining chain.
+  std::vector<std::pair<int, size_t>> DFS{{FrameReloadIndex.EntryBlockId, 0}};
+  std::set<int> Visited{FrameReloadIndex.EntryBlockId};
+  std::vector<int> PostOrder;
+  while (!DFS.empty()) {
+    auto &[Id, Next] = DFS.back();
+    const auto &Successors = FrameReloadIndex.Blocks.at(Id).Successors;
+    if (Next == Successors.size()) {
+      PostOrder.push_back(Id);
+      DFS.pop_back();
+      continue;
+    }
+    const int Successor = Successors[Next++];
+    if (Relevant.count(Successor) && Visited.insert(Successor).second)
+      DFS.emplace_back(Successor, 0);
+  }
+  std::map<int, size_t> Order;
+  for (auto It = PostOrder.rbegin(); It != PostOrder.rend(); ++It)
+    Order.emplace(*It, Order.size());
+  // A pending block reads its latest merged state. Multiple predecessors can
+  // update it before that visit without adding duplicate worklist entries.
+  std::set<std::pair<size_t, int>> Work{{0, FrameReloadIndex.EntryBlockId}};
   while (!Work.empty()) {
-    int BlockId = Work.back();
-    Work.pop_back();
+    const int BlockId = Work.begin()->second;
+    Work.erase(Work.begin());
     auto BlockIt = FrameReloadIndex.Blocks.find(BlockId);
     if (BlockIt == FrameReloadIndex.Blocks.end())
       return false;
     const FrameReloadBlock &Block = BlockIt->second;
     for (int SuccId : Block.Successors) {
+      if (!Relevant.count(SuccId))
+        continue;
+      if (!consume())
+        return false;
       if (FrameReloadIndex.Blocks.find(SuccId) == FrameReloadIndex.Blocks.end())
         return false;
       const auto Facts = Block.EqualityFacts.find(SuccId);
@@ -1573,7 +1782,7 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
         continue;
       Previous = Next;
       if (mergeInto(InStates[SuccId], Next))
-        Work.push_back(SuccId);
+        Work.emplace(Order.at(SuccId), SuccId);
     }
   }
 
@@ -1582,8 +1791,8 @@ bool MedLLVMEmitter::collectFrameReloadSourcesUncached(
     return false;
   ReachingState AtLoad =
       transfer(LoadBlockIt->second, Site.Index, InStates[Site.BlockId]);
-  if (!AtLoad.Reachable || AtLoad.Uninitialized || AtLoad.Invalid ||
-      AtLoad.Values.empty())
+  if (Exhausted || !AtLoad.Reachable || AtLoad.Uninitialized ||
+      AtLoad.Invalid || AtLoad.Values.empty())
     return false;
   Sources = std::move(AtLoad.Values);
   return true;
@@ -1621,6 +1830,9 @@ std::optional<uint64_t> MedLLVMEmitter::traceValueVA(const MedVar &V,
     const MedOp *Def = lookupDef(Cur);
     if (Def) {
       switch (Def->Opcode) {
+      case NdOp::INTRINSIC:
+        Result = x86RepConstantAddressOutput(*Def, Cur, TargetArch);
+        break;
       case NdOp::COPY:
       case NdOp::INT_ZEXT:
         if (Def->NumInputs >= 1)
@@ -1683,67 +1895,63 @@ bool MedLLVMEmitter::frameSlotReloadUsedLocally(const MedVar &StoreAddr) const {
       It != SlotReloadUsedLocallyCache.end())
     return It->second;
 
+  if (!frameSlotHasMatchingKeyLoad(StoreAddr)) {
+    SlotReloadUsedLocallyCache.emplace(*SK, false);
+    return false;
+  }
+
   auto isFwd = [](NdOp Op) {
     return Op == NdOp::COPY || Op == NdOp::INT_ZEXT || Op == NdOp::INT_SEXT ||
            Op == NdOp::SUBBYTES;
   };
-  auto sameVar = [](const MedVar &A, const MedVar &B) {
-    return !A.isConst() && !B.isConst() && A.Kind == B.Kind && A.Id == B.Id &&
-           A.SSAVer == B.SSAVer;
+  // Preserve the predicate's value identity: width changes still carry the
+  // same reloaded value, while a different kind or SSA version does not.
+  using UseKey = std::tuple<int, int, int>;
+  auto useKey = [](const MedVar &V) {
+    return UseKey{static_cast<int>(V.Kind), V.Id, V.SSAVer};
   };
-  auto compute = [&]() -> bool {
-    // The reload values (LOAD outputs of slot SK) plus everything they flow
-    // into through pure-forwarding ops (COPY/widen/low-slice) — the values that
-    // still carry the reloaded pointer.
-    std::vector<MedVar> ReloadVals;
-    for (const auto &Blk : CurMedFunc->Blocks)
-      for (const auto &Op : Blk.Ops)
-        if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1 &&
-            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-          if (auto LK = keyOf(Op.Inputs[0]); LK && *LK == *SK)
-            ReloadVals.push_back(Op.Output);
-    if (ReloadVals.empty())
-      return false;
-    auto inReloadSet = [&](const MedVar &V) {
-      for (const auto &R : ReloadVals)
-        if (sameVar(V, R))
-          return true;
-      return false;
-    };
-    for (bool Changed = true; Changed;) {
-      Changed = false;
-      for (const auto &Blk : CurMedFunc->Blocks)
-        for (const auto &Op : Blk.Ops)
-          if (isFwd(Op.Opcode) && Op.NumInputs >= 1 &&
-              inReloadSet(Op.Inputs[0]) && !inReloadSet(Op.Output)) {
-            if (Op.Opcode == NdOp::SUBBYTES &&
-                !(Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
-                  Op.Inputs[1].ConstVal == 0))
-              continue; // a high-slice extract drops the pointer, not
-                        // forwarding
-            ReloadVals.push_back(Op.Output);
-            Changed = true;
-          }
-    }
-    // Any NON-forwarding op consuming a reloaded value uses the pointer locally
-    // (dereference address, `p++`, `p - base`, comparison) — so it must keep
-    // the original VA.  Pure forwarding to the return register, and a RETURN
-    // that takes the reload directly as its value operand (x86-64 lowers
-    // `return p` to `RETURN <reload>`), are escapes, not local uses.
-    for (const auto &Blk : CurMedFunc->Blocks)
-      for (const auto &Op : Blk.Ops) {
-        if (isFwd(Op.Opcode) || Op.Opcode == NdOp::RETURN)
+  std::map<UseKey, std::vector<UseKey>> ForwardedFrom;
+  std::set<UseKey> UsedLocally;
+  std::vector<UseKey> Work;
+  auto markLocal = [&](const UseKey &Key) {
+    if (UsedLocally.insert(Key).second)
+      Work.push_back(Key);
+  };
+  // A reload is local exactly when a forwarding path reaches a non-forwarding
+  // consumer other than RETURN. Solve that reachability once backwards from
+  // all local consumers, instead of scanning every operation for each slot.
+  for (const auto &Block : CurMedFunc->Blocks)
+    for (const auto &Op : Block.Ops) {
+      if (isFwd(Op.Opcode)) {
+        if (Op.NumInputs < 1 || Op.Inputs[0].isConst() || Op.Output.isConst())
           continue;
-        for (int I = 0; I < Op.NumInputs; ++I)
-          if (inReloadSet(Op.Inputs[I]))
-            return true;
+        if (Op.Opcode == NdOp::SUBBYTES &&
+            !(Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
+              Op.Inputs[1].ConstVal == 0))
+          continue;
+        ForwardedFrom[useKey(Op.Output)].push_back(useKey(Op.Inputs[0]));
+        continue;
       }
-    return false;
-  };
-
-  bool Result = compute();
-  SlotReloadUsedLocallyCache[*SK] = Result;
-  return Result;
+      if (Op.Opcode == NdOp::RETURN)
+        continue;
+      for (uint8_t I = 0; I < Op.NumInputs; ++I)
+        if (!Op.Inputs[I].isConst())
+          markLocal(useKey(Op.Inputs[I]));
+    }
+  while (!Work.empty()) {
+    const UseKey Key = Work.back();
+    Work.pop_back();
+    if (auto It = ForwardedFrom.find(Key); It != ForwardedFrom.end())
+      for (const UseKey &Input : It->second)
+        markLocal(Input);
+  }
+  for (const auto &[Slot, Values] : *LoadedSlotValues) {
+    const bool Local = llvm::any_of(Values, [&](const MedVar &Value) {
+      return !Value.isConst() && UsedLocally.count(useKey(Value)) != 0;
+    });
+    SlotReloadUsedLocallyCache.emplace(Slot, Local);
+  }
+  return SlotReloadUsedLocallyCache.at(*SK);
 }
 
 } // namespace neverd

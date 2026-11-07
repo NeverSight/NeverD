@@ -6,6 +6,7 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/X86/X86AtomicRmw.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
@@ -421,6 +422,57 @@ TEST(LowInstructionBoundary,
   EXPECT_FALSE(Image.relocatedI386GOTOFFTargetBelongsToOwner(FoldedBeforeOwner,
                                                              Rodata.VA))
       << "synthetic anchor metadata cannot grant GOTOFF semantics cross-format";
+}
+
+TEST(LowInstructionBoundary,
+     RelocationBoundaryFilteringRetainsInteriorAndExactEndOwnership) {
+  constexpr va_t Base = 0x4000;
+  constexpr va_t FieldVA = 0x1010;
+  BinaryImage Image;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 0x100;
+  Text.Data.resize(Text.Size);
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Image.Segments.push_back(std::move(Text));
+  Image.CodePtrRelocSlots = {Base, Base + 8, Base + 16, Base + 24};
+  auto &Field = Image.DataAddressRelocOperands[FieldVA];
+  Field = {Base + 16, Base + 16, 8, Base};
+  EXPECT_EQ(boundCodePtrRunByNextAnchor(Image, Base, 8, 4, {}), 2u);
+  EXPECT_TRUE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 2, {}));
+  EXPECT_FALSE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 4, {}));
+
+  // A misaligned interior anchor is evidence of conflicting table ownership,
+  // so the cheap numeric filter must retain it for the authoritative refusal.
+  Field.TargetVA = Base + 17;
+  Image.CodePtrRelocSlots.insert(Field.TargetVA);
+  EXPECT_EQ(boundCodePtrRunByNextAnchor(Image, Base, 8, 4, {}), 0u);
+  EXPECT_FALSE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 2, {}));
+
+  Field.TargetVA = Base + 32;
+  EXPECT_EQ(boundCodePtrRunByNextAnchor(Image, Base, 8, 4, {}), 4u);
+  EXPECT_TRUE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 4, {}));
+  Field.PCRelativeFromInstructionEnd = true;
+  EXPECT_FALSE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 4, {}));
+  Field.PCRelativeFromInstructionEnd = false;
+  Image.Segments.front().Flags = SegmentFlags::Readable;
+  EXPECT_FALSE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 4, {}));
+  Image.Segments.front().Flags =
+      SegmentFlags::Readable | SegmentFlags::Executable;
+  for (va_t Target : {Base - 8, Base, Base + 33, va_t{0x20000000}}) {
+    SCOPED_TRACE(Target);
+    Field.TargetVA = Target;
+    Image.CodePtrRelocSlots.insert(Target);
+    EXPECT_EQ(boundCodePtrRunByNextAnchor(Image, Base, 8, 4, {}), 4u);
+    EXPECT_FALSE(codePtrRelocRunHasExactBoundary(Image, Base, 8, 4, {}));
+  }
+
+  // A near-VA-limit span must not wrap and discard a real interior anchor.
+  constexpr va_t HighBase = InvalidVA - 31;
+  Field.TargetVA = HighBase + 8;
+  Image.CodePtrRelocSlots.insert(Field.TargetVA);
+  EXPECT_EQ(boundCodePtrRunByNextAnchor(Image, HighBase, 8, 8, {}), 1u);
+  EXPECT_FALSE(codePtrRelocRunHasExactBoundary(Image, HighBase, 8, 8, {}));
 }
 
 TEST(LowInstructionBoundary,
@@ -3008,9 +3060,9 @@ TEST(LowInstructionBoundary,
   EXPECT_NE(MaskedHighC.find("address_space(257)"), std::string::npos);
   EXPECT_TRUE(validHighC(MaskedHighC));
 
-  // Generic atomic opcodes share the same pointer-resolution owner as scalar
-  // loads/stores.  A segmented atomic must bypass image-global resolution and
-  // reach LLVM and High-C with its target address space intact.
+  // Atomic opcodes share the pointer-resolution owner with scalar accesses.
+  // Native x86 RMW uses unaligned-safe inline assembly; its segment operand
+  // must bypass image-global resolution and retain the target address space.
   auto AtomicTemp = [](int Id) {
     MedVar Var;
     Var.Kind = MedVar::Temp;
@@ -3064,15 +3116,32 @@ TEST(LowInstructionBoundary,
                                             "segment-atomics", Arch::X64);
   ASSERT_NE(AtomicModule, nullptr);
   EXPECT_TRUE(validLLVMModule(*AtomicModule));
+  // x86 ATOMIC_ADD stays one native LOCK XADD, whose pointer operand keeps the
+  // segment's address space.
+  const auto NativeAtomicAddPointer =
+      [](const llvm::Instruction &I) -> const llvm::Value * {
+    const auto *Call = llvm::dyn_cast<llvm::CallInst>(&I);
+    const auto *Asm =
+        Call ? llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand())
+             : nullptr;
+    if (Asm && llvm::StringRef(Asm->getAsmString())
+                   .starts_with(kX86AtomicAddAsmMarker)) {
+      EXPECT_EQ(Call->arg_size(), 2u);
+      EXPECT_TRUE(Asm->hasSideEffects());
+    }
+    return Asm && Call->arg_size() == 2 &&
+                   llvm::StringRef(Asm->getAsmString())
+                       .starts_with(kX86AtomicAddAsmMarker)
+               ? Call->getArgOperand(0)
+               : nullptr;
+  };
   unsigned FSAtomicRMW = 0;
   unsigned GSAtomicCmpXchg = 0;
   for (const llvm::Function &Function : *AtomicModule)
     for (const llvm::BasicBlock &Block : Function)
       for (const llvm::Instruction &Instruction : Block) {
-        if (const auto *RMW = llvm::dyn_cast<llvm::AtomicRMWInst>(&Instruction))
-          FSAtomicRMW +=
-              RMW->getPointerOperand()->getType()->getPointerAddressSpace() ==
-              257;
+        if (const llvm::Value *Pointer = NativeAtomicAddPointer(Instruction))
+          FSAtomicRMW += Pointer->getType()->getPointerAddressSpace() == 257;
         if (const auto *CmpXchg =
                 llvm::dyn_cast<llvm::AtomicCmpXchgInst>(&Instruction))
           GSAtomicCmpXchg += CmpXchg->getPointerOperand()
@@ -3102,9 +3171,11 @@ TEST(LowInstructionBoundary,
   llvm::raw_string_ostream AtomicHighCOS(AtomicHighC);
   ASSERT_TRUE(HighCEmitter().emit({AtomicHigh}, AtomicHighCOS, HighCOptions));
   AtomicHighCOS.flush();
-  EXPECT_NE(AtomicHighC.find("__atomic_fetch_add"), std::string::npos);
+  // The FS addition is the native LOCK XADD with its segment prefix.
+  EXPECT_NE(AtomicHighC.find("lock xaddq %0, %%fs:(%1)"), std::string::npos)
+      << AtomicHighC;
   EXPECT_NE(AtomicHighC.find("__atomic_compare_exchange_n"), std::string::npos);
-  EXPECT_NE(AtomicHighC.find("address_space(257)"), std::string::npos);
+  EXPECT_EQ(AtomicHighC.find("__atomic_fetch_add"), std::string::npos);
   EXPECT_NE(AtomicHighC.find("address_space(256)"), std::string::npos);
   EXPECT_TRUE(validHighC(AtomicHighC));
 
@@ -3219,10 +3290,9 @@ TEST(LowInstructionBoundary,
         if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction))
           if (Load->getPointerAddressSpace() == 257)
             RawScalarPointers += IsRawSegmentPointer(Load->getPointerOperand());
-        if (const auto *RMW = llvm::dyn_cast<llvm::AtomicRMWInst>(&Instruction))
-          if (RMW->getPointerOperand()->getType()->getPointerAddressSpace() ==
-              256)
-            RawAtomicPointers += IsRawSegmentPointer(RMW->getPointerOperand());
+        if (const llvm::Value *Pointer = NativeAtomicAddPointer(Instruction))
+          if (Pointer->getType()->getPointerAddressSpace() == 256)
+            RawAtomicPointers += IsRawSegmentPointer(Pointer);
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
           if (Call->getCalledFunction() &&
               Call->getCalledFunction()->getName().starts_with(
@@ -3782,8 +3852,9 @@ TEST(LowInstructionBoundary, WindowsStringAndTableOpsUseIntrinH) {
 }
 
 TEST(LowInstructionBoundary, FlatPrefetchAndMxcsrUseIntrinsics) {
-  // Without a segment override these instructions have compiler intrinsics,
-  // which keep the same effects and read better than inline assembly.
+  // Flat read prefetch and MXCSR transfers use compiler intrinsics. A write
+  // prefetch keeps its exact instruction on GNU targets, where a generic
+  // builtin can lower to PREFETCHT0 without a target feature flag.
   LowFunc Low = buildFunction(Arch::X64, InstructionMode::Default,
                               {0x0f, 0x18, 0x00,       // prefetchnta [rax]
                                0x0f, 0x0d, 0x48, 0x40, // prefetchw [rax+40h]
@@ -3803,12 +3874,12 @@ TEST(LowInstructionBoundary, FlatPrefetchAndMxcsrUseIntrinsics) {
   EXPECT_NE(HighC.find("_mm_prefetch((const char *)"), std::string::npos)
       << HighC;
   EXPECT_NE(HighC.find("_MM_HINT_NTA"), std::string::npos) << HighC;
-  EXPECT_NE(HighC.find("_m_prefetchw((void *)"), std::string::npos) << HighC;
-  // Older Clang declares _m_prefetchw only through <x86intrin.h>.
+  EXPECT_NE(HighC.find("prefetchw (%[address])"), std::string::npos) << HighC;
+  EXPECT_EQ(HighC.find("_m_prefetchw("), std::string::npos) << HighC;
   EXPECT_NE(HighC.find("#include <x86intrin.h>"), std::string::npos) << HighC;
   EXPECT_NE(HighC.find("_mm_setcsr(neverd_csr)"), std::string::npos) << HighC;
   EXPECT_NE(HighC.find("_mm_getcsr()"), std::string::npos) << HighC;
-  EXPECT_EQ(HighC.find("__asm__"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("__asm__ volatile"), std::string::npos) << HighC;
   EXPECT_TRUE(validHighC(HighC));
 }
 

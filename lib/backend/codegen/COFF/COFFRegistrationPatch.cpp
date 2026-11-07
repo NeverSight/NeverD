@@ -20,6 +20,7 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/object/PELayout.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -61,6 +62,23 @@ using coff_registration::ownerVA;
 using coff_registration::sectionAt;
 
 using coff_registration::validateSymbolicImagePointers;
+
+std::optional<va_t> retiredSharedEntryPointer(const BinaryImage &Image,
+                                              const ExceptionFunction &Source,
+                                              va_t Entry, va_t Field) {
+  if (Entry > UINT32_MAX - 7 || Field != Entry + 3)
+    return std::nullopt;
+  if (Source.Cxx) {
+    const auto Call = coff_loader::getCheckedX86CxxPrologueCall(Image, Source);
+    if (Call && Call->Caller.Begin == Entry && Call->CallVA == Entry + 7)
+      return Call->HandlerVA;
+  } else {
+    const auto Call = coff_loader::getCheckedX86SEH4PrologueCall(Image, Source);
+    if (Call && Call->Caller.Begin == Entry && Call->CallVA == Entry + 7)
+      return Call->ScopeTableVA;
+  }
+  return std::nullopt;
+}
 #endif
 } // namespace
 
@@ -190,9 +208,10 @@ llvm::Expected<COFFRegistrationPatchUpdate> prepareCOFFRegistrationPatch(
                             "code without a native replacement contract");
           }
       }
-      auto Runtime = coff_loader::getCheckedX86CxxPersonalityABI(Image, *EH);
+      auto Runtime =
+          coff_registration::getCheckedCxxRuntimeIR(*Function, *EH, Image);
       if (!Runtime)
-        return reject("preserved C++ CRT dispatch has no original ABI");
+        return Runtime.takeError();
       for (const auto &[Entry, Generated] : Mappings)
         for (const auto &Range : Runtime->CodeRanges)
           if (ExceptionAddressRange{Entry, Entry + 5}.overlaps(Range))
@@ -318,20 +337,19 @@ llvm::Expected<COFFRegistrationPatchUpdate> prepareCOFFRegistrationPatch(
           const uint64_t Begin = Original - Image.Base;
           if (uint64_t(RVA) < Begin + 5 && Begin < uint64_t(RVA) + 4) {
             if (RVA < Begin || uint64_t(RVA) + 4 > Begin + 5) {
-              // A checked shared entry starts with PUSH imm8; MOV EAX,
-              // handler. The jump replaces the MOV's opcode and first two
-              // operand bytes, retiring its whole handler-pointer field.
-              // Keeping that relocation would rebase bytes of the new jump.
-              // No other partially overwritten field has this authority.
+              // Checked narrow shared entries retire the second instruction:
+              // MOV EAX, handler (C++) or PUSH table (SEH4). The jump replaces
+              // its opcode and first two operand bytes, so its entire field
+              // loses relocation ownership. Keeping it would rebase the new
+              // jump. No adjacent or unbound field has this authority.
               const auto Source = Sources.find(Original);
-              const auto Call = Source != Sources.end() && Source->second->Cxx
-                                    ? coff_loader::getCheckedX86CxxPrologueCall(
-                                          Image, *Source->second)
-                                    : std::nullopt;
-              if (!Call || Call->Caller.Begin != Original ||
-                  Call->CallVA - Original != 7 || RVA != Begin + 3 ||
-                  readLE<uint32_t>(OriginalBinary.data() + *Field) !=
-                      Call->HandlerVA)
+              const auto Retired =
+                  Source != Sources.end()
+                      ? retiredSharedEntryPointer(Image, *Source->second,
+                                                  Original, Image.Base + RVA)
+                      : std::nullopt;
+              if (!Retired ||
+                  readLE<uint32_t>(OriginalBinary.data() + *Field) != *Retired)
                 return reject("entry trampoline partially overwrites a "
                               "relocation field");
             }

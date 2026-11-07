@@ -7,10 +7,11 @@
 /// Checked original PE header mapping and snapshot identity.
 //===----------------------------------------------------------------------===//
 
-#ifndef NEVERD_LOADER_COFF_PEHEADERMAPPING_H
-#define NEVERD_LOADER_COFF_PEHEADERMAPPING_H
+#ifndef NEVERD_LIB_LOADER_COFF_PEHEADERMAPPING_H
+#define NEVERD_LIB_LOADER_COFF_PEHEADERMAPPING_H
 
 #include "neverd/Common.h"
+#include "neverd/loader/COFF/PEHeaderMapping.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
@@ -38,6 +39,13 @@ getPEHeaderMapping(llvm::ArrayRef<uint8_t> Bytes,
 void appendPEHeaderMapping(BinaryImage &Image, const PEHeaderMapping &Mapping,
                            llvm::ArrayRef<uint8_t> Bytes);
 
+/// BinaryImage::PEHeaderBytes of a linked PE file: SizeOfHeaders within
+/// SizeOfImage, up to the first section that maps over it.  Zero without a
+/// complete header or a nonzero 64 KiB-aligned base.  Unlike
+/// getPEHeaderMapping, this asks no proof of the loader's writes: those
+/// decide read authority over the header bytes, not where the headers are.
+uint32_t getPEHeaderBytes(llvm::ArrayRef<uint8_t> Bytes);
+
 /// Bind both normalized header regions to their current raw-file owner.
 bool matchesPEHeaderMapping(const BinaryImage &Image, size_t Index,
                             const PEHeaderMapping &Mapping,
@@ -45,4 +53,4 @@ bool matchesPEHeaderMapping(const BinaryImage &Image, size_t Index,
 } // namespace coff_loader
 } // namespace neverd
 
-#endif
+#endif // NEVERD_LIB_LOADER_COFF_PEHEADERMAPPING_H

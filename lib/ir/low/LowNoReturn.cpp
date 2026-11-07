@@ -28,6 +28,9 @@ bool isArchitecturalNoReturn(const LowOp &Op) {
 bool lowFunctionNeverReturns(
     const LowFunc &Func, Arch TheArch,
     llvm::function_ref<bool(va_t)> TailCalleeNeverReturns) {
+  if (hasUnmodeledRegistrationResumption(Func.ExceptionMetadata,
+                                         Func.RegistrationStates))
+    return false;
   // A tail call stands for `call target; ret`: the return is reached only
   // if the target returns.
   const auto endsInTailCall = [&](const LowInstructionBoundary &Insn) {
@@ -100,7 +103,15 @@ bool lowFunctionNeverReturns(
         Pending.push_back(It->second);
     }
   }
-  return SawTerminator;
+  // Every reachable path either reached a terminator or returned to a visited
+  // block; an unresolved jump, decode failure or escaping path already
+  // returned false above.  An explicit terminator proves no-return on its own.
+  // A function whose paths all loop forever (SawTerminator stays false) never
+  // returns either, but only read a terminator-less walk that way for a
+  // complete lift: an unread byte, a path out of the image or a jump table
+  // with unproven targets could leave the cycle where the walk cannot see.
+  return SawTerminator || (Func.hasCompleteLiftCoverage() &&
+                           Func.UnsafeIndirectBranchAddresses.empty());
 }
 
 } // namespace neverd

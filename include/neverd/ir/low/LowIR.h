@@ -23,6 +23,7 @@
 #include "neverd/ir/intrinsics/X86/X86AmxState.h"
 #include "neverd/ir/intrinsics/X86/X86AtomicMemory.h"
 #include "neverd/ir/intrinsics/X86/X86BoundedLeaf.h"
+#include "neverd/ir/intrinsics/X86/X86Hle.h"
 #include "neverd/ir/intrinsics/X86/X86RepState.h"
 #include "neverd/ir/intrinsics/X86/X86Sgx.h"
 #include "neverd/ir/intrinsics/X86/X86SystemState.h"
@@ -388,6 +389,26 @@ inline ApxAtomicIntrinsicShape apxAtomicLowShape(const LowOp &Op,
   };
 }
 
+inline X86HleShape x86HleLowShape(const LowOp &Op, Arch A = Arch::Unknown) {
+  X86HleShape S;
+  S.TargetArch = A;
+  S.ValidId = Op.NumInputs && Op.NumInputs <= std::size(Op.Inputs) &&
+              Op.Inputs[0].isConst() && Op.Inputs[0].Size == 2 &&
+              Op.Inputs[0].Offset == uint16_t(Intrinsic::X86HleState);
+  S.OutputSize = Op.Output.Size;
+  S.Arguments = Op.NumInputs ? Op.NumInputs - 1 : 0;
+  S.MemoryOrdering = Op.MemoryOrdering;
+  S.MemoryAddressSpace = Op.MemoryAddressSpace;
+  for (unsigned I = 0; I < S.Arguments && I < S.InputSizes.size(); ++I) {
+    const auto &V = Op.Inputs[I + 1];
+    S.InputSizes[I] = V.Size;
+    S.ScalarInputs[I] = V.isConst() || V.isReg() || V.isTemp();
+    if (I == 4 && V.isConst())
+      S.Control = V.Offset;
+  }
+  return S;
+}
+
 inline X86VirtualizationShape x86VirtualizationLowShape(const LowOp &Op,
                                                         Arch TargetArch) {
   X86VirtualizationShape Shape;
@@ -404,6 +425,14 @@ inline X86VirtualizationShape x86VirtualizationLowShape(const LowOp &Op,
     const auto &Input = Op.Inputs[I + 1];
     Shape.InputSizes[I] = Input.Size;
     Shape.ScalarInputs[I] = Input.isConst() || Input.isReg() || Input.isTemp();
+    if (I == 1 && Input.isConst()) {
+      Shape.AddressWidth = Input.Offset;
+      Shape.OriginalPC = Input.Offset;
+    }
+    if (I == 2 && Input.isConst())
+      Shape.SnpControl = Input.Offset;
+    if (I == 3 && Input.isConst())
+      Shape.VectorStride = Input.Offset;
   }
   return Shape;
 }
@@ -1156,6 +1185,8 @@ struct JumpTableCompositeSelectorUseRef {
 };
 
 struct JumpTable {
+  /// Display candidates, not a proof that the selector stays in this table.
+  bool AnalysisOnly = false;
   va_t InsnAddr = 0;
   va_t BaseAddr = 0;
   /// Distinguishes an absent base from a relocation-proven table mapped at VA
@@ -1192,6 +1223,10 @@ struct JumpTable {
   /// selector plan after SSA/copy propagation; absence or ambiguity is a hard
   /// failure for shapes that require exact selector ownership.
   std::vector<JumpTableSelectorUseRef> SelectorUseRefs;
+  /// A table-free finite cover compares the branch value with original image
+  /// addresses. Low-to-Med preserves that numeric coordinate in a separate
+  /// selector slice; observable code-pointer uses retain their address roles.
+  bool OriginalAddressSelector = false;
   /// Exact composite recipe for a runtime-selected table base.  This is kept
   /// separate from SelectorUseRefs because its selector lives in the final
   /// byte-address coordinate and also depends on a certified
@@ -1387,8 +1422,14 @@ struct LowFunctionTemporary {
 };
 
 struct LowFunc {
+  /// Tentative CFG/stack recovery or deferred native exception proofs. This
+  /// body is for analysis and cannot authorize binary reconstruction.
+  bool AnalysisOnly = false;
   va_t Entry = 0;
   uint64_t OriginalSize = 0;
+  /// OriginalSize spans the blocks (computedSize): nothing the image or its
+  /// debug information states sizes the function.
+  bool SizeFromBlocks = false;
   std::string Name;
   std::string DebugName;
   std::string SourceFile;
@@ -1513,6 +1554,11 @@ struct LowFunc {
   std::vector<va_t> CodeRefTargets;
 
   LowBlock *blockFor(va_t Addr) {
+    // Overlapping x86 instruction streams can share bytes. An exact entry
+    // belongs to its own stream even when an earlier instruction covers it.
+    for (auto &B : Blocks)
+      if (Addr == B.StartAddr)
+        return &B;
     for (auto &B : Blocks)
       if (Addr >= B.StartAddr && Addr < B.EndAddr)
         return &B;
@@ -1527,6 +1573,30 @@ struct LowFunc {
       if (B.EndAddr > MaxEnd)
         MaxEnd = B.EndAddr;
     return MaxEnd > Entry ? MaxEnd - Entry : 0;
+  }
+
+  /// The bytes from the entry to the end of the last block before another
+  /// function starts: a block joins them unless \p EntryIn(Begin, End)
+  /// finds a function starting in the gap or at the next block.  Padding, data
+  /// and code no path reaches inside the function count; code it runs out of
+  /// line, across other functions, does not.  Zero when no block starts at the
+  /// entry.
+  template <typename EntryInFn>
+  uint64_t contiguousSize(EntryInFn &&EntryIn) const {
+    std::vector<std::pair<va_t, va_t>> Ranges;
+    for (const auto &B : Blocks)
+      if (B.StartAddr >= Entry && B.EndAddr > B.StartAddr)
+        Ranges.emplace_back(B.StartAddr, B.EndAddr);
+    std::sort(Ranges.begin(), Ranges.end());
+    if (Ranges.empty() || Ranges.front().first != Entry)
+      return 0;
+    va_t End = Ranges.front().second;
+    for (const auto &[Begin, Stop] : Ranges) {
+      if (Begin >= End && EntryIn(End, Begin + 1))
+        break;
+      End = std::max(End, Stop);
+    }
+    return End - Entry;
   }
 };
 

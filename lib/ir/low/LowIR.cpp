@@ -9,6 +9,7 @@
 #include "neverd/ir/X86/X87Value.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/X86/X86Bound.h"
 #include "neverd/ir/intrinsics/X86/X86DescriptorState.h"
 #include "neverd/ir/intrinsics/X86/X86Unsupported.h"
 #include "neverd/ir/low/AArch64WritebackMemory.h"
@@ -76,8 +77,8 @@ llvm::Error validateMemoryAddressSpace(const LowOp &Op) {
   if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
     return invalid("intrinsic has no constant intrinsic ID");
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
-  if (isAArch64ExceptionReturnIntrinsic(Id))
-    return invalid(kAArch64ExceptionReturnUnsupported);
+  if (!aarch64ExceptionReturnShapeIsValid(Id, Op.NumInputs, Op.Output.Size))
+    return invalid(kAArch64ExceptionReturnMalformed);
   if (const char *Reason = x86NonlocalControlTransferReason(Id))
     return invalid(Reason);
   // The lifter publishes PACM as a pending instruction prefix. CFG resolves
@@ -133,11 +134,33 @@ llvm::Error validateMemoryAddressSpace(const LowOp &Op) {
           "APX atomic intrinsic has an invalid operand/output contract");
     return llvm::Error::success();
   }
+  if (Id == Intrinsic::X86HleState) {
+    if (!x86HleShapeIsValid(x86HleLowShape(Op)))
+      return invalid("invalid x86 HLE state contract");
+    return llvm::Error::success();
+  }
   if (isX86VirtualizationIntrinsic(Id)) {
     if (!x86VirtualizationShapeIsValid(
             Id, x86VirtualizationLowShape(Op, Arch::Unknown)))
       return invalid("x86 virtualization intrinsic has an invalid "
                      "operand/output contract");
+    return llvm::Error::success();
+  }
+  if (Id == Intrinsic::Bound) {
+    if (Op.NumInputs != 5 || Op.Inputs[0].Size != 2 ||
+        !Op.Inputs[3].isConst() || !Op.Inputs[4].isConst() ||
+        isAddressProvenance(Op.Inputs[3].Provenance) ||
+        isAddressProvenance(Op.Inputs[4].Provenance) ||
+        !x86BoundShapeIsValid(Arch::Unknown, Op.NumInputs - 1, Op.Output.Size,
+                              {Op.Inputs[1].Size, Op.Inputs[2].Size,
+                               Op.Inputs[3].Size, Op.Inputs[4].Size},
+                              Op.Inputs[3].Offset, Op.Inputs[4].Offset,
+                              Op.MemoryAddressSpace, Op.MemoryOrdering))
+      return invalid(X86BoundMalformed);
+    for (unsigned I = 1; I != 3; ++I)
+      if (!Op.Inputs[I].isReg() && !Op.Inputs[I].isTemp() &&
+          !Op.Inputs[I].isConst())
+        return invalid(X86BoundMalformed);
     return llvm::Error::success();
   }
   if (isX86DescriptorStateIntrinsic(Id)) {

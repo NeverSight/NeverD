@@ -1,6 +1,7 @@
 add_neverd_component_library(NeverDBackendC
   CSourceRecorder.cpp
   CSourceEvidence.cpp
+  CAnalysisDispatch.cpp
   DebugParamBinding.cpp
   dialect/CDialect.cpp
   dialect/CSyntaxLexer.cpp
@@ -16,6 +17,7 @@ add_neverd_component_library(NeverDBackendC
   HighC/HighCExprWriter.cpp
   HighC/X86/HighCNativeMemory.cpp
   HighC/X86/HighCX87Context.cpp
+  HighC/X86/HighCAnalysisDispatch.cpp
   HighC/X86/HighCPortableX87.cpp
   HighC/HighCSourceCalls.cpp
   HighC/HighCSourceNames.cpp
@@ -25,9 +27,12 @@ add_neverd_component_library(NeverDBackendC
   HighC/COFF/HighCWindowsCallbacks.cpp
   HighC/COFF/HighCSEH.cpp
   HighC/COFF/HighCCxxEH.cpp
+  HighC/COFF/HighCImageBase.cpp
+  HighC/HighCObjectExterns.cpp
   HighC/X86/HighCCallSetup.cpp
   HighC/X86/HighCRegistration.cpp
   LLVMC/LLVMCEmitter.cpp
+  LLVMC/COFF/LLVMCImageBase.cpp
   LLVMC/LLVMCVariableEdits.cpp
   LLVMC/LLVMCExprWriter.cpp
   LLVMC/LLVMCFuncWriter.cpp
@@ -35,6 +40,7 @@ add_neverd_component_library(NeverDBackendC
   LLVMC/LLVMCScalarRegions.cpp
   LLVMC/LLVMCScalarExpressions.cpp
   LLVMC/LLVMCStmtWriter.cpp
+  LLVMC/LLVMCAnalysisDispatch.cpp
   LLVMC/LLVMCStackAllocation.cpp
   pass/HighC/HighCDeadStoreAnalysis.cpp
   pass/HighC/HighCHiLoCollapse.cpp
@@ -54,15 +60,19 @@ add_neverd_component_library(NeverDBackendC
   render/HighC/HighCIntrinsicRender.cpp
   render/ARM/HighCIntrinsicRenderARM.cpp
   render/X86/HighCIntrinsicRenderX86.cpp
+  render/X86/X86SegmentMove.cpp
   render/LLVMC/LLVMCIntrinsicRender.cpp
   render/ARM/LLVMCIntrinsicRenderARM.cpp
   render/X86/LLVMCIntrinsicRenderX86.cpp
   render/SyscallHelpers.cpp
   render/X86/X86Virtualization.cpp
+  render/X86/X86Hle.cpp
+  render/X86/X86Snp.cpp
   render/X86/X86SystemState.cpp
   render/X86/X86RepState.cpp
   render/X86/X86Sgx.cpp
   render/X86/X86BoundedLeaf.cpp
+  render/X86/X64CallRCX.cpp
   render/X86/X86CompressExpand.cpp
   render/X86/X86FourSource.cpp
   render/X86/X86APXAtomic.cpp
@@ -73,6 +83,7 @@ add_neverd_component_library(NeverDBackendC
   LINK_COMPONENTS
   IR
   LLVMCallContract
+  LLVMSourceTypeHints
   LibC
   LLVMScalarLoopRecovery
   PassIR

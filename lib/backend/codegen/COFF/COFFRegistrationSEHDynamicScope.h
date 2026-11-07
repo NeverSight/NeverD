@@ -9,14 +9,9 @@
 
 #include "COFFRegistrationIRProof.h"
 
+#include "neverd/backend/llvm/RegistrationFrameRuntime.h"
+
 namespace neverd::coff_registration {
-struct RegistrationSEHScopeState {
-  bool Enabled = false;
-  int64_t Offset = 0;
-  std::map<const llvm::StoreInst *, uint16_t> Writes;
-  std::set<const llvm::StoreInst *> CallbackWrites;
-  std::set<const llvm::CallBase *> PhysicalWrites;
-};
 
 llvm::Expected<RegistrationSEHScopeState>
 bindDynamicSEHState(const MedFunc &Source, const RegistrationFrame &Frame,

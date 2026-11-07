@@ -37,14 +37,23 @@ public:
   /// Operations whose SDK calculation observes cooperative cancellation.
   /// Bounded transport/graph layout after calculation is not a hard deadline.
   static constexpr std::string_view CancellableOperations[] = {
-      "comparison_start",        "comparison_slice",
-      "comparison_impact",       "comparison_function_page",
-      "comparison_function",     "comparison_cfg_summary",
-      "comparison_cfg_viewport", "comparison_cfg_focus",
-      "comparison_observations", "comparison_scalar_validation",
-      "comparison_source_page",  "comparison_source_difference",
-      "comparison_restore",      "comparison_override",
-      "comparison_undo",         "comparison_redo"};
+      "comparison_dataflow",
+      "comparison_start",
+      "comparison_slice",
+      "comparison_impact",
+      "comparison_function_page",
+      "comparison_function",
+      "comparison_cfg_summary",
+      "comparison_cfg_viewport",
+      "comparison_cfg_focus",
+      "comparison_observations",
+      "comparison_scalar_validation",
+      "comparison_source_page",
+      "comparison_source_difference",
+      "comparison_restore",
+      "comparison_override",
+      "comparison_undo",
+      "comparison_redo"};
   static bool cancellable(std::string_view Operation);
   Json execute(const std::string &Operation, const Json &Payload,
                const Progress &Notify, const Cancellation &Cancelled);

@@ -12,6 +12,7 @@
 
 namespace neverd {
 struct BinaryImage;
+class RegistrationCallCalleeIndex;
 
 /// Bind current handler and shared frame-call bytes before solving the same
 /// LowIR state lattice. Shared exits require the separately proved prologue;
@@ -22,7 +23,8 @@ RegistrationStateAnalysis analyzeCheckedX86CxxStates(
     const std::vector<RegistrationCleanupFrameContract> *Cleanups = nullptr,
     const std::vector<RegistrationCalleeStackContract> *Stacks = nullptr,
     const std::vector<RegistrationLocalUnwindContract> *LocalUnwinds = nullptr,
-    const std::vector<RegistrationSEHControlContract> *SEHControls = nullptr);
+    const std::vector<RegistrationSEHControlContract> *SEHControls = nullptr,
+    RegistrationCallCalleeIndex *CalleeIndex = nullptr);
 
 } // namespace neverd
 

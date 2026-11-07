@@ -1,4 +1,5 @@
 add_neverd_component_library(NeverDIRMed
+  lower/ComputedBranchScalars.cpp
   AArch64/AArch64AuthenticatedCall.cpp
   AArch64/AArch64ReturnProtection.cpp
   AArch64/AArch64SVEState.cpp
@@ -31,19 +32,24 @@ add_neverd_component_library(NeverDIRMed
   X86/RegistrationSEHBoundCall.cpp
   X86/RegistrationSEHLocalUnwind.cpp
   X86/RegistrationSEHStateStore.cpp
+  X86/RegistrationSEHThread.cpp
   X86/RegistrationEntry.cpp
   X86/RegistrationRoots.cpp
   X86/RegistrationPrologue.cpp
   X86/RegistrationEpilogue.cpp
+  X86/RegistrationHelperExpansion.cpp
+  X86/RegistrationSEH4PhysicalFrame.cpp
   X86/RegistrationPhysicalFrame.cpp
   X86/RegistrationReachability.cpp
   X86/SEHFrame.cpp
   X86/SEHCallStackRanges.cpp
+  X86/X64StackProbeAllocations.cpp
   X86/SEHSourceRoots.cpp
   abi/MedABIPass.cpp
   abi/X86/MedABIPassI386.cpp
   abi/MedABIPassSupport.cpp
   abi/X86/MedABIPassWin64.cpp
+  abi/MedStackDeltaCache.cpp
   abi/MedCallConvention.cpp
   abi/ARM/MedCallConventionAAPCS32.cpp
   abi/AArch64/MedCallConventionAAPCS64.cpp
@@ -68,17 +74,20 @@ add_neverd_component_library(NeverDIRMed
   flags/ARM/MedFlagsARM.cpp
   flags/X86/MedFlagsX86.cpp
   lower/LowToMed.cpp
+  lower/LowToMedScalarSelectors.cpp
   lower/LowToMedSourceCalls.cpp
   lower/ARM/LowToMedARM.cpp
   lower/LowToMedCallReturnFP.cpp
   lower/LowToMedCallReturnStruct.cpp
   lower/LowToMedCallReturnWideInt.cpp
+  lower/LowToMedSEHLocalUnwind.cpp
   lower/X86/LowToMedCallReturnX87.cpp
   lower/LowToMedStack.cpp
   lower/LowToMedSubReg.cpp
   lower/X86/LowToMedX86.cpp
   lower/X86/LowToMedX86CrossBlock.cpp
   lower/LowToMedMachineFlags.cpp
+  pass/MedBoundCallStackArguments.cpp
   pass/MedCallReturnReads.cpp
   pass/MedCFGSimplify.cpp
   pass/MedConstantPropagation.cpp
@@ -88,6 +97,7 @@ add_neverd_component_library(NeverDIRMed
   pass/MedMutableSource.cpp
   pass/MedNoReturn.cpp
   pass/MedPropagation.cpp
+  pass/MedPhiRecomposition.cpp
   pass/MedPrologueSaves.cpp
   pass/MedPredicatedEffects.cpp
   pass/MedSSA.cpp

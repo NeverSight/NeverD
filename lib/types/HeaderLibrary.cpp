@@ -55,17 +55,24 @@ bool hasOrdinaryTypeName(const LocalType &Type) {
          Type.TypedefNamed;
 }
 
-/// The size \p Library gives the type named \p Name, as a member holds it.
-std::optional<uint64_t> sizeOfNamed(const TypeLibrary &Library,
-                                    llvm::StringRef Name) {
-  const LocalType *Type = Library.find(Name);
-  return Type ? Library.sizeOf(*makeNamed(Name.str(), Type->Kind))
-              : std::nullopt;
-}
-
-uint32_t alignOfNamed(const TypeLibrary &Library, llvm::StringRef Name) {
-  const LocalType *Type = Library.find(Name);
-  return Type ? Library.alignOf(*makeNamed(Name.str(), Type->Kind)) : 0;
+/// Compare a named dependency without allocating shared expressions for each
+/// size/alignment query. Each library still resolves the name under its own
+/// definitions, and a missing declaration retains its absent size/alignment.
+bool sameNamedLayout(const TypeLibrary &Library, const TypeLibrary &Headers,
+                     llvm::StringRef Name) {
+  const LocalType *Own = Library.find(Name);
+  const LocalType *Header = Headers.find(Name);
+  const TypeExpr OwnRef{.Kind = TypeExprKind::Named,
+                        .Name = Name.str(),
+                        .NamedKind = Own ? Own->Kind : TypeKind::Struct};
+  const TypeExpr HeaderRef{.Kind = TypeExprKind::Named,
+                           .Name = Name.str(),
+                           .NamedKind =
+                               Header ? Header->Kind : TypeKind::Struct};
+  return (Own ? Library.sizeOf(OwnRef) : std::nullopt) ==
+             (Header ? Headers.sizeOf(HeaderRef) : std::nullopt) &&
+         (Own ? Library.alignOf(OwnRef) : 0) ==
+             (Header ? Headers.alignOf(HeaderRef) : 0);
 }
 
 llvm::StringRef supplementSource(HeaderLibrary Library) {
@@ -208,6 +215,14 @@ const TypeLibrary *headerLibrary(HeaderLibrary Library, std::string *Error) {
 
 HeaderMerge mergeHeaderTypes(TypeLibrary &Library, const TypeLibrary &Headers,
                              std::optional<HeaderLibrary> Provider) {
+  // An empty destination with the same layout rules receives every definition
+  // unchanged except for its origin. No program override can change a layout
+  // or remove a dependency. Prototype name checks still apply below, including
+  // dependencies missing from the headers themselves.
+  const bool CopiesHeaderLayout = Library.size() == 0 &&
+                                  Library.prototypes().empty() &&
+                                  Library.dataModel() == Headers.dataModel() &&
+                                  Library.recordABI() == Headers.recordABI();
   HeaderMerge Merge;
   std::vector<std::string> Added;
   llvm::StringSet<> Gone;
@@ -272,7 +287,7 @@ HeaderMerge mergeHeaderTypes(TypeLibrary &Library, const TypeLibrary &Headers,
   // one that holds a type the program sizes or aligns otherwise goes, as does
   // any type that names one gone.  A typedef has no layout of its own: it names
   // the program's type, as C binds it.
-  for (bool Changed = true; Changed;) {
+  for (bool Changed = !CopiesHeaderLayout; Changed;) {
     Changed = false;
     for (const std::string &Name : Added) {
       if (Gone.contains(Name))
@@ -292,9 +307,7 @@ HeaderMerge mergeHeaderTypes(TypeLibrary &Library, const TypeLibrary &Headers,
           }
       for (const std::string &Held : valueDependencyNames(*Type))
         if (Gone.contains(Held) ||
-            (LaidOut &&
-             (sizeOfNamed(Library, Held) != sizeOfNamed(Headers, Held) ||
-              alignOfNamed(Library, Held) != alignOfNamed(Headers, Held)))) {
+            (LaidOut && !sameNamedLayout(Library, Headers, Held))) {
           Incompatible = true;
           break;
         }
@@ -338,8 +351,9 @@ HeaderMerge mergeHeaderTypes(TypeLibrary &Library, const TypeLibrary &Headers,
       for (const std::string &Name : mentionedTypeNames(Routine))
         Compatible &= Library.find(Name) != nullptr;
       const auto SameLayout = [&](const TypeExprRef &Type) {
-        return !Type || (Library.sizeOf(*Type) == Headers.sizeOf(*Type) &&
-                         Library.alignOf(*Type) == Headers.alignOf(*Type));
+        return CopiesHeaderLayout || !Type ||
+               (Library.sizeOf(*Type) == Headers.sizeOf(*Type) &&
+                Library.alignOf(*Type) == Headers.alignOf(*Type));
       };
       Compatible &= SameLayout(Entry.second->Return);
       for (const Parameter &Param : Entry.second->Params)

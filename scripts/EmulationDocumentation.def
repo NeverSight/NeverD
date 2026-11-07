@@ -1801,7 +1801,7 @@ NEVERD_EMULATION_DOC_TOKEN(NativeARM64Build,
                            "NeverDCapstoneCompilerOptions.inc")
 NEVERD_EMULATION_DOC_TOKEN(NativeARM64Build, "Clang")
 NEVERD_EMULATION_DOC_TOKEN(NativeARM64Build, "GCC")
-NEVERD_EMULATION_DOC_TOKEN(NativeARM64Build, "native_arm64_only=true")
+NEVERD_EMULATION_DOC_TOKEN(NativeARM64Build, "arm64-native-build.yml")
 NEVERD_EMULATION_DOC_TOKEN(NativeARM64Build, "8.3")
 
 #ifdef NEVERD_EMULATION_DOC_PATH

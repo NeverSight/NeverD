@@ -90,6 +90,9 @@ NEVERD_ACTION(FileProducePatchedBinary,
                                 "Replay all byte patches into a new binary"))
 
 // File.
+NEVERD_ACTION(FileNewInstance, QT_TRANSLATE_NOOP("Actions", "&New instance"),
+              "", "new_instance",
+              QT_TRANSLATE_NOOP("Actions", "Open a new instance of NeverD"))
 NEVERD_ACTION(FileOpen, QT_TRANSLATE_NOOP("Actions", "&Open..."), "", "open",
               QT_TRANSLATE_NOOP("Actions", "Open a binary for analysis"))
 NEVERD_ACTION(
@@ -102,8 +105,12 @@ NEVERD_ACTION(FileCompare, QT_TRANSLATE_NOOP("Actions", "Compare &binaries…"),
               QT_TRANSLATE_NOOP("Actions",
                                 "Compare two binaries, inspect changes and "
                                 "review function correspondence"))
-NEVERD_ACTION(FileLineage, QT_TRANSLATE_NOOP("Actions", "Version comparison &graph…"),
-              "", "compare", QT_TRANSLATE_NOOP("Actions", "Trace functions and inspect conflicting evidence across saved comparisons"))
+NEVERD_ACTION(FileLineage,
+              QT_TRANSLATE_NOOP("Actions", "Version comparison &graph…"), "",
+              "compare",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Trace functions and inspect conflicting "
+                                "evidence across saved comparisons"))
 NEVERD_ACTION(FileReload,
               QT_TRANSLATE_NOOP("Actions", "&Reload the input file"), "",
               "refresh",
@@ -309,8 +316,8 @@ NEVERD_VIEW_ACTION(
                       "Turn the current item back into undefined bytes"))
 // A semicolon key followed by the list separator, then the slash key.
 NEVERD_VIEW_ACTION(EditRepeatableComment,
-                   QT_TRANSLATE_NOOP("Actions", "Enter &comment..."),
-                   ";; /", "comment_repeatable",
+                   QT_TRANSLATE_NOOP("Actions", "Enter &comment..."), ";; /",
+                   "comment_repeatable",
                    QT_TRANSLATE_NOOP("Actions", "Comment the current address"))
 NEVERD_VIEW_ACTION(EditBookmark,
                    QT_TRANSLATE_NOOP("Actions", "Mar&k position..."), "Alt+M",
@@ -457,6 +464,60 @@ NEVERD_VIEW_ACTION(
     "Alt+Down", "down",
     QT_TRANSLATE_NOOP(
         "Actions", "Move to the next occurrence of the highlighted identifier"))
+NEVERD_VIEW_ACTION(SearchLockHighlight,
+                   QT_TRANSLATE_NOOP("Actions", "Lock or &unlock"),
+                   "Ctrl+Alt+0", "lock",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Keep the highlighted word highlighted in "
+                                     "the first free color, or unlock it"))
+NEVERD_VIEW_ACTION(SearchLockHighlight1,
+                   QT_TRANSLATE_NOOP("Actions", "Color &1"), "Ctrl+Alt+1",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight2,
+                   QT_TRANSLATE_NOOP("Actions", "Color &2"), "Ctrl+Alt+2",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight3,
+                   QT_TRANSLATE_NOOP("Actions", "Color &3"), "Ctrl+Alt+3",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight4,
+                   QT_TRANSLATE_NOOP("Actions", "Color &4"), "Ctrl+Alt+4",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight5,
+                   QT_TRANSLATE_NOOP("Actions", "Color &5"), "Ctrl+Alt+5",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight6,
+                   QT_TRANSLATE_NOOP("Actions", "Color &6"), "Ctrl+Alt+6",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight7,
+                   QT_TRANSLATE_NOOP("Actions", "Color &7"), "Ctrl+Alt+7",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
+NEVERD_VIEW_ACTION(SearchLockHighlight8,
+                   QT_TRANSLATE_NOOP("Actions", "Color &8"), "Ctrl+Alt+8",
+                   "colors",
+                   QT_TRANSLATE_NOOP("Actions",
+                                     "Lock the highlighted word in this color, "
+                                     "or unlock the color"))
 NEVERD_VIEW_ACTION(
     SearchInView, QT_TRANSLATE_NOOP("Actions", "&Find in view..."), "Ctrl+F",
     "search_text",
@@ -598,6 +659,11 @@ NEVERD_ACTION(ViewZoomReset, QT_TRANSLATE_NOOP("Actions", "&Reset font size"),
                                 "Restore the default code font size"))
 
 // Options.
+NEVERD_ACTION(OptionsPlugins,
+              QT_TRANSLATE_NOOP("Actions", "Plugin &manager..."), "",
+              "extensions",
+              QT_TRANSLATE_NOOP("Actions",
+                                "Install, enable, disable and remove plugins"))
 NEVERD_ACTION(OptionsGeneral, QT_TRANSLATE_NOOP("Actions", "&General..."), "",
               "options",
               QT_TRANSLATE_NOOP("Actions",

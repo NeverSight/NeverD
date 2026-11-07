@@ -11,7 +11,9 @@
 /// window that has its program.  A request and its reply are one JSON
 /// object each, on a line; a client that writes its request without the
 /// newline, as IDA's hcli does, is answered too.  Requests, by `cmd`:
-/// `ping`, `get_info`, `open_link` with `uri`, and `is_analysis_complete`;
+/// `ping`, `get_info`, `open_link` with `uri`, `is_analysis_complete`, and
+/// `raise`, which brings the workbench to the front, with the `token` that
+/// lets it take the focus where the platform asks for one;
 /// a reply carries `status` ("ok" or "error") and, for an error, `message`.
 ///
 /// Where IDA's sockets lie in /tmp, the servers live in a directory only
@@ -69,6 +71,9 @@ public:
   QString errorString() const { return error_; }
   void setInfo(Info info) { info_ = std::move(info); }
   void setLinkHandler(LinkHandler handler) { handler_ = std::move(handler); }
+  /// Brings this workbench to the front, with the activation token if any.
+  using RaiseHandler = std::function<void(const QString &token)>;
+  void setRaiseHandler(RaiseHandler handler) { raiser_ = std::move(handler); }
 
   /// The directory the servers live in, owner-only; empty when none can be
   /// made.
@@ -102,6 +107,7 @@ private:
   QString error_;
   Info info_;
   LinkHandler handler_;
+  RaiseHandler raiser_;
 };
 
 } // namespace neverd::gui

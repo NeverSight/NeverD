@@ -17,6 +17,7 @@
 #include "CallAlignment.h"
 #include "Features.h"
 #include "Matching.h"
+#include "ReferenceContext.h"
 
 #include "neverd/diff/FunctionDelta.h"
 #include "neverd/diff/StableHash.h"
@@ -102,6 +103,7 @@ void measure(FunctionMatch &M, const FunctionDelta &D) {
   if (!D.ComputationComplete)
     return;
   M.Measured = true;
+  M.Alignment = D.Alignment;
   M.IdentityOnly = D.IdentityOnly;
   M.AnalysisComplete = D.AnalysisComplete;
   M.ReferenceComparisonComplete = D.ReferenceComparisonComplete;
@@ -245,6 +247,10 @@ private:
     bool FromContext = false;
     bool ContextEligible = false;
     bool CallSite = false;
+    bool DataReference = false;
+    bool AddressSite = false;
+    bool Initializer = false;
+    bool BlockCallSite = false;
   };
   llvm::DenseMap<uint64_t, CandidateEvidence> FeatureCandidates;
   Clock::time_point PhaseStart;
@@ -254,14 +260,26 @@ private:
   static uint64_t pairKey(uint32_t A, uint32_t B) {
     return (uint64_t(A) << 32) | B;
   }
+  bool protectedMatch(const Formed &F) const {
+    return F.Step == FunctionStep::Manual ||
+           F.Step == FunctionStep::ImportName ||
+           F.Step == FunctionStep::SymbolName ||
+           F.Step == FunctionStep::ExactBytes ||
+           F.Step == FunctionStep::NormalizedBody || F.FromContext ||
+           Confirmed.contains(pairKey(F.Primary, F.Secondary));
+  }
   void propose(uint32_t A, uint32_t B, FunctionStep Step, bool FromContext) {
     auto [It, Inserted] =
         FeatureCandidates.try_emplace(pairKey(A, B), CandidateEvidence{Step});
     (void)Inserted;
     It->second.FromContext |= FromContext;
     It->second.ContextEligible |=
-        Step == FunctionStep::CallSite || Step == FunctionStep::Neighborhood;
+        Step == FunctionStep::CallSite || Step == FunctionStep::BlockCallSite ||
+        Step == FunctionStep::Neighborhood || Step == FunctionStep::AddressSite;
     It->second.CallSite |= Step == FunctionStep::CallSite;
+    It->second.CallSite |= Step == FunctionStep::BlockCallSite;
+    It->second.BlockCallSite |= Step == FunctionStep::BlockCallSite;
+    It->second.AddressSite |= Step == FunctionStep::AddressSite;
   }
   bool stopNow() {
     if (Stopped)
@@ -323,16 +341,28 @@ private:
   void settle(size_t From);
   void context(uint32_t A, uint32_t B, bool Loose);
   void callSites(uint32_t A, uint32_t B);
-  unsigned approximate();
+  unsigned approximate(bool ReferenceOnly = false);
   uint64_t featureKey(FunctionStep Step, uint32_t Function,
                       bool Secondary) const;
   double contextAgreement(uint32_t A, uint32_t B) const;
   double quickScore(uint32_t A, uint32_t B) const;
-  FunctionDelta delta(uint32_t A, uint32_t B) const;
+  bool consistentContext(uint32_t A, uint32_t B) const;
+  FunctionDelta delta(uint32_t A, uint32_t B,
+                      InstructionAlignmentProfile Alignment =
+                          CandidateInstructionAlignmentProfile) const;
+  std::vector<uint32_t> inlinedTailCallers(uint32_t A, uint32_t B,
+                                           const FunctionDelta &D,
+                                           bool Secondary) const;
   std::vector<uint32_t> unmatchedNeighbors(const ProgramFeatures &F,
                                            const Adjacency &Graph, uint32_t Of,
                                            uint32_t Side) const;
   void collectAmbiguities();
+  void retainEntryAlternatives();
+  void retainCallAlternatives();
+  void retainStackAlternatives();
+  void retainInlineCallerAlternatives();
+  void retainNeighborhoodAlternatives();
+  void retainGraphAlternatives();
   void finish();
 };
 
@@ -548,9 +578,10 @@ double Matcher::quickScore(uint32_t A, uint32_t B) const {
   return 0.5 * Sketch + 0.2 * Size + 0.3 * Context;
 }
 
-FunctionDelta Matcher::delta(uint32_t A, uint32_t B) const {
+FunctionDelta Matcher::delta(uint32_t A, uint32_t B,
+                             InstructionAlignmentProfile Alignment) const {
   return compareFunctionsWithKeys(P, A, S, B, {PMatch, SMatch}, PF.MnemonicKeys,
-                                  SF.MnemonicKeys, Control);
+                                  SF.MnemonicKeys, Control, Alignment);
 }
 
 void Matcher::callSites(uint32_t A, uint32_t B) {
@@ -678,7 +709,80 @@ void Matcher::settle(size_t From) {
   }
 }
 
-unsigned Matcher::approximate() {
+std::vector<uint32_t> Matcher::inlinedTailCallers(uint32_t A, uint32_t B,
+                                                  const FunctionDelta &D,
+                                                  bool Secondary) const {
+  const auto &Source = Secondary ? S : P;
+  const auto &Target = Secondary ? P : S;
+  const auto &Features = Secondary ? SF : PF;
+  const auto &Map = Secondary ? SMatch : PMatch;
+  const uint32_t Helper = Secondary ? B : A, Merged = Secondary ? A : B;
+  const auto Callers = Features.TailCallers.of(Helper);
+  std::vector<uint32_t> Candidates;
+  if (Callers.empty() ||
+      D.EqualInstructions < limits::kMinTailPreludeContribution)
+    return Candidates;
+  const auto &MergedFunction = Target.Functions[Merged];
+  const auto &Entry = Target.blocks(MergedFunction)[MergedFunction.EntryBlock];
+  llvm::DenseSet<uint32_t> Added;
+  for (const DeltaRow &Row : D.Rows)
+    if (Secondary ? Row.Kind == RowKind::Deleted &&
+                        Row.PrimaryBlock == MergedFunction.EntryBlock
+                  : Row.Kind == RowKind::Inserted &&
+                        Row.SecondaryBlock == MergedFunction.EntryBlock)
+      Added.insert(Secondary ? Row.Primary : Row.Secondary);
+  if (Added.size() < limits::kMinTailPreludeContribution)
+    return Candidates;
+  // Each tail edge is indexed once. Only callers that can fit in the merged
+  // entry are measured, in the existing parallel candidate batch. Reuse the
+  // delta's reference-aware classification instead of inventing an operand
+  // equality rule here. Uncertain rows can justify deferral, never identity.
+  for (uint32_t Caller : Callers) {
+    if (Control.stop())
+      return {};
+    const uint32_t X = Secondary ? A : Caller, Y = Secondary ? Caller : B;
+    if (Map[Caller] != NoIndex || Rejected.contains(pairKey(X, Y)) ||
+        namesConflict(X, Y))
+      continue;
+    const auto &Prefix = Source.blocks(Source.Functions[Caller]).front();
+    const uint32_t Count = Prefix.InstructionCount - 1;
+    if (Count > Entry.InstructionCount)
+      continue;
+    const auto Prelude = delta(X, Y);
+    if (!Prelude.ComputationComplete)
+      return {};
+    uint32_t Aligned = 0, Contributed = 0;
+    for (const DeltaRow &Row : Prelude.Rows) {
+      const uint32_t From = Secondary ? Row.Secondary : Row.Primary;
+      const uint32_t To = Secondary ? Row.Primary : Row.Secondary;
+      if (From < Prefix.FirstInstruction ||
+          From - Prefix.FirstInstruction >= Count)
+        continue;
+      if (To < Entry.FirstInstruction ||
+          To - Entry.FirstInstruction >= Entry.InstructionCount ||
+          (Row.Kind != RowKind::Identical && Row.Kind != RowKind::Moved &&
+           Row.Kind != RowKind::Uncertain))
+        break;
+      ++Aligned;
+      Contributed += Added.contains(To);
+    }
+    if (Aligned == Count && Contributed >= limits::kMinTailPreludeContribution)
+      Candidates.push_back(Caller);
+  }
+  return Candidates;
+}
+
+bool Matcher::consistentContext(uint32_t A, uint32_t B) const {
+  const auto It = FeatureCandidates.find(pairKey(A, B));
+  if (It == FeatureCandidates.end())
+    return false;
+  const double Agreement = contextAgreement(A, B);
+  return ((It->second.CallSite || It->second.AddressSite) && Agreement == 1) ||
+         ((It->second.DataReference || It->second.Initializer) &&
+          (Agreement < 0 || Agreement == 1));
+}
+
+unsigned Matcher::approximate(bool ReferenceOnly) {
   if (!Settings.Approximate && FeatureCandidates.empty())
     return 0;
   // Candidates: bounded sketch and mnemonic/CFG groups, and the unmatched
@@ -693,11 +797,19 @@ unsigned Matcher::approximate() {
   if (Ps.empty() || Ss.empty())
     return 0;
   std::vector<uint64_t> Candidates;
+  std::vector<uint8_t> ReferenceA, ReferenceB;
+  if (ReferenceOnly) {
+    ReferenceA.resize(P.Functions.size());
+    ReferenceB.resize(S.Functions.size());
+  }
   for (const auto &[Key, Evidence] : FeatureCandidates) {
-    (void)Evidence;
-    if (PMatch[uint32_t(Key >> 32)] == NoIndex &&
-        SMatch[uint32_t(Key)] == NoIndex)
+    const uint32_t A = uint32_t(Key >> 32), B = uint32_t(Key);
+    if (PMatch[A] == NoIndex && SMatch[B] == NoIndex) {
       Candidates.push_back(Key);
+      if (ReferenceOnly && (Evidence.DataReference || Evidence.AddressSite ||
+                            Evidence.Initializer || Evidence.BlockCallSite))
+        ReferenceA[A] = ReferenceB[B] = 1;
+    }
   }
   {
     struct Entry {
@@ -711,7 +823,7 @@ unsigned Matcher::approximate() {
     // mnemonic/CFG groups. Admit those alternatives before choosing a weak
     // feature proposal; shared graph keys never establish a match by
     // themselves.
-    for (unsigned Bucket = 0; Bucket <= SketchBands; ++Bucket) {
+    for (unsigned Bucket = 0; Bucket <= SketchBands + 1; ++Bucket) {
       if (stopNow())
         return 0;
       Entries.clear();
@@ -720,6 +832,12 @@ unsigned Matcher::approximate() {
         if (Bucket < SketchBands) {
           if (F.Sketched)
             Entries.push_back({sketchBand(F, Bucket), Secondary, Function});
+        } else if (Bucket == SketchBands) {
+          // Complete instruction bodies survive landing/padding edits that
+          // break short run sketches. This key only retrieves candidates;
+          // original instructions and references still decide the delta.
+          if (F.BodyWithoutPadding)
+            Entries.push_back({F.BodyWithoutPadding, Secondary, Function});
         } else if (const uint64_t K = featureKey(
                        FunctionStep::MnemonicsAndGraph, Function, Secondary))
           Entries.push_back({K, Secondary, Function});
@@ -741,7 +859,10 @@ unsigned Matcher::approximate() {
         if (J - I <= limits::kMaxSketchBucket)
           for (size_t X = I; X < J; ++X)
             for (size_t Y = I; Y < J; ++Y)
-              if (Entries[X].Side == 0 && Entries[Y].Side == 1)
+              if (Entries[X].Side == 0 && Entries[Y].Side == 1 &&
+                  (Bucket != SketchBands ||
+                   PF.Functions[Entries[X].Function].BodyWithPadding !=
+                       SF.Functions[Entries[Y].Function].BodyWithPadding))
                 Candidates.push_back(
                     pairKey(Entries[X].Function, Entries[Y].Function));
         I = J;
@@ -783,7 +904,9 @@ unsigned Matcher::approximate() {
     uint32_t B;
     double Quick;
     double Exact = -1;
-    bool CallSiteHint = false;
+    bool ContextHint = false;
+    std::vector<uint32_t> PrimaryTailCallers;
+    std::vector<uint32_t> SecondaryTailCallers;
   };
   std::vector<Scored> Pairs;
   Pairs.reserve(Candidates.size());
@@ -791,12 +914,13 @@ unsigned Matcher::approximate() {
     if (stopNow())
       return 0;
     const uint32_t A = uint32_t(K >> 32), B = uint32_t(K);
+    // After entry review, measure only reference proposals and their rivals.
+    // An unrelated candidate has no new evidence and must stay deferred.
+    if (ReferenceOnly && !ReferenceA[A] && !ReferenceB[B])
+      continue;
     if (!Rejected.contains(K) && !namesConflict(A, B)) {
-      const auto Feature = FeatureCandidates.find(K);
-      const bool CallSite = Feature != FeatureCandidates.end() &&
-                            Feature->second.CallSite &&
-                            contextAgreement(A, B) == 1;
-      Pairs.push_back({A, B, quickScore(A, B), -1, CallSite});
+      Pairs.push_back(
+          {A, B, quickScore(A, B), -1, consistentContext(A, B), {}, {}});
     }
   }
   const unsigned Keep = Settings.MaxCandidates;
@@ -831,7 +955,14 @@ unsigned Matcher::approximate() {
   parallelForEach(ToMeasure.size(), [&](auto Claim, size_t Total) {
     for (size_t I = Claim(); I < Total; I = Claim()) {
       Scored &Pair = Pairs[ToMeasure[I]];
-      Pair.Exact = delta(Pair.A, Pair.B).Similarity;
+      const auto D = delta(Pair.A, Pair.B);
+      Pair.Exact = D.Similarity;
+      if (D.ComputationComplete &&
+          Pair.Exact >= std::min(Settings.MinimumSimilarity,
+                                 Settings.MinimumContextSimilarity)) {
+        Pair.PrimaryTailCallers = inlinedTailCallers(Pair.A, Pair.B, D, false);
+        Pair.SecondaryTailCallers = inlinedTailCallers(Pair.A, Pair.B, D, true);
+      }
     }
   });
   if (stopNow())
@@ -842,8 +973,8 @@ unsigned Matcher::approximate() {
   std::vector<uint32_t> Ranked = ToMeasure;
   llvm::sort(Ranked, [&](uint32_t L, uint32_t R) {
     const Scored &X = Pairs[L], &Y = Pairs[R];
-    return std::make_tuple(-X.Exact, !X.CallSiteHint, -X.Quick, X.A, X.B) <
-           std::make_tuple(-Y.Exact, !Y.CallSiteHint, -Y.Quick, Y.A, Y.B);
+    return std::make_tuple(-X.Exact, !X.ContextHint, -X.Quick, X.A, X.B) <
+           std::make_tuple(-Y.Exact, !Y.ContextHint, -Y.Quick, Y.A, Y.B);
   });
   llvm::DenseMap<uint32_t, std::vector<uint32_t>> ByA, ByB;
   for (uint32_t I : Ranked) {
@@ -857,6 +988,13 @@ unsigned Matcher::approximate() {
     const auto Feature = FeatureCandidates.find(pairKey(Pair.A, Pair.B));
     if (!Settings.Approximate && Feature == FeatureCandidates.end())
       continue;
+    // Body alternatives still compete through ByA/ByB, but only a proposal
+    // supported by the new frozen reference evidence can be admitted here.
+    if (ReferenceOnly &&
+        (Feature == FeatureCandidates.end() ||
+         (!Feature->second.DataReference && !Feature->second.AddressSite &&
+          !Feature->second.Initializer && !Feature->second.BlockCallSite)))
+      continue;
     // A positional or lone-neighbor proposal earns the lower context
     // threshold only when every already mapped neighbor agrees. A local
     // position cannot overrule contradicting context elsewhere in the graph.
@@ -867,21 +1005,44 @@ unsigned Matcher::approximate() {
                                : Settings.MinimumSimilarity;
     if (Pair.Exact < Minimum)
       continue;
-    if (PMatch[Pair.A] != NoIndex || SMatch[Pair.B] != NoIndex ||
-        UndecidedA.contains(Pair.A) || UndecidedB.contains(Pair.B))
+    if (PMatch[Pair.A] != NoIndex || SMatch[Pair.B] != NoIndex)
       continue;
-    // A consistent call position can distinguish equal measured bodies.
-    // It cannot overrule a more similar body or another positional proposal.
-    const auto ConsistentPosition = [&](const Scored &Candidate) {
-      const auto It = FeatureCandidates.find(pairKey(Candidate.A, Candidate.B));
-      return It != FeatureCandidates.end() && It->second.CallSite &&
-             contextAgreement(Candidate.A, Candidate.B) == 1;
-    };
+    bool BoundaryAmbiguous = false;
+    for (bool Secondary : {false, true}) {
+      const auto &Map = Secondary ? SMatch : PMatch;
+      std::vector<uint32_t> Callers =
+          Secondary ? Pair.SecondaryTailCallers : Pair.PrimaryTailCallers;
+      llvm::erase_if(Callers, [&](uint32_t F) { return Map[F] != NoIndex; });
+      if (Callers.empty())
+        continue;
+      Callers.push_back(Secondary ? Pair.B : Pair.A);
+      auto &Undecided = Secondary ? UndecidedB : UndecidedA;
+      for (uint32_t F : Callers)
+        Undecided.insert(F);
+      NearTies.push_back(
+          Secondary
+              ? Tie{FunctionStep::InlinedTailCall, {Pair.A}, std::move(Callers)}
+              : Tie{FunctionStep::InlinedTailCall,
+                    std::move(Callers),
+                    {Pair.B}});
+      BoundaryAmbiguous = true;
+    }
+    if (BoundaryAmbiguous) {
+      UndecidedA.insert(Pair.A);
+      UndecidedB.insert(Pair.B);
+      continue;
+    }
+    if (UndecidedA.contains(Pair.A) || UndecidedB.contains(Pair.B))
+      continue;
+    // Consistent call positions or independent data-reference roles can
+    // distinguish equal or weaker bodies. Neither overrules a stronger body
+    // or a rival with its own consistent context.
     // Earlier admissions in this round may change the mapped neighborhood.
     // The sorting hint must not preserve a now-contradictory call position.
-    const bool Positioned = ConsistentPosition(Pair);
+    const bool Positioned = consistentContext(Pair.A, Pair.B);
     const auto Rival = [&](const Scored &Other) {
-      if (Other.Exact == Pair.Exact && Positioned && !ConsistentPosition(Other))
+      if (Other.Exact <= Pair.Exact && Positioned &&
+          !consistentContext(Other.A, Other.B))
         return false;
       return Other.Exact >= Pair.Exact ||
              Pair.Exact - Other.Exact < Settings.AmbiguityMargin;
@@ -947,9 +1108,597 @@ unsigned Matcher::approximate() {
   return Paired;
 }
 
+void Matcher::retainEntryAlternatives() {
+  if (!Settings.Approximate || stopNow())
+    return;
+  // Review against one settled correspondence. New guard candidates must not
+  // change propagation order or establish identities from a shared prefix.
+  std::vector<uint32_t> WeakA(P.Functions.size(), NoIndex),
+      WeakB(S.Functions.size(), NoIndex);
+  for (uint32_t I = 0; I < Order.size(); ++I) {
+    const auto &F = Order[I];
+    if (protectedMatch(F) || contextAgreement(F.Primary, F.Secondary) > 0)
+      continue;
+    WeakA[F.Primary] = WeakB[F.Secondary] = I;
+  }
+  struct Entry {
+    uint64_t Key;
+    uint8_t Side;
+    uint32_t Function;
+  };
+  std::vector<Entry> Entries;
+  Entries.reserve(P.Functions.size() + S.Functions.size());
+  for (bool Secondary : {false, true}) {
+    const auto &Features = Secondary ? SF : PF;
+    const auto &Map = Secondary ? SMatch : PMatch;
+    const auto &Weak = Secondary ? WeakB : WeakA;
+    for (uint32_t I = 0; I < Features.Functions.size(); ++I)
+      if ((Map[I] == NoIndex || Weak[I] != NoIndex) &&
+          Features.Functions[I].EntryBody)
+        Entries.push_back({Features.Functions[I].EntryBody, Secondary, I});
+  }
+  llvm::sort(Entries, [](const Entry &A, const Entry &B) {
+    return std::tie(A.Key, A.Side, A.Function) <
+           std::tie(B.Key, B.Side, B.Function);
+  });
+  struct Candidate {
+    uint32_t A, B, Prior;
+    double Quick, Exact = -1;
+  };
+  std::vector<Candidate> Candidates;
+  for (size_t I = 0; I < Entries.size();) {
+    if (stopNow())
+      return;
+    size_t J = I + 1;
+    while (J < Entries.size() && Entries[J].Key == Entries[I].Key)
+      ++J;
+    if (J - I <= limits::kMaxSketchBucket)
+      for (size_t X = I; X < J; ++X)
+        for (size_t Y = I; Y < J; ++Y) {
+          if (Entries[X].Side != 0 || Entries[Y].Side != 1)
+            continue;
+          const uint32_t A = Entries[X].Function, B = Entries[Y].Function;
+          if ((PMatch[A] != NoIndex && SMatch[B] != NoIndex) ||
+              Rejected.contains(pairKey(A, B)) || namesConflict(A, B))
+            continue;
+          const auto &AF = PF.Functions[A], &BF = SF.Functions[B];
+          if (AF.BodyWithPadding == BF.BodyWithPadding ||
+              std::tie(AF.Blocks, AF.Edges, AF.GraphTopDown,
+                       AF.GraphBottomUp) == std::tie(BF.Blocks, BF.Edges,
+                                                     BF.GraphTopDown,
+                                                     BF.GraphBottomUp))
+            continue;
+          Candidates.push_back({A, B,
+                                PMatch[A] == NoIndex ? WeakB[B] : WeakA[A],
+                                quickScore(A, B)});
+        }
+    I = J;
+  }
+  llvm::sort(Candidates, [](const Candidate &A, const Candidate &B) {
+    return std::make_tuple(-A.Quick, A.A, A.B) <
+           std::make_tuple(-B.Quick, B.A, B.B);
+  });
+  llvm::DenseMap<uint32_t, unsigned> CountA, CountB;
+  std::vector<uint32_t> ToMeasure, Priors;
+  for (uint32_t I = 0; I < Candidates.size(); ++I) {
+    const auto &C = Candidates[I];
+    const unsigned A = CountA[C.A]++, B = CountB[C.B]++;
+    if (A >= Settings.MaxCandidates && B >= Settings.MaxCandidates)
+      continue;
+    ToMeasure.push_back(I);
+    if (C.Prior != NoIndex)
+      Priors.push_back(C.Prior);
+  }
+  llvm::sort(Priors);
+  Priors.erase(std::unique(Priors.begin(), Priors.end()), Priors.end());
+  std::vector<double> PriorScores(Order.size(), -1);
+  parallelForEach(ToMeasure.size() + Priors.size(),
+                  [&](auto Claim, size_t Total) {
+                    for (size_t I = Claim(); I < Total; I = Claim()) {
+                      if (Control.stop())
+                        return;
+                      if (I < ToMeasure.size()) {
+                        auto &C = Candidates[ToMeasure[I]];
+                        const auto D = delta(C.A, C.B);
+                        if (D.ComputationComplete)
+                          C.Exact = D.Similarity;
+                      } else {
+                        const uint32_t Prior = Priors[I - ToMeasure.size()];
+                        const auto &F = Order[Prior];
+                        const auto D = delta(F.Primary, F.Secondary);
+                        if (D.ComputationComplete)
+                          PriorScores[Prior] = D.Similarity;
+                      }
+                    }
+                  });
+  if (stopNow())
+    return;
+  std::vector<uint8_t> Deferred(Order.size(), 0);
+  for (uint32_t I : ToMeasure) {
+    const auto &C = Candidates[I];
+    if (C.Exact < Settings.MinimumSimilarity)
+      continue;
+    if (C.Prior != NoIndex) {
+      const double Prior = PriorScores[C.Prior];
+      if (Prior < 0 || C.Exact <= Prior ||
+          C.Exact - Prior < Settings.AmbiguityMargin)
+        continue;
+      Deferred[C.Prior] = 1;
+    }
+    NearTies.push_back({FunctionStep::Similarity, {C.A}, {C.B}});
+  }
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (Deferred[I]) {
+      const auto &F = Order[I];
+      PMatch[F.Primary] = SMatch[F.Secondary] = NoIndex;
+      NearTies.push_back({F.Step, {F.Primary}, {F.Secondary}});
+    }
+  llvm::erase_if(Order,
+                 [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
+}
+
+void Matcher::retainCallAlternatives() {
+  if (stopNow())
+    return;
+  std::vector<uint32_t> WeakA(P.Functions.size(), NoIndex),
+      WeakB(S.Functions.size(), NoIndex);
+  bool HasWeak = false;
+  for (uint32_t I = 0; I < Order.size(); ++I) {
+    const auto &F = Order[I];
+    if (protectedMatch(F))
+      continue;
+    WeakA[F.Primary] = WeakB[F.Secondary] = I;
+    HasWeak = true;
+  }
+  if (!HasWeak)
+    return;
+  std::vector<std::pair<uint32_t, uint32_t>> Expanded;
+  auto Candidates = conflictingCallCandidates(
+      P, PF, PMatch, WeakA, S, SF, SMatch, WeakB, Control, &Expanded);
+  std::vector<uint8_t> WitnessA(P.Functions.size(), 0),
+      WitnessB(S.Functions.size(), 0);
+  for (const auto &F : Order) {
+    WitnessA[F.Primary] =
+        llvm::any_of(PF.Callees.of(F.Primary), [&](uint32_t C) {
+          return PMatch[C] == NoIndex || WeakA[C] != NoIndex;
+        });
+    WitnessB[F.Secondary] =
+        llvm::any_of(SF.Callees.of(F.Secondary), [&](uint32_t C) {
+          return SMatch[C] == NoIndex || WeakB[C] != NoIndex;
+        });
+  }
+  const auto Blocks = blockCallCandidates(P, PMatch, WitnessA, S, SMatch,
+                                          WitnessB, Control, WeakA, WeakB);
+  Expanded.insert(Expanded.end(), Blocks.begin(), Blocks.end());
+  if (stopNow())
+    return;
+  std::vector<uint8_t> Deferred(Order.size(), 0);
+  std::vector<uint8_t> ExpandedOnly(Order.size(), 1);
+  std::vector<uint32_t> StructuralEqual(Order.size(), NoIndex);
+  for (const auto &[A, B] : Expanded) {
+    if (Rejected.contains(pairKey(A, B)) || namesConflict(A, B))
+      continue;
+    const uint32_t Prior = PMatch[A] == NoIndex ? WeakB[B] : WeakA[A];
+    Deferred[Prior] = 1;
+  }
+  for (const auto &[A, B] : Candidates) {
+    if (Rejected.contains(pairKey(A, B)) || namesConflict(A, B))
+      continue;
+    const uint32_t Prior = PMatch[A] == NoIndex ? WeakB[B] : WeakA[A];
+    Deferred[Prior] = 1;
+    ExpandedOnly[Prior] = 0;
+  }
+  Candidates.insert(Candidates.end(), Expanded.begin(), Expanded.end());
+  llvm::sort(Candidates);
+  Candidates.erase(std::unique(Candidates.begin(), Candidates.end()),
+                   Candidates.end());
+  // A caller can deliberately switch to a newly extracted helper while the
+  // original body survives with insertions. Preserve that complete body/CFG
+  // evidence; a call role alone cannot displace it.
+  parallelForEach(Order.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      if (!Deferred[I])
+        continue;
+      const auto &F = Order[I];
+      const auto D = delta(F.Primary, F.Secondary);
+      // A preserved body/CFG can have been copied into a new helper while
+      // callers split between that helper and a guarded public entry. A local
+      // block or split role alone cannot reopen an arbitrarily edited body.
+      if (ExpandedOnly[I] && (!D.ComputationComplete || !D.AnalysisComplete ||
+                              (D.Changes & (ChangeBlocks | ChangeEdges)))) {
+        Deferred[I] = 0;
+        if (D.ComputationComplete && D.AnalysisComplete)
+          StructuralEqual[I] = D.EqualInstructions;
+        continue;
+      }
+      const uint32_t AEntry = P.Functions[F.Primary].EntryBlock;
+      const uint32_t BEntry = S.Functions[F.Secondary].EntryBlock;
+      if (D.ComputationComplete && D.AnalysisComplete &&
+          D.ReferenceComparisonComplete &&
+          D.EqualInstructions ==
+              std::min(PF.Functions[F.Primary].Instructions,
+                       SF.Functions[F.Secondary].Instructions) &&
+          !(D.Changes & (ChangeBlocks | ChangeEdges)) && AEntry != NoIndex &&
+          BEntry != NoIndex && D.PrimaryBlockPair[AEntry] != NoIndex &&
+          D.Blocks[D.PrimaryBlockPair[AEntry]].Secondary == BEntry)
+        Deferred[I] = 0;
+    }
+  });
+  if (stopNow())
+    return;
+  std::vector<uint8_t> MoreCoverage(Candidates.size(), 0);
+  parallelForEach(Candidates.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      const auto [A, B] = Candidates[I];
+      const uint32_t Prior = PMatch[A] == NoIndex ? WeakB[B] : WeakA[A];
+      if (StructuralEqual[Prior] == NoIndex ||
+          std::min(PF.Functions[A].Instructions,
+                   SF.Functions[B].Instructions) <= StructuralEqual[Prior] ||
+          Rejected.contains(pairKey(A, B)) || namesConflict(A, B))
+        continue;
+      const auto D = delta(A, B);
+      MoreCoverage[I] = D.ComputationComplete &&
+                        D.Similarity >= Settings.MinimumSimilarity &&
+                        D.EqualInstructions > StructuralEqual[Prior];
+    }
+  });
+  if (stopNow())
+    return;
+  for (size_t I = 0; I < Candidates.size(); ++I)
+    if (MoreCoverage[I]) {
+      const auto [A, B] = Candidates[I];
+      Deferred[PMatch[A] == NoIndex ? WeakB[B] : WeakA[A]] = 1;
+    }
+  for (const auto &[A, B] : Candidates) {
+    const uint32_t Prior = PMatch[A] == NoIndex ? WeakB[B] : WeakA[A];
+    if (Deferred[Prior] && !Rejected.contains(pairKey(A, B)) &&
+        !namesConflict(A, B))
+      NearTies.push_back({FunctionStep::CallSite, {A}, {B}});
+  }
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (Deferred[I]) {
+      const auto &F = Order[I];
+      PMatch[F.Primary] = SMatch[F.Secondary] = NoIndex;
+      NearTies.push_back({F.Step, {F.Primary}, {F.Secondary}});
+    }
+  llvm::erase_if(Order,
+                 [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
+}
+
+void Matcher::retainStackAlternatives() {
+  if (!Settings.Approximate || stopNow())
+    return;
+  std::vector<uint32_t> WeakA(P.Functions.size(), NoIndex),
+      WeakB(S.Functions.size(), NoIndex);
+  for (uint32_t I = 0; I < Order.size(); ++I) {
+    const auto &F = Order[I];
+    if (protectedMatch(F))
+      continue;
+    WeakA[F.Primary] = WeakB[F.Secondary] = I;
+  }
+  struct Entry {
+    uint64_t Key;
+    bool Secondary;
+    uint32_t Function;
+  };
+  std::vector<Entry> Entries;
+  Entries.reserve(P.Functions.size() + S.Functions.size());
+  for (bool Secondary : {false, true}) {
+    const auto &Program = Secondary ? S : P;
+    const auto &Match = Secondary ? SMatch : PMatch;
+    const auto &Weak = Secondary ? WeakB : WeakA;
+    for (uint32_t I = 0; I < Program.Functions.size(); ++I) {
+      const auto &F = Program.Functions[I];
+      if (F.StackRoleCandidate && !F.has(TraitIncomplete) &&
+          (Match[I] == NoIndex || Weak[I] != NoIndex))
+        Entries.push_back({F.StackRoleCandidate, Secondary, I});
+    }
+  }
+  llvm::sort(Entries, [](const Entry &A, const Entry &B) {
+    return std::tie(A.Key, A.Secondary, A.Function) <
+           std::tie(B.Key, B.Secondary, B.Function);
+  });
+  struct Candidate {
+    uint32_t A, B, Prior;
+    bool Retain = false;
+  };
+  std::vector<Candidate> Candidates;
+  for (size_t I = 0; I < Entries.size();) {
+    if (stopNow())
+      return;
+    size_t J = I + 1;
+    while (J < Entries.size() && Entries[J].Key == Entries[I].Key)
+      ++J;
+    if (J - I == 2 && !Entries[I].Secondary && Entries[I + 1].Secondary) {
+      const uint32_t A = Entries[I].Function, B = Entries[I + 1].Function;
+      if ((PMatch[A] == NoIndex || SMatch[B] == NoIndex) &&
+          !Rejected.contains(pairKey(A, B)) && !namesConflict(A, B)) {
+        const uint32_t Prior = PMatch[A] == NoIndex && SMatch[B] == NoIndex
+                                   ? NoIndex
+                               : PMatch[A] == NoIndex ? WeakB[B]
+                                                      : WeakA[A];
+        uint64_t Other = 0;
+        if (Prior != NoIndex) {
+          const auto &F = Order[Prior];
+          if (!P.Functions[F.Primary].has(TraitIncomplete) &&
+              !S.Functions[F.Secondary].has(TraitIncomplete))
+            Other = PMatch[A] == NoIndex
+                        ? P.Functions[F.Primary].StackRoleCandidate
+                        : S.Functions[F.Secondary].StackRoleCandidate;
+        }
+        if (Prior == NoIndex || (Other && Other != Entries[I].Key))
+          Candidates.push_back({A, B, Prior});
+      }
+    }
+    I = J;
+  }
+  parallelForEach(Candidates.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      auto &C = Candidates[I];
+      const auto D = delta(C.A, C.B);
+      C.Retain = D.ComputationComplete && D.AnalysisComplete &&
+                 D.Similarity >= Settings.MinimumSimilarity;
+    }
+  });
+  if (stopNow())
+    return;
+  std::vector<uint8_t> Deferred(Order.size(), 0);
+  for (const auto &C : Candidates)
+    if (C.Retain) {
+      if (C.Prior != NoIndex)
+        Deferred[C.Prior] = 1;
+      NearTies.push_back({FunctionStep::StackRoles, {C.A}, {C.B}});
+    }
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (Deferred[I]) {
+      const auto &F = Order[I];
+      PMatch[F.Primary] = SMatch[F.Secondary] = NoIndex;
+      NearTies.push_back({F.Step, {F.Primary}, {F.Secondary}});
+    }
+  llvm::erase_if(Order,
+                 [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
+}
+
+void Matcher::retainInlineCallerAlternatives() {
+  if (stopNow())
+    return;
+  std::vector<uint32_t> Weak;
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (!protectedMatch(Order[I]))
+      Weak.push_back(I);
+  if (Weak.empty())
+    return;
+
+  std::vector<uint32_t> WeakA(P.Functions.size(), NoIndex),
+      WeakB(S.Functions.size(), NoIndex);
+  for (uint32_t I : Weak) {
+    WeakA[Order[I].Primary] = I;
+    WeakB[Order[I].Secondary] = I;
+  }
+  const auto Proposals =
+      inlineCallerCandidates(P, PF, PMatch, WeakA, S, SF, SMatch, Control);
+  if (stopNow())
+    return;
+  struct Candidate {
+    uint32_t A, B, Prior;
+    bool Retain = false;
+  };
+  std::vector<Candidate> Candidates;
+  Candidates.reserve(Proposals.size());
+  for (const auto &[A, B] : Proposals)
+    if (!Rejected.contains(pairKey(A, B)) && !namesConflict(A, B))
+      Candidates.push_back({A, B, PMatch[A] == NoIndex ? WeakB[B] : WeakA[A]});
+  if (Candidates.empty())
+    return;
+  std::vector<uint8_t> Measure(Order.size(), 0);
+  for (const auto &C : Candidates)
+    Measure[C.Prior] = 1;
+  std::vector<uint32_t> Priors;
+  for (uint32_t I = 0; I < Measure.size(); ++I)
+    if (Measure[I])
+      Priors.push_back(I);
+  std::vector<uint32_t> PriorEqual(Order.size(), NoIndex);
+  parallelForEach(Priors.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      const uint32_t At = Priors[I];
+      const auto &F = Order[At];
+      const auto D = delta(F.Primary, F.Secondary);
+      // Complete body/CFG preservation is still stronger evidence. Only a
+      // structural edit can expose an unresolved whole-function boundary.
+      if (D.ComputationComplete && D.AnalysisComplete &&
+          (D.Changes & (ChangeBlocks | ChangeEdges)))
+        PriorEqual[At] = D.EqualInstructions;
+    }
+  });
+  if (stopNow())
+    return;
+  parallelForEach(Candidates.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      auto &C = Candidates[I];
+      if (PriorEqual[C.Prior] == NoIndex)
+        continue;
+      const auto D = delta(C.A, C.B);
+      C.Retain = D.ComputationComplete && D.AnalysisComplete &&
+                 D.Similarity >= Settings.MinimumSimilarity &&
+                 D.EqualInstructions > PriorEqual[C.Prior];
+    }
+  });
+  if (stopNow())
+    return;
+  std::vector<uint8_t> Deferred(Order.size(), 0);
+  for (const auto &C : Candidates)
+    if (C.Retain) {
+      Deferred[C.Prior] = 1;
+      NearTies.push_back({FunctionStep::CallSite, {C.A}, {C.B}});
+    }
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (Deferred[I]) {
+      const auto &F = Order[I];
+      PMatch[F.Primary] = SMatch[F.Secondary] = NoIndex;
+      NearTies.push_back({F.Step, {F.Primary}, {F.Secondary}});
+    }
+  llvm::erase_if(Order,
+                 [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
+}
+
+void Matcher::retainNeighborhoodAlternatives() {
+  if (stopNow())
+    return;
+  std::vector<uint32_t> WeakA(P.Functions.size(), NoIndex),
+      WeakB(S.Functions.size(), NoIndex);
+  std::vector<uint8_t> MappedA(P.Functions.size(), 0),
+      MappedB(S.Functions.size(), 0);
+  bool HasWeak = false;
+  for (uint32_t I = 0; I < Order.size(); ++I) {
+    const auto &F = Order[I];
+    MappedA[F.Primary] = MappedB[F.Secondary] = 1;
+    if (!protectedMatch(F)) {
+      WeakA[F.Primary] = WeakB[F.Secondary] = I;
+      HasWeak = true;
+    }
+  }
+  if (!HasWeak)
+    return;
+  const auto Proposals = neighborhoodReviewCandidates(
+      P, PF, PMatch, WeakA, MappedA, S, SF, SMatch, WeakB, MappedB, Control);
+  if (stopNow() || Proposals.empty())
+    return;
+  struct Candidate {
+    uint32_t A, B, Prior;
+    bool IndependentRoles, Retain = false;
+  };
+  std::vector<Candidate> Candidates;
+  std::vector<uint8_t> Measure(Order.size(), 0);
+  for (const auto &C : Proposals)
+    if (!Rejected.contains(pairKey(C.Primary, C.Secondary)) &&
+        !namesConflict(C.Primary, C.Secondary)) {
+      const uint32_t Prior =
+          PMatch[C.Primary] == NoIndex ? WeakB[C.Secondary] : WeakA[C.Primary];
+      Candidates.push_back({C.Primary, C.Secondary, Prior,
+                            C.OrderedCallees || C.BothDirections});
+      Measure[Prior] = 1;
+    }
+  std::vector<uint32_t> Priors;
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (Measure[I])
+      Priors.push_back(I);
+  std::vector<uint32_t> PriorEqual(Order.size(), NoIndex);
+  parallelForEach(Priors.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      const uint32_t At = Priors[I];
+      const auto &F = Order[At];
+      const auto D = delta(F.Primary, F.Secondary);
+      if (!D.ComputationComplete || !(D.Changes & ChangeCalls))
+        continue;
+      if (D.AnalysisComplete && D.ReferenceComparisonComplete &&
+          D.EqualInstructions ==
+              std::min(PF.Functions[F.Primary].Instructions,
+                       SF.Functions[F.Secondary].Instructions) &&
+          !(D.Changes & (ChangeBlocks | ChangeEdges)))
+        continue;
+      PriorEqual[At] = D.EqualInstructions;
+    }
+  });
+  parallelForEach(Candidates.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      auto &C = Candidates[I];
+      if (PriorEqual[C.Prior] == NoIndex)
+        continue;
+      const auto D = delta(C.A, C.B);
+      C.Retain =
+          D.ComputationComplete &&
+          (C.IndependentRoles || D.EqualInstructions > PriorEqual[C.Prior]);
+    }
+  });
+  if (stopNow())
+    return;
+  std::vector<uint8_t> Deferred(Order.size(), 0);
+  for (const auto &C : Candidates)
+    if (C.Retain) {
+      Deferred[C.Prior] = 1;
+      NearTies.push_back({FunctionStep::Neighborhood, {C.A}, {C.B}});
+    }
+  for (uint32_t I = 0; I < Order.size(); ++I)
+    if (Deferred[I]) {
+      const auto &F = Order[I];
+      PMatch[F.Primary] = SMatch[F.Secondary] = NoIndex;
+      NearTies.push_back({F.Step, {F.Primary}, {F.Secondary}});
+    }
+  llvm::erase_if(Order,
+                 [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
+}
+
+void Matcher::retainGraphAlternatives() {
+  if (stopNow())
+    return;
+  std::vector<uint32_t> Review;
+  for (uint32_t I = 0; I < Order.size(); ++I) {
+    const auto &F = Order[I];
+    if (!protectedMatch(F) &&
+        (F.Step == FunctionStep::GraphTopDown ||
+         F.Step == FunctionStep::GraphBottomUp ||
+         F.Step == FunctionStep::GraphNeighborhood) &&
+        contextAgreement(F.Primary, F.Secondary) == 0)
+      Review.push_back(I);
+  }
+  std::vector<uint8_t> Deferred(Review.size(), 0);
+  parallelForEach(Review.size(), [&](auto Claim, size_t Count) {
+    for (size_t I = Claim(); I < Count; I = Claim()) {
+      if (Control.stop())
+        return;
+      const auto &F = Order[Review[I]];
+      const auto D = delta(F.Primary, F.Secondary);
+      // Matching CFGs contribute half the composite similarity. When all
+      // mapped context contradicts a changed call, that graph score cannot
+      // substitute for the requested amount of known instruction evidence.
+      const uint64_t Instructions =
+          uint64_t(PF.Functions[F.Primary].Instructions) +
+          SF.Functions[F.Secondary].Instructions;
+      Deferred[I] = D.ComputationComplete && (D.Changes & ChangeCalls) &&
+                    2.0 * D.EqualInstructions / double(Instructions) <
+                        Settings.MinimumSimilarity;
+    }
+  });
+  if (stopNow())
+    return;
+  for (size_t I = 0; I < Review.size(); ++I)
+    if (Deferred[I]) {
+      const auto &F = Order[Review[I]];
+      PMatch[F.Primary] = SMatch[F.Secondary] = NoIndex;
+      NearTies.push_back({F.Step, {F.Primary}, {F.Secondary}});
+    }
+  llvm::erase_if(Order,
+                 [&](const Formed &F) { return PMatch[F.Primary] == NoIndex; });
+}
+
 void Matcher::collectAmbiguities() {
   std::vector<uint32_t> InPrimary(P.Functions.size(), NoIndex),
       InSecondary(S.Functions.size(), NoIndex);
+  // Initializer admission follows the last propagation pass. Keep those
+  // endpoints in the group population until Record removes accepted pairs,
+  // so resolving part of a group cannot hide an unpaired singleton remainder.
+  llvm::DenseSet<uint32_t> InitializerPrimary, InitializerSecondary;
+  for (const auto &F : Order)
+    if (F.Step == FunctionStep::Initializer ||
+        F.Step == FunctionStep::DataInitializer ||
+        F.Step == FunctionStep::BlockCallSite) {
+      InitializerPrimary.insert(F.Primary);
+      InitializerSecondary.insert(F.Secondary);
+    }
   const auto Record = [&](Tie T, bool Exact) {
     llvm::erase_if(T.Primary, [&](uint32_t A) {
       return PMatch[A] != NoIndex || (Exact && InPrimary[A] != NoIndex);
@@ -957,7 +1706,8 @@ void Matcher::collectAmbiguities() {
     llvm::erase_if(T.Secondary, [&](uint32_t B) {
       return SMatch[B] != NoIndex || (Exact && InSecondary[B] != NoIndex);
     });
-    if (!Exact) {
+    if (!Exact && T.Step != FunctionStep::InlinedTailCall &&
+        T.Step != FunctionStep::StackRoles) {
       // Exact groups already retain their full cross-product compactly.
       // Remove only those covered edges from a similarity star; sharing an
       // endpoint alone must not discard another measured alternative.
@@ -979,6 +1729,9 @@ void Matcher::collectAmbiguities() {
                       T.Secondary.end());
     if (T.Primary.empty() || T.Secondary.empty())
       return;
+    if (T.Primary.size() == 1 && T.Secondary.size() == 1 &&
+        Rejected.contains(pairKey(T.Primary[0], T.Secondary[0])))
+      return;
     if (Exact) {
       for (uint32_t A : T.Primary)
         InPrimary[A] = R.Ambiguities.size();
@@ -997,11 +1750,13 @@ void Matcher::collectAmbiguities() {
   for (FunctionStep Step : GlobalSteps) {
     std::vector<Entry> Entries;
     for (uint32_t A = 0; A < P.Functions.size(); ++A)
-      if (PMatch[A] == NoIndex && InPrimary[A] == NoIndex)
+      if (InitializerPrimary.contains(A) ||
+          (PMatch[A] == NoIndex && InPrimary[A] == NoIndex))
         if (const uint64_t K = featureKey(Step, A, false))
           Entries.push_back({K, 0, A});
     for (uint32_t B = 0; B < S.Functions.size(); ++B)
-      if (SMatch[B] == NoIndex && InSecondary[B] == NoIndex)
+      if (InitializerSecondary.contains(B) ||
+          (SMatch[B] == NoIndex && InSecondary[B] == NoIndex))
         if (const uint64_t K = featureKey(Step, B, true))
           Entries.push_back({K, 1, B});
     llvm::sort(Entries, [](const Entry &L, const Entry &R) {
@@ -1106,7 +1861,8 @@ void Matcher::finish() {
       if (Control.stop())
         return;
       FunctionMatch &M = R.Matches[I];
-      measure(M, delta(M.Primary, M.Secondary));
+      measure(
+          M, delta(M.Primary, M.Secondary, CurrentInstructionAlignmentProfile));
       if (M.Measured)
         Done.fetch_add(1, std::memory_order_relaxed);
     }
@@ -1209,6 +1965,98 @@ void Matcher::run(llvm::ArrayRef<Override> Overrides) {
     settle(Before);
   }
   beginPhase("ambiguities");
+  retainEntryAlternatives();
+  // Freeze all witnesses before adding data-reference proposals. A candidate
+  // cannot establish the data relation that would justify its own admission.
+  beginPhase("data-reference-context");
+  progress(0, 1);
+  const auto Candidates =
+      referenceCandidates(P, PF, PMatch, S, SF, SMatch, Control);
+  for (const auto &[A, B] : Candidates.Data) {
+    propose(A, B, FunctionStep::DataReference, true);
+    auto &Evidence = FeatureCandidates.find(pairKey(A, B))->second;
+    Evidence.Step = FunctionStep::DataReference;
+    Evidence.DataReference = true;
+  }
+  for (const auto &[A, B] : Candidates.Functions) {
+    propose(A, B, FunctionStep::AddressSite, true);
+    FeatureCandidates.find(pairKey(A, B))->second.Step =
+        FunctionStep::AddressSite;
+  }
+  if ((!Candidates.Data.empty() || !Candidates.Functions.empty()) && !stopNow())
+    approximate(true);
+  if (!stopNow())
+    progress(1, 1);
+  if (!P.CodeInitializers.empty() && !S.CodeInitializers.empty() &&
+      !stopNow()) {
+    beginPhase("initializer-context");
+    std::vector<uint8_t> TrustedP(P.Functions.size(), 0),
+        TrustedS(S.Functions.size(), 0);
+    for (const auto &F : Order)
+      if (protectedMatch(F) && !P.Functions[F.Primary].has(TraitIncomplete) &&
+          !S.Functions[F.Secondary].has(TraitIncomplete))
+        TrustedP[F.Primary] = TrustedS[F.Secondary] = 1;
+    InitializerCandidates Initializers;
+    const std::pair<const std::vector<std::pair<uint32_t, uint32_t>> *,
+                    FunctionStep>
+        Sources[]{{&Initializers.Contiguous, FunctionStep::Initializer},
+                  {&Initializers.Strided, FunctionStep::Initializer},
+                  {&Initializers.DataAddresses, FunctionStep::DataInitializer}};
+    progress(0, std::size(Sources));
+    if (!stopNow())
+      Initializers = initializerCandidates(P, PF, PMatch, TrustedP, S, SF,
+                                           SMatch, TrustedS, Control);
+    unsigned Done = 0;
+    for (const auto &[Proposals, Step] : Sources) {
+      if (stopNow())
+        break;
+      bool Proposed = false;
+      for (const auto &[A, B] : *Proposals) {
+        if (stopNow())
+          break;
+        if (PMatch[A] != NoIndex || SMatch[B] != NoIndex)
+          continue;
+        propose(A, B, Step, true);
+        auto &Evidence = FeatureCandidates.find(pairKey(A, B))->second;
+        Evidence.Step = Step;
+        Evidence.Initializer = true;
+        Proposed = true;
+      }
+      if (Proposed && !stopNow())
+        approximate(true);
+      if (!stopNow())
+        progress(++Done, std::size(Sources));
+    }
+  }
+  if (!stopNow()) {
+    beginPhase("block-call-context");
+    progress(0, 1);
+    std::vector<uint8_t> TrustedP(P.Functions.size(), 0),
+        TrustedS(S.Functions.size(), 0);
+    for (const auto &F : Order)
+      if (protectedMatch(F) && !P.Functions[F.Primary].has(TraitIncomplete) &&
+          !S.Functions[F.Secondary].has(TraitIncomplete))
+        TrustedP[F.Primary] = TrustedS[F.Secondary] = 1;
+    const auto Calls =
+        blockCallCandidates(P, PMatch, TrustedP, S, SMatch, TrustedS, Control);
+    for (const auto &[A, B] : Calls) {
+      if (stopNow())
+        break;
+      propose(A, B, FunctionStep::BlockCallSite, true);
+      FeatureCandidates.find(pairKey(A, B))->second.Step =
+          FunctionStep::BlockCallSite;
+    }
+    if (!Calls.empty() && !stopNow())
+      approximate(true);
+    if (!stopNow())
+      progress(1, 1);
+  }
+  beginPhase("ambiguities");
+  retainCallAlternatives();
+  retainStackAlternatives();
+  retainInlineCallerAlternatives();
+  retainNeighborhoodAlternatives();
+  retainGraphAlternatives();
   collectAmbiguities();
   endPhase();
   finish();
@@ -1257,6 +2105,7 @@ ComparisonResult compare(const Program &Primary, const Program &Secondary,
     throw std::invalid_argument("unsupported comparison profile pair");
   ComparisonResult R;
   R.Settings = Settings;
+  R.Regions.Calls = Settings.Regions.Calls;
   R.FlowRegions.Profile = flowRegionProfile(Settings.DataFlow.Profile,
                                             Settings.FlowRegions.Fragments)
                               .str();
@@ -1265,7 +2114,8 @@ ComparisonResult compare(const Program &Primary, const Program &Secondary,
   Matcher(Primary, Secondary, Settings, Control, R).run(Overrides);
   if (Settings.Regions.Enabled && R.State == ComparisonState::Complete) {
     const auto Begin = std::chrono::steady_clock::now();
-    R.Regions = findRegions(Primary, Secondary, Settings.Regions, Control);
+    R.Regions =
+        findRegions(Primary, Secondary, Settings.Regions, Control, R.Matches);
     R.Timings.push_back(
         {"regions", std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - Begin)
@@ -1420,6 +2270,24 @@ std::vector<uint32_t> dependentsOf(const Program &P,
   return Out;
 }
 
+void refreshCallRegions(ComparisonResult &R, const Program &Primary,
+                        const Program &Secondary,
+                        const ComparisonControl &Control) {
+  if (!R.Settings.Regions.Enabled || !R.Settings.Regions.Calls)
+    return;
+  auto Regions =
+      findRegions(Primary, Secondary, R.Settings.Regions, Control, R.Matches);
+  if (Regions.State == ComparisonState::Cancelled ||
+      Regions.State == ComparisonState::TimedOut)
+    throw ComparisonInterrupted(*Regions.State);
+  if (R.State == ComparisonState::Complete ||
+      llvm::StringRef(R.StoppedPhase).starts_with("regions:")) {
+    R.State = *Regions.State;
+    R.StoppedPhase = Regions.StoppedPhase;
+  }
+  R.Regions = std::move(Regions);
+}
+
 std::optional<std::string>
 applyOverrideInPlace(ComparisonResult &R, const Program &Primary,
                      const Program &Secondary, const Override &O,
@@ -1553,12 +2421,14 @@ applyOverrideInPlace(ComparisonResult &R, const Program &Primary,
         E.Remeasured.push_back(M);
       measure(M, compareFunctionsWithKeys(Primary, M.Primary, Secondary,
                                           M.Secondary, {PMap, SMap}, PK, SK,
-                                          Control));
+                                          Control, M.Alignment));
       Control.check();
       if (IsNew)
         E.Added = M;
     }
     Control.report("measure", Ordered.size(), Ordered.size());
+    if (!ChangedP.empty())
+      refreshCallRegions(R, Primary, Secondary, Control);
   }
   R.Overrides.push_back(O);
   summarize(R, Primary, Secondary);
@@ -1613,6 +2483,7 @@ void revertOverrideInPlace(ComparisonResult &R, const Program &Primary,
     for (const FunctionMatch &Before : E.Remeasured)
       if (const uint32_t I = R.PrimaryMatch[Before.Primary]; I != NoIndex)
         R.Matches[I] = Before;
+    refreshCallRegions(R, Primary, Secondary, Control);
   }
   if (!R.Overrides.empty() && R.Overrides.back() == E.Applied)
     R.Overrides.pop_back();

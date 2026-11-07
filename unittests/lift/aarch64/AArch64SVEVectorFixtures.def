@@ -141,6 +141,13 @@ NEVERD_SVE_VECTOR_FIXTURE(
     "signed_sve_leaf:\n.inst 0xd503233f\n.inst 0x2518e3e0\n"
     ".inst 0x2538c020\n.inst 0x0521a000\n.inst 0xd65f0bff\n"
     ".size signed_sve_leaf,.-signed_sve_leaf\n")
+// The same leaf returning with RETAB: no proved recipe, explicit operations.
+NEVERD_SVE_VECTOR_FIXTURE(
+    const char *, kUnprovedSignedStateAssembly,
+    ".text\n.globl signed_sve_leaf\n.type signed_sve_leaf,%function\n"
+    "signed_sve_leaf:\n.inst 0xd503233f\n.inst 0x2518e3e0\n"
+    ".inst 0x2538c020\n.inst 0x0521a000\n.inst 0xd65f0fff\n"
+    ".size signed_sve_leaf,.-signed_sve_leaf\n")
 NEVERD_SVE_VECTOR_FIXTURE(const char *, kSignedStatePacia, "pacia ")
 NEVERD_SVE_VECTOR_FIXTURE(const char *, kSignedStateAuthenticate,
                           "@llvm.ptrauth.auth(")

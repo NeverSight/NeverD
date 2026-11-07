@@ -77,6 +77,16 @@ inline bool isAAPCS64HFAArray(llvm::Type *Type) {
           Array->getElementType()->isDoubleTy());
 }
 
+/// Darwin's one/two-word C record carrier. Arrays keep each logical record
+/// grouped when the integer bank is exhausted, just as HFA arrays do for FP.
+inline bool isDarwinAArch64WordArray(llvm::Type *Type) {
+  const auto *Array = llvm::dyn_cast<llvm::ArrayType>(Type);
+  return Array && Array->getNumElements() &&
+         Array->getNumElements() <=
+             getTargetRegInfo(Arch::AArch64).IntReturnRegs.size() &&
+         Array->getElementType() == llvm::Type::getInt64Ty(Type->getContext());
+}
+
 } // namespace neverd
 
 #endif // NEVERD_BACKEND_LLVM_LLVMFLOATINGCALL_H

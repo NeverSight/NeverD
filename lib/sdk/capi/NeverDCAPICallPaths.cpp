@@ -16,6 +16,7 @@
 #include "JSONText.h"
 #include "SessionImpl.h"
 
+#include "neverd/libc/LibCNames.h"
 #include "neverd/sdk/Limits.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -231,6 +232,10 @@ std::shared_ptr<const CallReferenceGraph> buildGraph(Session &S) {
   Entries.reserve(Ordered.size());
   for (const FuncInfo *F : Ordered)
     Entries.push_back(F->Entry);
+  std::optional<libc::NoReturnTargetIndex> NoReturnTargets;
+  if (std::any_of(Bodies.begin(), Bodies.end(),
+                  [](const FuncInfo *F) { return !F->Size; }))
+    NoReturnTargets.emplace(Img);
   for (size_t First = 0; First < Bodies.size();
        First += FunctionPage::MaxFunctionsPerPage) {
     FunctionPage Page;
@@ -238,11 +243,13 @@ std::shared_ptr<const CallReferenceGraph> buildGraph(Session &S) {
         Bodies.size(), First + FunctionPage::MaxFunctionsPerPage);
     Page.Functions.assign(Bodies.begin() + First, Bodies.begin() + Last);
     Page.Entries = Entries;
-    if (!decodeFunctions(Img, Page,
-                         [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
-                             InstructionFlowScratch &Scratch) {
-                           Collect(First + Index, Dec, DI, Scratch);
-                         })) {
+    if (!decodeFunctions(
+            Img, Page,
+            [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
+                InstructionFlowScratch &Scratch) {
+              Collect(First + Index, Dec, DI, Scratch);
+            },
+            {}, nullptr, NoReturnTargets ? &*NoReturnTargets : nullptr)) {
       S.setError("failed to initialize a decoder for the image");
       return nullptr;
     }

@@ -1,0 +1,23 @@
+//===- MedLLVMSourceCall.def - Explicit call value carriers ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Sizes and diagnostics for source call value assembly.
+//===----------------------------------------------------------------------===//
+
+#ifndef LLVM_SOURCE_CALL_VALUE
+#define LLVM_SOURCE_CALL_VALUE(Type, Name, Value)
+#endif
+#ifndef LLVM_SOURCE_CALL_TEXT
+#define LLVM_SOURCE_CALL_TEXT(Name, Text)
+#endif
+
+LLVM_SOURCE_CALL_VALUE(unsigned, kSourceCallWordBytes, 8)
+LLVM_SOURCE_CALL_VALUE(unsigned, kSourceCallByteBits, 8)
+LLVM_SOURCE_CALL_TEXT(kSourceCallCarrierMissing,
+                      "a complete argument carrier is unavailable")
+
+#undef LLVM_SOURCE_CALL_VALUE
+#undef LLVM_SOURCE_CALL_TEXT

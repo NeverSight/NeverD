@@ -11,41 +11,56 @@ from scripts.audit_ci_test_results import (
     OPTIONAL_KERNEL_INPUT_SKIPS,
     ResultError,
     audit_results,
-    combine_prior_passes,
+    combine_prior_results,
     parse_junit,
-    prior_passes,
+    prior_results,
 )
 from scripts.tests.test_audit_ci_test_results import junit, policy_records, record
 
 
 class PriorPassTests(unittest.TestCase):
-    def test_only_consistent_passes_are_reused_with_their_original_output(self):
+    def test_only_consistent_passes_and_skips_are_reused_with_their_original_output(self):
         passed, skipped, failed = [record(name, "Owner") for name in ("a", "b", "c")]
         source = junit((passed, skipped, failed), {
             passed: ("run", "", "actual original execution"),
             skipped: ("notrun", "SKIP_REGULAR_EXPRESSION_MATCHED", "unavailable"),
             failed: ("fail", "failed", "actual failure"),
         })
-        kept = prior_passes((passed, skipped, failed), (passed, skipped, failed), (source,))
+        kept = prior_results((passed, skipped, failed), (passed, skipped, failed), (source,))
         outcomes = parse_junit(kept)
-        self.assertEqual([item.test for item in outcomes], [passed])
+        self.assertEqual([item.test for item in outcomes], [passed, skipped])
         self.assertEqual(outcomes[0].output, "actual original execution")
+        self.assertEqual(outcomes[1].outcome, "skipped")
+        self.assertEqual(outcomes[1].output, "unavailable")
         # Another completed shard disagreeing about the pass forces a rerun.
         contrary = junit((passed,), {passed: ("fail", "failed", "second failure")})
-        self.assertEqual(len(prior_passes((passed, skipped, failed), (passed,), (source,))), 1)
-        kept = prior_passes((passed, skipped, failed), (passed,), (source, contrary))
+        self.assertEqual(len(prior_results((passed, skipped, failed), (passed,), (source,))), 1)
+        kept = prior_results((passed, skipped, failed), (passed,), (source, contrary))
+        self.assertEqual(parse_junit(kept), ())
+        # So does a shard disagreeing about whether the case could execute.
+        ran = junit((skipped,))
+        kept = prior_results((passed, skipped, failed), (skipped,), (source, ran))
+        self.assertEqual(parse_junit(kept), ())
+
+    def test_disabled_and_infrastructure_not_run_cases_are_never_reused(self):
+        disabled, not_run = record("a", "Owner"), record("b", "Owner")
+        source = junit((disabled, not_run), {
+            disabled: ("disabled", "", ""),
+            not_run: ("notrun", "Not Run: missing executable", ""),
+        })
+        kept = prior_results((disabled, not_run), (disabled, not_run), (source,))
         self.assertEqual(parse_junit(kept), ())
 
     def test_excluded_profile_cases_are_not_reused(self):
         selected, excluded = record("a", "Owner"), record("b", "OtherOwner")
-        kept = prior_passes((selected, excluded), (selected,), (junit((excluded, selected)),))
+        kept = prior_results((selected, excluded), (selected,), (junit((excluded, selected)),))
         self.assertEqual([item.test for item in parse_junit(kept)], [selected])
 
     def test_same_name_with_multiple_owners_moves_only_as_a_complete_group(self):
         focused, aggregate = record("a", "Focused"), record("a", "Aggregate")
-        kept = prior_passes((focused, aggregate), (focused, aggregate), (junit((focused,)),))
+        kept = prior_results((focused, aggregate), (focused, aggregate), (junit((focused,)),))
         self.assertEqual(parse_junit(kept), ())
-        kept = prior_passes((focused, aggregate), (focused, aggregate),
+        kept = prior_results((focused, aggregate), (focused, aggregate),
                             (junit((focused, aggregate)),))
         self.assertEqual({item.test for item in parse_junit(kept)}, {focused, aggregate})
 
@@ -53,7 +68,7 @@ class PriorPassTests(unittest.TestCase):
         known = record("a", "Owner")
         for unknown in (record("a", "ChangedOwner"), record("stale", "Owner")):
             with self.subTest(unknown=unknown), self.assertRaisesRegex(ResultError, "unknown inventory"):
-                prior_passes((known,), (known,), (junit((unknown,)),))
+                prior_results((known,), (known,), (junit((unknown,)),))
 
     def test_contradictory_counts_and_duplicate_cases_are_rejected(self):
         known = record("a", "Owner")
@@ -61,34 +76,51 @@ class PriorPassTests(unittest.TestCase):
             if len(source) == 1:
                 source.set("tests", "2")
             with self.assertRaises(ResultError):
-                prior_passes((known,), (known,), (source,))
+                prior_results((known,), (known,), (source,))
 
     def test_name_files_cannot_split_one_identity_into_multiple_tests(self):
         known = record("a\nb", "Owner")
         with self.assertRaisesRegex(ResultError, "name file"):
-            prior_passes((known,), (known,), (junit((known,)),))
+            prior_results((known,), (known,), (junit((known,)),))
 
-    def test_fresh_and_prior_results_must_be_disjoint_and_prior_must_pass(self):
+    def test_fresh_and_prior_results_must_be_disjoint_and_prior_must_be_final(self):
         known = record("a", "Owner")
         passed = parse_junit(junit((known,)))
         failed = parse_junit(junit((known,), {known: ("fail", "failure", "")}))
         with self.assertRaisesRegex(ResultError, "duplicate identities"):
-            combine_prior_passes(passed, passed)
-        with self.assertRaisesRegex(ResultError, "other than passed"):
-            combine_prior_passes((), failed)
+            combine_prior_results(passed, passed)
+        with self.assertRaisesRegex(ResultError, "other than passed or skipped"):
+            combine_prior_results((), failed)
+        skipped = parse_junit(junit((known,), {
+            known: ("notrun", "SKIP_REGULAR_EXPRESSION_MATCHED", "unavailable"),
+        }))
+        self.assertEqual(combine_prior_results((), skipped), skipped)
+
+    def test_a_reused_skip_in_a_required_suite_still_fails_the_audit(self):
+        selected = policy_records("windows-focused")
+        required = next(test for test in selected if test.labels & {"NeverDSafetyTests"})
+        source = junit(selected, {
+            required: ("notrun", "SKIP_REGULAR_EXPRESSION_MATCHED", "unavailable"),
+        })
+        retained = parse_junit(prior_results(selected, selected, (source,)))
+        self.assertEqual(len(retained), len(selected))
+        report = audit_results(selected, combine_prior_results((), retained),
+                               "windows-focused", 0)
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["counts"]["required_skips"], 1)
 
     def test_complete_inventory_and_nonzero_exit_remain_authoritative(self):
         selected = policy_records("windows-focused")
         previous = parse_junit(junit(selected[:3]))
         current = parse_junit(junit(selected[3:]))
-        combined = combine_prior_passes(current, previous)
+        combined = combine_prior_results(current, previous)
         good = audit_results(selected, combined, "windows-focused", 0)
         self.assertTrue(good["ok"], good)
         self.assertEqual(good["counts"]["reported"], len(selected))
         self.assertFalse(audit_results(selected, combined[:-1], "windows-focused", 0)["ok"])
         self.assertFalse(audit_results(selected, combined, "windows-focused", 8)["ok"])
 
-    def test_real_ctest_reuses_one_pass_and_reruns_failed_and_skipped_children(self):
+    def test_real_ctest_reuses_a_pass_and_a_skip_and_reruns_only_the_failure(self):
         with tempfile.TemporaryDirectory(prefix="neverd-ci-reuse-") as directory:
             root = Path(directory)
             child = root / "child.py"
@@ -118,24 +150,24 @@ class PriorPassTests(unittest.TestCase):
                 capture_output=True, text=True, timeout=30,
             )
             self.assertNotEqual(result.returncode, 0)
-            retained = prior_passes(records, records, (ET.parse(first).getroot(),))
+            retained = prior_results(records, records, (ET.parse(first).getroot(),))
             previous = parse_junit(retained)
-            self.assertEqual([item.test.name for item in previous], ["Passed"])
+            self.assertEqual([item.test.name for item in previous], ["Passed", "Skipped"])
             names = root / "names.txt"
-            names.write_text("Passed\n", encoding="utf-8")
+            names.write_text("Passed\nSkipped\n", encoding="utf-8")
             second = root / "second.xml"
             result = subprocess.run(
                 ["ctest", "--test-dir", str(root), "--exclude-from-file", str(names),
                  "--output-junit", str(second)], capture_output=True, text=True, timeout=30,
             )
             self.assertNotEqual(result.returncode, 0)
-            combined = combine_prior_passes(parse_junit(ET.parse(second).getroot()), previous)
+            combined = combine_prior_results(parse_junit(ET.parse(second).getroot()), previous)
             self.assertEqual({item.test for item in combined}, set(records))
             self.assertEqual({item.test.name: item.outcome for item in combined}, {
                 "Passed": "passed", "Skipped": "skipped", "Failed": "failed",
             })
             self.assertEqual((root / "Passed").read_text(), "x")
-            self.assertEqual((root / "Skipped").read_text(), "xx")
+            self.assertEqual((root / "Skipped").read_text(), "x")
             self.assertEqual((root / "Failed").read_text(), "xx")
 
 

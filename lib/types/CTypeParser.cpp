@@ -17,6 +17,7 @@
 #include "neverd/types/TypeParse.h"
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
@@ -26,6 +27,7 @@
 #include "llvm/Support/StringSaver.h"
 
 #include <functional>
+#include <utility>
 
 namespace neverd::types {
 namespace {
@@ -53,6 +55,11 @@ struct Token {
   unsigned Column = 1;
 };
 
+// Tokens only borrow immutable spelling. Keep their growing sequence on
+// SmallVector's trivial relocation path rather than moving each token during
+// vector growth. Zero inline elements keep the complete stream off the stack.
+using TokenList = llvm::SmallVector<Token, 0>;
+
 /// What a #pragma pack asks, kept in a pragma token's value.
 enum class PackAction : uint8_t { Set, Reset, Push, PushSet, Pop, PopSet };
 
@@ -77,19 +84,14 @@ bool sameLayout(const RecordDef &A, const RecordDef &B) {
   return true;
 }
 
-const char *const Punctuators[] = {
-    "...", "::", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "->", "{",
-    "}",   "(",  ")",  "[",  "]",  ";",  ",",  "*",  "&",  ":",  "=",  "<",
-    ">",   "+",  "-",  "~",  "!",  "/",  "%",  "^",  "|",  "?",  ".",  "#"};
-
 class Lexer {
 public:
   Lexer(llvm::StringRef Source, std::vector<SourceProblem> &Problems,
         llvm::StringSaver &Spellings)
       : Source(Source), Problems(Problems), Spellings(Spellings) {}
 
-  std::vector<Token> run() {
-    std::vector<Token> Tokens;
+  TokenList run() {
+    TokenList Tokens;
     bool LineStart = true;
     while (At < Source.size()) {
       const char C = Source[At];
@@ -124,10 +126,11 @@ public:
       }
       LineStart = false;
       Token Next = token();
-      if (Next.Kind == TokenKind::Word) {
-        expand(std::move(Next), Tokens, 0);
-        continue;
-      }
+      if (Next.Kind == TokenKind::Word)
+        if (auto Found = Macros.find(Next.Text); Found != Macros.end()) {
+          expand(std::move(Next), Found->second, Tokens, 0);
+          continue;
+        }
       if (Next.Kind != TokenKind::End)
         Tokens.push_back(std::move(Next));
     }
@@ -244,13 +247,61 @@ private:
       quoted(Result);
       return Result;
     }
-    for (const char *Punct : Punctuators)
-      if (Source.substr(At).starts_with(Punct)) {
-        advance(strlen(Punct));
-        Result.Kind = TokenKind::Punct;
-        Result.Text = Punct;
-        return Result;
-      }
+    // Choose the longest spelling by its first byte. Large SDK headers are
+    // mostly declarations; a table walk for each bracket or semicolon adds
+    // work to every function's first type lookup.
+    const auto Rest = Source.drop_front(At);
+    const char Next = Rest.size() > 1 ? Rest[1] : '\0';
+    unsigned PunctBytes = 1;
+    switch (C) {
+    case '.':
+      PunctBytes = Rest.starts_with("...") ? 3 : 1;
+      break;
+    case ':':
+      PunctBytes = Next == ':' ? 2 : 1;
+      break;
+    case '<':
+    case '>':
+      PunctBytes = Next == C || Next == '=' ? 2 : 1;
+      break;
+    case '=':
+    case '!':
+      PunctBytes = Next == '=' ? 2 : 1;
+      break;
+    case '&':
+    case '|':
+      PunctBytes = Next == C ? 2 : 1;
+      break;
+    case '-':
+      PunctBytes = Next == '>' ? 2 : 1;
+      break;
+    case '{':
+    case '}':
+    case '(':
+    case ')':
+    case '[':
+    case ']':
+    case ';':
+    case ',':
+    case '*':
+    case '+':
+    case '~':
+    case '/':
+    case '%':
+    case '^':
+    case '?':
+    case '#':
+      break;
+    default:
+      PunctBytes = 0;
+      break;
+    }
+    if (PunctBytes) {
+      Result.Kind = TokenKind::Punct;
+      Result.Text = Rest.take_front(PunctBytes);
+      advance(PunctBytes);
+      return Result;
+    }
     problem(Line, Column,
             std::string("'") + C + "' cannot begin a declaration's word");
     advance();
@@ -287,27 +338,28 @@ private:
     Result.Text = Spellings.save(Text);
   }
 
-  /// A word, or the tokens of the macro it names.
-  void expand(Token Word, std::vector<Token> &Tokens, unsigned Depth) {
-    auto Found = Macros.find(Word.Text);
-    if (Found == Macros.end() ||
-        Depth > ::neverd::limits::types::kCTypeParserExpandDepthLimit) {
+  /// Expand a known macro. Ordinary identifiers stay on the token append path.
+  void expand(Token Word, const TokenList &Replacements, TokenList &Tokens,
+              unsigned Depth) {
+    if (Depth > ::neverd::limits::types::kCTypeParserExpandDepthLimit) {
       Tokens.push_back(std::move(Word));
       return;
     }
-    for (Token Replacement : Found->second) {
+    for (Token Replacement : Replacements) {
       Replacement.Line = Word.Line;
       Replacement.Column = Word.Column;
       if (Replacement.Kind == TokenKind::Word)
-        expand(std::move(Replacement), Tokens, Depth + 1);
-      else
-        Tokens.push_back(std::move(Replacement));
+        if (auto Found = Macros.find(Replacement.Text); Found != Macros.end()) {
+          expand(std::move(Replacement), Found->second, Tokens, Depth + 1);
+          continue;
+        }
+      Tokens.push_back(std::move(Replacement));
     }
   }
 
   /// A preprocessor line: #pragma pack becomes a token, an object-like
   /// #define a macro, and anything else is skipped.
-  void directive(std::vector<Token> &Tokens) {
+  void directive(TokenList &Tokens) {
     const unsigned L = Line, Col = Column;
     std::string Text;
     while (At < Source.size() && Source[At] != '\n') {
@@ -452,7 +504,7 @@ private:
         return;
       std::vector<SourceProblem> Ignored;
       Lexer Inner(Body, Ignored, Spellings);
-      std::vector<Token> Replacement = Inner.run();
+      TokenList Replacement = Inner.run();
       Replacement.pop_back();
       // A header NeverD renders names a system's types otherwise for
       // another system's compilers (#define X neverd_X); the declarations
@@ -474,7 +526,7 @@ private:
   size_t At = 0;
   unsigned Line = 1;
   unsigned Column = 1;
-  llvm::StringMap<std::vector<Token>> Macros;
+  llvm::StringMap<TokenList> Macros;
 };
 
 /// The builtins a single word names, in every spelling the renderers write.
@@ -539,43 +591,46 @@ std::optional<CallingConvention> conventionWord(llvm::StringRef Word) {
 
 /// Words a declaration may hold that do not change its type.
 bool ignoredWord(llvm::StringRef Word) {
-  return llvm::is_contained(
-      std::initializer_list<llvm::StringRef>{"extern",
-                                             "static",
-                                             "inline",
-                                             "__inline",
-                                             "__inline__",
-                                             "__forceinline",
-                                             "__extension__",
-                                             "__w64",
-                                             "register",
-                                             "auto",
-                                             "constexpr",
-                                             "virtual",
-                                             "explicit",
-                                             "mutable",
-                                             "__unaligned",
-                                             "NTKERNELAPI",
-                                             "NTSYSAPI",
-                                             "NTSYSCALLAPI",
-                                             "NTHALAPI",
-                                             "DECLSPEC_IMPORT",
-                                             "FORCEINLINE",
-                                             "__restrict",
-                                             "restrict",
-                                             "__restrict__",
-                                             "_Atomic",
-                                             "thread_local",
-                                             "__ptr32",
-                                             "__ptr64",
-                                             "__sptr",
-                                             "__uptr",
-                                             "_Nonnull",
-                                             "_Nullable",
-                                             "_Null_unspecified",
-                                             "_Nullable_result",
-                                             "__based"},
-      Word);
+  // Expose the fixed spellings to the compiler. A table walk here repeats
+  // for each type, declarator and parameter in the system headers.
+  return llvm::StringSwitch<bool>(Word)
+      .Case("extern", true)
+      .Case("static", true)
+      .Case("inline", true)
+      .Case("_inline", true)
+      .Case("__inline", true)
+      .Case("__inline__", true)
+      .Case("__forceinline", true)
+      .Case("__extension__", true)
+      .Case("__w64", true)
+      .Case("register", true)
+      .Case("auto", true)
+      .Case("constexpr", true)
+      .Case("virtual", true)
+      .Case("explicit", true)
+      .Case("mutable", true)
+      .Case("__unaligned", true)
+      .Case("NTKERNELAPI", true)
+      .Case("NTSYSAPI", true)
+      .Case("NTSYSCALLAPI", true)
+      .Case("NTHALAPI", true)
+      .Case("DECLSPEC_IMPORT", true)
+      .Case("FORCEINLINE", true)
+      .Case("__restrict", true)
+      .Case("restrict", true)
+      .Case("__restrict__", true)
+      .Case("_Atomic", true)
+      .Case("thread_local", true)
+      .Case("__ptr32", true)
+      .Case("__ptr64", true)
+      .Case("__sptr", true)
+      .Case("__uptr", true)
+      .Case("_Nonnull", true)
+      .Case("_Nullable", true)
+      .Case("_Null_unspecified", true)
+      .Case("_Nullable_result", true)
+      .Case("__based", true)
+      .Default(false);
 }
 
 /// Whether a target with 64-bit pointers keeps \p Convention.
@@ -615,10 +670,15 @@ llvm::StringRef attributeName(llvm::StringRef Name) {
   return Name;
 }
 
+/// Microsoft's original spelling remains an alias in SDK/WDK headers.
+bool declspecWord(llvm::StringRef Word) {
+  return Word == "__declspec" || Word == "_declspec";
+}
+
 class Parser {
 public:
-  Parser(std::vector<Token> Tokens, TypeLibrary &Library,
-         const ParseOptions &Options, ParseResult &Result)
+  Parser(TokenList Tokens, TypeLibrary &Library, const ParseOptions &Options,
+         ParseResult &Result)
       : Tokens(std::move(Tokens)), Library(Library), Options(Options),
         Result(Result), Cpp(Options.Lang == Language::Cpp) {}
 
@@ -778,8 +838,8 @@ private:
     return builtinKeyword(Word) || conventionWord(Word) || ignoredWord(Word) ||
            Word == "struct" || Word == "union" || Word == "enum" ||
            Word == "class" || Word == "const" || Word == "volatile" ||
-           Word == "typedef" || Word == "__declspec" ||
-           Word == "__attribute__" || Word == "sizeof" || typeofWord(Word);
+           Word == "typedef" || declspecWord(Word) || Word == "__attribute__" ||
+           Word == "sizeof" || typeofWord(Word);
   }
 
   static bool typeofWord(llvm::StringRef Word) {
@@ -1330,8 +1390,9 @@ private:
           ++Words.Double;
         else
           ++Words.WChar;
-      } else if (!Spec.Type && !AnyWord && isTypeName(W)) {
-        take();
+      } else if (!Spec.Type && !AnyWord) {
+        // Resolve the word and its kind together; ordinary typedefs need
+        // only one lookup in the library.
         if (auto Found = builtinWords().find(W); Found != builtinWords().end())
           Spec.Type = makeBuiltin(Found->second);
         else if (const std::optional<unsigned> Bytes =
@@ -1340,6 +1401,7 @@ private:
           // only the program's own is.
           const unsigned Own = Library.builtinBytes(Builtin::LongDouble);
           if (*Bytes != Own) {
+            take();
             fail(T, "'" + W.str() + "' is a long double of " +
                         std::to_string(*Bytes) +
                         " bytes, where the program's "
@@ -1348,22 +1410,23 @@ private:
             return false;
           }
           Spec.Type = makeBuiltin(Builtin::LongDouble);
-        } else if (vaListWord(W) && !Library.find(W)) {
+        } else if (const LocalType *Named = Library.find(W)) {
+          // A typedef the declarations made, such as glibc's size_t, keeps
+          // its name, including va_list when the header defines it.
+          Spec.Type = makeNamed(W.str(), Named->Kind);
+          Spec.TypeName = true;
+        } else if (vaListWord(W)) {
           // Windows and i386 pass the variable arguments' address; other
           // targets a record of their own, which a parameter passes as its
           // address too: x86-64's decays from an array, and AAPCS64 passes
           // a record that large by reference.
           if (Library.dataModel() == DataModel::LP64 && !InParameter) {
+            take();
             fail(T, "__builtin_va_list of an LP64 target is a record local "
                     "types do not know");
             return false;
           }
           Spec.Type = makePointer(makeBuiltin(Builtin::Char), pointerSize());
-        } else if (Library.find(W)) {
-          // A typedef the declarations made, such as glibc's size_t, keeps
-          // its name.
-          Spec.Type = named(W);
-          Spec.TypeName = true;
         } else if (W == "size_t" || W == "uintptr_t")
           Spec.Type = makeBuiltin(pointerSize() == 8 ? Builtin::ULongLong
                                                      : Builtin::UInt);
@@ -1371,7 +1434,8 @@ private:
           Spec.Type = makeBuiltin(pointerSize() == 8 ? Builtin::LongLong
                                                      : Builtin::Int);
         else
-          Spec.Type = named(W);
+          break;
+        take();
       } else {
         break;
       }
@@ -1436,7 +1500,7 @@ private:
       return true;
     return T.Kind == TokenKind::Word &&
            (T.Text == "__attribute__" || T.Text == "__attribute" ||
-            T.Text == "__declspec" || T.Text == "DECLSPEC_ALIGN" ||
+            declspecWord(T.Text) || T.Text == "DECLSPEC_ALIGN" ||
             T.Text == "alignas" || T.Text == "_Alignas" ||
             T.Text == "__asm__" || T.Text == "__asm");
   }
@@ -1500,7 +1564,7 @@ private:
       }
       // __attribute__((a, b(x))) lists its attributes in a second pair of
       // parentheses; __declspec(a b(x)) in its one.
-      const bool Gnu = Word != "__declspec";
+      const bool Gnu = !declspecWord(Word);
       if (Gnu && !expect("(", "after " + Word.str() + "("))
         return false;
       while (!Failed && !isPunct(")")) {
@@ -2018,20 +2082,28 @@ private:
       }
       break;
     }
-    return [Pointers, Inner, Suffixes](TypeExprRef T) {
+    // A declarator without modifiers already has its complete composition.
+    // Keep the nested result and transfer owned modifiers instead of cloning
+    // their vectors and any nested callable for each parameter.
+    if (Pointers.empty() && Suffixes.empty())
+      return Inner;
+    return [Pointers = std::move(Pointers), Inner = std::move(Inner),
+            Suffixes = std::move(Suffixes)](TypeExprRef T) mutable {
       for (const Pointer &P : Pointers)
-        T = qualified(makePointer(T, P.Bytes, P.Reference), P.Const,
+        T = qualified(makePointer(std::move(T), P.Bytes, P.Reference), P.Const,
                       P.Volatile);
       for (auto It = Suffixes.rbegin(); It != Suffixes.rend(); ++It) {
         if (It->Array) {
-          T = makeArray(T, It->Count);
+          T = makeArray(std::move(T), It->Count);
           continue;
         }
-        auto Function = std::make_shared<FunctionDef>(*It->Function);
-        Function->Return = T;
+        // declarator() applies each composition once. Its freshly parsed
+        // parameter list can become the published function directly.
+        auto Function = std::move(It->Function);
+        Function->Return = std::move(T);
         T = makeFunction(std::move(Function));
       }
-      return Inner(T);
+      return Inner(std::move(T));
     };
   }
 
@@ -2470,7 +2542,7 @@ private:
                                : "a static assertion fails: " + Message);
   }
 
-  std::vector<Token> Tokens;
+  TokenList Tokens;
   size_t Pos = 0;
   TypeLibrary &Library;
   const ParseOptions &Options;
@@ -2527,7 +2599,7 @@ ParseResult parseCTypes(llvm::StringRef Source, TypeLibrary &Library,
   ParseResult Result;
   llvm::BumpPtrAllocator Storage;
   llvm::StringSaver Spellings(Storage);
-  std::vector<Token> Tokens = Lexer(Source, Result.Problems, Spellings).run();
+  TokenList Tokens = Lexer(Source, Result.Problems, Spellings).run();
   if (!Result.Problems.empty())
     return Result;
   TypeLibrary Scratch(Library);
@@ -2549,7 +2621,7 @@ FunctionDeclaration parseFunctionDeclaration(llvm::StringRef Source,
     Text += ";";
   llvm::BumpPtrAllocator Storage;
   llvm::StringSaver Spellings(Storage);
-  std::vector<Token> Tokens = Lexer(Text, Result.Problems, Spellings).run();
+  TokenList Tokens = Lexer(Text, Result.Problems, Spellings).run();
   if (Result.Problems.empty()) {
     TypeLibrary Scratch(Library);
     ParseOptions One = Options;

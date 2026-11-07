@@ -77,6 +77,7 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(qualification.main(["run", "--plan", str(self.plan)]), 0)
         return bench.load(self.output / "qualification.json")
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux CLI/runtime execution")
     def test_success_preserves_unscored_pairs_and_partial_truth(self):
         result = self.execute()
         self.assertTrue(result["passed"])
@@ -85,6 +86,7 @@ class QualificationTests(unittest.TestCase):
         self.assertTrue(all(case["metrics"]["unscored"] == 1 for case in result["cases"]))
         self.assertTrue(all(case["metrics"]["exact_mapping"] is None for case in result["cases"]))
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux CLI/runtime execution")
     def test_missing_case_cannot_disappear_into_a_successful_macro(self):
         self.execute()
         (self.output / "second/run.json").unlink()
@@ -93,6 +95,7 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(result["receipt_failures"], 1)
         self.assertEqual(result["macro_f1"], 0.5)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux CLI/runtime execution")
     def test_timeout_remains_a_failure(self):
         self.execute()
         path = self.output / "second/compare.json"
@@ -103,6 +106,7 @@ class QualificationTests(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertEqual((result["receipt_failures"], result["timeouts"]), (1, 1))
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux CLI/runtime execution")
     def test_runtime_probe_failure_is_retained_with_every_case(self):
         self.executable.write_text(f"#!{sys.executable}\nraise SystemExit(7)\n")
         self.freeze()
@@ -113,6 +117,7 @@ class QualificationTests(unittest.TestCase):
         self.assertIn("error", result["runtime_probe"])
         self.assertEqual(bench.load(self.output / "version.json")["exit"], 7)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux CLI/runtime execution")
     def test_runtime_probe_uses_the_declared_timeout(self):
         self.executable.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n")
         declaration = bench.load(self.protocol)
@@ -125,6 +130,7 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(result["macro_f1"], 0)
         self.assertEqual(bench.load(self.output / "version.json")["error"], "timeout")
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux CLI/runtime execution")
     def test_wrong_runtime_or_thread_setting_is_refused(self):
         self.execute()
         path = self.output / "first/run.json"
@@ -139,6 +145,7 @@ class QualificationTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertFalse(qualification.qualify(self.plan)["passed"])
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux CLI/runtime execution")
     def test_running_the_same_candidate_with_a_wider_deadline_is_refused(self):
         self.freeze()
         bench.run_neverd(argparse.Namespace(corpus=self.corpus, neverd=self.executable,
@@ -148,6 +155,7 @@ class QualificationTests(unittest.TestCase):
         self.assertIn("deadline", result["runtime_probe"]["error"])
         self.assertTrue(all("deadline" in case["error"] for case in result["cases"]))
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux CLI/runtime execution")
     def test_edited_aggregate_scores_do_not_replace_native_evidence(self):
         self.execute()
         (self.output / "results.json").write_text('{"passed":true,"cases":[]}')

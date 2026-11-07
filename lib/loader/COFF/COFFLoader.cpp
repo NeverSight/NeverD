@@ -313,6 +313,9 @@ COFFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
 
   if (!IsRelocatable) {
     const auto Bytes = llvm::arrayRefFromStringRef(Buffer.getBuffer());
+    // Where the headers are does not depend on whether they can be mapped:
+    // base relocations and the emitters use the extent either way.
+    Img.PEHeaderBytes = coff_loader::getPEHeaderBytes(Bytes);
     auto Headers = coff_loader::getPEHeaderMapping(Bytes);
     if (Headers)
       coff_loader::appendPEHeaderMapping(Img, *Headers, Bytes);
@@ -550,12 +553,7 @@ COFFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
           const bool TargetReadable =
               TargetSec ? TargetSec->isReadable() : TargetSeg->isReadable();
           const bool TargetWritable =
-              TargetSec ? TargetSec->isWritable() &&
-                              !section_names::isReadOnlyAfterRelocSectionName(
-                                  TargetSec->Name) &&
-                              !section_names::isReadOnlyAfterRelocSectionName(
-                                  TargetSec->SegmentName)
-                        : TargetSeg->isWritable();
+              isRuntimeWritableAddress(Img, TargetOwnerVA);
           const bool TargetExecutable =
               Img.hasExecutableCodeOwnerAt(TargetOwnerVA);
           const va_t OwnerBegin = TargetSec ? TargetSec->VA : TargetSeg->VA;
@@ -621,12 +619,7 @@ COFFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
           if (!TargetReadable)
             return;
           const bool TargetWritable =
-              TargetSec ? TargetSec->isWritable() &&
-                              !section_names::isReadOnlyAfterRelocSectionName(
-                                  TargetSec->Name) &&
-                              !section_names::isReadOnlyAfterRelocSectionName(
-                                  TargetSec->SegmentName)
-                        : TargetSeg->isWritable();
+              isRuntimeWritableAddress(Img, TargetOwnerVA);
           if (TargetWritable)
             Img.WritableRelocDataAddrs.insert(TargetVA);
           else
@@ -1087,15 +1080,19 @@ COFFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
   // or data-pointer heuristic can turn an interior instruction into a symbol.
   // Personality resolution still follows import-veneer discovery below.
   dwarf_eh::recordFrameExtents(Img);
+  // Authenticate dispatch storage before a heuristic can name its case
+  // labels as functions. One loader pass owns CALL/JMP slot evidence in both
+  // executable and ordinary data sections.
+  coff_loader::recordSymbolTableDataInCode(Img);
+  coff_loader::recordRelocatedPointerRunsInCode(Img);
+  coff_loader::recordIndexedTableBasesInCode(Img);
   runPostLoadDiscovery(
       Img,
       "coff: loaded " +
           pathToUTF8(std::filesystem::u8path(Buffer.getBufferIdentifier().str())
                          .filename()),
       Progress);
-  coff_loader::recordSymbolTableDataInCode(Img);
   Progress.report("parse", 0, 1, "PE/COFF code literals");
-  coff_loader::recordRelocatedPointerRunsInCode(Img);
   coff_loader::recordConstantCodeSlots(Img);
   Progress.report("parse", 0, 1, "language runtime");
   // Classified before any table is read.  A PE is the format where schema and

@@ -375,13 +375,16 @@ CmpSource findCmpSource(const std::vector<MedOp> &Ops, int SearchEnd,
         } else if (Prev.Opcode == NdOp::INT_AND &&
                    Prev.Inputs[0] == Prev.Inputs[1]) {
           Result.A = Prev.Inputs[0];
-          Result.B = MedVar::makeConst(0, Prev.Inputs[0].Size);
+          Result.B = MedVar::makeConst(0, Prev.Inputs[0].Size,
+                                       ConstantAddressProvenance::Scalar);
         } else if (Prev.Opcode == NdOp::INT_AND) {
           Result.A = ResultVar;
-          Result.B = MedVar::makeConst(0, ResultVar.Size);
+          Result.B = MedVar::makeConst(0, ResultVar.Size,
+                                       ConstantAddressProvenance::Scalar);
         } else {
           Result.A = Prev.Output;
-          Result.B = MedVar::makeConst(0, Prev.Output.Size);
+          Result.B = MedVar::makeConst(0, Prev.Output.Size,
+                                       ConstantAddressProvenance::Scalar);
         }
         Result.Valid = true;
         break;
@@ -529,6 +532,11 @@ bool condFlagsComeFromCmp(const std::vector<MedOp> &Ops, int ConsumerIdx,
            (Ops[J].Output.Kind != MedVar::Flag || Ops[J].Output.RegOff != Off))
       --J;
     if (J < 0 || Ops[J].Addr != CmpAddr)
+      return false;
+    // The instruction itself can restore a flag after computing it: a shift
+    // by a zero count keeps the old flags, through a SELECT that folds to a
+    // COPY when the count is constant.
+    if (J > Cmp.FlagOpIndex && Ops[J].Opcode == NdOp::COPY)
       return false;
   }
   return true;
@@ -842,7 +850,8 @@ void LowToMedConverter::eliminateFlags(MedFunc &Func) {
       MedVar CmpA, CmpB;
       if (SelIsTst) {
         CmpA = SelAndResult;
-        CmpB = MedVar::makeConst(0, SelAndResult.Size);
+        CmpB = MedVar::makeConst(0, SelAndResult.Size,
+                                 ConstantAddressProvenance::Scalar);
       } else {
         CmpA = SelCmp.A;
         CmpB = SelCmp.B;

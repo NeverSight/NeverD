@@ -78,6 +78,10 @@ struct FunctionSym {
   /// qualifiers for C output that does not include the target platform SDK.
   /// Its outer cdecl/stdcall is carried by CallConv, not the spelling.
   std::string PortablePrototypeDeclaration;
+  /// Parallel source cast types from that same declaration graph. These
+  /// preserve nested callback pointees/qualifiers that machine types omit;
+  /// they carry no additional argument-placement or register-state evidence.
+  std::vector<std::string> PortableParameterTypes;
   /// The prototype comes from a selected platform header library, including
   /// Windows SDK/WDK headers that are rendered without a host header include.
   bool PrototypeFromHeader = false;
@@ -224,6 +228,13 @@ public:
     (void)Name;
     return std::nullopt;
   }
+  /// The same no-return answer as resolvePrototype, without requiring a
+  /// provider to materialize a returning routine's complete type graph.
+  /// A positive answer still requires that provider's prototype validation.
+  virtual bool prototypeDoesNotReturn(llvm::StringRef Name) const {
+    const auto Prototype = resolvePrototype(Name);
+    return Prototype && Prototype->NoReturn;
+  }
   /// Public name only.  PDB `--func` must not walk the owning module's
   /// S_LOCAL stream just to replace `sub_<va>`.
   virtual std::optional<std::string> functionName(va_t Addr) const {
@@ -310,6 +321,14 @@ public:
 
   virtual std::vector<FunctionSym> allFunctions() const = 0;
   virtual std::vector<DataObjectSym> allDataObjects() const { return {}; }
+  /// A linked, read-only data storage interval containing Addr. The provider
+  /// validates its image identity, bounds and absence of conflicting code or
+  /// writable contributions. This does not establish a C object boundary,
+  /// buffer capacity, or any pointer relocation target.
+  virtual std::optional<std::pair<va_t, va_t>>
+  readOnlyDataRegion(va_t Addr) const {
+    return std::nullopt;
+  }
   /// Name a data public at exactly \p Addr.  The default walks
   /// allDataObjects(); providers that keep an uningested publics index
   /// override this so `--func` does not have to materialize every S_PUB32.

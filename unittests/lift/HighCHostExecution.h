@@ -6,14 +6,18 @@
 ///
 /// \file
 /// A fixture that compiles a C kernel for a target, decompiles the object to
-/// HighC, and runs the HighC on the host against the kernel's own C.
+/// HighC, or to the LLVM route's C, and runs the C on the host against the
+/// kernel's own C.
 ///
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_UNITTESTS_LIFT_HIGHCHOSTEXECUTION_H
 #define NEVERD_UNITTESTS_LIFT_HIGHCHOSTEXECUTION_H
 
+#include "../HostCompiler.h"
 #include "NeverDLiftFixture.h"
+
+#include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 
 #include <algorithm>
 #include <fstream>
@@ -31,6 +35,8 @@ protected:
   /// The optimization level the kernel is built at: -O0 keeps every local in
   /// a frame slot.
   std::string KernelOptimization = "-O2";
+  /// Run the C the LLVM route writes (`decompile --llvm`) instead of HighC.
+  bool LLVMC = false;
 
   /// Compile \p Kernel with Clang and \p TargetFlags, decompile it to HighC,
   /// and expect the C of \p Entry, which takes and returns an int, to return
@@ -74,15 +80,43 @@ protected:
     const auto Compiled = exec(Compiler, Args);
     if (Compiled.exitCode != 0 && Compiler != NEVERD_TEST_CLANG)
       GTEST_SKIP() << Compiler << " cannot build the kernel: " << Compiled.err;
+    if (Compiled.exitCode != 0 && neverd::test::lacksCrossHeaders(Compiled.err))
+      GTEST_SKIP() << "no headers for the kernel's target: " << Compiled.err;
     ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
 
-    const auto Decompiled = decompileToHighC(Object);
+    const auto Decompiled =
+        LLVMC ? decompileToC(Object) : decompileToHighC(Object);
     ASSERT_EQ(Decompiled.exitCode, 0) << Decompiled.err;
-    std::ifstream Input(tmpFile("decompiled_high.c"));
+    const auto Output = tmpFile(LLVMC ? "decompiled.c" : "decompiled_high.c");
+    std::ifstream Input(Output);
     ASSERT_TRUE(Input.good());
     const std::string C((std::istreambuf_iterator<char>(Input)),
                         std::istreambuf_iterator<char>());
+    const bool X86Kernel = llvm::any_of(TargetFlags, [](llvm::StringRef Flag) {
+      return Flag.contains("x86_64") || Flag.contains("i386") ||
+             Flag.contains("i686") || Flag == "-m32";
+    });
+    if (X86Kernel)
+      if (const auto Reason = neverd::test::cannotRunX86C(C))
+        GTEST_SKIP() << *Reason;
     ASSERT_EQ(C.find("unknown"), std::string::npos) << C;
+
+    // AArch64 C retains each original register-offset memory instruction as
+    // its encoded word (AArch64AddressMemory.def), which only an AArch64 host
+    // executes. Elsewhere the C must still build for the kernel's target; the
+    // comparison against the kernel is then an explicit skip, not a pass.
+#if !defined(__aarch64__)
+    if (C.find(neverd::kAddressMemoryLoadCAsm) != std::string::npos ||
+        C.find(neverd::kAddressMemoryStoreCAsm) != std::string::npos) {
+      std::vector<std::string> TargetArgs = TargetFlags;
+      TargetArgs.insert(TargetArgs.end(), {"-ffreestanding", "-std=gnu11",
+                                           "-fno-strict-aliasing"});
+      const auto Target = checkHighCClangCompile(Output, TargetArgs);
+      ASSERT_EQ(Target.exitCode, 0) << Target.err << "\n" << C;
+      GTEST_SKIP() << "the C retains original AArch64 memory instructions; "
+                      "executing it requires an AArch64 host";
+    }
+#endif
 
     std::string Reference = Kernel;
     for (const std::string Name : Names)
@@ -114,6 +148,12 @@ protected:
     ReferenceArgs.insert(ReferenceArgs.end(), {"-c", ReferenceSource.string(),
                                                "-o", ReferenceObject.string()});
     const auto ReferenceBuilt = exec(NEVERD_TEST_CLANG, ReferenceArgs);
+    // The reference is the test's own source. An x86 kernel may need an x86
+    // host, whatever became of the C NeverD wrote from it.
+    if (ReferenceBuilt.exitCode != 0 && X86Kernel &&
+        !neverd::test::hostRunsX86())
+      GTEST_SKIP() << "the x86 kernel needs an x86 host: "
+                   << ReferenceBuilt.err;
     ASSERT_EQ(ReferenceBuilt.exitCode, 0) << ReferenceBuilt.err;
     // The C reads and writes scalars through plain pointer casts, which its
     // header says to build with -fno-strict-aliasing, as the semantic grid

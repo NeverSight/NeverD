@@ -69,8 +69,9 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
         else if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs > 0 &&
                  Op.Inputs[0].isConst()) {
           const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
-          if (isAArch64ExceptionReturnIntrinsic(Id))
-            Err(kAArch64ExceptionReturnUnsupported, Blk.Id, Op.Addr);
+          if (!aarch64ExceptionReturnShapeIsValid(
+                  Id, Op.NumInputs, Op.Output.Size, Op.IntrinsicOutputs.size()))
+            Err(kAArch64ExceptionReturnMalformed, Blk.Id, Op.Addr);
           if (const char *Reason = x86NonlocalControlTransferReason(Id))
             Err(Reason, Blk.Id, Op.Addr);
           if (isAArch64AddressMemoryIntrinsic(Id) &&
@@ -132,6 +133,9 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
               !intrinsicApxAtomicShapeIsValid(Id, apxAtomicMedShape(Op)))
             Err("APX atomic intrinsic has an invalid operand/output contract",
                 Blk.Id, Op.Addr);
+          if (Id == Intrinsic::X86HleState &&
+              !x86HleShapeIsValid(x86HleMedShape(Op)))
+            Err("invalid x86 HLE state contract", Blk.Id, Op.Addr);
           const bool IsVirtualization = isX86VirtualizationIntrinsic(Id);
           if (IsVirtualization &&
               !x86VirtualizationShapeIsValid(Id, x86VirtualizationMedShape(Op)))
@@ -141,6 +145,9 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
           if (isX86RepStateIntrinsic(Id) &&
               !x86RepShapeIsValid(Id, x86RepMedShape(Op)))
             Err("invalid x86 REP completion contract", Blk.Id, Op.Addr);
+          if (Id == Intrinsic::X64CallRCX &&
+              !x64CallRCXShapeIsValid(x64CallRCXMedShape(Op)))
+            Err(X64CallRCXDiagnostic, Blk.Id, Op.Addr);
           if (isX86BoundedLeafPending(Id) ||
               (isX86BoundedLeafIntrinsic(Id) &&
                !x86BoundedLeafShapeIsValid(Id, x86BoundedLeafMedShape(Op))))
@@ -149,6 +156,8 @@ bool verifyMedFunc(const MedFunc &Func, const char *PassName) {
               !x86SgxShapeIsValid(Id, x86SgxMedShape(Op)))
             Err("x86 SGX intrinsic has an invalid completion contract", Blk.Id,
                 Op.Addr);
+          if (Id == Intrinsic::Bound && !x86BoundMedShapeIsValid(Op))
+            Err(X86BoundMalformed, Blk.Id, Op.Addr);
           const bool IsDescriptorState = isX86DescriptorStateIntrinsic(Id);
           if (IsDescriptorState && !x86DescriptorStateMedShapeIsValid(Op))
             Err("x86 descriptor state intrinsic has an invalid shape", Blk.Id,

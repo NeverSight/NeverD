@@ -10,6 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "AnalysisDispatch.h"
+
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/MedDispatchSlots.h"
@@ -516,6 +518,18 @@ void MedToHighConverter::lowerBranchInd(HighFunc &Func,
       }
     }
   }
+
+  if (Func.AnalysisOnly && CurOp.NumInputs == 1)
+    for (const auto &Table : Med.JumpTables)
+      if (Table.AnalysisOnly && Table.InsnAddr == CurOp.Addr) {
+        MedVar Snapshot;
+        Snapshot.Kind = MedVar::Temp;
+        Snapshot.Id = NextHighTempId++;
+        Snapshot.Size = CurOp.Inputs[0].Size;
+        if (high_detail::appendAnalysisDispatch(
+                Func, CurOp, Table, medvarToExpr(CurOp.Inputs[0]), Snapshot))
+          return;
+      }
 
   // CFG construction owns tail-call classification and emits an explicit
   // INDIR_CALL + RETURN pair when that classification succeeds. A remaining

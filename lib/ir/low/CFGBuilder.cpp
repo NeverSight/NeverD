@@ -26,11 +26,13 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/AArch64ImmediateMemoryImage.h"
+#include "neverd/ir/low/GuardedZeroSelect.h"
 #include "neverd/ir/low/ImportedMemoryCopy.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -776,8 +778,11 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
   for (size_t B = 0; B < N; ++B)
     BlockAt[Func.Blocks[B].StartAddr] = B;
   auto StateBefore = [&](va_t Addr) -> std::optional<StackOffsetState> {
+    const auto Exact = BlockAt.find(Addr);
     for (size_t B = 0; B < N; ++B) {
       const LowBlock &Block = Func.Blocks[B];
+      if (Exact != BlockAt.end() && Exact->second != B)
+        continue;
       if (Addr < Block.StartAddr || Addr >= Block.EndAddr)
         continue;
       if (!FromEntry[B])
@@ -1201,10 +1206,17 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
   OwnInteriorTailReturns.clear();
   RegistrationCallees.reset();
   X87CallEffects.reset();
+  // A `bsr` the code reaches only with a nonzero source writes its result:
+  // the kept destination is no read of it.  Every body a build gives is
+  // folded so (foldGuardedZeroSelects), the published functions' and those
+  // of the callees whose summaries and signatures a run reads alike: an
+  // unfolded callee would read a register its callers never pass.
   for (;;) {
     LowFunc Func = buildOnce(Img, Dec, EntryAddr, FuncName);
-    if (OwnInteriorCallSites.empty())
+    if (OwnInteriorCallSites.empty()) {
+      foldGuardedZeroSelects(Func);
       return Func;
+    }
     OwnInteriorCallVerdict Verdict = classifyOwnInteriorCalls(Img, Func);
     for (va_t Address : OwnInteriorTailReturns)
       if (!Verdict.TailReturns.count(Address))
@@ -1234,12 +1246,52 @@ LowFunc CFGBuilder::build(const BinaryImage &Img, Decoder &Dec, va_t EntryAddr,
                               *Verdict.Unproven))
         Func.UnsupportedInstructionAddresses.push_back(*Verdict.Unproven);
     }
+    foldGuardedZeroSelects(Func);
     return Func;
   }
 }
 
+namespace {
+/// The first primary record of \p Metadata, in its table's order, whose range
+/// starts at \p Entry.  The table's index lists every record by its start,
+/// so only the records starting there are read, not a table that holds one
+/// for each function of the image; without an index covering the table, the
+/// table is read in order.
+const ExceptionFunction *firstPrimaryRecordAt(const ExceptionInfo &Metadata,
+                                              va_t Entry) {
+  const auto Primary = [&](const ExceptionFunction &Candidate) {
+    return Candidate.CodeRange.Begin == Entry &&
+           Candidate.Kind == RuntimeFunctionKind::Primary;
+  };
+  const std::vector<ExceptionFunction> &Records = Metadata.Functions;
+  if (Metadata.FunctionIndex.size() != Records.size()) {
+    for (const ExceptionFunction &Candidate : Records)
+      if (Primary(Candidate))
+        return &Candidate;
+    return nullptr;
+  }
+  const auto Start = std::partition_point(
+      Metadata.FunctionIndex.begin(), Metadata.FunctionIndex.end(),
+      [&](size_t I) {
+        return I >= Records.size() || Records[I].CodeRange.Begin < Entry;
+      });
+  size_t First = Records.size();
+  for (auto It = Start;
+       It != Metadata.FunctionIndex.end() && *It < Records.size() &&
+       Records[*It].CodeRange.Begin == Entry;
+       ++It)
+    if (Primary(Records[*It]) && *It < First)
+      First = *It;
+  return First < Records.size() ? &Records[First] : nullptr;
+}
+} // namespace
+
 LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
                               va_t EntryAddr, const std::string &FuncName) {
+  AnalysisRecoveryUsed = false;
+  AnalysisStackWork = 0;
+  AnalysisCallPops.clear();
+  AnalysisTables.clear();
   RelativeRelocationRootSourceCachePrepared = false;
   RelativeRelocationRootSourceCacheImage = nullptr;
   RelativeRelocationRootSourceCacheArch = Arch::Unknown;
@@ -1307,6 +1359,7 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   DurableCFGRoots.clear();
   CurrentExceptionalEntries.clear();
   RelocationCFGRootSources.clear();
+  LocalAbsoluteRelocationRoots.reset();
   ActiveJumpTableProofRoots.reset();
   ActiveJumpTableCandidateAddr = InvalidVA;
   ActiveJumpTableCandidateProofRank = 0;
@@ -1370,14 +1423,8 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   OrdinaryCFGRoots.insert(EntryAddr);
   DurableCFGRoots.insert(EntryAddr);
 
-  const ExceptionFunction *Exception = nullptr;
-  for (const ExceptionFunction &Candidate : Img.ExceptionMetadata.Functions) {
-    if (Candidate.CodeRange.Begin == EntryAddr &&
-        Candidate.Kind == RuntimeFunctionKind::Primary) {
-      Exception = &Candidate;
-      break;
-    }
-  }
+  const ExceptionFunction *Exception =
+      firstPrimaryRecordAt(Img.ExceptionMetadata, EntryAddr);
   if (!Exception) {
     Exception = Img.ExceptionMetadata.findFunction(EntryAddr);
     // A registration record is its installer's alone; its range also covers
@@ -1464,6 +1511,9 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
         AddBoundary(Chain.ChainInstallVA + *InstallSize);
       if (const auto Prologue =
               coff_loader::getCheckedX86CxxPrologueCall(Img, *Exception))
+        AddBoundary(Prologue->Caller.End);
+      if (const auto Prologue =
+              coff_loader::getCheckedX86SEH4PrologueCall(Img, *Exception))
         AddBoundary(Prologue->Caller.End);
       for (const RegistrationScopeRecord &Scope :
            Exception->Registration->Scopes) {
@@ -1579,6 +1629,16 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   while (recoverScalarConstantBranches(Img, Dec, Func, ScalarBranchWork,
                                        ImageScalars))
     multiStageResolve(Img, Dec, Func);
+
+  size_t ComputedBranchWork = limits::kMaxComputedBranchEvidenceWork;
+  while (recoverComputedScalarBranches(Img, Dec, Func, ComputedBranchWork)) {
+    multiStageResolve(Img, Dec, Func);
+    recoverScalarConstantBranches(Img, Dec, Func, ScalarBranchWork,
+                                  ImageScalars);
+  }
+
+  if (usesAnalysisRecovery())
+    recoverAnalysisTables(Img, Dec, Func);
 
   // PAGEOFF output provenance is consumed only after lifting, so authenticate
   // it on the final resolver CFG rather than during linear instruction
@@ -2220,7 +2280,8 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
                   Func.UnsupportedInstructionAddresses);
   PublishFailures(TruncatedPathAddresses, Func.TruncatedPathAddresses);
   for (const auto &[Addr, Rec] : Insns)
-    if (Rec.RejectedScalarBranch && ReachableInsnAddrs.count(Addr))
+    if ((Rec.RejectedScalarBranch || Rec.RejectedComputedTargets) &&
+        ReachableInsnAddrs.count(Addr))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
   if (UnsafeJumpTableBranches)
     for (va_t Addr : *UnsafeJumpTableBranches)
@@ -2273,6 +2334,13 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   LLVM_DEBUG(llvm::dbgs() << "CFG built: " << Func.Blocks.size()
                           << " blocks for " << Func.Name << " @ 0x"
                           << llvm::utohexstr(Func.Entry) << "\n");
+  Func.AnalysisOnly |= AnalysisRecoveryUsed;
+  if (AnalysisRecoveryUsed)
+    for (auto &Table : Func.JumpTables) {
+      Table.AnalysisOnly = true;
+      Table.SuppressibleRelocationSlots.clear();
+      Table.AuthenticatedTableLoads.clear();
+    }
   canonicalizePrologueStackAllocation(Img, Func);
   return Func;
 }
@@ -4582,7 +4650,7 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
   auto RememberPublishedJumpTables = [&]() {
     for (const auto &[Addr, Rec] : Insns)
       if (Rec.IsBranch && Rec.IsIndirect && !Rec.IsCall &&
-          !Rec.JumpTableTargets.empty())
+          !Rec.ScalarBranchInput && !Rec.JumpTableTargets.empty())
         EverPublishedJumpTableBranches.insert(Addr);
   };
   RememberPublishedJumpTables();
@@ -5054,7 +5122,9 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
     }
     CandidateAddrs.reserve(Insns.size());
     for (auto &[Addr, Rec] : Insns) {
-      if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall)
+      if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall ||
+          Rec.ComputedScalarTargets || Rec.RejectedComputedTargets ||
+          Rec.ScalarBranchInput)
         continue;
       auto Info = ResolvedTableInfo.find(Addr);
       const bool NeedsRevalidation = Info != ResolvedTableInfo.end() &&
@@ -6162,6 +6232,8 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
       bool RemovedTableEdges = false;
       for (auto &[Addr, Rec] : Insns) {
         (void)Addr;
+        if (Rec.ScalarBranchInput)
+          continue;
         RemovedTableEdges |= !Rec.JumpTableTargets.empty();
         Rec.JumpTableTargets.clear();
       }

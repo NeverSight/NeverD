@@ -10,11 +10,14 @@
 #ifndef NEVERD_TOOLS_NEVERD_GUI_APP_WINDOWFRAME_H
 #define NEVERD_TOOLS_NEVERD_GUI_APP_WINDOWFRAME_H
 
+#include <QByteArray>
 #include <QMargins>
 #include <QObject>
 #include <QPointer>
 #include <QRect>
+#include <memory>
 
+class QAbstractNativeEventFilter;
 class QApplication;
 class QDialog;
 class QScreen;
@@ -59,6 +62,11 @@ public:
   /// both edges.
   static Qt::Edges edgesAt(QPoint at, QSize size, QMargins shadow);
 
+  /// Before the first Show, restore geometry without resuming full screen.
+  bool restoreWindowedGeometry(const QByteArray &geometry);
+  /// Persist the normal or maximized geometry from before F11.
+  QByteArray saveWindowedGeometry() const;
+
   /// Apply a state after any native full-screen exit has restored its screen.
   void setWindowState(Qt::WindowStates states);
   /// Keep the state and normal geometry from before entering full screen.
@@ -72,6 +80,7 @@ protected:
 private:
   WindowFrame(QWidget &window, QWindow &handle, QWidget *titleBar);
   bool resizable() const;
+  Qt::Edges resizeEdgesAt(QPoint at) const;
   void syncWindowState();
   void restoreAfterFullScreen();
   /// Draw the shadow outside the visible window and its surface inside.
@@ -85,11 +94,13 @@ private:
   void updateMargins();
   void placeTitleBar();
   void showEdges(Qt::Edges edges);
+  void prepareResize();
   void resizeTo(QPoint globalPosition);
   void finishResize();
 
   QWidget &window_;
   QWindow &handle_;
+  std::unique_ptr<QAbstractNativeEventFilter> nativeResizeFilter_;
   QPointer<QWidget> titleBar_;
   /// The window's own contents margins, inside the frame's.
   const QMargins content_;
@@ -98,6 +109,9 @@ private:
   /// The window states the window system last applied.
   Qt::WindowStates states_;
   Qt::WindowStates beforeFullScreen_ = Qt::WindowNoState;
+  QByteArray geometryBeforeFullScreen_;
+  QByteArray startupGeometry_;
+  bool maximizeOnShow_ = false;
   QPointer<QScreen> fullScreenScreen_;
   QRect fullScreenAvailable_;
   QRect fullScreenScreenGeometry_;

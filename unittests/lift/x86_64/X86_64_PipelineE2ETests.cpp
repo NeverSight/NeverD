@@ -153,14 +153,25 @@ TEST_F(X86_64_PipelineE2E,
       if (Selected)
         Args.push_back("--func=test_lea_rip_relative");
       auto Result = exec(ndBin(), Args);
+      std::ifstream File(Out);
+      std::ostringstream Content;
+      Content << File.rdbuf();
+      if (!Selected) {
+        // The whole unit leaves the definition out and names why.
+        ASSERT_EQ(Result.exitCode, 0) << Result.err;
+        EXPECT_NE(Content.str().find(
+                      "/* neverd.not-decompiled: test_lea_rip_relative at "
+                      "0x100: c-emission-failed; LLVM C constant is not "
+                      "supported: ptr blockaddress(@test_lea_rip_relative"),
+                  std::string::npos)
+            << Content.str();
+        continue;
+      }
       ASSERT_NE(Result.exitCode, 0);
       EXPECT_TRUE(Result.errContains("LLVM C constant is not supported"))
           << Result.err;
       EXPECT_TRUE(Result.errContains("blockaddress(@test_lea_rip_relative"))
           << Result.err;
-      std::ifstream File(Out);
-      std::ostringstream Content;
-      Content << File.rdbuf();
       EXPECT_EQ(Content.str(), Sentinel);
     }
 }
@@ -168,8 +179,8 @@ TEST_F(X86_64_PipelineE2E,
 TEST_F(X86_64_PipelineE2E, DecompileC_MemAtomicSupportedFunctions) {
   for (const char *Function :
        {"test_xadd", "test_cmpxchg_success", "test_lock_add", "test_lock_inc",
-        "test_lock_dec", "test_lock_or", "test_lea_complex", "test_prefetch",
-        "test_clflush", "test_nop_variants", "test_movabs", "_start"})
+        "test_lock_dec", "test_lea_complex", "test_prefetch", "test_clflush",
+        "test_nop_variants", "test_movabs", "_start"})
     for (bool NoOpt : {false, true}) {
       SCOPED_TRACE(Function);
       SCOPED_TRACE(NoOpt);
@@ -185,6 +196,26 @@ TEST_F(X86_64_PipelineE2E, DecompileC_MemAtomicSupportedFunctions) {
       ASSERT_TRUE(fs::exists(Out));
       EXPECT_GT(fs::file_size(Out), 0U);
     }
+}
+
+// LOCK OR keeps its native instruction (X86LegacyAtomic), and never becomes a
+// plain read-modify-write.
+TEST_F(X86_64_PipelineE2E, DecompileC_MemAtomicLockOrStaysLocked) {
+  for (bool NoOpt : {false, true}) {
+    SCOPED_TRACE(NoOpt);
+    const auto Output = tmpFile("test_lock_or.c");
+    std::vector<std::string> Args = {
+        "decompile", "--llvm",        "--func=test_lock_or",
+        "-o",        Output.string(), obj("test_mem_atomic.o").string()};
+    if (NoOpt)
+      Args.push_back("--no-opt");
+    const auto Result = exec(ndBin(), Args);
+    ASSERT_EQ(Result.exitCode, 0) << Result.err;
+    std::ifstream Input(Output);
+    const std::string C((std::istreambuf_iterator<char>(Input)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_NE(C.find("lock orl"), std::string::npos) << C;
+  }
 }
 
 TEST_F(X86_64_PipelineE2E, GlobalVolatile_LLVMIRValid) {

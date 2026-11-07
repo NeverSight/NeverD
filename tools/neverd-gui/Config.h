@@ -20,6 +20,37 @@
 
 namespace neverd::limits::gui_config {
 
+// tools/neverd-gui/app/AnalysisProgress.cpp
+/// The status bar's bar, beside the AU text; slim, as Visual Studio Code
+/// draws progress.
+inline constexpr int kAnalysisProgressStripWidth = 96;
+inline constexpr int kAnalysisProgressStripHeight = 4;
+/// Before the bar: the status texts' own padding (theme.qss), so the bar
+/// starts where they do.
+inline constexpr int kAnalysisProgressStripMargin = 8;
+/// An unknown fraction sweeps a segment of this share of the bar across it
+/// in this time, redrawn 20 times a second: each frame repaints the whole
+/// window's buffer on some desktops, however small the bar.
+inline constexpr int kAnalysisProgressSegmentPercent = 30;
+inline constexpr int kAnalysisProgressSweepMs = 2000;
+inline constexpr int kAnalysisProgressFrameMs = 50;
+/// How long the indicator says the initial analysis finished.
+inline constexpr int kAnalysisProgressFinishedMs = 4000;
+/// The worker reports its background work with its replies and once a
+/// second; after an open, the indicator waits this long for a first report
+/// before it takes a worker that reports none as idle.
+inline constexpr int kAnalysisProgressReportWaitMs = 3000;
+/// The card over an empty workbench while a file opens; a load that takes
+/// less than the delay never shows it.
+inline constexpr int kLoadProgressCardWidth = 420;
+inline constexpr int kLoadProgressCardDelayMs = 400;
+/// The card's bar is four times as wide as the status bar's; at the same
+/// pace its segment would jump 13 pixels a frame, so it takes twice the time.
+inline constexpr int kLoadProgressCardSweepMs = 4000;
+/// The card's margins and the space between its lines, on the 4-pixel grid.
+inline constexpr int kLoadProgressCardMargin = 16;
+inline constexpr int kLoadProgressCardSpacing = 8;
+
 // tools/neverd-gui/app/ExtensionsView.cpp
 /// The narrowest each pane may get.  A scroll area asks at least for its
 /// scroll bars' room, and macOS's take enough that the two panes side by
@@ -114,9 +145,26 @@ inline constexpr double kGraphViewWholeGraphExtent = 9e8;
 inline constexpr qreal kGraphViewWheelZoomStep = 1.15;
 inline constexpr qreal kGraphViewArrowLength = 9.0;
 inline constexpr qreal kGraphViewArrowHalfWidth = 4.5;
+/// How near an edge's line, in screen pixels, a click selects it and a hover
+/// shows its other end.
+inline constexpr qreal kGraphViewEdgeReachPixels = 4.0;
+/// The rows an edge's hover shows of the block at its other end; a longer
+/// block shows its first and last rows.
+inline constexpr int kGraphViewEdgeHintRows = 12;
 
 // tools/neverd-gui/app/HexView.cpp
 inline constexpr int kHexViewMargin = 6;
+
+// tools/neverd-gui/app/HighlightLocks.cpp
+/// The colors IDA's Lock highlight offers, one word each.
+inline constexpr int kHighlightLockColors = 8;
+
+// tools/neverd-gui/app/JumpDialog.cpp
+/// The dialog's first size: the matches beside a preview of where Enter goes.
+inline constexpr int kJumpDialogWidth = 980;
+inline constexpr int kJumpDialogHeight = 480;
+/// The match list's first width; the preview takes the rest.
+inline constexpr int kJumpDialogListWidth = 320;
 
 // tools/neverd-gui/app/WheelInput.cpp
 inline constexpr int kTextViewWheelLinesPerNotch = 3;

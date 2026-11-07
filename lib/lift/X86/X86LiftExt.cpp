@@ -12,6 +12,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86CompatibilityReturnUndefined.h"
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -338,24 +339,29 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   };
   switch (InsnId) {
 
-  // --- SYSENTER / RSM ---
+  // SYSENTER's target, stack and selectors belong to the explicit environment.
+  // The terminal intrinsic is opaque until that owner supplies the live MSRs.
   case X86_INS_SYSENTER:
+    S.emitVoidIntrinsic(Intrinsic::X86Sysenter, {});
+    break;
   case X86_INS_RSM:
-    // SYSENTER's entry point and stack come from MSRs and RSM restores state
-    // from SMRAM: neither target is a named operand, so there is no faithful
-    // ordinary-C projection.
+    // RSM still requires the complete SMM save-state environment.
     return false;
 
   // --- SYSEXIT / SYSRET (compat-mode syscall returns) ---
   case X86_INS_SYSEXIT:
     // SYSEXIT transfers to EDX with stack ECX; terminal, never resumes here.
-    S.emitVoidIntrinsic(Intrinsic::Sysexitq,
-                        {NdVar::reg(x86reg::RDX, 4), NdVar::reg(x86reg::RCX, 4)});
+    S.emitVoidIntrinsic(Intrinsic::Sysexitq, {NdVar::reg(x86reg::RDX, 4),
+                                              NdVar::reg(x86reg::RCX, 4)});
+    if (TargetArch == Arch::X64)
+      compatibilityreturn::record(S);
     break;
   case X86_INS_SYSRET:
     // SYSRET transfers to ECX with EFLAGS from R11D; terminal.
-    S.emitVoidIntrinsic(Intrinsic::Sysretq,
-                        {NdVar::reg(x86reg::RCX, 4), NdVar::reg(x86reg::R11, 4)});
+    S.emitVoidIntrinsic(Intrinsic::Sysretq, {NdVar::reg(x86reg::RCX, 4),
+                                             NdVar::reg(x86reg::R11, 4)});
+    if (TargetArch == Arch::X64)
+      compatibilityreturn::record(S);
     break;
 
   // --- INT1 (ICEBP) ---
@@ -682,18 +688,12 @@ bool X86Lifter::liftExt(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     break;
   }
 
-  // A Hyper-V hypercall (TLFS): RCX holds the hypercall input value, RDX and
-  // R8 its input and output parameters, and the status comes back in RAX.
+  // The opcode does not identify a hypervisor ABI. Even Hyper-V rep/fast
+  // calls can update registers beyond RAX. Explicit continuations must bind
+  // the actual environment before projecting inputs, outputs or preservation.
   case X86_INS_VMCALL:
   case X86_INS_VMMCALL:
-    if (TargetArch != Arch::X64)
-      return false;
-    S.emitIntrinsic(InsnId == X86_INS_VMCALL ? Intrinsic::Vmcall
-                                             : Intrinsic::Vmmcall,
-                    NdVar::reg(x86reg::RAX, 8),
-                    {NdVar::reg(x86reg::RCX, 8), NdVar::reg(x86reg::RDX, 8),
-                     NdVar::reg(x86reg::R8, 8)});
-    break;
+    return false;
 
   // VERR/VERW set ZF when the selector names a segment readable or writable
   // at the current privilege; nothing else changes.  VERW also flushes the

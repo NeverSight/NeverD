@@ -53,13 +53,15 @@ void operationWords(llvm::ArrayRef<LowOp> Ops, size_t InputSlots,
 
 } // namespace
 
+bool lowOperationFitsV1InputSlots(const LowOp &Op) {
+  return Op.NumInputs <= kLowUndefinedV1InputSlots &&
+         llvm::all_of(
+             llvm::ArrayRef(Op.Inputs).drop_front(kLowUndefinedV1InputSlots),
+             [](const NdVar &Input) { return Input == NdVar{}; });
+}
+
 std::string lowUndefinedOperationDigest(llvm::ArrayRef<LowOp> Ops) {
-  const bool Legacy = llvm::all_of(Ops, [](const LowOp &Op) {
-    return Op.NumInputs <= kLowUndefinedV1InputSlots &&
-           llvm::all_of(
-               llvm::ArrayRef(Op.Inputs).drop_front(kLowUndefinedV1InputSlots),
-               [](const NdVar &Input) { return Input == NdVar{}; });
-  });
+  const bool Legacy = llvm::all_of(Ops, lowOperationFitsV1InputSlots);
   const llvm::StringRef DigestDomain =
       Legacy ? kLowUndefinedV1Domain : kLowUndefinedV2Domain;
   const size_t InputSlots =

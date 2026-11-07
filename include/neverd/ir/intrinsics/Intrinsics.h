@@ -347,6 +347,11 @@ enum class Intrinsic : uint16_t {
   /// Its exact LowIR contract is owned by LowRawEnvironment.h.
   RawEnvironmentRequirementV1 = 2,
 
+  /// A fresh architectural bit production in a checked raw region. Ordinary
+  /// emitters must refuse it; its LowIR shape belongs to
+  /// LowArchitecturalValue.h.
+  ArchitecturalValueV1 = 3,
+
 #include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64.inc"
 #include "neverd/ir/intrinsics/ARM/intrinsics_arm.inc"
 #include "neverd/ir/intrinsics/X86/intrinsics_x86.inc"
@@ -489,6 +494,56 @@ enum class Intrinsic : uint16_t {
   // Append-only: secure-loader launch abandons the calling machine context.
   X86Skinit,
 
+  // Append-only: operand-size-16 legacy x87 memory images.
+  X87Fldenv16,
+  X87Fnstenv16,
+  X87Frstor16,
+  X87Fnsave16,
+
+  // Append-only: one locked logical transaction returns its completed flags.
+  X86LockedAnd,
+  X86LockedOr,
+  X86LockedXor,
+
+  // Append-only: one locked bit-string update returns the original bit.
+  X86LockedBts,
+  X86LockedBtr,
+  X86LockedBtc,
+
+  // Append-only: SYSENTER leaves through the environment's live entry MSRs.
+  X86Sysenter,
+
+  // Append-only: returning VMEXIT with explicit software-managed state.
+  X86SvmRunContext,
+
+  // Append-only: one legacy MOVNTDQ owns its aligned non-temporal write.
+  X86StreamStore128,
+
+  // Append-only: explicitly bound returning KVM hypercall ABI.
+  X86KvmVmcall,
+  X86KvmVmmcall,
+
+  // Append-only: explicit returning Hyper-V page and complete output bank.
+  X86HyperVCall,
+
+// Append-only: explicit SNP completion and returning SEV-ES/GHCB binding.
+#define NEVERD_X86_SNP(Id, ...) Id,
+#include "neverd/ir/intrinsics/X86/X86Snp.def"
+#undef NEVERD_X86_SNP
+  X86SevVmgexit,
+
+  // Append-only: an HLE memory step publishes its original GPR destinations.
+  X86HleState,
+
+  // Append-only: software-managed SMM banks before terminal native RSM.
+  X86SmmReturnContext,
+
+  // Append-only: terminal SGX state transport to the original ENCLU site.
+  X86SgxTransferAtContext,
+
+  // Append-only: one ordinary native Win64 call publishes RAX and RCX.
+  X64CallRCX,
+
   _Count = 16000
 };
 
@@ -527,7 +582,10 @@ enum class X86SystemStateKind : uint8_t {
   SegmentedBlock,
   CacheZero,
   TransactionAbort,
-  SecureLaunch
+  SecureLaunch,
+  LockedLogic,
+  LockedBit,
+  StreamStore128
 };
 
 struct X86SystemStateContract {
@@ -574,7 +632,14 @@ constexpr bool isX86SystemStatePhysicalAddressArgument(Intrinsic Id,
          Index == 0;
 }
 
-enum class X86VirtualizationResult : uint8_t { None, Flags, Read };
+enum class X86VirtualizationResult : uint8_t {
+  None,
+  Flags,
+  Read,
+  Value,
+  SnpContext,
+  SevExit
+};
 
 struct X86VirtualizationContract {
   const char *Mnemonic = nullptr;
@@ -588,6 +653,25 @@ struct X86VirtualizationContract {
 constexpr X86VirtualizationContract x86VirtualizationContract(Intrinsic Id) {
   using R = X86VirtualizationResult;
   switch (Id) {
+#define NEVERD_X86_SNP(Id, Name, ...)                                          \
+  case Intrinsic::Id:                                                          \
+    return {#Name ".context", R::SnpContext, 3, -1, 0, false};
+#include "neverd/ir/intrinsics/X86/X86Snp.def"
+#undef NEVERD_X86_SNP
+  case Intrinsic::X86SevVmgexit:
+    return {"vmgexit.sev", R::SevExit, 1, -1, 0, false};
+  case Intrinsic::X86HyperVCall:
+    return {"hyperv.call", R::None, 4, -1, 0, false};
+  case Intrinsic::X86SvmRunContext:
+    return {"vmrun.context", R::None, 2, 0, 144, false};
+  case Intrinsic::X86SmmReturnContext:
+    return {"rsm.context", R::None, 1, 0, 40, false};
+  case Intrinsic::X86SgxTransferAtContext:
+    return {"enclu.transfer.at.context", R::None, 2, 0, 144, false};
+  case Intrinsic::X86KvmVmcall:
+    return {"vmcall.kvm", R::Value, 5, -1, 0, false};
+  case Intrinsic::X86KvmVmmcall:
+    return {"vmmcall.kvm", R::Value, 5, -1, 0, false};
 #define NEVERD_X86_VIRTUALIZATION(Id, Mnemonic, Result, Arguments,             \
                                   MemoryArgument, MemoryBytes,                 \
                                   PhysicalAddress)                             \
@@ -935,9 +1019,13 @@ constexpr bool intrinsicSupportsMemoryAddressSpace(Intrinsic Id) {
   case Intrinsic::Xrstor64:
   case Intrinsic::Xrstors64:
   case Intrinsic::X87Fldenv:
+  case Intrinsic::X87Fldenv16:
   case Intrinsic::X87Fnstenv:
+  case Intrinsic::X87Fnstenv16:
   case Intrinsic::X87Frstor:
+  case Intrinsic::X87Frstor16:
   case Intrinsic::X87Fnsave:
+  case Intrinsic::X87Fnsave16:
   case Intrinsic::X86Lgdt16:
   case Intrinsic::X86Lidt16:
   case Intrinsic::X86Sgdt16:
@@ -1198,6 +1286,16 @@ constexpr bool intrinsicMemoryAddressSpaceShapeIsValid(
            (MaskSize == 8 || MaskSize == 16 || MaskSize == 32 ||
             MaskSize == 64) &&
            DataSize == MaskSize;
+  case Intrinsic::X87Fldenv:
+  case Intrinsic::X87Fldenv16:
+  case Intrinsic::X87Fnstenv:
+  case Intrinsic::X87Fnstenv16:
+  case Intrinsic::X87Frstor:
+  case Intrinsic::X87Frstor16:
+  case Intrinsic::X87Fnsave:
+  case Intrinsic::X87Fnsave16:
+    return NumInputs == 2 && OutputSize == 0 &&
+           (AddressSize == 4 || AddressSize == 8);
   case Intrinsic::Clflush:
   case Intrinsic::Clflushopt:
   case Intrinsic::Clwb:
@@ -1214,10 +1312,6 @@ constexpr bool intrinsicMemoryAddressSpaceShapeIsValid(
   case Intrinsic::Fxrstor:
   case Intrinsic::Fxsave64Mem:
   case Intrinsic::Fxrstor64Mem:
-  case Intrinsic::X87Fldenv:
-  case Intrinsic::X87Fnstenv:
-  case Intrinsic::X87Frstor:
-  case Intrinsic::X87Fnsave:
   case Intrinsic::X86Lgdt16:
   case Intrinsic::X86Lidt16:
   case Intrinsic::X86Sgdt16:
@@ -1349,6 +1443,11 @@ constexpr bool intrinsicDefaultRegisterShapeIsValid(Intrinsic Id,
 constexpr bool isRawEnvironmentRequirementId(uint64_t Id) {
   return (Id & UINT16_MAX) ==
          static_cast<uint64_t>(Intrinsic::RawEnvironmentRequirementV1);
+}
+
+constexpr bool isArchitecturalValueId(uint64_t Id) {
+  return (Id & UINT16_MAX) ==
+         static_cast<uint64_t>(Intrinsic::ArchitecturalValueV1);
 }
 
 const char *intrinsicName(Intrinsic Id);

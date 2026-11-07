@@ -9,18 +9,13 @@
 
 #include "COFFRegistrationIRProof.h"
 
+#include "neverd/backend/llvm/RegistrationFrameRuntime.h"
+
 namespace neverd {
 struct X86RegistrationSEHJumpCall;
 }
 
 namespace neverd::coff_registration {
-
-struct RegistrationSEHJumpContract {
-  std::set<const llvm::CallBase *> Calls;
-  std::set<const llvm::StoreInst *> StateRestores;
-  std::vector<std::pair<int64_t, int64_t>> SourceBuffers;
-  bool readsSourceBuffer(int64_t Offset, uint64_t Bytes) const;
-};
 
 /// Match the exact state projection and return every required restore
 /// instruction to the caller's contiguous post-capture ordering proof.
@@ -57,7 +52,7 @@ llvm::Error
 validateSEHJumpUnwindBridge(const llvm::Function &Parent,
                             const RegistrationSEHJumpCapture &Source);
 
-llvm::Expected<std::set<const llvm::CallBase *>> bindSEHBoundCalls(
+llvm::Expected<RegistrationSEHJumpContract> bindSEHBoundCalls(
     const MedFunc &Source, const llvm::Function &Parent,
     const RegistrationFrame &Frame,
     const std::map<va_t, const llvm::AllocaInst *> &Buffers,

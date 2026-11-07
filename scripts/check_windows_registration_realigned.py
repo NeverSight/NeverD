@@ -84,7 +84,6 @@ def main() -> int:
     env = os.environ.copy()
     env["WINEDEBUG"] = "-all"
     if args.wine_prefix:
-        env["WINEARCH"] = "win32"
         env["WINEPREFIX"] = str(args.wine_prefix.resolve())
     report = {"schema": 1, "evidence": "generated-realigned-callback-analysis",
               "passed": False, "commands": [], "images": []}

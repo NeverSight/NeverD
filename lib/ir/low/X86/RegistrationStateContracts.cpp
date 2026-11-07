@@ -3,7 +3,13 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Validate frame-object ownership, initialization and projected call effects.
+///
+//===----------------------------------------------------------------------===//
 
+#include "RegistrationImportLoad.h"
 #include "RegistrationStateSolver.h"
 
 #include "neverd/Limits.h"
@@ -16,6 +22,15 @@
 namespace neverd::registration_state {
 
 bool RegistrationStateSolver::initializeContracts() {
+  if (CxxCalls) {
+    if (!KnownCxx || !charge(CxxCalls->ImportSlots.size()))
+      return false;
+    for (va_t Slot : CxxCalls->ImportSlots) {
+      if (!Slot || Slot > UINT32_MAX - 3)
+        return false;
+      StackImportSlots.insert(Slot);
+    }
+  }
   if (LocalUnwinds) {
     if (LocalUnwinds->size() >
         ::neverd::limits::ir::
@@ -44,7 +59,25 @@ bool RegistrationStateSolver::initializeContracts() {
         ::neverd::limits::ir::
             kRegistrationStateContractsRegistrationStateSolverInitializeContractsStacksSizeLimit)
       return false;
-    for (const auto &Stack : *Stacks)
+    std::map<std::pair<va_t, int>, va_t> CurrentLoads;
+    const bool HasImportLoads =
+        std::any_of(Stacks->begin(), Stacks->end(),
+                    [](const auto &Stack) { return !Stack.Loads.empty(); });
+    if (HasImportLoads) {
+      for (const auto &Block : Function.Blocks)
+        for (const auto &Boundary : Block.InstructionBoundaries) {
+          if (!charge(16))
+            return false;
+          if (const auto Load =
+                  registration_abi::registrationImportLoad(Block, Boundary))
+            if (!CurrentLoads
+                     .emplace(std::make_pair(Boundary.Address, Load->OpSeq),
+                              Load->Slot)
+                     .second)
+              return false;
+        }
+    }
+    for (const auto &Stack : *Stacks) {
       if (!charge(1) || !Stack.Target || Stack.Target > UINT32_MAX ||
           Stack.StackPopBytes > UINT16_MAX ||
           !StackPops
@@ -54,6 +87,42 @@ bool RegistrationStateSolver::initializeContracts() {
         Result.Diagnostics.push_back("registration stack contract is invalid");
         return false;
       }
+      if (!Stack.Loads.empty() && !Stack.Indirect)
+        return false;
+      if (Stack.ImportVeneer) {
+        if (Stack.Indirect || Stack.RequiredImports.size() != 1)
+          return false;
+        StackImportVeneers.insert(Stack.Target);
+      }
+      if (Stack.PreservesImportBindings) {
+        // Ordinary helpers can supply an independently proved normal-return
+        // binding effect too. Only ImportVeneer grants imported-target GPR
+        // preservation; retaining slots never grants that separate identity.
+        StackBindingPreservers.emplace(Stack.Target, Stack.Indirect);
+      }
+      if (Stack.Indirect) {
+        if (!Stack.RequiredImports.empty())
+          return false;
+        StackImportSlots.insert(Stack.Target);
+      }
+      va_t PreviousImport = 0;
+      for (va_t Slot : Stack.RequiredImports) {
+        if (!charge(1) || Slot <= PreviousImport || Slot > UINT32_MAX - 3)
+          return false;
+        StackImportSlots.insert(Slot);
+        PreviousImport = Slot;
+      }
+      if (!Stack.RequiredImports.empty())
+        StackBindingCallees.insert(Stack.Target);
+      for (const auto &Load : Stack.Loads) {
+        if (!charge(1))
+          return false;
+        const auto Current = CurrentLoads.find(Load);
+        if (Current == CurrentLoads.end() || Current->second != Stack.Target ||
+            !StackImportLoads.emplace(Load, Stack.Target).second)
+          return false;
+      }
+    }
   }
   if (CheckCalls) {
     if (Callees->size() >
@@ -67,6 +136,7 @@ bool RegistrationStateSolver::initializeContracts() {
           Callee.CalleeKind == RegistrationCalleeFrameContract::Kind::Leaf;
       const bool Throw = Callee.isThrow();
       const bool Initializer = Callee.isInitializer();
+      const bool CxxParent = Callee.isCxxParent();
       const bool Member =
           Leaf && (!Callee.ECXReads.empty() || !Callee.ECXWrites.empty()) &&
           Callee.CallerPCWrites.empty();
@@ -76,12 +146,19 @@ bool RegistrationStateSolver::initializeContracts() {
                      Callee.StackPopBytes % 4 ||
                      (Leaf && Callee.StackPopBytes / 4 >= limits::kMaxCallArgs)
                : Callee.StackPopBytes != 0) ||
-          (!Leaf && !Throw && !Initializer) || Callee.DoesNotReturn != Throw ||
-          (Callee.HasIndependentScalarReturn && !Leaf) ||
-          ((Leaf || Initializer || Callee.isRethrow() ||
+          (!Leaf && !Throw && !Initializer && !CxxParent) ||
+          (Throw ? !Callee.DoesNotReturn
+                 : !CxxParent && Callee.DoesNotReturn) ||
+          (Callee.DoesNotReturn && Callee.HasIndependentScalarReturn) ||
+          (Callee.HasIndependentScalarReturn && !Leaf && !CxxParent) ||
+          ((Leaf || Initializer || CxxParent || Callee.isRethrow() ||
             Callee.isRuntimeThrow()) &&
            (Callee.ThrownTypeVA || Callee.ThrownObjectSize)) ||
           (Throw && (!Callee.ECXReads.empty() || !Callee.ECXWrites.empty())) ||
+          (CxxParent &&
+           (!Callee.ECXReads.empty() || !Callee.ECXWrites.empty() ||
+            !Callee.CallerPCWrites.empty() ||
+            Callee.RequiredImports.empty())) ||
           (Throw && !Callee.isRethrow() && !Callee.isRuntimeThrow() &&
            (!Callee.ThrownTypeVA || Callee.ThrownTypeVA > UINT32_MAX ||
             !Callee.ThrownObjectSize ||
@@ -108,7 +185,15 @@ bool RegistrationStateSolver::initializeContracts() {
         if (!Covered)
           return false;
       }
-      if (!Callee.isRuntimeThrow() && !Callee.RuntimeThrowInfos.empty())
+      va_t PreviousImport = 0;
+      for (va_t Slot : Callee.RequiredImports) {
+        if (!charge(1) || Slot <= PreviousImport || Slot > UINT32_MAX - 3)
+          return false;
+        StackImportSlots.insert(Slot);
+        PreviousImport = Slot;
+      }
+      if (!Callee.isRuntimeThrow() && !CxxParent &&
+          !Callee.RuntimeThrowInfos.empty())
         return false;
       va_t Previous = 0;
       for (const auto &Info : Callee.RuntimeThrowInfos) {
@@ -238,7 +323,7 @@ bool RegistrationStateSolver::frameObjectIsDisjointFromAdministration(
   // are runtime administration even when a source store left scalar contents.
   int64_t Administration =
       int64_t(*Chain.RegistrationOffset) - (KnownCxx ? 4 : 8);
-  if (Chain.RealignedFrame)
+  if (Chain.RealignedFrame && Chain.RealignedFrame->hasSavedParentFrame())
     Administration = std::min(
         Administration, int64_t(Chain.RealignedFrame->SavedParentFrameOffset));
   if (Overlaps(Administration,
@@ -258,10 +343,54 @@ bool RegistrationStateSolver::frameObjectIsDisjointFromAdministration(
   return true;
 }
 
+std::optional<RegistrationObjectExtent>
+RegistrationStateSolver::cxxBorrowedStorage(const Domain &State,
+                                            int32_t Begin) {
+  const auto SP = parentStackOffset(State);
+  if (!KnownCxx || !SP || State.Unknown || Begin < *SP ||
+      Begin < -int64_t(limits::kMaxSourceCallBorrowedBytes))
+    return std::nullopt;
+  int64_t End = *Chain.cxxRuntimeFrameOffset();
+  if (Begin >= 8 && Conditional) {
+    if (!charge(Conditional->Objects.size() + 1))
+      return std::nullopt;
+    for (const auto &Object : Conditional->Objects)
+      if (Object.Begin <= Begin && int64_t(Begin) + 4 <= Object.End)
+        End = std::max(End, int64_t(Object.End));
+  }
+  End = std::min(End, int64_t(Begin) + limits::kMaxSourceCallBorrowedBytes);
+  if (End < int64_t(Begin) + 4)
+    return std::nullopt;
+
+  // The prefix predicate is monotone: once a range touches administration,
+  // extending it cannot regain ownership. Reuse that authority, including
+  // noncontiguous cookie slots, without scanning a large frame byte by byte.
+  uint32_t Words = 0, Limit = uint32_t((End - Begin) / 4);
+  while (Words < Limit) {
+    if (!charge(CxxCookieConditions.size() + 1))
+      return std::nullopt;
+    const uint32_t Middle = Words + (Limit - Words + 1) / 2;
+    if (frameObjectIsDisjointFromAdministration(Begin,
+                                                int64_t(Begin) + 4 * Middle))
+      Words = Middle;
+    else
+      Limit = Middle - 1;
+  }
+  if (!Words)
+    return std::nullopt;
+  const RegistrationObjectExtent Extent{Begin,
+                                        int32_t(int64_t(Begin) + 4 * Words)};
+  std::vector<RegistrationObjectExtent> Projected;
+  if (!projectFrameObject(State, 0, SP, {Extent}, Projected, false, false))
+    return std::nullopt;
+  return Extent;
+}
+
 bool RegistrationStateSolver::projectFrameObject(
     const Domain &State, int32_t Object, std::optional<int32_t> SP,
     llvm::ArrayRef<RegistrationObjectExtent> Extents,
-    std::vector<RegistrationObjectExtent> &Projected, bool Reads) {
+    std::vector<RegistrationObjectExtent> &Projected, bool Reads,
+    bool RecordBorrowedEffects, bool RequireInitializedReads) {
   if (!SP || State.Unknown)
     return false;
   for (const auto &Extent : Extents) {
@@ -269,14 +398,22 @@ bool RegistrationStateSolver::projectFrameObject(
       return false;
     const int64_t Begin = int64_t(Object) + Extent.Begin;
     const int64_t End = int64_t(Object) + Extent.End;
+    bool Borrowed = false;
+    if (KnownCxx && Conditional && Begin >= 8) {
+      if (End > INT32_MAX || !charge(Conditional->Objects.size()))
+        return false;
+      Borrowed = llvm::any_of(Conditional->Objects, [&](const auto &Range) {
+        return Range.Begin <= Begin && End <= Range.End;
+      });
+    }
     // Saved EBP and the caller PC lie above the source allocation. The common
     // administration proof also protects runtime slots within that allocation.
     if (Begin < *SP || Begin < -int64_t(limits::kMaxSourceCallBorrowedBytes) ||
-        End > (KnownCxx ? *Chain.cxxRuntimeFrameOffset() : 0) ||
+        (!Borrowed && End > (KnownCxx ? *Chain.cxxRuntimeFrameOffset() : 0)) ||
         !frameObjectIsDisjointFromAdministration(Begin, End) ||
         !charge(size_t(End - Begin) + State.Frame.cellCount()))
       return false;
-    if (Reads) {
+    if (Reads && RequireInitializedReads) {
       for (int64_t Byte = Begin; Byte < End; ++Byte)
         if (!State.InitializedFrameBytes.count(int32_t(Byte)))
           return false;
@@ -286,6 +423,10 @@ bool RegistrationStateSolver::projectFrameObject(
           return false;
     }
     Projected.push_back({int32_t(Begin), int32_t(End)});
+    if (Borrowed && RecordBorrowedEffects) {
+      auto &Effects = Reads ? Conditional->Reads : Conditional->Writes;
+      Effects.emplace(int32_t(Begin), int32_t(End));
+    }
   }
   return true;
 }

@@ -11,6 +11,7 @@
 
 #include "../../../lib/backend/c/render/X86/X86NativeFeatures.h"
 #include "../../../lib/backend/c/render/X86/X86RepState.h"
+#include "../core/SourceCallExecution.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -21,6 +22,7 @@
 #include "neverd/ir/intrinsics/X86/X86AmxState.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
+#include "neverd/ir/med/X86/X86RepAddresses.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -698,3 +700,367 @@ TEST(X86RepState, ExportFullMatrixForIndependentOracle) {
 }
 
 } // namespace
+
+TEST(X86RepState, ImageAccessSpanRequiresEveryByteInsideTheMapping) {
+  for (unsigned Width : {1, 2, 4, 8})
+    for (bool Backward : {false, true}) {
+      const X86RepControl Control{Width, 8, 0, false};
+      const uint64_t Address = 0x2000 + (Backward ? 24 - Width : 0);
+      auto Span =
+          x86RepAccessSpan(Address, 24 / Width, Control, Backward, 0x2000, 24);
+      ASSERT_TRUE(Span);
+      EXPECT_EQ(Span->Begin, 0x2000u);
+      EXPECT_EQ(Span->Bytes, 24u);
+      EXPECT_FALSE(x86RepAccessSpan(Address, 24 / Width + 1, Control, Backward,
+                                    0x2000, 24));
+      EXPECT_FALSE(x86RepAccessSpan(Address, 24 / Width, Control, Backward,
+                                    Backward ? 0x2001 : 0x2000, 23));
+      EXPECT_FALSE(
+          x86RepAccessSpan(Address, UINT64_MAX, Control, Backward, 0x2000, 24));
+      EXPECT_FALSE(x86RepAccessSpan(Address, 0, Control, Backward, 0x2000, 24));
+    }
+}
+
+TEST(X86RepState, ZeroCountAndOffsetFormsKeepTheirNumericInputs) {
+  constexpr va_t CodeVA = 0x140001000, DataVA = 0x140002000;
+  for (auto Id : {Intrinsic::X86RepMovsState, Intrinsic::X86RepStosState})
+    for (unsigned Mode : {0, 1, 2}) {
+      if (Mode == 2 && Id == Intrinsic::X86RepStosState)
+        continue;
+      SCOPED_TRACE(static_cast<unsigned>(Id));
+      SCOPED_TRACE(Mode);
+      BinaryImage Image;
+      Image.Arch = Arch::X64;
+      Image.Bits = Bitness::Bits64;
+      Image.Format = BinaryFormat::ELF;
+      Image.Entry = Image.Base = CodeVA;
+      Segment Data;
+      Data.VA = DataVA;
+      Data.Size = Data.FileSz = 40;
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Data.Data.resize(40);
+      for (unsigned I = 0; I < 8; ++I)
+        Data.Data[32 + I] = static_cast<uint8_t>(CodeVA >> (8 * I));
+      Image.Segments.push_back(std::move(Data));
+      Image.CodePtrRelocSlots.insert(DataVA + 32);
+      Image.CodeRefTargets.insert(CodeVA);
+      MedFunc Function;
+      Function.Entry = CodeVA;
+      Function.Name = "rep_address_bits";
+      Function.CC = CallingConv::SysV_AMD64;
+      Function.ReturnType = NdType::makeInt(8, false);
+      MedOp Op;
+      Op.Opcode = NdOp::INTRINSIC;
+      Op.Output = temporary(10, 8);
+      Op.addInput(MedVar::makeConst(static_cast<unsigned>(Id), 2));
+      Op.addInput(
+          MedVar::makeConst(DataVA, 8, ConstantAddressProvenance::Address));
+      const bool Copy = Id == Intrinsic::X86RepMovsState;
+      const uint64_t Count = Mode == 0 ? 0 : 3;
+      Op.addInput(MedVar::makeConst(Copy ? DataVA + 8 : Count, 8,
+                                    Copy ? ConstantAddressProvenance::Address
+                                         : ConstantAddressProvenance::Scalar));
+      Op.addInput(MedVar::makeConst(Copy ? Count : DataVA + 8, 8,
+                                    ConstantAddressProvenance::Scalar));
+      Op.addInput(MedVar::makeConst(0, 4));
+      Op.addInput(MedVar::makeConst(
+          *x86RepDescriptor(Id, Arch::X64, 8, Mode == 1 ? 4 : 8,
+                            Mode == 2 ? 0x65 : 0, false),
+          4));
+      for (unsigned I = 0; I < x86RepContract(Id)->auxiliaryOutputs(); ++I)
+        Op.IntrinsicOutputs.push_back(temporary(11 + I, 8));
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.addInput(Op.Output);
+      MedBlock Block;
+      Block.Id = 0;
+      Block.Ops = {Op, Return};
+      Function.Blocks.push_back(std::move(Block));
+      llvm::LLVMContext Context;
+      auto Module =
+          MedLLVMEmitter().emit({Function}, Context, "rep-inputs", Arch::X64,
+                                {}, &Image, BinaryFormat::ELF);
+      ASSERT_TRUE(Module);
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      unsigned Calls = 0;
+      for (const auto &F : *Module)
+        for (const auto &B : F)
+          for (const auto &I : B)
+            if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(&I)) {
+              ++Calls;
+              for (unsigned J = 0; J < 3; ++J) {
+                const auto *Value =
+                    llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(J));
+                ASSERT_TRUE(Value);
+                EXPECT_EQ(Value->getZExtValue(), Op.Inputs[J + 1].ConstVal);
+              }
+            }
+      EXPECT_EQ(Calls, 1u);
+#if defined(__x86_64__) || defined(_M_X64)
+      // Only the zero-count native-width form is safe to execute on the host.
+      if (Mode == 0) {
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        CEmitterOptions Options;
+        Options.TheArch = Arch::X64;
+        Options.Format = BinaryFormat::ELF;
+        ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options));
+        Out.flush();
+        Source += "\nint main(void) { return rep_address_bits() != " +
+                  std::to_string(DataVA) + "ULL; }\n";
+        for (const auto Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Source, {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+      }
+#endif
+    }
+}
+
+TEST(X86RepState, ConstantAddressFactsExcludeUnprovedAndNonAddressResults) {
+  for (auto A : {Arch::X86, Arch::X64}) {
+    const unsigned Word = A == Arch::X64 ? 8 : 4;
+    for (auto Id : {Intrinsic::X86RepMovsState, Intrinsic::X86RepStosState}) {
+      const bool Copy = Id == Intrinsic::X86RepMovsState;
+      MedOp Op;
+      Op.Opcode = NdOp::INTRINSIC;
+      Op.Output = temporary(10, Word);
+      Op.addInput(MedVar::makeConst(static_cast<unsigned>(Id), 2));
+      Op.addInput(MedVar::makeConst(0x1000, Word));
+      Op.addInput(MedVar::makeConst(Copy ? 0x2000 : 3, Word));
+      Op.addInput(MedVar::makeConst(Copy ? 3 : 0x55, Word));
+      Op.addInput(MedVar::makeConst(0, 4));
+      Op.addInput(
+          MedVar::makeConst(*x86RepDescriptor(Id, A, 4, Word, 0, false), 4));
+      for (unsigned I = 0; I < x86RepContract(Id)->auxiliaryOutputs(); ++I)
+        Op.IntrinsicOutputs.push_back(temporary(11 + I, Word));
+      for (bool Backward : {false, true}) {
+        Op.Inputs[4].ConstVal = uint64_t(Backward) << X86RepDirectionShift;
+        EXPECT_EQ(x86RepConstantAddressOutput(Op, Op.Output, A),
+                  Backward ? 0xff4u : 0x100cu);
+        if (Copy)
+          EXPECT_EQ(
+              x86RepConstantAddressOutput(Op, Op.IntrinsicOutputs.front(), A),
+              Backward ? 0x1ff4u : 0x200cu);
+        EXPECT_FALSE(
+            x86RepConstantAddressOutput(Op, Op.IntrinsicOutputs.back(), A));
+        EXPECT_FALSE(x86RepConstantAddressOutput(Op, temporary(99, Word), A));
+      }
+      auto Dynamic = Op;
+      Dynamic.Inputs[Copy ? 3 : 2] = temporary(20, Word);
+      EXPECT_FALSE(x86RepConstantAddressOutput(Dynamic, Op.Output, A));
+      Dynamic = Op;
+      Dynamic.Inputs[4] = temporary(21, 4);
+      EXPECT_FALSE(x86RepConstantAddressOutput(Dynamic, Op.Output, A));
+      Dynamic = Op;
+      Dynamic.Inputs[1] = temporary(22, Word);
+      EXPECT_FALSE(x86RepConstantAddressOutput(Dynamic, Op.Output, A));
+      auto Reduced = Op;
+      Reduced.Inputs[5].ConstVal =
+          *x86RepDescriptor(Id, A, 4, Word / 2, 0, false);
+      EXPECT_FALSE(x86RepConstantAddressOutput(Reduced, Op.Output, A));
+      if (Copy) {
+        auto Segmented = Op;
+        Segmented.Inputs[5].ConstVal =
+            *x86RepDescriptor(Id, A, 4, Word, 0x65, false);
+        EXPECT_FALSE(x86RepConstantAddressOutput(Segmented, Op.Output, A));
+      }
+      auto Malformed = Op;
+      Malformed.IntrinsicOutputs.clear();
+      EXPECT_FALSE(x86RepConstantAddressOutput(Malformed, Op.Output, A));
+    }
+  }
+}
+
+TEST(X86RepState, ImageCopiesRetainEveryAccessedByte) {
+#if !defined(__x86_64__) && !defined(_M_X64)
+  GTEST_SKIP() << "executing x64 REP source requires an x64 host";
+#endif
+  constexpr va_t CodeVA = 0x140001000, DataVA = 0x140002000;
+  for (auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (bool PointerMirror : {false, true})
+      for (bool ImageDestination : {false, true})
+        for (bool Fill : {false, true})
+          for (bool Backward : {false, true}) {
+            SCOPED_TRACE(static_cast<unsigned>(Format));
+            SCOPED_TRACE(Backward);
+            SCOPED_TRACE(Fill);
+            SCOPED_TRACE(PointerMirror);
+            SCOPED_TRACE(ImageDestination);
+            BinaryImage Image;
+            Image.Arch = Arch::X64;
+            Image.Bits = Bitness::Bits64;
+            Image.Format = Format;
+            Image.Base = Image.Entry = CodeVA;
+            Segment Data;
+            Data.Name = ".rdata";
+            Data.VA = DataVA;
+            Data.Flags = SegmentFlags::Readable;
+            if (Fill || ImageDestination)
+              Data.Flags = Data.Flags | SegmentFlags::Writable;
+            Data.Data = {0x41, 0x42, 0,    0x43, 0xff, 0x12, 0x80, 0x26,
+                         0x8a, 0xf5, 0,    0x7d, 0x31, 0x99, 0x02, 0xe4,
+                         0xee, 0x81, 0x21, 0,    0x43, 0x90, 0xfe, 0x72};
+            Data.Size = Data.FileSz = Data.Data.size();
+            uint64_t Expected = 0;
+            for (unsigned I = 0; I < Data.Data.size(); ++I)
+              Expected ^= uint64_t(Data.Data[I]) << (8 * (I % 8));
+            uint64_t RevisitedWord = 0;
+            for (unsigned I = 0; I < 8; ++I)
+              RevisitedWord |= uint64_t(Data.Data[(Backward ? 0 : 16) + I])
+                               << (8 * I);
+            // An unrelated function pointer in the same data owner must not
+            // keep the REP operand at its original unmapped numeric address.
+            if (PointerMirror) {
+              Data.Data.resize(40);
+              for (unsigned I = 0; I < 8; ++I)
+                Data.Data[32 + I] = static_cast<uint8_t>(CodeVA >> (8 * I));
+              Data.Size = Data.FileSz = Data.Data.size();
+              Image.CodePtrRelocSlots.insert(DataVA + 32);
+              Image.CodeRefTargets.insert(CodeVA);
+            }
+            if (ImageDestination) {
+              Data.Data.resize(96);
+              Data.Size = Data.FileSz = Data.Data.size();
+            }
+            const uint64_t FillValue =
+                PointerMirror ? DataVA + 8 : 0x17365879BADCF05A;
+            if (Fill)
+              Expected = RevisitedWord = FillValue;
+            Segment Text;
+            Text.Name = ".text";
+            Text.VA = CodeVA;
+            Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+            // Preserve the string registers, copy three complete words to a
+            // local object and observe every byte independently of source
+            // declarations.
+            Text.Data = {0x56, 0x57, 0x48, 0x83, 0xec, 0x28};
+            if (Fill) {
+              Text.Data.insert(Text.Data.end(), {0x48, 0x8d, 0x3d});
+              const uint32_t FillDisplacement = DataVA + (Backward ? 16 : 0) -
+                                                (CodeVA + Text.Data.size() + 4);
+              for (unsigned I = 0; I < 4; ++I)
+                Text.Data.push_back(
+                    static_cast<uint8_t>(FillDisplacement >> (8 * I)));
+              Text.Data.insert(Text.Data.end(), {0x48, 0xb8});
+              for (unsigned I = 0; I < 8; ++I)
+                Text.Data.push_back(static_cast<uint8_t>(FillValue >> (8 * I)));
+              Text.Data.insert(Text.Data.end(),
+                               {0xb9, 3, 0, 0, 0,
+                                static_cast<uint8_t>(Backward ? 0xfd : 0xfc),
+                                0xf3, 0x48, 0xab, 0xfc});
+            }
+            if (ImageDestination) {
+              Text.Data.insert(Text.Data.end(), {0x48, 0x8d, 0x3d});
+              const uint32_t DestinationDisplacement =
+                  DataVA + 64 + (Backward ? 16 : 0) -
+                  (CodeVA + Text.Data.size() + 4);
+              for (unsigned I = 0; I < 4; ++I)
+                Text.Data.push_back(
+                    static_cast<uint8_t>(DestinationDisplacement >> (8 * I)));
+            } else {
+              Text.Data.insert(Text.Data.end(),
+                               {0x48, 0x8d, 0x7c, 0x24,
+                                static_cast<uint8_t>(Backward ? 0x18 : 0x08)});
+            }
+            Text.Data.insert(Text.Data.end(), {0x48, 0x8d, 0x35});
+            const uint32_t Displacement =
+                DataVA + (Backward ? 16 : 0) - (CodeVA + Text.Data.size() + 4);
+            for (unsigned I = 0; I < 4; ++I)
+              Text.Data.push_back(
+                  static_cast<uint8_t>(Displacement >> (8 * I)));
+            Text.Data.insert(Text.Data.end(),
+                             {0xb9, 3, 0, 0, 0,
+                              static_cast<uint8_t>(Backward ? 0xfd : 0xfc),
+                              0xf3, 0x48, 0xa5, 0xfc});
+            if (ImageDestination) {
+              // Observe the auxiliary destination result through three reads.
+              for (unsigned I = 0; I < 3; ++I)
+                Text.Data.insert(
+                    Text.Data.end(),
+                    {0x48, static_cast<uint8_t>(I ? 0x33 : 0x8b), 0x47,
+                     static_cast<uint8_t>((Backward ? 8 : -24) + I * 8)});
+            } else {
+              Text.Data.insert(Text.Data.end(),
+                               {0x48, 0x8b, 0x44, 0x24, 0x08, 0x48, 0x33, 0x44,
+                                0x24, 0x10, 0x48, 0x33, 0x44, 0x24, 0x18});
+            }
+            // A subsequent memory use must resolve the completed address too.
+            Text.Data.insert(
+                Text.Data.end(),
+                {0x48, 0x03, 0x46, static_cast<uint8_t>(Backward ? 8 : -8)});
+            Expected += RevisitedWord;
+            // Observe the completed source register in the original coordinate
+            // model as well as every copied byte.
+            Text.Data.insert(Text.Data.end(), {0x48, 0x8d, 0x15});
+            const uint32_t SourceDisplacement =
+                DataVA + (Backward ? 16 : 0) - (CodeVA + Text.Data.size() + 4);
+            for (unsigned I = 0; I < 4; ++I)
+              Text.Data.push_back(
+                  static_cast<uint8_t>(SourceDisplacement >> (8 * I)));
+            Text.Data.insert(Text.Data.end(),
+                             {0x48, 0x29, 0xd6, 0x48, 0x31, 0xf0, 0x48, 0x83,
+                              0xc4, 0x28, 0x5f, 0x5e, 0xc3});
+            Expected ^= Backward ? uint64_t(-24) : uint64_t(24);
+            Text.Size = Text.FileSz = Text.Data.size();
+            auto Symbol = Symbol::makeFunc(CodeVA, Text.Size);
+            Symbol.Name = "copy_image_words";
+            Image.Symbols.push_back(std::move(Symbol));
+            Image.Segments.push_back(std::move(Text));
+            Image.Segments.push_back(std::move(Data));
+            PipelineOptions Options;
+            Options.EmitDumpOutput = false;
+            Options.OnlyFunctionEntries = {CodeVA};
+            llvm::LLVMContext Context;
+            auto Result = Pipeline().run(Image, Context, Options);
+            ASSERT_TRUE(Result.Success) << Result.Error;
+            auto Module =
+                MedLLVMEmitter().emit(Result.MedFuncs, Context, "copy",
+                                      Arch::X64, {}, &Image, Format);
+            ASSERT_TRUE(Module);
+            CEmitterOptions COptions;
+            COptions.TheArch = Arch::X64;
+            COptions.Format = Format;
+            COptions.Image = &Image;
+            for (bool LLVMRoute : {false, true}) {
+              SCOPED_TRACE(LLVMRoute);
+              std::string Source;
+              llvm::raw_string_ostream Out(Source);
+              ASSERT_TRUE(
+                  LLVMRoute
+                      ? LLVMCEmitter().emit(*Module, Out, COptions, nullptr,
+                                            &Image)
+                      : HighCEmitter().emit(Result.HighFuncs, Out, COptions));
+              Out.flush();
+              const auto Arguments = Format == BinaryFormat::COFF ? "" : "0, 0";
+              const auto Oracle =
+                  "\nint main(void) { return copy_image_words(" +
+                  std::string(Arguments) + ") != " + std::to_string(Expected) +
+                  "ULL; }\n";
+              for (const auto Level : {"-O0", "-O2"})
+                source_call_execution_test::compileAndRun(
+                    Source + Oracle,
+                    {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+            }
+            // A complete image span is required even when its starting address
+            // remains mapped. Truncate the far end in either direction.
+            auto &Truncated = Image.Segments.back();
+            if (Backward) {
+              Truncated.VA += 8;
+              Truncated.Data.erase(Truncated.Data.begin(),
+                                   Truncated.Data.begin() + 8);
+            }
+            // File padding beyond the mapping is not accessible image storage.
+            Truncated.Size = 16;
+            Truncated.FileSz = Truncated.Data.size();
+            std::string Refused;
+            llvm::raw_string_ostream RefusedOut(Refused);
+            EXPECT_THROW(
+                HighCEmitter().emit(Result.HighFuncs, RefusedOut, COptions),
+                std::invalid_argument);
+            EXPECT_THROW(MedLLVMEmitter().emit(Result.MedFuncs, Context,
+                                               "short", Arch::X64, {}, &Image,
+                                               Format),
+                         std::invalid_argument);
+          }
+}

@@ -1,0 +1,590 @@
+{
+  "schema": 1,
+  "date": "2026-11-03",
+  "status": "qualified",
+  "global_goal_complete": false,
+  "scope": "Explicit protected i386 scalar execution over ordinary paged RAM; shared selector/scalar address grammar and original page-fault handler repair/return/retry. This is not a general i386 source exporter.",
+  "tested_base_commit": "f307cf79b7e21bad6793a1ec013a008a56438a52",
+  "tested_tree": "ce22f69fac7b4c154e7df843317eefcd0df1dfa3",
+  "tested_worktree_patch_sha256": "bc79af6f51ada340f6c35cbb70ae0deb0ed3949d8e710627d0c4adb39259377a",
+  "source_basis": "Base commit plus retained tested.patch, including added files. The following hashes record changed executable inputs, not every compiled source. Build receipts and dependency input manifests identify external build inputs. Documentation can subsequently add this qualification record.",
+  "source_inputs_sha256": {
+    "include/neverd/translate/X86/X86LegacyExecution.h": "3ba0bf460265c8e5ec84521e6d7092b590af33dd3714f2940e251b0df6b56cb1",
+    "include/neverd/translate/X86/X86PagedMemory.h": "90d2b7b67cfd3802c50397caae2ab510fbd2fd12a61f8ed0a64a59dd0d61be91",
+    "lib/translate/CMakeLists.txt": "361c5648c115e5e8156306c6b55e85b6fbb8414f9cd8944a84742813f42eadfa",
+    "lib/translate/X86/X86LegacyEncoding.h": "adc415a48e7f2d03df57d8aef74ca7a0de9baab89f80496883dd48e7c1649a15",
+    "lib/translate/X86/X86LegacyExecution.cpp": "83a602c4155b26a33b222271bdb8c5950b6bd238d89cddea2be7fe2f30c55962",
+    "lib/translate/X86/X86LegacyScalar.h": "048317fafd56730bfbb58a7c776bd2c8d8138e9ec71324cc233e4be54c5376a0",
+    "lib/translate/X86/X86LegacyScalarEncoding.cpp": "f95c7c76959e2499cbc995ce8b4271ba2cd5ba687041c8d601caa1a61b12c762",
+    "lib/translate/X86/X86LegacyScalarExecution.cpp": "a946c4f9f20250c69befebf4b3fff749ba53960816541b50bcb8a7e8caac95f9",
+    "lib/translate/X86/X86LegacySegmentEncoding.h": "ff4f3d8108324ac4398f770be73e53f52d521ad863714ef11deca2b07d988963",
+    "lib/translate/X86/X86PagedMemory.cpp": "68c94e3ac511ad0f2b90e3e66eaa1e31db24d2ad85fdef5bfdd41dda6eb2546c",
+    "unittests/translate/x86/X86LegacyExecutionTests.cpp": "196efb3adf1b5e6fe7d2330b6f5509e00647501971fc4365aa1ea018749e4ab9",
+    "unittests/translate/x86/X86LegacyScalarNativeTests.inc": "34559693eae133e551a65b8c0e0f03a897890690f7c6ff8114fab3f590d40c97",
+    "unittests/translate/x86/X86PagingNativeTests.cpp": "4baa9e24f09f3957d1921cb8a52f5a3355b0655b3cf8a25f0bfc9f19ea81d39b",
+    "unittests/translate/x86/X86PagingTests.cpp": "db6e095a139383f08fba5e3994d4cbfc08098ff5c0d045c6a0599dc62fb77131"
+  },
+  "cpu": {
+    "model": "Intel Core i9-13900H",
+    "family": 6,
+    "model_number": 186,
+    "stepping": 2,
+    "microcode": "0x6134",
+    "p_core": "0",
+    "e_core": "12",
+    "kernel": "7.0.0-42-generic"
+  },
+  "profiles": {
+    "memory": "X86LegacyScalarProfile::OrderedRAM",
+    "events": "X86LegacyEventProfile::OrderedFrame",
+    "returns": "X86LegacyReturnProfile::OrderedFrame",
+    "segments": "X86LegacySegmentProfile::WordStackOffsetFirst",
+    "alignment": "BeforePaging",
+    "full_segment_limit": "Fault",
+    "logical_AF": false,
+    "calls_by_core": {
+      "0": "StoreBeforeTargetLimit",
+      "12": "CheckBeforeTargetLimit"
+    }
+  },
+  "counts": {
+    "runs": 10,
+    "tests": 910,
+    "passed": 908,
+    "skipped": 2,
+    "failures": 0,
+    "scalar_cpu_comparisons": 85120
+  },
+  "count_definition": "CPU comparisons count executed cases across SDKs, paging modes and core types, not unique inputs. Existing paging/segment/event/return matrices are retained as regressions and are not added to the new scalar comparison count. Shutdown cases compare the architectural stop, not undefined final registers.",
+  "builds": [
+    {
+      "sdk": "native",
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX86PagingTests",
+        "NeverDX64PagedExecutionTests",
+        "NeverDX64ContinuationSourceTests",
+        "NeverDX64ContinuationExportTests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "elapsed": 19.076481819152832
+    },
+    {
+      "sdk": "r6",
+      "command": [
+        "python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX86PagingTests",
+        "NeverDX64PagedExecutionTests",
+        "NeverDX64ContinuationSourceTests",
+        "NeverDX64ContinuationExportTests",
+        "--parallel",
+        "4"
+      ],
+      "exit_code": 0,
+      "elapsed": 22.596603631973267
+    }
+  ],
+  "runs": [
+    {
+      "environment": {
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "sdk": "r6",
+      "target": "NeverDX64PagedExecutionTests",
+      "phase": "shared",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_HELPER",
+        "$ARTIFACT_ROOT/r6/shared/NeverDX64PagedExecutionTests/tmp",
+        "env",
+        "TMPDIR=/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "$WORKTREE/build-x86/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:$ARTIFACT_ROOT/r6/shared/NeverDX64PagedExecutionTests/result.xml"
+      ],
+      "exit_code": 0,
+      "elapsed": 213.37158465385437,
+      "report": "$ARTIFACT_ROOT/r6/shared/NeverDX64PagedExecutionTests/result.xml",
+      "log": "$ARTIFACT_ROOT/r6/shared/NeverDX64PagedExecutionTests/run.log",
+      "binary_sha256": "e954ae6023ba0797dcb9e7ebc7b690737ff38dcd55685feb395321f5aac1a1d4",
+      "tests": 50,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0,
+      "skipped": 0,
+      "scalar_cpu_comparisons": 0
+    },
+    {
+      "environment": {
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "sdk": "native",
+      "target": "NeverDX64PagedExecutionTests",
+      "phase": "shared",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_HELPER",
+        "$ARTIFACT_ROOT/native/shared/NeverDX64PagedExecutionTests/tmp",
+        "env",
+        "TMPDIR=/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "$WORKTREE/build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:$ARTIFACT_ROOT/native/shared/NeverDX64PagedExecutionTests/result.xml"
+      ],
+      "exit_code": 0,
+      "elapsed": 392.1613004207611,
+      "report": "$ARTIFACT_ROOT/native/shared/NeverDX64PagedExecutionTests/result.xml",
+      "log": "$ARTIFACT_ROOT/native/shared/NeverDX64PagedExecutionTests/run.log",
+      "binary_sha256": "0535b0f015e707eb40df0d5393823365992fa6fc7475c6d6e7a39757eabfa21d",
+      "tests": 50,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0,
+      "skipped": 0,
+      "scalar_cpu_comparisons": 0
+    },
+    {
+      "environment": {
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "sdk": "native",
+      "target": "NeverDX64ContinuationSourceTests",
+      "phase": "shared",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_HELPER",
+        "$ARTIFACT_ROOT/native/shared/NeverDX64ContinuationSourceTests/tmp",
+        "env",
+        "TMPDIR=/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "$WORKTREE/build-x86-native/bin/NeverDX64ContinuationSourceTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:$ARTIFACT_ROOT/native/shared/NeverDX64ContinuationSourceTests/result.xml"
+      ],
+      "exit_code": 0,
+      "elapsed": 476.58253836631775,
+      "report": "$ARTIFACT_ROOT/native/shared/NeverDX64ContinuationSourceTests/result.xml",
+      "log": "$ARTIFACT_ROOT/native/shared/NeverDX64ContinuationSourceTests/run.log",
+      "binary_sha256": "1700d2e18206dd897d4bd7c0bc4e1fd3a1d098eac1ca4be9be4da60071ce2bdc",
+      "tests": 147,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0,
+      "skipped": 0,
+      "scalar_cpu_comparisons": 0
+    },
+    {
+      "environment": {
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "sdk": "native",
+      "target": "NeverDX64ContinuationExportTests",
+      "phase": "shared",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_HELPER",
+        "$ARTIFACT_ROOT/native/shared/NeverDX64ContinuationExportTests/tmp",
+        "env",
+        "TMPDIR=/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "$WORKTREE/build-x86-native/bin/NeverDX64ContinuationExportTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:$ARTIFACT_ROOT/native/shared/NeverDX64ContinuationExportTests/result.xml"
+      ],
+      "exit_code": 0,
+      "elapsed": 239.80726528167725,
+      "report": "$ARTIFACT_ROOT/native/shared/NeverDX64ContinuationExportTests/result.xml",
+      "log": "$ARTIFACT_ROOT/native/shared/NeverDX64ContinuationExportTests/run.log",
+      "binary_sha256": "55217ba5a1a1312d9072314386bd2d6000bcb9da34253e301f30a1df1832d74b",
+      "tests": 79,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0,
+      "skipped": 0,
+      "scalar_cpu_comparisons": 0
+    },
+    {
+      "environment": {
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "sdk": "r6",
+      "target": "NeverDX64ContinuationSourceTests",
+      "phase": "shared",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_HELPER",
+        "$ARTIFACT_ROOT/r6/shared/NeverDX64ContinuationSourceTests/tmp",
+        "env",
+        "TMPDIR=/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "$WORKTREE/build-x86/bin/NeverDX64ContinuationSourceTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:$ARTIFACT_ROOT/r6/shared/NeverDX64ContinuationSourceTests/result.xml"
+      ],
+      "exit_code": 0,
+      "elapsed": 602.3594806194305,
+      "report": "$ARTIFACT_ROOT/r6/shared/NeverDX64ContinuationSourceTests/result.xml",
+      "log": "$ARTIFACT_ROOT/r6/shared/NeverDX64ContinuationSourceTests/run.log",
+      "binary_sha256": "ebbb1843d4aa6f1c30e7704dea445d728c66e6d0196194fbd0e2f504b7f2bffd",
+      "tests": 147,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0,
+      "skipped": 0,
+      "scalar_cpu_comparisons": 0
+    },
+    {
+      "environment": {
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "sdk": "r6",
+      "target": "NeverDX64ContinuationExportTests",
+      "phase": "shared",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_HELPER",
+        "$ARTIFACT_ROOT/r6/shared/NeverDX64ContinuationExportTests/tmp",
+        "env",
+        "TMPDIR=/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "$WORKTREE/build-x86/bin/NeverDX64ContinuationExportTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:$ARTIFACT_ROOT/r6/shared/NeverDX64ContinuationExportTests/result.xml"
+      ],
+      "exit_code": 0,
+      "elapsed": 227.6589276790619,
+      "report": "$ARTIFACT_ROOT/r6/shared/NeverDX64ContinuationExportTests/result.xml",
+      "log": "$ARTIFACT_ROOT/r6/shared/NeverDX64ContinuationExportTests/run.log",
+      "binary_sha256": "ac91968675d03499785d0dad1672b0d1491187b791c8b6b4f7851bd44664d817",
+      "tests": 79,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0,
+      "skipped": 0,
+      "scalar_cpu_comparisons": 0
+    },
+    {
+      "environment": {
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "sdk": "native",
+      "target": "NeverDX86PagingTests",
+      "phase": "paging",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_HELPER",
+        "$ARTIFACT_ROOT/native/paging/NeverDX86PagingTests/tmp",
+        "env",
+        "TMPDIR=/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "$WORKTREE/build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:$ARTIFACT_ROOT/native/paging/NeverDX86PagingTests/result.xml"
+      ],
+      "exit_code": 0,
+      "elapsed": 378.5496735572815,
+      "report": "$ARTIFACT_ROOT/native/paging/NeverDX86PagingTests/result.xml",
+      "log": "$ARTIFACT_ROOT/native/paging/NeverDX86PagingTests/run.log",
+      "binary_sha256": "4eac906b28274fb2cf9dbbbcd2d7d89472c91da9506772223dfed62a29025ea2",
+      "tests": 157,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0,
+      "skipped": 1,
+      "scalar_cpu_comparisons": 21280
+    },
+    {
+      "environment": {
+        "NEVERD_TEST_LEGACY_CALL": "check",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "sdk": "native",
+      "target": "NeverDX86PagingTests",
+      "phase": "e-core",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_HELPER",
+        "$ARTIFACT_ROOT/native/e-core/NeverDX86PagingTests/tmp",
+        "env",
+        "TMPDIR=/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "$WORKTREE/build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyScalars/*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:$ARTIFACT_ROOT/native/e-core/NeverDX86PagingTests/result.xml"
+      ],
+      "exit_code": 0,
+      "elapsed": 50.78823804855347,
+      "report": "$ARTIFACT_ROOT/native/e-core/NeverDX86PagingTests/result.xml",
+      "log": "$ARTIFACT_ROOT/native/e-core/NeverDX86PagingTests/run.log",
+      "binary_sha256": "4eac906b28274fb2cf9dbbbcd2d7d89472c91da9506772223dfed62a29025ea2",
+      "tests": 22,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0,
+      "skipped": 0,
+      "scalar_cpu_comparisons": 21280
+    },
+    {
+      "environment": {
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "sdk": "r6",
+      "target": "NeverDX86PagingTests",
+      "phase": "paging",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_HELPER",
+        "$ARTIFACT_ROOT/r6/paging/NeverDX86PagingTests/tmp",
+        "env",
+        "TMPDIR=/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "$WORKTREE/build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:$ARTIFACT_ROOT/r6/paging/NeverDX86PagingTests/result.xml"
+      ],
+      "exit_code": 0,
+      "elapsed": 389.73694825172424,
+      "report": "$ARTIFACT_ROOT/r6/paging/NeverDX86PagingTests/result.xml",
+      "log": "$ARTIFACT_ROOT/r6/paging/NeverDX86PagingTests/run.log",
+      "binary_sha256": "29048ccb73c854ebf8d92edd71075720a22a0b7e5c36bb7791ec0b6b4348f05b",
+      "tests": 157,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0,
+      "skipped": 1,
+      "scalar_cpu_comparisons": 21280
+    },
+    {
+      "environment": {
+        "NEVERD_TEST_LEGACY_CALL": "check",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before"
+      },
+      "sdk": "r6",
+      "target": "NeverDX86PagingTests",
+      "phase": "e-core",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "$PRIVATE_TMP_HELPER",
+        "$ARTIFACT_ROOT/r6/e-core/NeverDX86PagingTests/tmp",
+        "env",
+        "TMPDIR=/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "$WORKTREE/build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyScalars/*",
+        "--gtest_break_on_failure",
+        "--gtest_output=xml:$ARTIFACT_ROOT/r6/e-core/NeverDX86PagingTests/result.xml"
+      ],
+      "exit_code": 0,
+      "elapsed": 46.1497848033905,
+      "report": "$ARTIFACT_ROOT/r6/e-core/NeverDX86PagingTests/result.xml",
+      "log": "$ARTIFACT_ROOT/r6/e-core/NeverDX86PagingTests/run.log",
+      "binary_sha256": "29048ccb73c854ebf8d92edd71075720a22a0b7e5c36bb7791ec0b6b4348f05b",
+      "tests": 22,
+      "failures": 0,
+      "errors": 0,
+      "disabled": 0,
+      "skipped": 0,
+      "scalar_cpu_comparisons": 21280
+    }
+  ],
+  "binaries_sha256": {
+    "native": {
+      "NeverDX86PagingTests": "4eac906b28274fb2cf9dbbbcd2d7d89472c91da9506772223dfed62a29025ea2",
+      "NeverDX64PagedExecutionTests": "0535b0f015e707eb40df0d5393823365992fa6fc7475c6d6e7a39757eabfa21d",
+      "NeverDX64ContinuationSourceTests": "1700d2e18206dd897d4bd7c0bc4e1fd3a1d098eac1ca4be9be4da60071ce2bdc",
+      "NeverDX64ContinuationExportTests": "55217ba5a1a1312d9072314386bd2d6000bcb9da34253e301f30a1df1832d74b",
+      "neverd": "645200309a35c0c1a617eb8cd0579808fc913272a21a90d8f02ed2d437f48956",
+      "libneverd.so": "e685f692a8c21053451c2ac5dbd1fdd5850e97dc52a8ae40fef4b6dd2f993dde"
+    },
+    "r6": {
+      "NeverDX86PagingTests": "29048ccb73c854ebf8d92edd71075720a22a0b7e5c36bb7791ec0b6b4348f05b",
+      "NeverDX64PagedExecutionTests": "e954ae6023ba0797dcb9e7ebc7b690737ff38dcd55685feb395321f5aac1a1d4",
+      "NeverDX64ContinuationSourceTests": "ebbb1843d4aa6f1c30e7704dea445d728c66e6d0196194fbd0e2f504b7f2bffd",
+      "NeverDX64ContinuationExportTests": "ac91968675d03499785d0dad1672b0d1491187b791c8b6b4f7851bd44664d817",
+      "neverd": "43870d2caec59f50f4d00a543a60948fa6a20d9d44d3adfd5e9b6808ca39df00",
+      "libneverd.so": "9eefc53a5236c03e170677a6d52dac207e0e13608a77c91e323ab335d2b20a0f"
+    }
+  },
+  "artifacts_sha256": {
+    "native": {
+      "build-final.log": "2767db935e59ae180b7dc9a78de0bf365564e371d19e1c5c4f43eb768fc5a3ab",
+      "neverd-build-receipt.json": "80622f4c5dabee7bc1c34e7735a2616c64ab56ec511ae14a841f17cdf05c56f7",
+      "neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "CMakeCache.txt": "00b0dde0a4aff478d6c457105ed359c78e626ddd45895e445df77edf64158c55",
+      "shared/NeverDX64PagedExecutionTests/run.log": "18a37563667426031d01e65992e35c001a3f51c709657dd8941cfe7c85cfd707",
+      "shared/NeverDX64PagedExecutionTests/result.xml": "1d824fdb2f780ea8f16345ddc2f4c911a4e7472cac47d27136777312e99ae864",
+      "shared/NeverDX64ContinuationSourceTests/run.log": "d3c7f94c63f11fe3b4bd352ecd447cb0f3fe93564bece97206af4bb0bc1e5183",
+      "shared/NeverDX64ContinuationSourceTests/result.xml": "391a26e804534f6116f1370a7d74b44b8e8c04914563864b4020ee36171555b7",
+      "shared/NeverDX64ContinuationExportTests/run.log": "e72a8cece03b50292acc1977edf506baf1e27fabe67fc10f088fc4cb48b3369d",
+      "shared/NeverDX64ContinuationExportTests/result.xml": "d714fb3b5a307edec8038a3540a79405a255b1c4a52b01b41a8fcc1377346d17",
+      "paging/NeverDX86PagingTests/run.log": "34f47f26504fa77ba3d5d5776048b1df06c25309c30d3eadcf0968e98bdd0da4",
+      "paging/NeverDX86PagingTests/result.xml": "04068fb34f4b0fe3823091e7466d916773c714cddaa8f3c7aeaa00e15aa97acf",
+      "e-core/NeverDX86PagingTests/run.log": "626ca7b2ece4b65f6b631965e6ce40cf2359dae46f45c2418f77bc9621142efe",
+      "e-core/NeverDX86PagingTests/result.xml": "7aaa5bfbf7c5d1e63d2501e64c3020e702ef88a27c9bdb53e389de0b0b949015"
+    },
+    "r6": {
+      "build-final.log": "eb46abf36b952654dfc5bef24640256237ec5b9a87feb07122458b8d95603ec6",
+      "neverd-build-receipt.json": "ad60f47b6a01e906c8a3594c2d0e83f0041520913e3766706a1ae98dfb6b1d93",
+      "neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "CMakeCache.txt": "c9e92f0e3d2de59b6529ad6eaf9a42361e21655caa6d1f37ba3e65f10b8fdc29",
+      "shared/NeverDX64PagedExecutionTests/run.log": "2e1cd937694f0698178467451c404be6606bdc3766954ef5039b047149f52770",
+      "shared/NeverDX64PagedExecutionTests/result.xml": "6e213bde2f03fd2baf288cb9458524f18323d93e183fadbd12a31300675ed2e5",
+      "shared/NeverDX64ContinuationSourceTests/run.log": "dde1e540b0aba30565e30c0193ee0405cfb3551ef45f75a775240b10bbbb0758",
+      "shared/NeverDX64ContinuationSourceTests/result.xml": "ce320f346512b898c06839d606faa078a7f72ebb490e15a64098d69e0a74141f",
+      "shared/NeverDX64ContinuationExportTests/run.log": "d49169ec398a5762ad8b2a69853acd6e412da88b090bf626f407d10f0d0e6ee5",
+      "shared/NeverDX64ContinuationExportTests/result.xml": "870fe24b948171ba2dc7f756680763c80b4b4f5589951144abc1e651468cad19",
+      "paging/NeverDX86PagingTests/run.log": "bbb1d1d17ab7739fd32fc042341079ede2167c817282a5bf22665fbb31fcde67",
+      "paging/NeverDX86PagingTests/result.xml": "d97a7964b5d643388bf2a288b108e0f72b87f823366b34541074989fdb7c4d97",
+      "e-core/NeverDX86PagingTests/run.log": "92bca857625b6a137c498a677ceb4f3d272335bec9e71b1a33058b8e38c7e83a",
+      "e-core/NeverDX86PagingTests/result.xml": "8369ceabdf6b29e416430282fa375fa98f296c20939b754a690982f00ad8add0"
+    }
+  },
+  "export_agreement": {
+    "files_per_sdk": 1032,
+    "c_and_headers_per_sdk": 542,
+    "all_bytes_equal": true,
+    "manifest_sha256": "06a7719c52f78aceaf36d8ab1ded75af1a486103f6d47ec0960e267be75ecafa"
+  },
+  "counterexamples": [
+    {
+      "instruction": "FF D0 (near CALL EAX)",
+      "code32": false,
+      "target": "0x4000",
+      "code_limit": "0x3fff",
+      "esp": "0xd100",
+      "core": "0",
+      "observation": "P-core execution writes return IP 0x1002 at 0xd0fe before target-limit #GP; the fault frame retains original ESP/EIP. With the stack page absent, #PF wins. The initial implementation checked the target before any stack access.",
+      "red_log_sha256": "8eb10d3ab445a32e8d1f1fa9b5a447cce6a5bf2103c4beb26bbedaca3756d2ec"
+    },
+    {
+      "instruction": "E8 / FF D0 (direct / indirect near CALL)",
+      "core": "12",
+      "observation": "E-core execution retains stack page-table A/D effects and gives stack #PF precedence, but preserves old stack data when the target limit causes #GP. The first correction incorrectly applied the P-core data-publication order. The runtime now requires an explicit call profile before fetch. Both choices and both operand/code widths compare data, A/D bits, restart frames and #PF/CR2 against original instructions.",
+      "red_log_sha256": "2b05250f5b9a0599eaa8e9cbb66f8fe6b7911ee3a3f4a6bcb48644712246eb6d"
+    }
+  ],
+  "focused_call_checks": {
+    "p-core.log": "547bd8849a8838d6575d7ca18d32aaee49b3746a3492d580954528a8ebce0bc5",
+    "p-core.xml": "0f76bf213b6726ca9e01ca414f2b025959ff81746a2de79b7ee09477a154cc5b",
+    "e-core.log": "c4f1bfbf77925f022628e613f121c716c2ace86e94b69e743a3e833438e3879b",
+    "e-core.xml": "85e2d87f6488f90e515322e12d5a4cdb881fb0a15ec0d603f0986ad2448b4675"
+  },
+  "independent_width_probe": {
+    "cases": 40,
+    "scope": "Two core types, code16/code32, operand16/operand32, short/conditional/near jumps, CALL and MOV at EIP 0x1fff0 with CS.limit=0x1ffff. Sixteen-bit taken branches truncate before the target limit check; sequential MOV preserves high EIP. Probe does not call NeverD.",
+    "source_sha256": "87422b6e2b15d456ff24280972676c4cbd7da262469028ff15293af14db618ef",
+    "log_sha256": "b364aad418143d8fe6a1a1688f7faa7a6b57cad0aebf7a8cec418b22a4eb5ab9"
+  },
+  "corrected_fixture_failures": [
+    "Initial unit fixture unmapped its own ring-zero exception stack; repair tests now use a separate mapped kernel stack.",
+    "A unit cache limit initially disagreed with G=1; granularity is now explicit.",
+    "Native fault recorder originally used an unusable DS; its store now uses SS.",
+    "An absent current CPL0 stack can triple fault; oracle now compares shutdown without asserting unspecified register contents."
+  ],
+  "compiler_inputs": {
+    "llvm_fork": "f4b2656eff23a889d50bdc88d46fed3b707b9542",
+    "neverc": "b3b4649f895f89c59e9baba200fab996ef7cd61b",
+    "neverc_binary_sha256": "010dbda1688d5a08a11b60ca44760204e794f44a8aed6c4fdf7da474e71f9020"
+  },
+  "production_pin": {
+    "release": "neverd-llvm-v23.0.0-r6",
+    "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "changed": false
+  },
+  "limitations": [
+    "Linux KVM qualification on the recorded Intel P/E cores only, with different explicit CALL profiles. LA57 skips remain explicit.",
+    "No TLB/cache, concurrent memory, MMIO, LOCK/HLE or unlisted scalar instruction contract.",
+    "General i386 source dispatch, real/VM86, tasks/call gates, debug producers, software SMM/enclave/AEX/EPCM, and complete CET/FRED fault/event contracts remain open.",
+    "No new LLVM/NeverC intrinsic is needed for the scalar runtime; the final LLVM release/pin remains gated on global completion."
+  ],
+  "references": [
+    "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html"
+  ]
+}

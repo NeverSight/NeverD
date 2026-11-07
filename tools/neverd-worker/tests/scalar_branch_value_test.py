@@ -43,6 +43,19 @@ INPUTS = (0, 1, 2, 3, 7, 255, 256, 0x5555555555555555,
 
 CASES = (
     ("load", "mov ecx,DWORD PTR[rip+.Ldelta]", 19),
+    ("local-target-long-prefix", ".rept 4096\nmov r10,0x123456789abcdef\n"
+     "jmp 1f\n.byte 0xcc\n1:\n.endr\nmov ecx,DWORD PTR[rip+.Ldelta]",
+     4096 * 13 + 19),
+    ("joined-prefix", "test rdi,rdi\njz .Lother\nmov ecx,DWORD PTR[rip+.Ldelta]\n"
+     "jmp .Lcontinued\n.Lother:\nmov ecx,DWORD PTR[rip+.Ldelta]\n.Lcontinued:", 32),
+    ("direct-prefix", "mov ecx,DWORD PTR[rip+.Ldelta]\njmp .Lcontinued\n"
+     ".byte 0xcc\n.Lcontinued:", 22),
+    ("symbolic-prefix", "mov rcx,rdi\nor rcx,rsi\nmov rdx,rdi\nand rdx,rsi\n"
+     "jmp .Lcontinued\n.byte 0xcc\n.Lcontinued:\n"
+     "add rcx,rdx\nsub rcx,rdi\nsub rcx,rsi\n" + IDENTITY_OFFSET, 44),
+    ("immutable-identity", "mov ecx,DWORD PTR[rip+.Ldelta]\nxor rcx,rdi\n"
+     "mov edx,DWORD PTR[rip+.Ldelta]\nxor rcx,rdx\nxor rcx,rdi\n" +
+     IDENTITY_OFFSET, 41),
     ("not", ".byte 0xb9\n.long ~(.Ldone-.Lorigin)\nnot ecx", 20),
     ("neg", ".byte 0xb9\n.long -(.Ldone-.Lorigin)\nneg ecx", 20),
     ("sext", ".byte 0xb9\n.long .Ldone-.Lbase\nmovsxd rcx,ecx", 21),
@@ -108,15 +121,25 @@ def run(worker, compiler):
                 for route in ("c", "llvmc"):
                     source = ok(client, "decompile", {"address": entry, "representation": route,
                                 "offset": 0, "limit": 2048})
-                    assert source["complete"], source
+                    total = source["total_lines"]
+                    pages = [source["text"]]
+                    while not source["complete"]:
+                        offset = source["next_offset"]
+                        assert offset > source["offset"], (name, route, offset)
+                        source = ok(client, "decompile", {"address": entry, "representation": route,
+                                    "offset": offset, "limit": 2048})
+                        assert source["total_lines"] == total, (name, route, source["total_lines"])
+                        assert source["offset"] == offset and source["text"], (name, route, offset)
+                        pages.append(source["text"])
+                    text = "".join(pages)
                     unit = area / (route + ".c")
-                    definition = re.search(r"\bdispatch_probe\(([^)]*)\)\s*\{", source["text"])
-                    assert definition, source
+                    definition = re.search(r"\bdispatch_probe\(([^)]*)\)\s*\{", text)
+                    assert definition, (name, route, "missing function definition")
                     parameters = definition.group(1).strip()
                     count = 0 if parameters in ("", "void") else len(parameters.split(","))
                     assert count <= 2, (name, route, parameters)
                     arguments = ", ".join(("a", "b")[:count])
-                    unit.write_text(source["text"] + "\nstatic uint64_t inputs[] = {" +
+                    unit.write_text(text + "\nstatic uint64_t inputs[] = {" +
                                     ",".join(hex(value) + "ULL" for value in INPUTS) + "};\n" +
                                     "int main(void) { for (unsigned i=0;i<sizeof(inputs)/sizeof(inputs[0]);++i) "
                                     "for (unsigned j=0;j<sizeof(inputs)/sizeof(inputs[0]);++j) { "

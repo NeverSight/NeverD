@@ -12,13 +12,15 @@
 
 #include "llvm/IR/Module.h"
 
+#include <map>
+
 namespace neverd {
 
 llvm::Function *
 MedLLVMEmitter::getX86RegistrationSEHRuntimeTarget(const MedOp &Op) {
   if (TargetArch != Arch::X86 || TargetFormat != BinaryFormat::COFF ||
       !CurMedFunc || !CurMedFunc->RegistrationStates || !FrameAlloca ||
-      Op.Opcode != NdOp::INDIR_CALL)
+      (Op.Opcode != NdOp::INDIR_CALL && Op.Opcode != NdOp::CALL))
     return nullptr;
   const auto Calls = getX86RegistrationSEHBoundCalls(*CurMedFunc);
   if (!Calls)
@@ -32,7 +34,8 @@ MedLLVMEmitter::getX86RegistrationSEHRuntimeTarget(const MedOp &Op) {
   if (!Callee || !Callee->isDeclaration() ||
       Callee->getFunctionType() !=
           getX86RegistrationSEHBoundType(Source, *Ctx) ||
-      !Callee->hasDLLImportStorageClass() ||
+      Callee->hasDLLImportStorageClass() !=
+          usesX86RegistrationSEHImportSlot(Found->second) ||
       Callee->getCallingConv() !=
           getX86RegistrationSEHBoundConvention(Source) ||
       !x86_registration::hasSEHBoundFrameArguments(Source, *FrameAlloca,
@@ -68,8 +71,16 @@ llvm::Function *MedLLVMEmitter::prepareX86RegistrationSEHRuntimeCall(
     }
     return Callee;
   }
+  std::map<va_t, llvm::Value *> ImagePointers;
+  for (const auto &Arg : Source.Arguments)
+    if (Arg.ArgumentKind == RegistrationSEHBoundArgument::Kind::ImagePointer) {
+      auto *Pointer = tryResolveGlobalData(Arg.ImageVA, 4);
+      if (!Pointer)
+        return nullptr;
+      ImagePointers.emplace(Arg.ImageVA, Pointer);
+    }
   const auto Projected = x86_registration::projectSEHBoundArguments(
-      Source, Builder, *FrameAlloca, FrameEntrySPOffset, {});
+      Source, Builder, *FrameAlloca, FrameEntrySPOffset, {}, ImagePointers);
   Arguments.assign(Projected.begin(), Projected.end());
   return Callee;
 }

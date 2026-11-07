@@ -312,6 +312,7 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
       Expr->Type = NdType::makeInt(Op.Output.Size, false);
       Expr->MemoryOrdering = Op.MemoryOrdering;
       Expr->MemoryAddressSpace = Op.MemoryAddressSpace;
+      Expr->SourceReturnSlotOffset = Op.SourceReturnSlotOffset;
       return Expr;
     }
     break;
@@ -387,6 +388,8 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
     auto Call =
         HighExpr::makeCall(calleeDisplayName(CallTarget), CallTarget, {});
     Call->CallSiteAddr = Op.Addr;
+    if (Op.Output.Size)
+      Call->Type = sourceCallResultType(Op);
     return Call;
   }
 

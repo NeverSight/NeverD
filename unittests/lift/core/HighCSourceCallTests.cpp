@@ -112,6 +112,64 @@ std::string emit(const std::vector<HighFunc> &Functions, bool Includes = true,
 
 using source_call_execution_test::compileAndRun;
 
+TEST(HighCSourceCalls, OpaqueParametersCompleteOnlyForMemberAccess) {
+  class RecordContext final : public NullDebugContext {
+  public:
+    void completeType(const TypeRef &Type) const override {
+      if (Type && Type->Kind == NdTypeKind::Struct &&
+          Type->SourceName == "LazyRecord") {
+        Type->FieldDisplayNames = {"value"};
+        Type->FieldDisplayOffsets = {0};
+        Type->FieldDisplayTypes = {NdType::makeInt(4, false)};
+        Type->FieldDisplayAlignment = 4;
+      }
+    }
+  } Debug;
+  for (bool Read : {false, true}) {
+    SCOPED_TRACE(Read);
+    const auto Pointer = NdType::makePtr(NdType::makeNamedRecord("LazyRecord"));
+    auto Function =
+        returning("opaque_record",
+                  Read ? HighExpr::makeLoad(parameter(0, Pointer),
+                                            NdType::makeInt(4, false))
+                       : HighExpr::makeConst(7, 4),
+                  {Pointer});
+    bool Complete = false;
+    CEmitterOptions Options;
+    Options.RecordDefinitions = [&](const std::vector<TypeRef> &Types) {
+      CRecordDefinitions Definitions;
+      for (const auto &Type : Types) {
+        const bool Opaque = Type->Kind == NdTypeKind::Ptr;
+        const auto Record = Opaque ? Type->Pointee : Type;
+        if (Record->SourceName != "LazyRecord")
+          continue;
+        Definitions.Tags[Record->SourceName] = false;
+        if (!Opaque) {
+          Complete = true;
+          Definitions.Records[Record->SourceName] = false;
+          Definitions.Text = "struct LazyRecord { uint32_t value; };\n";
+        }
+      }
+      return Definitions;
+    };
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options, &Debug));
+    EXPECT_EQ(Complete, Read) << Source;
+    if (Read)
+      EXPECT_NE(Source.find("arg0->value"), std::string::npos) << Source;
+    else
+      Source += "\nstruct LazyRecord { uint32_t value; };\n";
+    Source += "\nint main(void) { struct LazyRecord value = {37}; return "
+              "opaque_record(&value) != " +
+              std::string(Read ? "37" : "7") + "; }\n";
+    for (auto Optimization : {"-O0", "-O2"})
+      compileAndRun(Source, {Optimization, "-Werror=incompatible-pointer-types",
+                             "-Werror=int-conversion", "-fsanitize=undefined",
+                             "-fsanitize-trap=all"});
+  }
+}
+
 MedFunc savedFloatingRecord(unsigned Calls, bool ReplaceFirst = false,
                             bool ReadUpper = false) {
   const auto &TRI = getTargetRegInfo(Arch::AArch64);
@@ -235,6 +293,117 @@ TEST(HighCSourceCalls, UserAndIndirectCalleesKeepOpaqueUnionTags) {
         << Source;
     EXPECT_EQ(Source.find("struct Token"), std::string::npos) << Source;
     source_call_execution_test::checkSyntax(Source);
+  }
+}
+
+TEST(HighCSourceCalls, CallbackBorrowsDeclareNestedRecordTags) {
+  class CalleeDebug final : public NullDebugContext {
+  public:
+    FunctionSym Function;
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      return Address == Function.Addr ? std::optional(Function) : std::nullopt;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  for (const auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(Architecture));
+    const bool Narrow = Architecture == Arch::X86;
+    const auto Word = NdType::makeInt(Narrow ? 4 : 8, false);
+    const auto Input =
+        NdType::makePtr(NdType::makeNamedRecord("CallbackInput"));
+    const auto Output =
+        NdType::makePtr(NdType::makeNamedRecord("CallbackOutput"));
+    Input->Size = Output->Size = Word->Size;
+    const auto Callback = NdType::makePtr(
+        NdType::makeFunc(NdType::makeVoid(), {Input, Output},
+                         Narrow ? types::CallingConvention::Stdcall
+                                : types::CallingConvention::Unspecified));
+    Callback->Size = Word->Size;
+    FunctionSym &Function = Debug.Function;
+    Function = {};
+    Function.Addr = 0x2000;
+    Function.Name = "register_callback";
+    Function.ReturnType = NdType::makeInt(4, false);
+    // The records occur only inside the callback, not as ordinary parameters.
+    Function.Params = {
+        {"Callback", Callback}, {"Input", Word}, {"Output", Word}};
+    Function.PrototypeFromHeader = true;
+    const std::string Convention = Narrow ? "__stdcall " : "";
+    const std::string CallbackType =
+        "void (" + Convention +
+        "*)(const struct CallbackInput *, volatile union CallbackOutput *)";
+    Function.PortablePrototypeDeclaration =
+        "uint32_t register_callback(void (" + Convention +
+        "*Callback)(const struct CallbackInput *, volatile union "
+        "CallbackOutput *), "
+        "uintptr_t Input, uintptr_t Output)";
+    Function.PortableParameterTypes = {CallbackType, "uintptr_t", "uintptr_t"};
+    auto Call = HighExpr::makeCall(
+        "register_callback", Function.Addr,
+        {parameter(0, Word), parameter(1, Word), parameter(2, Word)});
+    Call->Type = Function.ReturnType;
+    auto Caller = returning("callback_entry", Call, {Word, Word, Word});
+    CEmitterOptions Options;
+    Options.TheArch = Architecture;
+    Options.Format = BinaryFormat::COFF;
+    Options.RecordDefinitions = [&](const std::vector<TypeRef> &Types) {
+      CRecordDefinitions Definitions;
+      for (const auto &Type : Types) {
+        EXPECT_EQ(Type->Kind, NdTypeKind::Ptr);
+        if (Type->Kind != NdTypeKind::Ptr || !Type->Pointee)
+          continue;
+        EXPECT_EQ(Type->Pointee->Size, 0u);
+        const auto &Name = Type->Pointee->SourceName;
+        Definitions.Tags[Name] = Name == "CallbackOutput";
+      }
+      return Definitions;
+    };
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    ASSERT_TRUE(HighCEmitter().emit({Caller}, OS, Options, &Debug));
+    EXPECT_NE(Source.find("typedef struct CallbackInput CallbackInput;"),
+              std::string::npos)
+        << Source;
+    EXPECT_NE(Source.find("typedef union CallbackOutput CallbackOutput;"),
+              std::string::npos)
+        << Source;
+    EXPECT_EQ(Source.find("struct CallbackOutput"), std::string::npos)
+        << Source;
+    EXPECT_NE(Source.find("const struct CallbackInput *"), std::string::npos)
+        << Source;
+    EXPECT_NE(Source.find("volatile union CallbackOutput *"), std::string::npos)
+        << Source;
+    source_call_execution_test::checkSyntax(
+        Source,
+        {Narrow                      ? "--target=i686-w64-windows-gnu"
+         : Architecture == Arch::X64 ? "--target=x86_64-w64-windows-gnu"
+                                     : "--target=aarch64-w64-windows-gnu",
+         "-Werror=incompatible-pointer-types",
+         "-Werror=incompatible-function-pointer-types"});
+    if (Narrow)
+      continue;
+    Source += R"c(
+struct CallbackInput { uint32_t Value; };
+union CallbackOutput { uint32_t Value; };
+uint32_t register_callback(void (*Callback)(const struct CallbackInput *, volatile union CallbackOutput *),
+                           uintptr_t Input, uintptr_t Output) {
+  Callback((const struct CallbackInput *)Input, (volatile union CallbackOutput *)Output);
+  return ((volatile union CallbackOutput *)Output)->Value + 3;
+}
+static void observed(const struct CallbackInput *Input, volatile union CallbackOutput *Output) {
+  Output->Value = Input->Value ^ 0xA5;
+}
+int main(void) {
+  struct CallbackInput Input = {0x1234};
+  volatile union CallbackOutput Output = {0};
+  uint32_t Result = callback_entry((uintptr_t)&observed, (uintptr_t)&Input, (uintptr_t)&Output);
+  return Output.Value != (0x1234 ^ 0xA5) || Result != (0x1234 ^ 0xA5) + 3;
+}
+)c";
+    for (const auto Optimization : {"-O0", "-O2"})
+      compileAndRun(Source, {Optimization, "-Werror=incompatible-pointer-types",
+                             "-Werror=incompatible-function-pointer-types",
+                             "-fsanitize=undefined", "-fsanitize-trap=all"});
   }
 }
 

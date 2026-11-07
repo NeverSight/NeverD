@@ -12,6 +12,14 @@
         <translation>Modo de en&amp;foque</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>N&amp;ueva instancia</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>Abrir una nueva instancia de NeverD</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>&amp;Abrir...</translation>
     </message>
@@ -342,6 +350,50 @@
     <message>
         <source>Move to the next occurrence of the highlighted identifier</source>
         <translation>Ir a la aparición siguiente del identificador resaltado</translation>
+    </message>
+    <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>Bloquear o &amp;desbloquear</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>Mantener resaltada la palabra resaltada con el primer color libre, o desbloquearla</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>Color &amp;1</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>Color &amp;2</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>Color &amp;3</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>Color &amp;4</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>Color &amp;5</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>Color &amp;6</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>Color &amp;7</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>Color &amp;8</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>Bloquear la palabra resaltada con este color, o liberar el color</translation>
     </message>
     <message>
         <source>&amp;Find in view...</source>
@@ -1275,6 +1327,14 @@
         <source>Enter &amp;comment...</source>
         <translation>Introducir &amp;comentario...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>Instalar, activar, desactivar y eliminar plugins</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>Administrador de plugins...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1612,6 +1672,10 @@
         <translation>&amp;Buscar</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>B&amp;loquear resaltado</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>&amp;Ver</translation>
     </message>
@@ -1712,6 +1776,10 @@
     <message>
         <source>%1 uses database format %2, which this NeverD cannot update.</source>
         <translation>%1 usa el formato de base de datos %2, que esta versión de NeverD no puede actualizar.</translation>
+    </message>
+    <message>
+        <source>This database may already be open in another NeverD (%1)</source>
+        <translation>Es posible que esta base de datos ya esté abierta en otro NeverD (%1)</translation>
     </message>
     <message>
         <source>Cannot create %1</source>
@@ -2002,6 +2070,23 @@ Haga doble clic para ir a la declaración.</translation>
         <source>Could not refresh source: %1</source>
         <translation>No se pudo actualizar el código fuente: %1</translation>
     </message>
+
+    <message>
+        <source>Interpreter recovered · %1 blocks</source>
+        <translation>Intérprete recuperado · %1 bloques</translation>
+    </message>
+    <message>
+        <source>No complete source was produced</source>
+        <translation>No se produjo código fuente completo</translation>
+    </message>
+    <message>
+        <source>Recovering interpreter control flow…</source>
+        <translation>Recuperando el flujo de control del intérprete…</translation>
+    </message>
+    <message>
+        <source>Recovery stopped: %1</source>
+        <translation>Recuperación detenida: %1</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::CodeView</name>
@@ -2068,6 +2153,23 @@ Haga doble clic para ir a la declaración.</translation>
     <message>
         <source>Cancel transformation</source>
         <translation>Cancelar la transformación</translation>
+    </message>
+
+    <message>
+        <source>Interpreter recovery options…</source>
+        <translation>Opciones de recuperación del intérprete…</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report…</source>
+        <translation>Informe de recuperación del intérprete…</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>Recuperar función del intérprete</translation>
+    </message>
+    <message>
+        <source>Return to ordinary source</source>
+        <translation>Volver al código fuente ordinario</translation>
     </message>
 </context>
 <context>
@@ -2296,6 +2398,14 @@ Haga doble clic para ir a la declaración.</translation>
         <source>Laying out graph…</source>
         <translation>Calculando la disposición del grafo…</translation>
     </message>
+    <message>
+        <source>From %1</source>
+        <translation>Desde %1</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>Hacia %1</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::HexView</name>
@@ -2377,6 +2487,26 @@ Haga doble clic para ir a la declaración.</translation>
         <translation>Análisis en segundo plano: las referencias y las etiquetas se indexan mientras navega</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>Base de datos modificada</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1 cambió después de que esta área de trabajo lo abriera, quizá en otro NeverD. ¿Reemplazar su contenido actual por el proyecto de esta área de trabajo?</translation>
+    </message>
+    <message>
+        <source>Open other files in a new instance</source>
+        <translation>Abrir otros archivos en una nueva instancia</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>Con un archivo abierto, Archivo &gt; Abrir, un archivo reciente y un archivo soltado inician una nueva instancia en lugar de reemplazarlo</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 ya está abierto en otro NeverD; cambiando a él.</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>Cambios sin guardar</translation>
     </message>
@@ -2387,6 +2517,10 @@ Haga doble clic para ir a la declaración.</translation>
     <message>
         <source>%1 lacks the latest changes. Save them into it before continuing?</source>
         <translation>A %1 le faltan los últimos cambios. ¿Guardarlos en ella antes de continuar?</translation>
+    </message>
+    <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>No se puede iniciar una nueva instancia: %1</translation>
     </message>
     <message>
         <source>Cannot jump to %1: %2</source>
@@ -2415,18 +2549,6 @@ Haga doble clic para ir a la declaración.</translation>
     <message>
         <source>History: %1 entries, cursor %2</source>
         <translation>Historial: %1 entradas, posición %2</translation>
-    </message>
-    <message>
-        <source>AU: idle</source>
-        <translation>AU: inactivo</translation>
-    </message>
-    <message>
-        <source>AU: busy %1%</source>
-        <translation>AU: ocupado %1%</translation>
-    </message>
-    <message>
-        <source>AU: busy</source>
-        <translation>AU: ocupado</translation>
     </message>
     <message>
         <source>Down</source>
@@ -3300,6 +3422,10 @@ Después:
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>Elija un archivo de 1 byte a %1, una dirección hexadecimal y un nombre de sección. Una función necesita un nombre y permisos de ejecución.</translation>
     </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>Tareas de plugins</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3464,6 +3590,14 @@ Después:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>%1 está en una carpeta en la que no puede escribir; su base de datos se guarda en %2</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>Es posible que este archivo ya esté abierto en otro NeverD (%1)</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1 se dejó como estaba; no contiene los cambios de esta área de trabajo.</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>
@@ -6807,6 +6941,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 Identidades de las referencias: sin resolver. Algunos destinos de llamadas o datos no se pueden comparar. Esto por sí solo no demuestra un cambio.</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>Incluir llamadas emparejadas</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>Extender las regiones compartidas a través de llamadas directas cuyos destinos estén emparejados. Los resultados dependen de los pares de funciones actuales y se recalculan cuando cambian. Esto no valida el comportamiento de las llamadas.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -6849,10 +6991,6 @@ Seleccione una operación para seguir las dependencias. Las operaciones sintéti
     <message>
         <source>Enable dependency evidence in comparison settings.</source>
         <translation>Active las pruebas de dependencias en los ajustes de comparación.</translation>
-    </message>
-    <message>
-        <source>Include control dependencies</source>
-        <translation>Incluir dependencias de control</translation>
     </message>
     <message>
         <source>Inspect original function</source>
@@ -6989,6 +7127,32 @@ La terminación no demuestra que coincidan los números de iteraciones ni los re
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>Demostración: cada ciclo del contador alcanza una salida común relativa a una expresión derivada de las entradas. Puede producirse comportamiento indefinido antes de salir.</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>Accesos a argumentos</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>Mostrar lecturas y escrituras que usan la misma dirección calculada que un argumento de llamada recuperado.</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>Incluir control</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>Incluir dependencias de control al rastrear entradas o usos.</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>Llamada n%1 · %2 observaciones de direcciones · %3
+Lecturas y escrituras en la dirección de un argumento recuperado. Los efectos de la llamada y el orden de ejecución siguen siendo desconocidos. Active una fila para seleccionar su operación.</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>Inspeccionando direcciones de argumentos…</translation>
     </message>
 </context>
 <context>
@@ -7803,6 +7967,38 @@ Cada uso de un parámetro proyectado lee los mismos bits inferiores. El comporta
         <source>Uncertain</source>
         <translation>Incierto</translation>
     </message>
+    <message>
+        <source>Argument</source>
+        <translation>Argumento</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>Acceso</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>Entrada RETURN</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>Escritura</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>Lectura</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>Ruta COPY / PHI</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>No observado</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>Ruta COPY/PHI del mismo ancho a un operando RETURN. Ese operando puede ser un destino de control; esto no establece un valor de retorno ABI ni el orden de ejecución.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonRegionsDialog</name>
@@ -7959,6 +8155,30 @@ Los productores de las entradas externas no se comparan ni se cuentan como códi
 SSA recipe: %1</source>
         <translation>
 Método SSA: %1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+Las llamadas usan los pares de funciones actuales; el comportamiento no está validado.</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>Contexto de llamadas…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>Principal</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>Secundario</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>%1 funciones principales / %2 secundarias · %3 intervalos compartidos
+Cobertura: %4% / %5% de las instrucciones admitidas, incluidas las llamadas directas emparejadas. Esta evidencia depende de los pares de funciones; el comportamiento no está validado.</translation>
     </message>
 </context>
 <context>
@@ -9505,6 +9725,18 @@ Las ambigüedades y decisiones manuales se limitan al informe. Las hipótesis de
         <source>Releases</source>
         <translation>Versiones publicadas</translation>
     </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>Las llamadas de estos fragmentos guardados se basan en los pares de funciones del informe original. No demuestran que el comportamiento de las funciones llamadas sea equivalente.</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>Todos los fragmentos nativos</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>Todos los fragmentos SSA</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LineageGraph</name>
@@ -9848,6 +10080,668 @@ Su grafo anterior sigue disponible.</translation>
     <message>
         <source>Timeline</source>
         <translation>Cronología</translation>
+    </message>
+</context>
+
+<context>
+    <name>neverd::gui::InterpreterRecoveryDialog</name>
+    <message>
+        <source>Assume external stores avoid the declared entry frame</source>
+        <translation>Suponer que las escrituras externas evitan el marco de entrada declarado</translation>
+    </message>
+    <message>
+        <source>Blank or zero keeps the engine default. More work does not permit incomplete source or add memory assumptions.</source>
+        <translation>Vacío o cero conserva el valor predeterminado del motor. Más trabajo no permite código incompleto ni añade supuestos de memoria.</translation>
+    </message>
+    <message>
+        <source>Chained transfers</source>
+        <translation>Transferencias encadenadas</translation>
+    </message>
+    <message>
+        <source>Chained visits per destination</source>
+        <translation>Visitas encadenadas por destino</translation>
+    </message>
+    <message>
+        <source>Contexts per address</source>
+        <translation>Contextos por dirección</translation>
+    </message>
+    <message>
+        <source>Control fields</source>
+        <translation>Campos de control</translation>
+    </message>
+    <message>
+        <source>Control refinements</source>
+        <translation>Refinamientos del control</translation>
+    </message>
+    <message>
+        <source>Control-flow nodes</source>
+        <translation>Nodos de flujo de control</translation>
+    </message>
+    <message>
+        <source>Dependency visits</source>
+        <translation>Visitas a dependencias</translation>
+    </message>
+    <message>
+        <source>End a chain at a repeated destination</source>
+        <translation>Terminar una cadena al repetir un destino</translation>
+    </message>
+    <message>
+        <source>Engine default</source>
+        <translation>Valor predeterminado del motor</translation>
+    </message>
+    <message>
+        <source>Enter a valid integer for %1.</source>
+        <translation>Introduzca un entero válido para %1.</translation>
+    </message>
+    <message>
+        <source>Enter both entry-frame endpoints, or leave both blank.</source>
+        <translation>Introduzca ambos extremos del marco de entrada o deje ambos vacíos.</translation>
+    </message>
+    <message>
+        <source>Entry RSP alignment</source>
+        <translation>Alineación del RSP de entrada</translation>
+    </message>
+    <message>
+        <source>Entry RSP range end (exclusive)</source>
+        <translation>Fin del rango del RSP de entrada (excluido)</translation>
+    </message>
+    <message>
+        <source>Entry RSP range start</source>
+        <translation>Inicio del rango del RSP de entrada</translation>
+    </message>
+    <message>
+        <source>Entry RSP residue</source>
+        <translation>Residuo del RSP de entrada</translation>
+    </message>
+    <message>
+        <source>Evaluated operations</source>
+        <translation>Operaciones evaluadas</translation>
+    </message>
+    <message>
+        <source>General registers</source>
+        <translation>Registros generales</translation>
+    </message>
+    <message>
+        <source>General registers and CPU queries</source>
+        <translation>Registros generales y consultas de CPU</translation>
+    </message>
+    <message>
+        <source>General registers, CPU queries and XMM</source>
+        <translation>Registros generales, consultas de CPU y XMM</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report</source>
+        <translation>Informe de recuperación del intérprete</translation>
+    </message>
+    <message>
+        <source>Node evaluations</source>
+        <translation>Evaluaciones de nodos</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid return slots and saved frame cells</source>
+        <translation>Demostrar que las escrituras evitan las ranuras de retorno y las celdas de marco guardadas</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid the declared entry frame</source>
+        <translation>Demostrar que las escrituras evitan el marco de entrada declarado</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>Recuperar</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>Recuperar función del intérprete</translation>
+    </message>
+    <message>
+        <source>Recover reachable control flow and generate C with explicit x64 register state. The source describes normal, nonfaulting execution with fixed image mappings. Memory assumptions below apply only when you enter them.</source>
+        <translation>Recuperar el flujo de control alcanzable y generar C con estado explícito de registros x64. El código describe una ejecución normal sin fallos con mapeos de imagen fijos. Los supuestos de memoria siguientes solo se aplican si los introduce.</translation>
+    </message>
+    <message>
+        <source>Signed offsets from entry RSP. Declaring this range assumes address arithmetic does not wrap; it does not prove accessibility or separation.</source>
+        <translation>Desplazamientos con signo respecto al RSP de entrada. Declarar este rango supone que la aritmética de direcciones no da la vuelta; no demuestra accesibilidad ni ausencia de solapamiento.</translation>
+    </message>
+    <message>
+        <source>Solver queries</source>
+        <translation>Consultas al solucionador</translation>
+    </message>
+    <message>
+        <source>Source state</source>
+        <translation>Estado del código fuente</translation>
+    </message>
+    <message>
+        <source>State and memory</source>
+        <translation>Estado y memoria</translation>
+    </message>
+    <message>
+        <source>Symbolic expression nodes</source>
+        <translation>Nodos de expresiones simbólicas</translation>
+    </message>
+    <message>
+        <source>Unspecified</source>
+        <translation>Sin especificar</translation>
+    </message>
+    <message>
+        <source>Work limits</source>
+        <translation>Límites de trabajo</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisProgress</name>
+    <message>
+        <source>AU: idle</source>
+        <translation>AU: inactivo</translation>
+    </message>
+    <message>
+        <source>AU: loading</source>
+        <translation>AU: cargando</translation>
+    </message>
+    <message>
+        <source>AU: loading %1%</source>
+        <translation>AU: cargando %1%</translation>
+    </message>
+    <message>
+        <source>AU: finding functions</source>
+        <translation>AU: buscando funciones</translation>
+    </message>
+    <message>
+        <source>AU: indexing references</source>
+        <translation>AU: indexando referencias</translation>
+    </message>
+    <message>
+        <source>AU: indexing references %1%</source>
+        <translation>AU: indexando referencias %1%</translation>
+    </message>
+    <message>
+        <source>AU: analysis finished</source>
+        <translation>AU: análisis terminado</translation>
+    </message>
+    <message>
+        <source>Analysis finished in %1 s</source>
+        <translation>Análisis terminado en %1 s</translation>
+    </message>
+    <message>
+        <source>Reading the file</source>
+        <translation>Leyendo el archivo</translation>
+    </message>
+    <message>
+        <source>Parsing the format</source>
+        <translation>Analizando el formato</translation>
+    </message>
+    <message>
+        <source>Finding code</source>
+        <translation>Buscando código</translation>
+    </message>
+    <message>
+        <source>Loading debug information</source>
+        <translation>Cargando información de depuración</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>Abriendo el proyecto</translation>
+    </message>
+    <message>
+        <source>Loading</source>
+        <translation>Cargando</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LoadProgressCard</name>
+    <message>
+        <source>Opening %1</source>
+        <translation>Abriendo %1</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 s</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> icono</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> posición</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · Tarea %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 s</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>&amp;Cancelar tarea</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>&amp;Exportar artefacto…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>&amp;Importar plugin…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>Añadir el código recuperado como sección de análisis y abrir su primera función</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>Artefacto:</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Examinar…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>Elegir icono del comando</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>Elija qué comandos aparecen directamente en el menú contextual. Los demás se agrupan en Plugins → nombre del plugin. Los iconos admiten builtin:name o archivos locales PNG, ICO o SVG.</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>Comando</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>Ajustes del menú contextual…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>Menú contextual directo</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>Duración</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>Exportar artefacto</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>Exportar artefacto a un archivo nuevo</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>Icono</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>Icono no disponible: %1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>Iconos (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>Importe un plugin de proceso para añadir comandos.</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>Importar código a la imagen</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>Importar plugin de proceso</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>Importar plugin de proceso…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>Registro de %1</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>Ajustes de menús…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>Plu&amp;gins</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>Plugin</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>Plugin / tarea</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>Artefacto del plugin exportado a %1</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>Menús contextuales de plugins</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>Icono del plugin no disponible: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>Administrador de plugins…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>Manifiestos de plugins (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>Registro de tareas del plugin</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>Tareas y resultados de plugins</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>Plugins</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>Submenú Plugins</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>Posición</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>Plugin de proceso importado: %1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>Progreso</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>El proyecto cambió mientras estaba abierto el diálogo del plugin</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>Recordar estos valores para esta acción</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>Ejecute un comando de plugin para ver sus tareas y resultados.</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>Seleccione una tarea bajo %1 para ver su resultado.</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>Progreso de la tarea de plugin seleccionada</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>Mostrar &amp;registro</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>Estado</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>Resultados de tareas</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>Tareas agrupadas por plugin</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>El registro de esta acción ya no está activo.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>Activando</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>Activación</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>Activación: %1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>Activo</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>Generación del componente: %1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>No se pudo abrir la carpeta del plugin.</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>Servicios de lectura declarados: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>Diagnóstico: %1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>Desactivar</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>Activar</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>Activado</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>Activado al iniciar: %1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>Filtrar por nombre, ID o ruta del plugin</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>Filtrar plugins</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>Importe un manifiesto de plugin de proceso para añadir comandos. Los proveedores solo se inician al ejecutar un comando.</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>Importar plugin…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>Importar plugin de proceso</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>Inactivo</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>Instalación eliminada. Se conservan los archivos del plugin y los artefactos de tareas.</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>Instalación eliminada; se están deteniendo las tareas activas.</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>Plugins de proceso instalados</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>Manifiesto: %1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>No</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>Abrir carpeta</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>Plugin</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>Plugin desactivado. Se conserva su instalación y se cancelan las tareas activas.</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>Plugin activado.</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>Plugin importado: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>Administrador de plugins</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>Manifiestos de plugins (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>Plugin: %1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>Registros: %1; llamadas activas: %2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>Eliminar el registro guardado. Se conservan los archivos del plugin y los artefactos de tareas.</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>Reintentar activación</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>Seleccione un plugin para ver su manifiesto, activación y diagnósticos.</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>Detalles del plugin seleccionado</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>Deteniendo</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>Tipo: proceso externo</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>No disponible</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>Desinstalar</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>Versión</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>Versión: %1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>Esperando el fin de las tareas y la limpieza de publicaciones aceptadas.</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>Sí</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>No se puede leer el recibo de publicación: %1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>No se pudo restaurar el plugin %1 desde %2: %3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>Se importó la sección de análisis %1. Guarde el proyecto para conservarla.</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>El estado del plugin cambió, pero no se pudo guardar su preferencia de inicio.</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>La operación del proyecto terminó, pero no se pudo guardar su recibo: %1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>La sesión se cerró antes de recibir el recibo de publicación.</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>La instancia del plugin ya no está activa.</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>Esperando el recibo del proyecto.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>Grafo de resultados del plugin</translation>
     </message>
 </context>
 </TS>

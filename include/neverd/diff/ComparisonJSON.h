@@ -41,10 +41,12 @@ inline constexpr unsigned ReferenceEvidenceSchemaVersion = 4;
 inline constexpr unsigned ComparisonSchemaVersion =
     ReferenceEvidenceSchemaVersion;
 inline constexpr unsigned OldestComparisonSchemaVersion = 2;
+/// First matcher whose reports must name each pair's alignment recipe.
+inline constexpr unsigned AlignmentProfileMatcherVersion = 22;
 /// The version of the matcher, the features and the delta; part of a
 /// comparison's identity.  Raise it whenever a change could pair functions
 /// differently, measure a pair differently or retain different candidates.
-inline constexpr unsigned MatcherVersion = 9;
+inline constexpr unsigned MatcherVersion = 25;
 
 /// Writes \p Result of \p Primary and \p Secondary as a saved comparison.
 /// SummaryOnly emits bounded metadata and counts without inventories or pairs.
@@ -112,7 +114,7 @@ readComparison(llvm::StringRef Text, std::string &Error,
 enum class BindFailure : uint8_t {
   /// An input's file hash differs.
   StaleInput,
-  /// An input was analyzed with other settings.
+  /// An input's analysis settings or captured native state differ.
   StaleAnalysis,
   /// A function the comparison names is not in the program.
   MissingFunction,

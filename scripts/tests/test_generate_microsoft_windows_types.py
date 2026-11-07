@@ -17,6 +17,151 @@ SPEC.loader.exec_module(windows)
 
 
 class MicrosoftWindowsTypes(unittest.TestCase):
+    def test_rdbss_published_abi_must_pass_before_replacing_primary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            primary = root / "kernel.h"
+            primary.write_text("/* established declarations */\n")
+            source = root / "provider.h"
+            source.write_text("/* provider declarations */\n")
+            imported = {"declaration": 1, "prefix": "RDBSS", "renamed": [],
+                        "dependencies": [], "prototypes": ["RxStartMinirdr"]}
+            result = {"source": "/* proposed declarations */\n", "types": [],
+                      "prototypes": ["RxStartMinirdr"], "imports": [imported]}
+            unit = {"name": "RDBSS", "source": source, "headers": [], "defines": [],
+                    "default_calling_convention": "", "input_sha256": "fixture",
+                    "selected_prototypes": [],
+                    "layouts": "layouts", "parsed": {"prototypes": ["RxStartMinirdr"]},
+                    "commands": [], "metadata": {"cpp_header_bridge": {
+                        "verified_functions": ["RxStartMinirdr"]}}}
+            with patch.dict(windows.ISOLATED_PROVIDERS, {
+                    "WindowsKernel": (windows.Provider("RDBSS", ("rxprocs", "mrx")),)}), \
+                    patch.object(windows, "prepare_provider", return_value=unit), \
+                    patch.object(windows, "run", return_value=json.dumps(result)), \
+                    patch.object(windows, "checked_types", return_value={
+                        "types": [], "prototypes": ["RxStartMinirdr"]}), \
+                    patch.object(windows, "verify_layouts", return_value=1), \
+                    patch.object(windows.rdbss, "verify_abis", side_effect=ValueError(
+                        "published compiler ABI changed")):
+                with self.assertRaisesRegex(ValueError, "published compiler ABI changed"):
+                    windows.merge_providers("WindowsKernel", primary, root, ["clang"],
+                                            ["clang"], "neverd", "LLP64", "layouts")
+            self.assertEqual(primary.read_text(), "/* established declarations */\n")
+
+    def test_rdbss_merge_refuses_an_unproved_companion_without_replacing_primary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            primary = root / "kernel.h"
+            primary.write_text("/* established declarations */\n")
+            candidate = "/* proposed declarations */\n"
+            imported = {"declaration": 1, "prefix": "RDBSS", "renamed": [],
+                        "dependencies": [], "prototypes": ["NewCompanion"]}
+            result = {"source": candidate, "types": [], "prototypes": ["NewCompanion"],
+                      "imports": [imported]}
+            unit = {"name": "RDBSS", "source": root / "provider.h", "metadata": {
+                "cpp_header_bridge": {"verified_functions": ["RxStartMinirdr"]}}}
+            with patch.dict(windows.ISOLATED_PROVIDERS, {
+                    "WindowsKernel": (windows.Provider("RDBSS", ("rxprocs", "mrx")),)}), \
+                    patch.object(windows, "prepare_provider", return_value=unit), \
+                    patch.object(windows, "run", return_value=json.dumps(result)), \
+                    patch.object(windows, "checked_types", return_value={
+                        "types": [], "prototypes": ["NewCompanion"]}), \
+                    patch.object(windows, "verify_layouts", return_value=1):
+                with self.assertRaisesRegex(ValueError, "lack an original C\\+\\+ ABI proof"):
+                    windows.merge_providers("WindowsKernel", primary, root, ["clang"],
+                                            ["clang"], "neverd", "LLP64", "layouts")
+            self.assertEqual(primary.read_text(), "/* established declarations */\n")
+
+    def test_rdbss_enum_bridge_precedes_the_type_parser(self):
+        create = "typedef enum { Create = 1 } RX_CONTEXT_CREATE_FLAGS;\n"
+        lowio = "typedef enum { LowIo = 2 } RX_CONTEXT_LOWIO_FLAGS;\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "RDBSS.c"
+            source.write_text("#include <rxprocs.h>\n#include <mrx.h>\n")
+
+            def run(command, log, output=None):
+                if "-E" in command:
+                    output.write_text(create + (lowio if "c++" in command else lowio.replace(
+                        "RX_CONTEXT_LOWIO_FLAGS", "RX_CONTEXT_CREATE_FLAGS")))
+                return "fixture layouts"
+
+            def parsed(neverd, path, log, model):
+                self.assertEqual(path.read_text().count("} RX_CONTEXT_CREATE_FLAGS;"), 1)
+                self.assertIn("} RX_CONTEXT_LOWIO_FLAGS;", path.read_text())
+                # Stop before the independent compiler checks; this test owns
+                # the order of preprocessing repair and parser admission.
+                raise ValueError("fixture parser boundary reached")
+
+            with patch.object(windows, "run", side_effect=run), \
+                    patch.object(windows, "checked_types", side_effect=parsed):
+                with self.assertRaisesRegex(ValueError, "fixture parser boundary reached"):
+                    windows.prepare_provider("RDBSS", source, ["clang"], root,
+                                             "neverd", "LLP64")
+
+    def test_dxgi_c_parameter_bridge_requires_the_original_cpp_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "DXGI.c"
+            original = '#include <windows.h>\n#include <dxgi1_6.h>\n'
+            source.write_text(original)
+            with patch.object(windows, "run", side_effect=ValueError("changed SDK type")):
+                with self.assertRaisesRegex(ValueError, "changed SDK type"):
+                    windows.prepare_provider("DXGI", source, ["clang"], root,
+                                             "neverd", "LLP64")
+            self.assertEqual(source.read_text(), original)
+            calls = []
+
+            def run(command, log, output=None):
+                calls.append(command)
+                if output:
+                    output.write_text("long DXGIDeclareAdapterRemovalSupport(void);\n")
+                return "record layouts"
+
+            with patch.object(windows, "run", side_effect=run), \
+                    patch.object(windows, "checked_types", return_value={"prototypes": []}):
+                result = windows.prepare_provider("DXGI", source, ["clang"], root,
+                                                  "neverd", "LLP64")
+            self.assertIn("c++", calls[0])
+            self.assertIn("-fsyntax-only", calls[0])
+            self.assertIn("DXGIDeclareAdapterRemovalSupport(void);", source.read_text())
+            proof = result["metadata"]["cpp_parameter_bridge"]
+            self.assertEqual(proof["sha256"], windows.wdk.digest(Path(proof["source"])))
+            self.assertIn("decltype(&DXGIDeclareAdapterRemovalSupport)",
+                          Path(proof["source"]).read_text())
+
+    def test_isolated_kernel_provider_keeps_default_before_selection(self):
+        # Preprocessing removes /Gz. The parser must see that policy before
+        # reading both the exported function and its unannotated callback.
+        declaration = "typedef int (*Callback)(int);\nlong Read(Callback cb);\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.c"
+            source.write_text(declaration)
+            seen = []
+
+            def run(command, log, output=None):
+                if output:
+                    output.write_text(declaration)
+                return "fixture record layouts"
+
+            def parsed(neverd, path, log, model):
+                seen.append(path.read_text())
+                return {"prototypes": ["Read"], "problems": []}
+
+            for convention in ("__stdcall", ""):
+                with patch.object(windows, "run", side_effect=run), \
+                        patch.object(windows, "checked_types", side_effect=parsed):
+                    result = windows.prepare_provider(
+                        "Provider", source, ["clang"], root, "neverd", "ILP32",
+                        convention=convention)
+                expected = (("#pragma neverd_default_calling_convention(__stdcall)\n"
+                             if convention else "") + declaration)
+                self.assertEqual(seen[-1], expected)
+                self.assertEqual(result["source"].read_text(), expected)
+                self.assertEqual(result["default_calling_convention"], convention)
+                self.assertEqual(result["input_sha256"], windows.wdk.digest(result["source"]))
+
     def test_x86_driver_compiler_default_requires_official_build_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             kit = Path(directory)

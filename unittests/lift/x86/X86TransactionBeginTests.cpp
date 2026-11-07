@@ -9,7 +9,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "../x86_64/X86FPStateAccuracyFixture.h"
+#include "X86TransactionTestCases.h"
 
+#include "neverd/decode/X86/X86TransactionEncoding.h"
 #include "neverd/lift/X86/X86Lifter.h"
 
 #include "llvm/Object/ObjectFile.h"
@@ -32,6 +34,78 @@ int decode(Decoder &D, unsigned Route, const std::vector<uint8_t> &Bytes,
          : Route == 1
              ? D.decodeOneLight(Bytes.data(), Bytes.size(), Address, I)
              : D.decodeOneForLift(Bytes.data(), Bytes.size(), Address, I);
+}
+
+TEST(X86TransactionEncoding, ControlsShareExactPrefixAndImmediateOwnership) {
+  unsigned Cases = 0, Refusals = 0;
+  for (Arch A : {Arch::X86, Arch::X64}) {
+    Decoder D;
+    ASSERT_TRUE(D.init(A));
+    auto Prefixes = x86TransactionTestPrefixes(A == Arch::X64);
+    Prefixes.push_back({std::vector<uint8_t>(12, 0x66), 2});
+    Prefixes.push_back({std::vector<uint8_t>(12, 0x67), 4});
+    for (const auto &[Prefix, Width] : Prefixes)
+      for (unsigned Code = 0; Code < 258; ++Code) {
+        auto Bytes = Prefix;
+        const unsigned ID = Code < 256    ? X86_INS_XABORT
+                            : Code == 256 ? X86_INS_XEND
+                                          : X86_INS_XTEST;
+        if (Code < 256)
+          Bytes.insert(Bytes.end(), {0xc6, 0xf8, uint8_t(Code)});
+        else
+          Bytes.insert(Bytes.end(),
+                       {0x0f, 0x01, uint8_t(Code == 256 ? 0xd5 : 0xd6)});
+        SCOPED_TRACE(testing::PrintToString(Bytes));
+        const auto E = x86TransactionEncoding(Bytes, 0x1000, A == Arch::X64);
+        const bool Valid = Code < 256 || std::none_of(
+                                             Prefix.begin(), Prefix.end(),
+                                             [](uint8_t Byte) {
+                                               return Byte == 0x66 ||
+                                                      Byte == 0xf2 ||
+                                                      Byte == 0xf3;
+                                             });
+        ASSERT_EQ(E.has_value(), Valid);
+        if (E)
+          EXPECT_EQ(E->OpcodeOffset, Prefix.size());
+        if (Code < 256)
+          EXPECT_EQ(E->AbortCode, Code);
+        for (unsigned Route = 0; Route < 3; ++Route) {
+          DecodedInsn I{};
+          ASSERT_EQ(decode(D, Route, Bytes, 0x1000, I), Bytes.size());
+          ASSERT_EQ(I.Id, ID);
+          if (E)
+            ASSERT_TRUE(x86TransactionControlDetailMatches(I.Raw->detail->x86,
+                                                           *E, A == Arch::X64));
+          for (bool Strict : {false, true}) {
+            D.setStrict(Strict);
+            std::vector<LowOp> Ops;
+            if (!Valid) {
+              EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+              EXPECT_TRUE(Ops.empty());
+              ++Refusals;
+            } else {
+              ASSERT_NO_THROW(D.liftToLow(I, Ops));
+              ASSERT_FALSE(Ops.empty());
+              if (Code < 256)
+                EXPECT_EQ(Ops.front().Inputs[1].Offset, Code);
+              ++Cases;
+            }
+          }
+        }
+        // None of these instructions has an optional/truncated final byte.
+        auto Invalid = Bytes;
+        Invalid.pop_back();
+        EXPECT_FALSE(x86TransactionEncoding(Invalid, 0x1000, A == Arch::X64));
+        Invalid = Bytes;
+        Invalid.insert(Invalid.begin(), 0xf0);
+        EXPECT_FALSE(x86TransactionEncoding(Invalid, 0x1000, A == Arch::X64));
+        Invalid = Bytes;
+        Invalid.push_back(0x90);
+        EXPECT_FALSE(x86TransactionEncoding(Invalid, 0x1000, A == Arch::X64));
+      }
+  }
+  RecordProperty("control_decoder_lift_checks", Cases);
+  RecordProperty("invalid_np_prefix_refusals", Refusals);
 }
 
 TEST(X86TransactionBegin, EveryRel16FieldRetainsItsSignedFullWidthTarget) {

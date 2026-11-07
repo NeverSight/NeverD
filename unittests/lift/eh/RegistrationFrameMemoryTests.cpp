@@ -10,6 +10,8 @@
 #include "../../../lib/ir/low/X86/RegistrationFrame.h"
 #include "gtest/gtest.h"
 
+#include "neverd/lift/X86/X86Regs.h"
+
 namespace {
 using namespace neverd::registration_state;
 
@@ -48,6 +50,42 @@ TEST(RegistrationFrameMemory, FrameCoordinatesHaveSeparateCells) {
   EXPECT_FALSE(Frame.loadCallback(-4, 4).MayBeFrame);
   EXPECT_EQ(Frame.load(-4, 4).Offset, -24);
   EXPECT_EQ(Frame.loadEntry(-4, 4).EntryOffset, 8);
+}
+
+TEST(RegistrationFrameMemory, StackReleaseKeepsSurvivingPointerBytes) {
+  for (const int32_t Boundary : {-32, INT32_MIN + 4})
+    for (int32_t Consumed = 1; Consumed <= 4; ++Consumed) {
+      SCOPED_TRACE(Boundary);
+      SCOPED_TRACE(Consumed);
+      FrameState Frame;
+      Frame.store(Boundary - Consumed, 4, FrameValue::frame(-64));
+      Frame.store(Boundary + 4, 4, FrameValue::constant(7));
+      discardFrameCellsBelow(Frame.Cells, Boundary);
+      const auto Value = Frame.load(Boundary, 4);
+      EXPECT_EQ(Value.MayBeFrame, Consumed != 4);
+      EXPECT_FALSE(Value.Offset);
+      EXPECT_EQ(Frame.load(Boundary + 4, 4).Constant, 7u);
+    }
+}
+
+TEST(RegistrationFrameMemory, CallbackReleaseRevokesInitializationAndIdentity) {
+  FrameState Frame;
+  Frame.CallbackEntry = 0x401000;
+  auto &Stack =
+      Frame.Registers[neverd::x86reg::RSP / neverd::x86reg::GeneralRegStride];
+  Stack = FrameValue::callbackFrame(0x401000, -36);
+  Frame.storeCallback(-33, 4, FrameValue::callbackFrame(0x401000, -64));
+  Stack = FrameValue::callbackFrame(0x401000, -32);
+  Frame.trimCallbackCells();
+  const auto Value = Frame.loadCallback(-32, 3);
+  EXPECT_TRUE(Value.MayBeFrame);
+  EXPECT_FALSE(Value.CallbackAddress);
+  EXPECT_FALSE(Frame.InitializedCallbackBytes.count(-33));
+  EXPECT_TRUE(Frame.InitializedCallbackBytes.count(-32));
+  EXPECT_TRUE(Frame.callbackMemoryIsPrivate({0x401000, -32}, 3, true));
+  Stack = FrameValue::callbackFrame(0x401000, -36);
+  Frame.trimCallbackCells();
+  EXPECT_FALSE(Frame.callbackMemoryIsPrivate({0x401000, -33}, 4, true));
 }
 
 TEST(RegistrationFrameMemory, OverlapLookupDoesNotWrapSignedCoordinates) {

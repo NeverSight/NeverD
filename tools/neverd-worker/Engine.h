@@ -1,16 +1,20 @@
 #pragma once
+#include "DeferredRelease.h"
 #include "Protocol.h"
 #include "ResourceLimits.h"
 
 #include "neverd/sdk/NeverDCAPISession.h"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <list>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -59,6 +63,8 @@ public:
   /// Whether the engine exposes its static x87 support matrix, independently
   /// of binary loading, host probing or execution.
   static bool reportsX87Capabilities();
+  /// Whether versioned machine-source recovery is available for source views.
+  static bool recoversInterpreterSource();
   /// Whether the engine can query unwind metadata at an exact address.
   static bool reportsUnwindFrames();
   /// Whether the engine keeps function edits (function_create/_delete).
@@ -191,6 +197,80 @@ private:
   void restartWarming();
   void warmStep();
   Json warmJson() const;
+  /// Whether idle time solves the image's call-register summaries for this
+  /// session's decompiles (neverd_prepare_call_summaries_json), after
+  /// preparing every function a page at a time for that solve to read.  An
+  /// analysis replica opts in at restore. Decompiles from then on read the
+  /// image's summaries, so a function's text can change once.
+  enum class SummaryState {
+    Off,
+    Pending,
+    Preparing,
+    Solving,
+    Ready,
+    Unavailable
+  };
+  SummaryState summaryState_ = SummaryState::Off;
+  /// Whether the restore asked for the job, which a change to the project
+  /// then runs again; an explicit request's summaries are only forgotten.
+  bool summaryJob_ = false;
+  std::uint64_t summaryCursor_ = 0;
+  /// Whether the job discovered the image's functions, whose summaries it
+  /// then solves (summaryJobStep).
+  bool summaryDiscovered_ = false;
+  std::string summaryError_;
+  /// Once the summaries are ready, the job reads ahead the signature bodies
+  /// of the callees later decompiles read (neverd_prefill_callees_json),
+  /// from prefillCursor_ in the engine's order, until it has read them all,
+  /// the engine's memory for them is full, or the engine has none to read.
+  enum class PrefillState { Off, Pending, Done, Unavailable };
+  PrefillState prefillState_ = PrefillState::Off;
+  std::uint64_t prefillCursor_ = 0;
+  std::uint64_t prefillPrepared_ = 0;
+  bool prefillPending() const;
+  void prefillStep();
+  /// A replica restored with render_ahead renders each function's engine
+  /// pages in idle time, once its summaries and read-ahead are done, smallest
+  /// function first (EngineRenderAhead.cpp).  namedView builds a first visit's
+  /// document from them as it builds a later visit's from a kept document's.
+  /// They have a kept document's lifetime: forgetNamedViews drops them.
+  enum class RenderAheadState { Off, Pending, Done, Full };
+  bool renderAheadRequested_ = false;
+  RenderAheadState renderAheadState_ = RenderAheadState::Off;
+  /// Each function's size and entry, smallest first, once read.
+  std::vector<std::pair<std::uint64_t, std::uint64_t>> renderAheadOrder_;
+  bool renderAheadOrdered_ = false;
+  std::size_t renderAheadCursor_ = 0;
+  unsigned renderAheadStarts_ = 0;
+  std::uint64_t renderAheadRendered_ = 0, renderAheadFailed_ = 0,
+                renderAheadHits_ = 0;
+  std::size_t renderAheadBytes_ = 0, renderAheadRawBytes_ = 0;
+  /// Compact engine pages by namedView's source key.
+  std::unordered_map<std::string, std::vector<std::string>> renderedAhead_;
+  /// When the last request was answered.
+  std::chrono::steady_clock::time_point lastRequest_{};
+  /// The function a request last prepared and how long that took.
+  std::optional<std::uint64_t> requestPrepared_;
+  std::chrono::steady_clock::duration requestPrepareTime_{};
+  bool renderingAhead_ = false;
+  bool renderAheadPending() const;
+  /// False while the step only waits for the reader to pause.
+  bool renderAheadStep();
+  void renderFunctionAhead(std::uint64_t address);
+  void restartRenderAhead();
+  Json renderAheadJson() const;
+  /// The pages kept under \p sourceKey, or none.
+  std::vector<std::string> renderedAheadPages(const std::string &sourceKey);
+  bool summaryWorkPending() const;
+  void restartSummaries();
+  /// False where the step only waits on discovery (summaryJobStep).
+  bool summaryStep();
+  bool summaryJobStep();
+  Json summaryJson() const;
+  Json prepareCallSummaries();
+  /// Drop the decompiled text, views and graphs kept from before the
+  /// engine's analysis changed.
+  void forgetDecompiledViews();
   std::uintmax_t loadedSize_ = 0;
   std::filesystem::file_time_type loadedTime_;
   /// neverd_strings_ex_json options as JSON text, empty for the defaults; a
@@ -206,7 +286,12 @@ private:
     std::string sourceKey;
     // Retain the exact undecorated document in wire form. A second parsed
     // row tree can exceed the cache budget before the displayed one does.
+    // An engine document keeps the pages the engine wrote and the
+    // representation they were asked in, from which namedView builds it
+    // again as it did; a recovered one keeps its whole text.
     std::string original;
+    std::vector<std::string> enginePages;
+    std::string engineRepresentation;
     Json value;
     std::vector<std::size_t> lines;
     // Decide once after decoration. Older engines may return unsorted rows
@@ -227,10 +312,44 @@ private:
     mutable std::list<EncodedPage> pages;
     mutable std::size_t pageBytes = 0;
   };
+  /// Destroys the documents the cache lets go, after the request that let
+  /// them go has answered.
+  DeferredRelease releases_;
   /// Newest first, bounded by retained bytes as well as document count.
   std::list<std::shared_ptr<const NamedView>> namedViews_;
+  /// Where namedViews_ holds the document of each key, and of each source
+  /// key, which no two of them share.  A document's key is read after its
+  /// function's preparation, its source key before; preparing a whole
+  /// program can change the listing between them.
+  using NamedViewPosition =
+      std::list<std::shared_ptr<const NamedView>>::iterator;
+  std::unordered_map<std::string, NamedViewPosition> namedViewsByKey_;
+  std::unordered_map<std::string, NamedViewPosition> namedViewsBySource_;
+  /// Takes \p position's document out of both indexes.
+  void unindexNamedView(NamedViewPosition position);
   std::size_t namedViewBytes_ = 0, encodedPageBytes_ = 0;
   std::uint64_t namedViewsRevision_ = 0, namedViewsListingGeneration_ = 0;
+  /// Revisions that changed local display names alone, which drop nothing the
+  /// engine prepared (localNamesChanged).
+  std::uint64_t localNameRevisions_ = 0;
+  /// Forgets the documents of another revision or listing generation.
+  void syncNamedViews();
+  std::string namedViewSourceKey(std::uint64_t address,
+                                 const std::string &representation,
+                                 const std::string &optionText);
+  /// \p options with what the project's edits add to a source view of
+  /// \p address; \p stale receives why it leaves any out.
+  Json namedViewEngineOptions(std::uint64_t address,
+                              const std::string &representation,
+                              const Json &options, const Json *variableEdits,
+                              const Json *callTypes, const Json *stackFrame,
+                              Json &stale);
+  /// The engine's page of \p address from line \p next, its text checked.
+  std::string engineViewPage(std::uint64_t address,
+                             const std::string &representation,
+                             std::size_t next, bool sourceView,
+                             const Json &engineOptions,
+                             const std::string &optionText);
   void forgetNamedViews();
   void forgetEncodedPages();
   std::shared_ptr<const NamedView>
@@ -340,5 +459,10 @@ private:
   void changedAnalysisSections();
   std::string error() const;
   Json backendJson(const char *owned, bool checkError = false) const;
+  /// The text of an engine answer \p owned, checked as backendJson checks
+  /// it, before it is parsed.
+  std::string backendText(const char *owned, bool checkError) const;
+  /// \p text, an engine answer, as backendJson gives it.
+  Json parsedBackendText(const std::string &text) const;
 };
 } // namespace neverd::worker

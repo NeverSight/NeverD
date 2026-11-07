@@ -13,6 +13,9 @@
 
 #include "neverd/ir/low/LowIR.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -60,6 +63,14 @@ struct StackFrameAnalysis {
 /// Bounded must-analysis. Unknown is not zero. No memory or callee guesses.
 StackFrameAnalysis analyzeSourceStackFrame(const LowFunc &, Arch,
                                            const SourceStackFrame & = {});
+/// Exact memory coordinates in an original entry prefix, using the same
+/// affine transfer as stack inspection. Stops before calls, intrinsics and
+/// control transfers; instruction-local temporaries never cross instructions.
+/// No analyst assertions or memory-derived addresses participate. Exhausting
+/// Remaining discards the result; coordinates alone grant no memory effects.
+std::vector<StackFrameAccess>
+sourceEntryStackAccesses(llvm::ArrayRef<LowOp> Operations, Arch Architecture,
+                         size_t &Remaining);
 /// Private source interpretation only; refuses roots without an entry carrier.
 std::optional<LowFunc> projectSourceStackFrame(const LowFunc &, Arch,
                                                const SourceStackFrame &,

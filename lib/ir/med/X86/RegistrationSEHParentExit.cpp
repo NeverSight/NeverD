@@ -11,6 +11,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHParentExit.h"
+#include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -24,7 +25,10 @@ std::optional<std::map<int, RegistrationSEHParentExit>>
 getRegistrationSEHParentExits(const MedFunc &Function) {
   if (!Function.RegistrationStates || Function.SkippedSSA)
     return std::nullopt;
-  const auto &States = *Function.RegistrationStates;
+  const auto *Physical = getX86RegistrationSEHPhysicalStates(Function);
+  if (!Physical)
+    return std::nullopt;
+  const auto &States = *Physical;
   if (!States.SEHInvocationExitsComplete)
     return std::nullopt;
   std::map<int, RegistrationSEHParentExit> Result;

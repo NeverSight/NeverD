@@ -1,9 +1,19 @@
+//===- ReadOnlyBytes.h - Immutable image storage queries -------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Authenticate mapped bytes and typed pointer storage independently of use.
+//===----------------------------------------------------------------------===//
+
 #ifndef NEVERD_LOADER_READONLYBYTES_H
 #define NEVERD_LOADER_READONLYBYTES_H
 
 #include "neverd/Common.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -59,6 +69,12 @@ readImmutablePE32CodeBytes(const BinaryImage &Image, va_t Address,
                            uint32_t Size,
                            const std::vector<va_t> &AbsoluteOperands);
 
+/// The same current-storage proof under one cumulative work allowance.
+/// Exhaustion returns no bytes and saturates Work at Limit.
+std::optional<std::vector<uint8_t>> readImmutablePE32CodeBytes(
+    const BinaryImage &Image, va_t Address, uint32_t Size,
+    const std::vector<va_t> &AbsoluteOperands, size_t &Work, size_t Limit);
+
 /// Read the complete runtime bits of one exact, resolved Mach-O chained
 /// rebase in unique immutable storage. Competing or overlapping fixups are
 /// rejected. This grants no ordinary pointer identity or byte-copy authority;
@@ -96,6 +112,22 @@ std::optional<va_t> readImmutableImagePointer(const BinaryImage &Image,
 /// permission to use a code pointer as an ordinary data pointer.
 std::optional<va_t> readImmutableImageCodePointer(const BinaryImage &Image,
                                                   va_t Address);
+
+/// Read the preferred bits of one immutable PE32 HIGHLOW code-pointer slot.
+/// Unlike an ordinary callable pointer, a runtime table may name an interior
+/// callback. Its format owner must authenticate that role separately. This
+/// proves exact storage/fixup shape and immutable target bytes, not an ordinary
+/// function entry, instruction boundary, callback ABI or permission to copy.
+std::optional<va_t>
+readImmutablePE32CodePointerStorage(const BinaryImage &Image, va_t Address);
+
+/// One exact PE32 HIGHLOW jump-table slot, including a table in executable
+/// storage. This grants only the selected immutable pointer and target bytes;
+/// the consumer owns the index, instruction boundary and invocation domain.
+/// No table extent or ordinary function entry is inferred.
+std::optional<va_t> readImmutablePE32JumpTableTarget(const BinaryImage &Image,
+                                                     va_t Address, size_t &Work,
+                                                     size_t Limit);
 
 /// Prove one exact strong, zero-addend import slot has unique immutable
 /// file-backed storage and no competing fixups. This authenticates the slot,
@@ -136,4 +168,4 @@ std::optional<va_t> readInitialImagePointer(const BinaryImage &Image,
 std::optional<va_t> readInitialImageSelectorPointer(const BinaryImage &Image,
                                                     va_t Address);
 } // namespace neverd
-#endif
+#endif // NEVERD_LOADER_READONLYBYTES_H

@@ -50,6 +50,14 @@ inline constexpr size_t kLLVMCFuncWriterMaxEHAnnotationChars = 256 * 1024;
 inline constexpr size_t kLLVMCFuncWriterMaxEHAnnotationStringChars = 4096;
 inline constexpr unsigned kLLVMCFuncWriterLLVMCWriterUsersAreDeadCopiesWork =
     64;
+/// Optional field/default naming must not rescan an unbounded mutable home.
+/// Exhaustion retains its explicit assignments and loads.
+inline constexpr unsigned kLLVMCFieldDefaultShapeWork = 256;
+inline constexpr unsigned kLLVMCFieldDefaultQueryWork = 4096;
+/// Optional storage forwarding retains explicit loads/stores on exhaustion.
+inline constexpr unsigned kLLVMCStorageUseQueryWork = 512;
+/// Optional branch-chain recognition retains the original CFG on exhaustion.
+inline constexpr unsigned kLLVMCBranchFeedQueryWork = 4096;
 
 // lib/backend/c/LLVMC/LLVMCMemoryUpdates.cpp
 inline constexpr unsigned kLLVMCMemoryUpdateAddressWork = 128;
@@ -183,6 +191,11 @@ inline constexpr int kMedLLVMWritableDataComputeBudget = 4096;
 inline constexpr int kMedLLVMWritableDataI386WritableBlendAddrBudget = 64;
 
 // lib/backend/llvm/resolve/MedLLVMAddrResolve.cpp
+/// Producer-DAG work for a runtime displacement; exhaustion is unproved.
+inline constexpr unsigned kMaxRuntimeOffsetSourceNodes = 256;
+inline constexpr unsigned kMaxRuntimeOffsetSourceDepth = 32;
+/// Write and edge transfers in an escaped-frame runtime-source query.
+inline constexpr size_t kMaxFrameRuntimeSourceWork = 1048576;
 inline constexpr unsigned
     kMedLLVMAddrResolveMedLLVMEmitterValueIsGuardedScalarOffsetBudget = 256;
 inline constexpr int kMedLLVMAddrResolveScalarRecurrenceHasInitializerBudget =
@@ -375,11 +388,9 @@ inline constexpr int
     kCOFFRegistrationFrameBitsTruncationMayDependOnFrameQueryActiveSizeLimit =
         128;
 
-// lib/backend/codegen/COFF/COFFRegistrationFrameProof.cpp
-inline constexpr int
-    kCOFFRegistrationFrameProofValidateFramePrivacyLocateDepthLimit = 128;
-inline constexpr int
-    kCOFFRegistrationFrameProofValidateFramePrivacyLocateImplDepthLimit = 128;
+// lib/backend/llvm/X86/RegistrationFrameProofAddress.cpp
+inline constexpr int kRegistrationFrameAddressLocateDepthLimit = 128;
+inline constexpr int kRegistrationFrameAddressLocateImplDepthLimit = 128;
 
 // lib/backend/codegen/COFF/COFFRegistrationImageProof.cpp
 inline constexpr int

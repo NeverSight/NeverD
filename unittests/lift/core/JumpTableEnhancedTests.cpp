@@ -288,6 +288,68 @@ TEST(JumpTableHighSelector, MissingExactSelectorRemainsAnUnresolvedGoto) {
 
 class JTE_X86_32 : public NeverDLiftTest {};
 
+// A guard over the final index has already accounted for subtraction and
+// shifting. Applying source-label normalization again truncates live cases.
+TEST_F(JTE_X86_32, NormalizedGuardKeepsEveryProvenTableSlot) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target Clang unavailable";
+  for (unsigned Shift : {0u, 1u}) {
+    SCOPED_TRACE(Shift);
+    const fs::path Source = tmpFile("normalized_guard.s");
+    const fs::path Object = tmpFile("normalized_guard.o");
+    {
+      std::ofstream File(Source);
+      File << R"(.text
+.globl normalized_guard
+.type normalized_guard,@function
+normalized_guard:
+  movl 4(%esp), %eax
+  subl $1, %eax
+)";
+      if (Shift)
+        File << "  shrl $1, %eax\n";
+      File << R"(  cmpl $4, %eax
+  ja default_case
+  jmp *case_table(,%eax,4)
+default_case:
+  movl $-1, %eax
+  ret
+)";
+      for (unsigned Case = 0; Case != 5; ++Case)
+        File << "case" << Case << ":\n  movl $" << 11 + Case
+             << ", %eax\n  ret\n";
+      File << ".size normalized_guard, .-normalized_guard\n"
+              ".section .rodata\n.p2align 2\ncase_table:\n";
+      for (unsigned Case = 0; Case != 5; ++Case)
+        File << "  .long case" << Case << "\n";
+    }
+    auto Compiled =
+        exec(NEVERD_TEST_CLANG, {"-target", "i386-linux-gnu", "-c",
+                                 Source.string(), "-o", Object.string()});
+    ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+    auto ImageOrErr = neverd::loadBinary(Object);
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    const auto &Image = *ImageOrErr;
+    const auto *Function = Image.findSymbol("normalized_guard");
+    ASSERT_NE(Function, nullptr);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const auto Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    ASSERT_EQ(Low.JumpTables.size(), 1u);
+    const auto &Table = Low.JumpTables.front();
+    ASSERT_EQ(Table.Targets.size(), 5u);
+    for (unsigned Case = 0; Case != 5; ++Case) {
+      const auto *Label = Image.findSymbol("case" + std::to_string(Case));
+      ASSERT_NE(Label, nullptr);
+      EXPECT_EQ(Table.Targets[Case], Label->Addr);
+    }
+    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  }
+}
+
 static fs::path frameLaneX86Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_frame_lane32.o";
 }
@@ -480,6 +542,18 @@ int biased_select_arm(int input) {
 }
 )";
 
+// The biased arm is a choice of the optimizer. Apple Clang reads both table
+// entries directly, so its image has nothing to anchor, and the arm stays
+// covered where a newer Clang builds it.
+static bool compilerBuiltABiasedSelectArm(const neverd::BinaryImage &Image) {
+#ifdef __APPLE__
+  return !Image.RodataAnchorSeg.empty();
+#else
+  (void)Image;
+  return true;
+#endif
+}
+
 TEST_F(JTE_X86_32, SelectArmBiasedBeforeItsTableKeepsTheAnchoredOwner) {
   // PIC: both arms are GOTOFF fields; without the anchor this arm is refused.
   if (!hasCrossTargetClang())
@@ -498,6 +572,8 @@ TEST_F(JTE_X86_32, SelectArmBiasedBeforeItsTableKeepsTheAnchoredOwner) {
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
       << llvm::toString(ImageOrErr.takeError());
   auto &Image = *ImageOrErr;
+  if (!compilerBuiltABiasedSelectArm(Image))
+    GTEST_SKIP() << "this compiler reads both table entries directly";
   ASSERT_EQ(Image.RodataAnchorSeg.size(), 1u)
       << "expected exactly one select arm biased before the table";
   auto Anchored = runPipelineWithEvidenceBudget(Image, 256);
@@ -528,6 +604,8 @@ TEST_F(JTE_X86_32, AbsoluteSelectArmBiasedBeforeItsTableKeepsTheOwner) {
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
       << llvm::toString(ImageOrErr.takeError());
   auto &Image = *ImageOrErr;
+  if (!compilerBuiltABiasedSelectArm(Image))
+    GTEST_SKIP() << "this compiler reads both table entries directly";
   ASSERT_EQ(Image.RodataAnchorSeg.size(), 1u)
       << "expected exactly one select arm biased before the table";
   auto Anchored = runPipelineWithEvidenceBudget(Image, 256);
@@ -698,14 +776,26 @@ TEST_F(JTE_X86_32, RealignedFrameKeepsItsSpilledGOTBase) {
   // `and $-16, %esp` (`$-4` in the leaf) anchors the frame: the GOT spill and
   // its reload are the same cell of the aligned frame, which no escape or
   // store reaches.
-  for (const char *Name :
-       {"jt_i386_realigned_loop", "jt_i386_realigned_lexer"}) {
-    SCOPED_TRACE(Name);
-    const neverd::LowFunc Low =
-        buildI386Function("test_jumptable_realigned_frame_i386.o", Name);
-    ASSERT_EQ(Low.JumpTables.size(), 1u);
-    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
-  }
+  const neverd::LowFunc Low = buildI386Function(
+      "test_jumptable_realigned_frame_i386.o", "jt_i386_realigned_loop");
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_32, UnknownCalleeCleanupCannotPreserveAnAlignedSpill) {
+  // The C source has declarations, but this object supplies no corresponding
+  // ABI receipt to the resolver. Its unknown external calls can change ESP;
+  // the earlier alignment cannot prove a later ESP-relative reload.
+  const neverd::LowFunc Low = buildI386Function(
+      "test_jumptable_realigned_frame_i386.o", "jt_i386_realigned_lexer");
+  EXPECT_TRUE(Low.JumpTables.empty());
+  EXPECT_TRUE(
+      std::any_of(Low.Blocks.begin(), Low.Blocks.end(), [](const auto &B) {
+        return std::any_of(B.Ops.begin(), B.Ops.end(), [](const auto &Op) {
+          return Op.Opcode == neverd::NdOp::INDIR_BR ||
+                 Op.Opcode == neverd::NdOp::INDIR_CALL;
+        });
+      }));
 }
 
 TEST_F(JTE_X86_32, StoreAboveTheAlignedFrameLeavesItsSpill) {
@@ -1218,6 +1308,122 @@ TEST_F(JTE_X86_32, AdjacentGOTOFFTablesEvidenceExhaustionFailsClosed) {
   EXPECT_EQ(countI386AdjacentTwoTableIndirectBranches(Low), 4u);
 }
 
+// A loop writes through ESP between calls, so the spilled GOT register is only
+// safe from those writes if each call returned with ESP where it was. In an ELF
+// object the callee's own body can say so; nothing else about the call can.
+TEST_F(JTE_X86_32, CalleeBodyAnswersForEspAcrossACallInALoop) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target Clang unavailable";
+  struct Case {
+    const char *Name;
+    const char *Helper;
+    bool Recovered;
+  };
+  const Case Cases[] = {
+      {"pops nothing",
+       "pushl %ebp\n movl %esp, %ebp\n movl 8(%ebp), %eax\n"
+       " andl $3, %eax\n popl %ebp\n retl\n",
+       true},
+      {"its callee pops nothing",
+       "calll leaf\n retl\nleaf:\n xorl %eax, %eax\n retl\n", true},
+      {"pops its argument", "xorl %eax, %eax\n retl $4\n", false},
+      {"returns from elsewhere on the stack",
+       "xorl %eax, %eax\n addl $4, %esp\n retl\n", false},
+      {"its callee is undefined",
+       "subl $12, %esp\n calll elsewhere@PLT\n addl $12, %esp\n retl\n", false},
+  };
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    const fs::path Source = tmpFile("callee_stack.s");
+    const fs::path Object = tmpFile("callee_stack.o");
+    {
+      std::ofstream File(Source);
+      File << R"(.text
+.globl loop_dispatch
+.type loop_dispatch,@function
+loop_dispatch:
+  pushl %ebp
+  movl %esp, %ebp
+  pushl %ebx
+  subl $0x24, %esp
+  calll .Lpc
+.Lpc:
+  popl %eax
+.Lgot:
+  addl $_GLOBAL_OFFSET_TABLE_+(.Lgot-.Lpc), %eax
+  movl %eax, -0x1c(%ebp)
+  movl $0, -0x10(%ebp)
+.Lloop:
+  cmpl $120, -0x10(%ebp)
+  jge .Ldone
+  movl -0x1c(%ebp), %ebx
+  movl 8(%ebp), %ecx
+  movl %esp, %eax
+  movl %ecx, (%eax)
+  calll helper
+  movl %eax, -0x20(%ebp)
+  subl $3, %eax
+  ja .Lnext
+  movl -0x1c(%ebp), %eax
+  movl -0x20(%ebp), %ecx
+  movl .Ltable@GOTOFF(%eax,%ecx,4), %ecx
+  addl %ecx, %eax
+  jmpl *%eax
+.Lcase0:
+  movl $1, -0x18(%ebp)
+  jmp .Lnext
+.Lcase1:
+  movl $3, -0x18(%ebp)
+  jmp .Lnext
+.Lcase2:
+  movl $5, -0x18(%ebp)
+  jmp .Lnext
+.Lcase3:
+  movl $7, -0x18(%ebp)
+.Lnext:
+  incl -0x10(%ebp)
+  jmp .Lloop
+.Ldone:
+  movl -0x18(%ebp), %eax
+  addl $0x24, %esp
+  popl %ebx
+  popl %ebp
+  retl
+.size loop_dispatch, .-loop_dispatch
+.type helper,@function
+helper:
+)" << C.Helper
+           << R"(.size helper, .-helper
+.section .rodata
+.p2align 2
+.Ltable:
+  .long .Lcase0@GOTOFF
+  .long .Lcase1@GOTOFF
+  .long .Lcase2@GOTOFF
+  .long .Lcase3@GOTOFF
+)";
+    }
+    auto Compiled =
+        exec(NEVERD_TEST_CLANG, {"-target", "i386-linux-gnu", "-c",
+                                 Source.string(), "-o", Object.string()});
+    ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+    auto ImageOrErr = neverd::loadBinary(Object);
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    const auto &Image = *ImageOrErr;
+    const auto *Function = Image.findSymbol("loop_dispatch");
+    ASSERT_NE(Function, nullptr);
+    neverd::Decoder Decoder;
+    ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+    neverd::CFGBuilder Builder;
+    const auto Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    EXPECT_EQ(Low.JumpTables.size() == 1 &&
+                  Low.JumpTables.front().Targets.size() == 4,
+              C.Recovered);
+  }
+}
+
 TEST_F(JTE_X86_32, StackMemcpyTableNeedsDedicatedEvidenceCeiling) {
   auto ImageOrErr = neverd::loadBinary(i386StackPICObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -1238,6 +1444,22 @@ TEST_F(JTE_X86_32, StackMemcpyTableNeedsDedicatedEvidenceCeiling) {
     return Low.JumpTables.size() == 1 &&
            Low.JumpTables.front().Targets.size() == 8;
   };
+
+  // The table's initializer lies in the object's .data.rel.ro, which the
+  // loader maps read-only once relocated, as a linker's RELRO does. The
+  // budget proof starts only with that protection.
+  ASSERT_GE(Image.CodePtrRelocSlots.size(), 8u);
+  auto Initializer = std::find_if(
+      Image.Segments.begin(), Image.Segments.end(), [&](const auto &S) {
+        return S.contains(*Image.CodePtrRelocSlots.begin());
+      });
+  ASSERT_NE(Initializer, Image.Segments.end());
+  ASSERT_TRUE(Initializer->isWritable());
+  ASSERT_TRUE(Initializer->ReadOnlyAfterRelocations);
+  Initializer->ReadOnlyAfterRelocations = false;
+  EXPECT_FALSE(Recovered(
+      BuildWithBudget(neverd::limits::kMaxJumpTableStackEvidenceWork)));
+  Initializer->ReadOnlyAfterRelocations = true;
 
   const neverd::LowFunc Full =
       BuildWithBudget(neverd::limits::kMaxJumpTableStackEvidenceWork);
@@ -7605,6 +7827,62 @@ TEST_F(JTE_X86_64, ModuloBoundAcceptsExactSixtyFourBitUnsignedDivision) {
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 
+TEST_F(JTE_X86_64, WideDivisionModuloKeepsHighDividendAndSignedness) {
+  for (const bool ExplicitQuotient : {false, true})
+    for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+      SCOPED_TRACE(ExplicitQuotient);
+      SCOPED_TRACE(Mutation);
+      auto Loaded = neverd::loadBinary(moduloDomainObj());
+      ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+      auto &Image = *Loaded;
+      const auto *Function =
+          Image.findSymbol(ExplicitQuotient ? "jt_modulo_u64_explicit_udiv"
+                                            : "jt_modulo_u64_direct_remainder");
+      ASSERT_NE(Function, nullptr);
+      auto Segment = std::find_if(
+          Image.Segments.begin(), Image.Segments.end(),
+          [&](const auto &S) { return S.contains(Function->Addr); });
+      ASSERT_NE(Segment, Image.Segments.end());
+      const auto Begin = Segment->Data.begin() + Function->Addr - Segment->VA;
+      const auto End = Begin + Function->Size;
+      const std::array<uint8_t, 3> HighZero{0x48, 0x31, 0xd2};
+      const std::array<uint8_t, 3> Divide{0x48, 0xf7, 0xf1};
+      const std::array<uint8_t, 7> Divisor{0x48, 0xc7, 0xc1, 5, 0, 0, 0};
+      const auto High =
+          std::search(Begin, End, HighZero.begin(), HighZero.end());
+      const auto Div = std::search(Begin, End, Divide.begin(), Divide.end());
+      const auto N = std::search(Begin, End, Divisor.begin(), Divisor.end());
+      ASSERT_NE(High, End);
+      ASSERT_NE(Div, End);
+      ASSERT_NE(N, End);
+      if (Mutation == 1) {
+        // mov rdx,rsi: the dividend's high half is unconstrained. URem still
+        // fits its divisor on a successful divide, but x-(quotient*N) no
+        // longer shares that complete dividend and must not borrow its proof.
+        High[1] = 0x89;
+        High[2] = 0xf2;
+      }
+      if (Mutation == 2)
+        Div[2] = 0xf9; // IDIV cannot borrow the unsigned remainder theorem.
+      if (Mutation == 3)
+        N[3] = 0;
+      if (Mutation == 4)
+        N[3] = 6; // The five-slot storage cannot supply the larger domain.
+      neverd::Decoder Decoder;
+      ASSERT_TRUE(Decoder.init(Image));
+      neverd::CFGBuilder Builder;
+      const auto Low =
+          Builder.build(Image, Decoder, Function->Addr, Function->Name);
+      const bool Expected =
+          Mutation == 0 || (Mutation == 1 && !ExplicitQuotient);
+      EXPECT_EQ(Low.JumpTables.size(), Expected ? 1u : 0u);
+      if (Expected) {
+        EXPECT_EQ(Low.JumpTables.front().Targets.size(), 5u);
+        EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+      }
+    }
+}
+
 TEST_F(JTE_X86_64, ModuloBoundRejectsInexactFactorizedSixRecipes) {
   constexpr const char *Names[] = {
       "jt_modulo_factorized_six_wrong_factor",
@@ -10222,11 +10500,18 @@ a64StrictSourceSpanImage(bool RightWritable = false) {
   neverd::Segment Mapped;
   Mapped.Name = "rodata";
   Mapped.VA = 0x1000;
-  Mapped.Size = 0x20;
-  Mapped.FileSz = 0x20;
+  Mapped.Size = RightWritable ? 0x10 : 0x20;
+  Mapped.FileSz = Mapped.Size;
   Mapped.Flags = neverd::SegmentFlags::Readable;
-  Mapped.Data.resize(0x20);
+  Mapped.Data.resize(Mapped.Size);
   Image.Segments.push_back(std::move(Mapped));
+  if (RightWritable) {
+    // Runtime permissions belong to mappings, not finer section metadata.
+    neverd::Segment Writable = Image.Segments.front();
+    Writable.VA = 0x1010;
+    Writable.Flags = Writable.Flags | neverd::SegmentFlags::Writable;
+    Image.Segments.push_back(std::move(Writable));
+  }
 
   neverd::Section Left;
   Left.Name = ".rodata.left";
@@ -11869,6 +12154,16 @@ int scalar_record(int input) {
       << llvm::toString(ImageOrErr.takeError());
   auto &Image = *ImageOrErr;
   ASSERT_EQ(Image.DataPtrRelocSlots.size(), 2u);
+  auto Records = std::find_if(
+      Image.Segments.begin(), Image.Segments.end(), [&](const auto &S) {
+        return S.contains(*Image.DataPtrRelocSlots.begin());
+      });
+  ASSERT_NE(Records, Image.Segments.end());
+  ASSERT_TRUE(Records->isWritable());
+  // The loader maps the object's .data.rel.ro read-only once relocated, which
+  // supplies the immutable-source contract separately from pointer evidence.
+  EXPECT_TRUE(Records->ReadOnlyAfterRelocations);
+  EXPECT_TRUE(Image.readOnlyAfterRelocations(Records->VA, Records->Size));
   auto Valid = runPipelineWithEvidenceBudget(Image, 256);
   ASSERT_TRUE(Valid.Result.Success) << Valid.Result.Error;
 

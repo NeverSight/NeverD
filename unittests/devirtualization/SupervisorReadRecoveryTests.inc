@@ -124,8 +124,10 @@ TEST(InterpreterSpecialization,
   P.add(0x102, {ret()});
   auto O = supervisorReadOptions();
   ASSERT_EQ(P.Code.at(0x100).Ops.size(), 6u);
+  ASSERT_EQ(P.Code.at(0x100).UndefinedEffects.Coverage,
+            LowUndefinedCoverage::Complete);
   ASSERT_TRUE(specializeInterpreter(P, {0x100}, O).complete());
-  for (unsigned Mutation = 0; Mutation != 18; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 20; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Bad = P;
     auto &I = Bad.Code.at(0x100);
@@ -183,6 +185,12 @@ TEST(InterpreterSpecialization,
       break;
     case 17:
       I.Ops[0].NumInputs = 1;
+      break;
+    case 18:
+      I.UndefinedEffects.Coverage = LowUndefinedCoverage::Missing;
+      break;
+    case 19:
+      I.UndefinedEffects.Coverage = LowUndefinedCoverage::Unsupported;
       break;
     }
     I.UndefinedEffects.OperationDigest = lowUndefinedOperationDigest(I.Ops);

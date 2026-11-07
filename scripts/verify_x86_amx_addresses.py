@@ -44,7 +44,46 @@ def text_section(path):
     section = next(
         s for s in obj.sections if s.name in (".text", "__text") and len(s.content)
     )
-    return bytes(section.content)
+    code = bytearray(section.content)
+    if isinstance(obj, lief.ELF.Binary):
+        for reloc in obj.relocations:
+            if reloc.section != section:
+                continue
+            assert reloc.type in (
+                lief.ELF.Relocation.TYPE.X86_64_PC32,
+                lief.ELF.Relocation.TYPE.X86_64_PLT32,
+            )
+            assert reloc.symbol.shndx == list(obj.sections).index(section)
+            at = reloc.address
+            code[at : at + 4] = (
+                reloc.symbol.value + reloc.addend - at
+            ).to_bytes(4, "little", signed=True)
+    elif isinstance(obj, lief.COFF.Binary):
+        # Internal leaf calls still carry COFF relocations in a .o. Resolve
+        # only same-section REL32 references before executing the fixture.
+        for reloc in section.relocations:
+            assert reloc.type == lief.COFF.Relocation.TYPE.AMD64_REL32
+            assert reloc.symbol.section == section, "unexpected external call"
+            at = reloc.address
+            addend = int.from_bytes(code[at : at + 4], "little", signed=True)
+            code[at : at + 4] = (addend + reloc.symbol.value - at - 4).to_bytes(
+                4, "little", signed=True
+            )
+    elif isinstance(obj, lief.MachO.Binary):
+        # LIEF's Mach-O relocation view does not retain the symbol for these
+        # private BRANCH relocations. Read the documented eight-byte record;
+        # admit only external-symbol, PC-relative, four-byte same-text calls.
+        raw, symbols = path.read_bytes(), list(obj.symbols)
+        text_index = next(i + 1 for i, s in enumerate(obj.sections) if s == section)
+        for i in range(section.numberof_relocations):
+            at, info = struct.unpack_from("<II", raw, section.relocation_offset + 8 * i)
+            assert info >> 24 == 0x2D, "unexpected Mach-O relocation"
+            symbol = symbols[info & 0xFFFFFF]
+            assert symbol.numberof_sections == text_index, "unexpected external call"
+            addend = int.from_bytes(code[at : at + 4], "little", signed=True)
+            displacement = addend + symbol.value - section.virtual_address - at - 4
+            code[at : at + 4] = displacement.to_bytes(4, "little", signed=True)
+    return bytes(code)
 
 
 def native_address(code, case):
@@ -106,7 +145,8 @@ def native_address(code, case):
     return accesses[0]
 
 
-def complete(code, native, case, windows, address, stride, allocation):
+def complete(code, native, case, windows, address, stride, allocation, *,
+             entry=0, expected_result=0x123456789ABCDEF0 ^ 0xA5):
     start, end, base, index, scale, displacement = native
     patched = bytearray(code)
     patched[start:end] = b"\x90" * (end - start)
@@ -129,7 +169,7 @@ def complete(code, native, case, windows, address, stride, allocation):
     machine.reg_write(reg("RSP"), sp)
     machine.mem_write(sp, struct.pack("<Q", stop))
     machine.reg_write(reg("EFLAGS"), 0x202)
-    machine.emu_start(CODE, CODE + start, count=10000)
+    machine.emu_start(CODE + entry, CODE + start, count=10000)
     assert machine.reg_read(reg("RIP")) == CODE + start
     mask = (1 << case["address_bits"]) - 1
     value = machine.reg_read(reg(GPRS[base])) + displacement
@@ -148,11 +188,60 @@ def complete(code, native, case, windows, address, stride, allocation):
     # compiler's dynamic frame and all calling-convention saved state intact.
     machine.emu_start(CODE + end, stop, count=10000)
     assert machine.reg_read(reg("RIP")) == stop
-    assert machine.reg_read(reg("RAX")) == 0x123456789ABCDEF0 ^ 0xA5, "frame canary"
+    if expected_result is not None:
+        assert machine.reg_read(reg("RAX")) == expected_result, "frame canary"
     assert machine.reg_read(reg("RSP")) == sp + 8, "return stack"
     assert all(
         machine.reg_read(reg(n)) == v for n, v in saved.items()
     ), "saved registers"
+
+
+def complete_modules(args):
+    """Compile the complete LLVMC module, including prototypes and private leaves."""
+    reports = []
+    for operation, triple, opt, route in itertools.product(
+        range(4, 9), TRIPLES, ("O0", "O2"),
+        ("llvm-asm", "neverc-bitcode", "neverc-c", "bridge")
+    ):
+        stem = f"module-{operation}-{TRIPLES.index(triple)}-{opt}-{route}"
+        source = args.exports / f"stack-leaf-{operation}"
+        obj = args.keep / (stem + ".o")
+        compile_c = [args.compiler, "--target=" + triple, "-" + opt,
+                     "-fno-lto", "-fno-builtin-mimalloc", "-ffreestanding",
+                     "-fno-function-sections", "-fno-data-sections"]
+        lower_ir = [args.llc, "-mtriple=" + triple, "-" + opt,
+                    "-verify-machineinstrs", "-filetype=obj"]
+        if route == "llvm-asm":
+            run(lower_ir + [source.with_suffix(".ll"), "-o", obj])
+        elif route == "neverc-bitcode":
+            bitcode = args.keep / (stem + ".bc")
+            run([args.llc.parent / "llvm-as", source.with_suffix(".ll"),
+                 "-o", bitcode])
+            run(compile_c + ["-c", bitcode, "-o", obj])
+        elif route == "bridge":
+            ir = args.keep / (stem + ".ll")
+            run(compile_c + ["-S", "-emit-llvm", source.with_suffix(".c"),
+                             "-o", ir])
+            assert " asm " not in ir.read_text(), stem
+            run(lower_ir + [ir, "-o", obj])
+        else:
+            run(compile_c + ["-c", source.with_suffix(".c"), "-o", obj])
+        binary = lief.parse(str(obj))
+        section = next(s for s in binary.sections
+                       if s.name in (".text", "__text") and len(s.content))
+        symbol = next(s for s in binary.symbols if s.name in ("probe", "_probe"))
+        entry = symbol.value - section.virtual_address
+        code = text_section(obj)
+        assert len(code) < PAGE - 1
+        case = dict(operation=operation, address_bits=64, stack=True,
+                    ss_prefix=False, evex=False)
+        native = native_address(code, case)
+        complete(code, native, case, "windows" in triple,
+                 0xFACE000000001234, 0x8765432100000040, 0,
+                 entry=entry, expected_result=None)
+        reports.append(dict(case=stem, controlled_completions=1))
+    (args.keep / "modules.json").write_text(json.dumps(reports, indent=2) + "\n")
+    print(f"PASS: {len(reports)} complete exported LLVM/C modules")
 
 
 def main():
@@ -185,6 +274,12 @@ def main():
         ("O0", "O2"),
         ("clang", "neverc-fallback", "neverc-native", "bridge"),
     ):
+        # Stack rows need the native compiler's isolated frame. Ordinary C
+        # inline assembly must not borrow the caller's live frame pointer.
+        if case["stack"] and case["operation"] >= 4 and route in (
+            "clang", "neverc-fallback"
+        ):
+            continue
         stem = f'{case["name"]}-{TRIPLES.index(triple)}-{opt}-{route}'
         source, obj = args.exports / (case["name"] + ".c"), args.keep / (stem + ".o")
         command = [
@@ -192,6 +287,8 @@ def main():
             "--target=" + triple,
             "-" + opt,
             "-ffreestanding",
+            "-fno-function-sections",
+            "-fno-data-sections",
             "-fno-lto",
             "-fno-stack-protector",
             "-mno-stack-arg-probe",
@@ -245,6 +342,7 @@ def main():
     print(
         f"PASS: {len(reports)} AMX address objects; {sum(r['controlled_completions'] for r in reports)} controlled completions"
     )
+    complete_modules(args)
 
 
 if __name__ == "__main__":

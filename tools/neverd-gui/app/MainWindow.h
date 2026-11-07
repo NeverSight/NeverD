@@ -36,8 +36,12 @@ namespace web {
 class PackageReviewDialog;
 }
 
+class AnalysisIndicator;
+class AnalysisProgress;
+class AnalysisPlugins;
 class ComparisonDialog;
 class LineageDialog;
+class LoadProgressCard;
 class CodeView;
 class DisassemblyView;
 class ExtensionsView;
@@ -73,12 +77,27 @@ public:
   void setAsksForDebugInfo(bool asks);
   /// Use a disposable layout file (tests and benchmarks).
   void setLayoutPath(const QString &path) { layoutPath_ = path; }
+  /// Ask how to load \p path, as File > Open does, once the worker can say.
+  /// A workbench started for this closes when the user declines.
+  void askHowToLoad(const QString &path);
+  /// Start another workbench with \p arguments, as a process of its own: this
+  /// program with a worker from the same path, and on a disposable layout if
+  /// this one is.  Returns why it could not start, or nothing.
+  QString startWorkbench(const QStringList &arguments = {}) const;
+  /// What startWorkbench runs in place of this program (tests).
+  void setWorkbenchProgram(const QString &program) {
+    workbenchProgram_ = program;
+  }
   /// Restore the saved desktop, or lay out the default one; later calls do
   /// nothing.  Call once the window has its size so preferred dock sizes
   /// apply.
   void initializeLayout();
   /// Show the workbench, laying out its desktop first if nothing did yet.
   void showWorkbench();
+  /// Restore startup geometry without resuming a previous F11 session.
+  bool restoreWindowedGeometry(const QByteArray &geometry);
+  /// Keep full screen local to this run when saving the startup geometry.
+  QByteArray saveWindowedGeometry() const;
   /// Before the workbench shows, the quick start greets alone and the
   /// workbench follows the user's choice; closing it quits. Returns immediately
   /// so minimizing never leaves an application-modal session running.
@@ -109,7 +128,9 @@ public:
   InstanceServer &instanceServer() { return instances_; }
   /// The active disassembly view; Alt+Enter can open independent views.
   DisassemblyView *disassembly() const { return disassembly_; }
+  const AddressSpace &addressSpace() const { return space_; }
   ActionRegistry &actions() { return actions_; }
+  AnalysisPlugins *analysisPlugins() const { return plugins_; }
   /// The window's menus, which sit in its title bar when it draws its own
   /// frame.  This hides QMainWindow::menuBar(), which would replace that
   /// title bar with a new menu bar.
@@ -221,7 +242,15 @@ private:
                         bool selectSourceAddress = false);
   void navigateCodeFunction(CodeView *view, Address address, Address function,
                             std::optional<Address> from);
-  void navigateHistory(bool forward);
+  /// Go \p steps stops back or forward, the code window in focus along.
+  void navigateHistory(bool forward, std::size_t steps = 1);
+  /// Give the toolbar's Back and Forward buttons the lists of their stops,
+  /// as IDA's do.
+  void addHistoryLists(QToolBar &toolbar);
+  /// List the stops Back, or Forward, reaches, nearest first, each as the
+  /// listing names its place, or as its line in the code in focus, and what
+  /// is there.
+  void showHistoryList(QMenu &menu, bool forward);
   void synchronize(Address address, QObject *source);
   /// The pseudocode and IR windows that are showing.
   QVector<CodeView *> visibleCodeViews() const;
@@ -258,6 +287,11 @@ private:
   /// Show the workbench and start loading \p path.
   void openNow(const QString &path, const LoadOptions &options);
   void chooseLoader(const QString &path);
+  /// With a program open, a file the user picks goes to a workbench of its
+  /// own, as IDA's File > Open, recent files and drops do: a new one, asking
+  /// how to load it if \p askLoader, or the one that already has it.  Returns
+  /// false when the file belongs here.
+  bool openElsewhere(const QString &path, bool askLoader);
   /// File, Load file, Reload the input file: read the file again, asking
   /// again how to read a binary file.
   void reloadInput();
@@ -301,6 +335,8 @@ private:
   void searchBinary(const QString &kind, bool again);
   void queryRegister(const QString &kind);
   void searchHighlight(bool forward);
+  /// Lock highlight: color \p slot, or the first free color.
+  void lockHighlight(std::optional<int> slot);
   void stepFunction(bool forward);
   void showCalculator();
   void showAbout();
@@ -377,10 +413,17 @@ private:
   DisassemblyView *primaryDisassembly_ = nullptr;
   HexView *hex_ = nullptr;
   OutputWindow *output_ = nullptr;
+  AnalysisPlugins *plugins_ = nullptr;
   MicrosoftSymbols *microsoftSymbols_ = nullptr;
   /// A file to open once the worker has started, asking for its debug
   /// information then.
   std::optional<std::pair<QString, LoadOptions>> debugPromptPending_;
+  std::optional<QString> loaderPromptPending_;
+  /// This workbench was started to load one file, so declining it closes it.
+  bool closesWithoutFile_ = false;
+  /// A question comes before this hidden workbench shows, and a worker that
+  /// stops will never put it.
+  bool asksBeforeShowing_ = false;
   bool asksForDebugInfo_ = true;
   GraphOverview *overview_ = nullptr;
   ExtensionsView *extensions_ = nullptr;
@@ -414,11 +457,19 @@ private:
   QPointer<ComparisonDialog> comparison_;
   QPointer<LineageDialog> lineage_;
   bool startupQuickStartPending_ = false;
-  QLabel *analysisLabel_ = nullptr, *directionLabel_ = nullptr,
-         *diskLabel_ = nullptr, *fileLabel_ = nullptr;
+  /// Maximize the first workbench shown after accepting the startup greeting.
+  bool maximizeWorkbenchOnShow_ = false;
+  /// Opening and background analysis, in the status bar and, while a file
+  /// opens into the empty workbench, over its main view.
+  AnalysisProgress *progress_ = nullptr;
+  AnalysisIndicator *analysisIndicator_ = nullptr;
+  LoadProgressCard *loadCard_ = nullptr;
+  QLabel *directionLabel_ = nullptr, *diskLabel_ = nullptr,
+         *fileLabel_ = nullptr;
   QMenu *recentMenu_ = nullptr;
   QMenu *windowsMenu_ = nullptr;
   QString layoutPath_;
+  QString workbenchProgram_;
   QByteArray focusLayout_;
   QPointer<QWidget> focusReturn_;
   QPointer<FocusSidebar> focusSidebar_;

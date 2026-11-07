@@ -180,7 +180,7 @@ const char *neverd_xrefs_scan(neverd_session_t Sess, const char *InputPath,
 const char *neverd_cfg_json(neverd_session_t Sess, neverd_va_t FuncEntry) {
   auto *S = toSession(Sess);
   S->clearError();
-  if (!S->ensurePipeline(Session::PipelineDepth::LowIR))
+  if (!neverd_prepare_function_view(Sess, FuncEntry, "cfg"))
     return dupStr(std::string("{}"));
 
   if (S->PipeResult.EVM) {
@@ -366,6 +366,8 @@ const char *neverd_cfg_json(neverd_session_t Sess, neverd_va_t FuncEntry) {
   llvm::json::Object Root;
   Root["name"] = jsonSafeText(F->Name);
   Root["entry"] = vaHex(F->Entry);
+  if (F->AnalysisOnly)
+    Root["analysis_only"] = true;
   Root["nodes"] = std::move(Nodes);
   Root["edges"] = std::move(Edges);
   return dupStr(jsonToString(llvm::json::Value(std::move(Root))));

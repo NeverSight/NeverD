@@ -94,13 +94,16 @@ NEVERD_API int neverd_comparison_restore_json_with_progress(
 /// rather than only its inventory preview. A valid source with no ambiguity has
 /// no rows. Overlapping groups contribute their deduplicated direct candidates.
 /// The returned ambiguity object identifies the source, supporting steps and
-/// total before search/paging; inventory rows expose candidate_steps. These
-/// candidates are hypotheses, not accepted matches. Search/sort/paging apply to
-/// the target side as usual. Addresses are hexadecimal strings. Function
-/// projections use name for the captured display name and evidence_name for the
-/// extracted matching name. Search accepts both; name sorting uses the display
-/// name. Display annotations do not change snapshot or report identity. Unknown
-/// options, missing source entries and out-of-range pages fail.
+/// total before search/paging; inventory rows expose candidate_steps. With
+/// ambiguous_with, each row also has pair_evidence (steps and explanation) for
+/// that source/target pair alone. A candidate's reasons with another source do
+/// not support this pair. These candidates are hypotheses, not accepted
+/// matches. Search/sort/paging apply to the target side as usual. Addresses are
+/// hexadecimal strings. Function projections use name for the captured display
+/// name and evidence_name for the extracted matching name. Search accepts both;
+/// name sorting uses the display name. Display annotations do not change
+/// snapshot or report identity. Unknown options, missing source entries and
+/// out-of-range pages fail.
 NEVERD_API const char *
 neverd_comparison_functions_json(neverd_comparison_t Comparison,
                                  const char *Query);
@@ -258,7 +261,15 @@ neverd_comparison_flow_regions_json(neverd_comparison_t Comparison,
 /// unsupported effects/types remain unavailable with reasons. Region nodes
 /// return plural originals rather than inventing a singular native origin.
 /// Query: side, kind (functions/nodes/blocks), offset, limit; nodes/blocks also
-/// require address. Unavailable functions return their explicit reason. Saved
+/// require address. kind:accesses additionally selects a call node with call,
+/// and accepts max_records, max_work, timeout_ms and refresh. It observes exact
+/// local SSA address relationships to recovered arguments under med-ssa-v2;
+/// caller reads/writes do not establish callee effects, execution order or
+/// complete alias information. RETURN operand paths follow equal-width COPY/PHI
+/// edges only; a RETURN input can be a control target rather than an ABI
+/// result. The graph's gaps remain visible. One graph index is cached across
+/// calls/pages; stopped inspections require refresh. Concurrent cancel/status
+/// are supported. Unavailable functions return their explicit reason. Saved
 /// graphs bind to fresh native pipeline evidence; hashes are not equivalence.
 NEVERD_API const char *
 neverd_comparison_dataflow_json(neverd_comparison_t Comparison,

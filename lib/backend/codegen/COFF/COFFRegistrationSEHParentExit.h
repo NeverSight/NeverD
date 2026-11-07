@@ -11,26 +11,9 @@
 
 #include "COFFRegistrationIRProof.h"
 
-namespace neverd::coff_registration {
+#include "neverd/backend/llvm/RegistrationFrameRuntime.h"
 
-struct RegistrationSEHParentExitContract {
-  struct Transfer {
-    const llvm::BasicBlock *Block = nullptr;
-    va_t Callback = 0;
-    va_t Address = 0;
-  };
-  std::map<int, Transfer> Transfers;
-  std::map<int, int> Targets;
-  std::map<const llvm::BasicBlock *, std::vector<const llvm::BasicBlock *>>
-      ResumptionPredecessors;
-  const llvm::BasicBlock *NormalEntry = nullptr;
-  const llvm::SwitchInst *Dispatch = nullptr;
-  std::set<const llvm::Instruction *> Setup;
-  std::set<const llvm::Instruction *> ChainReads;
-  std::set<const llvm::Instruction *> ChainWrites;
-  std::set<std::pair<va_t, int>> SourceChainRemovals;
-  std::set<const llvm::CallBase *> Calls;
-};
+namespace neverd::coff_registration {
 
 /// Authenticate the complete private machine context and every alias. This
 /// checks native structure without granting it a source control-flow identity.

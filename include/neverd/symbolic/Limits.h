@@ -85,6 +85,15 @@ inline constexpr int kSymExprLogicRemoveDiscardedShiftTermsCNumOperandsALimit =
     8;
 inline constexpr int kMaxDiscardedShiftWidth = 128;
 
+// lib/symbolic/synth/SymSynthEnumerate.cpp
+/// Words of a behaviour its hash reads.  The hash runs for every candidate, and
+/// a collision costs only the comparison that settles it.
+inline constexpr size_t kSynthBehaviourHashWords = 16;
+/// Largest behaviour array a thread keeps for its next search, 16 MiB.  A
+/// source view's budget fits; a larger search gives its memory back.  A lower
+/// limit regrows the array, costing CPU and usually peak memory too.
+inline constexpr size_t kSynthRetainedBehaviourWords = size_t(1) << 21;
+
 } // namespace neverd::limits::symbolic
 
 #endif // NEVERD_SYMBOLIC_LIMITS_H

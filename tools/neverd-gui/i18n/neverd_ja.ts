@@ -12,6 +12,14 @@
         <translation>集中モード(&amp;F)</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>新しいインスタンス(&amp;N)</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>NeverD の新しいインスタンスを開きます</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>開く(&amp;O)...</translation>
     </message>
@@ -342,6 +350,50 @@
     <message>
         <source>Move to the next occurrence of the highlighted identifier</source>
         <translation>ハイライトされた識別子の次の出現位置へ移動します</translation>
+    </message>
+    <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>ロックまたはロック解除(&amp;U)</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>ハイライトされた単語を最初の空いている色でハイライトしたままにするか、ロックを解除します</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>色 1(&amp;1)</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>色 2(&amp;2)</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>色 3(&amp;3)</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>色 4(&amp;4)</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>色 5(&amp;5)</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>色 6(&amp;6)</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>色 7(&amp;7)</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>色 8(&amp;8)</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>ハイライトされた単語をこの色でロックするか、この色のロックを解除します</translation>
     </message>
     <message>
         <source>&amp;Find in view...</source>
@@ -1275,6 +1327,14 @@
         <source>Enter &amp;comment...</source>
         <translation>コメントを入力(&amp;C)...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>プラグインのインストール、有効化、無効化、削除</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>プラグインマネージャー(M)...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1612,6 +1672,10 @@
         <translation>検索(&amp;S)</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>ハイライトのロック(&amp;L)</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>表示(&amp;V)</translation>
     </message>
@@ -1712,6 +1776,10 @@
     <message>
         <source>%1 uses database format %2, which this NeverD cannot update.</source>
         <translation>%1 はデータベース形式 %2 を使用しており、この NeverD では更新できません。</translation>
+    </message>
+    <message>
+        <source>This database may already be open in another NeverD (%1)</source>
+        <translation>このデータベースは別の NeverD で既に開かれている可能性があります（%1）</translation>
     </message>
     <message>
         <source>Cannot create %1</source>
@@ -1997,6 +2065,23 @@ Double-click to go to the declaration.</source>
         <source>Could not refresh source: %1</source>
         <translation>ソースコードを更新できませんでした: %1</translation>
     </message>
+
+    <message>
+        <source>Interpreter recovered · %1 blocks</source>
+        <translation>インタープリターを復元済み · %1 ブロック</translation>
+    </message>
+    <message>
+        <source>No complete source was produced</source>
+        <translation>完全なソースは生成されませんでした</translation>
+    </message>
+    <message>
+        <source>Recovering interpreter control flow…</source>
+        <translation>インタープリターの制御フローを復元中…</translation>
+    </message>
+    <message>
+        <source>Recovery stopped: %1</source>
+        <translation>復元停止: %1</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::CodeView</name>
@@ -2063,6 +2148,23 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Cancel transformation</source>
         <translation>変換をキャンセル</translation>
+    </message>
+
+    <message>
+        <source>Interpreter recovery options…</source>
+        <translation>インタープリター復元オプション…</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report…</source>
+        <translation>インタープリター復元レポート…</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>インタープリター関数を復元</translation>
+    </message>
+    <message>
+        <source>Return to ordinary source</source>
+        <translation>通常のソースに戻る</translation>
     </message>
 </context>
 <context>
@@ -2291,6 +2393,14 @@ Double-click to go to the declaration.</source>
         <source>Laying out graph…</source>
         <translation>グラフをレイアウト中…</translation>
     </message>
+    <message>
+        <source>From %1</source>
+        <translation>%1 から</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>%1 へ</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::HexView</name>
@@ -2371,6 +2481,26 @@ Double-click to go to the declaration.</source>
         <translation>バックグラウンド解析：閲覧中に参照とラベルのインデックスを作成します</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>データベースが変更されました</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1 はこのワークベンチで開いた後に、別の NeverD などで変更されました。現在の内容をこのワークベンチのプロジェクトで置き換えますか？</translation>
+    </message>
+    <message>
+        <source>Open other files in a new instance</source>
+        <translation>他のファイルを新しいインスタンスで開く</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>ファイルを開いているとき、ファイル &gt; 開く、最近使ったファイル、ドロップしたファイルは、置き換えずに新しいインスタンスを起動します</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 は既に別の NeverD で開かれています。そちらに切り替えます。</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>未保存の変更</translation>
     </message>
@@ -2381,6 +2511,10 @@ Double-click to go to the declaration.</source>
     <message>
         <source>%1 lacks the latest changes. Save them into it before continuing?</source>
         <translation>%1 には最新の変更が含まれていません。続行する前に保存しますか？</translation>
+    </message>
+    <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>新しいインスタンスを起動できません：%1</translation>
     </message>
     <message>
         <source>Cannot jump to %1: %2</source>
@@ -2409,18 +2543,6 @@ Double-click to go to the declaration.</source>
     <message>
         <source>History: %1 entries, cursor %2</source>
         <translation>履歴：%1 件、カーソル %2</translation>
-    </message>
-    <message>
-        <source>AU: idle</source>
-        <translation>AU: アイドル</translation>
-    </message>
-    <message>
-        <source>AU: busy %1%</source>
-        <translation>AU: 処理中 %1%</translation>
-    </message>
-    <message>
-        <source>AU: busy</source>
-        <translation>AU: 処理中</translation>
     </message>
     <message>
         <source>Down</source>
@@ -3294,6 +3416,10 @@ After:
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>1 バイトから %1 までのファイル、16 進数のアドレス、セクション名を指定してください。関数には名前と実行権限が必要です。</translation>
     </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>プラグインタスク</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3458,6 +3584,14 @@ After:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>%1 は書き込みできないフォルダーにあるため、そのデータベースは %2 に保存されます</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>このファイルは別の NeverD で既に開かれている可能性があります（%1）</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1 は変更しませんでした。このワークベンチの変更は含まれていません。</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>
@@ -6771,6 +6905,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 参照の識別情報：未解決。一部の呼び出し先またはデータ参照先を比較できません。これだけでは変更があったとは判断できません。</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>対応付け済みの呼び出しを含める</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>呼び出し先が対応付けられた直接呼び出しをまたいで共有領域を拡張します。結果は現在の関数の対応付けに依存し、対応付けが変わると再計算されます。呼び出しの動作は検証しません。</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -6813,10 +6955,6 @@ Select an operation to follow dependencies. Synthetic operations have block prov
     <message>
         <source>Enable dependency evidence in comparison settings.</source>
         <translation>比較の設定で依存関係の根拠を有効にしてください。</translation>
-    </message>
-    <message>
-        <source>Include control dependencies</source>
-        <translation>制御依存関係を含める</translation>
     </message>
     <message>
         <source>Inspect original function</source>
@@ -6953,6 +7091,32 @@ Progress does not establish equal loop counts or function results.</source>
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>証明：カウンターの各周期は、入力から導出された式に対する共通の出口に到達します。終了前に未定義動作が発生する場合があります。</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>引数のアクセス</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>復元された呼び出し引数と同じ計算アドレスを使う読み取りと書き込みを表示します。</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>制御依存を含める</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>入力や使用箇所の追跡に制御依存を含めます。</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>呼び出し n%1 · アドレス観測 %2 件 · %3
+復元された引数のアドレスでの読み書きです。呼び出しの影響と実行順序は不明です。行をアクティブにすると操作を選択します。</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>引数アドレスを調査中…</translation>
     </message>
 </context>
 <context>
@@ -7767,6 +7931,38 @@ Every use of a projected parameter reads the same low bits. Whole-function behav
         <source>Uncertain</source>
         <translation>不確定</translation>
     </message>
+    <message>
+        <source>Argument</source>
+        <translation>引数</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>アクセス</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>RETURN 入力</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>書き込み</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>読み取り</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>COPY / PHI 経路</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>未観測</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>RETURN オペランドに至る同じ幅の COPY/PHI 経路です。オペランドは制御先の場合があり、ABI の戻り値や実行順序は確定しません。</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonRegionsDialog</name>
@@ -7923,6 +8119,30 @@ External input producers are not compared or counted as shared code.</source>
 SSA recipe: %1</source>
         <translation>
 SSA 分析方式: %1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+呼び出しは現在の関数の対応付けに基づきます。動作は未検証です。</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>呼び出しコンテキスト…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>主入力</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>副入力</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>主入力の関数 %1 / 副入力の関数 %2 · 共有範囲 %3
+対象命令のカバレッジ：%4% / %5%（対応付け済みの直接呼び出しを含む）。この証拠は関数の対応付けを前提とし、動作は未検証です。</translation>
     </message>
 </context>
 <context>
@@ -9469,6 +9689,18 @@ Ambiguities and manual decisions remain report-local. Region hypotheses retain t
         <source>Releases</source>
         <translation>リリース</translation>
     </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>保存された区間内の呼び出しは、元のレポートの関数対応に基づきます。呼び出し先の動作の等価性を証明するものではありません。</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>すべてのネイティブ区間</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>すべての SSA 区間</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LineageGraph</name>
@@ -9812,6 +10044,668 @@ Your previous graph is still available.</source>
     <message>
         <source>Timeline</source>
         <translation>タイムライン</translation>
+    </message>
+</context>
+
+<context>
+    <name>neverd::gui::InterpreterRecoveryDialog</name>
+    <message>
+        <source>Assume external stores avoid the declared entry frame</source>
+        <translation>外部書き込みが宣言した入口フレームと重ならないと仮定</translation>
+    </message>
+    <message>
+        <source>Blank or zero keeps the engine default. More work does not permit incomplete source or add memory assumptions.</source>
+        <translation>空欄またはゼロでエンジンの既定値を使います。処理量を増やしても、不完全なソースを許可したりメモリの仮定を追加したりしません。</translation>
+    </message>
+    <message>
+        <source>Chained transfers</source>
+        <translation>連続する遷移数</translation>
+    </message>
+    <message>
+        <source>Chained visits per destination</source>
+        <translation>遷移先ごとの連続訪問数</translation>
+    </message>
+    <message>
+        <source>Contexts per address</source>
+        <translation>アドレスごとのコンテキスト数</translation>
+    </message>
+    <message>
+        <source>Control fields</source>
+        <translation>制御フィールド数</translation>
+    </message>
+    <message>
+        <source>Control refinements</source>
+        <translation>制御の絞り込み回数</translation>
+    </message>
+    <message>
+        <source>Control-flow nodes</source>
+        <translation>制御フローノード数</translation>
+    </message>
+    <message>
+        <source>Dependency visits</source>
+        <translation>依存関係の訪問数</translation>
+    </message>
+    <message>
+        <source>End a chain at a repeated destination</source>
+        <translation>同じ遷移先を再訪したら連続解析を終了</translation>
+    </message>
+    <message>
+        <source>Engine default</source>
+        <translation>エンジンの既定値</translation>
+    </message>
+    <message>
+        <source>Enter a valid integer for %1.</source>
+        <translation>%1 に有効な整数を入力してください。</translation>
+    </message>
+    <message>
+        <source>Enter both entry-frame endpoints, or leave both blank.</source>
+        <translation>入口フレームの両端を入力するか、両方を空欄にしてください。</translation>
+    </message>
+    <message>
+        <source>Entry RSP alignment</source>
+        <translation>入口 RSP のアラインメント</translation>
+    </message>
+    <message>
+        <source>Entry RSP range end (exclusive)</source>
+        <translation>入口 RSP 範囲の終端（含まない）</translation>
+    </message>
+    <message>
+        <source>Entry RSP range start</source>
+        <translation>入口 RSP 範囲の始端</translation>
+    </message>
+    <message>
+        <source>Entry RSP residue</source>
+        <translation>入口 RSP の剰余</translation>
+    </message>
+    <message>
+        <source>Evaluated operations</source>
+        <translation>評価する演算数</translation>
+    </message>
+    <message>
+        <source>General registers</source>
+        <translation>汎用レジスター</translation>
+    </message>
+    <message>
+        <source>General registers and CPU queries</source>
+        <translation>汎用レジスターと CPU クエリ</translation>
+    </message>
+    <message>
+        <source>General registers, CPU queries and XMM</source>
+        <translation>汎用レジスター、CPU クエリ、XMM</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report</source>
+        <translation>インタープリター復元レポート</translation>
+    </message>
+    <message>
+        <source>Node evaluations</source>
+        <translation>ノード評価回数</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid return slots and saved frame cells</source>
+        <translation>書き込みがリターンスロットと保存済みフレームセルを避けることを証明</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid the declared entry frame</source>
+        <translation>書き込みが宣言した入口フレームを避けることを証明</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>復元</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>インタープリター関数を復元</translation>
+    </message>
+    <message>
+        <source>Recover reachable control flow and generate C with explicit x64 register state. The source describes normal, nonfaulting execution with fixed image mappings. Memory assumptions below apply only when you enter them.</source>
+        <translation>到達可能な制御フローを復元し、明示的な x64 レジスター状態を持つ C ソースを生成します。ソースは固定イメージマッピング下で障害のない通常実行を記述します。以下のメモリの仮定は入力した場合にのみ適用されます。</translation>
+    </message>
+    <message>
+        <source>Signed offsets from entry RSP. Declaring this range assumes address arithmetic does not wrap; it does not prove accessibility or separation.</source>
+        <translation>入口 RSP からの符号付きオフセットです。この範囲の宣言はアドレス演算が折り返さないと仮定しますが、アクセス可能性や非重複を証明するものではありません。</translation>
+    </message>
+    <message>
+        <source>Solver queries</source>
+        <translation>ソルバーのクエリ数</translation>
+    </message>
+    <message>
+        <source>Source state</source>
+        <translation>ソースの状態</translation>
+    </message>
+    <message>
+        <source>State and memory</source>
+        <translation>状態とメモリ</translation>
+    </message>
+    <message>
+        <source>Symbolic expression nodes</source>
+        <translation>シンボリック式のノード数</translation>
+    </message>
+    <message>
+        <source>Unspecified</source>
+        <translation>未指定</translation>
+    </message>
+    <message>
+        <source>Work limits</source>
+        <translation>処理量の上限</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisProgress</name>
+    <message>
+        <source>AU: idle</source>
+        <translation>AU: アイドル</translation>
+    </message>
+    <message>
+        <source>AU: loading</source>
+        <translation>AU: 読み込み中</translation>
+    </message>
+    <message>
+        <source>AU: loading %1%</source>
+        <translation>AU: 読み込み中 %1%</translation>
+    </message>
+    <message>
+        <source>AU: finding functions</source>
+        <translation>AU: 関数を検出中</translation>
+    </message>
+    <message>
+        <source>AU: indexing references</source>
+        <translation>AU: 参照を索引中</translation>
+    </message>
+    <message>
+        <source>AU: indexing references %1%</source>
+        <translation>AU: 参照を索引中 %1%</translation>
+    </message>
+    <message>
+        <source>AU: analysis finished</source>
+        <translation>AU: 解析完了</translation>
+    </message>
+    <message>
+        <source>Analysis finished in %1 s</source>
+        <translation>解析は %1 秒で完了しました</translation>
+    </message>
+    <message>
+        <source>Reading the file</source>
+        <translation>ファイルを読み込み中</translation>
+    </message>
+    <message>
+        <source>Parsing the format</source>
+        <translation>形式を解析中</translation>
+    </message>
+    <message>
+        <source>Finding code</source>
+        <translation>コードを検出中</translation>
+    </message>
+    <message>
+        <source>Loading debug information</source>
+        <translation>デバッグ情報を読み込み中</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>プロジェクトを開いています</translation>
+    </message>
+    <message>
+        <source>Loading</source>
+        <translation>読み込み中</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LoadProgressCard</name>
+    <message>
+        <source>Opening %1</source>
+        <translation>%1 を開いています</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 秒</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> アイコン</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> 位置</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · タスク %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 秒</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>タスクをキャンセル(&amp;C)</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>成果物をエクスポート(&amp;E)…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>プラグインをインポート(&amp;I)…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>復元コードを解析セクションとして追加し、最初の関数を開く</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>成果物:</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>参照…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>コマンドのアイコンを選択</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>コンテキストメニューに直接表示するコマンドを選択します。他のコマンドは Plugins → プラグイン名にまとめられます。アイコンには builtin:name またはローカルの PNG、ICO、SVG ファイルを指定できます。</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>コマンド</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>コンテキストメニューの設定…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>コンテキストメニューに直接表示</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>経過時間</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>成果物をエクスポート</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>成果物を新しいファイルにエクスポート</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>アイコン</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>アイコンを使用できません: %1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>アイコン (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>プロセスプラグインをインポートしてコマンドを追加します。</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>イメージにコードをインポート</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>プロセスプラグインをインポート</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>プロセスプラグインをインポート…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>%1 のログ</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>メニュー設定…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>プラグイン(&amp;G)</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>プラグイン</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>プラグイン / タスク</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>プラグインの成果物を %1 にエクスポートしました</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>プラグインのコンテキストメニュー</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>プラグインのアイコンを使用できません: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>プラグインマネージャー…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>プラグインマニフェスト (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>プラグインのタスクログ</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>プラグインのタスクと結果</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>プラグイン</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>Plugins サブメニュー</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>位置</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>プロセスプラグインをインポートしました: %1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>進捗</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>プラグインのダイアログ表示中にプロジェクトが変更されました</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>このアクションの値を保存</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>プラグインのコマンドを実行するとタスクと結果が表示されます。</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>%1 の下のタスクを選択して結果を表示します。</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>選択したプラグインタスクの進捗</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>ログを表示(&amp;L)</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>状態</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>タスクの結果</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>プラグイン別のタスク</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>このアクションの登録は無効になりました。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>有効化中</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>有効化状態</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>有効化状態: %1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>有効</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>コンポーネントの世代: %1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>プラグインのフォルダーを開けませんでした。</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>宣言された読み取りサービス: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>診断: %1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>無効化</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>有効化</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>有効</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>起動時に有効化: %1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>プラグイン名、ID、パスで絞り込み</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>プラグインを絞り込み</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>プロセスプラグインのマニフェストをインポートしてコマンドを追加します。プロバイダーはコマンド実行時にのみ起動します。</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>プラグインをインポート…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>プロセスプラグインをインポート</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>無効</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>インストール記録を削除しました。プラグインファイルとタスクの成果物は保持されます。</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>インストール記録を削除しました。実行中の処理を停止しています。</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>インストール済みプロセスプラグイン</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>マニフェスト: %1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>いいえ</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>フォルダーを開く</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>プラグイン</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>プラグインを無効にしました。インストール記録は保持され、実行中の処理はキャンセルされます。</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>プラグインを有効にしました。</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>プラグインをインポートしました: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>プラグインマネージャー</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>プラグインマニフェスト (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>プラグイン: %1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>登録数: %1、実行中の呼び出し: %2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>保存済みの登録を削除します。プラグインファイルとタスクの成果物は保持されます。</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>有効化を再試行</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>プラグインを選択するとマニフェスト、有効化状態、診断が表示されます。</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>選択したプラグインの詳細</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>停止中</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>種類: 外部プロセス</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>使用不可</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>アンインストール</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>バージョン</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>バージョン: %1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>タスクの終了と受理済み公開処理のクリーンアップを待機しています。</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>はい</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>公開の受領記録を読み取れません: %1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>%2 からプラグイン %1 を復元できませんでした: %3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>解析セクション %1 をインポートしました。保持するにはプロジェクトを保存してください。</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>プラグインの状態は変更されましたが、起動時の設定を保存できませんでした。</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>プロジェクト操作は完了しましたが、受領記録を保存できませんでした: %1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>公開の受領記録が届く前にセッションが終了しました。</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>このプラグインのインスタンスは無効になりました。</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>プロジェクトの受領記録を待機しています。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>プラグイン結果グラフ</translation>
     </message>
 </context>
 </TS>

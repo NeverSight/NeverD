@@ -250,6 +250,12 @@ bool authenticatedSourceAnchorExemptionMatches(
     uint64_t EntryStride, uint32_t Run,
     const RelocatedInstructionAddressOccurrence &Occurrence);
 
+/// Whether a target can numerically bound this relocation run, including its
+/// exact end and misaligned interior anchors. This filters owner-query work;
+/// it grants no storage ownership or index-domain authority.
+bool canBoundCodePtrRun(va_t Target, va_t BaseAddr, uint64_t EntryStride,
+                        uint32_t Run);
+
 /// Truncate an absolute code-pointer relocation run at the next independently
 /// materialized table-base anchor.  This prevents two adjacent absolute tables
 /// from being conflated into one physical owner.

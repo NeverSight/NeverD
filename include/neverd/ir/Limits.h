@@ -18,6 +18,9 @@
 
 namespace neverd::limits::ir {
 
+/// Maximum replacement words between a terminator and a candidate entry.
+inline constexpr size_t kAArch64EntryFillerWords = 64;
+
 #define NEVERD_A64_SVE_STATE_LIMIT(Name, Value)                                \
   inline constexpr size_t Name = Value;
 #include "neverd/ir/med/AArch64/AArch64SVEState.def"
@@ -56,6 +59,16 @@ inline constexpr unsigned kMedToHighSemanticThreadLimit = 1;
 inline constexpr size_t kCFGBuilderMaxRounds = 8;
 inline constexpr size_t kCFGBuilderMaxDependencies = 4096;
 
+/// Optional PE32 display recovery. No allowance is borrowed from proofs.
+inline constexpr size_t kAnalysisStackInstructionsPerCallee = 4096;
+inline constexpr size_t kAnalysisStackInstructionsPerFunction = 65536;
+inline constexpr size_t kAnalysisTableSlots = 256;
+inline constexpr size_t kAnalysisTableTargetsPerFunction = 4096;
+inline constexpr unsigned kAnalysisTableRounds = 8;
+
+/// Maximum lifted operations in an authenticated shared entry prefix.
+inline constexpr size_t kMaxRegistrationSharedPrefixOps = 64;
+
 // include/neverd/ir/med/MedLibraryRecognition.h
 inline constexpr size_t
     kMedLibraryRecognitionRecognizeMedLibraryOperationsMaxWork = 250000;
@@ -92,6 +105,10 @@ inline constexpr size_t kSourceVariableFlowMaxWork = 2000000;
 inline constexpr size_t kUnwrittenSourceFrameReadWork = 262144;
 // Shared per-function budget for source-only scratch spill overwrite proofs.
 inline constexpr size_t kSourceEntrySpillWork = 262144;
+// Per-function budget for proving that a call receives the slot of an
+// undefined scratch store before anything reads it
+// (markUndefinedScratchStores).
+inline constexpr size_t kUndefinedScratchEscapeWork = 262144;
 // Bounded scalar/CPUID leaf summaries and total source expansion per function.
 inline constexpr size_t kSourceRegisterLeafOps = 256;
 inline constexpr size_t kSourceRegisterCallOps = 4096;
@@ -99,6 +116,9 @@ inline constexpr size_t kSourceRegisterCallOps = 4096;
 inline constexpr size_t kSourceCallReturnReadWork = 262144;
 // Per-function work for complete noncapturing frame/pointee use proofs.
 inline constexpr size_t kSourceFrameBorrowWork = 262144;
+// A direct borrow chain also consumes native stack while composing summaries;
+// the work budget alone permits many thousands of tiny relay functions.
+inline constexpr unsigned kSourceFrameBorrowCallDepth = 32;
 /// Closed internal-call return proofs are bounded independently of general
 /// CFG discovery. Larger groups retain the ordinary conservative admission.
 inline constexpr size_t kOwnInteriorReturnProofFunctions = 32;
@@ -128,6 +148,8 @@ inline constexpr size_t kHighDeadStoreElimNarrowSourceConcatLocalsBudget =
 inline constexpr size_t kHighDeadStoreElimBudget = 200000;
 inline constexpr size_t kHighDeadStoreElimElimUnreadPrivateFrameStoresBudget =
     100000;
+inline constexpr size_t
+    kHighDeadStoreElimElimUndefinedEntryScratchStoresBudget = 100000;
 
 // lib/ir/high/pass/HighDemandedBytes.cpp
 inline constexpr size_t kHighDemandedBytesVisitBudget = 2000000;
@@ -263,6 +285,10 @@ inline constexpr size_t kRegistrationABIPrivateMaxObjectCallbackNodes = 256;
 inline constexpr unsigned kRegistrationConditionalCalleeMaxBoundCallCheckDepth =
     4;
 
+// lib/ir/low/X86/RegistrationCxxState.cpp
+inline constexpr unsigned kRegistrationCxxMaxBoundCallDepth = 4;
+inline constexpr unsigned kRegistrationCxxMaxCalleeDepth = 4;
+
 // lib/ir/low/jumptable/JumpTableResolverBounds.cpp
 // Keep attacker-controlled work in independent accounts so an intentionally
 // expensive proposal scan cannot consume the memory needed for final all-path
@@ -308,6 +334,11 @@ inline constexpr size_t kJumpTableResolverSliceMaxFiniteSetSolverQueries = 128;
 // lib/ir/low/jumptable/ResolverDefinitionCache.h
 inline constexpr size_t kResolverDefinitionCacheCapacity = 4096;
 
+// lib/ir/low/jumptable/ResolverExactDefinitions.h
+// Bound the query-local index to at most 2 MiB of position storage. Larger
+// prefixes keep the original metered scan; this never limits proof coverage.
+inline constexpr size_t kResolverExactDefinitionIndexMaxOps = 65536;
+
 // lib/ir/low/jumptable/ResolverMemoryDefinitionCache.h
 inline constexpr size_t kResolverMemoryDefinitionCacheCapacity = 1024;
 
@@ -336,11 +367,18 @@ inline constexpr unsigned kMedImmutableTableScansMaxEvaluationDepth = 64;
 inline constexpr unsigned kMedImmutableTableScansMaxScanIterations = 4096;
 inline constexpr unsigned kMedImmutableTableScansMaxFoldRounds = 4;
 
+// lib/ir/med/pass/MedSSA.cpp
+// COPY and constant-step definitions one termination handler register value
+// is traced through before it has no stable form.
+inline constexpr unsigned kMedSSASEHFuncletRegisterChainLimit = 32;
+
 // lib/ir/med/pass/MedMutableSource.cpp
-inline constexpr size_t kMedMutableSourceMaxBlocks = 4096;
+// Block count, storage matrix size and propagation work have independent
+// ceilings. The matrix bounds the three packed liveness sets per block.
+inline constexpr size_t kMedMutableSourceMaxBlocks = 65536;
 inline constexpr size_t kMedMutableSourceMaxValues = 4096;
 inline constexpr size_t kMedMutableSourceMaxOperations = 8 * 1024 * 1024;
-inline constexpr size_t kMedMutableSourceMaxBlockValues = 4 * 1024 * 1024;
+inline constexpr size_t kMedMutableSourceMaxBlockValues = 16 * 1024 * 1024;
 inline constexpr size_t kMedMutableSourceMaxPropagationWords = 16 * 1024 * 1024;
 
 // lib/ir/med/pass/MedStackAlignment.cpp
@@ -627,6 +665,9 @@ inline constexpr int
     kSourceFrameAnalysisSourceFrameCompleteOutputBytesFunctionBlocksSizeLimit =
         128;
 
+// lib/ir/low/X86/RegistrationCalleeABI.cpp
+inline constexpr size_t kMaxRegistrationLeafPrefixRefusals = 4096;
+
 // lib/ir/low/X86/RegistrationCalleeIndex.cpp
 inline constexpr int
     kRegistrationCalleeIndexRegistrationCallCalleeIndexContractsTargetsSizeLimit =
@@ -639,6 +680,11 @@ inline constexpr int
         256;
 
 // lib/ir/low/X86/RegistrationCalleeStack.cpp
+/// Retained plain integer CFGs per unchanged-image stack-proof operation.
+inline constexpr size_t kMaxRegistrationStackGraphBytes = 64u * 1024u * 1024u;
+/// Conservative node and allocator overhead in retained graph accounting.
+inline constexpr size_t kRegistrationStackGraphAllocationOverhead =
+    8 * sizeof(void *);
 inline constexpr int kRegistrationCalleeStackProveCacheSizeLimit = 256;
 inline constexpr int
     kRegistrationCalleeStackRegistrationCallCalleeIndexStackContractsTargetsSizeLimit =
@@ -703,13 +749,18 @@ inline constexpr int
         256;
 
 // lib/ir/low/jumptable/JumpTableResolverSlice.cpp
-inline constexpr int kJumpTableResolverSliceCanRetainInputSizeLimit = 8192;
+// A builder keeps its last complete resolver graph, one metered and one
+// unmetered, for later queries on the same CFG.  A reused graph pays its whole
+// cold charge, so these bounds trade only memory and comparison time.  A
+// function beyond them rebuilds its graph for every query; capstone's largest
+// decoder functions retain 17,888 instructions in 43 MB.
+inline constexpr int kJumpTableResolverSliceCanRetainInputSizeLimit = 32768;
 inline constexpr int kJumpTableResolverSliceCanRetainBBlockStartsSizeLimit =
     8192;
 inline constexpr int
     kJumpTableResolverSliceCanRetainBResolvedTableInfoSizeLimit = 1024;
 inline constexpr size_t kJumpTableResolverSliceCanRetainRemaining =
-    8 * 1024 * 1024;
+    64 * 1024 * 1024;
 inline constexpr int
     kJumpTableResolverSliceCFGBuilderTableLoadAddressesMatchRoleExactRelocationFreeAddressProofOccurrenceArithmeticProofSizeLimit =
         32;

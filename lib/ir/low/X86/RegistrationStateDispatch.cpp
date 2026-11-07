@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "RegistrationMemoryPermissions.h"
 #include "RegistrationStateSolver.h"
 
 #include "neverd/Limits.h"
@@ -33,8 +34,12 @@ void RegistrationStateSolver::merge(size_t Target, const Domain &Source) {
                            2 * std::bit_width(States[Target].size() + 1)))
     return;
   SEHFlowKey Key{Source.Activation};
-  if (JumpRuntime && !KnownCxx) {
+  // The live C++ state owns its initialized cleanup objects. Joining it
+  // with a path that never constructed them would lose that correlation.
+  // Paths at the same state still intersect their initialization and facts.
+  if ((KnownCxx && !Source.Unknown) || (JumpRuntime && !KnownCxx))
     Key.Levels.assign(Source.Levels.begin(), Source.Levels.end());
+  if (JumpRuntime && !KnownCxx) {
     for (const auto &[Offset, Capture] : Source.JumpCaptures)
       Key.Captures.emplace_back(Offset, Capture.Call, Capture.Level);
   }
@@ -65,6 +70,10 @@ void RegistrationStateSolver::merge(size_t Target, const Domain &Source) {
     Changed |= Before != Dest.Levels.size();
     Changed |= Dest.Frame.merge(Source.Frame);
     Changed |= Dest.RuntimeObject.merge(Source.RuntimeObject);
+    if (Dest.CxxDispatchBindingsIntact && !Source.CxxDispatchBindingsIntact) {
+      Dest.CxxDispatchBindingsIntact = false;
+      Changed = true;
+    }
     if (Dest.SEHCallers.size() != Source.SEHCallers.size()) {
       Changed |= !Dest.Unknown;
       Dest.Unknown = true;
@@ -140,6 +149,9 @@ void RegistrationStateSolver::merge(size_t Target, const Domain &Source) {
 
 Domain dispatchSource(const Domain &Source) {
   Domain Root;
+  // Runtime dispatch supplies no proof that eager IAT bindings stayed intact.
+  Root.Frame.ImportBindingsIntact = false;
+  Root.CxxDispatchBindingsIntact = false;
   Root.Frame.Cells = Source.Frame.Cells;
   Root.Frame.EntryCells = Source.Frame.EntryCells;
   Root.JumpCaptures = Source.JumpCaptures;
@@ -151,10 +163,46 @@ Domain dispatchSource(const Domain &Source) {
   return Root;
 }
 
+bool RegistrationStateSolver::preservesCxxDispatchBindings(
+    const Domain &State, const LowOp &Op, const FrameTransfer &Transfer,
+    bool RuntimeMemory) {
+  if (!CxxCalls || !CxxCalls->ProveDispatchMemory || State.Unknown ||
+      !charge(1) || Op.MemoryOrdering != NdMemoryOrdering::None)
+    return false;
+  if (Op.Opcode != NdOp::LOAD && Op.Opcode != NdOp::STORE)
+    return registration_abi::hasClosedRegistrationIntegerEffect(Op);
+  const auto Memory = lowMemoryOperands(Op);
+  if (!Memory.Complete || !Memory.Address ||
+      Memory.AccessSize > sizeof(uint32_t))
+    return false;
+  if (RuntimeMemory)
+    return true; // The exact live exception allocation owns this access.
+  if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+    const auto Address = Transfer.read(*Memory.Address);
+    if (Address.CallbackAddress &&
+        Address == FrameValue::callbackFrame(Address.CallbackAddress->Entry,
+                                             Address.CallbackAddress->Offset))
+      return State.Frame.callbackMemoryIsPrivate(*Address.CallbackAddress,
+                                                 Memory.AccessSize,
+                                                 Op.Opcode != NdOp::STORE);
+    if (Address.Offset && Address == FrameValue::frame(*Address.Offset)) {
+      const auto SP = parentStackOffset(State);
+      // Source EBP = 0; [4, 8) is the caller PC. Callback code can also
+      // access the still-allocated parent frame, never arbitrary arguments.
+      return SP && *Address.Offset >= *SP &&
+             int64_t(*Address.Offset) + Memory.AccessSize <=
+                 (Op.Opcode == NdOp::STORE ? int64_t(sizeof(uint32_t))
+                                           : 2 * int64_t(sizeof(uint32_t)));
+    }
+  }
+  return CxxCalls->ProveDispatchMemory(Op, Transfer, WorkUsed);
+}
+
 void RegistrationStateSolver::dispatch(
     va_t Address, std::set<int32_t> Levels, const Domain &Source, bool Unknown,
     bool Callback, bool SearchFilter,
-    std::optional<std::pair<uint32_t, uint32_t>> CxxCatch) {
+    std::optional<std::pair<uint32_t, uint32_t>> CxxCatch,
+    bool PreserveBindings) {
   auto It = Entries.find(Address);
   if (It == Entries.end()) {
     if (CxxCatch)
@@ -165,6 +213,11 @@ void RegistrationStateSolver::dispatch(
   if (!charge(Levels.size() + 1))
     return;
   Domain Root = dispatchSource(Source);
+  if (KnownCxx && CxxCatch && PreserveBindings && !Unknown && !Source.Unknown &&
+      CxxCalls && CxxCalls->ProveDispatchCall) {
+    Root.Frame.ImportBindingsIntact = Source.Frame.ImportBindingsIntact;
+    Root.CxxDispatchBindingsIntact = Source.CxxDispatchBindingsIntact;
+  }
   Root.Levels = std::move(Levels);
   if (!KnownCxx && Callback)
     Root.Activation = {Address, SearchFilter};
@@ -181,8 +234,8 @@ void RegistrationStateSolver::dispatch(
   // their logical level. Distinct constants have no exact cell value; the
   // complete finite domain remains in Levels for subsequent state transfers.
   if (Root.Levels.size() == 1)
-    Root.Frame.Cells[*Chain.TryLevelOffset] =
-        FrameValue::constant(uint32_t(*Root.Levels.begin()));
+    Root.Frame.Cells.set(*Chain.TryLevelOffset,
+                         FrameValue::constant(uint32_t(*Root.Levels.begin())));
   else
     Root.Frame.Cells.erase(*Chain.TryLevelOffset);
   Root.Frame.Registers[x86reg::RBP / x86reg::GeneralRegStride] =
@@ -213,19 +266,22 @@ void RegistrationStateSolver::dispatch(
     // Unwinding and catch-object construction may change local objects.
     // Keep only frame taint until their write footprints establish that a
     // particular alias survives. Runtime administration has separate owners.
-    for (auto It = Root.Frame.Cells.begin(); It != Root.Frame.Cells.end();) {
-      const auto Offset = It->first;
-      if (Offset != *Chain.RegistrationOffset &&
-          int64_t(Offset) != int64_t(*Chain.RegistrationOffset) - 4 &&
-          Offset != *Chain.TryLevelOffset &&
-          (!Chain.RealignedFrame ||
-           Offset != Chain.RealignedFrame->SavedParentFrameOffset))
-        It->second = registration_state::join(It->second, {});
-      if (It->second == FrameValue{})
-        It = Root.Frame.Cells.erase(It);
-      else
-        ++It;
-    }
+    Root.Frame.Cells.edit([&](FrameCells::Map &Cells) {
+      for (auto It = Cells.begin(); It != Cells.end();) {
+        const auto Offset = It->first;
+        if (Offset != *Chain.RegistrationOffset &&
+            int64_t(Offset) != int64_t(*Chain.RegistrationOffset) - 4 &&
+            Offset != *Chain.TryLevelOffset &&
+            (!Chain.RealignedFrame ||
+             !Chain.RealignedFrame->hasSavedParentFrame() ||
+             Offset != Chain.RealignedFrame->SavedParentFrameOffset))
+          It->second = registration_state::join(It->second, {});
+        if (It->second == FrameValue{})
+          It = Cells.erase(It);
+        else
+          ++It;
+      }
+    });
     preserveCxxFrameCells(Root, Source);
     if (CheckRuntimeObjects) {
       const auto Object = CatchObjects.find(*CxxCatch);
@@ -280,24 +336,39 @@ void RegistrationStateSolver::seedEntries() {
         return C.Control ==
                RegistrationSEHControlContract::Kind::ParentEpilogue;
       });
-  if (Conditional || ParentEpilogue || CxxPrologue) {
+  if (Conditional || ParentEpilogue || CxxPrologue || SEH4Prologue) {
     for (unsigned Index = 0; Index != Initial.Frame.Registers.size(); ++Index)
       Initial.Frame.Registers[Index].SavedRegister = uint8_t(Index + 1);
     FrameValue PC;
     PC.MayBeFrame = PC.ReturnPC = true;
-    Initial.Frame.Cells[4] = PC;
+    Initial.Frame.Cells.set(4, PC);
   }
   if (Conditional) {
+    for (const auto &[Index, Value] : Conditional->Registers) {
+      // The query may refine only complete volatile input carriers. Saved
+      // nonvolatile identities and both physical frame registers stay owned
+      // by the entry protocol above.
+      if (!isX86VolatileFrameRegister(Index)) {
+        Conditional->Complete = false;
+        continue;
+      }
+      Initial.Frame.Registers[Index] = Value;
+    }
     for (const auto &[Offset, Value] : Conditional->Arguments)
       Initial.Frame.store(Offset, 4, Value);
-    for (const auto &[Offset, Value] : Conditional->ObjectCells)
+    for (const auto &[Offset, Value] : Conditional->ObjectCells) {
       Initial.Frame.store(Offset, 4, Value);
+      if (KnownCxx && Offset <= INT32_MAX - 4)
+        for (int32_t Byte = Offset; Byte != Offset + 4; ++Byte)
+          Initial.InitializedFrameBytes.insert(Byte);
+    }
   }
   Initial.Frame.OtherRegistersMayBeFrame = true;
   // After push EBP, the canonical direct prologue establishes EBP at this
   // incoming SP minus four bytes. Do not assume later reads still name it.
   Initial.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
       Chain.RealignedFrame ? FrameValue::entryFrame(4) : FrameValue::frame(4);
+  ParentEntryRegisters = Initial.Frame.Registers;
   Initial.Parent = Initial.Uninstalled = Initial.CanDispatch = true;
   merge(Entries.at(Function.Entry), Initial);
   for (va_t RootVA : Function.OrdinaryModuleAnalysisRoots) {

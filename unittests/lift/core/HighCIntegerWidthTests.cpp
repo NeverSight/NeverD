@@ -1247,7 +1247,13 @@ TEST(HighCIntegerWidths, SegmentedOffsetsDoNotAliasOverlappingImageBacking) {
       << Source;
   EXPECT_NE(Body("read_gs_compound").find(" + 0x140002000"), std::string::npos)
       << Source;
-  EXPECT_NE(Body("atomic_gs_coincident").find("__atomic_fetch_add"),
+  // x86 keeps the decoded LOCK XADD on its segment (X86AtomicRmw.h): an
+  // arbitrary address cannot carry __atomic_fetch_add's alignment promise.
+  EXPECT_NE(Body("atomic_gs_coincident")
+                .find("__asm__ __volatile__(\"lock xaddq %0, %%gs:(%1)\""),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Body("atomic_gs_coincident").find("__atomic_fetch_add"),
             std::string::npos)
       << Source;
 }
@@ -1652,5 +1658,50 @@ TEST(HighCIntegerWidths, LargeSignedLiteralsCompileWithTheirDeclaredWidths) {
       emitFunctions(Functions) + executionHarness(Checks);
   for (llvm::StringRef Optimization : {"-O0", "-O2"})
     compileAndExecute(Source, false, true, Optimization);
+}
+TEST(HighCIntegerWidths, BooleanXorAndWideInplaceMasksKeepExactBits) {
+  const auto Word = NdType::makeInt(8, false);
+  const auto Wide = NdType::makeInt(16, false);
+  HighFunc Boolean;
+  Boolean.Name = "boolean_xor";
+  Boolean.ReturnType = Word;
+  Boolean.Params = {{"left", Word}, {"right", Word}};
+  returnValue(Boolean, HighExpr::makeBinop(NdOp::BOOL_XOR, parameter(0, Word),
+                                           parameter(1, Word)));
+  HighFunc Mask;
+  Mask.Name = "wide_mask";
+  Mask.ReturnType = Wide;
+  Mask.Params = {{"low", Word}, {"high", Word}};
+  MedVar Local;
+  Local.Kind = MedVar::Temp;
+  Local.Id = 10;
+  Local.Size = 16;
+  HighStmt Define;
+  Define.Kind = StmtKind::Assign;
+  Define.Dst = HighExpr::makeVar(Local, Wide);
+  Define.Val =
+      HighExpr::makeBinop(NdOp::CONCAT, parameter(1, Word), parameter(0, Word));
+  Define.Val->Type = Wide;
+  Define.KeepsName = true;
+  Mask.Body.push_back(Define);
+  Define.Val = HighExpr::makeBinop(
+      NdOp::INT_AND, HighExpr::makeVar(Local, Wide),
+      HighExpr::makeConst(UINT64_MAX, 16, ConstantAddressProvenance::Scalar));
+  Mask.Body.push_back(Define);
+  returnValue(Mask, HighExpr::makeVar(Local, Wide));
+  const std::string Source = emitFunctions({Boolean, Mask}) + R"(
+int main(void) {
+  const uint64_t values[] = {0, 1, 2, 4, 255, UINT64_MAX};
+  for (unsigned i = 0; i < 6; ++i)
+    for (unsigned j = 0; j < 6; ++j) {
+      unsigned expected = (values[i] ? 1 : 0) + (values[j] ? 1 : 0);
+      if (boolean_xor(values[i], values[j]) != (expected == 1)) return 1;
+      if (wide_mask(values[i], values[j]) != values[i]) return 2;
+    }
+  return 0;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndExecute(Source, true, true, Optimization);
 }
 } // namespace

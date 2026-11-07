@@ -110,6 +110,9 @@ struct SpecializationTerminalImportEvidence {
 /// A complete, strictly lifted guest instruction. The provider owns decoding,
 /// mapping, relocation, and instruction-level exception checks. A missing or
 /// unsupported instruction must return an Error, never an empty approximation.
+/// A named ProfileProjection can instead retain exact native bytes for its
+/// explicit environment owner. Empty Ops in that case is an unexecuted native
+/// instruction, never a NOP or a complete architectural sidecar.
 struct SpecializationInstruction {
   std::vector<LowOp> Ops;
   LowInstructionBoundary Origin;
@@ -222,6 +225,14 @@ struct SpecializationEntryObject {
   int64_t End = 0;
 };
 
+enum class SpecializationUndefinedModel : uint8_t {
+  SelectedLowIR,
+  /// Checked raw x64 regions only. Complete scalar sidecars supply independent
+  /// architectural bit productions before control proofs. The residual keeps
+  /// those productions; ordinary source and native-proof APIs refuse them.
+  FreshScalarV1,
+};
+
 struct SpecializationOptions {
   /// Preserve incoming machine flags as symbolic machine-state inputs rather
   /// than claiming they are supplied by an ordinary source-language ABI.
@@ -244,18 +255,18 @@ struct SpecializationOptions {
   /// Requires ExplicitMachineState and
   /// NormalNonfaultingExecution. Bases may alias each other, the frame or any
   /// other address; this grants no operating-system layout or nonalias facts.
-  /// Only the raw residual API supports this environment contract. V1 source
-  /// wrapping and native proof APIs do not have authenticated base inputs.
+  /// Raw recovery and choice-region source V2 support this contract. Source
+  /// and native proof interfaces without authenticated base inputs refuse it.
   bool X64SegmentedReads = false;
   /// Retain ordinary scalar FS/GS stores with a 64-bit offset and arbitrary
   /// long-mode bases, fixed unless X64LegacyGSState is declared. Requires
   /// explicit nonfaulting machine state.
   /// Full linear addresses may alias any memory, including live return cells;
-  /// offset provenance grants no frame or separation fact. This raw-residual
-  /// contract is independent of X64SegmentedReads. Source and native proof
+  /// offset provenance grants no frame or separation fact. This contract is
+  /// independent of X64SegmentedReads. Source and native proof
   /// interfaces without authenticated base inputs refuse it.
   bool X64SegmentedWrites = false;
-  /// Raw-only SWAPGS state under KernelX64NoFaultV1, explicit nonfaulting
+  /// Raw-only SWAPGS state under an explicit kernel flags profile, nonfaulting
   /// machine state and little-endian x64. The caller declares CR4.FRED = 0
   /// throughout execution. Active GS.base and IA32_KERNEL_GS_BASE are arbitrary
   /// 64-bit inputs; only modeled SWAPGS exchanges them. FS stays fixed. These
@@ -264,13 +275,28 @@ struct SpecializationOptions {
   /// Source and native proof interfaces without this state contract refuse it.
   bool X64LegacyGSState = false;
   /// Retain CR8 reads/writes with a symbolic four-bit task-priority state.
-  /// Requires explicit nonfaulting machine state and KernelX64NoFaultV1.
+  /// Requires explicit nonfaulting machine state and a kernel flags profile.
   /// Every retained memory access must be ordinary memory without device side
   /// effects or APIC/TPR aliases; only modeled MOV-to-CR8 writes may change the
   /// priority. These are caller preconditions, never inferred from addresses.
   /// This raw-residual contract supplies no scheduling, native proof or source
   /// ABI. Possible reserved-bit writes are refused rather than truncated.
   bool X64CR8State = false;
+  /// CR4 state with writes restricted to changing PGE (bit 7).
+  /// Requires explicit nonfaulting CPL0 state, a kernel flags profile, PGE
+  /// support and a valid entry CR4. Only modeled writes may change CR4; every
+  /// other control bit remains fixed. No VMX transitions or asynchronous
+  /// observers are admitted. Paging structures and virtual mappings are stable,
+  /// cached translations are consistent with them, and retained accesses use
+  /// ordinary RAM without MMIO or paging/cache observations. These caller
+  /// premises make PGE invalidation unobservable to the scalar analysis; the
+  /// original serializing native transfers remain ordered in the residual.
+  /// Reads overapproximate the valid entry domain with all 64 bits unknown.
+  /// Every write must prove all non-PGE bits unchanged. Source projection
+  /// requires the separate machine-region V3 interface; earlier interfaces
+  /// refuse this domain. It supplies no TLB model or native-equivalence
+  /// certificate, even when unused.
+  bool X64CR4PGEState = false;
   /// Raw-only MXCSR loads and scalar state reads/writes under explicit
   /// nonfaulting machine state. The caller declares the CPU's writable mask:
   /// 0xffbf without DAZ, or 0xffff with DAZ. Entry state is arbitrary within
@@ -308,6 +334,8 @@ struct SpecializationOptions {
   /// implies this CPL/IOPL/flags contract. The binary proof requires the same
   /// value in its observation contract; ordinary recovery remains conservative.
   std::optional<InterpreterMachineStateProfile> X64FlagsProfile;
+  SpecializationUndefinedModel UndefinedModel =
+      SpecializationUndefinedModel::SelectedLowIR;
   /// Demand-driven precision refinement for unresolved control. Discovered
   /// register/frame ranges retain exhaustive finite relations. Repeatedly
   /// unresolved memory dependencies may additionally separate proven constant
@@ -334,7 +362,8 @@ struct SpecializationOptions {
   /// ranges are disjoint. No store exemption is implied: enable
   /// ProveStoreFrameSeparation to prove each complete access independently.
   /// Requires distinct complete x64 GPRs, excluding the frame register and
-  /// overlapping EntryConstants. Ordinary source/native consumers refuse.
+  /// overlapping EntryConstants. Machine-region source checks these complete
+  /// ranges before guest effects; ordinary source/native consumers refuse.
   std::vector<SpecializationEntryObject> EntryFrameExcludedObjects;
   /// Optional congruence domain for the entry frame root. Requires explicit
   /// machine state and an RSP FrameBaseRegister. Raw residual consumers enforce
@@ -467,7 +496,8 @@ struct SpecializationOptions {
 
   bool hasRawEnvironment() const {
     return !X64CodeRegions.empty() || !X64ImportBindings.empty() ||
-           !X64MachineExits.empty() || !EntryFrameExcludedObjects.empty();
+           !X64MachineExits.empty() || !EntryFrameExcludedObjects.empty() ||
+           UndefinedModel != SpecializationUndefinedModel::SelectedLowIR;
   }
 
   uint32_t chainedVisitLimit() const {

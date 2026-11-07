@@ -39,7 +39,7 @@ inline bool selfContainedDeclaration(
       "uint16_t",  "uint32_t",   "uint64_t",
       "intptr_t",  "uintptr_t",  "intmax_t",
       "uintmax_t", "__typeof__", "__builtin_choose_expr",
-      "sizeof"};
+      "sizeof",    "__cdecl",    "__stdcall"};
   llvm::StringRef Previous;
   for (size_t I = 0; I < Declaration.size();) {
     if (!llvm::isAlpha(Declaration[I]) && Declaration[I] != '_') {

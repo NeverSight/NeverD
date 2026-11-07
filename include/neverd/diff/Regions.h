@@ -16,15 +16,21 @@
 #include "neverd/diff/Limits.h"
 #include "neverd/diff/Program.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace neverd::diff {
 enum class ComparisonState : uint8_t;
+struct FunctionMatch;
 
 struct RegionSettings {
   bool Enabled = false;
+  /// Include direct calls conditioned on the current function correspondence.
+  /// This selects native-call-runs-v1, not semantic call equivalence.
+  bool Calls = false;
   unsigned MinimumInstructions = limits::diff::kDefaultRegionMinInstructions;
   unsigned MinimumRepeatedInstructions =
       limits::diff::kDefaultRegionMinRepeatedInstructions;
@@ -86,8 +92,9 @@ struct RegionHypothesis {
   std::vector<uint32_t> PrimaryFunctions, SecondaryFunctions;
   std::vector<RegionKind> Explanations;
   uint64_t PrimaryInstructions = 0, SecondaryInstructions = 0;
-  /// Coverage of decoded non-transfer instructions in the participating
-  /// functions. Calls, returns and branches are not part of run evidence.
+  /// Coverage of eligible instructions in the participating functions.
+  /// The call profile additionally admits direct calls with mapped targets;
+  /// branches and returns never contribute to run evidence.
   double PrimaryCoverage = 0, SecondaryCoverage = 0;
   /// Heuristic evidence strength, not a calibrated probability.
   double Confidence = 0;
@@ -96,6 +103,7 @@ struct RegionHypothesis {
 };
 
 struct RegionAnalysis {
+  bool Calls = false;
   /// Absent until requested. Complete means the bounded search finished,
   /// not that its hypotheses have been proved or all code was understood.
   std::optional<ComparisonState> State;
@@ -115,14 +123,18 @@ struct RegionAnalysis {
 /// original comparison; uncovered rows still need inspection.
 RegionAnalysis findRegions(const Program &Primary, const Program &Secondary,
                            const RegionSettings &Settings,
-                           const ComparisonControl &Control);
+                           const ComparisonControl &Control,
+                           llvm::ArrayRef<FunctionMatch> Matches = {});
 
 /// Validate persisted coordinates and normalized-run evidence against the
 /// exact bound snapshots, including membership and arithmetic invariants.
 std::optional<std::string>
 validateRegions(const RegionAnalysis &Regions, const RegionSettings &Settings,
                 const Program &Primary, const Program &Secondary,
-                const ComparisonControl &Control = {});
+                const ComparisonControl &Control = {},
+                llvm::ArrayRef<FunctionMatch> Matches = {});
+
+llvm::StringRef regionProfile(bool Calls);
 } // namespace neverd::diff
 
 #endif // NEVERD_DIFF_REGIONS_H

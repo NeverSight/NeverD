@@ -134,7 +134,6 @@ public:
     Trap.Fallthrough.Address = 0x201;
     Trap.NativeBytes = {0xcc};
     certify(Trap);
-    Trap.UndefinedEffects.Coverage = LowUndefinedCoverage::Missing;
   }
 
   void untakenUnaudited() {
@@ -645,6 +644,10 @@ TEST(NativeUndefinedIndependence, UntakenTrapStillRequiresExactEvidence) {
     if (!Encoding.Resumable)
       Trap.Origin.ControlFlags = LowInstructionControlFlag::Terminator;
     Trap.Ops[0].Inputs[0] = NdVar::cst(static_cast<uint64_t>(Encoding.Id), 2);
+    const auto Coverage = Encoding.Id == Intrinsic::Int3
+                              ? LowUndefinedCoverage::Complete
+                              : LowUndefinedCoverage::Missing;
+    Trap.UndefinedEffects.Coverage = Coverage;
     Trap.UndefinedEffects.OperationDigest =
         lowUndefinedOperationDigest(Trap.Ops);
     const auto Check = [&] {
@@ -655,8 +658,7 @@ TEST(NativeUndefinedIndependence, UntakenTrapStillRequiresExactEvidence) {
     ASSERT_TRUE(Valid.Proof.proved()) << Valid.Proof.Diagnostic;
     ASSERT_EQ(Valid.Instructions.size(), 3U);
     EXPECT_EQ(Provider.Fetches.count(Trap.Fallthrough.Address), 0U);
-    EXPECT_EQ(Valid.Instructions.back().UndefinedEffects.Coverage,
-              LowUndefinedCoverage::Missing);
+    EXPECT_EQ(Valid.Instructions.back().UndefinedEffects.Coverage, Coverage);
     const auto Original = Trap;
     for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
       SCOPED_TRACE(Mutation);
@@ -703,7 +705,10 @@ TEST(NativeUndefinedIndependence, UntakenTrapStillRequiresExactEvidence) {
         Trap.NativeBytes.assign(Trap.Origin.Size, 0x90);
         break;
       case 10:
-        Trap.UndefinedEffects.Coverage = LowUndefinedCoverage::Complete;
+        Trap.UndefinedEffects.Coverage =
+            Coverage == LowUndefinedCoverage::Complete
+                ? LowUndefinedCoverage::Missing
+                : LowUndefinedCoverage::Complete;
         break;
       case 11:
         Trap.PreservedState.SemanticsVersion = 1;

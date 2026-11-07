@@ -291,6 +291,8 @@ extern llvm::cl::opt<std::string> VMChainTransfers;
 extern llvm::cl::opt<std::string> VMChainVisits;
 extern llvm::cl::opt<bool> VMChainStopAtRepeat;
 extern llvm::cl::opt<std::string> VMEntryFrame;
+extern llvm::cl::opt<bool> VMProveStoreReturnSeparation;
+extern llvm::cl::opt<bool> VMProveStoreFrameSeparation;
 extern llvm::cl::opt<std::string> VMEntryAlignment;
 extern llvm::cl::opt<bool> VMExternalStoresDisjointFrame;
 extern llvm::cl::opt<std::string> VMMaxSymbolicNodes;
@@ -298,6 +300,7 @@ extern llvm::cl::opt<bool> VMNoControlDiscovery;
 extern llvm::cl::opt<uint64_t> VMMaxOperations;
 extern llvm::cl::opt<std::string> VMRecoveryReport;
 extern llvm::cl::opt<bool> VMMachineState;
+extern llvm::cl::opt<std::string> VMMachineSourceABI;
 
 int runMobile(const char *Argv0);
 extern llvm::cl::opt<std::string> MobilePlatform;
@@ -365,6 +368,8 @@ extern llvm::cl::opt<bool> DumpHigh;
 
 // Decompile.
 extern llvm::cl::opt<bool> LlvmRoute;
+extern llvm::cl::opt<std::string> X64Continuation;
+extern llvm::cl::opt<std::string> ContinuationReport;
 extern llvm::cl::opt<bool> SourceSymbolic;
 extern llvm::cl::opt<bool> StackFrameInfo;
 extern llvm::cl::opt<std::string> StackFrameFile;
@@ -502,17 +507,19 @@ extern llvm::cl::opt<std::string> DiffProfile, DiffOptions, DiffSave,
     DiffValidationSide, DiffListSide, DiffListSearch, DiffListSort,
     DiffAmbiguousWith, DiffSourceFunction, DiffSourceSide,
     DiffSourceRepresentation, DiffDataFlowProfile;
-extern llvm::cl::opt<bool> DiffIgnoreNames, DiffRegions, DiffDataFlow,
-    DiffSliceDataOnly, DiffFlowRegions, DiffFlowFragments, DiffReviewLatest,
-    DiffListDescending, DiffSourceDifference, DiffSourcePrelude;
+extern llvm::cl::opt<bool> DiffIgnoreNames, DiffRegions, DiffRegionCalls,
+    DiffDataFlow, DiffSliceDataOnly, DiffFlowRegions, DiffFlowFragments,
+    DiffReviewLatest, DiffListDescending, DiffSourceDifference,
+    DiffSourcePrelude;
 extern llvm::cl::opt<double> DiffMinSimilarity;
 extern llvm::cl::opt<unsigned long long> DiffTimeout;
 extern llvm::cl::opt<unsigned long long> DiffImpactWork, DiffChangesWork,
     DiffEffectWork, DiffValidationWork, DiffSourceWork, DiffSourceBytes;
 extern llvm::cl::opt<unsigned> DiffOffset, DiffLimit, DiffRegionAnchor,
-    DiffSliceNode, DiffFlowRegionAnchor, DiffImpactDepth, DiffImpactFunctions,
-    DiffImpactSites, DiffImpactWitness, DiffChangesRows, DiffChangesCount,
-    DiffEffectRecords, DiffValidationInstructions, DiffSourceInstructions;
+    DiffSliceNode, DiffArgumentAccessCall, DiffFlowRegionAnchor,
+    DiffImpactDepth, DiffImpactFunctions, DiffImpactSites, DiffImpactWitness,
+    DiffChangesRows, DiffChangesCount, DiffEffectRecords,
+    DiffValidationInstructions, DiffSourceInstructions;
 int runStructuralDiff();
 int runLineage();
 
@@ -828,6 +835,7 @@ bool configureAnalysisSession(neverd_session_t Sess);
 int runPlugins(const char *Argv0);
 int runLift(neverd_session_t Sess);
 int runDecompile(neverd_session_t Sess);
+int runX64Continuation(neverd_session_t Sess);
 int runPatch(neverd_session_t Sess);
 
 } // namespace neverd::cli

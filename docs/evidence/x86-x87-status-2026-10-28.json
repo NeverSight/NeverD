@@ -1,0 +1,385 @@
+{
+  "scope": "Native x87 FNSTSW register/memory, FNCLEX, FNINIT and FWAIT interfaces; NeverC builtins and NeverD state projections",
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-x87-status-20261028",
+  "sources": {
+    "neverd_code": "ec92705648f7743fc780c353f7eb21c50139ebeb",
+    "neverd_tested": "6f7912079bda8880c2b32597c17ad050875a27a9",
+    "neverd_final_integrated": "0329646f8c3b9d90cd323a4a625d73c7a9aacf91",
+    "integrated_dev": "012c4642c32fb4ebfe977d8364680475637bc1ec",
+    "llvm": "5740ed1d13baa01ca5f82d82ebc927e656620b39",
+    "neverc": "a26c5ba817626a13f58ec0a19d6e238999f8af0d",
+    "llvm_manifest": {
+      "path": "llvm-published-source.json",
+      "sha256": "a1f43e7b4588335aaabe0a60415ed82d205e2241a9995a5c2168106c5f1710dc"
+    },
+    "neverc_manifest": {
+      "path": "neverc-published-source.json",
+      "sha256": "09627517fff1616b902c7eb106ef54edef6cea3930d209b286764655a861c9b0"
+    },
+    "sdk_and_source_audit": {
+      "path": "sdk-and-source-audit.json",
+      "sha256": "d3baae8bd236deb1f68535965ec964f429fb69f87e303ed0e32a85ad1e7c4a7e"
+    },
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "production_sdk_commit": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "production_llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "release_and_pins_changed": false
+  },
+  "contract": {
+    "llvm": [
+      "i16 llvm.x86.fnstsw()",
+      "void llvm.x86.fnstsw.mem(ptr)",
+      "void llvm.x86.fnclex()",
+      "void llvm.x86.fninit()",
+      "void llvm.x86.fwait()"
+    ],
+    "neverc": [
+      "unsigned short __builtin_ia32_fnstsw(void)",
+      "void __builtin_ia32_fnstsw_mem(unsigned short *)",
+      "void __builtin_ia32_fnclex(void)",
+      "void __builtin_ia32_fninit(void)",
+      "void __builtin_ia32_fwait(void)"
+    ],
+    "memory": "FNSTSW memory retains a single DD /7 two-byte alignment-one volatile access, not a register read plus a store.",
+    "effects": "Conservative IR effects; native FPSW dependencies; FWAIT reads FPCW and may raise an FP exception. Status reads, FNCLEX and FNINIT are nonwaiting.",
+    "reset_allocation": "FNINIT clobbers compiler FP, architectural ST and MMX register banks and is a scheduling boundary. This preserves live compiler values through spills/reloads, without asserting physical payload erasure.",
+    "shared_ownership": "One X86 validator and private C renderer own seven control/status interfaces. The negative test covers 152 malformed cases before function filtering.",
+    "projection": "Typed FNINIT/FNCLEX/FWAIT select registered native LLVM calls; C selects available NeverC builtins; r6 and other C compilers retain exact assembly fallbacks.",
+    "owned_state": "Owned restore/step/save/host-restore remains one assembly unit. Typed X87ReadStatus consumes its sampled SSA status rather than ambient FNSTSW."
+  },
+  "compiler_validation": {
+    "llvm_focused": {
+      "path": "llvm-focused.xml",
+      "sha256": "ba5e1befac6e317d10472286c0fce6eb928986d5446b16c7e65e8a0555e18e17",
+      "tests": 4,
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0,
+      "skipped_tests": []
+    },
+    "llvm_regression": {
+      "path": "llvm-regression.xml",
+      "sha256": "4e3b350c58f81b5fdf741f1288034f28d2918ff179ba1622a403ac5a18f7acc3",
+      "tests": 36,
+      "passed": 36,
+      "failed": 0,
+      "skipped": 0,
+      "skipped_tests": []
+    },
+    "neverc_frontend": {
+      "path": "neverc-frontend.xml",
+      "sha256": "6a0f91387b0ec50d44c01f819a4c31d4660246f141e1c0fb616c74eb0ac6a498",
+      "tests": 113,
+      "passed": 113,
+      "failed": 0,
+      "skipped": 0,
+      "skipped_tests": []
+    },
+    "neverc_backend": {
+      "path": "neverc-backend.xml",
+      "sha256": "688c3af8964c410dbf4b8d19940dd9a582956b6aa4b8c09f45f9ab567e3f70e8",
+      "tests": 6,
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0,
+      "skipped_tests": []
+    }
+  },
+  "generator_validation": {
+    "focused_and_documentation_checks": {
+      "path": "neverc-validation-commands.json",
+      "sha256": "df135fd58b92f740d1300a4bbe2d5773225ff4288a660a68a1c938dd37bfee01"
+    },
+    "expanded_x86_ci_checks": {
+      "path": "neverc-expanded-generator-checks.json",
+      "sha256": "be5838f0d094568f7c9f797182ba680774323e5de82b12c8fd7348a9799fc79f"
+    },
+    "unit_tests": 53,
+    "failed": 0,
+    "focused_format": {
+      "path": "neverc-focused-format.json",
+      "sha256": "4a826eebc7025eac96431d0f421c054fe63b385ceed3043bfd37564bf34c72e4"
+    }
+  },
+  "native_qualification": {
+    "path": "compilers-status-qualified/qualification.json",
+    "sha256": "64253e4c08b82aebbc1ed733b3afd304929975eb4bf379a7f052960eafdee59d",
+    "passed": true,
+    "profiles": 6,
+    "manifest_files_rehashed": 63,
+    "compiler_and_script_hashes_rechecked": true,
+    "cross_compiler_output_sha256": "a400312626104a9869e3d87b61f85d8c02717393e137f163867f9e32eea8c6cd",
+    "state_observations": 34560,
+    "fault_observations": 60,
+    "fault_and_nonfault_cases": 168,
+    "boundary_observations": 12,
+    "live_value_cases": 1536,
+    "reference": "independently authored DF E0, DD /7, DB E2, DB E3 and 9B opcodes",
+    "audit": {
+      "path": "compilers-final-audit.json",
+      "sha256": "6a0f3f3a6244c9d90fedef7dbd141e476c76bb943940cffc4669be88336f5bd1"
+    },
+    "cpu": "Intel Core i9-13900H",
+    "os": "Linux x64",
+    "fault_observation": "Isolated children check actual fault PC/opcode, trap number, prefix marker and saved CW/SW, then exit without resuming generated code.",
+    "negative_controls": {
+      "path": "oracle-preflight/negative-controls.json",
+      "sha256": "5527ba4c3c20f5290396bc0c042e7812adeb8ac0b60b62b7cd1d8a3d84db8454",
+      "scope": "Oracle preflight only: omitted init, omitted clear, omitted wait and widened store are rejected. This preflight is not compiler qualification."
+    }
+  },
+  "control_harness_refactor": {
+    "path": "compilers-control-qualified/qualification.json",
+    "sha256": "5cb6c5506b454b701e431b1315958adebe3c47aed3c98635654b2bab1d206194",
+    "passed": true,
+    "profiles": 6,
+    "manifest_files_rehashed": 63,
+    "compiler_and_script_hashes_rechecked": true,
+    "cross_compiler_output_sha256": "f8e5366c46e0b4b7d98a9f8b63f15128697b104e8c1a8c7a9cc59030bf6fdf45",
+    "state_observations": 6912,
+    "fault_observations": 120,
+    "fault_and_nonfault_cases": 156,
+    "boundary_observations": 24,
+    "reference": "independently authored D9 /7 and D9 /5 opcodes",
+    "unchanged_generated_sources": {
+      "path": "control-source-refactor-check.json",
+      "sha256": "8a8f8afda448bc1801ce97244c1d51cd35132711347ab6a65e99f34b51134a14"
+    },
+    "scope": "The shared compiler driver reruns the existing independent FNSTCW/FLDCW harness on all six profiles."
+  },
+  "neverd_validation": {
+    "pinned": {
+      "source_commit": "6f7912079bda8880c2b32597c17ad050875a27a9",
+      "build": {
+        "path": "pinned-integrated-build-result.json",
+        "sha256": "4480e4b1823b10a7cef2e39c8d390971ce382e0d928a476100516a0501d18d01"
+      },
+      "ctest": {
+        "path": "pinned-integrated-ctest-result.json",
+        "sha256": "4dd53f315bb974f6e7eb4ef9e6ea03349b9603ca2c747a74aaca65b009491216"
+      },
+      "receipt": {
+        "path": "pinned-integrated-build-receipt.json",
+        "sha256": "0edaab4943019f36c8d3a5ffe0802c3ea10276a3d3ed18cc0090e63c4ee19320"
+      },
+      "tests": {
+        "path": "pinned-integrated-ctest.xml",
+        "sha256": "a0ab2facdced21c71ee080e9335e2e11156cb43bbd50fb11e94b37349b328f94",
+        "tests": 502,
+        "passed": 487,
+        "failed": 0,
+        "skipped": 15,
+        "skipped_tests": [
+          "LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior",
+          "LLVMCValues.NativeDescriptorReadKeepsExplicitPrior",
+          "LLVMCValues.NativeDescriptorAddressesKeepSegmentWidthAndPrior",
+          "LLVMCIntrinsicSemantics.DeadCPUIDRetainsNativeQueryAndBreakpointOrder",
+          "X87TranslationNative.IntegerInvocationCannotEnterLargerProfileEvenWithoutX87Calls",
+          "X87TranslationNative.EveryTopAndPrecisionRoundingRetainsExactMemoryAndState",
+          "X87TranslationNative.RefusalsAndMemoryFaultRetainCommittedPrefix",
+          "X87TranslationNative.ExecutableStoreCommitsOnlyUnderInvalidatePolicy",
+          "X87TranslationNative.MixedUnsupportedFormStopsAfterTheLastCommittedBlock",
+          "X87TranslationNative.BranchesAndBackedgesPreserveTheOwnedStack",
+          "X87TranslationNative.BudgetStopAndRestoreKeepExplicitState",
+          "X87TranslationNative.FrozenObjectsMatchProductionSessionsAcrossControls",
+          "X87TranslationNative.FnopObjectsAndSessionsRetainStateAndRefusedPrefix",
+          "X87TranslationNative.EmmsObjectsAndSessionsRetainStateAndRefusedPrefix",
+          "X87TranslationNative.FemmsObjectsAndSessionsRetainStateAndRefusedPrefix"
+        ]
+      }
+    },
+    "native": {
+      "source_commit": "6f7912079bda8880c2b32597c17ad050875a27a9",
+      "build": {
+        "path": "native-integrated-build-result.json",
+        "sha256": "db774068069bd7f0747510fc1ffe4094852958ce0d6a631ff08406768f2d9bea"
+      },
+      "ctest": {
+        "path": "native-integrated-ctest-result.json",
+        "sha256": "1030f5bcafd0425e166aed67eb762a7e2a5b07b7f5cef2da1ba7971ad9da4c13"
+      },
+      "receipt": {
+        "path": "native-integrated-build-receipt.json",
+        "sha256": "ca0762b514540f94d7472d229d455a7917876361efa5fdacb57485acc8ad5115"
+      },
+      "tests": {
+        "path": "native-integrated-ctest.xml",
+        "sha256": "f4f8cb9e65dfbc8c39cde5662ae679cb3e13a8b0fb09da67da750f200f1d9db3",
+        "tests": 502,
+        "passed": 490,
+        "failed": 0,
+        "skipped": 12,
+        "skipped_tests": [
+          "LLVMCIntrinsicSemantics.DeadCPUIDRetainsNativeQueryAndBreakpointOrder",
+          "X87TranslationNative.IntegerInvocationCannotEnterLargerProfileEvenWithoutX87Calls",
+          "X87TranslationNative.EveryTopAndPrecisionRoundingRetainsExactMemoryAndState",
+          "X87TranslationNative.RefusalsAndMemoryFaultRetainCommittedPrefix",
+          "X87TranslationNative.ExecutableStoreCommitsOnlyUnderInvalidatePolicy",
+          "X87TranslationNative.MixedUnsupportedFormStopsAfterTheLastCommittedBlock",
+          "X87TranslationNative.BranchesAndBackedgesPreserveTheOwnedStack",
+          "X87TranslationNative.BudgetStopAndRestoreKeepExplicitState",
+          "X87TranslationNative.FrozenObjectsMatchProductionSessionsAcrossControls",
+          "X87TranslationNative.FnopObjectsAndSessionsRetainStateAndRefusedPrefix",
+          "X87TranslationNative.EmmsObjectsAndSessionsRetainStateAndRefusedPrefix",
+          "X87TranslationNative.FemmsObjectsAndSessionsRetainStateAndRefusedPrefix"
+        ]
+      }
+    }
+  },
+  "neverd_final_integration": {
+    "pinned": {
+      "source_commit": "0329646f8c3b9d90cd323a4a625d73c7a9aacf91",
+      "upstream_commit": "913032c45499cceec594f5582c0bf67dadc7f72c",
+      "tests": 42,
+      "passed": 42,
+      "failed": 0,
+      "skipped": 0,
+      "result": {
+        "path": "pinned-final-integration-result.json",
+        "sha256": "c8fb8de208f9da8fffde319f0134378d0ad421cd85317ed3ff5868a370eb82d3"
+      },
+      "junit": {
+        "path": "pinned-final-integration-ctest.xml",
+        "sha256": "ee7904c161b09b15a349b60f4aef18cfb77f07f30f3390ffb074ff43366d39eb"
+      },
+      "build_receipt": {
+        "path": "pinned-final-integration-build-receipt.json",
+        "sha256": "4b523c99a42acb03d71b64b800001265b3862310b8c2bb70910f8232fc6223b1"
+      },
+      "test_names": [
+        "PipelineSourceStackAccesses.MachineRequestsKeepCallerStateOperations",
+        "PipelineSourceStackAccesses.ReturnRangesDoNotDependOnFunctionScheduling",
+        "PipelineSourceStackAccesses.BoundedCalleeKeepsDynamicFrameRestores",
+        "InterpreterMachineStateTest.SourceWrapperRefusesUnloweredCalls",
+        "InterpreterMachineStateTest.SharedReturnStateWritesStayBounded",
+        "InterpreterMachineStateTest.SharedReturnUsesFreshIdentityAndMetadata",
+        "InterpreterMachineStateTest.DefaultReturnLayoutRemainsInline",
+        "InterpreterMachineStateTest.RejectsUnsupportedReturnLayouts",
+        "InterpreterMachineStateTest.SharedReturnReservesAlignmentLayoutSpace",
+        "InterpreterMachineStateTest.SharedReturnDoesNotBindDanglingReferences",
+        "InterpreterMachineStateTest.SharedReturnModelHonorsBothWorkBounds",
+        "InterpreterMachineStateTest.V1RefusesRetainedSegmentedMemory",
+        "InterpreterMachineStateTest.OrderedAtomicsStillRefusesSourceWrapping",
+        "InterpreterMachineStateTest.V1RefusesTaskPriorityIntrinsics",
+        "InterpreterMachineStateTest.V1RefusesMXCSRIntrinsics",
+        "InterpreterMachineStateTest.V1RefusesWideTransport",
+        "InterpreterMachineStateTest.PipelineRefusesUnmappedSegmentEnvironment",
+        "InterpreterMachineStateTest.PipelineRefusesUnusedTerminalImportDomain",
+        "InterpreterMachineStateTest.PipelineRefusesUnusedRawEnvironmentDomains",
+        "InterpreterMachineStateTest.RejectsUnsupportedEntryFlagsAndProfiles",
+        "InterpreterMachineStateTest.RejectsUnknownRegistersAndIntrinsics",
+        "InterpreterMachineStateTest.GuestConstantsLoseSourceRelocationIdentity",
+        "InterpreterMachineStateTest.DirectDestinationsKeepTheirCFGIdentity",
+        "InterpreterMachineStateTest.FunctionTemporaryByteAliasesRefuseSource",
+        "InterpreterMachineSourceTest.SharedReturnPreservesEveryPathAndAlignmentRejection",
+        "InterpreterMachineSourceTest.AlignmentRejectsBeforeGuestOrStateWrites",
+        "InterpreterMachineSourceTest.FixedGuestAddressesRemainNumericThroughLoadsStoresAndState",
+        "InterpreterMachineSourceTest.EntryFlagsAndGuestStackRemainExplicitAcrossBothSourceBackends",
+        "InterpreterMachineSourceTest.PackedSystemFlagsUseUserModeWritesAndReportInvalidDynamicImages",
+        "InterpreterMachineSourceTest.PackedFlagsMatchIndependentUserModeOracle",
+        "InterpreterMachineSourceTest.PackedFlagsProfileFailureStaysSticky",
+        "InterpreterMachineSourceTest.FunctionTemporarySurvivesSourceLowering",
+        "InterpreterMachineSourceTest.EveryGPRLaneSurvivesSyntheticRemapping",
+        "InterpreterMachineSourceTest.HighByteReadsWritesAndOverlapsAreExplicit",
+        "InterpreterMachineSourceTest.LowRegisterViewsDoNotBecomeNativeWrites",
+        "X87ControlProjectionFixture.NativeMemoryCallsExecuteThroughClang",
+        "X87ControlProjectionFixture.NativeMemoryCallsExecuteThroughNeverC",
+        "X87ControlProjectionFixture.SourceLLVMUsesRegisteredControlIntrinsics",
+        "X87NativeStateContract.RejectsMalformedCallsBeforeFunctionFiltering",
+        "X87NativeStateProjection.NativeAndLegacyCallsExecuteThroughClang",
+        "X87NativeStateProjection.NativeAndLegacyCallsExecuteThroughNeverC",
+        "X87NativeStateProjection.TypedOperationsSelectRegisteredIntrinsics"
+      ]
+    },
+    "native": {
+      "source_commit": "0329646f8c3b9d90cd323a4a625d73c7a9aacf91",
+      "upstream_commit": "913032c45499cceec594f5582c0bf67dadc7f72c",
+      "tests": 42,
+      "passed": 42,
+      "failed": 0,
+      "skipped": 0,
+      "result": {
+        "path": "native-final-integration-result.json",
+        "sha256": "dee0b9fc6748a58162b2b589e386051a0aefc722c54c3594e92f726e66bbbde1"
+      },
+      "junit": {
+        "path": "native-final-integration-ctest.xml",
+        "sha256": "770e9d93e1ac4b52b2b21eb377d1defa66d062165a8c6b6720706b150268812d"
+      },
+      "build_receipt": {
+        "path": "native-final-integration-build-receipt.json",
+        "sha256": "7d7eb569b72abf568866853f651cd151a389680f494db5bd07e5ad6f4e7674a0"
+      },
+      "test_names": [
+        "PipelineSourceStackAccesses.MachineRequestsKeepCallerStateOperations",
+        "PipelineSourceStackAccesses.ReturnRangesDoNotDependOnFunctionScheduling",
+        "PipelineSourceStackAccesses.BoundedCalleeKeepsDynamicFrameRestores",
+        "InterpreterMachineStateTest.SourceWrapperRefusesUnloweredCalls",
+        "InterpreterMachineStateTest.SharedReturnStateWritesStayBounded",
+        "InterpreterMachineStateTest.SharedReturnUsesFreshIdentityAndMetadata",
+        "InterpreterMachineStateTest.DefaultReturnLayoutRemainsInline",
+        "InterpreterMachineStateTest.RejectsUnsupportedReturnLayouts",
+        "InterpreterMachineStateTest.SharedReturnReservesAlignmentLayoutSpace",
+        "InterpreterMachineStateTest.SharedReturnDoesNotBindDanglingReferences",
+        "InterpreterMachineStateTest.SharedReturnModelHonorsBothWorkBounds",
+        "InterpreterMachineStateTest.V1RefusesRetainedSegmentedMemory",
+        "InterpreterMachineStateTest.OrderedAtomicsStillRefusesSourceWrapping",
+        "InterpreterMachineStateTest.V1RefusesTaskPriorityIntrinsics",
+        "InterpreterMachineStateTest.V1RefusesMXCSRIntrinsics",
+        "InterpreterMachineStateTest.V1RefusesWideTransport",
+        "InterpreterMachineStateTest.PipelineRefusesUnmappedSegmentEnvironment",
+        "InterpreterMachineStateTest.PipelineRefusesUnusedTerminalImportDomain",
+        "InterpreterMachineStateTest.PipelineRefusesUnusedRawEnvironmentDomains",
+        "InterpreterMachineStateTest.RejectsUnsupportedEntryFlagsAndProfiles",
+        "InterpreterMachineStateTest.RejectsUnknownRegistersAndIntrinsics",
+        "InterpreterMachineStateTest.GuestConstantsLoseSourceRelocationIdentity",
+        "InterpreterMachineStateTest.DirectDestinationsKeepTheirCFGIdentity",
+        "InterpreterMachineStateTest.FunctionTemporaryByteAliasesRefuseSource",
+        "InterpreterMachineSourceTest.SharedReturnPreservesEveryPathAndAlignmentRejection",
+        "InterpreterMachineSourceTest.AlignmentRejectsBeforeGuestOrStateWrites",
+        "InterpreterMachineSourceTest.FixedGuestAddressesRemainNumericThroughLoadsStoresAndState",
+        "InterpreterMachineSourceTest.EntryFlagsAndGuestStackRemainExplicitAcrossBothSourceBackends",
+        "InterpreterMachineSourceTest.PackedSystemFlagsUseUserModeWritesAndReportInvalidDynamicImages",
+        "InterpreterMachineSourceTest.PackedFlagsMatchIndependentUserModeOracle",
+        "InterpreterMachineSourceTest.PackedFlagsProfileFailureStaysSticky",
+        "InterpreterMachineSourceTest.FunctionTemporarySurvivesSourceLowering",
+        "InterpreterMachineSourceTest.EveryGPRLaneSurvivesSyntheticRemapping",
+        "InterpreterMachineSourceTest.HighByteReadsWritesAndOverlapsAreExplicit",
+        "InterpreterMachineSourceTest.LowRegisterViewsDoNotBecomeNativeWrites",
+        "X87ControlProjectionFixture.NativeMemoryCallsExecuteThroughClang",
+        "X87ControlProjectionFixture.NativeMemoryCallsExecuteThroughNeverC",
+        "X87ControlProjectionFixture.SourceLLVMUsesRegisteredControlIntrinsics",
+        "X87NativeStateContract.RejectsMalformedCallsBeforeFunctionFiltering",
+        "X87NativeStateProjection.NativeAndLegacyCallsExecuteThroughClang",
+        "X87NativeStateProjection.NativeAndLegacyCallsExecuteThroughNeverC",
+        "X87NativeStateProjection.TypedOperationsSelectRegisteredIntrinsics"
+      ]
+    }
+  },
+  "neverd_generated_artifacts": {
+    "path": "neverd-generated-artifacts.json",
+    "sha256": "9ca25777d4653a75d43261638e302ec1758b9f79d901e2d546ecd201175f9bce",
+    "files_per_sdk": 6491,
+    "status_projection_profiles_per_sdk": 8,
+    "status_projection_state_comparisons_per_sdk": 768,
+    "scope": "Clang and NeverC at O0/O2 execute C rendered from native and legacy IR state calls. Both SDKs retain the same generated status program. The full-suite artifacts correspond to the original tested integration commit."
+  },
+  "neverd_skip_reasons": {
+    "native_aarch64_runtime_required": 11,
+    "windows_x64_single_step_required": 1,
+    "pinned_only_missing_native_virtualization_descriptor_intrinsics": 3
+  },
+  "validation_repairs": [
+    "The initial Clang projection harness used an incompatible callback parameter type; it was corrected to the generated void-pointer prototype. The subsequent preintegration pinned run passed 241 tests and skipped 14, before enabling the rebuilt NeverC in both integrated SDK runs."
+  ],
+  "exclusions": [
+    "all x86 instructions and complete state/continuation contracts",
+    "other CPU models and operating systems; native i386 execution",
+    "privileged #NM and alignment-check exceptions",
+    "historical x87 implementations and complete architectural equivalence",
+    "atomic capture of unrelated x87 operations or changed assumptions for unconstrained FP IR",
+    "new Clang frontend registrations; LLVM metadata and NeverC frontend registrations are supplied"
+  ]
+}

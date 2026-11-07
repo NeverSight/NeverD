@@ -87,14 +87,27 @@ realignedRegistrationFrameCoordinate(const ExceptionFunction &EH,
     return std::nullopt;
   const auto &Chain = *EH.Registration;
   const auto &Frame = *Chain.RealignedFrame;
+  const bool StackBased = Frame.BaseRegister == 4;
   if (Chain.RegistrationOffset != -12 || Chain.TryLevelOffset != -4 ||
-      Chain.SeededTryLevel != -1 || Frame.BaseRegister != 6 ||
-      EH.CodeRange.Begin > UINT32_MAX - 17 ||
-      Frame.DefinitionVA != EH.CodeRange.Begin + 15 || Frame.Alignment < 4 ||
-      Frame.Alignment > 128 || (Frame.Alignment & (Frame.Alignment - 1)) ||
-      Frame.AllocationBytes < 20 ||
-      Frame.AllocationBytes > limits::kMaxRegistrationEHStateWork ||
-      Frame.BaseOffset > -20 ||
+      Chain.SeededTryLevel != -1 || (!StackBased && Frame.BaseRegister != 6) ||
+      Frame.Alignment < limits::kMinRegistrationFrameAlignment ||
+      Frame.Alignment > limits::kMaxRegistrationFrameAlignment ||
+      (Frame.Alignment & (Frame.Alignment - 1)) ||
+      Frame.AllocationBytes > limits::kMaxSourceCallBorrowedBytes)
+    return std::nullopt;
+  if (StackBased) {
+    if (!EH.Cxx->TryBlocks.empty() || EH.CodeRange.Begin > UINT32_MAX - 8 ||
+        (Frame.DefinitionVA != EH.CodeRange.Begin + 3 &&
+         Frame.DefinitionVA != EH.CodeRange.Begin + 5) ||
+        Frame.AllocationBytes < 12 ||
+        int64_t(Frame.BaseOffset) != -int64_t(Frame.AllocationBytes) ||
+        Frame.SavedParentFrameOffset != 0)
+      return std::nullopt;
+    return RegistrationFrameCoordinate{-4, Frame.Alignment, 0};
+  }
+  if (EH.CodeRange.Begin > UINT32_MAX - 17 ||
+      Frame.DefinitionVA != EH.CodeRange.Begin + 15 ||
+      Frame.AllocationBytes < 20 || Frame.BaseOffset > -20 ||
       int64_t(Frame.BaseOffset) + Frame.AllocationBytes < 0 ||
       Frame.SavedParentFrameOffset != -20)
     return std::nullopt;

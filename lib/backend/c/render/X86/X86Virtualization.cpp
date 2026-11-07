@@ -16,6 +16,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Support/ModRef.h"
 
 #include <stdexcept>
 
@@ -166,6 +167,10 @@ std::string renderInstruction(const X86VirtualizationAsm &Plan,
 
 bool resultMatches(const llvm::CallInst &Call, Intrinsic Id, uint16_t Word) {
   switch (x86VirtualizationContract(Id).Result) {
+  case X86VirtualizationResult::Value:
+  case X86VirtualizationResult::SnpContext:
+  case X86VirtualizationResult::SevExit:
+    return false;
   case X86VirtualizationResult::None:
     return Call.getType()->isVoidTy();
   case X86VirtualizationResult::Flags:
@@ -206,6 +211,14 @@ renderX86VirtualizationExpression(Arch TargetArch, const HighExpr &Expression,
         E && E->Type &&
         (E->Type->Kind == NdTypeKind::Int || E->Type->Kind == NdTypeKind::Ptr);
     Shape.InputSizes[I] = E && E->Type ? E->Type->Size : 0;
+    if (I == 1 && E && E->Kind == ExprKind::Const) {
+      Shape.AddressWidth = E->ConstVal;
+      Shape.OriginalPC = E->ConstVal;
+    }
+    if (I == 2 && E && E->Kind == ExprKind::Const)
+      Shape.SnpControl = E->ConstVal;
+    if (I == 3 && E && E->Kind == ExprKind::Const)
+      Shape.VectorStride = E->ConstVal;
     if (I == C.MemoryArgument && E && E->Type &&
         E->Type->Kind == NdTypeKind::Ptr)
       Shape.InputSizes[I] = 8;
@@ -214,6 +227,33 @@ renderX86VirtualizationExpression(Arch TargetArch, const HighExpr &Expression,
       Arguments.size() != C.Arguments)
     throw std::invalid_argument(
         "x86 virtualization expression has an invalid operand/output contract");
+  if (C.Result == X86VirtualizationResult::Value) {
+    std::string Text = Id == Intrinsic::X86KvmVmcall
+                           ? "__builtin_ia32_vmcall_kvm"
+                           : "__builtin_ia32_vmmcall_kvm";
+    Text += TargetArch == Arch::X86 ? "32(" : "(";
+    for (size_t I = 0; I != Arguments.size(); ++I) {
+      if (I)
+        Text += ", ";
+      Text += Arguments[I];
+    }
+    return Text + ")";
+  }
+  if (C.Result == X86VirtualizationResult::SnpContext ||
+      C.Result == X86VirtualizationResult::SevExit)
+    return renderX86SnpExpression(Id, Arguments, Shape.SnpControl);
+  if (Id == Intrinsic::X86HyperVCall)
+    return "__builtin_ia32_hyperv_call((void *)(" + Arguments[0] +
+           "), (void *)(" + Arguments[1] + "), (void *)(" + Arguments[2] +
+           "), " + std::to_string(*Shape.VectorStride) + ")";
+  if (Id == Intrinsic::X86SmmReturnContext)
+    return "__builtin_ia32_rsm_context((const void *)(" + Arguments[0] + "))";
+  if (Id == Intrinsic::X86SgxTransferAtContext)
+    return "__builtin_ia32_enclu_transfer_at_context((const void *)(" +
+           Arguments[0] + "), " + std::to_string(*Shape.OriginalPC) + "ULL)";
+  if (Id == Intrinsic::X86SvmRunContext)
+    return "__builtin_ia32_vmrun_context((void *)(" + Arguments[0] + "), " +
+           std::to_string(*Shape.AddressWidth) + ")";
   const auto Plan =
       x86VirtualizationAsm(Id, TargetArch, Shape.MemoryAddressSpace,
                            C.PhysicalAddress ? Shape.InputSizes[0] : 0);
@@ -326,7 +366,18 @@ renderX86VirtualizationCall(Arch TargetArch, const llvm::CallInst &Call,
   return {};
 }
 
+bool isX86KvmHypercallNativeName(llvm::StringRef Name) {
+  return Name == "llvm.x86.vmcall.kvm" || Name == "llvm.x86.vmmcall.kvm" ||
+         Name == "llvm.x86.vmcall.kvm32" || Name == "llvm.x86.vmmcall.kvm32";
+}
+
 bool isX86VirtualizationNativeName(llvm::StringRef Name) {
+  if (isX86KvmHypercallNativeName(Name) || isX86SnpNativeName(Name))
+    return true;
+  if (Name == "llvm.x86.rsm.context" ||
+      Name == "llvm.x86.enclu.transfer.at.context" ||
+      Name == "llvm.x86.vmrun.context" || Name == "llvm.x86.hyperv.call")
+    return true;
   if (!Name.consume_front("llvm.x86."))
     return false;
   Name = Name.split('.').first;
@@ -352,6 +403,117 @@ renderX86VirtualizationNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       (TargetArch != Arch::X86 && TargetArch != Arch::X64))
     return {};
   const auto Name = Callee->getName();
+  if (isX86SnpNativeName(Name))
+    return renderX86SnpNativeCall(TargetArch, Call, ResultLive, Arguments);
+  if (Name == "llvm.x86.hyperv.call") {
+    bool Valid =
+        TargetArch == Arch::X64 && Callee->isDeclaration() &&
+        !Callee->isVarArg() && Call.getCallingConv() == llvm::CallingConv::C &&
+        !Call.getNumOperandBundles() && Call.getType()->isVoidTy() &&
+        Call.arg_size() == 4 && Arguments.size() == 4 &&
+        Call.getMemoryEffects() == llvm::MemoryEffects::unknown() &&
+        !Call.doesNotReturn() && Call.hasFnAttr(llvm::Attribute::NoUnwind) &&
+        Call.hasFnAttr(llvm::Attribute::Convergent) &&
+        Call.hasFnAttr(llvm::Attribute::NoDuplicate);
+    const llvm::ConstantInt *Stride = nullptr;
+    if (Valid) {
+      for (unsigned I = 0; I != 3; ++I)
+        Valid &=
+            Call.getArgOperand(I)->getType()->isPointerTy() &&
+            Call.getArgOperand(I)->getType()->getPointerAddressSpace() == 0;
+      Stride = llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(3));
+      Valid &= Stride && Stride->getType()->isIntegerTy(32) &&
+               (Stride->equalsInt(16) || Stride->equalsInt(32) ||
+                Stride->equalsInt(64));
+    }
+    if (!Valid)
+      throw std::invalid_argument("invalid native Hyper-V page contract");
+    return "__builtin_ia32_hyperv_call((void *)(" + Arguments[0] +
+           "), (void *)(" + Arguments[1] + "), (void *)(" + Arguments[2] +
+           "), " + std::to_string(Stride->getZExtValue()) + ");\n";
+  }
+  if (isX86KvmHypercallNativeName(Name)) {
+    const unsigned Bits = Name.ends_with("32") ? 32 : 64;
+    bool Valid =
+        (TargetArch == Arch::X64 ? 64u : 32u) == Bits &&
+        Callee->isDeclaration() && !Callee->isVarArg() &&
+        Call.getCallingConv() == llvm::CallingConv::C &&
+        !Call.getNumOperandBundles() && Call.getType()->isIntegerTy(Bits) &&
+        Call.arg_size() == 5 && Arguments.size() == 5 &&
+        Call.getMemoryEffects() == llvm::MemoryEffects::unknown() &&
+        !Call.doesNotReturn() && Call.hasFnAttr(llvm::Attribute::NoUnwind) &&
+        Call.hasFnAttr(llvm::Attribute::Convergent) &&
+        Call.hasFnAttr(llvm::Attribute::NoDuplicate);
+    for (const auto &Argument : Call.args())
+      Valid &= Argument->getType()->isIntegerTy(Bits);
+    if (!Valid)
+      throw std::invalid_argument("invalid native KVM hypercall contract");
+    std::string Text = ResultLive ? Result + " = " : "";
+    Text += Name.starts_with("llvm.x86.vmcall.") ? "__builtin_ia32_vmcall_kvm"
+                                                 : "__builtin_ia32_vmmcall_kvm";
+    Text += Bits == 32 ? "32(" : "(";
+    for (size_t I = 0; I != Arguments.size(); ++I) {
+      if (I)
+        Text += ", ";
+      Text += Arguments[I];
+    }
+    return Text + ");\n";
+  }
+  if (Name == "llvm.x86.rsm.context" ||
+      Name == "llvm.x86.enclu.transfer.at.context") {
+    const bool Sgx = Name == "llvm.x86.enclu.transfer.at.context";
+    const unsigned Count = Sgx ? 2 : 1;
+    bool Valid = TargetArch == Arch::X64 && Callee->isDeclaration() &&
+                 !Callee->isVarArg() && !Call.getNumOperandBundles() &&
+                 Call.getCallingConv() == llvm::CallingConv::C &&
+                 Call.getType()->isVoidTy() && !ResultLive &&
+                 Call.arg_size() == Count && Arguments.size() == Count &&
+                 Call.getMemoryEffects() == llvm::MemoryEffects::unknown() &&
+                 Call.doesNotReturn() &&
+                 Call.hasFnAttr(llvm::Attribute::NoUnwind) &&
+                 Call.hasFnAttr(llvm::Attribute::Convergent) &&
+                 Call.hasFnAttr(llvm::Attribute::NoDuplicate);
+    if (Valid) {
+      const auto *Type = Call.getArgOperand(0)->getType();
+      Valid = Type->isPointerTy() && Type->getPointerAddressSpace() == 0;
+    }
+    if (Sgx && Valid)
+      Valid = Call.getArgOperand(1)->getType()->isIntegerTy(64) &&
+              llvm::isa<llvm::ConstantInt>(Call.getArgOperand(1));
+    if (!Valid)
+      throw std::invalid_argument("invalid x64 terminal context intrinsic");
+    if (Sgx)
+      return "__builtin_ia32_enclu_transfer_at_context((const void *)(" +
+             Arguments[0] + "), " + Arguments[1] + ");\n";
+    return "__builtin_ia32_rsm_context((const void *)(" + Arguments[0] +
+           "));\n";
+  }
+  if (Name == "llvm.x86.vmrun.context") {
+    // This extension can be carried by a module read with an older SDK. Its
+    // explicit context and conservative call effects are the contract; do not
+    // substitute the scalar __svm_vmrun spelling, which loses guest outputs.
+    bool Valid =
+        TargetArch == Arch::X64 && Callee->isDeclaration() &&
+        !Callee->isVarArg() && Call.getCallingConv() == llvm::CallingConv::C &&
+        !Call.getNumOperandBundles() && Call.getType()->isVoidTy() &&
+        !ResultLive && Call.arg_size() == 2 && Arguments.size() == 2 &&
+        Call.getMemoryEffects() == llvm::MemoryEffects::unknown() &&
+        !Call.doesNotReturn() && Call.hasFnAttr(llvm::Attribute::Convergent) &&
+        Call.hasFnAttr(llvm::Attribute::NoDuplicate);
+    const llvm::ConstantInt *Width = nullptr;
+    if (Call.arg_size() == 2) {
+      const auto *Pointer = Call.getArgOperand(0)->getType();
+      Width = llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(1));
+      Valid &= Pointer->isPointerTy() &&
+               Pointer->getPointerAddressSpace() == 0 && Width &&
+               Width->getType()->isIntegerTy(32) &&
+               (Width->equalsInt(32) || Width->equalsInt(64));
+    }
+    if (!Valid)
+      throw std::invalid_argument("invalid x64 VMRUN context intrinsic");
+    return "__builtin_ia32_vmrun_context((void *)(" + Arguments[0] + "), " +
+           std::to_string(Width->getZExtValue()) + ");\n";
+  }
   const uint16_t Word = TargetArch == Arch::X64 ? 8 : 4;
   const Intrinsic Inventory[] = {
 #define NEVERD_X86_VIRTUALIZATION(Id, ...) Intrinsic::Id,

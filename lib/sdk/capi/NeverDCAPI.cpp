@@ -115,6 +115,46 @@ std::optional<size_t> Session::functionIndexNamed(llvm::StringRef Name) {
   return std::nullopt;
 }
 
+std::optional<size_t> Session::functionIndexAt(va_t Entry) {
+  using EntryInfo = llvm::DenseMapInfo<va_t>;
+  const auto Reserved = [](va_t Address) {
+    return Address == EntryInfo::getEmptyKey() ||
+           Address == EntryInfo::getTombstoneKey();
+  };
+  if (Reserved(Entry)) {
+    for (size_t I = 0; I < Functions.size(); ++I)
+      if (Functions[I].Entry == Entry)
+        return I;
+    return std::nullopt;
+  }
+  if (!EntryIndex || EntryIndex->Revision != FunctionListRevision ||
+      EntryIndex->List != Functions.data() ||
+      EntryIndex->Count != Functions.size()) {
+    FunctionEntryIndex Index{FunctionListRevision, Functions.data(),
+                             Functions.size(),
+                             llvm::DenseMap<va_t, size_t>(Functions.size())};
+    for (size_t I = 0; I < Functions.size(); ++I)
+      if (!Reserved(Functions[I].Entry))
+        Index.FirstAt.try_emplace(Functions[I].Entry, I);
+    EntryIndex = std::move(Index);
+  }
+  if (const auto At = EntryIndex->FirstAt.find(Entry);
+      At != EntryIndex->FirstAt.end())
+    return At->second;
+  return std::nullopt;
+}
+
+uint64_t listedFunctionSize(const LowFunc &Function,
+                            llvm::ArrayRef<va_t> SortedEntries) {
+  if (!Function.SizeFromBlocks)
+    return Function.OriginalSize;
+  const uint64_t Size = Function.contiguousSize([&](va_t Begin, va_t End) {
+    const auto Next = llvm::lower_bound(SortedEntries, Begin);
+    return Next != SortedEntries.end() && *Next < End;
+  });
+  return Size ? Size : Function.OriginalSize;
+}
+
 bool Session::synchronizeFunctions() {
   if (Img.Arch != Arch::SBF) {
     // Native function discovery lives in the pipeline, not in the loader.
@@ -126,6 +166,19 @@ bool Session::synchronizeFunctions() {
     const auto ByEntry = [](const FuncInfo &Left, const FuncInfo &Right) {
       return Left.Entry < Right.Entry;
     };
+    // Where a lifted function's size stops: the start of another the list
+    // or this run holds.
+    std::vector<va_t> Entries;
+    const auto sizeOf = [&](const LowFunc &Recovered) {
+      if (Recovered.SizeFromBlocks && Entries.empty()) {
+        for (const FuncInfo &Listed : Functions)
+          Entries.push_back(Listed.Entry);
+        for (const LowFunc &Function : PipeResult.LowFuncs)
+          Entries.push_back(Function.Entry);
+        llvm::sort(Entries);
+      }
+      return listedFunctionSize(Recovered, Entries);
+    };
     const auto PublishRecoveredSize = [&](FuncInfo &Listed,
                                           const LowFunc &Recovered) {
       // Discovery publishes entries without extents. Once a complete lift
@@ -133,8 +186,8 @@ bool Session::synchronizeFunctions() {
       // and a rebuild of the list gives it again (RecoveredSizes).  Keep
       // nonzero loader/debug/user extents authoritative.
       if (Listed.Size == 0 && Recovered.OriginalSize != 0) {
-        Listed.Size = Recovered.OriginalSize;
-        RecoveredSizes[Listed.Entry] = Recovered.OriginalSize;
+        Listed.Size = sizeOf(Recovered);
+        RecoveredSizes[Listed.Entry] = Listed.Size;
         const auto PreviousRevision = FunctionListRevision;
         functionListChanged();
         // An extent changes neither names nor their positions in the list.
@@ -144,12 +197,24 @@ bool Session::synchronizeFunctions() {
           NameIndex->Revision = FunctionListRevision;
         if (NamesDerivedFrom && NamesDerivedFrom->Revision == PreviousRevision)
           NamesDerivedFrom->Revision = FunctionListRevision;
+        if (EntryIndex && EntryIndex->Revision == PreviousRevision)
+          EntryIndex->Revision = FunctionListRevision;
+        if (FunctionOrder && FunctionOrder->Revision == PreviousRevision)
+          FunctionOrder->Revision = FunctionListRevision;
       }
     };
     // A selected run lifts functions the list, kept in address order,
     // already holds: find those there instead of indexing and sorting a list
     // of tens of thousands after every run.
-    if (std::is_sorted(Functions.begin(), Functions.end(), ByEntry) &&
+    // The order is checked once for each revision of the list; a
+    // recovered extent below keeps it.
+    if (!FunctionOrder || FunctionOrder->Revision != FunctionListRevision ||
+        FunctionOrder->List != Functions.data() ||
+        FunctionOrder->Count != Functions.size())
+      FunctionOrder = FunctionOrderCheck{
+          FunctionListRevision, Functions.data(), Functions.size(),
+          std::is_sorted(Functions.begin(), Functions.end(), ByEntry)};
+    if (FunctionOrder->Sorted &&
         llvm::all_of(PipeResult.LowFuncs, [&](const LowFunc &Function) {
           if (isDeletedFunction(Function.Entry))
             return true;
@@ -193,7 +258,7 @@ bool Session::synchronizeFunctions() {
       const auto Rename = Renames.find(Function.Entry);
       const NameOrigin Origin = Origins.at(Function.Entry);
       Functions.push_back(
-          {Function.Entry, Function.OriginalSize,
+          {Function.Entry, sizeOf(Function),
            Rename == Renames.end() ? Function.Name : Rename->second,
            Rename == Renames.end() ? Origin : NameOrigin::User, Function.Name,
            Origin});
@@ -458,6 +523,7 @@ int finishSessionLoad(neverd_session_t Sess, Session &S, BinaryImage Image,
   // Dispose analysis while the image/debug objects it was built from still
   // exist. clearPipeline also releases LLVM modules before their context.
   S.clearPipeline();
+  S.OnlyFunctionEntries = S.RestrictedFunctionEntries;
   auto PreviousProject = std::move(S.PackedProject);
   S.Img = std::move(Image);
   auto *SavedPatches = ProjectState ? ProjectState.get() : PatchState.get();
@@ -807,7 +873,7 @@ int neverd_session_load_cancellable(neverd_session_t Sess, const char *Path,
     Progress.report("image", 0, 1, "reading binary");
     BinaryLoadOptions LoadOpts;
     LoadOpts.Progress = Progress;
-    LoadOpts.OnlyFunctionEntries = S->OnlyFunctionEntries;
+    LoadOpts.OnlyFunctionEntries = S->RestrictedFunctionEntries;
     LoadOpts.ARMFunctionModes = S->ARMFunctionModes;
     LoadOpts.ReadStaticSymbols = ProjectSettings
                                      ? ProjectSettings->ReadStaticSymbols
@@ -1080,6 +1146,7 @@ void neverd_session_restrict_function(neverd_session_t Sess,
   // this one.
   if (S->PipeRan && Next != S->OnlyFunctionEntries)
     S->invalidatePipeline();
+  S->RestrictedFunctionEntries = Next;
   S->OnlyFunctionEntries = std::move(Next);
 }
 
@@ -1159,7 +1226,12 @@ detectFunctions(BinaryImage &Image, const std::function<bool()> &Cancelled) {
 void publishDiscovery(Session &S,
                       std::vector<std::pair<va_t, std::string>> Functions) {
   S.DiscoveredFunctions = std::move(Functions);
-  S.resetFunctionsFromImage();
+  // Discovery publishes entry facts, not new instruction bytes or relocation
+  // inputs. Keep decoded widths for the inventory update, as navigation does,
+  // while rebuilding names and retiring source from the previous catalog.
+  S.forgetEmittedSources();
+  S.ListInputs.reset();
+  S.refreshFunctionList();
 }
 
 enum class DiscoveryJobState { Pending, Complete, Cancelled };
@@ -1397,10 +1469,8 @@ int neverd_func_find_by_addr(neverd_session_t Sess, neverd_va_t Addr) {
   auto *S = toSession(Sess);
   if (!S || !S->Loaded || !S->synchronizeFunctions())
     return -1;
-  for (size_t I = 0; I < S->Functions.size(); ++I)
-    if (S->Functions[I].Entry == Addr)
-      return static_cast<int>(I);
-  return -1;
+  const std::optional<size_t> Index = S->functionIndexAt(Addr);
+  return Index ? static_cast<int>(*Index) : -1;
 }
 
 // ===--------------------------------------------------------------------===//

@@ -13,6 +13,9 @@
 #include "NeverDLiftFixture.h"
 
 #include "neverd/ir/intrinsics/X86/X64Syscall.h"
+#include "neverd/ir/med/MedSyscallConvention.h"
+#include "neverd/loader/BinaryImage.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <fstream>
 #include <sstream>
@@ -75,7 +78,7 @@ TEST(LinuxSyscallArguments, Linux72IncrementalMetadata) {
       SCOPED_TRACE(451 + I);
       EXPECT_EQ(linuxSyscallArgumentCount(Target, 451 + I), Counts[I]);
     }
-    EXPECT_EQ(linuxSyscallArgumentCount(Target, 472), std::nullopt);
+    EXPECT_EQ(linuxSyscallArgumentCount(Target, 473), std::nullopt);
     EXPECT_EQ(linuxSyscallArgumentCount(Target, 100000), std::nullopt);
   }
   // The syscall is SYSCALL_DEFINE5(bpf), not the three-argument internal
@@ -87,6 +90,16 @@ TEST(LinuxSyscallArguments, Linux72IncrementalMetadata) {
   EXPECT_EQ(linuxSyscallArgumentCount(Arch::ARM, 447), std::nullopt);
   // Native x86-64 metadata must not silently adopt x32 entries.
   EXPECT_EQ(linuxSyscallArgumentCount(Arch::X64, 512), std::nullopt);
+}
+
+// fchroot(int fd, unsigned int flags) has two word-sized arguments on all
+// three ABIs. Linux cbbddb6b08cc9900a87cccaa9b22bbe06aa4f50a assigns 472.
+TEST(LinuxSyscallArguments, FchrootMetadata) {
+  for (const neverd::Arch Target :
+       {neverd::Arch::X64, neverd::Arch::AArch64, neverd::Arch::ARM}) {
+    EXPECT_EQ(neverd::linuxSyscallArgumentCount(Target, 472), 2u);
+    EXPECT_EQ(neverd::linuxSyscallArgumentCount(Target, 473), std::nullopt);
+  }
 }
 
 TEST(LinuxSyscallArguments, AArch64NativeNotCompat) {
@@ -110,6 +123,39 @@ TEST(LinuxSyscallArguments, AArch64NativeNotCompat) {
   // A removed kernel implementation does not erase the historical ABI.
   EXPECT_EQ(linuxSyscallArgumentCount(Arch::AArch64, 18), 3u);
   EXPECT_EQ(linuxSyscallArgumentCount(Arch::ARM, 249), 4u);
+}
+
+// An arm64 Linux kernel Image, a binary file or its EFI stub's PE, makes no
+// supervisor call itself; its vDSO's user code makes Linux's.
+TEST(LinuxSyscallConvention, AnArm64KernelImageMakesLinuxCalls) {
+  using namespace neverd;
+  constexpr va_t MagicOffset = 0x38;
+  for (const auto Format :
+       {BinaryFormat::Raw, BinaryFormat::COFF, BinaryFormat::MachO})
+    for (const bool Kernel : {true, false}) {
+      SCOPED_TRACE(Kernel);
+      BinaryImage Image;
+      Image.Arch = Arch::AArch64;
+      Image.Bits = Bitness::Bits64;
+      Image.Format = Format;
+      Segment Text;
+      Text.VA = 0;
+      Text.Data.assign(0x40, 0);
+      Text.Size = Text.Data.size();
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      if (Kernel)
+        writeLE<uint32_t>(Text.Data.data() + MagicOffset,
+                          0x644D5241); // ARM\x64
+      Image.Segments.push_back(std::move(Text));
+      const SyscallConvention *Convention =
+          syscallConvention(Image, Arch::AArch64, Intrinsic::Svc, 0);
+      if (!Kernel || Format == BinaryFormat::MachO) {
+        EXPECT_EQ(Convention, nullptr);
+        continue;
+      }
+      ASSERT_NE(Convention, nullptr);
+      EXPECT_EQ(Convention->Modeled, Intrinsic::A64LinuxSyscall);
+    }
 }
 
 class LinuxSyscall : public NeverDLiftTest {

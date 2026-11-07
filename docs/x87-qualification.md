@@ -13,15 +13,27 @@ measurements and public capability surfaces have recorded evidence. Qualificatio
 is limited to the named profiles below; complete architectural and formal
 equivalence remain unknown.
 
+Portable FNOP/EMMS/FEMMS admission was added after those baseline records.
+The [reset qualification ledger](evidence/x86-x87-resets-2026-10-28.json)
+records their later generated checks at `710180d84eb925e6ee07fe6721774781055a0f20`: both
+local x64 SDKs and native ARM64 execute 36 generated artifacts and 2,700 state
+observations per profile. All 225 distinct seeded state transitions agree.
+Native x64 supplies 576 original FNOP/EMMS comparisons per SDK. These results
+are separate from the historical X0–X4 records. The subsequent seventeen-test
+translation gate and reset-aware cross-host comparison passed at
+`c27c87a9a1d2f816cf38392278d4017d96d7f832` in
+[run 40697970738](https://github.com/NeverSight/NeverD/actions/runs/40697970738).
+Physical FEMMS execution remains unqualified.
+
 ## Profiles and limits
 
 | Interface | Admitted scope | Explicit limits |
 | --- | --- | --- |
 | Native typed projection | i386 and x64 System V; selected x64 Microsoft typed cases; raw binary80 values, validated stack/call contracts and defined status | Complete architectural state remains unknown; typed BCD/pair guards trap outside their domain; processor-dependent results belong to the measured CPU |
 | Native owned context | x64 authenticated mutable state, native instruction/value/state replay, selected Linux fault boundaries | No arbitrary CPU/OS qualification; relocated/undefined fields and signal resumption are excluded |
-| Portable concrete | `intel64-architectural-masked-v1`, x64 owned state, explicitly listed operations and control/input domains | Unsupported nonfinite arithmetic, stack faults, unmasked data operations, MMX and general environment effects refuse; no native fallback |
+| Portable concrete | `intel64-architectural-masked-v1`, x64 owned state, explicitly listed operations and control/input domains | Unsupported nonfinite arithmetic, stack faults, unmasked data operations, MMX data and general environment effects refuse; no native fallback |
 | Portable LLVM/HighC/LLVM-C | Explicit C++ preparation and emission into Step V1; x64 owned integer source ABI; Linux little-endian x64/AArch64 | Source calls/floating ABIs, ordinary guest memory and x87 integer-flag forms are refused; ordinary decompilation does not select this interface |
-| Portable translation | Explicit C++ profile and authenticated logical extension; x64 to native Linux AArch64 ELF, checked memory/objects/credentials | Legacy C/Python/CLI translation object APIs stay scalar-only; no i386 translation, non-Linux runtime, floating ABI, MMX/general environment, arbitrary applications or termination proof |
+| Portable translation | Explicit C++ profile and authenticated logical extension; x64 to native Linux AArch64 ELF, checked memory/objects/credentials | Legacy C/Python/CLI translation object APIs stay scalar-only; no i386 translation, non-Linux runtime, floating ABI, MMX data/general environment, arbitrary applications or termination proof |
 | Symbolic/refinement | Conservative unknown for the unqualified x87 state/formal model | A native, differential or digest result cannot become a checked equivalence result |
 
 ## Recorded execution
@@ -81,8 +93,8 @@ adds 5,760 original-instruction comparisons. Cross-host comparison uses complete
 file manifests and matches portable observations separately from native-only
 reference fields.
 
-The translation gate requires all thirteen tests on native Linux AArch64 without
-skips. Its exhaustive fixture retained 192 TOP/PC/RC/O0/O2 observations and
+The original translation gate required thirteen tests on native Linux AArch64
+without skips. Its exhaustive fixture retained 192 TOP/PC/RC/O0/O2 observations and
 1,152 actual AArch64 ELF objects given to JITLink, full logical state after each
 block and agreement with production sessions. All thirteen tests executed
 successfully without skips. Separate tests cover ten-byte memory faults,
@@ -90,6 +102,28 @@ self-modification, forged/stale invocation bindings, prefix retention, mixed
 unsupported programs, branches/backedges and checkpoint/resume. Passing these
 checks qualifies
 this bounded profile; object compilation on x64 alone does not supply this result.
+
+The current gate additionally requires reset-object admission and three native
+FNOP/EMMS/FEMMS session tests, bringing the required test count to seventeen.
+The reset fixture enumerates 225 instruction/state cases at O0/O2, retaining
+450 observations and 882 direct JITLink input objects. It independently checks
+full logical state, untouched extensions/memory, the completed MOV prefix on
+refusal, and production-session agreement. Its eighteen refusals cover unknown
+environment, pending exceptions and invalid control words. All seventeen tests
+passed without skips on native Linux AArch64 in run 40697970738. Downloaded
+manifests, all 2,034 baseline/reset ELF objects and their architecture were
+independently checked. The same run's x64/ARM64 comparison passed with zero
+differences across 2,700 reset, 6,096 prior generated and 57,888 arithmetic
+observations per host; an independent local replay of the comparison agrees.
+
+The pinned SDK passes 1,544 local tests at `c27c87a9a1`; the full asserting LLVM
+passes 1,542 at `05307e249b4f16b1f2d42821a296060dd7c34e3e`. Each skips 52
+ARM-only tests, one Windows observer and three unavailable public SEH fixtures.
+The latter commit repairs only an invalid negative-test assembly constraint:
+two arguments now have two input constraints, allowing the intended missing
+clobber rejection to run. The original failure is retained. All nineteen pinned
+constant/control tests pass after the repair, and both SDKs repeat the strict
+generated reset and prior arithmetic checks successfully.
 
 Three fixed arithmetic seeds (`0x871677`, `0x871678`, `0x871679`) produce 57,888
 observations per host. Native x64 and ARM64 results match the native x64 original
@@ -153,6 +187,13 @@ builds the pinned repository LLVM revision from source because the pinned
 prebuilt package set has no ARM archive. Each record retains the actual compiler
 version and hashes, rather than assuming that a major-version label identifies
 one compiler binary.
+
+The generated recorder accepts `--profile resets` for the separate
+FNOP/EMMS/FEMMS corpus. It authenticates every seeded 528-byte input, expected
+state transition, refusal and success-only return, and retains the same compiler,
+runtime and file manifests as the arithmetic corpus. Cross-host comparison
+requires both profiles at one source commit. Native reference fields remain
+x64-only; their absence on ARM64 never counts as a physical FEMMS result.
 
 CI artifacts retain success and failure evidence for thirty days. Download and
 preserve them before expiry when long-term binary replay is required. A small

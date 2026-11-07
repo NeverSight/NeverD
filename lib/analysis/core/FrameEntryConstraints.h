@@ -10,8 +10,19 @@
 #include "neverd/symbolic/SymExpr.h"
 
 #include <cassert>
+#include <cstdint>
+#include <utility>
 
 namespace neverd::analysis::detail {
+
+/// Inclusive root bounds shared by symbolic predicates and source guards.
+/// The last byte may be UINT64_MAX; the exclusive end is never materialized.
+inline std::pair<uint64_t, uint64_t> nonwrappingFrameRootBounds(int64_t Begin,
+                                                                int64_t End) {
+  assert(Begin < End);
+  return {Begin < 0 ? uint64_t{0} - static_cast<uint64_t>(Begin) : 0,
+          End > 0 ? UINT64_MAX - static_cast<uint64_t>(End - 1) : UINT64_MAX};
+}
 
 /// Caller validates a 64-bit Root and Begin < End. Bound the first and last
 /// bytes without signed negation or constructing a wrapping exclusive end.
@@ -20,17 +31,12 @@ inline symbolic::SymRef nonwrappingFramePredicate(symbolic::SymContext &Ctx,
                                                   symbolic::SymRef Root,
                                                   int64_t Begin, int64_t End) {
   assert(Root && Ctx.width(Root) == 64 && Begin < End);
+  const auto [Minimum, Maximum] = nonwrappingFrameRootBounds(Begin, End);
   auto Predicate = Ctx.mkTrue();
   if (Begin < 0)
-    Predicate = Ctx.mkAnd(
-        Predicate,
-        Ctx.mkUle(Ctx.mkConst(64, uint64_t{0} - static_cast<uint64_t>(Begin)),
-                  Root));
+    Predicate = Ctx.mkAnd(Predicate, Ctx.mkUle(Ctx.mkConst(64, Minimum), Root));
   if (End > 0)
-    Predicate = Ctx.mkAnd(
-        Predicate,
-        Ctx.mkUle(Root, Ctx.mkConst(64, UINT64_MAX -
-                                            static_cast<uint64_t>(End - 1))));
+    Predicate = Ctx.mkAnd(Predicate, Ctx.mkUle(Root, Ctx.mkConst(64, Maximum)));
   return Predicate;
 }
 

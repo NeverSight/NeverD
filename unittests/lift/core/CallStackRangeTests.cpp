@@ -1,0 +1,579 @@
+//===- CallStackRangeTests.cpp - Bounded incoming stack reads ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Distinguish indexed private loads from incoming argument observations.
+///
+//===----------------------------------------------------------------------===//
+
+#include "../../../lib/ir/low/LowScalarTargets.h"
+#include "gtest/gtest.h"
+
+#include "neverd/Limits.h"
+#include "neverd/decode/Decoder.h"
+#include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/lift/X86/X86Regs.h"
+#include "neverd/loader/BinaryImage.h"
+
+#include <cstdint>
+#include <initializer_list>
+#include <limits>
+#include <utility>
+#include <vector>
+
+namespace {
+using namespace neverd;
+
+const auto SP = NdVar::reg(x86reg::RSP, 8);
+const auto Index = NdVar::reg(x86reg::RDX, 8);
+const auto Address = NdVar::tmp(0, 8);
+
+BinaryImage image() {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  return Image;
+}
+
+void append(LowBlock &Block, NdOp Opcode, NdVar Output,
+            std::initializer_list<NdVar> Inputs) {
+  LowOp Op;
+  Op.Opcode = Opcode;
+  Op.Addr = Block.StartAddr;
+  Op.Seq = Block.Ops.size();
+  Op.Output = Output;
+  for (auto Input : Inputs)
+    Op.addInput(Input);
+  Block.Ops.push_back(Op);
+}
+
+LowFunc indexedLoad(int64_t Displacement) {
+  LowFunc Function;
+  Function.Entry = 0x1000;
+  Function.Blocks.resize(1);
+  auto &Block = Function.Blocks.front();
+  Block.Id = 0;
+  Block.StartAddr = Function.Entry;
+  Block.EndAddr = Function.Entry + 1;
+  append(Block, NdOp::INT_ADD, Address, {SP, NdVar::cst(8, 8)});
+  append(Block, NdOp::STORE, {}, {Address, NdVar::reg(x86reg::RCX, 8)});
+  append(Block, NdOp::INT_SUB, SP, {SP, NdVar::cst(0x28, 8)});
+  append(Block, NdOp::INT_AND, Index, {Index, NdVar::cst(1, 8)});
+  append(Block, NdOp::INT_MULT, Index, {Index, NdVar::cst(4, 8)});
+  append(Block, NdOp::INT_ADD, Address, {SP, Index});
+  append(Block, NdOp::INT_ADD, Address, {Address, NdVar::cst(Displacement, 8)});
+  append(Block, NdOp::LOAD, NdVar::reg(x86reg::RAX, 4), {Address});
+  append(Block, NdOp::INT_ADD, SP, {SP, NdVar::cst(0x28, 8)});
+  append(Block, NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)});
+  return Function;
+}
+
+TEST(CallStackRange, IndexedLocalLoadsDoNotReadTheSpilledHomeArgument) {
+  const auto Function = indexedLoad(0x10);
+  const auto Effect = localRegisterEffect(image(), Function);
+  EXPECT_FALSE(Effect.UnknownStackReads);
+  EXPECT_EQ(Effect.StackArgs, 0);
+  const auto Solved =
+      solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+  EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8], 0u);
+}
+
+TEST(CallStackRange, NarrowHomeSpillsDoNotInventIncomingArguments) {
+  for (const unsigned Bytes : {1u, 2u, 4u, 8u}) {
+    SCOPED_TRACE(Bytes);
+    auto Function = indexedLoad(0x10);
+    Function.Blocks.front().Ops[1].Inputs[1].Size = Bytes;
+    const auto Effect = localRegisterEffect(image(), Function);
+    ASSERT_FALSE(Effect.UnknownStackReads);
+    const auto Solved =
+        solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8], 0u);
+  }
+}
+
+TEST(CallStackRange, SegmentedAndOrderedStoresAreNotPrivateHomeSpills) {
+  for (const auto Space :
+       {NdMemoryAddressSpace::Default, NdMemoryAddressSpace::X86FS,
+        NdMemoryAddressSpace::X86GS})
+    for (const auto Ordering :
+         {NdMemoryOrdering::None, NdMemoryOrdering::SequentiallyConsistent}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(Space) << ':' << unsigned(Ordering));
+      auto Function = indexedLoad(0x10);
+      auto &Store = Function.Blocks.front().Ops[1];
+      Store.MemoryAddressSpace = Space;
+      Store.MemoryOrdering = Ordering;
+      const auto Effect = localRegisterEffect(image(), Function);
+      const auto Solved =
+          solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+      EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8],
+                Space == NdMemoryAddressSpace::Default &&
+                        Ordering == NdMemoryOrdering::None
+                    ? 0u
+                    : 8u);
+    }
+}
+
+TEST(CallStackRange, DecodedSegmentOverridesRetainTheStoredRegister) {
+  for (const uint8_t Prefix : {0, 0x64, 0x65}) {
+    SCOPED_TRACE(unsigned(Prefix));
+    auto Image = image();
+    Segment Code;
+    Code.VA = Image.Entry = 0x1000;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    if (Prefix)
+      Code.Data.push_back(Prefix);
+    Code.Data.insert(Code.Data.end(),
+                     {0x4c, 0x89, 0x4c, 0x24, 0x20, // mov [rsp+32],r9
+                      0x31, 0xc0, 0xc3});           // xor eax,eax; ret
+    Code.Size = Code.FileSz = Code.Data.size();
+    Image.Segments.push_back(std::move(Code));
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    const auto Function = CFGBuilder().build(Image, Decode, Image.Entry);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    const auto Effect = localRegisterEffect(Image, Function);
+    const auto Solved =
+        solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::R9 / 8],
+              Prefix ? 8u : 0u);
+  }
+}
+
+TEST(CallStackRange, NarrowHomeReadsRetainTheirIncomingBytes) {
+  for (const unsigned Bytes : {1u, 2u, 4u, 8u}) {
+    SCOPED_TRACE(Bytes);
+    auto Function = indexedLoad(0x30);
+    Function.Blocks.front().Ops[1].Inputs[1].Size = Bytes;
+    const auto Effect = localRegisterEffect(image(), Function);
+    const auto Solved =
+        solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8], Bytes);
+  }
+}
+
+TEST(CallStackRange, VariadicSaveAreasRequireWholeArgumentWords) {
+  for (const unsigned Bytes : {1u, 2u, 4u, 8u}) {
+    SCOPED_TRACE(Bytes);
+    auto Function = indexedLoad(0x10);
+    auto &Block = Function.Blocks.front();
+    Block.Ops.clear();
+    unsigned Position = 1;
+    for (const auto Register : {x86reg::RDX, x86reg::R8, x86reg::R9}) {
+      append(Block, NdOp::INT_ADD, Address,
+             {SP, NdVar::cst(8 + Position++ * 8, 8)});
+      append(Block, NdOp::STORE, {}, {Address, NdVar::reg(Register, Bytes)});
+    }
+    append(Block, NdOp::INT_ADD, Index, {SP, NdVar::cst(16, 8)});
+    append(Block, NdOp::CALL, {}, {NdVar::cst(0x2000, 8)});
+    append(Block, NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)});
+    const auto Effect = localRegisterEffect(image(), Function);
+    EXPECT_TRUE(Effect.UnknownStackReads);
+    EXPECT_EQ(Effect.VariadicFrom, Bytes == 8 ? 1 : -1);
+    EXPECT_EQ(Effect.Blocks.front().Steps.front().Reads[x86reg::R8 / 8],
+              Bytes == 8 ? 0u : Bytes);
+
+    // Returning the same address lets the caller observe the saved bytes;
+    // that is not evidence that it supplied only variadic arguments.
+    Block.Ops.resize(6);
+    append(Block, NdOp::INT_ADD, NdVar::reg(x86reg::RAX, 8),
+           {SP, NdVar::cst(16, 8)});
+    append(Block, NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)});
+    const auto Returned = localRegisterEffect(image(), Function);
+    EXPECT_TRUE(Returned.UnknownStackReads);
+    EXPECT_EQ(Returned.VariadicFrom, -1);
+    const auto Solved =
+        solveCallRegisterEffects({{Function.Entry, Returned}}, 0xF07, 0x306);
+    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::R8 / 8], Bytes);
+  }
+}
+
+TEST(CallStackRange, ReturningAnIncomingAddressKeepsItsObservedInputs) {
+  for (const auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (const int64_t Offset : {-8, 8, 40}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(Format) << ':' << Offset);
+      auto Image = image();
+      Image.Format = Format;
+      auto Function = indexedLoad(0x10);
+      auto &Block = Function.Blocks.front();
+      Block.Ops.resize(2); // Preserve the home spill, without a local load.
+      append(Block, NdOp::INT_ADD, NdVar::reg(x86reg::RAX, 8),
+             {SP, NdVar::cst(Offset, 8)});
+      append(Block, NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)});
+      const auto Effect = localRegisterEffect(Image, Function);
+      EXPECT_EQ(Effect.UnknownStackReads, Offset >= 8);
+      const auto Solved =
+          solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+      EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8],
+                Offset >= 8 || Format != BinaryFormat::COFF ? 8u : 0u);
+    }
+}
+
+TEST(CallStackRange, TransformedHomeAddressesRetainTheirIncomingValues) {
+  const std::vector<std::vector<uint8_t>> Transforms = {
+      {},
+      {0x88, 0xc0},                         // mov al,al
+      {0x88, 0xe4},                         // mov ah,ah
+      {0x66, 0x89, 0xc0},                   // mov ax,ax
+      {0x34, 1, 0x34, 1},                   // xor al,1; xor al,1
+      {0x48, 0x83, 0xc8, 0},                // or rax,0
+      {0x48, 0x83, 0xe0, 0xf8},             // and rax,-8 (already aligned)
+      {0x48, 0xf7, 0xd0, 0x48, 0xf7, 0xd0}, // not rax; not rax
+      {0x48, 0x0f, 0x45, 0xc2}};            // cmovne rax,rdx
+  for (size_t I = 0; I < Transforms.size(); ++I) {
+    SCOPED_TRACE(I);
+    auto Image = image();
+    Segment Code;
+    Code.VA = Image.Entry = 0x1000;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Code.Data = {0x48, 0x89, 0x4c, 0x24, 8,  // mov [rsp+8],rcx
+                 0x48, 0x8d, 0x44, 0x24, 8}; // lea rax,[rsp+8]
+    Code.Data.insert(Code.Data.end(), Transforms[I].begin(),
+                     Transforms[I].end());
+    Code.Data.insert(Code.Data.end(),
+                     {0x48, 0x8b, 0x00, 0xc3}); // mov rax,[rax]; ret
+    Code.Size = Code.FileSz = Code.Data.size();
+    Image.Segments.push_back(std::move(Code));
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    const auto Function = CFGBuilder().build(Image, Decode, Image.Entry);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    const auto Effect = localRegisterEffect(Image, Function);
+    const auto Solved =
+        solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8], 8u);
+  }
+}
+
+TEST(CallStackRange, WholeRegisterDefinitionsEndTheOldStackDependence) {
+  for (bool Narrow : {false, true}) {
+    SCOPED_TRACE(Narrow);
+    auto Image = image();
+    Segment Code;
+    Code.VA = Image.Entry = 0x1000;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Code.Data = {0x48, 0x89, 0x4c, 0x24, 8, // mov [rsp+8],rcx
+                 0x48, 0x8d, 0x44, 0x24, 8, // lea rax,[rsp+8]
+                 0x34, 1};                  // xor al,1
+    if (!Narrow)
+      Code.Data.push_back(0x48);
+    Code.Data.insert(Code.Data.end(),
+                     {0x89, 0xd0, 0xc3}); // mov [r/e]ax,[r/e]dx; ret
+    Code.Size = Code.FileSz = Code.Data.size();
+    Image.Segments.push_back(std::move(Code));
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    const auto Function = CFGBuilder().build(Image, Decode, Image.Entry);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    const auto Effect = localRegisterEffect(Image, Function);
+    EXPECT_FALSE(Effect.UnknownStackReads);
+    const auto Solved =
+        solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8], 0u);
+    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RDX / 8],
+              Narrow ? 4u : 8u);
+  }
+}
+
+TEST(CallStackRange, AbsorbingWritesEndOnlyWholeAddressDependencies) {
+  for (const auto Opcode : {NdOp::INT_XOR, NdOp::INT_AND, NdOp::INT_OR})
+    for (unsigned Bytes : {1u, 8u}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(Opcode) << ':' << Bytes);
+      auto Function = indexedLoad(0x10);
+      auto &Block = Function.Blocks.front();
+      Block.Ops.resize(2);
+      const auto AX = NdVar::reg(x86reg::RAX, Bytes);
+      append(Block, NdOp::INT_ADD, NdVar::reg(x86reg::RAX, 8),
+             {SP, NdVar::cst(8, 8)});
+      append(Block, Opcode, AX,
+             {AX, Opcode == NdOp::INT_XOR
+                      ? AX
+                      : NdVar::scalar(Opcode == NdOp::INT_OR ? UINT64_MAX : 0,
+                                      Bytes)});
+      append(Block, NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)});
+      const auto Effect = localRegisterEffect(image(), Function);
+      EXPECT_EQ(Effect.UnknownStackReads, Bytes != 8);
+      const auto Solved =
+          solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+      EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8],
+                Bytes == 8 ? 0u : 8u);
+    }
+}
+
+TEST(CallStackRange, DerivedIncomingPointersRemainObserversAcrossFormats) {
+  for (auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (auto Observe : {NdOp::LOAD, NdOp::STORE, NdOp::CALL, NdOp::RETURN}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(Format) << ':' << unsigned(Observe));
+      auto Image = image();
+      Image.Format = Format;
+      auto Function = indexedLoad(0x10);
+      auto &Block = Function.Blocks.front();
+      Block.Ops.resize(2);
+      append(Block, NdOp::INT_ADD, Index, {SP, NdVar::cst(40, 8)});
+      append(Block, NdOp::INT_AND, Index, {Index, NdVar::cst(uint64_t(-8), 8)});
+      if (Observe == NdOp::LOAD)
+        append(Block, Observe, NdVar::reg(x86reg::RAX, 8), {Index});
+      else if (Observe == NdOp::STORE)
+        append(Block, Observe, {}, {NdVar::cst(0x3000, 8), Index});
+      else if (Observe == NdOp::CALL)
+        append(Block, Observe, {}, {NdVar::cst(0x2000, 8)});
+      else
+        append(Block, Observe, {}, {Index});
+      EXPECT_TRUE(localRegisterEffect(Image, Function).UnknownStackReads);
+    }
+}
+
+TEST(CallStackRange, IgnoredStepsCannotMoveAHomeSpillOntoAnotherRead) {
+  for (unsigned Bytes : {4u, 8u})
+    for (bool Vector : {false, true})
+      for (bool Observed : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Bytes << ':' << Vector << ':' << Observed);
+        auto Function = indexedLoad(0x10);
+        auto &Block = Function.Blocks.front();
+        Block.Ops.resize(2);
+        Block.Ops[1].Inputs[1].Size = Bytes;
+        LowBlock Prefix;
+        if (Vector)
+          append(Prefix, NdOp::INT_ZEXT, NdVar::reg(x86reg::VectorBase, 32),
+                 {NdVar::reg(x86reg::VectorBase, 16)});
+        else
+          append(Prefix, NdOp::SELECT, Index,
+                 {NdVar::cst(1, 1), Index, NdVar::reg(x86reg::R8, 8)});
+        Block.Ops.insert(Block.Ops.begin(), Prefix.Ops.front());
+        if (Observed)
+          append(Block, NdOp::COPY, NdVar::reg(x86reg::RAX, 8),
+                 {NdVar::reg(x86reg::RCX, 8)});
+        append(Block, NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)});
+        const auto Effect = localRegisterEffect(image(), Function);
+        const auto Solved =
+            solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+        EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8],
+                  Observed ? 8u : 0u);
+      }
+}
+
+TEST(CallStackRange, IndexedReadsRetainHomeAndStackArgumentsTheyReach) {
+  for (const int64_t Offset : {0x30, 0x50, 0x58}) {
+    SCOPED_TRACE(Offset);
+    const auto Function = indexedLoad(Offset);
+    const auto Effect = localRegisterEffect(image(), Function);
+    EXPECT_FALSE(Effect.UnknownStackReads);
+    EXPECT_EQ(Effect.StackArgs, Offset == 0x30 ? 0 : Offset == 0x50 ? 5 : 6);
+    const auto Solved =
+        solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RCX / 8],
+              Offset == 0x30 ? 8u : 0u);
+  }
+}
+
+TEST(CallStackRange, SystemVReadsUseItsFirstStackSlot) {
+  for (const auto Format : {BinaryFormat::ELF, BinaryFormat::MachO})
+    for (const int64_t Offset : {0x10, 0x30, 0x38}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(Format) << ':' << Offset);
+      auto Image = image();
+      Image.Format = Format;
+      const auto Effect = localRegisterEffect(Image, indexedLoad(Offset));
+      EXPECT_FALSE(Effect.UnknownStackReads);
+      EXPECT_EQ(Effect.StackArgs, Offset == 0x10 ? 0 : Offset == 0x30 ? 7 : 8);
+    }
+}
+
+TEST(CallStackRange, MissingAndInvalidatedOffsetsRemainUnknown) {
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Function = indexedLoad(0x10);
+    auto &Ops = Function.Blocks.front().Ops;
+    if (Mutation == 0)
+      Ops[3].Opcode = NdOp::INT_OR;
+    else if (Mutation == 1)
+      Ops[3].Inputs[1] = NdVar::cst(0xFF, 8); // Beyond the complete cover cap.
+    else if (Mutation == 2) {
+      Ops[4].Opcode = NdOp::LOAD;
+      Ops[4].NumInputs = 1;
+    } else if (Mutation == 3) {
+      Ops[4].Opcode = NdOp::CALL;
+      Ops[4].Output = {};
+      Ops[4].Inputs[0] = NdVar::cst(0x2000, 8);
+      Ops[4].NumInputs = 1;
+    } else if (Mutation == 4) {
+      Ops[4].Opcode = NdOp::COPY;
+      Ops[4].Output = NdVar::reg(x86reg::RDX + 1, 1);
+      Ops[4].Inputs[0] = NdVar::reg(x86reg::RCX, 1);
+      Ops[4].NumInputs = 1;
+    } else if (Mutation == 5)
+      Function.ModuleAnalysisRoots.insert(0x1001);
+    else if (Mutation == 6)
+      Ops[4].MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+    else if (Mutation == 7)
+      Function.UnsafeIndirectBranchAddresses.insert(0x1000);
+    else
+      Ops[5].Inputs[1].Size = 4;
+    EXPECT_TRUE(localRegisterEffect(image(), Function).UnknownStackReads);
+  }
+}
+
+TEST(CallStackRange, FiniteNegativeOffsetsAndSubtractionStayBelowEntry) {
+  for (bool Subtract : {false, true}) {
+    auto Function = indexedLoad(0x10);
+    auto &Ops = Function.Blocks.front().Ops;
+    Ops[5].Opcode = Subtract ? NdOp::INT_SUB : NdOp::INT_ADD;
+    Ops[4].Inputs[1] = NdVar::cst(Subtract ? 4 : uint64_t(-4), 8);
+    const auto Effect = localRegisterEffect(image(), Function);
+    EXPECT_FALSE(Effect.UnknownStackReads);
+    EXPECT_EQ(Effect.StackArgs, 0);
+  }
+}
+
+TEST(CallStackRange, OverflowAndUnrepresentableArgumentCountsFailClosed) {
+  for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Function = indexedLoad(std::numeric_limits<int64_t>::max());
+    auto &Ops = Function.Blocks.front().Ops;
+    if (Mutation == 0)
+      Ops[6].Inputs[1] = NdVar::cst(uint64_t{1} << 63, 8);
+    else if (Mutation == 1) {
+      Ops[5].Opcode = NdOp::INT_SUB;
+      Ops[4].Opcode = NdOp::COPY;
+      Ops[4].Inputs[0] = NdVar::cst(uint64_t{1} << 63, 8);
+      Ops[4].NumInputs = 1;
+    } else if (Mutation == 2)
+      Ops[6].Inputs[1] = NdVar::cst(uint64_t{1} << 40, 8);
+    else if (Mutation == 3)
+      Ops[6].Inputs[1] = NdVar::cst(uint64_t{1} << 63 | 0x10, 8);
+    else {
+      // Address fits, but the final byte of its load does not.
+      Ops[2].Inputs[1] = NdVar::cst(0, 8);
+      Ops[3].Inputs[1] = NdVar::cst(0, 8);
+    }
+    EXPECT_TRUE(localRegisterEffect(image(), Function).UnknownStackReads);
+  }
+}
+
+TEST(CallStackRange, EveryJoinPathMustSupplyTheIndexCover) {
+  for (unsigned Mutation = 0; Mutation != 4; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Function = indexedLoad(0x10);
+    auto Prefix = Function.Blocks.front();
+    auto Suffix = Prefix;
+    Prefix.Ops.resize(3);
+    Prefix.Succs = {1, 2};
+    Suffix.Id = 3;
+    Suffix.StartAddr = 0x1300;
+    Suffix.Preds = {1, 2};
+    Suffix.Ops.erase(Suffix.Ops.begin(), Suffix.Ops.begin() + 4);
+    Function.Blocks = {Prefix};
+    for (int Id : {1, 2}) {
+      LowBlock Arm;
+      Arm.Id = Id;
+      Arm.StartAddr = 0x1000 + 0x100 * Id;
+      Arm.Preds = {0};
+      Arm.Succs = {3};
+      append(Arm, NdOp::COPY, Index, {NdVar::cst(Id - 1, 8)});
+      if (Id == 2 && Mutation == 1)
+        Arm.Ops.clear();
+      else if (Id == 2 && Mutation == 2)
+        Arm.Ops[0].Inputs[0] = NdVar::reg(x86reg::RCX, 8);
+      Function.Blocks.push_back(Arm);
+    }
+    Function.Blocks.push_back(Suffix);
+    if (Mutation == 3)
+      std::swap(Function.Blocks[1], Function.Blocks[2]);
+    const auto Effect = localRegisterEffect(image(), Function);
+    EXPECT_EQ(Effect.UnknownStackReads, Mutation == 1 || Mutation == 2);
+    EXPECT_EQ(Effect.StackArgs, 0);
+  }
+}
+
+TEST(CallStackRange, PartialTemporaryWritesCannotKeepAnOldWholeOffset) {
+  auto Function = indexedLoad(0x10);
+  auto &Ops = Function.Blocks.front().Ops;
+  const auto Offset = NdVar::tmp(16, 8);
+  Ops[3].Output = Offset;
+  Ops[4].Opcode = NdOp::COPY;
+  Ops[4].Output = NdVar::tmp(17, 1);
+  Ops[4].Inputs[0] = NdVar::reg(x86reg::RCX, 1);
+  Ops[4].NumInputs = 1;
+  Ops[5].Inputs[1] = Offset;
+  EXPECT_TRUE(localRegisterEffect(image(), Function).UnknownStackReads);
+}
+
+TEST(CallStackRange, TemporaryOffsetsDoNotCrossMachineInstructions) {
+  auto Function = indexedLoad(0x10);
+  auto &Ops = Function.Blocks.front().Ops;
+  Ops[4].Output = NdVar::tmp(16, 8);
+  Ops[5].Inputs[1] = Ops[4].Output;
+  for (size_t I = 5; I < Ops.size(); ++I)
+    ++Ops[I].Addr;
+  EXPECT_TRUE(localRegisterEffect(image(), Function).UnknownStackReads);
+}
+
+TEST(CallStackRange, LoopBackedgesRetainAllPossibleIndexValues) {
+  for (bool Mask : {false, true}) {
+    SCOPED_TRACE(Mask);
+    auto Function = indexedLoad(0x10);
+    auto Prefix = Function.Blocks.front();
+    auto Loop = Prefix;
+    auto Suffix = Prefix;
+    Prefix.Ops.resize(3);
+    append(Prefix, NdOp::COPY, Index, {NdVar::cst(0, 8)});
+    Prefix.Succs = {1};
+    Loop.Id = 1;
+    Loop.StartAddr = 0x1100;
+    Loop.Preds = {0, 1};
+    Loop.Succs = {1, 2};
+    Loop.Ops.erase(Loop.Ops.begin() + 8, Loop.Ops.end());
+    Loop.Ops.erase(Loop.Ops.begin(), Loop.Ops.begin() + (Mask ? 3 : 4));
+    append(Loop, NdOp::INT_ADD, Index, {Index, NdVar::cst(1, 8)});
+    Suffix.Id = 2;
+    Suffix.StartAddr = 0x1200;
+    Suffix.Preds = {1};
+    Suffix.Ops.erase(Suffix.Ops.begin(), Suffix.Ops.begin() + 8);
+    Function.Blocks = {Prefix, Loop, Suffix};
+    const auto Effect = localRegisterEffect(image(), Function);
+    EXPECT_EQ(Effect.UnknownStackReads, !Mask);
+    EXPECT_EQ(Effect.StackArgs, 0);
+  }
+}
+
+TEST(CallStackRange, AFiniteIncomingPointerStillEscapesThroughACall) {
+  auto Function = indexedLoad(0x30);
+  auto &Ops = Function.Blocks.front().Ops;
+  Ops[7].Opcode = NdOp::COPY;
+  Ops[7].Output = NdVar::reg(x86reg::RCX, 8);
+  Ops[8].Opcode = NdOp::CALL;
+  Ops[8].Output = {};
+  Ops[8].NumInputs = 1;
+  Ops[8].Inputs[0] = NdVar::cst(0x2000, 8);
+  EXPECT_TRUE(localRegisterEffect(image(), Function).UnknownStackReads);
+}
+
+TEST(CallStackRange, ExhaustedScalarWorkPublishesNoPartialCover) {
+  const auto Function = indexedLoad(0x10);
+  const auto *Query = &Function.Blocks.front().Ops[5];
+  bool Proved = false, Refused = false;
+  for (size_t Budget = 0; Budget != 512; ++Budget) {
+    size_t Remaining = Budget;
+    const auto Values = finiteScalarOperandValues(
+        CallRegisterBodyView(Function), {{Query, {1}}}, Remaining);
+    EXPECT_LE(Remaining, Budget);
+    if (!Values) {
+      Refused = true;
+      continue;
+    }
+    Proved = true;
+    ASSERT_TRUE(Values->count({Query, 1}));
+    EXPECT_EQ(Values->at({Query, 1}), (std::vector<uint64_t>{0, 4}));
+  }
+  EXPECT_TRUE(Proved);
+  EXPECT_TRUE(Refused);
+}
+} // namespace

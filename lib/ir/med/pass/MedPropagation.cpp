@@ -13,8 +13,10 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedConstantPropagation.h"
+#include "neverd/ir/med/MedPhiRecomposition.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -26,6 +28,7 @@ namespace neverd {
 
 void LowToMedConverter::propagate(MedFunc &Func) {
   propagateInvariantConstants(Func);
+  recomposeSplitPhis(Func, &NextVarId);
   // Key by (Kind, Id, SSAVer): the MedVar Id space is shared across kinds, and
   // a stack Param's Id (its argument index, e.g. arg6) overlaps with the small
   // allocVarId() ids handed to registers/temps.  Ignoring Kind lets a Param
@@ -78,6 +81,21 @@ void LowToMedConverter::propagate(MedFunc &Func) {
     }
   }
 
+  // Complement and modular negation are distinct involutions at one unchanged
+  // bit width. Look through named SSA producers, never through a truncate or
+  // a new register definition. Producers and observed flag calculations stay
+  // for the normal DCE owner.
+  const auto PlainInvolution = [](const MedOp &Op) {
+    return (Op.Opcode == NdOp::INT_NOT || Op.Opcode == NdOp::INT_NEGATE ||
+            Op.Opcode == NdOp::INT_NEG2) &&
+           Op.NumInputs == 1 && Op.Output.Size &&
+           Op.Inputs[0].Size == Op.Output.Size && !Op.Dead &&
+           Op.RegistrationRoot == MedOp::RegistrationRootKind::None &&
+           !Op.SourceCallHint && Op.IntrinsicOutputs.empty() &&
+           Op.MemoryOrdering == NdMemoryOrdering::None &&
+           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default;
+  };
+
   // Copy propagation: if def is COPY from another var, replace uses
   bool Changed = true;
   int Iters = 0;
@@ -101,6 +119,9 @@ void LowToMedConverter::propagate(MedFunc &Func) {
               Def->RegistrationRoot == MedOp::RegistrationRootKind::None &&
               Def->Inputs[0].Size == Op.Inputs[I].Size) {
             MedVar Replacement = Def->Inputs[0];
+            if (Replacement.isConst() &&
+                !canPropagateConstantToOperand(Op.Opcode, I))
+              continue;
             // COPY is value transport, so an untagged immediate remains
             // role-neutral at its definition.  Once SSA substitutes it into a
             // numeric operand, classify only this occurrence as scalar.  Exact
@@ -115,6 +136,18 @@ void LowToMedConverter::propagate(MedFunc &Func) {
               Op.Inputs[I] = Replacement;
               Changed = true;
             }
+          }
+        }
+        if (PlainInvolution(Op)) {
+          const auto At = Defs.find(keyOf(Op.Inputs[0]));
+          if (At != Defs.end() && PlainInvolution(*At->second) &&
+              At->second->Output.Size == Op.Output.Size &&
+              (At->second->Opcode == NdOp::INT_NEG2) ==
+                  (Op.Opcode == NdOp::INT_NEG2)) {
+            const auto Value = At->second->Inputs[0];
+            Op.Opcode = NdOp::COPY;
+            Op.Inputs[0] = Value;
+            Changed = true;
           }
         }
       }
@@ -289,6 +322,34 @@ void LowToMedConverter::propagate(MedFunc &Func) {
           continue;
         }
         auto B = ResolveConst(Op.Inputs[1]);
+        // An absorbing scalar mask observes none of the other operand's bits.
+        // Keep that operand's producer and memory effects for ordinary DCE;
+        // only this pure value operation becomes a constant. An address
+        // whose original VA is zero is not a scalar zero after relocation.
+        if ((Op.Opcode == NdOp::INT_AND || Op.Opcode == NdOp::INT_OR) &&
+            Op.NumInputs == 2 && Op.Output.Size &&
+            Op.Output.Size <= sizeof(uint64_t) &&
+            Op.Inputs[0].Size == Op.Output.Size &&
+            Op.Inputs[1].Size == Op.Output.Size && !Op.Dead &&
+            Op.RegistrationRoot == MedOp::RegistrationRootKind::None &&
+            !Op.SourceCallHint && Op.IntrinsicOutputs.empty() &&
+            Op.MemoryOrdering == NdMemoryOrdering::None &&
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+          std::optional<uint64_t> Absorbed;
+          for (const auto *Value : {&A, &B})
+            if (*Value && (*Value)->IsStableScalar)
+              if (auto Bits = absorbingBitwiseConstant(
+                      Op.Opcode, Op.Output.Size, (*Value)->Value))
+                Absorbed = Bits;
+          if (Absorbed) {
+            Op.Opcode = NdOp::COPY;
+            Op.Inputs[0] = MedVar::makeConst(*Absorbed, Op.Output.Size,
+                                             ConstantAddressProvenance::Scalar);
+            Op.NumInputs = 1;
+            Changed = true;
+            continue;
+          }
+        }
         if (!A || !B)
           continue;
 

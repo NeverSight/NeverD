@@ -106,6 +106,9 @@ OPTIONAL_KERNEL_INPUT_SKIPS = {
     )
 }
 OUTCOME_NAMES = ("passed", "failed", "skipped", "disabled", "not_run")
+# A pass or an explicit skip cannot change when the same job repeats the case
+# on the same products. Failures, disabled and not-run cases are never reused.
+REUSABLE_OUTCOMES = frozenset({"passed", "skipped"})
 
 
 class ResultError(ValueError):
@@ -224,12 +227,12 @@ def _identity(test: inventory.TestRecord) -> str:
     return f"{test.name} [{', '.join(sorted(test.labels))}]"
 
 
-def prior_passes(
+def prior_results(
     records: Sequence[inventory.TestRecord],
     selected: Sequence[inventory.TestRecord],
     documents: Sequence[ET.Element],
 ) -> ET.Element:
-    """Reuse only matching, consistently passed registrations from this job."""
+    """Reuse only matching registrations with one final outcome from this job."""
     known = set(records)
     observations: dict[inventory.TestRecord, list[TestOutcome]] = {}
     cases: dict[inventory.TestRecord, ET.Element] = {}
@@ -242,17 +245,21 @@ def prior_passes(
                 )
             observations.setdefault(result.test, []).append(result)
             cases.setdefault(result.test, case)
-    eligible = {test for test in selected if test in observations and all(
-        result.outcome == "passed" for result in observations[test]
-    )}
+    outcomes = {
+        test: {result.outcome for result in observations[test]}
+        for test in selected if test in observations
+    }
+    eligible = {test for test, states in outcomes.items()
+                if len(states) == 1 and states <= REUSABLE_OUTCOMES}
     # A focused binary and its aggregate can register the same name with
     # different owners. CTest excludes by name, so retain every selected owner
     # of that name together or leave all of them for the remaining execution.
     remaining_names = {test.name for test in selected if test not in eligible}
     reused = [test for test in selected
               if test in eligible and test.name not in remaining_names]
+    skipped = sum(outcomes[test] == {"skipped"} for test in reused)
     root = ET.Element("testsuite", tests=str(len(reused)), failures="0",
-                      disabled="0", skipped="0")
+                      disabled="0", skipped=str(skipped))
     for test in reused:
         if any(character in test.name for character in "\r\n"):
             raise ResultError("test name cannot be represented in a CTest name file")
@@ -260,11 +267,13 @@ def prior_passes(
     return root
 
 
-def combine_prior_passes(
+def combine_prior_results(
     current: Sequence[TestOutcome], previous: Sequence[TestOutcome]
 ) -> tuple[TestOutcome, ...]:
-    if any(result.outcome != "passed" for result in previous):
-        raise ResultError("reused evidence contains an outcome other than passed")
+    if any(result.outcome not in REUSABLE_OUTCOMES for result in previous):
+        raise ResultError(
+            "reused evidence contains an outcome other than passed or skipped"
+        )
     identities = [result.test for result in (*current, *previous)]
     if len(set(identities)) != len(identities):
         raise ResultError("fresh and reused results contain duplicate identities")
@@ -461,11 +470,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     audit.add_argument("--exclude-label-regex", required=True)
     audit.add_argument("--matrix-name", required=True)
-    audit.add_argument("--prior-passes", type=Path)
+    audit.add_argument("--prior-results", type=Path)
     reuse = commands.add_parser(
-        "reuse", help="preserve passed focused tests before executing the remaining profile"
+        "reuse",
+        help="preserve passed and skipped focused tests before executing the remaining profile",
     )
-    for argument in ("inventory", "exclude-tests", "prior-passes", "output"):
+    for argument in ("inventory", "exclude-tests", "prior-results", "output"):
         reuse.add_argument(f"--{argument}", type=Path, required=True)
     reuse.add_argument("--completed-junit", type=Path, action="append", required=True)
     reuse.add_argument(
@@ -492,12 +502,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 document, arguments.profile, arguments.exclude_label_regex
             )
             completed = [ET.parse(path).getroot() for path in arguments.completed_junit]
-            retained = prior_passes(
+            retained = prior_results(
                 inventory.parse_inventory(document), discovery.selected_records, completed
             )
             reused = parse_junit(retained)
             ET.ElementTree(retained).write(
-                arguments.prior_passes, encoding="utf-8", xml_declaration=True
+                arguments.prior_results, encoding="utf-8", xml_declaration=True
             )
             arguments.exclude_tests.write_text(
                 "".join(name + "\n" for name in sorted({result.test.name for result in reused})),
@@ -509,14 +519,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "run_id": os.environ.get("GITHUB_RUN_ID"),
                 "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
                 "selected_count": discovery.selected_count,
-                "reused_passed": len(reused),
+                "reused_passed": sum(result.outcome == "passed" for result in reused),
+                "reused_skipped": sum(result.outcome == "skipped" for result in reused),
                 "remaining_count": discovery.selected_count - len(reused),
                 "inventory_sha256": hashlib.sha256(arguments.inventory.read_bytes()).hexdigest(),
                 "completed_junit": [
                     {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
                     for path in arguments.completed_junit
                 ],
-                "prior_passes_sha256": hashlib.sha256(arguments.prior_passes.read_bytes()).hexdigest(),
+                "prior_results_sha256": hashlib.sha256(arguments.prior_results.read_bytes()).hexdigest(),
             }
         except (OSError, ValueError, ET.ParseError) as error:
             report = {"ok": False, "errors": [str(error)]}
@@ -541,19 +552,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         outcomes = parse_junit(ET.parse(arguments.junit).getroot())
         reused = ()
         fresh_count = len(outcomes)
-        if arguments.prior_passes is not None:
-            reused = parse_junit(ET.parse(arguments.prior_passes).getroot())
-            outcomes = combine_prior_passes(outcomes, reused)
+        if arguments.prior_results is not None:
+            reused = parse_junit(ET.parse(arguments.prior_results).getroot())
+            outcomes = combine_prior_results(outcomes, reused)
         report = audit_results(
             discovery.selected_records, outcomes, discovery.profile, exit_status,
             frozenset(name for name in ("NEVERD_TYPES_NTOSKRNL", "NEVERD_TYPES_NTKRNLMP")
                       if name in os.environ),
         )
-        if arguments.prior_passes is not None:
+        if arguments.prior_results is not None:
             report["reuse"] = {
                 "fresh_reported": fresh_count,
-                "prior_passed": len(reused),
-                "prior_passes_sha256": hashlib.sha256(arguments.prior_passes.read_bytes()).hexdigest(),
+                "prior_passed": sum(result.outcome == "passed" for result in reused),
+                "prior_skipped": sum(result.outcome == "skipped" for result in reused),
+                "prior_results_sha256": hashlib.sha256(arguments.prior_results.read_bytes()).hexdigest(),
             }
     except (OSError, ValueError, ET.ParseError) as error:
         report["errors"] = [str(error)]

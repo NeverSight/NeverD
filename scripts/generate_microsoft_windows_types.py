@@ -21,6 +21,7 @@ from typing import NamedTuple
 import xml.etree.ElementTree as ET
 
 import build_wdk_driver_fixtures as wdk
+import microsoft_rdbss_types as rdbss
 import microsoft_ucrt_types as ucrt
 
 
@@ -46,7 +47,7 @@ LIBRARIES = {
                            ["-D_KERNEL_MODE=1", "-DNDIS680"]),
     # WDK's CRT supplies the Microsoft C runtime declarations required by the
     # SDK. It is the same pinned Microsoft package, never a host CRT or MinGW.
-    "WindowsUser": (USER_HEADERS, ["um", "shared", "km/crt"],
+    "WindowsUser": (USER_HEADERS, ["um", "shared", "winrt", "km/crt"],
                          ["-DSECURITY_WIN32=1"]),
 }
 
@@ -62,6 +63,22 @@ class Provider(NamedTuple):
 # WinHTTP's UTF-16 URL_COMPONENTS versus WinINet's ANSI default). Parse each
 # provider on its own and import only the missing prototypes and their types.
 ISOLATED_PROVIDERS = {
+    "WindowsKernel": (
+        Provider("NetworkInterfaces", ("ntddk", "netioddk", "wsk")),
+        Provider("KernelStreaming", ("ntddk", "minwindef", "ks", "swenum", "ksi")),
+        Provider("StorageClass", ("ntddk", "scsi", "classpnp")),
+        Provider("TDI", ("ntddk", "tdikrnl")),
+        Provider("VideoPort", ("miniport", "ntddvdeo", "video")),
+        Provider("ATA", ("ntddk", "ata", "irb")),
+        Provider("Battery", ("ntddk", "batclass")),
+        Provider("HIDPort", ("ntddk", "hidport", "hidpddi")),
+        Provider("SmartCard", ("ntddk", "smclib")),
+        Provider("SDPort", ("ntddk", "sdport")),
+        Provider("StreamClass", ("ntddk", "minwindef", "ks", "strmini")),
+        Provider("AudioPort", ("ntddk", "portcls")),
+        Provider("GraphicsKernel", ("ntddk", "dispmprt")),
+        Provider("RDBSS", ("rxprocs", "mrx"), ("MINIRDR__NAME=neverd_rdbss",)),
+    ),
     "WindowsUser": (
         Provider("WinHTTP", ("winsock2", "winhttp")),
         Provider("HTTPServer", ("winsock2", "windows", "http")),
@@ -81,6 +98,54 @@ ISOLATED_PROVIDERS = {
         # define WIN32 without a value, while tapi.h uses it in #if expressions.
         Provider("TAPI", ("winsock2", "windows", "tapi", "tspi"), ("WIN32=1",)),
         Provider("OpenGL", ("winsock2", "windows", "gl/gl", "gl/glu")),
+        Provider("EventTracing", ("windows", "evntprov")),
+        Provider("Path", ("windows", "pathcch")),
+        Provider("WinRTStrings", ("windows", "winstring", "roapi", "roerrorapi", "robuffer")),
+        Provider("RPCProxy", ("windows", "rpcproxy", "midles")),
+        Provider("Credentials", ("windows", "wincred")),
+        Provider("DeviceQuery", ("windows", "devquery")),
+        Provider("ApplicationModel", ("windows", "appmodel", "featurestagingapi")),
+        Provider("PropertyVariants", ("windows", "propvarutil")),
+        Provider("PerformanceData", ("windows", "pdh", "pdhmsg")),
+        Provider("Biometrics", ("windows", "winbio")),
+        Provider("GraphicsThunk", ("windows", "d3dkmthk")),
+        Provider("Direct3D11", ("windows", "d3d11"), (), (
+            "D3D11CreateDevice", "D3D11CreateDeviceAndSwapChain")),
+        Provider("Direct3D12", ("windows", "d3d12"), (), (
+            "D3D12CreateDevice", "D3D12GetDebugInterface", "D3D12GetInterface",
+            "D3D12SerializeRootSignature", "D3D12CreateRootSignatureDeserializer",
+            "D3D12SerializeVersionedRootSignature", "D3D12CreateVersionedRootSignatureDeserializer",
+            "D3D12EnableExperimentalFeatures")),
+        Provider("DXGI", ("windows", "dxgi1_6"), (), (
+            "CreateDXGIFactory", "CreateDXGIFactory1", "CreateDXGIFactory2",
+            "DXGIDeclareAdapterRemovalSupport", "DXGIGetDebugInterface1")),
+        Provider("ShaderCompiler", ("windows", "d3dcompiler"), (), (
+            "D3DReadFileToBlob", "D3DWriteBlobToFile", "D3DCompile", "D3DCompile2",
+            "D3DCompileFromFile", "D3DPreprocess", "D3DGetDebugInfo", "D3DReflect",
+            "D3DReflectLibrary", "D3DDisassemble", "D3DDisassembleRegion", "D3DCreateLinker",
+            "D3DLoadModule", "D3DCreateFunctionLinkingGraph", "D3DGetTraceInstructionOffsets",
+            "D3DGetInputSignatureBlob", "D3DGetOutputSignatureBlob",
+            "D3DGetInputAndOutputSignatureBlob", "D3DStripShader", "D3DGetBlobPart",
+            "D3DSetBlobPart", "D3DCreateBlob", "D3DCompressShaders", "D3DDecompressShaders",
+            "D3DDisassemble10Effect")),
+        # clfs.h includes the WDK's legacy stdio.h. Import the CLFS API only:
+        # those transitive CRT declarations must not take priority over UCRT.
+        Provider("CLFS", ("windows", "clfsw32"), (), (
+            "AddLogContainer", "AddLogContainerSet", "AdvanceLogBase",
+            "AlignReservedLog", "AllocReservedLog", "CloseAndResetLogFile",
+            "CreateLogContainerScanContext", "CreateLogFile", "CreateLogMarshallingArea",
+            "DeleteLogByHandle", "DeleteLogFile", "DeleteLogMarshallingArea", "DumpLogRecords",
+            "FlushLogBuffers", "FlushLogToLsn", "FreeReservedLog", "GetLogContainerName",
+            "GetLogFileInformation", "GetLogIoStatistics", "GetLogReservationInfo",
+            "GetNextLogArchiveExtent", "LsnBlockOffset", "LsnContainer", "LsnCreate",
+            "LsnEqual", "LsnGreater", "LsnIncrement", "LsnInvalid", "LsnLess", "LsnNull",
+            "LsnRecordSequence", "PrepareLogArchive", "ReadLogArchiveMetadata", "ReadLogRecord",
+            "ReadLogRestartArea", "ReadNextLogRecord", "ReadPreviousLogRestartArea",
+            "RemoveLogContainer", "RemoveLogContainerSet", "ReserveAndAppendLog",
+            "ReserveAndAppendLogAligned", "ScanLogContainers", "SetEndOfLog",
+            "SetLogArchiveMode", "SetLogArchiveTail", "TerminateLogArchive", "TerminateReadLog",
+            "TruncateLog", "ValidateLog", "WriteLogRestartArea")),
+        Provider("TPM", ("windows", "tbs")),
     ),
 }
 TARGETS = {
@@ -113,6 +178,13 @@ def checked_types(neverd: str, source: Path, log: Path,
                        encoding="utf-8")
         raise ValueError(f"official declarations were refused; see {log}")
     return result
+
+
+def parser_convention(source: Path, convention: str) -> None:
+    """Preprocessing loses the compiler's default on unannotated declarations."""
+    if convention:
+        source.write_text(f"#pragma neverd_default_calling_convention({convention})\n" +
+                          source.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def record_layouts(text: str) -> dict:
@@ -160,15 +232,42 @@ def verify_layouts(original: str, generated: str,
 
 def prepare_provider(name: str, source: Path, arguments: list[str], directory: Path,
                      neverd: str, model: str, headers=(), defines=(), prototypes=(),
-                     metadata: dict | None = None) -> dict:
+                     metadata: dict | None = None, convention: str = "") -> dict:
     """Validate and select a whole provider before it can enter the merge."""
+    bridge_commands = []
+    if name == "DXGI":
+        # The SDK writes () for this documented no-argument C++ API. In C
+        # that spelling has no prototype. Authenticate the complete C++ type
+        # before supplying its compatible C (void) redeclaration.
+        original = source.read_text(encoding="utf-8")
+        proof = directory / "DXGI-noargs.cpp"
+        proof.write_text(original + '\nstatic_assert(__is_same(\n'
+                         '    decltype(&DXGIDeclareAdapterRemovalSupport),\n'
+                         '    HRESULT (WINAPI *)(void)));\n', encoding="utf-8")
+        invocation = arguments + ["-x", "c++", "-std=c++17", "-fsyntax-only", str(proof)]
+        run(invocation, directory / "DXGI-noargs.log")
+        source.write_text(original + '\nHRESULT WINAPI DXGIDeclareAdapterRemovalSupport(void);\n',
+                          encoding="utf-8")
+        bridge_commands.append(invocation)
+        metadata = dict(metadata or {}, cpp_parameter_bridge={
+            "function": "DXGIDeclareAdapterRemovalSupport",
+            "source": str(proof), "sha256": wdk.digest(proof),
+            "documentation": "https://learn.microsoft.com/windows/win32/api/dxgi1_6/nf-dxgi1_6-dxgideclareadapterremovalsupport"})
     dump = ["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
     preprocessed = directory / (name + ".h")
     command = arguments + ["-E", str(source)]
     run(command, directory / (name + ".pre.log"), preprocessed)
+    cpp_bridge = (rdbss.prepare(source, preprocessed, arguments, directory, run)
+                  if name == "RDBSS" else None)
+    parser_convention(preprocessed, convention)
     parsed = checked_types(neverd, preprocessed, directory / (name + ".parse.log"), model)
+    if cpp_bridge is not None:
+        rdbss.verify_abis(cpp_bridge, preprocessed, arguments, directory,
+                          parsed["prototypes"], run)
+        bridge_commands += cpp_bridge["commands"]
+        metadata = dict(metadata or {}, cpp_header_bridge=cpp_bridge)
     input_hash = wdk.digest(preprocessed)
-    commands = [command]
+    commands = [command, *bridge_commands]
     if prototypes:
         original = directory / (name + ".pre.h")
         preprocessed.replace(original)
@@ -186,11 +285,14 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
             raise ValueError(f"official prototype selection failed for {name}")
         preprocessed.write_text(selected["source"], encoding="utf-8")
         commands.append(selection)
-    layouts = run(arguments + dump + [str(source)],
+    layout_arguments = cpp_bridge["arguments"] if cpp_bridge else arguments
+    layout_source = cpp_bridge["source"] if cpp_bridge else str(source)
+    layouts = run(layout_arguments + dump + [layout_source],
                   directory / (name + ".official-clang.log"),
                   directory / (name + ".official-layouts.log"))
     return {"name": name, "source": preprocessed, "headers": headers,
             "defines": defines, "selected_prototypes": prototypes,
+            "default_calling_convention": convention,
             "input_sha256": input_hash, "layouts": layouts,
             "parsed": parsed, "commands": commands, "metadata": metadata or {}}
 
@@ -199,7 +301,8 @@ def merge_providers(base: str, primary: Path, output: Path,
                     arguments: list[str], common: list[str], neverd: str,
                     model: str, primary_layouts: str,
                     runtime: dict | None = None,
-                    compatibility: dict | None = None) -> list[dict]:
+                    compatibility: dict | None = None,
+                    convention: str = "") -> list[dict]:
     providers = ISOLATED_PROVIDERS.get(base, ())
     if not providers and runtime is None:
         return []
@@ -212,7 +315,8 @@ def merge_providers(base: str, primary: Path, output: Path,
         source = directory / (name + ".c")
         source.write_text(include_headers(headers), encoding="utf-8")
         units.append(prepare_provider(name, source, provider_arguments, directory,
-                                      neverd, model, headers, defines, prototypes))
+                                      neverd, model, headers, defines, prototypes,
+                                      convention=convention))
     if runtime is not None:
         units.append(prepare_provider("UCRT", runtime["source"], runtime["arguments"],
                                       directory, neverd, model,
@@ -253,11 +357,36 @@ def merge_providers(base: str, primary: Path, output: Path,
         for index, (unit, report) in enumerate(zip(units, imported), 1):
             if report["declaration"] != index or report["prefix"] != unit["name"]:
                 raise ValueError("official provider provenance does not match its input")
+            bridge = unit["metadata"].get("cpp_header_bridge")
+            if bridge and not set(report["prototypes"]) <= set(bridge["verified_functions"]):
+                raise ValueError("imported RDBSS routines lack an original C++ ABI proof")
+            if bridge:
+                # Recheck the actual published declarations after parsing,
+                # renaming and merging; a correct preprocessed bridge alone
+                # cannot certify the parser's emitted function types.
+                published = directory / (unit["name"] + "-published")
+                published.mkdir(exist_ok=True)
+                empty = published / "empty.h"
+                empty.write_text("", encoding="utf-8")
+                selected = published / "declarations.h"
+                selection = [neverd, "types", "--data-model", model,
+                             "--record-abi", "microsoft", "--declare", str(empty),
+                             "--declare", str(temporary), "--merge-prototypes",
+                             "--all", "--prototypes", "--spelling", "windows",
+                             "--no-offsets", "-o", str(selected)]
+                selection += ["--import-prototype=" + name for name in bridge["verified_functions"]]
+                run(selection, published / "selection.log")
+                proof = dict(bridge, commands=[])
+                rdbss.verify_abis(proof, selected, common, published,
+                                  bridge["verified_functions"], run)
+                bridge["published_abi"] = proof
+                unit["commands"] += [selection, *proof["commands"]]
             renamed = {entry["original"]: entry["name"] for entry in report["renamed"]}
             count = verify_layouts(unit["layouts"], generated_layouts,
                                    renamed, report["dependencies"])
             records.append({"name": unit["name"], "headers": unit["headers"],
                             "defines": unit["defines"],
+                            "default_calling_convention": unit["default_calling_convention"],
                             "selected_prototypes": unit["selected_prototypes"],
                             "input_sha256": unit["input_sha256"],
                             "declaration_sha256": wdk.digest(unit["source"]),
@@ -390,7 +519,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
     packages = [wdk.download(cache, *record) for record in inventory["DOWNLOAD"]]
     kit = output / "microsoft-kit"
     selected = [f"c/Include/{VERSION}/{part}/"
-                for part in ("km", "shared", "um")]
+                for part in ("km", "shared", "um", "winrt")]
     selected += ["LICENSE.txt", "Microsoft.Windows.WDK.x64.nuspec",
                  "Microsoft.Windows.SDK.CPP.nuspec",
                  f"c/build/{VERSION}/WindowsDriver.Common.props"]
@@ -428,10 +557,7 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
         preprocessed = output / (name + ".pre.c")
         command = arguments + ["-E", str(source)]
         run(command, output / (name + ".pre.log"), preprocessed)
-        if convention:
-            preprocessed.write_text(
-                f"#pragma neverd_default_calling_convention({convention})\n" +
-                preprocessed.read_text(encoding="utf-8"), encoding="utf-8")
+        parser_convention(preprocessed, convention)
         read = checked_types(neverd, preprocessed, output / (name + ".parse.log"), model)
         generated = output / (name + ".h")
         with tempfile.TemporaryDirectory(dir=output, prefix="render-") as scratch:
@@ -480,7 +606,8 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
             if ucrt_compatibility:
                 compatibility = ucrt.prepare_compatibility(runtime, output, cache)
         providers = merge_providers(base, generated, output, arguments, common,
-                                     neverd, model, original_layouts, runtime, compatibility)
+                                     neverd, model, original_layouts, runtime, compatibility,
+                                     convention)
         final = checked_types(neverd, generated, output / (name + ".final.log"), model)
         built.append({"name": name, "sha256": wdk.digest(generated),
                       "types": len(final["types"]),
@@ -498,7 +625,8 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
         "packages": [{"file": name, "url": url, "sha256": digest}
                      for name, url, digest in inventory["DOWNLOAD"]] + runtime_packages,
         "target_packages": target_packages,
-        "profiles": {"ucrt": wdk.digest(ucrt.INPUTS)} if include_ucrt else {},
+        "profiles": dict({"ucrt": wdk.digest(ucrt.INPUTS)} if include_ucrt else {},
+                         rdbss=wdk.digest(Path(rdbss.__file__))),
         "inputs": inputs,
         "licenses": [{"file": path.name, "sha256": wdk.digest(path)}
                      for path in sorted(licenses.iterdir())],

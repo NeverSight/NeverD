@@ -21,6 +21,10 @@ class CallInst;
 
 namespace neverd {
 
+/// Address of the current function's compiler-owned return slot. The local
+/// declaration must stay in the caller: an out-of-line helper has its own slot.
+std::string renderX86ReturnSlotAddress(const std::string &IntrinsicName);
+
 std::string renderX86AtomicRmw(const X86AtomicRmwPlan &Plan,
                                const std::string &Address,
                                const std::string &Value);

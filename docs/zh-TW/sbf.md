@@ -253,7 +253,7 @@ scratch 復原採按需策略：只有存在真正的 `scratch consumer` 才建�
 scratch 的 fixed point；沒有該 consumer 的程式會跳過 `whole-CFG fixed point`。
 `SBFAnalysisLimits.def` 定義的是主機 `analysis policy`，不是 `protocol limits`：
 `MaxModeledScratchBytes` 為每個 `program point` 保留 1,024 bytes，
-`ScratchFlowRetainedByteBudget` 是 8,388,608 bytes 的 `logical retained estimate`。
+`ScratchFlowRetainedByteBudget` 是 16,777,216 bytes 的 `logical retained estimate`。
 超過預算時，復原會明確 widening 為 `ScratchRecoveryPrecision::BlockLocal`。
 只丟棄 `cross-block must-facts`；`block-local replay` 仍然 `sound`，並且仍可復原
 `same-block stores`。printer 穩定輸出

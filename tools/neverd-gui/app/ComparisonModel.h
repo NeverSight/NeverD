@@ -30,6 +30,7 @@ public:
     FlowFunctions,
     FlowNodes,
     FlowSlice,
+    FlowAccesses,
     FlowRegions,
     FlowRegionAnchors,
     FlowRegionNodes,

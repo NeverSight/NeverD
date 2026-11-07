@@ -9,7 +9,16 @@ add_neverd_component_library(NeverDLLVMMemoryAnalysis
 
 add_neverd_component_library(NeverDBinaryInterpreterSpecialization
   arch/x86_64/BinaryInterpreterSpecialization.cpp
+  arch/x86_64/X64ContinuationSource.cpp
+  arch/x86_64/X64PagedSource.cpp
   LINK_COMPONENTS InterpreterSpecialization Decode Loader
+)
+
+add_neverd_component_library(NeverDX64PagedEventDelivery
+  arch/x86_64/X64PagedEventDelivery.cpp
+  arch/x86_64/X64PagedExecution.cpp
+  arch/x86_64/X64PagedPortIO.cpp
+  LINK_COMPONENTS BinaryInterpreterSpecialization Translate
 )
 
 add_neverd_component_library(NeverDLLVMInterpreterModel

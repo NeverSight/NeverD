@@ -55,6 +55,24 @@ std::optional<uint64_t> armBarrierOptionValue(llvm::StringRef Text);
 /// ACLE's __arm_rsr64 accept, for one without a name.
 std::string aarch64SystemRegisterName(uint64_t Encoding, bool Write);
 
+/// The assembly of the SVE LDR or STR of a whole Z or P register that
+/// \p Word encodes, with `$0` for its base register (`str z0, [$0, #-34, mul
+/// vl]`); empty for any other word.  The lift keeps the word as the operand
+/// of A64_SveRegisterTransfer: C can name neither the registers nor the
+/// length the offset scales by.
+std::string aarch64SveRegisterTransferAsm(uint64_t Word);
+
+/// Whether \p Word encodes the SVE LDR or STR of a whole Z or P register.
+inline bool isAArch64SveRegisterTransferWord(uint32_t Word) {
+  return (Word & 0xFFC0E000) == 0xE5804000 ||
+         (Word & 0xFFC0E000) == 0x85804000 ||
+         (Word & 0xFFC0E010) == 0xE5800000 || (Word & 0xFFC0E010) == 0x85800000;
+}
+
+/// The physical destination clobbered by an SVE register load; empty for
+/// stores.
+std::string aarch64SveRegisterTransferClobber(uint64_t Word);
+
 /// The assembly of the AArch64 system instruction \p Id (Mrs, Msr, Dc, Ic,
 /// Tlbi or At) the lifter kept the op0:op1:CRn:CRm:op2 \p Field of, with
 /// `$0` for its output or else its register operand: `mrs $0, cntvct_el0`,

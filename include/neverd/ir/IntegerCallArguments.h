@@ -47,8 +47,8 @@ struct IntegerCallArguments {
   unsigned Positions = 0;
 };
 
-/// Complete scalar integer/pointer operands, including at least one stack
-/// value. Locations are in source order; widths exclude ABI slot padding.
+/// Complete scalar integer/pointer operands, in registers or on the stack.
+/// Locations are in source order; widths exclude ABI slot padding.
 /// This argument contract makes no additional claim about result registers.
 struct FixedIntegerCallArguments {
   struct Parameter {
@@ -62,9 +62,11 @@ struct FixedIntegerCallArguments {
   bool operator==(const FixedIntegerCallArguments &) const = default;
 };
 
-/// Fixed scalar x64/AArch64 calls whose arguments need explicit stack loads
-/// before SSA. Records, floating values, hidden results and other conventions
-/// retain their separate adapters. The caller authenticates the declaration.
+/// Fixed scalar x64/AArch64 calls whose complete operands bind before SSA.
+/// Stack values need explicit loads; register-only calls must not acquire
+/// incidental frame stores. Records, floating values, hidden results and other
+/// conventions retain separate adapters. The caller authenticates the
+/// declaration.
 std::optional<FixedIntegerCallArguments>
 fixedIntegerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
                           llvm::ArrayRef<TypeRef> Parameters);

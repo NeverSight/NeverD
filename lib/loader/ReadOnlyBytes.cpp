@@ -1,42 +1,223 @@
+//===- ReadOnlyBytes.cpp - Immutable image storage queries ---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Validate mapping, permissions and fixups for typed image reads.
+//===----------------------------------------------------------------------===//
+
 #include "neverd/loader/ReadOnlyBytes.h"
 
 #include "ReadOnlyBytesIndex.h"
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
+#include "neverd/loader/ReadOnlyBytesScope.h"
+#include "neverd/object/ELFLayout.h"
 
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/Endian.h"
 
 #include <algorithm>
+#include <bit>
 #include <set>
 
 namespace neverd {
 
+namespace read_only_detail {
+struct VectorFixupIndex {
+  const BinaryImage &Image;
+  std::vector<PE32CodeFixup> Fixups;
+  mutable std::shared_ptr<const PE32CodeFixupIndex> CodeFixups;
+};
+} // namespace read_only_detail
+
+namespace {
+thread_local const read_only_detail::VectorFixupIndex *ActiveVectorFixups =
+    nullptr;
+
+template <typename Visitor>
+bool visitStaticVectorFixups(const BinaryImage &Image, Visitor Visit) {
+  using Fixup = read_only_detail::PE32CodeFixup;
+  using Kind = Fixup::Kind;
+  for (const auto &R : Image.BaseRelocations)
+    if (!Visit(Fixup{
+            Kind::Base, R.Address,
+            uint8_t(R.Type == llvm::COFF::IMAGE_REL_BASED_HIGHLOW ? 4 : 8),
+            R.Type}))
+      return false;
+  for (const auto &R : Image.Relocations)
+    if (!Visit(Fixup{Kind::Forbidden, R.Address, 8}))
+      return false;
+  return true;
+}
+
+template <typename Visitor>
+bool visitRuntimeFixups(const BinaryImage &Image, Visitor Visit) {
+  using Fixup = read_only_detail::PE32CodeFixup;
+  for (const auto &Slot : Image.RuntimeCallablePointerSlots)
+    if (!Visit(Fixup{Fixup::Kind::Forbidden, Slot.SlotVA,
+                     uint8_t(Image.getPointerSize())}))
+      return false;
+  return true;
+}
+
+template <typename Visitor>
+bool visitVectorFixups(
+    const BinaryImage &Image, Visitor Visit,
+    const std::optional<ExceptionAddressRange> &Range = std::nullopt) {
+  if (Range && ActiveVectorFixups && &ActiveVectorFixups->Image == &Image) {
+    // Vector records occupy at most eight bytes. Keep partial overlaps and
+    // duplicate records; the reader still decides whether either is allowed.
+    const va_t First = Range->Begin >= 7 ? Range->Begin - 7 : 0;
+    const auto &Fixups = ActiveVectorFixups->Fixups;
+    auto It = std::lower_bound(
+        Fixups.begin(), Fixups.end(), First,
+        [](const auto &F, va_t Address) { return F.Address < Address; });
+    for (; It != Fixups.end() && It->Address < Range->End; ++It)
+      if (!Visit(*It))
+        return false;
+    return true;
+  }
+  return visitStaticVectorFixups(Image, Visit) &&
+         visitRuntimeFixups(Image, Visit);
+}
+} // namespace
+
+ReadOnlyBytesScope::ReadOnlyBytesScope(const BinaryImage &Image)
+    : Previous(ActiveVectorFixups) {
+  if (Previous && &Previous->Image == &Image)
+    return;
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF || Image.IsRelocatable)
+    return;
+  size_t Count = 0;
+  for (size_t Size : {Image.BaseRelocations.size(), Image.Relocations.size(),
+                      Image.RuntimeCallablePointerSlots.size()}) {
+    if (Size > limits::loader::kMaxReadOnlyVectorFixups - Count)
+      return;
+    Count += Size;
+  }
+  Index = std::make_unique<read_only_detail::VectorFixupIndex>(
+      read_only_detail::VectorFixupIndex{Image, {}, {}});
+  Index->Fixups.reserve(Count);
+  visitVectorFixups(Image, [&](const auto &Fixup) {
+    Index->Fixups.push_back(Fixup);
+    return true;
+  });
+  std::sort(Index->Fixups.begin(), Index->Fixups.end(),
+            [](const auto &A, const auto &B) { return A.Address < B.Address; });
+  ActiveVectorFixups = Index.get();
+}
+
+ReadOnlyBytesScope::~ReadOnlyBytesScope() { ActiveVectorFixups = Previous; }
+
 bool BinaryImage::readOnlyAfterRelocations(va_t Addr, uint64_t Width) const {
   const Segment *Seg = getSegmentFor(Addr);
-  if (!Seg || !Width || Width > Seg->Size - (Addr - Seg->VA))
+  if (!Seg || !Width || Seg->Size > InvalidVA - Seg->VA ||
+      Width > Seg->Size - (Addr - Seg->VA))
     return false;
-  if (!Seg->isWritable() || Seg->ReadOnlyAfterRelocations ||
-      section_names::isReadOnlyAfterRelocSectionName(Seg->Name))
+  // PE sections supply the mapping permissions. A contradictory normalized
+  // segment cannot erase their write permission without a loader guarantee.
+  if (Format == BinaryFormat::COFF && !Seg->ReadOnlyAfterRelocations)
+    if (const Section *Sec = getSectionFor(Addr); Sec && Sec->isWritable())
+      return false;
+  if (!Seg->isWritable() || Seg->ReadOnlyAfterRelocations)
     return true;
-  if (const Section *Sec = getSectionFor(Addr);
-      Sec && Width <= Sec->Size - (Addr - Sec->VA) &&
-      (section_names::isReadOnlyAfterRelocSectionName(Sec->Name) ||
-       section_names::isReadOnlyAfterRelocSectionName(Sec->SegmentName)))
-    return true;
-  if (ELFMetadata)
-    for (const ELFProgramHeader &Header : ELFMetadata->ProgramHeaders)
-      if (Header.Type == llvm::ELF::PT_GNU_RELRO &&
-          Addr >= Header.VirtualAddress &&
-          Addr - Header.VirtualAddress <= Header.MemorySize &&
-          Width <= Header.MemorySize - (Addr - Header.VirtualAddress))
-        return true;
+  // Names describe linker conventions, not runtime protection. In particular,
+  // -z norelro leaves .data.rel.ro writable and a Mach-O __DATA_CONST mapping
+  // without the loader's SG_READ_ONLY guarantee need not become immutable.
+  if (Format != BinaryFormat::ELF || IsRelocatable || !ELFMetadata)
+    return false;
+  // GNU_RELRO is a dynamic-loader action, not a kernel PT_LOAD permission.
+  // An executable without an interpreter may never protect it; a DSO has no
+  // independent process entry. Explicit loader guarantees above remain valid.
+  const bool DynamicImage =
+      (ELFMetadata->Type == llvm::ELF::ET_DYN && !Entry) ||
+      ((ELFMetadata->Type == llvm::ELF::ET_DYN ||
+        ELFMetadata->Type == llvm::ELF::ET_EXEC) &&
+       !ELFMetadata->Interpreter.empty());
+  const uint64_t Page = maximumELFProtectionPageSize(Arch);
+  if (!DynamicImage || !Page)
+    return false;
+  for (const ELFProgramHeader &Header : ELFMetadata->ProgramHeaders) {
+    if (Header.Type != llvm::ELF::PT_GNU_RELRO ||
+        Header.MemorySize > InvalidVA - Header.VirtualAddress)
+      continue;
+    // Relocation protection excludes an incomplete final page. Use the
+    // target's largest possible granule, never this analysis host's page.
+    const va_t End = (Header.VirtualAddress + Header.MemorySize) & ~(Page - 1);
+    if (Addr >= Header.VirtualAddress && Addr < End && Width <= End - Addr)
+      return true;
+  }
   return false;
 }
 
 namespace {
+// Keep the cost model beside the storage readers it bounds. No index is
+// cached across image changes, and an exhausted query grants no partial read.
+bool chargeStorageQuery(const BinaryImage &Image, uint32_t Size,
+                        bool CodePointer, size_t &Work, size_t Limit) {
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF || Image.IsRelocatable)
+    return false;
+  const auto Charge = [&](size_t Amount) {
+    if (Amount > Limit - std::min(Work, Limit)) {
+      Work = Limit;
+      return false;
+    }
+    Work += Amount;
+    return true;
+  };
+  const auto Lookup = [&](size_t Count, uint64_t Window) {
+    // A balanced-tree search visits at most twice the binary height. Unique
+    // integer keys bound the following overlap walk independently of size.
+    return Charge(2 * std::bit_width(Count) + 1) &&
+           Charge(size_t(std::min<uint64_t>(Count, Window)));
+  };
+  const auto Mapping = [&] {
+    // Include the nested getSectionFor/getSegmentFor calls, mapping end,
+    // permission checks, sectionless/execute-only fallbacks, overlap scans
+    // and the final readVA lookup.
+    for (unsigned I = 0; I != 12; ++I)
+      if (!Charge(Image.Sections.size()) || !Charge(Image.Segments.size()))
+        return false;
+    return true;
+  };
+  const auto Fixups = [&](uint32_t Extent) {
+    const uint64_t Window = uint64_t(Extent) + Image.getPointerSize() - 1;
+    for (size_t Count :
+         {Image.CodePtrRelocSlots.size(), Image.DataPtrRelocSlots.size(),
+          Image.DataPtrRelocTargetOwners.size(), Image.RelCodeRelocSlots.size(),
+          Image.RelDataPtrRelocSlots.size(),
+          Image.MachOResolvedChainedPointerSlots.size(),
+          Image.ConflictingImportStorageSlots.size(),
+          Image.ImportPtrSlots.size(), Image.ImportStorageSlots.size(),
+          Image.DyldBindSlots.size(), Image.ObjCSourceReferences.size(),
+          Image.DataAddressRelocOperands.size(),
+          Image.CodeAddressRelocOperands.size()})
+      if (!Lookup(Count, Window))
+        return false;
+    for (size_t Count : {Image.Relocations.size(), Image.BaseRelocations.size(),
+                         Image.RuntimeCallablePointerSlots.size()})
+      if (!Charge(Count) || !Charge(1))
+        return false;
+    return true;
+  };
+  if (!Charge(Size))
+    return false;
+  if (!CodePointer)
+    return Mapping() && Fixups(Size ? Size : 1);
+  // PE32 code-pointer storage checks the exact HIGHLOW multiplicity, source
+  // conflicts, raw executable target and immutable first target byte.
+  return Lookup(Image.CodePtrRelocSlots.size(), 0) &&
+         Lookup(Image.DataPtrRelocTargetOwners.size(), 0) &&
+         Charge(Image.BaseRelocations.size()) && Charge(1) && Mapping() &&
+         Fixups(4) && Mapping() && Mapping() && Fixups(1) && Charge(1);
+}
+
 bool supportedImage(const BinaryImage &Image) {
   return Image.Format == BinaryFormat::MachO && Image.Bits == Bitness::Bits64 &&
          supportsImmutableImageReads(Image);
@@ -50,7 +231,11 @@ bool supportedPEImage(const BinaryImage &Image) {
 bool supportedImmutableCodeImage(const BinaryImage &Image) {
   return supportedImage(Image) || supportedPEImage(Image) ||
          (Image.Format == BinaryFormat::ELF && !Image.IsRelocatable &&
-          Image.Arch == Arch::ARM && Image.Bits == Bitness::Bits32);
+          Image.Arch == Arch::ARM && Image.Bits == Bitness::Bits32) ||
+         // Bytes with no relocation record over them are the same in any link,
+         // so an i386 object answers as well as a linked image does.
+         (Image.Format == BinaryFormat::ELF && Image.Arch == Arch::X86 &&
+          Image.Bits == Bitness::Bits32);
 }
 
 bool overlaps(va_t Address, uint64_t Extent, va_t Base, uint64_t Width) {
@@ -116,8 +301,11 @@ const uint8_t *mappedBytes(const BinaryImage &Image, va_t Address,
         Type == llvm::MachO::S_THREAD_LOCAL_ZEROFILL)
       return nullptr;
   }
+  // An unmapped section, such as an object's string table, has address zero
+  // and occupies none.
   for (const auto &Other : Image.Sections)
-    if (&Other != Section && overlaps(Address, Extent, Other.VA, Other.Size))
+    if (&Other != Section && Other.Flags != SegmentFlags::None &&
+        overlaps(Address, Extent, Other.VA, Other.Size))
       return nullptr;
   for (const auto &Other : Image.Segments)
     if (&Other != Segment && overlaps(Address, Extent, Other.VA, Other.Size))
@@ -177,23 +365,18 @@ bool hasConflictingFixups(const BinaryImage &Image, va_t Address,
       TouchesOperands(Image.DataAddressRelocOperands) ||
       TouchesOperands(Image.CodeAddressRelocOperands))
     return true;
-  for (const auto &Relocation : Image.Relocations)
-    if (overlaps(Address, Extent, Relocation.Address, 8))
-      return true;
-  for (const auto &Relocation : Image.BaseRelocations) {
-    const uint64_t Width =
-        Relocation.Type == llvm::COFF::IMAGE_REL_BASED_HIGHLOW ? 4 : 8;
-    if (overlaps(Address, Extent, Relocation.Address, Width) &&
-        !(ExactPEPointer && Relocation.Address == Address &&
-          Width == PointerWidth &&
-          (Relocation.Type == llvm::COFF::IMAGE_REL_BASED_HIGHLOW ||
-           Relocation.Type == llvm::COFF::IMAGE_REL_BASED_DIR64)))
-      return true;
-  }
-  for (const auto &Slot : Image.RuntimeCallablePointerSlots)
-    if (overlaps(Address, Extent, Slot.SlotVA, PointerWidth))
-      return true;
-  return false;
+  return !visitVectorFixups(
+      Image,
+      [&](const read_only_detail::PE32CodeFixup &Fixup) {
+        if (!overlaps(Address, Extent, Fixup.Address, Fixup.Width))
+          return true;
+        return Fixup.Type == read_only_detail::PE32CodeFixup::Kind::Base &&
+               ExactPEPointer && Fixup.Address == Address &&
+               Fixup.Width == PointerWidth &&
+               (Fixup.BaseType == llvm::COFF::IMAGE_REL_BASED_HIGHLOW ||
+                Fixup.BaseType == llvm::COFF::IMAGE_REL_BASED_DIR64);
+      },
+      ExceptionAddressRange{Address, Address + Extent});
 }
 } // namespace
 
@@ -223,6 +406,14 @@ readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
   if (!Bytes || hasConflictingFixups(Image, Address, Extent, false))
     return std::nullopt;
   return std::vector<uint8_t>(Bytes, Bytes + Size);
+}
+
+std::optional<std::vector<uint8_t>>
+readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size,
+                        size_t &Work, size_t Limit) {
+  if (!chargeStorageQuery(Image, Size, false, Work, Limit))
+    return std::nullopt;
+  return readImmutableImageBytes(Image, Address, Size);
 }
 
 std::optional<std::vector<uint8_t>>
@@ -326,39 +517,52 @@ namespace {
 using PE32CodeFixup = read_only_detail::PE32CodeFixup;
 
 template <typename Visitor>
-bool visitPE32CodeFixups(const BinaryImage &Image, Visitor Visit) {
+bool visitPE32CodeFixups(
+    const BinaryImage &Image, Visitor Visit,
+    const std::optional<ExceptionAddressRange> &Range = std::nullopt) {
   using Kind = PE32CodeFixup::Kind;
-  for (const auto &R : Image.BaseRelocations)
-    if (R.Type &&
-        !Visit(PE32CodeFixup{
-            Kind::Base, R.Address,
-            uint8_t(R.Type == llvm::COFF::IMAGE_REL_BASED_HIGHLOW ? 4 : 8),
-            R.Type}))
-      return false;
-  for (const auto &R : Image.Relocations)
-    if (!Visit(PE32CodeFixup{Kind::Forbidden, R.Address, 8}))
-      return false;
+  const auto Ordered = [&](const auto &Items, uint64_t Width, auto Key,
+                           auto Make) {
+    const va_t First =
+        Range && Range->Begin >= Width - 1 ? Range->Begin - (Width - 1) : 0;
+    auto It = Range ? Items.lower_bound(First) : Items.begin();
+    for (; It != Items.end() && (!Range || Key(*It) < Range->End); ++It)
+      if (!Visit(Make(*It)))
+        return false;
+    return true;
+  };
+  const auto NonPadding = [&](const PE32CodeFixup &Fixup) {
+    return (Fixup.Type == Kind::Base && !Fixup.BaseType) || Visit(Fixup);
+  };
+  // Full indexes retain their original collection order before sorting, so
+  // equal-address conflicts retain the same per-record query charges.
+  if (Range ? !visitVectorFixups(Image, NonPadding, Range)
+            : !visitStaticVectorFixups(Image, NonPadding))
+    return false;
   for (const auto *Fields :
        {&Image.CodeAddressRelocOperands, &Image.DataAddressRelocOperands})
-    for (const auto &[Slot, Field] : *Fields)
-      if (!Visit(PE32CodeFixup{Kind::Operand, Slot, Field.Width, 0, &Field}))
-        return false;
+    if (!Ordered(
+            *Fields, UINT8_MAX, [](const auto &Item) { return Item.first; },
+            [](const auto &Item) {
+              return PE32CodeFixup{Kind::Operand, Item.first, Item.second.Width,
+                                   0, &Item.second};
+            }))
+      return false;
   for (const auto *Slots :
        {&Image.CodePtrRelocSlots, &Image.DataPtrRelocSlots,
         &Image.RelCodeRelocSlots, &Image.RelDataPtrRelocSlots})
-    for (va_t Slot : *Slots)
-      if (!Visit(PE32CodeFixup{Kind::Forbidden, Slot, 4}))
-        return false;
-  for (const auto &Slot : Image.RuntimeCallablePointerSlots)
-    if (!Visit(PE32CodeFixup{Kind::Forbidden, Slot.SlotVA, 4}))
+    if (!Ordered(
+            *Slots, 4, [](va_t Slot) { return Slot; },
+            [](va_t Slot) { return PE32CodeFixup{Kind::Forbidden, Slot, 4}; }))
       return false;
-  return true;
+  return Range || visitRuntimeFixups(Image, Visit);
 }
 
 template <typename FixupQuery>
 std::optional<std::vector<uint8_t>>
 readPE32CodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size,
-                  const std::vector<va_t> &AbsoluteOperands, FixupQuery Query) {
+                  const std::vector<va_t> &AbsoluteOperands, FixupQuery Query,
+                  bool RequireRelocations = false) {
   if (Image.Format != BinaryFormat::COFF || Image.IsRelocatable ||
       Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 || !Size ||
       Size > ::neverd::limits::loader::kMaxImageReadBytes ||
@@ -403,6 +607,8 @@ readPE32CodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size,
   for (va_t Slot : FieldSlots)
     if (!Relocated.count(Slot))
       return std::nullopt;
+  if (RequireRelocations && Relocated != Operands)
+    return std::nullopt;
   return std::vector<uint8_t>(Bytes, Bytes + Size);
 }
 } // namespace
@@ -412,8 +618,72 @@ readImmutablePE32CodeBytes(const BinaryImage &Image, va_t Address,
                            uint32_t Size,
                            const std::vector<va_t> &AbsoluteOperands) {
   return readPE32CodeBytes(
+      Image, Address, Size, AbsoluteOperands, [&](auto Visit) {
+        // The validator has checked this extent. Ordered inventories only
+        // need the overlapping window, including a wide malformed field
+        // beginning before it, just as in the budgeted reader below.
+        return visitPE32CodeFixups(
+            Image, Visit, ExceptionAddressRange{Address, Address + Size});
+      });
+}
+
+namespace {
+std::optional<std::vector<uint8_t>>
+readBudgetedPE32CodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size,
+                          const std::vector<va_t> &AbsoluteOperands,
+                          size_t &Work, size_t Limit, bool RequireRelocations) {
+  // The scalar storage charge already bounds mapping scans, all vector
+  // inventories and the four-byte ordered slot windows used by code queries.
+  if (!chargeStorageQuery(Image, Size, false, Work, Limit))
+    return std::nullopt;
+  const auto Charge = [&](size_t Amount) {
+    if (Amount > Limit - std::min(Work, Limit)) {
+      Work = Limit;
+      return false;
+    }
+    Work += Amount;
+    return true;
+  };
+  // Normalized instruction fields have an explicit uint8_t width, unlike
+  // data-pointer slots. Include malformed wide fields preceding this range.
+  for (size_t Count : {Image.CodeAddressRelocOperands.size(),
+                       Image.DataAddressRelocOperands.size()})
+    if (!Charge(
+            size_t(std::min<uint64_t>(Count, uint64_t(Size) + UINT8_MAX - 1))))
+      return std::nullopt;
+  // Operand validation and the relocated/normalized field sets use balanced
+  // trees. Successful insertions are bounded by the supplied operand count;
+  // one additional conflicting entry can terminate the query.
+  const size_t SetWork =
+      6 * (2 * std::bit_width(AbsoluteOperands.size()) + 1) + 6;
+  if (AbsoluteOperands.size() > (Limit - std::min(Work, Limit)) / SetWork) {
+    Work = Limit;
+    return std::nullopt;
+  }
+  if (!Charge(AbsoluteOperands.size() * SetWork) || !Charge(SetWork))
+    return std::nullopt;
+  return readPE32CodeBytes(
       Image, Address, Size, AbsoluteOperands,
-      [&](auto Visit) { return visitPE32CodeFixups(Image, Visit); });
+      [&](auto Visit) {
+        return visitPE32CodeFixups(
+            Image, Visit, ExceptionAddressRange{Address, Address + Size});
+      },
+      RequireRelocations);
+}
+} // namespace
+
+std::optional<std::vector<uint8_t>> readRelocatedPE32CodeBytes(
+    const BinaryImage &Image, va_t Address, uint32_t Size,
+    const std::vector<va_t> &AbsoluteOperands, size_t &Work, size_t Limit) {
+  return readBudgetedPE32CodeBytes(Image, Address, Size, AbsoluteOperands, Work,
+                                   Limit, true);
+}
+
+std::optional<std::vector<uint8_t>> readImmutablePE32CodeBytes(
+    const BinaryImage &Image, va_t Address, uint32_t Size,
+    const std::vector<va_t> &AbsoluteOperands, size_t &Work, size_t Limit) {
+  return readBudgetedPE32CodeBytes(Image, Address, Size, AbsoluteOperands, Work,
+                                   Limit, false);
 }
 
 bool IndexedPE32CodeBytes::charge(size_t Amount) {
@@ -448,14 +718,26 @@ IndexedPE32CodeBytes::IndexedPE32CodeBytes(const BinaryImage &Image,
   }
   if (!charge(Count * SortWork))
     return;
-  Fixups.reserve(Count);
+  const bool Retain = ActiveVectorFixups &&
+                      &ActiveVectorFixups->Image == &Image &&
+                      Count <= limits::loader::kMaxReadOnlyVectorFixups;
+  if (Retain && ActiveVectorFixups->CodeFixups) {
+    Index = ActiveVectorFixups->CodeFixups;
+    Valid = true;
+    return;
+  }
+  auto Built = std::make_shared<read_only_detail::PE32CodeFixupIndex>();
+  Built->Entries.reserve(Count);
   visitPE32CodeFixups(Image, [&](const PE32CodeFixup &Fixup) {
-    MaximumWidth = std::max(MaximumWidth, Fixup.Width);
-    Fixups.push_back(Fixup);
+    Built->MaximumWidth = std::max(Built->MaximumWidth, Fixup.Width);
+    Built->Entries.push_back(Fixup);
     return true;
   });
-  std::sort(Fixups.begin(), Fixups.end(),
+  std::sort(Built->Entries.begin(), Built->Entries.end(),
             [](const auto &A, const auto &B) { return A.Address < B.Address; });
+  Index = std::move(Built);
+  if (Retain)
+    ActiveVectorFixups->CodeFixups = Index;
   Valid = true;
 }
 
@@ -463,7 +745,7 @@ std::optional<std::vector<uint8_t>>
 IndexedPE32CodeBytes::read(va_t Address, uint32_t Size,
                            const std::vector<va_t> &AbsoluteOperands) {
   size_t LookupWork = 1;
-  for (size_t N = Fixups.size(); N > 1; N = N / 2 + N % 2)
+  for (size_t N = Index ? Index->Entries.size() : 0; N > 1; N = N / 2 + N % 2)
     ++LookupWork;
   if (!Valid ||
       !charge(LookupWork + Size + AbsoluteOperands.size() +
@@ -471,6 +753,8 @@ IndexedPE32CodeBytes::read(va_t Address, uint32_t Size,
     return std::nullopt;
   return readPE32CodeBytes(
       Image, Address, Size, AbsoluteOperands, [&](auto Visit) {
+        const auto &Fixups = Index->Entries;
+        const uint8_t MaximumWidth = Index->MaximumWidth;
         const va_t First =
             Address >= MaximumWidth - 1 ? Address - (MaximumWidth - 1) : 0;
         auto It = std::lower_bound(
@@ -542,8 +826,9 @@ std::optional<va_t> readResolvedPointer(const BinaryImage &Image, va_t Address,
     return std::nullopt;
   return Target;
 }
-std::optional<va_t> readImmutablePEPointer(const BinaryImage &Image,
-                                           va_t Address, bool Code) {
+std::optional<va_t> readImmutablePEPointerStorage(const BinaryImage &Image,
+                                                  va_t Address, bool Code,
+                                                  bool ExecutableSlot = false) {
   if (supportedPEImage(Image)) {
     const unsigned Width = Image.getPointerSize();
     const auto &Slots =
@@ -560,7 +845,8 @@ std::optional<va_t> readImmutablePEPointer(const BinaryImage &Image,
       }
     if (ExactRelocations != 1)
       return std::nullopt;
-    const auto *Bytes = mappedBytes(Image, Address, Width, true);
+    const auto *Bytes =
+        mappedBytes(Image, Address, Width, true, ExecutableSlot);
     const auto Owner = Image.DataPtrRelocTargetOwners.find(Address);
     if (!Bytes || (!Code && Owner == Image.DataPtrRelocTargetOwners.end()) ||
         hasConflictingFixups(Image, Address, Width, !Code, false, false, Code,
@@ -569,8 +855,7 @@ std::optional<va_t> readImmutablePEPointer(const BinaryImage &Image,
     const uint64_t Target = Width == 8 ? llvm::support::endian::read64le(Bytes)
                                        : llvm::support::endian::read32le(Bytes);
     if (!mappedBytes(Image, Target, 1, false, Code) ||
-        (!Code && Image.getSectionFor(Target)->VA != Owner->second) ||
-        (Code && !immutableLocalCodeTarget(Image, Target)))
+        (!Code && Image.getSectionFor(Target)->VA != Owner->second))
       return std::nullopt;
     return Target;
   }
@@ -578,17 +863,63 @@ std::optional<va_t> readImmutablePEPointer(const BinaryImage &Image,
 }
 } // namespace
 
+std::optional<va_t>
+readImmutablePE32CodePointerStorage(const BinaryImage &Image, va_t Address) {
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF || Image.Base > UINT32_MAX ||
+      Address > UINT32_MAX - 3)
+    return std::nullopt;
+  const auto Target = readImmutablePEPointerStorage(Image, Address, true);
+  if (!Target || !readImmutableCodeBytes(Image, *Target, 1))
+    return std::nullopt;
+  return Target;
+}
+
+std::optional<va_t>
+readImmutablePE32CodePointerStorage(const BinaryImage &Image, va_t Address,
+                                    size_t &Work, size_t Limit) {
+  if (!chargeStorageQuery(Image, 4, true, Work, Limit))
+    return std::nullopt;
+  return readImmutablePE32CodePointerStorage(Image, Address);
+}
+
+std::optional<va_t> readImmutablePE32JumpTableTarget(const BinaryImage &Image,
+                                                     va_t Address, size_t &Work,
+                                                     size_t Limit) {
+  if (Image.Base > UINT32_MAX || Address > UINT32_MAX - 3 ||
+      !chargeStorageQuery(Image, 4, true, Work, Limit))
+    return std::nullopt;
+  for (unsigned I = 0; I != 2; ++I)
+    for (size_t Count : {Image.Sections.size(), Image.Segments.size()}) {
+      if (Count > Limit - std::min(Work, Limit)) {
+        Work = Limit;
+        return std::nullopt;
+      }
+      Work += Count;
+    }
+  // Select the storage role without relaxing either reader's mapping/fixup
+  // policy; the additional owner lookup is prepaid above.
+  const auto Target = readImmutablePEPointerStorage(
+      Image, Address, true, Image.isCodeAddress(Address));
+  return Target && readImmutableCodeBytes(Image, *Target, 1) ? Target
+                                                             : std::nullopt;
+}
+
 std::optional<va_t> readImmutableImagePointer(const BinaryImage &Image,
                                               va_t Address) {
   if (supportedPEImage(Image))
-    return readImmutablePEPointer(Image, Address, false);
+    return readImmutablePEPointerStorage(Image, Address, false);
   return readResolvedPointer(Image, Address, true);
 }
 
 std::optional<va_t> readImmutableImageCodePointer(const BinaryImage &Image,
                                                   va_t Address) {
-  if (supportedPEImage(Image))
-    return readImmutablePEPointer(Image, Address, true);
+  if (supportedPEImage(Image)) {
+    const auto Target = readImmutablePEPointerStorage(Image, Address, true);
+    if (!Target || !immutableLocalCodeTarget(Image, *Target))
+      return std::nullopt;
+    return Target;
+  }
   if (!supportedImage(Image) || Address % 8 || !Image.MachOHasChainedFixups ||
       !Image.CodePtrRelocSlots.count(Address) ||
       !Image.MachOResolvedChainedPointerSlots.count(Address))

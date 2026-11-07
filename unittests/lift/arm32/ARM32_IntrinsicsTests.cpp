@@ -1,3 +1,4 @@
+#include "../../HostCompiler.h"
 #include "NeverDLiftFixture.h"
 
 class ARM32_Intrinsics : public NeverDLiftTest {
@@ -443,6 +444,8 @@ int subset(int a) {
                                "-mcpu=cortex-a15", "-mfloat-abi=softfp",
                                "-fsyntax-only", "-Werror=shift-count-overflow",
                                tmpFile("decompiled_high.c").string()});
+  if (Checked.exitCode != 0 && neverd::test::lacksCrossHeaders(Checked.err))
+    GTEST_SKIP() << "no headers for ARM Linux: " << Checked.err;
   EXPECT_EQ(Checked.exitCode, 0) << Checked.err << "\n"
                                  << readDecompiledFile("decompiled_high.c");
 }

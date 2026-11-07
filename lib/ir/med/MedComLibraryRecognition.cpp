@@ -23,10 +23,11 @@ using namespace neverd::sigs;
 namespace {
 using Key = std::tuple<int, int, int>;
 Key key(const MedVar &V) { return {V.Kind, V.Id, V.SSAVer}; }
-bool same(const MedVar &A, const MedVar &B) {
-  return A == B && A.Size == B.Size;
-}
 bool zero(const MedVar &V) { return V.isConst() && V.Size == 8 && !V.ConstVal; }
+bool same(const MedVar &A, const MedVar &B) {
+  // A null test's zero is one number, whatever provenance folding gave it.
+  return (A == B && A.Size == B.Size) || (zero(A) && zero(B));
+}
 bool plain(const MedOp &O) {
   return O.MemoryOrdering == NdMemoryOrdering::None &&
          O.MemoryAddressSpace == NdMemoryAddressSpace::Default;

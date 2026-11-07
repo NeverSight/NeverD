@@ -111,11 +111,19 @@ proveSEHEstablisherFrame(const LowFunc &Low, const MedFunc &Med, va_t Handler,
         std::string("Windows SEH establisher frame: ") + Why);
   };
   size_t WorkRemaining = limits::kMaxSEHEstablisherFrameWork;
+  // The local unwinds converted MedIR turned into jumps enter their targets
+  // from their calls.
+  std::vector<LowSEHLocalUnwindExitSource> Exits;
+  for (const MedSEHLocalUnwindExit &Exit : Med.SEHLocalUnwindExits)
+    if (Exit.OwnsTarget)
+      Exits.push_back(
+          {Exit.CallAddr, Exit.CallSeq, Exit.Target, Exit.TargetFrame});
   auto Proof = proveLowSEHEstablisherFrame(
       Low, Handler, TRI, OrdinaryEntry, WorkRemaining, LocalUnwindDigest,
       CxxContinuation,
       SourceProjection ? LowSEHFrameUse::SourceProjection
-                       : LowSEHFrameUse::InvocationIdentity);
+                       : LowSEHFrameUse::InvocationIdentity,
+      Exits);
   if (!Proof)
     Fail(llvm::toString(Proof.takeError()));
   auto Charge = [&](size_t Amount = 1) {

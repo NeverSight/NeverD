@@ -31,17 +31,21 @@ inline bool intrinsicNeverReturns(Intrinsic Id,
   case Intrinsic::Hlt_A64:
   case Intrinsic::Udf_A64:
   case Intrinsic::X86Skinit:
+  case Intrinsic::X86Sysenter:
+  case Intrinsic::X86SmmReturnContext:
+  case Intrinsic::X86SgxTransferAtContext:
     return true;
   case Intrinsic::IntN:
     return Operand && isX86NoReturnInterrupt(*Operand);
-  // x86 architectural returns (far, interrupt and syscall returns) transfer
-  // control to a named frame or register and never resume in the lifted
-  // function.  This grants no source ABI or memory contract; it only records
-  // that control leaves here.
+  // x86 architectural returns (far, interrupt and syscall returns) and the
+  // AArch64 exception return transfer control to a named frame or register
+  // and never resume in the lifted function.  This grants no source ABI or
+  // memory contract; it only records that control leaves here.
   case Intrinsic::Retf:
   case Intrinsic::Iret:
   case Intrinsic::Sysretq:
   case Intrinsic::Sysexitq:
+  case Intrinsic::Eret:
     return true;
   default:
     return false;

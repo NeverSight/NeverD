@@ -14,22 +14,47 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/object/PELayout.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace neverd::coff_loader {
 namespace {
 constexpr uint64_t PageSize = 4096;
+/// A PE image's preferred base is a multiple of 64 KiB.
+constexpr uint64_t ImageBaseAlignment = 65536;
 constexpr char HeaderName[] = "<PE headers>";
+
+PEHeaderPtrs locateHeaders(llvm::ArrayRef<uint8_t> Bytes) {
+  // locatePEHeaders is read-only; its mutable pointer is also used by writers.
+  return Bytes.size() >= 2 && Bytes[0] == 'M' && Bytes[1] == 'Z'
+             ? locatePEHeaders(const_cast<uint8_t *>(Bytes.data()),
+                               Bytes.size())
+             : PEHeaderPtrs{};
+}
 } // namespace
+
+uint32_t getPEHeaderBytes(llvm::ArrayRef<uint8_t> Bytes) {
+  const auto PE = locateHeaders(Bytes);
+  if (!PE.valid() || !PE.SectionTable)
+    return 0;
+  const uint64_t Base = getPEImageBase(PE);
+  uint64_t Size =
+      std::min<uint64_t>(getPESizeOfHeaders(PE), getPESizeOfImage(PE));
+  if (!Base || Base % ImageBaseAlignment || Size > InvalidVA - Base ||
+      (!PE.Is64 && Base + Size > (uint64_t{1} << 32)))
+    return 0;
+  // A section's mapping owns every address it covers.
+  forEachPESection(PE, [&](const PESectionFields &Section, uint16_t) {
+    if (getPESectionContentSize(Section.VirtualSize, Section.SizeOfRawData))
+      Size = std::min<uint64_t>(Size, Section.VirtualAddress);
+  });
+  return static_cast<uint32_t>(Size);
+}
 
 llvm::Expected<PEHeaderMapping>
 getPEHeaderMapping(llvm::ArrayRef<uint8_t> Bytes,
                    PEHeaderInitializationWork *Work) {
-  // locatePEHeaders is read-only; its mutable pointer is also used by writers.
-  const auto PE =
-      Bytes.size() >= 2 && Bytes[0] == 'M' && Bytes[1] == 'Z'
-          ? locatePEHeaders(const_cast<uint8_t *>(Bytes.data()), Bytes.size())
-          : PEHeaderPtrs{};
+  const auto PE = locateHeaders(Bytes);
   if (!PE.valid() || !PE.SectionTable)
     return llvm::createStringError("missing complete PE header inventory");
   const uint64_t Base = getPEImageBase(PE);
@@ -47,7 +72,8 @@ getPEHeaderMapping(llvm::ArrayRef<uint8_t> Bytes,
   if (!llvm::isPowerOf2_64(FileAlignment) || FileAlignment < 512 ||
       FileAlignment > 65536 || !llvm::isPowerOf2_64(SectionAlignment) ||
       SectionAlignment < PageSize || SectionAlignment < FileAlignment ||
-      Base % 65536 || Size % FileAlignment || ImageSize % SectionAlignment)
+      Base % ImageBaseAlignment || Size % FileAlignment ||
+      ImageSize % SectionAlignment)
     return llvm::createStringError(
         "PE headers require an aligned, separate page mapping");
 
@@ -111,25 +137,66 @@ void appendPEHeaderMapping(BinaryImage &Image, const PEHeaderMapping &Mapping,
   Image.DataPtrRelocTargetOwners.emplace(Slot, Mapping.Base);
 }
 
-bool matchesPEHeaderMapping(const BinaryImage &Image, size_t Index,
-                            const PEHeaderMapping &Mapping,
-                            llvm::ArrayRef<uint8_t> Bytes) {
+namespace {
+bool matchesHeaderRegions(const BinaryImage &Image, size_t Index,
+                          const PEHeaderMapping &Mapping,
+                          llvm::ArrayRef<uint8_t> Bytes,
+                          bool OmittedSectionData = false) {
   if (Index >= Image.Segments.size() || Index >= Image.Sections.size() ||
       Mapping.Size > Bytes.size())
     return false;
-  const auto Matches = [&](const auto &Region) {
+  const auto Matches = [&](const auto &Region, bool OmittedData = false) {
     return Region.Name == HeaderName && Region.VA == Mapping.Base &&
            Region.Size == Mapping.Size && Region.FileOff == 0 &&
            Region.FileSz == Mapping.Size &&
            Region.Flags == SegmentFlags::Readable &&
-           Region.Data.size() == Mapping.Size &&
-           std::memcmp(Region.Data.data(), Bytes.data(), Mapping.Size) == 0;
+           ((OmittedData && Region.Data.empty()) ||
+            (Region.Data.size() == Mapping.Size &&
+             std::memcmp(Region.Data.data(), Bytes.data(), Mapping.Size) == 0));
   };
   const auto &Segment = Image.Segments[Index];
   const auto &Section = Image.Sections[Index];
-  return Matches(Segment) && Matches(Section) &&
+  return Matches(Segment) && Matches(Section, OmittedSectionData) &&
          !Segment.ReadOnlyAfterRelocations && Section.IsImageHeader &&
          Section.Type == 0 && Section.SegmentName.empty() &&
          Section.Alignment == Mapping.FileAlignment;
+}
+} // namespace
+
+bool matchesPEHeaderMapping(const BinaryImage &Image, size_t Index,
+                            const PEHeaderMapping &Mapping,
+                            llvm::ArrayRef<uint8_t> Bytes) {
+  return matchesHeaderRegions(Image, Index, Mapping, Bytes);
+}
+
+bool hasCheckedPEHeaderMapping(const BinaryImage &Image,
+                               size_t NativeSections) {
+  if (Image.Format != BinaryFormat::COFF || Image.Sections.empty() ||
+      Image.Sections.size() != Image.Segments.size() ||
+      NativeSections != Image.Sections.size() - 1)
+    return false;
+  const auto Bytes = Image.Raw.empty()
+                         ? llvm::ArrayRef(Image.Segments.back().Data)
+                         : llvm::ArrayRef(Image.Raw);
+  const auto PE =
+      Bytes.size() >= 2 && Bytes[0] == 'M' && Bytes[1] == 'Z'
+          ? locatePEHeaders(const_cast<uint8_t *>(Bytes.data()), Bytes.size())
+          : PEHeaderPtrs{};
+  if (!PE.valid() || !PE.SectionTable || PE.NumSections != NativeSections ||
+      getPEImageBase(PE) != Image.Base)
+    return false;
+  const uint64_t Size = getPESizeOfHeaders(PE);
+  const uint64_t TableEnd =
+      PE.SectionTable - Bytes.data() +
+      uint64_t(PE.NumSections) * sizeof(llvm::object::coff_section);
+  if (!Size || Size < TableEnd || Size > Bytes.size())
+    return false;
+  // This query binds the normalized region to the original header inventory.
+  // Header admission and its loader-write footprint remain getPEHeaderMapping's
+  // responsibility; a restricted image deliberately omits the rest of Raw.
+  const PEHeaderMapping Mapping{Image.Base, uint32_t(Size),
+                                getPEFileAlignment(PE), 0};
+  return matchesHeaderRegions(Image, NativeSections, Mapping, Bytes,
+                              !Image.LoadOnlyFunctionEntries.empty());
 }
 } // namespace neverd::coff_loader

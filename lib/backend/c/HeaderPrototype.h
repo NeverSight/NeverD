@@ -19,6 +19,9 @@
 
 #include "llvm/ADT/StringRef.h"
 
+#include <cstddef>
+#include <set>
+
 namespace neverd::c_library {
 /// Source qualifiers belong to the selected header or local declaration,
 /// not to the machine carrier type. Reuse that spelling after checking the
@@ -62,6 +65,17 @@ inline llvm::StringRef portableScalarDeclaration(const FunctionSym &Function,
                                   Enumerations)
              ? llvm::StringRef(Function.PortablePrototypeDeclaration)
              : llvm::StringRef();
+}
+
+/// A call conversion uses the same source spelling as its admitted prototype.
+/// The caller has already checked the operand's scalar placement and width.
+inline llvm::StringRef portableScalarParameterType(const FunctionSym &Function,
+                                                   std::size_t Index) {
+  if (Function.PortableParameterTypes.size() != Function.Params.size() ||
+      Index >= Function.Params.size() ||
+      portableScalarDeclaration(Function, Function.Name).empty())
+    return {};
+  return Function.PortableParameterTypes[Index];
 }
 
 } // namespace neverd::c_library

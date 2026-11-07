@@ -34,6 +34,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -41,11 +42,13 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace neverd {
 
 struct BinaryImage;
+class MedEntryStackOffsets;
 
 /// Whether an operation prevents recovering an earlier ABI value: where it
 /// ends a later call's argument setup (endsCallArgumentSetup), as call
@@ -88,28 +91,49 @@ struct AbiSpillContext {
 class MedBlockIdIndex {
 public:
   explicit MedBlockIdIndex(const MedFunc &Func) {
+    // Block ids are usually 0..n-1: index those by id directly, and any
+    // others in a map.  Walks look a block up at every step.
+    const size_t Dense = 2 * Func.Blocks.size() + 1;
     for (const MedBlock &Block : Func.Blocks) {
-      if (!First.emplace(Block.Id, &Block).second)
+      const MedBlock *&FirstSlot =
+          slot(FirstById, FirstSparse, Block.Id, Dense);
+      if (FirstSlot)
         Unique = false;
-      Last[Block.Id] = &Block;
+      else
+        FirstSlot = &Block;
+      slot(LastById, LastSparse, Block.Id, Dense) = &Block;
     }
   }
   /// Whether no two blocks share an id.
   bool unique() const { return Unique; }
   /// The first block with \p Id, or null.
   const MedBlock *first(int Id) const {
-    const auto It = First.find(Id);
-    return It == First.end() ? nullptr : It->second;
+    return find(FirstById, FirstSparse, Id);
   }
   /// The last block with \p Id, or null.
-  const MedBlock *last(int Id) const {
-    const auto It = Last.find(Id);
-    return It == Last.end() ? nullptr : It->second;
-  }
+  const MedBlock *last(int Id) const { return find(LastById, LastSparse, Id); }
 
 private:
-  std::map<int, const MedBlock *> First;
-  std::map<int, const MedBlock *> Last;
+  static const MedBlock *&slot(std::vector<const MedBlock *> &ById,
+                               std::map<int, const MedBlock *> &Sparse, int Id,
+                               size_t Dense) {
+    if (Id >= 0 && static_cast<size_t>(Id) < Dense) {
+      if (static_cast<size_t>(Id) >= ById.size())
+        ById.resize(static_cast<size_t>(Id) + 1, nullptr);
+      return ById[static_cast<size_t>(Id)];
+    }
+    return Sparse[Id];
+  }
+  static const MedBlock *find(const std::vector<const MedBlock *> &ById,
+                              const std::map<int, const MedBlock *> &Sparse,
+                              int Id) {
+    if (Id >= 0 && static_cast<size_t>(Id) < ById.size())
+      return ById[static_cast<size_t>(Id)];
+    const auto It = Sparse.find(Id);
+    return It == Sparse.end() ? nullptr : It->second;
+  }
+  std::vector<const MedBlock *> FirstById, LastById;
+  std::map<int, const MedBlock *> FirstSparse, LastSparse;
   bool Unique = true;
 };
 
@@ -135,28 +159,31 @@ struct AbiCallContext {
   const MedBlockIdIndex *Blocks = nullptr;
 };
 
-/// The incoming value of a scratch register that carries no argument is
-/// undefined where the convention says so: storing it, as an alignment
-/// `push rax` does, passes nothing (HighIR's CallArgCollection applies the same
-/// rule).
-inline bool isUndefinedIncomingScratch(const TargetRegInfo &TRI, Arch TheArch,
-                                       const CallArgumentConvention *Convention,
-                                       llvm::ArrayRef<uint64_t> ArgRegs,
-                                       const MedVar &V) {
-  if (!Convention || !Convention->UndefinedIncomingScratchRegisters ||
-      V.Kind != MedVar::Reg || V.SSAVer != 0 || TRI.isStackPointer(V.RegOff) ||
-      TRI.isCalleeSaveReg(V.RegOff) || TRI.isLinkRegister(V.RegOff))
-    return false;
-  const std::optional<unsigned> Family = gprFamilyOf(TheArch, V.RegOff);
-  return Family && llvm::none_of(ArgRegs, [&](uint64_t Reg) {
-           return gprFamilyOf(TheArch, Reg) == Family;
-         });
-}
+/// An original scalar or an index into CallSetupStackJoins::Nodes. Plans use
+/// no SSA identity until a required argument actually consumes them.
+using CallSetupStackValue = std::variant<MedVar, size_t>;
+struct CallSetupStackJoin {
+  int BlockId;
+  uint16_t Bytes;
+  std::vector<std::pair<int, CallSetupStackValue>> Args;
+};
+struct CallSetupStackJoins {
+  std::vector<CallSetupStackJoin> Nodes;
+  std::map<int64_t, size_t> Slots;
+};
 
 /// Outgoing scalar stores that agree along every predecessor path
 /// to a call. Unknown writes, calls, independent entries and cycles stop the
 /// proof. Offsets are relative to the call's SP, using its exact SSA basis.
-std::map<int64_t, MedVar> callSetupStackStores(const AbiCallContext &C);
+/// When requested, Joins keeps complete same-width definitions through nested
+/// joins. Nodes refer only to earlier nodes, and Slots names the final roots.
+/// The caller materializes only the nodes a required argument reaches.
+/// SharedWork, when supplied by an enclosing proof, also charges every visited
+/// operation and edge to that proof. The per-call limit still applies.
+std::map<int64_t, MedVar>
+callSetupStackStores(const AbiCallContext &C,
+                     CallSetupStackJoins *Joins = nullptr,
+                     size_t *SharedWork = nullptr);
 
 /// Every reaching path leaves this incoming argument register untouched.
 bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex);
@@ -274,11 +301,13 @@ private:
 /// Offset of \p V relative to the function-entry stack pointer, following the
 /// SP definition chain through constant add/sub decrements and width casts.
 /// nullopt when \p V does not derive from the SP. \p Defs, when given, must
-/// index \p Func.
+/// index \p Func. \p EntryOffsets, when given, must index the same unchanged
+/// function, target and format for the complete loop-proof fallback.
 std::optional<int64_t>
 stackPtrDelta(const MedFunc &Func, const TargetRegInfo &TRI, const MedVar &V,
               int Depth = 0, MedDefSiteIndex *Defs = nullptr,
-              BinaryFormat Format = BinaryFormat::Unknown);
+              BinaryFormat Format = BinaryFormat::Unknown,
+              MedEntryStackOffsets *EntryOffsets = nullptr);
 
 /// Whether \p V is, or derives from (through copies, width casts and a constant
 /// add/sub), a frame register -- the stack OR frame pointer.

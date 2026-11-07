@@ -1,0 +1,44 @@
+name: NPH process plugins
+
+on:
+  pull_request:
+    paths:
+      - 'include/neverd/plugin/**'
+      - 'include/neverd/tools/**'
+      - 'lib/plugin/**'
+      - 'lib/tools/**'
+      - 'tools/neverd-plugin-host/**'
+      - 'pluginsdk/gui/**'
+      - 'pluginsdk/common/**'
+      - 'unittests/plugin/**'
+      # Limits compiled into the standalone host through sdk/Limits.h and the
+      # worker client.
+      - 'include/neverd/*/Limits.h'
+      - 'tools/common/transport/ResourceLimits.h'
+      - 'cmake/NeverDJson.cmake'
+      - '.github/workflows/plugin-host.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  process-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Configure standalone headless host
+        run: cmake -S tools/neverd-plugin-host -B build-nph -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Build
+        run: python scripts/build.py build-nph --config Release --parallel 3
+      - name: Test
+        run: ctest --test-dir build-nph --build-config Release --output-on-failure --parallel 3

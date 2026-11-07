@@ -2,6 +2,8 @@
 
 #include "../Config.h"
 #include "../ResourceLimits.h"
+#include "AnalysisPlugins.h"
+#include "AnalysisProgress.h"
 #include "ChooserView.h"
 #include "CodeView.h"
 #include "ComparisonDialog.h"
@@ -17,11 +19,13 @@
 #include "GnomeWindowEdges.h"
 #include "GraphView.h"
 #include "HexView.h"
+#include "HighlightLocks.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
 #include "JumpDialog.h"
 #include "Language.h"
 #include "LineageDialog.h"
+#include "LinkDispatch.h"
 #include "ListingView.h"
 #include "LoadFileDialog.h"
 #include "LocalTypesView.h"
@@ -32,6 +36,7 @@
 #include "OutputWindow.h"
 #include "PathfinderView.h"
 #include "PdbPromptDialog.h"
+#include "PluginManagerDialog.h"
 #include "ProjectDatabase.h"
 #include "QuickStartDialog.h"
 #include "Resolve.h"
@@ -46,6 +51,7 @@
 #include "TypeLibrariesView.h"
 #include "TypePickerDialog.h"
 #include "UnwindInfoDialog.h"
+#include "WindowActivation.h"
 #include "WindowFrame.h"
 #include "X87CapabilitiesDialog.h"
 #include "mcp/GuiSessionBroker.h"
@@ -91,7 +97,10 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPixmap>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QScopeGuard>
@@ -108,6 +117,7 @@
 #include <QTableWidget>
 #include <QTextStream>
 #include <QToolBar>
+#include <QToolButton>
 #include <QTreeView>
 #include <QTreeWidget>
 #include <QUrl>
@@ -125,6 +135,16 @@
 namespace neverd::gui {
 namespace {
 using KDDockWidgets::InitialOption;
+
+/// Lock highlight's command for color \p slot.
+ActionId lockColorAction(int slot) {
+  static_assert(static_cast<int>(ActionId::SearchLockHighlight8) -
+                        static_cast<int>(ActionId::SearchLockHighlight1) + 1 ==
+                    HighlightLocks::Colors,
+                "Actions.def holds one Lock highlight command per color");
+  return static_cast<ActionId>(
+      static_cast<int>(ActionId::SearchLockHighlight1) + slot);
+}
 
 constexpr char LayoutFileName[] = "desktop.json";
 // Application settings own main-window geometry. Automatic pane restoration
@@ -296,6 +316,48 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
   qApp->installEventFilter(this);
   buildMenusAndToolbars();
   buildDocks();
+  plugins_ = new AnalysisPlugins(session_, actions_);
+  plugins_->setSelectionProvider([this] {
+    QJsonObject selection;
+    auto address = currentAddress();
+    auto function = currentFunction();
+    if (auto *code = focusedCodeView()) {
+      function = code->text()->function();
+      address = code->text()->currentAddress();
+      if (!address)
+        address = function;
+    } else if (auto *chooser = focusedChooser()) {
+      address = chooser->currentAddress();
+      function = chooser->model().kind() == ChooserKind::Functions
+                     ? address
+                     : std::nullopt;
+    }
+    if (address)
+      selection.insert("address", hexAddress(*address));
+    if (function)
+      selection.insert("function_address", hexAddress(*function));
+    QString text;
+    if (auto *chooser = focusedChooser())
+      text = chooser->selectedText();
+    else if (auto *code = focusedCodeView())
+      text = code->text()->selectedText();
+    else
+      text = disassembly_->selectedText();
+    selection.insert(
+        "selection_text",
+        text.left(::neverd::limits::gui::plugin::kMaxSelectionCharacters));
+    return selection;
+  });
+  auto *pluginDock =
+      makeDock(QStringLiteral("analysisPlugins"), QT_TR_NOOP("Plugin tasks"),
+               QStringLiteral("extensions"), plugins_);
+  menuBar()->insertMenu(actions_.menu(QStringLiteral("Help"))->menuAction(),
+                        plugins_->menu());
+  connect(plugins_, &AnalysisPlugins::showRequested, this,
+          [this, pluginDock] { openDock(pluginDock, false); });
+  connect(plugins_, &AnalysisPlugins::navigateRequested, this,
+          &MainWindow::navigate);
+  connect(plugins_, &AnalysisPlugins::message, output_, &OutputWindow::append);
   buildStatusBar();
   connectSession();
   microsoftSymbols_ = new MicrosoftSymbols(session_, this);
@@ -304,6 +366,11 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
       auto [path, options] = *std::exchange(debugPromptPending_, std::nullopt);
       openAskingForDebugInfo(path, options);
     }
+    if (loaderPromptPending_ && session_.connected())
+      chooseLoader(*std::exchange(loaderPromptPending_, std::nullopt));
+    if (asksBeforeShowing_ && !session_.connected() && !session_.starting() &&
+        !debugPromptPending_ && !loaderPromptPending_)
+      showWorkbench();
   });
   // A worker that cannot start leaves no question to ask; the workbench
   // shows the error instead of staying hidden.
@@ -314,6 +381,11 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
               auto [path, options] =
                   *std::exchange(debugPromptPending_, std::nullopt);
               openNow(path, options);
+            }
+            if (level >= ErrorMessageLevel && loaderPromptPending_ &&
+                !session_.connected()) {
+              closesWithoutFile_ = false;
+              openNow(*std::exchange(loaderPromptPending_, std::nullopt), {});
             }
           });
   connectActions();
@@ -326,12 +398,20 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
           [this] { resetFocusSequence(); });
   // Other programs find this window and open links in it, as in IDA 9.4.
   instances_.setInfo([this] { return instanceInfo(); });
+  const auto comeToFront = [this] {
+    if (isMinimized())
+      setWindowState(windowState() & ~Qt::WindowMinimized);
+    raise();
+    activateWindow();
+  };
+  instances_.setRaiseHandler([comeToFront](const QString &token) {
+    useActivationToken(token);
+    comeToFront();
+  });
   instances_.setLinkHandler(
-      [this](const DeepLink &link, std::function<void(const QString &)> done) {
-        if (isMinimized())
-          setWindowState(windowState() & ~Qt::WindowMinimized);
-        raise();
-        activateWindow();
+      [this, comeToFront](const DeepLink &link,
+                          std::function<void(const QString &)> done) {
+        comeToFront();
         openLink(link, std::move(done));
       });
   if (!instances_.start() &&
@@ -472,7 +552,7 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
         QTimer::singleShot(0, this, [this, path, start] {
           if (start)
             start->startNew(path);
-          else
+          else if (!openElsewhere(path, true))
             chooseLoader(path);
         });
       }
@@ -515,6 +595,12 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
 }
 
 MainWindow::~MainWindow() {
+  plugins_->jobs().stopAll();
+  // The session's plugin services read this window's views for the plugin
+  // context and outlive them. View teardown releases queries, whose session
+  // notifications refresh that context: it must not reach a view being
+  // destroyed.
+  plugins_->setSelectionProvider({});
   qApp->removeEventFilter(this);
   // The startup greeting has no widget parent: it is the application's only
   // visible window until a start is chosen.
@@ -570,6 +656,8 @@ void MainWindow::buildMenusAndToolbars() {
     fillPlaceholder(menu, name);
   });
   const auto toolbars = actions_.buildToolbars(this);
+  for (auto *toolbar : toolbars)
+    addHistoryLists(*toolbar);
   // The navigation band spans its own row under the toolbars.
   addToolBarBreak(Qt::TopToolBarArea);
   auto *bandBar = new QToolBar(tr("Navigation band"), this);
@@ -619,8 +707,10 @@ void MainWindow::fillPlaceholder(QMenu *menu, const QString &name) {
         auto *action =
             new QAction(QStringLiteral("&%1 %2").arg(index++).arg(file), menu);
         action->setProperty("recent", true);
-        connect(action, &QAction::triggered, this,
-                [this, file] { openFile(file); });
+        connect(action, &QAction::triggered, this, [this, file] {
+          if (!openElsewhere(file, false))
+            openFile(file);
+        });
         menu->insertAction(before, action);
       }
     });
@@ -1150,15 +1240,22 @@ void MainWindow::buildStatusBar() {
   auto *bar = statusBar();
   // The window manager resizes the window from its edges.
   bar->setSizeGripEnabled(false);
-  analysisLabel_ = new QLabel(bar);
+  progress_ = new AnalysisProgress(this);
+  analysisIndicator_ = new AnalysisIndicator(*progress_, bar);
   directionLabel_ = new QLabel(bar);
   diskLabel_ = new QLabel(bar);
   fileLabel_ = new QLabel(bar);
-  analysisLabel_->setToolTip(
+  analysisIndicator_->setIdleToolTip(
       tr("Background analysis: references and labels are indexed while you "
          "browse"));
-  bar->addWidget(analysisLabel_);
+  bar->addWidget(analysisIndicator_);
   applyIndicator();
+  // Instead of a modal wait, the empty workbench shows the open over its
+  // main view, and the output keeps when the initial analysis finished.
+  loadCard_ = new LoadProgressCard(*progress_, *this);
+  loadCard_->setAnchor(primaryDisassembly_);
+  connect(progress_, &AnalysisProgress::finished, output_,
+          [this](const QString &text) { output_->append(text, 0); });
   bar->addWidget(directionLabel_);
   bar->addWidget(diskLabel_);
   bar->addPermanentWidget(fileLabel_);
@@ -1201,6 +1298,13 @@ void MainWindow::connectSession() {
               output_->run(command);
           });
   });
+  // What waited for a file that did not open is not for the next one. A link
+  // waiting with a program open waits for that program's addresses.
+  connect(&session_, &Session::openFailed, this, [this] {
+    pendingCommands_.clear();
+    if (!session_.loaded())
+      pendingLink_.reset();
+  });
   session_.setStateProvider([this] { return projectState(); });
   connect(&session_, &Session::unloaded, this, [this] {
     pseudocodeAfterJump_.reset();
@@ -1220,6 +1324,8 @@ void MainWindow::connectSession() {
   });
   connect(&session_, &Session::backgroundChanged, this,
           &MainWindow::updateStatusBar);
+  connect(&session_, &Session::loadProgress, progress_,
+          &AnalysisProgress::loadProgress);
   connect(&session_, &Session::databaseSaved, this, &MainWindow::updateTitle);
   connect(&session_, &Session::historyChanged, this,
           &MainWindow::updateActions);
@@ -1240,6 +1346,17 @@ void MainWindow::connectSession() {
                 : choice == QMessageBox::Discard ? QStringLiteral("discard")
                                                  : QStringLiteral("cancel"));
             Q_UNUSED(action);
+          });
+  connect(&session_, &Session::databaseConflict, this,
+          [this](const QString &path) {
+            const auto choice = QMessageBox::warning(
+                commandWindow(), tr("Database changed"),
+                tr("%1 changed after this workbench opened it, perhaps in "
+                   "another NeverD. Replace what it holds now with this "
+                   "workbench's project?")
+                    .arg(QFileInfo(path).fileName()),
+                QMessageBox::Save | QMessageBox::Cancel, QMessageBox::Cancel);
+            session_.resolveDatabaseConflict(path, choice == QMessageBox::Save);
           });
   // Bookmarks a pull or another tool changed show as the file has them.
   connect(&session_, &Session::projectFileChanged, this,
@@ -1430,6 +1547,18 @@ void MainWindow::copyLink() {
 void MainWindow::reportLinkError(const QString &error) {
   if (!error.isEmpty())
     output_->append(error, 2);
+}
+
+QString MainWindow::startWorkbench(const QStringList &arguments) const {
+  QStringList command{QStringLiteral("--worker"), session_.workerPath()};
+  if (!layoutPath_.isEmpty())
+    command << QStringLiteral("--fresh-layout");
+  QProcess launcher;
+  launcher.setProgram(workbenchProgram_.isEmpty()
+                          ? QCoreApplication::applicationFilePath()
+                          : workbenchProgram_);
+  launcher.setArguments(command + arguments);
+  return launcher.startDetached() ? QString() : launcher.errorString();
 }
 
 void MainWindow::jumpToLink() {
@@ -1651,8 +1780,11 @@ QJsonObject MainWindow::instanceInfo() const {
   QJsonObject info{
       {QStringLiteral("version"), QCoreApplication::applicationVersion()},
       {QStringLiteral("loaded"), session_.loaded()}};
-  if (!session_.loaded())
+  if (!session_.loaded()) {
+    if (session_.opening())
+      info.insert(QStringLiteral("opening"), session_.openingFile());
     return info;
+  }
   info.insert(QStringLiteral("input"), session_.filePath());
   info.insert(QStringLiteral("input_name"), session_.fileName());
   info.insert(QStringLiteral("project"), session_.projectPath());
@@ -1688,6 +1820,9 @@ void MainWindow::navigateCodeFunction(CodeView *view, Address address,
                                       std::optional<Address> from) {
   // The shared history and background listing follow without changing the
   // originating code window or its representation, including a pinned view.
+  // Back returns the code to the place it leaves, at the stop it leaves.
+  if (const auto origin = from ? from : disassembly_->currentAddress())
+    view->text()->keepPlace(*origin);
   disassembly_->navigate(address, true, from);
   if (view->text()->function() != function)
     view->showFunction(function);
@@ -1788,12 +1923,15 @@ void MainWindow::navigateExpression(const QString &text) {
       });
 }
 
-void MainWindow::navigateHistory(bool forward) {
+void MainWindow::navigateHistory(bool forward, std::size_t steps) {
   const auto serial = ++codeNavigationSerial_;
   hexFollower_.clear();
   if (forward ? !disassembly_->canGoForward() : !disassembly_->canGoBack())
     return;
   if (auto *view = focusedCodeView()) {
+    // Coming back to this stop returns the code to where it is now.
+    if (const auto address = disassembly_->currentAddress())
+      view->text()->keepPlace(*address);
     const auto epoch = session_.epoch();
     connect(
         disassembly_->listing(), &ListingView::jumpSettled, view,
@@ -1801,22 +1939,104 @@ void MainWindow::navigateHistory(bool forward) {
           if (serial != codeNavigationSerial_ || epoch != session_.epoch() ||
               !view->isVisible())
             return;
+          // The listing has landed; a graph may still be laying it out.
           const auto function = disassembly_->listing()->currentFunction();
-          if (function && view->text()->function() != function)
+          const auto address = disassembly_->listing()->currentAddress();
+          if (function && view->text()->function() != function) {
             view->showFunction(*function);
+            // The code goes back to the cursor and view it left there, as
+            // Hex-Rays' Esc does; a stop it never made opens the function.
+            if (address)
+              view->text()->returnToPlace(*address);
+          }
           // Within the function the code goes back to the row it left, such
-          // as the goto whose label it went to.
-          else if (const auto address = disassembly_->currentAddress())
+          // as the goto whose label it went to, and to its place there.
+          else if (address) {
             view->text()->revealAddress(*address);
+            view->text()->returnToPlace(*address);
+          }
           view->text()->setFocus();
         },
         Qt::SingleShotConnection);
   }
   QScopedValueRollback<bool> guard(codeHistoryNavigation_, true);
   if (forward)
-    disassembly_->goForward();
+    disassembly_->goForward(steps);
   else
-    disassembly_->goBack();
+    disassembly_->goBack(steps);
+}
+
+void MainWindow::addHistoryLists(QToolBar &toolbar) {
+  for (const bool forward : {false, true}) {
+    auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(
+        actions_.action(forward ? ActionId::JumpForward : ActionId::JumpBack)));
+    if (!button)
+      continue;
+    // The button's own list: the Jump menu keeps its commands.
+    auto *menu = new QMenu(button);
+    connect(menu, &QMenu::aboutToShow, this,
+            [this, menu, forward] { showHistoryList(*menu, forward); });
+    button->setMenu(menu);
+    button->setPopupMode(QToolButton::MenuButtonPopup);
+  }
+}
+
+void MainWindow::showHistoryList(QMenu &menu, bool forward) {
+  menu.clear();
+  const auto stops = disassembly_->stops(forward);
+  const int digits = session_.bitness() == 64 ? 16 : 8;
+  // The code in focus goes back along: a stop it left names the line it
+  // returns to, as Hex-Rays' history names it.
+  const QPointer<CodeView> code = focusedCodeView();
+  for (std::size_t i = 0;
+       i < std::min(stops.size(),
+                    ::neverd::limits::gui::kMainWindowHistoryListStops);
+       ++i) {
+    const Address address = stops[i];
+    auto *action = menu.addAction(displayAddress(address, digits));
+    connect(action, &QAction::triggered, this, [this, forward, steps = i + 1] {
+      navigateHistory(forward, steps);
+    });
+    // As in IDA's list, the stop's place, then the instruction or data there.
+    session_.read(
+        QStringLiteral("listing"),
+        {{"address", hexAddress(address)},
+         {"before", 0},
+         {"after", 0},
+         {"complete_anchor_item", true}},
+        action,
+        [this, action, address, digits, code](const QJsonObject &payload) {
+          for (const auto &value : payload.value("lines").toArray()) {
+            const auto line = value.toObject();
+            const auto kind = line.value("kind").toString();
+            if (kind != QLatin1String("insn") && kind != QLatin1String("data"))
+              continue;
+            QString place;
+            if (const auto function =
+                    addressValue(line.value("function_address"))) {
+              place = line.value("function").toString();
+              if (const auto kept =
+                      code ? code->text()->keptLine(address, *function)
+                           : std::nullopt)
+                place += QLatin1Char(':') + QString::number(*kept);
+              else if (address != *function)
+                place += QLatin1Char('+') + displayAddress(address - *function);
+              place += QStringLiteral(" (%1)").arg(displayAddress(address));
+            } else if (const auto *region = space_.regionOf(address)) {
+              place = region->name + QLatin1Char(':') +
+                      displayAddress(address, digits);
+            } else {
+              place = displayAddress(address, digits);
+            }
+            action->setText(
+                (place + QLatin1Char('\t') +
+                 line.value("text").toString().simplified())
+                    .replace(QLatin1Char('&'), QStringLiteral("&&")));
+            return;
+          }
+        },
+        [](const QString &, const QString &) {});
+  }
 }
 
 void MainWindow::synchronize(Address address, QObject *source) {
@@ -1855,6 +2075,10 @@ void MainWindow::connectActions() {
   const auto on = [this](ActionId id, auto slot) {
     connect(actions_.action(id), &QAction::triggered, this, slot);
   };
+  on(ActionId::FileNewInstance, [this] {
+    if (const QString error = startWorkbench(); !error.isEmpty())
+      output_->append(tr("Cannot start a new instance: %1").arg(error), 2);
+  });
   on(ActionId::FileOpen, [this] { openDialog(); });
   on(ActionId::FileLineage, [this] {
     if (!lineage_)
@@ -2092,6 +2316,26 @@ void MainWindow::connectActions() {
   on(ActionId::FindRegisterValue, [this] { queryRegister("value"); });
   on(ActionId::SearchHighlightUp, [this] { searchHighlight(false); });
   on(ActionId::SearchHighlightDown, [this] { searchHighlight(true); });
+  on(ActionId::SearchLockHighlight, [this] { lockHighlight(std::nullopt); });
+  for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
+    on(lockColorAction(slot), [this, slot] { lockHighlight(slot); });
+  // Each color's entry shows its color.
+  const auto paintLockSwatches = [this] {
+    const auto &theme = Theme::instance();
+    for (int slot = 0; slot < HighlightLocks::Colors; ++slot) {
+      QPixmap swatch(32, 32);
+      swatch.fill(Qt::transparent);
+      QPainter painter(&swatch);
+      painter.setRenderHint(QPainter::Antialiasing);
+      painter.setPen(QPen(theme.color(ColorRole::ListingPlain), 1.5));
+      painter.setBrush(theme.color(highlightLockRole(slot)));
+      painter.drawRoundedRect(QRectF(5, 5, 22, 22), 5, 5);
+      painter.end();
+      actions_.action(lockColorAction(slot))->setIcon(QIcon(swatch));
+    }
+  };
+  paintLockSwatches();
+  connect(&Theme::instance(), &Theme::changed, this, paintLockSwatches);
   on(ActionId::SearchInView, [this] {
     auto *code = focusedCodeView();
     if (!FindDialog)
@@ -2224,6 +2468,10 @@ void MainWindow::connectActions() {
         action->trigger();
         return;
       }
+  });
+  on(ActionId::OptionsPlugins, [this] {
+    showModelessDialog(new PluginManagerDialog(session_.pluginServices(), this),
+                       this);
   });
   on(ActionId::OptionsAnalyze, [this] { session_.analyzeWholeProgram(); });
   on(ActionId::OptionsCancel, [this] { session_.cancelReads(); });
@@ -2400,8 +2648,9 @@ void MainWindow::updateActions() {
   const bool location = loaded && currentAddress().has_value();
   // Compute the final state before touching QActions. Enabling every loaded
   // action and then disabling unavailable ones emits two change events on
-  // every query notification, even when no command state changed.
-  std::array<bool, static_cast<size_t>(ActionId::Count)> states;
+  // every query notification, even when no command state changed. An
+  // external command keeps its own state unless a rule below names it.
+  std::array<std::optional<bool>, static_cast<size_t>(ActionId::Count)> states;
   const auto enable = [&](ActionId id, bool enabled) {
     states[static_cast<size_t>(id)] = enabled;
   };
@@ -2413,6 +2662,7 @@ void MainWindow::updateActions() {
     const bool always = name.startsWith(QStringLiteral("Options")) ||
                         name.startsWith(QStringLiteral("Windows")) ||
                         name.startsWith(QStringLiteral("Help")) ||
+                        name == QLatin1String("FileNewInstance") ||
                         name == QLatin1String("FileOpen") ||
                         name == QLatin1String("FilePackageReview") ||
                         name == QLatin1String("FileCompare") ||
@@ -2563,7 +2813,8 @@ void MainWindow::updateActions() {
        {ActionId::PathfinderNewPath, ActionId::PathfinderAddWaypoint})
     enable(id, callPaths && pathfinderTarget().has_value());
   for (size_t index = 0; index < states.size(); ++index)
-    actions_.action(static_cast<ActionId>(index))->setEnabled(states[index]);
+    if (states[index])
+      actions_.action(static_cast<ActionId>(index))->setEnabled(*states[index]);
 }
 
 void MainWindow::updateTitle() {
@@ -2585,21 +2836,10 @@ void MainWindow::updateTitle() {
 }
 
 void MainWindow::updateStatusBar() {
-  const auto &background = session_.background();
-  const auto state = background.value("state").toString();
-  QString analysis;
-  if (!session_.loaded())
-    analysis = tr("AU: idle");
-  else if (state == QLatin1String("building") ||
-           state == QLatin1String("pending")) {
-    const int total = background.value("total").toInt();
-    const int done = background.value("done").toInt();
-    analysis = total ? tr("AU: busy %1%").arg(done * 100 / std::max(1, total))
-                     : tr("AU: busy");
-  } else {
-    analysis = tr("AU: idle");
-  }
-  analysisLabel_->setText(analysis);
+  // Each query reply refreshes the bar; the progress reports only changes.
+  progress_->update(session_.opening(), session_.loaded(),
+                    session_.idleAnalysis(), session_.openingFile(),
+                    session_.background());
   directionLabel_->setText(searchDown_ ? tr("Down") : tr("Up"));
   const QString path = session_.loaded()
                            ? QFileInfo(session_.filePath()).absolutePath()
@@ -2666,11 +2906,18 @@ void MainWindow::openNow(const QString &path, const LoadOptions &options) {
 void MainWindow::openAskingForDebugInfo(const QString &path,
                                         LoadOptions options) {
   // Whether the worker finds PDBs is known once it has started; a file named
-  // on the command line can come first.
+  // on the command line can come first.  One that has stopped will say
+  // nothing, and opening starts another.
   if (!session_.connected()) {
-    debugPromptPending_ = {path, options};
+    if (session_.starting()) {
+      asksBeforeShowing_ = !isVisible();
+      debugPromptPending_ = {path, options};
+    } else {
+      openNow(path, options);
+    }
     return;
   }
+  asksBeforeShowing_ = !isVisible();
   // IDA asks as it makes a database, so a project keeps the answers.
   if (!asksForDebugInfo_ || ProjectDatabase::hasState(path)) {
     openNow(path, options);
@@ -2845,8 +3092,70 @@ void MainWindow::openAskingForMap(const QString &path, LoadOptions options) {
 
 void MainWindow::openDialog() {
   startupQuickStartPending_ = false;
-  if (const QString path = askForFile(commandWindow()); !path.isEmpty())
+  if (const QString path = askForFile(commandWindow());
+      !path.isEmpty() && !openElsewhere(path, true))
     chooseLoader(path);
+}
+
+void MainWindow::askHowToLoad(const QString &path) {
+  // What the worker can tell of a file is known once it has started.
+  if (session_.connected()) {
+    closesWithoutFile_ = true;
+    chooseLoader(path);
+  } else if (session_.starting()) {
+    closesWithoutFile_ = true;
+    loaderPromptPending_ = path;
+  } else {
+    openNow(path, {});
+  }
+}
+
+bool MainWindow::openElsewhere(const QString &path, bool askLoader) {
+  if ((!session_.loaded() && !session_.opening()) ||
+      !QSettings().value(settings::OpenInNewInstance, true).toBool() ||
+      !QFileInfo(path).isFile())
+    return false;
+  // A new workbench could not have the program this one holds, which reopens
+  // here, or one another workbench holds, which comes forward instead.  IDA
+  // starts an instance that then asks about the locked database.
+  if (ProjectDatabase::sameFile(path, session_.openingFile()) ||
+      (session_.loaded() &&
+       ProjectDatabase::sameFile(path, session_.projectPath())))
+    return false;
+  if (const QString held =
+          ProjectDatabase::lockHeldElsewhere(path, session_.filePath());
+      !held.isEmpty()) {
+    // This window has the focus, and hands it on.
+    auto *focus = QGuiApplication::focusWindow();
+    requestActivationToken(
+        focus ? focus : windowHandle(), this,
+        [this, path, held](const QString &token) {
+          auto *watcher = new QFutureWatcher<bool>(this);
+          connect(watcher, &QFutureWatcher<bool>::finished, this,
+                  [this, watcher, path, held] {
+                    const bool raised = watcher->result();
+                    watcher->deleteLater();
+                    if (raised)
+                      output_->append(
+                          tr("%1 is already open in another NeverD; switching "
+                             "to it.")
+                              .arg(QFileInfo(path).fileName()),
+                          0);
+                    else
+                      output_->append(Session::heldMessage(path, held), 2);
+                  });
+          // Its own server answers on this thread, as a link's does.
+          watcher->setFuture(QtConcurrent::run(
+              [path, token] { return raiseWorkbenchWith(path, token); }));
+        });
+    return true;
+  }
+  QStringList arguments;
+  if (askLoader)
+    arguments << QStringLiteral("--ask-loader");
+  if (const QString error = startWorkbench(arguments << path); !error.isEmpty())
+    output_->append(tr("Cannot start a new instance: %1").arg(error), 2);
+  return true;
 }
 
 QString MainWindow::askForFile(QWidget *parent) const {
@@ -2860,6 +3169,8 @@ QString MainWindow::askForFile(QWidget *parent) const {
 
 void MainWindow::chooseLoader(const QString &path) {
   startupQuickStartPending_ = false;
+  const bool closes = std::exchange(closesWithoutFile_, false);
+  asksBeforeShowing_ = !isVisible();
   // A project opens as it was saved, and an engine that cannot list its
   // loaders opens files as before.
   if (!session_.identifiesFiles() || ProjectDatabase::hasState(path)) {
@@ -2869,7 +3180,7 @@ void MainWindow::chooseLoader(const QString &path) {
   const QPointer<QWidget> owner = isVisible() ? commandWindow() : nullptr;
   session_.read(
       QStringLiteral("identify"), {{"path", path}}, this,
-      [this, path, owner](const QJsonObject &payload) {
+      [this, path, owner, closes](const QJsonObject &payload) {
         // Before the workbench shows, the dialog greets alone, as IDA's
         // does for a file named at startup.
         LoadFileDialog dialog(path, payload.value("rows").toArray(),
@@ -2881,6 +3192,12 @@ void MainWindow::chooseLoader(const QString &path) {
         dialog.setBinaryProcessor(
             QSettings().value(BinaryProcessorKey).toString());
         if (dialog.exec() != QDialog::Accepted || dialog.row() < 0) {
+          // Started for this file alone, the workbench has no other use, as
+          // IDA's new instance goes when its load dialog is cancelled.
+          if (closes) {
+            emit shutdownAccepted();
+            return;
+          }
           // Without a file to open, the workbench takes its place.
           showWorkbench();
           return;
@@ -3075,7 +3392,7 @@ void MainWindow::confirmMap(const QJsonObject &facts, quint64 epoch,
 }
 
 void MainWindow::applyIndicator() {
-  analysisLabel_->setVisible(
+  analysisIndicator_->setVisible(
       QSettings().value(AnalysisIndicatorKey, true).toBool());
 }
 
@@ -3269,7 +3586,7 @@ void MainWindow::jumpAnywhere() {
   const auto base = currentAddress();
   const QPointer<DisassemblyView> assembly = disassembly_;
   const bool hex = hexActive_;
-  auto *dialog = new JumpDialog(session_, commandView());
+  auto *dialog = new JumpDialog(session_, space_, base, commandView());
   dialog->setObjectName(QStringLiteral("jumpDialog"));
   connect(dialog, &QDialog::accepted, this,
           [this, dialog, epoch, base, assembly, hex] {
@@ -3673,11 +3990,15 @@ void MainWindow::searchBinary(const QString &kind, bool again) {
     if (serial != searchSerial_ || epoch != session_.epoch() ||
         revision != session_.revision() || !session_.loaded())
       return;
-    const auto from = currentAddress().value_or(0);
+    // A listing still loading its first rows has no cursor yet: the search
+    // starts from the beginning, and the cursor its rows bring is not a move
+    // away from the search.
+    const auto origin = currentAddress();
+    const auto from = origin.value_or(0);
     auto request = std::make_shared<std::function<void(bool)>>();
     const std::weak_ptr<std::function<void(bool)>> weak = request;
-    *request = [this, kind, pattern, from, backward, serial, epoch, revision,
-                weak](bool wrapped) {
+    *request = [this, kind, pattern, origin, from, backward, serial, epoch,
+                revision, weak](bool wrapped) {
       auto keep = weak.lock();
       if (!keep)
         return;
@@ -3689,11 +4010,11 @@ void MainWindow::searchBinary(const QString &kind, bool again) {
         query["from"] = hexAddress(from);
       searchSubscription_ = session_.read(
           QStringLiteral("search"), query, this,
-          [this, kind, pattern, serial, epoch, revision, from, backward,
+          [this, kind, pattern, serial, epoch, revision, origin, backward,
            wrapped, keep](const QJsonObject &payload) {
             if (serial != searchSerial_ || epoch != session_.epoch() ||
                 revision != session_.revision() || !session_.loaded() ||
-                currentAddress().value_or(0) != from)
+                (origin && currentAddress() != origin))
               return;
             if (payload.value("building").toBool()) {
               QTimer::singleShot(
@@ -3861,6 +4182,19 @@ void MainWindow::searchHighlight(bool forward) {
     disassembly_->listing()->findInLoaded(token, forward);
 }
 
+void MainWindow::lockHighlight(std::optional<int> slot) {
+  // The word under the cursor of the code window with the focus, else of
+  // the disassembly.
+  const auto *code = focusedCodeView();
+  const QString word =
+      code ? code->text()->cursorWord() : disassembly_->currentToken();
+  auto &locks = session_.highlightLocks();
+  if (slot)
+    locks.toggleColor(*slot, word);
+  else
+    locks.toggle(word);
+}
+
 void MainWindow::stepFunction(bool forward) {
   const auto address = currentAddress();
   if (!address)
@@ -3989,6 +4323,15 @@ void MainWindow::showOptions() {
   symbolic->setObjectName(QStringLiteral("optionsSymbolicEvery"));
   symbolic->setChecked(SourceDefaults::instance().symbolic());
   form->addRow(symbolic);
+  auto *newInstance =
+      new QCheckBox(tr("Open other files in a new instance"), &dialog);
+  newInstance->setObjectName(QStringLiteral("optionsOpenInNewInstance"));
+  newInstance->setToolTip(tr("With a file open, File > Open, a recent file and "
+                             "a dropped file start a new instance instead of "
+                             "replacing it"));
+  newInstance->setChecked(
+      QSettings().value(settings::OpenInNewInstance, true).toBool());
+  form->addRow(newInstance);
   auto *buttons = new QDialogButtonBox(
       QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
   form->addRow(buttons);
@@ -4002,6 +4345,7 @@ void MainWindow::showOptions() {
   Theme::instance().setMode(theme->currentIndex() == 0 ? Theme::Mode::Dark
                                                        : Theme::Mode::Light);
   SourceDefaults::instance().setSymbolic(symbolic->isChecked());
+  QSettings().setValue(settings::OpenInNewInstance, newInstance->isChecked());
 }
 
 void MainWindow::showStringOptions() {
@@ -4593,6 +4937,7 @@ void MainWindow::contextMenu(const QPoint &globalPosition) {
   // The click moved the cursor: the commands act where it is now.
   updateActions();
   QMenu menu(commandWindow());
+  plugins_->populateContextMenu(menu);
   menu.setObjectName(QStringLiteral("analysisContextMenu"));
   if (auto *code = focusedCodeView())
     addNumberActions(menu, code);
@@ -4770,7 +5115,18 @@ void MainWindow::functionsMenu(ChooserView *view, const QPoint &position) {
   const auto entry = view->currentAddress();
   if (!entry)
     return;
+  const QPointer<MainWindow> window = this;
+  const QPointer<QWidget> previous = contextMenuFocus_;
+  const auto restore = qScopeGuard([window, previous] {
+    if (window) {
+      window->contextMenuFocus_ = previous;
+      window->updateActions();
+    }
+  });
+  contextMenuFocus_ = table;
   QMenu menu(table->window());
+  menu.setObjectName(QStringLiteral("functionsContextMenu"));
+  plugins_->populateContextMenu(menu);
   // The commands of the disassembly's, run on the row's function.
   auto *edit = actions_.action(ActionId::EditFunction);
   auto *rowEdit = menu.addAction(edit->icon(), edit->text());
@@ -5630,6 +5986,7 @@ void MainWindow::toggleFocusMode() {
   showPseudocode(code->representation());
   floating->showMaximized();
   focusToolbar_ = actions_.buildFocusToolbar(floating);
+  addHistoryLists(*focusToolbar_);
   if (!addFloatingWindowToolbar(*floating, *focusToolbar_))
     delete focusToolbar_.data();
   floating->raise();
@@ -5712,6 +6069,8 @@ void MainWindow::resetDesktop() {
 }
 
 void MainWindow::closeTransientDocks(bool discardContents) {
+  if (discardContents || plugins_->jobs().jobs().isEmpty())
+    docks_.value(QStringLiteral("analysisPlugins"))->forceClose();
   if (discardContents)
     leaveFocusMode();
   for (auto *dock : std::as_const(codeDocks_)) {
@@ -5800,6 +6159,8 @@ void MainWindow::showQuickStart() {
     }
     // A chosen file shows the workbench as it starts to load, after the
     // questions asked before the load greet alone too.
+    if (greeting)
+      maximizeWorkbenchOnShow_ = true;
     if (start == QuickStartDialog::Start::New)
       chooseLoader(file);
     else if (start == QuickStartDialog::Start::Previous)
@@ -5813,12 +6174,30 @@ void MainWindow::showQuickStart() {
 }
 
 void MainWindow::showWorkbench() {
+  asksBeforeShowing_ = false;
   if (isVisible())
     return;
   initializeLayout();
   gnome::boundMaximumSize(*this);
   show();
+  // Frameless Windows maximization must follow the first native Show so Qt
+  // retains a valid normal rectangle for the restore button and edge drags.
+  if (std::exchange(maximizeWorkbenchOnShow_, false)) {
+    if (frame_)
+      frame_->setWindowState(Qt::WindowMaximized);
+    else
+      showMaximized();
+  }
   gnome::widenResizeEdges(*this);
+}
+
+QByteArray MainWindow::saveWindowedGeometry() const {
+  return frame_ ? frame_->saveWindowedGeometry() : saveGeometry();
+}
+
+bool MainWindow::restoreWindowedGeometry(const QByteArray &geometry) {
+  return frame_ ? frame_->restoreWindowedGeometry(geometry)
+                : restoreGeometry(geometry);
 }
 
 QHash<QString, QByteArray> MainWindow::projectState() const {
@@ -5970,6 +6349,10 @@ void MainWindow::retranslateUi() {
   retitleCodeDocks();
   disassembly_->setSyncName(tr("Hex View-1"));
   updateTitle();
+  analysisIndicator_->setIdleToolTip(
+      tr("Background analysis: references and labels are indexed while you "
+         "browse"));
+  progress_->retranslate();
   updateStatusBar();
 }
 

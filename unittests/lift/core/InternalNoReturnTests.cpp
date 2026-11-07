@@ -26,6 +26,17 @@ struct NoReturnProofTestAccess {
                     va_t Entry) {
     return Builder.buildNoReturnProof(Image, Dec, Entry, "proof");
   }
+  static std::optional<uint32_t> preserved(CFGBuilder &Builder,
+                                           const BinaryImage &Image,
+                                           va_t Caller, va_t Target) {
+    Builder.CurrentImg = &Image;
+    Builder.CurrentFuncEntry = Caller;
+    LowOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.NumInputs = 1;
+    Call.Inputs[0] = NdVar::cst(Target, 8);
+    return Builder.provedCalleePreservedGPRs(Call, [](size_t) { return true; });
+  }
 };
 } // namespace neverd::detail
 
@@ -142,6 +153,53 @@ BinaryImage floatingForwarder(Arch Architecture, BinaryFormat Format,
 bool ownsX87(const BinaryImage &Image) {
   return x87ContextOwnsStack(Image.Arch, Image.abiFormat(),
                              Image.X87ContextOverride);
+}
+
+TEST(InternalNoReturn, RegisterPreservationReusesOnlyImageNames) {
+  for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF}) {
+    std::vector<uint8_t> Code(0x30, 0xcc);
+    Code[0] = 0xc3;
+    putCall(Code, Base + 0x10, Base + 0x20);
+    Code[0x15] = 0xc3;
+    // mov eax, 1; ret
+    const uint8_t Leaf[] = {0xb8, 1, 0, 0, 0, 0xc3};
+    std::copy(std::begin(Leaf), std::end(Leaf), Code.begin() + 0x20);
+    auto Image = imageWith(
+        Code,
+        {{Base, "root"}, {Base + 0x10, "wrapper"}, {Base + 0x20, "leaf"}});
+    Image.Format = Format;
+    Image.LoadOnlyFunctionEntries.insert(Base);
+    for (auto &Symbol : Image.Symbols)
+      Symbol.Size = Symbol.Addr == Base ? 1 : 6;
+    const std::set<va_t> Entries{Base, Base + 0x10, Base + 0x20};
+    unsigned Callbacks = 0;
+    const libc::NoReturnTargetIndex Plain(Image);
+    const libc::NoReturnTargetIndex Resolved(
+        Image, [&](va_t) -> std::optional<std::string> {
+          ++Callbacks;
+          return "abort";
+        });
+    const libc::NoReturnTargetIndex Declared(Image, {}, [&](llvm::StringRef) {
+      ++Callbacks;
+      return true;
+    });
+    EXPECT_TRUE(Plain.isImageOnly());
+    EXPECT_FALSE(Resolved.isImageOnly());
+    EXPECT_FALSE(Declared.isImageOnly());
+    const auto Prove = [&](const libc::NoReturnTargetIndex *Names) {
+      CFGBuilder Builder;
+      Builder.setKnownFuncEntries(&Entries);
+      Builder.setNoReturnTargetIndex(Names);
+      return detail::NoReturnProofTestAccess::preserved(Builder, Image, Base,
+                                                        Base + 0x10);
+    };
+    const auto Live = Prove(nullptr);
+    ASSERT_TRUE(Live);
+    EXPECT_EQ(Prove(&Plain), Live);
+    EXPECT_EQ(Prove(&Resolved), Live);
+    EXPECT_EQ(Prove(&Declared), Live);
+    EXPECT_EQ(Callbacks, 0u);
+  }
 }
 
 TEST(InternalNoReturn, TerminationDoesNotDemandUnusedFloatingReturns) {
@@ -374,6 +432,34 @@ TEST(InternalNoReturn, CallThroughALoaderBoundNoReturnSlotEndsItsBlock) {
     EXPECT_EQ(callAtBaseEndsItsBlock(Image),
               std::string_view(Bound) == "__libc_start_main" ||
                   std::string_view(Bound) == "__libc_init");
+  }
+}
+
+TEST(InternalNoReturn, UniversalCRTTerminateNeverReturns) {
+  // corecrt_terminate.h declares the Universal CRT's terminate
+  // __declspec(noreturn).  The name alone decides nothing: a program may
+  // export a terminate of its own that returns.
+  for (const char *Module :
+       {"api-ms-win-crt-runtime-l1-1-0.dll", "UCRTBASE.DLL", "engine.dll"}) {
+    SCOPED_TRACE(Module);
+    std::vector<uint8_t> Code(0x40, 0xcc);
+    // call qword ptr [rip + 0x1ffa] (the IAT slot at 0x3000); ret
+    const uint8_t Call[] = {0xff, 0x15, 0xfa, 0x1f, 0x00, 0x00, 0xc3};
+    std::copy(std::begin(Call), std::end(Call), Code.begin());
+    auto Image = imageWith(Code, {{Base, "caller"}});
+    Image.Format = BinaryFormat::COFF;
+    Segment Iat;
+    Iat.VA = 0x3000;
+    Iat.Size = Iat.FileSz = 8;
+    Iat.Data.resize(8);
+    Iat.Flags = SegmentFlags::Readable;
+    Image.Segments.push_back(std::move(Iat));
+    Image.Imports.push_back({Module, "terminate", 0, 0x3000});
+    const bool Runtime = std::string_view(Module) != "engine.dll";
+    EXPECT_EQ(libc::isNoReturnTarget(Image, 0x3000), Runtime);
+    EXPECT_EQ(libc::NoReturnTargetIndex(Image).contains(Image, 0x3000),
+              Runtime);
+    EXPECT_EQ(callAtBaseEndsItsBlock(Image), Runtime);
   }
 }
 
@@ -652,6 +738,17 @@ TEST(InternalNoReturn, MutualRecursionWithoutATrapProvesNothing) {
   EXPECT_FALSE(callAtBaseEndsItsBlock(Image));
 }
 
+TEST(InternalNoReturn, ACompletelyLiftedLoopNeverReturns) {
+  // callee: nop; L: jmp L -- no terminating fact, but nothing the lift left
+  // out can leave the loop.  A loop with an exit to a return still returns:
+  // nop; L: test eax, eax; jne L; ret.
+  EXPECT_TRUE(callAtBaseEndsItsBlock(imageWith(
+      callerThen({0x90, 0xeb, 0xfe}), {{Base, "caller"}, {0x1010, "spin"}})));
+  EXPECT_FALSE(callAtBaseEndsItsBlock(
+      imageWith(callerThen({0x90, 0x85, 0xc0, 0x75, 0xfc, 0xc3}),
+                {{Base, "caller"}, {0x1010, "spin_until"}})));
+}
+
 TEST(InternalNoReturn, ProofsStopAtTheDepthLimit) {
   // A chain of callees, each `call next; int3`, ending in `int 0x29`: one
   // within the depth limit is proved, one past it is not.
@@ -710,6 +807,59 @@ TEST(InternalNoReturn, CallFollowedByCodeIsNotProved) {
   Code.resize(0x20, 0xcc);
   const auto Image = imageWith(Code, {{Base, "caller"}, {0x1010, "b"}});
   EXPECT_FALSE(callAtBaseEndsItsBlock(Image));
+}
+
+TEST(InternalNoReturn,
+     LeafWithoutAnUnwindEntryIsScreenedByItsStraightLineFlow) {
+  // caller: call b; ret -- code follows the call and nothing gives b a code
+  // range.  In an x64 PE image every function but a leaf has an unwind
+  // entry, so straight-line flow from b's entry that reaches `int 0x29`
+  // sends b to the proof, as a __fastfail stub without one is sent.  A b
+  // that branches first may reach a return the screen does not read, and an
+  // x86 image, whose functions have no such entries, keeps the fall-through.
+  struct Case {
+    Arch Architecture;
+    std::vector<uint8_t> Body;
+    bool Proved;
+  };
+  for (const Case &C : {Case{Arch::X64, {0xcd, 0x29}, true},
+                        Case{Arch::X64, {0x89, 0xc8, 0xcd, 0x29}, true},
+                        Case{Arch::X64, {0x74, 0x02, 0xcd, 0x29, 0xc3}, false},
+                        Case{Arch::X86, {0xcd, 0x29}, false}}) {
+    SCOPED_TRACE(testing::PrintToString(C.Body) +
+                 (C.Architecture == Arch::X86 ? " on x86" : " on x64"));
+    std::vector<uint8_t> Code(0x10, 0xcc);
+    putCall(Code, Base, Base + 0x10);
+    Code[5] = 0xc3;
+    Code.insert(Code.end(), C.Body.begin(), C.Body.end());
+    Code.resize(0x20, 0xcc);
+    auto Image = imageWith(Code, {{Base, "caller"}, {0x1010, "b"}});
+    Image.Arch = C.Architecture;
+    Image.Bits =
+        C.Architecture == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+    Image.Format = BinaryFormat::COFF;
+    EXPECT_EQ(callAtBaseEndsItsBlock(Image), C.Proved);
+  }
+}
+
+TEST(InternalNoReturn, AArch64FastFailStubWithoutUnwindDataEndsItsBlock) {
+  // caller: bl stub; mov w0, #7; ret.  A Windows ARM64 leaf needs no .pdata,
+  // so nothing gives the stub a code range.  `brk #0xf003` is __fastfail and
+  // never resumes; `brk #0xf000` is __debugbreak, which does.
+  for (const auto &[Stub, Proved] :
+       std::initializer_list<std::pair<uint32_t, bool>>{{0xd43e0060, true},
+                                                        {0xd43e0000, false}}) {
+    SCOPED_TRACE(Stub);
+    std::vector<uint8_t> Code;
+    for (const uint32_t Word : {0x94000004u, 0x528000e0u, 0xd65f03c0u,
+                                0xd503201fu, Stub, 0xd65f03c0u})
+      for (unsigned I = 0; I < 4; ++I)
+        Code.push_back(static_cast<uint8_t>(Word >> (8 * I)));
+    auto Image = imageWith(Code, {{Base, "caller"}, {Base + 0x10, "stub"}});
+    Image.Arch = Arch::AArch64;
+    Image.Format = BinaryFormat::COFF;
+    EXPECT_EQ(callAtBaseEndsItsBlock(Image), Proved);
+  }
 }
 
 TEST(InternalNoReturn, RecognizesX86AlignmentNoOps) {
@@ -896,3 +1046,46 @@ TEST(InternalNoReturn, SummaryStillLiftsAProvedCalleeForItsParameters) {
 }
 
 } // namespace
+
+TEST(InternalNoReturn, EntryMarkersAfterACallDoNotProveTermination) {
+  // A returning call can precede a BTI landing pad or a shrink-wrapped frame.
+  // The marker and even another discovered entry do not supply a call effect.
+  for (uint32_t Marker : {0xd503245fu, 0xd503233fu, 0xa9bf7bfdu}) {
+    std::vector<uint8_t> Code;
+    for (uint32_t Word : {0xaa1e03f3u, // mov x19, x30
+                          0x94000005u, // bl helper at +0x18
+                          Marker,
+                          0xaa1303feu, // mov x30, x19
+                          0xd65f03c0u, // ret
+                          0xd503201fu, // nop
+                          0xd65f03c0u})
+      for (unsigned I = 0; I < 4; ++I)
+        Code.push_back(static_cast<uint8_t>(Word >> (I * 8)));
+    auto Image = imageWith(Code, {});
+    Image.Arch = Arch::AArch64;
+    Image.Format = BinaryFormat::COFF;
+    for (bool KnownContinuation : {false, true}) {
+      SCOPED_TRACE(Marker);
+      SCOPED_TRACE(KnownContinuation);
+      std::set<va_t> Entries{Base};
+      if (KnownContinuation)
+        Entries.insert(Base + 8);
+      const InternalNoReturnIndex Index(Image, &Entries, nullptr, nullptr,
+                                        nullptr);
+      EXPECT_FALSE(Index.mayNeverReturn(Base));
+    }
+  }
+}
+
+TEST(InternalNoReturn, BranchScreenRequiresExecutableOwnership) {
+  auto Image = imageWith({0xeb, 0x0e}, {}); // jmp data at Base + 0x10
+  Image.Format = BinaryFormat::COFF;
+  Segment Data;
+  Data.VA = Base + 0x10;
+  Data.Size = 2;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data = {0xeb, 0xfe}; // resembles an infinite loop
+  Image.Segments.push_back(std::move(Data));
+  const InternalNoReturnIndex Index(Image, nullptr, nullptr, nullptr, nullptr);
+  EXPECT_FALSE(Index.mayNeverReturn(Base));
+}

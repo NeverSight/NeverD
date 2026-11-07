@@ -280,11 +280,6 @@ TEST(SourceParameterPlacement, DarwinWideArgumentsStartAtOddRegisters) {
                                          kAArch64WideIntegerRegisters *
                                          kAArch64WideIntegerRegisters;
         if (First + kAArch64WideIntegerRegisters > kAArch64ArgumentRegisters) {
-          if (Format == BinaryFormat::MachO && Wide == WideRecord) {
-            // Aggregate spills still need their separate layout contract.
-            EXPECT_EQ(P.Parameters.size(), Prefix);
-            continue;
-          }
           ASSERT_EQ(P.Parameters.size(), Params.size());
           ASSERT_EQ(P.Parameters[Prefix].size(), 1u);
           expectStack(P.Parameters[Prefix][0], 0, kAArch64WideIntegerBytes);

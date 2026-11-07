@@ -14,6 +14,14 @@
 #include <QWindow>
 
 namespace neverd::gui::platform {
+std::unique_ptr<QAbstractNativeEventFilter>
+createResizeFilter(QWindow &, std::function<Qt::Edges(QPoint)>,
+                   std::function<void()>) {
+  return {};
+}
+
+void restoreForResize(QWindow &) {}
+
 void configureFrame(QWindow &window) {
   if (QGuiApplication::platformName() != QLatin1String("cocoa"))
     return;

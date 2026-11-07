@@ -4,11 +4,16 @@
 //
 //===----------------------------------------------------------------------===//
 
+/// \file
+/// Authenticate scalar helper paths and retain their code and storage extents.
+//===----------------------------------------------------------------------===//
+
 #include "COFFRegistrationScalarLeaf.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/ReadOnlyBytes.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
 #include <iterator>
@@ -64,6 +69,8 @@ class ScalarLeafProof {
   va_t Entry;
   Decoder Dec;
   std::map<va_t, va_t> Instructions;
+  std::set<va_t> ImageReads;
+  std::map<va_t, va_t> AbsoluteOperands;
 
   // Distinct paths may reach one instruction with different initialized
   // registers. Check each state; neither a favorable path nor a join supplies
@@ -91,7 +98,7 @@ class ScalarLeafProof {
   }
 
   bool readScalar(const cs_x86_op &Op, const ScalarState &State,
-                  bool &Absolute) const {
+                  bool &Absolute) {
     if (Op.type == X86_OP_IMM)
       return true;
     if (Op.type == X86_OP_REG) {
@@ -111,6 +118,7 @@ class ScalarLeafProof {
     // Only storage ownership matters: the retained instruction still reads
     // the current runtime value, including the CRT's mutable ISA level.
     Absolute = true;
+    ImageReads.insert(va_t(Op.mem.disp));
     return true;
   }
 
@@ -127,6 +135,20 @@ class ScalarLeafProof {
 public:
   ScalarLeafProof(const BinaryImage &Image, va_t Entry)
       : Image(Image), Entry(Entry) {}
+
+  X86RegistrationScalarLeaf dependencies() const {
+    X86RegistrationScalarLeaf Result;
+    for (const auto &[Begin, End] : Instructions) {
+      if (!Result.CodeRanges.empty() && Result.CodeRanges.back().End == Begin)
+        Result.CodeRanges.back().End = End;
+      else
+        Result.CodeRanges.push_back({Begin, End});
+    }
+    for (const auto Address : ImageReads)
+      Result.ImageReads.push_back({Address, Address + 4});
+    Result.AbsoluteOperands = AbsoluteOperands;
+    return Result;
+  }
 
   bool run() {
     // EBP saves the caller frame, while the ECX push reserves one private
@@ -236,6 +258,8 @@ public:
             unsigned(X.encoding.disp_offset) + 4 > Insn.Size)
           return false;
         Operands.push_back(State.Address + X.encoding.disp_offset);
+        AbsoluteOperands.emplace(
+            Operands.back(), readLE<uint32_t>(Bytes + X.encoding.disp_offset));
       }
       if (!readImmutablePE32CodeBytes(Image, State.Address, Insn.Size,
                                       Operands))
@@ -249,12 +273,17 @@ public:
 
 } // namespace
 
-bool isCheckedX86RegistrationScalarLeaf(const BinaryImage &Image, va_t Entry) {
-  return Image.Arch == Arch::X86 && Image.Bits == Bitness::Bits32 &&
-         Image.Format == BinaryFormat::COFF && Entry &&
-         Entry <= UINT32_MAX - ::neverd::limits::loader::
-                                   kCOFFRegistrationScalarLeafMaxHelperBytes &&
-         ScalarLeafProof(Image, Entry).run();
+std::optional<X86RegistrationScalarLeaf>
+getCheckedX86RegistrationScalarLeaf(const BinaryImage &Image, va_t Entry) {
+  if (Image.Arch != Arch::X86 || Image.Bits != Bitness::Bits32 ||
+      Image.Format != BinaryFormat::COFF || !Entry ||
+      Entry > UINT32_MAX - ::neverd::limits::loader::
+                               kCOFFRegistrationScalarLeafMaxHelperBytes)
+    return std::nullopt;
+  ScalarLeafProof Proof(Image, Entry);
+  if (!Proof.run())
+    return std::nullopt;
+  return Proof.dependencies();
 }
 
 } // namespace neverd::coff_loader

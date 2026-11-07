@@ -106,6 +106,11 @@ class TriggerTests(unittest.TestCase):
         event["workflow_run"]["event"] = run["event"] = "workflow_dispatch"
         self.verify(event, run=run)
 
+    def test_nightly_schedule_is_a_valid_producer_event(self):
+        event, run = deepcopy(EVENT), deepcopy(RUN)
+        event["workflow_run"]["event"] = run["event"] = "schedule"
+        self.verify(event, run=run)
+
     def test_missing_scalar_and_noninteger_fields_never_coerce_into_a_valid_identity(self):
         for key in ("id", "run_attempt", "workflow_id", "head_sha", "head_repository", "status", "conclusion"):
             event = deepcopy(EVENT)
@@ -269,6 +274,17 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(set(re.findall(r"[\w-]+", gate_needs[1])),
                          {"trigger", "producer", "guards", "build-linux", "build-macos", "android", "ios"})
         self.assertIn("needs.trigger.result == 'success'", jobs["release-gate"])
+
+    def test_qualification_follows_the_nightly_or_dispatched_producer(self):
+        trigger_job = self.workflow().split("\n  trigger:\n", 1)[1].split("\n    steps:", 1)[0]
+        self.assertIn("github.event.workflow_run.conclusion != 'cancelled'", trigger_job)
+        self.assertIn("github.event.workflow_run.event != 'push'", trigger_job)
+
+    def test_a_completion_that_qualifies_nothing_cannot_cancel_the_run_in_flight(self):
+        group = re.search(r"(?m)^concurrency:\n  group: (.*)$", self.workflow()).group(1)
+        self.assertIn("github.event.workflow_run.conclusion == 'cancelled'", group)
+        self.assertIn("github.event.workflow_run.event == 'push'", group)
+        self.assertIn("format('-skipped-{0}', github.run_id)", group)
 
     def test_actual_workflow_preserves_read_only_trigger_and_same_consumer_identity(self):
         self.assert_contract(self.workflow())

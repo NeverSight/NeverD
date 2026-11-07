@@ -208,6 +208,17 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     Result.CalleeSignatureMemo = Memo;
   }
 
+  if (!analysis::interpreterMachineSourceABIInfo(Opts.InterpreterMachineABI)) {
+    Result.Error = "unknown interpreter machine source ABI";
+    return Result;
+  }
+  if (Opts.InterpreterMachineABI !=
+          analysis::InterpreterMachineSourceABIKind::ScalarV1 &&
+      (!Opts.InterpreterSpecialization ||
+       !Opts.InterpreterSpecialization->ExplicitMachineState)) {
+    Result.Error = "extended source ABI requires explicit machine recovery";
+    return Result;
+  }
   if (Opts.InterpreterSpecialization &&
       (Opts.PatchMode || Opts.OnlyFunctionEntries.size() != 1 ||
        Img.Arch != Arch::X64)) {
@@ -341,6 +352,12 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       Trace.finish(false);
       return Result;
     }
+    if (Opts.InterpreterSpecialization->X64CR4PGEState) {
+      Result.Error = "machine-state recovery requires a versioned CR4 PGE "
+                     "source interface";
+      Trace.finish(false);
+      return Result;
+    }
     if (Opts.InterpreterSpecialization->X64CR8State) {
       Result.Error =
           "machine-state recovery requires a versioned task-priority "
@@ -365,8 +382,8 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       return Result;
     }
     if (Opts.InterpreterSpecialization->ExplicitMachineState) {
-      auto Wrapped = analysis::wrapInterpreterMachineStateX64(
-          Recovery.Residual, Img.Format,
+      auto Wrapped = analysis::wrapInterpreterMachineSourceX64(
+          Recovery.Residual, Opts.InterpreterMachineABI, Img.Format,
           analysis::InterpreterMachineStateProfile::UserX64NoFaultV1,
           Opts.InterpreterSpecialization->EntryFrameAlignment,
           !Opts.PatchMode && !Opts.LiftMode && !Opts.DumpLlvm
@@ -482,14 +499,14 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     }
   }
 
-  for (const auto &LF : Result.LowFuncs) {
-    auto AuditIt =
-        std::find_if(Result.FunctionAudits.begin(), Result.FunctionAudits.end(),
-                     [&](const PipelineFunctionAudit &Audit) {
-                       return Audit.Entry == LF.Entry;
-                     });
-    if (AuditIt != Result.FunctionAudits.end())
-      AuditIt->Disposition = PipelineFunctionDisposition::Accepted;
+  {
+    const auto FirstAudits =
+        pipeline_detail::firstFunctionAudits(Result.FunctionAudits);
+    for (const auto &LF : Result.LowFuncs)
+      if (const auto Found = FirstAudits.find(LF.Entry);
+          Found != FirstAudits.end())
+        Result.FunctionAudits[Found->second].Disposition =
+            PipelineFunctionDisposition::Accepted;
   }
 
   if (Opts.DumpLow && Opts.EmitDumpOutput)
@@ -515,8 +532,13 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     return Result;
   }
   Trace.start(NativePipelineTrace::Stage::NoReturnVerify);
-  propagateInternalNoReturn(Result.MedFuncs, Img.Arch, Img.UserNoReturn,
-                            importCallAddresses(Img));
+  {
+    std::set<va_t> OwnImportCalls;
+    propagateInternalNoReturn(
+        Result.MedFuncs, Img.Arch, Img.UserNoReturn,
+        importCallAddressesOf(Img, sharedAnalysisCache(Img, Opts),
+                              OwnImportCalls));
+  }
 
   // One read-only proof boundary serves both C routes. Neither annotation nor
   // its display name becomes input to ABI recovery or instruction semantics.
@@ -623,8 +645,13 @@ bool Pipeline::resumeMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     return false;
   }
   Trace.start(NativePipelineTrace::Stage::NoReturnVerify);
-  propagateInternalNoReturn(Result.MedFuncs, Img.Arch, Img.UserNoReturn,
-                            importCallAddresses(Img));
+  {
+    std::set<va_t> OwnImportCalls;
+    propagateInternalNoReturn(
+        Result.MedFuncs, Img.Arch, Img.UserNoReturn,
+        importCallAddressesOf(Img, sharedAnalysisCache(Img, Opts),
+                              OwnImportCalls));
+  }
   recognizeLibraries(Img, Opts, Result, Dbg);
   Trace.start(NativePipelineTrace::Stage::HighIR);
   if (Opts.DeferHighIR)

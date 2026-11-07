@@ -322,11 +322,22 @@ void AArch64Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
   // A decoded spelling is still useful for inspection, but an illegal or
   // architecturally unpredictable encoding has no ordinary LowIR semantics.
   // Refuse it even in permissive mode, before emitting any operations.
-  if (Insn->illegal)
+  // The decoder soft-fails a load whose transfer register is its base when
+  // bits 11:10 are nonzero, taking them for writeback. An unprivileged
+  // LDTR sets them too, but writes nothing back, so that pair is well defined.
+  if (Insn->illegal && !aarch64_decode::isUnprivilegedLoadStore(
+                           llvm::support::endian::read32le(Insn->bytes)))
     throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
   auto *Detail = Insn->detail;
 
   auto &ARM64 = Detail->aarch64;
+  // The lift has no ZA state, and Capstone gives SME forms the ids of the
+  // NEON and SVE instructions they resemble (umlsl, fmla, ld1b, ...), whose
+  // handlers would read a ZA operand as a vector register.  Refuse them even
+  // in permissive mode, before any handler emits operations.
+  for (unsigned I = 0; I < ARM64.op_count; ++I)
+    if (ARM64.operands[I].type == AARCH64_OP_SME)
+      throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
   LiftState S(Insn->address, static_cast<uint16_t>(Insn->size), Ops);
   S.ScalarWideImmediate = ScalarWideImmediate;
   S.FollowingWord = FollowingWord;

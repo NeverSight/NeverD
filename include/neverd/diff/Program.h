@@ -85,6 +85,9 @@ struct AddressReference {
   uint64_t Key = 0;
   uint32_t Operand = 0;
   ReferenceKind Kind = ReferenceKind::Function;
+  /// Optional full byte coordinate in this input's mapped data. Candidate
+  /// context only: neither object identity nor normalized instruction identity.
+  std::optional<uint64_t> Coordinate;
 };
 
 /// One decoded instruction.
@@ -100,8 +103,9 @@ struct Instruction {
   /// The shape without scalar immediates and displacements.
   uint64_t Skeleton = 0;
   /// Shape retaining scalar operands but replacing address identities with a
-  /// category marker. Used only to distinguish a reference gap from an observed
-  /// operand change; it never establishes normalized equality.
+  /// category marker. Distinguishes reference gaps from observed operand
+  /// changes and proposes structural candidates; it never establishes
+  /// normalized equality.
   uint64_t AddressIndependentShape = 0;
   /// Where the instruction's bytes begin in Program::Code.
   uint32_t CodeOffset = 0;
@@ -206,6 +210,10 @@ struct Function {
   /// The entry block, relative to FirstBlock; NoIndex for a function
   /// without blocks.
   uint32_t EntryBlock = NoIndex;
+  /// Byte-derived candidate hint for fixed-frame address-use roles. It does
+  /// not change normalized instruction identity or prove stack-object aliasing.
+  /// Zero means unavailable; matcher revisions own this auxiliary feature.
+  uint64_t StackRoleCandidate = 0;
 
   bool has(FunctionTrait Trait) const { return (Traits & Trait) != 0; }
   /// Whether the function has code of this program to compare.
@@ -262,6 +270,13 @@ bool isNativeX86Normalization(llvm::StringRef Profile);
 /// not a digest or authentication of the input or its analysis.
 std::string programAnalysisIdentity(const ProgramIdentity &Identity);
 
+/// An initialized, relocation-marked code coordinate, not a runtime binding.
+struct CodePointerInitializer {
+  uint64_t Slot = 0;
+  /// An unreadable marked slot remains a barrier, never a guessed target.
+  std::optional<uint64_t> Target;
+};
+
 /// One side of a comparison.
 struct Program {
   ProgramIdentity Identity;
@@ -274,6 +289,11 @@ struct Program {
   std::vector<Instruction> Instructions;
   std::vector<Reference> References;
   std::vector<AddressReference> AddressReferences;
+  /// Byte-derived initialized code references, ordered by slot. These optional
+  /// candidate hints establish neither object boundaries nor stable runtime
+  /// values. Their bytes and mapping are bound by the native input identity;
+  /// matcher revisions own their use, independently of instruction identity.
+  std::vector<CodePointerInitializer> CodeInitializers;
   /// The bytes of every instruction, at Instruction::CodeOffset.
   std::vector<uint8_t> Code;
   /// Distinct mnemonics, by Instruction::Mnemonic.
@@ -351,6 +371,7 @@ public:
   void addReference(ReferenceKind Kind, uint64_t Key, uint32_t Block);
   void setEntryBlock(uint32_t Block);
   void addTraits(uint16_t Traits);
+  void setStackRoleCandidate(uint64_t Key);
   void warn(std::string Warning);
 
   /// Ends the program: every direct call whose target begins one of its

@@ -151,6 +151,15 @@ TEST(X86SystemState, TransactionCompletionEncodingsAreValidated) {
                                                 0x1000, Instruction);
           ASSERT_EQ(Size, Bytes.size());
           std::vector<LowOp> Ops;
+          // XEND/XTEST use NP encodings. A disassembler mnemonic does not
+          // authorize discarding 66/F2/F3: the original aborts inside RTM.
+          if (std::any_of(Prefix.begin(), Prefix.end(), [](uint8_t Byte) {
+                return Byte == 0x66 || Byte == 0xf2 || Byte == 0xf3;
+              })) {
+            EXPECT_THROW(D.liftToLow(Instruction, Ops), UnliftedInstruction);
+            EXPECT_TRUE(Ops.empty());
+            continue;
+          }
           ASSERT_NO_THROW(D.liftToLow(Instruction, Ops));
           ASSERT_FALSE(Ops.empty());
           EXPECT_EQ(Ops.front().Inputs[0].Offset, static_cast<uint64_t>(Id));
@@ -640,7 +649,7 @@ TEST(X86ImplicitMsr, ForgedEncodingAndDetailsRefuseBeforeEmission) {
   }
 }
 
-TEST(X86SystemState, UnmodeledRefiningPrefixesCannotBecomeLegacyInstructions) {
+TEST(X86SystemState, RefiningPrefixesRetainTheirDistinctInstructions) {
   const std::vector<std::vector<uint8_t>> Encodings = {
       {0xf2, 0x0f, 0x01, 0xca},
       {0xf3, 0x0f, 0x01, 0xca},
@@ -659,6 +668,10 @@ TEST(X86SystemState, UnmodeledRefiningPrefixesCannotBecomeLegacyInstructions) {
                   static_cast<uint64_t>(Bytes.back() == 0xee
                                             ? Intrinsic::X86ClearUserInterrupt
                                             : Intrinsic::X86SetUserInterrupt));
+      } else if (A == Arch::X64) {
+        ASSERT_EQ(Size, Bytes.size());
+        EXPECT_EQ(I.Id, unsigned(Bytes.front() == 0xf2 ? X86_INS_ERETS
+                                                       : X86_INS_ERETU));
       } else
         EXPECT_EQ(Size, 0);
     }
@@ -692,28 +705,30 @@ TEST(X86SystemState, FarAndInterruptReturnsLiftToTerminalStateTransfers) {
   // Far and interrupt returns leave the ordinary call/return domain: they are
   // terminal architectural control transfers, never ABI returns.  Each lifts
   // to a void, no-return Retf/Iret intrinsic whose operands name every stack
-  // cell the transfer reads (CS:IP, plus FLAGS and, for 64-bit IRET, SS:RSP).
+  // cell the transfer reads (CS:IP, plus FLAGS and, for IRET begun in 64-bit
+  // mode, SS:SP independently of the operand size).
   // The lift never emits an ordinary RETURN and never silently drops the
   // transferred state; it grants no privilege/segment reconstruction.
   struct Case {
     std::vector<uint8_t> Bytes;
     Intrinsic Id;
     unsigned Cells;
+    unsigned FieldBytes;
   };
   for (auto A : {Arch::X86, Arch::X64}) {
     Decoder D;
     ASSERT_TRUE(D.init(A));
     D.setStrict(true);
     std::vector<Case> Cases = {
-        {{0xcb}, Intrinsic::Retf, 2},         // retf
-        {{0xca, 0x08, 0x00}, Intrinsic::Retf, 2}, // retf imm16
-        {{0x66, 0xcb}, Intrinsic::Retf, 2},   // retfw
-        {{0xcf}, Intrinsic::Iret, 3},         // iretd (ip/cs/flags)
-        {{0x66, 0xcf}, Intrinsic::Iret, 3},   // iretw
+        {{0xcb}, Intrinsic::Retf, 2, 4},             // retf
+        {{0xca, 0x08, 0x00}, Intrinsic::Retf, 2, 4}, // retf imm16
+        {{0x66, 0xcb}, Intrinsic::Retf, 2, 2},       // retfw
+        {{0xcf}, Intrinsic::Iret, A == Arch::X64 ? 5u : 3u, 4},
+        {{0x66, 0xcf}, Intrinsic::Iret, A == Arch::X64 ? 5u : 3u, 2},
     };
     if (A == Arch::X64) {
-      Cases.push_back({{0x48, 0xcf}, Intrinsic::Iret, 5}); // iretq: +ss:rsp
-      Cases.push_back({{0x48, 0xcb}, Intrinsic::Retf, 2}); // retfq
+      Cases.push_back({{0x48, 0xcf}, Intrinsic::Iret, 5, 8});
+      Cases.push_back({{0x48, 0xcb}, Intrinsic::Retf, 2, 8});
     }
     for (const auto &C : Cases) {
       SCOPED_TRACE(static_cast<unsigned>(A));
@@ -735,6 +750,8 @@ TEST(X86SystemState, FarAndInterruptReturnsLiftToTerminalStateTransfers) {
       ASSERT_GE(Term.NumInputs, 1u);
       EXPECT_EQ(Term.Inputs[0].Offset, static_cast<uint64_t>(C.Id));
       EXPECT_EQ(Term.NumInputs, C.Cells + 1u);
+      for (unsigned Cell = 1; Cell < Term.NumInputs; ++Cell)
+        EXPECT_EQ(Term.Inputs[Cell].Size, C.FieldBytes);
     }
   }
 }
@@ -744,7 +761,7 @@ TEST(X86SystemState, SyscallReturnsLiftToTerminalStateTransfers) {
   // transfer control to a named register (SYSRET: RCX->RIP, R11->RFLAGS;
   // SYSEXIT: RDX->RIP, RCX->RSP) and never resume in the lifted function.  Each
   // lifts to a void, no-return intrinsic naming those two source registers and
-  // never becomes an ordinary RETURN.  SYSENTER and RSM stay refused.
+  // never becomes an ordinary RETURN. SYSENTER has its own MSR boundary.
   struct Case {
     std::vector<uint8_t> Bytes;
     Intrinsic Id;
@@ -754,11 +771,11 @@ TEST(X86SystemState, SyscallReturnsLiftToTerminalStateTransfers) {
     ASSERT_TRUE(D.init(A));
     D.setStrict(true);
     std::vector<Case> Cases = {
-        {{0x0f, 0x07}, Intrinsic::Sysretq}, // sysret
+        {{0x0f, 0x07}, Intrinsic::Sysretq},  // sysret
         {{0x0f, 0x35}, Intrinsic::Sysexitq}, // sysexit
     };
     if (A == Arch::X64) {
-      Cases.push_back({{0x48, 0x0f, 0x07}, Intrinsic::Sysretq}); // sysretq
+      Cases.push_back({{0x48, 0x0f, 0x07}, Intrinsic::Sysretq});  // sysretq
       Cases.push_back({{0x48, 0x0f, 0x35}, Intrinsic::Sysexitq}); // sysexitq
     }
     for (const auto &C : Cases) {
@@ -782,22 +799,29 @@ TEST(X86SystemState, SyscallReturnsLiftToTerminalStateTransfers) {
   }
 }
 
-TEST(X86SystemState, SysenterAndResumeStayRefused) {
-  // SYSENTER's target and stack come from MSRs and RSM restores state from
-  // SMRAM: neither has a named operand, so both are refused rather than lifted
-  // to a lossy continuation.
+TEST(X86SystemState, SysenterNamesItsEnvironmentAndResumeStaysRefused) {
   for (auto A : {Arch::X86, Arch::X64}) {
     Decoder D;
     ASSERT_TRUE(D.init(A));
     D.setStrict(true);
-    for (const auto &Bytes : {std::vector<uint8_t>{0x0f, 0x34},   // sysenter
+    for (const auto &Bytes : {std::vector<uint8_t>{0x0f, 0x34},    // sysenter
                               std::vector<uint8_t>{0x0f, 0xaa}}) { // rsm
       DecodedInsn I{};
       ASSERT_EQ(D.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, I),
                 static_cast<int>(Bytes.size()));
       std::vector<LowOp> Ops;
-      EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
-      EXPECT_TRUE(Ops.empty());
+      if (Bytes.back() == 0xaa) {
+        EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+        EXPECT_TRUE(Ops.empty());
+      } else {
+        ASSERT_NO_THROW(D.liftToLow(I, Ops));
+        ASSERT_EQ(Ops.size(), 1u);
+        EXPECT_EQ(Ops.front().Opcode, NdOp::INTRINSIC);
+        EXPECT_EQ(Ops.front().NumInputs, 1u);
+        EXPECT_EQ(Ops.front().Output.Size, 0u);
+        EXPECT_EQ(Ops.front().Inputs[0],
+                  NdVar::cst(uint64_t(Intrinsic::X86Sysenter), 2));
+      }
     }
   }
 }

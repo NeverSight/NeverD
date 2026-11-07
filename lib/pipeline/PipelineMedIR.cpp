@@ -17,6 +17,8 @@
 #include "PipelineSEHRuntimeMemory.h"
 #include "PipelineSourceStackAccesses.h"
 #include "PipelineTrimStorage.h"
+#include "X86/X64CallRCX.h"
+#include "X86/X64FillReturn.h"
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
@@ -71,9 +73,12 @@ void prepareMedStackAccesses(MedFunc &Func, const LowFunc &Source,
                              const BinaryImage &Image,
                              MedStackProjection Projection,
                              const MedCallReturnRanges *CallReturns,
-                             bool WaitForCalleeFacts) {
+                             bool WaitForCalleeFacts,
+                             bool CallFreeMachineSource) {
   Func.EntryKind = functionEntryKind(Func, Image.stackEntryKindAt(Func.Entry));
-  if (Projection != MedStackProjection::Source)
+  // Tentative display bodies retain their physical operations. Native source
+  // frame proofs cannot reject that view or turn it into an executable ABI.
+  if (Projection != MedStackProjection::Source || Func.AnalysisOnly)
     return;
   simplifyProvenStackAlignment(Func, Image.Arch, Image.abiFormat(),
                                Func.EntryKind);
@@ -82,7 +87,8 @@ void prepareMedStackAccesses(MedFunc &Func, const LowFunc &Source,
   std::string Diagnostic;
   Func.CallReturnReads.clear();
   bool NeedsCalleeFacts = false;
-  if (!validateSourceCallReturnReads(
+  if (!CallFreeMachineSource &&
+      !preserveSourceCallReturnWrites(
           Func, Image, Diagnostic, limits::ir::kSourceCallReturnReadWork,
           &Source, CallReturns, &Func.CallReturnReads,
           WaitForCalleeFacts ? &NeedsCalleeFacts : nullptr))
@@ -93,7 +99,8 @@ void prepareMedStackAccesses(MedFunc &Func, const LowFunc &Source,
     throw LowToMedConversionError(
         "source frame in " + Func.Name +
         ": a CALL return-slot proof waits for callee return ranges");
-  markSourceStackAccesses(Func, Image.Arch, Image.abiFormat(), Func.EntryKind);
+  markSourceStackAccesses(Func, Image.Arch, Image.abiFormat(), Func.EntryKind,
+                          &Image);
 }
 
 MedCallReturnRanges sourceCallReturnRanges(const BinaryImage &Image,
@@ -118,24 +125,315 @@ MedCallReturnRanges sourceCallReturnRanges(const BinaryImage &Image,
   return Ranges;
 }
 
+SourceStackScan sourceStackScanOf(const MedFunc &Func,
+                                  const BinaryImage &Image) {
+  SourceStackScan Scan;
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  const auto Arguments = TRI.integerArgumentLayout(Image.abiFormat());
+  Scan.Candidate = Func.Params.size() > Arguments.Registers.size();
+  for (const auto &Block : Func.Blocks) {
+    Scan.Weight += Block.Ops.size();
+    for (const auto &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&
+          !Op.SourceCallHint)
+        Scan.Calls.push_back(Op.Inputs[0].ConstVal);
+      Scan.Candidate |= forwardsSourceEntryRegister(Op, Arguments);
+      if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2)
+        Scan.Candidate |= Op.Inputs[1].Kind == MedVar::Reg &&
+                          Op.Inputs[1].SSAVer == 0 &&
+                          Arguments.registerIndex(Op.Inputs[1].RegOff) >= 0;
+      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
+        Scan.Candidate |= Op.Inputs[0].Kind == MedVar::Reg &&
+                          Op.Inputs[0].SSAVer == 0 &&
+                          Op.Inputs[0].Size < TRI.PointerSize &&
+                          Arguments.registerIndex(Op.Inputs[0].RegOff) >= 0;
+    }
+  }
+  return Scan;
+}
+
+std::shared_ptr<OmittedCalleeMemo::Conversion::PreparedSource>
+prepareSourceStackBody(const MedFunc &Source, const BinaryImage &Image,
+                       bool KeepPrologueSaves) {
+  using PreparedSource = OmittedCalleeMemo::Conversion::PreparedSource;
+  // Marked where it is kept: the spills name its operations.
+  auto Prepared = std::make_shared<PreparedSource>(PreparedSource{Source, {}});
+  MedFunc &Func = Prepared->Body;
+  markSourceStackAccesses(Func, Image.Arch, Image.abiFormat(), Func.EntryKind,
+                          &Image, &Prepared->OverwrittenSpills);
+  // Selected bodies also carry this phase's complete borrowed-frame proof.
+  // Keep that source fact, but never promote it into an overwrite receipt.
+  if (KeepPrologueSaves)
+    for (size_t B = 0; B < Source.Blocks.size(); ++B)
+      for (size_t O = 0; O < Source.Blocks[B].Ops.size(); ++O)
+        Func.Blocks[B].Ops[O].PrologueSave |=
+            Source.Blocks[B].Ops[O].PrologueSave;
+  // Every dependency wave, and every later run's, queries the prepared
+  // body's value readers.
+  Prepared->ValueReads = valueReadsOf(Func);
+  return Prepared;
+}
+
 void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
-                                         PipelineResult &Result) {
+                                         PipelineResult &Result,
+                                         llvm::ArrayRef<LowFunc> Originals) {
+  const bool HasCallerBatch =
+      Image.Arch == Arch::X64 && Image.abiFormat() == BinaryFormat::COFF;
+  if (!HasCallerBatch &&
+      getTargetRegInfo(Image.Arch).PointerSize >= sizeof(uint64_t)) {
+    std::vector<uint64_t> Weights(Result.MedFuncs.size(), 1);
+    for (size_t I = 0; I < Result.MedFuncs.size(); ++I)
+      for (const auto &Block : Result.MedFuncs[I].Blocks)
+        Weights[I] += Block.Ops.size();
+    // Other source ABIs have no call-input batch below. Each worker owns only
+    // its selected body.
+    parallelForEachWeighted(Weights, [&](auto Claim, size_t N) {
+      for (size_t I; (I = Claim()) < N;)
+        markSettledSourceStackSpills(Result.MedFuncs[I], Image.Arch,
+                                     Image.abiFormat(), &Image);
+    });
+  }
   std::map<va_t, const MedFunc *> Callees;
   std::set<va_t> Complete;
-  for (const LowFunc &Func : Result.LowFuncs)
+  std::map<va_t, llvm::ArrayRef<LowBlock>> OriginalBlocks;
+  for (const LowFunc &Func : Originals)
     if (Func.hasCompleteLiftCoverage() &&
-        Func.UnsafeIndirectBranchAddresses.empty())
+        Func.UnsafeIndirectBranchAddresses.empty()) {
       Complete.insert(Func.Entry);
+      if (!Func.Blocks.empty() && Func.Blocks.front().StartAddr == Func.Entry &&
+          Func.Blocks.front().Preds.empty())
+        OriginalBlocks.emplace(Func.Entry, Func.Blocks);
+    }
+  if (Result.OmittedCallees)
+    for (const auto &[Entry, Blocks] :
+         Result.OmittedCallees->SourceOriginalBlocks)
+      if (Blocks)
+        OriginalBlocks.try_emplace(Entry, *Blocks);
   for (const MedFunc &Func : Result.MedFuncs)
     if (Complete.count(Func.Entry))
       Callees.emplace(Func.Entry, &Func);
   if (Result.OmittedCallees)
     for (const auto &Func : Result.OmittedCallees->Bodies)
       Callees.try_emplace(Func->Entry, Func.get());
-  for (MedFunc &Func : Result.MedFuncs)
+  for (MedFunc &Func : Result.MedFuncs) {
     if (Complete.count(Func.Entry))
       markUnobservedBorrowedFrameStores(Func, Image.Arch, Image.abiFormat(),
                                         Callees);
+    markUndefinedScratchStores(Func, Image.Arch, Image.abiFormat());
+  }
+  if (!HasCallerBatch)
+    return;
+  // What preparation reads of each callee it may follow: kept with the
+  // memo's conversion of an omitted body, else read here once.
+  OmittedCalleeMemo *Memo = Result.CalleeSignatureMemo.get();
+  std::map<va_t, SourceStackScan> OwnScans;
+  const auto ScanOf = [&](va_t Entry,
+                          const MedFunc &Func) -> const SourceStackScan & {
+    if (Memo && !Complete.count(Entry))
+      if (const auto *Kept = Memo->conversionOf(Func);
+          Kept && Kept->SourceStack)
+        return *Kept->SourceStack;
+    auto [At, Added] = OwnScans.try_emplace(Entry);
+    if (Added)
+      At->second = sourceStackScanOf(Func, Image);
+    return At->second;
+  };
+  std::set<va_t> Referenced;
+  std::vector<va_t> Pending;
+  const auto Reference = [&](va_t Target) {
+    if (!Result.CallPrototypeArguments.count(Target) &&
+        !Result.CallUserPrototypes.count(Target) &&
+        Referenced.insert(Target).second)
+      Pending.push_back(Target);
+  };
+  for (const auto &Func : Result.MedFuncs)
+    for (const auto &Call : Func.CallInfos)
+      if (!Call.IsIndirect && !Call.SourceCallHint &&
+          !Call.ArgumentsInCalleeRegisterOrder)
+        Reference(Call.TargetAddr);
+  // Follow only bodies already admitted by the bounded signature reader.
+  // Reading a callee's source inputs never starts an unbounded image walk.
+  for (size_t I = 0; I < Pending.size(); ++I)
+    if (const auto At = Callees.find(Pending[I]); At != Callees.end())
+      for (const va_t Target : ScanOf(At->first, *At->second).Calls)
+        Reference(Target);
+  std::vector<const MedFunc *> Sources;
+  std::vector<uint64_t> Weights;
+  for (const auto &[Entry, Func] : Callees) {
+    if (!Referenced.count(Entry))
+      continue;
+    if (const SourceStackScan &Scan = ScanOf(Entry, *Func); Scan.Candidate) {
+      Sources.push_back(Func);
+      Weights.push_back(Scan.Weight);
+    }
+  }
+  // Cached bodies are immutable. Prepare each candidate once; independent
+  // functions and each dependency wave run in weighted parallel batches. An
+  // omitted callee's preparation reads only its kept body and the image, so
+  // the memo keeps it with that conversion for every later run.
+  using PreparedSource = OmittedCalleeMemo::Conversion::PreparedSource;
+  std::vector<OmittedCalleeMemo::Conversion *> Kept(Sources.size(), nullptr);
+  std::vector<std::shared_ptr<PreparedSource>> Prepared(Sources.size());
+  std::vector<const std::set<const MedOp *> *> OverwrittenSpills(Sources.size(),
+                                                                 nullptr);
+  std::vector<uint64_t> PrepareWeights(Sources.size(), 0);
+  for (size_t I = 0; I < Sources.size(); ++I) {
+    if (Memo && !Complete.count(Sources[I]->Entry))
+      Kept[I] = Memo->conversionOf(*Sources[I]);
+    if (Kept[I] && Kept[I]->Prepared) {
+      Sources[I] = &Kept[I]->Prepared->Body;
+      OverwrittenSpills[I] = &Kept[I]->Prepared->OverwrittenSpills;
+    } else {
+      PrepareWeights[I] = Weights[I];
+    }
+  }
+  parallelForEachWeighted(PrepareWeights, [&](auto Claim, size_t N) {
+    for (size_t I; (I = Claim()) < N;) {
+      if (OverwrittenSpills[I])
+        continue;
+      const auto &Source = *Sources[I];
+      Prepared[I] = prepareSourceStackBody(Source, Image,
+                                           Complete.count(Source.Entry) != 0);
+      Sources[I] = &Prepared[I]->Body;
+    }
+  });
+  std::vector<const MedValueReads *> ValueReads(Sources.size(), nullptr);
+  for (size_t I = 0; I < Sources.size(); ++I) {
+    if (Prepared[I]) {
+      OverwrittenSpills[I] = &Prepared[I]->OverwrittenSpills;
+      ValueReads[I] = Prepared[I]->ValueReads.get();
+      if (Kept[I])
+        Memo->keepPrepared(*Kept[I], Prepared[I]);
+    } else if (Kept[I] && Kept[I]->Prepared) {
+      ValueReads[I] = Kept[I]->Prepared->ValueReads.get();
+    }
+  }
+  std::map<va_t, std::set<size_t>> Callers;
+  for (size_t I = 0; I < Sources.size(); ++I)
+    for (const auto &Block : Sources[I]->Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst())
+          Callers[Op.Inputs[0].ConstVal].insert(I);
+  std::vector<size_t> Work;
+  for (size_t I = 0; I < Sources.size(); ++I)
+    Work.push_back(I);
+  std::vector<size_t> Remaining(Sources.size(),
+                                limits::ir::kSourceEntrySpillWork);
+  SourceCalleeParameterReads Facts;
+  SourceCalleeParameterOverwrites Overwrites;
+  // The callees whose declarations bound their arguments, asked of each
+  // callee a query meets rather than listed for the image's declarations:
+  // prototypes, the integer signatures omitted callees read, and the
+  // imports below, less those a variadic signature leaves open.
+  const auto Declared = [&](va_t Target) {
+    if (Result.CallEntryVariadicArguments.count(Target) ||
+        (Result.OmittedCalleeVariadicArguments &&
+         Result.OmittedCalleeVariadicArguments->count(Target)))
+      return false;
+    if (Result.CallPrototypeArguments.count(Target) ||
+        (Result.OmittedCalleeIntegerArguments &&
+         Result.OmittedCalleeIntegerArguments->count(Target)))
+      return true;
+    // Fixed import arity tables also own native stack bounds, without
+    // needing a complete typed source prototype. An import rebound to an
+    // image routine must use that routine's independently checked contract
+    // instead.
+    const auto Own = Result.CallArgumentSources.find(Target);
+    const bool Unbound =
+        Own == Result.CallArgumentSources.end() || Own->second == Target;
+    const auto ImportDeclared = [&](const std::map<va_t, int> &Arguments) {
+      const auto At = Arguments.find(Target);
+      return At != Arguments.end() && At->second >= 0 &&
+             Image.findImportAt(Target) && Unbound;
+    };
+    // An image's summaries list their imports (CallEntryStackArgImports),
+    // ascending as CallEntryStackArgs holds them.
+    if (Result.CallEntryStackArgImports) {
+      if (Unbound &&
+          std::binary_search(Result.CallEntryStackArgImports->begin(),
+                             Result.CallEntryStackArgImports->end(), Target))
+        return true;
+    } else if (ImportDeclared(Result.CallEntryStackArgs)) {
+      return true;
+    }
+    return Result.OmittedCalleeStackArgs &&
+           ImportDeclared(*Result.OmittedCalleeStackArgs);
+  };
+  std::vector<std::optional<std::set<unsigned>>> StackReads(Sources.size());
+  while (!Work.empty()) {
+    std::vector<uint64_t> WaveWeights;
+    for (size_t I : Work)
+      WaveWeights.push_back(Weights[I]);
+    std::vector<SourceRegisterParameterReads> Reads(Work.size());
+    std::vector<std::set<unsigned>> Destroyed(Work.size());
+    parallelForEachWeighted(WaveWeights, [&](auto Claim, size_t N) {
+      for (size_t W; (W = Claim()) < N;) {
+        const size_t I = Work[W];
+        Reads[W] = sourceRegisterParameterReads(
+            *Sources[I], Facts, Remaining[I], Overwrites, ValueReads[I]);
+        if (const auto At = OriginalBlocks.find(Sources[I]->Entry);
+            At != OriginalBlocks.end() && !At->second.empty()) {
+          // This original-CFG fact is independent of the changing source
+          // register summaries. Reuse it across this phase's dependency waves.
+          if (!StackReads[I])
+            StackReads[I] = unobservedSourceStackParametersDeclaredBy(
+                *Sources[I], At->second, Declared, Remaining[I], &Image);
+          for (unsigned P : *StackReads[I])
+            Reads[W].emplace(P, 0);
+          Destroyed[W] = sourceRegisterInputOverwrites(
+              *Sources[I], At->second, Reads[W], Overwrites,
+              *OverwrittenSpills[I], Remaining[I]);
+          // A proved original destruction also rules out a source input.
+          // This includes the GS case, whose register proof cannot discard
+          // even a transient spill observed by its exceptional cookie check.
+          for (unsigned P : Destroyed[W])
+            Reads[W].emplace(P, 0);
+        }
+      }
+    });
+    std::set<size_t> Next;
+    for (size_t W = 0; W < Work.size(); ++W) {
+      const va_t Entry = Sources[Work[W]]->Entry;
+      auto &Known = Facts[Entry];
+      bool Changed = false;
+      for (const auto &[P, Bytes] : Reads[W]) {
+        auto [At, Added] = Known.emplace(P, Bytes);
+        if (Added || Bytes < At->second) {
+          At->second = Bytes;
+          Changed = true;
+        }
+      }
+      for (unsigned P : Destroyed[W])
+        Changed |= Overwrites[Entry].insert(P).second;
+      if (Changed)
+        if (const auto At = Callers.find(Entry); At != Callers.end())
+          for (size_t I : At->second)
+            if (Remaining[I])
+              Next.insert(I);
+    }
+    Work.assign(Next.begin(), Next.end());
+  }
+  std::vector<uint64_t> CallerWeights;
+  std::set<va_t> Emitted;
+  for (const auto &Func : Result.MedFuncs) {
+    Emitted.insert(Func.Entry);
+    uint64_t Weight = 1;
+    for (const auto &Block : Func.Blocks)
+      Weight += Block.Ops.size();
+    CallerWeights.push_back(Weight);
+  }
+  parallelForEachWeighted(CallerWeights, [&](auto Claim, size_t N) {
+    for (size_t I; (I = Claim()) < N;) {
+      replaceKnownSourceCallArguments(Result.MedFuncs[I], Facts);
+      recoverX64FillReturns(Result.MedFuncs[I], Image);
+      // Call-input recovery has settled as well. Reuse this worker instead
+      // of creating another large-stack coordinator for each source query.
+      markSettledSourceStackSpills(Result.MedFuncs[I], Image.Arch,
+                                   Image.abiFormat(), &Image);
+      captureX64CallRCX(Result.MedFuncs[I], Image, Result.CallUnreadGPRs,
+                        Emitted);
+    }
+  });
 }
 
 void omitRefusedFunctions(PipelineResult &Result,
@@ -202,8 +500,9 @@ std::map<va_t, unsigned> settledCalleeIntegerArity(
       getTargetRegInfo(Image.Arch).integerParamRegs(Image.abiFormat());
   std::map<va_t, unsigned> Arity;
   for (const MedFunc &Callee : Result.MedFuncs) {
-    if (!Targets.count(Callee.Entry) || !Callee.CallReturnReads.empty() ||
-        Callee.IsVariadic || Callee.SourceTypeHint)
+    if (Callee.AnalysisOnly || !Targets.count(Callee.Entry) ||
+        !Callee.CallReturnReads.empty() || Callee.IsVariadic ||
+        Callee.SourceTypeHint)
       continue;
     unsigned Count = 0;
     for (const MedVar &Param : Callee.Params)
@@ -298,8 +597,8 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   auto SourceSites = Opts.usesSourceDeclarations()
                          ? Opts.SourceCallSiteHints
                          : decltype(Opts.SourceCallSiteHints){};
-  const auto SEHRuntimeMemory =
-      collectLowSEHRuntimeMemory(Img, Result.LowFuncs);
+  const auto SEHRuntimeMemory = collectLowSEHRuntimeMemory(
+      Img, Result.LowFuncs, Result.SEHWritableImageRanges.get());
   std::map<va_t, const LowFunc *> SourceCalleeFunctions;
   for (const auto &F : Result.LowFuncs)
     SourceCalleeFunctions.emplace(F.Entry, &F);
@@ -371,20 +670,23 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     Local.setObjCBlockParameterReceivers(&Opts.ObjCBlockParameterReceivers);
     Local.setObjCBlockCaptureReceivers(&Opts.ObjCBlockCaptureReceivers);
     Local.setCalleePopMap(&CalleePop);
-    Local.setCallMayWriteGPRs(&Result.CallMayWriteGPRs);
-    Local.setCallExitConstants(&Result.CallExitConstants);
-    Local.setCallEntryReadGPRs(&Result.CallEntryReadGPRs);
-    Local.setCallUnreadGPRs(&Result.CallUnreadGPRs);
-    Local.setCallArgumentSources(&Result.CallArgumentSources);
-    Local.setCallEntryStackArgs(&Result.CallEntryStackArgs);
+    Local.setCallMayWriteGPRs(&Result.CallMayWriteGPRs.get());
+    Local.setCallExitConstants(&Result.CallExitConstants.get());
+    Local.setCallEntryReadGPRs(&Result.CallEntryReadGPRs.get());
+    Local.setCallUnreadGPRs(&Result.CallUnreadGPRs.get());
+    Local.setCallArgumentSources(&Result.CallArgumentSources.get());
+    Local.setCallEntryStackArgs(&Result.CallEntryStackArgs.get());
     Local.setCallEntryStackSlots(&Result.CallEntryStackSlots);
     Local.setCallEntryArgumentCounts(&Result.CallEntryArgumentCounts);
-    Local.setCallEntryFloatingArguments(&Result.CallEntryFloatingArguments);
-    Local.setCallEntryIntegerArguments(&Result.CallEntryIntegerArguments);
-    Local.setCallEntryVariadicArguments(&Result.CallEntryVariadicArguments);
-    Local.setUserPrototypeCallees(&Result.CallUserPrototypes);
-    Local.setCallDispatchThunks(&Result.CallDispatchThunks);
-    Local.setCallVariadicFrom(&Result.CallVariadicFrom);
+    Local.setCallEntryFloatingArguments(
+        &Result.CallEntryFloatingArguments.get());
+    Local.setCallEntryIntegerArguments(&Result.CallEntryIntegerArguments.get());
+    Local.setCallEntryVariadicArguments(
+        &Result.CallEntryVariadicArguments.get());
+    Local.setUserPrototypeCallees(&Result.CallUserPrototypes.get());
+    Local.setCallDispatchThunks(&Result.CallDispatchThunks.get());
+    Local.setCallVariadicFrom(&Result.CallVariadicFrom.get());
+    Local.setStackProbeIndex(Result.StackProbeIndex.get());
     Local.setFormattedCalls(&Result.FormattedCalls);
     Local.setStackProbeSlots(&StackProbeSlots);
   };
@@ -400,6 +702,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
                   << "\n";
     const LowFunc &LF = Result.LowFuncs[I];
     MedFunc Fallback;
+    Fallback.AnalysisOnly = LF.AnalysisOnly;
     Fallback.Name = LF.Name;
     Fallback.Entry = LF.Entry;
     Fallback.OriginalSize = LF.OriginalSize;
@@ -472,7 +775,9 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
       prepareMedStackAccesses(MF, Projected ? *Projected : Result.LowFuncs[I],
                               Img, medStackProjection(Opts),
                               CalleeFactsReady ? &CallReturns : nullptr,
-                              !CalleeFactsReady);
+                              !CalleeFactsReady,
+                              Result.InterpreterMachineSourceABI.has_value() &&
+                                  Result.LowFuncs.size() == 1);
       StackPrepared = true;
       if (medStackProjection(Opts) == MedStackProjection::Source)
         expandSourceRegisterCalls(MF, Img, Result.CallRegisterLeaves);
@@ -707,6 +1012,8 @@ neverd::PipelineResult neverd::Pipeline::rebuildSourceCalls(
   COPY_SOURCE_FACT(FormattedCalls);
   COPY_SOURCE_FACT(OmittedCallees);
   COPY_SOURCE_FACT(CallFloatReturns);
+  COPY_SOURCE_FACT(SEHWritableImageRanges);
+  COPY_SOURCE_FACT(StackProbeIndex);
 #undef COPY_SOURCE_FACT
   Result.Success = true;
   buildMedIR(Img, Opts, Result);

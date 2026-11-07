@@ -3,6 +3,7 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file Scalar expansion preserving element order and runtime direction.
 
 #include "StringTransfer.h"
 
@@ -91,15 +92,17 @@ std::optional<StringTransferShape> stringTransferShape(const LowOp &Op) {
 }
 
 llvm::Expected<std::vector<LowOp>>
-lowerStringTransfer(const LowOp &Op, uint64_t Count, bool Backward,
+lowerStringTransfer(const LowOp &Op, uint64_t Count,
+                    std::optional<bool> Backward,
                     llvm::ArrayRef<LowOp> InstructionOps,
                     uint64_t TemporaryLimit, uint64_t MaxOperations) {
   const auto Shape = stringTransferShape(Op);
   if (!Shape)
     return invalid("unsupported repeated memory transfer shape");
   std::vector<LowOp> Result;
-  const uint64_t PerElement = Shape->Fill ? 2 : 4;
-  const uint64_t Completion = Shape->completionOperations(Count);
+  const bool RuntimeDirection = !Backward && Count;
+  const uint64_t PerElement = Shape->elementOperations(RuntimeDirection);
+  const uint64_t Completion = Shape->fixedOperations(Count, RuntimeDirection);
   if (MaxOperations < Completion ||
       Count > (MaxOperations - Completion) / PerElement ||
       Count > (Result.max_size() - Completion) / PerElement)
@@ -127,7 +130,8 @@ lowerStringTransfer(const LowOp &Op, uint64_t Count, bool Backward,
   for (unsigned I = 0; I < Op.NumInputs; ++I)
     if (!Scan(Op.Inputs[I]))
       return invalid("repeated memory transfer temporary is out of range");
-  if (Count && (Next > TemporaryLimit || TemporaryLimit - Next < 24))
+  const unsigned ScratchBytes = RuntimeDirection ? 40 : 24;
+  if (Count && (Next > TemporaryLimit || TemporaryLimit - Next < ScratchBytes))
     return invalid("repeated memory transfer has no disjoint scratch range");
 
   std::vector<NdVar> Outputs{Op.Output};
@@ -196,14 +200,33 @@ lowerStringTransfer(const LowOp &Op, uint64_t Count, bool Backward,
   const NdVar SourceAddress = NdVar::tmp(Next, 8);
   const NdVar DestinationAddress = NdVar::tmp(Next + 8, 8);
   const NdVar Element = NdVar::tmp(Next + 16, Shape->ElementBytes);
+  const NdVar DirectionMask = NdVar::tmp(Next + 24, Op.Inputs[4].Size);
+  const NdVar Direction = NdVar::tmp(Next + 28, 1);
+  const NdVar SelectedDelta = NdVar::tmp(Next + 32, 8);
+  if (RuntimeDirection) {
+    NdVar Input = Op.Inputs[4];
+    if (Shape->CompleteState) {
+      Emit(NdOp::INT_AND, DirectionMask,
+           {Input, NdVar::scalar(1u << X86RepDirectionShift, Input.Size)});
+      Input = DirectionMask;
+    }
+    Emit(NdOp::INT_NOTEQUAL, Direction, {Input, NdVar::scalar(0, Input.Size)});
+  }
+  const auto DeltaFor = [&](uint64_t Distance) {
+    if (!RuntimeDirection)
+      return NdVar::scalar(
+          Backward.value_or(false) ? uint64_t{0} - Distance : Distance, 8);
+    Emit(NdOp::SELECT, SelectedDelta,
+         {Direction, NdVar::scalar(uint64_t{0} - Distance, 8),
+          NdVar::scalar(Distance, 8)});
+    return SelectedDelta;
+  };
   const bool TruncateFill =
       Shape->CompleteState && Shape->Fill && Shape->ElementBytes != 8;
   if (Count && TruncateFill)
     Emit(NdOp::SUBBYTES, Element, {Op.Inputs[3], NdVar::scalar(0, 4)});
   for (uint64_t I = 0; I < Count; ++I) {
-    const uint64_t Distance = I * Shape->ElementBytes;
-    const NdVar Delta =
-        NdVar::scalar(Backward ? uint64_t{0} - Distance : Distance, 8);
+    const NdVar Delta = DeltaFor(I * Shape->ElementBytes);
     if (!Shape->Fill) {
       Emit(NdOp::INT_ADD, SourceAddress, {Op.Inputs[1], Delta});
       Emit(NdOp::LOAD, Element, {SourceAddress});
@@ -215,9 +238,7 @@ lowerStringTransfer(const LowOp &Op, uint64_t Count, bool Backward,
           Shape->Fill && !TruncateFill ? Op.Inputs[3] : Element});
   }
   if (Shape->CompleteState) {
-    const uint64_t Distance = Count * Shape->ElementBytes;
-    const auto Delta =
-        NdVar::scalar(Backward ? uint64_t{0} - Distance : Distance, 8);
+    const auto Delta = DeltaFor(Count * Shape->ElementBytes);
     Emit(NdOp::INT_ADD, Outputs[0], {Op.Inputs[1], Delta});
     if (!Shape->Fill)
       Emit(NdOp::INT_ADD, Outputs[1], {Op.Inputs[2], Delta});

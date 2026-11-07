@@ -1454,29 +1454,6 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     break;
   }
 
-  // --- LCALL (far call) ---
-  case X86_INS_LCALL: {
-    if (X86.op_count < 1)
-      break;
-    NdVar Target = operandRead(S, X86.operands[0]);
-    S.emit(NdOp::INDIR_CALL, NdVar::reg(x86reg::RAX, 4), {Target});
-    break;
-  }
-
-  // --- LJMP (far jump) ---
-  case X86_INS_LJMP: {
-    if (X86.op_count < 1)
-      break;
-    if (X86.operands[0].type == X86_OP_IMM) {
-      S.emit(NdOp::BRANCH, {},
-             {NdVar::cst(static_cast<uint64_t>(X86.operands[0].imm), 8)});
-    } else {
-      NdVar Target = operandRead(S, X86.operands[0]);
-      S.emit(NdOp::INDIR_BR, {}, {Target});
-    }
-    break;
-  }
-
   // --- ENTER imm16, imm8 ---
   // imm8 is the lexical nesting level (taken mod 32).  Intel SDM:
   //   Push(RBP); FrameTemp = RSP
@@ -1596,15 +1573,15 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       break;
     }
     NdVar NewFlags = PopField(2);
-    if (InsnId == X86_INS_IRETQ) {
-      // 64-bit IRET pops SS:RSP unconditionally (Intel SDM): name all five
-      // transferred cells.
+    if (TargetArch == Arch::X64) {
+      // IRET begun in 64-bit mode always pops SS:SP, independently of its
+      // operand size or the target CPL (Intel SDM, IA-32e-MODE).
       NdVar NewSp = PopField(3);
       NdVar NewSs = PopField(4);
       S.emitVoidIntrinsic(Intrinsic::Iret,
                           {NewIp, NewCs, NewFlags, NewSp, NewSs});
     } else {
-      // 16-/32-bit IRET to the same privilege level pops IP/CS/FLAGS.
+      // Legacy IRET's stack switch depends on the target privilege level.
       S.emitVoidIntrinsic(Intrinsic::Iret, {NewIp, NewCs, NewFlags});
     }
     break;

@@ -43,6 +43,11 @@ struct SourceAggregateMember {
 /// Nested records retain their declared layout. Other mixtures fail.
 std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type);
 
+/// Scalar pieces of a supported logical source value. A 128-bit integer
+/// contributes two unsigned machine words; records retain their leaf types.
+/// Offsets describe source bytes independently of their physical locations.
+std::vector<SourceAggregateMember> sourceABIValueMembers(const TypeRef &Type);
+
 struct SourceABIParameter {
   size_t ParameterIndex = 0;
   uint16_t ByteOffset = 0;
@@ -79,7 +84,9 @@ sourceABIParameters(const SourceFunctionTypeHint &Hint);
 TypeRef sourceABICallResultType(const SourceFunctionTypeHint &Hint);
 
 /// Assign Darwin's ordinary fixed scalar calling convention, including a
-/// 128-bit integer result in two registers (parameters remain at most 64 bits).
+/// 128-bit integer result in two registers. AArch64 parameters also admit
+/// complete 128-bit integers, including consecutive odd-register pairs and
+/// aligned whole-value stack spills.
 /// This describes
 /// the requested scalar signature; it does not establish that a binary had
 /// that declaration. Inferred native hints must retain their observed

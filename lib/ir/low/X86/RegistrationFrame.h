@@ -12,7 +12,9 @@
 #include <array>
 #include <compare>
 #include <cstddef>
+#include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <utility>
@@ -40,6 +42,25 @@ struct SEHExceptionAddress {
   va_t Filter = InvalidVA;
   int32_t Offset = 0;
   auto operator<=>(const SEHExceptionAddress &) const = default;
+};
+
+/// A checked RaiseException occurrence and its current scalar argument. This
+/// only refines the code read by its local search filters; it proves neither
+/// callback effects nor the flags later maintained by the exception runtime.
+struct SEHExceptionOrigin {
+  va_t Address = InvalidVA;
+  int OpSeq = -1;
+  uint32_t Code = 0;
+  auto operator<=>(const SEHExceptionOrigin &) const = default;
+};
+
+/// The current thread block, named by the exact FS Self read. It is neither
+/// the registration chain nor a source-frame or callback-frame coordinate.
+struct SEHThreadAddress {
+  va_t RootAddress = InvalidVA;
+  int RootOpSeq = -1;
+  int32_t Offset = 0;
+  auto operator<=>(const SEHThreadAddress &) const = default;
 };
 
 /// Values in the PE32 address domain. Offset names the runtime establisher;
@@ -80,6 +101,28 @@ struct FrameValue {
   /// independent of regenerated frame placement. Mixing with any other frame
   /// provenance drops this fact; it never grants dereference authority.
   bool FrameOnlyFromSEHScalar = false;
+  /// A complete address retains its preferred-image identity for checked
+  /// memory/runtime consumers. Its bits are not a fixed integer after loading
+  /// or rewriting the image, and cannot serve as an affine frame displacement.
+  std::optional<uint32_t> ImageAddress;
+  /// An EH4 scope-table address XORed with the security cookie. CookieXOR
+  /// contains only the additional stable integer mask.
+  std::optional<uint32_t> CookieImageXOR;
+  /// A runtime callable loaded from an authenticated eager import slot.
+  /// This names the provider binding, never the callable's address bits.
+  std::optional<uint32_t> ImportTarget;
+  std::optional<SEHThreadAddress> ThreadAddress;
+
+  std::optional<uint32_t> preferredAddress() const {
+    return ImageAddress ? ImageAddress : Constant;
+  }
+
+  std::optional<uint32_t> cookieAddress() const {
+    if (!SecurityCookie || CookieFrameOffset)
+      return std::nullopt;
+    return CookieImageXOR ? (CookieXOR ? std::nullopt : CookieImageXOR)
+                          : std::optional<uint32_t>{CookieXOR};
+  }
 
   bool isFrameIndependentScalar() const {
     return !MayBeFrame || FrameOnlyFromSEHScalar;
@@ -102,6 +145,16 @@ struct FrameValue {
   static FrameValue constant(uint32_t Value) {
     return {{}, Value, false, false};
   }
+  static FrameValue imageAddress(uint32_t Value) {
+    FrameValue Result;
+    Result.ImageAddress = Value;
+    return Result;
+  }
+  static FrameValue importTarget(uint32_t Slot) {
+    FrameValue Result;
+    Result.ImportTarget = Slot;
+    return Result;
+  }
   static FrameValue callbackFrame(va_t Entry, int32_t Offset) {
     FrameValue Result;
     Result.MayBeFrame = true;
@@ -120,29 +173,119 @@ struct FrameValue {
     Result.SEHException = Address;
     return Result;
   }
+  static FrameValue threadBlock(SEHThreadAddress Address) {
+    FrameValue Result;
+    Result.ThreadAddress = Address;
+    return Result;
+  }
   auto operator<=>(const FrameValue &) const = default;
 };
 
 FrameValue join(FrameValue Left, const FrameValue &Right);
 
+/// Logical frame cells have value semantics. Snapshots share storage until an
+/// edit; const iteration never detaches. An edit must not retain references or
+/// copy its owning frame while the mutable map is borrowed.
+class FrameCells {
+public:
+  using Map = std::map<int32_t, FrameValue>;
+  using const_iterator = Map::const_iterator;
+
+  const Map &read() const {
+    static const Map Empty;
+    return Storage ? *Storage : Empty;
+  }
+  const_iterator begin() const { return read().begin(); }
+  const_iterator end() const { return read().end(); }
+  const_iterator find(int32_t Offset) const { return read().find(Offset); }
+  const_iterator lower_bound(int32_t Offset) const {
+    return read().lower_bound(Offset);
+  }
+  size_t count(int32_t Offset) const { return read().count(Offset); }
+  size_t size() const { return read().size(); }
+  bool empty() const { return read().empty(); }
+  void clear() { Storage.reset(); }
+
+  template <typename Edit> void edit(Edit &&Action) {
+    if (!Storage)
+      Storage = std::make_shared<Map>();
+    else if (Storage.use_count() != 1)
+      Storage = std::make_shared<Map>(*Storage);
+    Action(*Storage);
+  }
+
+  void set(int32_t Offset, const FrameValue &Value) {
+    const auto It = find(Offset);
+    if (It == end() || It->second != Value)
+      edit([&](Map &Cells) { Cells.insert_or_assign(Offset, Value); });
+  }
+  void erase(int32_t Offset) {
+    if (count(Offset))
+      edit([&](Map &Cells) { Cells.erase(Offset); });
+  }
+  const_iterator erase(const_iterator Position) {
+    const int32_t Offset = Position->first;
+    erase(Offset);
+    return lower_bound(Offset);
+  }
+  const_iterator erase(const_iterator First, const_iterator Last) {
+    if (First == Last)
+      return Last;
+    const int32_t Begin = First->first;
+    const auto End =
+        Last == end() ? std::nullopt : std::optional<int32_t>{Last->first};
+    edit([&](Map &Cells) {
+      Cells.erase(Cells.lower_bound(Begin),
+                  End ? Cells.lower_bound(*End) : Cells.end());
+    });
+    return End ? lower_bound(*End) : end();
+  }
+  bool operator==(const FrameCells &Other) const {
+    return Storage == Other.Storage || read() == Other.read();
+  }
+  auto operator<=>(const FrameCells &Other) const {
+    return read() <=> Other.read();
+  }
+
+private:
+  std::shared_ptr<Map> Storage;
+};
+
+/// Drop fully deallocated words. A word crossing the new stack boundary loses
+/// its exact identity but retains taint in the bytes that remain live.
+void discardFrameCellsBelow(FrameCells &Cells, int32_t Boundary);
+
 /// A checked PE32 scalar call defines either its instruction-local result or
 /// the complete physical EAX. Other register outputs carry no return authority.
 bool hasX86ScalarCallOutput(const LowOp &Op);
 
+/// Complete PE32 GPR indices that a bound invocation may refine. Saved
+/// nonvolatile identities and physical frame registers retain entry ownership.
+bool isX86VolatileFrameRegister(unsigned Index);
+
+/// Change invocation domains after a complete call proof. Exact scalars and
+/// image identities survive; callee-owned identities become opaque returned
+/// aliases. The borrow owner separately remaps authenticated caller objects.
+FrameValue projectX86CallReturnValue(const FrameValue &Value);
+
 struct FrameState {
   std::array<FrameValue, 8> Registers;
+  /// Unknown calls or possibly overlapping writes prevent future cached-IAT
+  /// load facts. Cached values have a separate call-preservation obligation.
+  bool ImportBindingsIntact = true;
   /// Flags and vector registers carry conservative byte taint. They cannot
   /// acquire an exact frame offset through a truncation or vector alias.
   std::map<uint64_t, FrameValue> OtherRegisterBytes;
   /// Calls may define any volatile flag/vector byte. Explicit subsequent
   /// writes override this default; a missing map entry is not a zero value.
   bool OtherRegistersMayBeFrame = false;
-  std::map<int32_t, FrameValue> Cells;
-  std::map<int32_t, FrameValue> EntryCells;
-  std::map<int32_t, FrameValue> CallbackCells;
+  FrameCells Cells;
+  FrameCells EntryCells;
+  FrameCells CallbackCells;
   std::set<int32_t> InitializedCallbackBytes;
   std::optional<va_t> CallbackEntry;
   std::optional<va_t> SEHFilterEntry;
+  std::optional<SEHExceptionOrigin> SEHOrigin;
   size_t cellCount() const {
     return Cells.size() + EntryCells.size() + CallbackCells.size() +
            InitializedCallbackBytes.size();
@@ -173,7 +316,8 @@ struct FrameState {
   /// pointer retained from an earlier callback. Old pointers keep only taint.
   void enterCallback(va_t Entry);
   void leaveCallback();
-  void enterSEHFilter(va_t Entry, int32_t ExceptionPointersOffset);
+  void enterSEHFilter(va_t Entry, int32_t ExceptionPointersOffset,
+                      std::optional<SEHExceptionOrigin> Origin = std::nullopt);
   /// Only the record link and the scalar code/flags are modeled. An absent
   /// value means this invocation, field, or access width has no authority.
   std::optional<FrameValue> sehExceptionLoad(const SEHExceptionAddress &Address,
@@ -200,11 +344,20 @@ public:
 
   FrameValue read(const NdVar &Value) const;
 
-  FrameValue evaluate(const LowOp &Op, bool Installed) const;
+  FrameValue evaluate(const LowOp &Op, bool Installed,
+                      std::optional<va_t> ImportLoad = std::nullopt) const;
+
+  void invalidateImportBindings(const LowOp &Op,
+                                const std::set<va_t> &ImportSlots);
 
   bool isCookieCheck(const LowOp &Op, va_t CookieCheckVA) const;
 
-  void write(const LowOp &Op, FrameValue Value, va_t CookieCheckVA = 0);
+  /// Cached callables survive only a separately authenticated import ABI.
+  /// Returning-stack facts for arbitrary local callees supply no such fact.
+  /// Keeping a live slot binding additionally needs its own call effect.
+  void write(const LowOp &Op, FrameValue Value, va_t CookieCheckVA = 0,
+             bool PreserveImportedTargets = false,
+             bool PreserveImportBindings = false);
 
 private:
   std::optional<FrameValue> evaluateRelativeScalar(const LowOp &Op) const;

@@ -560,15 +560,145 @@ declaredFloatCallBytes(const MedOp &Op, const TargetRegInfo &TRI,
 /// inside a PHI cycle can otherwise hide an undefined arm from a later return.
 /// Arithmetic and loads retain their ordinary result widths; this tracks
 /// incoming and call-clobbered bytes, not general value/poison analysis.
+///
+/// A value's answer reads only the values it is computed from, so a query
+/// solves just those its answer reaches that no earlier query solved: the
+/// greatest fixed point of such a closed set is the whole function's there.
 class DefinedLowBytes {
   using Key = std::pair<int, int>;
   const MedFunc &Func;
   const std::map<Key, const MedOp *> &Defs;
   const std::map<Key, const PhiNode *> &Phis;
+  /// Each value's last clobber, which evaluate reads.
   std::map<Key, const MedCallClobber *> Clobbers;
-  std::map<Key, uint16_t> Bytes;
+  /// The values earlier queries solved.
+  mutable std::map<Key, uint16_t> Bytes;
+  /// The values being solved, and those a step of that solve read that it
+  /// does not hold (solve).
+  mutable std::map<Key, uint16_t> *Solving = nullptr;
+  mutable std::set<Key> *Unsolved = nullptr;
   const TargetRegInfo &TRI;
   const std::map<va_t, uint16_t> *FloatReturns;
+
+  /// The value \p K names in the solve: its last clobber's, else its PHI's,
+  /// else its definition's output; null where none defines it.
+  const MedVar *valueOf(const Key &K) const {
+    if (const auto C = Clobbers.find(K); C != Clobbers.end())
+      return &C->second->Value;
+    if (const auto P = Phis.find(K); P != Phis.end())
+      return &P->second->Output;
+    if (const auto D = Defs.find(K); D != Defs.end())
+      return &D->second->Output;
+    return nullptr;
+  }
+
+  /// Calls \p Each with every value \p K's answer reads (evaluate): its
+  /// last clobber's preserved input, else its PHI's arguments, else the
+  /// inputs of the view or merge that defines it and the wide value behind
+  /// an OR's AND mask.  Other definitions keep their width without a read.
+  template <typename EachFn>
+  void forEachInput(const Key &K, EachFn Each) const {
+    const auto Input = [&](const MedVar &V) {
+      if (!V.isConst() && V.Kind != MedVar::Unspecified)
+        Each(Key{V.Id, V.SSAVer});
+    };
+    if (const auto C = Clobbers.find(K); C != Clobbers.end()) {
+      Input(C->second->PreservedInput);
+      return;
+    }
+    if (const auto P = Phis.find(K); P != Phis.end()) {
+      for (const auto &[Pred, Arg] : P->second->Args)
+        Input(Arg);
+      if (P->second->ExceptionalEntry)
+        Input(*P->second->ExceptionalEntry);
+      return;
+    }
+    const auto D = Defs.find(K);
+    if (D == Defs.end())
+      return;
+    const MedOp &Op = *D->second;
+    switch (Op.Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+    case NdOp::SUBBYTES:
+      if (Op.NumInputs)
+        Input(Op.Inputs[0]);
+      break;
+    case NdOp::CONCAT:
+    case NdOp::SELECT:
+      for (uint8_t I = 0; I != Op.NumInputs; ++I)
+        Input(Op.Inputs[I]);
+      break;
+    case NdOp::INT_OR:
+      for (uint8_t I = 0; I != Op.NumInputs; ++I)
+        Input(Op.Inputs[I]);
+      // A partial register write observes the original wide value behind
+      // its AND mask (definedMergedLowBytes).
+      if (Op.NumInputs == 2)
+        for (const MedVar &Masked : {Op.Inputs[0], Op.Inputs[1]})
+          if (!Masked.isConst())
+            if (const auto Mask = Defs.find({Masked.Id, Masked.SSAVer});
+                Mask != Defs.end() && Mask->second->Opcode == NdOp::INT_AND &&
+                Mask->second->NumInputs == 2)
+              Input(Mask->second->Inputs[0]);
+      break;
+    default:
+      break;
+    }
+  }
+
+  /// Solves \p Root and the values its answer reads that no earlier query
+  /// solved, each from its full width to the fixed point.  A read outside
+  /// that set joins it, and the set is solved again from full widths.
+  void solve(const Key &Root) const {
+    std::set<Key> Members;
+    const auto Widen = [&](std::vector<Key> Stack) {
+      while (!Stack.empty()) {
+        const Key K = Stack.back();
+        Stack.pop_back();
+        if (Bytes.count(K) || !valueOf(K) || !Members.insert(K).second)
+          continue;
+        forEachInput(K, [&](const Key &Input) { Stack.push_back(Input); });
+      }
+    };
+    Widen({Root});
+    while (!Members.empty()) {
+      std::map<Key, uint16_t> Current;
+      std::map<Key, std::vector<Key>> Users;
+      for (const Key &K : Members) {
+        Current[K] = valueOf(K)->Size;
+        forEachInput(K, [&](const Key &Input) {
+          if (Members.count(Input))
+            Users[Input].push_back(K);
+        });
+      }
+      std::set<Key> Read;
+      Solving = &Current;
+      Unsolved = &Read;
+      std::deque<Key> Work(Members.begin(), Members.end());
+      std::set<Key> Pending = Members;
+      while (!Work.empty()) {
+        const Key K = Work.front();
+        Work.pop_front();
+        Pending.erase(K);
+        const uint16_t Next = evaluate(*valueOf(K));
+        if (Next >= Current.at(K))
+          continue;
+        Current[K] = Next;
+        if (const auto U = Users.find(K); U != Users.end())
+          for (const Key &User : U->second)
+            if (Pending.insert(User).second)
+              Work.push_back(User);
+      }
+      Solving = nullptr;
+      Unsolved = nullptr;
+      if (Read.empty()) {
+        Bytes.merge(Current);
+        return;
+      }
+      Widen(std::vector<Key>(Read.begin(), Read.end()));
+    }
+  }
 
   uint16_t evaluate(const MedVar &Value) const {
     const Key K{Value.Id, Value.SSAVer};
@@ -625,63 +755,8 @@ public:
                   const std::map<va_t, uint16_t> *FloatReturns)
       : Func(Func), Defs(Defs), Phis(Phis), TRI(TRI),
         FloatReturns(FloatReturns) {
-    std::map<Key, MedVar> Values;
-    std::map<Key, std::vector<Key>> Users;
-    const auto Add = [&](const MedVar &V) {
-      const Key K{V.Id, V.SSAVer};
-      Values[K] = V;
-      Bytes[K] = V.Size;
-    };
-    const auto Use = [&](const MedVar &Output, const MedVar &Input) {
-      if (!Input.isConst() && Input.Kind != MedVar::Unspecified)
-        Users[{Input.Id, Input.SSAVer}].push_back({Output.Id, Output.SSAVer});
-    };
-    for (const auto &[K, Op] : Defs) {
-      Add(Op->Output);
-      for (uint8_t I = 0; I != Op->NumInputs; ++I)
-        Use(Op->Output, Op->Inputs[I]);
-      // A partial register write observes the original wide value behind
-      // its AND mask, whose ordinary arithmetic width is itself complete.
-      if (Op->Opcode == NdOp::INT_OR && Op->NumInputs == 2)
-        for (const MedVar &Input : {Op->Inputs[0], Op->Inputs[1]})
-          if (!Input.isConst())
-            if (const auto Mask = Defs.find({Input.Id, Input.SSAVer});
-                Mask != Defs.end() && Mask->second->Opcode == NdOp::INT_AND &&
-                Mask->second->NumInputs == 2)
-              Use(Op->Output, Mask->second->Inputs[0]);
-    }
-    for (const auto &[K, Phi] : Phis) {
-      Add(Phi->Output);
-      for (const auto &[Pred, Input] : Phi->Args)
-        Use(Phi->Output, Input);
-      if (Phi->ExceptionalEntry)
-        Use(Phi->Output, *Phi->ExceptionalEntry);
-    }
-    for (const MedCallClobber &Clobber : Func.CallClobbers) {
+    for (const MedCallClobber &Clobber : Func.CallClobbers)
       Clobbers[{Clobber.Value.Id, Clobber.Value.SSAVer}] = &Clobber;
-      Add(Clobber.Value);
-      if (Clobber.PreservedPrefixSize)
-        Use(Clobber.Value, Clobber.PreservedInput);
-    }
-    std::deque<Key> Work;
-    std::set<Key> Pending;
-    for (const auto &[K, V] : Values) {
-      Work.push_back(K);
-      Pending.insert(K);
-    }
-    while (!Work.empty()) {
-      const Key K = Work.front();
-      Work.pop_front();
-      Pending.erase(K);
-      const uint16_t Next = evaluate(Values.at(K));
-      if (Next >= Bytes.at(K))
-        continue;
-      Bytes[K] = Next;
-      if (const auto U = Users.find(K); U != Users.end())
-        for (const Key &User : U->second)
-          if (Pending.insert(User).second)
-            Work.push_back(User);
-    }
   }
 
   uint16_t operator()(const MedVar &V) const {
@@ -700,6 +775,19 @@ public:
       if (Op == Defs.end() || EntryCopy)
         return parameterRegisterPrefix(Func, V);
     }
+    if (const auto It = Bytes.find(K); It != Bytes.end())
+      return std::min(V.Size, It->second);
+    if (Solving) {
+      if (const auto It = Solving->find(K); It != Solving->end())
+        return std::min(V.Size, It->second);
+      // A value the solve does not hold yet: it joins the set (solve).
+      if (valueOf(K))
+        Unsolved->insert(K);
+      return 0;
+    }
+    if (!valueOf(K))
+      return 0;
+    solve(K);
     const auto It = Bytes.find(K);
     return It == Bytes.end() ? 0 : std::min(V.Size, It->second);
   }
@@ -927,6 +1015,70 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
   auto OnlyReturned = [&](const MedOp *Write) {
     return Write && !ReadInBody.count({Write->Output.Id, Write->Output.SSAVer});
   };
+  // Whether a merged epilogue's integer-return PHI takes, on every edge, the
+  // predecessor's last integer-return write, made after the value the
+  // floating-return PHI \p Float takes on that edge. find's
+  // get_relative_timestamp leaves strtod's double or its square in XMM0, then
+  // writes EAX's 1 or 0 on both paths to its shared `pop rbx; ret`.
+  auto IntegerWrittenLast = [&](const MedBlock &Join, const PhiNode &Float) {
+    const auto Writes = [](const MedOp &Op, uint64_t RegOff) {
+      return Op.Output.Kind == MedVar::Reg && Op.Output.Size &&
+             Op.Output.RegOff == RegOff && Op.Opcode != NdOp::SUBBYTES;
+    };
+    if (Float.ExceptionalEntry || Float.Args.empty())
+      return false;
+    // As for in-block writes, a value some branch decides on is a control
+    // value (a loop counter beside a floating accumulator), and a result is
+    // read by nothing but the return.
+    for (const auto &Phi : Join.Phis) {
+      if (Phi.Output.Kind != MedVar::Reg ||
+          Phi.Output.RegOff != TRI.IntReturnReg || Phi.ExceptionalEntry ||
+          Phi.Args.size() != Float.Args.size() ||
+          ReadInBody.count({Phi.Output.Id, Phi.Output.SSAVer}))
+        continue;
+      bool Later = true;
+      for (const auto &[Pred, Value] : Phi.Args) {
+        const auto FloatArm =
+            std::find_if(Float.Args.begin(), Float.Args.end(),
+                         [&](const auto &Arm) { return Arm.first == Pred; });
+        if (FloatArm == Float.Args.end() || Pred < 0 ||
+            Pred >= static_cast<int>(Func.Blocks.size())) {
+          Later = false;
+          break;
+        }
+        const MedBlock &Source = Func.Blocks[Pred];
+        std::optional<size_t> IntAt, FloatAt;
+        for (size_t I = 0; I < Source.Ops.size(); ++I) {
+          const MedOp &Op = Source.Ops[I];
+          if (Writes(Op, TRI.IntReturnReg))
+            IntAt = I;
+          if (FloatArm->second.isConst() ? Writes(Op, TRI.FPReturnReg)
+                                         : Op.Output == FloatArm->second)
+            FloatAt = I;
+        }
+        if (!IntAt) {
+          Later = false;
+          break;
+        }
+        const MedOp &Last = Source.Ops[*IntAt];
+        const bool Arrives = Value.isConst()
+                                 ? Last.Opcode == NdOp::COPY &&
+                                       Last.NumInputs == 1 &&
+                                       Last.Inputs[0].isConst() &&
+                                       Last.Inputs[0].ConstVal == Value.ConstVal
+                                 : Last.Output == Value;
+        if (!Arrives || TestedByBranch(&Last) ||
+            (FilterRestore && isReturnRegRestore(Defs, Source, Last, TRI)) ||
+            (FloatAt && *FloatAt > *IntAt)) {
+          Later = false;
+          break;
+        }
+      }
+      if (Later)
+        return true;
+    }
+    return false;
+  };
   for (const auto &Blk : Func.Blocks) {
     for (auto Rit = Blk.Ops.rbegin(); Rit != Blk.Ops.rend(); ++Rit) {
       if (Rit->Opcode != NdOp::RETURN)
@@ -979,8 +1131,12 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
         if (Rit2->Output.Kind != MedVar::Reg || Rit2->Output.Size == 0)
           continue;
 
+        // A SUBBYTES is usually a narrower view of the register, which writes
+        // nothing. One that fills the whole register is a write: a division's
+        // quotient comes out of its double-width result that way.
         if (Rit2->Output.RegOff == TRI.IntReturnReg &&
-            Rit2->Opcode != NdOp::SUBBYTES &&
+            (Rit2->Opcode != NdOp::SUBBYTES ||
+             Rit2->Output.Size == TRI.PointerSize) &&
             !(FilterRestore &&
               isReturnRegRestore(Defs, *ScanBlk, *Rit2, TRI))) {
           if (IntDist < 0)
@@ -1062,7 +1218,11 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
             }
             // Do not choose a narrow arm merely because it appears first:
             // a wider scalar candidate needs those bytes on every path.
-            if (CandidateWidth && DefinedBytes(Phi.Output) >= CandidateWidth) {
+            // Where every path writes the integer return register after the
+            // value this PHI takes, the integer is the result, as for writes
+            // in the RETURN's own block.
+            if (CandidateWidth && DefinedBytes(Phi.Output) >= CandidateWidth &&
+                !IntegerWrittenLast(Blk, Phi)) {
               FloatElem = CandidateWidth;
               FloatDist = 0;
               FloatViaPhi = true;
@@ -1190,55 +1350,84 @@ bool visitOriginalMemoryPointerInputs(
   return true;
 }
 
-static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI) {
-  std::map<std::pair<int, int>, const MedOp *> DefMap;
-  for (const auto &Blk : Func.Blocks)
-    for (const auto &Op : Blk.Ops)
-      if (Op.Output.Id >= 0 && Op.Output.Size > 0)
-        DefMap[{Op.Output.Id, Op.Output.SSAVer}] = &Op;
+namespace {
+// A zero SSA version is not by itself a live-in: a call, local definition or
+// PHI can own that version. Reuse this identity index for local address uses
+// and interprocedural forwarding, without rebuilding it for each call edge.
+class EntryParameterValues {
+  using Key = std::tuple<MedVar::VarKind, int, int>;
+  const MedFunc &Function;
+  unsigned PointerBytes;
+  std::set<Key> Defined;
 
-  // A parameter register is a pointer only when its INCOMING value (SSA version
-  // 0, the live-in) is used as a memory address / indirect target.  A register
-  // that merely shares its number with a parameter but holds a later, unrelated
-  // pointer (e.g. `x0 := &local_buffer` set up for an outgoing call argument, a
-  // redefinition at SSA version > 0) must NOT taint the parameter: typing an
-  // integer parameter as a pointer makes the caller pass
-  // `inttoptr(smallconst)`, which the rewrite backend materialises as a bogus
-  // PC-relative address rather than the literal value (an integer argument `10`
-  // became `0x20000000a`).
-  auto isLiveInReg = [](const MedVar &V) {
-    return V.Kind == MedVar::Reg && V.Id >= 0 && V.SSAVer == 0;
-  };
-  // Stack Params all use kNoParamReg, so that sentinel cannot own a role.
-  // Match the recovered slot identity instead; a narrow lane is not an address
-  // carrier. Version-zero register matching retains the existing live-in rule.
-  auto parameterIndex = [&](const MedVar &V) -> std::optional<size_t> {
-    if (!isLiveInReg(V) && V.Kind != MedVar::Param)
+  static Key key(const MedVar &Value) {
+    return {Value.Kind, Value.Id, Value.SSAVer};
+  }
+
+public:
+  EntryParameterValues(const MedFunc &Function, unsigned PointerBytes)
+      : Function(Function), PointerBytes(PointerBytes) {
+    auto Define = [&](const MedVar &Value) {
+      if ((Value.Kind == MedVar::Reg || Value.Kind == MedVar::Param) &&
+          Value.SSAVer == 0 && Value.Size >= PointerBytes)
+        Defined.insert(key(Value));
+    };
+    for (const auto &Clobber : Function.CallClobbers)
+      Define(Clobber.Value);
+    for (const auto &Block : Function.Blocks) {
+      for (const auto &Phi : Block.Phis)
+        Define(Phi.Output);
+      for (const auto &Op : Block.Ops) {
+        // The converter's entry self-copy declares a live-in; it does not
+        // replace its bits. Independently defined narrow views also do not
+        // redefine the complete pointer carrier.
+        if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+            Op.Output == Op.Inputs[0] && Op.Output.Size == Op.Inputs[0].Size)
+          continue;
+        Define(Op.Output);
+      }
+    }
+  }
+
+  std::optional<size_t> parameterIndex(const MedVar &Value) const {
+    if ((Value.Kind != MedVar::Reg && Value.Kind != MedVar::Param) ||
+        (Value.Kind == MedVar::Reg && Value.Id < 0) || Value.SSAVer != 0 ||
+        Value.Size != PointerBytes || Defined.count(key(Value)))
       return std::nullopt;
     std::optional<size_t> Index;
-    for (size_t I = 0; I < Func.Params.size(); ++I) {
-      const auto &P = Func.Params[I];
-      bool Matches = P.RegOff != kNoParamReg
-                         ? P.RegOff == V.RegOff
-                         : V.Kind == MedVar::Param && V.RegOff == kNoParamReg &&
-                               P.Id == V.Id && V.Size == TRI.PointerSize &&
-                               P.Size == TRI.PointerSize;
-      if (!Matches)
+    for (size_t I = 0; I < Function.Params.size(); ++I) {
+      const auto &Parameter = Function.Params[I];
+      if (Parameter.Size != PointerBytes || Parameter.RegOff != Value.RegOff ||
+          (Value.Kind == MedVar::Param &&
+           (Parameter.Kind != MedVar::Param || Parameter.Id != Value.Id ||
+            Parameter.SSAVer != Value.SSAVer)) ||
+          (Value.Kind == MedVar::Reg && Parameter.RegOff == kNoParamReg))
         continue;
       if (Index)
         return std::nullopt;
       Index = I;
     }
     return Index;
-  };
+  }
+};
+} // namespace
+
+static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI,
+                            const EntryParameterValues &EntryValues) {
+  std::map<std::pair<int, int>, const MedOp *> DefMap;
+  for (const auto &Blk : Func.Blocks)
+    for (const auto &Op : Blk.Ops)
+      if (Op.Output.Id >= 0 && Op.Output.Size > 0)
+        DefMap[{Op.Output.Id, Op.Output.SSAVer}] = &Op;
+
   std::set<size_t> PtrParameters;
   std::set<size_t> RawAddressParameters;
   for (const auto &Value : x86PhysicalAddressInputValues(Func))
-    if (auto Index = parameterIndex(Value))
+    if (auto Index = EntryValues.parameterIndex(Value))
       RawAddressParameters.insert(*Index);
   auto recordAddressLiveIns = [&](const MedVar &AddrVar,
                                   std::set<size_t> &Roles) {
-    if (auto Index = parameterIndex(AddrVar))
+    if (auto Index = EntryValues.parameterIndex(AddrVar))
       Roles.insert(*Index);
     if (AddrVar.Kind != MedVar::Temp || AddrVar.Id < 0)
       return;
@@ -1247,7 +1436,7 @@ static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI) {
         Dit->second->NumInputs < 2)
       return;
     for (uint8_t I = 0; I < Dit->second->NumInputs; ++I)
-      if (auto Index = parameterIndex(Dit->second->Inputs[I]))
+      if (auto Index = EntryValues.parameterIndex(Dit->second->Inputs[I]))
         Roles.insert(*Index);
   };
   for (const auto &Blk : Func.Blocks) {
@@ -1258,7 +1447,7 @@ static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI) {
         continue;
       if (Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::INDIR_CALL) {
         if (Op.NumInputs >= 1)
-          if (auto Index = parameterIndex(Op.Inputs[0]))
+          if (auto Index = EntryValues.parameterIndex(Op.Inputs[0]))
             PtrParameters.insert(*Index);
       }
       const MedVar *MemoryAddress = nullptr;
@@ -1268,11 +1457,11 @@ static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI) {
           Op.NumInputs >= 1)
         MemoryAddress = &Op.Inputs[0];
       else if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs >= 2 &&
-                 Op.Inputs[0].isConst() &&
-                 intrinsicSupportsMemoryAddressSpace(
-                     static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) &&
-                 !isX86StringIntrinsic(
-                     static_cast<Intrinsic>(Op.Inputs[0].ConstVal)))
+               Op.Inputs[0].isConst() &&
+               intrinsicSupportsMemoryAddressSpace(
+                   static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) &&
+               !isX86StringIntrinsic(
+                   static_cast<Intrinsic>(Op.Inputs[0].ConstVal)))
         MemoryAddress = &Op.Inputs[1];
       if (MemoryAddress) {
         recordAddressLiveIns(*MemoryAddress,
@@ -1294,9 +1483,10 @@ static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI) {
                             ? Func.FPParamScalarBytes.end()
                             : Func.FPParamScalarBytes.find(MP.RegOff);
     if (PtrParameters.count(PI) && !RawAddressParameters.count(PI) &&
-        !TRI.isFrameOrLinkReg(MP.RegOff))
+        !TRI.isFrameOrLinkReg(MP.RegOff)) {
       TP.Type = NdType::makePtr();
-    else if (Scalar != Func.FPParamScalarBytes.end())
+      TP.Type->Size = TRI.PointerSize;
+    } else if (Scalar != Func.FPParamScalarBytes.end())
       TP.Type = NdType::makeFloat(Scalar->second);
     else
       TP.Type = NdType::makeInt(MP.Size);
@@ -1551,7 +1741,7 @@ void inferMedTypes(MedFunc &Func, Arch TheArch,
       inferReturnType(Func, TRI, TheArch, ReturnViaX87, Func.DefinedReturnBytes,
                       CalleeFloatReturns);
   Func.FPReturnViaX87 = ReturnViaX87;
-  inferParamTypes(Func, TRI);
+  inferParamTypes(Func, TRI, EntryParameterValues(Func, TRI.PointerSize));
   inferLocalTypes(Func);
 
   if (!Func.SourceTypeHint)
@@ -1845,16 +2035,26 @@ void inferMedTypes(MedFunc &Func, Arch TheArch,
   }
 }
 
+void refreshInferredMedParameters(MedFunc &Func, Arch TheArch) {
+  if (Func.SourceTypeHint || Func.SourceParametersBound)
+    return;
+  const auto &TRI = getTargetRegInfo(TheArch);
+  inferParamTypes(Func, TRI, EntryParameterValues(Func, TRI.PointerSize));
+}
+
 void propagateForwardedPointerParams(std::vector<MedFunc> &Funcs,
                                      Arch TheArch) {
   const auto &TRI = getTargetRegInfo(TheArch);
   std::map<va_t, size_t> ByEntry;
+  std::vector<EntryParameterValues> EntryValues;
+  EntryValues.reserve(Funcs.size());
   for (size_t I = 0; I < Funcs.size(); ++I) {
     ByEntry.emplace(Funcs[I].Entry, I);
+    EntryValues.emplace_back(Funcs[I], TRI.PointerSize);
     // Call-ABI recovery may add a parameter after the local type pass. Keep
     // source declarations authoritative, and refresh only inferred signatures.
     if (!Funcs[I].SourceTypeHint)
-      inferParamTypes(Funcs[I], TRI);
+      inferParamTypes(Funcs[I], TRI, EntryValues[I]);
   }
 
   std::map<va_t, std::vector<size_t>> DirectCallers;
@@ -1894,27 +2094,15 @@ void propagateForwardedPointerParams(std::vector<MedFunc> &Funcs,
           if (!Type || Type->Kind != NdTypeKind::Ptr)
             continue;
           const MedVar &Arg = Call.Args[ArgIndex];
-          if (Arg.SSAVer != 0 || Arg.Size != TRI.PointerSize)
+          const auto ParamIndex = EntryValues[CallerIndex].parameterIndex(Arg);
+          if (!ParamIndex)
             continue;
-          for (size_t ParamIndex = 0; ParamIndex < Caller.Params.size();
-               ++ParamIndex) {
-            const MedVar &Param = Caller.Params[ParamIndex];
-            const bool SameEntryRegister =
-                Param.RegOff != kNoParamReg && Arg.RegOff == Param.RegOff &&
-                (Arg.Kind == MedVar::Reg ||
-                 (Arg.Kind == MedVar::Param && Param.Kind == MedVar::Param &&
-                  Arg.Id == Param.Id));
-            const bool SameEntryStackSlot =
-                Arg.Kind == MedVar::Param && Param.Kind == MedVar::Param &&
-                Arg.Id == Param.Id && Arg.RegOff == kNoParamReg &&
-                Param.RegOff == kNoParamReg;
-            if ((!SameEntryRegister && !SameEntryStackSlot) ||
-                (Caller.TypedParams[ParamIndex].Type &&
-                 Caller.TypedParams[ParamIndex].Type->Kind == NdTypeKind::Ptr))
-              continue;
-            Caller.TypedParams[ParamIndex].Type = NdType::makePtr();
-            Changed = true;
-          }
+          if (Caller.TypedParams[*ParamIndex].Type &&
+              Caller.TypedParams[*ParamIndex].Type->Kind == NdTypeKind::Ptr)
+            continue;
+          Caller.TypedParams[*ParamIndex].Type = NdType::makePtr();
+          Caller.TypedParams[*ParamIndex].Type->Size = TRI.PointerSize;
+          Changed = true;
         }
       }
       if (Changed && !Queued[CallerIndex]) {

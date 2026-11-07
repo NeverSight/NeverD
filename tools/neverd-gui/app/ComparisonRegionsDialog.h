@@ -12,9 +12,11 @@
 #define NEVERD_GUI_COMPARISONREGIONSDIALOG_H
 
 #include <QDialog>
+#include <QJsonObject>
 
 class QComboBox;
 class QLabel;
+class QPushButton;
 class QTableView;
 namespace neverd::gui {
 class ComparisonModel;
@@ -26,6 +28,7 @@ public:
                           bool SSA = false);
 signals:
   void inspectFunction(const QString &Side, const QString &Address);
+  void inspectCallContext(const QString &Side, const QString &Address);
 
 private:
   ComparisonSession &Session;
@@ -36,9 +39,13 @@ private:
   QComboBox *Coordinates = nullptr;
   QLabel *FragmentScope = nullptr;
   QLabel *Summary, *Evidence;
+  QPushButton *CallContext;
   QString Revision, RegionId;
+  QJsonObject InstructionQuery;
+  QString anchorFunction(const QString &Side) const;
   void refresh();
   void filter();
+  void selectHypothesis();
   void selectAnchor();
 };
 } // namespace neverd::gui

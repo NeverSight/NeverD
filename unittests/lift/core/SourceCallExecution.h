@@ -53,6 +53,11 @@ inline void compileSource(const std::string &Source,
       "-Werror=implicit-function-declaration",
       "-Werror=return-type"};
   Arguments.append(ExtraArguments.begin(), ExtraArguments.end());
+  // An oracle calls original instructions it has mapped. UBSan's function check
+  // reads the eight bytes before a callee, which a fresh mapping need not have.
+  if (llvm::is_contained(ExtraArguments,
+                         llvm::StringRef("-fsanitize=undefined")))
+    Arguments.push_back("-fno-sanitize=function");
   Arguments.append({SourcePath, "-o", BinaryPath});
   if (!Execute)
     Arguments.push_back("-fsyntax-only");

@@ -7,23 +7,31 @@
 #ifndef NEVERD_IR_LOW_REGISTRATIONABI_H
 #define NEVERD_IR_LOW_REGISTRATIONABI_H
 
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/RegistrationCall.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ExceptionCommon.h"
 
 #include <array>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 namespace neverd {
 struct BinaryImage;
 struct LowFunc;
+struct LowBlock;
 struct LowOp;
 struct RegistrationStateAnalysis;
 class RegistrationCallCalleeIndex;
+namespace detail {
+class AbsoluteRelocationRootIndex;
+}
 
 RegistrationStateAnalysis analyzeCheckedX86SEHStates(
     const BinaryImage &Image, const LowFunc &Function,
@@ -38,6 +46,15 @@ RegistrationStateAnalysis analyzeCheckedX86SEHStates(
 /// builds a registration callee answers per level.
 unsigned x86SEHStateAnalysisLevel();
 
+/// Authenticate the current immutable PE32 or i386 ELF E8 rel32 bytes and
+/// target. This supplies no source occurrence, argument, frame or
+/// exception-effect proof.
+bool hasCheckedX86RegistrationDirectCallBytes(const BinaryImage &Image,
+                                              va_t Address, va_t Target);
+bool hasCheckedX86RegistrationDirectCallBytes(const BinaryImage &Image,
+                                              va_t Address, va_t Target,
+                                              size_t &Work, size_t Limit);
+
 /// Prove the entry ESP is restored at every ordinary near return and that
 /// all return-pop immediates agree. Unchecked calls invalidate ESP; an explicit
 /// restoration from an ABI-preserved register can recover it. Ordinary bodies
@@ -47,38 +64,86 @@ unsigned x86SEHStateAnalysisLevel();
 /// memory values or grants memory-effect authority. A termination-only SEH
 /// frame has no exceptional parent entry and uses the ordinary register-only
 /// proof, including a separate proof for every called finally.
+/// Import-dependent callees assume their eager IAT bindings at entry. Source
+/// callers consume stackContracts(), which retains those transitive
+/// dependencies and checks that the caller has not invalidated them.
 std::optional<uint32_t>
 getCheckedX86CalleeStackPop(const BinaryImage &Image, va_t Target,
                             size_t *CumulativeWork = nullptr);
 
-/// The answers of getCheckedX86CalleeStackPop for one unchanged image, each
-/// with the work its computation charged, per callee and
-/// x86SEHStateAnalysisLevel. A repeated query replays the answer and charges
-/// the same work, so both the answer and the caller's cumulative budget,
-/// including its exhaustion, are those of a fresh computation. Only
-/// computations that stayed within the budget are kept. The image must not
-/// change while a scope uses the memo.
+/// A fresh standalone returning-stack proof with no entry IAT dependencies.
+/// Charge the existing callee proof to Work, up to Limit and the ordinary
+/// registration work ceiling. This optional query never starts a fresh proof
+/// from inside another callee or registration-state analysis. Neither success
+/// nor failure survives an image change. The consumer must independently bind
+/// its actual direct CALL; memory effects and native ABI remain separate.
+/// If the ordinary answer depends on imports, a plain body may instead prove
+/// explicit register restoration with every call's stack effect unknown. This
+/// projection charges the same remaining allowance and leaves the ordinary
+/// answer's memo and complete calling contract unchanged.
+/// Optional Roots shares only the unchanged image's relocation inventory.
+std::optional<uint32_t> getCheckedX86IndependentCalleeStackPop(
+    const BinaryImage &Image, va_t Target, size_t &Work, size_t Limit,
+    const detail::AbsoluteRelocationRootIndex *Roots = nullptr);
+
+/// A single physical caller block ending in a direct CALL may fix the index
+/// of an immutable `jmp [reg*4+table]` callee entry. Re-lift the current prefix
+/// and prove its scalar index without incoming values or memory forwarding,
+/// then prove the selected target's independent returning stack. Roots must
+/// include every additional entry into the supplied prefix. This result is
+/// invocation-specific: it neither bounds the dispatcher globally nor grants
+/// frame memory, return-value, import-preservation or native EH authority.
+std::optional<uint32_t> getCheckedX86IndependentIndexedCallStackPop(
+    const BinaryImage &Image, const LowBlock &Prefix,
+    const std::set<va_t> &Roots, size_t &Work, size_t Limit);
+
+/// The returning-stack answers for one unchanged image, each with its import
+/// dependence and the work its computation charged, per callee and
+/// x86SEHStateAnalysisLevel and query kind. An opaque-call projection never
+/// replaces an ordinary contract. A repeated query replays the answer and
+/// charges the same work, so both the answer and the caller's cumulative
+/// budget, including its exhaustion, are those of a fresh computation.
+/// Completed computations and full-allowance refusals are kept; the latter
+/// replay only for the same starting allowance. The image must not change while
+/// a scope uses the memo. Raw graph storage has a separate bounded allowance
+/// and shares the same image lifetime.
 class RegistrationStackPopMemo {
 public:
+  enum class QueryKind { Ordinary, OpaqueProjection };
+
   struct Answer {
     std::optional<uint32_t> Pop;
     size_t Work = 0;
+    bool HasImportDependencies = false;
   };
 
-  explicit RegistrationStackPopMemo(const BinaryImage &Image) : Image(Image) {}
+  explicit RegistrationStackPopMemo(
+      const BinaryImage &Image,
+      size_t MaxGraphBytes = limits::ir::kMaxRegistrationStackGraphBytes);
   RegistrationStackPopMemo(const RegistrationStackPopMemo &) = delete;
   RegistrationStackPopMemo &
   operator=(const RegistrationStackPopMemo &) = delete;
 
   std::optional<Answer> find(const BinaryImage &Other, va_t Target,
-                             unsigned Level);
+                             unsigned Level,
+                             QueryKind Kind = QueryKind::Ordinary);
   void record(const BinaryImage &Other, va_t Target, unsigned Level,
-              const Answer &Value);
+              const Answer &Value, QueryKind Kind = QueryKind::Ordinary);
+
+  /// Plain PE32 integer CFGs from a fresh default builder, with no exception
+  /// metadata, registration states or exceptional edges. These retain only
+  /// immutable image facts; caller-dependent proofs and work run afresh.
+  std::shared_ptr<const LowFunc> findGraph(const BinaryImage &Other,
+                                           va_t Target);
+  void recordGraph(const BinaryImage &Other, va_t Target, const LowFunc &Graph);
 
 private:
   const BinaryImage &Image;
   std::mutex Mutex;
-  std::map<std::pair<va_t, unsigned>, Answer> Answers;
+  std::map<std::tuple<va_t, unsigned, QueryKind>, Answer> Answers;
+  std::map<va_t, std::shared_ptr<const LowFunc>> Graphs;
+  size_t GraphBytes = 0;
+  const size_t MaxGraphBytes;
 };
 
 /// Answer this thread's getCheckedX86CalleeStackPop queries from \p Memo
@@ -118,6 +183,14 @@ struct RegistrationLeafCalleeABI {
   /// incoming registers, borrowed pointers and the physical caller PC. A frame
   /// privacy proof alone may still permit an unobserved entry-EAX return.
   bool HasIndependentScalarReturn = false;
+  /// Separate closed integer effects, currently limited to leaves without
+  /// object borrows or nested calls. Retains existing IAT bindings across
+  /// possible dispatch origins, not an independently inferred entry ABI.
+  bool PreservesDispatchBindings = false;
+  /// The same closed effects conditional on this invocation proving every
+  /// declared ECX extent allocated, initialized as required, and disjoint
+  /// from runtime administration. Never grants an object allocation itself.
+  bool PreservesBoundDispatchBindings = false;
   std::vector<RegistrationObjectExtent> ECXReads;
   std::vector<RegistrationObjectExtent> ECXWrites;
   std::vector<ExceptionAddressRange> ImageReads;
@@ -200,6 +273,10 @@ struct RegistrationThrowObjectABI {
   coff_loader::X86IdentityCxxThrowInfo Info;
   std::optional<RegistrationLeafCalleeABI> Destructor;
   std::optional<RegistrationCopyCalleeABI> CopyConstructor;
+  /// Every runtime callback has closed scalar effects within this object's
+  /// declared bounds. The caller still proves the live initialized object;
+  /// decoding ThrowInfo alone never grants this exceptional-path authority.
+  bool PreservesDispatchBindings = false;
 
   std::array<const RegistrationLeafCalleeABI *, 2> callbacks() const {
     return {Destructor ? &*Destructor : nullptr,
@@ -264,6 +341,10 @@ struct RegistrationThrowCalleeABI {
   /// Exactly two null arguments reuse the active CRT exception. No new object
   /// or ThrowInfo is supplied, and the caller must prove an active catch.
   bool IsRethrow = false;
+  /// Separate exceptional-path evidence: closed integer accesses, the checked
+  /// throw call and bounded scalar runtime callbacks, with no initializer.
+  /// A rethrow still requires a live, independently proved exception object.
+  bool PreservesDispatchBindings = false;
   coff_loader::X86IdentityCxxThrowInfo ThrowInfo;
   std::vector<ExceptionAddressRange> ImageReads;
   std::vector<ExceptionAddressRange> ImageWrites;
@@ -279,22 +360,38 @@ std::optional<RegistrationThrowCalleeABI>
 getCheckedX86RegistrationThrowCalleeABI(const BinaryImage &Image, va_t Target,
                                         size_t *CumulativeWork = nullptr);
 
+/// A cleanup-only C++ parent with no incoming arguments or object borrows.
+/// Proves its private physical frame, ordinary returns, all transitive image
+/// effects and required runtime bindings. The original callee is preserved;
+/// callers and native emitters must bind/replay this context-free evidence.
+std::optional<RegistrationCalleeFrameContract>
+getCheckedX86RegistrationCxxCalleeABI(const BinaryImage &Image, va_t Target,
+                                      size_t *CumulativeWork = nullptr);
+
 /// Memoized checked callees for one CFG construction and its continuation
 /// closure. A shared work budget includes failed proofs; a new CFG build gets
 /// a fresh index so edits to an image cannot reuse stale callee evidence.
 class RegistrationCallCalleeIndex {
 public:
-  explicit RegistrationCallCalleeIndex(const BinaryImage &Image,
-                                       size_t *CumulativeWork = nullptr)
-      : Image(Image), Work(CumulativeWork ? *CumulativeWork : LocalWork) {}
+  explicit RegistrationCallCalleeIndex(
+      const BinaryImage &Image, size_t *CumulativeWork = nullptr,
+      const detail::AbsoluteRelocationRootIndex *Roots = nullptr);
   RegistrationCallCalleeIndex(const RegistrationCallCalleeIndex &) = delete;
   RegistrationCallCalleeIndex &
   operator=(const RegistrationCallCalleeIndex &) = delete;
   bool ownsImage(const BinaryImage &Other) const { return &Image == &Other; }
+  /// Share immutable image bytes and runtime pointer roles, never entry- or
+  /// budget-dependent callee conclusions, across this invocation closure.
+  const detail::AbsoluteRelocationRootIndex &absoluteRelocationRoots();
   /// Bill decoded state propagation, including unsuccessful helper analyses,
   /// to this invocation closure's cumulative work budget.
   bool chargeStateWork(size_t Amount);
+  std::optional<RegistrationCalleeFrameContract> cxxCallee(va_t Target);
+  /// Prove a standalone entry. Local witnesses from stackContracts() cannot
+  /// satisfy this entry's admission or its transitive callee dependencies.
   std::optional<uint32_t> stackPop(va_t Target);
+  /// The same standalone proof, retaining every entry import dependency.
+  std::optional<RegistrationCalleeStackContract> stackContract(va_t Target);
   std::optional<std::vector<RegistrationCalleeFrameContract>>
   contracts(const LowFunc &Function);
   std::optional<std::vector<RegistrationCleanupFrameContract>>
@@ -311,9 +408,12 @@ private:
   size_t LocalWork = 0;
   size_t &Work;
   unsigned StackDepth = 0;
+  unsigned CxxDepth = 0;
   std::map<va_t, std::optional<RegistrationCalleeFrameContract>> Cache;
   std::map<va_t, std::optional<RegistrationCleanupRelayABI>> CleanupCache;
-  std::map<va_t, std::optional<uint32_t>> StackCache;
+  // Independent entries only; parent-graph witnesses stay in their query.
+  std::map<va_t, std::optional<RegistrationCalleeStackContract>> StackCache;
+  std::shared_ptr<const detail::AbsoluteRelocationRootIndex> RelocationRoots;
 };
 
 /// Native registration lowering currently emits caller-cleanup calls. Require
@@ -324,10 +424,18 @@ bool hasCallerCleanupRegistrationABI(
     const LowFunc &Function, const BinaryImage &Image,
     std::vector<ExceptionAddressRange> *CallerPCWrites = nullptr);
 
-/// Prove the C++ parent's exact RET cleanup separately from its runtime
-/// callbacks, and replay the preserved call/frame closure. The returned byte
-/// count is not the decoder's maximum across unrelated return instructions.
+/// Prove the C++ parent's entry separately from its runtime callbacks, and
+/// replay the preserved call/frame closure. Normal returns require one exact
+/// RET cleanup. A cleanup-only parent with no incoming frame access and closed
+/// private-throw exits can use a zero-argument C entry without proving any
+/// normal-return stack effect. Decoder maxima supply neither contract.
 std::optional<uint16_t> getCheckedX86RegistrationCxxParentABI(
+    const LowFunc &Function, const BinaryImage &Image,
+    std::vector<ExceptionAddressRange> *CallerPCWrites = nullptr);
+
+/// The corresponding SEH3/SEH4 parent contract. Runtime filters and finally
+/// callbacks retain their independent zero-pop invocation ABI.
+std::optional<uint16_t> getCheckedX86RegistrationSEHParentABI(
     const LowFunc &Function, const BinaryImage &Image,
     std::vector<ExceptionAddressRange> *CallerPCWrites = nullptr);
 } // namespace neverd

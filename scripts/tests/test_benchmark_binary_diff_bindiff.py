@@ -63,6 +63,18 @@ class ProcessContractTests(unittest.TestCase):
         self.assertIn("analysis failed", (self.root / "export.log").read_text())
         self.assertEqual(bench.load(self.root / "export.json"), result)
 
+    def test_nonlinux_process_does_not_receive_gnu_time_options(self):
+        command = [sys.executable, "-c", "print('analysis failed'); raise SystemExit(7)"]
+        with mock.patch.object(external.sys, "platform", "darwin"), \
+                mock.patch.object(external.subprocess, "Popen", wraps=subprocess.Popen) as start:
+            result = external.stage(self.root, "export", command, dict(os.environ), 30)
+        self.assertEqual(start.call_args.args[0], command)
+        self.assertEqual(result["exit"], 7)
+        self.assertIsNone(result["error"])
+        self.assertIsNone(result["resources"])
+        self.assertIn("analysis failed", (self.root / "export.log").read_text())
+        self.assertEqual(bench.load(self.root / "export.json"), result)
+
     def test_missing_tool_retains_failure_receipt(self):
         result = external.stage(self.root, "missing", [str(self.root / "missing-tool")], {}, 1)
         self.assertIsNone(result["exit"])

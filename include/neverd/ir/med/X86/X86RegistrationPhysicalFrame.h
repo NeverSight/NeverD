@@ -20,11 +20,13 @@ struct MedFunc;
 /// Source calls and the chain operations proved by independently replaying
 /// their expanded physical effects. Original source state receipts remain
 /// unchanged. Consumers bind every projected occurrence before using it.
+struct X86RegistrationPhysicalExit {
+  RegistrationChainAccess Source;
+  va_t HelperVA = InvalidVA;
+};
+
 struct X86RegistrationCxxPhysicalFrame {
-  struct Exit {
-    RegistrationChainAccess Source;
-    va_t HelperVA = InvalidVA;
-  };
+  using Exit = X86RegistrationPhysicalExit;
   RegistrationCxxPrologueEffect Entry;
   coff_loader::X86CxxPrologueCall EntryCall;
   std::vector<Exit> Exits;

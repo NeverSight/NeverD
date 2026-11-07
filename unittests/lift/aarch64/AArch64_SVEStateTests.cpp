@@ -20,6 +20,8 @@ namespace {
 #define NEVERD_SVE_VECTOR_FIXTURE(Type, Name, Value)                           \
   constexpr Type Name = Value;
 #include "AArch64SVEVectorFixtures.def"
+#define A64_RETURN_ABI_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "AArch64ReturnABIFixtures.def"
 } // namespace
 
 class AArch64_SVEState : public NeverDLiftTest {
@@ -186,27 +188,50 @@ TEST_F(AArch64_SVEState, SemanticRefusalsReturnErrorsInSerialAndShardedLift) {
 TEST_F(AArch64_SVEState, SignedLeafPreservesLocalScalableOperations) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << kMissingCompiler;
-  const auto Source = tmpFile(kSignedStateSource);
-  const auto Object = tmpFile(kSignedStateObject);
-  {
-    std::ofstream Out(Source);
-    ASSERT_TRUE(Out.good());
-    Out << kSignedStateAssembly;
-  }
-  const auto Compiled = exec(NEVERD_TEST_CLANG,
-                             {kTargetOption, kCTarget, kCompileOption,
-                              Source.string(), kOutputOption, Object.string()});
-  ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
-  for (bool NoOptimization : {false, true}) {
-    SCOPED_TRACE(NoOptimization);
-    const auto Result = liftToLLVMIR(Object, {}, NoOptimization);
-    ASSERT_EQ(Result.exitCode, 0) << Result.err;
-    EXPECT_NE(Result.out.find(kSignedStatePacia), std::string::npos)
-        << Result.out;
-    EXPECT_NE(Result.out.find(kSignedStateAuthenticate), std::string::npos)
-        << Result.out;
-    EXPECT_NE(Result.out.find(kByteLastIR), std::string::npos) << Result.out;
-    EXPECT_NE(Result.out.find(kSignedStateTargetUse), std::string::npos)
-        << Result.out;
+  // MedIR keeps both PAuth operations around the local Z/P state. PACIASP
+  // with RETAA is the proved compiler recipe: LLVM states the leaf's A-key
+  // policy and its backend signs the new frame. RETAB matches no recipe, so
+  // LLVM keeps the explicit operations around the same scalable state.
+  const auto Attribute = [](llvm::StringRef Key, llvm::StringRef Value) {
+    return llvm::formatv("\"{0}\"=\"{1}\"", Key, Value).str();
+  };
+  for (const bool Proved : {true, false}) {
+    SCOPED_TRACE(Proved);
+    const auto Source = tmpFile(kSignedStateSource);
+    const auto Object = tmpFile(kSignedStateObject);
+    {
+      std::ofstream Out(Source);
+      ASSERT_TRUE(Out.good());
+      Out << (Proved ? kSignedStateAssembly : kUnprovedSignedStateAssembly);
+    }
+    const auto Compiled = exec(
+        NEVERD_TEST_CLANG, {kTargetOption, kCTarget, kCompileOption,
+                            Source.string(), kOutputOption, Object.string()});
+    ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+    for (bool NoOptimization : {false, true}) {
+      SCOPED_TRACE(NoOptimization);
+      const auto Result = liftToLLVMIR(Object, {}, NoOptimization);
+      ASSERT_EQ(Result.exitCode, 0) << Result.err;
+      EXPECT_NE(Result.out.find(kByteLastIR), std::string::npos) << Result.out;
+      if (Proved) {
+        EXPECT_NE(Result.out.find(Attribute(kSigningScope, kSigningAll)),
+                  std::string::npos)
+            << Result.out;
+        EXPECT_NE(Result.out.find(Attribute(kSigningKey, kSigningAKey)),
+                  std::string::npos)
+            << Result.out;
+        EXPECT_EQ(Result.out.find(kSignedStateAuthenticate), std::string::npos)
+            << Result.out;
+        continue;
+      }
+      EXPECT_EQ(Result.out.find(kSigningScope), std::string::npos)
+          << Result.out;
+      EXPECT_NE(Result.out.find(kSignedStatePacia), std::string::npos)
+          << Result.out;
+      EXPECT_NE(Result.out.find(kSignedStateAuthenticate), std::string::npos)
+          << Result.out;
+      EXPECT_NE(Result.out.find(kSignedStateTargetUse), std::string::npos)
+          << Result.out;
+    }
   }
 }

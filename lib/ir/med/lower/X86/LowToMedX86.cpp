@@ -14,9 +14,12 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <set>
 #include <vector>
@@ -392,6 +395,55 @@ void LowToMedConverter::fixupPartialWritesX86(MedFunc &Func) {
       MB.Ops.insert(MB.Ops.begin() + static_cast<long>(It->InsertBefore),
                     It->Seq.begin(), It->Seq.end());
   }
+}
+
+std::map<std::pair<va_t, int>, const RelocatedInstructionAddressOccurrence *>
+LowToMedConverter::x86ZeroExtendedAddressOutputs(const LowFunc &Low,
+                                                 Arch TheArch) const {
+  std::map<std::pair<va_t, int>, const RelocatedInstructionAddressOccurrence *>
+      Outputs;
+  if (TheArch != Arch::X64 || !Image ||
+      Low.RelocatedInstructionAddressOccurrences.empty())
+    return Outputs;
+  // Each operation by instruction and sequence, with the one after it in the
+  // same instruction.
+  std::map<std::pair<va_t, int>, std::pair<const LowOp *, const LowOp *>> Ops;
+  for (const LowBlock &Block : Low.Blocks)
+    for (size_t I = 0; I < Block.Ops.size(); ++I) {
+      const LowOp &Op = Block.Ops[I];
+      const LowOp *Next =
+          I + 1 < Block.Ops.size() && Block.Ops[I + 1].Addr == Op.Addr
+              ? &Block.Ops[I + 1]
+              : nullptr;
+      Ops.emplace(std::pair(Op.Addr, Op.Seq), std::pair(&Op, Next));
+    }
+  for (const auto &Occurrence : Low.RelocatedInstructionAddressOccurrences) {
+    if (Occurrence.DefinesOutput || Occurrence.PCRelativeFromInstructionEnd ||
+        Occurrence.Width != 4 ||
+        (Occurrence.Provenance != ConstantAddressProvenance::DataAddress &&
+         Occurrence.Provenance != ConstantAddressProvenance::CodeAddress) ||
+        Occurrence.TargetVA > std::numeric_limits<uint32_t>::max() ||
+        !Image->relocatedTargetBelongsToOwner(Occurrence.TargetVA,
+                                              Occurrence.TargetOwnerVA))
+      continue;
+    const auto It = Ops.find({Occurrence.InstructionAddr, Occurrence.OpSeq});
+    if (It == Ops.end() || !It->second.second)
+      continue;
+    const LowOp &Copy = *It->second.first;
+    const LowOp &Extend = *It->second.second;
+    if (Copy.Opcode != NdOp::COPY || Copy.NumInputs != 1 ||
+        !Copy.Output.isReg() || Copy.Output.Size != 4 ||
+        !Copy.Inputs[0].isConst() || Copy.Inputs[0].Size != 4 ||
+        Copy.Inputs[0].Offset != Occurrence.TargetVA ||
+        Copy.Inputs[0].Provenance != Occurrence.Provenance ||
+        Copy.Inputs[0].AddressOwnerVA != Occurrence.TargetOwnerVA ||
+        Extend.Opcode != NdOp::INT_ZEXT || Extend.NumInputs != 1 ||
+        !(Extend.Inputs[0] == Copy.Output) || !Extend.Output.isReg() ||
+        Extend.Output.Size != 8 || Extend.Output.Offset != Copy.Output.Offset)
+      continue;
+    Outputs.emplace(std::pair(Extend.Addr, Extend.Seq), &Occurrence);
+  }
+  return Outputs;
 }
 
 } // namespace neverd

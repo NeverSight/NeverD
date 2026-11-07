@@ -149,7 +149,7 @@ TEST(CSymbolNames, ElfCxxCallsReadByScopeAndLinkByMangledName) {
       << Source;
   EXPECT_NE(Source.find("Bar_ctor();"), NotFound) << Source;
   EXPECT_NE(Source.find("Bar_ctor_2(7);"), NotFound) << Source;
-  EXPECT_NE(Source.find("operator_delete(0);"), NotFound) << Source;
+  EXPECT_NE(Source.find("operator_delete((uint64_t)0);"), NotFound) << Source;
   // An ELF symbol's underscores are part of its name.
   EXPECT_NE(Source.find("extern int __nd_probe_hook();"), NotFound) << Source;
   EXPECT_NE(Source.find("__nd_probe_hook();"), NotFound) << Source;
@@ -588,9 +588,12 @@ TEST(CSymbolNames, StartupPassesMainThroughItsPrototype) {
             NotFound)
       << Source;
   EXPECT_EQ(Source.find("0x1150"), NotFound) << Source;
+  // Linking resolves ELF and glibc names, which only a Linux host has.
+#ifdef __linux__
   source_call_execution_test::compileAndRun(
       Source + "int main(void) { return 0; }\n",
       {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+#endif
 }
 
 TEST(CSymbolNames, FunctionAddressesReadAsTheirFunctions) {
@@ -612,7 +615,8 @@ TEST(CSymbolNames, FunctionAddressesReadAsTheirFunctions) {
   EXPECT_EQ(Source.find("extern int on_exit_hook"), NotFound) << Source;
   EXPECT_NE(Source.find("register_hook(neverd_code_on_exit_hook);"), NotFound)
       << Source;
-  EXPECT_NE(Source.find("register_hook(0x1180);"), NotFound) << Source;
+  EXPECT_NE(Source.find("register_hook((uint64_t)0x1180);"), NotFound)
+      << Source;
 }
 
 TEST(CSymbolNames, AFunctionWhoseAddressIsTakenIsDeclaredBeforeTheUse) {
@@ -702,11 +706,14 @@ TEST(CSymbolNames, CxxRuntimeRoutinesTakeTheirPrototypes) {
                         "hook, 0, 0);"),
             NotFound)
       << Source;
+  // Linking resolves ELF and glibc names, which only a Linux host has.
+#ifdef __linux__
   source_call_execution_test::compileAndRun(
       Source + "int on_exit_hook(void *Object) { return Object != 0; }\n"
                "void __cxa_end_catch(void) {}\n"
                "int main(void) { return (int)install(); }\n",
       {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+#endif
 }
 
 TEST(CSymbolNames, APointerResultKeepsTheMachineInteger) {
@@ -720,6 +727,8 @@ TEST(CSymbolNames, APointerResultKeepsTheMachineInteger) {
       << Source;
   EXPECT_NE(Source.find("return (uintptr_t)__errno_location();"), NotFound)
       << Source;
+  // Linking resolves ELF and glibc names, which only a Linux host has.
+#ifdef __linux__
   source_call_execution_test::compileAndRun(
       Source + "int main(void) {\n"
                "  int *Errno = (int *)errno_slot();\n"
@@ -727,6 +736,7 @@ TEST(CSymbolNames, APointerResultKeepsTheMachineInteger) {
                "  return *Errno == 7 ? 0 : 1;\n"
                "}\n",
       {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+#endif
 }
 
 TEST(CSymbolNames, HeaderFunctionsTakeFunctionsAsTheirParameterTypes) {
@@ -741,8 +751,8 @@ TEST(CSymbolNames, HeaderFunctionsTakeFunctionsAsTheirParameterTypes) {
                            HighExpr::makeConst(4, 8), address(0x1180)})}),
        function("on_exit_hook", 0x1180, {})},
       Img);
-  EXPECT_NE(Source.find("qsort(0, 0, 4, (int (*)(const void *, const void "
-                        "*))on_exit_hook);"),
+  EXPECT_NE(Source.find("qsort((uint64_t)0, (uint64_t)0, (uint64_t)4, (int "
+                        "(*)(const void *, const void *))on_exit_hook);"),
             NotFound)
       << Source;
   source_call_execution_test::compileAndRun(

@@ -3,6 +3,7 @@
 #include "Address.h"
 #include "AnalysisService.h"
 #include "EngineClient.h"
+#include "HighlightLocks.h"
 #include "QueryService.h"
 #include "UnwindInfoWords.h"
 
@@ -15,9 +16,12 @@
 #include <QSet>
 #include <QTimer>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <utility>
 
 namespace neverd::gui {
+class PluginServices;
 
 /// How to load a binary, as the load dialog chooses it.
 struct LoadOptions {
@@ -76,6 +80,12 @@ public:
   ~Session() override;
 
   QueryService &queries() { return queries_; }
+  PluginServices &pluginServices();
+  /// The render-ahead job of the replica reads start in, empty where it
+  /// reports none.
+  QString analysisRenderAheadState() const {
+    return analysis_.renderAheadState();
+  }
   QueryService &analysisQueries(const QJsonObject &payload, QObject *owner) {
     return analysis_.queries(payload, owner);
   }
@@ -90,10 +100,19 @@ public:
   bool reportsX87Capabilities() const {
     return capabilities_.contains(QStringLiteral("x87_capabilities"));
   }
+  bool recoversInterpreterSource() const {
+    return capabilities_.contains(QStringLiteral("interpreter_recovery"));
+  }
   /// The configured NeverD worker, also used by separate offline workbenches.
   QString workerPath() const { return workerPath_; }
   bool loaded() const { return loaded_; }
   bool opening() const { return opening_; }
+  /// Whether a worker is on its way, which connected() then reports.
+  bool starting() const { return starting_; }
+  /// What the user is opening, while it opens.
+  QString openingFile() const { return opening_ ? openingFile_ : QString(); }
+  /// Whether the worker analyzes the loaded file in idle time.
+  bool idleAnalysis() const { return loadOptions_.analysis; }
   /// Whether quitting or opening another file must ask first: edits are
   /// staged or in flight, or a database the user opened lacks its edits.
   bool dirty() const {
@@ -246,6 +265,12 @@ public:
   /// Commit staged edits and pack the project, its binary included, into
   /// the database \p path: one file to keep or send.
   void packDatabase(const QString &path);
+  /// What to say when \p reason, the lock's own error, keeps \p path from
+  /// opening.
+  static QString heldMessage(const QString &path, const QString &reason);
+  /// Answers databaseConflict: write over what \p path holds now, or leave it
+  /// as it is and give up whatever the save was for.
+  void resolveDatabaseConflict(const QString &path, bool replace);
   /// Remember where the user is: in the database the user opened, or in a
   /// file of the user's own beside a binary.
   void saveDatabaseState();
@@ -299,6 +324,9 @@ public:
   }
   bool hasBytePatch(Address address, Address size = 1) const;
   bool hasBytePatches() const { return !patchRanges_.isEmpty(); }
+  /// The words Lock highlight keeps colored in every view of this file.
+  HighlightLocks &highlightLocks() { return highlightLocks_; }
+  const HighlightLocks &highlightLocks() const { return highlightLocks_; }
   void refreshBytePatches();
   bool keepsBytePatches() const {
     return capabilities_.contains(QStringLiteral("patch_apply"));
@@ -375,7 +403,7 @@ public:
 
   /// Extend the active image and refresh its revision and dependent views.
   void addAnalysisSection(const QJsonObject &description, Reply done = {},
-                          Failure failed = {});
+                          Failure failed = {}, QString expectedRevision = {});
   void removeAnalysisSection(const QString &name, Reply done = {},
                              Failure failed = {});
 
@@ -405,15 +433,23 @@ signals:
   void bytePatchesChanged();
   void stateChanged();
   void opened();
+  /// A file did not open, and no other waits to.
+  void openFailed();
   void unloaded();
   void revisionChanged();
   void generationChanged();
+  /// An analysis replica's decompiles changed once, after it solved the
+  /// image's call summaries; shown source should be read again.
+  void sourceRefined();
   /// The worker lists a different number of functions, for example after its
   /// function detector ran.
   void functionsChanged();
   void backgroundChanged();
   void historyChanged();
-  void loadProgress(const QString &phase, double fraction);
+  /// A step of the open: the engine's phase token, the step's completed
+  /// fraction or a negative value while unknown, and the engine's detail.
+  void loadProgress(const QString &phase, double fraction,
+                    const QString &detail);
   /// level: 0 information, 1 warning, 2 error.
   void message(const QString &text, int level);
   void transitionRequested(const QString &action);
@@ -424,6 +460,9 @@ signals:
   void commented(Address address, const QString &text);
   void contributionsChanged();
   void databaseSaved(bool ok);
+  /// \p path, the database this workbench opened, changed since it opened or
+  /// last wrote it.  Nothing is written until resolveDatabaseConflict.
+  void databaseConflict(const QString &path);
   void contributionResult(const QJsonObject &result);
   /// The worker searches strings with new options; string views reload.
   void stringOptionsChanged();
@@ -431,21 +470,30 @@ signals:
   void projectFileChanged(const QString &suffix);
 
 private:
+  std::unique_ptr<PluginServices> pluginServices_;
+  HighlightLocks highlightLocks_;
   /// The operations the worker offers (its hello).
   QSet<QString> capabilities_;
   using Callback = std::function<void(const QJsonObject &payload)>;
   void command(const QString &operation, const QJsonObject &payload,
-               Callback done, Failure failed = {});
+               Callback done, Failure failed = {},
+               QString expectedRevision = {});
   void receive(const QJsonObject &message);
   void applyBackgroundSnapshot(const QJsonObject &snapshot);
   void startWorker();
   void openPending();
   void sendOpen(const QString &requested, const QString &path,
                 const QString &database,
-                const QHash<QString, QByteArray> &state, LoadOptions options,
+                const QHash<QString, QByteArray> &state,
+                const QByteArray &databaseIdentity, LoadOptions options,
                 bool recoveredEdits);
-  /// Pack the project into the database \p path.
-  void writeDatabase(const QString &path);
+  /// Pack the project into the database \p path, unless it is the database
+  /// the user opened and it changed since; \p replace writes over that too.
+  void writeDatabase(const QString &path, bool replace = false);
+  /// The project changed in a way the opened database does not have yet.
+  void markDatabaseDirty();
+  /// Forget what an action asked to save for was going to do.
+  void cancelTransition();
   /// Keep the debug files chosen for the input with the project, beside it.
   /// \p loadedNow is a file the user loaded into the open project, which
   /// a database the user opened then lacks.
@@ -489,8 +537,19 @@ private:
   std::optional<LoadOptions> reloadOptions_;
   /// The open in flight reads the open file again.
   bool reloading_ = false;
+  /// What the open in flight opens, as the user named it.
+  QString openingFile_;
   QString projectPath_, databasePath_;
   QHash<QString, QByteArray> databaseState_;
+  /// What the opened database held when it opened or was last written here.
+  QByteArray databaseIdentity_;
+  /// Writes run one at a time, as each compares what the database holds with
+  /// what the last one left there; the latest asked for waits here.
+  bool databaseWriting_ = false;
+  std::optional<std::pair<QString, bool>> databaseWriteWaiting_;
+  /// Counts markDatabaseDirty, so that a write knows what came after it read
+  /// the project's files.
+  quint64 databaseEdits_ = 0;
   std::function<QHash<QString, QByteArray>()> stateProvider_;
   QString generation_;
   std::optional<quint64> BackgroundSequence;

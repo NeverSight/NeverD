@@ -58,7 +58,7 @@ struct Side {
   /// An empty signature retains an unresolved target, rather than inventing
   /// equality from a generic operand token or a reused address.
   llvm::DenseMap<const Instruction *, std::optional<uint64_t>> AddressKeys;
-  /// Outgoing and incoming edges of each block, by edge index.
+  /// Outgoing and incoming edges, ordered by the opposite block's index.
   Adjacency Out;
   Adjacency In;
 
@@ -110,6 +110,13 @@ Adjacency edgeAdjacency(const Program &P, const Function &F, bool Incoming) {
   std::vector<uint32_t> Fill(A.Start.begin(), A.Start.end() - 1);
   for (const auto &[Block, Edge] : Pairs)
     A.Targets[Fill[Block]++] = Edge;
+  for (uint32_t I = 0; I < F.BlockCount; ++I)
+    llvm::sort(llvm::MutableArrayRef(A.Targets).slice(
+                   A.Start[I], A.Start[I + 1] - A.Start[I]),
+               [&](uint32_t X, uint32_t Y) {
+                 return std::pair{Incoming ? Edges[X].From : Edges[X].To, X} <
+                        std::pair{Incoming ? Edges[Y].From : Edges[Y].To, Y};
+               });
   return A;
 }
 
@@ -285,6 +292,7 @@ public:
   std::vector<BlockStep> AStep;
 
 private:
+  bool CheckNeighbors = false;
   bool pair(uint32_t X, uint32_t Y, BlockStep Step) {
     if (AMatch[X] != NoIndex || BMatch[Y] != NoIndex)
       return false;
@@ -299,11 +307,20 @@ private:
   unsigned unique(llvm::ArrayRef<uint32_t> Xs, llvm::ArrayRef<uint32_t> Ys,
                   KeyFn Key, BlockStep Step);
   unsigned uniqueAll(BlockStep Step);
+  void runPass(llvm::ArrayRef<std::pair<uint32_t, uint32_t>> CallExits);
   unsigned uniqueAmong(llvm::ArrayRef<uint32_t> Xs,
                        llvm::ArrayRef<uint32_t> Ys);
   unsigned propagate();
   unsigned byOrder();
   double closeness(uint32_t X, uint32_t Y) const;
+  static bool callOnly(const Side &S, uint32_t Block) {
+    const auto &K = S.Keys[Block];
+    if (!K.Calls || K.Count != 1)
+      return false;
+    const auto Flow = S.instructions(Block).front().Flow;
+    return Flow == InstructionFlow::Call ||
+           Flow == InstructionFlow::IndirectCall;
+  }
 };
 
 template <typename KeyFn>
@@ -481,6 +498,29 @@ unsigned BlockMatcher::propagate() {
           Changed = true;
           continue;
         }
+        // A removed guard can leave the entry blocks corresponding while
+        // their successors no longer do. Known neighbors must agree before
+        // the remaining edges can supply weaker positional evidence.
+        const auto Agrees = [&](const Side &L, llvm::ArrayRef<uint32_t> LEdges,
+                                const std::vector<uint32_t> &Match,
+                                const Side &R,
+                                llvm::ArrayRef<uint32_t> REdges) {
+          for (uint32_t E : LEdges) {
+            const uint32_t M = Match[Other(L, E)];
+            if (M == NoIndex)
+              continue;
+            const auto It = llvm::lower_bound(
+                REdges, M, [&](uint32_t RIndex, uint32_t Block) {
+                  return Other(R, RIndex) < Block;
+                });
+            if (It == REdges.end() || Other(R, *It) != M)
+              return false;
+          }
+          return true;
+        };
+        if (CheckNeighbors && (!Agrees(A, XEdges, AMatch, B, YEdges) ||
+                               !Agrees(B, YEdges, BMatch, A, XEdges)))
+          continue;
         // One edge of each kind left on both sides: they correspond, or,
         // for the two arms of a conditional branch, cross over.
         const auto Single = [&](const Side &S, llvm::ArrayRef<uint32_t> Edges,
@@ -582,11 +622,78 @@ unsigned BlockMatcher::byOrder() {
 }
 
 void BlockMatcher::run() {
+  runPass({});
+  // Refine only when the ordinary alignment displaced a known call-only
+  // block at an exit on at least one side. Its other occurrence may have a
+  // modeled fallthrough after layout changes; preserve that edge difference.
+  // Larger blocks can mix moved statements with calls; their call sequence
+  // alone must not change the precedence of body evidence.
+  const auto Displaced = [](const Side &L, const Side &R,
+                            const std::vector<uint32_t> &Match) {
+    for (uint32_t X = 0; X < L.F.BlockCount; ++X) {
+      L.poll();
+      if (!callOnly(L, X) || !L.Keys[X].Exit)
+        continue;
+      const uint32_t Y = Match[X];
+      if (Y == NoIndex || !callOnly(R, Y) || R.Keys[Y].Calls != L.Keys[X].Calls)
+        return true;
+    }
+    return false;
+  };
+  if (!Displaced(A, B, AMatch) && !Displaced(B, A, BMatch))
+    return;
+  struct Entry {
+    uint64_t Key;
+    bool Secondary;
+    uint32_t Block;
+  };
+  std::vector<Entry> Entries;
+  for (bool Secondary : {false, true}) {
+    const Side &S = Secondary ? B : A;
+    for (uint32_t I = 0; I < S.F.BlockCount; ++I) {
+      S.poll();
+      if (S.Keys[I].Calls)
+        Entries.push_back({S.Keys[I].Calls, Secondary, I});
+    }
+  }
+  llvm::sort(Entries, [](const Entry &L, const Entry &R) {
+    return std::tie(L.Key, L.Secondary, L.Block) <
+           std::tie(R.Key, R.Secondary, R.Block);
+  });
+  std::vector<std::pair<uint32_t, uint32_t>> CallExits;
+  bool Refine = false;
+  for (size_t I = 0; I < Entries.size();) {
+    A.poll();
+    size_t J = I + 1;
+    while (J < Entries.size() && Entries[J].Key == Entries[I].Key)
+      ++J;
+    if (J - I == 2 && !Entries[I].Secondary && Entries[I + 1].Secondary) {
+      const uint32_t X = Entries[I].Block, Y = Entries[I + 1].Block;
+      if (callOnly(A, X) && callOnly(B, Y) &&
+          (A.Keys[X].Exit || B.Keys[Y].Exit)) {
+        CallExits.emplace_back(X, Y);
+        Refine |= AMatch[X] != Y;
+      }
+    }
+    I = J;
+  }
+  if (!Refine)
+    return;
+  std::fill(AMatch.begin(), AMatch.end(), NoIndex);
+  std::fill(BMatch.begin(), BMatch.end(), NoIndex);
+  CheckNeighbors = true;
+  runPass(CallExits);
+}
+
+void BlockMatcher::runPass(
+    llvm::ArrayRef<std::pair<uint32_t, uint32_t>> CallExits) {
   A.poll();
   if (!A.F.BlockCount || !B.F.BlockCount)
     return;
   uniqueAll(BlockStep::BlockBytes);
   uniqueAll(BlockStep::BlockBody);
+  for (const auto &[X, Y] : CallExits)
+    pair(X, Y, BlockStep::BlockCalls);
   if (A.F.EntryBlock != NoIndex && B.F.EntryBlock != NoIndex)
     pair(A.F.EntryBlock, B.F.EntryBlock, BlockStep::BlockEntry);
   for (BlockStep Step : {BlockStep::BlockPrime, BlockStep::BlockCalls,
@@ -622,6 +729,7 @@ public:
       : A(A), B(B), Map(Map) {}
 
   void align(uint32_t XBlock, uint32_t YBlock, std::vector<DeltaRow> &Rows);
+  bool refineOrderedSpans(std::vector<DeltaRow> &Rows, bool SingleBlockOnly);
 
 private:
   const Side &A;
@@ -629,6 +737,19 @@ private:
   const Correspondence &Map;
   std::vector<uint32_t> Score;
   using InstructionPairs = std::vector<std::pair<uint32_t, uint32_t>>;
+
+  struct Locations {
+    uint32_t Base;
+    uint32_t Block;
+    llvm::ArrayRef<uint32_t> Blocks;
+    uint32_t block(size_t I) const {
+      return Blocks.empty() ? Block : Blocks[I];
+    }
+  };
+  void appendRows(llvm::ArrayRef<Instruction> Xs,
+                  llvm::ArrayRef<Instruction> Ys, Locations X, Locations Y,
+                  llvm::ArrayRef<std::pair<uint32_t, uint32_t>> Pairs,
+                  std::vector<DeltaRow> &Rows) const;
 
   bool sameAddresses(const Instruction &X, const Instruction &Y) const {
     const auto XK = A.addressKey(X), YK = B.addressKey(Y);
@@ -867,39 +988,133 @@ void Aligner::align(uint32_t XBlock, uint32_t YBlock,
   const auto Ys = B.instructions(YBlock);
   const uint32_t XBase = A.firstInstruction(XBlock);
   const uint32_t YBase = B.firstInstruction(YBlock);
-  const size_t N = Xs.size(), M = Ys.size();
   InstructionPairs Pairs;
   match(Xs, Ys, 0, 0, Pairs);
+  appendRows(Xs, Ys, {XBase, XBlock, {}}, {YBase, YBlock, {}}, Pairs, Rows);
+}
+
+void Aligner::appendRows(llvm::ArrayRef<Instruction> Xs,
+                         llvm::ArrayRef<Instruction> Ys, Locations X,
+                         Locations Y,
+                         llvm::ArrayRef<std::pair<uint32_t, uint32_t>> Pairs,
+                         std::vector<DeltaRow> &Rows) const {
+  const size_t N = Xs.size(), M = Ys.size();
   // Unaligned runs between aligned pairs are shown side by side.
   size_t I = 0, J = 0;
   const auto Gap = [&](size_t IEnd, size_t JEnd) {
     while (I < IEnd && J < JEnd) {
       A.poll();
-      Rows.push_back({XBase + uint32_t(I), YBase + uint32_t(J), XBlock, YBlock,
-                      RowKind::Replaced});
+      Rows.push_back({X.Base + uint32_t(I), Y.Base + uint32_t(J), X.block(I),
+                      Y.block(J), RowKind::Replaced});
       ++I;
       ++J;
     }
     for (; I < IEnd; ++I) {
       A.poll();
-      Rows.push_back(
-          {XBase + uint32_t(I), NoIndex, XBlock, NoIndex, RowKind::Deleted});
+      Rows.push_back({X.Base + uint32_t(I), NoIndex, X.block(I), NoIndex,
+                      RowKind::Deleted});
     }
     for (; J < JEnd; ++J) {
       A.poll();
-      Rows.push_back(
-          {NoIndex, YBase + uint32_t(J), NoIndex, YBlock, RowKind::Inserted});
+      Rows.push_back({NoIndex, Y.Base + uint32_t(J), NoIndex, Y.block(J),
+                      RowKind::Inserted});
     }
   };
   for (const auto &[PI, PJ] : Pairs) {
     A.poll();
     Gap(PI, PJ);
-    Rows.push_back(
-        {XBase + PI, YBase + PJ, XBlock, YBlock, kind(Xs[PI], Ys[PJ])});
+    Rows.push_back({X.Base + PI, Y.Base + PJ, X.block(PI), Y.block(PJ),
+                    kind(Xs[PI], Ys[PJ])});
     ++I;
     ++J;
   }
   Gap(N, M);
+}
+
+bool Aligner::refineOrderedSpans(std::vector<DeltaRow> &Rows,
+                                 bool SingleBlockOnly) {
+  if ((A.F.BlockCount <= 1 && B.F.BlockCount <= 1) ||
+      (SingleBlockOnly && ((A.F.BlockCount != 1 && B.F.BlockCount != 1) ||
+                           A.F.BlockCount == B.F.BlockCount)))
+    return false;
+  uint64_t OldWeight = 0;
+  uint32_t OldEqual = 0;
+  for (const auto &R : Rows) {
+    A.poll();
+    OldEqual += R.Kind == RowKind::Identical || R.Kind == RowKind::Moved;
+    if (R.Primary != NoIndex && R.Secondary != NoIndex)
+      OldWeight +=
+          weight(A.P.Instructions[R.Primary], B.P.Instructions[R.Secondary]);
+  }
+  if (OldEqual >=
+      std::min(A.P.instructionCount(A.F), B.P.instructionCount(B.F)))
+    return false;
+  struct Span {
+    llvm::ArrayRef<Instruction> Instructions;
+    uint32_t Base;
+    std::vector<uint32_t> Blocks;
+  };
+  const auto Collect = [](const Side &S) -> std::optional<Span> {
+    const auto Blocks = S.P.blocks(S.F);
+    if (Blocks.empty())
+      return {};
+    const uint32_t Base = Blocks.front().FirstInstruction;
+    size_t End = Base;
+    for (uint32_t BI = 0; BI < Blocks.size(); ++BI) {
+      S.poll();
+      const auto &B = Blocks[BI];
+      if (B.FirstInstruction != End ||
+          (BI && B.Address <= Blocks[BI - 1].Address))
+        return {};
+      for (const auto &I : S.P.instructions(B)) {
+        S.poll();
+        if (I.Flow == InstructionFlow::Unknown ||
+            I.Flow == InstructionFlow::IndirectCall ||
+            I.Flow == InstructionFlow::IndirectJump)
+          return {};
+      }
+      End += B.InstructionCount;
+    }
+    for (const auto &E : S.P.edges(S.F)) {
+      S.poll();
+      if (E.To <= E.From || E.Kind == EdgeKind::Exception ||
+          E.Kind == EdgeKind::Switch)
+        return {};
+    }
+    // Borrow original instructions: address signatures are keyed by their
+    // addresses in the immutable Program, not by copied instruction values.
+    Span Result{
+        llvm::ArrayRef(S.P.Instructions).slice(Base, End - Base), Base, {}};
+    if (Blocks.size() > 1) {
+      Result.Blocks.reserve(End - Base);
+      for (uint32_t BI = 0; BI < Blocks.size(); ++BI) {
+        S.poll();
+        Result.Blocks.insert(Result.Blocks.end(), Blocks[BI].InstructionCount,
+                             BI);
+      }
+    }
+    return Result;
+  };
+  const auto X = Collect(A), Y = Collect(B);
+  if (!X || !Y)
+    return false;
+  InstructionPairs Pairs;
+  match(X->Instructions, Y->Instructions, 0, 0, Pairs);
+  uint64_t NewWeight = 0;
+  uint32_t NewEqual = 0;
+  for (const auto &[I, J] : Pairs) {
+    A.poll();
+    const auto &L = X->Instructions[I], &R = Y->Instructions[J];
+    NewWeight += weight(L, R);
+    const auto Kind = kind(L, R);
+    NewEqual += Kind == RowKind::Identical || Kind == RowKind::Moved;
+  }
+  if (NewEqual <= OldEqual || NewWeight < OldWeight)
+    return false;
+  Rows.clear();
+  appendRows(X->Instructions, Y->Instructions, {X->Base, 0, X->Blocks},
+             {Y->Base, 0, Y->Blocks}, Pairs, Rows);
+  return true;
 }
 
 bool unconditional(EdgeKind K) {
@@ -934,9 +1149,11 @@ FunctionDelta compareFunctionsWithKeys(const Program &Primary, uint32_t PF,
                                        const Correspondence &Map,
                                        llvm::ArrayRef<uint64_t> PrimaryKeys,
                                        llvm::ArrayRef<uint64_t> SecondaryKeys,
-                                       const ComparisonControl &Control) {
+                                       const ComparisonControl &Control,
+                                       InstructionAlignmentProfile Alignment) {
   try {
     FunctionDelta D;
+    D.Alignment = Alignment;
     D.IdentityOnly =
         !Primary.Functions[PF].hasBody() && !Secondary.Functions[SF].hasBody();
     D.AnalysisComplete = Primary.Functions[PF].hasBody() &&
@@ -1013,6 +1230,43 @@ FunctionDelta compareFunctionsWithKeys(const Program &Primary, uint32_t PF,
       }
       for (uint32_t Y : After[X])
         Inserted(Y);
+    }
+
+    if (D.AnalysisComplete &&
+        Alignment != InstructionAlignmentProfile::PairedBlocks &&
+        Align.refineOrderedSpans(
+            D.Rows,
+            Alignment == InstructionAlignmentProfile::SingleBlockSpans)) {
+      // Equal block/edge counts do not preserve boundaries: an instruction
+      // can move across an internal branch destination without changing
+      // either count. Such a refined listing must never become unchanged.
+      D.Changes |= ChangeBlocks;
+      for (auto &Pair : D.Blocks)
+        Pair.Unchanged = Pair.Uncertain = true;
+      // Instruction rows can cross a whole-block correspondence. Such rows
+      // never make either whole block unchanged or equate its CFG edges.
+      for (const auto &Row : D.Rows) {
+        A.poll();
+        const uint32_t X = Row.PrimaryBlock == NoIndex
+                               ? NoIndex
+                               : D.PrimaryBlockPair[Row.PrimaryBlock];
+        const uint32_t Y = Row.SecondaryBlock == NoIndex
+                               ? NoIndex
+                               : D.SecondaryBlockPair[Row.SecondaryBlock];
+        for (uint32_t I : {X, Y}) {
+          if (I == NoIndex)
+            continue;
+          auto &Pair = D.Blocks[I];
+          const bool Both = Row.PrimaryBlock == Pair.Primary &&
+                            Row.SecondaryBlock == Pair.Secondary;
+          const bool Equal =
+              Row.Kind == RowKind::Identical || Row.Kind == RowKind::Moved;
+          Pair.Unchanged &= Both && Equal;
+          Pair.Uncertain &= Both && (Equal || Row.Kind == RowKind::Uncertain);
+        }
+      }
+      for (auto &Pair : D.Blocks)
+        Pair.Uncertain &= !Pair.Unchanged;
     }
 
     for (const Edge &E : Primary.edges(A.F))
@@ -1173,6 +1427,7 @@ FunctionDelta compareFunctionsWithKeys(const Program &Primary, uint32_t PF,
     return D;
   } catch (const DeltaInterrupted &Stop) {
     FunctionDelta D;
+    D.Alignment = Alignment;
     D.State = Stop.State;
     D.ComputationComplete = false;
     D.AnalysisComplete = false;
@@ -1196,11 +1451,12 @@ std::vector<uint64_t> mnemonicKeys(const Program &P,
 FunctionDelta compareFunctions(const Program &Primary, uint32_t PF,
                                const Program &Secondary, uint32_t SF,
                                const Correspondence &Map,
-                               const ComparisonControl &Control) {
+                               const ComparisonControl &Control,
+                               InstructionAlignmentProfile Alignment) {
   const std::vector<uint64_t> PK = mnemonicKeys(Primary),
                               SK = mnemonicKeys(Secondary);
   return compareFunctionsWithKeys(Primary, PF, Secondary, SF, Map, PK, SK,
-                                  Control);
+                                  Control, Alignment);
 }
 
 uint32_t loopCount(const Program &P, const Function &F) {

@@ -4,6 +4,7 @@
 #include "Protocol.h"
 
 #include "neverd/sdk/NeverDCAPIBytePatch.h"
+#include "neverd/sdk/NeverDCAPIDevirtualize.h"
 #include "neverd/sdk/NeverDCAPIDisasm.h"
 #include "neverd/sdk/NeverDCAPILocalTypes.h"
 #include "neverd/sdk/NeverDCAPIPersist.h"
@@ -40,6 +41,21 @@ static std::filesystem::path projectFile(const std::string &input,
 }
 
 namespace {
+namespace discovery_fixture {
+constexpr auto kGateTimeout = std::chrono::seconds(5);
+constexpr auto kGatePollInterval = std::chrono::milliseconds(5);
+
+bool waitFor(const std::string &path) {
+  const auto deadline = std::chrono::steady_clock::now() + kGateTimeout;
+  while (!std::filesystem::exists(std::filesystem::u8path(path))) {
+    if (std::chrono::steady_clock::now() >= deadline)
+      return false;
+    std::this_thread::sleep_for(kGatePollInterval);
+  }
+  return true;
+}
+} // namespace discovery_fixture
+
 namespace unwind_query_fixture {
 #define NEVERD_UNWIND_TEST_TEXT(Name, Text) constexpr char Name[] = Text;
 #include "UnwindQueryFixtures.def"
@@ -139,8 +155,11 @@ struct MockSession {
   /// and refuse graph/IR reads against a different restricted pipeline.
   std::uint64_t preparedEntry = 0;
   unsigned sourcePrepares = 0, sourcePages = 0, sourceRenders = 0;
+  unsigned RecoveryCalls = 0;
   /// The functions the current neverd_warm_functions_json pass prepared.
   int warmed = 0;
+  /// neverd_prepare_call_summaries_json calls this session answered.
+  int summarySolves = 0;
   std::string preparedView;
   bool rejectedPreparation = false;
   bool wholeProgramPrepared = false;
@@ -173,6 +192,10 @@ bool literalFixture(neverd_session_t s) {
   return session(s)->path.ends_with("literal-names.bin");
 }
 std::uint64_t codeSize(neverd_session_t s) {
+  // The last function of these is far larger than the others.
+  if (session(s)->path.find("render-sizes") != std::string::npos ||
+      session(s)->path.find("render-late") != std::string::npos)
+    return CodeSize + 1024 * 1024;
   return session(s)->path.ends_with("make-code.bin")
              ? CodeBase + sizeof(CodeBytes) - Base
              : CodeSize;
@@ -712,6 +735,21 @@ int neverd_session_discover_functions(neverd_session_t s) {
 #endif
   if (state.path.find("discovery-order") != std::string::npos &&
       !state.discoveryPublished) {
+    if (std::filesystem::exists(
+            std::filesystem::u8path(state.path + ".pause-discovery"))) {
+      std::ofstream(std::filesystem::u8path(state.path + ".discovery-waiting"))
+          << "waiting";
+      if (!discovery_fixture::waitFor(state.path + ".finish-discovery")) {
+        state.error = "Fixture discovery gate timed out";
+        return -1;
+      }
+    }
+    state.discoveryPublished = true;
+    state.functions.push_back(Base + CodeSize);
+  }
+  // summaries-discover.bin discovers one function too, without a gate.
+  if (state.path.find("summaries-discover") != std::string::npos &&
+      !state.discoveryPublished) {
     state.discoveryPublished = true;
     state.functions.push_back(Base + CodeSize);
   }
@@ -731,8 +769,7 @@ NEVERD_API int neverd_session_discover_functions_step(neverd_session_t s) {
   if (state.path.find("discovery-order") != std::string::npos &&
       !state.discoveryPolls++)
     return 0;
-  neverd_session_discover_functions(s);
-  return 1;
+  return neverd_session_discover_functions(s) < 0 ? -1 : 1;
 }
 #endif
 neverd_va_t neverd_func_entry(neverd_session_t s, int index) {
@@ -741,12 +778,7 @@ neverd_va_t neverd_func_entry(neverd_session_t s, int index) {
     state.discoveryRebuild = true;
     std::ofstream(std::filesystem::u8path(state.path + ".rebuild"))
         << "started";
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!std::filesystem::exists(
-               std::filesystem::u8path(state.path + ".continue")) &&
-           std::chrono::steady_clock::now() < deadline)
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    discovery_fixture::waitFor(state.path + ".continue");
   }
   const auto &functions = session(s)->functions;
   return index >= 0 && index < static_cast<int>(functions.size())
@@ -758,6 +790,16 @@ int neverd_func_size(neverd_session_t s, int index) {
   const auto &functions = session(s)->functions;
   if (index < 0 || index >= static_cast<int>(functions.size()))
     return 16;
+  if (session(s)->path.find("render-late") != std::string::npos &&
+      index + 1 == static_cast<int>(functions.size()))
+    return 900;
+  // Functions of several sizes, none in the order of their addresses: the last
+  // is far larger than the others, and the engine knows no size for the one
+  // before it.
+  if (session(s)->path.find("render-sizes") != std::string::npos) {
+    const int fromEnd = static_cast<int>(functions.size()) - index;
+    return fromEnd == 1 ? 1024 * 1024 : fromEnd == 2 ? 0 : 16 - (index * 5) % 8;
+  }
   const auto end = index + 1 < static_cast<int>(functions.size())
                        ? functions[index + 1]
                        : Base + codeSize(s);
@@ -1011,10 +1053,22 @@ const char *neverd_warm_functions_json(neverd_session_t s,
         {"full", false},
         {"next_entry",
          nullptr}}.dump());
+  // summaries-discover.bin's summaries describe the functions discovery
+  // finds: warming it before discovery reads another inventory.
+  if (state.path.find("summaries-discover") != std::string::npos &&
+      !state.discoveryPublished)
+    return copy(Json{
+        {"available", false},
+        {"prepared", 0},
+        {"full", false},
+        {"next_entry",
+         nullptr}}.dump());
   if (firstEntry == 0)
     state.warmed = 0;
-  // warm-slow.bin takes long enough per step for heartbeats to show a pass.
-  if (state.path.find("warm-slow") != std::string::npos)
+  // warm-slow.bin takes long enough per step for heartbeats to show a pass;
+  // so does summaries-ready.bin, for its call-summary job.
+  if (state.path.find("warm-slow") != std::string::npos ||
+      state.path.find("summaries-ready") != std::string::npos)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   auto next = std::lower_bound(state.functions.begin(), state.functions.end(),
                                firstEntry);
@@ -1027,12 +1081,57 @@ const char *neverd_warm_functions_json(neverd_session_t s,
   if (full)
     prepared = 8 - state.warmed;
   state.warmed += prepared;
-  return copy(Json{{"available", true},
-                   {"prepared", prepared},
-                   {"full", full},
-                   {"next_entry", next == state.functions.end()
-                                      ? Json(nullptr)
-                                      : Json(hexAddress(*next))}}
+  // Only the summaries-ready.bin, summaries-discover.bin and
+  // summaries-fail.bin images have call summaries to solve.
+  const bool summaries =
+      state.path.find("summaries-ready") != std::string::npos ||
+      state.path.find("summaries-discover") != std::string::npos ||
+      state.path.find("summaries-fail") != std::string::npos;
+  return copy(Json{
+      {"available", true},
+      {"prepared", prepared},
+      {"full", full},
+      {"next_entry",
+       next == state.functions.end() ? Json(nullptr) : Json(hexAddress(*next))},
+      {"call_summaries",
+       summaries}}.dump());
+}
+const char *neverd_prepare_call_summaries_json(neverd_session_t s) {
+  auto &state = *session(s);
+  state.error.clear();
+  // summaries-ready.bin solves them, summaries-fail.bin fails; any other
+  // image has none, as one that is not x86-64.
+  if (state.path.find("summaries-fail") != std::string::npos) {
+    state.error = "call summary preparation failed: fixture";
+    return nullptr;
+  }
+  const bool available =
+      state.path.find("summaries-ready") != std::string::npos ||
+      state.path.find("summaries-discover") != std::string::npos;
+  ++state.summarySolves;
+  return copy(Json{{"available", available}, {"ready", available}}.dump());
+}
+// The callees of an image whose summaries a solve made ready are its
+// functions, read ahead in their order.
+const char *neverd_prefill_callees_json(neverd_session_t s, int first,
+                                        int maxCallees) {
+  auto &state = *session(s);
+  state.error.clear();
+  const bool available =
+      state.summarySolves > 0 &&
+      (state.path.find("summaries-ready") != std::string::npos ||
+       state.path.find("summaries-discover") != std::string::npos);
+  const size_t total = state.functions.size();
+  const size_t from = std::min<size_t>(std::max(first, 0), total);
+  const size_t count =
+      available
+          ? std::min<size_t>(std::clamp(maxCallees, 1, 4096), total - from)
+          : 0;
+  const bool more = available && from + count < total;
+  return copy(Json{{"available", available},
+                   {"prepared", count},
+                   {"full", false},
+                   {"next", more ? Json(from + count) : Json(nullptr)}}
                   .dump());
 }
 const char *neverd_code_refs_json(neverd_session_t s, neverd_va_t firstEntry,
@@ -2017,6 +2116,11 @@ static int prepareMockFunction(neverd_session_t s, neverd_va_t address) {
     }
     if (address == Base + 16 && session(s)->path.ends_with("source-export.bin"))
       std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    if (session(s)->path.find("slow-prepare") != std::string::npos)
+      std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    if (address == Base + 16 &&
+        session(s)->path.find("render-crash") != std::string::npos)
+      std::_Exit(3);
     if (session(s)->path.ends_with("source-cache-prepare-fail.bin") &&
         address == Base + 16 && !session(s)->rejectedPreparation) {
       session(s)->rejectedPreparation = true;
@@ -2237,6 +2341,53 @@ std::string spelledPage(neverd_session_t s, neverd_va_t address,
       .dump();
 }
 } // namespace
+
+const char *neverd_devirtualize_machine_source_v10(
+    neverd_session_t S, neverd_va_t Entry,
+    const neverd_devirtualize_options_v10 *Options, const char **Report) {
+  auto *Session = session(S);
+  ++Session->RecoveryCalls;
+  const auto &Proof = Options->base;
+  const auto &Work = Proof.base.base;
+  const auto &Alignment = Work.base.base;
+  const auto &Frame = Alignment.base;
+  const auto &Base = Frame.base.base.base;
+  if (Session->path.ends_with("recovery-slow.bin")) {
+    std::fprintf(stderr, "fixture interpreter recovery started\n");
+    std::fflush(stderr);
+    std::this_thread::sleep_for(std::chrono::seconds(30));
+  }
+  const bool Complete = !Session->path.ends_with("recovery-refused.bin");
+  Json Evidence{{"complete", Complete},
+                {"residualBlocks", 3},
+                {"sourceABI", "x64-machine-query-state-v2"},
+                {"fixture_calls", Session->RecoveryCalls},
+                {"fixture_prepares", Session->sourcePrepares},
+                {"fixture_entry", hexAddress(Entry)},
+                {"fixture_options",
+                 {{"size", Base.struct_size},
+                  {"abi", Options->machine_source_abi},
+                  {"llvm", Base.use_llvm},
+                  {"max_nodes", Base.max_nodes},
+                  {"max_operations", Base.max_operations},
+                  {"frame_begin", Frame.entry_frame_begin},
+                  {"frame_end", Frame.entry_frame_end},
+                  {"frame_flags", Frame.flags},
+                  {"alignment", Alignment.entry_frame_alignment},
+                  {"residue", Alignment.entry_frame_residue},
+                  {"separation_flags", Work.base.flags},
+                  {"proof_flags", Proof.flags}}}};
+  if (!Complete)
+    Evidence["error"] = "fixture unresolved indirect branch";
+  if (Report)
+    *Report = copy(Evidence.dump());
+  return Complete ? copy("/* recovered explicit state */\n"
+                         "unsigned recovered_fixture(void *state) {\n"
+                         "  (void)state;\n"
+                         "  return 0;\n"
+                         "}\n")
+                  : nullptr;
+}
 
 const char *neverd_ir_view_ex_json(neverd_session_t s, neverd_va_t address,
                                    const char *representation,
@@ -2529,6 +2680,7 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
       session(s)->path.ends_with("code-frame.bin") ||
       session(s)->path.ends_with("code-folding.bin") ||
       session(s)->path.ends_with("code-folding-cpp.bin") ||
+      session(s)->path.ends_with("code-brackets.bin") ||
       session(s)->path.ends_with("local-references.bin") ||
       session(s)->path.ends_with("local-references-cpp.bin") ||
       session(s)->path.ends_with("tab-sync-paged.bin")) {
@@ -2618,6 +2770,18 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
              "    break;\n"
              "  }\n"
              "  return v7;\n"
+             "}\n";
+    // Brackets of the code, nested and across lines, beside brackets of a
+    // string and a comment.
+    if (session(s)->path.ends_with("code-brackets.bin"))
+      full = "#include <stdint.h>\n"
+             "int32_t function_20(int32_t v0) {\n"
+             "  const char *message = \"(v0]\";\n"
+             "  int32_t v1[2] = {v0, (v0 + 1)};\n"
+             "  if (v0) {\n"
+             "    v1[(v0 & 1)] = function_22(v1[0]); /* ) */\n"
+             "  }\n"
+             "  return v1[0];\n"
              "}\n";
     if (localReferences)
       full = "#include <stdint.h>\n"

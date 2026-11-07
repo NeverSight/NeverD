@@ -87,40 +87,75 @@ def cancel_saved_restore(args, root, base, saved):
     target = root / "已有-比较.nddiff"
     for stage in ("restore:read", "restore:parse", "restore:write"):
         target.write_text("existing review must survive\n")
-        process = subprocess.Popen(base + ["--json", "--reopen", str(report), "--save", str(target)],
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        messages, captured = queue.Queue(), []
+        # A file, not a pipe: a signal that comes after the commit leaves the
+        # whole report to print, far more than a pipe holds until it is read.
+        output = root / f"restore-stopped-{stage.replace(':', '-')}.json"
+        with output.open("w") as stdout:
+            process = subprocess.Popen(base + ["--json", "--reopen", str(report), "--save", str(target)],
+                                       stdout=stdout, stderr=subprocess.PIPE, text=True)
+            messages, captured = queue.Queue(), []
 
-        def drain():
-            for line in process.stderr:
-                captured.append(line)
-                messages.put(line)
-            messages.put(None)
+            def drain():
+                for line in process.stderr:
+                    captured.append(line)
+                    messages.put(line)
+                messages.put(None)
 
-        reader = threading.Thread(target=drain, daemon=True)
-        reader.start()
-        try:
-            deadline = time.monotonic() + 20
-            while True:
-                line = messages.get(timeout=max(0.1, deadline - time.monotonic()))
-                assert line is not None and time.monotonic() < deadline, captured
-                if line.startswith(f"diff: {stage} "):
-                    process.send_signal(signal.SIGINT)
-                    break
-            process.wait(timeout=20)
-            output = process.stdout.read()
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=15)
-            reader.join(timeout=5)
-            process.stderr.close()
-            process.stdout.close()
+            reader = threading.Thread(target=drain, daemon=True)
+            reader.start()
+            try:
+                deadline = time.monotonic() + 20
+                while True:
+                    line = messages.get(timeout=max(0.1, deadline - time.monotonic()))
+                    assert line is not None and time.monotonic() < deadline, captured
+                    if line.startswith(f"diff: {stage} "):
+                        process.send_signal(signal.SIGINT)
+                        break
+                process.wait(timeout=20)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=15)
+                reader.join(timeout=5)
+                process.stderr.close()
+        # The write's last cancellation point is just before it commits. A later
+        # signal finds the review already replaced, and that is what it reports.
+        if stage == "restore:write" and process.returncode != 3:
+            assert target.read_text() != "existing review must survive\n", captured
+            assert json.loads(output.read_text()), captured
+            continue
         assert process.returncode == 3, (stage, process.returncode, captured)
         assert "restore cancelled; no output was published" in "".join(captured), captured
-        assert output == "", output
+        assert output.read_text() == "", output.read_text()
         assert target.read_text() == "existing review must survive\n"
     assert json.loads(run(base + ["--json", "--reopen", str(saved)], {2, 3}).stdout) == json.loads(saved.read_text())
+
+
+def argument_accesses(args, root):
+    binary = root / "argument-accesses.raw"
+    binary.write_bytes(bytes.fromhex(
+        "4883ec1848c744240807000000488d7c2408e80a000000488b4424084883c418c3"
+        "48c70707000000c3"))
+    project = pathlib.Path(str(binary) + ".neverd")
+    project.mkdir()
+    (project / "load.json").write_text(json.dumps({
+        "loader": "binary", "processor": "x86_64", "platform": "sysv", "base": "0x1000"}))
+    base = [args.neverd, "diff", "--structural", "-a", str(binary), "-b", str(binary)]
+    saved = root / "argument-accesses.nddiff"
+    report = json.loads(run(base + ["--dataflow", "--json", "--save", str(saved)], {0, 3}).stdout)
+    nodes = json.loads(run(base + ["--reopen", str(saved), "--flow-function", "0x1000"], {0, 3}).stdout)
+    call = next(n for n in nodes["rows"] if n["opcode"] == "CALL")
+    query = base + ["--reopen", str(saved), "--flow-function", "0x1000",
+                    "--argument-access-call", str(call["id"])]
+    accesses = json.loads(run(query, {0, 3}).stdout)
+    assert accesses["inspection_complete"] and accesses["total"] == 2, accesses
+    assert [(r["argument"], r["access"], r["address"], r["return_operand_path"])
+            for r in accesses["rows"]] == [(0, "write", "0x1004", False),
+                                          (0, "read", "0x1017", True)]
+    assert json.loads(run(query + ["--offset", "1", "--limit", "1"], {0, 3}).stdout)["rows"] == accesses["rows"][1:]
+    assert json.loads(run(base + ["--reopen", str(saved), "--json"], {0, 3}).stdout) == report
+    run(query + ["--slice-node", "0"], {1})
+    run(base + ["--argument-access-call", "0"], {1})
 
 
 def cancel_mapping_edits(args, root):
@@ -219,6 +254,34 @@ def ambiguity_pages(args, root):
     run([args.neverd, "diff", "-a", str(paths[0]), "-b", str(paths[1]), "--list-search", "copy"], {1})
 
 
+def mapped_call_regions(args, root):
+    code = bytes.fromhex('89f883c00383f017e8130000006bc00783c00983f025c3')
+    code += b'\x90' * (32 - len(code)) + bytes.fromhex('89f883c00bc3')
+    paths = [root / 'call-regions-before.bin', root / 'call-regions-after.bin']
+    for path, address in zip(paths, ('0x1000', '0x8000')):
+        path.write_bytes(code)
+        project = pathlib.Path(str(path) + '.neverd')
+        project.mkdir()
+        (project / 'load.json').write_text(json.dumps({
+            'loader': 'binary', 'processor': 'x86_64', 'platform': 'sysv', 'base': address}))
+    base = [args.neverd, 'diff', '--structural', '-a', str(paths[0]), '-b', str(paths[1])]
+    report = root / 'call-regions.nddiff'
+    legacy = json.loads(run(base + ['--regions', '--json'], {0, 2, 3}).stdout)
+    assert legacy['regions']['anchor_count'] == 0, legacy['regions']
+    result = json.loads(run(base + ['--region-calls', '--json', '--save', str(report)], {0, 2, 3}).stdout)
+    assert result['regions']['profile'] == 'native-call-runs-v1'
+    assert result['regions']['call_evidence'] == 'current_function_correspondence'
+    assert result['regions']['anchor_count'] == 1, result['regions']
+    assert result['regions']['semantic_validation'] == 'not_performed'
+    assert json.loads(run(base + ['--reopen', str(report), '--json'], {0, 2, 3}).stdout) == result
+    rows = json.loads(run(base + ['--reopen', str(report), '--region-anchor', '0'], {0, 2, 3}).stdout)
+    assert rows['total'] == 7 and rows['rows'][3]['primary']['bytes'] == 'E813000000', rows
+    overrides = root / 'call-regions-overrides.json'
+    overrides.write_text(json.dumps([{'kind': 'unmatch', 'primary': '0x1020', 'secondary': '0x8020'}]))
+    edited = json.loads(run(base + ['--reopen', str(report), '--overrides', str(overrides), '--json'], {2, 3}).stdout)
+    assert edited['regions']['anchor_count'] == 0, edited['regions']
+
+
 def unresolved_reference_evidence(args, root):
     paths = [root / "reference-before.bin", root / "reference-after.bin"]
     code = bytearray(24)
@@ -296,8 +359,10 @@ def main():
     lib.neverd_free_string.argtypes = [pointer]
     with tempfile.TemporaryDirectory(prefix="neverd-diff-cli-") as folder:
         root = pathlib.Path(folder)
+        argument_accesses(args, root)
         ambiguity_pages(args, root)
         unresolved_reference_evidence(args, root)
+        mapped_call_regions(args, root)
         mixed_reference_evidence(args, root)
         cancel_mapping_edits(args, root)
         for limit in (17, 9):

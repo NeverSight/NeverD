@@ -30,6 +30,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/DataSymbolBinding.h"
+#include "neverd/loader/X86/X64DispatchFrame.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -122,6 +123,14 @@ bool printsTruthValue(const HighExpr &E);
 /// import (HighCWriter::isImageDataAddress).
 bool isImageDataAt(const BinaryImage &Img, va_t Addr);
 
+/// The undefined data symbol of a relocatable object whose storage holds
+/// \p Addr (BinaryImage::objectExternDataAt), and the offset of \p Addr into
+/// it, where C reaches it through the symbol's declaration.  The object a C
+/// library header declares stays the header's at its own address
+/// (LibCDataObjects.def).
+std::optional<std::pair<const BinaryImage::ObjectExternData *, uint64_t>>
+declaredObjectExternAt(const BinaryImage &Img, va_t Addr);
+
 class HighCWriter {
 public:
   static llvm::StringRef
@@ -132,19 +141,24 @@ public:
   static std::optional<std::string> sourceValue(llvm::StringRef Text,
                                                 const TypeRef &Carrier,
                                                 const TypeRef &Source);
-  HighCWriter(llvm::raw_ostream &Stream, const CEmitterOptions &Opts,
-              DebugContext *Dbg, bool GuardAnalysisOnlyFunctions = true,
-              const std::unordered_set<std::string_view> *SharedNames = nullptr,
-              CSourceRecorder *Recorder = nullptr,
-              const HighCImageDataObjects *SharedDataObjects = nullptr,
-              const HighCImageFunctionSymbols *SharedFunctionSymbols = nullptr,
-              const PreparedPortableX87Function *PortableInterface = nullptr)
+  HighCWriter(
+      llvm::raw_ostream &Stream, const CEmitterOptions &Opts, DebugContext *Dbg,
+      bool GuardAnalysisOnlyFunctions = true,
+      const std::unordered_set<std::string_view> *SharedNames = nullptr,
+      CSourceRecorder *Recorder = nullptr,
+      const HighCImageDataObjects *SharedDataObjects = nullptr,
+      const HighCImageFunctionSymbols *SharedFunctionSymbols = nullptr,
+      const PreparedPortableX87Function *PortableInterface = nullptr,
+      const std::unordered_set<std::string_view> *SharedLinkNames = nullptr,
+      const HighCImageNameIndex *SharedNameIndex = nullptr)
       : OS(Stream), Opts(Opts), Dbg(Dbg),
         GuardAnalysisOnlyFunctions(GuardAnalysisOnlyFunctions),
         SharedImageFunctionNames(SharedNames), SourceRecorder(Recorder),
         SharedDataObjects(SharedDataObjects),
         SharedFunctionSymbols(SharedFunctionSymbols),
-        PortableInterface(PortableInterface) {}
+        PortableInterface(PortableInterface),
+        SharedFunctionLinkNames(SharedLinkNames),
+        SharedNameIndex(SharedNameIndex) {}
 
   //--- Module-level (HighCEmitter.cpp) ---
   void writeAll(const std::vector<HighFunc> &Funcs);
@@ -269,6 +283,8 @@ public:
   /// the stack protector's canary at FS:0x28 is
   /// (exceptionEncodingIsOutsideWindows).
   static bool hidesRegistrationMemory(const HighFunc &Func);
+  /// Use the same segmented-read spelling for declarations and expressions.
+  bool useMsvcSegmentedRead() const;
   bool isEmbeddedRegistrationCallback(const HighStmt &Stmt, size_t I) const;
   bool isEmbeddedWindowsCallback(const HighStmt &Stmt, size_t I) const;
   void writeEmbeddedNativeCallbacks(const HighStmt &Stmt, int Indent);
@@ -323,6 +339,13 @@ public:
   void writeFunction(const HighFunc &Func);
   void writeAnalysisOnlyFunction(const HighFunc &Func);
   void writeFunctionProjection(const HighFunc &Func);
+  /// What C shows \p Func returning: nothing, or the type its declaration
+  /// gives, else its recovered return type.
+  struct PrintedReturn {
+    bool Void = false;
+    TypeRef Type;
+  };
+  PrintedReturn printedReturn(const HighFunc &Func) const;
   void runAnalysisPasses(const HighFunc &Func);
   void writeExceptionAnnotation(const HighFunc &Func);
   void writeSEHScopeAnnotation(const HighFunc &Func, int Indent = 0);
@@ -457,6 +480,9 @@ public:
   /// does not change while a unit is written, and each lookup scans every
   /// export and symbol it holds.
   const std::string &imageFunctionNameAt(va_t Addr) const;
+  /// BinaryImage::findSymbolAt(\p Addr), from the emitter's index of the
+  /// image where it prepared one.
+  const Symbol *imageSymbolAt(va_t Addr) const;
   /// The C identifier a direct call names; see HighCExprWriter.cpp.
   std::string callIdentifier(const HighExpr &E) const;
   /// The C name of the import slot call \p E goes through, itself or by the
@@ -467,6 +493,15 @@ public:
   /// import's own slot in the import address table, not a stub that jumps
   /// through it; empty otherwise.
   std::string importDataSlotIdentifier(va_t Addr) const;
+  /// importSlotIdentifier's answers, by call address: the image does not
+  /// change while a unit is written.
+  mutable std::unordered_map<va_t, std::string> ImportSlotIdentifierAt;
+  /// The physical dispatch bridge (x64DispatchFrame) at the entry of a
+  /// function the unit writes, read once: a definition asks three times, and
+  /// a bridge names two functions of the image.
+  const std::optional<X64DispatchFrame> &dispatchFrame(va_t Entry) const;
+  mutable std::unordered_map<va_t, std::optional<X64DispatchFrame>>
+      DispatchFrames;
   /// The import slot a read of \p Size bytes at \p Address reads as data, a
   /// data import's address: the slot at a constant address, or the slot a
   /// read-only pointer holds (MinGW's `.refptr.__imp__fmode`).
@@ -513,8 +548,10 @@ public:
                          SourceVariable *>
       RecordedSourceVariables;
   std::map<std::pair<va_t, std::string>, unsigned> SourceLocalClasses;
-  std::string debugNameForDisplacement(va_t Entry, int64_t Disp) const;
-  TypeRef debugTypeForDisplacement(va_t Entry, int64_t Disp) const;
+  std::string debugNameForDisplacement(const HighFunc &Function,
+                                       int64_t Disp) const;
+  TypeRef debugTypeForDisplacement(const HighFunc &Function,
+                                   int64_t Disp) const;
   TypeRef declaredParamType(const MedVar &V) const;
   /// The type \p Func's definition declares its HighIR parameter \p Index
   /// with, which its prototype and every use of the parameter share.
@@ -642,6 +679,7 @@ public:
   std::string unknownValueText(const HighExpr &E, llvm::StringRef Kind);
   /// The failure an unknown value prints at its use, or empty when \p E
   /// names a value the function defines.
+  bool isPlatformRegisterEntry(const HighExpr &E) const;
   std::string unknownVarUse(const HighExpr &E, const std::string &Name,
                             const std::string &RawName);
   /// Pointer-sized Load chain used as a callee: `*(void **)p` / `**(void
@@ -663,6 +701,8 @@ public:
   /// leaves out the operand of the instruction it stands for; empty when its
   /// C spells the instruction itself.
   std::string intrinsicInstructionComment(const HighExpr &E) const;
+  /// Original instruction and unresolved-target note for an analysis exit.
+  std::string analysisDispatchComment(const HighExpr &Call) const;
   /// \p Call as a statement, with the instruction it stands for beside it.
   std::string callStatementText(const HighExpr &Call);
   /// Whether every byte of \p E from \p Bytes up is zero, as far as its
@@ -681,6 +721,25 @@ public:
   /// (`(int32_t)(int8_t)v` is not `v`).
   const HighExpr *sameWidthVariable(const HighExpr &E) const;
   const HighExpr *forwardedExpr(const HighExpr *E) const;
+  /// The text \p Not is `!(x < 0)` of the text \p Value, which is then `x > 0`
+  /// with it: without a cast, `x` is signed at its own width. Both are read
+  /// without source markers, so a marked render spells what the ordinary one
+  /// does.
+  bool isNotBelowZeroOf(llvm::StringRef Not, llvm::StringRef Value) const;
+  /// exprStr last printed the variable \p E as a name declared wider than its
+  /// value, so that reading only the value takes a cast.
+  bool printsWiderThanItsValue(const HighExpr &E) const;
+  /// The width a comparison of \p Value with the constant \p Zero tests: the
+  /// narrower of the two, since a variable can be typed wider than its test and
+  /// a zero wider than a 16-bit value.
+  static uint16_t zeroTestBytes(const HighExpr &Value, const HighExpr &Zero);
+  /// How many low bytes of the value under \p E reach it, or 0 if unknown. A
+  /// comparison with zero reads what its value does.
+  unsigned lowBytesRead(const HighExpr *E) const;
+  /// Whether two tests of one variable read the same low bytes of it, so that
+  /// either's zero test decides the other's. `v` and `(int32_t)v` do not when
+  /// `v` is wider.
+  bool readsSameBytes(const HighExpr *A, const HighExpr *B) const;
   /// \p Operand's text as an operand of a floating-point operator.  An
   /// operation whose type C may compute wider (CFloatTypes.def) is cast to
   /// that type, which rounds it where the instruction rounded.
@@ -692,11 +751,15 @@ public:
   /// none for an indirect call whose callee is unknown, which names its own
   /// instruction: debug information gives the caller there.
   std::optional<FunctionSym> debugFunctionCalled(const HighExpr &E) const;
+  /// Synthetic source bodies have their own interface, even when their
+  /// address marker coincides with a real native debug declaration at zero.
+  std::optional<FunctionSym> debugFunction(const HighFunc &Function) const;
   std::optional<FunctionSym> debugCallee(const HighExpr &E) const;
-  /// The debug information's function at \p Entry, resolved once per
+  /// The native debug declaration of \p Function, resolved once per
   /// output: the statement tests ask for the current function's on every
   /// line, and resolving it reads names, declarations and prototypes.
-  const std::optional<FunctionSym> &resolvedFunction(va_t Entry) const;
+  const std::optional<FunctionSym> &
+  resolvedFunction(const HighFunc &Function) const;
   /// The pointer type a local is declared with where a typed call's pointer
   /// result declares it (collectCallResultNames, emitLocalDecls), whatever
   /// the type of its machine value; null for any other value or name.
@@ -706,6 +769,10 @@ public:
   /// record an MSVC call returns through a hidden pointer; null where C
   /// cannot spell it.
   TypeRef callResultType(const HighExpr &Call) const;
+  /// A lifted integer carrier of a different width from its C declaration.
+  /// Both expression conversion and local storage must keep these bits.
+  static TypeRef integerCallResultCarrier(const HighExpr &Call,
+                                          const TypeRef &Declared);
   bool debugCallReturnIsDeclared(const HighExpr &Call,
                                  const FunctionSym &Function) const;
   TypeRef callResultPointerTypeNamed(const std::string &Name) const;
@@ -968,6 +1035,11 @@ public:
   std::string condStr(const HighExpr &E);
   std::string condStrImpl(const HighExpr &E);
   std::string invertCondStrImpl(const HighExpr &E);
+  /// The logical inverse of \p Test as the rendering of \p Node. A value is 0
+  /// or 1 and keeps its grouping; only the node a condition is currently
+  /// testing may read `!(x == 0)` as plain `x`.
+  std::string invertedTruthValue(const HighExpr &Test, const HighExpr &Node,
+                                 int ParentPrec);
   /// `!(a <= b && a != b)` is `a >= b`. When both IfElse arms print, Hex-Rays
   /// prefers `if (b > a) else-arm else then-arm`.
   std::optional<std::string> preferGreaterIfElseCond(const HighExpr &E);
@@ -1100,6 +1172,21 @@ public:
   std::unordered_map<const HighExpr *, std::pair<std::string, int>>
       UnsignedCarrierTexts;
   CEmitterOptions Opts;
+  std::optional<va_t> sourceBodyOrigin(const HighFunc &Function) const {
+    if (!Opts.SourceBodyOrigins || Function.Entry)
+      return std::nullopt;
+    const auto At = Opts.SourceBodyOrigins->find(Function.Name);
+    return At == Opts.SourceBodyOrigins->end()
+               ? std::nullopt
+               : std::optional<va_t>(At->second);
+  }
+  /// Only native function declarations and frames have this context. Callees
+  /// and image types retain the output's shared debug context.
+  DebugContext *functionDebugContext(const HighFunc &Function) const {
+    if (Function.Entry)
+      return Dbg;
+    return sourceBodyOrigin(Function) ? nullptr : Dbg;
+  }
   DebugContext *Dbg;
   bool GuardAnalysisOnlyFunctions;
   /// When false, emit recovered locals and statements without a C wrapper.
@@ -1197,6 +1284,8 @@ public:
       X87ContextHelperNames;
   std::map<std::pair<Intrinsic, unsigned>, std::string> X86FPStateHelpers;
   bool UsesX87Extended = false;
+  /// Checked addition of the dynamic frame's outgoing call storage.
+  std::string StackAllocationSizeHelper;
   /// The bytes a plain access of the C memory type \p Type copies inline: 0
   /// for its whole object, the value's bytes for a bit-precise integer
   /// narrower than its storage on a little-endian target, none when only
@@ -1212,11 +1301,14 @@ public:
   bool NeedsX64WindowsSyscallHelper = false;
   /// The modeled supervisor calls the output makes, whose helpers it defines.
   std::set<Intrinsic> LinuxSyscallHelpers;
-  /// A Windows x86 function renders an <intrin.h>-only intrinsic.
+  /// A Windows function renders an <intrin.h>-only intrinsic.
   bool NeedsMsvcIntrinsics = false;
   bool NeedsX86SystemRegisterDispatch = false;
   bool NeedsX86ScalarSystemDispatch = false;
+  bool NeedsX86Flags16Dispatch = false;
+  bool NeedsX86BoundDispatch = false;
   bool NeedsX86DescriptorStateDispatch = false;
+  bool NeedsX86SegmentMoveDispatch = false;
   bool NeedsX86VirtualizationDispatch = false;
   bool NeedsX86SystemStateDispatch = false;
   /// A non-Windows x86 function renders an <x86intrin.h>-only intrinsic.
@@ -1466,6 +1558,8 @@ public:
   std::map<std::string, TypeRef> PointerArgDestTypes;
   /// Single-use call / image-global loads print at the use, not as a temp.
   std::map<std::string, const HighExpr *> ValueForward;
+  /// The node whose truth, not value, the enclosing condition reads.
+  const HighExpr *TruthTested = nullptr;
   /// Values assigned to each printed variable name in the current function,
   /// built on first use by incrementBaseMatchesAddr.
   mutable std::unordered_map<std::string, std::vector<const HighExpr *>>
@@ -1580,6 +1674,9 @@ public:
     bool HeaderBytes = false;
   };
   std::map<va_t, ImageObject> ImageObjects;
+  /// Functions keeping an image address as a value that no storage can back,
+  /// with the first such address. Each refuses when it renders.
+  std::map<const HighFunc *, va_t> UnbackedEscapes;
   /// The access width that names the unnamed object \p Obj at \p Addr, as
   /// the listing names it: the width every access the image's code states
   /// there shares (CEmitterOptions::AccessWidths), else, without those, the
@@ -1678,7 +1775,14 @@ public:
   std::string
   functionAddressIdentifier(const FunctionAddressTarget &Target) const;
   /// Linker function names cannot also name definitions of reconstructed data.
-  std::optional<std::set<std::string>> ImageFunctionLinkNames;
+  /// The image's function link names: the emitter's prepared ones, or read
+  /// on the first query (imageFunctionOwnsLinkIdentifier).
+  const std::unordered_set<std::string_view> *SharedFunctionLinkNames;
+  std::optional<std::unordered_set<std::string_view>> ImageFunctionLinkNames;
+  /// The image's name lookups by address, which the emitter prepared for
+  /// the image, or null: a unit written alone scans the image for the few
+  /// names it asks.
+  const HighCImageNameIndex *SharedNameIndex;
   bool imageFunctionOwnsLinkIdentifier(llvm::StringRef Name);
   /// The symbols of those functions this output does not define, declared as
   /// the functions it calls are.
@@ -1715,8 +1819,38 @@ public:
     /// The bytes are a C library header's object (ImageObject::Header),
     /// reached through its address: the unit defines none of its own.
     bool Header = false;
+    /// The bytes are the image's own PE headers, the linker's `__ImageBase`
+    /// (addImageBaseBacking): the unit declares them and defines none.
+    bool External = false;
   };
   std::vector<ImageBacking> ImageBackings;
+  /// The walk found the unit printing an address in the image's own PE
+  /// headers (BinaryImage::imageBaseOffset), and the identifier it declares
+  /// `__ImageBase` by, empty while it reaches none.
+  bool ReachesImageBase = false;
+  std::string ImageBaseIdentifier;
+  /// The undefined data symbols of a relocatable object whose storage the
+  /// unit prints an address in, by their extern address
+  /// (declaredObjectExternAt).  Each is an external backing the unit
+  /// declares by the symbol and defines nothing of.
+  std::set<va_t> ReachedObjectExterns;
+  /// Note that the unit prints \p Addr, which may lie in such storage.
+  void noteObjectExternAddress(va_t Addr);
+  /// Add an external backing for each reached symbol, and declare them.
+  void addObjectExternBackings();
+  void writeObjectExternDeclarations();
+  /// The identifier the unit declares data symbol \p Symbol another module
+  /// defines by, shared with the GOT slots that bind it (DataSymbolBinding).
+  std::string externalDataIdentifier(const std::string &Symbol);
+  /// Note that the unit prints \p Addr through `__ImageBase`.
+  void noteImageBaseAddress(va_t Addr);
+  /// Whether \p E is an address in the image's headers by its provenance.
+  bool isImageBaseConstant(const HighExpr &E) const;
+  /// Add the `__ImageBase` backing once the walk has found the unit
+  /// reaching it, among the image's own backings.
+  void addImageBaseBacking();
+  /// Declare `__ImageBase` for a unit that reaches it.
+  void writeImageBaseDeclaration();
   /// The symbol the object a backing is named after has in its comment, as
   /// the backing's `neverd.image` line names it; empty for a name the
   /// emitter made.

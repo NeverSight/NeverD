@@ -10,6 +10,16 @@ static std::string constantResult() {
   return module("store i64 7, ptr %state, align 8\nret i64 0");
 }
 
+TEST(InterpreterLLVMRefinement, PageGlobalContractRequiresAuthenticatedState) {
+  Program P({0xb8, 7, 0, 0, 0, 0xc3});
+  const auto R = P.recover();
+  ASSERT_TRUE(R.complete());
+  P.Options.X64CR4PGEState = true;
+  const auto Result = P.check(R.Residual, constantResult());
+  rejected(Result, Stage::Native);
+  EXPECT_NE(Result.Diagnostic.find("CR4 PGE state"), std::string::npos);
+}
+
 TEST(InterpreterLLVMRefinement,
      TaskPriorityContractRequiresAuthenticatedState) {
   Program P({0xb8, 7, 0, 0, 0, 0xc3});

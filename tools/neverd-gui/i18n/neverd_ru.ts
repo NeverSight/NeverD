@@ -12,6 +12,14 @@
         <translation>Режим &amp;фокусировки</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>&amp;Новый экземпляр</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>Открыть новый экземпляр NeverD</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>&amp;Открыть...</translation>
     </message>
@@ -342,6 +350,50 @@
     <message>
         <source>Move to the next occurrence of the highlighted identifier</source>
         <translation>Перейти к следующему вхождению подсвеченного идентификатора</translation>
+    </message>
+    <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>Закрепить или &amp;открепить</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>Оставить подсвеченное слово подсвеченным первым свободным цветом или открепить его</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>Цвет &amp;1</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>Цвет &amp;2</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>Цвет &amp;3</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>Цвет &amp;4</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>Цвет &amp;5</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>Цвет &amp;6</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>Цвет &amp;7</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>Цвет &amp;8</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>Закрепить подсвеченное слово этим цветом или освободить цвет</translation>
     </message>
     <message>
         <source>&amp;Find in view...</source>
@@ -1275,6 +1327,14 @@
         <source>Enter &amp;comment...</source>
         <translation>Ввести &amp;комментарий...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>Установка, включение, отключение и удаление плагинов</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>Менеджер плагинов...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1612,6 +1672,10 @@
         <translation>По&amp;иск</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>&amp;Закрепить подсветку</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>&amp;Вид</translation>
     </message>
@@ -1712,6 +1776,10 @@
     <message>
         <source>%1 uses database format %2, which this NeverD cannot update.</source>
         <translation>%1 использует формат базы данных %2, который эта версия NeverD не может обновить.</translation>
+    </message>
+    <message>
+        <source>This database may already be open in another NeverD (%1)</source>
+        <translation>Возможно, эта база данных уже открыта в другом экземпляре NeverD (%1)</translation>
     </message>
     <message>
         <source>Cannot create %1</source>
@@ -2007,6 +2075,23 @@ Double-click to go to the declaration.</source>
         <source>Could not refresh source: %1</source>
         <translation>Не удалось обновить исходный код: %1</translation>
     </message>
+
+    <message>
+        <source>Interpreter recovered · %1 blocks</source>
+        <translation>Интерпретатор восстановлен · блоков: %1</translation>
+    </message>
+    <message>
+        <source>No complete source was produced</source>
+        <translation>Полный исходный код не создан</translation>
+    </message>
+    <message>
+        <source>Recovering interpreter control flow…</source>
+        <translation>Восстановление потока управления интерпретатора…</translation>
+    </message>
+    <message>
+        <source>Recovery stopped: %1</source>
+        <translation>Восстановление остановлено: %1</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::CodeView</name>
@@ -2073,6 +2158,23 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Cancel transformation</source>
         <translation>Отменить преобразование</translation>
+    </message>
+
+    <message>
+        <source>Interpreter recovery options…</source>
+        <translation>Параметры восстановления интерпретатора…</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report…</source>
+        <translation>Отчёт о восстановлении интерпретатора…</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>Восстановить функцию интерпретатора</translation>
+    </message>
+    <message>
+        <source>Return to ordinary source</source>
+        <translation>Вернуться к обычному исходному коду</translation>
     </message>
 </context>
 <context>
@@ -2301,6 +2403,14 @@ Double-click to go to the declaration.</source>
         <source>Laying out graph…</source>
         <translation>Построение графа…</translation>
     </message>
+    <message>
+        <source>From %1</source>
+        <translation>Из %1</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>В %1</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::HexView</name>
@@ -2383,6 +2493,26 @@ Double-click to go to the declaration.</source>
         <translation>Фоновый анализ: ссылки и метки индексируются во время просмотра</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>База данных изменена</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1 изменился после открытия в этой рабочей области, возможно, в другом экземпляре NeverD. Заменить его текущее содержимое проектом этой рабочей области?</translation>
+    </message>
+    <message>
+        <source>Open other files in a new instance</source>
+        <translation>Открывать другие файлы в новом экземпляре</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>Если файл открыт, Файл &gt; Открыть, недавний и перетащенный файл запускают новый экземпляр, а не заменяют его</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 уже открыт в другом экземпляре NeverD; выполняется переключение на него.</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>Несохранённые изменения</translation>
     </message>
@@ -2393,6 +2523,10 @@ Double-click to go to the declaration.</source>
     <message>
         <source>%1 lacks the latest changes. Save them into it before continuing?</source>
         <translation>В %1 нет последних изменений. Сохранить их в него перед продолжением?</translation>
+    </message>
+    <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>Не удалось запустить новый экземпляр: %1</translation>
     </message>
     <message>
         <source>Cannot jump to %1: %2</source>
@@ -2421,18 +2555,6 @@ Double-click to go to the declaration.</source>
     <message>
         <source>History: %1 entries, cursor %2</source>
         <translation>История: записей — %1, курсор — %2</translation>
-    </message>
-    <message>
-        <source>AU: idle</source>
-        <translation>AU: свободен</translation>
-    </message>
-    <message>
-        <source>AU: busy %1%</source>
-        <translation>AU: занят %1%</translation>
-    </message>
-    <message>
-        <source>AU: busy</source>
-        <translation>AU: занят</translation>
     </message>
     <message>
         <source>Down</source>
@@ -3306,6 +3428,10 @@ After:
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>Выберите файл размером от 1 байта до %1, шестнадцатеричный адрес и имя секции. Функции нужны имя и права на выполнение.</translation>
     </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>Задачи плагинов</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3470,6 +3596,14 @@ After:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>Файл %1 находится в папке, недоступной для записи; его база данных хранится в %2</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>Возможно, этот файл уже открыт в другом экземпляре NeverD (%1)</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1 оставлен без изменений; изменения этой рабочей области в него не вошли.</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>
@@ -6843,6 +6977,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 Идентичности ссылок: не определены. Некоторые цели вызовов или ссылки на данные нельзя сравнить. Само по себе это не доказывает наличие изменения.</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>Включить сопоставленные вызовы</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>Расширять общие области через прямые вызовы с сопоставленными целями. Результаты зависят от текущих пар функций и пересчитываются при их изменении. Поведение вызовов при этом не проверяется.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -6885,10 +7027,6 @@ Select an operation to follow dependencies. Synthetic operations have block prov
     <message>
         <source>Enable dependency evidence in comparison settings.</source>
         <translation>Включите свидетельства зависимостей в настройках сравнения.</translation>
-    </message>
-    <message>
-        <source>Include control dependencies</source>
-        <translation>Включить зависимости по управлению</translation>
     </message>
     <message>
         <source>Inspect original function</source>
@@ -7025,6 +7163,32 @@ Progress does not establish equal loop counts or function results.</source>
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>Доказательство: каждый цикл счётчика достигает общего выхода относительно выражения, полученного из входных данных. До выхода возможно неопределённое поведение.</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>Доступы по аргументам</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>Показать чтения и записи по тому же вычисленному адресу, что и восстановленный аргумент вызова.</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>Учитывать управление</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>Учитывать зависимости управления при трассировке входов или использований.</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>Вызов n%1 · Наблюдений адресов: %2 · %3
+Чтения и записи по адресу восстановленного аргумента. Эффекты вызова и порядок выполнения остаются неизвестными. Активируйте строку, чтобы выбрать операцию.</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>Анализ адресов аргументов…</translation>
     </message>
 </context>
 <context>
@@ -7839,6 +8003,38 @@ Every use of a projected parameter reads the same low bits. Whole-function behav
         <source>Uncertain</source>
         <translation>Неопределённо</translation>
     </message>
+    <message>
+        <source>Argument</source>
+        <translation>Аргумент</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>Доступ</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>Вход RETURN</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>Запись</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>Чтение</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>Путь COPY / PHI</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>Не наблюдалось</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>Путь COPY/PHI одинаковой ширины к операнду RETURN. Операнд может быть целью передачи управления; это не устанавливает возвращаемое значение ABI или порядок выполнения.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonRegionsDialog</name>
@@ -7995,6 +8191,30 @@ External input producers are not compared or counted as shared code.</source>
 SSA recipe: %1</source>
         <translation>
 Метод SSA: %1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+Вызовы используют текущие пары функций; поведение не проверено.</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>Контекст вызовов…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>Основной</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>Вторичный</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>%1 основных / %2 вторичных функций · %3 общих диапазонов
+Покрытие: %4% / %5% допустимых инструкций, включая сопоставленные прямые вызовы. Эти данные зависят от пар функций; поведение не проверено.</translation>
     </message>
 </context>
 <context>
@@ -9541,6 +9761,18 @@ Ambiguities and manual decisions remain report-local. Region hypotheses retain t
         <source>Releases</source>
         <translation>Выпуски</translation>
     </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>Вызовы в этих сохранённых фрагментах опираются на пары функций из исходного отчёта. Они не доказывают эквивалентность поведения вызываемых функций.</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>Все машинные фрагменты</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>Все фрагменты SSA</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LineageGraph</name>
@@ -9884,6 +10116,668 @@ Your previous graph is still available.</source>
     <message>
         <source>Timeline</source>
         <translation>Хронология</translation>
+    </message>
+</context>
+
+<context>
+    <name>neverd::gui::InterpreterRecoveryDialog</name>
+    <message>
+        <source>Assume external stores avoid the declared entry frame</source>
+        <translation>Предположить, что внешние записи не затрагивают заданный входной кадр</translation>
+    </message>
+    <message>
+        <source>Blank or zero keeps the engine default. More work does not permit incomplete source or add memory assumptions.</source>
+        <translation>Пустое поле или ноль сохраняет значение движка по умолчанию. Увеличение объёма работы не разрешает неполный код и не добавляет предположений о памяти.</translation>
+    </message>
+    <message>
+        <source>Chained transfers</source>
+        <translation>Переходы в цепочке</translation>
+    </message>
+    <message>
+        <source>Chained visits per destination</source>
+        <translation>Посещения каждой цели в цепочке</translation>
+    </message>
+    <message>
+        <source>Contexts per address</source>
+        <translation>Контексты на адрес</translation>
+    </message>
+    <message>
+        <source>Control fields</source>
+        <translation>Поля управления</translation>
+    </message>
+    <message>
+        <source>Control refinements</source>
+        <translation>Уточнения управления</translation>
+    </message>
+    <message>
+        <source>Control-flow nodes</source>
+        <translation>Узлы потока управления</translation>
+    </message>
+    <message>
+        <source>Dependency visits</source>
+        <translation>Посещения зависимостей</translation>
+    </message>
+    <message>
+        <source>End a chain at a repeated destination</source>
+        <translation>Завершать цепочку при повторном посещении цели</translation>
+    </message>
+    <message>
+        <source>Engine default</source>
+        <translation>По умолчанию в движке</translation>
+    </message>
+    <message>
+        <source>Enter a valid integer for %1.</source>
+        <translation>Введите допустимое целое число для %1.</translation>
+    </message>
+    <message>
+        <source>Enter both entry-frame endpoints, or leave both blank.</source>
+        <translation>Укажите обе границы входного кадра или оставьте обе пустыми.</translation>
+    </message>
+    <message>
+        <source>Entry RSP alignment</source>
+        <translation>Выравнивание входного RSP</translation>
+    </message>
+    <message>
+        <source>Entry RSP range end (exclusive)</source>
+        <translation>Конец диапазона входного RSP (не включается)</translation>
+    </message>
+    <message>
+        <source>Entry RSP range start</source>
+        <translation>Начало диапазона входного RSP</translation>
+    </message>
+    <message>
+        <source>Entry RSP residue</source>
+        <translation>Остаток входного RSP</translation>
+    </message>
+    <message>
+        <source>Evaluated operations</source>
+        <translation>Вычисленные операции</translation>
+    </message>
+    <message>
+        <source>General registers</source>
+        <translation>Регистры общего назначения</translation>
+    </message>
+    <message>
+        <source>General registers and CPU queries</source>
+        <translation>Общие регистры и запросы CPU</translation>
+    </message>
+    <message>
+        <source>General registers, CPU queries and XMM</source>
+        <translation>Общие регистры, запросы CPU и XMM</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report</source>
+        <translation>Отчёт о восстановлении интерпретатора</translation>
+    </message>
+    <message>
+        <source>Node evaluations</source>
+        <translation>Вычисления узлов</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid return slots and saved frame cells</source>
+        <translation>Доказать, что записи не затрагивают слоты возврата и сохранённые ячейки кадра</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid the declared entry frame</source>
+        <translation>Доказать, что записи не затрагивают заданный входной кадр</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>Восстановить</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>Восстановить функцию интерпретатора</translation>
+    </message>
+    <message>
+        <source>Recover reachable control flow and generate C with explicit x64 register state. The source describes normal, nonfaulting execution with fixed image mappings. Memory assumptions below apply only when you enter them.</source>
+        <translation>Восстановить достижимый поток управления и создать C с явным состоянием регистров x64. Код описывает нормальное выполнение без сбоев при фиксированных отображениях образа. Указанные ниже предположения о памяти применяются только после их ввода.</translation>
+    </message>
+    <message>
+        <source>Signed offsets from entry RSP. Declaring this range assumes address arithmetic does not wrap; it does not prove accessibility or separation.</source>
+        <translation>Знаковые смещения относительно входного RSP. Задание диапазона предполагает отсутствие переполнения адресной арифметики, но не доказывает доступность или отсутствие перекрытия.</translation>
+    </message>
+    <message>
+        <source>Solver queries</source>
+        <translation>Запросы решателю</translation>
+    </message>
+    <message>
+        <source>Source state</source>
+        <translation>Состояние исходного кода</translation>
+    </message>
+    <message>
+        <source>State and memory</source>
+        <translation>Состояние и память</translation>
+    </message>
+    <message>
+        <source>Symbolic expression nodes</source>
+        <translation>Узлы символьных выражений</translation>
+    </message>
+    <message>
+        <source>Unspecified</source>
+        <translation>Не задано</translation>
+    </message>
+    <message>
+        <source>Work limits</source>
+        <translation>Ограничения работы</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisProgress</name>
+    <message>
+        <source>AU: idle</source>
+        <translation>AU: свободен</translation>
+    </message>
+    <message>
+        <source>AU: loading</source>
+        <translation>AU: загрузка</translation>
+    </message>
+    <message>
+        <source>AU: loading %1%</source>
+        <translation>AU: загрузка %1%</translation>
+    </message>
+    <message>
+        <source>AU: finding functions</source>
+        <translation>AU: поиск функций</translation>
+    </message>
+    <message>
+        <source>AU: indexing references</source>
+        <translation>AU: индексация ссылок</translation>
+    </message>
+    <message>
+        <source>AU: indexing references %1%</source>
+        <translation>AU: индексация ссылок %1%</translation>
+    </message>
+    <message>
+        <source>AU: analysis finished</source>
+        <translation>AU: анализ завершён</translation>
+    </message>
+    <message>
+        <source>Analysis finished in %1 s</source>
+        <translation>Анализ завершён за %1 с</translation>
+    </message>
+    <message>
+        <source>Reading the file</source>
+        <translation>Чтение файла</translation>
+    </message>
+    <message>
+        <source>Parsing the format</source>
+        <translation>Разбор формата</translation>
+    </message>
+    <message>
+        <source>Finding code</source>
+        <translation>Поиск кода</translation>
+    </message>
+    <message>
+        <source>Loading debug information</source>
+        <translation>Загрузка отладочной информации</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>Открытие проекта</translation>
+    </message>
+    <message>
+        <source>Loading</source>
+        <translation>Загрузка</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LoadProgressCard</name>
+    <message>
+        <source>Opening %1</source>
+        <translation>Открытие %1</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 с</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> значок</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> положение</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · Задача %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 с</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>&amp;Отменить задачу</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>&amp;Экспорт артефакта…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>&amp;Импорт плагина…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>Добавить восстановленный код как секцию анализа и открыть первую функцию</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>Артефакт:</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Обзор…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>Выбрать значок команды</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>Выберите команды для прямого показа в контекстном меню. Остальные сгруппированы в Plugins → имя плагина. Значком может быть builtin:name или локальный файл PNG, ICO либо SVG.</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>Команда</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>Настройки контекстного меню…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>Прямо в контекстном меню</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>Время</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>Экспорт артефакта</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>Экспорт артефакта в новый файл</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>Значок</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>Значок недоступен: %1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>Значки (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>Импортируйте процессный плагин для добавления команд.</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>Импорт кода в образ</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>Импорт процессного плагина</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>Импорт процессного плагина…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>Журнал %1</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>Настройки меню…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>Пла&amp;гины</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>Плагин</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>Плагин / задача</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>Артефакт плагина экспортирован в %1</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>Контекстные меню плагинов</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>Значок плагина недоступен: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>Менеджер плагинов…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>Манифесты плагинов (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>Журнал задач плагина</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>Задачи и результаты плагинов</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>Плагины</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>Подменю Plugins</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>Положение</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>Процессный плагин импортирован: %1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>Ход выполнения</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>Проект изменился, пока диалог плагина был открыт</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>Запомнить эти значения для действия</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>Выполните команду плагина, чтобы увидеть задачи и результаты.</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>Выберите задачу в %1 для просмотра результата.</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>Ход выбранной задачи плагина</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>Показать &amp;журнал</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>Состояние</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>Результаты задач</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>Задачи по плагинам</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>Регистрация этого действия больше не активна.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>Активация</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>Активация</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>Активация: %1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>Активен</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>Поколение компонента: %1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>Не удалось открыть папку плагина.</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>Заявленные службы чтения: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>Диагностика: %1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>Отключить</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>Включить</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>Включён</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>Включён при запуске: %1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>Фильтр по имени, ID или пути плагина</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>Фильтр плагинов</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>Импортируйте манифест процессного плагина для добавления команд. Провайдер запускается только при выполнении команды.</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>Импорт плагина…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>Импорт процессного плагина</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>Неактивен</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>Запись установки удалена. Файлы плагина и артефакты задач сохранены.</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>Запись установки удалена; выполняемые задачи останавливаются.</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>Установленные процессные плагины</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>Манифест: %1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>Нет</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>Открыть папку</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>Плагин</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>Плагин отключён. Запись установки сохранена; активные задачи отменены.</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>Плагин включён.</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>Плагин импортирован: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>Менеджер плагинов</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>Манифесты плагинов (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>Плагин: %1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>Регистраций: %1; активных вызовов: %2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>Удалить сохранённую регистрацию. Файлы плагина и артефакты задач будут сохранены.</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>Повторить активацию</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>Выберите плагин для просмотра манифеста, активации и диагностики.</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>Сведения о выбранном плагине</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>Остановка</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>Тип: внешний процесс</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>Недоступен</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>Удалить</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>Версия</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>Версия: %1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>Ожидание завершения задач и очистки принятых публикаций.</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>Да</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>Не удалось прочитать квитанцию публикации: %1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>Не удалось восстановить плагин %1 из %2: %3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>Секция анализа %1 импортирована. Сохраните проект, чтобы оставить её.</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>Состояние плагина изменено, но настройку запуска сохранить не удалось.</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>Операция с проектом завершена, но её квитанцию сохранить не удалось: %1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>Сеанс закрыт до получения квитанции публикации.</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>Экземпляр плагина больше не активен.</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>Ожидание квитанции проекта.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>Граф результатов плагина</translation>
     </message>
 </context>
 </TS>

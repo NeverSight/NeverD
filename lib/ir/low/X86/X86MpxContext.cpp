@@ -10,6 +10,8 @@
 
 #include "neverd/ir/X86/X86MpxContext.h"
 
+#include "neverd/ir/X86/X86MpxSemantics.h"
+
 namespace neverd {
 namespace {
 
@@ -131,11 +133,9 @@ X86MpxResult X86MpxContext::check(X86MpxMode Mode, X86MpxCheck Kind,
   const uint64_t Mask = wordMask(Mode);
   if (!Value || (Bound.KnownMask & Mask) != Mask)
     return X86MpxResult::UnknownOperand;
-  uint64_t Limit = Bound.Value;
-  if (Kind == X86MpxCheck::UpperComplement)
-    Limit = ~Limit;
-  const bool Failed = Kind == X86MpxCheck::Lower
-      ? (*Value & Mask)<(Limit & Mask) : (*Value & Mask)>(Limit & Mask);
+  X86MpxIntegerOps Ops;
+  const bool Failed =
+      X86MpxSemantics(Ops).failed(Mode, Kind, *Value, Bound.Value);
   if (!Failed)
     return Result;
   Status = 1;
@@ -171,20 +171,17 @@ X86MpxAddress X86MpxContext::directoryAddress(
   if (!LinearPointerAddress)
     return {X86MpxResult::UnknownOperand};
   const uint64_t Config = *activeConfiguration();
-  if (Mode == X86MpxMode::Bits32)
-    return {Result,
-            uint32_t((Config & ~uint64_t(0xfff)) +
-                     ((uint32_t(*LinearPointerAddress) >> 12) * 4ull)),
-            4};
   unsigned Adjust = 0;
-  if (*Configuration.PrivilegeLevel == 3) {
+  if (Mode == X86MpxMode::Bits64 && *Configuration.PrivilegeLevel == 3) {
     if (!Configuration.UserAddressWidthAdjust)
       return {X86MpxResult::UnknownContext};
     Adjust = *Configuration.UserAddressWidthAdjust;
   }
-  const uint64_t IndexMask = (uint64_t(1) << (28 + Adjust)) - 1;
-  const uint64_t Index = (*LinearPointerAddress >> 20) & IndexMask;
-  return {Result, (Config & ~uint64_t(0xfff)) + (Index << 3), 8};
+  X86MpxIntegerOps Ops;
+  return {Result,
+          X86MpxSemantics(Ops).directory(Mode, Config, *LinearPointerAddress,
+                                         Adjust),
+          Mode == X86MpxMode::Bits64 ? 8u : 4u};
 }
 
 X86MpxAddress
@@ -198,15 +195,11 @@ X86MpxContext::tableAddress(X86MpxMode Mode,
     Status = Directory.Address | 2;
     return {X86MpxResult::BoundsFault};
   }
-  if (Mode == X86MpxMode::Bits32)
-    return {X86MpxResult::Completed,
-            uint32_t((DirectoryEntry & ~uint64_t(3)) +
-                     (((*LinearPointerAddress >> 2) & 0x3ff) << 4)),
-            4};
-  return {X86MpxResult::Completed,
-          (DirectoryEntry & ~uint64_t(7)) +
-              (((*LinearPointerAddress >> 3) & 0x1ffff) << 5),
-          8};
+  X86MpxIntegerOps Ops;
+  return {
+      X86MpxResult::Completed,
+      X86MpxSemantics(Ops).table(Mode, DirectoryEntry, *LinearPointerAddress),
+      Mode == X86MpxMode::Bits64 ? 8u : 4u};
 }
 
 X86MpxResult X86MpxContext::completeTableLoad(X86MpxMode Mode,

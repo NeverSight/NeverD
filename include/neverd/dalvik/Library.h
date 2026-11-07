@@ -99,7 +99,10 @@ enum LibraryOperation {
   EventLogWrite,
   ParcelData,
   BinderGetStrictMode,
-  BinderSetStrictMode
+  BinderSetStrictMode,
+  BinderTransact,
+  BinderTransactNative,
+  BinderTracing
 };
 struct LibraryMethod {
   const char *Class, *Name, *Signature;

@@ -73,10 +73,12 @@ enum class StructReturnEvidence : uint8_t {
 };
 
 /// Whether every normal return supplies the caller-observed fields. Used for
-/// selected definitions and bounded omitted-callee bodies alike.
+/// selected definitions and bounded omitted-callee bodies alike. Without
+/// \p PreservedArguments (no caller observed the first word), an argument
+/// register the callee never writes supplies no field.
 bool returnsStructFields(const MedFunc &Function,
                          llvm::ArrayRef<MedReturnReg> Shape, Arch Architecture,
-                         BinaryFormat Format);
+                         BinaryFormat Format, bool PreservedArguments = true);
 
 /// Recover a multi-register (or single wide-vector) return shape from a
 /// callee's own body when no direct caller reveals it.  AArch64 only.

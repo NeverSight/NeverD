@@ -47,10 +47,33 @@ worker.
 
 Open a binary or a project with **File → Open**, or drag one file from
 the system file manager onto the quick-start dialog, workbench or a floating
-view. File drops use the same open workflow, including the save/discard/cancel
-prompt for unsaved changes. Drop one existing file at a time; directories and
-web URLs are not opened. Opening by drag and drop leaves the source file in
-place.
+view. File drops use the same open workflow. Drop one existing file at a time;
+directories and web URLs are not opened. Opening by drag and drop leaves the
+source file in place.
+
+**File → New instance** starts another workbench, a process of its own with its
+own worker from the same path, as IDA's command does. It starts as a start
+without a file does, with Quick Start unless **Display at startup** is off, and
+leaves this window and its program as they are. Closing either workbench leaves
+the other running. A file another workbench has open does not open again, since
+its writer lock keeps it to one workbench; **Output** says that it may be open
+elsewhere, and a database is refused before anything is unpacked over the other
+workbench's unsaved edits. With unsaved edits of its own, a workbench refuses
+such a file before it asks to save or discard them, and keeps its program. A
+binary and a database packed from it are separate copies with locks of their
+own, so two workbenches can have one each; **File → Save** asks before it replaces
+what another wrote into the database.
+
+With a program open, **File → Open**, a recent file in the File menu and a dropped
+file go to a workbench of their own, as IDA's do under its default
+`OPEN_IDB_IN_NEW_WINDOW`, and this one stays as it is, unsaved edits included. For
+**File → Open** and a drop the new workbench asks how to load the file, and closes
+if that is declined (`neverd-gui --ask-loader FILE`). A file another workbench has
+open brings that workbench to the front instead of starting one that could not
+have it, and the program this workbench has reopens here. **File → Quick start**
+over the workbench replaces the program here, asking first about unsaved changes,
+as IDA's does. **Open other files in a new instance** in **Options → General** turns
+this off, and these then replace the program here too.
 
 PE browsing tolerates complete legacy relocation layouts and reports unusable
 entry/import metadata in **Output**. An unknown entry opens at a mapped code
@@ -88,9 +111,22 @@ scroll; keyboard navigation also brings offscreen commands into view.
 
 Double-clicking a function name in a code view follows it in that same window,
 keeping its C or LLVM C representation even when the window is locked. Back and
-forward navigation also stays in the active code window, and within a function
-takes its cursor to the row of the place it returns to. Imports and global
-objects continue to open at their addresses in the disassembly or hex view.
+forward navigation also stays in the active code window and returns it to where
+it left, as Hex-Rays' Esc does: Back from the function puts the cursor on the
+name that was double-clicked, with the view scrolled as it was, and Forward
+returns to the place the function was left; within a function the cursor goes
+to the row of the place it returns to. As in IDA, each jump adds one stop to
+the history, and the stop follows the cursor: clicks and keys after a jump, in
+the code or the disassembly, add none, so Back returns to where the jump began
+and Forward to where the user left. The arrow beside the Back or Forward
+toolbar button lists the stops it reaches, nearest first, as IDA's does: each
+names its place, `main+1DA (2A2A)` or a segment and address outside a
+function, then the instruction or data the listing shows there. With a code
+window in focus, a stop it left names the line Back returns it to, numbered as
+its margin numbers it: `main:83 (2A2A)`. Picking one goes that many steps at
+once, and the stops on both sides stay. Imports and
+global objects continue to open at their addresses in the disassembly or hex
+view.
 Double-clicking a goto's label (`goto L_14024FAB5;`) moves the cursor to the
 label and the disassembly to the block it labels, as IDA's labels do; Back
 returns to the goto. Pseudocode and C name a label after its block's address,
@@ -117,8 +153,8 @@ explicit restoration verifies the whole chain against the same assessment.
 Analysis uses the shared C++ backend and never launches the input. See the
 [workflow and limits](web-package-review-journal.md).
 
-A start without a file shows the quick start alone, as IDA does: the workbench
-appears once you choose how to start, and closing the quick start quits. The
+A start without a file shows the quick start alone: the workbench appears
+maximized once you choose how to start, and closing the quick start quits. The
 questions asked before a file loads, **Load a new file**, **Symbol table
 found**, **Load PDB file** and **DWARF info found**, greet alone too while the
 workbench has not shown yet, after the quick start or for a file named on the
@@ -140,10 +176,14 @@ shows that a drop opens it. **Display at startup** decides whether the next
 start shows it again; **File → Quick start** shows it any time, over the
 workbench, restoring the existing Quick Start window if one is already open.
 Quick Start can be minimized and restored from the macOS Dock, and system Quit
-remains available while it is minimized.
+remains available while it is minimized. Reopening Quick Start over an already
+visible workbench preserves the workbench's size and window state.
 Application settings restore the main window's position, size and
-maximized state once at startup. Automatic desktop and project restoration
-arranges the panes within that window; it does not move, resize, show or
+maximized state once at startup. F11 full screen lasts for the current run;
+restarting returns to the normal or maximized state from before F11, with the
+title-bar buttons visible. Older settings saved in full screen also reopen
+windowed. Automatic desktop and project restoration arranges the panes within
+that window; it does not move, resize, show or
 unmaximize it. Detached panes keep their saved positions. **Windows → Load
 desktop** explicitly restores the saved window geometry as well.
 The workbench opens with the default desktop:
@@ -162,9 +202,29 @@ The workbench opens with the default desktop:
   **Exports** as tabs, and the status line under the listing;
 - **Output** across the bottom, with a command line for expressions and
   workbench commands;
-- the status bar with the background analysis indicator (`AU: idle` or busy
-  with progress), the search direction and free disk space. It shares the
-  windows' surface below a hairline, as in Visual Studio Code's Modern themes.
+- the status bar with the analysis indicator (`AU: idle`, or a slim bar beside
+  the current step and its progress), the search direction and free disk
+  space. It shares the windows' surface below a hairline, as in Visual Studio
+  Code's Modern themes.
+
+Opening a file never blocks the workbench with a wait box. While a file opens
+into the empty workbench, a card over **NeverD View-A** names the file, the
+current step with the engine's own words for it (for example `Parsing the
+format · PE/COFF code literals`), the seconds spent and a slim bar; it takes no
+input, a long file name loses its middle rather than its extension, a narrow
+window narrows the card, and an open that takes less than half a second never
+shows it. The status bar's indicator
+follows the same open and then the background analysis: `AU: loading`,
+`AU: finding functions`, `AU: indexing references` with a percentage, then
+`AU: analysis finished` for a few seconds, and **Output** records how long the
+initial analysis took. While busy, the indicator keeps room for its longest
+text, so the status texts after it stay in place; a narrow window narrows its
+bar before it cuts any text. A bar fills where the worker
+reports a fraction, such as hashing a large input or indexing references, and
+sweeps a segment where it reports only a step's start and end; both start at the
+right in right-to-left languages. A bar animates only while it is on screen and
+NeverD is the active application. Without idle-time analysis the indicator stays
+idle until a query builds the reference index.
 
 Every window is a dock: drag tabs to split, stack or float them. A tab shows
 its close button while it is current or under the pointer. Docking tabs use
@@ -205,7 +265,13 @@ code reads or writes is laid out as wide as those accesses, under the name its
 operands and the pseudocode use (`qword_A410 dq ?`, or `unk_` where the widths
 differ); other unwritten bytes run as `db N dup(?)` up to the next item. Only a window of lines around the viewport is held; the scroll bar
 maps to the linear address space. The arrow gutter draws branches, and clicking
-an identifier highlights every occurrence. Names the engine leaves generic take
+an identifier highlights every occurrence; a register brings the registers that
+share it along, `eax` and `al` with `rax` or `w0` with `x0`, as in IDA.
+**Search → Lock highlight** keeps up to eight words highlighted, each in its
+own color, in every disassembly and code window while the cursor's highlight
+moves on: Ctrl+Alt+1 through Ctrl+Alt+8 lock the word under the cursor in that
+color or free the color again, and Ctrl+Alt+0 locks it in the first free color
+or unlocks it. Closing the file frees every color. Names the engine leaves generic take
 their classic forms in the listing, function list, jumps and source views:
 import thunks after their import and the entry point `start` (`DllEntryPoint`
 for a PE DLL). Pure direct forwarders carry a thunk attribute; a DLL entry's
@@ -223,7 +289,11 @@ char **envp)`; a rename of the function still wins over that name.
 **Graph view** (Space) lays the current function out in layers with the
 conditional (green/red) and unconditional edges routed around blocks; panning
 and zooming are local, and text is dropped at low zoom. The graph overview
-shows the whole function and the visible area.
+shows the whole function and the visible area. As in IDA, a click on an edge
+selects it and draws it over the others until the next click, and resting the
+pointer on an edge shows the block at its far end: beside its arrow the block
+it comes from, named by its branching instruction, and elsewhere the block it
+goes to, a long block by its first and last rows.
 
 Opening a file or database starts with disassembly and keeps pseudocode and
 IR windows closed, including when a saved desktop had them open. Generate the
@@ -356,9 +426,15 @@ operations in C can fold into one-line summaries too. Click a summary or press
 Keypad + on it to expand it; Keypad - folds the declarations again, and the
 context menu expands or collapses either kind. Hovering a type or macro the code
 declares, such as an unaligned access type, shows its declaration, and
-double-clicking it goes there. Double-clicking a function's name shows that
-function's pseudocode in place; an import's name opens its thunk, or its slot
-when it has none, in the disassembly, as do other names of data. Memory reads
+double-clicking it goes there. Hovering the name of an import a call names
+shows its type, as Hex-Rays' hint does, without the name the code already
+shows (`int32_t(char* __s1, char* __s2)` on `strcmp`), and under it each
+parameter after where it is passed (`rdi  char *__s1`); the hint goes once the
+mouse leaves the name. A function of the image shows no type there: only
+decompiling it types it, which could hold up the next jump for seconds.
+Double-clicking a function's name shows that function's pseudocode in place;
+an import's name opens its thunk, or its slot when it has none, in the
+disassembly, as do other names of data. Memory reads
 and writes print through the standard scalar types, `*(uint64_t *)p`. That C
 reads scalars at any address and through any type, so it is built for a target
 that allows unaligned access and with `-fno-strict-aliasing`, as its prelude
@@ -372,7 +448,10 @@ while it is held beyond an edge, extend with Shift and the arrows or a Shift
 click, or press **Ctrl+A** (also **Select all** in the context menu) for the
 whole function; **Ctrl+C** or the context menu's **Copy** copies it, and a
 right click inside the selection keeps it. Without a selection they copy the
-highlighted word under the cursor (see **Edit → Copy**).
+highlighted word under the cursor (see **Edit → Copy**). As in Hex-Rays, the
+bracket the cursor is on stands boxed with its partner, nested or lines away:
+a parenthesis, square bracket or brace of the code, not one in a string or
+comment.
 
 Global data is declared the way C source declares it, with the value the image
 holds: a string the code reaches by its address is its array
@@ -556,7 +635,10 @@ keys makes Copy take bytes again.
 **Imports**, **Exports**, **Names**, **Strings**, **Segments** and
 **Bookmarks** are choosers with a quick filter and sortable columns. **Jump
 anywhere** (G) takes an address, a name or an expression such as `main+0x10`
-and suggests names as you type. Cross references (X, Ctrl+X, Ctrl+J) list call
+and suggests names as you type. Beside the suggestions a disassembly preview
+shows where Enter goes, the chosen suggestion or else the typed expression, as
+in IDA; text that names nothing yet leaves the preview empty, and the typing
+stays in the field. Cross references (X, Ctrl+X, Ctrl+J) list call
 (`p`), jump (`j`), read (`r`), write (`w`) and offset (`o`) references from the
 worker's reference index.
 
@@ -669,8 +751,10 @@ live in the user's runtime directory, which only the user can enter, and
 refuse another user's connections, where IDA's sockets lie in `/tmp`; the
 `instances/disabled` setting keeps a workbench from serving. A server
 answers one JSON object a line: `ping`; `get_info`, the program's path, name
-and SHA-256, its analysis state and the cursor; `open_link` with `uri`; and
-`is_analysis_complete`. Running instances share places this way, not edits,
+and SHA-256, its analysis state and the cursor; `open_link` with `uri`;
+`is_analysis_complete`; and `raise`, which brings the workbench to the front, with
+the `token` that lets it take the focus on Wayland.
+Running instances share places this way, not edits,
 in IDA as in NeverD: a team shares a project's edits through git (see
 *Working in a team through git*).
 
@@ -706,6 +790,7 @@ Knowledge Exchange assets, and it registers only the `neverd://` scheme.
 | Ctrl+P / Ctrl+L / Ctrl+S / Ctrl+E | Choose a function / name / segment / entry point |
 | Alt+T, Ctrl+T / Alt+B, Ctrl+B | Search text / bytes, and repeat |
 | Alt+Up / Alt+Down | Previous / next occurrence of the highlighted identifier |
+| Ctrl+Alt+1 … Ctrl+Alt+8 / Ctrl+Alt+0 | Lock or free a highlight color / lock or unlock in the first free color |
 | Ctrl+Shift+Up / Ctrl+Shift+Down | Previous / next function |
 | Shift+F3, Shift+F4, Shift+F7, Shift+F12 | Functions, Names, Segments, Strings |
 | Shift+F11 | Type libraries |
@@ -809,10 +894,9 @@ like the rest of the workbench, because GTK's are another toolkit's windows,
 which GNOME attaches. A modal dialog still blocks the workbench until it
 closes.
 
-Without a remembered size the window opens centered at three quarters of the
-screen's width and four fifths of its height. GNOME maximizes a window that
-opens at nearly the size of the screen, and a maximized window does not resize
-from its edges; IDA opens that way.
+Without a remembered size, a workbench opened directly uses three quarters of
+the screen's width and four fifths of its height, centered on the screen. A
+workbench opened from the startup Quick Start is maximized instead.
 
 The workbench draws its own title bar. Drag the title bar's empty part to
 move the window, and double-click it to maximize or restore the window (on
@@ -837,10 +921,12 @@ How the rest of the frame is drawn depends on the system:
   corner, starting four pixels inside its visible edge. Under Wayland GNOME
   draws no shadow for such a window, so the window draws a ten-pixel shadow of
   its own, and that band resizes the window too, as GNOME's own windows allow;
-  under X11 GNOME draws the shadow.
-- On Windows the window keeps the system frame without its caption, so
-  Windows still draws its edges and shadow, snaps and animates it and resizes
-  it from its sides and bottom; the top edge resizes it through the title bar.
+  under X11 GNOME draws the shadow. Maximized edges remain inactive until
+  the window is restored.
+- On Windows native hit testing makes all edges and corners resizable, including
+  after a file loads. Dragging a maximized edge restores the window and resizes
+  it from its visible rectangle. The workbench paints its frame and shadow;
+  Windows handles the sizing gesture. Full-screen windows cannot be resized.
 - On macOS the window keeps its frame and traffic lights, and its title bar
   turns transparent with the workbench's own drawn under it.
 
@@ -946,8 +1032,8 @@ wrong processor, base or offset changes without starting over; a processor or
 platform the engine read from the bytes is read again.
 
 **Analysis → Enabled**
-turns idle-time analysis (function discovery and the reference index) on or off
-for the file, **Indicator enabled** shows or hides the status line's analysis
+turns idle-time analysis (function discovery, the reference index and rendering
+functions ahead) on or off for the file, **Indicator enabled** shows or hides the status line's analysis
 indicator, and **Options → Load debug information** reads the PDB, DWARF or
 linker map that belongs to the input. Projects, recent files and files opened
 from the command line skip the dialog. The command line lists the same rows with
@@ -1208,9 +1294,13 @@ and checked against its SHA-256 digest, and a damaged database is reported
 instead of loaded. Edits made in an opened database are kept beside its
 unpacked copy at once, and **File → Save** writes them back into the database.
 Quitting, opening another file or reloading first asks to save them when the
-database lacks them. Opening a binary whose `.nddb` sits beside it restores the
-saved location, bookmarks and desktop unless the project's own files say
-otherwise; when its comment files are missing they are restored from the
+database lacks them. If the project in the database changed after this workbench
+opened it or last wrote it, Save asks before it replaces that; the default leaves
+the database as it is and the edits unsaved, and **File → Pack database** can
+write them to another file. A save that does not reach the database also stops
+the quit or the opening it was for. Opening a binary whose `.nddb` sits beside it
+restores the saved location, bookmarks and desktop unless the project's own files
+say otherwise; when its comment files are missing they are restored from the
 database, and a database that describes a different version of the file is
 reported and left unused until the next pack replaces it. Closing the window
 updates the saved location of a database you opened.
@@ -1437,6 +1527,19 @@ dispatch and a data reference from the table. A table is laid out only when
 the engine has checked that every slot holds its target. Cancel removes
 queued work; a running engine call finishes unless the worker is restarted.
 
+With idle-time analysis on, the first analysis worker also renders pseudocode
+ahead of your first visit, once it has solved its call summaries: smallest
+function first, one function at a time, and only after no view has asked it for
+anything for a while, longer for a larger function. A function it has rendered
+opens without being decompiled, with the text decompiling it gave when the job
+reached it. One it has not reached, or one it left to the visit because it is
+very large or its size is unknown, is decompiled when you open it. A local rename keeps the renders; an edit that changes what the engine
+reads starts over. The job takes idle time on one core and memory for the
+compact text: on a Windows kernel of 25,800 functions, about ten minutes and
+500 MB. It is not repeated for a project in which a worker ended during it, and
+it does not run when views open every function under symbolic simplification,
+because they would read none of it.
+
 ## Call-site types
 
 In either **Pseudocode** or **LLVM C**, put the cursor on a call row and choose
@@ -1650,3 +1753,16 @@ Python exposes `preview_byte_patch`, `apply_byte_patch`, `revert_byte_patch`,
 `byte_patches`, `save_byte_patches`, `load_byte_patches`, `assemble` and
 `export_byte_patches`. Applying changes memory; saving is explicit. Saving
 refuses an externally modified patch sidecar instead of overwriting it.
+
+## External process plugins
+
+Use **Plugins → Plugin manager…** to import a process manifest, change saved
+enablement, retry activation, inspect a diagnostic or uninstall a registration.
+The manager keeps requested settings separate from NPH activation state.
+Commands and task history are grouped by plugin name and stable ID. Context
+menu settings choose direct actions with optional icons or a Plugins submenu.
+The task pane starts hidden and opens on invocation. Providers run outside the
+GUI; their shared task runtime survives closing and recreating that pane.
+
+See [GUI process plugins](gui-plugins.md), [NPH](plugin-host.md) and the
+[independent SDK examples](process-plugin-sdk.md) for authoring and verification.

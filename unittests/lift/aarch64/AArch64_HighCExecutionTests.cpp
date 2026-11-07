@@ -91,14 +91,30 @@ int window(int a) {
 // FMAX and FMIN are IEEE 754-2019 maximum and minimum: a NaN operand gives a
 // NaN, and -0 orders below +0, unlike fmaxf and fminf.
 TEST_F(AArch64_HighCExecution, FMaxAndFMinPropagateANaN) {
+  // The C spells these with a builtin Apple's Clang can lack.
+  if (!neverd::test::compilerAccepts(
+          NEVERD_TEST_CLANG, "c",
+          "float f(float a, float b) {\n"
+          "  return __builtin_elementwise_minimum(a, b);\n"
+          "}\n",
+          {}))
+    GTEST_SKIP() << "this Clang lacks __builtin_elementwise_minimum";
   expectRunsLikeSource(R"C(
 int extremes(int a) {
   float nan = __builtin_nanf("");
   float x = (a & 1) ? nan : (float)a;
   float y = (a & 2) ? -0.0f : (float)(a - 5);
   float z = (a & 4) ? 0.0f : (float)(7 - a);
-  float m = __builtin_elementwise_maximum(x, y);
-  float n = __builtin_elementwise_minimum(y, z);
+  float m, n;
+#if defined(__aarch64__)
+  __asm__("fmax %s0, %s1, %s2" : "=w"(m) : "w"(x), "w"(y));
+  __asm__("fmin %s0, %s1, %s2" : "=w"(n) : "w"(y), "w"(z));
+#else
+  m = x != x ? x : y != y ? y : x > y ? x : x < y ? y
+      : __builtin_signbit(x) ? y : x;
+  n = y != y ? y : z != z ? z : y < z ? y : y > z ? z
+      : __builtin_signbit(y) ? y : z;
+#endif
   return (m != m) + 2 * __builtin_signbit(n) + 4 * (m == m ? (int)m : 0) +
          64 * (n == n ? (int)n : 0);
 }

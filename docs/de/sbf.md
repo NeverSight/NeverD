@@ -295,7 +295,7 @@ wird nur aufgebaut, wenn ein echter `scratch consumer` existiert; Programme ohne
 überspringen den `whole-CFG fixed point`. `SBFAnalysisLimits.def` beschreibt die
 Host-`analysis policy`, nicht `protocol limits`: `MaxModeledScratchBytes` erlaubt
 1,024 Bytes je `program point`, und `ScratchFlowRetainedByteBudget` ist eine
-`logical retained estimate` von 8,388,608 Bytes. Bei überschrittenem Budget weitet
+`logical retained estimate` von 16,777,216 Bytes. Bei überschrittenem Budget weitet
 die Rekonstruktion ausdrücklich auf `ScratchRecoveryPrecision::BlockLocal`.
 Dabei gehen nur `cross-block must-facts` verloren; `block-local replay` bleibt `sound`
 und kann weiterhin `same-block stores` wiederherstellen.

@@ -44,6 +44,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace neverd::sdk {
 
@@ -52,6 +53,12 @@ namespace neverd::sdk {
 /// to functions as pointers.  Null for a type it cannot describe, such as a
 /// function by value or a record larger than a display offset reaches.
 TypeRef decompilerTypeOf(const types::TypeLibrary &Library,
+                         const types::TypeExpr &Type);
+
+/// A call-site value keeps a complete natural C record layout. Packed,
+/// overlapping, bitfield and incomplete records remain unavailable. Pointer
+/// pointees retain the ordinary display representation and need no value ABI.
+TypeRef sourceCallTypeOf(const types::TypeLibrary &Library,
                          const types::TypeExpr &Type);
 
 /// \p Function's signature, named \p Name, as the decompiler's types
@@ -175,6 +182,10 @@ public:
   std::vector<DataObjectSym> allDataObjects() const override {
     return Inner.allDataObjects();
   }
+  std::optional<std::pair<va_t, va_t>>
+  readOnlyDataRegion(va_t Addr) const override {
+    return Inner.readOnlyDataRegion(Addr);
+  }
   std::optional<DataObjectSym> resolveDataObject(va_t Addr) const override {
     return Inner.resolveDataObject(Addr);
   }
@@ -194,6 +205,7 @@ public:
   /// for a name without a prototype or a type the decompiler cannot describe.
   std::optional<FunctionSym>
   resolvePrototype(llvm::StringRef Name) const override;
+  bool prototypeDoesNotReturn(llvm::StringRef Name) const override;
 
   /// The signature of the user's declaration of the function at \p Entry.
   /// None where the user declared none, or one that no longer reads against
@@ -236,6 +248,15 @@ private:
   /// where each one it has lies where one of the library's does.  False
   /// where the library has none to give.  Holds Mutex.
   bool takeLibraryNames(const TypeRef &Type) const;
+  /// The library's record \p Local as takeLibraryNames gives it: converted
+  /// once in a session together with every record it reaches, each of them
+  /// one node that the others name, none changed afterwards.  A conversion
+  /// of its own where those are more than kMaxLocalTypeSharedClosure.  Holds
+  /// Mutex.
+  TypeRef libraryRecord(const types::LocalType &Local) const;
+  /// Lets the records libraryRecord shared release each other when
+  /// nothing outside them holds them.  Holds Mutex.
+  void releaseSharedRecords() const;
   /// The names the image states for the function at \p Entry, the one it
   /// is shown under first (BinaryImage::statedFunctionNamesAt).
   std::vector<std::string> statedNames(va_t Entry) const;
@@ -273,6 +294,17 @@ private:
   /// What renders the records a unit embeds: spelling the library's names
   /// for each unit would name every type again.
   mutable std::unique_ptr<types::EmbeddedCRenderer> CRenderer;
+  /// What CRenderer rendered for each list of roots: it reads a library
+  /// that stays as it is, so the same roots render the same C, and units
+  /// keep embedding the same few records.  RenderedBytes counts their text,
+  /// up to kMaxLocalTypeRenderedBytes.
+  mutable std::map<std::vector<const types::LocalType *>,
+                   std::shared_ptr<const types::EmbeddedC>>
+      Rendered;
+  mutable size_t RenderedBytes = 0;
+  /// CRenderer's C of \p Roots, rendered once.  Holds Mutex.
+  std::shared_ptr<const types::EmbeddedC>
+  renderedC(const std::vector<const types::LocalType *> &Roots) const;
   /// The names the image states for each function entry that has any, read
   /// at the first statedNames(): one pass over the image's exports and
   /// symbols, where reading them for each entry scans them all again.
@@ -298,11 +330,28 @@ private:
   };
   mutable std::vector<Named> Completed;
   mutable llvm::DenseSet<const NdType *> CompletedRecords;
+  /// The types CompletedRecords and GivenTypes name, kept while they name
+  /// them: a type the writer copied for one unit is otherwise freed, and
+  /// another type allocated where it was would read as completed.
+  mutable std::vector<TypeRef> KeptTypes;
+  /// The records libraryRecord converted, by name, and every node of their
+  /// types: complete as converted, so completing one changes nothing.
+  mutable llvm::StringMap<TypeRef> SharedRecords;
+  mutable llvm::DenseSet<const NdType *> SharedNodes;
+  /// The records that reach too many to share.
+  mutable llvm::StringSet<> UnsharedRecords;
   mutable llvm::StringSet<> Read;
   /// The records and enumerations of the library's names that the debug
-  /// information gave members or enumerators, by name.
+  /// information gave members or enumerators, by name: one of each that
+  /// reads differently (completeType), GivenCount in all.
   mutable llvm::StringMap<std::vector<TypeRef>> Given;
+  mutable size_t GivenCount = 0;
   mutable llvm::DenseSet<const NdType *> GivenTypes;
+  /// The enumerators of the enumerations in Given that a unit can spell
+  /// without their enumeration's name (definitions), read when Given held
+  /// GivenEnumeratorsRead types: Given only grows.
+  mutable llvm::StringMap<const types::LocalType *> GivenEnumerators;
+  mutable std::optional<size_t> GivenEnumeratorsRead;
   /// The library's names C spells otherwise, which a unit cannot name.
   mutable std::optional<llvm::StringSet<>> RenamedInC;
 };

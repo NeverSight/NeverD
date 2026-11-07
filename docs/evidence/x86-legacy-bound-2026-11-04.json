@@ -1,0 +1,1331 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-04",
+  "scope": "Legacy BOUND native compiler interfaces, exact source projection, protected-state completion and full-width returned-value preservation",
+  "global_goal_complete": false,
+  "reference": {
+    "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
+    "edition": "Intel SDM 093, Volume 2A, BOUND",
+    "qualified_host": "Intel Core i9-13900H; CPU 2 P core, CPU 12 E core, CPUID.1A core types 0x40/0x20",
+    "interpretation": "The observed CPU compares signed inclusive lower <= index <= upper. It does not add the element size to the upper bound. The upper field is accessed only after the lower comparison succeeds."
+  },
+  "contract": {
+    "protected": "Code16/code32, independently selected address16/address32, word/dword index and bounds, CPL0-3, segmented ordinary RAM under legacy paging/PAE. Each field offset wraps independently; bytes within a field do not wrap past its segment limit.",
+    "faults": "Lower operand access precedes signed comparison; a lower failure raises #BR without touching the upper field. #BR/#GP/#SS/#PF/#AC and original fault EIP/RF follow the existing ordered executor. Original guest #BR/#PF handlers repair state and IRET before retry.",
+    "mpx": "CPL and OSXSAVE are rebound from the current machine. Enabled #BR clears BNDSTATUS before attempted IDT delivery, even if delivery fails. Unknown enable state and explicitly active transactions refuse before fetch; an active transaction is refused even when MPX is disabled.",
+    "compiler": "LLVM bound16/bound32 pointer and address32 interfaces plus four Clang builtins lower to native BOUND in code16/i386. Address controls and long-mode use are rejected. Calls have conservative memory effects and no result; repeated or unused checks remain observable.",
+    "source": "Low/Med retain index, normalized eight-byte segment offset, constant address width and segment. HighC and LLVMC share a renderer requiring a concrete X86 target and the exact memory-effect contract. The pinned SDK retains one exact volatile GNU assembly alternative.",
+    "returned_value": "A complete propagated parameter, temporary, constant or other-register value precedes later physical return-register read views. HighC and LLVM apply this to integer/pointer returns; declared source types do not authorize truncating a full returned value.",
+    "decoder": "Capstone BOUND index and bounds memory operands are read-only, with no invented register or EFLAGS writes. Strict lifting checks raw bytes against the corrected operand details."
+  },
+  "source_identity": {
+    "neverd_base": "65e8323687fd6d704773dac6a5752db31f821389",
+    "llvm_commit": "0460a3fbb99808235c24003613eebd495f6c62d7",
+    "neverc_witness_commit": "967533ca06dd5122afa59e4de0ca5e8efe62ccf2",
+    "capstone_commit": "dcca2885585d16a03be2aa471e8a8ca61c1da9d1",
+    "neverd_source_sha256": {
+      "include/neverd/backend/llvm/X86/X86BoundNative.h": "52f97970276c273ce5684bdd03d4dc17c2253e9874f7dec5014c4458f843dde0",
+      "include/neverd/ir/X86/X86MpxContext.h": "ca79689e63b605032eb37a7d17e482b31a348fd6ecda5d53aa117b5651f51c39",
+      "include/neverd/ir/intrinsics/X86/X86Bound.h": "4ae8b0a9d98ad50bec574ecd35ff22343bf1733f6bfa71c74a69cd31908204d4",
+      "include/neverd/ir/med/IntrinsicShapes.h": "a9b435a6e9b061213b4514fc9abebb5cebbaa28f523763d9ae33b0a8a95e1c4c",
+      "include/neverd/ir/med/MedReturnValue.h": "1fb8064d341b596823113aa826b39116e54f756616848bbc99993758fcf2ff4e",
+      "include/neverd/translate/X86/X86LegacyExecution.h": "ba10e231b927fa1685315f2a65652054b98f42bf2f39964355c563ace7ef7129",
+      "lib/backend/c/HighC/HighCEmitter.cpp": "5bf7c71bd8b49c97f91766710bf7581155a8138cf2be61cdb991c612cca887e5",
+      "lib/backend/c/HighC/HighCExprWriter.cpp": "8292318c9f17a3d2935a56492b0ac78bf4f8fefc79f671bc653dd7e8a7dfa31e",
+      "lib/backend/c/HighC/HighCWriter.h": "839e7a1e9c2ddbdbcb058d1583ddff619852d1e907d4a0b582f3a92c0e9db4fb",
+      "lib/backend/c/LLVMC/LLVMCEmitter.cpp": "063593714af32a6b89781535531c9e24fe49d6e7a93913973e54ea8b4e39f2dd",
+      "lib/backend/c/LLVMC/LLVMCStmtWriter.cpp": "c7b1827f6de2a83331c5d26b5747c7be0a723baadfde050b405b71c75b054eed",
+      "lib/backend/c/render/X86/X86Bound.h": "4338d2d6c0a08cc1ca8293d271e3918239b96bf58d5c9bb86778c7d2ec5ae7ee",
+      "lib/backend/llvm/X86/MedLLVMX86Sideeffect.cpp": "90771ca2de39c17da1ac0ad16c304c346da1c509956e4b9771b034964ae4025c",
+      "lib/backend/llvm/emit/MedLLVMReturn.cpp": "00b34d6b9d9b2ac7490324fc850e8f0f9e97508d0590d32cb7dd52c03c16cd8d",
+      "lib/ir/high/lower/NdOpReturnLowering.cpp": "ba00a4a87b64634b90d5736335b6b8500d820e5a8d2b591c649af71edd2e040e",
+      "lib/ir/low/LowIR.cpp": "09e954c70aed9397e4dc35cca72c2baf80647f77c9dd2474dc63c92a22458d0d",
+      "lib/ir/med/pass/MedVerifier.cpp": "b58398edc7fa5a1a34c9fb108d99656f3d0d83bf5f12879fb0a1764a3f038c48",
+      "lib/lift/X86/X86LiftLegacyBCD.cpp": "eeeac071f482a81fb0db90f9073ff95863ada28072f1aa5a726842b9f469cd86",
+      "lib/translate/X86/X86LegacyExecution.cpp": "bda11c44de8849fe62639ee6f7f74bfc0e32291ed246db5d6b734bf4851599bb",
+      "lib/translate/X86/X86LegacyScalar.h": "cc9d833d2b2f2b8bbccd6a5ca844efee4f0c4d6b4e6788ee5280b0106fed4dee",
+      "lib/translate/X86/X86LegacyScalarEncoding.cpp": "2d3ebeff7efff20e060fd3df68bb844b13b16494eac0966a5bc2f72c2e575dda",
+      "lib/translate/X86/X86LegacyScalarExecution.cpp": "47227eac51fa881fbe670df31ffe2e43517b54b7342aa4189e699fdd2e416b88",
+      "unittests/lift/core/ReturnContractTests.cpp": "6a91d5f4d35cf66457fbecfc8fe36a8320662b17fc29c36f43d3dc985a0df64e",
+      "unittests/lift/x86/X86BoundSourceTests.inc": "8ea3f20ddb7024659f4ad1ba11e4e868371e3c796f590e23650ed2042ed96b62",
+      "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp": "838ccc6a8c9d75739d7aa03770d744e7054117596d641ac640e45685d239759f",
+      "unittests/translate/x86/X86LegacyBoundNativeTests.inc": "da93f0f329c5ddbd5e9003325b41b8e56240d5a9e2f0260173d04f8cfbbe563c",
+      "unittests/translate/x86/X86LegacyBoundTests.inc": "9bfdccbc4d4f7740dbac3cbed0e115f0499f3bcecaedd7b8c8cdc1dad2195a99",
+      "unittests/translate/x86/X86LegacyExecutionTests.cpp": "0a21bb5610eff37c53b8454b711b9fbaa5d00324103a3983ed4c20ed7aec5c13",
+      "unittests/translate/x86/X86LegacyScalarNativeFixture.inc": "1568b614fcaff26e3982ad848d0a1aef7823ba7892d9548179c19533d5a3f091",
+      "unittests/translate/x86/X86PagingNativeTests.cpp": "0540648d9a1b15049f0e537d96a13e8bea631eba8b7409517c1821f1f10f18df"
+    },
+    "pre_review_snapshot": {
+      "artifact": "source-snapshot-before-review.json",
+      "sha256": "fdf298131e66e5aac14c998b29fdbc163c5f6066ce02d53d258366edef5a2943"
+    },
+    "implementation_commit": "85809afa3ab70a0c7f351f584b542377e378d26d",
+    "integration_commit": "f575b5068345680c9f7f7c6b292c78153adb8e3e"
+  },
+  "qualification": {
+    "compiler_lit": {
+      "llvm_bound_and_adjacent_arpl": 2,
+      "clang_bound_codegen_and_sema": 2
+    },
+    "capstone": {
+      "bound_cases_per_profile": 224,
+      "profiles": [
+        "full",
+        "reduced"
+      ],
+      "adjacent_regressions": 6
+    },
+    "llvm_and_clang_linux_i386": {
+      "profiles": [
+        {
+          "artifact": "full-llvm-clang-cpu2-final/summary.json",
+          "sha256": "e141832ebf2e7530860c2bc60bee13373df9b6dd42f8c15a73059f62489f4d7b",
+          "profiles": [
+            {
+              "compiler": "llvm",
+              "optimization": "O0",
+              "comparisons": 1575744,
+              "cases": 24
+            },
+            {
+              "compiler": "llvm",
+              "optimization": "O2",
+              "comparisons": 1575744,
+              "cases": 24
+            },
+            {
+              "compiler": "clang",
+              "optimization": "O0",
+              "comparisons": 1575744,
+              "cases": 24
+            },
+            {
+              "compiler": "clang",
+              "optimization": "O2",
+              "comparisons": 1575744,
+              "cases": 24
+            }
+          ],
+          "negative_controls": [
+            "wrong index before intact BOUND rejected"
+          ],
+          "tools": {
+            "<full-llvm-build>/bin/llc": "4316545a1d6808b9257a32ea9c240dcb5019ee09aa2cbc0453cb443a42a17ffa",
+            "<full-llvm-build>/bin/opt": "299ad8e2c5b9869470db1947757f8732e2071e0b1e78ae87a6360099d56da915",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "<full-clang-build>/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
+            "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "affinity": [
+            2
+          ],
+          "executables": {
+            "llvm-O2": "957ad95a8583140dc3cc304bb5448a8d6e83ae13e996fdff6ac78cf796326105",
+            "llvm-O0": "2b3575d48a82535b1e7e8efbe30d064ae89e0071311a6d2e699c1ba1461dc31e",
+            "wrong-index": "7d7105db77fd83255bdb4b8e9789065842377721356bc7c9ea2ea356ebce04e9",
+            "clang-O0": "203a6a00ad36f46698dbf0e0ec16d845029bb8d8c912195bc950403bf47ef97d",
+            "clang-O2": "ca29e2a2c9e3942a69ca0510ae6a7866a25ac920b5af655afd1f753c4ac658d1"
+          }
+        },
+        {
+          "artifact": "full-llvm-clang-cpu12-final/summary.json",
+          "sha256": "498f9dfebd80f3f241b02b9d8462de734ef01da975283ebcd24df6b84d492e61",
+          "profiles": [
+            {
+              "compiler": "llvm",
+              "optimization": "O0",
+              "comparisons": 1575744,
+              "cases": 24
+            },
+            {
+              "compiler": "llvm",
+              "optimization": "O2",
+              "comparisons": 1575744,
+              "cases": 24
+            },
+            {
+              "compiler": "clang",
+              "optimization": "O0",
+              "comparisons": 1575744,
+              "cases": 24
+            },
+            {
+              "compiler": "clang",
+              "optimization": "O2",
+              "comparisons": 1575744,
+              "cases": 24
+            }
+          ],
+          "negative_controls": [
+            "wrong index before intact BOUND rejected"
+          ],
+          "tools": {
+            "<full-llvm-build>/bin/llc": "4316545a1d6808b9257a32ea9c240dcb5019ee09aa2cbc0453cb443a42a17ffa",
+            "<full-llvm-build>/bin/opt": "299ad8e2c5b9869470db1947757f8732e2071e0b1e78ae87a6360099d56da915",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "<full-clang-build>/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
+            "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+          },
+          "affinity": [
+            12
+          ],
+          "executables": {
+            "llvm-O2": "957ad95a8583140dc3cc304bb5448a8d6e83ae13e996fdff6ac78cf796326105",
+            "llvm-O0": "2b3575d48a82535b1e7e8efbe30d064ae89e0071311a6d2e699c1ba1461dc31e",
+            "wrong-index": "7d7105db77fd83255bdb4b8e9789065842377721356bc7c9ea2ea356ebce04e9",
+            "clang-O0": "203a6a00ad36f46698dbf0e0ec16d845029bb8d8c912195bc950403bf47ef97d",
+            "clang-O2": "ca29e2a2c9e3942a69ca0510ae6a7866a25ac920b5af655afd1f753c4ac658d1"
+          }
+        }
+      ],
+      "comparisons": 12605952,
+      "note": "Four compiler/optimization profiles per core. All 65536 word indices plus high input bits, dword limits, DS/FS and address widths; real signals are classified at the original BOUND instruction."
+    },
+    "actual_neverd_exports": {
+      "profiles": [
+        {
+          "artifact": "r6-source-stock-objects-cpu2/summary.json",
+          "sha256": "c61bb139d1b8111b5cf7fe975a6134c0afb0edf3bd0fb82c77e649de13722bec",
+          "profiles": [
+            {
+              "optimization": "O0",
+              "sha256": "ec9a1f4831c2aca11ea12926c4f6a214232fa318a11e94cc59947bd494afcb66",
+              "comparisons": 5515944,
+              "cases": 84
+            },
+            {
+              "optimization": "O2",
+              "sha256": "8e855a929804c247b594915ecc956cdb4b193af920a3c480888b5a53e2a4329c",
+              "comparisons": 5515944,
+              "cases": 84
+            }
+          ],
+          "compiled_sources": 336,
+          "exported_elf_objects": 12,
+          "tools": {
+            "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "affinity": [
+            2
+          ],
+          "negative_controls": [
+            "truncated return with intact BOUND rejected"
+          ]
+        },
+        {
+          "artifact": "r6-source-stock-objects-cpu12/summary.json",
+          "sha256": "af595a1e0e732c616df790df58522e983f7bebc652810d455fd2573889deb2a9",
+          "profiles": [
+            {
+              "optimization": "O0",
+              "sha256": "ec9a1f4831c2aca11ea12926c4f6a214232fa318a11e94cc59947bd494afcb66",
+              "comparisons": 5515944,
+              "cases": 84
+            },
+            {
+              "optimization": "O2",
+              "sha256": "8e855a929804c247b594915ecc956cdb4b193af920a3c480888b5a53e2a4329c",
+              "comparisons": 5515944,
+              "cases": 84
+            }
+          ],
+          "compiled_sources": 336,
+          "exported_elf_objects": 12,
+          "tools": {
+            "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "affinity": [
+            12
+          ],
+          "negative_controls": [
+            "truncated return with intact BOUND rejected"
+          ]
+        },
+        {
+          "artifact": "r6-source-native-objects-cpu2/summary.json",
+          "sha256": "fb7d3330ffe4a845a8adac7a4122e24612d1ff60aa01e67391d0f0289c5cf19c",
+          "profiles": [
+            {
+              "optimization": "O0",
+              "sha256": "9b3e81eedb3793d1478233729924b233f436d9cd24761916c89dc9a077179f4a",
+              "comparisons": 5515944,
+              "cases": 84
+            },
+            {
+              "optimization": "O2",
+              "sha256": "c44ca035ad76e2d51d5e7d1793c25de4aa14536b39e354ce1818252a1d93bb3c",
+              "comparisons": 5515944,
+              "cases": 84
+            }
+          ],
+          "compiled_sources": 336,
+          "exported_elf_objects": 12,
+          "tools": {
+            "<full-clang-build>/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "affinity": [
+            2
+          ],
+          "negative_controls": [
+            "truncated return with intact BOUND rejected"
+          ]
+        },
+        {
+          "artifact": "r6-source-native-objects-cpu12/summary.json",
+          "sha256": "14131dcd7ec8164fdc9c9a05d53cb1e5cb4d323dfc0954098b370e6e625c6c18",
+          "profiles": [
+            {
+              "optimization": "O0",
+              "sha256": "9b3e81eedb3793d1478233729924b233f436d9cd24761916c89dc9a077179f4a",
+              "comparisons": 5515944,
+              "cases": 84
+            },
+            {
+              "optimization": "O2",
+              "sha256": "c44ca035ad76e2d51d5e7d1793c25de4aa14536b39e354ce1818252a1d93bb3c",
+              "comparisons": 5515944,
+              "cases": 84
+            }
+          ],
+          "compiled_sources": 336,
+          "exported_elf_objects": 12,
+          "tools": {
+            "<full-clang-build>/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "affinity": [
+            12
+          ],
+          "negative_controls": [
+            "truncated return with intact BOUND rejected"
+          ]
+        },
+        {
+          "artifact": "native-source-stock-objects-cpu2/summary.json",
+          "sha256": "8b03dc11cfa3204ef0ca3717c38c87ef12590f21b4c396a8536bd2d82706527c",
+          "profiles": [
+            {
+              "optimization": "O0",
+              "sha256": "0ba869a829085305fed98399c435ee0895c4c6d5022dd1021f2976e24ab12b5c",
+              "comparisons": 5515944,
+              "cases": 84
+            },
+            {
+              "optimization": "O2",
+              "sha256": "5c5b01eb5ec7862a20bf891d71c4528c5766ecd8c6bad3cacd071092dab6074d",
+              "comparisons": 5515944,
+              "cases": 84
+            }
+          ],
+          "compiled_sources": 336,
+          "exported_elf_objects": 12,
+          "tools": {
+            "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "affinity": [
+            2
+          ],
+          "negative_controls": [
+            "truncated return with intact BOUND rejected"
+          ]
+        },
+        {
+          "artifact": "native-source-stock-objects-cpu12/summary.json",
+          "sha256": "f1cc99592ace924533aedcdc0f10fa4baaca022262a540c71c698474f5342ca3",
+          "profiles": [
+            {
+              "optimization": "O0",
+              "sha256": "0ba869a829085305fed98399c435ee0895c4c6d5022dd1021f2976e24ab12b5c",
+              "comparisons": 5515944,
+              "cases": 84
+            },
+            {
+              "optimization": "O2",
+              "sha256": "5c5b01eb5ec7862a20bf891d71c4528c5766ecd8c6bad3cacd071092dab6074d",
+              "comparisons": 5515944,
+              "cases": 84
+            }
+          ],
+          "compiled_sources": 336,
+          "exported_elf_objects": 12,
+          "tools": {
+            "/usr/lib/llvm-23/bin/clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "affinity": [
+            12
+          ],
+          "negative_controls": [
+            "truncated return with intact BOUND rejected"
+          ]
+        },
+        {
+          "artifact": "native-source-native-objects-cpu2/summary.json",
+          "sha256": "3b613dc974bf015ead1a2cc5d46c97ca451c32de7bf61f1454ad6332497353d4",
+          "profiles": [
+            {
+              "optimization": "O0",
+              "sha256": "192a099e4baa105630ee59ee0fd36b0b518087bb0ad8a7cedb09e7a4a46c3f70",
+              "comparisons": 5515944,
+              "cases": 84
+            },
+            {
+              "optimization": "O2",
+              "sha256": "f17116299bd79940370e5916665fb48e7f15988e5bf66c0ae5802fe63bf44329",
+              "comparisons": 5515944,
+              "cases": 84
+            }
+          ],
+          "compiled_sources": 336,
+          "exported_elf_objects": 12,
+          "tools": {
+            "<full-clang-build>/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "affinity": [
+            2
+          ],
+          "negative_controls": [
+            "truncated return with intact BOUND rejected"
+          ]
+        },
+        {
+          "artifact": "native-source-native-objects-cpu12/summary.json",
+          "sha256": "0449e70cf734b394b4c0db258267284f5af6714578cfb45eba6548cb519c1bf2",
+          "profiles": [
+            {
+              "optimization": "O0",
+              "sha256": "192a099e4baa105630ee59ee0fd36b0b518087bb0ad8a7cedb09e7a4a46c3f70",
+              "comparisons": 5515944,
+              "cases": 84
+            },
+            {
+              "optimization": "O2",
+              "sha256": "f17116299bd79940370e5916665fb48e7f15988e5bf66c0ae5802fe63bf44329",
+              "comparisons": 5515944,
+              "cases": 84
+            }
+          ],
+          "compiled_sources": 336,
+          "exported_elf_objects": 12,
+          "tools": {
+            "<full-clang-build>/bin/clang-23": "5afdd158470ed73baa96a15e42799505e5b17b88da014f4958e339a9a583333e",
+            "<full-llvm-build>/bin/llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e",
+            "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+          },
+          "affinity": [
+            12
+          ],
+          "negative_controls": [
+            "truncated return with intact BOUND rejected"
+          ]
+        }
+      ],
+      "comparisons": 88255104,
+      "note": "Each profile compiles all 336 actual C exports; executes 72 DS/FS source cases and 12 actual exported ELF objects. COFF/Mach-O objects are emitted but not natively linked. Repeated compiler/optimization executions are counted, not unique input states.",
+      "equivalence_after_review": {
+        "artifact": "export-equivalence-review.json",
+        "sha256": "e52fc6d50e0a72d18112f03710ff90cc796199d93fa3d9dec259aac69cff5fd1",
+        "r6": {
+          "previous": "<artifacts>/r6-final/exports",
+          "current": "<artifacts>/r6-review/exports",
+          "files": 672,
+          "different": [],
+          "manifest_sha256": "6c606f86292b710fbf388a0e53a1e336d2e18c9f0cee4bf11e1155b5f3e7a166"
+        },
+        "native": {
+          "previous": "<artifacts>/native-final/exports",
+          "current": "<artifacts>/native-review/exports",
+          "files": 672,
+          "different": [],
+          "manifest_sha256": "7497135b7c2bac8dd765f3d4ffbf1142279575109cba2d0d7822f302281e6485"
+        }
+      },
+      "equivalence_after_integration": {
+        "artifact": "export-equivalence-integration.json",
+        "sha256": "023fc2878b6f4b3f39fcafc227502768517c9b4847b989a995fe8ee6a7b03437",
+        "profiles": {
+          "r6": {
+            "files": 672,
+            "different": [],
+            "manifest_sha256": "6c606f86292b710fbf388a0e53a1e336d2e18c9f0cee4bf11e1155b5f3e7a166"
+          },
+          "native": {
+            "files": 672,
+            "different": [],
+            "manifest_sha256": "7497135b7c2bac8dd765f3d4ffbf1142279575109cba2d0d7822f302281e6485"
+          }
+        }
+      }
+    },
+    "full_compiler_protected_kvm": {
+      "profiles": [
+        {
+          "artifact": "compiler-kvm-code16-cpu12-v3/qualification.json",
+          "sha256": "0602d5600d9d7a959276d0cb5242199a268fa243b5650c69c28da38f6dd1560c",
+          "profiles": [
+            {
+              "mode": 16,
+              "optimization": "O0",
+              "image_sha256": "0a84204565873f66f04f46a96e0b49e3108ae6d673a26fb622dd3e0fee297c5d",
+              "manifest_sha256": "4f3f89290057548149130cd4739d9110be37f09c84744b0120d9cbab70fd5947",
+              "functions": 12,
+              "complete_state_pairs": 4320,
+              "returns": 980,
+              "completions": 1060,
+              "br": 1416,
+              "gp": 992,
+              "pf": 744,
+              "ac": 108
+            },
+            {
+              "mode": 16,
+              "optimization": "O2",
+              "image_sha256": "63f6c4bda579b677d1c8ee9dfb2d19fefd964bf7dfbd66037be2e87f7b864eb8",
+              "manifest_sha256": "295e471f2e2765f9918e399f74757c71a7205b2c8ce326b058f4523991d992d8",
+              "functions": 12,
+              "complete_state_pairs": 4320,
+              "returns": 980,
+              "completions": 1060,
+              "br": 1416,
+              "gp": 992,
+              "pf": 744,
+              "ac": 108
+            }
+          ],
+          "tools": {
+            "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+            "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+            "llc": "4316545a1d6808b9257a32ea9c240dcb5019ee09aa2cbc0453cb443a42a17ffa",
+            "opt": "299ad8e2c5b9869470db1947757f8732e2071e0b1e78ae87a6360099d56da915",
+            "llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e"
+          },
+          "inputs": {
+            "verify_protected_bound.py": "66d854a15425a6de2cc2617f9e39ec2a3c521ab5fd02ebba9d7233c6cac0d98b",
+            "protected_bound_kvm.c": "1bfb1fd33380d71041db8455d45ac61d0f11b4164ff9202052304d36b56dedb4",
+            "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33",
+            "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71"
+          },
+          "affinity": [
+            12
+          ],
+          "runner_sha256": "8e7a0509d098e0c220334a16875f29226c106d625977b2590a8113baa75d1ed5",
+          "negative_controls": [
+            "wrong input before intact BOUND",
+            "truncated full-width return after intact BOUND"
+          ]
+        },
+        {
+          "artifact": "compiler-kvm-code32-cpu12/qualification.json",
+          "sha256": "321ce07303e8f8d2a94ca1ca6ba93ab46455da6a4f41075955a076fc7222bea6",
+          "profiles": [
+            {
+              "mode": 32,
+              "optimization": "O0",
+              "image_sha256": "92fa61b3106a3831bf4be90e81925014a456b7bbef03d35f697ed2aed9c203cc",
+              "manifest_sha256": "d6075f2285b7a32fee23723ea45cc6c599df77171be0ed4af0db3dc7bbc306ac",
+              "functions": 12,
+              "complete_state_pairs": 4320,
+              "returns": 980,
+              "completions": 1060,
+              "br": 1416,
+              "gp": 992,
+              "pf": 744,
+              "ac": 108
+            },
+            {
+              "mode": 32,
+              "optimization": "O2",
+              "image_sha256": "b76e962b220d75fa1dbb07b11bc931afd375685e7964e9caa9663ecf1eec800b",
+              "manifest_sha256": "56f6e5108f9fc3085eb551676910c8019d97cfd13d7f198024c0a1528d461c43",
+              "functions": 12,
+              "complete_state_pairs": 4320,
+              "returns": 980,
+              "completions": 1060,
+              "br": 1416,
+              "gp": 992,
+              "pf": 744,
+              "ac": 108
+            }
+          ],
+          "tools": {
+            "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+            "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+            "llc": "4316545a1d6808b9257a32ea9c240dcb5019ee09aa2cbc0453cb443a42a17ffa",
+            "opt": "299ad8e2c5b9869470db1947757f8732e2071e0b1e78ae87a6360099d56da915",
+            "llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e"
+          },
+          "inputs": {
+            "verify_protected_bound.py": "66d854a15425a6de2cc2617f9e39ec2a3c521ab5fd02ebba9d7233c6cac0d98b",
+            "protected_bound_kvm.c": "1bfb1fd33380d71041db8455d45ac61d0f11b4164ff9202052304d36b56dedb4",
+            "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33",
+            "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71"
+          },
+          "affinity": [
+            12
+          ],
+          "runner_sha256": "8e7a0509d098e0c220334a16875f29226c106d625977b2590a8113baa75d1ed5",
+          "negative_controls": [
+            "wrong input before intact BOUND",
+            "truncated full-width return after intact BOUND"
+          ]
+        },
+        {
+          "artifact": "compiler-kvm-code16-cpu2/qualification.json",
+          "sha256": "84bf78a58ddd7d88fbb8d532a43b33eae4ccbe6e5a98650170a3b495f942b044",
+          "profiles": [
+            {
+              "mode": 16,
+              "optimization": "O0",
+              "image_sha256": "0a84204565873f66f04f46a96e0b49e3108ae6d673a26fb622dd3e0fee297c5d",
+              "manifest_sha256": "4f3f89290057548149130cd4739d9110be37f09c84744b0120d9cbab70fd5947",
+              "functions": 12,
+              "complete_state_pairs": 4320,
+              "returns": 980,
+              "completions": 1060,
+              "br": 1416,
+              "gp": 992,
+              "pf": 744,
+              "ac": 108
+            },
+            {
+              "mode": 16,
+              "optimization": "O2",
+              "image_sha256": "63f6c4bda579b677d1c8ee9dfb2d19fefd964bf7dfbd66037be2e87f7b864eb8",
+              "manifest_sha256": "295e471f2e2765f9918e399f74757c71a7205b2c8ce326b058f4523991d992d8",
+              "functions": 12,
+              "complete_state_pairs": 4320,
+              "returns": 980,
+              "completions": 1060,
+              "br": 1416,
+              "gp": 992,
+              "pf": 744,
+              "ac": 108
+            }
+          ],
+          "tools": {
+            "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+            "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+            "llc": "4316545a1d6808b9257a32ea9c240dcb5019ee09aa2cbc0453cb443a42a17ffa",
+            "opt": "299ad8e2c5b9869470db1947757f8732e2071e0b1e78ae87a6360099d56da915",
+            "llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e"
+          },
+          "inputs": {
+            "verify_protected_bound.py": "66d854a15425a6de2cc2617f9e39ec2a3c521ab5fd02ebba9d7233c6cac0d98b",
+            "protected_bound_kvm.c": "1bfb1fd33380d71041db8455d45ac61d0f11b4164ff9202052304d36b56dedb4",
+            "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33",
+            "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71"
+          },
+          "affinity": [
+            2
+          ],
+          "runner_sha256": "8e7a0509d098e0c220334a16875f29226c106d625977b2590a8113baa75d1ed5",
+          "negative_controls": [
+            "wrong input before intact BOUND",
+            "truncated full-width return after intact BOUND"
+          ]
+        },
+        {
+          "artifact": "compiler-kvm-code32-cpu2/qualification.json",
+          "sha256": "6d8c1105822abd155631006652de933a4f2a0d5e2e6fa8ed266c1171ece12aae",
+          "profiles": [
+            {
+              "mode": 32,
+              "optimization": "O0",
+              "image_sha256": "92fa61b3106a3831bf4be90e81925014a456b7bbef03d35f697ed2aed9c203cc",
+              "manifest_sha256": "d6075f2285b7a32fee23723ea45cc6c599df77171be0ed4af0db3dc7bbc306ac",
+              "functions": 12,
+              "complete_state_pairs": 4320,
+              "returns": 980,
+              "completions": 1060,
+              "br": 1416,
+              "gp": 992,
+              "pf": 744,
+              "ac": 108
+            },
+            {
+              "mode": 32,
+              "optimization": "O2",
+              "image_sha256": "b76e962b220d75fa1dbb07b11bc931afd375685e7964e9caa9663ecf1eec800b",
+              "manifest_sha256": "56f6e5108f9fc3085eb551676910c8019d97cfd13d7f198024c0a1528d461c43",
+              "functions": 12,
+              "complete_state_pairs": 4320,
+              "returns": 980,
+              "completions": 1060,
+              "br": 1416,
+              "gp": 992,
+              "pf": 744,
+              "ac": 108
+            }
+          ],
+          "tools": {
+            "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+            "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+            "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+            "llc": "4316545a1d6808b9257a32ea9c240dcb5019ee09aa2cbc0453cb443a42a17ffa",
+            "opt": "299ad8e2c5b9869470db1947757f8732e2071e0b1e78ae87a6360099d56da915",
+            "llvm-objdump": "96321074b9a132bd2d098e58a8c90338163699a89858170d901963214a62244e"
+          },
+          "inputs": {
+            "verify_protected_bound.py": "66d854a15425a6de2cc2617f9e39ec2a3c521ab5fd02ebba9d7233c6cac0d98b",
+            "protected_bound_kvm.c": "1bfb1fd33380d71041db8455d45ac61d0f11b4164ff9202052304d36b56dedb4",
+            "KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33",
+            "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71"
+          },
+          "affinity": [
+            2
+          ],
+          "runner_sha256": "8e7a0509d098e0c220334a16875f29226c106d625977b2590a8113baa75d1ed5",
+          "negative_controls": [
+            "wrong input before intact BOUND",
+            "truncated full-width return after intact BOUND"
+          ]
+        }
+      ],
+      "complete_state_pairs": 34560,
+      "note": "LLVM code16/code32 functions at O0/O2 on both cores, original native BOUND oracle, full state/RAM/fault frames and compiler-frame return. Physical KVM executes these ordinary instructions. Read-only/non-ABI DS cases stop at the instruction boundary; FS cases return through ordinary DS/SS."
+    },
+    "protected_broad_snapshots": [
+      {
+        "artifact": "native-initial/paging.xml",
+        "sha256": "4250545537a69cdc55d675dd0936929c95ab654a4eba3ad655c1e9d80b1fb6af",
+        "tests": 422,
+        "failures": 0,
+        "skips": [
+          {
+            "test": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+            "reason": "<neverd>/unittests/translate/x86/X86PagingNativeTests.cpp:116\nBound KVM CPU has no LA57\n"
+          }
+        ],
+        "properties": {
+          "cpu_comparisons": 522382,
+          "event_cpu_comparisons": 292,
+          "vmx_ac_nmi_recoveries": 24
+        }
+      },
+      {
+        "artifact": "r6-final/paging.xml",
+        "sha256": "71f0d3c8d0bf3dc65f23c9a786fd229b8674bf152f9f87918477906dcd1ba315",
+        "tests": 422,
+        "failures": 0,
+        "skips": [
+          {
+            "test": "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+            "reason": "<neverd>/unittests/translate/x86/X86PagingNativeTests.cpp:116\nBound KVM CPU has no LA57\n"
+          }
+        ],
+        "properties": {
+          "cpu_comparisons": 522670,
+          "event_cpu_comparisons": 292,
+          "vmx_ac_nmi_recoveries": 24
+        }
+      }
+    ],
+    "broad_snapshot_limits": "The native initial run precedes the added address32-wrap cases; both broad runs precede the active-transaction refusal. The final focused checks qualify those additions. Counts overlap and must not be summed as distinct states.",
+    "protected_review": [
+      {
+        "artifact": "native-transaction-green.xml",
+        "sha256": "6ca2e056cdc676a8a541c589f80eef0fc5dc9abb2f1ba5906bcdca8a9cdeaa7b",
+        "tests": 16,
+        "failures": 0,
+        "skips": [],
+        "properties": {
+          "cpu_comparisons": 5632
+        }
+      },
+      {
+        "artifact": "r6-transaction-green.xml",
+        "sha256": "0a2c8b845f087831e3f10d4f450cb4ba11bc88296f5d9627419e30b74197a079",
+        "tests": 25,
+        "failures": 0,
+        "skips": [],
+        "properties": {
+          "cpu_comparisons": 45136
+        }
+      }
+    ],
+    "source_review": [
+      {
+        "artifact": "r6-review/bound-source.xml",
+        "sha256": "bf14f4ae0ea6f55f2fe61ad05973721eec222cb37fd22a4b3269b25f5cc9fbce",
+        "tests": 5,
+        "failures": 0,
+        "skips": [],
+        "properties": {}
+      },
+      {
+        "artifact": "native-review/bound-source.xml",
+        "sha256": "c22211dc7e2a88331ad3c2432940e88ac6adb8548ba4e573c715b746d7ec0bae",
+        "tests": 5,
+        "failures": 0,
+        "skips": [],
+        "properties": {}
+      }
+    ],
+    "return_review_r6": [
+      {
+        "artifact": "return-review/r6-NeverDHighControlFlowTests.xml",
+        "sha256": "2f2ff2fec9184b7e58eb439539b2c15b0105f88cf3fc3fce8249e9cbe9a850ec",
+        "tests": 526,
+        "failures": 0,
+        "skips": [],
+        "properties": {}
+      },
+      {
+        "artifact": "return-review/r6-NeverDHighCIntegerWidthTests.xml",
+        "sha256": "03dff59dbbde3df926498bcd23bf188a19cfb09ed7a3c4876c8b16fa1c21b90a",
+        "tests": 25,
+        "failures": 0,
+        "skips": [],
+        "properties": {
+          "native_gs_loads": 40,
+          "native_executables": 2
+        }
+      },
+      {
+        "artifact": "return-review/r6-NeverDSysVCallContractTests.xml",
+        "sha256": "0dc9cd4a9b0e42e6851cb4a0fc05c7a7792b9e40564d1d66f1b60dc5a9e38c97",
+        "tests": 43,
+        "failures": 0,
+        "skips": [],
+        "properties": {}
+      },
+      {
+        "artifact": "return-review/r6-NeverDReturnContractTests.xml",
+        "sha256": "2ea4da08e6b339fd74ed99b2f2f3184bd4a480439fbb7900c2e25b1591ad11bb",
+        "tests": 29,
+        "failures": 0,
+        "skips": [],
+        "properties": {}
+      }
+    ],
+    "native_source_broad_before_final_review": {
+      "artifact": "native-final/virtualization.xml",
+      "sha256": "eddf8b4c6887456f1d95e084c36cc747b1c35f46ff424447b3b249c78edcdd0d",
+      "tests": 384,
+      "failures": 0,
+      "skips": [
+        {
+          "test": "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5644\nHost does not provide AMX-TILE; native restart unqualified\n"
+        },
+        {
+          "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+        },
+        {
+          "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+        },
+        {
+          "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+        },
+        {
+          "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+        },
+        {
+          "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+        },
+        {
+          "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+        },
+        {
+          "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+        },
+        {
+          "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+        },
+        {
+          "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
+          "reason": "<neverd>/unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+        }
+      ],
+      "properties": {
+        "native_modules": 426,
+        "native_c_compilations": 888,
+        "legacy_generic_and_fixed_bx_contracts": 24,
+        "descriptor_address_native_functions": 1722,
+        "descriptor_address_c_compilations": 24,
+        "descriptor_address_neverc_compilations": 12,
+        "native_system_modules": 312,
+        "transaction_abort_fixtures": 48,
+        "transaction_abort_neverc_fixtures": 24,
+        "stock_system_native_c_compilations": 48,
+        "native_system_c_compilations": 792,
+        "sgx_native_c_ir_and_object_compilations": 192,
+        "amx_native_c_compilations": 1800,
+        "amx_native_c_object_compilations": 1800,
+        "c_compilations": 288,
+        "segment_functions": 132,
+        "segment_c_compilations": 12,
+        "segment_neverc_compilations": 6,
+        "source_fixtures": 225,
+        "native_system_register_c_compilations": 936,
+        "descriptor_state_source_fixtures": 438,
+        "native_descriptor_state_c_compilations": 1680,
+        "scalar_system_source_fixtures": 126,
+        "native_scalar_system_c_compilations": 504
+      }
+    },
+    "return_cpu_witness": "DeclaredReturnKeepsFullValueAfterNarrowRead performs 16 compiled source executions x 65536 inputs = 1048576 original-byte comparisons per SDK on this Linux x64 host, checking both the whole result and the partial store.",
+    "final_integration": {
+      "r6": {
+        "commit": "f575b5068345680c9f7f7c6b292c78153adb8e3e",
+        "binaries": {
+          "NeverDX86PagingTests": "416ee066f3e9a67fb558c8a6dc7c63ad39477ab5d41e6d2bda346ee4a3d2dbec",
+          "NeverDX86VirtualizationSourceTests": "c8a8b44154e858553881271c4b326845bd73729cc75aecde1b0aa25537577fa0",
+          "NeverDHighControlFlowTests": "b8bdb0b8a8b24aefd53074ab5eb73c08cd77f061c69bebcd7ce88eec296194df",
+          "NeverDHighCIntegerWidthTests": "90b9d1771c423e5a3731790318c54a8152fb1abeaa95ea6bd695a0611c1e2ed6",
+          "NeverDSysVCallContractTests": "7dc9dbec52bd0f8953eb057e389cd758a0f2c3a19587ce7d6fa256e281b88173",
+          "NeverDReturnContractTests": "7a1ccc759105c2c122bfaf8b58ed07f084e8fcaf912d562cad5218433cd5040c"
+        },
+        "build_profile": "Release; native threads; mimalloc/highway/simdjson/simdutf/TBB disabled in these focused test builds",
+        "build_receipt_sha256": "ce577d19cda5c3e6b1f18d72eea5650a5f005a66def053010e4cb2f62e9d0eff",
+        "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "results": [
+          {
+            "artifact": "integration-r6/bound-source.xml",
+            "sha256": "e2a4f0628beff49db7718276fa55d35bd23b14ae4d8941b7686ac22f86d7237e",
+            "tests": 5,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-r6/bound-cpu2.xml",
+            "sha256": "8451de63f8222c1642f945fabd8600e0f0d1cba64e7f4ac01f9ef1c8cfdf76bd",
+            "tests": 16,
+            "failures": 0,
+            "skips": [],
+            "properties": {
+              "cpu_comparisons": 5632
+            }
+          },
+          {
+            "artifact": "integration-r6/bound-cpu12.xml",
+            "sha256": "2426eb4c19d1e734b08cf7718b6701e635ffc4ad15d7e33b273bc85b95ddd1ce",
+            "tests": 16,
+            "failures": 0,
+            "skips": [],
+            "properties": {
+              "cpu_comparisons": 5632
+            }
+          },
+          {
+            "artifact": "integration-r6/NeverDHighControlFlowTests.xml",
+            "sha256": "a02e60aafba69e78ba0c563befb50c1a2e9ae4007a516983880e9d65fd24c655",
+            "tests": 526,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-r6/NeverDHighCIntegerWidthTests.xml",
+            "sha256": "fdfd46a742d925abc0265875bd6c498e6939d5b8bafcf7dffc0df2ac86dc5b28",
+            "tests": 25,
+            "failures": 0,
+            "skips": [],
+            "properties": {
+              "native_gs_loads": 40,
+              "native_executables": 2
+            }
+          },
+          {
+            "artifact": "integration-r6/NeverDSysVCallContractTests.xml",
+            "sha256": "cd9b4568b7ff3013104117ce00bc78f6400e2caccd4c862f7ee4e98ac5913560",
+            "tests": 43,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-r6/NeverDReturnContractTests.xml",
+            "sha256": "497341aca094eba00ebbbf4266728206b910df538f6b7d879bcc46c033255a80",
+            "tests": 29,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-r6/virtualization.xml",
+            "sha256": "92385dd414de45403bf3da0a4b4bbf4e8010ed0fbe3bc343f365b288c9dc0da6",
+            "tests": 384,
+            "failures": 0,
+            "skips": [
+              {
+                "test": "X86VirtualizationSource.QualifiedSdkUsesNativeVirtualizationCalls",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1217\nrequires the qualified native virtualization SDK\n"
+              },
+              {
+                "test": "X86SystemRegisterSource.NativeCallsRequireExactRegisterModeAndEffects",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1977\nrequires the native control/debug register SDK\n"
+              },
+              {
+                "test": "X86DescriptorStateSource.NativeCallsRequireExactControlsTypesAndEffects",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1686\nrequires the explicit descriptor-state address SDK\n"
+              },
+              {
+                "test": "X86DescriptorStateSource.NativeAddressControlsCompileAcrossFormats",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3124\nrequires the explicit descriptor-address SDK\n"
+              },
+              {
+                "test": "X86ScalarSystemSource.NativeCallsRequireExactTypesAndEffects",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1870\nrequires the scalar MSR/port intrinsic SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.QualifiedSdkUsesNativeSystemCalls",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2426\nrequires the qualified native system SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.SmapPreservesMemoryAccessOrderAcrossBothControls",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2457\nrequires the qualified native system SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.TransactionCommitRetainsSurroundingMemory",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2562\nrequires the qualified native system SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.NativeCallsCannotLoseModeResultsOrEffects",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:2989\nrequires the qualified native system SDK\n"
+              },
+              {
+                "test": "X86SystemStateSource.NativeDescriptorAddressControlsCompileAcrossFormats",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:3124\nrequires the explicit descriptor-address SDK\n"
+              },
+              {
+                "test": "X86SgxSource.NativeContractsRejectLostEffectsAndMode",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:4834\nnative SGX completion requires the qualified fork\n"
+              },
+              {
+                "test": "X86AmxSource.NativeContractsRejectLostEffectsAndControls",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5325\nlinked SDK predates explicit AMX controls\n"
+              },
+              {
+                "test": "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5644\nHost does not provide AMX-TILE; native restart unqualified\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+              }
+            ],
+            "properties": {
+              "native_c_compilations": 888,
+              "legacy_generic_and_fixed_bx_contracts": 24,
+              "transaction_abort_fixtures": 48,
+              "transaction_abort_neverc_fixtures": 24,
+              "stock_system_native_c_compilations": 48,
+              "native_system_c_compilations": 792,
+              "sgx_native_c_ir_and_object_compilations": 192,
+              "amx_native_c_compilations": 1800,
+              "amx_native_c_object_compilations": 1800,
+              "c_compilations": 288,
+              "segment_functions": 132,
+              "segment_c_compilations": 12,
+              "segment_neverc_compilations": 6,
+              "source_fixtures": 225,
+              "native_system_register_c_compilations": 936,
+              "descriptor_state_source_fixtures": 438,
+              "native_descriptor_state_c_compilations": 1680,
+              "scalar_system_source_fixtures": 126,
+              "native_scalar_system_c_compilations": 504
+            }
+          }
+        ],
+        "tests": 1044,
+        "skips": 22,
+        "failures": 0
+      },
+      "native": {
+        "commit": "f575b5068345680c9f7f7c6b292c78153adb8e3e",
+        "binaries": {
+          "NeverDX86PagingTests": "cea914a69bfb1e1570a1ec7871114ccc8341f43252bf2f00bd42e510e4b99844",
+          "NeverDX86VirtualizationSourceTests": "57978bdeb5a8cb7a0279b9fb9297a13d707e327cc588f5c48edfdbb13d09c3cc",
+          "NeverDHighControlFlowTests": "d23806455f93e8e0b9ba6ea8d4968e312fd986095547d9b16c3c7e02590f195d",
+          "NeverDHighCIntegerWidthTests": "84efaa9dd735f900c8713d840cb8f9d761647ac994909f2173c01ea0eecef3d5",
+          "NeverDSysVCallContractTests": "0b8e9dd265938a192d917f32d1f6d786b5ca00d285ffb4f18771988e528e4f18",
+          "NeverDReturnContractTests": "319dc10811299f41845baed15d576d9373d61aafeaef536154bcefd1fb30aa90"
+        },
+        "build_profile": "Release; native threads; mimalloc/highway/simdjson/simdutf/TBB disabled in these focused test builds",
+        "build_receipt_sha256": "02e2e3c466216eddaf21d79fb518734e180c86eab0e5b1f6152c4dfa2f922231",
+        "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "results": [
+          {
+            "artifact": "integration-native/bound-source.xml",
+            "sha256": "e4ccd8489d1146b1cfb31b599f6cc40e084aaf48eefda271ced7d6119972d9f5",
+            "tests": 5,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-native/bound-cpu2.xml",
+            "sha256": "1c8ad318426601f13d53d4bb683db45879b9f6be26e0690cda5351451d8cc3c5",
+            "tests": 16,
+            "failures": 0,
+            "skips": [],
+            "properties": {
+              "cpu_comparisons": 5632
+            }
+          },
+          {
+            "artifact": "integration-native/bound-cpu12.xml",
+            "sha256": "3e0de5993331ae8661bc4f173b096368c11856f775b6b2bf2ea4c4f49eb00b2e",
+            "tests": 16,
+            "failures": 0,
+            "skips": [],
+            "properties": {
+              "cpu_comparisons": 5632
+            }
+          },
+          {
+            "artifact": "integration-native/NeverDHighControlFlowTests.xml",
+            "sha256": "f7e4b57701af8c083bf92e2217ac834e99725bf02708d61f0a09d393d8ad1344",
+            "tests": 526,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-native/NeverDHighCIntegerWidthTests.xml",
+            "sha256": "c11d6dbb0851a8ab40ef8b3463cc70e681e17a7177334b8a1076da28e3166eb9",
+            "tests": 25,
+            "failures": 0,
+            "skips": [],
+            "properties": {
+              "native_gs_loads": 40,
+              "native_executables": 2
+            }
+          },
+          {
+            "artifact": "integration-native/NeverDSysVCallContractTests.xml",
+            "sha256": "6cf17fcbb0b0f3c61eb06ff563cbd87bc22b9da67a38d28c0a49e1fed75fa7e6",
+            "tests": 43,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-native/NeverDReturnContractTests.xml",
+            "sha256": "b216d536083262e574ff70e5193510f131186cb28ae3d3984d5812e0b361ad52",
+            "tests": 29,
+            "failures": 0,
+            "skips": [],
+            "properties": {}
+          },
+          {
+            "artifact": "integration-native/virtualization.xml",
+            "sha256": "8beb556241f84552ab6e20dfc330a52c29aa14c871b55c95c6fe44ded44d08f2",
+            "tests": 384,
+            "failures": 0,
+            "skips": [
+              {
+                "test": "X86AmxSource.NativeTileRowsAndFaultContinuationMatchOriginalBytes",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:5644\nHost does not provide AMX-TILE; native restart unqualified\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86ELF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86COFF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.NeverCCompilesBothRoutesToNativeIntrinsics/X86MachO",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1330\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86ELF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86COFF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.DescriptorStateUsesNeverCNativeBuiltins/X86MachO",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1463\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86ELF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86COFF",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+              },
+              {
+                "test": "NativeFormats/X86SystemRegisterAccess.ScalarMsrAndPortsUseNeverCNativeIntrinsics/X86MachO",
+                "reason": "unittests/lift/x86_64/X86VirtualizationSourceTests.cpp:1816\nNeverC targets x64\n"
+              }
+            ],
+            "properties": {
+              "native_modules": 426,
+              "native_c_compilations": 888,
+              "legacy_generic_and_fixed_bx_contracts": 24,
+              "descriptor_address_native_functions": 1722,
+              "descriptor_address_c_compilations": 24,
+              "descriptor_address_neverc_compilations": 12,
+              "native_system_modules": 312,
+              "transaction_abort_fixtures": 48,
+              "transaction_abort_neverc_fixtures": 24,
+              "stock_system_native_c_compilations": 48,
+              "native_system_c_compilations": 792,
+              "sgx_native_c_ir_and_object_compilations": 192,
+              "amx_native_c_compilations": 1800,
+              "amx_native_c_object_compilations": 1800,
+              "c_compilations": 288,
+              "segment_functions": 132,
+              "segment_c_compilations": 12,
+              "segment_neverc_compilations": 6,
+              "source_fixtures": 225,
+              "native_system_register_c_compilations": 936,
+              "descriptor_state_source_fixtures": 438,
+              "native_descriptor_state_c_compilations": 1680,
+              "scalar_system_source_fixtures": 126,
+              "native_scalar_system_c_compilations": 504
+            }
+          }
+        ],
+        "tests": 1044,
+        "skips": 10,
+        "failures": 0
+      }
+    },
+    "integration_tools": {
+      "neverc_source_commit": "967533ca06dd5122afa59e4de0ca5e8efe62ccf2",
+      "neverc_binary_sha256": "47fa7019e247db819d78f1cf998c65e36baadedbefbd969e898f4d930d351e69"
+    },
+    "final_test_only_integration": {
+      "commit": "343ea677bae4db3d6cffb38eca3f3cc9a474df44",
+      "source_sha256": "72a10ec498f8b9242ea1e4d9c4b8ed4c3faeea81ef8ffa3cd2fea28037473bd3",
+      "binaries": {
+        "r6": "478d5c412b6d7f720da20667af540eade69a596a780db0379555944e10ac2543",
+        "native": "654302a0582280f5d2b7455edc5f2e3eb3ce2160b12c333d3c0650c8ac1ce7fd"
+      },
+      "results": [
+        {
+          "artifact": "sysv-post-merge-r6.xml",
+          "sha256": "457af41bfc8353e64b800e82a36e43b89e9a00ad67259650aa7d9b50fde3869d",
+          "tests": 43,
+          "failures": 0,
+          "skips": [],
+          "properties": {}
+        },
+        {
+          "artifact": "sysv-post-merge-native.xml",
+          "sha256": "de1729be5dd0c9b293d1e31604710c4715cb1dd1d4955e1131958c72f9699036",
+          "tests": 43,
+          "failures": 0,
+          "skips": [],
+          "properties": {}
+        }
+      ],
+      "replaces": "The earlier SysVCallContractTests executions in the integration matrix",
+      "reason": "Dev 359e9aad63 changes only this test harness and documentation: direct typed calls replace incompatible function-pointer calls, and UBSan is nonrecoverable. Production sources are unchanged; both 43-test suites were rebuilt and rerun."
+    },
+    "static_checks": {
+      "clang_format": {
+        "artifact": "format-final.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "localized_docs": {
+        "artifact": "docs-final.log",
+        "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+      },
+      "source_provenance": {
+        "artifact": "provenance-final-v3.log",
+        "sha256": "6c82a1ff4343c74bfb68b0b8d119724fe4734e24e0eafe1e18a4de21a075fc35"
+      }
+    },
+    "integration_limits": "The complete source suites, 623 shared return/ABI/control-flow tests per SDK, both core BOUND matrices and all source exports were rerun after the final review fixes and merge of dev 4d23cad0da. The full 422-test paging snapshots predate the transaction admission guard; the final matrix/unit tests cover that guard. No default-acceleration or physical MPX/LA57 claim is made."
+  },
+  "diagnostics": [
+    "Before the decoder fix, all 224 operand-access cases failed because Capstone described a BOUND register output.",
+    "The original source witness caught word BOUND changing returned 0x0000ffff into 0xffffffff. MedIR retained the full input; HighC selected a later AX read.",
+    "A separate x64 declared integer/pointer fixture reproduced the same truncation after mov [rsi],ax. The shared returned-value rule now retains the complete propagated other-register value; both C routes compile and execute at O0/O2.",
+    "The active-transaction regression failed with MPX disabled before the explicit pre-fetch refusal.",
+    "Changed argmem-only/inaccessible-memory-only LLVM call effects were incorrectly accepted before requiring the exact conservative memory effects.",
+    "Fixture repairs: native LLVM rejects nonvoid/vararg inline-asm construction before rendering; those malformed forms are tested through native declarations. Code16 address carriers may use SI, not only DI. Read-only DS cannot supply a normal C frame return, so those cases compare the instruction boundary.",
+    "Wrong-index and truncated-return negative controls are rejected while an intact BOUND remains present.",
+    "Superseded 72-case source reports, early protected fixture failures, stale 515-test r6 control-flow run and interrupted r6 pre-review source run are preserved locally and excluded from final qualification."
+  ],
+  "remaining_boundaries": [
+    "NeverC still has no i386 frontend. Its committed witnesses qualify the full LLVM/Clang toolchain and actual NeverD exports, not a NeverC BOUND builtin in long mode.",
+    "This host has no physical MPX or LA57 qualification. MPX status is covered by software-owner tests; the broad paging LA57 case skips explicitly.",
+    "These compiler source witnesses do not establish original-state execution for arbitrary generated C, RTM/HLE completion, async/device progress, or other original-state dispatchers.",
+    "General i386 source ABI, remaining scalar/vector/string completion, real/VM86, task/call gates, debug events, software SMM/SMI, SGX/AEX/EPCM, full CET/FRED and multicore/TLB/device state remain outside this BOUND batch."
+  ],
+  "publication_gate": {
+    "final_llvm_release_created": false,
+    "production_sdk": "neverd-llvm-v23.0.0-r6",
+    "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69"
+  },
+  "reproduce": [
+    "python3 scripts/build.py BUILD --target NeverDX86PagingTests NeverDX86VirtualizationSourceTests NeverDReturnContractTests --parallel 4",
+    "NEVERD_THREADS=1 NEVERD_TEST_LEGACY_ALIGNMENT=before taskset -c CPU BUILD/bin/NeverDX86PagingTests --gtest_filter='X86LegacyExecutionTest.*Bound*:LegacyBound/*'",
+    "NEVERD_THREADS=1 NEVERD_ISA_REGRESSION_ARTIFACT_DIR=EXPORTS BUILD/bin/NeverDX86VirtualizationSourceTests --gtest_filter='X86BoundSource.*'",
+    "From NeverC: taskset -c CPU python3 tests/neverc/X86/verify_bound.py --llvm-bin LLVM_BIN --clang FULL_CLANG --host-clang HOST_CLANG --output OUT",
+    "From NeverC: taskset -c CPU python3 tests/neverc/X86/verify_bound_source.py --exports EXPORTS --llvm-bin LLVM_BIN --clang CLANG --output OUT",
+    "From NeverC: taskset -c CPU python3 tests/neverc/X86/verify_protected_bound.py --mode MODE --llvm-bin LLVM_BIN --output OUT",
+    "Use distinct output directories for every profile. Repeat CPU=2/12, MODE=16/32 and source compilation with stock/full Clang. The drivers run O0/O2 internally; they require Linux multilib/modify_ldt or KVM respectively. The KVM driver resolves clang, ld.lld and objcopy through PATH."
+  ],
+  "artifact_commands": {
+    "assemble-evidence.py": "4974157cb9eeecda87548b7e3da1233bc878b753b95b9e988662f5e0f7c6f6a4",
+    "run-integration.py": "0af26e9b356c396386d6dbe847cc4dee763e359f676d86f742473b27511752a2",
+    "finish-evidence.py": "774654a71ae22243a8b00e87a50d9fa554393a69befe537a18cd7054a586273c"
+  }
+}

@@ -414,10 +414,14 @@ TEST(NeverDSemanticCAPI, SolverCounterexampleIsCanonicalAndFinal) {
   EXPECT_EQ(Counterexample.getString("candidate"), "x");
   const llvm::json::Array *Variables = Counterexample.getArray("variables");
   ASSERT_NE(Variables, nullptr);
-  ASSERT_EQ(Variables->size(), 2u);
-  const llvm::json::Object *Y = (*Variables)[1].getAsObject();
-  ASSERT_NE(Y, nullptr);
-  EXPECT_EQ(Y->getString("name"), "y");
+  // x cancels out of the difference, so a model need not give it a value. y is
+  // what tells the two apart.
+  const llvm::json::Object *Y = nullptr;
+  for (const llvm::json::Value &Variable : *Variables)
+    if (const llvm::json::Object *Object = Variable.getAsObject();
+        Object && Object->getString("name") == "y")
+      Y = Object;
+  ASSERT_NE(Y, nullptr) << Result.counterexample_json;
   EXPECT_EQ(Y->getString("value"), "0x00000004");
 
   const char *JSON = neverd_synthesize_expr_json_v1(Expression, &Options);
@@ -525,6 +529,35 @@ TEST(NeverDSemanticCAPI, LLVMConservativeModeRejectsSynthesis) {
   EXPECT_EQ(Object.getString("outputIR"), std::nullopt);
   ASSERT_TRUE(Object.getString("error").has_value());
   EXPECT_TRUE(Object.getString("error")->contains("conservative"));
+  neverd_free_string(JSON);
+}
+
+TEST(NeverDSemanticCAPI, LLVMContractFailureRetainsFunctionAndReason) {
+  constexpr const char *IR = R"(
+    define void @missing_native_contract() { ret void }
+    !neverd.exception.rewrite.schema = !{!0}
+    !0 = !{i32 1}
+  )";
+  neverd_optimize_llvm_ir_result Result{};
+  Result.struct_size = sizeof(Result);
+  ASSERT_EQ(neverd_optimize_llvm_ir(IR, nullptr, &Result), 0);
+  EXPECT_EQ(Result.ok, 0);
+  EXPECT_EQ(Result.stop, NEVERD_OPTIMIZATION_INPUT_INVALID);
+  EXPECT_EQ(Result.changed, 0);
+  ASSERT_NE(Result.error, nullptr);
+  const std::string Error = Result.error;
+  EXPECT_NE(Error.find("missing_native_contract"), std::string::npos);
+  EXPECT_NE(Error.find("missing per-function contract"), std::string::npos);
+  ASSERT_NE(Result.output_ir, nullptr);
+  EXPECT_NE(std::string(Result.output_ir).find("ret void"), std::string::npos);
+  neverd_optimize_llvm_ir_result_dispose(&Result);
+
+  const char *JSON = neverd_optimize_llvm_ir_json_v1(IR, nullptr);
+  const auto Object = parseObject(JSON);
+  EXPECT_EQ(Object.getBoolean("ok"), false);
+  EXPECT_EQ(Object.getString("stop"), "input-invalid");
+  EXPECT_EQ(Object.getString("error"), Error);
+  EXPECT_TRUE(Object.getString("outputIR").has_value());
   neverd_free_string(JSON);
 }
 

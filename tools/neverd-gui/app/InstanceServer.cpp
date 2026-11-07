@@ -309,6 +309,14 @@ void InstanceServer::answer(QLocalSocket *socket, const QByteArray &text) {
     info.insert(QStringLiteral("server"), serverName());
     return reply(socket, info);
   }
+  if (command == QLatin1String("raise")) {
+    if (!raiser_)
+      return reply(socket,
+                   failed(QStringLiteral("This workbench cannot come to the "
+                                         "front")));
+    raiser_(request.value(QStringLiteral("token")).toString());
+    return reply(socket, succeeded());
+  }
   if (command == QLatin1String("open_link")) {
     const ParsedLink parsed =
         parseDeepLink(request.value(QStringLiteral("uri")).toString());

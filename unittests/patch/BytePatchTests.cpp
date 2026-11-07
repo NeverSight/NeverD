@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <limits>
 #include <sstream>
@@ -91,6 +92,30 @@ protected:
     R.Address = 0x1000;
     R.Kind = Kind;
     return R;
+  }
+  std::string compactRows() const {
+    std::string Text;
+    llvm::raw_string_ostream Stream(Text);
+    Stream.SetBuffered();
+    writePatchRows(Stream, Overlay);
+    Stream.flush();
+    return Text;
+  }
+  std::string compactRanges() const {
+    std::string Text;
+    llvm::raw_string_ostream Stream(Text);
+    Stream.SetBuffered();
+    writePatchRanges(Stream, Overlay);
+    Stream.flush();
+    return Text;
+  }
+  std::string sidecarRows() const {
+    std::string Text;
+    llvm::raw_string_ostream Stream(Text);
+    Stream.SetBuffered();
+    writePatchSidecarRows(Stream, Overlay);
+    Stream.flush();
+    return Text;
   }
 };
 
@@ -225,6 +250,9 @@ TEST_F(BytePatch, SerializedRowsKeepProtocolAndSidecarBytes) {
   };
   EXPECT_EQ(Serialize(0), "[]");
   EXPECT_EQ(Serialize(2), "[]");
+  EXPECT_EQ(compactRows(), "[]");
+  EXPECT_EQ(compactRanges(), "[]");
+  EXPECT_EQ(sidecarRows(), "[]");
   ASSERT_FALSE(Overlay.apply(Img, *Input, 0x1004, {0xff}, PatchKind::Bytes));
   ASSERT_FALSE(Overlay.apply(Img, *Input, 0x1000, {0x90}, PatchKind::Nop));
   const std::string Compact =
@@ -250,7 +278,9 @@ TEST_F(BytePatch, SerializedRowsKeepProtocolAndSidecarBytes) {
   }
 ])";
   EXPECT_EQ(Serialize(0), Compact);
+  EXPECT_EQ(compactRows(), Compact);
   EXPECT_EQ(Serialize(2), Sidecar);
+  EXPECT_EQ(sidecarRows(), Sidecar);
   auto Parsed = parsePatchRows(Sidecar);
   ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
   EXPECT_TRUE(std::equal(Parsed->begin(), Parsed->end(), Overlay.rows().begin(),
@@ -319,12 +349,23 @@ TEST_F(BytePatch, SerializedAddressesKeepEveryHexadecimalDigit) {
       Expected.push_back(std::move(Row));
     }
     ASSERT_FALSE(Overlay.replace(Img, *Input, Expected));
+    llvm::json::Array ExpectedRanges;
+    for (const auto &Row : Expected)
+      ExpectedRanges.emplace_back(llvm::json::Object{
+          {"address", Hex(Row.Address)}, {"size", Row.size()}});
+    EXPECT_EQ(compactRanges(),
+              llvm::formatv("{0}", llvm::json::Value(std::move(ExpectedRanges)))
+                  .str());
     for (unsigned Indent : {0u, 2u, 4u}) {
       SCOPED_TRACE(Indent);
       std::string Text;
       llvm::raw_string_ostream Stream(Text);
       llvm::json::OStream Output(Stream, Indent);
       writePatchRows(Output, Overlay);
+      if (Indent == 0)
+        EXPECT_EQ(compactRows(), Text);
+      if (Indent == 2)
+        EXPECT_EQ(sidecarRows(), Text);
       auto Parsed = llvm::json::parse(Text);
       ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
       const auto *Array = Parsed->getAsArray();
@@ -341,6 +382,111 @@ TEST_F(BytePatch, SerializedAddressesKeepEveryHexadecimalDigit) {
       ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
       EXPECT_EQ(*Rows, Expected);
     }
+  }
+}
+
+TEST_F(BytePatch, SerializedRowsKeepIndependentSchemaAndNestedFormatting) {
+  const uint64_t Sizes[] = {1, 9, 10, 99, 100, 255, 256, 999, 1000, 65536};
+  const std::pair<PatchKind, const char *> Kinds[] = {
+#define NEVERD_PATCH_KIND(Id, Spelling) {PatchKind::Id, Spelling},
+#include "neverd/patch/PatchKinds.def"
+  };
+  size_t Extent = 0;
+  for (uint64_t Size : Sizes)
+    Extent += Size + 1;
+  const uint64_t Base = std::numeric_limits<uint64_t>::max() - Extent - 16;
+  std::vector<uint8_t> Initial(Extent, 0xcc);
+  std::vector<PatchRow> Expected;
+  uint64_t Offset = 0;
+  for (size_t I = 0; I < std::size(Sizes); ++I) {
+    PatchRow Row;
+    Row.FileOffset = Offset;
+    Row.Address = Base + Offset;
+    Row.Kind = Kinds[I % std::size(Kinds)].first;
+    for (uint64_t J = 0; J < Sizes[I]; ++J) {
+      const auto OriginalByte = static_cast<uint8_t>(J);
+      Initial[Offset + J] = OriginalByte;
+      Row.Original.push_back(OriginalByte);
+      Row.Current.push_back(OriginalByte ^ 0xff);
+    }
+    Expected.push_back(std::move(Row));
+    Offset += Sizes[I] + 1;
+  }
+  reset(std::move(Initial));
+  Img.Segments[0].VA = Base;
+  Img.Sections[0].VA = Base;
+  auto Opened = InputFile::open(Path, Img);
+  ASSERT_TRUE(bool(Opened)) << llvm::toString(Opened.takeError());
+  Input = std::move(*Opened);
+  ASSERT_FALSE(Overlay.replace(Img, *Input, Expected));
+  ASSERT_EQ(Overlay.rows().size(), Expected.size());
+
+  const auto Hex = [](uint64_t Value) {
+    std::ostringstream Stream;
+    Stream << "0x" << std::hex << Value;
+    return Stream.str();
+  };
+  const auto Bytes = [](llvm::ArrayRef<uint8_t> Data) {
+    std::ostringstream Stream;
+    Stream << std::hex << std::setfill('0');
+    for (uint8_t Byte : Data)
+      Stream << std::setw(2) << static_cast<unsigned>(Byte);
+    return Stream.str();
+  };
+  llvm::json::Array ExpectedJSON, ExpectedRanges;
+  for (size_t I = 0; I < Expected.size(); ++I) {
+    const auto &Row = Expected[I];
+    ExpectedJSON.emplace_back(
+        llvm::json::Object{{"addr", Hex(Row.FileOffset)},
+                           {"current", Bytes(Row.Current)},
+                           {"file_off", Hex(Row.FileOffset)},
+                           {"kind", Kinds[I % std::size(Kinds)].second},
+                           {"original", Bytes(Row.Original)},
+                           {"size", Sizes[I]},
+                           {"va", Hex(Row.Address)}});
+    ExpectedRanges.emplace_back(
+        llvm::json::Object{{"address", Hex(Row.Address)}, {"size", Sizes[I]}});
+  }
+  const llvm::json::Value ExpectedValue(std::move(ExpectedJSON));
+  const auto Compact = compactRows();
+  EXPECT_EQ(Compact, llvm::formatv("{0}", ExpectedValue).str());
+  const auto Sidecar = llvm::formatv("{0:2}", ExpectedValue).str();
+  EXPECT_EQ(sidecarRows(), Sidecar);
+  // Exercise the raw-value wrapper and owner newline used by SDK saves.
+  std::string Saved;
+  {
+    llvm::raw_string_ostream Stream(Saved);
+    llvm::json::OStream Output(Stream, 2);
+    Output.rawValue(
+        [&](llvm::raw_ostream &Raw) { writePatchSidecarRows(Raw, Overlay); });
+    Stream << '\n';
+  }
+  EXPECT_EQ(Saved, Sidecar + '\n');
+  EXPECT_EQ(
+      compactRanges(),
+      llvm::formatv("{0}", llvm::json::Value(std::move(ExpectedRanges))).str());
+  auto Parsed = parsePatchRows(Compact);
+  ASSERT_TRUE(bool(Parsed)) << llvm::toString(Parsed.takeError());
+  EXPECT_EQ(*Parsed, Expected);
+  for (unsigned Indent : {0u, 2u, 4u}) {
+    SCOPED_TRACE(Indent);
+    const auto Nested = [&](bool UseRows) {
+      std::string Text;
+      llvm::raw_string_ostream Stream(Text);
+      llvm::json::OStream Output(Stream, Indent);
+      Output.object([&] {
+        Output.attribute("before", true);
+        Output.attributeBegin("rows");
+        if (UseRows)
+          writePatchRows(Output, Overlay);
+        else
+          Output.value(ExpectedValue);
+        Output.attributeEnd();
+        Output.attribute("after", "tail");
+      });
+      return Text;
+    };
+    EXPECT_EQ(Nested(true), Nested(false));
   }
 }
 
@@ -710,6 +856,9 @@ TEST_F(BytePatch, ReplayIndexesKeepNonmonotonicVirtualAddresses) {
   std::reverse(Rows.begin(), Rows.end());
   ASSERT_FALSE(Overlay.replace(Img, *Input, std::move(Rows)));
   ASSERT_EQ(Overlay.rows().size(), 3u);
+  EXPECT_EQ(compactRanges(), R"([{"address":"0xffff800000002000","size":16},)"
+                             R"({"address":"0x1000","size":16},)"
+                             R"({"address":"0x9000","size":16}])");
   for (const auto &[Offset, Address] : Mapping) {
     SCOPED_TRACE(Offset);
     const auto Found = Overlay.rowsIn(Address + 4, 2);
@@ -733,6 +882,10 @@ TEST_F(BytePatch, ReplayIndexesKeepNonmonotonicVirtualAddresses) {
   EXPECT_FALSE(Overlay.changes(0x1004, 3));
   EXPECT_EQ(Overlay.rows().at(16).size(), 4u);
   EXPECT_EQ(Overlay.rows().at(23).size(), 9u);
+  EXPECT_EQ(compactRanges(), R"([{"address":"0xffff800000002000","size":16},)"
+                             R"({"address":"0x1000","size":4},)"
+                             R"({"address":"0x1007","size":9},)"
+                             R"({"address":"0x9000","size":16}])");
   std::fill(Expected.begin() + 20, Expected.begin() + 23, 0xcc);
   const auto Output = Directory / "reversed-addresses.bin";
   ASSERT_FALSE(exportPatches(Img, *Input, Overlay, Output));

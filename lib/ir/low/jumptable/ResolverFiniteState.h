@@ -206,7 +206,10 @@ std::optional<uint64_t> readonlyScalarEnvelope(
           Op.Output.Size <= 8 && Op.MemoryOrdering == NdMemoryOrdering::None &&
           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
           isAddress(Op.Inputs[0])) {
-        if (auto Address = valueOf(Op.Inputs[0])) {
+        // The image's own headers describe the image that runs, not this
+        // file: a read of them stays unknown (BinaryImage::imageBaseOffset).
+        if (auto Address = valueOf(Op.Inputs[0]);
+            Address && !Image.imageBaseOffset(*Address)) {
           if (!charge(lookupCost(ReadCache.size()) * 2 + 8))
             return {};
           auto [It, Inserted] =

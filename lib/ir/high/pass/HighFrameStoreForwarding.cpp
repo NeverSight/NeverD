@@ -83,7 +83,8 @@ bool hasValidShape(const HighExpr &E) {
   case ExprKind::UnaryOp:
     return E.Operands.size() == 1;
   case ExprKind::BinOp:
-    return E.Operands.size() == (E.Op == NdOp::FLOAT_FMA ? 3u : 2u);
+    return E.Operands.size() ==
+           (E.Op == NdOp::FLOAT_FMA || E.Op == NdOp::SELECT ? 3u : 2u);
   default:
     return true;
   }
@@ -643,6 +644,7 @@ void invalidateWrittenVariable(std::map<int64_t, StoredFrameValue> &Stores,
 // \p Validated says the caller has just proven \p Func straight-line.
 static void forwardLinearPrivateFrameLoads(HighFunc &Func, Arch Architecture,
                                            size_t &Budget,
+                                           const FrameAliases &KnownAliases,
                                            bool Validated = false) {
   if (Architecture == Arch::Unknown)
     return;
@@ -660,7 +662,7 @@ static void forwardLinearPrivateFrameLoads(HighFunc &Func, Arch Architecture,
   // spills can precede a frame-pointer assignment, so requiring a contiguous
   // alias-only prefix loses otherwise exact private-frame accesses.  Following
   // statement order also keeps an alias unavailable to earlier reads.
-  FrameAliases Aliases;
+  FrameAliases Aliases = KnownAliases;
   const auto Alias = [&](const MedVar &V) -> ExprPtr {
     auto It = Aliases.find(highSourceLocalIdentity(V));
     return It == Aliases.end() ? nullptr : It->second;
@@ -1371,10 +1373,9 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
   Context.FrameSize = Func.FrameSize;
   Context.FrameHeadroom = Func.FrameHeadroom;
   const auto Entries = gotoTargets(Func.Body);
-  // A single-definition entry-prefix frame alias dominates every later
-  // region. Preserve that address proof across calls, without preserving any
-  // stored bytes. This is the same entry-prefix rule used by private-frame
-  // dead-store analysis; aliases discovered inside a branch remain local.
+  // Immutable frame addresses survive calls. Stored bytes do not. Learn each
+  // address only after its assignment, and keep branch/loop-local definitions
+  // inside the scope they dominate.
   std::map<LocalIdentity, unsigned> Definitions;
   bool UnsupportedFrame = false;
   std::set<LocalIdentity> AddressTaken;
@@ -1397,6 +1398,11 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
         --Remaining;
         if (!E || !Observed.insert(E.get()).second)
           continue;
+        for (const MedVar &Output : E->IntrinsicOutputs) {
+          ++Definitions[highSourceLocalIdentity(Output)];
+          UnsupportedFrame |=
+              isSyntheticEntryStackPointer(Output, Func, Architecture);
+        }
         if (E->Kind == ExprKind::Addr && E->Operands.size() == 1 &&
             E->Operands[0] && E->Operands[0]->Kind == ExprKind::Var)
           AddressTaken.insert(highSourceLocalIdentity(E->Operands[0]->Var));
@@ -1407,47 +1413,49 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
   });
   if (UnsupportedFrame || !Remaining)
     return false;
-  FrameAliases DominatingAliases;
-  const auto Alias = [&](const MedVar &V) -> ExprPtr {
-    const auto I = DominatingAliases.find(highSourceLocalIdentity(V));
-    return I == DominatingAliases.end() ? nullptr : I->second;
-  };
-  std::vector<HighStmt> Prefix;
-  for (const auto &S : Func.Body) {
+  const auto LearnAlias = [&](const HighStmt &S, FrameAliases &Aliases) {
     if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
-        S.Dst->Kind != ExprKind::Var || S.Dst->Var.Kind == MedVar::Stack ||
-        !S.Dst->Type ||
+        S.Dst->Kind != ExprKind::Var || !replayableIntegerNode(*S.Dst) ||
         S.Dst->Type->Size != getTargetRegInfo(Architecture).PointerSize ||
         S.Dst->Var.Size != S.Dst->Type->Size ||
         AddressTaken.count(highSourceLocalIdentity(S.Dst->Var)) ||
-        Definitions[highSourceLocalIdentity(S.Dst->Var)] != 1 ||
-        !high_detail::frameAddressOffset(S.Val, Func, Architecture, Remaining,
+        Definitions[highSourceLocalIdentity(S.Dst->Var)] != 1)
+      return false;
+    const auto Alias = [&](const MedVar &V) -> ExprPtr {
+      const auto I = Aliases.find(highSourceLocalIdentity(V));
+      return I == Aliases.end() ? nullptr : I->second;
+    };
+    if (!high_detail::frameAddressOffset(S.Val, Func, Architecture, Remaining,
                                          0, Alias))
+      return false;
+    Aliases.emplace(highSourceLocalIdentity(S.Dst->Var), S.Val);
+    return true;
+  };
+  // Only the entry prefix is valid at an arbitrary goto target. Locally
+  // learned addresses are discarded there, so a jump cannot skip their defs.
+  FrameAliases EntryAliases;
+  for (const auto &S : Func.Body) {
+    if (high_detail::isEmptyBlockAnchor(S))
+      continue;
+    if (!isStraightLinePrivateFrameFunction(llvm::ArrayRef<HighStmt>(S),
+                                            Context, Architecture, Remaining) ||
+        !LearnAlias(S, EntryAliases))
       break;
-    DominatingAliases.emplace(highSourceLocalIdentity(S.Dst->Var), S.Val);
-    Prefix.push_back(S);
   }
-  // Every region below starts with this prefix: prove it once.
-  bool PrefixValid = Prefix.empty();
-  if (!PrefixValid) {
-    size_t Budget = Remaining;
-    PrefixValid = isStraightLinePrivateFrameFunction(Prefix, Context,
-                                                     Architecture, Budget);
-    Remaining = Budget;
-  }
+  // Returns whether control can enter \p Body other than at its start: a goto
+  // target anywhere in it, or a subtree too deep to walk.
   const auto Forward = [&](auto &&Self, std::vector<HighStmt> &Body,
-                           unsigned Depth) -> void {
+                           FrameAliases VisibleAliases,
+                           unsigned Depth) -> bool {
     if (Depth > ::neverd::limits::ir::kMaxPrivateFrameLeafDepth)
-      return;
+      return true;
+    bool Entered = false;
     size_t First = 0;
+    FrameAliases RegionAliases = VisibleAliases;
     const auto Flush = [&](size_t End, HighStmt *Call = nullptr) {
       if (End <= First || !Remaining)
         return;
       HighFunc Region = Context;
-      const bool AtEntry = &Body == &Func.Body && First == 0;
-      if (!AtEntry)
-        Region.Body = Prefix;
-      const size_t PrefixCount = Region.Body.size();
       Region.Body.insert(Region.Body.end(), Body.begin() + First,
                          Body.begin() + End);
       const size_t Count = Region.Body.size();
@@ -1489,23 +1497,22 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
       }
       // If a call input contains an effect, still optimize the preceding
       // region, but never speculate about argument evaluation order.
-      // Each statement of the region already passed this proof alone, and the
-      // prefix passed it above: only the exposed call inputs remain.
+      // Each statement of the region already passed this proof alone:
+      // only the exposed call inputs remain.
       size_t Budget = Remaining;
-      const bool Valid =
-          (AtEntry || PrefixValid) &&
-          isStraightLinePrivateFrameFunction(
-              llvm::ArrayRef<HighStmt>(Region.Body).drop_front(Count), Region,
-              Architecture, Budget);
+      const bool Valid = isStraightLinePrivateFrameFunction(
+          llvm::ArrayRef<HighStmt>(Region.Body).drop_front(Count), Region,
+          Architecture, Budget);
       if (!Valid) {
         Region.Body.resize(Count);
         Inputs.clear();
       }
       Remaining = Budget;
       // A region the proof above accepted is not proven again.
-      forwardLinearPrivateFrameLoads(Region, Architecture, Remaining, Valid);
-      for (size_t I = PrefixCount; I < Count; ++I)
-        Body[First + I - PrefixCount] = std::move(Region.Body[I]);
+      forwardLinearPrivateFrameLoads(Region, Architecture, Remaining,
+                                     RegionAliases, Valid);
+      for (size_t I = 0; I < Count; ++I)
+        Body[First + I] = std::move(Region.Body[I]);
       if (Root && !Inputs.empty()) {
         if ((*Root)->Kind != ExprKind::Call) {
           *Root = Region.Body[Count].Val;
@@ -1532,9 +1539,11 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
     };
     for (size_t I = 0; I < Body.size() && Remaining; ++I) {
       auto &S = Body[I];
-      if (Entries.count(S.Addr) && I > First) {
+      if (Entries.count(S.Addr) && (&Body != &Func.Body || I != 0)) {
+        Entered = true;
         Flush(I);
         First = I;
+        VisibleAliases = RegionAliases = EntryAliases;
       }
       // Reuse the original shape/effect validator on this individual
       // statement, in place: a compound statement fails without its children
@@ -1547,21 +1556,31 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
       if (Plain && S.Kind == StmtKind::Return) {
         Flush(I + 1);
         First = I + 1;
+        VisibleAliases = RegionAliases = EntryAliases;
         continue;
       }
-      if (Plain)
+      if (Plain) {
+        LearnAlias(S, VisibleAliases);
         continue;
+      }
       Flush(I, &S);
       First = I + 1;
-      Self(Self, S.Body, Depth + 1);
-      Self(Self, S.ElseBody, Depth + 1);
-      Self(Self, S.DefaultBody, Depth + 1);
+      bool Nested = Self(Self, S.Body, VisibleAliases, Depth + 1);
+      Nested |= Self(Self, S.ElseBody, VisibleAliases, Depth + 1);
+      Nested |= Self(Self, S.DefaultBody, VisibleAliases, Depth + 1);
       for (auto &Case : S.Cases)
-        Self(Self, Case.Body, Depth + 1);
+        Nested |= Self(Self, Case.Body, VisibleAliases, Depth + 1);
+      // A jump to a label inside the statement can skip this scope's earlier
+      // definitions, and control then falls out of it to what follows.
+      if (Nested)
+        VisibleAliases = EntryAliases;
+      Entered |= Nested;
+      RegionAliases = VisibleAliases;
     }
     Flush(Body.size());
+    return Entered;
   };
-  Forward(Forward, Func.Body, 0);
+  (void)Forward(Forward, Func.Body, FrameAliases{}, 0);
   return AcrossJoins &&
          FrameWritebacks(Func, Architecture, Remaining, Entries).run();
 }

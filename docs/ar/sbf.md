@@ -262,7 +262,7 @@ selector الذي تنشره واجهته: فهرس متغير bincode لبرا�
 إلا عند وجود `scratch consumer` حقيقي؛ والبرامج التي لا تملك هذا المستهلك تتجاوز
 `whole-CFG fixed point`. يعرّف `SBFAnalysisLimits.def` سياسة المضيف (`analysis policy`)
 لا `protocol limits`: يحدّد `MaxModeledScratchBytes` مقدار 1,024 bytes لكل
-`program point`، ويقدّر `ScratchFlowRetainedByteBudget` مقدار 8,388,608 في
+`program point`، ويقدّر `ScratchFlowRetainedByteBudget` مقدار 16,777,216 في
 `logical retained estimate`. عند تجاوز الميزانية يوسّع الاسترجاع صراحة إلى
 `ScratchRecoveryPrecision::BlockLocal`. لا تُفقد إلا `cross-block must-facts`، وتبقى
 `block-local replay` تبقى `sound`، مع إمكان استعادة `same-block stores`.

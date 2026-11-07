@@ -104,7 +104,7 @@ MedLLVMEmitter::atomicIntrinsicAddressInput(const MedOp &Op) const {
 
 llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
                                            llvm::IRBuilder<> &Builder) {
-  if (isMedRawEnvironmentRequirement(Op))
+  if (isMedRawEnvironmentRequirement(Op) || isMedArchitecturalValue(Op))
     llvm::report_fatal_error(
         "raw environment requirement has no LLVM runtime contract");
   if (!hasValidMedIntrinsicId(Op))
@@ -134,6 +134,8 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     return emitX86AmxState(Op, Builder);
   if (isX86RepStateIntrinsic(IC))
     return emitX86RepState(Op, IC, Builder);
+  if (IC == Intrinsic::X64CallRCX)
+    return emitX64CallRCX(Op, Builder);
   if (isX86BoundedLeafIntrinsic(IC))
     return emitX86BoundedLeaf(Op, IC, Builder);
   if (isX86BoundedLeafPending(IC))
@@ -143,6 +145,8 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
   if (isX86SystemStateIntrinsic(IC) || IC == I::X86MsrAccess)
     return emitX86SystemState(Op, IC, Builder);
 
+  if (IC == Intrinsic::X86HleState)
+    return emitX86Hle(Op, Builder);
   if (isX86VirtualizationIntrinsic(IC))
     return emitX86Virtualization(Op, IC, Builder);
 

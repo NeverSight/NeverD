@@ -24,6 +24,7 @@
 #include "HexView.h"
 #include "InstanceServer.h"
 #include "InteractionMetrics.h"
+#include "InterpreterRecoveryDialog.h"
 #include "JumpDialog.h"
 #include "LinkDispatch.h"
 #include "LinkOpener.h"
@@ -125,6 +126,7 @@
 #include <QTreeWidget>
 #include <QUrl>
 #include <QWindow>
+#include <QtConcurrent/QtConcurrentRun>
 #include <cmath>
 #include <functional>
 #include <kddockwidgets/LayoutSaver.h>
@@ -441,6 +443,45 @@ private:
   QTimer timer_;
   int accepted_ = 0;
 };
+
+#ifndef Q_OS_WIN
+/// A stand-in for this program, for MainWindow::setWorkbenchProgram, that
+/// records the command line it receives.
+class WorkbenchStandIn {
+public:
+  /// Write it before starting a worker, which could inherit it open for
+  /// writing and keep it from running.
+  explicit WorkbenchStandIn(const QTemporaryDir &directory)
+      : record_(directory.filePath(QStringLiteral("arguments"))),
+        program_(directory.filePath(QStringLiteral("workbench"))) {
+    QFile script(program_);
+    if (script.open(QIODevice::WriteOnly))
+      script.write(QStringLiteral("#!/bin/sh\n"
+                                  "printf '%s\\n' \"$@\" > \"%1.part\"\n"
+                                  "mv \"%1.part\" \"%1\"\n")
+                       .arg(record_)
+                       .toUtf8());
+    script.close();
+    script.setPermissions(script.permissions() | QFile::ExeOwner);
+  }
+  QString program() const { return program_; }
+  /// The next command line, none when none comes in \p timeoutMs.
+  QStringList received(int timeoutMs = OpenTimeoutMs) const {
+    if (!QTest::qWaitFor([this] { return QFile::exists(record_); }, timeoutMs))
+      return {};
+    QFile arguments(record_);
+    if (!arguments.open(QIODevice::ReadOnly))
+      return {};
+    const QStringList lines = QString::fromUtf8(arguments.readAll())
+                                  .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    arguments.remove();
+    return lines;
+  }
+
+private:
+  QString record_, program_;
+};
+#endif
 
 bool dropFile(QWidget *target, const QString &path) {
   QMimeData mime;
@@ -2780,6 +2821,65 @@ private slots:
     QVERIFY(!bench.window->findChild<FindInViewDialog *>());
   }
 
+  void bracketUnderTheCursorPairsWithItsPartner() {
+    // As in Hex-Rays, the bracket the cursor is on pairs with its partner,
+    // nested or lines away, while one of a string or comment, or the one
+    // before the cursor, pairs with nothing.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "code-brackets.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    bench.window->disassembly()->navigate(Base + 0x140);
+    QTRY_COMPARE(bench.window->disassembly()->currentFunction(),
+                 std::optional<Address>(Base + 0x140));
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    auto *code = bench.codeView("source")->text();
+    QTRY_VERIFY(code->complete());
+    const QStringList source = code->allText().split(QLatin1Char('\n'));
+    QCOMPARE(code->lineCount(), source.size());
+    // Put the cursor on the first match after a line, as Find does.
+    const auto pairOf =
+        [&](int line,
+            const QString &text) -> std::optional<std::pair<int, int>> {
+      code->setCursorLine(line);
+      if (!code->findText(text, true))
+        return std::pair{-1, -1};
+      const auto pair = code->bracketPair();
+      if (!pair)
+        return std::nullopt;
+      if (pair->line != code->cursorLine() ||
+          pair->column != code->cursorColumn())
+        return std::pair{-2, -2};
+      return std::pair{pair->partnerLine, pair->partnerColumn};
+    };
+    using Place = std::optional<std::pair<int, int>>;
+    QCOMPARE(pairOf(0, QStringLiteral("(int32_t")),
+             Place(std::pair{1, int(source[1].indexOf(QLatin1Char(')')))}));
+    QCOMPARE(pairOf(0, QStringLiteral("{")), Place(std::pair{8, 0}));
+    QCOMPARE(pairOf(7, QStringLiteral("}")),
+             Place(std::pair{1, int(source[1].size()) - 1}));
+    QCOMPARE(pairOf(2, QStringLiteral("{v0")),
+             Place(std::pair{3, int(source[3].lastIndexOf(QLatin1Char('}')))}));
+    QCOMPARE(
+        pairOf(4, QStringLiteral("[(")),
+        Place(std::pair{5, int(source[5].indexOf(QStringLiteral("1)]"))) + 2}));
+    QCOMPARE(
+        pairOf(4, QStringLiteral("(v0 &")),
+        Place(std::pair{5, int(source[5].indexOf(QStringLiteral("1)]"))) + 1}));
+    QCOMPARE(pairOf(1, QStringLiteral("(v0]")), Place());
+    QCOMPARE(pairOf(4, QStringLiteral(") */")), Place());
+    QCOMPARE(pairOf(4, QStringLiteral("v1[0]); /*")), Place());
+    QCOMPARE(pairOf(4, QStringLiteral("; /*")), Place());
+    code->viewport()->grab();
+    // A folded block keeps its braces in view, around its summary.
+    code->setCursorLine(4);
+    QVERIFY(code->setCurrentBlockFolded(true));
+    QCOMPARE(code->lineCount(), source.size() - 1);
+    QCOMPARE(pairOf(3, QStringLiteral("{")), Place(std::pair{5, 2}));
+    code->viewport()->grab();
+  }
+
   void findInViewUnfoldsHiddenMatchesAndHonorsOptions() {
     QTemporaryDir directory;
     Workbench bench;
@@ -3205,6 +3305,50 @@ private slots:
     QVERIFY(view);
     QVERIFY(!view->isVisible());
     QCOMPARE(view->model().total(), 0);
+  }
+
+  void searchBeforeTheListingHasACursorKeepsItsResults() {
+    // A search started while the listing still waited for its first rows
+    // dropped its results when those rows placed the cursor, taking that for
+    // a move away from the search.
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("search-first.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *listing = bench.window->disassembly()->listing();
+    QTRY_VERIFY_WITH_TIMEOUT(listing->cursorLine() && !listing->jumpPending(),
+                             OpenTimeoutMs);
+    const auto results = [&]() -> ChooserView * {
+      for (auto *view : bench.window->findChildren<ChooserView *>())
+        if (view->model().kind() == ChooserKind::SearchResults)
+          return view;
+      return nullptr;
+    };
+    // The listing as a file just opened shows it, with no cursor yet.
+    listing->clear();
+    QVERIFY(!listing->currentAddress());
+    QTimer input;
+    connect(&input, &QTimer::timeout, &input, [&] {
+      if (auto *dialog =
+              qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+        dialog->setTextValue(QStringLiteral("string 42"));
+        dialog->accept();
+      }
+    });
+    input.start(5);
+    bench.action(ActionId::SearchText)->trigger();
+    input.stop();
+    // Its first rows, and with them the cursor, arrive before the search
+    // answers.
+    ListingView::Line line;
+    line.item = line.address = Base;
+    line.itemSize = 1;
+    line.kind = QStringLiteral("insn");
+    ListingViewTestAccess::showOnly(*listing, line, 0);
+    QCOMPARE(listing->currentItem(), std::optional<Address>(Base));
+    QTRY_VERIFY_WITH_TIMEOUT(results() && results()->model().total() > 0,
+                             OpenTimeoutMs);
   }
 
   void searchDuringAJumpStartsWhereTheJumpLands() {
@@ -4504,10 +4648,11 @@ private slots:
       return QPoint(qRound(left + metrics.horizontalAdvance(text.left(at))), y);
     };
     const auto on = [&](const QString &text, int at, int y) {
-      return QPoint(qRound(left + (metrics.horizontalAdvance(text.left(at)) +
-                                   metrics.horizontalAdvance(text.left(at + 1))) /
-                                      2),
-                    y);
+      return QPoint(
+          qRound(left + (metrics.horizontalAdvance(text.left(at)) +
+                         metrics.horizontalAdvance(text.left(at + 1))) /
+                            2),
+          y);
     };
     const auto click = [viewport](Qt::MouseButton button, QPoint at) {
       QTest::mouseClick(viewport, button, Qt::NoModifier, at);
@@ -4550,8 +4695,7 @@ private slots:
     click(Qt::LeftButton, on(prefix, colon, y));
     QCOMPARE(listing->selectedText(), listing->currentLineText());
     QCOMPARE(copied(), kept);
-    click(Qt::LeftButton,
-          on(prefix + QLatin1Char(' '), int(prefix.size()), y));
+    click(Qt::LeftButton, on(prefix + QLatin1Char(' '), int(prefix.size()), y));
     QCOMPARE(listing->selectedText(), listing->currentLineText());
     QCOMPARE(copied(), kept);
 
@@ -4676,10 +4820,10 @@ private slots:
     const auto found = words(current);
     const int blank = blankColumn(current);
     QVERIFY2(found.size() >= 2 && blank > 0, qPrintable(current));
-    const QString first = current.mid(found[0].first,
-                                      found[0].second - found[0].first);
-    const QString second = current.mid(found[1].first,
-                                       found[1].second - found[1].first);
+    const QString first =
+        current.mid(found[0].first, found[0].second - found[0].first);
+    const QString second =
+        current.mid(found[1].first, found[1].second - found[1].first);
     // The caret's place at a column of the row, reached by keys.
     const auto place = [&](int column) {
       home();
@@ -4760,8 +4904,8 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(code->complete() && code->allText().contains(access),
-                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        code->complete() && code->allText().contains(access), OpenTimeoutMs);
     // Ctrl+C with the cursor in the row holding the access, at a column of
     // \p needle.
     const auto copyAt = [&](const QString &needle, int offset) {
@@ -4784,6 +4928,186 @@ private slots:
     QCOMPARE(copyAt(access, dot + 2), access.mid(dot + 1));
     if (device)
       QCOMPARE(copyAt(QStringLiteral("Device->"), 1), QStringLiteral("Device"));
+  }
+
+  void lockedHighlightsStayAcrossMovesAndViews() {
+    // IDA's Lock highlight keeps words colored as the cursor moves on:
+    // Ctrl+Alt+1..8 lock or free a color and Ctrl+Alt+0 takes the first free
+    // one, from the disassembly or a code window.
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(writeFixture(directory, "fixture.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    assembly->navigate(Base + 0x50);
+    QTRY_COMPARE(assembly->currentFunction(),
+                 std::optional<Address>(Base + 0x50));
+    bench.window->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
+    auto *listing = assembly->listing();
+    QTRY_VERIFY(listing->cursorLine());
+    listing->setFocus();
+    QTRY_VERIFY(listing->hasFocus());
+    const auto &locks = bench.session.highlightLocks();
+    const auto key = [](QWidget *view, Qt::Key digit) {
+      QTest::keyClick(view, digit, Qt::ControlModifier | Qt::AltModifier);
+    };
+    // The cursor on `rbx` of function_5's `push rbx`.
+    for (int i = 0; i < 40 && !listing->cursorLine()->styled.text.contains(
+                                  QStringLiteral("rbx"));
+         ++i)
+      QTest::keyClick(listing, Qt::Key_Down);
+    const QString row = listing->cursorLine()->styled.text;
+    const int at = int(row.indexOf(QStringLiteral("rbx")));
+    QVERIFY2(at >= 0, qPrintable(row));
+    QTest::keyClick(listing, Qt::Key_Home);
+    for (int i = 0; i <= at; ++i)
+      QTest::keyClick(listing, Qt::Key_Right);
+    QCOMPARE(listing->currentToken(), QStringLiteral("rbx"));
+    key(listing, Qt::Key_1);
+    QCOMPARE(locks.word(0), QStringLiteral("rbx"));
+    // The word keeps its color with the cursor gone from it.
+    const QRect onWord = listing->cursorViewportRect();
+    QTest::keyClick(listing, Qt::Key_Home);
+    const QImage shown = listing->viewport()->grab().toImage();
+    const qreal ratio = shown.devicePixelRatio();
+    QCOMPARE(shown.pixelColor(int(onWord.x() * ratio),
+                              int((onWord.y() + 1) * ratio)),
+             Theme::instance().color(ColorRole::HighlightLock1));
+    QTest::keyClick(listing, Qt::Key_Down);
+    QCOMPARE(locks.word(0), QStringLiteral("rbx"));
+    key(listing, Qt::Key_1);
+    QVERIFY(locks.word(0).isEmpty());
+    QTest::keyClick(listing, Qt::Key_Up);
+    QTest::keyClick(listing, Qt::Key_Home);
+    for (int i = 0; i <= at; ++i)
+      QTest::keyClick(listing, Qt::Key_Right);
+    QCOMPARE(listing->currentToken(), QStringLiteral("rbx"));
+    key(listing, Qt::Key_0);
+    QCOMPARE(locks.word(0), QStringLiteral("rbx"));
+
+    // A code window locks the word under its own cursor.
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    auto *code = bench.codeView(QStringLiteral("source"))->text();
+    QTRY_VERIFY_WITH_TIMEOUT(code->complete(), OpenTimeoutMs);
+    code->setFocus();
+    QTRY_VERIFY(code->hasFocus());
+    code->setCursorLine(0);
+    const int word = int(code->selectedText().indexOf(QStringLiteral("code")));
+    QVERIFY2(word >= 0, qPrintable(code->selectedText()));
+    QTest::keyClick(code, Qt::Key_Home);
+    for (int i = 0; i <= word; ++i)
+      QTest::keyClick(code, Qt::Key_Right);
+    QCOMPARE(code->cursorWord(), QStringLiteral("code"));
+    key(code, Qt::Key_2);
+    QCOMPARE(locks.word(1), QStringLiteral("code"));
+    QCOMPARE(locks.word(0), QStringLiteral("rbx"));
+
+    // Search > Lock highlight lists the commands, each color with its swatch.
+    auto *menu =
+        bench.window->findChild<QMenu *>(QStringLiteral("menuLockHighlight"));
+    QVERIFY(menu);
+    QStringList commands;
+    for (auto *action : menu->actions())
+      if (!action->isSeparator()) {
+        commands.append(
+            action->shortcut().toString(QKeySequence::PortableText));
+        QVERIFY(!action->icon().isNull());
+      }
+    QCOMPARE(commands, (QStringList{"Ctrl+Alt+0", "Ctrl+Alt+1", "Ctrl+Alt+2",
+                                    "Ctrl+Alt+3", "Ctrl+Alt+4", "Ctrl+Alt+5",
+                                    "Ctrl+Alt+6", "Ctrl+Alt+7", "Ctrl+Alt+8"}));
+
+    // Closing the file frees every color.
+    bench.session.closeFile();
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.loaded(), OpenTimeoutMs);
+    QVERIFY(locks.word(0).isEmpty());
+    QVERIFY(locks.word(1).isEmpty());
+  }
+
+  void graphEdgesSelectAndShowTheirOtherEnd() {
+    // As in IDA, a click on a graph edge selects it and a hover shows the
+    // block at its far end: where it comes from beside its arrow, where it
+    // goes elsewhere.
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(writeFixture(directory, "fixture.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    // function_6 branches around a push and joins again.
+    assembly->navigate(Base + 0x60);
+    QTRY_COMPARE(assembly->currentFunction(),
+                 std::optional<Address>(Base + 0x60));
+    assembly->setGraphMode(true);
+    auto *graph = assembly->graph();
+    QTRY_VERIFY(assembly->graphMode() && graph->loaded());
+    bench.window->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
+    graph->setFocus();
+    QTest::keyClick(graph, Qt::Key_1);
+    // The middle of the longest segment of an edge with both ends.
+    int chosen = -1;
+    QPointF first, second;
+    qreal longest = 0;
+    for (int e = 0; e < graph->edges().size(); ++e) {
+      const auto &edge = graph->edges()[e];
+      if (edge.from < 0 || edge.to < 0)
+        continue;
+      for (int i = 1; i < edge.points.size(); ++i) {
+        const QPointF step = edge.points[i] - edge.points[i - 1];
+        if (const qreal length = std::hypot(step.x(), step.y());
+            length > longest) {
+          longest = length;
+          chosen = e;
+          first = edge.points[i - 1];
+          second = edge.points[i];
+        }
+      }
+    }
+    QVERIFY(chosen >= 0 && longest > 20);
+    const auto edge = graph->edges()[chosen];
+    // A scene point, brought into view, in the graph's coordinates.
+    const auto widgetOf = [graph](QPointF scene) {
+      graph->centerOn(scene);
+      const QRectF view = graph->visibleScene();
+      const qreal scale = graph->width() / view.width();
+      return QPoint(qRound((scene.x() - view.left()) * scale),
+                    qRound((scene.y() - view.top()) * scale));
+    };
+    // A point on the edge a little way from \p end toward \p next.
+    const auto beside = [](QPointF end, QPointF next) {
+      QPointF along = next - end;
+      const qreal length = std::hypot(along.x(), along.y());
+      return end + along / length * std::min<qreal>(12, length / 2);
+    };
+    QTest::mouseClick(graph, Qt::LeftButton, Qt::NoModifier,
+                      widgetOf((first + second) / 2));
+    QCOMPARE(graph->selectedEdge(), std::optional<int>(chosen));
+
+    const auto &source = graph->nodes()[edge.from];
+    const auto &target = graph->nodes()[edge.to];
+    const QString from = graph->hintAt(widgetOf(
+        beside(edge.points.back(), edge.points[edge.points.size() - 2])));
+    QVERIFY2(from.startsWith(QStringLiteral("<b>From ")), qPrintable(from));
+    QVERIFY2(from.contains(source.rows.back().styled.text.toHtmlEscaped()),
+             qPrintable(from));
+    const QString to =
+        graph->hintAt(widgetOf(beside(edge.points.front(), edge.points[1])));
+    QVERIFY2(to.startsWith(QStringLiteral("<b>To ") +
+                           displayAddress(target.start, 16)),
+             qPrintable(to));
+    QVERIFY2(to.contains(target.rows.front().styled.text.toHtmlEscaped()),
+             qPrintable(to));
+    // A hover asks for the same hint.
+    const QPoint near = widgetOf(beside(edge.points.front(), edge.points[1]));
+    QHelpEvent help(QEvent::ToolTip, near, graph->mapToGlobal(near));
+    QApplication::sendEvent(graph, &help);
+    QVERIFY(help.isAccepted());
+
+    // A click on a block lets the edge go.
+    QTest::mouseClick(graph, Qt::LeftButton, Qt::NoModifier,
+                      widgetOf(source.box.center()));
+    QVERIFY(!graph->selectedEdge());
   }
 
   void tabFromCodeUsesSelectedInstruction_data() {
@@ -6824,6 +7148,176 @@ private slots:
                  .toBool());
   }
 
+  void analysisReplicaRefinesSourceOnceItsCallSummariesAreReady() {
+    // The replica restores with call_summaries, solves them while no read
+    // waits, and the session reads shown source again exactly once.
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    QSignalSpy refined(&session, &Session::sourceRefined);
+    session.open(
+        writeFixture(directory, QStringLiteral("summaries-ready.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject owner;
+    const QJsonObject payload{{"address", hexAddress(Base)},
+                              {"representation", "source"}};
+    const auto read = [&] {
+      bool done = false;
+      session.analysisQueries(payload, &owner)
+          .subscribe({"decompile", payload}, &owner,
+                     [&](const QJsonObject &response) {
+                       done = response.value("status") == QLatin1String("ok");
+                     });
+      QTRY_VERIFY_WITH_TIMEOUT(done, OpenTimeoutMs);
+    };
+    read();
+    // The job runs across idle steps: about 4 s here, 9 s on a macOS runner.
+    QTRY_COMPARE_WITH_TIMEOUT(refined.count(), 1, NativeOpenTimeoutMs);
+    // Reads go on after the refinement, which later heartbeats repeat none of.
+    read();
+    read();
+    QCOMPARE(refined.count(), 1);
+    // Then the replica reads start in renders functions ahead.
+    QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                              QStringLiteral("done"), NativeOpenTimeoutMs);
+  }
+
+  void pseudocodeViewReadsWhatItsReplicaRenderedAhead() {
+    // A view asks under the options a function opens with.  If the job rendered
+    // under any others, its work would reach nobody, and nothing else shows it.
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(writeFixture(
+        directory, QStringLiteral("summaries-ready-source-cache.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject owner;
+    // Asking for C goes to the engine, which reports the pages it has answered.
+    int pages = 0;
+    const auto readPages = [&](quint64 address) {
+      pages = 0;
+      const QJsonObject function{{"address", hexAddress(address)},
+                                 {"representation", "c"}};
+      session.analysisQueries(function, &owner)
+          .subscribe({"decompile", function}, &owner,
+                     [&](const QJsonObject &response) {
+                       pages = response.value("payload")
+                                   .toObject()
+                                   .value("fixture_pages")
+                                   .toInt(-1);
+                     });
+      QTRY_VERIFY_WITH_TIMEOUT(pages != 0, OpenTimeoutMs);
+    };
+    readPages(Base);
+    QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                              QStringLiteral("done"), NativeOpenTimeoutMs);
+    readPages(Base + 16);
+    const int before = pages;
+    QVERIFY(before > 0);
+    CodeText code(session);
+    code.resize(900, 700);
+    code.show();
+    code.load(Base + 32, QStringLiteral("source"));
+    QTRY_VERIFY_WITH_TIMEOUT(code.complete(), NativeOpenTimeoutMs);
+    QVERIFY(!code.allText().isEmpty());
+    readPages(Base + 48);
+    QCOMPARE(pages, before + 1);
+  }
+
+  void analysisReplicaRendersNothingAheadForViewsOpeningUnderOptions() {
+    // Such views read none of the job's renders.
+    const auto forget = qScopeGuard(
+        [] { QSettings().remove(settings::SymbolicSimplification); });
+    SourceDefaults::instance().setSymbolic(true);
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    QSignalSpy refined(&session, &Session::sourceRefined);
+    session.open(
+        writeFixture(directory, QStringLiteral("summaries-ready.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject owner;
+    const QJsonObject payload{{"address", hexAddress(Base)},
+                              {"representation", "source"}};
+    bool done = false;
+    session.analysisQueries(payload, &owner)
+        .subscribe({"decompile", payload}, &owner,
+                   [&](const QJsonObject &response) {
+                     done = response.value("status") == QLatin1String("ok");
+                   });
+    QTRY_VERIFY_WITH_TIMEOUT(done, OpenTimeoutMs);
+    // Heartbeats report the job from its start, well before the summaries end.
+    QTRY_COMPARE_WITH_TIMEOUT(refined.count(), 1, NativeOpenTimeoutMs);
+    QVERIFY(session.analysisRenderAheadState().isEmpty());
+  }
+
+  void analysisReplicaRendersNothingAheadWithoutIdleAnalysis() {
+    // Analysis > Enabled turned off asks for no idle-time work on the file.
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    QSignalSpy refined(&session, &Session::sourceRefined);
+    LoadOptions options;
+    options.analysis = false;
+    session.open(writeFixture(directory, QStringLiteral("summaries-ready.bin")),
+                 options);
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject owner;
+    const QJsonObject payload{{"address", hexAddress(Base)},
+                              {"representation", "source"}};
+    bool done = false;
+    session.analysisQueries(payload, &owner)
+        .subscribe({"decompile", payload}, &owner,
+                   [&](const QJsonObject &response) {
+                     done = response.value("status") == QLatin1String("ok");
+                   });
+    QTRY_VERIFY_WITH_TIMEOUT(done, OpenTimeoutMs);
+    // Heartbeats report the job from its start, well before the summaries end.
+    QTRY_COMPARE_WITH_TIMEOUT(refined.count(), 1, NativeOpenTimeoutMs);
+    QVERIFY(session.analysisRenderAheadState().isEmpty());
+  }
+
+  void analysisReplicaRendersNothingAheadOnceThatEndedOne() {
+    // The fixture ends the worker when it prepares the second function, which
+    // only the job asks for here.  The replica that replaces it answers reads
+    // and does not render ahead, which would end it the same way.
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-crash-source-cache.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject owner;
+    QString status;
+    const auto read = [&](quint64 address) {
+      status.clear();
+      const QJsonObject function{{"address", hexAddress(address)},
+                                 {"representation", "source"}};
+      session.analysisQueries(function, &owner)
+          .subscribe({"decompile", function}, &owner,
+                     [&](const QJsonObject &response) {
+                       status = response.value("status").toString();
+                     });
+      QTRY_VERIFY_WITH_TIMEOUT(!status.isEmpty(), OpenTimeoutMs);
+    };
+    read(Base);
+    QCOMPARE(status, QStringLiteral("ok"));
+    QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                              QStringLiteral("pending"), NativeOpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(session.analysisRenderAheadState().isEmpty(),
+                             NativeOpenTimeoutMs);
+    // Another function, which no cached reply answers, starts a new replica.
+    read(Base + 32);
+    QCOMPARE(status, QStringLiteral("ok"));
+    // A replica asked to render ahead reports the job from its first
+    // heartbeats, until the render that ends it: watch for as long as that
+    // takes, not only at the end.
+    QElapsedTimer watched;
+    watched.start();
+    while (watched.elapsed() < 12000) {
+      QVERIFY(session.analysisRenderAheadState().isEmpty());
+      QTest::qWait(50);
+    }
+    read(Base + 48);
+    QCOMPARE(status, QStringLiteral("ok"));
+  }
+
   void prefetchedSourceAndForegroundUseTheSameAnalysisReplica() {
     QTemporaryDir directory;
     Session session(QString::fromLocal8Bit(TEST_WORKER));
@@ -7315,6 +7809,136 @@ private slots:
     QVERIFY(view->text()->status().contains("Transformation failed"));
   }
 
+  void interpreterRecoveryPublishesCompleteSourceAndKeepsRefusals() {
+    for (bool Refused : {false, true}) {
+      QTemporaryDir Directory;
+      Workbench Bench;
+      Bench.window->openFile(writeFixture(
+          Directory, Refused ? "recovery-refused.bin" : "recovery-source.bin"));
+      QTRY_VERIFY_WITH_TIMEOUT(Bench.session.loaded(), OpenTimeoutMs);
+      QVERIFY(Bench.session.recoversInterpreterSource());
+      Bench.window->disassembly()->navigate(Base);
+      QTRY_COMPARE(Bench.window->disassembly()->currentFunction(),
+                   std::optional<Address>(Base));
+      Bench.action(ActionId::JumpPseudocode)->trigger();
+      auto *View = Bench.codeView("source");
+      QVERIFY(View);
+      QTRY_VERIFY(!View->text()->loading() &&
+                  !View->text()->allText().isEmpty());
+      const auto Original = View->text()->allText();
+      QMenu Actions;
+      View->addSourceActions(Actions);
+      auto *Recover = Actions.findChild<QAction *>("sourceInterpreterRecovery");
+      QVERIFY(Recover && Recover->isEnabled());
+      Recover->trigger();
+      QTRY_VERIFY(!View->text()->loading());
+      QVERIFY(!View->text()->recoveryReport().isEmpty());
+      QCOMPARE(View->text()->recoveryReport().value("complete").toBool(),
+               !Refused);
+      if (Refused) {
+        QCOMPARE(View->text()->allText(), Original);
+        QVERIFY(View->text()->status().contains(
+            "fixture unresolved indirect branch"));
+        QVERIFY(View->text()->sourceOptions().isEmpty());
+      } else {
+        QVERIFY(View->text()->allText().contains("recovered_fixture"));
+        QVERIFY(View->text()->status().contains("3 blocks"));
+      }
+      QMenu ResultActions;
+      View->addSourceActions(ResultActions);
+      QVERIFY(
+          ResultActions.findChild<QAction *>("sourceInterpreterRecoveryReport")
+              ->isEnabled());
+      if (!Refused) {
+        QVERIFY(!ResultActions.findChild<QAction *>("sourceSymbolic"));
+        ResultActions.findChild<QAction *>("sourceInterpreterOrdinary")
+            ->trigger();
+        QTRY_VERIFY(!View->text()->loading());
+        QCOMPARE(View->text()->allText(), Original);
+      }
+      View->showFunction(Base + 16);
+      QTRY_VERIFY(!View->text()->loading());
+      QVERIFY(View->text()->recoveryReport().isEmpty());
+      QVERIFY(View->text()->recoveryOptions().isEmpty());
+    }
+  }
+
+  void interpreterRecoveryCancellationKeepsThePreviousDocument() {
+    QTemporaryDir Directory;
+    Workbench Bench;
+    QStringList Diagnostics;
+    connect(&Bench.session, &Session::message, this,
+            [&](const QString &Text, int) { Diagnostics.append(Text); });
+    Bench.window->openFile(writeFixture(Directory, "recovery-slow.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(Bench.session.loaded(), OpenTimeoutMs);
+    Bench.window->disassembly()->navigate(Base);
+    QTRY_COMPARE(Bench.window->disassembly()->currentFunction(),
+                 std::optional<Address>(Base));
+    Bench.action(ActionId::JumpPseudocode)->trigger();
+    auto *View = Bench.codeView("source");
+    QVERIFY(View);
+    QTRY_VERIFY(!View->text()->loading() && !View->text()->allText().isEmpty());
+    const auto Original = View->text()->allText();
+    View->text()->setSourceOptions(
+        {{"interpreter_recovery", InterpreterRecoveryDialog::defaults()}});
+    QTRY_VERIFY_WITH_TIMEOUT(
+        Diagnostics.join('\n').contains("fixture interpreter recovery started"),
+        5000);
+    QVERIFY(View->text()->loading());
+    QCOMPARE(View->text()->allText(), Original);
+    View->text()->cancelTransformation();
+    QTRY_VERIFY(!View->text()->loading());
+    QCOMPARE(View->text()->allText(), Original);
+    QVERIFY(View->text()->sourceOptions().isEmpty());
+    QVERIFY(View->text()->recoveryReport().isEmpty());
+  }
+
+  void interpreterRecoveryOptionsKeepMemoryPremisesExplicit() {
+    Theme::instance().apply();
+    InterpreterRecoveryDialog Dialog({});
+    QCOMPARE(Dialog.options(), InterpreterRecoveryDialog::defaults());
+    Dialog.show();
+    auto *Buttons = Dialog.findChild<QDialogButtonBox *>();
+    auto *Begin = Dialog.findChild<QLineEdit *>("entry_frame_begin");
+    auto *End = Dialog.findChild<QLineEdit *>("entry_frame_end");
+    auto *Nodes = Dialog.findChild<QLineEdit *>("max_nodes");
+    auto *Separation =
+        Dialog.findChild<QCheckBox *>("external_stores_disjoint_frame");
+    QVERIFY(Buttons && Begin && End && Nodes && Separation);
+    QVERIFY(Begin->text().isEmpty() && End->text().isEmpty() &&
+            !Separation->isChecked());
+    Begin->setText("-4096");
+    Buttons->button(QDialogButtonBox::Ok)->click();
+    QVERIFY(Dialog.isVisible());
+    QVERIFY(Dialog.findChild<QLabel *>("recoveryOptionsError")
+                ->text()
+                .contains("both"));
+    End->setText("4096");
+    Nodes->setText("4294967296");
+    Buttons->button(QDialogButtonBox::Ok)->click();
+    QVERIFY(Dialog.isVisible());
+    QVERIFY(Dialog.findChild<QLabel *>("recoveryOptionsError")
+                ->text()
+                .contains("Control-flow nodes"));
+    Nodes->setText("512");
+    const auto Captures = qEnvironmentVariable("NEVERD_GUI_TEST_CAPTURES");
+    if (!Captures.isEmpty()) {
+      QDir().mkpath(Captures);
+      for (auto Mode : {Theme::Mode::Dark, Theme::Mode::Light}) {
+        Theme::instance().setMode(Mode);
+        QTest::qWait(100);
+        QVERIFY(Dialog.grab().save(Captures + "/interpreter-options-" +
+                                   Theme::modeName(Mode) + ".png"));
+      }
+    }
+    Buttons->button(QDialogButtonBox::Ok)->click();
+    QCOMPARE(Dialog.result(), int(QDialog::Accepted));
+    QCOMPARE(Dialog.options().value("entry_frame_begin").toInteger(),
+             qint64(-4096));
+    QCOMPARE(Dialog.options().value("max_nodes").toInteger(), qint64(512));
+    QVERIFY(!Dialog.options().value("external_stores_disjoint_frame").toBool());
+  }
+
   void sourceTransformationProfilesAreIndependentAndResetOnNavigation() {
     QTemporaryDir directory;
     Workbench bench;
@@ -7583,18 +8207,28 @@ private slots:
         writeFixture(directory, QStringLiteral("pseudocode-large.bin")));
     QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
     QTRY_VERIFY(bench.window->disassembly()->currentFunction().has_value());
+    // The event loop turns while the pages arrive, and the view shows the
+    // first of them before the rest: loading never waits for the whole text.
+    // How long one turn takes depends on the host's load, not on the code, so
+    // the largest gap is reported rather than checked.
     QElapsedTimer elapsed;
     elapsed.start();
     qint64 longest = 0;
-    int ticks = 0;
+    int loadingTicks = 0;
+    bool partial = false;
+    CodeView *view = nullptr;
     QTimer heartbeat;
     connect(&heartbeat, &QTimer::timeout, this, [&] {
       longest = std::max(longest, elapsed.restart());
-      ++ticks;
+      if (!view || !view->text()->loading())
+        return;
+      ++loadingTicks;
+      const int lines = view->text()->lineCount();
+      partial = partial || (lines > 0 && lines < 20000);
     });
     heartbeat.start(5);
     bench.action(ActionId::ViewLLVMC)->trigger();
-    auto *view = bench.codeView(QStringLiteral("llvmc"));
+    view = bench.codeView(QStringLiteral("llvmc"));
     QVERIFY(view);
     QTRY_VERIFY_WITH_TIMEOUT(
         !view->text()->loading() &&
@@ -7603,9 +8237,8 @@ private slots:
     QTest::qWait(10);
     QVERIFY(view->text()->preludeFolded());
     QVERIFY(view->text()->lineCount() >= 20000);
-    QVERIFY(ticks > 1);
-    QVERIFY2(longest < 500,
-             qPrintable(QStringLiteral("UI event gap: %1 ms").arg(longest)));
+    QVERIFY(loadingTicks > 1);
+    QVERIFY(partial);
     qInfo() << "Largest event gap while rendering 20,000 source lines:"
             << longest << "ms";
   }
@@ -7742,6 +8375,80 @@ private slots:
           !row.first().toString().startsWith(QStringLiteral("Cannot jump to")));
   }
 
+  void restingOnACallShowsAnImportsType_data() {
+    QTest::addColumn<QString>("fixture");
+    QTest::addColumn<bool>("import");
+    QTest::newRow("import") << QStringLiteral("pseudocode-import.bin") << true;
+    QTest::newRow("image") << QStringLiteral("pseudocode-navigation.bin")
+                           << false;
+  }
+
+  void restingOnACallShowsAnImportsType() {
+    // As Hex-Rays' hint does, the mouse resting on the name of an import a
+    // call names shows its type, without the name the code already shows, and
+    // where each argument is passed. A function of the image hints nothing:
+    // only decompiling it types it, which a hover must not wait for.
+    QFETCH(QString, fixture);
+    QFETCH(bool, import);
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(writeFixture(directory, fixture));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    const Address caller = Base + 0x140, callee = Base + 0x160;
+    bench.session.editFunction(
+        callee, {{"type", "int64_t function_22(void *arg0, int64_t arg1)"}});
+    auto *disassembly = bench.window->disassembly();
+    disassembly->navigate(caller);
+    QTRY_COMPARE(disassembly->currentFunction(),
+                 std::optional<Address>(caller));
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    auto *code = bench.codeView(QStringLiteral("source"))->text();
+    QTRY_VERIFY_WITH_TIMEOUT(code->complete(), OpenTimeoutMs);
+    // Rest the mouse on the second character of a name of a line.
+    const QStringList source = code->allText().split(QLatin1Char('\n'));
+    const QFontMetricsF metrics(Theme::instance().codeFont());
+    const auto rest = [&](int line, const QString &name) {
+      const auto column = source.value(line).indexOf(name);
+      if (column < 0)
+        return false;
+      code->setCursorLine(line);
+      const QRect start = code->cursorViewportRect();
+      const QPoint point(
+          start.x() +
+              qRound(metrics.horizontalAdvance(source[line].left(column + 1)) +
+                     metrics.horizontalAdvance(QLatin1Char('M')) / 2),
+          start.center().y());
+      QHelpEvent help(QEvent::ToolTip, code->viewport()->mapTo(code, point),
+                      code->viewport()->mapToGlobal(point));
+      QApplication::sendEvent(code, &help);
+      return true;
+    };
+    // A hint the mouse left before the worker answered stays away, as does
+    // the type of a function of the image.
+    QVERIFY(rest(1, QStringLiteral("function_22")));
+    if (import) {
+      QEvent leave(QEvent::Leave);
+      QApplication::sendEvent(code->viewport(), &leave);
+    }
+    QTest::qWait(500);
+    QVERIFY(!QToolTip::isVisible());
+    if (import) {
+      const QString type = QStringLiteral("int64_t(void *arg0, int64_t arg1)");
+      QVERIFY(rest(1, QStringLiteral("function_22")));
+      QTRY_VERIFY_WITH_TIMEOUT(QToolTip::text().contains(type), OpenTimeoutMs);
+      const QString hint = QToolTip::text();
+      QVERIFY2(hint.contains(QStringLiteral("rcx  void *arg0")) &&
+                   hint.contains(QStringLiteral("rdx  int64_t arg1")) &&
+                   !hint.contains(QStringLiteral("function_22")),
+               qPrintable(hint));
+      QToolTip::hideText();
+    }
+    // A keyword hints nothing.
+    QVERIFY(rest(1, QStringLiteral("return")));
+    QTest::qWait(500);
+    QVERIFY(!QToolTip::isVisible());
+  }
+
   void pseudocodeFunctionLinksStayInTheirWindow_data() {
     QTest::addColumn<QString>("representation");
     QTest::addColumn<bool>("secondWindow");
@@ -7812,12 +8519,19 @@ private slots:
     // The call is row 1 in C, row 3 after LLVM C's folded prelude.
     const QFontMetricsF metrics(Theme::instance().codeFont());
     const int row = representation == QLatin1String("source") ? 1 : 3;
+    // LLVM C's text is long enough to scroll: show the call at the top, where
+    // Back must show it again.
+    code->verticalScrollBar()->setValue(row);
+    const int top = code->verticalScrollBar()->value();
+    QCOMPARE(top, representation == QLatin1String("source") ? 0 : row);
     const QPoint point(
         qRound(6 + 17 * metrics.horizontalAdvance(QLatin1Char('M'))),
         qRound((row - code->verticalScrollBar()->value() + 0.5) *
                std::ceil(metrics.lineSpacing())));
     QTest::mouseClick(code->viewport(), Qt::LeftButton, Qt::NoModifier, point);
     QCOMPARE(code->currentToken(), link);
+    const int line = code->cursorLine(), column = code->cursorColumn();
+    QVERIFY(column > 0);
     QTest::mouseDClick(code->viewport(), Qt::LeftButton, Qt::NoModifier, point);
     QCOMPARE(activation.size(), 1);
     if (representation == QLatin1String("llvmc"))
@@ -7831,6 +8545,11 @@ private slots:
     QTRY_VERIFY(code->hasFocus());
     QTRY_COMPARE(disassembly->currentFunction(),
                  std::optional<Address>(callee));
+    // A move in the callee, as a click on one of its rows makes, follows in
+    // the disassembly without a stop of its own: one Back leaves the callee.
+    disassembly->navigate(callee + 2, false);
+    QTRY_COMPARE(disassembly->currentAddress(),
+                 std::optional<Address>(callee + 2));
     QVERIFY(bench.action(ActionId::JumpBack)->isEnabled());
     bench.action(ActionId::JumpBack)->trigger();
     QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(caller),
@@ -7839,6 +8558,12 @@ private slots:
     QVERIFY(code->isVisible());
     QTRY_VERIFY(code->hasFocus());
     QCOMPARE(view->representation(), representation);
+    // The code is back where it left: the cursor on the call, in view as it
+    // was, as Hex-Rays' Esc returns.
+    QCOMPARE(code->cursorLine(), line);
+    QCOMPARE(code->cursorColumn(), column);
+    QCOMPARE(code->currentToken(), link);
+    QCOMPARE(code->verticalScrollBar()->value(), top);
     QVERIFY(bench.action(ActionId::JumpForward)->isEnabled());
     bench.action(ActionId::JumpForward)->trigger();
     QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(callee),
@@ -7846,6 +8571,9 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
     QVERIFY(code->isVisible());
     QTRY_VERIFY(code->hasFocus());
+    // Forward returns to where the callee was left.
+    QTRY_COMPARE(disassembly->currentAddress(),
+                 std::optional<Address>(callee + 2));
   }
 
   void functionsActivationKeepsCodeWindow_data() {
@@ -10030,6 +10758,9 @@ private slots:
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
                        settingsDirectory_.path());
+    // A test binary is no workbench to start again: what replaces a program
+    // does so here, and the test of the new instance turns this back on.
+    QSettings().setValue(settings::OpenInNewInstance, false);
     configureDocking();
     WindowFrame::frameDialogs(*qApp);
     if (privateWayland()) {
@@ -11010,6 +11741,707 @@ private slots:
              QJsonArray{QStringLiteral("windows-kernel-x64")});
   }
 
+  void newInstanceStartsAWorkbenchOfItsOwn() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+#ifndef Q_OS_WIN
+    const WorkbenchStandIn standIn(directory);
+#endif
+    Workbench bench;
+    auto *action = bench.action(ActionId::FileNewInstance);
+    // First in File, as IDA's, and there with or without a program open.
+    auto *file = bench.window->findChild<QMenu *>(QStringLiteral("menuFile"));
+    QVERIFY(file);
+    QCOMPARE(file->actions().first(), action);
+    QVERIFY(action->isEnabled());
+    LoadDialogAcceptor loadDialogs;
+    bench.window->openFile(writeFixture(directory, QStringLiteral("open.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    QVERIFY(action->isEnabled());
+    // A program that cannot start says why.
+    bench.window->setWorkbenchProgram(
+        directory.filePath(QStringLiteral("missing")));
+    action->trigger();
+    auto *log = bench.window->findChild<OutputWindow *>()
+                    ->findChild<QPlainTextEdit *>();
+    QVERIFY(log);
+    QTRY_VERIFY(log->toPlainText().contains(
+        QStringLiteral("Cannot start a new instance: ")));
+#ifndef Q_OS_WIN
+    bench.window->setWorkbenchProgram(standIn.program());
+    // The new workbench has this one's worker and kind of layout, and not its
+    // program: it starts as a start without a file does.
+    const QStringList inherited{QStringLiteral("--worker"),
+                                bench.session.workerPath(),
+                                QStringLiteral("--fresh-layout")};
+    action->trigger();
+    QCOMPARE(standIn.received(), inherited);
+    // A workbench on the user's own layout starts another on it.
+    const QString disposable =
+        bench.layout.filePath(QStringLiteral("layout.json"));
+    bench.window->setLayoutPath({});
+    action->trigger();
+    const QStringList arguments = standIn.received();
+    bench.window->setLayoutPath(disposable);
+    QCOMPARE(arguments, inherited.first(2));
+    // A link to a recent program nobody has open starts a workbench for it,
+    // which names its file and link after those.
+    const QString linked =
+        writeFixture(directory, QStringLiteral("linked.bin"));
+    const auto original = QSettings().value(settings::RecentFiles);
+    const auto restore = qScopeGuard([&] {
+      if (original.isValid())
+        QSettings().setValue(settings::RecentFiles, original);
+      else
+        QSettings().remove(settings::RecentFiles);
+    });
+    QSettings().setValue(settings::RecentFiles, QStringList{linked});
+    LinkOpener opener(*bench.window, bench.session);
+    qApp->installEventFilter(&opener);
+    const QUrl link(QStringLiteral("neverd:///linked.bin/addresses?ea=") +
+                    hexAddress(Base + 0x42));
+    QFileOpenEvent event(link);
+    QCoreApplication::sendEvent(qApp, &event);
+    QCOMPARE(standIn.received(),
+             inherited + QStringList({linked, link.toString()}));
+#endif
+  }
+
+  void aFilePickedWithAProgramOpenGoesToAWorkbenchOfItsOwn() {
+#ifdef Q_OS_WIN
+    QSKIP("The stand-in for the program is a shell script.");
+#else
+    QSettings().setValue(settings::OpenInNewInstance, true);
+    const auto off = qScopeGuard(
+        [] { QSettings().setValue(settings::OpenInNewInstance, false); });
+    const auto originalRecent = QSettings().value(settings::RecentFiles);
+    const auto restoreRecent = qScopeGuard([&] {
+      if (originalRecent.isValid())
+        QSettings().setValue(settings::RecentFiles, originalRecent);
+      else
+        QSettings().remove(settings::RecentFiles);
+    });
+    QTemporaryDir directory;
+    const WorkbenchStandIn standIn(directory);
+    const QString first = writeFixture(directory, QStringLiteral("first.bin"));
+    const QString second =
+        writeFixture(directory, QStringLiteral("second.bin"));
+    const QString held = writeFixture(directory, QStringLiteral("held.bin"));
+    Session holder(QString::fromLocal8Bit(TEST_WORKER));
+    holder.open(held);
+    QTRY_VERIFY_WITH_TIMEOUT(holder.loaded(), OpenTimeoutMs);
+
+    Workbench bench;
+    bench.window->setWorkbenchProgram(standIn.program());
+    LoadDialogAcceptor loadDialogs;
+    const QStringList inherited{QStringLiteral("--worker"),
+                                bench.session.workerPath(),
+                                QStringLiteral("--fresh-layout")};
+    // With nothing open, a file opens here.
+    QVERIFY(dropFile(bench.window.get(), first));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    QVERIFY(standIn.received(0).isEmpty());
+    bench.session.setComment(Base, QStringLiteral("staged here"));
+    QTRY_VERIFY(bench.session.dirty());
+
+    const auto pickRecent = [&](const QString &path) {
+      QSettings().setValue(settings::RecentFiles,
+                           QStringList{first, second, held});
+      auto *menu = bench.window->findChild<QMenu *>(QStringLiteral("menuFile"));
+      emit menu->aboutToShow();
+      for (auto *action : menu->actions())
+        if (action->property("recent").toBool() &&
+            action->text().endsWith(path)) {
+          action->trigger();
+          return true;
+        }
+      return false;
+    };
+    auto *log = bench.window->findChild<OutputWindow *>()
+                    ->findChild<QPlainTextEdit *>();
+    QVERIFY(log);
+    QSignalSpy asked(&bench.session, &Session::transitionRequested);
+    // Answered from here on, so that a question that should not come up fails
+    // this test instead of waiting for an answer.
+    QTimer answering;
+    auto answer = QMessageBox::Cancel;
+    connect(&answering, &QTimer::timeout, &answering, [&answer] {
+      if (auto *box =
+              qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+        box->button(answer)->click();
+    });
+    answering.start(5);
+    // Another file goes to a new workbench, which asks how to load what a
+    // drop names, and this one stays as it is, unsaved edits and all.
+    QVERIFY(dropFile(bench.window.get(), second));
+    QCOMPARE(standIn.received(),
+             inherited + QStringList({QStringLiteral("--ask-loader"), second}));
+    QVERIFY(pickRecent(second));
+    QCOMPARE(standIn.received(), inherited + QStringList({second}));
+    QCOMPARE(asked.size(), 0);
+    QCOMPARE(bench.session.filePath(), first);
+    QVERIFY(bench.session.dirty());
+
+    // A file another process holds starts nothing that could not have it.
+    QVERIFY(pickRecent(held));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        log->toPlainText().contains(QStringLiteral("may already be open")),
+        OpenTimeoutMs);
+    QVERIFY(standIn.received(0).isEmpty());
+    // A workbench that says it has the file comes to the front.
+    int raises = 0;
+    QString raisedWith = QStringLiteral("unset");
+    InstanceServer responder;
+    responder.setInfo(
+        [&held] { return QJsonObject{{"loaded", true}, {"project", held}}; });
+    responder.setRaiseHandler([&](const QString &token) {
+      ++raises;
+      raisedWith = token;
+    });
+    QVERIFY(responder.start());
+    QVERIFY(pickRecent(held));
+    QTRY_COMPARE_WITH_TIMEOUT(raises, 1, OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        log->toPlainText().contains(QStringLiteral("switching to it")),
+        OpenTimeoutMs);
+    QVERIFY(standIn.received(0).isEmpty());
+    QCOMPARE(bench.session.filePath(), first);
+    // The token that lets it take the focus reaches it.
+    auto handed = QtConcurrent::run([&held] {
+      return raiseWorkbenchWith(held, QStringLiteral("handed-token"));
+    });
+    QTRY_VERIFY_WITH_TIMEOUT(handed.isFinished(), OpenTimeoutMs);
+    QVERIFY(handed.result());
+    QCOMPARE(raisedWith, QStringLiteral("handed-token"));
+
+    // The file this workbench has stays here, which asks about the edits.
+    QVERIFY(pickRecent(first));
+    QTRY_COMPARE_WITH_TIMEOUT(asked.size(), 1, OpenTimeoutMs);
+    QVERIFY(standIn.received(0).isEmpty());
+
+    // Turned off, another file replaces the program here, as it asks first.
+    QSettings().setValue(settings::OpenInNewInstance, false);
+    answer = QMessageBox::Discard;
+    QSignalSpy opened(&bench.session, &Session::opened);
+    QVERIFY(pickRecent(second));
+    QTRY_COMPARE_WITH_TIMEOUT(opened.size(), 1, OpenTimeoutMs);
+    QCOMPARE(asked.size(), 2);
+    QCOMPARE(bench.session.filePath(), second);
+    QVERIFY(standIn.received(0).isEmpty());
+
+    // A file closed here is another file again, even while one is opening.
+    QSettings().setValue(settings::OpenInNewInstance, true);
+    answering.stop();
+    QTRY_VERIFY(!bench.session.dirty());
+    bench.session.closeFile();
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.connected(), OpenTimeoutMs);
+    bench.session.open(first);
+    QVERIFY(bench.session.opening());
+    QVERIFY(pickRecent(second));
+    QCOMPARE(standIn.received(), inherited + QStringList({second}));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    QCOMPARE(bench.session.filePath(), first);
+#endif
+  }
+
+  void aHiddenWorkbenchShowsWhenItsWorkerCannotAsk() {
+    QTemporaryDir directory;
+    const QString file = writeFixture(directory, QStringLiteral("asked.bin"));
+    {
+      // The worker stops while the question is on its way.
+      Workbench bench(QString::fromLocal8Bit(TEST_WORKER), false);
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.connected(), OpenTimeoutMs);
+      bench.window->askHowToLoad(file);
+      bench.session.restart();
+      QTRY_VERIFY_WITH_TIMEOUT(bench.window->isVisible(), OpenTimeoutMs);
+    }
+    // No worker can start at all: the workbench says so, and stays open.
+    const QString worker = directory.filePath(QStringLiteral("late-worker"));
+    Workbench bench(worker, false);
+    QSignalSpy closed(bench.window.get(), &MainWindow::shutdownAccepted);
+    bench.window->askHowToLoad(file);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.window->isVisible(), OpenTimeoutMs);
+    QCOMPARE(closed.size(), 0);
+#ifndef Q_OS_WIN
+    // Once one can, declining a load no longer closes it.
+    QVERIFY(QFile::link(QString::fromLocal8Bit(TEST_WORKER), worker));
+    bench.session.restart();
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.connected(), OpenTimeoutMs);
+    int declined = 0;
+    QTimer declining;
+    connect(&declining, &QTimer::timeout, &declining, [&declined] {
+      if (auto *dialog = qobject_cast<LoadFileDialog *>(
+              QApplication::activeModalWidget())) {
+        ++declined;
+        dialog->reject();
+      }
+    });
+    declining.start(10);
+    QVERIFY(dropFile(bench.window.get(), file));
+    QTRY_COMPARE_WITH_TIMEOUT(declined, 1, OpenTimeoutMs);
+    QTest::qWait(50);
+    QCOMPARE(closed.size(), 0);
+    QVERIFY(bench.window->isVisible());
+#endif
+  }
+
+  void aWorkbenchStartedToLoadAFileClosesWhenThatIsDeclined() {
+    QTemporaryDir directory;
+    const QString file = writeFixture(directory, QStringLiteral("asked.bin"));
+    {
+      Workbench bench(QString::fromLocal8Bit(TEST_WORKER), false);
+      QSignalSpy closed(bench.window.get(), &MainWindow::shutdownAccepted);
+      int declined = 0;
+      QTimer declining;
+      connect(&declining, &QTimer::timeout, &declining, [&declined] {
+        if (auto *dialog = qobject_cast<LoadFileDialog *>(
+                QApplication::activeModalWidget())) {
+          ++declined;
+          dialog->reject();
+        }
+      });
+      declining.start(10);
+      bench.window->askHowToLoad(file);
+      QTRY_COMPARE_WITH_TIMEOUT(closed.size(), 1, OpenTimeoutMs);
+      QCOMPARE(declined, 1);
+      QVERIFY(!bench.window->isVisible());
+      QVERIFY(!bench.session.loaded());
+    }
+    // Accepted, it loads the file and shows like any other.
+    Workbench bench(QString::fromLocal8Bit(TEST_WORKER), false);
+    LoadDialogAcceptor loadDialogs;
+    QSignalSpy closed(bench.window.get(), &MainWindow::shutdownAccepted);
+    bench.window->askHowToLoad(file);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    QVERIFY(loadDialogs.accepted() > 0);
+    QTRY_VERIFY(bench.window->isVisible());
+    QCOMPARE(closed.size(), 0);
+  }
+
+  void commandHistoryKeepsAnotherWorkbenchsLines() {
+    const QString key = QStringLiteral("output/history");
+    const auto original = QSettings().value(key);
+    const auto restore = qScopeGuard([&] {
+      if (original.isValid())
+        QSettings().setValue(key, original);
+      else
+        QSettings().remove(key);
+    });
+    QSettings().remove(key);
+    Workbench bench;
+    // Another workbench adds a line after this one read the history.
+    QSettings().setValue(key, QStringList{QStringLiteral("theirs")});
+    auto *command =
+        bench.window->findChild<OutputWindow *>()->findChild<QLineEdit *>();
+    QVERIFY(command);
+    command->setText(QStringLiteral("ours"));
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(QSettings().value(key).toStringList(),
+             QStringList({QStringLiteral("theirs"), QStringLiteral("ours")}));
+  }
+
+  void aRefusedOpenForgetsWhatWaitedForIt() {
+    QTemporaryDir directory;
+    const QString file = writeFixture(directory, QStringLiteral("held.bin"));
+    Session holder(QString::fromLocal8Bit(TEST_WORKER));
+    holder.open(file);
+    QTRY_VERIFY_WITH_TIMEOUT(holder.loaded(), OpenTimeoutMs);
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    QSignalSpy refused(&bench.session, &Session::openFailed);
+    // A command line and a link wait for the file named with them.
+    const QString waiting = QStringLiteral("waiting-command");
+    bench.window->runAfterOpen({waiting});
+    const auto parsed =
+        parseDeepLink(QStringLiteral("neverd:///held.bin/addresses?ea=") +
+                      hexAddress(Base + 0x44));
+    QVERIFY(parsed.link);
+    bench.window->openLinkAfterOpen(*parsed.link);
+    bench.window->openFile(file);
+    QTRY_COMPARE_WITH_TIMEOUT(refused.size(), 1, OpenTimeoutMs);
+    // The next file the user opens gets neither.
+    QSignalSpy opened(&bench.session, &Session::opened);
+    bench.window->openFile(writeFixture(directory, QStringLiteral("next.bin")));
+    QTRY_COMPARE_WITH_TIMEOUT(opened.size(), 1, OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.window->disassembly()->currentItem(),
+                             OpenTimeoutMs);
+    QTest::qWait(100);
+    QVERIFY(bench.window->disassembly()->currentItem() !=
+            std::optional<Address>(Base + 0x44));
+    auto *log = bench.window->findChild<OutputWindow *>()
+                    ->findChild<QPlainTextEdit *>();
+    QVERIFY(log);
+    QVERIFY2(!log->toPlainText().contains(waiting),
+             qPrintable(log->toPlainText()));
+    QVERIFY(!log->toPlainText().contains(QStringLiteral("names held.bin")));
+  }
+
+  void aFileOpenInAnotherWorkbenchSaysSo() {
+    QTemporaryDir directory;
+    const QString file = writeFixture(directory, QStringLiteral("held.bin"));
+    Workbench holder;
+    LoadDialogAcceptor loadDialogs;
+    holder.window->openFile(file);
+    QTRY_VERIFY_WITH_TIMEOUT(holder.session.loaded(), OpenTimeoutMs);
+    Session other(QString::fromLocal8Bit(TEST_WORKER));
+    other.open(writeFixture(directory, QStringLiteral("own.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(other.loaded(), OpenTimeoutMs);
+    const QString own = other.filePath();
+    QSignalSpy messages(&other, &Session::message);
+    QSignalSpy refused(&other, &Session::openFailed);
+    other.open(file);
+    QTRY_COMPARE_WITH_TIMEOUT(refused.size(), 1, OpenTimeoutMs);
+    const auto refusal = [&messages] {
+      for (const auto &message : messages)
+        if (message.at(1).toInt() == 2)
+          return message.at(0).toString();
+      return QString();
+    };
+    QVERIFY2(refusal().contains(QStringLiteral("another NeverD")),
+             qPrintable(refusal()));
+    // Each keeps the program it had.
+    QVERIFY(other.loaded());
+    QCOMPARE(other.filePath(), own);
+    QVERIFY(holder.session.loaded());
+  }
+
+  void aHeldFileIsRefusedBeforeAskingToSaveOrDiscard() {
+    QTemporaryDir directory;
+    const QString held = writeFixture(directory, QStringLiteral("held.bin"));
+    const QString free = writeFixture(directory, QStringLiteral("free.bin"));
+    const QString database = directory.filePath(QStringLiteral("held.nddb"));
+    Session holder(QString::fromLocal8Bit(TEST_WORKER));
+    holder.open(held);
+    QTRY_VERIFY_WITH_TIMEOUT(holder.loaded(), OpenTimeoutMs);
+    QSignalSpy packed(&holder, &Session::databaseSaved);
+    holder.packDatabase(database);
+    QTRY_COMPARE_WITH_TIMEOUT(packed.size(), 1, OpenTimeoutMs);
+    Session databaseHolder(QString::fromLocal8Bit(TEST_WORKER));
+    databaseHolder.open(database);
+    QTRY_VERIFY_WITH_TIMEOUT(databaseHolder.loaded(), OpenTimeoutMs);
+
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("edited.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    const QString edited = bench.session.filePath();
+    bench.session.setComment(Base, QStringLiteral("staged here"));
+    QTRY_VERIFY(bench.session.dirty());
+    QSignalSpy asked(&bench.session, &Session::transitionRequested);
+    QSignalSpy refused(&bench.session, &Session::openFailed);
+    QSignalSpy messages(&bench.session, &Session::message);
+    // Answered from here on, so that a question that should not come up fails
+    // this test instead of waiting for an answer.
+    auto answer = QMessageBox::Cancel;
+    std::function<void()> whileAsked;
+    QTimer answering;
+    connect(&answering, &QTimer::timeout, &answering, [&] {
+      auto *box =
+          qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+      if (!box)
+        return;
+      if (whileAsked)
+        std::exchange(whileAsked, {})();
+      box->button(answer)->click();
+    });
+    answering.start(5);
+    // Neither question comes up, and the edited program stays as it was.
+    for (const auto &[path, says] :
+         {std::pair(held, QStringLiteral("This file may")),
+          std::pair(database, QStringLiteral("This database may"))}) {
+      messages.clear();
+      refused.clear();
+      bench.session.open(path);
+      QCOMPARE(refused.size(), 1);
+      QCOMPARE(asked.size(), 0);
+      QCOMPARE(messages.size(), 1);
+      QVERIFY2(messages.first().first().toString().contains(says),
+               qPrintable(messages.first().first().toString()));
+      QVERIFY(bench.session.loaded());
+      QVERIFY(bench.session.dirty());
+      QCOMPARE(bench.session.filePath(), edited);
+    }
+    // A file nobody holds still asks, and asking leaves nothing beside it.
+    refused.clear();
+    bench.session.open(free);
+    QCOMPARE(asked.size(), 1);
+    QCOMPARE(refused.size(), 0);
+    QVERIFY(!QFileInfo::exists(free + QStringLiteral(".neverd")));
+    QCOMPARE(bench.session.filePath(), edited);
+#ifndef Q_OS_WIN
+    // Its own program under another name is not another workbench's.
+    const QString alias = directory.filePath(QStringLiteral("alias.bin"));
+    QVERIFY(QFile::link(edited, alias));
+    bench.session.open(alias);
+    QCOMPARE(asked.size(), 2);
+    QCOMPARE(refused.size(), 0);
+    QCOMPARE(bench.session.filePath(), edited);
+#endif
+    // A refused open leaves the open that is waiting for an answer.
+    answer = QMessageBox::Discard;
+    whileAsked = [&] {
+      bench.session.open(held);
+      QCOMPARE(refused.size(), 1);
+    };
+    QSignalSpy opened(&bench.session, &Session::opened);
+    bench.session.open(free);
+    QTRY_COMPARE_WITH_TIMEOUT(opened.size(), 1, OpenTimeoutMs);
+    QCOMPARE(bench.session.filePath(), free);
+  }
+
+  void savingADatabaseChangedSinceItOpenedAsksFirst() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("shared.bin"));
+    const auto database = directory.filePath(QStringLiteral("shared.nddb"));
+    // Another workbench, on the binary, packs into the database.
+    Session other(QString::fromLocal8Bit(TEST_WORKER));
+    other.open(path);
+    QTRY_VERIFY_WITH_TIMEOUT(other.loaded(), OpenTimeoutMs);
+    QSignalSpy packed(&other, &Session::databaseSaved);
+    const auto packTheirs = [&](const QString &name) -> bool {
+      const auto before = packed.size();
+      other.rename(Base + 0x140, name);
+      if (!QTest::qWaitFor(
+              [&] {
+                return readAll(path + ".neverd/renames.json")
+                    .contains(name.toUtf8());
+              },
+              OpenTimeoutMs))
+        return false;
+      other.packDatabase(database);
+      return QTest::qWaitFor([&] { return packed.size() > before; },
+                             OpenTimeoutMs);
+    };
+    QVERIFY(packTheirs(QStringLiteral("theirs_first")));
+    const auto held = [&] {
+      QString error;
+      const auto contents = ProjectDatabase::read(database, &error);
+      return contents ? contents->sidecars.value(
+                            QStringLiteral(".neverd-renames.json"))
+                      : QByteArray();
+    };
+
+    Workbench bench;
+    bench.window->openFile(database);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    bench.session.rename(Base + 0x140, QStringLiteral("ours"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(), OpenTimeoutMs);
+    QVERIFY(packTheirs(QStringLiteral("theirs_second")));
+
+    int conflicts = 0;
+    bool cancelIsDefault = true;
+    QString question;
+    auto answer = QMessageBox::Cancel;
+    QTimer answering;
+    connect(&answering, &QTimer::timeout, &answering, [&] {
+      auto *box =
+          qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+      if (!box)
+        return;
+      if (box->text().contains(QStringLiteral("changed after"))) {
+        ++conflicts;
+        question = box->text();
+        cancelIsDefault =
+            cancelIsDefault &&
+            box->defaultButton() == box->button(QMessageBox::Cancel);
+        box->button(answer)->click();
+      } else {
+        box->button(QMessageBox::Save)->click();
+      }
+    });
+    answering.start(5);
+    QSignalSpy saved(&bench.session, &Session::databaseSaved);
+
+    // Cancelling leaves the database as the other workbench left it.
+    bench.session.save();
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), 1, OpenTimeoutMs);
+    QVERIFY(!saved.last().first().toBool());
+    QCOMPARE(conflicts, 1);
+    QVERIFY2(question.contains(QStringLiteral("shared.nddb")),
+             qPrintable(question));
+    QVERIFY(held().contains("theirs_second"));
+    QVERIFY(!held().contains("ours"));
+    QVERIFY(bench.session.databaseOutOfDate());
+
+    // Quitting stops with it, and so can go on being asked.
+    QSignalSpy approved(&bench.session, &Session::quitApproved);
+    QVERIFY(!bench.session.requestQuit());
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), 2, OpenTimeoutMs);
+    QVERIFY(!saved.last().first().toBool());
+    QCOMPARE(conflicts, 2);
+    QTest::qWait(50);
+    QCOMPARE(approved.size(), 0);
+    QVERIFY(bench.session.databaseOutOfDate());
+
+    // Replacing writes this workbench's project, which it then knows the
+    // database holds: the next save asks nothing.
+    answer = QMessageBox::Save;
+    bench.session.save();
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), 3, OpenTimeoutMs);
+    QVERIFY(saved.last().first().toBool());
+    QCOMPARE(conflicts, 3);
+    QVERIFY(held().contains("ours"));
+    QVERIFY(!held().contains("theirs_second"));
+    QTRY_VERIFY(!bench.session.databaseOutOfDate());
+    bench.session.rename(Base + 0x140, QStringLiteral("ours_again"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(), OpenTimeoutMs);
+    bench.session.save();
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), 4, OpenTimeoutMs);
+    QVERIFY(saved.last().first().toBool());
+    QCOMPARE(conflicts, 3);
+    QVERIFY(held().contains("ours_again"));
+
+    // Saves that overlap do not take each other for another workbench.
+    for (const auto &name :
+         {QStringLiteral("overlap_one"), QStringLiteral("overlap_two"),
+          QStringLiteral("overlap_three")}) {
+      bench.session.rename(Base + 0x140, name);
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(),
+                               OpenTimeoutMs);
+      bench.session.save();
+      bench.session.save();
+      bench.session.save();
+      QTRY_VERIFY_WITH_TIMEOUT(!bench.session.databaseOutOfDate() &&
+                                   held().contains(name.toUtf8()),
+                               OpenTimeoutMs);
+    }
+    QCOMPARE(conflicts, 3);
+    QTRY_VERIFY(!bench.session.dirty());
+#ifndef Q_OS_WIN
+    // So does a pack into the same database under another spelling.
+    const QString folder = directory.filePath(QStringLiteral("folder"));
+    QVERIFY(QFile::link(directory.path(), folder));
+    bench.session.rename(Base + 0x140, QStringLiteral("before_alias"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(), OpenTimeoutMs);
+    const auto packs = saved.size();
+    bench.session.packDatabase(folder + QStringLiteral("/shared.nddb"));
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), packs + 1, OpenTimeoutMs);
+    QVERIFY(saved.last().first().toBool());
+    bench.session.rename(Base + 0x140, QStringLiteral("after_alias"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(), OpenTimeoutMs);
+    bench.session.save();
+    QTRY_VERIFY_WITH_TIMEOUT(held().contains("after_alias"), OpenTimeoutMs);
+    QCOMPARE(conflicts, 3);
+    QTRY_VERIFY(!bench.session.dirty());
+#endif
+
+    // A save a quit asks for can replace it too, and the quit then goes on.
+    QVERIFY(packTheirs(QStringLiteral("theirs_third")));
+    bench.session.rename(Base + 0x140, QStringLiteral("ours_last"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(), OpenTimeoutMs);
+    QVERIFY(!bench.session.requestQuit());
+    QTRY_COMPARE_WITH_TIMEOUT(approved.size(), 1, OpenTimeoutMs);
+    answering.stop();
+    QCOMPARE(conflicts, 4);
+    QVERIFY(cancelIsDefault);
+    QVERIFY(held().contains("ours_last"));
+  }
+
+  void aDatabaseThatCannotBeSavedStopsTheQuit() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("stuck.bin"));
+    const auto database = directory.filePath(QStringLiteral("stuck.nddb"));
+    {
+      Workbench packer;
+      packer.window->openFile(path);
+      QTRY_VERIFY_WITH_TIMEOUT(packer.session.loaded(), OpenTimeoutMs);
+      QSignalSpy packed(&packer.session, &Session::databaseSaved);
+      packer.session.packDatabase(database);
+      QTRY_COMPARE_WITH_TIMEOUT(packed.size(), 1, OpenTimeoutMs);
+    }
+    Workbench bench;
+    bench.window->openFile(database);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    bench.session.rename(Base + 0x140, QStringLiteral("kept_edit"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.databaseOutOfDate(), OpenTimeoutMs);
+    // Something else takes the database's name.
+    {
+      QFile replaced(database);
+      QVERIFY(replaced.open(QIODevice::WriteOnly | QIODevice::Truncate));
+      replaced.write("no longer a database, and too short to be taken for one");
+    }
+    QTimer answering;
+    connect(&answering, &QTimer::timeout, &answering, [] {
+      if (auto *box =
+              qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+        box->button(QMessageBox::Save)->click();
+    });
+    answering.start(5);
+    QSignalSpy saved(&bench.session, &Session::databaseSaved);
+    QSignalSpy approved(&bench.session, &Session::quitApproved);
+    QVERIFY(!bench.session.requestQuit());
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), 1, OpenTimeoutMs);
+    answering.stop();
+    QVERIFY(!saved.first().first().toBool());
+    QTest::qWait(50);
+    QCOMPARE(approved.size(), 0);
+    QVERIFY(bench.session.loaded());
+    QVERIFY(bench.session.databaseOutOfDate());
+    QVERIFY(readAll(bench.session.filePath() +
+                    QStringLiteral(".neverd/renames.json"))
+                .contains("kept_edit"));
+  }
+
+  void aDatabaseOpenInAnotherWorkbenchKeepsItsEdits() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("team.bin"));
+    const auto database = directory.filePath(QStringLiteral("team.nddb"));
+    {
+      Workbench packer;
+      LoadDialogAcceptor loadDialogs;
+      packer.window->openFile(path);
+      QTRY_VERIFY_WITH_TIMEOUT(packer.session.loaded(), OpenTimeoutMs);
+      QSignalSpy packed(&packer.session, &Session::databaseSaved);
+      packer.session.packDatabase(database);
+      QTRY_COMPARE_WITH_TIMEOUT(packed.size(), 1, OpenTimeoutMs);
+    }
+    Workbench holder;
+    holder.window->openFile(database);
+    QTRY_VERIFY_WITH_TIMEOUT(holder.session.loaded(), OpenTimeoutMs);
+    // An edit lives beside the working copy until Save writes it back.
+    holder.session.rename(Base + 0x140, QStringLiteral("held_edit"));
+    QTRY_VERIFY_WITH_TIMEOUT(holder.session.databaseOutOfDate(), OpenTimeoutMs);
+    const QString renames =
+        holder.session.filePath() + QStringLiteral(".neverd/renames.json");
+    QVERIFY(readAll(renames).contains("held_edit"));
+
+    // Another workbench is refused before it unpacks over that working copy.
+    Session other(QString::fromLocal8Bit(TEST_WORKER));
+    QSignalSpy messages(&other, &Session::message);
+    other.open(database);
+    const auto refusal = [&messages] {
+      for (const auto &message : messages)
+        if (message.at(1).toInt() == 2)
+          return message.at(0).toString();
+      return QString();
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(!refusal().isEmpty(), OpenTimeoutMs);
+    QVERIFY2(refusal().contains(QStringLiteral("another NeverD")),
+             qPrintable(refusal()));
+    QVERIFY(!other.loaded());
+    QVERIFY(readAll(renames).contains("held_edit"));
+    QVERIFY(holder.session.databaseOutOfDate());
+
+    // The holder's own worker has the lock, so it can open the database again
+    // once its edit is saved.
+    QSignalSpy saved(&holder.session, &Session::databaseSaved);
+    holder.session.save();
+    QTRY_COMPARE_WITH_TIMEOUT(saved.size(), 1, OpenTimeoutMs);
+    QTRY_VERIFY(!holder.session.dirty());
+    QSignalSpy reopened(&holder.session, &Session::opened);
+    holder.session.open(database);
+    QTRY_COMPARE_WITH_TIMEOUT(reopened.size(), 1, OpenTimeoutMs);
+    QVERIFY(holder.session.loaded());
+
+    // Once the holder lets go, the other workbench opens it with the edit.
+    holder.session.closeFile();
+    QTRY_VERIFY_WITH_TIMEOUT(holder.session.connected(), OpenTimeoutMs);
+    other.open(database);
+    QTRY_VERIFY_WITH_TIMEOUT(other.loaded(), OpenTimeoutMs);
+    QVERIFY(readAll(renames).contains("held_edit"));
+  }
+
   void linksCopyAndOpenTheirPlaces() {
     // Copy link names the place the disassembly shows, and a link opens its
     // place in the view it asks for, as IDA's open_ida_link does; another
@@ -11598,6 +13030,194 @@ private slots:
     QTRY_COMPARE(assembly->currentItem(), std::optional<Address>(origin));
   }
 
+  void historyStopsFollowTheCursor() {
+    // IDA's history keeps a stop per jump that follows the cursor: a move
+    // since the jump, such as a click in the code it opened, adds no stop,
+    // so Back returns to where each jump began and Forward to where the user
+    // left.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("fixture.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *disassembly = bench.window->disassembly();
+    const auto at = [&](Address address) {
+      QTRY_VERIFY_WITH_TIMEOUT(!disassembly->listing()->jumpPending(),
+                               OpenTimeoutMs);
+      QTRY_COMPARE(disassembly->currentAddress(),
+                   std::optional<Address>(address));
+    };
+    const Address start = Base + 0x50, called = Base + 0x140, read = called + 2,
+                  reread = called + 4, next = Base + 0x180;
+    disassembly->navigate(start);
+    at(start);
+    disassembly->navigate(called);
+    at(called);
+    disassembly->navigate(read, false);
+    at(read);
+    disassembly->navigate(next);
+    at(next);
+    disassembly->goBack();
+    at(read);
+    disassembly->goBack();
+    at(start);
+    disassembly->goForward();
+    at(read);
+    disassembly->goForward();
+    at(next);
+    disassembly->goBack();
+    at(read);
+    disassembly->navigate(reread, false);
+    at(reread);
+    disassembly->goBack();
+    at(start);
+    disassembly->goForward();
+    at(reread);
+  }
+
+  void backAndForwardButtonsListTheirStops() {
+    // As in IDA, the Back and Forward buttons list the stops they reach,
+    // nearest first, each as the listing names its place and what is there,
+    // and a pick goes that many steps at once, keeping the stops on both
+    // sides. The Jump menu keeps its plain commands.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("fixture.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *disassembly = bench.window->disassembly();
+    const auto at = [&](Address address) {
+      QTRY_VERIFY_WITH_TIMEOUT(!disassembly->listing()->jumpPending(),
+                               OpenTimeoutMs);
+      QTRY_COMPARE(disassembly->currentAddress(),
+                   std::optional<Address>(address));
+    };
+    const Address start = Base + 0x50, called = Base + 0x140,
+                  next = Base + 0x180;
+    disassembly->navigate(start);
+    at(start);
+    disassembly->navigate(called);
+    at(called);
+    disassembly->navigate(next);
+    at(next);
+    const auto list = [&](ActionId id) -> QMenu * {
+      for (auto *toolbar : bench.window->findChildren<QToolBar *>())
+        if (auto *button = qobject_cast<QToolButton *>(
+                toolbar->widgetForAction(bench.action(id))))
+          return button->popupMode() == QToolButton::MenuButtonPopup
+                     ? button->menu()
+                     : nullptr;
+      return nullptr;
+    };
+    QMenu *back = list(ActionId::JumpBack);
+    QMenu *forward = list(ActionId::JumpForward);
+    QVERIFY(back && forward);
+    QVERIFY(!bench.action(ActionId::JumpBack)->menu());
+    QVERIFY(!bench.action(ActionId::JumpForward)->menu());
+    emit back->aboutToShow();
+    const auto backStops = disassembly->stops(false);
+    QVERIFY(backStops.size() >= 2 && backStops[0] == called &&
+            backStops[1] == start);
+    QCOMPARE(back->actions().size(), qsizetype(backStops.size()));
+    // A function's stop reads `name (address)` before the instruction there.
+    const QString calledPlace =
+        QStringLiteral("(%1)\t").arg(displayAddress(called));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        back->actions().first()->text().contains(calledPlace), OpenTimeoutMs);
+    const QString first = back->actions().first()->text();
+    QVERIFY2(!first.section(QLatin1Char('\t'), 1).isEmpty(), qPrintable(first));
+    back->actions()[1]->trigger();
+    at(start);
+    emit forward->aboutToShow();
+    QVERIFY(disassembly->stops(true) == (std::vector<Address>{called, next}));
+    QCOMPARE(forward->actions().size(), 2);
+    forward->actions()[1]->trigger();
+    at(next);
+    QCOMPARE(disassembly->stops(false).front(), called);
+  }
+
+  void historyListsNameTheCodeLineBackReturnsTo() {
+    // As Hex-Rays' history does, a stop the code in focus left reads as the
+    // line Back returns the code to, numbered as its margin numbers it; with
+    // the code shown another way, or the disassembly in focus, it reads as
+    // the listing names its place.
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("pseudocode-navigation.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *disassembly = bench.window->disassembly();
+    const Address caller = Base + 0x140, callee = Base + 0x160;
+    disassembly->navigate(caller);
+    QTRY_COMPARE(disassembly->currentFunction(),
+                 std::optional<Address>(caller));
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    auto *view = bench.codeView(QStringLiteral("source"));
+    QVERIFY(view);
+    view->setRepresentation(QStringLiteral("source"));
+    auto *code = view->text();
+    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+                             OpenTimeoutMs);
+    bench.window->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
+    code->setFocus();
+    QTRY_VERIFY(code->hasFocus());
+    // The call is the C's second line, which maps to the caller's entry.
+    const QFontMetricsF metrics(Theme::instance().codeFont());
+    const QPoint point(
+        qRound(6 + 17 * metrics.horizontalAdvance(QLatin1Char('M'))),
+        qRound(1.5 * std::ceil(metrics.lineSpacing())));
+    QTest::mouseClick(code->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+    QCOMPARE(code->currentToken(), QStringLiteral("function_22"));
+    QTest::mouseDClick(code->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+    QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(callee),
+                              OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY(code->hasFocus());
+    QCOMPARE(disassembly->stops(false).front(), caller);
+    QMenu *back = nullptr;
+    for (auto *toolbar : bench.window->findChildren<QToolBar *>())
+      if (auto *button = qobject_cast<QToolButton *>(
+              toolbar->widgetForAction(bench.action(ActionId::JumpBack))))
+        back = button->menu();
+    QVERIFY(back);
+    // The first entry's place, once the listing names it.
+    QString place;
+    const auto first = [&] {
+      emit back->aboutToShow();
+      const QString provisional = back->actions().first()->text();
+      QTRY_VERIFY_WITH_TIMEOUT(back->actions().first()->text() != provisional,
+                               OpenTimeoutMs);
+      place = back->actions().first()->text().section(QLatin1Char('\t'), 0, 0);
+    };
+    const QString address = QStringLiteral(" (%1)").arg(displayAddress(caller));
+    first();
+    QCOMPARE(place, QStringLiteral("function_20:2") + address);
+    // Shown as LLVM C, the code would not return to that line.
+    view->setRepresentation(QStringLiteral("llvmc"));
+    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+                             OpenTimeoutMs);
+    code->setFocus();
+    QTRY_VERIFY(code->hasFocus());
+    first();
+    QCOMPARE(place, QStringLiteral("function_20") + address);
+    // Shown as C again, it would; with the disassembly in focus, the code
+    // does not go back along.
+    view->setRepresentation(QStringLiteral("source"));
+    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+                             OpenTimeoutMs);
+    code->setFocus();
+    QTRY_VERIFY(code->hasFocus());
+    first();
+    QCOMPARE(place, QStringLiteral("function_20:2") + address);
+    disassembly->listing()->setFocus();
+    QTRY_VERIFY(disassembly->listing()->hasFocus());
+    first();
+    QCOMPARE(place, QStringLiteral("function_20") + address);
+  }
+
   void laterLinksSupersedeAQueuedGraphView() {
     QTemporaryDir directory;
     Workbench bench;
@@ -11653,6 +13273,22 @@ private slots:
     QCoreApplication::processEvents();
     QCOMPARE(changes.count(), 0);
     QVERIFY(!undo->isEnabled());
+  }
+
+  void queryNotificationsLeaveExternalCommandsAlone() {
+    Workbench bench;
+    // An external command owns its availability. Open has no rule of its
+    // own, so the refresh that enables Exit must leave it as it was set.
+    auto *open = bench.action(ActionId::FileOpen);
+    auto *exit = bench.action(ActionId::FileExit);
+    open->setProperty("externalCommand", true);
+    open->setEnabled(false);
+    exit->setEnabled(false);
+    QSignalSpy changes(open, &QAction::enabledChanged);
+    emit bench.session.stateChanged();
+    QTRY_VERIFY(exit->isEnabled());
+    QCOMPARE(changes.count(), 0);
+    QVERIFY(!open->isEnabled());
   }
 
   void initialNavigationOverviewDoesNotWaitForRefreshDebounce() {
@@ -12942,7 +14578,8 @@ private slots:
     });
     const QString recent = hexAddress(Base + 0x40);
     QSettings().setValue(QStringLiteral("jump/history"), QStringList{recent});
-    JumpDialog dialog(bench.session, bench.window.get());
+    JumpDialog dialog(bench.session, bench.window->addressSpace(), std::nullopt,
+                      bench.window.get());
     auto *input = dialog.findChild<QLineEdit *>();
     auto *matches = dialog.findChild<QListWidget *>();
     QVERIFY(input && matches);
@@ -12958,6 +14595,38 @@ private slots:
     input->setText(QStringLiteral("function_2"));
     QVERIFY2(!matches->currentItem(),
              "The previous expression kept its jump target.");
+  }
+
+  void jumpDialogPreviewsWhereEnterGoes() {
+    // Beside the matches the dialog previews where Enter goes: the chosen
+    // match, else the typed expression; text naming nothing shows nothing.
+    QTemporaryDir directory;
+    Workbench bench;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("fixture.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        bench.session.indexReady() && !bench.session.busy(), OpenTimeoutMs);
+    JumpDialog dialog(bench.session, bench.window->addressSpace(), Base,
+                      bench.window.get());
+    auto *input = dialog.findChild<QLineEdit *>();
+    auto *matches = dialog.findChild<QListWidget *>();
+    auto *preview =
+        dialog.findChild<ListingView *>(QStringLiteral("jumpPreview"));
+    QVERIFY(input && matches && preview);
+    QCOMPARE(preview->focusPolicy(), Qt::NoFocus);
+    input->setText(displayAddress(Base + 0x140, 16));
+    QTRY_COMPARE_WITH_TIMEOUT(preview->currentItem(),
+                              std::optional<Address>(Base + 0x140),
+                              OpenTimeoutMs);
+    input->setText(QStringLiteral("function_5"));
+    QTRY_VERIFY_WITH_TIMEOUT(matches->count() > 0, OpenTimeoutMs);
+    matches->setCurrentRow(0);
+    QCOMPARE(matches->item(0)->text(), QStringLiteral("function_5"));
+    QTRY_COMPARE_WITH_TIMEOUT(preview->currentItem(),
+                              std::optional<Address>(Base + 0x50),
+                              OpenTimeoutMs);
+    input->setText(QStringLiteral("no_such_name_anywhere"));
+    QTRY_VERIFY_WITH_TIMEOUT(!preview->currentItem(), OpenTimeoutMs);
   }
 
   void viewsFollowTheSessionAndNavigation() {

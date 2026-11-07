@@ -240,7 +240,7 @@ conservative; a refused subexpression never turns into a truncated constant.
 ## Parser provenance
 
 Hermes is pinned to
-[`602befee340da188ea1560cde7a9cc33e6b180dc`](https://github.com/facebook/hermes/tree/602befee340da188ea1560cde7a9cc33e6b180dc).
+[`602befee340da188ea1560cde7a9cc33e6b180dc`](https://github.com/meta/hermes/tree/602befee340da188ea1560cde7a9cc33e6b180dc).
 Its archive SHA-256 is
 `6c615757374850ccb99991c4536aaf86ac0973661b1ae18aac45d2ca85143153`.
 Only the parser/AST and required support dependencies are built; TypeScript,

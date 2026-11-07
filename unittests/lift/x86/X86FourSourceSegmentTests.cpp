@@ -192,6 +192,45 @@ TEST(X86FourSourceSegment, ConcreteAccessNeedsDescriptorsOnlyForActiveLanes) {
         }
 }
 
+TEST(X86FourSourceSegment, BoundCacheChecksAllSixteenBytesAndLinearWrap) {
+  for (unsigned Kind = 0; Kind < Opcodes.size(); ++Kind)
+    for (unsigned Prefix : {0x26u, 0x2eu, 0x36u})
+      for (bool Fits : {false, true}) {
+        auto Op = four(Kind, false, Prefix);
+        const auto Control = *x86FourSourceControl(Op.Inputs[5].Offset);
+        Op.Inputs[4] = NdVar::cst(1, Control.maskBytes());
+        BinaryImage Image;
+        Image.Arch = Arch::X86;
+        for (uint64_t Base : {uint64_t(0xfffffff8), uint64_t(0)}) {
+          Segment Data;
+          Data.VA = Base;
+          Data.Flags = SegmentFlags::Readable;
+          Data.Data.resize(8);
+          Data.Size = Data.FileSz = 8;
+          Image.Segments.push_back(std::move(Data));
+        }
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        E.setLoadCollect(true);
+        E.setRegister(901, 0x4000);
+        E.setRegisterBytes(900, std::vector<uint8_t>(Control.bytes(), 0xa5));
+        E.setRegisterBytes(902, std::vector<uint8_t>(Control.bytes(), 0));
+        E.setRegisterBytes(903,
+                           std::vector<uint8_t>(
+                               X86FourSourceCount * Control.sourceBytes(), 0));
+        X86LegacySegmentCache C{0xffffbff8, Fits ? 0x400fu : 0x400eu, 0,
+                                uint16_t(Prefix == 0x2e ? 0x409b : 0x4093),
+                                false};
+        EXPECT_EQ(E.stepX86LegacySegment(Op, C), Fits);
+        EXPECT_EQ(E.getLoadRecords().size(), Fits ? 1u : 0u);
+        if (Fits)
+          EXPECT_EQ(E.getLoadRecords()[0].Addr, 0xfffffff8u);
+        EXPECT_EQ(E.getRegisterBytes(900),
+                  std::vector<uint8_t>(Control.bytes(), Fits ? 0 : 0xa5));
+        EXPECT_FALSE(E.step(Op));
+      }
+}
+
 using X86FourSourceSegmentSource = X86NativeSegmentFixture;
 
 TEST_F(X86FourSourceSegmentSource, AllSixKindsKeepSegmentsAndRawOffsets) {

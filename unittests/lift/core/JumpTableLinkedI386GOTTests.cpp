@@ -25,6 +25,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -143,11 +144,11 @@ TEST(LinkedI386GOTTable, AnchorThatIsNotTheGOTOnEveryPathStaysUnresolved) {
   }
 }
 
-// Clang -O0 spills the GOT register in an aligned frame and reloads it for
-// the dispatch after a foreign store and a PLT call.  The spill's own address
-// escapes only on the default path, which ends in abort.  The reload is no
-// constant a block-local fold can see: emulated with an unknown %esp, it
-// would read the second program header at 0x54.
+// An aligned frame spills the GOT register and reloads it for the dispatch
+// after a foreign store, a PLT call and an explicit ESP restore. The spill's
+// own address escapes only on the default path, which ends in abort.  The
+// reload is no constant a block-local fold can see: emulated with an unknown
+// %esp, it would read the second program header at 0x54.
 TEST(LinkedI386GOTTable, SpilledGOTRegisterResolvesItsSwitch) {
   const std::optional<BinaryImage> Img = loadLibrary();
   if (!Img)
@@ -156,6 +157,34 @@ TEST(LinkedI386GOTTable, SpilledGOTRegisterResolvesItsSwitch) {
       dispatchTargets(*Img, "spilled_got_switch");
   ASSERT_TRUE(Targets.has_value());
   EXPECT_EQ(*Targets, caseLabels(*Img, "spilled_got_switch", 4));
+}
+
+TEST(LinkedI386GOTTable, UnknownImportCannotPreserveTheGOTSpillStack) {
+  auto Img = loadLibrary();
+  if (!Img)
+    GTEST_SKIP() << "the fixture links with ld.lld";
+  const Symbol *Begin = Img->findSymbol("spilled_got_switch_restore");
+  const Symbol *End = Img->findSymbol("spilled_got_switch_restored");
+  ASSERT_NE(Begin, nullptr);
+  ASSERT_NE(End, nullptr);
+  ASSERT_LT(Begin->Addr, End->Addr);
+  ASSERT_NE(Img->readVA(Begin->Addr, End->Addr - Begin->Addr), nullptr);
+  // Restore the original instruction shape without changing any table or
+  // branch address. note_value's spelling grants no zero-pop contract.
+  auto RemoveRestore = [&](auto &Ranges) {
+    bool Patched = false;
+    for (auto &Range : Ranges)
+      if (Range.contains(Begin->Addr) &&
+          End->Addr - Range.VA <= Range.Data.size()) {
+        std::fill(Range.Data.begin() + (Begin->Addr - Range.VA),
+                  Range.Data.begin() + (End->Addr - Range.VA), 0x90);
+        Patched = true;
+      }
+    return Patched;
+  };
+  ASSERT_TRUE(RemoveRestore(Img->Segments));
+  ASSERT_TRUE(RemoveRestore(Img->Sections));
+  EXPECT_FALSE(dispatchTargets(*Img, "spilled_got_switch").has_value());
 }
 
 // A callee that receives the spill's address before the reload may replace

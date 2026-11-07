@@ -8,6 +8,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
@@ -29,6 +30,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <memory>
 #include <random>
 #include <tuple>
 
@@ -38,7 +40,6 @@ void detectFPParams(
     MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
     const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
     Arch TargetArch, BinaryFormat TargetFormat);
-void detectCdeclStackParams(MedFunc &, Arch);
 } // namespace neverd
 
 namespace {
@@ -46,6 +47,7 @@ namespace {
 using namespace neverd;
 using med_calling_conv_detail::computeForwardValueClosure;
 using med_calling_conv_detail::containsValue;
+using med_calling_conv_detail::detectCdeclStackParams;
 using med_calling_conv_detail::findFirstUseSize;
 using med_calling_conv_detail::liveInOnlyFeedsScratch;
 
@@ -485,7 +487,8 @@ TEST(MedABIPass, ForwardedFPParametersRequireAnUnclobberedEntryPath) {
       const auto *Info = F.findCall(Block.Id, Block.Ops.size() - 1);
       ASSERT_NE(Info, nullptr);
       const bool Incoming = P == Path::Entry || P == Path::Linear;
-      EXPECT_EQ(Info->Args.size(), Incoming ? 2u : 0u);
+      const bool AfterCall = P == Path::PriorCall || P == Path::PredecessorCall;
+      EXPECT_EQ(Info->Args.size(), Incoming || AfterCall ? 2u : 0u);
       if (Incoming) {
         ASSERT_EQ(F.Params.size(), 2u);
         EXPECT_EQ(Info->Args[0].Kind, MedVar::Param);
@@ -493,6 +496,9 @@ TEST(MedABIPass, ForwardedFPParametersRequireAnUnclobberedEntryPath) {
         EXPECT_EQ(F.FPParamScalarBytes.at(FP[0]), 4u);
         EXPECT_EQ(F.FPParamScalarBytes.at(FP[1]), 8u);
       } else {
+        if (AfterCall)
+          for (const auto &Argument : Info->Args)
+            EXPECT_EQ(Argument.Kind, MedVar::Unspecified);
         EXPECT_TRUE(F.FPParamScalarBytes.empty());
         for (const auto &Parameter : F.Params)
           EXPECT_FALSE(TRI.isVectorReg(Parameter.RegOff));
@@ -631,6 +637,47 @@ TEST(MedABIPass, ScalarFPResultPromotionPreservesExistingDefinitions) {
   }
 }
 
+TEST(MedCallingConvStackParams, SharedStackPointerPhisAreTracedOnce) {
+  // Thirty diamonds each join two copies of SP, as SEH handler roots join the
+  // protected range's SP with the normal path. Every value's offset is
+  // computed once; a walk along every path would take 2^30 steps. The trace
+  // reaches the entry SP at depth 61, within its limit.
+  constexpr auto Architecture = Arch::X64;
+  const auto &TRI = getTargetRegInfo(Architecture);
+  const auto Layout = TRI.integerArgumentLayout(BinaryFormat::ELF);
+  MedFunc F;
+  F.Blocks.resize(1);
+  auto &B = F.Blocks[0];
+  MedVar Current = reg(1, 0, 8, TRI.StackPointer, Architecture);
+  addLiveIn(B, Current);
+  int Version = 0;
+  for (int Diamond = 0; Diamond < 30; ++Diamond) {
+    const MedVar Left = reg(1, ++Version, 8, TRI.StackPointer, Architecture);
+    const MedVar Right = reg(1, ++Version, 8, TRI.StackPointer, Architecture);
+    B.Ops.push_back(unary(NdOp::COPY, Left, Current));
+    B.Ops.push_back(unary(NdOp::COPY, Right, Current));
+    PhiNode Join;
+    Join.Output = reg(1, ++Version, 8, TRI.StackPointer, Architecture);
+    Join.Args = {{0, Left}, {0, Right}};
+    B.Phis.push_back(Join);
+    Current = Join.Output;
+  }
+  const auto Address = temp(2, 0, 8, Architecture);
+  B.Ops.push_back(binary(NdOp::INT_ADD, Address, Current,
+                         MedVar::makeConst(Layout.EntryStackBase, 8)));
+  B.Ops.push_back(unary(NdOp::LOAD, temp(3, 0, 8, Architecture), Address));
+  med_calling_conv_detail::detectStackParams(F, Architecture,
+                                             BinaryFormat::ELF);
+  // The load is the first stack argument, after every register one.
+  ASSERT_EQ(F.Params.size(), Layout.Registers.size() + 1);
+  bool Read = false;
+  for (const MedOp &Op : B.Ops)
+    for (uint8_t I = 0; I < Op.NumInputs; ++I)
+      Read |= Op.Inputs[I].Kind == MedVar::Param &&
+              Op.Inputs[I].Id == int(Layout.Registers.size());
+  EXPECT_TRUE(Read);
+}
+
 TEST(MedCallingConvFPStack, InstructionOwnedReadsRecoverTheIncomingBytes) {
   for (auto Architecture : {Arch::X86, Arch::X64})
     for (auto Format :
@@ -689,7 +736,7 @@ TEST(MedCallingConvFPStack, InstructionOwnedReadsRecoverTheIncomingBytes) {
               Id, x86FPStateMedShape(Read, Architecture)));
           B.Ops.push_back(Read);
           if (Architecture == Arch::X86)
-            detectCdeclStackParams(F, Architecture);
+            detectCdeclStackParams(F, Architecture, Format);
           else
             med_calling_conv_detail::detectStackParams(F, Architecture, Format);
           ASSERT_FALSE(F.Params.empty());
@@ -1021,7 +1068,7 @@ TEST(MedCallingConvFPStack, MemoryOwnershipAndMalformedReadsAreConservative) {
         Read.Inputs[0].ConstVal |= UINT64_C(1) << 32;
       B.Ops.push_back(Read);
       if (Architecture == Arch::X86)
-        detectCdeclStackParams(F, Architecture);
+        detectCdeclStackParams(F, Architecture, BinaryFormat::COFF);
       else
         med_calling_conv_detail::detectStackParams(F, Architecture,
                                                    BinaryFormat::COFF);
@@ -1089,7 +1136,7 @@ TEST(MedCallingConvFPStack, ExtendedLoadReadsEverySlotItReaches) {
             unary(NdOp::LOAD, temp(3, 0, 10, Architecture), Address);
         B.Ops.push_back(Load);
         if (I386)
-          detectCdeclStackParams(F, Architecture);
+          detectCdeclStackParams(F, Architecture, Format);
         else
           med_calling_conv_detail::detectStackParams(F, Architecture, Format);
         const int First = I386 ? 0 : int(Layout.Registers.size());
@@ -1438,6 +1485,25 @@ TEST(TargetRegInfo, ARM32PreservesD8ThroughD15Views) {
   EXPECT_FALSE(TRI.isCallPreserved(TRI.VecRegBase + 7 * TRI.VecRegStride, 8));
   EXPECT_FALSE(TRI.isCallPreserved(TRI.VecRegBase + 6 * TRI.VecRegStride, 16));
   EXPECT_FALSE(TRI.isCallPreserved(TRI.VecRegBase + 15 * TRI.VecRegStride, 16));
+}
+
+TEST(TargetRegInfo, I386CallRangesDoNotPromiseAnUnchangedStackPointer) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(Target) << ':' << unsigned(Format));
+      const auto &TRI = getTargetRegInfo(Target);
+      const auto Ranges = TRI.callPreservedRanges(Format);
+      auto Has = [&](uint64_t Register) {
+        return llvm::any_of(Ranges, [&](const auto &Range) {
+          return Range.Offset <= Register &&
+                 Register + TRI.PointerSize <= Range.Offset + Range.Bytes;
+        });
+      };
+      EXPECT_EQ(Has(TRI.StackPointer), Target != Arch::X86);
+      EXPECT_TRUE(Has(TRI.FramePointer));
+    }
 }
 
 TEST(TargetRegInfo, EnumeratesPartialVectorCallPreservation) {
@@ -3546,7 +3612,7 @@ TEST(MedABIPass, SplitStackArgumentSetupRequiresEveryIncomingPath) {
   for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
     for (BinaryFormat Format :
          {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
-      for (unsigned Mode = 0; Mode != 12; ++Mode) {
+      for (unsigned Mode = 0; Mode != 26; ++Mode) {
         SCOPED_TRACE(static_cast<int>(A));
         SCOPED_TRACE(static_cast<int>(Format));
         SCOPED_TRACE(Mode);
@@ -3558,8 +3624,8 @@ TEST(MedABIPass, SplitStackArgumentSetupRequiresEveryIncomingPath) {
         MedFunc F;
         F.Entry = 0x1000;
         F.Name = "split_outgoing_setup";
-        F.Blocks.resize(4);
-        for (int I = 0; I < 4; ++I) {
+        F.Blocks.resize(Mode >= 18 ? 6 : 4);
+        for (int I = 0; I < int(F.Blocks.size()); ++I) {
           F.Blocks[I].Id = I;
           F.Blocks[I].StartAddr = F.Entry + I * 16;
           F.Blocks[I].EndAddr = F.Entry + (I + 1) * 16;
@@ -3588,12 +3654,45 @@ TEST(MedABIPass, SplitStackArgumentSetupRequiresEveryIncomingPath) {
         };
         const auto Value =
             MedVar::makeConst(91, Word, ConstantAddressProvenance::Scalar);
-        if (Mode == 1 || Mode == 2 || Mode == 3 || Mode == 9) {
+        if (Mode >= 18) {
+          F.Blocks[0].Succs = {2, 4, 5};
+          F.Blocks[1].Preds = {4, 5};
+          for (int B : {4, 5}) {
+            F.Blocks[B].Preds = {0};
+            F.Blocks[B].Succs = {1};
+          }
+          Store(4, Slot, Value);
+          if (Mode != 19 && Mode != 25)
+            Store(5, Slot, MedVar::makeConst(92, Mode == 21 ? 1 : Word));
+          Store(2, Slot, MedVar::makeConst(93, Word));
+          if (Mode == 20) {
+            MedOp Opaque;
+            Opaque.Opcode = NdOp::CALL;
+            Opaque.addInput(MedVar::makeConst(0x3000, Word));
+            F.Blocks[1].Ops.push_back(Opaque);
+          }
+          if (Mode == 22)
+            F.ModuleAnalysisRoots.insert(F.Blocks[1].StartAddr);
+          if (Mode == 23)
+            Store(3, Slot, MedVar::makeConst(94, Word));
+          if (Mode == 24)
+            F.Blocks[5].Ops.insert(F.Blocks[5].Ops.begin(),
+                                   limits::kMaxCallSetupStackProofWork,
+                                   MedOp{});
+          if (Mode == 25) {
+            F.Blocks[5].Preds = {1};
+            F.Blocks[0].Succs.pop_back();
+            F.Blocks[1].Succs.push_back(5);
+          }
+        } else if (Mode == 1 || Mode == 2 || Mode == 3 || Mode == 9 ||
+                   Mode >= 12) {
           Store(1, Slot, Value);
           if (Mode != 3) {
             auto Other = Value;
-            if (Mode == 2)
+            if (Mode == 2 || Mode >= 12)
               ++Other.ConstVal;
+            if (Mode == 12)
+              Other.Size = 1;
             if (Mode == 9)
               Other.Provenance = ConstantAddressProvenance::DataAddress;
             Store(2, Slot, Other);
@@ -3624,8 +3723,21 @@ TEST(MedABIPass, SplitStackArgumentSetupRequiresEveryIncomingPath) {
         }
         if (Mode == 8)
           Store(2, reg(90, 0, Word, TRI.IntReturnReg, A), Value);
+        if (Mode == 13)
+          F.Blocks[3].Preds.push_back(1);
+        if (Mode == 14)
+          F.Blocks[2].Succs.clear();
+        if (Mode == 15)
+          F.Blocks[1].Ops.insert(F.Blocks[1].Ops.begin(),
+                                 limits::kMaxCallSetupStackProofWork, MedOp{});
         MedOp Call;
         Call.Opcode = NdOp::CALL;
+        if (Mode == 16) {
+          auto Hint = std::make_shared<SourceCallTypeHint>();
+          Hint->TargetAddress = Target;
+          Call.SourceCallHint = std::move(Hint);
+        }
+        Call.IsTailCall = Mode == 17;
         Call.addInput(MedVar::makeConst(Target, Word));
         F.Blocks[3].Ops.push_back(Call);
         if (Mode == 11)
@@ -3647,6 +3759,44 @@ TEST(MedABIPass, SplitStackArgumentSetupRequiresEveryIncomingPath) {
                                CI->Args[RegisterCount].ConstVal == 91 &&
                                CI->Args[RegisterCount].Size == Word;
         EXPECT_EQ(Recovered, Mode <= 1 || Mode == 11);
+        if ((Mode >= 12 && Mode != 18) ||
+            (Mode >= 3 && Mode <= 10 && Mode != 9))
+          EXPECT_TRUE(F.Blocks[3].Phis.empty());
+        if (Mode == 23) {
+          ASSERT_GT(CI->Args.size(), size_t(RegisterCount));
+          EXPECT_TRUE(CI->Args[RegisterCount].isConst());
+          EXPECT_EQ(CI->Args[RegisterCount].ConstVal, 94u);
+        }
+        if (Mode == 18 && A == Arch::X64 && Format == BinaryFormat::COFF) {
+          ASSERT_GT(CI->Args.size(), size_t(RegisterCount));
+          ASSERT_EQ(F.Blocks[1].Phis.size(), 1u);
+          ASSERT_EQ(F.Blocks[3].Phis.size(), 1u);
+          const auto &Inner = F.Blocks[1].Phis.front();
+          const auto &Outer = F.Blocks[3].Phis.front();
+          EXPECT_EQ(Inner.Args.size(), 2u);
+          EXPECT_EQ(Outer.Args.size(), 2u);
+          EXPECT_EQ(Outer.Output, CI->Args[RegisterCount]);
+          EXPECT_EQ(Outer.Args.front().second, Inner.Output);
+          EXPECT_EQ(Outer.Args.back().second.ConstVal, 93u);
+        }
+        if (A == Arch::X64 && Format == BinaryFormat::COFF &&
+            (Mode == 2 || Mode == 9)) {
+          ASSERT_GT(CI->Args.size(), size_t(RegisterCount));
+          const auto &Join = F.Blocks[3];
+          const auto Phi = std::find_if(
+              Join.Phis.begin(), Join.Phis.end(), [&](const PhiNode &Node) {
+                return Node.Output == CI->Args[RegisterCount];
+              });
+          ASSERT_NE(Phi, Join.Phis.end());
+          ASSERT_EQ(Phi->Args.size(), 2u);
+          EXPECT_EQ(Phi->Args[0].first, 1);
+          EXPECT_EQ(Phi->Args[0].second, Value);
+          EXPECT_EQ(Phi->Args[1].first, 2);
+          EXPECT_EQ(Phi->Args[1].second.ConstVal, Mode == 2 ? 92u : 91u);
+          EXPECT_EQ(Phi->Args[1].second.Provenance,
+                    Mode == 9 ? ConstantAddressProvenance::DataAddress
+                              : ConstantAddressProvenance::Scalar);
+        }
       }
 }
 
@@ -4487,6 +4637,82 @@ TEST(MedDCE, X86KeepsTheX87ReturnForReturnTyping) {
   EXPECT_EQ(Func.ReturnType->Kind, NdTypeKind::Float);
   EXPECT_EQ(Func.ReturnType->Size, 4u);
   EXPECT_TRUE(Func.FPReturnViaX87);
+}
+
+// A shared epilogue merges both return registers. Each path writing the
+// integer after the double it leaves in XMM0 returns the integer (find's
+// get_relative_timestamp); a loop counter that a branch decides on, beside a
+// floating accumulator, is no result.
+TEST(MedTypePass, MergedEpiloguesReturnTheRegisterWrittenLast) {
+  constexpr Arch TheArch = Arch::X64;
+  const auto &TRI = getTargetRegInfo(TheArch);
+  for (bool Counter : {false, true}) {
+    SCOPED_TRACE(Counter);
+    MedFunc Func;
+    Func.Entry = 0x1000;
+    Func.Blocks.resize(4);
+    for (int I = 0; I < 4; ++I) {
+      Func.Blocks[I].Id = I;
+      Func.Blocks[I].StartAddr = 0x1000 + 0x10 * I;
+    }
+    Func.Blocks[0].Succs = {1, 2};
+    Func.Blocks[1].Preds = Func.Blocks[2].Preds = {0};
+    Func.Blocks[1].Succs = Func.Blocks[2].Succs = {3};
+    Func.Blocks[3].Preds = {1, 2};
+    const MedVar Limit = reg(1, 0, 8, x86reg::RDI, TheArch);
+    addLiveIn(Func.Blocks[0], Limit);
+    const MedVar Zero = temp(2, 1, 1, TheArch);
+    Func.Blocks[0].Ops.push_back(
+        binary(NdOp::INT_EQUAL, Zero, Limit, MedVar::makeConst(0, 8)));
+    MedOp Branch;
+    Branch.Opcode = NdOp::COND_BR;
+    Branch.addInput(MedVar::makeConst(0x1020, 8));
+    Branch.addInput(Zero);
+    Func.Blocks[0].Ops.push_back(Branch);
+
+    const MedVar Sum = reg(10, 1, 8, TRI.FPReturnReg, TheArch);
+    const MedVar Count = reg(20, 1, 8, TRI.IntReturnReg, TheArch);
+    auto &Body = Func.Blocks[1].Ops;
+    Body.push_back(binary(NdOp::FLOAT_INT2FLOAT, Sum, MedVar::makeConst(42, 8),
+                          MedVar::makeConst(8, 4)));
+    if (Counter) {
+      Body.push_back(
+          binary(NdOp::INT_ADD, Count, Limit, MedVar::makeConst(1, 8)));
+      const MedVar More = temp(3, 1, 1, TheArch);
+      Body.push_back(binary(NdOp::INT_LESS, More, Count, Limit));
+      MedOp Loop;
+      Loop.Opcode = NdOp::COND_BR;
+      Loop.addInput(MedVar::makeConst(0x1030, 8));
+      Loop.addInput(More);
+      Body.push_back(Loop);
+    } else {
+      Body.push_back(unary(NdOp::COPY, Count, MedVar::makeConst(1, 8)));
+    }
+    const MedVar Square = reg(10, 2, 8, TRI.FPReturnReg, TheArch);
+    const MedVar None = reg(20, 2, 8, TRI.IntReturnReg, TheArch);
+    auto &Other = Func.Blocks[2].Ops;
+    Other.push_back(binary(NdOp::FLOAT_INT2FLOAT, Square,
+                           MedVar::makeConst(7, 8), MedVar::makeConst(8, 4)));
+    Other.push_back(unary(NdOp::COPY, None, MedVar::makeConst(0, 8)));
+
+    auto &Epilogue = Func.Blocks[3];
+    PhiNode Float;
+    Float.Output = reg(10, 3, 8, TRI.FPReturnReg, TheArch);
+    Float.Args = {{1, Sum}, {2, Square}};
+    PhiNode Integer;
+    Integer.Output = reg(20, 3, 8, TRI.IntReturnReg, TheArch);
+    Integer.Args = {{1, Count}, {2, None}};
+    Epilogue.Phis = {Float, Integer};
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.addInput(Integer.Output);
+    Epilogue.Ops.push_back(Return);
+
+    inferMedTypes(Func, TheArch);
+    ASSERT_TRUE(Func.ReturnType);
+    EXPECT_EQ(Func.ReturnType->Kind,
+              Counter ? NdTypeKind::Float : NdTypeKind::Int);
+  }
 }
 
 TEST(MedDCE, X86KeepsTheStackPointerWriteThatCommitsARuntimeAllocation) {
@@ -8104,6 +8330,70 @@ TEST(LowToMedIntegerStackABI, Win64HomeAreaIsNotAnIncomingStackParameter) {
   }
 }
 
+TEST(LowToMedIntegerStackABI, AlignedWideReadsComposeEveryIncomingSlot) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(testing::Message()
+                   << int(Architecture) << ':' << int(Format));
+      const auto &TRI = getTargetRegInfo(Architecture);
+      const auto Layout = TRI.integerArgumentLayout(Format);
+      const unsigned Slots =
+          Architecture == Arch::X86 ? 0 : Layout.Registers.size();
+      auto Function =
+          convertIntegerStackInput(Architecture, Format, Layout.EntryStackBase,
+                                   2 * Layout.SlotBytes, false, false);
+      ASSERT_EQ(Function.Params.size(), Slots + 2);
+      bool SawComposition = false;
+      for (const auto &Block : Function.Blocks)
+        for (const auto &Op : Block.Ops) {
+          EXPECT_NE(Op.Opcode, NdOp::LOAD);
+          if (Op.Opcode != NdOp::CONCAT)
+            continue;
+          ASSERT_EQ(Op.NumInputs, 2u);
+          EXPECT_EQ(Op.Inputs[0].Kind, MedVar::Param);
+          EXPECT_EQ(Op.Inputs[0].Id, Slots + 1);
+          EXPECT_EQ(Op.Inputs[1].Kind, MedVar::Param);
+          EXPECT_EQ(Op.Inputs[1].Id, Slots);
+          EXPECT_EQ(Op.Inputs[0].Size, Layout.SlotBytes);
+          EXPECT_EQ(Op.Inputs[1].Size, Layout.SlotBytes);
+          SawComposition = true;
+        }
+      EXPECT_TRUE(SawComposition);
+      EXPECT_TRUE(verifyMedFunc(Function, "wide-incoming-stack-read"));
+    }
+}
+
+TEST(LowToMedIntegerStackABI, WideMutableAndStraddlingReadsSeedEveryHome) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (bool Mutable : {false, true}) {
+        SCOPED_TRACE(testing::Message() << int(Architecture) << ':'
+                                        << int(Format) << ':' << Mutable);
+        const auto Layout =
+            getTargetRegInfo(Architecture).integerArgumentLayout(Format);
+        const unsigned Slots = Mutable ? 2 : 3;
+        const unsigned Registers =
+            Architecture == Arch::X86 ? 0 : Layout.Registers.size();
+        auto Function = convertIntegerStackInput(
+            Architecture, Format, Layout.EntryStackBase + (Mutable ? 0 : 1),
+            2 * Layout.SlotBytes, false, Mutable);
+        ASSERT_EQ(Function.Params.size(), Registers + Slots);
+        std::vector<std::pair<int, int64_t>> Expected;
+        for (unsigned I = 0; I < Slots; ++I)
+          Expected.emplace_back(Registers + I,
+                                Layout.EntryStackBase + I * Layout.SlotBytes);
+        EXPECT_EQ(Function.MutableStackParamHomes, Expected);
+        bool SawRead = false;
+        for (const auto &Block : Function.Blocks)
+          for (const auto &Op : Block.Ops)
+            SawRead |= Op.Opcode == NdOp::LOAD;
+        EXPECT_TRUE(SawRead);
+        EXPECT_TRUE(verifyMedFunc(Function, "wide-mutable-stack-read"));
+      }
+}
+
 TEST(LowToMedIntegerStackABI, Win64SubslotRetainsTheFifthParameterIdentity) {
   auto Med = convertIntegerStackInput(Arch::X64, BinaryFormat::COFF, 43, 2,
                                       false, false);
@@ -8350,6 +8640,60 @@ bool hasParameterIn(const MedFunc &Med, uint64_t RegOff) {
 }
 
 } // namespace
+
+TEST(LowToMedX86CallingConv,
+     NonstandardIntegerInputsKeepTheirOwnRegisterOrder) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+    SCOPED_TRACE(int(Format));
+    const NdVar ESI = NdVar::reg(x86reg::RSI, 4);
+    const NdVar EDI = NdVar::reg(x86reg::RDI, 4);
+    const NdVar EAX = NdVar::reg(x86reg::RAX, 4);
+    LowFunc Low = makeOneBlockLow(0x1000, "custom_inputs", [&](auto Push) {
+      Push(NdOp::LOAD, NdVar::tmp(1, 4), {ESI});
+      Push(NdOp::LOAD, NdVar::tmp(2, 4), {EDI});
+      Push(NdOp::INT_ADD, EAX, {NdVar::tmp(1, 4), NdVar::tmp(2, 4)});
+    });
+    Low.Blocks.front().Ops.back().addInput(EAX);
+    const MedFunc Med = LowToMedConverter().convert(Low, Arch::X86, Format);
+    ASSERT_EQ(Med.Params.size(), 2u);
+    EXPECT_EQ(Med.IntegerArgumentRegisters,
+              (std::vector<uint64_t>{x86reg::RSI, x86reg::RDI}));
+    EXPECT_EQ(Med.Params[0].RegOff, x86reg::RSI);
+    EXPECT_EQ(Med.Params[1].RegOff, x86reg::RDI);
+    for (const auto &P : Med.Params)
+      EXPECT_EQ(P.Size, 4u);
+  }
+}
+
+TEST(LowToMedX86CallingConv, NonstandardInputsExcludePreservationAndDeadLanes) {
+  for (uint64_t Register : {x86reg::RBX, x86reg::RSI, x86reg::RDI})
+    for (bool Consume : {false, true}) {
+      SCOPED_TRACE(testing::Message() << Register << ':' << Consume);
+      const NdVar Input = NdVar::reg(Register, 4);
+      const NdVar ESP = NdVar::reg(x86reg::RSP, 4);
+      const NdVar EAX = NdVar::reg(x86reg::RAX, 4);
+      LowFunc Low = makeOneBlockLow(0x1000, "saved_or_input", [&](auto Push) {
+        Push(NdOp::INT_SUB, ESP, {ESP, NdVar::cst(8, 4)});
+        Push(NdOp::INT_ADD, NdVar::tmp(1, 4), {ESP, NdVar::cst(4, 4)});
+        Push(NdOp::STORE, NdVar(), {NdVar::tmp(1, 4), Input});
+        Push(NdOp::INT_AND, NdVar::tmp(2, 4),
+             {Input, NdVar::cst(0xffffff00u, 4)});
+        Push(NdOp::INT_OR, Input, {NdVar::tmp(2, 4), NdVar::cst(7, 4)});
+        if (Consume)
+          Push(NdOp::COPY, EAX, {Input});
+        else
+          Push(NdOp::INT_AND, EAX, {Input, NdVar::cst(0xff, 4)});
+        Push(NdOp::LOAD, Input, {NdVar::tmp(1, 4)});
+        Push(NdOp::INT_ADD, ESP, {ESP, NdVar::cst(8, 4)});
+      });
+      Low.Blocks.front().Ops.back().addInput(EAX);
+      const MedFunc Med =
+          LowToMedConverter().convert(Low, Arch::X86, BinaryFormat::COFF);
+      EXPECT_EQ(hasParameterIn(Med, Register), Consume);
+      EXPECT_EQ(Med.Params.size(), Consume ? 1u : 0u);
+    }
+}
 
 TEST(LowToMedX86CallingConv, ScalarSSEMergeIsNotAParameterUntilALaneIsRead) {
   // `cvtsi2ss xmm2, eax; movss [esp+4], xmm2` keeps xmm2's upper lanes, so
@@ -9234,4 +9578,109 @@ TEST(CallRegisterEffects, TailCallAtEntryStackPassesTheStackArguments) {
       {{0x1000, Forwarder(true)}, {0x2000, Target}}, Args, Args);
   EXPECT_FALSE(Moved.EntryStackArgs.count(0x1000));
   EXPECT_TRUE(Moved.EntryStackArgs.count(0x2000));
+}
+
+TEST(LowToMedCallReturnFP, PromotedResultRetiresItsImplicitClobber) {
+  const auto &TRI = getTargetRegInfo(Arch::X64);
+  for (NdOp Second : {NdOp::CALL, NdOp::INDIR_CALL})
+    for (bool Successor : {false, true})
+      for (bool Preserving : {false, true}) {
+        SCOPED_TRACE(testing::Message() << unsigned(Second) << ':' << Successor
+                                        << ':' << Preserving);
+        const auto Med = convertTwoCallFPFlow(Second, Successor, Preserving);
+        unsigned Promoted = 0;
+        for (const auto *Call : callOps(Med)) {
+          if (Call->Output.Kind != MedVar::Reg ||
+              Call->Output.RegOff != TRI.FPReturnReg)
+            continue;
+          ++Promoted;
+          EXPECT_FALSE(std::any_of(
+              Med.CallClobbers.begin(), Med.CallClobbers.end(),
+              [&](const auto &Clobber) {
+                return Clobber.CallSiteId == Call->CallSiteId &&
+                       Clobber.Value.Kind == MedVar::Reg &&
+                       Clobber.Value.RegOff == Call->Output.RegOff &&
+                       Clobber.Value.Size == Call->Output.Size;
+              }));
+        }
+        EXPECT_GE(Promoted, 1u);
+        EXPECT_TRUE(verifyMedFunc(Med, "single-fp-call-result-identity"));
+      }
+}
+
+TEST(LowToMedCallReturnFP, LocalReadsAndJoinInputsShareTheBoundResult) {
+  for (const auto &[Architecture, Format] :
+       {std::pair{Arch::X64, BinaryFormat::COFF},
+        std::pair{Arch::X64, BinaryFormat::ELF},
+        std::pair{Arch::X64, BinaryFormat::MachO},
+        std::pair{Arch::AArch64, BinaryFormat::ELF},
+        std::pair{Arch::AArch64, BinaryFormat::MachO}})
+    for (bool BoundOutput : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << unsigned(Architecture) << ':' << unsigned(Format) << ':'
+                   << BoundOutput);
+      const auto &TRI = getTargetRegInfo(Architecture);
+      const auto FP = NdVar::reg(TRI.FPReturnReg, 16);
+      LowFunc Low;
+      Low.Entry = 0x1000;
+      Low.Name = "fp_result_join";
+      Low.Blocks.resize(4);
+      for (int I = 0; I < 4; ++I) {
+        Low.Blocks[I].Id = I;
+        Low.Blocks[I].StartAddr = Low.Entry + 0x10 * I;
+        Low.Blocks[I].EndAddr = Low.Entry + 0x10 * I + 0xF;
+      }
+      Low.Blocks[0].Succs = {1, 2};
+      Low.Blocks[1].Preds = Low.Blocks[2].Preds = {0};
+      Low.Blocks[1].Succs = Low.Blocks[2].Succs = {3};
+      Low.Blocks[3].Preds = {1, 2};
+      auto Append = [&](unsigned Block, NdOp Opcode, NdVar Out,
+                        std::initializer_list<NdVar> Inputs) {
+        auto &B = Low.Blocks[Block];
+        LowOp Op;
+        Op.Opcode = Opcode;
+        Op.Addr = B.StartAddr + B.Ops.size();
+        Op.Output = Out;
+        for (const auto &In : Inputs)
+          Op.addInput(In);
+        B.Ops.push_back(Op);
+      };
+      Append(0, NdOp::CALL, BoundOutput ? FP : NdVar::reg(TRI.IntReturnReg, 8),
+             {NdVar::cst(0x2000, 8)});
+      Append(0, NdOp::STORE, {}, {NdVar::cst(0x5000, 8), FP});
+      Append(0, NdOp::COND_BR, {},
+             {NdVar::cst(0x1010, 8),
+              NdVar::reg(TRI.integerParamRegs(Format).front(), 8)});
+      Append(1, NdOp::COPY, FP, {NdVar::cst(0, 16)});
+      Append(1, NdOp::BRANCH, {}, {NdVar::cst(0x1030, 8)});
+      Append(2, NdOp::CALL, NdVar::reg(TRI.IntReturnReg, 8),
+             {NdVar::cst(0x3000, 8)});
+      Append(2, NdOp::BRANCH, {}, {NdVar::cst(0x1030, 8)});
+      Append(3, NdOp::STORE, {}, {NdVar::cst(0x5010, 8), FP});
+      Append(3, NdOp::RETURN, {}, {NdVar::cst(0, 8)});
+      const std::set<va_t> Probes{0x3000};
+      LowToMedConverter Converter;
+      Converter.setStackProbeSlots(&Probes);
+      const auto Med = Converter.convert(Low, Architecture, Format);
+      const auto Calls = callOps(Med);
+      ASSERT_EQ(Calls.size(), 2u);
+      ASSERT_EQ(Calls[0]->Output.Kind, MedVar::Reg);
+      ASSERT_EQ(Calls[0]->Output.RegOff, TRI.FPReturnReg);
+      const auto &Result = Calls[0]->Output;
+      EXPECT_FALSE(std::any_of(Med.CallClobbers.begin(), Med.CallClobbers.end(),
+                               [&](const auto &Clobber) {
+                                 return Clobber.CallSiteId ==
+                                            Calls[0]->CallSiteId &&
+                                        Clobber.Value.Kind == MedVar::Reg &&
+                                        Clobber.Value.RegOff == Result.RegOff &&
+                                        Clobber.Value.Size == Result.Size;
+                               }));
+      bool JoinedResult = false;
+      for (const auto &Block : Med.Blocks)
+        for (const auto &Phi : Block.Phis)
+          for (const auto &[Pred, Incoming] : Phi.Args)
+            JoinedResult |= Incoming == Result;
+      EXPECT_TRUE(JoinedResult);
+      EXPECT_TRUE(verifyMedFunc(Med, "joined-fp-call-result-identity"));
+    }
 }

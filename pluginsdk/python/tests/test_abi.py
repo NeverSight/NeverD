@@ -16,6 +16,16 @@ from scripts.check_python_plugin_sdk import (
 
 
 class ABIInventoryTests(unittest.TestCase):
+    def test_continuation_source_preserves_both_owned_addresses(self) -> None:
+        from neverd_plugin import abi
+
+        spec = abi.FUNCTION_SPECS["neverd_x64_continuation_source_v1"]
+        self.assertIs(spec.ownership, abi.Ownership.OWNED_STRING)
+        self.assertIs(spec.restype, ctypes.c_void_p)
+        self.assertEqual(spec.argtypes,
+                         (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t,
+                          ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)))
+
     def test_metadata_visitor_preserves_borrowed_layout_and_callback(self) -> None:
         from neverd_plugin import abi
 
@@ -252,12 +262,32 @@ class ABIInventoryTests(unittest.TestCase):
         )
         if ctypes.sizeof(ctypes.c_void_p) == 8:
             self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeOptionsV8), 168)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV9.base.offset, 0)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV9.flags.offset,
+                         ctypes.sizeof(abi.NeverDDevirtualizeOptionsV8))
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV9.reserved.offset,
+                         ctypes.sizeof(abi.NeverDDevirtualizeOptionsV8) + 4)
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeOptionsV9), 176)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV9().flags, 0)
+        self.assertEqual(int(abi.DevirtualizeFlagsV9.PROVE_STORE_RETURN_SLOT_SEPARATION), 1)
+        self.assertEqual(int(abi.DevirtualizeFlagsV9.PROVE_STORE_FRAME_SEPARATION), 2)
         options_v8 = abi.NeverDDevirtualizeOptionsV8()
         self.assertEqual(options_v8.max_chained_visits_per_destination, 0)
         self.assertEqual(options_v8.reserved, 0)
         options_v8.max_chained_visits_per_destination = (1 << 32) - 1
         self.assertEqual(options_v8.max_chained_visits_per_destination, (1 << 32) - 1)
-        for version in (1, 2, 3, 4, 5, 6, 7, 8):
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV10.base.offset, 0)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV10.machine_source_abi.offset,
+                         ctypes.sizeof(abi.NeverDDevirtualizeOptionsV9))
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV10.reserved.offset,
+                         ctypes.sizeof(abi.NeverDDevirtualizeOptionsV9) + 4)
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            self.assertEqual(ctypes.sizeof(abi.NeverDDevirtualizeOptionsV10), 184)
+        self.assertEqual(abi.NeverDDevirtualizeOptionsV10().machine_source_abi, 0)
+        self.assertEqual(int(abi.DevirtualizeMachineSourceABI.QUERIES_V1), 1)
+        self.assertEqual(int(abi.DevirtualizeMachineSourceABI.QUERIES_XMM_V2), 2)
+        for version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
             for prefix in ("source", "machine_source"):
                 spec = abi.FUNCTION_SPECS[f"neverd_devirtualize_{prefix}_v{version}"]
                 self.assertEqual(

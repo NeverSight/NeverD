@@ -367,12 +367,15 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
       // Reading just the second word still proposes an integer pair. Keep
       // this as a candidate: only the direct callee's complete return proof
       // can establish the otherwise unobserved first word.
+      bool SecondWordOnly = false;
       if (TargetArch == Arch::AArch64 && Op.Opcode == NdOp::CALL &&
           TRI.IntReturnRegs.size() == 2 && Fields.size() == 1 &&
           !Fields.front().IsFP &&
           Fields.front().RegOff == TRI.IntReturnRegs[1] &&
-          isCallClobber(Fields.front().Value, Op.CallSiteId))
+          isCallClobber(Fields.front().Value, Op.CallSiteId)) {
         Fields.push_back({TRI.IntReturnReg, false, TRI.PointerSize, Op.Output});
+        SecondWordOnly = true;
+      }
       if (Fields.size() < 2)
         continue;
       bool AnyFP = false, AnyInt = false;
@@ -426,6 +429,7 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
           HasImplicitField) {
         MedStructReturnCandidate Candidate;
         Candidate.CallSiteId = Op.CallSiteId;
+        Candidate.SecondWordOnly = SecondWordOnly;
         for (const FieldRead &F : Fields) {
           MedVar Field = F.Value;
           Field.Size = F.Size;

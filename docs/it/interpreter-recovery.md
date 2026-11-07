@@ -80,7 +80,7 @@ In C si usa `neverd_devirtualize_source_v3()` o `neverd_devirtualize_machine_sou
 
 Il recupero espone anche `--vm-chain-transfers=N` (predefinito 0) e `--vm-no-control-discovery`. Il concatenamento mantiene le correlazioni simboliche tra trasferimenti con destinazione unica dimostrata; al limite torna ai normali confini CFG. Il recupero dello stato macchina può dichiarare offset rispetto a RSP d’ingresso senza riavvolgimento, non verificati a runtime, con `--vm-entry-frame=begin:end`. La premessa numerica esatta accompagna C e rapporto; non autorizza memoria né dimostra equivalenza.
 
-Le grandi funzioni recuperate che superano il limite di costruzione SSA possono usare `--llvm` tramite un contratto limitato di memoria scalare mutabile. Input iniziali, valori trasportati dai cicli e letture precedenti mantengono il proprio significato. Stati impliciti non supportati, parametri in registri vettoriali, rilocazioni, memoria ambigua e controllo malformato falliscono esplicitamente; HighC rifiuta questo percorso alternativo. L’output segue ancora il contratto esistente dello stato macchina e non aggiunge certificati di equivalenza.
+Le grandi funzioni recuperate che superano il limite di costruzione SSA possono usare `--llvm` tramite un contratto limitato di memoria scalare mutabile. Input iniziali, valori trasportati dai cicli e letture precedenti mantengono il proprio significato. Stati impliciti non supportati, parametri in registri vettoriali, rilocazioni, memoria ambigua e controllo malformato falliscono esplicitamente. HighC e LLVM C condividono questo percorso validato. I controlli x64 espliciti `RequireAligned`, incluse condizioni di un byte, mantengono i predicati di errore; forme errate e intrinseci non supportati vengono rifiutati. L’output segue ancora il contratto esistente dello stato macchina e non aggiunge certificati di equivalenza.
 
 Il sottoinsieme mutabile accetta memoria scalare da 8/16/32/64/128 bit; gli ingressi dei conteggi sono limitati a 64 bit. Larghezze non standard o superiori richiedono un contratto sorgente separato.
 
@@ -380,3 +380,99 @@ Un dominio incompleto o un intervallo immutabile non disponibile mantiene l’in
 ## Trasferimenti interni dopo il cambio dello stack
 
 Le regioni macchina grezze esplicite possono seguire istruzioni near CALL e RET interne anche quando il puntatore dello stack corrente non è più esprimibile rispetto a quello di ingresso. L’adattatore dell’architettura mantiene la cattura effettiva della destinazione, il push, la lettura della parola di ritorno e il pop. Ogni ritorno interno richiede ancora una prova esaustiva dell’insieme finito di destinazioni dalla parola effettiva sullo stack. Solo le celle di ritorno dimostrate relative all’ingresso entrano nella proiezione e nell’inventario di conservazione del frame; perdere altre relazioni sullo stack a un confine del grafo può ancora causare un rifiuto. Il recupero delle funzioni ordinarie mantiene i requisiti di ripristino del frame. Il risultato descrive una regione grezza; la composizione dell’intera funzione e l’equivalenza del sorgente o del codice nativo richiedono prove separate.
+
+<!-- i18n-section: store-separation-proofs -->
+
+## Prove facoltative di separazione delle scritture
+
+`--vm-prove-store-return-separation` dimostra che ogni scrittura completa evita le celle di ritorno, i puntatori di frame salvati e le celle scalari correnti prima di conservarli. `--vm-prove-store-frame-separation` controlla anche il frame dichiarato e le celle assolute correnti; richiede `--vm-machine-state` e `--vm-entry-frame`. Entrambe richiedono `--devirtualize`, sono disattivate per impostazione predefinita, condividono i budget esistenti e non aggiungono premesse di assenza di alias. Le scritture non dimostrate mantengono l’invalidazione normale; un recupero incompleto non pubblica codice. I controlli di catena esistenti consentono di conservare i cicli.
+
+Le API v9 `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v9` accettano `neverd_devirtualize_options_v9`. Inizializzare a zero e impostare `struct_size` del prefisso v1 alla dimensione completa. I flag sono `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION`, `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_FRAME_SEPARATION`; `reserved` deve essere zero. Le API precedenti ignorano questa coda. Python espone `NeverDDevirtualizeOptionsV9`, `DevirtualizeFlagsV9`; i rapporti includono `proveStoreReturnSlotSeparation`, `proveStoreFrameSeparation`. Il test esegue un ciclo su un array locale indicizzato tramite entrambi i percorsi C in O0/O2 con ASan/UBSan e controlla tutta la memoria di stack fornita.
+
+Con una delle strategie attiva, il recupero conserva tra i nodi anche gli offset finiti dei registri rispetto al frame di ingresso, dopo una prova esaustiva. Le confluenze uniscono gli offset in ingresso; fatti mancanti o unioni oltre il limite esistente delle tuple di controllo diventano sconosciuti. Non vengono introdotte correlazioni tra registri né ulteriori ipotesi di alias.
+
+<!-- i18n-section: finite-indexed-frame-reads -->
+
+## Letture del frame con indice finito
+
+Un normale `LOAD` con un insieme finito di offset dal frame d’ingresso dimostrato esaustivamente legge i byte correnti di ogni candidato e conserva un valore simbolico condizionale. La lettura a runtime rimane nel residuo con larghezza completa e ordine dei byte. L’origine esterna richiede tale provenienza per ogni byte di ogni candidato. Byte sconosciuti e valori invalidati restano sconosciuti; un’enumerazione incompleta mantiene il normale comportamento della memoria simbolica. Si applicano i budget esistenti per tuple di controllo, solver, nodi e operazioni. Non viene creato alcun testimone di lettura immutabile né un nuovo contratto di non alias.
+
+<!-- i18n-section: runtime-validity-refinement -->
+
+## Validità a runtime attraverso i confini del grafo
+
+Con la scoperta dello stato di controllo abilitata, un predicato non costante di validità a runtime può richiedere i bit del produttore persi al confine del grafo. Il recupero riprova entro i budget condivisi esistenti e deve dimostrare la validità di ogni stato in ingresso raggiungibile. Questo conserva l’allineamento stabilito e i valori mascherati dei registri di controllo tra nodi e cicli, senza supporre impossibili gli stati rifiutati né rimuovere l’operazione originale.
+
+<!-- i18n-section: ordered-query-source -->
+
+## Query CPU ordinate nel recupero del sorgente C++
+
+`wrapInterpreterMachineQueryStateX64()` è un’interfaccia C++ facoltativa. Lo stato di 160 byte conserva il prefisso macchina di 136 byte e aggiunge tre campi a 64 bit: indirizzo dell’array, conteggio e cursore. Ogni record di 24 byte contiene sei parole a 32 bit: leaf, subleaf, EAX, EBX, ECX ed EDX. Ogni CPUID canonico consuma in ordine un record corrispondente ed estende con zeri i quattro risultati. Selettori uguali possono avere risposte diverse. Nessuna istruzione CPU dell’host fornisce le risposte.
+
+L’esaurimento restituisce stato 3, la mancata corrispondenza dei selettori stato 4. Entrambi arrestano l’esecuzione prima della query, salvano lo stato corrente, conservano gli effetti precedenti sulla memoria guest e lasciano invariato il cursore. Il rifiuto dell’allineamento d’ingresso restituisce ancora 2 senza scritture. L’array deve essere accessibile, immutabile, senza riavvolgimento degli indirizzi e separato dallo stato e dalla memoria guest; un conteggio zero ammette un indirizzo nullo. Restano validi i contratti esistenti di stato e flag. Non viene aggiunto supporto per equivalenza nativa o serializzazione hardware. I wrapper precedenti rifiutano ancora le query CPU, gli altri intrinseci non supportati e gli ambienti grezzi.
+
+<!-- i18n-section: xmm-query-source -->
+
+## Stato XMM esplicito per il sorgente
+
+`wrapInterpreterMachineQueryStateX64V2()` usa una disposizione separata di 416 byte: il prefisso delle query di 160 byte invariato, seguito da XMM0–XMM15, ciascuno come parole bassa e alta a 64 bit. Basta un allineamento di otto byte. Ogni byte XMM viene letto all’ingresso e salvato ai ritorni ordinari e alle uscite per query fallita. I codici di query e allineamento mantengono il loro significato.
+
+L’interfaccia C++ ammette operandi XMM completi a 128 bit e ricostruisce le letture temporanee locali all’istruzione dalle definizioni correnti dei byte, conservando le sovrascritture parziali. Byte mancanti e alias temporanei di funzione causano un errore esplicito. Si eliminano solo controlli di allineamento di indirizzi costanti provati dal livello architetturale; quelli dinamici o malformati sono rifiutati. Restano esclusi operandi XMM parziali, banchi vettoriali più ampi e ambienti in virgola mobile. Non viene aggiunta equivalenza nativa; i wrapper precedenti mantengono disposizione e restrizioni.
+
+<!-- i18n-section: source-abi-v10 -->
+
+## Scelta della disposizione tramite CLI e SDK
+
+Usare `--vm-source-abi=scalar|queries|xmm` con `--devirtualize --vm-machine-state`. Il valore predefinito `scalar` conserva 136 byte; `queries` seleziona lo stato ordinato di 160 byte e `xmm` quello di 416 byte con XMM. I rapporti indicano `sourceABI` e `sourceStateBytes`; il C generato descrive il contratto di memoria.
+
+Le API C v10 `neverd_devirtualize_source_v10()` e `neverd_devirtualize_machine_source_v10()` accettano `neverd_devirtualize_options_v10`. Inizializzarlo a zero, impostare `struct_size` del prefisso v1 alla dimensione completa e scegliere `machine_source_abi` con `NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1`, `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1` o `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2`. Valori sconosciuti, campi riservati non nulli e disposizioni estese con sorgente ordinario vengono rifiutati. Le API precedenti ignorano questa coda; v10 ignora code future. Opzioni nulle conservano i valori scalari predefiniti. Python espone `NeverDDevirtualizeOptionsV10` e `DevirtualizeMachineSourceABI`. La certificazione nativa resta invariata.
+
+<!-- i18n-section: gui-interpreter-recovery -->
+
+## Ricostruzione dell’interprete nell’app desktop
+
+In una vista C, scegli **Ricostruisci funzione dell’interprete**. Le opzioni selezionano lo stato, i limiti di lavoro e le premesse esplicite del frame d’ingresso; i valori predefiniti non aggiungono ipotesi di frame, allineamento o separazione. Il rapporto conserva la diagnostica. Annullare o ottenere un risultato incompleto mantiene il sorgente precedente; **Torna al sorgente ordinario** ripristina la vista normale.
+
+Il worker accetta `source_options.interpreter_recovery` come unica opzione del sorgente e chiama il C SDK v10. Memorizza e pagina il C completo senza modificarlo, senza applicare modifiche alle variabili ordinarie o inventare mappe delle istruzioni. Il rapporto completo compare nella prima pagina; `source_available` distingue il sorgente generato da una ricostruzione interrotta. Non certifica l’equivalenza nativa.
+
+<!-- i18n-section: machine-region-source -->
+
+## Sorgente verificato delle regioni macchina
+
+L’interfaccia C++ esplicita `wrapInterpreterMachineRegionSourceX64()` in `neverd/analysis/arch/x86_64/InterpreterMachineRegionSource.h` riceve un risultato completo e opzioni attese specificate indipendentemente. Verifica l’intero grafo grezzo, l’ambiente e le uscite fisiche prima della conversione e conserva la ricevuta originale. I wrapper ordinari continuano a rifiutare i domini grezzi. CLI, SDK C e GUI non espongono ancora questa interfaccia.
+
+`InterpreterMachineRegionStateX64V1` usa un layout separato di 432 byte: prefisso query/XMM di 416 byte, `PC` a 416 e `ExitKind` a 424. L’ingresso è fisso; entrambi i campi sono uscite. CALL/JMP/RET conservano la destinazione effettiva e gli effetti fisici sullo stack, salvano tutto lo stato supportato e si fermano prima della destinazione. I tipi di uscita sono 1/2/3. Gli stati 3/4 si fermano prima di una query esaurita/non corrispondente, con il PC originale e tipo 0; gli effetti precedenti restano. Lo stato 2 rifiuta l’allineamento senza cambiare lo stato. Lo stato 1 non fornisce una continuazione valida.
+
+L’interfaccia di base ammette il profilo utente senza fault e le operazioni scalari/query/XMM esistenti. Stati architetturali e dichiarazioni di codice/import aggiuntivi restano rifiutati; le trap richiedono l’opzione esplicita di arresto prima dell’istruzione. `EntryFrameExcludedObjects` verifica che gli intervalli completi di frame e oggetti non subiscano overflow degli indirizzi e siano separati, prima di accessi guest, scritture dello stato o prenotazioni del nastro. Il rifiuto restituisce lo stato 2 senza modificare lo stato. Gli oggetti possono sovrapporsi tra loro; radici uguali sono valide se gli intervalli relativi sono disgiunti. Le altre premesse di memoria/frame, incluse le esclusioni assolute, restano responsabilità del chiamante; non si deducono accessibilità o byte iniziali. La memoria guest richiede ancora copie di byte o tipi alias con allineamento 1. Questo non certifica ABI ordinaria, composizione delle chiamate o funzione completa/equivalenza nativa. `InterpreterMachineRegionSourceTest.EntryObjects*` verifica entrambi i backend C a O0/O2 con sanitizer di indirizzi e comportamento indefinito: stati completi, query, alias, intervalli adiacenti o con overflow e budget sorgente esatti.
+
+Le uscite architetturalmente indefinite mantengono i valori scelti da LowIR. Riprodurre le scelte di un processore o dimostrarne l’irrilevanza per le osservazioni native richiede un ambiente indipendente o una prova di non interferenza; questa ricevuta non fornisce nessuno dei due.
+
+<!-- i18n-section: machine-region-architectural-choices -->
+
+## Valori scalari arbitrari dell’architettura
+
+L’API C++ delle regioni macchina consente `SpecializationUndefinedModel::FreshScalarV1`. Le descrizioni complete degli effetti scalari indefiniti producono un valore indipendente a ogni visita dinamica, prima delle prove sui rami e sulle destinazioni. Le copie condividono la stessa produzione; le visite ripetute usano nuovi valori. Il grafo residuo conserva gli aggiornamenti condizionali dei bit, incluse le produzioni con condizione falsa, e la ricevuta vincola il modello.
+
+L’opzione richiede uscite esplicite di regioni x64 e prove complete per le istruzioni scalari. Effetti non supportati e budget esauriti vengono rifiutati. L’adattatore C attuale, gli emettitori ordinari e le interfacce di prova nativa rifiutano questo modello senza un ambiente esplicito di valori a runtime; non deducono valori specifici di un processore né un’ABI ordinaria.
+
+Una proiezione RDSSP verificata esattamente, con CET esplicitamente disabilitato, preserva la destinazione senza una nuova produzione; il suo registro generale degli effetti indefiniti resta assente. Le trap autenticate rimangono confini non eseguiti.
+
+<!-- i18n-section: machine-region-choice-source -->
+
+## Scelte architetturali eseguibili
+
+`wrapInterpreterMachineRegionChoiceSourceX64V1` usa un risultato `FreshScalarV1` validato con il tipo separato `InterpreterMachineRegionChoiceStateX64V1` da 456 byte. I primi 432 byte mantengono il formato precedente; `Choices`, `ChoiceCount` e `ChoiceCursor` si trovano agli offset 432, 440 e 448. `StateABI` indica `x64-machine-region-choice-state-v1` e `StateBytes` vale 456. Il precedente wrapper da 432 byte continua a rifiutare questo modello.
+
+Ogni record `InterpreterArchitecturalChoiceX64V1` da 32 byte contiene quattro campi da 64 bit: PC originale, ordine della produzione nell’istruzione, numero di bit e valore. Il valore deve rientrare nella larghezza. Tutti i record vengono verificati prima di qualsiasi effetto dell’istruzione. Lo stato 5 indica esaurimento, il 6 una discordanza di PC, ordine, larghezza o valore. Entrambi conservano gli effetti precedenti, restituiscono il PC originale non eseguito con `ExitKind=None` e mantengono il cursore iniziale. Il cursore avanza solo dopo l’intera istruzione, anche con guardie false. Le visite ripetute consumano nuovi record; copie e salvataggi in memoria no.
+
+Il chiamante fornisce record accessibili, stabili e separati dallo stato e dalla memoria ospite. Non vengono dedotti valori specifici del processore. Query, arresti espliciti prima delle trap e controlli di allineamento mantengono i contratti esistenti. Entrambe le vie C possono emettere il grafo abbassato; gli emettitori ordinari rifiutano produzioni non consumate. Questa interfaccia C++ non fornisce integrazione CLI/C SDK/GUI, recupero dell’ABI ordinaria o certificazione di equivalenza nativa.
+
+I controlli delle scelte condividono i blocchi di scrittura per esaurimento e discordanza, conservando PC originale e flag iniziali di ogni istruzione. Dopo l’abbassamento scalare, il wrapper unisce una prosecuzione implicita solo se il successore ha un unico predecessore e non è un ingresso o una radice di analisi. Segmenti di istruzioni, rami condizionali e cicli restano espliciti. Cambiano solo le etichette di controllo generate; costanti ospiti e PC dei record restano intatti. Formati di stato, controlli dell’intera istruzione, aggiornamenti del cursore e limiti di risorse non cambiano.
+
+<!-- i18n-section: machine-region-pending-traps -->
+
+## Uscite prima di un trap
+
+L’overload che riceve `InterpreterMachineRegionSourceOptions` permette di impostare esplicitamente `StopBeforeTraps = true`. Mantiene il layout di 432 byte e restituisce `TrapPending` (4), con l’indirizzo originale del trap in `PC` e tutto lo stato supportato immediatamente prima dell’istruzione. Gli effetti di memoria precedenti restano; non esegue il trap, crea il frame di eccezione, entra nel gestore o riprende l’esecuzione. L’overload predefinito continua a rifiutare le dichiarazioni di trap, anche inutilizzate. L’identità esatta del trap e i metadati di verifica restano autenticati dal proprietario della regione originale; questa opzione non aggiunge prove architetturali. Gli arresti per query o allineamento mantengono i codici e i contratti di stato esistenti.
+
+Le regioni validate conservano anche le operazioni dinamiche canoniche `RequireAligned`. Entrambi i backend C mantengono i controlli con arresto immediato; una violazione dell’allineamento dell’istruzione non fornisce stato confermato né continuazione dell’eccezione. I wrapper ordinari dello stato macchina mantengono le restrizioni esistenti.

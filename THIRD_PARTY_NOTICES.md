@@ -101,7 +101,7 @@ support libraries from Meta Hermes at revision
 invoke JavaScript tools. Primitive Number formatting also uses the embedded
 support/dtoa library. The archive is pinned by SHA-256
 `6c615757374850ccb99991c4536aaf86ac0973661b1ae18aac45d2ca85143153`.
-See the [upstream source](https://github.com/facebook/hermes/tree/602befee340da188ea1560cde7a9cc33e6b180dc)
+See the [upstream source](https://github.com/meta/hermes/tree/602befee340da188ea1560cde7a9cc33e6b180dc)
 and preserved [license set](LICENSES/hermes).
 
 Hermes is Copyright (c) Meta Platforms, Inc. and affiliates, under the MIT

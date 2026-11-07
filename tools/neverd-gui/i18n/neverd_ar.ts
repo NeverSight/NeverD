@@ -12,6 +12,14 @@
         <translation>وضع التركيز (&amp;F)</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>مثيل جديد(&amp;N)</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>فتح مثيل جديد من NeverD</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>فتح(&amp;O)...</translation>
     </message>
@@ -342,6 +350,50 @@
     <message>
         <source>Move to the next occurrence of the highlighted identifier</source>
         <translation>الانتقال إلى التكرار التالي للمعرّف المميَّز</translation>
+    </message>
+    <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>قفل أو إلغاء القفل(&amp;U)</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>إبقاء الكلمة المميزة مميزة بأول لون متاح، أو إلغاء قفلها</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>اللون 1(&amp;1)</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>اللون 2(&amp;2)</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>اللون 3(&amp;3)</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>اللون 4(&amp;4)</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>اللون 5(&amp;5)</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>اللون 6(&amp;6)</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>اللون 7(&amp;7)</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>اللون 8(&amp;8)</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>قفل الكلمة المميزة بهذا اللون، أو إلغاء قفل اللون</translation>
     </message>
     <message>
         <source>&amp;Find in view...</source>
@@ -1275,6 +1327,14 @@
         <source>Enter &amp;comment...</source>
         <translation>إدخال تعليق(&amp;C)...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>تثبيت الإضافات وتفعيلها وتعطيلها وإزالتها</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>مدير الإضافات(M)...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1612,6 +1672,10 @@
         <translation>بحث(&amp;S)</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>قفل التمييز(&amp;L)</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>عرض(&amp;V)</translation>
     </message>
@@ -1712,6 +1776,10 @@
     <message>
         <source>%1 uses database format %2, which this NeverD cannot update.</source>
         <translation>يستخدم %1 تنسيق قاعدة البيانات %2، ولا يستطيع هذا الإصدار من NeverD تحديثه.</translation>
+    </message>
+    <message>
+        <source>This database may already be open in another NeverD (%1)</source>
+        <translation>قد تكون قاعدة البيانات هذه مفتوحة بالفعل في NeverD آخر (%1)</translation>
     </message>
     <message>
         <source>Cannot create %1</source>
@@ -2022,6 +2090,23 @@ Double-click to go to the declaration.</source>
         <source>Could not refresh source: %1</source>
         <translation>تعذّر تحديث الشيفرة المصدرية: %1</translation>
     </message>
+
+    <message>
+        <source>Interpreter recovered · %1 blocks</source>
+        <translation>تمت استعادة المفسّر · %1 كتل</translation>
+    </message>
+    <message>
+        <source>No complete source was produced</source>
+        <translation>لم يتم إنتاج شفرة مصدر كاملة</translation>
+    </message>
+    <message>
+        <source>Recovering interpreter control flow…</source>
+        <translation>جارٍ استعادة تدفق تحكم المفسّر…</translation>
+    </message>
+    <message>
+        <source>Recovery stopped: %1</source>
+        <translation>توقفت الاستعادة: %1</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::CodeView</name>
@@ -2088,6 +2173,23 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Cancel transformation</source>
         <translation>إلغاء التحويل</translation>
+    </message>
+
+    <message>
+        <source>Interpreter recovery options…</source>
+        <translation>خيارات استعادة المفسّر…</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report…</source>
+        <translation>تقرير استعادة المفسّر…</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>استعادة دالة المفسّر</translation>
+    </message>
+    <message>
+        <source>Return to ordinary source</source>
+        <translation>العودة إلى المصدر العادي</translation>
     </message>
 </context>
 <context>
@@ -2316,6 +2418,14 @@ Double-click to go to the declaration.</source>
         <source>Laying out graph…</source>
         <translation>جارٍ تخطيط الرسم البياني…</translation>
     </message>
+    <message>
+        <source>From %1</source>
+        <translation>من %1</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>إلى %1</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::HexView</name>
@@ -2401,6 +2511,26 @@ Double-click to go to the declaration.</source>
         <translation>التحليل في الخلفية: تُفهرَس المراجع والتسميات أثناء التصفح</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>تغيّرت قاعدة البيانات</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>تغيّر %1 بعد أن فتحته مساحة العمل هذه، ربما في NeverD آخر. هل تريد استبدال محتواه الحالي بمشروع مساحة العمل هذه؟</translation>
+    </message>
+    <message>
+        <source>Open other files in a new instance</source>
+        <translation>فتح الملفات الأخرى في مثيل جديد</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>عند فتح ملف، يبدأ ملف &gt; فتح والملف الأخير والملف المُفلت مثيلًا جديدًا بدلًا من استبداله</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 مفتوح بالفعل في NeverD آخر؛ جارٍ الانتقال إليه.</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>تغييرات غير محفوظة</translation>
     </message>
@@ -2411,6 +2541,10 @@ Double-click to go to the declaration.</source>
     <message>
         <source>%1 lacks the latest changes. Save them into it before continuing?</source>
         <translation>تفتقر %1 إلى آخر التغييرات. هل تريد حفظها فيها قبل المتابعة؟</translation>
+    </message>
+    <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>تعذّر بدء مثيل جديد: %1</translation>
     </message>
     <message>
         <source>Cannot jump to %1: %2</source>
@@ -2439,18 +2573,6 @@ Double-click to go to the declaration.</source>
     <message>
         <source>History: %1 entries, cursor %2</source>
         <translation>السجل: عدد الإدخالات %1، المؤشر %2</translation>
-    </message>
-    <message>
-        <source>AU: idle</source>
-        <translation>AU: خامل</translation>
-    </message>
-    <message>
-        <source>AU: busy %1%</source>
-        <translation>AU: مشغول %1%</translation>
-    </message>
-    <message>
-        <source>AU: busy</source>
-        <translation>AU: مشغول</translation>
     </message>
     <message>
         <source>Down</source>
@@ -3324,6 +3446,10 @@ After:
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>اختر ملفًا بحجم من بايت واحد إلى ‎%1، وعنوانًا ست عشريًا، واسم قسم. تحتاج الدالة إلى اسم وأذونات تنفيذ.</translation>
     </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>مهام الإضافات</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3488,6 +3614,14 @@ After:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>يقع %1 في مجلد لا يمكنك الكتابة فيه؛ تُحفظ قاعدة بياناته في %2</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>قد يكون هذا الملف مفتوحًا بالفعل في NeverD آخر (%1)</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>تُرك %1 كما هو؛ فهو لا يتضمن تغييرات مساحة العمل هذه.</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>
@@ -6951,6 +7085,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 هويات المراجع: غير محسومة. لا يمكن مقارنة بعض أهداف الاستدعاءات أو البيانات. وهذا وحده لا يثبت حدوث تغيير.</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>تضمين الاستدعاءات المتطابقة</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>توسيع المناطق المشتركة عبر الاستدعاءات المباشرة التي تمت مطابقة أهدافها. تعتمد النتائج على أزواج الدوال الحالية ويعاد حسابها عند تغير الأزواج. لا يتحقق هذا من سلوك الاستدعاءات.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -6993,10 +7135,6 @@ Select an operation to follow dependencies. Synthetic operations have block prov
     <message>
         <source>Enable dependency evidence in comparison settings.</source>
         <translation>فعّل أدلة التبعيات في إعدادات المقارنة.</translation>
-    </message>
-    <message>
-        <source>Include control dependencies</source>
-        <translation>تضمين تبعيات التحكم</translation>
     </message>
     <message>
         <source>Inspect original function</source>
@@ -7133,6 +7271,32 @@ Progress does not establish equal loop counts or function results.</source>
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>البرهان: تصل كل دورة للعدّاد إلى مخرج مشترك نسبةً إلى تعبير مشتق من المدخلات. قد يحدث سلوك غير معرّف قبل الخروج.</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>عمليات وصول المعاملات</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>عرض القراءات والكتابات التي تستخدم العنوان المحسوب نفسه لمعامل استدعاء مستعاد.</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>تضمين التحكم</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>تضمين تبعيات التحكم عند تتبع المدخلات أو الاستخدامات.</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>استدعاء n%1 · %2 من ملاحظات العناوين · %3
+قراءات وكتابات عند عنوان معامل مستعاد. تظل آثار الاستدعاء وترتيب التنفيذ غير معروفين. فعّل صفًا لتحديد عمليته.</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>جارٍ فحص عناوين المعاملات…</translation>
     </message>
 </context>
 <context>
@@ -7947,6 +8111,38 @@ Every use of a projected parameter reads the same low bits. Whole-function behav
         <source>Uncertain</source>
         <translation>غير مؤكد</translation>
     </message>
+    <message>
+        <source>Argument</source>
+        <translation>المعامل</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>الوصول</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>مدخل RETURN</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>كتابة</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>قراءة</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>مسار COPY / PHI</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>لم يُرصد</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>مسار COPY/PHI بالعرض نفسه إلى مُعامَل RETURN. قد يكون المُعامَل هدف تحكم؛ ولا يثبت ذلك قيمة إرجاع وفق ABI أو ترتيب التنفيذ.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonRegionsDialog</name>
@@ -8103,6 +8299,30 @@ External input producers are not compared or counted as shared code.</source>
 SSA recipe: %1</source>
         <translation>
 طريقة SSA: %1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+تستخدم الاستدعاءات أزواج الدوال الحالية؛ لم يتم التحقق من السلوك.</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>سياق الاستدعاءات…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>الأساسي</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>الثانوي</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>%1 دوال أساسية / %2 دوال ثانوية · %3 نطاقات مشتركة
+التغطية: %4% / %5% من التعليمات المؤهلة، بما فيها الاستدعاءات المباشرة المتطابقة. يعتمد هذا الدليل على أزواج الدوال؛ لم يتم التحقق من السلوك.</translation>
     </message>
 </context>
 <context>
@@ -9649,6 +9869,18 @@ Ambiguities and manual decisions remain report-local. Region hypotheses retain t
         <source>Releases</source>
         <translation>الإصدارات</translation>
     </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>تستند الاستدعاءات في هذه المقاطع المحفوظة إلى أزواج الدوال في التقرير المصدر. وهي لا تثبت تكافؤ سلوك الدوال المستدعاة.</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>كل المقاطع الأصلية</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>كل مقاطع SSA</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LineageGraph</name>
@@ -9992,6 +10224,668 @@ Your previous graph is still available.</source>
     <message>
         <source>Timeline</source>
         <translation>المخطط الزمني</translation>
+    </message>
+</context>
+
+<context>
+    <name>neverd::gui::InterpreterRecoveryDialog</name>
+    <message>
+        <source>Assume external stores avoid the declared entry frame</source>
+        <translation>افتراض أن الكتابات الخارجية لا تتداخل مع إطار الدخول المعلن</translation>
+    </message>
+    <message>
+        <source>Blank or zero keeps the engine default. More work does not permit incomplete source or add memory assumptions.</source>
+        <translation>ترك الحقل فارغًا أو ضبطه على صفر يبقي القيمة الافتراضية للمحرك. زيادة العمل لا تسمح بمصدر غير مكتمل ولا تضيف افتراضات عن الذاكرة.</translation>
+    </message>
+    <message>
+        <source>Chained transfers</source>
+        <translation>الانتقالات المتسلسلة</translation>
+    </message>
+    <message>
+        <source>Chained visits per destination</source>
+        <translation>الزيارات المتسلسلة لكل وجهة</translation>
+    </message>
+    <message>
+        <source>Contexts per address</source>
+        <translation>السياقات لكل عنوان</translation>
+    </message>
+    <message>
+        <source>Control fields</source>
+        <translation>حقول التحكم</translation>
+    </message>
+    <message>
+        <source>Control refinements</source>
+        <translation>تنقيحات التحكم</translation>
+    </message>
+    <message>
+        <source>Control-flow nodes</source>
+        <translation>عقد تدفق التحكم</translation>
+    </message>
+    <message>
+        <source>Dependency visits</source>
+        <translation>زيارات التبعيات</translation>
+    </message>
+    <message>
+        <source>End a chain at a repeated destination</source>
+        <translation>إنهاء السلسلة عند تكرار الوجهة</translation>
+    </message>
+    <message>
+        <source>Engine default</source>
+        <translation>القيمة الافتراضية للمحرك</translation>
+    </message>
+    <message>
+        <source>Enter a valid integer for %1.</source>
+        <translation>أدخل عددًا صحيحًا صالحًا لـ %1.</translation>
+    </message>
+    <message>
+        <source>Enter both entry-frame endpoints, or leave both blank.</source>
+        <translation>أدخل حدي إطار الدخول أو اتركهما فارغين.</translation>
+    </message>
+    <message>
+        <source>Entry RSP alignment</source>
+        <translation>محاذاة RSP عند الدخول</translation>
+    </message>
+    <message>
+        <source>Entry RSP range end (exclusive)</source>
+        <translation>نهاية نطاق RSP عند الدخول (غير مشمولة)</translation>
+    </message>
+    <message>
+        <source>Entry RSP range start</source>
+        <translation>بداية نطاق RSP عند الدخول</translation>
+    </message>
+    <message>
+        <source>Entry RSP residue</source>
+        <translation>باقي RSP عند الدخول</translation>
+    </message>
+    <message>
+        <source>Evaluated operations</source>
+        <translation>العمليات التي يتم تقييمها</translation>
+    </message>
+    <message>
+        <source>General registers</source>
+        <translation>السجلات العامة</translation>
+    </message>
+    <message>
+        <source>General registers and CPU queries</source>
+        <translation>السجلات العامة واستعلامات CPU</translation>
+    </message>
+    <message>
+        <source>General registers, CPU queries and XMM</source>
+        <translation>السجلات العامة واستعلامات CPU وXMM</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report</source>
+        <translation>تقرير استعادة المفسّر</translation>
+    </message>
+    <message>
+        <source>Node evaluations</source>
+        <translation>تقييمات العقد</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid return slots and saved frame cells</source>
+        <translation>إثبات أن الكتابات تتجنب خانات العودة وخلايا الإطار المحفوظة</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid the declared entry frame</source>
+        <translation>إثبات أن الكتابات تتجنب إطار الدخول المعلن</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>استعادة</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>استعادة دالة المفسّر</translation>
+    </message>
+    <message>
+        <source>Recover reachable control flow and generate C with explicit x64 register state. The source describes normal, nonfaulting execution with fixed image mappings. Memory assumptions below apply only when you enter them.</source>
+        <translation>استعادة تدفق التحكم القابل للوصول وتوليد C بحالة صريحة لسجلات x64. يصف المصدر تنفيذًا عاديًا دون أخطاء مع تعيينات ثابتة للصورة. لا تنطبق افتراضات الذاكرة أدناه إلا عند إدخالها.</translation>
+    </message>
+    <message>
+        <source>Signed offsets from entry RSP. Declaring this range assumes address arithmetic does not wrap; it does not prove accessibility or separation.</source>
+        <translation>إزاحات موقّعة من RSP عند الدخول. إعلان هذا النطاق يفترض عدم التفاف حساب العناوين؛ ولا يثبت إمكانية الوصول أو عدم التداخل.</translation>
+    </message>
+    <message>
+        <source>Solver queries</source>
+        <translation>استعلامات المحلّل</translation>
+    </message>
+    <message>
+        <source>Source state</source>
+        <translation>حالة المصدر</translation>
+    </message>
+    <message>
+        <source>State and memory</source>
+        <translation>الحالة والذاكرة</translation>
+    </message>
+    <message>
+        <source>Symbolic expression nodes</source>
+        <translation>عقد التعبيرات الرمزية</translation>
+    </message>
+    <message>
+        <source>Unspecified</source>
+        <translation>غير محدد</translation>
+    </message>
+    <message>
+        <source>Work limits</source>
+        <translation>حدود العمل</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisProgress</name>
+    <message>
+        <source>AU: idle</source>
+        <translation>AU: خامل</translation>
+    </message>
+    <message>
+        <source>AU: loading</source>
+        <translation>AU: جارٍ التحميل</translation>
+    </message>
+    <message>
+        <source>AU: loading %1%</source>
+        <translation>AU: جارٍ التحميل %1%</translation>
+    </message>
+    <message>
+        <source>AU: finding functions</source>
+        <translation>AU: جارٍ البحث عن الدوال</translation>
+    </message>
+    <message>
+        <source>AU: indexing references</source>
+        <translation>AU: جارٍ فهرسة المراجع</translation>
+    </message>
+    <message>
+        <source>AU: indexing references %1%</source>
+        <translation>AU: جارٍ فهرسة المراجع %1%</translation>
+    </message>
+    <message>
+        <source>AU: analysis finished</source>
+        <translation>AU: اكتمل التحليل</translation>
+    </message>
+    <message>
+        <source>Analysis finished in %1 s</source>
+        <translation>اكتمل التحليل في %1 ث</translation>
+    </message>
+    <message>
+        <source>Reading the file</source>
+        <translation>جارٍ قراءة الملف</translation>
+    </message>
+    <message>
+        <source>Parsing the format</source>
+        <translation>جارٍ تحليل التنسيق</translation>
+    </message>
+    <message>
+        <source>Finding code</source>
+        <translation>جارٍ البحث عن الشيفرة</translation>
+    </message>
+    <message>
+        <source>Loading debug information</source>
+        <translation>جارٍ تحميل معلومات التصحيح</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>جارٍ فتح المشروع</translation>
+    </message>
+    <message>
+        <source>Loading</source>
+        <translation>جارٍ التحميل</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LoadProgressCard</name>
+    <message>
+        <source>Opening %1</source>
+        <translation>جارٍ فتح %1</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 ث</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> أيقونة</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> موضع</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · المهمة %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 ث</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>إلغاء المهمة(&amp;C)</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>تصدير الناتج(&amp;E)…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>استيراد إضافة(&amp;I)…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>إضافة الشفرة المستعادة كقسم تحليل ثم فتح أول دالة فيه</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>الناتج:</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>استعراض…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>اختيار أيقونة الأمر</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>اختر الأوامر التي تظهر مباشرة في القائمة السياقية. تُجمع الأوامر الأخرى ضمن Plugins → اسم الإضافة. تقبل الأيقونات builtin:name أو ملف PNG أو ICO أو SVG محليًا.</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>الأمر</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>إعدادات القائمة السياقية…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>مباشرة في القائمة السياقية</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>المدة</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>تصدير الناتج</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>تصدير الناتج إلى ملف جديد</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>الأيقونة</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>الأيقونة غير متاحة: %1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>أيقونات (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>استورد إضافة تعمل كعملية لإضافة أوامر.</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>استيراد الشفرة إلى الصورة</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>استيراد إضافة تعمل كعملية</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>استيراد إضافة تعمل كعملية…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>سجل %1</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>إعدادات القوائم…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>الإضافات(&amp;G)</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>الإضافة</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>إضافة / مهمة</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>تم تصدير ناتج الإضافة إلى %1</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>القوائم السياقية للإضافات</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>أيقونة الإضافة غير متاحة: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>مدير الإضافات…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>بيانات الإضافات (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>سجل مهام الإضافة</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>مهام الإضافات ونتائجها</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>الإضافات</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>القائمة الفرعية Plugins</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>الموضع</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>تم استيراد الإضافة التي تعمل كعملية: %1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>التقدم</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>تغيّر المشروع أثناء فتح مربع حوار الإضافة</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>تذكّر هذه القيم لهذا الإجراء</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>شغّل أمرًا من الإضافة لعرض مهامها ونتائجها.</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>اختر مهمة ضمن %1 لعرض نتيجتها.</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>تقدم مهمة الإضافة المحددة</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>عرض السجل(&amp;L)</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>الحالة</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>نتائج المهام</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>المهام مجمّعة حسب الإضافة</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>لم يعد تسجيل هذا الإجراء نشطًا.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>جارٍ التفعيل</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>التفعيل</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>التفعيل: %1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>نشط</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>جيل المكوّن: %1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>تعذر فتح مجلد الإضافة.</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>خدمات القراءة المعلنة: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>التشخيص: %1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>تعطيل</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>تفعيل</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>مفعّل</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>مفعّل عند البدء: %1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>تصفية حسب اسم الإضافة أو معرّفها أو مسارها</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>تصفية الإضافات</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>استورد بيان إضافة تعمل كعملية لإضافة أوامر. لا تبدأ البرامج الموفّرة إلا عند تشغيل أمر.</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>استيراد إضافة…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>استيراد إضافة تعمل كعملية</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>غير نشط</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>أزيل سجل التثبيت. تم الاحتفاظ بملفات الإضافة ونواتج المهام.</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>أزيل سجل التثبيت؛ يجري إيقاف المهام النشطة.</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>الإضافات المثبّتة التي تعمل كعمليات</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>البيان: %1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>لا</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>فتح المجلد</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>الإضافة</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>تم تعطيل الإضافة. احتُفظ بسجل التثبيت وأُلغيت المهام النشطة.</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>تم تفعيل الإضافة.</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>تم استيراد الإضافة: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>مدير الإضافات</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>بيانات الإضافات (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>الإضافة: %1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>التسجيلات: %1؛ الاستدعاءات النشطة: %2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>إزالة التسجيل المحفوظ. سيُحتفظ بملفات الإضافة ونواتج المهام.</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>إعادة محاولة التفعيل</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>اختر إضافة لعرض بيانها وحالة تفعيلها وتشخيصاتها.</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>تفاصيل الإضافة المحددة</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>جارٍ الإيقاف</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>النوع: عملية خارجية</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>غير متاح</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>إلغاء التثبيت</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>الإصدار</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>الإصدار: %1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>بانتظار انتهاء المهام وتنظيف عمليات النشر المقبولة.</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>نعم</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>تعذرت قراءة إيصال النشر: %1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>تعذرت استعادة الإضافة %1 من %2: %3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>تم استيراد قسم التحليل %1. احفظ المشروع للاحتفاظ به.</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>تغيّرت حالة الإضافة، لكن تعذر حفظ تفضيل بدء التشغيل.</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>اكتملت عملية المشروع، لكن تعذر حفظ إيصالها: %1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>أُغلقت الجلسة قبل وصول إيصال النشر.</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>لم يعد مثيل الإضافة نشطًا.</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>بانتظار إيصال المشروع.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>رسم نتائج الإضافة</translation>
     </message>
 </context>
 </TS>

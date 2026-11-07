@@ -8,6 +8,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ir/low/LowIR.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
 #include "llvm/ADT/SmallString.h"
@@ -31,13 +32,20 @@ protected:
   static constexpr uint64_t Entry = 0x400078;
 
   void SetUp() override {
+    // A computed branch over an unused E9.
+    load(62, {0xb8, 0x78, 0x00, 0x40, 0x00, 0x83, 0xc0, 0x0b, 0xff, 0xe0, 0xe9,
+              0xc3, 0x90, 0x90, 0x90, 0x90});
+  }
+
+  /// Loads \p Code for ELF machine \p Machine as one executable segment
+  /// whose first byte is the entry.
+  void load(uint16_t Machine, const std::vector<uint8_t> &Code) {
+    if (!Path.empty())
+      (void)llvm::sys::fs::remove(Path);
     ASSERT_FALSE(
         llvm::sys::fs::createTemporaryFile("neverd-cfg-view", "elf", Path));
-    // One executable ELF segment and a computed branch over an unused E9.
     std::vector<uint8_t> Image(120, 0);
-    const uint8_t Code[] = {0xb8, 0x78, 0x00, 0x40, 0x00, 0x83, 0xc0, 0x0b,
-                            0xff, 0xe0, 0xe9, 0xc3, 0x90, 0x90, 0x90, 0x90};
-    Image.insert(Image.end(), std::begin(Code), std::end(Code));
+    Image.insert(Image.end(), Code.begin(), Code.end());
     const auto Put = [&](size_t Offset, uint64_t Value, unsigned Bytes) {
       for (unsigned I = 0; I < Bytes; ++I)
         Image[Offset + I] = uint8_t(Value >> (I * 8));
@@ -50,7 +58,7 @@ protected:
     Image[5] = 1;
     Image[6] = 1;
     Put(16, 2, 2);
-    Put(18, 62, 2);
+    Put(18, Machine, 2);
     Put(20, 1, 4);
     Put(24, Entry, 8);
     Put(32, 64, 8);
@@ -69,6 +77,8 @@ protected:
     ASSERT_FALSE(Error);
     Output.write(reinterpret_cast<const char *>(Image.data()), Image.size());
     Output.close();
+    if (Session)
+      neverd_session_destroy(Session);
     Session = neverd_session_create();
     ASSERT_NE(Session, nullptr);
     ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
@@ -129,6 +139,52 @@ TEST_F(FunctionDisasmCAPI, PagesFollowTheCFGAndRawDecodeStaysLinear) {
   auto One = take(neverd_function_disasm_json(Session, Entry, 0, 0, 0));
   ASSERT_NE(One.getAsObject(), nullptr);
   EXPECT_EQ(One.getAsObject()->getArray("instructions")->size(), 1u);
+}
+
+TEST_F(FunctionDisasmCAPI, AConditionalTailCallListsOnlyItsOwnCode) {
+  // The entry calls A and B; A is `cbz x0, B; ret`. A's recovered CFG
+  // reaches B through a synthetic stub that owns none of B's bytes.
+  constexpr uint64_t TailCaller = Entry + 0x10;
+  std::vector<uint8_t> Code;
+  for (const uint32_t Word :
+       {0x94000004u, 0x94000005u, 0xD65F03C0u, 0xD503201Fu, 0xB4000040u,
+        0xD65F03C0u, 0xD65F03C0u})
+    for (unsigned Shift = 0; Shift < 32; Shift += 8)
+      Code.push_back(uint8_t(Word >> Shift));
+  load(183, Code);
+  ASSERT_EQ(neverd_session_analyze(Session), 1);
+  auto View = take(neverd_function_disasm_json(Session, TailCaller, 0, 16,
+                                               NEVERD_DISASM_FLOW));
+  const auto *Page = View.getAsObject();
+  ASSERT_NE(Page, nullptr);
+  const auto *Rows = Page->getArray("instructions");
+  ASSERT_NE(Rows, nullptr);
+  ASSERT_EQ(Rows->size(), 2u);
+  EXPECT_EQ(Rows->front().getAsObject()->getString("mnemonic"), "cbz");
+  EXPECT_EQ(Rows->back().getAsObject()->getString("mnemonic"), "ret");
+}
+
+TEST(FunctionDisasmSize, RecoveredRangesStopBeforeAnotherEntry) {
+  neverd::LowFunc Function;
+  Function.Entry = 0x1000;
+  for (const auto &[Begin, End] :
+       {std::pair{0x1200u, 0x1220u}, std::pair{0x1000u, 0x1010u},
+        std::pair{0x1010u, 0x1020u}}) {
+    neverd::LowBlock Block;
+    Block.StartAddr = Begin;
+    Block.EndAddr = End;
+    Function.Blocks.push_back(Block);
+  }
+  for (const auto &[OtherEntry, Expected] :
+       {std::pair{0x1010u, 0x10u}, std::pair{0x1100u, 0x20u},
+        std::pair{0x1200u, 0x20u}, std::pair{0x1300u, 0x220u}}) {
+    SCOPED_TRACE(OtherEntry);
+    EXPECT_EQ(
+        Function.contiguousSize([&](neverd::va_t Begin, neverd::va_t End) {
+          return Begin <= OtherEntry && OtherEntry < End;
+        }),
+        Expected);
+  }
 }
 
 TEST(FunctionDisasmFailure, RejectsNullAndUnloadedSessions) {

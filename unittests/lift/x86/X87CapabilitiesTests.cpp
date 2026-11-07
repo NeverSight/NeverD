@@ -311,14 +311,22 @@ TEST(X87Capabilities, PortableRuntimeRoutesRequireTheirExplicitBoundary) {
               Consumer != X87Consumer::Translation);
     Q.Destination = X87Destination::ARM64;
     for (uint32_t Selector :
-         {0xf1dfU, 0xfed9U, 0x770fU, memory(0xd9, 0x30), memory(0xdf, 0x20)}) {
-      Q.Selector = Selector; // EFLAGS, FSIN, MMX, FNSTENV and BCD.
+         {0xf1dfU, 0xfed9U, memory(0xd9, 0x30), memory(0xdf, 0x20)}) {
+      Q.Selector = Selector; // EFLAGS, FSIN, FNSTENV and BCD.
       EXPECT_FALSE(queryX87Capability(Q).Implemented) << Selector;
       EXPECT_FALSE(isPortableX87RuntimeInstruction(Selector));
     }
     Q.Selector = 0xe3db; // Initialization is state behavior, not a value.
     EXPECT_TRUE(queryX87Capability(Q).Implemented);
     EXPECT_EQ(queryX87Capability(Q).Numerical, X87Support::Unknown);
+    for (uint32_t Selector : {0xd0d9U, 0x770fU, 0x0e0fU}) {
+      Q.Selector = Selector;
+      EXPECT_TRUE(isPortableX87RuntimeInstruction(Selector));
+      const auto State = queryX87Capability(Q);
+      EXPECT_TRUE(State.Implemented);
+      EXPECT_EQ(State.Numerical, X87Support::Unknown);
+      EXPECT_EQ(State.ArchitecturalState, X87Support::Unknown);
+    }
   }
   auto Flags = query(0xf1df);
   Flags.Backend = X87Backend::Portable;
@@ -343,7 +351,8 @@ TEST(X87Capabilities, FactoredReportNeverWidensAnIndividualInstruction) {
     else if (Form.ValueClass == X87ValueClass::StateOnly)
       Representative = 0xf6d9;
     if (Form.PortableOperation != X87PortableOperation::None)
-      Representative = Form.ValueClass == X87ValueClass::StateOnly    ? 0xe3db
+      Representative = !Form.TypedLift                                ? 0xd0d9
+                       : Form.ValueClass == X87ValueClass::StateOnly  ? 0xe3db
                        : Form.ValueClass == X87ValueClass::ExactValue ? 0xe0d9
                                                                       : 0xc1d8;
     auto Q = query(Form.Memory ? memory(Form.Escape, Form.FirstModRM)

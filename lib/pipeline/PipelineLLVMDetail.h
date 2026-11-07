@@ -9,6 +9,8 @@
 
 #include "neverd/pipeline/Pipeline.h"
 
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace neverd {
@@ -19,6 +21,10 @@ struct Pipeline::LLVMEmissionResult {
   uint64_t UnhandledValueIntrinsics = 0;
   bool LLVMVerifierFailed = false;
   std::string Error;
+  /// The functions the module declares only, by index into the emitted
+  /// functions, with why each body refused: their shard was emitted again
+  /// without them.
+  std::vector<std::pair<size_t, std::string>> LeftOut;
 };
 
 namespace pipeline_detail {

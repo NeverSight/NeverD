@@ -21,6 +21,9 @@ _registration_jump_callee:
   mov dword ptr [ecx],2
   mov dword ptr [ebp-4],-1
 #if REGISTRATION_CASE == 21
+#if REGISTRATION_OBSERVE_CALLEE_RESULT
+  mov eax,37
+#endif
   mov ecx,[ebp-16]
   mov fs:[0],ecx
   mov esp,ebp

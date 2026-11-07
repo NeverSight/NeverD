@@ -77,4 +77,11 @@ lowerOperation(const LowOp &Op, const SpecializationOptions &Options,
   Result.Rejected = Bad;
   return Result;
 }
+
+std::optional<bool> constantValidity(const LowOp &Op,
+                                     const SpecializationOptions &Options) {
+  if (!supportsOperation(Op, Options) || !Op.Inputs[1].isConst())
+    return std::nullopt;
+  return (Op.Inputs[1].Offset & (Op.Inputs[2].Offset - 1)) == 0;
+}
 } // namespace neverd::analysis::x64::alignment

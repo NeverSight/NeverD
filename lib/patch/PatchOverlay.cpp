@@ -689,6 +689,8 @@ llvm::Error PatchOverlay::replace(BinaryImage &Img, const InputFile &Input,
     ByAddress.insert_or_assign(ByAddress.end(), Run.Address, Run.FileOffset);
     Rows.emplace_hint(Rows.end(), Run.FileOffset, std::move(Run));
   }
+  // Bulk replay knows the full inventory; edits retain normal vector growth.
+  Img.BytePatchRanges.reserve(Rows.size());
   publishRanges(Img, *this);
   return llvm::Error::success();
 }

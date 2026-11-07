@@ -11,6 +11,14 @@ endif()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/NeverDProjectDatabase.cmake)
 neverd_add_project_database()
+if(NOT TARGET neverd_plugin_host)
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../lib/plugin"
+    "${CMAKE_CURRENT_BINARY_DIR}/plugin-host")
+endif()
+if(NOT TARGET neverd-plugin-host)
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../neverd-plugin-host"
+    "${CMAKE_CURRENT_BINARY_DIR}/plugin-cli")
+endif()
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Network LinguistTools Svg
   Sql Concurrent)
@@ -43,12 +51,13 @@ set_property(DIRECTORY "${neverd_docking_SOURCE_DIR}" PROPERTY EXCLUDE_FROM_ALL 
 
 # Worker transport, request dispatch and MCP bridges: no widgets.
 add_library(neverd_gui_core STATIC EngineClient.cpp QueryService.cpp
+  plugins/PluginManifest.cpp plugins/PluginJobs.cpp
   LibraryCodeView.cpp mcp/McpConnectionManager.cpp mcp/GuiSessionBroker.cpp)
 target_include_directories(neverd_gui_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
 target_compile_features(neverd_gui_core PUBLIC cxx_std_20)
-target_link_libraries(neverd_gui_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network)
+target_link_libraries(neverd_gui_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network neverd_plugin_protocol)
 
 # Offline package presentation and local journals; all analysis stays in the
 # shared worker/C API owner. No LLVM or input runtime enters this target.
@@ -181,6 +190,10 @@ if(BUILD_TESTING)
     target_link_libraries(neverd-gui-comparison-tests PRIVATE neverd_gui_app Qt6::Test)
     target_compile_definitions(neverd-gui-comparison-tests PRIVATE
       TEST_COMPARISON_WORKER="$<TARGET_FILE:neverd-worker>")
+    if(NEVERD_TRANSLATIONS)
+      qt_add_resources(neverd-gui-comparison-tests "comparison_test_translations" PREFIX /i18n
+        BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES ${NEVERD_QM_FILES})
+    endif()
     add_dependencies(neverd-gui-comparison-tests neverd-worker)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
       set(_neverd_diff_effect_fixture "${CMAKE_CURRENT_BINARY_DIR}/comparison-effects.so")
@@ -217,6 +230,13 @@ if(BUILD_TESTING)
     set_target_properties(neverd-gui-web-tests PROPERTIES WIN32_EXECUTABLE FALSE)
   endif()
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME NeverDGuiPluginSdk COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+    -s "${CMAKE_CURRENT_SOURCE_DIR}/../../pluginsdk/gui/tests" -v)
+  add_test(NAME NeverDGuiPluginLaunch COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/plugin_launch_test.py"
+    "$<TARGET_FILE:neverd-gui>")
+  set_tests_properties(NeverDGuiPluginLaunch PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_FORCE_STDERR_LOGGING=1" TIMEOUT 30)
   target_sources(neverd-gui PRIVATE tests/WidgetsProbe.cpp)
   target_compile_definitions(neverd-gui PRIVATE NEVERD_GUI_TEST_PROBES=1)
   target_link_libraries(neverd-gui PRIVATE Qt6::Test)
@@ -280,7 +300,10 @@ if(BUILD_TESTING)
     set_tests_properties(NeverDGuiSourceVariableTypes PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 180)
   endif()
-  target_link_libraries(neverd-gui-unit-tests PRIVATE neverd_gui_app Qt6::Test)
+  # The window system interface sets the application's active state, which
+  # the progress bar's animation follows.
+  target_link_libraries(neverd-gui-unit-tests PRIVATE neverd_gui_app Qt6::Test
+    Qt6::GuiPrivate)
   # A console program on Windows too, so CTest records what failed.
   set_target_properties(neverd-gui-unit-tests PROPERTIES WIN32_EXECUTABLE FALSE)
   add_test(NAME NeverDGuiUnits COMMAND neverd-gui-unit-tests
@@ -290,6 +313,11 @@ if(BUILD_TESTING)
 
   qt_add_executable(neverd-gui-docking-tests tests/DockingTests.cpp)
   target_link_libraries(neverd-gui-docking-tests PRIVATE neverd_gui_app Qt6::Test)
+  if(TARGET neverd-worker-test-server)
+    target_compile_definitions(neverd-gui-docking-tests PRIVATE
+      TEST_WORKER="$<TARGET_FILE:neverd-worker-test-server>")
+    add_dependencies(neverd-gui-docking-tests neverd-worker-test-server)
+  endif()
   if(APPLE)
     target_sources(neverd-gui-docking-tests PRIVATE
       tests/platform/NativeWindowStateMac.mm)
@@ -305,6 +333,18 @@ if(BUILD_TESTING)
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
   if(TARGET neverd-worker-test-server)
+    qt_add_executable(neverd-gui-plugin-tests tests/PluginTests.cpp)
+    target_link_libraries(neverd-gui-plugin-tests PRIVATE neverd_gui_app Qt6::Test)
+    target_compile_definitions(neverd-gui-plugin-tests PRIVATE
+      TEST_WORKER="$<TARGET_FILE:neverd-worker-test-server>"
+      TEST_PYTHON="${Python3_EXECUTABLE}"
+      TEST_PROVIDER_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../../unittests/plugin/process_provider.py"
+      TEST_GUI_SDK="${CMAKE_CURRENT_SOURCE_DIR}/../../pluginsdk/gui")
+    add_dependencies(neverd-gui-plugin-tests neverd-worker-test-server)
+    add_test(NAME NeverDGuiPlugins COMMAND neverd-gui-plugin-tests
+      -o "${CMAKE_CURRENT_BINARY_DIR}/plugin-tests.txt,txt")
+    set_tests_properties(NeverDGuiPlugins PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
     qt_add_executable(neverd-gui-symbol-tests tests/MicrosoftSymbolsTests.cpp)
     target_link_libraries(neverd-gui-symbol-tests PRIVATE neverd_gui_app Qt6::Test)
     target_compile_definitions(neverd-gui-symbol-tests PRIVATE
@@ -327,10 +367,11 @@ if(BUILD_TESTING)
     add_dependencies(neverd-gui-tests neverd-worker-test-server neverd-gui)
     add_test(NAME NeverDGuiController COMMAND neverd-gui-tests
       ${_neverd_controller_test_log_args})
-    # The full controller inventory takes several minutes on hosted runners;
-    # individual waits still use the test's own bounded operation deadlines.
+    # The full controller inventory takes about ten minutes on hosted macOS
+    # runners and grows with it. Individual waits still use the test's own
+    # bounded operation deadlines; this limit only ends a hung run.
     set_tests_properties(NeverDGuiController PROPERTIES
-      ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 600)
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 1800)
     qt_add_executable(neverd-gui-patch-tests tests/PatchTests.cpp)
     target_link_libraries(neverd-gui-patch-tests PRIVATE neverd_gui_app Qt6::Test)
     target_compile_definitions(neverd-gui-patch-tests PRIVATE
@@ -388,6 +429,7 @@ if(BUILD_TESTING)
   # Keep their diagnostics connected to CTest's stdout on Windows.
   foreach(_neverd_gui_test IN ITEMS neverd-gui-tests neverd-gui-unit-tests
       neverd-gui-patch-tests
+      neverd-gui-plugin-tests
       neverd-gui-library-view-tests neverd-gui-query-tests neverd-mcp-qt-tests
       neverd-gui-language-tests)
     if(TARGET ${_neverd_gui_test})

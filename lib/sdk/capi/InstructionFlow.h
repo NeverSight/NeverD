@@ -33,6 +33,10 @@
 #include <optional>
 #include <vector>
 
+namespace neverd::libc {
+class NoReturnTargetIndex;
+}
+
 namespace neverd::sdk {
 
 struct FuncInfo;
@@ -115,6 +119,10 @@ struct InstructionFlow {
   va_t Target = InvalidVA;
   llvm::SmallVector<InstructionRef, 2> Refs;
   StackMove Stack;
+  /// An unconditional call whose target's image contract ends ordinary flow.
+  /// Collected only with a supplied NoReturnTargetIndex. Unknown targets and
+  /// conditional calls keep their possible fallthrough.
+  bool NoReturn = false;
 };
 
 /// The flow kind of an instruction the lifter cannot model.
@@ -132,6 +140,11 @@ summarizeInstructionFlow(const BinaryImage &Img, Decoder &Dec,
 /// Results own their facts and never borrow this workspace.
 class InstructionFlowScratch {
 public:
+  /// Flow consumers share an image index. Listing/reference-only consumers
+  /// omit it, avoiding target lookups for facts they do not consume.
+  explicit InstructionFlowScratch(
+      const libc::NoReturnTargetIndex *NoReturnTargets = nullptr)
+      : NoReturnTargets(NoReturnTargets) {}
   InstructionFlow summarize(const BinaryImage &Img, Decoder &Dec,
                             const DecodedInsn &DI,
                             const TargetRegInfo *StackRegisters = nullptr);
@@ -142,6 +155,7 @@ public:
   dataAccesses(const BinaryImage &Img, Decoder &Dec, const DecodedInsn &DI);
 
 private:
+  const libc::NoReturnTargetIndex *NoReturnTargets;
   std::vector<LowOp> Ops;
 };
 
@@ -191,13 +205,16 @@ struct FunctionDecodeStatus {
 /// body (ExceptionInfo::outlyingChunks).  One function's visits run on one
 /// thread, so writing only to its own output keeps the result independent of
 /// the thread count.  False when a decoder could not be set up.
+/// Multi-page readers share one immutable image index through NoReturnTargets;
+/// a single-page reader may let this operation own its index.
 bool decodeFunctions(
     const BinaryImage &Img, const FunctionPage &Page,
     llvm::function_ref<void(size_t Index, Decoder &, const DecodedInsn &,
                             InstructionFlowScratch &)>
         Visit,
     const std::function<bool()> &Stop = {},
-    std::vector<FunctionDecodeStatus> *Status = nullptr);
+    std::vector<FunctionDecodeStatus> *Status = nullptr,
+    const libc::NoReturnTargetIndex *NoReturnTargets = nullptr);
 
 /// The width of the reads and writes the instructions of each of \p
 /// Functions state at each address in \p Img: the direct references
@@ -210,14 +227,14 @@ collectDataAccessWidths(const BinaryImage &Img,
 /// What collectDataAccessWidths read of a list of functions: the extent it
 /// read each one with, and how many of them state each width at each
 /// address.  Reading another list of the same image then decodes only the
-/// functions whose extent differs, as when a lift gives a function its size.
+/// functions whose extent or unsized entry boundaries differ.
 class DataAccessScan {
 public:
   /// The widths collectDataAccessWidths(\p Img, \p Functions) gives.  \p Img
   /// is the image every earlier update read.  A function without a size
-  /// reads up to other functions' entries, so a list with other entries is
-  /// read again whole.  None, and nothing kept, when a decoder could not be
-  /// set up.
+  /// reads up to other functions' entries: changing that entry list replaces
+  /// all unsized contributions, while retaining unchanged sized bodies.
+  /// None, and nothing kept, when a decoder could not be set up.
   std::optional<DataAccessWidths> update(const BinaryImage &Img,
                                          llvm::ArrayRef<FuncInfo> Functions);
   void clear() {
@@ -231,6 +248,8 @@ private:
     va_t Address;
     unsigned Width;
     uint32_t Functions;
+    /// The subset whose decode also depended on Entries.
+    uint32_t UnsizedFunctions;
   };
   /// The extent each function was read with, by entry.
   std::vector<std::pair<va_t, uint64_t>> Extents;

@@ -19,6 +19,10 @@
 #include <tuple>
 #include <vector>
 
+namespace neverd {
+struct BinaryImage;
+}
+
 namespace neverd::med_calling_conv_detail {
 
 using ValueKey = std::tuple<MedVar::VarKind, int, int>;
@@ -33,8 +37,19 @@ struct StackMemoryRead {
   bool ScalarFP = false;
 };
 std::optional<StackMemoryRead> stackMemoryRead(const MedOp &Op);
-void preserveFPStackHomes(
+/// Keep every home reached by a write or by an overlapping mutable read.
+/// Instruction-owned packed reads and unaligned slot-crossing loads retain
+/// physical homes; aligned immutable loads compose their slot parameters.
+void preserveStackReadHomes(
     const MedFunc &Func, int64_t Base, unsigned Slot,
+    llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
+    std::set<int64_t> &MutableSlots);
+/// Keep incoming reads reached by physical CALL writes as memory operations.
+/// The shared CALL-slot proof owns their byte history; incomplete proofs keep
+/// every candidate home mutable until source-frame validation can decide.
+void preserveCallStackHomes(
+    const MedFunc &Func, Arch Architecture, BinaryFormat Format,
+    const BinaryImage *Image, int64_t Base, unsigned Slot,
     llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
     std::set<int64_t> &MutableSlots);
 void recoverFPStackReads(
@@ -61,7 +76,10 @@ void composeStackSlots(MedOp &Read, MedVar First, unsigned Slot, unsigned Bytes,
 ValueKey valueKey(const MedVar &V);
 /// Internal register-ABI stack recovery, including a bounded variadic prefix.
 void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Format,
-                       int64_t MaxStackOff = 0);
+                       int64_t MaxStackOff = 0,
+                       const BinaryImage *Image = nullptr);
+void detectCdeclStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Format,
+                            const BinaryImage *Image = nullptr);
 bool containsValue(const ValueSet &Values, const MedVar &V);
 
 ValueSet computeForwardValueClosure(
@@ -88,6 +106,15 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff);
 /// slot stores the register without reading it as a value, and a return
 /// reads the return register whatever the function returns.
 bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff);
+
+/// Additional i386 integer inputs read through EBX, ESI or EDI. A saved
+/// register alone supplies no evidence: its incoming bits must reach a value
+/// use, rather than only storage, restoration or discarded scratch lanes.
+std::vector<uint64_t> additionalI386ParameterRegisters(const MedFunc &Func);
+
+/// The candidate carriers shared by i386 parameter detection and retention of
+/// call setup before the callee's recovered signature is available.
+llvm::ArrayRef<uint64_t> i386NonstandardArgumentRegisters();
 
 } // namespace neverd::med_calling_conv_detail
 

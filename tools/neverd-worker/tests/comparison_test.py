@@ -912,10 +912,13 @@ def main():
                 replacement = {"primary": start["primary"], "secondary": start["secondary"]}
                 replacement[side] = loading_input
                 request = client.send("comparison_start", replacement)
+                # The phase-start event is always published. A fast hash can
+                # finish within the progress presentation interval, so a
+                # positive intermediate byte count is not guaranteed.
                 progress = client.next(
                     lambda m: m.get("request_id") == request and m.get("status") == "progress"
                     and m.get("payload", {}).get("phase") == f"{side}:load:hash"
-                    and m["payload"].get("done", 0) > 0, timeout=30)
+                    and m["payload"].get("done") == 0, timeout=30)
                 assert progress["payload"]["done"] < progress["payload"]["total"], progress
                 load_stop_began = time.monotonic()
                 acknowledged = ok(client, "cancel", {"request_id": request})

@@ -3,6 +3,11 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Publish source effects separately from native registration call receipts.
+///
+//===----------------------------------------------------------------------===//
 
 #include "RegistrationStateSolver.h"
 
@@ -149,6 +154,18 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
     Result.Diagnostics.push_back(
         "SEH invocation exit or parent stack is not proven");
   }
+  // Receipts gathered on an earlier visit are provisional. A later reaching
+  // state with an expired binding revokes only that same source occurrence.
+  for (const auto &Identity : InvalidRuntimeBindings) {
+    if (!charge(1))
+      break;
+    if (BoundCalls.count(Identity))
+      Result.SEHBoundCallsComplete = false;
+    if (LocalUnwindCalls.count(Identity))
+      Result.SEHLocalUnwindsComplete = false;
+    if (JumpCaptureOccurrences.count(Identity))
+      Result.SEHJumpCapturesComplete = false;
+  }
   for (const auto &[Identity, Resume] : JumpResumptions)
     if (!charge(1) || ModifiedCallbackCaptures.count(Resume.CaptureCall))
       Result.SEHJumpResumptionsComplete = false;
@@ -206,6 +223,19 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
     }
   if (!Result.SEHExceptionAccessesComplete)
     Result.SEHExceptionAccesses.clear();
+  Result.SEHThreadAccessesComplete &=
+      Result.Complete && Result.CallbackStatesComplete && !Exhausted;
+  if (Result.SEHThreadAccessesComplete)
+    for (const auto &[Identity, Access] : SEHThreadAccesses) {
+      if (!charge(1)) {
+        Result.SEHThreadAccessesComplete = false;
+        break;
+      }
+      if (Access)
+        Result.SEHThreadAccesses.push_back(*Access);
+    }
+  if (!Result.SEHThreadAccessesComplete)
+    Result.SEHThreadAccesses.clear();
   if (!Result.Complete)
     Result.Diagnostics.push_back(
         "registration state has an unproven transition");
@@ -217,13 +247,17 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
       Result.ChainAccesses.push_back(Access);
   if (Result.ChainOperationsComplete)
     Result.CxxPrologue = CxxPrologueEffect;
+  if (Result.ChainOperationsComplete)
+    Result.SEH4Prologue = SEH4PrologueEffect;
   Result.IncomingFrameAccessesComplete = ConsistentIncomingAccesses;
-  Result.CallFrameEffectsComplete = CompleteCalls && Result.Complete &&
-                                    Result.CallbackStatesComplete &&
-                                    Result.RegistrationLifetimeComplete;
+  Result.SourceCallFrameEffectsComplete = CompleteCalls && Result.Complete &&
+                                          Result.CallbackStatesComplete &&
+                                          Result.RegistrationLifetimeComplete;
+  Result.CallFrameEffectsComplete =
+      Result.SourceCallFrameEffectsComplete && !HasSourceOnlyCallEffects;
   for (const auto &[Identity, Call] : CallEffects)
     Result.CallFrameEffects.push_back(Call);
-  if (CheckCalls && !Result.CallFrameEffectsComplete)
+  if (CheckCalls && !Result.SourceCallFrameEffectsComplete)
     Result.Diagnostics.push_back(
         "registration call stack or initialized object borrow is not proven");
   Result.CxxCatchObjectsComplete = CompleteCatchObjects && Result.Complete &&
@@ -235,7 +269,7 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
       Result.CxxCatchObjects.push_back(Object);
   Result.RuntimeObjectAccessesComplete = Result.CxxCatchObjectsComplete &&
                                          CompleteRuntimeObjects &&
-                                         Result.CallFrameEffectsComplete;
+                                         Result.SourceCallFrameEffectsComplete;
   if (Result.RuntimeObjectAccessesComplete)
     for (const auto &[Identity, Access] : RuntimeAccesses)
       Result.RuntimeObjectAccesses.push_back(Access);
@@ -260,8 +294,8 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
       CompleteCookies && Result.Complete && Result.CallbackStatesComplete &&
       Result.RegistrationLifetimeComplete && Result.ChainOperationsComplete &&
       (!CxxCookies ||
-       (Result.CallFrameEffectsComplete && Result.CleanupFrameEffectsComplete &&
-        Result.CxxCatchObjectsComplete &&
+       (Result.SourceCallFrameEffectsComplete &&
+        Result.CleanupFrameEffectsComplete && Result.CxxCatchObjectsComplete &&
         Result.RuntimeObjectAccessesComplete)) &&
       hasCompleteCookieChecks() && (!ReadsGSCookie || !CookieChecks.empty());
   if (Result.SecurityCookiesComplete) {
@@ -274,8 +308,9 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
     // Transfer used these success paths instead of ordinary callee effects.
     // Without published cookie receipts they cannot close the call or runtime
     // memory proof: the original mismatch path has not been summarized.
-    Result.CallFrameEffectsComplete = Result.RuntimeObjectAccessesComplete =
-        Result.ImageReadsComplete = false;
+    Result.SourceCallFrameEffectsComplete = Result.CallFrameEffectsComplete =
+        Result.RuntimeObjectAccessesComplete = Result.ImageReadsComplete =
+            false;
     Result.RuntimeObjectAccesses.clear();
     Result.Diagnostics.push_back("C++ cookie call success is not proven");
   }
@@ -294,10 +329,13 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
     if (!charge(FrameValues.size())) {
       Result.Complete = Result.ChainOperationsComplete =
           Result.ImageReadsComplete = Result.SecurityCookiesComplete =
-              Result.CallFrameEffectsComplete =
-                  Result.CleanupFrameEffectsComplete =
-                      Result.CxxCatchObjectsComplete =
-                          Result.RuntimeObjectAccessesComplete = false;
+              Result.SourceCallFrameEffectsComplete =
+                  Result.CallFrameEffectsComplete =
+                      Result.CleanupFrameEffectsComplete =
+                          Result.CxxCatchObjectsComplete =
+                              Result.RuntimeObjectAccessesComplete = false;
+      Result.SEHThreadAccessesComplete = false;
+      Result.SEHThreadAccesses.clear();
       Result.CallFrameEffects.clear();
       Result.CleanupFrameEffects.clear();
       Result.CxxCatchObjects.clear();
@@ -308,6 +346,7 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
       Result.CxxCookieConditions.clear();
       Result.ChainAccesses.clear();
       Result.CxxPrologue.reset();
+      Result.SEH4Prologue.reset();
       Result.Diagnostics.push_back(
           "registration-frame output budget exhausted");
       return std::move(Result);
@@ -323,6 +362,10 @@ RegistrationStateAnalysis RegistrationStateSolver::finish() {
   if (Result.SEHStateStoresComplete && charge(SEHStateStores.size()))
     for (const auto &[Identity, Store] : SEHStateStores)
       Result.SEHStateStores.push_back(Store);
+  if (Exhausted) {
+    Result.SEHThreadAccessesComplete = false;
+    Result.SEHThreadAccesses.clear();
+  }
   return std::move(Result);
 }
 

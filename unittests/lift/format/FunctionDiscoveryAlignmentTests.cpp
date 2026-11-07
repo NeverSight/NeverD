@@ -915,6 +915,32 @@ TEST(FunctionDiscoveryAlignment, PreservesAlignedEntriesAfterPadding) {
   }
 }
 
+// 0x40-0x4F are REX prefixes only in 64-bit code; IA-32 decodes them as
+// INC/DEC.  There the byte after an int3 is more often the rest of an
+// operand holding 0xcc, as in `mov [0x4048cc], eax` (a3 cc 48 40 00), than a
+// function start.
+TEST(FunctionDiscoveryAlignment, RexBytesBeginFunctionsOnlyIn64BitCode) {
+  for (Arch Architecture : {Arch::X64, Arch::X86}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    BinaryImage Img;
+    Img.Arch = Architecture;
+    Img.Bits = Architecture == Arch::X64 ? Bitness::Bits64 : Bitness::Bits32;
+    // The scanner deliberately skips a segment's initial padding run.  Then
+    // x64 `sub rsp, 0x28; ret` and IA-32 `dec eax; sub esp, 0x28; ret`.
+    const uint8_t Bytes[] = {0x12, x86::kInt3, 0x48, 0x83, 0xec, 0x28, 0xc3};
+    Img.Segments.push_back(executableSegment(0x1000, Bytes));
+
+    scanPaddingBoundaries(Img);
+
+    if (Architecture == Arch::X64) {
+      ASSERT_EQ(Img.Symbols.size(), 1u);
+      EXPECT_EQ(Img.Symbols.front().Addr, 0x1002u);
+    } else {
+      EXPECT_TRUE(Img.Symbols.empty());
+    }
+  }
+}
+
 // MSVC keeps string literals in the executable sections of drivers and the
 // kernel, padded with int3 like the functions between them.  Their first
 // bytes read as prologues -- `W` is `push rdi`, `H` a REX prefix -- but text

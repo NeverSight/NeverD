@@ -82,6 +82,8 @@ validateCOFFRegistrationCxxControlIR(const llvm::Function &Function,
 
 /// Authenticate source control, actual LLVM frame/object borrows, definite
 /// initialization, runtime reference identities and original image effects.
+/// Cleanup-only guarded C++ also needs exact retained check coverage and the
+/// complete current cookie protocol, replayed independently of the producer.
 /// Generated tables, the compiler handler and final PE still need validation.
 llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
                                           const ExceptionFunction &Source,
@@ -90,6 +92,8 @@ llvm::Error validateCOFFRegistrationCxxIR(const llvm::Function &Function,
 /// Checked PE32 C++ compiler table closure. This receipt authenticates raw
 /// language-table bytes and absolute pointer fields, not edited IR effects or
 /// permission to install the generated function.
+/// Guarded dispatch additionally replays the complete current source/IR proof;
+/// that conditional runtime check does not replace final installation checks.
 struct COFFRegistrationCxxTableReceipt {
   va_t OwnerVA = 0;
   va_t FuncInfoVA = 0;
@@ -117,6 +121,9 @@ getCheckedCOFFRegistrationCxxHandlerReceipt(const llvm::Function &Function,
                                             const ExceptionFunction &Source,
                                             const BinaryImage &Image,
                                             const CompiledImage &Compiled);
+/// Prepare from immutable source bytes before entry trampolines are installed.
+/// Final validation independently closes the written entries and generated
+/// data.
 llvm::Expected<COFFRegistrationPatchUpdate> prepareCOFFRegistrationPatch(
     llvm::ArrayRef<uint8_t> OriginalBinary, const BinaryImage &Image,
     CompiledImage &Compiled,

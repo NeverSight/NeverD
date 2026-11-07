@@ -808,6 +808,25 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
     return Address && ((*Address & (Alignment - 1)) == 0);
   }
 
+  if (Id == Intrinsic::X86StreamStore128) {
+    if (!x86SystemStateShapeIsValid(Id, x86SystemStateLowShape(Op, Img.Arch)) ||
+        !knownOperandBytes(Op.Inputs[1], 0, 8) ||
+        !knownOperandBytes(Op.Inputs[2], 0, 16))
+      return false;
+    const auto Address = resolveMemoryAddress(Op, readOperand(Op.Inputs[1]));
+    if (!Address || (*Address & 15) != 0)
+      return false;
+    for (unsigned I = 0; I != 16; ++I) {
+      const auto *Mapped = Img.getSegmentFor(*Address + I);
+      if (!Mapped || !Mapped->isWritable() || *Address + I < Mapped->VA ||
+          *Address + I - Mapped->VA >= Mapped->Size)
+        return false;
+    }
+    // Finite ordinary-memory projection only. Native output retains the
+    // original WC store and its ordering relative to actual fences.
+    return storeMemoryBytes(*Address, readOperandBytes(Op.Inputs[2]));
+  }
+
   if (Id == Intrinsic::X86DirectStore || Id == Intrinsic::X86DirectStore64B) {
     const auto Shape = x86SystemStateLowShape(Op, Img.Arch);
     const auto IsKnownScalar = [&](const NdVar &Value) {
@@ -905,18 +924,14 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
         !intrinsicSupportsMemoryAddressSpace(Id) ||
         !intrinsicApxAtomicShapeIsValid(Id, Shape))
       return false;
-    // Native execution owns CS/ES/SS descriptor checks. The concrete evaluator
-    // must not reinterpret an i386 segment offset as ordinary image memory.
-    if (Shape.segmentPrefix())
-      return false;
-
     for (unsigned I = 1; I != Op.NumInputs; ++I)
       if (!knownOperandBytes(Op.Inputs[I], 0, Op.Inputs[I].Size))
         return false;
 
     const uint16_t Width = IsApxRao ? Op.Inputs[2].Size : Op.Output.Size;
 
-    const auto Address = resolveMemoryAddress(Op, readOperand(Op.Inputs[1]));
+    const auto Address = resolveX86NativeMemoryAddress(
+        Op, Shape.segmentPrefix(), readOperand(Op.Inputs[1]), Width, true);
     if (!Address || (*Address & (Width - 1)) != 0)
       return false;
 
@@ -1338,17 +1353,17 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
     const auto Use = x86CompactOperandUse(LaneCount, Expand, Control.Zero,
                                           readOperand(Op.Inputs[2]));
     const uint64_t Mask = readOperand(Op.Inputs[2]) & Use.LaneMask;
-    // The concrete evaluator has no CS/ES/SS descriptor environment. A masked
-    // off access needs none; an active access must not become a DS load/store.
-    if (Use.Address && Control.SegmentPrefix)
-      return false;
     if (Use.Address && !Known(Op.Inputs[1]))
       return false;
-    const auto Base = Use.Address
-                          ? resolveMemoryAddress(Op, readOperand(Op.Inputs[1]))
-                          : std::optional<uint64_t>(0);
+    const uint16_t PackedBytes = std::popcount(Mask) * ElementBytes;
+    const auto Base =
+        Use.Address ? resolveX86NativeMemoryAddress(Op, Control.SegmentPrefix,
+                                                    readOperand(Op.Inputs[1]),
+                                                    PackedBytes, !Expand)
+                    : std::optional<uint64_t>(0);
     if (!Base)
       return false;
+    const bool Wrap32 = Control.SegmentPrefix != 0;
     uint64_t Cursor = *Base;
 
     if (Expand) {
@@ -1362,12 +1377,13 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
       for (unsigned Lane = 0; Lane < LaneCount; ++Lane) {
         if (((Mask >> Lane) & 1U) == 0)
           continue;
-        auto Value = loadMemory(Cursor, ElementBytes);
+        auto Value = loadMemory(Cursor, ElementBytes, Wrap32);
         if (!Value)
           return false;
         std::memcpy(Result.data() + Lane * ElementBytes, &*Value, ElementBytes);
         Records.push_back({Cursor, static_cast<uint16_t>(ElementBytes)});
-        Cursor += ElementBytes;
+        Cursor =
+            Wrap32 ? uint32_t(Cursor + ElementBytes) : Cursor + ElementBytes;
       }
       if (CollectLoads)
         for (const LoadRecord &Record : Records)
@@ -1389,9 +1405,9 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
         continue;
       uint64_t Value = 0;
       std::memcpy(&Value, Source.data() + Lane * ElementBytes, ElementBytes);
-      if (!storeMemory(Cursor, ElementBytes, Value))
+      if (!storeMemory(Cursor, ElementBytes, Value, Wrap32))
         return false;
-      Cursor += ElementBytes;
+      Cursor = Wrap32 ? uint32_t(Cursor + ElementBytes) : Cursor + ElementBytes;
     }
     return true;
   }

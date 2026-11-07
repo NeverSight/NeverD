@@ -236,12 +236,13 @@ TEST(X86ApxMovrs, IllegalRegisterSourceIsRejectedAndFaultDoesNotWriteTarget) {
   EXPECT_EQ(*Result, 0xfeedfacecafebeefULL);
 }
 
-TEST(X86ApxMovrs, VirtualizationInvalidationInstructionsRemainUnlifted) {
-  const std::array<std::vector<uint8_t>, 2> Instructions = {{
-      {0x62, 0xec, 0x7e, 0x08, 0xf0, 0x11},
-      {0x62, 0xec, 0x7e, 0x08, 0xf1, 0x11},
-  }};
-  for (const auto &Bytes : Instructions) {
+TEST(X86ApxMovrs, VirtualizationInvalidationInstructionsNameTheirIntrinsics) {
+  const std::array<std::pair<std::vector<uint8_t>, Intrinsic>, 2> Instructions =
+      {{
+          {{0x62, 0xec, 0x7e, 0x08, 0xf0, 0x11}, Intrinsic::VmxInvalidateEpt},
+          {{0x62, 0xec, 0x7e, 0x08, 0xf1, 0x11}, Intrinsic::VmxInvalidateVpid},
+      }};
+  for (const auto &[Bytes, Expected] : Instructions) {
     Decoder Dec;
     ASSERT_TRUE(Dec.init(Arch::X64));
     DecodedInsn Insn{};
@@ -249,7 +250,11 @@ TEST(X86ApxMovrs, VirtualizationInvalidationInstructionsRemainUnlifted) {
                                    kInstructionAddress, Insn),
               static_cast<int>(Bytes.size()));
     std::vector<LowOp> Ops;
-    EXPECT_THROW(Dec.liftToLow(Insn, Ops), UnliftedInstruction);
+    ASSERT_NO_THROW(Dec.liftToLow(Insn, Ops));
+    EXPECT_TRUE(llvm::any_of(Ops, [&, Wanted = Expected](const LowOp &Op) {
+      return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+             Op.Inputs[0].Offset == static_cast<uint64_t>(Wanted);
+    }));
   }
 }
 

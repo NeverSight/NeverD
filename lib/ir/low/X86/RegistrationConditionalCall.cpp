@@ -7,6 +7,8 @@
 /// Check invocation-specific SEH frame inputs and bounded effects.
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationConditionalFrame.h"
+#include "RegistrationOriginalImage.h"
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -23,11 +25,7 @@ bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
       !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 ||
       Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
       Op.MemoryOrdering != NdMemoryOrdering::None || Op.Addr > UINT32_MAX - 6 ||
-      checkedRegistrationImportStackPop(Image, Op.Inputs[0].Offset) != 16)
-    return false;
-  const auto *Imported = Image.findImportAt(Op.Inputs[0].Offset);
-  if (!Imported || Imported->IsDelayImport ||
-      !isFileBackedPEImportSlot(Image, Op.Inputs[0].Offset))
+      !isCheckedRegistrationRaiseSlot(Image, Op.Inputs[0].Offset))
     return false;
   const auto Bytes =
       readImmutablePE32CodeBytes(Image, Op.Addr, 6, {Op.Addr + 2});
@@ -52,28 +50,57 @@ bool hasClosedRegistrationRaise(const BinaryImage &Image, const LowOp &Op,
 }
 
 bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
-                             const FrameState &State, size_t &Work) {
-  if (hasClosedRegistrationRaise(Image, Op, State))
-    return chargeCalleeWork(Work, 10);
+                             const FrameState &State, size_t &Work,
+                             const std::set<int32_t> *Initialized,
+                             std::optional<FrameValue> *ReturnValue,
+                             BoundPlainCalleeEffect *Effect,
+                             OriginalImageFrameProof *OriginalImage,
+                             ConditionalCallResult *Invocation) {
+  if (ReturnValue)
+    ReturnValue->reset();
+  if (Effect)
+    *Effect = {};
+  if (Invocation)
+    *Invocation = {};
+  if (OriginalImage && !Effect)
+    return false;
+  if (hasClosedRegistrationRaise(Image, Op, State)) {
+    if (Effect || !chargeCalleeWork(Work, 10))
+      return false;
+    if (Invocation)
+      Invocation->StackPopBytes = 16;
+    return true;
+  }
   if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
       Op.Inputs[0].Size != 4)
     return false;
   const va_t Target = Op.Inputs[0].Offset;
+  if (Effect && Image.ExceptionMetadata.findFunction(Target))
+    return false;
   const auto SP =
       State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset;
-  if (!SP || *SP > INT32_MAX - 128 || Op.Opcode != NdOp::CALL)
+  constexpr int32_t ArgumentLimit = limits::ir::
+      kRegistrationConditionalCallHasConditionalCallFrameOffsetLimit;
+  if (!SP || *SP > INT32_MAX - ArgumentLimit)
     return false;
-  std::map<int32_t, FrameValue> Arguments;
-  for (int32_t Offset = 8;
-       Offset <=
-       ::neverd::limits::ir::
-           kRegistrationConditionalCallHasConditionalCallFrameOffsetLimit;
-       Offset += 4) {
-    const auto It = State.Cells.find(*SP + Offset - 8);
-    if (It != State.Cells.end() && !It->second.MayBeFrame)
-      Arguments.emplace(Offset, It->second);
+  std::map<unsigned, FrameValue> Registers;
+  for (unsigned Index = 0; Index != State.Registers.size(); ++Index) {
+    if (!chargeCalleeWork(Work, 1))
+      return false;
+    const auto &Value = State.Registers[Index];
+    if (isX86VolatileFrameRegister(Index) && !Value.MayBeFrame)
+      Registers.emplace(Index, Value);
   }
-  if (Arguments.empty())
+  std::map<int32_t, FrameValue> Arguments;
+  for (int32_t Offset = 8; Offset <= ArgumentLimit; Offset += 4) {
+    if (!chargeCalleeWork(Work, 1))
+      return false;
+    const auto Value =
+        readCallerFrameWord(State, *SP + Offset - 8, Initialized, Work);
+    if (Value && !Value->MayBeFrame)
+      Arguments.emplace(Offset, *Value);
+  }
+  if (Arguments.empty() && Registers.empty())
     return false;
   Decoder Dec;
   if (!Dec.init(Image))
@@ -87,12 +114,59 @@ bool hasConditionalCallFrame(const BinaryImage &Image, const LowOp &Op,
           !hasImmutableCalleeInstruction(Image, Insn, Dec))
         return false;
   registration_abi::ImageFrameEffects Effects;
+  std::optional<FrameValue> Returned;
+  std::optional<uint32_t> Pop;
+  std::optional<ConditionalDispatch> Dispatch;
   if (Callee.ExceptionMetadata || !Callee.hasCompleteLiftCoverage() ||
       !registration_abi::chargeDecodedCallee(Work, Callee) ||
       !registration_abi::hasPrivateCallerFrame(
-          Callee, Image, Work, Effects, {.ScalarArguments = &Arguments}) ||
-      !Effects.Writes.empty() || !Effects.CallerPCWrites.empty())
+          Callee, Image, Work, Effects,
+          {.ScalarArguments = &Arguments,
+           .ScalarRegisters = &Registers,
+           .ReturnValue =
+               ReturnValue || Effect || Invocation ? &Returned : nullptr,
+           .ExcludeCalls = Effect != nullptr,
+           .OriginalImage = OriginalImage,
+           .StackPopBytes = &Pop,
+           .Dispatch = Invocation ? &Dispatch : nullptr}) ||
+      !Effects.Writes.empty() || !Effects.CallerPCWrites.empty() ||
+      (!Effect && !Effects.Reads.empty()))
     return false;
+  if (OriginalImage && !OriginalImage->recordCode(Callee, Work))
+    return false;
+  if (Effect && !Returned)
+    return false;
+  if (Dispatch && Op.Seq >= 0 &&
+      Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+      Op.MemoryOrdering == NdMemoryOrdering::None &&
+      Op.Addr <= UINT32_MAX - 5) {
+    if (!chargeCalleeWork(Work, 5))
+      return false;
+    const auto Call = readImmutablePE32CodeBytes(Image, Op.Addr, 5, {});
+    if (!Call || (*Call)[0] != 0xe8 ||
+        uint32_t(Op.Addr + 5 + int64_t(readLE<int32_t>(Call->data() + 1))) !=
+            Target)
+      Dispatch.reset();
+  } else
+    Dispatch.reset();
+  // This invocation already proved its initialized arguments, restored frame
+  // and all reached exits together. A context-free stack query loses those
+  // premises and cannot validate an input-dependent result or cleanup.
+  if (Effect) {
+    if (!chargeCalleeWork(Work, Effects.Reads.size() + 1))
+      return false;
+    Effect->StackPopBytes = *Pop;
+    copyExtents(Effects.Reads, Effect->ImageReads);
+    Effect->ReturnValue = projectX86CallReturnValue(*Returned);
+  }
+  if (ReturnValue && Returned)
+    *ReturnValue = projectX86CallReturnValue(*Returned);
+  if (Invocation) {
+    Invocation->StackPopBytes = Pop;
+    if (Returned)
+      Invocation->ReturnValue = projectX86CallReturnValue(*Returned);
+    Invocation->Dispatch = std::move(Dispatch);
+  }
   return true;
 }
 

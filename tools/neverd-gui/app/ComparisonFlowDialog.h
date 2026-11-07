@@ -29,14 +29,14 @@ signals:
 
 private:
   ComparisonSession &Session;
-  ComparisonModel *Functions, *Nodes, *Slice;
+  ComparisonModel *Functions, *Nodes, *Slice, *Accesses;
   QTableView *FunctionTable, *NodeTable, *SliceTable;
   QComboBox *Side;
   QCheckBox *Control;
-  QPushButton *Backward, *Forward, *Cancel, *Inspect;
+  QPushButton *Backward, *Forward, *ArgumentAccesses, *Cancel, *Inspect;
   QLabel *Summary, *FunctionStatus, *LoopStatus, *SliceStatus;
   QString Revision, Address;
-  bool Requested = false;
+  bool Requested = false, AccessesStopped = false;
   void refresh();
   void selectSide();
   void controls();

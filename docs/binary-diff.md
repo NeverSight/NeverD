@@ -64,6 +64,240 @@ otherwise identical wrappers after layout changes. Their original bytes remain
 inspectable; separate normalized features, names and call context can still
 establish correspondence, while indistinguishable candidates remain ambiguous.
 
+Matcher version 15 adds `data_reference` candidates after the existing matcher
+and entry-alternative review settle. Independently matched complete functions
+with equal instruction layouts and CFGs align unnamed data operands by their
+instruction and operand positions. Known addresses and mapped call/function
+targets must agree; conflicting mappings in either direction remain unknown.
+Only a unique pair with the same complete reference roles is proposed. These
+candidates use the existing similarity threshold and can distinguish equal or
+weaker alternatives only when mapped call/address context does not contradict
+them. A stronger body or another independently supported alternative still
+prevents automatic admission. The witness correspondence is frozen for this
+pass, so proposed functions cannot justify their own data-reference evidence.
+This final pass measures reference proposals and their competing bodies, but
+only admits pairs supported by the new reference evidence. Unrelated pairs
+deferred during entry-alternative review remain available for review.
+
+The same pass proposes `address_site` callback pairs from complete function
+address operands at aligned positions in independently matched functions.
+Already paired targets and known data must agree. Unnamed data operands require
+the frozen data-reference relation above; callbacks cannot bootstrap that
+relation. All eligible witnesses must agree in both directions. Like call-site
+proposals, these candidates use the existing lower context threshold only when
+every mapped caller, callee and address neighbor agrees, and still compete with
+measured body alternatives. Function addresses retain their explicit role;
+they are not inferred from arbitrary numeric operands.
+
+This rule currently uses the complete address operands of
+`native-x86-operands-v3`; AArch64 page fragments are not object-reference
+witnesses. It does not use companion debug information, neighboring function
+addresses or assumed data layouts. Data identity and contents remain unknown:
+the instruction delta retains uncertain references and does not report
+semantic equivalence or unchanged code merely because this context paired it.
+
+Matcher version 16 reviews provisional body matches against complete callers
+after all candidate admission finishes. Equal instruction layouts, scalar
+operands and CFGs align call and tail-transfer positions even when one target
+was already consumed by a weaker body match. Every eligible caller must agree
+in both directions; unresolved data, incomplete callers and known target
+retargeting cannot support this review. When this evidence conflicts with a
+weak match and points to an unmatched function, both alternatives remain
+available for review with their original body or call-site evidence. The
+matcher does not automatically promote the new target or lower its similarity
+threshold. Manual, confirmed, named, exact-byte, normalized-body and
+context-supported matches remain protected.
+The review also preserves a complete instruction body embedded in its unchanged
+CFG when only insertions or deletions distinguish the pair: callers can
+deliberately switch to a new helper without changing the original body's
+identity.
+
+Matcher version 17 adds review evidence for x64 fixed-frame address-use roles.
+The native reader retains the instruction, operand, width and order of uses
+of each observed local address. The candidate key allows local offsets to
+permute while preserving these roles, including which address is later read.
+It requires two distinct address-taken slots, an observed memory use of one,
+and a fixed RSP allocation before the first control transfer. Dynamic stack
+changes, direct SP copies, frame-pointer aliases, out-of-frame addresses and
+overlapping observed slots supply no key.
+
+Unique role pairs remain review candidates. When an unmatched alternative
+passes the existing body threshold and contradicts the role key of a weak
+body match, both alternatives are retained for review. Named, confirmed,
+manual, byte-exact, normalized and context-supported identities are protected.
+Original scalar offsets and normalized shapes still determine the instruction
+delta. This byte-derived hint is versioned by the matcher and establishes no
+stack-object identity, alias proof or semantic equivalence.
+
+Matcher version 18 adds `initializer_context` candidates for callbacks in
+relocation-marked function-pointer initializers. It compares complete contiguous
+pointer-width neighborhoods, requiring at least two distinct independently
+matched complete targets and a unique neighborhood on each side. Every aligned
+occurrence must agree in both directions before an unmatched target is proposed.
+Repeated anchors, competing neighborhoods, missing targets and overlapping
+slots cannot resolve an identity. The witness correspondence is frozen for this
+pass; newly admitted callbacks cannot support their own initializer evidence.
+Resolving part of a duplicate-body group retains its unpaired remainder for
+review, including a lone remaining pair. Explicitly rejected pairs stay hidden.
+
+These proposals still compete with measured body alternatives under the existing
+similarity, ambiguity and mapped-context checks. Initializer evidence alone does
+not earn the lower call-context threshold. Native capture reads only slots
+explicitly marked by the loader, through the same code-coordinate reader as CFG
+relocation roots. Numeric lookalikes supply no evidence. These byte-derived hints
+do not establish data-object boundaries, stable runtime pointer values, ABI
+compatibility or semantic equivalence. Input bytes, effective mapping and
+overlays bind their native source; normalized instruction identity stays intact.
+Interrupted initializer extraction discards the optional neighborhoods while
+retaining the completed code inventory and an explicit stopped state.
+
+Matcher version 19 extends this context to repeated pointer-slot spacing.
+Both pointer width and stride must agree, alongside the ordered independently
+matched targets. It does not interpret the bytes between slots or infer a
+record type. Contiguous proposals are evaluated first; wider spacing proposes
+only remaining unmatched endpoints. Both channels use the same frozen anchors,
+so a newly paired initializer cannot justify another initializer proposal.
+All eligible wider-spacing observations must agree in both directions.
+Unknown or unreadable marked coordinates remain explicit barriers instead of
+disappearing from the slot sequence. Capturing a coordinate never admits a new
+function entry. Body competition, thresholds, original instruction identity and
+the limits of the equivalence claims above remain unchanged.
+
+Matcher version 20 adds `data_initializer` candidates between paired data-address
+observations. Complete independently matched functions must use those addresses
+at the same instruction and operand roles, with equal scalar, CFG and mapped
+reference layouts. Adjacent observations must agree uniquely in both directions;
+both bounded intervals need the same length and every marked pointer slot at
+the same offset. Unknown targets, conflicting observations, overlapping slots
+and incompatible already paired targets block the evidence. Full mapped data
+coordinates supply this hint; numeric lookalikes and AArch64 page fragments do
+not. The pass uses the original frozen correspondence after the earlier
+initializer channels and retains ordinary similarity and rival checks. Observed
+intervals do not identify data-object boundaries or prove runtime equivalence.
+
+Matcher version 21 adds `block_call_site`: the same call position in a unique
+complete block of independently matched complete callers. The surrounding block
+must retain every scalar and known reference role. Repeated indistinguishable
+blocks, contradictory occurrences, unresolved operands or indirect transfers
+cannot resolve a pair. This can propose a remaining helper after calls elsewhere
+were added or reordered. Candidates still compete with measured bodies; only
+complete agreement with already mapped neighbors earns the existing lower
+context threshold. These local observations neither prove whole-function
+identity nor relax instruction-level change reporting.
+
+Matcher version 22 preserves unchanged instructions when a new guard splits a
+complete single-block body across several blocks. The instruction rows can
+cross block boundaries; block, edge and entry changes remain visible. This
+path requires an ordered contiguous instruction span and forward ordinary CFG
+edges, and it must recover more known equal instructions without weakening the
+weighted alignment. Loops, exceptions, indirect transfers and incomplete bodies
+retain ordinary block alignment. The comparison still reports changed scalar
+values, retargeted calls and unknown reference identities separately.
+
+Matcher version 23 also aligns complete ordered spans when both functions have
+several blocks, under the same forward-graph and instruction-evidence rules.
+Moving an instruction across an internal branch target remains a block-boundary
+change even when the total block and edge counts agree. More matching rows do
+not establish control-flow or semantic equivalence.
+Automatic pairing and rival checks retain the structural matcher-22 recipe;
+ordered multi-block rows refine the resulting comparison and analyst-selected
+pairs without promoting a shared instruction sequence into identity evidence.
+
+Saved matches record `alignment_profile`. New matches use
+`ordered-block-spans-v1`; matcher-22 reports retain `single-block-spans-v1`, and
+older reports reopen with `paired-blocks-v1` measurements and rows.
+Reopening checks the chosen method
+against the retained inputs; an unknown method, a missing method in a current
+document, or scores that disagree with its method are refused. Analyst edits
+and undo/redo retain the method with each pair.
+
+Matcher version 10 also defers a similar helper body when its changed entry
+contains the complete straight-line prelude of an unmatched direct tail caller,
+with at least two caller instructions beyond the helper's aligned body. Both
+the helper and caller remain candidates under `inlined_tail_call`, in either
+comparison direction. Unknown address identities can support this ambiguity;
+they do not establish identity or equivalence. This check reuses reference-aware
+instruction alignment and respects stated names and analyst decisions. It
+recognizes this boundary pattern, not arbitrary compiler inlining or outlining.
+Saved comparisons reject this candidate-only step on an accepted match. Failed
+restoration preserves the current comparison and its undo/redo history.
+
+Matcher version 24 also reviews a weak helper match against its unmatched
+direct callers. A complete caller and the opposite function must have the same
+ordered entry calls to at least two distinct already matched targets outside
+the proposed inline pair. None of these targets may be a callee of the helper.
+The caller must pass the existing body threshold and explain strictly more
+known equal instructions than the structurally changed helper match. Both
+whole-function alternatives then remain available for review as ordinary
+call-site candidates. This review never accepts a caller identity; shared
+initialization, repeated calls, incomplete analysis or a preserved helper CFG
+cannot by themselves overturn a match. Stated identities, confirmations and
+analyst rejections retain their authority.
+
+Matcher version 25 retains split call roles instead of discarding their
+conflicts. Whole-caller layouts remain strict; local review can also use a
+unique fully decoded block of a partially analyzed caller. Unknown instructions,
+addresses and indirect transfers cannot support that block. A split or local
+role can reopen a complete weak match with a preserved CFG; a changed CFG needs
+a competing body above the existing similarity threshold with more known equal
+instructions. Original complete-body preservation and analyst decisions remain
+protected. Uncertain rows never become equal through this review.
+
+The same revision reviews independent observed neighborhoods. A different
+ordered call sequence needs at least two distinct already mapped complete
+callees and no shared mapped callee with the prior body. Caller alternatives
+need at least two additional independently mapped callers and must retain all
+observed mapped source callers. They also need two agreeing callee anchors or
+more known equal instructions than the prior match. These channels retain
+separate `neighborhood` candidates; partial analysis stays partial. They do not
+accept new identities, change native facts or establish equivalence.
+
+A weak CFG-based match with changed calls and zero agreement among mapped
+neighbors also needs instruction-only coverage to meet the configured minimum
+similarity. Otherwise it remains a review candidate: matching blocks and edges
+cannot supply most of the evidence for a contradictory function identity.
+Unknown context alone does not trigger this rule. Named, exact, normalized,
+context-supported, manual and confirmed identities remain protected.
+
+Matcher version 11 also proposes candidates whose complete instruction streams
+agree after excluding NOP padding and an entry ENDBR marker. These layout edits
+can break every shared three-instruction sketch band and whole-function graph
+key in a short function. The added channel requires different original
+instruction streams, so it does not expand unchanged-layout duplicate groups.
+The additional key retains scalar operands and
+abstracts address identities only for candidate retrieval. Reference-aware
+measurement, ambiguity decisions, analyst rejections and the existing
+candidate/bucket limits still govern acceptance. Original bytes, landing
+instructions and padding remain in the reported delta. This is structural
+matching evidence, not a proof of semantic equivalence or unchanged protection.
+
+Matcher version 12 reviews remaining alternatives after correspondence has
+settled. A complete call-free conditional entry can retrieve a changed body
+whose whole-function graph and instruction sketch no longer agree. The entry
+key retains scalar operands and excludes only NOP padding and an entry ENDBR
+marker. The existing bucket and per-function candidate limits bound this review.
+Original instructions and references determine the similarity.
+
+An entry-only alternative remains available for review; it never automatically
+establishes identity. If it clearly exceeds a weak accepted pair by the existing
+ambiguity margin, that pair becomes ambiguous and both choices remain available.
+Names, exact bodies, analyst choices/confirmations and pairs supported by mapped
+neighbors are preserved. Reviewing against a settled map keeps this additional
+retrieval channel from changing the order of matching propagation. Approximation
+must be enabled; rejected choices stay excluded. Save/reopen and the counterpart
+picker retain the alternatives, and manual choice and undo use the same core
+correspondence editor.
+
+Matcher version 13 repairs block alignment when a removed guard or reordered
+failure path displaces a known single-call block. The call must be unique among
+the function's complete resolved call sequences and lie at an exit on at least
+one side. The affected alignment is rebuilt around that call, preserving
+uncertain or retargeted calls and duplicate-call alternatives. This avoids
+reporting an unchanged call as deleted or replaced by a neighboring check.
+Original branch inversions, inserted/deleted instructions and modeled
+fallthrough differences remain visible. This structural alignment repair does
+not establish function identity or infer that a call cannot return.
+
 ## Command line
 
 ```sh
@@ -117,6 +351,11 @@ query returns the deduplicated union of its direct candidates. Sharing another
 function's candidate does not make two functions candidates for each other.
 Search and sort apply to the returned candidate functions. `ambiguity.steps`
 lists the supporting matching steps; inventory rows expose `candidate_steps`.
+Each returned row also has `pair_evidence.steps` and
+`pair_evidence.explanation` for that specific source and candidate. These
+exclude reasons that support the candidate only with another source in an
+overlapping group; the ordinary inventory fields retain their function-wide
+meaning.
 The usual inventory's short `candidates` array remains a preview; it does not
 limit this query's total. These are the engine's retained hypotheses, not all
 possible correspondences or accepted matches.
@@ -124,9 +363,11 @@ possible correspondences or accepted matches.
 In the desktop, select a function and choose **Pair with…**. The resizable
 picker pages all retained ambiguity candidates and can switch to **All
 functions** for manual pairing. Search accepts names and hexadecimal addresses,
-including zero. Rows show current pairings; a selection explains which pairs
-will be replaced. **Pair functions** records the edit and **Undo** restores the
-previous pairs. Searching, browsing and cancelling do not edit the mapping.
+including zero. Rows show current pairings; a selection explains its specific
+candidate evidence and which pairs will be replaced. Tooltips and accessible
+descriptions include that pair's evidence. **Pair functions** records the edit
+and **Undo** restores the previous pairs. Searching, browsing and cancelling do
+not edit the mapping.
 Changed comparison revisions invalidate the picker until it is reopened.
 
 `--options FILE` accepts an object containing:
@@ -220,13 +461,41 @@ the ordinary function delta. Memory effects, register renaming, scheduling,
 source-level dataflow and cross-ISA semantics are not validated by this profile.
 An unchanged shared run does not hide a changed constant elsewhere in the body.
 
-Repeated runs shorter than the default eight instructions are omitted unless
+`--region-calls` (desktop **Settings → Include matched calls**) selects the
+separate `native-call-runs-v1` profile and enables region analysis. It extends
+block-local runs across direct calls whose native targets have a current
+one-to-one function correspondence. The run retains exact normalized operands
+and register identities. Unknown, indirect, unpaired or differently paired call
+targets interrupt it; branches and returns still interrupt it. These results
+are conditioned on the heuristic or analyst-selected function pairs, **not** on
+validated call behavior or argument equivalence. The report records
+`call_evidence: current_function_correspondence`, and the review window displays
+this scope alongside the original instructions.
+
+Call-profile coverage also counts admitted direct calls. In that profile, a
+short repeated run can additionally qualify when it contains at least two
+distinct paired call targets, or a paired call in a run ending at a return or
+direct-jump boundary on both sides. The ordinary minimum length, occurrence
+bounds, exact operand checks and clone ambiguity still apply. Repeated calls to
+one target inside a block do not supply that additional support. This lets short call-heavy
+fragments survive extraction or duplication without discarding their competing
+destinations. It does not infer equivalent register values, memory effects or
+control paths. Changed calls and constants outside a shared fragment remain
+visible; matching a cleanup tail does not make its preceding call unchanged.
+
+Mapping edits and undo recompute call-profile regions within the existing
+work/storage allowance. Cancellation preserves the previous mapping and regions;
+resource exhaustion publishes only completed evidence with its stop reason.
+Saved binding validates call targets against the saved correspondence and exact
+native snapshots. The default `native-runs-v1` search and encoding are unchanged.
+
+In the default profile, repeated runs shorter than eight instructions are omitted unless
 they cover at least half the eligible instructions of either function. This
 limits components formed from common short sequences; it is a heuristic
 abstention, not evidence that a transformation is absent. Unique seeds retain
 the ordinary minimum run length.
 
-`regions` may be an object with `enabled`, `min_instructions`,
+`regions` may be an object with `enabled`, `calls`, `min_instructions`,
 `min_repeated_instructions`, `max_occurrences`, `max_seeds`, `max_work`,
 `max_anchors` and `max_hypotheses`. Work/storage admission
 and defaults have one owner in `diff/Limits.h`. Frequent seed groups and oversized
@@ -236,6 +505,28 @@ No feature hash, score or region explanation is a semantic certificate.
 The **All shared spans (including unclassified)** filter and `--list region-anchors`
 also page anchors retained before grouping could finish. Use the saved report
 when revisiting a partial result: anchor indices belong to that exact result.
+
+For large inputs, pass explicit allowances with `--options large-regions.json`.
+For example, the following settings completed the retained full FFmpeg
+call-region search; they are a workload-specific configuration, not a change to
+the defaults or an accuracy guarantee:
+
+```json
+{"regions":{"calls":true,"max_seeds":4194304,"max_work":268435456,"max_anchors":1000000}}
+```
+
+Save that result with `--save comparison.nddiff` and reopen it in the desktop
+for bounded inspection. Its native-region thresholds and allowances survive
+Reopen and the next **Compare**, including when **Include matched calls** is
+toggled. The **All shared spans** view gives the full width to the spans and
+their original instructions.
+
+Select a shared span and use **Call context… → Primary / Secondary** to trace
+its callers through the same native call-path review. This also exposes a public
+wrapper that delegates to a moved private body, even when the wrapper contains
+no directly shared instructions. Calls and tail transfers retain their original
+instruction witnesses. Reachability is conditional on observed native edges;
+it does not establish path feasibility, source ancestry or patch presence.
 
 ## Dependency evidence and slices
 
@@ -299,6 +590,39 @@ unknown inputs and missing exits remain visible gaps. These are pipeline
 observations with inferred calling conventions, not qualified machine-state or
 whole-program equivalence. The internal finite-neighborhood fingerprints expose
 open data frontiers; hash equality never marks code unchanged.
+
+Select a recovered call in **Dependency evidence**, then choose **Argument
+accesses** to review caller-side reads and writes using the same SSA address
+expression as an argument. Argument positions are one-based in the table and
+zero-based in JSON. Activate a row to select its SSA operation and trace its
+inputs or uses. The RETURN-input column records a same-width copy/PHI path to a
+RETURN operand, without deciding which path executes. Depending on the native
+projection, that operand can be a return control target; this observation does
+not infer an ABI result binding. This distinguishes local slot
+roles when compiler frame layouts change; it does not attribute writes to a
+callee or change automatic function correspondence.
+
+The C/Python/CLI dataflow query accepts
+`{"kind":"accesses","side":"primary","address":"0x1000","call":12}`.
+`call` is a node ID from the function's node page. The CLI equivalent is
+`--flow-function 0x1000 --argument-access-call 12`, with ordinary side, paging,
+reopen and timeout options. The
+`med-ssa-argument-accesses-v1` observation requires `med-ssa-v2`. It indexes
+same-width copies and scalar constant addition/subtraction over a shared local
+SSA definition or parameter. Separate unknown inputs, pointer loads and call
+clobbers do not acquire a common identity. Segmented/ordered memory operations,
+literal addresses and other expression equivalences are outside this observation.
+The original graph, memory/call gaps and native bytes remain unchanged. Missing
+observations do not rule out aliases, and execution order remains unassessed.
+
+Pages include `inspection_complete`, `state`, `work`, `gaps` and the original
+call. Rows retain the access node/native origin, zero-based `argument`,
+`access` (`read`/`write`), `access_bytes` and `return_operand_path`. Optional
+`max_records`/`max_work` bound the complete function index; `offset`/`limit` page
+one call's retained observations. Calls and pages share one index. Cooperative
+cancellation and `timeout_ms` preserve completed observations; `refresh:true`
+recomputes a stopped request. These derived pages are reconstructed from the
+same authenticated graph after reopening a report.
 
 Saved dependency graphs stream into the shared document. Reopen reconstructs
 the bounded native projection and checks the recipe, coverage, origins and every
@@ -1092,6 +1416,11 @@ propose a consistent one-to-one relationship before the similarity threshold
 can accept a pair. Unresolved calls retain their positions and prevent this
 positional inference across their interval; they are not invented call-graph
 edges. Other matching features can still resolve those functions.
+Matcher version 14 also lets a fully consistent call position distinguish a
+nearby alternative whose measured body is no more similar and has no consistent
+call position of its own. Stronger bodies and competing positional proposals
+still prevent this decision; similarity thresholds and ambiguity margins are
+unchanged.
 
 There is no 1,024-call cutoff. Large call sequences retain exact anchor selection
 with linear score frontiers and bounded dense tables; identical known-call
@@ -1114,8 +1443,12 @@ named `sub_1234` remains eligible, as do names admitted by recognition. Display
 renames do not replace those names or change native snapshot revisions. Numeric
 suffixes added to distinguish equal names in the listing do not manufacture
 unique name evidence; literal suffixes in the original symbols remain intact. The
-`sdk-native-decode-v4` extraction identity records this contract and the v3
-address-evidence profile described in the architecture guide; historical
+`sdk-native-decode-v5` extraction identity records this contract, the v3
+address-evidence profile and known no-return call termination. The native reader
+shares the pipeline's target contracts: an unconditional known no-return call
+has no ordinary fallthrough and does not make a function incomplete merely
+because it is last in the layout. Conditional and unknown calls keep their
+possible fallthrough. Historical
 reports keep their original evidence and require a new comparison for fresh
 binding under the revised extraction profile.
 Use the [offline report workflow](binary-diff-lineage.md#open-a-report-from-an-older-analysis-profile)

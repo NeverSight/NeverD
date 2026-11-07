@@ -1,6 +1,6 @@
 **语言**: [English](../README.md) | [简体中文](README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 7736ad46b93593b04d29c3e0facee7e7a9cd77a1dd1d2b11e74558f55c3ed76c -->
+<!-- i18n-source: e1b18ca385ee2c0da797d70ea8b6d1d166393d196100096863a20662b72d11db -->
 
 [← NeverD 项目](project.md)
 
@@ -39,6 +39,10 @@
 | [macOS HVF](macos-hvf.md) | 宿主同架构硬件执行、签名权限、打包与验证 |
 | [Windows 驱动模拟](driver-emulation.md) | 有界 x64 WDM/KMDF 生命周期、请求、硬件场景、SEH、PnP 子集、后端选择及限制 |
 | [内存安全审计与猎取](memory-safety.md) | 堆对象生命周期与拷贝越界分析：各格式身份契约、汇/源目录、判定、预算与 JSON 模式 |
+| [进程插件 SDK（英文）](../process-plugin-sdk.md) | 独立 Python 辅助库、协议和独立示例 |
+| [Tools 层（英文）](../tools-layer.md) | 精确插件调用、冻结的使用方步骤和操作记录 |
+| [GUI 进程插件（英文）](../gui-plugins.md) | 管理器、菜单位置、任务结果和进程提供程序协议 |
+| [NPH 进程插件宿主（英文）](../plugin-host.md) | 共享所有权、任务准入、协议和进程生命周期 |
 | [原生插件](plugins.md) | 纯 C 描述符 ABI、回调与事件、构建/链接流程、发现顺序及兼容性规则 |
 | [Python 插件](python-plugins.md) | 插件编写、会话与事件 API、隔离、测试及发布 |
 | [移动端总览](mobile.md) | Android 与 iOS 支持范围、输入输出格式、快速开始及各平台指南入口 |

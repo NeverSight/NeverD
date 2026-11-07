@@ -34,6 +34,131 @@ llvm::Value *MedLLVMEmitter::emitX86Virtualization(const MedOp &Op,
         " output=" + llvm::Twine(Op.Output.Size) +
         " inputs=" + llvm::Twine(static_cast<unsigned>(Op.NumInputs)));
   const auto C = x86VirtualizationContract(Id);
+  if (C.Result == X86VirtualizationResult::SnpContext ||
+      C.Result == X86VirtualizationResult::SevExit) {
+    const bool Context = C.Result == X86VirtualizationResult::SnpContext;
+    const std::vector<llvm::Type *> Types =
+        Context
+            ? std::vector<llvm::Type *>{Builder.getPtrTy(), Builder.getPtrTy(),
+                                        Builder.getInt32Ty()}
+            : std::vector<llvm::Type *>{Builder.getInt64Ty()};
+    auto Callee = Mod->getOrInsertFunction(
+        std::string("llvm.x86.") + C.Mnemonic,
+        llvm::FunctionType::get(Builder.getVoidTy(), Types, false));
+    auto *Function = llvm::cast<llvm::Function>(Callee.getCallee());
+    Function->setMemoryEffects(llvm::MemoryEffects::unknown());
+    Function->addFnAttr(llvm::Attribute::Convergent);
+    Function->addFnAttr(llvm::Attribute::NoDuplicate);
+    Function->addFnAttr(llvm::Attribute::NoUnwind);
+    if (Context && Function->getIntrinsicID())
+      Function->addParamAttr(2, llvm::Attribute::ImmArg);
+    std::vector<llvm::Value *> Arguments;
+    for (unsigned I = 1; I != Op.NumInputs; ++I) {
+      auto *Value = getVar(Op.Inputs[I], Builder);
+      if (Context && I < 3 && !Value->getType()->isPointerTy())
+        Value = Builder.CreateIntToPtr(Value, Builder.getPtrTy());
+      if (!Context && Value->getType()->isPointerTy())
+        Value = Builder.CreatePtrToInt(Value, Builder.getInt64Ty());
+      Arguments.push_back(Value);
+    }
+    Builder.CreateCall(Callee, Arguments);
+    return nullptr;
+  }
+  if (Id == Intrinsic::X86HyperVCall) {
+    auto *Type =
+        llvm::FunctionType::get(Builder.getVoidTy(),
+                                {Builder.getPtrTy(), Builder.getPtrTy(),
+                                 Builder.getPtrTy(), Builder.getInt32Ty()},
+                                false);
+    auto Callee = Mod->getOrInsertFunction("llvm.x86.hyperv.call", Type);
+    auto *Function = llvm::cast<llvm::Function>(Callee.getCallee());
+    Function->setMemoryEffects(llvm::MemoryEffects::unknown());
+    Function->addFnAttr(llvm::Attribute::Convergent);
+    Function->addFnAttr(llvm::Attribute::NoDuplicate);
+    Function->addFnAttr(llvm::Attribute::NoUnwind);
+    if (Function->getIntrinsicID())
+      Function->addParamAttr(3, llvm::Attribute::ImmArg);
+    std::vector<llvm::Value *> Arguments;
+    for (unsigned I = 1; I != 4; ++I) {
+      auto *Value = getVar(Op.Inputs[I], Builder);
+      Arguments.push_back(
+          Value->getType()->isPointerTy()
+              ? Value
+              : Builder.CreateIntToPtr(Value, Builder.getPtrTy()));
+    }
+    Arguments.push_back(Builder.getInt32(Op.Inputs[4].ConstVal));
+    Builder.CreateCall(Callee, Arguments);
+    return nullptr;
+  }
+  if (C.Result == X86VirtualizationResult::Value) {
+    const auto Word = Op.Output.Size;
+    auto *Type = sizeToType(Word);
+    std::vector<llvm::Value *> Arguments;
+    for (unsigned I = 1; I != Op.NumInputs; ++I)
+      Arguments.push_back(getVar(Op.Inputs[I], Builder));
+    const std::string Name =
+        std::string("llvm.x86.") + C.Mnemonic + (Word == 4 ? "32" : "");
+    auto Callee = Mod->getOrInsertFunction(
+        Name, llvm::FunctionType::get(Type, std::vector<llvm::Type *>(5, Type),
+                                      false));
+    auto *Function = llvm::cast<llvm::Function>(Callee.getCallee());
+    Function->setMemoryEffects(llvm::MemoryEffects::unknown());
+    Function->addFnAttr(llvm::Attribute::Convergent);
+    Function->addFnAttr(llvm::Attribute::NoDuplicate);
+    Function->addFnAttr(llvm::Attribute::NoUnwind);
+    return Builder.CreateCall(Callee, Arguments, "kvm.status");
+  }
+  if (Id == Intrinsic::X86SmmReturnContext ||
+      Id == Intrinsic::X86SgxTransferAtContext) {
+    const bool Sgx = Id == Intrinsic::X86SgxTransferAtContext;
+    auto *Pointer = resolveAtomicMemoryPtr(Op.Inputs[1], C.MemoryBytes,
+                                           Builder.getInt8Ty(), Builder);
+    std::vector<llvm::Type *> Types{Builder.getPtrTy()};
+    if (Sgx)
+      Types.push_back(Builder.getInt64Ty());
+    auto *Type = llvm::FunctionType::get(Builder.getVoidTy(), Types, false);
+    auto Callee =
+        Mod->getOrInsertFunction(std::string("llvm.x86.") + C.Mnemonic, Type);
+    auto *Function = llvm::cast<llvm::Function>(Callee.getCallee());
+    Function->setMemoryEffects(llvm::MemoryEffects::unknown());
+    Function->addFnAttr(llvm::Attribute::Convergent);
+    Function->addFnAttr(llvm::Attribute::NoDuplicate);
+    Function->addFnAttr(llvm::Attribute::NoUnwind);
+    Function->addFnAttr(llvm::Attribute::NoReturn);
+    std::vector<llvm::Value *> Arguments{Pointer};
+    if (Sgx) {
+      if (Function->getIntrinsicID())
+        Function->addParamAttr(1, llvm::Attribute::ImmArg);
+      Arguments.push_back(Builder.getInt64(Op.Inputs[2].ConstVal));
+      auto *Owner = Builder.GetInsertBlock()->getParent();
+      auto Features =
+          Owner->getFnAttribute("target-features").getValueAsString().str();
+      Owner->addFnAttr("target-features", Features.empty()
+                                              ? "+sgx,+xsave"
+                                              : Features + ",+sgx,+xsave");
+    }
+    Builder.CreateCall(Callee, Arguments);
+    return nullptr;
+  }
+  if (Id == Intrinsic::X86SvmRunContext) {
+    auto *Pointer = resolveAtomicMemoryPtr(Op.Inputs[1], C.MemoryBytes,
+                                           Builder.getInt8Ty(), Builder);
+    auto *Type = llvm::FunctionType::get(
+        Builder.getVoidTy(), {Builder.getPtrTy(), Builder.getInt32Ty()}, false);
+    auto Callee = Mod->getOrInsertFunction("llvm.x86.vmrun.context", Type);
+    auto *Function = llvm::cast<llvm::Function>(Callee.getCallee());
+    Function->setMemoryEffects(llvm::MemoryEffects::unknown());
+    Function->addFnAttr(llvm::Attribute::Convergent);
+    Function->addFnAttr(llvm::Attribute::NoDuplicate);
+    Function->addFnAttr(llvm::Attribute::NoUnwind);
+    if (Function->getIntrinsicID())
+      Function->addParamAttr(1, llvm::Attribute::ImmArg);
+    // The old SDK may transport this extension into LLVM C. Native object
+    // emission explicitly refuses it until its backend recognizes the API.
+    Builder.CreateCall(Callee,
+                       {Pointer, Builder.getInt32(Op.Inputs[2].ConstVal)});
+    return nullptr;
+  }
   const uint16_t Word = TargetArch == Arch::X64 ? 8 : 4;
   const auto P =
       x86VirtualizationAsm(Id, TargetArch, Op.MemoryAddressSpace,

@@ -17,6 +17,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "AnalysisCall.h"
+
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -119,6 +121,10 @@ void MedToHighConverter::lowerStore(HighFunc &Func, const MedOp &CurOp) {
 
 void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
                                    const MedOp &CurOp) {
+  if (high_detail::appendAnalysisX87Call(Func, CurOp, [&](const MedVar &Value) {
+        return medvarToExpr(Value);
+      }))
+    return;
   va_t Target = 0;
   if (CurOp.NumInputs >= 1 && CurOp.Inputs[0].isConst())
     Target = CurOp.Inputs[0].ConstVal;
@@ -190,14 +196,11 @@ void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
   const bool X87Result =
       CurOp.Output.Kind == MedVar::Reg && CurOp.Output.Size == 10 &&
       getTargetRegInfo(TargetArch).isX87StackReg(CurOp.Output.RegOff);
-  if (CurOp.SourceCallHint || X87Result || CurOp.CalleeFloatReturnBytes ||
+  if (CurOp.Output.Size || CurOp.SourceCallHint || X87Result ||
+      CurOp.CalleeFloatReturnBytes ||
       (CallExpr->FloatingCallSignature &&
        CallExpr->FloatingCallSignature->ReturnElements))
     CallExpr->Type = sourceCallResultType(CurOp);
-  // A call remodeled to return a struct across several registers writes
-  // every field into one packed temporary.
-  else if (CurOp.Output.Kind == MedVar::Temp && CurOp.Output.Size > 8)
-    CallExpr->Type = NdType::makeInt(CurOp.Output.Size, false);
   if (ExpressionObserver && CurOp.Addr != InvalidVA && CurOp.OriginSeq >= 0)
     ExpressionObserver(CurOp, CallExpr);
 

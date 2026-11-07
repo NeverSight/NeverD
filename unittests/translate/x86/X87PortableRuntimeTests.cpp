@@ -77,6 +77,53 @@ void expectUnchanged(const PortableX87StateV1 &Before,
   EXPECT_EQ(std::memcmp(&Before, &After, sizeof(Before)), 0);
 }
 
+TEST(X87PortableRuntime, ResetsNeedNoGuestMemoryAndRetainCompletionBoundaries) {
+  auto Memory = memory({});
+  for (unsigned Top = 0; Top != 8; ++Top)
+    for (uint32_t Selector : {0xd0d9U, 0x770fU, 0x0e0fU}) {
+      auto State = environment(0x37f, Top);
+      State.Image[4] = 0xff;
+      State.KnownPayload = 0x96;
+      const auto Before = State;
+      auto Step = executePortableX87RuntimeStepV1(State, *Memory, Selector,
+                                                  0x4000, UINT64_MAX);
+      ASSERT_EQ(Step.Status, PortableX87StepStatusV1::Completed);
+      EXPECT_TRUE(Step.InstructionCompleted);
+      EXPECT_FALSE(Step.MemoryAccess);
+      EXPECT_FALSE(Step.HasScalarResult);
+      auto Expected = Before;
+      if (Selector == 0xd0d9)
+        Expected.Image[9] = 0x40;
+      else {
+        Expected.Image[3] = 0;
+        Expected.Image[4] = 0;
+        for (unsigned Physical = 0; Physical != 8; ++Physical)
+          std::copy_n(Before.Image.begin() + 32 +
+                          ((Physical + 8 - Top) & 7) * 16,
+                      16, Expected.Image.begin() + 32 + Physical * 16);
+      }
+      if (Selector == 0x0e0f)
+        Expected.KnownPayload = 0;
+      expectUnchanged(Expected, State);
+      // A failed next instruction keeps the reset's completed prefix.
+      const auto Reset = State;
+      Step = executePortableX87RuntimeStepV1(State, *Memory, Load80, 0x4002,
+                                             UINT64_MAX);
+      EXPECT_EQ(Step.Status, PortableX87StepStatusV1::MemoryFault);
+      EXPECT_FALSE(Step.InstructionCompleted);
+      expectUnchanged(Reset, State);
+      State.Image[0] &= ~1U;
+      State.Image[2] |= 0x81;
+      const auto Pending = State;
+      Step = executePortableX87RuntimeStepV1(State, *Memory, Selector, 0x4004,
+                                             UINT64_MAX);
+      EXPECT_EQ(Step.Status, PortableX87StepStatusV1::PendingException);
+      EXPECT_FALSE(Step.InstructionCompleted);
+      EXPECT_FALSE(Step.MemoryAccess);
+      expectUnchanged(Pending, State);
+    }
+}
+
 TEST(X87PortableRuntime, EveryTopAndPrecisionRoundingRetainsBinary80) {
   const auto A = binary80(0x8000000000000001, 0x3fff);
   const auto B = binary80(0x8000000000000000, 0x3ffe);

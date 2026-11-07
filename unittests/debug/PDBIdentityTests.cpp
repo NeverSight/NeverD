@@ -4,15 +4,21 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/debug/PDBDataContributions.h"
+#include "../loader/PEHeaderFixture.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Common.h"
 #include "neverd/debug/DebugInfoDiscovery.h"
+#include "neverd/debug/PDBFunctionNameHint.h"
 #include "neverd/debug/PDBLoader.h"
 #include "neverd/ir/NdTypes.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
+#include "neverd/loader/COFF/PEHeaderMapping.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/DebugInfo/CodeView/CVRecord.h"
@@ -20,9 +26,15 @@
 #include "llvm/DebugInfo/CodeView/SymbolRecord.h"
 #include "llvm/DebugInfo/CodeView/SymbolSerializer.h"
 #include "llvm/DebugInfo/MSF/MSFCommon.h"
+#include "llvm/DebugInfo/PDB/Native/DbiStream.h"
+#include "llvm/DebugInfo/PDB/Native/NativeSession.h"
+#include "llvm/DebugInfo/PDB/Native/PDBFile.h"
 #include "llvm/DebugInfo/PDB/Native/RawConstants.h"
+#include "llvm/DebugInfo/PDB/Native/RawTypes.h"
+#include "llvm/DebugInfo/PDB/PDB.h"
 #include "llvm/Object/CVDebugRecord.h"
 #include "llvm/Support/BinaryByteStream.h"
+#include "llvm/Support/BinaryStreamReader.h"
 #include "llvm/Support/BinaryStreamRef.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Error.h"
@@ -32,12 +44,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <initializer_list>
 #include <memory>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace neverd;
@@ -718,6 +732,12 @@ TEST(PDBIdentityIntegration, MatchingFixtureAuthenticatesNamesButNotExtents) {
   EXPECT_FALSE((*ContextOr)->hasAuthenticatedFunctionSignatures());
   EXPECT_FALSE((*ContextOr)->hasAuthenticatedObjectExtents());
   EXPECT_TRUE((*ContextOr)->hasInfo());
+  const auto Storage = (*ContextOr)->readOnlyDataRegion(0x140002008);
+  ASSERT_TRUE(Storage);
+  EXPECT_LE(Storage->first, 0x140002008u);
+  EXPECT_GT(Storage->second, 0x140002008u);
+  EXPECT_FALSE((*ContextOr)->readOnlyDataRegion(0x140001250));
+  EXPECT_FALSE((*ContextOr)->readOnlyDataRegion(Storage->second));
   const std::vector<FunctionSym> Functions = (*ContextOr)->allFunctions();
   ASSERT_FALSE(Functions.empty());
   for (const FunctionSym &Function : Functions) {
@@ -726,6 +746,20 @@ TEST(PDBIdentityIntegration, MatchingFixtureAuthenticatesNamesButNotExtents) {
     EXPECT_FALSE(Function.ReturnType)
         << "Phase A must not consume an unvalidated PDB type graph";
   }
+}
+
+TEST(PDBDataContributions, StorageRegionsRetainGapsAndRejectConflicts) {
+  using pdb_loader_detail::ModuleRange;
+  const std::vector<ModuleRange> Contributions{
+      {0x1000, 0x1010, 1, 1, true},  {0x1008, 0x1018, 2, 1, true},
+      {0x1018, 0x1020, 3, 1, true},  {0x1030, 0x1040, 4, 1, true},
+      {0x1038, 0x1048, 5, 1, false}, {0x1048, 0x1050, 6, 1, true},
+      {0x1050, 0x1060, 7, 2, true},  {0x1070, 0x1080, 8, 2, true},
+      {0x1078, 0x1088, 9, 3, true}};
+  EXPECT_EQ(pdb_loader_detail::readOnlyDataRegions(Contributions),
+            (std::vector<std::pair<va_t, va_t>>{
+                {0x1000, 0x1020}, {0x1048, 0x1050}, {0x1050, 0x1060}}));
+  EXPECT_TRUE(pdb_loader_detail::readOnlyDataRegions({}).empty());
 }
 
 TEST(PDBIdentityIntegration,
@@ -928,13 +962,12 @@ TEST(PDBIdentityIntegration, EitherGuidOrAgeMismatchRejectsTheCompanion) {
   }
 }
 
-// Copies a fixture PDB and overwrites the little-endian u32 at byte
-// \p Offset of MSF stream \p Stream.  Both the Info and DBI headers keep
-// their age at offset 8, inside the stream's first block.
-std::filesystem::path copyPDBWithStreamU32(const ScratchDir &Dir,
-                                           llvm::StringRef Fixture,
-                                           uint32_t Stream, uint32_t Offset,
-                                           uint32_t Value) {
+// Each edit is a byte offset and a little-endian word in the first block of
+// the selected fixture stream. Info/DBI ages and section headers fit there.
+std::filesystem::path
+copyPDBWithStreamWords(const ScratchDir &Dir, llvm::StringRef Fixture,
+                       uint32_t Stream,
+                       llvm::ArrayRef<std::pair<uint32_t, uint32_t>> Edits) {
   auto BufferOr = llvm::MemoryBuffer::getFile(safetyFixture(Fixture).string());
   EXPECT_TRUE(static_cast<bool>(BufferOr));
   if (!BufferOr)
@@ -964,8 +997,11 @@ std::filesystem::path copyPDBWithStreamU32(const ScratchDir &Dir,
   }
   const uint32_t FirstBlock =
       llvm::support::endian::read32le(Directory.data() + BlockListOffset);
-  llvm::support::endian::write32le(
-      Bytes.data() + uint64_t(FirstBlock) * BlockSize + Offset, Value);
+  for (const auto &[Offset, Value] : Edits) {
+    EXPECT_LE(Offset + sizeof(Value), BlockSize);
+    llvm::support::endian::write32le(
+        Bytes.data() + uint64_t(FirstBlock) * BlockSize + Offset, Value);
+  }
 
   const std::filesystem::path Out = Dir.path(Fixture);
   std::error_code EC;
@@ -975,9 +1011,110 @@ std::filesystem::path copyPDBWithStreamU32(const ScratchDir &Dir,
   return Out;
 }
 
+std::filesystem::path copyPDBWithStreamU32(const ScratchDir &Dir,
+                                           llvm::StringRef Fixture,
+                                           uint32_t Stream, uint32_t Offset,
+                                           uint32_t Value) {
+  return copyPDBWithStreamWords(Dir, Fixture, Stream, {{Offset, Value}});
+}
+
 constexpr uint32_t kInfoStream = 1;
 constexpr uint32_t kDbiStream = 3;
 constexpr uint32_t kHeaderAgeOffset = 8;
+
+TEST(PDBDataContributions, DataStorageRequiresCompleteReadOnlyContributions) {
+  auto ImageOr = loadPEFixture("safety_cases_pe_x64.exe");
+  ASSERT_TRUE(bool(ImageOr)) << llvm::toString(ImageOr.takeError());
+  std::unique_ptr<llvm::pdb::IPDBSession> Session;
+  auto Err = llvm::pdb::loadDataForPDB(
+      llvm::pdb::PDB_ReaderType::Native,
+      safetyFixture("safety_cases_pe_x64.pdb").string(), Session);
+  ASSERT_FALSE(bool(Err)) << llvm::toString(std::move(Err));
+  auto &PDB =
+      static_cast<llvm::pdb::NativeSession *>(Session.get())->getPDBFile();
+  auto DBIOr = PDB.getPDBDbiStream();
+  ASSERT_TRUE(bool(DBIOr)) << llvm::toString(DBIOr.takeError());
+  const auto Contributions = DBIOr->getSectionContributionData();
+  llvm::BinaryStreamReader Reader(Contributions.StreamData);
+  uint32_t Version = 0;
+  Err = Reader.readInteger(Version);
+  ASSERT_FALSE(bool(Err)) << llvm::toString(std::move(Err));
+  ASSERT_EQ(Version,
+            static_cast<uint32_t>(
+                llvm::pdb::PdbRaw_DbiSecContribVer::DbiSecContribVer60));
+  uint32_t RecordOffset = 0;
+  const llvm::pdb::SectionContrib *Data = nullptr;
+  while (Reader.bytesRemaining()) {
+    RecordOffset = Contributions.Offset + Reader.getOffset();
+    Err = Reader.readObject(Data);
+    ASSERT_FALSE(bool(Err)) << llvm::toString(std::move(Err));
+    if (Data->ISect == 2 && Data->Off <= 8 && Data->Off + Data->Size > 8)
+      break;
+    Data = nullptr;
+  }
+  ASSERT_NE(Data, nullptr);
+  const uint32_t Flags = Data->Characteristics;
+  const uint32_t FlagsOffset =
+      RecordOffset + offsetof(llvm::pdb::SectionContrib, Characteristics);
+  std::vector<std::pair<uint32_t, uint32_t>> Edits{
+      {FlagsOffset, Flags & ~llvm::COFF::IMAGE_SCN_MEM_READ},
+      {FlagsOffset, Flags & ~llvm::COFF::IMAGE_SCN_CNT_INITIALIZED_DATA},
+      {RecordOffset + offsetof(llvm::pdb::SectionContrib, Size),
+       static_cast<uint32_t>(ImageOr->Sections[1].Size - Data->Off + 1)}};
+  for (const uint32_t Forbidden :
+       {llvm::COFF::IMAGE_SCN_CNT_CODE,
+        llvm::COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA,
+        llvm::COFF::IMAGE_SCN_MEM_EXECUTE, llvm::COFF::IMAGE_SCN_MEM_WRITE})
+    Edits.emplace_back(FlagsOffset, Flags | Forbidden);
+  for (const auto &[Offset, Value] : Edits) {
+    SCOPED_TRACE(Offset);
+    SCOPED_TRACE(Value);
+    ScratchDir Dir;
+    const auto Modified = copyPDBWithStreamU32(Dir, "safety_cases_pe_x64.pdb",
+                                               kDbiStream, Offset, Value);
+    auto ContextOr = PDBDebugContext::load(Modified, *ImageOr);
+    ASSERT_TRUE(bool(ContextOr)) << llvm::toString(ContextOr.takeError());
+    EXPECT_FALSE((*ContextOr)->readOnlyDataRegion(0x140002008));
+  }
+}
+
+TEST(PDBDataContributions, AddressTranslationCannotAuthorizeCurrentStorage) {
+  auto ImageOr = loadPEFixture("safety_cases_pe_x64.exe");
+  ASSERT_TRUE(bool(ImageOr)) << llvm::toString(ImageOr.takeError());
+  std::unique_ptr<llvm::pdb::IPDBSession> Session;
+  auto Err = llvm::pdb::loadDataForPDB(
+      llvm::pdb::PDB_ReaderType::Native,
+      safetyFixture("safety_cases_pe_x64.pdb").string(), Session);
+  ASSERT_FALSE(bool(Err)) << llvm::toString(std::move(Err));
+  auto &PDB =
+      static_cast<llvm::pdb::NativeSession *>(Session.get())->getPDBFile();
+  auto DBIOr = PDB.getPDBDbiStream();
+  ASSERT_TRUE(bool(DBIOr)) << llvm::toString(DBIOr.takeError());
+  const auto &Header = *DBIOr->getHeader();
+  const uint32_t DebugOffset = sizeof(Header) + Header.ModiSubstreamSize +
+                               Header.SecContrSubstreamSize +
+                               Header.SectionMapSize + Header.FileInfoSize +
+                               Header.TypeServerSize + Header.ECSubstreamSize;
+  for (const auto Kind : {llvm::pdb::DbgHeaderType::OmapToSrc,
+                          llvm::pdb::DbgHeaderType::OmapFromSrc,
+                          llvm::pdb::DbgHeaderType::SectionHdrOrig}) {
+    SCOPED_TRACE(static_cast<unsigned>(Kind));
+    const unsigned Index = static_cast<unsigned>(Kind);
+    // Change only this index, preserving its neighboring 16-bit entry.
+    const unsigned Pair = Index & ~1u;
+    const uint32_t Neighbor = DBIOr->getDebugStreamIndex(
+        static_cast<llvm::pdb::DbgHeaderType>(Index ^ 1u));
+    const uint32_t Word = (Index & 1u) ? Neighbor : Neighbor << 16;
+    ScratchDir Dir;
+    const auto Translated =
+        copyPDBWithStreamU32(Dir, "safety_cases_pe_x64.pdb", kDbiStream,
+                             DebugOffset + 2 * Pair, Word);
+    auto ContextOr = PDBDebugContext::load(Translated, *ImageOr);
+    ASSERT_TRUE(bool(ContextOr)) << llvm::toString(ContextOr.takeError());
+    EXPECT_FALSE((*ContextOr)->readOnlyDataRegion(0x140002008));
+    EXPECT_FALSE((*ContextOr)->hasAuthenticatedObjectExtents());
+  }
+}
 
 TEST(PDBIdentityIntegration, RepublishedInfoAgeStillMatchesOnDbiAge) {
   // Public Windows PDBs (for example ntkrnlmp.pdb) keep RSDS age == DBI age
@@ -996,6 +1133,61 @@ TEST(PDBIdentityIntegration, RepublishedInfoAgeStillMatchesOnDbiAge) {
   ASSERT_TRUE(static_cast<bool>(ContextOr))
       << llvm::toString(ContextOr.takeError());
   EXPECT_FALSE((*ContextOr)->allFunctions().empty());
+  auto IdentityOr = readPDBBuildIdentity(Republished);
+  ASSERT_TRUE(static_cast<bool>(IdentityOr))
+      << llvm::toString(IdentityOr.takeError());
+  EXPECT_EQ(*IdentityOr, *ImageOr->DynInfo.CodeViewPDBIdentity);
+  EXPECT_EQ(resolvePDBPublicFunctionNameHint(
+                safetyFixture("safety_cases_pe_x64.exe"), Republished, "main"),
+            0x140001250u);
+  EXPECT_FALSE(
+      resolvePDBPublicFunctionNameHint(safetyFixture("safety_cases_pe_x64.exe"),
+                                       Republished, "absent_public_function"));
+}
+
+TEST(PDBIdentityIntegration, MissingDbiAgeUsesInfoAgeOnEveryPath) {
+  auto ImageOr = loadPEFixture("safety_cases_pe_x64.exe");
+  ASSERT_TRUE(static_cast<bool>(ImageOr))
+      << llvm::toString(ImageOr.takeError());
+  ASSERT_TRUE(ImageOr->DynInfo.CodeViewPDBIdentity.has_value());
+  ScratchDir Dir;
+  const std::filesystem::path NoDbiAge = copyPDBWithStreamU32(
+      Dir, "safety_cases_pe_x64.pdb", kDbiStream, kHeaderAgeOffset, 0);
+  auto ContextOr = PDBDebugContext::load(NoDbiAge, *ImageOr);
+  ASSERT_TRUE(static_cast<bool>(ContextOr))
+      << llvm::toString(ContextOr.takeError());
+  auto IdentityOr = readPDBBuildIdentity(NoDbiAge);
+  ASSERT_TRUE(static_cast<bool>(IdentityOr))
+      << llvm::toString(IdentityOr.takeError());
+  EXPECT_EQ(*IdentityOr, *ImageOr->DynInfo.CodeViewPDBIdentity);
+  EXPECT_EQ(resolvePDBPublicFunctionNameHint(
+                safetyFixture("safety_cases_pe_x64.exe"), NoDbiAge, "main"),
+            0x140001250u);
+}
+
+TEST(PDBIdentityIntegration, OlderInfoAgeRejectsIdentityOnEveryPath) {
+  auto ImageOr = loadPEFixture("safety_cases_pe_x64.exe");
+  ASSERT_TRUE(static_cast<bool>(ImageOr))
+      << llvm::toString(ImageOr.takeError());
+  ASSERT_TRUE(ImageOr->DynInfo.CodeViewPDBIdentity.has_value());
+  const uint32_t ImageAge = ImageOr->DynInfo.CodeViewPDBIdentity->Age;
+  ASSERT_GT(ImageAge, 0u);
+  ScratchDir Dir;
+  const std::filesystem::path OlderInfo =
+      copyPDBWithStreamU32(Dir, "safety_cases_pe_x64.pdb", kInfoStream,
+                           kHeaderAgeOffset, ImageAge - 1);
+  auto ContextOr = PDBDebugContext::load(OlderInfo, *ImageOr);
+  ASSERT_FALSE(static_cast<bool>(ContextOr));
+  EXPECT_NE(llvm::toString(ContextOr.takeError())
+                .find("DBI age is newer than PDB Info age"),
+            std::string::npos);
+  auto IdentityOr = readPDBBuildIdentity(OlderInfo);
+  ASSERT_FALSE(static_cast<bool>(IdentityOr));
+  EXPECT_NE(llvm::toString(IdentityOr.takeError())
+                .find("DBI age is newer than PDB Info age"),
+            std::string::npos);
+  EXPECT_FALSE(resolvePDBPublicFunctionNameHint(
+      safetyFixture("safety_cases_pe_x64.exe"), OlderInfo, "main"));
 }
 
 TEST(PDBIdentityIntegration, DbiAgeMismatchStillRejectsTheCompanion) {
@@ -1006,7 +1198,7 @@ TEST(PDBIdentityIntegration, DbiAgeMismatchStillRejectsTheCompanion) {
   const uint32_t ImageAge = ImageOr->DynInfo.CodeViewPDBIdentity->Age;
 
   ScratchDir Dir;
-  // Both Info and DBI say ImageAge + 1: a later link, not a republish.
+  // A changed DBI age cannot be treated as an Info-only republish.
   const std::filesystem::path Relinked =
       copyPDBWithStreamU32(Dir, "safety_cases_pe_x64.pdb", kDbiStream,
                            kHeaderAgeOffset, ImageAge + 1);
@@ -1014,6 +1206,75 @@ TEST(PDBIdentityIntegration, DbiAgeMismatchStillRejectsTheCompanion) {
   ASSERT_FALSE(static_cast<bool>(ContextOr));
   const std::string Error = llvm::toString(ContextOr.takeError());
   EXPECT_NE(Error.find("GUID/age does not match"), std::string::npos) << Error;
+  EXPECT_FALSE(resolvePDBPublicFunctionNameHint(
+      safetyFixture("safety_cases_pe_x64.exe"), Relinked, "main"));
+}
+
+TEST(PDBIdentityIntegration, PostLinkSectionHintsMatchFullLoader) {
+  const auto PDBPath = safetyFixture("safety_cases_pe_x64.pdb");
+  std::unique_ptr<llvm::pdb::IPDBSession> Session;
+  auto Err = llvm::pdb::loadDataForPDB(llvm::pdb::PDB_ReaderType::Native,
+                                       PDBPath.string(), Session);
+  ASSERT_FALSE(bool(Err)) << llvm::toString(std::move(Err));
+  auto &PDB =
+      static_cast<llvm::pdb::NativeSession *>(Session.get())->getPDBFile();
+  auto DBIOr = PDB.getPDBDbiStream();
+  ASSERT_TRUE(bool(DBIOr)) << llvm::toString(DBIOr.takeError());
+  const uint32_t SectionStream =
+      DBIOr->getDebugStreamIndex(llvm::pdb::DbgHeaderType::SectionHdr);
+  auto BufferOr = llvm::MemoryBuffer::getFile(
+      safetyFixture("safety_cases_pe_x64.exe").string());
+  ASSERT_TRUE(bool(BufferOr));
+
+  for (bool Trailing : {false, true}) {
+    for (bool ChangeFlags : {false, true}) {
+      SCOPED_TRACE(Trailing);
+      SCOPED_TRACE(ChangeFlags);
+      std::string Bytes = (*BufferOr)->getBuffer().str();
+      auto PE = locatePEHeaders(reinterpret_cast<uint8_t *>(Bytes.data()),
+                                Bytes.size());
+      ASSERT_TRUE(PE.valid());
+      const uint32_t Index = Trailing ? PE.NumSections - 1 : 0;
+      auto *Sections =
+          reinterpret_cast<llvm::object::coff_section *>(PE.SectionTable);
+      auto &Section = Sections[Index];
+      std::memset(Section.Name, 0, sizeof(Section.Name));
+      std::memcpy(Section.Name, ".rsrc", 5);
+      Section.VirtualSize += 0x80;
+      if (ChangeFlags)
+        Section.Characteristics =
+            Section.Characteristics ^ llvm::COFF::IMAGE_SCN_MEM_WRITE;
+      ScratchDir Dir;
+      const auto ImagePath = Dir.path("resource-edit.exe");
+      std::error_code EC;
+      llvm::raw_fd_ostream OS(ImagePath.string(), EC);
+      ASSERT_FALSE(EC) << EC.message();
+      OS << Bytes;
+      OS.close();
+
+      // Rename the matching link-time header, but retain its original size
+      // and permissions. Only a trailing resource section may grow.
+      const uint32_t Offset = Index * sizeof(llvm::object::coff_section);
+      const auto EditedPDB =
+          copyPDBWithStreamWords(Dir, "safety_cases_pe_x64.pdb", SectionStream,
+                                 {{Offset, 0x7273722e}, {Offset + 4, 0x63}});
+      COFFLoader Loader;
+      auto ImageOr = Loader.load(ImagePath);
+      ASSERT_TRUE(bool(ImageOr)) << llvm::toString(ImageOr.takeError());
+      auto ContextOr = PDBDebugContext::load(EditedPDB, *ImageOr);
+      const auto Hint =
+          resolvePDBPublicFunctionNameHint(ImagePath, EditedPDB, "main");
+      if (Trailing && !ChangeFlags) {
+        ASSERT_TRUE(bool(ContextOr)) << llvm::toString(ContextOr.takeError());
+        EXPECT_EQ(Hint, 0x140001250u);
+      } else {
+        ASSERT_FALSE(bool(ContextOr));
+        EXPECT_NE(llvm::toString(ContextOr.takeError()).find("section table"),
+                  std::string::npos);
+        EXPECT_FALSE(Hint);
+      }
+    }
+  }
 }
 
 BinaryImage imageWithSections(
@@ -1048,6 +1309,59 @@ TEST(PDBSectionTable, TrailingResourceRelayoutStillMatches) {
       {".reloc", 0xB000, 0x100, 0x9400, 0x200, 0x42000040},
   };
   EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, AtLink));
+  auto OutsideRVA = Image;
+  OutsideRVA.Sections.back().VA = Image.Base + (uint64_t{1} << 32);
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(OutsideRVA, AtLink));
+}
+
+TEST(PDBSectionTable, HeaderMappingKeepsNativeSectionsAndTheirChecks) {
+  for (bool Restricted : {false, true}) {
+    SCOPED_TRACE(Restricted);
+    COFFLoader Loader;
+    if (Restricted)
+      Loader.restrictFunctions({0x140001000});
+    auto Loaded = Loader.load(safetyFixture("safety_cases_pe_x64.exe"));
+    ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+    const auto &Image = *Loaded;
+    const size_t Count = Image.Sections.size() - 1;
+    ASSERT_TRUE(coff_loader::hasCheckedPEHeaderMapping(Image, Count));
+    std::vector<pdb_loader_detail::RecordedSection> Recorded;
+    for (size_t I = 0; I != Count; ++I) {
+      const auto &S = Image.Sections[I];
+      Recorded.push_back({S.Name, uint32_t(S.VA - Image.Base), uint32_t(S.Size),
+                          uint32_t(S.FileOff), uint32_t(S.FileSz), S.Type});
+    }
+    EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+    if (Recorded.back().Name == ".reloc") {
+      auto AtLink = Recorded;
+      AtLink.back().VirtualAddress += 0x1000;
+      AtLink.back().PointerToRawData += 0x200;
+      EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, AtLink));
+    }
+    for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
+      SCOPED_TRACE(Mutation);
+      auto Changed = Image;
+      if (Mutation == 0)
+        ++Changed.Sections.front().Size;
+      if (Mutation == 1)
+        ++Changed.Sections.front().VA;
+      if (Mutation == 2)
+        Changed.Sections.front().Type ^= llvm::COFF::IMAGE_SCN_MEM_WRITE;
+      if (Mutation == 3)
+        Changed.Segments.back().Data[0] = 0;
+      if (Mutation == 4)
+        Changed.Sections.back().Flags =
+            Changed.Sections.back().Flags | SegmentFlags::Writable;
+      if (Mutation == 5)
+        Changed.Sections.push_back(Changed.Sections.back());
+      EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Changed, Recorded));
+    }
+    auto Context =
+        PDBDebugContext::load(safetyFixture("safety_cases_pe_x64.pdb"), Image);
+    ASSERT_TRUE(bool(Context)) << llvm::toString(Context.takeError());
+    EXPECT_TRUE((*Context)->hasAuthenticatedImageIdentity());
+    EXPECT_FALSE((*Context)->resolveFunction(Image.Base + 0x40));
+  }
 }
 
 TEST(PDBSectionTable, CodeOrNonTrailingSectionMoveStillRejects) {
@@ -1084,7 +1398,7 @@ TEST(PDBSectionTable, CodeOrNonTrailingSectionMoveStillRejects) {
       pdb_loader_detail::recordedSectionsMatch(Trailing, Recharacterized));
 }
 
-TEST(PDBSectionTable, HeaderStorageHasNoLinkTimeSectionNumber) {
+TEST(PDBSectionTable, UnbackedHeaderTagsCannotHideASection) {
   const pdb_loader_detail::RecordedSection Recorded[] = {
       {".text", 0x1000, 0x3000, 0x400, 0x3000, 0x60000020},
       {".rsrc", 0x5000, 0x6000, 0x3400, 0x6000, 0x40000040},
@@ -1097,11 +1411,12 @@ TEST(PDBSectionTable, HeaderStorageHasNoLinkTimeSectionNumber) {
   Image.Sections.push_back(Headers);
   // A name alone cannot hide an extra section from the PDB check.
   EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  // A normalized tag also needs its original header mapping and bytes.
   Image.Sections.back().IsImageHeader = true;
-  EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
   Image.Sections.back().Name = "renamed header storage";
   Image.Sections[1].Size += 0x1000;
-  EXPECT_TRUE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
+  EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
   ++Image.Sections.front().Size;
   EXPECT_FALSE(pdb_loader_detail::recordedSectionsMatch(Image, Recorded));
   --Image.Sections.front().Size;
@@ -1140,6 +1455,7 @@ TEST(PDBDisplayInspection, MissingIdentityNamesWithoutAuthenticatingFacts) {
   EXPECT_FALSE((*Context)->hasAnalysisAuthority());
   EXPECT_FALSE((*Context)->hasAuthenticatedFunctionSignatures());
   EXPECT_FALSE((*Context)->hasAuthenticatedObjectExtents());
+  EXPECT_FALSE((*Context)->readOnlyDataRegion(0x140002008));
   const auto Functions = (*Context)->allFunctions();
   EXPECT_TRUE(std::any_of(Functions.begin(), Functions.end(),
                           [](const FunctionSym &Function) {
@@ -1706,7 +2022,48 @@ TEST(PDB20IdentityIntegration, MatchingNB10LoadsLengthPrefixedProcName) {
   EXPECT_EQ(Fn->Size, 0x20u);
 }
 
-TEST(PDB20IdentityIntegration, HeaderStorageDoesNotAuthorizeAnExtraSection) {
+TEST(PDB20IdentityIntegration, MappedHeadersSupplyNoAdditionalSegmentNumber) {
+  constexpr uint32_t Signature = 0x11223344;
+  constexpr uint32_t Age = 1;
+  for (bool Restricted : {false, true}) {
+    SCOPED_TRACE(Restricted);
+    COFFLoader Loader;
+    if (Restricted)
+      Loader.restrictFunctions({0x401000});
+    const auto Bytes =
+        test::peHeaderImage(false, llvm::COFF::IMAGE_FILE_MACHINE_I386);
+    auto Image = Loader.loadBuffer(llvm::MemoryBufferRef(Bytes, "header.exe"));
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    ASSERT_TRUE(coff_loader::hasCheckedPEHeaderMapping(*Image, 1));
+    Image->DynInfo.CodeViewPDBIdentityState = PDBIdentityState::Unique;
+    Image->DynInfo.CodeViewPDBIdentity = makeNB10Identity(Signature, Age);
+    auto Module = makeLegacyProcStream("legacy_target", 0, 1, 6);
+    const auto HeaderProc =
+        makeLegacyProcStream("header_impostor", 0x40, 2, 16);
+    Module.insert(Module.end(), HeaderProc.begin() + 4, HeaderProc.end());
+    const auto &Text = Image->Sections.front();
+    std::vector<std::vector<uint8_t>> Streams(6);
+    Streams[1] = makeLegacyInfo(Signature, Age);
+    Streams[3] = makeLegacyDbi(Age, 5, uint32_t(Module.size()), 4);
+    Streams[4] = makeLegacySectionHdr(
+        Text.Name, uint32_t(Text.VA - Image->Base), uint32_t(Text.Size),
+        uint32_t(Text.FileSz), uint32_t(Text.FileOff), Text.Type);
+    Streams[5] = Module;
+    ScratchDir Dir;
+    const auto PdbPath = writePdb(writeJgPdb(Streams), Dir);
+    auto Context = PDBDebugContext::load(PdbPath, *Image);
+    ASSERT_TRUE(bool(Context)) << llvm::toString(Context.takeError());
+    const auto Target = (*Context)->resolveFunction(Image->Base + 0x1000);
+    ASSERT_TRUE(Target);
+    EXPECT_EQ(Target->Name, "legacy_target");
+    EXPECT_FALSE((*Context)->resolveFunction(Image->Base + 0x40));
+    EXPECT_TRUE(llvm::none_of((*Context)->allFunctions(), [](const auto &F) {
+      return F.Name == "header_impostor";
+    }));
+  }
+}
+
+TEST(PDB20IdentityIntegration, UnbackedHeaderStorageRejectsSectionIdentity) {
   constexpr uint32_t Signature = 0x12345678;
   constexpr uint32_t Age = 1;
   constexpr uint32_t Chars = 0x60000020;
@@ -1728,12 +2085,10 @@ TEST(PDB20IdentityIntegration, HeaderStorageDoesNotAuthorizeAnExtraSection) {
   Headers.IsImageHeader = true;
   Image.Sections.push_back(Headers);
   auto Context = PDBDebugContext::load(Path, Image);
-  ASSERT_TRUE(bool(Context)) << llvm::toString(Context.takeError());
-  const auto Function = (*Context)->resolveFunction(0x401100);
-  ASSERT_TRUE(Function);
-  EXPECT_EQ(Function->Name, "code_target");
-  EXPECT_FALSE((*Context)->resolveFunction(0x400100));
-  EXPECT_EQ((*Context)->allFunctions().size(), 1u);
+  ASSERT_FALSE(bool(Context));
+  EXPECT_NE(llvm::toString(Context.takeError())
+                .find("section table does not match loaded PE image"),
+            std::string::npos);
 }
 
 TEST(PDB20IdentityIntegration, SignatureOrAgeMismatchRejectsTheCompanion) {

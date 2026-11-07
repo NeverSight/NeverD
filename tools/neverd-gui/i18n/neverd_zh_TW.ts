@@ -12,6 +12,14 @@
         <translation>專注模式(&amp;F)</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>新增執行個體(&amp;N)</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>開啟新的 NeverD 執行個體</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>開啟(&amp;O)...</translation>
     </message>
@@ -342,6 +350,50 @@
     <message>
         <source>Move to the next occurrence of the highlighted identifier</source>
         <translation>移至醒目提示識別碼的下一個出現位置</translation>
+    </message>
+    <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>鎖定或解除鎖定(&amp;U)</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>以第一個可用色彩持續醒目提示目前醒目提示的單字，或解除鎖定</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>色彩 1(&amp;1)</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>色彩 2(&amp;2)</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>色彩 3(&amp;3)</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>色彩 4(&amp;4)</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>色彩 5(&amp;5)</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>色彩 6(&amp;6)</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>色彩 7(&amp;7)</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>色彩 8(&amp;8)</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>以此色彩鎖定醒目提示的單字，或解除此色彩的鎖定</translation>
     </message>
     <message>
         <source>&amp;Find in view...</source>
@@ -1275,6 +1327,14 @@
         <source>Enter &amp;comment...</source>
         <translation>輸入註解(&amp;C)...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>安裝、啟用、停用及移除外掛</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>外掛管理員(M)...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1612,6 +1672,10 @@
         <translation>搜尋(&amp;S)</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>鎖定醒目提示(&amp;L)</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>檢視(&amp;V)</translation>
     </message>
@@ -1712,6 +1776,10 @@
     <message>
         <source>%1 uses database format %2, which this NeverD cannot update.</source>
         <translation>%1 使用資料庫格式 %2，此版本的 NeverD 無法更新它。</translation>
+    </message>
+    <message>
+        <source>This database may already be open in another NeverD (%1)</source>
+        <translation>此資料庫可能已在另一個 NeverD 中開啟（%1）</translation>
     </message>
     <message>
         <source>Cannot create %1</source>
@@ -1997,6 +2065,23 @@ Double-click to go to the declaration.</source>
         <source>Could not refresh source: %1</source>
         <translation>無法重新整理原始碼：%1</translation>
     </message>
+
+    <message>
+        <source>Interpreter recovered · %1 blocks</source>
+        <translation>直譯器還原完成 · %1 個區塊</translation>
+    </message>
+    <message>
+        <source>No complete source was produced</source>
+        <translation>未產生完整原始碼</translation>
+    </message>
+    <message>
+        <source>Recovering interpreter control flow…</source>
+        <translation>正在還原直譯器控制流程…</translation>
+    </message>
+    <message>
+        <source>Recovery stopped: %1</source>
+        <translation>還原已停止：%1</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::CodeView</name>
@@ -2063,6 +2148,23 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Cancel transformation</source>
         <translation>取消轉換</translation>
+    </message>
+
+    <message>
+        <source>Interpreter recovery options…</source>
+        <translation>直譯器還原選項…</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report…</source>
+        <translation>直譯器還原報告…</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>還原直譯器函式</translation>
+    </message>
+    <message>
+        <source>Return to ordinary source</source>
+        <translation>返回一般原始碼</translation>
     </message>
 </context>
 <context>
@@ -2291,6 +2393,14 @@ Double-click to go to the declaration.</source>
         <source>Laying out graph…</source>
         <translation>正在配置圖形版面…</translation>
     </message>
+    <message>
+        <source>From %1</source>
+        <translation>來自 %1</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>前往 %1</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::HexView</name>
@@ -2371,6 +2481,26 @@ Double-click to go to the declaration.</source>
         <translation>背景分析：瀏覽期間為參照與標籤建立索引</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>資料庫已變更</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1 在此工作區開啟後已被變更，可能來自另一個 NeverD。要以此工作區的專案取代其目前內容嗎？</translation>
+    </message>
+    <message>
+        <source>Open other files in a new instance</source>
+        <translation>在新的執行個體中開啟其他檔案</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>已開啟檔案時，「檔案 &gt; 開啟」、最近的檔案和拖入的檔案會啟動新的執行個體，而不是取代目前檔案</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1 已在另一個 NeverD 中開啟，正在切換過去。</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>未儲存的變更</translation>
     </message>
@@ -2381,6 +2511,10 @@ Double-click to go to the declaration.</source>
     <message>
         <source>%1 lacks the latest changes. Save them into it before continuing?</source>
         <translation>%1 尚未包含最新的變更。繼續之前要將其儲存到其中嗎？</translation>
+    </message>
+    <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>無法啟動新的執行個體：%1</translation>
     </message>
     <message>
         <source>Cannot jump to %1: %2</source>
@@ -2409,18 +2543,6 @@ Double-click to go to the declaration.</source>
     <message>
         <source>History: %1 entries, cursor %2</source>
         <translation>歷程記錄：%1 筆，目前位置 %2</translation>
-    </message>
-    <message>
-        <source>AU: idle</source>
-        <translation>AU：閒置</translation>
-    </message>
-    <message>
-        <source>AU: busy %1%</source>
-        <translation>AU：忙碌 %1%</translation>
-    </message>
-    <message>
-        <source>AU: busy</source>
-        <translation>AU：忙碌</translation>
     </message>
     <message>
         <source>Down</source>
@@ -3294,6 +3416,10 @@ After:
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>請選擇大小為 1 位元組到 %1 的檔案、十六進位位址和區段名稱。函式需要名稱和可執行權限。</translation>
     </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>外掛工作</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3458,6 +3584,14 @@ After:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>%1 所在的資料夾無法寫入；其資料庫儲存在 %2</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>此檔案可能已在另一個 NeverD 中開啟（%1）</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1 維持原樣；此工作區的變更未寫入其中。</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>
@@ -6771,6 +6905,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 參照身分：未解析。部分呼叫或資料目標無法比較。僅憑這一點無法認定發生了變更。</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>包含已配對的呼叫</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>允許共用區域跨越目標已配對的直接呼叫。結果取決於目前的函式配對，並在配對變更時重新計算。這不驗證呼叫行為。</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -6813,10 +6955,6 @@ Select an operation to follow dependencies. Synthetic operations have block prov
     <message>
         <source>Enable dependency evidence in comparison settings.</source>
         <translation>在比較設定中啟用依賴證據。</translation>
-    </message>
-    <message>
-        <source>Include control dependencies</source>
-        <translation>包括控制依賴</translation>
     </message>
     <message>
         <source>Inspect original function</source>
@@ -6953,6 +7091,32 @@ Progress does not establish equal loop counts or function results.</source>
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>證明：每個計數器循環都會到達相對於輸入衍生運算式的共同出口。退出前可能發生未定義行為。</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>參數存取</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>顯示與已還原的呼叫參數使用相同計算位址的讀寫操作。</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>包含控制相依</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>追蹤輸入或使用位置時包含控制相依。</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>呼叫 n%1 · %2 筆位址觀測 · %3
+在已還原的參數位址處觀察到的讀寫。呼叫影響與執行順序仍未知。啟用一列可定位其操作。</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>正在檢查參數位址…</translation>
     </message>
 </context>
 <context>
@@ -7767,6 +7931,38 @@ Every use of a projected parameter reads the same low bits. Whole-function behav
         <source>Uncertain</source>
         <translation>不確定</translation>
     </message>
+    <message>
+        <source>Argument</source>
+        <translation>參數</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>存取</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>RETURN 輸入</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>寫入</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>讀取</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>COPY / PHI 路徑</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>未觀察到</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>通往 RETURN 運算元的同寬 COPY/PHI 路徑。該運算元可能是控制目標；這無法確定 ABI 回傳值或執行順序。</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonRegionsDialog</name>
@@ -7923,6 +8119,30 @@ External input producers are not compared or counted as shared code.</source>
 SSA recipe: %1</source>
         <translation>
 SSA 分析方案：%1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+呼叫依據目前的函式配對；尚未驗證行為。</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>呼叫脈絡…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>主要輸入</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>次要輸入</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>%1 個主要輸入函式 / %2 個次要輸入函式 · %3 個共用片段
+涵蓋率：符合條件的指令中占 %4% / %5%，包括已配對的直接呼叫。此證據以函式配對為條件；尚未驗證行為。</translation>
     </message>
 </context>
 <context>
@@ -9469,6 +9689,18 @@ Ambiguities and manual decisions remain report-local. Region hypotheses retain t
         <source>Releases</source>
         <translation>發布版本</translation>
     </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>這些已儲存片段中的呼叫依據來源報告的函式配對。它們不能證明被呼叫函式的行為等價。</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>全部原生片段</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>全部 SSA 片段</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LineageGraph</name>
@@ -9812,6 +10044,668 @@ Your previous graph is still available.</source>
     <message>
         <source>Timeline</source>
         <translation>時間軸</translation>
+    </message>
+</context>
+
+<context>
+    <name>neverd::gui::InterpreterRecoveryDialog</name>
+    <message>
+        <source>Assume external stores avoid the declared entry frame</source>
+        <translation>假設外部寫入不與宣告的進入堆疊框架重疊</translation>
+    </message>
+    <message>
+        <source>Blank or zero keeps the engine default. More work does not permit incomplete source or add memory assumptions.</source>
+        <translation>留空或填零保留引擎預設值。增加工作量不會允許不完整原始碼，也不會新增記憶體假設。</translation>
+    </message>
+    <message>
+        <source>Chained transfers</source>
+        <translation>連續轉移次數</translation>
+    </message>
+    <message>
+        <source>Chained visits per destination</source>
+        <translation>每個目標的連續存取次數</translation>
+    </message>
+    <message>
+        <source>Contexts per address</source>
+        <translation>每個位址的上下文數</translation>
+    </message>
+    <message>
+        <source>Control fields</source>
+        <translation>控制欄位數</translation>
+    </message>
+    <message>
+        <source>Control refinements</source>
+        <translation>控制細化次數</translation>
+    </message>
+    <message>
+        <source>Control-flow nodes</source>
+        <translation>控制流程節點數</translation>
+    </message>
+    <message>
+        <source>Dependency visits</source>
+        <translation>相依存取次數</translation>
+    </message>
+    <message>
+        <source>End a chain at a repeated destination</source>
+        <translation>遇到重複目標時結束連續分析</translation>
+    </message>
+    <message>
+        <source>Engine default</source>
+        <translation>引擎預設值</translation>
+    </message>
+    <message>
+        <source>Enter a valid integer for %1.</source>
+        <translation>請為 %1 輸入有效整數。</translation>
+    </message>
+    <message>
+        <source>Enter both entry-frame endpoints, or leave both blank.</source>
+        <translation>請輸入進入堆疊框架的兩個端點，或將兩者均留空。</translation>
+    </message>
+    <message>
+        <source>Entry RSP alignment</source>
+        <translation>進入 RSP 對齊</translation>
+    </message>
+    <message>
+        <source>Entry RSP range end (exclusive)</source>
+        <translation>進入 RSP 範圍終點（不含）</translation>
+    </message>
+    <message>
+        <source>Entry RSP range start</source>
+        <translation>進入 RSP 範圍起點</translation>
+    </message>
+    <message>
+        <source>Entry RSP residue</source>
+        <translation>進入 RSP 餘數</translation>
+    </message>
+    <message>
+        <source>Evaluated operations</source>
+        <translation>求值運算數</translation>
+    </message>
+    <message>
+        <source>General registers</source>
+        <translation>通用暫存器</translation>
+    </message>
+    <message>
+        <source>General registers and CPU queries</source>
+        <translation>通用暫存器與 CPU 查詢</translation>
+    </message>
+    <message>
+        <source>General registers, CPU queries and XMM</source>
+        <translation>通用暫存器、CPU 查詢與 XMM</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report</source>
+        <translation>直譯器還原報告</translation>
+    </message>
+    <message>
+        <source>Node evaluations</source>
+        <translation>節點求值次數</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid return slots and saved frame cells</source>
+        <translation>證明寫入避開返回位址槽與已儲存的框架單元</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid the declared entry frame</source>
+        <translation>證明寫入避開宣告的進入堆疊框架</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>還原</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>還原直譯器函式</translation>
+    </message>
+    <message>
+        <source>Recover reachable control flow and generate C with explicit x64 register state. The source describes normal, nonfaulting execution with fixed image mappings. Memory assumptions below apply only when you enter them.</source>
+        <translation>還原可達控制流程並產生帶明確 x64 暫存器狀態的 C 原始碼。原始碼描述固定映像對映下無故障的正常執行。下方記憶體假設僅在您填寫後生效。</translation>
+    </message>
+    <message>
+        <source>Signed offsets from entry RSP. Declaring this range assumes address arithmetic does not wrap; it does not prove accessibility or separation.</source>
+        <translation>相對於進入 RSP 的有號位移。宣告此範圍表示假設位址運算不會回繞，並不證明記憶體可存取或互不重疊。</translation>
+    </message>
+    <message>
+        <source>Solver queries</source>
+        <translation>求解器查詢次數</translation>
+    </message>
+    <message>
+        <source>Source state</source>
+        <translation>原始碼狀態</translation>
+    </message>
+    <message>
+        <source>State and memory</source>
+        <translation>狀態與記憶體</translation>
+    </message>
+    <message>
+        <source>Symbolic expression nodes</source>
+        <translation>符號運算式節點數</translation>
+    </message>
+    <message>
+        <source>Unspecified</source>
+        <translation>未指定</translation>
+    </message>
+    <message>
+        <source>Work limits</source>
+        <translation>工作量限制</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisProgress</name>
+    <message>
+        <source>AU: idle</source>
+        <translation>AU：閒置</translation>
+    </message>
+    <message>
+        <source>AU: loading</source>
+        <translation>AU：正在載入</translation>
+    </message>
+    <message>
+        <source>AU: loading %1%</source>
+        <translation>AU：正在載入 %1%</translation>
+    </message>
+    <message>
+        <source>AU: finding functions</source>
+        <translation>AU：正在尋找函式</translation>
+    </message>
+    <message>
+        <source>AU: indexing references</source>
+        <translation>AU：正在建立交叉參照</translation>
+    </message>
+    <message>
+        <source>AU: indexing references %1%</source>
+        <translation>AU：正在建立交叉參照 %1%</translation>
+    </message>
+    <message>
+        <source>AU: analysis finished</source>
+        <translation>AU：分析完成</translation>
+    </message>
+    <message>
+        <source>Analysis finished in %1 s</source>
+        <translation>分析完成，耗時 %1 秒</translation>
+    </message>
+    <message>
+        <source>Reading the file</source>
+        <translation>正在讀取檔案</translation>
+    </message>
+    <message>
+        <source>Parsing the format</source>
+        <translation>正在解析檔案格式</translation>
+    </message>
+    <message>
+        <source>Finding code</source>
+        <translation>正在尋找程式碼</translation>
+    </message>
+    <message>
+        <source>Loading debug information</source>
+        <translation>正在載入偵錯資訊</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>正在開啟專案</translation>
+    </message>
+    <message>
+        <source>Loading</source>
+        <translation>正在載入</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LoadProgressCard</name>
+    <message>
+        <source>Opening %1</source>
+        <translation>正在開啟 %1</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 秒</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> 圖示</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> 位置</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · 工作 %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1 秒</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>取消工作(&amp;C)</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>匯出產物(&amp;E)…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>匯入外掛(&amp;I)…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>將還原的程式碼新增為分析區段，再開啟其中第一個函式</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>產物：</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>瀏覽…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>選擇命令圖示</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>選擇直接顯示於快顯功能表的命令。其他命令依「Plugins → 外掛名稱」分組。圖示支援 builtin:name 或本機 PNG、ICO、SVG 檔案。</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>命令</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>快顯功能表設定…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>直接顯示於快顯功能表</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>經過時間</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>匯出產物</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>將產物匯出至新檔案</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>圖示</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>圖示無法使用：%1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>圖示 (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>匯入行程外掛以新增命令。</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>將程式碼匯入映像</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>匯入行程外掛</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>匯入行程外掛…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>%1 的記錄</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>功能表設定…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>外掛(&amp;G)</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>外掛</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>外掛 / 工作</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>外掛產物已匯出至 %1</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>外掛快顯功能表</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>外掛圖示無法使用：%1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>外掛管理員…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>外掛資訊清單 (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>外掛工作記錄</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>外掛工作與結果</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>外掛</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>Plugins 子功能表</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>位置</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>已匯入行程外掛：%1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>進度</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>外掛對話方塊開啟期間專案已變更</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>記住此動作的參數值</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>執行外掛命令以檢視工作及結果。</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>選取 %1 下的工作以檢視結果。</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>所選外掛工作的進度</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>顯示記錄(&amp;L)</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>狀態</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>工作結果</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>依外掛分組的工作</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>此動作的註冊項目已不再作用。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>正在啟用</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>啟用狀態</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>啟用狀態：%1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>已啟用</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>元件世代：%1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>無法開啟外掛資料夾。</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>宣告的唯讀服務：%1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>診斷資訊：%1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>停用</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>啟用</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>已啟用</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>啟動時啟用：%1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>依外掛名稱、ID 或路徑篩選</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>篩選外掛</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>匯入行程外掛資訊清單以新增命令。僅執行命令時才會啟動提供程式。</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>匯入外掛…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>匯入行程外掛</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>未啟用</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>已移除安裝記錄。外掛檔案與工作產物均予保留。</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>已移除安裝記錄，正在停止執行中的工作。</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>已安裝的行程外掛</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>資訊清單：%1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>否</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>開啟資料夾</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>外掛</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>已停用外掛。安裝記錄已保留，執行中的工作已取消。</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>已啟用外掛。</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>已匯入外掛：%1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>外掛管理員</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>外掛資訊清單 (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>外掛：%1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>註冊項目：%1；作用中的呼叫：%2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>移除已儲存的註冊記錄。外掛檔案與工作產物將予保留。</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>重試啟用</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>選取外掛以檢視資訊清單、啟用狀態及診斷資訊。</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>所選外掛詳細資料</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>正在停止</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>類型：外部行程</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>無法使用</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>解除安裝</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>版本</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>版本：%1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>正在等候工作結束與已接受發佈的清理。</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>是</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>無法讀取發佈回執：%1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>無法從 %2 還原外掛 %1：%3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>已匯入分析區段 %1。請儲存專案以保留變更。</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>外掛狀態已變更，但無法儲存啟動偏好。</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>專案操作已完成，但無法儲存回執：%1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>工作階段已關閉，尚未收到發佈回執。</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>外掛執行個體已不再作用。</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>正在等候專案回執。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>外掛結果圖</translation>
     </message>
 </context>
 </TS>

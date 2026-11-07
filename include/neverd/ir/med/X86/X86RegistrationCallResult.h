@@ -12,10 +12,19 @@
 #include "neverd/Common.h"
 
 #include <cstddef>
+#include <optional>
 
 namespace neverd {
 struct MedFunc;
 struct RegistrationCallFrameEffect;
+
+enum class X86RegistrationCallResultUse { Unused, Observed };
+
+/// Classify a complete current result-use graph. Malformed SSA and exhausted
+/// work return no classification. An observation grants no native return ABI.
+std::optional<X86RegistrationCallResultUse> getX86RegistrationCallResultUse(
+    const MedFunc &Function, const RegistrationCallFrameEffect &Call,
+    size_t &Work, bool Indirect = false, va_t RuntimeFinally = 0);
 
 /// Follow only SSA copies, integer extensions and PHIs. Every other use,
 /// including a call's implicit arguments, observes the result. Duplicate or

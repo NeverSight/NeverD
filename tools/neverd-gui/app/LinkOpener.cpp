@@ -19,7 +19,6 @@
 #include <QCoreApplication>
 #include <QFileOpenEvent>
 #include <QFutureWatcher>
-#include <QProcess>
 #include <QtConcurrent/QtConcurrentRun>
 
 namespace neverd::gui {
@@ -67,11 +66,7 @@ void LinkOpener::openRecent(const QString &text, const DeepLink &link) {
     window_.openFile(*file);
     return;
   }
-  QProcess launcher;
-  launcher.setProgram(QCoreApplication::applicationFilePath());
-  launcher.setArguments({*file, text});
-  if (!launcher.startDetached())
-    window_.reportLinkError(launcher.errorString());
+  window_.reportLinkError(window_.startWorkbench({*file, text}));
 }
 
 } // namespace neverd::gui

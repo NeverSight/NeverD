@@ -4,6 +4,7 @@
 
 #include "neverd/backend/c/SourceVariableTypes.h"
 #include "neverd/ir/SourceCallEdits.h"
+#include "neverd/support/SHA256.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/SHA256.h"
@@ -39,7 +40,7 @@ private:
     Written += Size;
   }
   uint64_t current_pos() const override { return Written; }
-  llvm::SHA256 Hash;
+  SHA256Stream Hash;
   uint64_t Written = 0;
 };
 std::string highVariableSnapshot(const HighFunc &Function, bool Symbolic);

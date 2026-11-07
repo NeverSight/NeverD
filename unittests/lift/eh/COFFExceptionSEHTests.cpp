@@ -56,6 +56,27 @@ TEST(ExceptionInfoIndex, RebuildKeepsAnIndexInOrderAndPlacesChangedRanges) {
   EXPECT_EQ(Info.FunctionIndex, (std::vector<size_t>{0, 2, 4, 1, 3, 5}));
 }
 
+TEST(COFFExceptionParser, EmptySEHTableMayEndAtTheMappedBoundary) {
+  for (uint32_t Count : {0u, 1u}) {
+    SCOPED_TRACE(Count);
+    BinaryImage Img = makeX64ExceptionImage(sizeof(Count));
+    addPersonalityImport(Img, Img.Base + 0x1100, "__C_specific_handler");
+    writeLE<uint32_t>(Img.Segments[1].Data.data(), Count);
+    ExceptionFunction F;
+    F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1080};
+    F.PersonalityVA = Img.Base + 0x1100;
+    F.HandlerDataVA = Img.Base + 0x3000;
+    Img.ExceptionMetadata.Functions.push_back(std::move(F));
+    coff_loader::resolveExceptionHandlers(Img);
+    const auto &Decoded = Img.ExceptionMetadata.Functions.front();
+    EXPECT_EQ(Decoded.ParseStatus, Count ? ExceptionParseStatus::Malformed
+                                         : ExceptionParseStatus::Complete);
+    EXPECT_EQ(bool(Decoded.SEH), Count == 0);
+    if (Decoded.SEH)
+      EXPECT_TRUE(Decoded.SEH->Scopes.empty());
+  }
+}
+
 TEST(COFFExceptionParser, LoadOnlyFunctionEntriesSkipsUnrelatedLanguageTables) {
   BinaryImage Img = makeX64ExceptionImage(0x40);
   addPersonalityImport(Img, Img.Base + 0x11f0, "__C_specific_handler");

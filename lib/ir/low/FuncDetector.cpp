@@ -177,6 +177,14 @@ va_t forwardingJumpTarget(const BinaryImage &Img, Decoder &Dec, va_t Entry) {
   return Target;
 }
 
+/// Whether \p Img names where its execution starts. A binary file's entry is
+/// always within its bytes, the base when none is given, so it may be 0, as
+/// an AArch64 Linux kernel Image's is; elsewhere 0 marks an image without
+/// one, as a relocatable object.
+bool hasEntryPoint(const BinaryImage &Img) {
+  return Img.Entry != 0 || Img.Format == BinaryFormat::Raw;
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -251,7 +259,7 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   std::vector<std::pair<va_t, std::string>> Results;
   std::set<va_t> VerifiedCandidates;
 
-  if (Img.Entry != 0 && Img.isFunctionEntryCandidateAt(Img.Entry)) {
+  if (hasEntryPoint(Img) && Img.isFunctionEntryCandidateAt(Img.Entry)) {
     Entries.insert(Img.Entry);
     Results.push_back({Img.Entry, Img.getFunctionNameAt(Img.Entry)});
   }
@@ -298,6 +306,26 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   for (va_t EHEntry : Img.ExceptionMetadata.PrimaryFunctionEntries)
     if (EHEntry != 0 && Img.isFunctionEntryCandidateAt(EHEntry))
       ExceptionEntries.insert(EHEntry);
+  // A scope table's termination handler outside its owner is a function the
+  // runtime calls. An ARM leaf handler has no unwind record of its own, so
+  // only the scope names it; one inside another record's range is not an
+  // entry. A filter stays as it was: C calls it from its `__except` with the
+  // exception pointers, which a definition that never reads them would not
+  // take.
+  for (const ExceptionFunction &EH : Img.ExceptionMetadata.Functions) {
+    if (!EH.SEH)
+      continue;
+    for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
+      const va_t Handler = Scope.FilterOrFinallyVA;
+      if (Scope.Kind != SEHScopeKind::Finally || !Handler ||
+          EH.ownsCode(Handler) || !Img.isFunctionEntryCandidateAt(Handler))
+        continue;
+      const ExceptionFunction *Owner =
+          Img.ExceptionMetadata.findFunction(Handler);
+      if (!Owner || Owner->CodeRange.Begin == Handler)
+        ExceptionEntries.insert(Handler);
+    }
+  }
   const std::set<va_t> ExceptionThunks =
       Img.ExceptionMetadata.registrationScopeThunks();
   const auto RegistrationPointerRoles =
@@ -383,14 +411,25 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   const bool IsX86LinkedCOFF = Img.Arch == Arch::X86 &&
                                Img.Format == BinaryFormat::COFF &&
                                !Img.IsRelocatable;
-  const bool IsX64LinkedCOFF = Img.Arch == Arch::X64 &&
-                               Img.Format == BinaryFormat::COFF &&
-                               !Img.IsRelocatable;
+  const bool IsX64LinkedCodeAddresses =
+      Img.Arch == Arch::X64 && !Img.IsRelocatable &&
+      (Img.Format == BinaryFormat::COFF || Img.Format == BinaryFormat::ELF);
   std::set<va_t> RelocationCodeTargets;
+  // CALL-table targets and ordinary out-of-line callbacks still undergo the
+  // relocated-entry decode probe before publication. Keep its existing
+  // inconclusive-budget policy for candidates awaiting the pipeline audit.
+  std::set<va_t> RelocationCallableCandidates;
+  // Targets the code-named label analysis promoted to entries; they verify
+  // below for the same reason.
+  std::set<va_t> CodeNamedTargets;
   // What code names, as (naming address, code named): decided below, once the
   // entries that bound each naming function are known.
   std::vector<std::pair<va_t, va_t>> CodeNamedByCode;
   const uint32_t PointerSize = Img.getPointerSize();
+  std::vector<std::pair<va_t, va_t>> CodeImmediates;
+  if (IsX86LinkedCOFF && Img.Entry != 0 && !RelocationsOnly)
+    func_detect_detail::scanCodeAddressImmediatesX86(Img, Dec, CodeImmediates,
+                                                     Cancellation);
   if (PointerSize != 0)
     for (va_t Slot : Img.CodePtrRelocSlots) {
       func_detect_detail::checkCancellation(Cancellation);
@@ -407,8 +446,27 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
       if (Img.DataInCode.count(Target) ||
           !Img.isFunctionEntryCandidateAt(Target) || IsMachOLocalLabel(Target))
         continue;
-      if (IsX86LinkedCOFF && Img.hasExecutableCodeOwnerAt(Slot)) {
-        CodeNamedByCode.emplace_back(Slot, Target);
+      if (IsX86LinkedCOFF) {
+        RelocationCodeTargets.insert(Target);
+        if (Img.CallDispatchRelocSlots.count(Slot)) {
+          Entries.insert(Target);
+          RelocationCallableCandidates.insert(Target);
+          continue;
+        }
+        if (auto Uses = Img.JumpDispatchTableSources.find(Slot);
+            Uses != Img.JumpDispatchTableSources.end()) {
+          for (va_t Source : Uses->second)
+            CodeNamedByCode.emplace_back(Source, Target);
+          continue;
+        }
+        if (Img.hasExecutableCodeOwnerAt(Slot)) {
+          CodeNamedByCode.emplace_back(Slot, Target);
+          continue;
+        }
+        // An out-of-line callback without a proved JMP reader cannot become
+        // a label of whichever function happens to precede its data section.
+        Entries.insert(Target);
+        RelocationCallableCandidates.insert(Target);
         continue;
       }
       Entries.insert(Target);
@@ -459,16 +517,20 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   }
 
   std::set<va_t> DirectCallTargets;
-  // Functions a binary file's code takes the address of, whose prologue
-  // already vouches for them.
+  // Raw-image prologues and addressed x64 IBT markers supply entry evidence
+  // independently of a return inside the bounded candidate probe.
   std::set<va_t> CodePointerTargets;
+  // AArch64 entry markers after the end of a function, which begin only
+  // functions, supply that evidence the same way.
+  std::set<va_t> MarkedEntries;
   // The entries other evidence found before the prologue scan adds its own.
   std::set<va_t> EvidencedX86Entries;
-  if (Img.Entry != 0 && !RelocationsOnly) {
+  if (hasEntryPoint(Img) && !RelocationsOnly) {
     scanCallTargets(Img, Dec, DirectCallTargets, CodeNamedByCode);
     std::erase_if(DirectCallTargets, [&](va_t Addr) {
       return !Img.isFunctionEntryCandidateAt(Addr);
     });
+    MarkedEntries = MarkedAArch64Entries;
     Entries.insert(DirectCallTargets.begin(), DirectCallTargets.end());
     // A binary file has no symbols, unwind tables or relocations to name
     // the functions its code only takes the address of.  A target starts
@@ -535,6 +597,15 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
       });
   }
 
+  std::set<va_t> X64BoundaryGuesses;
+  if (IsX64LinkedCodeAddresses) {
+    X64BoundaryGuesses = Img.boundaryGuessFunctionStarts();
+    std::erase_if(X64BoundaryGuesses, [&](va_t Addr) {
+      return IndependentEntries.count(Addr) || DirectCallTargets.count(Addr) ||
+             RelocationCodeTargets.count(Addr);
+    });
+  }
+
   // Code that other code names is a function of its own, except inside the
   // function naming it, where it is that function's label: a pointer table
   // among the code names its dispatcher's cases, which the jump-table
@@ -542,13 +613,17 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   // callback stored into an object; `push offset filter`, a handler) names a
   // function the code only takes the address of.  The bounded decoder below
   // still decides whether a target is an entry.
-  std::set<va_t> CodeNamedTargets;
-  if ((IsX86LinkedCOFF || IsX64LinkedCOFF) && Img.Entry != 0) {
+  if ((IsX86LinkedCOFF || IsX64LinkedCodeAddresses) && Img.Entry != 0) {
     const size_t TableNames = IsX86LinkedCOFF ? CodeNamedByCode.size() : 0;
-    if (IsX86LinkedCOFF && !RelocationsOnly)
-      func_detect_detail::scanCodeAddressImmediatesX86(
-          Img, Dec, CodeNamedByCode, Cancellation);
-    const std::vector<va_t> Starts(Entries.begin(), Entries.end());
+    CodeNamedByCode.insert(CodeNamedByCode.end(), CodeImmediates.begin(),
+                           CodeImmediates.end());
+    // A padding/data guess cannot end the namer's body and turn its own
+    // address-taken label into independently evidenced callable code.
+    std::vector<va_t> Starts;
+    Starts.reserve(Entries.size());
+    for (va_t Entry : Entries)
+      if (!X64BoundaryGuesses.count(Entry))
+        Starts.push_back(Entry);
     // The function an address lies in: the entry before it, and the next.
     auto functionOf = [&](va_t Addr) -> std::optional<std::pair<va_t, va_t>> {
       const auto Next = std::upper_bound(Starts.begin(), Starts.end(), Addr);
@@ -597,7 +672,7 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
       func_detect_detail::checkCancellation(Cancellation);
       const auto &[Namer, Target] = CodeNamedByCode[I];
       if (NamesOwnLabel(Namer, Target) &&
-          (IsX64LinkedCOFF || I < TableNames ||
+          (IsX64LinkedCodeAddresses || I < TableNames ||
            !func_detect_detail::isX86EscapingCodeImmediate(Img, Namer) ||
            Reaches(Namer, Target)))
         Labels.insert(Target);
@@ -606,8 +681,8 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
       func_detect_detail::checkCancellation(Cancellation);
       const va_t Target = Named.second;
       // An instruction starts with its opcode, never with a relocated field.
-      if (Entries.count(Target) || Labels.count(Target) ||
-          ExceptionThunks.count(Target) ||
+      if ((!IsX64LinkedCodeAddresses && Entries.count(Target)) ||
+          Labels.count(Target) || ExceptionThunks.count(Target) ||
           Img.CodePtrRelocSlots.count(Target) ||
           Img.DataPtrRelocSlots.count(Target) ||
           Img.CodeAddressRelocOperands.count(Target) ||
@@ -619,6 +694,15 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
           RegistrationPointerRoles->RuntimeOnlyPointerTargets.count(Target))
         continue;
       CodeNamedTargets.insert(Target);
+      // A reference from outside the owner to an ENDBR64 marks an indirect
+      // entry even when hand-written assembly has no unwind row or ordinary
+      // prologue. Keep a long body for the formal audit; definite decode and
+      // ownership failures still reject it. ENDBR32 is not an x64 marker.
+      if (IsX64LinkedCodeAddresses)
+        if (const uint8_t *Bytes = Img.readVA(Target, 4);
+            Bytes && Bytes[3] == 0xfa &&
+            x86BranchTargetMarkerLength(Bytes, 4) == 4)
+          CodePointerTargets.insert(Target);
     }
     Entries.insert(CodeNamedTargets.begin(), CodeNamedTargets.end());
   }
@@ -651,7 +735,7 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
           {Addr, (kAutoFuncPrefix + llvm::utohexstr(Addr)).str()});
   }
 
-  if (Img.Entry != 0 || RelocationsOnly) {
+  if (hasEntryPoint(Img) || RelocationsOnly) {
     std::set<va_t> Trusted{Img.Entry};
     Trusted.insert(ExceptionEntries.begin(), ExceptionEntries.end());
     // PE exports are untyped: executable-section data can legally appear in
@@ -707,9 +791,12 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
           Img.VerifiedFunctionEntries.count(
               normalizeCodeAddress(Addr, Img.Arch, Img.Mode)) ||
           Trusted.count(Addr) || UnsymbolizedX86Entries.count(Addr) ||
-          (!RelocationsOnly && IsX86LinkedCallOrRelocTarget(Addr)))
+          (!RelocationsOnly && IsX86LinkedCallOrRelocTarget(Addr) &&
+           !RelocationCallableCandidates.count(Addr) &&
+           !CodeNamedTargets.count(Addr)))
         Keep[I] = 1;
       else if ((RelocationsOnly && IsX86LinkedCallOrRelocTarget(Addr)) ||
+               RelocationCallableCandidates.count(Addr) ||
                UntypedCOFFExports.count(Addr) ||
                IsCoveredMachODirectCallTarget(Addr) ||
                IsCoveredImportCallTarget(Addr) ||
@@ -730,16 +817,20 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
     // and stays single-threaded, avoiding pointless thread-spawn overhead.
     auto verifyIdx = [&](Decoder &LocalDec, size_t I) {
       const va_t Addr = Results[I].first;
-      Keep[I] = verifyFunctionDecode(
-                    Img, LocalDec, Addr,
-                    UntypedCOFFExports.count(Addr) != 0 ||
-                        UnsymbolizedX86Entries.count(Addr) != 0 ||
-                        IsX86LinkedCallOrRelocTarget(Addr) ||
-                        CodePointerTargets.count(Addr) != 0 ||
-                        (!IsX64LinkedCOFF && CodeNamedTargets.count(Addr) != 0),
-                    IsX64LinkedCOFF && CodeNamedTargets.count(Addr) != 0)
-                    ? 1
-                    : 0;
+      Keep[I] =
+          verifyFunctionDecode(Img, LocalDec, Addr,
+                               UntypedCOFFExports.count(Addr) != 0 ||
+                                   UnsymbolizedX86Entries.count(Addr) != 0 ||
+                                   IsX86LinkedCallOrRelocTarget(Addr) ||
+                                   CodePointerTargets.count(Addr) != 0 ||
+                                   MarkedEntries.count(Addr) != 0 ||
+                                   (!IsX64LinkedCodeAddresses &&
+                                    CodeNamedTargets.count(Addr) != 0),
+                               IsX64LinkedCodeAddresses &&
+                                   CodeNamedTargets.count(Addr) != 0 &&
+                                   !CodePointerTargets.count(Addr))
+              ? 1
+              : 0;
     };
     if (NeedVerify.size() < limits::kMinParallelVerify) {
       // Most targets classify the initial linear probe from the instruction id
@@ -904,6 +995,29 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
     }
   }
 
+  // Now that code-address candidates have passed admission, let their own
+  // reachable instructions disprove weak x64 starts. This also covers an
+  // unrelocated data word whose value happens to name an instruction, or an
+  // immediate ending in INT3 bytes. Only surviving independent entries may
+  // own the proof, and genuine calls, symbols and relocated pointers remain
+  // independent even where their code overlaps.
+  if (IsX64LinkedCodeAddresses && !RelocationsOnly &&
+      !X64BoundaryGuesses.empty()) {
+    std::set<va_t> Evidenced, Guessed;
+    for (const auto &[Addr, Name] : Results) {
+      (void)Name;
+      if (X64BoundaryGuesses.count(Addr) && !CodeNamedTargets.count(Addr))
+        Guessed.insert(Addr);
+      else
+        Evidenced.insert(Addr);
+    }
+    const auto Interior =
+        rejectX86InteriorEntries(Img, Dec, Evidenced, Guessed, {});
+    if (!Interior.empty())
+      llvm::erase_if(
+          Results, [&](const auto &R) { return Interior.count(R.first) != 0; });
+  }
+
   std::sort(Results.begin(), Results.end());
   func_detect_detail::checkCancellation(Cancellation);
 
@@ -1019,6 +1133,11 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
             return false;
           break;
         }
+        // Code that runs on into another function's authenticated entry has
+        // left this candidate: that function's exits are not its own.
+        if (NeedsCallableExit && Cur != Addr && Entries.count(Cur) &&
+            Img.hasAuthenticatedFunctionEntryAt(Cur))
+          break;
         if (Explored.size() >= kCFGProbeBudget)
           return !NeedsCallableExit;
 
@@ -1158,6 +1277,19 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
 void FuncDetector::scanCallTargets(
     const BinaryImage &Img, Decoder &Dec, std::set<va_t> &Out,
     std::vector<std::pair<va_t, va_t>> &CodeAddresses) {
+  MarkedAArch64Entries.clear();
+  func_detect_detail::AArch64EntryScan A64Entries;
+  const auto finishAArch64 = [&] {
+    auto &Targets = A64Entries.ConditionalTargets;
+    llvm::sort(Targets);
+    for (const auto &[Entry, After] : A64Entries.EntryCandidates) {
+      const auto Target = llvm::lower_bound(Targets, After);
+      if (Target == Targets.end() || *Target > Entry) {
+        Out.insert(Entry);
+        MarkedAArch64Entries.insert(Entry);
+      }
+    }
+  };
   struct ScanChunk {
     const Segment *Seg;
     va_t Start;
@@ -1268,7 +1400,7 @@ void FuncDetector::scanCallTargets(
         AddRange(&Seg, Seg.VA, Seg.Data.size());
     }
 
-  // An x86 sweep reads sizes and ids, call targets and linked PE code
+  // An x86 sweep reads sizes and ids, call targets and linked PE/ELF code
   // addresses.
   const bool SweepWithoutDetail =
       Img.Arch == Arch::X86 || Img.Arch == Arch::X64;
@@ -1282,7 +1414,9 @@ void FuncDetector::scanCallTargets(
   if (Chunks.size() <= 1 && PieceJobs.empty()) {
     for (auto &[Seg, Start, End] : Chunks)
       func_detect_detail::scanSegmentCalls(Img, Dec, Seg, Start, End, Out,
-                                           CodeAddresses, Cancellation);
+                                           CodeAddresses, Cancellation,
+                                           A64Entries);
+    finishAArch64();
     Dec.setDetail(PreviousDetail);
     Dec.setText(PreviousText);
     return;
@@ -1337,6 +1471,7 @@ void FuncDetector::scanCallTargets(
       LocalDec.setDetail(false);
       LocalDec.setText(false);
     }
+    func_detect_detail::AArch64EntryScan LocalA64;
     std::set<va_t> LocalEntries;
     std::vector<std::pair<va_t, va_t>> LocalCodeAddresses;
 
@@ -1368,11 +1503,17 @@ void FuncDetector::scanCallTargets(
       auto &[Seg, Start, End] = Chunks[Job - PieceJobs.size()];
       func_detect_detail::scanSegmentCalls(Img, LocalDec, Seg, Start, End,
                                            LocalEntries, LocalCodeAddresses,
-                                           Cancellation);
+                                           Cancellation, LocalA64);
     }
 
     std::lock_guard<std::mutex> Lk(Mtx);
     Out.insert(LocalEntries.begin(), LocalEntries.end());
+    A64Entries.ConditionalTargets.insert(A64Entries.ConditionalTargets.end(),
+                                         LocalA64.ConditionalTargets.begin(),
+                                         LocalA64.ConditionalTargets.end());
+    A64Entries.EntryCandidates.insert(A64Entries.EntryCandidates.end(),
+                                      LocalA64.EntryCandidates.begin(),
+                                      LocalA64.EntryCandidates.end());
     CodeAddresses.insert(CodeAddresses.end(), LocalCodeAddresses.begin(),
                          LocalCodeAddresses.end());
   };
@@ -1482,8 +1623,10 @@ void FuncDetector::scanCallTargets(
                                    : *std::prev(Last);
     }
     func_detect_detail::scanSegmentCalls(Img, Dec, Chunk.Seg, From, Chunk.End,
-                                         Out, CodeAddresses, Cancellation);
+                                         Out, CodeAddresses, Cancellation,
+                                         A64Entries);
   }
+  finishAArch64();
   Dec.setDetail(PreviousDetail);
   Dec.setText(PreviousText);
 }

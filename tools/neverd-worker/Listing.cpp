@@ -67,6 +67,8 @@ using TypeMemberFunction = const char *(*)(neverd_session_t, const char *,
                                            const char *);
 
 constexpr int IndexStepFunctions = 2048;
+/// AArch64's NOP, which pads code as zero words do.
+constexpr std::uint32_t kAArch64Nop = 0xD503201F;
 // Strings in these encodings are shown as plain bytes (`db`).
 constexpr std::string_view PlainStringEncodings[] = {"ascii", "utf-8"};
 constexpr char SeparatorRule[] = "; -------------------------------------------"
@@ -348,6 +350,9 @@ struct Item {
   std::size_t index = 0;
   std::uint64_t alignment = 0;
   bool userCode = false;
+  /// An instruction decoded in a function's extent that its recovered body
+  /// does not reach, owned by no function.
+  bool looseCode = false;
 };
 struct MetadataField {
   std::uint64_t offset = 0, size = 0, target = 0;
@@ -653,7 +658,12 @@ struct Listing::Impl {
   /// Where a run of unwritten bytes stops: named data and the automatic
   /// items' starts and ends, sorted.
   std::vector<std::uint64_t> dataBounds;
-  std::unordered_map<std::uint64_t, std::uint64_t> alignCache;
+  /// The alignment padding names, by its start and end.
+  std::map<std::pair<std::uint64_t, std::uint64_t>, std::uint64_t> alignCache;
+  /// Where code in a gap ends and its padding starts, keyed by both bounds:
+  /// newly indexed references can shorten a gap without changing its start.
+  std::map<std::pair<std::uint64_t, std::uint64_t>, std::uint64_t>
+      looseGapCache;
 
   std::unordered_map<std::uint64_t, DecodedFunction> decoded;
   std::list<std::uint64_t> decodedOrder;
@@ -810,6 +820,7 @@ struct Listing::Impl {
     recoveredInstructions.clear();
     maxRecoveredInstructionSize = 0;
     alignCache.clear();
+    looseGapCache.clear();
     applyDisplayNames();
     if (initialFunctions && cache.writable())
       cache.defer("initial-functions-" + std::to_string(count),
@@ -847,6 +858,7 @@ struct Listing::Impl {
     recoveredInstructions.clear();
     maxRecoveredInstructionSize = 0;
     alignCache.clear();
+    looseGapCache.clear();
     applyDisplayNames();
   }
 
@@ -2044,14 +2056,21 @@ struct Listing::Impl {
                ? &*it
                : nullptr;
   }
-  std::optional<int> recoveredFunctionIndex(std::uint64_t address) const {
+  /// \p declared is the entry of the function whose extent contains the
+  /// address. Among several recovered owners it wins only when it is one of
+  /// them: code another entry jumps into stays in the body that reaches it
+  /// from its own entry. Other owners of the same start remain ambiguous.
+  std::optional<int>
+  recoveredFunctionIndex(std::uint64_t address,
+                         std::optional<std::uint64_t> declared = {}) const {
     std::optional<std::uint64_t> owner;
+    bool ambiguous = false, declaredOwns = false;
     auto at = recoveredInstructions.upper_bound(address);
     const bool exact = recoveredInstructions.contains(address);
     while (at != recoveredInstructions.begin()) {
       --at;
       // A proven start wins over the operand bytes of a different decode
-      // stream. Two owners of the same start remain ambiguous.
+      // stream.
       if (exact && at->first != address)
         break;
       if (address - at->first >= maxRecoveredInstructionSize)
@@ -2059,10 +2078,15 @@ struct Listing::Impl {
       for (const auto &[entry, size] : at->second) {
         if (address - at->first >= size)
           continue;
-        if (owner && *owner != entry)
-          return -1;
+        declaredOwns |= declared == entry;
+        ambiguous |= owner && *owner != entry;
         owner = entry;
       }
+    }
+    if (ambiguous) {
+      if (!declaredOwns)
+        return -1;
+      owner = declared;
     }
     if (!owner)
       return std::nullopt;
@@ -2090,13 +2114,25 @@ struct Listing::Impl {
     // when another decode stream covers their entry's bytes.
     if (index < 0 ||
         (!functions[index].chunkOf && functions[index].entry != address))
-      if (const auto recovered = recoveredFunctionIndex(address))
+      if (const auto recovered = recoveredFunctionIndex(
+              address,
+              index < 0 ? std::nullopt : std::optional(functions[index].entry)))
         return {*recovered, true};
     return {index, false};
   }
   /// Index of the function whose decoded extent contains \p address.
   int functionIndex(std::uint64_t address) {
     const auto [index, recovered] = functionOwnerIndex(address);
+    if (recovered) {
+      const int declared = declaredFunctionIndex(address);
+      // Another body may have been viewed first. Establish whether the
+      // declared body also reaches this instruction before resolving their
+      // shared tail; navigation order must not select its owner.
+      if (declared >= 0 && declared != index && !functions[declared].chunkOf) {
+        decode(declared);
+        return functionOwnerIndex(address).first;
+      }
+    }
     if (recovered || index < 0)
       return index;
     const auto &function = functions[index];
@@ -2551,10 +2587,15 @@ struct Listing::Impl {
           const auto *other = functionAtEntry(instruction.address);
           if (!other || other->entry == function.entry)
             body.instructions.push_back(std::move(instruction));
-          if (body.instructions.size() >
-              ::neverd::limits::worker::kListingMaxUnsizedInstructions)
-            throw Error("analysis_failed",
-                        "Recovered function exceeds listing limit");
+        }
+        // A body past the listing's bound still has bytes to inspect: the
+        // ordinary decoder lists them, as for a rejected lift.
+        if (body.instructions.size() >
+            ::neverd::limits::worker::kListingMaxRecoveredInstructions) {
+          body.instructions.clear();
+          body.recoveryError = "Recovered function exceeds listing limit";
+          recovered = false;
+          break;
         }
         const auto next = page.at("next_address");
         if (next.is_null())
@@ -2563,10 +2604,6 @@ struct Listing::Impl {
         if (!previousAddress || nextAddress <= *previousAddress)
           throw Error("analysis_failed",
                       "Invalid recovered instruction cursor");
-        if (body.instructions.size() >=
-            ::neverd::limits::worker::kListingMaxUnsizedInstructions)
-          throw Error("analysis_failed",
-                      "Recovered function exceeds listing limit");
         cursor = nextAddress;
       }
       stop = recovered;
@@ -2835,10 +2872,131 @@ struct Listing::Impl {
     return 0;
   }
 
+  /// The run of zero words around \p word within [\p low, \p high), up to the
+  /// largest alignment on each side; empty unless \p word is zero.
+  std::pair<std::uint64_t, std::uint64_t>
+  zeroWords(std::uint64_t word, std::uint64_t low, std::uint64_t high) {
+    const std::uint64_t span = ::neverd::limits::worker::kListingMaxAlignment;
+    if (word < low || word >= high || high - word < 4)
+      return {word, word};
+    const std::uint64_t first =
+        word - std::min(span, (word - low) & ~std::uint64_t{3});
+    const std::uint64_t last =
+        word + std::min(span, (high - word) & ~std::uint64_t{3});
+    std::vector<unsigned char> bytes(last - first);
+    if (neverd_read_bytes(session, first, bytes.data(),
+                          static_cast<int>(bytes.size())) !=
+        static_cast<int>(bytes.size()))
+      return {word, word};
+    const auto zero = [&](std::uint64_t at) {
+      const unsigned char *p = bytes.data() + (at - first);
+      return !(p[0] | p[1] | p[2] | p[3]);
+    };
+    if (!zero(word))
+      return {word, word};
+    std::uint64_t start = word, end = word + 4;
+    while (start > first && zero(start - 4))
+      start -= 4;
+    while (end < last && zero(end))
+      end += 4;
+    return {start, end};
+  }
+
+  /// Shows the zero words around \p address within [\p low, \p high) as
+  /// the padding they are up to an alignment, or else as data; false unless
+  /// the word at \p address is zero.
+  bool zeroWordsItem(Item &item, std::uint64_t address, std::uint64_t low,
+                     std::uint64_t high) {
+    const auto [start, end] = zeroWords(address & ~std::uint64_t{3}, low, high);
+    if (end <= start)
+      return false;
+    if (const auto alignment = paddingAlignment(start, end)) {
+      item.kind = ItemKind::Align;
+      item.start = start;
+      item.size = end - start;
+      item.alignment = alignment;
+    } else
+      repeatItem(item, start, end, address);
+    return true;
+  }
+
+  /// Whether \p instruction, decoded at \p at, is what a word no body reaches
+  /// holds as code: a 4-byte instruction, but not UDF, as which a zero or a
+  /// small constant reads.
+  static bool looseInstruction(const Instruction &instruction,
+                               std::uint64_t at) {
+    return instruction.address == at && instruction.size == 4 &&
+           instruction.mnemonic != "udf";
+  }
+  bool decodesLoose(std::uint64_t start) {
+    if (const auto it = userInstructions.find(start);
+        it != userInstructions.end())
+      return looseInstruction(it->second, start);
+    auto instructions = disassemble(start, 1);
+    if (instructions.empty() || !looseInstruction(instructions.front(), start))
+      return false;
+    userInstructions.emplace(start, std::move(instructions.front()));
+    return true;
+  }
+  /// \p item as the instruction holding \p address, which decodesLoose
+  /// decoded: code no function's recovered body reaches.
+  static void looseItem(Item &item, std::uint64_t address) {
+    item.kind = ItemKind::Instruction;
+    item.function = -1;
+    item.start = address & ~std::uint64_t{3};
+    item.size = 4;
+    item.looseCode = true;
+  }
+  /// Where the instructions of the gap [start, end) between two AArch64
+  /// functions end and the zero words or NOPs that align the next one start,
+  /// or start when not every word before that padding is code.  Zero words
+  /// among the code, which zeroWordsItem shows, pad or hold a zero; NOPs that
+  /// align nothing are code.
+  std::uint64_t looseGapCodeEnd(std::uint64_t start, std::uint64_t end) {
+    if (dialect != OperandDialect::AArch64 || start % 4 || end % 4 ||
+        end <= start)
+      return start;
+    if (auto it = looseGapCache.find({start, end}); it != looseGapCache.end())
+      return it->second;
+    std::vector<std::uint32_t> words((end - start) / 4);
+    const int bytes = static_cast<int>(words.size() * 4);
+    if (neverd_read_bytes(session, start,
+                          reinterpret_cast<unsigned char *>(words.data()),
+                          bytes) != bytes)
+      return start;
+    const auto wordAt = [&](std::uint64_t at) {
+      return words[(at - start) / 4];
+    };
+    std::uint64_t padding = end;
+    while (padding > start &&
+           (wordAt(padding - 4) == 0 || wordAt(padding - 4) == kAArch64Nop))
+      padding -= 4;
+    if (padding != end && !paddingAlignment(padding, end))
+      padding = end;
+    bool code = padding > start;
+    for (std::uint64_t at = start; code && at < padding;) {
+      const std::uint64_t count = std::min<std::uint64_t>(
+          (padding - at) / 4, ::neverd::limits::worker::kListingMaxDecodeChunk);
+      const std::uint64_t from = at;
+      for (auto &instruction : disassemble(at, count)) {
+        if (at - from == 4 * count ||
+            (wordAt(at) != 0 && !looseInstruction(instruction, at)))
+          break;
+        if (wordAt(at) != 0)
+          userInstructions.try_emplace(at, std::move(instruction));
+        at += 4;
+      }
+      code = at - from == 4 * count;
+    }
+    const std::uint64_t codeEnd = code ? padding : start;
+    looseGapCache.emplace(std::pair(start, end), codeEnd);
+    return codeEnd;
+  }
+
   std::uint64_t paddingAlignment(std::uint64_t start, std::uint64_t end) {
     if (end <= start)
       return 0;
-    if (auto it = alignCache.find(start); it != alignCache.end())
+    if (auto it = alignCache.find({start, end}); it != alignCache.end())
       return it->second;
     std::uint64_t alignment = gapAlignment(start, end);
     const std::uint64_t length = end - start;
@@ -2866,7 +3024,7 @@ struct Listing::Impl {
           alignment = 0;
       }
     }
-    alignCache.emplace(start, alignment);
+    alignCache.emplace(std::pair(start, end), alignment);
     return alignment;
   }
 
@@ -2996,6 +3154,7 @@ struct Listing::Impl {
             [](std::uint64_t value, const Instruction &i) {
               return value < i.address;
             });
+        const auto next = it;
         if (it != body.instructions.begin()) {
           --it;
           if (address < it->address + it->size) {
@@ -3004,6 +3163,40 @@ struct Listing::Impl {
             item.size = it->size;
             item.index =
                 static_cast<std::size_t>(it - body.instructions.begin());
+            return item;
+          }
+          // Padding the body jumps over, as before an aligned loop, aligns
+          // the instruction after it, as between functions.
+          const auto start = it->address + it->size;
+          if (next != body.instructions.end() && next->address > start)
+            if (const auto alignment = paddingAlignment(start, next->address)) {
+              item.kind = ItemKind::Align;
+              item.start = start;
+              item.size = next->address - start;
+              item.alignment = alignment;
+              return item;
+            }
+        }
+        if (dialect == OperandDialect::AArch64) {
+          const std::uint64_t word = address & ~std::uint64_t{3};
+          // Zero words the body does not reach read as UDF #0, which no one
+          // writes as code: they pad up to what follows, as between a vector
+          // table's entries, or hold a zero.
+          const std::uint64_t holeStart =
+              next == body.instructions.begin()
+                  ? functions[f].entry
+                  : std::prev(next)->address + std::prev(next)->size;
+          const std::uint64_t holeEnd = next == body.instructions.end()
+                                            ? functions[f].end
+                                            : next->address;
+          if (zeroWordsItem(item, address, holeStart, holeEnd))
+            return item;
+          // A fixed-width instruction the body does not reach, as an
+          // unresolved jump table's target or an alternative a boot-time
+          // patch copies in, is code all the same: it shows decoded, in no
+          // function.
+          if (decodesLoose(word)) {
+            looseItem(item, address);
             return item;
           }
         }
@@ -3015,6 +3208,12 @@ struct Listing::Impl {
       std::uint64_t gapStart = previousCodeEnd(address, region);
       std::uint64_t gapEnd =
           std::min(nextFunctionStart(address, region), region.initializedEnd);
+      // A short gap with a function on either side, as the code a boot-time
+      // patch copies in sits after the function it patches.
+      const bool betweenFunctions =
+          gapStart > region.start && gapEnd < region.initializedEnd &&
+          gapEnd - gapStart <=
+              ::neverd::limits::worker::kListingMaxLooseGapBytes;
       // A string between functions, as MSVC's literals sit among the code
       // of a kernel's sections; the padding around it aligns it.
       if (gapStart <= address && address < gapEnd) {
@@ -3046,6 +3245,19 @@ struct Listing::Impl {
           item.start = gapStart;
           item.size = gapEnd - gapStart;
           item.alignment = alignment;
+        } else if (const std::uint64_t codeEnd =
+                       betweenFunctions ? looseGapCodeEnd(gapStart, gapEnd)
+                                        : gapStart;
+                   codeEnd > gapStart) {
+          if (address < codeEnd) {
+            if (!zeroWordsItem(item, address, gapStart, codeEnd))
+              looseItem(item, address);
+          } else {
+            item.kind = ItemKind::Align;
+            item.start = codeEnd;
+            item.size = gapEnd - codeEnd;
+            item.alignment = paddingAlignment(codeEnd, gapEnd);
+          }
         } else
           repeatItem(item, gapStart, gapEnd, address);
       }
@@ -3609,7 +3821,7 @@ struct Listing::Impl {
   }
 
   const Instruction &instructionOf(const Item &item) {
-    if (!item.userCode)
+    if (!item.userCode && !item.looseCode)
       return decode(item.function).instructions[item.index];
     // P can subsequently give this code a function. Reuse the matching
     // instruction's tracked stack/frame facts once it has an owner.
@@ -4953,7 +5165,8 @@ Json Listing::uncachedPage(const Json &payload) {
     if (item && d.regions[item->region].exec &&
         (item->userCode || !d.userItemOverlapping(target, 1)) &&
         ((item->userCode && !d.functionAtEntry(target)) ||
-         item->kind != ItemKind::Instruction || item->start != target)) {
+         item->kind != ItemKind::Instruction || item->looseCode ||
+         item->start != target)) {
       (void)chunkOwner(target);
       // Discovery can rebuild the function and item indexes even if this
       // address still has no proven owner.
@@ -5417,13 +5630,18 @@ std::optional<std::uint64_t> Listing::chunkOwner(std::uint64_t address) {
   auto &d = *impl_;
   d.discover();
   d.build();
+  // Discovery can publish an entry absent from the caller's initial lookup.
+  // Keep its identity before probing nearby functions for chunk ownership.
+  if (d.functionAtEntry(address))
+    return address;
   if (const int f = d.functionIndex(address); f >= 0) {
     if (d.functions[f].chunkOf)
       return d.ownerOf(f).entry;
     // Operand coverage can be a decoy stream swallowing the real start.
     // Search for a proven start before accepting that weaker ownership.
     if (d.recoveredInstructions.contains(address))
-      if (const auto found = d.recoveredFunctionIndex(address))
+      if (const auto found =
+              d.recoveredFunctionIndex(address, d.functions[f].entry))
         return *found >= 0 ? std::optional(d.ownerOf(*found).entry)
                            : std::nullopt;
     // Bytecode and older engines retain their ordinary extent lookup.
@@ -5453,7 +5671,10 @@ std::optional<std::uint64_t> Listing::chunkOwner(std::uint64_t address) {
     ++count;
     (void)d.decode(static_cast<int>(candidate - d.functions.begin()));
   }
-  const auto found = d.recoveredFunctionIndex(address);
+  const int declared = d.declaredFunctionIndex(address);
+  const auto found = d.recoveredFunctionIndex(
+      address,
+      declared < 0 ? std::nullopt : std::optional(d.functions[declared].entry));
   return found && *found >= 0 ? std::optional(d.ownerOf(*found).entry)
                               : std::nullopt;
 }
@@ -5622,6 +5843,8 @@ const Json &Listing::uncachedFunctionRows() {
   }
   return d.functionRowsCache;
 }
+
+void Listing::build() { impl_->build(); }
 
 const std::unordered_map<std::string, std::string> &Listing::functionAliases() {
   impl_->build();

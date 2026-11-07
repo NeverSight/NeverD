@@ -59,10 +59,38 @@ inline constexpr std::size_t kEngineMaxNamedViewBytes = 32 * 1024 * 1024;
 /// ends before the line that would pass it.
 inline constexpr std::size_t kEngineMaxCodePageBytes =
     ::neverd::limits::kMaxViewPageBytes;
-inline constexpr std::size_t kEngineMaxNamedViewCacheBytes = 32 * 1024 * 1024;
-inline constexpr std::size_t kEngineMaxNamedViews = 8;
+/// Finished view documents the worker keeps, so that returning to a function
+/// answers from its document instead of decompiling it again: a session's
+/// working set of functions, bounded by retained bytes as well as count.
+inline constexpr std::size_t kEngineMaxNamedViewCacheBytes = 256 * 1024 * 1024;
+inline constexpr std::size_t kEngineMaxNamedViews = 512;
 inline constexpr std::size_t kEngineMaxEncodedPages = 64;
 inline constexpr std::size_t kEngineMaxEncodedBytes = 8 * 1024 * 1024;
+/// Compact bytes of engine pages a replica keeps of the functions it renders
+/// ahead (EngineRenderAhead.cpp); the job ends at them.
+inline constexpr std::size_t kRenderAheadMaxStoredBytes = 1024 * 1024 * 1024;
+/// A request that arrives during a render waits for what is left of it, so the
+/// job renders a function only after no request has come for this long: past
+/// the pace of a reader going through functions, and for a larger function
+/// longer in proportion.  A function renders in about 0.1 ms per byte, so the
+/// reader has paused for some fifty times what such a wait should cost.
+inline constexpr std::int64_t kRenderAheadHoldOffMilliseconds = 2000;
+inline constexpr std::int64_t kRenderAheadHoldOffMillisecondsPerKilobyte = 5000;
+/// The largest function the job renders.  A render cannot be interrupted, and
+/// a request that comes during one waits for it.  On a Windows kernel a
+/// function this size renders in a few seconds, about what opening it costs
+/// anyway; the largest take over half a minute, too long to risk for a visit
+/// that may never come.
+inline constexpr std::uint64_t kRenderAheadMaxFunctionBytes = 16 * 1024;
+/// Times the job starts over before it ends: something keeps changing what it
+/// renders, which is no idle work worth repeating.
+inline constexpr unsigned kRenderAheadMaxStarts = 8;
+/// Rendering replaces the function the session has prepared.  One a request
+/// took longer than this to prepare stays prepared, so that the graph or IR
+/// the reader opens next does not prepare it again, until no request has come
+/// for the longer time.
+inline constexpr std::int64_t kRenderAheadKeepPreparedMilliseconds = 50;
+inline constexpr std::int64_t kRenderAheadKeepPreparedIdleMilliseconds = 30000;
 // Decode one basic block without following its successors or inventing
 // a function. Known instructions are a boundary, and unmodelled control
 // flow never invites guessing what bytes follow it.
@@ -107,6 +135,11 @@ inline constexpr std::uint64_t kListingOwnerSearchDistance = 0x10000;
 inline constexpr std::size_t kListingMaxStringDisplay = 400;
 inline constexpr std::size_t kListingMaxUnsizedInstructions =
     ::neverd::sdk::kMaxUnsizedInstructions;
+/// A recovered body the listing copies. The engine bounds the CFG; this bounds
+/// the copy above the largest real functions, as a kernel's of 86K
+/// instructions. A larger body lists through the ordinary decoder.
+inline constexpr std::size_t kListingMaxRecoveredInstructions = std::size_t{1}
+                                                                << 18;
 inline constexpr std::uint64_t kListingMaxAlignment = 0x1000;
 // Classic listings name padding by the alignment of its end, up to this or the
 // smallest power of two longer than the padding.
@@ -115,6 +148,10 @@ inline constexpr std::uint64_t kListingClassicAlignmentLimit = 0x20;
 /// stable.
 inline constexpr std::uint64_t kListingMaxRepeatBytes = 0x1000;
 inline constexpr std::uint64_t kListingMinRepeatBytes = 4;
+/// The longest gap between two functions whose fixed-width instructions the
+/// listing decodes as code no function reaches, as the cases and slow paths
+/// a function's body leaves after its returns.
+inline constexpr std::uint64_t kListingMaxLooseGapBytes = 0x10000;
 inline constexpr std::size_t kListingMaxOverviewBuckets = 16384;
 inline constexpr int kListingOverviewSamples = 4;
 inline constexpr int kListingStringScanMinimum =

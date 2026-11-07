@@ -17,6 +17,7 @@
 #include "neverd/ir/med/MedIntegerReturnRange.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -26,6 +27,15 @@ struct BinaryImage;
 struct LowFunc;
 struct MedCallReturnRead;
 struct MedFunc;
+struct TargetRegInfo;
+
+/// Whether the settled source return contract observes any bytes in a
+/// physical register view. Primary results, preserved state and explicit
+/// multi-register results remain live. On a 64-bit target, merely being an
+/// architectural secondary result register does not make it a scalar result.
+bool sourceReturnReadsRegister(const MedFunc &Func, const TargetRegInfo &TRI,
+                               BinaryFormat Format, uint64_t RegOff,
+                               uint16_t Size);
 
 /// Check exact entry-relative loads against reaching physical x86 CALL
 /// return slots before source cleanup. An ordinary C call does not write the
@@ -37,6 +47,9 @@ struct MedFunc;
 /// flow can locate restored x86 SEH stacks; this is not a reusable MedIR fact.
 /// Where that proof is incomplete, the EH3/EH4 frame protocol still places
 /// reloads of the saved stack pointer and runtime callback stacks.
+/// A byte-authenticated x64 page probe can likewise bound its subsequent
+/// same-block allocation after an uninterrupted normal return. These bounds
+/// attach only to exact fresh Low-to-Med operation identities.
 ///
 /// With \p Deferred, each such load is recorded there instead of refusing the
 /// function: whether its value is observed is known only once call arguments
@@ -73,6 +86,21 @@ bool validateObservedCallReturnReads(
     const MedFunc &Func, const BinaryImage &Image, std::string &Diagnostic,
     size_t WorkLimit = limits::ir::kSourceCallReturnReadWork,
     const std::map<va_t, unsigned> *CalleeIntegerArity = nullptr);
+/// Retain near-CALL writes observed or replacing a private scalar spill in the
+/// reconstructed frame. Existing target loads and call operands keep their
+/// ordering and value-versus-storage roles.
+/// Only exact entry-relative slots below entry SP are admitted. Planning is
+/// transactional: ambiguous stacks, incomplete graphs and unavailable original
+/// encodings leave Func unchanged. This does not prove callee memory effects or
+/// authorize a physical stack switch. Invoke before source stack cleanup.
+bool preserveSourceCallReturnWrites(
+    MedFunc &Func, const BinaryImage &Image, std::string &Diagnostic,
+    size_t WorkLimit = limits::ir::kSourceCallReturnReadWork,
+    const LowFunc *FreshSource = nullptr,
+    const MedCallReturnRanges *CallReturns = nullptr,
+    std::vector<MedCallReturnRead> *Deferred = nullptr,
+    bool *NeedsCalleeFacts = nullptr);
+
 } // namespace neverd
 
 #endif // NEVERD_IR_MED_MEDCALLRETURNREADS_H

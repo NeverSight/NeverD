@@ -888,13 +888,19 @@ TEST_F(PEFixedImageTest,
     ASSERT_EQ(Good.ExternalExits.size(), 2u);
     EXPECT_FALSE(bool(validateSpecializationRawEnvironment(Good, O)));
     auto Changed = Good;
-    Changed.ExternalExits[0].Original.Ops[0].Inputs[5].Offset ^= 1;
-    auto Error = validateSpecializationRawEnvironment(Changed, O);
-    ASSERT_TRUE(bool(Error));
-    llvm::consumeError(std::move(Error));
+    // The last inactive slot v1 encodes and every extension slot.
+    for (size_t Slot = kLowUndefinedV1InputSlots - 1;
+         Slot != kLowOperationInputs; ++Slot) {
+      SCOPED_TRACE(Slot);
+      Changed = Good;
+      Changed.ExternalExits[0].Original.Ops[0].Inputs[Slot].Offset ^= 1;
+      auto Error = validateSpecializationRawEnvironment(Changed, O);
+      ASSERT_TRUE(bool(Error));
+      llvm::consumeError(std::move(Error));
+    }
     Changed = Good;
     Changed.ExternalExits[0].Original.UndefinedEffects.Diagnostic = "changed";
-    Error = validateSpecializationRawEnvironment(Changed, O);
+    auto Error = validateSpecializationRawEnvironment(Changed, O);
     ASSERT_TRUE(bool(Error));
     llvm::consumeError(std::move(Error));
     uint64_t Low = 0, High = O.MaxRawEnvironmentResultRecords;

@@ -34,6 +34,11 @@ inline constexpr unsigned MaxMinLength = 1024;
 
 namespace neverd::limits::support {
 
+/// Coarse raw/PE code-discovery windows, not architectural page sizes.
+inline constexpr size_t kAArch64PageBytes = 4096;
+/// Unallocated or nonzero UDF words needed to classify a window as data.
+inline constexpr size_t kAArch64DataWordsPerPage = 64;
+
 // Hashing and copying loaded bytes. This is a checkpoint granularity, not a
 // maximum input size or a wall-clock deadline. Keep it a SHA-256 block
 // multiple.
@@ -90,6 +95,14 @@ inline constexpr int kTextEncodingEscapeInvalidUTF8TextSizeLimit = 64;
 // Default display-column length for binary string discovery, shared by every
 // surface.
 inline constexpr unsigned kDefaultStringMinLength = 4;
+
+// lib/support/StringScan.cpp
+// Bytes from which a string scan given tasks (strings::scan) splits each of
+// its passes into spans run as tasks, and about how many bytes each span
+// reads: enough spans to keep every worker busy on an image, few enough that
+// each span's setup stays small.
+inline constexpr size_t kStringScanParallelBytes = size_t{1} << 20;
+inline constexpr size_t kStringScanParallelSpanBytes = size_t{256} << 10;
 } // namespace neverd::limits::support
 
 #endif // NEVERD_SUPPORT_LIMITS_H

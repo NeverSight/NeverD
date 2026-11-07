@@ -130,8 +130,23 @@ struct CEmitterOptions {
   /// writes eight bytes at, `unk_` where they differ or none states one.
   /// Without it, data is named by the accesses of the functions emitted.
   const DataAccessWidths *AccessWidths = nullptr;
+  /// Resolve the same inventory on demand when AccessWidths is absent. A
+  /// source view with no image-data names need not scan unrelated functions.
+  /// The provider owns the inventory and its lifetime through emission; it
+  /// should reuse its result, including an unavailable inventory, on repeat
+  /// queries. Writers do not retain it after emission.
+  std::function<const DataAccessWidths *()> ReadAccessWidths;
+  const DataAccessWidths *dataAccessWidths() const {
+    return AccessWidths       ? AccessWidths
+           : ReadAccessWidths ? ReadAccessWidths()
+                              : nullptr;
+  }
   /// Optional source-map sink. Recording never changes the emitted C text.
   CSourceMap *SourceMap = nullptr;
+  /// HighC-only helper names and the original bodies they specialize. These
+  /// functions have no native entry ABI. Suppress native-variable editing
+  /// identities for them rather than inventing addresses for generated code.
+  const std::map<std::string, va_t> *SourceBodyOrigins = nullptr;
   /// Receives the names the text spells (CSourceMap::Names) without the
   /// marked render a source map needs.
   std::vector<CSourceName> *SourceNames = nullptr;
@@ -142,10 +157,13 @@ struct CEmitterOptions {
     std::string Reason;
   };
   /// Where a unit lists the definitions it leaves out rather than failing:
-  /// one whose C throws is omitted with what it threw, in the unit's order,
-  /// and the others are written.  Null fails the unit at the first, as one
-  /// function's view does.  A rendering that records positions, a source
-  /// map or source names still fails, as its text follows one pass.
+  /// one whose source requirements fail, then one whose C throws, each in the
+  /// unit's order, is omitted with what it threw, and the others are written.
+  /// Null fails the unit at the first, as one function's view does.  A
+  /// rendering that records positions, a source map or source names still
+  /// fails, as its text follows one pass, and so does one whose requirements
+  /// fail under structured exception syntax, which writes funclets inside
+  /// their parents, or in a function whose body fills another's `__finally`.
   std::vector<RefusedDefinition> *RefusedDefinitions = nullptr;
   /// Given the named records a unit's types reach, through pointers and
   /// arrays, the definitions the program's local types give them.  A record

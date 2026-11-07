@@ -15,6 +15,8 @@
 
 #include "../../pipeline/PipelineCallAbiDetail.h"
 #include "../../pipeline/PipelineFunctionNames.h"
+#include "../../pipeline/PipelineSourceInline.h"
+#include "../../pipeline/PipelineSourceStackAccesses.h"
 #include "../plugin/PluginManager.h"
 #include "FunctionAuditReason.h"
 #include "ImageStrings.h"
@@ -55,6 +57,7 @@
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -101,6 +104,13 @@ struct FuncInfo {
 
   bool operator==(const FuncInfo &) const = default;
 };
+
+/// The size a function list gives \p Function: what the image or its debug
+/// information states, else the bytes from its entry to the end of its last
+/// block before another of \p SortedEntries starts
+/// (LowFunc::contiguousSize), not the span to its farthest out-of-line part.
+uint64_t listedFunctionSize(const LowFunc &Function,
+                            llvm::ArrayRef<va_t> SortedEntries);
 
 struct Session {
   enum class SanitizePublicationFaultForTesting : uint8_t {
@@ -303,6 +313,7 @@ struct Session {
     SourceViewOptions Options;
     std::unique_ptr<llvm::Module> Module;
     std::shared_ptr<LLVMSourceMap> Sources;
+    std::shared_ptr<SourceInlineHighPreparation> PreparedHigh;
     /// The LLVM IR view of an inspection module's function, made when first
     /// shown (functionLlvmView).  Its comments read the user's names.
     mutable std::shared_ptr<const LLVMFunctionView> View;
@@ -396,6 +407,9 @@ struct Session {
     }
   }
   std::set<va_t> OnlyFunctionEntries;
+  /// What neverd_session_restrict_function() asked for. A load starts from
+  /// this: the functions queries selected belong to the image they read.
+  std::set<va_t> RestrictedFunctionEntries;
   /// Whole-program source simplifies symbolically
   /// (neverd_session_set_source_symbolic).
   bool SourceSymbolic = false;
@@ -488,6 +502,28 @@ struct Session {
   /// On Mach-O only, a C spelling also finds its ABI-decorated symbol after
   /// both exact-name lookups fail.
   std::optional<size_t> functionIndexNamed(llvm::StringRef Name);
+  /// Where functionIndexAt() finds an entry, read from the list as it was at
+  /// Revision: every request for a function's view asks where the list holds
+  /// it, and an image lists tens of thousands.
+  struct FunctionEntryIndex {
+    uint64_t Revision;
+    const FuncInfo *List;
+    size_t Count;
+    /// The first function listed at each entry.
+    llvm::DenseMap<va_t, size_t> FirstAt;
+  };
+  std::optional<FunctionEntryIndex> EntryIndex;
+  /// The first function listed at \p Entry.
+  std::optional<size_t> functionIndexAt(va_t Entry);
+  /// Whether Functions was in address order at Revision, as
+  /// synchronizeFunctions() asks after every run.
+  struct FunctionOrderCheck {
+    uint64_t Revision;
+    const FuncInfo *List;
+    size_t Count;
+    bool Sorted;
+  };
+  std::optional<FunctionOrderCheck> FunctionOrder;
   /// Emits the session's C (cEmitter()), keeping the image's function names
   /// from one emission to the next.  Those name the symbol table Symbols
   /// held when it read them; clearPipeline() drops them.
@@ -1189,7 +1225,9 @@ struct Session {
   std::unique_ptr<llvm::Module>
   emitNativeLlvm(bool NoOpt, const std::vector<char> *BodyMask,
                  std::shared_ptr<LLVMSourceMap> &Sources,
-                 bool OriginalImageStorage = false) try {
+                 bool OriginalImageStorage = false,
+                 std::shared_ptr<SourceInlineHighPreparation> *PreparedHigh =
+                     nullptr) try {
     // HighIR decompile does not run recoverCallAbi. --func --llvm still emits
     // from that MedIR, so populate CallInfos here; otherwise MedLLVM emits
     // 0-arg calls for unwritten live-in rcx.  A body-masked module declares
@@ -1217,7 +1255,11 @@ struct Session {
       // callees, which serve where this recovery reads the same.
       Recovery.CalleeSignatureMemo = PipeResult.CalleeSignatureMemo;
       recoverModuleCallAbi(Img, Recovery, FuncNames,
-                           /*SourceDeclarations=*/true);
+                           /*SourceDeclarations=*/true,
+                           /*SourceParameterReads=*/true);
+      // Recovery rebuilds CallInfos. Reapply the same source observation
+      // proof as module emission before caching these single-function views.
+      prepareRecoveredSourceStackAccesses(Img, Recovery, PipeResult.LowFuncs);
       NativeMedFuncs = std::move(Recovery.MedFuncs);
       NativeCalleeDeclarations = std::move(Recovery.OmittedCalleeDeclarations);
     }
@@ -1228,11 +1270,13 @@ struct Session {
     Emitter.setPreserveUnknownSourceValues(true);
     Emitter.setSourceCalleeDeclarations(NativeCalleeDeclarations);
     Emitter.setOriginalImageStorageForSource(OriginalImageStorage);
+    Emitter.setAnalysisRecoveryForSource(OriginalImageStorage);
     Emitter.setAnalystSourceProjection(UsingAnalystCallContracts);
     if (UsingAnalystCallContracts && CallVariant)
       Emitter.setSourceTargetSignatures(&CallVariant->TargetSignatures);
     Emitter.setDebugContext(decompileDebug());
-    Emitter.setPrototypeArgumentCallees(&PipeResult.CallPrototypeArguments);
+    Emitter.setPrototypeArgumentCallees(
+        &PipeResult.CallPrototypeArguments.get());
     // Native source views need surviving instruction observations even when
     // this function contains no recognized library operation.
     Sources = std::make_shared<LLVMSourceMap>();
@@ -1257,11 +1301,32 @@ struct Session {
     if (UsingAnalystCallContracts &&
         !SourceOptions.StackFrame.Variables.empty())
       preserveAnalystStackObjects(*Candidate);
+    bool SpecializedSource = false;
+    if (!NoOpt && OriginalImageStorage && !UsingAnalystCallContracts &&
+        supportsSourceCallSpecialization(Img, PipeResult, SourceOptions)) {
+      // Match HighC's proof input and avoid optimizing a caller which the
+      // validated joint source module will replace. The full optimizer still
+      // runs exactly once for either successful or refused specialization.
+      Pipeline::promoteScaffoldingAllocas(*Candidate);
+      PipelineOptions AnalysisOptions;
+      applyAnalysisOptions(AnalysisOptions);
+      AnalysisOptions.AnalysisCache = &AnalysisCache;
+      auto Specialized = specializeUnavailableSourceCalls(
+          Img, PipeResult, *Candidate, decompileDebug(), AnalysisOptions,
+          SourceOptions);
+      if (Specialized.Module) {
+        Candidate = std::move(Specialized.Module);
+        Sources = std::move(Specialized.Sources);
+        if (PreparedHigh)
+          *PreparedHigh = std::move(Specialized.PreparedHigh);
+        SpecializedSource = true;
+      }
+    }
     if (NoOpt) {
       Pipeline::promoteScaffoldingAllocas(*Candidate);
       if (Sources)
         Sources->refreshExpressionOrigins();
-    } else {
+    } else if (!SpecializedSource) {
       const OptimizationResult Optimization = Pipeline::optimizeOrPromoteModule(
           *Candidate, Sources.get(), SourceOptions);
       if (Optimization.Stop == OptimizationStopReason::VerificationFailed) {
@@ -1327,8 +1392,8 @@ struct Session {
     Built.NoOpt = NoOpt;
     Built.OriginalImageStorage = OriginalImageStorage;
     Built.Options = std::move(NativeOptions);
-    Built.Module =
-        emitNativeLlvm(NoOpt, &Mask, Built.Sources, OriginalImageStorage);
+    Built.Module = emitNativeLlvm(NoOpt, &Mask, Built.Sources,
+                                  OriginalImageStorage, &Built.PreparedHigh);
     if (!Built.Module)
       return nullptr;
     FunctionLlvmModules.push_front(std::move(Built));

@@ -19,6 +19,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/debug/DebugContext.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -28,6 +29,7 @@
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Diagnostic.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
@@ -105,6 +107,38 @@ bool MedLLVMEmitter::preservesRegistrationImageStorage(uint64_t Begin,
                             [&](const auto &Range) {
                               return Range.Begin < End && Begin < Range.End;
                             });
+}
+
+MedLLVMEmitter::PointerRunStorageContract
+MedLLVMEmitter::pointerRunStorageContract(uint64_t Begin, uint64_t End) const {
+  if (!Img || Begin >= End)
+    return {};
+  const bool Registration =
+      (TargetArch == Arch::X86 && TargetFormat == BinaryFormat::COFF &&
+       llvm::any_of(Img->ExceptionMetadata.Functions,
+                    [&](const auto &EH) {
+                      return EH.Registration &&
+                             EH.Registration->ScopeTableVA >= Begin &&
+                             EH.Registration->ScopeTableVA < End;
+                    })) ||
+      preservesRegistrationImageStorage(Begin, End);
+  const unsigned Width = Img->getPointerSize();
+  const bool Runtime =
+      Width &&
+      llvm::any_of(Img->RuntimeCallablePointerSlots, [&](const auto &Slot) {
+        return Slot.SlotVA >= Begin && Slot.SlotVA < End &&
+               Width <= End - Slot.SlotVA;
+      });
+  return {Registration || Runtime, Registration};
+}
+
+bool MedLLVMEmitter::pointerRunHasOriginalStorage(uint64_t RunStart) const {
+  if (completePointerMirrorRun(RunStart) != std::optional<uint64_t>(RunStart))
+    return false;
+  uint64_t Begin = 0, End = 0;
+  readOnlyAfterRelocRun(Img->getSegmentFor(RunStart), Begin, End);
+  return Begin == RunStart &&
+         pointerRunStorageContract(Begin, End).OriginalStorage;
 }
 
 bool MedLLVMEmitter::hasAuthenticatedFunctionEntryVA(va_t Address) const {
@@ -385,6 +419,16 @@ llvm::Constant *MedLLVMEmitter::resolveDeclaredFunctionInterior(va_t Address) {
       llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), Address - Owner));
 }
 
+bool MedLLVMEmitter::isInCodePointerTableAddress(uint64_t VA) const {
+  if (!Img || !Img->hasExecutableCodeOwnerAt(VA))
+    return false;
+  // Storage identity belongs to this exact object/slot, not every address
+  // sharing the executable segment containing one pointer table.
+  return (Img->DataInCode.count(VA) || Img->CodePtrRelocSlots.count(VA) ||
+          Img->DataPtrRelocSlots.count(VA)) &&
+         segHasPtrRelocSlots(Img->getSegmentFor(VA));
+}
+
 llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     uint64_t SlotVA, uint64_t &OutSegVA,
     std::optional<uint64_t> InCodeObjectAddr) {
@@ -409,7 +453,26 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
   // lays among its code), which is a few hundred bytes though its `.text` is
   // megabytes.
   std::optional<std::pair<uint64_t, uint64_t>> InCodeRun;
-  if (InCodeObjectAddr && Seg && Seg->isExecutable() && !Seg->Data.empty() &&
+  bool LinkedDataRegion = false;
+  if (InCodeObjectAddr && Dbg && Seg && Seg->isExecutable() &&
+      Seg->isReadable() && !Seg->isWritable() &&
+      Seg->Data.size() > limits::kMaxSingleGlobalEmbedLen) {
+    // A matching PDB can retain the linker's read-only data contributions
+    // even when its public symbols have no types or object sizes. Keep that
+    // storage interval whole: mixed scalar/pointer records and interior
+    // aliases must not depend on which address is emitted first.
+    if (const auto Region = Dbg->readOnlyDataRegion(*InCodeObjectAddr);
+        Region && Region->first >= Seg->VA &&
+        Region->first <= *InCodeObjectAddr &&
+        *InCodeObjectAddr < Region->second &&
+        Region->second - Seg->VA <= Seg->Data.size() &&
+        Region->second - Region->first <= limits::kMaxSingleGlobalEmbedLen) {
+      InCodeRun = *Region;
+      LinkedDataRegion = true;
+    }
+  }
+  if (!InCodeRun && InCodeObjectAddr && Seg && Seg->isExecutable() &&
+      !Seg->Data.empty() &&
       Seg->Data.size() > limits::kMaxSingleGlobalEmbedLen && PtrSz != 0) {
     const uint64_t SegEnd = Seg->VA + Seg->Data.size();
     const uint64_t Target = *InCodeObjectAddr;
@@ -488,7 +551,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
   }
   if (!Seg || Seg->Data.empty() ||
       (Seg->isExecutable() &&
-       (!segHasLoaderPtrRelocSlots(Seg) ||
+       ((!LinkedDataRegion && !segHasLoaderPtrRelocSlots(Seg)) ||
         (Seg->Data.size() > limits::kMaxSingleGlobalEmbedLen && !InCodeRun))))
     return nullptr;
 
@@ -514,6 +577,45 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     readOnlyAfterRelocRun(Seg, RunStart, RunEnd);
   }
   OutSegVA = RunStart;
+
+  if (LinkedDataRegion) {
+    // The range proof cannot authorize copying only part of a relocated
+    // pointer, including one that begins just before the range.
+    const auto CutsSlot = [&](uint64_t Slot) {
+      for (uint64_t Boundary : {RunStart, RunEnd})
+        if (Slot < Boundary && Boundary - Slot < PtrSz)
+          return true;
+      return false;
+    };
+    const auto Cuts = [&](const auto &Slots, auto Key) {
+      for (uint64_t Boundary : {RunStart, RunEnd}) {
+        auto It = Slots.lower_bound(Boundary -
+                                    std::min<uint64_t>(Boundary, PtrSz - 1));
+        if (It != Slots.end() && CutsSlot(Key(*It)))
+          return true;
+      }
+      return false;
+    };
+    const auto SlotKey = [](uint64_t Slot) { return Slot; };
+    const auto BindingKey = [](const auto &Binding) { return Binding.first; };
+    if (Cuts(Img->CodePtrRelocSlots, SlotKey) ||
+        Cuts(Img->DataPtrRelocSlots, SlotKey) ||
+        Cuts(ConflictingImportStorageSlots, SlotKey) ||
+        Cuts(EffectiveImportStorageSlots, BindingKey) ||
+        Cuts(ExternalFunctionPointerSlots, BindingKey) ||
+        llvm::any_of(Img->RuntimeCallablePointerSlots,
+                     [&](const auto &Slot) { return CutsSlot(Slot.SlotVA); })) {
+      syncError()
+          << "med_llvm_emitter: linked data region at 0x"
+          << llvm::utohexstr(RunStart)
+          << " cuts relocated pointer storage; refusing partial mirror\n";
+      FatalDataPointerResolution = true;
+      return nullptr;
+    }
+    if (auto It = CodePtrTableGlobals.find(RunStart);
+        It != CodePtrTableGlobals.end())
+      return It->second;
+  }
 
   // dyld owns signing these bytes with the process keys and, when requested,
   // the storage address. Preserve original storage as an external dependency;
@@ -551,15 +653,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     uint64_t TargetOwnerVA = InvalidVA;
   };
   std::map<uint64_t, PtrSlot> SlotsByVA;
-  bool HasRuntimeCallableStorage = false;
-  const bool HasRegistrationStorage =
-      TargetArch == Arch::X86 && TargetFormat == BinaryFormat::COFF &&
-      llvm::any_of(Img->ExceptionMetadata.Functions, [&](const auto &EH) {
-        return EH.Registration && EH.Registration->ScopeTableVA >= RunStart &&
-               EH.Registration->ScopeTableVA < RunEnd;
-      });
-  const bool HasPreservedRegistrationStorage =
-      preservesRegistrationImageStorage(RunStart, RunEnd);
+  const auto StorageContract = pointerRunStorageContract(RunStart, RunEnd);
   auto slotInRun = [&](uint64_t S) {
     return S >= RunStart && S <= RunEnd && PtrSz <= RunEnd - S;
   };
@@ -613,7 +707,6 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     const uint64_t S = RuntimeSlot.SlotVA;
     if (!slotInRun(S))
       continue;
-    HasRuntimeCallableStorage = true;
     const bool IsCode = Img->CodePtrRelocSlots.count(S) != 0;
     const bool IsData = Img->DataPtrRelocSlots.count(S) != 0;
     const bool IsImport = EffectiveImportStorageSlots.count(S) != 0 ||
@@ -640,7 +733,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
     // a runtime-only null slot gets an addressable pointer-width field.
     SlotsByVA.try_emplace(S, PtrSlot{S, PtrSlotKind::RuntimeCallable, {}});
   }
-  if (SlotsByVA.empty())
+  if (SlotsByVA.empty() && !LinkedDataRegion)
     return nullptr;
   std::vector<PtrSlot> Slots;
   Slots.reserve(SlotsByVA.size());
@@ -701,6 +794,13 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
   size_t Cur = 0;
   for (const auto &Slot : Slots) {
     size_t Off = static_cast<size_t>(Slot.VA - RunStart);
+    if (Off < Cur && LinkedDataRegion) {
+      syncError() << "med_llvm_emitter: linked data region at 0x"
+                  << llvm::utohexstr(RunStart)
+                  << " has overlapping relocated pointers; refusing mirror\n";
+      FatalDataPointerResolution = true;
+      return nullptr;
+    }
     if (Off < Cur)
       continue; // overlapping/duplicate slot — skip
     uint64_t TargetVA = 0;
@@ -719,10 +819,14 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
       if (Imported && !Imported->Name.empty()) {
         Kind = PtrSlotKind::Import;
         ImportName = Imported->Name;
-      } else if ((HasRegistrationStorage || HasPreservedRegistrationStorage)
+      } else if (StorageContract.OriginalCodeTargets
                      ? (!Img->isCodeAddress(TargetVA) ||
                         !Img->readVA(TargetVA, 1))
                      : !resolveImageFunctionAddress(TargetVA)) {
+        // Missing or masked code is not evidence of data. Only the loader's
+        // data-pointer role can authorize data materialization; a code slot
+        // must retain a lifted callable/block identity, including its static
+        // fallback when runtime storage can later replace the pointer.
         if (!FatalCodePointerResolution)
           llvm::WithColor::error()
               << "med_llvm_emitter: relocation-proven code pointer at 0x"
@@ -769,8 +873,7 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
   // fields name dispatcher-only labels with an implicit frame ABI, rather than
   // ordinary address-taken LLVM blocks. Native lowering emits a fresh table
   // for its own callbacks; source inspection still sees the original storage.
-  if (HasRuntimeCallableStorage || HasRegistrationStorage ||
-      HasPreservedRegistrationStorage) {
+  if (StorageContract.OriginalStorage) {
     auto *GV = new llvm::GlobalVariable(*Mod, StructTy, /*isConstant=*/false,
                                         llvm::GlobalValue::ExternalLinkage,
                                         /*Initializer=*/nullptr, GlobalName);
@@ -914,12 +1017,13 @@ MedLLVMEmitter::importedSymbolIdentity(llvm::StringRef ImportName) {
     return nullptr;
   }
   if (!Symbol) {
-    // Only the symbol's address is known here; C reaches it through an
-    // opaque alias until a call proves its type.
+    // Only the symbol's address is known here. Keep its import origin so C
+    // can use an established runtime prototype, or an opaque alias if none
+    // describes it. This does not invent a machine-level call signature.
     auto *Placeholder = new llvm::GlobalVariable(
         *Mod, llvm::Type::getInt8Ty(*Ctx), /*isConstant=*/false,
         llvm::GlobalValue::ExternalLinkage, /*Initializer=*/nullptr, Name);
-    data_symbol::mark(*Placeholder);
+    data_symbol::markImport(*Placeholder);
     ImportedSymbolPlaceholders[Name] = Placeholder;
     Symbol = Placeholder;
   }
@@ -988,7 +1092,7 @@ MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
   enum class ConstLeafModel { Raw, Symbolized, Incomplete };
   auto emittedConstLeafRelocates = [&](const MedVar &Root) {
     std::vector<MedVar> Pending{Root};
-    std::set<std::tuple<int, int, int, uint16_t>> LeafSeen;
+    llvm::SmallDenseSet<std::tuple<int, int, int, uint16_t>, 16> LeafSeen;
     int LeafBudget =
         ::neverd::limits::backend::kMedLLVMCodePtrResolveLeafBudget;
     while (!Pending.empty() && LeafBudget-- > 0) {
@@ -1029,7 +1133,9 @@ MedLLVMEmitter::ptrTableUniqueSegment(const MedVar &V,
     uint64_t SegVA = 0;
     bool Found = false;
     std::vector<std::pair<MedVar, bool>> Work{{V, false}};
-    std::set<std::tuple<int, int, int, bool>> Seen;
+    // Only membership is observed; the value kind keeps sentinel keys outside
+    // the valid key domain without reserving any SSA ID or version.
+    llvm::SmallDenseSet<std::tuple<int, int, int, int>, 16> Seen;
     // The Seen set bounds the walk to the function's distinct
     // address-arithmetic values; the counter is only a safety cap against a
     // pathological DAG (and is large enough that an index subtree — e.g. a deep
@@ -1872,7 +1978,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
     // Redirect only into a segment that holds pointer slots; also gate out
     // frame-derived "indices" that would be stack-pointer arithmetic.
     uint64_t SegVA = 0;
-    if (auto *G = buildCodePtrSegmentGlobal(Base, SegVA)) {
+    if (auto *G = buildCodePtrSegmentGlobal(Base, SegVA, Base)) {
       bool FrameIdx = false;
       for (const auto &T : IdxTerms)
         if (varIsFrameDerived(T)) {
@@ -2219,7 +2325,8 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
           return Pointer.Model == AddressModel::Symbolized &&
                  completePointerMirrorRun(Pointer.Segment) ==
                      std::optional<uint64_t>(Pointer.Segment) &&
-                 valueIsOpaqueRuntimeOffset(Offset);
+                 valueIsOpaqueRuntimeOffset(
+                     Offset, pointerRunHasOriginalStorage(Pointer.Segment));
         };
         if (RightTable && (Def->Opcode == NdOp::INT_SUB || LeftTable))
           return invalidProof();
@@ -2952,33 +3059,20 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     if (Current.Kind != MedVar::Reg || Current.TheArch != TargetArch ||
         Current.Id < 0 || Current.SSAVer <= 0 || Current.Size != PointerSize)
       return false;
-    const MedCallClobber *Record = nullptr;
-    for (const MedCallClobber &Clobber : CurMedFunc->CallClobbers) {
-      if (Clobber.Value != Current)
-        continue;
-      // getVar reads the declared clobber's storage. A different-width view,
-      // a partial preservation, or competing definitions cannot establish
-      // that every bit of this occurrence is an independent runtime value.
-      if (Record || Clobber.CallSiteId == 0 ||
-          Clobber.PreservedPrefixSize != 0 ||
-          addressProvenanceVarKey(Clobber.Value) !=
-              addressProvenanceVarKey(Current))
-        return false;
-      Record = &Clobber;
-    }
-    if (!Record)
+    const MedCallClobber *Record = lookupCallClobber(Current, true);
+    // getVar reads the declared clobber's storage. A different-width view,
+    // a partial preservation, or competing definitions cannot establish
+    // that every bit of this occurrence is an independent runtime value.
+    if (!Record || Record->CallSiteId == 0 ||
+        Record->PreservedPrefixSize != 0 ||
+        addressProvenanceVarKey(Record->Value) !=
+            addressProvenanceVarKey(Current))
       return false;
-    const MedOp *Owner = nullptr;
-    for (const MedBlock &Block : CurMedFunc->Blocks)
-      for (const MedOp &Op : Block.Ops) {
-        if (Op.CallSiteId != Record->CallSiteId)
-          continue;
-        if (Owner || (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL))
-          return false;
-        Owner = &Op;
-      }
+    const MedOp *Owner = lookupUniqueCallOperation(Record->CallSiteId);
     const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
-    return Owner && !Owner->DoesNotReturn &&
+    return Owner &&
+           (Owner->Opcode == NdOp::CALL || Owner->Opcode == NdOp::INDIR_CALL) &&
+           !Owner->DoesNotReturn &&
            callClobbersRegister(*Owner, Current.RegOff, Current.Size, TRI,
                                 TargetFormat) &&
            TRI.callPreservedPrefixSize(Current.RegOff, Current.Size,
@@ -3266,6 +3360,11 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       return Finish({finishValueMerge(std::move(Combined)), Complete});
     }
 
+    // An original AArch64 load's result is what it reads, as a LOAD's is. The
+    // table its base names gives that value no identity of its own.
+    if (aarch64AddressLoadMedShapeIsValid(*Def))
+      return Finish(completeProof({.SawUnresolved = true}));
+
     // Calls, atomic old values and pointer authentication do not inherit a
     // static identity from all their operands. PAC keys/modifiers are scalar;
     // treating a zero modifier as a null target rejects valid arm64e calls.
@@ -3389,6 +3488,26 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
             sizeToType(V.Size > 0 ? V.Size
                                   : static_cast<uint16_t>(PointerSize)),
             "literal");
+    // A relocated pointer table the linker placed among the code (MinGW's
+    // CRT tables live in .text) is likewise data at a code address. The
+    // value's identity is the mirrored slot run, not a lifted function: a
+    // table base has no callable identity to lose.
+    if (!RequireCodeRole && isInCodePointerTableAddress(*Proof.CommonTarget)) {
+      uint64_t TableSegVA = 0;
+      if (llvm::Constant *Table = buildCodePtrSegmentGlobal(
+              *Proof.CommonTarget, TableSegVA, *Proof.CommonTarget)) {
+        llvm::Type *I8Ty = llvm::Type::getInt8Ty(*Ctx);
+        llvm::Constant *Offset = llvm::ConstantInt::get(
+            llvm::Type::getInt64Ty(*Ctx), *Proof.CommonTarget - TableSegVA);
+        llvm::Constant *TableAddr =
+            llvm::ConstantExpr::getGetElementPtr(I8Ty, Table, Offset);
+        return Builder.CreatePtrToInt(
+            TableAddr,
+            sizeToType(V.Size > 0 ? V.Size
+                                  : static_cast<uint16_t>(PointerSize)),
+            "code.table.value");
+      }
+    }
   }
 
   if (Proof.AllFunctionEntries && Proof.SawFunctionIdentity &&
@@ -3425,6 +3544,20 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       !Proof.SawUnsafeCodeDependency &&
       !(RequireCodeRole && (Proof.SawExplicit || Proof.SawCodeDependency)))
     return nullptr;
+
+  // The memory-address owner already proves scalar offsets and preserves
+  // every runtime addend. Reuse it for escaping table addresses as well.
+  if (!RequireCodeRole) {
+    uint64_t Base = 0;
+    bool HaveBase = false;
+    std::vector<MedVar> Terms;
+    if (collectIndexedGlobalBase(V, Base, HaveBase, Terms) && HaveBase &&
+        !Terms.empty() && isInCodePointerTableAddress(Base))
+      if (llvm::Value *Address = tryResolveCodePtrTablePtr(V, Builder))
+        return Builder.CreatePtrToInt(
+            Address, sizeToType(V.Size > 0 ? V.Size : PointerSize),
+            "code.table.value");
+  }
 
   // An explicit code-address origin exists, but its value graph cannot be
   // emitted as one function identity.  The raw original VA is never a sound

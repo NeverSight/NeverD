@@ -256,9 +256,7 @@ OptimizedModule optimizeIR(const char *IR, const OptimizationConfig &Config) {
   Out.Ok = Out.Result.Stop != OptimizationStopReason::InputInvalid &&
            Out.Result.Stop != OptimizationStopReason::VerificationFailed;
   if (!Out.Ok)
-    Out.Error = Out.Result.Stop == OptimizationStopReason::InputInvalid
-                    ? "input module failed optimization validation"
-                    : "optimized module failed verification";
+    Out.Error = optimizationStopMessage(Out.Result);
 
   llvm::raw_string_ostream Stream(Out.OutputIR);
   Module->print(Stream, nullptr);

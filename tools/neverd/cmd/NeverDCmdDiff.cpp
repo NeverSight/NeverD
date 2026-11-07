@@ -262,7 +262,8 @@ int runStructuralDiff() {
         !DiffFlowRegion.empty() || DiffFlowRegionAnchor.getNumOccurrences();
     const bool DataFlowView = DiffList == "dataflow" ||
                               !DiffFlowFunction.empty() ||
-                              DiffSliceNode.getNumOccurrences();
+                              DiffSliceNode.getNumOccurrences() ||
+                              DiffArgumentAccessCall.getNumOccurrences();
     const bool ImpactView = !DiffImpactFunction.empty();
     const bool ChangesView = !DiffChangesFunction.empty();
     const bool ValidationView = !DiffValidationFunction.empty();
@@ -344,11 +345,16 @@ int runStructuralDiff() {
         (DiffEffectRecords.getNumOccurrences() ||
          DiffEffectWork.getNumOccurrences()))
       throw std::runtime_error("effect options require --impact-kind effects");
-    if (DiffRegions || NativeRegionsView) {
+    if (DiffRegions || DiffRegionCalls || NativeRegionsView) {
       if (auto *Regions = Options->getObject("regions"))
         (*Regions)["enabled"] = true;
       else
         (*Options)["regions"] = true;
+    }
+    if (DiffRegionCalls) {
+      if (!Options->getObject("regions"))
+        (*Options)["regions"] = llvm::json::Object{{"enabled", true}};
+      (*Options->getObject("regions"))["calls"] = true;
     }
     if (DiffFlowRegions || DiffFlowFragments || FlowRegionsView) {
       if (auto *Regions = Options->getObject("flow_regions"))
@@ -374,6 +380,12 @@ int runStructuralDiff() {
       (*Options->getObject("dataflow"))["profile"] =
           DiffDataFlowProfile.getValue();
     }
+    if (DiffArgumentAccessCall.getNumOccurrences() &&
+        (DiffFlowFunction.empty() || DiffSliceNode.getNumOccurrences() ||
+         DiffFlowKind.getNumOccurrences()))
+      throw std::runtime_error(
+          "--argument-access-call requires --flow-function and cannot combine "
+          "with --slice-node or --flow-kind");
     if (DiffSliceNode.getNumOccurrences() && DiffFlowFunction.empty())
       throw std::runtime_error("--slice-node requires --flow-function");
     if (DiffFlowRegionCoordinates.getNumOccurrences() &&
@@ -625,10 +637,18 @@ int runStructuralDiff() {
           Partial |=
               parse(Output).getAsObject()->getString("state") != "complete";
       } else {
-        Query["kind"] =
-            DiffFlowFunction.empty() ? "functions" : DiffFlowKind.getValue();
+        Query["kind"] = DiffArgumentAccessCall.getNumOccurrences() ? "accesses"
+                        : DiffFlowFunction.empty() ? "functions"
+                                                   : DiffFlowKind.getValue();
+        if (DiffArgumentAccessCall.getNumOccurrences()) {
+          Query["call"] = unsigned(DiffArgumentAccessCall);
+          Query["timeout_ms"] = uint64_t(DiffTimeout);
+        }
         Output = take(neverd_comparison_dataflow_json(
             C, render(std::move(Query)).c_str()));
+        if (DiffArgumentAccessCall.getNumOccurrences() && !Output.empty())
+          Partial |=
+              parse(Output).getAsObject()->getString("state") != "complete";
       }
     } else if (DiffList == "regions" || DiffList == "region-anchors" ||
                !DiffRegion.empty() || DiffRegionAnchor.getNumOccurrences()) {

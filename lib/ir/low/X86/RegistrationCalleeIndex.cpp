@@ -5,9 +5,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationStackOwner.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIR.h"
 
 namespace neverd {
@@ -15,15 +17,39 @@ namespace {
 using registration_abi::chargeCalleeWork;
 } // namespace
 
+RegistrationCallCalleeIndex::RegistrationCallCalleeIndex(
+    const BinaryImage &Image, size_t *CumulativeWork,
+    const detail::AbsoluteRelocationRootIndex *Roots)
+    : Image(Image), Work(CumulativeWork ? *CumulativeWork : LocalWork) {
+  // Own the snapshot so a subsidiary proof cannot outlive its caller's CFG.
+  // Copies share the image-only runtime-role computation, never callee facts.
+  if (Roots && Roots->ownsImage(Image))
+    RelocationRoots =
+        std::make_shared<const detail::AbsoluteRelocationRootIndex>(*Roots);
+}
+
+const detail::AbsoluteRelocationRootIndex &
+RegistrationCallCalleeIndex::absoluteRelocationRoots() {
+  if (!RelocationRoots)
+    RelocationRoots =
+        std::make_shared<const detail::AbsoluteRelocationRootIndex>(Image);
+  return *RelocationRoots;
+}
+
 std::optional<std::vector<RegistrationCalleeFrameContract>>
 RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
+  const registration_abi::StackProofOwnerScope OwnerScope(*this, Work);
+  const auto FrameCalls =
+      registration_abi::checkedRegistrationFrameCalls(Image, Function, Work);
+  if (!FrameCalls)
+    return std::nullopt;
   std::set<va_t> Targets;
   for (const auto &Block : Function.Blocks)
     for (const auto &Op : Block.Ops) {
       if (!chargeCalleeWork(Work, 1))
         return std::nullopt;
-      if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
-          Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4)
+      if (!FrameCalls->count(&Op) && Op.Opcode == NdOp::CALL &&
+          Op.NumInputs == 1 && Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4)
         Targets.insert(Op.Inputs[0].Offset);
       if (Targets.size() >
           ::neverd::limits::ir::
@@ -38,6 +64,9 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
           ::neverd::limits::ir::
               kRegistrationCalleeIndexRegistrationCallCalleeIndexContractsCacheSizeLimit)
         return std::nullopt;
+      // A nested CFG must see an unavailable in-progress answer, never start
+      // a fresh copy of this same invocation with another proof budget.
+      Existing = Cache.emplace(Target, std::nullopt).first;
       std::optional<RegistrationCalleeFrameContract> Contract;
       if (auto Import =
               getCheckedX86RegistrationThrowImportABI(Image, Target, &Work)) {
@@ -46,6 +75,7 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
             RegistrationCalleeFrameContract::Kind::RuntimeThrow;
         Contract->Target = Target;
         Contract->DoesNotReturn = true;
+        Contract->RequiredImports.push_back(Import->IATVA);
         Contract->CodeRanges.push_back({Target, Target + 6});
       } else if (auto Initializer =
                      getCheckedX86RegistrationInitializerCalleeABI(
@@ -83,6 +113,7 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
                 : RegistrationCalleeFrameContract::Kind::PrivateThrow;
         Contract->Target = Target;
         Contract->DoesNotReturn = true;
+        Contract->RequiredImports.push_back(Throw->ImportIATVA);
         if (!Throw->IsRethrow) {
           Contract->ThrownTypeVA = Throw->ThrowInfo.TypeDescriptorVA;
           Contract->ThrownObjectSize = Throw->ThrowInfo.ObjectSize;
@@ -91,10 +122,11 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
         Contract->ImageWrites = std::move(Throw->ImageWrites);
         Contract->CallerPCWrites = std::move(Throw->CallerPCWrites);
         Contract->CodeRanges = std::move(Throw->CodeRanges);
-      }
+      } else
+        Contract = cxxCallee(Target);
       if (Work == limits::kMaxRegistrationEHStateWork)
         return std::nullopt;
-      Existing = Cache.emplace(Target, std::move(Contract)).first;
+      Existing->second = std::move(Contract);
     }
     if (Existing->second) {
       const auto &Contract = *Existing->second;
@@ -103,7 +135,8 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
               Contract.ECXReads.size() + Contract.ECXWrites.size() +
                   Contract.ECXInitialized.size() + Contract.ImageReads.size() +
                   Contract.ImageWrites.size() + Contract.CallerPCWrites.size() +
-                  Contract.CodeRanges.size() + 1))
+                  Contract.CodeRanges.size() + Contract.RequiredImports.size() +
+                  Contract.RuntimeThrowInfos.size() + 1))
         return std::nullopt;
       Result.push_back(Contract);
     }
@@ -137,6 +170,7 @@ RegistrationCallCalleeIndex::contracts(const LowFunc &Function) {
 
 std::optional<std::vector<RegistrationCleanupFrameContract>>
 RegistrationCallCalleeIndex::cleanupContracts(const LowFunc &Function) {
+  const registration_abi::StackProofOwnerScope OwnerScope(*this, Work);
   std::vector<RegistrationCleanupFrameContract> Result;
   if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->Cxx)
     return Result;

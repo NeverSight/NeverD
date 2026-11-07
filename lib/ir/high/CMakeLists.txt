@@ -6,6 +6,8 @@ add_neverd_component_library(NeverDIRHigh
   HighSourceFlow.cpp
   HighVariableEdits.cpp
   HighSourceInputs.cpp
+  lower/AnalysisCall.cpp
+  lower/AnalysisDispatch.cpp
   lower/CFStructurer.cpp
   lower/CallArgCollection.cpp
   lower/X86/CallArgCollectionX86.cpp
@@ -17,6 +19,7 @@ add_neverd_component_library(NeverDIRHigh
   lower/MedOpToExpr.cpp
   lower/MedToHighDynamicStack.cpp
   lower/MedToHigh.cpp
+  lower/MedMutableToHigh.cpp
   lower/NdOpCallIndLowering.cpp
   lower/NdOpLowering.cpp
   lower/NdOpReturnLowering.cpp
@@ -47,6 +50,9 @@ add_neverd_component_library(NeverDIRHigh
   structure/HighCFSimplifyIfElse.cpp
   structure/HighCommonContinuations.cpp
   structure/CxxObjectActions.cpp
+  structure/SEHFinallyBodies.cpp
+  structure/ARM/ARMSEHFinallyBodies.cpp
+  structure/X86/X64SEHFinallyBodies.cpp
   structure/HighEHStructurer.cpp
   structure/ItaniumHandlers.cpp
   structure/X86/X86RegistrationFilter.cpp
@@ -57,6 +63,7 @@ add_neverd_component_library(NeverDIRHigh
   structure/HighLoopRecovery.cpp
 
   LINK_COMPONENTS
+  IRMed
   Loader
   Symbolic
 )

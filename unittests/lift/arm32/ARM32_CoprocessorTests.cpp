@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCompiler.h"
 #include "CSourceText.h"
 #include "NeverDLiftFixture.h"
 
@@ -91,6 +92,8 @@ TEST_F(ARM32_Coprocessor, BothRoutesCallTheACLEIntrinsics) {
       const auto Syntax =
           exec("clang", {"--target=armv7a-linux-gnueabihf", "-mcpu=cortex-a15",
                          "-ffreestanding", "-fsyntax-only", File.string()});
+      if (Syntax.exitCode != 0 && neverd::test::lacksCrossHeaders(Syntax.err))
+        GTEST_SKIP() << "no headers for ARM Linux: " << Syntax.err;
       EXPECT_EQ(Syntax.exitCode, 0) << Syntax.err << "\n" << C;
     }
   }

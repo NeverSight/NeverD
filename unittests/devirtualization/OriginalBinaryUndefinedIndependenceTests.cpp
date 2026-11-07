@@ -579,8 +579,10 @@ TEST(OriginalBinaryUndefinedIndependence,
 
 TEST(OriginalBinaryUndefinedIndependence,
      UnreachableUnauditedBoundariesRequireOptInAndRetainExactReceipts) {
-  for (const auto &Bytes : std::vector<std::vector<uint8_t>>{
-           {0xd1, 0xd0}, {0xf0, 0x0f, 0xc1, 0x08}, {0xf3, 0xa4}}) {
+  // The default-address REP form is audited; the address-size override is not.
+  for (const auto &Bytes :
+       std::vector<std::vector<uint8_t>>{{0xd1, 0xd0}, {0x67, 0xf3, 0xa4}}) {
+    SCOPED_TRACE(::testing::PrintToString(Bytes));
     // CMP EAX,EAX; JNE boundary; MOV EAX,7; RET; boundary: body; RET.
     Program P({0x39, 0xc0, 0x75, 6, 0xb8, 7, 0, 0, 0, 0xc3});
     P.Image.Segments.front().Data.insert(P.Image.Segments.front().Data.end(),
@@ -624,6 +626,69 @@ TEST(OriginalBinaryUndefinedIndependence,
     Limits.MaxSolverQueries = Good.Proof.SolverQueries - 1;
     expectRefusal(P, Status::BudgetExceeded, Limits);
     // Making the branch feasible cannot turn the boundary into an empty body.
+    P.Image.Segments.front().Data[2] = 0x74;
+    expectRefusal(P, Status::Unsupported);
+  }
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     UnreachableAuditedRepAndReadPrefetchRetainCompleteCoverage) {
+  for (const auto &Bytes :
+       std::vector<std::vector<uint8_t>>{{0xf3, 0xa4},
+                                         {0x0f, 0x18, 0x00},
+                                         {0x0f, 0x18, 0x08},
+                                         {0x0f, 0x18, 0x10},
+                                         {0x0f, 0x18, 0x18}}) {
+    SCOPED_TRACE(::testing::PrintToString(Bytes));
+    for (bool RetainUnaudited : {false, true}) {
+      SCOPED_TRACE(RetainUnaudited);
+      // CMP EAX,EAX; JNE body; MOV EAX,7; RET; body: instruction; RET.
+      Program P({0x39, 0xc0, 0x75, 6, 0xb8, 7, 0, 0, 0, 0xc3});
+      auto &Code = P.Image.Segments.front();
+      Code.Data.insert(Code.Data.end(), Bytes.begin(), Bytes.end());
+      P.append({0xc3});
+      P.Contract.RetainUnauditedNativeBoundaries = RetainUnaudited;
+      const auto Good = P.check();
+      ASSERT_TRUE(Good.proved()) << Good.Proof.Diagnostic;
+      EXPECT_TRUE(Good.Certificate->LowIR.NativeAuditBoundaries.empty());
+      const auto &Instructions = Good.Certificate->Instructions;
+      const auto Audited = std::find_if(
+          Instructions.begin(), Instructions.end(),
+          [](const auto &I) { return I.Origin.Address == Entry + 10; });
+      ASSERT_NE(Audited, Instructions.end());
+      EXPECT_EQ(Audited->NativeBytes, Bytes);
+      EXPECT_EQ(Audited->UndefinedEffects.Coverage,
+                LowUndefinedCoverage::Complete);
+      EXPECT_EQ(Audited->UndefinedEffects.OperationDigest,
+                lowUndefinedOperationDigest(Audited->Ops));
+    }
+  }
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     UnreachableAuditedAtomicRetainsCompleteCoverage) {
+  for (bool RetainUnaudited : {false, true}) {
+    SCOPED_TRACE(RetainUnaudited);
+    // CMP EAX,EAX; JNE atomic; MOV EAX,7; RET;
+    // atomic: LOCK XADD [RAX],ECX; RET.
+    Program P({0x39, 0xc0, 0x75, 6, 0xb8, 7, 0, 0, 0, 0xc3, 0xf0, 0x0f, 0xc1,
+               0x08, 0xc3});
+    P.Contract.RetainUnauditedNativeBoundaries = RetainUnaudited;
+    const auto Good = P.check();
+    ASSERT_TRUE(Good.proved()) << Good.Proof.Diagnostic;
+    EXPECT_TRUE(Good.Certificate->LowIR.NativeAuditBoundaries.empty());
+    const auto &Instructions = Good.Certificate->Instructions;
+    const auto Atomic = std::find_if(
+        Instructions.begin(), Instructions.end(),
+        [](const auto &I) { return I.Origin.Address == Entry + 10; });
+    ASSERT_NE(Atomic, Instructions.end());
+    EXPECT_EQ(Atomic->NativeBytes,
+              (std::vector<uint8_t>{0xf0, 0x0f, 0xc1, 0x08}));
+    EXPECT_EQ(Atomic->UndefinedEffects.Coverage,
+              LowUndefinedCoverage::Complete);
+    EXPECT_EQ(Atomic->UndefinedEffects.OperationDigest,
+              lowUndefinedOperationDigest(Atomic->Ops));
+    // A complete undefined-output audit supplies no memory contract for RAX.
     P.Image.Segments.front().Data[2] = 0x74;
     expectRefusal(P, Status::Unsupported);
   }
@@ -1139,7 +1204,7 @@ TEST(OriginalBinaryUndefinedIndependence,
 }
 
 TEST(OriginalBinaryUndefinedIndependence,
-     UnreachableTrapRetainsBytesAndMissingEffects) {
+     UnreachableTrapRetainsBytesAndExactEffectAudit) {
   // xor eax,eax; jne trap; ret; trap. No bytes follow the trap, so inventing
   // a resumption edge would fail even though the original branch is untaken.
   const std::initializer_list<uint8_t> Encodings[] = {
@@ -1162,7 +1227,10 @@ TEST(OriginalBinaryUndefinedIndependence,
         hasLowInstructionControlFlag(It->Origin.ControlFlags,
                                      LowInstructionControlFlag::Resumable),
         *Bytes.begin() != 0x0f);
-    EXPECT_EQ(It->UndefinedEffects.Coverage, LowUndefinedCoverage::Missing);
+    EXPECT_EQ(It->UndefinedEffects.Coverage,
+              *Bytes.begin() == 0xcc || *Bytes.begin() == 0xcd
+                  ? LowUndefinedCoverage::Complete
+                  : LowUndefinedCoverage::Missing);
     EXPECT_EQ(It->UndefinedEffects.OperationDigest,
               lowUndefinedOperationDigest(It->Ops));
   }
@@ -1183,6 +1251,82 @@ TEST(OriginalBinaryUndefinedIndependence,
       std::any_of(R.Independence.Certificate->Instructions.begin(),
                   R.Independence.Certificate->Instructions.end(),
                   [](const auto &I) { return I.Origin.Address == Entry + 5; }));
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     SoftwareInterruptCannotAcquireAnImplicitHandlerContract) {
+  for (uint8_t Vector : {0, 2, 0x29, 0x2c, 0x2d, 0x80, 0xff}) {
+    SCOPED_TRACE(unsigned(Vector));
+    // Overwriting the ordinary source service result cannot hide the actual
+    // interrupt's memory, stack, segment and control effects.
+    Program P({0xcd, Vector, 0xb8, 7, 0, 0, 0, 0xc3});
+    const auto Checked = P.check();
+    EXPECT_FALSE(Checked.proved()) << Checked.Proof.Diagnostic;
+    EXPECT_FALSE(Checked.Certificate.has_value());
+    const auto Ordinary =
+        specializeBinaryInterpreter(P.Image, Entry, P.Options);
+    EXPECT_FALSE(Ordinary.complete()) << Ordinary.Diagnostic;
+  }
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     AuditedFarReturnCannotAcquireAnOrdinaryReturnContract) {
+  for (const auto Bytes : {std::initializer_list<uint8_t>{0x48, 0xcb},
+                           {0x48, 0xca, 0, 0},
+                           {0x48, 0xca, 0xff, 0xff}}) {
+    for (bool Sibling : {false, true}) {
+      SCOPED_TRACE(Bytes.size());
+      SCOPED_TRACE(Sibling);
+      Program P({});
+      if (Sibling)
+        P.append(
+            {0x72, 1, 0xc3}); // One feasible ordinary return is insufficient.
+      P.append(Bytes);
+      for (bool Flags : {false, true}) {
+        if (Flags)
+          P.flagsProfile(InterpreterMachineStateProfile::KernelX64NoFaultV1);
+        const auto Checked = P.check();
+        EXPECT_FALSE(Checked.proved()) << Checked.Proof.Diagnostic;
+        EXPECT_FALSE(Checked.Certificate.has_value());
+        const auto Ordinary =
+            specializeBinaryInterpreter(P.Image, Entry, P.Options);
+        EXPECT_FALSE(Ordinary.complete()) << Ordinary.Diagnostic;
+        EXPECT_TRUE(Ordinary.Residual.Blocks.empty());
+      }
+    }
+  }
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     FarPointerContinuationCannotAcquireAnOrdinaryStateCertificate) {
+  for (const auto Bytes : {std::initializer_list<uint8_t>{0x66, 0x0f, 0xb4, 3},
+                           {0x0f, 0xb4, 3},
+                           {0x48, 0x0f, 0xb4, 3},
+                           {0x66, 0x0f, 0xb5, 3},
+                           {0x0f, 0xb5, 3},
+                           {0x48, 0x0f, 0xb5, 3},
+                           {0x66, 0x0f, 0xb2, 3},
+                           {0x0f, 0xb2, 3},
+                           {0x48, 0x0f, 0xb2, 3}})
+    for (bool Sibling : {false, true}) {
+      Program P({});
+      if (Sibling)
+        P.append({0x72, 1, 0xc3});
+      P.append(Bytes);
+      // Killing the loaded GPR cannot remove the segment/descriptor effects.
+      P.append({0xb8, 7, 0, 0, 0, 0xc3});
+      for (bool Flags : {false, true}) {
+        if (Flags)
+          P.flagsProfile(InterpreterMachineStateProfile::KernelX64NoFaultV1);
+        const auto Checked = P.check();
+        EXPECT_FALSE(Checked.proved()) << Checked.Proof.Diagnostic;
+        EXPECT_FALSE(Checked.Certificate.has_value());
+        const auto Ordinary =
+            specializeBinaryInterpreter(P.Image, Entry, P.Options);
+        EXPECT_FALSE(Ordinary.complete()) << Ordinary.Diagnostic;
+        EXPECT_TRUE(Ordinary.Residual.Blocks.empty());
+      }
+    }
 }
 
 TEST(OriginalBinaryUndefinedIndependence,
@@ -2383,6 +2527,48 @@ TEST(OriginalBinaryUndefinedIndependence,
 }
 
 #include "KernelInterruptFlagTests.inc"
+
+TEST(OriginalBinaryUndefinedIndependence,
+     SysretCompatibilityKeepsOrdinarySourceAndCertificatesRefused) {
+  for (bool Branch : {false, true})
+    for (bool Kernel : {false, true})
+      for (bool Retain : {false, true}) {
+        Program P({});
+        if (Branch)
+          P.append(
+              {0x85, 0xc9, 0x74, 1, 0xc3}); // test ecx,ecx; jz sysret; ret.
+        P.append({0x0f, 0x07});
+        P.flagsProfile(Kernel
+                           ? InterpreterMachineStateProfile::KernelX64NoFaultV1
+                           : InterpreterMachineStateProfile::UserX64NoFaultV1);
+        P.Contract.RetainUnauditedNativeBoundaries = Retain;
+        expectRefusal(P, Status::Unsupported);
+        P.Contract.NativePreservedState.emplace();
+        expectRefusal(P, Status::Unsupported);
+      }
+}
+
+TEST(OriginalBinaryUndefinedIndependence,
+     DescriptorSelectedReturnModeCannotAcquireAnEmptyEffectCertificate) {
+  for (unsigned Kind = 0; Kind != 3; ++Kind)
+    for (bool Branch : {false, true})
+      for (bool Kernel : {false, true})
+        for (bool Retain : {false, true}) {
+          Program P({});
+          if (Branch)
+            P.append({0x85, 0xc9, 0x74, 1, 0xc3});
+          P.append({0x48, uint8_t(Kind == 0 ? 0xcf : Kind == 1 ? 0xcb : 0xca)});
+          if (Kind == 2)
+            P.append({7, 0});
+          P.flagsProfile(
+              Kernel ? InterpreterMachineStateProfile::KernelX64NoFaultV1
+                     : InterpreterMachineStateProfile::UserX64NoFaultV1);
+          P.Contract.RetainUnauditedNativeBoundaries = Retain;
+          expectRefusal(P, Status::Unsupported);
+          P.Contract.NativePreservedState.emplace();
+          expectRefusal(P, Status::Unsupported);
+        }
+}
 
 TEST(OriginalBinaryUndefinedIndependence,
      FrameExclusionsRequireMatchingProofDomain) {

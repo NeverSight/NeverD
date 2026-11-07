@@ -33,6 +33,9 @@
 #include <vector>
 
 namespace neverd {
+namespace libc {
+class StackProbeIndex;
+} // namespace libc
 class LowSEHRuntimeMemory;
 
 struct BinaryImage;
@@ -219,6 +222,12 @@ public:
   void setCodePointerTargets(const std::vector<va_t> *Targets) {
     SharedCodePointerTargets = Targets;
   }
+  /// The image's stack-probe helpers (libc::StackProbeIndex), read once for
+  /// every converter of a run.  Without them a converter asks the image
+  /// about each call (libc::stackProbeEffect).
+  void setStackProbeIndex(const libc::StackProbeIndex *Index) {
+    StackProbes = Index;
+  }
 
   /// Provide the set of direct-call targets proven to return a 64-bit integer
   /// in the register pair (i386 EDX:EAX, ARM32 R1:R0).  When set, a direct CALL
@@ -244,13 +253,15 @@ public:
   /// Registration frame facts that an earlier conversion of the same LowFunc
   /// against the same image proved
   /// (MedFunc::RegistrationCallerCleanupABIComplete and
-  /// RegistrationCxxEntryPopBytes).  They depend on nothing else, so a
+  /// RegistrationCxxEntryPopBytes / RegistrationSEHEntryPopBytes).
+  /// They depend on nothing else, so a
   /// re-conversion of Entry reuses them instead of proving them again.
   /// Optional; unset = prove them.
   struct RegistrationFrameFacts {
     va_t Entry = 0;
     bool CallerCleanupABIComplete = false;
     std::optional<uint16_t> CxxEntryPopBytes;
+    std::optional<uint16_t> SEHEntryPopBytes;
   };
   void setRegistrationFrameFacts(const RegistrationFrameFacts &Facts) {
     KnownRegistrationFrameFacts = Facts;
@@ -281,6 +292,10 @@ private:
   /// Keep the architectural data registers of checked ordinary SEH callbacks
   /// on explicit state edges before SSA applies the ordinary calling ABI.
   void modelSEHFinallyRegisters(MedFunc &Func);
+  /// Replace each certified same-frame Windows local unwind by the
+  /// termination-handler calls it makes and a jump to its target, before SSA
+  /// (MedFunc::SEHLocalUnwindExits).
+  void modelSEHLocalUnwindExits(MedFunc &Func, const LowFunc &Low);
 
   // --- Architecture-specific sub-register fixups (LLVM target-dispatch) ---
   // Each helper guards on TargetArch internally and is a no-op on other
@@ -315,6 +330,14 @@ private:
   RelativeLiteralOutputs armRelativeLiteralOutputs(const LowFunc &Low,
                                                    Arch TheArch,
                                                    BinaryFormat Fmt) const;
+  /// x86-64: the zero extensions that complete a relocated 32-bit address,
+  /// keyed by instruction and op sequence of the extension.  `mov r32, imm32`
+  /// sets the low register to the field and zero-extends it into the full
+  /// register; where the field's occurrence names a target that is its zero
+  /// extension (R_X86_64_32), the full register holds that whole address
+  /// (LowToMedX86.cpp).  Empty for other targets.
+  std::map<std::pair<va_t, int>, const RelocatedInstructionAddressOccurrence *>
+  x86ZeroExtendedAddressOutputs(const LowFunc &Low, Arch TheArch) const;
   /// ARM/AArch64: reconstruct a full-width NEON Q read from its two more-recent
   /// 8-byte D halves within a block (LowToMedARM.cpp, Phase B3).
   void mergeWideVectorReadsARM(MedFunc &Func);
@@ -394,6 +417,7 @@ private:
   void runDce(MedFunc &Func);
   void propagate(MedFunc &Func);
   void resolveSwitchSelectorPlans(MedFunc &Func);
+  void projectOriginalAddressSelectors(MedFunc &Func);
   void resolveScalarAddressModels(
       MedFunc &Func,
       const std::vector<RelocatedInstructionScalarModelOccurrence> &Models);
@@ -478,6 +502,8 @@ private:
   /// Null/empty until the pipeline (which has the loaded import tables)
   /// provides it.  Mach-O only.
   const std::set<va_t> *StackProbeSlots = nullptr;
+  /// The image's stack-probe helpers (setStackProbeIndex), or null.
+  const libc::StackProbeIndex *StackProbes = nullptr;
 
   /// The addresses that name a runtime routine one intrinsic models (its
   /// imports' stubs and slots, and its symbols), with that intrinsic: those

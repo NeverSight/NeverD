@@ -7,13 +7,17 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -109,6 +113,292 @@ struct ResolverGraphCacheTestAccess {
     Q.UseSeq = 0;
     Q.Alternatives = {{First, R.Addr, FirstSeq, true}};
     Q.AllowZeroExtension = true;
+    return Q;
+  }
+
+  enum class ReloadGuardCase {
+    Unchanged,
+    DirectEquality,
+    Register,
+    TwoGuards,
+    OtherAddress,
+    Store,
+    Call,
+    Atomic,
+    OrderedRead,
+    OrderedReload,
+    Width,
+    IndependentRoot,
+    Bypass,
+    PointerChange,
+    Intrinsic,
+    Opposite,
+    Signed
+  };
+
+  static Query seedGuardedReload(CFGBuilder &B, const BinaryImage &Image,
+                                 ReloadGuardCase Kind) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    B.BlockStarts = {0x100, 0x110, 0x120, 0x200};
+    if (Kind == ReloadGuardCase::IndependentRoot)
+      B.PersistentCFGRoots.insert(0x120);
+    const auto Width = static_cast<uint16_t>(Image.getPointerSize());
+    const NdVar Address = NdVar::reg(8, Width);
+    const NdVar First = NdVar::tmp(0x8000, 4);
+    const NdVar Difference = NdVar::tmp(0x8010, 4);
+    const NdVar Condition = NdVar::tmp(0x8020, 1);
+    const NdVar Inverted = NdVar::tmp(0x8030, 1);
+    const NdVar Candidate =
+        NdVar::reg(0, Kind == ReloadGuardCase::Width ? 2 : 4);
+    auto Emit = [&](va_t Address, NdOp Code, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) -> LowOp & {
+      auto &R = B.Insns[Address];
+      R.Addr = Address;
+      R.Size = 0x10;
+      LowOp Op;
+      Op.Addr = Address;
+      Op.Seq = static_cast<int>(R.Ops.size());
+      Op.Opcode = Code;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.addInput(Input);
+      R.Ops.push_back(Op);
+      return R.Ops.back();
+    };
+    auto Branch = [&](va_t Address, va_t Target,
+                      std::optional<NdVar> Condition = std::nullopt) {
+      if (Condition)
+        Emit(Address, NdOp::COND_BR, {},
+             {NdVar::cst(Target, Width), *Condition});
+      else
+        Emit(Address, NdOp::BRANCH, {}, {NdVar::cst(Target, Width)});
+      auto &R = B.Insns.at(Address);
+      R.IsBranch = true;
+      R.IsCond = Condition.has_value();
+      R.BranchTarget = Target;
+    };
+    auto &FirstLoad = Emit(0x100, NdOp::LOAD, First, {Address});
+    if (Kind == ReloadGuardCase::OrderedRead)
+      FirstLoad.MemoryOrdering = NdMemoryOrdering::Acquire;
+    if (Kind == ReloadGuardCase::TwoGuards || Kind == ReloadGuardCase::Signed) {
+      Emit(0x100,
+           Kind == ReloadGuardCase::Signed ? NdOp::INT_SLESS : NdOp::INT_LESS,
+           Condition, {First, NdVar::scalar(7, 4)});
+      Emit(0x100, NdOp::BOOL_NOT, Inverted, {Condition});
+      Branch(0x100, 0x200, Inverted);
+    } else {
+      if (Kind != ReloadGuardCase::DirectEquality)
+        Emit(0x100, NdOp::INT_SUB, Difference, {First, NdVar::scalar(6, 4)});
+      Emit(0x100,
+           Kind == ReloadGuardCase::Opposite ? NdOp::INT_EQUAL
+                                             : NdOp::INT_NOTEQUAL,
+           Condition,
+           {Kind == ReloadGuardCase::DirectEquality ? First : Difference,
+            NdVar::scalar(Kind == ReloadGuardCase::DirectEquality ? 6 : 0, 4)});
+      Branch(0x100, 0x200, Condition);
+    }
+    if (Kind == ReloadGuardCase::Store)
+      Emit(0x110, NdOp::STORE, {}, {Address, NdVar::reg(16, 4)});
+    if (Kind == ReloadGuardCase::Call)
+      Emit(0x110, NdOp::CALL, {}, {NdVar::address(0x400, Width)});
+    if (Kind == ReloadGuardCase::Atomic)
+      Emit(0x110, NdOp::ATOMIC_XCHG, NdVar::tmp(0x8040, 4),
+           {Address, NdVar::reg(16, 4)});
+    if (Kind == ReloadGuardCase::PointerChange)
+      Emit(0x110, NdOp::COPY, Address, {NdVar::reg(16, Width)});
+    if (Kind == ReloadGuardCase::Intrinsic)
+      Emit(0x110, NdOp::INTRINSIC, {}, {Address});
+    if (Kind == ReloadGuardCase::TwoGuards) {
+      const NdVar Lower = NdVar::tmp(0x8050, 1);
+      Emit(0x110, NdOp::INT_LESS, Lower, {First, NdVar::scalar(3, 4)});
+      Branch(0x110, 0x200, Lower);
+    } else {
+      Branch(0x110, 0x120);
+    }
+    NdVar ReloadAddress = Address;
+    if (Kind == ReloadGuardCase::OtherAddress) {
+      ReloadAddress = NdVar::tmp(0x8060, Width);
+      Emit(0x120, NdOp::INT_ADD, ReloadAddress,
+           {Address, NdVar::scalar(4, Width)});
+    }
+    auto &Reload = Emit(
+        0x120, Kind == ReloadGuardCase::Register ? NdOp::COPY : NdOp::LOAD,
+        Candidate, {Kind == ReloadGuardCase::Register ? First : ReloadAddress});
+    if (Kind == ReloadGuardCase::OrderedReload)
+      Reload.MemoryOrdering = NdMemoryOrdering::Acquire;
+    Emit(0x130, NdOp::RETURN, {}, {Candidate});
+    B.Insns.at(0x130).IsRet = true;
+    if (Kind == ReloadGuardCase::Bypass)
+      Branch(0x200, 0x120);
+    else {
+      Emit(0x200, NdOp::RETURN, {}, {NdVar::scalar(99, 4)});
+      B.Insns.at(0x200).IsRet = true;
+    }
+    Query Q;
+    Q.Candidate = Candidate;
+    Q.UseAddr = 0x130;
+    Q.UseSeq = 0;
+    Q.Relation = Relation::UnsignedFeasibleSet;
+    Q.UnsignedUpperBound = 8;
+    return Q;
+  }
+
+  static Query seedGuardedFrameReload(CFGBuilder &B, const BinaryImage &Image,
+                                      ReloadGuardCase Kind) {
+    const auto Q = seedGuardedReload(B, Image, Kind);
+    B.CurrentFuncEntry = 0xf0;
+    B.PersistentCFGRoots.erase(0x100);
+    B.PersistentCFGRoots.insert(0xf0);
+    B.BlockStarts.insert(0xf0);
+    auto &R = B.Insns[0xf0];
+    R.Addr = 0xf0;
+    R.Size = 0x10;
+    const auto Width = static_cast<uint16_t>(Image.getPointerSize());
+    const auto Address = NdVar::reg(8, Width);
+    LowOp Frame;
+    Frame.Addr = R.Addr;
+    Frame.Opcode = NdOp::INT_SUB;
+    Frame.Output = Address;
+    Frame.addInput(
+        NdVar::reg(getTargetRegInfo(Image.Arch).StackPointer, Width));
+    Frame.addInput(NdVar::scalar(32, Width));
+    R.Ops.push_back(Frame);
+    LowOp Store;
+    Store.Addr = R.Addr;
+    Store.Seq = 1;
+    Store.Opcode = NdOp::STORE;
+    Store.addInput(Address);
+    Store.addInput(NdVar::reg(24, 4));
+    R.Ops.push_back(Store);
+    return Q;
+  }
+
+  static void changeGuardedFrameRead(CFGBuilder &B, bool Guard, bool Atomic) {
+    auto &Op = B.Insns.at(Guard ? 0x100 : 0x120).Ops.front();
+    if (Atomic)
+      Op.MemoryOrdering = NdMemoryOrdering::Acquire;
+    else
+      Op.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  }
+
+  static void
+  addDisjointFrameAccess(CFGBuilder &B, const BinaryImage &Image,
+                         NdMemoryAddressSpace Space, NdOp Opcode = NdOp::STORE,
+                         NdMemoryOrdering Ordering = NdMemoryOrdering::None) {
+    auto &R = B.Insns.at(0x110);
+    auto Branch = R.Ops.back();
+    const auto Width = static_cast<uint16_t>(Image.getPointerSize());
+    LowOp Address;
+    Address.Addr = R.Addr;
+    Address.Opcode = NdOp::INT_SUB;
+    Address.Output = NdVar::tmp(0x9200, Width);
+    Address.addInput(NdVar::reg(8, Width));
+    Address.addInput(NdVar::scalar(8, Width));
+    LowOp Access;
+    Access.Addr = R.Addr;
+    Access.Seq = 1;
+    Access.Opcode = Opcode;
+    Access.MemoryAddressSpace = Space;
+    Access.MemoryOrdering = Ordering;
+    Access.addInput(Address.Output);
+    if (Opcode == NdOp::LOAD)
+      Access.Output = NdVar::tmp(0x9208, 4);
+    else
+      Access.addInput(NdVar::reg(16, 4));
+    Branch.Seq = 2;
+    R.Ops = {Address, Access, Branch};
+  }
+
+  static Query seedObservedFrameReload(CFGBuilder &B, const BinaryImage &Image,
+                                       ReloadGuardCase Kind,
+                                       bool CallBeforeObservation = false) {
+    const auto Q = seedGuardedFrameReload(B, Image, Kind);
+    auto &Entry = B.Insns.at(0xf0);
+    Entry.Ops.pop_back(); // No initializing STORE is available to this proof.
+    if (CallBeforeObservation) {
+      const auto &TRI = getTargetRegInfo(Image.Arch);
+      const auto Width = static_cast<uint16_t>(Image.getPointerSize());
+      auto Address = Entry.Ops.front();
+      const auto Frame = NdVar::reg(TRI.FramePointer, Width);
+      LowOp Save;
+      Save.Opcode = NdOp::COPY;
+      Save.Addr = Entry.Addr;
+      Save.Output = Frame;
+      Save.addInput(NdVar::reg(TRI.StackPointer, Width));
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = Entry.Addr;
+      Call.Seq = 1;
+      Call.addInput(NdVar::address(0x400, Width));
+      Address.Inputs[0] = Frame;
+      Address.Seq = 2;
+      Entry.Ops = {Save, Call, Address};
+    }
+    const auto Original = B.Insns.at(0x110).Ops;
+    addDisjointFrameAccess(B, Image, NdMemoryAddressSpace::Default);
+    auto &Ops = B.Insns.at(0x110).Ops;
+    Ops.pop_back();
+    Ops.insert(Ops.end(), Original.begin(), Original.end());
+    for (size_t I = 0; I < Ops.size(); ++I)
+      Ops[I].Seq = static_cast<int>(I);
+    return Q;
+  }
+
+  static void changeObservation(CFGBuilder &B, unsigned Mutation) {
+    if (Mutation == 0)
+      B.Insns.at(0x100).Ops.front().MemoryAddressSpace =
+          NdMemoryAddressSpace::X86FS;
+    if (Mutation == 1)
+      B.Insns.at(0x120).Ops.front().MemoryAddressSpace =
+          NdMemoryAddressSpace::X86GS;
+    if (Mutation == 2)
+      B.Insns.at(0x100).IsInstructionGuard = true;
+    if (Mutation == 3)
+      B.Insns.at(0x120).IsInstructionGuard = true;
+    if (Mutation == 4)
+      B.Insns.at(0x100).Ops.front().Output = NdVar::scalar(6, 4);
+    if (Mutation == 5) {
+      auto &Store = B.Insns.at(0x110).Ops[1];
+      Store.Inputs[0] = NdVar::reg(8, Store.Inputs[0].Size);
+      Store.Inputs[1].Size = 1;
+    }
+    if (Mutation == 6)
+      B.Insns.at(0x110).Ops[1].MemoryOrdering = NdMemoryOrdering::Release;
+  }
+
+  static Query seedObservedFrameLoop(CFGBuilder &B, const BinaryImage &Image,
+                                     bool WritesOnBackedge) {
+    const auto Q =
+        seedObservedFrameReload(B, Image, ReloadGuardCase::DirectEquality);
+    const auto Width = static_cast<uint16_t>(Image.getPointerSize());
+    auto &Latch = B.Insns.at(0x130);
+    Latch.IsRet = false;
+    Latch.IsBranch = Latch.IsCond = true;
+    Latch.BranchTarget = 0x100;
+    Latch.Ops.clear();
+    if (WritesOnBackedge) {
+      LowOp Store;
+      Store.Addr = Latch.Addr;
+      Store.Opcode = NdOp::STORE;
+      Store.addInput(NdVar::reg(8, Width));
+      Store.addInput(NdVar::reg(24, 4));
+      Latch.Ops.push_back(Store);
+    }
+    LowOp Branch;
+    Branch.Addr = Latch.Addr;
+    Branch.Seq = static_cast<int>(Latch.Ops.size());
+    Branch.Opcode = NdOp::COND_BR;
+    Branch.addInput(NdVar::address(0x100, Width));
+    Branch.addInput(NdVar::reg(16, 1));
+    Latch.Ops.push_back(Branch);
+    auto Exit = B.Insns.at(0x200);
+    Exit.Addr = 0x140;
+    Exit.Ops.front().Addr = Exit.Addr;
+    B.Insns.emplace(Exit.Addr, Exit);
+    B.BlockStarts.insert({0x130, 0x140});
     return Q;
   }
 
@@ -473,6 +763,80 @@ struct ResolverGraphCacheTestAccess {
     return Q;
   }
 
+  static Query seedJoinedLaneGuard(CFGBuilder &B, const BinaryImage &Image,
+                                   unsigned Variant = 0) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    B.BlockStarts = {0x100, 0x101, 0x200, 0x201, 0x300, 0x301, 0x400};
+    if (Variant == 4)
+      B.PersistentCFGRoots.insert(0x400);
+    const uint16_t PointerSize = Image.getPointerSize();
+    const NdVar Index = NdVar::reg(0, 4);
+    const NdVar WideIndex = NdVar::reg(0, PointerSize);
+    auto Emit = [&](va_t Address, NdOp Opcode, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) {
+      auto &R = B.Insns[Address];
+      R.Addr = Address;
+      R.Size = 1;
+      LowOp Op;
+      Op.Addr = Address;
+      Op.Seq = static_cast<int>(R.Ops.size());
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      for (NdVar Input : Inputs)
+        Op.addInput(Input);
+      R.Ops.push_back(Op);
+    };
+    auto Branch = [&](va_t Address, va_t Target,
+                      std::optional<NdVar> Condition = std::nullopt) {
+      if (Condition)
+        Emit(Address, NdOp::COND_BR, {},
+             {NdVar::cst(Target, PointerSize), *Condition});
+      else
+        Emit(Address, NdOp::BRANCH, {}, {NdVar::cst(Target, PointerSize)});
+      auto &R = B.Insns.at(Address);
+      R.IsBranch = true;
+      R.IsCond = Condition.has_value();
+      R.BranchTarget = Target;
+    };
+    if (Variant == 1)
+      Emit(0x100, NdOp::COPY, WideIndex, {NdVar::reg(8, PointerSize)});
+    else {
+      Emit(0x100, NdOp::COPY, Index, {NdVar::reg(8, 4)});
+      if (PointerSize > 4)
+        Emit(0x100, NdOp::INT_ZEXT, WideIndex, {Index});
+    }
+    Emit(0x100, NdOp::INT_EQUAL, NdVar::tmp(0x100, 1),
+         {Index, NdVar::cst(1, 4)});
+    Branch(0x100, 0x200, NdVar::tmp(0x100, 1));
+    Branch(0x101, 0x300);
+    Emit(0x200, NdOp::INT_EQUAL, NdVar::tmp(0x200, 1),
+         {NdVar::reg(16, 4), NdVar::cst(0, 4)});
+    Branch(0x200, 0x400, NdVar::tmp(0x200, 1));
+    Emit(0x201, NdOp::COPY, WideIndex,
+         {NdVar::cst(Variant == 2 ? uint64_t{1} << 32 : 0, PointerSize)});
+    Branch(0x201, 0x300);
+    Emit(0x300, Variant == 5 ? NdOp::INT_SLESSEQUAL : NdOp::INT_LESSEQUAL,
+         NdVar::tmp(0x300, 1), {Index, NdVar::cst(2, 4)});
+    Branch(0x300, 0x400, NdVar::tmp(0x300, 1));
+    Emit(0x301, NdOp::RETURN, {}, {NdVar::cst(99, 4)});
+    B.Insns.at(0x301).IsRet = true;
+    if (Variant == 3)
+      Emit(0x400, NdOp::COPY, NdVar::reg(0, 1), {NdVar::cst(255, 1)});
+    const int UseSeq = static_cast<int>(B.Insns[0x400].Ops.size());
+    Emit(0x400, NdOp::INDIR_BR, {}, {WideIndex});
+    B.Insns.at(0x400).IsBranch = B.Insns.at(0x400).IsIndirect = true;
+    Query Q;
+    Q.Candidate = WideIndex;
+    Q.UseAddr = 0x400;
+    Q.UseSeq = UseSeq;
+    Q.Relation = Relation::JoinedUnsignedFeasibleSet;
+    Q.UnsignedUpperBound = 4;
+    return Q;
+  }
+
   static Query seedReadonlyLookup(CFGBuilder &B, const BinaryImage &Image,
                                   unsigned Variant = 0) {
     B.CurrentImg = &Image;
@@ -555,6 +919,225 @@ struct ResolverGraphCacheTestAccess {
                              Image.getPointerSize());
     Q.Alternatives = {{Q.Candidate, 0x100, 0, false}};
     Q.Relation = Relation::SameCanonicalFrameAddress;
+    return Q;
+  }
+
+  static Query seedCallStackEpoch(CFGBuilder &B, const BinaryImage &Image,
+                                  unsigned Variant, bool Scalar) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    B.BlockStarts = {0x100, 0x120};
+    const auto &TRI = getTargetRegInfo(Image.Arch);
+    const auto Width = uint16_t(Image.getPointerSize());
+    const auto SP = NdVar::reg(TRI.StackPointer, Width);
+    const auto FP = NdVar::reg(TRI.FramePointer, Width);
+    auto Emit = [&](va_t Address, NdOp Code, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) {
+      auto &R = B.Insns[Address];
+      R.Addr = Address;
+      R.Size = 0x10;
+      LowOp Op;
+      Op.Addr = Address;
+      Op.Seq = int(R.Ops.size());
+      Op.Opcode = Code;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.addInput(Input);
+      R.Ops.push_back(Op);
+    };
+    if (Scalar)
+      Emit(0x100, NdOp::COPY, SP, {NdVar::scalar(0x10000, Width)});
+    Emit(0x100, NdOp::COPY, FP, {SP});
+    if (Variant) {
+      Emit(0x110, Variant == 2 ? NdOp::INDIR_CALL : NdOp::CALL, {},
+           {NdVar::address(0x400, Width)});
+      B.Insns.at(0x110).IsCall = true;
+    } else
+      Emit(0x110, NdOp::COPY, NdVar::tmp(0x100, Width), {SP});
+    if (Variant == 3)
+      Emit(0x120, NdOp::COPY, SP, {FP});
+    else if (Variant == 4)
+      Emit(0x120, NdOp::COPY, NdVar::reg(TRI.StackPointer, Width / 2),
+           {NdVar::scalar(7, Width / 2)});
+    else
+      Emit(0x120, NdOp::COPY, NdVar::tmp(0x120, Width), {SP});
+    Emit(0x130, NdOp::RETURN, {}, {SP});
+    B.Insns.at(0x130).IsRet = true;
+    Query Q;
+    Q.Candidate = SP;
+    Q.UseAddr = 0x130;
+    Q.UseSeq = 0;
+    Q.Relation =
+        Scalar ? Relation::MustEqual : Relation::SameCanonicalFrameAddress;
+    Q.Alternatives = {
+        {Scalar ? NdVar::scalar(0x10000, Width) : SP, 0x100, 0, false}};
+    return Q;
+  }
+
+  static Query nativeCallStackEpoch(CFGBuilder &B, va_t Before, va_t After) {
+    Query Q;
+    const auto First = B.Insns.find(Before);
+    const auto Last = B.Insns.find(After);
+    if (!B.CurrentImg || First == B.Insns.end() || Last == B.Insns.end() ||
+        First->second.Ops.empty() || Last->second.Ops.empty())
+      return Q;
+    B.JumpTableProofContextComplete = true;
+    Q.Candidate = NdVar::reg(getTargetRegInfo(B.CurrentImg->Arch).StackPointer,
+                             B.CurrentImg->getPointerSize());
+    Q.UseAddr = After;
+    Q.UseSeq = Last->second.Ops.front().Seq;
+    Q.Relation = Relation::SameCanonicalFrameAddress;
+    Q.Alternatives = {
+        {Q.Candidate, Before, First->second.Ops.front().Seq, false}};
+    return Q;
+  }
+
+  static void changeNativeStackCall(CFGBuilder &B, va_t Address,
+                                    unsigned Mutation) {
+    auto &Call = B.Insns.at(Address);
+    switch (Mutation) {
+    case 0:
+      Call.Size = 4;
+      break;
+    case 1:
+      Call.IsCall = false;
+      break;
+    case 2:
+      Call.IsCond = true;
+      break;
+    case 3:
+      Call.IsIndirect = true;
+      break;
+    case 4:
+      Call.IsInstructionGuard = true;
+      break;
+    case 5:
+      Call.IsNoReturnCall = true;
+      break;
+    case 6:
+      Call.Ops.front().Output =
+          NdVar::reg(getTargetRegInfo(B.CurrentImg->Arch).StackPointer, 4);
+      break;
+    case 7:
+      Call.Ops.front().addInput(NdVar::scalar(0, 4));
+      break;
+    case 8:
+      ++Call.Ops.front().Seq;
+      break;
+    case 9:
+      Call.Ops.front().MemoryOrdering = NdMemoryOrdering::Acquire;
+      break;
+    case 10:
+      Call.Ops.front().MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      break;
+    case 11:
+      Call.Immediate = *Call.Immediate + 1;
+      break;
+    }
+  }
+
+  static void rawIntegerProofMode(CFGBuilder &B, bool Enabled) {
+    B.SkipX87StackFixup = Enabled;
+  }
+
+  static Query seedImportedCopyStackEpoch(CFGBuilder &B, BinaryImage &Image,
+                                          bool Scalar, unsigned Variant) {
+    Image.Arch = Arch::X86;
+    Image.Bits = Bitness::Bits32;
+    Image.Format = BinaryFormat::ELF;
+    Image.IsRelocatable = true;
+    const Query Q = seedCallStackEpoch(B, Image, Variant == 17 ? 4 : 1, Scalar);
+    auto Next = B.Insns.extract(0x120);
+    Next.key() = 0x115;
+    Next.mapped().Addr = 0x115;
+    Next.mapped().Size = 0x1b;
+    for (auto &Op : Next.mapped().Ops)
+      Op.Addr = 0x115;
+    B.Insns.insert(std::move(Next));
+    B.BlockStarts.erase(0x120);
+    B.BlockStarts.insert(0x115);
+    auto &Call = B.Insns.at(0x110);
+    Call.Size = 5;
+    Segment Text;
+    Text.VA = Call.Addr;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data = {0xe8, 0, 0, 0, 0};
+    writeLE<uint32_t>(Text.Data.data() + 1, 0x400 - 0x115);
+    Text.Size = Text.FileSz = Text.Data.size();
+    Image.Segments.push_back(Text);
+    Import Copy;
+    Copy.Name = Variant == 1 ? "memmove" : "memcpy";
+    Copy.IATAddr = 0x400;
+    Image.Imports.push_back(Copy);
+    Image.ObjectExternFunctionEntries.insert(0x400);
+    switch (Variant) {
+    case 2: // A data import is not a callable extern identity.
+      Image.ObjectExternFunctionEntries.clear();
+      break;
+    case 3: // An unknown import has no C memory-copy contract.
+      Image.Imports.front().Name = "copy_with_callee_cleanup";
+      break;
+    case 4: // The native target disagrees with LowIR.
+      ++Image.Segments.front().Data[1];
+      break;
+    case 5: // A jump at the same occurrence is not CALL.
+      Image.Segments.front().Data[0] = 0xe9;
+      break;
+    case 6:
+      Image.Segments.clear();
+      break;
+    case 7: // An indirect call may read a mutable slot.
+      Call.Ops.front().Opcode = NdOp::INDIR_CALL;
+      break;
+    case 8: // Two import owners cannot grant one ABI receipt.
+      Image.Imports.push_back(Copy);
+      break;
+    case 9:
+      Call.IsInstructionGuard = true;
+      break;
+    case 10: {
+      LowOp Extra = Call.Ops.front();
+      ++Extra.Seq;
+      Call.Ops.push_back(Extra);
+      break;
+    }
+    case 11:
+      Image.IsRelocatable = false;
+      break;
+    case 12:
+      Image.Format = BinaryFormat::COFF;
+      break;
+    case 13:
+      Image.Format = BinaryFormat::MachO;
+      break;
+    case 14: // Calling into an extern does not call its entry.
+      ++Call.Ops.front().Inputs[0].Offset;
+      ++Image.Segments.front().Data[1];
+      break;
+    case 15: { // A local function's name carries no cleanup guarantee.
+      Image.Imports.clear();
+      Image.ObjectExternFunctionEntries.clear();
+      Symbol Local = Symbol::makeFunc(0x400);
+      Local.Name = "memcpy";
+      Image.Symbols.push_back(Local);
+      break;
+    }
+    case 16:
+      ++Call.Size;
+      break;
+    case 18: { // A later unproved call still destroys the stack identity.
+      auto &Later = B.Insns.at(0x115);
+      Later.Ops = Call.Ops;
+      Later.Ops.front().Addr = Later.Addr;
+      Later.Ops.front().Inputs[0].Offset = 0x500;
+      Later.IsCall = true;
+      break;
+    }
+    default:
+      break;
+    }
     return Q;
   }
 
@@ -2183,6 +2766,441 @@ TEST(ResolverLoadAddress, ARMELFLiteralStillRequiresItsAddressValue) {
   EXPECT_EQ(Full.Values, (std::vector<bool>{true}));
 }
 
+TEST(ResolverGuardPredicates, ReloadCarriesEveryCrossedEdgePredicate) {
+  using Kind = Access::ReloadGuardCase;
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      auto Image = image();
+      Image.Arch = Target;
+      Image.Format = Format;
+      Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                       ? Bitness::Bits64
+                       : Bitness::Bits32;
+      SCOPED_TRACE(static_cast<unsigned>(Target));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      for (Kind Case : {Kind::Unchanged, Kind::DirectEquality, Kind::Register,
+                        Kind::TwoGuards}) {
+        SCOPED_TRACE(static_cast<unsigned>(Case));
+        CFGBuilder B;
+        const auto Q = Access::seedGuardedReload(B, Image, Case);
+        const auto Answer =
+            Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+        ASSERT_TRUE(Answer.Complete);
+        EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+        EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{
+                                    Case == Kind::TwoGuards ? 0x78u : 0x40u}));
+        EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true),
+                  Answer);
+        Access::clear(B);
+        EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true),
+                  Answer);
+      }
+    }
+}
+
+TEST(ResolverGuardPredicates, ReloadCannotBorrowUnrelatedOrStaleConditions) {
+  using Kind = Access::ReloadGuardCase;
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    auto Image = image();
+    Image.Arch = Target;
+    Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                     ? Bitness::Bits64
+                     : Bitness::Bits32;
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    for (Kind Case : {Kind::OtherAddress, Kind::Store, Kind::Call, Kind::Atomic,
+                      Kind::OrderedRead, Kind::OrderedReload, Kind::Width,
+                      Kind::IndependentRoot, Kind::Bypass, Kind::PointerChange,
+                      Kind::Intrinsic, Kind::Opposite, Kind::Signed}) {
+      SCOPED_TRACE(static_cast<unsigned>(Case));
+      CFGBuilder B;
+      const auto Q = Access::seedGuardedReload(B, Image, Case);
+      const auto Answer =
+          Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{false}));
+      EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0}));
+      EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true), Answer);
+    }
+  }
+}
+
+TEST(ResolverGuardPredicates, StoredFrameValuesKeepEveryCrossedCondition) {
+  using Kind = Access::ReloadGuardCase;
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      auto Image = image();
+      Image.Arch = Target;
+      Image.Format = Format;
+      Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                       ? Bitness::Bits64
+                       : Bitness::Bits32;
+      SCOPED_TRACE(static_cast<unsigned>(Target));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      for (Kind Case :
+           {Kind::Unchanged, Kind::DirectEquality, Kind::TwoGuards}) {
+        SCOPED_TRACE(static_cast<unsigned>(Case));
+        CFGBuilder B;
+        const auto Q = Access::seedGuardedFrameReload(B, Image, Case);
+        const auto Answer =
+            Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+        ASSERT_TRUE(Answer.Complete);
+        EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+        EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{
+                                    Case == Kind::TwoGuards ? 0x78u : 0x40u}));
+      }
+    }
+}
+
+TEST(ResolverGuardPredicates, ObservedFrameValuesSurviveDisjointStores) {
+  using Kind = Access::ReloadGuardCase;
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (bool EarlierCall : {false, true})
+        for (Kind Case :
+             {Kind::Unchanged, Kind::DirectEquality, Kind::TwoGuards}) {
+          auto Image = image();
+          Image.Arch = Target;
+          Image.Format = Format;
+          Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                           ? Bitness::Bits64
+                           : Bitness::Bits32;
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(Target) << ':' << unsigned(Format) << ':'
+                       << EarlierCall << ':' << unsigned(Case));
+          CFGBuilder B;
+          const auto Q =
+              Access::seedObservedFrameReload(B, Image, Case, EarlierCall);
+          const auto Answer =
+              Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+          ASSERT_TRUE(Answer.Complete);
+          EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+          EXPECT_EQ(
+              Answer.Masks,
+              (std::vector<uint64_t>{Case == Kind::TwoGuards ? 0x78u : 0x40u}));
+          EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true),
+                    Answer);
+        }
+}
+
+TEST(ResolverGuardPredicates, ObservedFrameValuesRetainEveryMemoryBarrier) {
+  using Kind = Access::ReloadGuardCase;
+  for (Kind Case : {Kind::OtherAddress, Kind::Store, Kind::Call, Kind::Atomic,
+                    Kind::OrderedRead, Kind::OrderedReload, Kind::Width,
+                    Kind::IndependentRoot, Kind::Bypass, Kind::PointerChange,
+                    Kind::Intrinsic, Kind::Opposite, Kind::Signed}) {
+    SCOPED_TRACE(unsigned(Case));
+    auto Image = image();
+    Image.Bits = Bitness::Bits64;
+    CFGBuilder B;
+    const auto Q = Access::seedObservedFrameReload(B, Image, Case);
+    const auto Answer = Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{false}));
+    EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0}));
+    EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true), Answer);
+  }
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto Image = image();
+    Image.Bits = Bitness::Bits64;
+    CFGBuilder B;
+    const auto Q =
+        Access::seedObservedFrameReload(B, Image, Kind::DirectEquality);
+    Access::changeObservation(B, Mutation);
+    const auto Answer = Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{false}));
+    EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0}));
+  }
+}
+
+TEST(ResolverGuardPredicates, ObservedReadsCannotAuthenticateFrameWriters) {
+  auto Image = image();
+  Image.Bits = Bitness::Bits64;
+  CFGBuilder B;
+  auto Value = Access::seedObservedFrameReload(
+      B, Image, Access::ReloadGuardCase::DirectEquality);
+  // This relation shares equality-only predicate mode with writer queries.
+  // A change of writer authority must still retire observation-based memos.
+  Value.Relation = Access::Relation::UnsignedLessThan;
+  Access::Query Auth;
+  Auth.Candidate = NdVar::reg(8, Image.getPointerSize());
+  Auth.UseAddr = 0x130;
+  Auth.UseSeq = 0;
+  Auth.Relation = Access::Relation::AuthenticatedFrameMemory;
+  Auth.FrameMemorySize = 4;
+  Auth.AuthenticatedFrameStoreWriters = {
+      {NdVar::tmp(0x8000, 4), 0x100, 0, true}};
+  auto StackArgument = Auth;
+  StackArgument.Relation = Access::Relation::FrameMemoryMatches;
+  StackArgument.Alternatives = {{NdVar::scalar(6, 4), 0x130, 0, false}};
+  StackArgument.AlternativeFrameValueOffsets = {0};
+  for (const auto &Queries :
+       {std::vector<Access::Query>{Value, Auth, StackArgument, Value},
+        std::vector<Access::Query>{Value, StackArgument, Auth, Value}}) {
+    Access::clear(B);
+    const auto Answer =
+        Access::batch(B, Queries, 1000000, 0, 0, true, true, true);
+    EXPECT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{true, false, false, true}));
+    EXPECT_EQ(Access::batch(B, Queries, 1000000, 0, 0, true, true, true),
+              Answer);
+  }
+}
+
+TEST(ResolverGuardPredicates, ObservedLoopsRecheckBeforePublishingTheDomain) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (bool Writes : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(Target) << ':' << Writes);
+      auto Image = image();
+      Image.Arch = Target;
+      Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                       ? Bitness::Bits64
+                       : Bitness::Bits32;
+      CFGBuilder B;
+      const auto Guarded = Access::seedObservedFrameLoop(B, Image, Writes);
+      auto BeforeGuard = Guarded;
+      BeforeGuard.Candidate = NdVar::tmp(0x8000, 4);
+      BeforeGuard.UseAddr = 0x100;
+      BeforeGuard.UseSeq = 1;
+      for (const auto &Queries :
+           {std::vector<Access::Query>{Guarded, BeforeGuard, Guarded},
+            std::vector<Access::Query>{BeforeGuard, Guarded, BeforeGuard}}) {
+        Access::clear(B);
+        const auto Answer =
+            Access::batch(B, Queries, 1000000, 0, 0, true, true, true);
+        ASSERT_TRUE(Answer.Complete);
+        const bool GuardFirst = Queries.front().UseAddr == Guarded.UseAddr;
+        EXPECT_EQ(Answer.Values,
+                  (std::vector<bool>{GuardFirst, !GuardFirst, GuardFirst}));
+        EXPECT_EQ(Answer.Masks,
+                  (std::vector<uint64_t>{GuardFirst ? 0x40u : 0u,
+                                         GuardFirst ? 0u : 0x40u,
+                                         GuardFirst ? 0x40u : 0u}));
+        EXPECT_EQ(Access::batch(B, Queries, 1000000, 0, 0, true, true, true),
+                  Answer);
+      }
+    }
+}
+
+TEST(ResolverGuardPredicates, ObservedFrameReadsChargeColdAndWarmWork) {
+  auto Image = image();
+  Image.Bits = Bitness::Bits64;
+  CFGBuilder Warm;
+  const auto Q = Access::seedObservedFrameReload(
+      Warm, Image, Access::ReloadGuardCase::DirectEquality, true);
+  const auto Full = Access::batch(Warm, {Q}, 1000000, 0, 0, true, true, true);
+  ASSERT_TRUE(Full.Complete);
+  EXPECT_EQ(Full.Values, (std::vector<bool>{true}));
+  const size_t Work = 1000000 - Full.Remaining;
+  ASSERT_GT(Work, 0u);
+  for (size_t Limit : {size_t{0}, size_t{1}, Work - 1, Work}) {
+    SCOPED_TRACE(Limit);
+    CFGBuilder Cold;
+    Access::seedObservedFrameReload(
+        Cold, Image, Access::ReloadGuardCase::DirectEquality, true);
+    const auto Answer = Access::batch(Cold, {Q}, Limit, 0, 0, true, true, true);
+    EXPECT_EQ(Access::batch(Warm, {Q}, Limit, 0, 0, true, true, true), Answer);
+    EXPECT_EQ(Answer.Complete, Limit == Work);
+    if (Limit == Work) {
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+      EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0x40}));
+    } else {
+      EXPECT_TRUE(std::none_of(Answer.Values.begin(), Answer.Values.end(),
+                               [](bool Value) { return Value; }));
+      EXPECT_TRUE(std::all_of(Answer.Masks.begin(), Answer.Masks.end(),
+                              [](uint64_t Mask) { return Mask == 0; }));
+    }
+  }
+}
+
+TEST(ResolverGuardPredicates, StoredFrameConditionsNeedTheSameOrdinaryValue) {
+  using Kind = Access::ReloadGuardCase;
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    auto Image = image();
+    Image.Arch = Target;
+    Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                     ? Bitness::Bits64
+                     : Bitness::Bits32;
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    for (Kind Case : {Kind::OtherAddress, Kind::Store, Kind::Call, Kind::Atomic,
+                      Kind::OrderedRead, Kind::OrderedReload, Kind::Width,
+                      Kind::IndependentRoot, Kind::Bypass, Kind::PointerChange,
+                      Kind::Intrinsic, Kind::Opposite, Kind::Signed}) {
+      SCOPED_TRACE(static_cast<unsigned>(Case));
+      CFGBuilder B;
+      const auto Q = Access::seedGuardedFrameReload(B, Image, Case);
+      const auto Answer =
+          Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{false}));
+      EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0}));
+      EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true), Answer);
+    }
+    for (bool Guard : {false, true})
+      for (bool Atomic : {false, true}) {
+        SCOPED_TRACE(Guard);
+        SCOPED_TRACE(Atomic);
+        CFGBuilder B;
+        const auto Q =
+            Access::seedGuardedFrameReload(B, Image, Kind::Unchanged);
+        Access::changeGuardedFrameRead(B, Guard, Atomic);
+        const auto Answer =
+            Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+        EXPECT_EQ(Answer.Values, (std::vector<bool>{false}));
+        EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0}));
+      }
+  }
+}
+
+TEST(ResolverGuardPredicates, StoredFrameModesAndBudgetsAgreeColdAndWarm) {
+  auto Image = image();
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  CFGBuilder Warm;
+  const auto Q = Access::seedGuardedFrameReload(
+      Warm, Image, Access::ReloadGuardCase::Unchanged);
+  auto Joined = Q;
+  Joined.Relation = Access::Relation::JoinedUnsignedFeasibleSet;
+  const auto Modes =
+      Access::batch(Warm, {Q, Joined, Q}, 1000000, 0, 0, true, true, true);
+  ASSERT_TRUE(Modes.Complete);
+  EXPECT_EQ(Modes.Values, (std::vector<bool>{true, false, true}));
+  EXPECT_EQ(Modes.Masks, (std::vector<uint64_t>{0x40, 0, 0x40}));
+  const auto Full = Access::batch(Warm, {Q}, 1000000, 0, 0, true, true, true);
+  ASSERT_TRUE(Full.Complete);
+  ASSERT_EQ(Full.Values, (std::vector<bool>{true}));
+  const size_t Work = 1000000 - Full.Remaining;
+  ASSERT_GT(Work, 0u);
+  for (size_t Limit : {size_t{0}, size_t{1}, Work / 2, Work - 1, Work})
+    for (uint32_t Depth : {1u, 2u, 4u, 64u}) {
+      SCOPED_TRACE(Limit);
+      SCOPED_TRACE(Depth);
+      CFGBuilder Cold;
+      Access::seedGuardedFrameReload(Cold, Image,
+                                     Access::ReloadGuardCase::Unchanged);
+      const auto Answer =
+          Access::batch(Cold, {Q}, Limit, Depth, 0, true, true, true);
+      EXPECT_EQ(Access::batch(Warm, {Q}, Limit, Depth, 0, true, true, true),
+                Answer);
+      if (Limit < Work || Depth < 4) {
+        EXPECT_FALSE(Answer.Complete);
+        EXPECT_TRUE(std::none_of(Answer.Values.begin(), Answer.Values.end(),
+                                 [](bool Value) { return Value; }));
+        EXPECT_TRUE(std::all_of(Answer.Masks.begin(), Answer.Masks.end(),
+                                [](uint64_t Mask) { return Mask == 0; }));
+      }
+    }
+}
+
+TEST(ResolverGuardPredicates, SegmentedStoresCannotBorrowNumericDisjointness) {
+  for (Arch Target : {Arch::X86, Arch::X64})
+    for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+      auto Image = image();
+      Image.Arch = Target;
+      Image.Format = Format;
+      Image.Bits = Target == Arch::X64 ? Bitness::Bits64 : Bitness::Bits32;
+      SCOPED_TRACE(static_cast<unsigned>(Target));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      CFGBuilder Warm;
+      const auto Q = Access::seedGuardedFrameReload(
+          Warm, Image, Access::ReloadGuardCase::Unchanged);
+      for (auto Space :
+           {NdMemoryAddressSpace::Default, NdMemoryAddressSpace::X86FS,
+            NdMemoryAddressSpace::X86GS, NdMemoryAddressSpace::Default}) {
+        SCOPED_TRACE(static_cast<unsigned>(Space));
+        Access::addDisjointFrameAccess(Warm, Image, Space);
+        const auto Answer =
+            Access::batch(Warm, {Q}, 1000000, 0, 0, true, true, true);
+        ASSERT_TRUE(Answer.Complete);
+        const bool Ordinary = Space == NdMemoryAddressSpace::Default;
+        EXPECT_EQ(Answer.Values, (std::vector<bool>{Ordinary}));
+        EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{Ordinary ? 0x40u : 0u}));
+        CFGBuilder Cold;
+        Access::seedGuardedFrameReload(Cold, Image,
+                                       Access::ReloadGuardCase::Unchanged);
+        Access::addDisjointFrameAccess(Cold, Image, Space);
+        EXPECT_EQ(Access::batch(Cold, {Q}, 1000000, 0, 0, true, true, true),
+                  Answer);
+      }
+    }
+}
+
+TEST(ResolverGuardPredicates, StoredFrameSynchronizationBreaksPriorConditions) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    auto Image = image();
+    Image.Arch = Target;
+    Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                     ? Bitness::Bits64
+                     : Bitness::Bits32;
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    for (NdOp Opcode : {NdOp::LOAD, NdOp::STORE}) {
+      SCOPED_TRACE(static_cast<unsigned>(Opcode));
+      const auto Ordered = Opcode == NdOp::LOAD ? NdMemoryOrdering::Acquire
+                                                : NdMemoryOrdering::Release;
+      CFGBuilder Warm;
+      const auto Q = Access::seedGuardedFrameReload(
+          Warm, Image, Access::ReloadGuardCase::Unchanged);
+      for (auto Ordering :
+           {NdMemoryOrdering::None, Ordered, NdMemoryOrdering::None}) {
+        SCOPED_TRACE(static_cast<unsigned>(Ordering));
+        Access::addDisjointFrameAccess(
+            Warm, Image, NdMemoryAddressSpace::Default, Opcode, Ordering);
+        const auto Answer =
+            Access::batch(Warm, {Q}, 1000000, 0, 0, true, true, true);
+        ASSERT_TRUE(Answer.Complete);
+        const bool Ordinary = Ordering == NdMemoryOrdering::None;
+        EXPECT_EQ(Answer.Values, (std::vector<bool>{Ordinary}));
+        EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{Ordinary ? 0x40u : 0u}));
+        CFGBuilder Cold;
+        Access::seedGuardedFrameReload(Cold, Image,
+                                       Access::ReloadGuardCase::Unchanged);
+        Access::addDisjointFrameAccess(
+            Cold, Image, NdMemoryAddressSpace::Default, Opcode, Ordering);
+        EXPECT_EQ(Access::batch(Cold, {Q}, 1000000, 0, 0, true, true, true),
+                  Answer);
+      }
+    }
+  }
+}
+
+TEST(ResolverGuardPredicates, ReloadConditionsRespectModesAndEvidence) {
+  auto Image = image();
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  CFGBuilder Warm;
+  const auto Q = Access::seedGuardedReload(Warm, Image,
+                                           Access::ReloadGuardCase::Unchanged);
+  auto Joined = Q;
+  Joined.Relation = Access::Relation::JoinedUnsignedFeasibleSet;
+  const auto Modes =
+      Access::batch(Warm, {Q, Joined, Q}, 1000000, 0, 0, true, true, true);
+  ASSERT_TRUE(Modes.Complete);
+  EXPECT_EQ(Modes.Values, (std::vector<bool>{true, false, true}));
+  EXPECT_EQ(Modes.Masks, (std::vector<uint64_t>{0x40, 0, 0x40}));
+  const auto Full = Access::batch(Warm, {Q}, 1000000, 0, 0, true, true, true);
+  ASSERT_TRUE(Full.Complete);
+  ASSERT_EQ(Full.Values, (std::vector<bool>{true}));
+  const size_t Work = 1000000 - Full.Remaining;
+  ASSERT_GT(Work, 0u);
+  for (size_t Limit : {size_t{0}, size_t{1}, Work / 2, Work - 1, Work}) {
+    SCOPED_TRACE(Limit);
+    CFGBuilder Cold;
+    Access::seedGuardedReload(Cold, Image, Access::ReloadGuardCase::Unchanged);
+    const auto Answer = Access::batch(Cold, {Q}, Limit, 0, 0, true, true, true);
+    EXPECT_EQ(Access::batch(Warm, {Q}, Limit, 0, 0, true, true, true), Answer);
+    EXPECT_EQ(Answer.Complete, Limit == Work);
+    if (Limit == Work) {
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+      EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{0x40}));
+    } else {
+      EXPECT_TRUE(std::none_of(Answer.Values.begin(), Answer.Values.end(),
+                               [](bool Value) { return Value; }));
+      EXPECT_TRUE(std::all_of(Answer.Masks.begin(), Answer.Masks.end(),
+                              [](uint64_t Mask) { return Mask == 0; }));
+    }
+  }
+}
+
 BinaryImage readonlyLookupImage(Arch Target, BinaryFormat Format) {
   auto Image = image();
   Image.Arch = Target;
@@ -2311,6 +3329,71 @@ TEST(ResolverGuardPredicates, CompoundGuardsPreserveEveryJoinedInput) {
   }
 }
 
+TEST(ResolverGuardPredicates,
+     NarrowJoinedGuardsRequireZeroHighBytesOnEveryArm) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      auto Image = image();
+      Image.Arch = Target;
+      Image.Format = Format;
+      Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                       ? Bitness::Bits64
+                       : Bitness::Bits32;
+      SCOPED_TRACE(static_cast<unsigned>(Target));
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      for (unsigned Variant : {0u, 1u, 2u, 3u, 4u, 5u}) {
+        if ((Variant == 1 || Variant == 2) && Image.getPointerSize() == 4)
+          continue;
+        SCOPED_TRACE(Variant);
+        CFGBuilder B;
+        const auto Q = Access::seedJoinedLaneGuard(B, Image, Variant);
+        const auto Answer =
+            Access::batch(B, {Q}, 1000000, 0, 0, true, true, true);
+        EXPECT_EQ(Answer.Values, (std::vector<bool>{Variant == 0}));
+        EXPECT_EQ(Answer.Masks,
+                  (std::vector<uint64_t>{Variant == 0 ? 7u : 0u}));
+        if (Variant == 0)
+          EXPECT_TRUE(Answer.Complete);
+        EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true),
+                  Answer);
+        Access::clear(B);
+        EXPECT_EQ(Access::batch(B, {Q}, 1000000, 0, 0, true, true, true),
+                  Answer);
+      }
+    }
+}
+
+TEST(ResolverGuardPredicates, JoinedLaneEvidenceAgreesColdAndWarm) {
+  auto Image = image();
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  CFGBuilder Warm;
+  const auto Q = Access::seedJoinedLaneGuard(Warm, Image);
+  const auto Full = Access::batch(Warm, {Q}, 1000000, 0, 0, true, true, true);
+  ASSERT_TRUE(Full.Complete);
+  ASSERT_EQ(Full.Values, (std::vector<bool>{true}));
+  const size_t Work = 1000000 - Full.Remaining;
+  ASSERT_GT(Work, 0u);
+  for (size_t Limit : {size_t{0}, size_t{1}, Work / 2, Work - 1, Work}) {
+    SCOPED_TRACE(Limit);
+    CFGBuilder Cold;
+    Access::seedJoinedLaneGuard(Cold, Image);
+    const auto Answer = Access::batch(Cold, {Q}, Limit, 0, 0, true, true, true);
+    EXPECT_EQ(Access::batch(Warm, {Q}, Limit, 0, 0, true, true, true), Answer);
+    EXPECT_EQ(Answer.Complete, Limit == Work);
+    if (Limit == Work) {
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+      EXPECT_EQ(Answer.Masks, (std::vector<uint64_t>{7}));
+    } else {
+      EXPECT_TRUE(std::none_of(Answer.Values.begin(), Answer.Values.end(),
+                               [](bool Value) { return Value; }));
+      EXPECT_TRUE(std::all_of(Answer.Masks.begin(), Answer.Masks.end(),
+                              [](uint64_t Mask) { return Mask == 0; }));
+    }
+  }
+}
+
 TEST(ResolverGuardPredicates, LogicalUnionCannotClaimPredecessorOwnership) {
   for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
     SCOPED_TRACE(static_cast<unsigned>(Target));
@@ -2383,6 +3466,569 @@ TEST(ResolverGuardPredicates, ResourceRefusalCannotPublishAPartialDomain) {
   EXPECT_FALSE(Refused.Complete);
   EXPECT_EQ(Refused.Values, (std::vector<bool>{false}));
   EXPECT_EQ(Refused.Masks, (std::vector<uint64_t>{0}));
+}
+
+TEST(ResolverFrameModes, CallsDoNotInventI386StackEpochs) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (bool Scalar : {false, true})
+        for (unsigned Variant = 0; Variant != 5; ++Variant) {
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(Target) << ':' << unsigned(Format) << ':'
+                       << Scalar << ':' << Variant);
+          auto Image = image();
+          Image.Arch = Target;
+          Image.Format = Format;
+          Image.Bits = Target == Arch::X64 || Target == Arch::AArch64
+                           ? Bitness::Bits64
+                           : Bitness::Bits32;
+          CFGBuilder B;
+          const auto Q = Access::seedCallStackEpoch(B, Image, Variant, Scalar);
+          const bool Expected =
+              Variant != 4 && (!Variant || Variant == 3 || Target != Arch::X86);
+          const auto Answer = Access::batch(B, {Q});
+          ASSERT_TRUE(Answer.Complete);
+          EXPECT_EQ(Answer.Values, (std::vector<bool>{Expected}));
+          EXPECT_EQ(Access::batch(B, {Q}), Answer);
+          Access::clear(B);
+          EXPECT_EQ(Access::batch(B, {Q}), Answer);
+        }
+}
+
+struct NativeStackCaller {
+  BinaryImage Image;
+  std::set<va_t> Entries;
+  va_t Call = 0;
+  va_t Use = 0;
+
+  NativeStackCaller(const std::vector<uint8_t> &Callee, bool Restore = false,
+                    bool ObserveMemory = false) {
+    Image.Arch = Arch::X86;
+    Image.Bits = Bitness::Bits32;
+    Image.Format = BinaryFormat::COFF;
+    Image.Base = 0x400000;
+    Image.Entry = 0x401000;
+    Segment Text;
+    Text.VA = Image.Entry;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data = {0x55, 0x89, 0xe5, 0x83, 0xec, 0x10};
+    if (ObserveMemory)
+      Text.Data.insert(Text.Data.end(), {0xc7, 0x04, 0x24, 6, 0, 0, 0});
+    Call = Text.VA + Text.Data.size();
+    Text.Data.insert(Text.Data.end(), {0xe8, 0, 0, 0, 0});
+    writeLE<uint32_t>(Text.Data.data() + Call - Text.VA + 1,
+                      uint32_t(Text.VA + 0x100 - (Call + 5)));
+    if (Restore)
+      Text.Data.insert(Text.Data.end(), {0x8d, 0x65, 0xf0});
+    if (ObserveMemory)
+      Text.Data.insert(Text.Data.end(), {0x8b, 0x04, 0x24});
+    Use = Text.VA + Text.Data.size();
+    Text.Data.insert(Text.Data.end(), {0x89, 0xe1, 0x89, 0xec, 0x5d, 0xc3});
+    Text.Data.resize(0x100, 0xcc);
+    Text.Data.insert(Text.Data.end(), Callee.begin(), Callee.end());
+    Text.Size = Text.FileSz = Text.Data.size();
+    Image.Segments.push_back(Text);
+    Section Code;
+    Code.VA = Text.VA;
+    Code.Size = Code.FileSz = Text.Size;
+    Code.Flags = Text.Flags;
+    Code.Data = Text.Data;
+    Image.Sections.push_back(Code);
+    Entries = {Image.Entry, Image.Entry + 0x100};
+    for (const auto Entry : Entries)
+      Image.Symbols.push_back(Symbol::makeFunc(Entry));
+  }
+
+  LowFunc build(CFGBuilder &Builder) {
+    Decoder Dec;
+    EXPECT_TRUE(Dec.init(Image));
+    Builder.setKnownFuncEntries(&Entries);
+    return Builder.buildIntegerFrameProof(Image, Dec, Image.Entry, "caller");
+  }
+};
+
+TEST(ResolverFrameModes, DisplayEquationDoesNotBecomeAStrictCachedAnswer) {
+  // The opaque nested call prevents a native stack proof. Its observed
+  // ordinary return still supplies a tentative four-byte display equation.
+  NativeStackCaller F({0xff, 0xd0, 0xc2, 4, 0});
+  CFGBuilder B;
+  ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+  auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+  Q.FrameByteAddend = -4;
+  EXPECT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{false}));
+  B.setAnalysisRecoveryEnabled(true);
+  EXPECT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{true}));
+  B.setAnalysisRecoveryEnabled(false);
+  EXPECT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{false}));
+  B.setAnalysisRecoveryEnabled(true);
+  const auto Proof = F.build(B);
+  EXPECT_FALSE(Proof.AnalysisOnly);
+  EXPECT_TRUE(Proof.hasCompleteLiftCoverage());
+}
+
+TEST(ResolverFrameModes, NativeReturnCleanupRequiresTheCurrentCalleeProof) {
+  for (unsigned Pop : {0u, 4u, 12u, 65532u})
+    for (bool Restore : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Pop << ':' << Restore);
+      NativeStackCaller F({0xc2, uint8_t(Pop), uint8_t(Pop >> 8)}, Restore);
+      CFGBuilder B;
+      ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+      auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+      ASSERT_GE(Q.UseSeq, 0);
+      const auto Answer = Access::batch(B, {Q});
+      ASSERT_TRUE(Answer.Complete);
+      // A nonzero pop changes ESP; explicit restoration supersedes it.
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{Restore || Pop == 0}));
+      Q.FrameByteAddend = Restore ? 0 : -int64_t(Pop);
+      const auto Adjusted = Access::batch(B, {Q});
+      EXPECT_TRUE(Adjusted.Complete);
+      EXPECT_EQ(Adjusted.Values, (std::vector<bool>{true}));
+      EXPECT_EQ(Access::batch(B, {Q}), Adjusted);
+      Access::clear(B);
+      EXPECT_EQ(Access::batch(B, {Q}), Adjusted);
+    }
+}
+
+TEST(ResolverFrameModes, IndependentStackProofRetainsCalleeRefusals) {
+  const std::vector<std::vector<uint8_t>> Bodies = {
+      {0x85, 0xc0, 0x74, 3, 0xc2, 0, 0, 0xc2, 4, 0},
+      {0x83, 0xec, 4, 0xc3},
+      {0xff, 0xd0, 0xc3},
+      {0x89, 0x64, 0x24, 0xfc, 0x8b, 0x64, 0x24, 0xfc, 0xc3},
+      {0x5c, 0xc3},
+      {0xff, 0xe0},
+      {0xcb},
+      {0xe8, 0xfb, 0xff, 0xff, 0xff, 0xc3},
+      {0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a, 0, 0xff, 0x15, 0, 0x20, 0x40, 0, 0xc3}};
+  for (unsigned I = 0; I != Bodies.size(); ++I) {
+    SCOPED_TRACE(I);
+    NativeStackCaller F(Bodies[I]);
+    if (I + 1 == Bodies.size()) {
+      Segment Data;
+      Data.VA = 0x402000;
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Data.Data.resize(4);
+      Data.Size = Data.FileSz = 4;
+      F.Image.Segments.push_back(Data);
+      Section Storage;
+      Storage.VA = Data.VA;
+      Storage.Flags = Data.Flags;
+      Storage.Size = Storage.FileSz = Data.Size;
+      F.Image.Sections.push_back(Storage);
+      Import Imported;
+      Imported.Module = "KERNEL32.dll";
+      Imported.Name = "RaiseException";
+      Imported.IATAddr = Data.VA;
+      F.Image.Imports.push_back(Imported);
+      ASSERT_TRUE(F.Image.recordImportStorageSlot(
+          Data.VA, Imported.Name, 0, ImportStorageEvidence::ImportDirectory));
+      const auto Contract =
+          RegistrationCallCalleeIndex(F.Image).stackContract(0x401100);
+      ASSERT_TRUE(Contract);
+      ASSERT_EQ(Contract->StackPopBytes, 0u);
+      ASSERT_FALSE(Contract->RequiredImports.empty());
+    }
+    CFGBuilder B;
+    ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+    const auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+    const auto Answer = Access::batch(B, {Q});
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{false}));
+    EXPECT_EQ(Access::batch(B, {Q}), Answer);
+  }
+}
+
+TEST(ResolverFrameModes, IndependentStackProofBindsTheActualCall) {
+  for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    NativeStackCaller F({0xc3});
+    CFGBuilder B;
+    ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+    const auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+    ASSERT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{true}));
+    Access::changeNativeStackCall(B, F.Call, Mutation);
+    const auto Answer = Access::batch(B, {Q});
+    EXPECT_TRUE(std::none_of(Answer.Values.begin(), Answer.Values.end(),
+                             [](bool Value) { return Value; }));
+    Access::clear(B);
+    EXPECT_EQ(Access::batch(B, {Q}), Answer);
+  }
+}
+
+TEST(ResolverFrameModes, IndependentStackProofReplaysCurrentImageAndBudget) {
+  NativeStackCaller F({0xc2, 4, 0});
+  CFGBuilder B;
+  ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+  auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+  Q.FrameByteAddend = -4;
+  constexpr size_t Budget = 1000000;
+  const auto Answer = Access::batch(B, {Q}, Budget);
+  ASSERT_TRUE(Answer.Complete);
+  ASSERT_EQ(Answer.Values, (std::vector<bool>{true}));
+  const size_t Work = Budget - Answer.Remaining;
+  ASSERT_GT(Work, 1u);
+  for (size_t Limit : {size_t{0}, size_t{1}, Work - 1, Work}) {
+    const auto Warm = Access::batch(B, {Q}, Limit);
+    Access::clear(B);
+    EXPECT_EQ(Access::batch(B, {Q}, Limit), Warm);
+    EXPECT_EQ(Warm.Complete, Limit == Work);
+    if (Limit == Work)
+      EXPECT_EQ(Warm.Values, (std::vector<bool>{true}));
+    else
+      EXPECT_TRUE(std::none_of(Warm.Values.begin(), Warm.Values.end(),
+                               [](bool Value) { return Value; }));
+  }
+  auto &Bytes = F.Image.Segments.front().Data;
+  for (unsigned Pop : {8u, 4u, 8u, 4u}) {
+    Bytes[0x101] = uint8_t(Pop);
+    const auto Changed = Access::batch(B, {Q}, Budget);
+    EXPECT_EQ(Changed.Values, (std::vector<bool>{Pop == 4}));
+    Access::clear(B);
+    EXPECT_EQ(Access::batch(B, {Q}, Budget), Changed);
+  }
+  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+    const auto Original = Bytes;
+    if (Mutation == 0)
+      Bytes[F.Call - F.Image.Entry] = 0xe9;
+    if (Mutation == 1)
+      ++Bytes[F.Call - F.Image.Entry + 1];
+    if (Mutation == 2)
+      F.Image.BaseRelocations.push_back({F.Call + 1, 3});
+    const auto Changed = Access::batch(B, {Q}, Budget);
+    EXPECT_EQ(Changed.Values, (std::vector<bool>{false}));
+    Bytes = Original;
+    F.Image.BaseRelocations.clear();
+    EXPECT_EQ(Access::batch(B, {Q}, Budget).Values, (std::vector<bool>{true}));
+  }
+}
+
+TEST(ResolverFrameModes, IndependentStackProofGrantsNoFrameMemoryPreservation) {
+  // This callee restores ESP but changes the caller's first outgoing word.
+  NativeStackCaller F({0xc7, 0x44, 0x24, 4, 9, 0, 0, 0, 0xc3}, false, true);
+  CFGBuilder B;
+  ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+  const auto Frame = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+  Access::Query Value;
+  Value.Candidate = NdVar::reg(getTargetRegInfo(Arch::X86).IntReturnReg, 4);
+  Value.UseAddr = F.Use;
+  Value.UseSeq = 0;
+  Value.Alternatives = {{NdVar::scalar(6, 4), F.Use, 0, false}};
+  for (bool Reverse : {false, true}) {
+    const auto Queries =
+        Reverse ? std::vector{Value, Frame} : std::vector{Frame, Value};
+    const auto Answer = Access::batch(B, Queries);
+    EXPECT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, Reverse ? (std::vector<bool>{false, true})
+                                     : (std::vector<bool>{true, false}));
+    EXPECT_EQ(Access::batch(B, Queries), Answer);
+  }
+}
+
+TEST(ResolverFrameModes, IndependentStackProofDoesNotReenterIntegerProofs) {
+  NativeStackCaller F({0xc3});
+  CFGBuilder B;
+  ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+  const auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+  for (bool Raw : {true, false, true, false}) {
+    Access::rawIntegerProofMode(B, Raw);
+    const auto Answer = Access::batch(B, {Q});
+    EXPECT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{!Raw}));
+    EXPECT_EQ(Access::batch(B, {Q}), Answer);
+  }
+}
+
+struct IndexedStackCaller : NativeStackCaller {
+  va_t Dispatch = 0;
+  va_t Selector = 0;
+  va_t Table = 0;
+
+  explicit IndexedStackCaller(std::vector<uint8_t> Input = {0xba, 0, 0, 0, 0},
+                              bool ObserveMemory = false)
+      : NativeStackCaller({0xff, 0x24, 0x95, 0x80, 0x11, 0x40, 0}, false,
+                          ObserveMemory) {
+    auto &Text = Image.Segments[0];
+    Selector = Call;
+    Text.Data.insert(Text.Data.begin() + Call - Text.VA, Input.begin(),
+                     Input.end());
+    Call += Input.size();
+    Use += Input.size();
+    Dispatch = Text.VA + 0x100 + Input.size();
+    Table = Text.VA + 0x180;
+    writeLE<uint32_t>(Text.Data.data() + Call - Text.VA + 1,
+                      uint32_t(Dispatch - (Call + 5)));
+    Text.Data.resize(0x190, 0xcc);
+    Text.Data[0x160] = 0xc3;
+    Text.Data[0x170] = 0xc2;
+    Text.Data[0x171] = 4;
+    Text.Data[0x172] = 0;
+    writeLE<uint32_t>(Text.Data.data() + 0x180, uint32_t(Text.VA + 0x160));
+    writeLE<uint32_t>(Text.Data.data() + 0x184, uint32_t(Text.VA + 0x170));
+    Text.Size = Text.FileSz = Text.Data.size();
+    Image.Sections[0].Size = Image.Sections[0].FileSz = Text.Size;
+    Entries = {Image.Entry, Dispatch};
+    Image.Symbols.clear();
+    for (va_t Entry : Entries)
+      Image.Symbols.push_back(Symbol::makeFunc(Entry));
+    for (va_t Field : {Dispatch + 3, Table, Table + 4})
+      Image.BaseRelocations.push_back(
+          {Field, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+    Image.CodePtrRelocSlots = {Table, Table + 4};
+  }
+
+  LowBlock prefix(const LowFunc &Function) const {
+    for (auto Block : Function.Blocks)
+      for (size_t I = 0; I != Block.InstructionBoundaries.size(); ++I) {
+        const auto Boundary = Block.InstructionBoundaries[I];
+        if (Boundary.Address != Call)
+          continue;
+        Block.InstructionBoundaries.resize(I + 1);
+        Block.Ops.resize(Boundary.FirstOp + Boundary.OpCount);
+        Block.EndAddr = Call + Boundary.Size;
+        return Block;
+      }
+    return {};
+  }
+};
+
+TEST(ResolverFrameModes, IndexedTailStackCleanupBelongsToTheSourceCall) {
+  for (unsigned Index : {0u, 1u}) {
+    SCOPED_TRACE(Index);
+    IndexedStackCaller F({0xba, uint8_t(Index), 0, 0, 0});
+    CFGBuilder B;
+    const auto Function = F.build(B);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+    Q.FrameByteAddend = -int64_t(Index * 4);
+    const auto Answer = Access::batch(B, {Q});
+    ASSERT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{true}));
+    EXPECT_EQ(Access::batch(B, {Q}), Answer);
+    Access::clear(B);
+    EXPECT_EQ(Access::batch(B, {Q}), Answer);
+    size_t Work = 0;
+    EXPECT_FALSE(getCheckedX86IndependentCalleeStackPop(
+        F.Image, F.Dispatch, Work, limits::kMaxRegistrationEHStateWork));
+    Work = 0;
+    EXPECT_EQ(getCheckedX86IndependentIndexedCallStackPop(
+                  F.Image, F.prefix(Function), {}, Work,
+                  limits::kMaxRegistrationEHStateWork),
+              Index * 4);
+  }
+}
+
+TEST(ResolverFrameModes, IndexedTailStackRequiresACompleteCurrentScalar) {
+  const std::vector<std::vector<uint8_t>> Inputs = {
+      {0x31, 0xd2},                    // XOR EDX,EDX
+      {0x31, 0xd2, 0x8b, 0xc3},        // GOF-shaped register transport
+      {0xba, 1, 0, 0, 0},              // MOV EDX,1
+      {0x89, 0xc2},                    // Incoming EAX is unknown.
+      {0xb2, 0},                       // Low byte does not define EDX.
+      {0x6a, 0, 0x5a},                 // No saved-stack value authority.
+      {0x31, 0xd2, 0x8b, 0x10},        // Unknown LOAD overwrites EDX.
+      {0xba, 0xff, 0xff, 0xff, 0xff}}; // No wrapping table index.
+  for (unsigned I = 0; I != Inputs.size(); ++I) {
+    SCOPED_TRACE(I);
+    IndexedStackCaller F(Inputs[I]);
+    CFGBuilder B;
+    const auto Function = F.build(B);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+    Q.FrameByteAddend = I == 2 ? -4 : 0;
+    const auto Answer = Access::batch(B, {Q});
+    EXPECT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, (std::vector<bool>{I < 3}));
+    size_t Work = 0;
+    EXPECT_EQ(bool(getCheckedX86IndependentIndexedCallStackPop(
+                  F.Image, F.prefix(Function), {}, Work,
+                  limits::kMaxRegistrationEHStateWork)),
+              I < 3);
+  }
+}
+
+TEST(ResolverFrameModes, IndexedTailStackRechecksTheImageAndExactBudget) {
+  IndexedStackCaller F;
+  CFGBuilder B;
+  const auto Function = F.build(B);
+  ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+  const auto Prefix = F.prefix(Function);
+  auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+  constexpr size_t Budget = 1000000;
+  const auto Answer = Access::batch(B, {Q}, Budget);
+  ASSERT_TRUE(Answer.Complete);
+  ASSERT_EQ(Answer.Values, (std::vector<bool>{true}));
+  const size_t Work = Budget - Answer.Remaining;
+  for (size_t Limit : {size_t{0}, size_t{1}, Work - 1, Work}) {
+    const auto Warm = Access::batch(B, {Q}, Limit);
+    Access::clear(B);
+    EXPECT_EQ(Access::batch(B, {Q}, Limit), Warm);
+    EXPECT_EQ(Warm.Complete, Limit == Work);
+    if (Limit == Work)
+      EXPECT_EQ(Warm.Values, (std::vector<bool>{true}));
+    else
+      EXPECT_TRUE(std::none_of(Warm.Values.begin(), Warm.Values.end(),
+                               [](bool Value) { return Value; }));
+  }
+  size_t DirectWork = 0;
+  ASSERT_EQ(getCheckedX86IndependentIndexedCallStackPop(F.Image, Prefix, {},
+                                                        DirectWork, Budget),
+            0u);
+  for (size_t Limit : {DirectWork - 1, DirectWork}) {
+    size_t Used = 0;
+    EXPECT_EQ(bool(getCheckedX86IndependentIndexedCallStackPop(
+                  F.Image, Prefix, {}, Used, Limit)),
+              Limit == DirectWork);
+    EXPECT_EQ(Used, Limit);
+  }
+  const auto Original = F.Image;
+  for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    auto &Bytes = F.Image.Segments[0].Data;
+    if (Mutation == 0)
+      Bytes[F.Selector - F.Image.Entry + 1] = 1; // Stale source LowIR.
+    if (Mutation == 1)
+      Bytes[F.Dispatch - F.Image.Entry + 1] = 0x14; // CALL, not tail JMP.
+    if (Mutation == 2)
+      Bytes[F.Dispatch - F.Image.Entry + 2] = 0xa5; // SIB has no index.
+    if (Mutation == 3)
+      Bytes[F.Dispatch - F.Image.Entry + 2] = 0xd5; // Wrong scale.
+    if (Mutation == 4)
+      F.Image.BaseRelocations.erase(F.Image.BaseRelocations.begin());
+    if (Mutation == 5)
+      F.Image.BaseRelocations.push_back({F.Selector + 1, 3});
+    if (Mutation == 6)
+      writeLE<uint32_t>(Bytes.data() + 0x180, uint32_t(F.Image.Entry + 0x170));
+    if (Mutation == 7)
+      F.Image.CodePtrRelocSlots.erase(F.Table);
+    if (Mutation == 8)
+      F.Image.BaseRelocations.push_back({F.Table + 1, 3});
+    if (Mutation == 9)
+      Bytes[0x160] = 0xcb; // Far return grants no ordinary cleanup.
+    if (Mutation == 10)
+      F.Image.Segments[0].Flags =
+          F.Image.Segments[0].Flags | SegmentFlags::Writable;
+    if (Mutation == 11)
+      Bytes[F.Call - F.Image.Entry] = 0xe9;
+    const auto Changed = Access::batch(B, {Q}, Budget);
+    EXPECT_EQ(Changed.Values, (std::vector<bool>{false}));
+    Access::clear(B);
+    EXPECT_EQ(Access::batch(B, {Q}, Budget), Changed);
+    F.Image = Original;
+    EXPECT_EQ(Access::batch(B, {Q}, Budget).Values, (std::vector<bool>{true}));
+  }
+  size_t Used = 0;
+  EXPECT_FALSE(getCheckedX86IndependentIndexedCallStackPop(
+      F.Image, Prefix, {F.Selector}, Used, Budget));
+}
+
+TEST(ResolverFrameModes, IndexedTailStackGrantsNoMemoryOrGlobalCalleeFact) {
+  IndexedStackCaller F({0x31, 0xd2}, true);
+  auto &Bytes = F.Image.Segments[0].Data;
+  const std::vector<uint8_t> WritesCaller = {0xc7, 0x44, 0x24, 4,   9,
+                                             0,    0,    0,    0xc3};
+  std::copy(WritesCaller.begin(), WritesCaller.end(), Bytes.begin() + 0x160);
+  CFGBuilder B;
+  ASSERT_TRUE(F.build(B).hasCompleteLiftCoverage());
+  const auto Frame = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+  Access::Query Value;
+  Value.Candidate = NdVar::reg(getTargetRegInfo(Arch::X86).IntReturnReg, 4);
+  Value.UseAddr = F.Use;
+  Value.UseSeq = Frame.UseSeq;
+  Value.Relation = Access::Relation::MustEqual;
+  Value.Alternatives = {{NdVar::scalar(6, 4), 0, 0, false}};
+  for (bool Reverse : {false, true}) {
+    const auto Answer = Access::batch(B, Reverse ? std::vector{Value, Frame}
+                                                 : std::vector{Frame, Value});
+    EXPECT_TRUE(Answer.Complete);
+    EXPECT_EQ(Answer.Values, (Reverse ? std::vector<bool>{false, true}
+                                      : std::vector<bool>{true, false}));
+  }
+  size_t Work = 0;
+  RegistrationCallCalleeIndex Index(F.Image, &Work);
+  EXPECT_FALSE(Index.stackContract(F.Dispatch));
+  for (bool Raw : {true, false, true, false}) {
+    Access::rawIntegerProofMode(B, Raw);
+    EXPECT_EQ(Access::batch(B, {Frame}).Values, (std::vector<bool>{!Raw}));
+  }
+}
+
+TEST(ResolverFrameModes, IndexedTailStackRejectsChangedSourceOccurrences) {
+  for (unsigned Mutation = 0; Mutation != 12; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    IndexedStackCaller F;
+    CFGBuilder B;
+    const auto Function = F.build(B);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    const auto Q = Access::nativeCallStackEpoch(B, F.Call, F.Use);
+    Access::changeNativeStackCall(B, F.Call, Mutation);
+    EXPECT_EQ(Access::batch(B, {Q}).Values, (std::vector<bool>{false}));
+    auto Prefix = F.prefix(Function);
+    if (Mutation == 0)
+      Prefix.InstructionBoundaries.front().Size = 0;
+    if (Mutation == 1)
+      ++Prefix.InstructionBoundaries.front().OpCount;
+    if (Mutation == 2)
+      ++Prefix.InstructionBoundaries.back().FirstOp;
+    if (Mutation == 3)
+      Prefix.InstructionBoundaries.back().ControlFlags |=
+          LowInstructionControlFlag::Conditional;
+    if (Mutation == 4)
+      Prefix.Ops.back().ConsumesX87Argument = true;
+    if (Mutation == 5)
+      Prefix.Ops.back().Seq = 1;
+    if (Mutation == 6)
+      ++Prefix.Ops.front().Output.Size;
+    if (Mutation == 7)
+      Prefix.Ops.back().Inputs[0].Offset += 1;
+    if (Mutation == 8)
+      ++Prefix.StartAddr;
+    if (Mutation == 9)
+      ++Prefix.EndAddr;
+    if (Mutation == 10)
+      Prefix.InstructionBoundaries.back().Immediate.reset();
+    if (Mutation == 11)
+      Prefix.InstructionBoundaries.back().TargetMode =
+          LowInstructionTargetMode::ARM;
+    size_t Work = 0;
+    EXPECT_FALSE(getCheckedX86IndependentIndexedCallStackPop(
+        F.Image, Prefix, {}, Work, limits::kMaxRegistrationEHStateWork));
+  }
+}
+
+TEST(ResolverFrameModes, ImportedCopyStackReceiptRequiresExactNativeCall) {
+  for (bool Scalar : {false, true})
+    for (unsigned Variant = 0; Variant != 19; ++Variant) {
+      SCOPED_TRACE(::testing::Message() << Scalar << ':' << Variant);
+      auto Image = image();
+      CFGBuilder B;
+      const auto Q =
+          Access::seedImportedCopyStackEpoch(B, Image, Scalar, Variant);
+      const auto Answer = Access::batch(B, {Q});
+      EXPECT_EQ(Answer.Values, (std::vector<bool>{Variant < 2}));
+      if (Variant < 2)
+        EXPECT_TRUE(Answer.Complete);
+      EXPECT_EQ(Access::batch(B, {Q}), Answer);
+      Access::clear(B);
+      EXPECT_EQ(Access::batch(B, {Q}), Answer);
+      if (Variant >= 2)
+        continue;
+      const size_t Work = 1000000 - Answer.Remaining;
+      ASSERT_GT(Work, 1u);
+      for (size_t Limit : {size_t{1}, Work - 1, Work}) {
+        auto ColdImage = image();
+        CFGBuilder Cold;
+        const auto ColdQ = Access::seedImportedCopyStackEpoch(Cold, ColdImage,
+                                                              Scalar, Variant);
+        const auto Bounded = Access::batch(Cold, {ColdQ}, Limit);
+        EXPECT_EQ(Access::batch(B, {Q}, Limit), Bounded);
+        EXPECT_EQ(Bounded.Complete, Limit == Work);
+        if (Limit == Work)
+          EXPECT_EQ(Bounded.Values, (std::vector<bool>{true}));
+        else
+          EXPECT_TRUE(std::none_of(Bounded.Values.begin(), Bounded.Values.end(),
+                                   [](bool Value) { return Value; }));
+      }
+    }
 }
 
 TEST(ResolverFrameModes, ValueModesDoNotRebuildIndependentFrameProofs) {

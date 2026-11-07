@@ -147,6 +147,11 @@ NeonLaneInfo getNeonLaneInfo(arm_vectordata_type VD, const char *Mnem);
 /// Defined in ARMLifter.cpp.
 bool isPredicated(const cs_arm &ARM);
 
+/// The immediate a post-indexed single-register LDR/STR adds to its base:
+/// Capstone carries it in the operand after \p MemOp, or else in its
+/// displacement. Defined in ARMLiftMemAddr.cpp.
+int64_t postIndexImmediate(const cs_arm &ARM, const cs_arm_op &MemOp);
+
 /// Whether \p Insn's mnemonic spells \p Alias: the alias itself, with the
 /// condition of a predicated instruction after it (`popne`, also inside an IT
 /// block), and with the ".w" of a wide Thumb-2 encoding (`popne.w`).  Capstone

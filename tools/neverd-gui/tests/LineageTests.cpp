@@ -19,6 +19,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
+#include <QCryptographicHash>
 #include <QDateTimeEdit>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -37,6 +38,7 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QScopeGuard>
+#include <QSet>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QSpinBox>
@@ -228,6 +230,231 @@ private slots:
                              Timeout);
     QCOMPARE(Edges->selected(), Evidence);
     QCOMPARE(Edges->table()->model()->index(0, 1).data().toString(), Expected);
+    QCOMPARE(Errors.size(), 0);
+  }
+
+  void nativeRegionCallConditionsSurviveReopen_data() {
+    QTest::addColumn<bool>("Calls");
+    QTest::addColumn<QString>("Locale");
+    for (const auto *Locale : {"en", "zh-CN"}) {
+      QTest::newRow(qPrintable(QString("ordinary-%1").arg(Locale)))
+          << false << QString(Locale);
+      QTest::newRow(qPrintable(QString("calls-%1").arg(Locale)))
+          << true << QString(Locale);
+    }
+  }
+
+  void nativeRegionCallConditionsSurviveReopen() {
+    QFETCH(bool, Calls);
+    QFETCH(QString, Locale);
+    applyLanguage(Locale);
+    const auto RestoreLanguage = qScopeGuard([] { applyLanguage("en"); });
+    const auto Path = Directory.filePath("lineage-regions.raw");
+    auto Code = QByteArray::fromHex(
+        Calls ? "89f883c00383f017e8130000006bc00783c00983f025c3"
+              : "89f883c00383f0176bc00783c00983f025c3");
+    if (Calls) {
+      Code.append(QByteArray(32 - Code.size(), char(0x90)));
+      Code.append(QByteArray::fromHex("89f883c00bc3"));
+    }
+    QVERIFY(write(Path, Code));
+    ComparisonSession Source(TEST_LINEAGE_WORKER, this);
+    QSignalSpy SourceErrors(&Source, &ComparisonSession::failed);
+    QTRY_VERIFY_WITH_TIMEOUT(Source.ready(), Timeout);
+    const auto Input = [&](const char *Base) {
+      return QJsonObject{{"path", Path},
+                         {"load_options", QJsonObject{{"loader", "binary"},
+                                                      {"processor", "x86_64"},
+                                                      {"base", Base}}}};
+    };
+    Source.start(
+        Input("0x1000"), Input("0x8000"),
+        {{"regions", QJsonObject{{"enabled", true}, {"calls", Calls}}}});
+    QTRY_VERIFY_WITH_TIMEOUT(!Source.busy(), Timeout);
+    QCOMPARE(SourceErrors.size(), 0);
+    QCOMPARE(Source.summary()["regions"].toObject()["hypothesis_count"].toInt(),
+             1);
+    const auto Report = Directory.filePath("lineage-regions.nddiff");
+    bool Saved = false;
+    Source.request(
+        "comparison_save", {{"path", Report}}, this,
+        [&](const QJsonObject &R) { Saved = R["status"] == QJsonValue("ok"); });
+    QTRY_VERIFY_WITH_TIMEOUT(Saved, Timeout);
+    LineageDialog View(TEST_LINEAGE_WORKER);
+    View.setAttribute(Qt::WA_DeleteOnClose, false);
+    View.show();
+    auto &Session = View.session();
+    QSignalSpy Errors(&Session, &LineageSession::failed);
+    QTRY_VERIFY_WITH_TIMEOUT(Session.ready(), Timeout);
+    const auto Collection = Directory.filePath("call-conditions.ndlineage");
+    for (const bool Reopen : {false, true}) {
+      if (Reopen) {
+        QSignalSpy Saves(&Session, &LineageSession::saved);
+        Session.save(Collection);
+        QTRY_COMPARE_WITH_TIMEOUT(Saves.size(), 1, Timeout);
+        Session.load({{"path", Collection}});
+      } else {
+        Session.load({{"reports", QJsonArray{Report}}});
+      }
+      auto *Inspect = View.findChild<QPushButton *>("lineageInspectSource");
+      QVERIFY(Inspect);
+      QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && Inspect->isEnabled(),
+                               Timeout);
+      Inspect->click();
+      auto *Evidence = View.findChild<QDialog *>("lineageSourceEvidence");
+      QVERIFY(Evidence);
+      auto *Regions = Evidence->findChild<LineagePageView *>("native_regions");
+      QVERIFY(Regions);
+      QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && Regions->rows().size() == 1,
+                               Timeout);
+      QCOMPARE(Regions->selected()["profile"].toString(),
+               QString(Calls ? "native-call-runs-v1" : "native-runs-v1"));
+      QCOMPARE(Regions->selected().contains("call_evidence"), Calls);
+      auto *All = Evidence->findChild<LineagePageView *>("native_anchors");
+      QVERIFY(All);
+      QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && All->rows().size() == 1,
+                               Timeout);
+      QCOMPARE(All->selected()["profile"], Regions->selected()["profile"]);
+      QCOMPARE(All->selected()["call_evidence"],
+               Regions->selected()["call_evidence"]);
+      QVERIFY(!All->selected().contains("hypothesis_id"));
+      const auto *AllNotice =
+          All->parentWidget()->findChild<QLabel *>("lineageRegionCallEvidence");
+      QVERIFY(AllNotice);
+      QCOMPARE(AllNotice->isHidden(), !Calls);
+      Evidence->findChild<QTabWidget *>()->setCurrentWidget(
+          All->parentWidget());
+      QTest::qWait(40);
+      const auto Captures = qEnvironmentVariable("NEVERD_LINEAGE_SCREENSHOTS");
+      if (!Reopen && Calls && !Captures.isEmpty()) {
+        QVERIFY(QDir().mkpath(Captures));
+        QVERIFY(Evidence->grab().save(Captures + "/all-native-spans-" + Locale +
+                                      ".png"));
+      }
+      Evidence->findChild<QTabWidget *>()->setCurrentWidget(Regions);
+      Regions->table()->setFocus();
+      QTest::keyClick(Regions->table(), Qt::Key_Return);
+      auto *Detail = Evidence->findChild<QDialog *>("lineageRegionAnchors");
+      QVERIFY(Detail);
+      const auto *Notice =
+          Detail->findChild<QLabel *>("lineageRegionCallEvidence");
+      QCOMPARE(Notice != nullptr, Calls);
+      if (Notice)
+        QVERIFY(Notice->text().contains(
+            Locale == "zh-CN" ? QString::fromUtf8("函数配对")
+                              : QString("source report's function pairs")));
+      auto *Anchors =
+          Detail->findChild<LineagePageView *>("native_region_anchors");
+      QVERIFY(Anchors);
+      QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && Anchors->rows().size() == 1,
+                               Timeout);
+      QCOMPARE(Anchors->selected()["profile"], Regions->selected()["profile"]);
+      QCOMPARE(Anchors->selected()["call_evidence"],
+               Regions->selected()["call_evidence"]);
+      QVERIFY(!Anchors->selected()["native_authenticated"].toBool(true));
+      if (!Reopen && Calls) {
+        const auto Captures =
+            qEnvironmentVariable("NEVERD_LINEAGE_SCREENSHOTS");
+        if (!Captures.isEmpty()) {
+          QVERIFY(QDir().mkpath(Captures));
+          QVERIFY(Detail->grab().save(Captures + "/call-region-conditions-" +
+                                      Locale + ".png"));
+        }
+      }
+      delete Evidence;
+    }
+    QCOMPARE(Errors.size(), 0);
+  }
+
+  void retainedUnclassifiedNativeSpans() {
+    const auto Report = qEnvironmentVariable("NEVERD_DIFF_CALL_REGIONS_REPORT");
+    if (Report.isEmpty())
+      QSKIP("Set NEVERD_DIFF_CALL_REGIONS_REPORT for the retained all-span "
+            "workflow.");
+    const auto Bytes = read(Report);
+    const auto Witness =
+        QJsonDocument::fromJson(
+            read(qEnvironmentVariable("NEVERD_DIFF_REGION_WORKFLOW")))
+            .object();
+    QCOMPARE(
+        QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex(),
+        Witness["report_sha256"].toString().toLatin1());
+    const auto Regions =
+        QJsonDocument::fromJson(Bytes).object()["regions"].toObject();
+    const auto Anchors = Regions["anchors"].toArray();
+    QVERIFY(Anchors.size() > 10000);
+    QSet<int> Grouped;
+    for (const auto &H : Regions["hypotheses"].toArray())
+      for (const auto &I : H.toObject()["anchors"].toArray())
+        Grouped.insert(I.toInt());
+    QVERIFY(Grouped.size() < Anchors.size());
+    LineageDialog View(TEST_LINEAGE_WORKER);
+    View.setAttribute(Qt::WA_DeleteOnClose, false);
+    View.show();
+    auto &Session = View.session();
+    QSignalSpy Errors(&Session, &LineageSession::failed);
+    QTRY_VERIFY_WITH_TIMEOUT(Session.ready(), Timeout);
+    const auto Collection = Directory.filePath("all-native-spans.ndlineage");
+    for (const bool Reopen : {false, true}) {
+      if (Reopen) {
+        QSignalSpy Saves(&Session, &LineageSession::saved);
+        Session.save(Collection);
+        QTRY_COMPARE_WITH_TIMEOUT(Saves.size(), 1, Timeout);
+        Session.load({{"path", Collection}});
+      } else {
+        Session.load({{"reports", QJsonArray{Report}}});
+      }
+      auto *Inspect = View.findChild<QPushButton *>("lineageInspectSource");
+      QVERIFY(Inspect);
+      QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && Inspect->isEnabled(),
+                               Timeout);
+      Inspect->click();
+      auto *Evidence = View.findChild<QDialog *>("lineageSourceEvidence");
+      QVERIFY(Evidence);
+      auto *All = Evidence->findChild<LineagePageView *>("native_anchors");
+      QVERIFY(All);
+      QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && !All->rows().isEmpty(),
+                               Timeout);
+      Evidence->findChild<QTabWidget *>()->setCurrentWidget(
+          All->parentWidget());
+      bool Unclassified = false;
+      for (const auto &Row : All->rows())
+        Unclassified |= !Grouped.contains(Row.toObject()["index"].toInt());
+      QVERIFY(Unclassified);
+      auto *Next = All->findChild<QToolButton *>("lineageNextPage");
+      QVERIFY(Next && Next->isEnabled());
+      Next->click();
+      QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && All->offset() > 0 &&
+                                   !All->rows().isEmpty(),
+                               Timeout);
+      const auto Row = All->selected();
+      const auto Index = Row["index"].toInt(-1);
+      QVERIFY(Index >= 0 && Index < Anchors.size());
+      for (const auto *Side : {"primary", "secondary"}) {
+        const auto Original = Anchors[Index].toObject()[Side].toArray();
+        QCOMPARE(Row[QString(Side) + "_function_index"].toInt(),
+                 Original[0].toInt());
+        QCOMPARE(Row[QString(Side) + "_block_index"].toInt(),
+                 Original[1].toInt());
+        QCOMPARE(Row[QString(Side) + "_instruction_index"].toInt(),
+                 Original[2].toInt());
+        QCOMPARE(Row[QString(Side) + "_instruction_count"].toInt(),
+                 Original[3].toInt());
+      }
+      QCOMPARE(Row["profile"], Regions["profile"]);
+      QCOMPARE(Row["call_evidence"], Regions["call_evidence"]);
+      QVERIFY(!Row.contains("hypothesis_id"));
+      QTest::qWait(60);
+      QVERIFY(All->table()->viewport()->rect().contains(
+          All->table()->visualRect(All->table()->currentIndex())));
+      const auto Captures = qEnvironmentVariable("NEVERD_LINEAGE_SCREENSHOTS");
+      if (!Reopen && !Captures.isEmpty()) {
+        QVERIFY(QDir().mkpath(Captures));
+        QVERIFY(Evidence->grab().save(Captures +
+                                      "/real-unclassified-native-spans.png"));
+      }
+      delete Evidence;
+    }
     QCOMPARE(Errors.size(), 0);
   }
 
@@ -1570,6 +1797,17 @@ private slots:
     QCOMPARE(QJsonDocument::fromJson(read(Path)).object()["schema_version"],
              QJsonValue(1));
     QCOMPARE(Session.revision(), Revision);
+    QVERIFY(!Session.summary()["supports_all_region_anchors"].toBool());
+    auto *Inspect = View.findChild<QPushButton *>("lineageInspectSource");
+    QVERIFY(Inspect);
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && Inspect->isEnabled(), Timeout);
+    Inspect->click();
+    auto *Evidence = View.findChild<QDialog *>("lineageSourceEvidence");
+    QVERIFY(Evidence);
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy(), Timeout);
+    QVERIFY(Evidence->findChild<LineagePageView *>("native_regions"));
+    QVERIFY(!Evidence->findChild<LineagePageView *>("native_anchors"));
+    QVERIFY(!Evidence->findChild<LineagePageView *>("flow_anchors"));
     QCOMPARE(Errors.size(), 0);
   }
 

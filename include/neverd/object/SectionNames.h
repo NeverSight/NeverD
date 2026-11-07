@@ -163,13 +163,6 @@ inline bool isDataRelRoSectionName(llvm::StringRef Name) {
          (Name.empty() || Name.starts_with("."));
 }
 
-/// True if \p Name identifies a section/segment whose loader-visible flags may
-/// be writable while relocations are applied, but whose contents are immutable
-/// once loading completes.
-inline bool isReadOnlyAfterRelocSectionName(llvm::StringRef Name) {
-  return isDataRelRoSectionName(Name) || Name == macho::DataConstSeg;
-}
-
 /// True if \p Name is an ELF data/rodata/bss section whose contents are
 /// embedded alongside code in roundtrip and Unicorn test images, the GOT
 /// included: position-independent code reads a global's address there.

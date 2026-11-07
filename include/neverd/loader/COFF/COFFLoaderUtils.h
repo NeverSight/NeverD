@@ -16,6 +16,7 @@
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/Error.h"
 
@@ -26,6 +27,11 @@
 
 namespace neverd {
 namespace coff_loader {
+
+/// Resolve the SDK's exact public ordinal contracts; otherwise keep ord_N.
+/// The Import still retains its original module, ordinal and IAT identity.
+std::string ordinalImportName(Arch Architecture, llvm::StringRef Module,
+                              uint16_t Ordinal);
 
 /// Loader-owned offsets of pointer-storage fields in the PE load configuration.
 struct LoadConfigCallableField {
@@ -178,6 +184,12 @@ void recordConstantCodeSlots(BinaryImage &Img);
 /// relocations took for instruction operands.  MSVC places an i386 switch's
 /// jump table so, after its function.
 void recordRelocatedPointerRunsInCode(BinaryImage &Img);
+
+/// Authenticate fixed-base indexed pointer reads reached from known code
+/// entries. Reclassify complete relocated runs among code and record exact
+/// CALL slots and JMP readers in any readable section. Run before heuristic
+/// function discovery so case labels cannot acquire false function symbols.
+void recordIndexedTableBasesInCode(BinaryImage &Img);
 
 /// Parse one delay-import descriptor from the already mapped image.  Supports
 /// current RVA descriptors and legacy VA descriptors, returning the number of

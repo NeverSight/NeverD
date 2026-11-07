@@ -114,8 +114,9 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
       for (const MedStructReturnCandidate &Candidate :
            Caller.StructReturnCandidates) {
         MedOp *Call = findCallSite(Caller, Candidate.CallSiteId);
+        // A second word read alone is no complete field evidence.
         if (!Call || Call->Opcode != NdOp::CALL || Call->NumInputs < 1 ||
-            !Call->Inputs[0].isConst())
+            !Call->Inputs[0].isConst() || Candidate.SecondWordOnly)
           continue;
         auto It = ByEntry.find(Call->Inputs[0].ConstVal);
         if (It == ByEntry.end() || !It->second->MultiReturn.empty() ||
@@ -138,7 +139,7 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
     // bounded body reader used for their argument signatures. Floating records
     // need an omitted HFA declaration as well as their packed field values.
     std::map<va_t, std::vector<MedReturnReg>> OmittedShapes;
-    std::set<va_t> ConflictingShapes;
+    std::set<va_t> ConflictingShapes, OmittedFirstWordObserved;
     for (auto &Caller : Result.MedFuncs)
       for (const auto &Candidate : Caller.StructReturnCandidates) {
         const MedOp *Call = findCallSite(Caller, Candidate.CallSiteId);
@@ -157,6 +158,8 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
           if (!Field.IsFP)
             Field.Size = TRI.PointerSize;
         const va_t Target = Call->Inputs[0].ConstVal;
+        if (!Candidate.SecondWordOnly)
+          OmittedFirstWordObserved.insert(Target);
         auto [It, Inserted] = OmittedShapes.emplace(Target, Shape);
         if (!Inserted &&
             !std::equal(It->second.begin(), It->second.end(), Shape.begin(),
@@ -168,7 +171,8 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
       }
     for (va_t Target : ConflictingShapes)
       OmittedShapes.erase(Target);
-    confirmOmittedStructReturns(Img, Result, OmittedShapes);
+    confirmOmittedStructReturns(Img, Result, OmittedShapes,
+                                OmittedFirstWordObserved);
     MRByEntry.insert(OmittedShapes.begin(), OmittedShapes.end());
     for (auto &Caller : Result.MedFuncs) {
       for (const MedStructReturnCandidate &Candidate :
@@ -178,7 +182,7 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
             !Call->Inputs[0].isConst())
           continue;
         const Import *Imp = Img.findImportAt(Call->Inputs[0].ConstVal);
-        if (!Imp)
+        if (!Imp || Candidate.SecondWordOnly)
           continue;
         std::vector<MedReturnReg> Shape = candidateShape(Candidate);
         if (!isCompleteShape(Shape))

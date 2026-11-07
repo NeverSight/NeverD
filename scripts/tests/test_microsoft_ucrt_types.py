@@ -28,6 +28,19 @@ class MicrosoftUCRTTypes(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unique compiler ABI"):
             ucrt.bridge_abis(ir.replace('declare', 'missing'), ["routine"])
 
+    def test_compiler_abi_keeps_by_value_record_type_and_alignment(self):
+        ir = ('@neverd_ucrt_abi_0 = global ptr @"\\01_routine@12", align 4\n'
+              'declare x86_stdcallcc ptr @"\\01_routine@12"'
+              '(ptr noundef, ptr noundef byval(%union.Value) align 4) #0\n')
+        expected = {"routine": ('@"\\01_routine@12"', 'x86_stdcallcc ptr',
+                                'ptr noundef, ptr noundef byval(%union.Value) align 4')}
+        self.assertEqual(ucrt.bridge_abis(ir, ["routine"]), expected)
+        for before, after in [('byval(%union.Value)', ''), ('align 4)', 'align 8)'),
+                              ('%union.Value', '%struct.Other')]:
+            self.assertNotEqual(ucrt.bridge_abis(ir.replace(before, after), ["routine"]), expected)
+        with self.assertRaisesRegex(ValueError, "unique compiler ABI"):
+            ucrt.bridge_abis(ir.replace('align 4)', 'align 4'), ["routine"])
+
     def test_dll_inventory_selects_executable_extent_and_records_other_exports(self):
         text = ("File: ucrtbase.dll\nFormat: COFF-ARM64\nSections [\n"
                 "  Section {\n    VirtualAddress: 0x1000\n    VirtualSize: 0x20\n"

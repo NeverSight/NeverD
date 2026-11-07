@@ -9,9 +9,12 @@ add_neverd_component_library(NeverDInterpreterSpecialization
   ../arch/x86_64/NativeStackControl.cpp
   ../arch/x86_64/X64Recovery.cpp
   ../arch/x86_64/X64MXCSR.cpp
+  ../arch/x86_64/X64PageGlobal.cpp
   ../arch/x86_64/X64LegacyGS.cpp
   ../arch/x86_64/X64Alignment.cpp
   ../arch/x86_64/X64RuntimeControl.cpp
+  ../arch/x86_64/X64ReadPrefetch.cpp
+  ../arch/x86_64/X64StreamStore.cpp
   ../arch/x86_64/InterpreterMachineState.cpp
   FiniteValues.cpp
   CompleteModel.cpp

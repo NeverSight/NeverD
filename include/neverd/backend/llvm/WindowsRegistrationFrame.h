@@ -33,6 +33,8 @@ namespace neverd {
 /// A canonical declaration is separate from authentication of its image VA.
 bool hasX86RegistrationSecurityCheckABI(const llvm::Function &Function);
 llvm::Function *createX86RegistrationSecurityCheck(llvm::Module &Module);
+llvm::Function *createX86RegistrationSecurityCheck(llvm::Module &Module,
+                                                   llvm::StringRef Name);
 
 enum class X86RegistrationCallbackKind { Filter, Finally };
 

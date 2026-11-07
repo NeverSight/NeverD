@@ -54,6 +54,10 @@ struct SEHJumpRuntime {
   std::function<bool(const LowOp &, size_t &)> Resume;
   std::function<bool(const LowOp &, const FrameState &, size_t &)> Raise;
   std::function<bool(const LowOp &, size_t &)> ControlFP;
+  std::function<bool(const LowOp &, size_t &)> StartupInfo;
+  std::function<bool(const LowOp &, size_t &)> HeapTermination;
+  std::function<bool(const LowOp &, size_t &)> Interlocked;
+  std::function<bool(const LowOp &, size_t &)> Sleep;
   /// An authenticated ordinary call with zero stack cleanup and no parent
   /// frame borrow. This grants capture preservation only; its volatile
   /// registers, result and native caller ABI remain separate obligations.

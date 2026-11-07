@@ -67,6 +67,9 @@ inline constexpr unsigned kMinQuadraticCongruenceAtoms = 4;
 inline constexpr unsigned kMinPackedPolynomialAtoms = 4;
 inline constexpr unsigned kMinPackedPolynomialWidth = 8;
 
+/// Bound exact reciprocal-product proofs within the caller's work budget.
+inline constexpr unsigned kMaxReciprocalProductWidth = 128;
+
 inline constexpr std::size_t kMinResidueProductFactors = 4;
 inline constexpr unsigned kMinResidueShiftedFactors = 2;
 inline constexpr std::size_t kMaxResidueProductFactors = 512;

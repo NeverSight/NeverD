@@ -6,13 +6,31 @@ add_neverd_component_library(NeverDPipeline
   StateSourceBank.cpp
   evidence/ConstantStores.cpp
   Pipeline.cpp
+  PipelineAnalysis.cpp
+  X86/X64ContinuationEnvironment.cpp
+  X86/X64ContinuationExport.cpp
+  X86/X64ContinuationSchedule.cpp
+  X86/X64FunctionContext.cpp
+  X86/X64FunctionCalls.cpp
+  X86/X64FunctionCallSites.cpp
+  X86/X64FunctionCallHandlers.cpp
+  X86/X64RtmAbortRegions.cpp
+  X86/X64RtmRegions.cpp
+  X86/X64SpecialRegions.cpp
+  X86/X64StateObjectPointers.cpp
+  X86/X64FillReturn.cpp
+  X86/X64CallRCX.cpp
   NativeSourceHints.cpp
   NativeSourcePreservation.cpp
   PipelineCallAbi.cpp
+  PipelineCallAbiGlobal.cpp
   PipelineDump.cpp
   PipelineFormattedCalls.cpp
   PipelineFuncDetect.cpp
   PipelineHighIR.cpp
+  PipelineSourcePointerParameters.cpp
+  PipelineSourceInline.cpp
+  PipelineSourceInlineHigh.cpp
   PipelineLLVM.cpp
   PipelineLibraryRecognition.cpp
   PipelineLowIR.cpp
@@ -30,6 +48,7 @@ add_neverd_component_library(NeverDPipeline
   PipelineReturnContracts.cpp
   PipelineWideIntReturn.cpp
   PipelineWideIntReturnEvidence.cpp
+  X86/X64FunctionCallSchedule.cpp
 
   LINK_COMPONENTS
   BinaryInterpreterSpecialization

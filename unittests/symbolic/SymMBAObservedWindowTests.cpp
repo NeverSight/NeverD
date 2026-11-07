@@ -6,7 +6,10 @@
 #include "neverd/solver/BitVectorSolver.h"
 #include "neverd/symbolic/SymMBA.h"
 
+#include "llvm/Support/MathExtras.h"
+
 #include <algorithm>
+#include <random>
 #include <set>
 
 using namespace neverd::symbolic;
@@ -355,4 +358,152 @@ TEST(SymMBAObservedWindow, PartialWindowBudgetsPreserveEveryInput) {
       EXPECT_EQ(Proof.check(C.mkNe(Root, Result.Expr)),
                 neverd::solver::SatResult::Unsat);
     }
+}
+
+TEST(SymMBAObservedWindow, ReciprocalProductsRecoverDivisionWithoutPrototypes) {
+  for (unsigned Width : {8u, 16u, 32u, 64u})
+    for (unsigned Divisor : {3u, 5u, 10u, 25u, 100u}) {
+      SCOPED_TRACE(Width);
+      SCOPED_TRACE(Divisor);
+      SymContext C;
+      const auto X = C.mkVar("input", Width);
+      const unsigned Shift = Width + llvm::Log2_32(Divisor) - 1;
+      const auto Scale = llvm::APInt::getOneBitSet(2 * Width, Shift);
+      const auto M = Scale.udiv(Divisor) + 1;
+      const auto Product = C.mkMul(C.mkConst(M), C.mkZExt(X, 2 * Width));
+      const auto High = C.mkExtract(Product, Width, Width);
+      const auto Count = C.mkConst(256, Shift - Width);
+      const auto Root = C.mkAShr(High, Count);
+      const auto Want = C.mkUDiv(X, C.mkConst(Width, Divisor));
+      const auto Reduced = simplifyWindow(C, Root);
+      // Some divisors need a correction term at a given width. Only exact
+      // rounded reciprocals qualify; an independent full-domain bound below
+      // and concrete native/APInt evaluation cover both accepted/refused forms.
+      std::mt19937_64 Random(Width * 127 + Divisor);
+      for (unsigned I = 0; I != 4096; ++I) {
+        const llvm::APInt V(Width, Width == 8 ? I % 256 : Random());
+        const auto Expected = (V.zext(2 * Width) * M).lshr(Shift).trunc(Width);
+        EXPECT_EQ(C.eval(Reduced, {V}), Expected);
+      }
+      if (Width == 32 && Divisor == 100)
+        EXPECT_EQ(Reduced, Want) << C.toString(Reduced);
+      const auto Direct =
+          C.mkExtract(C.mkLShr(Product, C.mkConst(2 * Width, Shift)), 0, Width);
+      if (Reduced == Want)
+        EXPECT_EQ(simplifyWindow(C, Direct), Want);
+    }
+}
+
+TEST(SymMBAObservedWindow,
+     ReciprocalRecoveryRefusesRoundingOverflowAndSignLoss) {
+  SymContext C;
+  const auto X = C.mkVar("input", 8);
+  for (const unsigned M : {85u, 86u, 87u, 137u, 205u, 1023u})
+    for (const unsigned Shift : {8u, 9u, 10u, 11u})
+      for (const bool Signed : {false, true}) {
+        const auto Product = C.mkMul(C.mkConst(16, M), C.mkZExt(X, 16));
+        const auto High = C.mkExtract(Product, 8, 8);
+        const auto Root = Signed ? C.mkAShr(High, C.mkConst(8, Shift - 8))
+                                 : C.mkLShr(High, C.mkConst(8, Shift - 8));
+        const auto Reduced = simplifyWindow(C, Root);
+        for (unsigned V = 0; V != 256; ++V) {
+          const auto HighValue = llvm::APInt(16, V * M).extractBits(8, 8);
+          const auto Expected =
+              Signed ? HighValue.ashr(Shift - 8) : HighValue.lshr(Shift - 8);
+          EXPECT_EQ(C.eval(Reduced, {llvm::APInt(8, V)}), Expected)
+              << M << ':' << Shift << ':' << Signed << ':' << V;
+        }
+      }
+  const auto SignedProduct = C.mkMul(C.mkConst(16, 86), C.mkSExt(X, 16));
+  const auto NarrowProduct = C.mkMul(C.mkConst(8, 86), X);
+  for (const auto Root : {C.mkExtract(SignedProduct, 8, 8),
+                          C.mkLShr(NarrowProduct, C.mkConst(8, 7))}) {
+    const auto Reduced = simplifyWindow(C, Root);
+    for (unsigned V = 0; V != 256; ++V)
+      EXPECT_EQ(C.eval(Reduced, {llvm::APInt(8, V)}),
+                C.eval(Root, {llvm::APInt(8, V)}));
+  }
+}
+
+TEST(SymMBAObservedWindow, QuotientProductsRecoverOnlyTheirOwnRemainder) {
+  for (unsigned Width : {8u, 16u, 32u, 64u, 128u}) {
+    SymContext C;
+    const auto X = C.mkVar("input", Width);
+    const auto Other = C.mkVar("other", Width);
+    const auto Input = C.mkAdd(X, C.mkConst(Width, 17));
+    const auto D = C.mkConst(Width, 100);
+    const auto Q = C.mkUDiv(Input, D);
+    const auto Root = C.mkSub(Input, C.mkMul(D, Q));
+    EXPECT_EQ(simplifyWindow(C, Root), C.mkURem(Input, D));
+    for (auto Candidate : {C.mkSub(Other, C.mkMul(D, Q)),
+                           C.mkSub(Input, C.mkMul(C.mkConst(Width, 99), Q)),
+                           C.mkSub(Input, C.mkMul(D, C.mkSDiv(Input, D)))}) {
+      const auto Reduced = simplifyWindow(C, Candidate);
+      neverd::solver::BitVectorSolver Proof(C);
+      EXPECT_EQ(Proof.check(C.mkNe(Candidate, Reduced)),
+                neverd::solver::SatResult::Unsat);
+    }
+    for (size_t Work : {0u, 1u, 16u}) {
+      MBAOptions Options;
+      Options.MaxWork = Work;
+      const auto Reduced = simplifyMBADeep(C, Root, Options);
+      EXPECT_LE(Reduced.Work, Work);
+    }
+  }
+}
+
+TEST(SymMBAObservedWindow, RecoveredDivisionKeepsTheFactsOfItsProduct) {
+  // Each shape reduced before quotient and remainder recovery existed. The
+  // recovered operation must keep the bounds and low bits that reduction
+  // used, and one value must not end up spelled two ways.
+  SymContext C;
+  const auto X = C.mkVar("x", 16), Y = C.mkVar("y", 16);
+  const auto Equivalent = [&](SymRef A, SymRef B) {
+    neverd::solver::BitVectorSolver Proof(C);
+    return Proof.check(C.mkNe(A, B)) == neverd::solver::SatResult::Unsat;
+  };
+  const auto Contains = [&](SymRef Root, SymOp Op) {
+    llvm::SmallVector<SymRef, 16> Pending{Root};
+    std::set<uint32_t> Seen;
+    while (!Pending.empty()) {
+      const auto R = Pending.pop_back_val();
+      if (!Seen.insert(R.index()).second)
+        continue;
+      if (C.op(R) == Op)
+        return true;
+      for (const auto Operand : C.operands(R))
+        Pending.push_back(Operand);
+    }
+    return false;
+  };
+  // 1025 * x stays below 2^27, so this window is 0 or 1 under a mask of 3.
+  const auto Bounded = C.mkZExt(
+      C.mkOr(C.mkConst(7, 3),
+             C.mkExtract(C.mkMul(C.mkConst(33, 1025), C.mkZExt(X, 33)), 26, 7)),
+      16);
+  EXPECT_EQ(simplifyWindow(C, Bounded), C.mkConst(16, 3));
+  // A remainder by 152 keeps x's three low bits.
+  const auto D = C.mkConst(16, 152);
+  const auto Remainder = C.mkSub(X, C.mkMul(D, C.mkUDiv(X, D)));
+  const auto LowBit =
+      C.mkAnd({C.mkConst(16, 2), C.mkOr(C.mkConst(16, 0x3FFD), Remainder),
+               C.mkOr(X, Y)});
+  const auto LowReduced = simplifyWindow(C, LowBit);
+  EXPECT_FALSE(Contains(LowReduced, SymOp::URem)) << C.toString(LowReduced);
+  EXPECT_TRUE(Equivalent(LowBit, LowReduced));
+  // The same remainder inside a longer sum takes the same spelling.
+  const auto Longer = C.mkAdd(Remainder, Y);
+  const auto LongerReduced = simplifyWindow(C, Longer);
+  EXPECT_TRUE(Contains(LongerReduced, SymOp::URem))
+      << C.toString(LongerReduced);
+  EXPECT_FALSE(Contains(LongerReduced, SymOp::UDiv))
+      << C.toString(LongerReduced);
+  EXPECT_TRUE(Equivalent(Longer, LongerReduced));
+  // A power-of-two reciprocal is a shift and stays one.
+  const auto V = C.mkVar("v", 8);
+  const auto Shift =
+      C.mkExtract(C.mkMul(C.mkConst(16, 64), C.mkZExt(V, 16)), 8, 8);
+  const auto ShiftReduced = simplifyWindow(C, Shift);
+  EXPECT_FALSE(Contains(ShiftReduced, SymOp::UDiv)) << C.toString(ShiftReduced);
+  EXPECT_TRUE(Equivalent(Shift, ShiftReduced));
 }

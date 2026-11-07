@@ -740,6 +740,46 @@ class NeverDDevirtualizeOptionsV8(ctypes.Structure):
     ]
 
 
+class DevirtualizeFlagsV9(IntFlag):
+    PROVE_STORE_RETURN_SLOT_SEPARATION = 1
+    PROVE_STORE_FRAME_SEPARATION = 2
+
+
+class NeverDDevirtualizeOptionsV9(ctypes.Structure):
+    """v8 prefix plus per-store separation proof strategies.
+
+    Set the v1 prefix's struct_size to the full size. Flags default to zero.
+    Proofs share existing budgets and add no nonalias premise. Frame proofs
+    require machine source and explicit v4 bounds. Reserved must be zero.
+    """
+
+    _fields_ = [
+        ("base", NeverDDevirtualizeOptionsV8),
+        ("flags", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
+class DevirtualizeMachineSourceABI(IntEnum):
+    SCALAR_V1 = 0
+    QUERIES_V1 = 1
+    QUERIES_XMM_V2 = 2
+
+
+class NeverDDevirtualizeOptionsV10(ctypes.Structure):
+    """v9 prefix plus an explicit machine-source storage layout.
+
+    Set the v1 prefix's struct_size to the full size. Non-scalar layouts require
+    machine source. Reserved must be zero. Earlier APIs ignore this tail.
+    """
+
+    _fields_ = [
+        ("base", NeverDDevirtualizeOptionsV9),
+        ("machine_source_abi", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
 class NeverDSymbolicExploreOptions(ctypes.Structure):
     """Layout of ``neverd_symbolic_explore_options``."""
 
@@ -1002,6 +1042,12 @@ _C_TYPES: dict[str, object] = {
     ),
     "const neverd_devirtualize_options_v8 *": ctypes.POINTER(
         NeverDDevirtualizeOptionsV8
+    ),
+    "const neverd_devirtualize_options_v9 *": ctypes.POINTER(
+        NeverDDevirtualizeOptionsV9
+    ),
+    "const neverd_devirtualize_options_v10 *": ctypes.POINTER(
+        NeverDDevirtualizeOptionsV10
     ),
     "unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
     "const unsigned char *": ctypes.POINTER(ctypes.c_ubyte),
@@ -1551,6 +1597,18 @@ _declare(
     "neverd_warm_functions_json",
     "const char *",
     ["neverd_session_t", "neverd_va_t", "int"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_prepare_call_summaries_json",
+    "const char *",
+    ["neverd_session_t"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_prefill_callees_json",
+    "const char *",
+    ["neverd_session_t", "int", "int"],
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
@@ -2210,6 +2268,12 @@ _declare(
     ],
 )
 _declare(
+    "neverd_x64_continuation_source_v1",
+    "const char *",
+    ["neverd_session_t", "const char *", "size_t", "int", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_decompile_all",
     "const char *",
     ["neverd_session_t", "const char *", "int", "int", "int"],
@@ -2488,6 +2552,13 @@ _declare(
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
+    "neverd_devirtualize_source_v9",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v9 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_devirtualize_machine_source_v5",
     "const char *",
     ["neverd_session_t", "neverd_va_t",
@@ -2513,6 +2584,27 @@ _declare(
     "const char *",
     ["neverd_session_t", "neverd_va_t",
      "const neverd_devirtualize_options_v8 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_devirtualize_machine_source_v9",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v9 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_devirtualize_source_v10",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v10 *", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_devirtualize_machine_source_v10",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t",
+     "const neverd_devirtualize_options_v10 *", "const char * *"],
     ownership=Ownership.OWNED_STRING,
 )
 _declare("neverd_comparison_create", "neverd_comparison_t", [])
@@ -2604,6 +2696,10 @@ __all__ = [
     "NeverDDevirtualizeOptionsV6",
     "NeverDDevirtualizeOptionsV7",
     "NeverDDevirtualizeOptionsV8",
+    "NeverDDevirtualizeOptionsV9",
+    "DevirtualizeFlagsV9",
+    "NeverDDevirtualizeOptionsV10",
+    "DevirtualizeMachineSourceABI",
     "DevirtualizeFlagsV6",
     "DevirtualizeFlagsV7",
     "DevirtualizeFlagsV4",

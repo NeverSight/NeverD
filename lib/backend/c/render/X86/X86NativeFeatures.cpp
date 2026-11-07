@@ -12,6 +12,7 @@
 
 #include "X86NativeFeatures.h"
 
+#include "X64CallRCX.h"
 #include "X86APXAtomic.h"
 #include "X86AmxState.h"
 #include "X86BoundedLeaf.h"
@@ -70,6 +71,15 @@ std::string preamble(const std::set<std::string> &Amx, bool Sgx, bool Rep,
             "#define NEVERD_X86_AMX_STACK(native, ...) native\n"
             "#else\n"
             "#define NEVERD_X86_AMX_STACK(native, ...) __VA_ARGS__\n"
+            "#endif\n#endif\n"
+            "#ifndef NEVERD_X86_AMX_STACK_MEMORY\n"
+            "#if defined(__NEVERC_X86_AMX_STACK_MEMORY__) && "
+            "__NEVERC_X86_AMX_STACK_MEMORY__ >= 1\n"
+            "#define NEVERD_X86_AMX_STACK_MEMORY(native) native\n"
+            "#else\n"
+            "#define NEVERD_X86_AMX_STACK_MEMORY(native) "
+            "({ _Static_assert(0, \"AMX stack memory requires a compiler with "
+            "native stack-memory intrinsics\"); })\n"
             "#endif\n#endif\n";
   if (Bounded)
     Text += "#ifndef NEVERD_X86_BOUNDED_LEAF\n"
@@ -132,7 +142,7 @@ std::string preamble(const std::set<std::string> &Amx, bool Sgx, bool Rep,
 
 std::string x86NativeFunctionPreamble(const HighFunc &Function,
                                       Arch TargetArch) {
-  bool Atomic = false, Compact = false, FourSource = false;
+  bool Atomic = false, Compact = false, FourSource = false, NativeCall = false;
   bool Sgx = false, Rep = false, Compare = false, Bounded = false,
        BoundedEnclu = false;
   std::set<std::string> Required;
@@ -140,6 +150,7 @@ std::string x86NativeFunctionPreamble(const HighFunc &Function,
     if (!E)
       return;
     Atomic |= isX86AtomicIntrinsic(E->IntrinsicId);
+    NativeCall |= E->IntrinsicId == Intrinsic::X64CallRCX;
     if (isX86CompactMemory(E->IntrinsicId)) {
       Compact = true;
       const auto P = x86CompactHighPlan(TargetArch, *E);
@@ -152,6 +163,10 @@ std::string x86NativeFunctionPreamble(const HighFunc &Function,
       Required.insert("avx512f");
     }
     Sgx |= isX86SgxIntrinsic(E->IntrinsicId);
+    if (E->IntrinsicId == Intrinsic::X86SgxTransferAtContext) {
+      Required.insert("sgx");
+      Required.insert("xsave");
+    }
     if (isX86BoundedLeafIntrinsic(E->IntrinsicId)) {
       Bounded = true;
       BoundedEnclu |= isX86EncluLeaf(E->IntrinsicId);
@@ -161,11 +176,18 @@ std::string x86NativeFunctionPreamble(const HighFunc &Function,
       Rep = true;
       Compare |= C->Compare;
     }
+    if (const auto C = x86SystemStateContract(E->IntrinsicId); C.Mnemonic)
+      if (const auto *Feature = x86SystemNativeTargetFeature(
+              std::string("llvm.x86.") + C.Mnemonic))
+        Required.insert(Feature);
     for (const auto &Operand : E->Operands)
       Visit(Operand);
   };
   walkStmts(Function.Body, [&](const HighStmt &S) { forEachExpr(S, Visit); });
+  if (NativeCall)
+    Required.insert({"arch=x86-64", "no-avx", "no-avx2", "no-avx512f"});
   return std::string(Atomic ? X86APXAtomicCompilerDispatch : "") +
+         (NativeCall ? X64CallRCXCompilerContract : "") +
          (Compact ? X86CompactCompilerDispatch : "") +
          (FourSource ? X86FourSourceCompilerDispatch : "") +
          preamble(x86AmxFunctionFeatures(Function), Sgx, Rep, Compare, Bounded,
@@ -173,7 +195,7 @@ std::string x86NativeFunctionPreamble(const HighFunc &Function,
 }
 std::string x86NativeFunctionPreamble(const llvm::Function &Function,
                                       Arch TargetArch) {
-  bool Atomic = false, Compact = false, FourSource = false;
+  bool Atomic = false, Compact = false, FourSource = false, NativeCall = false;
   bool Sgx = false, Rep = false, Compare = false, Bounded = false,
        BoundedEnclu = false;
   std::set<std::string> Required;
@@ -182,6 +204,7 @@ std::string x86NativeFunctionPreamble(const llvm::Function &Function,
       const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction);
       if (!Call)
         continue;
+      NativeCall |= isX64CallRCX(TargetArch, *Call);
       if (const auto *F = Call->getCalledFunction())
         Atomic |= bool(x86APXAtomicName(F->getName().str()));
       if (const auto *Asm =
@@ -214,6 +237,10 @@ std::string x86NativeFunctionPreamble(const llvm::Function &Function,
         Compare |= P->Contract.Compare;
       }
       if (const auto *Callee = Call->getCalledFunction()) {
+        if (Callee->getName() == "llvm.x86.enclu.transfer.at.context") {
+          Required.insert("sgx");
+          Required.insert("xsave");
+        }
         Sgx |= isX86SgxNativeName(Callee->getName().str());
         if (const auto *Feature =
                 x86SystemNativeTargetFeature(Callee->getName().str()))
@@ -231,7 +258,10 @@ std::string x86NativeFunctionPreamble(const llvm::Function &Function,
           Required.insert(Feature);
       }
     }
+  if (NativeCall)
+    Required.insert({"arch=x86-64", "no-avx", "no-avx2", "no-avx512f"});
   return std::string(Atomic ? X86APXAtomicCompilerDispatch : "") +
+         (NativeCall ? X64CallRCXCompilerContract : "") +
          (Compact ? X86CompactCompilerDispatch : "") +
          (FourSource ? X86FourSourceCompilerDispatch : "") +
          preamble(x86AmxFunctionFeatures(Function), Sgx, Rep, Compare, Bounded,

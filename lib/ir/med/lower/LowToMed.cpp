@@ -17,6 +17,8 @@
 #include "../X86/RegistrationPhysicalFrame.h"
 #include "../X86/RegistrationPrologue.h"
 #include "../X86/RegistrationRoots.h"
+#include "../X86/RegistrationSEH4PhysicalFrame.h"
+#include "ComputedBranchScalars.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
@@ -35,10 +37,14 @@
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowIntrinsicOutputs.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
+#include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/ir/low/X86/X86CompactShape.h"
 #include "neverd/ir/low/X86/X86FourSourceShape.h"
+#include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/ir/med/MedBoundCallStackArguments.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallTarget.h"
 #include "neverd/ir/med/MedConstantPropagation.h"
@@ -48,6 +54,7 @@
 #include "neverd/ir/med/X86/X86RegistrationSEHRegisters.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/LibCVariant.h"
+#include "neverd/libc/StackProbeIndex.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
@@ -301,37 +308,6 @@ void splitEntryLoopHeader(MedFunc &Func) {
   }
 }
 
-/// The constant the low byte of \p Register holds where the call at
-/// \p CallIndex of \p Ops reads it: the last write of that byte before the
-/// call, through extensions of the register itself (`xor eax, eax` writes
-/// EAX and zero-extends it into RAX).  Nullopt where another kind of write,
-/// an earlier call or the block's start comes first.
-std::optional<uint8_t> lowByteConstantAtCall(llvm::ArrayRef<LowOp> Ops,
-                                             size_t CallIndex,
-                                             uint64_t Register) {
-  for (size_t I = std::min(CallIndex, Ops.size()); I-- > 0;) {
-    const LowOp &Op = Ops[I];
-    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
-      return std::nullopt;
-    const NdVar &Out = Op.Output;
-    // A write that leaves the byte alone, such as one to AH.
-    if (!Out.isReg() || Out.Size == 0 || Out.Offset > Register ||
-        Out.Offset + Out.Size <= Register)
-      continue;
-    if (Out.Offset != Register)
-      return std::nullopt;
-    if (Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 && Op.Inputs[0].isConst())
-      return static_cast<uint8_t>(Op.Inputs[0].Offset & 0xFF);
-    if ((Op.Opcode == NdOp::INT_ZEXT || Op.Opcode == NdOp::INT_SEXT ||
-         Op.Opcode == NdOp::COPY) &&
-        Op.NumInputs >= 1 && Op.Inputs[0].isReg() &&
-        Op.Inputs[0].Offset == Register)
-      continue;
-    return std::nullopt;
-  }
-  return std::nullopt;
-}
-
 } // namespace
 
 bool LowToMedConverter::bindFormattedCall(MedBlock &MB, MedOp &MOp,
@@ -496,9 +472,10 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
           std::make_shared<FixedIntegerCallArguments>(I->second);
       MOp.CalleeRegisterArgs = 0;
       MOp.CalleeVectorArgs = 0;
-      MOp.CalleeStackArgs = I->second.Parameters.size();
+      MOp.CalleeStackArgs = 0;
       for (const auto &Parameter : I->second.Parameters) {
         if (Parameter.Kind == SourceABICarrierKind::Stack) {
+          MOp.CalleeStackArgs = I->second.Parameters.size();
           MOp.addInput(loadCallStackArgument(Block, LOp, Parameter.StackOffset,
                                              Parameter.Bytes, TailCall));
         } else {
@@ -619,8 +596,9 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
   // Its arguments are the registers this function set before the call, the
   // rule IDA uses; a register only passed through from this function's
   // entry is not taken as an argument.
-  if (Convention && Convention->DispatcherTargetRegister &&
-      CallDispatchThunks && MOp.NumInputs == 1 && LOp.Inputs[0].isConst() &&
+  if (!MOp.IntegerCallSignature && Convention &&
+      Convention->DispatcherTargetRegister && CallDispatchThunks &&
+      MOp.NumInputs == 1 && LOp.Inputs[0].isConst() &&
       CallDispatchThunks->count(Key)) {
     int8_t Count = 0;
     for (int8_t I = 0; I < Slots; ++I)
@@ -632,7 +610,8 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
     for (int8_t I = 0; I < Count; ++I)
       MOp.addInput(ndVarToMedVar(NdVar::reg(ArgRegs[I], TRI.PointerSize)));
     MOp.CalleeRegisterArgs = Count;
-  } else if (Convention && Convention->RegisterArgumentsFromCalleeSummary &&
+  } else if (!MOp.IntegerCallSignature && Convention &&
+             Convention->RegisterArgumentsFromCalleeSummary &&
              CallEntryReadGPRs && MOp.NumInputs == 1)
     if (auto R = CallEntryReadGPRs->find(ArgumentsKey);
         R != CallEntryReadGPRs->end() &&
@@ -715,10 +694,18 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
       // A positional summary can also prove that no vector register is
       // read. Publish that absence explicitly: later ABI recovery may no
       // longer have the callee body and must not infer an extra argument
-      // from an unrelated XMM write or call-clobbered PHI. A vector read in
-      // any tracked family keeps the existing positional contract instead.
+      // from an unrelated XMM write or call-clobbered PHI. A read of a vector
+      // register a call may pass keeps the existing positional contract
+      // instead; one the convention preserves (Win64's XMM6 and up) only
+      // saves it.
+      const unsigned PassedVectorFamilies =
+          Convention->VolatileVectorFamilies
+              ? std::min(Convention->VolatileVectorFamilies,
+                         kX64VectorArgumentFamilies)
+              : kX64VectorArgumentFamilies;
       if (VectorSlots && std::none_of(R->second.begin() + kX64VectorFamilyBase,
-                                      R->second.end(),
+                                      R->second.begin() + kX64VectorFamilyBase +
+                                          PassedVectorFamilies,
                                       [](uint8_t Width) { return Width != 0; }))
         MOp.CalleeVectorArgs = 0;
       // The floating arguments follow, each in the next vector register the
@@ -774,10 +761,18 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
       Physical ? x86_registration::analyzePhysicalCxxFrame(*Image, SourceLow,
                                                            *Physical)
                : nullptr;
+  auto SEHPhysical =
+      !Physical && Image && TheArch == Arch::X86 && Fmt == BinaryFormat::COFF
+          ? x86_registration::projectSEH4PhysicalFrame(*Image, SourceLow)
+          : std::nullopt;
+  if (SEHPhysical)
+    Physical = std::move(SEHPhysical->Function);
   const LowFunc &Low = Physical ? *Physical : SourceLow;
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops) {
-      if (isLowRawEnvironmentRequirement(Op))
+      if (isLowRawEnvironmentRequirement(Op) ||
+          (Op.Opcode == NdOp::INTRINSIC &&
+           isArchitecturalValueId(Op.Inputs[0].Offset)))
         throw LowToMedConversionError(
             "raw environment requirement has no ordinary source contract");
       // Validate before legacy address-space checks or best-effort SSA can
@@ -819,8 +814,10 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
         if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
           llvm::report_fatal_error("intrinsic has no constant intrinsic ID");
         const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
-        if (isAArch64ExceptionReturnIntrinsic(Id))
-          throw LowToMedConversionError(kAArch64ExceptionReturnUnsupported);
+        if ((Id == Intrinsic::Eret && TheArch != Arch::AArch64) ||
+            !aarch64ExceptionReturnShapeIsValid(Id, Op.NumInputs,
+                                                Op.Output.Size))
+          throw LowToMedConversionError(kAArch64ExceptionReturnMalformed);
         if (const char *Reason = x86NonlocalControlTransferReason(Id))
           throw LowToMedConversionError(Reason);
         if (isX86BoundedLeafPending(Id))
@@ -883,6 +880,11 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
                                           x86SystemStateLowShape(Op, TheArch)))
             llvm::report_fatal_error("x86 system state intrinsic has an "
                                      "invalid operand/output contract");
+          continue;
+        }
+        if (Id == Intrinsic::X86HleState) {
+          if (!x86HleShapeIsValid(x86HleLowShape(Op, TheArch)))
+            llvm::report_fatal_error("invalid x86 HLE state contract");
           continue;
         }
         if (isX86VirtualizationIntrinsic(Id)) {
@@ -993,17 +995,26 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
   using OccurrenceKey = std::pair<va_t, int>;
   const RelativeLiteralOutputs RelativeLiterals =
       armRelativeLiteralOutputs(Low, TheArch, Fmt);
+  const auto ZeroExtendedAddresses =
+      x86ZeroExtendedAddressOutputs(Low, TheArch);
 
   MedFunc Func;
+  Func.AnalysisOnly = SourceLow.AnalysisOnly || Low.AnalysisOnly ||
+                      std::any_of(Low.JumpTables.begin(), Low.JumpTables.end(),
+                                  [](const auto &T) { return T.AnalysisOnly; });
   Func.Entry = Low.Entry;
   Func.Name = Low.Name;
   Func.JumpTables = Low.JumpTables;
   Func.ModuleAnalysisRoots = Low.ModuleAnalysisRoots;
   Func.CxxContinuationEntries = Low.CxxContinuationEntries;
   Func.UnsafeIndirectBranchAddresses = Low.UnsafeIndirectBranchAddresses;
+  Func.CompleteLiftCoverage = Low.hasCompleteLiftCoverage();
   Func.ExceptionMetadata = Low.ExceptionMetadata;
+  Func.SEHTerminationFrameBytes = collectLowSEHTerminationFrames(Low, TheArch);
   Func.RegistrationStates = Low.RegistrationStates;
   Func.RegistrationPhysicalFrame = PhysicalFrame;
+  if (SEHPhysical)
+    Func.RegistrationSEH4PhysicalFrame = std::move(SEHPhysical->Frame);
   Func.CalleePopBytes = Low.CalleePopBytes;
   Func.ConsumesX87Argument = Low.ConsumesX87Argument;
   bool HasReturn = false, AllX87Returns = true;
@@ -1023,6 +1034,8 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
         KnownRegistrationFrameFacts->CallerCleanupABIComplete;
     Func.RegistrationCxxEntryPopBytes =
         KnownRegistrationFrameFacts->CxxEntryPopBytes;
+    Func.RegistrationSEHEntryPopBytes =
+        KnownRegistrationFrameFacts->SEHEntryPopBytes;
   } else {
     if (Low.RegistrationStates && Image)
       Func.RegistrationCallerCleanupABIComplete =
@@ -1030,6 +1043,9 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
     if (Low.ExceptionMetadata && Low.ExceptionMetadata->Cxx && Image)
       Func.RegistrationCxxEntryPopBytes =
           getCheckedX86RegistrationCxxParentABI(SourceLow, *Image);
+    else if (Low.RegistrationStates && Low.CalleePopBytes && Image)
+      Func.RegistrationSEHEntryPopBytes =
+          getCheckedX86RegistrationSEHParentABI(SourceLow, *Image);
   }
   if (SourceCallHintsEnabled && Image && Fmt == BinaryFormat::MachO &&
       TheArch == Arch::AArch64 && Image->Arch == TheArch) {
@@ -1102,6 +1118,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
   }
   size_t LowBlockIndex = 0;
   size_t CallTargetWork = limits::ir::kSourceFrameAnalysisRemaining;
+  std::optional<std::map<SourceCallOccurrenceKey, va_t>> ScalarCallTargets;
 
   const auto CachedImports =
       Image && Image->Arch == TheArch && Image->abiFormat() == Fmt &&
@@ -1150,6 +1167,13 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
         CachedTarget = CallTargets.resolve(MB, ndVarToMedVar(Call.Inputs[0]),
                                            &CallTargetWork);
         const auto OriginalSite = sourceCallOccurrenceKey(Call);
+        if (!CachedTarget && OriginalSite && !Image->IsRelocatable) {
+          if (!ScalarCallTargets)
+            ScalarCallTargets = constantRegisterCallTargets(Low);
+          if (const auto Target = ScalarCallTargets->find(*OriginalSite);
+              Target != ScalarCallTargets->end())
+            CachedTarget = MedCallTarget{Target->second, false};
+        }
         const bool AnalystSite = OriginalSite && SourceCallSiteHints &&
                                  SourceCallSiteHints->count(*OriginalSite);
         if (CachedTarget && !CachedTarget->ThroughSlot && !AnalystSite &&
@@ -1188,7 +1212,7 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
               LowInstructionControl::TailCall;
       if (Image && LOp.Opcode == NdOp::CALL && LOp.NumInputs > 0 &&
           LOp.Inputs[0].isConst() && !TailCall &&
-          libc::stackProbeEffect(*Image, LOp.Inputs[0].Offset) ==
+          libc::stackProbeEffect(*Image, LOp.Inputs[0].Offset, StackProbes) ==
               libc::StackProbeEffect::Probe)
         continue;
 
@@ -1410,12 +1434,20 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
         for (unsigned K = 0; K <= LOp.X87ScratchSlots; ++K)
           MOp.X87ClobberedSlots |= uint8_t(1u << ((Slot + 8 - K) & 7));
       }
-      if (TheArch == Arch::X86 && Low.RegistrationStates &&
+      const bool CookieCall =
+          TheArch == Arch::X86 && Fmt == BinaryFormat::COFF &&
+          LOp.Opcode == NdOp::CALL && LOp.NumInputs == 1 &&
+          LOp.Inputs[0].isConst() && LOp.Inputs[0].Size == 4 &&
+          Low.RegistrationStates &&
           Low.RegistrationStates->SecurityCookiesComplete &&
-          Low.RegistrationStates->cookieCheck(LOp.Addr, LOp.Seq)) {
+          LOp.Inputs[0].Offset == Low.RegistrationStates->CookieCheckVA &&
+          Low.RegistrationStates->cookieCheck(LOp.Addr, LOp.Seq);
+      if (CookieCall) {
         MOp.Output = MedVar{};
         MOp.Output.Id = -1;
-        MOp.CallPreservedGPRs = 0xff;
+        // The family-mask summary is x64-only. The checked leaf preserves
+        // every non-arithmetic register, including vectors and x87 state.
+        MOp.PreservesCallerSaved = true;
       }
       if (TrackDispatchArgs)
         DispatchDefined = StepDefined(DispatchDefined, LOp);
@@ -1445,6 +1477,20 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
         MOp.addInput(MedVar::makeConst(Proof.TargetVA, 4, Proof.Provenance,
                                        Proof.TargetOwnerVA));
       }
+      // The zero extension that completes an x86-64 relocated 32-bit address
+      // holds that whole address.
+      if (const auto Completed = ZeroExtendedAddresses.find(MaterializationKey);
+          Completed != ZeroExtendedAddresses.end() &&
+          MOp.Opcode == NdOp::INT_ZEXT && MOp.Output.Size == 8 &&
+          MOp.IntrinsicOutputs.empty() &&
+          MOp.MemoryOrdering == NdMemoryOrdering::None &&
+          MOp.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+        const auto &Field = *Completed->second;
+        MOp.Opcode = NdOp::COPY;
+        MOp.NumInputs = 0;
+        MOp.addInput(MedVar::makeConst(Field.TargetVA, 8, Field.Provenance,
+                                       Field.TargetOwnerVA));
+      }
       const ImportedCallSlotFacts::Operation Position{LB.Id, LowOpIndex};
       if (const auto Reload = CachedImports.Reloads.find(Position);
           Reload != CachedImports.Reloads.end()) {
@@ -1456,6 +1502,16 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
             {Reload->second.BlockId, Reload->second.OperationIndex}));
       }
       MB.Ops.push_back(MOp);
+      if (CookieCall)
+        for (const auto &[Flag, Bit] : kX86EqualComparisonFlags) {
+          MedOp Write;
+          Write.Opcode = NdOp::COPY;
+          Write.Addr = LOp.Addr;
+          Write.Output = ndVarToMedVar(NdVar::reg(Flag, 1));
+          Write.addInput(
+              MedVar::makeConst(Bit, 1, ConstantAddressProvenance::Scalar));
+          MB.Ops.push_back(std::move(Write));
+        }
       if (CallExitConstants && LOp.Opcode == NdOp::CALL &&
           MOp.Opcode == NdOp::CALL && !MOp.DoesNotReturn && LOp.NumInputs &&
           LOp.Inputs[0].isConst())
@@ -1594,10 +1650,14 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
     // selectors bind exactly as they would after the full pipeline.
     resolveSwitchSelectorPlans(Func);
     Func.SkippedSSA = true;
+    projectOriginalAddressSelectors(Func);
     return Func;
   }
 
   try {
+    modelSEHLocalUnwindExits(Func, Low);
+    debugVerifyMedFunc(Func, "modelSEHLocalUnwindExits");
+
     x86_registration::RegistrationRoots(Low, TheArch, Fmt)
         .disconnectNoReturnFallthroughs(Func);
     bindSourceCalls(Func, Low, Fmt);
@@ -1797,6 +1857,10 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
 
     propagate(Func);
     debugVerifyMedFunc(Func, "propagate");
+    // A bound call passes what the block stored in its outgoing slots; the
+    // loads become dead, as for a call recovery takes from those stores.
+    if (forwardBoundCallStackArguments(Func))
+      debugVerifyMedFunc(Func, "forwardBoundCallStackArguments");
 
     eliminateFlags(Func);
     debugVerifyMedFunc(Func, "eliminateFlags");
@@ -1821,6 +1885,10 @@ MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
       debugVerifyMedFunc(Func, "foldImmutableTableScans");
     }
     resolveSwitchSelectorPlans(Func);
+    if (Image && !preserveComputedBranchScalars(Func, *Image))
+      throw LowToMedConversionError(
+          "computed code branch has an escaping or unproved numeric selector");
+    projectOriginalAddressSelectors(Func);
     resolveScalarAddressModels(Func,
                                Low.RelocatedInstructionScalarModelOccurrences);
     resolveI386GetPcModels(Func, Low.I386GetPcOccurrences);

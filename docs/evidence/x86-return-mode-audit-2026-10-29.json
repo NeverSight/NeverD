@@ -1,0 +1,113 @@
+{
+  "scope": "Descriptor-dependent IRETQ/RETFQ undefined-output authority and retained V6 long-mode continuation",
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-return-audit-20261029",
+  "neverd_base": "16d29a8266a16cc3e26ef6176831a1c57280ad92",
+  "integrated_dev": "c65560cb06",
+  "sysret32_commit": "c5d9b73141",
+  "implementation_commit": "2d112dff45",
+  "qualified_head": "de2c5c9573a796cae69a652f9da5394140a0d85c",
+  "source_files": {
+    "lib/analysis/arch/x86_64/X64ContinuationSource.cpp": {
+      "sha256": "8ba8b49e73c37c36a6ccadfdea64b81e833773932bf5ed7afe65b9bec5e2405f",
+      "bytes": 56849
+    },
+    "lib/lift/X86/X86NativeStateAudit.h": {
+      "sha256": "bb0f8d9554b2457122ffa333db970206f550c8aa53f0fbc2d7ec9965b927f2d1",
+      "bytes": 17972
+    },
+    "unittests/devirtualization/NativeStateAuditTests.cpp": {
+      "sha256": "7621536e3992073e667a74c324b4375e4aaeeda72108b19d49cecec7889d2b07",
+      "bytes": 54389
+    },
+    "unittests/devirtualization/OriginalBinaryUndefinedIndependenceTests.cpp": {
+      "sha256": "deb5089f37770a10c4acc9291b6584430bf40aa607a9064a1615f510db9bff2d",
+      "bytes": 113071
+    },
+    "unittests/devirtualization/X64ContinuationSourceTests.cpp": {
+      "sha256": "1ed0f79637b28e1b5b8125faa70551b4805c6647fdfcedd8553672e0a76bf2ba",
+      "bytes": 86757
+    }
+  },
+  "checks": {
+    "red": {
+      "tests": 2,
+      "passed": 0,
+      "failed": 2,
+      "skipped": 0,
+      "artifact": "red.xml",
+      "sha256": "f46990deb395a6de90ec5feb656f0084893ba8d175c1355ef6b3862eedf5733a",
+      "bytes": 5892
+    },
+    "qualification": {
+      "tests": 139,
+      "passed": 139,
+      "failed": 0,
+      "skipped": 0,
+      "artifact": "qualification.xml",
+      "sha256": "e5305aa3871c3af981688c10812843097d4d6924d313eb81778adc25b0f192fb",
+      "bytes": 147046
+    },
+    "proof_regressions": {
+      "tests": 872,
+      "passed": 872,
+      "failed": 0,
+      "skipped": 0,
+      "artifact": "proof-regressions.xml",
+      "sha256": "5be7a90f145d1d62fdeca2c00372c49a81e0faf5222124ebf9668f598b80aa06",
+      "bytes": 912876
+    }
+  },
+  "unique_tests_passed_after_fix": 1011,
+  "tests_skipped": 0,
+  "cause": "The generic exact-encoding audit issued unconditional complete empty undefined-output sidecars for descriptor-selected returns. Valid compatibility destinations make the legacy GPR high halves arbitrary.",
+  "classification": "Incomplete prior return audit exposed by the SYSRET32 mode-transition investigation",
+  "fix": "Generic frame returns retain Missing coverage. The explicit V6 descriptor owner discharges its CS.L=1/CS.D=0 condition before any writes, retaining only qualified long-mode continuations.",
+  "native_counterexample": {
+    "processor": "Intel Core i9-13900H",
+    "artifact": "native-observations.log",
+    "sha256": "31a983df1d2bf43d1e0f06bf07be2a3d1baae328ea4d6a16f3939615072404c8",
+    "bytes": 257,
+    "observation": "Both IRETQ and RETFQ retain RSP=0x12345678000e0000 for a long-mode target and produce RSP=0x000e0000 for a valid compatibility target."
+  },
+  "native_and_source_boundary_matrix": {
+    "pairs": 384,
+    "matrix": "IRETQ / RETFQ / RETFQ imm16 x CPL0..3 x CS.D 0/1 x GDT/LDT x accessed 0/1 x HighC/LLVMC O0/O2",
+    "native": "Checks valid compatibility transfer, target CS.L/CS.D/selector, PC, defined GPR low halves, preserved R8-R15, flags and NMI behavior at the original target breakpoint. No full native-state equivalence claim for unsupported compatibility return emission.",
+    "source": "V6 rejects before publishing any state or descriptor writes; compares every represented state byte and all 4096 RAM bytes."
+  },
+  "proof_refusals": {
+    "cases": 48,
+    "matrix": "3 return forms x direct/feasible branch x user/kernel profile x native-boundary retention on/off x opaque preservation on/off"
+  },
+  "unchanged_coverage": [
+    "Existing long-mode return state/RAM matrices",
+    "SYSRET32 14,040 complete native-state and 468,000 portable-state comparisons",
+    "LSS/LFS/LGS 175,040 native state/RAM pairs",
+    "SDK HighC/LLVMC output under ASan/UBSan",
+    "All 65,536 RETFQ immediate encoding checks"
+  ],
+  "isa_reference": {
+    "manual": "Intel SDM 325462-085US, Vol.1 section 3.4.1.1; Vol.2 IRET and RET descriptor-selected return modes",
+    "url": "https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf"
+  },
+  "historical_correction": [
+    "The old generic empty IRETQ/RETFQ audit was unconditional and invalid.",
+    "The earlier bounded V6 long-mode continuation results remain valid; the guard excluded the problematic mode switch."
+  ],
+  "excluded_artifact": "stale-binary-diagnostic.xml was launched before the red build completed; it is not RED evidence or qualification.",
+  "build": {
+    "configuration": "Release",
+    "receipt": {
+      "sha256": "9c0e1dbd115d61865943dc24019277eaa506ff7715a80aa9410f577ede3d7c6e",
+      "bytes": 3700
+    }
+  },
+  "limitations": [
+    "Compatibility-mode frame-return emission remains unqualified",
+    "Fault delivery, other CPU models and the global x86 inventory remain open",
+    "No LLVM SDK release or pin change"
+  ],
+  "release_and_pins_changed": false
+}

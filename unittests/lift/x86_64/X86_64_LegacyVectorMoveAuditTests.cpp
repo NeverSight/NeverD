@@ -149,6 +149,13 @@ void checkMove(Arch Target, const std::vector<uint8_t> &Bytes,
       if (Memory) {
         for (unsigned I = 0; I != 16; ++I)
           Value.insertBits(llvm::APInt(8, MemoryBytes[I + 1]), I * 8);
+      } else if (Insn.Raw->id == X86_INS_MOVLHPS ||
+                 Insn.Raw->id == X86_INS_MOVHLPS) {
+        const bool HighDestination = Insn.Raw->id == X86_INS_MOVLHPS;
+        Value = Vectors[Destination].trunc(128);
+        Value.insertBits(
+            Vectors[Source].extractBits(64, HighDestination ? 0 : 64),
+            HighDestination ? 64 : 0);
       } else {
         Value = Vectors[Source].trunc(128);
       }
@@ -201,6 +208,26 @@ TEST(X86LegacyVectorMoveAudit, FullValuesAliasesFlagsAndHighVectorBits) {
             if (testing::Test::HasFatalFailure())
               return;
           }
+}
+
+TEST(X86LegacyVectorMoveAudit, HalfMovesPreserveOtherLaneAndHighVectorBits) {
+  for (Arch Target : {Arch::X86, Arch::X64})
+    for (uint8_t Opcode : {0x12, 0x16})
+      for (unsigned Destination : {0u, 7u, 8u, 15u})
+        for (unsigned Source : {0u, 7u, 8u, 15u}) {
+          if (Target == Arch::X86 && (Destination >= 8 || Source >= 8))
+            continue;
+          const uint8_t Rex =
+              (Destination >= 8 ? 4 : 0) | (Source >= 8 ? 1 : 0);
+          const MoveEncoding Move{0, 0, Opcode, Opcode, false};
+          const auto Bytes = encoding(
+              Move, false,
+              {uint8_t(0xc0 | ((Destination & 7) << 3) | (Source & 7))}, false,
+              Rex);
+          checkMove(Target, Bytes, Destination, Source, nullptr, false);
+          if (testing::Test::HasFatalFailure())
+            return;
+        }
 }
 
 TEST(X86LegacyVectorMoveAudit,
@@ -259,11 +286,59 @@ void expectUnaudited(Decoder &Dec, DecodedInsn &Insn) {
   EXPECT_EQ(Preserved, LowInstructionPreservedState{});
 }
 
+TEST(X86LegacyVectorMoveAudit, HalfMovesBindRegisterEncodingAndDetail) {
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  using Mutation = void (*)(cs_insn &);
+  const Mutation Mutations[] = {
+      [](cs_insn &I) { I.bytes[I.detail->x86.encoding.modrm_offset] ^= 8; },
+      [](cs_insn &I) { I.bytes[I.detail->x86.encoding.modrm_offset - 1] ^= 4; },
+      [](cs_insn &I) { I.bytes[I.size++] = 0x90; },
+      [](cs_insn &I) { I.detail->x86.op_count = 1; },
+      [](cs_insn &I) { I.detail->x86.operands[0].size = 8; },
+      [](cs_insn &I) { I.detail->x86.operands[1].reg = X86_REG_XMM2; },
+      [](cs_insn &I) { I.detail->x86.rex ^= 4; },
+      [](cs_insn &I) { I.detail->x86.prefix[0] = 0xf3; },
+      [](cs_insn &I) { I.detail->x86.prefix[2] = 0x66; },
+      [](cs_insn &I) { I.detail->x86.eflags = X86_EFLAGS_MODIFY_ZF; },
+      [](cs_insn &I) { I.detail->x86.addr_size = 4; },
+      [](cs_insn &I) { I.detail->x86.encoding.modrm_offset += 1; },
+      [](cs_insn &I) { I.detail->x86.operands[0].avx_zero_opmask = true; },
+  };
+  for (uint8_t Opcode : {0x12, 0x16})
+    for (uint8_t Rex : {0, 5}) {
+      const MoveEncoding Move{0, 0, Opcode, Opcode, false};
+      const auto Bytes = encoding(Move, false, {0xc1}, false, Rex);
+      for (Mutation Change : Mutations) {
+        DecodedInsn Insn{};
+        ASSERT_EQ(
+            Dec.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, Insn),
+            int(Bytes.size()));
+        Change(*Insn.Raw);
+        expectUnaudited(Dec, Insn);
+      }
+      for (uint8_t Prefix : {0x66, 0x67, 0xf2, 0xf3}) {
+        auto Prefixed = Bytes;
+        Prefixed.insert(Prefixed.begin(), Prefix);
+        DecodedInsn Insn{};
+        if (Dec.decodeOneForLift(Prefixed.data(), Prefixed.size(), 0x1000,
+                                 Insn) <= 0)
+          continue;
+        // Another valid instruction may share this opcode, but cannot claim
+        // the unprefixed half-move contract.
+        Insn.Raw->id = Opcode == 0x12 ? X86_INS_MOVHLPS : X86_INS_MOVLHPS;
+        expectUnaudited(Dec, Insn);
+      }
+    }
+}
+
 TEST(X86LegacyVectorMoveAudit,
-     OtherEncodingsAndSegmentedMemoryRemainUnaudited) {
+     OtherEncodingsAndUnalignedSegmentedMemoryRemainUnaudited) {
   const std::vector<std::vector<uint8_t>> Cases = {
-      {0x66, 0x64, 0x0f, 0x6f, 0x00},       // segmented aligned load
-      {0x66, 0x65, 0x0f, 0x7f, 0x00},       // segmented aligned store
+      {0x64, 0x65, 0x0f, 0x28, 0x00},       // conflicting segments
+      {0x64, 0x64, 0x0f, 0x28, 0x00},       // repeated segment
+      {0x64, 0x0f, 0x28, 0xc1},             // segment on register form
+      {0x40, 0x64, 0x0f, 0x28, 0x00},       // legacy prefix after REX
       {0xc5, 0xf9, 0x6f, 0x00},             // VEX aligned load
       {0xc5, 0xfa, 0x6f, 0xc1},             // VEX.128
       {0xc5, 0xfe, 0x6f, 0xc1},             // VEX.256
@@ -414,8 +489,10 @@ TEST(X86LegacyVectorMoveAudit, SegmentAndPrefixBoundariesRemainUnaudited) {
     for (const auto &Move : Moves)
       for (bool Store : {false, true})
         for (uint8_t Prefix : {uint8_t(0x64), uint8_t(0x65), uint8_t(0x67)}) {
-          // FS/GS require a separate admission contract. Repeated 67 is
-          // noncanonical even when the decoder normalizes it to one prefix.
+          // Only x64 aligned moves bind the explicit FS/GS guard and access.
+          // Repeated 67 remains noncanonical even when normalized away.
+          if (Target == Arch::X64 && Move.Aligned && Prefix != 0x67)
+            continue;
           auto Bytes = encoding(Move, Store, {0x08}, Prefix == 0x67);
           Bytes.insert(Bytes.begin(), Prefix);
           DecodedInsn Insn{};
@@ -427,6 +504,63 @@ TEST(X86LegacyVectorMoveAudit, SegmentAndPrefixBoundariesRemainUnaudited) {
           SCOPED_TRACE(::testing::Message()
                        << Move.Id << '/' << Store << '/' << unsigned(Prefix));
           expectUnaudited(Dec, Insn);
+        }
+  }
+}
+
+TEST(X86LegacyVectorMoveAudit,
+     AlignedSegmentsBindGuardAndMemoryToOriginalBytes) {
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  for (const auto &Move : Moves) {
+    if (!Move.Aligned)
+      continue;
+    for (bool Store : {false, true})
+      for (uint8_t Segment : {uint8_t(0x64), uint8_t(0x65)})
+        for (bool AddressPrefix : {false, true}) {
+          auto Bytes =
+              encoding(Move, Store, {0x44, 0x4b, 0xfd}, AddressPrefix, 4);
+          Bytes.insert(Bytes.begin(), Segment);
+          for (unsigned Mutation = 0; Mutation != 5; ++Mutation) {
+            SCOPED_TRACE(::testing::Message()
+                         << Move.Id << '/' << Store << '/' << unsigned(Segment)
+                         << '/' << AddressPrefix << '/' << Mutation);
+            DecodedInsn Insn{};
+            ASSERT_EQ(
+                Dec.decodeOneForLift(Bytes.data(), Bytes.size(), 0x1000, Insn),
+                int(Bytes.size()));
+            if (Mutation == 1)
+              Insn.Raw->bytes[0] ^= 1;
+            else if (Mutation == 2)
+              Insn.Raw->detail->x86.prefix[1] ^= 1;
+            else if (Mutation == 3)
+              memoryOperand(*Insn.Raw).mem.segment = X86_REG_INVALID;
+            else if (Mutation == 4)
+              Insn.Raw->detail->x86.addr_size = AddressPrefix ? 8 : 4;
+            if (Mutation) {
+              expectUnaudited(Dec, Insn);
+              continue;
+            }
+            std::vector<LowOp> Ops;
+            LowInstructionUndefinedEffects Effects;
+            LowInstructionPreservedState Preserved;
+            Dec.liftToLow(Insn, Ops, {}, {}, &Effects, &Preserved);
+            ASSERT_EQ(Effects.Coverage, LowUndefinedCoverage::Complete)
+                << Effects.Diagnostic;
+            EXPECT_TRUE(Effects.Effects.empty());
+            EXPECT_EQ(Effects.OperationDigest,
+                      lowUndefinedOperationDigest(Ops));
+            EXPECT_EQ(Preserved, LowInstructionPreservedState{});
+            unsigned SegmentedOperations = 0;
+            for (const auto &Op : Ops)
+              if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
+                ++SegmentedOperations;
+                EXPECT_EQ(Op.MemoryAddressSpace,
+                          Segment == 0x64 ? NdMemoryAddressSpace::X86FS
+                                          : NdMemoryAddressSpace::X86GS);
+              }
+            EXPECT_EQ(SegmentedOperations, 2u);
+          }
         }
   }
 }

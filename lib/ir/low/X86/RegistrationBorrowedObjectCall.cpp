@@ -27,7 +27,7 @@ applyBorrowedObjectCall(PrivateFrameState &State,
   const auto &ABI = Callee;
   if (!SP || !Object.Offset || *Object.Offset < 0 || Object.FrameOnlyFromCall ||
       Object.ReturnPC || State.Frame.Registers[This].MayBeFrame ||
-      State.Frame.Registers[This].Constant ||
+      State.Frame.Registers[This].preferredAddress() ||
       State.CopySource.Registers[This].MayBeFrame ||
       ABI.StackPopBytes > UINT16_MAX || ABI.StackPopBytes % 4 ||
       int64_t(*SP) + ABI.StackPopBytes > 4 || !ABI.CallerPCWrites.empty() ||

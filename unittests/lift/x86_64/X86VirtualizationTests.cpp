@@ -182,3 +182,124 @@ TEST(X86Virtualization, AddressSizeAndSegmentsStayWithTheInstruction) {
   EXPECT_TRUE(x86VirtualizationShapeIsValid(
       Intrinsic::VmxReadMemory, x86VirtualizationLowShape(*Op, Arch::X64)));
 }
+
+TEST(X86Virtualization, KvmAbiRequiresFiveNaturalWidthValues) {
+  for (const auto Id : {Intrinsic::X86KvmVmcall, Intrinsic::X86KvmVmmcall})
+    for (const auto A : {Arch::X86, Arch::X64}) {
+      const uint16_t Word = A == Arch::X64 ? 8 : 4;
+      LowOp Op{.Opcode = NdOp::INTRINSIC, .Output = NdVar::tmp(0, Word)};
+      Op.addInput(NdVar::cst(uint64_t(Id), 2));
+      for (unsigned I = 0; I != 5; ++I)
+        Op.addInput(NdVar::reg(I * 8, Word));
+      const auto Valid = [&](const LowOp &Candidate) {
+        return x86VirtualizationShapeIsValid(
+            Id, x86VirtualizationLowShape(Candidate, A));
+      };
+      EXPECT_TRUE(Valid(Op));
+      EXPECT_TRUE(isSideeffectIntrinsic(Id));
+      for (unsigned I = 1; I != 6; ++I) {
+        auto Wrong = Op;
+        Wrong.Inputs[I].Size = 2;
+        EXPECT_FALSE(Valid(Wrong));
+      }
+      auto Missing = Op;
+      --Missing.NumInputs;
+      EXPECT_FALSE(Valid(Missing));
+      auto WrongResult = Op;
+      WrongResult.Output.Size = 2;
+      EXPECT_FALSE(Valid(WrongResult));
+      auto Segmented = Op;
+      Segmented.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      EXPECT_FALSE(Valid(Segmented));
+    }
+}
+
+TEST(X86Virtualization, SgxTransferRequiresACompleteBankAndOriginalPC) {
+  LowOp Op{.Opcode = NdOp::INTRINSIC};
+  Op.addInput(NdVar::cst(uint64_t(Intrinsic::X86SgxTransferAtContext), 2));
+  Op.addInput(NdVar::reg(x86reg::RDI, 8));
+  Op.addInput(NdVar::scalar(0xffff800012345678ULL, 8));
+  const auto Valid = [&](const LowOp &Candidate, Arch A = Arch::X64) {
+    return x86VirtualizationShapeIsValid(
+        Intrinsic::X86SgxTransferAtContext,
+        x86VirtualizationLowShape(Candidate, A));
+  };
+  EXPECT_TRUE(Valid(Op));
+  EXPECT_FALSE(Valid(Op, Arch::X86));
+  EXPECT_FALSE(Valid(Op, Arch::AArch64));
+  EXPECT_TRUE(isSideeffectIntrinsic(Intrinsic::X86SgxTransferAtContext));
+  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+    auto Bad = Op;
+    switch (Mutation) {
+    case 0:
+      Bad.Inputs[1].Size = 4;
+      break;
+    case 1:
+      Bad.Inputs[2] = NdVar::reg(x86reg::RCX, 8);
+      break;
+    case 2:
+      Bad.Inputs[2].Size = 4;
+      break;
+    case 3:
+      Bad.Output = NdVar::reg(x86reg::RAX, 8);
+      break;
+    case 4:
+      Bad.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      break;
+    case 5:
+      Bad.MemoryOrdering = NdMemoryOrdering::Acquire;
+      break;
+    case 6:
+      Bad.NumInputs = 2;
+      break;
+    }
+    EXPECT_FALSE(Valid(Bad)) << Mutation;
+  }
+}
+
+TEST(X86Virtualization, VmrunContextRequiresAnExplicitPointerAndConstantWidth) {
+  LowOp Op{.Opcode = NdOp::INTRINSIC};
+  Op.addInput(NdVar::cst(uint64_t(Intrinsic::X86SvmRunContext), 2));
+  Op.addInput(NdVar::reg(x86reg::RDI, 8));
+  Op.addInput(NdVar::scalar(64, 4));
+  const auto Valid = [&](const LowOp &Candidate, Arch A = Arch::X64) {
+    return x86VirtualizationShapeIsValid(
+        Intrinsic::X86SvmRunContext, x86VirtualizationLowShape(Candidate, A));
+  };
+  EXPECT_TRUE(Valid(Op));
+  EXPECT_FALSE(Valid(Op, Arch::X86));
+  EXPECT_FALSE(Valid(Op, Arch::AArch64));
+  EXPECT_TRUE(isSideeffectIntrinsic(Intrinsic::X86SvmRunContext));
+  for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+    auto Bad = Op;
+    switch (Mutation) {
+    case 0:
+      Bad.Inputs[1].Size = 4;
+      break;
+    case 1:
+      Bad.Inputs[2] = NdVar::reg(x86reg::RCX, 4);
+      break;
+    case 2:
+      Bad.Inputs[2] = NdVar::scalar(16, 4);
+      break;
+    case 3:
+      Bad.Inputs[2].Size = 8;
+      break;
+    case 4:
+      Bad.Output = NdVar::reg(x86reg::RAX, 8);
+      break;
+    case 5:
+      Bad.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+      break;
+    case 6:
+      Bad.MemoryOrdering = NdMemoryOrdering::Acquire;
+      break;
+    case 7:
+      Bad.NumInputs = 2;
+      break;
+    }
+    EXPECT_FALSE(Valid(Bad)) << Mutation;
+  }
+  Op.Inputs[2] = NdVar::scalar(32, 4);
+  EXPECT_TRUE(Valid(Op));
+}

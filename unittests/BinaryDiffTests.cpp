@@ -13,6 +13,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../lib/diff/Features.h"
+#include "../lib/diff/ReferenceContext.h"
+
 #include "neverd/diff/ChangeObservations.h"
 #include "neverd/diff/Comparison.h"
 #include "neverd/diff/ComparisonJSON.h"
@@ -29,6 +32,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <gtest/gtest.h>
 #include <map>
 #include <random>
@@ -912,6 +916,397 @@ TEST(BinaryDiff, SameSizeConstantEditStaysVisible) {
   EXPECT_EQ(Constants, 1u);
 }
 
+TEST(BinaryDiff, CallAnchorsSurviveRemovedGuardsAndReorderedFailurePaths) {
+  Fn Before;
+  Before.Name = "query";
+  Before.Blocks = {
+      {{"sub", "rsp, 40"},
+       {"test", "rdi, rdi"},
+       {"je", "", InstructionFlow::Branch}},
+      {{"mov", "rax, [rdi + 56]"},
+       {"test", "rax, rax"},
+       {"je", "", InstructionFlow::Branch}},
+      {{"mov", "r8, [rax + 56]"},
+       {"test", "r8, r8"},
+       {"je", "", InstructionFlow::Branch}},
+      {{"xor", "ecx, ecx"},
+       {"mov", "rdi, [rax]"},
+       {"lea", "rsi, [rsp + 8]"},
+       {"call", "r8", InstructionFlow::IndirectCall},
+       {"test", "eax, eax"},
+       {"jne", "", InstructionFlow::Branch}},
+      {{"mov", "rax, [rsp + 8]"}, {"jmp", "", InstructionFlow::Jump}},
+      {{"nop", ""}},
+      {{"xor", "eax, eax"}},
+      {{"mov", "rdx, [rsp + 24]"},
+       {"sub", "rdx, fs:[40]"},
+       {"jne", "", InstructionFlow::Branch}},
+      {{"add", "rsp, 40"}, {"ret", "", InstructionFlow::Return}},
+      {{"call", "", InstructionFlow::Call, "failure"}}};
+  Before.Edges = {{0, 6, EdgeKind::Taken},       {0, 1, EdgeKind::NotTaken},
+                  {1, 6, EdgeKind::Taken},       {1, 2, EdgeKind::NotTaken},
+                  {2, 6, EdgeKind::Taken},       {2, 3, EdgeKind::NotTaken},
+                  {3, 6, EdgeKind::Taken},       {3, 4, EdgeKind::NotTaken},
+                  {4, 7, EdgeKind::Jump},        {5, 6, EdgeKind::Fallthrough},
+                  {6, 7, EdgeKind::Fallthrough}, {7, 9, EdgeKind::Taken},
+                  {7, 8, EdgeKind::NotTaken}};
+  Fn After;
+  After.Name = Before.Name;
+  After.Blocks = {{{"sub", "rsp, 40"},
+                   {"mov", "rax, [rdi + 56]"},
+                   {"test", "rax, rax"},
+                   {"jne", "", InstructionFlow::Branch}},
+                  {{"xor", "eax, eax"}, {"jmp", "", InstructionFlow::Jump}},
+                  Before.Blocks[2],
+                  Before.Blocks[3],
+                  {Before.Blocks[4].front()},
+                  Before.Blocks[7],
+                  Before.Blocks[9],
+                  Before.Blocks[8]};
+  After.Blocks[5].back().Mnemonic = "je";
+  After.Edges = {{0, 2, EdgeKind::Taken},      {0, 1, EdgeKind::NotTaken},
+                 {1, 5, EdgeKind::Jump},       {2, 1, EdgeKind::Taken},
+                 {2, 3, EdgeKind::NotTaken},   {3, 1, EdgeKind::Taken},
+                 {3, 4, EdgeKind::NotTaken},   {4, 5, EdgeKind::Fallthrough},
+                 {5, 7, EdgeKind::Taken},      {5, 6, EdgeKind::NotTaken},
+                 {6, 7, EdgeKind::Fallthrough}};
+  Fn Retargeted = After;
+  Retargeted.Blocks[6].front().Callee = "other_failure";
+  const auto A =
+      build({Before, import("failure"), import("other_failure")}, 0x400000);
+  const auto B =
+      build({After, import("failure"), import("other_failure")}, 0x800000);
+  const auto C =
+      build({Retargeted, import("failure"), import("other_failure")}, 0x900000);
+  for (bool Reverse : {false, true}) {
+    SCOPED_TRACE(Reverse);
+    const auto &P = Reverse ? B : A, &S = Reverse ? A : B;
+    const auto R = compare(P, S, {});
+    std::vector<uint32_t> PMap(P.Functions.size(), NoIndex),
+        SMap(S.Functions.size(), NoIndex);
+    for (const auto &M : R.Matches) {
+      PMap[M.Primary] = M.Secondary;
+      SMap[M.Secondary] = M.Primary;
+    }
+    const auto D = compareFunctions(P, 0, S, 0, {PMap, SMap});
+    ASSERT_TRUE(D.ComputationComplete);
+    EXPECT_FALSE(D.Changes & ChangeCalls);
+    EXPECT_TRUE(D.Changes & ChangeInstructions);
+    EXPECT_TRUE(D.Changes & ChangeBranchInversion);
+    const auto CallPair = D.PrimaryBlockPair[Reverse ? 6 : 9];
+    ASSERT_NE(CallPair, NoIndex);
+    EXPECT_EQ(D.Blocks[CallPair].Secondary, Reverse ? 9u : 6u);
+    EXPECT_EQ(D.Blocks[CallPair].Step, BlockStep::BlockCalls);
+    const auto GuardPair = D.PrimaryBlockPair[Reverse ? 5 : 7];
+    ASSERT_NE(GuardPair, NoIndex);
+    EXPECT_EQ(D.Blocks[GuardPair].Secondary, Reverse ? 7u : 5u);
+
+    PMap[indexOf(P, "failure")] = SMap[indexOf(S, "failure")] = NoIndex;
+    const auto Unknown = compareFunctions(P, 0, S, 0, {PMap, SMap});
+    EXPECT_FALSE(llvm::any_of(Unknown.Blocks, [](const BlockPair &Pair) {
+      return Pair.Step == BlockStep::BlockCalls;
+    }));
+    const std::vector<uint32_t> Map{0, 1, 2};
+    const auto Changed =
+        compareFunctions(Reverse ? C : A, 0, Reverse ? A : C, 0, {Map, Map});
+    EXPECT_TRUE(Changed.Changes & ChangeCalls);
+  }
+}
+
+TEST(BinaryDiff,
+     CallOnlyExitsStillCompeteWithLargerBlocksCallingTheSameTarget) {
+  Fn Before;
+  Before.Name = "query";
+  Before.Blocks = {
+      {{"test", "rdi, rdi"},
+       {"xor", "eax, eax"},
+       {"ret", "", InstructionFlow::Return}},
+      {{"call", "", InstructionFlow::Call, "failure"}},
+      {{"mov", "edi, 1"}, {"call", "", InstructionFlow::Call, "failure"}}};
+  Fn After = Before;
+  After.Blocks[2].insert(After.Blocks[2].begin(), {"xor", "eax, eax"});
+  const auto A = build({Before, import("failure")}, 0x400000),
+             B = build({After, import("failure")}, 0x800000);
+  for (bool Reverse : {false, true}) {
+    const auto &P = Reverse ? B : A, &S = Reverse ? A : B;
+    const std::vector<uint32_t> Map{0, 1};
+    const auto D = compareFunctions(P, 0, S, 0, {Map, Map});
+    EXPECT_FALSE(llvm::any_of(D.Blocks, [](const BlockPair &Pair) {
+      return Pair.Step == BlockStep::BlockCalls;
+    }));
+  }
+}
+
+TEST(BinaryDiff, CompleteLocalCallBlocksSurviveOtherCallLayoutChanges) {
+  const auto Input = [](bool Secondary) {
+    Fn Caller;
+    Caller.Name = "caller";
+    Caller.Blocks = {
+        {{"test", "edi, edi"}, {"je", "", InstructionFlow::Branch}},
+        {{"mov", "edi, 11"},
+         {"call", "", InstructionFlow::Call, "callback_a"},
+         {"ret", "", InstructionFlow::Return}},
+        {{"mov", "edi, 22"},
+         {"call", "", InstructionFlow::Call, "callback_b"},
+         {"ret", "", InstructionFlow::Return}}};
+    Caller.Edges = {{0, 1, EdgeKind::NotTaken}, {0, 2, EdgeKind::Taken}};
+    Fn A = leaf("callback_a", 77, 5), B = A, Extra = leaf("extra", 1234, 4);
+    A.Source = B.Source = Extra.Source = NameSource::Generated;
+    B.Name = "callback_b";
+    if (Secondary) {
+      std::swap(Caller.Blocks[1], Caller.Blocks[2]);
+      Caller.Blocks.push_back({{"call", "", InstructionFlow::Call, "extra"},
+                               {"ret", "", InstructionFlow::Return}});
+    }
+    return build({Caller, A, B, Extra}, Secondary ? 0x8000 : 0x1000,
+                 Secondary ? std::vector<size_t>{0, 2, 1, 3}
+                           : std::vector<size_t>{0, 1, 2, 3});
+  };
+  const auto P = Input(false), S = Input(true);
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    const auto R = compare(A, B, {});
+    for (const auto *Name : {"callback_a", "callback_b"}) {
+      EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      if (const auto *M = R.matchOfPrimary(indexOf(A, Name)))
+        EXPECT_EQ(stepName(M->Step), "block_call_site");
+    }
+    auto Incomplete = A;
+    Incomplete.Functions[0].Traits |= TraitIncomplete;
+    const auto Unknown = compare(Incomplete, B, {});
+    EXPECT_EQ(Unknown.secondaryOf(indexOf(A, "callback_a")), NoIndex);
+    EXPECT_EQ(Unknown.secondaryOf(indexOf(A, "callback_b")), NoIndex);
+    auto Duplicate = A;
+    const auto &F = Duplicate.Functions[0];
+    const auto &First = Duplicate.Blocks[F.FirstBlock + 1];
+    const auto &Second = Duplicate.Blocks[F.FirstBlock + 2];
+    Duplicate.Instructions[Second.FirstInstruction].Shape =
+        Duplicate.Instructions[First.FirstInstruction].Shape;
+    Duplicate.Instructions[Second.FirstInstruction].AddressIndependentShape =
+        Duplicate.Instructions[First.FirstInstruction].AddressIndependentShape;
+    const auto Ambiguous = compare(Duplicate, B, {});
+    EXPECT_EQ(Ambiguous.secondaryOf(indexOf(A, "callback_a")), NoIndex);
+    EXPECT_EQ(Ambiguous.secondaryOf(indexOf(A, "callback_b")), NoIndex);
+    auto Conflict = A;
+    Conflict.Instructions[First.FirstInstruction + 1].Callee =
+        indexOf(A, "callback_b");
+    Conflict.Instructions[Second.FirstInstruction + 1].Callee =
+        indexOf(A, "callback_b");
+    const auto Contradictory = compare(Conflict, B, {});
+    EXPECT_EQ(Contradictory.secondaryOf(indexOf(A, "callback_a")), NoIndex);
+    EXPECT_EQ(Contradictory.secondaryOf(indexOf(A, "callback_b")), NoIndex);
+    auto Missing = A;
+    const auto CA = indexOf(A, "callback_a");
+    const auto FirstTarget = A.Instructions[First.FirstInstruction + 1].Callee;
+    const auto TargetBlock = FirstTarget == CA ? First : Second;
+    Missing.Instructions[TargetBlock.FirstInstruction].HasUnresolvedData = true;
+    EXPECT_EQ(compare(Missing, B, {}).secondaryOf(CA), NoIndex);
+    const Override Reject{OverrideKind::Unmatch, named(A, "callback_a").Address,
+                          named(B, "callback_a").Address};
+    EXPECT_EQ(compare(A, B, {}, {Reject}).secondaryOf(indexOf(A, "callback_a")),
+              NoIndex);
+  }
+  std::atomic<bool> Cancel{false};
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t Done, uint64_t) {
+    if (Phase == "block-call-context" && Done == 0)
+      Cancel = true;
+  };
+  const auto Stopped = compare(P, S, {}, {}, Control);
+  EXPECT_EQ(Stopped.State, ComparisonState::Cancelled);
+  EXPECT_EQ(Stopped.StoppedPhase, "block-call-context");
+  EXPECT_EQ(Stopped.secondaryOf(indexOf(P, "callback_a")), NoIndex);
+  EXPECT_EQ(Stopped.secondaryOf(indexOf(P, "callback_b")), NoIndex);
+}
+
+TEST(BinaryDiff, SingleBlockSpansKeepInstructionAndGraphEvidenceSeparate) {
+  Fn Before;
+  Before.Name = "guarded";
+  Before.Blocks = {{{"mov", "eax, 17"},
+                    {"add", "eax, 7"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Fn After = Before;
+  After.Blocks = {{{"test", "edi, edi"}, {"je", "", InstructionFlow::Branch}},
+                  {{"mov", "eax, 17"}, {"add", "eax, 7"}},
+                  {{"ret", "", InstructionFlow::Return}}};
+  After.Edges = {{0, 2, EdgeKind::Taken},
+                 {0, 1, EdgeKind::NotTaken},
+                 {1, 2, EdgeKind::Fallthrough}};
+  const auto P = build({Before}, 0x1000), S = build({After}, 0x8000);
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    const std::vector<uint32_t> Map{0};
+    const auto D = compareFunctions(A, 0, B, 0, {Map, Map});
+    EXPECT_EQ(D.EqualInstructions, 3u);
+    EXPECT_EQ(D.Alignment, CurrentInstructionAlignmentProfile);
+    const auto Legacy = compareFunctions(
+        A, 0, B, 0, {Map, Map}, {}, InstructionAlignmentProfile::PairedBlocks);
+    EXPECT_EQ(Legacy.EqualInstructions, 0u);
+    EXPECT_GT(D.Similarity, Legacy.Similarity);
+    EXPECT_TRUE(D.Changes & ChangeBlocks);
+    EXPECT_TRUE(D.Changes & ChangeEdges);
+    EXPECT_TRUE(D.Changes & ChangeEntry);
+    EXPECT_TRUE(D.Changes & ChangeInstructions);
+    EXPECT_LT(D.Similarity, 1);
+    ASSERT_EQ(D.Blocks.size(), 1u);
+    EXPECT_FALSE(D.Blocks[0].Unchanged);
+    EXPECT_FALSE(D.Blocks[0].Uncertain);
+    std::vector<unsigned> SeenA(A.Instructions.size()),
+        SeenB(B.Instructions.size());
+    for (const auto &Row : D.Rows) {
+      if (Row.Primary != NoIndex) {
+        ASSERT_LT(Row.Primary, A.Instructions.size());
+        ++SeenA[Row.Primary];
+        const auto &Block = A.Blocks[Row.PrimaryBlock];
+        EXPECT_GE(Row.Primary, Block.FirstInstruction);
+        EXPECT_LT(Row.Primary, Block.FirstInstruction + Block.InstructionCount);
+      }
+      if (Row.Secondary != NoIndex) {
+        ASSERT_LT(Row.Secondary, B.Instructions.size());
+        ++SeenB[Row.Secondary];
+        const auto &Block = B.Blocks[Row.SecondaryBlock];
+        EXPECT_GE(Row.Secondary, Block.FirstInstruction);
+        EXPECT_LT(Row.Secondary,
+                  Block.FirstInstruction + Block.InstructionCount);
+      }
+    }
+    EXPECT_TRUE(llvm::all_of(SeenA, [](unsigned N) { return N == 1; }));
+    EXPECT_TRUE(llvm::all_of(SeenB, [](unsigned N) { return N == 1; }));
+  }
+  auto Incomplete = P;
+  Incomplete.Functions[0].Traits |= TraitIncomplete;
+  const std::vector<uint32_t> Map{0};
+  auto Changed = After;
+  Changed.Blocks[1][1].Operands = "eax, 9";
+  const auto C = build({Changed}, 0x8000);
+  for (bool Reverse : {false, true}) {
+    const auto D =
+        compareFunctions(Reverse ? C : P, 0, Reverse ? P : C, 0, {Map, Map});
+    EXPECT_EQ(D.EqualInstructions, 2u);
+    EXPECT_TRUE(D.Changes & ChangeConstants);
+    EXPECT_TRUE(D.Changes & ChangeBlocks);
+    EXPECT_TRUE(llvm::any_of(
+        D.Rows, [](const auto &Row) { return Row.Kind == RowKind::Constant; }));
+  }
+  const auto Partial = compareFunctions(Incomplete, 0, S, 0, {Map, Map});
+  EXPECT_FALSE(Partial.AnalysisComplete);
+  EXPECT_EQ(Partial.EqualInstructions, 0u);
+  for (bool Exceptional : {false, true}) {
+    auto Modified = After;
+    if (Exceptional)
+      Modified.Edges.push_back({0, 2, EdgeKind::Exception});
+    else {
+      Modified.Blocks.back() = {{"jmp", "entry", InstructionFlow::Jump}};
+      Modified.Edges.push_back({2, 0, EdgeKind::Jump});
+    }
+    const auto C = build({Modified}, 0x8000);
+    const auto D = compareFunctions(P, 0, C, 0, {Map, Map});
+    const auto Legacy = compareFunctions(
+        P, 0, C, 0, {Map, Map}, {}, InstructionAlignmentProfile::PairedBlocks);
+    EXPECT_EQ(D.EqualInstructions, Legacy.EqualInstructions);
+    EXPECT_EQ(D.Similarity, Legacy.Similarity);
+  }
+}
+
+TEST(BinaryDiff, OrderedBlockSpansKeepChangedBoundariesVisible) {
+  Fn Before;
+  Before.Name = "guard_boundary";
+  Before.Blocks = {{{"test", "edi, edi"}, {"je", "", InstructionFlow::Branch}},
+                   {{"mov", "eax, 17"}, {"add", "eax, 7"}},
+                   {{"ret", "", InstructionFlow::Return}}};
+  Before.Edges = {{0, 2, EdgeKind::Taken},
+                  {0, 1, EdgeKind::NotTaken},
+                  {1, 2, EdgeKind::Fallthrough}};
+  auto After = Before;
+  After.Blocks[1].pop_back();
+  After.Blocks[2].insert(After.Blocks[2].begin(), {"add", "eax, 7"});
+  const auto P = build({Before}, 0x1000), S = build({After}, 0x8000);
+  const std::vector<uint32_t> Map{0};
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    const auto D = compareFunctions(A, 0, B, 0, {Map, Map});
+    EXPECT_EQ(D.EqualInstructions, 5u);
+    EXPECT_TRUE(D.Changes & ChangeBlocks);
+    EXPECT_LT(D.Similarity, 1);
+    const auto Legacy =
+        compareFunctions(A, 0, B, 0, {Map, Map}, {},
+                         InstructionAlignmentProfile::SingleBlockSpans);
+    EXPECT_EQ(Legacy.EqualInstructions, 4u);
+    EXPECT_GT(D.Similarity, Legacy.Similarity);
+    EXPECT_FALSE(llvm::all_of(D.Blocks, [](const auto &Pair) {
+      return Pair.Unchanged || Pair.Uncertain;
+    }));
+  }
+}
+
+TEST(BinaryDiff, SplitBlockSpansRetainCallIdentityAndReferenceGaps) {
+  Fn Before;
+  Before.Name = "call_guard";
+  Before.Blocks = {{{"mov", "edi, 17"},
+                    {"call", "", InstructionFlow::Call, "first"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Fn After = Before;
+  After.Blocks = {
+      {{"test", "edi, edi"}, {"je", "", InstructionFlow::Branch}},
+      {{"mov", "edi, 17"}, {"call", "", InstructionFlow::Call, "first"}},
+      {{"ret", "", InstructionFlow::Return}}};
+  After.Edges = {{0, 2, EdgeKind::Taken},
+                 {0, 1, EdgeKind::NotTaken},
+                 {1, 2, EdgeKind::Fallthrough}};
+  auto Changed = After;
+  Changed.Blocks[1][1].Callee = "second";
+  const auto P = build({Before, import("first"), import("second")}, 0x1000);
+  for (bool Retarget : {false, true}) {
+    const auto S =
+        build({Retarget ? Changed : After, import("first"), import("second")},
+              0x8000);
+    for (bool Reverse : {false, true}) {
+      const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+      const std::vector<uint32_t> Map{0, 1, 2};
+      const auto D = compareFunctions(A, 0, B, 0, {Map, Map});
+      EXPECT_EQ(D.EqualInstructions, Retarget ? 2u : 3u);
+      EXPECT_EQ(bool(D.Changes & ChangeCalls), Retarget);
+      EXPECT_TRUE(D.ReferenceComparisonComplete);
+      if (!Retarget) {
+        const std::vector<uint32_t> UnknownMap{0, NoIndex, 2};
+        const auto Unknown =
+            compareFunctions(A, 0, B, 0, {UnknownMap, UnknownMap});
+        EXPECT_EQ(Unknown.EqualInstructions, 2u);
+        EXPECT_FALSE(Unknown.ReferenceComparisonComplete);
+        EXPECT_FALSE(Unknown.Changes & ChangeCalls);
+        EXPECT_TRUE(llvm::any_of(Unknown.Rows, [](const auto &Row) {
+          return Row.Kind == RowKind::Uncertain;
+        }));
+      }
+    }
+  }
+}
+
+TEST(BinaryDiff, SingleCallEntrySurvivesAnInsertedGuard) {
+  Fn Before;
+  Before.Name = "fail";
+  Before.Blocks = {{{"call", "", InstructionFlow::Call, "failure"}}};
+  Fn After = Before;
+  After.Blocks = {{{"test", "edi, edi"}, {"je", "", InstructionFlow::Branch}},
+                  Before.Blocks[0],
+                  {{"ret", "", InstructionFlow::Return}}};
+  After.Edges = {{0, 2, EdgeKind::Taken}, {0, 1, EdgeKind::NotTaken}};
+  const auto A = build({Before, import("failure")}, 0x400000),
+             B = build({After, import("failure")}, 0x800000);
+  for (bool Reverse : {false, true}) {
+    const std::vector<uint32_t> Map{0, 1};
+    const auto D =
+        compareFunctions(Reverse ? B : A, 0, Reverse ? A : B, 0, {Map, Map});
+    EXPECT_FALSE(D.Changes & ChangeCalls);
+    EXPECT_TRUE(D.Changes & ChangeEntry);
+    const auto Call = D.PrimaryBlockPair[Reverse ? 1 : 0];
+    ASSERT_NE(Call, NoIndex);
+    EXPECT_EQ(D.Blocks[Call].Secondary, Reverse ? 0u : 1u);
+    EXPECT_EQ(D.Blocks[Call].Step, BlockStep::BlockCalls);
+  }
+}
+
 TEST(BinaryDiff, BranchInversionStaysVisible) {
   std::vector<Fn> Old = sample(), New = sample();
   for (Fn &F : New)
@@ -1007,6 +1402,1064 @@ TEST(BinaryDiff, UnknownDataDoesNotHideIndependentConstantChanges) {
     EXPECT_EQ(bool(M.Changes & ChangeBytes), Changed);
     EXPECT_EQ(changeState(M), Changed ? "changed" : "uncertain");
   }
+}
+
+namespace {
+struct DataContextInput {
+  bool Conflict = false;
+  bool KnownRetarget = false;
+  bool Incomplete = false;
+  bool MissingOccurrence = false;
+  bool Duplicate = false;
+  bool Witnesses = true;
+  bool AArch64 = false;
+};
+
+Program dataContextInput(bool Secondary, DataContextInput Options = {}) {
+  ProgramIdentity Identity;
+  Identity.SHA256 = std::string(64, Secondary ? 'b' : 'a');
+  Identity.Normalization = Options.AArch64 ? NativeAArch64Normalization.str()
+                                           : NativeX86Normalization.str();
+  ProgramBuilder Builder(Identity);
+  const uint64_t Base = Secondary ? 0x9000 : 0x1000;
+  const auto Add = [&](unsigned Index, unsigned Object, bool Anchor) {
+    const uint64_t Address = Base + Index * 0x100;
+    const uint64_t Key = (Secondary ? 100 : 10) + Object;
+    Builder.beginFunction(Address, 3, "f" + std::to_string(Index),
+                          Anchor ? NameSource::Symbol : NameSource::Generated,
+                          Anchor && Options.Incomplete ? TraitIncomplete : 0);
+    Builder.addBlock(Address);
+    std::vector<AddressReference> Refs{{Key, 1, ReferenceKind::UnresolvedData}};
+    if (Anchor && Options.KnownRetarget)
+      Refs.push_back({Secondary ? 801U : 800U, 2, ReferenceKind::Data});
+    Builder.addInstruction(Address, {0xa1}, "load", Key, 7,
+                           InstructionFlow::None, {}, {}, {}, Refs, 7, true);
+    if (Anchor && Options.MissingOccurrence)
+      Builder.addReference(ReferenceKind::UnresolvedData, 999, 0);
+    const uint8_t Tag = Anchor ? 30 + Index : 12;
+    Builder.addInstruction(Address + 1, {Tag}, "add", Tag, 8,
+                           InstructionFlow::None);
+    Builder.addInstruction(Address + 2, {0xc3}, "ret", 9, 9,
+                           InstructionFlow::Return);
+  };
+  if (Options.Witnesses) {
+    Add(0, 1, true);
+    Add(1, 2, true);
+    if (Options.Conflict)
+      Add(2, Secondary ? 2 : 1, true);
+  }
+  Add(3, 1, false);
+  Add(4, 2, false);
+  if (Options.Duplicate)
+    Add(5, 1, false);
+  return Builder.finish();
+}
+} // namespace
+
+TEST(BinaryDiff, IndependentDataReferenceRolesDistinguishDuplicateBodies) {
+  const auto ResetThreads =
+      llvm::scope_exit([] { neverd::setWorkerThreadCount(0); });
+  const auto P = dataContextInput(false), S = dataContextInput(true);
+  for (bool Reverse : {false, true})
+    for (unsigned Threads : {1U, 4U}) {
+      neverd::setWorkerThreadCount(Threads);
+      const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+      const auto R = compare(A, B, {});
+      ASSERT_EQ(R.Matches.size(), 4u);
+      for (uint32_t I : {2U, 3U}) {
+        const auto *M = R.matchOfPrimary(I);
+        ASSERT_NE(M, nullptr);
+        EXPECT_EQ(M->Secondary, I);
+        EXPECT_EQ(M->Step, FunctionStep::DataReference);
+        EXPECT_TRUE(M->FromContext);
+        EXPECT_FALSE(M->ReferenceComparisonComplete);
+        EXPECT_FALSE(M->identical());
+        EXPECT_EQ(changeState(*M), "uncertain");
+      }
+    }
+}
+
+TEST(BinaryDiff, DataReferenceContextRequiresIndependentCompleteWitnesses) {
+  for (const DataContextInput Options :
+       {DataContextInput{.Conflict = true},
+        DataContextInput{.KnownRetarget = true},
+        DataContextInput{.Incomplete = true},
+        DataContextInput{.MissingOccurrence = true},
+        DataContextInput{.Witnesses = false},
+        DataContextInput{.AArch64 = true}}) {
+    const auto P = dataContextInput(false, Options);
+    const auto S = dataContextInput(true, Options);
+    for (bool Reverse : {false, true}) {
+      const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+      const auto R = compare(A, B, {});
+      const unsigned Anchors = !Options.Witnesses ? 0
+                               : Options.Conflict ? 3
+                                                  : 2;
+      EXPECT_EQ(R.Matches.size(), Anchors);
+      for (const auto &M : R.Matches)
+        EXPECT_NE(M.Step, FunctionStep::DataReference);
+    }
+  }
+}
+
+TEST(BinaryDiff, SharedDataRolesDoNotCollapseDuplicatesOrLowerThresholds) {
+  const auto P = dataContextInput(false, {.Duplicate = true});
+  const auto S = dataContextInput(true, {.Duplicate = true});
+  const auto R = compare(P, S, {});
+  ASSERT_EQ(R.Matches.size(), 3u);
+  EXPECT_EQ(R.secondaryOf(3), 3u);
+  EXPECT_EQ(R.secondaryOf(2), NoIndex);
+  EXPECT_EQ(R.secondaryOf(4), NoIndex);
+
+  ComparisonSettings Strict;
+  Strict.MinimumSimilarity = 1;
+  const auto Limited = compare(P, S, Strict);
+  EXPECT_EQ(Limited.Matches.size(), 2u);
+}
+
+TEST(BinaryDiff, DataReferenceContextRespectsRejectionAndCancellation) {
+  const auto P = dataContextInput(false), S = dataContextInput(true);
+  const std::vector<Override> Overrides{
+      {OverrideKind::Unmatch, 0x1300, 0x9300}};
+  const auto Rejected = compare(P, S, {}, Overrides);
+  EXPECT_EQ(Rejected.secondaryOf(2), NoIndex);
+  EXPECT_EQ(Rejected.secondaryOf(3), 3u);
+
+  std::atomic<bool> Cancel{false};
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t, uint64_t) {
+    if (Phase == "data-reference-context")
+      Cancel = true;
+  };
+  const auto Stopped = compare(P, S, {}, {}, Control);
+  EXPECT_EQ(Stopped.State, ComparisonState::Cancelled);
+  EXPECT_EQ(Stopped.StoppedPhase, "data-reference-context");
+  EXPECT_EQ(Stopped.Matches.size(), 2u);
+}
+
+TEST(BinaryDiff, DataReferenceMatchesRestoreWithoutInventingDataIdentity) {
+  const auto P = dataContextInput(false), S = dataContextInput(true);
+  const auto R = compare(P, S, {});
+  ASSERT_EQ(R.Matches.size(), 4u);
+  std::string Error;
+  const auto Read = readComparison(saved(R, P, S), Error);
+  ASSERT_TRUE(Read) << Error;
+  ComparisonResult Restored;
+  const auto Failure = bindComparison(*Read, P, S, Restored);
+  ASSERT_FALSE(Failure) << *Failure;
+  EXPECT_EQ(savedWithoutTimings(R, P, S), savedWithoutTimings(Restored, P, S));
+  const auto *M = Restored.matchOfPrimary(2);
+  ASSERT_NE(M, nullptr);
+  EXPECT_EQ(M->Step, FunctionStep::DataReference);
+  EXPECT_FALSE(M->ReferenceComparisonComplete);
+  EXPECT_EQ(changeState(*M), "uncertain");
+}
+
+TEST(BinaryDiff, AddressOperandRolesDistinguishReorderedDuplicateCallbacks) {
+  Fn A = leaf("callback_a", 41), B = A;
+  B.Name = "callback_b";
+  A.Source = B.Source = NameSource::Generated;
+  Fn Holder = leaf("holder", 53);
+  Holder.AddressTargets = {A.Name, B.Name};
+  const auto P = build({Holder, A, B}, 0x1000);
+  const auto S = build({Holder, A, B}, 0x9000, {0, 2, 1});
+  for (bool Reverse : {false, true}) {
+    const auto &Before = Reverse ? S : P, &After = Reverse ? P : S;
+    const auto R = compare(Before, After, {});
+    ASSERT_EQ(R.Matches.size(), 3u);
+    for (const auto *Name : {"callback_a", "callback_b"}) {
+      const auto &M = matchOf(R, Before, Name);
+      EXPECT_EQ(counterpart(R, Before, After, Name), Name);
+      EXPECT_EQ(M.Step, FunctionStep::AddressSite);
+      EXPECT_TRUE(M.FromContext);
+    }
+    std::string Error;
+    const auto Read = readComparison(saved(R, Before, After), Error);
+    ASSERT_TRUE(Read) << Error;
+    ComparisonResult Restored;
+    ASSERT_FALSE(bindComparison(*Read, Before, After, Restored));
+    EXPECT_EQ(savedWithoutTimings(R, Before, After),
+              savedWithoutTimings(Restored, Before, After));
+  }
+}
+
+TEST(BinaryDiff, ConflictingAddressOperandRolesRemainAmbiguous) {
+  Fn A = leaf("callback_a", 41), B = A;
+  B.Name = "callback_b";
+  A.Source = B.Source = NameSource::Generated;
+  Fn First = leaf("first_holder", 53), Second = leaf("second_holder", 61);
+  First.AddressTargets = Second.AddressTargets = {A.Name, B.Name};
+  const auto P = build({First, Second, A, B}, 0x1000);
+  Second.AddressTargets = {B.Name, A.Name};
+  const auto S = build({First, Second, A, B}, 0x9000);
+  for (bool Reverse : {false, true}) {
+    const auto R = compare(Reverse ? S : P, Reverse ? P : S, {});
+    EXPECT_EQ(R.Matches.size(), 2u);
+    EXPECT_EQ(R.secondaryOf(2), NoIndex);
+    EXPECT_EQ(R.secondaryOf(3), NoIndex);
+  }
+}
+
+TEST(BinaryDiff, AddressRoleWitnessesRetainBodyAndKnownCallConstraints) {
+  for (bool Incomplete : {false, true}) {
+    Fn A = leaf("callback_a", 41), B = A;
+    B.Name = "callback_b";
+    A.Source = B.Source = NameSource::Generated;
+    Fn Holder = leaf("holder", 53);
+    Holder.AddressTargets = {A.Name, B.Name};
+    Holder.Blocks[0].insert(Holder.Blocks[0].begin(),
+                            {"call", "", InstructionFlow::Call, "callee_a"});
+    if (Incomplete)
+      Holder.Traits |= TraitIncomplete;
+    const auto P = build(
+        {Holder, A, B, leaf("callee_a", 61), leaf("callee_b", 71)}, 0x1000);
+    if (!Incomplete)
+      Holder.Blocks[0].front().Callee = "callee_b";
+    const auto S = build(
+        {Holder, A, B, leaf("callee_a", 61), leaf("callee_b", 71)}, 0x9000);
+    for (bool Reverse : {false, true}) {
+      const auto R = compare(Reverse ? S : P, Reverse ? P : S, {});
+      EXPECT_EQ(R.Matches.size(), 3u);
+      EXPECT_EQ(R.secondaryOf(1), NoIndex);
+      EXPECT_EQ(R.secondaryOf(2), NoIndex);
+    }
+  }
+}
+
+TEST(BinaryDiff, ConflictingCallRolesRetainWeakMatchesForReview) {
+  for (bool NamedCaller : {false, true})
+    for (bool Tail : {false, true}) {
+      SCOPED_TRACE(NamedCaller);
+      SCOPED_TRACE(Tail);
+      Fn Before = diamond("old_body", 11);
+      Before.Source = NameSource::Generated;
+      Fn Helper = Before;
+      Helper.Name = "new_helper";
+      Helper.Blocks[0][0].Operands = "r0, 123";
+      Fn Public = leaf("new_public", 197, 30);
+      Public.Source = NameSource::Generated;
+      Fn Anchor = leaf("caller", 53);
+      Anchor.Source = NamedCaller ? NameSource::Symbol : NameSource::Generated;
+      if (Tail)
+        Anchor.Blocks[0].back() = {"jmp", "", InstructionFlow::Jump,
+                                   Before.Name};
+      else
+        Anchor.Blocks[0].insert(
+            Anchor.Blocks[0].begin() + 1,
+            {"call", "", InstructionFlow::Call, Before.Name});
+      const auto P = build({Anchor, Before}, 0x1000);
+      Anchor.Blocks[0][Tail ? Anchor.Blocks[0].size() - 1 : 1].Callee =
+          Public.Name;
+      const auto S = build({Anchor, Public, Helper}, 0x9000);
+      for (bool Reverse : {false, true}) {
+        const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+        const auto R = compare(A, B, {});
+        EXPECT_EQ(R.Matches.size(), 1u);
+        const auto HasCandidate = [&](const ComparisonResult &Result,
+                                      const char *Alternative) {
+          const auto AI = indexOf(A, Reverse ? Alternative : "old_body");
+          const auto BI = indexOf(B, Reverse ? "old_body" : Alternative);
+          return llvm::any_of(Result.Ambiguities, [&](const Ambiguity &Group) {
+            return llvm::is_contained(Group.Primary, AI) &&
+                   llvm::is_contained(Group.Secondary, BI);
+          });
+        };
+        for (const auto *Alternative : {"new_public", "new_helper"})
+          EXPECT_TRUE(HasCandidate(R, Alternative));
+        std::string Error;
+        const auto Read = readComparison(saved(R, A, B), Error);
+        ASSERT_TRUE(Read) << Error;
+        ComparisonResult Edited;
+        ASSERT_FALSE(bindComparison(*Read, A, B, Edited));
+        const auto Original = savedWithoutTimings(R, A, B);
+        EXPECT_EQ(savedWithoutTimings(Edited, A, B), Original);
+        const auto PI = indexOf(A, Reverse ? "new_public" : "old_body");
+        const auto SI = indexOf(B, Reverse ? "old_body" : "new_public");
+        const Override Choice{OverrideKind::Match, A.Functions[PI].Address,
+                              B.Functions[SI].Address};
+        OverrideEffect Effect;
+        ASSERT_FALSE(applyOverride(Edited, A, B, Choice, &Effect));
+        EXPECT_EQ(Edited.secondaryOf(PI), SI);
+        revertOverride(Edited, A, B, Effect);
+        EXPECT_EQ(savedWithoutTimings(Edited, A, B), Original);
+        EXPECT_EQ(compare(A, B, {}, {Choice}).secondaryOf(PI), SI);
+
+        const auto HI = indexOf(A, Reverse ? "new_helper" : "old_body");
+        const auto HJ = indexOf(B, Reverse ? "old_body" : "new_helper");
+        for (auto Kind : {OverrideKind::Match, OverrideKind::Confirm}) {
+          const Override Keep{Kind, A.Functions[HI].Address,
+                              B.Functions[HJ].Address};
+          EXPECT_EQ(compare(A, B, {}, {Keep}).secondaryOf(HI), HJ);
+        }
+        Override Reject = Choice;
+        Reject.Kind = OverrideKind::Unmatch;
+        const auto Rejected = compare(A, B, {}, {Reject});
+        EXPECT_EQ(Rejected.secondaryOf(HI), HJ);
+        EXPECT_FALSE(HasCandidate(Rejected, "new_public"));
+      }
+    }
+}
+
+TEST(BinaryDiff, CallRoleReviewPreservesKnownAndUnknownConstraints) {
+  enum class Case {
+    Incomplete,
+    DisagreeingCallers,
+    KnownRetarget,
+    UnrecordedData,
+    UnknownData,
+    ExactBody,
+    NamedBody,
+    ChangedScalar
+  };
+  for (const auto Kind :
+       {Case::Incomplete, Case::DisagreeingCallers, Case::KnownRetarget,
+        Case::UnrecordedData, Case::UnknownData, Case::ExactBody,
+        Case::NamedBody, Case::ChangedScalar}) {
+    SCOPED_TRACE(unsigned(Kind));
+    Fn Before = diamond("old_body", 11);
+    Before.Source = NameSource::Generated;
+    Fn Helper = Before;
+    Helper.Name = "new_helper";
+    if (Kind != Case::ExactBody)
+      Helper.Blocks[0][0].Operands = "r0, 123";
+    if (Kind == Case::NamedBody) {
+      Before.Source = Helper.Source = NameSource::Symbol;
+      Helper.Name = Before.Name;
+    }
+    Fn Public = leaf("new_public", 197, 30);
+    Public.Source = NameSource::Generated;
+    Fn Anchor = leaf("caller", 53);
+    Anchor.Blocks[0].insert(Anchor.Blocks[0].begin() + 1,
+                            {"call", "", InstructionFlow::Call, Before.Name});
+    if (Kind == Case::Incomplete)
+      Anchor.Traits |= TraitIncomplete;
+    std::vector<Fn> Left{Anchor, Before};
+    Anchor.Blocks[0][1].Callee = Public.Name;
+    std::vector<Fn> Right{Anchor, Public, Helper};
+    if (Kind == Case::DisagreeingCallers) {
+      auto Other = caller("other_caller", 71, {Before.Name});
+      Left.push_back(Other);
+      Other.Blocks[1][2].Callee = Helper.Name;
+      Right.push_back(Other);
+    }
+    if (Kind == Case::KnownRetarget) {
+      for (const auto *Name : {"stable_a", "stable_b"}) {
+        Left.push_back(import(Name));
+        Right.push_back(import(Name));
+      }
+      Left[0].Blocks[0].insert(Left[0].Blocks[0].begin() + 2,
+                               {"call", "", InstructionFlow::Call, "stable_a"});
+      Right[0].Blocks[0].insert(
+          Right[0].Blocks[0].begin() + 2,
+          {"call", "", InstructionFlow::Call, "stable_b"});
+    }
+    if (Kind == Case::ChangedScalar)
+      Right[0].Blocks[0][0].Operands = "r0, 789";
+    auto P = build(Left, 0x1000), S = build(Right, 0x9000);
+    for (auto *Input : {&P, &S})
+      if (Kind == Case::UnrecordedData || Kind == Case::UnknownData) {
+        auto &I = Input->Instructions[0];
+        I.HasUnresolvedData = true;
+        if (Kind == Case::UnknownData) {
+          I.FirstAddressReference = Input->AddressReferences.size();
+          I.AddressReferenceCount = 1;
+          Input->AddressReferences.push_back(
+              {0x8000, 0, ReferenceKind::UnresolvedData});
+        }
+      }
+    for (bool Reverse : {false, true}) {
+      const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+      const auto R = compare(A, B, {});
+      const auto AI = indexOf(A, Reverse ? Helper.Name : Before.Name);
+      const auto BI = indexOf(B, Reverse ? Before.Name : Helper.Name);
+      if (Kind == Case::Incomplete)
+        EXPECT_EQ(R.secondaryOf(AI), NoIndex);
+      else
+        EXPECT_EQ(R.secondaryOf(AI), BI);
+    }
+  }
+}
+
+TEST(BinaryDiff, SplitAndLocalCallRolesRetainIndependentReviewEvidence) {
+  enum class Case {
+    Split,
+    OtherBlockEdit,
+    ScalarEdit,
+    Incomplete,
+    UnknownData,
+    UnknownInstruction,
+    IndirectCall
+  };
+  for (auto Kind :
+       {Case::Split, Case::OtherBlockEdit, Case::ScalarEdit, Case::Incomplete,
+        Case::UnknownData, Case::UnknownInstruction, Case::IndirectCall})
+    for (bool Reorder : {false, true}) {
+      SCOPED_TRACE(unsigned(Kind));
+      Fn Old = diamond("old", 11);
+      Old.Source = NameSource::Generated;
+      Fn Helper = Old;
+      Helper.Name = "helper";
+      Helper.Blocks[0][0].Operands = "r0, 123";
+      Fn Public = leaf("public", 197, 30);
+      Public.Source = NameSource::Generated;
+      Fn Caller = diamond("caller", 53);
+      Caller.Blocks[1].insert(Caller.Blocks[1].begin() + 1,
+                              {"call", "", InstructionFlow::Call, Old.Name});
+      Fn Other = leaf("other", 71);
+      Other.Blocks[0].insert(Other.Blocks[0].begin() + 1,
+                             {"call", "", InstructionFlow::Call, Old.Name});
+      auto P = build({Caller, Other, Old}, 0x1000);
+      Caller.Blocks[1][1].Callee = Public.Name;
+      Other.Blocks[0][1].Callee = Helper.Name;
+      if (Kind == Case::OtherBlockEdit)
+        Caller.Blocks[0][0].Operands = "r4, 12345";
+      if (Kind == Case::ScalarEdit)
+        Caller.Blocks[1][0].Operands = "r4, 12345";
+      if (Kind == Case::Incomplete)
+        Caller.Traits |= TraitIncomplete;
+      if (Kind == Case::UnknownInstruction || Kind == Case::IndirectCall) {
+        Caller.Traits |= TraitIncomplete;
+        Caller.Blocks[1][0].Flow = Kind == Case::UnknownInstruction
+                                       ? InstructionFlow::Unknown
+                                       : InstructionFlow::IndirectCall;
+      }
+      auto S = build({Caller, Other, Helper, Public}, 0x9000,
+                     Reorder ? std::vector<size_t>{3, 1, 2, 0}
+                             : std::vector<size_t>{});
+      if (Kind == Case::UnknownData) {
+        const auto &F = named(S, Caller.Name);
+        S.Instructions[S.blocks(F)[1].FirstInstruction].HasUnresolvedData =
+            true;
+      }
+      for (bool Reverse : {false, true}) {
+        const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+        const auto AF = computeFeatures(A, {}), BF = computeFeatures(B, {});
+        std::vector<uint32_t> AM(A.Functions.size(), NoIndex),
+            BM(B.Functions.size(), NoIndex), AW(A.Functions.size(), NoIndex),
+            BW(B.Functions.size(), NoIndex);
+        std::vector<uint8_t> AT(A.Functions.size(), 0),
+            BT(B.Functions.size(), 0);
+        for (const auto *Name : {"caller", "other"}) {
+          const uint32_t X = indexOf(A, Name), Y = indexOf(B, Name);
+          AM[X] = Y;
+          BM[Y] = X;
+          AT[X] = BT[Y] = 1;
+        }
+        const uint32_t X = indexOf(A, Reverse ? "helper" : "old");
+        const uint32_t Y = indexOf(B, Reverse ? "old" : "helper");
+        AM[X] = Y;
+        BM[Y] = X;
+        AW[X] = BW[Y] = 0;
+        const std::pair<uint32_t, uint32_t> Expected{
+            indexOf(A, Reverse ? "public" : "old"),
+            indexOf(B, Reverse ? "old" : "public")};
+        std::vector<std::pair<uint32_t, uint32_t>> Split;
+        EXPECT_TRUE(
+            conflictingCallCandidates(A, AF, AM, AW, B, BF, BM, BW, {}, &Split)
+                .empty());
+        EXPECT_EQ(llvm::is_contained(Split, Expected), Kind == Case::Split);
+        const auto Blocks =
+            blockCallCandidates(A, AM, AT, B, BM, BT, {}, AW, BW);
+        EXPECT_EQ(llvm::is_contained(Blocks, Expected),
+                  Kind == Case::Split || Kind == Case::OtherBlockEdit ||
+                      Kind == Case::Incomplete);
+        ComparisonControl Cancel;
+        std::atomic<bool> Stop{true};
+        Cancel.Cancel = &Stop;
+        EXPECT_TRUE(
+            blockCallCandidates(A, AM, AT, B, BM, BT, Cancel, AW, BW).empty());
+      }
+    }
+}
+
+TEST(BinaryDiff, OrderedCallReviewRequiresDistinctIndependentTargets) {
+  enum class Case { Normal, Repeated, MissingAnchor, UnknownCall, SamePrior };
+  for (auto Kind : {Case::Normal, Case::Repeated, Case::MissingAnchor,
+                    Case::UnknownCall, Case::SamePrior})
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(unsigned(Kind));
+      auto Old = leaf("old", 41);
+      Old.Source = NameSource::Generated;
+      Old.Blocks[0].insert(Old.Blocks[0].begin() + 1,
+                           {"call", "", InstructionFlow::Call, "first"});
+      Old.Blocks[0].insert(Old.Blocks[0].begin() + 3,
+                           {"call", "", InstructionFlow::Call,
+                            Kind == Case::Repeated ? "first" : "second"});
+      auto Other = Old;
+      Other.Name = "other";
+      if (Kind != Case::SamePrior)
+        for (auto &I : Other.Blocks[0])
+          if (I.Flow == InstructionFlow::Call)
+            I.Callee = "third";
+      auto Public = Old;
+      Public.Name = "public";
+      auto P = build({Old, import("first"), import("second"), import("third")},
+                     0x1000);
+      auto S = build(
+          {Other, Public, import("first"), import("second"), import("third")},
+          0x9000, {4, 1, 3, 0, 2});
+      if (Kind == Case::UnknownCall) {
+        auto &I =
+            S.Instructions[S.blocks(named(S, "public"))[0].FirstInstruction +
+                           1];
+        I.Callee = NoIndex;
+        I.UnresolvedCallee = true;
+      }
+      const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+      const auto AF = computeFeatures(A, {}), BF = computeFeatures(B, {});
+      std::vector<uint32_t> AM(A.Functions.size(), NoIndex),
+          BM(B.Functions.size(), NoIndex), AW(A.Functions.size(), NoIndex),
+          BW(B.Functions.size(), NoIndex);
+      std::vector<uint8_t> AT(A.Functions.size(), 0), BT(B.Functions.size(), 0);
+      for (const auto *Name : {"first", "second", "third"}) {
+        const uint32_t X = indexOf(A, Name), Y = indexOf(B, Name);
+        AM[X] = Y;
+        BM[Y] = X;
+        AT[X] = BT[Y] =
+            Kind != Case::MissingAnchor || Name != std::string("second");
+      }
+      const uint32_t X = indexOf(A, Reverse ? "other" : "old");
+      const uint32_t Y = indexOf(B, Reverse ? "old" : "other");
+      AM[X] = Y;
+      BM[Y] = X;
+      AW[X] = BW[Y] = 0;
+      const auto Candidates = neighborhoodReviewCandidates(A, AF, AM, AW, AT, B,
+                                                           BF, BM, BW, BT, {});
+      ASSERT_EQ(Candidates.size(), Kind == Case::Normal ? 1u : 0u);
+      if (!Candidates.empty()) {
+        EXPECT_EQ(Candidates[0].Primary,
+                  indexOf(A, Reverse ? "public" : "old"));
+        EXPECT_EQ(Candidates[0].Secondary,
+                  indexOf(B, Reverse ? "old" : "public"));
+        EXPECT_TRUE(Candidates[0].OrderedCallees);
+      }
+      ComparisonControl Cancel;
+      std::atomic<bool> Stop{true};
+      Cancel.Cancel = &Stop;
+      EXPECT_TRUE(neighborhoodReviewCandidates(A, AF, AM, AW, AT, B, BF, BM, BW,
+                                               BT, Cancel)
+                      .empty());
+    }
+}
+
+TEST(BinaryDiff, CallerReviewCountsIndependentObservedWitnesses) {
+  enum class Case {
+    Normal,
+    SingleWitness,
+    MissingOccurrence,
+    PartialCallers,
+    SingleCallee
+  };
+  for (auto Kind : {Case::Normal, Case::SingleWitness, Case::MissingOccurrence,
+                    Case::PartialCallers, Case::SingleCallee})
+    for (bool Reverse : {false, true}) {
+      SCOPED_TRACE(unsigned(Kind));
+      auto Old = leaf("old", 11);
+      Old.Source = NameSource::Generated;
+      Old.Blocks[0].insert(Old.Blocks[0].begin() + 1,
+                           {"call", "", InstructionFlow::Call, "first"});
+      Old.Blocks[0].insert(Old.Blocks[0].begin() + 3,
+                           {"call", "", InstructionFlow::Call, "second"});
+      auto Other = Old;
+      Other.Name = "other";
+      Other.Blocks[0][1].Callee = Other.Blocks[0][3].Callee = "third";
+      auto Public = Old;
+      Public.Name = "public";
+      Public.Blocks[0][1].Callee = "second";
+      Public.Blocks[0][3].Callee = "first";
+      const auto Caller = [&](const char *Name, unsigned Seed,
+                              const char *Target) {
+        auto F = leaf(Name, Seed);
+        if (Kind == Case::PartialCallers)
+          F.Traits |= TraitIncomplete;
+        F.Blocks[0].insert(F.Blocks[0].begin() + 1,
+                           {"call", "", InstructionFlow::Call, Target});
+        return F;
+      };
+      const auto P =
+          build({Old, Caller("caller_a", 53, "old"),
+                 Caller("caller_b", 71, "old"), Caller("caller_c", 101, "old"),
+                 import("first"), import("second"), import("third")},
+                0x1000);
+      auto Last = Caller("caller_c", 101, "other");
+      if (Kind != Case::MissingOccurrence)
+        Last.Blocks[0].insert(Last.Blocks[0].begin() + 2,
+                              {"call", "", InstructionFlow::Call, "public"});
+      const auto S =
+          build({Other, Public, Caller("caller_a", 53, "public"),
+                 Caller("caller_b", 71,
+                        Kind == Case::SingleWitness ? "other" : "public"),
+                 Last, import("first"), import("second"), import("third")},
+                0x9000, {7, 3, 1, 5, 0, 4, 2, 6});
+      const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+      const auto AF = computeFeatures(A, {}), BF = computeFeatures(B, {});
+      std::vector<uint32_t> AM(A.Functions.size(), NoIndex),
+          BM(B.Functions.size(), NoIndex), AW(A.Functions.size(), NoIndex),
+          BW(B.Functions.size(), NoIndex);
+      std::vector<uint8_t> AT(A.Functions.size(), 0), BT(B.Functions.size(), 0);
+      for (const auto *Name :
+           {"first", "second", "third", "caller_a", "caller_b", "caller_c"}) {
+        const uint32_t X = indexOf(A, Name), Y = indexOf(B, Name);
+        AM[X] = Y;
+        BM[Y] = X;
+        AT[X] = BT[Y] =
+            Kind != Case::SingleCallee || llvm::StringRef(Name) != "second";
+      }
+      const uint32_t X = indexOf(A, Reverse ? "other" : "old");
+      const uint32_t Y = indexOf(B, Reverse ? "old" : "other");
+      AM[X] = Y;
+      BM[Y] = X;
+      AW[X] = BW[Y] = 0;
+      const auto Candidates = neighborhoodReviewCandidates(A, AF, AM, AW, AT, B,
+                                                           BF, BM, BW, BT, {});
+      const bool Expected =
+          Kind != Case::SingleWitness && Kind != Case::MissingOccurrence;
+      ASSERT_EQ(Candidates.size(), Expected ? 1u : 0u);
+      if (Expected) {
+        EXPECT_EQ(Candidates[0].Primary,
+                  indexOf(A, Reverse ? "public" : "old"));
+        EXPECT_EQ(Candidates[0].Secondary,
+                  indexOf(B, Reverse ? "old" : "public"));
+        EXPECT_FALSE(Candidates[0].OrderedCallees);
+        EXPECT_EQ(Candidates[0].BothDirections, Kind != Case::SingleCallee);
+      }
+    }
+}
+
+TEST(BinaryDiff, ContradictoryCFGMatchesRequireKnownInstructionEvidence) {
+  for (bool SharedCallee : {false, true})
+    for (bool Reverse : {false, true}) {
+      auto Before = diamond("before", 11);
+      Before.Source = NameSource::Generated;
+      auto After = diamond("after", 197);
+      After.Source = NameSource::Generated;
+      Before.Blocks[0].insert(Before.Blocks[0].begin() + 1,
+                              {"call", "", InstructionFlow::Call, "first"});
+      After.Blocks[0].insert(After.Blocks[0].begin() + 1,
+                             {"call", "", InstructionFlow::Call, "second"});
+      After.Blocks[1][0].Mnemonic = "xor";
+      if (SharedCallee)
+        for (auto *F : {&Before, &After})
+          F->Blocks[0].insert(F->Blocks[0].begin() + 2,
+                              {"call", "", InstructionFlow::Call, "third"});
+      const auto P = build(
+          {Before, import("first"), import("second"), import("third")}, 0x1000);
+      const auto S =
+          build({After, import("first"), import("second"), import("third")},
+                0x9000, {3, 0, 2, 1});
+      const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+      const uint32_t X = indexOf(A, Reverse ? "after" : "before");
+      const uint32_t Y = indexOf(B, Reverse ? "before" : "after");
+      ComparisonSettings Settings;
+      const auto R = compare(A, B, Settings);
+      std::vector<uint32_t> AM(A.Functions.size(), NoIndex),
+          BM(B.Functions.size(), NoIndex);
+      for (const auto &M : R.Matches) {
+        AM[M.Primary] = M.Secondary;
+        BM[M.Secondary] = M.Primary;
+      }
+      const auto D = compareFunctions(A, X, B, Y, {AM, BM}, {},
+                                      CandidateInstructionAlignmentProfile);
+      ASSERT_TRUE(D.ComputationComplete);
+      ASSERT_GE(D.Similarity, Settings.MinimumSimilarity);
+      EXPECT_LT(2.0 * D.EqualInstructions /
+                    double(A.instructionCount(A.Functions[X]) +
+                           B.instructionCount(B.Functions[Y])),
+                Settings.MinimumSimilarity);
+      if (SharedCallee) {
+        EXPECT_EQ(R.secondaryOf(X), Y);
+      } else {
+        EXPECT_EQ(R.secondaryOf(X), NoIndex);
+        EXPECT_TRUE(llvm::any_of(R.Ambiguities, [&](const Ambiguity &G) {
+          return llvm::is_contained(G.Primary, X) &&
+                 llvm::is_contained(G.Secondary, Y);
+        }));
+        Settings.MinimumSimilarity = 0;
+        EXPECT_EQ(compare(A, B, Settings).secondaryOf(X), Y);
+      }
+      for (auto Kind : {OverrideKind::Match, OverrideKind::Confirm}) {
+        const Override Keep{Kind, A.Functions[X].Address,
+                            B.Functions[Y].Address};
+        EXPECT_EQ(compare(A, B, {}, {Keep}).secondaryOf(X), Y);
+      }
+      std::string Error;
+      const auto Read = readComparison(saved(R, A, B), Error);
+      ASSERT_TRUE(Read) << Error;
+      ComparisonResult Restored;
+      ASSERT_FALSE(bindComparison(*Read, A, B, Restored));
+      EXPECT_EQ(savedWithoutTimings(R, A, B),
+                savedWithoutTimings(Restored, A, B));
+    }
+}
+
+TEST(BinaryDiff, StackRoleAlternativesRetainConflictingBodyMatchesForReview) {
+  Fn Current = diamond("current", 11);
+  Current.Source = NameSource::Generated;
+  Fn Misleading = Current;
+  Misleading.Name = "misleading";
+  Misleading.Blocks[0][0].Operands = "r0, 123";
+  Fn Original = Current;
+  Original.Name = "original";
+  Original.Blocks[0].insert(Original.Blocks[0].begin() + 1, {"sub", "r2, 789"});
+  Original.Blocks[2].insert(Original.Blocks[2].begin(), {"xor", "r4, 567"});
+  for (unsigned I = 0; I < 8; ++I)
+    Original.Blocks[0].insert(Original.Blocks[0].begin() + 1,
+                              {"div", "r2, " + std::to_string(1000 + I)});
+  auto P = build({Original, Misleading}, 0x1000);
+  auto S = build({Current}, 0x9000);
+  P.Functions[0].StackRoleCandidate = S.Functions[0].StackRoleCandidate = 101;
+  P.Functions[1].StackRoleCandidate = 102;
+  EXPECT_GT(compareFunctions(P, 1, S, 0, {}).Similarity,
+            compareFunctions(P, 0, S, 0, {}).Similarity +
+                ComparisonSettings{}.AmbiguityMargin);
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    const auto AI = indexOf(A, Reverse ? "current" : "original");
+    const auto BI = indexOf(B, Reverse ? "original" : "current");
+    const auto R = compare(A, B, {});
+    EXPECT_TRUE(R.Matches.empty());
+    for (const auto *Name : {"original", "misleading"}) {
+      const auto X = indexOf(A, Reverse ? "current" : Name);
+      const auto Y = indexOf(B, Reverse ? Name : "current");
+      EXPECT_TRUE(llvm::any_of(R.Ambiguities, [&](const Ambiguity &Group) {
+        return llvm::is_contained(Group.Primary, X) &&
+               llvm::is_contained(Group.Secondary, Y);
+      }));
+    }
+    const Override Choice{OverrideKind::Match, A.Functions[AI].Address,
+                          B.Functions[BI].Address};
+    EXPECT_EQ(compare(A, B, {}, {Choice}).secondaryOf(AI), BI);
+    std::string Error;
+    const auto Read = readComparison(saved(R, A, B), Error);
+    ASSERT_TRUE(Read) << Error;
+    ComparisonResult Reopened;
+    ASSERT_FALSE(bindComparison(*Read, A, B, Reopened));
+    EXPECT_EQ(savedWithoutTimings(R, A, B),
+              savedWithoutTimings(Reopened, A, B));
+    const auto HI = indexOf(A, Reverse ? "current" : "misleading");
+    const auto HJ = indexOf(B, Reverse ? "misleading" : "current");
+    for (auto Kind : {OverrideKind::Match, OverrideKind::Confirm}) {
+      const Override Keep{Kind, A.Functions[HI].Address,
+                          B.Functions[HJ].Address};
+      EXPECT_EQ(compare(A, B, {}, {Keep}).secondaryOf(HI), HJ);
+    }
+    Override Reject = Choice;
+    Reject.Kind = OverrideKind::Unmatch;
+    const auto Rejected = compare(A, B, {}, {Reject});
+    EXPECT_EQ(Rejected.secondaryOf(HI), HJ);
+    EXPECT_FALSE(llvm::any_of(Rejected.Ambiguities, [&](const auto &Group) {
+      return Group.Step == FunctionStep::StackRoles;
+    }));
+    ComparisonSettings Restricted;
+    Restricted.MinimumSimilarity =
+        (compareFunctions(P, 0, S, 0, {}).Similarity +
+         compareFunctions(P, 1, S, 0, {}).Similarity) /
+        2;
+    EXPECT_EQ(compare(A, B, Restricted).secondaryOf(HI), HJ);
+    auto Missing = P;
+    Missing.Functions[0].StackRoleCandidate = 0;
+    EXPECT_EQ(compare(Reverse ? S : Missing, Reverse ? Missing : S, {})
+                  .secondaryOf(HI),
+              HJ);
+    auto Incomplete = P;
+    Incomplete.Functions[0].Traits |= TraitIncomplete;
+    EXPECT_EQ(compare(Reverse ? S : Incomplete, Reverse ? Incomplete : S, {})
+                  .secondaryOf(HI),
+              HJ);
+  }
+}
+
+TEST(BinaryDiff, IndependentInitializerRolesSeparateIdenticalCallbacks) {
+  const auto Input = [](bool Secondary, bool Changed = false,
+                        unsigned CallbackInstructions = 5,
+                        unsigned Background = 0,
+                        uint64_t SlotStride = sizeof(uint64_t)) {
+    std::vector<Fn> Functions = {leaf("anchor_a", 1, 11),
+                                 leaf("anchor_b", 2, 22),
+                                 leaf(Secondary ? "callback_b" : "callback_a",
+                                      Changed ? 8 : 7, CallbackInstructions),
+                                 leaf(Secondary ? "callback_a" : "callback_b",
+                                      Changed ? 8 : 7, CallbackInstructions)};
+    for (unsigned I = 0; I < Background; ++I)
+      Functions.push_back(leaf("background_" + std::to_string(I), 3, 1));
+    for (auto &F : Functions)
+      F.Source = NameSource::Generated;
+    auto P = build(Functions, Secondary ? 0x8000 : 0x1000);
+    P.Identity.Bits = 64;
+    const uint64_t Slot = Secondary ? 0x9000 : 0x3000;
+    for (const auto *Name :
+         {"anchor_a", "callback_a", "anchor_b", "callback_b"})
+      P.CodeInitializers.push_back(
+          {Slot + P.CodeInitializers.size() * SlotStride,
+           named(P, Name).Address});
+    return P;
+  };
+  const auto P = Input(false), S = Input(true);
+  ComparisonSettings Settings;
+  Settings.UseNames = false;
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    auto Plain = A;
+    Plain.CodeInitializers.clear();
+    EXPECT_EQ(compare(Plain, B, Settings).Matches.size(), 2u);
+    const auto R = compare(A, B, Settings);
+    EXPECT_EQ(R.Matches.size(), 4u);
+    for (const auto *Name : {"callback_a", "callback_b"}) {
+      EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      EXPECT_EQ(matchOf(R, A, Name).Step, FunctionStep::Initializer);
+      EXPECT_TRUE(matchOf(R, A, Name).FromContext);
+    }
+    auto ExactOnly = Settings;
+    ExactOnly.Approximate = false;
+    EXPECT_EQ(compare(A, B, ExactOnly).Matches.size(), 4u);
+    // Resolving one member of a duplicate group must not hide its remaining
+    // pair. The final context pass does not automatically promote that pair.
+    // Repeated short backgrounds exceed exhaustive candidate admission; the
+    // remaining pair has no measured similarity-star fallback.
+    auto PartialA = Input(Reverse, false, 1, 260),
+         PartialB = Input(!Reverse, false, 1, 260);
+    PartialA.CodeInitializers.resize(3);
+    PartialB.CodeInitializers.resize(3);
+    const uint32_t LeftA = indexOf(A, "callback_b"),
+                   LeftB = indexOf(B, "callback_b");
+    const auto RetainsRemainder = [&](const ComparisonResult &R) {
+      return llvm::any_of(R.Ambiguities, [&](const auto &Group) {
+        return llvm::is_contained(Group.Primary, LeftA) &&
+               llvm::is_contained(Group.Secondary, LeftB);
+      });
+    };
+    const auto Partial = compare(PartialA, PartialB, Settings);
+    EXPECT_EQ(Partial.Matches.size(), 3u);
+    EXPECT_EQ(Partial.secondaryOf(LeftA), NoIndex);
+    EXPECT_TRUE(RetainsRemainder(Partial));
+    const Override RejectRemainder{OverrideKind::Unmatch,
+                                   named(PartialA, "callback_b").Address,
+                                   named(PartialB, "callback_b").Address};
+    EXPECT_FALSE(RetainsRemainder(
+        compare(PartialA, PartialB, Settings, {RejectRemainder})));
+    auto Gap = B;
+    Gap.CodeInitializers.erase(Gap.CodeInitializers.begin() + 1);
+    EXPECT_EQ(compare(A, Gap, Settings).Matches.size(), 2u);
+    auto Overlap = A;
+    Overlap.CodeInitializers[1].Slot = Overlap.CodeInitializers[0].Slot + 1;
+    EXPECT_EQ(compare(Overlap, B, Settings).Matches.size(), 2u);
+    auto Missing = A;
+    Missing.CodeInitializers[1].Target = 0x12345678;
+    EXPECT_EQ(compare(Missing, B, Settings).Matches.size(), 2u);
+    auto Incomplete = A;
+    Incomplete.Functions[indexOf(A, "callback_a")].Traits |= TraitIncomplete;
+    EXPECT_EQ(
+        compare(Incomplete, B, Settings).secondaryOf(indexOf(A, "callback_a")),
+        NoIndex);
+    std::string Error;
+    const auto Read = readComparison(saved(R, A, B), Error);
+    ASSERT_TRUE(Read) << Error;
+    ComparisonResult Restored;
+    ASSERT_FALSE(bindComparison(*Read, A, B, Restored));
+    EXPECT_EQ(savedWithoutTimings(R, A, B),
+              savedWithoutTimings(Restored, A, B));
+    // One repeated anchor is not independent context, and two copies of a
+    // neighborhood cannot select one arbitrary source location.
+    auto Repeated = A;
+    Repeated.CodeInitializers[2].Target = named(A, "anchor_a").Address;
+    EXPECT_EQ(compare(Repeated, B, Settings).Matches.size(), 2u);
+    auto Duplicate = A;
+    for (const auto &I : A.CodeInitializers)
+      Duplicate.CodeInitializers.push_back({I.Slot + 0x1000, I.Target});
+    EXPECT_EQ(compare(Duplicate, B, Settings).Matches.size(), 2u);
+    // Conflicting occurrences are checked together before accepting either.
+    auto ConflictA = A, ConflictB = B;
+    for (const auto *Name :
+         {"anchor_b", "callback_a", "anchor_a", "callback_b"}) {
+      const uint64_t Slot =
+          0x10000 + ConflictA.CodeInitializers.size() * sizeof(uint64_t);
+      ConflictA.CodeInitializers.push_back({Slot, named(A, Name).Address});
+      const auto Other = llvm::StringRef(Name) == "callback_a"   ? "callback_b"
+                         : llvm::StringRef(Name) == "callback_b" ? "callback_a"
+                                                                 : Name;
+      ConflictB.CodeInitializers.push_back({Slot, named(B, Other).Address});
+    }
+    EXPECT_EQ(compare(ConflictA, ConflictB, Settings).Matches.size(), 2u);
+    const Override Keep{OverrideKind::Match, named(A, "callback_a").Address,
+                        named(B, "callback_b").Address};
+    EXPECT_EQ(counterpart(compare(A, B, Settings, {Keep}), A, B, "callback_a"),
+              "callback_b");
+  }
+  for (uint64_t Stride : {16, 56}) {
+    const auto StridedP = Input(false, false, 5, 0, Stride),
+               StridedS = Input(true, false, 5, 0, Stride);
+    for (bool Reverse : {false, true}) {
+      const auto &A = Reverse ? StridedS : StridedP,
+                 &B = Reverse ? StridedP : StridedS;
+      const auto R = compare(A, B, Settings);
+      EXPECT_EQ(R.Matches.size(), 4u);
+      for (const auto *Name : {"callback_a", "callback_b"})
+        EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      auto Missing = A;
+      Missing.CodeInitializers[1].Target = 0x12345678;
+      EXPECT_EQ(compare(Missing, B, Settings).Matches.size(), 2u);
+      Missing.CodeInitializers[1].Target.reset();
+      EXPECT_EQ(compare(Missing, B, Settings).Matches.size(), 2u);
+    }
+  }
+  const auto AddRecords = [&](Program &A, bool Swap) {
+    uint64_t Slot = 0x10000;
+    for (const auto *Name :
+         {"anchor_b", "callback_a", "anchor_a", "callback_b"}) {
+      const auto Target =
+          Swap && llvm::StringRef(Name) == "callback_a"   ? "callback_b"
+          : Swap && llvm::StringRef(Name) == "callback_b" ? "callback_a"
+                                                          : Name;
+      A.CodeInitializers.push_back({Slot, named(A, Target).Address});
+      Slot += 56;
+    }
+  };
+  auto ConflictingP = Input(false, false, 5, 0, 16),
+       ConflictingS = Input(true, false, 5, 0, 16);
+  AddRecords(ConflictingP, false);
+  AddRecords(ConflictingS, true);
+  EXPECT_EQ(compare(ConflictingP, ConflictingS, Settings).Matches.size(), 2u);
+  auto PackedP = P, PackedS = S;
+  AddRecords(PackedP, false);
+  AddRecords(PackedS, true);
+  const auto Packed = compare(PackedP, PackedS, Settings);
+  for (const auto *Name : {"callback_a", "callback_b"})
+    EXPECT_EQ(counterpart(Packed, PackedP, PackedS, Name), Name);
+  std::atomic<bool> Cancel{false};
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t Done, uint64_t) {
+    if (Phase == "initializer-context" && Done == 0)
+      Cancel = true;
+  };
+  const auto Stopped = compare(P, S, Settings, {}, Control);
+  EXPECT_EQ(Stopped.State, ComparisonState::Cancelled);
+  EXPECT_EQ(Stopped.StoppedPhase, "initializer-context");
+  EXPECT_EQ(Stopped.Matches.size(), 2u);
+  EXPECT_EQ(compare(P, S, Settings).Matches.size(), 4u);
+  const auto Changed = Input(true, true);
+  EXPECT_EQ(compare(P, Changed, Settings).Matches.size(), 4u);
+  auto Strict = Settings;
+  Strict.MinimumSimilarity = 0.99;
+  EXPECT_EQ(compare(P, Changed, Strict).Matches.size(), 2u);
+  auto Invalid = P;
+  Invalid.CodeInitializers[1].Slot = Invalid.CodeInitializers[0].Slot;
+  EXPECT_TRUE(Invalid.validate());
+  Invalid = P;
+  Invalid.Identity.Bits = 0;
+  EXPECT_TRUE(Invalid.validate());
+  Invalid = P;
+  Invalid.CodeInitializers.back().Slot = UINT64_MAX;
+  EXPECT_TRUE(Invalid.validate());
+}
+
+TEST(BinaryDiff, InitializedPointersUseBoundedPairedDataAddressObservations) {
+  const auto Input = [](bool Secondary, bool Coordinates) {
+    ProgramIdentity Identity;
+    Identity.Bits = 64;
+    Identity.Normalization = NativeX86Normalization.str();
+    Identity.SHA256 = std::string(64, Secondary ? 'b' : 'a');
+    const uint64_t Base = Secondary ? 0x8000 : 0x1000;
+    const uint64_t Data = Secondary ? 0x9000 : 0x3000;
+    ProgramBuilder B(Identity);
+    for (unsigned I = 0; I < 4; ++I) {
+      const auto Name = I == 0                  ? "data_begin"
+                        : I == 1                ? "data_end"
+                        : (I == 2) == Secondary ? "callback_b"
+                                                : "callback_a";
+      const uint64_t Address = Base + I * 0x100;
+      B.beginFunction(Address, 3, Name,
+                      I < 2 ? NameSource::Symbol : NameSource::Generated, 0);
+      B.addBlock(Address);
+      if (I < 2) {
+        const uint64_t Key = (Secondary ? 2000 : 1000) + I;
+        const AddressReference References[]{
+            {Key, 0, ReferenceKind::UnresolvedData,
+             Coordinates ? std::optional<uint64_t>(Data + I * 0x80)
+                         : std::nullopt}};
+        B.addInstruction(Address, {0x48, 0x8d}, "lea", Key, 10,
+                         InstructionFlow::None, {}, {}, {}, References, 100 + I,
+                         true);
+      } else {
+        B.addInstruction(Address, {0x31, 0xc0}, "xor", 77, 77,
+                         InstructionFlow::None);
+      }
+      B.addInstruction(Address + 2, {0xc3}, "ret", 88, 88,
+                       InstructionFlow::Return);
+    }
+    auto P = B.finish();
+    P.CodeInitializers = {{Data + 0x18, named(P, "callback_a").Address},
+                          {Data + 0x20, named(P, "callback_b").Address}};
+    return P;
+  };
+  const auto P = Input(false, true), S = Input(true, true);
+  for (bool Reverse : {false, true}) {
+    const auto &A = Reverse ? S : P, &B = Reverse ? P : S;
+    EXPECT_EQ(compare(Input(Reverse, false), B, {}).Matches.size(), 2u);
+    const auto R = compare(A, B, {});
+    EXPECT_EQ(R.Matches.size(), 4u);
+    for (const auto *Name : {"callback_a", "callback_b"}) {
+      EXPECT_EQ(counterpart(R, A, B, Name), Name);
+      if (const auto *M = R.matchOfPrimary(indexOf(A, Name))) {
+        EXPECT_EQ(stepName(M->Step), "data_initializer");
+        EXPECT_TRUE(M->FromContext);
+      }
+    }
+    std::string Error;
+    const auto Saved = readComparison(saved(R, A, B), Error);
+    ASSERT_TRUE(bool(Saved)) << Error;
+    ComparisonResult Restored;
+    ASSERT_FALSE(bindComparison(*Saved, A, B, Restored));
+    EXPECT_EQ(savedWithoutTimings(R, A, B),
+              savedWithoutTimings(Restored, A, B));
+    auto Missing = A;
+    Missing.AddressReferences[0].Coordinate.reset();
+    EXPECT_EQ(compare(Missing, B, {}).Matches.size(), 2u);
+    auto Incomplete = A;
+    Incomplete.Functions[0].Traits |= TraitIncomplete;
+    EXPECT_EQ(compare(Incomplete, B, {}).Matches.size(), 2u);
+    auto Span = B;
+    *Span.AddressReferences[1].Coordinate += 8;
+    EXPECT_EQ(compare(A, Span, {}).Matches.size(), 2u);
+    auto Position = B;
+    Position.CodeInitializers[1].Slot += 8;
+    EXPECT_EQ(compare(A, Position, {}).Matches.size(), 2u);
+    auto Unknown = A;
+    Unknown.CodeInitializers[0].Target.reset();
+    EXPECT_EQ(compare(Unknown, B, {}).Matches.size(), 2u);
+    Unknown.CodeInitializers[0].Target = named(A, "callback_a").Address + 1;
+    EXPECT_EQ(compare(Unknown, B, {}).Matches.size(), 2u);
+    auto Conflict = A;
+    Conflict.AddressReferences[1].Coordinate =
+        Conflict.AddressReferences[0].Coordinate;
+    EXPECT_EQ(compare(Conflict, B, {}).Matches.size(), 2u);
+    auto Overlap = A;
+    Overlap.CodeInitializers[1].Slot = Overlap.CodeInitializers[0].Slot + 1;
+    EXPECT_EQ(compare(Overlap, B, {}).Matches.size(), 2u);
+    auto Retarget = A;
+    Retarget.CodeInitializers[0].Target = named(A, "data_begin").Address;
+    EXPECT_EQ(compare(Retarget, B, {}).Matches.size(), 2u);
+    auto Scalar = A;
+    auto &First = Scalar.Instructions[Scalar.Blocks[0].FirstInstruction];
+    ++First.AddressIndependentShape;
+    EXPECT_EQ(compare(Scalar, B, {}).Matches.size(), 2u);
+    const Override Reject{OverrideKind::Unmatch, named(A, "callback_a").Address,
+                          named(B, "callback_a").Address};
+    const auto Rejected = compare(A, B, {}, {Reject});
+    EXPECT_EQ(Rejected.secondaryOf(indexOf(A, "callback_a")), NoIndex);
+  }
+  std::atomic<bool> Cancel{false};
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t Done, uint64_t) {
+    if (Phase == "initializer-context" && Done == 0)
+      Cancel = true;
+  };
+  const auto Stopped = compare(P, S, {}, {}, Control);
+  EXPECT_EQ(Stopped.State, ComparisonState::Cancelled);
+  EXPECT_EQ(Stopped.StoppedPhase, "initializer-context");
+  EXPECT_EQ(Stopped.Matches.size(), 2u);
 }
 
 TEST(BinaryDiff, UnknownAddressOperandDoesNotHideAKnownRetargeting) {
@@ -1170,6 +2623,372 @@ TEST(BinaryDiff, SharedGraphFeaturesRecoverCandidatesBeyondCommonSketches) {
   }
 }
 
+TEST(BinaryDiff, ShortLayoutEditsRetainCandidatesBeyondRunSketches) {
+  Fn Before;
+  Before.Name = "limit_check";
+  Before.Source = NameSource::Generated;
+  Before.Blocks = {{{"endbr64", ""},
+                    {"cmp", "dword ptr [limit], 1"},
+                    {"mov", "eax, 1"},
+                    {"jbe", "exit", InstructionFlow::Branch}},
+                   {{"ret", "", InstructionFlow::Return}},
+                   {{"nop", "dword ptr [rax]"}},
+                   {{"movzx", "eax, byte ptr [enabled]"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Before.Edges = {{0, 3, EdgeKind::Taken},
+                  {0, 1, EdgeKind::NotTaken},
+                  {2, 3, EdgeKind::Fallthrough}};
+  Fn After = Before;
+  After.Blocks[0].erase(After.Blocks[0].begin());
+  After.Blocks[0].insert(After.Blocks[0].end() - 1, Before.Blocks[2][0]);
+  After.Blocks.erase(After.Blocks.begin() + 2);
+  After.Edges = {{0, 2, EdgeKind::Taken}, {0, 1, EdgeKind::NotTaken}};
+  Fn Decoy;
+  Decoy.Name = "unrelated_check";
+  Decoy.Source = NameSource::Generated;
+  Decoy.Blocks = {{{"cmp", "edi, 3"}, {"jbe", "exit", InstructionFlow::Branch}},
+                  {{"mov", "eax, 1"}, {"ret", "", InstructionFlow::Return}},
+                  {{"xor", "eax, eax"}, {"ret", "", InstructionFlow::Return}}};
+  Decoy.Edges = After.Edges;
+  std::vector<Fn> Left{Before, Decoy}, Right{After};
+  // A repeated background exceeds exhaustive admission and provides no unique
+  // function identity. The edited check must enter through a bounded index.
+  for (unsigned I = 0; I != 260; ++I) {
+    Fn F;
+    F.Name = "background_" + std::to_string(I);
+    F.Source = NameSource::Generated;
+    F.Blocks = {{{"div", "r8, r9"},
+                 {"neg", "r10"},
+                 {"ret", "", InstructionFlow::Return}}};
+    Left.push_back(F);
+    Right.push_back(F);
+  }
+  std::vector<size_t> Layout;
+  for (size_t I = Right.size(); I != 0; --I)
+    Layout.push_back(I - 1);
+  const auto A = build(Left, 0x400000), B = build(Right, 0x800000, Layout);
+  for (bool Reverse : {false, true}) {
+    const auto &P = Reverse ? B : A, &S = Reverse ? A : B;
+    const auto R = compare(P, S, {});
+    EXPECT_EQ(counterpart(R, P, S, "limit_check"), "limit_check");
+    EXPECT_EQ(R.Matches.size(), 1U);
+    const auto *Matched = R.matchOfPrimary(indexOf(P, "limit_check"));
+    ASSERT_NE(Matched, nullptr);
+    EXPECT_TRUE(Matched->Changes & ChangeInstructions);
+    EXPECT_LT(Matched->Similarity, 1.0);
+
+    ComparisonSettings Exact;
+    Exact.Approximate = false;
+    EXPECT_EQ(compare(P, S, Exact).matchOfPrimary(indexOf(P, "limit_check")),
+              nullptr);
+    const Override Reject{OverrideKind::Unmatch,
+                          P.Functions[indexOf(P, "limit_check")].Address,
+                          S.Functions[indexOf(S, "limit_check")].Address};
+    const auto Rejected = compare(P, S, {}, {Reject});
+    const auto *Match = Rejected.matchOfPrimary(indexOf(P, "limit_check"));
+    EXPECT_TRUE(!Match || Match->Secondary != indexOf(S, "limit_check"));
+  }
+
+  Fn Duplicate = After;
+  Duplicate.Name = "duplicate_check";
+  Right.push_back(std::move(Duplicate));
+  const auto Duplicated = build(Right, 0x900000);
+  for (bool Reverse : {false, true}) {
+    const auto &P = Reverse ? Duplicated : A, &S = Reverse ? A : Duplicated;
+    const auto R = compare(P, S, {});
+    EXPECT_EQ(R.matchOfPrimary(indexOf(P, "limit_check")), nullptr);
+    EXPECT_TRUE(R.Matches.empty());
+  }
+}
+
+TEST(BinaryDiff, EntryGuardsRetainReviewableCandidatesAcrossBodyEdits) {
+  Fn Before;
+  Before.Name = "write_header";
+  Before.Source = NameSource::Generated;
+  Before.Blocks = {{{"endbr64", ""},
+                    {"test", "rdi, rdi"},
+                    {"je", "exit", InstructionFlow::Branch}},
+                   {{"mov", "eax, dword ptr [rdi]"},
+                    {"test", "eax, eax"},
+                    {"jne", "write", InstructionFlow::Branch}},
+                   {{"xor", "eax, eax"}, {"ret", "", InstructionFlow::Return}},
+                   {{"nop", "word ptr [rax]"}},
+                   {{"mov", "dword ptr [rsi], eax"},
+                    {"xor", "eax, eax"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Before.Edges = {{0, 2, EdgeKind::Taken},
+                  {0, 1, EdgeKind::NotTaken},
+                  {1, 4, EdgeKind::Taken},
+                  {1, 2, EdgeKind::NotTaken},
+                  {3, 4, EdgeKind::Fallthrough}};
+  Fn After = Before;
+  After.Blocks[1].back() = {"je", "exit", InstructionFlow::Branch};
+  After.Blocks[2] = {{"push", "rdx"},
+                     {"mov", "rdi, rsi"},
+                     {"mov", "esi, eax"},
+                     {"call", "writer", InstructionFlow::IndirectCall},
+                     {"xor", "eax, eax"},
+                     {"pop", "rcx"},
+                     {"ret", "", InstructionFlow::Return}};
+  After.Blocks[3] = Before.Blocks[2];
+  After.Blocks.resize(4);
+  After.Edges = {{0, 3, EdgeKind::Taken},
+                 {0, 1, EdgeKind::NotTaken},
+                 {1, 3, EdgeKind::Taken},
+                 {1, 2, EdgeKind::NotTaken}};
+  Fn Decoy;
+  Decoy.Name = "unrelated_graph";
+  Decoy.Source = NameSource::Generated;
+  Decoy.Blocks = {
+      {{"endbr64", ""},
+       {"push", "rbx"},
+       {"test", "rdi, rdi"},
+       {"je", "exit", InstructionFlow::Branch}},
+      {{"mov", "rbx, rdi"},
+       {"cmp", "byte ptr [rdi], 0"},
+       {"je", "exit", InstructionFlow::Branch}},
+      {{"mov", "rdi, rbx"}, {"call", "copy", InstructionFlow::IndirectCall}},
+      {{"pop", "rbx"}, {"ret", "", InstructionFlow::Return}}};
+  Decoy.Edges = After.Edges;
+  std::vector<Fn> Left{Before, Decoy}, Right{After};
+  for (unsigned I = 0; I != 260; ++I) {
+    Fn F;
+    F.Name = "background_" + std::to_string(I);
+    F.Source = NameSource::Generated;
+    F.Blocks = {{{"div", "r8, r9"},
+                 {"neg", "r10"},
+                 {"ret", "", InstructionFlow::Return}}};
+    Left.push_back(F);
+    Right.push_back(F);
+  }
+  std::vector<size_t> Layout;
+  for (size_t I = Right.size(); I != 0; --I)
+    Layout.push_back(I - 1);
+  const auto A = build(Left, 0x400000), B = build(Right, 0x800000, Layout);
+  const auto HasCandidate = [](const ComparisonResult &R, uint32_t P,
+                               uint32_t S) {
+    return llvm::any_of(R.Ambiguities, [&](const Ambiguity &Group) {
+      return llvm::is_contained(Group.Primary, P) &&
+             llvm::is_contained(Group.Secondary, S);
+    });
+  };
+  for (bool Reverse : {false, true}) {
+    SCOPED_TRACE(Reverse);
+    const auto &P = Reverse ? B : A, &S = Reverse ? A : B;
+    const auto R = compare(P, S, {});
+    const auto PI = indexOf(P, "write_header"), SI = indexOf(S, "write_header");
+    // A complete guard retrieves the stronger body before a misleading graph
+    // match consumes it, but the guard alone cannot establish its identity.
+    EXPECT_TRUE(R.Matches.empty());
+    EXPECT_TRUE(HasCandidate(R, PI, SI));
+
+    std::string Error;
+    const auto Read = readComparison(saved(R, P, S), Error);
+    ASSERT_TRUE(Read) << Error;
+    ComparisonResult Edited;
+    ASSERT_FALSE(bindComparison(*Read, P, S, Edited));
+    const auto Original = savedWithoutTimings(R, P, S);
+    EXPECT_EQ(savedWithoutTimings(Edited, P, S), Original);
+    const Override Choice{OverrideKind::Match, P.Functions[PI].Address,
+                          S.Functions[SI].Address};
+    OverrideEffect Effect;
+    ASSERT_FALSE(applyOverride(Edited, P, S, Choice, &Effect));
+    const auto *Matched = Edited.matchOfPrimary(PI);
+    ASSERT_NE(Matched, nullptr);
+    EXPECT_EQ(Matched->Secondary, SI);
+    EXPECT_EQ(Matched->Step, FunctionStep::Manual);
+    EXPECT_TRUE(Matched->Changes & ChangeInstructions);
+    EXPECT_LT(Matched->Similarity, 1.0);
+    revertOverride(Edited, P, S, Effect);
+    EXPECT_EQ(savedWithoutTimings(Edited, P, S), Original);
+    EXPECT_EQ(counterpart(compare(P, S, {}, {Choice}), P, S, "write_header"),
+              "write_header");
+
+    ComparisonSettings Exact;
+    Exact.Approximate = false;
+    const auto NoApproximate = compare(P, S, Exact);
+    EXPECT_NE(counterpart(NoApproximate, P, S, "write_header"), "write_header");
+    EXPECT_FALSE(HasCandidate(NoApproximate, PI, SI));
+    if (const auto *Prior = NoApproximate.matchOfPrimary(PI)) {
+      EXPECT_EQ(S.Functions[Prior->Secondary].Name, "unrelated_graph");
+      const Override Confirm{OverrideKind::Confirm, P.Functions[PI].Address,
+                             S.Functions[Prior->Secondary].Address};
+      const auto Confirmed = compare(P, S, {}, {Confirm});
+      EXPECT_EQ(counterpart(Confirmed, P, S, "write_header"),
+                "unrelated_graph");
+      EXPECT_TRUE(matchOf(Confirmed, P, "write_header").Confirmed);
+    }
+    Override Reject = Choice;
+    Reject.Kind = OverrideKind::Unmatch;
+    const auto Rejected = compare(P, S, {}, {Reject});
+    const auto *Match = Rejected.matchOfPrimary(PI);
+    EXPECT_TRUE(!Match || Match->Secondary != SI);
+    EXPECT_FALSE(HasCandidate(Rejected, PI, SI));
+    const auto OtherP =
+        indexOf(P, Reverse ? "write_header" : "unrelated_graph");
+    const auto OtherS =
+        indexOf(S, Reverse ? "unrelated_graph" : "write_header");
+    const Override KeepOther{OverrideKind::Match, P.Functions[OtherP].Address,
+                             S.Functions[OtherS].Address};
+    EXPECT_EQ(compare(P, S, {}, {KeepOther}).secondaryOf(OtherP), OtherS);
+  }
+  for (bool Named : {false, true}) {
+    auto SupportedLeft = Left, SupportedRight = Right;
+    if (Named) {
+      SupportedLeft[1].Source = SupportedRight[0].Source = NameSource::Symbol;
+      SupportedRight[0].Name = "unrelated_graph";
+    } else {
+      SupportedLeft[1].AddressTargets =
+          SupportedRight[0].AddressTargets = {"anchor"};
+      SupportedLeft.push_back(leaf("anchor", 197));
+      SupportedRight.push_back(leaf("anchor", 197));
+    }
+    const auto X = build(SupportedLeft, 0x400000),
+               Y = build(SupportedRight, 0x800000);
+    for (bool Reverse : {false, true}) {
+      const auto &P = Reverse ? Y : X, &S = Reverse ? X : Y;
+      const auto R = compare(P, S, {});
+      const std::string Primary =
+          Reverse && !Named ? "write_header" : "unrelated_graph";
+      const std::string Secondary =
+          !Reverse && !Named ? "write_header" : "unrelated_graph";
+      EXPECT_EQ(counterpart(R, P, S, Primary), Secondary);
+    }
+  }
+  // Independent callback evidence must not reopen unrelated pairs that the
+  // entry review already deferred in favor of a stronger body candidate.
+  auto ReferencedLeft = Left, ReferencedRight = Right;
+  Fn CallbackA = leaf("reference_callback_a", 41), CallbackB = CallbackA;
+  CallbackB.Name = "reference_callback_b";
+  CallbackA.Source = CallbackB.Source = NameSource::Generated;
+  Fn Holder = leaf("reference_holder", 53);
+  Holder.AddressTargets = {CallbackA.Name, CallbackB.Name};
+  for (auto *Side : {&ReferencedLeft, &ReferencedRight})
+    Side->insert(Side->end(), {Holder, CallbackA, CallbackB});
+  const auto ReferencedA = build(ReferencedLeft, 0x400000),
+             ReferencedB = build(ReferencedRight, 0x800000);
+  for (bool Reverse : {false, true}) {
+    SCOPED_TRACE(Reverse);
+    const auto &P = Reverse ? ReferencedB : ReferencedA,
+               &S = Reverse ? ReferencedA : ReferencedB;
+    const auto R = compare(P, S, {});
+    EXPECT_EQ(R.Matches.size(), 3u);
+    for (const auto *Name : {"reference_callback_a", "reference_callback_b"}) {
+      EXPECT_EQ(counterpart(R, P, S, Name), Name);
+      EXPECT_EQ(matchOf(R, P, Name).Step, FunctionStep::AddressSite);
+    }
+    EXPECT_EQ(R.matchOfPrimary(indexOf(P, "write_header")), nullptr);
+    EXPECT_EQ(R.matchOfSecondary(indexOf(S, "write_header")), nullptr);
+    EXPECT_TRUE(HasCandidate(R, indexOf(P, "write_header"),
+                             indexOf(S, "write_header")));
+  }
+  Fn Duplicate = After;
+  Duplicate.Name = "duplicate_header";
+  Right.push_back(std::move(Duplicate));
+  const auto Duplicated = build(Right, 0x900000);
+  for (bool Reverse : {false, true}) {
+    const auto &P = Reverse ? Duplicated : A, &S = Reverse ? A : Duplicated;
+    const auto R = compare(P, S, {});
+    EXPECT_EQ(R.matchOfPrimary(indexOf(P, "write_header")), nullptr);
+    EXPECT_TRUE(R.Matches.empty());
+    EXPECT_TRUE(HasCandidate(R, indexOf(P, "write_header"),
+                             indexOf(S, "write_header")));
+    EXPECT_TRUE(HasCandidate(
+        R, indexOf(P, Reverse ? "duplicate_header" : "write_header"),
+        indexOf(S, Reverse ? "write_header" : "duplicate_header")));
+  }
+}
+
+TEST(BinaryDiff, PartialInstructionPairsDoNotIdentifyUnrelatedBodies) {
+  Fn Before;
+  Before.Name = "original";
+  Before.Source = NameSource::Generated;
+  Before.Blocks = {{{"mov", "eax, ebx"},
+                    {"add", "ecx, edx"},
+                    {"xor", "esi, edi"},
+                    {"or", "eax, ecx"},
+                    {"and", "ebx, edx"},
+                    {"sub", "edi, esi"},
+                    {"rol", "eax, 1"},
+                    {"ror", "ebx, 1"},
+                    {"shl", "ecx, 1"},
+                    {"shr", "edx, 1"},
+                    {"neg", "esi"},
+                    {"not", "edi"},
+                    {"bswap", "eax"},
+                    {"imul", "ebx, ecx"},
+                    {"test", "edx, edx"},
+                    {"cmp", "esi, edi"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Fn After = Before;
+  After.Name = "unrelated";
+  for (unsigned I = 2; I < 16; I += 2)
+    std::swap(After.Blocks[0][I], After.Blocks[0][I + 1]);
+  After.Blocks[0][15] = {"inc", "edx"};
+  // The initial pair and much of the instruction inventory survive, but no
+  // complete run shingle, mnemonic sequence or multiset identifies this body.
+  // Merely adding rare partial seeds would turn a similar CFG into an identity.
+  enum class Layout { Whole, Split, Guard, CallGuard };
+  for (const auto Kind :
+       {Layout::Whole, Layout::Split, Layout::Guard, Layout::CallGuard}) {
+    Fn First = Before, Second = After;
+    if (Kind == Layout::Split)
+      for (Fn *F : {&First, &Second}) {
+        const auto Cut = F->Blocks[0].begin() + 8;
+        std::vector<Op> Tail(Cut, F->Blocks[0].end());
+        F->Blocks[0].erase(Cut, F->Blocks[0].end());
+        F->Blocks.push_back(std::move(Tail));
+        F->Edges = {{0, 1, EdgeKind::Fallthrough}};
+      }
+    if (Kind == Layout::Guard || Kind == Layout::CallGuard) {
+      std::swap(Second.Blocks[0][0], Second.Blocks[0][1]);
+      for (Fn *F : {&First, &Second}) {
+        std::vector<Op> Guard = {{"test", "r12, r12"},
+                                 {"jne", "body", InstructionFlow::Branch}};
+        if (Kind == Layout::CallGuard)
+          Guard.insert(Guard.begin(),
+                       {"call", "rax", InstructionFlow::IndirectCall});
+        F->Blocks.insert(F->Blocks.begin(), std::move(Guard));
+        F->Blocks.push_back(
+            {{"xor", "eax, eax"}, {"ret", "", InstructionFlow::Return}});
+        F->Edges = {{0, 1, EdgeKind::Taken}, {0, 2, EdgeKind::NotTaken}};
+      }
+      // A common guard does not distinguish same-CFG families. Shared
+      // initialization calls are not intrinsic guards, even after CFG edits.
+      if (Kind == Layout::CallGuard) {
+        First.Blocks.push_back({{"nop", "word ptr [rax]"}});
+        First.Edges.emplace_back(3, 2, EdgeKind::Fallthrough);
+      }
+    }
+    std::vector<Fn> Left{First}, Right{Second};
+    for (unsigned I = 0; I != 260; ++I) {
+      Fn F;
+      F.Name = "background_" + std::to_string(I);
+      F.Source = NameSource::Generated;
+      F.Blocks = {{{"div", "r8, r9"},
+                   {"neg", "r10"},
+                   {"ret", "", InstructionFlow::Return}}};
+      if (Kind == Layout::Guard || Kind == Layout::CallGuard) {
+        F.Blocks[0].back() = {"jne", "exit", InstructionFlow::Branch};
+        F.Blocks.push_back({{"ret", "", InstructionFlow::Return}});
+        F.Blocks.push_back({{"ret", "", InstructionFlow::Return}});
+        F.Edges = {{0, 1, EdgeKind::Taken}, {0, 2, EdgeKind::NotTaken}};
+      }
+      Right.push_back(F);
+      if (Kind == Layout::CallGuard) {
+        F.Blocks.push_back({{"nop", "word ptr [rax]"}});
+        F.Edges.emplace_back(3, 2, EdgeKind::Fallthrough);
+      }
+      Left.push_back(F);
+    }
+    const auto A = build(Left, 0x400000), B = build(Right, 0x800000);
+    for (bool Reverse : {false, true}) {
+      const auto &P = Reverse ? B : A, &S = Reverse ? A : B;
+      EXPECT_TRUE(compare(P, S, {}).Matches.empty());
+    }
+  }
+}
+
 TEST(BinaryDiff, MovedStringEvidenceDoesNotConsumeTheSimilarBody) {
   Fn Old;
   Old.Name = "original";
@@ -1239,6 +3058,386 @@ TEST(BinaryDiff, CallGraphDegreeCannotOverrideContradictingImportTargets) {
   EXPECT_EQ(R.matchOfPrimary(indexOf(P, "wrapper_a")), nullptr);
 }
 
+TEST(BinaryDiff, InlineCallerCandidatesRequireIndependentEntryCalls) {
+  // A two-loop helper is partly inlined after the caller's independently
+  // mapped initialization. A weak pairing to the old helper cannot explain
+  // the merged entry's calls or the caller's greater instruction coverage.
+  const std::vector<Op> Loop = {{"mov", "rdi, [r14+8]"},
+                                {"call", "", InstructionFlow::Call, "release"},
+                                {"mov", "rdi, r14"},
+                                {"call", "", InstructionFlow::Call, "discard"},
+                                {"mov", "rax, [rbx+32]"},
+                                {"mov", "rdi, [rax+16]"},
+                                {"call", "", InstructionFlow::Call, "next"},
+                                {"mov", "r14, rax"},
+                                {"test", "rax, rax"},
+                                {"jne", "", InstructionFlow::Branch}};
+  Fn Helper;
+  Helper.Name = "helper";
+  Helper.Source = NameSource::Generated;
+  Helper.Blocks = {{{"push", "r14"},
+                    {"push", "rbx"},
+                    {"push", "rax"},
+                    {"mov", "rbx, rdi"},
+                    {"mov", "rax, [rdi+32]"},
+                    {"mov", "rdi, [rax+16]"},
+                    {"call", "", InstructionFlow::Call, "next"},
+                    {"test", "rax, rax"},
+                    {"je", "", InstructionFlow::Branch}},
+                   {{"mov", "r14, rax"}, {"nop", ""}},
+                   Loop,
+                   {{"mov", "rax, [rbx+32]"},
+                    {"mov", "rdi, [rax+24]"},
+                    {"call", "", InstructionFlow::Call, "next"},
+                    {"test", "rax, rax"},
+                    {"je", "", InstructionFlow::Branch}},
+                   {{"mov", "r14, rax"}, {"nop", ""}},
+                   Loop,
+                   {{"add", "rsp, 8"},
+                    {"pop", "rbx"},
+                    {"pop", "r14"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Helper.Blocks[5][5].Operands = "rdi, [rax+24]";
+  Helper.Edges = {{0, 3, EdgeKind::Taken},       {0, 1, EdgeKind::NotTaken},
+                  {1, 2, EdgeKind::Fallthrough}, {2, 2, EdgeKind::Taken},
+                  {2, 3, EdgeKind::NotTaken},    {3, 6, EdgeKind::Taken},
+                  {3, 4, EdgeKind::NotTaken},    {4, 5, EdgeKind::Fallthrough},
+                  {5, 5, EdgeKind::Taken},       {5, 6, EdgeKind::NotTaken}};
+  Fn Caller;
+  Caller.Name = "caller";
+  Caller.Source = NameSource::Generated;
+  Caller.Blocks = {{{"push", "rbx"},
+                    {"mov", "rbx, rdi"},
+                    {"add", "rdi, 64"},
+                    {"call", "", InstructionFlow::Call, "initialize"},
+                    {"mov", "rdi, rbx"},
+                    {"call", "", InstructionFlow::Call, "reset"},
+                    {"cmp", "[rbx+32], 0"},
+                    {"je", "", InstructionFlow::Branch}},
+                   {{"mov", "rdi, rbx"},
+                    {"call", "", InstructionFlow::Call, "helper"},
+                    {"mov", "rax, [rbx+32]"},
+                    {"mov", "rdi, [rax+16]"},
+                    {"call", "", InstructionFlow::Call, "queue_free"},
+                    {"mov", "rax, [rbx+32]"},
+                    {"mov", "rdi, [rax+24]"},
+                    {"call", "", InstructionFlow::Call, "queue_free"},
+                    {"mov", "rdi, [rbx+32]"},
+                    {"jmp", "", InstructionFlow::Jump}},
+                   {{"xor", "edi, edi"}},
+                   {{"mov", "esi, 71"},
+                    {"call", "", InstructionFlow::Call, "cleanup"},
+                    {"mov", "[rbx+32], 0"},
+                    {"pop", "rbx"},
+                    {"ret", "", InstructionFlow::Return}}};
+  Caller.Edges = {{0, 2, EdgeKind::Taken},
+                  {0, 1, EdgeKind::NotTaken},
+                  {1, 3, EdgeKind::Jump},
+                  {2, 3, EdgeKind::Fallthrough}};
+  Fn Merged = Caller;
+  Merged.Name = "merged";
+  Merged.Blocks = {Caller.Blocks[0],
+                   {{"mov", "rdi, [rax+16]"},
+                    {"call", "", InstructionFlow::Call, "next"},
+                    {"test", "rax, rax"},
+                    {"je", "", InstructionFlow::Branch}},
+                   Helper.Blocks[1],
+                   Loop,
+                   Caller.Blocks[1],
+                   Caller.Blocks[2],
+                   Caller.Blocks[3]};
+  Merged.Blocks[0].insert(Merged.Blocks[0].begin(), {"push", "r14"});
+  Merged.Blocks[0][7] = {"mov", "rax, [rbx+32]"};
+  Merged.Blocks[0].insert(Merged.Blocks[0].end() - 1, {"test", "rax, rax"});
+  Merged.Blocks[4][1].Callee = "remaining_loop";
+  Merged.Blocks[6][0].Operands = "esi, 83";
+  Merged.Blocks[6].insert(Merged.Blocks[6].end() - 1, {"pop", "r14"});
+  Merged.Edges = {{0, 5, EdgeKind::Taken},       {0, 1, EdgeKind::NotTaken},
+                  {1, 4, EdgeKind::Taken},       {1, 2, EdgeKind::NotTaken},
+                  {2, 3, EdgeKind::Fallthrough}, {3, 3, EdgeKind::Taken},
+                  {3, 4, EdgeKind::NotTaken},    {4, 6, EdgeKind::Jump},
+                  {5, 6, EdgeKind::Fallthrough}};
+  Helper.Strings = Merged.Strings = {"retained helper data"};
+  std::vector<Fn> Before{Caller, Helper}, After{Merged};
+  unsigned Seed = 701;
+  for (const auto *Name : {"initialize", "reset", "next", "release", "discard",
+                           "queue_free", "cleanup", "remaining_loop"}) {
+    Before.push_back(leaf(Name, Seed));
+    After.push_back(leaf(Name, Seed));
+    Seed += 10;
+  }
+  const auto HasCandidate = [](const ComparisonResult &R, uint32_t P,
+                               uint32_t S) {
+    return llvm::any_of(R.Ambiguities, [&](const Ambiguity &Group) {
+      return llvm::is_contained(Group.Primary, P) &&
+             llvm::is_contained(Group.Secondary, S);
+    });
+  };
+  for (unsigned Variant = 0; Variant != 12; ++Variant) {
+    auto Left = Before, Right = After;
+    if (Variant == 1)
+      Left[0].Traits |= TraitIncomplete;
+    else if (Variant == 2)
+      Right[0].Traits |= TraitIncomplete;
+    else if (Variant == 3)
+      Left[1].Traits |= TraitIncomplete;
+    else if (Variant == 4)
+      Left[2].Traits |=
+          TraitIncomplete; // An entry callee has no complete body.
+    else if (Variant == 5) {
+      for (auto *F : {&Left[0], &Right[0]})
+        for (auto &Op : F->Blocks[0])
+          if (Op.Callee == "initialize")
+            Op.Callee = "reset"; // Repetition cannot provide distinct anchors.
+    } else if (Variant == 6)
+      std::swap(Right[0].Blocks[0][4].Callee,
+                Right[0].Blocks[0][6].Callee); // Different ordered entry calls.
+    else if (Variant == 7)
+      Left[0].Blocks[0][0].Flow = InstructionFlow::Unknown;
+    else if (Variant == 8)
+      Left[0].Blocks[0][3].Flow = InstructionFlow::IndirectCall;
+    else if (Variant == 9)
+      Left[0].Blocks[0][3].Callee.clear();
+    else if (Variant == 10)
+      Left[1].Blocks[0].insert(
+          Left[1].Blocks[0].begin(),
+          {"call", "", InstructionFlow::Call, "initialize"});
+    for (bool Reverse : {false, true})
+      for (bool Reorder : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << Variant << Reverse << Reorder);
+        std::vector<size_t> Layout;
+        if (Reorder)
+          for (size_t I = Left.size(); I != 0; --I)
+            Layout.push_back(I - 1);
+        const auto A = build(Left, 0x400000, Layout),
+                   B = build(Right, 0x800000);
+        const auto &P = Reverse ? B : A, &S = Reverse ? A : B;
+        const auto PI = indexOf(P, Reverse ? "merged" : "caller"),
+                   SI = indexOf(S, Reverse ? "caller" : "merged"),
+                   HP = indexOf(P, Reverse ? "merged" : "helper"),
+                   HS = indexOf(S, Reverse ? "helper" : "merged");
+        std::vector<uint32_t> PMapping(P.Functions.size(), NoIndex),
+            SMapping(S.Functions.size(), NoIndex),
+            Weak(P.Functions.size(), NoIndex);
+        for (const auto *Name :
+             {"initialize", "reset", "next", "release", "discard", "queue_free",
+              "cleanup", "remaining_loop"}) {
+          const auto X = indexOf(P, Name), Y = indexOf(S, Name);
+          PMapping[X] = Y;
+          SMapping[Y] = X;
+        }
+        PMapping[HP] = HS;
+        SMapping[HS] = HP;
+        Weak[HP] = 0;
+        if (Variant == 11)
+          Weak[HP] = NoIndex; // Stated identity or an analyst confirmation.
+        const auto PF = computeFeatures(P), SF = computeFeatures(S);
+        const auto Proposals =
+            inlineCallerCandidates(P, PF, PMapping, Weak, S, SF, SMapping, {});
+        if (Variant != 0) {
+          EXPECT_TRUE(Proposals.empty());
+          continue;
+        }
+        EXPECT_EQ(Proposals,
+                  (std::vector<std::pair<uint32_t, uint32_t>>{{PI, SI}}));
+        const auto D = compareFunctions(P, PI, S, SI, {PMapping, SMapping}, {},
+                                        CandidateInstructionAlignmentProfile);
+        const auto Prior =
+            compareFunctions(P, HP, S, HS, {PMapping, SMapping}, {},
+                             CandidateInstructionAlignmentProfile);
+        EXPECT_TRUE(D.AnalysisComplete);
+        EXPECT_GE(D.Similarity, ComparisonSettings{}.MinimumSimilarity);
+        EXPECT_GT(D.EqualInstructions, Prior.EqualInstructions);
+        EXPECT_TRUE(Prior.Changes & (ChangeBlocks | ChangeEdges));
+        for (bool Approximate : {false, true}) {
+          ComparisonSettings Settings;
+          Settings.Approximate = Approximate;
+          const auto R = compare(P, S, Settings);
+          // Ordinary competition already finds the caller in this fixture.
+          // The additional review must preserve that accepted correspondence.
+          ASSERT_EQ(R.secondaryOf(PI), SI);
+          EXPECT_FALSE(HasCandidate(R, HP, HS));
+          std::string Error;
+          auto Read = readComparison(saved(R, P, S), Error);
+          ASSERT_TRUE(Read) << Error;
+          ComparisonResult Edited;
+          ASSERT_FALSE(bindComparison(*Read, P, S, Edited));
+          EXPECT_EQ(savedWithoutTimings(Edited, P, S),
+                    savedWithoutTimings(R, P, S));
+        }
+        const std::atomic<bool> Cancelled{true};
+        ComparisonControl Stop;
+        Stop.Cancel = &Cancelled;
+        EXPECT_TRUE(
+            inlineCallerCandidates(P, PF, PMapping, Weak, S, SF, SMapping, Stop)
+                .empty());
+      }
+  }
+}
+
+TEST(BinaryDiff, InlinedTailPreludeKeepsWholeFunctionIdentityAmbiguous) {
+  Fn Helper = leaf("helper", 19, 18);
+  Helper.Source = NameSource::Generated;
+  Fn Caller;
+  Caller.Name = "caller";
+  Caller.Source = NameSource::Generated;
+  Caller.Blocks = {{{"store", "[state], r4"},
+                    {"store", "[flag], 1"},
+                    {"jmp", "", InstructionFlow::Jump, "helper"}}};
+  Fn Merged = Helper;
+  Merged.Name = "merged";
+  Merged.Blocks[0].insert(Merged.Blocks[0].begin() + 2,
+                          Caller.Blocks[0].begin(), Caller.Blocks[0].end() - 1);
+  for (bool Reverse : {false, true})
+    for (bool Reorder : {false, true})
+      for (bool Approximate : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << Reverse << Reorder << Approximate);
+        // A shared weak feature must not bypass the boundary check.
+        Helper.Strings = Merged.Strings = {"output pipe"};
+        const Program A = build({Caller, Helper}, 0x400000,
+                                Reorder ? std::vector<size_t>{1, 0}
+                                        : std::vector<size_t>{0, 1});
+        const Program B = build({Merged}, 0x500000);
+        const Program &P = Reverse ? B : A, &S = Reverse ? A : B;
+        ComparisonSettings Settings;
+        Settings.Approximate = Approximate;
+        const auto R = compare(P, S, Settings);
+        EXPECT_TRUE(R.Matches.empty());
+        std::set<std::pair<std::string, std::string>> Candidates;
+        for (const auto &Group : R.Ambiguities)
+          for (uint32_t X : Group.Primary)
+            for (uint32_t Y : Group.Secondary)
+              Candidates.emplace(P.Functions[X].Name, S.Functions[Y].Name);
+        const std::set<std::pair<std::string, std::string>> Expected =
+            Reverse ? std::set<std::pair<std::string, std::string>>{{"merged",
+                                                                     "helper"},
+                                                                    {"merged",
+                                                                     "caller"}}
+                    : std::set<std::pair<std::string, std::string>>{
+                          {"helper", "merged"}, {"caller", "merged"}};
+        EXPECT_EQ(Candidates, Expected);
+        std::string Error;
+        const auto Read = readComparison(saved(R, P, S), Error);
+        ASSERT_TRUE(bool(Read)) << Error;
+        ComparisonResult Edited;
+        ASSERT_FALSE(bindComparison(*Read, P, S, Edited));
+        const auto Original = savedWithoutTimings(R, P, S);
+        EXPECT_EQ(savedWithoutTimings(Edited, P, S), Original);
+        OverrideEffect Effect;
+        const Override Choice{
+            OverrideKind::Match,
+            P.Functions[indexOf(P, Reverse ? "merged" : "caller")].Address,
+            S.Functions[indexOf(S, Reverse ? "caller" : "merged")].Address};
+        ASSERT_FALSE(applyOverride(Edited, P, S, Choice, &Effect));
+        EXPECT_EQ(counterpart(Edited, P, S, Reverse ? "merged" : "caller"),
+                  Reverse ? "caller" : "merged");
+        revertOverride(Edited, P, S, Effect);
+        EXPECT_EQ(savedWithoutTimings(Edited, P, S), Original);
+        const auto Forced = compare(P, S, Settings, {Choice});
+        EXPECT_EQ(counterpart(Forced, P, S, Reverse ? "merged" : "caller"),
+                  Reverse ? "caller" : "merged");
+        Override Rejected = Choice;
+        Rejected.Kind = OverrideKind::Unmatch;
+        const auto WithoutCaller = compare(P, S, Settings, {Rejected});
+        EXPECT_EQ(
+            counterpart(WithoutCaller, P, S, Reverse ? "merged" : "helper"),
+            Reverse ? "helper" : "merged");
+      }
+}
+
+TEST(BinaryDiff, TailPreludeNeedsCompleteAndIndependentContribution) {
+  Fn Helper = leaf("helper", 29, 18);
+  Helper.Source = NameSource::Generated;
+  Fn Caller;
+  Caller.Name = "caller";
+  Caller.Source = NameSource::Generated;
+  Caller.Blocks = {{{"store", "[state], r4"},
+                    {"store", "[flag], 1"},
+                    {"jmp", "", InstructionFlow::Jump, "helper"}}};
+  for (unsigned Variant = 0; Variant < 6; ++Variant) {
+    SCOPED_TRACE(Variant);
+    Fn C = Caller, Changed = Helper;
+    Changed.Name = "changed_helper";
+    if (Variant == 0) // Only part of the caller survives.
+      Changed.Blocks[0].insert(Changed.Blocks[0].begin(), C.Blocks[0][0]);
+    else if (Variant == 1) { // A changed operand is not the same prelude.
+      Changed.Blocks[0].insert(Changed.Blocks[0].begin(), C.Blocks[0].begin(),
+                               C.Blocks[0].end() - 1);
+      Changed.Blocks[0][1].Operands = "[other_flag], 1";
+    } else if (Variant == 2) { // Shared helper instructions add no evidence.
+      C.Blocks[0][0] = Helper.Blocks[0][0];
+      C.Blocks[0][1] = Helper.Blocks[0][1];
+      Changed.Blocks[0].insert(Changed.Blocks[0].begin(), {"sub", "r3, 71"});
+    } else { // A call or an unresolved jump is not an admitted tail edge.
+      Changed.Blocks[0].insert(Changed.Blocks[0].begin(), C.Blocks[0].begin(),
+                               C.Blocks[0].end() - 1);
+      if (Variant == 3)
+        C.Blocks[0].back().Flow = InstructionFlow::Call;
+      else if (Variant == 4)
+        C.Blocks[0].back().Callee.clear();
+    }
+    std::vector<Fn> After{Changed};
+    if (Variant == 5) { // Independent identity already accounts for the caller.
+      C.Source = NameSource::Symbol;
+      Fn SurvivingCaller = C;
+      SurvivingCaller.Blocks[0].back().Callee = "changed_helper";
+      After.push_back(SurvivingCaller);
+    }
+    for (bool Reverse : {false, true}) {
+      const Program A = build({C, Helper}, 0x400000);
+      const Program B = build(After, 0x500000);
+      const Program &P = Reverse ? B : A, &S = Reverse ? A : B;
+      const auto R = compare(P, S, {});
+      EXPECT_EQ(counterpart(R, P, S, Reverse ? "changed_helper" : "helper"),
+                Reverse ? "helper" : "changed_helper");
+    }
+  }
+}
+
+TEST(BinaryDiff, EachInlinedTailCallerRetainsOnlyItsOwnMergedCandidate) {
+  Fn Helper = leaf("helper", 39, 18);
+  Helper.Source = NameSource::Generated;
+  std::vector<Fn> Before{Helper}, After;
+  for (unsigned I = 0; I < 2; ++I) {
+    Fn Caller;
+    Caller.Name = "caller" + std::to_string(I);
+    Caller.Source = NameSource::Generated;
+    Caller.Blocks = {{{"store", "[state" + std::to_string(I) + "], r4"},
+                      {"store", "[flag" + std::to_string(I) + "], 1"},
+                      {"jmp", "", InstructionFlow::Jump, "helper"}}};
+    Fn Merged = Helper;
+    Merged.Name = "merged" + std::to_string(I);
+    Merged.Blocks[0].insert(Merged.Blocks[0].begin() + 2,
+                            Caller.Blocks[0].begin(),
+                            Caller.Blocks[0].end() - 1);
+    Before.push_back(Caller);
+    After.push_back(Merged);
+  }
+  for (bool Reverse : {false, true})
+    for (bool Reorder : {false, true}) {
+      const Program A = build(Before, 0x400000);
+      const Program B = build(After, 0x500000,
+                              Reorder ? std::vector<size_t>{1, 0}
+                                      : std::vector<size_t>{0, 1});
+      const Program &P = Reverse ? B : A, &S = Reverse ? A : B;
+      const auto R = compare(P, S, {});
+      EXPECT_TRUE(R.Matches.empty());
+      std::set<std::pair<std::string, std::string>> Expected, Actual;
+      for (unsigned I = 0; I < 2; ++I)
+        for (const std::string &Source :
+             {std::string("helper"), "caller" + std::to_string(I)}) {
+          const std::string Target = "merged" + std::to_string(I);
+          Expected.emplace(Reverse ? Target : Source,
+                           Reverse ? Source : Target);
+        }
+      for (const auto &Group : R.Ambiguities)
+        for (uint32_t X : Group.Primary)
+          for (uint32_t Y : Group.Secondary)
+            Actual.emplace(P.Functions[X].Name, S.Functions[Y].Name);
+      EXPECT_EQ(Actual, Expected);
+    }
+}
+
 TEST(BinaryDiff, ExactReferenceCandidatesStillCompeteWithoutApproximation) {
   Fn A = leaf("old", 12);
   A.Source = NameSource::Generated;
@@ -1275,6 +3474,57 @@ TEST(BinaryDiff, AdditionalWeakEvidenceCannotSuppressMatchingCallContext) {
     const auto R = compare(P, S, Settings);
     ASSERT_EQ(R.Matches.size(), 2U);
     EXPECT_EQ(counterpart(R, P, S, "candidate"), "candidate");
+  }
+}
+
+TEST(BinaryDiff, CallPositionDistinguishesOnlyEqualOrWeakerNearTies) {
+  Fn A = leaf("candidate", 17, 40), B = A;
+  A.Source = B.Source = NameSource::Generated;
+  B.Blocks[0].insert(B.Blocks[0].begin(), {"div", "r6, r7"});
+  B.Blocks[0].insert(B.Blocks[0].begin(), {"imul", "r6, r7"});
+  Fn Anchor;
+  Anchor.Name = "anchor";
+  Anchor.Blocks = {{{"call", "candidate", InstructionFlow::Call, "candidate"},
+                    {"ret", "", InstructionFlow::Return}}};
+  for (int BodyLead : {-1, 0, 1}) {
+    Fn Rival = A;
+    Rival.Name = "rival";
+    Rival.Blocks[0].insert(Rival.Blocks[0].begin(), {"xor", "r5, r5"});
+    if (BodyLead <= 0)
+      Rival.Blocks[0].insert(Rival.Blocks[0].begin(), {"or", "r4, r4"});
+    if (BodyLead < 0)
+      Rival.Blocks[0].insert(Rival.Blocks[0].begin(), {"neg", "r3"});
+    for (bool Reverse : {false, true})
+      for (bool Reorder : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << BodyLead << Reverse << Reorder);
+        const Program Before = build({Anchor, A}, 0x400000);
+        const Program After = build({Anchor, B, Rival}, 0x500000,
+                                    Reorder ? std::vector<size_t>{2, 0, 1}
+                                            : std::vector<size_t>{0, 1, 2});
+        const Program &P = Reverse ? After : Before;
+        const Program &S = Reverse ? Before : After;
+        const double ContextScore =
+            compareFunctions(Before, indexOf(Before, "candidate"), After,
+                             indexOf(After, "candidate"), {})
+                .Similarity;
+        const double RivalScore =
+            compareFunctions(Before, indexOf(Before, "candidate"), After,
+                             indexOf(After, "rival"), {})
+                .Similarity;
+        ComparisonSettings Settings;
+        EXPECT_EQ(RivalScore > ContextScore, BodyLead > 0);
+        EXPECT_EQ(RivalScore == ContextScore, BodyLead == 0);
+        ASSERT_LT(std::abs(RivalScore - ContextScore),
+                  Settings.AmbiguityMargin);
+        for (bool Approximate : {false, true}) {
+          Settings.Approximate = Approximate;
+          const auto R = compare(P, S, Settings);
+          // Consistent call position distinguishes equally or less similar
+          // alternatives. It cannot override a stronger measured body.
+          EXPECT_EQ(counterpart(R, P, S, "candidate") == "candidate",
+                    BodyLead <= 0);
+        }
+      }
   }
 }
 
@@ -1400,6 +3650,18 @@ TEST(BinaryDiff, SimilarStructureWithOtherInstructionsIsNotIdentical) {
 
 TEST(BinaryDiff, ResultsDoNotDependOnThreadCount) {
   std::vector<Fn> Old = sample(), New = sample();
+  Fn Helper = leaf("tail_helper", 1200, 25), Prelude;
+  Prelude.Name = "tail_caller";
+  Prelude.Blocks = {{{"store", "[state], r4"},
+                     {"store", "[flag], 1"},
+                     {"jmp", "", InstructionFlow::Jump, "tail_helper"}}};
+  Old.push_back(Prelude);
+  Old.push_back(Helper);
+  Helper.Name = "tail_merged";
+  Helper.Blocks[0].insert(Helper.Blocks[0].begin() + 2,
+                          Prelude.Blocks[0].begin(),
+                          Prelude.Blocks[0].end() - 1);
+  New.push_back(Helper);
   for (unsigned I = 0; I < 40; ++I) {
     Old.push_back(leaf("bulk" + std::to_string(I), 1000 + I, 4 + I % 5));
     New.push_back(
@@ -1447,8 +3709,18 @@ TEST(BinaryDiff, SavedComparisonsRoundTripAndRefuseOtherInputs) {
   EXPECT_EQ(Why, BindFailure::StaleInput);
   const Program Reanalyzed =
       build(Old, 0x400000, {}, std::string(64, 'b'), "other settings");
-  EXPECT_TRUE(bindComparison(*Read, Reanalyzed, S, Bound, &Why));
+  const auto SettingsError = bindComparison(*Read, Reanalyzed, S, Bound, &Why);
+  ASSERT_TRUE(SettingsError);
+  EXPECT_NE(SettingsError->find("other settings"), std::string::npos);
   EXPECT_EQ(Why, BindFailure::StaleAnalysis);
+  auto Recovered = P;
+  Recovered.Identity.Revision = "newly-discovered-functions";
+  const auto SnapshotError = bindComparison(*Read, Recovered, S, Bound, &Why);
+  ASSERT_TRUE(SnapshotError);
+  EXPECT_NE(SnapshotError->find("analyzed snapshot"), std::string::npos);
+  EXPECT_EQ(SnapshotError->find("other settings"), std::string::npos);
+  EXPECT_EQ(Why, BindFailure::StaleAnalysis);
+  EXPECT_EQ(savedWithoutTimings(Bound, P, S), savedWithoutTimings(R, P, S));
   std::vector<Fn> Fewer = Old;
   llvm::erase_if(Fewer, [](const Fn &F) { return F.Name == "leaf3"; });
   const Program Lost = build(Fewer, 0x400000, {}, std::string(64, 'b'));
@@ -1491,6 +3763,39 @@ TEST(BinaryDiff, MalformedSavedComparisonsFailClearly) {
   Rejects(
       Replace("\"functions\":{\"primary\":[", "\"functions\":{\"primary\":[5,"),
       "a function must be");
+}
+
+TEST(BinaryDiff, CandidateOnlyStepsCannotPublishAcceptedMatches) {
+  const Program P = build({leaf("body", 3, 5)}, 0x400000);
+  const Program S = build({leaf("body", 3, 5)}, 0x800000);
+  const ComparisonResult Original = compare(P, S, {});
+  ASSERT_EQ(Original.Matches.size(), 1u);
+  const std::string Before = saved(Original, P, S);
+  std::string Error;
+  const auto Parsed = readComparison(Before, Error);
+  ASSERT_TRUE(Parsed) << Error;
+  for (auto Step : {FunctionStep::InlinedTailCall, FunctionStep::StackRoles})
+    for (bool Confirmed : {false, true}) {
+      SCOPED_TRACE(Confirmed);
+      auto Invalid = Original;
+      Invalid.Matches.front().Step = Step;
+      Invalid.Matches.front().Confirmed = Confirmed;
+      EXPECT_FALSE(readComparison(saved(Invalid, P, S), Error));
+      EXPECT_NE(Error.find("can only describe ambiguous candidates"),
+                std::string::npos)
+          << Error;
+
+      // Typed saved state uses the same validator and cannot replace a result
+      // already published to its caller when the evidence is invalid.
+      auto Mutated = *Parsed;
+      Mutated.Matches.front().Match.Step = Step;
+      Mutated.Matches.front().Match.Confirmed = Confirmed;
+      auto Bound = Original;
+      BindFailure Why;
+      EXPECT_TRUE(bindComparison(Mutated, P, S, Bound, &Why));
+      EXPECT_EQ(Why, BindFailure::InvalidEvidence);
+      EXPECT_EQ(saved(Bound, P, S), Before);
+    }
 }
 
 TEST(BinaryDiff, OverridesKeepPairsOneToOneAndRevert) {
@@ -1898,7 +4203,7 @@ TEST(BinaryDiff, SavedMeasurementsAreRecomputedBeforePublication) {
 }
 
 TEST(BinaryDiff, VocabularyRoundTrips) {
-  for (unsigned I = 0; I <= unsigned(FunctionStep::Similarity); ++I) {
+  for (unsigned I = 0; I <= unsigned(FunctionStep::BlockCallSite); ++I) {
     const auto Step = static_cast<FunctionStep>(I);
     EXPECT_EQ(functionStepNamed(stepName(Step)), Step);
     EXPECT_FALSE(stepDescription(Step).empty());
@@ -2008,6 +4313,250 @@ TEST(BinaryDiff, RegionInlineAndOutlineUseObservedInternalCalls) {
   const auto Reverse = findRegions(B, A, enabledRegions(), {});
   ASSERT_EQ(Reverse.Hypotheses.size(), 1u);
   EXPECT_TRUE(explains(Reverse.Hypotheses[0], RegionKind::Outline));
+}
+
+namespace {
+Fn callRegionBody(std::string Name, std::string Target) {
+  Fn F;
+  F.Name = std::move(Name);
+  F.Blocks = {body(411, 3)};
+  F.Blocks[0].push_back({"call", "", InstructionFlow::Call, std::move(Target)});
+  const auto Suffix = body(527, 3);
+  F.Blocks[0].insert(F.Blocks[0].end(), Suffix.begin(), Suffix.end());
+  F.Blocks[0].push_back({"ret", "", InstructionFlow::Return});
+  return F;
+}
+Fn callRegionTarget(std::string Name, unsigned Seed) {
+  auto F = leaf(std::move(Name), Seed, 1);
+  F.Blocks[0].back().Flow = InstructionFlow::Return;
+  return F;
+}
+} // namespace
+
+TEST(BinaryDiff, CallRegionsRetainMovedBodiesAndExactTargetAssumptions) {
+  const auto P =
+      build({callRegionBody("old", "callee"), callRegionTarget("callee", 77)},
+            0x1000);
+  auto Public = callRegionBody("public", "callee_new");
+  const auto Prefix = body(619, 6);
+  Public.Blocks[0].insert(Public.Blocks[0].begin(), Prefix.begin(),
+                          Prefix.end());
+  const auto S =
+      build({Public, callRegionBody("private", "callee_new"),
+             callRegionBody("wrong", "other"),
+             callRegionTarget("callee_new", 77), callRegionTarget("other", 91)},
+            0x8000);
+  FunctionMatch M;
+  M.Primary = 1;
+  M.Secondary = 3;
+  auto Settings = enabledRegions();
+  const auto Legacy = findRegions(P, S, Settings, {}, {M});
+  EXPECT_TRUE(Legacy.Anchors.empty());
+  Settings.Calls = true;
+  const auto R = findRegions(P, S, Settings, {}, {M});
+  ASSERT_EQ(R.State, ComparisonState::Complete);
+  ASSERT_EQ(R.Anchors.size(), 2u);
+  ASSERT_EQ(R.Hypotheses.size(), 1u);
+  EXPECT_TRUE(R.Hypotheses[0].Ambiguous);
+  EXPECT_TRUE(explains(R.Hypotheses[0], RegionKind::Clone));
+  EXPECT_EQ(R.Hypotheses[0].PrimaryInstructions, 7u);
+  EXPECT_EQ(R.Hypotheses[0].SecondaryInstructions, 14u);
+  for (const auto &A : R.Anchors) {
+    EXPECT_EQ(A.Primary.Function, 0u);
+    EXPECT_LT(A.Secondary.Function, 2u);
+    EXPECT_EQ(A.Primary.InstructionCount, 7u);
+  }
+  EXPECT_FALSE(validateRegions(R, Settings, P, S, {}, {M}));
+  EXPECT_TRUE(validateRegions(R, Settings, P, S));
+  EXPECT_TRUE(findRegions(P, S, Settings, {}).Anchors.empty());
+  std::swap(M.Primary, M.Secondary);
+  const auto Back = findRegions(S, P, Settings, {}, {M});
+  ASSERT_EQ(Back.Anchors.size(), 2u);
+  EXPECT_FALSE(validateRegions(Back, Settings, S, P, {}, {M}));
+  EXPECT_THROW(findRegions(S, P, Settings, {}, {M, M}), std::invalid_argument);
+
+  for (const auto Flow :
+       {InstructionFlow::IndirectCall, InstructionFlow::Unknown}) {
+    auto Changed = S;
+    Changed.Instructions[Changed.Blocks[0].FirstInstruction + 9].Flow = Flow;
+    std::swap(M.Primary, M.Secondary);
+    const auto Limited = findRegions(P, Changed, Settings, {}, {M});
+    ASSERT_EQ(Limited.Anchors.size(), 1u);
+    EXPECT_EQ(Limited.Anchors[0].Secondary.Function, 1u);
+    std::swap(M.Primary, M.Secondary);
+  }
+}
+
+TEST(BinaryDiff, ShortRepeatedCallRegionsNeedDistinctMappedTargets) {
+  for (bool Distinct : {false, true}) {
+    Fn Before;
+    Before.Name = "old";
+    auto Shared = body(713, 2);
+    Shared.push_back({"call", "", InstructionFlow::Call, "one"});
+    const auto Middle = body(719, 2);
+    Shared.insert(Shared.end(), Middle.begin(), Middle.end());
+    Shared.push_back(
+        {"call", "", InstructionFlow::Call, Distinct ? "two" : "one"});
+    Shared.push_back(body(727, 1)[0]);
+    Before.Blocks = {body(100, 20), Shared};
+    auto Public = Before, Private = Before;
+    Public.Name = "public";
+    Public.Blocks[0] = body(200, 20);
+    Private.Name = "private";
+    Private.Blocks[0] = body(300, 20);
+    const auto P = build(
+        {Before, callRegionTarget("one", 77), callRegionTarget("two", 91)},
+        0x1000);
+    const auto S = build({Public, Private, callRegionTarget("one", 77),
+                          callRegionTarget("two", 91)},
+                         0x8000);
+    FunctionMatch One, Two;
+    One.Primary = 1;
+    One.Secondary = 2;
+    Two.Primary = 2;
+    Two.Secondary = 3;
+    auto Settings = enabledRegions();
+    Settings.Calls = true;
+    const auto R = findRegions(P, S, Settings, {}, {One, Two});
+    EXPECT_EQ(R.State, ComparisonState::Complete);
+    EXPECT_EQ(R.Anchors.size(), Distinct ? 2u : 0u);
+    EXPECT_FALSE(validateRegions(R, Settings, P, S, {}, {One, Two}));
+    if (Distinct) {
+      ASSERT_EQ(R.Hypotheses.size(), 1u);
+      EXPECT_TRUE(R.Hypotheses[0].Ambiguous);
+      EXPECT_TRUE(explains(R.Hypotheses[0], RegionKind::Clone));
+      EXPECT_EQ(R.Hypotheses[0].PrimaryInstructions, 7u);
+      EXPECT_EQ(R.Hypotheses[0].SecondaryInstructions, 14u);
+      Settings.MaxOccurrences = 1;
+      const auto Frequent = findRegions(P, S, Settings, {}, {One, Two});
+      EXPECT_TRUE(Frequent.Anchors.empty());
+      EXPECT_GT(Frequent.FrequentSeedGroups, 0u);
+    } else {
+      EXPECT_GT(R.WeakCandidates, 0u);
+    }
+  }
+}
+
+TEST(BinaryDiff, CallRegionsKeepCleanupTailsBesideChangedCalls) {
+  for (const auto Flow : {InstructionFlow::Return, InstructionFlow::Jump,
+                          InstructionFlow::Branch}) {
+    Fn Old;
+    Old.Name = "old";
+    auto Ops = body(817, 3);
+    Ops.push_back({"call", "", InstructionFlow::Call, "before"});
+    const auto Suffix = body(823, 2);
+    Ops.insert(Ops.end(), Suffix.begin(), Suffix.end());
+    Ops.push_back({"call", "", InstructionFlow::Call, "cleanup"});
+    Ops.push_back(body(827, 1)[0]);
+    Ops.push_back({"transfer", "", Flow});
+    Old.Blocks = {body(100, 20), Ops};
+    auto New = Old, Copy = Old;
+    New.Name = "new";
+    New.Blocks[0] = body(200, 20);
+    New.Blocks[1][3].Callee = "changed";
+    Copy.Name = "copy";
+    Copy.Blocks[0] = body(300, 20);
+    Copy.Blocks[1][3].Callee = "changed";
+    const auto P = build(
+        {Old, callRegionTarget("before", 77), callRegionTarget("cleanup", 91)},
+        0x1000);
+    const auto S = build({New, Copy, callRegionTarget("before", 77),
+                          callRegionTarget("changed", 99),
+                          callRegionTarget("cleanup", 91)},
+                         0x8000);
+    FunctionMatch Before, Cleanup;
+    Before.Primary = 1;
+    Before.Secondary = 2;
+    Cleanup.Primary = 2;
+    Cleanup.Secondary = 4;
+    auto Settings = enabledRegions();
+    Settings.Calls = true;
+    const auto R = findRegions(P, S, Settings, {}, {Before, Cleanup});
+    EXPECT_EQ(R.Anchors.size(), Flow == InstructionFlow::Branch ? 0u : 2u);
+    for (const auto &A : R.Anchors) {
+      EXPECT_EQ(A.Primary.FirstInstruction, 4u);
+      EXPECT_EQ(A.Primary.InstructionCount, 4u);
+      EXPECT_EQ(A.Secondary.FirstInstruction, 4u);
+    }
+    EXPECT_FALSE(validateRegions(R, Settings, P, S, {}, {Before, Cleanup}));
+    // The unresolved cleanup call cannot supply terminal support either.
+    EXPECT_TRUE(findRegions(P, S, Settings, {}, {Before}).Anchors.empty());
+  }
+}
+
+TEST(BinaryDiff, CallRegionsBindSavedEvidenceAndMappingEditsTransactionally) {
+  const auto P = build(
+      {callRegionBody("caller", "callee"), callRegionTarget("callee", 77)},
+      0x1000);
+  const auto S = build(
+      {callRegionBody("caller", "callee"), callRegionTarget("callee", 77)},
+      0x8000);
+  ComparisonSettings Settings;
+  Settings.Regions = enabledRegions();
+  Settings.Regions.Calls = true;
+  auto R = compare(P, S, Settings);
+  ASSERT_EQ(R.Regions.Anchors.size(), 1u);
+  const auto Initial = regionAnalysisJSON(R.Regions);
+  EXPECT_EQ(Initial.getString("profile"), "native-call-runs-v1");
+  EXPECT_EQ(Initial.getString("call_evidence"),
+            "current_function_correspondence");
+  EXPECT_EQ(readRegionSettings(regionSettingsJSON(Settings.Regions)),
+            Settings.Regions);
+  EXPECT_THROW(readRegionSettings(llvm::json::Object{{"calls", 1}}),
+               std::invalid_argument);
+  auto Forged = Initial;
+  Forged["call_evidence"] = "semantic_equivalence";
+  EXPECT_THROW(readRegionAnalysis(std::move(Forged), Settings.Regions),
+               std::invalid_argument);
+  auto OldSettings = Settings.Regions;
+  OldSettings.Calls = false;
+  EXPECT_THROW(readRegionAnalysis(llvm::json::Object(Initial), OldSettings),
+               std::invalid_argument);
+  EXPECT_FALSE(regionSettingsJSON(OldSettings).get("calls"));
+
+  std::string Error;
+  const auto Saved = readComparison(saved(R, P, S), Error);
+  ASSERT_TRUE(Saved) << Error;
+  ComparisonResult Bound;
+  ASSERT_FALSE(bindComparison(*Saved, P, S, Bound));
+  EXPECT_EQ(regionAnalysisJSON(Bound.Regions), Initial);
+  Override O{OverrideKind::Unmatch, P.Functions[1].Address,
+             S.Functions[1].Address};
+  std::atomic<bool> Cancel = false;
+  ComparisonControl Control;
+  Control.Cancel = &Cancel;
+  Control.Progress = [&](llvm::StringRef Phase, uint64_t, uint64_t) {
+    if (Phase == "regions:call-context")
+      Cancel = true;
+  };
+  OverrideEffect Effect;
+  EXPECT_THROW(applyOverride(R, P, S, O, &Effect, Control),
+               ComparisonInterrupted);
+  EXPECT_TRUE(R.Overrides.empty());
+  EXPECT_EQ(regionAnalysisJSON(R.Regions), Initial);
+  ASSERT_FALSE(applyOverride(R, P, S, O, &Effect));
+  EXPECT_TRUE(R.Regions.Anchors.empty());
+  const auto Edited = readComparison(saved(R, P, S), Error);
+  ASSERT_TRUE(Edited) << Error;
+  EXPECT_FALSE(bindComparison(*Edited, P, S, Bound));
+  auto Stale = *Edited;
+  Stale.Regions = Saved->Regions;
+  EXPECT_TRUE(bindComparison(Stale, P, S, Bound));
+  Cancel = false;
+  EXPECT_THROW(revertOverride(R, P, S, Effect, Control), ComparisonInterrupted);
+  EXPECT_TRUE(R.Regions.Anchors.empty());
+  EXPECT_EQ(R.Overrides.size(), 1u);
+  revertOverride(R, P, S, Effect);
+  EXPECT_EQ(regionAnalysisJSON(R.Regions), Initial);
+  EXPECT_FALSE(
+      validateRegions(R.Regions, Settings.Regions, P, S, {}, R.Matches));
+  auto Limited = Settings.Regions;
+  Limited.MaxWork = 1;
+  const auto Stopped = findRegions(P, S, Limited, {}, R.Matches);
+  EXPECT_EQ(Stopped.State, ComparisonState::ResourceLimited);
+  EXPECT_EQ(Stopped.Work, 1u);
+  EXPECT_TRUE(Stopped.Anchors.empty());
+  EXPECT_FALSE(validateRegions(Stopped, Limited, P, S, {}, R.Matches));
 }
 
 TEST(BinaryDiff, RegionClonesRemainCompetingOverlappingEvidence) {

@@ -19,6 +19,7 @@ add_neverd_component_library(NeverDIRLowValidation
   X86/X87PortableABI.cpp
   X86/X86MpxContext.cpp
   X86/X86MpxMemory.cpp
+  X86/X86LegacySegments.cpp
 
   LINK_COMPONENTS
   Digest
@@ -51,6 +52,7 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationStateSEHParentExit.cpp
   X86/RegistrationStateSEHParentOwnership.cpp
   X86/RegistrationStateSEHException.cpp
+  X86/RegistrationStateSEHThread.cpp
   X86/RegistrationStateLocalUnwind.cpp
   X86/RegistrationStateLocalUnwindReceipt.cpp
   X86/RegistrationStateTryLevel.cpp
@@ -61,12 +63,16 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationStateBorrowedJump.cpp
   X86/RegistrationStateNestedFinally.cpp
   X86/RegistrationStateCRTCall.cpp
+  X86/RegistrationStateStartupInfo.cpp
+  X86/RegistrationStateHeap.cpp
+  X86/RegistrationStateSynchronization.cpp
   X86/RegistrationStateRuntimeCall.cpp
   X86/RegistrationStateOccurrences.cpp
   X86/RegistrationStateOrder.cpp
   X86/RegistrationStateRealignment.cpp
   X86/RegistrationStateInstallation.cpp
   X86/RegistrationStatePrologue.cpp
+  X86/RegistrationStateSEH4Entry.cpp
   X86/RegistrationStateEpilogue.cpp
   X86/RegistrationStateResult.cpp
   X86/RegistrationStateSearch.cpp
@@ -80,8 +86,10 @@ add_neverd_component_library(NeverDIRRegistrationState
   X86/RegistrationNestedFinallyFrame.cpp
   X86/RegistrationFilterFrame.cpp
   X86/RegistrationFrame.cpp
+  X86/RegistrationImportLoad.cpp
   X86/RegistrationFrameScalar.cpp
   X86/RegistrationFrameMemory.cpp
+  X86/RegistrationFrameInputs.cpp
   X86/RegistrationFrameCallback.cpp
   X86/RegistrationFrameSEHException.cpp
   X86/RegistrationJumpBuffer.cpp
@@ -100,14 +108,20 @@ add_neverd_component_library(NeverDIRLow
   X86/CFGBuilderX86BoundedLeaf.cpp
   AArch64/CFGBuilderAArch64PAuth.cpp
   CFGBuilderException.cpp
+  CFGBuilderAnalysis.cpp
   CFGBuilderInsn.cpp
   CFGBuilderScalarBranch.cpp
+  LowScalarTargets.cpp
+  LowScalarFiniteExpression.cpp
   LowScalarExpression.cpp
   LowScalarSymbolic.cpp
   X86/CFGBuilderX86Fpu.cpp
+  SEHLocalUnwindProtocol.cpp
+  X86/SEHLocalUnwindX64.cpp
   X86/CFGBuilderX86GetPc.cpp
   X86/CFGBuilderX86PLT.cpp
   CallRegisterEffects.cpp
+  CallStackOffsets.cpp
   CallRegisterUnread.cpp
   CircleRange.cpp
   FuncDetector.cpp
@@ -120,6 +134,7 @@ add_neverd_component_library(NeverDIRLow
   X86/RegistrationLocalUnwind.cpp
   X86/RegistrationLocalUnwindCall.cpp
   X86/RegistrationCallbackImage.cpp
+  X86/RegistrationOriginalImage.cpp
   X86/RegistrationCFG.cpp
   X86/RegistrationCleanupABI.cpp
   X86/RegistrationCleanupFrame.cpp
@@ -143,7 +158,13 @@ add_neverd_component_library(NeverDIRLow
   X86/RegistrationJumpCapture.cpp
   X86/RegistrationJumpEH4.cpp
   X86/RegistrationCalleeIndex.cpp
+  X86/RegistrationCallEffects.cpp
   X86/RegistrationCalleeStack.cpp
+  X86/RegistrationOpaqueStack.cpp
+  X86/RegistrationPrecisionArguments.cpp
+  X86/RegistrationScalarPackets.cpp
+  X86/RegistrationMemoryPermissions.cpp
+  X86/RegistrationCRTData.cpp
   X86/RegistrationSEHControl.cpp
   X86/RegistrationSEHCallNext.cpp
   X86/RegistrationSEHParentEpilogue.cpp
@@ -152,6 +173,7 @@ add_neverd_component_library(NeverDIRLow
   X86/RegistrationEntryABI.cpp
   NdOpEmulator.cpp
   NdOpEmulatorExec.cpp
+  X86/X86LegacySegmentsEmulator.cpp
   X86/X86FourSource.cpp
   NdOpEmulatorFloatConvert.cpp
   X86/NdOpEmulatorX86FPArith.cpp

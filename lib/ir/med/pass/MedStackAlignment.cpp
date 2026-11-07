@@ -12,6 +12,8 @@
 #include "neverd/ir/med/MedStackAlignment.h"
 
 #include "../../../safety/StackSlotFlow.h"
+#include "MedEntryStackOffsets.h"
+#include "MedScalarSelectRange.h"
 #include "MedStackRecurrence.h"
 
 #include "neverd/ArchSupport.h"
@@ -237,9 +239,24 @@ public:
     return resolve(Value, 0);
   }
 
+  std::optional<int64_t> independentOffset(const MedVar &Value) {
+    // Keep a root query's budget and cycle state independent of earlier roots.
+    // Active definitions and assumptions are restored by the traversal itself.
+    Completed.clear();
+    ContextUses = 0;
+    Deepest = 0;
+    CycleHit = false;
+    return offset(Value);
+  }
+
   std::optional<EntryStackOffsetRange> range(const MedVar &Value) {
     Steps = 0;
     return resolveRange(Value, 0);
+  }
+
+  std::optional<uint64_t> residue(const MedVar &Value, uint64_t Alignment) {
+    Steps = 0;
+    return resolveResidue(Value, Alignment, 0);
   }
 
   /// The largest offset \p Value can have: the longest way to it from exact
@@ -294,9 +311,7 @@ public:
       // ways share is visited once instead of proved again for each way in.
       if (!OnlySeededRoots && Current.Kind == MedVar::Reg &&
           Current.RegOff == TRI.StackPointer &&
-          (authenticatedEntryLiveIn(Current, Definition) ||
-           (FollowJoins && Current.SSAVer == 0 &&
-            (!Definition || !Definition->Op)))) {
+          authenticatedEntryLiveIn(Current, Definition)) {
         N.Bound = 0;
         N.Exact = true;
         continue;
@@ -348,6 +363,10 @@ public:
       }
       if (Op->Opcode == NdOp::COPY && Op->NumInputs == 1) {
         Follow(Op->Inputs[0], 0);
+        continue;
+      }
+      if (const MedVar *Native = nativeAddressRoundTrip(*Op)) {
+        Follow(*Native, 0);
         continue;
       }
       // Clearing low bits only lowers the address.
@@ -424,6 +443,208 @@ private:
   }
   std::map<Key, std::optional<CountedStackRecurrence>> Recurrences;
 
+  std::vector<detail::ScalarConstraint> ScalarConstraints;
+
+  bool stableScalarConstant(const MedVar &Value) const {
+    return Value.isConst() && !isAddressProvenance(Value.Provenance) &&
+           !(RangeImage &&
+             Value.Provenance == ConstantAddressProvenance::Unknown &&
+             RangeImage->isPotentiallyRelocatableAddress(Value.ConstVal));
+  }
+
+  std::optional<const MedOp *> scalarDefinition(const MedVar &Value) const {
+    if (Value.isConst() || !Value.Size)
+      return std::nullopt;
+    const auto At = Definitions.find(key(Value));
+    if (At == Definitions.end())
+      return nullptr;
+    const auto &Def = At->second;
+    if (Def.Ambiguous)
+      return std::nullopt;
+    if (Def.Join)
+      return sameOccurrence(Def.Join->Output, Value) &&
+                     !Def.Join->ExceptionalEntry
+                 ? std::optional<const MedOp *>(nullptr)
+                 : std::nullopt;
+    const MedOp *Op = Def.Op;
+    if (!Op || !sameOccurrence(Op->Output, Value) || Op->Dead ||
+        Op->MemoryOrdering != NdMemoryOrdering::None ||
+        Op->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !Op->IntrinsicOutputs.empty())
+      return std::nullopt;
+    return Op;
+  }
+
+  const MedVar *nativeAddressRoundTrip(const MedOp &Op) {
+    if (!FollowJoins || TRI.PointerSize != 4 || Op.Dead ||
+        Op.Opcode != NdOp::SUBBYTES || Op.NumInputs != 2 ||
+        Op.Output.Size != TRI.PointerSize ||
+        Op.Inputs[0].Size != sizeof(uint64_t) ||
+        !stableScalarConstant(Op.Inputs[1]) || Op.Inputs[1].ConstVal != 0 ||
+        Op.MemoryOrdering != NdMemoryOrdering::None ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !Op.IntrinsicOutputs.empty())
+      return nullptr;
+    const auto Carrier = scalarDefinition(Op.Inputs[0]);
+    if (!Carrier || !*Carrier || (*Carrier)->Opcode != NdOp::INT_ZEXT ||
+        (*Carrier)->NumInputs != 1 ||
+        (*Carrier)->Inputs[0].Size != TRI.PointerSize ||
+        ++Steps > kMaxProofSteps)
+      return nullptr;
+    // LEA returns the low native pointer from a zero-extended address
+    // container. Charge the skipped extension and use this same relation in
+    // exact, component and one-sided proofs, including loop backedges.
+    return &(*Carrier)->Inputs[0];
+  }
+
+  llvm::ConstantRange scalarSlice(const MedVar &Value, unsigned Offset,
+                                  unsigned Bytes, unsigned Depth) {
+    const unsigned Bits = Bytes * 8;
+    if (++Steps > kMaxProofSteps ||
+        Depth > limits::ir::kMedStackAlignmentResolveDepthLimit)
+      return llvm::ConstantRange(Bits, true);
+    // A low-byte query must not lose its known bytes by first joining the
+    // complete value with an unrelated, unconstrained upper register slice.
+    const auto Def = scalarDefinition(Value);
+    if (Def && *Def) {
+      const auto &Op = **Def;
+      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+          Op.Inputs[0].Size == Value.Size)
+        return scalarSlice(Op.Inputs[0], Offset, Bytes, Depth + 1);
+      if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+          stableScalarConstant(Op.Inputs[1]) &&
+          Op.Inputs[0].Size >= Value.Size &&
+          Op.Inputs[1].ConstVal <= Op.Inputs[0].Size - Value.Size)
+        return scalarSlice(Op.Inputs[0], Offset + Op.Inputs[1].ConstVal, Bytes,
+                           Depth + 1);
+      if (Op.Opcode == NdOp::CONCAT && Op.NumInputs == 2 && Op.Inputs[0].Size &&
+          Op.Inputs[1].Size &&
+          Op.Inputs[0].Size + Op.Inputs[1].Size == Value.Size) {
+        const unsigned Low = Op.Inputs[1].Size;
+        if (Offset >= Low)
+          return scalarSlice(Op.Inputs[0], Offset - Low, Bytes, Depth + 1);
+        if (Offset + Bytes <= Low)
+          return scalarSlice(Op.Inputs[1], Offset, Bytes, Depth + 1);
+      }
+    }
+    const auto Input = scalarRange(Value, Depth + 1);
+    return Input
+        .lshr(llvm::ConstantRange(llvm::APInt(Input.getBitWidth(), Offset * 8)))
+        .zextOrTrunc(Bits);
+  }
+
+  /// Low bits survive native wrapping, independently of any signed bounds.
+  std::optional<uint64_t> scalarResidue(const MedVar &Value, uint64_t Alignment,
+                                        unsigned Depth) {
+    const uint64_t Mask = Alignment - 1;
+    if (++Steps > kMaxProofSteps ||
+        Depth > limits::ir::kMedStackAlignmentResolveDepthLimit ||
+        !Value.Size || Value.Size > sizeof(uint64_t) ||
+        (Value.Size < sizeof(uint64_t) && Mask >> (Value.Size * 8)))
+      return std::nullopt;
+    if (Value.isConst())
+      return isAddressProvenance(Value.Provenance)
+                 ? std::nullopt
+                 : std::optional(Value.ConstVal & Mask);
+    const auto Found = Definitions.find(key(Value));
+    if (Found == Definitions.end() || Found->second.Ambiguous ||
+        !RangeActive.insert(key(Value)).second)
+      return std::nullopt;
+    const auto Clear = llvm::scope_exit([&] { RangeActive.erase(key(Value)); });
+    const MedOp *Op = Found->second.Op;
+    if (!Op || !sameOccurrence(Op->Output, Value) || Op->Dead ||
+        Op->MemoryOrdering != NdMemoryOrdering::None ||
+        Op->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !Op->IntrinsicOutputs.empty())
+      return std::nullopt;
+    if (Op->NumInputs == 1 &&
+        ((Op->Opcode == NdOp::COPY && Op->Inputs[0].Size == Value.Size) ||
+         ((Op->Opcode == NdOp::INT_ZEXT || Op->Opcode == NdOp::INT_SEXT) &&
+          Op->Inputs[0].Size < Value.Size)))
+      return scalarResidue(Op->Inputs[0], Alignment, Depth + 1);
+    if (Op->NumInputs != 2 || Op->Inputs[0].Size != Value.Size ||
+        Op->Inputs[1].Size != Value.Size)
+      return std::nullopt;
+    // A mask can fix the low bits even when its other input has no range or
+    // known bits. Do not ask that input to prove anything about its sign.
+    if (Op->Opcode == NdOp::INT_AND)
+      for (unsigned I = 0; I != Op->NumInputs; ++I) {
+        const MedVar &Input = Op->Inputs[I];
+        if (Input.isConst() && !isAddressProvenance(Input.Provenance) &&
+            !(Input.ConstVal & Mask))
+          return 0;
+      }
+    if (Op->Opcode != NdOp::INT_ADD && Op->Opcode != NdOp::INT_SUB &&
+        Op->Opcode != NdOp::INT_AND)
+      return std::nullopt;
+    const auto Left = scalarResidue(Op->Inputs[0], Alignment, Depth + 1);
+    const auto Right = scalarResidue(Op->Inputs[1], Alignment, Depth + 1);
+    if (!Left || !Right)
+      return std::nullopt;
+    if (Op->Opcode == NdOp::INT_AND)
+      return *Left & *Right;
+    return (Op->Opcode == NdOp::INT_SUB ? *Left - *Right : *Left + *Right) &
+           Mask;
+  }
+
+  std::optional<uint64_t> resolveResidue(const MedVar &Value,
+                                         uint64_t Alignment, unsigned Depth) {
+    if (++Steps > kMaxProofSteps ||
+        Depth > limits::ir::kMedStackAlignmentResolveDepthLimit ||
+        Value.Size != TRI.PointerSize || Value.TheArch != Architecture ||
+        (Value.Kind != MedVar::Reg && Value.Kind != MedVar::Temp))
+      return std::nullopt;
+    const auto Found = Definitions.find(key(Value));
+    ValueDefinition *Definition =
+        Found == Definitions.end() ? nullptr : &Found->second;
+    if (Definition && Definition->Ambiguous)
+      return std::nullopt;
+    if (Value.Kind == MedVar::Reg && Value.RegOff == TRI.StackPointer &&
+        authenticatedEntryLiveIn(Value, Definition))
+      return 0;
+    if (!Definition || !RangeActive.insert(key(Value)).second)
+      return std::nullopt;
+    const auto Clear = llvm::scope_exit([&] { RangeActive.erase(key(Value)); });
+    if (Definition->Join) {
+      bool HasCycle = false;
+      const auto Boundaries = phiComponentBoundaries(Value, Depth, HasCycle);
+      if (!Boundaries)
+        return std::nullopt;
+      std::optional<uint64_t> Agreed;
+      for (const auto &[Boundary, AtDepth] : *Boundaries) {
+        const auto Incoming = resolveResidue(Boundary, Alignment, AtDepth);
+        if (!Incoming || (Agreed && Agreed != Incoming))
+          return std::nullopt;
+        Agreed = Incoming;
+      }
+      return Agreed;
+    }
+    const MedOp *Op = Definition->Op;
+    if (!Op || !sameOccurrence(Op->Output, Value) || Op->Dead ||
+        Op->RegistrationRoot != MedOp::RegistrationRootKind::None ||
+        Op->MemoryOrdering != NdMemoryOrdering::None ||
+        Op->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !Op->IntrinsicOutputs.empty())
+      return std::nullopt;
+    if (Op->Opcode == NdOp::COPY && Op->NumInputs == 1)
+      return resolveResidue(Op->Inputs[0], Alignment, Depth + 1);
+    if ((Op->Opcode != NdOp::INT_ADD && Op->Opcode != NdOp::INT_SUB) ||
+        Op->NumInputs != 2 || Op->Inputs[0].Size != TRI.PointerSize ||
+        Op->Inputs[1].Size != TRI.PointerSize)
+      return std::nullopt;
+    const bool Subtract = Op->Opcode == NdOp::INT_SUB;
+    for (unsigned I = 0; I != (Subtract ? 1u : 2u); ++I) {
+      const auto Base = resolveResidue(Op->Inputs[I], Alignment, Depth + 1);
+      if (!Base)
+        continue;
+      const auto Delta =
+          scalarResidue(Op->Inputs[I ^ 1u], Alignment, Depth + 1);
+      if (Delta)
+        return (Subtract ? *Base - *Delta : *Base + *Delta) & (Alignment - 1);
+    }
+    return std::nullopt;
+  }
+
   /// Scalar bounds retain machine-width wrapping. Unknown scalar values have
   /// their full bit range; only a narrower extension or mask can bound them.
   llvm::ConstantRange scalarRange(const MedVar &Value, unsigned Depth) {
@@ -440,6 +661,10 @@ private:
         return Full;
       return llvm::ConstantRange(llvm::APInt(Bits, Value.ConstVal));
     }
+    for (auto At = ScalarConstraints.rbegin(); At != ScalarConstraints.rend();
+         ++At)
+      if (sameOccurrence(At->Root, Value))
+        return At->Values;
     const auto Found = Definitions.find(key(Value));
     if (Found == Definitions.end() || Found->second.Ambiguous ||
         !RangeActive.insert(key(Value)).second)
@@ -485,10 +710,35 @@ private:
         Op->Inputs[1].isConst() &&
         !isAddressProvenance(Op->Inputs[1].Provenance) &&
         Op->Inputs[1].ConstVal <= Op->Inputs[0].Size - Value.Size) {
-      const auto Input = scalarRange(Op->Inputs[0], Depth + 1);
-      const llvm::ConstantRange Shift(
-          llvm::APInt(Input.getBitWidth(), Op->Inputs[1].ConstVal * 8));
-      return Input.lshr(Shift).zextOrTrunc(Bits);
+      return scalarSlice(Op->Inputs[0], Op->Inputs[1].ConstVal, Value.Size,
+                         Depth + 1);
+    }
+    if (Op->Opcode == NdOp::INT_OR || Op->Opcode == NdOp::SELECT) {
+      detail::ScalarSelectRange Proof(
+          [&](const MedVar &V) { return scalarDefinition(V); }, sameOccurrence,
+          [&](const MedVar &V) { return stableScalarConstant(V); }, Steps);
+      if (const auto Select = Proof.selection(*Op, Depth + 1)) {
+        const auto True = Proof.condition(Select->Condition, true, Depth + 1);
+        const auto False = Proof.condition(Select->Condition, false, Depth + 1);
+        if (True && False) {
+          const auto Arm = [&](const MedVar &V,
+                               const detail::ScalarConstraint &Constraint) {
+            auto Refined = Constraint;
+            for (const auto &Parent : ScalarConstraints)
+              if (sameOccurrence(Parent.Root, Refined.Root))
+                Refined.Values = Refined.Values.intersectWith(Parent.Values);
+            if (Refined.Values.isEmptySet())
+              return llvm::ConstantRange(Bits, false);
+            ScalarConstraints.push_back(std::move(Refined));
+            const auto Clear =
+                llvm::scope_exit([&] { ScalarConstraints.pop_back(); });
+            return scalarRange(V, Depth + 1);
+          };
+          const auto Left = Arm(Select->TrueValue, *True);
+          const auto Right = Arm(Select->FalseValue, *False);
+          return Left.unionWith(Right);
+        }
+      }
     }
     if (Op->NumInputs == 1 && Op->Inputs[0].Size &&
         Op->Inputs[0].Size <= Value.Size) {
@@ -619,7 +869,11 @@ private:
     // offset queries reuse authentication, and only for the exact occurrence.
     if (!FollowJoins)
       return safety::detail::isAuthenticatedEntryRegisterLiveIn(Func, Value);
-    if (!Definition || !Definition->Op)
+    // An undefined version-zero value is an SSA live-in. A PHI remains a
+    // definition even at version zero; a closed cycle cannot seed itself.
+    if (!Definition)
+      return Value.SSAVer == 0;
+    if (!Definition->Op)
       return false;
     if (!Definition->EntryChecked) {
       Definition->EntryLiveIn =
@@ -708,8 +962,7 @@ private:
       const MedOp *Op = Definition ? Definition->Op : nullptr;
       const bool EntryOrigin = !OnlySeededRoots && Value.Kind == MedVar::Reg &&
                                Value.RegOff == TRI.StackPointer &&
-                               (authenticatedEntryLiveIn(Value, Definition) ||
-                                (Value.SSAVer == 0 && !Op));
+                               authenticatedEntryLiveIn(Value, Definition);
       const bool Copy =
           Op && sameOccurrence(Op->Output, Value) && !Op->Dead &&
           Op->Opcode == NdOp::COPY && Op->NumInputs == 1 &&
@@ -718,7 +971,11 @@ private:
           Op->MemoryOrdering == NdMemoryOrdering::None &&
           Op->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
           Op->IntrinsicOutputs.empty();
-      if (!Definition || (!Definition->Join && !Copy) || Assumed.count(K) ||
+      const MedVar *RoundTrip = Op && sameOccurrence(Op->Output, Value)
+                                    ? nativeAddressRoundTrip(*Op)
+                                    : nullptr;
+      const MedVar *Forward = Copy ? &Op->Inputs[0] : RoundTrip;
+      if (!Definition || (!Definition->Join && !Forward) || Assumed.count(K) ||
           Definition->ProvenOffset || Definition->ProvenRange || EntryOrigin ||
           (RangeQuery && K != RootKey && Definition->Join &&
            sameOccurrence(Definition->Join->Output, Value) &&
@@ -749,7 +1006,7 @@ private:
             return false;
         }
       } else {
-        if (!Self(Self, Op->Inputs[0], AtDepth + 1, K))
+        if (!Self(Self, *Forward, AtDepth + (RoundTrip ? 2 : 1), K))
           return false;
       }
       Active.erase(K);
@@ -918,9 +1175,7 @@ private:
       }
       if (!OnlySeededRoots && Value.Kind == MedVar::Reg &&
           Value.RegOff == TRI.StackPointer &&
-          (authenticatedEntryLiveIn(Value, Definition) ||
-           (FollowJoins && Value.SSAVer == 0 &&
-            (!Definition || !Definition->Op))))
+          authenticatedEntryLiveIn(Value, Definition))
         return Replay(0);
       if (Definition && Definition->ProvenOffset && Definition->Op &&
           sameOccurrence(Definition->Op->Output, Value))
@@ -959,6 +1214,8 @@ private:
             Links.emplace_back(0, false);
             Current = &Op.Inputs[0];
             continue;
+          } else if (const MedVar *Native = nativeAddressRoundTrip(Op)) {
+            Result = resolve(*Native, Depth + 2);
           } else if ((Op.Opcode == NdOp::INT_ADD ||
                       Op.Opcode == NdOp::INT_SUB) &&
                      Op.NumInputs == 2) {
@@ -1020,11 +1277,37 @@ private:
 
 } // namespace
 
+struct MedEntryStackOffsets::Impl {
+  StackOffsetProof Proof;
+
+  Impl(const MedFunc &Func, Arch Architecture, BinaryFormat Format)
+      : Proof(Func, Architecture, Format, Func.EntryKind,
+              /*FollowJoins=*/true) {}
+};
+
+MedEntryStackOffsets::MedEntryStackOffsets(const MedFunc &Func,
+                                           Arch Architecture,
+                                           BinaryFormat Format)
+    : Func(Func), Architecture(Architecture), Format(Format) {}
+
+MedEntryStackOffsets::~MedEntryStackOffsets() = default;
+
+std::optional<int64_t> MedEntryStackOffsets::query(const MedVar &Value) {
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if ((TRI.PointerSize != 4 && TRI.PointerSize != 8) || Func.Blocks.empty())
+    return std::nullopt;
+  if (!Index)
+    Index = std::make_unique<Impl>(Func, Architecture, Format);
+  return Index->Proof.independentOffset(Value);
+}
+
+void MedEntryStackOffsets::invalidate() { Index.reset(); }
+
 std::optional<MedIntegerReturnRange>
 integerReturnRange(const MedFunc &Func, const LowFunc &Source,
                    const BinaryImage &Image) {
   const auto &TRI = getTargetRegInfo(Image.Arch);
-  if (!TRI.ReturnOperandIsValue ||
+  if (Func.AnalysisOnly || Source.AnalysisOnly || !TRI.ReturnOperandIsValue ||
       (TRI.PointerSize != 4 && TRI.PointerSize != 8) ||
       Func.Entry != Source.Entry || !Source.hasCompleteLiftCoverage() ||
       !Source.UnsafeIndirectBranchAddresses.empty() ||
@@ -1244,6 +1527,23 @@ entryStackOffsetUpperBounds(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
   for (size_t I = 0; I < Values.size(); ++I)
     Bounds[I] = Proof.upperBound(Values[I]);
   return Bounds;
+}
+
+std::vector<std::optional<uint64_t>>
+entryStackOffsetResidues(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
+                         Arch Architecture, BinaryFormat Format,
+                         uint64_t Alignment, StackEntryKind Entry) {
+  std::vector<std::optional<uint64_t>> Residues(Values.size());
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if ((TRI.PointerSize != 4 && TRI.PointerSize != 8) || Func.Blocks.empty() ||
+      Alignment < 2 || (Alignment & (Alignment - 1)) ||
+      (TRI.PointerSize == 4 && Alignment > UINT32_MAX))
+    return Residues;
+  StackOffsetProof Proof(Func, Architecture, Format, Entry,
+                         /*FollowJoins=*/true);
+  for (size_t I = 0; I < Values.size(); ++I)
+    Residues[I] = Proof.residue(Values[I], Alignment);
+  return Residues;
 }
 
 std::vector<std::optional<int64_t>> entryStackOffsetsFromProvenDefinitions(

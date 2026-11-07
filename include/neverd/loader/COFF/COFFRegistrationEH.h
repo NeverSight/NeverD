@@ -24,9 +24,12 @@
 
 #include "neverd/loader/BinaryImage.h"
 
+#include <cstddef>
 #include <map>
 #include <optional>
 #include <set>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace neverd::coff_loader {
@@ -65,6 +68,15 @@ getCheckedX86CxxFuncInfoRecords(const BinaryImage &Img, va_t FuncInfoVA);
 std::optional<ExceptionAddressRange>
 getX86RegistrationSEHScopeTableRange(const ExceptionFunction &Function);
 
+/// Revalidate every current immutable SEH3/EH4 table word against its decoded
+/// scope graph. Pointer fields need exact HIGHLOW storage and their table-owned
+/// callback identity; they never become ordinary callable entries. The shared
+/// registration work counter bounds storage/fixup rechecks. Frame installation,
+/// callback instructions, native admission and final-image replay are separate.
+/// Currently requires the table's format-specific outside-try seed.
+std::optional<std::vector<uint8_t>> getCheckedX86SEHScopeTableBytes(
+    const BinaryImage &Img, const ExceptionFunction &Function, size_t &Work);
+
 /// Reparse an absolute-pointer FuncInfo and require equality with its checked
 /// normalized graph. Only these exact native fields carry runtime callback
 /// roles; independent references to the same target keep their ordinary role.
@@ -80,11 +92,19 @@ std::optional<std::vector<ExceptionAddressRange>>
 getCheckedX86CxxMetadataRanges(const BinaryImage &Img,
                                const ExceptionFunction &Function);
 
-/// Image-wide runtime pointer roles, reconstructed from the checked FuncInfo
-/// and SafeSEH parsers. These sources name callbacks or table storage, not
-/// ordinary function entries. RuntimeOnlyPointerTargets have no independent
-/// relocated code-pointer source. Exports, stated symbols and ordinary calls
-/// retain their separate function-entry roles.
+/// Reconstruct the complete current C++ installation prefix and handler
+/// identity. Return its exact absolute handler operand only when the decoded
+/// publication and coordinates still match the frame. This pointer role does
+/// not grant an ordinary callable ABI or permission to omit runtime guards.
+std::optional<std::pair<va_t, va_t>>
+getCheckedX86CxxHandlerPointerSource(const BinaryImage &Img,
+                                     const ExceptionFunction &Function);
+
+/// Image-wide runtime pointer roles, reconstructed from the checked FuncInfo,
+/// registration prefix and SafeSEH parsers. These sources name runtime code or
+/// table storage, not ordinary function entries. RuntimeOnlyPointerTargets have
+/// no independent relocated code-pointer source. Exports, stated symbols and
+/// ordinary calls retain their separate function-entry roles.
 struct X86RegistrationPointerRoles {
   std::map<va_t, va_t> Sources;
   std::set<va_t> RuntimeOnlyPointerTargets;
@@ -131,6 +151,47 @@ getCheckedX86SimpleCxxThrowInfo(const BinaryImage &Img, va_t Address);
 
 /// Authenticate an argument-preserving veneer to the known CRT SEH3 import.
 bool isCheckedX86SEH3Personality(const BinaryImage &Img, va_t HandlerVA);
+
+/// Exact retained SEH dispatch dependencies. Code ranges include forwarding
+/// veneers and every decoded scalar-normalizer path. Image reads name current
+/// runtime storage, not constant contents. The checker itself and its failure
+/// path require separate proofs; these ranges do not grant native admission.
+struct X86SEHPersonalityABI {
+  va_t IATVA = InvalidVA;
+  va_t SecurityCookieVA = 0;
+  va_t CookieCheckVA = 0;
+  std::vector<ExceptionAddressRange> CodeRanges;
+  std::vector<ExceptionAddressRange> ImageReads;
+  /// Decoded four-byte address fields and their preferred targets. Missing
+  /// base relocations remain possible; retained native use must independently
+  /// require complete HIGHLOW coverage for these exact fields.
+  std::map<va_t, va_t> AbsoluteOperands;
+};
+std::optional<X86SEHPersonalityABI>
+getCheckedX86SEH3PersonalityABI(const BinaryImage &Img, va_t HandlerVA);
+std::optional<X86SEHPersonalityABI>
+getCheckedX86EH4PersonalityABI(const BinaryImage &Img, va_t HandlerVA);
+
+/// Relocation-complete retained forwarding and cookie-success code. The eager
+/// import identity and each decoded absolute operand are retained separately
+/// from instruction bytes. Dynamic normalizers are currently excluded.
+/// Cookie equality/failure reachability, shared entry/exit helpers, scope
+/// tables, actual caller arguments and final-image preservation remain separate
+/// proofs.
+struct X86SEHRuntimeCode {
+  va_t IATVA = InvalidVA;
+  std::string ImportModule;
+  std::string ImportName;
+  va_t SecurityCookieVA = 0;
+  va_t CookieCheckVA = 0;
+  va_t CookieFailureVA = 0;
+  std::map<va_t, va_t> AbsoluteOperands;
+  std::map<va_t, std::vector<uint8_t>> Code;
+  bool operator==(const X86SEHRuntimeCode &) const = default;
+};
+std::optional<X86SEHRuntimeCode>
+getCheckedX86SEHRuntimeCode(const BinaryImage &Img,
+                            const ExceptionFunction &Function, size_t &Work);
 
 /// Separate the per-function EAX/FuncInfo thunk from its argument- and
 /// EAX-preserving CRT dispatch entry. A generated handler must use RuntimeVA;
@@ -207,11 +268,19 @@ struct X86CxxPrologueCall {
   ExceptionAddressRange Helper;
   va_t CallVA = 0;
   va_t HandlerVA = 0;
+  va_t HandlerPointerVA = 0;
   va_t SecurityCookieVA = 0;
   uint32_t AllocationBytes = 0;
   int32_t PostCallStackOffset = 0;
   std::vector<X86CxxPrologueWrite> Writes;
 };
+/// Authenticate only the immutable physical entry/helper protocol, charging
+/// the supplied cumulative work account. No FuncInfo, personality, SafeSEH,
+/// source occurrence or native EH contract is granted by this query.
+std::optional<X86CxxPrologueCall>
+getCheckedX86CxxPhysicalPrologueCall(const BinaryImage &Img, va_t Entry,
+                                     size_t &Work, size_t Limit);
+
 std::optional<X86CxxPrologueCall>
 getCheckedX86CxxPrologueCall(const BinaryImage &Img,
                              const ExceptionFunction &Function);
@@ -237,6 +306,8 @@ struct X86CookieCheckSuccessPath {
   va_t SecurityCookieVA = 0;
   va_t FailureVA = 0;
   ExceptionAddressRange CodeRange;
+  /// The decoded CMP operand; this record alone does not prove relocation.
+  std::map<va_t, va_t> AbsoluteOperands;
 };
 std::optional<X86CookieCheckSuccessPath>
 getCheckedX86CookieCheckSuccessPath(const BinaryImage &Img, va_t CheckVA);

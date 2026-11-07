@@ -37,9 +37,12 @@ getCheckedX86RegistrationThrowObjectABI(const BinaryImage &Image, va_t Address,
     if (!Result.CopyConstructor)
       return std::nullopt;
   }
+  Result.PreservesDispatchBindings = true;
   for (const auto *Callback : Result.callbacks()) {
     if (!Callback)
       continue;
+    Result.PreservesDispatchBindings &=
+        Callback->PreservesBoundDispatchBindings;
     for (const auto &Range : Callback->CodeRanges) {
       const auto *Owner = Image.getSegmentFor(Range.Begin);
       if (!registration_abi::chargeCalleeWork(Work, 1) || !Owner ||

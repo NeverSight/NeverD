@@ -50,9 +50,13 @@ public:
 
   /// True when the code range unwind or symbol metadata gives the function at
   /// \p Target holds no instruction that returns, decoded in order from its
-  /// start.  Without such a range, past limits::kMaxNoReturnScreenBytes, or
-  /// where a byte does not decode, the function may return.  Where the user
-  /// states of some function that it never returns, also true when each
+  /// start.  Without such a range in an x64, ARM or ARM64 PE or raw image, true
+  /// when no path from the start reaches a return (entryFlowNeverResumes), as
+  /// in a
+  /// __fastfail stub or a routine that ends in a loop. Otherwise without such
+  /// a range, past limits::kMaxNoReturnScreenBytes, or where a byte does not
+  /// decode, the function may return. Where the user states of some function
+  /// that it never returns, also true when each
   /// return in that range follows a call that cannot come back
   /// (returnsFollowStatedCalls): the function still holds its return,
   /// although no path reaches it.  Memoized.
@@ -102,6 +106,12 @@ private:
   /// Whether the screened range of the function at \p Target holds no
   /// instruction that returns.  Memoized.
   bool nothingReturns(va_t Target) const;
+  /// Whether no path from \p Target that its direct branches name reaches a
+  /// return, within limits::kMaxNoReturnScreenBytes of decoded instructions.
+  /// A path ends at an architectural trap that never resumes, at a call
+  /// stated or known by name never to return. An indirect jump, or a byte that
+  /// does not decode or lift, may lead to a return.
+  bool entryFlowNeverResumes(va_t Target) const;
   /// The instructions of the screened range of the function at \p Target;
   /// empty where a byte does not decode.  Memoized.
   const std::vector<ScreenedInstruction> &

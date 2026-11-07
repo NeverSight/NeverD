@@ -29,7 +29,7 @@ bool RegistrationStateSolver::runSEHCallbackFrame(
     std::vector<RegistrationObjectExtent> *Writes, SEHUnwindJump *Jump,
     SEHFilterOutcomes *FilterOutcomes, unsigned Depth,
     std::optional<int32_t> ParentStackOffset, SEHFrameOutcomes *Outcomes,
-    SEHHandlerOutcomes *Selected) {
+    SEHHandlerOutcomes *Selected, std::optional<SEHExceptionOrigin> Origin) {
   // A filter may leave through a jump; only its actual returns contribute
   // dispositions and restore the suspended callback frame.
   if (FilterOutcomes && (OrdinaryInvocation || Outcomes || Selected))
@@ -59,7 +59,7 @@ bool RegistrationStateSolver::runSEHCallbackFrame(
         FrameValue::frame(0);
   }
   if (FilterOutcomes)
-    Initial.enterSEHFilter(Target, *Chain.RegistrationOffset - 4);
+    Initial.enterSEHFilter(Target, *Chain.RegistrationOffset - 4, Origin);
   else
     Initial.enterCallback(Target);
   const auto InitialLevel = Initial.load(Chain.TryLevelOffset, 4).Constant;
@@ -121,7 +121,7 @@ bool RegistrationStateSolver::runSEHCallbackFrame(
             !State.callbackMemoryIsPrivate(*SP, 16, true) ||
             !JumpRuntime->Raise(Op, State, WorkUsed) ||
             State.loadCallback(SP->Offset + 4, 4).Constant != 0 ||
-            !runSEHFilterSearch(State, Writes, Continued,
+            !runSEHFilterSearch(Op, State, Writes, Continued,
                                 /*RequireResume=*/true,
                                 Selected ? &SelectedHandlers : nullptr, Jump))
           return false;
@@ -208,9 +208,14 @@ bool RegistrationStateSolver::runSEHCallbackFrame(
         if (Conditional && Address.Offset && *Address.Offset >= 4) {
           if (!checkConditionalMemory(State, Op, Transfer))
             return false;
-          if (Op.Opcode == NdOp::STORE)
+          if (Op.Opcode == NdOp::STORE) {
             State.store(*Address.Offset, Memory.AccessSize,
                         Transfer.read(*Memory.StoredValue));
+            if (Writes)
+              Writes->push_back(
+                  {*Address.Offset,
+                   int32_t(int64_t(*Address.Offset) + Memory.AccessSize)});
+          }
         } else if (Address.CallbackAddress) {
           if (!charge(Memory.AccessSize) ||
               !State.callbackMemoryIsPrivate(*Address.CallbackAddress,
@@ -225,17 +230,19 @@ bool RegistrationStateSolver::runSEHCallbackFrame(
           if (Op.Opcode != NdOp::LOAD ||
               !State.sehExceptionLoad(*Address.SEHException, Memory.AccessSize))
             return false;
-        } else if (Address.Constant && !Address.MayBeFrame) {
+        } else if (Address.preferredAddress() && !Address.MayBeFrame) {
           const bool Write = Op.Opcode == NdOp::STORE;
-          const uint64_t End = uint64_t(*Address.Constant) + Memory.AccessSize;
+          const uint64_t End =
+              uint64_t(*Address.preferredAddress()) + Memory.AccessSize;
           const uint64_t TableEnd =
               Chain.ScopeTableVA + (EH4 ? 16 : 0) + Chain.Scopes.size() * 12;
           if (!JumpRuntime || !JumpRuntime->ImageMemory ||
-              !JumpRuntime->ImageMemory(*Address.Constant, Memory.AccessSize,
-                                        Write, WorkUsed) ||
-              (Write &&
-               (*Address.Constant < TableEnd && Chain.ScopeTableVA < End)) ||
-              (Write && EH4 && *Address.Constant < SecurityCookieVA + 4 &&
+              !JumpRuntime->ImageMemory(*Address.preferredAddress(),
+                                        Memory.AccessSize, Write, WorkUsed) ||
+              (Write && (*Address.preferredAddress() < TableEnd &&
+                         Chain.ScopeTableVA < End)) ||
+              (Write && EH4 &&
+               *Address.preferredAddress() < SecurityCookieVA + 4 &&
                SecurityCookieVA < End) ||
               (Write && Transfer.read(*Memory.StoredValue).MayBeFrame))
             return false;

@@ -3,11 +3,11 @@ name: Desktop GUI
 on:
   push:
     branches: [dev]
-    paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'tools/common/**', 'scripts/check_gui_i18n.py', 'scripts/check_gui_icons.py', '.github/workflows/gui.yml']
+    paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'tools/common/**', 'include/neverd/plugin/**', 'lib/plugin/**', 'include/neverd/tools/**', 'lib/tools/**', 'tools/neverd-plugin-host/**', 'pluginsdk/gui/**', 'pluginsdk/common/**', 'unittests/plugin/**', 'cmake/NeverDJson.cmake', 'scripts/check_gui_i18n.py', 'scripts/check_gui_icons.py', '.github/workflows/gui.yml']
   pull_request:
     # closed cancels this PR's run through its concurrency group; no job runs.
     types: [opened, synchronize, reopened, closed]
-    paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'tools/common/**', 'scripts/check_gui_i18n.py', 'scripts/check_gui_icons.py', '.github/workflows/gui.yml']
+    paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'tools/common/**', 'include/neverd/plugin/**', 'lib/plugin/**', 'include/neverd/tools/**', 'lib/tools/**', 'tools/neverd-plugin-host/**', 'pluginsdk/gui/**', 'pluginsdk/common/**', 'unittests/plugin/**', 'cmake/NeverDJson.cmake', 'scripts/check_gui_i18n.py', 'scripts/check_gui_icons.py', '.github/workflows/gui.yml']
   workflow_dispatch:
 
 permissions:
@@ -157,6 +157,7 @@ jobs:
         run: |
           python scripts/check_gui_i18n.py --check-sources
           python scripts/check_gui_icons.py
+          python -m unittest discover -s tools/neverd-gui/benchmarks/tests -p test_startup_bench.py -v
           if [ '${{ runner.os }}' != Linux ]; then
             mkdir -p build-gui/ci-diagnostics
             set +e

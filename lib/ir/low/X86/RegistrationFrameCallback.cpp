@@ -9,6 +9,8 @@
 #include "neverd/Limits.h"
 #include "neverd/lift/X86/X86Regs.h"
 
+#include <algorithm>
+
 namespace neverd::registration_state {
 
 void FrameState::enterCallback(va_t Entry) {
@@ -26,14 +28,20 @@ void FrameState::leaveCallback() {
   for (auto &Value : Registers)
     Forget(Value);
   for (auto *Space : {&Cells, &EntryCells})
-    for (auto &[Offset, Value] : *Space)
-      Forget(Value);
+    if (std::any_of(Space->begin(), Space->end(), [](const auto &Cell) {
+          return Cell.second.CallbackAddress || Cell.second.SEHException;
+        }))
+      Space->edit([&](FrameCells::Map &Cells) {
+        for (auto &[Offset, Value] : Cells)
+          Forget(Value);
+      });
   for (auto &[Offset, Value] : OtherRegisterBytes)
     Forget(Value);
   CallbackCells.clear();
   InitializedCallbackBytes.clear();
   CallbackEntry.reset();
   SEHFilterEntry.reset();
+  SEHOrigin.reset();
 }
 
 bool FrameState::callbackMemoryIsPrivate(const CallbackFrameAddress &Address,
@@ -68,14 +76,19 @@ void FrameState::trimCallbackCells() {
       Registers[x86reg::RSP / x86reg::GeneralRegStride].CallbackAddress;
   if (!SP || SP->Entry != CallbackEntry) {
     InitializedCallbackBytes.clear();
-    for (auto &[Offset, Value] : CallbackCells)
-      Value = join(Value, {});
+    if (std::any_of(CallbackCells.begin(), CallbackCells.end(),
+                    [](const auto &Cell) {
+                      return join(Cell.second, {}) != Cell.second;
+                    }))
+      CallbackCells.edit([](FrameCells::Map &Cells) {
+        for (auto &[Offset, Value] : Cells)
+          Value = join(Value, {});
+      });
     return;
   }
-  // Dead stack slots cannot prove a later push/load after the runtime or a
-  // callee has reused them. A partial pop invalidates the overlapping cell.
-  CallbackCells.erase(CallbackCells.begin(),
-                      CallbackCells.lower_bound(SP->Offset));
+  // Deallocated bytes lose initialization. A partial pop also loses the
+  // complete word's identity, while its surviving pointer bits remain tainted.
+  discardFrameCellsBelow(CallbackCells, SP->Offset);
   InitializedCallbackBytes.erase(
       InitializedCallbackBytes.begin(),
       InitializedCallbackBytes.lower_bound(SP->Offset));

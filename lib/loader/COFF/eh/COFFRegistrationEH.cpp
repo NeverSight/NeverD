@@ -9,6 +9,7 @@
 #include "COFFRegistrationEHDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/COFF/COFFStackProbe.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -25,6 +26,7 @@ namespace neverd::coff_loader {
 namespace {
 
 using registration_detail::decodeEH4Header;
+using registration_detail::decodeRealignedCxxRegistrationLayout;
 using registration_detail::decodeScopeRecords;
 using registration_detail::decodeX86FuncInfo;
 using registration_detail::diagnose;
@@ -33,8 +35,8 @@ using registration_detail::findInstallSites;
 using registration_detail::FunctionRangeMap;
 using registration_detail::HandlerIdentity;
 using registration_detail::InstallSite;
-using registration_detail::proveRealignedCxxRegistrationLayout;
 using registration_detail::recoverTryLevelStores;
+using registration_detail::RegistrationInstallation;
 using registration_detail::SafeSEHTable;
 
 /// Address at which the table after \p TableVA begins, or zero when it is the
@@ -156,7 +158,8 @@ std::optional<size_t> directEH4Publication(const BinaryImage &Img,
 /// tail is not exactly that shape.
 std::optional<size_t> directCxxCookiePublication(const BinaryImage &Img,
                                                  const InstallSite &Site,
-                                                 size_t Cursor) {
+                                                 size_t Cursor,
+                                                 va_t &CookieOperand) {
   const size_t Size = std::min<uint64_t>(Site.Range.size(), 128);
   const uint8_t *P = Img.readVA(Site.Range.Begin, Size);
   if (Img.Base > UINT32_MAX ||
@@ -221,18 +224,20 @@ std::optional<size_t> directCxxCookiePublication(const BinaryImage &Img,
           Img, Site.Range.Begin, Cursor + *Store,
           {Site.Range.Begin + 6, Site.Range.Begin + Cursor - 10}))
     return std::nullopt;
+  CookieOperand = Site.Range.Begin + Cursor - 10;
   return Cursor;
 }
 
 /// Authenticate the direct MSVC frame from its exact entry instruction
 /// sequence. A chain-head read alone does not establish a registration, and
 /// locals containing -1/0 are not evidence of the runtime's state field.
-void proveDirectRegistrationLayout(const BinaryImage &Img,
-                                   const InstallSite &Source,
-                                   RegistrationChainInfo &Chain) {
-  if (Source.Identity.CxxFuncInfoVA &&
-      proveRealignedCxxRegistrationLayout(Img, Source, Chain))
-    return;
+std::optional<RegistrationInstallation>
+decodeDirectRegistrationLayout(const BinaryImage &Img,
+                               const InstallSite &Source,
+                               const RegistrationChainInfo &Chain) {
+  if (Source.Identity.CxxFuncInfoVA)
+    if (auto Layout = decodeRealignedCxxRegistrationLayout(Img, Source))
+      return Layout;
   auto Site = Source;
   // MSVC's two-byte hotpatch entry preserves every register and flag. Keep
   // the function entry and its LowIR instruction intact; only the position
@@ -241,49 +246,102 @@ void proveDirectRegistrationLayout(const BinaryImage &Img,
       Prefix && Prefix[0] == 0x8b && Prefix[1] == 0xff) {
     if (Site.Range.size() <= 2 ||
         !readImmutablePE32CodeBytes(Img, Site.Range.Begin, 2, {}))
-      return;
+      return std::nullopt;
     Site.Range.Begin += 2;
   }
   const bool IsCxx = Site.Identity.CxxFuncInfoVA != 0;
-  if (IsCxx &&
-      registration_detail::proveFixedCxxRegistrationLayout(Img, Site, Chain))
-    return;
+  if (IsCxx)
+    if (auto Layout =
+            registration_detail::decodeFixedCxxRegistrationLayout(Img, Site))
+      return Layout;
   const size_t Size = IsCxx ? 24 : 29;
   const uint8_t *P = Img.readVA(Site.Range.Begin, Size);
   if (!P || Site.Range.size() < Size || P[0] != 0x55 ||
       !((P[1] == 0x8B && P[2] == 0xEC) || (P[1] == 0x89 && P[2] == 0xE5)) ||
       P[3] != 0x6A || !Chain.SeededTryLevel ||
       static_cast<int8_t>(P[4]) != *Chain.SeededTryLevel)
-    return;
+    return std::nullopt;
   size_t Cursor = 5;
   if (!IsCxx) {
     if (P[Cursor] != 0x68 || readLE<uint32_t>(P + Cursor + 1) != Site.TableVA)
-      return;
+      return std::nullopt;
     Cursor += 5;
   }
   if (P[Cursor] != 0x68 || readLE<uint32_t>(P + Cursor + 1) != Site.HandlerVA)
-    return;
+    return std::nullopt;
+  const va_t HandlerPointer = Site.Range.Begin + Cursor + 1;
+  std::vector<va_t> Operands{HandlerPointer};
   Cursor += 5;
-  if (Site.InstallVA != Site.Range.Begin + Cursor || P[Cursor] != 0x64 ||
-      P[Cursor + 1] != 0xA1 || readLE<uint32_t>(P + Cursor + 2) != 0 ||
-      P[Cursor + 6] != 0x50)
-    return;
+  const va_t ChainRead = Site.Range.Begin + Cursor;
+  if (P[Cursor] != 0x64 || P[Cursor + 1] != 0xA1 ||
+      readLE<uint32_t>(P + Cursor + 2) != 0 || P[Cursor + 6] != 0x50)
+    return std::nullopt;
   size_t Installation = Cursor + 7;
   if (P[Cursor + 7] != 0x64 || P[Cursor + 8] != 0x89 || P[Cursor + 9] != 0x25 ||
       readLE<uint32_t>(P + Cursor + 10) != 0) {
+    va_t CookieOperand = 0;
     const auto Publication =
-        IsCxx ? directCxxCookiePublication(Img, Site, Cursor + 7)
+        IsCxx ? directCxxCookiePublication(Img, Site, Cursor + 7, CookieOperand)
               : directEH4Publication(Img, Site, Chain);
     if (!Publication)
-      return;
+      return std::nullopt;
     Installation = *Publication;
+    if (CookieOperand)
+      Operands.push_back(CookieOperand);
   }
-  Chain.RegistrationOffset = IsCxx ? -12 : -16;
-  Chain.TryLevelOffset = -4;
-  Chain.ChainInstallVA = Site.Range.Begin + Installation;
+  return RegistrationInstallation{ChainRead,
+                                  HandlerPointer,
+                                  Site.Range.Begin + Installation,
+                                  IsCxx ? -12 : -16,
+                                  -4,
+                                  std::nullopt,
+                                  std::move(Operands)};
+}
+
+void proveDirectRegistrationLayout(const BinaryImage &Img,
+                                   const InstallSite &Site,
+                                   RegistrationChainInfo &Chain) {
+  if (const auto Layout = decodeDirectRegistrationLayout(Img, Site, Chain))
+    Layout->applyTo(Site.InstallVA, Chain);
 }
 
 } // namespace
+
+std::optional<std::pair<va_t, va_t>>
+getCheckedX86CxxHandlerPointerSource(const BinaryImage &Img,
+                                     const ExceptionFunction &Function) {
+  if (!Function.CodeRange.isValid() || !Function.Registration ||
+      Function.Registration->SeededTryLevel != -1 ||
+      !getCheckedX86CxxHandlerABI(Img, Function))
+    return std::nullopt;
+  const auto &Chain = *Function.Registration;
+  if (const auto Helper = getCheckedX86CxxPrologueCall(Img, Function)) {
+    if (Chain.RegistrationOffset != Helper->RegistrationOffset ||
+        Chain.TryLevelOffset != Helper->TryLevelOffset || Chain.RealignedFrame)
+      return std::nullopt;
+    return std::make_pair(Helper->HandlerPointerVA, Helper->HandlerVA);
+  }
+  InstallSite Site;
+  Site.Range = Function.CodeRange;
+  Site.HandlerVA = Chain.HandlerVA;
+  Site.Identity.CxxFuncInfoVA = Function.Cxx->NativeFuncInfoVA;
+  const auto Layout = decodeDirectRegistrationLayout(Img, Site, Chain);
+  if (!Layout || Layout->ChainInstallVA != Chain.ChainInstallVA ||
+      Layout->RegistrationOffset != Chain.RegistrationOffset ||
+      Layout->TryLevelOffset != Chain.TryLevelOffset ||
+      Layout->RealignedFrame != Chain.RealignedFrame ||
+      !Function.CodeRange.contains(Layout->ChainInstallVA))
+    return std::nullopt;
+  const auto Store =
+      getX86RegistrationChainStoreSize(Img, Layout->ChainInstallVA);
+  if (!Store || *Store > Function.CodeRange.End - Layout->ChainInstallVA ||
+      !readImmutablePE32CodeBytes(Img, Function.CodeRange.Begin,
+                                  Layout->ChainInstallVA -
+                                      Function.CodeRange.Begin + *Store,
+                                  Layout->AddressOperands))
+    return std::nullopt;
+  return std::make_pair(Layout->HandlerPointerVA, Chain.HandlerVA);
+}
 
 std::optional<registration_detail::PhysicalRegistrationEntry>
 registration_detail::directCxxCookieInstallEntry(const BinaryImage &Img,
@@ -444,6 +502,10 @@ void parseX86RegistrationExceptions(BinaryImage &Img) {
     if (getCheckedX86CxxPrologueCall(Img, F)) {
       Chain.RegistrationOffset = X86CxxPrologueCall::RegistrationOffset;
       Chain.TryLevelOffset = X86CxxPrologueCall::TryLevelOffset;
+    }
+    if (getCheckedX86SEH4PrologueCall(Img, F)) {
+      Chain.RegistrationOffset = X86SEH4PrologueCall::RegistrationOffset;
+      Chain.TryLevelOffset = X86SEH4PrologueCall::TryLevelOffset;
     }
     registration_detail::recoverRegistrationCallbackRanges(
         F, Img, BodyFunctions, Chain);

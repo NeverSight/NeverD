@@ -1,0 +1,417 @@
+{
+  "scope": "Intel x64 SYSENTER/SYSEXIT explicit V7 continuation, live MSRs and public C export",
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-fast-system-continuation-20261030",
+  "neverd_source_commit": "dd527d729e2056edd81738f791b33a3f9040fd67",
+  "neverd_regression_commit": "dd527d729e2056edd81738f791b33a3f9040fd67",
+  "llvm_commit": "739d6012881cf29bfac0f6bec5627334b5d0cb26",
+  "neverc_commit": "d85e5c9c91c8b77610f8bd69a01e64b14cb37a45",
+  "llvm_sdk_tag": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "source_files": {
+    "docs/architecture.md": {
+      "sha256": "82f9eb36744f730af2f14b95b92e93f38090b0cccb9f12a824c4fa8f94c9e734",
+      "bytes": 1371059
+    },
+    "docs/testing.md": {
+      "sha256": "bce4b286b88e2cdc8f50a15b6ba2640f290feefa964378aa2e0c35fd5af36950",
+      "bytes": 1445647
+    },
+    "docs/x64-continuation-source.md": {
+      "sha256": "b5110597cbd3bdf8dc79d8dea924769387239f0c06943ee63a09757252c34b81",
+      "bytes": 20520
+    },
+    "docs/x86-instruction-support.md": {
+      "sha256": "1b511522f7331e01ebe6078f5a0e131a99a951c85da663012e4486893fcd6c53",
+      "bytes": 220692
+    },
+    "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h": {
+      "sha256": "d8f5b9de0c0c97401671be07b8f5ea1b8f1d8f696c2f4a92633ed24a3fdaa919",
+      "bytes": 16174
+    },
+    "include/neverd/ir/intrinsics/IntrinsicTermination.h": {
+      "sha256": "77bfa7aa7acb228f4411db5bfe462fe83d21391b197e6bf0857aac9e38ed56ce",
+      "bytes": 1676
+    },
+    "include/neverd/ir/intrinsics/Intrinsics.h": {
+      "sha256": "8e25074348c52a3da18df29091a21eceb93e3aea22e1e2b04a03f4d0de57383a",
+      "bytes": 53101
+    },
+    "include/neverd/ir/intrinsics/X86/intrinsics_x86_asm.inc": {
+      "sha256": "91093c48e76d7dfb437bc3a7a259dbfa14994c664070322f768c39142caa3919",
+      "bytes": 7307
+    },
+    "include/neverd/ir/intrinsics/X86/intrinsics_x86_cnames.inc": {
+      "sha256": "6e8a2e23050a8a35cf8cc8327e8a55a388a2eb4d673c974ca44ae3b717e6e073",
+      "bytes": 12278
+    },
+    "include/neverd/ir/intrinsics/X86/intrinsics_x86_sideeffect.inc": {
+      "sha256": "8f66a97506845bf130aa563040c0dfad69966df135a7d609f930317c82b92f45",
+      "bytes": 10329
+    },
+    "include/neverd/pipeline/X64ContinuationExport.h": {
+      "sha256": "11ad0da7478b8216fcf23c48c5428805d40d5f14b3f41d700f96fdb63ecaa422",
+      "bytes": 1808
+    },
+    "include/neverd/sdk/NeverDCAPIContinuation.h": {
+      "sha256": "d2ddcfc98bb43e4ee530bfefaf33413364d23cfec73f3d87bef060dbc488d020",
+      "bytes": 2119
+    },
+    "lib/analysis/arch/x86_64/X64ContinuationSource.cpp": {
+      "sha256": "cf396e94187ae1cf366dafde70aa8be8b35637e6543566a89043a1ed19d19463",
+      "bytes": 62451
+    },
+    "lib/analysis/arch/x86_64/X64ContinuationSystemTransfers.h": {
+      "sha256": "c31e7c7f318de32108178ba2510fb9836ba8fec7efb2e2d42c69657f6d940b20",
+      "bytes": 6884
+    },
+    "lib/backend/llvm/X86/MedLLVMX86Sideeffect.cpp": {
+      "sha256": "5324e809a43e7459c3d1970b4b36966c0d16d4f71aab3c6fbea823013c57b46a",
+      "bytes": 46096
+    },
+    "lib/lift/X86/X86CompatibilityReturnUndefined.h": {
+      "sha256": "a60b8a9cc5db2b9a96574088f468299dc9af17062d5f1812b2f002520977f5ba",
+      "bytes": 2324
+    },
+    "lib/lift/X86/X86LiftExt.cpp": {
+      "sha256": "1f7a39890062a8ffb380db8f20d1ecfadf2db35ebc0216f6f488fbcc08e14a92",
+      "bytes": 33169
+    },
+    "lib/lift/X86/X86Lifter.cpp": {
+      "sha256": "36986a9b3d9aa77d9558edb5b2b4534eb0b629f00dea23e1139c3f164db8e877",
+      "bytes": 59848
+    },
+    "lib/lift/X86/X86NativeStateAudit.h": {
+      "sha256": "fd028466bb980a8a5d40216aa6045b8f3e5db6cd6c4ceeef58e8de3ab55eb870",
+      "bytes": 19637
+    },
+    "lib/pipeline/X64ContinuationExport.cpp": {
+      "sha256": "a369440a82fbeb54f85cd762d991ad006075c1048760bd65c0c1a4f133fc6c20",
+      "bytes": 21705
+    },
+    "unittests/devirtualization/NativeStateAuditTests.cpp": {
+      "sha256": "1c0289e573713e0223791724211750d0bb2b2f900b0e26ffff347448d6306348",
+      "bytes": 56989
+    },
+    "unittests/devirtualization/X64ContinuationExportTests.cpp": {
+      "sha256": "88ca7784bf58fe74ed27b1fd74a9187531dcc2c13dbf209663b8c5895887ee1d",
+      "bytes": 32688
+    },
+    "unittests/devirtualization/X64ContinuationSourceTests.cpp": {
+      "sha256": "ddcb03550bcc821e2d7e581f925e4ded3ffb4d80836a3307617f4ae763412ac4",
+      "bytes": 95735
+    },
+    "unittests/devirtualization/X64FastSystemContinuationTests.inc": {
+      "sha256": "ac843b473fe15eb38c3389c996489df490578cc32a42824040e33ba2d90a4324",
+      "bytes": 13819
+    },
+    "unittests/devirtualization/fixtures/x64_continuation_event_state.h": {
+      "sha256": "c9861d754d28cfaf94a0b59482bee9889c1b5d2fb99d9b52442906aeaafbd758",
+      "bytes": 2164
+    },
+    "unittests/devirtualization/fixtures/x64_continuation_kvm.c": {
+      "sha256": "a85923d3d5700f32ce18c3259c0a18768becc6d57106b1c3a2dc0c561eecaa25",
+      "bytes": 22519
+    },
+    "unittests/lift/x86_64/X86SystemStateTests.cpp": {
+      "sha256": "c71c0acbd04399fc45cff40e22a3201f874dc9db14cf19044219dedf7e96da88",
+      "bytes": 52331
+    }
+  },
+  "regressions": [
+    {
+      "target": "NeverDX64ContinuationSourceTests",
+      "tests": 107,
+      "failures": 0,
+      "skipped": 0,
+      "report": {
+        "artifact": "NeverDX64ContinuationSourceTests-published.xml",
+        "sha256": "62891909a29dafbbf5f17bf8ba6e9bd1c5f47dea6cd669dc8ef5294324906e21",
+        "bytes": 35864
+      },
+      "log": {
+        "artifact": "NeverDX64ContinuationSourceTests-published.log",
+        "sha256": "86c6c175d01aa9f210c6187daf1bd048ee2105508b4d734fb345d7133282e434",
+        "bytes": 19718
+      }
+    },
+    {
+      "target": "NeverDX64ContinuationExportTests",
+      "tests": 13,
+      "failures": 0,
+      "skipped": 0,
+      "report": {
+        "artifact": "NeverDX64ContinuationExportTests-published.xml",
+        "sha256": "564541021d1b115b120b877de9821180db508ac235c3863a3abfc45e56dd1083",
+        "bytes": 4538
+      },
+      "log": {
+        "artifact": "NeverDX64ContinuationExportTests-published.log",
+        "sha256": "560c4bda28dca8f20b03b4144bafa50620a03e05a1a8c5296d4a7174604bd011",
+        "bytes": 2761
+      }
+    },
+    {
+      "target": "NeverDX86NativeStateAuditTests",
+      "tests": 31,
+      "failures": 0,
+      "skipped": 0,
+      "report": {
+        "artifact": "NeverDX86NativeStateAuditTests-published.xml",
+        "sha256": "5c8e6e69cfb492506266f750d6cb16b085d49029476b54ca645effcbaa395f29",
+        "bytes": 10175
+      },
+      "log": {
+        "artifact": "NeverDX86NativeStateAuditTests-published.log",
+        "sha256": "83fda22158dea4fabc224167ee25fb87b6143454a354a3b3931ea811e3660ebf",
+        "bytes": 5776
+      }
+    },
+    {
+      "target": "NeverDX86SystemStateTests",
+      "tests": 29,
+      "failures": 0,
+      "skipped": 0,
+      "report": {
+        "artifact": "NeverDX86SystemStateTests-published.xml",
+        "sha256": "c30331af2d843d7520c9c4b3dac63b26d1cf5238c4879a959c0154662195c197",
+        "bytes": 10158
+      },
+      "log": {
+        "artifact": "NeverDX86SystemStateTests-published.log",
+        "sha256": "7d6144353b6445a289e63e85f09298ee7e9bd6137e71a8d2183685a20b01ff88",
+        "bytes": 5781
+      }
+    },
+    {
+      "target": "NeverDX86UndefinedEffectsTests",
+      "tests": 53,
+      "failures": 0,
+      "skipped": 0,
+      "report": {
+        "artifact": "NeverDX86UndefinedEffectsTests-published.xml",
+        "sha256": "a4dd2ea98af31c4d3343163a7656e50da4ed10864a2b36b525aa12f54bbc0fc8",
+        "bytes": 18428
+      },
+      "log": {
+        "artifact": "NeverDX86UndefinedEffectsTests-published.log",
+        "sha256": "201861698c58820c963bd81c88b7e0049ba40603e53b447812b2c6180ec267da",
+        "bytes": 10304
+      }
+    },
+    {
+      "target": "NeverDRawEnvironmentRequirementTests",
+      "tests": 16,
+      "failures": 0,
+      "skipped": 0,
+      "report": {
+        "artifact": "NeverDRawEnvironmentRequirementTests-published.xml",
+        "sha256": "2c86c203dd17fbe12a5c78189a66c347054f5f48b59fac7713d179cabe2a5706",
+        "bytes": 5648
+      },
+      "log": {
+        "artifact": "NeverDRawEnvironmentRequirementTests-published.log",
+        "sha256": "28f75246dacf02098591d6923540dc03c2141c28086e7315549226521f91b976",
+        "bytes": 3241
+      }
+    },
+    {
+      "target": "NeverDInterpreterMachineStateTests",
+      "tests": 113,
+      "failures": 0,
+      "skipped": 0,
+      "report": {
+        "artifact": "NeverDInterpreterMachineStateTests-published.xml",
+        "sha256": "8af81dff17bb67ad797ad3c19f4a7cb83cc0c811231bb81e3f86b4601f4b66ce",
+        "bytes": 41367
+      },
+      "log": {
+        "artifact": "NeverDInterpreterMachineStateTests-published.log",
+        "sha256": "45aa858d0d15550ed2904ca5eb0c0e80d71fb6d48fd235f7a8e2640483fda832",
+        "bytes": 24339
+      }
+    }
+  ],
+  "regression_commands": {
+    "artifact": "published-regression-commands.json",
+    "sha256": "d46f8a57ed35dd35934f1c76047f27a106c0d95550144cd0529888723d7a9839",
+    "bytes": 2218
+  },
+  "validation_tools": {
+    "artifact": "publish-validation-tools.json",
+    "sha256": "63ac101e8a6f31f77741341941ac91bd3d9af0f282c9e689254e2755af43af5d",
+    "bytes": 1304
+  },
+  "unique_regression_tests": 362,
+  "portable_context_comparisons": 317784,
+  "native_transition_comparisons_per_complete_matrix": 22400,
+  "native_msr_readbacks_per_complete_matrix": 72,
+  "native_contexts": {
+    "SYSENTER": "14 valid CPL/DPL/conforming combinations times seven selectors, five flags, five stacks, two NMI states, two C routes and O0/O2",
+    "SYSEXIT": "CPL0; seven selectors, five flags, five stacks, two NMI states, two C routes and O0/O2",
+    "SYSEXITQ": "CPL0; seven selectors, five flags, five stacks, two NMI states, two C routes and O0/O2",
+    "compared": "GPRs, PC, flags, visible/hidden segments, preserved control/event state, live MSRs, all 4 MiB mapped RAM and every byte of the 4096-byte KVM_GET_XSAVE image",
+    "undefined_outputs": "Only the eight architecturally arbitrary legacy GPR high halves of compatibility SYSEXIT bind to native witnesses; all other bits compare independently"
+  },
+  "public_export": {
+    "state_version": 7,
+    "state_bytes": 2528,
+    "unchanged_v6_prefix_bytes": 2496,
+    "routes": [
+      "HighC",
+      "LLVMC"
+    ],
+    "compiler_execution_profiles": 8,
+    "compiler_commands": {
+      "artifact": "export-qualification.json",
+      "sha256": "29676cf913ba7fe5e526627da4f32a4afd3a665f30921cc0189b8995b88cfe58",
+      "bytes": 10525
+    },
+    "qualification_script": {
+      "artifact": "qualify-export.py",
+      "sha256": "da84275a4a9ae6a0180cd2d9112fbeb3e2ef4583d64a281788c6d9e47773f81e",
+      "bytes": 3008
+    },
+    "highc_manifest": {
+      "artifact": "export-v7-high.json",
+      "sha256": "f9690be91d64b3a48423aa8d4a6dc6450500f5b2790fca1f908d208a1374eb51",
+      "bytes": 6908
+    },
+    "llvmc_manifest": {
+      "artifact": "export-v7-llvm.json",
+      "sha256": "ebf1aad25510209e4fd166b275e93f3c985463cfb52345b147c3b4ac425522f4",
+      "bytes": 6908
+    },
+    "highc_harness": {
+      "artifact": "export-v7-high-harness.c",
+      "sha256": "7004765b01a42a25db0f05a19c4114d54c917249eb731089011fe1d0e733804e",
+      "bytes": 40187
+    },
+    "llvmc_harness": {
+      "artifact": "export-v7-llvm-harness.c",
+      "sha256": "332ee8ac9d5ec1abc053a39a0cc4c98e35ff5fb99acc32eb71af809f909d3b26",
+      "bytes": 53038
+    },
+    "compiler_paths": [
+      "NeverC native at O0/O2",
+      "NeverC IR verified and lowered by full LLVM at O0/O2"
+    ]
+  },
+  "additional_repetition": {
+    "full_native_matrix_repetitions": 4,
+    "log": {
+      "artifact": "fast-system-native-repeat.log",
+      "sha256": "70d342d35a7fff0d766e66033ea36a316c077516c4907ee347557b8f36677e32",
+      "bytes": 2413
+    },
+    "independent_sysenter_seeded_oracle_repetitions": 24,
+    "independent_log": {
+      "artifact": "xsave-seeded-xsave.log",
+      "sha256": "95e79f831f084b04bf8e148ac7561d54d4f1f28ff111477656b06b2c9965c047",
+      "bytes": 1694
+    },
+    "counts_are_repetitions_not_additional_unique_coverage": true
+  },
+  "negative_controls_and_repairs": [
+    {
+      "reason": "Old profile rejected the new explicit V7 invocation",
+      "artifact": "red.log",
+      "sha256": "3c0a9b50ad2fe09ff8c3989738a965442899dae6bdc3d853073f472b9844c5d5",
+      "bytes": 1062
+    },
+    {
+      "reason": "Old guard rejected valid conforming CPL3 SYSENTER while the independent CPU accepted it",
+      "old_generated_source": {
+        "artifact": "conforming-red.c",
+        "sha256": "b594ea4f5dd40ba0ef5b8e120f70f32627efc84e4417f945accf3182ed1f7db3",
+        "bytes": 50660
+      },
+      "native_fixture": {
+        "artifact": "conforming-native.c",
+        "sha256": "13e68f46242a6febf56496cd587ff225f916f4cf5309c3875e975f54774c0608",
+        "bytes": 7546
+      }
+    },
+    {
+      "reason": "Broad run exposed initial x87/SSE XSAVE in-use bitmap changes without payload changes",
+      "failed_suite": {
+        "artifact": "NeverDX64ContinuationSourceTests.xml",
+        "sha256": "638fc4949c3c29c04fd8dfe1443c4f45f8150004f814edf7140f3333395057be",
+        "bytes": 37582
+      },
+      "diagnostic": {
+        "artifact": "xsave-reproduce.log",
+        "sha256": "7082916e0b9bbfc32f895eefe29ff3577c9107238067581c1b0ce7aec9ba1955",
+        "bytes": 605
+      }
+    },
+    {
+      "reason": "SET_FPU alone does not set XSAVE validity bits; that attempted fixture initialization did not resolve the problem",
+      "artifact": "xsave-seeded-fpu.log",
+      "sha256": "4ff094f62d92c57b597a310131e4fd987b2e5aa99d76bd1912930641e0f47640",
+      "bytes": 605
+    },
+    {
+      "reason": "Explicit SET_XSAVE seeds payloads and validity bits together; allocation uses KVM_CAP_XSAVE2 size, and native readback verifies seeds",
+      "artifact": "xsave-seeded-xsave.log",
+      "sha256": "95e79f831f084b04bf8e148ac7561d54d4f1f28ff111477656b06b2c9965c047",
+      "bytes": 1694
+    },
+    {
+      "reason": "Deliberate XMM snapshot corruption remains rejected by the full XSAVE comparison",
+      "artifact": "oracle-negative.log",
+      "sha256": "a341e26ae4b3678eb14cba1129a1469b6a2ca114260cb6d5740fcb131ec5fab7",
+      "bytes": 219
+    }
+  ],
+  "build": {
+    "configuration": "Release",
+    "entry_point": "scripts/build.py",
+    "log": {
+      "artifact": "publish-build.log",
+      "sha256": "45ac9e56208f8c2a12d3b343c55550f6ec5905d14df0ad85797792340325a2b2",
+      "bytes": 42290
+    },
+    "receipt": {
+      "artifact": "publish-build-receipt.json",
+      "sha256": "2039b6073e907cbe8f5dd476e8f508e3fe4a390124a05c539a2a83f62cf84032",
+      "bytes": 3742
+    },
+    "dependency_inputs": {
+      "artifact": "publish-dependency-inputs.json",
+      "sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "bytes": 524
+    }
+  },
+  "sources": [
+    "https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf",
+    "https://www.kernel.org/doc/html/v6.7/virt/kvm/api.html#kvm-set-xsave"
+  ],
+  "documentation_and_format_checks": [
+    {
+      "artifact": "docs-i18n-final.log",
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+      "bytes": 69
+    },
+    {
+      "artifact": "capabilities-final.log",
+      "sha256": "6493fc3b0c4ef5fe525cdffaaa35a0f7992a0384e9a759e0269be79943fed414",
+      "bytes": 43
+    },
+    {
+      "artifact": "changed-range-format.json",
+      "sha256": "10611ecc217077ec5046a59c6b3c4695c6da432885d1b4ea5d57c2e9e9c3d0e4",
+      "bytes": 1359
+    }
+  ],
+  "qualification_limits": [
+    "Intel SEP and 48-bit native host; declared 57-bit processor/paging cases have portable source qualification only.",
+    "X87 and sixteen XMM registers have explicit noninitial native seeds. Full ZMM/AMX, larger XSAVE2 snapshots and other CPUs are not qualified.",
+    "Compatibility entry, legacy modes, TF/RF/IOPL/VIF/VIP expansion, faults, CET/FRED, asynchronous events and SMM restoration remain outside V7.",
+    "The continuation has explicit state and stop codes; an opaque SYSENTER lift is not an ordinary C ABI or full native rewritten-register context.",
+    "Public SDK/CLI export uses linked ELF fixtures; this phase does not add independent PE/COFF or Mach-O V7 qualification.",
+    "NeverC stage-1 plus exported C/IR checks are qualified; full product CI, stage-2 and global instruction completion are not claimed."
+  ],
+  "release_and_pins_changed": false
+}

@@ -77,6 +77,12 @@ add_neverd_unittest(NeverDSupportThreadTests
 target_include_directories(NeverDSupportThreadTests PRIVATE
   "${CMAKE_SOURCE_DIR}/include")
 
+add_neverd_unittest(NeverDSupportSharedValueTests
+  SupportSharedValueTests.cpp
+)
+target_include_directories(NeverDSupportSharedValueTests PRIVATE
+  "${CMAKE_SOURCE_DIR}/include")
+
 add_subdirectory(acceleration)
 add_subdirectory(digest)
 
@@ -93,8 +99,18 @@ add_neverd_unittest(NeverDLowUndefinedDigestTests
   LINK_COMPONENTS IRLowValidation
 )
 
+add_neverd_unittest(NeverDInstructionRelocationsTests
+  InstructionRelocationsTests.cpp
+  LINK_COMPONENTS Decode Loader
+)
+
 add_neverd_unittest(NeverDStringScanTests
   StringScanTests.cpp
+  LINK_COMPONENTS Support
+)
+
+add_neverd_unittest(NeverDSupportHostMemoryTests
+  SupportHostMemoryTests.cpp
   LINK_COMPONENTS Support
 )
 
@@ -120,6 +136,7 @@ add_neverd_unittest(NeverDBinaryDiffTests
   BinaryDiffCallAlignmentTests.cpp
   BinaryDiffLineageTests.cpp
   BinaryDiffDataFlowTests.cpp
+  BinaryDiffArgumentAccessTests.cpp
   BinaryDiffLLVMDataFlowTests.cpp
   BinaryDiffParameterViewTests.cpp
   BinaryDiffProgressTests.cpp
@@ -174,6 +191,10 @@ add_neverd_unittest(NeverDPipelineOutcomeTests
   CalleeSignatureMemoTests.cpp
   PipelineSourceStackAccessesTests.cpp
   LINK_COMPONENTS Pipeline BackendC
+)
+add_neverd_unittest(NeverDAnalysisRecoveryTests
+  AnalysisRecoveryTests.cpp
+  LINK_COMPONENTS Pipeline BackendLLVM
 )
 target_include_directories(NeverDPipelineOutcomeTests PRIVATE
   "${CMAKE_SOURCE_DIR}/lib/pipeline")
@@ -242,7 +263,7 @@ add_neverd_unittest(NeverDLocalTypesDebugContextTests
   LocalTypesDebugContextTests.cpp
   "${CMAKE_SOURCE_DIR}/lib/sdk/capi/LocalTypesDebugContext.cpp"
   "${CMAKE_SOURCE_DIR}/lib/ir/NdTypes.cpp"
-  LINK_COMPONENTS Types Loader
+  LINK_COMPONENTS IR Types Loader
 )
 target_include_directories(NeverDLocalTypesDebugContextTests PRIVATE
   "${CMAKE_SOURCE_DIR}/lib/sdk/capi")
@@ -293,6 +314,21 @@ if(TARGET neverd_shared)
   set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/ObjCRuntimeTestProperties.cmake")
   if(Python3_EXECUTABLE AND NEVERD_TEST_CLANG_EXECUTABLE)
+    add_test(NAME NeverDCalleeSourceCLI
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/callee_source_cli_test.py"
+        --neverd $<TARGET_FILE:neverd>
+        --compiler "${NEVERD_TEST_CLANG_EXECUTABLE}")
+    set_tests_properties(NeverDCalleeSourceCLI PROPERTIES
+      TIMEOUT 180 LABELS "NeverDCalleeSourceCLI")
+    if(APPLE)
+      add_test(NAME NeverDArm64eSourceCallSDK
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/arm64e_source_calls_test.py"
+          --library $<TARGET_FILE:neverd_shared>
+          --compiler "${NEVERD_TEST_CLANG_EXECUTABLE}"
+          --artifacts "${CMAKE_CURRENT_BINARY_DIR}/arm64e-source-call-sdk")
+      set_tests_properties(NeverDArm64eSourceCallSDK PROPERTIES
+        TIMEOUT 120 LABELS "NeverDSourceCallABI")
+    endif()
     add_test(NAME NeverDBinaryDiffCLI
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/diff/cli_test.py"
         --neverd $<TARGET_FILE:neverd> --library $<TARGET_FILE:neverd_shared>

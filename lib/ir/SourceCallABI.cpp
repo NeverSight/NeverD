@@ -24,6 +24,9 @@
 #include <tuple>
 using namespace neverd;
 namespace {
+#define SOURCE_ABI_CARRIER_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "SourceABICarriers.def"
+
 bool scalar(const TypeRef &T) {
   return T && (T->Size == 1 || T->Size == 2 || T->Size == 4 || T->Size == 8) &&
          (T->Kind == NdTypeKind::Int || T->Kind == NdTypeKind::Float ||
@@ -71,6 +74,18 @@ bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
            Signature.Parameters.size()))
     return refuse(Error, "A variadic call-site needs a nonempty fixed prefix "
                          "within its actual operands");
+  if (Architecture == Arch::AArch64 && Format == BinaryFormat::MachO &&
+      Hint.AnalystFixedCount < 0) {
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    if (!assignDarwinFixedSourceABI(Signature, Architecture, Error))
+      return false;
+    if (hasIndirectSourceParameters(Signature))
+      return refuse(Error, kIndirectAnalystCopy);
+    if (Signature.ReturnLocation.Kind ==
+        SourceABICarrierKind::IndirectResultPointer)
+      return refuse(Error, kIndirectAnalystResult);
+    return true;
+  }
   if ((Architecture != Arch::X64 && Architecture != Arch::AArch64) ||
       (Format != BinaryFormat::COFF && Format != BinaryFormat::ELF &&
        Format != BinaryFormat::MachO) ||
@@ -181,7 +196,9 @@ bool neverd::sourceCallStackArgumentsDefined(const LowFunc &Function,
   if (Hint.AnalystSite)
     return sourceCallStackArgumentsDefined(Function, Hint, *Hint.AnalystSite,
                                            Architecture, Bias, Error);
-  for (const auto &Parameter : Hint.Signature.Parameters)
+  if (!validateSourceABI(Hint.Signature, Error))
+    return false;
+  for (const auto &Parameter : sourceABIParameters(Hint.Signature))
     if (Parameter.Location.Kind == SourceABICarrierKind::Stack)
       return refuse(Error,
                     "The stack arguments have no original call occurrence");
@@ -192,8 +209,11 @@ bool neverd::sourceCallStackArgumentsDefined(
     const LowFunc &Function, const SourceCallTypeHint &Hint,
     const SourceCallOccurrenceKey &OriginalSite, Arch Architecture,
     int64_t Bias, std::string &Error) {
+  if (!validateSourceABI(Hint.Signature, Error))
+    return false;
+  const auto Parameters = sourceABIParameters(Hint.Signature);
   bool HasStack = false;
-  for (const auto &P : Hint.Signature.Parameters)
+  for (const auto &P : Parameters)
     HasStack |= P.Location.Kind == SourceABICarrierKind::Stack;
   if (!HasStack)
     return true;
@@ -228,7 +248,7 @@ bool neverd::sourceCallStackArgumentsDefined(
         if (!CurrentSP)
           return refuse(Error, "The call's stack pointer is not a complete "
                                "constant-offset value");
-        for (const auto &P : Hint.Signature.Parameters)
+        for (const auto &P : Parameters)
           if (P.Location.Kind == SourceABICarrierKind::Stack) {
             const int64_t Offset =
                 *CurrentSP + P.Location.EntryStackOffset - Bias;
@@ -305,14 +325,18 @@ bool neverd::sourceCallArgumentsDefined(const MedFunc &Function,
     return Key{V.Kind, V.Id, V.SSAVer, V.Size};
   };
   std::map<Key, std::vector<MedVar>> Definitions;
+  std::map<Key, const MedOp *> Operations;
+  std::map<int, MedVar> EntryRegisters;
   std::set<Key> Unknown, Parameters;
   for (const auto &P : Function.Params) {
     Parameters.insert(key(P));
     // ABI recovery promotes an entry register marker to Param while retaining
     // its variable id. Some physical dependencies still name that exact SSA-0
     // marker; no later version or unrelated register is an entry value.
-    if (P.Kind == MedVar::Param && P.Id >= 0 && P.RegOff != kNoParamReg)
+    if (P.Kind == MedVar::Param && P.Id >= 0 && P.RegOff != kNoParamReg) {
       Parameters.insert(Key{MedVar::Reg, P.Id, 0, P.Size});
+      EntryRegisters.emplace(P.Id, P);
+    }
   }
   for (const auto &C : Function.CallClobbers)
     if (C.Value.Size > C.PreservedPrefixSize)
@@ -347,6 +371,7 @@ bool neverd::sourceCallArgumentsDefined(const MedFunc &Function,
         Call = &Op;
       }
       if (Op.Output.Size) {
+        Operations.emplace(key(Op.Output), &Op);
         auto &Inputs = Definitions[key(Op.Output)];
         // Actual calls and memory reads produce runtime values. Their targets,
         // addresses and operands are separately retained by SSA and the stack
@@ -361,44 +386,80 @@ bool neverd::sourceCallArgumentsDefined(const MedFunc &Function,
   if (!Call)
     return refuse(Error, "The call-site declaration could not bind to a "
                          "surviving original call");
-  std::map<Key, unsigned> State;
+  using Read = std::tuple<Key, unsigned, unsigned>;
+  std::map<Read, unsigned> State;
   size_t Work = 0;
   std::string Missing;
-  std::function<bool(const MedVar &)> Defined = [&](const MedVar &V) {
-    if (++Work >
-            ::neverd::limits::ir::
-                kSourceCallABINeverdSourceCallArgumentsDefinedDefinedWorkLimit ||
-        V.Kind == MedVar::Unspecified) {
-      Missing = V.display();
-      return false;
-    }
-    if (V.isConst() || Parameters.count(key(V)))
-      return true;
-    if (Unknown.count(key(V))) {
-      Missing = V.display();
-      return false;
-    }
-    if (State[key(V)] == 2)
-      return true;
-    if (State[key(V)] == 1) {
-      Missing = V.display();
-      return false;
-    }
-    State[key(V)] = 1;
-    const auto It = Definitions.find(key(V));
-    if (It == Definitions.end()) {
-      Missing = V.display();
-      return false;
-    }
-    for (const auto &Input : It->second)
-      if (!Defined(Input))
-        return false;
-    State[key(V)] = 2;
-    return true;
-  };
+  std::function<bool(const MedVar &, unsigned, unsigned)> Defined =
+      [&](const MedVar &V, unsigned Offset, unsigned Bytes) {
+        if (++Work >
+                ::neverd::limits::ir::
+                    kSourceCallABINeverdSourceCallArgumentsDefinedDefinedWorkLimit ||
+            V.Kind == MedVar::Unspecified || Offset > V.Size ||
+            Bytes > V.Size - Offset) {
+          Missing = V.display();
+          return false;
+        }
+        if (V.isConst() || Parameters.count(key(V)))
+          return true;
+        if (V.Kind == MedVar::Reg && V.SSAVer == 0)
+          if (const auto Entry = EntryRegisters.find(V.Id);
+              Entry != EntryRegisters.end() &&
+              Entry->second.RegOff == V.RegOff &&
+              Offset <= Entry->second.Size &&
+              Bytes <= Entry->second.Size - Offset)
+            return true;
+        if (Unknown.count(key(V))) {
+          Missing = V.display();
+          return false;
+        }
+        const Read Query{key(V), Offset, Bytes};
+        if (State[Query] == 2)
+          return true;
+        if (State[Query] == 1) {
+          Missing = V.display();
+          return false;
+        }
+        State[Query] = 1;
+        const auto It = Definitions.find(key(V));
+        if (It == Definitions.end()) {
+          Missing = V.display();
+          return false;
+        }
+        // Only bit-preserving projections narrow a dependency. A padded
+        // record's int32 member may be copied through Xn before its low word is
+        // extracted; those upper padding bits never become a source argument.
+        // Arithmetic and all other operations still require their complete
+        // physical inputs.
+        if (const auto Found = Operations.find(key(V));
+            Found != Operations.end()) {
+          const auto &Op = *Found->second;
+          if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+              Op.Inputs[0].Size == Op.Output.Size) {
+            if (!Defined(Op.Inputs[0], Offset, Bytes))
+              return false;
+          } else if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+                     Op.Inputs[1].isConst() &&
+                     Op.Inputs[1].ConstVal <= Op.Inputs[0].Size &&
+                     Offset <= Op.Inputs[0].Size - Op.Inputs[1].ConstVal) {
+            if (!Defined(Op.Inputs[0], Op.Inputs[1].ConstVal + Offset, Bytes))
+              return false;
+          } else {
+            for (const auto &Input : It->second)
+              if (!Defined(Input, 0, Input.Size))
+                return false;
+          }
+        } else {
+          for (const auto &Input : It->second)
+            if (!Defined(Input, Offset, Bytes))
+              return false;
+        }
+        State[Query] = 2;
+        return true;
+      };
   for (unsigned I = Call->Opcode == NdOp::INDIR_CALL ? 0 : 1;
        I < Call->NumInputs; ++I)
-    if (!Defined(Call->Inputs[I])) {
+    if (!Defined(Call->Inputs[I], 0, Call->Inputs[I].Size)) {
       Error = (I == 0 ? "The indirect target" : "An argument") +
               std::string(
                   " depends on an undefined or clobbered physical carrier: ") +

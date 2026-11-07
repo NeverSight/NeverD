@@ -6,6 +6,8 @@
 
 #include "neverd/ir/low/CallRegisterEffects.h"
 
+#include "CallStackOffsets.h"
+
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -21,10 +23,12 @@
 #include "neverd/loader/ELF/ELFOperatingSystem.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <array>
 #include <deque>
+#include <limits>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -158,11 +162,14 @@ struct Spill {
 /// where the branch rejoins (Clang -O0).  Such a spill reads no parameter: a
 /// caller passes exactly the variadic arguments it sets.  The vector argument
 /// registers spilled in the block a test of AL alone branches around are the
-/// save area's too: a caller passes the vector arguments AL counts.
+/// save area's too, which \p SavesVectors reports: a caller passes the vector
+/// arguments AL counts.
 std::set<std::pair<size_t, size_t>>
 findRegisterSaveAreaSpills(const BinaryImage &Img, CallRegisterBodyView F,
-                           const std::map<int, size_t> &IndexOfId) {
+                           const std::map<int, size_t> &IndexOfId,
+                           bool &SavesVectors) {
   std::set<std::pair<size_t, size_t>> Spills;
+  SavesVectors = false;
   if (Img.Arch != Arch::X64 || Img.abiFormat() == BinaryFormat::COFF ||
       F.Blocks.empty())
     return Spills;
@@ -330,8 +337,10 @@ findRegisterSaveAreaSpills(const BinaryImage &Img, CallRegisterBodyView F,
         continue;
       if (const auto Family = registerFamilyOf(Img.Arch, Op.Inputs[1].Offset);
           Family && Family->first >= kX64VectorFamilyBase &&
-          Family->second == 0)
+          Family->second == 0) {
         Spills.insert({*VectorSpillBlock, I});
+        SavesVectors = true;
+      }
     }
   }
   return Spills;
@@ -513,8 +522,13 @@ struct StackValue {
 
   static StackValue at(int64_t Offset) { return {Range, Offset, Offset}; }
   static StackValue unknown() { return {Unknown, 0, 0}; }
-  StackValue shifted(int64_t Delta) const {
-    return {K, Lo + Delta, Hi + Delta};
+  StackValue shifted(int64_t Min, int64_t Max, bool Subtract = false) const {
+    int64_t First, Last;
+    const bool Overflow = Subtract ? llvm::SubOverflow(Lo, Max, First) ||
+                                         llvm::SubOverflow(Hi, Min, Last)
+                                   : llvm::AddOverflow(Lo, Min, First) ||
+                                         llvm::AddOverflow(Hi, Max, Last);
+    return Overflow ? unknown() : StackValue{K, First, Last};
   }
   bool operator==(const StackValue &) const = default;
 };
@@ -581,8 +595,8 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
   auto HomeSlot = [&](size_t K) {
     return static_cast<int64_t>(TRI.PointerSize + K * Layout.SlotBytes);
   };
-  // Spills of an incoming argument register to its own home slot in the
-  // entry block, by register position: the step that spills it.
+  // Ordinary spills of an incoming argument register's low bytes to its own
+  // home slot in the entry block, by register position: the spilling step.
   std::vector<std::optional<size_t>> HomeSpill(NumArgRegs);
   // Home slots a load reads back.
   std::vector<bool> HomeLoaded(NumArgRegs);
@@ -613,7 +627,35 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
     }
   }
   bool Unknown = false;
+  bool ReturnsIncomingAddress = false;
   int StackArgs = 0;
+  std::optional<CallStackOffsets> ScalarOffsets;
+  auto ReadRange = [&](const StackValue &A, unsigned Bytes) {
+    if (A.K == StackValue::Unknown) {
+      Unknown = true;
+      return;
+    }
+    if (A.K != StackValue::Range)
+      return;
+    int64_t Last;
+    if (llvm::AddOverflow(A.Hi, int64_t(std::max(Bytes, 1u)) - 1, Last)) {
+      Unknown = true;
+      return;
+    }
+    for (size_t K = 0; K < NumArgRegs; ++K)
+      if (A.Lo < HomeSlot(K) + static_cast<int64_t>(Layout.SlotBytes) &&
+          HomeSlot(K) <= Last)
+        HomeLoaded[K] = true;
+    if (Last >= Layout.EntryStackBase) {
+      const int64_t Count = static_cast<int64_t>(Layout.Registers.size()) +
+                            (Last - Layout.EntryStackBase) / Layout.SlotBytes +
+                            1;
+      if (Count > std::numeric_limits<int>::max())
+        Unknown = true;
+      else
+        StackArgs = std::max(StackArgs, static_cast<int>(Count));
+    }
+  };
   auto Run = [&](const LowBlock &Block, StackState &S) {
     auto ControlOf = [&](size_t OpIndex) {
       for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
@@ -626,8 +668,13 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
       auto Key = stackKeyOf(V);
       if (!Key)
         return;
-      if (!wholeWord(V))
-        Value = {};
+      if (!wholeWord(V)) {
+        // A byte or word register write leaves the rest of a stack address
+        // intact. Its new offset is unknown, not unrelated to the stack.
+        // The lifter emits a separate whole-register ZEXT for 32-bit writes.
+        Value =
+            V.isReg() && S.count(*Key) ? StackValue::unknown() : StackValue{};
+      }
       // The stack pointer always addresses the stack.
       if (*Key == SP && Value.K == StackValue::Unrelated)
         Value = StackValue::unknown();
@@ -648,60 +695,68 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
       auto In = [&](unsigned K) {
         return K < Op.NumInputs ? stackValueOf(S, Op.Inputs[K]) : StackValue{};
       };
-      auto Const = [&](unsigned K) -> std::optional<int64_t> {
-        if (K < Op.NumInputs && Op.Inputs[K].isConst())
-          return static_cast<int64_t>(Op.Inputs[K].Offset);
+      auto Offset =
+          [&](unsigned K) -> std::optional<std::pair<int64_t, int64_t>> {
+        if (Op.NumInputs != 2 || Op.Output.Size != 8 ||
+            Op.Inputs[0].Size != 8 || Op.Inputs[1].Size != 8)
+          return std::nullopt;
+        if (Op.Inputs[K].isConst()) {
+          const auto Bits = static_cast<int64_t>(Op.Inputs[K].Offset);
+          return std::pair{Bits, Bits};
+        }
+        if (!ScalarOffsets)
+          ScalarOffsets = finiteCallStackOffsets(F);
+        if (const auto At = ScalarOffsets->find({&Op, K});
+            At != ScalarOffsets->end())
+          return At->second;
         return std::nullopt;
       };
       const bool DirectTarget = Op.NumInputs > 0 && Op.Inputs[0].isConst();
+      // Reuse the register-read proof: a whole absorbing write has no old
+      // address dependence. Set still retains untouched bytes of a partial
+      // destination, so clearing AL cannot erase RAX's surviving high bits.
+      if (isLowSelfXor(Op) || lowAbsorbingConstant(Op)) {
+        Set(Op.Output, {});
+        continue;
+      }
       switch (Op.Opcode) {
       case NdOp::COPY:
         Set(Op.Output, In(0));
         continue;
+      case NdOp::SELECT:
+        Set(Op.Output, joinStack(In(1), In(2)));
+        continue;
       case NdOp::INT_ADD: {
         const StackValue A = In(0), B = In(1);
-        if (A.K == StackValue::Range && Const(1))
-          Set(Op.Output, A.shifted(*Const(1)));
-        else if (B.K == StackValue::Range && Const(0))
-          Set(Op.Output, B.shifted(*Const(0)));
-        else if (A.K != StackValue::Unrelated || B.K != StackValue::Unrelated)
-          Set(Op.Output, StackValue::unknown());
-        else
-          Set(Op.Output, {});
+        StackValue Result;
+        if (A.K != StackValue::Unrelated || B.K != StackValue::Unrelated)
+          Result = StackValue::unknown();
+        if (A.K == StackValue::Range && B.K == StackValue::Unrelated) {
+          if (const auto Bounds = Offset(1))
+            Result = A.shifted(Bounds->first, Bounds->second);
+        } else if (B.K == StackValue::Range && A.K == StackValue::Unrelated)
+          if (const auto Bounds = Offset(0))
+            Result = B.shifted(Bounds->first, Bounds->second);
+        Set(Op.Output, Result);
         continue;
       }
       case NdOp::INT_SUB: {
         const StackValue A = In(0);
-        if (A.K == StackValue::Range && Const(1))
-          Set(Op.Output, A.shifted(-*Const(1)));
-        else if (A.K != StackValue::Unrelated)
-          Set(Op.Output, StackValue::unknown());
-        else
-          Set(Op.Output, {});
+        StackValue Result;
+        if (A.K != StackValue::Unrelated || In(1).K != StackValue::Unrelated)
+          Result = StackValue::unknown();
+        if (A.K == StackValue::Range && In(1).K == StackValue::Unrelated)
+          if (const auto Bounds = Offset(1))
+            Result = A.shifted(Bounds->first, Bounds->second, true);
+        Set(Op.Output, Result);
         continue;
       }
       case NdOp::LOAD:
       case NdOp::ATOMIC_XCHG:
       case NdOp::ATOMIC_ADD:
       case NdOp::ATOMIC_CMPXCHG:
-        if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
-          const StackValue A = In(0);
-          if (A.K == StackValue::Unknown) {
-            Unknown = true;
-          } else if (A.K == StackValue::Range) {
-            const int64_t Last =
-                A.Hi + std::max<int64_t>(Op.Output.Size, 1) - 1;
-            for (size_t K = 0; K < NumArgRegs; ++K)
-              if (A.Lo < HomeSlot(K) + static_cast<int64_t>(Layout.SlotBytes) &&
-                  HomeSlot(K) <= Last)
-                HomeLoaded[K] = true;
-            if (Last >= Layout.EntryStackBase)
-              StackArgs = std::max<int64_t>(
-                  StackArgs,
-                  static_cast<int64_t>(Layout.Registers.size()) +
-                      (Last - Layout.EntryStackBase) / Layout.SlotBytes + 1);
-          }
-        }
+        if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+          ReadRange(In(0), Op.Output.Size);
         // An atomic also stores its value operands.
         for (unsigned K = 1; K < Op.NumInputs; ++K)
           Unknown |= Escapes(In(K));
@@ -713,14 +768,25 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
         Unknown |= Escapes(In(1));
         const StackValue A = In(0);
         if (HomeSlots && &Block == &F.Blocks.front() &&
-            A.K == StackValue::Range && A.Lo == A.Hi && Op.NumInputs >= 2)
+            Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+            Op.MemoryOrdering == NdMemoryOrdering::None &&
+            A.K == StackValue::Range && A.Lo == A.Hi && Op.NumInputs == 2 &&
+            Op.Inputs[1].isReg() && Op.Inputs[1].Size &&
+            Op.Inputs[1].Size <= Layout.SlotBytes)
           for (size_t K = 0; K < NumArgRegs; ++K)
             if (A.Lo == HomeSlot(K) &&
-                Op.Inputs[1] == NdVar::reg(Layout.Registers[K], 8) &&
+                Op.Inputs[1].Offset == Layout.Registers[K] &&
                 !((EntryWrittenBefore[I] >> K) & 1))
               HomeSpill[K] = I;
         continue;
       }
+      case NdOp::RETURN:
+        // The caller can dereference a returned incoming-area address.
+        // This is an observer, not evidence for a variadic forwarding call.
+        for (unsigned K = 0; K < Op.NumInputs; ++K)
+          ReturnsIncomingAddress |= Escapes(In(K));
+        Unknown |= ReturnsIncomingAddress;
+        continue;
       case NdOp::CALL:
       case NdOp::INDIR_CALL:
       case NdOp::BRANCH:
@@ -745,31 +811,22 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
                     static_cast<unsigned>(Op.Inputs[2].Offset)))
               FPRead = Bytes;
         }
-        if (FPRead) {
-          const StackValue A = In(1);
-          if (A.K == StackValue::Unknown) {
-            Unknown = true;
-          } else if (A.K == StackValue::Range) {
-            const int64_t Last = A.Hi + static_cast<int64_t>(*FPRead) - 1;
-            for (size_t K = 0; K < NumArgRegs; ++K)
-              if (A.Lo < HomeSlot(K) + static_cast<int64_t>(Layout.SlotBytes) &&
-                  HomeSlot(K) <= Last)
-                HomeLoaded[K] = true;
-            if (Last >= Layout.EntryStackBase)
-              StackArgs = std::max<int64_t>(
-                  StackArgs,
-                  static_cast<int64_t>(Layout.Registers.size()) +
-                      (Last - Layout.EntryStackBase) / Layout.SlotBytes + 1);
-          }
-        }
-        // Arithmetic on a stack address (a flag, an alignment mask) yields
-        // no address; an operation that may dereference a pointer into the
-        // incoming slots is a read this summary cannot bound.
+        if (FPRead)
+          ReadRange(In(1), *FPRead);
+        // An operation that may dereference a pointer into the incoming
+        // slots is a read this summary cannot bound. Whole-word arithmetic
+        // can still yield an address (masking alignment bits, for example);
+        // preserve its dependence even when its offset is no longer affine.
         if (Op.Opcode == NdOp::INTRINSIC)
           for (unsigned K = 0; K < Op.NumInputs; ++K)
             if (!(FPRead && K == 1))
               Unknown |= Escapes(In(K));
-        Set(Op.Output, {});
+        StackValue Result;
+        if (wholeWord(Op.Output))
+          for (unsigned K = 0; K < Op.NumInputs; ++K)
+            if (In(K).K != StackValue::Unrelated)
+              Result = StackValue::unknown();
+        Set(Op.Output, Result);
         continue;
       }
       }
@@ -868,20 +925,23 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
     Work.push_back(BI);
     Drain();
   }
-  // A variadic prologue spills the first variadic argument register and
+  // A variadic prologue spills the whole first variadic argument register and
   // every later one to their home slots and hands a pointer to the first of
   // those slots on as the va_list.  A caller passes only the variadic
   // arguments it sets, so those spills read none.  Any other spill that no
   // load reads back, with no pointer to the incoming area escaping, reads
   // nothing either: only this function could observe its home slots.
   int VariadicFrom = -1;
-  if (HomeSlots && LowestEscape && *LowestEscape >= HomeSlot(1) &&
+  if (HomeSlots && !ReturnsIncomingAddress && LowestEscape &&
+      *LowestEscape >= HomeSlot(1) &&
       (*LowestEscape - HomeSlot(0)) % Layout.SlotBytes == 0) {
     const size_t First =
         static_cast<size_t>((*LowestEscape - HomeSlot(0)) / Layout.SlotBytes);
     bool Spilled = First < NumArgRegs;
     for (size_t K = First; Spilled && K < NumArgRegs; ++K)
-      Spilled = HomeSpill[K].has_value();
+      Spilled =
+          HomeSpill[K] && F.Blocks.front().Ops[*HomeSpill[K]].Inputs[1].Size ==
+                              Layout.SlotBytes;
     if (Spilled)
       VariadicFrom = static_cast<int>(First);
   }
@@ -1293,7 +1353,23 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
            Out.Offset < FPReturn + 16 && FPReturn < Out.Offset + Out.Size;
   };
   const std::set<std::pair<size_t, size_t>> SaveAreaSpills =
-      findRegisterSaveAreaSpills(Img, F, IndexOfId);
+      findRegisterSaveAreaSpills(Img, F, IndexOfId,
+                                 Effect.SavesVectorArguments);
+  // System V's AL: how many vector registers a call passes a variadic callee
+  // that saves them, where the call's own setup loads a constant there.
+  const size_t VectorArguments =
+      Img.Arch == Arch::X64 && Img.abiFormat() != BinaryFormat::COFF
+          ? getTargetRegInfo(Img.Arch).floatingParamRegs(Img.abiFormat()).size()
+          : 0;
+  auto VectorCountAt = [&](const LowBlock &Block, size_t Call) -> int8_t {
+    if (const std::optional<uint8_t> Count =
+            VectorArguments
+                ? lowByteConstantAtCall(Block.Ops, Call, x86reg::RAX)
+                : std::nullopt;
+        Count && *Count <= VectorArguments)
+      return static_cast<int8_t>(*Count);
+    return -1;
+  };
   for (size_t BI = 0; BI < F.Blocks.size(); ++BI) {
     const LowBlock &Block = F.Blocks[BI];
     Effect.UnknownObservers |= !Block.ExceptionalSuccs.empty();
@@ -1335,6 +1411,9 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
     };
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
       const LowOp &Op = Block.Ops[I];
+      // Home-spill refinement below addresses steps by their LowIR index.
+      // Keep an empty step for ignored operations until joinPlainSteps.
+      RegisterStep &Step = Out.Steps.emplace_back();
       if (const auto Arm = SelectedArms.find(I);
           Arm != SelectedArms.end() && Op.Output.isReg() &&
           Op.Output == Op.Inputs[Arm->second])
@@ -1372,7 +1451,6 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
         if (const auto Family = registerFamilyOf(Img.Arch, Op.Output.Offset);
             Family && Family->first >= kX64VectorFamilyBase)
           continue;
-      RegisterStep Step;
       // A slice of a vector register reads that slice's bytes only, and a
       // whole copy reads the source as wide as the copy is read.
       const std::optional<unsigned> SlicedVector =
@@ -1459,7 +1537,6 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
           Step.FixedTailCall = TailCall;
           Step.Exits = NoReturnCall;
           Effect.CallsFixedContract = true;
-          Out.Steps.push_back(Step);
           continue;
         }
       switch (Op.Opcode) {
@@ -1499,6 +1576,7 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
             Effect.NoReturnCallees.insert(Op.Inputs[0].Offset);
           Step.Callee = Op.Inputs[0].Offset;
           Step.TailCallee = true;
+          Step.VectorCount = VectorCountAt(Block, I);
           Step.Exits = EntersNoReturnFunction && Op.Opcode == NdOp::BRANCH;
         }
         break;
@@ -1523,6 +1601,7 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
           const va_t Callee = OwnRoutine ? *OwnRoutine : Op.Inputs[0].Offset;
           Step.Callee = Callee;
           Step.TailCallee = TailCall;
+          Step.VectorCount = VectorCountAt(Block, I);
           if (!NoReturnCall)
             Effect.Callees.insert(Callee);
           else if (!EntersNoReturnFunction || Img.userNoReturnAt(Callee))
@@ -1536,7 +1615,6 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
       Effect.UnknownEntryReads |= Step.UnknownTailCall &&
                                   Step.ImportCallee == InvalidVA &&
                                   Step.ArgumentsFrom == InvalidVA;
-      Out.Steps.push_back(Step);
     }
   }
   summarizeIncomingStackReads(Img, F, IndexOfId, BlockStarts, ArgumentSources,
@@ -1547,13 +1625,48 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
 
 namespace {
 /// Bytes of each family live on entry to \p F, given the current callee
-/// summaries.
+/// summaries.  A call to one of \p VectorArgumentCallees reads the vector
+/// registers its AL counts.
+/// A return hands its caller the return registers, which is no read: a function
+/// that leaves XMM0 alone does not read it. A whole copy of another register
+/// into XMM0 is the result's value, so a returning block keeps it live. So is
+/// one into XMM1 beside such a copy, the second half of a pair: all that
+/// `return (SD){b, a}` does with its arguments. A copy into XMM1 alone is
+/// scratch.
+static GPRReadWidths returnedVectorCopies(const RegisterBlock &Block) {
+  GPRReadWidths Live{};
+  GPRFamilyMask Settled = 0;
+  for (auto It = Block.Steps.rbegin(); It != Block.Steps.rend(); ++It) {
+    const RegisterStep &Step = *It;
+    if (Step.Exits || Step.TailCallee || Step.UnknownTailCall ||
+        Step.FixedTailCall)
+      return {};
+    if (Step.Callee != InvalidVA || Step.ImportCallee != InvalidVA ||
+        Step.UnknownCall || Step.FixedArguments)
+      break;
+    for (unsigned Family = kX64VectorFamilyBase;
+         Family < kX64VectorFamilyBase + kX64VectorReturnFamilies; ++Family) {
+      const GPRFamilyMask Bit = GPRFamilyMask(1) << Family;
+      if (Settled & Bit)
+        continue;
+      if (Step.VectorCopy && Step.VectorCopy->first == Family)
+        Live[Family] = kX64VectorFamilyBytes;
+      if ((Step.Kills & Bit) || Step.LowWrites[Family])
+        Settled |= Bit;
+    }
+  }
+  if (!Live[kX64VectorFamilyBase])
+    Live[kX64VectorFamilyBase + 1] = 0;
+  return Live;
+}
+
 GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
                               const std::map<va_t, GPRFamilyMask> &MayWrite,
                               const std::map<va_t, GPRReadWidths> &EntryReads,
                               GPRFamilyMask VolatileFamilies,
                               GPRFamilyMask ArgumentFamilies,
-                              const std::set<va_t> &DispatchThunks) {
+                              const std::set<va_t> &DispatchThunks,
+                              const std::set<va_t> &VectorArgumentCallees) {
   auto Clear = [](GPRReadWidths &Live, GPRFamilyMask Mask) {
     for (size_t I = 0; I < Live.size(); ++I)
       if ((Mask >> I) & 1)
@@ -1597,8 +1710,17 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
       } else if (Step.Callee != InvalidVA) {
         auto W = MayWrite.find(Step.Callee);
         Clear(Live, W != MayWrite.end() ? W->second : VolatileFamilies);
-        if (auto R = EntryReads.find(Step.Callee); R != EntryReads.end())
+        if (auto R = EntryReads.find(Step.Callee); R != EntryReads.end()) {
           joinReads(Live, R->second);
+          // The callee's summary leaves out the vector registers it saves
+          // for va_arg; the call passes the low double of each its AL
+          // counts, a register the caller only passes on included.
+          if (Step.VectorCount > 0 && VectorArgumentCallees.count(Step.Callee))
+            for (int K = 0; K < Step.VectorCount; ++K) {
+              uint8_t &Width = Live[kX64VectorFamilyBase + K];
+              Width = std::max<uint8_t>(Width, sizeof(double));
+            }
+        }
       }
       // The bytes of the copy that later reads need, before the copy's
       // write ends their life.
@@ -1629,6 +1751,8 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
       for (size_t S : F.Blocks[B].Succs)
         if (S < LiveIn.size())
           joinReads(LiveOut, LiveIn[S]);
+      if (F.Blocks[B].Succs.empty())
+        LiveOut = returnedVectorCopies(F.Blocks[B]);
       const GPRReadWidths In = Transfer(F.Blocks[B], LiveOut);
       if (In != LiveIn[B]) {
         LiveIn[B] = In;
@@ -1760,6 +1884,10 @@ CallRegisterSummaries solveCallRegisterEffects(
       Reads[Entry] = GPRReadWidths{};
   for (const auto &[Entry, Widths] : FixedEntryReads)
     Reads[Entry] = Widths;
+  std::set<va_t> VectorArgumentCallees;
+  for (const auto &[Entry, Effect] : Funcs)
+    if (Effect->SavesVectorArguments)
+      VectorArgumentCallees.insert(Entry);
   // A function's entry reads depend only on those of the routines its steps
   // name, so a change revisits just their readers.  Visiting callees before
   // their callers reaches the same least fixed point while visiting most
@@ -1818,7 +1946,7 @@ CallRegisterSummaries solveCallRegisterEffects(
     GPRReadWidths Next = Widths;
     joinReads(Next, entryLiveWidths(*Funcs.at(Solved[I]), Writes, Reads,
                                     VolatileFamilies, ArgumentFamilies,
-                                    DispatchThunks));
+                                    DispatchThunks, VectorArgumentCallees));
     if (Next == Widths)
       continue;
     Widths = Next;

@@ -19,6 +19,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/support/ISAEncoding.h"
+#include "neverd/support/Limits.h"
 
 #include "llvm/Support/Endian.h"
 
@@ -375,6 +376,66 @@ inline bool isStrictPrologueWordAArch64(uint32_t W) {
   return false;
 }
 
+/// Whether \p W is a candidate function-entry marker: PACIASP or PACIBSP, which
+/// sign the return address on entry, BTI c, the landing pad of an indirect
+/// call, or the frame push `stp x29, x30, [sp, #negative]!`. Shrink wrapping
+/// can also put these inside a function; the marker alone proves no boundary.
+inline bool isFunctionEntryMarkerWordAArch64(uint32_t W) {
+  return W == 0xD503233F ||              // paciasp
+         W == 0xD503237F ||              // pacibsp
+         W == 0xD503245F ||              // bti c
+         (W & 0xFFE07FFF) == 0xA9A07BFD; // stp x29, x30, [sp, #negative]!
+}
+
+/// Whether \p W ends a basic block unconditionally, so the word after it can
+/// begin a function laid out with no padding between the two: an
+/// unconditional branch, a return, an indirect branch, an exception return, a
+/// trap (BRK/HLT/UDF, zero reading as UDF #0). NOPs, conditional branches and
+/// calls can fall through to the next word.
+inline bool isAArch64BlockEndWord(uint32_t W) {
+  if (branch::A64Branch.matches(W))
+    return true;
+  if ((W & 0xFFFFFC1F) == 0xD65F0000) // ret Xn
+    return true;
+  if (W == 0xD65F0BFF || W == 0xD65F0FFF) // retaa / retab
+    return true;
+  if ((W & 0xFFFFFC1F) == 0xD61F0000) // br Xn
+    return true;
+  if (W == 0xD69F03E0 || W == 0xD69F0BFF || W == 0xD69F0FFF) // eret[aa|ab]
+    return true;
+  if ((W & 0xFFE0001F) == 0xD4200000) // brk #imm
+    return true;
+  if ((W & 0xFFE0001F) == 0xD4400000) // hlt #imm
+    return true;
+  if ((W & 0xFFFF0000) == 0x00000000) // udf #imm (zero padding reads as udf)
+    return true;
+  return false;
+}
+
+/// Whether \p W lies in the A64 encoding space no instruction occupies: the
+/// unallocated top-level groups, and the reserved group outside UDF and SME.
+inline bool isAArch64UnallocatedWord(uint32_t W) {
+  const uint32_t Op0 = (W >> 25) & 0xF;
+  return Op0 == 0x1 || Op0 == 0x3 ||
+         (Op0 == 0 && (W >> 16) != 0 && (W >> 31) == 0);
+}
+
+/// Whether the \p Size bytes at \p Bytes, a page or the part of one an image
+/// holds, are data by limits::support::kAArch64DataWordsPerPage.
+inline bool isAArch64DataPage(const uint8_t *Bytes, size_t Size) {
+  size_t DataWords = 0;
+  for (size_t At = 0;
+       At + 4 <= Size && DataWords < limits::support::kAArch64DataWordsPerPage;
+       At += 4) {
+    const uint32_t W = static_cast<uint32_t>(Bytes[At]) |
+                       static_cast<uint32_t>(Bytes[At + 1]) << 8 |
+                       static_cast<uint32_t>(Bytes[At + 2]) << 16 |
+                       static_cast<uint32_t>(Bytes[At + 3]) << 24;
+    DataWords += isAArch64UnallocatedWord(W) || (W != 0 && (W >> 16) == 0);
+  }
+  return DataWords >= limits::support::kAArch64DataWordsPerPage;
+}
+
 // ===--------------------------------------------------------------------===//
 // ARM 32-bit (Thumb-2 / ARM) prologue patterns
 // ===--------------------------------------------------------------------===//
@@ -421,6 +482,11 @@ inline bool isStrictPrologueWordARM(uint32_t W, bool IsThumb) {
 inline bool isPrologueAt(const uint8_t *Data, size_t Len, Arch A) {
   if (A == Arch::X64 || A == Arch::X86) {
     if (Len < 1)
+      return false;
+    // 0x40-0x4F are REX prefixes only in 64-bit mode. IA-32 decodes them as
+    // INC/DEC, which begin no function: such a byte after an int3 is more
+    // often an operand's 0xCC, as in `mov [0x4040cc], eax`.
+    if (A == Arch::X86 && (Data[0] & 0xF0) == 0x40)
       return false;
     return isStrictPrologueByteX86(Data[0]);
   }

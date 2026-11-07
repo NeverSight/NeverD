@@ -22,6 +22,10 @@
 namespace neverd {
 inline constexpr const char *X86AmxAsmMarker = "# neverd AMX v2 ";
 inline constexpr const char *X86AmxLegacyAsmMarker = "# neverd AMX v1 ";
+inline constexpr const char *X86AmxStackLeafAsmMarker =
+    "# neverd AMX stack leaf v1 ";
+inline constexpr const char *X86AmxStackLeafAttribute =
+    "neverd-x86-amx-stack-leaf";
 struct X86AmxAsm {
   std::string Text;
   std::string Constraints;
@@ -30,6 +34,7 @@ struct X86AmxAsm {
   std::vector<std::string> Clobbers;
   bool Row = false;
   bool Memory = false;
+  bool StackLeaf = false;
 };
 inline std::optional<X86AmxAsm>
 x86AmxAsm(uint32_t D, NdMemoryAddressSpace Space, bool Legacy = false) {
@@ -40,11 +45,14 @@ x86AmxAsm(uint32_t D, NdMemoryAddressSpace Space, bool Legacy = false) {
   X86AmxAsm P;
   P.Row = x86AmxIsRow(K);
   P.Memory = x86AmxIsMemory(K);
-  P.Text = std::string(Legacy ? X86AmxLegacyAsmMarker : X86AmxAsmMarker) +
+  P.StackLeaf = x86AmxNeedsStackLeaf(D);
+  P.Text = std::string(P.StackLeaf ? X86AmxStackLeafAsmMarker
+                       : Legacy    ? X86AmxLegacyAsmMarker
+                                   : X86AmxAsmMarker) +
            std::to_string(D) + " " +
            std::to_string(static_cast<unsigned>(Space)) + "\n\t";
   const bool Stack = D & X86AmxStackReference;
-  if (Stack) {
+  if (Stack && !P.StackLeaf) {
     // Use a real stack-default base without replacing the compiler's RBP.
     // Arithmetic stays inside the owned window and performs no extra access.
     P.Text += "movq ${0:q}, %rdx\n\tsubq %rbp, %rdx\n\t";
@@ -62,12 +70,15 @@ x86AmxAsm(uint32_t D, NdMemoryAddressSpace Space, bool Legacy = false) {
                          : D & X86AmxStackSegment               ? "%ss:"
                                                                 : "%ds:";
     const bool Addr32 = D & X86AmxAddress32;
-    std::string Address = std::string(Segment) + (Stack    ? "(%rbp,%rdx"
-                                                  : Addr32 ? "(${0:k}"
-                                                           : "(${0:q}");
+    std::string Address = std::string(Segment) + (P.StackLeaf ? "(${0:q}"
+                                                  : Stack     ? "(%rbp,%rdx"
+                                                  : Addr32    ? "(${0:k}"
+                                                              : "(${0:q}");
     P.InputBytes.push_back(Addr32 ? 4 : 8);
     P.InputConstraints.push_back(
-        Legacy ? "r" : x86MemoryAddressAsm(Addr32 ? 32 : 64).LLVMConstraint);
+        P.StackLeaf ? "{bp}"
+        : Legacy    ? "r"
+                    : x86MemoryAddressAsm(Addr32 ? 32 : 64).LLVMConstraint);
     if (x86AmxIsTileMemory(K)) {
       Address += Addr32 ? ",${1:k}" : ",${1:q}";
       P.InputBytes.push_back(Addr32 ? 4 : 8);

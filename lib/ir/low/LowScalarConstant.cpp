@@ -9,13 +9,17 @@
 #include "neverd/ir/low/LowScalarConstant.h"
 
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/low/BlockRegisterConstant.h"
+#include "neverd/ir/low/CallRegisterBody.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/ArrayRef.h"
 
 #include <algorithm>
 #include <map>
 #include <set>
 #include <utility>
+#include <vector>
 
 namespace neverd {
 
@@ -243,14 +247,17 @@ public:
   }
 };
 
-bool visitScalarCallValues(
-    const LowFunc &Function, llvm::function_ref<bool(const LowOp &)> Select,
-    llvm::function_ref<void(const LowOp &, ValueLookup)> Observe) {
-  size_t Work = 0;
-  for (const auto &Block : Function.Blocks) {
-    if (Block.Ops.size() > limits::ir::kConstantRegisterCallOperations - Work)
+bool visitScalarBlockValues(
+    llvm::ArrayRef<LowBlock> Blocks,
+    llvm::function_ref<bool(const LowOp &)> Select,
+    llvm::function_ref<void(const LowOp &, ValueLookup)> Observe,
+    size_t &Remaining, bool NumericOnly = false) {
+  for (const auto &Block : Blocks) {
+    if (Block.Ops.size() > Remaining) {
+      Remaining = 0;
       return false;
-    Work += Block.Ops.size();
+    }
+    Remaining -= Block.Ops.size();
     if (std::none_of(Block.Ops.begin(), Block.Ops.end(), Select))
       continue;
     RegisterConstants Registers;
@@ -259,7 +266,8 @@ bool visitScalarCallValues(
     auto ValueOf = [&](const NdVar &Value) -> std::optional<uint64_t> {
       if (!Value.Size || Value.Size > sizeof(uint64_t))
         return {};
-      if (Value.isConst())
+      if (Value.isConst() &&
+          (!NumericOnly || !isAddressProvenance(Value.Provenance)))
         return Value.Offset & (UINT64_MAX >> ((8 - Value.Size) * 8));
       if (Value.isTemp()) {
         const auto It = Temps.find(Value.Offset);
@@ -293,10 +301,23 @@ bool visitScalarCallValues(
               ? lowScalarConstantResult(Op, ValueOf)
               : std::nullopt;
       if (Output.isTemp()) {
+        if (Output.Offset > UINT64_MAX - Output.Size) {
+          Temps.clear();
+          continue;
+        }
+        // Known temporaries hold at most one scalar word. Visit just the
+        // overlapping range, including a prior word's partial tail.
+        const uint64_t Back = sizeof(uint64_t) - 1;
+        for (auto It = Temps.lower_bound(
+                 Output.Offset > Back ? Output.Offset - Back : 0);
+             It != Temps.end() && It->first < Output.Offset + Output.Size;) {
+          if (Output.Offset < It->first + It->second.first)
+            It = Temps.erase(It);
+          else
+            ++It;
+        }
         if (Result)
           Temps[Output.Offset] = {Output.Size, *Result};
-        else
-          Temps.erase(Output.Offset);
       } else if (Output.Offset <= UINT64_MAX - Output.Size) {
         // Erase overlapping byte facts even for a wide unknown result. Never
         // interpret an architectural subregister write as a whole GPR write.
@@ -314,24 +335,123 @@ bool visitScalarCallValues(
 
 std::map<SourceCallOccurrenceKey, va_t>
 constantRegisterCallTargets(const LowFunc &Function) {
+  return constantRegisterCallTargets(CallRegisterBodyView(Function));
+}
+
+std::map<SourceCallOccurrenceKey, va_t>
+constantRegisterCallTargets(const CallRegisterBodyView &Function) {
   std::map<SourceCallOccurrenceKey, va_t> Targets;
-  std::set<SourceCallOccurrenceKey> Seen;
-  const bool Complete = visitScalarCallValues(
-      Function,
-      [](const LowOp &Op) {
-        return Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
-               !Op.Inputs[0].isConst();
-      },
+  std::set<SourceCallOccurrenceKey> Seen, Repeated;
+  size_t Remaining = limits::ir::kConstantRegisterCallOperations;
+  const auto Select = [](const LowOp &Op) {
+    return Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
+           !Op.Inputs[0].isConst();
+  };
+  const bool Complete = visitScalarBlockValues(
+      Function.Blocks, Select,
       [&](const LowOp &Op, ValueLookup ValueOf) {
         if (const auto Site = sourceCallOccurrenceKey(Op)) {
-          if (!Seen.insert(*Site).second)
+          if (!Seen.insert(*Site).second) {
             Targets.erase(*Site);
-          else if (const auto Target = ValueOf(Op.Inputs[0]))
+            Repeated.insert(*Site);
+          } else if (const auto Target = ValueOf(Op.Inputs[0]))
             Targets.emplace(*Site, *Target);
         }
-      });
+      },
+      Remaining);
   if (!Complete)
     return {};
+  // Local proofs need no predecessor state. Only unresolved occurrences pay
+  // for the bounded graph walk, and incomplete/multi-entry bodies inherit none.
+  if (Targets.size() + Repeated.size() == Seen.size() || !Function.Complete ||
+      Function.HasIndependentRoots || Function.UnsafeIndirectBranches)
+    return Targets;
+  const auto Spend = [&](size_t Count) {
+    if (Count > Remaining) {
+      Remaining = 0;
+      return false;
+    }
+    Remaining -= Count;
+    return true;
+  };
+  if (!Spend(Function.Blocks.size()))
+    return {};
+  std::map<int, const LowBlock *> Blocks;
+  for (const auto &Block : Function.Blocks)
+    if (!Blocks.emplace(Block.Id, &Block).second)
+      return Targets;
+  for (const auto &Block : Function.Blocks) {
+    std::set<SourceCallOccurrenceKey> Pending;
+    for (const auto &Op : Block.Ops)
+      if (Select(Op))
+        if (const auto Site = sourceCallOccurrenceKey(Op);
+            Site && !Targets.count(*Site) && !Repeated.count(*Site))
+          Pending.insert(*Site);
+    if (Pending.empty())
+      continue;
+    std::vector<const LowBlock *> Path{&Block};
+    std::set<int> Visited{Block.Id};
+    bool Cyclic = false;
+    while (Path.back() != &Function.Blocks.front()) {
+      const auto &Current = *Path.back();
+      if (!Spend(1))
+        return {};
+      if (Current.Preds.size() != 1 || !Current.ExceptionalPreds.empty())
+        break;
+      const auto Found = Blocks.find(Current.Preds.front());
+      if (Found == Blocks.end())
+        break;
+      const auto &Pred = *Found->second;
+      if (Pred.Succs.size() != 1 || Pred.Succs.front() != Current.Id ||
+          !Pred.ExceptionalSuccs.empty() || !Pred.ExceptionalPreds.empty() ||
+          Pred.InstructionBoundaries.empty())
+        break;
+      const auto &Edge = Pred.InstructionBoundaries.back();
+      if (!Edge.Size || Edge.Address < Pred.StartAddr ||
+          Edge.Address >= Pred.EndAddr ||
+          Edge.Size != Pred.EndAddr - Edge.Address ||
+          Edge.FirstOp > Pred.Ops.size() ||
+          Edge.OpCount != Pred.Ops.size() - Edge.FirstOp)
+        break;
+      const bool Direct =
+          Edge.Control == LowInstructionControl::Branch && Edge.Immediate &&
+          *Edge.Immediate == Current.StartAddr &&
+          !hasLowInstructionControlFlag(Edge.ControlFlags,
+                                        LowInstructionControlFlag::Indirect) &&
+          !hasLowInstructionControlFlag(Edge.ControlFlags,
+                                        LowInstructionControlFlag::Conditional);
+      const bool Fallthrough = Edge.Control == LowInstructionControl::None &&
+                               Pred.EndAddr == Current.StartAddr;
+      if (!Direct && !Fallthrough)
+        break;
+      if (!Visited.insert(Pred.Id).second) {
+        Cyclic = true;
+        break;
+      }
+      Path.push_back(&Pred);
+    }
+    if (Cyclic || Path.size() == 1)
+      continue;
+    LowBlock Prefix;
+    for (auto It = Path.rbegin(); It != Path.rend(); ++It) {
+      // Copying and evaluating the prefix both consume the same work cap.
+      if (!Spend((*It)->Ops.size()))
+        return {};
+      Prefix.Ops.insert(Prefix.Ops.end(), (*It)->Ops.begin(), (*It)->Ops.end());
+    }
+    if (!visitScalarBlockValues(
+            llvm::ArrayRef(&Prefix, 1),
+            [&](const LowOp &Op) {
+              const auto Site = sourceCallOccurrenceKey(Op);
+              return Site && Pending.count(*Site);
+            },
+            [&](const LowOp &Op, ValueLookup ValueOf) {
+              if (const auto Target = ValueOf(Op.Inputs[0]))
+                Targets.emplace(*sourceCallOccurrenceKey(Op), *Target);
+            },
+            Remaining))
+      return {};
+  }
   return Targets;
 }
 
@@ -342,8 +462,9 @@ constantRegisterValueAtCall(const LowFunc &Function,
   LowCallRegisterConstant Result;
   if (!Register.isReg() || !Register.Size || Register.Size > 8)
     return Result;
-  const bool Complete = visitScalarCallValues(
-      Function,
+  size_t Remaining = limits::ir::kConstantRegisterCallOperations;
+  const bool Complete = visitScalarBlockValues(
+      Function.Blocks,
       [&](const LowOp &Op) { return sourceCallOccurrenceKey(Op) == Site; },
       [&](const LowOp &, ValueLookup ValueOf) {
         if (Result.OccurrenceFound)
@@ -352,12 +473,34 @@ constantRegisterValueAtCall(const LowFunc &Function,
           Result.OccurrenceFound = true;
           Result.Value = ValueOf(Register);
         }
-      });
+      },
+      Remaining);
   if (!Complete) {
     Result = {};
     Result.BudgetExceeded = true;
   }
   return Result;
+}
+
+std::set<const LowOp *>
+lowBlockAbsorbingConstants(llvm::ArrayRef<LowBlock> Blocks, size_t &Remaining) {
+  std::set<const LowOp *> Result;
+  const bool Complete = visitScalarBlockValues(
+      Blocks,
+      [](const LowOp &Op) {
+        return (Op.Opcode == NdOp::INT_AND || Op.Opcode == NdOp::INT_OR) &&
+               Op.NumInputs == 2;
+      },
+      [&](const LowOp &Op, ValueLookup ValueOf) {
+        LowOp Folded = Op;
+        for (unsigned I = 0; I != 2; ++I)
+          if (const auto Value = ValueOf(Op.Inputs[I]))
+            Folded.Inputs[I] = NdVar::scalar(*Value, Op.Inputs[I].Size);
+        if (lowAbsorbingConstant(Folded))
+          Result.insert(&Op);
+      },
+      Remaining, true);
+  return Complete ? Result : std::set<const LowOp *>{};
 }
 
 } // namespace neverd

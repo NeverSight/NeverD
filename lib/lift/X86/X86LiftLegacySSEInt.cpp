@@ -92,7 +92,25 @@ bool liftLegacySSEInt(X86Lifter &L, X86Lifter::LiftState &S,
     if (X86.op_count < 2)
       break;
     NdVar Dst = L.operandWrite(X86.operands[0]);
-    NdVar Src = L.operandRead(S, X86.operands[1]);
+    NdVar Src;
+    if (InsnId == X86_INS_PAND && Dst.Size == 16 &&
+        X86.operands[1].type == X86_OP_MEM) {
+      // Legacy 128-bit integer memory operands require 16-byte alignment.
+      // Check the resolved address before reading memory or changing Dst.
+      if (X86.op_count != 2 || X86.operands[0].type != X86_OP_REG ||
+          X86.operands[1].size != Dst.Size)
+        return false;
+      const auto &Memory = X86.operands[1];
+      const NdVar Address = S.computeEA(Memory);
+      const auto Space = X86Lifter::LiftState::memoryAddressSpace(Memory);
+      S.emitIntrinsic(Intrinsic::RequireAligned, {},
+                      {Address, NdVar::scalar(Dst.Size, 8)},
+                      NdMemoryOrdering::None, Space);
+      Src = S.makeTemp(Dst.Size);
+      S.emit(NdOp::LOAD, Src, {Address}, NdMemoryOrdering::None, Space);
+    } else {
+      Src = L.operandRead(S, X86.operands[1]);
+    }
     NdOp Opc = NdOp::COPY;
     switch (InsnId) {
     case X86_INS_XORPS:
@@ -368,12 +386,30 @@ bool liftLegacySSEInt(X86Lifter &L, X86Lifter::LiftState &S,
     break;
   }
   case X86_INS_SHUFPS: {
-    if (X86.op_count < 3)
-      break;
+    if (X86.op_count != 3 || X86.operands[0].type != X86_OP_REG ||
+        (X86.operands[1].type != X86_OP_REG &&
+         X86.operands[1].type != X86_OP_MEM) ||
+        X86.operands[0].size != 16 || X86.operands[1].size != 16 ||
+        X86.operands[2].type != X86_OP_IMM || X86.operands[2].size != 1 ||
+        X86.operands[2].imm < 0 || X86.operands[2].imm > UINT8_MAX)
+      return false;
     NdVar Dst = L.operandWrite(X86.operands[0]);
     NdVar Src = L.operandRead(S, X86.operands[1]);
-    uint8_t Imm = static_cast<uint8_t>(X86.operands[2].imm);
-    S.emitIntrinsic(Intrinsic::Shufps, Dst, {Dst, Src, NdVar::cst(Imm, 1)});
+    const uint8_t Imm = static_cast<uint8_t>(X86.operands[2].imm);
+    // Read both original vectors before writeback, including self aliases.
+    // The low pair comes from Dst and the high pair from Src; lane bits are
+    // copied without floating-point conversion or MXCSR side effects.
+    NdVar Lanes[4];
+    for (unsigned I = 0; I != 4; ++I) {
+      Lanes[I] = S.makeTemp(4);
+      S.emit(NdOp::SUBBYTES, Lanes[I],
+             {I < 2 ? Dst : Src, NdVar::cst(((Imm >> (I * 2)) & 3) * 4, 4)});
+    }
+    NdVar Low = S.makeTemp(8), High = S.makeTemp(8), Result = S.makeTemp(16);
+    S.emit(NdOp::CONCAT, Low, {Lanes[1], Lanes[0]});
+    S.emit(NdOp::CONCAT, High, {Lanes[3], Lanes[2]});
+    S.emit(NdOp::CONCAT, Result, {High, Low});
+    S.emit(NdOp::COPY, Dst, {Result});
     break;
   }
   case X86_INS_SHUFPD: {

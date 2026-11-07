@@ -39,6 +39,7 @@
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
@@ -46,11 +47,13 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <functional>
 #include <initializer_list>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -213,6 +216,58 @@ TEST(SummarizedCallArguments, PublishesAnEmptyVectorBankForScalarCallees) {
   }
 }
 
+TEST(SummarizedCallArguments, Win64SavedVectorReadsStillProveAnEmptyBank) {
+  // Win64 preserves XMM6 and up in every convention: a callee reads them
+  // only to save them, so a summary whose only vector reads are those still
+  // proves that the call passes no vector argument.  XMM4 and XMM5 are
+  // volatile, __vectorcall's fifth and sixth vector arguments: a read of
+  // either keeps the positional contract open.
+  const auto &Registers = getTargetRegInfo(Arch::X64);
+  const auto Integers = Registers.integerParamRegs(BinaryFormat::COFF);
+  for (unsigned Saved : {4u, 5u, 6u, 7u}) {
+    SCOPED_TRACE(Saved);
+    GPRReadWidths Reads{};
+    Reads[Integers[0] / 8] = 8;
+    Reads[Integers[1] / 8] = 8;
+    Reads[kX64VectorFamilyBase + Saved] = 16;
+    const std::map<va_t, GPRReadWidths> Summaries{{0x2000, Reads}};
+    LowFunc Low;
+    Low.Entry = 0x1000;
+    Low.Name = "forward_values";
+    Low.Blocks.resize(1);
+    Low.Blocks[0].Id = 0;
+    Low.Blocks[0].StartAddr = Low.Entry;
+    LowOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = Low.Entry;
+    Call.Output = NdVar::reg(Registers.IntReturnReg, 8);
+    Call.addInput(NdVar::cst(0x2000, 8));
+    Low.Blocks[0].Ops.push_back(Call);
+    LowOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = Low.Entry + 5;
+    Return.addInput(Call.Output);
+    Low.Blocks[0].Ops.push_back(Return);
+    LowToMedConverter Converter;
+    Converter.setCallEntryReadGPRs(&Summaries);
+    const MedFunc Function =
+        Converter.convert(Low, Arch::X64, BinaryFormat::COFF);
+    const MedOp *Bound = nullptr;
+    for (const auto &Block : Function.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::CALL)
+          Bound = &Op;
+    ASSERT_NE(Bound, nullptr);
+    EXPECT_EQ(Bound->CalleeRegisterArgs, 2);
+    EXPECT_EQ(Bound->CalleeVectorSlots, 0);
+    EXPECT_EQ(Bound->NumInputs, 3u);
+    if (Saved >= 6)
+      EXPECT_EQ(Bound->CalleeVectorArgs, 0);
+    else
+      EXPECT_NE(Bound->CalleeVectorArgs, 0);
+  }
+}
+
 TEST(SummarizedCallArguments, ScalarCallsDoNotAcquireIncidentalVectorState) {
   for (BinaryFormat Format :
        {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
@@ -272,10 +327,12 @@ TEST(SummarizedCallArguments, ScalarCallsDoNotAcquireIncidentalVectorState) {
             recoverCallAbi(Function, Arch::X64, {{0x2000, "consumer"}}, &Image);
             ASSERT_EQ(Function.CallInfos.size(), 1u);
             const auto &Recovered = Function.CallInfos.front().Args;
-            ASSERT_EQ(Recovered.size(), HasVectorSummary ? 2u : 3u);
+            const bool IndependentVector =
+                !HasVectorSummary && Format != BinaryFormat::COFF;
+            ASSERT_EQ(Recovered.size(), IndependentVector ? 3u : 2u);
             EXPECT_EQ(Recovered[0], Arguments[0]);
             EXPECT_EQ(Recovered[1], Arguments[1]);
-            if (!HasVectorSummary)
+            if (IndependentVector)
               EXPECT_EQ(Recovered[2], Scratch);
           }
         }
@@ -755,6 +812,91 @@ TEST(SummarizedCallArguments, UnreadRegisterTailsDoNotBecomeArguments) {
     }
 }
 
+TEST(SummarizedCallArguments, LaterStackParametersKeepUnreadRegisterPositions) {
+  for (unsigned Count : {0u, 1u, 3u, 4u})
+    for (bool Stored : {false, true})
+      for (bool Scratch : {false, true}) {
+        SCOPED_TRACE(Count);
+        SCOPED_TRACE(Stored);
+        SCOPED_TRACE(Scratch);
+        BinaryImage Image;
+        Image.Arch = Arch::X64;
+        Image.Format = BinaryFormat::COFF;
+        Image.Bits = Bitness::Bits64;
+        MedFunc Function;
+        Function.Entry = 0x1000;
+        Function.Name = "caller";
+        MedBlock Block;
+        Block.Id = 0;
+        const auto Register = [](uint64_t Offset, int Version) {
+          MedVar Value;
+          Value.Kind = MedVar::Reg;
+          Value.TheArch = Arch::X64;
+          Value.Id = Offset / 8 + 1;
+          Value.RegOff = Offset;
+          Value.SSAVer = Version;
+          Value.Size = 8;
+          return Value;
+        };
+        const auto Registers =
+            getTargetRegInfo(Arch::X64).integerParamRegs(Image.Format);
+        if (Scratch)
+          for (unsigned I = Count; I < Registers.size(); ++I) {
+            MedOp Setup;
+            Setup.Opcode = NdOp::COPY;
+            Setup.Output = Register(Registers[I], 1);
+            Setup.addInput(MedVar::makeConst(100 + I, 8));
+            Block.Ops.push_back(Setup);
+          }
+        const auto Pointer = MedVar::makeConst(0x3000, 8);
+        if (Stored) {
+          MedOp Address;
+          Address.Opcode = NdOp::INT_ADD;
+          Address.Output.Kind = MedVar::Temp;
+          Address.Output.Id = 100;
+          Address.Output.SSAVer = 1;
+          Address.Output.Size = 8;
+          Address.Output.TheArch = Arch::X64;
+          Address.addInput(Register(x86reg::RSP, 0));
+          Address.addInput(MedVar::makeConst(32, 8));
+          Block.Ops.push_back(Address);
+          MedOp Store;
+          Store.Opcode = NdOp::STORE;
+          Store.addInput(Address.Output);
+          Store.addInput(Pointer);
+          Block.Ops.push_back(Store);
+        }
+        MedOp Call;
+        Call.Opcode = NdOp::CALL;
+        Call.Addr = 0x1010;
+        Call.addInput(MedVar::makeConst(0x2000, 8));
+        for (unsigned I = 0; I < Count; ++I)
+          Call.addInput(I ? MedVar::makeConst(7 + I, 8)
+                          : MedVar::makeUnspecified(8, Arch::X64));
+        Call.CalleeRegisterArgs = Count;
+        Call.CalleeVectorArgs = 0;
+        // Memory reached through an incoming pointer can leave the early
+        // stack summary unknown. The recovered callee still owns five slots.
+        Call.CalleeStackArgs = -1;
+        Block.Ops.push_back(Call);
+        Function.Blocks.push_back(std::move(Block));
+        std::map<va_t, int> RegisterArity{{0x2000, 4}};
+        std::map<va_t, int> TotalArity{{0x2000, 5}};
+        for (unsigned Repeat = 0; Repeat < 2; ++Repeat) {
+          recoverCallAbi(Function, Arch::X64, {{0x2000, "consumer"}}, &Image,
+                         &RegisterArity, &TotalArity);
+          ASSERT_EQ(Function.CallInfos.size(), 1u);
+          const auto &Arguments = Function.CallInfos.front().Args;
+          ASSERT_EQ(Arguments.size(), 5u);
+          for (unsigned I = 0; I < 4; ++I)
+            EXPECT_EQ(Arguments[I],
+                      I < Count ? Call.Inputs[I + 1] : MedVar::makeConst(0, 8));
+          EXPECT_EQ(Arguments[4],
+                    Stored ? Pointer : MedVar::makeUnspecified(8, Arch::X64));
+        }
+      }
+}
+
 TEST(SummarizedCallArguments, CountOnlyContractsStillReadTheirSetup) {
   for (Arch Architecture : {Arch::ARM, Arch::AArch64}) {
     SCOPED_TRACE(static_cast<unsigned>(Architecture));
@@ -882,6 +1024,67 @@ int main(void) {
 
 constexpr va_t Text = 0x140001000;
 constexpr va_t Iat = 0x140003000;
+
+/// Execute the original fixture at a fresh mapping. Its observed return word
+/// must have the same instruction-relative offset as the fixed-image source.
+/// The two imported providers, when present, also check the caller's string.
+/// A scalar-result fixture leaves the return word itself unobserved.
+std::string nativeReturnPCOracle(llvm::ArrayRef<uint8_t> Code, va_t ReturnPC,
+                                 bool Windows, bool Imports,
+                                 std::optional<uint64_t> ScalarResult = {}) {
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  Out << "\n#if defined(__linux__) && defined(__x86_64__)\n"
+         "#include <sys/mman.h>\n#include <string.h>\n";
+  if (Imports) {
+    const char *ABI = Windows ? "__attribute__((ms_abi)) " : "";
+    Out << "static " << ABI
+        << "int machine_rand(void) { return spill_provider(); }\n"
+        << "static " << ABI
+        << "size_t machine_strlen(const char *p) {\n"
+           "  if (p[0] != 97 || p[1] != 0) __builtin_trap();\n"
+           "  return spill_strlen_provider(p);\n}\n";
+  }
+  Out << "static int check_native_return_pc(void) {\n"
+         "  static const uint8_t original[] = {";
+  for (uint8_t Byte : Code)
+    Out << unsigned(Byte) << ',';
+  const size_t Bytes = std::max<size_t>(Code.size(), Iat - Text + 16);
+  Out << "};\n  const size_t size = " << Bytes
+      << ";\n"
+         // UBSan probes for a compiled-function signature before an indirect
+         // target. Keep that prefix mapped for this raw machine-code entry.
+         "  uint8_t *mapping = mmap(0, size + 16, PROT_READ | PROT_WRITE | "
+         "PROT_EXEC,\n"
+         "      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);\n"
+         "  if (mapping == MAP_FAILED) return 1;\n"
+         "  uint8_t *code = mapping + 16;\n"
+         "  memcpy(code, original, sizeof(original));\n";
+  if (Imports)
+    Out << "  uintptr_t random = (uintptr_t)machine_rand;\n"
+           "  uintptr_t reader = (uintptr_t)machine_strlen;\n"
+           "  memcpy(code + "
+        << Iat - Text << ", &random, 8);\n"
+        << "  memcpy(code + " << Iat - Text + 8
+        << ", &reader, 8);\n"
+           "  calls = 0;\n";
+  Out << "  __builtin___clear_cache((char *)code, (char *)code + size);\n"
+         "  uint64_t actual = ((uint64_t ("
+      << (Windows ? "__attribute__((ms_abi)) " : "")
+      << "*)(void))code)();\n"
+         "  int bad = actual != ";
+  if (ScalarResult)
+    Out << *ScalarResult;
+  else
+    Out << "(uintptr_t)code + " << ReturnPC - Text;
+  Out << (Imports ? " || calls != 2" : "") << ";\n";
+  if (Imports)
+    Out << "  calls = 0;\n";
+  Out << "  if (munmap(mapping, size + 16)) return 1;\n  return bad;\n}\n"
+         "#else\nstatic int check_native_return_pc(void) { return 0; }\n"
+         "#endif\n";
+  return Source;
+}
 
 void put(std::vector<uint8_t> &Code, va_t At, std::vector<uint8_t> Bytes) {
   std::copy(Bytes.begin(), Bytes.end(), Code.begin() + (At - Text));
@@ -1396,6 +1599,235 @@ int main(void) {
     }
 }
 
+TEST(MedFlagConstants, GeneratedComparisonZeroIsScalar) {
+  for (Arch Architecture : {Arch::X64, Arch::X86, Arch::AArch64, Arch::ARM})
+    for (unsigned Producer = 0; Producer != 4; ++Producer)
+      for (bool Select : {false, true}) {
+        // SELECT currently folds SUB and AND producers, while branches also
+        // recover zero tests of other arithmetic results.
+        if (Select && Producer == 2)
+          continue;
+        SCOPED_TRACE(Select);
+        SCOPED_TRACE(unsigned(Architecture));
+        SCOPED_TRACE(Producer);
+        const auto &TRI = getTargetRegInfo(Architecture);
+        const uint16_t Width = TRI.PointerSize;
+        const NdVar Value = NdVar::reg(TRI.IntReturnReg, Width);
+        const NdVar Result = NdVar::tmp(0x10000, Width);
+        const NdVar Condition = NdVar::tmp(0x10020, 1);
+        const NdVar Flag = NdVar::reg(TRI.FlagZF, 1);
+        LowFunc Low;
+        Low.Entry = Text;
+        LowBlock Block;
+        Block.Id = 0;
+        Block.StartAddr = Text;
+        Block.EndAddr = Text + 16;
+        const auto Add = [&](NdOp Opcode, NdVar Output,
+                             std::initializer_list<NdVar> Inputs) {
+          LowOp Op;
+          Op.Opcode = Opcode;
+          Op.Addr = Text;
+          Op.Output = Output;
+          for (const auto &Input : Inputs)
+            Op.addInput(Input);
+          Block.Ops.push_back(Op);
+        };
+        Add(NdOp::COPY, Value, {Value});
+        const auto Other = Producer == 0   ? Value
+                           : Producer == 3 ? NdVar::dataAddress(0, Width)
+                                           : NdVar::scalar(7, Width);
+        Add(Producer < 2    ? NdOp::INT_AND
+            : Producer == 2 ? NdOp::INT_ADD
+                            : NdOp::INT_SUB,
+            Result, {Value, Other});
+        Add(NdOp::INT_EQUAL, Flag, {Result, NdVar::scalar(0, Width)});
+        Add(NdOp::COPY, Condition, {Flag});
+        if (Select) {
+          Add(NdOp::SELECT, Value,
+              {Condition, NdVar::scalar(11, Width), NdVar::scalar(23, Width)});
+          Add(NdOp::RETURN, NdVar(), {Value});
+          Low.Blocks.push_back(std::move(Block));
+        } else {
+          Add(NdOp::COND_BR, NdVar(),
+              {NdVar::codeAddress(Text + 32, Width), Condition});
+          Block.Succs = {1, 2};
+          Low.Blocks.push_back(std::move(Block));
+          for (int I : {1, 2}) {
+            Block = {};
+            Block.Id = I;
+            Block.StartAddr = Text + I * 16;
+            Block.EndAddr = Block.StartAddr + 16;
+            Block.Preds = {0};
+            Add(NdOp::RETURN, NdVar(),
+                {NdVar::scalar(I == 1 ? 11 : 23, Width)});
+            Block.Ops.back().Addr = Block.StartAddr;
+            Low.Blocks.push_back(std::move(Block));
+          }
+        }
+        const auto Med = LowToMedConverter().convert(Low, Architecture);
+        ASSERT_EQ(Med.Blocks.size(), Select ? 1u : 3u);
+        const auto &Ops = Med.Blocks.front().Ops;
+        const auto Comparison =
+            std::find_if(Ops.begin(), Ops.end(), [](const MedOp &Op) {
+              return Op.Opcode == NdOp::INT_EQUAL &&
+                     Op.Output.Kind == MedVar::Temp;
+            });
+        ASSERT_NE(Comparison, Ops.end());
+        ASSERT_EQ(Comparison->NumInputs, 2);
+        const auto &Zero = Comparison->Inputs[1];
+        ASSERT_TRUE(Zero.isConst());
+        EXPECT_EQ(Zero.ConstVal, 0u);
+        EXPECT_EQ(Zero.Size, Width);
+        // A real subtraction keeps its operand's address identity. Only the
+        // zero invented for an arithmetic result is a new scalar constant.
+        EXPECT_EQ(Zero.Provenance, Producer == 3
+                                       ? ConstantAddressProvenance::DataAddress
+                                       : ConstantAddressProvenance::Scalar);
+      }
+}
+
+TEST(Win64CallContract, NullGuardedBorrowKeepsItsActualReadExtent) {
+  constexpr va_t Consumer = Text + 0x80;
+  for (bool ReadsNeighbor : {false, true}) {
+    SCOPED_TRACE(ReadsNeighbor);
+    std::vector<uint8_t> Code(0xA0, 0xCC);
+    std::vector<uint8_t> Caller = {0x48, 0x83, 0xEC, 0x38};
+    const auto Random = throughSlot(Text + Caller.size(), Iat);
+    Caller.insert(Caller.end(), Random.begin(), Random.end());
+    Caller.insert(Caller.end(),
+                  {0x31, 0xC0,             // xor eax,eax
+                   0x0F, 0xBD, 0xC8,       // bsr ecx,eax: unavailable old ECX
+                   0x89, 0x4C, 0x24, 0x20, // mov [rsp+20h],ecx
+                   0xC7, 0x44, 0x24, 0x24, 37,   0,    0,
+                   0,    0x48, 0x8D, 0x4C, 0x24, 0x24, // lea rcx,[rsp+24h]
+                   0xE8});
+    const auto Displacement = rel32(Text + Caller.size() + 4, Consumer);
+    Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+    Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
+    put(Code, Text, Caller);
+    std::vector<uint8_t> Reader = {0x48, 0x85, 0xC9, // test rcx,rcx
+                                   0x74, uint8_t(ReadsNeighbor ? 4 : 3)};
+    if (ReadsNeighbor)
+      Reader.insert(Reader.end(), {0x8B, 0x41, 0xFC}); // mov eax,[rcx-4]
+    else
+      Reader.insert(Reader.end(), {0x8B, 0x01}); // mov eax,[rcx]
+    Reader.insert(Reader.end(), {0xC3, 0x31, 0xC0, 0xC3});
+    put(Code, Consumer, Reader);
+    const auto Image = makeImage(
+        Code, {{Text, "guarded_borrow_caller"}, {Consumer, "nullable_reader"}},
+        {"rand"});
+    for (bool OmitCallee : {false, true})
+      for (bool NoOpt : {false, true})
+        for (bool LLVM : {false, true}) {
+          SCOPED_TRACE(OmitCallee);
+          SCOPED_TRACE(NoOpt);
+          SCOPED_TRACE(LLVM);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee)
+            Options.OnlyFunctionEntries.insert(Consumer);
+          Options.NoOpt = NoOpt;
+          Options.SourceProjection = true;
+          Options.LiftMode = LLVM;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          ASSERT_TRUE(
+              LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                         nullptr, &Image)
+                   : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          const bool HasUnknown =
+              Source.find("__builtin_trap") != std::string::npos;
+          if (HasUnknown != ReadsNeighbor) {
+            std::string Facts;
+            llvm::raw_string_ostream FactsOut(Facts);
+            Pipeline::dumpMedIR(Result.MedFuncs, FactsOut);
+            ADD_FAILURE() << Source << Facts;
+          }
+        }
+  }
+}
+
+TEST(Win64CallContract, PrivateBorrowSpillsKeepNativeReadExtents) {
+  constexpr va_t Consumer = Text + 0x80;
+  for (unsigned Case = 0; Case != 3; ++Case) {
+    SCOPED_TRACE(Case);
+    const bool ReadsNeighbor = Case != 0;
+    const bool AliasedSlot = Case == 2;
+    std::vector<uint8_t> Code(0xB0, 0xCC);
+    std::vector<uint8_t> Caller = {0x48, 0x83, 0xEC, 0x38};
+    const auto Random = throughSlot(Text + Caller.size(), Iat);
+    Caller.insert(Caller.end(), Random.begin(), Random.end());
+    Caller.insert(Caller.end(),
+                  {0x31, 0xC0,             // xor eax,eax
+                   0x0F, 0xBD, 0xC8,       // bsr ecx,eax: unavailable old ECX
+                   0x89, 0x4C, 0x24, 0x20, // mov [rsp+20h],ecx
+                   0xC7, 0x44, 0x24, 0x24, 37,   0,   0,
+                   0,    0x48, 0x8D, 0x4C, 0x24, 0x24}); // lea rcx,[rsp+24h]
+    if (AliasedSlot)
+      Caller.insert(Caller.end(), {0x48, 0x8D, 0x54, 0x24, 0xF0});
+    Caller.push_back(0xE8);
+    const auto Displacement = rel32(Text + Caller.size() + 4, Consumer);
+    Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+    Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
+    put(Code, Text, Caller);
+    std::vector<uint8_t> Reader = {0x48, 0x83, 0xEC, 0x08,  // sub rsp,8
+                                   0x48, 0x89, 0x0C, 0x24}; // mov [rsp],rcx
+    if (AliasedSlot)
+      Reader.insert(Reader.end(), {0x48, 0x8B, 0x12}); // mov rdx,[rdx]
+    else
+      Reader.insert(Reader.end(), {0x48, 0x8B, 0x14, 0x24}); // mov rdx,[rsp]
+    if (ReadsNeighbor)
+      Reader.insert(Reader.end(), {0x8B, 0x42, 0xFC}); // mov eax,[rdx-4]
+    else
+      Reader.insert(Reader.end(), {0x8B, 0x02}); // mov eax,[rdx]
+    Reader.insert(Reader.end(), {0x48, 0x83, 0xC4, 0x08, 0xC3});
+    put(Code, Consumer, Reader);
+    const auto Image = makeImage(
+        Code, {{Text, "borrow_spill_caller"}, {Consumer, "spill_reader"}},
+        {"rand"});
+    // Static projection only: neither the specimen nor emitted C is executed.
+    for (bool OmitCallee : {false, true})
+      for (bool NoOpt : {false, true})
+        for (bool LLVM : {false, true}) {
+          SCOPED_TRACE(OmitCallee);
+          SCOPED_TRACE(NoOpt);
+          SCOPED_TRACE(LLVM);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee)
+            Options.OnlyFunctionEntries.insert(Consumer);
+          Options.NoOpt = NoOpt;
+          Options.SourceProjection = true;
+          Options.LiftMode = LLVM;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          ASSERT_TRUE(
+              LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                         nullptr, &Image)
+                   : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          EXPECT_EQ(Source.find("__builtin_trap") != std::string::npos,
+                    ReadsNeighbor)
+              << Source;
+        }
+  }
+}
+
 TEST(Win64CallContract, BoundedCalleeReadDoesNotExposeAdjacentUnknownBytes) {
   constexpr va_t Consumer = Text + 0x80;
   for (bool ReadsNeighbor : {false, true}) {
@@ -1493,6 +1925,420 @@ int main(void) { return read_neighbor() != 37 || observed != 1; }
                 {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
         }
   }
+}
+
+TEST(Win64CallContract,
+     ParameterCopiesDistinguishEntrySeedsFromFirstDefinitions) {
+  for (unsigned Mode = 0; Mode < 4; ++Mode) {
+    SCOPED_TRACE(Mode);
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Format = BinaryFormat::COFF;
+    Image.Bits = Bitness::Bits64;
+    const auto Register = [](int Id, uint64_t Offset, int Version = 0) {
+      MedVar V;
+      V.Kind = MedVar::Reg;
+      V.TheArch = Arch::X64;
+      V.Id = Id;
+      V.RegOff = Offset;
+      V.SSAVer = Version;
+      V.Size = 8;
+      return V;
+    };
+    const auto RCX = Register(10, x86reg::RCX);
+    const auto RDX = Register(11, x86reg::RDX);
+    const auto RDI = Register(12, x86reg::RDI, 1);
+    MedFunc Func;
+    Func.Entry = Text;
+    Func.Name = "copy_value";
+    Func.CC = CallingConv::Win64;
+    Func.ReturnType = NdType::makeInt(8, false);
+    for (const auto &Input : {RCX, RDX}) {
+      auto Param = Input;
+      Param.Kind = MedVar::Param;
+      Func.Params.push_back(Param);
+    }
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Func.Entry;
+    const auto Append = [&](NdOp Opcode, MedVar Output, MedVar Input) {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      Op.addInput(Input);
+      Block.Ops.push_back(Op);
+    };
+    if (Mode == 1)
+      Append(NdOp::COPY, RCX, RCX);
+    if (Mode == 2) {
+      Append(NdOp::COPY, RDX, RDX);
+      Append(NdOp::INT_NEGATE, RCX, RDX);
+    }
+    if (Mode == 3) {
+      Append(NdOp::COPY, RDX, RDX);
+      Append(NdOp::BRANCH, {}, MedVar::makeConst(Text + 0x10, 8));
+      Block.Succs = {1};
+      Func.Blocks.push_back(std::move(Block));
+      Block = MedBlock{};
+      Block.Id = 1;
+      Block.StartAddr = Text + 0x10;
+      Block.Preds = {0};
+      PhiNode Phi;
+      Phi.Output = RCX;
+      Phi.Args = {{0, RDX}};
+      Block.Phis.push_back(std::move(Phi));
+    }
+    Append(NdOp::COPY, RDI, RCX);
+    Append(NdOp::RETURN, {}, RDI);
+    Func.Blocks.push_back(std::move(Block));
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(LLVM);
+      std::string Source;
+      llvm::raw_string_ostream Output(Source);
+      CEmitterOptions Options;
+      Options.TheArch = Image.Arch;
+      Options.Format = Image.Format;
+      Options.Image = &Image;
+      if (LLVM) {
+        llvm::LLVMContext Context;
+        auto Module =
+            MedLLVMEmitter().emit({Func}, Context, "entry_copies", Arch::X64,
+                                  {}, &Image, BinaryFormat::COFF);
+        ASSERT_TRUE(Module);
+        ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+        ASSERT_TRUE(LLVMCEmitter().emit(*Module, Output, Options));
+      } else {
+        MedToHighConverter Converter;
+        Converter.setBinaryImage(&Image);
+        auto High = Converter.convert(Func, Arch::X64);
+        ASSERT_TRUE(HighCEmitter().emit({High}, Output, Options));
+      }
+      const std::string Harness = R"(
+int main(void) {
+  uint64_t a = UINT64_C(0xfedcba9876543210);
+  for (unsigned i = 0; i < 64; ++i) {
+    uint64_t b = a ^ UINT64_C(0x1020304050607080);
+    uint64_t expected = MODE == 3 ? b : MODE == 2 ? ~b : a;
+    if ((uint64_t)copy_value(a, b) != expected) return 1;
+    a ^= a << 13;
+    a ^= a >> 7;
+    a ^= a << 17;
+  }
+  return 0;
+}
+)";
+      for (llvm::StringRef Level : {"-O0", "-O2"})
+        source_call_execution_test::compileAndRun(
+            Source + "\n#define MODE " + std::to_string(Mode) + "\n" + Harness,
+            {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+    }
+  }
+}
+
+TEST(Win64CallContract, SavedParameterReplacedByCallResultKeepsTheNewValue) {
+  constexpr va_t Provider = Text + 0x80;
+  for (bool Narrow : {false, true}) {
+    SCOPED_TRACE(Narrow);
+    std::vector<uint8_t> Code(0x90, 0xCC);
+    std::vector<uint8_t> Caller = {
+        0x57, // push rdi
+        0x48, 0x83,
+        0xEC, 0x20, // sub rsp,32
+        0x48, 0x89,
+        0xCF,       // mov rdi,rcx: save the incoming parameter
+        0x85, 0xD2, // test edx,edx
+        0x74, uint8_t(Narrow ? 7 : 8),
+        0xE8};
+    const auto Displacement = rel32(Text + Caller.size() + 4, Provider);
+    Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+    if (!Narrow)
+      Caller.push_back(0x48);
+    Caller.insert(Caller.end(), {0x89, 0xC7}); // mov [e/r]di,[e/r]ax
+    if (!Narrow)
+      Caller.push_back(0x48);
+    Caller.insert(Caller.end(),
+                  {0x89, 0xF8,             // mov [e/r]ax,[e/r]di: observe join
+                   0x48, 0x83, 0xC4, 0x20, // add rsp,32
+                   0x5F, 0xC3});
+    put(Code, Text, Caller);
+    put(Code, Provider,
+        {0x48, 0x89, 0xC8,         // mov rax,rcx
+         0x48, 0xF7, 0xD0, 0xC3}); // not rax; ret
+    const auto Image = makeImage(
+        Code, {{Text, "replace_saved"}, {Provider, "replacement_value"}}, {});
+    std::string Native;
+    llvm::raw_string_ostream Oracle(Native);
+    Oracle << R"(
+#include <string.h>
+#if defined(__x86_64__) && defined(__linux__)
+#include <sys/mman.h>
+static int check_native(uint64_t value, uint32_t flag, uint64_t expected) {
+  static const uint8_t bytes[] = {)";
+    for (uint8_t Byte : Code)
+      Oracle << unsigned(Byte) << ',';
+    Oracle << R"(};
+  uint8_t *mapping = mmap(0, sizeof(bytes) + 16,
+      PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  uint8_t *code = mapping + 16;
+  memcpy(code, bytes, sizeof(bytes));
+  __builtin___clear_cache((char *)code, (char *)code + sizeof(bytes));
+  uint64_t actual = ((uint64_t (__attribute__((ms_abi)) *)(uint64_t, uint32_t))code)(value, flag);
+  int bad = actual != expected;
+  return munmap(mapping, sizeof(bytes) + 16) ? 1 : bad;
+}
+#else
+static int check_native(uint64_t value, uint32_t flag, uint64_t expected) { return 0; }
+#endif
+)";
+    for (bool OmitCallee : {false, true})
+      for (bool NoOpt : {false, true})
+        for (bool LLVM : {false, true}) {
+          SCOPED_TRACE(testing::Message()
+                       << OmitCallee << ':' << NoOpt << ':' << LLVM);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee)
+            Options.OnlyFunctionEntries.insert(Provider);
+          Options.SourceProjection = true;
+          Options.NoOpt = NoOpt;
+          Options.LiftMode = LLVM;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          ASSERT_TRUE(
+              LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                         nullptr, &Image)
+                   : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+          const std::string ProviderSource =
+              OmitCallee ? (LLVM ? "uint64_t replacement_value(uint64_t value) "
+                                   "{ return ~value; }\n"
+                                 : "int64_t replacement_value(int64_t value) { "
+                                   "return ~value; }\n")
+                         : "";
+          const std::string Harness = R"(
+int main(void) {
+  uint64_t value = UINT64_C(0xfedcba9876543210);
+  for (unsigned i = 0; i < 64; ++i) {
+    for (uint32_t flag = 0; flag < 2; ++flag) {
+      uint64_t expected = flag ? ~value : value;
+      if (NARROW_RESULT) expected = (uint32_t)expected;
+      if (check_native(value, flag, expected)) return 1;
+      uint64_t actual = (uint64_t)replace_saved(value, flag);
+      if (NARROW_RESULT) actual = (uint32_t)actual;
+      if (actual != expected) return 2;
+    }
+    value ^= value << 13;
+    value ^= value >> 7;
+    value ^= value << 17;
+  }
+  return 0;
+}
+)";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                Source + ProviderSource + Native + "\n#define NARROW_RESULT " +
+                    std::to_string(Narrow) + "\n" + Harness,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+  }
+}
+
+void checkPartialOverwriteBorrow(bool ScalarStackCall) {
+  constexpr va_t Consumer = Text + 0x80;
+  const std::vector<unsigned> Depths = ScalarStackCall
+                                           ? std::vector<unsigned>{2}
+                                           : std::vector<unsigned>{1, 2, 3};
+  for (unsigned Depth : Depths)
+    for (bool Home : {false, true})
+      for (bool ReadsNeighbor : {false, true}) {
+        SCOPED_TRACE(Depth);
+        SCOPED_TRACE(Home);
+        SCOPED_TRACE(ReadsNeighbor);
+        std::vector<uint8_t> Code(0x120, 0xCC);
+        std::vector<uint8_t> Caller = {0x48, 0x83, 0xEC, 0x38};
+        const auto Random = throughSlot(Text + Caller.size(), Iat);
+        Caller.insert(Caller.end(), Random.begin(), Random.end());
+        // The call leaves RCX unavailable. Only the low byte of its spill is
+        // overwritten before this complete bounded borrow. Positive offsets use
+        // the caller's incoming home storage, outside the nested call's home.
+        const uint8_t Slot = Home ? 0x40 : 0x28;
+        Caller.insert(Caller.end(),
+                      {0x48, 0x89, 0x4C, 0x24, Slot, 0xC6, 0x44, 0x24, Slot, 37,
+                       0x48, 0x8D, 0x4C, 0x24, Slot, 0xE8});
+        const auto Displacement = rel32(Text + Caller.size() + 4, Consumer);
+        Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+        Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
+        put(Code, Text, Caller);
+        const va_t Leaf = Consumer + 0x40 * (Depth - 1);
+        if (ScalarStackCall) {
+          // Read just the initialized byte, then pass it as the fifth scalar
+          // argument. Native and selected bodies must share the same stack
+          // footprint, including the scalar slot the helper actually reads.
+          std::vector<uint8_t> Reader = {0x48, 0x83, 0xEC, 0x38};
+          const std::vector<uint8_t> Load =
+              ReadsNeighbor ? std::vector<uint8_t>{0x0F, 0xB6, 0x41, 1}
+                            : std::vector<uint8_t>{0x0F, 0xB6, 0x01};
+          Reader.insert(Reader.end(), Load.begin(), Load.end());
+          Reader.insert(Reader.end(),
+                        {0x89, 0x44, 0x24, 0x20,       // mov [rsp+20h],eax
+                         0xB9, 1,    0,    0,    0,    // mov ecx,1
+                         0xBA, 2,    0,    0,    0,    // mov edx,2
+                         0x41, 0xB8, 3,    0,    0, 0, // mov r8d,3
+                         0x41, 0xB9, 4,    0,    0, 0,
+                         0xE8}); // mov r9d,4; call
+          const auto Jump = rel32(Consumer + Reader.size() + 4, Leaf);
+          Reader.insert(Reader.end(), Jump.begin(), Jump.end());
+          Reader.insert(Reader.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
+          put(Code, Consumer, Reader);
+          put(Code, Leaf,
+              {0x8B, 0x44, 0x24, 0x28, // mov eax,[rsp+28h]
+               0x01, 0xC8,             // add eax,ecx
+               0x01, 0xD0,             // add eax,edx
+               0x44, 0x01, 0xC0,       // add eax,r8d
+               0x44, 0x01, 0xC8,       // add eax,r9d
+               0xC3});
+        } else {
+          for (unsigned Level = 0; Level + 1 < Depth; ++Level) {
+            const va_t Relay = Consumer + 0x40 * Level;
+            std::vector<uint8_t> Forward = {0x48, 0x83, 0xEC, 0x28, 0xE8};
+            const auto Jump = rel32(Relay + Forward.size() + 4, Relay + 0x40);
+            Forward.insert(Forward.end(), Jump.begin(), Jump.end());
+            Forward.insert(Forward.end(), {0x48, 0x83, 0xC4, 0x28, 0xC3});
+            put(Code, Relay, Forward);
+          }
+          put(Code, Leaf,
+              ReadsNeighbor ? std::vector<uint8_t>{0x0F, 0xB6, 0x41, 1, 0xC3}
+                            : std::vector<uint8_t>{0x0F, 0xB6, 0x01, 0xC3});
+        }
+        std::vector<std::pair<va_t, const char *>> Names{
+            {Text, "partial_borrow"}, {Consumer, "byte_reader"}};
+        const char *RelayNames[] = {"byte_reader", "byte_relay_one",
+                                    "byte_relay_two"};
+        for (unsigned Level = 1; Level < Depth; ++Level)
+          Names.emplace_back(Consumer + 0x40 * Level, RelayNames[Level]);
+        const auto Image = makeImage(Code, Names, {"rand"});
+        std::string NativeOracle;
+        llvm::raw_string_ostream Native(NativeOracle);
+        Native << R"(
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+#include <string.h>
+static uint64_t native_seed;
+static __attribute__((ms_abi)) int machine_rand(void) {
+  ++observed;
+  __asm__ volatile("mov %0, %%rcx" : : "r"(native_seed) : "rcx");
+  return 17;
+}
+static int check_native(uint64_t seed) {
+  static const uint8_t original[] = {
+)";
+        for (uint8_t Byte : Code)
+          Native << unsigned(Byte) << ',';
+        Native << "};\n  const size_t size = " << Iat - Text + 8 << R"(;
+  uint8_t *mapping = mmap(0, size + 16, PROT_READ | PROT_WRITE | PROT_EXEC,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  uintptr_t random = (uintptr_t)machine_rand;
+)";
+        Native << "  memcpy(code + " << Iat - Text << ", &random, 8);\n";
+        Native << R"(
+  native_seed = seed;
+  observed = 0;
+  __builtin___clear_cache((char *)code, (char *)code + size);
+  uint64_t actual = ((uint64_t (__attribute__((ms_abi)) *)(void))code)();
+  int bad = actual != BORROW_EXPECTED || observed != 1;
+  if (munmap(mapping, size + 16)) return 1;
+  return bad;
+}
+#else
+static int check_native(uint64_t seed) { return 0; }
+#endif
+)";
+        for (bool OmitCallee : {false, true})
+          for (bool NoOpt : {false, true})
+            for (bool LLVM : {false, true}) {
+              SCOPED_TRACE(OmitCallee);
+              SCOPED_TRACE(NoOpt);
+              SCOPED_TRACE(LLVM);
+              llvm::LLVMContext Context;
+              PipelineOptions Options;
+              Options.EmitDumpOutput = false;
+              Options.OnlyFunctionEntries = {Text};
+              if (!OmitCallee)
+                for (unsigned Level = 0; Level < Depth; ++Level)
+                  Options.OnlyFunctionEntries.insert(Consumer + 0x40 * Level);
+              Options.NoOpt = NoOpt;
+              Options.SourceProjection = true;
+              Options.LiftMode = LLVM;
+              auto Result = Pipeline().run(Image, Context, Options);
+              ASSERT_TRUE(Result.Success) << Result.Error;
+              std::string Source;
+              llvm::raw_string_ostream Output(Source);
+              CEmitterOptions COptions;
+              COptions.TheArch = Image.Arch;
+              COptions.Format = Image.Format;
+              COptions.Image = &Image;
+              ASSERT_TRUE(LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output,
+                                                     COptions, nullptr, &Image)
+                               : HighCEmitter().emit(Result.HighFuncs, Output,
+                                                     COptions));
+              const bool Unknown =
+                  Source.find("__builtin_trap") != std::string::npos;
+              EXPECT_EQ(Unknown, ReadsNeighbor) << Source;
+              if (ReadsNeighbor || Unknown)
+                continue;
+              std::string Oracle;
+              if (OmitCallee)
+                Oracle = R"(
+#define SYMBOL_PREFIX_(prefix) #prefix
+#define SYMBOL_PREFIX(prefix) SYMBOL_PREFIX_(prefix)
+uint64_t byte_provider(uint64_t address)
+    __asm__(SYMBOL_PREFIX(__USER_LABEL_PREFIX__) "byte_reader");
+uint64_t byte_provider(uint64_t address) {
+  return *(uint8_t *)(uintptr_t)address + BORROW_EXPECTED - 37;
+}
+)";
+              Oracle += R"(
+static unsigned observed;
+int rand(void) { ++observed; return 17; }
+static int check_native(uint64_t seed);
+int main(void) {
+  for (unsigned i = 0; i < 32; ++i) {
+    observed = 0;
+    if (partial_borrow() != BORROW_EXPECTED || observed != 1) return 1;
+    if (check_native(UINT64_C(0xFEDCBA9876543210) ^
+                     (uint64_t)i * UINT64_C(0x100010001))) return 2;
+  }
+  return 0;
+}
+)";
+              for (llvm::StringRef Level : {"-O0", "-O2"})
+                source_call_execution_test::compileAndRun(
+                    Source + "\n#define BORROW_EXPECTED " +
+                        std::to_string(ScalarStackCall ? 47 : 37) + "\n" +
+                        Oracle + NativeOracle,
+                    {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+            }
+      }
+}
+
+TEST(Win64CallContract, PartialOverwriteBeforeBorrowDropsOnlyUnreadBytes) {
+  checkPartialOverwriteBorrow(false);
+}
+
+TEST(Win64CallContract, ScalarStackCallKeepsBorrowedReadExtent) {
+  checkPartialOverwriteBorrow(true);
 }
 
 TEST(Win64CallContract, BoundIntegerOperandsAgreeAcrossSourceRoutes) {
@@ -1727,6 +2573,299 @@ TEST(Win64CallContract, UnreadRegisterHolesBeforeStackArgumentsStayUnread) {
     }
 }
 
+TEST(Win64CallContract, OverwrittenStackArgumentDoesNotDemandItsEntryBytes) {
+  constexpr va_t Consumer = Text + 0x100;
+  for (bool Partial : {false, true}) {
+    SCOPED_TRACE(Partial);
+    std::vector<uint8_t> Code(0x140, 0xCC);
+    std::vector<uint8_t> Caller = {
+        0x48, 0x83, 0xEC, 0x48, 0x48, 0xC7, 0x44, 0x24, 0x20, 5, 0, 0, 0,
+        // The sixth argument is deliberately unwritten.
+        0x48, 0xC7, 0x44, 0x24, 0x30, 29, 0, 0, 0, 0x48, 0xC7, 0x44, 0x24, 0x38,
+        43, 0, 0, 0, 0x48, 0x8D, 0x4C, 0x24, 0x38, 0xE8};
+    const auto Displacement = rel32(Text + Caller.size() + 4, Consumer);
+    Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+    Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x48, 0xC3});
+    put(Code, Text, Caller);
+    std::vector<uint8_t> Body;
+    if (!Partial)
+      Body.push_back(0x48);
+    Body.insert(Body.end(),
+                {0xC7, 0x44, 0x24, 0x30, 7,    0, 0, 0, // replace sixth
+                 0x48, 0x8B, 0x01,             // read unrelated pointer
+                 0x48, 0x03, 0x44, 0x24, 0x30, // read replaced sixth
+                 0x48, 0x03, 0x44, 0x24, 0x38, // read seventh
+                 0xC3});
+    put(Code, Consumer, Body);
+    const auto Image = makeImage(
+        Code,
+        {{Text, "call_overwritten_stack"}, {Consumer, "overwriting_consumer"}},
+        {});
+    std::string NativeOracle;
+    llvm::raw_string_ostream Native(NativeOracle);
+    Native << R"(
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+#include <string.h>
+static int check_native(uint64_t seed) {
+  static const uint8_t original[] = {
+)";
+    for (uint8_t Byte : Body)
+      Native << unsigned(Byte) << ',';
+    Native << R"(};
+  void *mapping = mmap(0, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  // UBSan inspects the prefix before indirect code targets.
+  uint8_t *code = (uint8_t *)mapping + 16;
+  memcpy(code, original, sizeof(original));
+  __builtin___clear_cache((char *)code, (char *)code + sizeof(original));
+  typedef uint64_t (__attribute__((ms_abi)) *callee_t)(
+      uint64_t *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+  uint64_t pointee = 43;
+  uint64_t actual = ((callee_t)code)(&pointee, 11, 13, 17, 5, seed, 29);
+  int bad = actual != 79 || pointee != 43;
+  if (munmap(mapping, 4096)) return 1;
+  return bad;
+}
+#else
+static int check_native(uint64_t seed) { return 0; }
+#endif
+)";
+    for (bool OmitCallee : {false, true})
+      for (bool NoOpt : {false, true})
+        for (bool LLVM : {false, true}) {
+          SCOPED_TRACE(OmitCallee);
+          SCOPED_TRACE(NoOpt);
+          SCOPED_TRACE(LLVM);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee)
+            Options.OnlyFunctionEntries.insert(Consumer);
+          Options.SourceProjection = true;
+          Options.LiftMode = LLVM;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            ASSERT_TRUE(
+                LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions));
+          } else
+            ASSERT_TRUE(
+                HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          const bool Unknown =
+              Source.find("__builtin_trap") != std::string::npos;
+          EXPECT_EQ(Unknown, Partial) << Source;
+          if (Partial || Unknown)
+            continue;
+          std::string Oracle;
+          if (OmitCallee)
+            Oracle = R"(
+#define SYMBOL_PREFIX_(prefix) #prefix
+#define SYMBOL_PREFIX(prefix) SYMBOL_PREFIX_(prefix)
+uint64_t stack_provider(uint64_t, uint64_t, uint64_t, uint64_t,
+                        uint64_t, uint64_t, uint64_t)
+    __asm__(SYMBOL_PREFIX(__USER_LABEL_PREFIX__) "overwriting_consumer");
+uint64_t stack_provider(uint64_t pointer, uint64_t a1, uint64_t a2,
+                        uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6) {
+  return *(uint64_t *)(uintptr_t)pointer + 7 + a6;
+}
+)";
+          Oracle += R"(
+static int check_native(uint64_t seed);
+int main(void) {
+  for (unsigned i = 0; i < 32; ++i) {
+    if (call_overwritten_stack() != 79) return 1;
+    if (check_native(UINT64_C(0xFEDCBA9876543210) ^
+                     (uint64_t)i * UINT64_C(0x100010001))) return 2;
+  }
+  return 0;
+}
+)";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                Source + Oracle + NativeOracle,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+  }
+}
+
+TEST(Win64CallContract, BranchStackArgumentsKeepTheirEdgeValues) {
+  for (bool ByteArgument : {false, true})
+    for (bool Nested : {false, true}) {
+      SCOPED_TRACE(ByteArgument);
+      SCOPED_TRACE(Nested);
+      constexpr va_t Consumer = Text + 0x100;
+      std::vector<uint8_t> Code(0x140, 0xCC);
+      std::vector<uint8_t> Caller = {
+          0x48, 0x83, 0xEC, 0x48,        // sub rsp,48h
+          0x48, 0x89, 0x54, 0x24, 0x30,  // mov [rsp+30h],rdx
+          0x48, 0x8D, 0x42, 17,          // lea rax,[rdx+17]
+          0x48, 0x89, 0x44, 0x24, 0x38}; // mov [rsp+38h],rax
+      size_t OuterJump = 0;
+      if (Nested) {
+        Caller.insert(Caller.end(), {0xF6, 0xC1, 2, 0x75, 0});
+        OuterJump = Caller.size() - 1;
+      }
+      Caller.insert(Caller.end(), {0xF6, 0xC1, 1, 0x75, 0});
+      const size_t OtherJump = Caller.size() - 1;
+      Caller.insert(Caller.end(),
+                    {0x48, 0x8D, 0x44, 0x24, 0x30, // lea rax,[rsp+30h]
+                     0x48, 0x89, 0x44, 0x24, 0x20});
+      if (!ByteArgument)
+        Caller.push_back(0x48);
+      Caller.insert(Caller.end(), {uint8_t(ByteArgument ? 0x88 : 0x89), 0x54,
+                                   0x24, 0x28, 0xEB, 0});
+      const size_t JoinJump = Caller.size() - 1;
+      Caller[OtherJump] = Caller.size() - OtherJump - 1;
+      Caller.insert(Caller.end(),
+                    {0x48, 0x8D, 0x44, 0x24, 0x38, // lea rax,[rsp+38h]
+                     0x48, 0x89, 0x44, 0x24, 0x20, 0x48, 0x8D, 0x42,
+                     29}); // lea rax,[rdx+29]
+      if (!ByteArgument)
+        Caller.push_back(0x48);
+      Caller.insert(Caller.end(),
+                    {uint8_t(ByteArgument ? 0x88 : 0x89), 0x44, 0x24, 0x28});
+      Caller[JoinJump] = Caller.size() - JoinJump - 1;
+      if (Nested) {
+        // The two inner stores first meet here, then meet a third definition
+        // at the call. Each join needs its own edge-selected memory value.
+        Caller.insert(Caller.end(), {0x4C, 0x8D, 0x42, 7, 0xEB, 0});
+        // r8 = value + 7 keeps the inner join observable through the call.
+        const size_t FinalJump = Caller.size() - 1;
+        Caller[OuterJump] = Caller.size() - OuterJump - 1;
+        Caller.insert(Caller.end(), {0x48, 0x8D, 0x44, 0x24, 0x30, 0x48, 0x89,
+                                     0x44, 0x24, 0x20, 0x48, 0x8D, 0x42, 53});
+        if (!ByteArgument)
+          Caller.push_back(0x48);
+        Caller.insert(Caller.end(),
+                      {uint8_t(ByteArgument ? 0x88 : 0x89), 0x44, 0x24, 0x28});
+        Caller.insert(Caller.end(), {0x41, 0xB8, 11, 0, 0, 0});
+        Caller[FinalJump] = Caller.size() - FinalJump - 1;
+      }
+      Caller.insert(Caller.end(), {0x31, 0xC9, 0x31, 0xD2});
+      if (!Nested)
+        Caller.insert(Caller.end(), {0x45, 0x31, 0xC0});
+      Caller.insert(Caller.end(), {0x45, 0x31, 0xC9, 0xE8});
+      const auto Call = rel32(Text + Caller.size() + 4, Consumer);
+      Caller.insert(Caller.end(), Call.begin(), Call.end());
+      Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x48, 0xC3});
+      put(Code, Text, Caller);
+      std::vector<uint8_t> Body = {0x48, 0x8B, 0x44, 0x24,
+                                   0x28, 0x48, 0x8B, 0x00};
+      if (ByteArgument)
+        Body.insert(Body.end(), {0x0F, 0xB6, 0x54, 0x24, 0x30});
+      else
+        Body.insert(Body.end(), {0x48, 0x8B, 0x54, 0x24, 0x30});
+      Body.insert(Body.end(), {0x48, 0x01, 0xD0});
+      if (Nested)
+        Body.insert(Body.end(), {0x4C, 0x01, 0xC0});
+      Body.push_back(0xC3);
+      put(Code, Consumer, Body);
+      const auto Image = makeImage(
+          Code,
+          {{Text, "branch_stack_values"}, {Consumer, "read_branch_stack"}}, {});
+      std::string Oracle;
+      llvm::raw_string_ostream Native(Oracle);
+      Native << "\n#define NESTED_JOIN " << unsigned(Nested) << "\n";
+      Native << R"(
+#include <string.h>
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+static int check_native(uint64_t flag, uint64_t value, uint64_t expected) {
+  static const uint8_t original[] = {
+)";
+      for (uint8_t B : Code)
+        Native << unsigned(B) << ',';
+      Native << R"(};
+  uint8_t *mapping = mmap(0, sizeof(original) + 16,
+                          PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  // UBSan's indirect-function check may inspect the preceding type tag.
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  __builtin___clear_cache((char *)code, (char *)code + sizeof(original));
+  uint64_t actual = ((uint64_t (__attribute__((ms_abi)) *)(uint64_t, uint64_t))code)(flag, value);
+  int bad = actual != expected;
+  if (munmap(mapping, sizeof(original) + 16)) return 1;
+  return bad;
+}
+#else
+static int check_native(uint64_t flag, uint64_t value, uint64_t expected) { return 0; }
+#endif
+int main(void) {
+  uint64_t value = UINT64_C(0xfedcba9876543210);
+  for (unsigned i = 0; i < 64; ++i) {
+    for (uint64_t flag = 0; flag != (NESTED_JOIN ? 4 : 2); ++flag) {
+      uint64_t extra = value + (flag & 2 ? 53 : flag & 1 ? 29 : 0);
+)";
+      if (ByteArgument)
+        Native << "      extra = (uint8_t)extra;\n";
+      Native << R"(
+      uint64_t expected = value + ((flag & 1) && !(flag & 2) ? 17 : 0) + extra;
+      if (NESTED_JOIN) expected += flag & 2 ? 11 : value + 7;
+      if (check_native(flag, value, expected)) return 1;
+      if ((uint64_t)branch_stack_values(flag, value) != expected) return 2;
+    }
+    value ^= value << 13; value ^= value >> 7; value ^= value << 17;
+  }
+  return 0;
+}
+)";
+      for (bool OmitCallee : {false, true})
+        for (bool LLVM : {false, true})
+          for (bool NoOpt : {false, true}) {
+            SCOPED_TRACE(testing::Message()
+                         << OmitCallee << ':' << LLVM << ':' << NoOpt);
+            llvm::LLVMContext Context;
+            PipelineOptions Options;
+            Options.EmitDumpOutput = false;
+            Options.OnlyFunctionEntries = {Text};
+            if (!OmitCallee)
+              Options.OnlyFunctionEntries.insert(Consumer);
+            Options.LiftMode = LLVM;
+            Options.SourceProjection = true;
+            Options.NoOpt = NoOpt;
+            auto Result = Pipeline().run(Image, Context, Options);
+            ASSERT_TRUE(Result.Success) << Result.Error;
+            std::string Source;
+            llvm::raw_string_ostream Output(Source);
+            CEmitterOptions COptions;
+            COptions.TheArch = Image.Arch;
+            COptions.Format = Image.Format;
+            COptions.Image = &Image;
+            if (LLVM) {
+              ASSERT_TRUE(Result.LlvmModule);
+              ASSERT_FALSE(
+                  llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+              ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Output,
+                                              COptions, nullptr, &Image));
+            } else
+              ASSERT_TRUE(
+                  HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+            EXPECT_EQ(Source.find("unknown value"), std::string::npos)
+                << Source;
+            if (OmitCallee || Source.find("unknown value") != std::string::npos)
+              continue;
+            for (llvm::StringRef Level : {"-O0", "-O2"})
+              source_call_execution_test::compileAndRun(
+                  Source + Oracle,
+                  {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+          }
+    }
+}
+
 TEST(Win64CallContract, DebugNamedOmittedRuntimeKeepsItsFixedArity) {
   constexpr va_t Runtime = Text + 0x80;
   class PublicNames : public NullDebugContext {
@@ -1929,6 +3068,498 @@ TEST(CallExitRegisters, OverwrittenEntrySpillsAreNotValueReads) {
   }
 }
 
+TEST(CallExitRegisters, ImageReadBeforeHomeResetDoesNotDemandSpilledInput) {
+  for (unsigned Variant : {0, 1, 2, 3, 4, 5, 6, 7, 8}) {
+    SCOPED_TRACE(Variant);
+    const bool WholeRegisterForward = Variant >= 6;
+    const bool ChainedForward = Variant == 7;
+    const bool GSForward = Variant == 8;
+    const bool CallAfterConsumer = Variant >= 3;
+    const unsigned PrefixBytes =
+        WholeRegisterForward ? 0 : (CallAfterConsumer ? 1 : Variant);
+    const unsigned ExpectedCalls =
+        ChainedForward ? 3 : (CallAfterConsumer ? 2 : 1);
+    const bool ThroughWrapper = PrefixBytes != 0 || WholeRegisterForward;
+    const unsigned Flag = GSForward          ? 1
+                          : PrefixBytes == 1 ? 0x5A
+                          : PrefixBytes == 2 ? 0xA55A
+                                             : 0;
+    constexpr va_t Wrapper = Text + 0x40;
+    constexpr va_t Consumer = Text + 0x80;
+    constexpr va_t Outer = Text + 0x100;
+    constexpr va_t CookieCheck = Text + 0x180;
+    constexpr va_t Global = Iat + 0x100;
+    std::vector<uint8_t> Code(GSForward        ? 0x1A0
+                              : ChainedForward ? 0x140
+                                               : 0xC0,
+                              0xCC);
+    std::vector<uint8_t> Caller = {0x48, 0x83, 0xEC, 0x28};
+    const auto Random = throughSlot(Text + Caller.size(), Iat);
+    Caller.insert(Caller.end(), Random.begin(), Random.end());
+    if (PrefixBytes == 1)
+      Caller.insert(Caller.end(), {0xB1, 0x5A}); // mov cl,5Ah
+    else if (PrefixBytes == 2)
+      Caller.insert(Caller.end(), {0x66, 0xB9, 0x5A, 0xA5}); // mov cx,A55Ah
+    Caller.push_back(0xE8);
+    const auto Call =
+        rel32(Text + Caller.size() + 4, ChainedForward   ? Outer
+                                        : ThroughWrapper ? Wrapper
+                                                         : Consumer);
+    Caller.insert(Caller.end(), Call.begin(), Call.end());
+    Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x28, 0xC3});
+    put(Code, Text, Caller);
+    std::vector<uint8_t> Body = {0x48, 0x89, 0x4C, 0x24, 8, // mov [rsp+8],rcx
+                                 0x53,                      // push rbx
+                                 0x48, 0x83, 0xEC, 0x20};   // sub rsp,20h
+    if (Variant == 5) {
+      Body.insert(Body.end(),
+                  {0x31, 0xC0,                   // xor eax,eax
+                   0x48, 0x21, 0x44, 0x24, 0x30, // and [rsp+30h],rax
+                   0x48, 0x8B, 0x5C, 0x24, 0x50, // mov rbx,[rsp+50h]
+                   0x48, 0x8B, 0x1B});           // mov rbx,[rbx]
+    } else {
+      Body.insert(Body.end(), {0x48, 0x8B, 0x1D}); // mov rbx,[rip+global]
+      const auto Data = rel32(Consumer + Body.size() + 4, Global);
+      Body.insert(Body.end(), Data.begin(), Data.end());
+      Body.insert(Body.end(),
+                  {0x48, 0x83, 0x64, 0x24, 0x30, 0}); // and [rsp+30h],0
+    }
+    if (Variant >= 4)
+      Body.insert(Body.end(),
+                  {0xF6, 0xC3, 1,                // test bl,1
+                   0x74, 7,                      // jz other overwrite
+                   0x48, 0x8D, 0x4C, 0x24, 0x30, // lea rcx,[rsp+30h]
+                   0xEB, 5});                    // jmp reader
+    Body.insert(Body.end(), {0x48, 0x8D, 0x4C, 0x24, 0x30});
+    const auto Read = throughSlot(Consumer + Body.size(), Iat + 8);
+    Body.insert(Body.end(), Read.begin(), Read.end());
+    Body.insert(Body.end(), {0x48, 0x01, 0xD8, // add rax,rbx
+                             0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3});
+    put(Code, Consumer, Body);
+    std::vector<uint8_t> Forwarder = {0x53,                   // push rbx
+                                      0x0F, 0xB6, 0xD9,       // movzx ebx,cl
+                                      0x48, 0x83, 0xEC, 0x20, // sub rsp,20h
+                                      0xE8};
+    if (PrefixBytes == 2)
+      Forwarder[2] = 0xB7; // movzx ebx,cx
+    if (WholeRegisterForward) {
+      // No narrow entry view or spill in this wrapper: its complete incoming
+      // register only flows into the consumer that destroys it on both arms.
+      Forwarder.erase(Forwarder.begin() + 1, Forwarder.begin() + 4);
+    }
+    if (GSForward) {
+      Forwarder[4] = 0x30;
+      Forwarder.pop_back();
+      Forwarder.insert(Forwarder.end(),
+                       {0xB8, 0x34, 0x12, 0, 0,       // mov eax,1234h
+                        0x48, 0x31, 0xE0,             // xor rax,rsp
+                        0x48, 0x89, 0x44, 0x24, 0x28, // cookie above call home
+                        0xE8});
+    }
+    if (Variant == 5) {
+      Forwarder[7] = 0x30; // room for the consumer's fifth argument
+      Forwarder.pop_back();
+      Forwarder.insert(Forwarder.end(), {0x48, 0x8D, 0x05});
+      const auto Pointer = rel32(Wrapper + Forwarder.size() + 4, Global);
+      Forwarder.insert(Forwarder.end(), Pointer.begin(), Pointer.end());
+      Forwarder.insert(Forwarder.end(), {0x48, 0x89, 0x44, 0x24, 0x20, 0xE8});
+    }
+    const auto Forward = rel32(Wrapper + Forwarder.size() + 4, Consumer);
+    Forwarder.insert(Forwarder.end(), Forward.begin(), Forward.end());
+    if (CallAfterConsumer) {
+      // The later opaque call can observe stale RCX unless the consumer's
+      // original control flow destroys it without leaving a live copy.
+      Forwarder.insert(
+          Forwarder.end(),
+          {0x48, uint8_t(WholeRegisterForward ? 0x89 : 0x01), 0xC3});
+      // mov rbx,rax for a whole-register forward; otherwise add rbx,rax.
+      const auto Observe = throughSlot(Wrapper + Forwarder.size(), Iat);
+      Forwarder.insert(Forwarder.end(), Observe.begin(), Observe.end());
+      Forwarder.insert(Forwarder.end(), {0x48, 0x89, 0xD8}); // mov rax,rbx
+    } else {
+      Forwarder.insert(Forwarder.end(), {0x48, 0x01, 0xD8}); // add rax,rbx
+    }
+    if (GSForward) {
+      Forwarder.insert(Forwarder.end(),
+                       {0x48, 0x8B, 0x4C, 0x24, 0x28, // mov rcx,[rsp+28h]
+                        0x48, 0x31, 0xE1,             // xor rcx,rsp
+                        0xE8});
+      const auto Check = rel32(Wrapper + Forwarder.size() + 4, CookieCheck);
+      Forwarder.insert(Forwarder.end(), Check.begin(), Check.end());
+      Forwarder.insert(Forwarder.end(), {0x48, 0x01, 0xD8});
+      put(Code, CookieCheck,
+          {0x48, 0x81, 0xF9, 0x34, 0x12, 0, 0, // cmp rcx,1234h
+           0x0F, 0x94, 0xC0,                   // sete al
+           0x0F, 0xB6, 0xC0, 0xC3});           // movzx eax,al; ret
+    }
+    Forwarder.insert(Forwarder.end(),
+                     {0x48, 0x83, 0xC4,
+                      uint8_t(Variant == 5 || GSForward ? 0x30 : 0x20), 0x5B,
+                      0xC3}); // restore rsp; pop rbx; ret
+    put(Code, Wrapper, Forwarder);
+    if (ChainedForward) {
+      std::vector<uint8_t> OuterBody = {0x53, 0x48, 0x83, 0xEC, 0x20, 0xE8};
+      const auto Inner = rel32(Outer + OuterBody.size() + 4, Wrapper);
+      OuterBody.insert(OuterBody.end(), Inner.begin(), Inner.end());
+      OuterBody.insert(OuterBody.end(), {0x48, 0x89, 0xC3});
+      const auto Observe = throughSlot(Outer + OuterBody.size(), Iat);
+      OuterBody.insert(OuterBody.end(), Observe.begin(), Observe.end());
+      OuterBody.insert(OuterBody.end(),
+                       {0x48, 0x89, 0xD8, 0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3});
+      put(Code, Outer, OuterBody);
+    }
+    auto Image = makeImage(Code,
+                           {{Text, "reset_spill"},
+                            {Wrapper, "forward_low_byte"},
+                            {Consumer, "read_reset_home"}},
+                           {"rand", "strlen"});
+    if (ChainedForward)
+      Image.addSymbol("forward_whole_register", Outer, 0, true);
+    if (GSForward) {
+      Image.addSymbol("check_frame_cookie", CookieCheck, 0, true);
+      ExceptionFunction EH;
+      EH.CodeRange = {Wrapper, Wrapper + Forwarder.size()};
+      EH.Encoding = ExceptionEncoding::X64UnwindV1;
+      EH.UnwindVersion = 1;
+      EH.UnwindFlags = 3;
+      EH.PrologueSize = 18;
+      EH.Personality = ExceptionPersonality::GSHandlerCheck;
+      EH.PersonalityVA = Iat + 0x20;
+      EH.PersonalityName = "__GSHandlerCheck";
+      EH.HandlerDataVA = Iat + 0x28;
+      EH.LanguageTablesResolved = true;
+      UnwindOperation Allocation, Save;
+      Allocation.Kind = UnwindOperationKind::AllocateSmall;
+      Allocation.CodeOffset = 5;
+      Allocation.StackOffset = 48;
+      Save.Kind = UnwindOperationKind::PushNonVolatile;
+      Save.CodeOffset = 1;
+      Save.Register = 3;
+      EH.UnwindOperations = {Allocation, Save};
+      EH.GSCookie.emplace();
+      EH.GSCookie->ParseStatus = ExceptionParseStatus::Complete;
+      EH.GSCookie->CookieOffset = 40;
+      EH.GSCookie->Payload = {40, 0, 0, 0};
+      Image.ExceptionMetadata.Functions.push_back(std::move(EH));
+      Image.ExceptionMetadata.rebuildIndex();
+    }
+    Segment Storage;
+    Storage.Name = ".data";
+    Storage.VA = Global;
+    Storage.Size = Storage.FileSz = 8;
+    Storage.Data.resize(8);
+    Storage.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Image.Segments.push_back(std::move(Storage));
+    Symbol Object;
+    Object.Addr = Global;
+    Object.Name = "spill_global";
+    Object.Size = 8;
+    Image.Symbols.push_back(std::move(Object));
+    std::string NativeOracle;
+    llvm::raw_string_ostream Native(NativeOracle);
+    Native << R"(
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+static uint64_t incoming_seed;
+static __attribute__((ms_abi)) int machine_rand(void) {
+  int value = rand();
+  __asm__ volatile("movq %0, %%rcx" : : "r"(incoming_seed) : "rcx");
+  return value;
+}
+static __attribute__((ms_abi)) size_t machine_strlen(const char *p) {
+  return strlen(p);
+}
+static int check_native(uint64_t value, uint64_t seed) {
+  static const uint8_t original[] = {
+)";
+    for (uint8_t Byte : Code)
+      Native << unsigned(Byte) << ',';
+    const size_t Bytes = Global - Text + sizeof(uint64_t);
+    Native << "};\n  const size_t size = " << Bytes << R"(;
+  uint8_t *mapping = mmap(0, size + 16, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  uintptr_t random = (uintptr_t)machine_rand;
+  uintptr_t reader = (uintptr_t)machine_strlen;
+)";
+    Native << "  memcpy(code + " << Iat - Text << ", &random, 8);\n"
+           << "  memcpy(code + " << Iat - Text + 8 << ", &reader, 8);\n"
+           << "  memcpy(code + " << Global - Text << ", &value, 8);\n"
+           << R"(
+  incoming_seed = seed;
+  calls = 0;
+  __builtin___clear_cache((char *)code, (char *)code + size);
+  uint64_t actual = ((uint64_t (__attribute__((ms_abi)) *)(void))code)();
+  int bad = actual != value + )"
+           << Flag << " || calls != " << ExpectedCalls << R"(;
+  if (munmap(mapping, size + 16)) return 1;
+  return bad;
+}
+#else
+static int check_native(uint64_t value, uint64_t seed) { return 0; }
+#endif
+)";
+    for (bool OmitCallee : {false, true})
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(testing::Message()
+                       << OmitCallee << ':' << LLVM << ':' << NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee) {
+            Options.OnlyFunctionEntries.insert(Consumer);
+            if (ThroughWrapper)
+              Options.OnlyFunctionEntries.insert(Wrapper);
+            if (ChainedForward)
+              Options.OnlyFunctionEntries.insert(Outer);
+            if (GSForward)
+              Options.OnlyFunctionEntries.insert(CookieCheck);
+          }
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          ASSERT_TRUE(
+              LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                         nullptr, &Image)
+                   : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+          if (OmitCallee || Source.find("__builtin_trap") != std::string::npos)
+            continue;
+          const std::string Providers = R"(
+#include <string.h>
+static unsigned calls;
+int rand(void) { ++calls; return 17; }
+)";
+          const std::string Oracle = R"(
+int main(void) {
+  uint64_t seed = UINT64_C(0xfedcba9876543210);
+  for (unsigned i = 0; i < 64; ++i) {
+    uint64_t value = i ? seed : 37;
+    if (check_native(value, seed)) return 1;
+    memcpy(&spill_global, &value, sizeof(value));
+    calls = 0;
+    if ((uint64_t)reset_spill() != value + EXPECTED_LOW || calls != EXPECTED_CALLS) return 2;
+    seed ^= seed << 13;
+    seed ^= seed >> 7;
+    seed ^= seed << 17;
+  }
+  return 0;
+}
+)";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                Source + Providers + NativeOracle + "\n#define EXPECTED_LOW " +
+                    std::to_string(Flag) + "\n#define EXPECTED_CALLS " +
+                    std::to_string(ExpectedCalls) + "\n" + Oracle,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+  }
+}
+
+TEST(CallExitRegisters, UnusedIncomingStackSlotsDoNotRequireValues) {
+  for (unsigned Flow = 0; Flow != 9; ++Flow) {
+    const unsigned Shape = Flow % 3;
+    const bool Alias = Flow >= 3;
+    const bool ImageRead = Flow >= 6;
+    constexpr va_t Global = Iat + 0x100;
+    SCOPED_TRACE(Flow);
+    constexpr va_t Wrapper = Text + 0x80;
+    std::vector<uint8_t> Code(0xC0, 0xCC);
+    std::vector<uint8_t> Caller = {
+        0x48, 0x83, 0xEC, 0x38,       // sub rsp,38h
+        0x48, 0x89, 0x4C, 0x24, 0x28, // mov [rsp+28h],rcx
+        0x48, 0x89, 0x54, 0x24, 0x30, // mov [rsp+30h],rdx
+        0xE8};
+    const auto ToWrapper = rel32(Text + Caller.size() + 4, Wrapper);
+    Caller.insert(Caller.end(), ToWrapper.begin(), ToWrapper.end());
+    Caller.insert(Caller.end(), {0x48, 0x83, 0xC4, 0x38, 0xC3});
+    put(Code, Text, Caller);
+    std::vector<uint8_t> Body = {0x53,                   // push rbx
+                                 0x48, 0x83, 0xEC, 0x20, // sub rsp,20h
+                                 0x48, 0x8B, 0x5C, 0x24,
+                                 0x58}; // mov rbx,[rsp+58h] (argument 5)
+    if (Alias) {
+      Body = {0x53, 0x48, 0x83, 0xEC, 0x20, // push rbx; sub rsp,20h
+              0x49, 0x89, 0xE3,             // mov r11,rsp
+              0x49, 0x8B, 0x5B, 0x58};      // mov rbx,[r11+58h]
+    }
+    if (Alias && Shape == 1) {
+      Body.insert(Body.end(), {0xF6, 0xC1, 0x01,         // test cl,1
+                               0x74, 0x06,               // jz subtract
+                               0x49, 0x03, 0x5B, 0x60,   // add rbx,[r11+60h]
+                               0xEB, 0x04,               // jmp join
+                               0x49, 0x2B, 0x5B, 0x60}); // sub rbx,[r11+60h]
+    } else if (Alias && Shape == 2) {
+      Body.insert(Body.end(), {0x41, 0xBA, 0x03, 0x00, 0x00, 0x00, // mov r10d,3
+                               0x49, 0x03, 0x5B, 0x60, // add rbx,[r11+60h]
+                               0x41, 0xFF, 0xCA,       // dec r10d
+                               0x75, 0xF7});           // jnz add
+    } else if (Alias) {
+      Body.insert(Body.end(), {0x49, 0x03, 0x5B, 0x60});
+    } else if (Shape == 1) {
+      Body.insert(Body.end(),
+                  {0xF6, 0xC1, 0x01,               // test cl,1
+                   0x74, 0x07,                     // jz subtract
+                   0x48, 0x03, 0x5C, 0x24, 0x60,   // add rbx,[rsp+60h]
+                   0xEB, 0x05,                     // jmp join
+                   0x48, 0x2B, 0x5C, 0x24, 0x60}); // sub rbx,[rsp+60h]
+    } else if (Shape == 2) {
+      Body.insert(Body.end(),
+                  {0x41, 0xBA, 0x03, 0x00, 0x00, 0x00, // mov r10d,3
+                   0x48, 0x03, 0x5C, 0x24, 0x60,       // add rbx,[rsp+60h]
+                   0x41, 0xFF, 0xCA,                   // dec r10d
+                   0x75, 0xF6});                       // jnz add
+    } else {
+      Body.insert(Body.end(), {0x48, 0x03, 0x5C, 0x24, 0x60});
+    }
+    if (ImageRead) {
+      // A mutable image read must remain live even though it cannot observe
+      // the missing incoming stack slot.
+      const auto Displacement = rel32(Wrapper + Body.size() + 7, Global);
+      Body.insert(Body.end(), {0x48, 0x33, 0x1D}); // xor rbx,[rip+disp32]
+      Body.insert(Body.end(), Displacement.begin(), Displacement.end());
+    }
+    // Kill the complete physical alias before the opaque import. The lifted
+    // 32-bit definition includes its explicit zero-extension to all 64 bits.
+    if (Alias)
+      Body.insert(Body.end(), {0x45, 0x31, 0xDB}); // xor r11d,r11d
+    const auto Random = throughSlot(Wrapper + Body.size(), Iat);
+    Body.insert(Body.end(), Random.begin(), Random.end());
+    Body.insert(Body.end(), {0x48, 0x01, 0xD8, // add rax,rbx
+                             0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3});
+    put(Code, Wrapper, Body);
+    auto Image = makeImage(
+        Code, {{Text, "stack_hole"}, {Wrapper, "stack_wrapper"}}, {"rand"});
+    if (ImageRead) {
+      Segment Storage;
+      Storage.Name = ".data";
+      Storage.VA = Global;
+      Storage.Size = Storage.FileSz = 8;
+      Storage.Data.resize(8);
+      Storage.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Image.Segments.push_back(std::move(Storage));
+      Symbol Object;
+      Object.Addr = Global;
+      Object.Name = "stack_salt";
+      Object.Size = 8;
+      Image.Symbols.push_back(std::move(Object));
+    }
+    std::string NativeOracle;
+    llvm::raw_string_ostream Native(NativeOracle);
+    Native << R"(
+#if defined(__linux__) && defined(__x86_64__)
+#include <sys/mman.h>
+static __attribute__((ms_abi)) int machine_rand(void) { return rand(); }
+static int check_native(uint64_t a, uint64_t b) {
+  static const uint8_t original[] = {
+)";
+    for (uint8_t Byte : Code)
+      Native << unsigned(Byte) << ',';
+    Native << "};\n  const size_t size = " << Global - Text + 8 << R"(;
+  uint8_t *mapping = mmap(0, size + 16, PROT_READ | PROT_WRITE | PROT_EXEC,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapping == MAP_FAILED) return 1;
+  uint8_t *code = mapping + 16;
+  memcpy(code, original, sizeof(original));
+  uintptr_t random = (uintptr_t)machine_rand;
+)";
+    Native << "  memcpy(code + " << Iat - Text << ", &random, 8);\n";
+    if (ImageRead)
+      Native << "  uint64_t salt = a ^ (b << 7);\n  memcpy(code + "
+             << Global - Text << ", &salt, 8);\n";
+    Native << R"(
+  calls = 0;
+  __builtin___clear_cache((char *)code, (char *)code + size);
+  uint64_t actual = ((uint64_t (__attribute__((ms_abi)) *)(uint64_t,uint64_t))code)(a,b);
+  uint64_t combined = FLOW_KIND == 2 ? a + 3 * b : (FLOW_KIND == 0 || (a & 1) ? a + b : a - b);
+#if HAS_IMAGE_READ
+  combined ^= salt;
+#endif
+  int bad = actual != combined + 17 || calls != 1;
+  if (munmap(mapping, size + 16)) return 1;
+  return bad;
+}
+#else
+static int check_native(uint64_t a, uint64_t b) { return 0; }
+#endif
+)";
+    for (bool OmitCallee : {false, true})
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(testing::Message()
+                       << OmitCallee << ':' << LLVM << ':' << NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text};
+          if (!OmitCallee)
+            Options.OnlyFunctionEntries.insert(Wrapper);
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          ASSERT_TRUE(
+              LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                         nullptr, &Image)
+                   : HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+          if (OmitCallee || Source.find("__builtin_trap") != std::string::npos)
+            continue;
+          if (ImageRead && !LLVM)
+            Source += "\n__typeof__(stack_salt) stack_salt;\n";
+          const std::string Providers = R"(
+#include <string.h>
+static unsigned calls;
+int rand(void) { ++calls; return 17; }
+)";
+          const std::string Oracle = R"(
+int main(void) {
+  uint64_t a = UINT64_C(0xfedcba9876543210);
+  for (unsigned i = 0; i < 64; ++i) {
+    uint64_t b = a ^ UINT64_C(0x123456789abcdef0);
+    if (check_native(a, b)) return 1;
+    calls = 0;
+    uint64_t combined = FLOW_KIND == 2 ? a + 3 * b : (FLOW_KIND == 0 || (a & 1) ? a + b : a - b);
+#if HAS_IMAGE_READ
+    uint64_t salt = a ^ (b << 7);
+    memcpy(&stack_salt, &salt, sizeof(salt));
+    combined ^= salt;
+#endif
+    if ((uint64_t)stack_hole(a, b) != combined + 17 || calls != 1) return 2;
+    a ^= a << 13; a ^= a >> 7; a ^= a << 17;
+  }
+  return 0;
+}
+)";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                Source + Providers + "\n#define FLOW_KIND " +
+                    std::to_string(Shape) + "\n#define HAS_IMAGE_READ " +
+                    std::to_string(ImageRead) + "\n" + NativeOracle + Oracle,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+  }
+}
+
 TEST(CallExitRegisters, EntrySpillProofKeepsObservedBytesAndEscapes) {
   for (unsigned Version : {0u, 3u})
     for (unsigned Mode = 0; Mode < 7; ++Mode) {
@@ -2011,10 +3642,111 @@ TEST(CallExitRegisters, EntrySpillProofKeepsObservedBytesAndEscapes) {
     }
 }
 
+TEST(SourceStackSpills, TemporaryRestoreChainsExecuteBothSourceRoutes) {
+  for (BinaryFormat Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (bool RestoreRegister : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      SCOPED_TRACE(RestoreRegister);
+      const auto Register = [](uint64_t Offset, int Version) {
+        MedVar Value;
+        Value.Kind = MedVar::Reg;
+        Value.TheArch = Arch::X64;
+        Value.Id = Offset / 8 + 1;
+        Value.RegOff = Offset;
+        Value.SSAVer = Version;
+        Value.Size = 8;
+        return Value;
+      };
+      const auto Temp = [](int Id) {
+        MedVar Value;
+        Value.Kind = MedVar::Temp;
+        Value.TheArch = Arch::X64;
+        Value.Id = Id;
+        Value.SSAVer = 1;
+        Value.Size = 8;
+        return Value;
+      };
+      const auto Op = [](NdOp Opcode, MedVar Output,
+                         std::initializer_list<MedVar> Inputs) {
+        MedOp Result;
+        Result.Opcode = Opcode;
+        Result.Output = Output;
+        for (const auto &Input : Inputs)
+          Result.addInput(Input);
+        return Result;
+      };
+      const auto SP = [&](int Version) {
+        return Register(x86reg::RSP, Version);
+      };
+      MedFunc Function;
+      Function.Entry = 0x1000;
+      Function.Name = "restored_scratch";
+      Function.CC = CallingConv::Win64;
+      Function.FrameSize = 16;
+      Function.ReturnType = NdType::makeInt(8, false);
+      MedBlock Block;
+      Block.Id = 0;
+      Block.StartAddr = Function.Entry;
+      Block.Ops = {
+          Op(NdOp::COPY, SP(0), {SP(0)}),
+          Op(NdOp::INT_SUB, SP(1), {SP(0), MedVar::makeConst(16, 8)}),
+          Op(NdOp::STORE, {}, {SP(1), MedVar::makeUnspecified(8, Arch::X64)}),
+          Op(NdOp::LOAD, Temp(100), {SP(1)}),
+          Op(NdOp::COPY, Temp(101), {Temp(100)}),
+          Op(NdOp::COPY, RestoreRegister ? Register(x86reg::R10, 1) : Temp(102),
+             {Temp(101)}),
+          Op(NdOp::STORE, {}, {SP(1), MedVar::makeConst(19, 8)}),
+          Op(NdOp::LOAD, Temp(103), {SP(1)}),
+          Op(NdOp::INT_ADD, SP(2), {SP(1), MedVar::makeConst(16, 8)}),
+          Op(NdOp::RETURN, {}, {Temp(103)})};
+      Function.Blocks.push_back(std::move(Block));
+      markSourceStackAccesses(Function, Arch::X64, Format);
+      ASSERT_TRUE(Function.Blocks.front().Ops[2].PrologueSave);
+      for (bool LLVM : {false, true}) {
+        SCOPED_TRACE(LLVM);
+        BinaryImage Image;
+        Image.Arch = Arch::X64;
+        Image.Format = Format;
+        Image.Bits = Bitness::Bits64;
+        CEmitterOptions Options;
+        Options.TheArch = Image.Arch;
+        Options.Format = Format;
+        Options.Image = &Image;
+        std::string Source;
+        llvm::raw_string_ostream Output(Source);
+        if (LLVM) {
+          llvm::LLVMContext Context;
+          MedLLVMEmitter Emitter;
+          Emitter.setPreserveUnknownSourceValues(true);
+          auto Module = Emitter.emit({Function}, Context, "scratch_copies",
+                                     Arch::X64, {}, &Image, Format);
+          ASSERT_TRUE(Module);
+          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          Pipeline::optimizeOrPromoteModule(*Module);
+          ASSERT_TRUE(LLVMCEmitter().emit(*Module, Output, Options));
+        } else {
+          MedToHighConverter Converter;
+          Converter.setBinaryImage(&Image);
+          const auto High = Converter.convert(Function, Arch::X64);
+          ASSERT_TRUE(HighCEmitter().emit({High}, Output, Options));
+        }
+        EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+        const std::string Oracle =
+            "int main(void) { return restored_scratch() != 19; }";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Source + Oracle,
+              {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+      }
+    }
+}
+
 class OverwrittenCallClobberSpills : public testing::TestWithParam<unsigned> {};
 
 INSTANTIATE_TEST_SUITE_P(SourceStackSpills, OverwrittenCallClobberSpills,
-                         testing::Values(0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u));
+                         testing::Values(0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u,
+                                         9u));
 
 TEST_P(OverwrittenCallClobberSpills, AreNotValueReads) {
   const unsigned Variant = GetParam();
@@ -2031,11 +3763,12 @@ TEST_P(OverwrittenCallClobberSpills, AreNotValueReads) {
     std::vector<uint8_t> Code = {0x48, 0x83, 0xEC, 0x28};
     Code.insert(Code.end(), Call.begin(), Call.end());
     constexpr va_t Callee = Text + 0x80;
+    va_t ObservedReturnPC = 0;
     if ((Variant >= 3 && Variant <= 4) || Variant >= 7) {
       // PUSHF explicitly overwrites the released push slot after ADD.
       // Passing another frame member to strlen keeps the frame observable.
       Code.insert(Code.end(), {0x66, 0xc7, 0x44, 0x24, 0x10, 97, 0});
-      if (Variant >= 7)
+      if (Variant == 7 || Variant == 8)
         Code.insert(Code.end(), {0x6a, 19}); // push 19
       else
         Code.insert(Code.end(), {0x41, 0x53}); // push r11
@@ -2051,13 +3784,14 @@ TEST_P(OverwrittenCallClobberSpills, AreNotValueReads) {
                                0x24, 0x10});
       const auto Read = throughSlot(Text + Code.size(), slot(1));
       Code.insert(Code.end(), Read.begin(), Read.end());
+      ObservedReturnPC = Text + Code.size();
       if (Variant == 8)
         // A complete explicit write after CALL supplies real source bytes.
         Code.insert(Code.end(), {0x48, 0xc7, 0x44, 0x24, 0xf8, 19, 0, 0, 0});
-      if (Variant == 4 || Variant >= 7)
+      if (Variant == 4 || Variant == 7 || Variant == 8)
         // The old slot can hold an unavailable register OR a known constant.
-        // Neither represents the CALL's new return address. Variant 8 alone
-        // supplies the complete later write before the observed load.
+        // Neither represents the CALL's new return address. Source preparation
+        // must materialize that exact word; variant 8 overwrites it again.
         Code.insert(Code.end(), {0x48, 0x8b, 0x44, 0x24, 0xf8});
       Code.insert(Code.end(), {0x48, 0x83, 0xc4, 0x28, 0xc3});
     } else {
@@ -2113,13 +3847,6 @@ TEST_P(OverwrittenCallClobberSpills, AreNotValueReads) {
         Options.SourceProjection = true;
         Options.NoOpt = NoOpt;
         auto Result = Pipeline().run(Image, Context, Options);
-        if (Variant == 4 || Variant == 7) {
-          EXPECT_FALSE(Result.Success);
-          EXPECT_NE(Result.Error.find("physical CALL return slot"),
-                    std::string::npos)
-              << Result.Error;
-          continue;
-        }
         ASSERT_TRUE(Result.Success) << Result.Error;
         std::string Source;
         llvm::raw_string_ostream Output(Source);
@@ -2169,13 +3896,27 @@ static size_t spill_strlen_provider(const char *p) {
 #define rand spill_provider
 #define strlen spill_strlen_provider
 )";
-        const std::string Oracle =
-            Variant == 3   ? "int main(void) { return reused_scratch() != 1 || "
-                             "calls != 2; }"
+        std::string Oracle =
+            Variant == 3 || Variant == 9
+                ? "int main(void) { return reused_scratch() != 1 || "
+                  "calls != 2; }"
             : Variant == 8 ? "int main(void) { return reused_scratch() != 19 "
                              "|| calls != 2; }"
                            : "int main(void) { return reused_scratch() != 19 "
                              "|| calls != 1; }";
+        if (Variant == 4 || Variant == 7)
+          Oracle = nativeReturnPCOracle(Code, ObservedReturnPC,
+                                        Format == BinaryFormat::COFF, true) +
+                   "int main(void) { if (check_native_return_pc()) return 2; "
+                   "return (uint64_t)reused_scratch() != UINT64_C(" +
+                   std::to_string(ObservedReturnPC) + ") || calls != 2; }";
+        if (Variant == 9)
+          // The original CALL replaces the unavailable scratch word even
+          // though the body never loads its new return-PC value.
+          Oracle = nativeReturnPCOracle(Code, ObservedReturnPC,
+                                        Format == BinaryFormat::COFF, true, 1) +
+                   "int main(void) { return check_native_return_pc() || "
+                   "reused_scratch() != 1 || calls != 2; }";
         for (llvm::StringRef Level : {"-O0", "-O2"})
           source_call_execution_test::compileAndRun(
               Provider + Native + Oracle,
@@ -3797,6 +5538,96 @@ TEST(Win64CallContract, CallersPassWhatAnExportedRoutinesPrototypeDeclares) {
   EXPECT_EQ(Reads.at(Extra)[family(x86reg::R9)], 8u);
 }
 
+TEST(Win64CallContract, AGuardedBsrCalleeReadsNoDestinationRegister) {
+  // The callee runs `bsr r8, rcx` only where RCX is nonzero, so it always
+  // writes R8 and never reads the old value. The run lifts the callee only
+  // for its summary, and that body is folded like a published one: its
+  // summary reads RCX and not R8, which the caller never sets.
+  constexpr va_t Caller = Text, Callee = Text + 0x20;
+  std::vector<uint8_t> Code(0x40, 0xCC);
+  // sub rsp, 28h; call Callee; add rsp, 28h; ret
+  std::vector<uint8_t> CallerCode = {0x48, 0x83, 0xEC, 0x28, 0xE8};
+  for (uint8_t B : rel32(Caller + CallerCode.size() + 4, Callee))
+    CallerCode.push_back(B);
+  for (uint8_t B : {0x48, 0x83, 0xC4, 0x28, 0xC3})
+    CallerCode.push_back(B);
+  put(Code, Caller, CallerCode);
+  // test rcx, rcx; je zero; bsr r8, rcx; mov rax, r8; ret;
+  // zero: xor eax, eax; ret
+  put(Code, Callee,
+      {0x48, 0x85, 0xC9, 0x74, 0x08, 0x4C, 0x0F, 0xBD, 0xC1, 0x4C, 0x89, 0xC0,
+       0xC3, 0x31, 0xC0, 0xC3});
+  const BinaryImage Img =
+      makeImage(Code, {{Caller, "caller"}, {Callee, "highest_bit"}}, {});
+  llvm::LLVMContext Ctx;
+  const PipelineResult Result = run(Img, Ctx, {Caller});
+  const auto &Reads = Result.CallEntryReadGPRs;
+  ASSERT_TRUE(Reads.count(Callee));
+  EXPECT_EQ(Reads.at(Callee)[family(x86reg::RCX)], 8u);
+  EXPECT_EQ(Reads.at(Callee)[family(x86reg::R8)], 0u);
+}
+
+TEST(Win64CallContract, PreparedSummariesReadCalleesPastTheRunsDepth) {
+  // caller -> f1 -> ... -> fN, each passing its argument registers on, and
+  // fN reads R9: one call deeper than a run summarizes callees.  The run of
+  // the caller leaves fN unread, so f1 seems to read nothing.  A session's
+  // image summaries read every function, as a whole-image run does.
+  constexpr size_t Chain = limits::kMaxCallEffectCalleeDepth + 1;
+  constexpr va_t Stride = 0x20;
+  std::vector<uint8_t> Code((Chain + 1) * Stride, 0xCC);
+  std::vector<std::pair<va_t, const char *>> Functions;
+  static const char *const Names[] = {"caller", "f1", "f2", "f3",
+                                      "f4",     "f5", "f6", "f7"};
+  static_assert(Chain < std::size(Names));
+  for (size_t I = 0; I <= Chain; ++I) {
+    const va_t At = Text + I * Stride;
+    Functions.emplace_back(At, Names[I]);
+    if (I == Chain) {
+      // mov rax, r9; ret
+      put(Code, At, {0x4C, 0x89, 0xC8, 0xC3});
+      break;
+    }
+    // sub rsp, 28h; call next; add rsp, 28h; ret
+    std::vector<uint8_t> Call = {0xE8};
+    for (uint8_t B : rel32(At + 9, At + Stride))
+      Call.push_back(B);
+    put(Code, At, framed({Call}));
+  }
+  const BinaryImage Img = makeImage(Code, Functions, {});
+  const va_t First = Text + Stride, Last = Text + Chain * Stride;
+  llvm::LLVMContext Ctx;
+  PipelineAnalysisCache Cache;
+  PipelineOptions Opts;
+  Opts.EmitDumpOutput = false;
+  Opts.OnlyFunctionEntries = {Text};
+  Opts.AnalysisCache = &Cache;
+  {
+    const PipelineResult Closure = Pipeline().run(Img, Ctx, Opts);
+    ASSERT_TRUE(Closure.Success) << Closure.Error;
+    EXPECT_FALSE(Closure.CallEntryReadGPRs.count(Last));
+    ASSERT_TRUE(Closure.CallEntryReadGPRs.count(First));
+    EXPECT_EQ(Closure.CallEntryReadGPRs.at(First)[family(x86reg::R9)], 0u);
+  }
+  ASSERT_TRUE(Pipeline().prepareCallSummaries(Img, Opts, nullptr));
+  const PipelineResult Prepared = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Prepared.Success) << Prepared.Error;
+  PipelineOptions WholeOpts;
+  WholeOpts.EmitDumpOutput = false;
+  const PipelineResult Whole = Pipeline().run(Img, Ctx, WholeOpts);
+  ASSERT_TRUE(Whole.Success) << Whole.Error;
+  for (size_t I = 1; I <= Chain; ++I) {
+    const va_t Entry = Text + I * Stride;
+    SCOPED_TRACE(Names[I]);
+    ASSERT_TRUE(Prepared.CallEntryReadGPRs.count(Entry));
+    ASSERT_TRUE(Whole.CallEntryReadGPRs.count(Entry));
+    EXPECT_EQ(Prepared.CallEntryReadGPRs.at(Entry)[family(x86reg::R9)], 8u);
+    EXPECT_EQ(Prepared.CallEntryReadGPRs.at(Entry),
+              Whole.CallEntryReadGPRs.at(Entry));
+    EXPECT_EQ(Prepared.CallMayWriteGPRs.at(Entry),
+              Whole.CallMayWriteGPRs.at(Entry));
+  }
+}
+
 TEST(Win64CallContract, AnOutgoingArgumentMayReuseAnAddressTakenLocal) {
   constexpr va_t Initialize = Text + 0x80, Consume = Text + 0xA0;
   std::vector<uint8_t> Code(0xC0, 0xCC);
@@ -3999,6 +5830,65 @@ TEST(Win64CallContract, ADataImportReadsAsItsSlot) {
   EXPECT_EQ(Source.find("refptr"), std::string::npos) << Source;
 }
 
+TEST(Win64CallContract, PreparedImageNamesNameEveryDataSlotAsTheImageDoes) {
+  // Three data imports read through their slots: one with a label and two
+  // `__imp_` symbols at its slot (the first names it), one whose `__imp_`
+  // name a symbol elsewhere holds (it keeps no slot identifier), and one the
+  // format's prefix and its name alone name.  An emitter that prepared the
+  // image's names writes what one reading the image writes.
+  constexpr va_t First = Text, Second = Text + 0x20, Third = Text + 0x40;
+  std::vector<uint8_t> Code(0x60, 0xCC);
+  for (auto [At, Index] :
+       {std::pair{First, size_t{0}}, std::pair{Second, size_t{1}},
+        std::pair{Third, size_t{2}}}) {
+    std::vector<uint8_t> Read = {0x48, 0x8B, 0x05}; // mov rax, [rip + slot]
+    for (uint8_t B : rel32(At + 7, slot(Index)))
+      Read.push_back(B);
+    Read.push_back(0xC3); // ret
+    put(Code, At, Read);
+  }
+  BinaryImage Img = makeImage(Code,
+                              {{First, "read_commode"},
+                               {Second, "read_fmode"},
+                               {Third, "read_environ"}},
+                              {"_commode", "_fmode", "_environ"});
+  for (auto [Name, Address] : {std::pair{"commode_cell", slot(0)},
+                               std::pair{"__imp_commode_first", slot(0)},
+                               std::pair{"__imp_commode_second", slot(0)},
+                               std::pair{"__imp__fmode", Text + 0x58}}) {
+    Symbol Sym;
+    Sym.Name = Name;
+    Sym.Addr = Address;
+    Img.Symbols.push_back(std::move(Sym));
+  }
+  llvm::LLVMContext Ctx;
+  const PipelineResult Result = run(Img, Ctx, {First, Second, Third});
+  const auto Emit = [&](HighCEmitter &Emitter) {
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Img.Arch;
+    Options.Format = Img.Format;
+    Options.Image = &Img;
+    EXPECT_TRUE(Emitter.emit(Result.HighFuncs, OS, Options));
+    return Source;
+  };
+  HighCEmitter Plain;
+  HighCEmitter Prepared;
+  Prepared.prepareImageFunctionNames(Img);
+  const std::string Source = Emit(Prepared);
+  EXPECT_EQ(Source, Emit(Plain));
+  EXPECT_NE(body(Source, "read_commode").find("__imp_commode_first"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("__imp_commode_second"), std::string::npos) << Source;
+  EXPECT_EQ(body(Source, "read_fmode").find("__imp__fmode"), std::string::npos)
+      << Source;
+  EXPECT_NE(body(Source, "read_environ").find("__imp__environ"),
+            std::string::npos)
+      << Source;
+}
+
 TEST(Win64CallContract, AFloatArgumentTakesItsSlotsVectorRegister) {
   // scale(x, n) = x * n reads x in xmm0, the first slot's vector register,
   // and n in edx, the second slot's integer one. twice(x) = x + x;
@@ -4100,10 +5990,8 @@ void checkPointerQualifiers(bool Local) {
               if (!Type || Type->SourceName != "fixture_record")
                 continue;
               Definitions.Tags["fixture_record"] = Debug.Union;
-              if (!Pointer) {
-                Definitions.Records["fixture_record"] = Debug.Union;
-                Definitions.Text = Debug.element() + " { uint16_t value; };";
-              }
+              // Pointer-only declarations need the tag, not a record body.
+              // The independent provider below owns the complete definition.
             }
             return Definitions;
           };
@@ -4143,8 +6031,8 @@ void checkPointerQualifiers(bool Local) {
               " *input = &value;\n  uint32_t output = 41;\n"
               "  " +
               (VoidResult ? "" : "uintptr_t result = ") +
-              "forward_qualified((uintptr_t)" + (Nested ? "&input" : "input") +
-              ", (uintptr_t)&output);\n"
+              "forward_qualified((void*)" + (Nested ? "&input" : "input") +
+              ", &output);\n"
               "  return " +
               (VoidResult ? "" : "result != (uintptr_t)&value || ") +
               "output != 42;\n}\n";
@@ -5136,7 +7024,7 @@ TEST(CallExitRegisters, PureRegisterLeafKeepsDynamicExtraResults) {
 #endif
   for (BinaryFormat Format :
        {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
-    for (unsigned Mutation : {0u, 9u, 10u}) {
+    for (unsigned Mutation : {0u, 7u, 9u, 10u}) {
       auto Image = registerQueryImage(Mutation);
       Image.Format = Format;
       PipelineAnalysisCache Cache;
@@ -5198,6 +7086,12 @@ int main(void) {
             Oracle.replace(Oracle.find(Whole), Whole.size(),
                            "(((c ^ UINT32_C(0xFEDCBA98)) >> 8) & 255)");
           }
+          if (Mutation == 7)
+            Oracle = nativeReturnPCOracle(Image.Segments.front().Data, Text + 9,
+                                          Format == BinaryFormat::COFF, false) +
+                     "int main(void) { return check_native_return_pc() || "
+                     "(uint64_t)observe_cpu_words() != UINT64_C(" +
+                     std::to_string(Text + 9) + "); }";
           for (llvm::StringRef Level : {"-O0", "-O2"})
             source_call_execution_test::compileAndRun(
                 Source + Oracle,
@@ -5208,7 +7102,7 @@ int main(void) {
 
 TEST(CallExitRegisters, RegisterQueryKeepsUnprovedBoundaries) {
   constexpr va_t Producer = Text + 0x80;
-  for (unsigned Mutation : {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 12u, 13u, 14u, 15u})
+  for (unsigned Mutation : {1u, 2u, 3u, 4u, 5u, 6u, 8u, 12u, 13u, 14u, 15u})
     for (bool LLVM : {false, true})
       for (bool NoOpt : {false, true}) {
         SCOPED_TRACE(Mutation);
@@ -5223,13 +7117,6 @@ TEST(CallExitRegisters, RegisterQueryKeepsUnprovedBoundaries) {
         Options.LiftMode = LLVM;
         Options.NoOpt = NoOpt;
         auto Result = Pipeline().run(Image, Context, Options);
-        if (Mutation == 7) {
-          EXPECT_FALSE(Result.Success);
-          EXPECT_NE(Result.Error.find("physical CALL return slot"),
-                    std::string::npos)
-              << Result.Error;
-          continue;
-        }
         ASSERT_TRUE(Result.Success) << Result.Error;
         bool CallsOriginal = false;
         for (const auto &Function : Result.MedFuncs)
@@ -5288,3 +7175,575 @@ TEST(Win64CallContract, RegisterQueryWindowsSourceCompilesWithItsHeaders) {
   }
 }
 } // namespace
+
+TEST(SummarizedCallArguments,
+     CopiedCallClobbersNeedActualSetupOrARequiredSlot) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Bits = Bitness::Bits64;
+  const std::array<unsigned, 7> ExpectedArgs{1, 2, 1, 2, 2, 3, 1};
+  for (unsigned Variant = 0; Variant < ExpectedArgs.size(); ++Variant) {
+    SCOPED_TRACE(Variant);
+    MedFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "transport_wrap";
+    Function.CC = CallingConv::Win64;
+    Function.ReturnType = NdType::makeInt(8, false);
+    Function.DefinedReturnBytes = 8;
+    Function.Blocks.resize(1);
+    auto &Block = Function.Blocks.front();
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    auto Register = [](int Id, int Version, uint64_t Offset) {
+      MedVar V;
+      V.Kind = MedVar::Reg;
+      V.Id = Id;
+      V.SSAVer = Version;
+      V.RegOff = Offset;
+      V.Size = 8;
+      V.TheArch = Arch::X64;
+      return V;
+    };
+    auto Temp = [&](int Id) {
+      auto V = Register(Id, 1, 0);
+      V.Kind = MedVar::Temp;
+      return V;
+    };
+    auto Add = [&](NdOp Opcode, MedVar Out,
+                   std::initializer_list<MedVar> Inputs) -> MedOp & {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Out;
+      Op.Addr = Function.Entry + Block.Ops.size();
+      for (const auto &In : Inputs)
+        Op.addInput(In);
+      Block.Ops.push_back(Op);
+      return Block.Ops.back();
+    };
+    auto &First = Add(NdOp::CALL, Register(10, 1, x86reg::RAX),
+                      {MedVar::makeConst(0x2000, 8)});
+    First.CallSiteId = 1;
+    First.CalleeRegisterArgs = 0;
+    First.CalleeStackArgs = 0;
+    const auto Clobber = Register(20, 1, x86reg::RDX);
+    Function.CallClobbers.push_back({Clobber, 1});
+    Add(NdOp::COPY, Temp(100), {Clobber});
+    auto Transport = Temp(100);
+    if (Variant == 3) {
+      Transport = Temp(101);
+      Add(NdOp::INT_ADD, Transport, {Temp(100), MedVar::makeConst(1, 8)});
+    }
+    const auto RCX = Register(30, 1, x86reg::RCX),
+               RDX = Register(20, 2, x86reg::RDX),
+               Result = Register(10, 2, x86reg::RAX);
+    Add(NdOp::COPY, RCX, {Variant == 2 ? Transport : MedVar::makeConst(17, 8)});
+    if (Variant != 2)
+      Add(NdOp::COPY, RDX, {Transport});
+    if (Variant == 5)
+      Add(NdOp::COPY, Register(40, 1, x86reg::R8), {MedVar::makeConst(29, 8)});
+    auto &Call = Add(Variant == 6 ? NdOp::INDIR_CALL : NdOp::CALL, Result,
+                     {MedVar::makeConst(0x3000, 8)});
+    Call.CallSiteId = 2;
+    std::map<va_t, int> Arity;
+    if (Variant == 1) {
+      Arity.emplace(0x3000, 2);
+      Call.CalleeRegisterArgs = 2;
+    }
+    if (Variant == 4) {
+      auto Hint = std::make_shared<SourceCallTypeHint>();
+      Hint->TargetAddress = 0x3000;
+      auto &Signature = Hint->Signature;
+      Signature.Architecture = Arch::X64;
+      Signature.HasExplicitABI = true;
+      Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+      Signature.ReturnType = Function.ReturnType;
+      Signature.ReturnLocation = {SourceABICarrierKind::IntegerRegister,
+                                  x86reg::RAX, 0, 8};
+      for (auto Reg : {x86reg::RCX, x86reg::RDX}) {
+        SourceParameterTypeHint Parameter;
+        Parameter.Type = NdType::makeInt(8, false);
+        Parameter.Location = {SourceABICarrierKind::IntegerRegister, Reg, 0, 8};
+        Signature.Parameters.push_back(Parameter);
+      }
+      Call.SourceCallHint = std::move(Hint);
+      Call.addInput(RCX);
+      Call.addInput(RDX);
+    }
+    Add(NdOp::RETURN, {}, {Result});
+    // Repeating recovery cannot grow the discarded register tail back.
+    for (unsigned Repeat = 0; Repeat < 2; ++Repeat) {
+      recoverCallAbi(Function, Arch::X64, {}, &Image, &Arity, &Arity);
+      ASSERT_EQ(Function.CallInfos.size(), 2u);
+      ASSERT_EQ(Function.CallInfos.back().Args.size(), ExpectedArgs[Variant]);
+    }
+    auto SourceFunction = Function;
+    if (Variant == 0 || Variant == 6) {
+      // A saved heuristic list can predate the SSA transport analysis. HighIR
+      // reuses the same origin proof instead of reviving that trailing value.
+      SourceFunction.CallInfos.back().Args.push_back(Temp(100));
+    }
+    MedToHighConverter Converter;
+    Converter.setBinaryImage(&Image);
+    const auto High = Converter.convert(SourceFunction, Arch::X64);
+    unsigned ConsumerCalls = 0;
+    walkStmts(High.Body, [&](const HighStmt &Statement) {
+      forEachExpr(Statement, [&](const ExprPtr &Expression) {
+        if (Expression && Expression->Kind == ExprKind::Call &&
+            (Expression->CallTarget == "sub_3000" ||
+             Expression->IsIndirectCall)) {
+          ++ConsumerCalls;
+          EXPECT_EQ(Expression->Operands.size(), ExpectedArgs[Variant]);
+        }
+      });
+    });
+    EXPECT_EQ(ConsumerCalls, 1u);
+    if (Variant != 0)
+      continue;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::COFF;
+    ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+    OS.flush();
+    EXPECT_EQ(Source.find("unknown value"), std::string::npos);
+    EXPECT_EQ(Source.find("__neverd_call_register"), std::string::npos);
+    Source += R"(
+static unsigned effects;
+int64_t sub_2000(void) {
+  if (effects != 0) __builtin_trap();
+  effects = 1;
+  return 91;
+}
+int64_t sub_3000(int64_t value) {
+  if (effects != 1) __builtin_trap();
+  effects = 2;
+  return value ^ 0x55;
+}
+int main(void) {
+  return transport_wrap() != 0x44 || effects != 2;
+}
+)";
+    for (auto Optimization : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Source, {Optimization, "-fsanitize=undefined"});
+  }
+}
+
+TEST(FloatingCallArgumentFlow, CallsDoNotResurrectEntryPhis) {
+  const std::array Targets{std::pair{Arch::X64, BinaryFormat::COFF},
+                           std::pair{Arch::X64, BinaryFormat::ELF},
+                           std::pair{Arch::X64, BinaryFormat::MachO},
+                           std::pair{Arch::AArch64, BinaryFormat::ELF},
+                           std::pair{Arch::AArch64, BinaryFormat::MachO}};
+  for (const auto &[Architecture, Format] : Targets)
+    for (uint16_t Bytes : {4, 8, 16})
+      for (bool Indirect : {false, true})
+        for (unsigned Variant = 0; Variant != 11; ++Variant) {
+          const bool RequiredFP = Variant >= 5 && Variant <= 7;
+          const bool InPredecessor = Variant == 6 || Variant == 7;
+          // Mixed Win64 positions have a separate ABI regression.
+          if (Architecture == Arch::X64 && Format == BinaryFormat::COFF &&
+              !RequiredFP && Variant != 0)
+            continue;
+          if ((Indirect && RequiredFP) ||
+              (Architecture != Arch::X64 && Variant == 2) ||
+              (Variant == 10 && Bytes == 16))
+            continue;
+          SCOPED_TRACE(testing::Message()
+                       << unsigned(Architecture) << ':' << unsigned(Format)
+                       << ':' << Bytes << ':' << Indirect << ':' << Variant);
+          BinaryImage Image;
+          Image.Arch = Architecture;
+          Image.Format = Format;
+          Image.Bits = Bitness::Bits64;
+          const auto &TRI = getTargetRegInfo(Image.Arch);
+          const auto Integers = TRI.integerParamRegs(Format);
+          const uint64_t FP = TRI.floatingParamRegs(Format).front();
+          auto Register = [&](uint64_t Offset, uint16_t Size, int Id,
+                              int Version) {
+            MedVar V;
+            V.Kind = MedVar::Reg;
+            V.TheArch = Image.Arch;
+            V.RegOff = Offset;
+            V.Size = Size;
+            V.Id = Id;
+            V.SSAVer = Version;
+            return V;
+          };
+          MedFunc Function;
+          Function.Entry = 0x1000;
+          Function.Name = "fp_call_flow";
+          Function.ReturnType = NdType::makeVoid();
+          Function.ReturnsNoValue = true;
+          Function.Blocks.resize(InPredecessor ? 3 : 2);
+          auto &Entry = Function.Blocks.front();
+          auto &Block = Function.Blocks[1];
+          Entry.Id = 0;
+          Entry.StartAddr = Function.Entry;
+          Entry.Succs = {1};
+          Block.Id = 1;
+          Block.StartAddr = Function.Entry + 0x10;
+          Block.Preds = {0};
+          auto &CallBlock = Function.Blocks.back();
+          if (InPredecessor) {
+            Block.Succs = {2};
+            CallBlock.Id = 2;
+            CallBlock.StartAddr = Function.Entry + 0x20;
+            CallBlock.Preds = {1};
+          }
+          const auto Old = Register(FP, Bytes, 20, 1);
+          MedVar Incoming;
+          Incoming.Kind = MedVar::Param;
+          Incoming.TheArch = Image.Arch;
+          Incoming.Id = 60;
+          Incoming.RegOff = FP;
+          Incoming.Size = Bytes;
+          if (Variant == 8 || Variant == 9) {
+            MedOp Seed;
+            Seed.Opcode = NdOp::CALL;
+            Seed.Addr = Entry.StartAddr;
+            Seed.CallSiteId = 42;
+            Seed.CalleeRegisterArgs = Seed.CalleeVectorArgs =
+                Seed.CalleeStackArgs = 0;
+            Seed.Output = Register(TRI.IntReturnReg, 8, 10, 0);
+            Seed.addInput(MedVar::makeConst(0x4000, 8));
+            Entry.Ops.push_back(Seed);
+            Incoming = Register(FP, Bytes, 20, 9);
+            Function.CallClobbers.push_back({Incoming, Seed.CallSiteId});
+          } else {
+            Function.Params.push_back(Incoming);
+          }
+          PhiNode Phi;
+          Phi.Output = Old;
+          Phi.Args = {{0, Incoming}};
+          Block.Phis.push_back(Phi);
+          if (Variant == 10) {
+            // This unprototyped consumer builds the origin cache before the
+            // next call's implicit FP clobber becomes its proven result.
+            MedOp Earlier;
+            Earlier.Opcode = NdOp::CALL;
+            Earlier.Addr = Block.StartAddr;
+            Earlier.CallSiteId = 50;
+            Earlier.Output = Register(TRI.IntReturnReg, 8, 10, 0);
+            Earlier.addInput(MedVar::makeConst(0x5000, 8));
+            Block.Ops.push_back(Earlier);
+          }
+          MedOp Before;
+          Before.Opcode = NdOp::CALL;
+          Before.Addr = Block.StartAddr + 4;
+          Before.CallSiteId = 1;
+          Before.addInput(MedVar::makeConst(0x2000, 8));
+          Before.CalleeRegisterArgs = Before.CalleeVectorArgs =
+              Before.CalleeStackArgs = 0;
+          Before.Output = Register(TRI.IntReturnReg, 8, 10, 1);
+          if (Variant == 1 || (Variant >= 7 && Variant <= 9))
+            Before.PreservesCallerSaved = true;
+          if (Variant == 2)
+            Before.CallPreservedGPRs = kFPReturnWriteBit;
+          const auto PostCall = Register(FP, Bytes, 20, 2);
+          if (Variant == 4)
+            Before.Output = PostCall;
+          else if (!Before.PreservesCallerSaved && !Before.CallPreservedGPRs)
+            Function.CallClobbers.push_back({PostCall, Before.CallSiteId});
+          Block.Ops.push_back(Before);
+          const auto Prepared = Register(FP, Bytes, 20, 3);
+          if (Variant == 3) {
+            MedOp Copy;
+            Copy.Opcode = NdOp::COPY;
+            Copy.Addr = Block.StartAddr + 5;
+            Copy.Output = Prepared;
+            Copy.addInput(MedVar::makeConst(17, Bytes));
+            Block.Ops.push_back(Copy);
+          }
+          if (!RequiredFP)
+            for (unsigned K = 0; K != 2; ++K) {
+              MedOp Copy;
+              Copy.Opcode = NdOp::COPY;
+              Copy.Addr = Block.StartAddr + 6 + K;
+              Copy.Output = Register(Integers[K], 8, 30 + K, 1);
+              Copy.addInput(MedVar::makeConst(19 + K, 8));
+              Block.Ops.push_back(Copy);
+            }
+          MedOp Call;
+          Call.Opcode = Indirect ? NdOp::INDIR_CALL : NdOp::CALL;
+          Call.Addr = CallBlock.StartAddr + 0x10;
+          Call.CallSiteId = 2;
+          Call.addInput(MedVar::makeConst(0x3000, 8));
+          if (Variant == 9) {
+            Call.CalleeRegisterArgs = 2;
+            Call.CalleeStackArgs = 0;
+            Call.addInput(MedVar::makeConst(19, 8));
+            Call.addInput(MedVar::makeConst(20, 8));
+          }
+          CallBlock.Ops.push_back(Call);
+          MedOp Return;
+          Return.Opcode = NdOp::RETURN;
+          Return.Addr = Call.Addr + 5;
+          CallBlock.Ops.push_back(Return);
+          std::map<va_t, int> IntegerArity{{0x3000, 0}};
+          std::map<va_t, int> FloatingArity{{0x3000, 1}};
+          const std::map<va_t, uint16_t> FloatReturns{{0x2000, Bytes}};
+          recoverCallAbi(Function, Image.Arch, {}, &Image,
+                         RequiredFP ? &IntegerArity : nullptr, nullptr,
+                         RequiredFP ? &FloatingArity : nullptr,
+                         Variant == 10 ? &FloatReturns : nullptr);
+          ASSERT_EQ(Function.CallInfos.size(), Variant >= 8 ? 3u : 2u);
+          const auto &Args = Function.CallInfos.back().Args;
+          const size_t Expected = Variant == 0 || Variant == 8 || Variant == 9
+                                      ? 2u
+                                  : RequiredFP ? 1u
+                                               : 3u;
+          ASSERT_EQ(Args.size(), Expected);
+          if (Variant && Variant != 8 && Variant != 9) {
+            const auto &Wanted = Variant == 1 || Variant == 2 || Variant == 7
+                                     ? Old
+                                 : Variant == 3 ? Prepared
+                                                : PostCall;
+            EXPECT_EQ(Args.back(), Wanted);
+          }
+        }
+}
+
+TEST(SummarizedCallArguments, ConsecutiveIntegerBanksEndAtTheFirstLeftover) {
+  // Win64 positions are shared with floating arguments, so a later setup
+  // keeps an earlier leftover position (CopiedCallClobbers... variant 5).
+  // System V's integer bank is consecutive: after a leftover in RSI, a later
+  // RCX write such as clang's alignment `pop rcx` before a tail call passes
+  // nothing to this call, direct or indirect.
+  for (bool Indirect : {false, true}) {
+    SCOPED_TRACE(Indirect);
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Format = BinaryFormat::ELF;
+    Image.Bits = Bitness::Bits64;
+    MedFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "sysv_tail";
+    Function.CC = CallingConv::SysV_AMD64;
+    Function.ReturnType = NdType::makeInt(8, false);
+    Function.DefinedReturnBytes = 8;
+    Function.Blocks.resize(1);
+    auto &Block = Function.Blocks.front();
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    auto Register = [](int Id, int Version, uint64_t Offset) {
+      MedVar V;
+      V.Kind = MedVar::Reg;
+      V.Id = Id;
+      V.SSAVer = Version;
+      V.RegOff = Offset;
+      V.Size = 8;
+      V.TheArch = Arch::X64;
+      return V;
+    };
+    auto Add = [&](NdOp Opcode, MedVar Out,
+                   std::initializer_list<MedVar> Inputs) -> MedOp & {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Out;
+      Op.Addr = Function.Entry + Block.Ops.size();
+      for (const auto &In : Inputs)
+        Op.addInput(In);
+      Block.Ops.push_back(Op);
+      return Block.Ops.back();
+    };
+    auto &First = Add(NdOp::CALL, Register(10, 1, x86reg::RAX),
+                      {MedVar::makeConst(0x2000, 8)});
+    First.CallSiteId = 1;
+    First.CalleeRegisterArgs = 0;
+    First.CalleeStackArgs = 0;
+    const auto Clobber = Register(20, 1, x86reg::RSI);
+    Function.CallClobbers.push_back({Clobber, 1});
+    auto Temp = Register(100, 1, 0);
+    Temp.Kind = MedVar::Temp;
+    Add(NdOp::COPY, Temp, {Clobber});
+    Add(NdOp::COPY, Register(30, 1, x86reg::RDI), {MedVar::makeConst(17, 8)});
+    Add(NdOp::COPY, Register(20, 2, x86reg::RSI), {Temp});
+    Add(NdOp::COPY, Register(40, 1, x86reg::RCX), {MedVar::makeConst(29, 8)});
+    const auto Returned = Register(10, 2, x86reg::RAX);
+    auto &Call = Add(Indirect ? NdOp::INDIR_CALL : NdOp::CALL, Returned,
+                     {MedVar::makeConst(0x3000, 8)});
+    Call.CallSiteId = 2;
+    Add(NdOp::RETURN, {}, {Returned});
+    recoverCallAbi(Function, Arch::X64, {}, &Image);
+    ASSERT_EQ(Function.CallInfos.size(), 2u);
+    EXPECT_EQ(Function.CallInfos.back().Args.size(), 1u);
+  }
+}
+
+TEST(SummarizedCallArguments, LiveRegistersAfterALeftoverSetNoWin64Position) {
+  // capstone's custom-mnemonic loop calls `handle->insn_name(handle, id)`
+  // while R9 still holds the list node and R8 what an earlier call left. A
+  // later position is set up only where the call's block writes it;
+  // otherwise the first leftover ends the register arguments.
+  for (bool WrittenForCall : {false, true}) {
+    SCOPED_TRACE(WrittenForCall);
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Format = BinaryFormat::COFF;
+    Image.Bits = Bitness::Bits64;
+    MedFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "mnemonic_lookup";
+    Function.CC = CallingConv::Win64;
+    Function.ReturnType = NdType::makeInt(8, false);
+    Function.DefinedReturnBytes = 8;
+    Function.Blocks.resize(3);
+    for (int I = 0; I < 3; ++I) {
+      Function.Blocks[I].Id = I;
+      Function.Blocks[I].StartAddr = Function.Entry + 0x20 * I;
+    }
+    Function.Blocks[0].Succs = Function.Blocks[1].Succs = {2};
+    Function.Blocks[2].Preds = {0, 1};
+    auto Register = [](int Id, int Version, uint64_t Offset) {
+      MedVar V;
+      V.Kind = MedVar::Reg;
+      V.Id = Id;
+      V.SSAVer = Version;
+      V.RegOff = Offset;
+      V.Size = 8;
+      V.TheArch = Arch::X64;
+      return V;
+    };
+    auto Add = [&](int BlockIndex, NdOp Opcode, MedVar Out,
+                   std::initializer_list<MedVar> Inputs) -> MedOp & {
+      auto &Block = Function.Blocks[BlockIndex];
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Out;
+      Op.Addr = Block.StartAddr + Block.Ops.size();
+      for (const auto &In : Inputs)
+        Op.addInput(In);
+      Block.Ops.push_back(Op);
+      return Block.Ops.back();
+    };
+    // Each predecessor calls, then holds a real value in R9.
+    for (int Pred : {0, 1}) {
+      auto &Call = Add(Pred, NdOp::CALL, Register(10, 1 + Pred, x86reg::RAX),
+                       {MedVar::makeConst(0x2000 + Pred, 8)});
+      Call.CallSiteId = 1 + Pred;
+      Call.CalleeRegisterArgs = Call.CalleeStackArgs = 0;
+      Function.CallClobbers.push_back(
+          {Register(30, 1 + Pred, x86reg::R8), Call.CallSiteId});
+      Function.CallClobbers.push_back(
+          {Register(40, 1 + Pred, x86reg::R9), Call.CallSiteId});
+      Add(Pred, NdOp::COPY, Register(40, 3 + Pred, x86reg::R9),
+          {MedVar::makeConst(0x5000 + Pred, 8)});
+    }
+    auto &Join = Function.Blocks[2];
+    PhiNode Leftover;
+    Leftover.Output = Register(30, 3, x86reg::R8);
+    Leftover.Args = {{0, Register(30, 1, x86reg::R8)},
+                     {1, Register(30, 2, x86reg::R8)}};
+    PhiNode Node;
+    Node.Output = Register(40, 5, x86reg::R9);
+    Node.Args = {{0, Register(40, 3, x86reg::R9)},
+                 {1, Register(40, 4, x86reg::R9)}};
+    Join.Phis = {Leftover, Node};
+    Add(2, NdOp::COPY, Register(50, 1, x86reg::RCX),
+        {MedVar::makeConst(17, 8)});
+    Add(2, NdOp::COPY, Register(60, 1, x86reg::RDX),
+        {MedVar::makeConst(29, 8)});
+    if (WrittenForCall)
+      Add(2, NdOp::COPY, Register(40, 6, x86reg::R9),
+          {MedVar::makeConst(31, 8)});
+    const auto Returned = Register(10, 3, x86reg::RAX);
+    auto &Call =
+        Add(2, NdOp::INDIR_CALL, Returned, {MedVar::makeConst(0x3000, 8)});
+    Call.CallSiteId = 3;
+    Add(2, NdOp::RETURN, {}, {Returned});
+    recoverCallAbi(Function, Arch::X64, {}, &Image);
+    ASSERT_EQ(Function.CallInfos.size(), 3u);
+    EXPECT_EQ(Function.CallInfos.back().Args.size(), WrittenForCall ? 4u : 2u);
+  }
+}
+
+TEST(SummarizedCallArguments, IndirectSetupCannotRegrowAClobberedTail) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Bits = Bitness::Bits64;
+  const std::array<unsigned, 5> ExpectedArgs{1, 0, 3, 2, 2};
+  for (unsigned Variant = 0; Variant < ExpectedArgs.size(); ++Variant) {
+    SCOPED_TRACE(Variant);
+    MedFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "trimmed_indirect";
+    Function.CC = CallingConv::Win64;
+    Function.ReturnType = NdType::makeInt(8, false);
+    Function.DefinedReturnBytes = 8;
+    Function.Blocks.resize(1);
+    auto &Block = Function.Blocks.front();
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    auto Register = [](int Id, int Version, uint64_t Offset) {
+      MedVar V;
+      V.Kind = MedVar::Reg;
+      V.Id = Id;
+      V.SSAVer = Version;
+      V.RegOff = Offset;
+      V.Size = 8;
+      V.TheArch = Arch::X64;
+      return V;
+    };
+    auto Add = [&](NdOp Opcode, MedVar Out,
+                   std::initializer_list<MedVar> Inputs) -> MedOp & {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Out;
+      Op.Addr = Function.Entry + Block.Ops.size();
+      for (const auto &In : Inputs)
+        Op.addInput(In);
+      Block.Ops.push_back(Op);
+      return Block.Ops.back();
+    };
+    const auto Result = Register(10, 1, x86reg::RAX);
+    auto &First = Add(NdOp::CALL, Result, {MedVar::makeConst(0x2000, 8)});
+    First.CallSiteId = 1;
+    First.CalleeRegisterArgs = 0;
+    First.CalleeStackArgs = 0;
+    First.CalleeVectorArgs = 0;
+    const auto Clobber = Register(20, 1, x86reg::RDX);
+    Function.CallClobbers.push_back({Clobber, 1});
+    auto Temp = Register(100, 1, 0);
+    Temp.Kind = MedVar::Temp;
+    Add(NdOp::COPY, Temp, {Clobber});
+    // Retain a captured temporary with more than one use. Its source can be
+    // unavailable even when the expression builder keeps the local itself.
+    Add(NdOp::STORE, {}, {MedVar::makeConst(0x5000, 8), Temp});
+    const auto RCXClobber = Register(30, 1, x86reg::RCX);
+    Function.CallClobbers.push_back({RCXClobber, 1});
+    Add(NdOp::COPY, Register(30, 2, x86reg::RCX),
+        {Variant == 1 || Variant == 3 ? RCXClobber : MedVar::makeConst(17, 8)});
+    Add(NdOp::COPY, Register(20, 2, x86reg::RDX),
+        {Variant == 3 ? MedVar::makeConst(29, 8) : Temp});
+    if (Variant == 2)
+      Add(NdOp::COPY, Register(40, 1, x86reg::R8), {MedVar::makeConst(29, 8)});
+    const auto Returned = Register(10, 2, x86reg::RAX);
+    auto &Call =
+        Add(NdOp::INDIR_CALL, Returned, {MedVar::makeConst(0x3000, 8)});
+    Call.CallSiteId = 2;
+    if (Variant == 4)
+      Call.CalleeRegisterArgs = 2;
+    Add(NdOp::RETURN, {}, {Returned});
+    recoverCallAbi(Function, Arch::X64, {}, &Image);
+    ASSERT_EQ(Function.CallInfos.size(), 2u);
+    ASSERT_EQ(Function.CallInfos.back().Args.size(), ExpectedArgs[Variant]);
+    MedToHighConverter Converter;
+    Converter.setBinaryImage(&Image);
+    const auto High = Converter.convert(Function, Arch::X64);
+    unsigned ConsumerCalls = 0;
+    walkStmts(High.Body, [&](const HighStmt &Statement) {
+      forEachExpr(Statement, [&](const ExprPtr &Expression) {
+        if (Expression && Expression->Kind == ExprKind::Call &&
+            Expression->IsIndirectCall) {
+          ++ConsumerCalls;
+          EXPECT_EQ(Expression->Operands.size(), ExpectedArgs[Variant]);
+        }
+      });
+    });
+    EXPECT_EQ(ConsumerCalls, 1u);
+  }
+}

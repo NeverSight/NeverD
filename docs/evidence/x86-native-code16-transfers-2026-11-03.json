@@ -1,0 +1,516 @@
+{
+  "schema": 1,
+  "date": "2026-11-03",
+  "global_goal_complete": false,
+  "scope": "Full LLVM protected code16 native control transfers. Compiler operands and native terminal instructions are qualified independently of the NeverD software execution owner. NeverC retains its x86-64 frontend.",
+  "system_returns": {
+    "llvm_commit": "b29c890605b199ed8917b4506aa46e0231d33ea7",
+    "neverc_commit": "876c2afbc35af46add68533efc71702e39f13987",
+    "change": "Allow llvm.x86.sysexit32 in protected code16; retain wrong-mode SYSRET and 64-bit SYSEXIT rejection. No inline assembly or runtime helper.",
+    "counts": {
+      "code16_P_E_state_pairs": 87040,
+      "code32_regression_state_pairs": 43520,
+      "x64_regression_state_pairs": 522240,
+      "llvm_related_lit_tests": 27,
+      "neverc_frontend_tests": 10
+    },
+    "counts_definition": "State pairs count executions across optimization/compiler/core profiles, not unique architectural inputs. The native fixture compares each compiler boundary with separately encoded original instructions, all represented GPRs/system caches/flags and mapped RAM. Negative controls intentionally corrupt the declared stack operand.",
+    "source_inputs": {
+      "llvm": {
+        "head": "b29c890605b199ed8917b4506aa46e0231d33ea7",
+        "source_sha256": {
+          "llvm/lib/Target/X86/X86ISelLowering.cpp": "2eb4870b4800298c105010815305ce48edd7023ef7ceafcc9ede957058c11927",
+          "llvm/include/llvm/IR/IntrinsicsX86.td": "6a6bc93f6f9122142c179e68062a7f29036251b3db56a8dc9186ba08bd84308b",
+          "llvm/test/CodeGen/X86/system-return-intrinsics.ll": "08e4d4d2c5b56363fcddb2a8bda87cf0340cd5e1edb6413cf837a2a93917bd74"
+        }
+      },
+      "neverc": {
+        "head": "8eddd6e2a722cfe75c8d786357a93dba12035815",
+        "source_sha256": {
+          "llvm/lib/Target/X86/X86ISelLowering.cpp": "1dd84cd93c6d2105c45b4813a64e0217eebfa235706beead20294e917ae69aa0",
+          "tests/neverc/X86/system_return_kvm.c": "2fdf98407ce7aaec8de5c2fd7f05bcc0e7ed69316613426eea606c6934198188",
+          "tests/neverc/X86/verify_system_returns.py": "d0afa2109dbd842bdc66eee68e0cdc3944358041f642a7febb0617756fae47fc",
+          "tests/neverc/X86/KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396"
+        },
+        "patch_sha256": "00b92c74ca54701b7a9671a0fb1afdc819ea4c410de7e99e4203a0eb141951f9"
+      }
+    },
+    "runs": {
+      "p-core": {
+        "code_bits": 16,
+        "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "cpu": 0,
+        "profiles": [
+          {
+            "profile": "llvm-O0",
+            "functions": 4,
+            "complete_state_pairs": 21760,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "e82fd7824874ae67f7ac29818ed9acd35c0e2a1f69c92d09a7a3b784392b8894",
+            "wrong_stack_negative_control": "rejected"
+          },
+          {
+            "profile": "llvm-O2",
+            "functions": 4,
+            "complete_state_pairs": 21760,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "c2c17902aeaf604ab5ba85efd97d8d8d1bf69e553d8f0c94fc13e0a2144567e8",
+            "wrong_stack_negative_control": "rejected"
+          }
+        ],
+        "source_sha256": {
+          "verify_system_returns.py": "d0afa2109dbd842bdc66eee68e0cdc3944358041f642a7febb0617756fae47fc",
+          "system_return_kvm.c": "2fdf98407ce7aaec8de5c2fd7f05bcc0e7ed69316613426eea606c6934198188",
+          "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396"
+        },
+        "tools_sha256": {
+          "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "llc": "eaea0c53830b8fb6ce9a0b98668f35c0f866e98f3582a435ac44a67ba37d4be0",
+          "opt": "a7716064bfe8f924a2762c11fd4ad079ad8f612370ae8df0219380145264b0fb",
+          "llvm-objdump": "61eaf8071412efeff93ad8b42209a6ffe9ec25ad6060267967afce7bd2372a5c",
+          "neverc": "010dbda1688d5a08a11b60ca44760204e794f44a8aed6c4fdf7da474e71f9020"
+        },
+        "report_sha256": "600248adfa91ce542fe41724d201ccbca70750a12c636a07e283644a4a2b6f37",
+        "commands_sha256": "12212647f00ec3f2bc93083be114aff6e8185670c208d4ec3e6ef611661ad4d8"
+      },
+      "e-core": {
+        "code_bits": 16,
+        "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "cpu": 12,
+        "profiles": [
+          {
+            "profile": "llvm-O0",
+            "functions": 4,
+            "complete_state_pairs": 21760,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "e82fd7824874ae67f7ac29818ed9acd35c0e2a1f69c92d09a7a3b784392b8894",
+            "wrong_stack_negative_control": "rejected"
+          },
+          {
+            "profile": "llvm-O2",
+            "functions": 4,
+            "complete_state_pairs": 21760,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "c2c17902aeaf604ab5ba85efd97d8d8d1bf69e553d8f0c94fc13e0a2144567e8",
+            "wrong_stack_negative_control": "rejected"
+          }
+        ],
+        "source_sha256": {
+          "verify_system_returns.py": "d0afa2109dbd842bdc66eee68e0cdc3944358041f642a7febb0617756fae47fc",
+          "system_return_kvm.c": "2fdf98407ce7aaec8de5c2fd7f05bcc0e7ed69316613426eea606c6934198188",
+          "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396"
+        },
+        "tools_sha256": {
+          "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "llc": "eaea0c53830b8fb6ce9a0b98668f35c0f866e98f3582a435ac44a67ba37d4be0",
+          "opt": "a7716064bfe8f924a2762c11fd4ad079ad8f612370ae8df0219380145264b0fb",
+          "llvm-objdump": "61eaf8071412efeff93ad8b42209a6ffe9ec25ad6060267967afce7bd2372a5c",
+          "neverc": "010dbda1688d5a08a11b60ca44760204e794f44a8aed6c4fdf7da474e71f9020"
+        },
+        "report_sha256": "600248adfa91ce542fe41724d201ccbca70750a12c636a07e283644a4a2b6f37",
+        "commands_sha256": "8115251107db306f47f3e726fd5434e878a87b1d74849f39b63dd45bc44c07ce"
+      },
+      "i386": {
+        "code_bits": 32,
+        "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "cpu": 0,
+        "profiles": [
+          {
+            "profile": "llvm-O0",
+            "functions": 4,
+            "complete_state_pairs": 21760,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "036a9045c40129327543d1d6bb7ebf8c78a80797c4b4a6ad87f2d618d108df8d",
+            "wrong_stack_negative_control": "rejected"
+          },
+          {
+            "profile": "llvm-O2",
+            "functions": 4,
+            "complete_state_pairs": 21760,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "dbbe4d7236e6c20746388de5fede9ff963cd0531deca0d5b68d4e2fa09579b31",
+            "wrong_stack_negative_control": "rejected"
+          }
+        ],
+        "source_sha256": {
+          "verify_system_returns.py": "d0afa2109dbd842bdc66eee68e0cdc3944358041f642a7febb0617756fae47fc",
+          "system_return_kvm.c": "2fdf98407ce7aaec8de5c2fd7f05bcc0e7ed69316613426eea606c6934198188",
+          "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396"
+        },
+        "tools_sha256": {
+          "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "llc": "eaea0c53830b8fb6ce9a0b98668f35c0f866e98f3582a435ac44a67ba37d4be0",
+          "opt": "a7716064bfe8f924a2762c11fd4ad079ad8f612370ae8df0219380145264b0fb",
+          "llvm-objdump": "61eaf8071412efeff93ad8b42209a6ffe9ec25ad6060267967afce7bd2372a5c",
+          "neverc": "010dbda1688d5a08a11b60ca44760204e794f44a8aed6c4fdf7da474e71f9020"
+        },
+        "report_sha256": "2aa857988a1e0b5bf5379130f690395af218fa988d1896293ba6308702a5f7fa",
+        "commands_sha256": "95d1bd4e25ab022fe0b93bbd49dba902397def5926324e4cb65aa2ab71401df8"
+      },
+      "x64": {
+        "code_bits": 64,
+        "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "cpu": 0,
+        "profiles": [
+          {
+            "profile": "llvm-O0",
+            "functions": 16,
+            "complete_state_pairs": 87040,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "bcdc7fbe1b9a421753bad76464e4a9ee0316a889bdb326610705b925a2a4c22c",
+            "wrong_stack_negative_control": "rejected"
+          },
+          {
+            "profile": "llvm-O2",
+            "functions": 16,
+            "complete_state_pairs": 87040,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "f16aaac355d6b29c1d37da5e2a9360a74457ad09cf0fe2c1bf678e1a965fe0af",
+            "wrong_stack_negative_control": "rejected"
+          },
+          {
+            "profile": "neverc-O0",
+            "functions": 16,
+            "complete_state_pairs": 87040,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "09d7fa8ece2c40e12aa90166f95ed2a13a24d8062bc09204b082cc0c191376e3",
+            "wrong_stack_negative_control": "rejected"
+          },
+          {
+            "profile": "neverc-O2",
+            "functions": 16,
+            "complete_state_pairs": 87040,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "b0a6e2fee89dbe04ad8158c89ce15a065b457af5a01199f9eea87e64caa25b01",
+            "wrong_stack_negative_control": "rejected"
+          },
+          {
+            "profile": "neverc-ir-O0",
+            "functions": 16,
+            "complete_state_pairs": 87040,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "b059f0ecd5ddf179519ca43337b8a2cd874d493064d08bec2af71d41666b82a7",
+            "wrong_stack_negative_control": "rejected"
+          },
+          {
+            "profile": "neverc-ir-O2",
+            "functions": 16,
+            "complete_state_pairs": 87040,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "b9dde5d65aad4461985f8901f0df9bf3a3264921a587ec04ded2da13e63530b6",
+            "wrong_stack_negative_control": "rejected"
+          }
+        ],
+        "source_sha256": {
+          "verify_system_returns.py": "d0afa2109dbd842bdc66eee68e0cdc3944358041f642a7febb0617756fae47fc",
+          "system_return_kvm.c": "2fdf98407ce7aaec8de5c2fd7f05bcc0e7ed69316613426eea606c6934198188",
+          "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396"
+        },
+        "tools_sha256": {
+          "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "llc": "eaea0c53830b8fb6ce9a0b98668f35c0f866e98f3582a435ac44a67ba37d4be0",
+          "opt": "a7716064bfe8f924a2762c11fd4ad079ad8f612370ae8df0219380145264b0fb",
+          "llvm-objdump": "61eaf8071412efeff93ad8b42209a6ffe9ec25ad6060267967afce7bd2372a5c",
+          "neverc": "bbd2357ed68709d573c287d09d43a749d4bbeea39c94c37cbcd39d38a178b461"
+        },
+        "report_sha256": "3e81644e50086a38e7df349d9dd55aafec289c8b1884224821c224ab347cb3bc",
+        "commands_sha256": "346de07b049837f1294647be739673b641d787264d1172f5ee86d06f061af2e7"
+      }
+    },
+    "artifacts_sha256": {
+      "before.json": "b6dc831810171b1a554064a31b40a4931c8b2f8c6c79834c2652847dee4cf055",
+      "before.log": "c0a2437fc18d94922fff2e439a4ddd9791d0e40db27bea1a9a9f45b06e9b3522",
+      "return.ll": "58fe678a96f1643bf04f13504b5c0dfb076f8abbbbb96df09ee1ebfbb2a238d5",
+      "neverc-before.json": "6f8a07c372488bdfa02e183ceafd37c4822f05902a226d77a53fa8d3d97f6be9",
+      "neverc-before.log": "48dcc2a8fbb0626e6e0d936320171758ab8b6a59c0807442397d8ee8729037a0",
+      "lit-focused.log": "b03a78624c66e7e753a5f63cb18937d8a8a4c1d242a76b6b56020b79f99f01f5",
+      "lit-related.log": "fcc06254efa4c2c5715dbbcb94d354d93c693702693adca3e9ae01a7ff2d6187",
+      "neverc-tests.xml": "18454d8f4c65bf65e94c4bdedaf2e9a5bb2722db6d0b965a00c39b5ca42d5c0c",
+      "neverc-tests.log": "0445273b3087884a252ed5b0ceb900ef478580a69704d6ae7441ff49ec1defc6",
+      "build.log": "9666585ae3489f9405af3a79059fb523fdefaa39edf0ea29e1c25f71f0f61fec",
+      "neverc-build.log": "f0760cbd9cc75787e90abe15e6a54dcd7e39cc2ae462f886e6eb1348f1b21126",
+      "system-return-table-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "neverc-tested.patch": "00b92c74ca54701b7a9671a0fb1afdc819ea4c410de7e99e4203a0eb141951f9",
+      "llvm-CMakeCache.txt": "f428282da2a8381562915dfa2b05fe5105787d83432bec215835cc69cdc45c9a",
+      "neverc-CMakeCache.txt": "20dc68e67ea13464828b36c8d1b5604a11c2a270eee32232d22361119b782086"
+    },
+    "exclusions": [
+      "complete original-image register restoration",
+      "CET enabled",
+      "fault ordering",
+      "asynchronous unwind/interrupt delivery",
+      "other CPU models",
+      "architectural promises for compatibility GPR high halves"
+    ]
+  },
+  "production_pin": {
+    "release": "neverd-llvm-v23.0.0-r6",
+    "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+    "changed": false
+  },
+  "limitations": [
+    "Code16 uses protected-mode execution with the 32-bit compiler stack ABI; no real-mode/VM86 or NeverC i386 target is enabled.",
+    "No compiler intrinsic here promises complete original-image GPR/vector restoration. Ambient machine state and hardware own the transfer.",
+    "Fault ordering, asynchronous delivery, CET, complete SMM/SGX software environments and general i386 source dispatch remain separate open domains. The final LLVM release/pin remains gated."
+  ],
+  "references": [
+    "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html"
+  ],
+  "frame_returns": {
+    "llvm_commit": "e132e5aebb007e372dddb2121690b2932ef33d71",
+    "neverc_commit": "a97a22b85503fefdc1f1e15d4873a9c8fd9efa38",
+    "change": "Allow 16/32-bit IRET and RETF, including imm16 cleanup, in protected code16. Keep the final full ESP assignment adjacent to the native instruction. Long-mode-only transfers remain rejected.",
+    "counts": {
+      "code16_P_E_state_pairs": 21504,
+      "code32_regression_state_pairs": 10752,
+      "x64_regression_state_pairs": 46080,
+      "llvm_focused_lit_tests": 4
+    },
+    "counts_definition": "State pairs count actual executions by optimization/compiler/core profile. The 28 protected and 40 long-mode functions cover plain, fixed, dynamic and pressure frames, CPL0/CPL3 targets, six flag samples, aligned/unaligned frames and immediate cleanup. Code16 retains a 32-bit stack ABI; destination code width follows the selected descriptor. No new software CPU fault/descriptor semantics are claimed.",
+    "source_inputs": {
+      "llvm": {
+        "head": "e132e5aebb007e372dddb2121690b2932ef33d71",
+        "source_sha256": {
+          "llvm/lib/Target/X86/X86ISelLowering.cpp": "0935ef4686ff5dfa065286262682843ca4885feb9fd9e7c137ad3f8f08c7f3cb",
+          "llvm/include/llvm/IR/IntrinsicsX86.td": "c2db7e7229db89c5bb27be24367283eb22d0e1afe1a459a00a2b3aa8d199730f",
+          "llvm/test/CodeGen/X86/native-frame-returns.ll": "4292ee4c392e674c1fba53a7bba95b314f35c895f550ab766eb13ee8d9062239"
+        }
+      },
+      "neverc": {
+        "head": "a97a22b85503fefdc1f1e15d4873a9c8fd9efa38",
+        "source_sha256": {
+          "tests/neverc/X86/verify_frame_returns.py": "8167187e146312f3dbf871196552d1fc5532977977b10b757f60929fec1aef78",
+          "tests/neverc/X86/frame_return_kvm.c": "c021df97aba9386fb1a6f54f14eea733236b07fdc6331940890293e737fc1f6c",
+          "tests/neverc/X86/KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396"
+        }
+      }
+    },
+    "runs": {
+      "p-core": {
+        "code_bits": 16,
+        "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "cpu": 0,
+        "profiles": [
+          {
+            "profile": "llvm-O0",
+            "functions": 28,
+            "complete_state_pairs": 5376,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "f66a113a474ac55e2867d2b3fcb4ad2e4451e640a6afd8e1106ce0f9bddb62b6",
+            "negative_control": "wrong stack rejected"
+          },
+          {
+            "profile": "llvm-O2",
+            "functions": 28,
+            "complete_state_pairs": 5376,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "aa67f6c2df1d422fa02b8e985abdb3a91748ed0dafd892877d3eb1855b7d347a",
+            "negative_control": "wrong stack rejected"
+          }
+        ],
+        "source_sha256": {
+          "verify_frame_returns.py": "8167187e146312f3dbf871196552d1fc5532977977b10b757f60929fec1aef78",
+          "frame_return_kvm.c": "c021df97aba9386fb1a6f54f14eea733236b07fdc6331940890293e737fc1f6c",
+          "smm_return_kvm.c": "180a4db33a1a99038d329cf0093018fae54190c801c043caecc896bab9e698da",
+          "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+          "NativeXStateFixture.h": "9927c4d5d03f7d52ab1a7ae4f10139b5b546f832b6eb51a5406ee466b390300c"
+        },
+        "tools_sha256": {
+          "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "llc": "fe418a906fc6c9a2054efb9559cd881186df94251139e9f0b4d8c00cfba72989",
+          "opt": "cd0699598f6e796567204cfd0e4b04c91ffb0ddf768eb82c8fa4c5083698daac",
+          "llvm-objdump": "8db11f55d88774dfa944d5cd14636e3b891decded5761a40daf0c1c57f3cf671",
+          "neverc": "bbd2357ed68709d573c287d09d43a749d4bbeea39c94c37cbcd39d38a178b461"
+        },
+        "report_sha256": "dee9897448ce76ffc2c5c0fcd6219797bfea9aeedc8f0ed6d2d6826e5967b997",
+        "commands_sha256": "8a920039f5224f04952131e91747c82c43ad0e1aa8fff6d517a4dfebabd2c52d"
+      },
+      "e-core": {
+        "code_bits": 16,
+        "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "cpu": 12,
+        "profiles": [
+          {
+            "profile": "llvm-O0",
+            "functions": 28,
+            "complete_state_pairs": 5376,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "f66a113a474ac55e2867d2b3fcb4ad2e4451e640a6afd8e1106ce0f9bddb62b6",
+            "negative_control": "wrong stack rejected"
+          },
+          {
+            "profile": "llvm-O2",
+            "functions": 28,
+            "complete_state_pairs": 5376,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "aa67f6c2df1d422fa02b8e985abdb3a91748ed0dafd892877d3eb1855b7d347a",
+            "negative_control": "wrong stack rejected"
+          }
+        ],
+        "source_sha256": {
+          "verify_frame_returns.py": "8167187e146312f3dbf871196552d1fc5532977977b10b757f60929fec1aef78",
+          "frame_return_kvm.c": "c021df97aba9386fb1a6f54f14eea733236b07fdc6331940890293e737fc1f6c",
+          "smm_return_kvm.c": "180a4db33a1a99038d329cf0093018fae54190c801c043caecc896bab9e698da",
+          "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+          "NativeXStateFixture.h": "9927c4d5d03f7d52ab1a7ae4f10139b5b546f832b6eb51a5406ee466b390300c"
+        },
+        "tools_sha256": {
+          "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "llc": "fe418a906fc6c9a2054efb9559cd881186df94251139e9f0b4d8c00cfba72989",
+          "opt": "cd0699598f6e796567204cfd0e4b04c91ffb0ddf768eb82c8fa4c5083698daac",
+          "llvm-objdump": "8db11f55d88774dfa944d5cd14636e3b891decded5761a40daf0c1c57f3cf671",
+          "neverc": "bbd2357ed68709d573c287d09d43a749d4bbeea39c94c37cbcd39d38a178b461"
+        },
+        "report_sha256": "dee9897448ce76ffc2c5c0fcd6219797bfea9aeedc8f0ed6d2d6826e5967b997",
+        "commands_sha256": "905ce631de22af5125bc896ad04923dba55e225173696133d4a5a2c1492da004"
+      },
+      "i386": {
+        "code_bits": 32,
+        "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "cpu": 0,
+        "profiles": [
+          {
+            "profile": "llvm-O0",
+            "functions": 28,
+            "complete_state_pairs": 5376,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "8eb5c2f985ce4192fbc5e929b74500bb2a4dab33045741ef24a4766f54c01424",
+            "negative_control": "wrong stack rejected"
+          },
+          {
+            "profile": "llvm-O2",
+            "functions": 28,
+            "complete_state_pairs": 5376,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "e24d94a413971449d717622fd8a21cc6204f8c96d03d43afe3ab7d9570417acd",
+            "negative_control": "wrong stack rejected"
+          }
+        ],
+        "source_sha256": {
+          "verify_frame_returns.py": "8167187e146312f3dbf871196552d1fc5532977977b10b757f60929fec1aef78",
+          "frame_return_kvm.c": "c021df97aba9386fb1a6f54f14eea733236b07fdc6331940890293e737fc1f6c",
+          "smm_return_kvm.c": "180a4db33a1a99038d329cf0093018fae54190c801c043caecc896bab9e698da",
+          "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+          "NativeXStateFixture.h": "9927c4d5d03f7d52ab1a7ae4f10139b5b546f832b6eb51a5406ee466b390300c"
+        },
+        "tools_sha256": {
+          "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "llc": "fe418a906fc6c9a2054efb9559cd881186df94251139e9f0b4d8c00cfba72989",
+          "opt": "cd0699598f6e796567204cfd0e4b04c91ffb0ddf768eb82c8fa4c5083698daac",
+          "llvm-objdump": "8db11f55d88774dfa944d5cd14636e3b891decded5761a40daf0c1c57f3cf671",
+          "neverc": "bbd2357ed68709d573c287d09d43a749d4bbeea39c94c37cbcd39d38a178b461"
+        },
+        "report_sha256": "4ba5aa80d7199410b56d706cd9d8132e4ff569ceeceaec92514c7d9a4c103ada",
+        "commands_sha256": "198ea7bc09a4de957aefdc8133f5ab0f5cc2da8fe8254d75a596756d26a4dd18"
+      },
+      "x64": {
+        "code_bits": 64,
+        "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "cpu": 0,
+        "profiles": [
+          {
+            "profile": "llvm-O0",
+            "functions": 40,
+            "complete_state_pairs": 7680,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "1340fe61187a12c029cb4e58676f19131e73873a68be75108a0cfad8af0566e6",
+            "negative_control": "wrong stack rejected"
+          },
+          {
+            "profile": "llvm-O2",
+            "functions": 40,
+            "complete_state_pairs": 7680,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "0c43d5143e52b33b57367f4fb96279344478425dffd9b303e95127493de22fba",
+            "negative_control": "wrong stack rejected"
+          },
+          {
+            "profile": "neverc-O0",
+            "functions": 40,
+            "complete_state_pairs": 7680,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "51e0f7937f77eb551ff9d8a9f1fa113916e2b1480d227073cc38b1d64ba2763c",
+            "negative_control": "wrong stack rejected"
+          },
+          {
+            "profile": "neverc-O2",
+            "functions": 40,
+            "complete_state_pairs": 7680,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "3350db8fb7a8c70f7ae5733f9ff0d2dc23d7a21c97d8c8b3f13916227ed32a88",
+            "negative_control": "wrong stack rejected"
+          },
+          {
+            "profile": "neverc-ir-O0",
+            "functions": 40,
+            "complete_state_pairs": 7680,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "47cf99ade4074b687785d95fb556c62588a6f0ce314e46f083a5ea97f0c2314d",
+            "negative_control": "wrong stack rejected"
+          },
+          {
+            "profile": "neverc-ir-O2",
+            "functions": 40,
+            "complete_state_pairs": 7680,
+            "mapped_bytes_per_observation": 2097152,
+            "elf_sha256": "feb13df57c2987d143ed2cf772f36627961396b0103e5d8887fc1996797997ad",
+            "negative_control": "wrong stack rejected"
+          }
+        ],
+        "source_sha256": {
+          "verify_frame_returns.py": "8167187e146312f3dbf871196552d1fc5532977977b10b757f60929fec1aef78",
+          "frame_return_kvm.c": "c021df97aba9386fb1a6f54f14eea733236b07fdc6331940890293e737fc1f6c",
+          "smm_return_kvm.c": "180a4db33a1a99038d329cf0093018fae54190c801c043caecc896bab9e698da",
+          "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+          "NativeXStateFixture.h": "9927c4d5d03f7d52ab1a7ae4f10139b5b546f832b6eb51a5406ee466b390300c"
+        },
+        "tools_sha256": {
+          "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+          "ld.lld": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447",
+          "objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+          "llc": "fe418a906fc6c9a2054efb9559cd881186df94251139e9f0b4d8c00cfba72989",
+          "opt": "cd0699598f6e796567204cfd0e4b04c91ffb0ddf768eb82c8fa4c5083698daac",
+          "llvm-objdump": "8db11f55d88774dfa944d5cd14636e3b891decded5761a40daf0c1c57f3cf671",
+          "neverc": "bbd2357ed68709d573c287d09d43a749d4bbeea39c94c37cbcd39d38a178b461"
+        },
+        "report_sha256": "1dcc31b1d6d198f674e937980f6b535871f9b5c78b87aa5e10e63db5db7319ec",
+        "commands_sha256": "61a97cae95a8bb4dfbaac14518a6885d031cb301e9ed1db3c61a73b9c4a9844c"
+      }
+    },
+    "artifacts_sha256": {
+      "before.json": "6c3e1b68f11b3acf5f72dd046236a001177de6fdb360a79fee35555515c558d3",
+      "before.log": "97393f6f454d83b48b7a494a8e2d6c006f693e8f18a141d5341b30884f6e6de6",
+      "return.ll": "d9dbd5294d48fc124ce4840bdcc2ff019e3e2b24bb1bab6149a7a9eab80b1b9c",
+      "lit-focused.log": "a87af687ae50317d168d2e67476f74440759fdf47c7e2a4d4335bcd9069fcb86",
+      "frame-table-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "build.log": "2b87df60dbb7d17891a2027067deb41e0172962f4d545b3c1ecb2d969b183833",
+      "llvm-CMakeCache.txt": "f428282da2a8381562915dfa2b05fe5105787d83432bec215835cc69cdc45c9a"
+    },
+    "exclusions": [
+      "complete original-image register restoration",
+      "CET enabled",
+      "FRED and UIRET successful paths",
+      "bare-metal SMM implementation",
+      "NT task return",
+      "XSTATE",
+      "fault ordering",
+      "asynchronous unwind/interrupt delivery",
+      "other CPU models",
+      "architectural promises for compatibility GPR high halves"
+    ]
+  }
+}

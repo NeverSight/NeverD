@@ -12,8 +12,11 @@
 #include "SessionImpl.h"
 
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64ExceptionReturn.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/IR/BasicBlock.h"
@@ -22,10 +25,12 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Verifier.h"
 
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace neverd::sdk {
 namespace {
@@ -146,6 +151,334 @@ TEST_F(SessionLLVMTest, ExactAddressZeroIgnoresHelperNamesAndDeclarations) {
   EXPECT_TRUE(State.LastError.empty());
 }
 
+TEST_F(SessionLLVMTest, DllEntryPrototypeRequiresARealPEEntry) {
+  State.Img.Format = BinaryFormat::COFF;
+  State.Img.DynInfo.PECharacteristics = llvm::COFF::IMAGE_FILE_DLL;
+  State.Img.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_GUI;
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(unsigned(Architecture));
+    State.Img.Arch = Architecture;
+    State.Img.Bits =
+        Architecture == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+    State.Img.Entry = 0;
+    EXPECT_TRUE(State.platformEntryDeclaration().empty());
+    State.Img.Entry = 0x1000;
+    EXPECT_NE(State.platformEntryDeclaration().find("DllEntryPoint"),
+              std::string::npos);
+  }
+  State.Img.DynInfo.PECharacteristics = 0;
+  EXPECT_TRUE(State.platformEntryDeclaration().empty());
+  State.Img.DynInfo.PECharacteristics = llvm::COFF::IMAGE_FILE_DLL;
+  State.Img.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_NATIVE;
+  EXPECT_TRUE(State.platformEntryDeclaration().empty());
+}
+
+TEST_F(SessionLLVMTest, SourceBodyExpansionKeepsNativeAndUnoptimizedQueries) {
+  State.PipeRan = false;
+  State.Img.Format = BinaryFormat::COFF;
+  State.Img.Entry = State.Img.Base = 0x1000;
+  State.OnlyFunctionEntries = {0x1000};
+  Segment Code;
+  Code.VA = 0x1000;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Code.Data = {0x48, 0x83, 0xec, 0x38,       // sub rsp,56
+               0x48, 0x89, 0x54, 0x24, 0x30, // mov [rsp+48],rdx
+               0xe8, 0x72, 0,    0,    0,    // call 1080h
+               0x48, 0x83, 0xc4, 0x38, 0xc3};
+  Code.Data.resize(0x80, 0xcc);
+  const uint8_t Body[] = {0x48, 0x8b, 0x44, 0x24, 0x38, // mov rax,[rsp+56]
+                          0x48, 0x33, 0x01, 0xc3};      // xor rax,[rcx]; ret
+  Code.Data.insert(Code.Data.end(), std::begin(Body), std::end(Body));
+  Code.Size = Code.FileSz = Code.Data.size();
+  State.Img.Segments.push_back(std::move(Code));
+  for (const auto &[Entry, Name] :
+       {std::pair{0x1000, "body_caller"}, std::pair{0x1080, "body_callee"}}) {
+    auto Symbol = Symbol::makeFunc(Entry);
+    Symbol.Name = Name;
+    State.Img.Symbols.push_back(std::move(Symbol));
+  }
+  const auto Text = [](llvm::Module &Module) {
+    std::string Result;
+    llvm::raw_string_ostream OS(Result);
+    EXPECT_TRUE(LLVMCEmitter().emit(Module, OS));
+    return Result;
+  };
+  const auto *Expanded = State.ensureFunctionLlvmModule(0x1000, false, true);
+  ASSERT_TRUE(Expanded) << State.LastError;
+  const std::string Source = Text(*Expanded->Module);
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+  EXPECT_EQ(State.ensureFunctionLlvmModule(0x1000, false, true), Expanded);
+  ASSERT_TRUE(Expanded->PreparedHigh);
+  ASSERT_TRUE(State.ensurePipeline()) << State.LastError;
+  SourceInlineHighView Original{
+      State.PipeResult.HighFuncs, State.PipeResult.HighSources, {}};
+  std::string FirstHigh;
+  for (unsigned Query = 0; Query != 2; ++Query) {
+    auto High = projectSpecializedHighSourceCalls(
+        State.Img, *Expanded->PreparedHigh, {}, nullptr, Original);
+    ASSERT_TRUE(High);
+    std::string HighText;
+    llvm::raw_string_ostream OS(HighText);
+    CEmitterOptions Options;
+    Options.Image = &State.Img;
+    Options.SourceBodyOrigins = &High->BodyOrigins;
+    HighCEmitter().emit(High->Functions, OS, Options);
+    EXPECT_EQ(HighText.find("__builtin_trap"), std::string::npos);
+    EXPECT_NE(HighText.find("neverd_source_body_1080"), std::string::npos);
+    if (Query == 0)
+      FirstHigh = HighText;
+    else
+      EXPECT_EQ(HighText, FirstHigh);
+    EXPECT_EQ(State.ensureFunctionLlvmModule(0x1000, false, true), Expanded);
+    EXPECT_EQ(Text(*Expanded->Module), Source);
+  }
+  for (const auto &[NoOpt, OriginalStorage] :
+       {std::pair{true, true}, std::pair{false, false}}) {
+    const auto *Kept =
+        State.ensureFunctionLlvmModule(0x1000, NoOpt, OriginalStorage);
+    ASSERT_TRUE(Kept) << State.LastError;
+    EXPECT_FALSE(Kept->PreparedHigh);
+    const auto *Callee = Kept->Module->getFunction("body_callee");
+    ASSERT_TRUE(Callee);
+    EXPECT_EQ(Callee->arg_size(), 7u);
+    EXPECT_NE(Text(*Kept->Module).find("__builtin_trap"), std::string::npos);
+  }
+  EXPECT_EQ(Text(*Expanded->Module), Source);
+  const std::weak_ptr<SourceInlineHighPreparation> Kept =
+      Expanded->PreparedHigh;
+  State.clearPipeline();
+  EXPECT_TRUE(Kept.expired());
+}
+
+TEST_F(SessionLLVMTest, CallRecoveryKeepsUnobservedSourceSpillArguments) {
+  constexpr va_t Caller = 0x1000, Consumer = 0x1040, Global = 0x2000;
+  State.Img.Format = BinaryFormat::COFF;
+  State.Img.Entry = Caller;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Caller;
+  Text.Size = Text.FileSz = 0x80;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xCC);
+  const std::vector<uint8_t> CallBytes = {0x48, 0x83, 0xEC, 0x28, 0xE8,
+                                          0x37, 0,    0,    0,    0x48,
+                                          0x83, 0xC4, 0x28, 0xC3};
+  const std::vector<uint8_t> Body = {
+      0x48, 0x89, 0x4C, 0x24, 8,            // mov [rsp+8],rcx
+      0x53, 0x48, 0x83, 0xEC, 0x20,         // push rbx; sub rsp,20h
+      0x48, 0x8B, 0x1D, 0xAF, 0x0F, 0,   0, // mov rbx,[rip+global]
+      0x48, 0x83, 0x64, 0x24, 0x30, 0,      // and qword [rsp+30h],0
+      0x48, 0x8D, 0x4C, 0x24, 0x30,         // lea rcx,[rsp+30h]
+      0xFF, 0x15, 0x9E, 0x1F, 0,    0,      // call [strlen]
+      0x48, 0x01, 0xD8,                     // add rax,rbx
+      0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3};  // add rsp,20h; pop rbx; ret
+  std::copy(CallBytes.begin(), CallBytes.end(), Text.Data.begin());
+  std::copy(Body.begin(), Body.end(), Text.Data.begin() + Consumer - Caller);
+  State.Img.Segments.push_back(std::move(Text));
+  Segment Data;
+  Data.Name = ".data";
+  Data.VA = Global;
+  Data.Size = Data.FileSz = 8;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.assign(8, 0);
+  State.Img.Segments.push_back(std::move(Data));
+  Segment Slots;
+  Slots.Name = ".idata";
+  Slots.VA = 0x3000;
+  Slots.Size = Slots.FileSz = 16;
+  Slots.Flags = SegmentFlags::Readable;
+  Slots.Data.assign(16, 0);
+  State.Img.Segments.push_back(std::move(Slots));
+  Import Reader;
+  Reader.Name = "strlen";
+  Reader.Module = "msvcrt.dll";
+  Reader.IATAddr = 0x3000;
+  State.Img.Imports.push_back(std::move(Reader));
+  Import Observer;
+  Observer.Name = "rand";
+  Observer.Module = "msvcrt.dll";
+  Observer.IATAddr = 0x3008;
+  State.Img.Imports.push_back(std::move(Observer));
+  for (const auto &[Entry, Name] : {std::pair{Caller, "spill_caller"},
+                                    std::pair{Consumer, "spill_consumer"}}) {
+    auto Symbol = Symbol::makeFunc(Entry);
+    Symbol.Name = Name;
+    State.Img.Symbols.push_back(std::move(Symbol));
+  }
+  Symbol Object;
+  Object.Addr = Global;
+  Object.Name = "spill_global";
+  Object.Size = 8;
+  State.Img.Symbols.push_back(std::move(Object));
+  const auto OriginalImage = State.Img;
+  for (unsigned Variant : {0, 1, 2, 3, 4}) {
+    SCOPED_TRACE(Variant);
+    const bool ThroughWrapper = Variant != 0;
+    State.Img = OriginalImage;
+    if (ThroughWrapper) {
+      auto &Code = State.Img.Segments.front().Data;
+      const std::vector<uint8_t> CallerCode = {
+          0x48, 0x83, 0xEC, 0x28,    // sub rsp,28h
+          0xB1, 0x5A,                // mov cl,5Ah
+          0xE8, 0x15, 0,    0,    0, // call wrapper
+          0x48, 0x83, 0xC4, 0x28, 0xC3};
+      std::vector<uint8_t> Wrapper = {
+          0x53,                      // push rbx
+          0x0F, 0xB6, 0xD9,          // movzx ebx,cl
+          0x48, 0x83, 0xEC, 0x20,    // sub rsp,20h
+          0xE8, 0x13, 0,    0,    0, // call consumer
+          0x48, 0x01, 0xD8,          // add rax,rbx
+          0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3};
+      if (Variant >= 2) {
+        Wrapper.resize(13);
+        Wrapper.insert(Wrapper.end(),
+                       {0x48, 0x01, 0xC3,             // add rbx,rax
+                        0xFF, 0x15, 0xD2, 0x1F, 0, 0, // call [rand]
+                        0x48, 0x89, 0xD8,             // mov rax,rbx
+                        0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3});
+      }
+      if (Variant == 4) {
+        // A full-width forward has no local spill or narrow entry view.
+        Wrapper.erase(Wrapper.begin() + 1, Wrapper.begin() + 4);
+        Wrapper[6] += 3;    // consumer rel32
+        Wrapper[11] = 0x89; // mov rbx,rax instead of adding an old rbx
+        Wrapper[15] += 3;   // rand IAT rel32
+      }
+      std::copy(CallerCode.begin(), CallerCode.end(), Code.begin());
+      std::copy(Wrapper.begin(), Wrapper.end(), Code.begin() + 0x20);
+      auto Symbol = Symbol::makeFunc(Caller + 0x20);
+      Symbol.Name = "spill_prefix_forwarder";
+      State.Img.Symbols.push_back(std::move(Symbol));
+      if (Variant >= 3) {
+        // Both arms destroy the incoming RCX before strlen, so a later
+        // opaque call in the wrapper cannot revive its unused high bytes.
+        auto BranchingBody = Body;
+        BranchingBody.insert(
+            BranchingBody.begin() + 23,
+            {0xF6, 0xC3, 1, 0x74, 7, 0x48, 0x8D, 0x4C, 0x24, 0x30, 0xEB, 5});
+        BranchingBody[42] -= 12; // adjust the strlen IAT displacement
+        std::copy(BranchingBody.begin(), BranchingBody.end(),
+                  Code.begin() + Consumer - Caller);
+      }
+    }
+    for (bool Omitted : {false, true}) {
+      SCOPED_TRACE(Omitted);
+      State.NativeMedFuncs.reset();
+      State.FunctionLlvmModules.clear();
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.OnlyFunctionEntries = {Caller};
+      if (!Omitted) {
+        Options.OnlyFunctionEntries.insert(Consumer);
+        if (ThroughWrapper)
+          Options.OnlyFunctionEntries.insert(Caller + 0x20);
+      }
+      State.PipeResult = Pipeline().run(State.Img, *State.LLVMCtx, Options);
+      ASSERT_TRUE(State.PipeResult.Success) << State.PipeResult.Error;
+      for (bool NoOpt : {false, true}) {
+        SCOPED_TRACE(NoOpt);
+        const auto *Shown = State.ensureFunctionLlvmModule(Caller, NoOpt, true);
+        ASSERT_TRUE(Shown) << State.LastError;
+        ASSERT_TRUE(State.NativeMedFuncs);
+        const auto &Calls = State.NativeMedFuncs->front().CallInfos;
+        ASSERT_EQ(Calls.size(), 1U);
+        ASSERT_EQ(Calls.front().Args.size(), 1U);
+        EXPECT_TRUE(Calls.front().Args.front().isConst());
+        EXPECT_EQ(Calls.front().Args.front().ConstVal,
+                  ThroughWrapper && Variant != 4 ? 0x5AU : 0U);
+        EXPECT_EQ(State.ensureFunctionLlvmModule(Caller, NoOpt, true), Shown);
+      }
+    }
+  }
+}
+
+TEST_F(SessionLLVMTest, CallRecoveryKeepsUnobservedStackArgumentHoles) {
+  constexpr va_t Caller = 0x1000, Wrapper = 0x1080;
+  State.Img.Format = BinaryFormat::COFF;
+  State.Img.Entry = Caller;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Caller;
+  Text.Size = Text.FileSz = 0xC0;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xCC);
+  const std::vector<uint8_t> CallBytes = {
+      0x48, 0x83, 0xEC, 0x38, 0x48, 0x89, 0x4C, 0x24, 0x28, 0x48, 0x89, 0x54,
+      0x24, 0x30, 0xE8, 0x6D, 0,    0,    0,    0x48, 0x83, 0xC4, 0x38, 0xC3};
+  std::vector<uint8_t> Body = {
+      0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x5C, 0x24,
+      0x58, 0xF6, 0xC1, 0x01,          // test cl,1
+      0x74, 0x07,                      // jz subtract
+      0x48, 0x03, 0x5C, 0x24, 0x60,    // add rbx,[rsp+60h]
+      0xEB, 0x05,                      // jmp join
+      0x48, 0x2B, 0x5C, 0x24, 0x60,    // sub rbx,[rsp+60h]
+      0xFF, 0x15, 0x5F, 0x1F, 0,    0, // call [rand]
+      0x48, 0x01, 0xD8, 0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3};
+  std::copy(CallBytes.begin(), CallBytes.end(), Text.Data.begin());
+  std::copy(Body.begin(), Body.end(), Text.Data.begin() + Wrapper - Caller);
+  State.Img.Segments.push_back(std::move(Text));
+  Segment Slots;
+  Slots.Name = ".idata";
+  Slots.VA = 0x3000;
+  Slots.Size = Slots.FileSz = 8;
+  Slots.Flags = SegmentFlags::Readable;
+  Slots.Data.assign(8, 0);
+  State.Img.Segments.push_back(std::move(Slots));
+  Segment Data;
+  Data.Name = ".data";
+  Data.VA = 0x3100;
+  Data.Size = Data.FileSz = 8;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.assign(8, 0);
+  State.Img.Segments.push_back(std::move(Data));
+  Import Observer;
+  Observer.Name = "rand";
+  Observer.Module = "msvcrt.dll";
+  Observer.IATAddr = 0x3000;
+  State.Img.Imports.push_back(std::move(Observer));
+  for (const auto &[Entry, Name] :
+       {std::pair{Caller, "stack_hole"}, std::pair{Wrapper, "stack_wrapper"}}) {
+    auto Symbol = Symbol::makeFunc(Entry);
+    Symbol.Name = Name;
+    State.Img.Symbols.push_back(std::move(Symbol));
+  }
+  for (bool ImageRead : {false, true}) {
+    SCOPED_TRACE(ImageRead);
+    if (ImageRead) {
+      // Insert xor rbx,[rip+205Eh] before the import and adjust its
+      // displacement.
+      Body.insert(Body.begin() + 27, {0x48, 0x33, 0x1D, 0x5E, 0x20, 0, 0});
+      Body[36] = 0x58;
+      std::copy(Body.begin(), Body.end(),
+                State.Img.Segments.front().Data.begin() + Wrapper - Caller);
+    }
+    for (bool Omitted : {false, true}) {
+      SCOPED_TRACE(Omitted);
+      State.NativeMedFuncs.reset();
+      State.FunctionLlvmModules.clear();
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.OnlyFunctionEntries = {Caller};
+      if (!Omitted)
+        Options.OnlyFunctionEntries.insert(Wrapper);
+      State.PipeResult = Pipeline().run(State.Img, *State.LLVMCtx, Options);
+      ASSERT_TRUE(State.PipeResult.Success) << State.PipeResult.Error;
+      for (bool NoOpt : {false, true}) {
+        SCOPED_TRACE(NoOpt);
+        const auto *Shown = State.ensureFunctionLlvmModule(Caller, NoOpt, true);
+        ASSERT_TRUE(Shown) << State.LastError;
+        ASSERT_TRUE(State.NativeMedFuncs);
+        const auto &Calls = State.NativeMedFuncs->front().CallInfos;
+        ASSERT_EQ(Calls.size(), 1U);
+        ASSERT_EQ(Calls.front().Args.size(), 7U);
+        EXPECT_TRUE(Calls.front().Args[4].isConst());
+        EXPECT_EQ(Calls.front().Args[4].ConstVal, 0U);
+        EXPECT_EQ(State.ensureFunctionLlvmModule(Caller, NoOpt, true), Shown);
+      }
+    }
+  }
+}
+
 TEST_F(SessionLLVMTest, EmissionExceptionsKeepTheSessionAndReason) {
   State.Img.Arch = Arch::AArch64;
   auto Function = sourceFunction();
@@ -153,6 +486,12 @@ TEST_F(SessionLLVMTest, EmissionExceptionsKeepTheSessionAndReason) {
   Exit.Opcode = NdOp::INTRINSIC;
   Exit.addInput(MedVar::makeConst(static_cast<uint64_t>(Intrinsic::Eret),
                                   sizeof(uint16_t)));
+  // ERET defines no value, so the emitter refuses one that claims X0.
+  Exit.Output.Kind = MedVar::Reg;
+  Exit.Output.TheArch = Arch::AArch64;
+  Exit.Output.RegOff = a64reg::X0;
+  Exit.Output.Size = 8;
+  Exit.Output.SSAVer = 1;
   Function.Blocks.front().Ops.insert(Function.Blocks.front().Ops.begin(), Exit);
   State.PipeResult.MedFuncs.push_back(Function);
   std::shared_ptr<LLVMSourceMap> Sources;
@@ -161,7 +500,7 @@ TEST_F(SessionLLVMTest, EmissionExceptionsKeepTheSessionAndReason) {
       State.clearError();
       EXPECT_NO_THROW(EXPECT_FALSE(
           State.emitNativeLlvm(NoOpt, nullptr, Sources, OriginalImage)));
-      EXPECT_NE(State.LastError.find(kAArch64ExceptionReturnUnsupported),
+      EXPECT_NE(State.LastError.find(kAArch64ExceptionReturnMalformed),
                 std::string::npos)
           << State.LastError;
       EXPECT_FALSE(Sources);
@@ -195,6 +534,23 @@ TEST_F(SessionLLVMTest, SourceOnlyStackLimitSurvivesModulePreparation) {
           Emitted->hasFnAttribute(windows_eh_md::UnresolvedSourceFrame));
       EXPECT_TRUE(State.LastError.empty());
     }
+}
+
+TEST_F(SessionLLVMTest, TentativeSourceCacheCannotAuthorizeNativeLLVM) {
+  auto Function = sourceFunction();
+  Function.AnalysisOnly = true;
+  State.PipeResult.MedFuncs.push_back(Function);
+  for (bool NoOpt : {false, true}) {
+    State.clearError();
+    const auto *Source = State.ensureFunctionLlvmModule(0x1000, NoOpt, true);
+    ASSERT_TRUE(Source) << State.LastError;
+    EXPECT_EQ(State.ensureFunctionLlvmModule(0x1000, NoOpt, true), Source);
+    EXPECT_EQ(State.ensureFunctionLlvmModule(0x1000, NoOpt, false), nullptr);
+    EXPECT_NE(State.LastError.find("Tentative analysis recovery"),
+              std::string::npos);
+    EXPECT_FALSE(State.ensureLlvmModule(NoOpt));
+    EXPECT_TRUE(State.PipeResult.Success);
+  }
 }
 
 TEST_F(SessionLLVMTest, MissingIdentityNeverFallsBackToSymbolSpelling) {

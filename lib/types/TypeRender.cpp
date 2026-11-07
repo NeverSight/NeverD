@@ -16,6 +16,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <array>
 
 namespace neverd::types {
 namespace {
@@ -65,14 +66,20 @@ constexpr Keyword Keywords[] = {
 };
 
 bool reserved(Language Lang, llvm::StringRef Name) {
-  for (const Keyword &Entry : Keywords) {
-    // C++ reserves C's words as well as its own.
-    const bool Applies = Entry.Lang == Lang ||
-                         (Lang == Language::Cpp && Entry.Lang == Language::C);
-    if (Applies && Name == Entry.Word)
-      return true;
-  }
-  return false;
+  // A header can spell thousands of names. Index the shared language table
+  // once instead of scanning every language's keywords for each identifier.
+  static const auto ByLanguage = [] {
+    std::array<llvm::StringSet<>, std::size(Languages)> Sets;
+    for (const Keyword &Entry : Keywords) {
+      Sets[size_t(Entry.Lang)].insert(Entry.Word);
+      // C++ reserves C's words as well as its own.
+      if (Entry.Lang == Language::C)
+        Sets[size_t(Language::Cpp)].insert(Entry.Word);
+    }
+    return Sets;
+  }();
+  const size_t Index = size_t(Lang);
+  return Index < ByLanguage.size() && ByLanguage[Index].contains(Name);
 }
 
 } // namespace

@@ -16,7 +16,9 @@
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedBoundCallStackArguments.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallTarget.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -220,6 +222,97 @@ TEST(MedCachedCallTarget, Win64ConventionOwnsWdkOperandsAndSingleResults) {
   EXPECT_EQ(Arguments->Parameters[5].Bytes, 1u);
   EXPECT_EQ(Arguments->Parameters[6].Bytes, 8u);
   EXPECT_FALSE(Win64->PrototypeIntegerArguments("NotAKernelRoutine"));
+}
+
+// The contract binds a stack argument as a load of its outgoing slot at the
+// call. Where the block stored that slot last, the call passes the stored
+// value; anything that may change the slot in between keeps the load.
+TEST(MedBoundCallStackArguments, CallsPassTheValueTheirBlockStoredLast) {
+  const auto *Win64 = callArgumentConvention(Arch::X64, BinaryFormat::COFF);
+  ASSERT_TRUE(Win64 && Win64->PrototypeIntegerArguments);
+  const auto Signature = Win64->PrototypeIntegerArguments("KeBugCheckEx");
+  ASSERT_TRUE(Signature);
+  ASSERT_EQ(Signature->Parameters.size(), 5u);
+  ASSERT_EQ(Signature->Parameters[4].Kind, SourceABICarrierKind::Stack);
+  const auto Bound =
+      std::make_shared<const FixedIntegerCallArguments>(*Signature);
+  const auto SP = reg(1, x86reg::RSP);
+  const auto Constant = [](uint64_t Value, uint16_t Bytes = 8) {
+    return MedVar::makeConst(Value, Bytes);
+  };
+  const auto IntrinsicOp = [&](Intrinsic Id) {
+    return op(NdOp::INTRINSIC, {},
+              {Constant(static_cast<uint64_t>(Id), 4), value(20)});
+  };
+  enum class Between {
+    Nothing,
+    ContextExport,
+    DisjointStore,
+    OtherIntrinsic,
+    Call,
+    OverlappingStore,
+    OtherBase,
+  };
+  for (Between Kind :
+       {Between::Nothing, Between::ContextExport, Between::DisjointStore,
+        Between::OtherIntrinsic, Between::Call, Between::OverlappingStore,
+        Between::OtherBase}) {
+    SCOPED_TRACE(static_cast<int>(Kind));
+    MedFunc F;
+    F.Entry = 0x1000;
+    F.Name = "bound_stack_argument";
+    MedBlock B;
+    B.Id = 0;
+    B.StartAddr = F.Entry;
+    B.Ops = {op(NdOp::INT_ADD, value(2), {SP, Constant(0x20)}),
+             op(NdOp::STORE, {}, {value(2), Constant(0)})};
+    switch (Kind) {
+    case Between::Nothing:
+      break;
+    case Between::ContextExport:
+      B.Ops.push_back(IntrinsicOp(Intrinsic::X87ContextExport));
+      break;
+    case Between::DisjointStore:
+      B.Ops.push_back(op(NdOp::INT_ADD, value(3), {SP, Constant(0x28)}));
+      B.Ops.push_back(op(NdOp::STORE, {}, {value(3), Constant(7)}));
+      break;
+    case Between::OtherIntrinsic:
+      B.Ops.push_back(IntrinsicOp(Intrinsic::X87ContextBegin));
+      break;
+    case Between::Call:
+      B.Ops.push_back(op(NdOp::CALL, value(3), {Constant(0x2000)}));
+      break;
+    case Between::OverlappingStore:
+      B.Ops.push_back(op(NdOp::INT_ADD, value(3), {SP, Constant(0x24)}));
+      B.Ops.push_back(op(NdOp::STORE, {}, {value(3), Constant(7, 4)}));
+      break;
+    case Between::OtherBase:
+      B.Ops.push_back(
+          op(NdOp::INT_ADD, value(3), {reg(4, x86reg::RBX), Constant(0x40)}));
+      B.Ops.push_back(op(NdOp::STORE, {}, {value(3), Constant(7)}));
+      break;
+    }
+    B.Ops.push_back(op(NdOp::INT_ADD, value(5), {SP, Constant(0x20)}));
+    B.Ops.push_back(op(NdOp::LOAD, value(6), {value(5)}));
+    MedOp Call = op(
+        NdOp::CALL, {},
+        {Constant(0x3000), value(7), value(8), value(9), value(10), value(6)});
+    Call.IntegerCallSignature = Bound;
+    B.Ops.push_back(Call);
+    B.Ops.push_back(op(NdOp::RETURN, {}, {}));
+    for (size_t I = 0; I < B.Ops.size(); ++I)
+      B.Ops[I].Addr = F.Entry + I;
+    F.Blocks = {B};
+    const bool Forwards = Kind == Between::Nothing ||
+                          Kind == Between::ContextExport ||
+                          Kind == Between::DisjointStore;
+    EXPECT_EQ(forwardBoundCallStackArguments(F), Forwards);
+    const MedOp &Result = F.Blocks[0].Ops[F.Blocks[0].Ops.size() - 2];
+    ASSERT_EQ(Result.Opcode, NdOp::CALL);
+    EXPECT_EQ(Result.Inputs[5], Forwards ? Constant(0) : value(6));
+    // Register arguments are no slot loads and stay as bound.
+    EXPECT_EQ(Result.Inputs[1], value(7));
+  }
 }
 
 TEST(MedCachedCallTarget, RetainsTheOriginalMutableImportObservation) {
@@ -703,5 +796,45 @@ int main(void) {
             Source + Oracle,
             {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
     }
+}
+
+TEST(MedCachedCallTarget, AffineCodeValuesKeepTheirAddressRole) {
+  for (uint16_t Width : {uint16_t(4), uint16_t(8)})
+    for (NdOp Opcode : {NdOp::INT_ADD, NdOp::INT_SUB}) {
+      MedBlock B;
+      auto Result = value(1, Width);
+      const uint64_t Base = Width == 4 ? UINT32_MAX : UINT64_MAX;
+      B.Ops = {
+          op(Opcode, Result,
+             {MedVar::makeConst(Base, Width), MedVar::makeConst(17, Width)})};
+      const auto Target = resolvePreSSAMedCallTarget(
+          B, Result, Width == 4 ? Arch::X86 : Arch::X64);
+      ASSERT_TRUE(Target);
+      EXPECT_FALSE(Target->ThroughSlot);
+      EXPECT_EQ(Target->Address, Opcode == NdOp::INT_ADD ? 16u : Base - 17);
+      B.Ops.push_back(op(NdOp::LOAD, value(2, Width), {Result}));
+      const auto Slot = resolvePreSSAMedCallTarget(
+          B, value(2, Width), Width == 4 ? Arch::X86 : Arch::X64);
+      ASSERT_TRUE(Slot);
+      EXPECT_TRUE(Slot->ThroughSlot);
+      EXPECT_EQ(Slot->Address, Target->Address);
+    }
+}
+
+TEST(MedCachedCallTarget, AffineCodeProofRejectsUnknownOrFutureInputs) {
+  MedBlock B;
+  B.Ops = {op(NdOp::INT_ADD, value(1), {value(2), MedVar::makeConst(17, 8)})};
+  EXPECT_FALSE(resolvePreSSAMedCallTarget(B, value(1), Arch::X64));
+  // A later definition cannot become evidence for a value at this call.
+  B.Ops.push_back(op(NdOp::COPY, value(2), {MedVar::makeConst(0x1000, 8)}));
+  EXPECT_FALSE(resolveMedCallTarget(B, 1, value(1)));
+  B.Ops.front().Inputs[0] = MedVar::makeConst(0x1000, 4);
+  EXPECT_FALSE(resolvePreSSAMedCallTarget(B, value(1), Arch::X64));
+  B.Ops.front().Inputs[0] = MedVar::makeConst(0x1000, 8);
+  B.Ops.front().MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+  EXPECT_FALSE(resolvePreSSAMedCallTarget(B, value(1), Arch::X64));
+  B.Ops.front().MemoryOrdering = NdMemoryOrdering::None;
+  size_t Work = 0;
+  EXPECT_FALSE(resolvePreSSAMedCallTarget(B, value(1), Arch::X64, &Work));
 }
 } // namespace

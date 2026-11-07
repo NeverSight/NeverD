@@ -30,13 +30,14 @@ std::string MultiOutputRender::operator()(
     const std::vector<ExprPtr> &Operands,
     std::function<std::string(const HighExpr &)> ExprFn,
     std::function<std::string(const MedVar &)> VarFn, IsAliveFn IsAlive) const {
+  if (IID == Intrinsic::Eret)
+    throw std::invalid_argument(kAArch64ExceptionReturnMalformed);
   if (isAArch64WritebackMemoryIntrinsic(IID) && TheArch != Arch::AArch64)
     throw std::invalid_argument(kWritebackMalformed);
-  if (isAArch64ExceptionReturnIntrinsic(IID))
-    throw std::invalid_argument(kAArch64ExceptionReturnUnsupported);
   if (const char *Reason = x86NonlocalControlTransferReason(IID))
     throw std::invalid_argument(Reason);
-  if (IID == Intrinsic::RawEnvironmentRequirementV1)
+  if (IID == Intrinsic::RawEnvironmentRequirementV1 ||
+      IID == Intrinsic::ArchitecturalValueV1)
     throw std::invalid_argument(
         "raw environment requirement has no C runtime contract");
   if (TheArch == Arch::ARM || TheArch == Arch::AArch64)
@@ -50,11 +51,18 @@ std::string renderIntrinsicCall(Intrinsic Id, Arch TheArch,
                                 uint16_t ResultBytes, bool &HasCIntrinsics,
                                 bool GnuToolchain,
                                 llvm::ArrayRef<uint16_t> OperandBytes) {
-  if (isAArch64ExceptionReturnIntrinsic(Id))
-    throw std::invalid_argument(kAArch64ExceptionReturnUnsupported);
+  if (Id == Intrinsic::Eret &&
+      (TheArch != Arch::AArch64 ||
+       !aarch64ExceptionReturnShapeIsValid(Id, Ops.size() + 1, ResultBytes)))
+    throw std::invalid_argument(kAArch64ExceptionReturnMalformed);
+  if ((Id == Intrinsic::A64_Wrffr || Id == Intrinsic::A64_Rdffr ||
+       Id == Intrinsic::A64_Setffr) &&
+      TheArch != Arch::AArch64)
+    throw std::invalid_argument("FFR transfers require AArch64");
   if (const char *Reason = x86NonlocalControlTransferReason(Id))
     throw std::invalid_argument(Reason);
-  if (Id == Intrinsic::RawEnvironmentRequirementV1)
+  if (Id == Intrinsic::RawEnvironmentRequirementV1 ||
+      Id == Intrinsic::ArchitecturalValueV1)
     throw std::invalid_argument(
         "raw environment requirement has no C runtime contract");
   if (aarch64_sve::vectorOperation(Id) && TheArch != Arch::AArch64)

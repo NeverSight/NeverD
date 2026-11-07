@@ -24,6 +24,7 @@ C(Intrinsic::Iret, "neverd_interrupt_return");
 // R11->RFLAGS; SYSEXIT: RDX->RIP, RCX->RSP).
 C(Intrinsic::Sysretq, "neverd_syscall_return");
 C(Intrinsic::Sysexitq, "neverd_sysenter_return");
+C(Intrinsic::X86Sysenter, "__builtin_ia32_sysenter");
 C(Intrinsic::X64WindowsSyscall, "neverd_x64_windows_syscall");
 
 // SSE4.2 CRC32 (the function takes the crc32 target feature,
@@ -293,6 +294,7 @@ C(Intrinsic::X86FPMaskCompareMemoryState,
 C(Intrinsic::X86EncluPending, "__neverd_enclu_pending");
 C(Intrinsic::X86GetsecPending, "__neverd_getsec_pending");
 C(Intrinsic::X86EncluBounded, "__neverd_enclu_bounded");
+C(Intrinsic::X64CallRCX, "__neverd_win64_call_rcx");
 C(Intrinsic::X86GetsecBounded, "__neverd_getsec_bounded");
 
 C(Intrinsic::X86FourSourceMemory, "neverd_x86_four_source_memory");
@@ -302,3 +304,20 @@ C(Intrinsic::X86LegacyRaoAnd, "neverd_x86_legacy_aand");
 C(Intrinsic::X86LegacyRaoOr, "neverd_x86_legacy_aor");
 C(Intrinsic::X86LegacyRaoXor, "neverd_x86_legacy_axor");
 C(Intrinsic::X86LegacyCmpccXadd, "neverd_x86_legacy_cmpccxadd");
+C(Intrinsic::X86SvmRunContext, "__builtin_ia32_vmrun_context");
+C(Intrinsic::X86KvmVmcall, "__builtin_ia32_vmcall_kvm");
+C(Intrinsic::X86KvmVmmcall, "__builtin_ia32_vmmcall_kvm");
+
+C(Intrinsic::X86HyperVCall, "__builtin_ia32_hyperv_call");
+
+#define NEVERD_X86_SNP(Id, Name, ...)                                          \
+  C(Intrinsic::Id, "__builtin_ia32_" #Name "_context");
+#include "neverd/ir/intrinsics/X86/X86Snp.def"
+#undef NEVERD_X86_SNP
+C(Intrinsic::X86SevVmgexit, "__builtin_ia32_vmgexit_sev");
+
+C(Intrinsic::X86HleState, "__neverd_x86_hle_state");
+
+C(Intrinsic::X86SmmReturnContext, "__builtin_ia32_rsm_context");
+C(Intrinsic::X86SgxTransferAtContext,
+  "__builtin_ia32_enclu_transfer_at_context");

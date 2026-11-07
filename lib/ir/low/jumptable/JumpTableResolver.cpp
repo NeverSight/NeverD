@@ -1684,21 +1684,35 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // The exact-boundary helpers inspect loader inventories whose size is under
   // input control.  Charge their complete owner-query call graph before each
   // use; a failed charge is candidate evidence incompleteness and occurs before
-  // the helper can allocate or publish anything.
+  // the helper can allocate or publish anything. The full relocation scan is
+  // always charged. Only fields inside the candidate span can reach the
+  // helpers' expensive executable-owner queries; use their shared numeric
+  // filter without treating it as ownership or selector evidence.
   auto consumeExactBoundaryInventory = [&](const BinaryImage &Image,
-                                           size_t DecodedAnchorCount) {
+                                           size_t DecodedAnchorCount,
+                                           va_t BaseAddr, uint64_t Stride,
+                                           uint32_t Run) {
     const size_t Fields = Image.DataAddressRelocOperands.size();
+    if (!consumeCandidateProducts({{Fields, 8}}))
+      return false;
+    size_t RelevantFields = 0;
+    for (const auto &[FieldVA, Field] : Image.DataAddressRelocOperands)
+      RelevantFields +=
+          !Field.PCRelativeFromInstructionEnd &&
+          canBoundCodePtrRun(Field.TargetVA, BaseAddr, Stride, Run);
     if (!consumeCandidateProducts({{Image.Segments.size(), 3},
                                    {Image.Sections.size(), 3},
                                    {Image.RelCodeTableAnchors.size(), 1},
                                    {DecodedAnchorCount, 1},
                                    {Fields, 2}}) ||
-        !consumeCandidateFactorProduct({Fields, Image.Segments.size(), 16}) ||
-        !consumeCandidateFactorProduct({Fields, Image.Sections.size(), 8}) ||
         !consumeCandidateFactorProduct(
-            {Fields, Image.Imports.size(), Image.Segments.size(), 4}) ||
+            {RelevantFields, Image.Segments.size(), 16}) ||
         !consumeCandidateFactorProduct(
-            {Fields, Image.Imports.size(), Image.Sections.size(), 4}))
+            {RelevantFields, Image.Sections.size(), 8}) ||
+        !consumeCandidateFactorProduct(
+            {RelevantFields, Image.Imports.size(), Image.Segments.size(), 4}) ||
+        !consumeCandidateFactorProduct(
+            {RelevantFields, Image.Imports.size(), Image.Sections.size(), 4}))
       return false;
     return true;
   };
@@ -1730,8 +1744,12 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     if (StorageCount == 0 && Candidate.HasBaseAddr &&
         Candidate.EntrySize != 0 && Candidate.PhysicalCapacity != 0 &&
         Candidate.RelocAbsolute) {
-      if (!CurrentImg || !consumeExactBoundaryInventory(
-                             *CurrentImg, DecodedTableAnchors.size()))
+      if (!CurrentImg ||
+          !consumeExactBoundaryInventory(
+              *CurrentImg, DecodedTableAnchors.size(), Candidate.BaseAddr,
+              Candidate.EntryStride ? Candidate.EntryStride
+                                    : Candidate.EntrySize,
+              Candidate.PhysicalCapacity))
         return std::nullopt;
       StorageCount = 1;
     }
@@ -3894,7 +3912,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       (!consumeCandidateFactorProduct(
            {size_t(limits::kMaxJumpTableEntries) + 1,
             orderedLookupWork(Img.CodePtrRelocSlots.size())}) ||
-       !consumeExactBoundaryInventory(Img, DecodedTableAnchors.size()) ||
+       !consumeExactBoundaryInventory(Img, DecodedTableAnchors.size(),
+                                      Info.BaseAddr, PhysicalEntryStride,
+                                      limits::kMaxJumpTableEntries) ||
        !consumeCandidateProducts(
            {{Img.RelCodeTableAnchors.size(), 3},
             {DecodedTableAnchors.size(),
@@ -4290,18 +4310,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     return {};
   }
 
-  // If a normalization offset is present and the guard bound looks
-  // like it was applied to the original (pre-normalization) variable,
-  // adjust it down to reflect the actual table size.
-  if (Info.MaxEntries > 0 && Info.NormBase > 0) {
-    uint32_t Adj = pullBackBound(Info.MaxEntries, Info);
-    if (Adj != Info.MaxEntries && Adj >= limits::kMinJumpTableEntries) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  pullback: adjusted bound " << Info.MaxEntries << " -> "
-                 << Adj << " (normBase=" << Info.NormBase << ")\n");
-      Info.MaxEntries = Adj;
-    }
-  }
+  // Domain proofs already use the exact table-address index occurrence.
+  // Source-level normalization is only for recovering case labels; applying
+  // it to this bound again would discard reachable table slots.
 
   // A power-of-two-modulo / masked index (`and $(2^k-1)`, with an optional
   // following `dec` from a peeled iteration) is hard-bounded by the mask, for
@@ -4456,7 +4467,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         bool HasExactBoundary = ExactOwnerBoundary;
         if (ExactPhysicalSlotCount != 0 && !HasExactBoundary &&
             AllowAnchorBoundary) {
-          if (!consumeExactBoundaryInventory(Img, DecodedTableAnchors.size()))
+          if (!consumeExactBoundaryInventory(Img, DecodedTableAnchors.size(),
+                                             Candidate.BaseAddr, PhysicalStride,
+                                             ExactPhysicalSlotCount))
             return false;
           HasExactBoundary = codePtrRelocRunHasExactBoundary(
               Img, Candidate.BaseAddr, PhysicalStride, ExactPhysicalSlotCount,
@@ -4758,7 +4771,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         }
       } else if (Info.PhysicalCapacity >= limits::kMinJumpTableEntries &&
                  Info.PhysicalCapacity < RawAbsCodePtrRun) {
-        if (!consumeExactBoundaryInventory(Img, DecodedTableAnchors.size()))
+        if (!consumeExactBoundaryInventory(Img, DecodedTableAnchors.size(),
+                                           Info.BaseAddr, PhysicalEntryStride,
+                                           Info.PhysicalCapacity))
           return uint32_t{0};
         if (codePtrRelocRunHasExactBoundary(
                 Img, Info.BaseAddr, PhysicalEntryStride, Info.PhysicalCapacity,
@@ -4777,7 +4792,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
             return static_cast<uint32_t>(Slots);
         }
       }
-      if (!consumeExactBoundaryInventory(Img, DecodedTableAnchors.size()))
+      if (!consumeExactBoundaryInventory(Img, DecodedTableAnchors.size(),
+                                         Info.BaseAddr, PhysicalEntryStride,
+                                         RawAbsCodePtrRun))
         return uint32_t{0};
       return codePtrRelocRunHasExactBoundary(
                  Img, Info.BaseAddr, PhysicalEntryStride, RawAbsCodePtrRun,
@@ -4878,7 +4895,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     // permission is computed after the final target graph is known.
     bool OwnsCompletePhysicalObject = false;
     if (AuthenticatedStorageSlots == PhysicalSpan) {
-      if (!consumeExactBoundaryInventory(Img, DecodedTableAnchors.size()))
+      if (!consumeExactBoundaryInventory(Img, DecodedTableAnchors.size(),
+                                         Info.BaseAddr, PhysicalStride,
+                                         PhysicalSpan))
         return {};
       OwnsCompletePhysicalObject =
           codePtrRelocRunHasExactBoundary(Img, Info.BaseAddr, PhysicalStride,

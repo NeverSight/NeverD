@@ -134,6 +134,7 @@ void initAArch64RegInfoTables() {
   A64RegInfo.SubRegs = A64SubRegs;
 
   A64RegInfo.MinInsnAlign = limits::kMinInsnAlignAArch64;
+  A64RegInfo.PlatformRegister = a64reg::X18;
 
   // AArch64 returns floating point in V0/D0, and ARM's -O2 internal
   // convention for static functions returns it in D0 (both vector

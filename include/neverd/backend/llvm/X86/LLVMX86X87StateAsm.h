@@ -6,8 +6,8 @@
 ///
 /// \file
 /// Inline-asm contracts of the x87 instructions that change register tags,
-/// TOP or status without an LLVM intrinsic.  The LLVM emitter writes them and
-/// the LLVM-to-C writer recognizes them from the same table.
+/// TOP or status when a native LLVM intrinsic is unavailable. The LLVM
+/// emitter writes them and the LLVM-to-C writer recognizes the same table.
 ///
 //===----------------------------------------------------------------------===//
 

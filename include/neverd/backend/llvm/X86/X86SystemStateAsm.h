@@ -142,14 +142,32 @@ x86SystemStateAsm(Intrinsic Id, Arch TargetArch, uint16_t Width,
     P.InputConstraints = {"r", "{ax}", "{dx}"};
     P.Text += " " + Input(0) + "\n\tsetc $0";
     break;
+  case K::LockedBit:
+    P.Text += std::string(Width == 2   ? "w "
+                          : Width == 4 ? "l "
+                                       : "q ") +
+              Input(1) + ", " + Memory(0) + "\n\tsetc $0";
+    break;
+  case K::LockedLogic: {
+    const char *Suffix = Width == 1   ? "b"
+                         : Width == 2 ? "w"
+                         : Width == 4 ? "l"
+                                      : "q";
+    P.Text += std::string(Suffix) + " " + Input(1) + ", " + Memory(0) +
+              "\n\tsetp %al\n\tsetz %ah\n\tsets $1";
+    P.OutputConstraints[0] = "={ax}";
+    P.InputConstraints[1] = Width == 1 ? "q" : "r";
+    break;
+  }
   case K::AccessRights:
     P.Text += " " + (C.MemoryArgument == 0 ? Memory(0) : Input(0)) +
               ", $0\n\tsetz $1";
     break;
   case K::AdjustRpl:
-    if (C.MemoryArgument == 0)
+    if (C.MemoryArgument == 0) {
+      P.InputConstraints[0] = x86MemoryAddressAsm(32).LLVMConstraint;
       P.Text += " " + Input(1) + ", " + Memory(0) + "\n\tsetz $0";
-    else {
+    } else {
       P.InputConstraints[0] = "0";
       P.Text += " " + Input(1) + ", $0\n\tsetz $1";
     }
@@ -163,6 +181,10 @@ x86SystemStateAsm(Intrinsic Id, Arch TargetArch, uint16_t Width,
     break;
   case K::DirectStore:
     P.Text += " " + Input(1) + ", " + Memory(0);
+    break;
+  case K::StreamStore128:
+    P.Text += " " + Input(1) + ", " + Memory(0);
+    P.InputConstraints[1] = "x";
     break;
   case K::DirectStore64B:
     P.Text += " " + Memory(0) + ", " + Input(1);
@@ -190,7 +212,7 @@ x86SystemStateAsm(Intrinsic Id, Arch TargetArch, uint16_t Width,
   return P;
 }
 
-/// Explicit descriptor offsets carry their own address width and segment.
+/// Explicit system-memory offsets carry their own address width and segment.
 /// Shared by native-call C projection and the assembly fallback.
 inline std::optional<X86SystemStateAsm>
 x86SystemStateAddressAsm(Intrinsic Id, Arch TargetArch, uint16_t Width,
@@ -201,7 +223,8 @@ x86SystemStateAddressAsm(Intrinsic Id, Arch TargetArch, uint16_t Width,
   const bool Query = C.Kind == X86SystemStateKind::AccessRights;
   const unsigned WordBits = TargetArch == Arch::X64 ? 64 : 32;
   if (!Plan || C.MemoryArgument != 0 ||
-      (!Query && Id != Intrinsic::X86LoadKernelGsMemory) ||
+      (!Query && Id != Intrinsic::X86LoadKernelGsMemory &&
+       Id != Intrinsic::X86AdjustRplMemory) ||
       (AddressBits != WordBits && AddressBits != WordBits / 2))
     return std::nullopt;
   const char *Segment = nullptr;
@@ -242,11 +265,16 @@ x86SystemStateAddressAsm(Intrinsic Id, Arch TargetArch, uint16_t Width,
   if (Query)
     A.Text += ", $0\n\tsetz $1";
   const auto *Constraint = x86MemoryAddressAsm(AddressBits).LLVMConstraint;
-  A.InputConstraints = {Constraint};
+  A.InputConstraints[0] = Constraint;
+  if (Id == Intrinsic::X86AdjustRplMemory)
+    A.Text = std::string(C.Mnemonic) + " $" +
+             std::to_string(A.OutputBytes.size() + 1) + ", " + Segment + "(" +
+             Base + ")\n\tsetz $0";
   A.Constraints.clear();
   for (const auto &Constraint : A.OutputConstraints)
     A.Constraints += Constraint + ",";
-  A.Constraints += std::string(Constraint) + ",";
+  for (const auto &Input : A.InputConstraints)
+    A.Constraints += Input + ",";
   if (A.ChangesFlags)
     A.Constraints += "~{flags},";
   A.Constraints += "~{memory}";

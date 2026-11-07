@@ -87,6 +87,7 @@ add_neverd_unittest(NeverDEVMIntegrationTests
 
   LINK_LIBS
   neverd_shared
+  LLVMSupport
 )
 
 target_compile_definitions(NeverDEVMIntegrationTests PRIVATE

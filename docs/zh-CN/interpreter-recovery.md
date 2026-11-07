@@ -63,7 +63,7 @@ C 调用方使用 `neverd_devirtualize_source_v3()` 或 `neverd_devirtualize_mac
 
 恢复还提供 `--vm-chain-transfers=N`（默认 0）和 `--vm-no-control-discovery`。串接在已证明唯一目标的控制转移之间保留符号关联；达到上限后回到普通 CFG 边界。机器状态恢复可通过 `--vm-entry-frame=begin:end` 声明未经运行时检查、不会回绕的入口 RSP 偏移范围。精确数值前提会写入生成的 C 和报告；它不授予内存访问权限，也不构成等价证明。
 
-超过 SSA 构建限制的大型恢复函数可通过 `--llvm` 使用有界的标量可变存储契约。入口输入、循环携带值和较早读取的语义得到保留。不支持的隐式状态、向量寄存器参数、映像重定位、歧义存储和畸形控制流会明确失败；HighC 拒绝此回退路径。源码输出仍遵循现有机器状态契约，不新增等价证明证书。
+超过 SSA 构建限制的大型恢复函数可通过 `--llvm` 使用有界的标量可变存储契约。入口输入、循环携带值和较早读取的语义得到保留。不支持的隐式状态、向量寄存器参数、映像重定位、歧义存储和畸形控制流会明确失败。HighC 与 LLVM C 共用这条经过验证的回退路径。显式 x64 `RequireAligned` 检查（包括单字节条件）保留其故障判定；畸形操作和不支持的内建指令仍会被拒绝。源码输出仍遵循现有机器状态契约，不新增等价证明证书。
 
 该可变子集接受 8/16/32/64/128 位标量存储，位计数输入最多为 64 位。非标准位宽和更宽存储需要单独的源码契约。
 
@@ -310,3 +310,99 @@ neverd decompile program --func entry --devirtualize --vm-machine-state \
 ## 换栈后的内部转移
 
 显式原始机器区域可以继续处理当前栈指针不再相对入口栈定位的内部近 CALL 和 RET。架构适配器保留实际的目标捕获、压栈、返回地址读取和出栈。每个内部返回仍须根据真实栈字证明完整的有限目标集合。只有已证明相对入口栈定位的返回槽才能进入栈帧投影和保留清单；图边界丢失其他栈关系时，恢复仍可能拒绝。普通函数恢复继续要求栈帧恢复。此能力提供原始区域结果，完整函数组合以及源码或原生等价性仍需单独证明。
+
+<!-- i18n-section: store-separation-proofs -->
+
+## 可选的写入分离证明
+
+`--vm-prove-store-return-separation` 在保留返回地址单元、已保存的帧指针和当前标量帧单元之前，证明完整写入与它们不相交。`--vm-prove-store-frame-separation` 还检查声明的帧和当前绝对地址单元，需要 `--vm-machine-state` 和 `--vm-entry-frame`。两者都需要 `--devirtualize`，默认关闭，共用现有证明和工作预算，不增加不别名前提。未获证明的写入仍按通常规则使信息失效；恢复不完整时不发布源码。可与现有链控制组合以保留循环。
+
+v9 接口 `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v9` 接受 `neverd_devirtualize_options_v9`。将结构清零，并将 v1 前缀的 `struct_size` 设为完整大小。标志为 `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION`, `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_FRAME_SEPARATION`；`reserved` 必须为零。旧接口忽略此尾部。Python 提供 `NeverDDevirtualizeOptionsV9`, `DevirtualizeFlagsV9`。报告含 `proveStoreReturnSlotSeparation`, `proveStoreFrameSeparation`。回归通过两条 C 路径，在 O0/O2 和 ASan/UBSan 下执行动态索引局部数组循环，并检查整个提供的栈存储。
+
+启用任一种证明策略后，恢复过程还会在控制流节点间保留经穷尽证明的寄存器相对入口栈帧的有限偏移。合流取所有传入偏移的并集；缺少事实或并集超过现有控制元组上限时，退化为未知。这不会保留跨寄存器相关性，也不增加别名假设。
+
+<!-- i18n-section: finite-indexed-frame-reads -->
+
+## 有限索引的栈帧读取
+
+普通 `LOAD` 的入口栈帧偏移经穷尽证明为有限集合后，会读取每个候选位置的当前帧字节，并保留条件符号值。残留代码保留原始运行时读取、完整宽度和字节序。只有所有候选位置的每个字节都具备外部来源，输出才获得该来源。未知字节和已失效值仍为未知；枚举不完整时继续采用通常的符号内存行为。沿用现有控制元组、求解器、节点和操作预算，不生成不可变读取证据，也不增加不别名契约。
+
+<!-- i18n-section: runtime-validity-refinement -->
+
+## 跨图边界的运行时有效性
+
+启用控制状态发现后，非恒定的运行时有效性谓词可以请求恢复图边界处丢失的产生者位信息。恢复过程沿用现有共享预算重试，并必须证明每个可达传入状态都有效。这可以跨节点和循环保留已建立的对齐关系及经过掩码的控制寄存器值；不会假定被拒绝的状态不可能出现，也不会删除原始运行时操作。
+
+<!-- i18n-section: ordered-query-source -->
+
+## C++ 源码恢复中的有序 CPU 查询
+
+`wrapInterpreterMachineQueryStateX64()` 是可选的 C++ 源码接口。160 字节状态保留原有的 136 字节机器状态前缀，随后依次是三个 64 位字段：查询数组地址、数量和游标。每条 24 字节记录包含六个 32 位字：leaf、subleaf、EAX、EBX、ECX 和 EDX。规范 CPUID 指令按顺序消耗一条匹配记录，并将四个结果零扩展；相同选择器可以得到不同答案。答案不来自主机 CPU 指令。
+
+记录耗尽返回状态 3，选择器不匹配返回 4。两者都在该查询之前停止，提交当前机器状态，保留此前的客户机内存效果，并保持游标不变。入口对齐拒绝仍返回 2，且不执行写入。调用者必须提供可访问、不可变、地址不回绕且与状态和客户机内存分离的数组；数量为零时允许空地址。原有机器状态和标志配置契约仍适用。此接口不增加 原生等价证明或硬件串行化支持。原有封装仍拒绝 CPU 查询，其他不支持的内建操作和原始环境仍被拒绝。
+
+<!-- i18n-section: xmm-query-source -->
+
+## 显式 XMM 源码状态
+
+`wrapInterpreterMachineQueryStateX64V2()` 使用独立的 416 字节布局：保留 160 字节查询状态前缀，随后存储 XMM0–XMM15，每个寄存器依次为低、高 64 位字。状态只需 8 字节对齐。所有 XMM 字节均在入口读取，在普通返回和查询失败出口提交。查询状态和入口对齐状态的含义保持不变。
+
+此 C++ 接口接受完整的 128 位 XMM 操作数，并根据当前字节定义重建指令内临时值的读取，保留局部覆盖。未定义的字节和函数级临时值别名会明确报错。只有经架构层证明的常量地址对齐检查可以移除；动态或畸形检查仍被拒绝。部分 XMM 操作数、更宽的向量寄存器组和浮点环境仍不支持。此功能不增加 原生等价证明支持；原有封装保持其布局和限制。
+
+<!-- i18n-section: source-abi-v10 -->
+
+## 通过 CLI 和 SDK 选择源码布局
+
+将 `--vm-source-abi=scalar|queries|xmm` 与 `--devirtualize --vm-machine-state` 一起使用。默认 `scalar` 保留 136 字节布局；`queries` 选择上述 160 字节有序查询状态；`xmm` 选择 416 字节查询及 XMM 状态。报告通过 `sourceABI` 和 `sourceStateBytes` 标明布局，生成的 C 会说明相应存储契约。
+
+v10 C API `neverd_devirtualize_source_v10()` 和 `neverd_devirtualize_machine_source_v10()` 接受 `neverd_devirtualize_options_v10`。将其清零，把 v1 前缀的 `struct_size` 设为完整大小，并用 `NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1`、`NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1` 或 `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2` 设置 `machine_source_abi`。未知选择值、非零保留字段及普通源码配合扩展布局都会被拒绝。旧 API 忽略新增尾部，v10 忽略未来尾部；空选项保留标量默认值。Python 提供 `NeverDDevirtualizeOptionsV10` 和 `DevirtualizeMachineSourceABI`。原生认证能力保持不变。
+
+<!-- i18n-section: gui-interpreter-recovery -->
+
+## 桌面中的解释器恢复
+
+在 C 源码视图选择**恢复解释器函数**。**解释器恢复选项…**可设置状态布局、工作量限制及明确的入口栈帧条件；默认不增加栈帧、对齐或互不重叠的假设。**解释器恢复报告…**保留引擎诊断。取消或结果不完整时保留之前的源码，**返回普通源码**恢复常规视图。
+
+后台接受 `source_options.interpreter_recovery` 作为唯一源码选项，并调用 C SDK v10。完整 C 源码按原样缓存和分页，不应用普通源码变量编辑，也不虚构指令映射。完整报告仅出现在第一页；`source_available` 区分已生成源码与中止的恢复。这不构成原生等价认证。
+
+<!-- i18n-section: machine-region-source -->
+
+## 经过校验的机器分段源码
+
+显式启用的 C++ 接口 `wrapInterpreterMachineRegionSourceX64()` 位于 `neverd/analysis/arch/x86_64/InterpreterMachineRegionSource.h`，接收完整恢复结果和调用者独立给出的预期选项。它先校验整个原始图、环境和物理出口，再转换源码，并保留原始校验记录。普通包装器仍拒绝原始环境。CLI、C SDK 和 GUI 尚未暴露此接口。
+
+`InterpreterMachineRegionStateX64V1` 使用独立的 432 字节布局：前 416 字节为查询/XMM 状态，`PC` 位于 416，`ExitKind` 位于 424。函数入口固定，这两个字段都是输出。CALL/JMP/RET 成功出口保留实际目标和真实栈变化，提交全部受支持状态，并停在目标执行之前；出口种类依次为 1/2/3。查询耗尽或不匹配返回状态 3/4，停在查询前，输出该查询的原始 PC 和种类 0，保留此前效果。对齐拒绝返回 2，全部状态不变。状态 1 不提供有效续执行点。
+
+基础接口接受用户态非故障配置及现有标量/查询/XMM 操作；额外架构状态和补充代码/导入声明仍被拒绝，陷阱须显式选择指令前停止。`EntryFrameExcludedObjects` 现在会在任何访客访问、状态写入或记录预留前，检查完整栈帧/对象范围不发生地址环绕且彼此分离。拒绝返回状态 2，全部状态不变。对象之间可重叠；根地址相同时，只要相对范围分离仍可接受。其他内存/栈帧前提（包括绝对地址排除范围）仍由调用者负责，不推断可访问性或初始字节。访客内存仍须使用字节复制或对齐为 1 的别名类型输出。这不提供普通 ABI、调用组合或整个函数/原生等价认证。`InterpreterMachineRegionSourceTest.EntryObjects*` 在两种 C 后端的 O0/O2 下使用地址及未定义行为检查，覆盖完整状态、查询、别名、相邻和环绕范围，以及精确源码预算。
+
+架构未定义输出仍采用 LowIR 选定的实现值。要匹配某个处理器的选择，或证明这些选择不影响原生观测，仍须独立的环境约定或无干扰证明；本源码校验记录不提供这两者。
+
+<!-- i18n-section: machine-region-architectural-choices -->
+
+## 架构未定义标量取值
+
+C++ 原始区域接口可选择 `SpecializationUndefinedModel::FreshScalarV1`。架构侧完整的标量未定义效果记录会在每次动态执行时产生独立取值，并在分支和目标证明之前生效。同一次取值的复制保持关联，重复执行使用新的取值。残余图保留带条件的位更新，包括条件为假的生产记录；原始区域凭据绑定所选模型。
+
+该选项目前要求显式 x64 机态区域出口和完整的标量指令证据，不支持的效果或预算耗尽均拒绝。现有区域 C 适配器、普通发射器和原生证明接口会拒绝此模型，直到提供显式运行时取值环境；不会推断处理器的具体取值或普通 ABI。
+
+经过精确审核、显式关闭 CET 的 RDSSP 投影会保留目标寄存器，不产生新的取值；其通用未定义效果记录仍保持缺失状态。已认证的陷阱仍是尚未执行的边界。
+
+<!-- i18n-section: machine-region-choice-source -->
+
+## 可执行的架构取值
+
+`wrapInterpreterMachineRegionChoiceSourceX64V1` 使用独立的 456 字节 `InterpreterMachineRegionChoiceStateX64V1` 消费经过验证的 `FreshScalarV1` 结果。前 432 字节保持旧区域布局；`Choices`、`ChoiceCount`、`ChoiceCursor` 分别位于偏移 432、440、448。`StateABI` 为 `x64-machine-region-choice-state-v1`，`StateBytes` 为 456。旧的 432 字节封装仍拒绝该模型。
+
+每条 32 字节 `InterpreterArchitecturalChoiceX64V1` 记录包含四个 64 位字段：原始指令 PC、指令内的产生顺序号、位数和值。值必须落在指定位宽内。执行任何指令效果之前，先检查该指令所需的全部记录。状态 5 表示记录耗尽，状态 6 表示 PC、顺序号、位宽或值不匹配；两者都提交此前的效果，返回尚未执行的原始 PC 和 `ExitKind=None`，并保持该指令进入时的游标。整条指令完成后才推进游标，条件为假的产生记录也会消耗。重复执行使用新记录，复制和溢出到内存不消耗新记录。
+
+调用者须提供可访问、稳定且与状态及客户内存分离的记录；接口不会推断某个处理器的具体取值。查询状态、显式陷阱前退出和指令对齐检查保持原有约定。两条 C 路线可输出转换后的图，普通输出器仍拒绝未消费的产生操作。该 C++ 接口不等于 CLI/C SDK/GUI 集成、普通 ABI 恢复或原生等价认证。
+
+取值检查共用耗尽与不匹配的写回块，同时保留每条指令的原始 PC 和进入时的标志。标量转换后，仅当顺序后继只有一个前驱且不是入口或分析根时，封装才合并这条隐式顺序边。指令片段、条件边和循环仍明确保留。只重新分配生成的控制标签，客户常量和记录 PC 不变。状态布局、整条指令检查、游标提交以及全部源码资源上限保持不变。
+
+<!-- i18n-section: machine-region-pending-traps -->
+
+## 待处理陷阱出口
+
+接受 `InterpreterMachineRegionSourceOptions` 的重载可显式设置 `StopBeforeTraps = true`。它保持 432 字节布局，返回 `TrapPending`（4），`PC` 为原始陷阱地址，并提交该指令执行前的全部受支持状态。先前访存效果保留；不会执行陷阱、建立异常帧、进入处理程序或恢复执行。默认重载仍拒绝陷阱声明，包括未使用的声明。陷阱身份及审计元数据仍由原始区域所有者校验，此选项不补充架构证据。查询与对齐停止沿用原有状态码和状态契约。
+
+已校验的区域还保留规范的动态 `RequireAligned` 操作。两个 C 后端都保留其快速失败检查；违反指令对齐要求时，不提供已提交状态或异常续接。普通机态包装器沿用原有限制。

@@ -76,7 +76,8 @@ enum class X87PortableOperation {
   Subtract,
   ReverseSubtract,
   Divide,
-  ReverseDivide
+  ReverseDivide,
+  ResetMMX
 };
 
 struct X87InstructionForm {

@@ -13,6 +13,7 @@
 #include "../../../lib/backend/c/render/X86/X86Sgx.h"
 #include "../../../lib/backend/c/render/X86/X86SystemState.h"
 #include "../../../lib/backend/c/render/X86/X86Virtualization.h"
+#include "../../HostCompiler.h"
 #include "X86AMXFixtures.h"
 #include "X86SHA512Reference.h"
 #include "X86SystemStateFixtures.h"
@@ -24,13 +25,16 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/HighC/HighCIntrinsicRender.h"
 #include "neverd/backend/c/render/LLVMC/LLVMCIntrinsicRender.h"
+#include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/X86/X86AmxAsm.h"
 #include "neverd/backend/llvm/X86/X86AmxNative.h"
 #include "neverd/backend/llvm/X86/X86DescriptorStateNative.h"
+#include "neverd/backend/llvm/X86/X86FlagsNative.h"
 #include "neverd/backend/llvm/X86/X86ScalarSystemNative.h"
+#include "neverd/backend/llvm/X86/X86SegmentMoveNative.h"
 #include "neverd/backend/llvm/X86/X86SgxAsm.h"
 #include "neverd/backend/llvm/X86/X86SgxNative.h"
 #include "neverd/backend/llvm/X86/X86SystemStateAsm.h"
@@ -193,10 +197,12 @@ void sourceRoutes(BinaryImage &Image, bool NoOpt, va_t Address,
   }
   if (UsesForkNative)
     for (const auto &F : *Module)
-      *UsesForkNative |= isX86VirtualizationNativeName(F.getName()) ||
+      *UsesForkNative |= x86FlagsNative(F.getName()).has_value() ||
+                         isX86VirtualizationNativeName(F.getName()) ||
                          (isX86SystemStateNativeName(F.getName()) &&
                           F.getName() != "llvm.x86.xabort") ||
                          isX86ScalarSystemNativeName(F.getName()) ||
+                         isX86SegmentMoveNativeName(F.getName()) ||
                          isX86DescriptorStateNativeName(F.getName()) ||
                          isX86SystemRegisterNativeName(F.getName()) ||
                          isX86SgxNativeName(F.getName().str()) ||
@@ -866,7 +872,8 @@ void compileRoutes(BinaryImage &Image, bool NoOpt, va_t Address,
     // sourceRoutes already compiles these with the linked SDK, and the native
     // object execution below uses that result. Both C routes still compile at
     // O0/O2 with stock Clang to check their assembly fallback.
-    if (IR && UsesForkNative)
+    if (IR &&
+        (UsesForkNative || !neverd::test::compilerReadsCurrentIR(Compiler)))
       continue;
     if (!IR)
       Source = freestandingC(std::move(Source));
@@ -1913,6 +1920,57 @@ TEST(X86ScalarSystemSource, NativeCallsRequireExactTypesAndEffects) {
                  std::invalid_argument);
     Call->setArgOperand(0, Builder.getInt64(1));
     EXPECT_THROW((void)Render(Arch::X64), std::invalid_argument);
+  }
+}
+
+TEST(X86VirtualizationSource, SgxOriginalSiteCannotLoseItsTerminalContract) {
+  for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("sgx_original_site", Context);
+    llvm::IRBuilder<> Builder(Context);
+    auto *Pointer = llvm::PointerType::get(Context, Mutation == 8 ? 1 : 0);
+    auto *Type = llvm::FunctionType::get(
+        Builder.getVoidTy(), {Pointer, Builder.getInt64Ty()}, false);
+    auto *Callee =
+        llvm::Function::Create(Type, llvm::Function::ExternalLinkage,
+                               "llvm.x86.enclu.transfer.at.context", Module);
+    Callee->addFnAttr(llvm::Attribute::NoReturn);
+    Callee->addFnAttr(llvm::Attribute::NoUnwind);
+    Callee->addFnAttr(llvm::Attribute::Convergent);
+    Callee->addFnAttr(llvm::Attribute::NoDuplicate);
+    if (Mutation == 1)
+      Callee->removeFnAttr(llvm::Attribute::NoReturn);
+    if (Mutation == 2)
+      Callee->removeFnAttr(llvm::Attribute::NoUnwind);
+    if (Mutation == 3)
+      Callee->removeFnAttr(llvm::Attribute::Convergent);
+    if (Mutation == 4)
+      Callee->removeFnAttr(llvm::Attribute::NoDuplicate);
+    if (Mutation == 5)
+      Callee->setMemoryEffects(llvm::MemoryEffects::readOnly());
+    auto *Function = llvm::Function::Create(
+        Type, llvm::Function::ExternalLinkage, "caller", Module);
+    Builder.SetInsertPoint(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    llvm::Value *Site = Mutation == 6
+                            ? static_cast<llvm::Value *>(Function->getArg(1))
+                            : Builder.getInt64(0xffff800012345678ULL);
+    auto *Call = Builder.CreateCall(Callee, {Function->getArg(0), Site});
+    Builder.CreateUnreachable();
+    const auto Render = [&] {
+      return renderX86VirtualizationNativeCall(
+          Mutation == 7 ? Arch::X86 : Arch::X64, *Call, "", false,
+          {"context", "0xffff800012345678ULL"});
+    };
+    if (Mutation) {
+      EXPECT_THROW((void)Render(), std::invalid_argument) << Mutation;
+    } else {
+      auto Text = Render();
+      ASSERT_TRUE(Text);
+      EXPECT_NE(Text->find("__builtin_ia32_enclu_transfer_at_context"),
+                std::string::npos);
+      EXPECT_NE(Text->find("0xffff800012345678ULL"), std::string::npos);
+    }
   }
 }
 
@@ -5246,6 +5304,11 @@ class X86AmxEncodingSource : public testing::TestWithParam<size_t> {};
 
 TEST_P(X86AmxEncodingSource, EveryRouteCompilesAcrossNativeFormats) {
   const auto &E = amxEncodings()[GetParam()];
+  // Apple's assembler lags the newest AMX instructions the C spells.
+  if (!neverd::test::compilerAccepts(NEVERD_TEST_CLANG, "s",
+                                     std::string(E.Assembly) + "\n",
+                                     {"--target=x86_64-unknown-linux-gnu"}))
+    GTEST_SKIP() << "this Clang's assembler lacks " << E.Assembly;
   for (const auto Format :
        {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
     for (bool NoOpt : {false, true}) {
@@ -5660,3 +5723,26 @@ TEST(X86AmxSource, HighCRejectsMalformedBankOwnership) {
                    std::invalid_argument);
   }
 }
+
+namespace {
+void saveX86SourceArtifact(llvm::StringRef Name, llvm::StringRef Data) {
+  const char *Directory = std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR");
+  if (!Directory)
+    return;
+  ASSERT_FALSE(llvm::sys::fs::create_directories(Directory));
+  llvm::SmallString<128> Path(Directory);
+  llvm::sys::path::append(Path, Name);
+  std::error_code Error;
+  llvm::raw_fd_ostream File(Path, Error);
+  ASSERT_FALSE(Error);
+  File << Data;
+  File.close();
+  ASSERT_FALSE(File.has_error());
+}
+} // namespace
+
+#include "../x86/X86ArplSourceTests.inc"
+#include "../x86/X86BoundSourceTests.inc"
+#include "../x86/X86HresetSourceTests.inc"
+#include "X86FlagsSourceTests.inc"
+#include "X86SegmentMoveSourceTests.inc"

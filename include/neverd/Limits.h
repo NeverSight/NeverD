@@ -62,6 +62,13 @@ constexpr uint64_t kMaxObjectExternStatedReach = 0x10000;
 /// Exhaustion preserves the original indirect transfers.
 constexpr size_t kMaxScalarBranchEvidenceWork = 262144;
 
+/// Complete scalar dataflow covers shared by computed targets and stack
+/// offsets. Larger sets or Cartesian products lose their numeric fact.
+constexpr size_t kMaxScalarValueSet = 32;
+constexpr size_t kMaxScalarValueProduct = 256;
+/// Total computed-target work, including revalidation after CFG discovery.
+constexpr size_t kMaxComputedBranchEvidenceWork = 2000000;
+
 /// Optional symbolic fallback for unresolved straight-block scalar targets.
 /// Ordinary constant propagation runs first; these local caps also bound DAG
 /// construction before the shared per-function work account is charged.
@@ -71,6 +78,12 @@ constexpr unsigned kMaxScalarBranchSymbolicAtoms = 4;
 constexpr unsigned kMaxScalarBranchOptimalSynthesisAtoms = 2;
 constexpr size_t kMaxScalarBranchSymbolicRewriteWork = 8192;
 constexpr size_t kMaxScalarBranchSymbolicTableBytes = 65536;
+
+/// Finite scalar dispatch covers, including conservative child products.
+/// Larger domains and exhausted work preserve the original indirect branch.
+inline constexpr size_t kMaxScalarBranchFiniteValues = 64;
+inline constexpr size_t kMaxScalarBranchFiniteProducts = 4096;
+inline constexpr unsigned kMaxScalarBranchFiniteDepth = 64;
 
 /// Total register-byte, operand and graph work for bounded SGX/SMX leaf
 /// proofs, including revalidation after CFG discovery adds incoming edges.
@@ -446,6 +459,10 @@ constexpr uint64_t kMaxOverlapDistance = 0x10000;
 /// the ABI clobber set.
 constexpr int kMaxCallEffectCalleeDepth = 4;
 constexpr size_t kMaxCallEffectExtraLifts = 256;
+/// The functions Pipeline::prepareCallSummaries reads for an image's
+/// call-register summaries: its symbol starts and the callees they reach.
+/// An image with more keeps each run's own callee summaries.
+constexpr size_t kMaxImageCallSummaryFunctions = 262144;
 /// On-demand CFG register proofs admit only small, metadata-bounded callees.
 /// The query may not recursively start another CFG register proof.
 constexpr size_t kMaxCFGCallRegisterProofFunctions = 32;
@@ -470,9 +487,11 @@ constexpr size_t kMaxX87CallProofWork = 262144;
 /// A pipeline's CFG builds share one cache of call-proof graphs, and its
 /// selected-function runs also keep there the machine bodies that later runs
 /// of the same session reuse instead of lifting them again.  The least
-/// recently used graphs and bodies leave it beyond these bounds.
-constexpr size_t kMaxPipelineCallGraphEntries = 8192;
-constexpr size_t kMaxPipelineCallGraphBytes = 64 * 1024 * 1024;
+/// recently used graphs and bodies leave it beyond these bounds.  A graph
+/// takes a few kilobytes, and a kernel's call walks read tens of thousands:
+/// fewer entries evict graphs the next walk lifts again.
+constexpr size_t kMaxPipelineCallGraphEntries = 65536;
+constexpr size_t kMaxPipelineCallGraphBytes = 256 * 1024 * 1024;
 constexpr size_t kMaxPipelineCallBodyBytes = 256 * 1024 * 1024;
 /// Alignment no-ops between a call and the next function are fewer bytes
 /// than the widest function alignment compilers use (64); a longer run is
@@ -485,6 +504,9 @@ constexpr uint64_t kMaxNoReturnScreenBytes = 0x4000;
 /// Revisits of one block before a callee's incoming-stack-read summary widens
 /// a still-changing stack offset (a pointer stepped around a loop) to unknown.
 constexpr unsigned kMaxStackOffsetJoinVisits = 8;
+/// Optional finite scalar offsets for one incoming-stack summary. The cover
+/// is built lazily once; exhaustion keeps variable offsets unknown.
+constexpr size_t kMaxIncomingStackScalarWork = 65536;
 
 /// `--func` may attach out-of-line catch/unwind pdata, but a malformed or
 /// merged runtime-function range must not import that owner's entire EH
@@ -598,6 +620,12 @@ constexpr size_t kMaxEmbeddedDataLen = 4096;
 /// ARM32 NEON pool fell back to ~2 MB of overlapping copies).  The cap is
 /// therefore generous and only guards against an abnormally huge segment.
 constexpr size_t kMaxSingleGlobalEmbedLen = 1u << 20; // 1 MiB
+
+/// Bytes of alignment padding one embedded run of read-only segments may
+/// cross between two of them.  No other segment may map the padding: one
+/// there (a `.data` between two constant pools) is another object, whose
+/// addresses the run would otherwise claim.
+constexpr uint64_t kMaxRodataRunPaddingBytes = 16;
 
 /// Maximum text bytes of one page of a paged code view (source or IR): a
 /// page that would pass it ends early and the next page starts at the line
@@ -863,6 +891,10 @@ constexpr unsigned kMaxRegistrationEHFixedPoint = 16;
 
 /// Shared limit on x86 registration language-table records and state domains.
 constexpr uint32_t kMaxRegistrationEHRecords = 4096;
+
+/// Supported power-of-two alignment of a checked x86 registration frame.
+constexpr uint32_t kMinRegistrationFrameAlignment = 4;
+constexpr uint32_t kMaxRegistrationFrameAlignment = 128;
 
 /// Total registration-state propagation work, including state/edge pairs.
 /// Exhaustion invalidates the whole result rather than truncating a domain.

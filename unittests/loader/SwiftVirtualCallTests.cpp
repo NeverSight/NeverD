@@ -5,6 +5,7 @@
 #include "../../lib/sdk/capi/ObjCSwiftBooleanSources.h"
 #include "../../lib/sdk/capi/ObjCSwiftVirtualSources.h"
 #include "../../lib/sdk/capi/SwiftMangledSourceABI.h"
+#include "../lift/core/MappedSectionFlags.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -395,9 +396,9 @@ TEST(SwiftVirtualCalls, NativeClassSelfRejectsChangedPathOrMachine) {
     } else if (Case == 18) {
       F.Image.ObjCMethods[0].Implementation = Fixture::Entry;
     } else if (Case == 19) {
-      F.Image.Sections[0].Flags = SegmentFlags::Readable |
-                                  SegmentFlags::Writable |
-                                  SegmentFlags::Executable;
+      setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                            SegmentFlags::Readable | SegmentFlags::Writable |
+                                SegmentFlags::Executable);
     } else if (Case == 20) {
       F.Image.Symbols.back().Name =
           "_$s6Lottie17AnimationViewBaseC6layoutyySbF";

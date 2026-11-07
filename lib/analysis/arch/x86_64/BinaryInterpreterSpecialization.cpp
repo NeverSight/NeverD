@@ -9,11 +9,22 @@
 #include "../../../lift/X86/X86CetEncoding.h"
 #include "../../core/NativeUndefinedIndependence.h"
 #include "../../core/RawEnvironment.h"
+#include "BinaryContinuationInstructions.h"
 #include "NativeStackControl.h"
+#include "X64FarPointerEncoding.h"
+#include "X64FredReturnEncoding.h"
 #include "X64Recovery.h"
+#include "X64SegmentMoveEncoding.h"
+#include "X64UserInterruptEncoding.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/lift/X86/X86DebugRegisterEncoding.h"
+#include "neverd/lift/X86/X86HleEncoding.h"
+#include "neverd/lift/X86/X86HypercallEncoding.h"
+#include "neverd/lift/X86/X86MpxEncoding.h"
+#include "neverd/lift/X86/X86SnpEncoding.h"
+#include "neverd/lift/X86/X86SvmEncoding.h"
 #include "neverd/loader/COFF/PEFixedImage.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -63,6 +74,11 @@ class ImageProvider final : public SpecializationProvider {
   std::string FixedPEDiagnostic;
   bool FixedPEBudgetExceeded = false;
   const bool PreserveOpaqueState;
+  // Continuation source binds the exact original instruction bytes explicitly
+  // at runtime. It never claims a Windows loader/fixed-image theorem and never
+  // folds data reads. Other users retain the complete PE evidence boundary.
+  const bool ContinuationSnapshot;
+  const bool PagedDebug;
   std::map<va_t, SpecializationTerminalImport> TerminalImports;
   std::shared_ptr<const SpecializationRawEnvironment> RawDomain;
 
@@ -114,17 +130,20 @@ class ImageProvider final : public SpecializationProvider {
         return nullptr;
       Owner = &S;
     }
-    if (!Owner || (FixedPE ? !FixedPE->read(Address, Bytes, Executable)
-                           : touchesFixup(Address, Bytes)))
+    if (!Owner || (!ContinuationSnapshot &&
+                   (FixedPE ? !FixedPE->read(Address, Bytes, Executable)
+                            : touchesFixup(Address, Bytes))))
       return nullptr;
     return Owner;
   }
 
 public:
   ImageProvider(const BinaryImage &Image, const SpecializationOptions &Options,
-                bool PreserveOpaqueState = false)
+                bool PreserveOpaqueState = false,
+                bool ContinuationSnapshot = false, bool PagedDebug = false)
       : Image(Image), Options(Options),
-        PreserveOpaqueState(PreserveOpaqueState) {
+        PreserveOpaqueState(PreserveOpaqueState),
+        ContinuationSnapshot(ContinuationSnapshot), PagedDebug(PagedDebug) {
     Decode.init(Arch::X64);
     Decode.setStrict(true);
     auto RawCost = x64::validateRawEnvironmentDeclarations(Options);
@@ -144,7 +163,8 @@ public:
         return;
       }
     }
-    if (Image.Format == BinaryFormat::COFF && !Image.Raw.empty()) {
+    if (!ContinuationSnapshot && Image.Format == BinaryFormat::COFF &&
+        !Image.Raw.empty()) {
       auto View = PEFixedImageView::create(
           Image, {.MaxBytes = Options.MaxImagePreparationBytes - RawCost->Bytes,
                   .MaxRecords =
@@ -247,8 +267,15 @@ public:
     }
     const size_t Size = std::min<size_t>(15, Window.size());
     DecodedInsn Insn{};
-    if (!Decode.decodeOneForLift(Window.data(), Size, Cursor.Address, Insn) ||
-        !Insn.Size || Insn.Size > Window.size() ||
+    const auto DebugRegister =
+        PagedDebug ? x86DebugRegisterEncoding(Window.take_front(Size), true)
+                   : std::nullopt;
+    const bool Decoded =
+        DebugRegister ||
+        Decode.decodeOneForLift(Window.data(), Size, Cursor.Address, Insn);
+    if (DebugRegister)
+      Insn.Size = DebugRegister->Size;
+    if (!Decoded || !Insn.Size || Insn.Size > Window.size() ||
         (Supplemental.empty() &&
          !immutableMapping(Cursor.Address, Insn.Size, true)))
       return llvm::createStringError(llvm::errc::invalid_argument,
@@ -268,6 +295,19 @@ public:
         return llvm::createStringError(
             llvm::errc::not_supported,
             "exception edges require a recovery contract");
+    if (DebugRegister) {
+      SpecializationInstruction Result;
+      Result.NativeBytes.assign(Window.begin(), Window.begin() + Insn.Size);
+      Result.Origin.Address = Cursor.Address;
+      Result.Origin.Size = Insn.Size;
+      Result.Origin.Mode = Cursor.Mode;
+      Result.Fallthrough = {Cursor.Address + Insn.Size, Cursor.Mode};
+      Result.ProfileProjection =
+          InterpreterProfileProjection::X64DebugRegisterV1;
+      Result.UndefinedEffects.Diagnostic =
+          "MOV-DR requires the paged debug-register profile";
+      return Result;
+    }
     // x87 and other sequence-dependent lifter state are outside this adapter's
     // integer contract; the core rejects their opaque/FP LowOps.
     Decode.resetX86FpuState();
@@ -306,6 +346,68 @@ public:
             lowUndefinedOperationDigest(Result.Ops);
         Result.UndefinedEffects.Diagnostic =
             "CET-disabled RDSSP requires explicit profile evidence";
+      } else if (const auto Mpx =
+                     ContinuationSnapshot
+                         ? decodeX86MpxEncoding(Result.NativeBytes, Arch::X64)
+                         : std::nullopt;
+                 Mpx && Mpx->Id != X86_INS_NOP &&
+                 Mpx->Size == Result.NativeBytes.size()) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64MpxV1;
+        Result.UndefinedEffects.Diagnostic =
+            "MPX requires explicit bounds, enable and branch-state ownership";
+      } else if (ContinuationSnapshot && x86HleEncoding(Result.NativeBytes)) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64HleV1;
+        Result.UndefinedEffects.Diagnostic =
+            "HLE requires explicit native memory and publication ownership";
+      } else if (ContinuationSnapshot && x86SnpEncoding(Result.NativeBytes)) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64SnpV1;
+        Result.UndefinedEffects.Diagnostic =
+            "SNP/VMGEXIT requires an explicit native RMP or SEV-ES environment";
+      } else if (ContinuationSnapshot &&
+                 x86HypercallEncoding(Result.NativeBytes)) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64HypercallV1;
+        Result.UndefinedEffects.Diagnostic =
+            "hypercall requires an explicit hypervisor register/state ABI";
+      } else if (ContinuationSnapshot && Insn.Id == X86_INS_ENCLU) {
+        Result.ProfileProjection =
+            InterpreterProfileProjection::X64SgxTransferV1;
+        Result.UndefinedEffects.Diagnostic =
+            "ENCLU transfer requires native enclave state and original code "
+            "mapping";
+      } else if (ContinuationSnapshot && Insn.Id == X86_INS_RSM) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64SmmReturnV1;
+        Result.UndefinedEffects.Diagnostic =
+            "RSM requires active SMM and explicit software state ownership";
+      } else if (ContinuationSnapshot &&
+                 x64VmrunAddressWidth(Result.NativeBytes)) {
+        Result.ProfileProjection = InterpreterProfileProjection::X64SvmRunV1;
+        Result.UndefinedEffects.Diagnostic =
+            "VMRUN requires explicit GPR, xstate and native SVM ownership";
+      } else if (ContinuationSnapshot &&
+                 detail::x64FredReturn(Result.NativeBytes)) {
+        Result.ProfileProjection =
+            InterpreterProfileProjection::X64FredReturnV1;
+        Result.UndefinedEffects.Diagnostic =
+            "FRED return requires explicit frame, segment and event ownership";
+      } else if (ContinuationSnapshot &&
+                 detail::x64UserInterrupt(Result.NativeBytes)) {
+        Result.ProfileProjection =
+            InterpreterProfileProjection::X64UserInterruptV1;
+        Result.UndefinedEffects.Diagnostic =
+            "user interrupt requires explicit UIF and continuation ownership";
+      } else if (ContinuationSnapshot &&
+                 detail::x64FarPointerLoad(Result.NativeBytes)) {
+        Result.ProfileProjection =
+            InterpreterProfileProjection::X64FarPointerLoadV1;
+        Result.UndefinedEffects.Diagnostic =
+            "far-pointer load requires explicit descriptor-state ownership";
+      } else if (ContinuationSnapshot &&
+                 detail::x64SegmentMove(Result.NativeBytes)) {
+        Result.ProfileProjection =
+            InterpreterProfileProjection::X64SegmentMoveV1;
+        Result.UndefinedEffects.Diagnostic =
+            "selector transfer requires explicit descriptor and stack "
+            "ownership";
       } else {
         if (Options.ExplicitMachineState && Options.X64CetDisabled)
           LoadedMemoryCall = Decode.liftX64MemoryCallToLow(
@@ -368,6 +470,11 @@ public:
           B.Immediate = Op.Inputs[0].Offset;
         break;
       case NdOp::RETURN:
+        if (Insn.Id != X86_INS_RET && ContinuationSnapshot) {
+          B.Control = LowInstructionControl::Terminator;
+          B.ControlFlags = LowInstructionControlFlag::Terminator;
+          break;
+        }
         if (Insn.Id != X86_INS_RET)
           return llvm::createStringError(
               llvm::errc::not_supported,
@@ -376,10 +483,7 @@ public:
         // that width from the mnemonic when operand-size or other prefixes
         // may change the instruction's contract.
         if (Options.ExplicitMachineState && Options.X64CetDisabled &&
-            !((Result.NativeBytes.size() == 1 &&
-               Result.NativeBytes[0] == 0xc3) ||
-              (Result.NativeBytes.size() == 3 &&
-               Result.NativeBytes[0] == 0xc2)))
+            !isX64PhysicalNearReturn(Result.NativeBytes))
           return llvm::createStringError(llvm::errc::not_supported,
                                          "native stack projection requires a "
                                          "canonical 64-bit near return");
@@ -409,7 +513,8 @@ public:
     }
     if (Decode.isFunctionTerminator(Insn) &&
         B.Control == LowInstructionControl::None) {
-      if (!Decode.isResumableTrap(Insn) && Insn.Id != X86_INS_UD2)
+      if (!ContinuationSnapshot && !Decode.isResumableTrap(Insn) &&
+          Insn.Id != X86_INS_UD2)
         return llvm::createStringError(llvm::errc::not_supported,
                                        "unsupported machine terminator");
       // Preserve strictly lifted traps for whole-original-graph inspection.
@@ -449,7 +554,8 @@ public:
 
   std::optional<SpecializationImmutableRead>
   immutableRead(va_t Address, uint16_t Bytes) override {
-    if (!FixedPEDiagnostic.empty() || !Bytes || Address > InvalidVA - Bytes)
+    if (ContinuationSnapshot || !FixedPEDiagnostic.empty() || !Bytes ||
+        Address > InvalidVA - Bytes)
       return std::nullopt;
     if (RawDomain) {
       // Any overlap with a declared slot is excluded from ordinary reads.
@@ -557,6 +663,35 @@ validateBinaryImage(const BinaryImage &Image,
 }
 } // namespace
 
+llvm::Expected<std::vector<SpecializationInstruction>>
+readBinaryX64ContinuationInstructions(const BinaryImage &Image,
+                                      llvm::ArrayRef<va_t> Addresses,
+                                      bool PagedDebug) {
+  SpecializationOptions Options;
+  Options.ExplicitMachineState = true;
+  Options.NormalNonfaultingExecution = true;
+  Options.X64CetDisabled = true;
+  if (auto Failure = validateBinaryImage(Image, Options))
+    return llvm::createStringError(llvm::errc::not_supported,
+                                   Failure->Diagnostic);
+  ImageProvider Provider(Image, Options, false, true, PagedDebug);
+  SpecializationResult Preparation;
+  if (Provider.preparationFailed(Preparation))
+    return llvm::createStringError(llvm::errc::not_supported,
+                                   Preparation.Diagnostic);
+  std::vector<SpecializationInstruction> Result;
+  for (va_t Address : Addresses) {
+    auto Instruction = Provider.instruction({Address, Image.Mode});
+    if (!Instruction)
+      return llvm::createStringError(
+          llvm::errc::not_supported, "continuation instruction 0x%s: %s",
+          llvm::utohexstr(Address).c_str(),
+          llvm::toString(Instruction.takeError()).c_str());
+    Result.push_back(std::move(*Instruction));
+  }
+  return Result;
+}
+
 SpecializationResult
 specializeBinaryInterpreter(const BinaryImage &Image, va_t Entry,
                             const SpecializationOptions &Options) {
@@ -630,6 +765,10 @@ binaryExecutionDigest(const BinaryImage &Image,
     Number(Options.X64SegmentedWrites);
   }
   Number(Options.X64CR8State);
+  if (Options.X64CR4PGEState) {
+    Hash.update("x64-cr4-pge-state-v1");
+    Number(Options.X64CR4PGEState);
+  }
   if (Options.X64LegacyGSState) {
     Hash.update("x64-legacy-gs-state-v1");
     Number(Options.X64LegacyGSState);
@@ -771,6 +910,9 @@ prepareBinaryRelation(const BinaryImage &Image,
   if (Options.X64CR8State)
     return Fail(Status::Unsupported,
                 "native proof requires authenticated task-priority state");
+  if (Options.X64CR4PGEState)
+    return Fail(Status::Unsupported,
+                "native proof requires authenticated CR4 PGE state");
   if (Options.X64LegacyGSState)
     return Fail(Status::Unsupported,
                 "native proof requires authenticated legacy GS state");

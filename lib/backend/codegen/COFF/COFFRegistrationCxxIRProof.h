@@ -7,12 +7,24 @@
 #define NEVERD_COFFREGISTRATIONCXXIRPROOF_H
 #include "COFFRegistrationIRProof.h"
 
+#include "neverd/backend/llvm/RegistrationCxxCookieBindings.h"
 #include "neverd/backend/llvm/X86/X86RegistrationCatch.h"
+#include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/med/MedIR.h"
+#include "neverd/loader/COFF/COFFRegistrationEH.h"
+
+#include <map>
+#include <optional>
+#include <set>
+#include <vector>
+
+namespace llvm {
+class CatchReturnInst;
+} // namespace llvm
 
 namespace neverd {
 struct BinaryImage;
-struct X86RegistrationFrameLayout;
 } // namespace neverd
 namespace neverd::coff_registration {
 struct CxxIRCall {
@@ -30,6 +42,14 @@ struct CxxIRCatch {
   const llvm::AllocaInst *Stack = nullptr;
   std::set<const llvm::BasicBlock *> Blocks;
 };
+/// Ephemeral bindings from independent source/control replay. The complete
+/// current guarded frame proof must still succeed before dispatch is allowed.
+struct CxxIRGuardedFrame {
+  MedFunc Source;
+  X86RegistrationFrameLayout Layout;
+  std::vector<registration_frame::CxxSourceCallBinding> Calls;
+  std::vector<registration_frame::CxxCleanupCallBinding> Cleanups;
+};
 /// This is a control/source occurrence receipt. Its calls still need the
 /// post-edit frame, initialization and runtime-object proof before
 /// installation.
@@ -42,10 +62,12 @@ struct CxxIRControlProof {
   std::map<const llvm::BasicBlock *, const llvm::BasicBlock *> CopyEdges;
   std::map<uint32_t, const llvm::CleanupPadInst *> Cleanups;
   std::map<const llvm::CallBase *, CxxIRCall> Calls;
+  std::set<const llvm::CatchReturnInst *> CatchReturns;
   std::set<const llvm::Instruction *> ChainReads;
   std::set<const llvm::StoreInst *> SavedStackRestores;
   std::set<const llvm::Instruction *> IncomingAccesses;
   std::vector<ExceptionAddressRange> CallerPCWrites;
+  std::optional<CxxIRGuardedFrame> Guarded;
 };
 struct RegistrationCxxFrameContract;
 llvm::Error bindCxxRuntimeThrow(const CxxIRControlProof &Proof,
@@ -83,5 +105,13 @@ llvm::Expected<CxxIRControlProof>
 getCheckedCxxControlIRProof(const llvm::Function &Function,
                             const ExceptionFunction &Source,
                             const BinaryImage &Image);
+
+/// The image-only query remains unguarded. A guarded dispatcher additionally
+/// requires independent source/control replay and the complete current frame
+/// proof; neither producer metadata nor a previous receipt is sufficient.
+llvm::Expected<coff_loader::X86CxxPersonalityABI>
+getCheckedCxxRuntimeIR(const llvm::Function &Function,
+                       const ExceptionFunction &Source,
+                       const BinaryImage &Image);
 } // namespace neverd::coff_registration
 #endif

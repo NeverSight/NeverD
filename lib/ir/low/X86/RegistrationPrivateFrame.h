@@ -25,7 +25,9 @@ struct PrivateFrameState {
   registration_state::FrameState CopySourceSpills;
   std::set<int32_t> ObjectInitialized;
   std::set<int32_t> Initialized;
+  bool Raised = false;
 
+  bool operator==(const PrivateFrameState &) const = default;
   bool merge(const PrivateFrameState &Other);
 };
 

@@ -13,6 +13,7 @@
 #ifndef NEVERD_OBJECT_ELFLAYOUT_H
 #define NEVERD_OBJECT_ELFLAYOUT_H
 
+#include "neverd/ArchSupport.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -24,6 +25,25 @@
 #include <optional>
 
 namespace neverd {
+
+/// Largest native base page on which ELF relocation protection must hold.
+/// An image does not record the runtime granule. Arm permits up to 64 KiB;
+/// using the host page or the code generator's default would freeze a tail
+/// that remains writable on a different supported target.
+inline constexpr uint64_t kELFArmMaxProtectionPageSize = 0x10000;
+
+constexpr uint64_t maximumELFProtectionPageSize(Arch Architecture) {
+  switch (Architecture) {
+  case Arch::X86:
+  case Arch::X64:
+    return kPageSize4K;
+  case Arch::ARM:
+  case Arch::AArch64:
+    return kELFArmMaxProtectionPageSize;
+  default:
+    return 0;
+  }
+}
 
 struct ELFHeaderInfo {
   bool Is64 = false;

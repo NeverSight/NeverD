@@ -115,11 +115,18 @@ ComparisonFlowDialog::ComparisonFlowDialog(ComparisonSession &S,
   Backward->setObjectName("flowBackward");
   Forward = new QPushButton(tr("Trace uses"), Top);
   Forward->setObjectName("flowForward");
-  Control = new QCheckBox(tr("Include control dependencies"), Top);
+  ArgumentAccesses = new QPushButton(tr("Argument accesses"), Top);
+  ArgumentAccesses->setObjectName("flowArgumentAccesses");
+  ArgumentAccesses->setToolTip(
+      tr("Show reads and writes using the same computed address as a recovered "
+         "call argument."));
+  Control = new QCheckBox(tr("Include control"), Top);
+  Control->setToolTip(
+      tr("Include control dependencies when tracing inputs or uses."));
   Control->setChecked(true);
   Cancel = new QPushButton(tr("Cancel"), Top);
   Cancel->setObjectName("flowCancel");
-  for (auto *B : {Backward, Forward})
+  for (auto *B : {Backward, Forward, ArgumentAccesses})
     Actions->addWidget(B);
   Actions->addWidget(Control);
   Actions->addStretch();
@@ -133,9 +140,13 @@ ComparisonFlowDialog::ComparisonFlowDialog(ComparisonSession &S,
   SliceStatus->setObjectName("flowSliceStatus");
   BottomLayout->addWidget(SliceStatus);
   Slice = new ComparisonModel(Session, ComparisonModel::Kind::FlowSlice, this);
+  Accesses =
+      new ComparisonModel(Session, ComparisonModel::Kind::FlowAccesses, this);
   SliceTable = table(Bottom, Slice, "flowSlice");
   SliceTable->setColumnWidth(2, 145);
   SliceTable->horizontalHeader()->setStretchLastSection(false);
+  SliceTable->horizontalHeader()->setSectionResizeMode(
+      0, QHeaderView::ResizeToContents);
   SliceTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
   SliceTable->horizontalHeader()->setResizeContentsPrecision(0);
   SliceTable->horizontalHeader()->setSectionResizeMode(
@@ -143,6 +154,9 @@ ComparisonFlowDialog::ComparisonFlowDialog(ComparisonSession &S,
   BottomLayout->addWidget(SliceTable, 1);
   Inspect = new QPushButton(tr("Inspect original function"), Bottom);
   Inspect->setObjectName("flowInspect");
+  // Enter activates the selected evidence row, without also tracing a slice.
+  for (auto *Button : {Backward, Forward, ArgumentAccesses, Cancel, Inspect})
+    Button->setAutoDefault(false);
   BottomLayout->addWidget(Inspect, 0, Qt::AlignLeft);
   Split->setStretchFactor(0, 1);
   Split->setStretchFactor(1, 3);
@@ -155,7 +169,7 @@ ComparisonFlowDialog::ComparisonFlowDialog(ComparisonSession &S,
           &ComparisonFlowDialog::selectSide);
   connect(&Session, &ComparisonSession::changed, this,
           &ComparisonFlowDialog::refresh);
-  for (auto *Model : {Functions, Nodes, Slice})
+  for (auto *Model : {Functions, Nodes, Slice, Accesses})
     connect(Model, &ComparisonModel::failed, this,
             [this](const QString &Error) { SliceStatus->setText(Error); });
   connect(Functions, &ComparisonModel::pageReady, this, [this] {
@@ -168,6 +182,8 @@ ComparisonFlowDialog::ComparisonFlowDialog(ComparisonSession &S,
             const auto Row = Functions->row(Index.row());
             Address = Row["function"].toString();
             Slice->clear();
+            Accesses->clear();
+            AccessesStopped = false;
             SliceStatus->setText(
                 tr("Select an operation, then trace its inputs or uses."));
             if (Address.isEmpty())
@@ -242,6 +258,42 @@ ComparisonFlowDialog::ComparisonFlowDialog(ComparisonSession &S,
                          Gaps.isEmpty() ? tr("none observed within this model")
                                         : Gaps.join(", ")));
           });
+  connect(Accesses, &ComparisonModel::pageReady, this,
+          [this](const QJsonObject &Page) {
+            AccessesStopped = Page["state"] != QJsonValue("complete");
+            SliceStatus->setText(
+                tr("Call n%1 · %2 address observations · %3\n"
+                   "Reads and writes at a recovered argument's address. "
+                   "Call effects and execution order remain unknown. "
+                   "Activate a row to select its operation.")
+                    .arg(Page["call"].toObject()["id"].toInt())
+                    .arg(Page["total"].toInt())
+                    .arg(Page["state"].toString().replace('_', ' ')));
+          });
+  connect(ArgumentAccesses, &QPushButton::clicked, this, [this] {
+    const auto Call = Nodes->row(NodeTable->currentIndex().row());
+    if (Call.isEmpty() || Address.isEmpty())
+      return;
+    Slice->clear();
+    SliceTable->setModel(Accesses);
+    SliceStatus->setText(tr("Inspecting argument addresses…"));
+    Accesses->setQuery({{"side", Side->currentData().toString()},
+                        {"kind", "accesses"},
+                        {"address", Address},
+                        {"call", Call["id"]},
+                        {"refresh", AccessesStopped}});
+  });
+  connect(SliceTable, &QTableView::activated, this,
+          [this](const QModelIndex &Index) {
+            if (SliceTable->model() != Accesses)
+              return;
+            const auto Row = Accesses->row(Index.row());
+            if (Row.isEmpty())
+              return;
+            const auto Node = Nodes->index(Row["id"].toInt(), 0);
+            NodeTable->setCurrentIndex(Node);
+            NodeTable->scrollTo(Node);
+          });
   connect(Backward, &QPushButton::clicked, this, [this] { slice("backward"); });
   connect(Forward, &QPushButton::clicked, this, [this] { slice("forward"); });
   connect(Cancel, &QPushButton::clicked, &Session, &ComparisonSession::cancel);
@@ -300,6 +352,17 @@ void ComparisonFlowDialog::controls() {
       Session.ready() && !Session.busy() && !Session.cancellable();
   Backward->setEnabled(Idle && Node);
   Forward->setEnabled(Idle && Node);
+  const auto Selected = Nodes->row(NodeTable->currentIndex().row());
+  const auto Profile = Session.summary()["settings"]
+                           .toObject()["dataflow"]
+                           .toObject()["profile"]
+                           .toString(::neverd::limits::diff::kMedSSAProfile);
+  ArgumentAccesses->setEnabled(
+      Idle && Profile == ::neverd::limits::diff::kMedSSAProfile &&
+      (Selected["opcode"] == QJsonValue("CALL") ||
+       Selected["opcode"] == QJsonValue("INDIR_CALL")) &&
+      !Selected["call_argument_begin"].isNull() &&
+      Selected["call_argument_count"].toInt() > 0);
   Inspect->setEnabled(Idle && !Address.isEmpty());
   Cancel->setEnabled(Session.cancellable() && !Session.cancelRequested());
 }
@@ -320,6 +383,8 @@ void ComparisonFlowDialog::selectSide() {
   Functions->clear();
   Nodes->clear();
   Slice->clear();
+  Accesses->clear();
+  AccessesStopped = false;
   FunctionStatus->setText(
       tr("Select a function to inspect its SSA operations."));
   SliceStatus->setText(
@@ -380,6 +445,8 @@ void ComparisonFlowDialog::selectSide() {
   controls();
 }
 void ComparisonFlowDialog::slice(const QString &Direction) {
+  Accesses->clear();
+  SliceTable->setModel(Slice);
   const auto Node = Nodes->row(NodeTable->currentIndex().row());
   if (Node.isEmpty() || Address.isEmpty())
     return;

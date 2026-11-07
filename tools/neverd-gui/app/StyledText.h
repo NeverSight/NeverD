@@ -6,6 +6,7 @@
 #include <QFont>
 #include <QJsonArray>
 #include <QString>
+#include <QStringList>
 #include <QTextLayout>
 #include <QVector>
 #include <functional>
@@ -74,5 +75,15 @@ QVector<int> tokenOccurrences(const QString &text, const QString &token,
 std::pair<int, int> tokenRange(const QString &text, int position,
                                TokenDots dots = TokenDots::Join);
 bool isTokenCharacter(QChar c);
+/// The registers that share \p word's register, \p word among them (`rax`,
+/// `eax`, `ax`, `al`, `ah`; AArch64's `x0` and `w0`); none for another word.
+QStringList registerFamily(const QString &word);
+/// Ranges [first, second) where \p line shows the highlighted \p word: its
+/// whole-word occurrences and, inside spans of \p registerRole, the registers
+/// sharing it, as IDA highlights `eax` with `rax`.
+QVector<std::pair<int, int>> highlightRanges(const StyledLine &line,
+                                             const QString &word,
+                                             std::optional<int> registerRole,
+                                             TokenDots dots = TokenDots::Join);
 
 } // namespace neverd::gui

@@ -12,6 +12,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/low/RegistrationSharedCall.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/X86RegistrationSEHThread.h"
 
 #include "llvm/ADT/ScopeExit.h"
 
@@ -51,11 +52,12 @@ using TempKey = std::pair<int, int>;
 using TempDefinition = std::pair<const MedBlock *, const MedOp *>;
 using TempDefinitions = std::map<TempKey, TempDefinition>;
 
-bool zeroChainOffset(const MedBlock &Block, const MedOp &Access,
-                     const TempDefinitions &Definitions, size_t &Work) {
+bool segmentOffset(const MedBlock &Block, const MedOp &Access,
+                   const TempDefinitions &Definitions, uint32_t Offset,
+                   size_t &Work) {
   MedVar Value = Access.Inputs[0];
   const MedOp *Before = &Access;
-  // The ordinary x86 lifter materializes FS:[0] as COPY(0), optionally
+  // The ordinary x86 lifter materializes a fixed FS offset as COPY, optionally
   // followed by a 32-to-64-bit zero extension. Exceptional CFGs need not
   // have folded these transports. Only unique, earlier definitions in the
   // same source instruction can supply this offset; no PHI or input can.
@@ -64,7 +66,7 @@ bool zeroChainOffset(const MedBlock &Block, const MedOp &Access,
         (Value.Size != 4 && Value.Size != 8))
       return false;
     if (Value.isConst())
-      return Value.ConstVal == 0;
+      return Value.ConstVal == Offset;
     if (Value.Kind != MedVar::Temp)
       return false;
     const auto It = Definitions.find({Value.Id, Value.SSAVer});
@@ -90,32 +92,47 @@ bool zeroChainOffset(const MedBlock &Block, const MedOp &Access,
 
 bool matchesSourceChain(const RegistrationStateAnalysis &Source,
                         const X86RegistrationCxxPhysicalFrame &Frame) {
-  if (!complete(Source) || !Source.CxxPrologue ||
-      *Source.CxxPrologue != Frame.Entry ||
-      Source.ChainAccesses.size() > limits::kMaxRegistrationEHRecords ||
-      Frame.ChainAccesses.size() != Source.ChainAccesses.size() + 1 ||
-      Frame.Exits.size() > Source.ChainAccesses.size())
+  return complete(Source) && Source.CxxPrologue &&
+         *Source.CxxPrologue == Frame.Entry &&
+         x86_registration::matchesPhysicalChain(
+             Source.ChainAccesses,
+             {Frame.Entry.Address, Frame.Entry.EndAddress, Frame.Entry.OpSeq,
+              RegistrationChainAccess::Kind::Install},
+             Frame.Exits, Frame.ChainAccesses);
+}
+
+} // namespace
+
+namespace x86_registration {
+bool matchesPhysicalChain(
+    const std::vector<RegistrationChainAccess> &Source,
+    const RegistrationChainAccess &Entry,
+    const std::vector<X86RegistrationPhysicalExit> &SourceExits,
+    const std::vector<RegistrationChainAccess> &Projected) {
+  if (Source.size() > limits::kMaxRegistrationEHRecords ||
+      Projected.size() != Source.size() + 1 ||
+      SourceExits.size() > Source.size())
     return false;
   using Key = std::pair<va_t, int>;
   std::map<Key, const RegistrationChainAccess *> Physical;
   std::map<va_t, std::vector<const RegistrationChainAccess *>> At;
-  for (const auto &Access : Frame.ChainAccesses) {
+  for (const auto &Access : Projected) {
     if (Access.Address >= Access.EndAddress || Access.OpSeq < 0 ||
         !Physical.emplace(Key{Access.Address, Access.OpSeq}, &Access).second)
       return false;
     At[Access.Address].push_back(&Access);
   }
-  std::map<va_t, const X86RegistrationCxxPhysicalFrame::Exit *> Exits;
-  for (const auto &Exit : Frame.Exits)
-    if (Exit.Source.Address == Frame.Entry.Address ||
+  std::map<va_t, const X86RegistrationPhysicalExit *> Exits;
+  for (const auto &Exit : SourceExits)
+    if (Exit.Source.Address == Entry.Address ||
         Exit.Source.AccessKind != RegistrationChainAccess::Kind::Remove ||
         !Exits.emplace(Exit.Source.Address, &Exit).second)
       return false;
-  bool Entry = false;
-  for (const auto &Access : Source.ChainAccesses) {
-    if (Access.Address == Frame.Entry.Address) {
-      if (Entry || Access.EndAddress != Frame.Entry.EndAddress ||
-          Access.OpSeq != Frame.Entry.OpSeq ||
+  bool SeenEntry = false;
+  for (const auto &Access : Source) {
+    if (Access.Address == Entry.Address) {
+      if (SeenEntry || Access.EndAddress != Entry.EndAddress ||
+          Access.OpSeq != Entry.OpSeq ||
           Access.AccessKind != RegistrationChainAccess::Kind::Install ||
           At[Access.Address].size() != 2)
         return false;
@@ -130,7 +147,7 @@ bool matchesSourceChain(const RegistrationStateAnalysis &Source,
       }
       if (!Read || !Install)
         return false;
-      Entry = true;
+      SeenEntry = true;
     } else if (const auto Exit = Exits.find(Access.Address);
                Exit != Exits.end()) {
       if (!same(Access, Exit->second->Source) || At[Access.Address].size() != 1)
@@ -148,12 +165,9 @@ bool matchesSourceChain(const RegistrationStateAnalysis &Source,
       Physical.erase(Found);
     }
   }
-  return Entry && Physical.empty() && Exits.empty();
+  return SeenEntry && Physical.empty() && Exits.empty();
 }
 
-} // namespace
-
-namespace x86_registration {
 std::shared_ptr<const X86RegistrationCxxPhysicalFrame>
 analyzePhysicalCxxFrame(const BinaryImage &Image, const LowFunc &Source,
                         LowFunc &Physical) {
@@ -234,6 +248,79 @@ analyzePhysicalCxxFrame(const BinaryImage &Image, const LowFunc &Source,
   Frame->ChainAccesses = std::move(Replayed.ChainAccesses);
   return matchesSourceChain(States, *Frame) ? Frame : nullptr;
 }
+bool hasCurrentPhysicalChain(
+    const MedFunc &Function,
+    const std::vector<RegistrationChainAccess> &ChainAccesses) {
+  const auto Threads = getX86RegistrationSEHThreadAccesses(Function);
+  if (!Threads)
+    return false;
+  std::map<std::pair<va_t, int>, const RegistrationChainAccess *> Remaining;
+  for (const auto &Access : ChainAccesses)
+    Remaining.emplace(std::make_pair(Access.Address, Access.OpSeq), &Access);
+  size_t Work = 0;
+  TempDefinitions Definitions;
+  auto Define = [&](const MedVar &Value, const MedBlock &Block,
+                    const MedOp *Op) {
+    if (Value.Kind != MedVar::Temp || !Value.Size || Value.Id < 0)
+      return;
+    const auto [It, Added] = Definitions.emplace(
+        TempKey{Value.Id, Value.SSAVer}, TempDefinition{&Block, Op});
+    if (!Added)
+      It->second.second = nullptr;
+  };
+  for (const auto &Block : Function.Blocks) {
+    for (const auto &Phi : Block.Phis) {
+      if (++Work > limits::kMaxRegistrationEHStateWork)
+        return false;
+      Define(Phi.Output, Block, nullptr);
+    }
+    for (const auto &Op : Block.Ops) {
+      if (++Work > limits::kMaxRegistrationEHStateWork)
+        return false;
+      Define(Op.Output, Block, &Op);
+      for (const auto &Output : Op.IntrinsicOutputs) {
+        if (++Work > limits::kMaxRegistrationEHStateWork)
+          return false;
+        Define(Output, Block, nullptr);
+      }
+    }
+  }
+  for (const auto &Block : Function.Blocks)
+    for (const auto &Op : Block.Ops) {
+      if (++Work > limits::kMaxRegistrationEHStateWork)
+        return false;
+      if (Op.MemoryAddressSpace != NdMemoryAddressSpace::X86FS)
+        continue;
+      const auto Found = Remaining.find({Op.Addr, Op.OriginSeq});
+      const auto Thread = Threads->find({Op.Addr, Op.OriginSeq});
+      if (Thread != Threads->end()) {
+        // Source-bound Self loads are ordinary thread reads, never chain
+        // effects. Recheck their current materialized offset independently.
+        if (Found != Remaining.end() || Op.Dead || Op.Addr < Block.StartAddr ||
+            Op.Addr >= Block.EndAddr ||
+            Thread->second.Field != RegistrationSEHThreadAccess::Kind::Self ||
+            !segmentOffset(Block, Op, Definitions,
+                           RegistrationSEHThreadAccess::SelfOffset, Work))
+          return false;
+        continue;
+      }
+      const bool Load = Op.Opcode == NdOp::LOAD;
+      if (Found == Remaining.end() || Op.Dead || Op.Addr < Block.StartAddr ||
+          Found->second->EndAddress > Block.EndAddr ||
+          (!Load && Op.Opcode != NdOp::STORE) ||
+          Op.NumInputs != (Load ? 1u : 2u) ||
+          !segmentOffset(Block, Op, Definitions, 0, Work) ||
+          (Load ? Op.Output.Size : Op.Inputs[1].Size) != 4 ||
+          Op.MemoryOrdering != NdMemoryOrdering::None ||
+          Load != (Found->second->AccessKind ==
+                       RegistrationChainAccess::Kind::ReadPreviousHead ||
+                   Found->second->AccessKind ==
+                       RegistrationChainAccess::Kind::ReadInstalledHead))
+        return false;
+      Remaining.erase(Found);
+    }
+  return Remaining.empty();
+}
 } // namespace x86_registration
 
 const std::vector<RegistrationChainAccess> *
@@ -250,60 +337,10 @@ getX86RegistrationCxxChainAccesses(const MedFunc &Function) {
       Function.ExceptionMetadata->Registration->RealignedFrame ||
       !matchesSourceChain(States, *Frame))
     return nullptr;
-  std::map<std::pair<va_t, int>, const RegistrationChainAccess *> Remaining;
-  for (const auto &Access : Frame->ChainAccesses)
-    Remaining.emplace(std::make_pair(Access.Address, Access.OpSeq), &Access);
-  size_t Work = 0;
-  TempDefinitions Definitions;
-  auto Define = [&](const MedVar &Value, const MedBlock &Block,
-                    const MedOp *Op) {
-    if (Value.Kind != MedVar::Temp || !Value.Size || Value.Id < 0)
-      return;
-    const auto [It, Added] = Definitions.emplace(
-        TempKey{Value.Id, Value.SSAVer}, TempDefinition{&Block, Op});
-    if (!Added)
-      It->second.second = nullptr;
-  };
-  for (const auto &Block : Function.Blocks) {
-    for (const auto &Phi : Block.Phis) {
-      if (++Work > limits::kMaxRegistrationEHStateWork)
-        return nullptr;
-      Define(Phi.Output, Block, nullptr);
-    }
-    for (const auto &Op : Block.Ops) {
-      if (++Work > limits::kMaxRegistrationEHStateWork)
-        return nullptr;
-      Define(Op.Output, Block, &Op);
-      for (const auto &Output : Op.IntrinsicOutputs) {
-        if (++Work > limits::kMaxRegistrationEHStateWork)
-          return nullptr;
-        Define(Output, Block, nullptr);
-      }
-    }
-  }
-  for (const auto &Block : Function.Blocks)
-    for (const auto &Op : Block.Ops) {
-      if (++Work > limits::kMaxRegistrationEHStateWork)
-        return nullptr;
-      if (Op.MemoryAddressSpace != NdMemoryAddressSpace::X86FS)
-        continue;
-      const auto Found = Remaining.find({Op.Addr, Op.OriginSeq});
-      const bool Load = Op.Opcode == NdOp::LOAD;
-      if (Found == Remaining.end() || Op.Dead || Op.Addr < Block.StartAddr ||
-          Found->second->EndAddress > Block.EndAddr ||
-          (!Load && Op.Opcode != NdOp::STORE) ||
-          Op.NumInputs != (Load ? 1u : 2u) ||
-          !zeroChainOffset(Block, Op, Definitions, Work) ||
-          (Load ? Op.Output.Size : Op.Inputs[1].Size) != 4 ||
-          Op.MemoryOrdering != NdMemoryOrdering::None ||
-          Load != (Found->second->AccessKind ==
-                       RegistrationChainAccess::Kind::ReadPreviousHead ||
-                   Found->second->AccessKind ==
-                       RegistrationChainAccess::Kind::ReadInstalledHead))
-        return nullptr;
-      Remaining.erase(Found);
-    }
-  return Remaining.empty() ? &Frame->ChainAccesses : nullptr;
+  return x86_registration::hasCurrentPhysicalChain(Function,
+                                                   Frame->ChainAccesses)
+             ? &Frame->ChainAccesses
+             : nullptr;
 }
 
 bool hasCheckedX86RegistrationCxxPhysicalFrame(const BinaryImage &Image,

@@ -1520,4 +1520,103 @@ int main(void) { return stack_wrapper() != -27; }
     }
 }
 
+TEST(AAPCS64CallContract, AVectorStackCopyForwardsBothScalarArguments) {
+  class Header : public NullDebugContext {
+  public:
+    std::optional<FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      if (Name != "fixture_wide_stack")
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Name = Name.str();
+      Function.PrototypeFromHeader = true;
+      Function.PrototypeLibrary = "test-header";
+      Function.ReturnType = NdType::makeInt(8, true);
+      for (unsigned I = 0; I < 14; ++I)
+        Function.Params.emplace_back(
+            "a" + std::to_string(I),
+            NdType::makeInt(I == 8 || I == 9 ? 4 : 8, false));
+      return Function;
+    }
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      auto Function = Address == Got ? resolvePrototype("fixture_wide_stack")
+                                     : std::nullopt;
+      if (Function)
+        Function->Addr = Address;
+      return Function;
+    }
+  } Debug;
+  // An ordinary compiler-generated fourteen-argument forwarder. Q0 copies
+  // arguments 10 and 11 together; it is not an independent vector parameter.
+  std::vector<uint32_t> Code{0xD10103FF, // sub sp,sp,64
+                             0xA9462FEA, // ldp x10,x11,[sp,96]
+                             0xB94043E8, // ldr w8,[sp,64]
+                             0xB9404BE9, // ldr w9,[sp,72]
+                             0x3DC017E0, // ldr q0,[sp,80]
+                             0xB90003E8, // str w8,[sp]
+                             0xA902FBEB, // stp x11,x30,[sp,40]
+                             0xF90013EA, // str x10,[sp,32]
+                             0x3D8007E0, // str q0,[sp,16]
+                             0xB9000BE9, // str w9,[sp,8]
+                             uint32_t(0x94000000 | ((Plt - (Text + 40)) / 4)),
+                             0xF9401BFE, // ldr x30,[sp,48]
+                             0x910103FF, // add sp,sp,64
+                             Ret};
+  for (BinaryFormat Format : {BinaryFormat::COFF, BinaryFormat::ELF})
+    for (bool LLVM : {false, true})
+      for (bool NoOpt : {false, true}) {
+        SCOPED_TRACE(testing::Message()
+                     << int(Format) << ':' << LLVM << ':' << NoOpt);
+        auto Image =
+            makeImage({{Text, Code}, {Plt, pltEntry(Plt, Got)}},
+                      {{Text, "wide_stack_forwarder"}}, {"fixture_wide_stack"});
+        Image.Format = Format;
+        Image.Imports.front().Module = "fixture.dll";
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.OnlyFunctionEntries = {Text};
+        Options.LiftMode = LLVM;
+        Options.SourceProjection = true;
+        Options.NoOpt = NoOpt;
+        auto Result = Pipeline().run(Image, Context, Options, &Debug);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        std::string Source;
+        llvm::raw_string_ostream Output(Source);
+        CEmitterOptions COptions;
+        COptions.TheArch = Image.Arch;
+        COptions.Format = Image.Format;
+        COptions.Image = &Image;
+        ASSERT_TRUE(LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Output,
+                                               COptions, &Debug, &Image)
+                         : HighCEmitter().emit(Result.HighFuncs, Output,
+                                               COptions, &Debug));
+        const std::string Provider = R"C(
+static unsigned calls;
+int64_t fixture_wide_stack(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                          uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7,
+                          uint32_t a8, uint32_t a9, uint64_t a10, uint64_t a11,
+                          uint64_t a12, uint64_t a13) {
+  if (a0 != 1 || a1 != 2 || a2 != 3 || a3 != 4 || a4 != 5 || a5 != 6 ||
+      a6 != 7 || a7 != 8 || a8 != 0x1234abcd || a9 != 0x9abc8765 ||
+      a10 != UINT64_C(0x1020304050607080) ||
+      a11 != UINT64_C(0x8877665544332211) || a12 != 13 || a13 != 14)
+    __builtin_trap();
+  ++calls;
+  return 19;
+}
+int main(void) {
+  return wide_stack_forwarder(1, 2, 3, 4, 5, 6, 7, 8, 0x1234abcd, 0x9abc8765,
+                              UINT64_C(0x1020304050607080),
+                              UINT64_C(0x8877665544332211), 13, 14) != 19 ||
+         calls != 1;
+}
+)C";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Source + Provider,
+              {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+      }
+}
+
 } // namespace

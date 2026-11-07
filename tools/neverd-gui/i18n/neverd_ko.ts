@@ -12,6 +12,14 @@
         <translation>집중 모드(&amp;F)</translation>
     </message>
     <message>
+        <source>&amp;New instance</source>
+        <translation>새 인스턴스(&amp;N)</translation>
+    </message>
+    <message>
+        <source>Open a new instance of NeverD</source>
+        <translation>NeverD의 새 인스턴스를 엽니다</translation>
+    </message>
+    <message>
         <source>&amp;Open...</source>
         <translation>열기(&amp;O)...</translation>
     </message>
@@ -342,6 +350,50 @@
     <message>
         <source>Move to the next occurrence of the highlighted identifier</source>
         <translation>강조 표시된 식별자가 나오는 다음 위치로 이동합니다</translation>
+    </message>
+    <message>
+        <source>Lock or &amp;unlock</source>
+        <translation>고정 또는 고정 해제(&amp;U)</translation>
+    </message>
+    <message>
+        <source>Keep the highlighted word highlighted in the first free color, or unlock it</source>
+        <translation>강조 표시된 단어를 첫 번째 빈 색으로 계속 강조 표시하거나 고정을 해제합니다</translation>
+    </message>
+    <message>
+        <source>Color &amp;1</source>
+        <translation>색 1(&amp;1)</translation>
+    </message>
+    <message>
+        <source>Color &amp;2</source>
+        <translation>색 2(&amp;2)</translation>
+    </message>
+    <message>
+        <source>Color &amp;3</source>
+        <translation>색 3(&amp;3)</translation>
+    </message>
+    <message>
+        <source>Color &amp;4</source>
+        <translation>색 4(&amp;4)</translation>
+    </message>
+    <message>
+        <source>Color &amp;5</source>
+        <translation>색 5(&amp;5)</translation>
+    </message>
+    <message>
+        <source>Color &amp;6</source>
+        <translation>색 6(&amp;6)</translation>
+    </message>
+    <message>
+        <source>Color &amp;7</source>
+        <translation>색 7(&amp;7)</translation>
+    </message>
+    <message>
+        <source>Color &amp;8</source>
+        <translation>색 8(&amp;8)</translation>
+    </message>
+    <message>
+        <source>Lock the highlighted word in this color, or unlock the color</source>
+        <translation>강조 표시된 단어를 이 색으로 고정하거나 이 색의 고정을 해제합니다</translation>
     </message>
     <message>
         <source>&amp;Find in view...</source>
@@ -1275,6 +1327,14 @@
         <source>Enter &amp;comment...</source>
         <translation>주석 입력(&amp;C)...</translation>
     </message>
+    <message>
+        <source>Install, enable, disable and remove plugins</source>
+        <translation>플러그인 설치, 활성화, 비활성화 및 제거</translation>
+    </message>
+    <message>
+        <source>Plugin &amp;manager...</source>
+        <translation>플러그인 관리자(M)...</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1612,6 +1672,10 @@
         <translation>검색(&amp;S)</translation>
     </message>
     <message>
+        <source>&amp;Lock highlight</source>
+        <translation>강조 표시 고정(&amp;L)</translation>
+    </message>
+    <message>
         <source>&amp;View</source>
         <translation>보기(&amp;V)</translation>
     </message>
@@ -1712,6 +1776,10 @@
     <message>
         <source>%1 uses database format %2, which this NeverD cannot update.</source>
         <translation>%1은(는) 데이터베이스 형식 %2을(를) 사용하므로 이 버전의 NeverD에서는 업데이트할 수 없습니다.</translation>
+    </message>
+    <message>
+        <source>This database may already be open in another NeverD (%1)</source>
+        <translation>이 데이터베이스는 다른 NeverD에서 이미 열려 있을 수 있습니다(%1)</translation>
     </message>
     <message>
         <source>Cannot create %1</source>
@@ -1997,6 +2065,23 @@ Double-click to go to the declaration.</source>
         <source>Could not refresh source: %1</source>
         <translation>소스 코드를 새로 고칠 수 없습니다: %1</translation>
     </message>
+
+    <message>
+        <source>Interpreter recovered · %1 blocks</source>
+        <translation>인터프리터 복원 완료 · 블록 %1개</translation>
+    </message>
+    <message>
+        <source>No complete source was produced</source>
+        <translation>완전한 소스가 생성되지 않았습니다</translation>
+    </message>
+    <message>
+        <source>Recovering interpreter control flow…</source>
+        <translation>인터프리터 제어 흐름 복원 중…</translation>
+    </message>
+    <message>
+        <source>Recovery stopped: %1</source>
+        <translation>복원 중지: %1</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::CodeView</name>
@@ -2063,6 +2148,23 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Cancel transformation</source>
         <translation>변환 취소</translation>
+    </message>
+
+    <message>
+        <source>Interpreter recovery options…</source>
+        <translation>인터프리터 복원 옵션…</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report…</source>
+        <translation>인터프리터 복원 보고서…</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>인터프리터 함수 복원</translation>
+    </message>
+    <message>
+        <source>Return to ordinary source</source>
+        <translation>일반 소스로 돌아가기</translation>
     </message>
 </context>
 <context>
@@ -2291,6 +2393,14 @@ Double-click to go to the declaration.</source>
         <source>Laying out graph…</source>
         <translation>그래프 배치 중…</translation>
     </message>
+    <message>
+        <source>From %1</source>
+        <translation>%1에서</translation>
+    </message>
+    <message>
+        <source>To %1</source>
+        <translation>%1(으)로</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::HexView</name>
@@ -2371,6 +2481,26 @@ Double-click to go to the declaration.</source>
         <translation>백그라운드 분석: 탐색하는 동안 참조와 레이블의 색인을 생성합니다</translation>
     </message>
     <message>
+        <source>Database changed</source>
+        <translation>데이터베이스가 변경됨</translation>
+    </message>
+    <message>
+        <source>%1 changed after this workbench opened it, perhaps in another NeverD. Replace what it holds now with this workbench&apos;s project?</source>
+        <translation>%1은(는) 이 작업 공간에서 연 뒤에 변경되었습니다. 다른 NeverD에서 변경되었을 수 있습니다. 현재 내용을 이 작업 공간의 프로젝트로 바꾸시겠습니까?</translation>
+    </message>
+    <message>
+        <source>Open other files in a new instance</source>
+        <translation>다른 파일을 새 인스턴스에서 열기</translation>
+    </message>
+    <message>
+        <source>With a file open, File &gt; Open, a recent file and a dropped file start a new instance instead of replacing it</source>
+        <translation>파일이 열려 있으면 파일 &gt; 열기, 최근 파일, 끌어다 놓은 파일은 바꾸지 않고 새 인스턴스를 시작합니다</translation>
+    </message>
+    <message>
+        <source>%1 is already open in another NeverD; switching to it.</source>
+        <translation>%1은(는) 이미 다른 NeverD에서 열려 있습니다. 해당 창으로 전환합니다.</translation>
+    </message>
+    <message>
         <source>Unsaved changes</source>
         <translation>저장되지 않은 변경 사항</translation>
     </message>
@@ -2381,6 +2511,10 @@ Double-click to go to the declaration.</source>
     <message>
         <source>%1 lacks the latest changes. Save them into it before continuing?</source>
         <translation>%1에 최신 변경 사항이 없습니다. 계속하기 전에 저장하시겠습니까?</translation>
+    </message>
+    <message>
+        <source>Cannot start a new instance: %1</source>
+        <translation>새 인스턴스를 시작할 수 없습니다: %1</translation>
     </message>
     <message>
         <source>Cannot jump to %1: %2</source>
@@ -2409,18 +2543,6 @@ Double-click to go to the declaration.</source>
     <message>
         <source>History: %1 entries, cursor %2</source>
         <translation>기록: 항목 %1개, 커서 %2</translation>
-    </message>
-    <message>
-        <source>AU: idle</source>
-        <translation>AU: 유휴</translation>
-    </message>
-    <message>
-        <source>AU: busy %1%</source>
-        <translation>AU: 작업 중 %1%</translation>
-    </message>
-    <message>
-        <source>AU: busy</source>
-        <translation>AU: 작업 중</translation>
     </message>
     <message>
         <source>Down</source>
@@ -3294,6 +3416,10 @@ After:
         <source>Choose a file of 1 byte to %1, a hexadecimal address and a section name. A function needs a name and executable permissions.</source>
         <translation>1바이트에서 %1 사이의 파일, 16진수 주소와 섹션 이름을 지정하세요. 함수에는 이름과 실행 권한이 필요합니다.</translation>
     </message>
+    <message>
+        <source>Plugin tasks</source>
+        <translation>플러그인 작업</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3458,6 +3584,14 @@ After:
     <message>
         <source>%1 is in a folder you cannot write to; its database is kept in %2</source>
         <translation>%1은(는) 쓸 수 없는 폴더에 있으므로 데이터베이스를 %2에 보관합니다</translation>
+    </message>
+    <message>
+        <source>This file may already be open in another NeverD (%1)</source>
+        <translation>이 파일은 다른 NeverD에서 이미 열려 있을 수 있습니다(%1)</translation>
+    </message>
+    <message>
+        <source>%1 was left as it is; this workbench&apos;s changes are not in it.</source>
+        <translation>%1은(는) 그대로 두었습니다. 이 작업 공간의 변경 사항은 포함되지 않았습니다.</translation>
     </message>
     <message>
         <source>Starting analysis worker…</source>
@@ -6771,6 +6905,14 @@ Reference identities: unresolved. Some call or data targets cannot be compared. 
         <translation>
 참조 식별 정보: 미확인. 일부 호출 또는 데이터 대상을 비교할 수 없습니다. 이 사실만으로 변경이 발생했다고 판단할 수는 없습니다.</translation>
     </message>
+    <message>
+        <source>Include matched calls</source>
+        <translation>대응된 호출 포함</translation>
+    </message>
+    <message>
+        <source>Extend shared regions across direct calls whose targets are paired. Results depend on the current function pairs and are recomputed when pairs change. This does not validate call behavior.</source>
+        <translation>호출 대상이 대응된 직접 호출을 넘어 공유 영역을 확장합니다. 결과는 현재 함수 대응에 따라 달라지며 대응이 변경되면 다시 계산됩니다. 호출 동작을 검증하지는 않습니다.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonFlowDialog</name>
@@ -6813,10 +6955,6 @@ Select an operation to follow dependencies. Synthetic operations have block prov
     <message>
         <source>Enable dependency evidence in comparison settings.</source>
         <translation>비교 설정에서 의존성 근거를 활성화하세요.</translation>
-    </message>
-    <message>
-        <source>Include control dependencies</source>
-        <translation>제어 의존성 포함</translation>
     </message>
     <message>
         <source>Inspect original function</source>
@@ -6953,6 +7091,32 @@ Progress does not establish equal loop counts or function results.</source>
     <message>
         <source>Proof: every counter cycle reaches a shared exit relative to an input-derived expression. Undefined behavior may occur before exit.</source>
         <translation>증명: 각 카운터 주기는 입력에서 파생된 표현식을 기준으로 공통 출구에 도달합니다. 종료 전에 정의되지 않은 동작이 발생할 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Argument accesses</source>
+        <translation>인자 접근</translation>
+    </message>
+    <message>
+        <source>Show reads and writes using the same computed address as a recovered call argument.</source>
+        <translation>복구된 호출 인자와 동일한 계산 주소를 사용하는 읽기와 쓰기를 표시합니다.</translation>
+    </message>
+    <message>
+        <source>Include control</source>
+        <translation>제어 의존성 포함</translation>
+    </message>
+    <message>
+        <source>Include control dependencies when tracing inputs or uses.</source>
+        <translation>입력이나 사용 위치를 추적할 때 제어 의존성을 포함합니다.</translation>
+    </message>
+    <message>
+        <source>Call n%1 · %2 address observations · %3
+Reads and writes at a recovered argument's address. Call effects and execution order remain unknown. Activate a row to select its operation.</source>
+        <translation>호출 n%1 · 주소 관측 %2개 · %3
+복구된 인자 주소에서의 읽기와 쓰기입니다. 호출 영향과 실행 순서는 아직 알 수 없습니다. 행을 활성화하면 해당 연산을 선택합니다.</translation>
+    </message>
+    <message>
+        <source>Inspecting argument addresses…</source>
+        <translation>인자 주소 검사 중…</translation>
     </message>
 </context>
 <context>
@@ -7767,6 +7931,38 @@ Every use of a projected parameter reads the same low bits. Whole-function behav
         <source>Uncertain</source>
         <translation>불확실</translation>
     </message>
+    <message>
+        <source>Argument</source>
+        <translation>인자</translation>
+    </message>
+    <message>
+        <source>Access</source>
+        <translation>접근</translation>
+    </message>
+    <message>
+        <source>RETURN input</source>
+        <translation>RETURN 입력</translation>
+    </message>
+    <message>
+        <source>Write</source>
+        <translation>쓰기</translation>
+    </message>
+    <message>
+        <source>Read</source>
+        <translation>읽기</translation>
+    </message>
+    <message>
+        <source>COPY / PHI path</source>
+        <translation>COPY / PHI 경로</translation>
+    </message>
+    <message>
+        <source>Not observed</source>
+        <translation>관측되지 않음</translation>
+    </message>
+    <message>
+        <source>A same-width COPY/PHI path to a RETURN operand. That operand may be a control target; this does not establish an ABI return value or execution order.</source>
+        <translation>RETURN 피연산자로 이어지는 동일 너비의 COPY/PHI 경로입니다. 피연산자는 제어 대상일 수 있으며, ABI 반환값이나 실행 순서를 확정하지 않습니다.</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ComparisonRegionsDialog</name>
@@ -7923,6 +8119,30 @@ External input producers are not compared or counted as shared code.</source>
 SSA recipe: %1</source>
         <translation>
 SSA 분석 방식: %1</translation>
+    </message>
+    <message>
+        <source>
+Calls use current function pairs; behavior is not validated.</source>
+        <translation>
+호출은 현재 함수 대응을 기준으로 합니다. 동작은 검증되지 않았습니다.</translation>
+    </message>
+    <message>
+        <source>Call context…</source>
+        <translation>호출 컨텍스트…</translation>
+    </message>
+    <message>
+        <source>Primary</source>
+        <translation>주 입력</translation>
+    </message>
+    <message>
+        <source>Secondary</source>
+        <translation>보조 입력</translation>
+    </message>
+    <message>
+        <source>%1 primary / %2 secondary functions · %3 shared spans
+Coverage: %4% / %5% of eligible instructions, including paired direct calls. Function pairs condition this evidence; behavior is not validated.</source>
+        <translation>주 입력 함수 %1개 / 보조 입력 함수 %2개 · 공유 구간 %3개
+대상 명령어의 범위: %4% / %5% (대응된 직접 호출 포함). 이 증거는 함수 대응을 전제로 하며 동작은 검증되지 않았습니다.</translation>
     </message>
 </context>
 <context>
@@ -9469,6 +9689,18 @@ Ambiguities and manual decisions remain report-local. Region hypotheses retain t
         <source>Releases</source>
         <translation>릴리스</translation>
     </message>
+    <message>
+        <source>Calls in these saved spans rely on the source report's function pairs. They do not prove equivalent callee behavior.</source>
+        <translation>저장된 구간의 호출은 원본 보고서의 함수 대응에 근거합니다. 호출 대상의 동작이 동등함을 증명하지는 않습니다.</translation>
+    </message>
+    <message>
+        <source>All native spans</source>
+        <translation>모든 네이티브 구간</translation>
+    </message>
+    <message>
+        <source>All SSA spans</source>
+        <translation>모든 SSA 구간</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LineageGraph</name>
@@ -9812,6 +10044,668 @@ Your previous graph is still available.</source>
     <message>
         <source>Timeline</source>
         <translation>타임라인</translation>
+    </message>
+</context>
+
+<context>
+    <name>neverd::gui::InterpreterRecoveryDialog</name>
+    <message>
+        <source>Assume external stores avoid the declared entry frame</source>
+        <translation>외부 쓰기가 선언된 진입 프레임과 겹치지 않는다고 가정</translation>
+    </message>
+    <message>
+        <source>Blank or zero keeps the engine default. More work does not permit incomplete source or add memory assumptions.</source>
+        <translation>빈칸 또는 0은 엔진 기본값을 유지합니다. 작업량을 늘려도 불완전한 소스를 허용하거나 메모리 가정을 추가하지 않습니다.</translation>
+    </message>
+    <message>
+        <source>Chained transfers</source>
+        <translation>연속 전이 수</translation>
+    </message>
+    <message>
+        <source>Chained visits per destination</source>
+        <translation>대상별 연속 방문 수</translation>
+    </message>
+    <message>
+        <source>Contexts per address</source>
+        <translation>주소별 컨텍스트 수</translation>
+    </message>
+    <message>
+        <source>Control fields</source>
+        <translation>제어 필드 수</translation>
+    </message>
+    <message>
+        <source>Control refinements</source>
+        <translation>제어 세분화 횟수</translation>
+    </message>
+    <message>
+        <source>Control-flow nodes</source>
+        <translation>제어 흐름 노드 수</translation>
+    </message>
+    <message>
+        <source>Dependency visits</source>
+        <translation>의존성 방문 수</translation>
+    </message>
+    <message>
+        <source>End a chain at a repeated destination</source>
+        <translation>동일한 대상을 다시 방문하면 연속 분석 종료</translation>
+    </message>
+    <message>
+        <source>Engine default</source>
+        <translation>엔진 기본값</translation>
+    </message>
+    <message>
+        <source>Enter a valid integer for %1.</source>
+        <translation>%1에 유효한 정수를 입력하세요.</translation>
+    </message>
+    <message>
+        <source>Enter both entry-frame endpoints, or leave both blank.</source>
+        <translation>진입 프레임의 양 끝점을 입력하거나 둘 다 비워 두세요.</translation>
+    </message>
+    <message>
+        <source>Entry RSP alignment</source>
+        <translation>진입 RSP 정렬</translation>
+    </message>
+    <message>
+        <source>Entry RSP range end (exclusive)</source>
+        <translation>진입 RSP 범위 끝 (미포함)</translation>
+    </message>
+    <message>
+        <source>Entry RSP range start</source>
+        <translation>진입 RSP 범위 시작</translation>
+    </message>
+    <message>
+        <source>Entry RSP residue</source>
+        <translation>진입 RSP 나머지</translation>
+    </message>
+    <message>
+        <source>Evaluated operations</source>
+        <translation>평가 연산 수</translation>
+    </message>
+    <message>
+        <source>General registers</source>
+        <translation>범용 레지스터</translation>
+    </message>
+    <message>
+        <source>General registers and CPU queries</source>
+        <translation>범용 레지스터 및 CPU 쿼리</translation>
+    </message>
+    <message>
+        <source>General registers, CPU queries and XMM</source>
+        <translation>범용 레지스터, CPU 쿼리 및 XMM</translation>
+    </message>
+    <message>
+        <source>Interpreter recovery report</source>
+        <translation>인터프리터 복원 보고서</translation>
+    </message>
+    <message>
+        <source>Node evaluations</source>
+        <translation>노드 평가 횟수</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid return slots and saved frame cells</source>
+        <translation>쓰기가 반환 슬롯과 저장된 프레임 셀을 피함을 증명</translation>
+    </message>
+    <message>
+        <source>Prove stores avoid the declared entry frame</source>
+        <translation>쓰기가 선언된 진입 프레임을 피함을 증명</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>복원</translation>
+    </message>
+    <message>
+        <source>Recover interpreter function</source>
+        <translation>인터프리터 함수 복원</translation>
+    </message>
+    <message>
+        <source>Recover reachable control flow and generate C with explicit x64 register state. The source describes normal, nonfaulting execution with fixed image mappings. Memory assumptions below apply only when you enter them.</source>
+        <translation>도달 가능한 제어 흐름을 복원하고 명시적 x64 레지스터 상태를 가진 C 소스를 생성합니다. 소스는 고정 이미지 매핑에서 오류 없는 정상 실행을 설명합니다. 아래 메모리 가정은 입력한 경우에만 적용됩니다.</translation>
+    </message>
+    <message>
+        <source>Signed offsets from entry RSP. Declaring this range assumes address arithmetic does not wrap; it does not prove accessibility or separation.</source>
+        <translation>진입 RSP에 대한 부호 있는 오프셋입니다. 이 범위를 선언하면 주소 연산이 순환하지 않는다고 가정하지만 접근 가능성이나 비중첩을 증명하지는 않습니다.</translation>
+    </message>
+    <message>
+        <source>Solver queries</source>
+        <translation>솔버 쿼리 수</translation>
+    </message>
+    <message>
+        <source>Source state</source>
+        <translation>소스 상태</translation>
+    </message>
+    <message>
+        <source>State and memory</source>
+        <translation>상태 및 메모리</translation>
+    </message>
+    <message>
+        <source>Symbolic expression nodes</source>
+        <translation>기호식 노드 수</translation>
+    </message>
+    <message>
+        <source>Unspecified</source>
+        <translation>지정되지 않음</translation>
+    </message>
+    <message>
+        <source>Work limits</source>
+        <translation>작업량 제한</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisProgress</name>
+    <message>
+        <source>AU: idle</source>
+        <translation>AU: 유휴</translation>
+    </message>
+    <message>
+        <source>AU: loading</source>
+        <translation>AU: 불러오는 중</translation>
+    </message>
+    <message>
+        <source>AU: loading %1%</source>
+        <translation>AU: 불러오는 중 %1%</translation>
+    </message>
+    <message>
+        <source>AU: finding functions</source>
+        <translation>AU: 함수 찾는 중</translation>
+    </message>
+    <message>
+        <source>AU: indexing references</source>
+        <translation>AU: 참조 색인 중</translation>
+    </message>
+    <message>
+        <source>AU: indexing references %1%</source>
+        <translation>AU: 참조 색인 중 %1%</translation>
+    </message>
+    <message>
+        <source>AU: analysis finished</source>
+        <translation>AU: 분석 완료</translation>
+    </message>
+    <message>
+        <source>Analysis finished in %1 s</source>
+        <translation>분석이 %1초 만에 완료되었습니다</translation>
+    </message>
+    <message>
+        <source>Reading the file</source>
+        <translation>파일 읽는 중</translation>
+    </message>
+    <message>
+        <source>Parsing the format</source>
+        <translation>형식 분석 중</translation>
+    </message>
+    <message>
+        <source>Finding code</source>
+        <translation>코드 찾는 중</translation>
+    </message>
+    <message>
+        <source>Loading debug information</source>
+        <translation>디버그 정보 불러오는 중</translation>
+    </message>
+    <message>
+        <source>Opening the project</source>
+        <translation>프로젝트 여는 중</translation>
+    </message>
+    <message>
+        <source>Loading</source>
+        <translation>불러오는 중</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::LoadProgressCard</name>
+    <message>
+        <source>Opening %1</source>
+        <translation>%1 여는 중</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1초</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::AnalysisPlugins</name>
+    <message>
+        <source> (%1/%2)</source>
+        <translation> (%1/%2)</translation>
+    </message>
+    <message>
+        <source> icon</source>
+        <translation> 아이콘</translation>
+    </message>
+    <message>
+        <source> position</source>
+        <translation> 위치</translation>
+    </message>
+    <message>
+        <source>%1 [%2]</source>
+        <translation>%1 [%2]</translation>
+    </message>
+    <message>
+        <source>%1 [%2] · Task %3</source>
+        <translation>%1 [%2] · 작업 %3</translation>
+    </message>
+    <message>
+        <source>%1 s</source>
+        <translation>%1초</translation>
+    </message>
+    <message>
+        <source>%1 · %2</source>
+        <translation>%1 · %2</translation>
+    </message>
+    <message>
+        <source>&amp;Cancel task</source>
+        <translation>작업 취소(&amp;C)</translation>
+    </message>
+    <message>
+        <source>&amp;Export artifact…</source>
+        <translation>산출물 내보내기(&amp;E)…</translation>
+    </message>
+    <message>
+        <source>&amp;Import plugin…</source>
+        <translation>플러그인 가져오기(&amp;I)…</translation>
+    </message>
+    <message>
+        <source>Add recovered code as an analysis section, then open its first function</source>
+        <translation>복원 코드를 분석 섹션으로 추가한 뒤 첫 함수를 엽니다</translation>
+    </message>
+    <message>
+        <source>Artifact:</source>
+        <translation>산출물:</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>찾아보기…</translation>
+    </message>
+    <message>
+        <source>Choose command icon</source>
+        <translation>명령 아이콘 선택</translation>
+    </message>
+    <message>
+        <source>Choose which commands appear directly in the context menu. Other commands are grouped under Plugins → plugin name. Icons accept builtin:name or a local PNG, ICO or SVG file.</source>
+        <translation>컨텍스트 메뉴에 직접 표시할 명령을 선택하세요. 다른 명령은 Plugins → 플러그인 이름 아래에 그룹화됩니다. 아이콘은 builtin:name 또는 로컬 PNG, ICO, SVG 파일을 사용할 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Command</source>
+        <translation>명령</translation>
+    </message>
+    <message>
+        <source>Context menu settings…</source>
+        <translation>컨텍스트 메뉴 설정…</translation>
+    </message>
+    <message>
+        <source>Direct context menu</source>
+        <translation>컨텍스트 메뉴에 직접 표시</translation>
+    </message>
+    <message>
+        <source>Elapsed</source>
+        <translation>경과 시간</translation>
+    </message>
+    <message>
+        <source>Export artifact</source>
+        <translation>산출물 내보내기</translation>
+    </message>
+    <message>
+        <source>Export artifact to a new file</source>
+        <translation>산출물을 새 파일로 내보내기</translation>
+    </message>
+    <message>
+        <source>Icon</source>
+        <translation>아이콘</translation>
+    </message>
+    <message>
+        <source>Icon is unavailable: %1</source>
+        <translation>아이콘을 사용할 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>Icons (*.png *.ico *.svg)</source>
+        <translation>아이콘 (*.png *.ico *.svg)</translation>
+    </message>
+    <message>
+        <source>Import a process plugin to add commands.</source>
+        <translation>프로세스 플러그인을 가져와 명령을 추가하세요.</translation>
+    </message>
+    <message>
+        <source>Import code into image</source>
+        <translation>이미지로 코드 가져오기</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>프로세스 플러그인 가져오기</translation>
+    </message>
+    <message>
+        <source>Import process plugin…</source>
+        <translation>프로세스 플러그인 가져오기…</translation>
+    </message>
+    <message>
+        <source>Log for %1</source>
+        <translation>%1 로그</translation>
+    </message>
+    <message>
+        <source>Menu settings…</source>
+        <translation>메뉴 설정…</translation>
+    </message>
+    <message>
+        <source>Plu&amp;gins</source>
+        <translation>플러그인(&amp;G)</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>플러그인</translation>
+    </message>
+    <message>
+        <source>Plugin / task</source>
+        <translation>플러그인 / 작업</translation>
+    </message>
+    <message>
+        <source>Plugin artifact exported to %1</source>
+        <translation>플러그인 산출물을 %1에 내보냈습니다</translation>
+    </message>
+    <message>
+        <source>Plugin context menus</source>
+        <translation>플러그인 컨텍스트 메뉴</translation>
+    </message>
+    <message>
+        <source>Plugin icon is unavailable: %1</source>
+        <translation>플러그인 아이콘을 사용할 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager…</source>
+        <translation>플러그인 관리자…</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>플러그인 매니페스트 (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin task log</source>
+        <translation>플러그인 작업 로그</translation>
+    </message>
+    <message>
+        <source>Plugin tasks and results</source>
+        <translation>플러그인 작업 및 결과</translation>
+    </message>
+    <message>
+        <source>Plugins</source>
+        <translation>플러그인</translation>
+    </message>
+    <message>
+        <source>Plugins submenu</source>
+        <translation>Plugins 하위 메뉴</translation>
+    </message>
+    <message>
+        <source>Position</source>
+        <translation>위치</translation>
+    </message>
+    <message>
+        <source>Process plugin imported: %1</source>
+        <translation>프로세스 플러그인을 가져왔습니다: %1</translation>
+    </message>
+    <message>
+        <source>Progress</source>
+        <translation>진행률</translation>
+    </message>
+    <message>
+        <source>Project changed while the plugin dialog was open</source>
+        <translation>플러그인 대화 상자가 열린 동안 프로젝트가 변경되었습니다</translation>
+    </message>
+    <message>
+        <source>Remember these values for this action</source>
+        <translation>이 동작의 값 기억하기</translation>
+    </message>
+    <message>
+        <source>Run a plugin command to see its tasks and results.</source>
+        <translation>플러그인 명령을 실행하면 작업과 결과를 볼 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Select a task under %1 to inspect its result.</source>
+        <translation>%1 아래의 작업을 선택하면 결과를 볼 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Selected plugin task progress</source>
+        <translation>선택한 플러그인 작업 진행률</translation>
+    </message>
+    <message>
+        <source>Show &amp;log</source>
+        <translation>로그 표시(&amp;L)</translation>
+    </message>
+    <message>
+        <source>State</source>
+        <translation>상태</translation>
+    </message>
+    <message>
+        <source>Task results</source>
+        <translation>작업 결과</translation>
+    </message>
+    <message>
+        <source>Tasks grouped by plugin</source>
+        <translation>플러그인별 작업</translation>
+    </message>
+    <message>
+        <source>This action registration is no longer active.</source>
+        <translation>이 동작의 등록이 더 이상 활성 상태가 아닙니다.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginManagerDialog</name>
+    <message>
+        <source>Activating</source>
+        <translation>활성화 중</translation>
+    </message>
+    <message>
+        <source>Activation</source>
+        <translation>활성화 상태</translation>
+    </message>
+    <message>
+        <source>Activation: %1</source>
+        <translation>활성화 상태: %1</translation>
+    </message>
+    <message>
+        <source>Active</source>
+        <translation>활성</translation>
+    </message>
+    <message>
+        <source>Component generation: %1</source>
+        <translation>구성 요소 세대: %1</translation>
+    </message>
+    <message>
+        <source>Could not open the plugin folder.</source>
+        <translation>플러그인 폴더를 열 수 없습니다.</translation>
+    </message>
+    <message>
+        <source>Declared read services: %1</source>
+        <translation>선언된 읽기 서비스: %1</translation>
+    </message>
+    <message>
+        <source>Diagnostic: %1</source>
+        <translation>진단: %1</translation>
+    </message>
+    <message>
+        <source>Disable</source>
+        <translation>비활성화</translation>
+    </message>
+    <message>
+        <source>Enable</source>
+        <translation>활성화</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <translation>활성화됨</translation>
+    </message>
+    <message>
+        <source>Enabled on startup: %1</source>
+        <translation>시작 시 활성화: %1</translation>
+    </message>
+    <message>
+        <source>Filter by plugin name, ID or path</source>
+        <translation>플러그인 이름, ID 또는 경로로 필터링</translation>
+    </message>
+    <message>
+        <source>Filter plugins</source>
+        <translation>플러그인 필터링</translation>
+    </message>
+    <message>
+        <source>ID: %1</source>
+        <translation>ID: %1</translation>
+    </message>
+    <message>
+        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
+        <translation>프로세스 플러그인 매니페스트를 가져와 명령을 추가하세요. 제공 프로그램은 명령 실행 시에만 시작됩니다.</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>플러그인 가져오기…</translation>
+    </message>
+    <message>
+        <source>Import process plugin</source>
+        <translation>프로세스 플러그인 가져오기</translation>
+    </message>
+    <message>
+        <source>Inactive</source>
+        <translation>비활성</translation>
+    </message>
+    <message>
+        <source>Installation removed. Plugin files and task artifacts are kept.</source>
+        <translation>설치 기록을 제거했습니다. 플러그인 파일과 작업 산출물은 유지됩니다.</translation>
+    </message>
+    <message>
+        <source>Installation removed; active work is stopping.</source>
+        <translation>설치 기록을 제거했습니다. 실행 중인 작업을 중지합니다.</translation>
+    </message>
+    <message>
+        <source>Installed process plugins</source>
+        <translation>설치된 프로세스 플러그인</translation>
+    </message>
+    <message>
+        <source>Manifest: %1</source>
+        <translation>매니페스트: %1</translation>
+    </message>
+    <message>
+        <source>No</source>
+        <translation>아니요</translation>
+    </message>
+    <message>
+        <source>Open folder</source>
+        <translation>폴더 열기</translation>
+    </message>
+    <message>
+        <source>Plugin</source>
+        <translation>플러그인</translation>
+    </message>
+    <message>
+        <source>Plugin disabled. Its installation is kept; active work is cancelled.</source>
+        <translation>플러그인을 비활성화했습니다. 설치 기록은 유지되며 실행 중인 작업은 취소됩니다.</translation>
+    </message>
+    <message>
+        <source>Plugin enabled.</source>
+        <translation>플러그인을 활성화했습니다.</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>플러그인을 가져왔습니다: %1</translation>
+    </message>
+    <message>
+        <source>Plugin manager</source>
+        <translation>플러그인 관리자</translation>
+    </message>
+    <message>
+        <source>Plugin manifests (*.json)</source>
+        <translation>플러그인 매니페스트 (*.json)</translation>
+    </message>
+    <message>
+        <source>Plugin: %1</source>
+        <translation>플러그인: %1</translation>
+    </message>
+    <message>
+        <source>Registrations: %1; active invocations: %2</source>
+        <translation>등록: %1; 활성 호출: %2</translation>
+    </message>
+    <message>
+        <source>Remove the saved registration. Plugin files and task artifacts are kept.</source>
+        <translation>저장된 등록을 제거합니다. 플러그인 파일과 작업 산출물은 유지됩니다.</translation>
+    </message>
+    <message>
+        <source>Retry activation</source>
+        <translation>활성화 다시 시도</translation>
+    </message>
+    <message>
+        <source>Select a plugin to see its manifest, activation and diagnostics.</source>
+        <translation>플러그인을 선택하면 매니페스트, 활성화 상태 및 진단을 볼 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Selected plugin details</source>
+        <translation>선택한 플러그인 세부 정보</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>중지 중</translation>
+    </message>
+    <message>
+        <source>Type: External process</source>
+        <translation>유형: 외부 프로세스</translation>
+    </message>
+    <message>
+        <source>Unavailable</source>
+        <translation>사용 불가</translation>
+    </message>
+    <message>
+        <source>Uninstall</source>
+        <translation>제거</translation>
+    </message>
+    <message>
+        <source>Version</source>
+        <translation>버전</translation>
+    </message>
+    <message>
+        <source>Version: %1</source>
+        <translation>버전: %1</translation>
+    </message>
+    <message>
+        <source>Waiting for task exit and accepted publication cleanup.</source>
+        <translation>작업 종료와 수락된 게시 작업 정리를 기다리는 중입니다.</translation>
+    </message>
+    <message>
+        <source>Yes</source>
+        <translation>예</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::PluginServices</name>
+    <message>
+        <source>Cannot read publication receipt: %1</source>
+        <translation>게시 처리 결과를 읽을 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>Could not restore plugin %1 from %2: %3</source>
+        <translation>%2에서 플러그인 %1을 복원하지 못했습니다: %3</translation>
+    </message>
+    <message>
+        <source>Imported analysis section %1. Save the project to keep it.</source>
+        <translation>분석 섹션 %1을 가져왔습니다. 유지하려면 프로젝트를 저장하세요.</translation>
+    </message>
+    <message>
+        <source>Plugin state changed, but its startup preference could not be saved.</source>
+        <translation>플러그인 상태는 변경되었지만 시작 설정을 저장하지 못했습니다.</translation>
+    </message>
+    <message>
+        <source>Project operation completed, but its receipt could not be saved: %1</source>
+        <translation>프로젝트 작업은 완료되었지만 처리 결과를 저장하지 못했습니다: %1</translation>
+    </message>
+    <message>
+        <source>Session closed before the publication receipt arrived.</source>
+        <translation>게시 처리 결과가 도착하기 전에 세션이 닫혔습니다.</translation>
+    </message>
+    <message>
+        <source>The plugin instance is no longer active.</source>
+        <translation>플러그인 인스턴스가 더 이상 활성 상태가 아닙니다.</translation>
+    </message>
+    <message>
+        <source>Waiting for project receipt.</source>
+        <translation>프로젝트 처리 결과를 기다리는 중입니다.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ResultGraph</name>
+    <message>
+        <source>Plugin result graph</source>
+        <translation>플러그인 결과 그래프</translation>
     </message>
 </context>
 </TS>

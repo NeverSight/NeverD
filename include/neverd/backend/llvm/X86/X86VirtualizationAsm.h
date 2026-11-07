@@ -32,6 +32,16 @@ struct X86VirtualizationAsm {
 inline std::optional<X86VirtualizationAsm>
 x86VirtualizationAsm(Intrinsic Id, Arch TargetArch, NdMemoryAddressSpace Space,
                      uint16_t PhysicalAddressBytes = 0) {
+  // Context and hypervisor APIs have separate register/memory transports.
+  // Only the architectural instruction inventory can acquire an asm plan.
+  switch (Id) {
+#define NEVERD_X86_VIRTUALIZATION(Id, ...) case Intrinsic::Id:
+#include "neverd/ir/intrinsics/X86/X86Virtualization.def"
+#undef NEVERD_X86_VIRTUALIZATION
+    break;
+  default:
+    return std::nullopt;
+  }
   const auto C = x86VirtualizationContract(Id);
   if (!C.Mnemonic || (TargetArch != Arch::X86 && TargetArch != Arch::X64) ||
       !isKnownMemoryAddressSpace(Space) ||

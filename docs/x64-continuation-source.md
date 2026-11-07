@@ -1,0 +1,1308 @@
+# Explicit x64 continuation C
+
+The alternative [Hyper-V page binding](x86-hyperv-hypercalls.md) publishes
+ordinary, fast and rep result registers through a native page call.
+
+The [`native_kvm_hypercalls` binding](x86-kvm-hypercalls.md) explicitly owns
+returning VMCALL/VMMCALL with the KVM five-register input ABI. Unbound raw
+hypercalls remain native boundaries; an opcode never selects a hypervisor ABI.
+
+The [`intel-mpx-v11` profile](x86-mpx-source.md) extends V4 with the complete
+long-mode bounds bank, enable state, bounds tables, original branch effects and
+a pending-`#BR` stop (status 14), through both C routes.
+
+The `amd-svm-v10` profile extends V4 with native VMRUN exchange state and a
+VMEXIT stop (status 13). Its distinct 2464-byte layout requires unchanged
+XCR0=7 and the declared native SVM environment. Canonical addr64/addr32 original
+bytes share both C routes; this profile does not inherit the Intel V5–V9 return
+domains. See [the SVM invocation contract](x86-vmrun-context.md#original-byte-source-continuation).
+
+`neverd decompile --x64-continuation=request.json` exports selected machine
+instructions from linked x64 ELF or PE images as C with an explicit architectural
+state. Raw images and relocatable objects retain their existing native-provider
+refusal. Use it for interrupt
+entries, stack pivots and physical dispatch frames that have no proven ordinary
+C calling convention. Both HighC and `--llvm` consume the same checked LowIR.
+
+```json
+{
+  "profile": "kernel-events-v6",
+  "entries": ["0x140001000"],
+  "mxcsr_mask": "0xffbf",
+  "paging_address_bits": 48
+}
+```
+
+```sh
+neverd decompile input.exe --x64-continuation=request.json \
+  --continuation-report=state.manifest.json -o state.c
+neverd decompile input.exe --x64-continuation=request.json --llvm \
+  --continuation-report=state-llvm.manifest.json -o state-llvm.c
+```
+
+The profile, effective MXCSR mask and active paging width are declarations
+about the execution environment. Set them from that environment; the example
+values are not inferred from a PE file. `paging_address_bits` accepts 48 or 57.
+Supply exactly one nonempty array: `entries` selects recovered CFG regions;
+`instructions` selects exact instruction addresses. Decimal integers and hex
+strings are accepted. An ordinary source rejection does not erase its native
+instruction selection: every selected instruction is relifted independently.
+Manifest schema 2 records each region's `lowir_disposition`,
+`lowir_unproved_returns` and `lowir_unsupported_instructions`. These describe
+the LowIR selection stage only; full ordinary ABI and call/return validation
+has not run (`ordinary_source_validation: "not-run"`). Original bytes and
+overlapping instruction starts remain in the manifest. Selection does not
+prove whole-function or callee coverage.
+
+The request can lower `max_instructions` and `max_operations` from the shared
+continuation limits. Unknown options, duplicate addresses, missing bytes,
+malformed instructions and exhausted generation budgets fail the export.
+Ordinary `--func`, frame edits, devirtualization and source optimization options
+cannot be combined with this mode. The ordinary decompiler never silently
+changes its interface to state C.
+
+## Special handling for unresolved function interfaces
+
+Keep the state translation in a separate C file and pass the original machine
+context explicitly when ordinary parameter or frame recovery cannot be proved.
+The special-region implementation lives in `lib/pipeline/X86/X64SpecialRegions.cpp`;
+it does not replace missing source arguments with constants.
+
+The ordinary Win64 borrow proof is isolated in
+[`MedFrameBorrowReads.h`](../lib/ir/med/pass/MedFrameBorrowReads.h). A nested
+call with scalar stack arguments can participate when its entire incoming
+read extent is bounded by the caller's outgoing storage. Recovered source
+parameters keep their original stack-slot reads in this proof. Omitted bodies
+use the shared ABI reaching-store analysis with the same total work budget,
+one address index per body, and no additional image discovery. Unknown stack
+operands, stack-passed pointer borrows, recursive calls, GS/EH observers and
+opaque effects still require separate evidence or the explicit state route.
+The `SourceFrameBorrows.ScalarStackArgumentsKeepTheirPhysicalReadExtent` and
+`Win64CallContract.ScalarStackCallKeepsBorrowedReadExtent` tests exercise this
+boundary, including original machine code and both C routes at O0/O2.
+
+Ordinary C also has a separate, bounded call-body specialization path in
+[`PipelineSourceInline.cpp`](../lib/pipeline/PipelineSourceInline.cpp). It can
+replace a missing *formal operand* by expanding an admitted actual body whose
+formal is unused, while retaining pointer reads, writes and physical stack
+storage. HighC emits a separately named source helper; LLVM C inlines the body.
+Neither representation changes the native function signature or supplies
+unknown values. The native ABI, unknown spilled bytes, incomplete helper inputs
+and external service implementations still require their own proofs. Public
+execution controls are in `NeverDSourceInlineCallsTests`.
+
+An entry request can include `"callee_depth": 1` together with
+`"follow_internal_calls": true`. Each discovery wave selects original direct
+CALL targets in mapped image code. Repeated targets and recursive edges share
+one recovered region; the union of instruction addresses is lifted once. The
+depth is bounded at eight and the existing instruction/operation/output budgets
+still apply. Imports, indirect targets and calls beyond the depth frontier
+remain environment boundaries unless their actual target is already selected.
+Ordinary ABI recovery is not required for these regions. Their manifest records
+the discovery depth and the same original bytes, native requests and incomplete
+CFG diagnostics as explicit entry selection. A failed discovery or exceeded
+budget publishes no partial translation.
+
+Set `"follow_direct_jumps": true` on an `entries` request to include original
+direct JMP targets outside each recovered body. This is useful when native
+function extents split a physical continuation into separate regions. Jumps
+keep the caller's discovery depth; only CALL consumes a depth level. Cycles and
+targets also reached by calls are deduplicated, and the existing budgets bound
+the complete selection. The architecture lifter owns target arithmetic.
+Imports and indirect targets are not added by this option. Each region records
+its added edges in `direct_jump_successors`. The default is `false`; selection
+does not convert a jump into a source call or alter its physical stack.
+
+`"dispatch": "direct"` connects adjacent selected instructions with C labels.
+Connections are partitioned into at most 64 steps per helper, with inlining
+disabled between helpers so large selections keep bounded compiler graphs.
+Every connection checks the actual post-instruction PC; branches and other
+transfers retain indexed dispatch. This reduces repeated dispatch work without
+removing instruction preconditions, per-instruction budgets or stopping
+boundaries. `"dispatch": "switch"` retains the default driver for comparison.
+Neither option invents a callee preservation rule or restores a lexical return
+address after a callback. Both work with HighC and LLVM C. Environment bindings
+remain explicit, and successful compilation is not whole-function execution
+qualification.
+
+### An explicit function context
+
+For `kernel-events-v6` entry selections, set `"function_context": true` and
+`"follow_internal_calls": true` to add a callable activation alongside the
+ordinary state drivers. The caller supplies the complete native entry state
+and original stack RAM, including bytes that ordinary source parameters cannot
+recover. This option does not manufacture an argument value or grant a native
+service implementation. Its owner is
+[`X64FunctionContext.cpp`](../lib/pipeline/X86/X64FunctionContext.cpp).
+
+```c
+neverd_x64_function_context_v1 function = {0};
+/* state already describes an explicitly requested root and its original RAM. */
+if (!neverd_x64_begin_function_v6(&state, &function))
+    return INVALID_ENTRY;
+uint64_t status = neverd_x64_run_function_v6(
+    &state, &instruction_budget, &environment_budget, &function,
+    environment, environment_context);
+/* Retain function and state when replenishing budgets or handling a boundary. */
+```
+
+`begin_function` accepts only the request's explicit roots, not automatically
+discovered descendants. It records entry RSP without reading or copying its
+return address; a rejected entry leaves the context unchanged. The producer
+declares that cell to be the completion boundary. A successful selected near
+`RET` using that **pre-instruction** SP changes `Phase` from
+`NEVERD_X64_FUNCTION_ACTIVE` to `NEVERD_X64_FUNCTION_RETURNED`. It retains the
+actual returned PC, `RET imm` cleanup and every state/memory effect, consumes
+one instruction unit and returns status 3 before following even a selected
+destination or invoking the environment. Other near returns follow the usual
+physical target policy. No per-step scan or host call stack is introduced;
+only selected near-return steps capture their pre-instruction SP.
+
+`neverd_x64_continue_function_v6` runs the same activation without a provider.
+Budget exhaustion, native requests, invalid machine states and external
+boundaries preserve an active context for resumption. Resuming a completed
+context returns 3 without accessing guest RAM or consuming either budget.
+An uninitialized or unknown phase returns 5 without invoking a provider.
+Context storage, state, both budgets and compiler storage must be accessible
+and mutually disjoint from guest RAM. The producer must retain the activation
+and avoid modifying its fields between begin and completion.
+
+This is a declared return-cell boundary, **not a dynamic frame-ownership
+proof**. A callee that reuses that cell for a different return violates the
+producer's function-boundary declaration. A pivot to a different cell does not
+complete this activation, even when its post-RET SP equals entry RSP or its PC
+resembles a caller. Provider execution outside the selection cannot report
+completion implicitly; return to selected code before the completing RET, or
+use the ordinary state driver with producer-owned stopping. No post-SP/PC
+heuristic fills this gap. Paged memory uses the separate driver described
+below. Other profiles and native RTM regions remain rejected with this option.
+
+Both dispatch strategies and C routes share the same return-cell check. The
+manifest records the additional entry points, completion contract and
+`frame_ownership_proven: false`. With the option disabled, generated source
+retains the existing driver text. When enabled, both interfaces share the
+instruction bodies and one driver;
+the original entry point delegates with no activation context. Added work is
+limited to activation entry/exit and selected near-return checks. This
+interface does not close ordinary-C argument-recovery gaps or
+qualify a full Windows execution environment.
+
+### Scheduled function contexts
+
+Combining `"scheduled_events": true` with `function_context` adds
+`neverd_x64_continue_events_function_v6`. With paged memory, use
+`neverd_x64_continue_paged_events_function_v6` instead:
+
+```c
+uint64_t status = neverd_x64_continue_paged_events_function_v6(
+    &state, paged_context, &instruction_budget, &shadows, &poll_budget,
+    peek, accepted, event_context, &function);
+```
+
+The nonpaged signature omits `paged_context` and requires `"event_delivery": true`
+as for the original scheduler. Initialize `function` at an
+explicit root with `begin_function`, and retain it, the machine state and the
+interruptibility state across pauses. The activation storage, state, shadows,
+budgets, memory context and producer context must be accessible and mutually
+disjoint. The producer must preserve the declared return-cell lifetime across
+event handlers and address-space changes; the driver cannot infer it.
+
+The scheduler polls before each admitted instruction under its existing event
+contract. A successful original near RET through the entry cell consumes one
+instruction, expires STI/SS inhibition and marks the activation returned before
+following its selected target or polling again. `NMIBlockedBySTI` remains a
+producer policy. Paged completion additionally requires instruction-attempt
+progress. Accepted events stop at their delivery boundary with the activation
+still active; they consume no instruction budget and are acknowledged once,
+including an accepted paged event whose entry faults. Faults, backing stops and
+changed code retain the activation and the runtime's original accounting.
+The producer supplies handler effects and restores an appropriate continuation
+before resumption. No handler completion or IRET is synthesized.
+
+A completed or invalid activation is checked before any runtime state, budget
+or callback access. The original scheduled entry point remains an adapter with
+no activation boundary. The manifest's `function_context.scheduled_driver`
+names the new entry point. Other drivers do not acquire implicit event polling.
+`function_calls` and its call-site views use the scheduled interfaces described
+below when scheduled events are requested. Omitting `function_context` retains
+the previous scheduler source. This composition adds checks only to selected
+near returns; it adds no scan, guest-memory observation or ordinary-C analysis.
+
+### Checked scalar call interfaces
+
+With `function_context`, an optional `function_calls` array declares scalar C
+views of explicit roots. The declarations are supplied by the producer; no
+name, debug signature or inferred argument count supplies this authority.
+
+```json
+"function_calls": [{
+  "entry": "0x1000",
+  "abi": "win64",
+  "argument_bytes": [8, 8, 8, 8, 4],
+  "result_bytes": 4
+}]
+```
+
+Only fixed Win64 integer/pointer carriers of 1, 2, 4 or 8 bytes are supported,
+up to the shared call-argument limit. Pointer arguments carry guest address
+bits, without host relocation. Floating, vector, aggregate and variadic
+interfaces are not inferred. Explicit Win64 declarations can describe linked
+ELF fixtures too; the image format alone does not supply a signature.
+
+Use `null` for a physical argument slot that is supplied only by the original
+native state. For example, `"argument_bytes": [8, 8, 8, 8, null, 1]` emits
+scalar parameters `arg0`, `arg1`, `arg2`, `arg3`, `arg5`. The wrapper does not
+read, check or initialize the fifth slot; it checks `arg5` at entry SP + 48,
+without shifting it into the fifth slot at SP + 40. Register holes and trailing
+holes follow the same rule. An all-null list produces a context-only call view.
+Every slot, including a null slot, counts toward the shared argument limit.
+Zero is not a valid width, and the result width cannot be null.
+
+Null does not mean that the native input is unused or unconstrained: the
+original register and RAM bytes remain part of the supplied state, and the
+selected instructions or environment may read them. This lets a producer
+expose known scalar arguments around a missing ordinary argument without
+inventing its value or granting a no-read proof. It does not capture that state
+from an ordinary C caller or recover the caller's original ABI.
+
+The generated `neverd_x64_call_1000_v6` takes state, both budgets, a
+zero-initialized `neverd_x64_call_context_v1`, provider/context and the declared
+unsigned scalar arguments. It first requires the matching entry PC and an
+uninitialized call context, then checks each argument against its actual
+Win64 register or entry-SP stack cell. Narrow views compare only their declared
+bytes. No input register, padding byte, home slot or private stack byte is
+written. A mismatch or wrapping stack range returns `{5, 0, 0}` without
+starting the activation or consuming a budget. The stack cells being checked
+must already be accessible ordinary RAM under the V6 nonfaulting contract.
+This is an argument check, not allocation, memory mapping or state capture.
+
+```c
+neverd_x64_call_context_v1 call = {0};
+neverd_x64_call_result_v1 result = neverd_x64_call_1000_v6(
+    &state, &budget, &environment_budget, &call, environment, environment_data,
+    arg0, arg1, arg2, arg3, arg4);
+/* After handling a boundary or replenishing budgets: */
+result = neverd_x64_resume_1000_v6(
+    &state, &budget, &environment_budget, &call, environment, environment_data);
+/* Only result.Completed == 1 makes result.Value available. */
+```
+
+Resume does not recheck entry arguments, reset the entry PC or begin again.
+An active context cannot be passed to `call` a second time. An interface for
+another root rejects the context. `Status == 3` alone is insufficient: an
+external physical return can leave the activation active. Only the shared
+return-cell completion makes `Completed` one and captures the declared low
+result bytes from RAX. Later completed resumes return that cached value
+without inspecting state, invoking a provider or consuming budgets. An
+incomplete result has `Completed == 0`; its zero `Value` field supplies no
+machine value. Reinitialize the call context for another invocation.
+
+The manifest records parameter locations, widths and entry-point names with
+`source_abi_inferred: false`. Context-only slots retain their physical location
+and use `retained_in_state: true` instead of a scalar `bytes` width. They add no
+entry memory access or stack-range check. Context storage must remain disjoint
+from state, budgets, provider storage and guest RAM. The existing native environment and
+return-cell lifetime contracts still apply. Both C routes and dispatchers
+append the same wrappers to unchanged instruction bodies and drivers. Work is
+limited to entry argument checks and completion/resume bookkeeping; there is
+no additional per-instruction work. Omitting `function_calls` retains the
+previous source and manifest. The owner is
+[`X64FunctionCalls.cpp`](../lib/pipeline/X86/X64FunctionCalls.cpp).
+
+### Paged entry call views
+
+With `"paged_memory": true` and instruction debug disabled, function activation uses
+`neverd_x64_run_paged_function_v6(state, context, budget, function)`. Its context
+is the existing `X64PagedExecution` binding. The recorded return cell is a guest
+virtual address; only an attempted successful original near RET consumes it.
+Faults, backing stops and changed code preserve the activation. The producer
+must retain the same execution context and declared return-cell/address-space
+lifetime across pauses.
+
+Paged `function_calls` may check register arguments and expose a scalar result.
+Every physical stack slot must use `null` or lie beyond the declared list. For
+example, `"argument_bytes": [8, null, 4, 8, null, null]` checks RCX, the low
+DWORD of R8 and R9, while RDX and both stack slots stay solely in native state.
+An empty or all-null list also works. None of these forms initializes any
+input or implies that an omitted input is unused.
+
+```c
+neverd_x64_call_context_v1 call = {0};
+neverd_x64_call_result_v1 result = neverd_x64_call_paged_1000_v6(
+    &state, paged_context, &budget, &call, arg0, arg2, arg3);
+/* Retain state, call and the paged binding while handling a stop. */
+result = neverd_x64_resume_paged_1000_v6(
+    &state, paged_context, &budget, &call);
+```
+
+Entry checks read only the explicit register state. The original instructions
+own all guest memory observations, translations and fault effects. There is no
+environment callback or environment-budget parameter; paged stops retain the
+existing runtime's accounting and producer-controlled continuation. Resume
+does not check arguments again. `Completed`, cached `Value` and wrong-root
+rejection follow the ordinary call-view contract above. The manifest marks
+`paged_memory: true` and `entry_guest_memory_reads: false`.
+
+Scalar stack checks remain rejected because their extra reads could fault or
+change page-table access bits. Paged original-CALL bridges are described below.
+These interfaces do not capture the initial machine state, infer environment
+effects or recover bytes missing from ordinary C arguments. Entry views append
+wrappers without changing an instruction body or the paged dispatcher.
+
+### Debug-aware paged call views
+
+Combining `paged_debug`, `paged_memory` and `function_context` uses distinct
+V2 contexts. The same root selection, `follow_internal_calls`, original-state
+and return-cell lifetime obligations apply. The V1 layouts and non-debug
+entry points retain their contracts.
+
+| Context | V1 bytes | Debug V2 bytes | Added state |
+| --- | ---: | ---: | --- |
+| `neverd_x64_function_context` | 16 | 32 | Original completion `Status` and `Value` |
+| `neverd_x64_call_context` | 32 | 48 | Nested V2 function context |
+| `neverd_x64_call_site_context` | 48 | 64 | Nested V2 call context |
+
+Initialize with `neverd_x64_begin_debug_function_v6`. The function drivers are
+`neverd_x64_run_paged_debug_function_v6` and
+`neverd_x64_continue_paged_debug_events_function_v6`. Typed entry/call-site
+interfaces use `paged_debug_` or `paged_debug_events_` in their names; exact
+names are recorded in the manifest. The result remains
+`neverd_x64_call_result_v1` with `Status`, `Completed` and `Value`.
+
+```c
+neverd_x64_call_context_v2 call = {0};
+neverd_x64_call_result_v1 result = neverd_x64_call_paged_debug_1000_v6(
+    &state, paged_context, &budget, &call, arg0, arg2, arg3);
+result = neverd_x64_resume_paged_debug_1000_v6(
+    &state, paged_context, &budget, &call);
+```
+
+`neverd_x64_paged_transfer_v1` is a required runtime symbol. It returns the
+completed near transfer's original Call/Return kind and, through nullable
+outputs, its instruction address, committed PC/SP and RAX. A subsequent
+runtime operation, including entry refusal or event resumption, replaces the
+record. When no transfer completed, it returns zero without writing outputs.
+This is separate from the unchanged instruction-attempt progress ABI.
+
+A selected near RET consuming the declared entry cell completes the activation
+before its post-instruction debug event. `Completed == 1` is independent of
+`Status`: the status can be an exception, backing failure, event-work stop or
+shutdown. `Value` contains the declared-width view of RAX captured before that
+event. Repeated resumes of the completed call preserve both values and consume
+no budgets, runtime accesses or polls. Continue pending event entry and selected
+handlers through their separate runtime/region interfaces; doing so cannot
+replace the cached result. A fault before RET completes retains the active
+function. Nested RETs consuming other cells cannot complete it.
+
+A completed original CALL similarly starts its callee using the recorded
+post-CALL PC/SP, even when the live state already names a debug handler or
+partial event entry. The bridge returns that actual stop before resuming the
+callee. A pre-CALL fault or scheduled event leaves the site pending. Scheduled
+bridges consume a receipt only for an instruction attempt owned by that
+invocation; an old receipt cannot turn a rejected boundary into a completed
+CALL. The scheduler passes its actual SS inhibition into RET and owns each
+instruction charge and shadow expiry.
+
+With call-site pauses, the pending-handler context remains the flat
+`neverd_x64_call_site_handler_context_v1`; use
+`neverd_x64_begin_debug_call_site_handler_v1` for a V2 site. Only a successful
+privilege-return boundary to the pending original CALL PC/SP permits retry.
+An IRET followed by another debug event continues handler processing instead.
+The producer still supplies initial state, memory and event resumption. These
+interfaces do not infer an ordinary C ABI or dynamic frame ownership.
+
+The [qualification record](evidence/x86-debug-function-activation-2026-11-06.json)
+separates original-processor comparisons, runtime controller cases and
+compatibility regressions, with retained source/tool/product hashes.
+
+### Original CALL bridges
+
+When state is available immediately before a native CALL, add `call_sites` to
+its `function_calls` declaration:
+
+```json
+"function_calls": [{
+  "entry": "0x1020",
+  "abi": "win64",
+  "argument_bytes": [8, 8, 8, 8, null, 1],
+  "result_bytes": 4,
+  "call_sites": ["0x1000"]
+}]
+```
+
+The caller's region and callee entry must already be selected. Each site must
+decode as an original, modeled direct near CALL to that exact entry. A JMP,
+indirect CALL, unselected instruction, wrong target or duplicate site refuses
+the export. This option does not enlarge the selection or infer a signature.
+The total site count shares the request's instruction budget.
+
+`neverd_x64_call_site_1000_v6` takes the same scalar parameters and runtime
+inputs as the entry wrapper, with a zero-initialized
+`neverd_x64_call_site_context_v1` instead of a call context. It checks parameters
+against the pre-CALL state. In this example the sixth slot is at current RSP +
+40, and the fifth slot at RSP + 32 is retained without a scalar read or write.
+Mismatch or a wrapping checked range rejects before CALL or context mutation.
+
+The original instruction step then pushes its real return PC and updates RSP
+and PC. Only a successful CALL consumes one instruction unit and begins the
+shared function activation at the resulting return cell. No synthetic host
+return address, replacement frame, argument initialization or private-stack
+copy is introduced. The selected callee's RET and any `RET imm` cleanup keep
+their original effects. The existing return-cell lifetime declaration remains
+necessary; this bridge does not prove arbitrary frame ownership.
+
+Resume with `neverd_x64_resume_site_1000_v6`. Zero budget before CALL keeps a
+prepared context; the pending instruction requires the same PC and SP on
+resume. Invalid instruction state also remains pending without spending a
+step. Once CALL completes, subsequent pauses retain the callee activation and
+never replay CALL or recheck arguments. A repeated start or a resume for a
+different site rejects. The producer retains context fields and native state
+across pauses and owns any deliberate environment changes. Completion and
+cached result bits use the same rules as the entry interface.
+
+The manifest's `function_call_sites` records original sites, targets, return
+PCs, parameter widths and `call_sp_offset` locations. Both routes and
+dispatchers use the same bridges and unchanged instruction bodies. Only
+explicit requests build the small site index and decode the named CALLs; there
+is no new ordinary-source analysis or per-instruction dispatcher check.
+Omitting `call_sites` preserves the previous source and manifest. The owner is
+[`X64FunctionCallSites.cpp`](../lib/pipeline/X86/X64FunctionCallSites.cpp).
+Full pre-CALL state, accessible RAM and the environment provider are still
+required. Automatic state capture or arbitrary ordinary-C/native composition
+is not supplied by this interface.
+
+### Paged original CALL bridges
+
+Paged views may also declare `call_sites`, with the same original direct-CALL
+authentication and context-only stack-slot restriction. The generated names
+are `neverd_x64_call_paged_site_1000_v6` and
+`neverd_x64_resume_paged_site_1000_v6`. They take state, paged context, instruction
+budget and site context; only the start entry takes scalar register parameters.
+The original CALL performs its own fetch, translation and return-cell store
+through the existing paged executor. Register checks add no guest-memory access.
+
+A prepared context with an uninitialized callee retains the original pre-CALL
+SP. Only status 1 **and** the runtime's instruction-attempt bit begin the callee
+activation. Every attempted instruction spends one budget unit, including a
+fault or failed fault entry; backing stops before an attempt, changed code and
+refused state spend none. A delivered fault remains a pending CALL even if its
+handler PC happens to equal the callee entry. The bridge preserves the runtime's
+state, RAM and diagnostics and returns that boundary to the producer.
+
+The producer handles faults and backing recovery using the retained paged
+binding. Before retrying a pending CALL it must restore that original CALL's
+PC and pre-CALL SP; resume refuses a handler context or another stack without
+changing it. The bridge neither runs a handler nor rolls back fault effects.
+After CALL succeeds, resume uses the active callee context and never pushes a
+second return cell. Scalar arguments are checked only at start, including
+across a pending retry; deliberate environment changes remain producer-owned.
+Completion, RET cleanup and cached results use the existing function owner.
+
+`pause_call_sites` also works with the paged switch dispatcher. Each selected
+CALL label returns status 21 directly, before a paged step or progress query;
+this is the pre-CALL handoff, not the runtime's internal REP-continue status 21.
+Zero budget still returns 9. Keep the caller activation while invoking the site
+bridge, then resume it after the callee completes. With pauses disabled, the
+complete existing dispatcher remains unchanged. The manifest marks paged site
+interfaces with `paged_memory: true` and `entry_guest_memory_reads: false` and
+records the producer's pending-retry obligation.
+
+### Scheduled checked calls and original CALL sites
+
+With `scheduled_events`, checked entry and call-site views take the scheduler's
+interruptibility state, poll budget and producer callbacks. Their names include
+`events`, for example:
+
+```c
+neverd_x64_call_result_v1 result = neverd_x64_call_paged_events_site_1005_v6(
+    &state, paged_context, &instruction_budget, &site,
+    &shadows, &poll_budget, peek, accepted, event_context,
+    arg0, arg2, arg3);
+```
+
+This example has declared widths `[1, null, 4, 8, null, null]`; omitted slots
+remain in original state. Nonpaged signatures omit `paged_context`. Entry views
+use `call_events_<entry>_v6` or `call_paged_events_<entry>_v6`; matching `resume`
+views omit scalar arguments. Resume retains the activation and result cache.
+A cached result needs no machine state, budget, producer, shadows or memory
+context. No ordinary environment callback is invoked implicitly.
+
+The original CALL uses a specialized instance of the same scheduler and stops
+after that CALL. It validates, polls, charges attempts and expires inhibition
+under the shared rules. Only successful CALL status, plus instruction-attempt
+progress in paged mode, starts the callee activation. An accepted event or
+fault leaves the CALL pending, even if the handler's PC/SP equal the callee's
+coordinates. The producer handles the boundary and restores the original CALL
+PC/SP before retrying. Once active, resumption never repeats the CALL or pushes
+another return cell. Callee events and faults retain that activation.
+
+`pause_call_sites` also applies to the scheduled function driver. Its entry
+checks validate producer and shadow fields; selected CALL labels then return
+21 before instruction validation, polling or budget consumption. The bridge
+performs that boundary when invoked. Zero instruction budget still returns 9.
+Retain the parent activation and the same shadows, contexts and budgets across
+handoff; they and the call/site contexts must be mutually disjoint from guest
+RAM. Handler resumption and return-cell/address-space lifetime remain producer
+obligations. Paged scalar stack checks remain rejected.
+
+These wrappers add no ordinary-source analysis. Specialized CALL schedulers
+are emitted only for declared sites; unscheduled requests and scheduled
+requests without call views retain their previous drivers. Nonpaged LLVM C
+event delivery also preserves the producer-declared event object's pointer,
+using bounded object offsets for its fields. This supplies no object bounds
+for guest addresses or ordinary parameters.
+
+### Resuming selected handlers before an original CALL
+
+With `pause_call_sites: true`, each call-site interface also exports
+`resume_handler_<mode>site_<address>_v6`. The pauses prevent a near RET or
+fallthrough from executing the pending CALL before a privilege return is
+observed. Without them the handler context and interfaces are not exported.
+Use this interface when a pending CALL has stopped at a delivered event/fault handler and
+that handler's instructions are selected. This is an explicit handler-context
+declaration by the producer; a matching PC/SP does not establish it. Retain a
+separate `neverd_x64_call_site_handler_context_v1` alongside the site:
+
+```c
+/* result.Status == 7, with the original CALL still pending. */
+neverd_x64_call_site_handler_context_v1 handler;
+if (!neverd_x64_begin_call_site_handler_v1(&site, &handler))
+    return INVALID_PHASE;
+result = neverd_x64_resume_handler_paged_events_site_1005_v6(
+    &state, paged_context, &instruction_budget, &site,
+    &shadows, &poll_budget, peek, accepted, event_context, &handler);
+```
+
+`begin_call_site_handler` binds the site and its original pre-CALL SP without
+reading or altering machine state or RAM. It rejects an unprepared or already
+active/completed site without changing the handler context. Do not begin again
+when merely replenishing a budget: retain both objects and call the same handler
+resume interface. The context storage has the same disjointness and lifetime
+requirements as the site context. An invocation needs its own handler context.
+
+The helper runs the existing region driver without a callee activation. The
+original handler instructions own register, memory and return-frame effects;
+no PC, SP, argument, padding or frame byte is synthesized. Only a successful
+privilege-return boundary (status 6) whose actual PC/SP equal the pending CALL
+coordinates permits the ordinary bridge to retry. Paged returns additionally
+require instruction-attempt progress. Merely entering the handler at matching
+coordinates, reaching another selected CALL, a near RET, fault delivery or an
+unattempted boundary cannot start the callee. Nested returns to other
+coordinates stop with their actual status; resume continues the selected
+handler from that state. Other selected CALL pauses can be handled with their
+own bridges and then this handler resumed.
+
+A matching return is retained across instruction/poll-budget exhaustion or a
+backing stop before CALL, so resumption does not replay the handler. If retrying
+CALL delivers another exception before starting the callee, the helper switches
+back to handler continuation with that new native state. Successful CALL and
+all active/completed resumes reuse the original site/activation owner and cached
+result; they cannot push the CALL return cell twice. Scalar checks retain their
+existing start-only contract, including producer-owned handler effects.
+
+Unscheduled plain helpers run `continue_v6` while in the handler, so an
+ordinary environment callback cannot consume the privilege-return boundary
+before the helper sees it. The supplied environment is used by the existing
+callee resume after CALL succeeds. Scheduled and paged helpers reuse their
+existing region drivers, budgets, shadows and boundary accounting. Outside
+selection, unsupported instructions, faults and other external boundaries still
+stop for the producer. No missing handler instruction or external service is
+inferred. Debug-enabled requests use the separate
+[V2 contexts and completed-transfer contract](#debug-aware-paged-call-views).
+
+The manifest records `handler_context_type`, `begin_handler`, `handler_domain`
+and each site's `resume_handler`. Existing start/resume interfaces and every
+instruction driver remain unchanged. Only requests with call sites and their pauses emit these
+additional helpers; ordinary decompilation and site-free exports do not gain
+analysis or per-instruction checks. This closes selected-handler/pending-CALL
+composition, not initial state capture, frame/address-space lifetime proof,
+complete environment effects or recovery of missing ordinary-C arguments.
+
+## Invocation
+
+Legacy SHUFPS register forms select their four 32-bit lanes through primitive
+bit operations shared by both C backends. MOVMSKPS register forms use the
+existing sign-bit extraction and clear the remaining destination GPR bits.
+Their byte/detail audit admits canonical x86/x64 register encodings, including
+extended registers and aliases; memory, VEX and redundant-prefix forms need
+separate audits. These selections preserve flags, MXCSR and upper vector lanes.
+`SinglePrecisionSelectionsMatchNativeBits` compares original x64 instructions
+with both C routes at O0/O2 under ASan/UBSan, including all 256 SHUFPS controls,
+signaling-NaN bit patterns and all four-bit sign masks.
+`X86PackedSelectionAudit.SinglePrecisionShuffleAndMasksPreserveState` supplies
+an independent lane oracle for x86/x64 aliases; malformed details remain refused.
+
+Legacy 128-bit integer AND operations use the existing bit-vector lowering
+for both C backends. PAND register and memory forms, and ANDPS/ANDPD register
+forms, compute all 128 result bits while preserving upper vector lanes,
+source memory and flags within the declared nonfaulting memory domain.
+ANDPS/ANDPD memory forms retain their separate alignment audit requirement.
+The source adapter admits only equal 128-bit operands here; scalar
+mixed-width mask admission is unchanged.
+`WholeVectorAndPreservesLanesMemoryAndFlags` checks an independent byte oracle,
+and `LegacyVectorAndMatchesNativeMasks` compares original x64 instructions
+through the public continuation exporter. Both execute HighC and LLVMC at
+O0/O2 with ASan/UBSan, covering register, memory and self-register forms.
+`X86PackedSelectionAudit` checks x86/x64 register aliases and refuses
+inconsistent bytes, decoder details and unaudited memory forms.
+
+Flat 64-bit-address REP MOVS/STOS use the existing complete-state intrinsic
+for 1-, 2-, 4- and 8-byte elements. Their count and direction remain runtime
+inputs; overlapping copies retain ordered element semantics and zero count
+accesses no memory. This requires an x64 host and the existing successful
+ordinary-RAM domain. Reduced address widths, segmented sources and other REP
+families remain explicit native requests. This admission does not prove a
+bounded count or relax the ordinary recovery route's memory and frame proofs.
+`X64ContinuationSourceTest.RepeatedTransfersPreserveRuntimeState` checks both
+C routes at O0/O2 with ASan/UBSan against independent ordered-element oracles,
+including full state preservation in V1 and V2.
+
+The generated translation unit defines `neverd_x64_state_v6`, its checked field
+layout, instruction steps, and:
+
+```c
+uint64_t neverd_x64_continue_v6(neverd_x64_state_v6 *state, uint64_t *budget);
+```
+
+The translation also defines a companion environment driver:
+
+```c
+typedef int (*neverd_x64_environment_v6)(neverd_x64_state_v6 *state,
+                                        uint64_t boundary, void *context);
+uint64_t neverd_x64_run_v6(neverd_x64_state_v6 *state, uint64_t *budget,
+                          uint64_t *environment_budget,
+                          neverd_x64_environment_v6 environment, void *context);
+```
+
+The other profiles use their own version suffix and state layout. Calling this
+companion with a provider explicitly enables environment handoff. It runs the
+same selected-instruction driver, then passes its completed boundary and full
+state to the provider. The provider can execute a native service, handle a
+context transition, or supply another explicitly bound environment operation.
+It returns nonzero to resume at the updated `state->PC`, or zero to stop with
+the last translated boundary status. All provider changes remain visible on
+either return; the driver never restores a lexical return address, an earlier
+stack or presumed callee-preserved registers. The provider is responsible for
+the actual native semantics and for returning a state in the selected
+profile's invocation domain. An ordinary C callback's ABI alone does not
+establish that contract or implement a Windows service.
+
+`environment_budget` counts provider invocations, including declined requests
+and requests that leave PC unchanged. It is decremented before the invocation.
+This bounds handoff loops independently of the translated-instruction budget;
+it does not bound the work or time inside one provider invocation. Provider
+execution does not consume translated-instruction units. A null provider,
+zero environment budget or zero remaining instruction budget returns the
+original boundary without invoking the provider. Invalid state (5) and
+exhausted instruction budget (9) always return directly. A final translated
+CALL therefore still returns CALL (1) with its completed physical stack write
+when it consumes the last instruction unit. The caller may replenish the
+budgets explicitly before another invocation. Both counters must be disjoint
+from each other, state storage and guest accesses, and the provider must not
+change them. The companion adds no work to `neverd_x64_continue_vN`.
+
+The manifest names `environment_driver` and describes its explicit binding.
+This interface composes checked state regions with caller-provided execution;
+it does not infer missing ordinary parameters, automatically convert an
+ordinary function to state C, or certify complete Windows execution.
+
+Initialize all architectural inputs from the intended machine context, including
+GPRs in x86 encoding order, RFLAGS, PC, vector containers, FS/GS bases, controls,
+segment caches and descriptor tables. Zero-initialization alone is not a valid
+kernel entry context. The flattened C layout is checked against the semantic
+owner's versioned state, and the manifest publishes every field offset.
+
+Guest pointers name actual accessible memory. State and budget storage must be
+disjoint from each other and every guest access. CALL writes its original next
+PC to the physical guest stack. RET reads that stack, including changes made by
+an intervening callback. The environment can change every state field and guest
+byte before resuming. No source parameter count or callee preservation is
+assumed. Arbitrary-value slots represent caller-selected choices
+for each dynamic instruction; reusing them selects a subset of allowed runs.
+
+Memory-indirect jumps read their target from the live guest memory, including
+RIP-relative slots. Changing a slot between invocations changes the completed
+PC; register jumps use the register value directly. These transfers preserve
+the guest stack and do not invoke the target as a host function.
+
+The driver continues ordinary instructions and jumps to listed addresses. Each
+successful instruction consumes one budget unit, including a stopping transfer.
+A native request or invalid-state refusal executes nothing and consumes none.
+
+Aligned memory instructions use the shared alignment predicate and return
+status 5 before a guest access or architectural write when it fails. The
+predicate checks the linear address after address-width wrapping and addition
+of the live FS/GS base. Canonical x64 legacy MOVAPS, MOVAPD and MOVDQA memory
+forms retain their original segment in the byte audit. A precondition after an
+observable instruction effect cannot use this unchanged-state contract and
+remains a native request. Refusal does not deliver a guest exception.
+
+Set `"follow_internal_calls": true` to compose CALL and RET inside the selected
+region. The default is `false`, which stops at every CALL and RET. The composed
+driver follows the actual post-instruction PC, including indirect calls and
+returns through callback-modified stack memory. It uses no host call stack and
+assumes no relation between a return and the most recent call. Retained frames,
+stack replacements and recursive transfers therefore keep their machine
+semantics and share the same instruction budget.
+
+An external CALL or RET still reports status 1 or 3, even when it consumes the
+last budget unit. An internal transfer with no budget left reports status 9
+before executing its target. Native requests, invalid state, exceptions and
+all context transitions remain stopping boundaries even when their target is
+selected. The manifest records `call_return_policy` as `stop` or
+`follow-selected-targets`. Selecting this dispatch policy adds no instructions,
+callee bodies, memory mappings or runtime bindings to the request.
+
+| Status | Meaning |
+| --- | --- |
+| 1 | CALL completed; environment owns the target |
+| 2 | Jump completed to an address outside the selection |
+| 3 | RET completed from the physical stack |
+| 4 | Native execution required; original instruction remains unexecuted |
+| 5 | Invocation is outside the declared state/precondition domain; unchanged state |
+| 6 | Privilege-return context installed; target has not executed |
+| 7 | Exception-handler context installed; handler has not executed |
+| 8 | Current PC is outside the selection |
+| 9 | Instruction budget exhausted |
+| 10 | V7 fast-system-call context installed; handler has not executed |
+| 11 | V8 user-interrupt return completed; target and pending delivery have not executed |
+| 12 | V9 FRED return completed; target and pending delivery have not executed |
+
+The invocation domain is CPL0, 64-bit entry with valid descriptor caches,
+CET/FRED disabled, successful sequential ordinary RAM accesses and immutable
+original instruction bytes. It excludes MMIO, concurrent writers, asynchronous
+events and faulting execution. Canonical IRET (`CF`) and RETF (`CB`, `CA imm16`)
+with no prefix, `66` or `48` select 32-, 16- or 64-bit frame fields and can
+produce CPL0–3 long-mode or compatibility contexts;
+INT3 and canonical `INT imm8` (`CD 00` through `CD FF`) install a CPL0
+interrupt/trap-gate context with optional IST. Each vector reads its own live
+IDT entry, including vectors ordinarily used for OS services. Software INT
+does not push a hardware exception's error code or acquire NMI blocking for
+vector 2. These transfers stop before the target executes. Status 5 is not
+emulated fault delivery. Other prefixed encodings remain native requests.
+
+Canonical SYSRET (`0F 07`) and SYSRETQ (`48 0F 07`) install user CS/SS caches
+from the live STAR field without reading descriptors. SYSRET selects a 32-bit
+compatibility context and takes EIP from ECX; SYSRETQ selects a 64-bit context
+and checks the full RCX against the declared canonical width. Both derive flags
+from R11 and stop with status 6 before user code executes, even if its address
+is selected. A returned context cannot reenter this CPL0 64-bit profile.
+
+SYSRET preserves ESP and the low halves of the other seven legacy GPRs. Their
+high halves are architecturally undefined on this mode switch; `Undefined[0..7]`
+supplies their new 32-bit values in RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI order.
+Only the low 32 bits of each slot are used. R8–R15 remain fully preserved.
+SYSRETQ preserves all GPRs. The manifest records all eight SYSRET arbitrary
+effects and their exact register ranges. This follows
+[Intel SDM Volume 1, section 3.4.1.1](https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf);
+a particular CPU's high-half results are witnesses, not a preservation guarantee.
+Successful execution requires SYSCALL/SYSRET enabled and the profile's existing
+CET/FRED-disabled environment. Ordinary source and proof admission stay closed.
+
+V5/V6 also bind `RDMSR` and `WRMSR` selector `0xc0000081` to that same live
+`STAR` field. A write followed by a read or SYSRET observes the new selectors;
+the executing host's STAR is unchanged. The low 32 bits of RCX select the MSR,
+and only EDX:EAX supply its write value. Reads zero-extend EAX and EDX.
+Writes require zero in STAR's low 32-bit reserved field. Nonzero values return
+status 5 with unchanged state and budget; this restriction does not assert
+that every processor faults on them. The upper selector fields are not
+canonical addresses. These fields follow
+[Intel SDM Volume 3, Figure 6-14](https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf).
+
+This STAR binding needs no additional request option because V5/V6 already
+declare it as live return state. Earlier profiles retain their previous MSR
+boundaries. Segment-base and native speculation MSRs still require their own
+options below; an unbound runtime selector returns status 5 before effects.
+
+### Intel fast system calls (V7)
+
+Select `"profile": "intel-fast-system-v7"` and supply
+`"sysenter_msr_address_bits": 48` or `57`, in addition to the MXCSR mask and
+active paging width. This declares an Intel processor with SEP support. AMD
+long-mode SYSENTER/SYSEXIT are outside this profile. The processor's MSR address
+width is independent of active paging; if segment-base MSRs are also bound,
+the two processor-width declarations must agree.
+
+V7 exports `neverd_x64_state_v7` and `neverd_x64_continue_v7`. Its 2528-byte
+layout contains the unchanged V6 prefix, followed by 64-bit `SysenterCS`,
+`SysenterESP`, `SysenterEIP` and `ReservedV7` at offsets 2496, 2504, 2512 and
+2520. V6 requests still export their original 2496-byte layout and symbols.
+Initialize the three live MSR cells from the original machine. CS has 32
+readable bits; EIP and ESP must be canonical at the declared processor width.
+An invalid initial cell refuses the step without changing state or RAM.
+
+`RDMSR`/`WRMSR` selectors `0x174`, `0x175` and `0x176` use these exact cells.
+CS bits 16–31 are readable/writable even though only its low selector enters
+the transfer; writes ignore bits 32–63 and reads return zero there. EIP/ESP
+writes require processor-width canonical addresses. These are guest state
+updates and never write the executing host's system-call MSRs. The rules
+follow [Intel SDM Volume 4, Table 2-2](https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf).
+
+Canonical `SYSENTER` (`0F 34`) accepts a valid CPL0–3 64-bit or flat
+compatibility source context, with either compatibility CS.D value.
+Nonconforming CS requires DPL equal to CPL; conforming CS permits DPL below
+or equal to CPL. CPL still comes from the live CS selector's RPL.
+It installs the live entry PC and SP, CPL0 flat CS/SS caches, clears IF/RF, and
+preserves the other admitted flags and registers. It returns status 10 before
+the handler executes, including when the handler is selected in the manifest.
+The target PC must be canonical for active paging. SYSENTER does not access
+its new stack; its ESP cell retains the processor-width MSR requirement.
+
+Canonical `SYSEXIT` (`0F 35`) and `SYSEXITQ` (`48 0F 35`) require CPL0 and
+install CPL3 CS/SS caches from the live CS MSR. The former takes EIP/ESP from
+EDX/ECX and supplies the same eight arbitrary legacy GPR high halves as SYSRET;
+the latter takes the full RDX/RCX and checks both against active paging.
+Both clear RF, preserve the other admitted flags and stop with status 6 before user code.
+Unprefixed `SYSEXIT` also accepts flat compatibility entry at CPL0; its operand
+semantics remain 32-bit with either CS.D value. `SYSEXITQ` requires 64-bit entry.
+Compatibility entry requires CS.base=0 and the whole two-byte instruction
+within CS.limit, so the exported address is also the architectural code offset.
+Other steps retain their earlier mode guards. A driver can therefore return
+through SYSEXIT to a selected SYSENTER stub and explicitly resume it; each
+transition still exits before executing its destination.
+Neither instruction reads descriptors or the old/new stack. Selector TI bits
+and 16-bit wraparound remain significant; null entry selectors refuse before
+any write. These transitions follow the SYSENTER/SYSEXIT instruction entries
+in [Intel SDM Volume 2](https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf).
+
+Other instructions retain V6's CPL0 entry requirements. SYSENTER, SYSEXIT and
+SYSRET accept RF, all IOPL values and VIF/VIP on entry. TF remains excluded
+because debug-trap delivery is unowned. Other instruction domains are unchanged. Nonflat
+compatibility code, legacy modes, faults, CET/FRED, asynchronous events and SMM
+restoration are not added by V7. An opaque SYSENTER lift alone is not a proof of
+an ordinary C ABI or a full native register continuation.
+
+RETF reads IP/CS alone for a same-privilege return and retains SS. For a
+return to an outer privilege level, its unsigned imm16 skips parameter bytes
+before saved RSP/SS and also adjusts the restored RSP. The transition preserves
+NMI blocking and flags except for ordinary RF clearing. RF, all IOPL values
+and VIF/VIP are admitted on entry; TF remains excluded. It consumes one driver step and stops even
+when the return target is selected; a returned CPL1–3 context cannot reenter
+this supervisor profile. Frame fields use the operand width independently of
+the target stack width. A narrow saved IP or SP is zero-extended before the
+target's stack-size rules apply. Same-level RETF advances the original full
+stack pointer by two operand-sized fields before target-width cleanup.
+
+All three IRET operand sizes pop five fields when execution begins in 64-bit
+code, including a same-CPL return. Word IRET replaces the low FLAGS bits and
+retains AC/ID/VIF/VIP from the input and clears RF; dword/qword IRET restore
+those bits from the frame. Both accept input RF, all IOPL values and VIF/VIP;
+input TF remains excluded. RF clears at instruction entry, as described in
+[Intel SDM Volume 3B, section 20.3.1.1](https://cdrdv2-public.intel.com/929360/253669-093-sdm-vol-3b.pdf).
+The earlier statement that word IRET retained RF was overbroad: its qualified
+entry domain required RF=0. The extended-entry regression covers RF=1 directly.
+The [narrow-frame qualification](evidence/x86-narrow-frame-returns-2026-10-30.json)
+compares both widths with original instructions and checks exact frame reads
+against inaccessible guard pages.
+
+IRET/RETF have no unconditional empty undefined-output certificate: a live
+return descriptor can select compatibility mode, where the legacy GPR high
+halves are arbitrary. V6 now owns either a long-mode or compatibility target.
+Long-mode code requires CS.L=1/CS.D=0. Compatibility code permits either CS.D
+value, returns the low 32 RIP bits as the target offset, and checks that offset
+against the effective CS limit. This profile requires the raw frame RIP to be
+canonical at the declared paging width before truncation; other raw high-bit
+patterns remain outside its qualification. The environment interprets the
+returned offset with the returned CS base and does not execute the target in
+this step.
+
+IRET and outer RETF require non-null SS for compatibility targets. A 32-bit
+stack restores ESP. A 16-bit stack replaces SP and retains the original
+ESP[31:16], including when frame pops cross a 64 KiB boundary. RETF performs
+parameter cleanup at the target stack width without carrying into preserved
+bits. Same-privilege RETF retains its original SS/cache and applies that cache's
+stack width. IRET unblocks NMIs; RETF preserves their blocking state.
+
+Successful compatibility returns consume all eight arbitrary-value slots for
+the legacy GPR high halves, including RSP; all low halves and R8-R15 follow the
+instruction's defined state. Long-mode returns and rejected invocations do not
+apply these choices. Their manifest records the conditional profile transition
+instead of inventing an original LowIR operation index. This supplies no
+ordinary LowIR or native-preservation certificate. Earlier generic audits
+incorrectly treated a checked profile condition as an instruction-wide fact.
+The stack rules follow Intel SDM Volume 3A section 7.14.3 and the IRET/RET
+entries; the retained middle ESP bits also match Linux's
+[documented espfix requirement](https://github.com/torvalds/linux/blob/master/arch/x86/kernel/espfix_64.c).
+The [qualification record](evidence/x86-legacy-compatibility-returns-2026-10-30.json)
+includes native and portable state/RAM matrices and the processor-dependent
+raw-RIP experiment behind the canonical-input restriction.
+
+LSS/LFS/LGS also continue through V6. The shared descriptor owner loads the
+16/32/64-bit offset, validates the GDT or LDT descriptor, updates its accessed
+bit and installs the selected cache and base together with the destination
+GPR. LSS requires writable data with RPL=DPL=CPL=0; LFS/LGS accept the
+corresponding data/readable-code privilege rules. A 16-bit destination retains its upper
+bits; a 32-bit destination zero-extends. Both pointer fields are read before
+the descriptor write, even when they alias it. The next PC is the original
+fallthrough, and flags, NMI blocking and other state remain unchanged.
+
+These forms use Intel operand-size rules. The byte grammar admits single
+operand/address-size and FS/GS prefixes in any order, an optional final REX,
+and complete ModRM/SIB/displacement addressing. Each field's address wraps
+independently at the address size before adding the original FS/GS base. Thus
+an addr32 selector may be 4 GiB away from the offset's end in linear memory.
+Null SS selector 0 is supported at CPL0; selectors 1..3 reject. LSS does not
+establish MOV SS / POP SS interrupt/debug inhibition, as specified in
+[Intel SDM Volume 3A, section 7.8.3](https://cdrdv2-public.intel.com/835754/253668-sdm-vol-3a.pdf).
+The previous documentation incorrectly attributed that inhibition to LSS.
+Null LFS/LGS selectors 0..3 require `"null_segment_base_policy": "clear"` or
+`"preserve"` in the request (`NullSegmentBasePolicy` in C++). Bind the actual
+original processor's behavior; vendor identity alone is insufficient. Both
+policies install the selector and mark it unusable, retain ignored cache bytes,
+and read no descriptor. The live FS/GS base follows the selected policy. When
+omitted, null LFS/LGS still reject with status 5 before descriptor access or
+any write. LSS does not need this option. The manifest retains the declaration.
+LDS/LES and compatibility-mode loads remain outside this long-mode profile.
+Ordinary strict/permissive lifting continues to refuse these far loads. The
+continuation receipt retains exact bytes with an incomplete ordinary sidecar;
+it supplies no NOP approximation or ordinary source/native proof.
+
+### Intel user interrupts (V8)
+
+Select `"profile": "intel-user-interrupt-v8"` with V7's required fields and
+the boolean `"uiret_restores_uif"`. This binds the original CPU's
+`CPUID.07H.01H:EDX.UIRET_UIF[17]`; omitting it is an error, including for the
+older behavior (`false`). UINTR must be enabled, with execution outside an
+enclave or RTM transaction. The other nonfaulting, no-asynchronous-delivery
+requirements still apply.
+
+The separate `neverd_x64_state_v8` is 2544 bytes. It contains the unchanged V7
+prefix, followed by one-byte `UIF` and `MonitorActive` at 2528 and 2529, and
+14 reserved bytes. Initialize both flags to 0 or 1. The environment retains
+the monitor's range and pending user-interrupt state; an inactive monitor
+cannot observe its old range. No host UIF, monitor or segment is changed.
+
+Canonical UIRET (`F3 0F 01 EC`) reads exactly three 64-bit stack words: RIP,
+RFLAGS and RSP. It checks RIP against active paging, restores the twelve
+specified flag bits, updates UIF under the declared CPU rule and clears
+monitor validity. With the enhancement, saved bit 1 selects UIF while actual
+RFLAGS bit 1 remains set. Restored RSP need not be canonical until accessed.
+Segments, NMI blocking, other GPRs and vector containers are preserved. Status
+11 stops even when the target is listed, before executing it or delivering a
+pending user interrupt.
+
+The inherited IRET, SYSRET and SYSEXIT paths also clear `MonitorActive`, as
+does RETF when it changes CPL. A same-CPL RETF and SYSENTER preserve it.
+The return owners invoke one version-aware state writer, so earlier layouts
+receive no writes beyond their state storage. Invalid entries and frames leave
+the monitor unchanged. This follows the instruction interactions listed under
+UMWAIT in the same SDM.
+
+CLUI, STUI and TESTUI share the live UIF cell. TESTUI copies it to CF and
+clears the other arithmetic flags. Their ordinary RF clearing is retained;
+TF must be zero because debug-trap delivery is outside this profile. These
+three steps and UIRET accept valid CPL0–3 64-bit code, including conforming
+segments. Other instructions keep V7's entry domain. Faulting stack accesses,
+shadow-stack checks, interrupt delivery and RTM aborts remain unsupported.
+These rules follow [Intel SDM revision 090, UIRET and user interrupts section
+9.7](https://cdrdv2-public.intel.com/874240/325462-090-sdm-vol-1-2abcd-3abcd-4.pdf).
+
+## Ordered scalar memory operations
+
+The control-state profiles retain one sequentially consistent transaction for
+canonical x64 scalar LOCK CMPXCHG and LOCK ADD, alongside XCHG/XADD. The strict
+lifter audit checks raw encoding against operand widths, registers, addressing
+and prefix metadata. CMPXCHG keeps the old-value accumulator, partial-register
+rules and all six comparison flags on both outcomes. Live FS/GS bases remain
+part of the effective address. The existing invocation domain still excludes
+faults, MMIO and concurrent writes; this is not general transaction support or
+an ordinary function ABI proof. Unaudited wider compare-exchange forms remain
+native boundaries.
+
+## Native environment bindings
+
+All bindings below are disabled by default. They must match the executing
+machine environment; enabling them is not an emulation implementation.
+
+| Request field | Effect |
+| --- | --- |
+| `native_timestamp_reads: true` | Executing host's TSC and TSC_AUX |
+| `native_write_prefetch: true` | Host PREFETCHW and its actual memory environment |
+| `segment_base_msr_address_bits: 48` or `57` | FS_BASE, GS_BASE and KERNEL_GS_BASE use the existing state cells and declared MSR canonical width |
+| `native_speculation_control_msrs: true` | Real IA32_SPEC_CTRL and IA32_PRED_CMD writes; feature support and valid values are required |
+| `native_descriptor_queries: true` | Real SGDT, memory VERW and register LSL in the bound descriptor environment |
+| `native_page_table_access: true` | Real CR3 accesses, mapping changes and TLB invalidation |
+| `native_debug_register_access: true` | Real supervisor DR0–3, DR6 and DR7 transfers |
+| `native_page_global_access: true` | Real CR4 reads and writes restricted to changing PGE, including TLB invalidation |
+
+Native descriptor and paging bindings must agree with the declared architectural
+context. Both address spaces must retain accessible generated code, host stack
+and state storage across native CR3 writes. Other MSRs and unsupported system
+effects retain status 4. A zero native-request count describes the selected
+instructions under these declarations; it is not evidence that a complete OS
+has run.
+
+The debug binding requires valid register values and a supervisor environment
+in which GD and enabled breakpoints do not trap the generated code, state or
+compiler stack. DR4/DR5 aliases remain native requests because their behavior
+depends on CR4.DE. The PGE binding compares each write against the live CR4 and
+rejects any non-PGE change with status 5 before committing explicit state or
+writing CR4. Successful writes execute MOV CR4, preserving its serializing and
+TLB effects. Generated code, stack and state mappings must remain accessible.
+Both bindings require a controls profile. Their six undefined arithmetic flags
+use independent caller-supplied slots; DF and other explicit state are preserved.
+These are native bindings, not scalar simulations of the debug or paging banks.
+
+## Immediate-abort RTM regions
+
+With `kernel-events-v6`, `native_rtm_abort_regions: true` emits the optional
+`neverd_x64_rtm_abort_environment_v6` callback. It accepts only an authenticated
+rel16 or rel32 XBEGIN immediately followed by XABORT imm8, with both
+instructions authenticated by the shared prefix reader. The
+transaction runs in one native compiler operation, so neither a C return nor a
+translated step
+can split its checkpoint. On abort, the callback zero-extends the actual EAX
+status into RAX and resumes at the original signed fallback address. Other
+explicit state stays intact. Entry selection follows this fallback; an explicit
+instruction list still selects exactly its requested PCs.
+
+Pass this callback as the provider to `neverd_x64_run_v6`, or call it from an
+existing provider before handling other boundaries. One environment-budget
+unit owns the pair, including an abort before XABORT; the translated-instruction
+budget counts only the subsequent translated steps. A fallback that returns to
+XBEGIN consumes another environment unit. The original XBEGIN remains a native
+request in the instruction manifest. The separate
+`native_rtm_abort_environment.regions` receipts bind every original byte,
+including admitted prefixes, the immediate and the fallback. They do not certify other native requests,
+including an independently entered XABORT.
+
+NeverC uses `__builtin_ia32_rtm_abort_pair` and the native
+`__builtin_ia32_cpuidex` availability query. The pair is one indivisible
+`llvm.x86.rtm.abort.pair` operation through optimization and code generation;
+it retains actual abort status and ordered memory effects. Older C compilers
+use the original single assembly block. Neither route splits the pair into
+independent C calls to `_xbegin` and `_xabort`.
+
+Execution requires an RTM-capable host outside RTM/HLE, with no debug traps or
+faults. If CPUID does not advertise RTM, the provider declines without changing
+explicit state. It never substitutes a constant abort status. Other transaction
+bodies require the complete-region binding below. Invalid encodings remain
+unsupported. The instruction
+behavior and abort status follow [Intel's instruction-set reference](https://cdrdv2-public.intel.com/671110/325383-sdm-vol-2abcd.pdf).
+
+## Complete selected RTM attempts
+
+`native_rtm_regions: true` separately binds complete transactions, nested
+commit/abort, original RAM rollback, selected CALL/RET and standalone
+XABORT/XTEST. Its native provider retains the outer checkpoint until completion
+and rolls back unsupported paths before declining. Pass a read-only
+`neverd_x64_rtm_context_v6` with an explicit `max_instructions` attempt budget.
+Do not combine this option with `native_rtm_abort_regions`. See the
+[RTM region contract and qualification procedure](x86-rtm-regions.md).
+
+## SDK and verification
+
+The [capability ledger](capabilities.json) records this interface as experimental
+under `analysis.x64-continuation-source`, with its C entry point, both CLI options
+and the public exporter regressions. SDK request/CLI parity checks cover the
+portable interface; the sanitizer-backed generated-C execution entries are
+scoped to Linux. Native Windows/macOS generated execution remains separate
+qualification. The ledger keeps ordinary source ABI recovery outside this claim.
+
+`neverd_x64_continuation_source_v1` takes a size-delimited request, route 0 or 1,
+and returns owned source plus an independently owned manifest. Release both
+with `neverd_free_string`. Failure returns NULL, clears the manifest output and
+sets `neverd_last_error`. The manifest contains exact original instruction bytes,
+state layout, arbitrary-effect ordering, environment declarations and a SHA-256
+of the complete emitted C.
+
+Python plugins can use the same interface through `session.raw`. The owned-string
+helper releases the source; the caller must separately release the manifest:
+
+```python
+import ctypes
+import json
+
+request = json.dumps({
+    "profile": "kernel-events-v6",
+    "instructions": [0x140001000],
+    "mxcsr_mask": "0xffbf",
+    "paging_address_bits": 48,
+}).encode("utf-8")  # Use the execution environment's mask and paging width.
+manifest_pointer = ctypes.c_void_p()
+try:
+    source = session.raw.session_owned_string(
+        "neverd_x64_continuation_source_v1", request, len(request), 0,
+        ctypes.byref(manifest_pointer))
+    if source is None:
+        raise RuntimeError(session.raw.session_owned_string("neverd_last_error"))
+    manifest = json.loads(ctypes.string_at(manifest_pointer).decode("utf-8"))
+finally:
+    if manifest_pointer.value:
+        session.raw.call("neverd_free_string",
+                         ctypes.cast(manifest_pointer, ctypes.c_char_p))
+```
+
+Pass `None` as the last argument if no manifest is needed. Never use `c_char_p`
+as its output cell: implicit string conversion would lose the owned address.
+
+Build `NeverDX64ContinuationExportTests` and `NeverDX64ContinuationSourceTests`
+with `scripts/build.py`. The public exporter suite checks SDK/CLI parity,
+strict request failures, physical CALL/RET after a stack pivot, bounded loops,
+unchanged native/invalid boundaries, and successful privilege-exit accounting.
+It compiles and executes both C routes at O0/O2 with ASan and UBSan. The semantic
+suite separately compares supported privileged transitions with native KVM
+fixtures; missing KVM coverage is reported as skipped.
+
+The [RETFQ qualification record](evidence/x86-retfq-continuation-2026-10-29.json)
+records 6,628 complete state/RAM comparisons, all 65,536 imm16 encoding audits,
+guard-page and read-only descriptor checks, and 378 passing continuation,
+export and proof regressions on the recorded source and toolchain. It qualifies
+the V6 transition domain above, not an ordinary C return ABI.
+
+The [LFS/LGS qualification record](evidence/x86-lfs-lgs-continuation-2026-10-29.json)
+records 132,544 native state/RAM comparisons across HighC/LLVMC at O0/O2,
+including independent addr32 field wrapping, old segment bases, every GPR,
+descriptor-bit variants and accessed-bit aliasing into either pointer field.
+It also records 408 unchanged-state/RAM refusals, 24 exact-width/read-only
+page checks and 387 passing continuation, export and proof regressions.
+The native CPU was Intel; null-selector policy and LSS were not qualified by
+those earlier counts. The subsequent
+[far-load completion record](evidence/x86-far-load-continuation-2026-10-29.json)
+covers LSS, null loads and the public policy binding: 175,040 native state/RAM
+comparisons, immediate fallthrough breakpoints and zero CPU interrupt shadow.
+Guard pages check that null loads never read descriptors and retain exact
+pointer widths. Both base policies and the original-base read/new-base write
+sequence execute under ASan/UBSan; hardware qualifies the clearing policy on
+the measured Intel CPU. A public driver test switches SS/RSP, resumes a stack
+load and returns using the new physical stack. Fault delivery remains outside
+these successful-completion contracts.
+
+The [SYSRET32 qualification record](evidence/x86-sysret32-continuation-2026-10-29.json)
+records 14,040 complete native state comparisons and 468,000 portable state
+comparisons with independent arbitrary-value choices. It checks selector wrap,
+every R11 bit, noncanonical RCX high halves, both paging widths and V5/V6.
+The native breakpoint stops before compatibility code; the SDK manifest and
+driver retain all eight high-half choices and the privilege-return boundary.
+All 1,009 continuation, export, audit and proof regressions passed without skips.
+
+The [return-mode audit correction](evidence/x86-return-mode-audit-2026-10-29.json)
+records the two failing pre-fix audit tests and 1,011 passing regressions after
+the fix and integration with `dev`. Another 384 paired native/source cases
+confirmed valid hardware compatibility returns while V6 retained its then-current
+state/RAM refusal. The matrix spans both compatibility code widths, all four
+privilege levels, GDT/LDT, accessed-bit variants and the three qualified frame
+return encodings. That historical record predates the compatibility-return
+source implementation described above.
+
+`X64ContinuationIntegerTest` compares complete state and memory with original
+native instructions for audited legacy vector transfers, XOR and byte shifts,
+16/32/64-bit register products, scalar exchanges and locked memory updates. It
+exercises arbitrary arithmetic flags, preserved upper vector lanes, negative
+bit-string indices and unaligned RAM through both C routes at O0/O2 with ASan/UBSan.
+LOCK BTS/BTR/BTC retain one sequentially consistent native transaction, including
+the old bit returned in CF; an unlocked load/store pair is not equivalent.
+The encoding audit rejects inconsistent decoder details and unaudited prefixes.
+These tests do not extend the invocation domain to faulting or concurrent runs.
+
+`RegisterProductsRetainWidthsAndAliases` adds 63 MUL/IMUL encodings with
+overlapping sources and destinations, negative immediate bits, 16-bit partial
+writes and 32-bit zero extension. Its 580,608 native comparisons vary all four
+undefined flag choices independently. `LegacyHalfMovesRetainSourceAndUpperLanes`
+adds 1,024 native MOVHLPS/MOVLHPS comparisons, including self-copies and extended
+XMM registers, while checking the complete vector containers and other state.
+`X86MultiplyUndefined` and `X86LegacyVectorMoveAudit` own exact byte/detail
+admission for these forms; memory products, 8-bit products and other encoding
+families retain their separate audit requirements. The Intel instruction
+contracts define [product flags](https://cdrdv2-public.intel.com/868140/253666-089-sdm-vol-2a.pdf)
+and [legacy half-move preservation](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-2b-manual.pdf).
+
+## Intel FRED return profile V9
+
+`intel-fred-return-v9` enables the canonical ERETS and ERETU encodings at
+CPL0 in 64-bit mode, with FRED enabled and CET/RTM disabled, outside VMX
+non-root execution. It is a separate
+execution domain: other instructions request native execution. It requires
+`mxcsr_mask` and `paging_address_bits`; SYSENTER and UIRET feature bindings
+are not accepted. It inherits the nonfaulting ordinary-RAM, immutable-code and
+disjoint-state requirements. Descriptor caches must describe a valid entry
+context, and no debug exception may be pending at entry.
+
+The V9 state retains the complete V8 layout and appends `FredConfig` at offset
+2544, `STIBlocked` at 2552, `PendingDebug` at 2553 and six reserved bytes.
+Its total size is 2560 bytes. The low two FredConfig bits hold the current
+stack level; other bits are preserved. Event bytes are booleans. A successful
+step returns status **12 (FredReturn)** and always stops before the target or
+pending-event delivery, consuming exactly one driver step.
+
+Both instructions skip the error-code qword without reading it, then read
+exactly five qwords: RIP, augmented CS, RFLAGS, RSP and augmented SS. Neither
+the restored RSP nor the event-information area above the return words is
+accessed. A 64-bit RIP must be canonical at the declared paging width. Invalid
+frames reject before any state or descriptor write; this is invocation refusal,
+not an emulated CPU exception.
+
+ERETS checks that the selectors match the current CS/SS, validates the reserved
+fields, restores the complete allowed flags and RSP, and lowers the stack level
+to the minimum of its old and saved values. CS/SS caches and GS bases stay
+unchanged. ERETU requires stack level zero and target CPL3. Its standard
+64-bit or compatibility selector pair installs flat CS/SS caches without
+consulting descriptor tables; other selector pairs use the shared GDT/LDT
+descriptor owner, including ordered accessed-bit writes. It swaps GS.base with
+the kernel GS-base MSR, invalidates the UMONITOR state, and preserves the DS/ES/FS/GS
+selectors and other caches, even when their DPL is below 3.
+
+On a compatibility return, ERETU clears the upper 32 bits of the restored RIP
+and RSP, including for a 16-bit default code segment. The truncated RIP must
+fit the target CS limit; a standard flat compatibility return always fits.
+L=1/D=1 code descriptors and nonstandard null CS/SS selectors reject before
+any write. The target mode and its segment caches are returned without running
+that target or changing the host execution mode.
+For compatibility code, `PC` is the returned IP offset; the environment uses
+the returned CS base to interpret its linear code address.
+
+The other seven legacy GPR high halves become explicit architectural choices
+under SDM Volume 1 section 3.4.1.1. Slots 0,1,2,3,5,6,7 select RAX, RCX, RDX,
+RBX, RBP, RSI and RDI high halves, respectively. The low 32 bits and R8-R15
+remain intact. Slot 4 is unused: ERETU explicitly loads all 64 RSP bits after
+clearing the upper half. These choices occur only on successful compatibility
+returns; 64-bit returns and rejected frames neither apply them nor alter the
+input slots. The manifest records `after_profile_transition` as
+`successful_compatibility_return`, with no invented original `after_operation`
+index. Ordinary lifting still has no complete arbitrary-output certificate
+for these instructions.
+
+Saved SS controls conditional NMI unblocking and single-step pendency. ERETS
+may establish STI blocking when requested with restored IF set, provided it
+was not already active at entry; prior STI blocking expires. ERETU does not
+establish it. An entry TF or the saved pending-debug condition with restored TF
+produces PendingDebug. No debug/NMI/interrupt handler runs in this step.
+
+These transitions follow Intel SDM 325462-090, ERETS/ERETU and Volume 3A
+sections 8.4.1-8.4.2. CET checks, faults, virtual-NMI
+controls, physical FRED execution and subsequent event delivery remain
+unqualified. Ordinary lifting refuses both forms without this state owner.
+
+## Explicit fault and asynchronous-event delivery
+
+V6 requests may set `event_delivery: true` to export
+`neverd_x64_deliver_event_v6`. The supplied event owns its cause and saved PC;
+the shared INT owner delivers faults, traps, IRQs and NMIs through the live
+IDT, privilege stacks and IST. This entry accepts 16/32-bit compatibility or
+64-bit state at CPL0–3. It returns 7 after delivery, 15 while inhibited, or 5
+on invalid input/preconditions. The same option routes canonical UD2 and the
+admitted register DIV/IDIV fault conditions at 8/16/32/64 bits through that
+owner. The same division range check returns status 5 without state writes
+when event delivery is not selected. See the
+[event contract and native qualification](x86-event-delivery.md) for the input
+layout, error-code/RF/CR2 rules, interruptibility and remaining memory/event
+boundaries. Older requests keep their original admission and state layout.
+
+## Native SMM return state
+
+`native-smm-v12` exports a 2368-byte state and canonical RSM through
+`llvm.x86.rsm.context` / `__builtin_ia32_rsm_context`. See the
+[native SMM return contract](x86-smm-return.md) for state ownership, native
+execution requirements and verification. A successful RSM abandons the
+compiler frame; it does not return a dispatcher status.
+
+## Native SGX input transfer
+
+`native-sgx-v13` exports a 2464-byte state and canonical ENCLU leaves 2/3/4
+through `llvm.x86.enclu.transfer.at.context` and its NeverC builtin. It imports
+the complete represented input bank and jumps to the original executable
+instruction site, preserving EENTER's PC-dependent RCX result. Native
+enclave/AEP/continuation code owns execution thereafter; no ordinary C return
+survives. See [the SGX contract](x86-sgx-transfer.md) for admission, native
+environment requirements and the distinction between input-state validation
+and actual enclave execution.

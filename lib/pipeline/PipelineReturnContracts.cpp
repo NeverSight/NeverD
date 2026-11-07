@@ -46,6 +46,7 @@
 #include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/ImportCallee.h"
+#include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedNoReturn.h"
@@ -172,7 +173,7 @@ std::optional<MedVar> returnRegisterAt(const MedFunc &Func,
 struct CallAddress {
   std::optional<va_t> Target, Slot;
 };
-CallAddress callAddressOf(const MedOp &Call,
+CallAddress callAddressOf(const MedFunc &Func, const MedOp &Call,
                           const std::map<ValueKey, const MedOp *> &Defs) {
   CallAddress Address;
   if (Call.NumInputs < 1)
@@ -180,14 +181,11 @@ CallAddress callAddressOf(const MedOp &Call,
   const MedVar &Callee = Call.Inputs[0];
   if (Call.Opcode == NdOp::CALL && Callee.isConst())
     Address.Target = static_cast<va_t>(Callee.ConstVal);
-  else if (Call.Opcode == NdOp::INDIR_CALL && Callee.isConst())
-    Address.Slot = static_cast<va_t>(Callee.ConstVal);
   else if (Call.Opcode == NdOp::INDIR_CALL)
-    if (const auto Def = Defs.find(keyOf(Callee)); Def != Defs.end())
-      if (const MedOp &Load = *Def->second; Load.Opcode == NdOp::LOAD &&
-                                            Load.NumInputs >= 1 &&
-                                            Load.Inputs[0].isConst())
-        Address.Slot = static_cast<va_t>(Load.Inputs[0].ConstVal);
+    Address.Slot = indirectCallSlot(Func, Call, [&](const MedVar &Value) {
+      const auto Definition = Defs.find(keyOf(Value));
+      return Definition == Defs.end() ? nullptr : Definition->second;
+    });
   return Address;
 }
 
@@ -273,7 +271,7 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
   // A call's callee is known once every definition is: an indirect call may
   // load its slot in a later block.
   for (const MedOp *Call : Calls) {
-    const CallAddress Address = callAddressOf(*Call, Facts.Defs);
+    const CallAddress Address = callAddressOf(Func, *Call, Facts.Defs);
     std::optional<va_t> Callee = Address.Target;
     if (const std::optional<va_t> Own =
             ownRoutineOf(Img, ArgumentSources, Address))
@@ -320,6 +318,9 @@ public:
       if (!Func.Name.empty())
         Names.emplace(Func.Entry, Func.Name);
     }
+    for (const auto &[Entry, Caller] : Facts)
+      for (const auto &[Callee, Results] : Caller.CallResults)
+        CallsTo[Callee].push_back({Entry, &Caller, &Results});
   }
 
   void settle() {
@@ -348,6 +349,16 @@ private:
   const DebugContext *Dbg;
   const TargetRegInfo &TRI;
   std::map<va_t, FunctionFacts> Facts;
+  /// A function's calls to one callee: its entry, its facts, and the results
+  /// of those calls.
+  struct CallsByCaller {
+    va_t Entry;
+    const FunctionFacts *Facts;
+    const std::vector<ValueKey> *Results;
+  };
+  /// The calls to each function of this image, caller by caller in address
+  /// order.
+  std::map<va_t, std::vector<CallsByCaller>> CallsTo;
   std::map<va_t, bool> NoValue;
   /// The numbers the i386 PC-rooted proof gives each function's values
   /// (MedToHighConverter::i386PcRootedNumbers), computed on first use.
@@ -369,15 +380,19 @@ private:
         return Debug->ReturnType->Kind == NdTypeKind::Void;
     if (isMsvcDestructorName(Func.Name))
       return true;
+    // The program's prototype of a definition is resolveFunction's, which
+    // refuses one an alias the linker folded with it contradicts (KeClearEvent
+    // and KeResetEvent): the name alone does not choose between them.
     if (!Img.functionHasBytePatch(Func.Entry))
-      return namedNoValue(Func.Name);
+      return namedNoValue(Func.Name, /*ByProgramPrototype=*/false);
     return std::nullopt;
   }
 
   /// Whether a routine called \p Name returns nothing by its prototype, the
-  /// libc tables' or one the program's types declare, or as an MSVC
-  /// destructor.  None when none knows it.
-  std::optional<bool> namedNoValue(llvm::StringRef Name) const {
+  /// libc tables' or, with \p ByProgramPrototype, one the program's types
+  /// declare, or as an MSVC destructor.  None when none knows it.
+  std::optional<bool> namedNoValue(llvm::StringRef Name,
+                                   bool ByProgramPrototype = true) const {
     if (Name.empty())
       return std::nullopt;
     if (isMsvcDestructorName(Name))
@@ -396,7 +411,7 @@ private:
     if (const std::optional<bool> Returns =
             libc::libcReturnsValue(CName, libc::libcVariantOf(Img)))
       return !*Returns;
-    if (Dbg)
+    if (Dbg && ByProgramPrototype)
       if (const std::optional<FunctionSym> Declared =
               Dbg->resolvePrototype(CName);
           Declared && Declared->ReturnType)
@@ -426,7 +441,7 @@ private:
       return true;
     if (Call.NumInputs < 1)
       return false;
-    const CallAddress Address = callAddressOf(Call, F.Defs);
+    const CallAddress Address = callAddressOf(*F.Func, Call, F.Defs);
     std::optional<va_t> Target = Address.Target, Slot = Address.Slot;
     // A call through the stub or slot of an import the loader starts at
     // this image's own routine calls that routine, as the C prints it.
@@ -435,10 +450,11 @@ private:
       Target = Own;
       Slot.reset();
     }
-    // A callee's declaration decides, then a prototype of its name, then
-    // what this pass settled for it.  One this pass does not decompile is
-    // declared as the C writers read it, by the debug information or a
-    // prototype of its name: the call they print returns nothing then.
+    // A callee's declaration decides, then what its name says, then what
+    // this pass settled for it; the program's prototype of a definition is
+    // its declaration's.  One this pass does not decompile is declared as the
+    // C writers read it, by the debug information or a prototype of its
+    // name: the call they print returns nothing then.
     if (Target) {
       if (const auto Declaration = Declared.find(*Target);
           Declaration != Declared.end())
@@ -449,7 +465,8 @@ private:
           return Debug->ReturnType->Kind == NdTypeKind::Void;
       if (const auto Name = Names.find(*Target);
           Name != Names.end() && !Img.functionHasBytePatch(*Target))
-        if (const std::optional<bool> None = namedNoValue(Name->second))
+        if (const std::optional<bool> None =
+                namedNoValue(Name->second, /*ByProgramPrototype=*/false))
           return *None;
       if (const auto Known = NoValue.find(*Target); Known != NoValue.end())
         return Known->second;
@@ -695,18 +712,19 @@ private:
 
   /// Whether a caller reads what a call to \p Func returns.
   bool callerReadsResult(const MedFunc &Func) const {
-    for (const auto &[Entry, Caller] : Facts)
-      if (const auto Calls = Caller.CallResults.find(Func.Entry);
-          Calls != Caller.CallResults.end())
-        for (const ValueKey &Result : Calls->second) {
-          if (Caller.Read.count(Result))
+    const auto Calls = CallsTo.find(Func.Entry);
+    if (Calls == CallsTo.end())
+      return false;
+    for (const CallsByCaller &Caller : Calls->second)
+      for (const ValueKey &Result : *Caller.Results) {
+        if (Caller.Facts->Read.count(Result))
+          return true;
+        // A caller that hands it back on reads it when it returns a value.
+        if (Caller.Facts->Returned.count(Result))
+          if (const auto Known = NoValue.find(Caller.Entry);
+              Known == NoValue.end() || !Known->second)
             return true;
-          // A caller that hands it back on reads it when it returns a value.
-          if (Caller.Returned.count(Result))
-            if (const auto Known = NoValue.find(Entry);
-                Known == NoValue.end() || !Known->second)
-              return true;
-        }
+      }
     return false;
   }
 

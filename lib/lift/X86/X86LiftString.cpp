@@ -141,11 +141,11 @@ bool X86Lifter::liftString(LiftState &S, const cs_insn *Insn,
       // Single form only; the REP form falls to the placeholder below.
       unsigned ElemSz = 4;
       const uint16_t AddrSz = S.AddressSize;
+      NdVar DiVal = S.makeTemp(ElemSz);
+      S.emit(NdOp::LOAD, DiVal, {NdVar::reg(x86reg::RDI, AddrSz)});
       NdVar SiVal = S.makeTemp(ElemSz);
       S.emit(NdOp::LOAD, SiVal, {NdVar::reg(x86reg::RSI, AddrSz)},
              NdMemoryOrdering::None, stringSourceAddressSpace(X86));
-      NdVar DiVal = S.makeTemp(ElemSz);
-      S.emit(NdOp::LOAD, DiVal, {NdVar::reg(x86reg::RDI, AddrSz)});
       NdVar Res = S.makeTemp(ElemSz);
       S.emit(NdOp::INT_SUB, Res, {SiVal, DiVal});
       emitFlagsArith(S, Res, SiVal, DiVal, /*IsSub=*/true);

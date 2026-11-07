@@ -34,6 +34,14 @@ std::optional<bool> selfComparisonConstant(NdOp Opcode, const MedVar &A,
 bool hasCompleteOrdinaryPhiInputs(const MedBlock &Block, const PhiNode &Phi,
                                   const std::set<int> &Incoming);
 
+/// A literal INDIR_CALL target denotes implicit pointer storage, whereas its
+/// register/temp operand is already a callable value. Keep that value's SSA
+/// occurrence even when its producer becomes constant; substituting the bits
+/// would introduce a memory read. Ordinary arguments retain constant folding.
+constexpr bool canPropagateConstantToOperand(NdOp Opcode, unsigned Index) {
+  return Opcode != NdOp::INDIR_CALL || Index != 0;
+}
+
 /// Propagate equal, fully seeded constants through pure same-width SSA copies
 /// and complete PHIs. Preserve occurrence-sensitive address provenance and
 /// reject uninitialized cycles. Returns whether any operand changed; exhausted

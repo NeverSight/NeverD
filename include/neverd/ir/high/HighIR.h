@@ -26,6 +26,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <memory>
@@ -43,7 +44,13 @@ using VarKey = std::pair<int, int>;
 
 struct VarKeyHash {
   size_t operator()(const VarKey &K) const {
-    return std::hash<int>()(K.first) ^ (std::hash<int>()(K.second) << 16);
+    // Power-of-two hash tables select buckets from the low bits, so both fields
+    // must reach them. Versions of one carrier stay in neighboring buckets, and
+    // the product's high half brings spaced carrier IDs down. This runs on
+    // every HighIR variable lookup, so it stays one inline multiply.
+    uint64_t Mixed = uint64_t(uint32_t(K.first)) * 0x9E3779B97F4A7C15ull;
+    Mixed ^= uint32_t(K.second);
+    return size_t(Mixed ^ (Mixed >> 32));
   }
 };
 
@@ -96,6 +103,9 @@ struct HighExpr {
   NdOp Op = NdOp::NOP;
   NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None;
   NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default;
+  /// ATOMIC_ADD's source-only return-slot address, proved by MedIR. Preserve
+  /// the transaction but address the compiled function's actual return slot.
+  std::optional<uint16_t> SourceReturnSlotOffset;
   TypeRef Type;
 
   /// For Var
@@ -361,6 +371,11 @@ struct HighStmt {
   /// short (nameRepeatedValues).  Folding it back into a reader would print
   /// the value there in full again.
   bool KeepsName = false;
+  /// A goto that ends a local unwind whose `__finally` clauses now run the
+  /// termination handlers (SEHFinallyBodies.h): C runs a filled clause as an
+  /// abnormal termination only when the goto leaves its `__try` as a jump,
+  /// so the writer prints it neither as a fall-through nor as `__leave`.
+  bool AbnormalExit = false;
 
   std::string str(int Indent = 0) const;
 };
@@ -652,12 +667,23 @@ struct HighFunc {
   std::vector<HighParam> Params;
   std::vector<HighLocal> Locals;
   std::vector<HighStmt> Body;
+  /// Why MedToHigh could not convert the function. Its Body is then only the
+  /// goto skeleton the pipeline keeps, which no writer presents as its C.
+  std::string ConversionFailure;
   std::optional<ExceptionFunction> ExceptionMetadata;
+  bool AnalysisOnly = false;
   /// Entry-SP coordinates of frame PHIs when the Itanium C++ view enters
   /// pads only from their protected calls. The machine range edges remain
   /// unchanged. Use only after every pad has become a C++ clause.
   std::vector<std::pair<MedVar, ExprPtr>> ItaniumCallFrameOffsets;
   bool HasUnresolvedSEHFrame = false;
+  /// MedFunc::SEHTerminationFrameBytes.
+  std::map<va_t, uint64_t> SEHTerminationFrameBytes;
+  /// MedFunc::SEHFuncletRegisters.
+  std::map<va_t, std::map<uint64_t, SEHFuncletRegisterValue>>
+      SEHFuncletRegisters;
+  /// MedFunc::SEHLocalUnwindExits.
+  std::vector<MedSEHLocalUnwindExit> SEHLocalUnwindExits;
   std::set<va_t> CxxContinuationTargets;
   unsigned StructuredExceptionRegions = 0;
   unsigned UnstructuredExceptionRegions = 0;

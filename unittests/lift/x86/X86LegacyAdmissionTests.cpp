@@ -13,7 +13,9 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/X86/X87Context.h"
+#include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/X86/X86Lifter.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include <cstdint>
 #include <vector>
@@ -62,6 +64,36 @@ void checkRefusal(Arch Target, unsigned Id, const std::vector<uint8_t> &Bytes,
     }
 }
 } // namespace
+
+TEST(X86LegacyAdmission, ZeroBaseAAMRequiresFaultContinuation) {
+  for (const auto &Bytes : std::vector<std::vector<uint8_t>>{
+           {0xd4, 0}, {0x66, 0xd4, 0}, {0x67, 0x64, 0xd4, 0}})
+    ASSERT_NO_FATAL_FAILURE(checkRefusal(Arch::X86, X86_INS_AAM, Bytes));
+}
+
+#include "X86DecimalAdjustTests.inc"
+
+TEST(X86LegacyAdmission, ZeroBaseAADPreservesALAndClearsAH) {
+  Decoder D;
+  ASSERT_TRUE(D.init(Arch::X86));
+  DecodedInsn I{};
+  const uint8_t Bytes[]{0xd5, 0};
+  ASSERT_EQ(D.decodeOneForLift(Bytes, sizeof(Bytes), kEntry, I), 2);
+  std::vector<LowOp> Ops;
+  D.liftToLow(I, Ops);
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  NdOpEmulator E(Image);
+  E.setRegister(x86reg::RAX, 0xabcd1295);
+  E.setRegister(x86reg::RAX + 1, 0x12);
+  E.setStrictMode(true);
+  for (const auto &Op : Ops)
+    ASSERT_TRUE(E.step(Op));
+  ASSERT_TRUE(E.getRegister(x86reg::RAX));
+  EXPECT_EQ(*E.getRegister(x86reg::RAX) & 0xff, 0x95u);
+  EXPECT_EQ(E.getRegister(x86reg::RAX + 1), 0u);
+}
 
 TEST(X86LegacyAdmission, FarPointerLoadsRequireSegmentState) {
   unsigned Cases = 0;

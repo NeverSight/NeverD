@@ -88,6 +88,34 @@ TEST(MedNoReturn, PropagatesOnlyFromExplicitTerminatingFacts) {
   EXPECT_TRUE(Funcs[1].Blocks[1].Ops[0].DoesNotReturn);
 }
 
+TEST(MedNoReturn, ACompletelyLiftedLoopNeverReturns) {
+  // A loop with no terminating fact proves no-return only where the lift left
+  // nothing out, and its caller then never returns either.
+  constexpr va_t LoopEntry = 0x1000;
+  constexpr va_t CallerEntry = 0x2000;
+  for (const bool Complete : {false, true})
+    for (const bool UnprovenTable : {false, true}) {
+      SCOPED_TRACE(Complete);
+      SCOPED_TRACE(UnprovenTable);
+      std::vector<MedFunc> Funcs;
+      Funcs.push_back(
+          function(CallerEntry, {block(0, {callOp(LoopEntry), returnOp()})}));
+      MedFunc Loop =
+          function(LoopEntry, {block(0, {}, {1}), block(1, {}, {1})});
+      Loop.CompleteLiftCoverage = Complete;
+      if (UnprovenTable)
+        Loop.UnsafeIndirectBranchAddresses.insert(LoopEntry);
+      Funcs.push_back(std::move(Loop));
+
+      propagateInternalNoReturn(Funcs, Arch::AArch64);
+
+      const bool Proven = Complete && !UnprovenTable;
+      EXPECT_EQ(Funcs[1].DoesNotReturn, Proven);
+      EXPECT_EQ(Funcs[0].DoesNotReturn, Proven);
+      EXPECT_EQ(Funcs[0].Blocks[0].Ops[0].DoesNotReturn, Proven);
+    }
+}
+
 TEST(MedNoReturn, WhatTheUserStatesDecidesHowCallsEnd) {
   constexpr va_t ReturningEntry = 0x1000;
   constexpr va_t TrapEntry = 0x2000;
@@ -249,6 +277,48 @@ TEST(MedNoReturn, NoReturnCallStillFollowsExceptionalContinuations) {
         }
       }
     }
+  }
+}
+
+TEST(MedNoReturn, AnUnprovedRegistrationFrameMayResumeThroughItsHandler) {
+  enum class Frame { None, Unanalyzed, Cleanups, Scope, TryBlock, Proved };
+  for (const Frame Kind : {Frame::None, Frame::Unanalyzed, Frame::Cleanups,
+                           Frame::Scope, Frame::TryBlock, Frame::Proved}) {
+    SCOPED_TRACE(static_cast<int>(Kind));
+    auto Guarded = function(0x1000, {block(0, {callOp(0x2000)})});
+    if (Kind != Frame::None) {
+      auto &Metadata = Guarded.ExceptionMetadata.emplace();
+      auto &Chain = Metadata.Registration.emplace();
+      if (Kind == Frame::Scope || Kind == Frame::Proved)
+        Chain.Scopes.emplace_back();
+      if (Kind == Frame::TryBlock)
+        Metadata.Cxx.emplace().TryBlocks.emplace_back();
+      if (Kind != Frame::Unanalyzed)
+        Guarded.RegistrationStates.emplace().Complete = Kind == Frame::Proved;
+    }
+    const bool MayResume = Kind == Frame::Scope || Kind == Frame::TryBlock;
+    std::vector<MedFunc> Functions = {
+        Guarded, function(0x2000, {block(0, {trapOp()})}),
+        function(0x3000, {block(0, {callOp(0x1000), returnOp()})})};
+    propagateInternalNoReturn(Functions, Arch::X86);
+    EXPECT_EQ(Functions[0].DoesNotReturn, !MayResume);
+    EXPECT_EQ(Functions[2].DoesNotReturn, !MayResume);
+    EXPECT_EQ(Functions[2].Blocks[0].Ops[0].DoesNotReturn, !MayResume);
+
+    LowFunc Low;
+    Low.Entry = 0x1000;
+    Low.ExceptionMetadata = Guarded.ExceptionMetadata;
+    Low.RegistrationStates = Guarded.RegistrationStates;
+    LowBlock Body;
+    Body.Id = 0;
+    Body.StartAddr = 0x1000;
+    LowOp Trap;
+    Trap.Opcode = NdOp::INTRINSIC;
+    Trap.addInput(NdVar::cst(static_cast<uint64_t>(Intrinsic::Brk), 2));
+    Body.Ops.push_back(Trap);
+    Low.Blocks.push_back(std::move(Body));
+    Low.Blocks[0].InstructionBoundaries.push_back({0x1000, 4, 0, 1});
+    EXPECT_EQ(lowFunctionNeverReturns(Low, Arch::X86), !MayResume);
   }
 }
 

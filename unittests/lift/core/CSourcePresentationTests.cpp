@@ -16,6 +16,7 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
+#include "neverd/debug/DebugContext.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/loader/BinaryImage.h"
@@ -79,6 +80,147 @@ TEST(CSourcePresentation, KnownNarrowStringCallsDoNotRequireAWideLiteral) {
     // Without a narrow consumer, a non-ASCII wide string must not become
     // its one-byte prefix. The typed call above supplies the missing width.
     EXPECT_FALSE(imageStringLiteral(&Image, 0x2000));
+  }
+}
+
+TEST(CSourcePresentation, TypedImageCallArgumentsRetainTheirStorageAddress) {
+  class TextCallDebug final : public NullDebugContext {
+  public:
+    unsigned PointerBytes = 8;
+    bool PointerParameter = true;
+    bool Admitted = true;
+    std::optional<FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      if (Name != "consume_text")
+        return std::nullopt;
+      auto Pointer = NdType::makePtr(NdType::makeInt(2, false));
+      Pointer->Size = PointerBytes;
+      FunctionSym Function;
+      Function.Name = Name.str();
+      Function.ReturnType = NdType::makeVoid();
+      Function.Params = {{"value", PointerParameter
+                                       ? Pointer
+                                       : NdType::makeInt(PointerBytes, false)}};
+      Function.PrototypeFromHeader = true;
+      Function.PrototypeLibrary = "test-header";
+      Function.PlatformConvention = Admitted;
+      return Function;
+    }
+  } Debug;
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(unsigned(Architecture));
+      SCOPED_TRACE(unsigned(Format));
+      Debug.PointerBytes = Architecture == Arch::X86 ? 4 : 8;
+      const std::string Bits = std::to_string(Debug.PointerBytes * 8);
+      BinaryImage Image;
+      Image.Arch = Architecture;
+      Image.Bits =
+          Architecture == Arch::X86 ? Bitness::Bits32 : Bitness::Bits64;
+      Image.Format = Format;
+      Segment Data;
+      Data.VA = 0x2000;
+      for (char Ch : std::string("ConfigToken")) {
+        Data.Data.push_back(Ch);
+        Data.Data.push_back(0);
+      }
+      Data.Data.insert(Data.Data.end(), {0, 0});
+      Data.Size = Data.FileSz = Data.Data.size();
+      // Displaying the initial image text grants neither immutable bytes
+      // nor a replacement C literal with different storage identity.
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Image.Segments.push_back(std::move(Data));
+      for (bool Pointer : {false, true})
+        for (bool Admitted : {false, true})
+          for (bool Dynamic : {false, true})
+            for (bool Comments : {false, true}) {
+              SCOPED_TRACE(Pointer);
+              SCOPED_TRACE(Admitted);
+              SCOPED_TRACE(Dynamic);
+              SCOPED_TRACE(Comments);
+              Debug.PointerParameter = Pointer;
+              Debug.Admitted = Admitted;
+              llvm::LLVMContext Context;
+              llvm::SMDiagnostic Diagnostic;
+              const std::string IR = "target datalayout = \"e-p:" + Bits + ":" +
+                                     Bits +
+                                     "\"\n"
+                                     "declare void @consume_text(i" +
+                                     Bits +
+                                     ")\n"
+                                     "define void @show_text(i" +
+                                     Bits +
+                                     " %input) {\n"
+                                     "  call void @consume_text(i" +
+                                     Bits + (Dynamic ? " %input" : " 8192") +
+                                     ")\n"
+                                     "  ret void\n}\n";
+              auto Module = llvm::parseAssemblyString(IR, Diagnostic, Context);
+              ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+              CEmitterOptions Options;
+              Options.TheArch = Architecture;
+              Options.Format = Format;
+              Options.EmitComments = Comments;
+              std::string Text;
+              llvm::raw_string_ostream Out(Text);
+              ASSERT_TRUE(
+                  LLVMCEmitter().emit(*Module, Out, Options, &Debug, &Image));
+              EXPECT_EQ(Text.find("UTF-16LE \"ConfigToken\"") !=
+                            std::string::npos,
+                        Pointer && Admitted && !Dynamic && Comments)
+                  << Text;
+              EXPECT_EQ(Text.find("L\"ConfigToken\""), std::string::npos)
+                  << Text;
+              if (!Dynamic)
+                EXPECT_NE(Text.find("0x2000"), std::string::npos) << Text;
+            }
+    }
+}
+
+TEST(CSourcePresentation, LLVMImagePointerCallsUseTheSharedTextScanner) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  Segment Data;
+  Data.VA = 0x2000;
+  const std::string Message = "Config*/Token";
+  Data.Data.assign(Message.begin(), Message.end());
+  Data.Data.push_back(0);
+  Data.Size = Data.FileSz = Data.Data.size();
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Image.Segments.push_back(std::move(Data));
+  const auto Comment = imageStringComment(&Image, 0x2000);
+  ASSERT_TRUE(Comment);
+  ASSERT_EQ(Comment->find("*/"), std::string::npos);
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"(
+    target datalayout = "e-p:64:64"
+    declare void @consume_text(ptr)
+    define void @show_text() {
+      call void @consume_text(ptr inttoptr (i64 8192 to ptr))
+      ret void
+    }
+  )",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module);
+  for (bool Comments : {false, true}) {
+    CEmitterOptions Options;
+    Options.TheArch = Image.Arch;
+    Options.Format = Image.Format;
+    Options.EmitComments = Comments;
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options, nullptr, &Image));
+    const auto Call = Text.find("consume_text(", Text.find("void show_text"));
+    ASSERT_NE(Call, std::string::npos) << Text;
+    const auto End = Text.find(';', Call);
+    const auto Statement = Text.substr(Call, End - Call);
+    EXPECT_EQ(Statement.find("/* " + *Comment + " */") != std::string::npos,
+              Comments)
+        << Text;
   }
 }
 

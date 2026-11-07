@@ -1,5 +1,10 @@
 **語言**: [English](../testing.md) | [简体中文](../zh-CN/testing.md) | [繁體中文](testing.md) | [日本語](../ja/testing.md) | [한국어](../ko/testing.md) | [Français](../fr/testing.md) | [Deutsch](../de/testing.md) | [Español](../es/testing.md) | [Italiano](../it/testing.md) | [Русский](../ru/testing.md) | [العربية](../ar/testing.md)
 
+`PEFixedImageTest.MachineExitDiscoversBoundedCopyDestination` 檢查內部呼叫和有界字複製迴圈的指標、計數自動細化。獨立暫存器和記憶體預期涵蓋零計數、提前終止、緩衝區重疊及高位框架位址；仍拒絕完整或部分返回儲存格損壞，並檢查精確及少一單位的操作、查詢預算。
+`InterpreterMachineRegionSourceTest.BoundedCopyDiscoversPointerAndCountContexts` 在 O0/O2 下透過兩種 C 輸出和 ASan/UBSan 核對完整狀態與記憶體。這些自建樣例不構成一般 ABI 恢復認證。
+
+有界 `REP MOVS/STOS` 的機器狀態原始碼測試涵蓋使用者與核心選擇模型、四種元素寬度、正反方向、重疊記憶體及零計數的無效指標。`X86NativeStateAudit.RepTransfers*` 驗證兩種字前綴順序、精確編碼與運算元、完整狀態和逐位元組結果。額外前綴、位址覆寫、分段、REPNE 和未證明的計數仍被拒絕；此審核不授予記憶體、無故障、其他狀態保留或普通 ABI 假設。
+
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites` 透過原始碼管線檢查 x64/ARM64 Mach-O 的整數、浮點及混合堆疊參數。`IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers` 確保記憶體讀取、呼叫、堆疊位址逸出，以及不透明或記憶體 intrinsic 仍保留入口儲存初始化。純值路徑直接使用宣告參數，不額外產生實體 SP 寫入，並保留暫存器浮點狀態效應。macOS 行動端矩陣獨立編譯並執行還原的 Swift；產生成功本身不代表執行驗證。
 
 `NeverDLLVMCValueTests` 在 O0/O2 及兩種 LLVM 型別保留設定下，與獨立的 Windows x64 ABI 函式編譯執行可變參數呼叫。原生 x64 以 va_arg 驗證浮點值；其他架構明確略過。
@@ -103,7 +108,7 @@ v4 測試固定前綴大小與填充，拒絕截斷配置和未知旗標，保�
 
 數值位址測試涵蓋單一寫入者的完整與子字轉發、不新增快照的 undef/poison、雙端序、32/64 位元表示、模運算負位移、部分重疊、不同根與 alloca 的別名、可擲出例外的呼叫、迴圈、相鄰工作量與用途預算，以及僅刪除寫入時的分析失效。O0/O2 執行將原始與改寫 IR 對照獨立基準，同時檢查傳回值及別名緩衝區的每個位元組。
 
-`NeverDMedMutableSourceTests` 和 `NeverDLLVMCValueTests` 在 O0/O2 下執行獨立撰寫的迴圈、區塊重排、入口回邊、執行期堆疊運算、較早讀取、分支匯合、部分別名、布林真值和包含零輸入的位元計數。反例要求在發射前拒絕畸形輸入、截斷目標、歧義承載和預算耗盡。超過 SSA 限制的 CLI 案例要求 LLVMC 輸出可執行，並要求 HighC 明確拒絕。 連續更新和跨區塊儲存運算式鏈也會檢查產生 C 的大小與執行結果。
+`NeverDMedMutableSourceTests` 和 `NeverDLLVMCValueTests` 在 O0/O2 下執行獨立撰寫的迴圈、區塊重排、入口回邊、執行期堆疊運算、較早讀取、分支匯合、部分別名、布林真值和包含零輸入的位元計數。反例要求在發射前拒絕畸形輸入、截斷目標、歧義承載和預算耗盡。超過 SSA 限制的 CLI 案例執行 HighC 和 LLVMC。大型窄圖驗證超過原區塊數上限後的執行，儲存預算的恰好達限與超限分別測試。 連續更新和跨區塊儲存運算式鏈也會檢查產生 C 的大小與執行結果。
 
 新增迴歸限制 LLVM 提升前的私有讀寫數量和 C 輸出大小，執行長混合運算鏈、重新排序的 SSA 區塊、重疊的客戶記憶體寫入及零回傳值的 O0/O2 檢查；關鍵案例還經過實際 LLVM 最佳化管線，並驗證模組產生遭拒後可以安全重用發射器。
 
@@ -1343,7 +1348,7 @@ checked Unicorn 使用 `MachineRunControl`：ARM64 維護、客體執行與完�
 
 `WindowsProcess.ClockServicesUseConsistentUnitsAndPreserveLastError` 執行原始 x64/ARM64 PE 中的 `QueryPerformanceFrequency`、單調計數器、FILETIME、回繞 tick 計數和相對延遲呼叫。`WindowsProcess.UnmodeledDelaysStopWithoutClaimingCompletion` 驗證警覺、正數絕對時間及 INT64_MIN 間隔在完成前遭拒絕。`NativeWindowsOracleRunsTheSameExecutable` 也在 Windows 上直接執行成功的時鐘情境；兩項客體回歸均納入停用 Unicorn 的 KVM/WHP 必測清單。 原始樣例明確污染 `BOOLEAN` 參數暫存器未使用的高位元，並以明確的 64 位元型別定義常數，防止 Windows ABI 截斷紀元值與 INT64_MIN。
 
-`ARM64 native backend build` 使用固定版本的 LLVM 原始碼，在 `ubuntu-24.04-arm`（KVM）和 `windows-11-arm`（WHP）上停用 Unicorn 並編譯 `NeverDEmulationNative`。`audit_native_backend_build.py` 核對每個宣告的原生原始檔、啟用的後端定義、編譯命令、ARM64 ELF/COFF 物件及雜湊。`probe_native_host.py` 記錄主機初始化能力與資源清理；能力不可用會明確記錄，初始化錯誤會使工作失敗。這些工作驗證編譯與主機初始化，尚不構成客體執行證據。 `NeverDCapstoneCompilerOptions.inc` 將限定詞診斷選項限定於 Clang 的 C 編譯；GCC 與 MSVC 保留各自的警告規則。 `native_arm64_only=true` 可單獨執行這些 ARM64 元件建構與初始化探測，不啟動完整 x64 CPU 驗收。 建構審計會先正規化原始碼與建構目錄，再比對路徑，包括 Windows 8.3 別名。 ARM64 元件工作會在建置稽核前明確啟用選定的 KVM 或 WHP 後端。
+`ARM64 native backend build` 使用固定版本的 LLVM 原始碼，在 `ubuntu-24.04-arm`（KVM）和 `windows-11-arm`（WHP）上停用 Unicorn 並編譯 `NeverDEmulationNative`。`audit_native_backend_build.py` 核對每個宣告的原生原始檔、啟用的後端定義、編譯命令、ARM64 ELF/COFF 物件及雜湊。`probe_native_host.py` 記錄主機初始化能力與資源清理；能力不可用會明確記錄，初始化錯誤會使工作失敗。這些工作驗證編譯與主機初始化，尚不構成客體執行證據。 `NeverDCapstoneCompilerOptions.inc` 將限定詞診斷選項限定於 Clang 的 C 編譯；GCC 與 MSVC 保留各自的警告規則。 `arm64-native-build.yml` 可單獨執行這些 ARM64 元件建構與初始化探測，不啟動完整 x64 CPU 驗收。 建構審計會先正規化原始碼與建構目錄，再比對路徑，包括 Windows 8.3 別名。 ARM64 元件工作會在建置稽核前明確啟用選定的 KVM 或 WHP 後端。
 
 `WindowsTestExecution.def` 將 Unicorn ARM64 的 `WindowsExclusive` 對照設為 `RUN_SERIAL`。CTest 策略避免它與其他客體負載爭用資源，保留原有 60 s 客體截止時間及全部結果、暫存器、權限和原生摘要檢查。
 
@@ -2108,6 +2113,8 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NativeStackControl.TrapExit*` · `InterpreterSpecialization.TrapIntrinsicsCannotFallThroughWithoutAnAuthenticatedExit` · `PEFixedImageTest.MachineTrapExitEndsRegionAtDeclaredTrap` · `PEFixedImageTest.UndeclaredTrapRemainsUnsupported` · `PEFixedImageTest.MachineTrapExitRejectsNonTrapInstruction` · `NativeUndefinedIndependence.UntakenTrapStillRequiresExactEvidence`.
 
+`NativeStackControl.JumpExit*` 檢查直接、暫存器及記憶體目標、反向與未對齊的槽、過期證據和暫存變數重疊。`InterpreterMachineRegionSourceTest.MemoryJumpExitsReadCurrentGuestSlots` 在選定值及新鮮未定義值兩種模型下，以 UBSan 執行 HighC、LLVMC 的 O0/O2 結果，比較完整狀態與記憶體，並涵蓋槽內容變化及前置別名寫入。固定地址案例要求 Linux x64；其 PE 位址位於 ASan 的影子記憶體空隙。執行 `NeverDInterpreterSpecializationTests` 和 `NeverDInterpreterMachineStateTests`。
+
 這些檢查驗證宣告區域，不證明例外處理或原始碼／原生等價。
 
 
@@ -2118,6 +2125,10 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 `NeverDInterpreterSpecializationTests`, `NeverDPEFixedImageTests`, `NeverDRawEnvironmentRequirementTests`, `NeverDOriginalBinaryUndefinedIndependenceTests`, `NeverDLowIRRefinementTests`.
 
 執行 `NeverDObjCSourceCallTests`（`SourceFrameAnalysis.*`）和 `NeverDCSourcePresentationTests`，檢查位元組來源、路徑一致性、遭覆寫或逸出的儲存、不可變映像範圍、預算、編碼及中繼資料邊界。`NeverDWorkerStackText` 編譯公開的 x64/ARM64 PE 樣例並透過兩條 C 路徑驗證，包括未知的覆寫。此測試需要 Clang 和 lld-link；Windows 原生執行需要另外驗證。
+
+已驗證的指標呼叫參數即使由 LLVM 整數承載位址，也使用相同的映像文字註解。案例涵蓋 x86/x64/ARM64 的 COFF、ELF 和 Mach-O，包括遭拒的宣告、相同數值的整數、動態位址、可寫儲存及停用或跳脫的註解。參數仍保留原位址；顯示初始位元組不代表儲存不可變。
+
+回傳型別分析與呼叫 ABI 還原共用有界匯入槽證明，追蹤匯入位址和已載入目標的複製。測試涵蓋 x86/x64/ARM32/ARM64 的 COFF、ELF 和 Mach-O，以及數值碰撞、動態位址、循環、區段覆寫與非 void 宣告。
 
 <!-- i18n-section: interactive-byte-patches -->
 ## 互動式修補的職責
@@ -2175,3 +2186,85 @@ HFA 匯入槽測試編譯嚴格的 C 原型，並對標頭宣告及本機宣告�
 `MemoryAdditionReturnsItsSnapshotThroughBothRoutes` 與交換對照在 O0/O2 及 UBSan 下執行兩條 C 輸出路線，涵蓋四種 x64 寬度、未對齊位址、舊值及所有相鄰位元組。`LLVMCIntrinsicSemantics.NativeAddition*` / `NativeExchange*` 也執行原始 LLVM IR、保留未使用結果的寫入，並拒絕變更的組合語言契約。FS/GS 形式僅編譯，不存取宿主 TLS；執行需要 x64 宿主。這些檢查不認證並行競爭或硬體故障。
 
 `X86LegacyAtomic.LockedArithmetic*` 檢查 x86/x64 純量寬度、獨立算術旗標、來源暫存器與進位保留、有號立即數、未對齊鄰接位元組、唯讀及截斷映射、FS/GS 位址與無鎖對照。不支援的帶鎖核心運算不能發布一般儲存。`InterpreterLLVMRefinement.RawAtomicsStopBeforeLLVMProof` 也檢查四種帶鎖算術的原始特化，並保留有序記憶體證明拒絕。
+
+`X86LegacyAtomic.NeutralLogic*` 檢查各寬度與 FS/GS 下的恆等帶鎖邏輯，保留記憶體、已定義旗標和 DF，並拒絕無寫入權限、不完整存取、其他立即數及 HLE。`NeverDX86NeutralAtomicSourceTests` 在 x64 主機以 O0/O2 與 UBSan 執行 COFF/ELF/MachO 的兩條 C 路線，涵蓋高位輸入與八種位元組偏移。宣告型別變更還需執行 `NeverDHighControlFlowTests` 與 `NeverDHighCIntegerWidthTests`。
+
+## 純量跳轉驗證
+
+`NeverDConstantBranchTests` 涵蓋 x86/x64/ARM64 與 PE、ELF、Mach-O 的直接前驅、所有前驅一致的匯合及不可變讀取；未證明的備選、未定義輸入、呼叫破壞和獨立入口保留動態跳轉。`NeverDConstantBranchSourceTests` 在最佳化開啟/關閉時，編譯並執行 x64/ARM64 的兩條 C 路徑，涵蓋 O0/O2 與 UBSan。純整數函式本體使用主機標準標頭；這不等同原生 ARM64 或 Windows 驅動程式驗證。worker 的獨立 ELF x64 機器碼比對也檢查冷啟動導覽、參照及跳過的 E9 位元組。
+
+先驗證目前基本區塊能獨立證明的目標，避免無關前驅耗盡其工作預算。長前驅回歸也驗證此邊界。
+
+MedIR 的常數傳播與複製傳播共用 `canPropagateConstantToOperand`：計算所得的間接呼叫目標保留 SSA 值身分，不能因位元模式成為常數而被當作指標儲存位址；直接呼叫和一般參數繼續摺疊。`NeverDImageAnalysisBoundaryTests` 檢查 x86/x64/ARM32/ARM64 的轉換，`NeverDIndirectCallValueSourceTests` 在三種原生格式下執行 x64/ARM64 兩條 C 路徑；原映像檢視僅檢查語法及沒有憑空增加的記憶體讀取，不能脫離映像提供者執行。
+
+`NeverDReadOnlyProtectionSourceTests` 將 PE、ELF、Mach-O 的 x64/ARM64 輸入指令產生為 HighC 和 LLVM C，並以主機 Clang 在 O0/O2 加 UBSan 下執行全域變數讀寫。涵蓋兩種管線最佳化模式及具誤導性的常數區段名稱。`NeverDReadOnlyBytesTests` 檢查映射權限、完整 RELRO 範圍與非法範圍；原生指標邊界套件以 relro 和 norelro 連結相同 ELF 範例。重建 C 的主機執行不等於原生 ARM64 或 Windows 核心驗證。
+
+`RelroKeepsPartialPagesAndStaticStartupWritable` 檢查 x86、x64、ARM、ARM64 的頁面邊界與明確的載入器保證。原生指標測試執行獨立的 Linux x64 部分頁 RELRO 與無載入器靜態範例，驗證全域變數先寫後讀。`NeverDDataSymbolBindingTests` 檢查完整指標保護與兩條 C 路徑；這些檢查不代表原生 ARM 頁面配置認證。
+
+`NeverDLowScalarConstantTests` 與 `NeverDIndirectCallValueSourceTests` 涵蓋跨區塊呼叫及拒絕邊界，並執行兩條 C 路線。`NeverDLLVMCSourcePointerTests` 以 O0/O2 及 UBSan 檢查物件指標、回呼、別名及外部宣告。原生指標套件編譯公開 MinGW 範例並拒絕 MSVCRT/UCRT 配置不符；不代表原生核心或 ARM64 執行驗證。
+
+`X86RepState.ImageCopiesRetainEveryAccessedByte` 在 x64 COFF、ELF 和 Mach-O 下執行雙向映像複製，以及填入後複製。兩條 C 路線均以 O0/O2 加 UBSan 編譯執行，獨立計算的結果檢查每個複製位元組；非 x64 主機明確略過執行檢查。
+
+`NeverDFiniteScalarBranchTests` 涵蓋 x86/x64/AArch64 與 COFF/ELF/Mach-O 的無表算術分派、稀疏遮罩、模運算、部分寫入、呼叫破壞、暫存量生命期、預算、外部入口及新增邊。`NeverDFiniteScalarBranchSourceTests` 在最佳化開關、O0/O2、UBSan 下執行兩條 C 路徑的所有案例，並驗證同時儲存程式碼指標的獨立身分及略過 SSA 的拒絕行為。
+
+`NeverDCalleeSourceCLI` 透過正式 CLI 檢查獨立編碼的 x64 PE/ELF 呼叫鏈：位址與名稱選取、遞移呼叫定義、排除無關函式、普通單函式輸出、剛好達到與超過深度上限、循環以及根函式與被呼叫函式的拒絕。呼叫閉包失敗時保留既有輸出。完整三函式 C 單元在 O0/O2 編譯執行並傳回獨立預期值；遞迴案例只做檢查。 它也涵蓋沒有展開中繼資料或符號、以 NOP 填充分隔的直接被呼叫葉函式，以及完成函式探索後依數值位址選取該葉函式。
+
+重複映像存取回歸亦涵蓋同一資料擁有者內的無關函式指標重定位、映像內目標、位元類似位址的整數填充值、來源暫存器完成位移，以及透過更新後的來源與目標暫存器再次讀取。`ConstantAddressFactsExcludeUnprovedAndNonAddressResults` 檢查 x86/x64 邊界：動態輸入、分段或縮減位址寬度、異常介面與非位址輸出不能取得完成事實。`ZeroCountAndOffsetFormsKeepTheirNumericInputs` 檢查輸入保持，僅自然寬度的零次數案例在主機執行。完整範圍測試拒絕截斷映射與溢出次數。本機 LLVM 缺少原生 intrinsic 時，相應測試明確跳過。
+
+## 返回槽上的中性原子操作
+
+`NeverDMedPrologueSavesTests` 涵蓋槽寬度、偏移、活躍值、旗標/PHI 讀取及修改後的證據失效。`NeverDPipelineOutcomeTests` 檢查機器與修補請求不會取得此投影。`NeverDX86NeutralAtomicSourceTests` 以獨立撰寫的原始指令對照 COFF/ELF/MachO 的兩條 C 路線，包含調整後的堆疊指標，並以 O0/O2 和 UBSan 執行。執行對照需要 Linux x64；i386 證明測試不代表原生 i386 執行涵蓋。
+
+
+## 標準監督態讀取稽核
+
+`InterpreterSpecialization.SupervisorRead*` 使用實際嚴格提升，並拒絕降級為 `Missing` 的稽核。`BinaryLowIRRefinement.SupervisorReadCompletesOnlyRawRecovery` 檢查原始位元組復原邊界，同時繼續拒絕原生證明和原始碼包裝。
+
+## OR/XOR 運算式的常數覆蓋
+
+`SymExprMask.ConstantCover*` 窮舉四位元遮罩與輸入，檢查 8–257 位元字、有效高位、深層共用來源及遮罩字數和項數預算拒絕。`FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` 驗證零求解查詢下的固定位移，並拒絕依賴輸入的相鄰案例。執行 `NeverDSymbolicTests` 與 `NeverDInterpreterSpecializationTests`。
+
+## 遞增指標存取的映像儲存
+
+`CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` 以 O0/O2 與 ASan/UBSan 執行 COFF/ELF/Mach-O 的正反向遍歷、中間複製、同寬轉換、讀寫及純寫路徑。`CursorStorageNeedsAnAddressPreservingMemoryPath` 拒絕純量常數、載入的指標、窄化及沒有記憶體消費者的算術；`DirectBoundedTablesKeepTheirExtent` 保留有界直接索引路徑。建置 `NeverDLiftTests` 後執行 `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4`。
+
+`CImageObjects.EscapingUnsizedAddressesKeepTheirImageStorage` 以 O0/O2 與 ASan/UBSan 執行 COFF/ELF/Mach-O 中呼叫端透過具名、未具名及內部位址讀取資料的路徑。即使區域內沒有讀取操作且符號沒有大小，也必須保留全部原始位元組、位址別名及下一符號邊界；已知大小的純量維持原型別。
+
+`CImageObjects.SharedAddressUsesKeepStorageInEitherFunctionOrder` 在兩種函式順序下執行同一位址節點的區域單位元組讀取和回傳用途，並使用相同的格式、命名、最佳化與 sanitizer 矩陣。
+
+`CImageObjects.EscapingUnsizedStorageBeyondTheEmbedLimitIsRefused` 檢查超出共用嵌入上限的未定大小逸出物件，涵蓋 COFF、ELF、Mach-O、具名與未具名物件、listing 名稱及 ELF 重定位接納路徑；拒絕時輸出保持為空。
+
+LLVM C 的合成堆疊槽保留完整的 128 位元整數寫入，再由執行期選擇讀取任一 64 位元半部。`LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` 在 O0/O2、ASan/UBSan 及文件規定的 `-fno-strict-aliasing` 契約下涵蓋加法與基於對齊的 OR 定址。執行 `NeverDLLVMCValueTests`；相關框架、向量及顯示記錄測試涵蓋周邊儲存路徑。
+
+`MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` 對 x64/AArch64 與 COFF/ELF/Mach-O 的可變游標迴圈執行 LLVM C 的 O0/O2 + ASan/UBSan 檢查。在明確的原始映像原始碼模式下，已確認的位址即使鄰近無關指標重定位，也使用共用的執行期映像。數值相同的一般整數保持純量；獨立指標映像保留既有驗證。執行 `NeverDMedLLVMDirectDataTests` 及指標重定位邊界測試。
+
+<!-- i18n-section: mutable-alignment-guards -->
+
+`MedMutableSource.AlignmentChecks*` 在兩條 C 路徑的 O0/O2 下執行對齊輸入與未啟用條件，要求啟用條件下的未對齊輸入觸發陷阱，並拒絕錯誤的寬度、對齊值、輸出和位址空間。
+
+`InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` 在 ASan/UBSan 下執行兩條 C 路線的 O0/O2 輸出。壓縮回歸比較分支兩側失敗及迴圈後續訪問後的完整狀態、記憶體與記錄。48 條連續指令檢查早期、中間及末尾記錄的成功、耗盡與不匹配。獨立的 3300 條指令案例超過舊封裝的區塊容量，只檢查兩條 C 匯出，不編譯產生的原始碼。執行 `NeverDInterpreterMachineStateTests`；這些自有測試資料不構成任意原生函式的認證。
+
+`MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` 檢查包含 2048 級條件分支和兩個共用失敗出口的鏈，同時涵蓋正向與反轉的區塊排列。兩個 C 後端均在 O0/O2 與 UBSan 下執行，比對前段、中段、末段失敗和成功路徑的回傳值及已提交客體記憶體前綴。
+
+`NeverDX86UndefinedEffectsTests` 的 `X86ArithmeticUndefinedAudit` 檢查傳統暫存器 PADDB/W/D/Q、PSUBB/W/D/Q 的精確編碼、各通道獨立回繞、旗標保持和完整 512 位元暫存器組。標準 x64 立即數 IMUL 綁定符號延伸的 imm8/imm32 與四個獨立未定義旗標。記憶體、MMX/VEX 及位元組與解碼詳情不一致的形式仍需各自的准入證明。`ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts` 在 O0/O2、ASan/UBSan 下執行兩條 C 路徑，檢查記錄耗盡或不符時整條指令尚未提交目標與游標。
+
+`X86PackedSelectionAudit` 檢查規範暫存器形式的 PSHUFD、PCMPEQD、PAND、PACKSSDW/PACKSSWB、PUNPCKLQDQ 和 MOVMSKPD，涵蓋全部 256 種重排控制字、有號飽和邊界、部分相等、暫存器別名、完整向量暫存器組與旗標保持。傳統記憶體 PAND 在讀取或修改目的暫存器前保留 [Intel 規定的對齊要求](https://cdrdv2-public.intel.com/671436/253665-sdm-vol-1.pdf)；`X86LegacyAlignedMove.PackedAnd*` 檢查位址回繞、明確 FS/GS 基址、不可用記憶體及失敗時狀態不變。取值來源樣例以 ASan/UBSan、O0/O2 執行兩條 C 路線並保留動態對齊檢查。這些檢查不認證不透明處理器狀態。
+
+`InterpreterMachineRegionSourceTest.SegmentedChoiceSource*` 在 O0/O2 下經兩種 C 路線執行明確 FS/GS 基址測試，並啟用 ASan/UBSan。獨立位元組預期比較完整狀態、重疊記憶體與返回位址單元、回繞位址、查詢及選擇記錄預留與不變的記錄帶。拒絕測試涵蓋認證、V1、操作預算及不支援的架構狀態。執行 `NeverDInterpreterMachineStateTests` 與原始環境、固定映像及延續原始碼測試；這些自有程式不證明原生核心執行等價。
+
+`X86NativeStateAudit.CR4*` 檢查 48 種已准入的 CR4 傳送編碼與 34 組位元組和解碼詳情不符的輸入。測試要求記錄六個任意算術旗標、保留原有原生內在操作，且不授予不透明狀態保持證書。`CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution` 驗證缺少控制狀態契約時仍拒絕原始碼恢復。這些測試只解碼並提升自有指令位元組，不執行特權指令。
+
+`PageGlobal*` 檢查涵蓋未知高位、兩個分支、讀寫關係、63 個禁止變更的控制位、其他狀態保持、錯誤運算元、預算與環境身分。執行 `NeverDInterpreterSpecializationTests`、`NeverDInterpreterMachineStateTests`、`NeverDLowIRRefinementTests` 和 `NeverDInterpreterLLVMRefinementTests`；這些值模型測試不執行硬體特權指令。
+
+`NeverDInterpreterMachineStateTests` 的 `KernelPageGlobalSource*` 以 HighC、LLVMC、O0/O2 及 ASan/UBSan 檢查完整狀態、返回堆疊、CR4 關係、所有不足或不符的指令記錄，以及核心 POPFQ/CLI/STI 旗標。另檢查執行域、舊配置和預算拒絕；僅執行產生的純量 C。
+
+`AtomicSourceRequiresAnUnmodifiedSupportedReceipt` 拒絕缺少或修改的原子憑據及不支援的 CMPXCHG。`ScalarAtomicsRetainTransactionsAndPhysicalState` 以獨立的完整狀態、旗標及位元組預期驗證 1/2/4/8 位元組 XCHG、LOCK XADD、未對齊記憶體與返回字別名。兩條 C 路徑在使用者及核心狀態設定下執行 O0/O2、ASan/UBSan。執行 `NeverDInterpreterMachineStateTests` 及原始環境、特化、續接原始碼與原始碼後端測試；這些完成測試不認證並行競爭或故障行為。
+
+`InterpreterSpecialization.AlignmentProducersPrecedeWideGuardContexts` / `RuntimeValidityStillRefinesAnEnclosingGuard`: 對齊回歸使用獨立算術預期，涵蓋兩條對齊路徑、所有低位餘數、寬計數、閾值兩側及無號回繞；同時檢查拒絕未對齊迴圈、產生者細化停滯後仍可細化外層分支，以及操作與查詢預算恰好足夠或少一次的情況。這些檢查不證明一般原始碼 ABI 還原或原生故障行為。
+
+ReadPrefetch 回歸檢查原始位元組與運算元中繼資料、獨立的未定義輸出和不透明狀態憑據、畸形純量契約及被修改的原始憑據。兩條 C 路徑保留四種提示及重複出現，並在 O0/O2 和消毒器下比較獨立的完整狀態與記憶體預期，涵蓋未映射位址、32 位元位址回繞和實體返回。不比較快取位置或時序。
+
+StreamingStore 回歸檢查指令位元組、運算元中繼資料、對齊、完整可寫範圍、畸形契約與修改過的憑據。獨立預期比較完整狀態與記憶體，包括覆寫實體返回位址的儲存。兩條 C 路徑均在使用者與核心狀態設定下，以 O0/O2 和消毒器執行。這些檢查不認證原生核心、並行或故障執行。
+
+`InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
+這些測試檢查完整分派、不同前驅值域、前綴寫入、停用自動探索、不完整值域及精確/少一預算。兩種 C 輸出在 O0/O2 下透過 ASan/UBSan 執行。獨立完整狀態與逐位元組預期涵蓋截斷計數、雙向存取、重疊、零計數無效指標、提前終止和迴圈補零；不構成一般 ABI 恢復證明。

@@ -11,6 +11,8 @@
 
 #include "neverd/ir/low/X86/X87PortableContext.h"
 
+#include "X87ContextState.h"
+
 #include "neverd/ir/X86/X87Capabilities.h"
 #include "neverd/ir/X86/X87Context.h"
 #include "neverd/ir/X86/X87Control.h"
@@ -61,16 +63,7 @@ struct Context {
     Image[4] |= Mask;
     Known |= Mask;
   }
-  void setTop(unsigned NewTop) {
-    const unsigned OldTop = top();
-    const auto Old = Image;
-    for (unsigned I = 0; I != 8; ++I) {
-      const unsigned OldLogical = (NewTop + I + 8 - OldTop) & 7;
-      std::copy_n(Old.begin() + 32 + OldLogical * 16, 16,
-                  Image.begin() + 32 + I * 16);
-    }
-    putWord(Image, 2, (word(Image, 2) & ~0x3800U) | (NewTop << 11));
-  }
+  void setTop(unsigned NewTop) { setX87ContextTop(Image, NewTop); }
   Outcome push(const X87Binary80Bytes &Value) {
     const unsigned NewTop = (top() + 7) & 7;
     if (Image[4] & (1U << NewTop))
@@ -146,6 +139,10 @@ Outcome execute(Operation Op, unsigned Escape, unsigned Index, Context &S,
     putWord(S.Image, 2, word(S.Image, 2) & 0x7f00);
     return Outcome::Completed;
   case Operation::Wait:
+    return Outcome::Completed;
+  case Operation::ResetMMX:
+    S.setTop(0);
+    S.Image[4] = 0;
     return Outcome::Completed;
   case Operation::LoadControl: {
     const uint16_t Control = word(Memory);
@@ -319,7 +316,7 @@ preflightPortableX87Context(uint32_t Selector,
   if (Op != Operation::Initialize &&
       (!x87ControlWordIsValid(Control) || !(Control & 0x0040)))
     return Outcome::InvalidControl;
-  if (x87ContextUpdatesInstructionPointer(Selector) &&
+  if (Op != Operation::Wait && x87ContextUpdatesInstructionPointer(Selector) &&
       (Control & ExceptionFlags) != ExceptionFlags)
     return Outcome::UnmaskedControl;
   return Outcome::Completed;
@@ -348,6 +345,10 @@ executePortableX87Context(uint32_t Selector, std::array<uint8_t, 512> &State,
                                   Next, OperandView, Output);
   if (Completion != Outcome::Completed)
     return Completion;
+  // Empty tags do not establish retained payload values. FEMMS invalidates
+  // all eight physical aliases; EMMS and FNOP preserve their provenance.
+  if (Spec->InvalidatesPayloads)
+    Next.Known = 0;
   if (x87ContextUpdatesInstructionPointer(Selector)) {
     putAddress(Next.Image, 8, IP);
     if (Spec->MemoryBytes)

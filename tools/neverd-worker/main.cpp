@@ -7,6 +7,8 @@
 #include "UnwindQuery.h"
 #include "WebEngine.h"
 
+#include "neverd/support/StackSizeMain.h"
+
 #ifdef NEVERD_WORKER_HAS_MIMALLOC
 #include <mimalloc.h>
 #endif
@@ -230,6 +232,8 @@ Json hello() {
                 "analysis_snapshot",
                 "analysis_restore",
                 "analysis_update_names",
+                "prepare_call_summaries",
+                "render_ahead",
                 "functions",
                 "disasm",
                 "bytes",
@@ -394,6 +398,8 @@ Json hello() {
     result["capabilities"].push_back(unwind_query::kOperation);
   if (Engine::reportsX87Capabilities())
     result["capabilities"].push_back("x87_capabilities");
+  if (Engine::recoversInterpreterSource())
+    result["capabilities"].push_back("interpreter_recovery");
   result["web"] = WebEngine::capabilities();
   return result;
 }
@@ -628,7 +634,13 @@ int main(int argc, char **argv) {
     if (!transport.send(hello()))
       return 1;
     State state;
-    std::thread executor([&] { executeLoop(state, transport); });
+    // Requests run their pipelines on the stack a CLI run has, so each
+    // parallel phase coordinates its workers there rather than on a thread
+    // it starts first.
+    std::thread executor([&] {
+      auto Loop = [&] { executeLoop(state, transport); };
+      neverd::runWithMainStack(Loop);
+    });
     std::thread heartbeat([&] {
       std::unique_lock lock(state.mutex);
       while (!state.finished) {

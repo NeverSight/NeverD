@@ -332,7 +332,8 @@ TEST(AndroidLogOptions, EventWriteSchemaPreservesAbsenceBytesAndSignedResults) {
   ASSERT_TRUE(bool(Empty));
   ASSERT_TRUE(Empty->Android->EventLogWrites);
   EXPECT_TRUE(Empty->Android->EventLogWrites->empty());
-  for (int64_t Result : {int64_t(INT32_MIN), -11LL, 0LL, int64_t(INT32_MAX)}) {
+  for (int64_t Result :
+       {int64_t(INT32_MIN), int64_t(-11), int64_t(0), int64_t(INT32_MAX)}) {
     auto Good = Parse("[{\"payload\":\"008000ff\",\"result\":" +
                       std::to_string(Result) + "}]");
     ASSERT_TRUE(bool(Good)) << llvm::toString(Good.takeError());

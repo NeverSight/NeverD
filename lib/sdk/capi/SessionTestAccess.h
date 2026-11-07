@@ -21,6 +21,7 @@ struct DecodedInsn;
 namespace neverd::sdk {
 struct Session;
 struct FunctionPage;
+struct InstructionFlow;
 
 // Same-build test seam. Mutations that destroy engine objects run in the
 // shared library; this header is not installed with the public SDK.
@@ -41,6 +42,9 @@ struct SessionTestAccess {
   NEVERD_API static std::vector<std::pair<neverd_va_t, unsigned>>
   instructionDataAccesses(const BinaryImage &Img, Decoder &Dec,
                           const DecodedInsn &Insn, bool Filter);
+  NEVERD_API static InstructionFlow instructionFlow(const BinaryImage &Img,
+                                                    Decoder &Dec,
+                                                    const DecodedInsn &Insn);
   NEVERD_API static FunctionPage functionPage(const Session &State,
                                               neverd_va_t First, int Limit);
   /// findProgramMain of \p Img.

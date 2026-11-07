@@ -1,0 +1,15 @@
+//===- X86Snp.def - SNP completion inventory ----------------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// NEVERD_X86_SNP(Id, Name, MandatoryPrefix, ModRM). No include guard.
+
+NEVERD_X86_SNP(X86SnpPsmash, psmash, 0xf3, 0xff)
+NEVERD_X86_SNP(X86SnpPvalidate, pvalidate, 0xf2, 0xff)
+NEVERD_X86_SNP(X86SnpRmpadjust, rmpadjust, 0xf3, 0xfe)
+NEVERD_X86_SNP(X86SnpRmpupdate, rmpupdate, 0xf2, 0xfe)
+NEVERD_X86_SNP(X86SnpRmpquery, rmpquery, 0xf3, 0xfd)
+NEVERD_X86_SNP(X86SnpRmpread, rmpread, 0xf2, 0xfd)
+NEVERD_X86_SNP(X86SnpRmpopt, rmpopt, 0xf2, 0xfc)
+NEVERD_X86_SNP(X86SnpRmpchkd, rmpchkd, 0xf3, 0xfc)

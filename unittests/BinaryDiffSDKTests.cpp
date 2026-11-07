@@ -537,6 +537,598 @@ TEST_F(BinaryDiffSDK,
             false);
 }
 
+TEST_F(BinaryDiffSDK,
+       FixedStackRolesRetainReviewCandidatesAcrossLocalRelayout) {
+  enum class Variant { Fixed, Alias, Dynamic, InputSlot, Overlap, BodyGap };
+  const auto Code = [](bool Guard, bool Swap, uint8_t Result, Variant Kind) {
+    std::vector<uint8_t> Bytes{0x48, 0x83, 0xec, 0x28}; // sub rsp,40
+    const auto Add = [&](std::initializer_list<uint8_t> Part) {
+      Bytes.insert(Bytes.end(), Part);
+    };
+    if (Kind == Variant::Alias)
+      Add({0x48, 0x89, 0xe0}); // mov rax,rsp: an untracked alias
+    if (Kind == Variant::Dynamic)
+      Add({0x48, 0x83, 0xe4, 0xf0}); // and rsp,-16
+    std::vector<size_t> Branches;
+    if (Guard) {
+      Add({0x85, 0xff, 0x74, 0}); // test edi,edi; je failure
+      Branches.push_back(Bytes.size() - 1);
+    }
+    const uint8_t First = Kind == Variant::InputSlot ? 48 : 8;
+    const uint8_t Second = Kind == Variant::InputSlot ? 56
+                           : Kind == Variant::Overlap ? 12
+                                                      : 16;
+    if (Kind == Variant::Overlap)
+      Add({0x48, 0x89, 0x44, 0x24, First}); // observed overlapping access
+    Add({0x48, 0x8d, 0x54, 0x24, Swap ? First : Second}); // lea rdx,slot
+    Add({0x48, 0x8d, 0x74, 0x24, Swap ? Second : First}); // lea rsi,slot
+    Add({0x41, 0xff, 0xd0, 0x85, 0xc0, 0x75, 0});         // call r8; test; jne
+    Branches.push_back(Bytes.size() - 1);
+    Add({0x48, 0x8b, 0x44, 0x24, Result ? Second : First});
+    Add({0x48, 0x83, 0xc4, 0x28, 0xc3}); // restore; ret
+    const size_t Failure = Bytes.size();
+    Add({0x31, 0xc0, 0x48, 0x83, 0xc4, 0x28, 0xc3});
+    for (size_t At : Branches)
+      Bytes[At] = Failure - At - 1;
+    return Bytes;
+  };
+  const auto Canonical = [](std::string Text) {
+    auto Value = llvm::json::parse(Text);
+    if (!Value)
+      return std::string{};
+    Value->getAsObject()->erase("timings");
+    return render(*Value);
+  };
+  for (auto Kind : {Variant::Fixed, Variant::Alias, Variant::Dynamic,
+                    Variant::InputSlot, Variant::Overlap, Variant::BodyGap}) {
+    SCOPED_TRACE(unsigned(Kind));
+    std::vector<uint8_t> Image(256, 0xcc);
+    const auto Original = Code(true, false, 0, Kind);
+    const auto Misleading = Code(true, true, 0, Kind);
+    std::copy(Original.begin(), Original.end(), Image.begin());
+    std::copy(Misleading.begin(), Misleading.end(), Image.begin() + 128);
+    const auto A = input(Image);
+    const auto B = input(Code(Kind != Variant::BodyGap, true, 1, Kind), 0x2000);
+    if (const char *Attributes = neverd_func_attributes_json(A, 0x1080))
+      neverd_free_string(Attributes);
+    else
+      ASSERT_EQ(neverd_func_create(A, 0x1080), 0);
+    for (bool Reverse : {false, true}) {
+      const auto C = compare(Reverse ? B : A, Reverse ? A : B,
+                             R"({"discover":false,"use_names":false})");
+      const auto Saved = take(neverd_comparison_export_json(C));
+      auto Report = llvm::json::parse(Saved);
+      ASSERT_TRUE(bool(Report));
+      const auto *Groups = Report->getAsObject()->getArray("ambiguities");
+      ASSERT_TRUE(Groups);
+      const bool Retained =
+          std::any_of(Groups->begin(), Groups->end(), [&](const auto &Group) {
+            const auto *G = Group.getAsObject();
+            if (G->getString("step") != "stack_roles")
+              return false;
+            const auto &P = *G->getArray("primary"),
+                       &S = *G->getArray("secondary");
+            return P.size() == 1 && S.size() == 1 &&
+                   P[0].getAsString() == (Reverse ? "0x2000" : "0x1000") &&
+                   S[0].getAsString() == (Reverse ? "0x1000" : "0x2000");
+          });
+      EXPECT_EQ(Retained, Kind == Variant::Fixed) << Saved;
+      if (Kind != Variant::Fixed)
+        continue;
+      ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1);
+      EXPECT_EQ(Canonical(take(neverd_comparison_export_json(C))),
+                Canonical(Saved));
+      const auto Choice = render(
+          llvm::json::Object{{"kind", "match"},
+                             {"primary", Reverse ? "0x2000" : "0x1000"},
+                             {"secondary", Reverse ? "0x1000" : "0x2000"}});
+      ASSERT_EQ(neverd_comparison_override_json(C, Choice.c_str()), 1);
+      ASSERT_EQ(neverd_comparison_undo(C), 1);
+      EXPECT_EQ(Canonical(take(neverd_comparison_export_json(C))),
+                Canonical(Saved));
+      ASSERT_EQ(neverd_comparison_redo(C), 1);
+    }
+  }
+}
+
+TEST_F(BinaryDiffSDK, RelocatedInitializerPositionsDisambiguateEqualCallbacks) {
+  const auto Image = [&](bool Reordered, bool Relocated, uint64_t Stride,
+                         bool Barriers, bool DataAddresses) {
+    using ELF = llvm::object::ELF64LE;
+    using namespace llvm::ELF;
+    constexpr size_t TextOffset = 0x1000, DataOffset = 0x2000,
+                     RelocOffset = 0x2100, NamesOffset = 0x2200,
+                     SectionsOffset = 0x2300, SymbolsOffset = 0x2500,
+                     SymbolNamesOffset = 0x2600;
+    constexpr uint64_t DataVA = 0x3000;
+    constexpr char Names[] = "\0.text\0.data\0.rela.dyn\0.shstrtab\0";
+    constexpr char SymbolNames[] = "\0data_begin\0data_end\0";
+    std::vector<uint8_t> File(DataAddresses
+                                  ? SymbolNamesOffset + sizeof(SymbolNames)
+                                  : SectionsOffset + 7 * sizeof(ELF::Shdr),
+                              0);
+    ELF::Ehdr H{};
+    std::memcpy(H.e_ident, ElfMagic, sizeof(ElfMagic) - 1);
+    H.e_ident[EI_CLASS] = ELFCLASS64;
+    H.e_ident[EI_DATA] = ELFDATA2LSB;
+    H.e_ident[EI_VERSION] = EV_CURRENT;
+    H.e_type = ET_DYN;
+    H.e_machine = EM_X86_64;
+    H.e_version = EV_CURRENT;
+    H.e_entry = TextOffset;
+    H.e_phoff = sizeof(H);
+    H.e_ehsize = sizeof(H);
+    H.e_phentsize = sizeof(ELF::Phdr);
+    H.e_phnum = 2;
+    H.e_shoff = SectionsOffset;
+    H.e_shentsize = sizeof(ELF::Shdr);
+    H.e_shnum = DataAddresses ? 7 : 5;
+    H.e_shstrndx = 4;
+    std::array<ELF::Phdr, 2> Segments{};
+    Segments[0].p_type = PT_LOAD;
+    Segments[0].p_flags = PF_R | PF_X;
+    Segments[0].p_filesz = TextOffset + 64;
+    Segments[0].p_memsz = TextOffset + 64;
+    Segments[0].p_align = 0x1000;
+    Segments[1].p_type = PT_LOAD;
+    Segments[1].p_flags = PF_R | PF_W;
+    Segments[1].p_offset = DataOffset;
+    Segments[1].p_vaddr = DataVA;
+    Segments[1].p_paddr = DataVA;
+    Segments[1].p_filesz = 0x200;
+    Segments[1].p_memsz = 0x200;
+    Segments[1].p_align = 0x1000;
+    std::array<ELF::Shdr, 7> Sections{};
+    Sections[1].sh_name = 1;
+    Sections[1].sh_type = SHT_PROGBITS;
+    Sections[1].sh_flags = SHF_ALLOC | SHF_EXECINSTR;
+    Sections[1].sh_addr = TextOffset;
+    Sections[1].sh_offset = TextOffset;
+    Sections[1].sh_size = 64;
+    Sections[1].sh_addralign = 16;
+    Sections[2].sh_name = 7;
+    Sections[2].sh_type = SHT_PROGBITS;
+    Sections[2].sh_flags = SHF_ALLOC | SHF_WRITE;
+    Sections[2].sh_addr = DataVA;
+    Sections[2].sh_offset = DataOffset;
+    Sections[2].sh_size = DataAddresses ? 0x88 : 3 * Stride + sizeof(ELF::Addr);
+    Sections[2].sh_addralign = sizeof(ELF::Addr);
+    Sections[3].sh_name = 13;
+    Sections[3].sh_type = SHT_RELA;
+    Sections[3].sh_flags = SHF_ALLOC;
+    Sections[3].sh_addr = DataVA + RelocOffset - DataOffset;
+    Sections[3].sh_offset = RelocOffset;
+    Sections[3].sh_size =
+        Relocated ? (DataAddresses ? (Barriers ? 3 : 2) : (Barriers ? 7 : 4)) *
+                        sizeof(ELF::Rela)
+                  : 0;
+    Sections[3].sh_addralign = sizeof(ELF::Addr);
+    Sections[3].sh_entsize = sizeof(ELF::Rela);
+    Sections[4].sh_name = 23;
+    Sections[4].sh_type = SHT_STRTAB;
+    Sections[4].sh_offset = NamesOffset;
+    Sections[4].sh_size = sizeof(Names);
+    Sections[4].sh_addralign = 1;
+    if (DataAddresses) {
+      Sections[5].sh_type = SHT_SYMTAB;
+      Sections[5].sh_offset = SymbolsOffset;
+      Sections[5].sh_size = 3 * sizeof(ELF::Sym);
+      Sections[5].sh_link = 6;
+      Sections[5].sh_info = 1;
+      Sections[5].sh_addralign = sizeof(ELF::Addr);
+      Sections[5].sh_entsize = sizeof(ELF::Sym);
+      Sections[6].sh_type = SHT_STRTAB;
+      Sections[6].sh_offset = SymbolNamesOffset;
+      Sections[6].sh_size = sizeof(SymbolNames);
+      Sections[6].sh_addralign = 1;
+      std::array<ELF::Sym, 3> Symbols{};
+      for (unsigned I = 1; I < Symbols.size(); ++I) {
+        Symbols[I].st_name = I == 1 ? 1 : 12;
+        Symbols[I].st_info = (STB_GLOBAL << 4) | STT_FUNC;
+        Symbols[I].st_shndx = 1;
+        Symbols[I].st_value = TextOffset + (I - 1) * 16;
+        Symbols[I].st_size = 16;
+      }
+      std::memcpy(File.data() + SymbolsOffset, Symbols.data(), sizeof(Symbols));
+      std::memcpy(File.data() + SymbolNamesOffset, SymbolNames,
+                  sizeof(SymbolNames));
+    }
+    std::memcpy(File.data(), &H, sizeof(H));
+    std::memcpy(File.data() + H.e_phoff, Segments.data(), sizeof(Segments));
+    std::memcpy(File.data() + SectionsOffset, Sections.data(),
+                sizeof(Sections));
+    std::memcpy(File.data() + NamesOffset, Names, sizeof(Names));
+    std::fill(File.begin() + TextOffset, File.begin() + TextOffset + 64, 0xcc);
+    for (unsigned I = 0; I < 4; ++I) {
+      auto Code = body(I < 2 ? I + 1 : 7);
+      if (DataAddresses && I < 2) {
+        Code.pop_back();
+        Code.insert(Code.end(), {0x48, 0x8d, 0x15}); // lea rdx, [rip + disp32]
+        const uint32_t Displacement =
+            DataVA + I * 0x80 - (TextOffset + I * 16 + Code.size() + 4);
+        for (unsigned Shift = 0; Shift < 32; Shift += 8)
+          Code.push_back(uint8_t(Displacement >> Shift));
+        Code.push_back(0xc3);
+      }
+      std::copy(Code.begin(), Code.end(), File.begin() + TextOffset + I * 16);
+    }
+    const unsigned Order[] = {0, Reordered ? 3u : 2u, 1, Reordered ? 2u : 3u};
+    unsigned RelocationIndex = 0;
+    const auto Add = [&](uint64_t Offset, uint64_t Address) {
+      ELF::Addr Target{};
+      Target = Address;
+      std::memcpy(File.data() + DataOffset + Offset, &Target, sizeof(Target));
+      ELF::Rela R{};
+      R.r_offset = DataVA + Offset;
+      R.r_info = R_X86_64_RELATIVE;
+      R.r_addend = Target;
+      std::memcpy(File.data() + RelocOffset + RelocationIndex++ * sizeof(R), &R,
+                  sizeof(R));
+    };
+    if (DataAddresses) {
+      Add(0x18, TextOffset + (Reordered ? 3 : 2) * 16);
+      Add(0x18 + Stride, TextOffset + (Reordered ? 2 : 3) * 16);
+      if (Barriers)
+        Add(0x10, TextOffset + 1);
+    } else
+      for (unsigned I = 0; I < 4; ++I) {
+        Add(I * Stride, TextOffset + Order[I] * 16);
+        if (Barriers && I + 1 < 4)
+          Add(I * Stride + sizeof(ELF::Addr), TextOffset + 1);
+      }
+    return File;
+  };
+  for (bool DataAddresses : {false, true})
+    for (const auto &[Stride, Barriers] :
+         {std::pair{8u, false}, std::pair{16u, false}, std::pair{56u, false},
+          std::pair{16u, true}})
+      for (bool Relocated : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << DataAddresses << ", " << Stride << ", " << Barriers
+                     << ", " << Relocated);
+        const auto Load = [&](bool Reordered) {
+          const auto Bytes =
+              Image(Reordered, Relocated, Stride, Barriers, DataAddresses);
+          const auto Path =
+              Directory / (std::to_string(Sessions.size()) + ".elf");
+          std::ofstream File(Path, std::ios::binary);
+          File.write(reinterpret_cast<const char *>(Bytes.data()),
+                     Bytes.size());
+          File.close();
+          auto S = neverd_session_create();
+          Sessions.push_back(S);
+          EXPECT_EQ(neverd_session_load(S, Path.string().c_str()), 1)
+              << take(neverd_last_error(S));
+          for (uint64_t Entry : {0x1000, 0x1010, 0x1020, 0x1030}) {
+            if (const char *Attributes = neverd_func_attributes_json(S, Entry))
+              neverd_free_string(Attributes);
+            else
+              EXPECT_EQ(neverd_func_create(S, Entry), 0);
+          }
+          return S;
+        };
+        const auto A = Load(false), B = Load(true);
+        for (bool Reverse : {false, true}) {
+          const auto C = compare(
+              Reverse ? B : A, Reverse ? A : B,
+              DataAddresses ? R"({"discover":false,"use_names":true})"
+                            : R"({"discover":false,"use_names":false})");
+          const auto Before = take(neverd_comparison_export_json(C));
+          auto Report = llvm::json::parse(Before);
+          ASSERT_TRUE(bool(Report));
+          const auto *Matches = Report->getAsObject()->getArray("matches");
+          for (const auto &[P, S] :
+               {std::pair{"0x1020", "0x1030"}, std::pair{"0x1030", "0x1020"}}) {
+            const auto Match = std::find_if(
+                Matches->begin(), Matches->end(), [&](const auto &M) {
+                  return M.getAsObject()->getString("primary") == P &&
+                         M.getAsObject()->getString("secondary") == S;
+                });
+            EXPECT_EQ(Match != Matches->end(), Relocated && !Barriers)
+                << Before;
+            if (Match != Matches->end())
+              EXPECT_EQ(Match->getAsObject()->getString("step"),
+                        DataAddresses ? "data_initializer"
+                                      : "initializer_context");
+          }
+          ASSERT_EQ(neverd_comparison_restore_json(C, Before.c_str()), 1);
+          EXPECT_EQ(take(neverd_comparison_export_json(C)), Before);
+        }
+        if (Relocated && !Barriers) {
+          if (DataAddresses) {
+            const auto Weak =
+                compare(A, B, R"({"discover":false,"use_names":false})");
+            EXPECT_EQ(parsed(neverd_comparison_export_json(Weak))
+                          .getAsObject()
+                          ->getArray("matches")
+                          ->size(),
+                      2u);
+          }
+          for (uint64_t Minimum : {0, DataAddresses ? 2 : 4}) {
+            const auto C = neverd_comparison_create();
+            Comparisons.push_back(C);
+            struct StopContext {
+              neverd_comparison_t Handle;
+              uint64_t Minimum;
+              bool Seen = false;
+              std::thread::id Caller = std::this_thread::get_id();
+            } Stop{C, Minimum};
+            const auto Cancel = [](void *Opaque, const char *Phase,
+                                   neverd_va_t Done, neverd_va_t) {
+              auto &S = *static_cast<StopContext *>(Opaque);
+              EXPECT_EQ(std::this_thread::get_id(), S.Caller);
+              if (std::string_view(Phase) == "primary:initializers" &&
+                  Done >= S.Minimum) {
+                S.Seen = true;
+                neverd_comparison_cancel(S.Handle);
+              }
+            };
+            ASSERT_EQ(neverd_comparison_run(C, A, B, "{}", Cancel, &Stop), 1)
+                << take(neverd_comparison_last_error(C));
+            EXPECT_TRUE(Stop.Seen);
+            const auto Summary = parsed(neverd_comparison_summary_json(C));
+            EXPECT_EQ(Summary.getAsObject()->getString("state"), "cancelled");
+            EXPECT_EQ(Summary.getAsObject()->getString("stopped_phase"),
+                      "initializers");
+            const auto Saved = parsed(neverd_comparison_export_json(C));
+            EXPECT_EQ(Saved.getAsObject()->getObject("primary")->getBoolean(
+                          "discovery_complete"),
+                      true);
+            EXPECT_EQ(Saved.getAsObject()
+                          ->getObject("functions")
+                          ->getArray("primary")
+                          ->size(),
+                      4u);
+            const auto Retry = compare(A, B, "{}");
+            EXPECT_EQ(parsed(neverd_comparison_export_json(Retry))
+                          .getAsObject()
+                          ->getArray("matches")
+                          ->size(),
+                      4u);
+          }
+        }
+      }
+}
+
+TEST_F(BinaryDiffSDK, CompleteLocalCallRolesSurviveCallerLayoutEdits) {
+  const auto Image = [&](bool Secondary) {
+    std::vector<uint8_t> Bytes(0x160, 0xcc);
+    const auto Call = [&](unsigned At, unsigned Target) {
+      Bytes[At] = 0xe8;
+      const uint32_t Displacement = Target - (At + 5);
+      for (unsigned Shift = 0; Shift < 32; Shift += 8)
+        Bytes[At + 1 + Shift / 8] = uint8_t(Displacement >> Shift);
+    };
+    const auto Block = [&](unsigned At, uint8_t Scalar, unsigned Target) {
+      Bytes[At] = 0xbf;
+      Bytes[At + 1] = Scalar;
+      std::fill_n(Bytes.begin() + At + 2, 3, 0);
+      Call(At + 5, Target);
+      Bytes[At + 10] = 0xc3;
+    };
+    Bytes[0] = 0x85;
+    Bytes[1] = 0xff;
+    Bytes[2] = 0x74;
+    Bytes[3] = Secondary ? 0x5c : 0x2c;
+    if (Secondary) {
+      Bytes[4] = 0x85;
+      Bytes[5] = 0xf6;
+      Bytes[6] = 0x74;
+      Bytes[7] = 0x28;
+      Block(8, 22, 0x100);
+      Block(0x30, 11, 0x120);
+      Block(0x60, 99, 0x140);
+    } else {
+      Block(4, 11, 0x100);
+      Block(0x30, 22, 0x120);
+    }
+    for (unsigned Offset : {0x100, 0x120, 0x140}) {
+      const auto Code = body(Offset == 0x140 ? 99 : 7);
+      std::copy(Code.begin(), Code.end(), Bytes.begin() + Offset);
+    }
+    return Bytes;
+  };
+  const auto A = input(Image(false)), B = input(Image(true), 0x8000);
+  for (const auto &[Session, Base] :
+       {std::pair{A, 0x1000u}, std::pair{B, 0x8000u}})
+    for (uint64_t Offset : {0x100, 0x120, 0x140}) {
+      if (const char *Attributes =
+              neverd_func_attributes_json(Session, Base + Offset))
+        neverd_free_string(Attributes);
+      else
+        ASSERT_EQ(neverd_func_create(Session, Base + Offset), 0);
+    }
+  for (bool Reverse : {false, true}) {
+    const auto Options = render(llvm::json::Object{
+        {"discover", false},
+        {"use_names", false},
+        {"overrides", llvm::json::Array{llvm::json::Object{
+                          {"kind", "match"},
+                          {"primary", Reverse ? "0x8000" : "0x1000"},
+                          {"secondary", Reverse ? "0x1000" : "0x8000"}}}}});
+    const auto C = compare(Reverse ? B : A, Reverse ? A : B, Options.c_str());
+    const auto Saved = take(neverd_comparison_export_json(C));
+    auto Document = llvm::json::parse(Saved);
+    ASSERT_TRUE(bool(Document));
+    const auto *Matches = Document->getAsObject()->getArray("matches");
+    ASSERT_TRUE(Matches);
+    for (const auto &[P, S] :
+         {std::pair{"0x1100", "0x8120"}, std::pair{"0x1120", "0x8100"}}) {
+      const auto Match = llvm::find_if(*Matches, [&](const auto &M) {
+        return M.getAsObject()->getString("primary") == (Reverse ? S : P) &&
+               M.getAsObject()->getString("secondary") == (Reverse ? P : S);
+      });
+      ASSERT_NE(Match, Matches->end()) << Saved;
+      EXPECT_EQ(Match->getAsObject()->getString("step"), "block_call_site");
+      EXPECT_EQ(Match->getAsObject()->getBoolean("analysis_complete"), true);
+    }
+    ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1)
+        << take(neverd_comparison_last_error(C));
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Saved);
+    const auto Reject = render(
+        llvm::json::Object{{"kind", "unmatch"},
+                           {"primary", Reverse ? "0x8120" : "0x1100"},
+                           {"secondary", Reverse ? "0x1100" : "0x8120"}});
+    ASSERT_EQ(neverd_comparison_override_json(C, Reject.c_str()), 1);
+    ASSERT_EQ(neverd_comparison_undo(C), 1);
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Saved);
+    ASSERT_EQ(neverd_comparison_redo(C), 1);
+    ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1);
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Saved);
+  }
+}
+
+TEST_F(BinaryDiffSDK, SplitBlockProfilesReopenLegacyMeasurementsExactly) {
+  const auto A = input({0xb8, 17, 0, 0, 0, 0x83, 0xc0, 7, 0xc3});
+  const auto B = input(
+      {0x85, 0xff, 0x74, 8, 0xb8, 17, 0, 0, 0, 0x83, 0xc0, 7, 0xc3}, 0x8000);
+  const auto C = compare(
+      A, B,
+      R"({"discover":false,"overrides":[{"kind":"match","primary":"0x1000","secondary":"0x8000"}]})");
+  const auto Original = take(neverd_comparison_export_json(C));
+  auto Document = llvm::json::parse(Original);
+  ASSERT_TRUE(bool(Document));
+  auto *M = (*Document->getAsObject()->getArray("matches"))[0].getAsObject();
+  ASSERT_TRUE(M);
+  EXPECT_EQ(M->getString("alignment_profile"), "ordered-block-spans-v1");
+  EXPECT_EQ(M->getInteger("equal_instructions"), 3);
+  EXPECT_EQ(M->getNumber("similarity"), 0.5);
+  const auto Page = parsed(neverd_comparison_function_page_json(
+      C, R"({"address":"0x1000","limit":64})"));
+  ASSERT_TRUE(Page.getAsObject()->getArray("rows"));
+  unsigned Equal = 0;
+  for (const auto &Row : *Page.getAsObject()->getArray("rows")) {
+    const auto Kind = Row.getAsObject()->getString("kind");
+    Equal += Kind == "identical" || Kind == "moved";
+  }
+  EXPECT_EQ(Equal, 3u);
+  for (unsigned Case = 0; Case < 3; ++Case) {
+    auto Invalid = llvm::json::parse(Original);
+    ASSERT_TRUE(bool(Invalid));
+    auto *Match =
+        (*Invalid->getAsObject()->getArray("matches"))[0].getAsObject();
+    if (Case == 0)
+      Match->erase("alignment_profile");
+    else
+      (*Match)["alignment_profile"] =
+          Case == 1 ? "unknown-profile" : "paired-blocks-v1";
+    EXPECT_EQ(neverd_comparison_restore_json(C, render(*Invalid).c_str()), 0);
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Original);
+  }
+  // An older report has no recipe field. Its original zero equal instructions
+  // and paired-block score must still be checked against the actual bytes.
+  (*Document->getAsObject())["matcher_version"] = 21;
+  (*Document->getAsObject())["similarity"] = 0.125;
+  M->erase("alignment_profile");
+  (*M)["equal_instructions"] = 0;
+  (*M)["similarity"] = 0.125;
+  (*M)["changes"] =
+      llvm::json::Array{"bytes", "instructions", "blocks", "edges", "entry"};
+  ASSERT_EQ(neverd_comparison_restore_json(C, render(*Document).c_str()), 1)
+      << take(neverd_comparison_last_error(C));
+  const auto Legacy = take(neverd_comparison_export_json(C));
+  const auto LegacyDoc = parsed(neverd_comparison_export_json(C));
+  const auto *LegacyMatch =
+      (*LegacyDoc.getAsObject()->getArray("matches"))[0].getAsObject();
+  EXPECT_EQ(LegacyMatch->getString("alignment_profile"), "paired-blocks-v1");
+  EXPECT_EQ(LegacyMatch->getInteger("equal_instructions"), 0);
+  EXPECT_EQ(LegacyMatch->getNumber("similarity"), 0.125);
+  const auto LegacyPage = parsed(neverd_comparison_function_page_json(
+      C, R"({"address":"0x1000","limit":64})"));
+  Equal = 0;
+  for (const auto &Row : *LegacyPage.getAsObject()->getArray("rows")) {
+    const auto Kind = Row.getAsObject()->getString("kind");
+    Equal += Kind == "identical" || Kind == "moved";
+  }
+  EXPECT_EQ(Equal, 0u);
+  ASSERT_EQ(neverd_comparison_restore_json(C, Legacy.c_str()), 1);
+  EXPECT_EQ(take(neverd_comparison_export_json(C)), Legacy);
+  ASSERT_EQ(
+      neverd_comparison_override_json(
+          C, R"({"kind":"unmatch","primary":"0x1000","secondary":"0x8000"})"),
+      1);
+  ASSERT_EQ(
+      neverd_comparison_override_json(
+          C, R"({"kind":"match","primary":"0x1000","secondary":"0x8000"})"),
+      1);
+  const auto Edited = parsed(neverd_comparison_export_json(C));
+  EXPECT_EQ(
+      (*Edited.getAsObject()->getArray("matches"))[0].getAsObject()->getString(
+          "alignment_profile"),
+      "ordered-block-spans-v1");
+  EXPECT_EQ(
+      (*Edited.getAsObject()->getArray("matches"))[0].getAsObject()->getInteger(
+          "equal_instructions"),
+      3);
+  ASSERT_EQ(neverd_comparison_undo(C), 1);
+  ASSERT_EQ(neverd_comparison_undo(C), 1);
+  EXPECT_EQ(take(neverd_comparison_export_json(C)), Legacy);
+  ASSERT_EQ(neverd_comparison_redo(C), 1);
+  ASSERT_EQ(neverd_comparison_redo(C), 1);
+  ASSERT_EQ(neverd_comparison_restore_json(C, Legacy.c_str()), 1);
+  EXPECT_EQ(take(neverd_comparison_export_json(C)), Legacy);
+  const auto Changed = input(
+      {0x85, 0xff, 0x74, 8, 0xb8, 17, 0, 0, 0, 0x83, 0xc0, 99, 0xc3}, 0x8000);
+  const auto ChangedPair = compare(
+      A, Changed,
+      R"({"discover":false,"overrides":[{"kind":"match","primary":"0x1000","secondary":"0x8000"}]})");
+  const auto ChangedDoc = parsed(neverd_comparison_export_json(ChangedPair));
+  const auto *ChangedMatch =
+      (*ChangedDoc.getAsObject()->getArray("matches"))[0].getAsObject();
+  EXPECT_EQ(ChangedMatch->getInteger("equal_instructions"), 2);
+  ASSERT_TRUE(ChangedMatch->getArray("changes"));
+  EXPECT_TRUE(
+      llvm::any_of(*ChangedMatch->getArray("changes"), [](const auto &V) {
+        return V.getAsString() == "constants";
+      }));
+}
+
+TEST_F(BinaryDiffSDK, OrderedBlockBoundariesDoNotBecomeUnchanged) {
+  const auto A =
+      input({0x85, 0xff, 0x74, 8, 0xb8, 17, 0, 0, 0, 0x83, 0xc0, 7, 0xc3});
+  const auto B = input(
+      {0x85, 0xff, 0x74, 5, 0xb8, 17, 0, 0, 0, 0x83, 0xc0, 7, 0xc3}, 0x8000);
+  const auto C = compare(
+      A, B,
+      R"({"discover":false,"overrides":[{"kind":"match","primary":"0x1000","secondary":"0x8000"}]})");
+  const auto Saved = take(neverd_comparison_export_json(C));
+  auto Doc = llvm::json::parse(Saved);
+  ASSERT_TRUE(bool(Doc));
+  auto *M = (*Doc->getAsObject()->getArray("matches"))[0].getAsObject();
+  ASSERT_TRUE(M);
+  EXPECT_EQ(M->getString("alignment_profile"), "ordered-block-spans-v1");
+  EXPECT_EQ(M->getInteger("equal_instructions"), 5);
+  EXPECT_LT(M->getNumber("similarity").value_or(1), 1);
+  const auto Page = parsed(neverd_comparison_function_page_json(
+      C, R"({"address":"0x1000","limit":64})"));
+  EXPECT_EQ(
+      Page.getAsObject()->getObject("evidence")->getString("change_state"),
+      "changed");
+  EXPECT_EQ(Page.getAsObject()
+                ->getObject("evidence")
+                ->getBoolean("normalized_unchanged"),
+            false);
+  ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1);
+  (*Doc->getAsObject())["matcher_version"] = 22;
+  (*Doc->getAsObject())["similarity"] = 0.9;
+  (*M)["alignment_profile"] = "single-block-spans-v1";
+  (*M)["equal_instructions"] = 4;
+  (*M)["similarity"] = 0.9;
+  (*M)["changes"] = llvm::json::Array{"bytes", "relocation", "instructions"};
+  ASSERT_EQ(neverd_comparison_restore_json(C, render(*Doc).c_str()), 1);
+  const auto Legacy = take(neverd_comparison_export_json(C));
+  const auto OldPage = parsed(neverd_comparison_function_page_json(
+      C, R"({"address":"0x1000","limit":64})"));
+  unsigned Equal = 0;
+  for (const auto &Row : *OldPage.getAsObject()->getArray("rows")) {
+    const auto Kind = Row.getAsObject()->getString("kind");
+    Equal += Kind == "identical" || Kind == "moved";
+  }
+  EXPECT_EQ(Equal, 4u);
+  ASSERT_EQ(neverd_comparison_restore_json(C, Legacy.c_str()), 1);
+  EXPECT_EQ(take(neverd_comparison_export_json(C)), Legacy);
+}
+
 TEST_F(BinaryDiffSDK, DirectCallTargetsArePartOfStrongFunctionIdentity) {
   const auto Image = [&](bool Reordered) {
     std::vector<uint8_t> Bytes(128, 0xcc);
@@ -1138,6 +1730,45 @@ TEST_F(BinaryDiffSDK, UnpairedMOVPRFXCannotReportCompleteSemanticComparison) {
   ASSERT_FALSE(Matches->empty());
   EXPECT_EQ(Matches->front().getAsObject()->getBoolean(kAnalysisComplete),
             false);
+}
+
+TEST_F(BinaryDiffSDK, NoReturnCallsDoNotAcquireLayoutDependentFallthrough) {
+  for (bool AArch64 : {false, true}) {
+    SCOPED_TRACE(AArch64);
+    // A conditional guard can bypass the call and reach the return. The
+    // callee's stated contract, not the next block's position, decides whether
+    // the call also reaches it.
+    const auto Bytes =
+        AArch64 ? words({0x7100001f, 0x54000040, 0x94000002, 0xd65f03c0,
+                         0xd65f03c0})
+                : std::vector<uint8_t>{0x85, 0xff, 0x74, 5,    0xe8, 2,
+                                       0,    0,    0,    0xc3, 0x90, 0xc3};
+    const auto S = input(Bytes, 0x1000, AArch64 ? "aarch64" : "x86_64");
+    const uint64_t Callee = AArch64 ? 0x1010 : 0x100b;
+    ASSERT_EQ(neverd_func_create(S, Callee), 0) << take(neverd_last_error(S));
+    for (bool NoReturn : {true, false, true}) {
+      SCOPED_TRACE(NoReturn);
+      ASSERT_EQ(neverd_func_edit(S, Callee,
+                                 NoReturn ? R"({"noreturn":true})"
+                                          : R"({"noreturn":false})"),
+                0)
+          << take(neverd_last_error(S));
+      const auto C = compare(S, S);
+      const auto Graph = parsed(neverd_comparison_graph_json(
+          C, R"({"side":"primary","address":"0x1000"})"));
+      const auto *Edges = Graph.getAsObject()->getArray("edges");
+      ASSERT_TRUE(Edges) << render(Graph);
+      EXPECT_EQ(Edges->size(), NoReturn ? 2u : 3u) << render(Graph);
+      const auto Detail = parsed(neverd_comparison_function_json(C, 0, 0x1000));
+      const auto *Evidence = Detail.getAsObject()->getObject("evidence");
+      ASSERT_TRUE(Evidence) << render(Detail);
+      EXPECT_EQ(Evidence->getBoolean("analysis_complete"), true);
+      const auto Saved = take(neverd_comparison_export_json(C));
+      const auto Reopened = compare(S, S);
+      EXPECT_EQ(neverd_comparison_restore_json(Reopened, Saved.c_str()), 1);
+      EXPECT_EQ(take(neverd_comparison_export_json(Reopened)), Saved);
+    }
+  }
 }
 
 TEST_F(BinaryDiffSDK, AArch64BranchBitIndexIsNotASecondTargetOperand) {
@@ -2062,6 +2693,85 @@ TEST_F(BinaryDiffSDK, OverlappingCandidatesRemainExactThroughPagingAndEdits) {
   }
 }
 
+TEST_F(BinaryDiffSDK, CandidatePairEvidenceDoesNotBorrowOtherSourcesReasons) {
+  std::vector<uint8_t> Bytes(3 * 16, 0xcc);
+  const auto Code = body(7);
+  for (unsigned I = 0; I < 3; ++I)
+    std::copy(Code.begin(), Code.end(), Bytes.begin() + I * 16);
+  const auto A = input(Bytes), B = input(Bytes, 0x8000);
+  for (auto S : {A, B})
+    ASSERT_GE(neverd_session_discover_functions(S), 3u);
+  const auto C = compare(A, B, R"({"discover":false,"use_names":false})");
+  auto Document = parsed(neverd_comparison_export_json(C));
+  auto *O = Document.getAsObject();
+  ASSERT_TRUE(O->getArray("matches")->empty());
+  const auto Addresses = [](bool Secondary) {
+    return Secondary ? llvm::json::Array{"0x8000", "0x8010", "0x8020"}
+                     : llvm::json::Array{"0x1000", "0x1010", "0x1020"};
+  };
+  // All functions share a broad group; each specific witness concerns one
+  // pair. A candidate's reasons with another source cannot explain this pair.
+  (*O)["ambiguities"] = llvm::json::Array{
+      llvm::json::Object{{"step", "similarity"},
+                         {"primary", Addresses(false)},
+                         {"secondary", Addresses(true)}},
+      llvm::json::Object{{"step", "stack_roles"},
+                         {"primary", llvm::json::Array{"0x1000"}},
+                         {"secondary", llvm::json::Array{"0x8000"}}},
+      llvm::json::Object{{"step", "call_site"},
+                         {"primary", llvm::json::Array{"0x1010"}},
+                         {"secondary", llvm::json::Array{"0x8010"}}}};
+  const auto Saved = render(std::move(Document));
+  ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1);
+  const auto Before = take(neverd_comparison_export_json(C));
+  const auto Check = [&] {
+    for (bool Secondary : {false, true})
+      for (unsigned Source = 0; Source < 2; ++Source)
+        for (unsigned Target = 0; Target < 3; ++Target) {
+          const auto Sources = Addresses(!Secondary);
+          const auto Query = render(llvm::json::Object{
+              {"side", Secondary ? "secondary" : "primary"},
+              {"ambiguous_with", Sources[Source].getAsString()->str()},
+              {"offset", Target},
+              {"limit", 1}});
+          const auto Page =
+              parsed(neverd_comparison_functions_json(C, Query.c_str()));
+          const auto *Items = Page.getAsObject()->getArray("items");
+          ASSERT_TRUE(Items);
+          ASSERT_EQ(Items->size(), 1u);
+          const auto *Evidence =
+              Items->front().getAsObject()->getObject("pair_evidence");
+          ASSERT_TRUE(Evidence) << render(Page);
+          const auto *Steps = Evidence->getArray("steps");
+          ASSERT_TRUE(Steps);
+          std::set<std::string> Actual;
+          for (const auto &Step : *Steps)
+            Actual.insert(Step.getAsString()->str());
+          std::set<std::string> Expected{"similarity"};
+          if (Source == Target)
+            Expected.insert(Source == 0 ? "stack_roles" : "call_site");
+          EXPECT_EQ(Actual, Expected);
+          const auto Explanation = Evidence->getString("explanation");
+          ASSERT_TRUE(Explanation);
+          EXPECT_EQ(Explanation->contains("fixed-frame"),
+                    Source == 0 && Target == 0);
+          EXPECT_EQ(Explanation->contains("call site"),
+                    Source == 1 && Target == 1);
+        }
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Before);
+  };
+  Check();
+  ASSERT_EQ(
+      neverd_comparison_override_json(
+          C, R"({"kind":"match","primary":"0x1000","secondary":"0x8000"})"),
+      1);
+  ASSERT_EQ(neverd_comparison_undo(C), 1);
+  Check();
+  ASSERT_EQ(neverd_comparison_redo(C), 1);
+  ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1);
+  Check();
+}
+
 TEST_F(BinaryDiffSDK, RedoRebuildsCallerDetailsObservationsAndInventory) {
   std::vector<uint8_t> Bytes{0xe8, 0x0b, 0, 0, 0, 0xc3};
   Bytes.resize(16, 0xcc);
@@ -2564,6 +3274,91 @@ TEST_F(BinaryDiffSDK,
                   .value_or(false));
 }
 
+TEST_F(BinaryDiffSDK, InlinedTailCallerCandidatesSurviveEditsAndRestore) {
+  const auto Make = [](bool Merged) {
+    std::vector<uint8_t> Bytes{0xf3, 0x0f, 0x1e, 0xfa}; // endbr64
+    const auto Word = [&](uint32_t Value) {
+      for (unsigned Shift = 0; Shift < 32; Shift += 8)
+        Bytes.push_back(uint8_t(Value >> Shift));
+    };
+    const auto Prelude = [&] {
+      // Unknown global objects move between inputs. Their identity is not
+      // asserted by this candidate evidence.
+      Bytes.insert(Bytes.end(), {0x89, 0x3d}); // mov [rip+disp32], edi
+      Word((Merged ? 0x600 : 0x400) - uint32_t(Bytes.size() + 4));
+      Bytes.insert(Bytes.end(), {0xc7, 0x05}); // mov dword [rip+disp32], 1
+      Word((Merged ? 0x700 : 0x500) - uint32_t(Bytes.size() + 8));
+      Word(1);
+    };
+    if (!Merged) {
+      Prelude();
+      Bytes.push_back(0xe9);
+      Word(0x40 - uint32_t(Bytes.size() + 4));
+      Bytes.resize(0x40, 0xcc);
+      Bytes.insert(Bytes.end(), {0xf3, 0x0f, 0x1e, 0xfa});
+    }
+    Bytes.insert(Bytes.end(), {0xb8, 7, 0, 0, 0});
+    for (unsigned I = 0; I < 18; ++I) {
+      if (Merged && I == 2)
+        Prelude();
+      Bytes.insert(Bytes.end(), {0x83, 0xc0, uint8_t(I + 1)}); // add eax, imm8
+    }
+    Bytes.push_back(0xc3);
+    return Bytes;
+  };
+  const auto Before = input(Make(false)), After = input(Make(true), 0x8000);
+  ASSERT_EQ(neverd_func_create(Before, 0x1040), 0);
+  for (bool Reverse : {false, true}) {
+    SCOPED_TRACE(Reverse);
+    const auto C = compare(Reverse ? After : Before, Reverse ? Before : After,
+                           R"({"discover":false,"use_names":false})");
+    const auto Original = take(neverd_comparison_export_json(C));
+    auto Document = llvm::json::parse(Original);
+    ASSERT_TRUE(bool(Document));
+    ASSERT_TRUE(Document->getAsObject()->getArray("matches"));
+    EXPECT_TRUE(Document->getAsObject()->getArray("matches")->empty());
+    const auto Query =
+        render(llvm::json::Object{{"side", Reverse ? "secondary" : "primary"},
+                                  {"ambiguous_with", "0x8000"},
+                                  {"limit", 10}});
+    const auto Candidates =
+        parsed(neverd_comparison_functions_json(C, Query.c_str()));
+    const auto *Items = Candidates.getAsObject()->getArray("items");
+    ASSERT_TRUE(Items);
+    std::set<std::string> Addresses;
+    for (const auto &Item : *Items)
+      Addresses.insert(
+          Item.getAsObject()->getString("address").value_or("").str());
+    EXPECT_EQ(Addresses, (std::set<std::string>{"0x1000", "0x1040"}));
+    ASSERT_EQ(neverd_comparison_restore_json(C, Original.c_str()), 1)
+        << take(neverd_comparison_last_error(C));
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Original);
+    const auto Override = render(
+        llvm::json::Object{{"kind", "match"},
+                           {"primary", Reverse ? "0x8000" : "0x1000"},
+                           {"secondary", Reverse ? "0x1000" : "0x8000"}});
+    ASSERT_EQ(neverd_comparison_override_json(C, Override.c_str()), 1);
+    const auto Edited = take(neverd_comparison_export_json(C));
+    auto Invalid = llvm::json::parse(Edited);
+    ASSERT_TRUE(bool(Invalid));
+    auto *Accepted = Invalid->getAsObject()->getArray("matches");
+    ASSERT_TRUE(Accepted);
+    ASSERT_EQ(Accepted->size(), 1u);
+    (*(*Accepted)[0].getAsObject())["step"] = "inlined_tail_call";
+    EXPECT_EQ(neverd_comparison_restore_json(C, render(*Invalid).c_str()), 0);
+    EXPECT_NE(take(neverd_comparison_last_error(C))
+                  .find("can only describe ambiguous candidates"),
+              std::string::npos);
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Edited);
+    ASSERT_EQ(neverd_comparison_undo(C), 1);
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Original);
+    ASSERT_EQ(neverd_comparison_redo(C), 1);
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Edited);
+    ASSERT_EQ(neverd_comparison_restore_json(C, Original.c_str()), 1);
+    EXPECT_EQ(take(neverd_comparison_export_json(C)), Original);
+  }
+}
+
 TEST_F(BinaryDiffSDK, LongNativeCallContextSurvivesReorderingAndRestore) {
   const auto Make = [](bool ReverseHelpers) {
     std::vector<uint8_t> Bytes;
@@ -2593,7 +3388,7 @@ TEST_F(BinaryDiffSDK, LongNativeCallContextSurvivesReorderingAndRestore) {
   const auto Saved = take(neverd_comparison_export_json(C));
   const auto Document = parsed(neverd_comparison_export_json(C));
   ASSERT_TRUE(Document.getAsObject());
-  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 9);
+  EXPECT_EQ(Document.getAsObject()->getInteger("matcher_version"), 25);
   const auto *Matches = Document.getAsObject()->getArray("matches");
   ASSERT_TRUE(Matches);
   const std::map<std::string, std::string> Expected = {{"0x3000", "0xa010"},
@@ -3430,6 +4225,79 @@ TEST_F(BinaryDiffSDK, NativeRegionPagesPersistWithoutChangingAcceptedPairs) {
   EXPECT_EQ(take(neverd_comparison_export_json(C)), SavedText);
   auto Without = compare(A, B);
   EXPECT_EQ(neverd_comparison_regions_json(Without, "{}"), nullptr);
+}
+
+TEST_F(BinaryDiffSDK, CallRegionsRebindTargetsAcrossEditsAndRestore) {
+  // Three operations, direct call to +32, three operations, ret; callee at +32.
+  // Each non-call run is too short for the default native region profile.
+  std::vector<uint8_t> Code{0x89, 0xf8, 0x83, 0xc0, 0x03, 0x83, 0xf0, 0x17,
+                            0xe8, 0x13, 0,    0,    0,    0x6b, 0xc0, 0x07,
+                            0x83, 0xc0, 0x09, 0x83, 0xf0, 0x25, 0xc3};
+  Code.resize(32, 0x90);
+  Code.insert(Code.end(), {0x89, 0xf8, 0x83, 0xc0, 11, 0xc3});
+  auto A = input(Code), B = input(Code, 0x8000);
+  auto Legacy = compare(A, B, R"({"regions":true})");
+  auto C = compare(A, B, R"({"regions":{"calls":true}})");
+  auto Old = parsed(neverd_comparison_summary_json(Legacy));
+  EXPECT_EQ(Old.getAsObject()->getObject("regions")->getInteger("anchor_count"),
+            0);
+  auto Summary = parsed(neverd_comparison_summary_json(C));
+  const auto *Regions = Summary.getAsObject()->getObject("regions");
+  EXPECT_EQ(Regions->getString("profile"), "native-call-runs-v1");
+  ASSERT_EQ(Regions->getInteger("anchor_count"), 1);
+  const auto Text = take(neverd_comparison_export_json(C));
+  auto Rows = parsed(neverd_comparison_region_page_json(C, R"({"anchor":0})"));
+  ASSERT_EQ(Rows.getAsObject()->getInteger("total"), 7);
+  const auto *Call = (*Rows.getAsObject()->getArray("rows"))[3].getAsObject();
+  EXPECT_EQ(Call->getObject("primary")->getString("address"), "0x1008");
+  EXPECT_EQ(Call->getObject("secondary")->getString("address"), "0x8008");
+  EXPECT_EQ(Call->getObject("primary")->getString("bytes"), "E813000000");
+  ASSERT_EQ(
+      neverd_comparison_override_json(
+          C, R"({"kind":"unmatch","primary":"0x1020","secondary":"0x8020"})"),
+      1);
+  auto Changed = parsed(neverd_comparison_summary_json(C));
+  EXPECT_EQ(
+      Changed.getAsObject()->getObject("regions")->getInteger("anchor_count"),
+      0);
+  EXPECT_EQ(neverd_comparison_region_page_json(C, R"({"anchor":0})"), nullptr);
+  const auto Edited = take(neverd_comparison_export_json(C));
+  ASSERT_EQ(neverd_comparison_restore_json(C, Edited.c_str()), 1);
+  ASSERT_EQ(neverd_comparison_restore_json(C, Text.c_str()), 1);
+  EXPECT_EQ(
+      render(parsed(neverd_comparison_region_page_json(C, R"({"anchor":0})"))),
+      render(Rows));
+  ASSERT_EQ(
+      neverd_comparison_override_json(
+          C, R"({"kind":"unmatch","primary":"0x1020","secondary":"0x8020"})"),
+      1);
+  ASSERT_EQ(neverd_comparison_undo(C), 1);
+  EXPECT_EQ(
+      render(parsed(neverd_comparison_region_page_json(C, R"({"anchor":0})"))),
+      render(Rows));
+  ASSERT_EQ(neverd_comparison_redo(C), 1);
+  EXPECT_EQ(neverd_comparison_region_page_json(C, R"({"anchor":0})"), nullptr);
+}
+
+TEST_F(BinaryDiffSDK, AArch64CallRegionsKeepNativeCallAndRegisterOperands) {
+  // Three scalar operations on each side of BL; the callee starts at +32.
+  const auto Code = words({0x2a0103e0, 0x11000c00, 0x4a020000, 0x94000005,
+                           0x11002400, 0x4a030000, 0x11004400, 0xd65f03c0,
+                           0x2a0103e0, 0x11002c00, 0xd65f03c0});
+  auto A = input(Code, 0x1000, "aarch64"), B = input(Code, 0x8000, "aarch64");
+  auto C = compare(A, B, R"({"regions":{"calls":true}})");
+  auto Summary = parsed(neverd_comparison_summary_json(C));
+  ASSERT_EQ(
+      Summary.getAsObject()->getObject("regions")->getInteger("anchor_count"),
+      1);
+  auto Rows = parsed(neverd_comparison_region_page_json(C, R"({"anchor":0})"));
+  ASSERT_EQ(Rows.getAsObject()->getInteger("total"), 7);
+  const auto *Call = (*Rows.getAsObject()->getArray("rows"))[3].getAsObject();
+  EXPECT_EQ(Call->getObject("primary")->getString("bytes"), "05000094");
+  EXPECT_EQ(Call->getObject("primary")->getString("address"), "0x100C");
+  const auto Saved = take(neverd_comparison_export_json(C));
+  ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1);
+  EXPECT_EQ(take(neverd_comparison_export_json(C)), Saved);
 }
 
 TEST_F(BinaryDiffSDK, UngroupedRegionEvidenceRemainsPageableAfterBudgetStop) {
@@ -4797,4 +5665,150 @@ TEST_F(BinaryDiffSDK, RestoreCompletionIsIndependentOfTheSavedStopState) {
     ASSERT_EQ(neverd_comparison_undo(C), 1);
     EXPECT_EQ(take(neverd_comparison_export_json(C)), BeforeEdit);
   }
+}
+
+TEST_F(BinaryDiffSDK, ArgumentAccessPagesPreserveNativeRolesGapsAndRestore) {
+  // Initialize a local, pass its address, then return the reloaded value.
+  // A relationship to both the pre-call store and post-call load is observed;
+  // this does not attribute either access to the callee.
+  const auto Bytes = llvm::fromHex(
+      "4883ec1848c744240807000000488d7c2408e80a000000488b4424084883c418c3"
+      "48c70707000000c3");
+  const auto A = input(llvm::ArrayRef(
+      reinterpret_cast<const uint8_t *>(Bytes.data()), Bytes.size()));
+  const auto B =
+      input(llvm::ArrayRef(reinterpret_cast<const uint8_t *>(Bytes.data()),
+                           Bytes.size()),
+            0x8000);
+  const auto C = compare(A, B, R"({"dataflow":true})");
+  const auto Saved = take(neverd_comparison_export_json(C));
+  auto Nodes = parsed(neverd_comparison_dataflow_json(
+      C, R"({"address":"0x1000","kind":"nodes"})"));
+  const auto *NodeRows = Nodes.getAsObject()->getArray("rows");
+  ASSERT_NE(NodeRows, nullptr);
+  int64_t Call = -1;
+  for (const auto &N : *NodeRows)
+    if (N.getAsObject()->getString("opcode") == "CALL")
+      Call = *N.getAsObject()->getInteger("id");
+  ASSERT_GE(Call, 0) << render(Nodes);
+  llvm::json::Object Query{{"kind", "accesses"},
+                           {"address", "0x1000"},
+                           {"call", Call},
+                           {"limit", 1}};
+  const auto Page = [&] {
+    return parsed(neverd_comparison_dataflow_json(
+        C, render(llvm::json::Object(Query)).c_str()));
+  };
+  const auto First = Page();
+  const auto *F = First.getAsObject();
+  ASSERT_EQ(F->getInteger("total"), 2) << render(First);
+  EXPECT_EQ(F->getString("observation_profile"),
+            "med-ssa-argument-accesses-v1");
+  EXPECT_EQ(F->getBoolean("inspection_complete"), true);
+  EXPECT_EQ(F->getString("callee_memory_effects"), "not_proved");
+  EXPECT_EQ(F->getString("execution_order"), "not_assessed");
+  EXPECT_EQ(F->getInteger("next_offset"), 1);
+  const auto *Store = F->getArray("rows")->front().getAsObject();
+  EXPECT_EQ(Store->getInteger("argument"), 0);
+  EXPECT_EQ(Store->getString("address"), "0x1004");
+  EXPECT_EQ(Store->getString("access"), "write");
+  EXPECT_EQ(Store->getBoolean("return_operand_path"), false);
+  Query["offset"] = 1;
+  const auto Second = Page();
+  const auto *Load =
+      Second.getAsObject()->getArray("rows")->front().getAsObject();
+  EXPECT_EQ(Load->getString("address"), "0x1017");
+  EXPECT_EQ(Load->getString("access"), "read");
+  EXPECT_EQ(Load->getBoolean("return_operand_path"), true);
+  EXPECT_EQ(Load->getInteger("access_bytes"), 8);
+  EXPECT_EQ(Second.getAsObject()->getInteger("work"), F->getInteger("work"));
+  Query["offset"] = 0;
+  EXPECT_EQ(render(Page()), render(First));
+  EXPECT_EQ(take(neverd_comparison_export_json(C)), Saved);
+  ASSERT_EQ(neverd_comparison_restore_json(C, Saved.c_str()), 1);
+  EXPECT_EQ(render(Page()), render(First));
+  Query["max_work"] = 1;
+  const auto Limited = Page();
+  EXPECT_EQ(Limited.getAsObject()->getString("state"), "resource_limited");
+  EXPECT_EQ(Limited.getAsObject()->getBoolean("inspection_complete"), false);
+  Query.erase("max_work");
+  EXPECT_EQ(render(Page()), render(First));
+  Query["call"] = 0;
+  EXPECT_EQ(neverd_comparison_dataflow_json(
+                C, render(llvm::json::Object(Query)).c_str()),
+            nullptr);
+  EXPECT_EQ(neverd_comparison_dataflow_json(
+                C, R"({"kind":"nodes","address":"0x1000","call":0})"),
+            nullptr);
+  EXPECT_EQ(take(neverd_comparison_export_json(C)), Saved);
+}
+
+TEST_F(BinaryDiffSDK,
+       AArch64ArgumentAccessesUseRecoveredValuesAndNativeWidths) {
+  // Preserve x19/LR, pass an incoming pointer and return its post-call load.
+  // The current MedIR RETURN operand is LR, not the ABI result x0.
+  const auto Code =
+      words({0xa9bf7bf3, 0xaa0003f3, 0xf900001f, 0x94000004, 0xf9400260,
+             0xa8c17bf3, 0xd65f03c0, 0xd28000e1, 0xf9000001, 0xd65f03c0});
+  const auto A = input(Code, 0x1000, "aarch64");
+  const auto C = compare(A, A, R"({"dataflow":true})");
+  const auto Nodes = parsed(neverd_comparison_dataflow_json(
+      C, R"({"kind":"nodes","address":"0x1000"})"));
+  const auto *Rows = Nodes.getAsObject()->getArray("rows");
+  ASSERT_NE(Rows, nullptr);
+  int64_t Call = -1;
+  for (const auto &N : *Rows)
+    if (N.getAsObject()->getString("opcode") == "CALL")
+      Call = *N.getAsObject()->getInteger("id");
+  ASSERT_GE(Call, 0) << render(Nodes);
+  const auto Query = render(llvm::json::Object{
+      {"kind", "accesses"}, {"address", "0x1000"}, {"call", Call}});
+  const auto Accesses =
+      parsed(neverd_comparison_dataflow_json(C, Query.c_str()));
+  const auto *Observations = Accesses.getAsObject()->getArray("rows");
+  ASSERT_NE(Observations, nullptr);
+  ASSERT_EQ(Observations->size(), 2u) << render(Accesses);
+  const auto *Load = Observations->back().getAsObject();
+  EXPECT_EQ(Load->getString("address"), "0x1010");
+  EXPECT_EQ(Load->getInteger("argument"), 0);
+  EXPECT_EQ(Load->getInteger("access_bytes"), 8);
+  EXPECT_EQ(Load->getBoolean("return_operand_path"), false);
+}
+
+TEST_F(BinaryDiffSDK, AArch64NarrowAddressConstantsRemainUnobserved) {
+  const auto Code = words({0xa9be7bfd, 0x910003fd, 0xf9000bff, 0x910043e0,
+                           0x94000005, 0xf9400be0, 0xa8c27bfd, 0xd65f03c0,
+                           0xd503201f, 0xd28000e1, 0xf9000001, 0xd65f03c0});
+  const auto A = input(Code, 0x1000, "aarch64");
+  const auto C = compare(A, A, R"({"dataflow":true})");
+  const auto Saved = take(neverd_comparison_export_json(C));
+  const auto Nodes = parsed(neverd_comparison_dataflow_json(
+      C, R"({"kind":"nodes","address":"0x1000"})"));
+  const auto *Rows = Nodes.getAsObject()->getArray("rows");
+  ASSERT_NE(Rows, nullptr);
+  int64_t Call = -1;
+  bool NarrowAddress = false;
+  for (const auto &N : *Rows) {
+    const auto *Row = N.getAsObject();
+    if (Row->getString("opcode") == "CALL")
+      Call = *Row->getInteger("id");
+    if (Row->getString("address") == "0x100c" &&
+        Row->getString("opcode") == "INT_ADD") {
+      EXPECT_EQ(Row->getInteger("result_bytes"), 8);
+      ASSERT_EQ(Row->getArray("inputs")->size(), 2u);
+      EXPECT_EQ((*(*Row->getArray("inputs"))[1].getAsArray())[2].getAsInteger(),
+                4);
+      NarrowAddress = true;
+    }
+  }
+  ASSERT_GE(Call, 0);
+  ASSERT_TRUE(NarrowAddress);
+  const auto Query = render(llvm::json::Object{
+      {"kind", "accesses"}, {"address", "0x1000"}, {"call", Call}});
+  const auto Accesses =
+      parsed(neverd_comparison_dataflow_json(C, Query.c_str()));
+  EXPECT_EQ(Accesses.getAsObject()->getInteger("total"), 0);
+  EXPECT_EQ(Accesses.getAsObject()->getString("alias_completeness"),
+            "not_proved");
+  EXPECT_EQ(take(neverd_comparison_export_json(C)), Saved);
 }

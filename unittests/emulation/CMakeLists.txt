@@ -370,6 +370,7 @@ add_neverd_unittest(NeverDWindowsProcessTests
   WindowsModuleTests.cpp
   WindowsLifetimeTests.cpp
   WindowsExportTests.cpp
+  WindowsExportNameTests.cpp
   WindowsDynamicTests.cpp
   WindowsEnvironmentTests.cpp
   WindowsHeapTests.cpp
@@ -384,6 +385,7 @@ add_neverd_unittest(NeverDWindowsProcessTests
   WindowsDeferredTests.cpp
   WindowsSEHTests.cpp
   WindowsContextTests.cpp
+  WindowsTLSCallbacksTests.cpp
   WindowsNativeTestSupport.cpp
   LINK_COMPONENTS EmulationProcess)
 target_include_directories(NeverDWindowsProcessTests PRIVATE

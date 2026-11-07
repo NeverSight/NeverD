@@ -4,6 +4,7 @@ add_neverd_unittest(NeverDBytePatchTests
   PatchJSONTests.cpp
   LINK_COMPONENTS Patch Sigs LibC
 )
+target_compile_features(NeverDBytePatchTests PRIVATE c_std_11)
 
 if(NEVERD_ENABLE_SIMDJSON)
   # Exercise the same reader without acceleration in the default test build.

@@ -13,6 +13,9 @@
 #include "neverd/lift/X86/X86Lifter.h"
 
 #include "X86BitTestUndefined.h"
+#include "X86CompatibilityReturnUndefined.h"
+#include "X86DecimalAdjustAudit.h"
+#include "X86DivisionUndefined.h"
 #include "X86DoubleShiftUndefined.h"
 #include "X86LegacyVectorMoveAudit.h"
 #include "X86LiftADX.h"
@@ -22,13 +25,16 @@
 #include "X86LiftBitCount.h"
 #include "X86LiftDetail.h"
 #include "X86LiftTBM.h"
+#include "X86MultiplyUndefined.h"
 #include "X86NativeStateAudit.h"
 #include "X86OpaqueStateAudit.h"
+#include "X86RegisterMoveUndefined.h"
 #include "X86ShiftUndefined.h"
 #include "X86XaddAudit.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/X86/X86Interrupts.h"
+#include "neverd/lift/X86/X86MpxEncoding.h"
 #include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -580,15 +586,49 @@ bool hasAuditedLegacyIntegerForm(const cs_insn *Insn, Arch TargetArch) {
                : X86.addr_size != 2 && X86.addr_size != 4))
     return false;
   size_t OpcodeOffset = 0;
+  bool Bnd = false;
   while (OpcodeOffset < Insn->size &&
          isLegacyEncodingPrefix(Insn->bytes[OpcodeOffset], Is64Bit)) {
     const uint8_t Prefix = Insn->bytes[OpcodeOffset++];
-    if (Prefix == 0xf0 || Prefix == 0xf2 || Prefix == 0xf3)
+    if (Prefix == 0xf0 || Prefix == 0xf3 || (Prefix == 0xf2 && Bnd))
       return false;
+    Bnd |= Prefix == 0xf2;
   }
   if (OpcodeOffset == Insn->size || hasVexOrEvexEncoding(Insn, Is64Bit) ||
       (Is64Bit && Insn->bytes[OpcodeOffset] == 0xd5))
     return false;
+
+  if (Bnd) {
+    // F2 on these original transfers preserves bounds; it adds no arbitrary
+    // output. Do not admit F2 arithmetic, HLE memory or repeated prefixes.
+    if (x86MpxBranchEffect({Insn->bytes, Insn->size}, TargetArch) !=
+        X86MpxBranch::Preserve)
+      return false;
+    switch (Insn->id) {
+    case X86_INS_CALL:
+    case X86_INS_RET:
+    case X86_INS_JMP:
+    case X86_INS_JE:
+    case X86_INS_JNE:
+    case X86_INS_JA:
+    case X86_INS_JAE:
+    case X86_INS_JB:
+    case X86_INS_JBE:
+    case X86_INS_JG:
+    case X86_INS_JGE:
+    case X86_INS_JL:
+    case X86_INS_JLE:
+    case X86_INS_JS:
+    case X86_INS_JNS:
+    case X86_INS_JO:
+    case X86_INS_JNO:
+    case X86_INS_JP:
+    case X86_INS_JNP:
+      break;
+    default:
+      return false;
+    }
+  }
 
   const uint64_t GeneralRegisterEnd = Is64Bit ? x86reg::RIP : x86reg::R8;
   auto GeneralRegister = [&](x86_reg Reg, unsigned Size) {
@@ -881,6 +921,13 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   if (hasHardwareLockElisionPrefix(Insn, TargetArch == Arch::X64))
     throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
 
+  auto &X86 = Detail->x86;
+  // Capstone can label FF /3 and /5 as CALL/JMP rather than LCALL/LJMP.
+  // Their selector-bearing memory operands still require a far-transfer owner.
+  if (X86.opcode[0] == 0xff &&
+      ((X86.modrm & 0x38) == 0x18 || (X86.modrm & 0x38) == 0x28))
+    throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
+
   // These instructions leave the ordinary call/return domain and have no
   // faithful ordinary-C projection yet. Refuse before publishing any
   // operations, including when permissive lifting was asked for: a NOP or
@@ -888,19 +935,24 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   // returns are the exception: far and interrupt returns (liftControl) and the
   // syscall returns SYSRET/SYSRETQ and SYSEXIT/SYSEXITQ (liftExt /
   // liftLegacyExt) lift to explicit terminal state-transfer intrinsics that
-  // name every cell the transfer reads, so they are not refused here.  SYSENTER
-  // and RSM enter a handler whose target comes from an MSR or SMRAM, not named
-  // operands; those stay refused.  XBEGIN keeps its original abort continuation
-  // as a second exit of its own instruction (liftTransactions).
+  // name their frame/register inputs. SYSENTER has an opaque terminal effect;
+  // only an explicit MSR environment can reconstruct its continuation. RSM
+  // still requires the complete SMRAM save state. XBEGIN keeps its abort
+  // continuation as a second exit of its own instruction (liftTransactions).
   switch (Insn->id) {
-  case X86_INS_SYSENTER:
   case X86_INS_RSM:
+  case X86_INS_UIRET:
+  case X86_INS_ERETS:
+  case X86_INS_ERETU:
+  // Far branches can select a call gate or task and change CPL/SS/SP. Only
+  // the explicit legacy machine-state executor owns that descriptor state.
+  case X86_INS_LCALL:
+  case X86_INS_LJMP:
     throw UnliftedInstruction(Insn->address, Insn->mnemonic, Insn->op_str);
   default:
     break;
   }
 
-  auto &X86 = Detail->x86;
   LiftState S(Insn->address, static_cast<uint16_t>(Insn->size), Ops);
   // Each decoded instruction is one publication transaction. A refused
   // handler may already have computed an address or emitted a partial result.
@@ -1046,43 +1098,7 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   GetPcArmedThisInsn = GetPcPending && Insn->address == GetPcValue;
   GetPcPending = false;
 
-  // Track CQO/CDQ/CWD → IDIV/DIV pattern.
-  unsigned Id = Insn->id;
-  if (Id == X86_INS_CQO) {
-    LastRdxState = RdxState::SignExtRAX;
-    LastRdxSize = 8;
-  } else if (Id == X86_INS_CDQ) {
-    LastRdxState = RdxState::SignExtRAX;
-    LastRdxSize = 4;
-  } else if (Id == X86_INS_CWD) {
-    LastRdxState = RdxState::SignExtRAX;
-    LastRdxSize = 2;
-  } else if (Id != X86_INS_IDIV && Id != X86_INS_DIV) {
-    // Check for XOR RDX,RDX (zero) pattern before invalidating.
-    bool SetZero = false;
-    if (Id == X86_INS_XOR && X86.op_count == 2 &&
-        X86.operands[0].type == X86_OP_REG &&
-        X86.operands[1].type == X86_OP_REG) {
-      auto R0 = mapCapstoneReg(static_cast<x86_reg>(X86.operands[0].reg));
-      auto R1 = mapCapstoneReg(static_cast<x86_reg>(X86.operands[1].reg));
-      if (R0.Offset == x86reg::RDX && R1.Offset == x86reg::RDX) {
-        LastRdxState = RdxState::Zero;
-        // On x86-64, writing a 32-bit register implicitly zeros the upper 32
-        // bits, so XOR EDX,EDX effectively zeros all of RDX.
-        LastRdxSize = (TargetArch == Arch::X64 && R0.Size == 4) ? 8 : R0.Size;
-        SetZero = true;
-      }
-    }
-    if (!SetZero) {
-      for (uint8_t I = 0; I < X86.op_count; ++I) {
-        if (X86.operands[I].type == X86_OP_REG) {
-          auto RI = mapCapstoneReg(static_cast<x86_reg>(X86.operands[I].reg));
-          if (RI.Offset == x86reg::RDX)
-            LastRdxState = RdxState::Unknown;
-        }
-      }
-    }
-  }
+  const unsigned Id = Insn->id;
 
   bool Handled = liftCore(S, Insn, X86) || liftControl(S, Insn, X86) ||
                  liftAtomic(S, Insn, X86) || liftString(S, Insn, X86) ||
@@ -1274,7 +1290,12 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
       Ops.size() > S.OpsStart &&
       (hasAuditedLegacyIntegerForm(Insn, TargetArch) ||
        nativestateaudit::swapgsForm(Insn, TargetArch) ||
-       nativestateaudit::cpuQueryForm(Insn, TargetArch)) &&
+       nativestateaudit::cpuQueryForm(Insn, TargetArch) ||
+       readprefetchaudit::form(Insn, TargetArch) ||
+       (Insn->id == X86_INS_MOVNTDQ &&
+        vectormoveaudit::form(Insn, TargetArch)) ||
+       (Insn->id == X86_INS_SFENCE &&
+        nativestateaudit::memoryFenceForm(Insn, TargetArch))) &&
       opaqueaudit::hasLegacyIntegerBankAudit(Insn->id)) {
     PreservedDraft.Audit = LowPreservedStateAudit::LegacyIntegerV1;
     PreservedDraft.StateSet = LowPreservedStateSet::LegacyIntegerOpaqueV1;
@@ -1332,6 +1353,30 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
             ? bmilogic::matches(
                   Insn, llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
                   EffectsDraft)
+        : ((Id == X86_INS_SYSRET &&
+            nativestateaudit::sysretForm(Insn, TargetArch)) ||
+           (Id == X86_INS_SYSEXIT &&
+            nativestateaudit::fastSystemForm(Insn, TargetArch)))
+            ? compatibilityreturn::matches(
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
+        : registermoveundefined::form(Insn, TargetArch)
+            ? registermoveundefined::matches(
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
+        : multiplyundefined::form(Insn, TargetArch)
+            ? multiplyundefined::matches(
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
+        : divisionundefined::form(Insn, TargetArch)
+            ? divisionundefined::matches(
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
+        : decimaladjust::form(Insn, TargetArch)
+            ? decimaladjust::matches(
+                  Insn, TargetArch,
+                  llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart),
+                  EffectsDraft)
         : Logic ? HasLogicEffect
                 : EffectsDraft.Effects.empty();
     if (!Strict) {
@@ -1341,6 +1386,10 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
                (!hasAuditedLegacyIntegerForm(Insn, TargetArch) &&
                 !vectormoveaudit::form(Insn, TargetArch) &&
                 !nativestateaudit::form(Insn, TargetArch) &&
+                !registermoveundefined::form(Insn, TargetArch) &&
+                !divisionundefined::form(Insn, TargetArch) &&
+                !decimaladjust::form(Insn, TargetArch) &&
+                !multiplyundefined::form(Insn, TargetArch) &&
                 !tbm::form(Insn, TargetArch) &&
                 !bextr::form(Insn, TargetArch) &&
                 !bitcount::form(Insn, TargetArch) &&
@@ -1407,10 +1456,14 @@ bool X86Lifter::isFunctionTerminator(const cs_insn *I) {
   case X86_INS_IRET:
   case X86_INS_IRETD:
   case X86_INS_IRETQ:
+  case X86_INS_UIRET:
+  case X86_INS_ERETS:
+  case X86_INS_ERETU:
   case X86_INS_SYSRET:
   case X86_INS_SYSRETQ:
   case X86_INS_SYSEXIT:
   case X86_INS_SYSEXITQ:
+  case X86_INS_SYSENTER:
   case X86_INS_SKINIT:
     return true;
   case X86_INS_INT:

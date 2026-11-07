@@ -1,0 +1,592 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-05",
+  "scope": "Protected legacy instruction-step TF and ICEBP causes, debug entry and handler return/retry",
+  "global_goal_complete": false,
+  "neverd_source_base": "1320641166472f698c3620d46349a6e3584f7f9e",
+  "integration_base": "b255ccb721091ba41ad470579bc06143262cf77e",
+  "llvm_commit": "1c51c12828cc0d8eb6089ee02614f3f86f2e95f5",
+  "neverc_commit": "785a3dc1b78cd1fc4a738497a91f9416f1fd7d3f",
+  "production_sdk": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "artifact_root": "/mnt/data/neverd-legacy-debug-20261105",
+  "changed_source_sha256": {
+    "docs/architecture.md": "316684cb912481b9933fe869f728aa1fb52a35e3e6c34f427e78faf943e76272",
+    "docs/testing.md": "5128e999e32a26f8810908a4a9eed2f6a82eb853a8ff46b1b492661a94620356",
+    "docs/x86-instruction-support.md": "fb80536d8d251a494ceeb64c8ee3bfbeef8cad3d72ac1d3ee29e107d184a4583",
+    "docs/x86-legacy-segments.md": "b7948a8c6d5dce10ab607ef884f86b326b368a0bd550a697c7454dffaf7dfb37",
+    "include/neverd/translate/X86/X86LegacyExecution.h": "9a387c82245d716e3e1b05ff40366e53497a2eaeee380c680df4bf691cefe013",
+    "lib/translate/X86/X86LegacyExecution.cpp": "1e1829f76931b4e5242b63b815fbf3b54b179372f6fe9b50e2c18bbcd95f471c",
+    "unittests/translate/x86/X86LegacyExecutionTests.cpp": "15910e4a8a52adf6557ba769c3dcaa24f7e9534b77fc16fa88eb1be2b5a6dd9e",
+    "unittests/translate/x86/X86PagingNativeTests.cpp": "e25acfb74cc2712f89e5bfa03ab67ed974880d4e8855ad512d994ddc3f4c23df",
+    "unittests/translate/x86/X86LegacyDebugNativeTests.inc": "26a9cb54af2e8ff596d6c33d8321aa83bcedbff7ff6561ebbaa6f5e14a9590d9",
+    "unittests/translate/x86/X86LegacyDebugTests.inc": "fd5b538d4a1fba59c358f3c9b558aa2056d3d6ba91bdb719c419a98f6984cc43"
+  },
+  "tools_sha256": {
+    "host_clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+    "neverc": "df9dd82278bcf2649a512da46ba0360e4891d124114081c5b14bfdd0d5204911",
+    "native_LLVMCore": "98de01e10b3cb49c11ca842d9f43cfded41ca76dab7dbaade5bd0282dc61c570",
+    "r6_LLVMCore": "48b26dae21d78ad09cc12f54f988ff4fca68ceaccf49fc114249b9326059f297",
+    "private_tmp_helper": "bb37523e352b56e8a66e70660146eb73901e72462aabdfb48612d1acfb0c4000",
+    "no_core_preload": "bd4916ad8693e7189a3be4433787a640071ebce360eea3d42efe2e637293b0ba"
+  },
+  "contract": {
+    "binding": "InstructionStep with matching optional Debug state; DR7=0x400, DEBUGCTL=0, valid DR6 reserved bits, outside transactions. Enabled hardware controls refuse before fetch.",
+    "tf": "Sample instruction-entry TF; POPF/IRET clearing TF still steps, setting TF starts with the next instruction; RF does not suppress instruction stepping.",
+    "shadow": "MOV/POP SS suppresses its own TF cause when it establishes the window; no deferred BS. Consecutive SS load consumes the incoming window; LSS creates none. ICEBP after a real MOV SS keeps its own cause.",
+    "dr6": "Clear inactive B0..B3; set RTM; preserve sticky status. TF sets BS; ICEBP does not. Software INT 1 and faults before completion do not generate a cause.",
+    "continuation": "Publish completion and cause before IDT entry; retain them through failed gates/frames and backing stops. Resume accepted entry without replay. REP unfinished elements save original PC/RF; IRET keeps restored RF.",
+    "native_oracle": "Original KVM instructions, guest debugging disabled, real IDT handlers, final HLT. Compare eight GPRs, six segment caches, EIP/EFLAGS/CR2, DR6/DR7, inhibition and complete 2 MiB RAM, including page tables and partial frames.",
+    "round_trips": "Original #DB handler increments a RAM counter then IRET; original #PF handler repairs a PTE, drops error and IRET before retried load traps. No host-side intermediate repair.",
+    "matrix": {
+      "paging": [
+        "legacy",
+        "PAE"
+      ],
+      "code_bits": [
+        16,
+        32
+      ],
+      "stack_bits": [
+        16,
+        32
+      ],
+      "gate_bits": [
+        16,
+        32
+      ],
+      "cpl": [
+        0,
+        3
+      ],
+      "rf": [
+        false,
+        true
+      ],
+      "dr6": [
+        "0xffff0ff0",
+        "0xffffafff",
+        "0xffffefff",
+        "0xffffeff0"
+      ],
+      "instruction_scenarios": 42,
+      "exception": "DebugStackFault requires CPL3"
+    },
+    "native_cpu": "Intel Core i9-13900H, P cores 2/4 and E core 12; Linux 7.0.0-42-generic",
+    "historical_status_limit": "KVM CPUID exposes no RTM or bus-lock detection. Canonical native inputs have BLD=RTM=1. Incoming BLD=0/RTM=0 on a capable processor is software-only coverage; no native producer claimed."
+  },
+  "integration_note": "Ten existing dev commits were fast-forwarded from the source base before publication; the last two change only unrelated tests outside the qualified targets. All changed implementation/test files retained identical hashes. Rebuilt paging executables are compared with the exact tested binaries; x64 execution uses the integrated pipeline.",
+  "reference": {
+    "title": "Intel SDM revision 093, volume 3 sections 7.8.3, 20.2.3 and 20.3.1.4; volume 2 INT1",
+    "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
+    "volume3_url": "https://cdrdv2.intel.com/v1/dl/getContent/671447",
+    "volume3_sha256": "77919be320f35da2782771ef2cb65a868cf68e62c8f8279f2ca61199cb70d1f8"
+  },
+  "final_totals": {
+    "tests": 1162,
+    "passed": 1160,
+    "failed": 0,
+    "skipped": 2,
+    "new_debug_cpu_comparisons": 42496,
+    "new_debug_round_trips": 3072,
+    "counting_note": "Only the six named checks count. Round trips are a subset of CPU comparisons. Earlier focused and exploratory runs are excluded from totals."
+  },
+  "checks": [
+    {
+      "name": "native-paging-p",
+      "sdk": "native",
+      "core": "2",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-debug-20261105/native-paging-p/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=*",
+        "--gtest_output=json:/mnt/data/neverd-legacy-debug-20261105/native-paging-p/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-debug-20261105/native-paging-p/exports"
+      },
+      "binary_sha256": "adcfa7a8d46afb3693de67edda79f2afc0b853ca61b924646469ca19586a9a60",
+      "exit_code": 0,
+      "seconds": 1621.861,
+      "log_sha256": "d4bbe55b74e79da75aa299b8ba6ac261cceca76323aee01e32a07400fb031c89",
+      "result_sha256": "1d1a0811cf3072807abb405bdb0c37a4914cb80ab511c8290f527262ef162f73",
+      "tests": 527,
+      "failed": 0,
+      "skipped": [
+        "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3"
+      ],
+      "passed": 526,
+      "debug_cpu_comparisons": 10624,
+      "debug_round_trips": 768,
+      "failures": []
+    },
+    {
+      "name": "r6-paging-p",
+      "sdk": "r6",
+      "core": "4",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-debug-20261105/r6-paging-p/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "${NEVERD_WORKTREE}/build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=*",
+        "--gtest_output=json:/mnt/data/neverd-legacy-debug-20261105/r6-paging-p/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-debug-20261105/r6-paging-p/exports"
+      },
+      "binary_sha256": "62475847817a342c8efd453c1471d5c2bff46ac23e7d5b7c7ebb823a8ddbb5a0",
+      "exit_code": 0,
+      "seconds": 1644.65,
+      "log_sha256": "2ca7ccf5016d30589a359b22921652062a775f4483ff26b745a1bab5589b0331",
+      "result_sha256": "6ef91a0479754af8b5825ea940506dc05b0419c8a17cca19f6da901f5dd4f4c0",
+      "tests": 527,
+      "failed": 0,
+      "skipped": [
+        "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3"
+      ],
+      "passed": 526,
+      "debug_cpu_comparisons": 10624,
+      "debug_round_trips": 768,
+      "failures": []
+    },
+    {
+      "name": "canonical-debug-e",
+      "sdk": "native",
+      "core": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-debug-20261105/canonical-debug-e/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyDebug/*",
+        "--gtest_output=json:/mnt/data/neverd-legacy-debug-20261105/canonical-debug-e/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-debug-20261105/canonical-debug-e/exports"
+      },
+      "binary_sha256": "adcfa7a8d46afb3693de67edda79f2afc0b853ca61b924646469ca19586a9a60",
+      "exit_code": 0,
+      "seconds": 70.915,
+      "log_sha256": "72fb6e7998c6aa1a9827debea61221e1274de8e5960edbcd1370322521ed457c",
+      "result_sha256": "30c936fe0c9f238abf18eb338add4c348d0a8bce523f63d7122bb51e132dcb40",
+      "tests": 2,
+      "failed": 0,
+      "skipped": [],
+      "passed": 2,
+      "debug_cpu_comparisons": 10624,
+      "debug_round_trips": 768,
+      "failures": []
+    },
+    {
+      "name": "r6-debug-e",
+      "sdk": "r6",
+      "core": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-debug-20261105/r6-debug-e/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "${NEVERD_WORKTREE}/build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=LegacyDebug/*",
+        "--gtest_output=json:/mnt/data/neverd-legacy-debug-20261105/r6-debug-e/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-debug-20261105/r6-debug-e/exports"
+      },
+      "binary_sha256": "62475847817a342c8efd453c1471d5c2bff46ac23e7d5b7c7ebb823a8ddbb5a0",
+      "exit_code": 0,
+      "seconds": 52.129,
+      "log_sha256": "fcc3c54178d139473fea38f5d93d4277a4435f2a953d16d0c26429ecbfe088f9",
+      "result_sha256": "f15ac5df517ea34ef16c1b8629059847e036c9573df4c05ecf16d355877c5033",
+      "tests": 2,
+      "failed": 0,
+      "skipped": [],
+      "passed": 2,
+      "debug_cpu_comparisons": 10624,
+      "debug_round_trips": 768,
+      "failures": []
+    },
+    {
+      "name": "native-paged",
+      "sdk": "native",
+      "core": "2",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-debug-20261105/native-paged/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*",
+        "--gtest_output=json:/mnt/data/neverd-legacy-debug-20261105/native-paged/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-debug-20261105/native-paged/exports"
+      },
+      "binary_sha256": "d48439edc3dc2f70b3dd2d8cbdbab986c766b472d2a3cd8d211682be77cf35c6",
+      "exit_code": 0,
+      "seconds": 218.674,
+      "log_sha256": "acd0ca24862f8b5663b033ed7ec6a5d0e1abaedade3fdf482064dddff853b1c0",
+      "result_sha256": "f915fd367d740a7efca6a8a787fe8705c7701903a4cf5d459b1f7e1a04be493d",
+      "tests": 52,
+      "failed": 0,
+      "skipped": [],
+      "passed": 52,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    },
+    {
+      "name": "r6-paged",
+      "sdk": "r6",
+      "core": "4",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-legacy-debug-20261105/r6-paged/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "${NEVERD_WORKTREE}/build-x86/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*",
+        "--gtest_output=json:/mnt/data/neverd-legacy-debug-20261105/r6-paged/result.json"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "TMPDIR": "/tmp",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-legacy-debug-20261105/r6-paged/exports"
+      },
+      "binary_sha256": "c8e2e31a8177af3201029077c1cdc8dd00df1690a270d91df08c675f139bcf34",
+      "exit_code": 0,
+      "seconds": 185.973,
+      "log_sha256": "85024723de2aec403542e3c388f7b345b36f329bf7c7e3a53440b42dd3086db2",
+      "result_sha256": "6b66cf68afa17a276f1a12623351ca6983c628fca30d623a68b836de43c5ac07",
+      "tests": 52,
+      "failed": 0,
+      "skipped": [],
+      "passed": 52,
+      "debug_cpu_comparisons": 0,
+      "debug_round_trips": 0,
+      "failures": []
+    }
+  ],
+  "builds": {
+    "native": {
+      "build_receipt_sha256": "73c6a3f2e43bb563587290d2060ebaad3bb0cdce6163cb1be6b69c773fbfbdc7",
+      "receipt": {
+        "status": "success",
+        "started_at": "2026-11-06T06:32:03.419693+00:00",
+        "options": [
+          "--target",
+          "NeverDX86PagingTests",
+          "NeverDX64PagedExecutionTests",
+          "--parallel",
+          "6"
+        ],
+        "scope": "Only the requested build targets and configuration; not all features or tests.",
+        "snapshot": {
+          "schema": 1,
+          "resolved_at": "2026-11-06T06:32:06.092924+00:00",
+          "sources": {
+            "neverd_highway": {
+              "repository": "https://github.com/NeverSight/highway.git",
+              "branch": "master",
+              "commit": "1693ca7926ed12c5520623564e465cff97d93374",
+              "archive": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/third_party/highway/1693ca7926ed12c5520623564e465cff97d93374/source.tar.gz",
+              "sha256": "f5149df5acb77cd9730ed8e5160f2deff0b02fe49cc45443fd396fdb5f0519d2"
+            },
+            "neverd_simdutf": {
+              "repository": "https://github.com/NeverSight/simdutf.git",
+              "branch": "master",
+              "commit": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+              "archive": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/third_party/simdutf/8d82299606e675b50de8dc16fd118aae4b65bfde/source.tar.gz",
+              "sha256": "48e9c9fc33940bcc81cdaec785ce6e21ea20f7b03b7a26bff56abb41d2cf5126"
+            },
+            "neverd_simdjson": {
+              "repository": "https://github.com/NeverSight/simdjson.git",
+              "branch": "master",
+              "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+              "archive": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/third_party/simdjson/edb7016c62efbe6155226896cdba5736307190e3/source.tar.gz",
+              "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d"
+            },
+            "neverd_tbb": {
+              "repository": "https://github.com/NeverSight/oneTBB.git",
+              "branch": "master",
+              "commit": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+              "archive": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/third_party/oneTBB/d26e0502ca39f888c1266cbbf1e2c2226d31e41b/source.tar.gz",
+              "sha256": "98300a443e43d047eabae27d3e30232efe7508b20d8e24a92ff2d54ef511761b"
+            },
+            "neverd_mimalloc": {
+              "repository": "https://github.com/NeverSight/mimalloc.git",
+              "branch": "main3",
+              "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+              "archive": "/mnt/data/neverd-mpx-source-20261031/build-x86-native/third_party/mimalloc/e8e7bc41ce904b4c83fe20e87d93f24d5286315a/source.tar.gz",
+              "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3"
+            }
+          }
+        },
+        "snapshot_sha256": "914a159d2d30f233041a668616e3685ddcd82f31b5f9447f400baf5b4f0e5dc2",
+        "configuration": "Release",
+        "configure_inputs": {
+          "purpose": "configure_inputs",
+          "schema": 1,
+          "sources": {
+            "neverd_highway": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_mimalloc": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_simdjson": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_simdutf": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_tbb": {
+              "selection": "disabled",
+              "used": false
+            }
+          }
+        },
+        "inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "cache_sha256": "47525d2f95f1a2862256d0cda1309689a93d9dda5ce02737e357bd8df0496287",
+        "finished_at": "2026-11-06T06:33:29.770453+00:00"
+      },
+      "paging_binary_sha256": "adcfa7a8d46afb3693de67edda79f2afc0b853ca61b924646469ca19586a9a60",
+      "paged_execution_binary_sha256": "d48439edc3dc2f70b3dd2d8cbdbab986c766b472d2a3cd8d211682be77cf35c6"
+    },
+    "r6": {
+      "build_receipt_sha256": "b7b625a2694e3de378f3fddb0cd7fc02ccb082aee0a3641c0a789bf1f3bbd9b6",
+      "receipt": {
+        "status": "success",
+        "started_at": "2026-11-06T06:33:29.947886+00:00",
+        "options": [
+          "--target",
+          "NeverDX86PagingTests",
+          "NeverDX64PagedExecutionTests",
+          "--parallel",
+          "6"
+        ],
+        "scope": "Only the requested build targets and configuration; not all features or tests.",
+        "snapshot": {
+          "schema": 1,
+          "resolved_at": "2026-11-06T06:33:34.634196+00:00",
+          "sources": {
+            "neverd_highway": {
+              "repository": "https://github.com/NeverSight/highway.git",
+              "branch": "master",
+              "commit": "1693ca7926ed12c5520623564e465cff97d93374",
+              "archive": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/third_party/highway/1693ca7926ed12c5520623564e465cff97d93374/source.tar.gz",
+              "sha256": "f5149df5acb77cd9730ed8e5160f2deff0b02fe49cc45443fd396fdb5f0519d2"
+            },
+            "neverd_simdutf": {
+              "repository": "https://github.com/NeverSight/simdutf.git",
+              "branch": "master",
+              "commit": "8d82299606e675b50de8dc16fd118aae4b65bfde",
+              "archive": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/third_party/simdutf/8d82299606e675b50de8dc16fd118aae4b65bfde/source.tar.gz",
+              "sha256": "48e9c9fc33940bcc81cdaec785ce6e21ea20f7b03b7a26bff56abb41d2cf5126"
+            },
+            "neverd_simdjson": {
+              "repository": "https://github.com/NeverSight/simdjson.git",
+              "branch": "master",
+              "commit": "edb7016c62efbe6155226896cdba5736307190e3",
+              "archive": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/third_party/simdjson/edb7016c62efbe6155226896cdba5736307190e3/source.tar.gz",
+              "sha256": "e4e849bbb16878f8555501cc09bf4a6d90d4a06ccfc67a202a3c030486c3823d"
+            },
+            "neverd_tbb": {
+              "repository": "https://github.com/NeverSight/oneTBB.git",
+              "branch": "master",
+              "commit": "d26e0502ca39f888c1266cbbf1e2c2226d31e41b",
+              "archive": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/third_party/oneTBB/d26e0502ca39f888c1266cbbf1e2c2226d31e41b/source.tar.gz",
+              "sha256": "98300a443e43d047eabae27d3e30232efe7508b20d8e24a92ff2d54ef511761b"
+            },
+            "neverd_mimalloc": {
+              "repository": "https://github.com/NeverSight/mimalloc.git",
+              "branch": "main3",
+              "commit": "e8e7bc41ce904b4c83fe20e87d93f24d5286315a",
+              "archive": "/mnt/data/neverd-sgx-transfer-20261101/build-x86/third_party/mimalloc/e8e7bc41ce904b4c83fe20e87d93f24d5286315a/source.tar.gz",
+              "sha256": "aea4126df4ada4e8f733e2a0f08642a8aabe6c2afc01886a1a9a259c18231ac3"
+            }
+          }
+        },
+        "snapshot_sha256": "e319663e37273619103421aa7b3a2199b900bd633461bff8a2e0b10a41df69dd",
+        "configuration": "Release",
+        "configure_inputs": {
+          "purpose": "configure_inputs",
+          "schema": 1,
+          "sources": {
+            "neverd_highway": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_mimalloc": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_simdjson": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_simdutf": {
+              "selection": "disabled",
+              "used": false
+            },
+            "neverd_tbb": {
+              "selection": "disabled",
+              "used": false
+            }
+          }
+        },
+        "inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "cache_sha256": "1bf7e75ad734ab9e16d7af098d4af139162a75ffe9e75cf6113958ed0a302f80",
+        "finished_at": "2026-11-06T06:34:59.262341+00:00"
+      },
+      "paging_binary_sha256": "62475847817a342c8efd453c1471d5c2bff46ac23e7d5b7c7ebb823a8ddbb5a0",
+      "paged_execution_binary_sha256": "c8e2e31a8177af3201029077c1cdc8dd00df1690a270d91df08c675f139bcf34"
+    }
+  },
+  "diagnostics_sha256": {
+    "unit-first.log": "211d0da4591b746d123f8f425052714009770cf6f4969d11b1920dca09260952",
+    "build-native-debug.log": "43edd387ed16859fbcfdea7e3471e395f9e3d3415b69e7476e8f4edf702ba2b1",
+    "native-debug-roundtrip-p/output.log": "e051628a435f19af9382d3a44af004cc4739974b0c86709efe735b57e5384158",
+    "native-debug-roundtrip-p/receipt.json": "ee7e0014ecf12b25d985dfc30eeef529e080935f86810c046168a15c0eea5f9e",
+    "first-debug-p.log": "376c852d4d32f49547d01de80a659ec8279e0a7eb98b0a7d45e9e858feb141b8",
+    "probe.c": "6e1fa9dca45129380061148a1424f75d995db4ef2a738139f1b205068da5de13",
+    "probe-matches.c": "1183d2c2e61eb17a29a756495b96edf71242e099dd66392ea48b80a4065c7a2e",
+    "probe-matches-p.log": "06e4139e1f88db50e0af2684c7a4634598a4afb1f41f19c3109f6cbae236456e",
+    "probe-bld.c": "2d238cc6199ff6f02c8696b8481b6f1bc9b4a16ecec28bbfd5c5893495b9f4a5",
+    "probe-bld-final-p.log": "d66591e9018f80d0c855f6e0d85800e81a1f651d54f279f944ee6e50b47c079c",
+    "probe-bld-final-e.log": "d66591e9018f80d0c855f6e0d85800e81a1f651d54f279f944ee6e50b47c079c"
+  },
+  "diagnostic_findings": [
+    "The first unit expectation omitted the selector error-code EXT bit for failed #DB entry. Native missing-gate cases confirm the existing event owner; expectation corrected.",
+    "First native fixture compilation omitted owning neverd namespaces; corrected before qualification.",
+    "Expanded raw DR6 injection failed on BLD=0. KVM accepts the stored value, but the original MOV DR6 read forces BLD/RTM to 1 because those capabilities are absent. Canonical matrix inputs replace the invalid native state; historical status retention remains separate software coverage.",
+    "A preliminary injected MOV-SS shadow plus TF yielded KVM_EXIT_FAIL_ENTRY. Qualification uses original MOV SS sequences, not invalid VM-entry state."
+  ],
+  "release": {
+    "published": false,
+    "sdk_pin_changed": false,
+    "llvm_gitlink_changed": false,
+    "remaining": [
+      "general original-state i386 source dispatch",
+      "IA-32e generated-source TF/DR6 binding",
+      "enabled hardware address/data/I/O breakpoints and BTF/GD/task debug producers",
+      "task switching and real/VM86",
+      "software SMM and SGX/AEX/EPCM environments",
+      "other unqualified device, asynchronous and partial-progress contracts"
+    ],
+    "note": "This runtime step binding requires no LLVM or NeverC intrinsic addition. Final LLVM release/pin follows global completion, not this bounded qualification."
+  },
+  "maintenance_checks": {
+    "docs_i18n": {
+      "command": "python3 scripts/check_docs_i18n.py",
+      "exit_code": 0,
+      "markdown_files": 309,
+      "locales": 10
+    },
+    "source_provenance": {
+      "command": "python3 scripts/check_source_provenance.py --history-commits 2",
+      "exit_code": 0
+    },
+    "clang_format": {
+      "version": "22.1.2",
+      "scope": "All six changed C++ source/header/fixture files",
+      "exit_code": 0
+    },
+    "git_diff_check": {
+      "exit_code": 0
+    }
+  },
+  "harness_note": "Each run uses a private /tmp mount. The wrapper sets LD_PRELOAD=/mnt/data/neverd-uiret-20261030/no-core-helper.so to disable host core dumps; neither helper changes guest instruction semantics."
+}

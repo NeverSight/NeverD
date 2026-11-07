@@ -21,6 +21,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/TargetParser/Host.h"
@@ -29,6 +30,7 @@
 #include <climits>
 #include <cstring>
 #include <iterator>
+#include <tuple>
 
 #ifndef NEVERD_SHA256_PORTABLE
 #if (defined(__aarch64__) || defined(_M_ARM64)) && !defined(__AARCH64EB__)
@@ -304,6 +306,27 @@ constexpr size_t tailBlocks(size_t Rest) {
   return llvm::divideCeil(Rest + sizeof(MessageEnd) + LengthBytes, BlockBytes);
 }
 
+/// The digest \p State gives once \p Rest bytes of the message's last block
+/// at \p Last and its length of \p Length bytes are padded and compressed.
+std::array<uint8_t, 32> finish(uint32_t *State, const uint8_t *Last,
+                               size_t Rest, uint64_t Length) {
+  uint8_t Tail[tailBlocks(BlockBytes - 1) * BlockBytes] = {};
+  if (Rest != 0)
+    std::memcpy(Tail, Last, Rest);
+  Tail[Rest] = MessageEnd;
+  const size_t TailBytes = tailBlocks(Rest) * BlockBytes;
+  llvm::support::endian::write64be(Tail + TailBytes - LengthBytes,
+                                   Length * CHAR_BIT);
+  compress(State, Tail, TailBytes / BlockBytes);
+
+  std::array<uint8_t, 32> Digest;
+  static_assert(sizeof(Digest) == StateWords * WordBytes,
+                "the digest is the final state, big-endian");
+  for (size_t I = 0; I != StateWords; ++I)
+    llvm::support::endian::write32be(Digest.data() + I * WordBytes, State[I]);
+  return Digest;
+}
+
 std::array<uint8_t, 32> sha256WithExtensions(llvm::ArrayRef<uint8_t> Data,
                                              const LoadProgress &Progress) {
   uint32_t State[StateWords];
@@ -323,22 +346,9 @@ std::array<uint8_t, 32> sha256WithExtensions(llvm::ArrayRef<uint8_t> Data,
     }
   }
 
-  uint8_t Tail[tailBlocks(BlockBytes - 1) * BlockBytes] = {};
-  const size_t Rest = Data.size() % BlockBytes;
-  if (Rest != 0)
-    std::memcpy(Tail, Data.data() + Blocks * BlockBytes, Rest);
-  Tail[Rest] = MessageEnd;
-  const size_t TailBytes = tailBlocks(Rest) * BlockBytes;
-  llvm::support::endian::write64be(Tail + TailBytes - LengthBytes,
-                                   static_cast<uint64_t>(Data.size()) *
-                                       CHAR_BIT);
-  compress(State, Tail, TailBytes / BlockBytes);
-
-  std::array<uint8_t, 32> Digest;
-  static_assert(sizeof(Digest) == sizeof(State),
-                "the digest is the final state, big-endian");
-  for (size_t I = 0; I != StateWords; ++I)
-    llvm::support::endian::write32be(Digest.data() + I * WordBytes, State[I]);
+  const auto Digest =
+      finish(State, Data.data() + Blocks * BlockBytes, Data.size() % BlockBytes,
+             static_cast<uint64_t>(Data.size()));
   Progress.report("hash", Data.size(), Data.size());
   return Digest;
 }
@@ -357,6 +367,68 @@ bool detail::sha256UsesHardware() {
 
 std::array<uint8_t, 32> sha256(llvm::ArrayRef<uint8_t> Data) {
   return sha256(Data, {});
+}
+
+SHA256Stream::SHA256Stream() { start(); }
+
+SHA256Stream::~SHA256Stream() = default;
+
+void SHA256Stream::start() {
+  PendingBytes = 0;
+  Length = 0;
+#ifdef NEVERD_SHA_EXTENSIONS
+  static_assert(std::tuple_size_v<decltype(State)> == StateWords &&
+                std::tuple_size_v<decltype(Pending)> == BlockBytes);
+  if (detail::sha256UsesHardware()) {
+    llvm::copy(InitialState, State.begin());
+    return;
+  }
+#endif
+  Portable = std::make_unique<llvm::SHA256>();
+}
+
+void SHA256Stream::update(llvm::ArrayRef<uint8_t> Data) {
+  if (Portable) {
+    Portable->update(Data);
+    return;
+  }
+#ifdef NEVERD_SHA_EXTENSIONS
+  Length += Data.size();
+  if (PendingBytes != 0) {
+    const size_t Taken = std::min(BlockBytes - PendingBytes, Data.size());
+    std::memcpy(Pending.data() + PendingBytes, Data.data(), Taken);
+    PendingBytes += Taken;
+    Data = Data.drop_front(Taken);
+    if (PendingBytes != BlockBytes)
+      return;
+    compress(State.data(), Pending.data(), 1);
+    PendingBytes = 0;
+  }
+  const size_t Blocks = Data.size() / BlockBytes;
+  if (Blocks != 0)
+    compress(State.data(), Data.data(), Blocks);
+  Data = Data.drop_front(Blocks * BlockBytes);
+  if (!Data.empty())
+    std::memcpy(Pending.data(), Data.data(), Data.size());
+  PendingBytes = Data.size();
+#endif
+}
+
+std::array<uint8_t, 32> SHA256Stream::final() {
+  if (Portable) {
+    const auto Digest = Portable->final();
+    Portable.reset();
+    start();
+    return Digest;
+  }
+#ifdef NEVERD_SHA_EXTENSIONS
+  const auto Digest =
+      finish(State.data(), Pending.data(), PendingBytes, Length);
+  start();
+  return Digest;
+#else
+  llvm_unreachable("a stream without the extensions hashes portably");
+#endif
 }
 
 std::array<uint8_t, 32> sha256(llvm::ArrayRef<uint8_t> Data,

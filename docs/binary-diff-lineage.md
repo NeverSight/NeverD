@@ -133,6 +133,7 @@ is refused. All pages return `items`, `total`, `offset`, nullable `next_offset`,
 | `decisions`, `ambiguities`, `warnings`, `native_regions`, `flow_regions` | `report` |
 | `ambiguity_primary`, `ambiguity_secondary` | `report`, ambiguity `index` |
 | `native_region_anchors`, `flow_region_anchors` | `report`, hypothesis `index` |
+| `native_anchors`, `flow_anchors` | `report`; all saved spans, including unclassified evidence |
 | `releases` | Optional `version`, `search`, or exact release ID `focus` |
 | `release_parents`, `release_children` | `release` ID |
 
@@ -299,3 +300,7 @@ bytes, snapshot identities, decisions and assessment histories are unchanged.
 This profile does not complete the [advanced acceptance map](binary-diff-acceptance.md).
 Package-wide graphs, automated patch/backport/revert evidence,
 and independent large-corpus quality/latency qualification remain separate work.
+
+The summary advertises `supports_all_region_anchors: true` when these all-span
+queries are available. Desktop clients use this capability before requesting
+them; older engines retain their existing source-evidence pages.

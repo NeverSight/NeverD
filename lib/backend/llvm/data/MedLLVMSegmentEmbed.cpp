@@ -106,6 +106,30 @@ static bool segmentHoldsSlot(const Segment &S, const Slots &Ordered) {
     return S.contains(It->first);
 }
 
+/// Whether read-only \p Next follows \p Prev across only alignment padding
+/// (kMaxRodataRunPaddingBytes) that no other segment of \p Img maps, so one
+/// embedded run may hold both.  Overflowing ranges never join.
+static bool separatedOnlyByPadding(const BinaryImage &Img, const Segment *Prev,
+                                   const Segment *Next) {
+  constexpr uint64_t Max = std::numeric_limits<uint64_t>::max();
+  if (Prev->Data.size() > Max - Prev->VA)
+    return false;
+  const uint64_t PrevEnd = Prev->VA + static_cast<uint64_t>(Prev->Data.size());
+  if (Next->VA < PrevEnd ||
+      Next->VA - PrevEnd > limits::kMaxRodataRunPaddingBytes)
+    return false;
+  for (const Segment &Other : Img.Segments) {
+    const uint64_t Extent = std::max<uint64_t>(
+        Other.Size, static_cast<uint64_t>(Other.Data.size()));
+    if (&Other == Prev || &Other == Next || Extent == 0)
+      continue;
+    const uint64_t OtherEnd = Extent > Max - Other.VA ? Max : Other.VA + Extent;
+    if (Other.VA < Next->VA && OtherEnd > PrevEnd)
+      return false;
+  }
+  return true;
+}
+
 static bool collectRodataRun(const BinaryImage *Img, uint64_t SegVA,
                              std::vector<const Segment *> &Run,
                              uint64_t &RunStart, uint64_t &RunEnd) {
@@ -116,10 +140,11 @@ static bool collectRodataRun(const BinaryImage *Img, uint64_t SegVA,
     return false;
 
   // Collect read-only, non-executable segments that carry data, sorted by VA.
+  // Mapped headers are `__ImageBase`, never part of a copied run.
   std::vector<const Segment *> Ro;
   for (const auto &S : Img->Segments)
     if (S.isReadable() && !S.isWritable() && !S.isExecutable() &&
-        !S.Data.empty())
+        !S.Data.empty() && !Img->imageBaseOffset(S.VA))
       Ro.push_back(&S);
   std::sort(Ro.begin(), Ro.end(),
             [](const Segment *A, const Segment *B) { return A->VA < B->VA; });
@@ -133,9 +158,10 @@ static bool collectRodataRun(const BinaryImage *Img, uint64_t SegVA,
   if (Idx == Ro.size())
     return false;
 
-  // Extend over neighbours separated only by a small alignment gap; a larger
-  // gap means a distinct region that must not be merged. Reject overflowing
-  // segment ranges rather than letting their wrapped end look adjacent.
+  // Extend over neighbours separated only by alignment padding; a larger gap,
+  // or another segment in it, means a distinct region that must not be merged.
+  // Reject overflowing segment ranges rather than letting their wrapped end
+  // look adjacent.
   auto endOf = [](const Segment *S, uint64_t &End) {
     if (S->Data.size() > std::numeric_limits<uint64_t>::max() - S->VA)
       return false;
@@ -143,9 +169,7 @@ static bool collectRodataRun(const BinaryImage *Img, uint64_t SegVA,
     return true;
   };
   auto adjacent = [&](const Segment *Prev, const Segment *Next) {
-    uint64_t PrevEnd = 0;
-    return endOf(Prev, PrevEnd) && Next->VA >= PrevEnd &&
-           Next->VA - PrevEnd <= 16;
+    return separatedOnlyByPadding(*Img, Prev, Next);
   };
   size_t Lo = Idx, Hi = Idx;
   while (Lo > 0 && adjacent(Ro[Lo - 1], Ro[Lo]))
@@ -262,7 +286,8 @@ bool MedLLVMEmitter::isMutableDataSeg(const Segment *S) const {
     return false;
   // Some formats retain writable loader flags on relocated pointer tables that
   // become immutable after fixups; pointer-table machinery owns those ranges.
-  if (section_names::isReadOnlyAfterRelocSectionName(S->Name))
+  if (Img ? Img->readOnlyAfterRelocations(S->VA, S->Size)
+          : S->ReadOnlyAfterRelocations)
     return false;
   if (!Img)
     return true;
@@ -308,9 +333,10 @@ llvm::Constant *MedLLVMEmitter::tryResolveDirectDataBytes(uint64_t Addr,
   // Shards must choose the same storage for a segment even if a different
   // shard takes its address. Keep their existing whole-run contract; local
   // mirrors below can instead rebind all earlier uses when demand expands.
+  // A header byte is never copied: the headers are `__ImageBase`.
   if (!Img || !Size || MergeableGlobals ||
       (OriginalImageStorageForSource && !Img->IsRelocatable) ||
-      (Addr == 0 && OwnerVA == InvalidVA))
+      (Addr == 0 && OwnerVA == InvalidVA) || Img->imageBaseOffset(Addr))
     return nullptr;
   ensureImportStorageSnapshot();
   const Segment *Seg = Img->getSegmentFor(Addr);
@@ -479,8 +505,8 @@ void MedLLVMEmitter::rebindDirectDataBytes(llvm::Constant *Mirror,
 
 bool MedLLVMEmitter::isReadOnlyAfterReloc(const Segment *S) const {
   return S && S->isReadable() && !S->isExecutable() && !S->Data.empty() &&
-         (!S->isWritable() || S->ReadOnlyAfterRelocations ||
-          section_names::isReadOnlyAfterRelocSectionName(S->Name));
+         (Img ? Img->readOnlyAfterRelocations(S->VA, S->Size)
+              : !S->isWritable() || S->ReadOnlyAfterRelocations);
 }
 
 std::pair<llvm::Constant *, uint64_t>
@@ -514,22 +540,15 @@ bool MedLLVMEmitter::isMaterializableReadOnlyDataAddress(uint64_t VA) const {
       VA - Seg->VA >= Seg->Data.size())
     return false;
 
-  // A format-native section is finer provenance than its load segment.  In a
-  // linked ELF, lld can place `.data.rel.ro` in an ordinary writable PT_LOAD
-  // together with unrelated sections; the segment name/permissions therefore
-  // cannot express the post-relocation immutability of this exact address.
-  // Mach-O has the inverse coarse-layout case: read-only data can share the
-  // executable __TEXT segment.  Accept exact readable, non-executable section
-  // evidence when the enclosing segment is too coarse, including writable
-  // RELRO sections that become immutable after the dynamic loader fixes them.
+  // A data section can share an executable mapping, and an exact RELRO range
+  // can share a writable mapping. Keep data ownership separate from the
+  // loader's address-specific protection proof.
   bool HasReadOnlySectionEvidence = false;
   if (const Section *Sec = Img->getSectionFor(VA))
     HasReadOnlySectionEvidence =
         Sec->isReadable() &&
         (Img->isMachO() ? !Img->isCodeAddress(VA) : !Sec->isExecutable()) &&
-        (!Sec->isWritable() ||
-         section_names::isReadOnlyAfterRelocSectionName(Sec->Name) ||
-         section_names::isReadOnlyAfterRelocSectionName(Sec->SegmentName));
+        Img->readOnlyAfterRelocations(VA, 1);
   if (Seg->isWritable() && !isReadOnlyAfterReloc(Seg) &&
       !HasReadOnlySectionEvidence)
     return false;
@@ -554,13 +573,10 @@ bool MedLLVMEmitter::isMaterializableReadOnlyDataAddress(
 
   bool HasReadOnlySectionEvidence = false;
   if (OwnerSec)
-    HasReadOnlySectionEvidence =
-        OwnerSec->isReadable() &&
-        (Img->isMachO() ? !Img->isCodeAddress(OwnerVA)
-                        : !OwnerSec->isExecutable()) &&
-        (!OwnerSec->isWritable() ||
-         section_names::isReadOnlyAfterRelocSectionName(OwnerSec->Name) ||
-         section_names::isReadOnlyAfterRelocSectionName(OwnerSec->SegmentName));
+    HasReadOnlySectionEvidence = OwnerSec->isReadable() &&
+                                 (Img->isMachO() ? !Img->isCodeAddress(OwnerVA)
+                                                 : !OwnerSec->isExecutable()) &&
+                                 Img->readOnlyAfterRelocations(OwnerVA, 1);
   if (OwnerSeg->isWritable() && !isReadOnlyAfterReloc(OwnerSeg) &&
       !HasReadOnlySectionEvidence)
     return false;
@@ -579,7 +595,7 @@ void MedLLVMEmitter::readOnlyAfterRelocRun(const Segment *Seg,
     return;
   std::vector<const Segment *> RO;
   for (const auto &S : Img->Segments)
-    if (isReadOnlyAfterReloc(&S))
+    if (isReadOnlyAfterReloc(&S) && !Img->imageBaseOffset(S.VA))
       RO.push_back(&S);
   std::sort(RO.begin(), RO.end(),
             [](const Segment *A, const Segment *B) { return A->VA < B->VA; });
@@ -591,9 +607,8 @@ void MedLLVMEmitter::readOnlyAfterRelocRun(const Segment *Seg,
     }
   if (Idx == RO.size())
     return;
-  auto adjacent = [](const Segment *P, const Segment *N) {
-    uint64_t PEnd = P->VA + P->Data.size();
-    return N->VA >= PEnd && N->VA - PEnd <= 16;
+  auto adjacent = [&](const Segment *P, const Segment *N) {
+    return separatedOnlyByPadding(*Img, P, N);
   };
   size_t Lo = Idx, Hi = Idx;
   while (Lo > 0 && adjacent(RO[Lo - 1], RO[Lo]))
@@ -635,7 +650,8 @@ MedLLVMEmitter::completePointerMirrorRun(uint64_t VA) const {
 }
 
 bool MedLLVMEmitter::addrInCodePtrMirrorRun(uint64_t VA) const {
-  if (!Img)
+  // The headers' ImageBase slot is no mirror: the headers are `__ImageBase`.
+  if (!Img || Img->imageBaseOffset(VA))
     return false;
   const Segment *Seg = Img->getSegmentFor(VA);
   // Keep this ownership predicate in lockstep with

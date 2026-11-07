@@ -806,7 +806,7 @@ Scratch recovery is demand-driven: the Solana CPI/PDA scratch fixed point is
 constructed only when a real scratch consumer exists; programs without such a
 consumer skip the whole-CFG fixed point. `SBFAnalysisLimits.def` defines host
 analysis policy, not protocol limits: `MaxModeledScratchBytes` is 1,024 bytes
-per program point and `ScratchFlowRetainedByteBudget` is an 8,388,608-byte
+per program point and `ScratchFlowRetainedByteBudget` is a 16,777,216-byte
 logical retained estimate. When the retained budget is exceeded, recovery
 widens explicitly to `ScratchRecoveryPrecision::BlockLocal`. It discards only
 cross-block must-facts; block-local replay remains sound and can still recover

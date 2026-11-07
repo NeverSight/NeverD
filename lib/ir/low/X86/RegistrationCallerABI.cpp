@@ -5,7 +5,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "RegistrationABIPrivate.h"
+#include "RegistrationCRTFrame.h"
 #include "RegistrationJumpRuntime.h"
+#include "RegistrationSourceCall.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
@@ -51,13 +53,17 @@ bool hasRegistrationCallFrameABI(
       if (!Reachability.emplace(State.BlockId, &State).second)
         return false;
   }
-  if (States && States->CxxPrologue &&
+  if (States && (States->CxxPrologue || States->SEH4Prologue) &&
       !chargeCalleeWork(Work,
                         Function.Blocks.size() + States->ChainAccesses.size()))
     return false;
   const auto SharedEntry =
       getCheckedX86RegistrationCxxPrologueCall(Image, Function);
   if (States && States->CxxPrologue && !SharedEntry)
+    return false;
+  const auto SharedSEHEntry =
+      getCheckedX86RegistrationSEH4PrologueCall(Image, Function);
+  if (States && States->SEH4Prologue && !SharedSEHEntry)
     return false;
   std::set<va_t> Targets;
   std::map<va_t, uint32_t> ScalarMemberPops;
@@ -96,6 +102,19 @@ bool hasRegistrationCallFrameABI(
             continue;
         }
       }
+      if (SharedSEHEntry) {
+        if (Block.StartAddr == Function.Entry &&
+            Block.EndAddr == SharedSEHEntry->Caller.End &&
+            &Op == &Block.Ops.back() && Op.Addr == SharedSEHEntry->CallVA &&
+            Op.Seq == States->SEH4Prologue->OpSeq)
+          continue;
+        if (&Op == &Block.Ops.back()) {
+          if (!chargeCalleeWork(Work, States->ChainAccesses.size()))
+            return false;
+          if (getCheckedX86RegistrationSEH4EpilogueCall(Image, Function, Block))
+            continue;
+        }
+      }
       if (States && States->Complete && States->CallbackStatesComplete &&
           States->RegistrationLifetimeComplete &&
           States->SEHLocalUnwindsComplete) {
@@ -126,7 +145,12 @@ bool hasRegistrationCallFrameABI(
         if (Bound != States->SEHBoundCalls.end()) {
           const bool Imported = Bound->CalleeKind !=
                                 RegistrationSEHBoundCall::Kind::PreservedHelper;
-          if (Op.Opcode != (Imported ? NdOp::INDIR_CALL : NdOp::CALL) ||
+          const bool ControlFP =
+              Bound->CalleeKind == RegistrationSEHBoundCall::Kind::ControlFP;
+          if ((ControlFP
+                   ? !registration_state::isCheckedControlFPCall(Image, Op,
+                                                                 Work)
+                   : Op.Opcode != (Imported ? NdOp::INDIR_CALL : NdOp::CALL)) ||
               Op.NumInputs != 1 || !Op.Inputs[0].isConst() ||
               Op.Inputs[0].Size != 4 || Bound->TargetVA != Op.Inputs[0].Offset)
             return false;
@@ -144,16 +168,12 @@ bool hasRegistrationCallFrameABI(
           const auto Success = coff_loader::getCheckedX86CookieCheckSuccessPath(
               Image, States->CookieCheckVA);
           if (States->CookieCheckVA != Op.Inputs[0].Offset || !Success ||
-              Success->SecurityCookieVA != States->SecurityCookieVA ||
-              !chargeCalleeWork(Work, Block.InstructionBoundaries.size()))
+              Success->SecurityCookieVA != States->SecurityCookieVA)
             return false;
-          const auto Boundary =
-              llvm::find_if(Block.InstructionBoundaries, [&](const auto &B) {
-                return B.Address == Op.Addr;
-              });
-          if (Boundary == Block.InstructionBoundaries.end() ||
-              Boundary->Control != LowInstructionControl::Call ||
-              Op.Addr + Boundary->Size != Cookie->EndAddress)
+          const auto *Boundary =
+              registration_state::checkedRegistrationDirectCall(Image, Function,
+                                                                Op, Work);
+          if (!Boundary || Op.Addr + Boundary->Size != Cookie->EndAddress)
             return false;
           // The exact cookie receipt replaces an ordinary callee-frame
           // effect. Its successful path preserves the source registers.
@@ -362,6 +382,18 @@ bool hasRegistrationCallFrameABI(
           Effects.CallerPCWrites.emplace(Write.Begin, Write.End);
         continue;
       }
+    if (UseReachability)
+      if (const auto Parent =
+              getCheckedX86RegistrationCxxCalleeABI(Image, Target, &Work)) {
+        if (!chargeCalleeWork(Work, Parent->ImageReads.size() +
+                                        Parent->ImageWrites.size()))
+          return false;
+        for (const auto &Read : Parent->ImageReads)
+          Effects.Reads.emplace(Read.Begin, Read.End);
+        for (const auto &Write : Parent->ImageWrites)
+          Effects.Writes.emplace(Write.Begin, Write.End);
+        continue;
+      }
     const LowFunc Callee =
         Builder.buildIntegerFrameProof(Image, Decoder, Target, "abi-callee");
     if (Callee.CalleePopBytes || !Callee.hasCompleteLiftCoverage() ||
@@ -386,7 +418,7 @@ bool hasRegistrationCallFrameABI(
         if (Image.findImportAt(Next)) {
           // Dispatch intentionally consumes the live registration chain.
           // Other opaque APIs need a separate frame-observation contract.
-          if (!registration_abi::checkedRegistrationImportStackPop(Image, Next))
+          if (!registration_abi::isCheckedRegistrationRaiseSlot(Image, Next))
             return false;
           continue;
         }
@@ -510,9 +542,24 @@ std::optional<uint16_t> getCheckedX86RegistrationCxxParentABI(
     std::vector<ExceptionAddressRange> *CallerPCWrites) {
   if (CallerPCWrites)
     CallerPCWrites->clear();
-  const auto Pop = registration_abi::parentPopBytes(Function, Image);
-  if (!Pop || !hasRegistrationCallFrameABI(Function, Image, CallerPCWrites))
+  if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->Cxx)
     return std::nullopt;
-  return Pop;
+  const auto Entry = registration_abi::parentEntryABI(Function, Image);
+  if (!Entry || !hasRegistrationCallFrameABI(Function, Image, CallerPCWrites))
+    return std::nullopt;
+  return Entry->PopBytes;
+}
+
+std::optional<uint16_t> getCheckedX86RegistrationSEHParentABI(
+    const LowFunc &Function, const BinaryImage &Image,
+    std::vector<ExceptionAddressRange> *CallerPCWrites) {
+  if (CallerPCWrites)
+    CallerPCWrites->clear();
+  if (!Function.ExceptionMetadata || Function.ExceptionMetadata->Cxx)
+    return std::nullopt;
+  const auto Entry = registration_abi::parentEntryABI(Function, Image);
+  if (!Entry || !hasRegistrationCallFrameABI(Function, Image, CallerPCWrites))
+    return std::nullopt;
+  return Entry->PopBytes;
 }
 } // namespace neverd

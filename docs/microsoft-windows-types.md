@@ -102,6 +102,10 @@ check. Explicit conventions take precedence, variadic functions use `cdecl`,
 and rendered callbacks and prototypes carry their conventions explicitly.
 An empty pragma resets the source default; it never leaks into another parse.
 User libraries and 64-bit targets retain their own defaults.
+Independent kernel provider units receive the same default before parsing or
+prototype selection, including their callback typedefs. Microsoft's legacy
+`_declspec` and `_inline` spellings are also accepted; malformed attributes
+still reject the declaration.
 
 WinHTTP and HTTP Server are separate official declaration units. WinHTTP and
 WinINet can use the same `URL_COMPONENTS` name for different string pointees;
@@ -118,6 +122,93 @@ OpenGL/GLU. Each unit declares its own preprocessor settings. TAPI uses
 `WIN32=1`, as Microsoft's metadata partition does, because its headers test
 that macro's value. Both preprocessing and the independent compiler check use
 the same settings, which are recorded in the manifest.
+
+Kernel units additionally cover NMR/WSK, Kernel Streaming, storage class, TDI,
+VideoPort, ATA, battery, HID port and SmartCard declarations. User units add
+ETW providers, PathCch, WinRT strings, RPC proxy/marshalling, credentials,
+device queries, application model/features, property variants, performance
+data and biometrics. Inclusion of a header does not establish coverage of
+private exports or other Windows versions.
+
+Further independent units cover SD Port, Stream Class, PortCls/DRM and display
+miniport declarations, plus user-mode D3DKMT, CLFS and TPM base services. Their
+records and callback dependencies pass the same per-target layout checks;
+kernel providers also retain the x86 WDK default calling convention.
+CLFS selects its explicit API set so transitive WDK legacy CRT declarations
+cannot take priority over the separately selected UCRT declarations.
+Direct3D 11/12, DXGI and D3DCompiler likewise select their exported C functions
+with the complete record and callback dependencies. These units cover device
+and swap-chain creation, root-signature serialization, factory creation and
+shader compilation; they do not infer a COM method call from a vtable slot.
+RDBSS is an independent kernel unit using the official mini-redirector
+profile. The pinned `rxcontx.h` gives two different anonymous enums the same
+`RX_CONTEXT_CREATE_FLAGS` typedef only in C. The generator compares both
+complete enumerator lists with the original C++ header before using its
+`RX_CONTEXT_LOWIO_FLAGS` name for the second C declaration. Other conflicts
+or different values reject the unit. Three empty-parentheses declarations
+also receive C `(void)` prototypes only after comparison with their original
+C++ types. The original SDK files remain unchanged.
+Before importing this unit, compiler-visible type aliases compare every RDBSS
+routine's parameter and return ABI between the C declarations and original
+C++ headers on the selected target. Newly imported companion routines require
+the same proof. This includes inline routines without
+comparing an inline implementation to an external LLVM declaration. Required
+record layouts are checked again after merging. The manifest retains proof
+sources, compiler arguments and hashes; no C++ method is invented as a C API.
+Every selected RDBSS declaration is also compiled after parsing, renaming and
+merging, and its ABI is compared with the original C++ header before publication.
+
+`scripts/check_microsoft_provider_abis.py --generated /path/to/microsoft-windows
+--output /path/to/abi-results --neverd build-release/bin/neverd` compares
+representative functions from the selected units against the original compiler
+declarations on all three targets. It retains decoration, calling convention,
+parameter/return attributes and by-value record alignment, excluding only DLL
+visibility. Each published prototype is selected with its complete dependent
+types; unrelated compiler intrinsics are not compiled as replacement builtins.
+The generated side also omits the WDK's default calling-convention option;
+published declarations must retain their own conventions, so a lost x86
+`__stdcall` cannot be hidden by compiling both sides with that default.
+Use `--provider NDIS` to compare every `Ndis` function declared by the retained
+target's primary WDK profile. Its inventory comes from fresh preprocessing of
+the original official headers; a missing published declaration therefore fails
+instead of reducing the checked set. Type-only compiler aliases cover inline
+routines as well as imported functions, preserving calling conventions and
+parameter/return attributes. This checks the selected SDK version and NDIS
+profile, rather than claiming that export names establish a private API's type.
+
+`scripts/check_windows_provider_calls.py --generated /path/to/microsoft-windows
+--cache /path/to/package-cache --output /path/to/call-results
+--neverd build-release/bin/neverd` builds import-only ETW, PathCch and WinRT
+fixtures, including D3DKMT, CLFS, TPM, Direct3D, DXGI and D3DCompiler calls, with the retained SDK headers
+and pinned target import libraries. Add `--kernel` for SD Port, PortCls and
+Stream Class callers compiled from the WDK headers. Those driver fixtures use
+synthetic import libraries whose symbols come from the original compiler,
+including x86 stack decoration; they do not execute an API implementation.
+Add `--kernel --rdbss` for original RDBSS C++ callers, including eight-argument
+registration, byte output pointers, void and pointer results, and the three
+no-argument routines. Their recovered source is compiled as C against each
+target's compiler contract.
+Both C routes must compile, retain each API call without unknown operands,
+and match its original compiler ABI. These checks do not execute the Windows
+API or a driver. The generation must include `--ucrt` to retain the target
+SDK package identities used by this check.
+The source-call checker also omits the original default calling convention
+when compiling recovered output. It retains the target's SDK C library
+headers for standard includes such as `string.h`; API calling conventions
+must come from the emitted declarations.
+The graphics callers include twelve-argument swap-chain creation and the
+fourteen-argument `D3DCompile2`, retaining target-sized lengths, enum parameters,
+interface outputs and stack arguments on all three targets.
+The DXGI no-argument declaration additionally checks its complete type against
+the original SDK in C++ before adding a compatible C `(void)` redeclaration.
+The SDK's `()` spelling alone does not establish a C parameter list. The proof
+and source hash are retained in the manifest; see Microsoft's
+[declaration](https://learn.microsoft.com/windows/win32/api/dxgi1_6/nf-dxgi1_6-dxgideclareadapterremovalsupport).
+Ordinary and delayed PE imports share the SDK's `d3d12.dll` ordinal-101 name
+contract on x86, x64 and ARM64. The original module, ordinal and exact IAT slot
+remain intact; other modules, ordinals and targets retain their ordinal names.
+The device-creation fixture links the original target SDK import library,
+whose ordinal import must recover the same complete source prototype.
 
 DNS also has a Unicode profile. Its official `PDNS_RECORD` alias changes with
 `UNICODE`, including in declarations with an explicit `_W` name. An exact
@@ -151,6 +242,21 @@ callback return values. Both C emitters share the declarator formatter; a
 stdcall callback returned by a cdecl function must not turn the outer function
 into stdcall. PDB callback types use the same source convention identity.
 An unsupported callback convention is not substituted with the ordinary C ABI.
+Callback pointees retain borrowed record identities without recursively
+reconstructing their members. For admitted portable prototypes, source
+declarations and call conversions share parameter spellings from the same
+type graph, preserving nested qualifiers even though the machine carrier
+does not encode them. The admitted x86 `__cdecl` and `__stdcall` keywords
+retain nested callback qualifiers without requiring an SDK typedef.
+Recursive record back references also remain separate borrowed identities,
+so releasing an analysis does not retain a shared ownership cycle. Member
+access can still complete those identities from the selected type library.
+
+Legacy Windows/kernel and ISO `swprintf` declarations have different fixed
+prefixes. A PE image alone cannot select between them: name-only variadic and
+`va_list` forwarding rules decline that ambiguity, leaving the selected
+declaration authoritative. Underscored bounded formatters retain their capacity
+argument, while count-only `_scprintf`/`_scwprintf` take only the format prefix.
 
 Generation rejects parser errors, missing declarations on round trip and named
 record layout differences against Clang reading the original Microsoft headers.

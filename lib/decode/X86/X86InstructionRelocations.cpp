@@ -21,12 +21,13 @@ namespace instruction_relocations_detail {
 namespace {
 
 /// In an image that runs at its link address, the displacement of a memory
-/// operand that lands in a mapped segment is that address, as a relocation
-/// would have said: `jmp *table(,%rdi,8)` and `movzbl array(%rcx), %eax`
-/// index an object of the image.  A field offset added to a pointer
-/// (`mov 8(,%rcx,8), %rax` on a packed pointer) lands in no segment, the
-/// image being mapped above it, and stays a number.  RIP-relative operands
-/// and a plain `[disp]` are addresses for the lifter already.
+/// operand that lands in a mapped segment, or in the image's own headers, is
+/// that address, as a relocation would have said: `jmp *table(,%rdi,8)` and
+/// `movzbl array(%rcx), %eax` index an object of the image.  A field offset
+/// added to a pointer (`mov 8(,%rcx,8), %rax` on a packed pointer) lands in
+/// no segment, the image being mapped above it, and stays a number.
+/// RIP-relative operands and a plain `[disp]` are addresses for the lifter
+/// already.
 void addFixedImageDisplacement(const BinaryImage &Img, const DecodedInsn &DI,
                                InstructionRelocations &Result) {
   if (!Img.LoadsAtLinkAddress || !DI.Raw || !DI.Raw->detail)
@@ -53,8 +54,10 @@ void addFixedImageDisplacement(const BinaryImage &Img, const DecodedInsn &DI,
   uint64_t Target = static_cast<uint64_t>(Memory->mem.disp);
   if (AddressBytes < 8)
     Target &= (uint64_t(1) << (AddressBytes * 8)) - 1;
+  // The image's own headers are its data whether or not they are mapped.
   const Segment *Seg = Img.getSegmentFor(Target);
-  if (!Seg || Target < limits::kMinGlobalDataAddr)
+  if ((!Seg && !Img.imageBaseOffset(Target)) ||
+      Target < limits::kMinGlobalDataAddr)
     return;
   // A relocation the loader recorded for the field already owns it.
   const va_t FieldVA = DI.Addr + Offset;
@@ -70,7 +73,7 @@ void addFixedImageDisplacement(const BinaryImage &Img, const DecodedInsn &DI,
       Memory->size != 0 && Memory->size < Img.getPointerSize();
   Result.Addresses.push_back(RelocatedAddressOperand{
       FieldVA, Encoded, Target, Width,
-      Seg->isExecutable() && !NarrowerThanPointer
+      Seg && Seg->isExecutable() && !NarrowerThanPointer
           ? ConstantAddressProvenance::CodeAddress
           : ConstantAddressProvenance::DataAddress,
       InvalidVA, /*PCRelativeFromInstructionEnd=*/false});

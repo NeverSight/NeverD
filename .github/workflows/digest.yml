@@ -128,7 +128,7 @@ jobs:
           import os
           import xml.etree.ElementTree as ET
           cases = list(ET.parse('build-digest/tests.xml').getroot().iter('testcase'))
-          expected = 26 if os.environ.get('BASELINE_COMMIT') else 18
+          expected = 29 if os.environ.get('BASELINE_COMMIT') else 20
           assert len(cases) == expected, len(cases)
           assert all(case.get('status') == 'run' for case in cases)
           assert not any(child.tag in {'failure', 'error', 'skipped'} for case in cases for child in case)

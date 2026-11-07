@@ -23,6 +23,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
+#include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/ParameterSites.h"
@@ -37,6 +38,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/AArch64/AArch64AuthenticatedCall.h"
 #include "neverd/ir/med/MedMutableSource.h"
+#include "neverd/loader/X86/X64DispatchFrame.h"
 #include "neverd/loader/X86/X86GetPcThunk.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -49,6 +51,7 @@
 #include "llvm/Support/ErrorHandling.h"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -360,12 +363,39 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
   if (FatalDataPointerResolution)
     return nullptr;
   collectSuppressedTableAddressOps(Func);
+  if (FatalCodePointerResolution || FatalDataPointerResolution)
+    return nullptr;
 
   auto *LLVMFunc = declareFunc(Func);
+  if (Func.AnalysisOnly)
+    LLVMFunc->addFnAttr(llvm_analysis_dispatch::FunctionAttribute);
   if (ReturnProtection)
     setLLVMAArch64ReturnProtection(*LLVMFunc, ReturnProtection->Protection);
   if (Func.HasUnresolvedSEHFrame)
     LLVMFunc->addFnAttr(windows_eh_md::UnresolvedSourceFrame);
+  if (Img && PreserveUnknownSourceValues && !Func.SourceTypeHint &&
+      !Func.AnalystStackFrame)
+    if (const auto Frame = x64DispatchFrame(*Img, Func.Entry)) {
+      // Source inspection keeps this physical interface intact. In particular,
+      // an inferred argument count cannot replace the dispatcher's live bank.
+      // Native reconstruction retains its independent admission rules.
+      LLVMFunc->addFnAttr(llvm::Attribute::Naked);
+      LLVMFunc->addFnAttr(llvm::Attribute::NoInline);
+      LLVMFunc->setCallingConv(llvm::CallingConv::Win64);
+      LLVMFunc->addFnAttr("neverd.x64_dispatch_frame",
+                          x64DispatchFrameAssembly(*Frame));
+      auto *Entry = LLVMFunc->empty()
+                        ? llvm::BasicBlock::Create(*Ctx, "entry", LLVMFunc)
+                        : &LLVMFunc->getEntryBlock();
+      llvm::IRBuilder<> Builder(Entry);
+      auto *Type = llvm::FunctionType::get(llvm::Type::getVoidTy(*Ctx), false);
+      Builder.CreateCall(llvm::InlineAsm::get(
+          Type, x64DispatchFrameAssembly(*Frame, true), "~{memory}", true));
+      Builder.CreateUnreachable();
+      if (SourceMap)
+        SourceMap->Functions[Func.Entry] = LLVMFunc;
+      return LLVMFunc;
+    }
   if (Img)
     if (auto Reg = x86GetPcThunkRegister(*Img, Func.Entry)) {
       // These helpers return in a selected machine register, including
@@ -786,6 +816,10 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
     };
 
     for (size_t OI = 0; OI < Blk.Ops.size(); ++OI) {
+      // Pointer resolution has already diagnosed this doomed module. Do not
+      // keep allocating IR or running proofs for its remaining operations.
+      if (FatalCodePointerResolution || FatalDataPointerResolution)
+        return nullptr;
       auto &Op = Blk.Ops[OI];
       if (Op.Opcode == NdOp::BRANCH) {
         if (!Blk.Succs.empty()) {
@@ -833,6 +867,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
 
               llvm::IRBuilder<> EffectBuilder(EffectBB);
               for (size_t EI = OI + 1; EI < *EffectEnd; ++EI) {
+                if (FatalCodePointerResolution || FatalDataPointerResolution)
+                  return nullptr;
                 const MedOp &Effect = Blk.Ops[EI];
                 if (Effect.Opcode == NdOp::INDIR_BR) {
                   if (!emitJumpTableSwitch(Blk, Effect, BBMap, EffectBuilder)) {
@@ -854,6 +890,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
                 if (!EffectBB->empty() && EffectBB->back().isTerminator())
                   break;
               }
+              if (FatalCodePointerResolution || FatalDataPointerResolution)
+                return nullptr;
               if (EffectBB->empty() || !EffectBB->back().isTerminator())
                 EffectBuilder.CreateBr(SkipBB);
               break;
@@ -926,7 +964,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
         break;
       }
       if (Op.Opcode == NdOp::INDIR_BR) {
-        if (!emitJumpTableSwitch(Blk, Op, BBMap, Builder)) {
+        if (!emitJumpTableSwitch(Blk, Op, BBMap, Builder) &&
+            !emitAnalysisDispatch(Blk, Op, BBMap, Builder)) {
           // Every INDIR_BR that survives tail-call conversion must have a
           // proved finite destination set.  This includes the selected half of
           // a predicated PC write: it may legitimately have zero recovered
@@ -950,6 +989,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       if (builderHasTerminator())
         break;
     }
+    if (FatalCodePointerResolution || FatalDataPointerResolution)
+      return nullptr;
 
     if (!builderHasTerminator()) {
       auto EmitDefaultRet = [&]() {
@@ -1009,6 +1050,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
         continue;
       llvm::IRBuilder<> SB(Term);
       llvm::Value *V = getVar(PredIdx.second, SB);
+      if (FatalCodePointerResolution || FatalDataPointerResolution)
+        return nullptr;
       if (!V || !V->getType()->isIntegerTy())
         continue;
       unsigned Have = V->getType()->getIntegerBitWidth();
@@ -1154,6 +1197,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
               VarAllocs[SrcKey] = HiddenAlloca;
           } else
             Val = getPhiIncomingValue(Src, Dst.Size, InsBuilder);
+          if (FatalCodePointerResolution || FatalDataPointerResolution)
+            return nullptr;
           Pending.emplace_back(Dst, Val);
         }
 
@@ -1165,9 +1210,11 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
 
   // Registration-chain and table-driven WinEH have separate source contracts.
   // Install their runtime edges before promoting the callback SSA slots.
+  std::function<llvm::Error()> FinalRegistrationFrameProof;
   const bool NativeRegistration =
       emitNativeX86RegistrationSEH(Func, *LLVMFunc, BBMap, PHICopyEdges) ||
-      emitNativeX86RegistrationCxx(Func, *LLVMFunc, BBMap, PHICopyEdges);
+      emitNativeX86RegistrationCxx(Func, *LLVMFunc, BBMap, PHICopyEdges,
+                                   FinalRegistrationFrameProof);
   if (!NativeRegistration && !emitNativeSEH(Func, *LLVMFunc, BBMap) &&
       !emitNativeCxxEH(Func, *LLVMFunc, BBMap))
     emitNativeItaniumEH(Func, *LLVMFunc, BBMap);
@@ -1196,6 +1243,9 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       PrivateSlots.push_back(Slot);
     discardDeadMedLLVMSlots(PrivateSlots);
   }
+  if (FinalRegistrationFrameProof)
+    FinalRegistrationFrameProofs.push_back(
+        std::move(FinalRegistrationFrameProof));
   if (TargetArch == Arch::X86 || TargetArch == Arch::X64)
     applyX86SystemNativeTargetFeatures(*LLVMFunc);
   return LLVMFunc;

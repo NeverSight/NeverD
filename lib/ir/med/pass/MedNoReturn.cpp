@@ -8,8 +8,8 @@
 /// Proves internal functions do not return without relying on symbol names.
 /// A proof requires every reachable path to end at an explicit architectural
 /// trap, an already-known no-return call, or a direct call to another proved
-/// internal no-return function.  Unknown terminal fragments and unanchored
-/// cycles remain conservative.
+/// internal no-return function, or stay in a completely lifted closed cycle.
+/// Unknown terminal fragments and incomplete cycles remain conservative.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -80,7 +80,9 @@ bool endsItsPath(const MedBlock &Block, const MedOp &Op) {
 
 bool provesNoReturn(const MedFunc &Func, Arch TheArch,
                     const std::set<va_t> &KnownNoReturn) {
-  if (Func.Blocks.empty())
+  if (Func.Blocks.empty() ||
+      hasUnmodeledRegistrationResumption(Func.ExceptionMetadata,
+                                         Func.RegistrationStates))
     return false;
 
   std::map<int, const MedBlock *> BlocksById;
@@ -132,10 +134,11 @@ bool provesNoReturn(const MedFunc &Func, Arch TheArch,
       Pending.push(Succ);
   }
 
-  // A closed cycle with no return may be an infinite loop, but without an
-  // explicit terminating fact it is not used as the seed for interprocedural
-  // propagation.  This also keeps incomplete cyclic CFGs conservative.
-  return SawProvenTerminator;
+  // A closed cycle with no return is an infinite loop only where the lift left
+  // nothing out: an unread byte, a path out of the image or a jump table with
+  // unproven targets could leave the cycle where this walk cannot see.
+  return SawProvenTerminator || (Func.CompleteLiftCoverage &&
+                                 Func.UnsafeIndirectBranchAddresses.empty());
 }
 
 } // namespace

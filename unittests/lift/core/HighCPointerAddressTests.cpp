@@ -10,6 +10,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/DataAccessWidths.h"
+#include "neverd/Limits.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -24,6 +25,7 @@
 #include "neverd/ir/high/HighSourceFlow.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -88,6 +90,25 @@ namespace descriptor_source {
   constexpr char Name[] = Value;
 #include "../x86/X86DescriptorSourceExpectations.def"
 } // namespace descriptor_source
+
+// The synthetic debug records deliberately point to themselves through a
+// next-node field. Their owner drops those display edges after all source
+// consumers finish, including when a fatal test assertion returns early.
+class RecursiveDisplayRecords {
+  mutable std::vector<TypeRef> Types;
+
+public:
+  ~RecursiveDisplayRecords() {
+    for (const auto &Type : Types)
+      Type->FieldDisplayTypes.clear();
+  }
+
+  TypeRef makeRecord(std::string Name, uint16_t Bytes) const {
+    auto Type = NdType::makeNamedRecord(std::move(Name), Bytes);
+    Types.push_back(Type);
+    return Type;
+  }
+};
 
 ExprPtr parameter(unsigned Id, TypeRef ExprType = NdType::makeInt(8)) {
   MedVar Var;
@@ -2679,11 +2700,13 @@ TEST(LLVMCPointerAddresses, ReadonlyWideImageStringPrintsLLiteral) {
   llvm::Module Module("llvm-c-wide-string", Context);
   llvm::Type *I8 = llvm::Type::getInt8Ty(Context);
   llvm::Type *I64 = llvm::Type::getInt64Ty(Context);
-  llvm::FunctionType *PutsTy =
+  // As in the HighC twin, a routine without a C library prototype: puts's
+  // declared narrow parameter reads these bytes as "%".
+  llvm::FunctionType *FormatTy =
       llvm::FunctionType::get(llvm::Type::getVoidTy(Context),
                               {llvm::PointerType::getUnqual(I8)}, false);
-  llvm::Function *Puts = llvm::Function::Create(
-      PutsTy, llvm::GlobalValue::ExternalLinkage, "puts", Module);
+  llvm::Function *Format = llvm::Function::Create(
+      FormatTy, llvm::GlobalValue::ExternalLinkage, "Format", Module);
   llvm::FunctionType *FnTy =
       llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
   llvm::Function *Function = llvm::Function::Create(
@@ -2693,7 +2716,7 @@ TEST(LLVMCPointerAddresses, ReadonlyWideImageStringPrintsLLiteral) {
   auto *Ptr =
       llvm::ConstantExpr::getIntToPtr(llvm::ConstantInt::get(I64, 0x140003400),
                                       llvm::PointerType::getUnqual(I8));
-  Builder.CreateCall(Puts, {Ptr});
+  Builder.CreateCall(Format, {Ptr});
   Builder.CreateRetVoid();
 
   std::string Source;
@@ -2707,6 +2730,67 @@ TEST(LLVMCPointerAddresses, ReadonlyWideImageStringPrintsLLiteral) {
   OS.flush();
   EXPECT_NE(Source.find("L\"%s\""), std::string::npos) << Source;
   EXPECT_EQ(Source.find("0x140003400"), std::string::npos) << Source;
+}
+
+TEST(LLVMCPointerAddresses, ReadonlyImageStringsRespectCalleeCharacterWidth) {
+  // The same immutable bytes mean "%" to puts and L"%s" to wcslen on
+  // Windows. A byte-string declaration must not request a wide literal.
+  BinaryImage Img = makeImageObjectFixture(
+      0x140003400, {0x25, 0x00, 0x73, 0x00, 0x00, 0x00}, false);
+  for (bool Wide : {false, true}) {
+    SCOPED_TRACE(Wide);
+    llvm::LLVMContext Context;
+    llvm::Module Module("llvm-c-string-width", Context);
+    auto *PointerTy = llvm::PointerType::getUnqual(Context);
+    auto *I64 = llvm::Type::getInt64Ty(Context);
+    auto *ResultTy = Wide ? I64 : llvm::Type::getInt32Ty(Context);
+    auto *Callee = llvm::Function::Create(
+        llvm::FunctionType::get(ResultTy, {PointerTy}, false),
+        llvm::GlobalValue::ExternalLinkage, Wide ? "wcslen" : "puts", Module);
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(ResultTy, false),
+        llvm::GlobalValue::ExternalLinkage, "read_string", Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Pointer = llvm::ConstantExpr::getIntToPtr(
+        llvm::ConstantInt::get(I64, 0x140003400), PointerTy);
+    Builder.CreateRet(Builder.CreateCall(Callee, {Pointer}));
+
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::COFF;
+    Options.EmitIncludes = false;
+    ASSERT_TRUE(
+        LLVMCEmitter().emit(Module, OS, Options, nullptr, &Img, Function));
+    OS.flush();
+    EXPECT_NE(Source.find(Wide ? "L\"%s\"" : "\"%\""), std::string::npos)
+        << Source;
+    EXPECT_EQ(Source.find("0x140003400"), std::string::npos) << Source;
+
+    // Use providers with the declared character widths, without depending on
+    // the host C library's wchar_t ABI. Compile for Windows' two-byte wchar_t.
+    const std::string Program = R"c(
+#include <stdint.h>
+#include <stddef.h>
+static unsigned calls;
+int puts(const char *s) {
+  ++calls;
+  return s[0] == 0x25 && s[1] == 0 ? 1 : -1;
+}
+size_t wcslen(const wchar_t *s) {
+  ++calls;
+  return sizeof(wchar_t) == 2 && s[0] == 0x25 && s[1] == 0x73 && s[2] == 0
+             ? 2 : 0;
+}
+)c" + Source + "\nint main(void) { return read_string() != " +
+                                (Wide ? "2" : "1") + " || calls != 1; }\n";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Program, {Level, "-fno-builtin", "-fshort-wchar",
+                    "-Werror=incompatible-pointer-types"});
+  }
 }
 
 TEST(HighCPointerAddresses, StatedLiteralsKeepEveryCharacterAndTheirZeros) {
@@ -2854,7 +2938,7 @@ TEST(LLVMCPointerAddresses, DataOnlyAddressedIsDeclared) {
 }
 
 /// Expect \p Source to be C a compiler accepts.
-void expectCSyntax(const std::string &Source) {
+void expectCSyntax(const std::string &Source, llvm::StringRef Target = {}) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -2877,6 +2961,8 @@ void expectCSyntax(const std::string &Source) {
   }
   llvm::SmallVector<llvm::StringRef, 4> Arguments{Compiler, "-std=c11",
                                                   "-fsyntax-only", SourcePath};
+  if (!Target.empty())
+    Arguments.append({"-target", Target, "-ffreestanding"});
   const std::optional<llvm::StringRef> Redirects[] = {
       std::nullopt, std::nullopt, ErrorPath.str()};
   std::string Error;
@@ -4922,7 +5008,8 @@ TEST(HighCPointerAddresses, ExternalPrototypeMatchesLeadingUnderscoreCall) {
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("extern int __report_gsfailure("), std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("__report_gsfailure(7);"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__report_gsfailure((uint64_t)7);"), std::string::npos)
+      << Source;
   EXPECT_EQ(Source.find("extern int _report_gsfailure("), std::string::npos)
       << Source;
 }
@@ -4944,8 +5031,10 @@ TEST(HighCPointerAddresses, ExternalCallsKeepDistinctUnderscoreSpellings) {
       << Source;
   EXPECT_NE(Source.find("extern int __nd_external("), std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("    _nd_external(1);"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("    __nd_external(2);"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("    _nd_external((uint64_t)1);"), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("    __nd_external((uint64_t)2);"), std::string::npos)
+      << Source;
 }
 
 TEST(HighCPointerAddresses, SecurityCheckCookieParamIsStackCookie) {
@@ -5150,7 +5239,7 @@ TEST(HighCPointerAddresses, WidenedParamCopyPrintsAsParamInCompare) {
   EXPECT_EQ(Source.find("t29 ="), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, UntypedCallPeelsWidenedImmediate) {
+TEST(HighCPointerAddresses, UntypedCallKeepsWidenedImmediateCarrier) {
   HighFunc Func;
   Func.Name = "ctor_imm";
   Func.ReturnType = NdType::makeVoid();
@@ -5173,7 +5262,7 @@ TEST(HighCPointerAddresses, UntypedCallPeelsWidenedImmediate) {
   Func.Body.push_back(std::move(Ret));
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("sub_140001000("), std::string::npos) << Source;
-  EXPECT_NE(Source.find(", 1)"), std::string::npos) << Source;
+  EXPECT_NE(Source.find(", (uint64_t)1)"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("(uint32_t)1"), std::string::npos) << Source;
 }
 
@@ -7853,8 +7942,8 @@ TEST(HighCPointerAddresses, SingleUseCallsKeepSequencedCaptures) {
   Func.Body.push_back(std::move(Html));
   const std::string Source = emitFunctions({Func});
   const auto RankAt = Source.find("Rank = CRecord_GetRank(record);");
-  const auto ColorAt =
-      Source.find("t1 = CRecordDataTable_LookupColor(0x140070000, Rank);");
+  const auto ColorAt = Source.find(
+      "t1 = CRecordDataTable_LookupColor((uint64_t)0x140070000, Rank);");
   const auto HtmlAt = Source.find("TextToHtml_GetHtmlText(result, t1);");
   ASSERT_NE(RankAt, std::string::npos) << Source;
   ASSERT_NE(ColorAt, std::string::npos) << Source;
@@ -10957,12 +11046,20 @@ TEST(HighCPointerAddresses, X86CallPushStoresAreHidden) {
   S3.StoreVal = HighExpr::makeVar(Code);
   HighStmt Raise;
   Raise.Kind = StmtKind::Call;
-  Raise.CallExpr =
-      HighExpr::makeCall("RaiseException", 0x401200, {HighExpr::makeVar(Code)});
+  Raise.CallExpr = HighExpr::makeCall(
+      "RaiseException", 0x401200,
+      {HighExpr::makeVar(Code), HighExpr::makeConst(0, 4),
+       HighExpr::makeConst(0, 4), HighExpr::makeConst(0, 4)});
   Func.Body = {A8, S0, A9, S1, S2, LoadCode, S3, Raise};
   const std::string Source = emitFunctions({Func}, Arch::X86);
   EXPECT_NE(Source.find("RaiseException("), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("*("), std::string::npos) << Source;
+  // Loading the exception code is observable; only the outgoing stack stores
+  // are redundant once the call carries all four arguments.
+  EXPECT_NE(Source.find("= *(int32_t *)0x403120;"), std::string::npos)
+      << Source;
+  EXPECT_FALSE(std::regex_search(Source, std::regex(R"((^|\n)\s*\*[^;\n]*=)")))
+      << Source;
+  EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, X86SehRegistrationSlotIsHidden) {
@@ -12565,7 +12662,7 @@ TEST(HighCPointerAddresses, CallCondAndDoesNotFillUndefStore) {
   EXPECT_EQ(Func.Body[0].Body[0].StoreVal->Kind, ExprKind::Undef);
 }
 
-TEST(HighCPointerAddresses, IfNarrowCastOfAssignedCallPrintsBare) {
+TEST(HighCPointerAddresses, IfNarrowCastOfAssignedCallKeepsItsWidth) {
   HighFunc Func;
   Func.Name = "adjustment_narrow";
   Func.Entry = 0x140001000;
@@ -12598,10 +12695,11 @@ TEST(HighCPointerAddresses, IfNarrowCastOfAssignedCallPrintsBare) {
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("GetAdjustmentLevel"), std::string::npos) << Source;
   EXPECT_NE(Source.find("if ("), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(int16_t)"), std::string::npos) << Source;
+  // A result such as 0x10000 is zero only after the 16-bit conversion.
+  EXPECT_NE(Source.find("(int16_t)"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, IfSubbytesZeroOfAssignedCallPrintsBare) {
+TEST(HighCPointerAddresses, IfSubbytesZeroOfAssignedCallKeepsItsWidth) {
   HighFunc Func;
   Func.Name = "adjustment_subbytes";
   Func.Entry = 0x140001000;
@@ -12631,7 +12729,7 @@ TEST(HighCPointerAddresses, IfSubbytesZeroOfAssignedCallPrintsBare) {
   Func.Body = {Get, Guard};
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("GetAdjustmentLevel"), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("(int16_t)"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(int16_t)"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, IfNarrowCastOfAddKeepsWrap) {
@@ -16223,7 +16321,7 @@ TEST(LLVMCPointerAddresses, FoldsAssignSelectIntoElseIf) {
   EXPECT_EQ(Source.find("use_picked(", UseAt + 1), std::string::npos) << Source;
 }
 
-TEST(LLVMCPointerAddresses, FoldsCursorLoopIntoFor) {
+TEST(LLVMCPointerAddresses, CursorLoopKeepsReadsAndDeclarations) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-cursor-loop", Context);
   llvm::Type *I32 = llvm::Type::getInt32Ty(Context);
@@ -16297,34 +16395,35 @@ TEST(LLVMCPointerAddresses, FoldsCursorLoopIntoFor) {
   const auto BodyAt = Source.find("cursor_loop(");
   ASSERT_NE(BodyAt, std::string::npos) << Source;
   const auto ForAt = Source.find("for (", BodyAt);
+  // A materialized header read keeps its own execution site. The complete
+  // condition may use a for-loop; a goto loop retains the same semantics.
+  const auto LoopAt =
+      ForAt != std::string::npos ? ForAt : Source.find("L_header:", BodyAt);
   const auto HashAt = Source.find("hash_step(", BodyAt);
   const auto KeyAt = Source.find("key_step(", BodyAt);
   const auto ValueAt = Source.find("value_step(", BodyAt);
   const auto NextAt = Source.find("next_step(", BodyAt);
   const auto InitAt = Source.find("init_step(", BodyAt);
   const auto RetAt = Source.find("return 7;", BodyAt);
-  ASSERT_NE(ForAt, std::string::npos) << Source;
+  ASSERT_NE(LoopAt, std::string::npos) << Source;
   ASSERT_NE(HashAt, std::string::npos) << Source;
   ASSERT_NE(KeyAt, std::string::npos) << Source;
   ASSERT_NE(ValueAt, std::string::npos) << Source;
   ASSERT_NE(NextAt, std::string::npos) << Source;
   ASSERT_NE(InitAt, std::string::npos) << Source;
   ASSERT_NE(RetAt, std::string::npos) << Source;
-  EXPECT_LT(InitAt, ForAt) << Source;
-  EXPECT_LT(ForAt, HashAt) << Source;
+  EXPECT_LT(InitAt, LoopAt) << Source;
+  EXPECT_LT(LoopAt, HashAt) << Source;
   EXPECT_LT(HashAt, KeyAt) << Source;
   EXPECT_LT(KeyAt, ValueAt) << Source;
-  EXPECT_LT(ValueAt, RetAt) << Source;
-  EXPECT_LT(ForAt, NextAt) << Source;
-  EXPECT_LT(NextAt, RetAt) << Source;
-  EXPECT_EQ(Source.find("goto ", BodyAt), std::string::npos) << Source;
+  EXPECT_LT(LoopAt, NextAt) << Source;
   EXPECT_EQ(Source.find("hash_step(", HashAt + 1), std::string::npos) << Source;
   EXPECT_EQ(Source.find("key_step(", KeyAt + 1), std::string::npos) << Source;
   EXPECT_EQ(Source.find("next_step(", NextAt + 1), std::string::npos) << Source;
   EXPECT_EQ(Source.find("value_step(", ValueAt + 1), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("init_step(", InitAt + 1), std::string::npos) << Source;
-  // A for-header load and the copies printed from it must be declared.
+  // A loop-header load and the copies printed from it must be declared.
   // The pre-fix body used cur3 / v4 without a declaration line.
   std::set<std::string> DeclaredNames;
   for (size_t LineStart = BodyAt; LineStart < Source.size();) {
@@ -16363,17 +16462,72 @@ TEST(LLVMCPointerAddresses, FoldsCursorLoopIntoFor) {
       EXPECT_TRUE(DeclaredNames.count(Ident)) << Ident << "\n" << Source;
     At = End;
   }
+  compileAndRunCallOrdering("#include <stdint.h>\n" + Source + R"c(
+static uint64_t first, trace;
+static const struct { uint32_t hash, key, value; uint64_t next; } nodes[] = {
+  {0, 0, 0, 0}, {22, 11, 101, 2}, {22, 22, 102, 3}, {33, 33, 103, 0}
+};
+static uint64_t event(uint64_t prior, uint64_t cursor, unsigned operation) {
+  return prior * UINT64_C(131) + cursor * 8 + operation;
+}
+uint64_t init_step(void) {
+  trace = event(trace, first, 1);
+  return first;
+}
+uint64_t next_step(uint64_t cursor) {
+  trace = event(trace, cursor, 2);
+  return nodes[cursor].next;
+}
+uint32_t hash_step(uint64_t cursor) {
+  trace = event(trace, cursor, 3);
+  return nodes[cursor].hash;
+}
+uint32_t key_step(uint64_t cursor) {
+  trace = event(trace, cursor, 4);
+  return nodes[cursor].key;
+}
+uint32_t value_step(uint64_t cursor) {
+  trace = event(trace, cursor, 5);
+  return nodes[cursor].value;
+}
+int main(void) {
+  static const uint32_t keys[] = {11, 22, 33, 99};
+  for (first = 0; first != 4; ++first)
+    for (unsigned i = 0; i != 4; ++i) {
+      uint32_t expected = 7, key = keys[i];
+      uint64_t wanted = event(0, first, 1);
+      for (uint64_t cursor = first; cursor; cursor = nodes[cursor].next) {
+        wanted = event(wanted, cursor, 3);
+        if (nodes[cursor].hash == key) {
+          wanted = event(wanted, cursor, 4);
+          if (nodes[cursor].key == key) {
+            wanted = event(wanted, cursor, 5);
+            expected = nodes[cursor].value;
+            break;
+          }
+        }
+        wanted = event(wanted, cursor, 2);
+      }
+      trace = 0;
+      if (cursor_loop(key) != expected || trace != wanted) return 1;
+    }
+  return 0;
+}
+)c",
+                            /*TrapUndefined=*/true);
 }
 
 TEST(LLVMCPointerAddresses, CursorFieldIncrementStaysInForHeader) {
   class NodeDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140015100)
         return std::nullopt;
       auto Rank = NdType::makeNamedRecord("eRecordRank", 0);
       Rank->IsEnum = true;
-      auto Node = NdType::makeNamedRecord(
+      auto Node = Records.makeRecord(
           "ATL::CAtlMap<enum eRecordRank,unsigned long>::CNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
@@ -17330,11 +17484,13 @@ TEST(LLVMCPointerAddresses, KeepsSkipRegionWhenSideExitFollowsJoin) {
 
 TEST(LLVMCPointerAddresses, PrintsDefaultColorOnCursorMiss) {
   class NodeDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140000620)
         return std::nullopt;
-      auto Node = NdType::makeNamedRecord("CursorNode", 24);
+      auto Node = Records.makeRecord("CursorNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
       Node->FieldDisplayOffsets = {0, 4, 8, 16};
@@ -17521,11 +17677,13 @@ TEST(LLVMCPointerAddresses, PrintsDefaultColorOnCursorMiss) {
 
 TEST(LLVMCPointerAddresses, BreaksCursorLoopAtSharedTail) {
   class NodeDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140000610)
         return std::nullopt;
-      auto Node = NdType::makeNamedRecord("CursorNode", 24);
+      auto Node = Records.makeRecord("CursorNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
       Node->FieldDisplayOffsets = {0, 4, 8, 16};
@@ -17648,11 +17806,13 @@ TEST(LLVMCPointerAddresses, OmitsElseContinueWhenHitBreaks) {
   // in the loop is printed after that if, so the else continue is omitted.
   // The hash miss stays a bare continue.
   class NodeDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140000620)
         return std::nullopt;
-      auto Node = NdType::makeNamedRecord("CursorNode", 24);
+      auto Node = Records.makeRecord("CursorNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
       Node->FieldDisplayOffsets = {0, 4, 8, 16};
@@ -17772,11 +17932,13 @@ TEST(LLVMCPointerAddresses, ForwardsSingleCursorCopy) {
   // One composed field value copied into the cursor prints on the cursor.
   // The source temp is omitted. A second use of that temp keeps the assign.
   class NodeDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140000640 && Addr != 0x140000650)
         return std::nullopt;
-      auto Node = NdType::makeNamedRecord("CursorNode", 24);
+      auto Node = Records.makeRecord("CursorNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
       Node->FieldDisplayOffsets = {0, 4, 8, 16};
@@ -17875,11 +18037,13 @@ TEST(LLVMCPointerAddresses, ForwardsSingleCursorCopy) {
 
 TEST(LLVMCPointerAddresses, KeepsElseContinueWhenMissCalls) {
   class NodeDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140000630)
         return std::nullopt;
-      auto Node = NdType::makeNamedRecord("CursorNode", 24);
+      auto Node = Records.makeRecord("CursorNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
       Node->FieldDisplayOffsets = {0, 4, 8, 16};
@@ -26330,7 +26494,8 @@ TEST(HighCPointerAddresses, Win64CopyFromTempAfterParamCopyIsNotParam) {
 }
 
 TEST(HighCPointerAddresses, TypedPointerIndexLoadPrintsBucketsAndNodeFields) {
-  auto Node = NdType::makeNamedRecord("CNode", 24);
+  RecursiveDisplayRecords Records;
+  auto Node = Records.makeRecord("CNode", 24);
   auto NodePtr = NdType::makePtr(Node);
   Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
   Node->FieldDisplayOffsets = {0, 4, 8, 16};
@@ -26497,11 +26662,12 @@ TEST(HighCPointerAddresses, TypedPointerIndexLoadPrintsBucketsAndNodeFields) {
 }
 
 TEST(HighCPointerAddresses, TypedMapCursorComposesHashKeyNextValue) {
+  RecursiveDisplayRecords Records;
   // Guest LookupColor HighIR: untyped temps, RenameTag cursor, nested
   // `(i64)(eRecord % nBins) * 8`, and `v1 = t22` hidden by CopyForward.
   // Collect must still type the cursor so hash/next/value assigns fold.
   auto Rank = NdType::makeNamedRecord("eRecordRank", 4, true);
-  auto Node = NdType::makeNamedRecord(
+  auto Node = Records.makeRecord(
       "ATL::CAtlMap<enum eRecordRank,unsigned long>::CNode", 24);
   auto NodePtr = NdType::makePtr(Node);
   Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
@@ -27397,14 +27563,9 @@ TEST(HighCPointerAddresses, Win64InBlockConstantOverridesJoinPhi) {
   const std::string Source = emitFunctions({High}, Arch::X64, &Img);
   const auto CallAt = Source.rfind("Catalog_Lookup(");
   ASSERT_NE(CallAt, std::string::npos) << Source;
-  const auto Open = Source.find('(', CallAt);
-  const auto Close = Source.find(')', Open);
-  ASSERT_NE(Open, std::string::npos) << Source;
-  ASSERT_NE(Close, std::string::npos) << Source;
-  const std::string Args = Source.substr(Open + 1, Close - Open - 1);
-  EXPECT_EQ(std::count(Args.begin(), Args.end(), ','), 3)
-      << Source << "\nHighIR:\n"
-      << HighDump;
+  const auto Args = lastCallArguments(Source, "Catalog_Lookup");
+  ASSERT_TRUE(Args) << Source;
+  EXPECT_EQ(Args->size(), 4u) << Source << "\nHighIR:\n" << HighDump;
   EXPECT_NE(Source.find(", 0);", CallAt), std::string::npos)
       << Source << "\nHighIR:\n"
       << HighDump;
@@ -33705,8 +33866,7 @@ TEST(HighCPointerAddresses, GetLengthJleKeepsOneSequencedSignedResult) {
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("Length = GetLength(arg0);"), std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("if ((int32_t)Length > 0)"), std::string::npos)
-      << Source;
+  EXPECT_NE(Source.find("if (Length > 0)"), std::string::npos) << Source;
   EXPECT_NE(Source.find("CStringT_assign("), std::string::npos) << Source;
   EXPECT_NE(Source.find("GetData("), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t82_23"), std::string::npos) << Source;
@@ -35922,8 +36082,9 @@ TEST(HighCPointerAddresses, TerminateProcessReturnsItsResult) {
   Ret.RetVal = HighExpr::makeVar(Dst);
   Func.Body.push_back(std::move(Ret));
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("return (int64_t)TerminateProcess(0, 0xC0000409);"),
-            std::string::npos)
+  EXPECT_NE(
+      Source.find("return (int64_t)TerminateProcess((uint64_t)0, 0xC0000409);"),
+      std::string::npos)
       << Source;
 }
 
@@ -38624,7 +38785,9 @@ TEST(LLVMCPointerAddresses, IndirectCallPrintsLoadedCalleePlusOffset) {
       << Source;
   EXPECT_NE(Source.find("this->m_pBadge.p"), std::string::npos) << Source;
   EXPECT_NE(Source.find(" + 0x58))"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("(this->m_pBadge.p, result)"), std::string::npos)
+  // The callee takes integers, so the record pointer converts explicitly.
+  EXPECT_NE(Source.find("(this->m_pBadge.p, ((uint64_t)(uintptr_t)result))"),
+            std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("((void*)"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("*(uint64_t*)"), std::string::npos) << Source;
@@ -39873,7 +40036,7 @@ TEST(LLVMCPointerAddresses, AddressTakenArgListValuesStoreStays) {
       << Source;
 }
 
-TEST(LLVMCPointerAddresses, LeftoverEaxPackedSiblingTakesCallResult) {
+TEST(LLVMCPointerAddresses, PackedSiblingPreservesFullSnapshot) {
   auto Aux = NdType::makeNamedRecord("CAuxData", 64);
   Aux->FieldDisplayNames = {"m_type"};
   Aux->FieldDisplayOffsets = {24};
@@ -39993,11 +40156,16 @@ TEST(LLVMCPointerAddresses, LeftoverEaxPackedSiblingTakesCallResult) {
   Builder.CreateCondBr(Cmp, Miss, Then);
 
   llvm::IRBuilder<> ThenBuilder(Then);
-  llvm::Value *UnkHome = ThenBuilder.CreateAlloca(I64, nullptr, "unk_home");
-  ThenBuilder.CreateStore(llvm::UndefValue::get(I64), UnkHome);
+  // The branch's call result does not supply these bytes. Snapshot all
+  // sixteen initialized bytes, then overwrite the source before the second
+  // copy. Both destinations must retain the same complete snapshot.
+  auto *Payload = ThenBuilder.CreateLoad(I128, Function->getArg(0), "payload");
+  Payload->setAlignment(llvm::Align(1));
+  ThenBuilder.CreateStore(Payload, AuxP);
   llvm::Value *Wide = ThenBuilder.CreateLoad(I128, AuxP, "wide");
   ThenBuilder.CreateStore(Wide, Home);
-  ThenBuilder.CreateStore(ThenBuilder.CreateLoad(I64, UnkHome, "unk_ld"), AuxP);
+  ThenBuilder.CreateStore(llvm::ConstantInt::get(I64, 0x9876543210abcdef),
+                          AuxP);
   ThenBuilder.CreateStore(Wide, Sib);
   ThenBuilder.CreateStore(llvm::ConstantInt::get(I64, 43), Pack);
   ThenBuilder.CreateStore(Home, Vals);
@@ -40024,14 +40192,45 @@ TEST(LLVMCPointerAddresses, LeftoverEaxPackedSiblingTakesCallResult) {
   EXPECT_NE(Source.find("LookupTextW(arg0, ((void*)0), &frame0.var_m38)"),
             std::string::npos)
       << Source;
-  // The packed sibling takes the call result.
-  EXPECT_NE(Source.find("*(uint32_t *)&frame0.var_m18 = period"),
-            std::string::npos)
-      << Source;
+  // The preceding call controls the branch only. It cannot replace a
+  // word of either sixteen-byte copy.
+  EXPECT_EQ(Source.find("= period;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__builtin_memcpy"), std::string::npos) << Source;
   EXPECT_NE(Source.find("GetPeriodID"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("pAuxData.types_ = 0 /* unknown */"), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("pAuxData._Ptr = 0"), std::string::npos) << Source;
+  compileAndRunCallOrdering("#include <stdint.h>\n#include <string.h>\n" +
+                                Source + R"c(
+static unsigned period_calls, lookup_calls, bad_bytes;
+uint32_t GetPeriodID(void *input) {
+  ++period_calls;
+  return (uint32_t)(*(const uint8_t *)input) + 1;
+}
+void *LookupTextW(void *input, void *key, void *args) {
+  const uint8_t *record = (const uint8_t *)args;
+  uint64_t types;
+  void *values;
+  memcpy(&types, record, 8);
+  memcpy(&values, record + 8, sizeof(values));
+  ++lookup_calls;
+  if (key || types != 43 ||
+      memcmp(values, input, 16) ||
+      memcmp((const uint8_t *)values + 16, input, 16))
+    ++bad_bytes;
+  return input;
+}
+int main(void) {
+  uint8_t input[16];
+  for (unsigned seed = 0; seed != 256; ++seed) {
+    for (unsigned i = 0; i != sizeof(input); ++i)
+      input[i] = (uint8_t)(seed * 37 + i * 19);
+    leftover_eax(input);
+  }
+  return bad_bytes || period_calls != 256 || lookup_calls != 256;
+}
+)c",
+                            /*TrapUndefined=*/true);
 }
 
 TEST(LLVMCPointerAddresses, LeftoverEaxNarrowStoreThenWideCopyTakesCallResult) {
@@ -40328,8 +40527,7 @@ TEST(LLVMCPointerAddresses, DistantArgListCopyOfNarrowCallPrintsTypes) {
   EXPECT_EQ(Calls, 1u) << Source;
 }
 
-TEST(LLVMCPointerAddresses,
-     LeftoverEaxPackedSiblingTakesCallResultThroughInvoke) {
+TEST(LLVMCPointerAddresses, PackedSiblingPreservesFullSnapshotThroughInvoke) {
   auto Aux = NdType::makeNamedRecord("CAuxData", 64);
   Aux->FieldDisplayNames = {"m_type"};
   Aux->FieldDisplayOffsets = {24};
@@ -40462,11 +40660,16 @@ TEST(LLVMCPointerAddresses,
        llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(Ptr))});
 
   llvm::IRBuilder<> ThenBuilder(Then);
-  llvm::Value *UnkHome = ThenBuilder.CreateAlloca(I64, nullptr, "unk_home");
-  ThenBuilder.CreateStore(llvm::UndefValue::get(I64), UnkHome);
+  // The branch's call result does not supply these bytes. Snapshot all
+  // sixteen initialized bytes, then overwrite the source before the second
+  // copy. Both destinations must retain the same complete snapshot.
+  auto *Payload = ThenBuilder.CreateLoad(I128, Function->getArg(0), "payload");
+  Payload->setAlignment(llvm::Align(1));
+  ThenBuilder.CreateStore(Payload, AuxP);
   llvm::Value *Wide = ThenBuilder.CreateLoad(I128, AuxP, "wide");
   ThenBuilder.CreateStore(Wide, Home);
-  ThenBuilder.CreateStore(ThenBuilder.CreateLoad(I64, UnkHome, "unk_ld"), AuxP);
+  ThenBuilder.CreateStore(llvm::ConstantInt::get(I64, 0x9876543210abcdef),
+                          AuxP);
   ThenBuilder.CreateStore(Wide, Sib);
   ThenBuilder.CreateStore(llvm::ConstantInt::get(I64, 43), Pack);
   ThenBuilder.CreateStore(Home, Vals);
@@ -40499,10 +40702,10 @@ TEST(LLVMCPointerAddresses,
   EXPECT_NE(Source.find("LookupTextW(arg0, ((void*)0), &frame0.var_m38)"),
             std::string::npos)
       << Source;
-  // The packed sibling takes the call result.
-  EXPECT_NE(Source.find("*(uint32_t *)&frame0.var_m18 = period"),
-            std::string::npos)
-      << Source;
+  // The preceding call controls the branch only. It cannot replace a
+  // word of either sixteen-byte copy.
+  EXPECT_EQ(Source.find("= period;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__builtin_memcpy"), std::string::npos) << Source;
   EXPECT_NE(Source.find("GetPeriodID"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("var_m18 = pAuxData"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("pAuxData.types_ = 0 /* unknown */"), std::string::npos)
@@ -40743,13 +40946,15 @@ TEST(LLVMCPointerAddresses, WideFrameCopyPrintsSyntheticSlot) {
 
 TEST(LLVMCPointerAddresses, TypedMapCursorPrintsHashNextValue) {
   class MapDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140014f80)
         return std::nullopt;
       auto Rank = NdType::makeNamedRecord("eRecordRank", 0);
       Rank->IsEnum = true;
-      auto Node = NdType::makeNamedRecord(
+      auto Node = Records.makeRecord(
           "ATL::CAtlMap<enum eRecordRank,unsigned long>::CNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
@@ -40913,13 +41118,15 @@ TEST(LLVMCPointerAddresses, TypedMapCursorPrintsHashNextValue) {
 
 TEST(LLVMCPointerAddresses, SplitPhiCursorWalkPrintsFor) {
   class MapDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140014fd0)
         return std::nullopt;
       auto Rank = NdType::makeNamedRecord("eRecordRank", 0);
       Rank->IsEnum = true;
-      auto Node = NdType::makeNamedRecord(
+      auto Node = Records.makeRecord(
           "ATL::CAtlMap<enum eRecordRank,unsigned long>::CNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
@@ -41155,13 +41362,15 @@ TEST(LLVMCPointerAddresses, SplitPhiCursorWalkPrintsFor) {
 
 TEST(LLVMCPointerAddresses, ForwardedCursorFieldLoadIsNotDeclared) {
   class MapDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140014f80)
         return std::nullopt;
       auto Rank = NdType::makeNamedRecord("eRecordRank", 0);
       Rank->IsEnum = true;
-      auto Node = NdType::makeNamedRecord(
+      auto Node = Records.makeRecord(
           "ATL::CAtlMap<enum eRecordRank,unsigned long>::CNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
@@ -41263,11 +41472,13 @@ TEST(LLVMCPointerAddresses, ForwardedCursorFieldLoadIsNotDeclared) {
 
 TEST(LLVMCPointerAddresses, CursorNextStoreDoesNotRecurse) {
   class MapDbg : public NullDebugContext {
+    RecursiveDisplayRecords Records;
+
   public:
     std::optional<FunctionSym> resolveFunction(va_t Addr) const override {
       if (Addr != 0x140014f80)
         return std::nullopt;
-      auto Node = NdType::makeNamedRecord(
+      auto Node = Records.makeRecord(
           "ATL::CAtlMap<enum eRecordRank,unsigned long>::CNode", 24);
       auto NodePtr = NdType::makePtr(Node);
       Node->FieldDisplayNames = {"m_key", "m_value", "m_pNext", "m_nHash"};
@@ -41955,13 +42166,15 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeHasSingleWin64Arg) {
   EXPECT_EQ(Source.find("*(uint64_t*)0"), std::string::npos) << Source;
 }
 
-// A load certified immutable by MedIR can fold to its exact exception code.
+// A load certified immutable by MedIR can fold to its exact exception code,
+// including the signed decimal spelling converted by the uint32_t parameter.
 // Otherwise the LLVM projection must preserve its captured volatile value.
 void expectCapturedSehExceptionCode(const std::string &Source) {
   const auto Folded = lastCallArguments(
       sourceLineContaining(Source, "    RaiseException("), "RaiseException");
   if (Folded && Folded->size() == 4 &&
-      ((*Folded)[0] == "3762425857" || (*Folded)[0] == "0xE0421001")) {
+      ((*Folded)[0] == "3762425857" || (*Folded)[0] == "0xE0421001" ||
+       (*Folded)[0] == "-532541439")) {
     for (size_t I = 1; I < Folded->size(); ++I)
       EXPECT_EQ(llvm::StringRef((*Folded)[I]).trim(), "0") << Source;
     return;
@@ -42475,6 +42688,7 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadGsWrappedSehLlvmcNestsHandlerBodies) {
             "*);\n"
             "void *GetExceptionInformation(void);\n"
             "unsigned long GetExceptionCode(void);\n"
+            "int AbnormalTermination(void);\n"
          << Source;
     }
     llvm::SmallVector<llvm::StringRef, 16> Args{
@@ -42851,13 +43065,24 @@ TEST(HighCPointerAddresses, CorpusFuncLoadX86FilterThunksPrintTheirValue) {
   ASSERT_TRUE(static_cast<bool>(Img)) << llvm::toString(Img.takeError());
   const std::string Source = highcOnlyFunction(std::move(*Img), Entry);
   bool ReadsTheLocal = false;
-  for (llvm::StringRef Line : llvm::split(Source, '\n'))
+  bool ExecutesTheHandler = false;
+  for (llvm::StringRef Line : llvm::split(Source, '\n')) {
     // The filter result is a signed 32-bit value; a uint32_t frame carrier
     // needs the cast to retain EXCEPTION_CONTINUE_EXECUTION (-1).
+    // Default display recovery defers native registration closure, so its
+    // unstructured annotation must retain the same value at the exact thunk.
     ReadsTheLocal |=
         Line.ends_with("__except (stack_storage.var_m20) {") ||
-        Line.ends_with("__except ((int32_t)stack_storage.var_m20) {");
+        Line.ends_with("__except ((int32_t)stack_storage.var_m20) {") ||
+        (Line.contains("filter @ 0x401683, handler @ 0x401687, state=1, ") &&
+         Line.ends_with("filter_value=(int32_t)stack_storage.var_m20"));
+    ExecutesTheHandler |=
+        Line.ends_with("__except (EXCEPTION_EXECUTE_HANDLER) {") ||
+        (Line.contains("filter @ 0x4029BD, handler @ 0x4029C3, state=46, ") &&
+         Line.ends_with("filter_value=EXCEPTION_EXECUTE_HANDLER"));
+  }
   EXPECT_TRUE(ReadsTheLocal) << Source;
+  EXPECT_TRUE(ExecutesTheHandler) << Source;
   // 0x4029BD is `mov eax, 1; ret`, 0x401683 the frame read.
   EXPECT_EQ(Source.find("sub_4029BD"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("sub_401683"), std::string::npos) << Source;
@@ -44807,9 +45032,13 @@ TEST(HighCPointerAddresses, Win64TwelveArgumentCallKeepsEveryStackArgument) {
   GSym.Name = "twelve";
   Img.Symbols.push_back(GSym);
   const std::string HighC = highcOnlyFunction(Img, Entry);
-  EXPECT_NE(HighC.find("twelve(0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8)"),
-            std::string::npos)
-      << HighC;
+  const auto Args = lastCallArguments(HighC, "twelve");
+  ASSERT_TRUE(Args) << HighC;
+  ASSERT_EQ(Args->size(), 12u) << HighC;
+  for (size_t I = 0; I < Args->size(); ++I)
+    EXPECT_EQ(llvm::StringRef((*Args)[I]).trim(),
+              "(uint64_t)" + std::to_string(I < 4 ? 0 : I - 3))
+        << HighC;
   llvm::LLVMContext Context;
   PipelineOptions Options;
   Options.EmitDumpOutput = false;
@@ -45075,7 +45304,7 @@ TEST(HighCPointerAddresses, Win64StackArgumentsFollowTheHomeArea) {
   ASSERT_TRUE(Args) << HighC;
   ASSERT_EQ(Args->size(), 6u) << HighC;
   EXPECT_EQ(llvm::StringRef((*Args)[0]).trim(), "arg0") << HighC;
-  EXPECT_EQ(llvm::StringRef(Args->back()).trim(), "0") << HighC;
+  EXPECT_EQ(llvm::StringRef(Args->back()).trim(), "(uint64_t)0") << HighC;
 }
 
 TEST(HighCPointerAddresses, SummarizedCalleeTakesOnlyTheArgumentsItReads) {
@@ -45121,7 +45350,7 @@ TEST(HighCPointerAddresses, Win64StackArgumentsThroughEntryStackCopy) {
   const auto Args = lastCallArguments(HighC, "sub_140001040");
   ASSERT_TRUE(Args) << HighC;
   ASSERT_EQ(Args->size(), 7u) << HighC;
-  EXPECT_EQ(llvm::StringRef((*Args)[4]).trim(), "5") << HighC;
+  EXPECT_EQ(llvm::StringRef((*Args)[4]).trim(), "(uint64_t)5") << HighC;
 }
 
 TEST(HighCPointerAddresses, GotoToSmallReturnTailBecomesItsCopy) {
@@ -45283,6 +45512,78 @@ TEST(HighCPointerAddresses, ReturnTailContinuesPastTheEndOfAnArm) {
   ASSERT_EQ(Body[0].Body.size(), 2u);
   EXPECT_EQ(Body[0].Body[0].Val->ConstVal, 1u);
   EXPECT_EQ(Body[0].Body[1].Kind, StmtKind::Return);
+}
+
+TEST(HighCPointerAddresses, PrintedReturnTailWeighsReadsInItsOwnRun) {
+  // if (c) goto T; return; T: t1 = 1; t2 = t1; ... tN = tN-1; return tN;
+  // By printed size a temporary read once later in its run prints inside
+  // that read, so N assignments, one more than the limit, fit it.  The run
+  // ends at its return or jump: later reads do not count.  A shared operand
+  // read twice counts twice, as it prints twice.
+  constexpr int N = static_cast<int>(limits::kMaxReturnTailStatements) + 1;
+  auto Temp = [](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = Id;
+    V.Size = 8;
+    return HighExpr::makeVar(V);
+  };
+  auto Assign = [](va_t Addr, ExprPtr Dst, ExprPtr Val) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Addr = Addr;
+    S.Dst = std::move(Dst);
+    S.Val = std::move(Val);
+    return S;
+  };
+  auto Read = [&](int Id, bool Twice) {
+    ExprPtr V = Temp(Id);
+    return Twice ? HighExpr::makeBinop(NdOp::INT_ADD, V, V) : V;
+  };
+  auto Tail = [&](bool Twice) {
+    std::vector<HighStmt> Body = {condGoto(0x1000, 1, 0x1100),
+                                  returnAt(0x1010)};
+    Body.push_back(Assign(0x1100, Temp(1), HighExpr::makeConst(1, 8)));
+    for (int I = 2; I <= N; ++I)
+      Body.push_back(Assign(0x1100 + 4 * (I - 1), Temp(I), Read(I - 1, Twice)));
+    return Body;
+  };
+  const va_t End = 0x1100 + 4 * N;
+  auto ReturnOf = [&](int Id, bool Twice, va_t Addr) {
+    HighStmt S = returnAt(Addr);
+    S.RetVal = Read(Id, Twice);
+    return S;
+  };
+  // Dead code reading every temporary again.
+  auto ReadAll = [&]() {
+    ExprPtr Sum = Temp(1);
+    for (int I = 2; I <= N; ++I)
+      Sum = HighExpr::makeBinop(NdOp::INT_ADD, Sum, Temp(I));
+    return Assign(0x2000, Temp(N + 1), Sum);
+  };
+  auto Copied = [](std::vector<HighStmt> Body, bool PrintedSize) {
+    duplicateSmallReturnTails(Body, PrintedSize);
+    return countGotos(Body[0].Body) == 0;
+  };
+
+  std::vector<HighStmt> Returning = Tail(false);
+  Returning.push_back(ReturnOf(N, false, End));
+  EXPECT_TRUE(Copied(Returning, /*PrintedSize=*/true));
+  EXPECT_FALSE(Copied(Returning, /*PrintedSize=*/false));
+  Returning.push_back(ReadAll());
+  EXPECT_TRUE(Copied(Returning, /*PrintedSize=*/true));
+
+  // `goto E; <reads>; E: return tN;` composes the tail; its run ends at the
+  // jump.
+  std::vector<HighStmt> Jumping = Tail(false);
+  Jumping.push_back(gotoAt(End, 0x3000));
+  Jumping.push_back(ReadAll());
+  Jumping.push_back(ReturnOf(N, false, 0x3000));
+  EXPECT_TRUE(Copied(Jumping, /*PrintedSize=*/true));
+
+  std::vector<HighStmt> Shared = Tail(true);
+  Shared.push_back(ReturnOf(N, true, End));
+  EXPECT_FALSE(Copied(Shared, /*PrintedSize=*/true));
 }
 
 TEST(HighCPointerAddresses, ReduceGotosUnrotatesAJumpIntoTheLoopTest) {
@@ -45943,14 +46244,15 @@ TEST(HighCPointerAddresses, IntegerVectorIntrinsicsTakeVectorOperands) {
 }
 
 TEST(HighCPointerAddresses, FloatVectorIntrinsicsTakeTheirVectorTypes) {
-  // `_mm_shuffle_ps` takes __m128 and `_mm_unpacklo_pd` __m128d, which C
-  // does not convert from an integer vector.
+  // VEX shuffle still uses `_mm_shuffle_ps` with __m128 operands, while the
+  // legacy register shuffle lowers to lane copies. `_mm_unpacklo_pd` takes
+  // __m128d; C does not convert either type from an integer vector.
   constexpr va_t Entry = 0x140001000;
   const std::vector<uint8_t> Code = {
-      0x0f, 0xc6, 0xc1, 0x1b, // shufps xmm0, xmm1, 0x1b
-      0x0f, 0x11, 0x01,       // movups [rcx], xmm0
-      0x66, 0x0f, 0x14, 0xd3, // unpcklpd xmm2, xmm3
-      0x66, 0x0f, 0x11, 0x12, // movupd [rdx], xmm2
+      0xc5, 0xf8, 0xc6, 0xc1, 0x1b, // vshufps xmm0, xmm0, xmm1, 0x1b
+      0x0f, 0x11, 0x01,             // movups [rcx], xmm0
+      0x66, 0x0f, 0x14, 0xd3,       // unpcklpd xmm2, xmm3
+      0x66, 0x0f, 0x11, 0x12,       // movupd [rdx], xmm2
       0xc3};
   const std::string HighC =
       highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
@@ -50099,4 +50401,42 @@ TEST(LLVMCPointerAddresses, HeaderImportsKeepScalarTypesAndVoidEffects) {
       )c",
                                 true);
     }
+}
+
+TEST(HighCPointerAddresses, PlatformRegisterReadRequiresAReservingABI) {
+  HighFunc Func;
+  Func.Name = "read_platform_register";
+  Func.ReturnType = NdType::makeInt(8, false);
+  MedVar Register;
+  Register.Kind = MedVar::Reg;
+  Register.Id = 18;
+  Register.Size = 8;
+  Register.RegOff = a64reg::X18;
+  Register.TheArch = Arch::AArch64;
+  returnValue(Func, HighExpr::makeVar(Register, Func.ReturnType));
+  for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::Unknown,
+                              BinaryFormat::MachO, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<int>(Format));
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.Format = Format;
+    ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options));
+    const bool Reserved =
+        Format == BinaryFormat::MachO || Format == BinaryFormat::COFF;
+    EXPECT_EQ(Source.find("__builtin_trap") == std::string::npos, Reserved)
+        << Source;
+    if (Format == BinaryFormat::MachO) {
+      EXPECT_NE(Source.find("mov %0, x18"), std::string::npos) << Source;
+      expectCSyntax(Source, "arm64-apple-macos");
+    }
+    if (Format == BinaryFormat::COFF) {
+      EXPECT_NE(Source.find("__getReg(18)"), std::string::npos) << Source;
+      EXPECT_NE(Source.find("#include <intrin.h>"), std::string::npos)
+          << Source;
+      EXPECT_EQ(Source.find("__asm__"), std::string::npos) << Source;
+      expectCSyntax(Source, "aarch64-pc-windows-msvc");
+    }
+  }
 }

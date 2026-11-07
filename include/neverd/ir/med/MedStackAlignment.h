@@ -77,6 +77,16 @@ entryStackOffsetUpperBounds(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
                             StackEntryKind Entry = StackEntryKind::Call,
                             const MedCallReturnRanges *CallReturns = nullptr);
 
+/// Displacements from entry SP modulo a power-of-two \p Alignment >= 2 smaller
+/// than the native address space. Masked dynamic sizes can retain a residue
+/// without bounds. Native-width wrapping preserves this residue; it does not
+/// establish an exact offset, a nonwrapping interval or a nonnegative size.
+std::vector<std::optional<uint64_t>>
+entryStackOffsetResidues(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
+                         Arch Architecture, BinaryFormat Format,
+                         uint64_t Alignment,
+                         StackEntryKind Entry = StackEntryKind::Call);
+
 /// Full-width SP definitions in the entry block that align an authenticated
 /// entry-stack offset. Each definition is a distinct frame origin; this does
 /// not establish a constant displacement from the unaligned entry SP.

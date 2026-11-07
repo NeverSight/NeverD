@@ -22,6 +22,7 @@
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringRef.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -131,11 +132,25 @@ struct TextStart {
 std::optional<TextStart> textFrom(llvm::ArrayRef<uint8_t> Data, Encoding E,
                                   uint64_t Offset);
 
+/// Runs \p Task for each index below \p Count, in any order, perhaps several
+/// at once.
+using ParallelTasks = llvm::function_ref<void(
+    size_t Count, llvm::function_ref<void(size_t Index)> Task)>;
+
 /// Reports the strings in \p Data in offset order, none overlapping another.
 /// A wide string starts at a multiple of its code unit size; where strings
-/// of different encodings overlap, the one starting first wins.
+/// of different encodings overlap, the one starting first wins.  Given
+/// \p Parallel, a scan of at least limits::support::kStringScanParallelBytes
+/// reads spans of its data as tasks of it; it reports the same strings.
 void scan(llvm::ArrayRef<uint8_t> Data, const ScanOptions &Options,
-          llvm::function_ref<void(FoundString &&)> Found);
+          llvm::function_ref<void(FoundString &&)> Found,
+          ParallelTasks Parallel = {});
+
+/// The string scan(\p Data, \p Options) reports first, where it starts at
+/// \p Data's first byte; none otherwise.  Reads only what the strings that
+/// start there span.
+std::optional<FoundString> scanAt(llvm::ArrayRef<uint8_t> Data,
+                                  const ScanOptions &Options);
 
 } // namespace neverd::strings
 

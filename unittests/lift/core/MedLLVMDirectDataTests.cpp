@@ -10,15 +10,23 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
+#include "neverd/backend/LLVMOriginalImageStorage.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/debug/DebugContext.h"
+#include "neverd/ir/TargetRegInfo.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 using namespace neverd;
 
@@ -241,6 +249,312 @@ TEST(MedLLVMDirectData, ARequiredPointerStillRejectsAnUnresolvedTarget) {
     llvm::LLVMContext Context;
     EXPECT_EQ(emit(Image, {F}, Context), nullptr);
   }
+}
+
+namespace {
+
+class LinkedDataDebug : public NullDebugContext {
+public:
+  std::pair<va_t, va_t> Region{FlagVA, FlagVA + 32};
+  std::optional<std::pair<va_t, va_t>>
+  readOnlyDataRegion(va_t Address) const override {
+    return Address >= Region.first && Address < Region.second
+               ? std::optional(Region)
+               : std::nullopt;
+  }
+};
+
+BinaryImage mixedDataInCode(Arch A, BinaryFormat Format) {
+  BinaryImage Image = image(A, Format, false);
+  auto &Data = Image.Segments.back();
+  Data.Size = Data.FileSz = limits::kMaxSingleGlobalEmbedLen + 0x1000;
+  Data.Data.resize(Data.Size);
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Image.DataInCode.insert(FlagVA);
+  Image.DataPtrRelocSlots.insert(FlagVA + 8);
+  for (unsigned I = 0; I < Image.getPointerSize(); ++I)
+    Data.Data[FlagVA + 8 - DataVA + I] =
+        static_cast<uint8_t>((FlagVA + 24) >> (I * 8));
+  return Image;
+}
+
+std::unique_ptr<llvm::Module> emitLinkedData(const BinaryImage &Image,
+                                             llvm::LLVMContext &Context,
+                                             const DebugContext *Debug,
+                                             bool Reverse = false) {
+  MedFunc Base = function(Image), Interior = function(Image, CodeVA + 0x100);
+  auto ReturnAddress = [&](MedFunc &Function, va_t Address) {
+    MedOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Addr = Function.Entry;
+    Copy.Output.Kind = MedVar::Reg;
+    Copy.Output.TheArch = Image.Arch;
+    Copy.Output.RegOff = getTargetRegInfo(Image.Arch).IntReturnReg;
+    Copy.Output.Size = Image.getPointerSize();
+    Copy.Output.Id = 1;
+    Copy.Output.SSAVer = 1;
+    Copy.addInput(address(Image, Address));
+    Function.Blocks.front().Ops.push_back(Copy);
+    finish(Function, Image, Address);
+    Function.Blocks.front().Ops.back().Inputs[0] = Copy.Output;
+  };
+  ReturnAddress(Base, FlagVA);
+  ReturnAddress(Interior, FlagVA + 4);
+  std::vector<MedFunc> Functions{Base, Interior};
+  if (Reverse)
+    std::reverse(Functions.begin(), Functions.end());
+  MedLLVMEmitter Emitter;
+  Emitter.setDebugContext(Debug);
+  return Emitter.emit(Functions, Context, "linked-data", Image.Arch, {}, &Image,
+                      Image.Format);
+}
+
+} // namespace
+
+TEST(MedLLVMDirectData, LinkedDataRegionMirrorsMixedRecordsAndInteriorAliases) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (bool Reverse : {false, true}) {
+        for (bool Relocated : {false, true}) {
+          SCOPED_TRACE(static_cast<unsigned>(A));
+          SCOPED_TRACE(static_cast<unsigned>(Format));
+          SCOPED_TRACE(Reverse);
+          SCOPED_TRACE(Relocated);
+          BinaryImage Image = mixedDataInCode(A, Format);
+          if (!Relocated)
+            Image.DataPtrRelocSlots.clear();
+          LinkedDataDebug Debug;
+          llvm::LLVMContext Context;
+          auto Module = emitLinkedData(Image, Context, &Debug, Reverse);
+          ASSERT_NE(Module, nullptr);
+          EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          auto *Storage = Module->getNamedGlobal("__nd_codeptr_3040");
+          ASSERT_NE(Storage, nullptr);
+          EXPECT_EQ(
+              Module->getDataLayout().getTypeAllocSize(Storage->getValueType()),
+              32u);
+          for (const auto &[Name, Expected] :
+               {std::pair{"probe", 0}, std::pair{"target", 4}}) {
+            auto *Function = Module->getFunction(Name);
+            // Eliminate the emitter's register allocas before checking the
+            // returned storage identity. This transforms IR; it executes no
+            // generated instructions.
+            llvm::SmallVector<llvm::AllocaInst *> Allocas;
+            for (auto &I : Function->getEntryBlock())
+              if (auto *Alloca = llvm::dyn_cast<llvm::AllocaInst>(&I);
+                  Alloca && llvm::isAllocaPromotable(Alloca))
+                Allocas.push_back(Alloca);
+            llvm::DominatorTree Dominators(*Function);
+            llvm::PromoteMemToReg(Allocas, Dominators);
+            auto *Return =
+                llvm::cast<llvm::ReturnInst>(Function->back().getTerminator());
+            auto *Cast =
+                llvm::dyn_cast<llvm::ConstantExpr>(Return->getReturnValue());
+            ASSERT_NE(Cast, nullptr);
+            ASSERT_EQ(Cast->getOpcode(), llvm::Instruction::PtrToInt);
+            int64_t Offset = 0;
+            EXPECT_EQ(llvm::GetPointerBaseWithConstantOffset(
+                          Cast->getOperand(0), Offset, Module->getDataLayout()),
+                      Storage);
+            EXPECT_EQ(Offset, Expected);
+          }
+          // The relocated member refers to the same storage at offset 24,
+          // rather than retaining a numeric address in the original code
+          // segment.
+          auto *Initializer =
+              llvm::dyn_cast<llvm::ConstantStruct>(Storage->getInitializer());
+          ASSERT_NE(Initializer, nullptr);
+          if (Relocated) {
+            ASSERT_EQ(Initializer->getNumOperands(), 3u);
+            auto *Pointer =
+                llvm::dyn_cast<llvm::ConstantExpr>(Initializer->getOperand(1));
+            ASSERT_NE(Pointer, nullptr);
+            ASSERT_EQ(Pointer->getOpcode(), llvm::Instruction::PtrToInt);
+            int64_t Offset = 0;
+            EXPECT_EQ(
+                llvm::GetPointerBaseWithConstantOffset(
+                    Pointer->getOperand(0), Offset, Module->getDataLayout()),
+                Storage);
+            EXPECT_EQ(Offset, 24);
+          } else {
+            ASSERT_EQ(Initializer->getNumOperands(), 1u);
+            const auto *Bytes = llvm::dyn_cast<llvm::ConstantDataSequential>(
+                Initializer->getOperand(0));
+            ASSERT_NE(Bytes, nullptr);
+            for (unsigned I = 0; I != 32; ++I)
+              EXPECT_EQ(Bytes->getElementAsInteger(I),
+                        Image.Segments.back().Data[FlagVA - DataVA + I]);
+          }
+        }
+      }
+}
+
+TEST(MedLLVMDirectData, LinkedDataRegionRequiresCompletePointerStorage) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    const unsigned HalfPointer = getTargetRegInfo(A).PointerSize / 2;
+    for (va_t Slot : {FlagVA - HalfPointer, FlagVA + 8 + HalfPointer,
+                      FlagVA + 32 - HalfPointer}) {
+      BinaryImage Image = mixedDataInCode(A, BinaryFormat::COFF);
+      Image.DataPtrRelocSlots.insert(Slot);
+      LinkedDataDebug Debug;
+      llvm::LLVMContext Context;
+      EXPECT_EQ(emitLinkedData(Image, Context, &Debug), nullptr);
+    }
+  }
+}
+
+TEST(MedLLVMDirectData, LinkedDataRegionRetainsExtentAndTargetRefusals) {
+  for (unsigned Case = 0; Case != 4; ++Case) {
+    SCOPED_TRACE(Case);
+    BinaryImage Image = mixedDataInCode(Arch::X64, BinaryFormat::COFF);
+    LinkedDataDebug Debug;
+    if (Case == 1)
+      Debug.Region.second =
+          Debug.Region.first + limits::kMaxSingleGlobalEmbedLen + 1;
+    if (Case == 2)
+      Debug.Region.second = DataVA + Image.Segments.back().Data.size() + 1;
+    if (Case == 3) {
+      Image.CodePtrRelocSlots.insert(FlagVA + 16);
+      for (unsigned I = 0; I != 8; ++I)
+        Image.Segments.back().Data[FlagVA + 16 - DataVA + I] =
+            static_cast<uint8_t>(uint64_t(0x1888) >> (I * 8));
+    }
+    llvm::LLVMContext Context;
+    EXPECT_EQ(emitLinkedData(Image, Context, Case == 0 ? nullptr : &Debug),
+              nullptr);
+  }
+}
+
+TEST(MedLLVMDirectData, OriginalImageCursorsIgnoreUnrelatedPointerRelocations) {
+  for (Arch A : {Arch::X64, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+      for (auto Provenance : {ConstantAddressProvenance::Address,
+                              ConstantAddressProvenance::DataAddress}) {
+        SCOPED_TRACE(static_cast<int>(A));
+        SCOPED_TRACE(static_cast<int>(Format));
+        SCOPED_TRACE(static_cast<int>(Provenance));
+        BinaryImage Image = image(A, Format);
+        MedFunc F = function(Image);
+        F.Name = "advance_cursor";
+        F.ReturnType = NdType::makeInt(8, false);
+        F.Blocks.resize(3);
+        for (int I = 0; I != 3; ++I) {
+          F.Blocks[I].Id = I;
+          F.Blocks[I].StartAddr = CodeVA + I * 0x20;
+          F.Blocks[I].EndAddr = CodeVA + (I + 1) * 0x20;
+        }
+        F.Blocks[0].Succs = {1};
+        F.Blocks[1].Preds = {0, 1};
+        F.Blocks[1].Succs = {1, 2};
+        F.Blocks[2].Preds = {1};
+        auto Value = [&](int Id, unsigned Size = 8) {
+          MedVar V;
+          V.Kind = MedVar::Temp;
+          V.TheArch = A;
+          V.Id = Id;
+          V.SSAVer = 1;
+          V.Size = Size;
+          return V;
+        };
+        auto Scalar = [](uint64_t Bits, unsigned Size = 8) {
+          return MedVar::makeConst(Bits, Size,
+                                   ConstantAddressProvenance::Scalar);
+        };
+        auto Add = [&](unsigned Block, NdOp Opcode, MedVar Output,
+                       std::initializer_list<MedVar> Inputs) {
+          MedOp Op;
+          Op.Opcode = Opcode;
+          Op.Output = Output;
+          Op.Addr = F.Blocks[Block].StartAddr + F.Blocks[Block].Ops.size();
+          for (const auto &Input : Inputs)
+            Op.addInput(Input);
+          F.Blocks[Block].Ops.push_back(Op);
+        };
+        MedVar Count = Value(0);
+        Count.Kind = MedVar::Param;
+        Count.RegOff = getTargetRegInfo(A).integerParamRegs(Format)[0];
+        F.Params.push_back(Count);
+        Add(0, NdOp::COPY, Value(1),
+            {MedVar::makeConst(FlagVA, 8, Provenance)});
+        Add(0, NdOp::BRANCH, {}, {Scalar(F.Blocks[1].StartAddr)});
+        F.Blocks[1].Phis.push_back({Value(2), {{0, Value(1)}, {1, Value(3)}}});
+        F.Blocks[1].Phis.push_back({Value(4), {{0, Scalar(0)}, {1, Value(5)}}});
+        Add(1, NdOp::LOAD, Value(6, 1), {Value(2)});
+        Add(1, NdOp::INT_XOR, Value(7, 1), {Value(6, 1), Scalar(0x5a, 1)});
+        Add(1, NdOp::STORE, {}, {Value(2), Value(7, 1)});
+        Add(1, NdOp::INT_ADD, Value(3), {Value(2), Scalar(1)});
+        Add(1, NdOp::INT_ADD, Value(5), {Value(4), Scalar(1)});
+        Add(1, NdOp::INT_LESS, Value(8, 1), {Value(5), Count});
+        Add(1, NdOp::COND_BR, {}, {Scalar(F.Blocks[1].StartAddr), Value(8, 1)});
+        MedVar Result = Value(9);
+        Result.Kind = MedVar::Reg;
+        Result.RegOff = getTargetRegInfo(A).IntReturnReg;
+        Add(2, NdOp::COPY, Result, {Value(3)});
+        Add(2, NdOp::RETURN, {}, {Result});
+        MedFunc Literal = function(Image, CodeVA + 0x80);
+        Literal.Name = "numeric_collision";
+        Literal.ReturnType = NdType::makeInt(8, false);
+        MedOp Copy;
+        Copy.Opcode = NdOp::COPY;
+        Copy.Output = Result;
+        Copy.addInput(Scalar(FlagVA));
+        Literal.Blocks.front().Ops.push_back(Copy);
+        MedOp Return;
+        Return.Opcode = NdOp::RETURN;
+        Return.addInput(Result);
+        Literal.Blocks.front().Ops.push_back(Return);
+        llvm::LLVMContext Context;
+        MedLLVMEmitter Emitter;
+        Emitter.setOriginalImageStorageForSource(true);
+        auto Module = Emitter.emit({F, Literal}, Context, "original-cursor", A,
+                                   {}, &Image, Format);
+        ASSERT_NE(Module, nullptr);
+        ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+        unsigned OriginalSpans = 0;
+        for (const auto &Global : Module->globals())
+          OriginalSpans += llvm_original_image::isMarked(Global);
+        ASSERT_EQ(OriginalSpans, 1u);
+        CEmitterOptions Options;
+        Options.TheArch = A;
+        Options.Format = Format;
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        ASSERT_TRUE(
+            LLVMCEmitter().emit(*Module, Out, Options, nullptr, &Image));
+        Out.flush();
+        const std::string Prefix = "extern uint8_t ";
+        const size_t Start = Source.find(Prefix);
+        ASSERT_NE(Start, std::string::npos) << Source;
+        const size_t NameStart = Start + Prefix.size();
+        const std::string Name =
+            Source.substr(NameStart, Source.find('[', NameStart) - NameStart);
+        const size_t Size = DataVA + Image.Segments.back().Size - CodeVA;
+        Source += "\nuint8_t " + Name + "[" + std::to_string(Size) +
+                  "];\n#define image " + Name + "\n#define offset " +
+                  std::to_string(FlagVA - CodeVA) + "\n";
+        Source += "#define original_address " + std::to_string(FlagVA) + "\n";
+        Source += R"c(
+int main(void) {
+  for (unsigned count = 1; count <= 16; ++count) {
+    for (unsigned i = 0; i < sizeof(image); ++i) image[i] = i * 13 + count;
+    if (advance_cursor(count) != (uintptr_t)(image + offset + count)) return 1;
+    if (numeric_collision() != original_address) return 2;
+    for (unsigned i = 0; i < sizeof(image); ++i) {
+      uint8_t expected = i * 13 + count;
+      if (i >= offset && i < offset + count) expected ^= 0x5a;
+      if (image[i] != expected) return 3;
+    }
+  }
+  return 0;
+}
+)c";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Source, {Level, "-fsanitize=address,undefined",
+                       "-fno-sanitize-recover=all"});
+      }
 }
 
 TEST(MedLLVMDirectData, TakingAnAddressPromotesEarlierByteAccesses) {

@@ -1976,10 +1976,10 @@
           "seconds": 25.551045542000793,
           "limit_seconds": 120,
           "command": [
-            "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/bin/NeverDLiftTests",
+            "build-arm64e/bin/NeverDLiftTests",
             "--gtest_filter=IncomingHomeSource.ExplicitStackCarrierReachesBothCPaths",
             "--gtest_also_run_disabled_tests",
-            "--gtest_output=xml:/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/arm64e-typed-call-evidence/serial-4460.xml"
+            "--gtest_output=xml:build-arm64e/arm64e-typed-call-evidence/serial-4460.xml"
           ],
           "log_sha256": "5a08e6b826ff7e6a28dc590d186ee1eebb1ee47e39441be809691f0afbf18e6e"
         },
@@ -1992,10 +1992,10 @@
           "seconds": 76.6635042919952,
           "limit_seconds": 120,
           "command": [
-            "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/bin/NeverDLiftTests",
+            "build-arm64e/bin/NeverDLiftTests",
             "--gtest_filter=IncomingHomeSource.NarrowStackInputsKeepTheirExactWidth",
             "--gtest_also_run_disabled_tests",
-            "--gtest_output=xml:/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/arm64e-typed-call-evidence/serial-4462.xml"
+            "--gtest_output=xml:build-arm64e/arm64e-typed-call-evidence/serial-4462.xml"
           ],
           "log_sha256": "360ef2362c0d2b51dd2c7252c6a924a1f975226c3cdb5b9cd9183e15cab7f89b"
         },
@@ -2008,10 +2008,10 @@
           "seconds": 24.83386466698721,
           "limit_seconds": 120,
           "command": [
-            "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/bin/NeverDLiftTests",
+            "build-arm64e/bin/NeverDLiftTests",
             "--gtest_filter=IncomingHomeSource.SelectedCallerRetainsExplicitScalarDeclarations",
             "--gtest_also_run_disabled_tests",
-            "--gtest_output=xml:/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/arm64e-typed-call-evidence/serial-4466.xml"
+            "--gtest_output=xml:build-arm64e/arm64e-typed-call-evidence/serial-4466.xml"
           ],
           "log_sha256": "57d1fffa246afb3f2a4f0a92ebdbb4627d010eb36980a8fc29eaa1ef206ca135"
         },
@@ -2024,10 +2024,10 @@
           "seconds": 25.56907633400988,
           "limit_seconds": 120,
           "command": [
-            "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/bin/NeverDLiftTests",
+            "build-arm64e/bin/NeverDLiftTests",
             "--gtest_filter=IncomingHomeSource.ExplicitStackInputSurvivesAFrame",
             "--gtest_also_run_disabled_tests",
-            "--gtest_output=xml:/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/arm64e-typed-call-evidence/serial-4467.xml"
+            "--gtest_output=xml:build-arm64e/arm64e-typed-call-evidence/serial-4467.xml"
           ],
           "log_sha256": "9b1098cadaff3b4d7d38e5f99c2b0e116cda4e9dd78b3e1307c77889c7c88d36"
         },
@@ -2040,10 +2040,10 @@
           "seconds": 25.335637000011047,
           "limit_seconds": 120,
           "command": [
-            "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/bin/NeverDLiftTests",
+            "build-arm64e/bin/NeverDLiftTests",
             "--gtest_filter=IncomingHomeSource.ExplicitStackInputSurvivesAnAllocatedFrame",
             "--gtest_also_run_disabled_tests",
-            "--gtest_output=xml:/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/arm64e-typed-call-evidence/serial-4470.xml"
+            "--gtest_output=xml:build-arm64e/arm64e-typed-call-evidence/serial-4470.xml"
           ],
           "log_sha256": "ffa3c63ddbdc74dfb1fb353521089b096a3a2e5a6b7f48c7bb2c6a9338ca8f23"
         },
@@ -2056,10 +2056,10 @@
           "seconds": 79.48454495798796,
           "limit_seconds": 120,
           "command": [
-            "/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/bin/NeverDSourceEntryBindingTests",
+            "build-arm64e/bin/NeverDSourceEntryBindingTests",
             "--gtest_filter=IncomingHomeSource.NarrowStackInputsKeepTheirExactWidth",
             "--gtest_also_run_disabled_tests",
-            "--gtest_output=xml:/Users/gmh/.codex/worktrees/apple-arm64e/NeverD/build-arm64e/arm64e-typed-call-evidence/serial-13437.xml"
+            "--gtest_output=xml:build-arm64e/arm64e-typed-call-evidence/serial-13437.xml"
           ],
           "log_sha256": "755aea1e4fd4987a6de87a5f06ae7e39aacb48129f9bb613c070d12d40d265ba"
         }

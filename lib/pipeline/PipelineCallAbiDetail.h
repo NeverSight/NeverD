@@ -13,6 +13,8 @@
 #ifndef NEVERD_LIB_PIPELINE_PIPELINECALLABIDETAIL_H
 #define NEVERD_LIB_PIPELINE_PIPELINECALLABIDETAIL_H
 
+#include "PipelineSourceStackAccesses.h"
+
 #include "neverd/Common.h"
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/IntegerCallArguments.h"
@@ -22,6 +24,7 @@
 #include "neverd/loader/DataSymbolBinding.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/pipeline/Limits.h"
+#include "neverd/support/SharedValue.h"
 
 #include "llvm/ADT/ArrayRef.h"
 
@@ -34,6 +37,8 @@
 #include <vector>
 
 namespace neverd {
+class DebugContext;
+struct MedValueReads;
 
 struct BinaryImage;
 struct AnalysisCacheWarmup;
@@ -48,6 +53,12 @@ bool needsCallSignatureRecovery(const CallArgumentConvention *Convention);
 namespace detail {
 class AbsoluteRelocationRootIndex;
 } // namespace detail
+namespace libc {
+class NoReturnTargetIndex;
+} // namespace libc
+
+struct GlobalCalleeSolve;
+class RelocationSymbolIndex;
 
 /// What reading the signature bodies of omitted callees read of each callee
 /// (recoverModuleCallAbi): how its lift's blocks count against the bound on
@@ -176,6 +187,29 @@ struct OmittedCalleeMemo {
     std::map<uint64_t, uint16_t> FPScalarBytes;
     uint16_t FPReturnSize = 0;
   };
+  /// What the image-wide solve of the memo's bodies
+  /// (stepGlobalCalleeSignatures) gives one of them: the summaries forwarder
+  /// propagation leaves at its entry over every kept body, and its omitted
+  /// recovery under them.
+  struct GlobalSignature {
+    int RegArity = 0;
+    int TotalArity = 0;
+    bool IsVariadic = false;
+    std::optional<std::vector<uint64_t>> IntRegs;
+    int FPArity = 0;
+    std::vector<uint64_t> FPRegs;
+    std::map<uint64_t, uint16_t> FPScalarBytes;
+    uint16_t FPReturnSize = 0;
+    /// What the omitted recovery gives the calls to the body.
+    size_t Parameters = 0;
+    bool RecoveredVariadic = false;
+    bool SourceParametersBound = false;
+    bool PreservesDeclaration = false;
+    /// The summaries the omitted recovery leaves at the body's entry.
+    std::optional<int> EntryRegArity;
+    std::optional<int> EntryTotalArity;
+    std::optional<bool> EntryIsVariadic;
+  };
   /// A conversion of a callee's lift.
   struct Conversion {
     /// The typed body, or null where the conversion fails or the body is too
@@ -198,15 +232,41 @@ struct OmittedCalleeMemo {
     std::optional<CalleeSummary> Summary;
     std::vector<va_t> CalleesRead;
     std::vector<va_t> DirectCallTargets;
+    /// The callees whose bodies its source parameter reads take
+    /// (sourcePrefixCallees), and what source stack preparation reads of it
+    /// on an x64 COFF image (sourceStackScanOf).
+    std::vector<va_t> SourcePrefixCallees;
+    std::optional<SourceStackScan> SourceStack;
     /// Complete read-only leaf inputs proved from this conversion's original
     /// LowIR, as entry-SP offset and observed byte width. These inputs do not
     /// alter Body's machine calling convention.
     std::vector<std::pair<int64_t, uint16_t>> SourceStackInputs;
+    /// Original blocks of a complete Win64 spill or stack-parameter
+    /// candidate, retained under the same image and conversion identity as
+    /// Body.
+    std::shared_ptr<const std::vector<LowBlock>> SourceOriginalBlocks;
+    /// Body as source preparation marks a candidate's stack accesses
+    /// (prepareRecoveredSourceStackAccesses), with the stores it found
+    /// overwritten; kept where a run first prepared it.  It reads only Body
+    /// and the image, so every later run's preparation is the same.
+    struct PreparedSource {
+      MedFunc Body;
+      std::set<const MedOp *> OverwrittenSpills;
+      /// The readers of Body's values its source parameter reads consult
+      /// (valueReadsOf), or null where it has none.
+      std::shared_ptr<const MedValueReads> ValueReads;
+    };
+    std::shared_ptr<const PreparedSource> Prepared;
+    /// What the image-wide solve gives the body, or null; it holds while
+    /// the memo's Globals stamp does.
+    std::shared_ptr<const GlobalSignature> Global;
     /// Whether \p Result's summaries read as they did for the conversion.
     bool readsHold(const PipelineResult &Result) const;
   };
   /// The probes kept of each conversion's body.  The selections around a
-  /// forwarder hold different summaries of its callees.
+  /// forwarder hold different summaries of its callees, and a callee many
+  /// functions read is probed under many: with four kept, the second
+  /// decompile of 300 ntoskrnl functions recovered 2265 callees again.
   static constexpr size_t MaxProbes =
       ::neverd::limits::pipeline::kPipelineCallAbiDetailMaxProbes;
   /// The conversions kept of each callee.  The selections around a callee
@@ -233,10 +293,14 @@ struct OmittedCalleeMemo {
   };
   /// The bodies the memo holds at most, counted by their blocks, operations
   /// and external operands (keep): bodies of a large image's every callee hold
-  /// most of its MedIR.  A mid-sized image's signature bodies, an Android
-  /// server's 6000, fit in three quarters of it.
-  static constexpr size_t MaxBytes =
-      ::neverd::limits::pipeline::kPipelineCallAbiDetailMaxBytes;
+  /// most of its MedIR.  A session's decompiles read the same callees again,
+  /// so the memo holds what they read rather than evicting it for each one's
+  /// new callees: 600 decompiles of 300 ntoskrnl functions read 3980 callees,
+  /// 1.3 GB, which a cap of 512 MB evicted from the 48th on.  A replica's
+  /// read-ahead fills three quarters of it, the more the larger it is: a
+  /// share of the host's physical memory, between
+  /// kPipelineCallAbiDetailMaxBytes and kPipelineCallAbiDetailMaxBytesCeiling.
+  static size_t maxBytes();
   /// Read of \p Img with \p Result's function-pointer variables; starts
   /// again when this was read of another image or with other variables.
   void adopt(const BinaryImage &Img, const PipelineResult &Result);
@@ -256,10 +320,18 @@ struct OmittedCalleeMemo {
   Callee *find(va_t Entry);
   /// Keeps \p Converted as \p Holder's conversion used last, where its
   /// conversion used longest ago makes room past MaxConversions.  Past
-  /// MaxBytes, the bodies of the callees used longest ago go, \p Holder's
+  /// maxBytes(), the bodies of the callees used longest ago go, \p Holder's
   /// aside, down to three quarters of it.
   const Conversion &keep(Callee &Holder, Conversion Converted);
-  /// What the kept bodies count against MaxBytes.
+  /// Keeps \p Kept as \p Holder's prepared source body, counted against
+  /// maxBytes() until the conversion goes; the next keep makes room.
+  void keepPrepared(Conversion &Holder,
+                    std::shared_ptr<const Conversion::PreparedSource> Kept);
+  /// Keeps \p Kept as what the image-wide solve gives \p Holder's body,
+  /// counted against maxBytes() as keepPrepared counts.
+  void keepGlobal(Conversion &Holder,
+                  std::shared_ptr<const GlobalSignature> Kept);
+  /// What the kept bodies count against maxBytes().
   size_t bytes() const { return Bytes; }
   /// The entries callee lifts know: the image's function symbols that are
   /// not boundary guesses, read when the memo adopts the image.
@@ -274,9 +346,17 @@ struct OmittedCalleeMemo {
   /// cache's, the index serves until the memo adopts another image or the
   /// cache is reset.
   const ExecutableCodeOwnerIndex &codeOwners();
+  /// The name of the function at each address an export or a symbol of the
+  /// image the memo adopted names (imageFunctionNames), which the callee
+  /// lifts take: getFunctionNameAt scans every export and symbol for each.
+  /// Kept like codeOwners, and read again where the exports changed.
+  const std::map<va_t, std::string> &functionNames();
   /// The absolute relocations of the image the memo adopted, indexed by
   /// target for the lifts of the callees read of it, kept like codeOwners.
   const detail::AbsoluteRelocationRootIndex &absoluteRelocationRoots();
+  /// The same exact no-return names used by every supplemental signature
+  /// lift of this image. Declarations remain owned by the ordinary pipeline.
+  const libc::NoReturnTargetIndex &noReturnTargets();
   /// The addresses that name a runtime routine one intrinsic models in the
   /// image the memo adopted (runtimeRoutineCallsOf), read for the
   /// conversions of the callees read of it where they first need them, and
@@ -288,16 +368,33 @@ struct OmittedCalleeMemo {
 
   std::map<va_t, Callee> Callees;
 
+  /// How many times adopt() started the memo again.
+  uint64_t Adoptions = 0;
+  /// What the kept bodies' Global signatures were solved under: the
+  /// adoption they read and the prototypes that declare callees.  A run
+  /// whose summaries declare others reads none of them.
+  struct GlobalStamp {
+    uint64_t Adoption = 0;
+    SharedValue<std::set<va_t>> PrototypeArguments;
+  };
+  std::optional<GlobalStamp> Globals;
+  /// The image-wide solve in progress, or null.
+  std::shared_ptr<GlobalCalleeSolve> Solve;
+
 private:
   const BinaryImage *Image = nullptr;
   const Symbol *SymbolData = nullptr;
   size_t SymbolCount = 0;
-  std::map<va_t, va_t> CallArgumentSources;
+  SharedValue<std::map<va_t, va_t>> CallArgumentSources;
   std::set<va_t> FunctionEntries;
   std::map<va_t, PointerVariableCallee> PointerCallees;
   std::optional<ExecutableCodeOwnerIndex> CodeOwners;
+  std::optional<std::map<va_t, std::string>> FunctionNames;
+  const Export *NamedExports = nullptr;
+  size_t NamedExportCount = 0;
   std::shared_ptr<const detail::AbsoluteRelocationRootIndex>
       AbsoluteRelocationRoots;
+  std::shared_ptr<const libc::NoReturnTargetIndex> NoReturnTargets;
   std::optional<std::map<va_t, Intrinsic>> RuntimeRoutineCalls;
   std::optional<std::vector<va_t>> CodePointerTargets;
   size_t Bytes = 0;
@@ -308,6 +405,23 @@ private:
 /// projection. Derived bodies and memo ownership remain the caller's choice.
 void copyCallSignatureFacts(const PipelineResult &Source,
                             PipelineResult &Destination);
+
+/// \p Source as source stack preparation reads a body it follows
+/// (prepareRecoveredSourceStackAccesses): a copy with its stack accesses
+/// marked, the spills found overwritten, and the readers of its values.  A
+/// run's own complete body, with \p KeepPrologueSaves, keeps the prologue
+/// saves its earlier phase proved.  An omitted callee's preparation reads
+/// only its kept body and the image; the memo keeps it with the conversion.
+std::shared_ptr<OmittedCalleeMemo::Conversion::PreparedSource>
+prepareSourceStackBody(const MedFunc &Source, const BinaryImage &Image,
+                       bool KeepPrologueSaves);
+
+/// Refine source-only integer carriers whose complete uses forward pointers
+/// to admitted imported declarations. Shared by HighC and LLVM-to-C; native
+/// lifting and patching retain their independent machine type contracts.
+void refineSourcePointerParameters(const BinaryImage &Image,
+                                   PipelineResult &Result,
+                                   const DebugContext *Debug);
 
 /// Recover every call's arguments in \p Result, and the parameters each
 /// forwarder passes straight through, from the setup its caller writes
@@ -320,14 +434,18 @@ void copyCallSignatureFacts(const PipelineResult &Source,
 /// the types the functions have already been given (inferMedTypes).
 void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                           const std::map<va_t, std::string> &AllFuncNames,
-                          bool SourceDeclarations = false);
+                          bool SourceDeclarations = false,
+                          bool SourceParameterReads = false);
 
 /// Confirm caller-observed return shapes in omitted local callees. Uses the
 /// signature reader's complete lifts, conversion memo and work bounds; support
 /// bodies never become output functions. Candidates with no proof are removed.
+/// A target outside \p FirstWordObserved had only second-word readers, so an
+/// argument register its body never writes supplies no field.
 void confirmOmittedStructReturns(
     const BinaryImage &Image, const PipelineResult &Result,
-    std::map<va_t, std::vector<MedReturnReg>> &Candidates);
+    std::map<va_t, std::vector<MedReturnReg>> &Candidates,
+    const std::set<va_t> &FirstWordObserved);
 
 /// Read the signature bodies of \p Functions into
 /// \p Summaries.CalleeSignatureMemo as a restricted run under \p Summaries'
@@ -337,6 +455,115 @@ void confirmOmittedStructReturns(
 AnalysisCacheWarmup warmOmittedCallees(const BinaryImage &Img,
                                        const PipelineResult &Summaries,
                                        llvm::ArrayRef<va_t> Functions);
+
+/// warmOmittedCallees, reading the next callees of \p Functions together on
+/// the pipeline's workers as a run's signature read does (readAhead), and
+/// converting every lift as that read does.
+AnalysisCacheWarmup prefillOmittedCallees(const BinaryImage &Img,
+                                          const PipelineResult &Summaries,
+                                          llvm::ArrayRef<va_t> Functions);
+
+/// The summaries a run's signature bodies give their callers, by entry, as
+/// recoverModuleCallAbi gathers them before the forwarder probes.
+struct CalleeSummaryMaps {
+  std::map<va_t, int> RegArity;
+  std::map<va_t, int> TotalArity;
+  std::map<va_t, int> FPArity;
+  std::map<va_t, std::vector<uint64_t>> FPRegs;
+  std::map<va_t, std::map<uint64_t, uint16_t>> FPScalarBytes;
+  std::map<va_t, uint16_t> FPReturnSize;
+  std::map<va_t, bool> HasSret;
+  std::map<va_t, bool> IsVariadic;
+  std::set<va_t> VectorArguments;
+  std::map<va_t, bool> ConsumesVaList;
+  // The integer argument registers of each function that takes them in its
+  // own order (MedFunc::IntegerArgumentRegisters).
+  std::map<va_t, std::vector<uint64_t>> IntRegs;
+
+  /// Notes what the body at \p Entry gives its callers.
+  void note(va_t Entry, const OmittedCalleeMemo::CalleeSummary &Summary) {
+    if (!Summary.IntegerArgumentRegisters.empty())
+      IntRegs[Entry] = Summary.IntegerArgumentRegisters;
+    ConsumesVaList[Entry] = Summary.ConsumesVaList;
+    RegArity[Entry] = Summary.RegArity;
+    TotalArity[Entry] = Summary.TotalArity;
+    HasSret[Entry] = Summary.HasSret;
+    IsVariadic[Entry] = Summary.IsVariadic;
+    if (Summary.VectorArguments)
+      VectorArguments.insert(Entry);
+    FPArity[Entry] = Summary.FPArity;
+    FPRegs[Entry] = Summary.FPRegs;
+    FPScalarBytes[Entry] = Summary.FPScalarBytes;
+    FPReturnSize[Entry] = Summary.FPReturnSize;
+  }
+};
+
+/// A forwarder probe of \p Body as forwarder propagation probes a body
+/// (propagateForwardedCallArities) under \p Shared's summaries, whose
+/// register arities, total arities and variadic marks it reads from
+/// \p RegArity, \p TotalArity and \p IsVariadic instead: the probe's
+/// recovery writes those three at the body's entry.
+OmittedCalleeMemo::ProbeSignature probeCalleeSignature(
+    const MedFunc &Body, const BinaryImage &Img,
+    const std::map<va_t, std::string> &Names, const CalleeSummaryMaps &Shared,
+    std::map<va_t, int> &RegArity, std::map<va_t, int> &TotalArity,
+    std::map<va_t, bool> &IsVariadic,
+    const std::map<va_t, PointerVariableCallee> &PointerCallees,
+    const std::set<va_t> &PrototypeArguments,
+    const RelocationSymbolIndex &Relocations);
+
+/// What forwarder propagation makes of \p Probe, a probe of the body at
+/// \p Entry: the summaries the probe's recovery left at the entry, then
+/// those the fixed point raises there.  Whether any grew.
+bool applyCalleeProbe(va_t Entry,
+                      const OmittedCalleeMemo::ProbeSignature &Probe,
+                      CalleeSummaryMaps &Maps);
+
+/// The omitted recovery of a copy of \p Body as recoverModuleCallAbi
+/// recovers an omitted body under \p Shared's summaries, with the three it
+/// writes at the entry in \p RegArity, \p TotalArity and \p IsVariadic:
+/// what bounds and declares the calls to it, and those summaries it leaves,
+/// into \p Into.
+void recoverOmittedCallee(
+    const MedFunc &Body, const BinaryImage &Img,
+    const std::map<va_t, std::string> &Names, const CalleeSummaryMaps &Shared,
+    std::map<va_t, int> &RegArity, std::map<va_t, int> &TotalArity,
+    std::map<va_t, bool> &IsVariadic,
+    const std::map<va_t, PointerVariableCallee> &PointerCallees,
+    const std::set<va_t> &PrototypeArguments,
+    const RelocationSymbolIndex &Relocations,
+    OmittedCalleeMemo::GlobalSignature &Into);
+
+/// Whether the image-wide solve of \p Summaries.CalleeSignatureMemo's kept
+/// bodies (stepGlobalCalleeSignatures) applies to \p Img: an x64 COFF image
+/// with a memo, while limits::pipeline::kPipelineCallAbiGlobalSignatures
+/// holds.
+bool solvesGlobalCalleeSignatures(const BinaryImage &Img,
+                                  const PipelineResult &Summaries);
+
+/// One step of the image-wide solve of \p Summaries.CalleeSignatureMemo's
+/// kept bodies (PipelineCallAbiGlobal.cpp), probing or recovering at most
+/// about \p Bodies of them; starts it where none is in progress.  Once it
+/// is complete it gives each body it could probe and recover its Global
+/// signature and stamps the memo.  True once complete; false while it has
+/// more steps.  A memo another adoption started again, or summaries that
+/// declare other callees, start it again.
+bool stepGlobalCalleeSignatures(const BinaryImage &Img,
+                                const PipelineResult &Summaries,
+                                const std::map<va_t, std::string> &Names,
+                                size_t Bodies);
+
+/// Installs in \p Maps what the image-wide solve gives each of \p Omitted,
+/// a run's omitted bodies whose memo conversions \p Holders are, where it
+/// gives one and \p Result reads the summaries it was solved under.  Entries
+/// in \p Skip keep the run's own summaries.  The signatures installed, by
+/// body, or null.
+std::vector<std::shared_ptr<const OmittedCalleeMemo::GlobalSignature>>
+installGlobalCalleeSignatures(
+    const OmittedCalleeMemo &Memo, const PipelineResult &Result,
+    llvm::ArrayRef<std::shared_ptr<const MedFunc>> Omitted,
+    llvm::ArrayRef<OmittedCalleeMemo::Conversion *> Holders,
+    const std::set<va_t> &Skip, CalleeSummaryMaps &Maps);
 
 /// Give each call in \p Result exactly its callee's parameters, as the LLVM
 /// emitter does when it truncates a call to its callee's declaration: once

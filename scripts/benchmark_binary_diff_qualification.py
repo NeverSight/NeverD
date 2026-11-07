@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import math
-import os
 from pathlib import Path
 import sys
 
@@ -90,7 +89,7 @@ def freeze(args: argparse.Namespace) -> dict:
         "harness": [bench.artifact(path, plan.parent) for path in harness_files()],
         "qualifier": bench.artifact(Path(__file__).resolve(), plan.parent),
         "case_ids": [case["id"] for case in cases],
-        "output_directory": os.path.relpath(output, plan.parent),
+        "output_directory": bench.recorded_path(output, plan.parent),
         "scope": value["scope"],
     }
     bench.save(plan, record)

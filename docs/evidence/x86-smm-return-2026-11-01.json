@@ -1,0 +1,411 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-01",
+  "feature": "native SMM software-state restoration",
+  "source_commit": "d37193039a9106d10a1d54a72565254bc6c847aa",
+  "llvm_commit": "8148aa6ec8207e181b2d33203d19c9b85be66f66",
+  "neverc_commit": "c1cfa0dddc7bfa418c0e3a14058be09ca7a20d8a",
+  "production_sdk": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "profile": "native-smm-v12",
+  "state_bytes": 2368,
+  "regressions": [
+    {
+      "sdk": "native",
+      "passed": 204,
+      "failed": 0,
+      "skipped": 0,
+      "report": "neverd-native-final-tests.log",
+      "sha256": "86c9ed0c6a045da5fcf142c58d16106582abe3295107b6cc504e09b50e9c5676"
+    },
+    {
+      "sdk": "r6",
+      "passed": 204,
+      "failed": 0,
+      "skipped": 0,
+      "report": "neverd-r6-final-tests.log",
+      "sha256": "39ef0f83c2c37843f44d36ea49811ff0fcab8cfe55d8765725f60fd41909b0fd"
+    }
+  ],
+  "source_artifacts": [
+    {
+      "name": "smm-high.c",
+      "sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+      "identical_sdks": true
+    },
+    {
+      "name": "smm-high.json",
+      "sha256": "316139ccba92a2560e8a866fd03afbde63bcb842be1a68e30afa47da652b7afa",
+      "identical_sdks": true
+    },
+    {
+      "name": "smm-llvm.c",
+      "sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+      "identical_sdks": true
+    },
+    {
+      "name": "smm-llvm.json",
+      "sha256": "9e7d6774f52f24e848829035ed85972c9c4aef3124c4a8cb6fe765727b304214",
+      "identical_sdks": true
+    }
+  ],
+  "source_files": [
+    {
+      "path": "include/neverd/analysis/InterpreterMachineStateProfile.h",
+      "sha256": "33f3357c19928d429c221e20c325767ca77edb536e39d01f1feafdc18b98b15c"
+    },
+    {
+      "path": "include/neverd/analysis/arch/x86_64/X64ContinuationSource.h",
+      "sha256": "90f39c118cdc788f6b700f69d6bbaf50f6ce6e8025dd8db1ae9e88b9015f578f"
+    },
+    {
+      "path": "include/neverd/ir/intrinsics/IntrinsicTermination.h",
+      "sha256": "50e7e08d6dcfe42cf14ddc56e593181e324f4974de0ddc30d6be7d97085d4c51"
+    },
+    {
+      "path": "include/neverd/ir/intrinsics/Intrinsics.h",
+      "sha256": "04bef8a716b2b2284b0c3c08a8a1727f8bee449dffb41148a5f5a5d2b42b6c3b"
+    },
+    {
+      "path": "include/neverd/ir/intrinsics/X86/X86Virtualization.h",
+      "sha256": "5c547f1bad82e469f6c1aec6513bf33e67fda766cfa14da194ff352761859e49"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/BinaryInterpreterSpecialization.cpp",
+      "sha256": "e2c309cb2fd9bb35a9ac0e39109ba5fdd1c0f592a4c2cd21a949fde83350504f"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSource.cpp",
+      "sha256": "506f86a27d07c7f089114d813b2b1f8210bae667c275fb48921fce009b13e9e2"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSmm.h",
+      "sha256": "0e686a31d69dfafaf0907b9a87d63425c71d4ee2fe962e7a6773a05a40da64a2"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationAvxImage.h",
+      "sha256": "ea66dd0b22dc9054223d1aa4a0151906e57ad5dd7b5980b713ae4a716d1e9c26"
+    },
+    {
+      "path": "lib/analysis/arch/x86_64/X64ContinuationSvm.h",
+      "sha256": "2e2e77a5ee1ec18fed20580988f36f49dcdc5201233220b16c50b28290e31363"
+    },
+    {
+      "path": "lib/backend/c/render/X86/X86Virtualization.cpp",
+      "sha256": "506a83a6749dac1cb2c91423026bc675235471adcd4b427cf8d2c076782ae313"
+    },
+    {
+      "path": "lib/backend/llvm/X86/MedLLVMX86Virtualization.cpp",
+      "sha256": "b87ba60cadb9eaa7ae750f1444b9d403f40be12c5bf813042c0e847afa117e06"
+    },
+    {
+      "path": "lib/pipeline/X86/X64ContinuationExport.cpp",
+      "sha256": "f03cecc223c1ed23e0cd57f79c68eec53f3a3af30ed30f29ac84693d5a5daf39"
+    },
+    {
+      "path": "unittests/devirtualization/x86_64/X64SmmContinuationExportTests.inc",
+      "sha256": "b171eead2ee5f316681cafc529a32a40925909a473f30ae47e7b438137ff9550"
+    },
+    {
+      "path": "scripts/isa/x86/verify_smm_return.py",
+      "sha256": "00e596f606708cecc70359d3f38230e97cbff6d94fbf8a89ef7c9eac4fd729d4"
+    }
+  ],
+  "compiler_tests": {
+    "neverc_passed": 10,
+    "llvm_lit_passed": 2,
+    "generators_passed": 9
+  },
+  "compiler_qualification": {
+    "scope": "KVM-mediated SMM save/restore through native RSM",
+    "host": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "code_bits": 64,
+    "profiles": [
+      {
+        "profile": "llvm-O0",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304,
+        "elf_sha256": "3d8252b222406f70e8b0baa530ceec859c66e0eb05ef258848833fc6c7b74ca9",
+        "negative_control": "wrong opcode rejected",
+        "negative_xstate_control": "missing XRSTOR rejected"
+      },
+      {
+        "profile": "llvm-O2",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304,
+        "elf_sha256": "23c8aeaad88b6f9fbbfb3c853cdc451a61dfb50a9f90b6e2ff6dd9145ce33f34",
+        "negative_control": "wrong opcode rejected",
+        "negative_xstate_control": "missing XRSTOR rejected"
+      },
+      {
+        "profile": "neverc-O0",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304,
+        "elf_sha256": "b4e5c134bb00e733fad81e5e4b249311824cfca6cef93778b2d43309170f9838",
+        "negative_control": "wrong opcode rejected",
+        "negative_xstate_control": "missing XRSTOR rejected"
+      },
+      {
+        "profile": "neverc-O2",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304,
+        "elf_sha256": "b3071c05a65181423a4d122b8a0080ed49095aa193e5e1a86897c7d8f8bfcd6c",
+        "negative_control": "wrong opcode rejected",
+        "negative_xstate_control": "missing XRSTOR rejected"
+      },
+      {
+        "profile": "neverc-ir-O0",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304,
+        "elf_sha256": "31a84c70cac89c73dd3fb02cfe1980372713be0099ec2106cb74d88313fadc86",
+        "negative_control": "wrong opcode rejected",
+        "negative_xstate_control": "missing XRSTOR rejected"
+      },
+      {
+        "profile": "neverc-ir-O2",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304,
+        "elf_sha256": "61eb31f806d1896fb0969c27c6a485c3571cfa27d11493217ec00554536ed6ea",
+        "negative_control": "wrong opcode rejected",
+        "negative_xstate_control": "missing XRSTOR rejected"
+      }
+    ],
+    "smm_software_context": true,
+    "source_sha256": {
+      "verify_frame_returns.py": "d555d81c34b75eb39e2626bc32da090c78d2f31de8048bedb88ed42319eb238f",
+      "frame_return_kvm.c": "ccc5a95cf7f9f88060d0cfaa777551a5750db455920519076d6df2776ca9b132",
+      "smm_return_kvm.c": "43b5f07915c66b71bc3099cd65a1dfe489c50f3f6e1caa2ae69b8488ba09cb9d",
+      "KvmTransferFixture.h": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396"
+    },
+    "tools": {
+      "clang": {
+        "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+      },
+      "ld.lld": {
+        "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+      },
+      "objcopy": {
+        "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+      },
+      "llc": {
+        "sha256": "3e259c85f0961dd7456040fef236a17d247c80a1bfdaed6182e4c24ca8dbdb20"
+      },
+      "opt": {
+        "sha256": "5ec38c9683daf9854f8d328fb5afc7902abc0ca4138feb5b16c564a7834f586b"
+      },
+      "llvm-objdump": {
+        "sha256": "2bc217fb9b1a5d8b7eec483f0f4079999af7c869b353bcd71158b398f9cad1b6"
+      },
+      "neverc": {
+        "sha256": "12d1e91e774c2a031273ab32616eccd336eebbd8557e3771152753c82a3d80b9"
+      }
+    },
+    "reference": "Intel SDM Vol. 2 IRET/RET/SYSENTER; Vol. 3C 34.4.1 SMM state",
+    "reference_url": "https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf",
+    "exclusions": [
+      "CET enabled",
+      "FRED and UIRET successful paths",
+      "bare-metal SMM implementation",
+      "NT task return",
+      "fault ordering",
+      "asynchronous unwind/interrupt delivery",
+      "other CPU models",
+      "architectural promises for compatibility GPR high halves"
+    ]
+  },
+  "export_qualification": {
+    "profiles": [
+      {
+        "route": "high",
+        "optimization": "O0",
+        "backend": "neverc",
+        "source_sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+        "ir_sha256": "ca60b4908382c8456a70bc95df0ef25ee8c0aa9f665590a6d4578b3ec2419761",
+        "image_sha256": "26ebce4519147e08f8528d7a8c3c4091f91d9362fe8eaa6cfc760bd1d18f2da1",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304
+      },
+      {
+        "route": "high",
+        "optimization": "O0",
+        "backend": "llvm-legacy",
+        "source_sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+        "ir_sha256": "ca60b4908382c8456a70bc95df0ef25ee8c0aa9f665590a6d4578b3ec2419761",
+        "image_sha256": "2ec743103253f11c78838e43240684bc8db2c08e62d9e43c72802b68e4d65382",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304
+      },
+      {
+        "route": "high",
+        "optimization": "O0",
+        "backend": "llvm-new",
+        "source_sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+        "ir_sha256": "ca60b4908382c8456a70bc95df0ef25ee8c0aa9f665590a6d4578b3ec2419761",
+        "image_sha256": "2ec743103253f11c78838e43240684bc8db2c08e62d9e43c72802b68e4d65382",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304
+      },
+      {
+        "route": "high",
+        "optimization": "O2",
+        "backend": "neverc",
+        "source_sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+        "ir_sha256": "3d8296659205494d21690aa9f08225155d08734755e35aafb00da4e488915d1d",
+        "image_sha256": "9fd6adfb701ce27d891f527c3a622d9dc422cc87008d9e323c560217ba8f8083",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304
+      },
+      {
+        "route": "high",
+        "optimization": "O2",
+        "backend": "llvm-legacy",
+        "source_sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+        "ir_sha256": "3d8296659205494d21690aa9f08225155d08734755e35aafb00da4e488915d1d",
+        "image_sha256": "97248c125dd5f35e219dd64e583e756f2b949a24dccfa180126246b9e224e849",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304
+      },
+      {
+        "route": "high",
+        "optimization": "O2",
+        "backend": "llvm-new",
+        "source_sha256": "5c935174895da096b8ffd4c89ce8bbf0c7e44b58660f8bd1301181452f9db024",
+        "ir_sha256": "3d8296659205494d21690aa9f08225155d08734755e35aafb00da4e488915d1d",
+        "image_sha256": "db6489016f014e1315e9ff09acbec6e4911c497d04df68e9965cef29dc262b67",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304
+      },
+      {
+        "route": "llvm",
+        "optimization": "O0",
+        "backend": "neverc",
+        "source_sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+        "ir_sha256": "61b64da1d0dd5934c250035575d902d78ba915a134b2e371ddc5f74bfe64642f",
+        "image_sha256": "d741d4c3a22295a52fdd77e84e511996f30356e38f74d43fd73e7483c327d21d",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304
+      },
+      {
+        "route": "llvm",
+        "optimization": "O0",
+        "backend": "llvm-legacy",
+        "source_sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+        "ir_sha256": "61b64da1d0dd5934c250035575d902d78ba915a134b2e371ddc5f74bfe64642f",
+        "image_sha256": "b110142e006de0094ff71ceff2a6753014991ddb0b48ef5bd9662a6be7a7e0f4",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304
+      },
+      {
+        "route": "llvm",
+        "optimization": "O0",
+        "backend": "llvm-new",
+        "source_sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+        "ir_sha256": "61b64da1d0dd5934c250035575d902d78ba915a134b2e371ddc5f74bfe64642f",
+        "image_sha256": "b110142e006de0094ff71ceff2a6753014991ddb0b48ef5bd9662a6be7a7e0f4",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304
+      },
+      {
+        "route": "llvm",
+        "optimization": "O2",
+        "backend": "neverc",
+        "source_sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+        "ir_sha256": "9237592f4e44d70d398ffcf2a55a7de239fed6c3566fa4922ac58dffe30db614",
+        "image_sha256": "f710bb65cd76989d327bf5796e99622845dc6d76f8dc8126f586cbd49b23092d",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304
+      },
+      {
+        "route": "llvm",
+        "optimization": "O2",
+        "backend": "llvm-legacy",
+        "source_sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+        "ir_sha256": "9237592f4e44d70d398ffcf2a55a7de239fed6c3566fa4922ac58dffe30db614",
+        "image_sha256": "0f443e7677173b964f51847e7b5abb13c248e035578a81defc948caaa45e638d",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304
+      },
+      {
+        "route": "llvm",
+        "optimization": "O2",
+        "backend": "llvm-new",
+        "source_sha256": "412f4d79ad148e2e0238db081c160418393bf88c20300da6d8b586cc643d49c0",
+        "ir_sha256": "9237592f4e44d70d398ffcf2a55a7de239fed6c3566fa4922ac58dffe30db614",
+        "image_sha256": "8b2fec6825ff3d5f854cb62c5c8d7e7d2a122318faee0eb0ab5c5fdb84540fc6",
+        "functions": 4,
+        "complete_state_pairs": 3072,
+        "mapped_bytes_per_observation": 4194304
+      }
+    ],
+    "complete_state_pairs": 36864,
+    "fixture_sha256": "43b5f07915c66b71bc3099cd65a1dfe489c50f3f6e1caa2ae69b8488ba09cb9d",
+    "fixture_header_sha256": "0ade7d4bd1d81f146e58609496b352e95edfe23f94c0bcbcf8fd4fc6608df396",
+    "tools": {
+      "neverc": {
+        "sha256": "12d1e91e774c2a031273ab32616eccd336eebbd8557e3771152753c82a3d80b9"
+      },
+      "llc": {
+        "sha256": "3e259c85f0961dd7456040fef236a17d247c80a1bfdaed6182e4c24ca8dbdb20"
+      },
+      "llvm-objdump": {
+        "sha256": "2bc217fb9b1a5d8b7eec483f0f4079999af7c869b353bcd71158b398f9cad1b6"
+      },
+      "clang": {
+        "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+      },
+      "ld.lld": {
+        "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+      },
+      "objcopy": {
+        "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+      }
+    },
+    "scope": "KVM-mediated native SMM, code64, XCR0=7; software state plus ambient SMI image"
+  },
+  "total_complete_state_pairs": 55296,
+  "oracle": {
+    "runtime": "Intel i9-13900H, native KVM-mediated SMM",
+    "save_image": "independent SMI-created processor image on each vCPU",
+    "reference": "original XRSTOR64/RSM bytes",
+    "source_projection": "original xstate input retained before explicit SIMD import",
+    "compare": [
+      "all GPRs, PC and RFLAGS",
+      "system registers and segment caches",
+      "IA32_KERNEL_GS_BASE",
+      "both 2 MiB memory spaces at RSM",
+      "KVM event state",
+      "x87/SSE/AVX architectural values"
+    ],
+    "xstate_normalization": "materialize initial components when XSTATE_BV is clear; retain all populated payloads",
+    "negatives": [
+      "wrong RSM opcode rejected",
+      "omitted XRSTOR fails xstate comparison"
+    ]
+  },
+  "limits": [
+    "Active native SMM, code64, XCR0=7, valid accessible ordinary RAM",
+    "Hardware owns its SMI save image; no universal SMRAM layout is emulated",
+    "Other software-managed MSRs, debug state, devices and mappings remain environment-owned",
+    "No SMI entry/selection emulation, SGX/CET/VMX/SVM interactions or asynchronous unwind",
+    "No fault/restart emulation or bare-metal firmware qualification",
+    "Legacy i386 and SGX continuation gaps remain separate work",
+    "No LLVM release, SDK pin or gitlink update"
+  ]
+}

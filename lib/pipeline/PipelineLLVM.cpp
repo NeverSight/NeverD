@@ -233,8 +233,12 @@ Pipeline::LLVMEmissionResult Pipeline::emitLLVMSharded(
     const DebugContext *Dbg, const SourceViewOptions &View,
     const std::set<va_t> *PrototypeArgumentCallees,
     bool PreserveUnknownSourceValues,
-    llvm::ArrayRef<MedFunc> SourceCalleeDeclarations) {
+    llvm::ArrayRef<MedFunc> SourceCalleeDeclarations, bool OmitRefusedBodies,
+    bool AnalysisRecoveryForSource) {
   const size_t N = Funcs.size();
+  const bool OriginalAnalysisImage =
+      AnalysisRecoveryForSource &&
+      llvm::any_of(Funcs, [](const MedFunc &F) { return F.AnalysisOnly; });
   NumThreads = std::max(
       1u, std::min<unsigned>(NumThreads, static_cast<unsigned>(N ? N : 1)));
   const pipeline_detail::LLVMShardPlan ShardPlan =
@@ -243,20 +247,48 @@ Pipeline::LLVMEmissionResult Pipeline::emitLLVMSharded(
     std::vector<char> Mask(N, 0);
     for (size_t I = 0; I < N; ++I)
       Mask[I] = (ShardPlan.ShardOf[I] == S);
-    MedLLVMEmitter Emitter;
-    Emitter.setPreserveUnknownSourceValues(PreserveUnknownSourceValues);
-    Emitter.setSourceCalleeDeclarations(SourceCalleeDeclarations);
-    Emitter.setDebugContext(Dbg);
-    Emitter.setPrototypeArgumentCallees(PrototypeArgumentCallees);
     LLVMEmissionResult Result;
-    if (RecordSources) {
-      Result.Sources = std::make_shared<LLVMSourceMap>();
-      Emitter.setSourceMap(Result.Sources.get());
+    // Where the unit names what it leaves out, a body that refuses a stale
+    // address, or whose contract the emitter refuses before any module,
+    // stays declared only, with why, and the shard is emitted again without
+    // it: one refusal must not cost the unit every other definition. Each
+    // round leaves out at least one body.
+    for (;;) {
+      MedLLVMEmitter Emitter;
+      // The shards' masks partition the unit, and a body left out is noted.
+      Emitter.setMaskedBodiesOwnedElsewhere(true);
+      Emitter.setPreserveUnknownSourceValues(PreserveUnknownSourceValues);
+      Emitter.setAnalysisRecoveryForSource(AnalysisRecoveryForSource);
+      Emitter.setOriginalImageStorageForSource(OriginalAnalysisImage);
+      Emitter.setSourceCalleeDeclarations(SourceCalleeDeclarations);
+      Emitter.setDebugContext(Dbg);
+      Emitter.setPrototypeArgumentCallees(PrototypeArgumentCallees);
+      Result.Sources.reset();
+      if (RecordSources) {
+        Result.Sources = std::make_shared<LLVMSourceMap>();
+        Emitter.setSourceMap(Result.Sources.get());
+      }
+      try {
+        Result.Module = Emitter.emit(Funcs, ShardCtx, "neverd_output", TheArch,
+                                     Imports, &Img, Fmt,
+                                     /*MergeableGlobals=*/true, &Mask);
+      } catch (const std::exception &) {
+        // Any other error, and a refusal the unit cannot name, fails the
+        // shard with the emitter's text.
+        if (!OmitRefusedBodies || Emitter.refusedBodies().empty())
+          throw;
+        Result.Module.reset();
+      }
+      Result.UnhandledValueIntrinsics = Emitter.unhandledValueIntrinsicCount();
+      if (Result.Module || !OmitRefusedBodies ||
+          Emitter.refusedBodies().empty())
+        break;
+      for (const MedLLVMEmitter::RefusedBody &Refused :
+           Emitter.refusedBodies()) {
+        Mask[Refused.Index] = 0;
+        Result.LeftOut.emplace_back(Refused.Index, Refused.Reason);
+      }
     }
-    Result.Module = Emitter.emit(Funcs, ShardCtx, "neverd_output", TheArch,
-                                 Imports, &Img, Fmt,
-                                 /*MergeableGlobals=*/true, &Mask);
-    Result.UnhandledValueIntrinsics = Emitter.unhandledValueIntrinsicCount();
     if (Result.Sources)
       Result.Sources->preserveExpressionOrigins(Recognitions);
     return Result;
@@ -282,6 +314,7 @@ Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
     uint64_t UnhandledValueIntrinsics = 0;
     bool LLVMVerifierFailed = false;
     std::string Error;
+    std::vector<std::pair<size_t, std::string>> LeftOut;
   };
   std::vector<ShardResult> Shards(NumShards);
   auto appendError = [&](const std::string &Error) {
@@ -301,9 +334,8 @@ Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
       OptimizationOptions Options;
       OptimizationResult Result = optimizeModule(Warm, Options);
       if (isFatalOptimizationStop(Result.Stop))
-        llvm::WithColor::warning()
-            << "pipeline: LLVM optimizer warmup failed: "
-            << optimizationStopReasonName(Result.Stop) << "\n";
+        llvm::WithColor::warning() << "pipeline: LLVM optimizer warmup failed: "
+                                   << optimizationStopMessage(Result) << "\n";
       promoteScaffoldingAllocas(Warm);
     });
 
@@ -322,6 +354,7 @@ Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
         LLVMEmissionResult Emission = Emit(S, ShardCtx);
         Shard.UnhandledValueIntrinsics = Emission.UnhandledValueIntrinsics;
         Shard.LLVMVerifierFailed = Emission.LLVMVerifierFailed;
+        Shard.LeftOut = std::move(Emission.LeftOut);
         auto M = std::move(Emission.Module);
         if (!Emission.Error.empty()) {
           fail(Emission.Error);
@@ -349,7 +382,7 @@ Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
             // already promoted its temporary allocas.
           } else if (isFatalOptimizationStop(Optimization.Stop)) {
             Shard.LLVMVerifierFailed = true;
-            fail(optimizationStopReasonName(Optimization.Stop));
+            fail(optimizationStopMessage(Optimization));
             return;
           }
         } else {
@@ -407,6 +440,8 @@ Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
       const ShardResult &Shard = Shards[S];
       Result.UnhandledValueIntrinsics += Shard.UnhandledValueIntrinsics;
       Result.LLVMVerifierFailed |= Shard.LLVMVerifierFailed;
+      Result.LeftOut.insert(Result.LeftOut.end(), Shard.LeftOut.begin(),
+                            Shard.LeftOut.end());
       if (!Shard.Error.empty())
         appendError(Shard.Error);
       else if (Shard.Bitcode.empty())

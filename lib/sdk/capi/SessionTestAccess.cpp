@@ -10,7 +10,17 @@
 #include "ProgramMain.h"
 #include "SessionImpl.h"
 
+#include "neverd/libc/LibCNames.h"
+
 namespace neverd::sdk {
+InstructionFlow SessionTestAccess::instructionFlow(const BinaryImage &Img,
+                                                   Decoder &Dec,
+                                                   const DecodedInsn &Insn) {
+  const libc::NoReturnTargetIndex Targets(Img);
+  InstructionFlowScratch Scratch(&Targets);
+  return Scratch.summarize(Img, Dec, Insn);
+}
+
 std::vector<std::pair<neverd_va_t, unsigned>>
 SessionTestAccess::instructionDataAccesses(const BinaryImage &Img, Decoder &Dec,
                                            const DecodedInsn &Insn,

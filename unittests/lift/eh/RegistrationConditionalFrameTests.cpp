@@ -19,8 +19,602 @@
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/BinaryEncoding.h"
+
+#include "llvm/BinaryFormat/COFF.h"
+
+#include <cstdint>
+#include <initializer_list>
+#include <map>
+#include <optional>
+#include <set>
+#include <vector>
 
 using namespace neverd;
+
+TEST(RegistrationConditionalFrame,
+     NestedDispatchRequiresOneAuthenticatedKnownRaise) {
+  using namespace registration_state;
+  for (va_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+      SCOPED_TRACE(::testing::Message() << Base << " " << Mutation);
+      BinaryImage Image;
+      Image.Arch = Arch::X86;
+      Image.Bits = Bitness::Bits32;
+      Image.Format = BinaryFormat::COFF;
+      Image.Base = Base;
+      Image.Entry = Base + 0x1000;
+      Segment Text;
+      Text.VA = Image.Entry;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      Text.Data = {0xe8, 0x0b, 0, 0, 0, 0xc3};
+      Text.Data.resize(16, 0xcc);
+      Text.Data.insert(Text.Data.end(), {0x55, 0x8b, 0xec});
+      if (Mutation != 9)
+        for (unsigned Raise = 0; Raise != (Mutation == 3 ? 2u : 1u); ++Raise) {
+          if (Raise)
+            Text.Data.insert(Text.Data.end(), {0x31, 0xc9, 0x31, 0xd2});
+          const std::vector<uint8_t> Body = {
+              0x6a, uint8_t(Mutation == 8), // No argument array.
+              0x6a, uint8_t(Mutation == 7), // No argument count.
+              0x6a, uint8_t(Mutation == 2), // Continuable exception.
+              0x8b, 0x45,
+              0x08, 0x50,
+              0xff, 0x15};
+          Text.Data.insert(Text.Data.end(), Body.begin(), Body.end());
+          const size_t Slot = Text.Data.size();
+          Text.Data.resize(Slot + 4);
+          writeLE<uint32_t>(Text.Data.data() + Slot, uint32_t(Base + 0x2000));
+        }
+      Text.Data.insert(Text.Data.end(), {0x31, 0xc0, 0x5d, 0xc3});
+      Text.Size = Text.FileSz = Text.Data.size();
+      Section Code;
+      Code.VA = Text.VA;
+      Code.Size = Code.FileSz = Text.Size;
+      Code.Flags = Text.Flags;
+      Image.Sections.push_back(Code);
+      Image.Segments.push_back(Text);
+      Segment Data;
+      Data.VA = Base + 0x2000;
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Data.Size = Data.FileSz = 4;
+      Data.Data.resize(4);
+      Image.Segments.push_back(Data);
+      Section Storage;
+      Storage.VA = Data.VA;
+      Storage.Size = Storage.FileSz = Data.Size;
+      Storage.Flags = Data.Flags;
+      Image.Sections.push_back(Storage);
+      Import Raise;
+      Raise.Name = "RaiseException";
+      Raise.Module = Mutation == 6 ? "untrusted.dll" : "kernel32.dll";
+      Raise.IATAddr = Data.VA;
+      Image.Imports.push_back(Raise);
+      ASSERT_TRUE(Image.recordImportStorageSlot(
+          Raise.IATAddr, Raise.Name, 0,
+          ImportStorageEvidence::ImportDirectory));
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = Image.Entry + (Mutation == 4);
+      Call.Seq = Mutation == 5 ? -1 : 0;
+      Call.addInput(NdVar::cst(Image.Entry + 16, 4));
+      FrameState Parent;
+      Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+          FrameValue::frame(-64);
+      const std::set<int32_t> Initialized{-64, -63, -62, -61};
+      for (uint32_t Code : {0xe0000011u, 0xe0000012u, 0xe0000011u}) {
+        SCOPED_TRACE(Code);
+        Parent.store(-64, 4,
+                     Mutation == 1 ? FrameValue{} : FrameValue::constant(Code));
+        size_t Work = 0;
+        ConditionalCallResult Result;
+        const bool Valid = registration_abi::hasConditionalCallFrame(
+            Image, Call, Parent, Work, &Initialized, nullptr, nullptr, nullptr,
+            &Result);
+        EXPECT_EQ(Valid, Mutation < 6 || Mutation == 9);
+        EXPECT_EQ(bool(Result.Dispatch), Mutation == 0 || Mutation == 9);
+        if (Result.Dispatch) {
+          EXPECT_EQ(Result.StackPopBytes, 0u);
+          EXPECT_EQ(Result.ReturnValue, FrameValue::constant(0));
+          EXPECT_EQ(Result.Dispatch->ArgumentEnd, Mutation == 0 ? 12 : 8);
+          ASSERT_EQ(bool(Result.Dispatch->Raise), Mutation == 0);
+          if (Result.Dispatch->Raise) {
+            EXPECT_EQ(Result.Dispatch->Raise->Address, Image.Entry + 29);
+            EXPECT_EQ(Result.Dispatch->Raise->Code, Code);
+          }
+        }
+        EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+      }
+    }
+}
+
+TEST(RegistrationConditionalFrame, VolatileInputsDoNotRequireStackArguments) {
+  using namespace registration_state;
+  for (va_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Register : {x86reg::RAX, x86reg::RCX, x86reg::RDX})
+      for (unsigned Mode = 0; Mode != 14; ++Mode) {
+        SCOPED_TRACE(::testing::Message()
+                     << Base << " " << Register << " " << Mode);
+        const unsigned Index = Register / x86reg::GeneralRegStride;
+        BinaryImage Image;
+        Image.Arch = Arch::X86;
+        Image.Bits = Bitness::Bits32;
+        Image.Format = BinaryFormat::COFF;
+        Image.Base = Base;
+        Image.Entry = Base + 0x1000;
+        Segment Text;
+        Text.VA = Image.Entry;
+        Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+        if (Mode >= 10 && Mode <= 12)
+          // A zero input bypasses a load through a different, unbound carrier.
+          Text.Data = {0x85, uint8_t(0xc0 | (Index << 3) | Index),
+                       0x74, 2,
+                       0x8b, uint8_t((Index + 1) % 3)};
+        if (Mode == 13)
+          Text.Data = {0x31, uint8_t(0xc0 | (Index << 3) | Index)};
+        Text.Data.insert(Text.Data.end(),
+                         {0x8b, uint8_t((Mode == 9 ? 0 : 0xc0) | Index), 0xc3});
+        Text.Size = Text.FileSz = Text.Data.size();
+        if (Mode == 8)
+          Text.Flags = Text.Flags | SegmentFlags::Writable;
+        Section Code;
+        Code.VA = Text.VA;
+        Code.Size = Code.FileSz = Text.Size;
+        Code.Flags = Text.Flags;
+        Image.Sections.push_back(Code);
+        Image.Segments.push_back(Text);
+        FrameState Parent;
+        for (auto &Value : Parent.Registers)
+          Value = FrameValue::taint(true);
+        Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+            FrameValue::frame(-64);
+        auto Input = Mode == 0 || Mode == 10 ? FrameValue::constant(0)
+                     : Mode == 2 ? FrameValue::imageAddress(Base + 0x3000)
+                     : Mode == 3 || Mode == 9 || Mode == 12 ? FrameValue{}
+                     : Mode == 11 ? FrameValue::constant(1)
+                                  : FrameValue::constant(37);
+        if (Mode < 4 || Mode >= 8)
+          Parent.Registers[Index] = Input;
+        if (Mode == 5 || Mode == 6) {
+          LowOp Partial;
+          Partial.Opcode = NdOp::COPY;
+          Partial.Output = NdVar::reg(Register, Mode == 5 ? 1 : 2);
+          FrameTransfer(Parent, 0).write(Partial, FrameValue::constant(37));
+          EXPECT_TRUE(Parent.Registers[Index].MayBeFrame);
+        }
+        if (Mode == 7)
+          Parent.Registers[x86reg::RBX / x86reg::GeneralRegStride] = Input;
+        LowOp Call;
+        Call.Opcode = NdOp::CALL;
+        Call.addInput(NdVar::cst(Image.Entry, 4));
+        const std::set<int32_t> Initialized;
+        size_t Work = 0;
+        std::optional<FrameValue> Returned = FrameValue::constant(UINT32_MAX);
+        const bool Valid = registration_abi::hasConditionalCallFrame(
+            Image, Call, Parent, Work, &Initialized, &Returned);
+        const bool Expected = Mode < 4 || Mode == 10 || Mode == 13;
+        EXPECT_EQ(Valid, Expected);
+        if (!Expected) {
+          EXPECT_FALSE(Returned);
+          continue;
+        }
+        EXPECT_EQ(Returned, Mode == 13 ? FrameValue::constant(0) : Input);
+        ASSERT_LT(Work, limits::kMaxRegistrationEHStateWork);
+        size_t Exact = limits::kMaxRegistrationEHStateWork - Work;
+        EXPECT_TRUE(registration_abi::hasConditionalCallFrame(
+            Image, Call, Parent, Exact, &Initialized, &Returned));
+        EXPECT_EQ(Exact, limits::kMaxRegistrationEHStateWork);
+        size_t Limited = limits::kMaxRegistrationEHStateWork - Work + 1;
+        EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+            Image, Call, Parent, Limited, &Initialized, &Returned));
+        EXPECT_FALSE(Returned);
+      }
+}
+
+TEST(RegistrationConditionalFrame, PrivateRegisterBindingsKeepTheEntryABI) {
+  using namespace registration_state;
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  Image.Format = BinaryFormat::COFF;
+  Image.Base = 0x400000;
+  Image.Entry = Image.Base + 0x1000;
+  Segment Text;
+  Text.VA = Image.Entry;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = {0xc3};
+  Text.Size = Text.FileSz = Text.Data.size();
+  Section Code;
+  Code.VA = Text.VA;
+  Code.Size = Code.FileSz = Text.Size;
+  Code.Flags = Text.Flags;
+  Image.Sections.push_back(Code);
+  Image.Segments.push_back(Text);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  const auto Callee = CFGBuilder().buildIntegerFrameProof(
+      Image, Dec, Image.Entry, "bound-registers");
+  ASSERT_TRUE(Callee.hasCompleteLiftCoverage());
+  const std::map<int32_t, FrameValue> Arguments;
+  for (unsigned Index : {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, UINT32_MAX})
+    for (unsigned Mode = 0; Mode != 3; ++Mode) {
+      SCOPED_TRACE(::testing::Message() << Index << " " << Mode);
+      const std::map<unsigned, FrameValue> Registers{
+          {Index,
+           Mode == 1 ? FrameValue::frame(-16) : FrameValue::constant(37)}};
+      std::optional<FrameValue> Returned = FrameValue::constant(99);
+      registration_abi::ImageFrameEffects Effects;
+      size_t Work = 0;
+      const bool Valid = registration_abi::hasPrivateCallerFrame(
+          Callee, Image, Work, Effects,
+          {.ScalarArguments = Mode == 2 ? nullptr : &Arguments,
+           .ScalarRegisters = &Registers,
+           .ReturnValue = &Returned});
+      const bool Expected = Index < 3 && Mode == 0;
+      EXPECT_EQ(Valid, Expected);
+      EXPECT_EQ(Returned.has_value(), Expected);
+      if (Valid) {
+        ASSERT_TRUE(Returned);
+        EXPECT_EQ(Returned->Constant,
+                  Index == 0 ? std::optional<uint32_t>(37) : std::nullopt);
+      }
+    }
+}
+
+TEST(RegistrationConditionalFrame,
+     ReturnsKeepTheirInvocationAndAddressIdentity) {
+  using namespace registration_state;
+  for (va_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Mode = 0; Mode != 11; ++Mode) {
+      SCOPED_TRACE(Base);
+      SCOPED_TRACE(Mode);
+      BinaryImage Image;
+      Image.Arch = Arch::X86;
+      Image.Bits = Bitness::Bits32;
+      Image.Format = BinaryFormat::COFF;
+      Image.Base = Base;
+      Image.Entry = Base + 0x1000;
+      Segment Text;
+      Text.VA = Image.Entry;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      Text.Data = {0x55, 0x8b, 0xec};                 // push ebp; mov ebp,esp
+      std::vector<uint8_t> Body = {0x8b, 0x45, 0x08}; // return arg0
+      if (Mode == 3)
+        Body.clear(); // Incoming EAX belongs to another invocation.
+      if (Mode == 4)
+        Body = {0x8b, 0x45, 0x04}; // This callee's return PC.
+      if (Mode == 5)
+        Body = {0x8d, 0x45, 0xf8}; // Escaping private-frame address.
+      if (Mode == 6 || Mode == 7)
+        // The unknown second argument selects arg0 or arg0+4. Neither arm
+        // alone may supply the summary, regardless of block visitation order.
+        Body = {0x8b, 0x45, 0x08, 0x83, 0x7d, 0x0c,
+                0x00, 0x74, 0x03, 0x83, 0xc0, 0x04};
+      if (Mode == 10)
+        Body = {0xeb, 0xfe}; // A closed loop supplies no ordinary return.
+      Text.Data.insert(Text.Data.end(), Body.begin(), Body.end());
+      if (Mode != 10)
+        Text.Data.insert(Text.Data.end(), {0x5d, 0xc3});
+      Text.Size = Text.FileSz = Text.Data.size();
+      if (Mode == 9)
+        Text.Flags = Text.Flags | SegmentFlags::Writable;
+      Section Code;
+      Code.VA = Text.VA;
+      Code.Size = Code.FileSz = Text.Size;
+      Code.Flags = Text.Flags;
+      Image.Sections.push_back(Code);
+      Image.Segments.push_back(Text);
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.addInput(NdVar::cst(Image.Entry, 4));
+      FrameState Parent;
+      for (auto &Value : Parent.Registers)
+        Value = FrameValue::taint(true);
+      Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+          FrameValue::frame(-64);
+      const auto Argument = Mode == 1 || Mode == 6
+                                ? FrameValue::imageAddress(Base + 0x3000)
+                            : Mode == 2 ? FrameValue{}
+                                        : FrameValue::constant(37);
+      Parent.store(-64, 4, Argument);
+      std::set<int32_t> Initialized;
+      for (int32_t Byte = -64; Byte != -56; ++Byte)
+        Initialized.insert(Byte);
+      if (Mode == 8)
+        Initialized.erase(-61);
+      size_t Work = 0;
+      std::optional<FrameValue> Returned = FrameValue::constant(UINT32_MAX);
+      const bool Valid = registration_abi::hasConditionalCallFrame(
+          Image, Call, Parent, Work, &Initialized, &Returned);
+      EXPECT_EQ(Valid, Mode != 5 && Mode != 8 && Mode != 9);
+      if (!Valid || Mode == 10) {
+        EXPECT_FALSE(Returned);
+        continue;
+      }
+      ASSERT_TRUE(Returned);
+      if (Mode == 3 || Mode == 4) {
+        auto Opaque = FrameValue::taint(true);
+        Opaque.FrameOnlyFromCall = true;
+        EXPECT_EQ(*Returned, Opaque);
+      } else if (Mode == 6 || Mode == 7)
+        EXPECT_EQ(*Returned, FrameValue{});
+      else
+        EXPECT_EQ(*Returned, Argument);
+      size_t Incomplete = limits::kMaxRegistrationEHStateWork - Work + 1;
+      EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+          Image, Call, Parent, Incomplete, &Initialized, &Returned));
+      EXPECT_FALSE(Returned);
+    }
+}
+
+TEST(RegistrationConditionalFrame, UnknownScalarArgumentsNeedInitializedBytes) {
+  using namespace registration_state;
+  for (va_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Mutation = 0; Mutation != 17; ++Mutation) {
+      SCOPED_TRACE(Base);
+      SCOPED_TRACE(Mutation);
+      BinaryImage Image;
+      Image.Arch = Arch::X86;
+      Image.Bits = Bitness::Bits32;
+      Image.Format = BinaryFormat::COFF;
+      Image.Base = Base;
+      Image.Entry = Base + 0x1000;
+      Segment Text;
+      Text.Name = ".text";
+      Text.VA = Image.Entry;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      // Search an immutable, count-prefixed table for an unknown scalar.
+      // Either comparison outcome is safe; the table count bounds the loop.
+      Text.Data = {0x55, 0x8b, 0xec, 0x56, 0x8b, 0x75, 0x08, 0x8b, 0x45,
+                   0x0c, 0x8b, 0x0e, 0x8d, 0x56, 0x04, 0x85, 0xc9, 0x74,
+                   0x0a, 0x39, 0x02, 0x74, 0x06, 0x83, 0xc2, 0x04, 0x49,
+                   0x75, 0xf6, 0x31, 0xc0, 0x5e, 0x5d, 0xc3};
+      Segment Data;
+      Data.Name = ".rdata";
+      Data.VA = Base + 0x3000;
+      Data.Flags = SegmentFlags::Readable;
+      Data.Data.resize(16);
+      writeLE<uint32_t>(Data.Data.data(), 3);
+      for (unsigned I = 1; I != 4; ++I)
+        writeLE<uint32_t>(Data.Data.data() + I * 4, I * 7);
+      for (auto *Segment : {&Text, &Data}) {
+        Segment->Size = Segment->FileSz = Segment->Data.size();
+        Section Section;
+        Section.Name = Segment->Name;
+        Section.VA = Segment->VA;
+        Section.Size = Section.FileSz = Segment->Size;
+        Section.Flags = Segment->Flags;
+        Image.Sections.push_back(Section);
+        Image.Segments.push_back(*Segment);
+      }
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.NumInputs = 1;
+      Call.Inputs[0] = NdVar::cst(Image.Entry, 4);
+      FrameState Parent;
+      Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+          FrameValue::frame(-64);
+      Parent.store(-64, 4, FrameValue::imageAddress(Data.VA));
+      Parent.store(-60, 4, {});
+      ASSERT_FALSE(Parent.Cells.count(-60));
+      std::set<int32_t> Initialized;
+      for (int32_t Byte = -64; Byte != -56; ++Byte)
+        Initialized.insert(Byte);
+      if (Mutation == 1 || Mutation == 3 || Mutation == 13)
+        Parent.store(-60, 4, FrameValue::constant(14));
+      if (Mutation == 2)
+        for (int32_t Byte = -60; Byte != -56; ++Byte)
+          Parent.store(Byte, 1, {});
+      if (Mutation >= 5 && Mutation <= 12)
+        Initialized.erase(-64 + int32_t(Mutation - 5));
+      if (Mutation == 13)
+        Initialized.erase(-58);
+      if (Mutation == 14)
+        Parent.store(-59, 1, FrameValue::frame(-8));
+      if (Mutation == 15)
+        Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+            FrameValue::frame(-56);
+      if (Mutation == 16)
+        Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+            FrameValue::frame(INT32_MAX - 3);
+      const auto *Bytes =
+          Mutation == 3 || Mutation == 4 ? nullptr : &Initialized;
+      size_t Work = 0;
+      BoundPlainCalleeEffect Effect;
+      EXPECT_EQ(registration_abi::hasConditionalCallFrame(
+                    Image, Call, Parent, Work, Bytes, nullptr, &Effect),
+                Mutation <= 3);
+      size_t Exhausted = limits::kMaxRegistrationEHStateWork;
+      EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+          Image, Call, Parent, Exhausted, Bytes, nullptr, &Effect));
+      if (Mutation <= 3) {
+        ASSERT_GT(Work, 0u);
+        size_t Incomplete = limits::kMaxRegistrationEHStateWork - Work + 1;
+        EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+            Image, Call, Parent, Incomplete, Bytes, nullptr, &Effect));
+        size_t Unretained = 0;
+        EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+            Image, Call, Parent, Unretained, Bytes));
+      }
+    }
+}
+
+TEST(RegistrationConditionalFrame, BoundReadsKeepRuntimeCookieValuesOpaque) {
+  using namespace registration_state;
+  for (va_t Base : {0x400000u, 0x18000000u})
+    for (uint16_t Width : {1, 2, 4})
+      for (int32_t Offset : {-4, -1, 0, 1, 3, 4})
+        for (bool Cookie : {false, true})
+          for (bool Guard : {false, true}) {
+            SCOPED_TRACE(::testing::Message()
+                         << Base << " " << Width << " " << Offset << " "
+                         << Cookie << " " << Guard);
+            BinaryImage Image;
+            Image.Arch = Arch::X86;
+            Image.Bits = Bitness::Bits32;
+            Image.Format = BinaryFormat::COFF;
+            Image.Base = Base;
+            Image.Entry = Base + 0x1000;
+            Image.DynInfo.SecurityCookieRVA = Cookie ? 0x3008 : 0;
+            Segment Text;
+            Text.VA = Image.Entry;
+            Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+            if (Width == 4)
+              Text.Data = {0x8b, 0x01}; // mov eax, [ecx]
+            else
+              Text.Data = {0x0f, uint8_t(Width == 1 ? 0xb6 : 0xb7), 0x01};
+            if (Guard)
+              // Initial zero bytes hide an otherwise unproved memory read.
+              Text.Data.insert(Text.Data.end(),
+                               {0x85, 0xc0, 0x74, 0x02, 0x8b, 0x02});
+            Text.Data.push_back(0xc3);
+            Segment Data;
+            Data.VA = Base + 0x3000;
+            Data.Flags = SegmentFlags::Readable;
+            Data.Data.resize(32);
+            for (auto *Segment : {&Text, &Data}) {
+              Segment->Size = Segment->FileSz = Segment->Data.size();
+              Section Section;
+              Section.VA = Segment->VA;
+              Section.Size = Section.FileSz = Segment->Size;
+              Section.Flags = Segment->Flags;
+              Image.Sections.push_back(Section);
+              Image.Segments.push_back(*Segment);
+            }
+            FrameState Parent;
+            Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+                FrameValue::frame(-64);
+            Parent.Registers[x86reg::RCX / x86reg::GeneralRegStride] =
+                FrameValue::imageAddress(uint32_t(Data.VA + 8 + Offset));
+            Parent.Registers[x86reg::RDX / x86reg::GeneralRegStride] =
+                FrameValue::taint(true);
+            LowOp Call;
+            Call.Opcode = NdOp::CALL;
+            Call.addInput(NdVar::cst(Image.Entry, 4));
+            size_t Work = 0;
+            std::optional<FrameValue> Returned;
+            BoundPlainCalleeEffect Effect;
+            const bool Opaque = Cookie && Offset < 4 && Offset + Width > 0;
+            const bool Valid = registration_abi::hasConditionalCallFrame(
+                Image, Call, Parent, Work, nullptr, &Returned, &Effect);
+            EXPECT_EQ(Valid, !(Opaque && Guard));
+            if (!Valid) {
+              EXPECT_FALSE(Returned);
+              continue;
+            }
+            ASSERT_TRUE(Returned);
+            EXPECT_EQ(Returned->Constant.has_value(), !Opaque);
+            EXPECT_EQ(Effect.ReturnValue.Constant.has_value(), !Opaque);
+            if (!Opaque)
+              EXPECT_EQ(Returned, FrameValue::constant(0));
+            ASSERT_EQ(Effect.ImageReads.size(), 1u);
+            EXPECT_EQ(Effect.ImageReads.front().Begin, Data.VA + 8 + Offset);
+            EXPECT_EQ(Effect.ImageReads.front().End,
+                      Data.VA + 8 + Offset + Width);
+          }
+}
+
+TEST(RegistrationConditionalFrame, BoundImmutableScansKeepTheirMemoryExtent) {
+  using namespace registration_state;
+  for (va_t Base : {0x400000u, 0x18000000u})
+    for (unsigned Count : {0u, 1u, 3u})
+      for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
+        SCOPED_TRACE(Base);
+        SCOPED_TRACE(Count);
+        SCOPED_TRACE(Mutation);
+        BinaryImage Image;
+        Image.Arch = Arch::X86;
+        Image.Bits = Bitness::Bits32;
+        Image.Format = BinaryFormat::COFF;
+        Image.Base = Base;
+        Image.Entry = Base + 0x1000;
+        Segment Text;
+        Text.Name = ".text";
+        Text.VA = Image.Entry;
+        Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+        // Sum count immutable words. The count, addresses and backedge must
+        // be proved together; the mapping's capacity is not a loop bound.
+        Text.Data = {0x55, 0x8b, 0xec, 0x56, 0x8b, 0x75, 0x08, 0x8b, 0x0e, 0x8d,
+                     0x56, 0x04, 0x31, 0xc0, 0x85, 0xc9, 0x74, 0x08, 0x03, 0x02,
+                     0x83, 0xc2, 0x04, 0x49, 0x75, 0xf8, 0x5e, 0x5d, 0xc3};
+        Segment Data;
+        Data.Name = ".rdata";
+        Data.VA = Base + 0x3000;
+        Data.Flags = SegmentFlags::Readable;
+        Data.Data.resize(16);
+        writeLE<uint32_t>(Data.Data.data(), Mutation == 5 ? 4 : Count);
+        for (unsigned I = 1; I != 4; ++I)
+          writeLE<uint32_t>(Data.Data.data() + I * 4, I * 7);
+        for (auto *Segment : {&Text, &Data}) {
+          Segment->Size = Segment->FileSz = Segment->Data.size();
+          Section Section;
+          Section.Name = Segment->Name;
+          Section.VA = Segment->VA;
+          Section.Size = Section.FileSz = Segment->Size;
+          Section.Flags = Segment->Flags;
+          Image.Sections.push_back(Section);
+          Image.Segments.push_back(*Segment);
+        }
+        if (Mutation == 1) {
+          Image.Segments[1].Flags = Image.Sections[1].Flags =
+              SegmentFlags::Readable | SegmentFlags::Writable;
+        }
+        if (Mutation == 2)
+          Image.Sections[1].FileSz = 0;
+        if (Mutation == 3)
+          Image.BaseRelocations.push_back(
+              {Data.VA, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+        if (Mutation == 4)
+          Image.Sections.push_back(Image.Sections[1]);
+        if (Mutation == 6) {
+          Image.Segments[0].Flags = Image.Sections[0].Flags =
+              SegmentFlags::Readable | SegmentFlags::Executable |
+              SegmentFlags::Writable;
+        }
+        LowOp Call;
+        Call.Opcode = NdOp::CALL;
+        Call.NumInputs = 1;
+        Call.Inputs[0] = NdVar::cst(Image.Entry, 4);
+        FrameState Parent;
+        Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+            FrameValue::frame(-64);
+        Parent.store(-64, 4,
+                     Mutation == 7 ? FrameValue::frame(-32)
+                                   : FrameValue::imageAddress(Data.VA));
+        size_t Work = 0;
+        std::optional<FrameValue> Returned = FrameValue::constant(UINT32_MAX);
+        BoundPlainCalleeEffect Effect;
+        EXPECT_EQ(registration_abi::hasConditionalCallFrame(
+                      Image, Call, Parent, Work, nullptr, &Returned, &Effect),
+                  Mutation == 0);
+        if (Mutation == 0) {
+          EXPECT_EQ(Returned,
+                    FrameValue::constant(7 * Count * (Count + 1) / 2));
+          EXPECT_EQ(Effect.ReturnValue, *Returned);
+          ASSERT_FALSE(Effect.ImageReads.empty());
+          for (const auto &Read : Effect.ImageReads) {
+            EXPECT_GE(Read.Begin, Data.VA);
+            EXPECT_LE(Read.End, Data.VA + (Count + 1) * 4);
+          }
+        } else
+          EXPECT_FALSE(Returned);
+        size_t Exhausted = limits::kMaxRegistrationEHStateWork;
+        EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+            Image, Call, Parent, Exhausted, nullptr, &Returned, &Effect));
+        EXPECT_FALSE(Returned);
+        if (Mutation == 0) {
+          ASSERT_GT(Work, 0u);
+          size_t Incomplete = limits::kMaxRegistrationEHStateWork - Work + 1;
+          EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+              Image, Call, Parent, Incomplete, nullptr, &Returned, &Effect));
+          EXPECT_FALSE(Returned);
+          size_t Unretained = 0;
+          EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+              Image, Call, Parent, Unretained, nullptr, &Returned));
+          EXPECT_FALSE(Returned);
+        }
+      }
+}
 
 #ifdef NEVERD_BINARY_CORPUS_ROOT
 namespace {
@@ -34,6 +628,44 @@ auto loadXCPT4(bool Selected = false) {
       "xcpt4-msvc-x86-native-no-gs-o0.exe");
 }
 } // namespace
+
+TEST(RegistrationConditionalFrame, BoundRaiseWrapperRetainsOnlyLocalProofs) {
+  using namespace registration_state;
+  auto Image = loadXCPT4();
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  LowOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = 0x401288;
+  Call.Seq = 0;
+  Call.addInput(NdVar::cst(0x401030, 4));
+  FrameState Parent;
+  Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+      FrameValue::frame(-64);
+  Parent.store(-64, 4, FrameValue::constant(0xc0000005));
+  const std::set<int32_t> Initialized{-64, -63, -62, -61};
+  // The independent query cannot assume this cdecl argument is accessible.
+  EXPECT_FALSE(getCheckedX86CalleeStackPop(*Image, 0x401030));
+  size_t Work = 0;
+  std::optional<FrameValue> Returned;
+  ConditionalCallResult Invocation;
+  EXPECT_TRUE(registration_abi::hasConditionalCallFrame(
+      *Image, Call, Parent, Work, &Initialized, &Returned, nullptr, nullptr,
+      &Invocation));
+  ASSERT_TRUE(Invocation.Dispatch);
+  ASSERT_TRUE(Invocation.Dispatch->Raise);
+  EXPECT_EQ(Invocation.Dispatch->Raise->Code, 0xc0000005u);
+  EXPECT_EQ(Invocation.Dispatch->ArgumentEnd, 12);
+  ASSERT_TRUE(Returned);
+  EXPECT_FALSE(Returned->Constant);
+  EXPECT_TRUE(Returned->FrameOnlyFromCall);
+  // Frame transport grants no closed call-free source effect: the outer SEH
+  // solver still owns RaiseException's callback and runtime binding proofs.
+  BoundPlainCalleeEffect Effect;
+  EXPECT_FALSE(registration_abi::hasConditionalCallFrame(
+      *Image, Call, Parent, Work, &Initialized, &Returned, &Effect));
+  EXPECT_FALSE(Returned);
+  EXPECT_FALSE(getCheckedX86CalleeStackPop(*Image, 0x401030));
+}
 
 TEST(RegistrationConditionalFrame,
      XCPT4CompletesWithinTheDefaultClosureBudget) {
@@ -59,6 +691,35 @@ TEST(RegistrationConditionalFrame,
   EXPECT_FALSE(States.SEHInvocationExits.empty());
   EXPECT_FALSE(States.SEHJumpResumptions.empty());
   EXPECT_LE(Work, limits::kMaxRegistrationEHStateWork);
+}
+
+TEST(RegistrationConditionalFrame,
+     XCPT4FinallyOnlyLocalUnwindUsesItsCurrentStack) {
+  auto Image = loadXCPT4();
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  size_t Work = 0;
+  RegistrationCallCalleeIndex Index(*Image, &Work);
+  CFGBuilder Builder;
+  Builder.setRegistrationCalleeIndex(&Index);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(*Image));
+  // The original MSVC EH3 parent has finally scopes but no SavedESP store.
+  const auto Function = Builder.build(*Image, Dec, 0x4059a0, "finally-loop");
+  ASSERT_TRUE(Function.RegistrationStates);
+  const auto &States = *Function.RegistrationStates;
+  for (const auto &Diagnostic : States.Diagnostics)
+    ADD_FAILURE() << Diagnostic;
+  EXPECT_TRUE(States.Complete);
+  ASSERT_TRUE(States.HasSEHLocalUnwinds);
+  ASSERT_TRUE(States.SEHLocalUnwindsComplete);
+  ASSERT_EQ(States.SEHLocalUnwinds.size(), 2u);
+  for (const auto &Call : States.SEHLocalUnwinds) {
+    EXPECT_TRUE(Call.Address == 0x4059fa || Call.Address == 0x405a16);
+    EXPECT_EQ(Call.StackOffset, -48);
+    EXPECT_EQ(Call.Runtime.Protocol,
+              RegistrationLocalUnwindContract::Kind::EH3);
+  }
+  EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
 }
 
 TEST(RegistrationConditionalFrame,
@@ -132,17 +793,36 @@ TEST(RegistrationConditionalFrame, XCPT4HelperChecksItsBoundIncomingCounter) {
   const auto Controls = Index.sehControlContracts(Function);
   ASSERT_TRUE(Stacks && Unwinds && Controls);
   using namespace registration_state;
-  for (unsigned Mutation = 0; Mutation != 7; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
     SCOPED_TRACE(Mutation);
+    auto *Flags = const_cast<uint8_t *>(Image->readVA(0x401038, 1));
+    auto *Code = const_cast<uint8_t *>(Image->readVA(0x401039, 3));
+    ASSERT_TRUE(Flags && Code);
+    *Flags = Mutation == 8 ? 1 : 0;
+    // An authentic wrapper may raise a different code than its incoming
+    // scalar. That search must not borrow the caller argument as its origin.
+    Code[0] = Mutation == 9 ? 0x31 : 0x8b;
+    Code[1] = Mutation == 9 ? 0xc0 : 0x45;
+    Code[2] = Mutation == 9 ? 0x90 : 0x08;
     auto Current = Function;
     ConditionalFrame Inputs;
     Inputs.Arguments = {{8, FrameValue::constant(0xc0000005)},
                         {12, FrameValue::frame(256)}};
     Inputs.Objects = {{256, 260}};
     Inputs.ObjectCells = {{256, FrameValue::constant(1)}};
-    Inputs.ProveCall = [&](const LowOp &Op, const FrameState &State) {
-      return Mutation != 4 && registration_abi::hasConditionalCallFrame(
-                                  *Image, Op, State, Inputs.Work);
+    Inputs.ProveCall = [&](const LowOp &Op, const FrameState &State,
+                           const std::set<int32_t> &Initialized)
+        -> std::optional<ConditionalCallResult> {
+      ConditionalCallResult Invocation;
+      if (Mutation == 4 || !registration_abi::hasConditionalCallFrame(
+                               *Image, Op, State, Inputs.Work, &Initialized,
+                               nullptr, nullptr, nullptr, &Invocation))
+        return std::nullopt;
+      // The returning frame remains valid, but cannot stand in for the
+      // missing proof of this wrapper's exceptional dispatch effects.
+      if (Mutation == 7)
+        Invocation.Dispatch.reset();
+      return Invocation;
     };
     if (Mutation == 1)
       Inputs.Objects[0].End = 259;
@@ -203,18 +883,18 @@ TEST(RegistrationConditionalFrame,
     FrameState Parent;
     Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
         FrameValue::frame(-308);
-    Parent.Cells[-308] = FrameValue::constant(0xc0000005);
-    Parent.Cells[-304] = FrameValue::frame(-28);
-    Parent.Cells[-28] = FrameValue::constant(1);
+    Parent.Cells.set(-308, FrameValue::constant(0xc0000005));
+    Parent.Cells.set(-304, FrameValue::frame(-28));
+    Parent.Cells.set(-28, FrameValue::constant(1));
     size_t Work = 0;
     if (Mutation == 1)
       Parent.Cells.erase(-28);
     if (Mutation == 2)
-      Parent.Cells[-304] = FrameValue::frame(-20);
+      Parent.Cells.set(-304, FrameValue::frame(-20));
     if (Mutation == 3)
-      Parent.Cells[-28] = FrameValue::frame(-100);
+      Parent.Cells.set(-28, FrameValue::frame(-100));
     if (Mutation == 4)
-      Parent.Cells[-304] = FrameValue::frame(-304);
+      Parent.Cells.set(-304, FrameValue::frame(-304));
     if (Mutation == 5)
       Parent.Registers[x86reg::RSP / x86reg::GeneralRegStride] = {};
     if (Mutation == 6)
@@ -330,7 +1010,7 @@ TEST(RegistrationConditionalFrame, OriginalHelperResumesItsBorrowedCapture) {
 }
 TEST(RegistrationCRTFrame, ControlFPRequiresItsImportAndPhysicalCall) {
   using namespace registration_state;
-  for (unsigned Mutation = 0; Mutation != 10; ++Mutation) {
+  for (unsigned Mutation = 0; Mutation != 11; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Image = loadXCPT4();
     ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
@@ -370,8 +1050,11 @@ TEST(RegistrationCRTFrame, ControlFPRequiresItsImportAndPhysicalCall) {
     if (Mutation == 9)
       Image->Imports.push_back(
           {"application.dll", "_controlfp_s", 0, 0x4080e0});
+    if (Mutation == 10)
+      Import->Module = "MSVCR100.DLL";
     size_t Work = 0;
-    EXPECT_EQ(isCheckedControlFPCall(*Image, Call, Work), Mutation == 0);
+    EXPECT_EQ(isCheckedControlFPCall(*Image, Call, Work),
+              Mutation == 0 || Mutation == 10);
   }
 }
 TEST(RegistrationCRTFrame, MathHelperStackFactsDoNotGrantMemoryEffects) {

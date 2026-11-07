@@ -371,6 +371,101 @@ TEST_F(PEFixedImageTest, MachineExitLookupUsesBoundedIndexedWork) {
   }
 }
 
+TEST_F(PEFixedImageTest, MachineExitDiscoversBoundedCopyDestination) {
+  // Reserve a local buffer and call a short copy loop with count ECX & 3.
+  // The loop stops at either a zero word or the exhausted count. Its live
+  // destination is an entry-relative pointer, not an absolute constant.
+  const std::vector<uint8_t> Code{
+      0x48, 0x8d, 0x64, 0x24, 0xb0, 0x48, 0x8d, 0x7c, 0x24, 0x28, 0x83, 0xe1,
+      0x03, 0xe8, 0x06, 0x00, 0x00, 0x00, 0x48, 0x8d, 0x64, 0x24, 0x50, 0xc3,
+      0x48, 0x85, 0xc9, 0x74, 0x1b, 0x66, 0x8b, 0x06, 0x66, 0x89, 0x07, 0x48,
+      0x8d, 0x76, 0x02, 0x48, 0x8d, 0x7f, 0x02, 0x48, 0xff, 0xc9, 0x66, 0x85,
+      0xc0, 0x74, 0x05, 0x48, 0x85, 0xc9, 0x75, 0xe5, 0xc3};
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = machineExitOptions(Base + 0x1017, MachineExitKind::Return);
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{0, 8, {}};
+  O.EntryFrameAlignment = InterpreterEntryAlignment{16, 8};
+  O.ProveStoreFrameSeparation = O.ProveStoreReturnSlotSeparation = true;
+  O.DiscoverControlState = true;
+  ASSERT_TRUE(O.ControlRegisters.empty());
+  ASSERT_TRUE(O.EntryConstants.empty());
+  O.MaxSolverQueries = 16384;
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  EXPECT_FALSE(bool(validateSpecializationRawEnvironment(R, O)));
+  for (uint64_t Stack : {UINT64_C(0x800008), UINT64_C(0xffff900020000008)})
+    for (uint64_t Count : {UINT64_C(0), UINT64_C(1), UINT64_C(2), UINT64_MAX})
+      for (int Gap : {-2, 0, 2, 72})
+        for (unsigned Zero : {0, 1, 3}) {
+          auto Actual = machineExitState(Stack);
+          const uint64_t Source = Stack - 40 + static_cast<uint64_t>(Gap);
+          Actual.memory(Stack, 0x12340, 8);
+          Actual.write(NdVar::reg(x86reg::RCX, 8), Count);
+          Actual.write(NdVar::reg(x86reg::RSI, 8), Source);
+          Actual.write(NdVar::reg(x86reg::AF, 1), 1);
+          for (unsigned I = 0; I != 4; ++I)
+            Actual.memory(Source + 2 * I, I == Zero ? 0 : 0x8123 + I, 2);
+          auto Expected = Actual;
+          Expected.memory(Stack - 88, Base + 0x1012, 8);
+          uint64_t Left = Count & 3, Read = Source, Write = Stack - 40;
+          while (Left) {
+            const uint16_t Value = Expected.Memory.at(Read) |
+                                   uint16_t(Expected.Memory.at(Read + 1)) << 8;
+            Expected.memory(Write, Value, 2);
+            Expected.write(NdVar::reg(x86reg::RAX, 2), Value);
+            Read += 2;
+            Write += 2;
+            --Left;
+            if (!Value)
+              break;
+          }
+          Expected.write(NdVar::reg(x86reg::RCX, 8), Left);
+          Expected.write(NdVar::reg(x86reg::RSI, 8), Read);
+          Expected.write(NdVar::reg(x86reg::RDI, 8), Write);
+          Expected.write(NdVar::reg(x86reg::RSP, 8), Stack + 8);
+          for (uint64_t Flag : {x86reg::CF, x86reg::PF, x86reg::AF, x86reg::ZF,
+                                x86reg::SF, x86reg::OF})
+            Expected.write(NdVar::reg(Flag, 1),
+                           Flag == x86reg::PF || Flag == x86reg::ZF ||
+                               (Flag == x86reg::AF && !(Count & 3)));
+          ASSERT_TRUE(Actual.run(R, O)) << Actual.Diagnostic;
+          expectMachineExitState(Actual, Expected, 0x12340);
+        }
+  for (uint8_t Offset : {uint8_t{0xf8}, uint8_t{0xff}}) {
+    // Possible complete and one-byte overlaps must still invalidate the
+    // native return word; nominating a dependency supplies no alias proof.
+    auto Aliased = Code;
+    Aliased[9] = Offset;
+    auto BadImage = load(machineExitFixture(Aliased));
+    ASSERT_TRUE(bool(BadImage)) << llvm::toString(BadImage.takeError());
+    const auto Bad = specializeBinaryInterpreter(*BadImage, Base + 0x1000, O);
+    EXPECT_FALSE(Bad.complete());
+    EXPECT_TRUE(Bad.Residual.Blocks.empty());
+    EXPECT_FALSE(Bad.RawEnvironment);
+  }
+  auto NoDiscovery = O;
+  NoDiscovery.DiscoverControlState = false;
+  EXPECT_FALSE(specializeBinaryInterpreter(*Loaded, Base + 0x1000, NoDiscovery)
+                   .complete());
+  for (bool Queries : {false, true}) {
+    auto Exact = O;
+    auto &Limit = Queries ? Exact.MaxSolverQueries : Exact.MaxOperations;
+    Limit = Queries ? R.SolverQueries : R.EvaluatedOperations;
+    ASSERT_GT(Limit, 0u);
+    const auto Good =
+        specializeBinaryInterpreter(*Loaded, Base + 0x1000, Exact);
+    ASSERT_TRUE(Good.complete()) << Good.Diagnostic;
+    --Limit;
+    const auto Short =
+        specializeBinaryInterpreter(*Loaded, Base + 0x1000, Exact);
+    EXPECT_EQ(Short.Status, SpecializationStatus::BudgetExceeded)
+        << Short.Diagnostic;
+    EXPECT_TRUE(Short.Residual.Blocks.empty());
+    EXPECT_FALSE(Short.RawEnvironment);
+  }
+}
+
 TEST_F(PEFixedImageTest, MachineTrapExitEndsRegionAtDeclaredTrap) {
   const std::vector<uint8_t> Encodings[] = {{0xcc}, {0xf1}, {0xcd, 0x03}};
   for (const auto &Trap : Encodings) {

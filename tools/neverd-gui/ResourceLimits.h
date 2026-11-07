@@ -18,6 +18,7 @@
 
 #include "neverd/diff/Limits.h"
 #include "neverd/patch/Limits.h"
+#include "neverd/plugin/Config.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/Limits.h"
 
@@ -26,6 +27,10 @@
 #include <cstdint>
 
 namespace neverd::limits::gui {
+inline constexpr int kInterpreterRecoveryDialogWidth = 640;
+inline constexpr int kInterpreterRecoveryDialogHeight = 600;
+inline constexpr int kInterpreterRecoveryReportWidth = 760;
+inline constexpr int kInterpreterRecoveryReportHeight = 560;
 inline constexpr int kPatchPreviewDelayMs = 180;
 inline constexpr int kPatchEditorWidth = 620;
 inline constexpr int kPatchAnchorGap = 4;
@@ -39,6 +44,26 @@ inline constexpr int kPatchLogHexCharacters = 64;
 inline constexpr int kPatchLogInstructions = 4;
 inline constexpr int kRewriteDialogWidth = 960;
 inline constexpr int kRewriteDialogHeight = 720;
+
+// External GUI process plugins. These are host admission and presentation
+// bounds; semantic section validation remains owned by the SDK.
+namespace plugin {
+inline constexpr int kRuntimePollMilliseconds = 20;
+inline constexpr int kMaxQueuedJobs = ::neverd::plugin::kMaxQueuedTasks;
+inline constexpr int kMaxHistoryRows = ::neverd::plugin::kMaxTaskHistory;
+inline constexpr int kMaxLogRows = 1000;
+inline constexpr int kRefreshIntervalMs = 500;
+inline constexpr int kTaskTreeMinimumRows = 3;
+inline constexpr int kTaskTreeInitialHeight = 120;
+inline constexpr int kTaskTreeNameInitialWidth = 420;
+inline constexpr int kMaxSelectionCharacters = 65536;
+inline constexpr int kMaxIconBytes = 1 << 20;
+inline constexpr int kMaxIconDimension = 1024;
+inline constexpr int kManagerWidth = 940;
+inline constexpr int kManagerHeight = 620;
+inline constexpr int kMenuSettingsWidth = 900;
+inline constexpr int kMenuSettingsHeight = 420;
+} // namespace plugin
 
 // Binary comparison views. Rows and request admission stay bounded separately.
 inline constexpr int kComparisonPageSize =
@@ -112,6 +137,9 @@ inline constexpr int kCodeViewPageLines = 256;
 /// the interactive first load small, and retry it if a batch exceeds bytes.
 inline constexpr int kCodeViewNameRefreshPageLines =
     ::neverd::sdk::kMaxCodeViewPageLines;
+/// The characters a function's hint holds on a line before its type breaks
+/// after a comma.
+inline constexpr int kCodeViewHintColumns = 96;
 
 // tools/neverd-gui/app/FindInViewDialog.cpp
 inline constexpr int kFindInViewDebounceMs = 120;
@@ -160,6 +188,8 @@ inline constexpr int kMainWindowMaxStringMinLength =
 inline constexpr int kMainWindowMaxOpcodeBytes = 12;
 // As much as one declaration of the editor takes.
 inline constexpr qint64 kMainWindowMaxHeaderBytes = 4 << 20;
+/// The stops the Back or Forward button's list shows, nearest first.
+inline constexpr std::size_t kMainWindowHistoryListStops = 30;
 
 // tools/neverd-gui/app/MicrosoftSymbols.cpp
 /// How long to wait for another modal dialog to close before asking.

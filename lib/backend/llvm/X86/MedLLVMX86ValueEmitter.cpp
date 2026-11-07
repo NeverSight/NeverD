@@ -17,7 +17,7 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
-#include "neverd/backend/llvm/X86/LLVMX86DivRemAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX86DivRem.h"
 #include "neverd/backend/llvm/X86/LLVMX86FPStateAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX86ShadowStackAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX86StackEffects.h"
@@ -25,6 +25,7 @@
 #include "neverd/backend/llvm/X86/LLVMX87ContextAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX87GuardedValueAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX87ValueAsm.h"
+#include "neverd/backend/llvm/X86/X86FlagsNative.h"
 #include "neverd/backend/llvm/X86/X86SystemRegisterAsm.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -32,7 +33,6 @@
 #define DEBUG_TYPE "neverd-med-llvm-x86-value"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/X86/X64Syscall.h"
-#include "neverd/ir/intrinsics/X86/X86SegmentRegisters.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -535,6 +535,29 @@ static const char *x87AsmForIntrinsic(Intrinsic IC) {
   }
 }
 
+//===----------------------------------------------------------------------===//
+// x87 control word
+//===----------------------------------------------------------------------===//
+
+llvm::Value *MedLLVMEmitter::emitX87ControlRead(llvm::IRBuilder<> &Builder) {
+  // FNSTCW stores through memory, into a word of the entry block.
+  llvm::IRBuilder<> EntryBuilder(&CurFunc->getEntryBlock(),
+                                 CurFunc->getEntryBlock().begin());
+  auto *Word =
+      EntryBuilder.CreateAlloca(Builder.getInt16Ty(), nullptr, "x87_control");
+  if (const auto ID = llvm::Intrinsic::lookupIntrinsicID("llvm.x86.fnstcw")) {
+    Builder.CreateIntrinsic(Builder.getVoidTy(), ID, {Word});
+  } else {
+    auto *Type = llvm::FunctionType::get(
+        Builder.getVoidTy(), {llvm::PointerType::get(*Ctx, 0)}, false);
+    auto *Asm =
+        llvm::InlineAsm::get(Type, "fnstcw ($0)", X87ControlConstraints, true);
+    auto *Call = Builder.CreateCall(Asm, {Word});
+    Call->setMetadata(X87ConstantAsmMetadata, llvm::MDNode::get(*Ctx, {}));
+  }
+  return Builder.CreateLoad(Builder.getInt16Ty(), Word);
+}
+
 llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
                                                    Intrinsic IC,
                                                    llvm::IRBuilder<> &Builder) {
@@ -754,7 +777,15 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
     auto *Status =
         Entry.CreateAlloca(Builder.getInt16Ty(), nullptr, "x87_value_status");
     Builder.CreateStore(getVar(Op.Inputs[1], Builder), Source);
-    Builder.CreateStore(getVar(Op.Inputs[2], Builder), Control);
+    // A control word the function has not written is the processor's own. The
+    // guard must judge that one, not the zero an unset register reads as.
+    const MedVar &ControlWord = Op.Inputs[2];
+    const bool Incoming = ControlWord.Kind == MedVar::Reg &&
+                          ControlWord.RegOff == x86reg::FPU_CW &&
+                          ControlWord.SSAVer == 0;
+    Builder.CreateStore(Incoming ? emitX87ControlRead(Builder)
+                                 : getVar(ControlWord, Builder),
+                        Control);
     auto *Ptr = llvm::PointerType::get(*Ctx, 0);
     auto *Type = llvm::FunctionType::get(Builder.getVoidTy(),
                                          {Ptr, Ptr, Ptr, Ptr}, false);
@@ -770,6 +801,8 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
     if (!x87ConstantControlShapeIsValid(
             IC, x87ConstantControlMedShape(Op, TargetArch)))
       llvm::report_fatal_error("invalid x87 constant/control contract");
+    if (IC == I::X87ReadControl)
+      return emitX87ControlRead(Builder);
     llvm::IRBuilder<> EntryBuilder(&CurFunc->getEntryBlock(),
                                    CurFunc->getEntryBlock().begin());
     auto *Word =
@@ -777,12 +810,17 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
     auto *Ptr = llvm::PointerType::get(*Ctx, 0);
     llvm::SmallVector<llvm::Type *, 2> Types{Ptr};
     llvm::SmallVector<llvm::Value *, 2> Args{Word};
-    std::string Text = IC == I::X87ReadControl ? "fnstcw ($0)" : "fldcw ($0)";
+    std::string Text = "fldcw ($0)";
     const char *Constraints = X87ControlConstraints;
     llvm::AllocaInst *Value = nullptr;
-    if (IC != I::X87ReadControl)
-      Builder.CreateStore(
-          getVar(Op.Inputs[IC == I::X87LoadConstant ? 2 : 1], Builder), Word);
+    Builder.CreateStore(
+        getVar(Op.Inputs[IC == I::X87LoadConstant ? 2 : 1], Builder), Word);
+    if (IC == I::X87WriteControl)
+      if (const auto ID =
+              llvm::Intrinsic::lookupIntrinsicID("llvm.x86.fldcw")) {
+        Builder.CreateIntrinsic(Builder.getVoidTy(), ID, {Word});
+        return nullptr;
+      }
     if (IC == I::X87LoadConstant) {
       Value = EntryBuilder.CreateAlloca(Builder.getIntNTy(80), nullptr,
                                         "x87_constant");
@@ -795,10 +833,7 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
     auto *Asm = llvm::InlineAsm::get(Type, Text, Constraints, true);
     auto *Call = Builder.CreateCall(Asm, Args);
     Call->setMetadata(X87ConstantAsmMetadata, llvm::MDNode::get(*Ctx, {}));
-    return Value ? Builder.CreateLoad(Builder.getIntNTy(80), Value)
-           : IC == I::X87ReadControl
-               ? Builder.CreateLoad(Builder.getInt16Ty(), Word)
-               : nullptr;
+    return Value ? Builder.CreateLoad(Builder.getIntNTy(80), Value) : nullptr;
   }
   if (isX86FPStateIntrinsic(IC)) {
     const auto Shape = x86FPStateMedShape(Op, TargetArch);
@@ -1414,21 +1449,8 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
   if (IC == I::Rdmsr)
     return emitX86ScalarSystem(Op, IC, Builder);
 
-  // A segment selector read.
-  if (IC == I::ReadSegment && Op.Output.Size > 0) {
-    const char *Segment = Op.NumInputs == 2 && Op.Inputs[1].isConst()
-                              ? x86SegmentRegisterName(Op.Inputs[1].ConstVal)
-                              : nullptr;
-    if (!Segment)
-      llvm::report_fatal_error("x86 segment read has an invalid operand shape");
-    auto *I16Ty = llvm::Type::getInt16Ty(*Ctx);
-    auto *FnTy = llvm::FunctionType::get(I16Ty, {}, false);
-    auto *IA =
-        llvm::InlineAsm::get(FnTy, std::string("mov %") + Segment + ", $0",
-                             "=r", /*hasSideEffects=*/true);
-    llvm::Value *Selector = Builder.CreateCall(IA, {}, "selector");
-    return Builder.CreateZExtOrTrunc(Selector, sizeToType(Op.Output.Size));
-  }
+  if (IC == I::ReadSegment && Op.Output.Size)
+    return emitX86SegmentMove(Op, IC, Builder);
 
   // RDPMC reads the counter ECX selects into EDX:EAX, combined like RDMSR.
   if (IC == I::Rdpmc && Op.Output.Size > 0) {
@@ -1563,16 +1585,19 @@ llvm::Value *MedLLVMEmitter::emitX86IntrinsicValue(const MedOp &Op,
   // PUSHF: the lifter merges the machine's unmodelled EFLAGS bits with the
   // modelled arithmetic flags.
   if (IC == I::Pushf && Op.Output.Size > 0) {
-    const bool Wide = TargetArch == Arch::X64;
-    auto *AsmTy =
-        Wide ? llvm::Type::getInt64Ty(*Ctx) : llvm::Type::getInt32Ty(*Ctx);
-    auto *FnTy = llvm::FunctionType::get(AsmTy, false);
-    auto *IA = llvm::InlineAsm::get(
-        FnTy, Wide ? "pushfq\n\tpopq $0" : "pushfl\n\tpopl $0", "=r,~{memory}",
-        /*hasSideEffects=*/true);
-    llvm::Value *Flags = Builder.CreateCall(IA, {}, "eflags");
-    markX86StackTemporary(*llvm::cast<llvm::CallInst>(Flags));
-    return Builder.CreateZExtOrTrunc(Flags, sizeToType(Op.Output.Size));
+    const auto P = x86FlagsNative(IC, TargetArch, Op.Output.Size);
+    if (!P || Op.NumInputs != 1 ||
+        Op.MemoryOrdering != NdMemoryOrdering::None ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      llvm::report_fatal_error("invalid x86 PUSHF image contract");
+    if (const auto ID = llvm::Intrinsic::lookupIntrinsicID(P->LLVMName))
+      return Builder.CreateCall(
+          llvm::Intrinsic::getOrInsertDeclaration(Mod, ID), {}, "eflags");
+    auto *FnTy = llvm::FunctionType::get(sizeToType(P->Bytes), false);
+    auto *IA = llvm::InlineAsm::get(FnTy, P->Assembly, "=r,~{memory}", true);
+    auto *Flags = Builder.CreateCall(IA, {}, "eflags");
+    markX86StackTemporary(*Flags);
+    return Flags;
   }
 
   if (IC == I::Ldmxcsr || IC == I::Leave || IC == I::Enter || IC == I::Popf)
@@ -1679,7 +1704,8 @@ llvm::Value *MedLLVMEmitter::emitX86WideDivRem(llvm::IRBuilder<> &Builder,
                                                llvm::Value *Divisor,
                                                bool IsSigned, bool WantRem) {
   // A double-width DIV/IDIV (the hardware quotient/remainder split) is lowered
-  // back to a single native divide via inline asm, so the recompiled object
+  // back to the native quotient/remainder intrinsic (or the legacy assembly
+  // contract on older SDKs), so the recompiled object
   // never pulls in a compiler-rt division libcall that the original binary did
   // not have:
   //   * x86-64 : i128 dividend (RDX:RAX) -> divq/idivq
@@ -1706,15 +1732,22 @@ llvm::Value *MedLLVMEmitter::emitX86WideDivRem(llvm::IRBuilder<> &Builder,
   llvm::Value *Hi = Builder.CreateTrunc(HiShifted, HalfTy, "div.hi");
   llvm::Value *DivHalf = Builder.CreateTrunc(Divisor, HalfTy, "div.src");
 
-  auto *RetTy = llvm::StructType::get(*Ctx, {HalfTy, HalfTy});
-  auto *FnTy = llvm::FunctionType::get(RetTy, {HalfTy, HalfTy, HalfTy}, false);
-  auto *IA = llvm::InlineAsm::get(FnTy, x86DivRemAssembly({HalfBits, IsSigned}),
-                                  X86DivRemAsmConstraints,
-                                  /*hasSideEffects=*/true);
-
-  llvm::Value *AsmResult = Builder.CreateCall(IA, {Lo, Hi, DivHalf}, "divrem");
+  llvm::Value *Pair;
+  if (const auto ID = llvm::Intrinsic::lookupIntrinsicID(
+          x86DivRemNativeName({HalfBits, IsSigned}))) {
+    Pair = Builder.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(Mod, ID),
+                              {Lo, Hi, DivHalf}, "divrem");
+  } else {
+    auto *RetTy = llvm::StructType::get(*Ctx, {HalfTy, HalfTy});
+    auto *FnTy =
+        llvm::FunctionType::get(RetTy, {HalfTy, HalfTy, HalfTy}, false);
+    auto *IA = llvm::InlineAsm::get(
+        FnTy, x86DivRemAssembly({HalfBits, IsSigned}), X86DivRemAsmConstraints,
+        /*hasSideEffects=*/true);
+    Pair = Builder.CreateCall(IA, {Lo, Hi, DivHalf}, "divrem");
+  }
   unsigned Idx = WantRem ? 1 : 0;
-  llvm::Value *RHalf = Builder.CreateExtractValue(AsmResult, {Idx}, "divrem.r");
+  llvm::Value *RHalf = Builder.CreateExtractValue(Pair, {Idx}, "divrem.r");
 
   if (IsSigned)
     return Builder.CreateSExt(RHalf, WideTy, "divrem.ext");

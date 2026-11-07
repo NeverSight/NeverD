@@ -29,6 +29,7 @@
 namespace neverd {
 namespace {
 constexpr auto ArgumentBanks = LLVMArgumentBanksAttribute;
+constexpr llvm::StringLiteral FirstUnsetInteger("neverd.first-unset-integer");
 } // namespace
 
 std::optional<std::pair<unsigned, unsigned>>
@@ -107,6 +108,25 @@ void setLLVMArgumentBanks(llvm::CallBase &Call, unsigned Integers,
   }
   Call.setMetadata(ArgumentBanks,
                    llvm::MDNode::get(Call.getContext(), Operands));
+}
+
+void setLLVMFirstUnsetInteger(llvm::CallBase &Call, unsigned Position) {
+  llvm::IRBuilder<> Builder(Call.getContext());
+  Call.setMetadata(
+      FirstUnsetInteger,
+      llvm::MDNode::get(Call.getContext(), {llvm::ConstantAsMetadata::get(
+                                               Builder.getInt32(Position))}));
+}
+
+std::optional<unsigned> getLLVMFirstUnsetInteger(const llvm::CallBase &Call) {
+  const auto *Node = Call.getMetadata(FirstUnsetInteger);
+  if (!Node || Node->getNumOperands() != 1)
+    return std::nullopt;
+  const auto *Position =
+      llvm::mdconst::dyn_extract<llvm::ConstantInt>(Node->getOperand(0));
+  if (!Position)
+    return std::nullopt;
+  return Position->getZExtValue();
 }
 
 std::optional<IntegerCallArguments>

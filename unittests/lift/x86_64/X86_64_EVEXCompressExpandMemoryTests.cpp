@@ -459,3 +459,98 @@ TEST(X86EVEXCompressExpandMemory, I386DSOverrideOwnsTheStackBaseSegment) {
 }
 
 } // namespace
+
+TEST(X86EVEXCompressExpandMemory,
+     LegacyCacheBoundsPackedBytesBeforeLinearWrap) {
+  for (unsigned Element : {1u, 2u, 4u, 8u})
+    for (unsigned Prefix : {0x26u, 0x2eu, 0x36u})
+      for (bool Expand : {false, true})
+        for (bool Fits : {false, true}) {
+          LowOp Op;
+          Op.Opcode = NdOp::INTRINSIC;
+          Op.addInput(
+              NdVar::cst(unsigned(Expand ? Intrinsic::EVEXExpandLoad
+                                         : Intrinsic::EVEXCompressStore),
+                         2));
+          Op.addInput(NdVar::cst(0x4000, 8));
+          Op.addInput(NdVar::cst(5, 8));
+          Op.addInput(NdVar::reg(900, 64));
+          Op.addInput(
+              NdVar::cst(Element | Prefix << X86CompactSegmentShift, 2));
+          if (Expand)
+            Op.Output = NdVar::reg(901, 64);
+          BinaryImage I;
+          I.Arch = Arch::X86;
+          for (uint64_t Base :
+               {uint64_t(UINT32_MAX) + 1 - Element, uint64_t(0)}) {
+            Segment S;
+            S.VA = Base;
+            S.Size = S.FileSz = Element;
+            S.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+            S.Data.resize(Element, 0x31);
+            I.Segments.push_back(std::move(S));
+          }
+          NdOpEmulator E(I);
+          E.setStrictMode(true);
+          E.setLoadCollect(true);
+          E.setRegisterBytes(900, std::vector<uint8_t>(64, 0x77));
+          E.setRegisterBytes(901, std::vector<uint8_t>(64, 0xa5));
+          X86LegacySegmentCache C{
+              uint32_t(0xffffc000 - Element),
+              uint32_t(0x4000 + 2 * Element - (Fits ? 1 : 2)), 0,
+              uint16_t(Prefix == 0x2e ? 0x409b : 0x4093), false};
+          const bool Allowed = Fits && (Expand || Prefix != 0x2e);
+          EXPECT_EQ(E.stepX86LegacySegment(Op, C), Allowed);
+          EXPECT_FALSE(E.step(Op));
+          if (Expand) {
+            auto Expected = std::vector<uint8_t>(64, Allowed ? 0x77 : 0xa5);
+            if (Allowed)
+              for (unsigned Lane : {0u, 2u})
+                std::fill_n(Expected.begin() + Lane * Element, Element, 0x31);
+            EXPECT_EQ(E.getRegisterBytes(901), Expected);
+            EXPECT_EQ(E.getLoadRecords().size(), Allowed ? 2u : 0u);
+          } else {
+            for (const auto &S : I.Segments) {
+              LowOp Load;
+              Load.Opcode = NdOp::LOAD;
+              Load.Output = NdVar::tmp(1000, 1);
+              Load.addInput(NdVar::scalar(S.VA, 8));
+              ASSERT_TRUE(E.step(Load));
+              EXPECT_EQ(E.getRegister(1000), Allowed ? 0x77u : 0x31u);
+            }
+          }
+        }
+}
+
+TEST(X86EVEXCompressExpandMemory, FullLimitChoiceBelongsToOneBoundOperation) {
+  auto I = image(UINT32_MAX, 1);
+  I.Arch = Arch::X86;
+  I.Segments[0].Data[0] = 0x12;
+  I.Segments.push_back(I.Segments[0]);
+  I.Segments[1].VA = 0;
+  I.Segments[1].Data[0] = 0x34;
+  NdOpEmulator E(I);
+  E.setStrictMode(true);
+  E.setRegisterBytes(900, std::vector<uint8_t>(16, 0));
+  LowOp Op;
+  Op.Opcode = NdOp::INTRINSIC;
+  Op.Output = NdVar::reg(901, 16);
+  Op.addInput(NdVar::cst(unsigned(Intrinsic::EVEXExpandLoad), 2));
+  Op.addInput(NdVar::cst(UINT32_MAX, 8));
+  Op.addInput(NdVar::cst(3, 2));
+  Op.addInput(NdVar::reg(900, 16));
+  Op.addInput(NdVar::cst(1 | 0x36 << X86CompactSegmentShift, 2));
+  const X86LegacySegmentCache C{0, UINT32_MAX, 16, 0xc093, false};
+  EXPECT_FALSE(E.stepX86LegacySegment(Op, C));
+  EXPECT_FALSE(E.stepX86LegacySegment(Op, C, X86FullSegmentLimitChoice::Fault));
+  EXPECT_FALSE(E.getRegisterBytes(901));
+  ASSERT_TRUE(E.stepX86LegacySegment(Op, C, X86FullSegmentLimitChoice::Wrap));
+  auto Expected = std::vector<uint8_t>(16, 0);
+  Expected[0] = 0x12;
+  Expected[1] = 0x34;
+  EXPECT_EQ(E.getRegisterBytes(901), Expected);
+  EXPECT_FALSE(E.stepX86LegacySegment(Op, C));
+  EXPECT_FALSE(E.step(Op));
+  Op.NumInputs = UINT8_MAX;
+  EXPECT_FALSE(E.stepX86LegacySegment(Op, C));
+}

@@ -7,24 +7,35 @@
 /// Exercise the production docking chrome with native window drag targets.
 //===----------------------------------------------------------------------===//
 
+#include "../Config.h"
 #include "Docking.h"
 #include "Icons.h"
+#include "MainWindow.h"
 #include "NativeWindowStates.h"
+#include "QuickStartDialog.h"
+#include "Session.h"
 #include "SettingsKeys.h"
 #include "Theme.h"
+#include "TitleBar.h"
 #include "WindowFrame.h"
+#include "mcp/GuiSessionBroker.h"
+#include "mcp/McpConnectionManager.h"
 
+#include <QAbstractButton>
 #include <QApplication>
 #include <QCursor>
 #include <QDebug>
 #include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QListWidget>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QProcess>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QScreen>
 #include <QSettings>
 #include <QSignalSpy>
@@ -38,6 +49,7 @@
 #include <chrono>
 #include <future>
 #include <kddockwidgets/KDDockWidgets.h>
+#include <kddockwidgets/LayoutSaver.h>
 #include <kddockwidgets/core/DropArea.h>
 #include <kddockwidgets/core/DropIndicatorOverlay.h>
 #include <kddockwidgets/core/Group.h>
@@ -46,6 +58,7 @@
 #include <kddockwidgets/qtwidgets/views/MainWindow.h>
 #include <kddockwidgets/qtwidgets/views/TabBar.h>
 #include <kddockwidgets/qtwidgets/views/TitleBar.h>
+#include <memory>
 #include <thread>
 #include <utility>
 
@@ -267,6 +280,67 @@ public:
     return true;
   }
 
+#ifdef Q_OS_WIN
+  std::future<std::pair<bool, bool>> finishWindowsDrag(QWidget &widget,
+                                                       QPoint destination) {
+    const auto scale = widget.window()->devicePixelRatioF();
+    const auto local = widget.mapTo(widget.window(), destination);
+    POINT position{qRound(local.x() * scale), qRound(local.y() * scale)};
+    const auto handle = reinterpret_cast<HWND>(widget.window()->winId());
+    ClientToScreen(handle, &position);
+    const DWORD thread = GetWindowThreadProcessId(handle, nullptr);
+    const int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    // A system resize runs a native modal loop. Its completion must not depend
+    // on Qt timers; only copied native coordinates cross the thread boundary.
+    return std::async(std::launch::async, [=] {
+      // Press delivery can wait behind initial widget/model work. Do not send
+      // the complete drag before Windows has begun tracking that press.
+      const auto deadline =
+          std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      bool tracking = false;
+      while (std::chrono::steady_clock::now() < deadline) {
+        GUITHREADINFO info{};
+        info.cbSize = sizeof(info);
+        if (GetGUIThreadInfo(thread, &info) && (info.flags & GUI_INMOVESIZE) &&
+            info.hwndMoveSize == handle) {
+          tracking = true;
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+      INPUT motion{};
+      motion.type = INPUT_MOUSE;
+      motion.mi.dx = LONG(qint64(position.x - left) * 65535 / (width - 1));
+      motion.mi.dy = LONG(qint64(position.y - top) * 65535 / (height - 1));
+      motion.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE |
+                          MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE_NOCOALESCE;
+      const bool moved = tracking && SendInput(1, &motion, sizeof(motion)) == 1;
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      INPUT release{};
+      release.type = INPUT_MOUSE;
+      release.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+      const bool released = SendInput(1, &release, sizeof(release)) == 1;
+      const auto finishDeadline =
+          std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      bool finished = false;
+      while (std::chrono::steady_clock::now() < finishDeadline) {
+        GUITHREADINFO info{};
+        info.cbSize = sizeof(info);
+        if (GetGUIThreadInfo(thread, &info) &&
+            (!(info.flags & GUI_INMOVESIZE) || info.hwndMoveSize != handle)) {
+          finished = true;
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+      return std::make_pair(moved, released && finished);
+    });
+  }
+#endif
+
 #ifdef Q_OS_MACOS
   std::future<std::pair<bool, bool>> finishNativeDrag(QPoint destination) {
     // Cocoa tracks a system move or resize in an AppKit loop that does not
@@ -319,6 +393,28 @@ struct Desktop {
     Source.setFloating(true);
     Source.QWidget::window()->resize(std::min(450, screen.width() / 3),
                                      std::min(350, screen.height() / 2));
+    // A window manager may map a new window below the focused one. Without a
+    // compositor, one entirely behind the workbench would never be exposed.
+    Source.QWidget::window()->raise();
+  }
+
+  /// What a test saw of \p Widget's top-level window when it was not exposed.
+  static QByteArray windowState(const QWidget *Widget) {
+    const QWindow *Handle = Widget->windowHandle();
+    const QRect Frame = Widget->frameGeometry();
+    return QStringLiteral(
+               "%1: widget visible %2, handle %3, handle visible %4, exposed "
+               "%5, frame %6,%7 %8x%9")
+        .arg(QString::fromLatin1(Widget->metaObject()->className()))
+        .arg(Widget->isVisible())
+        .arg(Handle != nullptr)
+        .arg(Handle && Handle->isVisible())
+        .arg(Handle && Handle->isExposed())
+        .arg(Frame.x())
+        .arg(Frame.y())
+        .arg(Frame.width())
+        .arg(Frame.height())
+        .toUtf8();
   }
 
   KD::QtWidgets::TitleBar *titleBar() const {
@@ -375,7 +471,12 @@ private slots:
     QSettings().setValue(settings::NativeTitleBar, nativeCaption);
     Desktop desktop;
     auto *floating = desktop.Source.QWidget::window();
-    QVERIFY(QTest::qWaitForWindowExposed(floating));
+    // The process's first windows also load its fonts and platform plugins,
+    // which can take a hosted runner past QTest's default five seconds.
+    QVERIFY2(QTest::qWaitForWindowExposed(floating, 30000),
+             (Desktop::windowState(floating) + "; " +
+              Desktop::windowState(&desktop.Window))
+                 .constData());
     QVERIFY(desktop.titleBar());
     auto *maximize = floating->findChild<QAbstractButton *>(
         QStringLiteral("floatingMaximizeButton"));
@@ -491,6 +592,506 @@ private slots:
         QTest::newRow(qPrintable(QString::fromLatin1(name) +
                                  (locked ? "-locked" : "-unlocked")))
             << int(edges) << locked;
+  }
+
+  void framedWindowEdgesResize_data() {
+    QTest::addColumn<bool>("quickStart");
+    QTest::addColumn<int>("edges");
+    QTest::addColumn<bool>("restored");
+    QTest::addColumn<bool>("maximized");
+    for (const bool quickStart : {false, true})
+      for (const auto [name, edges] :
+           {std::pair{"left", Qt::Edges(Qt::LeftEdge)},
+            {"right", Qt::Edges(Qt::RightEdge)},
+            {"top", Qt::Edges(Qt::TopEdge)},
+            {"bottom", Qt::Edges(Qt::BottomEdge)},
+            {"top-left", Qt::TopEdge | Qt::LeftEdge},
+            {"bottom-right", Qt::BottomEdge | Qt::RightEdge}})
+        QTest::newRow(qPrintable(
+            QString(quickStart ? "quick-start-" : "workbench-") + name))
+            << quickStart << int(edges) << false << false;
+    QTest::newRow("workbench-right-restored")
+        << false << int(Qt::RightEdge) << true << false;
+    QTest::newRow("workbench-right-maximized")
+        << false << int(Qt::RightEdge) << false << true;
+  }
+
+  void quickStartChoosesWorkbenchSize_data() {
+    QTest::addColumn<bool>("greeting");
+    QTest::addColumn<bool>("openRecent");
+    QTest::newRow("startup-go") << true << false;
+    QTest::newRow("startup-recent") << true << true;
+    QTest::newRow("workbench-go") << false << false;
+    QTest::newRow("workbench-recent") << false << true;
+  }
+
+  void quickStartChoosesWorkbenchSize() {
+#ifdef TEST_WORKER
+    QFETCH(bool, greeting);
+    QFETCH(bool, openRecent);
+    QTemporaryDir project;
+    const auto path = project.filePath(QStringLiteral("quick-start.bin"));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write("fixture"), 7);
+    file.close();
+    const auto previousRecent = QSettings().value(settings::RecentFiles);
+    const auto restoreRecent = qScopeGuard(
+        [&] { QSettings().setValue(settings::RecentFiles, previousRecent); });
+    QSettings().setValue(settings::RecentFiles, QStringList{path});
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    McpConnectionManager mcp;
+    GuiSessionBroker broker;
+    MainWindow window(session, mcp, broker);
+    window.setLayoutPath(project.filePath(QStringLiteral("layout.json")));
+    window.setAsksForDebugInfo(false);
+    window.resize(950, 620);
+    if (!greeting)
+      window.showWorkbench();
+    window.showQuickStart();
+    QPointer<QuickStartDialog> dialog;
+    for (auto *widget : QApplication::topLevelWidgets())
+      if (auto *start = qobject_cast<QuickStartDialog *>(widget);
+          start && start->isVisible())
+        dialog = start;
+    QVERIFY(dialog);
+    QVERIFY(QTest::qWaitForWindowExposed(dialog));
+    if (openRecent) {
+      auto *recent = dialog->findChild<QListWidget *>("quickStartRecent");
+      QVERIFY(recent);
+      QCOMPARE(recent->count(), 1);
+      recent->setCurrentRow(0);
+      QTest::keyClick(recent, Qt::Key_Return);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), 7000);
+    } else {
+      QTest::keyClick(dialog, Qt::Key_Escape);
+    }
+    QTRY_VERIFY(window.isVisible());
+    QTRY_VERIFY(!dialog);
+    QTRY_COMPARE(window.isMaximized(), greeting);
+    QVERIFY(!window.isFullScreen());
+#else
+    QSKIP("Requires the fixture worker.");
+#endif
+  }
+
+  void workbenchReopensWindowed_data() {
+    QTest::addColumn<bool>("maximized");
+    QTest::addColumn<bool>("fullScreen");
+    QTest::addColumn<bool>("legacy");
+    QTest::newRow("normal") << false << false << false;
+    QTest::newRow("maximized") << true << false << false;
+    QTest::newRow("f11-from-normal") << false << true << false;
+    QTest::newRow("f11-from-maximized") << true << true << false;
+    QTest::newRow("legacy-fullscreen-normal") << false << true << true;
+    QTest::newRow("legacy-fullscreen-maximized") << true << true << true;
+  }
+
+  void workbenchReopensWindowed() {
+#ifdef TEST_WORKER
+    QFETCH(bool, maximized);
+    QFETCH(bool, fullScreen);
+    QFETCH(bool, legacy);
+    QByteArray geometry;
+    const QSize available = QGuiApplication::primaryScreen()->availableSize();
+    QRect normal(QPoint(40, 40), QSize(std::min(950, available.width() - 80),
+                                       std::min(620, available.height() - 80)));
+    {
+      QWidget previous;
+      auto *frame = WindowFrame::attach(previous);
+      QVERIFY(frame);
+      previous.setGeometry(normal);
+      previous.show();
+      QVERIFY(QTest::qWaitForWindowExposed(&previous));
+#ifdef Q_OS_MACOS
+      test::NativeWindowStates previousApplied(*previous.windowHandle());
+#endif
+      // X11 can quantize a requested size at fractional scale. Save the
+      // normal geometry accepted by the window manager.
+      QTest::qWait(250);
+      normal = previous.geometry();
+      if (maximized) {
+        previous.showMaximized();
+        QTRY_VERIFY(previous.isMaximized());
+        if (QGuiApplication::platformName() == QLatin1String("windows"))
+          QTRY_COMPARE(previous.size(),
+                       previous.screen()->availableGeometry().size());
+      }
+#ifdef Q_OS_MACOS
+      const QRect availableBeforeFullScreen =
+          previous.screen()->availableGeometry();
+#endif
+      if (fullScreen) {
+#ifdef Q_OS_MACOS
+        if (QGuiApplication::platformName() == QLatin1String("cocoa")) {
+          previous.raise();
+          previous.activateWindow();
+          if (!QTest::qWaitForWindowActive(&previous))
+            QSKIP("Cocoa full-screen validation requires a foreground window.");
+        }
+#endif
+        if (legacy)
+          previous.setWindowState(previous.windowState() |
+                                  Qt::WindowFullScreen);
+        else
+          frame->toggleFullScreen();
+        QTRY_VERIFY(previous.isFullScreen());
+        if (QGuiApplication::platformName() == QLatin1String("windows"))
+          QTRY_COMPARE(previous.size(), previous.screen()->geometry().size());
+      }
+      if (legacy)
+        normal = previous.normalGeometry();
+      geometry =
+          legacy ? previous.saveGeometry() : frame->saveWindowedGeometry();
+#ifdef Q_OS_MACOS
+      if (fullScreen &&
+          QGuiApplication::platformName() == QLatin1String("cocoa")) {
+        // The saved geometry is the restart input. Finish the old fixture's
+        // native transition and restore the desktop work area before the new
+        // window receives input; QWidget's state flag changes before AppKit.
+        QTRY_VERIFY(previousApplied.is(Qt::WindowFullScreen));
+        QVERIFY(test::setNativeFullScreen(previous, false));
+        QTRY_COMPARE(previous.screen()->availableGeometry(),
+                     availableBeforeFullScreen);
+      }
+#endif
+    }
+    QTemporaryDir project;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    McpConnectionManager mcp;
+    GuiSessionBroker broker;
+    MainWindow window(session, mcp, broker);
+    window.setLayoutPath(project.filePath(QStringLiteral("layout.json")));
+    // Startup restores the geometry while the native workbench is still hidden,
+    // before a file is loaded and before its first Show event.
+    QVERIFY(window.restoreWindowedGeometry(geometry));
+    QVERIFY(!window.isFullScreen());
+    const QSize expectedNormal =
+        legacy ? window.normalGeometry().size() : normal.size();
+    window.setAsksForDebugInfo(false);
+    const auto path = project.filePath(QStringLiteral("resize.bin"));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write("fixture"), 7);
+    file.close();
+    window.openFile(path);
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), 7000);
+    window.showWorkbench();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    const QRect screen = window.screen()->geometry();
+    QTRY_VERIFY(!window.isFullScreen());
+    QCOMPARE(window.isMaximized(), maximized);
+    auto *bar = window.findChild<TitleBar *>();
+    QVERIFY(bar && bar->isVisible());
+    for (const char *name :
+         {"minimizeButton", "maximizeButton", "closeButton"}) {
+      auto *button = bar->findChild<QAbstractButton *>(QLatin1String(name));
+      QVERIFY(button);
+      QVERIFY2(button->isVisible(), name);
+      QVERIFY(screen.contains(button->mapToGlobal(button->rect().center())));
+    }
+    if (maximized) {
+      if (!canPostPointerEvents())
+        QSKIP("Cocoa native restore-button input requires event-posting "
+              "permission; startup state and controls were checked above.");
+      auto *restore = bar->findChild<QAbstractButton *>("maximizeButton");
+      if (onWayland())
+        QVERIFY(shell(QStringLiteral("Main.activateWindow(%1);")
+                          .arg(nativeWindow(window))));
+      else {
+        window.raise();
+        window.activateWindow();
+      }
+      QVERIFY(QTest::qWaitForWindowActive(&window));
+      QSignalSpy restoreClicks(restore, &QAbstractButton::clicked);
+      Pointer pointer;
+      QVERIFY(pointer.click(*restore));
+      QTRY_COMPARE(restoreClicks.size(), 1);
+      QTRY_VERIFY_WITH_TIMEOUT(!window.isMaximized(), 2000);
+    }
+    if (maximized &&
+        QGuiApplication::platformName() == QLatin1String("offscreen"))
+      QSKIP(
+          "Restored native geometry needs a window manager; state and controls "
+          "were checked above.");
+    QTRY_COMPARE_WITH_TIMEOUT(window.size(), expectedNormal, 2000);
+    if (QGuiApplication::platformName() == QLatin1String("windows")) {
+#ifdef Q_OS_WIN
+      QVERIFY(place(window, window.screen()->availableGeometry().topLeft() +
+                                QPoint(1, 1)));
+      constexpr int shadow =
+          ::neverd::limits::gui_config::kWindowFrameShadowExtent;
+      const QPoint start(window.width() / 2, window.height() - shadow - 1);
+      Pointer pointer;
+      const auto handle = reinterpret_cast<HWND>(window.winId());
+      const auto scale = window.devicePixelRatioF();
+      POINT position{qRound(start.x() * scale), qRound(start.y() * scale)};
+      QVERIFY(ClientToScreen(handle, &position));
+      QTRY_COMPARE(SendMessageW(handle, WM_NCHITTEST, 0,
+                                MAKELPARAM(position.x, position.y)),
+                   LRESULT(HTBOTTOM));
+      QCOMPARE(WindowFromPoint(position), handle);
+      QVERIFY(pointer.button(window, start, false));
+      QVERIFY(pointer.move(window, start, false));
+      QTest::qWait(50);
+      QVERIFY(pointer.button(window, start, true));
+      auto completion =
+          pointer.finishWindowsDrag(window, start + QPoint(0, 20));
+      QTRY_VERIFY_WITH_TIMEOUT(completion.wait_for(std::chrono::milliseconds(
+                                   0)) == std::future_status::ready,
+                               5000);
+      const auto [moved, released] = completion.get();
+      QVERIFY(moved && released);
+      QTRY_VERIFY_WITH_TIMEOUT(window.height() > expectedNormal.height(), 2000);
+#endif
+    }
+    const auto captures = qEnvironmentVariable("NEVERD_DOCK_CAPTURE_DIR");
+    if (!captures.isEmpty()) {
+      QDir().mkpath(captures);
+      QVERIFY(window.grab().save(captures + '/' + QTest::currentDataTag() +
+                                 QStringLiteral("-reopened.png")));
+    }
+#else
+    QSKIP("Requires the fixture worker.");
+#endif
+  }
+
+  void oldFullscreenLayoutsKeepStartupGeometry_data() {
+    QTest::addColumn<bool>("globalLayout");
+    QTest::newRow("project-only") << false;
+    QTest::newRow("global-and-project") << true;
+  }
+
+  void oldFullscreenLayoutsKeepStartupGeometry() {
+#ifdef TEST_WORKER
+    QFETCH(bool, globalLayout);
+    QTemporaryDir project;
+    const QString binary = project.filePath(QStringLiteral("layout.bin"));
+    QFile file(binary);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write("fixture"), 7);
+    file.close();
+    const QString layout = project.filePath(QStringLiteral("fullscreen.json"));
+    QByteArray geometry;
+    QSize normal;
+    {
+      Session session(QString::fromLocal8Bit(TEST_WORKER));
+      McpConnectionManager mcp;
+      GuiSessionBroker broker;
+      MainWindow previous(session, mcp, broker);
+      previous.setLayoutPath(project.filePath(QStringLiteral("previous.json")));
+      previous.initializeLayout();
+      previous.showWorkbench();
+      previous.setAsksForDebugInfo(false);
+      previous.openFile(binary);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), 7000);
+      const QSize available = previous.screen()->availableSize();
+      previous.resize(std::min(950, available.width() - 80),
+                      std::min(620, available.height() - 80));
+      QTest::qWait(250);
+      normal = previous.size();
+      geometry = previous.saveWindowedGeometry();
+      previous.actions().action(ActionId::ViewFullScreen)->trigger();
+      QTRY_VERIFY(previous.isFullScreen());
+      if (QGuiApplication::platformName() == QLatin1String("windows"))
+        QTRY_COMPARE(previous.size(), previous.screen()->geometry().size());
+      // Use the real serializers: older desktop and project files include the
+      // main-window state independently of Qt's ui/geometry2 value.
+      if (globalLayout)
+        QVERIFY(KD::LayoutSaver().saveToFile(layout));
+      session.saveDatabaseState();
+    }
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    McpConnectionManager mcp;
+    GuiSessionBroker broker;
+    MainWindow window(session, mcp, broker);
+    window.setLayoutPath(layout);
+    QVERIFY(window.restoreWindowedGeometry(geometry));
+    window.initializeLayout();
+    QVERIFY(!window.isFullScreen());
+    window.showWorkbench();
+    window.setAsksForDebugInfo(false);
+    window.openFile(binary);
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), 7000);
+    QVERIFY(!window.isFullScreen());
+    QCOMPARE(window.size(), normal);
+    auto *bar = window.findChild<TitleBar *>();
+    QVERIFY(bar && bar->isVisible());
+    for (const char *name :
+         {"minimizeButton", "maximizeButton", "closeButton"}) {
+      auto *button = bar->findChild<QAbstractButton *>(QLatin1String(name));
+      QVERIFY(button && button->isVisible());
+    }
+#else
+    QSKIP("Requires the fixture worker.");
+#endif
+  }
+
+  void framedWindowEdgesResize() {
+    const auto platform = QGuiApplication::platformName();
+    if (platform != QLatin1String("windows") &&
+        platform != QLatin1String("xcb") && !onWayland())
+      QSKIP("Checks Windows and Linux native frame input.");
+    if (onWayland() && !qEnvironmentVariableIsSet("NEVERD_TEST_GNOME_POINTER"))
+      QSKIP("Wayland needs the isolated compositor's native pointer.");
+    QFETCH(bool, quickStart);
+    QFETCH(int, edges);
+    QFETCH(bool, restored);
+    QFETCH(bool, maximized);
+#if !defined(TEST_WORKER)
+    QSKIP("Requires the fixture worker for a loaded production workbench.");
+#else
+    QTemporaryDir project;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    McpConnectionManager mcp;
+    GuiSessionBroker broker;
+    std::unique_ptr<QWidget> window;
+    // Keep the complete 60-pixel edge gesture on small runner desktops.
+    const QRect available =
+        QGuiApplication::primaryScreen()->availableGeometry();
+    const QRect testArea = available.adjusted(80, 80, -80, -80);
+    const QSize initialSize = QSize(950, 620).boundedTo(testArea.size());
+    if (quickStart) {
+      auto dialog = std::make_unique<QuickStartDialog>(
+          [](QWidget *) { return QString(); });
+      auto *title = new TitleBar(*dialog);
+      QVERIFY(WindowFrame::attach(*dialog, title));
+      window = std::move(dialog);
+    } else {
+      auto workbench = std::make_unique<MainWindow>(session, mcp, broker);
+      workbench->setLayoutPath(project.filePath(QStringLiteral("layout.json")));
+      workbench->initializeLayout();
+      const auto path = project.filePath(QStringLiteral("resize.bin"));
+      QFile file(path);
+      QVERIFY(file.open(QIODevice::WriteOnly));
+      QCOMPARE(file.write("fixture"), 7);
+      file.close();
+      // Opening the file shows the workbench. Set its initial size before
+      // Wayland starts configuring that first surface.
+      workbench->resize(initialSize);
+      workbench->openFile(path);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), 7000);
+      window = std::move(workbench);
+    }
+    window->resize(initialSize);
+    window->show();
+    QVERIFY(QTest::qWaitForWindowExposed(window.get()));
+    QTest::qWait(250);
+    const QSize normal = window->size();
+    test::NativeWindowStates applied(*window->windowHandle());
+    if (restored) {
+      window->showMaximized();
+      QTRY_VERIFY(applied.is(Qt::WindowMaximized));
+      window->showNormal();
+      QTRY_VERIFY(applied.is(Qt::WindowNoState));
+      QTRY_COMPARE(window->size(), normal);
+    }
+    if (maximized) {
+      window->showMaximized();
+      QTRY_VERIFY(applied.is(Qt::WindowMaximized));
+      if (platform == QLatin1String("windows"))
+        QTRY_COMPARE(window->size(),
+                     window->screen()->availableGeometry().size());
+      if (onWayland())
+        QVERIFY(shell(QStringLiteral("Main.activateWindow(%1);")
+                          .arg(nativeWindow(*window))));
+      // The compositor can still animate its input surface after Qt has
+      // received the maximized size.
+      QTest::qWait(500);
+    } else {
+      QVERIFY(place(*window, testArea.topLeft()));
+      QTest::qWait(100);
+      QVERIFY(available.contains(
+          window->frameGeometry().adjusted(-60, -60, 60, 60)));
+    }
+    const QSize initial = window->size();
+    const int shadow =
+        maximized ? 0 : ::neverd::limits::gui_config::kWindowFrameShadowExtent;
+    QPoint start = window->rect().center(), delta;
+    if (edges & Qt::LeftEdge) {
+      start.setX(shadow + 1);
+      delta.setX(-60);
+    } else if (edges & Qt::RightEdge) {
+      start.setX(initial.width() - shadow - 2);
+      delta.setX(maximized ? -60 : 60);
+    }
+    if (edges & Qt::TopEdge) {
+      start.setY(shadow + 1);
+      delta.setY(-60);
+    } else if (edges & Qt::BottomEdge) {
+      start.setY(initial.height() - shadow - 2);
+      delta.setY(60);
+    }
+    Pointer pointer;
+    QVERIFY(pointer.button(*window, QPoint(), false));
+#ifdef Q_OS_WIN
+    const auto handle = reinterpret_cast<HWND>(window->winId());
+    QVERIFY(GetWindowLongPtrW(handle, GWL_STYLE) & WS_THICKFRAME);
+    const auto scale = window->devicePixelRatioF();
+    POINT native{qRound(start.x() * scale), qRound(start.y() * scale)};
+    QVERIFY(ClientToScreen(handle, &native));
+    const auto hit =
+        SendMessageW(handle, WM_NCHITTEST, 0, MAKELPARAM(native.x, native.y));
+    const auto expected = edges == int(Qt::LeftEdge)     ? HTLEFT
+                          : edges == int(Qt::RightEdge)  ? HTRIGHT
+                          : edges == int(Qt::TopEdge)    ? HTTOP
+                          : edges == int(Qt::BottomEdge) ? HTBOTTOM
+                          : edges == int(Qt::TopEdge | Qt::LeftEdge)
+                              ? HTTOPLEFT
+                              : HTBOTTOMRIGHT;
+    QCOMPARE(hit, LRESULT(expected));
+#endif
+    QVERIFY(pointer.move(*window, start, false));
+    QTest::qWait(50);
+    QVERIFY(pointer.button(*window, start, true));
+#ifdef Q_OS_WIN
+    auto completion = pointer.finishWindowsDrag(*window, start + delta);
+    QTRY_VERIFY_WITH_TIMEOUT(completion.wait_for(std::chrono::milliseconds(
+                                 0)) == std::future_status::ready,
+                             5000);
+    const auto [moved, released] = completion.get();
+    QVERIFY(moved);
+    QVERIFY(released);
+#else
+    QTest::qWait(100);
+    const bool moved = pointer.move(*window, start + delta, true);
+    QTest::qWait(200);
+    const bool released = pointer.button(*window, QPoint(), false);
+    QVERIFY(moved);
+    QVERIFY(released);
+#endif
+    if (maximized && platform != QLatin1String("windows")) {
+      QVERIFY(window->isMaximized());
+      QVERIFY(applied.is(Qt::WindowMaximized));
+      QCOMPARE(window->size(), initial);
+      QCOMPARE(window->contentsMargins().left(), 0);
+      QCOMPARE(window->contentsMargins().right(), 0);
+      return;
+    }
+    if (maximized) {
+      QTRY_VERIFY(!window->isMaximized());
+      QTRY_VERIFY2_WITH_TIMEOUT(
+          window->width() < initial.width(),
+          qPrintable(QStringLiteral("Before %1x%2, after %3x%4")
+                         .arg(initial.width())
+                         .arg(initial.height())
+                         .arg(window->width())
+                         .arg(window->height())),
+          2000);
+    } else if (delta.x())
+      QTRY_VERIFY_WITH_TIMEOUT(window->width() > initial.width(), 2000);
+    else
+      QCOMPARE(window->width(), initial.width());
+    if (delta.y())
+      QTRY_VERIFY_WITH_TIMEOUT(window->height() > initial.height(), 2000);
+    else if (maximized)
+      QTRY_COMPARE(
+          window->height(),
+          initial.height() +
+              2 * ::neverd::limits::gui_config::kWindowFrameShadowExtent);
+    else
+      QCOMPARE(window->height(), initial.height());
+#endif
   }
 
   void doubleClickDetachStartsLocked() {
@@ -670,13 +1271,17 @@ private slots:
     QVERIFY(pointer.move(*floating, start, false));
     QTest::qWait(50);
     QVERIFY(pointer.button(*floating, start, true));
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     QTimer observePreview;
     connect(&observePreview, &QTimer::timeout, &desktop.Window,
             [&] { preview |= area->dropIndicatorOverlay()->isVisible(); });
     observePreview.start(50);
+#ifdef Q_OS_WIN
+    auto completion = pointer.finishWindowsDrag(*floating, start + delta);
+#else
     auto completion =
         pointer.finishNativeDrag(floating->mapToGlobal(start + delta));
+#endif
     QTRY_VERIFY_WITH_TIMEOUT(completion.wait_for(std::chrono::milliseconds(
                                  0)) == std::future_status::ready,
                              5000);
@@ -989,12 +1594,14 @@ private slots:
       }
       auto *button = qobject_cast<QPushButton *>(desktop.Source.widget());
       QSignalSpy clicks(button, &QPushButton::clicked);
-      const QPoint center = button->rect().center();
-      QVERIFY(pointer.move(*button, center, false));
+      // The compositor can keep the target above a cancelled maximized
+      // source. Its center is covered at 150% scale; use exposed content.
+      const QPoint point(button->width() * 3 / 4, button->height() * 3 / 4);
+      QVERIFY(pointer.move(*button, point, false));
       QTest::qWait(50);
-      QVERIFY(pointer.button(*button, center, true));
+      QVERIFY(pointer.button(*button, point, true));
       QTest::qWait(50);
-      QVERIFY(pointer.button(*button, center, false));
+      QVERIFY(pointer.button(*button, point, false));
       QTRY_COMPARE(clicks.size(), 1);
     } else {
       QCOMPARE(desktop.Source.QWidget::window(), &desktop.Window);

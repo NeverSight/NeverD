@@ -1,0 +1,133 @@
+{
+  "schema": "neverd.gui-plugin.v1",
+  "id": "workbench-explorer",
+  "name": "Workbench Explorer (Developer)",
+  "version": "1.2.0",
+  "program": "python",
+  "arguments": [
+    "explorer.py"
+  ],
+  "queries": [
+    "metadata",
+    "functions",
+    "disasm",
+    "bytes",
+    "cfg",
+    "xrefs",
+    "imports",
+    "resolve"
+  ],
+  "actions": [
+    {
+      "id": "report",
+      "title": "Analyze current function",
+      "context": "function",
+      "context_menu": true,
+      "icon": "icons/function-report.svg"
+    },
+    {
+      "id": "overview",
+      "title": "Browse largest functions",
+      "context": "project",
+      "icon": "builtin:functions"
+    },
+    {
+      "id": "instructions",
+      "title": "Inspect selected instructions",
+      "context": "address",
+      "context_menu": true,
+      "icon": "builtin:bytes"
+    },
+    {
+      "id": "graph",
+      "title": "Function report with CFG",
+      "context": "function",
+      "context_menu": true,
+      "icon": "builtin:graph"
+    },
+    {
+      "id": "context",
+      "title": "Show captured context",
+      "context": "none",
+      "icon": "builtin:output"
+    },
+    {
+      "id": "background",
+      "title": "Run background demonstration…",
+      "context": "none",
+      "parameters": [
+        {
+          "id": "steps",
+          "title": "Work steps",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 10
+        },
+        {
+          "id": "delay_ms",
+          "title": "Delay per step (ms)",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000,
+          "default": 100
+        },
+        {
+          "id": "message",
+          "title": "Report message",
+          "type": "string",
+          "default": "Hello from an external GUI plugin"
+        },
+        {
+          "id": "letter_case",
+          "title": "Letter case",
+          "type": "choice",
+          "choices": [
+            "original",
+            "upper"
+          ],
+          "default": "original"
+        },
+        {
+          "id": "write_report",
+          "title": "Write report artifact",
+          "type": "boolean",
+          "default": true
+        }
+      ],
+      "icon": "builtin:analyze"
+    },
+    {
+      "id": "image-code",
+      "title": "Create analysis function…",
+      "context": "project",
+      "icon": "builtin:functions",
+      "parameters": [
+        {"id": "address", "title": "Free virtual address for analysis code", "type": "string", "default": "0x10000000"},
+        {"id": "value", "title": "Returned integer", "type": "integer", "default": 42, "minimum": 0, "maximum": 1000000}
+      ]
+    },
+    {
+      "id": "failure",
+      "title": "Exercise failure handling…",
+      "context": "none",
+      "timeout_ms": 1500,
+      "parameters": [
+        {
+          "id": "mode",
+          "title": "Failure mode",
+          "type": "choice",
+          "choices": [
+            "reported",
+            "crash",
+            "malformed",
+            "timeout"
+          ],
+          "default": "reported"
+        }
+      ],
+      "icon": "builtin:cancel"
+    }
+  ],
+  "icon": "builtin:extensions"
+}

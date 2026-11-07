@@ -6,6 +6,7 @@
 
 #include "TypeShape.h"
 
+#include "neverd/types/Limits.h"
 #include "neverd/types/PDBTypeImport.h"
 #include "neverd/types/TypeParse.h"
 #include "neverd/types/TypeRender.h"
@@ -63,6 +64,182 @@ std::string leaves(const RecordDef &Record, uint64_t Base = 0) {
 }
 
 } // namespace
+
+TEST(TypeParse, StorageQualifiersKeepDeclaratorsAndKeywordBoundaries) {
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    TypeLibrary Library = parsed(R"(
+      #define INLINE_API NTKERNELAPI __forceinline
+      typedef unsigned int __forceinline_count;
+      struct Entry { unsigned int inline_count; };
+      INLINE_API const struct Entry * __stdcall Inspect(
+          const struct Entry * __restrict _Nonnull item,
+          __forceinline_count count);
+      static inline unsigned int __forceinline_suffix(unsigned int _NullableX);
+      typedef void *P;
+      typedef P __ptr32 P32;
+      typedef P __ptr64 P64;
+      _Static_assert(sizeof(P32) == 4, "explicit narrow pointer");
+      _Static_assert(sizeof(P64) == 8, "explicit wide pointer");
+    )",
+                                 {}, Model);
+    const auto *Inspect = Library.findPrototype("Inspect");
+    ASSERT_NE(Inspect, nullptr);
+    ASSERT_EQ(Inspect->Params.size(), 2u);
+    EXPECT_EQ(Inspect->Params[0].Name, "item");
+    EXPECT_EQ(Inspect->Params[1].Name, "count");
+    EXPECT_EQ(Inspect->Params[1].Type->Name, "__forceinline_count");
+    EXPECT_EQ(Inspect->Convention, Model == DataModel::ILP32
+                                       ? CallingConvention::Stdcall
+                                       : CallingConvention::Unspecified);
+    ASSERT_EQ(Inspect->Return->Kind, TypeExprKind::Pointer);
+    ASSERT_NE(Inspect->Return->Element, nullptr);
+    EXPECT_TRUE(Inspect->Return->Element->Const);
+    const auto *Suffix = Library.findPrototype("__forceinline_suffix");
+    ASSERT_NE(Suffix, nullptr);
+    ASSERT_EQ(Suffix->Params.size(), 1u);
+    EXPECT_EQ(Suffix->Params[0].Name, "_NullableX");
+    EXPECT_EQ(recordOf(Library, "Entry").Members.front().Name, "inline_count");
+
+    // Similar words are identifiers, not storage annotations. A failed
+    // declaration must not publish its preceding valid declaration either.
+    const auto Before = Library.prototypes().size();
+    const auto Rejected =
+        parseCTypes("int Prior(void);\nInline int Broken(void);", Library);
+    ASSERT_EQ(Rejected.Problems.size(), 1u);
+    EXPECT_EQ(Rejected.Problems[0].Line, 2u);
+    EXPECT_EQ(Rejected.Problems[0].Column, 1u);
+    EXPECT_EQ(Rejected.Problems[0].Message, "'Inline' names no type");
+    EXPECT_EQ(Library.prototypes().size(), Before);
+    EXPECT_EQ(Library.findPrototype("Prior"), nullptr);
+  }
+}
+
+TEST(TypeParse, NamedSpecifiersKeepPrecedenceAndUnknownWordPositions) {
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    auto Library = parsed(R"(
+      typedef unsigned short size_t;
+      typedef unsigned int va_list;
+      typedef unsigned char uint64_t;
+      struct Entry { int value; };
+      enum Mode { First, Second };
+      Entry *Inspect(size_t count, va_list arguments, uint64_t bits, Mode mode);
+    )",
+                          {}, Model);
+    const auto *Inspect = Library.findPrototype("Inspect");
+    ASSERT_NE(Inspect, nullptr);
+    ASSERT_EQ(Inspect->Params.size(), 4u);
+    ASSERT_EQ(Inspect->Return->Kind, TypeExprKind::Pointer);
+    ASSERT_NE(Inspect->Return->Element, nullptr);
+    EXPECT_EQ(Inspect->Return->Element->NamedKind, TypeKind::Struct);
+    // Declared size_t and va_list keep their names. The parser's fixed
+    // builtin spellings retain precedence even if a header redeclares one.
+    EXPECT_EQ(Inspect->Params[0].Type->Name, "size_t");
+    EXPECT_EQ(Library.sizeOf(*Inspect->Params[0].Type), 2u);
+    EXPECT_EQ(Inspect->Params[1].Type->Name, "va_list");
+    EXPECT_EQ(Library.sizeOf(*Inspect->Params[1].Type), 4u);
+    EXPECT_EQ(Inspect->Params[2].Type->Kind, TypeExprKind::Builtin);
+    EXPECT_EQ(Inspect->Params[2].Type->TheBuiltin, Builtin::ULongLong);
+    EXPECT_EQ(Inspect->Params[3].Type->NamedKind, TypeKind::Enum);
+
+    ParseOptions Going;
+    Going.KeepGoing = true;
+    const auto Read = parseCTypes("int Before(void);\n  Missing Broken(void);\n"
+                                  "int After(size_t count);",
+                                  Library, Going);
+    ASSERT_EQ(Read.Problems.size(), 1u);
+    EXPECT_EQ(Read.Problems[0].Line, 2u);
+    EXPECT_EQ(Read.Problems[0].Column, 3u);
+    EXPECT_EQ(Read.Problems[0].Message, "'Missing' names no type");
+    EXPECT_NE(Library.findPrototype("Before"), nullptr);
+    EXPECT_NE(Library.findPrototype("After"), nullptr);
+    EXPECT_EQ(Library.findPrototype("Broken"), nullptr);
+
+    TypeLibrary Defaults(Model);
+    const auto Fallback = parseFunctionDeclaration(
+        "size_t Inspect(uintptr_t address, va_list arguments)", Defaults);
+    ASSERT_TRUE(Fallback.ok());
+    EXPECT_EQ(Defaults.sizeOf(*Fallback.Function->Return), pointerBytes(Model));
+    EXPECT_EQ(Fallback.Function->Params[1].Type->Kind, TypeExprKind::Pointer);
+    const unsigned Own = Defaults.builtinBytes(Builtin::LongDouble);
+    const auto Other = exactLongDoubleName(Own == 8 ? 16 : 8);
+    const auto WrongSize =
+        parseCTypes("\n" + Other + " BadLong(void);\nint AfterLong(void);",
+                    Defaults, Going);
+    ASSERT_EQ(WrongSize.Problems.size(), 1u);
+    EXPECT_EQ(WrongSize.Problems[0].Line, 2u);
+    EXPECT_EQ(WrongSize.Problems[0].Column, 1u);
+    EXPECT_NE(WrongSize.Problems[0].Message.find("is a long double of"),
+              std::string::npos);
+    EXPECT_NE(Defaults.findPrototype("AfterLong"), nullptr);
+    if (Model == DataModel::LP64) {
+      const auto Refused =
+          parseCTypes("va_list Bad(void);\nint After(void);", Defaults, Going);
+      ASSERT_EQ(Refused.Problems.size(), 1u);
+      EXPECT_EQ(Refused.Problems[0].Line, 1u);
+      EXPECT_EQ(Refused.Problems[0].Column, 1u);
+      EXPECT_EQ(Refused.Problems[0].Message,
+                "__builtin_va_list of an LP64 target is a record local "
+                "types do not know");
+      EXPECT_NE(Defaults.findPrototype("After"), nullptr);
+    }
+  }
+}
+
+TEST(TypeParse, GrowingTokenStreamsKeepMacroValuesSpellingAndSourceOrder) {
+  constexpr unsigned Count = 256;
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    std::string Source = "#pragma neverd_header(\"growth.h\")\n"
+                         "#define BOUND 3\n#define WORD unsigned short\n";
+    for (unsigned I = 0; I < Count; ++I) {
+      if (I == Count / 2)
+        Source += "#undef BOUND\n#define BOUND 5\n";
+      const auto Index = std::to_string(I);
+      Source += "struct Entry" + Index + " { WORD field" + Index +
+                "[BOUND]; char wide[sizeof(L\"A\")]; };\n"
+                "struct Entry" +
+                Index + " *Read" + Index + "(struct Entry" + Index +
+                " *value);\n";
+    }
+    TypeLibrary Library(Model);
+    const auto Result = parseCTypes(Source, Library);
+    ASSERT_TRUE(Result.ok()) << Result.Problems.front().Message;
+    ASSERT_EQ(Result.Types.size(), Count);
+    ASSERT_EQ(Result.Prototypes.size(), Count);
+    // Published names and headers must own their spelling after both the
+    // token stream and its arena are destroyed and the source is overwritten.
+    Source.assign(Source.size(), '!');
+    for (unsigned I = 0; I < Count; ++I) {
+      const auto Index = std::to_string(I);
+      const auto Name = "Entry" + Index;
+      SCOPED_TRACE(Name);
+      EXPECT_EQ(Result.Types[I], Name);
+      EXPECT_EQ(Result.Prototypes[I], "Read" + Index);
+      const auto *Type = Library.find(Name);
+      ASSERT_NE(Type, nullptr);
+      EXPECT_EQ(Type->Header, "growth.h");
+      const auto &Record = recordOf(Library, Name);
+      ASSERT_EQ(Record.Members.size(), 2u);
+      EXPECT_EQ(Record.Members[0].Name, "field" + Index);
+      EXPECT_EQ(Record.Members[0].Type->Count, I < Count / 2 ? 3u : 5u);
+      ASSERT_NE(Record.Members[0].Type->Element, nullptr);
+      EXPECT_EQ(Record.Members[0].Type->Element->TheBuiltin, Builtin::UShort);
+      EXPECT_EQ(Record.Members[1].Type->Count,
+                2 * Library.builtinBytes(Builtin::WChar));
+      const auto *Read = Library.findPrototype("Read" + Index);
+      ASSERT_NE(Read, nullptr);
+      ASSERT_EQ(Read->Params.size(), 1u);
+      EXPECT_EQ(Read->Params[0].Name, "value");
+      EXPECT_EQ(Read->Return->Element->Name, Name);
+      EXPECT_EQ(Read->Params[0].Type->Element->Name, Name);
+    }
+  }
+}
 
 TEST(TypeParse, LaysAStructureOutAsMSVC) {
   const TypeLibrary Library = parsed(R"(
@@ -154,6 +331,50 @@ TEST(TypeParse, ReadsOneFunctionsDeclarationAgainstTheLibrary) {
   EXPECT_NE(problem("int f(int a").find("expected ')'"), std::string::npos);
 }
 
+TEST(TypeParse, PunctuationKeepsOperatorsDeclaratorsAndErrorPositions) {
+  for (const auto Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    ParseOptions Options;
+    Options.Lang = Language::Cpp;
+    auto Library = parsed(R"(
+#define SHIFT 8
+struct Pair { int value; unsigned bits:3; };
+struct Box { struct Pair pair; int slots[SHIFT >> 1]; };
+_Static_assert((3 << 2) == 12 && (SHIFT >> 1) == 4, "shifts");
+_Static_assert(2 <= 3 && 4 >= 4 && 1 < 2 && 3 > 2, "relations");
+_Static_assert(1 != 2 && !0 && (0 || 1), "logical");
+_Static_assert(((~0 & 255) ^ 3 | 16) == 252, "bitwise");
+_Static_assert(17 / 4 == 4 && 17 % 4 == 1 && 2 + 3 * 4 - 1 == 13,
+               "arithmetic");
+_Static_assert((0 ? 2 : 3) == 3, "conditional");
+_Static_assert(sizeof(((struct Box *)0)->slots) == 16, "arrow");
+_Static_assert(__builtin_offsetof(struct Box, pair.value) == 0, "dot");
+int vendor::Dispatch(int (*callback)(int), const struct Box *box, ...);
+)",
+                          Options, Model);
+    EXPECT_EQ(recordOf(Library, "Box").Size, 24u);
+    const auto *Function = Library.findPrototype("vendor::Dispatch");
+    ASSERT_NE(Function, nullptr);
+    EXPECT_TRUE(Function->Variadic);
+    ASSERT_EQ(Function->Params.size(), 2u);
+    EXPECT_EQ(Function->Params[0].Name, "callback");
+    EXPECT_EQ(Function->Params[1].Name, "box");
+    const auto Before = renderTypes(Library, {}, {});
+    for (llvm::StringRef Bad :
+         {"struct Bad { int field; @ };", "int Broken(int value, ....);",
+          "struct Bad { int field; .. };"}) {
+      const auto Result = parseCTypes(Bad, Library, Options);
+      ASSERT_FALSE(Result.ok()) << Bad.str();
+      EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+      EXPECT_EQ(Library.findPrototype("Broken"), nullptr);
+      if (Bad.contains('@')) {
+        EXPECT_EQ(Result.Problems.front().Line, 1u);
+        EXPECT_EQ(Result.Problems.front().Column, Bad.find('@') + 1);
+      }
+    }
+  }
+}
+
 TEST(TypeParse, ExpandedSpellingsSurviveDirectivesAndTheInput) {
   TypeLibrary Library(DataModel::ILP32);
   std::string Source = R"(
@@ -203,6 +424,39 @@ struct RECORD { char Lead; WORD MEMBER; };
     EXPECT_EQ(Function->Params[0].Name, "Argument");
     EXPECT_EQ(Function->Convention, CallingConvention::Stdcall);
   }
+}
+
+TEST(TypeParse, MacroExpansionKeepsItsDepthBoundaryAndInvocationPosition) {
+  const unsigned Limit = neverd::limits::types::kCTypeParserExpandDepthLimit;
+  const auto Chain = [](unsigned Last) {
+    std::string Source;
+    for (unsigned Index = 0; Index <= Last; ++Index)
+      Source +=
+          "#define M" + std::to_string(Index) + " " +
+          (Index == Last ? "unsigned int" : "M" + std::to_string(Index + 1)) +
+          "\n";
+    return Source + "typedef M0 Expanded;\n";
+  };
+  TypeLibrary Library;
+  const auto Allowed = parseCTypes(Chain(Limit), Library);
+  ASSERT_TRUE(Allowed.ok());
+  ASSERT_NE(Library.find("Expanded"), nullptr);
+
+  TypeLibrary TooDeep;
+  const auto Refused = parseCTypes(Chain(Limit + 1), TooDeep);
+  ASSERT_EQ(Refused.Problems.size(), 1u);
+  EXPECT_EQ(Refused.Problems[0].Line, Limit + 3);
+  EXPECT_EQ(Refused.Problems[0].Column, 9u);
+  EXPECT_EQ(TooDeep.find("Expanded"), nullptr);
+
+  const auto Cycle = parseCTypes("#define FIRST SECOND\n#define SECOND FIRST\n"
+                                 "typedef FIRST Cyclic;\n",
+                                 Library);
+  ASSERT_EQ(Cycle.Problems.size(), 1u);
+  EXPECT_EQ(Cycle.Problems[0].Line, 3u);
+  EXPECT_EQ(Cycle.Problems[0].Column, 9u);
+  EXPECT_EQ(Library.find("Cyclic"), nullptr);
+  EXPECT_NE(Library.find("Expanded"), nullptr);
 }
 
 TEST(TypeParse, ExpandedDiagnosticsOwnTheirTextAndInvocationPosition) {
@@ -464,6 +718,62 @@ TEST(TypeParse, KeepsADeclaredAlignmentUnderPack) {
   EXPECT_EQ(recordOf(Library, "P4n").Size, 12u);
 }
 
+TEST(TypeParse, MicrosoftLegacyDeclspecKeepsAlignmentAndFunctionContracts) {
+  for (auto Lang : {Language::C, Language::Cpp}) {
+    ParseOptions Options;
+    Options.Lang = Lang;
+    for (auto Model : {DataModel::ILP32, DataModel::LLP64}) {
+      const TypeLibrary Library = parsed(R"(
+        typedef struct _declspec(align(16)) Block {
+          unsigned long long words[2];
+        } Block;
+        #pragma pack(push, 1)
+        struct Frame { char tag; Block block; char tail; };
+        #pragma pack(pop)
+        long _declspec(dllimport) __stdcall Read(Block *block, unsigned count);
+        _declspec(noreturn) void __cdecl Stop(unsigned code);
+        void _declspec(dllimport) Finish(void);
+        unsigned _inline Count(const Block *block) {
+          return (unsigned)block->words[0];
+        }
+      )",
+                                         Options, Model, RecordABI::Microsoft);
+      EXPECT_EQ(shapeOf(recordOf(Library, "Frame")),
+                "struct{tag@0 block@16 tail@32}");
+      EXPECT_EQ(recordOf(Library, "Frame").Size, 48u);
+      EXPECT_EQ(recordOf(Library, "Block").Alignment, 16u);
+      const auto *Read = Library.findPrototype("Read");
+      ASSERT_NE(Read, nullptr);
+      EXPECT_EQ(Read->Params.size(), 2u);
+      EXPECT_EQ(Read->Convention, Model == DataModel::ILP32
+                                      ? CallingConvention::Stdcall
+                                      : CallingConvention::Unspecified);
+      const auto *Stop = Library.findPrototype("Stop");
+      ASSERT_NE(Stop, nullptr);
+      EXPECT_TRUE(Stop->NoReturn);
+      ASSERT_NE(Library.findPrototype("Finish"), nullptr);
+      EXPECT_TRUE(Library.findPrototype("Finish")->Params.empty());
+      EXPECT_EQ(Library.findPrototype("_declspec"), nullptr);
+      ASSERT_NE(Library.findPrototype("Count"), nullptr);
+      EXPECT_EQ(Library.findPrototype("Count")->Params.size(), 1u);
+      EXPECT_EQ(Library.findPrototype("_inline"), nullptr);
+    }
+  }
+}
+
+TEST(TypeParse, MicrosoftLegacyDeclspecRejectsMalformedAttributes) {
+  for (llvm::StringRef Source :
+       {"struct _declspec(align()) Bad { int x; };",
+        "_declspec(noreturn void Bad(void);",
+        "typedef int Bad _declspec(vector_size(16));"}) {
+    TypeLibrary Library(DataModel::LLP64);
+    const auto Result = parseTypes(Source, Library, {});
+    EXPECT_FALSE(Result.Problems.empty()) << Source.str();
+    EXPECT_EQ(Library.find("Bad"), nullptr);
+    EXPECT_EQ(Library.findPrototype("Bad"), nullptr);
+  }
+}
+
 TEST(TypeParse, RequiredAlignmentSurvivesContainingRecordsAndRoundTrips) {
   // Clang's Microsoft ABI puts nested at 16 and tail at 32, even when an
   // intermediate record has no explicit alignment attribute of its own.
@@ -603,6 +913,68 @@ TEST(TypeParse, ReadsTypedefsPrototypesAndFunctionPointers) {
   ASSERT_TRUE(parseCTypes("LONG NTAPI IoCallDevice(ULONG Length);", X86).ok());
   EXPECT_EQ(X86.findPrototype("IoCallDevice")->Convention,
             CallingConvention::Stdcall);
+}
+
+TEST(TypeParse, NestedDeclaratorsKeepTheirCompositionAndQualifiers) {
+  for (const auto Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    ParseOptions Options;
+    Options.Lang = Language::Cpp;
+    std::string Source = R"(
+      typedef const unsigned short (Plain), (*Pointer), (*PointerArray[3]),
+          (*(*Factory)(int count))[2];
+      typedef const unsigned short (&ArrayRef)[3];
+      int __stdcall Use(Plain value,
+                        int (__stdcall *callback)(const Plain *, int));
+    )";
+    auto Library = parsed(Source, Options, Model);
+    Source.assign(Source.size(), '!');
+    for (const auto Name :
+         {"Plain", "Pointer", "PointerArray", "Factory", "ArrayRef"}) {
+      ASSERT_NE(Library.find(Name), nullptr) << Name;
+      ASSERT_NE(Library.find(Name)->Target, nullptr) << Name;
+    }
+    const auto Plain = Library.find("Plain")->Target;
+    EXPECT_EQ(Plain->Kind, TypeExprKind::Builtin);
+    EXPECT_EQ(Plain->TheBuiltin, Builtin::UShort);
+    EXPECT_TRUE(Plain->Const);
+    const auto Pointer = Library.find("Pointer")->Target;
+    ASSERT_EQ(Pointer->Kind, TypeExprKind::Pointer);
+    EXPECT_TRUE(Pointer->Element->Const);
+    const auto Array = Library.find("PointerArray")->Target;
+    ASSERT_EQ(Array->Kind, TypeExprKind::Array);
+    EXPECT_EQ(Array->Count, 3u);
+    ASSERT_EQ(Array->Element->Kind, TypeExprKind::Pointer);
+    EXPECT_TRUE(Array->Element->Element->Const);
+    const auto Factory = Library.find("Factory")->Target;
+    ASSERT_EQ(Factory->Kind, TypeExprKind::Pointer);
+    ASSERT_EQ(Factory->Element->Kind, TypeExprKind::Function);
+    const auto Function = Factory->Element->Function;
+    ASSERT_EQ(Function->Params.size(), 1u);
+    EXPECT_EQ(Function->Params[0].Name, "count");
+    EXPECT_EQ(Function->Params[0].Type->TheBuiltin, Builtin::Int);
+    ASSERT_EQ(Function->Return->Kind, TypeExprKind::Pointer);
+    ASSERT_EQ(Function->Return->Element->Kind, TypeExprKind::Array);
+    EXPECT_EQ(Function->Return->Element->Count, 2u);
+    EXPECT_TRUE(Function->Return->Element->Element->Const);
+    const auto Reference = Library.find("ArrayRef")->Target;
+    ASSERT_EQ(Reference->Kind, TypeExprKind::Pointer);
+    EXPECT_TRUE(Reference->Reference);
+    ASSERT_EQ(Reference->Element->Kind, TypeExprKind::Array);
+    EXPECT_EQ(Reference->Element->Count, 3u);
+    EXPECT_TRUE(Reference->Element->Element->Const);
+    const auto *Use = Library.findPrototype("Use");
+    ASSERT_NE(Use, nullptr);
+    ASSERT_EQ(Use->Params.size(), 2u);
+    EXPECT_EQ(Use->Params[0].Name, "value");
+    EXPECT_EQ(Use->Params[1].Name, "callback");
+    const auto Convention = Model == DataModel::ILP32
+                                ? CallingConvention::Stdcall
+                                : CallingConvention::Unspecified;
+    EXPECT_EQ(Use->Convention, Convention);
+    EXPECT_EQ(Use->Params[1].Type->Element->Function->Convention, Convention);
+  }
 }
 
 TEST(TypeParse, ReadsWhatGnuPreprocessedHeadersHold) {

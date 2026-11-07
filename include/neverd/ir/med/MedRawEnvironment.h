@@ -25,6 +25,11 @@ inline bool isMedRawEnvironmentRequirement(const MedOp &Op) {
          isRawEnvironmentRequirementId(Op.Inputs.front().ConstVal);
 }
 
+inline bool isMedArchitecturalValue(const MedOp &Op) {
+  return Op.Opcode == NdOp::INTRINSIC && !Op.Inputs.empty() &&
+         isArchitecturalValueId(Op.Inputs.front().ConstVal);
+}
+
 } // namespace neverd
 
 #endif // NEVERD_IR_MED_MEDRAWENVIRONMENT_H

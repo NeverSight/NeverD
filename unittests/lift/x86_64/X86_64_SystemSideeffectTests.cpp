@@ -129,14 +129,6 @@ TEST(X86SystemSideeffect, SystemInstructionsKeepTheirRegisterOperands) {
   EXPECT_TRUE(writes(Rdpmc.Ops, x86reg::RAX));
   EXPECT_TRUE(writes(Rdpmc.Ops, x86reg::RDX));
 
-  const LiftedInstruction Vmcall = liftX64({0x0f, 0x01, 0xc1});
-  const LowOp *Hypercall = findIntrinsic(Vmcall.Ops, Intrinsic::Vmcall);
-  ASSERT_NE(Hypercall, nullptr);
-  EXPECT_EQ(Hypercall->Output, NdVar::reg(x86reg::RAX, 8));
-  EXPECT_TRUE(hasInput(*Hypercall, x86reg::RCX, 8));
-  EXPECT_TRUE(hasInput(*Hypercall, x86reg::RDX, 8));
-  EXPECT_TRUE(hasInput(*Hypercall, x86reg::R8, 8));
-
   const LiftedInstruction Verw = liftX64({0x0f, 0x00, 0x29}); // verw [rcx]
   const LowOp *Check = findIntrinsic(Verw.Ops, Intrinsic::Verw);
   ASSERT_NE(Check, nullptr);
@@ -201,13 +193,31 @@ TEST(X86SystemSideeffect, SegmentRegisterMovesReadAndWriteSelectors) {
 TEST(X86SystemSideeffect, UnmodeledSystemInstructionsStayUnlifted) {
   // VMRUN needs a returning complete-machine continuation contract.
   for (const std::vector<uint8_t> &Bytes :
-       {std::vector<uint8_t>{0x0f, 0x01, 0xd8}}) { // VMRUN
+       {std::vector<uint8_t>{0x0f, 0x01, 0xd8},    // VMRUN
+        std::vector<uint8_t>{0x0f, 0x01, 0xc1},    // VMCALL has no implied ABI.
+        std::vector<uint8_t>{0x0f, 0x01, 0xd9}}) { // VMMCALL
     Decoder Dec;
     ASSERT_TRUE(Dec.init(Arch::X64));
     DecodedInsn Insn{};
     ASSERT_EQ(Dec.decodeOneForLift(Bytes.data(), Bytes.size(),
                                    kInstructionAddress, Insn),
               static_cast<int>(Bytes.size()));
+    std::vector<LowOp> Ops;
+    EXPECT_THROW(Dec.liftToLow(Insn, Ops), UnliftedInstruction);
+    EXPECT_TRUE(Ops.empty());
+  }
+}
+
+TEST(X86SystemSideeffect, MovCannotWriteCodeSegment) {
+  for (const auto A : {Arch::X86, Arch::X64}) {
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(A));
+    const uint8_t Bytes[] = {0x8e, 0xc8};
+    DecodedInsn Insn{};
+    const auto Size =
+        Dec.decodeOneForLift(Bytes, sizeof(Bytes), kInstructionAddress, Insn);
+    if (Size <= 0)
+      continue;
     std::vector<LowOp> Ops;
     EXPECT_THROW(Dec.liftToLow(Insn, Ops), UnliftedInstruction);
     EXPECT_TRUE(Ops.empty());

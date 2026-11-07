@@ -1,0 +1,438 @@
+{
+  "scope": "Native SYSRET32/64 and SYSEXIT32/64 LLVM/NeverC APIs and terminal compiler-frame ownership",
+  "goal_complete": false,
+  "validation_complete": true,
+  "artifact_set": "neverd-native-system-returns-20261029",
+  "llvm_commit": "230be9f7eaef3117ff72a5055477e96f2653b2f1",
+  "neverc_commit": "e05982e98965c37b154d82ea40e832dc4c4d4c4d",
+  "neverd_base": "76bc4215c5c9cebda202306e33aa70f00e725c3c",
+  "source_files": {
+    "llvm": {
+      "llvm/docs/X86SystemReturnIntrinsics.rst": {
+        "sha256": "97fda10d59eeb72b94e0b5e5842ade9d1c118024c0d0cf935c30a009d116eb55",
+        "bytes": 3432
+      },
+      "llvm/include/llvm/IR/IntrinsicsX86.td": {
+        "sha256": "f52ede312eadfedb803bb41f8865a77dcceee04d6f3fb9221734af7dbb14c934",
+        "bytes": 453239
+      },
+      "llvm/lib/Target/X86/X86ISelLowering.cpp": {
+        "sha256": "1017efd38775ac63cd86eda2d17c3eded6c1e044d033332db600b5d5bfb3cc4b",
+        "bytes": 2757924
+      },
+      "llvm/lib/Target/X86/X86InstrCompiler.td": {
+        "sha256": "67103714e82c858913ccd347889b9fe4d6ac0c420d3c2e4306d186f7e1f903ff",
+        "bytes": 118563
+      },
+      "llvm/lib/Target/X86/X86InstrSystem.td": {
+        "sha256": "7ff8d10bd787abdf77ca0baa5879eb8dbcfe0bc00d3d25b2f052b2ae508fb537",
+        "bytes": 48401
+      },
+      "llvm/lib/Target/X86/X86MCInstLower.cpp": {
+        "sha256": "57fe15eb15abcc7606d255e2bdc5f64f237950ee21fa0d7c6da23a3b462dc9a0",
+        "bytes": 139216
+      },
+      "llvm/test/CodeGen/X86/system-return-intrinsics.ll": {
+        "sha256": "5613630ea1df4beadcd7c258aca6fa44b52ebb9b4b5780c286ab0e7300d98bdc",
+        "bytes": 6141
+      }
+    },
+    "neverc": {
+      ".github/workflows/lint-generated-td.yml": {
+        "sha256": "66cb5b7cf13050aadd5adafcd444c607278267e78af52e51235cf04a88c9b982",
+        "bytes": 8204
+      },
+      "development.md": {
+        "sha256": "12ac5b6ff64eba283295739ab8c4011705c0ccf34ffd32651c2ba4b8058b7283",
+        "bytes": 128457
+      },
+      "llvm/include/llvm/IR/IntrinsicEnums.inc": {
+        "sha256": "0f933b6a8a8b219b55db58e414c7d83d4fe232376ca73b1f76a8e63760746df7",
+        "bytes": 27186
+      },
+      "llvm/include/llvm/IR/IntrinsicImpl.inc": {
+        "sha256": "da3f9f2d778e6e640fac964e75bd4d30964346d62235c8f6ff4b708291a1eb7b",
+        "bytes": 652719
+      },
+      "llvm/include/llvm/IR/IntrinsicsX86.h": {
+        "sha256": "c35ad269869218688ceda9cada767c58732a682a8e2d1dc7f20903fba2cdc4b1",
+        "bytes": 144130
+      },
+      "llvm/lib/Target/X86/X86GenAsmWriter.inc": {
+        "sha256": "e6b486f7ec1b18e10a8555dd2d9804a69cb39942acfe5f1257c8693323216705",
+        "bytes": 1694887
+      },
+      "llvm/lib/Target/X86/X86GenAsmWriter1.inc": {
+        "sha256": "d1f6e11747ce480b2b722415ea95ac549760120162d49be37e3dd485f6677373",
+        "bytes": 1224688
+      },
+      "llvm/lib/Target/X86/X86GenDAGISel.inc": {
+        "sha256": "aa798c3c072cd24f891f76595dadf16076592047a95548006036b26d583955ad",
+        "bytes": 10097947
+      },
+      "llvm/lib/Target/X86/X86GenInstrInfo.inc": {
+        "sha256": "c06c6d8c5e3ea557e8700897b2eeb717a6a70c553dcf9c1c437d9b0e08403ff6",
+        "bytes": 6946785
+      },
+      "llvm/lib/Target/X86/X86ISelLowering.cpp": {
+        "sha256": "f36e33c99262fb1994adaea45f01077cee7ff38f0e6dce3e471662af8095f90f",
+        "bytes": 2375160
+      },
+      "llvm/lib/Target/X86/X86MCInstLower.cpp": {
+        "sha256": "a5f917e1f3a646b083e0ce66294b01dabf8522d9d8d4de1e6be1ad01a80f3d62",
+        "bytes": 85240
+      },
+      "neverc/include/neverc/Foundation/Builtin/BuiltinsX86_64.def": {
+        "sha256": "cda958ff6c58a4353115dd7f4ba3159bc4fac5e7f9e9b53a1e15331ef856c0ae",
+        "bytes": 25080
+      },
+      "neverc/lib/Emit/Builtin/BuiltinEmitterX86.cpp": {
+        "sha256": "dc7712e181c81ca403fff8094bd0061dc16f838ec9fa94f483c3ca7575a037e7",
+        "bytes": 186331
+      },
+      "tests/neverc/CMakeLists.txt": {
+        "sha256": "ab497d52598e121d31af5c126dfe5fbbd79c713e8c551b6cb7eb60eb0f42ccf4",
+        "bytes": 127621
+      },
+      "tests/neverc/X86/SystemReturnFrontendTests.cpp": {
+        "sha256": "f8c56e49107e26be6b2cadf4b700a9ec7648bebae18a8c718b4c62adfc7c760d",
+        "bytes": 4190
+      },
+      "tests/neverc/X86/system_return_kvm.c": {
+        "sha256": "c07eaea1b2064fe8f07601131b2d358406aa9160a3afedb2dfa123050e8bb0b7",
+        "bytes": 13276
+      },
+      "tests/neverc/X86/verify_system_returns.py": {
+        "sha256": "9d1651b299c218d026ac2cadc9f7eac6a72388edd5af41784466c01527572132",
+        "bytes": 13787
+      },
+      "utils/lint/sync-x86-native-intrinsics.py": {
+        "sha256": "d64f32b7a10ee5e47a1084eeac3d74853979a6b233d684c98999dcde26cdbf73",
+        "bytes": 20315
+      },
+      "utils/lint/sync-x86-system-effects.py": {
+        "sha256": "4ac39213312480121d1d558f1db8668fb0a742829cb630c92ea74331f85219c6",
+        "bytes": 10640
+      },
+      "utils/lint/sync-x86-system-returns.py": {
+        "sha256": "9ea7d2ddf560b8cc62d03616aa8a2ac100b0083188fd0438ef9a819d3f4b5b28",
+        "bytes": 2766
+      },
+      "utils/lint/test_sync_x86_system_returns.py": {
+        "sha256": "67ba8b09badef348a5fcf4efd3140668641825032d03f548e39c9078cc7af712",
+        "bytes": 1314
+      }
+    }
+  },
+  "checks": {
+    "llvm": {
+      "tests": 38,
+      "passed": 38,
+      "failed": 0,
+      "skipped": 0,
+      "artifact": "llvm-regression.xml",
+      "sha256": "2a9e45e1c010440e95e2b148ca6335987d691f3b250fc71627402c46aef23dbd",
+      "bytes": 3420
+    },
+    "neverc_x86": {
+      "tests": 42,
+      "passed": 42,
+      "failed": 0,
+      "skipped": 0,
+      "artifact": "neverc-regression.xml",
+      "sha256": "8ef1a873c6422aab2180cff9c9ae434fedddc8c453bbcf51616e7e895a1e4559",
+      "bytes": 15233
+    },
+    "neverc_privileged_and_headers": {
+      "tests": 78,
+      "passed": 78,
+      "failed": 0,
+      "skipped": 0,
+      "artifact": "neverc-privileged.xml",
+      "sha256": "c04ee8f001b72e45ca84a0f89a7b5a9257f480da14225beddf64bb954f960ae2",
+      "bytes": 23738
+    },
+    "generators": {
+      "generators-final.log": {
+        "passed": 64,
+        "artifact": "generators-final.log",
+        "sha256": "01aa88f667955490388fd54b0db8cfbedcfc31b566f5f97fbf6f8ef6b864f4d3",
+        "bytes": 164
+      },
+      "intrinsic-sort-tests.log": {
+        "passed": 7,
+        "artifact": "intrinsic-sort-tests.log",
+        "sha256": "5ededeb609c7acdc121da6c97b87fb419910252a11342b3ca610b5e13a673a89",
+        "bytes": 105
+      }
+    }
+  },
+  "unique_tests_passed": 229,
+  "native": {
+    "profiles": [
+      {
+        "code_bits": 64,
+        "profile": "llvm-O0",
+        "functions": 16,
+        "complete_state_pairs": 87040,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "bcdc7fbe1b9a421753bad76464e4a9ee0316a889bdb326610705b925a2a4c22c",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "code_bits": 64,
+        "profile": "llvm-O2",
+        "functions": 16,
+        "complete_state_pairs": 87040,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "f16aaac355d6b29c1d37da5e2a9360a74457ad09cf0fe2c1bf678e1a965fe0af",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "code_bits": 64,
+        "profile": "neverc-O0",
+        "functions": 16,
+        "complete_state_pairs": 87040,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "09d7fa8ece2c40e12aa90166f95ed2a13a24d8062bc09204b082cc0c191376e3",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "code_bits": 64,
+        "profile": "neverc-O2",
+        "functions": 16,
+        "complete_state_pairs": 87040,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "b0a6e2fee89dbe04ad8158c89ce15a065b457af5a01199f9eea87e64caa25b01",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "code_bits": 64,
+        "profile": "neverc-ir-O0",
+        "functions": 16,
+        "complete_state_pairs": 87040,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "b059f0ecd5ddf179519ca43337b8a2cd874d493064d08bec2af71d41666b82a7",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "code_bits": 64,
+        "profile": "neverc-ir-O2",
+        "functions": 16,
+        "complete_state_pairs": 87040,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "b9dde5d65aad4461985f8901f0df9bf3a3264921a587ec04ded2da13e63530b6",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "code_bits": 32,
+        "profile": "llvm-O0",
+        "functions": 4,
+        "complete_state_pairs": 21760,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "036a9045c40129327543d1d6bb7ebf8c78a80797c4b4a6ad87f2d618d108df8d",
+        "wrong_stack_negative_control": "rejected"
+      },
+      {
+        "code_bits": 32,
+        "profile": "llvm-O2",
+        "functions": 4,
+        "complete_state_pairs": 21760,
+        "mapped_bytes_per_observation": 2097152,
+        "elf_sha256": "dbbe4d7236e6c20746388de5fede9ff963cd0531deca0d5b68d4e2fa09579b31",
+        "wrong_stack_negative_control": "rejected"
+      }
+    ],
+    "complete_represented_state_pairs": 565760,
+    "wrong_operand_negative_controls": 8,
+    "compared": "All 16 GPRs, RIP, RFLAGS, all kvm_sregs against each CPU admitted baseline, and every byte of 2 MiB mapped RAM. XSTATE is not compared.",
+    "operand_boundary": "Named input bits checked at the declared operand width before the original-byte oracle executes. Compatibility high halves are compared as same-host witnesses, never promoted to architectural promises.",
+    "matrix": "Four transfers x four frame/pressure variants x five selectors x 68 flag samples x four stack values x four size/address combinations for each x64 profile. i386 profiles run SYSEXIT32 with the same four variants and input matrix.",
+    "cpu": {
+      "vendor_id": "GenuineIntel",
+      "cpu family": "6",
+      "model": "186",
+      "model name": "13th Gen Intel(R) Core(TM) i9-13900H",
+      "stepping": "2",
+      "microcode": "0x6134",
+      "flags": "fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb intel_pt sha_ni xsaveopt xsavec xgetbv1 xsaves split_lock_detect user_shstk avx_vnni dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp hwp_pkg_req hfi vnmi umip pku ospke waitpkg gfni vaes vpclmulqdq rdpid movdiri movdir64b fsrm md_clear serialize pconfig arch_lbr ibt flush_l1d arch_capabilities"
+    },
+    "artifacts": {
+      "native-qualified-x64": {
+        "report": {
+          "artifact": "native-qualified-x64/evidence.json",
+          "sha256": "6126322f241901a008e82ddf72f8241716309c792d2a2853bf6ad20852ca90f9",
+          "bytes": 3851
+        },
+        "commands": {
+          "artifact": "native-qualified-x64/commands.json",
+          "sha256": "6d56c70447452f2bdbbe685f5b53efa41da4363c1561d45216c30ba4229f19e2",
+          "bytes": 20458
+        },
+        "observations": {
+          "llvm-O0": {
+            "artifact": "native-qualified-x64/llvm-O0-native.stdout",
+            "sha256": "ee54009fdce8e633e6e996546f77b1b9098fbcc707fd397cc4c81b70aa9ca929",
+            "bytes": 85
+          },
+          "llvm-O2": {
+            "artifact": "native-qualified-x64/llvm-O2-native.stdout",
+            "sha256": "ee54009fdce8e633e6e996546f77b1b9098fbcc707fd397cc4c81b70aa9ca929",
+            "bytes": 85
+          },
+          "neverc-O0": {
+            "artifact": "native-qualified-x64/neverc-O0-native.stdout",
+            "sha256": "ee54009fdce8e633e6e996546f77b1b9098fbcc707fd397cc4c81b70aa9ca929",
+            "bytes": 85
+          },
+          "neverc-O2": {
+            "artifact": "native-qualified-x64/neverc-O2-native.stdout",
+            "sha256": "ee54009fdce8e633e6e996546f77b1b9098fbcc707fd397cc4c81b70aa9ca929",
+            "bytes": 85
+          },
+          "neverc-ir-O0": {
+            "artifact": "native-qualified-x64/neverc-ir-O0-native.stdout",
+            "sha256": "ee54009fdce8e633e6e996546f77b1b9098fbcc707fd397cc4c81b70aa9ca929",
+            "bytes": 85
+          },
+          "neverc-ir-O2": {
+            "artifact": "native-qualified-x64/neverc-ir-O2-native.stdout",
+            "sha256": "ee54009fdce8e633e6e996546f77b1b9098fbcc707fd397cc4c81b70aa9ca929",
+            "bytes": 85
+          }
+        },
+        "negatives": {
+          "llvm-O0": {
+            "artifact": "native-qualified-x64/llvm-O0-negative.stderr",
+            "sha256": "bcdfb0fbc66a183322961c34e4bf613571cfc2438244967def0370d3e676b1fe",
+            "bytes": 80
+          },
+          "llvm-O2": {
+            "artifact": "native-qualified-x64/llvm-O2-negative.stderr",
+            "sha256": "bcdfb0fbc66a183322961c34e4bf613571cfc2438244967def0370d3e676b1fe",
+            "bytes": 80
+          },
+          "neverc-O0": {
+            "artifact": "native-qualified-x64/neverc-O0-negative.stderr",
+            "sha256": "bcdfb0fbc66a183322961c34e4bf613571cfc2438244967def0370d3e676b1fe",
+            "bytes": 80
+          },
+          "neverc-O2": {
+            "artifact": "native-qualified-x64/neverc-O2-negative.stderr",
+            "sha256": "bcdfb0fbc66a183322961c34e4bf613571cfc2438244967def0370d3e676b1fe",
+            "bytes": 80
+          },
+          "neverc-ir-O0": {
+            "artifact": "native-qualified-x64/neverc-ir-O0-negative.stderr",
+            "sha256": "bcdfb0fbc66a183322961c34e4bf613571cfc2438244967def0370d3e676b1fe",
+            "bytes": 80
+          },
+          "neverc-ir-O2": {
+            "artifact": "native-qualified-x64/neverc-ir-O2-negative.stderr",
+            "sha256": "bcdfb0fbc66a183322961c34e4bf613571cfc2438244967def0370d3e676b1fe",
+            "bytes": 80
+          }
+        }
+      },
+      "native-qualified-i386": {
+        "report": {
+          "artifact": "native-qualified-i386/evidence.json",
+          "sha256": "420d302ec06079265c2d2aad07b0b5faa569bafbe7017be33ff009e03d0741be",
+          "bytes": 2707
+        },
+        "commands": {
+          "artifact": "native-qualified-i386/commands.json",
+          "sha256": "123e2eaf2cd55a57a8abaf3fab5280c1c774fcd704b3dd4bb1ae3018c886957c",
+          "bytes": 6544
+        },
+        "observations": {
+          "llvm-O0": {
+            "artifact": "native-qualified-i386/llvm-O0-native.stdout",
+            "sha256": "32684f3746cf9c19bdef4348cf56b8ae592a7a632769a44e1db6399607625c35",
+            "bytes": 84
+          },
+          "llvm-O2": {
+            "artifact": "native-qualified-i386/llvm-O2-native.stdout",
+            "sha256": "32684f3746cf9c19bdef4348cf56b8ae592a7a632769a44e1db6399607625c35",
+            "bytes": 84
+          }
+        },
+        "negatives": {
+          "llvm-O0": {
+            "artifact": "native-qualified-i386/llvm-O0-negative.stderr",
+            "sha256": "4875731c171c46b37edc70690312fbd86e03210997939252a10a6eebbef65628",
+            "bytes": 147
+          },
+          "llvm-O2": {
+            "artifact": "native-qualified-i386/llvm-O2-negative.stderr",
+            "sha256": "4875731c171c46b37edc70690312fbd86e03210997939252a10a6eebbef65628",
+            "bytes": 147
+          }
+        }
+      }
+    }
+  },
+  "root_cause": "Machine scheduling moved a glued RSP CopyToReg ahead of compiler-frame accesses at O2.",
+  "fix": "Retain RSP input in a terminal pseudo through register allocation and scheduling; emit adjacent MOV-to-RSP and SYSRET only at final MC emission with inter-instruction padding disabled.",
+  "red": {
+    "artifact": "llvm-first-test.log",
+    "sha256": "dce9b7e3ab05ab0eb658faea28e8b76c714c77d6cdd3352e0aed8c3cd83a5b3e",
+    "bytes": 24243
+  },
+  "other_initial_failures": [
+    {
+      "reason": "The pre-change NeverC binary did not recognize the new builtin.",
+      "artifact": "neverc-red.log",
+      "sha256": "04f29c4bc5a69a6fe0b2734dda502a117659e5527318198167e283eebf8b9e9a",
+      "bytes": 388
+    },
+    {
+      "reason": "The first runtime oracle incorrectly demanded zero above narrow ECX inputs. O2 legally used MOV64; the API guarantees low 32 bits. Corrected operand-width validation retains full native post-state comparisons.",
+      "artifact": "native-llvm.log",
+      "sha256": "925c9cd384a967b65d509fea5821ed5548e21495345cfa3a6952d9987355fbc6",
+      "bytes": 868
+    },
+    {
+      "reason": "Local root filesystem exhaustion interrupted archive output. The build tree moved intact to /mnt/data and the failed archive was preserved before rebuilding.",
+      "artifact": "neverc-build.log",
+      "sha256": "1457d953e3f8ee1b736b32f510bff0a4bfbb97aad5f2ca0fea1a84315a7873f0",
+      "bytes": 192850
+    },
+    {
+      "reason": "NeverC prunes code16 support and has no is16Bit accessor. Its mode admission now explicitly requires its existing x86-64 target; full LLVM retains protected-mode SYSEXIT32.",
+      "artifact": "neverc-rebuild.log",
+      "sha256": "5bab6cb0193e8be1c673254a8c22cfac899db7505aa970453d93f730526fad9a",
+      "bytes": 933304
+    }
+  ],
+  "final_build": {
+    "artifact": "neverc-rebuild-2.log",
+    "sha256": "063798ce50abd197b470a1207da06690dfa7418cd0bae4f5696bf8e962496b1a",
+    "bytes": 932293
+  },
+  "documentation_checks": [
+    {
+      "artifact": "neverc-doc-links.log",
+      "sha256": "125529d1a9a46607a5341c15e641a1b96abdc6af34c1749b990638171483521f",
+      "bytes": 128
+    },
+    {
+      "artifact": "neverc-doc-facts.log",
+      "sha256": "c301ac6b3b5369439af026074cbb2a50ec8c8bf63d8cc21e3aceaf5b03e10d52",
+      "bytes": 167
+    },
+    {
+      "artifact": "neverd-docs-i18n.log",
+      "sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+      "bytes": 69
+    }
+  ],
+  "qualification_limits": [
+    "Intel Core i9-13900H Linux KVM with CET disabled; other CPU models, faults and asynchronous events remain unqualified.",
+    "Native APIs guarantee named inputs and abandon the compiler frame. They do not reconstruct an original-image full register/vector context or provide asynchronous unwind across the stack switch.",
+    "NeverD ordinary transfer-proof boundaries are unchanged; this phase changes NeverD documentation only.",
+    "NeverC stage-1 and selected x86 regressions pass; this is not a full product CI or stage-2 qualification.",
+    "SYSENTER, IRET/RETF, RSM, FRED/UIRET native APIs and the other global support-table gaps remain open."
+  ],
+  "release_and_pins_changed": false
+}

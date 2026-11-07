@@ -89,6 +89,17 @@ functionNamesAt(const BinaryImage &Img, const std::set<va_t> &Addrs) {
   return Names;
 }
 
+/// functionNamesAt() for every address an export or a symbol of \p Img
+/// names; any other address is named `sub_` and its address.
+inline std::map<va_t, std::string> imageFunctionNames(const BinaryImage &Img) {
+  std::set<va_t> Named;
+  for (const Export &Exp : Img.Exports)
+    Named.insert(Exp.Addr);
+  for (const Symbol &Sym : Img.Symbols)
+    Named.insert(Sym.Addr);
+  return functionNamesAt(Img, Named);
+}
+
 /// A recovered entry does not itself supply a name. Preserve the image naming
 /// producer's origin, including its generated fallback; only an additional
 /// name supplied by recovery is analysis evidence. A stated sub_<va> remains

@@ -14,6 +14,7 @@
 
 #include "neverd/support/ByteScan.h"
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <vector>
@@ -29,9 +30,113 @@
 #include <unistd.h>
 #endif
 
+using neverd::strings::detail::byteRunMasks;
+using neverd::strings::detail::findNulOrControl;
+using neverd::strings::detail::isNonTextUnit;
+using neverd::strings::detail::isNulOrControl;
+using neverd::strings::detail::isTextASCII;
 using neverd::strings::detail::textASCIIPrefix;
+using neverd::strings::detail::unitRunMasks;
 
 namespace {
+/// A code unit of \p UnitBytes at \p At in the byte order \p BigEndian.
+uint32_t unitAt(const uint8_t *At, unsigned UnitBytes, bool BigEndian) {
+  uint32_t Value = 0;
+  for (unsigned I = 0; I < UnitBytes; ++I)
+    Value |= uint32_t(At[I]) << (8 * (BigEndian ? UnitBytes - 1 - I : I));
+  return Value;
+}
+
+/// byteRunMasks and unitRunMasks over \p Count elements, as their contracts
+/// mark each one: the terminators and the elements of a run.
+template <typename Terminates, typename Runs>
+void expectMasks(size_t Count, const std::vector<uint64_t> &Terminator,
+                 const std::vector<uint64_t> &Run, Terminates IsTerminator,
+                 Runs InRun) {
+  ASSERT_EQ(Terminator.size(), (Count + 63) / 64);
+  for (size_t I = 0; I < Terminator.size() * 64; ++I) {
+    const bool Inside = I < Count;
+    EXPECT_EQ(Terminator[I / 64] >> (I % 64) & 1,
+              uint64_t(Inside && IsTerminator(I)))
+        << I;
+    EXPECT_EQ(Run[I / 64] >> (I % 64) & 1, uint64_t(Inside && InRun(I))) << I;
+  }
+}
+
+void checkByteMasks(const uint8_t *Data, size_t Count) {
+  for (const bool Text : {false, true}) {
+    std::vector<uint64_t> Nul((Count + 63) / 64, ~uint64_t(0)),
+        Run((Count + 63) / 64, ~uint64_t(0));
+    byteRunMasks(Data, Count, Text, Nul.data(), Run.data());
+    expectMasks(
+        Count, Nul, Run, [&](size_t I) { return Data[I] == 0; },
+        [&](size_t I) {
+          return Text ? isTextASCII(Data[I]) : !isNulOrControl(Data[I]);
+        });
+  }
+  size_t First = 0;
+  while (First < Count && !isNulOrControl(Data[First]))
+    ++First;
+  EXPECT_EQ(findNulOrControl(Data, Count), First);
+}
+
+void checkUnitMasks(const uint8_t *Data, size_t Count, unsigned UnitBytes) {
+  for (const bool BigEndian : {false, true}) {
+    std::vector<uint64_t> Zero((Count + 63) / 64, ~uint64_t(0)),
+        Run((Count + 63) / 64, ~uint64_t(0));
+    unitRunMasks(Data, Count, UnitBytes, BigEndian, Zero.data(), Run.data());
+    const auto unit = [&](size_t I) {
+      return unitAt(Data + I * UnitBytes, UnitBytes, BigEndian);
+    };
+    expectMasks(
+        Count, Zero, Run, [&](size_t I) { return unit(I) == 0; },
+        [&](size_t I) { return !isNonTextUnit(unit(I)); });
+  }
+}
+
+void checkRunMaskTargets() {
+  // Every byte value at every lane, across two words.
+  std::array<uint8_t, 192> Bytes;
+  for (unsigned Byte = 0; Byte != 256; ++Byte)
+    for (size_t Pos = 0; Pos != 130; ++Pos) {
+      Bytes.fill('a');
+      Bytes[Pos] = static_cast<uint8_t>(Byte);
+      checkByteMasks(Bytes.data(), Bytes.size());
+    }
+  // Units either side of each class boundary, in both byte orders.
+  const uint32_t Values[] = {
+      0,      1,       9,        0x1f,     0x20,      0x7e,      0x7f,
+      0x9f,   0xa0,    0xff,     0x100,    0x4e00,    0xd800,    0xdfff,
+      0xffff, 0x10000, 0x10ffff, 0x110000, 0x1000000, 0xffffffff};
+  std::array<uint8_t, 4 * 192> Units;
+  for (const unsigned UnitBytes : {2u, 4u})
+    for (const uint32_t Value : Values) {
+      if (UnitBytes == 2 && Value > 0xffff)
+        continue;
+      for (size_t Pos = 0; Pos != 130; ++Pos)
+        for (const bool BigEndian : {false, true}) {
+          for (size_t I = 0; I != 192; ++I)
+            for (unsigned B = 0; B < UnitBytes; ++B)
+              Units[I * UnitBytes + B] =
+                  B == (BigEndian ? UnitBytes - 1 : 0) ? 'a' : 0;
+          for (unsigned B = 0; B < UnitBytes; ++B)
+            Units[Pos * UnitBytes + B] = static_cast<uint8_t>(
+                Value >> (8 * (BigEndian ? UnitBytes - 1 - B : B)));
+          checkUnitMasks(Units.data(), 192, UnitBytes);
+        }
+    }
+  // Every offset and count, over patterned bytes.
+  for (size_t Offset = 0; Offset != 8; ++Offset)
+    for (size_t Size = 0; Size != 300; ++Size) {
+      for (size_t I = 0; I != Units.size(); ++I)
+        Units[I] = static_cast<uint8_t>(
+            (I * 37 + Size * 13) % 7 == 0 ? 0 : (I * 53 + Size) & 255);
+      checkByteMasks(Units.data() + Offset, Size);
+      checkUnitMasks(Units.data() + Offset, Size / 2, 2);
+      checkUnitMasks(Units.data() + Offset, Size / 4, 4);
+    }
+}
+
 size_t referencePrefix(const uint8_t *Data, size_t Size) {
   size_t I = 0;
   for (; I < Size; ++I)
@@ -79,6 +184,23 @@ TEST(ByteScan, EveryByteLaneAndAlignment) {
 #endif
 }
 
+TEST(ByteScan, RunMasksMarkEveryByteAndUnit) {
+#if NEVERD_TEST_HIGHWAY
+  const auto Targets = hwy::SupportedAndGeneratedTargets();
+  struct Reset {
+    ~Reset() { hwy::SetSupportedTargetsForTest(0); }
+  } Restore;
+  ASSERT_FALSE(Targets.empty());
+  for (const auto Target : Targets) {
+    SCOPED_TRACE(hwy::TargetName(Target));
+    hwy::SetSupportedTargetsForTest(Target);
+    checkRunMaskTargets();
+  }
+#else
+  checkRunMaskTargets();
+#endif
+}
+
 TEST(ByteScan, EmptyAndGuardedTails) {
   EXPECT_EQ(textASCIIPrefix(nullptr, 0), 0u);
 #ifdef _WIN32
@@ -113,6 +235,11 @@ TEST(ByteScan, EmptyAndGuardedTails) {
       EXPECT_EQ(
           neverd::knownValidUTF8({reinterpret_cast<const char *>(At), Size}),
           static_cast<bool>(NEVERD_TEST_SIMDUTF));
+      EXPECT_EQ(findNulOrControl(At, Size), Size);
+      checkByteMasks(At, Size);
+      for (const unsigned UnitBytes : {2u, 4u})
+        checkUnitMasks(Memory + Page - Size / UnitBytes * UnitBytes,
+                       Size / UnitBytes, UnitBytes);
     }
 #if NEVERD_TEST_HIGHWAY
   }

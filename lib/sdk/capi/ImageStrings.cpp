@@ -9,6 +9,8 @@
 #include "SessionImpl.h"
 
 #include "neverd/loader/StringLiteralSymbols.h"
+#include "neverd/sdk/Limits.h"
+#include "neverd/support/Parallel.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ConvertUTF.h"
@@ -76,17 +78,15 @@ std::optional<ImageString> literalString(const BinaryImage &Img, va_t Addr,
     strings::ScanOptions Whole = Options;
     Whole.Encodings |= strings::defaultEncodings();
     Whole.MinLength = 1;
-    std::optional<ImageString> Paged;
-    strings::scan(Terminated, Whole, [&](strings::FoundString &&Found) {
-      if (Found.Offset || Found.Bytes != Literal.Bytes ||
-          !strings::isLegacyEncoding(Found.Kind))
-        return;
-      String.Kind = Found.Kind;
-      String.Chars = Found.Chars;
-      String.Text = std::move(Found.Text);
-      Paged = String;
-    });
-    return Paged;
+    std::optional<strings::FoundString> Found =
+        strings::scanAt(Terminated, Whole);
+    if (!Found || Found->Bytes != Literal.Bytes ||
+        !strings::isLegacyEncoding(Found->Kind))
+      return std::nullopt;
+    String.Kind = Found->Kind;
+    String.Chars = Found->Chars;
+    String.Text = std::move(Found->Text);
+    return String;
   }
   case 2:
     return ReadsWhole(strings::Encoding::UTF16LE) ? std::optional(String)
@@ -186,13 +186,26 @@ imageStrings(Session &S, const strings::ScanOptions &Options) {
     return S.ImageStrings->Strings;
   ImageStringScan Scan;
   Scan.Options = Options;
+  // A large range's spans scan on the workers; each is a large task.
+  const auto Parallel = [](size_t Count,
+                           llvm::function_ref<void(size_t)> Task) {
+    parallelForEachWeighted(
+        std::vector<uint64_t>(Count, 1),
+        [&](auto Claim, size_t Total) {
+          for (size_t I; (I = Claim()) < Total;)
+            Task(I);
+        },
+        kMinParallelStringScanSpans);
+  };
   const auto ScanRange = [&](va_t Start, const uint8_t *Bytes, size_t Size) {
-    strings::scan(llvm::ArrayRef<uint8_t>(Bytes, Size), Options,
-                  [&](strings::FoundString &&Found) {
-                    Scan.Strings.push_back({Start + Found.Offset, Found.Bytes,
-                                            Found.Chars, Found.Kind,
-                                            std::move(Found.Text)});
-                  });
+    strings::scan(
+        llvm::ArrayRef<uint8_t>(Bytes, Size), Options,
+        [&](strings::FoundString &&Found) {
+          Scan.Strings.push_back({Start + Found.Offset, Found.Bytes,
+                                  Found.Chars, Found.Kind,
+                                  std::move(Found.Text)});
+        },
+        Parallel);
   };
   // Data segments whole, and the data sections of code segments.
   for (const auto &Seg : S.Img.Segments) {

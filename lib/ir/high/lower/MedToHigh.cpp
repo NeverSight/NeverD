@@ -19,7 +19,9 @@
 #include "neverd/ir/high/MedToHigh.h"
 
 #include "../../../loader/Swift/SwiftErrorSourceProjection.h"
+#include "AnalysisCall.h"
 #include "HighEntryStackOffsets.h"
+#include "MedMutableToHigh.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
@@ -548,17 +550,20 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
       Image->abiFormat() == BinaryFormat::COFF &&
       !PhiOutputVars.count(varKey(V))) {
     if (ParamCopyIndexFunc != CurMed) {
-      // One pass over the function instead of one per variable reference.
+      // Build the indexes once per function, not once per variable reference.
       ParamCopyIndexFunc = CurMed;
       ParamSourceCopies.clear();
-      ComputedVersions.clear();
+      DefinedVersions.clear();
+      for (const auto &Blk : CurMed->Blocks) {
+        for (const auto &Phi : Blk.Phis)
+          if (Phi.Output.Kind == MedVar::Reg)
+            DefinedVersions.insert(varKey(Phi.Output));
+        for (const auto &Op : Blk.Ops)
+          if (Op.Output.Kind == MedVar::Reg)
+            DefinedVersions.insert(varKey(Op.Output));
+      }
       for (const auto &Blk : CurMed->Blocks)
         for (const auto &Op : Blk.Ops) {
-          // Any def but a COPY of a register or parameter computes a value.
-          if (Op.Opcode != NdOp::COPY ||
-              (Op.NumInputs >= 1 && Op.Inputs[0].Kind != MedVar::Reg &&
-               Op.Inputs[0].Kind != MedVar::Param))
-            ComputedVersions.insert({Op.Output.Id, Op.Output.SSAVer});
           if (Op.Opcode != NdOp::COPY || Op.NumInputs < 1 ||
               Op.Output.Kind != MedVar::Reg)
             continue;
@@ -566,7 +571,10 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
           int Idx = -1;
           if (Src.Kind == MedVar::Param)
             Idx = abiParamIndex(Src);
-          else if (Src.Kind == MedVar::Reg && Src.SSAVer == 0)
+          else if (Src.Kind == MedVar::Reg &&
+                   (isEntryLiveInValue(*CurMed, Src, Src.RegOff) ||
+                    (Src.SSAVer == 0 && !DefinedVersions.count(varKey(Src)) &&
+                     !findCallClobber(Src))))
             Idx = regToArgIdx(Src.RegOff);
           if (Idx >= 0 && static_cast<size_t>(Idx) < CurMed->Params.size())
             ParamSourceCopies.push_back({&Op, Idx});
@@ -587,20 +595,15 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
             return SourceParameter(Param, static_cast<size_t>(Idx));
           return HighExpr::makeVar(Param, TypeRef{});
         }
-        // SSA-bumped callee-saves with no new def (`rdi.2` after `mov rdi, r9`)
-        // still hold the parameter.  A later computed def (INT_AND of r10 on
-        // the GS_HANDLER_DATA bit-2 edge) does not.
-        // A COPY from a Temp is also a computed def: `mov eax, edx` then
-        // `mov rax, [bins+i]` must not remap RAX.3 onto arg1.  That deleted
-        // Typed map bucket walks.
+        // Only an SSA-bumped callee-save with no definition can use the
+        // unchanged-register fallback. A COPY of a call result or another
+        // register is still a new value, as is a conditional call clobber.
         // The value a callee-save holds at entry is the caller's, which the
         // prologue saves: no copy inside this function made it a parameter
         // (`push rbx` before `mov bl, r9b` saves the caller's rbx).
         if (Fallback < 0 && regToArgIdx(V.RegOff) < 0 &&
             !isEntryLiveInValue(*CurMed, V, V.RegOff)) {
-          const bool Computed = PhiOutputVars.count(varKey(V)) ||
-                                ComputedVersions.count({V.Id, V.SSAVer});
-          if (!Computed)
+          if (!DefinedVersions.count(varKey(V)) && !findCallClobber(V))
             Fallback = Idx;
         }
       }
@@ -1507,12 +1510,20 @@ void MedToHighConverter::reduceLateGotos(HighFunc &Func) {
 void MedToHighConverter::validateCallContracts(const MedFunc &Med) {
   for (const MedBlock &Block : Med.Blocks)
     for (const MedOp &Op : Block.Ops)
-      if (Op.X87ImportArguments)
+      if (Op.X87ImportArguments &&
+          !(Med.AnalysisOnly && high_detail::hasAnalysisX87CallShape(Op)))
         throw std::runtime_error(
             "C source output requires a native x87 import call adapter");
 }
 
 HighFunc MedToHighConverter::convert(const MedFunc &Med, Arch TheArch) {
+  if (Med.SkippedSSA) {
+    if (Image)
+      throw std::runtime_error(
+          "mutable HighIR source does not support image relocation");
+    return detail::lowerMedMutableToHigh(Med, TheArch, ExpressionObserver,
+                                         StatementObserver);
+  }
   if (const char *Error = validateAArch64SVEState(Med, TheArch))
     throw std::runtime_error(Error);
   validateCallContracts(Med);
@@ -1649,7 +1660,11 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   Func.VaListCalls = Med.VaListCalls;
   Func.EntryKind = Med.EntryKind;
   Func.ExceptionMetadata = Med.ExceptionMetadata;
+  Func.AnalysisOnly = Med.AnalysisOnly;
   Func.HasUnresolvedSEHFrame = Med.HasUnresolvedSEHFrame;
+  Func.SEHTerminationFrameBytes = Med.SEHTerminationFrameBytes;
+  Func.SEHFuncletRegisters = Med.SEHFuncletRegisters;
+  Func.SEHLocalUnwindExits = Med.SEHLocalUnwindExits;
   for (const auto &Entry : Med.CxxContinuationEntries)
     Func.CxxContinuationTargets.insert(Entry.Target);
   // Catch returns enter the parent through edges absent from its ordinary
@@ -1797,14 +1812,8 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
     MedOps += Block.Ops.size();
   if (Med.Blocks.size() > limits::kMaxStructurableMedBlocks ||
       MedOps > limits::kMaxStructurableMedOps) {
-    // Too large to structure: still lower every operation, block by block,
-    // with explicit gotos between blocks.  MedIR that skipped SSA cannot be
-    // lowered this way (a register has no unique definition), so it keeps the
-    // skeleton.
-    if (Med.SkippedSSA) {
-      fillUnstructuredGotoSkeleton(Func, Med);
-      return Func;
-    }
+    // Too large to structure: lower SSA operations block by block. Mutable
+    // bodies use the separate explicit-storage lowering before this path.
     buildExpressions(Med);
     structureControlFlow(Func, Med);
     CaptureSwiftError();

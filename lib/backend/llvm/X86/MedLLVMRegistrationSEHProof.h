@@ -23,6 +23,7 @@ class BasicBlock;
 class CallInst;
 class Function;
 class Instruction;
+class LoadInst;
 class StoreInst;
 } // namespace llvm
 
@@ -81,7 +82,8 @@ std::optional<std::set<const llvm::StoreInst *>> getCheckedSEHCallbackStores(
 std::optional<std::set<llvm::Instruction *>> getCheckedSEHChainInstructions(
     llvm::Function &Parent, const RegistrationStateAnalysis &States,
     const std::map<std::pair<va_t, int>, llvm::Instruction *>
-        &RegistrationChainIR);
+        &RegistrationChainIR,
+    const std::set<const llvm::LoadInst *> &ThreadReads);
 
 struct SourceOperation {
   llvm::Instruction *Instruction;

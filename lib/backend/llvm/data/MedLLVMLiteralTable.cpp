@@ -382,10 +382,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
           OwnerSec->isReadable() &&
           (Img->isMachO() ? !Img->isCodeAddress(OwnerVA)
                           : !OwnerSec->isExecutable()) &&
-          (!OwnerSec->isWritable() ||
-           section_names::isReadOnlyAfterRelocSectionName(OwnerSec->Name) ||
-           section_names::isReadOnlyAfterRelocSectionName(
-               OwnerSec->SegmentName));
+          Img->readOnlyAfterRelocations(OwnerVA, 1);
     if (OwnerSeg->isWritable() && !isReadOnlyAfterReloc(OwnerSeg) &&
         !HasReadOnlySectionEvidence)
       return false;
@@ -475,6 +472,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   bool SawInvalidPointerExpression = false;
   bool SawTableShapedInvalidExpression = false;
   bool SawUnprovedFrameReload = false;
+  std::vector<MedVar> UnprovedFrameReloads;
   bool SawRawOriginalBase = false;
   bool SawSymbolizedBase = false;
   bool SawOpaqueRuntimeOffset = false;
@@ -1003,11 +1001,15 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // be reused under a different ancestor set.
   std::set<AddressProvenanceVarKey> ProvenWithoutBase;
   size_t CycleEpoch = 0;
+  bool NeedsOriginalStorage = false;
   auto offsetPreservesAddress = [&](const MedVar &Offset) {
     if (valueIsStableAddressOffset(Offset))
       return true;
-    if (!valueIsOpaqueRuntimeOffset(Offset))
-      return false;
+    if (!valueIsOpaqueRuntimeOffset(Offset)) {
+      if (!valueIsOpaqueRuntimeOffset(Offset, /*AllowEscapedFrame=*/true))
+        return false;
+      NeedsOriginalStorage = true;
+    }
     // The complete address audit below must still establish one complete
     // run and a uniform symbolized model for every selectable base.
     SawOpaqueRuntimeOffset = true;
@@ -1444,8 +1446,10 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
         // on the generic path.
         const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
         if (Def->NumInputs >= 1 && Def->Output.Size == PointerSize &&
-            varIsFrameDerived(Def->Inputs[0]))
+            varIsFrameDerived(Def->Inputs[0])) {
           SawUnprovedFrameReload = true;
+          UnprovedFrameReloads.push_back(V);
+        }
         return BaseProof::NoBase;
       }
       const unsigned PointerSize = getTargetRegInfo(TargetArch).PointerSize;
@@ -1609,9 +1613,19 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       }
       Run = Owner;
     }
-    if (!CompleteMirror || !Run) {
+    if (!CompleteMirror || !Run ||
+        (NeedsOriginalStorage && !pointerRunHasOriginalStorage(*Run))) {
       Proof = BaseProof::Invalid;
       SawInvalidPointerExpression = true;
+    } else if (NeedsOriginalStorage && SawUnprovedFrameReload) {
+      // Only a qualified displacement consumer needs this extra memory audit.
+      // A plain unresolved frame address must not start a whole-function
+      // runtime-source query before this walk has found any pointer run.
+      SawUnprovedFrameReload =
+          llvm::any_of(UnprovedFrameReloads, [&](const MedVar &Reload) {
+            return !valueIsOpaqueRuntimeOffset(Reload,
+                                               /*AllowEscapedFrame=*/true);
+          });
     }
   }
 
@@ -1838,7 +1852,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
   // or re-anchor an already computed address.  Scalar index PHIs do not set
   // SawPhi because the scalar-domain proof consumes them before this pointer
   // audit, so ordinary `base +/- scalar_phi` remains eligible.
-  if (!SawPointerValueMerge && !SawPhi) {
+  if (!SawPointerValueMerge && !SawPhi && !NeedsOriginalStorage) {
     if (SawOpaqueRuntimeOffset) {
       if (llvm::Value *Indexed = tryResolveRuntimeIndexedReadOnlyTable(
               AddrVar, SizeHint, Bases.size(), Builder))

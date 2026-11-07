@@ -13,6 +13,7 @@
 #define NEVERD_LIFT_X86_X86MPXENCODING_H
 
 #include "neverd/Common.h"
+#include "neverd/ir/X86/X86MpxContext.h"
 
 #include "llvm/ADT/ArrayRef.h"
 
@@ -38,6 +39,12 @@ struct X86MpxEncoding {
 /// ignore scale, and discard displacement when there is no base register.
 std::optional<X86MpxEncoding>
 decodeX86MpxEncoding(llvm::ArrayRef<uint8_t> Bytes, Arch Target);
+
+/// Classify the bank effect of an already decoded, complete control transfer.
+/// Null means this reader cannot authenticate that transfer. In particular an
+/// unknown opcode must not silently acquire a preserve or initialize effect.
+std::optional<X86MpxBranch> x86MpxBranchEffect(llvm::ArrayRef<uint8_t> Bytes,
+                                               Arch Target);
 
 } // namespace neverd
 

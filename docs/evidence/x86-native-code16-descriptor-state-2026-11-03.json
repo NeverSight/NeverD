@@ -1,0 +1,477 @@
+{
+  "schema": 1,
+  "date": "2026-11-03",
+  "status": "qualified",
+  "global_goal_complete": false,
+  "scope": "Full LLVM explicit descriptor-state address32 APIs in protected code16 using the 32-bit stack/pointer ABI. Code32 native and existing x64 full/lightweight/combined compiler routes are regressions; the NeverC x86 frontend remains x64-only.",
+  "operations": [
+    "VERR",
+    "VERW",
+    "SLDT",
+    "STR",
+    "SMSW",
+    "LLDT",
+    "LTR",
+    "LMSW",
+    "SGDT32",
+    "SIDT32",
+    "LGDT32",
+    "LIDT32",
+    "INVLPG",
+    "SGDT16",
+    "SIDT16",
+    "LGDT16",
+    "LIDT16"
+  ],
+  "commits": {
+    "llvm": "b246fcc316c7269c283a70ff627c227908be8982",
+    "neverc": "103e62d53b67f285d0c7b4c7f7970244e94093da"
+  },
+  "tested_source_inputs": {
+    "llvm": {
+      "base": "8bad5a9ed5189f4fa8dc764f82b062aaeb01e939",
+      "files": {
+        "llvm/include/llvm/IR/IntrinsicsX86.td": "06fc309ce53c2c538eb6c6eceb78e084e735776b628059c7da55b81c68c86b5a",
+        "llvm/lib/Target/X86/X86ISelLowering.cpp": "db123cdd9cdffa6ed7c52ca15b07ca90d1498809a7759b5284fca2bf2482375e",
+        "llvm/lib/Target/X86/X86InstrSystem.td": "a76a3fca198e63f7f9fad02b9413e57770250db6082320ec99eb7843ff04d962",
+        "llvm/test/CodeGen/X86/descriptor-state-address-intrinsics.ll": "544046ffb49304951385bcd9ece56e7f5030ede353ad4bb6e97a347d30374814",
+        "llvm/test/CodeGen/X86/far-pointer-load-intrinsics.ll": "a8eb6815a6d2ea5a315da5c2edc5133750dbcc9e2fbebe711cc83759109812e7",
+        "llvm/test/CodeGen/X86/segment-move-intrinsics.ll": "af7d5c9e32136aeda71a991d96e6dd9f62c0ee653828396da38bcf3fc484c64f",
+        "llvm/test/CodeGen/X86/native-frame-returns.ll": "4292ee4c392e674c1fba53a7bba95b314f35c895f550ab766eb13ee8d9062239",
+        "llvm/test/CodeGen/X86/native-divrem.ll": "1488bd1ee4d98b3701828a39cd686feda291faba5b2953ae6aa2541858f05cad",
+        "llvm/test/CodeGen/X86/descriptor-address-intrinsics.ll": "331f138589f3cae53f8dbe8f381d9998879c1e076fe1d15cb3dc0dfebb5bc1e8",
+        "llvm/test/CodeGen/X86/descriptor-state-intrinsics.ll": "8e4bcb19eba7b06395500249b7d11cf26a0a23b09d135865f5f984f596fc8112",
+        "llvm/test/CodeGen/X86/descriptor-query-intrinsics.ll": "63ff1d45cf23e94dab328db364ef67dfb0e629d8b4c6df843b6885d73d552c13",
+        "llvm/test/CodeGen/X86/arpl-intrinsics.ll": "146bf14e54c55f8c09688e2ee63502345b2f44aef7ee81459a320fba66424534"
+      }
+    },
+    "neverc": {
+      "base": "7c4f4f935207d358f22fb7303b7229662c7fe880",
+      "files": {
+        "tests/neverc/X86/protected_descriptor_state_kvm.c": "514712673a6968e26defe7b9cf6c609e2a6dd307a07d8b91e558e8cf30fe4a5e",
+        "tests/neverc/X86/verify_protected_descriptor_state.py": "1f356ba7dc12843bfa7413d8b5b8b63abcfd524e8076c1826e34766b05076b43",
+        "tests/neverc/X86/KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71",
+        "tests/neverc/X86/KvmProtectedFaultFixture.h": "92e6dc80df46d45d6f27e4fd1920f61a34ddd14f761fe927dccb3efe91f8db33",
+        "tests/verify-descriptor-address-completion.py": "db846ef1c77856ac23ec0be57da51903f8ee9acac23f699e0853bdbcfdc1a15c",
+        "tests/verify-descriptor-query-completion.py": "b1c2232c568d1a7c7aa662343f5eed9f43347441a32dd7be38e43ff5356f940e",
+        "tests/verify-descriptor-state-address-completion.py": "4db2bdf3c37678392a7210f35b41125d4875177d9ce8acb07593ae61311afdfd",
+        "tests/verify-descriptor-state-completion.py": "8bd4c8b68434bd968d6cc8299c6da2a8ac739edc369e6dd8bfee6a5a05d1dc5e",
+        "tests/verify-descriptor-state-qemu.py": "67782e7d9da62f2a425c243679f358a737442045f109eb8b1c0ac4cb3205e222"
+      }
+    }
+  },
+  "source_basis": "Retained source snapshots, patches, base commits and tool hashes identify the executable inputs. Final workers verify source and frozen/live tool hashes after all runs. Earlier focused executions are excluded from final counts.",
+  "cpu": {
+    "model": "Intel Core i9-13900H",
+    "family": 6,
+    "model_number": 186,
+    "stepping": 2,
+    "microcode": "0x6134",
+    "p_core": "0",
+    "e_core": "12",
+    "kernel": "7.0.0-42-generic"
+  },
+  "counts": {
+    "code16": {
+      "profiles": 4,
+      "complete_state_pairs": 397824,
+      "returns": 171352,
+      "success": 29792,
+      "rejected": 83552,
+      "np": 2016,
+      "gp": 122640,
+      "pf": 73976,
+      "ac": 27840,
+      "faults": 226472
+    },
+    "code32": {
+      "profiles": 4,
+      "complete_state_pairs": 397824,
+      "returns": 171352,
+      "success": 29792,
+      "rejected": 83552,
+      "np": 2016,
+      "gp": 122640,
+      "pf": 73976,
+      "ac": 27840,
+      "faults": 226472
+    }
+  },
+  "count_definition": "Actual final executions across O0/O2 and P/E cores, not unique inputs. Every pair compares represented GPR/flag, segment/system, active event and RAM state against independent original bytes. Compiler returns and VERR/VERW success/rejection counts are subsets of those pairs.",
+  "native_boundary": "266 functions per optimization profile: 17 APIs, both address sizes, all seven segment prefixes, independent table operand sizes and live/dead verification results. Per-function cases combine CPL0/CPL3, clear/AC/UMIP state, eight operand/descriptor memory configurations and 16 selector or four scalar/table input images.",
+  "state_effects": "Observe CR0 low-bit changes, GDTR/IDTR values including legacy operand truncation, LDTR/TR cache changes, LTR descriptor busy-bit writes, native ZF and exact memory stores. Source/cached segment controls, privilege/UMIP, read-only/cross-page/missing operands and descriptor faults retain native ordering.",
+  "negative_controls": "Every profile rejects zeroed address transport before an intact instruction and an inverted returned VERR ZF. Every positive case independently checks its declared effective offset at the instruction boundary, then compares the original instruction state.",
+  "fault_observation": "Original #NP/#GP/#PF/#AC handlers execute completed OUT. Both saved restart PCs are authenticated before normalizing only that frame PC; inactive exception payload is excluded only after proving neither pending nor injected. Other represented event fields and complete RAM remain compared.",
+  "cs_address_contract": "CS.base places code at linear 0x10000 while relative code16 RIPs fit 64 KiB. Linear debug addresses are distinct from guest RIP. Flat fault handlers and the existing shared helpers are unchanged.",
+  "other_checks": {
+    "llvm_codegen_tests": 9,
+    "completion_routes": {
+      "llvm": 3144,
+      "neverc": 1404,
+      "combined": 1404
+    },
+    "failures": 0,
+    "skips": 0
+  },
+  "integration": {
+    "commit": "4487a81898c839cd6cdb41dd32ad6589dcf22671",
+    "upstream": "c6a82e6137dade454a06068d4ee590d7ce6ae748",
+    "binary_sha256": {
+      "neverc": "177bad6683d43f0302d8dc1148d9ea364fd0371742d290311e192af834da3d91",
+      "neverc-tests": "13dab4b24902382609cdecbce26747d7fc93346fc66b2a486dac6da701f717ea",
+      "neverc-x86-backend-tests": "cb33f9b2de8ab77491bb7b71d834aa60fd4bcc7e96659ff6ba0f3444528f831e"
+    },
+    "runs": [
+      {
+        "name": "frontend",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-code16-descriptor-state-20261103/integration/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "/mnt/data/neverd-code16-descriptor-state-20261103/integration/bin/neverc-tests",
+          "--gtest_filter=X86PrivilegedIntrinTest.*Descriptor*:X86NativeAddressTest.StackControlUsesNativeInstructionsAcrossFormats:X86NativeAddressTest.InvalidStackControlsFailBeforeCodeGeneration:X86NativeAddressTest.NativeResultsFaultClassesAndRealignedStackAgree",
+          "--gtest_output=xml:/mnt/data/neverd-code16-descriptor-state-20261103/integration/frontend.xml"
+        ],
+        "exit_code": 0,
+        "seconds": 1.7672115539971855,
+        "tests": 9,
+        "failures": 0,
+        "skips": 0
+      },
+      {
+        "name": "backend",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-code16-descriptor-state-20261103/integration/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "/mnt/data/neverd-code16-descriptor-state-20261103/integration/bin/neverc-x86-backend-tests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-code16-descriptor-state-20261103/integration/backend.xml"
+        ],
+        "exit_code": 0,
+        "seconds": 0.031965583002602216,
+        "tests": 10,
+        "failures": 0,
+        "skips": 0
+      },
+      {
+        "name": "addresses-neverc",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-code16-descriptor-state-20261103/integration/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "${NEVERC_WORKTREE}/build-neverc/vmcs-test-env/bin/python",
+          "tests/verify-descriptor-state-address-completion.py",
+          "--compiler",
+          "/mnt/data/neverd-code16-descriptor-state-20261103/integration/bin/neverc",
+          "--keep",
+          "/mnt/data/neverd-code16-descriptor-state-20261103/integration/addresses-neverc"
+        ],
+        "exit_code": 0,
+        "seconds": 49.955623863002984
+      },
+      {
+        "name": "addresses-combined",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-code16-descriptor-state-20261103/integration/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "${NEVERC_WORKTREE}/build-neverc/vmcs-test-env/bin/python",
+          "tests/verify-descriptor-state-address-completion.py",
+          "--compiler",
+          "/mnt/data/neverd-code16-descriptor-state-20261103/integration/bin/neverc",
+          "--backend-llc",
+          "/mnt/data/neverd-code16-descriptor-state-20261103/frozen-bin/llc",
+          "--keep",
+          "/mnt/data/neverd-code16-descriptor-state-20261103/integration/addresses-combined"
+        ],
+        "exit_code": 0,
+        "seconds": 36.22693245099799
+      }
+    ],
+    "unavailable_coverage": {
+      "test": "AndroidKernelRuntimeTest.CurrentInitializationPrecedesUserEntry",
+      "result": "Failed because this is a stage-1 compiler without embedded Android kernel runtime bitcode; this x86 task does not build or qualify the stage-2 Android runtime.",
+      "diagnostics": [
+        "upstream.log",
+        "upstream.xml",
+        "upstream-repro.json"
+      ],
+      "counted_as_pass": false
+    },
+    "documentation_merge_commit": "103e62d53b67f285d0c7b4c7f7970244e94093da",
+    "documentation_merge_upstream": "68688afc0897846cd6fdf84bd424e2faefa36a12",
+    "documentation_merge_boundary": "Only workflow/documentation changes follow the integration build. Executable source inputs and binary hashes remain unchanged."
+  },
+  "before_change": {
+    "functions": 17,
+    "code32_success": 17,
+    "code16_target_mode_rejections": 17,
+    "llvm_commit": "8bad5a9ed5189f4fa8dc764f82b062aaeb01e939",
+    "compiler_sha256": "1e86d46842a7e428dc8bd7c5a978aff8857e4bf41cbf3d3cab0fc0f09b5890d5",
+    "raw_record": "repro/audit.json"
+  },
+  "binary_sha256": {
+    "llc": "fa29fa0c3905362fe2d8de186816f026f8574cf7539e0125f3e3c42ce11bb31c",
+    "opt": "82a1e3519bb3ecd26df8edf999156d16a91e60e05d5520a6475b68e49d483482",
+    "llvm-objdump": "ae5725c5c5d68057b6b663113aa590481e5863e0568f214d4ef78b1d16e22029",
+    "llvm-mc": "6a7e7cc884bc9c6269a8938a9e190769ce28e2a9377d80a231600553df0ab499",
+    "FileCheck": "f9bffb050e642a24ed6d8d67c57aafc62fb46461c5f40c0e889b4caa0718bf50",
+    "neverc": "a8439a7d11d9f8dfb4c3cd5d2fa350b24e7dfa10c5e3fc3422b9d4b32613286b"
+  },
+  "artifact_root": "/mnt/data/neverd-code16-descriptor-state-20261103",
+  "artifact_manifest_sha256": "92039aa6e6703c2bc583c5c02203a3c4f6f273557d73e4a1cb4657f829f59edd",
+  "artifact_count": 32980,
+  "runs": [
+    {
+      "name": "queries-code16",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_descriptor_state.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/frozen-bin",
+        "--mode",
+        "16",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/p-core/queries-code16"
+      ],
+      "exit_code": 0,
+      "seconds": 119.2535560131073
+    },
+    {
+      "name": "queries-code32",
+      "cpu": "0",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/p-core/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "python3",
+        "tests/neverc/X86/verify_protected_descriptor_state.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/frozen-bin",
+        "--mode",
+        "32",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/p-core/queries-code32"
+      ],
+      "exit_code": 0,
+      "seconds": 119.10636973381042
+    },
+    {
+      "name": "queries-code16",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "tests/neverc/X86/verify_protected_descriptor_state.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/frozen-bin",
+        "--mode",
+        "16",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/e-core/queries-code16"
+      ],
+      "exit_code": 0,
+      "seconds": 190.16795015335083
+    },
+    {
+      "name": "queries-code32",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "tests/neverc/X86/verify_protected_descriptor_state.py",
+        "--llvm-bin",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/frozen-bin",
+        "--mode",
+        "32",
+        "--output",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/e-core/queries-code32"
+      ],
+      "exit_code": 0,
+      "seconds": 198.28271102905273
+    },
+    {
+      "name": "llvm-lit",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "${LLVM_WORKTREE}/build-intrinsics/bin/llvm-lit",
+        "-v",
+        "-j",
+        "1",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/descriptor-state-address-intrinsics.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/far-pointer-load-intrinsics.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/segment-move-intrinsics.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/native-frame-returns.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/native-divrem.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/descriptor-address-intrinsics.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/descriptor-state-intrinsics.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/descriptor-query-intrinsics.ll",
+        "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/arpl-intrinsics.ll"
+      ],
+      "exit_code": 0,
+      "seconds": 5.237800121307373
+    },
+    {
+      "name": "addresses-llvm",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "${NEVERC_WORKTREE}/build-neverc/vmcs-test-env/bin/python",
+        "tests/verify-descriptor-state-address-completion.py",
+        "--compiler",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/frozen-bin/neverc",
+        "--llc",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/frozen-bin/llc",
+        "--keep",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/e-core/addresses-llvm"
+      ],
+      "exit_code": 0,
+      "seconds": 86.10044240951538
+    },
+    {
+      "name": "addresses-neverc",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "${NEVERC_WORKTREE}/build-neverc/vmcs-test-env/bin/python",
+        "tests/verify-descriptor-state-address-completion.py",
+        "--compiler",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/frozen-bin/neverc",
+        "--keep",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/e-core/addresses-neverc"
+      ],
+      "exit_code": 0,
+      "seconds": 69.88784623146057
+    },
+    {
+      "name": "addresses-combined",
+      "cpu": "12",
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/e-core/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "${NEVERC_WORKTREE}/build-neverc/vmcs-test-env/bin/python",
+        "tests/verify-descriptor-state-address-completion.py",
+        "--compiler",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/frozen-bin/neverc",
+        "--backend-llc",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/frozen-bin/llc",
+        "--keep",
+        "/mnt/data/neverd-code16-descriptor-state-20261103/final/e-core/addresses-combined"
+      ],
+      "exit_code": 0,
+      "seconds": 50.713500022888184
+    }
+  ],
+  "source_reference": {
+    "title": "Intel SDM Volume 2 revision 093: descriptor verification, descriptor-table and task-register state, LMSW/SMSW and INVLPG",
+    "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
+    "local_text": "/mnt/data/neverd-paged-scheduling-20261101/intel-sdm-vol2-093.txt"
+  },
+  "boundaries": [
+    "Native execution is observed under the recorded KVM environment. INVLPG opcode identity, declared address transport, retained effects and exceptions are checked, but no stale physical-TLB contents are observed.",
+    "This compiler qualification does not provide a general i386 NeverC frontend/NeverD dispatcher, real/VM86, arbitrary invalid source caches, asynchronous events, device memory or all CPU models.",
+    "Production SDK neverd-llvm-v23.0.0-r6 and gitlink 03270359c2ed8f6806533d3832a947bf883a6f69 remain unchanged. Unlisted legacy scalars, tasks/call gates, debug producers, software SMM/SGX and complete CET/FRED/event domains still keep global completion and final LLVM release/pin open."
+  ],
+  "path_normalization": "Public command paths use ${LLVM_WORKTREE}, ${NEVERC_WORKTREE} and ${CLANG}; original local logs are retained unchanged in the hashed artifact root."
+}

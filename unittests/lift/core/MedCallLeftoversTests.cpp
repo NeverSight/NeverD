@@ -9,7 +9,9 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -85,4 +87,156 @@ TEST(MedCallLeftovers, JoinsOfCallClobbersOnly) {
   F.Blocks[4].Phis[0].ExceptionalEntry = X3Entry;
   EXPECT_FALSE(ValuesLeftByCalls(F).contains(X2Loop));
   EXPECT_TRUE(ValuesLeftByCalls(F).contains(X2Join));
+}
+
+TEST(MedCallLeftovers, SameCarrierSurvivesTemporaryCopiesAndLoopJoins) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  const auto X2 = TRI.IntParamRegs[2];
+  const MedVar A = value(2, 1, X2), B = value(2, 2, X2);
+  auto Temp = [](int Id, int Version = 1) {
+    auto V = value(Id, Version, 0);
+    V.Kind = MedVar::Temp;
+    return V;
+  };
+  const auto TA = Temp(20), TB = Temp(21), Joined = Temp(22), Loop = Temp(23),
+             Back = Temp(24);
+  const auto Restored = value(2, 3, X2);
+  auto Copy = [](MedVar Out, MedVar In) {
+    MedOp Op;
+    Op.Opcode = NdOp::COPY;
+    Op.Output = Out;
+    Op.addInput(In);
+    return Op;
+  };
+  MedFunc F;
+  F.Blocks.resize(5);
+  F.CallClobbers = {{A, 1}, {B, 2}};
+  F.Blocks[1].Ops = {Copy(TA, A)};
+  F.Blocks[2].Ops = {Copy(TB, B)};
+  F.Blocks[3].Phis = {join(Joined, {{1, TA}, {2, TB}})};
+  F.Blocks[4].Phis = {join(Loop, {{3, Joined}, {4, Back}})};
+  F.Blocks[4].Ops = {Copy(Back, Loop), Copy(Restored, Loop)};
+  const ValuesLeftByCalls Left(F);
+  EXPECT_TRUE(Left.contains(Restored));
+  EXPECT_FALSE(Left.contains(Joined));
+  // Blocks are storage order, not provenance order.
+  std::reverse(F.Blocks.begin(), F.Blocks.end());
+  EXPECT_TRUE(ValuesLeftByCalls(F).contains(Restored));
+  // One real input invalidates the whole loop, including its copies.
+  F.Blocks.front().Phis.front().ExceptionalEntry = value(2, 0, X2);
+  EXPECT_FALSE(ValuesLeftByCalls(F).contains(Restored));
+}
+
+TEST(MedCallLeftovers, TransportCannotBorrowACarrierOrChangeTheValue) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  const auto X1 = TRI.IntParamRegs[1], X2 = TRI.IntParamRegs[2];
+  const auto A = value(2, 1, X2);
+  MedFunc F;
+  F.Blocks.resize(1);
+  F.CallClobbers = {{A, 1}};
+  auto Temp = value(20, 1, 0);
+  Temp.Kind = MedVar::Temp;
+  MedOp Save;
+  Save.Opcode = NdOp::COPY;
+  Save.Output = Temp;
+  Save.addInput(A);
+  F.Blocks[0].Ops.push_back(Save);
+  MedOp Copy;
+  Copy.Opcode = NdOp::COPY;
+  Copy.Output = value(1, 2, X1);
+  Copy.addInput(Temp);
+  F.Blocks[0].Ops.push_back(Copy);
+  EXPECT_FALSE(ValuesLeftByCalls(F).contains(Copy.Output));
+
+  Copy.Output = value(2, 2, X2);
+  Copy.Output.Size = 4;
+  F.Blocks[0].Ops.back() = Copy;
+  EXPECT_FALSE(ValuesLeftByCalls(F).contains(Copy.Output));
+  // A different-width view of the clobber is not the same untouched word.
+  auto Narrow = A;
+  Narrow.Size = 4;
+  EXPECT_FALSE(ValuesLeftByCalls(F).contains(Narrow));
+
+  Copy.Output.Size = 8;
+  Copy.Opcode = NdOp::INT_ADD;
+  Copy.addInput(MedVar::makeConst(1, 8));
+  F.Blocks[0].Ops.back() = Copy;
+  EXPECT_FALSE(ValuesLeftByCalls(F).contains(Copy.Output));
+  // A possible extra return field remains a real value through exact copies.
+  F.StructReturnCandidates = {{1, {Narrow}}};
+  F.Blocks[0].Ops.back().Opcode = NdOp::COPY;
+  F.Blocks[0].Ops.back().NumInputs = 1;
+  EXPECT_FALSE(ValuesLeftByCalls(F).contains(Copy.Output));
+}
+
+TEST(MedCallLeftovers, AnUnseededCycleIsNotACallClobber) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  const auto X2 = TRI.IntParamRegs[2];
+  const auto A = value(2, 1, X2), B = value(2, 2, X2);
+  MedFunc F;
+  F.Blocks.resize(1);
+  F.CallClobbers = {{value(3, 1, TRI.IntParamRegs[3]), 1}};
+  F.Blocks[0].Phis = {join(A, {{0, B}}), join(B, {{0, A}})};
+  EXPECT_FALSE(ValuesLeftByCalls(F).contains(A));
+  EXPECT_FALSE(ValuesLeftByCalls(F).contains(B));
+}
+
+TEST(MedCallLeftovers, UnknownTransportNeedsAnActualCallOrigin) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  const auto X2 = TRI.IntParamRegs[2];
+  const auto Unknown = MedVar::makeUnspecified(8, Arch::AArch64);
+  const auto Joined = value(2, 1, X2), Restored = value(2, 2, X2);
+  auto Saved = value(20, 1, 0);
+  Saved.Kind = MedVar::Temp;
+  const auto Copy = [](MedVar Out, MedVar In) {
+    MedOp Op;
+    Op.Opcode = NdOp::COPY;
+    Op.Output = Out;
+    Op.addInput(In);
+    return Op;
+  };
+  MedFunc F;
+  F.Blocks.resize(1);
+  // A clobber in an unrelated register cannot authenticate this chain.
+  F.CallClobbers = {{value(3, 1, TRI.IntParamRegs[3]), 1}};
+  F.Blocks[0].Phis = {join(Joined, {{0, Unknown}})};
+  F.Blocks[0].Ops = {Copy(Saved, Joined), Copy(Restored, Saved)};
+  EXPECT_FALSE(ValuesLeftByCalls(F).contains(Joined));
+  EXPECT_FALSE(ValuesLeftByCalls(F).contains(Restored));
+  // Unavailable incoming values are neutral only beside a real call origin.
+  const auto Clobber = value(2, 3, X2);
+  F.CallClobbers.push_back({Clobber, 2});
+  F.Blocks[0].Phis[0].Args.emplace_back(1, Clobber);
+  EXPECT_TRUE(ValuesLeftByCalls(F).contains(Joined));
+  EXPECT_TRUE(ValuesLeftByCalls(F).contains(Restored));
+}
+
+TEST(MedCallLeftovers, PlatformRegisterPreservationFollowsTheABI) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.addInput(MedVar::makeConst(0x2000, 8));
+  for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::Unknown,
+                              BinaryFormat::MachO, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<int>(Format));
+    const bool Reserved =
+        Format == BinaryFormat::MachO || Format == BinaryFormat::COFF;
+    const auto Ranges = TRI.callPreservedRanges(Format);
+    EXPECT_EQ(std::any_of(Ranges.begin(), Ranges.end(),
+                          [](const auto &Range) {
+                            return Range.Offset == a64reg::X18 &&
+                                   Range.Bytes == 8;
+                          }),
+              Reserved);
+    for (uint16_t Size : {4, 8}) {
+      EXPECT_EQ(TRI.isCallPreserved(a64reg::X18, Size, Format), Reserved);
+      EXPECT_EQ(callClobbersRegister(Call, a64reg::X18, Size, TRI, Format),
+                !Reserved);
+    }
+    EXPECT_EQ(TRI.callPreservedPrefixSize(a64reg::X18 + 4, 4, Format),
+              Reserved ? 4 : 0);
+    EXPECT_FALSE(TRI.isCallPreserved(a64reg::X18, 16, Format));
+    EXPECT_TRUE(callClobbersRegister(Call, a64reg::X18, 16, TRI, Format));
+    EXPECT_TRUE(callClobbersRegister(Call, a64reg::X17, 8, TRI, Format));
+  }
 }

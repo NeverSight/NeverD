@@ -1,5 +1,7 @@
 #include "AnalysisService.h"
 
+#include "CodeView.h"
+
 #include <QJsonArray>
 #include <QTimer>
 #include <utility>
@@ -17,10 +19,14 @@ AnalysisService::AnalysisService(QueryService &owner, QString workerPath,
   connect(&client_, &EngineClient::diagnostic, this,
           &AnalysisService::diagnostic);
   connect(&client_, &EngineClient::failure, this, [this](const QString &text) {
+    // Rendering ahead visits every function, and one the worker cannot survive
+    // would end every replica of this project the same way.
+    renderCrashProject_ = queries_.projectId();
     fail(QStringLiteral("analysis_failed"), text);
   });
   connect(&client_, &EngineClient::stopped, this, [this] {
     ready_ = false;
+    renderAheadState_.clear();
     if (!active_.isEmpty())
       fail(QStringLiteral("analysis_failed"), tr("Analysis worker stopped."));
   });
@@ -48,6 +54,7 @@ void AnalysisService::stopWorker() {
   ready_ = false;
   startingReplica_ = false;
   refreshingNames_ = false;
+  summariesReady_ = false;
   snapshot_ = {};
   client_.stop();
 }
@@ -141,12 +148,36 @@ void AnalysisService::requestSnapshot() {
 }
 
 void AnalysisService::receive(const QJsonObject &message) {
+  // The replica solves the image's call summaries while no read waits.
+  if (message.value("type") == QLatin1String("heartbeat")) {
+    renderAheadState_ = message.value("background")
+                            .toObject()
+                            .value("render_ahead")
+                            .toObject()
+                            .value("state")
+                            .toString();
+    if (solvesSummaries_ && !summariesReady_ &&
+        message.value("background")
+                .toObject()
+                .value("call_summaries")
+                .toObject()
+                .value("state")
+                .toString() == QLatin1String("ready")) {
+      summariesReady_ = true;
+      queries_.listingChanged();
+      emit sourceRefined();
+    }
+    return;
+  }
   if (active_.isEmpty())
     return;
   if (message.value("type") == QLatin1String("hello")) {
     updatesNames_ = message.value("capabilities")
                         .toArray()
                         .contains(QStringLiteral("analysis_update_names"));
+    solvesSummaries_ = message.value("capabilities")
+                           .toArray()
+                           .contains(QStringLiteral("prepare_call_summaries"));
     if (!message.value("capabilities")
              .toArray()
              .contains(QStringLiteral("analysis_restore"))) {
@@ -154,7 +185,19 @@ void AnalysisService::receive(const QJsonObject &message) {
            tr("The worker cannot restore analysis state."));
       return;
     }
-    restore_ = client_.request(QStringLiteral("analysis_restore"), snapshot_);
+    auto restore = snapshot_;
+    if (solvesSummaries_)
+      restore["call_summaries"] = true;
+    // The job renders what a view reads under no options; one that opens its
+    // functions under others would read none of it.
+    if (solvesSummaries_ && rendersAhead_ &&
+        owner_.projectId() != renderCrashProject_ &&
+        SourceDefaults::options(QStringLiteral("source")).isEmpty() &&
+        message.value("capabilities")
+            .toArray()
+            .contains(QStringLiteral("render_ahead")))
+      restore["render_ahead"] = true;
+    restore_ = client_.request(QStringLiteral("analysis_restore"), restore);
     return;
   }
   if (message.value("type") != QLatin1String("response") ||
@@ -230,6 +273,8 @@ AnalysisPool::AnalysisPool(QueryService &owner, const QString &workerPath,
         QueryService::Limits{}.cacheBytes / (1024 * 1024 * lanes_.size()));
     connect(lane.service.get(), &AnalysisService::diagnostic, this,
             &AnalysisPool::diagnostic);
+    connect(lane.service.get(), &AnalysisService::sourceRefined, this,
+            &AnalysisPool::sourceRefined);
   }
   connect(&owner, &QueryService::contextChanged, this, [this, &owner] {
     ++preparationSerial_;

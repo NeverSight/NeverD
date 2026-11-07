@@ -209,11 +209,12 @@ std::optional<CallScanStep> stepCallsX86(const BinaryImage &Img, Decoder &Dec,
   if (!Owned &&
       !Img.hasExecutableCodeOwnerRange(Cur, static_cast<uint64_t>(Sz)))
     return Step;
-  // Linked PE leaf callbacks need not have unwind metadata or a prologue.
+  // Linked PE/ELF callbacks need not have unwind metadata or a prologue.
   // The size/id sweep already proves the instruction boundary. Its canonical
   // RIP-relative encoding supplies the target without a second decode.
   if (DI.Id == X86_INS_LEA && Img.Arch == Arch::X64 &&
-      Img.Format == BinaryFormat::COFF && !Img.IsRelocatable) {
+      (Img.Format == BinaryFormat::COFF || Img.Format == BinaryFormat::ELF) &&
+      !Img.IsRelocatable) {
     const auto Bytes = llvm::ArrayRef(Seg->Data).slice(Off, Sz);
     if (x86::isRipRelativeAddressInstruction(Bytes)) {
       const va_t Target =
@@ -322,7 +323,8 @@ void scanCodeAddressImmediatesX86(const BinaryImage &Img, Decoder &Dec,
       func_detect_detail::checkCancellation(Control);
       while (Field != Fields.end() && Field->first < Cur)
         ++Field;
-      if (Field == Fields.end() || Field->first >= End)
+      const va_t NextField = Field == Fields.end() ? InvalidVA : Field->first;
+      if (NextField >= End)
         break;
       const uint8_t *Bytes = Seg->Data.data() + (Cur - Seg->VA);
       const size_t Remain = static_cast<size_t>(End - Cur);
@@ -335,14 +337,15 @@ void scanCodeAddressImmediatesX86(const BinaryImage &Img, Decoder &Dec,
         continue;
       }
       const va_t Next = Cur + static_cast<va_t>(Size);
-      if (Field->first < Next) {
+      if (NextField < Next) {
         // Only operand detail, which comes with text, says which field of
         // the instruction is its immediate.
         Dec.setText(true);
         Dec.setDetail(true);
         if (Dec.decodeOneLight(Bytes, Remain, Cur, DI) == Size && DI.Raw &&
             DI.Raw->detail) {
-          const cs_x86_encoding &Encoding = DI.Raw->detail->x86.encoding;
+          const cs_x86 &X86 = DI.Raw->detail->x86;
+          const cs_x86_encoding &Encoding = X86.encoding;
           for (auto It = Field; It != Fields.end() && It->first < Next; ++It)
             if (Encoding.imm_size == 4 &&
                 It->first == Cur + Encoding.imm_offset &&
@@ -754,9 +757,12 @@ std::set<va_t> FuncDetector::rejectX86InteriorEntries(
           if (Addr == Owner || !Candidates.count(Addr))
             return true;
           // Only a jump can be a tail call, and a frame prologue right after
-          // a call can follow one that does not return.
+          // a call can follow one that does not return. In x64, preserve
+          // every guess after a call: the x86 frame pattern proves nothing
+          // about its callee's return behavior.
           if (How == X86Reach::Jump ||
-              (How == X86Reach::AfterCall && isX86StrongFramePrologue(Bytes)))
+              (How == X86Reach::AfterCall &&
+               (Img.Arch == Arch::X64 || isX86StrongFramePrologue(Bytes))))
             return false;
           Interior.insert(Addr);
           return true;

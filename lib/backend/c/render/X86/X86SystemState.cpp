@@ -24,15 +24,24 @@
 namespace neverd {
 namespace {
 
-bool hasTransactionEffects(const llvm::CallBase &Call) {
-  // Abort can roll back ordinary memory even though its only argument is an
-  // integer byte. Argument-only or inaccessible-memory effects lose that fact.
+const char *compilerDispatch(const X86SystemStateNative &Plan,
+                             Arch TargetArch) {
+  if (Plan.AdjustRpl)
+    return "NEVERD_X86_ARPL";
+  if (Plan.Assembly.Id == Intrinsic::X86HistoryReset)
+    return "NEVERD_X86_HRESET";
+  return TargetArch == Arch::X64 ? "NEVERD_X86_SYSTEM_STATE" : nullptr;
+}
+
+bool hasOrderedSystemEffects(const llvm::CallBase &Call) {
+  // System effects and instruction-owned conditional writes cannot be reduced
+  // to argument-only memory or speculated past the original fault boundary.
   return Call.getMemoryEffects() == llvm::MemoryEffects::unknown() &&
          !Call.hasFnAttr(llvm::Attribute::Speculatable);
 }
 
 bool hasSecureLaunchEffects(const llvm::CallBase &Call) {
-  return hasTransactionEffects(Call) && Call.doesNotReturn() &&
+  return hasOrderedSystemEffects(Call) && Call.doesNotReturn() &&
          Call.hasFnAttr(llvm::Attribute::Convergent) &&
          Call.hasFnAttr(llvm::Attribute::NoDuplicate) &&
          !Call.hasFnAttr(llvm::Attribute::WillReturn) &&
@@ -145,13 +154,14 @@ std::string nativeBody(const X86SystemStateNative &Plan,
       Text += ", ";
     std::string Type = unsignedType(Plan.InputBytes[I]);
     if (isX86SystemStateAddressArgument(Id, I) && !Plan.AddressBits)
-      Type =
-          (Id == Intrinsic::X86ReadMsrList && I == 1) || Id == Intrinsic::Clzero
-              ? "void *"
-              : "const void *";
+      Type = (Id == Intrinsic::X86ReadMsrList && I == 1) ||
+                     Id == Intrinsic::Clzero ||
+                     Id == Intrinsic::X86AdjustRplMemory
+                 ? "void *"
+                 : "const void *";
     Text += "(" + Type + ")(" + Arguments[I] + ")";
   }
-  if (Plan.DescriptorQuery)
+  if (Plan.Assembly.OutputBytes.size() == 2)
     Text += ", &(" + Outputs[1] + ")";
   return Text + ");";
 }
@@ -162,7 +172,9 @@ std::string renderInstruction(const X86SystemStateAsm &Plan, Arch TargetArch,
                               const std::vector<std::string> &Inputs) {
   const auto Assembly = renderAsm(Plan, Outputs, Inputs);
   const auto Native = x86SystemStateNative(Plan.Id, TargetArch, Width, Space);
-  if (!Native || TargetArch != Arch::X64)
+  const auto *Dispatch =
+      Native ? compilerDispatch(*Native, TargetArch) : nullptr;
+  if (!Dispatch)
     return Assembly;
   auto Arguments = Inputs;
   if (Native->PackMsr)
@@ -175,7 +187,7 @@ std::string renderInstruction(const X86SystemStateAsm &Plan, Arch TargetArch,
   }
   if (Native->DescriptorQuery)
     Arguments.push_back("0");
-  return "NEVERD_X86_SYSTEM_STATE(({ " +
+  return std::string(Dispatch) + "(({ " +
          nativeBody(*Native, Arguments, Outputs) + " }), ({ " + Assembly +
          " }));";
 }
@@ -345,8 +357,9 @@ renderX86SystemStateExpression(Arch TargetArch, const HighExpr &Expression,
   }
   if (!x86SystemStateShapeIsValid(Id, Shape))
     throw std::invalid_argument("invalid x86 system expression contract");
+  HasCIntrinsics |=
+      x86SystemStateUsesCHeader(Id, Shape.MemoryAddressSpace, MsvcIntrinsics);
   if (Id == Intrinsic::Xabort) {
-    HasCIntrinsics = true;
     return "_xabort(" + std::to_string(*Shape.TransactionAbortCode) + ")";
   }
   // Preserve the established MSVC spelling after the shared admission check.
@@ -355,7 +368,6 @@ renderX86SystemStateExpression(Arch TargetArch, const HighExpr &Expression,
   if (MsvcIntrinsics && C.Kind == X86SystemStateKind::ShadowWrite &&
       Shape.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
     const auto Width = x86SystemStateWidth(Id, Shape);
-    HasCIntrinsics = true;
     return "_" + std::string(C.Mnemonic) + (Width == 8 ? "q" : "d") + "((" +
            unsignedType(Width) + ")(" + Arguments[1] +
            "), (void *)(uintptr_t)(" + Arguments[0] + "))";
@@ -414,7 +426,11 @@ renderX86SystemStateCall(Arch TargetArch, const llvm::CallInst &Call,
   for (const auto Id : Inventory) {
     const auto C = x86SystemStateContract(Id);
     const bool Segmented = C.Kind == X86SystemStateKind::SegmentedBlock;
+    const bool Locked = C.Kind == X86SystemStateKind::LockedLogic ||
+                        C.Kind == X86SystemStateKind::LockedBit;
     if (!(Segmented &&
+          llvm::StringRef(Asm->getAsmString()).starts_with(C.Mnemonic)) &&
+        !(Locked &&
           llvm::StringRef(Asm->getAsmString()).starts_with(C.Mnemonic)) &&
         Mnemonic != C.Mnemonic &&
         !(C.Kind == X86SystemStateKind::ShadowWrite &&
@@ -422,7 +438,7 @@ renderX86SystemStateCall(Arch TargetArch, const llvm::CallInst &Call,
            Mnemonic == std::string(C.Mnemonic) + "q")))
       continue;
     Known = true;
-    std::vector<uint16_t> Widths = {0, 2, 4, 8};
+    std::vector<uint16_t> Widths = {0, 1, 2, 4, 8, 16};
     if (Segmented) {
       Widths.clear();
       for (uint16_t S = 0; S < X86SegmentedBlockSelectorLimit; ++S)
@@ -461,7 +477,7 @@ renderX86SystemStateCall(Arch TargetArch, const llvm::CallInst &Call,
         if (Id == Intrinsic::Xabort) {
           const auto *Code =
               llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(0));
-          if (!Types || !Code || !hasTransactionEffects(Call))
+          if (!Types || !Code || !hasOrderedSystemEffects(Call))
             continue;
           return "_xabort(" + std::to_string(Code->getZExtValue()) + ");\n";
         }
@@ -516,13 +532,16 @@ renderX86SystemStateNativeCall(Arch TargetArch, const llvm::CallBase &Call,
   if (!Callee || !isX86SystemStateNativeName(Callee->getName()))
     return {};
   std::optional<X86SystemStateNativeAddress> Address;
+  const unsigned ControlIndex =
+      Callee->getName() == "llvm.x86.arpl.mem.address32" ? 2 : 1;
   if (Callee->getName().ends_with(".address") ||
       Callee->getName().ends_with(".address32")) {
-    if (Call.arg_size() < 3)
+    if (Call.arg_size() < ControlIndex + 2)
       throw std::invalid_argument("native descriptor address has no controls");
-    const auto *Bits = llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(1));
+    const auto *Bits =
+        llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(ControlIndex));
     const auto *Segment =
-        llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(2));
+        llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(ControlIndex + 1));
     if (!Bits || !Segment || !Bits->getType()->isIntegerTy(32) ||
         !Segment->getType()->isIntegerTy(32))
       throw std::invalid_argument(
@@ -541,6 +560,9 @@ renderX86SystemStateNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       const auto Count = P->InputBytes.size();
       if (!Callee->isIntrinsic() || Call.getNumOperandBundles() ||
           Call.onlyReadsMemory() || Call.onlyWritesMemory() ||
+          ((P->AdjustRpl || Id == Intrinsic::X86HistoryReset) &&
+           (!hasOrderedSystemEffects(Call) ||
+            Call.getCallingConv() != llvm::CallingConv::C)) ||
           (x86SystemStateContract(Id).Kind == X86SystemStateKind::SecureLaunch
                ? !hasSecureLaunchEffects(Call)
                : Call.doesNotReturn()) ||
@@ -557,7 +579,7 @@ renderX86SystemStateNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       if (Id == Intrinsic::Xabort) {
         const auto *Code =
             llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(0));
-        if (!Valid || !Code || !hasTransactionEffects(Call))
+        if (!Valid || !Code || !hasOrderedSystemEffects(Call))
           continue;
         return "_xabort(" + std::to_string(Code->getZExtValue()) + ");\n";
       }
@@ -568,7 +590,8 @@ renderX86SystemStateNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       auto NativeArguments = Arguments;
       auto AsmArguments = Arguments;
       if (P->AddressBits)
-        AsmArguments.erase(AsmArguments.begin() + 1, AsmArguments.begin() + 3);
+        AsmArguments.erase(AsmArguments.begin() + ControlIndex,
+                           AsmArguments.begin() + ControlIndex + 2);
       std::string Text = "{ ";
       if (P->PackMsr) {
         // Both halves come from one LLVM operand. Materialize it once before
@@ -587,7 +610,7 @@ renderX86SystemStateNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       std::vector<std::string> Outputs;
       if (!Assembly.OutputBytes.empty()) {
         if (ResultLive) {
-          if (P->DescriptorQuery)
+          if (Assembly.OutputBytes.size() == 2)
             Outputs = {Result + ".field_0", Result + ".field_1"};
           else
             Outputs.push_back(Result);
@@ -598,9 +621,10 @@ renderX86SystemStateNativeCall(Arch TargetArch, const llvm::CallBase &Call,
       if (P->DescriptorQuery)
         Fallback += " " + Outputs[0] + " = " + Outputs[1] + " ? " + Outputs[0] +
                     " : __neverd_system_prior;";
-      if (TargetArch == Arch::X86)
+      const auto *Dispatch = compilerDispatch(*P, TargetArch);
+      if (!Dispatch)
         return Text + Fallback + " }\n";
-      return Text + "NEVERD_X86_SYSTEM_STATE(({ " +
+      return Text + Dispatch + "(({ " +
              nativeBody(*P, NativeArguments, Outputs) + " }), ({ " + Fallback +
              " })); }\n";
     }

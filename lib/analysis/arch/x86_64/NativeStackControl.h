@@ -13,6 +13,15 @@
 
 namespace neverd::analysis {
 
+/// Near 64-bit RET, optionally with the MPX-preserving BND prefix. Other
+/// prefixes need their own operand/stack-width qualification.
+inline bool isX64PhysicalNearReturn(llvm::ArrayRef<uint8_t> Bytes) {
+  if (!Bytes.empty() && Bytes.front() == 0xf2)
+    Bytes = Bytes.drop_front();
+  return (Bytes.size() == 1 && Bytes.front() == 0xc3) ||
+         (Bytes.size() == 3 && Bytes.front() == 0xc2);
+}
+
 /// Single owner for the raw terminal-import environment domain and its bounds.
 llvm::Error
 validateX64TerminalImportDomain(const SpecializationOptions &Options);
@@ -79,6 +88,8 @@ expandNativeStackControl(const SpecializationInstruction &Instruction,
 /// exact physical effects and actual next PC as a terminal INDIR_BR. Direct
 /// guest addresses remain values, never residual CFG labels. A declared trap
 /// instead retains its exact terminal operation without a next-PC contract.
+/// Constant-slot JMPs load their current eight-byte target into the same
+/// validated scratch carrier; their ordinary import-thunk lift is unchanged.
 llvm::Expected<NativeStackExpansion>
 expandX64MachineExit(const SpecializationInstruction &Instruction,
                      const SpecializationX64MachineExit &Declaration,

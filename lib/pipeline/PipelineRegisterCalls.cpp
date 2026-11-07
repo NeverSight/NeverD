@@ -199,7 +199,7 @@ expand(llvm::ArrayRef<const MedCallClobber *> Clobbers, const MedOp &Call,
 void expandSourceRegisterCalls(
     MedFunc &Function, const BinaryImage &Image,
     const std::map<va_t, std::shared_ptr<const std::vector<LowOp>>> &Leaves) {
-  if (Image.Arch != Arch::X64 || Leaves.empty() ||
+  if (Function.AnalysisOnly || Image.Arch != Arch::X64 || Leaves.empty() ||
       Function.CallClobbers.empty() || Function.SkippedSSA ||
       Function.AnalystStackFrame ||
       (Function.ExceptionMetadata &&

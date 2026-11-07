@@ -35,6 +35,10 @@ void inferMedTypes(
     MedFunc &Func, Arch TheArch,
     const std::map<va_t, uint16_t> *CalleeFloatReturns = nullptr);
 
+/// Refresh inferred parameter types after call recovery changes the carrier
+/// list. Preserve explicit source signatures and the return/local types.
+void refreshInferredMedParameters(MedFunc &Func, Arch TheArch);
+
 /// Refresh the parameters call-ABI recovery added to \p Funcs, code of
 /// \p TheArch, and propagate a callee's proven pointer role through exact
 /// entry-register forwarding calls to a fixed point.

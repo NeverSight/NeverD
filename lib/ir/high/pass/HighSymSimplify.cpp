@@ -244,8 +244,22 @@ bool isRewriteableNode(const ExprPtr &E) {
   case ExprKind::BinOp:
     if (E->Op == NdOp::SUBBYTES && !isIntegerSlice(E))
       return false;
-    return E->Op != NdOp::INT_DIV && E->Op != NdOp::INT_SDIV &&
-           E->Op != NdOp::INT_REM && E->Op != NdOp::INT_SREM &&
+    if (E->Op == NdOp::INT_DIV || E->Op == NdOp::INT_REM) {
+      // A proved reciprocal rewrite can introduce ordinary division. A
+      // nonzero literal divisor is total at this exact unsigned width;
+      // rejecting it would discard an already proved, shorter expression.
+      // Dynamic/zero divisors and signed overflow retain their boundaries.
+      if (E->Operands.size() != 2 || !E->Operands[1] ||
+          E->Operands[1]->Kind != ExprKind::Const)
+        return false;
+      const unsigned Width = bitWidthOf(E);
+      const unsigned Have = bitWidthOf(E->Operands[1]);
+      if (!Width || !Have)
+        return false;
+      const auto Divisor = literalAt(*E->Operands[1], Have, Width);
+      return Divisor && !Divisor->isZero();
+    }
+    return E->Op != NdOp::INT_SDIV && E->Op != NdOp::INT_SREM &&
            E->Op != NdOp::ATOMIC_ADD && E->Op != NdOp::ATOMIC_XCHG &&
            E->Op != NdOp::ATOMIC_CMPXCHG;
   case ExprKind::UnaryOp:
@@ -336,6 +350,10 @@ using LocalIdentity = HighSourceLocalIdentity;
 struct AvailableDefinition {
   ExprPtr Value;
   std::set<LocalIdentity> Dependencies;
+  // A call's result was assigned to this source local. The local keeps that
+  // captured value; its register spelling does not make it a later read of
+  // the physical return register. This marker is never symbolically expanded.
+  bool CapturedCallResult = false;
 };
 using AvailableDefinitions = std::map<LocalIdentity, AvailableDefinition>;
 
@@ -430,7 +448,8 @@ private:
     if (!isScalarLocal(E))
       return nullptr;
     auto It = Definitions.find(highSourceLocalIdentity(E->Var));
-    return It != Definitions.end() && widthOf(It->second.Value) == widthOf(E)
+    return It != Definitions.end() && !It->second.CapturedCallResult &&
+                   widthOf(It->second.Value) == widthOf(E)
                ? It->second.Value
                : nullptr;
   }
@@ -867,16 +886,30 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
 
     Active.erase(Index);
     const uint32_t NodeWidth = Ctx.width(Item.Ref);
-    if (NodeWidth == 0 || NodeWidth % 8 != 0) {
+    if (NodeWidth == 0 || (NodeWidth != 1 && NodeWidth % 8 != 0)) {
       Built.emplace(Index, nullptr);
       continue;
     }
-    const auto ByteSize = static_cast<uint16_t>(NodeWidth / 8);
+    const auto ByteSize = static_cast<uint16_t>((NodeWidth + 7) / 8);
+    // HighIR carries predicates as byte-valued 0/1. Only Boolean operations
+    // and comparisons may use that view; one-bit arithmetic has different
+    // wrapping semantics from byte arithmetic.
+    if (NodeWidth == 1 && Ctx.op(Item.Ref) != sym::SymOp::Const &&
+        Ctx.op(Item.Ref) != sym::SymOp::Var &&
+        Ctx.op(Item.Ref) != sym::SymOp::And &&
+        Ctx.op(Item.Ref) != sym::SymOp::Or &&
+        Ctx.op(Item.Ref) != sym::SymOp::Xor &&
+        Ctx.op(Item.Ref) != sym::SymOp::Not &&
+        !sym::isPredicate(Ctx.op(Item.Ref))) {
+      Built.emplace(Index, nullptr);
+      continue;
+    }
 
     auto get = [&](sym::SymRef Child) -> ExprPtr {
       auto It = Built.find(Child.index());
       assert(It != Built.end() && "iterative HighIR rebuild lost an operand");
-      return It->second;
+      // A lost operand abandons this rewrite and keeps the source expression.
+      return It == Built.end() ? nullptr : It->second;
     };
     auto binop = [&](NdOp Op, llvm::ArrayRef<sym::SymRef> Operands) -> ExprPtr {
       if (Operands.empty())
@@ -913,7 +946,10 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       // `p - 8` rather than `-8 + p`.
       llvm::SmallVector<sym::SymRef, 8> Plus, Minus, Constants;
       for (sym::SymRef Term : Ctx.operands(Item.Ref)) {
-        if (Ctx.op(Term) == sym::SymOp::Mul) {
+        // A term spelled by an available local was built as that local, without
+        // its factors, so it cannot be rewritten as a subtraction of them.
+        if (Ctx.op(Term) == sym::SymOp::Mul &&
+            DefinitionViews.find(Term.index()) == DefinitionViews.end()) {
           llvm::ArrayRef<sym::SymRef> Factors = Ctx.operands(Term);
           if (Factors.size() == 2 && Ctx.isConst(Factors[0]) &&
               Ctx.constValue(Factors[0]).isAllOnes()) {
@@ -979,18 +1015,93 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       break;
     }
     case sym::SymOp::And:
-      Result = binop(NdOp::INT_AND, Ctx.operands(Item.Ref));
+      Result = binop(NodeWidth == 1 ? NdOp::BOOL_AND : NdOp::INT_AND,
+                     Ctx.operands(Item.Ref));
       break;
     case sym::SymOp::Or:
-      Result = binop(NdOp::INT_OR, Ctx.operands(Item.Ref));
+      Result = binop(NodeWidth == 1 ? NdOp::BOOL_OR : NdOp::INT_OR,
+                     Ctx.operands(Item.Ref));
       break;
     case sym::SymOp::Xor:
-      Result = binop(NdOp::INT_XOR, Ctx.operands(Item.Ref));
+      Result = binop(NodeWidth == 1 ? NdOp::BOOL_XOR : NdOp::INT_XOR,
+                     Ctx.operands(Item.Ref));
       break;
 
     case sym::SymOp::Not: {
       ExprPtr Operand = get(Ctx.operand(Item.Ref, 0));
-      Result = Operand ? HighExpr::makeUnary(NdOp::INT_NOT, Operand) : nullptr;
+      // The complement of a comparison is a comparison. Spell it directly: a
+      // source reader expects `x != y`, not `!(x == y)`.
+      if (NodeWidth == 1 && Operand && Operand->Kind == ExprKind::BinOp &&
+          Operand->Operands.size() == 2) {
+        std::optional<NdOp> Negated;
+        bool Swap = true;
+        switch (Operand->Op) {
+        case NdOp::INT_EQUAL:
+          Negated = NdOp::INT_NOTEQUAL;
+          Swap = false;
+          break;
+        case NdOp::INT_LESS:
+          Negated = NdOp::INT_LESSEQUAL;
+          break;
+        case NdOp::INT_LESSEQUAL:
+          Negated = NdOp::INT_LESS;
+          break;
+        case NdOp::INT_SLESS:
+          Negated = NdOp::INT_SLESSEQUAL;
+          break;
+        case NdOp::INT_SLESSEQUAL:
+          Negated = NdOp::INT_SLESS;
+          break;
+        default:
+          break;
+        }
+        if (Negated) {
+          Result =
+              HighExpr::makeBinop(*Negated, Operand->Operands[Swap ? 1 : 0],
+                                  Operand->Operands[Swap ? 0 : 1]);
+          break;
+        }
+      }
+      Result = Operand ? HighExpr::makeUnary(NodeWidth == 1 ? NdOp::BOOL_NOT
+                                                            : NdOp::INT_NOT,
+                                             Operand)
+                       : nullptr;
+      break;
+    }
+
+    case sym::SymOp::Eq:
+    case sym::SymOp::Ult:
+    case sym::SymOp::Ule:
+    case sym::SymOp::Slt:
+    case sym::SymOp::Sle: {
+      const auto A = Ctx.operand(Item.Ref, 0), B = Ctx.operand(Item.Ref, 1);
+      ExprPtr Left = get(A), Right = get(B);
+      if (!Left || !Right)
+        break;
+      NdOp Op = NdOp::INT_EQUAL;
+      switch (Ctx.op(Item.Ref)) {
+      case sym::SymOp::Ult:
+        Op = NdOp::INT_LESS;
+        break;
+      case sym::SymOp::Ule:
+        Op = NdOp::INT_LESSEQUAL;
+        break;
+      case sym::SymOp::Slt:
+        Op = NdOp::INT_SLESS;
+        break;
+      case sym::SymOp::Sle:
+        Op = NdOp::INT_SLESSEQUAL;
+        break;
+      default:
+        break;
+      }
+      // A signed one-bit value denotes 0/-1, not the byte carrier's 0/1.
+      if (Ctx.width(A) == 1 &&
+          (Op == NdOp::INT_SLESS || Op == NdOp::INT_SLESSEQUAL)) {
+        Left = HighExpr::makeUnary(NdOp::INT_NEG2, Left);
+        Right = HighExpr::makeUnary(NdOp::INT_NEG2, Right);
+      }
+      Result = HighExpr::makeBinop(Op, std::move(Left), std::move(Right));
       break;
     }
 
@@ -1063,11 +1174,15 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       }
       ExprPtr Operand = get(Ctx.operand(Item.Ref, 0));
       if (Operand) {
-        Result = HighExpr::makeUnary(Ctx.op(Item.Ref) == sym::SymOp::ZExt
-                                         ? NdOp::INT_ZEXT
-                                         : NdOp::INT_SEXT,
-                                     Operand);
+        const bool SignedBit = Ctx.op(Item.Ref) == sym::SymOp::SExt &&
+                               Ctx.width(Ctx.operand(Item.Ref, 0)) == 1;
+        Result = HighExpr::makeUnary(
+            Ctx.op(Item.Ref) == sym::SymOp::ZExt || SignedBit ? NdOp::INT_ZEXT
+                                                              : NdOp::INT_SEXT,
+            Operand);
         Result->Type = NdType::makeInt(ByteSize, false);
+        if (SignedBit)
+          Result = HighExpr::makeUnary(NdOp::INT_NEG2, std::move(Result));
       }
       break;
     }
@@ -1085,7 +1200,7 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     }
 
     default:
-      // Selects and predicates have no output spelling here.
+      // Unsupported operators retain the source expression.
       Result = nullptr;
       break;
     }
@@ -1357,6 +1472,7 @@ definitionInputs(const ExprPtr &Value, const AvailableDefinitions &Definitions,
 void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
                               unsigned MaxThreads) {
   std::set<LocalIdentity> Escaped;
+  std::set<LocalIdentity> ExternallyMutable, ExplicitOutputs;
   std::map<LocalIdentity, std::pair<int64_t, uint16_t>> StackViews;
   bool FrameAddressTaken = false;
   std::unordered_set<va_t> Entries;
@@ -1379,6 +1495,13 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
         Work.pop_back();
         if (!E || !Seen.insert(E.get()).second)
           continue;
+        if (E->Kind == ExprKind::Var && E->Var.Kind != MedVar::Temp &&
+            E->Var.Kind != MedVar::Param)
+          ExternallyMutable.insert(highSourceLocalIdentity(E->Var));
+        for (const auto &Output : E->IntrinsicOutputs) {
+          ExternallyMutable.insert(highSourceLocalIdentity(Output));
+          ExplicitOutputs.insert(highSourceLocalIdentity(Output));
+        }
         if (E->Kind == ExprKind::Var && E->Var.Kind == MedVar::Stack) {
           const auto Key = highSourceLocalIdentity(E->Var);
           const auto View = std::make_pair(E->Var.StackOff, E->Var.Size);
@@ -1446,6 +1569,8 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
   struct StatementProperties {
     bool ResetBefore;
     bool ResetAfter;
+    bool MutableBoundary;
+    bool ReadsBeforeMutation;
     uint64_t Weight;
   };
   auto Classify = [&](const HighStmt &S) {
@@ -1458,7 +1583,8 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
     const bool Straight =
         (EmptyAnchor || S.Kind == StmtKind::Assign ||
          S.Kind == StmtKind::ExprStmt || S.Kind == StmtKind::Return ||
-         S.Kind == StmtKind::Nop || S.Kind == StmtKind::Store) &&
+         S.Kind == StmtKind::Nop || S.Kind == StmtKind::Store ||
+         S.Kind == StmtKind::Call) &&
         S.Body.empty() && S.ElseBody.empty() && S.Cases.empty() &&
         S.DefaultBody.empty() && S.EHClauses.empty() &&
         S.EHClauseBodies.empty() && !S.IsPhiCopy &&
@@ -1466,7 +1592,11 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
         S.MemoryAddressSpace == NdMemoryAddressSpace::Default;
     bool Pure = true;
     uint64_t Weight = 1;
+    const HighExpr *OnlyRoot = nullptr;
+    unsigned RootCount = 0;
     forEachRhsExpr(S, [&](const ExprPtr &E) {
+      OnlyRoot = E.get();
+      ++RootCount;
       const auto Cost = expressionCost(E);
       Pure &= Cost.has_value();
       // Scheduling estimates never expand the rendered tree or overflow on a
@@ -1476,16 +1606,53 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
           ::neverd::limits::ir::
               kHighSymSimplifyStatementRegionsClassifyWeightMinArgument2);
     });
+    // A standalone call evaluates its scalar inputs and target before the
+    // callee can change registers or escaped storage. A nested effect can run
+    // earlier during argument evaluation, so it retains the ordinary barrier.
+    bool ReadsBeforeMutation =
+        Straight && RootCount == 1 && OnlyRoot &&
+        OnlyRoot->Kind == ExprKind::Call &&
+        (S.Kind == StmtKind::Assign || S.Kind == StmtKind::Call ||
+         S.Kind == StmtKind::ExprStmt);
+    if (ReadsBeforeMutation)
+      OnlyRoot->forEachChildExpr([&](const ExprPtr &Child) {
+        ReadsBeforeMutation &= expressionCost(Child).has_value();
+      });
     return StatementProperties{
-        !Straight || !Pure || Entries.count(S.Addr) ||
+        !Straight || Entries.count(S.Addr) ||
             (S.Kind == StmtKind::Assign && !isScalarLocal(S.Dst)),
-        !Straight || !Pure || S.Kind == StmtKind::Return, Weight};
+        !Straight || S.Kind == StmtKind::Return, !Pure, ReadsBeforeMutation,
+        Weight};
   };
   auto Simplify = [&](HighStmt &S, const StatementProperties &Properties,
                       AvailableDefinitions &Definitions) {
     if (Properties.ResetBefore)
       Definitions.clear();
+    const auto RetireMutable = [&] {
+      // Calls and memory observations cannot change an unescaped C temporary
+      // or parameter. A register, frame object, escaped local, or a definition
+      // that still reads one must not be expanded across that boundary.
+      const auto Mutable = [&](const LocalIdentity &Key) {
+        const auto Definition = Definitions.find(Key);
+        const bool Captured = Definition != Definitions.end() &&
+                              Definition->second.CapturedCallResult;
+        return Escaped.count(Key) || ExplicitOutputs.count(Key) ||
+               (ExternallyMutable.count(Key) && !Captured);
+      };
+      for (auto It = Definitions.begin(); It != Definitions.end();) {
+        if (Mutable(It->first) ||
+            std::any_of(It->second.Dependencies.begin(),
+                        It->second.Dependencies.end(), Mutable))
+          It = Definitions.erase(It);
+        else
+          ++It;
+      }
+    };
+    if (Properties.MutableBoundary && !Properties.ReadsBeforeMutation)
+      RetireMutable();
     forEachRhsExpr(S, [&](ExprPtr &E) { simplifyRegions(E, Definitions); });
+    if (Properties.MutableBoundary && Properties.ReadsBeforeMutation)
+      RetireMutable();
     if (Properties.ResetAfter) {
       Definitions.clear();
       return;
@@ -1521,6 +1688,18 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts,
         It = Definitions.erase(It);
       else
         ++It;
+    }
+    // Keep the value assignment, never a deferred or repeated invocation.
+    // Explicit writes, escapes, intrinsic outputs and scope resets still
+    // retire this marker and every expression depending on it.
+    if (S.Val && S.Val->Kind == ExprKind::Call &&
+        S.Dst->Var.Kind == MedVar::Reg && !Escaped.count(Key) &&
+        !ExplicitOutputs.count(Key) &&
+        Definitions.size() <
+            ::neverd::limits::ir::
+                kHighSymSimplifyStatementRegionsSimplifyDefinitionsSizeLimit) {
+      Definitions.emplace(Key, AvailableDefinition{S.Dst, {}, true});
+      return;
     }
     if (Inputs && !Inputs->count(Key) && !Escaped.count(Key) &&
         Definitions.size() <

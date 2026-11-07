@@ -18,7 +18,9 @@ namespace neverd::registration_abi {
 std::optional<RegistrationLeafCalleeABI>
 checkedObjectCallbackCalleeABI(const BinaryImage &Image, va_t Target,
                                size_t &Work, ObjectCallbackContext &Context) {
-  if (!chargeCalleeWork(Work, 1) || Context.Depth >= kMaxObjectCallbackDepth)
+  if (!chargeCalleeWork(Work, 1) ||
+      !isPlainRegistrationCalleeEntry(Image, Target) ||
+      Context.Depth >= kMaxObjectCallbackDepth)
     return std::nullopt;
   if (const auto It = Context.Callees.find(Target);
       It != Context.Callees.end()) {

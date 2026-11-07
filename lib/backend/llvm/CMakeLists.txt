@@ -11,11 +11,25 @@ add_neverd_component_library(NeverDLLVMFloatConvertLowering
 
 add_neverd_component_library(NeverDWindowsRegistrationFrame
   X86/RegistrationFrameLayout.cpp
+  X86/RegistrationFrameProof.cpp
+  X86/RegistrationFrameProofAddress.cpp
+  X86/RegistrationFrameRuntime.cpp
+  X86/RegistrationFrameStores.cpp
+  X86/RegistrationFrameBits.cpp
+  X86/RegistrationFrameTaint.cpp
+  X86/RegistrationCxxLifetime.cpp
+  X86/RegistrationFrameXor.cpp
+  X86/RegistrationImageProof.cpp
+  X86/RegistrationCookieProof.cpp
+  X86/RegistrationCxxCookieBindings.cpp
+  X86/RegistrationCxxGuardedFrame.cpp
   X86/RegistrationCatch.cpp
   X86/RegistrationCatchBlocks.cpp
   X86/RegistrationEntry.cpp
   X86/RegistrationSEHControl.cpp
+  X86/X86RegistrationSEHStateStore.cpp
   X86/RegistrationSEHException.cpp
+  X86/RegistrationSEHThread.cpp
   X86/RegistrationSEHBoundABI.cpp
   X86/RegistrationSEHJumpCallbackFrame.cpp
   X86/RegistrationSEHJumpStack.cpp
@@ -29,20 +43,26 @@ add_neverd_component_library(NeverDWindowsRegistrationFrame
   LINK_COMPONENTS
   IR
   IRMed
+  IRLow
+  Loader
 )
 
 add_neverd_component_library(NeverDBackendLLVM
   LLVMSourceMap.cpp
+  emit/MedLLVMAnalysisDispatch.cpp
   AArch64/MedLLVMAArch64Sideeffect.cpp
   AArch64/MedLLVMAArch64ValueEmitter.cpp
   ARM/MedLLVMARMSideeffect.cpp
   ARM/MedLLVMARMValueEmitter.cpp
+  COFF/MedLLVMPEImageBase.cpp
   X86/MedLLVMX86CryptoEmitter.cpp
   X86/MedLLVMX86GlobalData.cpp
   X86/MedLLVMX86ShuffleEmitter.cpp
   X86/MedLLVMX86Sideeffect.cpp
+  X86/MedLLVMX86SegmentMove.cpp
   X86/MedLLVMX86SimdEmitter.cpp
   X86/MedLLVMX86ValueEmitter.cpp
+  X86/MedLLVMX86Hle.cpp
   X86/MedLLVMX86Virtualization.cpp
   X86/MedLLVMX86SystemState.cpp
   X86/MedLLVMX86CompressExpand.cpp
@@ -52,6 +72,7 @@ add_neverd_component_library(NeverDBackendLLVM
   X86/MedLLVMX86RepState.cpp
   X86/MedLLVMX86Sgx.cpp
   X86/MedLLVMX86BoundedLeaf.cpp
+  X86/MedLLVMX64CallRCX.cpp
   X86/MedLLVMX86AmxState.cpp
   X86/X87ImportCall.cpp
   data/MedLLVMConstClass.cpp
@@ -98,6 +119,7 @@ add_neverd_component_library(NeverDBackendLLVM
   X86/MedLLVMRegistrationCopyBlocks.cpp
   X86/MedLLVMRegistrationCxxBlocks.cpp
   X86/MedLLVMRegistrationCxxCall.cpp
+  X86/MedLLVMRegistrationCookieCall.cpp
   X86/MedLLVMRegistrationCxxObjectCall.cpp
   X86/MedLLVMRegistrationCallResult.cpp
   emit/MedLLVMCall.cpp
@@ -119,6 +141,7 @@ add_neverd_component_library(NeverDBackendLLVM
   LINK_COMPONENTS
   LLVMFloatConvertLowering
   LLVMCallContract
+  LLVMSourceTypeHints
   IR
   IRLow
   WindowsEHMetadata

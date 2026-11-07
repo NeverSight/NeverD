@@ -29,7 +29,9 @@ struct DataSymbolBinding {
 };
 
 /// Builds a snapshot from exact relocation symbol records, independent of
-/// section names and symbol-name searches. Conflicting bindings fail clearly.
+/// section names and symbol-name searches: a linked ELF image's data slot
+/// relocations, or the GOT cells ObjectExterns gives a relocatable object's
+/// undefined data symbols. Conflicting bindings fail clearly.
 std::map<va_t, DataSymbolBinding>
 collectDataSymbolBindings(const BinaryImage &Image);
 

@@ -62,6 +62,13 @@ struct RuntimeTimestampRead {
   std::array<NdVar, 2> PlaceholderOutputs;
 };
 
+/// Authenticate a complete RDTSC/RDTSCP native bundle before retaining its
+/// host execution. Returns the full-width architectural output registers in
+/// placeholder order. This does not grant host timestamp/processor identity.
+std::optional<llvm::ArrayRef<uint64_t>>
+runtimeTimestampRegisters(const SpecializationInstruction &Instruction,
+                          NdVar Scratch);
+
 /// Match the complete canonical x64 RDTSC bundle and bind one caller-supplied
 /// sample to its primary result and two instruction-local output placeholders.
 /// The original operation remains a runtime read. This scalar transition gives
@@ -72,9 +79,10 @@ lowerRuntimeTimestampRead(const SpecializationInstruction &Instruction,
 
 /// Authenticate complete canonical RDTSC, CPUID and supervisor RDMSR bundles.
 /// CPUID retains its EAX/ECX selectors and four independent 32-bit answers.
-/// RDMSR requires KernelX64NoFaultV1 and retains its actual ECX selector.
-/// No host CPU value, repeated-query correlation or hardware capability is
-/// inferred. Sample reserves sixteen bytes; the result states the used width.
+/// RDMSR requires an explicit kernel profile and retains its actual ECX
+/// selector. No host CPU value, repeated-query correlation or hardware
+/// capability is inferred. Sample reserves sixteen bytes; the result states the
+/// used width.
 std::optional<RuntimeRegisterRead> lowerRuntimeRegisterRead(
     const SpecializationInstruction &Instruction, NdVar Sample,
     std::optional<InterpreterMachineStateProfile> Profile = std::nullopt);
@@ -83,6 +91,9 @@ std::optional<RuntimeRegisterRead> lowerRuntimeRegisterRead(
 /// be folded scalars; this validates no native bytes or execution domain.
 std::optional<SpecializationScalarQuery>
 describeCPUQuery(llvm::ArrayRef<LowOp> Operations);
+
+/// Architectural result order shared by query descriptors and source adapters.
+llvm::ArrayRef<uint64_t> cpuQueryResultRegisters();
 
 bool isRetainedNativeTrap(const SpecializationInstruction &Insn);
 bool isCetDisabledProjection(const SpecializationInstruction &Insn);

@@ -1,0 +1,14 @@
+{
+  "schema": "neverd.gui-plugin.v1",
+  "id": "host-observer",
+  "name": "Host Observer",
+  "version": "1.0",
+  "program": "python",
+  "arguments": ["observer.py"],
+  "services": [
+    {"id": "project.context", "version": 1},
+    {"id": "analysis.metadata", "version": 1}
+  ],
+  "events": [{"id": "task.changed", "version": 1}],
+  "actions": [{"id": "inspect", "title": "Inspect host services and events", "context": "none"}]
+}

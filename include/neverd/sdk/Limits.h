@@ -51,6 +51,9 @@ inline constexpr int kMaxSourceEntriesPerQuery = 65536;
 inline constexpr int kMaxStringRowsPerPage = 65536;
 inline constexpr int kMaxDecodedTextBytes = 65536;
 inline constexpr size_t kStringSearchWindowBytes = 65536;
+// The fewest spans of an image string scan (strings::scan) run on several
+// workers: each span is a large task of its own.
+inline constexpr size_t kMinParallelStringScanSpans = 2;
 inline constexpr unsigned kDefaultStringMinLength =
     ::neverd::limits::support::kDefaultStringMinLength;
 inline constexpr size_t kShortInstructionByteColumnWidth = 18;
@@ -81,6 +84,14 @@ inline constexpr size_t kMaxTypeFitTextBytes = 256;
 inline constexpr int64_t kMaxTypeFitCandidates = 500;
 inline constexpr int64_t kMaxTypeFitAccessBytes = 1 << 16;
 inline constexpr unsigned kMaxLocalTypeConversionDepth = 16;
+/// Records a library record may reach for a session to convert them once
+/// and share them (LocalTypesDebugContext::libraryRecord); a record that
+/// reaches more is converted afresh for each record it completes.
+inline constexpr size_t kMaxLocalTypeSharedClosure = 4096;
+/// Bytes of rendered record definitions a session keeps to give units that
+/// embed the same records again (LocalTypesDebugContext::definitions);
+/// past them it starts over.
+inline constexpr size_t kMaxLocalTypeRenderedBytes = 16u << 20;
 /// Admission and persistence use the same bound for function declarations.
 inline constexpr size_t kMaxFunctionDeclarationBytes = 4096;
 inline constexpr size_t kMaxUserNameBytes = 4096;

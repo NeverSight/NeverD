@@ -96,6 +96,43 @@ class ComparisonIntegrationTests(unittest.TestCase):
                                         after.encode()), 1)
         self.assertEqual(self.host.owned_string("neverd_comparison_export_json", comparison), after)
 
+    def test_argument_access_pages_preserve_call_roles_and_saved_graph(self) -> None:
+        from neverd_plugin import abi
+
+        self.binary.write_bytes(bytes.fromhex(
+            "4883ec1848c744240807000000488d7c2408e80a000000488b4424084883c418c3"
+            "48c70707000000c3"))
+        left, right = self.session(), self.session()
+        for handle in (left, right):
+            self.assertEqual(self.host.call("neverd_session_load", handle,
+                                            str(self.binary).encode()), 1)
+        comparison = self.comparison()
+        self.assertEqual(self.host.call("neverd_comparison_run", comparison,
+            left, right, b'{"dataflow":true}', abi.ComparisonProgressCallback(), None), 1)
+        saved = self.host.owned_string("neverd_comparison_export_json", comparison)
+
+        def page(**query):
+            return json.loads(self.host.owned_string("neverd_comparison_dataflow_json",
+                comparison, json.dumps({"address": "0x1000", **query}).encode()))
+
+        call = next(n for n in page(kind="nodes")["rows"] if n["opcode"] == "CALL")
+        full = page(kind="accesses", call=call["id"])
+        self.assertTrue(full["inspection_complete"])
+        self.assertEqual([(r["argument"], r["access"], r["address"], r["return_operand_path"])
+                          for r in full["rows"]],
+                         [(0, "write", "0x1004", False), (0, "read", "0x1017", True)])
+        self.assertIn("memory_alias", full["gaps"])
+        self.assertIn("call_effects", full["gaps"])
+        self.assertEqual(page(kind="accesses", call=call["id"], offset=1, limit=1)["rows"],
+                         full["rows"][1:])
+        self.assertEqual(self.host.owned_string("neverd_comparison_export_json", comparison), saved)
+        self.assertEqual(self.host.call("neverd_comparison_restore_json", comparison, saved.encode()), 1)
+        self.assertEqual(page(kind="accesses", call=call["id"]), full)
+        stopped = page(kind="accesses", call=call["id"], max_records=1)
+        self.assertFalse(stopped["inspection_complete"])
+        self.assertEqual(stopped["state"], "resource_limited")
+        self.assertEqual(stopped["rows"], full["rows"][:1])
+
     def test_restore_callback_retains_result_and_allows_retry(self) -> None:
         from neverd_plugin import abi
 

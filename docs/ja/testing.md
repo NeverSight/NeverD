@@ -1,5 +1,10 @@
 **Languages**: [English](../testing.md) | [简体中文](../zh-CN/testing.md) | [繁體中文](../zh-TW/testing.md) | [日本語](testing.md) | [한국어](../ko/testing.md) | [Français](../fr/testing.md) | [Deutsch](../de/testing.md) | [Español](../es/testing.md) | [Italiano](../it/testing.md) | [Русский](../ru/testing.md) | [العربية](../ar/testing.md)
 
+`PEFixedImageTest.MachineExitDiscoversBoundedCopyDestination` は内部呼び出しと有界コピーのポインター・カウント精密化を検証します。独立した期待値はゼロ回、早期終端、重複バッファー、高位フレームを含みます。戻り先の全体・部分破壊を拒否し、正確な上限と一単位不足する操作・問い合わせ上限を確認します。
+`InterpreterMachineRegionSourceTest.BoundedCopyDiscoversPointerAndCountContexts` は両 C 出力を O0/O2 と ASan/UBSan で実行して全状態とメモリーを確認します。通常の ABI 復元の認証ではありません。
+
+有界の `REP MOVS/STOS` の機械状態ソーステストは、ユーザーとカーネルの選択モデル、4 種の要素幅、両方向、重複メモリ、ゼロ回での無効ポインタを検証します。`X86NativeStateAudit.RepTransfers*` はワード接頭辞の両順序、正確な符号化とオペランド、全状態と各バイトを確認します。余分な接頭辞、アドレス上書き、セグメント、REPNE、未証明の回数は拒否し、メモリアクセス、無故障、他の状態保存、通常 ABI の仮定を追加しません。
+
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites` は x64/ARM64 Mach-O の整数、浮動小数点、混合スタック引数をソースパイプラインで検証します。`IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers` はメモリ読み取り、呼び出し、スタックアドレスの流出、不透明な intrinsic やメモリ intrinsic に必要な入口ストレージを維持します。値だけを使う経路では宣言済み引数を使い、物理 SP への書き込みを生成せず、レジスタの浮動小数点状態効果を保持します。macOS モバイル行列は復元した Swift を独立にコンパイル・実行します。生成成功だけでは実行の証拠になりません。
 
 `NeverDLLVMCValueTests` は独立した Windows x64 ABI 関数への可変引数呼び出しを O0/O2 と両型保持設定でコンパイルして実行します。ネイティブ x64 で va_arg による値を検証し、他のアーキテクチャでは明示的にスキップします。
@@ -106,7 +111,7 @@ v4 テストはプレフィックスのサイズとパディング、切り詰�
 
 数値アドレスのテストは単一 writer の全体・部分転送、スナップショットを追加しない undef/poison、両バイト順、32/64 ビット、負の剰余オフセット、部分重複、異なる根や alloca とのエイリアス、例外を送出する呼び出し、ループ、隣接する予算境界、store 削除だけの場合の解析無効化を検証します。O0/O2 で元と変換後の IR を独立した基準と比較し、戻り値とエイリアスするバッファーの全バイトを確認します。
 
-`NeverDMedMutableSourceTests` と `NeverDLLVMCValueTests` は、独立作成したループ、ブロック順序変更、入口への後退辺、実行時スタック演算、過去の読み取り、分岐合流、部分エイリアス、論理真値、ゼロを含むビットカウントを O0/O2 で実行します。負のテストでは不正な入力、切り詰められた分岐先、曖昧な値の受け渡し、予算超過を生成前に拒否します。SSA 上限を超える CLI ケースは実行可能な LLVMC 出力と HighC の明示的拒否を確認します。 連続更新とブロックをまたぐ格納式の連鎖についても、生成 C のサイズと実行結果を検証します。
+`NeverDMedMutableSourceTests` と `NeverDLLVMCValueTests` は、独立作成したループ、ブロック順序変更、入口への後退辺、実行時スタック演算、過去の読み取り、分岐合流、部分エイリアス、論理真値、ゼロを含むビットカウントを O0/O2 で実行します。負のテストでは不正な入力、切り詰められた分岐先、曖昧な値の受け渡し、予算超過を生成前に拒否します。SSA 上限を超える CLI ケースは HighC と LLVMC の両方を実行します。変数の少ない大規模グラフで旧ブロック上限を超える実行を確認し、ストレージ予算の境界と超過を別途検証します。 連続更新とブロックをまたぐ格納式の連鎖についても、生成 C のサイズと実行結果を検証します。
 
 追加の回帰テストは LLVM の昇格前の私有読み書き数と C 出力サイズを制限します。長い混合演算列、並べ替えた SSA ブロック、重複する対象メモリへの書き込み、ゼロの戻り値を O0/O2 で実行し、主要例を実際の LLVM 最適化パイプラインにも通します。モジュール生成拒否後のエミッター再利用も検証します。
 
@@ -1397,7 +1402,7 @@ checked Unicorn は `MachineRunControl` を使い、ARM64 の保守、ゲスト�
 
 `WindowsProcess.ClockServicesUseConsistentUnitsAndPreserveLastError` は元の x64/ARM64 PE で `QueryPerformanceFrequency`、単調カウンター、FILETIME、循環 tick 数、相対待機を実行します。`WindowsProcess.UnmodeledDelaysStopWithoutClaimingCompletion` は alertable 待機、正の絶対時刻、INT64_MIN 間隔が完了前に拒否されることを確認します。`NativeWindowsOracleRunsTheSameExecutable` は成功する時刻シナリオを Windows 上で直接実行します。両ゲスト回帰は Unicorn 無効の KVM/WHP 受け入れで必須です。 元のサンプルは `BOOLEAN` 引数の未使用上位ビットを明示的に汚染し、型付き 64 ビット定数で Windows ABI による紀元値と INT64_MIN の切り詰めを防ぎます。
 
-`ARM64 native backend build` は固定した LLVM ソースを使い、`ubuntu-24.04-arm`（KVM）と `windows-11-arm`（WHP）で Unicorn を無効にして `NeverDEmulationNative` をコンパイルします。`audit_native_backend_build.py` は宣言された各ネイティブソース、有効なバックエンド定義、コンパイルコマンド、ARM64 ELF/COFF オブジェクトとハッシュを検査します。`probe_native_host.py` はホスト初期化の可否とリソース解放を記録し、機能が利用できない場合は明示し、初期化エラーではジョブを失敗させます。これらはコンパイルとホスト初期化の検証であり、ゲスト実行は未検証です。 `NeverDCapstoneCompilerOptions.inc` は修飾子の診断オプションを Clang による C コンパイルに限定し、GCC と MSVC はそれぞれの警告規則を維持します。 `native_arm64_only=true` は完全な x64 CPU 受け入れ検証を起動せず、これらの ARM64 コンポーネントのビルドと初期化プローブを選択します。 ビルド監査では Windows 8.3 エイリアスを含め、ソースとビルドのルートを正規化してからパスを比較します。 ARM64 コンポーネントジョブは、ビルド監査の前に選択した KVM または WHP バックエンドを明示的に有効にします。
+`ARM64 native backend build` は固定した LLVM ソースを使い、`ubuntu-24.04-arm`（KVM）と `windows-11-arm`（WHP）で Unicorn を無効にして `NeverDEmulationNative` をコンパイルします。`audit_native_backend_build.py` は宣言された各ネイティブソース、有効なバックエンド定義、コンパイルコマンド、ARM64 ELF/COFF オブジェクトとハッシュを検査します。`probe_native_host.py` はホスト初期化の可否とリソース解放を記録し、機能が利用できない場合は明示し、初期化エラーではジョブを失敗させます。これらはコンパイルとホスト初期化の検証であり、ゲスト実行は未検証です。 `NeverDCapstoneCompilerOptions.inc` は修飾子の診断オプションを Clang による C コンパイルに限定し、GCC と MSVC はそれぞれの警告規則を維持します。 `arm64-native-build.yml` は完全な x64 CPU 受け入れ検証を起動せず、これらの ARM64 コンポーネントのビルドと初期化プローブを選択します。 ビルド監査では Windows 8.3 エイリアスを含め、ソースとビルドのルートを正規化してからパスを比較します。 ARM64 コンポーネントジョブは、ビルド監査の前に選択した KVM または WHP バックエンドを明示的に有効にします。
 
 `WindowsTestExecution.def` は Unicorn ARM64 の `WindowsExclusive` 比較に `RUN_SERIAL` を指定します。他のゲスト負荷との競合を避けつつ、元の 60 s のゲスト期限と、結果・レジスター・権限・ネイティブダイジェストの全検査を保持します。
 
@@ -2162,6 +2167,8 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 
 `NativeStackControl.TrapExit*` · `InterpreterSpecialization.TrapIntrinsicsCannotFallThroughWithoutAnAuthenticatedExit` · `PEFixedImageTest.MachineTrapExitEndsRegionAtDeclaredTrap` · `PEFixedImageTest.UndeclaredTrapRemainsUnsupported` · `PEFixedImageTest.MachineTrapExitRejectsNonTrapInstruction` · `NativeUndefinedIndependence.UntakenTrapStillRequiresExactEvidence`.
 
+`NativeStackControl.JumpExit*` は直接・レジスタ・メモリの転送先、後方・非整列スロット、古い証拠、一時値の重複を検査します。`InterpreterMachineRegionSourceTest.MemoryJumpExitsReadCurrentGuestSlots` は選択値と fresh 未定義値の両モデルで、HighC と LLVMC を O0/O2・UBSan 付きで実行します。状態とメモリ全体、スロット内容の変化、先行する別名ストアを検査します。固定アドレスのテストには Linux x64 が必要で、PE アドレスは ASan のシャドウ領域の隙間に位置します。`NeverDInterpreterSpecializationTests` と `NeverDInterpreterMachineStateTests` を実行してください。
+
 これらの検査が検証するのは宣言された領域であり、例外処理やソース/native 等価性は証明しません。
 
 
@@ -2172,6 +2179,10 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 `NeverDInterpreterSpecializationTests`, `NeverDPEFixedImageTests`, `NeverDRawEnvironmentRequirementTests`, `NeverDOriginalBinaryUndefinedIndependenceTests`, `NeverDLowIRRefinementTests`.
 
 `NeverDObjCSourceCallTests`（`SourceFrameAnalysis.*`）と `NeverDCSourcePresentationTests` を実行し、バイトの由来、経路の一致、上書きまたは逸出した記憶領域、不変のイメージ範囲、予算、文字コード、メタデータ境界を確認します。`NeverDWorkerStackText` は公開の x64/ARM64 PE 例をコンパイルし、未知の上書きを含めて両方の C 経路を検証します。Clang と lld-link が必要で、Windows のネイティブ実行は別途検証します。
+
+検証済みのポインター引数は、LLVM がアドレスを整数で保持する場合も同じイメージ文字列注釈を使います。x86/x64/ARM64 の COFF、ELF、Mach-O で、拒否された宣言、同じ数値の整数、動的アドレス、書き込み可能な記憶領域、注釈の無効化とエスケープを検証します。引数は元のアドレスを保持し、初期バイトの表示は不変性の証明にはなりません。
+
+戻り値の型解析は、呼び出し ABI の復元と同じ有界のインポートスロット証明を使い、インポートアドレスと読み込まれた呼び出し先のコピーを追跡します。x86/x64/ARM32/ARM64 の COFF、ELF、Mach-O で、数値の一致、動的アドレス、循環、セグメント指定、非 void 宣言を検証します。
 
 <!-- i18n-section: interactive-byte-patches -->
 ## 対話的パッチの責務
@@ -2229,3 +2240,85 @@ HFA インポートスロットのテストは厳密な C プロトタイプを�
 `MemoryAdditionReturnsItsSnapshotThroughBothRoutes` と交換の対照テストは O0/O2 と UBSan で両 C 経路を実行し、x64 の全4幅、非整列アドレス、旧値、隣接バイトを確認します。`LLVMCIntrinsicSemantics.NativeAddition*` / `NativeExchange*` は元の LLVM IR も実行し、未使用結果の書き込みを保持し、変更されたアセンブリ契約を拒否します。FS/GS はコンパイルのみでホスト TLS に触れません。実行には x64 ホストが必要で、競合やハードウェア障害の認証ではありません。
 
 `X86LegacyAtomic.LockedArithmetic*` は x86/x64 の幅、独立した算術フラグ、入力レジスタとキャリーの保持、符号付き即値、非整列の隣接バイト、読み取り専用・部分マッピング、FS/GS、ロックなしの対照を検証します。未対応のロック付き演算を通常のストアに変換しません。`InterpreterLLVMRefinement.RawAtomicsStopBeforeLLVMProof` は四種類の命令の特化と、順序付きメモリの証明拒否を確認します。
+
+`X86LegacyAtomic.NeutralLogic*` は各幅と FS/GS でメモリ、定義済みフラグ、DF を保持し、書き込み拒否、不完全なアクセス、他の即値、HLE を検証します。`NeverDX86NeutralAtomicSourceTests` は x64 ホストで COFF/ELF/MachO の両 C 経路を O0/O2 と UBSan で実行し、上位ビットと八つのバイト位置を検証します。宣言型の変更には `NeverDHighControlFlowTests` と `NeverDHighCIntegerWidthTests` も実行します。
+
+## スカラー分岐の検証
+
+`NeverDConstantBranchTests` は x86/x64/ARM64 と PE、ELF、Mach-O で直接先行辺、全経路が一致する合流、不変読み取りを検証します。未証明の候補、未定義入力、呼び出しによる破壊、独立入口では動的分岐を維持します。`NeverDConstantBranchSourceTests` は最適化の有無、O0/O2、UBSan で x64/ARM64 の両 C 経路をコンパイルして実行します。整数のみの関数本体にはホスト標準ヘッダーを使い、ネイティブ ARM64 や Windows ドライバーの認証とは区別します。worker の独立した ELF x64 機械語との比較は、コールド状態の移動、参照、飛び越された E9 バイトも検証します。
+
+まず現在の基本ブロックだけで証明できる対象を調べ、無関係な先行経路による予算消費を避けます。長い先行経路の回帰テストでもこの境界を検証します。
+
+MedIR の定数伝播とコピー伝播は `canPropagateConstantToOperand` を共有します。計算された間接呼び出し先は SSA 値のまま保持し、定数化したビットをポインター格納先と解釈しません。直接呼び出しと通常の引数は引き続き畳み込みます。`NeverDImageAnalysisBoundaryTests` は x86/x64/ARM32/ARM64 の変換を、`NeverDIndirectCallValueSourceTests` は三つのネイティブ形式で x64/ARM64 の両 C 経路を検証します。元のイメージの表示では構文と余分なメモリー読み取りがないことを確認し、イメージ提供者なしでは実行しません。
+
+`NeverDReadOnlyProtectionSourceTests` は PE、ELF、Mach-O の x64/ARM64 入力から HighC と LLVM C を生成し、ホスト Clang の O0/O2 と UBSan でグローバル変数の読み書きを実行する。両方のパイプライン最適化モードと紛らわしい定数セクション名を含む。`NeverDReadOnlyBytesTests` はマッピング権限、RELRO の完全な範囲と不正範囲を検査し、ポインター境界スイートは同じ ELF を relro と norelro でリンクする。再構成 C のホスト実行は ARM64 ネイティブや Windows カーネルの実行検証ではない。
+
+`RelroKeepsPartialPagesAndStaticStartupWritable` は x86、x64、ARM、ARM64 のページ境界と明示的なローダー保証を確認します。ネイティブポインターテストは Linux x64 の部分 RELRO とローダーなし静的プログラムを独立に実行し、グローバル変数への書き込み後の読み出しを検証します。`NeverDDataSymbolBindingTests` はポインター全体の保護と両 C 経路を確認します。実機 ARM のページ構成を認証するものではありません。
+
+`NeverDLowScalarConstantTests` と `NeverDIndirectCallValueSourceTests` はブロック間呼び出しと拒否条件を両 C 経路の実行で検証します。`NeverDLLVMCSourcePointerTests` はポインター、コールバック、別名、外部宣言を O0/O2 と UBSan で実行します。ネイティブ境界テストは公開 MinGW 例をコンパイルし、MSVCRT/UCRT の配置不一致を拒否します。カーネルや ARM64 のネイティブ実行を保証するものではありません。
+
+`X86RepState.ImageCopiesRetainEveryAccessedByte` は x64 COFF、ELF、Mach-O で両方向のコピーと同一領域の埋め込み後のコピーを検証します。両 C 経路を O0/O2 と UBSan でコンパイルして実行し、独立に計算した結果で全コピー済みバイトを確認します。x64 以外のホストでは実行検証を明示的にスキップします。
+
+`NeverDFiniteScalarBranchTests` は x86/x64/AArch64、COFF/ELF/Mach-O のテーブルなし算術分岐、疎なマスク、剰余算術、部分書き込み、破壊、テンポラリーの寿命、予算、外部入口、新しい辺を検証します。`NeverDFiniteScalarBranchSourceTests` は最適化の有無、O0/O2、UBSan で両 C 経路の全ケースを実行し、同時に保存するコードポインターの識別と SSA 省略時の拒否も確認します。
+
+`NeverDCalleeSourceCLI` は独自に符号化した x64 PE/ELF 呼び出し列を実際の CLI で確認します。アドレス・名前選択、推移的な定義、無関係な関数の除外、単一関数出力、深さ上限の境界と超過、循環、ルートと呼び出し先の拒否を検査します。閉包が失敗した場合は既存出力を保存します。三関数の完全な C 単位を O0/O2 でコンパイル・実行し、独立した期待値を確認します。再帰例は検査のみです。 さらに、アンワインドメタデータもシンボルもなく NOP パディングで区切られた直接呼び出し先のリーフ関数と、関数検出完了後にそのリーフを数値アドレスで選択する場合を検証します。
+
+反復イメージアクセスの回帰は、同じ領域内の無関係な関数ポインター再配置、イメージ内の宛先、アドレスに似た整数の埋め込み値、完了後のソース変位と両レジスターを使った後続の読み取りも検査する。`ConstantAddressFactsExcludeUnprovedAndNonAddressResults` は x86/x64 で動的入力、セグメント、縮小幅、不正なインターフェース、非アドレス出力を除外する。`ZeroCountAndOffsetFormsKeepTheirNumericInputs` は入力の保持を検査し、自然幅のゼロ回数ケースだけをホストで実行する。完全範囲の検査は切り詰められたマッピングと回数のオーバーフローを拒否する。LLVM に対応するネイティブ intrinsic がない検査は明示的にスキップする。
+
+## 戻りアドレス領域の中立なアトミック操作
+
+`NeverDMedPrologueSavesTests` は幅、オフセット、生きた値、フラグ/PHI の参照、編集後の証拠失効を検査します。`NeverDPipelineOutcomeTests` は機械・パッチ要求の分離を検査します。`NeverDX86NeutralAtomicSourceTests` は独立に作成した元命令と COFF/ELF/MachO の両 C 経路を比較し、スタックポインタ変更も含め O0/O2 と UBSan で実行します。この実行比較には Linux x64 が必要です。i386 の証明テストはネイティブ実行の検証ではありません。
+
+
+## 標準のスーパーバイザー読み取り監査
+
+`InterpreterSpecialization.SupervisorRead*` は実際の厳密なリフトを使用し、`Missing` に格下げした監査を拒否します。`BinaryLowIRRefinement.SupervisorReadCompletesOnlyRawRecovery` は元のバイト列の復元境界を検査し、ネイティブ証明とソースラップの拒否も確認します。
+
+## OR/XOR 式の定数による包含
+
+`SymExprMask.ConstantCover*` は全四ビットマスクと入力、8–257 ビット値、有効な上位ビット、深い共有式、ワード数と項数の予算拒否を検証します。`FrameOffsets.ConstantCoveredBitsExposeOffsetsWithoutSolverQueries` は求解問い合わせなしの固定変位と、入力依存の反例を検証します。`NeverDSymbolicTests` と `NeverDInterpreterSpecializationTests` を実行してください。
+
+## 進むカーソルが参照するイメージ領域
+
+`CImageObjects.AdvancingCursorsKeepTheWholeMutableImageObject` は COFF/ELF/Mach-O の前進/後退、途中のコピー、同幅変換、読み書きと書き込みのみの経路を O0/O2 と ASan/UBSan で実行します。`CursorStorageNeedsAnAddressPreservingMemoryPath` はスカラー定数、ロードされたポインタ、幅の縮小、メモリ利用のない算術を拒否し、`DirectBoundedTablesKeepTheirExtent` は有界な直接索引を維持します。`NeverDLiftTests` をビルドして `ctest --test-dir build-release -R '^CImageObjects[.]' --output-on-failure --parallel 4` を実行してください。
+
+`CImageObjects.EscapingUnsizedAddressesKeepTheirImageStorage` は COFF/ELF/Mach-O で、呼び出し元が名前付き・名前なし・内部アドレスを通じて読む経路を O0/O2 と ASan/UBSan で実行します。局所的な読み込みやシンボルのサイズがなくても、元の全バイト、アドレスの別名関係、次のシンボル境界を保持します。サイズが既知のスカラーは元の型を維持します。
+
+`CImageObjects.SharedAddressUsesKeepStorageInEitherFunctionOrder` は、ローカルな1バイト読み出しとアドレスを返す関数で共有されるアドレスノードを、両方の関数順序と同じ形式・命名・最適化・サニタイザーの組み合わせで実行します。
+
+`CImageObjects.EscapingUnsizedStorageBeyondTheEmbedLimitIsRefused` は、関数外へ渡されるサイズ不明のオブジェクトが共有の埋め込み上限を超える場合を拒否します。COFF・ELF・Mach-O、名前の有無、リスティング名、ELF再配置による採用を対象とし、拒否時は出力を空に保ちます。
+
+LLVM C の合成スタックスロットは、実行時にどちらかの 64 ビット半分を読み出す前に、128 ビット整数の書き込み全体を保持します。`LLVMCValues.WideFrameStoreRetainsBothRuntimeSelectedWords` は、文書化された `-fno-strict-aliasing` 契約と ASan/UBSan を使用し、O0/O2 で加算およびアラインメントに基づく OR アドレス計算を検証します。`NeverDLLVMCValueTests` と関連するフレーム、ベクトル、表示レコードのテストを実行してください。
+
+`MedLLVMDirectData.OriginalImageCursorsIgnoreUnrelatedPointerRelocations` は x64/AArch64 と COFF/ELF/Mach-O の可変カーソルループを LLVM C の O0/O2 と ASan/UBSan で実行します。明示的な元イメージのソースモードでは、無関係なポインタ再配置の隣でも、確定したアドレスは共有の実行時イメージを使用します。同じ数値の整数はスカラーのままで、独立したポインタミラーの検証も維持されます。`NeverDMedLLVMDirectDataTests` とポインタ再配置境界テストを実行してください。
+
+<!-- i18n-section: mutable-alignment-guards -->
+
+`MedMutableSource.AlignmentChecks*` は整列済み入力と無効なガードを両 C 経路の O0/O2 で実行し、有効なガードで整列違反があればトラップを要求します。不正な幅、整列値、出力、アドレス空間も拒否します。
+
+`InterpreterMachineRegionSourceTest.ArchitecturalChoiceSource*` は両C経路のO0/O2出力をASan/UBSan付きで実行します。圧縮の回帰テストは両分岐の失敗とループ再訪問後の全状態、メモリ、記録を比較します。48命令の列で序盤・中間・末尾の成功、不足、不一致を確認します。別の3300命令ケースは旧ラッパーのブロック上限を超え、生成コードをコンパイルせず両C出力を検査します。`NeverDInterpreterMachineStateTests` を実行してください。自作フィクスチャは任意のネイティブ関数を認証するものではありません。
+
+`MedMutableSource.SharedRejectionChainsPreserveEveryCommittedPrefix` は、二つの共通失敗出口を持つ 2048 段の条件分岐列を、通常と逆順のブロック配置で検証する。両 C 経路を O0/O2 と UBSan で実行し、序盤・中盤・終盤の失敗と成功について戻り値と確定済みゲストメモリの接頭部分を比較する。
+
+`NeverDX86UndefinedEffectsTests` の `X86ArithmeticUndefinedAudit` は、従来のレジスタ形式 PADDB/W/D/Q と PSUBB/W/D/Q の正確な符号化、各レーンの独立したラップアラウンド、フラグ保持、512 ビットの全レジスタを検証します。標準的な x64 即値 IMUL は符号拡張した imm8/imm32 と独立した四つの未定義フラグに結び付けます。メモリ、MMX/VEX、バイト列とデコード情報の不一致には個別の受理証明が必要です。`ArchitecturalChoiceSourcePackedArithmeticAndImmediateProducts` は両 C 経路を O0/O2 と ASan/UBSan で実行し、入力枯渇や不一致時に命令の出力とカーソルが未確定であることを確認します。
+
+`X86PackedSelectionAudit` は正規のレジスタ形式 PSHUFD、PCMPEQD、PAND、PACKSSDW/PACKSSWB、PUNPCKLQDQ、MOVMSKPD を検証します。256 通りのシャッフル制御、符号付き飽和境界、部分一致、レジスタの別名、全ベクトルレジスタとフラグの保持を対象とします。従来のメモリ PAND は読み出しや宛先更新の前に [Intel のアラインメント要件](https://cdrdv2-public.intel.com/671436/253665-sdm-vol-1.pdf)を保持します。`X86LegacyAlignedMove.PackedAnd*` はアドレスの折り返し、明示的な FS/GS ベース、利用不能なメモリ、失敗時の状態保持を検証します。選択値ソースの例は ASan/UBSan 下の O0/O2 で両 C 経路を実行し、動的な整列チェックを保持します。不透明なプロセッサ状態の認証ではありません。
+
+`InterpreterMachineRegionSourceTest.SegmentedChoiceSource*` は明示的な FS/GS 基底を両 C 経路、O0/O2、ASan/UBSan で実行します。独立したバイト期待値で全状態、重複メモリと戻り先、アドレスの折り返し、照会と選択記録の予約、不変の記録列を比較します。認証、V1、操作予算、未対応状態の拒否も確認します。`NeverDInterpreterMachineStateTests` を生環境、固定イメージ、継続ソースのテストと実行します。これらの自作プログラムはネイティブカーネル実行を保証しません。
+
+`X86NativeStateAudit.CR4*` は、受理する CR4 転送の 48 エンコーディングと、バイト列とデコード情報が一致しない 34 組を検証します。6 個の算術フラグの未定義値、既存のネイティブ組み込み操作の維持、隠れた状態の保存証明を付与しないことを確認します。`CR4FlagCoverageDoesNotAuthorizeMachineRegionExecution` は制御状態契約なしのソース復元を拒否します。所有する命令バイト列をデコードして IR に変換するだけで、特権命令は実行しません。
+
+`PageGlobal*` は未知の上位ビット、両分岐、読み書き関係、禁止する 63 ビットの変更、他の状態の保持、不正オペランド、予算と環境識別を検証します。`NeverDInterpreterSpecializationTests`、`NeverDInterpreterMachineStateTests`、`NeverDLowIRRefinementTests`、`NeverDInterpreterLLVMRefinementTests` を実行してください。値モデルの検証であり、特権命令は実行しません。
+
+`NeverDInterpreterMachineStateTests` の `KernelPageGlobalSource*` は HighC/LLVMC、O0/O2、ASan/UBSan で全状態、戻りスタック、CR4、全記録不足・不一致、カーネル POPFQ/CLI/STI を検証します。ドメイン、旧配置、予算の拒否も確認し、生成されたスカラー C のみを実行します。
+
+`AtomicSourceRequiresAnUnmodifiedSupportedReceipt` は欠落・改変された証跡と未対応の CMPXCHG を拒否します。`ScalarAtomicsRetainTransactionsAndPhysicalState` は独立した状態・フラグ・バイトの期待値で 1/2/4/8 バイトの XCHG、LOCK XADD、非整列メモリ、戻りアドレスとの別名を検証します。両 C 経路をユーザー／カーネル状態で O0/O2、ASan/UBSan 実行します。`NeverDInterpreterMachineStateTests` と生環境、特殊化、継続ソース、ソースバックエンドのテストを実行してください。競合や障害動作の認証ではありません。
+
+`InterpreterSpecialization.AlignmentProducersPrecedeWideGuardContexts` / `RuntimeValidityStillRefinesAnEnclosingGuard`: 整列の回帰テストは独立した算術オラクルと比較し、両方の整列経路、下位ビットの全剰余、幅広カウント、閾値の両側、符号なしの折り返しを検査します。不整列ループの拒否、生成元の精密化が停滞した後の外側条件の精密化、および操作・クエリ予算のちょうど十分な値と一つ不足する値も確認します。通常のソース ABI 復元やネイティブ障害動作の証明ではありません。
+
+ReadPrefetch 回帰は正確なバイトとオペランド情報、独立した未定義出力・不透明状態の証跡、不正なスカラー契約と改変した証跡を検査します。両 C 経路は四種類と反復ヒントを保持し、O0/O2 とサニタイザーで独立した全状態・メモリ期待値と比較します。未マップアドレス、32 ビットアドレスの折返し、物理的リターンを含み、キャッシュ配置や時間は比較対象外です。
+
+StreamingStore 回帰は命令バイト、オペランド情報、整列、書込み範囲全体、不正な契約、改変した証跡を検査します。物理的な戻りアドレスを上書きするストアを含め、全状態とメモリを独立した期待値と比較します。両 C 経路をユーザー・カーネル状態プロファイルで O0/O2 とサニタイザー付きで実行します。ネイティブカーネル、並行実行、故障時の実行は認証しません。
+
+`InterpreterSpecialization.RepeatedCounts*`; `InterpreterMachineRegionSourceTest.FiniteRepeatedCountsPreserveFullState`; `InterpreterMachineRegionSourceTest.FiniteCopyAndPaddingPreserveLoopState`.
+これらは完全な分岐、異なる先行値域、命令内書き込み、探索無効、不完全な値域、必要量ちょうどと一不足の予算を検査します。両 C 経路を O0/O2 と ASan/UBSan で実行し、独立した全状態・バイト比較で上限付き計数、両方向、重複、ゼロ回の無効ポインタ、早期終端、ループのゼロ埋めを検証します。通常 ABI の復元証明ではありません。

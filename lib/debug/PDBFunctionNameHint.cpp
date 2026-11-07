@@ -6,6 +6,9 @@
 
 #include "neverd/debug/PDBFunctionNameHint.h"
 
+#include "PDBIdentity.h"
+#include "PDBSectionIdentity.h"
+
 #include "neverd/Limits.h"
 #include "neverd/debug/PDBLoader.h"
 #include "neverd/support/FilePath.h"
@@ -31,7 +34,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstring>
 #include <limits>
 #include <memory>
 #include <vector>
@@ -62,19 +64,20 @@ bool sectionsMatch(const llvm::object::COFFObjectFile &Object,
   const auto Recorded = DBI.getSectionHeaders();
   if (Recorded.size() != Object.getNumberOfSections())
     return false;
+  const size_t FirstMovable =
+      pdb_loader_detail::firstPostLinkSection(Recorded.size(), [&](size_t I) {
+        return pdb_loader_detail::sectionIdentity(Recorded[I]).Name;
+      });
   Sections.reserve(Recorded.size());
   for (const llvm::object::SectionRef &Ref : Object.sections()) {
     const unsigned ID = Object.getSectionID(Ref);
     if (ID != Sections.size() + 1 || ID > Recorded.size())
       return false;
     const auto *Actual = Object.getCOFFSection(Ref);
-    const auto &Expected = Recorded[ID - 1];
-    if (std::memcmp(Actual->Name, Expected.Name, llvm::COFF::NameSize) != 0 ||
-        Actual->VirtualAddress != Expected.VirtualAddress ||
-        Actual->VirtualSize != Expected.VirtualSize ||
-        Actual->PointerToRawData != Expected.PointerToRawData ||
-        Actual->SizeOfRawData != Expected.SizeOfRawData ||
-        Actual->Characteristics != Expected.Characteristics)
+    if (!pdb_loader_detail::sectionIdentityMatches(
+            pdb_loader_detail::sectionIdentity(*Actual),
+            pdb_loader_detail::sectionIdentity(Recorded[ID - 1]),
+            ID - 1 >= FirstMovable))
       return false;
     Sections.push_back(Actual);
   }
@@ -158,21 +161,23 @@ std::optional<va_t> resolve(const std::filesystem::path &BinaryPath,
     llvm::consumeError(InfoOr.takeError());
     return std::nullopt;
   }
-  const auto &Info = *InfoOr;
-  const auto GUID = Info.getGuid();
-  if (Info.getAge() != PEInfo->PDB70.Age ||
-      std::memcmp(GUID.Guid, PEInfo->PDB70.Signature,
-                  sizeof(PEInfo->PDB70.Signature)) != 0)
-    return std::nullopt;
-
   auto DBIOr = PDB.getPDBDbiStream();
   if (!DBIOr) {
     llvm::consumeError(DBIOr.takeError());
     return std::nullopt;
   }
   const auto &DBI = *DBIOr;
-  if (DBI.getAge() != Info.getAge() ||
-      !machineMatches(Object.getMachine(), DBI.getMachineType()))
+  PDBBuildIdentity Expected;
+  std::copy_n(PEInfo->PDB70.Signature, Expected.Guid.size(),
+              Expected.Guid.begin());
+  Expected.Age = PEInfo->PDB70.Age;
+  auto IdentityOr =
+      pdb_loader_detail::readRSDSBuildIdentity(*InfoOr, DBI, &Expected);
+  if (!IdentityOr) {
+    llvm::consumeError(IdentityOr.takeError());
+    return std::nullopt;
+  }
+  if (!machineMatches(Object.getMachine(), DBI.getMachineType()))
     return std::nullopt;
   std::vector<const llvm::object::coff_section *> Sections;
   if (!sectionsMatch(Object, DBI, Sections))

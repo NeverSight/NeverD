@@ -182,6 +182,17 @@ revision checks and cooperative cancellation contract as source inspection.
 
 `comparison_dataflow` pages retained SSA collections (`side`, `kind` of
 `functions`, `nodes` or `blocks`, `address` for a graph, `offset`, `limit`).
+`comparison_dataflow` additionally accepts `kind:"accesses"` with a function
+`address` and `call` node ID under `med-ssa-v2`. It returns paged reads/writes
+whose SSA address expression equals a recovered argument, including zero-based
+`argument`, `access_bytes` and a same-width COPY/PHI `return_operand_path`.
+`observation_profile` is `med-ssa-argument-accesses-v1`. `inspection_complete`,
+`state`, `work` and original `gaps` distinguish observation scope from memory or
+callee-effect proof. Execution order is unassessed. Optional `max_records`,
+`max_work`, `timeout_ms` and `refresh` govern the function index, shared across
+call selections and pages. This dataflow operation supports cancellation; stopped
+pages are retained until an explicit refresh. No automatic pairing is changed.
+
 `comparison_slice` accepts `side`, `address`, `seeds` (node IDs), `direction`
 (`backward`/`forward`), `control`, `timeout_ms`, `offset`, `limit`, and optional
 `refresh`. Both require `dataflow:true` or a bounded settings object at start.
@@ -655,6 +666,7 @@ diagnostic; fixed-image authentication still requires its stricter evidence.
 | `disasm` | `{address,limit:128}`; limit 1–512 instructions. Returns `{items,address,next_address:hex|null,complete}`. Rows `{address,size,bytes,mnemonic,operands,comment}` may include backend decode status. `next_address` is computed from the last decoded instruction's size, with overflow checks. A full page's successor is a continuation candidate; an empty following page means decoding ended. |
 | `bytes` | `{address,size:256,text_encoding?}`; size 1–65536. Returns `{address,encoding:"hex",data,bytes_read,requested_size,mapping_status,next_address}`. Status is `mapped`, `partial`, or `unmapped_or_unmaterialized`; reading stops at the first unmapped byte. The legacy C ABI cannot distinguish BSS from unmapped bytes. Initial v1 carries bounded hex data in JSON, not separate binary attachments. With `text_encoding` (a `string_encodings` name) the reply adds `cells`, one per byte read, from the engine's `neverd_decode_text_json`: a character's text at its first byte, `""` at its later bytes, and `null` where no character is shown. The bytes decode from the first one, so a character cut by the range's ends shows as `null`. An unknown name is `unsupported_encoding`; an engine without the decoder returns `unsupported`. |
 | `analyze` | Computes the synchronous full-image pipeline once, publishes a new revision, invalidates adapter caches, and returns metadata. The listing then reads the jump tables the pipeline recovered (`neverd_switches_json`): a table is named `jpt_<dispatch>` and, in the form the engine verified, laid out a slot per line; its load and dispatch are commented, and every target is referred to from the dispatch (`j`) and the table (`o`). No function-level incremental analysis or cooperative cancellation is claimed. |
+| `prepare_call_summaries` | No parameters. Solves the call-register summaries of every function of an x86-64 image once (`neverd_prepare_call_summaries_json`), as a full-image analysis solves them, and returns `{available,ready}`. Later decompiles of the session read them instead of solving the callees each function reaches within fixed depth and lift bounds, so a function's text can change; the worker drops the decompiled text and views it kept. Neither revision nor history changes. |
 | `signatures_load` | `{path,mode:"file"}` loads one `.pat` or library feature `.json`; `mode:"auto"` selects from a signature tree including `features/rules`. Returns `{loaded:true,byte_matches}` and advances the analysis revision. `byte_matches` counts candidates, not renamed functions; library classification requires the SDK's admitted `auto_name`. Invalid packs preserve the previous evidence and revision. Available on read-only images; it does not write annotations or the binary. |
 | `decompile` | `{address,representation:"c",offset:0,limit:512}`; representation `c/llvmc/low/med/high/llvm/source/cpp/rust/go`, line limit 1–2048. Triggers analysis when needed. A known native chunk selects its recovered owner before analysis; `address` in the result is that entry. Explicit entries retain their identity, and unowned addresses retain the ordinary entry request. Returns `{address,representation,text,offset,total_lines,next_offset,complete,mapping_status,provenance_complete,rows,project_id,revision}`. Native Low/Med/High/LLVM/C/LLVMC use the optional bounded C ABI page API when present; other views retain one legacy function representation up to 32 MiB. C pages may also carry `byte_offset,function_identity,library_regions,prelude,recognition_budget_exhausted`. `cpp`, `rust` and `go` spell the HighC page in that language, for an image whose `language.pseudocode` lists it (otherwise `unavailable` with the engine's reason), and `source` in the function's own (C++, Rust, Go or C); they come only from the page API and add `dialect` (`c/cpp/rust/go`, what the page reads in), `unread` (why a declaration is shown as C) and `source_names` (`{begin_byte,end_byte,identifier,symbol,address?}` for each source name on the page, such as `core::fmt::write`, which splitting the text into identifiers would not find whole). A wire code page is capped at 2 MiB. See source mapping below. |
 | `cfg` | `{address}`. Uses the same function-owner selection as `decompile`. Triggers analysis, returns `{name?,entry?,nodes,edges,complete:true}`. Nodes have `{id:string,start,end,insn_count,disasm:[string],address:start,label:start,lines:disasm}`; edges `{from:string,to:string|null,type}`. More than 500 nodes or 2000 edges returns `budget_exceeded`, with no partial graph. |
@@ -899,6 +911,50 @@ never writes sidecars or history. A changed snapshot or racing sidecar is
 `stale_snapshot`; a changed input is `input_changed`. The GUI uses the capability
 only for an idle replica after a confirmed local-name commit and otherwise
 keeps the existing fresh-process restore path.
+
+`analysis_restore` also takes `call_summaries:true`, which the GUI adds to the
+owner's snapshot when the replica advertises `prepare_call_summaries`. The
+replica then discovers the image's functions (`neverd_session_discover_functions`,
+stepped where the engine can), prepares every function a page at a time while
+no request waits, as `open`'s `warm` does, and finally solves the image's call
+summaries, which its later decompiles read (`prepare_call_summaries`).
+Discovering first solves them for the functions the replica keeps listing: a
+later discovery, as its first decompile of a function only discovery finds
+starts, would add functions and retire summaries solved before it. Once they
+are ready, the replica reads ahead, a batch per idle step, the signature bodies
+of the callees its decompiles read (`neverd_prefill_callees_json`), until the
+engine has read them all or its memory for them is full; decompiles print the
+same either way. Heartbeats report it as `background.call_summaries.prefill`:
+`{state, prepared}` with `pending`, `done` or `unavailable`. Heartbeats report the job
+as `background.call_summaries.state`: `pending`, `preparing`, `solving`,
+`ready` or `unavailable`: the engine's first page says it solves none for the
+image (one that is not x86-64), or the solve stopped at the engine's limit. On
+`ready`
+the GUI drops the replica's cached replies and reads the shown source again;
+earlier replies used each function's own callee summaries.
+
+`analysis_restore` also takes `render_ahead:true`, which the GUI adds for the
+first replica of a file opened with idle-time analysis when that replica
+advertises `render_ahead`, views open functions under no source options and no
+worker of the project has ended abnormally. With
+`call_summaries:true`, once the summaries and the read-ahead are done, the
+replica renders each function's engine pages in idle time, smallest function
+first, and keeps them compact, up to a byte limit. A first `decompile` of such a
+function builds its document from those pages without preparing the function,
+as a `decompile` after `analysis_update_names` builds one from a kept document's,
+and answers exactly what asking the engine answers. The pages have a kept
+document's lifetime: a local rename keeps them, and whatever forgets the kept
+documents forgets them and starts the job over. A render cannot be interrupted,
+so the job renders a function only after no request has come for a while, longer
+for a larger function, leaves a function a request took long to prepare prepared
+until the reader has paused for much longer, leaves the largest functions and any
+of unknown size to their visits, and ends after starting over a few times.
+A render reads what the engine knew when it ran, as a kept document does: code
+addresses the functions rendered before it published can make it differ from a
+first visit to that function in a new session. Heartbeats report it as
+`background.render_ahead`: `{state, total, rendered, failed, hits, raw_bytes,
+bytes}` with `pending`, `done` or `full`. A function the job failed to render, or
+has not reached, is decompiled as usual.
 
 Source pages with edit metadata carry `code_names`, half-open UTF-8 spans in
 the complete displayed document. An address target has `kind:"address"`,
@@ -1247,7 +1303,11 @@ same results either way. `background.warm` reports `{state,prepared}`: `off`,
 discarding what it holds) or `unavailable` (an engine or image whose
 decompiles keep no such state, such as one that is not x86-64), and
 `prepared` counts the functions it holds. Every revision change starts the preparation over, since
-the engine may have dropped it.
+the engine may have dropped it. A change of local display names alone drops
+nothing it prepared and starts nothing over. A replica restored with
+`call_summaries:true` adds `call_summaries:{state}`, and one restored with
+`render_ahead:true` adds `render_ahead:{state,...}` (see `analysis_restore`);
+without a listing it has no other background fields.
 
 
 ### Interactive byte and source patches

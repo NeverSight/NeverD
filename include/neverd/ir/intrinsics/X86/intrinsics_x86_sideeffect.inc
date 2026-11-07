@@ -25,6 +25,7 @@ SIDEEFFECT(Intrinsic::Retf);
 SIDEEFFECT(Intrinsic::Iret);
 SIDEEFFECT(Intrinsic::Sysretq);
 SIDEEFFECT(Intrinsic::Sysexitq);
+SIDEEFFECT(Intrinsic::X86Sysenter);
 SIDEEFFECT(Intrinsic::Into);
 SIDEEFFECT(Intrinsic::Ud2);
 SIDEEFFECT(Intrinsic::Hlt);
@@ -129,7 +130,8 @@ SIDEEFFECT(Intrinsic::Scasw);
 SIDEEFFECT(Intrinsic::Scasd);
 SIDEEFFECT(Intrinsic::Scasq);
 SIDEEFFECT(Intrinsic::MaskedStoreB);
-// Legacy MPX / HLE / generic SHA identities retain effects, never implicit NOPs.
+// Legacy MPX / HLE / generic SHA identities retain effects, never implicit
+// NOPs.
 SIDEEFFECT(Intrinsic::BndMk);
 SIDEEFFECT(Intrinsic::BndMov);
 SIDEEFFECT(Intrinsic::BndCl);
@@ -279,6 +281,7 @@ SIDEEFFECT(Intrinsic::X86Sidt16);
 SIDEEFFECT(Intrinsic::X86EncluPending);
 SIDEEFFECT(Intrinsic::X86GetsecPending);
 SIDEEFFECT(Intrinsic::X86EncluBounded);
+SIDEEFFECT(Intrinsic::X64CallRCX);
 SIDEEFFECT(Intrinsic::X86GetsecBounded);
 
 SIDEEFFECT(Intrinsic::X86FourSourceMemory);
@@ -288,3 +291,22 @@ SIDEEFFECT(Intrinsic::X86LegacyRaoAnd);
 SIDEEFFECT(Intrinsic::X86LegacyRaoOr);
 SIDEEFFECT(Intrinsic::X86LegacyRaoXor);
 SIDEEFFECT(Intrinsic::X86LegacyCmpccXadd);
+SIDEEFFECT(Intrinsic::X87Fldenv16);
+SIDEEFFECT(Intrinsic::X87Fnstenv16);
+SIDEEFFECT(Intrinsic::X87Frstor16);
+SIDEEFFECT(Intrinsic::X87Fnsave16);
+SIDEEFFECT(Intrinsic::X86SvmRunContext);
+SIDEEFFECT(Intrinsic::X86KvmVmcall);
+SIDEEFFECT(Intrinsic::X86KvmVmmcall);
+
+SIDEEFFECT(Intrinsic::X86HyperVCall);
+
+#define NEVERD_X86_SNP(Id, ...) SIDEEFFECT(Intrinsic::Id);
+#include "neverd/ir/intrinsics/X86/X86Snp.def"
+#undef NEVERD_X86_SNP
+SIDEEFFECT(Intrinsic::X86SevVmgexit);
+
+SIDEEFFECT(Intrinsic::X86HleState);
+
+SIDEEFFECT(Intrinsic::X86SmmReturnContext);
+SIDEEFFECT(Intrinsic::X86SgxTransferAtContext);

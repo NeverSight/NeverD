@@ -6,24 +6,18 @@
 ///
 /// \file
 /// Dispatches the core x86/x64 integer ALU instructions to the per-family
-/// handlers in X86LiftCore*.cpp.  DIV/IDIV and the bit-test family stay here:
-/// they read the lifter's private cross-instruction state (the CQO/CDQ + DIV
-/// tracking and the target architecture).  Also defines the carry snapshot
-/// helper that ADC/SBB and RCL/RCR share.
+/// handlers in X86LiftCore*.cpp. DIV/IDIV and bit tests retain their shared
+/// mode-dependent width and addressing semantics here. Also defines the carry
+/// snapshot helper that ADC/SBB and RCL/RCR share.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "X86BitTestUndefined.h"
+#include "X86DivisionUndefined.h"
 #include "X86LiftDetail.h"
 
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/X86/X86Lifter.h"
-
-#include "llvm/ADT/StringExtras.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
-
-#define DEBUG_TYPE "neverd-lift-x86"
 
 namespace neverd {
 
@@ -65,137 +59,52 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
   };
   switch (InsnId) {
 
-  case X86_INS_DIV: {
-    if (X86.op_count < 1)
-      break;
-    NdVar Src = operandRead(S, X86.operands[0]);
-    uint16_t Sz = Src.Size;
-    if (Sz == 1) {
-      NdVar Ax = NdVar::reg(x86reg::RAX, 2);
-      NdVar ExtSrc = S.makeTemp(2);
-      S.emit(NdOp::INT_ZEXT, ExtSrc, {Src});
-      NdVar Quot = S.makeTemp(2);
-      NdVar Rem = S.makeTemp(2);
-      RequireDivPrecondition(Ax, Src, X86DivKind::Unsigned);
-      S.emit(NdOp::INT_DIV, Quot, {Ax, ExtSrc});
-      S.emit(NdOp::INT_REM, Rem, {Ax, ExtSrc});
-      NdVar QuotByte = S.makeTemp(1);
-      NdVar RemByte = S.makeTemp(1);
-      S.emit(NdOp::SUBBYTES, QuotByte, {Quot, NdVar::scalar(0, 4)});
-      S.emit(NdOp::SUBBYTES, RemByte, {Rem, NdVar::scalar(0, 4)});
-      NdVar AxResult = S.makeTemp(2);
-      S.emit(NdOp::CONCAT, AxResult, {RemByte, QuotByte});
-      S.emit(NdOp::COPY, NdVar::reg(x86reg::RAX, 2), {AxResult});
-    } else {
-      NdVar Rax = NdVar::reg(x86reg::RAX, Sz);
-      NdVar Rdx = NdVar::reg(x86reg::RDX, Sz);
-
-      bool IsZeroRdx = (LastRdxState == RdxState::Zero && LastRdxSize >= Sz);
-
-      if (IsZeroRdx) {
-        NdVar OrigRax = S.makeTemp(Sz);
-        S.emit(NdOp::COPY, OrigRax, {Rax});
-        NdVar Dividend = S.makeTemp(Sz * 2);
-        S.emit(NdOp::INT_ZEXT, Dividend, {OrigRax});
-        RequireDivPrecondition(Dividend, Src, X86DivKind::Unsigned);
-        S.emit(NdOp::INT_DIV, Rax, {OrigRax, Src});
-        S.emit(NdOp::INT_REM, Rdx, {OrigRax, Src});
-      } else {
-        // The double-width INT_DIV/INT_REM below is recognized by the value
-        // emitter and lowered back to a single `divq` via inline-asm
-        // passthrough (no __udivti3/__umodti3 libcall) — original binary stays
-        // binary.
-        LLVM_DEBUG(if (Sz * 2 > 8) llvm::dbgs()
-                   << "DIV wide fallback: i" << (Sz * 2 * 8)
-                   << " udiv/urem at 0x" << llvm::utohexstr(S.Addr)
-                   << " — emitter lowers to inline-asm div\n");
-        NdVar ExtRAX = S.makeTemp(Sz * 2);
-        NdVar ExtRDX = S.makeTemp(Sz * 2);
-        S.emit(NdOp::INT_ZEXT, ExtRAX, {Rax});
-        S.emit(NdOp::INT_ZEXT, ExtRDX, {Rdx});
-        NdVar HiShifted = S.makeTemp(Sz * 2);
-        S.emit(NdOp::INT_LEFT, HiShifted,
-               {ExtRDX, NdVar::scalar(Sz * 8, Sz * 2)});
-        NdVar Dividend = S.makeTemp(Sz * 2);
-        S.emit(NdOp::INT_OR, Dividend, {HiShifted, ExtRAX});
-        NdVar ExtSrc = S.makeTemp(Sz * 2);
-        S.emit(NdOp::INT_ZEXT, ExtSrc, {Src});
-        NdVar Quot = S.makeTemp(Sz * 2);
-        NdVar Rem = S.makeTemp(Sz * 2);
-        RequireDivPrecondition(Dividend, Src, X86DivKind::Unsigned);
-        S.emit(NdOp::INT_DIV, Quot, {Dividend, ExtSrc});
-        S.emit(NdOp::INT_REM, Rem, {Dividend, ExtSrc});
-        S.emit(NdOp::SUBBYTES, Rax, {Quot, NdVar::scalar(0, 4)});
-        S.emit(NdOp::SUBBYTES, Rdx, {Rem, NdVar::scalar(0, 4)});
-      }
-    }
-    break;
-  }
+  case X86_INS_DIV:
   case X86_INS_IDIV: {
     if (X86.op_count < 1)
       break;
-    NdVar Src = operandRead(S, X86.operands[0]);
-    uint16_t Sz = Src.Size;
+    const bool Signed = InsnId == X86_INS_IDIV;
+    const bool Audited = divisionundefined::form(Insn, TargetArch);
+    const NdVar Src = operandRead(S, X86.operands[0]);
+    const uint16_t Sz = Src.Size;
+    const NdOp Extend = Signed ? NdOp::INT_SEXT : NdOp::INT_ZEXT;
+    NdVar Dividend = NdVar::reg(x86reg::RAX, 2);
+    if (Sz != 1) {
+      // Preserve the actual double-width dividend for every instruction.
+      // Only subsequent dataflow may prove a narrower value; lift-call order
+      // does not establish the incoming DX/EDX/RDX of another instruction.
+      const NdVar ExtRAX = S.makeTemp(Sz * 2);
+      const NdVar ExtRDX = S.makeTemp(Sz * 2);
+      S.emit(NdOp::INT_ZEXT, ExtRAX, {NdVar::reg(x86reg::RAX, Sz)});
+      S.emit(Extend, ExtRDX, {NdVar::reg(x86reg::RDX, Sz)});
+      const NdVar HiShifted = S.makeTemp(Sz * 2);
+      S.emit(NdOp::INT_LEFT, HiShifted,
+             {ExtRDX, NdVar::scalar(Sz * 8, Sz * 2)});
+      Dividend = S.makeTemp(Sz * 2);
+      S.emit(NdOp::INT_OR, Dividend, {HiShifted, ExtRAX});
+    }
+    const NdVar ExtSrc = S.makeTemp(Sz * 2);
+    S.emit(Extend, ExtSrc, {Src});
+    const NdVar Quot = S.makeTemp(Sz * 2), Rem = S.makeTemp(Sz * 2);
+    RequireDivPrecondition(Dividend, Src,
+                           Signed ? X86DivKind::Signed : X86DivKind::Unsigned);
+    S.emit(Signed ? NdOp::INT_SDIV : NdOp::INT_DIV, Quot, {Dividend, ExtSrc});
+    S.emit(Signed ? NdOp::INT_SREM : NdOp::INT_REM, Rem, {Dividend, ExtSrc});
     if (Sz == 1) {
-      NdVar Ax = NdVar::reg(x86reg::RAX, 2);
-      NdVar ExtSrc = S.makeTemp(2);
-      S.emit(NdOp::INT_SEXT, ExtSrc, {Src});
-      NdVar Quot = S.makeTemp(2);
-      NdVar Rem = S.makeTemp(2);
-      RequireDivPrecondition(Ax, Src, X86DivKind::Signed);
-      S.emit(NdOp::INT_SDIV, Quot, {Ax, ExtSrc});
-      S.emit(NdOp::INT_SREM, Rem, {Ax, ExtSrc});
-      NdVar QuotByte = S.makeTemp(1);
-      NdVar RemByte = S.makeTemp(1);
+      const NdVar QuotByte = S.makeTemp(1), RemByte = S.makeTemp(1);
       S.emit(NdOp::SUBBYTES, QuotByte, {Quot, NdVar::scalar(0, 4)});
       S.emit(NdOp::SUBBYTES, RemByte, {Rem, NdVar::scalar(0, 4)});
-      NdVar AxResult = S.makeTemp(2);
+      const NdVar AxResult = S.makeTemp(2);
       S.emit(NdOp::CONCAT, AxResult, {RemByte, QuotByte});
       S.emit(NdOp::COPY, NdVar::reg(x86reg::RAX, 2), {AxResult});
     } else {
-      NdVar Rax = NdVar::reg(x86reg::RAX, Sz);
-      NdVar Rdx = NdVar::reg(x86reg::RDX, Sz);
-
-      bool IsCqoIdiom =
-          (LastRdxState == RdxState::SignExtRAX && LastRdxSize == Sz);
-
-      if (IsCqoIdiom) {
-        NdVar OrigRax = S.makeTemp(Sz);
-        S.emit(NdOp::COPY, OrigRax, {Rax});
-        NdVar Dividend = S.makeTemp(Sz * 2);
-        S.emit(NdOp::INT_SEXT, Dividend, {OrigRax});
-        RequireDivPrecondition(Dividend, Src, X86DivKind::Signed);
-        S.emit(NdOp::INT_SDIV, Rax, {OrigRax, Src});
-        S.emit(NdOp::INT_SREM, Rdx, {OrigRax, Src});
-      } else {
-        // The double-width INT_SDIV/INT_SREM below is recognized by the value
-        // emitter and lowered back to a single `idiv` via inline-asm
-        // passthrough (no __divti3/__modti3 libcall) — original binary stays
-        // binary.
-        LLVM_DEBUG(if (Sz * 2 > 8) llvm::dbgs()
-                   << "IDIV wide fallback: i" << (Sz * 2 * 8)
-                   << " sdiv/srem at 0x" << llvm::utohexstr(S.Addr)
-                   << " — emitter lowers to inline-asm idiv\n");
-        NdVar ExtRAX = S.makeTemp(Sz * 2);
-        NdVar ExtRDX = S.makeTemp(Sz * 2);
-        S.emit(NdOp::INT_ZEXT, ExtRAX, {Rax});
-        S.emit(NdOp::INT_SEXT, ExtRDX, {Rdx});
-        NdVar HiShifted = S.makeTemp(Sz * 2);
-        S.emit(NdOp::INT_LEFT, HiShifted,
-               {ExtRDX, NdVar::scalar(Sz * 8, Sz * 2)});
-        NdVar Dividend = S.makeTemp(Sz * 2);
-        S.emit(NdOp::INT_OR, Dividend, {HiShifted, ExtRAX});
-        NdVar ExtSrc = S.makeTemp(Sz * 2);
-        S.emit(NdOp::INT_SEXT, ExtSrc, {Src});
-        NdVar Quot = S.makeTemp(Sz * 2);
-        NdVar Rem = S.makeTemp(Sz * 2);
-        RequireDivPrecondition(Dividend, Src, X86DivKind::Signed);
-        S.emit(NdOp::INT_SDIV, Quot, {Dividend, ExtSrc});
-        S.emit(NdOp::INT_SREM, Rem, {Dividend, ExtSrc});
-        S.emit(NdOp::SUBBYTES, Rax, {Quot, NdVar::scalar(0, 4)});
-        S.emit(NdOp::SUBBYTES, Rdx, {Rem, NdVar::scalar(0, 4)});
-      }
+      S.emit(NdOp::SUBBYTES, NdVar::reg(x86reg::RAX, Sz),
+             {Quot, NdVar::scalar(0, 4)});
+      S.emit(NdOp::SUBBYTES, NdVar::reg(x86reg::RDX, Sz),
+             {Rem, NdVar::scalar(0, 4)});
     }
+    if (Audited)
+      divisionundefined::record(S);
     break;
   }
 
@@ -223,6 +132,9 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         S.AddressSize == 2 || S.AddressSize == 4 || S.AddressSize == 8
             ? S.AddressSize
             : PtrSz;
+    const bool Locked = X86.prefix[0] == X86_PREFIX_LOCK;
+    if (Locked && !bitundefined::form(Insn, TargetArch))
+      return false;
     bool MemBase = (X86.operands[0].type == X86_OP_MEM);
     bool RegOffset = (X86.operands[1].type == X86_OP_REG);
 
@@ -269,8 +181,9 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
         }
       }
       Base = S.makeTemp(Sz);
-      S.emit(NdOp::LOAD, Base, {ByteAddr}, NdMemoryOrdering::None,
-             LiftState::memoryAddressSpace(X86.operands[0]));
+      if (!Locked)
+        S.emit(NdOp::LOAD, Base, {ByteAddr}, NdMemoryOrdering::None,
+               LiftState::memoryAddressSpace(X86.operands[0]));
     } else {
       Base = operandRead(S, X86.operands[0]);
     }
@@ -278,6 +191,19 @@ bool X86Lifter::liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86) {
     // In-chunk bit position, taken modulo the operand width.
     NdVar Idx = S.makeTemp(Sz);
     S.emit(NdOp::INT_AND, Idx, {IdxRaw, NdVar::scalar(Bits - 1, Sz)});
+
+    if (Locked) {
+      const auto Id = InsnId == X86_INS_BTS   ? Intrinsic::X86LockedBts
+                      : InsnId == X86_INS_BTR ? Intrinsic::X86LockedBtr
+                                              : Intrinsic::X86LockedBtc;
+      // The completed transaction owns both the old bit and the write.
+      // Do not precede it with an unlocked read, even when CF is dead.
+      S.emitIntrinsic(Id, NdVar::reg(x86reg::CF, 1), {ByteAddr, Idx},
+                      NdMemoryOrdering::SequentiallyConsistent,
+                      LiftState::memoryAddressSpace(X86.operands[0]));
+      bitundefined::record(S);
+      break;
+    }
 
     // CF = (Base >> Idx) & 1
     NdVar Shifted = S.makeTemp(Sz);

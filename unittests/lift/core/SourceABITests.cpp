@@ -851,7 +851,8 @@ TEST(SourceABI, DarwinIntegerPairResultRequiresBothReturnRegisters) {
     ASSERT_TRUE(assignDarwinScalarSourceABI(Hint, Architecture, Diagnostic));
     EXPECT_TRUE(Hint.ReturnComponents.empty());
     Hint.Parameters = {{"wide", NdType::makeInt(16)}};
-    EXPECT_FALSE(assignDarwinScalarSourceABI(Hint, Architecture, Diagnostic));
+    EXPECT_EQ(assignDarwinScalarSourceABI(Hint, Architecture, Diagnostic),
+              Architecture == Arch::AArch64);
   }
 }
 

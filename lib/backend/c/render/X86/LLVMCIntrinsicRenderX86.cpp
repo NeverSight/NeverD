@@ -11,23 +11,23 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86DescriptorState.h"
+#include "X86Flags.h"
 #include "X86ScalarSystem.h"
 #include "X86SystemRegister.h"
 
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/c/render/LLVMC/LLVMCIntrinsicRender.h"
-#include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86/X86SystemRegisterAsm.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/ir/intrinsics/X86/X86SegmentRegisters.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/ModRef.h"
 
@@ -36,6 +36,72 @@
 #include <utility>
 
 namespace neverd {
+
+std::optional<InlineAsmRender>
+renderX86FlagsCall(Arch TheArch, const llvm::CallBase &Call,
+                   const std::string &ResultName, bool ResultLive,
+                   const std::vector<std::string> &Args) {
+  const auto *Callee = Call.getCalledFunction();
+  const auto P = Callee ? x86FlagsNative(Callee->getName()) : std::nullopt;
+  if (!P)
+    return std::nullopt;
+  const auto ID = llvm::Intrinsic::lookupIntrinsicID(P->LLVMName);
+  if (!P->supports(TheArch) || !ID || !Callee->isDeclaration() ||
+      Callee->getIntrinsicID() != ID || Call.getNumOperandBundles() ||
+      Call.getFunctionType()->isVarArg() ||
+      Call.getCallingConv() != llvm::CallingConv::C || Call.doesNotReturn() ||
+      Call.arg_size() != unsigned(P->write()) ||
+      Args.size() != Call.arg_size() ||
+      (P->write()
+           ? !Call.getType()->isVoidTy() ||
+                 !Call.getArgOperand(0)->getType()->isIntegerTy(8 * P->Bytes)
+           : !Call.getType()->isIntegerTy(8 * P->Bytes) ||
+                 (ResultLive && ResultName.empty())) ||
+      Call.getMemoryEffects() !=
+          llvm::Intrinsic::getAttributes(Call.getContext(), ID,
+                                         Call.getFunctionType())
+              .getMemoryEffects() ||
+      Callee->hasFnAttribute(llvm::Attribute::Speculatable) ||
+      Call.hasFnAttr(llvm::Attribute::Speculatable))
+    throw std::invalid_argument("unsupported x86 FLAGS call contract");
+  return InlineAsmRender{(!P->write() && ResultLive ? ResultName + " = " : "") +
+                             renderX86FlagsExpression(*P, Args) + ";\n",
+                         P->Bytes != 2};
+}
+
+std::optional<InlineAsmRender>
+renderX86TimestampCall(Arch TheArch, const llvm::CallBase &Call,
+                       const std::string &ResultName, bool ResultLive) {
+  const auto *Callee = Call.getCalledFunction();
+  if (!Callee || Callee->getName() != "llvm.x86.rdtscp")
+    return std::nullopt;
+  const auto *Pair = llvm::dyn_cast<llvm::StructType>(Call.getType());
+  const auto Attributes = llvm::Intrinsic::getAttributes(
+      Call.getContext(), llvm::Intrinsic::x86_rdtscp,
+      Callee->getFunctionType());
+  if ((TheArch != Arch::X86 && TheArch != Arch::X64) ||
+      !Callee->isIntrinsic() || !Callee->isDeclaration() ||
+      Callee->getIntrinsicID() != llvm::Intrinsic::x86_rdtscp ||
+      !Call.arg_empty() || Call.getNumOperandBundles() ||
+      Call.getFunctionType()->isVarArg() ||
+      Call.getCallingConv() != llvm::CallingConv::C || Call.doesNotReturn() ||
+      Call.getMemoryEffects() != Attributes.getMemoryEffects() ||
+      Callee->hasFnAttribute(llvm::Attribute::Speculatable) ||
+      Call.hasFnAttr(llvm::Attribute::Speculatable) || !Pair ||
+      Pair->isPacked() || Pair->hasName() || Pair->getNumElements() != 2 ||
+      !Pair->getElementType(0)->isIntegerTy(64) ||
+      !Pair->getElementType(1)->isIntegerTy(32) ||
+      (ResultLive && ResultName.empty()))
+    throw std::invalid_argument("unsupported x86 RDTSCP call contract");
+  if (ResultLive)
+    return InlineAsmRender{ResultName + ".field_0 = __rdtscp(&" + ResultName +
+                               ".field_1);\n",
+                           true};
+  return InlineAsmRender{
+      "do { unsigned int neverd_tsc_aux; (void)__rdtscp(&neverd_tsc_aux); } "
+      "while (0);\n",
+      true};
+}
 
 namespace {
 
@@ -641,16 +707,19 @@ InlineAsmRender renderX86InlineAsm(Arch TheArch, const std::string &AsmStr,
     throw std::runtime_error("unsupported MXCSR inline assembly contract");
   }
 
-  // PUSHF/POPF of the whole EFLAGS image, as MedLLVM emits them.
-  if (llvm::StringRef(AsmStr).starts_with("pushf") && Args.empty()) {
-    std::string Result;
-    if (ResultLive && !ResultName.empty())
-      Result = ResultName + " = ";
-    return {Result + "__readeflags();\n", true};
-  }
-  if ((AsmStr == "pushq $0\n\tpopfq" || AsmStr == "pushl $0\n\tpopfl") &&
-      Args.size() == 1)
-    return {"__writeeflags(" + Args[0] + ");\n", true};
+  // Old SDKs retain the same exact-width fallback as the native calls.
+  for (const auto &P : X86FlagsNativeInventory)
+    if (AsmStr == P.Assembly) {
+      if (!P.supports(TheArch) || IsStructReturn ||
+          Args.size() != unsigned(P.write()) ||
+          (ResultLive && (P.write() || ResultName.empty())))
+        throw std::invalid_argument("unsupported x86 FLAGS assembly contract");
+      return {(!P.write() && ResultLive && !ResultName.empty()
+                   ? ResultName + " = "
+                   : "") +
+                  renderX86FlagsExpression(P, Args) + ";\n",
+              P.Bytes != 2};
+    }
 
   if (Mnemonic == "cpuid") {
     if (AsmStr != "cpuid" || !IsStructReturn || ResultName.empty() ||
@@ -681,28 +750,6 @@ InlineAsmRender renderX86InlineAsm(Arch TheArch, const std::string &AsmStr,
       llvm::StringRef(AsmStr).contains("%dr"))
     throw std::invalid_argument(
         "x86 system register assembly needs a checked call");
-
-  {
-    llvm::StringRef Text(AsmStr);
-    if (Text.consume_front("mov ")) {
-      auto [First, Second] = Text.split(',');
-      First = First.trim();
-      Second = Second.trim();
-      const bool Read = Second == "$0";
-      const llvm::StringRef Reg = Read ? First : Second;
-      // A segment selector move (`mov %cs, $0` / `mov ${0:w}, %ds`).
-      llvm::StringRef Segment = Reg;
-      if (Segment.consume_front("%") && x86SegmentRegisterNamed(Segment) &&
-          (Read || (First == "${0:w}" && Args.size() == 1))) {
-        if (!Read)
-          return {x86SegmentWriteText(Segment, Args[0]) + ";\n", false};
-        std::string Result;
-        if (ResultLive && !ResultName.empty())
-          Result = ResultName + " = ";
-        return {Result + x86SegmentReadText(Segment) + ";\n", false};
-      }
-    }
-  }
 
   const char *X86C = lookupX86AsmToC(AsmStr.c_str());
   if (!X86C)

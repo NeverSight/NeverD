@@ -4,12 +4,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/analysis/core/RawEnvironment.h"
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/BinaryInterpreterSpecialization.h"
 #include "neverd/analysis/InterpreterLLVMRefinement.h"
 #include "neverd/analysis/InterpreterMachineState.h"
 #include "neverd/ir/low/LowRawEnvironment.h"
+#include "neverd/ir/low/LowUndefinedEffects.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"

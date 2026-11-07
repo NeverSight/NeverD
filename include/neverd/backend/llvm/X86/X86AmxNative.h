@@ -16,6 +16,10 @@
 #include "neverd/backend/llvm/X86/X86NativeMemoryAddress.h"
 #include "neverd/ir/intrinsics/X86/X86AmxState.h"
 
+#if __has_include("llvm/IR/X86AMXNative.h")
+#include "llvm/IR/X86AMXNative.h"
+#endif
+
 #include <array>
 #include <optional>
 #include <string>
@@ -23,6 +27,13 @@
 
 namespace neverd {
 inline constexpr unsigned X86AmxNativeStackReference = X86NativeStackReference;
+constexpr bool x86AmxNativeStackMemoryIsAvailable() {
+#if defined(LLVM_X86_AMX_STACK_MEMORY) && LLVM_X86_AMX_STACK_MEMORY >= 1
+  return true;
+#else
+  return false;
+#endif
+}
 inline std::string x86AmxNativeSuffix(uint32_t D) {
   constexpr std::array<const char *, unsigned(X86AmxOp::Count)> Names = {
       "ldtilecfg",       "sttilecfg",       "tilerelease",   "tilezero",

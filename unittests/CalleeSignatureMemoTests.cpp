@@ -15,6 +15,8 @@
 #include "PipelineCallAbiDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/libc/LibCNames.h"
+#include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include <iterator>
@@ -22,6 +24,36 @@
 #include <utility>
 
 namespace {
+
+TEST(CalleeSignatureMemo, NoReturnNamesFollowTheAdoptedImage) {
+  using namespace neverd;
+  BinaryImage Image, Other;
+  Image.Imports.push_back({"runtime", "abort", 0, 0x3000});
+  Other.Imports.push_back({"runtime", "warn", 0, 0x3000});
+  PipelineResult First, Second;
+  Second.CallEntryArgumentCounts[0x4000] = 2;
+  OmittedCalleeMemo Memo;
+  Memo.adopt(Image, First);
+  const auto *Names = &Memo.noReturnTargets();
+  EXPECT_TRUE(Names->contains(Image, 0x3000));
+  EXPECT_FALSE(Names->contains(Image, 0x4000));
+  // Different selections' argument facts do not change immutable names.
+  Memo.adopt(Image, Second);
+  EXPECT_EQ(&Memo.noReturnTargets(), Names);
+  EXPECT_TRUE(Memo.noReturnTargets().contains(Image, 0x3000));
+  // Equal addresses in another image cannot inherit the first image's fact.
+  Memo.adopt(Other, Second);
+  EXPECT_FALSE(Memo.noReturnTargets().contains(Other, 0x3000));
+  // A changed symbol inventory rebuilds the name index along with bodies.
+  Symbol Added;
+  Added.Addr = 0x4000;
+  Added.Name = "abort";
+  Added.IsFunc = true;
+  Other.Symbols.push_back(std::move(Added));
+  Memo.adopt(Other, Second);
+  EXPECT_TRUE(Memo.noReturnTargets().contains(Other, 0x4000));
+  EXPECT_FALSE(Memo.noReturnTargets().contains(Other, 0x3000));
+}
 
 TEST(CalleeSignatureMemo, AKeptBodyServesWhileTheSummariesItReadHold) {
   // A callee body kept from one run serves another whose call summaries read
@@ -121,15 +153,15 @@ TEST(CalleeSignatureMemo, ASourceProjectionKeepsTheCompleteReadSet) {
   Source.CallUnreadGPRs[0x1000] = 0x10;
   Source.CallEntryIntegerArguments[0x1000].Parameters = {
       {SourceABICarrierKind::IntegerRegister, 8, 0, 8}};
-  Source.OmittedCalleeIntegerArguments =
-      std::make_shared<const decltype(Source.CallEntryIntegerArguments)>(
-          Source.CallEntryIntegerArguments);
+  Source.OmittedCalleeIntegerArguments = std::make_shared<
+      decltype(Source.OmittedCalleeIntegerArguments)::element_type>(
+      Source.CallEntryIntegerArguments.get());
   Source.CallEntryIntegerArguments.clear();
   Source.CallEntryFloatingArguments[0x2000].ParameterBytes = {8, 4};
   Source.CallEntryFloatingArguments[0x2000].ReturnBytes = 8;
-  Source.OmittedCalleeFloatingArguments =
-      std::make_shared<const decltype(Source.CallEntryFloatingArguments)>(
-          Source.CallEntryFloatingArguments);
+  Source.OmittedCalleeFloatingArguments = std::make_shared<
+      decltype(Source.OmittedCalleeFloatingArguments)::element_type>(
+      Source.CallEntryFloatingArguments.get());
   Source.CallEntryFloatingArguments.clear();
   Source.CallEntryVariadicArguments[0x2000] = {8, 4};
   Source.CallEntryStackArgs[0x2000] = 2;

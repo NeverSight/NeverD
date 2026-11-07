@@ -5,15 +5,18 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// i386 CDECL and register calling-convention parameter recovery.
+/// i386 CDECL and register calling-convention parameter recovery, and the
+/// System V x86-64 vector parameters only a variadic call reads.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -32,7 +35,10 @@ namespace neverd {
 // i386 CDECL stack-passed parameter detection
 //===----------------------------------------------------------------------===//
 
-void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
+void med_calling_conv_detail::detectCdeclStackParams(MedFunc &Func,
+                                                     Arch TargetArch,
+                                                     BinaryFormat Format,
+                                                     const BinaryImage *Image) {
   // i386 passes stack arguments at [esp_entry + 4 + 4*i] (the return address
   // occupies [esp_entry + 0]).  Recover those incoming-stack loads as function
   // parameters AND rewrite each load to read its parameter, so the lifted
@@ -263,8 +269,7 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops)
       if (auto Read = med_calling_conv_detail::stackMemoryRead(Op))
-        if (auto Off = Read->AddressInput == 1 ? rawStackArgOffset(Op.Inputs[1])
-                                               : stackArgOffset(Op.Inputs[0])) {
+        if (auto Off = rawStackArgOffset(Op.Inputs[Read->AddressInput])) {
           Offsets.insert(4 + ((*Off - 4) / 4) * 4);
           int LastSlot = static_cast<int>((*Off - 4 + Read->Bytes - 1) / 4);
           MaxIdx = std::max(MaxIdx, LastSlot);
@@ -329,10 +334,6 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
   std::set<int64_t> MutableArgOffsets;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops) {
-      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 1 &&
-          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
-        if (auto Off = stackArgOffset(Op.Inputs[0]))
-          MutableArgOffsets.insert(*Off); // direct write to the home slot
       // The stack address can thread through these value-preserving operations
       // before reaching its real use.  They are not escapes themselves; keep
       // this list in sync with traceOff above.  In particular, i386 address
@@ -364,8 +365,11 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
       }
     }
 
-  med_calling_conv_detail::preserveFPStackHomes(Func, 4, 4, rawStackArgOffset,
-                                                MutableArgOffsets);
+  med_calling_conv_detail::preserveCallStackHomes(
+      Func, TargetArch, Format, Image, 4, 4, rawStackArgOffset,
+      MutableArgOffsets);
+  med_calling_conv_detail::preserveStackReadHomes(Func, 4, 4, rawStackArgOffset,
+                                                  MutableArgOffsets);
 
   // The home slot of each mutable parameter is [frame_end + Off] (the entry-SP
   // offset equals the frame_end offset).  Record it so the emitter seeds that
@@ -471,6 +475,60 @@ void detectCdeclStackParams(MedFunc &Func, Arch TargetArch) {
       Func, TargetArch, 4, 4, BaseIdx, rawStackArgOffset, MutableArgOffsets);
 }
 
+//===----------------------------------------------------------------------===//
+// System V x86-64 vector parameters only a variadic call reads
+//===----------------------------------------------------------------------===//
+
+void detectSummaryVectorParams(MedFunc &Func, const TargetRegInfo &TRI,
+                               const GPRReadWidths &Summary, Arch TargetArch,
+                               BinaryFormat Fmt) {
+  // Every caller passes the vector argument registers this function's
+  // entry-read summary lists (LowToMed).  One the body reads, if only as an
+  // operand of a call it passes the register to, has an entry copy that
+  // detectFPParams follows.  A call to a variadic function that saves the
+  // vector registers for va_arg has no such operand: it passes the doubles
+  // its AL counts, which the summary reads (RegisterStep::VectorCount), a
+  // register this function only passes on included.  `long gd(double x)
+  // {return logv("y", x);}` is `lea rdi; mov al, 1; jmp logv`.  Such a
+  // register is the double parameter it carries, as a register the summary
+  // lists that the body never reads still holds its integer parameter's
+  // position (detectRegisterParams).
+  if (Func.Blocks.empty())
+    return;
+  auto CopiedAtEntry = [&](uint64_t Register) {
+    for (const MedOp &Op : Func.Blocks.front().Ops) {
+      if (Op.Opcode != NdOp::COPY)
+        return false;
+      if (med_calling_conv_detail::isEntryLiveInCopy(Op, Register))
+        return true;
+    }
+    return false;
+  };
+  const auto VectorRegs = TRI.floatingParamRegs(Fmt);
+  for (size_t K = 0; K < VectorRegs.size() && K < kX64VectorArgumentFamilies;
+       ++K) {
+    const uint64_t Register = VectorRegs[K];
+    const uint8_t Width = Summary[kX64VectorFamilyBase + K];
+    if (!Width || CopiedAtEntry(Register) ||
+        llvm::any_of(Func.Params,
+                     [&](const MedVar &P) { return P.RegOff == Register; }))
+      continue;
+    MedVar Param;
+    Param.Kind = MedVar::Param;
+    Param.Id = -1;
+    Param.Size = TRI.FPABIRegWidth;
+    Param.RegOff = Register;
+    Param.TheArch = TargetArch;
+    // The floating parameters follow the integer ones in register order.
+    auto At = llvm::find_if(Func.Params, [&](const MedVar &P) {
+      return TRI.isFPArgReg(P.RegOff, Fmt) && P.RegOff > Register;
+    });
+    Func.Params.insert(At, Param);
+    if (Width == sizeof(float) || Width == sizeof(double))
+      Func.FPParamScalarBytes[Register] = Width;
+  }
+}
+
 namespace med_calling_conv_detail {
 
 std::optional<StackMemoryRead> stackMemoryRead(const MedOp &Op) {
@@ -511,7 +569,7 @@ std::optional<StackMemoryRead> stackMemoryRead(const MedOp &Op) {
   return StackMemoryRead{1, Bytes, Scalar};
 }
 
-void preserveFPStackHomes(
+void preserveStackReadHomes(
     const MedFunc &Func, int64_t Base, unsigned Slot,
     llvm::function_ref<std::optional<int64_t>(const MedVar &)> Trace,
     std::set<int64_t> &MutableSlots) {
@@ -522,8 +580,17 @@ void preserveFPStackHomes(
   llvm::SmallVector<std::pair<int64_t, int64_t>, 8> DependentRanges;
   for (const auto &Block : Func.Blocks)
     for (const auto &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+        if (const auto Offset = Trace(Op.Inputs[0])) {
+          const int64_t First = Base + ((*Offset - Base) / Slot) * Slot;
+          const int64_t Last =
+              Base + ((*Offset - Base + Op.Inputs[1].Size - 1) / Slot) * Slot;
+          for (int64_t Home = First; Home <= Last; Home += Slot)
+            MutableSlots.insert(Home);
+        }
       const auto Read = stackMemoryRead(Op);
-      if (!Read || Read->AddressInput != 1)
+      if (!Read)
         continue;
       const auto Offset = Trace(Op.Inputs[Read->AddressInput]);
       if (!Offset)
@@ -534,7 +601,10 @@ void preserveFPStackHomes(
       const unsigned ByteOffset = *Offset - First;
       const bool Pair = ByteOffset == 0 && Slot == 4 && Read->Bytes == 8;
       const bool Keep =
-          !Read->ScalarFP || (!Pair && ByteOffset + Read->Bytes > Slot);
+          Op.MemoryOrdering != NdMemoryOrdering::None ||
+          (Read->AddressInput == 1
+               ? !Read->ScalarFP || (!Pair && ByteOffset + Read->Bytes > Slot)
+               : ByteOffset != 0 && ByteOffset + Read->Bytes > Slot);
       if (Keep) {
         for (int64_t Home = First; Home <= Last; Home += Slot)
           MutableSlots.insert(Home);
@@ -695,7 +765,9 @@ void recoverFPStackReads(
 /// copied from it) is consumed ONLY by those scratch idioms and never as a
 /// genuine value, so it must not be recovered as a parameter (doing so injects
 /// a phantom leading argument that shifts every real stack argument).
-bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
+static bool liveInOnlyFeedsScratchImpl(const MedFunc &Func,
+                                       uint64_t ParamRegOff,
+                                       bool IgnoreStoredValues) {
   if (Func.Blocks.empty())
     return false;
 
@@ -857,6 +929,13 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
     if (!HasTaint)
       return true;
 
+    // When looking outside the ordinary argument registers, saving an
+    // incoming value is not enough to call it an argument. A separate value
+    // use must establish it; the address of a store is still such a use.
+    if (IgnoreStoredValues && Op.Opcode == NdOp::STORE && Op.NumInputs == 2 &&
+        InputMasks[0] == 0)
+      return true;
+
     // BSR/BSF's old-destination operand is architecturally undefined when
     // selected.  It must not make a scratch destination into an argument.
     if (isBsrBsfPreserve(Op, 1)) {
@@ -967,9 +1046,14 @@ bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
   return true; // all surviving incoming lanes feed scratch reconstruction only
 }
 
-bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff) {
+bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
+  return liveInOnlyFeedsScratchImpl(Func, ParamRegOff, false);
+}
+
+static bool liveInReachesUse(const MedFunc &Func, uint64_t RegOff,
+                             bool IncludeReturns, bool IgnoreStoredValues) {
   if (Func.Blocks.empty())
-    return true;
+    return !IgnoreStoredValues;
   llvm::SmallVector<MedVar, 2> Seeds;
   for (const MedOp &Op : Func.Blocks.front().Ops) {
     if (Op.Opcode != NdOp::COPY)
@@ -981,7 +1065,7 @@ bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff) {
       Seeds.push_back(Op.Inputs[0]);
   }
   if (Seeds.empty())
-    return true;
+    return !IgnoreStoredValues;
   // The operations that carry the value's bytes without reading them.
   auto Carries = [](const MedOp &Op) {
     switch (Op.Opcode) {
@@ -1003,7 +1087,7 @@ bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff) {
         continue;
       // A return reads the integer return register whatever the function
       // returns (a float in XMM0 leaves EAX untouched).
-      if (Op.Opcode == NdOp::RETURN)
+      if (!IncludeReturns && Op.Opcode == NdOp::RETURN)
         continue;
       // A push stores at the stack pointer itself; a spill to a frame slot,
       // read back later, is a use.
@@ -1012,10 +1096,40 @@ bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff) {
                         Op.Inputs[0].RegOff ==
                             getTargetRegInfo(Op.Inputs[0].TheArch).StackPointer;
       for (unsigned I = 0; I < Op.NumInputs; ++I)
-        if (containsValue(Reached, Op.Inputs[I]) && !(Push && I == 1))
+        if (containsValue(Reached, Op.Inputs[I]) && !(Push && I == 1) &&
+            !(IgnoreStoredValues && Op.Opcode == NdOp::STORE && I == 1))
           return true;
     }
   return false;
+}
+
+bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff) {
+  return liveInReachesUse(Func, RegOff, false, false);
+}
+
+std::vector<uint64_t> additionalI386ParameterRegisters(const MedFunc &Func) {
+  std::vector<uint64_t> Registers;
+  if (Func.Blocks.empty())
+    return Registers;
+  for (uint64_t Register : i386NonstandardArgumentRegisters()) {
+    // Compilers can give private callees inputs in normally preserved
+    // registers. Keep that exact machine carrier in the recovered order;
+    // this does not declare an external platform calling convention.
+    if (llvm::none_of(
+            Func.Blocks.front().Ops,
+            [&](const MedOp &Op) { return isEntryLiveInCopy(Op, Register); }) ||
+        !liveInReachesUse(Func, Register, true, true) ||
+        liveInOnlyFeedsScratchImpl(Func, Register, true))
+      continue;
+    Registers.push_back(Register);
+  }
+  return Registers;
+}
+
+llvm::ArrayRef<uint64_t> i386NonstandardArgumentRegisters() {
+  static constexpr uint64_t Registers[] = {x86reg::RBX, x86reg::RSI,
+                                           x86reg::RDI};
+  return Registers;
 }
 
 } // namespace med_calling_conv_detail

@@ -11,9 +11,13 @@
 
 #include "neverd/sdk/NeverDCAPI.h"
 
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/JSON.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <filesystem>
@@ -154,6 +158,118 @@ TEST_F(SessionFunctionDiscovery, CallsAtTheEntryAreSweptInStep) {
   ASSERT_EQ(neverd_session_discover_functions(Session), 5);
   for (const uint64_t Offset : {0x0, 0x10, 0x16, 0x1c, 0x22})
     EXPECT_GE(neverd_func_find_by_addr(Session, Entry + Offset), 0) << Offset;
+}
+
+TEST_F(SessionFunctionDiscovery,
+       ComparisonSharesKnownImportTerminationForSizedAndUnsizedBodies) {
+  for (bool Indirect : {false, true}) {
+    for (bool Sized : {false, true}) {
+      for (bool Returning : {false, true}) {
+        SCOPED_TRACE(Indirect);
+        SCOPED_TRACE(Sized);
+        SCOPED_TRACE(Returning);
+        std::string Code(0x40, '\xcc');
+        // A sole call ends this function's declared body. The bytes beyond
+        // it are deliberately not a return, so a missing contract stays
+        // incomplete instead of borrowing a layout-based no-return guess.
+        const std::string Call =
+            Indirect ? std::string("\xff\x15\x1a\x00\x00\x00", 6)
+                     : std::string("\xe8\x1b\x00\x00\x00", 5);
+        Code.replace(0, Call.size(), Call);
+        const auto Path = write("call-termination.elf",
+                                makeNativeELF(false, 0x400000, {}, Code));
+        ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+        auto &State = *reinterpret_cast<neverd::sdk::Session *>(Session);
+        const auto Entry = neverd_session_entry_addr(Session);
+        neverd::Import Import;
+        Import.Name = Returning ? "ordinary_call" : "__stack_chk_fail";
+        Import.IATAddr = Entry + 0x20;
+        State.Img.Imports = {Import};
+        State.Img.Symbols = {
+            neverd::Symbol::makeFunc(Entry, Sized ? Call.size() : 0)};
+        neverd::sdk::SessionTestAccess::resetFunctions(State);
+        const auto C = neverd_comparison_create();
+        const auto Destroy =
+            llvm::make_scope_exit([&] { neverd_comparison_destroy(C); });
+        ASSERT_EQ(neverd_comparison_run(C, Session, Session,
+                                        R"({"discover":false})", nullptr,
+                                        nullptr),
+                  1)
+            << takeString(neverd_comparison_last_error(C));
+        const auto Text = takeString(neverd_comparison_graph_json(
+            C, ("{\"side\":\"primary\",\"address\":\"0x" +
+                llvm::utohexstr(Entry) + "\"}")
+                   .c_str()));
+        auto Graph = llvm::json::parse(Text);
+        ASSERT_TRUE(bool(Graph)) << Text;
+        EXPECT_EQ(Graph->getAsObject()->getBoolean("analysis_complete"),
+                  !Returning)
+            << Text;
+        if (!Returning) {
+          EXPECT_TRUE(Graph->getAsObject()->getArray("edges")->empty());
+          ASSERT_EQ(Graph->getAsObject()->getArray("nodes")->size(), 1u);
+          EXPECT_EQ(Graph->getAsObject()
+                        ->getArray("nodes")
+                        ->front()
+                        .getAsObject()
+                        ->getInteger("insn_count"),
+                    1);
+        }
+      }
+    }
+  }
+}
+
+TEST_F(SessionFunctionDiscovery, AddressedAssemblyKeepsOneCompleteNativeBody) {
+  using namespace neverd;
+  constexpr char Body[] = "\xf3\x0f\x1e\xfa\x50" // endbr64; push rax
+                          "\x48\xb8\xcd\xcc\xcc\xcc\xcc\xcc\xcc\xcc"
+                          "\x48\xf7\xe2"     // mul rdx
+                          "\x48\x83\xe0\x07" // and rax,7
+                          "\x58\xc3";        // pop rax; ret
+  std::string Code(512, '\xcc');
+  Code.replace(0, sizeof(Body) - 1, Body, sizeof(Body) - 1);
+  constexpr char Namer[] = "\x48\x8d\x05\xf9\xfe\xff\xff\xc3";
+  Code.replace(0x100, sizeof(Namer) - 1, Namer, sizeof(Namer) - 1);
+  auto Bytes = makeNativeELF(false, 0x400000, {}, Code);
+  llvm::object::ELF64LE::Ehdr Header;
+  std::memcpy(&Header, Bytes.data(), sizeof(Header));
+  const uint64_t Target = Header.e_entry;
+  Header.e_entry = Target + 0x100;
+  std::memcpy(Bytes.data(), &Header, sizeof(Header));
+  const auto Path = write("addressed-assembly.elf", Bytes);
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  auto &State = *static_cast<sdk::Session *>(Session);
+  auto Guess = Symbol::makeFunc(Target + 18);
+  Guess.IsBoundaryGuess = true;
+  State.Img.Symbols.push_back(Guess);
+  ASSERT_EQ(neverd_session_discover_functions(Session), 2);
+  const int Index = neverd_func_find_by_addr(Session, Target);
+  ASSERT_GE(Index, 0);
+  EXPECT_EQ(neverd_func_entry(Session, Index), Target);
+  for (int I = 0; I < neverd_func_count(Session); ++I)
+    EXPECT_TRUE(neverd_func_entry(Session, I) == Target ||
+                neverd_func_entry(Session, I) == Target + 0x100);
+  ASSERT_FALSE(takeString(neverd_ir_low(Session, Target)).empty());
+  EXPECT_EQ(neverd_func_size(Session, Index), sizeof(Body) - 1);
+  EXPECT_EQ(neverd_session_discover_functions(Session), 2);
+
+  const auto Comparison = neverd_comparison_create();
+  ASSERT_TRUE(Comparison);
+  auto DestroyComparison =
+      llvm::scope_exit([&] { neverd_comparison_destroy(Comparison); });
+  EXPECT_EQ(neverd_comparison_run(Comparison, Session, Session,
+                                  R"({"discover":true})", nullptr, nullptr),
+            1)
+      << takeString(neverd_comparison_last_error(Comparison));
+  auto Result =
+      llvm::json::parse(takeString(neverd_comparison_export_json(Comparison)));
+  ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
+  const auto *Matches = Result->getAsObject()->getArray("matches");
+  ASSERT_TRUE(Matches);
+  EXPECT_EQ(Matches->size(), 2u);
+  for (const auto &Match : *Matches)
+    EXPECT_EQ(Match.getAsObject()->getBoolean("analysis_complete"), true);
 }
 
 TEST_F(SessionFunctionDiscovery,

@@ -157,7 +157,7 @@ def bridge_abis(ir: str, names=CPP_FUNCTIONS) -> dict:
     """
     declarations = {}
     for match in re.finditer(r'(?m)^declare (.+?) (@(?:"[^"\n]+"|[\w.$-]+))'
-                             r'\(([^()\n]*)\)', ir):
+                             r'\(((?:[^()\n]|\([^()\n]*\))*)\)', ir):
         prefix, symbol, parameters = match.groups()
         declarations[symbol] = (prefix, parameters)
     result = {}

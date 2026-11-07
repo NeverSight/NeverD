@@ -21,10 +21,12 @@
 #include "neverd/debug/MapFile.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/DyldSharedCache.h"
 #include "neverd/loader/PointerRelocation.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/BinaryLoading.h"
 #include "neverd/support/Parallel.h"
 
@@ -927,6 +929,99 @@ TEST(ApplyDebugSymbolsTest, ReplacesPlaceholderAndFillsSize) {
   ASSERT_NE(S, nullptr);
   EXPECT_EQ(S->Name, "parse_header");
   EXPECT_EQ(S->Size, 64u);
+}
+
+TEST(ApplyDebugSymbolsTest, RefreshesPreviouslyUnnamedWindowsPersonality) {
+  for (unsigned Mode = 0; Mode < 7; ++Mode) {
+    SCOPED_TRACE(Mode);
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    Img.Bits = Bitness::Bits64;
+    Img.Format = BinaryFormat::COFF;
+    Img.Base = 0x140000000;
+    Segment Text;
+    Text.VA = Img.Base + 0x1000;
+    Text.Size = Text.FileSz = 0x200;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.assign(Text.Size, 0xC3);
+    Img.Segments.push_back(std::move(Text));
+    Segment Data;
+    Data.VA = Img.Base + 0x3000;
+    Data.Size = Data.FileSz = 4;
+    Data.Flags = SegmentFlags::Readable;
+    Data.Data.resize(4);
+    // A missing alignment payload is still malformed after naming its handler.
+    writeLE<uint32_t>(Data.Data.data(), Mode == 3   ? 0x24
+                                        : Mode == 6 ? 0
+                                                    : 0x20);
+    Img.Segments.push_back(std::move(Data));
+    ExceptionFunction F;
+    F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1080};
+    F.Encoding = ExceptionEncoding::X64UnwindV1;
+    F.PersonalityVA = Img.Base + 0x1100;
+    F.HandlerDataVA = Img.Base + 0x3000;
+    if (Mode == 1) {
+      F.ParseStatus = ExceptionParseStatus::Malformed;
+      F.Diagnostics.push_back("retained unwind fault");
+    }
+    if (Mode == 2) {
+      Img.ExceptionMetadata.ParseStatus = ExceptionParseStatus::Malformed;
+      Img.ExceptionMetadata.Diagnostics.push_back("retained directory fault");
+    }
+    Img.ExceptionMetadata.Functions.push_back(std::move(F));
+    Img.Symbols.push_back(Symbol::makeFunc(Img.Base + 0x1100));
+    BinaryImage NamedFirst = Img;
+    coff_loader::resolveExceptionHandlers(Img);
+    ASSERT_EQ(Img.ExceptionMetadata.Functions.front().Personality,
+              ExceptionPersonality::Unknown);
+    ASSERT_TRUE(Img.ExceptionMetadata.Functions.front().LanguageTablesResolved);
+    if (Mode == 5)
+      Img.ExceptionMetadata.Functions.front().DecodeProvenance.reset();
+    const std::string Handler = Mode == 4   ? "custom_handler"
+                                : Mode == 6 ? "__C_specific_handler"
+                                            : "__GSHandlerCheck";
+    FakeDebugContext Dbg({makeDebugFunc(Img.Base + 0x1100, Handler, 1)});
+    EXPECT_EQ(applyDebugSymbols(Img, Dbg), 1u);
+    const auto &After = Img.ExceptionMetadata.Functions.front();
+    EXPECT_EQ(After.Personality, Mode == 4 ? ExceptionPersonality::Unknown
+                                 : Mode == 6
+                                     ? ExceptionPersonality::CSpecificHandler
+                                     : ExceptionPersonality::GSHandlerCheck);
+    EXPECT_EQ(After.ParseStatus,
+              Mode == 1 || Mode == 3   ? ExceptionParseStatus::Malformed
+              : Mode == 4 || Mode == 5 ? ExceptionParseStatus::Partial
+                                       : ExceptionParseStatus::Complete);
+    EXPECT_EQ(bool(After.GSCookie), Mode != 4 && Mode != 6);
+    EXPECT_EQ(bool(After.SEH), Mode == 6);
+    if (After.GSCookie && Mode != 3)
+      EXPECT_EQ(After.GSCookie->CookieOffset, 0x20);
+    EXPECT_EQ(Img.ExceptionMetadata.ParseStatus,
+              Mode == 2 ? ExceptionParseStatus::Malformed : After.ParseStatus);
+    EXPECT_EQ(std::count(After.Diagnostics.begin(), After.Diagnostics.end(),
+                         "retained unwind fault"),
+              Mode == 1 ? 1 : 0);
+    EXPECT_EQ(std::count(Img.ExceptionMetadata.Diagnostics.begin(),
+                         Img.ExceptionMetadata.Diagnostics.end(),
+                         "retained directory fault"),
+              Mode == 2 ? 1 : 0);
+    EXPECT_EQ(std::count(After.Diagnostics.begin(), After.Diagnostics.end(),
+                         "unknown Windows language personality"),
+              Mode == 4 || Mode == 5 ? 1 : 0);
+    const auto Diagnostics = After.Diagnostics;
+    EXPECT_EQ(applyDebugSymbols(Img, Dbg), 0u);
+    coff_loader::resolveExceptionHandlers(Img);
+    EXPECT_EQ(Img.ExceptionMetadata.Functions.front().Diagnostics, Diagnostics);
+    if (Mode != 5) {
+      applyDebugSymbols(NamedFirst, Dbg);
+      coff_loader::resolveExceptionHandlers(NamedFirst);
+      const auto &Early = NamedFirst.ExceptionMetadata.Functions.front();
+      EXPECT_EQ(Early.Personality, After.Personality);
+      EXPECT_EQ(Early.ParseStatus, After.ParseStatus);
+      EXPECT_EQ(Early.Diagnostics, After.Diagnostics);
+      EXPECT_EQ(NamedFirst.ExceptionMetadata.ParseStatus,
+                Img.ExceptionMetadata.ParseStatus);
+    }
+  }
 }
 
 TEST(ApplyDebugSymbolsTest, ImageNameOutranksDebugName) {

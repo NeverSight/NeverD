@@ -12,6 +12,7 @@
 #include "neverd/analysis/InterpreterModel.h"
 #include "neverd/analysis/Limits.h"
 #include "neverd/analysis/LowIRUndefinedIndependence.h"
+#include "neverd/analysis/arch/x86_64/InterpreterMachineSourceABI.h"
 #include "neverd/ir/SourceTypeHint.h"
 #include "neverd/ir/low/LowIR.h"
 
@@ -38,6 +39,44 @@ static_assert(std::is_standard_layout_v<InterpreterMachineStateX64V1>);
 static_assert(sizeof(InterpreterMachineStateX64V1) == 136);
 static_assert(offsetof(InterpreterMachineStateX64V1, RFlags) == 128);
 
+/// One ordered guest CPU query, including both input selectors. Answers are
+/// independent across occurrences, including repeated identical selectors.
+struct InterpreterCPUQueryX64V1 {
+  uint32_t Leaf = 0;
+  uint32_t Subleaf = 0;
+  uint32_t Answers[4] = {}; // EAX, EBX, ECX, EDX.
+};
+
+/// Opt-in source ABI. Queries is an integer address of QueryCount accessible,
+/// immutable query records. The complete array must not wrap or alias state
+/// storage or guest memory. Count zero permits a null Queries pointer. The
+/// caller owns this environment; no host CPU instruction supplies an answer.
+struct alignas(8) InterpreterMachineQueryStateX64V1 {
+  InterpreterMachineStateX64V1 Machine;
+  uint64_t Queries = 0;
+  uint64_t QueryCount = 0;
+  uint64_t QueryCursor = 0;
+};
+
+static_assert(std::is_standard_layout_v<InterpreterCPUQueryX64V1>);
+static_assert(sizeof(InterpreterCPUQueryX64V1) == 24);
+static_assert(std::is_standard_layout_v<InterpreterMachineQueryStateX64V1>);
+static_assert(offsetof(InterpreterMachineQueryStateX64V1, Machine) == 0);
+static_assert(sizeof(InterpreterMachineQueryStateX64V1) == 160);
+
+/// A separate source layout that also binds every byte of XMM0 through XMM15.
+/// The query prefix retains its v1 layout. XMM words are low then high halves;
+/// only eight-byte state alignment is required. Wider vector banks, partial
+/// register operands and floating-point environment operations remain refused.
+struct alignas(8) InterpreterMachineQueryStateX64V2 {
+  InterpreterMachineQueryStateX64V1 Core;
+  uint64_t XMM[16][2] = {};
+};
+
+static_assert(std::is_standard_layout_v<InterpreterMachineQueryStateX64V2>);
+static_assert(offsetof(InterpreterMachineQueryStateX64V2, XMM) == 160);
+static_assert(sizeof(InterpreterMachineQueryStateX64V2) == 416);
+
 /// Check the caller-supplied entry state against the fixed user-mode profile.
 /// Generated source returns a nonzero status for the same invalid states.
 llvm::Error
@@ -46,9 +85,9 @@ validateInterpreterMachineStateX64V1(const InterpreterMachineStateX64V1 &State);
 struct InterpreterMachineSource {
   LowFunc Function;
   /// One state pointer parameter and an unsigned 64-bit status: zero means
-  /// success; nonzero means a flag-profile or entry-domain violation. Invalid
-  /// executions may have guest memory effects; no rollback is promised and
-  /// their output state does not certify guest semantics.
+  /// success; nonzero means a flag-profile, entry-domain or query violation.
+  /// Invalid executions may have guest memory effects; no rollback is promised
+  /// and their output state does not certify guest semantics.
   SourceFunctionTypeHint SourceABI;
 };
 
@@ -92,6 +131,47 @@ llvm::Expected<InterpreterMachineSource> wrapInterpreterMachineStateX64(
     InterpreterMachineStateProfile Profile,
     std::optional<InterpreterEntryAlignment> EntryAlignment,
     InterpreterMachineStateLayout Layout);
+
+/// Wrap the scalar machine domain with the explicit ordered CPU-query ABI.
+/// Canonical CPUID bundles consume exactly one matching record and clear the
+/// four result registers' high halves. Exhaustion returns status 3; selector
+/// mismatch returns status 4. Both stop before that query, commit the current
+/// machine state, and leave QueryCursor unchanged. Earlier guest effects are
+/// not rolled back. Entry alignment still rejects before any state write.
+/// Other intrinsic and raw-environment restrictions remain unchanged. This
+/// interface supplies source, not a native equivalence certificate or a
+/// hardware serialization/concurrency model. The existing v1 wrappers continue
+/// to refuse CPU queries; they do not infer or read this extended layout.
+llvm::Expected<InterpreterMachineSource> wrapInterpreterMachineQueryStateX64(
+    const LowFunc &Residual, BinaryFormat SourceFormat = BinaryFormat::ELF,
+    InterpreterMachineStateProfile Profile =
+        InterpreterMachineStateProfile::UserX64NoFaultV1,
+    std::optional<InterpreterEntryAlignment> EntryAlignment = std::nullopt,
+    InterpreterMachineStateLayout Layout =
+        InterpreterMachineStateLayout::InlineReturns);
+
+/// The same ordered-query contract with complete XMM input/output storage.
+/// Whole 128-bit register operands and instruction-local temporary byte views
+/// are translated through ordinary scalar LowIR. Unbound temporary bytes and
+/// function-temporary aliases fail. Constant alignment checks require an exact
+/// proof; dynamic checks still fail. The old wrappers never read this layout.
+llvm::Expected<InterpreterMachineSource> wrapInterpreterMachineQueryStateX64V2(
+    const LowFunc &Residual, BinaryFormat SourceFormat = BinaryFormat::ELF,
+    InterpreterMachineStateProfile Profile =
+        InterpreterMachineStateProfile::UserX64NoFaultV1,
+    std::optional<InterpreterEntryAlignment> EntryAlignment = std::nullopt,
+    InterpreterMachineStateLayout Layout =
+        InterpreterMachineStateLayout::InlineReturns);
+
+/// Select a versioned source layout without changing recovery or proof policy.
+llvm::Expected<InterpreterMachineSource> wrapInterpreterMachineSourceX64(
+    const LowFunc &Residual, InterpreterMachineSourceABIKind Kind,
+    BinaryFormat SourceFormat = BinaryFormat::ELF,
+    InterpreterMachineStateProfile Profile =
+        InterpreterMachineStateProfile::UserX64NoFaultV1,
+    std::optional<InterpreterEntryAlignment> EntryAlignment = std::nullopt,
+    InterpreterMachineStateLayout Layout =
+        InterpreterMachineStateLayout::InlineReturns);
 
 /// Generate the source wrapper and its register-state model through the same
 /// scalar, lane, flag and control-flow rules. No rewritten-wrapper pattern

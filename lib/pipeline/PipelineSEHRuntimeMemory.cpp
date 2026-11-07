@@ -29,6 +29,18 @@
 namespace neverd {
 namespace {
 
+/// The work a catalog's scan may take: the cap of complete SEH frame
+/// propagation.  A four-thousand-operation jump-table query is not a
+/// module-size bound.
+constexpr size_t kCatalogScanAllowance =
+    size_t{limits::kMaxJumpTableEvidenceWork} *
+    size_t{limits::kMaxMultiStageRetries} * 16;
+
+bool catalogedImage(const BinaryImage &Image) {
+  return Image.Arch == Arch::X64 && Image.Bits == Bitness::Bits64 &&
+         Image.Format == BinaryFormat::COFF;
+}
+
 std::optional<LowSEHRuntimeCall> runtimeCall(const BinaryImage &Image,
                                              const Import &Imported,
                                              size_t &Remaining) {
@@ -83,17 +95,57 @@ bool runtimeVeneer(const BinaryImage &Image, va_t Address, va_t Slot,
 
 } // namespace
 
+LowSEHWritableImageRanges lowSEHWritableImageRanges(const BinaryImage &Image) {
+  LowSEHWritableImageRanges Writable;
+  Writable.Image = &Image;
+  if (!catalogedImage(Image))
+    return Writable;
+  for (const auto &Segment : Image.Segments) {
+    if (!Segment.isWritable() || Segment.isExecutable())
+      continue;
+    const auto Bytes =
+        std::min<uint64_t>({Segment.Data.size(), Segment.Size, Segment.FileSz});
+    if (!Bytes || Segment.VA > InvalidVA - Bytes)
+      continue;
+    const va_t End = Segment.VA + Bytes;
+    for (va_t Begin = Segment.VA; Begin < End;) {
+      if (Writable.Steps == kCatalogScanAllowance)
+        return Writable;
+      ++Writable.Steps;
+      const auto OwnerEnd = Image.mappedObjectOwnerEnd(Begin);
+      const va_t Limit = OwnerEnd ? std::min(*OwnerEnd, End) : Begin;
+      if (Limit <= Begin || Limit - Begin > UINT32_MAX ||
+          !isFileBackedWritableImageRange(Image, Begin,
+                                          uint32_t(Limit - Begin))) {
+        ++Begin;
+        continue;
+      }
+      if (!Writable.Ranges.empty() && Writable.Ranges.back().End == Begin)
+        Writable.Ranges.back().End = Limit;
+      else {
+        if (Writable.Ranges.size() ==
+            ::neverd::limits::pipeline::
+                kPipelineSEHRuntimeMemoryCollectLowSEHRuntimeMemoryWritableImageRangesSizeLimit)
+          return Writable;
+        Writable.Ranges.push_back({Begin, Limit});
+      }
+      Begin = Limit;
+    }
+  }
+  llvm::sort(Writable.Ranges,
+             [](const auto &A, const auto &B) { return A.Begin < B.Begin; });
+  Writable.Complete = true;
+  return Writable;
+}
+
 LowSEHRuntimeMemory
 collectLowSEHRuntimeMemory(const BinaryImage &Image,
-                           llvm::ArrayRef<LowFunc> Functions) {
+                           llvm::ArrayRef<LowFunc> Functions,
+                           const LowSEHWritableImageRanges *Writable) {
   LowSEHRuntimeMemory Memory;
-  if (Image.Arch != Arch::X64 || Image.Bits != Bitness::Bits64 ||
-      Image.Format != BinaryFormat::COFF)
+  if (!catalogedImage(Image))
     return Memory;
-  // The module scan uses the same cap as complete SEH frame propagation.
-  // A four-thousand-operation jump-table query is not a module-size bound.
-  size_t Remaining = size_t{limits::kMaxJumpTableEvidenceWork} *
-                     size_t{limits::kMaxMultiStageRetries} * 16;
+  size_t Remaining = kCatalogScanAllowance;
   std::set<va_t> Candidates;
   using Key = std::tuple<VnodeSpace, uint64_t, uint16_t>;
   const auto KeyOf = [](const NdVar &V) {
@@ -168,41 +220,14 @@ collectLowSEHRuntimeMemory(const BinaryImage &Image,
     if (!Remaining)
       return {};
   }
-  for (const auto &Segment : Image.Segments) {
-    if (!Segment.isWritable() || Segment.isExecutable())
-      continue;
-    const auto Bytes =
-        std::min<uint64_t>({Segment.Data.size(), Segment.Size, Segment.FileSz});
-    if (!Bytes || Segment.VA > InvalidVA - Bytes)
-      continue;
-    const va_t End = Segment.VA + Bytes;
-    for (va_t Begin = Segment.VA; Begin < End;) {
-      if (!Remaining)
-        return {};
-      --Remaining;
-      const auto OwnerEnd = Image.mappedObjectOwnerEnd(Begin);
-      const va_t Limit = OwnerEnd ? std::min(*OwnerEnd, End) : Begin;
-      if (Limit <= Begin || Limit - Begin > UINT32_MAX ||
-          !isFileBackedWritableImageRange(Image, Begin,
-                                          uint32_t(Limit - Begin))) {
-        ++Begin;
-        continue;
-      }
-      if (!Memory.WritableImageRanges.empty() &&
-          Memory.WritableImageRanges.back().End == Begin)
-        Memory.WritableImageRanges.back().End = Limit;
-      else {
-        if (Memory.WritableImageRanges.size() ==
-            ::neverd::limits::pipeline::
-                kPipelineSEHRuntimeMemoryCollectLowSEHRuntimeMemoryWritableImageRangesSizeLimit)
-          return {};
-        Memory.WritableImageRanges.push_back({Begin, Limit});
-      }
-      Begin = Limit;
-    }
-  }
-  llvm::sort(Memory.WritableImageRanges,
-             [](const auto &A, const auto &B) { return A.Begin < B.Begin; });
+  // The image's writable ranges take a step of the allowance for each place
+  // their scan reads; a scan that would stop on either bound gives nothing.
+  std::optional<LowSEHWritableImageRanges> Own;
+  if (!Writable || Writable->Image != &Image)
+    Writable = &Own.emplace(lowSEHWritableImageRanges(Image));
+  if (!Writable->Complete || Writable->Steps > Remaining)
+    return {};
+  Memory.WritableImageRanges = Writable->Ranges;
   if (lowSEHRuntimeMemoryDigest(Memory).empty())
     return {};
   return Memory;

@@ -271,7 +271,7 @@ scratch の復元は demand-driven です。Solana CPI/PDA scratch の fixed poi
 `whole-CFG fixed point` をスキップします。`SBFAnalysisLimits.def` は host の
 `analysis policy` を定めるもので、`protocol limits` ではありません。
 `MaxModeledScratchBytes` は `program point` ごとに 1,024 bytes、
-`ScratchFlowRetainedByteBudget` は 8,388,608 bytes の `logical retained estimate`
+`ScratchFlowRetainedByteBudget` は 16,777,216 bytes の `logical retained estimate`
 です。予算を超えると復元は明示的に `ScratchRecoveryPrecision::BlockLocal` へ
 widening します。失うのは `cross-block must-facts` だけで、`block-local replay` は
 `sound` のまま、`same-block stores` も復元できます。printer は安定して `recovery scratch-precision=block-local` を出力し、

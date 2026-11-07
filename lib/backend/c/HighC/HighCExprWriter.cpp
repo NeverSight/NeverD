@@ -17,15 +17,19 @@
 #include "../LibraryPrototype.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
+#include "../render/X86/X64CallRCX.h"
 #include "../render/X86/X86APXAtomic.h"
 #include "../render/X86/X86AmxState.h"
+#include "../render/X86/X86Bound.h"
 #include "../render/X86/X86BoundedLeaf.h"
 #include "../render/X86/X86CompressExpand.h"
 #include "../render/X86/X86FourSource.h"
+#include "../render/X86/X86Hle.h"
 #include "../render/X86/X86RepState.h"
 #include "../render/X86/X86Sgx.h"
 #include "../render/X86/X86SystemState.h"
 #include "../render/X86/X86Virtualization.h"
+#include "../render/X86/X87NativeState.h"
 #include "HighCWriter.h"
 
 #include "neverd/ArchSupport.h"
@@ -74,6 +78,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 namespace neverd {
 
@@ -162,9 +167,10 @@ std::string frameStorageAddress(int64_t Displacement) {
          std::to_string(Magnitude) + ")";
 }
 
-std::string HighCWriter::debugNameForDisplacement(va_t Entry,
+std::string HighCWriter::debugNameForDisplacement(const HighFunc &Function,
                                                   int64_t Disp) const {
-  if (!Dbg)
+  auto *Debug = functionDebugContext(Function);
+  if (!Debug)
     return {};
   auto Accept = [](const std::optional<VariableSym> &Var) -> std::string {
     if (!Var || Var->Name.empty() || Var->IsParam)
@@ -172,19 +178,23 @@ std::string HighCWriter::debugNameForDisplacement(va_t Entry,
     return Var->Name;
   };
   if (CurrentFunc && CurrentFunc->FrameSize > 0) {
-    if (const std::string Name = Accept(Dbg->resolveStackPointerVariable(
-            Entry, Disp + static_cast<int64_t>(CurrentFunc->FrameSize)));
+    if (const std::string Name = Accept(Debug->resolveStackPointerVariable(
+            Function.Entry,
+            Disp + static_cast<int64_t>(CurrentFunc->FrameSize)));
         !Name.empty())
       return Name;
   }
-  if (const std::string Name = Accept(Dbg->resolveVariable(Entry, Disp));
+  if (const std::string Name =
+          Accept(Debug->resolveVariable(Function.Entry, Disp));
       !Name.empty())
     return Name;
   return {};
 }
 
-TypeRef HighCWriter::debugTypeForDisplacement(va_t Entry, int64_t Disp) const {
-  if (!Dbg)
+TypeRef HighCWriter::debugTypeForDisplacement(const HighFunc &Function,
+                                              int64_t Disp) const {
+  auto *Debug = functionDebugContext(Function);
+  if (!Debug)
     return {};
   auto Accept = [](const std::optional<VariableSym> &Var) -> TypeRef {
     if (!Var || !Var->Type || Var->IsParam)
@@ -193,12 +203,12 @@ TypeRef HighCWriter::debugTypeForDisplacement(va_t Entry, int64_t Disp) const {
   };
   TypeRef Ty;
   if (CurrentFunc && CurrentFunc->FrameSize > 0)
-    Ty = Accept(Dbg->resolveStackPointerVariable(
-        Entry, Disp + static_cast<int64_t>(CurrentFunc->FrameSize)));
+    Ty = Accept(Debug->resolveStackPointerVariable(
+        Function.Entry, Disp + static_cast<int64_t>(CurrentFunc->FrameSize)));
   if (!Ty)
-    Ty = Accept(Dbg->resolveVariable(Entry, Disp));
+    Ty = Accept(Debug->resolveVariable(Function.Entry, Disp));
   if (Ty)
-    Dbg->completeType(Ty);
+    Debug->completeType(Ty);
   // A local whose type C cannot spell keeps the type its accesses give it,
   // as a parameter keeps its machine type.
   TypeRef Display = cDisplayType(Ty);
@@ -235,7 +245,7 @@ std::string HighCWriter::varName(const MedVar &V) const {
     const TypeRef Stated = statedVariableType(V);
     if (Stated)
       StatedLocalTypes[Name] = Stated;
-    if (Opts.SourceMap) {
+    if (Opts.SourceMap && !sourceBodyOrigin(*CurrentFunc)) {
       // Recording the value again under the name its entry holds changes
       // nothing, unless the width differs from the entry's and the entry is
       // not yet ambiguous.
@@ -278,7 +288,7 @@ std::string HighCWriter::rawVarName(const MedVar &V) const {
       const int64_t Candidates[] = {V.StackOff, V.StackOff + 4, V.StackOff - 4};
       for (int64_t Off : Candidates) {
         if (const std::string Name =
-                debugNameForDisplacement(CurrentFunc->Entry, Off);
+                debugNameForDisplacement(*CurrentFunc, Off);
             !Name.empty() && !isReservedParamDisplayName(Name))
           return Name;
       }
@@ -726,7 +736,7 @@ void HighCWriter::collectFrameRecordMembers(const HighFunc &Func,
   std::map<int64_t, TypeRef> DebugTypes;
   std::vector<std::pair<int64_t, int64_t>> RawObjects;
   for (int64_t Start : Starts)
-    if (TypeRef DebugTy = debugTypeForDisplacement(Func.Entry, Start)) {
+    if (TypeRef DebugTy = debugTypeForDisplacement(Func, Start)) {
       if (!isPlainInteger(DebugTy))
         RawObjects.push_back(
             {Start, Start + std::max<int64_t>(DebugTy->Size, 1)});
@@ -1207,7 +1217,7 @@ const HighExpr &HighCWriter::lowBytesSource(const HighExpr &E,
     // A conversion to at least Width bytes keeps the low Width bytes of its
     // source; an extension supplies the bytes above its source itself.
     if (!isPlainInteger(To) || !isPlainInteger(Source.Type) ||
-        To->Size < Width || (Extension && Source.Type->Size < Width) ||
+        To->Size < Width || Source.Type->Size < Width ||
         Source.Kind == ExprKind::Call)
       break;
     Cur = &Source;
@@ -1463,7 +1473,7 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
       }
       return false;
     };
-    auto AsSignedLtZero = [&](const HighExpr *Op, ExprPtr &X) {
+    auto AsSignedLtZero = [&](const HighExpr *Op, ExprPtr &X, uint16_t &Bytes) {
       Op = forwardedExpr(Op);
       Op = unwrapIntegerView(Op);
       if (Op && Op->Kind == ExprKind::BinOp && Op->Op == NdOp::INT_NOTEQUAL &&
@@ -1482,9 +1492,12 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
           !Op->Operands[0])
         return false;
       X = Op->Operands[0];
-      return true;
+      Bytes = zeroTestBytes(*Op->Operands[0], *Op->Operands[1]);
+      return Bytes != 0;
     };
-    auto PrintGtZero = [&](const ExprPtr &X) {
+    // `Sz` is the width the test reads, whatever the variable it views: a
+    // 64-bit `test rax, rax` is not `(int32_t)rax > 0`.
+    auto PrintGtZero = [&](const ExprPtr &X, uint16_t Sz) {
       const HighExpr *V = forwardedExpr(X.get());
       V = unwrapIntegerView(V);
       if (V && V->Kind == ExprKind::BinOp && V->Operands.size() == 2 &&
@@ -1492,25 +1505,33 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
           V->Op != NdOp::INT_SLESS && V->Op != NdOp::INT_SLESSEQUAL &&
           IsZero(V->Operands[1]) && V->Operands[0])
         V = unwrapIntegerView(V->Operands[0].get());
-      const uint16_t Sz = V && V->Type && V->Type->Size && V->Type->Size <= 4
-                              ? V->Type->Size
-                              : 4;
-      std::string LHS;
-      const HighExpr *Print = V ? V : X.get();
-      if (const HighExpr *Call = typedCallResult(Print)) {
+      // A value narrower than the test keeps the extension X reads it through.
+      const HighExpr *Print =
+          V && (!V->Type || V->Type->Size >= Sz) && lowBytesRead(X.get()) >= Sz
+              ? V
+              : X.get();
+      // What the text certainly prints as decides over the IR's type: a call
+      // has its declared type, not the carrier's, and a declared local can read
+      // in the other signedness.
+      TypeRef Printed = Print->Type;
+      const HighExpr *Call = typedCallResult(Print);
+      if (Call) {
         TypeRef Ret = knownCallReturnType(*Call);
         if (!Ret)
           Ret = Call->Type;
         if (Ret && Ret->Kind == NdTypeKind::Int && Ret->Size == Sz)
           Print = Call;
+        Printed = Ret;
       }
-      if (Print->Type && Print->Type->Kind == NdTypeKind::Int &&
-          Print->Type->Size == Sz && Print->Type->IsSigned)
+      bool SignedAtWidth = Printed && Printed->Kind == NdTypeKind::Int &&
+                           Printed->Size == Sz && Printed->IsSigned;
+      std::string LHS;
+      if (!Call || SignedAtWidth)
         LHS = exprStr(*Print, 7);
-      else if (const HighExpr *Call = typedCallResult(Print);
-               Call && Call == Print)
-        LHS = exprStr(*Print, 7);
-      else
+      if (!Call)
+        if (const auto Certain = printedIntegerType(*Print))
+          SignedAtWidth = Certain->first == Sz && Certain->second;
+      if (!SignedAtWidth)
         LHS = "(" + typeToC(NdType::makeInt(Sz, true)) + ")" +
               exprStr(*Print, 99);
       std::string Result = LHS + " > 0";
@@ -1523,25 +1544,23 @@ std::string HighCWriter::renderUnaryOp(const HighExpr &E, int ParentPrec) {
         Inner->Operands.size() == 2) {
       ExprPtr XEq;
       ExprPtr XLt;
+      uint16_t Bytes = 0;
       const bool LeftEq = AsEqZero(Inner->Operands[0].get(), XEq) &&
-                          AsSignedLtZero(Inner->Operands[1].get(), XLt);
+                          AsSignedLtZero(Inner->Operands[1].get(), XLt, Bytes);
       const bool RightEq = AsEqZero(Inner->Operands[1].get(), XEq) &&
-                           AsSignedLtZero(Inner->Operands[0].get(), XLt);
-      if ((LeftEq || RightEq) && SameScalar(XEq.get(), XLt.get()))
-        return PrintGtZero(XEq);
+                           AsSignedLtZero(Inner->Operands[0].get(), XLt, Bytes);
+      if ((LeftEq || RightEq) && SameScalar(XEq.get(), XLt.get()) &&
+          readsSameBytes(Inner->Operands[0].get(), Inner->Operands[1].get()))
+        return PrintGtZero(XLt, Bytes);
     }
     if (Inner && Inner->Kind == ExprKind::BinOp &&
         Inner->Op == NdOp::INT_SLESSEQUAL && Inner->Operands.size() == 2 &&
         IsZero(Inner->Operands[1]) && Inner->Operands[0])
-      return PrintGtZero(Inner->Operands[0]);
-    if (Inner) {
-      // The inverse is a condition of its own, `!a && !b` of `!(a || b)` or
-      // `a >= b` of `!(a < b)`: as an operand it keeps its grouping.
-      std::string Inverted = invertCondStr(*Inner);
-      if (ParentPrec > 0 && hasTopLevelBinaryOperator(Inverted))
-        Inverted = "(" + Inverted + ")";
-      return Inverted;
-    }
+      if (const uint16_t Bytes =
+              zeroTestBytes(*Inner->Operands[0], *Inner->Operands[1]))
+        return PrintGtZero(Inner->Operands[0], Bytes);
+    if (Inner)
+      return invertedTruthValue(*Inner, E, ParentPrec);
     return "!" + exprStr(*E.Operands[0], 99);
   }
   case NdOp::INT_ZEXT: {
@@ -1818,7 +1837,7 @@ std::string HighCWriter::headerRoutineOfStub(const HighFunc &Func) const {
 bool HighCWriter::libraryDeclaresDefinition(const HighFunc &Func) const {
   if (!Dbg || !Func.Entry)
     return false;
-  const std::optional<FunctionSym> Declared = Dbg->resolveFunction(Func.Entry);
+  const std::optional<FunctionSym> Declared = debugFunction(Func);
   return Declared && Declared->PrototypeFromCLibrary;
 }
 
@@ -1957,6 +1976,10 @@ std::vector<size_t> HighCWriter::printedCallOperands(const HighExpr &E) const {
 std::string HighCWriter::importSlotIdentifier(const HighExpr &E) const {
   if (!Opts.Image || !E.CallAddr)
     return {};
+  auto [Known, Fresh] = ImportSlotIdentifierAt.try_emplace(E.CallAddr);
+  if (!Fresh)
+    return Known->second;
+  std::string &Answer = Known->second;
   // The call goes through an import's slot, or to a stub that jumps through
   // it, which the linker names on formats that name slots.
   const Import *Imp = Opts.Image->findImportAt(E.CallAddr);
@@ -1969,19 +1992,36 @@ std::string HighCWriter::importSlotIdentifier(const HighExpr &E) const {
   // slot is the prefix and the import's symbol, `__imp_calloc` or
   // `__imp___initterm` on 32-bit Windows, unless that names another object.
   // C spells it without the format's underscore.
+  // The index the emitter prepared holds the symbols these scans find.
   std::string SlotSymbol;
-  for (const Symbol &Sym : Opts.Image->Symbols)
-    if (Sym.Addr == Imp->IATAddr &&
-        llvm::StringRef(Sym.Name).starts_with(Prefix)) {
-      SlotSymbol = Sym.Name;
-      break;
-    }
+  if (SharedNameIndex) {
+    if (const auto At = SharedNameIndex->ImportSlotSymbols.find(Imp->IATAddr);
+        At != SharedNameIndex->ImportSlotSymbols.end())
+      for (const Symbol *Sym : At->second)
+        if (llvm::StringRef(Sym->Name).starts_with(Prefix)) {
+          SlotSymbol = Sym->Name;
+          break;
+        }
+  } else {
+    for (const Symbol &Sym : Opts.Image->Symbols)
+      if (Sym.Addr == Imp->IATAddr &&
+          llvm::StringRef(Sym.Name).starts_with(Prefix)) {
+        SlotSymbol = Sym.Name;
+        break;
+      }
+  }
   if (SlotSymbol.empty()) {
     SlotSymbol =
         (Prefix + symbolOfImportName(Imp->Name, Opts.Format, Opts.TheArch))
             .str();
-    if (const Symbol *Other = Opts.Image->findSymbol(SlotSymbol);
-        Other && Other->Addr != Imp->IATAddr)
+    const Symbol *Other = nullptr;
+    if (!SharedNameIndex)
+      Other = Opts.Image->findSymbol(SlotSymbol);
+    else if (const auto Named =
+                 SharedNameIndex->ImportSlotNamed.find(SlotSymbol);
+             Named != SharedNameIndex->ImportSlotNamed.end())
+      Other = Named->second;
+    if (Other && Other->Addr != Imp->IATAddr)
       return {};
   }
   std::string Identifier =
@@ -1989,6 +2029,7 @@ std::string HighCWriter::importSlotIdentifier(const HighExpr &E) const {
   for (char &Ch : Identifier)
     if (!isCProjectionIdentifierByte(static_cast<unsigned char>(Ch)))
       Ch = '_';
+  Answer = Identifier;
   return Identifier;
 }
 
@@ -2022,10 +2063,17 @@ std::optional<va_t> HighCWriter::importDataSlotRead(const HighExpr &Address,
   return Slot;
 }
 
+const Symbol *HighCWriter::imageSymbolAt(va_t Addr) const {
+  return SharedNameIndex ? SharedNameIndex->symbolAt(Addr)
+                         : Opts.Image->findSymbolAt(Addr);
+}
+
 const std::string &HighCWriter::imageFunctionNameAt(va_t Addr) const {
   auto [It, Inserted] = ListedFunctionNames.try_emplace(Addr);
   if (Inserted)
-    It->second = Opts.Image->getFunctionNameAt(Addr);
+    It->second = SharedNameIndex
+                     ? SharedNameIndex->functionNameAt(*Opts.Image, Addr)
+                     : Opts.Image->getFunctionNameAt(Addr);
   return It->second;
 }
 
@@ -2115,6 +2163,10 @@ std::string HighCWriter::resolveCallTarget(const HighExpr &E) const {
 }
 
 std::string HighCWriter::renderCallExpr(const HighExpr &E) {
+  if (!E.IsIndirectCall && E.CallTarget == "__builtin_alloca" &&
+      E.Operands.size() == 1 && !StackAllocationSizeHelper.empty())
+    return "__builtin_alloca(" + StackAllocationSizeHelper + "(" +
+           exprStr(*E.Operands[0]) + "))";
   if (E.IntrinsicId == Intrinsic::X86FourSourceMemory)
     return renderX86FourSourceExpression(
         Opts.TheArch, E, x86NativeMemoryArguments(E), typeToC(E.Type));
@@ -2146,6 +2198,19 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         [this](const MedVar &V) {
           return !Analysis.DeadVars.count(varName(V));
         });
+  if (E.IntrinsicId == Intrinsic::X64CallRCX)
+    return renderX64CallRCXExpression(
+        Opts.TheArch, E,
+        [this](const HighExpr &V) { return intrinsicOperandStr(V); },
+        [this](const MedVar &V) { return varName(V); },
+        [this](const MedVar &V) {
+          return !Analysis.DeadVars.count(varName(V));
+        });
+  if (E.IntrinsicId == Intrinsic::Bound) {
+    const auto P = x86BoundHighPlan(Opts.TheArch, E);
+    return renderX86Bound(P, intrinsicOperandStr(*E.Operands[0]),
+                          intrinsicOperandStr(*E.Operands[1]));
+  }
   if (isX86BoundedLeafPending(E.IntrinsicId))
     throw std::invalid_argument(X86BoundedLeafUnproven);
   if (isX86BoundedLeafIntrinsic(E.IntrinsicId))
@@ -2196,15 +2261,13 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
       llvm::report_fatal_error("invalid HighC x87 constant/control contract");
     const std::string Word = MemoryIdentifiers.allocate("x87_control");
     if (E.IntrinsicId == Intrinsic::X87ReadControl)
-      return "({ uint16_t " + Word +
-             "; __asm__ volatile(\"fnstcw %0\" : \"=m\"(" + Word +
-             ") :: \"memory\"); " + Word + "; })";
+      return "({ uint16_t " + Word + ";" +
+             renderX87ControlAccess(false, "&" + Word) + Word + "; })";
     const unsigned Index = E.IntrinsicId == Intrinsic::X87LoadConstant ? 1 : 0;
     const std::string Init = "({ uint16_t " + Word + " = (uint16_t)(" +
                              exprStr(*E.Operands[Index]) + "); ";
     if (E.IntrinsicId == Intrinsic::X87WriteControl)
-      return Init + "__asm__ volatile(\"fldcw %0\" :: \"m\"(" + Word +
-             ") : \"memory\"); })";
+      return Init + renderX87ControlAccess(true, "&" + Word) + "})";
     const std::string Value = MemoryIdentifiers.allocate("x87_constant");
     return Init + "unsigned _BitInt(80) " + Value +
            " = 0; __asm__ volatile(\"fldcw (%1)\\n\\t" +
@@ -2285,8 +2348,10 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     // A trap or a breakpoint whose code the intrinsic keeps spells as its
     // builtin, which takes no code: the statement prints the instruction
     // beside it.  One with no C name runs as the instruction itself.
+    // FFR transfers need the ARM renderer's physical-register clobbers.
     if (const std::string Instruction = intrinsicInstruction(E);
-        !Instruction.empty()) {
+        !Instruction.empty() && E.IntrinsicId != Intrinsic::A64_Wrffr &&
+        E.IntrinsicId != Intrinsic::A64_Rdffr) {
       const HighExpr *Operand = unwrapIntegerView(E.Operands[0].get());
       const std::optional<uint64_t> Code =
           Operand && Operand->Kind == ExprKind::Const
@@ -2404,6 +2469,8 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     // Operands added for the intrinsic's spelling have no width.
     if (OpBytes.size() != OpStrs.size())
       OpBytes.clear();
+    if (E.IntrinsicId == Intrinsic::X86HleState)
+      return renderX86HleExpression(Opts.TheArch, E, OpStrs);
     if (isX86VirtualizationIntrinsic(E.IntrinsicId))
       return renderX86VirtualizationExpression(Opts.TheArch, E, OpStrs);
     auto Rendered = renderIntrinsicCall(
@@ -2733,11 +2800,16 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
           // typedef the local types define (nftw's __nftw_func_t), which an
           // argument converts to as well: its type's structure, whose
           // pointers the unit spells void *, would not match.
-          std::string Text =
-              exprStrAsTypedArg(*Op, Expected,
-                                Defined && Expected->Kind != NdTypeKind::Array
-                                    ? declaredTypedef(Expected)
-                                    : std::nullopt);
+          std::optional<std::string> Spelled =
+              Defined && Expected->Kind != NdTypeKind::Array
+                  ? declaredTypedef(Expected)
+                  : std::nullopt;
+          if (!Defined)
+            if (const auto Portable =
+                    c_library::portableScalarParameterType(*Callee, I);
+                !Portable.empty())
+              Spelled = Portable.str();
+          std::string Text = exprStrAsTypedArg(*Op, Expected, Spelled);
           // A selected source declaration can spell an integer pointee as
           // long while the machine carrier and local fields use int32_t.
           // Equal widths do not make those C pointer types compatible. The
@@ -2866,6 +2938,13 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         Source < ArityIntegers + ArityFloats)
       FloatParam =
           NdType::makeFloat(Arity->FpIsFloat ? sizeof(float) : sizeof(double));
+    // A floating argument no parameter types, such as a double a formatted
+    // call passes past its format (MedOp::ExactFloatInputs), passes as its
+    // own value: bits it reads from read-only data print as that constant
+    // (`2.5`).  The integer immediate the bits make would travel in an
+    // integer register.
+    if (!FloatParam && Op->Type && Op->Type->Kind == NdTypeKind::Float)
+      FloatParam = Op->Type;
     if (FloatParam && FloatParam->Kind == NdTypeKind::Float) {
       if (PointerArgument)
         PointerArgumentOperands.erase(PointerArgument);
@@ -2883,14 +2962,22 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     // A bare -1 is an int; default argument promotions cannot make it a
     // 64-bit all-ones value. Keep the complete expression, including any
     // narrowing or zero/sign extension, before selecting its wide C carrier.
-    // Only a negative literal changes value this way. A non-negative literal
-    // takes a C type wide enough for its value, and a string or an address
-    // already passes as the pointer it names: both keep their spelling.
+    // Small non-negative literals need the same carrier: an int stack
+    // argument need not initialize the upper bytes a word-sized callee reads.
+    // Strings and addresses already pass as pointers and keep their spelling.
     if (Imm && !PointerArgument && !DefinedParam &&
         (!Prototype || I >= Prototype->ParamCount) && Op->Type &&
-        Op->Type->Kind == NdTypeKind::Int && Op->Type->Size > 4 &&
-        llvm::StringRef(Arg).starts_with("-"))
-      Arg = "(" + typeToC(Op->Type) + ")" + castOperand(exprStr(*Op));
+        Op->Type->Kind == NdTypeKind::Int && Op->Type->Size > 4) {
+      // An image constant may already print as a pointer or uintptr_t,
+      // whose width is the machine word's. Preserve that representation.
+      const bool PointerCarrier =
+          Op->Type->Size == pointerBytes(Opts.TheArch) &&
+          (printsAsPointer(Arg) ||
+           llvm::StringRef(Arg).starts_with("(uintptr_t)") ||
+           printsPointer(*Imm, Arg));
+      if (!PointerCarrier)
+        Arg = "(" + typeToC(Op->Type) + ")" + castOperand(exprStr(*Op));
+    }
     if (!Imm && !PointerArgument && Op->Type && Op->Type->Size >= 4 &&
         (!DefinedParam || (DefinedParam->Kind == NdTypeKind::Int &&
                            DefinedParam->Size <= Op->Type->Size)))
@@ -3310,6 +3397,8 @@ const HighExpr *HighCWriter::printedPointerSource(const HighExpr &Value) const {
 
 bool HighCWriter::printsPointer(const HighExpr &Value,
                                 llvm::StringRef Text) const {
+  std::string Storage;
+  Text = plainText(Text, Storage);
   if (const HighExpr *Shown = forwardedExpr(&Value);
       Shown && isBarePointerName(*Shown, Text))
     return true;
@@ -3679,8 +3768,11 @@ std::string HighCWriter::addrStr(const HighExpr &E, int ParentPrec,
           return "&" + *Slot;
         // The constant is the table and the rest the offset into it.  The
         // offset prints as the operand is, not as what peeling found under
-        // it: `(u64)(u8)i` indexes by the low byte of `i`, not by `i`.
-        if (Base->Kind != ExprKind::Const && indexedImageBase(*Inner) == Off)
+        // it: `(u64)(u8)i` indexes by the low byte of `i`, not by `i`.  A
+        // header address is `__ImageBase`'s, which the rest is added to.
+        if (Base->Kind != ExprKind::Const &&
+            (indexedImageBase(*Inner) == Off ||
+             (!Minus && isImageBaseConstant(*Off))))
           if (auto Table = imageBackingAddress(Off->ConstVal)) {
             constexpr int AddPrec = 9;
             const HighExpr &Index =
@@ -3780,6 +3872,8 @@ std::string HighCWriter::addrStr(const HighExpr &E, int ParentPrec,
 
 bool HighCWriter::isBarePointerName(const HighExpr &E,
                                     llvm::StringRef Text) const {
+  std::string Storage;
+  Text = plainText(Text, Storage);
   return (E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) &&
          !Text.empty() &&
          (llvm::isAlpha(Text.front()) || Text.front() == '_') &&
@@ -3828,27 +3922,58 @@ bool HighCWriter::isIntegerViewOfScalar(const HighExpr &E) const {
 }
 
 const HighExpr *HighCWriter::typedCallResult(const HighExpr *E) const {
-  const HighExpr *Inner = peelIntegerViewOps(E);
-  unsigned Peel = 0;
-  while (Inner && Peel++ < limits::kMaxIntegerViewUnwrapDepth) {
+  const HighExpr *Inner = E;
+  TypeRef View;
+  for (unsigned Depth = 0; Inner && Depth < limits::kMaxIntegerViewUnwrapDepth;
+       ++Depth) {
+    if (Inner->Kind == ExprKind::Call) {
+      TypeRef Return = knownCallReturnType(*Inner);
+      if (!Return)
+        Return = Inner->Type;
+      const TypeRef Carrier = Inner->Type ? Inner->Type : Return;
+      // Only identical integer views can disappear around a call. Its
+      // identity alone proves neither a truncation nor a sign change safe.
+      // A wider lifted carrier also differs from the declared C result.
+      if (!Return || Return->Kind != NdTypeKind::Int || !Carrier ||
+          Carrier->Kind != NdTypeKind::Int || Return->Size != Carrier->Size ||
+          Return->IsSigned != Carrier->IsSigned ||
+          (View &&
+           (View->Size != Return->Size || View->IsSigned != Return->IsSigned)))
+        return nullptr;
+      return Inner;
+    }
+    const TypeRef Type = Inner->Kind == ExprKind::Cast && Inner->CastTo
+                             ? Inner->CastTo
+                             : Inner->Type;
+    if (!Type || Type->Kind != NdTypeKind::Int ||
+        (View &&
+         (View->Size != Type->Size || View->IsSigned != Type->IsSigned)))
+      return nullptr;
+    View = Type;
     if (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi) {
       const std::string Name = copyForwardName(varName(Inner->Var));
       if (auto Fwd = ValueForward.find(Name);
           Fwd != ValueForward.end() && Fwd->second && Fwd->second != Inner) {
-        Inner = peelIntegerViewOps(Fwd->second);
+        Inner = Fwd->second;
         continue;
       }
+      return nullptr;
     }
-    break;
+    const bool ScalarView =
+        (Inner->Kind == ExprKind::Cast || Inner->Kind == ExprKind::BitCast ||
+         (Inner->Kind == ExprKind::UnaryOp &&
+          (Inner->Op == NdOp::INT_ZEXT || Inner->Op == NdOp::INT_SEXT))) &&
+        Inner->Operands.size() == 1;
+    const bool LowPart = Inner->Kind == ExprKind::BinOp &&
+                         Inner->Op == NdOp::SUBBYTES &&
+                         Inner->Operands.size() == 2 && Inner->Operands[1] &&
+                         Inner->Operands[1]->Kind == ExprKind::Const &&
+                         Inner->Operands[1]->ConstVal == 0;
+    if ((!ScalarView && !LowPart) || !Inner->Operands[0])
+      return nullptr;
+    Inner = Inner->Operands[0].get();
   }
-  if (!Inner || Inner->Kind != ExprKind::Call)
-    return nullptr;
-  TypeRef Ret = knownCallReturnType(*Inner);
-  if (!Ret)
-    Ret = Inner->Type;
-  if (!Ret || Ret->Kind != NdTypeKind::Int)
-    return nullptr;
-  return Inner;
+  return nullptr;
 }
 
 bool HighCWriter::isCtorSourceExpr(const HighExpr *Op) const {
@@ -4552,6 +4677,8 @@ HighCWriter::typedArgumentText(const HighExpr &E, const TypeRef &Expected,
 
 bool HighCWriter::printsAsInteger(const HighExpr &E,
                                   llvm::StringRef Text) const {
+  std::string Storage;
+  Text = plainText(Text, Storage);
   auto Integer = [](const TypeRef &Type) {
     return Type && (Type->Kind == NdTypeKind::Int ||
                     (Type->Kind == NdTypeKind::Struct && Type->IsEnum));
@@ -4874,7 +5001,7 @@ TypeRef HighCWriter::debugParamType(const MedVar &V) const {
       debugParamBinding(*CurrentFunc, static_cast<size_t>(V.Id));
   if (B.Index < 0 || !B.Whole)
     return nullptr;
-  const auto &FS = resolvedFunction(CurrentFunc->Entry);
+  const auto &FS = resolvedFunction(*CurrentFunc);
   if (!FS || static_cast<size_t>(B.Index) >= FS->Params.size())
     return nullptr;
   TypeRef Ty = FS->Params[B.Index].second;
@@ -5029,7 +5156,7 @@ TypeRef HighCWriter::declaredRecordPointee(const HighExpr &Base) const {
   if (!HasRecordParamTypes)
     return nullptr;
   if (Dbg) {
-    if (const auto &FS = resolvedFunction(CurrentFunc->Entry); FS) {
+    if (const auto &FS = resolvedFunction(*CurrentFunc); FS) {
       for (const auto &Param : FS->Params) {
         if (Param.first == Printed)
           return RecordFrom(Param.second);
@@ -5794,6 +5921,14 @@ std::string HighCWriter::unknownValueText(const HighExpr &E,
   return Text;
 }
 
+bool HighCWriter::isPlatformRegisterEntry(const HighExpr &E) const {
+  const auto &TRI = getTargetRegInfo(Opts.TheArch);
+  return E.Kind == ExprKind::Var && E.Var.Kind == MedVar::Reg &&
+         E.Var.SSAVer == 0 && E.Var.RenameTag < 0 &&
+         E.Var.Size == TRI.PointerSize &&
+         TRI.isPlatformRegister(E.Var.RegOff, Opts.Format);
+}
+
 std::string HighCWriter::unknownVarUse(const HighExpr &E,
                                        const std::string &Name,
                                        const std::string &RawName) {
@@ -5815,9 +5950,20 @@ std::string HighCWriter::unknownVarUse(const HighExpr &E,
       !(CurrentFunc &&
         isSyntheticEntryStackPointer(E.Var, *CurrentFunc, Opts.TheArch))) {
     const auto &TRI = getTargetRegInfo(Opts.TheArch);
-    if (Opts.TheArch == Arch::AArch64 && E.Var.Kind == MedVar::Reg &&
-        TRI.isLinkRegister(E.Var.RegOff) && E.Var.Size == TRI.PointerSize)
+    // The link register's full entry value is the return address, as the
+    // LLVM route reads it: AArch64 x30 and ARM LR alike (x86 has none).
+    if (E.Var.Kind == MedVar::Reg && TRI.isLinkRegister(E.Var.RegOff) &&
+        E.Var.Size == TRI.PointerSize)
       return "(uintptr_t)__builtin_return_address(0)";
+    // The platform register's entry value is the platform's state, which C
+    // reads from the register itself.
+    if (isPlatformRegisterEntry(E) && TRI.GetRegName) {
+      if (Opts.Format == BinaryFormat::COFF)
+        return "__getReg(18)";
+      return "({ uint64_t __platform; __asm__ volatile(\"mov %0, " +
+             llvm::StringRef(TRI.GetRegName(E.Var.RegOff, E.Var.Size)).lower() +
+             "\" : \"=r\"(__platform)); __platform; })";
+    }
     if (x87HelperFor(E) == X87CHelper::ControlWord)
       return useX87Helper(X87CHelper::ControlWord) + "()";
     return unknownValueText(E, "register");
@@ -6152,6 +6298,98 @@ const HighExpr *HighCWriter::forwardedExpr(const HighExpr *E) const {
   return E;
 }
 
+uint16_t HighCWriter::zeroTestBytes(const HighExpr &Value,
+                                    const HighExpr &Zero) {
+  const uint16_t ValueBytes = Value.Type ? Value.Type->Size : 0;
+  const uint16_t ZeroBytes = Zero.Type ? Zero.Type->Size : 0;
+  return ValueBytes && ZeroBytes ? std::min(ValueBytes, ZeroBytes)
+                                 : std::max(ValueBytes, ZeroBytes);
+}
+
+unsigned HighCWriter::lowBytesRead(const HighExpr *E) const {
+  constexpr unsigned Unknown = std::numeric_limits<unsigned>::max();
+  unsigned Bytes = Unknown;
+  const auto Narrow = [&Bytes](const TypeRef &Type) {
+    if (Type && Type->Size)
+      Bytes = std::min<unsigned>(Bytes, Type->Size);
+  };
+  const auto IsZero = [this](const ExprPtr &Op) {
+    const HighExpr *Value = unwrapIntegerView(Op.get());
+    return Value && Value->Kind == ExprKind::Const && Value->ConstVal == 0;
+  };
+  for (unsigned Depth = 0; E && Depth < limits::kMaxIntegerViewUnwrapDepth;
+       ++Depth) {
+    if (E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi) {
+      if (E->Type && E->Type->Size)
+        Narrow(E->Type);
+      else if (E->Var.Size)
+        Bytes = std::min<unsigned>(Bytes, E->Var.Size);
+      const auto It = ValueForward.find(varName(E->Var));
+      if (It == ValueForward.end() || !It->second || It->second == E)
+        return Bytes == Unknown ? 0 : Bytes;
+      E = It->second;
+      continue;
+    }
+    if (E->Kind == ExprKind::UnaryOp && E->Op == NdOp::BOOL_NOT &&
+        !E->Operands.empty()) {
+      Bytes = Unknown;
+      E = E->Operands[0].get();
+      continue;
+    }
+    if ((E->Kind == ExprKind::Cast || E->Kind == ExprKind::BitCast ||
+         (E->Kind == ExprKind::UnaryOp &&
+          (E->Op == NdOp::INT_ZEXT || E->Op == NdOp::INT_SEXT))) &&
+        !E->Operands.empty()) {
+      Narrow(E->Type);
+      E = E->Operands[0].get();
+      continue;
+    }
+    if (E->Kind == ExprKind::BinOp && E->Operands.size() == 2 &&
+        E->Operands[0] && E->Operands[1]) {
+      const bool ZeroRight = IsZero(E->Operands[1]);
+      if (ZeroRight || IsZero(E->Operands[0])) {
+        if (E->Op == NdOp::INT_EQUAL || E->Op == NdOp::INT_NOTEQUAL ||
+            E->Op == NdOp::INT_LESS || E->Op == NdOp::INT_LESSEQUAL ||
+            E->Op == NdOp::INT_SLESS || E->Op == NdOp::INT_SLESSEQUAL) {
+          // A test reads what its value does, whatever views its result passes
+          // through, and its zero states how much of that value.
+          Bytes = Unknown;
+          Narrow(E->Operands[ZeroRight ? 1 : 0]->Type);
+        } else {
+          // Any other operation with zero keeps the value at its own width.
+          Narrow(E->Type);
+        }
+        E = E->Operands[ZeroRight ? 0 : 1].get();
+        continue;
+      }
+    }
+    Narrow(E->Type);
+    return Bytes == Unknown ? 0 : Bytes;
+  }
+  return 0;
+}
+
+bool HighCWriter::isNotBelowZeroOf(llvm::StringRef Not,
+                                   llvm::StringRef Value) const {
+  std::string NotStorage, ValueStorage;
+  llvm::StringRef Plain = plainText(Not, NotStorage);
+  return Plain.consume_front("!(") && Plain.consume_back(" < 0)") &&
+         Plain == plainText(Value, ValueStorage);
+}
+
+bool HighCWriter::printsWiderThanItsValue(const HighExpr &E) const {
+  if (E.Kind != ExprKind::Var && E.Kind != ExprKind::Phi)
+    return false;
+  const auto Printed = printedIntegerType(E);
+  return Printed && E.Type && E.Type->Kind == NdTypeKind::Int && E.Type->Size &&
+         Printed->first > E.Type->Size;
+}
+
+bool HighCWriter::readsSameBytes(const HighExpr *A, const HighExpr *B) const {
+  const unsigned Bytes = lowBytesRead(A);
+  return Bytes && Bytes == lowBytesRead(B);
+}
+
 const HighExpr *HighCWriter::sameWidthVariable(const HighExpr &E) const {
   // Integers and pointers, which convert by their bits; a float converts by
   // its value.
@@ -6212,7 +6450,8 @@ std::string HighCWriter::callStatementText(const HighExpr &Call) {
   std::string Text = statementCallText(Call);
   if (aarch64PointerCRequiresDiscard(Call.IntrinsicId))
     Text = llvm::formatv(kAArch64PointerCDiscardExpression, Text).str();
-  return Text + ";" + intrinsicInstructionComment(Call);
+  return Text + ";" + intrinsicInstructionComment(Call) +
+         analysisDispatchComment(Call);
 }
 
 const HighExpr *HighCWriter::unwrapIntegerView(const HighExpr *E) const {
@@ -6583,8 +6822,7 @@ bool HighCWriter::frameStorageAlignmentHolds(const HighExpr &Call) {
 
 const HighFunc::VaStartForwarder *
 HighCWriter::vaStartForwarder(const HighFunc &Func) const {
-  if (!Func.VaStart || Func.SourceTypeHint ||
-      (Dbg && Dbg->resolveFunction(Func.Entry)))
+  if (!Func.VaStart || Func.SourceTypeHint || (Dbg && debugFunction(Func)))
     return nullptr;
   if (!Func.VaStart->Junk.empty()) {
     // Decided once; a call back into the function while it is decided
@@ -7277,8 +7515,22 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
       const std::string Prefix = callIdentifier(E) + "(";
       if (llvm::StringRef(Text).starts_with(Prefix) && Text.back() == ')' &&
           c_memory::castOperand(Text.substr(Prefix.size() - 1)) ==
-              Text.substr(Prefix.size() - 1))
+              Text.substr(Prefix.size() - 1)) {
+        // Match MedLLVM's integer carrier assignment: retain the declared
+        // result's bits, then zero-extend or truncate them to the lifted
+        // width. C's implicit widening of a signed status would sign-extend.
+        if (const auto Carrier = integerCallResultCarrier(E, Return);
+            &E != StatementCall && Carrier) {
+          if (Carrier->Size > Return->Size)
+            Text = "(" + typeToC(NdType::makeInt(Return->Size, false)) + ")" +
+                   Text;
+          Text =
+              "(" + typeToC(Carrier) + ")" + castOperandText(std::move(Text));
+          return typedText(E, std::move(Text), Carrier->Size,
+                           Carrier->IsSigned);
+        }
         return typedText(E, std::move(Text), Return->Size, Return->IsSigned);
+      }
     }
     return Text;
   }
@@ -7422,14 +7674,24 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     }
     return Result + "}";
   }
-  case ExprKind::Field:
+  case ExprKind::Field: {
     if (E.Operands.size() != 1 || !E.Operands[0] || !E.Operands[0]->Type ||
         E.Operands[0]->Type->Kind != NdTypeKind::Struct ||
         E.ConstVal >= E.Operands[0]->Type->Fields.size() ||
         !equalSourceTypes(E.Type, E.Operands[0]->Type->Fields[E.ConstVal]))
       llvm::report_fatal_error("HighC cannot render an invalid source field");
+    const auto &Record = E.Operands[0]->Type;
+    if (!Record->SourceName.empty()) {
+      const auto Field = Record->displayFieldPathAt(
+          Record->FieldOffsets[E.ConstVal], E.Type->Size,
+          /*EnterNestedAtZero=*/false);
+      if (!Field)
+        throw std::runtime_error(c_detail::kUnknownNamedRecordField);
+      return "(" + exprStr(*E.Operands[0]) + ")." + *Field;
+    }
     return "(" + exprStr(*E.Operands[0]) + ").field_" +
            std::to_string(E.ConstVal);
+  }
   default:
     return "/* unknown expr */";
   }
@@ -7555,37 +7817,7 @@ std::string HighCWriter::formatReturnExpr(const HighExpr &Expr) {
   // i32 add. A real widen (i16→i64) stays so narrowing the C return does
   // not turn zero extension into sign extension.
   auto PeelReturnViews = [&](const HighExpr *Cur) {
-    for (unsigned Peel = 0; Peel < limits::kMaxIntegerViewUnwrapDepth && Cur;
-         ++Peel) {
-      // A view of an integer only: the bits of a floating value are no
-      // view of it, and C would convert the value they were peeled from.
-      if ((Cur->Kind == ExprKind::Cast || Cur->Kind == ExprKind::BitCast) &&
-          !Cur->Operands.empty() && Cur->Operands[0] &&
-          (!Cur->Operands[0]->Type ||
-           Cur->Operands[0]->Type->Kind == NdTypeKind::Int ||
-           Cur->Operands[0]->Type->Kind == NdTypeKind::Ptr)) {
-        Cur = Cur->Operands[0].get();
-        continue;
-      }
-      if (Cur->Kind == ExprKind::UnaryOp &&
-          (Cur->Op == NdOp::INT_ZEXT || Cur->Op == NdOp::INT_SEXT) &&
-          !Cur->Operands.empty() && Cur->Operands[0] &&
-          Cur->Operands[0]->Type &&
-          Cur->Operands[0]->Type->Kind == NdTypeKind::Int &&
-          Cur->Operands[0]->Type->Size == FuncReturnType->Size) {
-        Cur = Cur->Operands[0].get();
-        continue;
-      }
-      if (Cur->Kind == ExprKind::BinOp && Cur->Op == NdOp::SUBBYTES &&
-          Cur->Operands.size() == 2 && Cur->Operands[0] && Cur->Operands[1] &&
-          Cur->Operands[1]->Kind == ExprKind::Const &&
-          Cur->Operands[1]->ConstVal == 0) {
-        Cur = Cur->Operands[0].get();
-        continue;
-      }
-      break;
-    }
-    return Cur;
+    return Cur ? &lowBytesSource(*Cur, FuncReturnType->Size) : nullptr;
   };
   const HighExpr *Inner = PeelReturnViews(&Expr);
   if (Inner && (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi)) {
@@ -7800,7 +8032,11 @@ std::optional<va_t> HighCWriter::constAddress(const HighExpr &E) const {
 }
 
 bool isImageDataAt(const BinaryImage &Img, va_t Addr) {
-  if (Addr == 0 || Addr == InvalidVA)
+  // The image's own headers are `__ImageBase`, never a copied object, and
+  // another module's storage an undefined data symbol names is no object of
+  // the image's.
+  if (Addr == 0 || Addr == InvalidVA || Img.imageBaseOffset(Addr) ||
+      declaredObjectExternAt(Img, Addr))
     return false;
   const Segment *Seg = Img.getSegmentFor(Addr);
   if (!Seg || !Seg->isReadable())
@@ -7928,6 +8164,8 @@ HighCWriter::sizedObjectAt(va_t Addr) const {
 
 std::optional<std::pair<va_t, uint64_t>>
 HighCWriter::indexedObjectAt(va_t Addr) const {
+  if (Opts.Image && Opts.Image->imageBaseOffset(Addr))
+    return std::nullopt;
   if (auto Object = sizedObjectAt(Addr))
     return Object;
   if (!Opts.Image)
@@ -8089,7 +8327,7 @@ HighCWriter::ImageSymbolName HighCWriter::imageSymbolName(va_t Addr) const {
       Named.Raw = Data->Name;
   }
   if (Named.Raw.empty() && Opts.Image) {
-    if (const Symbol *Sym = Opts.Image->findSymbolAt(Addr);
+    if (const Symbol *Sym = imageSymbolAt(Addr);
         Sym && !Sym->IsFunc && !Sym->Name.empty() &&
         llvm::StringRef(Sym->Name).find(kAutoFuncPrefix) != 0) {
       // A mangled name keeps the underscores its scheme starts with
@@ -8199,7 +8437,7 @@ void HighCWriter::noteImageObject(va_t Addr, const TypeRef &Ty, bool Written,
     Obj.WeakType = false;
   }
   Obj.Written |= Written;
-  if (Opts.SourceMap && CurrentFunc) {
+  if (Opts.SourceMap && CurrentFunc && !sourceBodyOrigin(*CurrentFunc)) {
     SourceVariable Variable;
     Variable.Function = CurrentFunc->Entry;
     Variable.Address = Addr;
@@ -8232,8 +8470,9 @@ void HighCWriter::noteImageAddress(va_t Addr) {
   // symbol sizes, else as the accesses that name it, or the pointer a
   // relocated slot holds, which the type of any access replaces.
   uint64_t Size = Opts.Image ? Opts.Image->dataObjectSizeAt(Addr) : 0;
-  if (!Size && Opts.AccessWidths)
-    Size = Opts.AccessWidths->at(Addr).value_or(0);
+  if (!Size)
+    if (const auto *Widths = Opts.dataAccessWidths())
+      Size = Widths->at(Addr).value_or(0);
   if (!Size && Opts.Image &&
       (Opts.Image->CodePtrRelocSlots.count(Addr) ||
        Opts.Image->DataPtrRelocSlots.count(Addr)))
@@ -8248,8 +8487,8 @@ void HighCWriter::noteImageAddress(va_t Addr) {
 
 std::optional<uint64_t>
 HighCWriter::dataNameWidth(va_t Addr, const ImageObject &Obj) const {
-  if (Opts.AccessWidths) {
-    if (const auto Width = Opts.AccessWidths->at(Addr); Width && *Width)
+  if (const auto *Widths = Opts.dataAccessWidths()) {
+    if (const auto Width = Widths->at(Addr); Width && *Width)
       return *Width;
     return std::nullopt;
   }
@@ -8320,10 +8559,15 @@ bool HighCWriter::namesFileScope(llvm::StringRef Name) const {
 }
 
 const std::optional<FunctionSym> &
-HighCWriter::resolvedFunction(va_t Entry) const {
-  auto [It, Added] = ResolvedFunctions.try_emplace(Entry);
-  if (Added && Dbg)
-    It->second = Dbg->resolveFunction(Entry);
+HighCWriter::resolvedFunction(const HighFunc &Function) const {
+  auto *Debug = functionDebugContext(Function);
+  if (!Debug) {
+    static const std::optional<FunctionSym> None;
+    return None;
+  }
+  auto [It, Added] = ResolvedFunctions.try_emplace(Function.Entry);
+  if (Added)
+    It->second = Debug->resolveFunction(Function.Entry);
   return It->second;
 }
 
@@ -8341,7 +8585,7 @@ bool HighCWriter::isReservedParamDisplayName(llvm::StringRef Name) const {
     if (!Display.empty() && Name == Display)
       return true;
   if (Dbg && CurrentFunc) {
-    if (const auto &FS = resolvedFunction(CurrentFunc->Entry); FS) {
+    if (const auto &FS = resolvedFunction(*CurrentFunc); FS) {
       if (isMsvcIndirectReturn(FS->ReturnType, Opts.TheArch, Opts.Format) &&
           Name == "result")
         return true;
@@ -8496,19 +8740,36 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
         }
         return nullptr;
       };
-      auto NotSignedNeg = [&](const HighExpr *E) -> const HighExpr * {
-        E = forwardedExpr(E);
-        E = unwrapIntegerView(E);
-        if (!E || E->Kind != ExprKind::UnaryOp || E->Op != NdOp::BOOL_NOT ||
-            E->Operands.empty() || !E->Operands[0])
+      // The value tested by `!(x < 0)`, `(x < 0) == 0`, or the normalized
+      // `0 <= x`, and the width of that test.
+      auto NonNegativeValue = [&](const HighExpr *E,
+                                  uint16_t &Bytes) -> ExprPtr {
+        E = unwrapIntegerView(forwardedExpr(E));
+        if (!E || E->Operands.empty() || !E->Operands[0])
           return nullptr;
-        const HighExpr *Cmp = forwardedExpr(E->Operands[0].get());
-        Cmp = unwrapIntegerView(Cmp);
+        if (E->Kind == ExprKind::BinOp && E->Op == NdOp::INT_SLESSEQUAL &&
+            E->Operands.size() == 2 && E->Operands[1] &&
+            IsZeroLike(E->Operands[0])) {
+          Bytes = zeroTestBytes(*E->Operands[1], *E->Operands[0]);
+          return E->Operands[1];
+        }
+        const HighExpr *Below = nullptr;
+        if (E->Kind == ExprKind::UnaryOp && E->Op == NdOp::BOOL_NOT)
+          Below = E->Operands[0].get();
+        else if (E->Kind == ExprKind::BinOp && E->Op == NdOp::INT_EQUAL &&
+                 E->Operands.size() == 2 && E->Operands[1])
+          Below = IsZeroLike(E->Operands[1])   ? E->Operands[0].get()
+                  : IsZeroLike(E->Operands[0]) ? E->Operands[1].get()
+                                               : nullptr;
+        if (!Below)
+          return nullptr;
+        const HighExpr *Cmp = unwrapIntegerView(forwardedExpr(Below));
         if (!Cmp || Cmp->Kind != ExprKind::BinOp ||
             Cmp->Op != NdOp::INT_SLESS || Cmp->Operands.size() != 2 ||
-            !IsZeroLike(Cmp->Operands[1]) || !Cmp->Operands[0])
+            !Cmp->Operands[0] || !IsZeroLike(Cmp->Operands[1]))
           return nullptr;
-        return ScalarOf(Cmp->Operands[0].get());
+        Bytes = zeroTestBytes(*Cmp->Operands[0], *Cmp->Operands[1]);
+        return Cmp->Operands[0];
       };
       auto SameScalar = [&](const HighExpr *A, const HighExpr *B) {
         if (!A || !B ||
@@ -8520,26 +8781,28 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
         return copyForwardName(varName(A->Var)) ==
                copyForwardName(varName(B->Var));
       };
-      const HighExpr *Pos = ScalarOf(Cur->Operands[0].get());
-      const HighExpr *Neg = NotSignedNeg(Cur->Operands[1].get());
-      if (!SameScalar(Pos, Neg)) {
-        Pos = ScalarOf(Cur->Operands[1].get());
-        Neg = NotSignedNeg(Cur->Operands[0].get());
+      for (unsigned Truth = 0; Truth != 2; ++Truth) {
+        uint16_t Bytes = 0;
+        const ExprPtr Value =
+            NonNegativeValue(Cur->Operands[1 - Truth].get(), Bytes);
+        if (!Value || !Bytes ||
+            !SameScalar(ScalarOf(Cur->Operands[Truth].get()),
+                        ScalarOf(Value.get())) ||
+            !readsSameBytes(Cur->Operands[0].get(), Cur->Operands[1].get()))
+          continue;
+        // Printed as the negated comparison, which spells the view it reads.
+        return exprStr(*HighExpr::makeUnary(
+            NdOp::BOOL_NOT,
+            HighExpr::makeBinop(NdOp::INT_SLESSEQUAL, Value,
+                                HighExpr::makeConst(0, Bytes))));
       }
-      if (SameScalar(Pos, Neg))
-        return exprStr(*Pos) + " > 0";
     }
     std::string L = condStr(*Cur->Operands[0]);
     std::string R = condStr(*Cur->Operands[1]);
     if (Cur->Op == NdOp::BOOL_AND) {
-      auto NotLessZero = [](const std::string &Expr, const std::string &Not) {
-        return Not == "!(" + Expr + " < 0)" ||
-               Not == "!((int32_t)" + Expr + " < 0)" ||
-               Not == "!((int64_t)" + Expr + " < 0)";
-      };
-      if (NotLessZero(L, R))
+      if (isNotBelowZeroOf(R, L))
         return L + " > 0";
-      if (NotLessZero(R, L))
+      if (isNotBelowZeroOf(L, R))
         return R + " > 0";
       if (L.find(" || ") != std::string::npos)
         L = "(" + L + ")";
@@ -8551,16 +8814,61 @@ std::string HighCWriter::condStrImpl(const HighExpr &E) {
   }
   // Boolean context: a view the test keeps whether it reads zero through is
   // no sanitizer wrap. Keep wraps on add/sub/mul.
-  if (Cur && Cur != &E &&
-      (Cur->Kind == ExprKind::Var || Cur->Kind == ExprKind::Phi ||
-       Cur->Kind == ExprKind::Call ||
-       (Cur->Kind == ExprKind::UnaryOp && Cur->Op == NdOp::BOOL_NOT) ||
-       (Cur->Kind == ExprKind::BinOp &&
-        (Cur->Op == NdOp::INT_EQUAL || Cur->Op == NdOp::INT_NOTEQUAL ||
-         Cur->Op == NdOp::INT_LESS || Cur->Op == NdOp::INT_LESSEQUAL ||
-         Cur->Op == NdOp::INT_SLESS || Cur->Op == NdOp::INT_SLESSEQUAL))))
-    return exprStr(*Cur);
-  return exprStr(E);
+  const HighExpr *Tested =
+      Cur && Cur != &E &&
+              (Cur->Kind == ExprKind::Var || Cur->Kind == ExprKind::Phi ||
+               Cur->Kind == ExprKind::Call ||
+               (Cur->Kind == ExprKind::UnaryOp && Cur->Op == NdOp::BOOL_NOT) ||
+               (Cur->Kind == ExprKind::BinOp &&
+                (Cur->Op == NdOp::INT_EQUAL || Cur->Op == NdOp::INT_NOTEQUAL ||
+                 Cur->Op == NdOp::INT_LESS || Cur->Op == NdOp::INT_LESSEQUAL ||
+                 Cur->Op == NdOp::INT_SLESS ||
+                 Cur->Op == NdOp::INT_SLESSEQUAL)))
+          ? Cur
+          : &E;
+  const HighExpr *Enclosing = TruthTested;
+  TruthTested = Tested;
+  std::string Text = exprStr(*Tested);
+  TruthTested = Enclosing;
+  // A name declared wider than its value has bytes the test does not read.
+  if (printsWiderThanItsValue(*Tested))
+    return "(" + typeToC(NdType::makeInt(Tested->Type->Size, false)) + ")" +
+           castOperandText(std::move(Text));
+  return Text;
+}
+
+std::string HighCWriter::invertedTruthValue(const HighExpr &Test,
+                                            const HighExpr &Node,
+                                            int ParentPrec) {
+  // Inverting `x == 0` leaves the condition `x`, whose value is not 0 or 1.
+  const HighExpr *Compare = unwrapIntegerView(forwardedExpr(&Test));
+  if (&Node != TruthTested && Compare && Compare->Kind == ExprKind::BinOp &&
+      Compare->Op == NdOp::INT_EQUAL && Compare->Operands.size() == 2 &&
+      Compare->Operands[0] && Compare->Operands[1]) {
+    const auto IsZero = [&](const ExprPtr &Op) {
+      const HighExpr *Literal = unwrapIntegerView(Op.get());
+      return Literal && Literal->Kind == ExprKind::Const &&
+             Literal->ConstVal == 0;
+    };
+    const HighExpr *Value =
+        IsZero(Compare->Operands[1])   ? Compare->Operands[0].get()
+        : IsZero(Compare->Operands[0]) ? Compare->Operands[1].get()
+                                       : nullptr;
+    const HighExpr *Shown =
+        Value ? unwrapIntegerView(forwardedExpr(Value)) : nullptr;
+    if (Value && (!Shown || !printsTruthValue(*Shown))) {
+      auto NotZero = HighExpr::makeBinop(
+          NdOp::INT_NOTEQUAL, Compare->Operands[0], Compare->Operands[1]);
+      NotZero->Type = Compare->Type;
+      return renderBinOp(*NotZero, ParentPrec);
+    }
+  }
+  // The inverse is a condition of its own, `!a && !b` of `!(a || b)` or
+  // `a >= b` of `!(a < b)`: as an operand it keeps its grouping.
+  std::string Inverted = invertCondStr(Test);
+  if (ParentPrec > 0 && hasTopLevelBinaryOperator(Inverted))
+    Inverted = "(" + Inverted + ")";
+  return Inverted;
 }
 
 std::optional<std::string>
@@ -8817,6 +9125,11 @@ std::string HighCWriter::invertCondStrImpl(const HighExpr &E) {
       std::string L = invertCondStr(*Cur->Operands[0]);
       std::string R = invertCondStr(*Cur->Operands[1]);
       if (BoolOr) {
+        // `x == 0 || x < 0` inverts to `x > 0`.
+        if (isNotBelowZeroOf(R, L))
+          return L + " > 0";
+        if (isNotBelowZeroOf(L, R))
+          return R + " > 0";
         if (L.find(" || ") != std::string::npos)
           L = "(" + L + ")";
         if (R.find(" || ") != std::string::npos)
@@ -8841,6 +9154,10 @@ std::string HighCWriter::invertCondStrImpl(const HighExpr &E) {
         return S;
       }
     }
+    // `!(x >= 0)` reads as `x < 0`.
+    if (Cur->Op == NdOp::INT_SLESSEQUAL && IsZeroLike(Cur->Operands[0]))
+      return exprStr(*HighExpr::makeBinop(NdOp::INT_SLESS, Cur->Operands[1],
+                                          Cur->Operands[0]));
     NdOp Inv = NdOp::NOP;
     switch (Cur->Op) {
     case NdOp::INT_EQUAL:

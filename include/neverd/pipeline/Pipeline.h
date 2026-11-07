@@ -15,6 +15,7 @@
 #define NEVERD_PIPELINE_PIPELINE_H
 
 #include "neverd/analysis/InterpreterSpecialization.h"
+#include "neverd/analysis/arch/x86_64/InterpreterMachineSourceABI.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/evm/EVMIR.h"
 #include "neverd/ir/FloatingCallArguments.h"
@@ -32,6 +33,7 @@
 #include "neverd/pipeline/SourceViewOptions.h"
 #include "neverd/sbf/SBFIR.h"
 #include "neverd/solver/SymSynthVerifier.h"
+#include "neverd/support/SharedValue.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
@@ -57,6 +59,7 @@ class PipelineTestPeer;
 
 class Decoder;
 class LLVMSourceMap;
+class X87CallGraphCache;
 
 /// What Pipeline::warmAnalysisCache left in a session's analysis cache.
 struct AnalysisCacheWarmup {
@@ -68,10 +71,15 @@ struct AnalysisCacheWarmup {
 
 struct OmittedCalleeMemo;
 struct ImageImportCounts;
+struct LowSEHWritableImageRanges;
+namespace libc {
+class StackProbeIndex;
+} // namespace libc
 
 /// Optional facts for consecutive restricted x64, i386, AArch64 and ARM
 /// analyses of an unchanged image. Owns the indexes borrowed by bounded
-/// machine-graph/body caches, not output IR or caller-dependent summaries. The
+/// machine-graph/body caches and, once Pipeline::prepareCallSummaries solves
+/// them, the image's call-register summaries; not output IR. The
 /// image and debug context must outlive the cache; reset it before changing
 /// either, including symbols, exception metadata, bytes or analysis policy.
 /// Function selection may vary. Pipeline checks the exact function-entry and
@@ -127,6 +135,9 @@ struct PipelineOptions {
   /// Experimental source recovery of one interpreter entry. Requires exactly
   /// one OnlyFunctionEntries element; never authorizes binary patching.
   std::optional<analysis::SpecializationOptions> InterpreterSpecialization;
+  /// Source storage only. Extended layouts require explicit machine recovery.
+  analysis::InterpreterMachineSourceABIKind InterpreterMachineABI =
+      analysis::InterpreterMachineSourceABIKind::ScalarV1;
   bool DumpLow = false;
   bool DumpMed = false;
   bool DumpHigh = false;
@@ -170,6 +181,12 @@ struct PipelineOptions {
   /// instead leaves each refused one out and names it in its audit, as a
   /// whole-image run does.
   bool OmitRefusedFunctions = false;
+  /// A unit that names each function it leaves out (a whole LLVM C unit)
+  /// declares a function only when the LLVM emitter refuses its body for a
+  /// stale code or data address, and emits the others, recording why in the
+  /// function's audit (LLVMDiagnostic). Lifting and patching, whose output
+  /// names nothing it leaves out, fail at such a body instead.
+  bool OmitRefusedLLVMBodies = false;
   /// The user's function edits: an address made the entry of a function
   /// (true) or no longer one (false).  Whole-program detection follows them;
   /// a restricted run lifts its OnlyFunctionEntries.
@@ -218,6 +235,13 @@ struct PipelineOptions {
   /// Borrowed for this run only. See PipelineAnalysisCache's lifetime and
   /// invalidation contract; nullptr preserves independent analysis.
   PipelineAnalysisCache *AnalysisCache = nullptr;
+
+  /// Display recovery may use tentative control-flow and stack relationships.
+  /// Binary output and specialization always request independent evidence.
+  bool allowsAnalysisRecovery() const {
+    return !PatchMode && (!LiftMode || SourceProjection) && !DumpLlvm &&
+           !MedAnalysisOnly && !InterpreterSpecialization.has_value();
+  }
 
   /// Machine analysis and rewriting exclude presentation-only source hints.
   bool usesMachineMedIR() const {
@@ -290,12 +314,22 @@ struct PipelineFunctionAudit {
   /// ownership; see LowFunc::UnprovenReturnAddresses.
   std::vector<va_t> UnprovenReturns;
   std::vector<va_t> TruncatedPaths;
+  /// Final CFG instruction starts and unsupported original-instruction sites,
+  /// collected only for a DeferMedIR view. Rejected functions retain this
+  /// metadata; it grants neither LowIR admission nor executable instruction
+  /// semantics. A state-source consumer must independently relift the selected
+  /// bytes.
+  std::vector<va_t> NativeInstructionAddresses;
   bool HasLowIR = false;
   bool HasMedIR = false;
   bool MedIRVerified = false;
   bool HasLLVMDefinition = false;
   /// Why MedIR refused the function (MedIRFailed); empty otherwise.
   std::string Diagnostic;
+  /// Why the LLVM module declares the function only: its body refused a
+  /// stale code or data address, and the others were emitted without it.
+  /// Empty otherwise.
+  std::string LLVMDiagnostic;
 };
 
 /// Signature bodies of the direct callees a set of functions leaves out.
@@ -306,6 +340,13 @@ struct OmittedCalleeBodies {
   /// Include direct callees whose arity is known but whose source types are
   /// not.
   bool IncludesSourceDeclarations = false;
+  /// Include bounded callees needed to distinguish an observed low register
+  /// prefix from obsolete full-width spill inputs in source projections.
+  bool IncludesSourceParameterReads = false;
+  /// Original blocks for source input-use/destruction proofs. Shared with
+  /// bounded conversions; optimized MedIR cannot certify physical exit state.
+  std::map<va_t, std::shared_ptr<const std::vector<LowBlock>>>
+      SourceOriginalBlocks;
 };
 
 struct PipelineResult {
@@ -321,22 +362,23 @@ struct PipelineResult {
   std::optional<SourceFunctionTypeHint> InterpreterMachineSourceABI;
   /// Direct-callee GPR write summaries (see CallRegisterEffects.h), keyed by
   /// callee entry.  Absent entries keep the ABI clobber set.
-  std::map<va_t, uint32_t> CallMayWriteGPRs;
+  SharedValue<std::map<va_t, uint32_t>> CallMayWriteGPRs;
   /// Scalar register words proved equal at every ordinary callee return.
-  std::map<va_t, GPRExitConstants> CallExitConstants;
+  SharedValue<std::map<va_t, GPRExitConstants>> CallExitConstants;
   /// Validated register-only leaves, shared with the bounded callee cache.
-  std::map<va_t, std::shared_ptr<const std::vector<LowOp>>> CallRegisterLeaves;
+  SharedValue<std::map<va_t, std::shared_ptr<const std::vector<LowOp>>>>
+      CallRegisterLeaves;
   /// Bytes of each GPR family a lifted callee reads before writing (its
   /// register arguments, including pass-throughs), keyed by callee entry.
-  std::map<va_t, GPRReadWidths> CallEntryReadGPRs;
+  SharedValue<std::map<va_t, GPRReadWidths>> CallEntryReadGPRs;
   /// Incoming GPR values proved unobserved independently of argument inference.
-  std::map<va_t, GPRFamilyMask> CallUnreadGPRs;
+  SharedValue<std::map<va_t, GPRFamilyMask>> CallUnreadGPRs;
   /// For each function-pointer variable a call may go through, by address,
   /// the key of the routine whose summary gives that call its arguments: the
   /// routine the variable starts at (collectPointerVariableCallees), or the
   /// variable itself for another module's routine, whose prototype fixes the
   /// summary kept under the variable's address.
-  std::map<va_t, va_t> CallArgumentSources;
+  SharedValue<std::map<va_t, va_t>> CallArgumentSources;
   /// The bodies recoverModuleCallAbi lifted for the direct callees these
   /// functions leave out, as lifted: another recovery over the same functions
   /// (the native LLVM route of a session) reuses them instead of lifting them
@@ -352,14 +394,26 @@ struct PipelineResult {
   std::shared_ptr<OmittedCalleeMemo> CalleeSignatureMemo;
   /// Bytes of the scalar float each prototyped import returns in the vector
   /// return register, keyed by the stub or slot a call names it by.
-  std::map<va_t, uint16_t> CallFloatReturns;
+  SharedValue<std::map<va_t, uint16_t>> CallFloatReturns;
   /// The calls in LowFuncs whose constant format names every argument they
   /// read, keyed by the call instruction's address.
   std::map<va_t, FormattedCall> FormattedCalls;
   /// Positional arguments implied by the incoming stack slots a lifted callee
   /// reads, including through tail calls (0 when none), keyed by callee
   /// entry. Absent entries leave the stack arguments to the call-site scan.
-  std::map<va_t, int> CallEntryStackArgs;
+  SharedValue<std::map<va_t, int>> CallEntryStackArgs;
+  /// Where the run took an image's summaries (Pipeline::prepareCallSummaries),
+  /// the callees in CallEntryStackArgs at an import (BinaryImage::findImportAt)
+  /// whose count is not negative, listed once for the image in ascending
+  /// order; null otherwise.
+  std::shared_ptr<const std::vector<va_t>> CallEntryStackArgImports;
+  /// The writable ranges of the image that MedIR's SEH runtime catalog
+  /// reads (collectLowSEHRuntimeMemory), kept with the image's analysis
+  /// inputs and set by buildLowIR.
+  std::shared_ptr<const LowSEHWritableImageRanges> SEHWritableImageRanges;
+  /// The image's stack-probe helpers, kept with its analysis inputs and set
+  /// by buildLowIR, which MedIR's converters ask about each call.
+  std::shared_ptr<const libc::StackProbeIndex> StackProbeIndex;
   /// The callees in CallEntryStackArgs whose count a typed prototype gives
   /// slot by slot where every argument is on the stack (i386): a call to one
   /// passes those slots and no register.
@@ -374,13 +428,14 @@ struct PipelineResult {
   std::map<va_t, int> CallEntryArgumentCounts;
   /// Complete fixed scalar FP import signatures, with no integer or stack
   /// parameters. Their register uses must reach SSA before call setup scans.
-  std::map<va_t, FloatingCallArguments> CallEntryFloatingArguments;
+  SharedValue<std::map<va_t, FloatingCallArguments>> CallEntryFloatingArguments;
   /// Complete fixed scalar integer operands with exact stack locations.
-  std::map<va_t, FixedIntegerCallArguments> CallEntryIntegerArguments;
+  SharedValue<std::map<va_t, FixedIntegerCallArguments>>
+      CallEntryIntegerArguments;
   std::shared_ptr<const std::map<va_t, FixedIntegerCallArguments>>
       OmittedCalleeIntegerArguments;
   /// Fixed scalar widths of header variadic imports; the tail stays open.
-  std::map<va_t, std::vector<uint16_t>> CallEntryVariadicArguments;
+  SharedValue<std::map<va_t, std::vector<uint16_t>>> CallEntryVariadicArguments;
   std::shared_ptr<const std::map<va_t, std::vector<uint16_t>>>
       OmittedCalleeVariadicArguments;
   /// The same signatures for imports reached only by omitted callees.
@@ -400,18 +455,18 @@ struct PipelineResult {
   /// Machine positions override arity tables that count source parameters.
   /// A recovered body alone cannot truncate this declared summary; exported
   /// bodies can still contribute additional reads to their entry summary.
-  std::set<va_t> CallPrototypeArguments;
+  SharedValue<std::set<va_t>> CallPrototypeArguments;
   /// Explicit user declarations among CallPrototypeArguments. Source-call
   /// binding uses this identity to override automatic Darwin SDK contracts;
   /// a header record layout alone does not override those contracts.
-  std::set<va_t> CallUserPrototypes;
+  SharedValue<std::set<va_t>> CallUserPrototypes;
   /// Entries of indirect-call dispatchers (`_guard_dispatch_icall`): a call to
   /// one passes the argument registers its caller set.
-  std::set<va_t> CallDispatchThunks;
+  SharedValue<std::set<va_t>> CallDispatchThunks;
   /// Register position of the first variadic argument of each lifted Win64
   /// variadic callee, keyed by callee entry: a call to one passes the fixed
   /// arguments and the variadic argument registers its caller set.
-  std::map<va_t, int> CallVariadicFrom;
+  SharedValue<std::map<va_t, int>> CallVariadicFrom;
   std::vector<MedFunc> MedFuncs;
   std::vector<HighFunc> HighFuncs;
   /// Shared source MedIR is ready; HighIR projection has not been requested.
@@ -468,7 +523,13 @@ struct FunctionOptimizationResult {
 /// reached by any definition, and Stop uses the documented severity order.
 struct OptimizationResult : FunctionOptimizationResult {
   uint64_t FunctionsVisited = 0;
+  /// The verifier or exception-contract refusal that stopped this transaction.
+  /// A failed candidate leaves the original module unchanged.
+  std::string Diagnostic;
 };
+
+/// Stable stop name followed by the available rejection detail.
+std::string optimizationStopMessage(const OptimizationResult &Result);
 
 class Pipeline {
 public:
@@ -496,6 +557,36 @@ public:
   std::optional<AnalysisCacheWarmup>
   warmAnalysisCache(const BinaryImage &Img, const PipelineOptions &Opts,
                     DebugContext *Dbg, llvm::ArrayRef<va_t> Functions);
+
+  /// Solve the call-register summaries of every function of \p Img once, as
+  /// a whole-image run solves them, and keep them in Opts.AnalysisCache.
+  /// Later selected-function runs of the image's symbol starts read these
+  /// instead of solving their own callees, whose depth and lift bounds leave
+  /// farther calls unread, so those runs can decompile differently than
+  /// before.  Whether the cache holds them: none for an image that is not
+  /// x86-64, without a cache, or past limits::kMaxImageCallSummaryFunctions.
+  /// \p Solved, where given, says whether this call solved them rather than
+  /// finding them kept.
+  bool prepareCallSummaries(const BinaryImage &Img, const PipelineOptions &Opts,
+                            DebugContext *Dbg, bool *Solved = nullptr);
+
+  /// Read the signature bodies of the functions \p Img's functions call,
+  /// those more of them call first, into Opts.AnalysisCache's omitted-callee
+  /// memo, as runs of the image's symbol starts read them once the cache
+  /// holds the image's call summaries (prepareCallSummaries): from the
+  /// \p First'th in that order, at most \p Count.  The output of every run
+  /// stays as it was; runs find the bodies read.  Stops, full, where the
+  /// memo holds three quarters of its bound.  Past the order (\p First at
+  /// its end or beyond), each call takes a step of the image-wide solve of
+  /// the bodies read (limits::pipeline::kPipelineCallAbiGlobalSignatures),
+  /// whose signatures runs install instead of probing and recovering those
+  /// callees again.  \p Next is where a later call continues, or nullopt
+  /// once the order or the memo, and the solve, are done.  Nullopt where the
+  /// cache holds no summaries.
+  std::optional<AnalysisCacheWarmup>
+  prefillCalleeSignatures(const BinaryImage &Img, const PipelineOptions &Opts,
+                          DebugContext *Dbg, size_t First, size_t Count,
+                          std::optional<size_t> &Next);
 
   /// Complete deferred HighIR from this image's prepared source MedIR. This
   /// preserves LowIR, MedIR and LLVM module identities and contains failures
@@ -756,6 +847,11 @@ private:
 
   struct LLVMEmissionResult;
 
+  /// The x87 call graph cache the runs of \p Cache's symbol inventory share,
+  /// or null before a run kept its facts.
+  static std::shared_ptr<X87CallGraphCache>
+  x87CallGraphsForTesting(const PipelineAnalysisCache &Cache);
+
   /// Interior basic-block addresses are module-local LLVM blockaddress
   /// constants and cannot be split from their owner into another emission
   /// shard.  Function-entry-only pointer tables remain shard-safe.
@@ -817,7 +913,8 @@ private:
       const DebugContext *Dbg = nullptr, const SourceViewOptions &View = {},
       const std::set<va_t> *PrototypeArgumentCallees = nullptr,
       bool PreserveUnknownSourceValues = false,
-      llvm::ArrayRef<MedFunc> SourceCalleeDeclarations = {});
+      llvm::ArrayRef<MedFunc> SourceCalleeDeclarations = {},
+      bool OmitRefusedBodies = false, bool AnalysisRecoveryForSource = false);
 
   /// Execute the common shard lifecycle. The emitter creates each module in
   /// its worker's context; only a complete linked module is returned in the
@@ -843,8 +940,17 @@ private:
   /// The import-address names of \p Img kept with \p Cache's image inputs, or
   /// null when \p Cache is null or those inputs are not built yet. Additions
   /// a run makes belong to that run and must not remain on the kept map.
-  std::map<va_t, std::string> *importAddressNames(const BinaryImage &Img,
-                                                  PipelineAnalysisCache *Cache);
+  /// \p CallAddresses, when given, receives the addresses they name as the
+  /// image gives them (importCallAddresses), kept with them, or null.
+  std::map<va_t, std::string> *
+  importAddressNames(const BinaryImage &Img, PipelineAnalysisCache *Cache,
+                     const std::set<va_t> **CallAddresses = nullptr);
+  /// importCallAddresses(\p Img): those \p Cache keeps with the names, or
+  /// read into \p Own.  Every run that propagates internal no-return reads
+  /// them, and the names they come from copy every import's name.
+  const std::set<va_t> &importCallAddressesOf(const BinaryImage &Img,
+                                              PipelineAnalysisCache *Cache,
+                                              std::set<va_t> &Own);
 
   /// Phase 3: convert MedIR -> HighIR in parallel.
   void buildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,

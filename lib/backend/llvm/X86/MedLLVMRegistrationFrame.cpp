@@ -7,6 +7,7 @@
 #include "neverd/backend/llvm/X86/X86RegistrationFrame.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/X86RegistrationFrame.h"
+#include "neverd/ir/med/X86RegistrationSEH4PhysicalFrame.h"
 
 #include <stdexcept>
 
@@ -27,6 +28,9 @@ std::pair<uint64_t, uint64_t> x86RegistrationFrameStorage(const MedFunc &Func,
           Alignment);
     }
   }
+  if (const auto Bytes = getX86RegistrationSEHFrameStorage(Func);
+      Bytes && *Bytes)
+    EntrySP = llvm::alignTo(std::max(EntrySP, *Bytes), Alignment);
   return {EntrySP, Alignment};
 }
 

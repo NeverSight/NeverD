@@ -61,10 +61,58 @@ inline constexpr size_t
     kNativeSourceIntegerPrefixReturnHasNativeSourceIntegerPrefixReturnBudget =
         100000;
 
+// lib/pipeline/PipelineCallAbi.cpp
+/// The callees next in a restricted run's signature read
+/// (omittedDirectCalleeSignatures) that are lifted and converted together on
+/// the pipeline workers before the read takes them in queue order. Each holds
+/// a whole conversion until its turn; the breadth-first levels of a selection
+/// rarely exceed this, so it bounds that memory without serializing them.
+inline constexpr size_t kPipelineCallAbiCalleeReadAhead = 64;
+/// The callees a restricted run reads at most for the signatures its calls
+/// pass (omittedDirectCalleeSignatures), its direct callees first; each read
+/// callee is converted, probed and recovered with the run.  Callees past the
+/// first few rarely bound a selection's calls: on the 300-function ntoskrnl
+/// 19041.6456 sample, reading 16 left all 600 decompiles as reading 256 did
+/// and 8 changed three, and 32 left the EH corpus, the switch corpus and the
+/// whole units as they were too.
+inline constexpr size_t kPipelineCallAbiMaxOmittedCalleeReads = 32;
+/// Whether a replica's callee prefill goes on to solve the signatures of the
+/// bodies it read image-wide (stepGlobalCalleeSignatures), which runs then
+/// install instead of probing and recovering those callees again around
+/// their own selection.  On the 300-function ntoskrnl 19041.6456 sample the
+/// callees a run reads at 32 reads end with the summaries and recoveries an
+/// unbounded read gives them, which is what the solve gives a callee it
+/// read every callee of.
+inline constexpr bool kPipelineCallAbiGlobalSignatures = true;
+/// Bodies one step of that solve probes or recovers at least, on the
+/// pipeline's workers: about as long as a decompile of a median function.
+inline constexpr size_t kPipelineCallAbiGlobalSignatureStepBodies = 256;
+/// Rounds of forwarder propagation the solve takes at most; past them it
+/// gives no body a signature and runs read every callee themselves.
+inline constexpr size_t kPipelineCallAbiGlobalSignatureMaxRounds = 64;
+/// Fewest such callees worth a worker batch. Each is a whole function's lift
+/// and MedIR conversion, so two already outweigh starting the workers.
+inline constexpr size_t kPipelineCallAbiMinParallelCalleeReads = 2;
+/// Fewest kept bodies without a probe their run's summaries hold that the
+/// forwarder fixed point probes together on the workers before it starts
+/// (propagateForwardedCallArities).  Each probe recovers a copy of one body;
+/// a few cost less than starting the workers and copying their summaries,
+/// as a revisit's or a small selection's usually are.
+inline constexpr size_t kPipelineCallAbiMinSpeculativeProbes = 8;
+
 // lib/pipeline/PipelineCallAbiDetail.h
-inline constexpr size_t kPipelineCallAbiDetailMaxProbes = 4;
+inline constexpr size_t kPipelineCallAbiDetailMaxProbes = 16;
 inline constexpr size_t kPipelineCallAbiDetailMaxConversions = 4;
-inline constexpr size_t kPipelineCallAbiDetailMaxBytes = size_t{512} << 20;
+/// The omitted-callee memo's bodies take up to an eighth of the host's
+/// physical memory (OmittedCalleeMemo::maxBytes), between these bounds.  The
+/// share and ceiling let a large host's replica read ahead every callee of an
+/// image the size of ntoskrnl, with the source stack preparation of the ones
+/// a run may follow: 5.3 GB for its 19,484 callees, under the three-quarter
+/// mark of an eighth of 64 GiB.
+inline constexpr size_t kPipelineCallAbiDetailMaxBytes = size_t{2048} << 20;
+inline constexpr uint64_t kPipelineCallAbiDetailMaxBytesCeiling = uint64_t{8192}
+                                                                  << 20;
+inline constexpr uint64_t kPipelineCallAbiDetailMemoryShare = 8;
 
 // lib/pipeline/PipelineFormattedCalls.cpp
 /// The distinct constants a register may hold where paths join, as the scan
@@ -81,6 +129,17 @@ inline constexpr size_t kPipelineHighIRSourceWorkBudget = 250000;
 // lib/pipeline/PipelineIncomingStack.cpp
 inline constexpr size_t kIncomingStackLeafOperations = 256;
 inline constexpr size_t kIncomingStackLeafCallees = 32;
+
+// lib/pipeline/PipelineSourceInline.cpp
+// Source call arguments can contain a short chain of ABI carrier casts.
+inline constexpr unsigned kSourceInlineOperandDepth = 16;
+// An interactive source view can include the root and its EH continuations.
+inline constexpr size_t kSourceInlineRoots = 8;
+// Recover only a small set of complete support bodies on this lazy path.
+inline constexpr size_t kSourceInlineCallees = 4;
+// Exclude large helpers before expansion; cap aggregate duplicated IR too.
+inline constexpr size_t kSourceInlineBodyOperations = 1024;
+inline constexpr size_t kSourceInlineExpansionOperations = 16384;
 
 // lib/pipeline/PipelineLibraryRecognition.cpp
 inline constexpr size_t kPipelineLibraryRecognitionConflictWork = 250000;

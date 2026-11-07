@@ -3,6 +3,11 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+///
+/// \file
+/// Solve source registration states with separately bound call authorities.
+///
+//===----------------------------------------------------------------------===//
 
 #include "RegistrationStateSolver.h"
 
@@ -10,6 +15,7 @@
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFCxxEpilogue.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/RegistrationScopeGraph.h"
 
 #include <algorithm>
@@ -28,19 +34,26 @@ RegistrationStateSolver::RegistrationStateSolver(
     const SEHJumpRuntime *JumpRuntime,
     const coff_loader::X86CxxHandlerABI *CxxHandler,
     const coff_loader::X86CxxPrologueCall *CxxPrologue,
-    const std::vector<coff_loader::X86CxxEpilogueCall> *CxxEpilogues)
+    const std::vector<coff_loader::X86CxxEpilogueCall> *CxxEpilogues,
+    const coff_loader::X86SEH4PrologueCall *SEH4Prologue,
+    const std::vector<coff_loader::X86SEH4EpilogueCall> *SEH4Epilogues,
+    const CxxCallerProof *CxxCalls)
     : Function(Function), EH(*Function.ExceptionMetadata),
       Chain(*EH.Registration), SecurityCookieVA(SecurityCookieVA),
       CookieCheckVA(CookieCheckVA), CxxHandler(CxxHandler),
-      CxxPrologue(CxxPrologue), CxxEpilogues(CxxEpilogues), Callees(Callees),
-      Cleanups(Cleanups), Stacks(Stacks), LocalUnwinds(LocalUnwinds),
-      SEHControls(SEHControls), Conditional(Conditional),
-      BoundCallees(BoundCallees), JumpRuntime(JumpRuntime),
+      CxxPrologue(CxxPrologue), SEH4Prologue(SEH4Prologue),
+      SEH4Epilogues(SEH4Epilogues), CxxEpilogues(CxxEpilogues),
+      Callees(Callees), Cleanups(Cleanups), Stacks(Stacks),
+      LocalUnwinds(LocalUnwinds), SEHControls(SEHControls),
+      Conditional(Conditional), BoundCallees(BoundCallees),
+      JumpRuntime(JumpRuntime), CxxCalls(CxxCalls),
       KnownCxx(EH.Encoding == ExceptionEncoding::X86CxxFuncInfo &&
                (EH.Personality == ExceptionPersonality::CxxFrameHandlerX86 ||
                 EH.Personality == ExceptionPersonality::CxxFrameHandler3)),
       EH4(EH.Personality == ExceptionPersonality::ExceptHandler4),
       CheckCalls(Callees != nullptr),
+      TrackRuntimeArguments(!KnownCxx && !Conditional && JumpRuntime &&
+                            (JumpRuntime->Interlocked || JumpRuntime->Sleep)),
       CheckRuntimeObjects(KnownCxx && CheckCalls),
       CheckCleanups(KnownCxx && Cleanups != nullptr),
       InvalidBlocks(Function.Blocks.size()), States(Function.Blocks.size()),
@@ -48,7 +61,11 @@ RegistrationStateSolver::RegistrationStateSolver(
       CompleteCatchObjects(CheckRuntimeObjects),
       CompleteRuntimeObjects(CheckRuntimeObjects) {}
 
-RegistrationStateAnalysis RegistrationStateSolver::run() {
+RegistrationStateAnalysis RegistrationStateSolver::run(size_t InitialWork) {
+  if (!charge(InitialWork))
+    return std::move(Result);
+  if (stopRefusedConditional())
+    return std::move(Result);
   if (!initialize())
     return std::move(Result);
   if (!initializeOrder()) {
@@ -72,6 +89,8 @@ RegistrationStateAnalysis RegistrationStateSolver::run() {
   initializeCookies();
   collectOccurrences();
   seedEntries();
+  if (stopRefusedConditional())
+    return std::move(Result);
   while ((!Work.empty() || !PendingSEHFrames.empty()) && !Exhausted) {
     if (Work.empty()) {
       flushSEHScopes();
@@ -84,6 +103,8 @@ RegistrationStateAnalysis RegistrationStateSolver::run() {
     // while ordinary and exceptional successors update their own activations.
     const Domain Before = State.Incoming;
     if (!transferBlock(I, Before, State.Facts))
+      return std::move(Result);
+    if (stopRefusedConditional())
       return std::move(Result);
   }
   return finish();
@@ -110,6 +131,24 @@ bool RegistrationStateSolver::initialize() {
         "shared C++ prologue has no exact parent entry and call boundary");
     return false;
   }
+  if (SEH4Prologue && !validateSEH4Prologue()) {
+    Result.Diagnostics.push_back(
+        "shared SEH4 prologue has no exact parent entry and call boundary");
+    return false;
+  }
+  if (SEH4Epilogues)
+    for (const auto &Call : *SEH4Epilogues)
+      if (!charge(1) || !SEH4Prologue || !Call.Caller.isValid() ||
+          Call.Caller.size() != 5 ||
+          Call.Caller.Begin < SEH4Prologue->Caller.End ||
+          Call.Caller.End > EH.CodeRange.End || !Call.Helper.isValid() ||
+          Call.Helper.size() != 20 || EH.CodeRange.overlaps(Call.Helper) ||
+          SEH4Prologue->Helper.overlaps(Call.Helper) ||
+          !SEH4EpilogueIndex.emplace(Call.Caller.Begin, &Call).second) {
+        Result.Diagnostics.push_back(
+            "shared SEH4 epilogue has no unique physical call description");
+        return false;
+      }
   if (CxxEpilogues)
     for (const auto &Call : *CxxEpilogues)
       if (!charge(1) || !CxxPrologue || !Call.Caller.isValid() ||
@@ -138,7 +177,6 @@ bool RegistrationStateSolver::initialize() {
   }
   if (!Chain.RegistrationOffset || !Chain.TryLevelOffset ||
       !Chain.SeededTryLevel || !Chain.ChainInstallVA ||
-      (!KnownCxx && Chain.TryLevelStores.empty()) ||
       (KnownCxx && (!Chain.cxxRuntimeFrameOffset() ||
                     *Chain.RegistrationOffset < INT32_MIN + 4))) {
     Result.Diagnostics.push_back(
@@ -237,8 +275,9 @@ bool RegistrationStateSolver::initialize() {
       HasInstallBoundary |=
           Instruction.Address == Chain.ChainInstallVA &&
           Instruction.Size != 0 &&
-          Instruction.Control == (CxxPrologue ? LowInstructionControl::Call
-                                              : LowInstructionControl::None) &&
+          Instruction.Control == (CxxPrologue || SEH4Prologue
+                                      ? LowInstructionControl::Call
+                                      : LowInstructionControl::None) &&
           Instruction.Address <= InvalidVA - Instruction.Size &&
           Instruction.Address + Instruction.Size == Block.EndAddr;
   if (!HasInstallBoundary) {
@@ -251,6 +290,7 @@ bool RegistrationStateSolver::initialize() {
 
 bool RegistrationStateSolver::charge(size_t Amount) {
   if (Amount > limits::kMaxRegistrationEHStateWork - WorkUsed) {
+    WorkUsed = limits::kMaxRegistrationEHStateWork;
     Exhausted = true;
     Result.Complete = Result.CallbackStatesComplete =
         Result.RegistrationLifetimeComplete = false;

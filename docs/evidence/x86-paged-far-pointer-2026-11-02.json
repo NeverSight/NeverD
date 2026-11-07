@@ -1,0 +1,1076 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-02",
+  "feature": "faultable long-mode LSS/LFS/LGS through shared V6 semantics, original instruction bytes, native compiler frontends, IRQ/NMI scheduling and page-repair/IRET/retry",
+  "commits": {
+    "neverd_runtime": "2f9c586ec03e25abef09a02fe6359cdc41f9e565",
+    "implementation": "2310a137b3",
+    "integrated_dev": "44a2ebc6c1e1bb11a43be609565b8661e75ce17c",
+    "previous_integrated_dev": "12285312c7e0d4a30d2ba78d86ab0ee57b4bded3",
+    "llvm": "1c67e6be645fd373c0820179c7849f52c5d723f9",
+    "neverc": "64b3d564921808a96066732e066130076424d7ea"
+  },
+  "production_sdk": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "signatures_gitlink": "254a63f839f27348badbabdd14f9d15f7d65ee37",
+  "artifact_root": "/mnt/data/neverd-paged-far-pointer-20261102",
+  "totals": {
+    "passed": 604,
+    "skipped": 2,
+    "failed": 0,
+    "cpu_comparisons": 768246,
+    "far_pointer_cpu_comparisons": 580440,
+    "far_pointer_fault_cpu_comparisons": 360096,
+    "iret_ac_vmm_nmi_discrepancies": 544
+  },
+  "comparison_subsets_are_not_additional_totals": true,
+  "regressions": [
+    {
+      "name": "paged",
+      "target": "NeverDX64PagedExecutionTests",
+      "sdk": "native",
+      "cpu": 0,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/native/paged/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/native/paged/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "native/paged/result.xml",
+      "tests": 28,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 28,
+      "sha256": "d01628ca86de0ed3b7e1631d66a58c57862c27f6dc9e40030bc4ebd6f1a67c4a",
+      "log_sha256": "93e4cce361ff60e8c3f801e61bf83bc361ba17004fe0c3241cd6721eca50937e"
+    },
+    {
+      "name": "paging",
+      "target": "NeverDX86PagingTests",
+      "sdk": "native",
+      "cpu": 2,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/native/paging/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/native/paging/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "native/paging/result.xml",
+      "tests": 41,
+      "failed": 0,
+      "skipped": 1,
+      "passed": 40,
+      "sha256": "2944a6017e448ef12dd26acf73a89af475670b6f91b3efa1c2938b6adf024076",
+      "log_sha256": "364d1e3682ce331c89bf79484f91a21799df83ab0c529407e54f8aa572547689"
+    },
+    {
+      "name": "far-pointer-efficient",
+      "target": "NeverDX64PagedExecutionTests",
+      "sdk": "native",
+      "cpu": 12,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/native/far-pointer-efficient/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*PagedFarPointer*:*PagedLss*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/native/far-pointer-efficient/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "native/far-pointer-efficient/result.xml",
+      "tests": 5,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 5,
+      "sha256": "ff5cd871029b45a4cebe9ccbaf6ce17a80067ecfae8aff80f9c5272415893319",
+      "log_sha256": "d6148c32d24193f85ee94cbdf3f4961de6670aeb3743e2c5c94fd89aea47a70a"
+    },
+    {
+      "name": "returns-efficient",
+      "target": "NeverDX64PagedExecutionTests",
+      "sdk": "native",
+      "cpu": 14,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/native/returns-efficient/tmp",
+        "taskset",
+        "-c",
+        "14",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*PagedIret*:*PagedInterruptReturn*:*PagedFarReturn*:*PagedReturnFaultHandler*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/native/returns-efficient/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "native/returns-efficient/result.xml",
+      "tests": 6,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 6,
+      "sha256": "35f4e48ff1e11e1313c46622ab0c4504e9e6d8c75e6322e7aa982f10a7de2b48",
+      "log_sha256": "5642cbc78720df02b198a30ce28c7a61a3c88eb90146696eae8aafd0d223bdca"
+    },
+    {
+      "name": "NeverDX64ContinuationSourceTests-shard-0",
+      "target": "NeverDX64ContinuationSourceTests",
+      "sdk": "native",
+      "cpu": 2,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/native/NeverDX64ContinuationSourceTests-shard-0/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "build-x86-native/bin/NeverDX64ContinuationSourceTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/native/NeverDX64ContinuationSourceTests-shard-0/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "native/NeverDX64ContinuationSourceTests-shard-0/result.xml",
+      "tests": 72,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 72,
+      "sha256": "8bd34f957f89df4b938fd42aa2d63368c8c5bb7680608d8555f2fe8d7acb8f4a",
+      "log_sha256": "21ac61d4df93ca880c5ea538f544cfba4ec8c0e94e4a91320e8cd3c6820c2582"
+    },
+    {
+      "name": "NeverDX64ContinuationSourceTests-shard-1",
+      "target": "NeverDX64ContinuationSourceTests",
+      "sdk": "native",
+      "cpu": 4,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/native/NeverDX64ContinuationSourceTests-shard-1/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX64ContinuationSourceTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/native/NeverDX64ContinuationSourceTests-shard-1/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "native/NeverDX64ContinuationSourceTests-shard-1/result.xml",
+      "tests": 72,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 72,
+      "sha256": "e73f37ca702b1b9ee1706a24190121208ae04de8abdce3703eb51e290e358250",
+      "log_sha256": "b1f176732a0b41d43dac1969801944921c2448227762ea260bcf087c456ed46c"
+    },
+    {
+      "name": "NeverDX64ContinuationExportTests-shard-0",
+      "target": "NeverDX64ContinuationExportTests",
+      "sdk": "native",
+      "cpu": 2,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/native/NeverDX64ContinuationExportTests-shard-0/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "build-x86-native/bin/NeverDX64ContinuationExportTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/native/NeverDX64ContinuationExportTests-shard-0/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "native/NeverDX64ContinuationExportTests-shard-0/result.xml",
+      "tests": 40,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 40,
+      "sha256": "4eed6a0b7f6a98ec8b6266491cb7544c8a1bc5ea3b536716c78408d7f6bfb5d9",
+      "log_sha256": "b75670e91355f500edaa7341a98d7af8437cf681790bbb7f784e1abaad55b558"
+    },
+    {
+      "name": "NeverDX64ContinuationExportTests-shard-1",
+      "target": "NeverDX64ContinuationExportTests",
+      "sdk": "native",
+      "cpu": 4,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/native/NeverDX64ContinuationExportTests-shard-1/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX64ContinuationExportTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/native/NeverDX64ContinuationExportTests-shard-1/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "native/NeverDX64ContinuationExportTests-shard-1/result.xml",
+      "tests": 39,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 39,
+      "sha256": "00609a20de009620fa206e1a7c81910f097184a3dbbb6e308306cfbf4cc15453",
+      "log_sha256": "2e88706f7578916555ecd68c09444f2023b20b5c97d0664f7fb6da4757377ad7"
+    },
+    {
+      "name": "paged",
+      "target": "NeverDX64PagedExecutionTests",
+      "sdk": "r6",
+      "cpu": 0,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/r6/paged/tmp",
+        "taskset",
+        "-c",
+        "0",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/r6/paged/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "r6/paged/result.xml",
+      "tests": 28,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 28,
+      "sha256": "4cba68cce1bb34240fd7ad4638d51a41ed6c3c23fd7e97c456003ecf1ef7b9ec",
+      "log_sha256": "cec4a13d8d7d92ff045d053cd78a62ef5b585a5b9e202df94e43fa4db4c97326"
+    },
+    {
+      "name": "paging",
+      "target": "NeverDX86PagingTests",
+      "sdk": "r6",
+      "cpu": 2,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/r6/paging/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/r6/paging/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "r6/paging/result.xml",
+      "tests": 41,
+      "failed": 0,
+      "skipped": 1,
+      "passed": 40,
+      "sha256": "6542b117bf3cad04c6d0bb8ced9ab56216050ce714fe3fa1df8d4f48fedf2274",
+      "log_sha256": "d812db4d7729bba4076054b7637aca63783674ce359a3dff60d1cb5ddaf74364"
+    },
+    {
+      "name": "far-pointer-efficient",
+      "target": "NeverDX64PagedExecutionTests",
+      "sdk": "r6",
+      "cpu": 12,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/r6/far-pointer-efficient/tmp",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*PagedFarPointer*:*PagedLss*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/r6/far-pointer-efficient/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "r6/far-pointer-efficient/result.xml",
+      "tests": 5,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 5,
+      "sha256": "65992b87899d947d0658c8ab997707653db45f2db7f93275e9e7205ee618a6a5",
+      "log_sha256": "b616a6b25134797810392cdac28e9524f5c421c45c92691c95f2ba6aaf102e13"
+    },
+    {
+      "name": "returns-efficient",
+      "target": "NeverDX64PagedExecutionTests",
+      "sdk": "r6",
+      "cpu": 14,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/r6/returns-efficient/tmp",
+        "taskset",
+        "-c",
+        "14",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*PagedIret*:*PagedInterruptReturn*:*PagedFarReturn*:*PagedReturnFaultHandler*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/r6/returns-efficient/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "r6/returns-efficient/result.xml",
+      "tests": 6,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 6,
+      "sha256": "45706559a96f26b874b06260319df9c627c7606853d2d8c12df6452162503152",
+      "log_sha256": "5a283f66a217a82da6cbbb5c10a7826d47c6405617bd53db2f67b7b21cafe2a5"
+    },
+    {
+      "name": "NeverDX64ContinuationSourceTests-shard-0",
+      "target": "NeverDX64ContinuationSourceTests",
+      "sdk": "r6",
+      "cpu": 2,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/r6/NeverDX64ContinuationSourceTests-shard-0/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "build-x86/bin/NeverDX64ContinuationSourceTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/r6/NeverDX64ContinuationSourceTests-shard-0/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "r6/NeverDX64ContinuationSourceTests-shard-0/result.xml",
+      "tests": 72,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 72,
+      "sha256": "f2a424edaaf987410f28abc416e17c276a542057e0a22699d32648751e43a012",
+      "log_sha256": "9f180b24589f10a1fd0e642351f2e051eb542ae8eda4b5600ac85e055abcd3c5"
+    },
+    {
+      "name": "NeverDX64ContinuationSourceTests-shard-1",
+      "target": "NeverDX64ContinuationSourceTests",
+      "sdk": "r6",
+      "cpu": 4,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/r6/NeverDX64ContinuationSourceTests-shard-1/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86/bin/NeverDX64ContinuationSourceTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/r6/NeverDX64ContinuationSourceTests-shard-1/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "r6/NeverDX64ContinuationSourceTests-shard-1/result.xml",
+      "tests": 72,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 72,
+      "sha256": "ded8924619fc4cbad3f3c3fa5f618c493425500c700baf10c0c81c8ba8893641",
+      "log_sha256": "31fb826a39eb7033c4b648dd23a6fd24ea84067f0f33f4ac1b238d293560da78"
+    },
+    {
+      "name": "NeverDX64ContinuationExportTests-shard-0",
+      "target": "NeverDX64ContinuationExportTests",
+      "sdk": "r6",
+      "cpu": 2,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/r6/NeverDX64ContinuationExportTests-shard-0/tmp",
+        "taskset",
+        "-c",
+        "2",
+        "build-x86/bin/NeverDX64ContinuationExportTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/r6/NeverDX64ContinuationExportTests-shard-0/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "r6/NeverDX64ContinuationExportTests-shard-0/result.xml",
+      "tests": 40,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 40,
+      "sha256": "696da1868e2eeb4573568960df34ac4512f6f44f32fd5d568af0665aa2c40a71",
+      "log_sha256": "e534c4daf97c53254f7e90ebb0d53392bd186a45026388d1f30190b373fd886e"
+    },
+    {
+      "name": "NeverDX64ContinuationExportTests-shard-1",
+      "target": "NeverDX64ContinuationExportTests",
+      "sdk": "r6",
+      "cpu": 4,
+      "command": [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "python3",
+        "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+        "/mnt/data/neverd-paged-far-pointer-20261102/final/r6/NeverDX64ContinuationExportTests-shard-1/tmp",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86/bin/NeverDX64ContinuationExportTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-paged-far-pointer-20261102/final/r6/NeverDX64ContinuationExportTests-shard-1/result.xml"
+      ],
+      "exit_code": 0,
+      "report": "r6/NeverDX64ContinuationExportTests-shard-1/result.xml",
+      "tests": 39,
+      "failed": 0,
+      "skipped": 0,
+      "passed": 39,
+      "sha256": "2c9257ef84011b718b0d3413e21850ad53015d0f8a96c5de683734ea29594c71",
+      "log_sha256": "97e0acd029782dd575715ad923855ffdf3555b53d113687382eb5b50b9624407"
+    }
+  ],
+  "cpu_comparisons": [
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "SoftwareEntryAtTheLastCanonicalInstructionByte",
+      "cpu_comparisons": 16
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "GeneratedInstructionsMatchOriginalCPU",
+      "cpu_comparisons": 35400,
+      "fault_cpu_comparisons": 14936,
+      "handler_cpu_comparisons": 33440,
+      "software_interrupt_cpu_comparisons": 30840,
+      "software_completion_cpu_comparisons": 18504
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "PagedFarPointerLoadsMatchOriginalCPU",
+      "processor": 0,
+      "core_type": 64,
+      "smap_available": "true",
+      "cpu_comparisons": 143352,
+      "far_pointer_fault_cpu_comparisons": 90024
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "PagedFarPointerWrapsFieldsAndCapturesOldBases",
+      "cpu_comparisons": 1728
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "PagedLssComposesWithScheduledIRQAndNMI",
+      "cpu_comparisons": 24
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "PagedFarPointerHandlerRepairsMappingAndRetries",
+      "cpu_comparisons": 6
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "PagedFarReturnsMatchOriginalCPU",
+      "return_processor": 0,
+      "return_core_type": 64,
+      "cpu_comparisons": 6912,
+      "far_return_fault_cpu_comparisons": 3840
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "PagedInterruptReturnsMatchOriginalCPU",
+      "return_processor": 0,
+      "return_core_type": 64,
+      "iret_cpu_comparisons": 6048,
+      "cpu_comparisons": 6048,
+      "iret_fault_cpu_comparisons": 2456,
+      "iret_ac_vmm_nmi_discrepancies": 136
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "PagedIretComposesWithScheduledIRQAndNMI",
+      "iret_roundtrip_cpu_comparisons": 8,
+      "cpu_comparisons": 8
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "PagedReturnFaultHandlerRepairsMappingAndRetries",
+      "return_retry_cpu_comparisons": 4,
+      "cpu_comparisons": 4
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "ScheduledEventsMatchOriginalCPU",
+      "cpu_comparisons": 16432,
+      "accepted_cpu_comparisons": 14376,
+      "secondary_fault_cpu_comparisons": 2040
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "PagedCliStiMatchPrivilegeAndVirtualFlags",
+      "cpu_comparisons": 4096
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "VirtualInterruptFaultAndExternalEventPriority",
+      "cpu_comparisons": 96
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "PagedSchedulingMatchesNativeInstructionWindows",
+      "cpu_comparisons": 2304
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "SequentialFetchFaultSavesNoncanonicalPC",
+      "cpu_comparisons": 8
+    },
+    {
+      "sdk": "native",
+      "run": "paged",
+      "test": "EventFramesPreserveFaultingAndInterruptedPCData",
+      "cpu_comparisons": 3
+    },
+    {
+      "sdk": "native",
+      "run": "paging",
+      "test": "OriginalInstructionsMatchPagingFaultsAndCommit/0",
+      "cpu_comparisons": 180,
+      "event_cpu_comparisons": 0
+    },
+    {
+      "sdk": "native",
+      "run": "paging",
+      "test": "OriginalInstructionsMatchPagingFaultsAndCommit/1",
+      "cpu_comparisons": 192,
+      "event_cpu_comparisons": 0
+    },
+    {
+      "sdk": "native",
+      "run": "paging",
+      "test": "OriginalInstructionsMatchPagingFaultsAndCommit/2",
+      "cpu_comparisons": 528,
+      "event_cpu_comparisons": 292
+    },
+    {
+      "sdk": "native",
+      "run": "far-pointer-efficient",
+      "test": "PagedFarPointerLoadsMatchOriginalCPU",
+      "processor": 12,
+      "core_type": 32,
+      "smap_available": "true",
+      "cpu_comparisons": 143352,
+      "far_pointer_fault_cpu_comparisons": 90024
+    },
+    {
+      "sdk": "native",
+      "run": "far-pointer-efficient",
+      "test": "PagedFarPointerWrapsFieldsAndCapturesOldBases",
+      "cpu_comparisons": 1728
+    },
+    {
+      "sdk": "native",
+      "run": "far-pointer-efficient",
+      "test": "PagedLssComposesWithScheduledIRQAndNMI",
+      "cpu_comparisons": 24
+    },
+    {
+      "sdk": "native",
+      "run": "far-pointer-efficient",
+      "test": "PagedFarPointerHandlerRepairsMappingAndRetries",
+      "cpu_comparisons": 6
+    },
+    {
+      "sdk": "native",
+      "run": "returns-efficient",
+      "test": "PagedFarReturnsMatchOriginalCPU",
+      "return_processor": 14,
+      "return_core_type": 32,
+      "cpu_comparisons": 6912,
+      "far_return_fault_cpu_comparisons": 3816
+    },
+    {
+      "sdk": "native",
+      "run": "returns-efficient",
+      "test": "PagedInterruptReturnsMatchOriginalCPU",
+      "return_processor": 14,
+      "return_core_type": 32,
+      "iret_cpu_comparisons": 6048,
+      "cpu_comparisons": 6048,
+      "iret_fault_cpu_comparisons": 2456,
+      "iret_ac_vmm_nmi_discrepancies": 136
+    },
+    {
+      "sdk": "native",
+      "run": "returns-efficient",
+      "test": "PagedIretComposesWithScheduledIRQAndNMI",
+      "iret_roundtrip_cpu_comparisons": 8,
+      "cpu_comparisons": 8
+    },
+    {
+      "sdk": "native",
+      "run": "returns-efficient",
+      "test": "PagedReturnFaultHandlerRepairsMappingAndRetries",
+      "return_retry_cpu_comparisons": 4,
+      "cpu_comparisons": 4
+    },
+    {
+      "sdk": "native",
+      "run": "NeverDX64ContinuationExportTests-shard-1",
+      "test": "ScheduledEventsMatchNativeInterruptWindows",
+      "cpu_comparisons": 8704,
+      "lss_cpu_comparisons": 4608
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "SoftwareEntryAtTheLastCanonicalInstructionByte",
+      "cpu_comparisons": 16
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "GeneratedInstructionsMatchOriginalCPU",
+      "cpu_comparisons": 35400,
+      "fault_cpu_comparisons": 14936,
+      "handler_cpu_comparisons": 33440,
+      "software_interrupt_cpu_comparisons": 30840,
+      "software_completion_cpu_comparisons": 18504
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "PagedFarPointerLoadsMatchOriginalCPU",
+      "processor": 0,
+      "core_type": 64,
+      "smap_available": "true",
+      "cpu_comparisons": 143352,
+      "far_pointer_fault_cpu_comparisons": 90024
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "PagedFarPointerWrapsFieldsAndCapturesOldBases",
+      "cpu_comparisons": 1728
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "PagedLssComposesWithScheduledIRQAndNMI",
+      "cpu_comparisons": 24
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "PagedFarPointerHandlerRepairsMappingAndRetries",
+      "cpu_comparisons": 6
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "PagedFarReturnsMatchOriginalCPU",
+      "return_processor": 0,
+      "return_core_type": 64,
+      "cpu_comparisons": 6912,
+      "far_return_fault_cpu_comparisons": 3840
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "PagedInterruptReturnsMatchOriginalCPU",
+      "return_processor": 0,
+      "return_core_type": 64,
+      "iret_cpu_comparisons": 6048,
+      "cpu_comparisons": 6048,
+      "iret_fault_cpu_comparisons": 2456,
+      "iret_ac_vmm_nmi_discrepancies": 136
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "PagedIretComposesWithScheduledIRQAndNMI",
+      "iret_roundtrip_cpu_comparisons": 8,
+      "cpu_comparisons": 8
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "PagedReturnFaultHandlerRepairsMappingAndRetries",
+      "return_retry_cpu_comparisons": 4,
+      "cpu_comparisons": 4
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "ScheduledEventsMatchOriginalCPU",
+      "cpu_comparisons": 16432,
+      "accepted_cpu_comparisons": 14376,
+      "secondary_fault_cpu_comparisons": 2040
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "PagedCliStiMatchPrivilegeAndVirtualFlags",
+      "cpu_comparisons": 4096
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "VirtualInterruptFaultAndExternalEventPriority",
+      "cpu_comparisons": 96
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "PagedSchedulingMatchesNativeInstructionWindows",
+      "cpu_comparisons": 2304
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "SequentialFetchFaultSavesNoncanonicalPC",
+      "cpu_comparisons": 8
+    },
+    {
+      "sdk": "r6",
+      "run": "paged",
+      "test": "EventFramesPreserveFaultingAndInterruptedPCData",
+      "cpu_comparisons": 3
+    },
+    {
+      "sdk": "r6",
+      "run": "paging",
+      "test": "OriginalInstructionsMatchPagingFaultsAndCommit/0",
+      "cpu_comparisons": 180,
+      "event_cpu_comparisons": 0
+    },
+    {
+      "sdk": "r6",
+      "run": "paging",
+      "test": "OriginalInstructionsMatchPagingFaultsAndCommit/1",
+      "cpu_comparisons": 192,
+      "event_cpu_comparisons": 0
+    },
+    {
+      "sdk": "r6",
+      "run": "paging",
+      "test": "OriginalInstructionsMatchPagingFaultsAndCommit/2",
+      "cpu_comparisons": 528,
+      "event_cpu_comparisons": 292
+    },
+    {
+      "sdk": "r6",
+      "run": "far-pointer-efficient",
+      "test": "PagedFarPointerLoadsMatchOriginalCPU",
+      "processor": 12,
+      "core_type": 32,
+      "smap_available": "true",
+      "cpu_comparisons": 143352,
+      "far_pointer_fault_cpu_comparisons": 90024
+    },
+    {
+      "sdk": "r6",
+      "run": "far-pointer-efficient",
+      "test": "PagedFarPointerWrapsFieldsAndCapturesOldBases",
+      "cpu_comparisons": 1728
+    },
+    {
+      "sdk": "r6",
+      "run": "far-pointer-efficient",
+      "test": "PagedLssComposesWithScheduledIRQAndNMI",
+      "cpu_comparisons": 24
+    },
+    {
+      "sdk": "r6",
+      "run": "far-pointer-efficient",
+      "test": "PagedFarPointerHandlerRepairsMappingAndRetries",
+      "cpu_comparisons": 6
+    },
+    {
+      "sdk": "r6",
+      "run": "returns-efficient",
+      "test": "PagedFarReturnsMatchOriginalCPU",
+      "return_processor": 14,
+      "return_core_type": 32,
+      "cpu_comparisons": 6912,
+      "far_return_fault_cpu_comparisons": 3816
+    },
+    {
+      "sdk": "r6",
+      "run": "returns-efficient",
+      "test": "PagedInterruptReturnsMatchOriginalCPU",
+      "return_processor": 14,
+      "return_core_type": 32,
+      "iret_cpu_comparisons": 6048,
+      "cpu_comparisons": 6048,
+      "iret_fault_cpu_comparisons": 2456,
+      "iret_ac_vmm_nmi_discrepancies": 136
+    },
+    {
+      "sdk": "r6",
+      "run": "returns-efficient",
+      "test": "PagedIretComposesWithScheduledIRQAndNMI",
+      "iret_roundtrip_cpu_comparisons": 8,
+      "cpu_comparisons": 8
+    },
+    {
+      "sdk": "r6",
+      "run": "returns-efficient",
+      "test": "PagedReturnFaultHandlerRepairsMappingAndRetries",
+      "return_retry_cpu_comparisons": 4,
+      "cpu_comparisons": 4
+    },
+    {
+      "sdk": "r6",
+      "run": "NeverDX64ContinuationExportTests-shard-1",
+      "test": "ScheduledEventsMatchNativeInterruptWindows",
+      "cpu_comparisons": 8704,
+      "lss_cpu_comparisons": 4608
+    }
+  ],
+  "builds": [
+    {
+      "sdk": "native",
+      "receipt": "native-build-receipt.json",
+      "sha256": "62439ad4b6545b6cb3b1ce955d52a15b3514287743abed8c5248fc0f1b998bc9",
+      "options": [
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "NeverDX86PagingTests",
+        "NeverDX64ContinuationSourceTests",
+        "NeverDX64ContinuationExportTests",
+        "--parallel",
+        "4"
+      ],
+      "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+    },
+    {
+      "sdk": "r6",
+      "receipt": "r6-build-receipt.json",
+      "sha256": "32bb8984895df2ac97b4158464972338b0c58d41db93d8398e05bbb09de4e1a6",
+      "options": [
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "NeverDX86PagingTests",
+        "NeverDX64ContinuationSourceTests",
+        "NeverDX64ContinuationExportTests",
+        "--parallel",
+        "4"
+      ],
+      "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+    }
+  ],
+  "cross_sdk_exports": {
+    "identical_primary_files": 556,
+    "identical_efficient_files": 124,
+    "manifests": {
+      "primary-export-sha256.txt": "7cd0dda2a4aef2386d5f75c9cfa9b2ba6c4ce0a1476f01d1b77b8e986a913623",
+      "efficient-export-sha256.txt": "e393d8b6fe9c0cf90a32d2cd818ae6c26202a71e1beff7a24c3cee8e25c9755a"
+    },
+    "unchanged_prior_files": 484,
+    "changed_prior_files": [],
+    "absent_prior_files": []
+  },
+  "qualification": {
+    "matrix": "99 forms x 181 cases x 8 compiler profiles per SDK/core; SMAP case is executed only when KVM advertises it",
+    "matrix_routes": [
+      "HighC",
+      "LLVM-to-C"
+    ],
+    "matrix_compilers": [
+      "Clang",
+      "NeverC"
+    ],
+    "matrix_optimizations": [
+      "O0",
+      "O2"
+    ],
+    "address_matrix": "54 forms x 4 input/memory cases x 8 compiler profiles per SDK/core",
+    "composition": "24 IRQ/NMI cases and 6 page-repair/IRET/retry comparisons per SDK/core, both C routes using Clang O2",
+    "cpu": "Intel Core i9-13900H, KVM, performance CPUs 0/2/4 and efficient CPUs 12/14",
+    "no_inline_assembly_far_pointer_exports": 36,
+    "native_intrinsics": "Existing LLVM x86.lss/lfs/lgs16/32/64 and NeverC native builtins require no source change for this portable runtime extension",
+    "retained_exclusions": [
+      "inactive segment-cache values normalized by KVM are not asserted equal",
+      "fault-time page-table A/D publication is not equated",
+      "known IRET #AC VMX/NMI disagreement is separately counted",
+      "native LA57 is unavailable"
+    ],
+    "backing_and_policy_cases": "12 cases per SDK/core and C route; 96 total policy/backing checks"
+  },
+  "counterexamples": [
+    {
+      "log": "first/test.log",
+      "sha256": "9fa8c1a6124ba11462ef820183e50674f64f66ac5f786f258f685f0a254efcee",
+      "cause": "SMAP fixture left system and handler pages user-accessible, causing native shutdown",
+      "resolution": "keep entry pages supervisor and isolate the user descriptor page; AC does not bypass implicit SMAP"
+    },
+    {
+      "log": "second/test.log",
+      "sha256": "f60acf0ec11fe93371ee59b1f92b0668c1b02d4bba62b1e3cd5ddf726dc01649",
+      "cause": "VM entry cannot install a noncanonical LDTR base",
+      "resolution": "use a canonical LDTR base whose descriptor index crosses into noncanonical space"
+    },
+    {
+      "log": "fourth/test.log",
+      "sha256": "2b72b1cc41514180e1100322e4f9b384efcad844b38a17d9c9c54920b73e0ffe",
+      "cause": "new high-address paging structures were not included in the existing fault-time A/D exclusion",
+      "resolution": "exclude exactly the additional page-table pages for those two cases; retain all ordinary RAM comparisons"
+    }
+  ],
+  "specifications": [
+    {
+      "title": "Intel SDM revision 093, volume 2 LDS/LES/LFS/LGS/LSS",
+      "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html",
+      "local_pdf": "/mnt/data/neverd-paged-scheduling-20261101/intel-sdm-vol2-093.pdf",
+      "sha256": "d137a7887787bbb06c1a8b8bafd51958d8d2e16b4dff987a03226c845cca1516"
+    },
+    {
+      "title": "KVM API",
+      "url": "https://www.kernel.org/doc/html/latest/virt/kvm/api.html"
+    }
+  ],
+  "limitations": [
+    "This qualifies the supplied OffsetFirst profile on both local hybrid core types, not all processors or AMD REX.W behavior",
+    "Legacy i386/compatibility far-pointer dispatch and task gates remain open",
+    "SMI/software SMM, SGX enclave/AEX/EPCM, REP/gather/XSAVE partial completion and device/controller ownership remain open",
+    "TF, CET/FRED/LAM/LASS, TLB/MMIO and concurrent writers require their separate owners",
+    "No final LLVM release, SDK pin or LLVM gitlink update is implied"
+  ],
+  "compiler_interface_checks": [
+    {
+      "name": "neverc-frontend",
+      "passed": 3,
+      "report": "final/toolchain/neverc-frontend.xml",
+      "sha256": "37eeb5464902c4c5964fca1a0e1bb3bfc2d501a6e2149491bde25abcce2c7a1f",
+      "log_sha256": "4eb4b405227349322c914cdd0eaa1f05f0492fa083c4aa2a9ae96005288aea97"
+    },
+    {
+      "name": "neverc-backend",
+      "passed": 1,
+      "report": "final/toolchain/neverc-backend.xml",
+      "sha256": "55a2d3cd21d7e613a3f5960790f5a6092110943d0e7e80ec1607ba384ad1cc11",
+      "log_sha256": "18b8b73d1456499561ddf6b0f3a57a333c944971aca7f6e594651e7001db6d04"
+    },
+    {
+      "name": "llvm-legacy-codegen-lit",
+      "passed": 1,
+      "report": "final/toolchain/llvm.json",
+      "sha256": "4e2f8dffc61a8b85418c6016d795fc450fab0e9025145aa65bbeac04aff54f7f",
+      "log_sha256": "215b1b11953ceed621bc73ec0e71e9ba801460ebd176d67b0a9dbf76317bf3d1"
+    },
+    {
+      "name": "llvm-new-codegen-commands",
+      "passed_commands": 33,
+      "report": "final/toolchain/new-pm/result.json",
+      "sha256": "eaf3b503d9ef4c95f1fa58715df0d6f1f5db4c026f05f6904d181134030b3aa0",
+      "source_sha256": "3492a95ba1901272206749b6a697e326f91d022bf5ebffe67939353eabd27dd4"
+    }
+  ],
+  "compiler_checks_are_separate_from_cpp_and_cpu_totals": true,
+  "toolchain_binary_sha256": {
+    "${LLVM_WORKTREE}/build-intrinsics/bin/llc": "17411ce561dddd91fd98e7ac1c7ecb464a5cb7b789b1adb0cf5637890f98eae0",
+    "${LLVM_WORKTREE}/build-intrinsics/bin/opt": "b16f0dbb6461388d55a0ff94e7a2373e59c8875b6b4110a682ce6aa8405cfd87",
+    "${NEVERC_WORKTREE}/build-neverc/bin/neverc": "4eb585ed3d578521b2e84e9e29efdc901e22811f09ad1a0edb2ad1db8fc028dc"
+  },
+  "build_logs": {
+    "final/build-native-integrated.log": "db8f7607e2c85cac7054a0a1d840986dcf69efeda21f6c8dde9cd1d5bcc93317",
+    "final/build-r6-integrated.log": "a6aa494ec726902cea7f353f9fcd67334f6c7e2c3db9b78bd15f88e5f40f3d88"
+  },
+  "qualification_scripts": {
+    "run_final.py": "d7cc6f978ff0fc4fd7bdce61a199dda445555c0d4bb42490749678bb7cd0ae71",
+    "private_tmp.py": "bb37523e352b56e8a66e70660146eb73901e72462aabdfb48612d1acfb0c4000",
+    "collect_evidence.py": "11c71c7f303aa7deb40ea344d120b7a5146433347ce5999ad28c86c0ab109d2e"
+  },
+  "changed_source_sha256": {
+    "include/neverd/analysis/arch/x86_64/X64PagedEventDelivery.h": "7196089be333d01164029f5ad36c54491719226723fdac9b295eb8843a85bef9",
+    "include/neverd/analysis/arch/x86_64/X64PagedExecution.h": "73d23e8849cf9f349a0cf66b8311a98602246c8bc2a2047963d0c512be6f5c23",
+    "include/neverd/analysis/arch/x86_64/X64PagedSource.h": "dc2baf8444cfc05605c495f9d58c7f9d2c4853183fae225c7c78949e9a54b19d",
+    "lib/analysis/arch/x86_64/X64ContinuationEvents.h": "63da40e401089407d68059456493fa97b471eb0221bce7ef7c549e7efee07d9a",
+    "lib/analysis/arch/x86_64/X64ContinuationSegments.h": "01754ada3d71ce05264c4971500700b5539e1e722eaff33aaa612f5ba214356f",
+    "lib/analysis/arch/x86_64/X64ContinuationSource.cpp": "9f72921232f9eda16b80b247572a85b0f07ed5d41641eed42417596301d73783",
+    "lib/analysis/arch/x86_64/X64FarPointerEncoding.h": "43928be8098342f5d81dd70c8964de00d8e930039c698f00ff0a2d2859afdb87",
+    "lib/analysis/arch/x86_64/X64PagedEventDelivery.cpp": "e3f645c3a447131ec9c0934ddbe6c0dfa79c7a794817c78af469a50807395579",
+    "lib/analysis/arch/x86_64/X64PagedExecution.cpp": "cf8d07e48a45894eb6329898b7f708188faabaab924e1259ac176e59926b9db2",
+    "unittests/devirtualization/x86_64/X64FarPointerContinuationTests.inc": "b06a0477aebd80ec01574b7eb47951f2306f4a68b90fc77c9d88bd59993fa31d",
+    "unittests/translate/x86/X64PagedExecutionTests.cpp": "7337da3f9996f40f800e12642db127b551516f68c04cb98856d52a4f9c99f925",
+    "unittests/translate/x86/X64PagedFarPointerTests.inc": "84fc8cc2a7290e2aba907b424d9d1d2cc8cd3d5b636dab3f5dd5a2d25385a025",
+    "unittests/translate/x86/X64PagedNativeCPU.h": "92b74467fd18c3c954b738d6bdaf2ceb5b8828879a2ed3cebb10c12f574783a1"
+  }
+}

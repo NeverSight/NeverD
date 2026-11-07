@@ -24,6 +24,7 @@
 #include "neverd/ir/med/MedCallReturnReads.h"
 #include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/ir/med/MedStackAlignment.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryLoading.h"
@@ -32,6 +33,7 @@
 #include "llvm/IR/Verifier.h"
 
 #include <algorithm>
+#include <cstring>
 #include <regex>
 #include <set>
 
@@ -566,10 +568,11 @@ LowFunc decodeFixedSEHFrame(const BinaryImage &Img) {
 // Resolve only copies, constant SP arithmetic and equal-input PHIs. This
 // asserts the actual memory operand's entry-SP-relative identity on both
 // paths, rather than looking for a particular initializer spelling.
-std::optional<int64_t> entrySPOffset(const MedFunc &F, const MedVar &V,
-                                     std::set<std::pair<int, int>> Seen = {}) {
-  if (V.Kind == MedVar::Reg &&
-      V.RegOff == getTargetRegInfo(Arch::X64).StackPointer && V.SSAVer == 0)
+std::optional<int64_t>
+entrySPOffset(const MedFunc &F, const MedVar &V,
+              std::set<std::pair<int, int>> Seen = {},
+              uint64_t SP = getTargetRegInfo(Arch::X64).StackPointer) {
+  if (V.Kind == MedVar::Reg && V.RegOff == SP && V.SSAVer == 0)
     return 0;
   if (!Seen.emplace(V.Id, V.SSAVer).second)
     return std::nullopt;
@@ -579,7 +582,7 @@ std::optional<int64_t> entrySPOffset(const MedFunc &F, const MedVar &V,
         continue;
       std::optional<int64_t> Result;
       for (const auto &[Pred, Arg] : Phi.Args) {
-        auto Offset = entrySPOffset(F, Arg, Seen);
+        auto Offset = entrySPOffset(F, Arg, Seen, SP);
         if (!Offset || (Result && Result != Offset))
           return std::nullopt;
         Result = Offset;
@@ -590,10 +593,10 @@ std::optional<int64_t> entrySPOffset(const MedFunc &F, const MedVar &V,
       if (Op.Output.Id != V.Id || Op.Output.SSAVer != V.SSAVer)
         continue;
       if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
-        return entrySPOffset(F, Op.Inputs[0], Seen);
+        return entrySPOffset(F, Op.Inputs[0], Seen, SP);
       if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
           Op.NumInputs == 2 && Op.Inputs[1].isConst()) {
-        auto Base = entrySPOffset(F, Op.Inputs[0], Seen);
+        auto Base = entrySPOffset(F, Op.Inputs[0], Seen, SP);
         if (Base)
           return *Base + (Op.Opcode == NdOp::INT_ADD ? 1 : -1) *
                              static_cast<int64_t>(Op.Inputs[1].ConstVal);
@@ -1028,6 +1031,48 @@ TEST(MedSEHEstablisherFrame, SourceRequiresExplicitIndependentEntry) {
     EXPECT_EQ(Proved, Published) << Failure;
     if (Proved)
       EXPECT_TRUE(Proof->HasIndependentEntries);
+  }
+}
+
+// clang-cl ends a guarded range one byte past the return address of its
+// last call, so the instruction there is guarded: here the first one of the
+// join the handler resumes at.  The epilogue after it is guarded by no
+// scope, so its stack release cannot unsettle a handler's frame; inside the
+// range it would.
+TEST(MedSEHEstablisherFrame, EpilogueAfterTheGuardedRangeIsUnchecked) {
+  for (va_t RangeEnd : {0x16, 0x1a}) {
+    SCOPED_TRACE(RangeEnd);
+    auto Img = makeFixedSEHFrameImage();
+    auto &Code = Img.Segments.front().Data;
+    std::fill(Code.begin() + 0x10, Code.end(), 0xcc);
+    // 0x10: call 0x38; 0x15: mov eax,[rsp+36]; add rsp,128; pop rdi; ret.
+    const uint8_t Join[] = {0xe8, 0x23, 0,    0,    0, 0x8b, 0x44, 0x24, 0x24,
+                            0x48, 0x81, 0xc4, 0x80, 0, 0,    0,    0x5f, 0xc3};
+    std::copy(std::begin(Join), std::end(Join), Code.begin() + 0x10);
+    // 0x28: eax=[rsp+36]; eax+=20; [rsp+36]=eax; jmp 0x15.
+    const uint8_t Handler[] = {0x8b, 0x44, 0x24, 0x24, 0x83, 0xc0, 20,
+                               0x89, 0x44, 0x24, 0x24, 0xeb, 0xe0};
+    std::copy(std::begin(Handler), std::end(Handler), Code.begin() + 0x28);
+    Code[0x38] = 0xc3;
+    auto &EH = Img.ExceptionMetadata.Functions.front();
+    EH.CodeRange.End = Img.Entry + 0x35;
+    Img.Symbols.front().Size = 0x35;
+    auto &Scope = EH.SEH->Scopes.front();
+    Scope.GuardedRange = {Img.Entry + 0x10, Img.Entry + RangeEnd};
+    Scope.HandlerVA = Img.Entry + 0x28;
+    Img.ExceptionMetadata.rebuildIndex();
+    auto Low = decodeFixedSEHFrame(Img);
+    ASSERT_NE(Low.blockFor(Img.Entry + 0x15), nullptr);
+    size_t Work = limits::kMaxSEHEstablisherFrameWork;
+    auto Frame = proveLowSEHEstablisherFrame(
+        Low, Img.Entry + 0x28, getTargetRegInfo(Arch::X64), false, Work);
+    const bool Proven = bool(Frame);
+    const std::string Error = Proven ? "" : llvm::toString(Frame.takeError());
+    EXPECT_EQ(Proven, RangeEnd == 0x16) << Error;
+    if (!Proven)
+      EXPECT_NE(Error.find("SP is not stable"), std::string::npos) << Error;
+    else
+      EXPECT_EQ(Frame->FrameBytes, 136u);
   }
 }
 
@@ -2255,6 +2300,80 @@ TEST(MedSEHHandlerEntry, IsolatedX86TableEntryKeepsFrameAfterStateExhaustion) {
   }
 }
 
+// stp x29,x30,[sp,#-0x20]!; mov x29,sp; mov x19,x0; nop; b join;
+// handler: str x19,[x29,#0x10]; b join; join: ldp x29,x30,[sp],#0x20; ret.
+// The scope guards [RangeBegin, 0x10) from the entry, the nop at least.
+BinaryImage makeAArch64SEHHandlerImage(va_t RangeBegin) {
+  constexpr va_t Entry = 0x140001000;
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  Img.Entry = Entry;
+  const uint32_t Words[] = {0xa9be7bfd, 0x910003fd, 0xaa0003f3,
+                            0xd503201f, 0x14000003, 0xf9000bb3,
+                            0x14000001, 0xa8c27bfd, 0xd65f03c0};
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Entry;
+  Text.Size = sizeof(Words);
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  std::memcpy(Text.Data.data(), Words, sizeof(Words));
+  Img.Segments.push_back(std::move(Text));
+  Section Section;
+  Section.Name = ".text";
+  Section.VA = Entry;
+  Section.Size = sizeof(Words);
+  Section.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Section));
+  Img.Symbols.push_back(Symbol::makeFunc(Entry, sizeof(Words)));
+  ExceptionFunction EH;
+  EH.CodeRange = {Entry, Entry + sizeof(Words)};
+  EH.Encoding = ExceptionEncoding::ARM64Unpacked;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  EH.SEH.emplace();
+  SEHScopeRecord Scope;
+  Scope.GuardedRange = {Entry + RangeBegin, Entry + 0x10};
+  Scope.Kind = SEHScopeKind::CatchAll;
+  Scope.HandlerVA = Entry + 0x14;
+  EH.SEH->Scopes.push_back(Scope);
+  Img.ExceptionMetadata.Functions.push_back(EH);
+  Img.ExceptionMetadata.rebuildIndex();
+  return Img;
+}
+
+TEST(MedSEHHandlerEntry, AArch64HandlerResumesWithTheProtectedRegisters) {
+  // The ARM64 unwinder resumes an __except body with the protected frame's
+  // nonvolatile registers and SP. The range writes neither x19 nor fp, so
+  // the handler stores x0's incoming value through the frame the prologue
+  // set. A range covering `mov x19,x0` leaves x19 to where it struck.
+  for (va_t RangeBegin : {0xc, 0x8}) {
+    SCOPED_TRACE(RangeBegin);
+    auto Img = makeAArch64SEHHandlerImage(RangeBegin);
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Arch::AArch64));
+    auto Low = CFGBuilder().build(Img, Dec, Img.Entry, "aarch64_seh_handler");
+    auto Med =
+        LowToMedConverter().convert(Low, Arch::AArch64, BinaryFormat::COFF);
+    ASSERT_TRUE(verifyMedFunc(Med, "aarch64-seh-handler-entry"));
+    auto Saved = storedValueAt(Med, Img.Entry + 0x14);
+    ASSERT_TRUE(Saved);
+    if (RangeBegin == 0x8) {
+      EXPECT_EQ(Saved->Kind, MedVar::Unspecified) << Saved->display();
+    } else {
+      EXPECT_EQ(Saved->Kind, MedVar::Reg) << Saved->display();
+      EXPECT_EQ(Saved->RegOff, a64reg::X0) << Saved->display();
+      EXPECT_EQ(Saved->SSAVer, 0) << Saved->display();
+    }
+    auto Frame = storeAddressBase(Med, Img.Entry + 0x14);
+    ASSERT_TRUE(Frame);
+    EXPECT_EQ(entrySPOffset(Med, *Frame, {}, a64reg::SP), -0x20)
+        << Frame->display();
+  }
+}
+
 TEST(MedSEHHandlerEntry, NonvolatileRegisterWrittenInTheRangeIsUnspecified) {
   // mov rdi,rcx inside the protected range; the handler stores rdi. Where
   // the exception struck decides rdi, so the handler cannot know it.
@@ -2800,6 +2919,8 @@ TEST(Win64Forwarder, ArgumentSlotTheCalleeNeverReadsIsZero) {
   Options.Image = &Img;
   ASSERT_TRUE(HighCEmitter().emit({*Caller}, Stream, Options));
   Stream.flush();
-  EXPECT_NE(Source.find("sub_140001030(0, 1)"), std::string::npos) << Source;
+  // An unprototyped call still passes the complete unused register carrier.
+  EXPECT_NE(Source.find("sub_140001030((uint64_t)0, 1)"), std::string::npos)
+      << Source;
   EXPECT_EQ(Source.find("unknown"), std::string::npos) << Source;
 }

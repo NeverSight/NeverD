@@ -20,6 +20,7 @@
 
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/COFF/COFFCxxEpilogue.h"
+#include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/Support/ErrorHandling.h"
@@ -83,6 +84,15 @@ void CFGBuilder::splitBlocks() {
   const bool Registration =
       CurrentImg && CurrentImg->Arch == Arch::X86 && EH && EH->Registration;
   for (auto &[Addr, Rec] : Insns) {
+    // x86 can enter after a prefix or in an immediate. Each decoded stream
+    // falls through at its own instruction end, not the next address in the
+    // instruction map. Split the convergence points before forming blocks.
+    const auto Next = Insns.upper_bound(Addr);
+    if (Next != Insns.end() && Next->first < Addr + Rec.Size) {
+      BlockStarts.insert(Next->first);
+      if (Insns.count(Addr + Rec.Size))
+        BlockStarts.insert(Addr + Rec.Size);
+    }
     if (Rec.IsBranch && Rec.IsCond)
       BlockStarts.insert(Addr + Rec.Size);
     if (Registration &&
@@ -91,11 +101,15 @@ void CFGBuilder::splitBlocks() {
                  Op.MemoryAddressSpace == NdMemoryAddressSpace::X86FS;
         }))
       BlockStarts.insert(Addr + Rec.Size);
-    if (Registration && EH->Cxx &&
+    if (Registration &&
         registration_state::stateStoreCandidate(*EH->Registration, Rec.Ops))
       BlockStarts.insert(Addr + Rec.Size);
     if (Registration && EH->Cxx && Rec.IsCall && !Rec.IsIndirect &&
         coff_loader::getCheckedX86CxxEpilogueCall(*CurrentImg, *EH, Addr))
+      BlockStarts.insert(Addr + Rec.Size);
+    if (Registration && !EH->Cxx && Rec.IsCall && !Rec.IsIndirect &&
+        !Rec.IsCond && !Rec.IsRet && !Rec.IsInstructionGuard &&
+        coff_loader::getCheckedX86SEH4EpilogueCall(*CurrentImg, *EH, Addr))
       BlockStarts.insert(Addr + Rec.Size);
     if (Registration && !EH->Cxx &&
         (EH->Encoding == ExceptionEncoding::X86ScopeTableEH3 ||
@@ -428,14 +442,9 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
   // qualify suppression; they must not seed otherwise unreachable table arms.
   if (CurrentImg && CurrentFuncRange) {
     std::map<va_t, std::set<va_t>> AbsoluteSources;
-    if (!AbsoluteRelocationRoots ||
-        !AbsoluteRelocationRoots->collectSources(
-            *CurrentImg, CurrentFuncRange->first, CurrentFuncRange->second,
-            AbsoluteSources)) {
-      const detail::AbsoluteRelocationRootIndex LocalIndex(*CurrentImg);
-      LocalIndex.collectSources(*CurrentImg, CurrentFuncRange->first,
-                                CurrentFuncRange->second, AbsoluteSources);
-    }
+    absoluteRelocationRootIndex(*CurrentImg)
+        .collectSources(*CurrentImg, CurrentFuncRange->first,
+                        CurrentFuncRange->second, AbsoluteSources);
     for (const auto &[Target, Sources] : AbsoluteSources) {
       if (!Insns.count(Target))
         continue;
@@ -833,8 +842,9 @@ void CFGBuilder::linkSuccessors(LowFunc &Func,
     } else if (!Rec.IsBranch || Rec.IsCall) {
       // An unconditional no-return call ends control flow.  A conditional
       // call still reaches the next block when its predicate is false.
-      if ((!Rec.IsNoReturnCall || Rec.IsCond) && I + 1 < Func.Blocks.size())
-        Blk.Succs.push_back(static_cast<int>(I + 1));
+      const auto Fall = AddrToBlock.find(Rec.Addr + Rec.Size);
+      if ((!Rec.IsNoReturnCall || Rec.IsCond) && Fall != AddrToBlock.end())
+        Blk.Succs.push_back(Fall->second);
     }
 
     // A predicated non-control ARM instruction uses an instruction-local

@@ -132,6 +132,8 @@ llvm::Expected<ExternLayout> layoutExterns(const ExternRequests &Requests,
     Layout.SymbolSlots[U.Name] = *At;
     if (U.Called)
       Layout.CalledSymbols.insert(U.Name);
+    else
+      Layout.SymbolBytes[U.Name] = Bytes;
   }
   for (const auto &C : Requests.Commons) {
     auto At = allocate(Next, std::max<uint64_t>(C.Bytes, 1),
@@ -169,6 +171,9 @@ void addExternSegment(
       Imp.IATAddr = SlotVA;
       Img.Imports.push_back(std::move(Imp));
       Img.ObjectExternFunctionEntries.insert(SlotVA);
+    } else if (const auto Bytes = Layout.SymbolBytes.find(Name);
+               Bytes != Layout.SymbolBytes.end()) {
+      Img.ObjectExternDataSymbols[SlotVA] = {Name, Bytes->second};
     }
     // Another module states the size of what it defines; the object does
     // not, so the symbol has none.

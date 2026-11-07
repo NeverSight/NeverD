@@ -412,8 +412,9 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
       CurOp.Inputs[0].Size == Func.ReturnType->Size)
     RetVal = medvarToExpr(CurOp.Inputs[0]);
 
-  if (!RetVal && !ExplicitABI && !UsesFPReturnReg && !Med.FPReturnViaX87 &&
-      Func.ReturnType && Func.ReturnType->Kind == NdTypeKind::Int &&
+  if (!RetVal && !UsesFPReturnReg && !Med.FPReturnViaX87 && Func.ReturnType &&
+      (Func.ReturnType->Kind == NdTypeKind::Int ||
+       Func.ReturnType->Kind == NdTypeKind::Ptr) &&
       hasPropagatedIntegerReturnValue(CurOp, TargetArch, Func.ReturnType->Size))
     RetVal = medvarToExpr(CurOp.Inputs[0]);
 

@@ -568,21 +568,22 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
         LowToMedConverter Reconv;
         Reconv.setBinaryImage(&Img);
         Reconv.setCalleePopMap(&CalleePop);
-        Reconv.setCallMayWriteGPRs(&Result.CallMayWriteGPRs);
-        Reconv.setCallExitConstants(&Result.CallExitConstants);
-        Reconv.setCallEntryReadGPRs(&Result.CallEntryReadGPRs);
-        Reconv.setCallUnreadGPRs(&Result.CallUnreadGPRs);
-        Reconv.setCallArgumentSources(&Result.CallArgumentSources);
-        Reconv.setCallEntryStackArgs(&Result.CallEntryStackArgs);
+        Reconv.setCallMayWriteGPRs(&Result.CallMayWriteGPRs.get());
+        Reconv.setCallExitConstants(&Result.CallExitConstants.get());
+        Reconv.setCallEntryReadGPRs(&Result.CallEntryReadGPRs.get());
+        Reconv.setCallUnreadGPRs(&Result.CallUnreadGPRs.get());
+        Reconv.setCallArgumentSources(&Result.CallArgumentSources.get());
+        Reconv.setCallEntryStackArgs(&Result.CallEntryStackArgs.get());
         Reconv.setCallEntryStackSlots(&Result.CallEntryStackSlots);
         Reconv.setCallEntryArgumentCounts(&Result.CallEntryArgumentCounts);
-        Reconv.setCallEntryIntegerArguments(&Result.CallEntryIntegerArguments);
+        Reconv.setCallEntryIntegerArguments(
+            &Result.CallEntryIntegerArguments.get());
         Reconv.setCallEntryFloatingArguments(
-            &Result.CallEntryFloatingArguments);
-        Reconv.setCallDispatchThunks(&Result.CallDispatchThunks);
-        Reconv.setCallVariadicFrom(&Result.CallVariadicFrom);
+            &Result.CallEntryFloatingArguments.get());
+        Reconv.setCallDispatchThunks(&Result.CallDispatchThunks.get());
+        Reconv.setCallVariadicFrom(&Result.CallVariadicFrom.get());
         Reconv.setCallEntryVariadicArguments(
-            &Result.CallEntryVariadicArguments);
+            &Result.CallEntryVariadicArguments.get());
         Reconv.setFormattedCalls(&Result.FormattedCalls);
         Reconv.setStackProbeSlots(&StackProbeSlots);
         Reconv.setI64Callees(&I64RetCallees);
@@ -592,7 +593,8 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
         Reconv.setRegistrationFrameFacts(
             {Result.MedFuncs[I].Entry,
              Result.MedFuncs[I].RegistrationCallerCleanupABIComplete,
-             Result.MedFuncs[I].RegistrationCxxEntryPopBytes});
+             Result.MedFuncs[I].RegistrationCxxEntryPopBytes,
+             Result.MedFuncs[I].RegistrationSEHEntryPopBytes});
         MedFunc NewMF =
             Reconv.convert(Result.LowFuncs[I], Img.Arch, Img.abiFormat());
         NewMF.OriginalSize = Result.LowFuncs[I].OriginalSize;

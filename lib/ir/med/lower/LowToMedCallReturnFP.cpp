@@ -17,9 +17,56 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <tuple>
 #include <vector>
 
 namespace neverd {
+namespace {
+using ValueKey = std::tuple<int, int, int, uint16_t>;
+ValueKey valueKey(const MedVar &V) {
+  return {static_cast<int>(V.Kind), V.Id, V.SSAVer, V.Size};
+}
+
+// A use in real control flow is stronger result evidence than merely saving
+// another volatile register. Follow SSA values, including views and joins;
+// an unrelated later call's result must not claim an earlier call's output.
+// RETURN is deliberately not a root: the lifter's default integer return
+// operand alone cannot establish an integer result for a floating function.
+std::set<ValueKey> valuesFeedingControl(const MedFunc &Func) {
+  std::map<ValueKey, std::vector<MedVar>> Inputs;
+  std::vector<MedVar> Work;
+  for (const auto &Block : Func.Blocks) {
+    for (const auto &Phi : Block.Phis) {
+      auto &Incoming = Inputs[valueKey(Phi.Output)];
+      for (const auto &[Pred, Value] : Phi.Args)
+        Incoming.push_back(Value);
+      if (Phi.ExceptionalEntry)
+        Incoming.push_back(*Phi.ExceptionalEntry);
+    }
+    for (const auto &Op : Block.Ops) {
+      if (Op.Dead)
+        continue;
+      if (Op.Opcode == NdOp::COND_BR)
+        Work.insert(Work.end(), Op.Inputs.begin(),
+                    Op.Inputs.begin() + Op.NumInputs);
+      if (Op.Output.Size && !Op.Output.isConst() && Op.Opcode != NdOp::CALL &&
+          Op.Opcode != NdOp::INDIR_CALL)
+        Inputs[valueKey(Op.Output)].assign(Op.Inputs.begin(),
+                                           Op.Inputs.begin() + Op.NumInputs);
+    }
+  }
+  std::set<ValueKey> Seen;
+  while (!Work.empty()) {
+    const auto V = Work.back();
+    Work.pop_back();
+    if (V.isConst() || !Seen.insert(valueKey(V)).second)
+      continue;
+    if (const auto It = Inputs.find(valueKey(V)); It != Inputs.end())
+      Work.insert(Work.end(), It->second.begin(), It->second.end());
+  }
+  return Seen;
+}
+} // namespace
 
 void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
   const auto &TRI = getTargetRegInfo(TargetArch);
@@ -55,6 +102,10 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
   }
   if (VecId < 0)
     return; // the FP return register is never referenced anywhere
+
+  const auto ControlValues = TargetFormat == BinaryFormat::COFF
+                                 ? valuesFeedingControl(Func)
+                                 : std::set<ValueKey>{};
 
   // The architectural container may be wider than the ABI carrier.  In
   // particular, x86 AVX-512 aliases XMM0 with a 64-byte ZMM0 container, but a
@@ -252,6 +303,8 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
         continue;
       if (Op.Output.Kind == MedVar::Reg && TRI.isX87StackReg(Op.Output.RegOff))
         continue; // LowIR already bound the proven x87 result.
+      if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == FPRet)
+        continue; // SSA already bound every reader to this FP result.
       // A call already remodeled as a multi-register struct return (its output
       // is the flat aggregate temp, its FP return register claimed by an
       // extract op) is handled there — do not also route its FP register here.
@@ -313,14 +366,42 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
       if (!Consumed)
         continue;
 
-      int NewVer = NextVer++;
+      // An ordinary Win64 call has one result carrier. Keep the existing
+      // integer projection when that exact value feeds control flow; the
+      // vector's SSA clobber still supplies every post-call read. A declared
+      // scalar FP result retains its contract, and other conventions retain
+      // their aggregate/independent-register recovery above.
+      if (TargetArch == Arch::X64 && TargetFormat == BinaryFormat::COFF &&
+          !Op.CalleeFloatReturnBytes && Op.Output.Kind == MedVar::Reg &&
+          Op.Output.RegOff == TRI.IntReturnReg &&
+          ControlValues.count(valueKey(Op.Output)))
+        continue;
+
       MedVar Out;
-      Out.Kind = MedVar::Reg;
-      Out.Id = VecId;
-      Out.Size = FPReturnWidth;
-      Out.RegOff = FPRet;
-      Out.SSAVer = NewVer;
-      Out.TheArch = TargetArch;
+      const auto Existing = std::find_if(
+          Func.CallClobbers.begin(), Func.CallClobbers.end(),
+          [&](const MedCallClobber &Clobber) {
+            return Op.CallSiteId && Clobber.CallSiteId == Op.CallSiteId &&
+                   Clobber.Value.Kind == MedVar::Reg &&
+                   Clobber.Value.RegOff == FPRet && Clobber.Value.Id == VecId &&
+                   Clobber.Value.Size == FPReturnWidth &&
+                   Clobber.PreservedPrefixSize == 0;
+          });
+      if (Existing != Func.CallClobbers.end()) {
+        // This is the same post-call value SSA already gave every path.
+        // A fresh version would leave joins reading a second, independent
+        // observation of the very register now used as the call's result.
+        Out = Existing->Value;
+        Func.CallClobbers.erase(Existing);
+      } else {
+        Out.Kind = MedVar::Reg;
+        Out.Id = VecId;
+        Out.Size = FPReturnWidth;
+        Out.RegOff = FPRet;
+        Out.SSAVer = NextVer++;
+        Out.TheArch = TargetArch;
+      }
+      const int NewVer = Out.SSAVer;
       keepReplacedCallOutput(Func, Op, Op.Output);
       Op.Output = Out;
 

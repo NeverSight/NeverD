@@ -1,0 +1,1041 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-05",
+  "scope": "Native far CALL/JMP compiler interfaces and zero-argument returning far-entry ABI",
+  "global_goal_complete": false,
+  "neverd_base_commit": "4b28263e424157e97fa4e504dac4fabf6eb17a77",
+  "llvm_commit": "1c51c12828cc0d8eb6089ee02614f3f86f2e95f5",
+  "neverc_commit": "785a3dc1b78cd1fc4a738497a91f9416f1fd7d3f",
+  "source_bases": {
+    "llvm": "f2370bdd646363455b8a3c3f69b8e7ba86aeea33",
+    "neverc": "faeacf194cb8657e623f68cfc19656e369b20ec0"
+  },
+  "artifact_root": "/mnt/data/neverd-native-far-transfers-20261105",
+  "production_sdk": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "changed_source_sha256": {
+    "${LLVM_WORKTREE}/llvm/docs/X86NativeFarTransfers.rst": "2745508bf0fff9cd4020b7bfd0c6c5747f68dbc1aea0ee86d6346fdb89b337d5",
+    "${LLVM_WORKTREE}/llvm/docs/X86NativeFrameReturns.rst": "ff11fbc5c4e84cb8d77cd7dbd8af6cdce0e28bedd8db58ef4059dd6cacd11040",
+    "${LLVM_WORKTREE}/llvm/include/llvm/IR/IntrinsicsX86.td": "f3eacba2d179cfd8a4049406141675a10a80849641eeeeaa1ee42b40df653ade",
+    "${LLVM_WORKTREE}/llvm/lib/Target/X86/X86ISelLowering.cpp": "b33c4f8d12ea23ada5d5b6b3a2ca8c0774bf0fde8756149dfffdd08b6696a9ba",
+    "${LLVM_WORKTREE}/llvm/lib/Target/X86/X86InstrCompiler.td": "c9863d285f66cf1d8b8a66254df066230bbb2d1f55799e5221b1040b07085950",
+    "${LLVM_WORKTREE}/llvm/lib/Target/X86/X86MCInstLower.cpp": "e39f5e64d70e5bd0934ec3714a3654a3733b11fc10864222087751902823db8b",
+    "${LLVM_WORKTREE}/llvm/lib/Target/X86/X86NativeFarTransfer.h": "8b36505b054dfa460f91601c297320fe1cb29db5be3473d38b3728803cc4e22d",
+    "${LLVM_WORKTREE}/llvm/lib/Target/X86/X86NativeFarTransfers.def": "7d9e8ce4c27916762bbdd9206fad13d22154c447c0fa56081d7a6697a47e5b6b",
+    "${LLVM_WORKTREE}/llvm/test/CodeGen/X86/native-far-transfers.ll": "ac6a05a352905163d7fdab76c1bbdcd76a76b3df02ff4612841c1d427b34689d",
+    "${NEVERC_WORKTREE}/.github/workflows/lint-generated-td.yml": "f44a2385fd26751dbb94de39977757f7d72837997cd5f8d874be6c69b6e9de5b",
+    "${NEVERC_WORKTREE}/development.md": "3deb585cf469ceef2fc35a19072c1f4cad2e8af1641677b61550b41061670f65",
+    "${NEVERC_WORKTREE}/llvm/include/llvm/IR/IntrinsicEnums.inc": "c26b22dcacc2d6370cb7a9233be96105429752445eb544cdd743411adf926daa",
+    "${NEVERC_WORKTREE}/llvm/include/llvm/IR/IntrinsicImpl.inc": "a8990b6be18b4c60bfc3dcddd10aa0b710432ac95de13eab34f06fe7e5597b4f",
+    "${NEVERC_WORKTREE}/llvm/include/llvm/IR/IntrinsicsX86.h": "f96df21a6775dcad6a3038c87d557ad85c848b93c103b12261fd3cfa6aa59843",
+    "${NEVERC_WORKTREE}/llvm/lib/Target/X86/X86GenAsmWriter.inc": "93c466f9e5f0526334b6537edc1991ff0e2c285bf7fbb2966ef5df9701836d3d",
+    "${NEVERC_WORKTREE}/llvm/lib/Target/X86/X86GenAsmWriter1.inc": "45cd3a8c6c44f1443215a7a786cdccc1407fc742f9bf65579a80deb5be988bde",
+    "${NEVERC_WORKTREE}/llvm/lib/Target/X86/X86GenDAGISel.inc": "99d53150ce41fe8ba0b9b40b13c897fefa71e4312b0f4527f26b91161b1d193a",
+    "${NEVERC_WORKTREE}/llvm/lib/Target/X86/X86GenInstrInfo.inc": "0a3867007f8c2e56e96703b903caa185a00ef2094b43398d1127a3ad37a12505",
+    "${NEVERC_WORKTREE}/llvm/lib/Target/X86/X86ISelLowering.cpp": "18d882a327b8de0e29c5ee0008b64958e0a3134eff8e575cd3f54d8481b555fc",
+    "${NEVERC_WORKTREE}/llvm/lib/Target/X86/X86MCInstLower.cpp": "8258fcb97ab9ff58528c16463055e812e60fd69982343d9338e104168ffba12b",
+    "${NEVERC_WORKTREE}/llvm/lib/Target/X86/X86NativeFarTransfer.h": "7c476767a8ee67aa610601b23cfc73cfe029ddb2b644f36de7d143df8cac3cac",
+    "${NEVERC_WORKTREE}/llvm/lib/Target/X86/X86NativeFarTransfers.def": "7d9e8ce4c27916762bbdd9206fad13d22154c447c0fa56081d7a6697a47e5b6b",
+    "${NEVERC_WORKTREE}/neverc/include/neverc/Foundation/Builtin/BuiltinsX86.def": "b3e13964886fdfa1b81cc18d535a3537e61a9e795466865f1b7c26029090f5e9",
+    "${NEVERC_WORKTREE}/neverc/include/neverc/Foundation/Builtin/X86NativeFarTransfers.def": "0ce090a4d78c61e4b81cc4d29159756f85fc0ce9a10500fb9cf6119880ad0946",
+    "${NEVERC_WORKTREE}/neverc/lib/Analyze/Checking/SemaCheckingTargetX86.cpp": "0a2019f53f130c78fad22570475b2bae2e9ceef9a493c94774d274a6f0f072a6",
+    "${NEVERC_WORKTREE}/neverc/lib/Emit/Builtin/BuiltinEmitterX86.cpp": "1d8c7624daec874cd5d11b67befa6dadaabd4fc709b7725034bb79e20bee40b1",
+    "${NEVERC_WORKTREE}/tests/neverc/CMakeLists.txt": "f987bc0b4232bdec84cdfb9cfb81a8855c32b36629f5d50f887c9a4060e712e2",
+    "${NEVERC_WORKTREE}/tests/neverc/X86/FarTransferFrontendTests.cpp": "e1a9bc330cda449da29e17428866bebf8bca126086b6f8c3b1e833acefd37a9e",
+    "${NEVERC_WORKTREE}/tests/neverc/X86/far_transfer_kvm.c": "4ebaec3bece07da4683d6b3e4a875a30f76a398b7b097aa425dafa705c45358c",
+    "${NEVERC_WORKTREE}/tests/neverc/X86/verify_far_transfers.py": "58cddb366e7b0274aaaf8455916fa72ce39e0e29742983a257c288884b97e49d",
+    "${NEVERC_WORKTREE}/utils/lint/sync-x86-far-transfers.py": "13326536e78f69f0bc6a490a7e228ad2e6d9ee459c5d3256603fd4a741d94268",
+    "${NEVERC_WORKTREE}/utils/lint/sync-x86-native-intrinsics.py": "e125e76e32549d40ae5185838196795ffb33a4a25e9763c21c0c63ff46f0ea3d",
+    "${NEVERC_WORKTREE}/utils/lint/test_sync_x86_far_transfers.py": "b5bb6ebfacc01b71bfe641bb43d631318482bda42a8f9a10173514b49c642a2b",
+    "${NEVERC_WORKTREE}/utils/plugin-api/global-state-allowlist.json": "4338a8294dafc01ed2fe1cfa2f2deece27caf529a79f406f932df65487832d90"
+  },
+  "contract": {
+    "interfaces": 10,
+    "returning_call": "No C arguments; AX/EAX/RAX result; platform C callee-saved banks and environment; exact CS/SS/SP restored by RETF; zero copied gate parameters; continuation offset fits actual return-frame width.",
+    "terminal_jump": "Explicit ESP/RSP installed adjacent to the native far transfer; target base excludes SP; other registers compiler-selected.",
+    "lowering": "Real call sequences and platform register masks, Win64 home space, no leaf red zone; terminal machine carriers survive until MC emission.",
+    "oracle": "Independently encoded native far bytes execute at the same PC from a copied boundary state, including complete XSAVE import. Compare GPRs, segment/system state, FPU/XMM, events and all 2 MiB guest RAM. Returning entry then clobbers caller-saved banks and memory before the compiled continuation.",
+    "formats_compile_only": [
+      "ELF",
+      "COFF",
+      "Mach-O"
+    ],
+    "execution_platform": "Linux KVM, Intel Core i9-13900H, P core 2 and E core 12",
+    "coverage": [
+      "code16/code32/code64",
+      "x32 pointer ABI",
+      "LLVM IR, NeverC source and NeverC IR through full LLVM at O0/O2",
+      "CPL0 and CPL3 direct transfers",
+      "zero-parameter 16/32-bit call gates with independent opcode widths",
+      "fixed and dynamic compiler frames",
+      "packed targets copied into the compiler stack",
+      "callee-saved restoration, integer and vector live values, memory effects",
+      "native identity, mode/type/immediate diagnostics"
+    ],
+    "modes": "Code16 and x32 execute only full LLVM profiles. Linux i386 NeverC source uses its checked full-LLVM backend; x64 source uses the embedded backend.",
+    "exclusions": [
+      "arbitrary original-image context restoration",
+      "nonzero native call-gate parameters",
+      "task switching",
+      "CET",
+      "fault recovery",
+      "asynchronous unwinding",
+      "generic lifting of unbound far CALL/JMP"
+    ]
+  },
+  "final_totals": {
+    "profiles": 32,
+    "complete_state_pairs": 4512,
+    "returned_abi_checks": 2112,
+    "rejected_negative_controls": 64,
+    "llvm_lit_passed": 4,
+    "neverc_frontend_passed": 25,
+    "generated_table_unit_tests_passed": 91,
+    "failed_qualification_cases": 0,
+    "counting_note": "Only eight verified-* reports count. Returned ABI checks are a subset of native execution cases, not additional transfer pairs. Earlier diagnostic, failed and superseded runs are excluded."
+  },
+  "checks": {
+    "llvm_lit": {
+      "command": [
+        "build-intrinsics/bin/llvm-lit",
+        "-v",
+        "-j",
+        "2",
+        "llvm/test/CodeGen/X86/native-far-transfers.ll",
+        "llvm/test/CodeGen/X86/native-frame-returns.ll",
+        "llvm/test/CodeGen/X86/system-return-intrinsics.ll",
+        "llvm/test/CodeGen/X86/far-pointer-load-intrinsics.ll"
+      ],
+      "exit_code": 0,
+      "log_sha256": "90d796d01ec28ae60ba4c1de4bf20c4070ffa0c820d8e6fb1ee50d84bef0e20c"
+    },
+    "neverc_frontend": {
+      "filter": "X86FarTransferTest.*:X86FrameReturnTest.*:X86SystemReturnTest.*:X86FarPointerTest.*:I386FrontendTest.*:X86SegmentMoveTest.*",
+      "exit_code": 0,
+      "report_sha256": "97e967b2ad74a8899fa505191074eb85523124673045a39ac178e501965ec812",
+      "log_sha256": "145b9bbbaabbf98e9681c0f1b241b2a0094d3e6253c4667014e3ceb6e8713ded"
+    },
+    "generated_tables": {
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "utils/lint",
+        "-p",
+        "test_sync_x86*.py"
+      ],
+      "exit_code": 0,
+      "log_sha256": "03266436d926777b4a73045f05c7009afb4adfa92bc9fe9d2b7206ee7ef74952"
+    },
+    "global_state_audit": {
+      "command": [
+        "python3",
+        "utils/plugin-api/check-global-state.py",
+        "--strict",
+        "--json"
+      ],
+      "exit_code": 1,
+      "baseline_commit": "3328cbcda463f50ba86784ba6edb49ea08d85794",
+      "existing_source_global_findings": 90,
+      "new_findings": 0,
+      "source_global_findings_identical_to_baseline": true,
+      "baseline_sha256": "a97ffaa93f1b99e15ed737b27fe243287a3b54841398ca40ba698c79cf47817d",
+      "final_sha256": "026d5e02373fc4fe54f82c9297a5c4a0675edd8d91ddce5d5383a4eaa48539ee",
+      "limitation": "Repository-wide strict audit remains red on 90 pre-existing source-global findings. The reviewed TargetInfos metadata digest was refreshed for ten added builtin entries; no audit rule was weakened."
+    },
+    "neverd_docs": {
+      "command": [
+        "python3",
+        "scripts/check_docs_i18n.py"
+      ],
+      "exit_code": 0,
+      "log_sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+    },
+    "neverd_provenance": {
+      "command": [
+        "python3",
+        "scripts/check_source_provenance.py",
+        "--history-commits",
+        "2"
+      ],
+      "exit_code": 0,
+      "log_sha256": "79998f776f2a4e2ac10934f76ab2d0add73f211072e7b86cd00c0c77ef3b11f1"
+    }
+  },
+  "builds": {
+    "llvm": {
+      "log": "/mnt/data/neverd-native-far-transfers-20261105/build-llvm-final.log",
+      "log_sha256": "5bd7a34b8b4c0dfec3f0589ba618f7841f685c94cc9147803edca0d5d767dfd2"
+    },
+    "neverc": {
+      "log": "/mnt/data/neverd-native-far-transfers-20261105/build-neverc-final.log",
+      "log_sha256": "2f4c0defb561db1338c5c4ded203d7cde1cfe8cfd643b3c6578bbf4306e5a171"
+    }
+  },
+  "reports": [
+    {
+      "name": "verified-16-p",
+      "cpu": 2,
+      "core_type": "P",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "python3",
+        "${NEVERC_WORKTREE}/tests/neverc/X86/verify_far_transfers.py",
+        "--llvm-bin",
+        "${LLVM_WORKTREE}/build-intrinsics/bin",
+        "--neverc",
+        "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "--mode",
+        "16",
+        "--output",
+        "/mnt/data/neverd-native-far-transfers-20261105/verified-16-p"
+      ],
+      "exit_code": 0,
+      "evidence_sha256": "7b190757f861e4c6543dc98b1228b45e207f32ac3a7fa7a685cf536e1004934e",
+      "commands_sha256": "06bad1af8fb326a088545b616ce69098aae0450a199c4d08317aab454d3ccadb",
+      "log_sha256": "4bcaeeb90f8e4a04fd0bb5d1de7e6cbef28af983fb91baa7e5b38f6e575dfe38",
+      "code_bits": 16,
+      "x32": false,
+      "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+      "profiles": [
+        {
+          "profile": "llvm-O0",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "5ccb7ca4698461120a0a64df0aad04c87150776dc781709e6f80b32bb7e605bc",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "llvm-O2",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "0b0b28e6ff7af76f65948437d593e657622f3b068447f72fb6da52dfe2b2a10b",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        }
+      ],
+      "source_sha256": {
+        "verify_far_transfers.py": "58cddb366e7b0274aaaf8455916fa72ce39e0e29742983a257c288884b97e49d",
+        "far_transfer_kvm.c": "4ebaec3bece07da4683d6b3e4a875a30f76a398b7b097aa425dafa705c45358c",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71"
+      },
+      "tools": {
+        "clang": {
+          "path": "/usr/lib/llvm-23/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "path": "/usr/lib/llvm-23/bin/lld",
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "path": "/usr/bin/objcopy",
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llc",
+          "sha256": "892b1b867c22d9e02141f0a54c0c0fd478c8dc0bfa3a2889f8907c4bcb11db0c"
+        },
+        "opt": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/opt",
+          "sha256": "8c39a2bb1e7fe6e7e466838e9b67a7d87e98b1643529dd98648d2cb993418a01"
+        },
+        "llvm-objdump": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llvm-objdump",
+          "sha256": "4123a16e4dc51a3a599b44e6d0de9a9cd125581ff485e9051dd1ffe7e74e48c4"
+        }
+      },
+      "scope": "Native target/stack transport, direct and protected call-gate transitions, zero-argument returning far ABI",
+      "exclusions": [
+        "nonzero call-gate parameters",
+        "task switching",
+        "CET",
+        "fault recovery",
+        "asynchronous unwind",
+        "complete original-image register restoration"
+      ]
+    },
+    {
+      "name": "verified-32-p",
+      "cpu": 2,
+      "core_type": "P",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "python3",
+        "${NEVERC_WORKTREE}/tests/neverc/X86/verify_far_transfers.py",
+        "--llvm-bin",
+        "${LLVM_WORKTREE}/build-intrinsics/bin",
+        "--neverc",
+        "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "--mode",
+        "32",
+        "--output",
+        "/mnt/data/neverd-native-far-transfers-20261105/verified-32-p"
+      ],
+      "exit_code": 0,
+      "evidence_sha256": "ab1b31c541da4bf273692c8b01c087d897fe740b9042946dcc476c765a23dbd2",
+      "commands_sha256": "293a66cdbf5e921ca5159a4045756c41d15feaedcf4a0d6bfb55a1e107562412",
+      "log_sha256": "4a4aa4fcac0708e9796c3171a27401d3e7b43986b15abda0343af4d5f2652360",
+      "code_bits": 32,
+      "x32": false,
+      "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+      "profiles": [
+        {
+          "profile": "llvm-O0",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "c699343de54e92ac34cbb8160c99a0682d490b5dd5bda87a7ca916d069b38c0e",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "llvm-O2",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "ac89632a3e649d44a04a30c5b1689076514ecdbeba1020d622c082d0cea445ec",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-O0",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "324ce8ff2de042d3446db81173abd9320c4db9164d0f6eda4d2ea5af3da7e8c9",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-O2",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "e19199eee31f0a39606129adfbae8c0cc5f288a327438058a37b422f92b790e5",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-ir-O0",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "324ce8ff2de042d3446db81173abd9320c4db9164d0f6eda4d2ea5af3da7e8c9",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-ir-O2",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "e19199eee31f0a39606129adfbae8c0cc5f288a327438058a37b422f92b790e5",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        }
+      ],
+      "source_sha256": {
+        "verify_far_transfers.py": "58cddb366e7b0274aaaf8455916fa72ce39e0e29742983a257c288884b97e49d",
+        "far_transfer_kvm.c": "4ebaec3bece07da4683d6b3e4a875a30f76a398b7b097aa425dafa705c45358c",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71"
+      },
+      "tools": {
+        "clang": {
+          "path": "/usr/lib/llvm-23/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "path": "/usr/lib/llvm-23/bin/lld",
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "path": "/usr/bin/objcopy",
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llc",
+          "sha256": "892b1b867c22d9e02141f0a54c0c0fd478c8dc0bfa3a2889f8907c4bcb11db0c"
+        },
+        "opt": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/opt",
+          "sha256": "8c39a2bb1e7fe6e7e466838e9b67a7d87e98b1643529dd98648d2cb993418a01"
+        },
+        "llvm-objdump": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llvm-objdump",
+          "sha256": "4123a16e4dc51a3a599b44e6d0de9a9cd125581ff485e9051dd1ffe7e74e48c4"
+        },
+        "neverc": {
+          "path": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "sha256": "df9dd82278bcf2649a512da46ba0360e4891d124114081c5b14bfdd0d5204911"
+        }
+      },
+      "scope": "Native target/stack transport, direct and protected call-gate transitions, zero-argument returning far ABI",
+      "exclusions": [
+        "nonzero call-gate parameters",
+        "task switching",
+        "CET",
+        "fault recovery",
+        "asynchronous unwind",
+        "complete original-image register restoration"
+      ]
+    },
+    {
+      "name": "verified-64-p",
+      "cpu": 2,
+      "core_type": "P",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "python3",
+        "${NEVERC_WORKTREE}/tests/neverc/X86/verify_far_transfers.py",
+        "--llvm-bin",
+        "${LLVM_WORKTREE}/build-intrinsics/bin",
+        "--neverc",
+        "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "--mode",
+        "64",
+        "--output",
+        "/mnt/data/neverd-native-far-transfers-20261105/verified-64-p"
+      ],
+      "exit_code": 0,
+      "evidence_sha256": "52c805ae52c0f0c54e78d4d8b079cb551963d34b30c6dc57ba5f834e995985c3",
+      "commands_sha256": "61e8eb7d96c167d85a25449c676b32dc974d0cb2b737ff2c3de2f90b525d9fb1",
+      "log_sha256": "6a71ec269f73a74ab294762f848dd1ea4db8966f95efe530c536853c760119f8",
+      "code_bits": 64,
+      "x32": false,
+      "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+      "profiles": [
+        {
+          "profile": "llvm-O0",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "0ddcd6b421f7acb337b329ab7673a6a05ce10c721908c11097e2e65026dbfa0f",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "llvm-O2",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "a39084acfb0e21e0d252635e30a484b1df824ee015ba48efcfedac8c1947c248",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-O0",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "8793e09dfeed251a768f8752f617c65bd49a9a5fd155978af282495366440aff",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-O2",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "74c82bf7fb41881cdb6578ef9ad709c9aaa089876bfe0507ae0dca1ffb88849c",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-ir-O0",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "49d0756fc13f79c700af952db9af9f86c43c31ee8a44fdc3cb5cd22b4b83ee47",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-ir-O2",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "0d0906d2d27531037cfe19279946c7c8161a9dc0d0cf1e1def1969350f2adb3b",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        }
+      ],
+      "source_sha256": {
+        "verify_far_transfers.py": "58cddb366e7b0274aaaf8455916fa72ce39e0e29742983a257c288884b97e49d",
+        "far_transfer_kvm.c": "4ebaec3bece07da4683d6b3e4a875a30f76a398b7b097aa425dafa705c45358c",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71"
+      },
+      "tools": {
+        "clang": {
+          "path": "/usr/lib/llvm-23/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "path": "/usr/lib/llvm-23/bin/lld",
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "path": "/usr/bin/objcopy",
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llc",
+          "sha256": "892b1b867c22d9e02141f0a54c0c0fd478c8dc0bfa3a2889f8907c4bcb11db0c"
+        },
+        "opt": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/opt",
+          "sha256": "8c39a2bb1e7fe6e7e466838e9b67a7d87e98b1643529dd98648d2cb993418a01"
+        },
+        "llvm-objdump": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llvm-objdump",
+          "sha256": "4123a16e4dc51a3a599b44e6d0de9a9cd125581ff485e9051dd1ffe7e74e48c4"
+        },
+        "neverc": {
+          "path": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "sha256": "df9dd82278bcf2649a512da46ba0360e4891d124114081c5b14bfdd0d5204911"
+        }
+      },
+      "scope": "Native target/stack transport, direct and protected call-gate transitions, zero-argument returning far ABI",
+      "exclusions": [
+        "nonzero call-gate parameters",
+        "task switching",
+        "CET",
+        "fault recovery",
+        "asynchronous unwind",
+        "complete original-image register restoration"
+      ]
+    },
+    {
+      "name": "verified-x32-p",
+      "cpu": 2,
+      "core_type": "P",
+      "command": [
+        "taskset",
+        "-c",
+        "2",
+        "python3",
+        "${NEVERC_WORKTREE}/tests/neverc/X86/verify_far_transfers.py",
+        "--llvm-bin",
+        "${LLVM_WORKTREE}/build-intrinsics/bin",
+        "--neverc",
+        "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "--mode",
+        "64",
+        "--x32",
+        "--output",
+        "/mnt/data/neverd-native-far-transfers-20261105/verified-x32-p"
+      ],
+      "exit_code": 0,
+      "evidence_sha256": "dab0ff1743928ff0bc55b6166189c12d9f708f87a0278f2a946b0e8142cc84d3",
+      "commands_sha256": "a719e0e392559842aa5fff933e39c7beaeeb59ad86d365791d9362a072c0e5a6",
+      "log_sha256": "72e5e363ee5dd6471a870619b4385cd8f08bdfc4f7de47f7ef1f1972b7931105",
+      "code_bits": 64,
+      "x32": true,
+      "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+      "profiles": [
+        {
+          "profile": "llvm-O0",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "3d2889941fc8026ed7763ae1290f0a7fc3296f2830e52ef60852a02c5a8fb8cf",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "llvm-O2",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "754c7c73662562ac1daba0cbff9bb5c38f25a04809cbc0c317163dab3f8e4b9a",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        }
+      ],
+      "source_sha256": {
+        "verify_far_transfers.py": "58cddb366e7b0274aaaf8455916fa72ce39e0e29742983a257c288884b97e49d",
+        "far_transfer_kvm.c": "4ebaec3bece07da4683d6b3e4a875a30f76a398b7b097aa425dafa705c45358c",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71"
+      },
+      "tools": {
+        "clang": {
+          "path": "/usr/lib/llvm-23/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "path": "/usr/lib/llvm-23/bin/lld",
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "path": "/usr/bin/objcopy",
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llc",
+          "sha256": "892b1b867c22d9e02141f0a54c0c0fd478c8dc0bfa3a2889f8907c4bcb11db0c"
+        },
+        "opt": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/opt",
+          "sha256": "8c39a2bb1e7fe6e7e466838e9b67a7d87e98b1643529dd98648d2cb993418a01"
+        },
+        "llvm-objdump": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llvm-objdump",
+          "sha256": "4123a16e4dc51a3a599b44e6d0de9a9cd125581ff485e9051dd1ffe7e74e48c4"
+        }
+      },
+      "scope": "Native target/stack transport, direct and protected call-gate transitions, zero-argument returning far ABI",
+      "exclusions": [
+        "nonzero call-gate parameters",
+        "task switching",
+        "CET",
+        "fault recovery",
+        "asynchronous unwind",
+        "complete original-image register restoration"
+      ]
+    },
+    {
+      "name": "verified-16-e",
+      "cpu": 12,
+      "core_type": "E",
+      "command": [
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "${NEVERC_WORKTREE}/tests/neverc/X86/verify_far_transfers.py",
+        "--llvm-bin",
+        "${LLVM_WORKTREE}/build-intrinsics/bin",
+        "--neverc",
+        "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "--mode",
+        "16",
+        "--output",
+        "/mnt/data/neverd-native-far-transfers-20261105/verified-16-e"
+      ],
+      "exit_code": 0,
+      "evidence_sha256": "7b190757f861e4c6543dc98b1228b45e207f32ac3a7fa7a685cf536e1004934e",
+      "commands_sha256": "789d91cb89078762d6962211d7ad89f5c8bcf66beb3e40775f469be02a1aa51e",
+      "log_sha256": "4bcaeeb90f8e4a04fd0bb5d1de7e6cbef28af983fb91baa7e5b38f6e575dfe38",
+      "code_bits": 16,
+      "x32": false,
+      "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+      "profiles": [
+        {
+          "profile": "llvm-O0",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "5ccb7ca4698461120a0a64df0aad04c87150776dc781709e6f80b32bb7e605bc",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "llvm-O2",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "0b0b28e6ff7af76f65948437d593e657622f3b068447f72fb6da52dfe2b2a10b",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        }
+      ],
+      "source_sha256": {
+        "verify_far_transfers.py": "58cddb366e7b0274aaaf8455916fa72ce39e0e29742983a257c288884b97e49d",
+        "far_transfer_kvm.c": "4ebaec3bece07da4683d6b3e4a875a30f76a398b7b097aa425dafa705c45358c",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71"
+      },
+      "tools": {
+        "clang": {
+          "path": "/usr/lib/llvm-23/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "path": "/usr/lib/llvm-23/bin/lld",
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "path": "/usr/bin/objcopy",
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llc",
+          "sha256": "892b1b867c22d9e02141f0a54c0c0fd478c8dc0bfa3a2889f8907c4bcb11db0c"
+        },
+        "opt": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/opt",
+          "sha256": "8c39a2bb1e7fe6e7e466838e9b67a7d87e98b1643529dd98648d2cb993418a01"
+        },
+        "llvm-objdump": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llvm-objdump",
+          "sha256": "4123a16e4dc51a3a599b44e6d0de9a9cd125581ff485e9051dd1ffe7e74e48c4"
+        }
+      },
+      "scope": "Native target/stack transport, direct and protected call-gate transitions, zero-argument returning far ABI",
+      "exclusions": [
+        "nonzero call-gate parameters",
+        "task switching",
+        "CET",
+        "fault recovery",
+        "asynchronous unwind",
+        "complete original-image register restoration"
+      ]
+    },
+    {
+      "name": "verified-32-e",
+      "cpu": 12,
+      "core_type": "E",
+      "command": [
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "${NEVERC_WORKTREE}/tests/neverc/X86/verify_far_transfers.py",
+        "--llvm-bin",
+        "${LLVM_WORKTREE}/build-intrinsics/bin",
+        "--neverc",
+        "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "--mode",
+        "32",
+        "--output",
+        "/mnt/data/neverd-native-far-transfers-20261105/verified-32-e"
+      ],
+      "exit_code": 0,
+      "evidence_sha256": "ab1b31c541da4bf273692c8b01c087d897fe740b9042946dcc476c765a23dbd2",
+      "commands_sha256": "dd2faf036340f4fcdf845f773829f24a140c2d0544cdb6f8978970e205b495fb",
+      "log_sha256": "4a4aa4fcac0708e9796c3171a27401d3e7b43986b15abda0343af4d5f2652360",
+      "code_bits": 32,
+      "x32": false,
+      "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+      "profiles": [
+        {
+          "profile": "llvm-O0",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "c699343de54e92ac34cbb8160c99a0682d490b5dd5bda87a7ca916d069b38c0e",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "llvm-O2",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "ac89632a3e649d44a04a30c5b1689076514ecdbeba1020d622c082d0cea445ec",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-O0",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "324ce8ff2de042d3446db81173abd9320c4db9164d0f6eda4d2ea5af3da7e8c9",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-O2",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "e19199eee31f0a39606129adfbae8c0cc5f288a327438058a37b422f92b790e5",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-ir-O0",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "324ce8ff2de042d3446db81173abd9320c4db9164d0f6eda4d2ea5af3da7e8c9",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-ir-O2",
+          "functions": 18,
+          "complete_state_pairs": 192,
+          "returned_abi_checks": 96,
+          "binary_sha256": "e19199eee31f0a39606129adfbae8c0cc5f288a327438058a37b422f92b790e5",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        }
+      ],
+      "source_sha256": {
+        "verify_far_transfers.py": "58cddb366e7b0274aaaf8455916fa72ce39e0e29742983a257c288884b97e49d",
+        "far_transfer_kvm.c": "4ebaec3bece07da4683d6b3e4a875a30f76a398b7b097aa425dafa705c45358c",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71"
+      },
+      "tools": {
+        "clang": {
+          "path": "/usr/lib/llvm-23/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "path": "/usr/lib/llvm-23/bin/lld",
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "path": "/usr/bin/objcopy",
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llc",
+          "sha256": "892b1b867c22d9e02141f0a54c0c0fd478c8dc0bfa3a2889f8907c4bcb11db0c"
+        },
+        "opt": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/opt",
+          "sha256": "8c39a2bb1e7fe6e7e466838e9b67a7d87e98b1643529dd98648d2cb993418a01"
+        },
+        "llvm-objdump": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llvm-objdump",
+          "sha256": "4123a16e4dc51a3a599b44e6d0de9a9cd125581ff485e9051dd1ffe7e74e48c4"
+        },
+        "neverc": {
+          "path": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "sha256": "df9dd82278bcf2649a512da46ba0360e4891d124114081c5b14bfdd0d5204911"
+        }
+      },
+      "scope": "Native target/stack transport, direct and protected call-gate transitions, zero-argument returning far ABI",
+      "exclusions": [
+        "nonzero call-gate parameters",
+        "task switching",
+        "CET",
+        "fault recovery",
+        "asynchronous unwind",
+        "complete original-image register restoration"
+      ]
+    },
+    {
+      "name": "verified-64-e",
+      "cpu": 12,
+      "core_type": "E",
+      "command": [
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "${NEVERC_WORKTREE}/tests/neverc/X86/verify_far_transfers.py",
+        "--llvm-bin",
+        "${LLVM_WORKTREE}/build-intrinsics/bin",
+        "--neverc",
+        "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "--mode",
+        "64",
+        "--output",
+        "/mnt/data/neverd-native-far-transfers-20261105/verified-64-e"
+      ],
+      "exit_code": 0,
+      "evidence_sha256": "52c805ae52c0f0c54e78d4d8b079cb551963d34b30c6dc57ba5f834e995985c3",
+      "commands_sha256": "bf8666750f04e564468b62a985f7dc98113064ab43e9b3089940e6d13503ab54",
+      "log_sha256": "6a71ec269f73a74ab294762f848dd1ea4db8966f95efe530c536853c760119f8",
+      "code_bits": 64,
+      "x32": false,
+      "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+      "profiles": [
+        {
+          "profile": "llvm-O0",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "0ddcd6b421f7acb337b329ab7673a6a05ce10c721908c11097e2e65026dbfa0f",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "llvm-O2",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "a39084acfb0e21e0d252635e30a484b1df824ee015ba48efcfedac8c1947c248",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-O0",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "8793e09dfeed251a768f8752f617c65bd49a9a5fd155978af282495366440aff",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-O2",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "74c82bf7fb41881cdb6578ef9ad709c9aaa089876bfe0507ae0dca1ffb88849c",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-ir-O0",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "49d0756fc13f79c700af952db9af9f86c43c31ee8a44fdc3cb5cd22b4b83ee47",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "neverc-ir-O2",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "0d0906d2d27531037cfe19279946c7c8161a9dc0d0cf1e1def1969350f2adb3b",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        }
+      ],
+      "source_sha256": {
+        "verify_far_transfers.py": "58cddb366e7b0274aaaf8455916fa72ce39e0e29742983a257c288884b97e49d",
+        "far_transfer_kvm.c": "4ebaec3bece07da4683d6b3e4a875a30f76a398b7b097aa425dafa705c45358c",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71"
+      },
+      "tools": {
+        "clang": {
+          "path": "/usr/lib/llvm-23/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "path": "/usr/lib/llvm-23/bin/lld",
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "path": "/usr/bin/objcopy",
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llc",
+          "sha256": "892b1b867c22d9e02141f0a54c0c0fd478c8dc0bfa3a2889f8907c4bcb11db0c"
+        },
+        "opt": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/opt",
+          "sha256": "8c39a2bb1e7fe6e7e466838e9b67a7d87e98b1643529dd98648d2cb993418a01"
+        },
+        "llvm-objdump": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llvm-objdump",
+          "sha256": "4123a16e4dc51a3a599b44e6d0de9a9cd125581ff485e9051dd1ffe7e74e48c4"
+        },
+        "neverc": {
+          "path": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "sha256": "df9dd82278bcf2649a512da46ba0360e4891d124114081c5b14bfdd0d5204911"
+        }
+      },
+      "scope": "Native target/stack transport, direct and protected call-gate transitions, zero-argument returning far ABI",
+      "exclusions": [
+        "nonzero call-gate parameters",
+        "task switching",
+        "CET",
+        "fault recovery",
+        "asynchronous unwind",
+        "complete original-image register restoration"
+      ]
+    },
+    {
+      "name": "verified-x32-e",
+      "cpu": 12,
+      "core_type": "E",
+      "command": [
+        "taskset",
+        "-c",
+        "12",
+        "python3",
+        "${NEVERC_WORKTREE}/tests/neverc/X86/verify_far_transfers.py",
+        "--llvm-bin",
+        "${LLVM_WORKTREE}/build-intrinsics/bin",
+        "--neverc",
+        "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+        "--mode",
+        "64",
+        "--x32",
+        "--output",
+        "/mnt/data/neverd-native-far-transfers-20261105/verified-x32-e"
+      ],
+      "exit_code": 0,
+      "evidence_sha256": "dab0ff1743928ff0bc55b6166189c12d9f708f87a0278f2a946b0e8142cc84d3",
+      "commands_sha256": "227094f4ccd6a5f17ad75520236a3639f33c4d7bb9b711de5723853bbb7317af",
+      "log_sha256": "72e5e363ee5dd6471a870619b4385cd8f08bdfc4f7de47f7ef1f1972b7931105",
+      "code_bits": 64,
+      "x32": true,
+      "host": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+      "profiles": [
+        {
+          "profile": "llvm-O0",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "3d2889941fc8026ed7763ae1290f0a7fc3296f2830e52ef60852a02c5a8fb8cf",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        },
+        {
+          "profile": "llvm-O2",
+          "functions": 15,
+          "complete_state_pairs": 90,
+          "returned_abi_checks": 36,
+          "binary_sha256": "754c7c73662562ac1daba0cbff9bb5c38f25a04809cbc0c317163dab3f8e4b9a",
+          "negative_control": "intact far CALL with incorrect returned value rejected",
+          "negative_stack": "intact far JMP with wrong stack rejected"
+        }
+      ],
+      "source_sha256": {
+        "verify_far_transfers.py": "58cddb366e7b0274aaaf8455916fa72ce39e0e29742983a257c288884b97e49d",
+        "far_transfer_kvm.c": "4ebaec3bece07da4683d6b3e4a875a30f76a398b7b097aa425dafa705c45358c",
+        "KvmTransferFixture.h": "aa7d7f70128ec48f6ffd388365bedc2493366a8dada695cb84b3edfa90de3f71"
+      },
+      "tools": {
+        "clang": {
+          "path": "/usr/lib/llvm-23/bin/clang",
+          "sha256": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884"
+        },
+        "ld.lld": {
+          "path": "/usr/lib/llvm-23/bin/lld",
+          "sha256": "fc1073aaaacfed055c0612dc5190cd19419c711cb8341c37d97fec2916891447"
+        },
+        "objcopy": {
+          "path": "/usr/bin/objcopy",
+          "sha256": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770"
+        },
+        "llc": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llc",
+          "sha256": "892b1b867c22d9e02141f0a54c0c0fd478c8dc0bfa3a2889f8907c4bcb11db0c"
+        },
+        "opt": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/opt",
+          "sha256": "8c39a2bb1e7fe6e7e466838e9b67a7d87e98b1643529dd98648d2cb993418a01"
+        },
+        "llvm-objdump": {
+          "path": "${LLVM_WORKTREE}/build-intrinsics/bin/llvm-objdump",
+          "sha256": "4123a16e4dc51a3a599b44e6d0de9a9cd125581ff485e9051dd1ffe7e74e48c4"
+        }
+      },
+      "scope": "Native target/stack transport, direct and protected call-gate transitions, zero-argument returning far ABI",
+      "exclusions": [
+        "nonzero call-gate parameters",
+        "task switching",
+        "CET",
+        "fault recovery",
+        "asynchronous unwind",
+        "complete original-image register restoration"
+      ]
+    }
+  ],
+  "references": [
+    "https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf",
+    "https://docs.kernel.org/virt/kvm/api.html"
+  ]
+}

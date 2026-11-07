@@ -133,6 +133,9 @@ public:
   /// Functions in address order under their display names:
   /// [{"name","engine_name","address","size","library","thunk","exported"}].
   const Json &functionRows();
+  /// Reads what the session holds now, not at the first thing that needs it.
+  /// It advances generation().
+  void build();
   /// Engine function name -> display name, for engine text such as
   /// pseudocode that spells functions the engine's way.
   const std::unordered_map<std::string, std::string> &functionAliases();

@@ -167,13 +167,14 @@ void HighCWriter::hideX86CallPushSetup(const HighFunc &Func) {
           if (!Matched)
             continue;
           std::set<const HighStmt *> Hidden(Run.begin(), Run.end());
-          // Retaining a definition can make its own inputs live. The run has
-          // at most eight statements, so this reaches a fixed point quickly.
+          // Every retained reader needs its definitions: the call reads an
+          // image-loaded argument just as its continuation reads a stack
+          // address. Retaining either can make further inputs live.
           bool Changed;
           do {
             Changed = false;
             for (const HighStmt *P : Run) {
-              if (!Hidden.count(P) || !IsEspSubAssign(*P))
+              if (!Hidden.count(P) || P->Kind != StmtKind::Assign)
                 continue;
               for (const HighStmt *Reader : Readers[varName(P->Dst->Var)])
                 if (!Hidden.count(Reader)) {

@@ -335,7 +335,7 @@ const char *neverd_byte_patch_source_preview_json(
   Preview.RequestedLoad = S->LoadedChoice;
   Preview.DbgRequest = S->LoadedDbgRequest;
   Preview.ReadsStaticSymbols = S->LoadedStaticSymbols;
-  Preview.OnlyFunctionEntries = S->OnlyFunctionEntries;
+  Preview.RestrictedFunctionEntries = S->OnlyFunctionEntries;
   Preview.ARMFunctionModes = S->ARMFunctionModes;
   if (!neverd_session_load(&Preview, pathToUTF8(S->FilePath).c_str())) {
     S->setError(Preview.LastError);

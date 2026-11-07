@@ -80,7 +80,7 @@ En C, utiliser `neverd_devirtualize_source_v3()` ou `neverd_devirtualize_machine
 
 La récupération expose aussi `--vm-chain-transfers=N` (0 par défaut) et `--vm-no-control-discovery`. Le chaînage conserve les corrélations symboliques entre transferts dont la cible unique est prouvée ; sa limite revient aux frontières CFG ordinaires. Le mode état machine accepte des offsets d’entrée RSP sans bouclage, non vérifiés à l’exécution, via `--vm-entry-frame=begin:end`. La prémisse numérique exacte accompagne le C et le rapport, sans autoriser d’accès mémoire ni prouver l’équivalence.
 
-Les grandes fonctions récupérées qui dépassent la limite de construction SSA peuvent utiliser `--llvm` avec un contrat borné de stockage scalaire mutable. Les entrées, les valeurs portées par les boucles et les lectures antérieures conservent leur sens. Les états implicites non pris en charge, paramètres en registres vectoriels, relocalisations, stockages ambigus et contrôles mal formés échouent explicitement ; HighC refuse ce repli. La sortie reste soumise au contrat existant de l’état machine, sans certificat d’équivalence supplémentaire.
+Les grandes fonctions récupérées qui dépassent la limite de construction SSA peuvent utiliser `--llvm` avec un contrat borné de stockage scalaire mutable. Les entrées, les valeurs portées par les boucles et les lectures antérieures conservent leur sens. Les états implicites non pris en charge, paramètres en registres vectoriels, relocalisations, stockages ambigus et contrôles mal formés échouent explicitement. HighC et LLVM C partagent ce repli validé. Les vérifications x64 explicites `RequireAligned`, y compris les conditions sur un octet, conservent leurs prédicats de faute ; les formes incorrectes et les intrinsèques non pris en charge sont rejetés. La sortie reste soumise au contrat existant de l’état machine, sans certificat d’équivalence supplémentaire.
 
 Le sous-ensemble mutable accepte un stockage scalaire de 8/16/32/64/128 bits ; les entrées des comptages sont limitées à 64 bits. Les largeurs non standard ou supérieures exigent un contrat source distinct.
 
@@ -384,3 +384,99 @@ Un domaine incomplet ou une étendue immuable indisponible conserve la lecture e
 ## Transferts internes après un changement de pile
 
 Les régions machine brutes explicites peuvent suivre les instructions near CALL et RET internes même si le pointeur de pile courant ne se représente plus relativement à celui de l’entrée. L’adaptateur d’architecture conserve la capture de cible, l’empilement, la lecture du mot de retour et le dépilement réels. Chaque retour interne exige toujours une preuve exhaustive des cibles finies à partir du mot réellement présent sur la pile. Seules les cellules de retour prouvées relatives à l’entrée entrent dans la projection et l’inventaire de préservation du cadre ; une relation perdue à une frontière du graphe peut encore entraîner un refus. La récupération des fonctions ordinaires conserve ses exigences de restauration du cadre. Ce résultat concerne une région brute ; la composition de la fonction entière et l’équivalence source ou native restent à prouver séparément.
+
+<!-- i18n-section: store-separation-proofs -->
+
+## Preuves facultatives de séparation des écritures
+
+`--vm-prove-store-return-separation` prouve que chaque écriture complète évite les cellules de retour, les pointeurs de trame sauvegardés et les cellules scalaires courantes avant de les préserver. `--vm-prove-store-frame-separation` vérifie aussi la trame déclarée et les cellules absolues courantes ; il exige `--vm-machine-state` et `--vm-entry-frame`. Les deux exigent `--devirtualize`, sont désactivés par défaut, partagent les budgets existants et ne supposent aucun non-alias. Les écritures non prouvées conservent l’invalidation habituelle ; une récupération incomplète ne publie aucun source. Les contrôles de chaîne existants permettent de conserver les boucles.
+
+Les API v9 `neverd_devirtualize_source_v9`, `neverd_devirtualize_machine_source_v9` acceptent `neverd_devirtualize_options_v9`. Initialiser à zéro et régler le `struct_size` du préfixe v1 sur la taille complète. Les indicateurs sont `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_RETURN_SLOT_SEPARATION`, `NEVERD_DEVIRTUALIZE_V9_PROVE_STORE_FRAME_SEPARATION` ; `reserved` doit être nul. Les anciennes API ignorent cette extension. Python expose `NeverDDevirtualizeOptionsV9`, `DevirtualizeFlagsV9` ; les rapports contiennent `proveStoreReturnSlotSeparation`, `proveStoreFrameSeparation`. Le test exécute une boucle sur un tableau local indexé par les deux voies C, en O0/O2 avec ASan/UBSan, et vérifie tout le stockage de pile fourni.
+
+Lorsqu’une de ces stratégies est activée, la récupération conserve aussi entre les nœuds les décalages finis des registres par rapport au cadre d’entrée, après preuve exhaustive. Les jonctions prennent l’union des décalages entrants ; une information absente ou une union dépassant la limite existante des tuples de contrôle devient inconnue. Aucune corrélation entre registres ni hypothèse d’alias supplémentaire n’est introduite.
+
+<!-- i18n-section: finite-indexed-frame-reads -->
+
+## Lectures de trame à index fini
+
+Un `LOAD` ordinaire dont l’ensemble fini des décalages depuis la trame d’entrée est prouvé exhaustivement lit les octets actuels de chaque candidat et conserve une valeur symbolique conditionnelle. La lecture à l’exécution reste dans le résidu, avec sa largeur complète et son ordre des octets. L’origine externe exige cette provenance pour chaque octet de chaque candidat. Les octets inconnus et les valeurs invalidées restent inconnus ; une énumération incomplète conserve le comportement habituel de la mémoire symbolique. Les budgets existants de tuples de contrôle, solveur, nœuds et opérations s’appliquent. Aucun témoin de lecture immuable ni nouveau contrat de non-alias n’est créé.
+
+<!-- i18n-section: runtime-validity-refinement -->
+
+## Validité à l’exécution aux frontières du graphe
+
+Lorsque la découverte de l’état de contrôle est activée, un prédicat non constant de validité à l’exécution peut demander les bits du producteur perdus à une frontière du graphe. La récupération réessaie avec les budgets partagés existants et doit prouver la validité de chaque état entrant atteignable. Cela conserve l’alignement établi et les valeurs masquées des registres de contrôle entre nœuds et dans les boucles, sans supposer les états rejetés impossibles ni supprimer l’opération d’origine.
+
+<!-- i18n-section: ordered-query-source -->
+
+## Requêtes CPU ordonnées dans la restitution de source C++
+
+`wrapInterpreterMachineQueryStateX64()` est une interface C++ facultative. Son état de 160 octets conserve le préfixe machine de 136 octets, suivi de trois champs de 64 bits : adresse du tableau, nombre et curseur. Chaque enregistrement de 24 octets contient six mots de 32 bits : leaf, subleaf, EAX, EBX, ECX et EDX. Une instruction CPUID canonique consomme un enregistrement correspondant dans l’ordre et étend les quatre résultats par des zéros. Des sélecteurs identiques peuvent recevoir des réponses différentes. Aucune instruction CPU hôte ne fournit les réponses.
+
+L’épuisement renvoie le statut 3, un sélecteur incompatible le statut 4. Les deux arrêtent l’exécution avant cette requête, enregistrent l’état machine courant, conservent les effets mémoire précédents et ne changent pas le curseur. Un alignement d’entrée refusé renvoie toujours 2 sans écriture. Le tableau doit être accessible, immuable, sans débordement d’adresse et distinct de l’état et de la mémoire invitée ; un nombre nul autorise une adresse nulle. Les contrats existants de machine et de drapeaux restent applicables. Aucune preuve d’équivalence native ou sérialisation matérielle n’est ajoutée. Les wrappers existants refusent toujours les requêtes CPU ; les autres intrinsèques et environnements bruts non pris en charge restent refusés.
+
+<!-- i18n-section: xmm-query-source -->
+
+## État source XMM explicite
+
+`wrapInterpreterMachineQueryStateX64V2()` utilise une disposition distincte de 416 octets : le préfixe de requêtes de 160 octets inchangé, puis XMM0–XMM15, chacun sous forme de deux mots de 64 bits, bas puis haut. Un alignement de huit octets suffit. Tous les octets XMM sont lus à l’entrée et enregistrés aux retours ordinaires et aux sorties d’échec de requête. Les statuts de requête et d’alignement conservent leur sens.
+
+Cette interface C++ accepte les opérandes XMM complets de 128 bits et reconstruit les lectures temporaires locales à l’instruction depuis les définitions courantes des octets, en conservant les écrasements partiels. Les octets manquants et les alias temporaires de fonction échouent explicitement. Seuls les contrôles d’alignement d’adresses constantes prouvés par la couche d’architecture peuvent disparaître ; les contrôles dynamiques ou mal formés sont refusés. Les opérandes XMM partiels, les banques plus larges et les environnements flottants restent exclus. Aucune preuve d’équivalence native n’est ajoutée ; les wrappers antérieurs restent inchangés.
+
+<!-- i18n-section: source-abi-v10 -->
+
+## Choisir la disposition source par CLI et SDK
+
+Utilisez `--vm-source-abi=scalar|queries|xmm` avec `--devirtualize --vm-machine-state`. Par défaut, `scalar` conserve 136 octets ; `queries` sélectionne l’état ordonné de 160 octets et `xmm` celui de 416 octets avec XMM. Les rapports indiquent `sourceABI` et `sourceStateBytes` ; le C généré décrit le contrat de stockage correspondant.
+
+Les API C v10 `neverd_devirtualize_source_v10()` et `neverd_devirtualize_machine_source_v10()` acceptent `neverd_devirtualize_options_v10`. Initialisez la structure à zéro, fixez `struct_size` du préfixe v1 à la taille complète et choisissez `machine_source_abi` avec `NEVERD_DEVIRTUALIZE_MACHINE_SCALAR_V1`, `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_V1` ou `NEVERD_DEVIRTUALIZE_MACHINE_QUERIES_XMM_V2`. Les valeurs inconnues, champs réservés non nuls et dispositions étendues en source ordinaire sont refusés. Les anciennes API ignorent cette extension ; v10 ignore les extensions futures. Des options nulles gardent les valeurs scalaires par défaut. Python expose `NeverDDevirtualizeOptionsV10` et `DevirtualizeMachineSourceABI`. La certification native reste inchangée.
+
+<!-- i18n-section: gui-interpreter-recovery -->
+
+## Reconstitution de l’interpréteur dans l’application
+
+Dans une vue C, choisissez **Reconstituer la fonction interprétée**. Les options choisissent le stockage d’état, les limites de travail et les prémisses explicites du cadre d’entrée ; les valeurs par défaut n’ajoutent aucune hypothèse de cadre, d’alignement ou de séparation. Le rapport conserve les diagnostics. Une annulation ou un résultat incomplet garde le source précédent ; **Revenir au code source ordinaire** rétablit la vue normale.
+
+Le worker accepte `source_options.interpreter_recovery` comme seule option de source et appelle le SDK C v10. Il met en cache et pagine le C complet sans modification, sans éditions de variables ordinaires ni correspondances d’instructions inventées. Le rapport complet figure sur la première page ; `source_available` distingue le source généré d’une reconstitution arrêtée. Aucune équivalence native n’est certifiée.
+
+<!-- i18n-section: machine-region-source -->
+
+## Source vérifiée pour les régions machine
+
+L’interface C++ explicite `wrapInterpreterMachineRegionSourceX64()`, dans `neverd/analysis/arch/x86_64/InterpreterMachineRegionSource.h`, reçoit un résultat complet et des options attendues fournies indépendamment. Elle valide tout le graphe brut, l’environnement et les sorties physiques avant la conversion, puis conserve le reçu original. Les wrappers ordinaires refusent toujours les domaines bruts. Cette interface n’est pas exposée par la CLI, le SDK C ou la GUI.
+
+`InterpreterMachineRegionStateX64V1` possède un format distinct de 432 octets : préfixe requêtes/XMM de 416 octets, `PC` à 416, `ExitKind` à 424. L’entrée est fixe ; ces champs sont des sorties. CALL/JMP/RET conservent la cible réelle et les effets physiques sur la pile, enregistrent tout l’état pris en charge et s’arrêtent avant la cible. Les types de sortie valent 1/2/3. Les statuts 3/4 arrêtent avant une requête épuisée/incompatible avec son PC original et le type 0 ; les effets précédents restent acquis. Le statut 2 refuse l’alignement sans modifier l’état. Le statut 1 ne fournit aucune continuation valide.
+
+L’interface de base accepte le profil utilisateur sans faute et les opérations scalaires/requêtes/XMM existantes. Les états architecturaux supplémentaires et les déclarations de code/imports restent refusés ; les pièges exigent l’option explicite d’arrêt avant l’instruction. `EntryFrameExcludedObjects` vérifie les plages complètes du cadre et des objets, sans débordement d’adresse et disjointes, avant tout accès invité, écriture d’état ou réservation de bande. Un refus renvoie le statut 2 sans modifier l’état. Les objets peuvent se chevaucher ; des bases égales restent valides si leurs plages relatives sont disjointes. Les autres prémisses mémoire/cadre, dont les exclusions absolues, restent à la charge de l’appelant ; aucune accessibilité ni valeur initiale n’est déduite. La mémoire invitée exige toujours des copies d’octets ou des types alias alignés sur 1. Cela ne certifie ni ABI ordinaire, ni composition des appels, ni fonction complète/équivalence native. `InterpreterMachineRegionSourceTest.EntryObjects*` vérifie les deux backends C à O0/O2 avec les sanitizers d’adresse et de comportement indéfini : états complets, requêtes, alias, plages adjacentes ou débordantes et budgets source exacts.
+
+Les sorties architecturalement indéfinies gardent les valeurs choisies par LowIR. Reproduire les choix d’un processeur ou prouver leur absence d’effet sur les observations natives exige un environnement indépendant ou une preuve de non-interférence ; ce reçu source ne fournit ni l’un ni l’autre.
+
+<!-- i18n-section: machine-region-architectural-choices -->
+
+## Valeurs scalaires arbitraires de l’architecture
+
+L’API C++ des régions machine permet `SpecializationUndefinedModel::FreshScalarV1`. Les descriptions complètes des effets scalaires indéfinis produisent une valeur indépendante à chaque visite dynamique, avant les preuves de branches et de cibles. Les copies partagent une même production ; les visites répétées utilisent de nouvelles valeurs. Le graphe résiduel conserve les mises à jour conditionnelles, y compris les productions dont la condition est fausse, et le reçu lie le modèle.
+
+Cette option exige des sorties de région x64 explicites et des preuves complètes pour les instructions scalaires. Les effets non pris en charge et les budgets épuisés sont refusés. L’adaptateur C actuel, les émetteurs ordinaires et les interfaces de preuve native refusent ce modèle sans environnement explicite de valeurs à l’exécution ; aucune valeur propre à un processeur ni ABI ordinaire n’est déduite.
+
+Une projection RDSSP exactement vérifiée, avec CET explicitement désactivé, préserve sa destination sans nouvelle production ; son relevé général des effets indéfinis reste manquant. Les pièges authentifiés restent des frontières non exécutées.
+
+<!-- i18n-section: machine-region-choice-source -->
+
+## Choix architecturaux exécutables
+
+`wrapInterpreterMachineRegionChoiceSourceX64V1` consomme un résultat `FreshScalarV1` validé avec le type distinct `InterpreterMachineRegionChoiceStateX64V1` de 456 octets. Les 432 premiers octets conservent le format précédent ; `Choices`, `ChoiceCount` et `ChoiceCursor` occupent les décalages 432, 440 et 448. `StateABI` indique `x64-machine-region-choice-state-v1` et `StateBytes` vaut 456. L’ancien adaptateur de 432 octets refuse toujours ce modèle.
+
+Chaque enregistrement `InterpreterArchitecturalChoiceX64V1` de 32 octets contient quatre champs de 64 bits : PC original, numéro de production dans l’instruction, largeur et valeur. La valeur doit tenir dans cette largeur. Tous les enregistrements sont vérifiés avant le moindre effet de l’instruction. Le statut 5 signale leur épuisement, 6 une discordance de PC, numéro, largeur ou valeur. Les deux conservent les effets précédents, retournent le PC original non exécuté avec `ExitKind=None` et gardent le curseur d’entrée. Le curseur avance après l’instruction entière, même pour les gardes fausses. Les visites répétées consomment de nouveaux enregistrements ; les copies et sauvegardes mémoire n’en consomment pas.
+
+L’appelant fournit des enregistrements accessibles, stables et séparés de l’état et de la mémoire invitée. Aucun choix propre au processeur n’est déduit. Les statuts de requête, arrêts explicites avant trap et contrôles d’alignement gardent leurs contrats. Les deux voies C peuvent émettre le graphe abaissé, mais les émetteurs ordinaires refusent les productions restantes. Cette interface C++ ne fournit ni intégration CLI/C SDK/GUI, ni ABI ordinaire restaurée, ni certification d’équivalence native.
+
+Les contrôles de choix partagent les blocs de restitution pour épuisement et discordance, tout en conservant le PC original et les drapeaux d’entrée de chaque instruction. Après abaissement scalaire, le wrapper fusionne une succession implicite seulement si le successeur a un unique prédécesseur et n’est ni une entrée ni une racine d’analyse. Les tranches d’instructions, branches conditionnelles et boucles restent explicites. Seules les étiquettes de contrôle générées changent ; constantes invitées et PC des enregistrements restent intacts. Formats d’état, contrôles d’instruction entière, mises à jour du curseur et limites de ressources sont inchangés.
+
+<!-- i18n-section: machine-region-pending-traps -->
+
+## Sorties avant un trap
+
+La surcharge recevant `InterpreterMachineRegionSourceOptions` permet de définir explicitement `StopBeforeTraps = true`. Elle conserve la disposition de 432 octets et renvoie `TrapPending` (4), avec l’adresse originale du trap dans `PC` et tout l’état pris en charge juste avant cette instruction. Les effets mémoire précédents sont conservés ; le trap, la création du cadre d’exception, le gestionnaire et la reprise ne sont pas exécutés. La surcharge par défaut refuse toujours les déclarations de trap, même inutilisées. L’identité exacte du trap et ses métadonnées d’audit restent authentifiées par le propriétaire de la région brute ; cette option n’apporte aucune nouvelle preuve architecturale. Les arrêts de requête et d’alignement conservent leurs codes et contrats d’état.
+
+Les régions validées conservent aussi les opérations dynamiques canoniques `RequireAligned`. Les deux backends C gardent leurs contrôles avec arrêt immédiat ; une violation d’alignement de l’instruction ne fournit ni état validé ni continuation d’exception. Les wrappers ordinaires d’état machine conservent leurs restrictions.

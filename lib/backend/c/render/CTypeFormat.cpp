@@ -171,7 +171,9 @@ bool appendStatedLiteralCharacter(uint32_t Ch, std::string &Out) {
 
 std::optional<std::string> imageStringLiteral(const BinaryImage *Img, va_t Addr,
                                               bool AllowEmpty, bool Narrow) {
-  if (!Img || Addr == 0 || Addr == InvalidVA)
+  // The image's own headers describe the image that runs, not this file:
+  // none of their bytes is a literal (BinaryImage::imageBaseOffset).
+  if (!Img || Addr == 0 || Addr == InvalidVA || Img->imageBaseOffset(Addr))
     return std::nullopt;
   if (Img->findImportAt(Addr) || !terminatesStrings(*Img))
     return std::nullopt;
@@ -379,14 +381,7 @@ std::string quotedStringText(strings::Encoding Kind, llvm::StringRef Text) {
 std::optional<strings::FoundString>
 stringAtStart(llvm::ArrayRef<uint8_t> Bytes,
               const strings::ScanOptions &Options) {
-  std::optional<strings::FoundString> First;
-  strings::scan(Bytes, Options, [&](strings::FoundString &&Found) {
-    if (!First)
-      First = std::move(Found);
-  });
-  if (!First || First->Offset != 0)
-    return std::nullopt;
-  return First;
+  return strings::scanAt(Bytes, Options);
 }
 
 /// The readable, non-executable bytes from \p Addr, at most \p Window of

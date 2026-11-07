@@ -209,7 +209,9 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
   if (Convention && (Convention->ArgumentsFromCallSetup ||
                      (Convention->StackArgumentSummary &&
                       Convention->PositionalArgumentSlots))) {
-    recoverModuleCallAbi(Img, Result, AllFuncNames);
+    recoverModuleCallAbi(Img, Result, AllFuncNames,
+                         /*SourceDeclarations=*/false,
+                         /*SourceParameterReads=*/true);
     propagateForwardedPointerParams(Result.MedFuncs, Img.Arch);
     // A variadic callee takes its call sites' overflow arguments as trailing
     // stack parameters, which MedToHigh seeds where its va_arg walk reads
@@ -219,7 +221,7 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
     // A convention whose calls take their arguments from callee summaries
     // recovers no call arguments here: a System V variadic callee's overflow
     // is the stack its calls store.
-    sizeVariadicOverflowFromStores(Result.MedFuncs, Img.Arch);
+    sizeVariadicOverflowFromStores(Result.MedFuncs, Img.Arch, Img.abiFormat());
   }
   // A tail call that forwards a multi-register return (`return g(x);`, an
   // import's stub) returns every register its callee returns, as in lift
@@ -243,11 +245,12 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
           NamedCallee Callee;
           if (const auto Arity = libc::libcArityForSymbol(Name, Variant))
             Callee.IntegerParams = static_cast<unsigned>(Arity->IntArgs);
-          Callee.VaList = libc::vaListParameter(Name);
+          Callee.VaList = libc::vaListParameter(Name, Variant);
           return Callee;
         });
   }
-  prepareRecoveredSourceStackAccesses(Img, Result);
+  refineSourcePointerParameters(Img, Result, Dbg);
+  prepareRecoveredSourceStackAccesses(Img, Result, Result.LowFuncs);
   // Both C projections consume these original-machine observations after
   // source ABI remodeling. They never participate in type or call recovery.
   std::map<va_t, const LowFunc *> OriginalFunctions;
@@ -371,13 +374,15 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
     // semantic segments; parallel function workers must not nest another pool.
     Local.setSemanticThreadLimit(
         Total < limits::kMinParallelIRWorkItems ? workerThreadCount() : 1);
-    Local.setBinaryImage(&Img);
     Local.setFuncNames(&AllFuncNames);
     Local.setResolvedCalleeNames(&ResolvedCalleeNames);
     Local.setVariadicVectorCallees(&VariadicVectorCallees);
-    Local.setPrototypeArgumentCallees(&Result.CallPrototypeArguments);
+    Local.setPrototypeArgumentCallees(&Result.CallPrototypeArguments.get());
     for (size_t FI; (FI = Claim()) < N;) {
       const MedFunc &MF = Result.MedFuncs[FI];
+      // Explicit machine-state recovery retains fixed guest addresses, as
+      // the LLVM and final C emitters do. It supplies no relocation image.
+      Local.setBinaryImage(Result.InterpreterMachineSourceABI ? nullptr : &Img);
       Local.setExpressionObserver({});
       Local.setExpressionCloneObserver({});
       Local.setStatementObserver({});
@@ -498,6 +503,7 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
         HF.SourceFile = MF.SourceFile;
         HF.SourceLine = MF.SourceLine;
         HF.ExceptionMetadata = MF.ExceptionMetadata;
+        HF.AnalysisOnly = MF.AnalysisOnly;
         HF.HasUnresolvedSEHFrame = MF.HasUnresolvedSEHFrame;
         HF.ReturnType = MF.ReturnType ? MF.ReturnType : NdType::makeInt(4);
         HF.ReturnsNoValue = MF.ReturnsNoValue;
@@ -513,6 +519,8 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
         FromLow.Name = LF.Name;
         FromLow.Entry = LF.Entry;
         FromLow.ExceptionMetadata = LF.ExceptionMetadata;
+        FromLow.AnalysisOnly = LF.AnalysisOnly;
+        HF.AnalysisOnly |= LF.AnalysisOnly;
         for (const auto &LB : LF.Blocks) {
           MedBlock MB;
           MB.Id = LB.Id;
@@ -530,6 +538,7 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
       };
       if (MF.Blocks.empty()) {
         keepIdentity();
+        Pending[FI].ConversionFailure = "no MedIR body";
         continue;
       }
       try {
@@ -562,15 +571,19 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
         // Structuring can yield an empty body even when MedIR/LowIR exist.
         // Identity-only HighFuncs become trap stubs in HighC; emit a goto
         // skeleton instead so coverage cannot treat them as silent success.
-        if (HF.Body.empty())
+        if (HF.Body.empty()) {
           keepIdentity();
+          HF.ConversionFailure = "conversion produced no body";
+        }
       } catch (const std::exception &Error) {
         keepIdentity();
+        Pending[FI].ConversionFailure = Error.what();
         llvm::errs() << "pipeline: highir threw on " << MF.Name << " at 0x"
                      << llvm::utohexstr(MF.Entry) << ": " << Error.what()
                      << "\n";
       } catch (...) {
         keepIdentity();
+        Pending[FI].ConversionFailure = "HighIR conversion failed";
         llvm::errs() << "pipeline: highir threw on " << MF.Name << " at 0x"
                      << llvm::utohexstr(MF.Entry) << "\n";
       }

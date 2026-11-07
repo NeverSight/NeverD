@@ -20,6 +20,7 @@
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
@@ -3035,6 +3036,144 @@ TEST(COFFExceptionIR, PreservesAndAuthenticatesHardwareOnlySEHRanges) {
       Image.Base);
   ASSERT_TRUE(Compiled.Success);
   EXPECT_TRUE(Compiled.Unresolved.empty());
+}
+
+// A region's block set is ordered by pointer, and block addresses vary from
+// run to run. Its markers take their names, boundary provenance and the
+// blocks appended for returns from the layout instead. The return after a
+// protected call moves to a continuation split off at lowering time, which
+// the layout places before the other return but the allocator gives a later
+// address.
+TEST(COFFExceptionIR, NativeSEHRangeMarkersFollowTheBlockLayout) {
+  MedFunc Func;
+  Func.Entry = 0x140001000;
+  Func.Name = "native_seh_layout";
+  Func.ReturnType = NdType::makeVoid();
+  constexpr va_t MayThrowVA = 0x140001100;
+  MedVar Selector;
+  Selector.Kind = MedVar::Param;
+  Selector.TheArch = Arch::X64;
+  Selector.Id = 0;
+  Selector.Size = 8;
+  Selector.RegOff = x86reg::RCX;
+  Func.Params.push_back(Selector);
+  Func.TypedParams.push_back({"selector", NdType::makeInt(8, false)});
+  MedVar Condition;
+  Condition.Kind = MedVar::Temp;
+  Condition.TheArch = Arch::X64;
+  Condition.Id = 1;
+  Condition.Size = 1;
+
+  // Test [0, 8) falls into CallReturn [8, 0x10) and branches to Return
+  // [0x10, 0x18); all three are guarded.
+  MedBlock Test;
+  Test.Id = 0;
+  Test.StartAddr = Func.Entry;
+  Test.EndAddr = Func.Entry + 8;
+  Test.Succs = {1, 2};
+  MedOp Compare;
+  Compare.Opcode = NdOp::INT_EQUAL;
+  Compare.Addr = Func.Entry;
+  Compare.Output = Condition;
+  Compare.addInput(Selector);
+  Compare.addInput(MedVar::makeConst(0, 8));
+  Test.Ops.push_back(Compare);
+  MedOp Branch;
+  Branch.Opcode = NdOp::COND_BR;
+  Branch.Addr = Func.Entry + 4;
+  Branch.addInput(MedVar::makeConst(Func.Entry + 0x10, 8));
+  Branch.addInput(Condition);
+  Test.Ops.push_back(Branch);
+  MedBlock CallReturn;
+  CallReturn.Id = 1;
+  CallReturn.StartAddr = Func.Entry + 8;
+  CallReturn.EndAddr = Func.Entry + 0x10;
+  CallReturn.Preds = {0};
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = Func.Entry + 8;
+  Call.addInput(MedVar::makeConst(MayThrowVA, 8));
+  CallReturn.Ops.push_back(Call);
+  MedOp AfterCall;
+  AfterCall.Opcode = NdOp::RETURN;
+  AfterCall.Addr = Func.Entry + 0xc;
+  CallReturn.Ops.push_back(AfterCall);
+  MedBlock Return;
+  Return.Id = 2;
+  Return.StartAddr = Func.Entry + 0x10;
+  Return.EndAddr = Func.Entry + 0x18;
+  Return.Preds = {0};
+  MedOp Leave;
+  Leave.Opcode = NdOp::RETURN;
+  Leave.Addr = Return.StartAddr;
+  Return.Ops.push_back(Leave);
+  MedBlock Handler;
+  Handler.Id = 3;
+  Handler.StartAddr = Func.Entry + 0x20;
+  Handler.EndAddr = Func.Entry + 0x30;
+  MedOp HandlerReturn;
+  HandlerReturn.Opcode = NdOp::RETURN;
+  HandlerReturn.Addr = Handler.StartAddr;
+  Handler.Ops.push_back(HandlerReturn);
+  Func.Blocks.push_back(std::move(Test));
+  Func.Blocks.push_back(std::move(CallReturn));
+  Func.Blocks.push_back(std::move(Return));
+  Func.Blocks.push_back(std::move(Handler));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {Func.Entry, Func.Entry + 0x40};
+  EH.Encoding = ExceptionEncoding::X64UnwindV1;
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  EH.PersonalityVA = Func.Entry + 0x300;
+  SEHExceptionInfo SEH;
+  SEHScopeRecord Scope;
+  Scope.GuardedRange = {Func.Entry, Func.Entry + 0x18};
+  Scope.Kind = SEHScopeKind::CatchAll;
+  Scope.HandlerVA = Func.Entry + 0x20;
+  Scope.ContinuationVA = Scope.HandlerVA;
+  SEH.Scopes.push_back(Scope);
+  EH.SEH = std::move(SEH);
+  const va_t PersonalityVA = EH.PersonalityVA;
+  Func.ExceptionMetadata = std::move(EH);
+  MedFunc Personality =
+      makeAddressBackedPersonality(PersonalityVA, "\01__C_specific_handler");
+
+  llvm::LLVMContext Context;
+  MedLLVMEmitter Emitter;
+  auto Mod =
+      Emitter.emit({Func, Personality}, Context, "native_seh_layout", Arch::X64,
+                   {{MayThrowVA, "may_throw"}}, nullptr, BinaryFormat::COFF);
+  ASSERT_NE(Mod, nullptr);
+  expectVerifierClean(*Mod);
+  llvm::Function *Function = Mod->getFunction(Func.Name);
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Function->getMetadata(windows_eh_md::NativeAttachment), nullptr);
+
+  // Each return leaves through its own end marker, appended and numbered in
+  // the layout order of the return it replaces.
+  llvm::DenseMap<const llvm::BasicBlock *, size_t> Position;
+  for (const llvm::BasicBlock &BB : *Function)
+    Position.try_emplace(&BB, Position.size());
+  std::vector<unsigned> Boundaries;
+  std::vector<size_t> Sources;
+  for (const llvm::BasicBlock &BB : *Function) {
+    llvm::StringRef Name = BB.getName();
+    if (!Name.consume_front("seh.try.end.0.ret."))
+      continue;
+    unsigned Boundary = 0;
+    ASSERT_FALSE(Name.getAsInteger(10, Boundary)) << BB.getName().str();
+    const llvm::BasicBlock *Source = BB.getSinglePredecessor();
+    ASSERT_NE(Source, nullptr) << BB.getName().str();
+    Boundaries.push_back(Boundary);
+    Sources.push_back(Position.lookup(Source));
+  }
+  std::string IR;
+  llvm::raw_string_ostream OS(IR);
+  Function->print(OS);
+  ASSERT_EQ(Boundaries.size(), 2u) << IR;
+  EXPECT_LT(Boundaries[0], Boundaries[1]) << IR;
+  EXPECT_LT(Sources[0], Sources[1]) << IR;
 }
 
 TEST(COFFExceptionIR, RejectsMissingSEHCallSiteWithoutMutation) {

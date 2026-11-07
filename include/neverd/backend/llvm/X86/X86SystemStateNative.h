@@ -36,6 +36,8 @@ inline const char *x86SystemNativeTargetFeature(std::string_view Name) {
     return "rtm";
   if (Name == "llvm.x86.clzero")
     return "clzero";
+  if (Name == "llvm.x86.hreset")
+    return "hreset";
   return nullptr;
 }
 
@@ -44,6 +46,9 @@ inline const char *x86SystemNativeTargetFeature(std::string_view Name) {
 void applyX86SystemNativeTargetFeatures(llvm::Function &Function);
 
 inline constexpr Intrinsic X86SystemStateNativeInventory[] = {
+    Intrinsic::X86AdjustRpl,
+    Intrinsic::X86AdjustRplMemory,
+    Intrinsic::X86HistoryReset,
     Intrinsic::Xend,
     Intrinsic::Xabort,
     Intrinsic::Clac,
@@ -70,6 +75,7 @@ struct X86SystemStateNative {
   std::vector<uint16_t> InputBytes;
   bool PackMsr = false;
   bool DescriptorQuery = false;
+  bool AdjustRpl = false;
   unsigned AddressBits = 0;
   unsigned SegmentPrefix = 0;
 };
@@ -95,6 +101,7 @@ inline std::optional<X86SystemStateNative> x86SystemStateNative(
   Plan.PackMsr = Id == Intrinsic::X86WriteMsrNonSerializing;
   const auto C = x86SystemStateContract(Id);
   Plan.DescriptorQuery = C.Kind == X86SystemStateKind::AccessRights;
+  Plan.AdjustRpl = C.Kind == X86SystemStateKind::AdjustRpl;
   const unsigned WordBits = TargetArch == Arch::X64 ? 64 : 32;
   if (!Address && Space != NdMemoryAddressSpace::Default)
     Address = X86SystemStateNativeAddress{
@@ -113,7 +120,11 @@ inline std::optional<X86SystemStateNative> x86SystemStateNative(
   if (Plan.AddressBits)
     Plan.InputBytes.insert(Plan.InputBytes.end(), {4, 4});
   std::string Name = C.Mnemonic;
-  if (Plan.DescriptorQuery) {
+  if (Plan.AdjustRpl) {
+    Name += C.MemoryArgument == 0 ? ".mem" : ".reg";
+    if (Plan.AddressBits)
+      Name += ".address32";
+  } else if (Plan.DescriptorQuery) {
     Name += C.MemoryArgument == 0 ? ".mem" : ".reg";
     Name += std::to_string(8 * Width);
     if (Plan.AddressBits)
@@ -131,7 +142,7 @@ inline std::optional<X86SystemStateNative> x86SystemStateNative(
     if (Character == '.')
       Character = '_';
   if ((Id == Intrinsic::X86InvalidateBroadcast || Plan.AddressBits) &&
-      TargetArch == Arch::X86)
+      TargetArch == Arch::X86 && !Plan.AdjustRpl)
     Name += "32";
   Plan.LLVMName = "llvm.x86." + Name;
   return Plan;

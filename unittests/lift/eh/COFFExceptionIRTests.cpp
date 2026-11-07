@@ -9,6 +9,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/Limits.h"
+#include "neverd/backend/DataSymbolMetadata.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/CSourceMap.h"
@@ -172,7 +173,9 @@ void checkStandaloneSEHSource(llvm::StringRef Source,
               "void *_exception_info(void);\n"
               "#define exception_code _exception_code\n"
               "#define GetExceptionCode() _exception_code()\n"
-              "#define GetExceptionInformation() _exception_info()\n";
+              "#define GetExceptionInformation() _exception_info()\n"
+              "int _abnormal_termination(void);\n"
+              "#define AbnormalTermination _abnormal_termination\n";
   }
   const auto Result = runCCompiler(
       Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions", "-std=c11",
@@ -381,6 +384,155 @@ TEST(COFFExceptionIR,
   EXPECT_NE(Source.find("catch ("), std::string::npos) << Source;
   EXPECT_EQ(Source.find("#if 0"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+}
+
+// The runtime tries the scopes of one range in table order, and a C __try
+// has a single handler: such scopes print as nested tries, the first
+// innermost.  The outermost arm takes its handler block.  An inner arm leaves
+// its handler where it is, after both tries: the outer try does not protect
+// that block.
+TEST(COFFExceptionIR, HighCSEHScopesSharingARangeNestInTableOrder) {
+  constexpr va_t FunctionVA = 0x140001000;
+  for (bool FinallyInside : {true, false}) {
+    SCOPED_TRACE(FinallyInside);
+    MedFunc Func = makeWindowsHandlerFixture("shared_range", 0x140009000);
+    ExceptionFunction EH;
+    EH.CodeRange = {FunctionVA, FunctionVA + 0x40};
+    EH.ParseStatus = ExceptionParseStatus::Complete;
+    EH.Personality = ExceptionPersonality::CSpecificHandler;
+    SEHScopeRecord Finally;
+    Finally.GuardedRange = {FunctionVA, FunctionVA + 0x10};
+    Finally.Kind = SEHScopeKind::Finally;
+    Finally.FilterOrFinallyVA = 0x14000C000;
+    SEHScopeRecord Except;
+    Except.GuardedRange = Finally.GuardedRange;
+    Except.Kind = SEHScopeKind::CatchAll;
+    Except.HandlerVA = FunctionVA + 0x20;
+    EH.SEH.emplace();
+    EH.SEH->Scopes = FinallyInside ? std::vector{Finally, Except}
+                                   : std::vector{Except, Finally};
+    Func.ExceptionMetadata = std::move(EH);
+
+    const HighFunc High = MedToHighConverter().convert(Func, Arch::X64);
+    unsigned Tries = 0;
+    walkStmts(High.Body, [&](const HighStmt &S) {
+      if (S.Kind != StmtKind::SEHTry)
+        return;
+      ++Tries;
+      EXPECT_TRUE(S.EHIsReducible);
+      EXPECT_EQ(S.EHClauses.size(), 1u);
+    });
+    EXPECT_EQ(Tries, 2u);
+    const std::string Source = emitHighC({High});
+    EXPECT_EQ(Source.find("unstructured SEH"), std::string::npos) << Source;
+    const size_t Outer = Source.find("__try {");
+    ASSERT_NE(Outer, std::string::npos) << Source;
+    const size_t Inner = Source.find("__try {", Outer + 1);
+    ASSERT_NE(Inner, std::string::npos) << Source;
+    EXPECT_EQ(Source.find_first_not_of(" \n", Outer + 7), Inner) << Source;
+    const size_t FinallyArm = Source.find("} __finally {");
+    const size_t ExceptArm =
+        Source.find("} __except (EXCEPTION_EXECUTE_HANDLER) {");
+    const size_t Handler = Source.find("sub_140009000();", Outer);
+    ASSERT_NE(FinallyArm, std::string::npos) << Source;
+    ASSERT_NE(ExceptArm, std::string::npos) << Source;
+    ASSERT_NE(Handler, std::string::npos) << Source;
+    EXPECT_EQ(FinallyArm < ExceptArm, FinallyInside) << Source;
+    // The handler's code is the outermost arm's, or follows both tries:
+    // never inside the outer try.
+    const size_t OuterArm = FinallyInside ? ExceptArm : FinallyArm;
+    const size_t OuterEnd = Source.find('}', OuterArm + 1);
+    ASSERT_NE(OuterEnd, std::string::npos) << Source;
+    if (FinallyInside)
+      EXPECT_TRUE(Handler > OuterArm && Handler < OuterEnd) << Source;
+    else
+      EXPECT_GT(Handler, OuterEnd) << Source;
+    EXPECT_EQ(Source.find("sub_140009000();", Handler + 1), std::string::npos)
+        << Source;
+  }
+}
+
+// MSVC maps the continuation tail of a catch funclet back to a state of the
+// try block it handles.  A handler is outside its own try block, so that tail
+// is not protected by it; a try block of another handler still protects it.
+// A try block whose states the funclet's code never holds dispatches nothing
+// from it either, though the funclet shares its parent's table.
+TEST(COFFExceptionIR, HighCCatchFuncletIsOutsideItsOwnTry) {
+  constexpr va_t ParentVA = 0x140001000;
+  constexpr va_t FuncletVA = 0x140002000;
+  for (bool OwnTry : {true, false}) {
+    SCOPED_TRACE(OwnTry);
+    MedFunc Funclet;
+    Funclet.Entry = FuncletVA;
+    Funclet.Name = "catch_funclet";
+    Funclet.ReturnType = NdType::makeVoid();
+    MedBlock Body;
+    Body.Id = 0;
+    Body.StartAddr = FuncletVA;
+    Body.EndAddr = FuncletVA + 8;
+    Body.Succs = {1};
+    MedOp Work;
+    Work.Opcode = NdOp::CALL;
+    Work.Addr = FuncletVA + 4;
+    Work.addInput(MedVar::makeConst(0x140009000, 8));
+    Body.Ops.push_back(Work);
+    MedBlock Tail;
+    Tail.Id = 1;
+    Tail.StartAddr = FuncletVA + 8;
+    Tail.EndAddr = FuncletVA + 0x10;
+    Tail.Preds = {0};
+    Work.Addr = FuncletVA + 8;
+    Work.Inputs[0] = MedVar::makeConst(0x14000A000, 8);
+    Tail.Ops.push_back(Work);
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = FuncletVA + 0xc;
+    Tail.Ops.push_back(Return);
+    Funclet.Blocks = {Body, Tail};
+
+    ExceptionFunction EH;
+    EH.CodeRange = {FuncletVA, FuncletVA + 0x10};
+    EH.ParseStatus = ExceptionParseStatus::Complete;
+    EH.Personality = ExceptionPersonality::CxxFrameHandler3;
+    CxxExceptionInfo Cxx;
+    Cxx.MaxState = 3;
+    Cxx.UnwindMap = {{-1, 0}, {-1, 0}, {-1, 0}};
+    Cxx.IPMap = {{ParentVA, -1},      {ParentVA + 4, 0},     {ParentVA + 8, 2},
+                 {ParentVA + 0xc, 0}, {ParentVA + 0x10, -1}, {FuncletVA, 1},
+                 {FuncletVA + 8, 0}};
+    CxxTryBlock Try;
+    Try.TryLow = 0;
+    Try.TryHigh = 0;
+    Try.CatchHigh = 1;
+    CxxCatchHandler Catch;
+    Catch.HandlerVA = OwnTry ? FuncletVA : ParentVA + 0x20;
+    Try.Handlers.push_back(Catch);
+    Cxx.TryBlocks.push_back(Try);
+    // A try block of the parent alone, at state 2.
+    Try.TryLow = Try.TryHigh = Try.CatchHigh = 2;
+    Try.Handlers.front().HandlerVA = ParentVA + 0x30;
+    Cxx.TryBlocks.push_back(Try);
+    EH.Cxx = std::move(Cxx);
+    Funclet.ExceptionMetadata = std::move(EH);
+
+    const HighFunc High = MedToHighConverter().convert(Funclet, Arch::X64);
+    bool Protected = false;
+    walkStmts(High.Body, [&](const HighStmt &S) {
+      if (S.Kind != StmtKind::CxxTry)
+        return;
+      Protected = true;
+      for (const HighEHClause &Clause : S.EHClauses)
+        EXPECT_EQ(Clause.HandlerVA, ParentVA + 0x20);
+    });
+    EXPECT_EQ(Protected, !OwnTry);
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.EmitIncludes = false;
+    Options.StructuredExceptionSyntax = false;
+    EXPECT_TRUE(HighCEmitter().emit({High}, OS, Options)) << Source;
+    EXPECT_NE(Source.find("sub_14000A000();"), std::string::npos) << Source;
+  }
 }
 
 TEST(COFFExceptionIR, HighCCxxTryRendersCatchSyntaxInReadableListing) {
@@ -1037,31 +1189,104 @@ TEST(COFFExceptionIR, LLVMCExceptionAnnotationReadsCanonicalStringsOnly) {
 }
 
 TEST(COFFExceptionIR, LLVMCRealignedFrameKeepsItsEstablisherCoordinates) {
-  llvm::LLVMContext Context;
-  llvm::Module Module("realigned-cxx-frame", Context);
-  Module.setTargetTriple(llvm::Triple("i686-pc-windows-msvc"));
-  auto *Function = llvm::Function::Create(
-      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false),
-      llvm::GlobalValue::ExternalLinkage, "realigned", Module);
-  llvm::IRBuilder<> Builder(
-      llvm::BasicBlock::Create(Context, "entry", Function));
-  Builder.CreateRetVoid();
-  ExceptionFunction EH;
-  EH.CodeRange = {0x401000, 0x401100};
-  EH.Encoding = ExceptionEncoding::X86CxxFuncInfo;
-  EH.Registration.emplace().RealignedFrame =
-      RegistrationRealignedFrame{6, 0x40100f, 16, 0x270, -0x26c, -20};
-  Function->setMetadata(windows_eh_md::FunctionAttachment,
-                        windows_eh_md::getCanonicalFunctionMetadata(
-                            Context, EH, Arch::X86, BinaryFormat::COFF));
-  const auto Source = emitLLVMC(Module);
-  EXPECT_NE(
-      Source.find("registration.frame: base=esi, definition=0x40100F, "
-                  "alignment=16, allocation=624, establisher_offset=-620, "
-                  "saved_parent_offset=-20"),
-      std::string::npos)
-      << Source;
-  EXPECT_EQ(Source.find("metadata-invalid"), std::string::npos) << Source;
+  for (bool StackBased : {false, true}) {
+    llvm::LLVMContext Context;
+    llvm::Module Module("realigned-cxx-frame", Context);
+    Module.setTargetTriple(llvm::Triple("i686-pc-windows-msvc"));
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false),
+        llvm::GlobalValue::ExternalLinkage, "realigned", Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    Builder.CreateRetVoid();
+    ExceptionFunction EH;
+    EH.CodeRange = {0x401000, 0x401100};
+    EH.Encoding = ExceptionEncoding::X86CxxFuncInfo;
+    EH.Registration.emplace().RealignedFrame =
+        StackBased
+            ? RegistrationRealignedFrame{4, 0x401003, 16, 0x40, -0x40, 0}
+            : RegistrationRealignedFrame{6, 0x40100f, 16, 0x270, -0x26c, -20};
+    Function->setMetadata(windows_eh_md::FunctionAttachment,
+                          windows_eh_md::getCanonicalFunctionMetadata(
+                              Context, EH, Arch::X86, BinaryFormat::COFF));
+    const auto Source = emitLLVMC(Module);
+    const auto *Expected =
+        StackBased ? "registration.frame: base=esp, definition=0x401003, "
+                     "alignment=16, allocation=64, establisher_offset=-64, "
+                     "entry_frame=ebp"
+                   : "registration.frame: base=esi, definition=0x40100F, "
+                     "alignment=16, allocation=624, establisher_offset=-620, "
+                     "saved_parent_offset=-20";
+    EXPECT_NE(Source.find(Expected), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("metadata-invalid"), std::string::npos) << Source;
+    if (StackBased)
+      EXPECT_EQ(Source.find("saved_parent_offset="), std::string::npos)
+          << Source;
+  }
+}
+
+TEST(COFFExceptionIR, HighCRealignedSegmentReadsCollectTheirActualHelpers) {
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  Image.Format = BinaryFormat::COFF;
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X86;
+  Options.Format = BinaryFormat::COFF;
+  Options.Image = &Image;
+  const auto Word = NdType::makeInt(4, false);
+  HighFunc Ordinary;
+  Ordinary.Name = "ordinary_segment_read";
+  Ordinary.Entry = 0x401000;
+  Ordinary.ReturnType = Word;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal =
+      HighExpr::makeLoad(HighExpr::makeConst(0, 4), Word,
+                         NdMemoryOrdering::None, NdMemoryAddressSpace::X86FS);
+  Ordinary.Body.push_back(Return);
+  // Deliberately share the expression with the ordinary function. Its
+  // declaration requirements belong to each function's registration mode.
+  HighFunc Realigned = Ordinary;
+  Realigned.Name = "realigned_segment_read";
+  Realigned.Entry = 0x402000;
+  Realigned.ExceptionMetadata.emplace().Encoding =
+      ExceptionEncoding::X86CxxFuncInfo;
+  Realigned.ExceptionMetadata->Registration.emplace().RealignedFrame =
+      RegistrationRealignedFrame{4, 0x402003, 16, 0x40, -0x40, 0};
+  auto Emit = [&](std::vector<HighFunc> Functions) {
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    EXPECT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+    return Source;
+  };
+  const auto AlignedSource = Emit({Realigned});
+  EXPECT_EQ(AlignedSource.find("<intrin.h>"), std::string::npos)
+      << AlignedSource;
+  EXPECT_EQ(AlignedSource.find("__readfsdword"), std::string::npos)
+      << AlignedSource;
+  EXPECT_NE(AlignedSource.find("static inline uint32_t neverd_mem_load_fs_u32"),
+            std::string::npos)
+      << AlignedSource;
+  for (const auto &Functions : {std::vector<HighFunc>{Ordinary},
+                                std::vector<HighFunc>{Ordinary, Realigned},
+                                std::vector<HighFunc>{Realigned, Ordinary}}) {
+    const auto Source = Emit(Functions);
+    EXPECT_NE(Source.find("<intrin.h>"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("__readfsdword("), std::string::npos) << Source;
+    EXPECT_EQ(Source.find("static inline uint32_t neverd_mem_load_fs_u32") !=
+                  std::string::npos,
+              Functions.size() == 2)
+        << Source;
+  }
+#ifdef NEVERD_TEST_CLANG
+  if (NEVERD_TEST_CLANG[0] != '\0') {
+    const auto Syntax =
+        runCCompiler(AlignedSource, {"-std=c11", "-fsyntax-only",
+                                     "-Werror=implicit-function-declaration"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << AlignedSource;
+  }
+#endif
 }
 
 TEST(COFFExceptionIR, LLVMCProjectsCanonicalWindowsEHAsCommentsOnly) {
@@ -1509,6 +1734,136 @@ TEST(COFFExceptionIR, LLVMCCatchSwitchRendersExceptSyntax) {
   ASSERT_TRUE(LLVMCEmitter().emit(Module, Stream, Options));
   if (hasHostFixtureCompiler())
     checkStandaloneSEHSource(Standalone);
+}
+
+TEST(COFFExceptionIR, LLVMCAddressedImportKeepsItsRuntimeFunctionDeclaration) {
+  for (const auto Format : {BinaryFormat::COFF, BinaryFormat::ELF})
+    for (bool Import : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(Format));
+      SCOPED_TRACE(Import);
+      llvm::LLVMContext Context;
+      llvm::Module Module("addressed-runtime-symbol", Context);
+      auto *Symbol = new llvm::GlobalVariable(
+          Module, llvm::Type::getInt8Ty(Context), false,
+          llvm::GlobalValue::ExternalLinkage, nullptr, "__C_specific_handler");
+      if (Import)
+        data_symbol::markImport(*Symbol);
+      else
+        data_symbol::mark(*Symbol);
+      new llvm::GlobalVariable(Module, Symbol->getType(), false,
+                               llvm::GlobalValue::ExternalLinkage, Symbol,
+                               "personality_address");
+      ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+      CEmitterOptions Options;
+      Options.TheArch = Arch::X64;
+      Options.Format = Format;
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+      const bool Function = Import && Format == BinaryFormat::COFF;
+      const std::string Declaration =
+          Function ? "extern int32_t neverd_data___C_specific_handler("
+                   : "extern unsigned char neverd_data___C_specific_handler[]";
+      EXPECT_NE(Source.find(Declaration), std::string::npos) << Source;
+      EXPECT_NE(Source.find("__asm__(\"__C_specific_handler\")"),
+                std::string::npos)
+          << Source;
+      if (Function && hasHostFixtureCompiler()) {
+        // The initializer materializes the imported symbol before Clang
+        // encounters its implicit SEH personality. A data alias passes syntax
+        // checking but makes the backend treat the personality as an object.
+        Source += "#include <excpt.h>\n"
+                  "extern void may_raise(void);\n"
+                  "void protected_call(void) {\n"
+                  "  __try { may_raise(); }\n"
+                  "  __except(EXCEPTION_EXECUTE_HANDLER) {}\n"
+                  "}\n";
+        checkStandaloneSEHSource(Source, /*CompileObject=*/true);
+      }
+    }
+}
+
+TEST(COFFExceptionIR, HighCAddressedRuntimeFunctionPrecedesSEH) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = Text.FileSz = 1;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = {0xc3};
+  Image.Segments.push_back(Text);
+  Symbol Personality;
+  Personality.Addr = Text.VA;
+  Personality.Name = "__C_specific_handler";
+  Personality.IsFunc = true;
+  Image.Symbols.push_back(Personality);
+  HighFunc Function;
+  Function.Name = "personality_address";
+  Function.Entry = 0x2000;
+  Function.ReturnType = NdType::makePtr(NdType::makeVoid());
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal =
+      HighExpr::makeConst(Text.VA, 8, ConstantAddressProvenance::Address);
+  Function.Body.push_back(std::move(Return));
+  CEmitterOptions Options;
+  Options.TheArch = Image.Arch;
+  Options.Format = Image.Format;
+  Options.Image = &Image;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit({Function}, OS, Options));
+  EXPECT_NE(Source.find("extern int32_t __C_specific_handler("),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("extern unsigned char neverd_code_"), std::string::npos)
+      << Source;
+  REQUIRE_HOST_FIXTURE_COMPILER();
+  Source += "#include <excpt.h>\n"
+            "extern void may_raise(void);\n"
+            "void protected_call(void) {\n"
+            "  __try { may_raise(); }\n"
+            "  __except(EXCEPTION_EXECUTE_HANDLER) {}\n"
+            "}\n";
+  checkStandaloneSEHSource(Source, /*CompileObject=*/true);
+}
+
+TEST(COFFExceptionIR, LLVMCAddressedImportUsesPrototypeHeadersAndWeakLinkage) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("addressed-runtime-headers", Context);
+  for (llvm::StringRef Name : {"__iob_func", "unknown_runtime_symbol"}) {
+    auto *Symbol = new llvm::GlobalVariable(
+        Module, llvm::Type::getInt8Ty(Context), false,
+        llvm::GlobalValue::ExternalWeakLinkage, nullptr, Name);
+    data_symbol::markImport(*Symbol);
+    new llvm::GlobalVariable(Module, Symbol->getType(), false,
+                             llvm::GlobalValue::ExternalLinkage, Symbol,
+                             Name + "_address");
+  }
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+  const auto Header = Source.find("#include <stdio.h>");
+  const auto Declaration =
+      Source.find("extern FILE *neverd_data___iob_func(void)");
+  EXPECT_NE(Header, std::string::npos) << Source;
+  EXPECT_NE(Declaration, std::string::npos) << Source;
+  EXPECT_LT(Header, Declaration);
+  EXPECT_NE(Source.find("__asm__(\"__iob_func\") __attribute__((weak))"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(
+      Source.find("extern unsigned char neverd_data_unknown_runtime_symbol[]"),
+      std::string::npos)
+      << Source;
+  REQUIRE_HOST_FIXTURE_COMPILER();
+  const auto Syntax = runCCompiler(Source, {"-std=c11", "-fsyntax-only"});
+  EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << '\n' << Source;
 }
 
 TEST(COFFExceptionIR, LLVMCWrapUsesRecoveredSEHFilter) {
@@ -2828,10 +3183,258 @@ TEST(COFFExceptionIR, LLVMCFinallyWrapContainsCleanupBody) {
   EXPECT_NE(FinallyAt, std::string::npos) << Source;
   EXPECT_NE(CallAt, std::string::npos) << Source;
   EXPECT_LT(FinallyAt, CallAt) << Source;
+  // The cleanup pad runs only while an exception unwinds the try; a C
+  // __finally runs on its normal exit as well. This try holds the return,
+  // which AbnormalTermination() would count, so the return sets a flag.
+  const auto GuardAt = Source.find("if (!neverd_seh_normal) {", FinallyAt);
+  EXPECT_LT(GuardAt, CallAt) << Source;
+  const auto ReturnAt = Source.find("return;");
+  ASSERT_NE(ReturnAt, std::string::npos) << Source;
+  EXPECT_LT(ReturnAt, FinallyAt) << Source;
+  EXPECT_EQ(Source.rfind("neverd_seh_normal = 1;", ReturnAt),
+            Source.rfind(";", ReturnAt - 1) + 1 -
+                std::string("neverd_seh_normal = 1;").size())
+      << Source;
   EXPECT_EQ(Source.find(
                 "/* recovered handler labels remain in the protected body */"),
             std::string::npos)
       << Source;
+}
+
+// A cleanup pad runs only while an exception unwinds its try, but C runs a
+// __finally for a return out of the try as well, and AbnormalTermination()
+// is then true too. Such a range takes the per-block normal-exit flag, which
+// the return sets before it leaves.
+TEST(COFFExceptionIR, LLVMCFinallyReturnInsideTheTrySkipsTheCleanup) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-finally-exit", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::Type *Void = llvm::Type::getVoidTy(Context);
+  llvm::Type *I1 = llvm::Type::getInt1Ty(Context);
+  llvm::FunctionType *VoidType = llvm::FunctionType::get(Void, false);
+  llvm::FunctionType *BoolType = llvm::FunctionType::get(I1, false);
+  llvm::FunctionType *PersonalityType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(Context), /*isVarArg=*/true);
+  llvm::Function *Personality = llvm::Function::Create(
+      PersonalityType, llvm::GlobalValue::ExternalLinkage,
+      "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "seh_finally_exit", Module);
+  Function->setPersonalityFn(Personality);
+  llvm::BasicBlock *Entry =
+      llvm::BasicBlock::Create(Context, "entry", Function);
+  llvm::BasicBlock *Body = llvm::BasicBlock::Create(Context, "body", Function);
+  llvm::BasicBlock *Test = llvm::BasicBlock::Create(Context, "test", Function);
+  llvm::BasicBlock *More = llvm::BasicBlock::Create(Context, "more", Function);
+  llvm::BasicBlock *End = llvm::BasicBlock::Create(Context, "end", Function);
+  llvm::BasicBlock *Early =
+      llvm::BasicBlock::Create(Context, "early", Function);
+  llvm::BasicBlock *Finally =
+      llvm::BasicBlock::Create(Context, "finally", Function);
+  llvm::BasicBlock *Cont = llvm::BasicBlock::Create(Context, "cont", Function);
+  llvm::Function *Raise = llvm::Function::Create(
+      BoolType, llvm::GlobalValue::ExternalLinkage, "may_raise", Module);
+  llvm::Function *Again = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "raise_again", Module);
+  llvm::Function *CleanupFn = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "run_finally", Module);
+  llvm::Function *Leave = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "leave_early", Module);
+  auto *TryBegin = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_begin);
+  auto *TryEnd = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_end);
+  llvm::IRBuilder<>(Entry).CreateInvoke(TryBegin, Body, Finally);
+  llvm::Value *Flag = nullptr;
+  {
+    llvm::IRBuilder<> B(Body);
+    Flag = B.CreateInvoke(Raise, Test, Finally);
+  }
+  llvm::IRBuilder<>(Test).CreateCondBr(Flag, Early, More);
+  llvm::IRBuilder<>(More).CreateInvoke(Again, End, Finally);
+  llvm::IRBuilder<>(End).CreateInvoke(TryEnd, Cont, Finally);
+  {
+    llvm::IRBuilder<> B(Early);
+    B.CreateCall(Leave);
+    B.CreateRetVoid();
+  }
+  llvm::IRBuilder<> FinallyBuilder(Finally);
+  llvm::CleanupPadInst *Cleanup =
+      FinallyBuilder.CreateCleanupPad(llvm::ConstantTokenNone::get(Context));
+  FinallyBuilder.CreateCall(CleanupFn, {},
+                            {llvm::OperandBundleDef("funclet", Cleanup)});
+  FinallyBuilder.CreateCleanupRet(Cleanup, nullptr);
+  llvm::IRBuilder<>(Cont).CreateRetVoid();
+  std::string Source = emitLLVMC(Module);
+  EXPECT_EQ(Source.find("AbnormalTermination"), std::string::npos) << Source;
+  const auto LeaveAt = Source.find("leave_early();");
+  ASSERT_NE(LeaveAt, std::string::npos) << Source;
+  const auto NormalAt = Source.find("neverd_seh_normal = 1;", LeaveAt);
+  const auto ReturnAt = Source.find("return;", LeaveAt);
+  ASSERT_NE(NormalAt, std::string::npos) << Source;
+  ASSERT_NE(ReturnAt, std::string::npos) << Source;
+  EXPECT_LT(NormalAt, ReturnAt) << Source;
+  // Every __finally runs the cleanup only after an exception.
+  size_t Finallies = 0;
+  for (size_t At = Source.find("} __finally {"); At != std::string::npos;
+       At = Source.find("} __finally {", At + 1), ++Finallies)
+    EXPECT_EQ(Source.find_first_not_of(" \n", At + 13),
+              Source.find("if (!neverd_seh_normal) {", At))
+        << Source;
+  EXPECT_GT(Finallies, 0u) << Source;
+  if (hasHostFixtureCompiler()) {
+    const std::string Prelude =
+        "#include <stdint.h>\n"
+        "uint8_t may_raise(void);\nvoid raise_again(void);\n"
+        "void run_finally(void);\nvoid leave_early(void);\n";
+    CompilerResult Syntax = runCCompiler(
+        Prelude + Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions",
+                           "-std=c11", "-fsyntax-only"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
+  }
+}
+
+// One finally range with a protected block laid out past its end marker:
+// lexically that block would print outside the try, reached by a jump out of
+// it and back in. The per-block normal-exit flag renders the range exactly.
+TEST(COFFExceptionIR, LLVMCFinallyRangeLaidOutPastItsEndUsesTheExitFlag) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-finally-layout", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::FunctionType *VoidType =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  llvm::FunctionType *BoolType =
+      llvm::FunctionType::get(llvm::Type::getInt1Ty(Context), false);
+  llvm::Function *Personality = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getInt32Ty(Context),
+                              /*isVarArg=*/true),
+      llvm::GlobalValue::ExternalLinkage, "__C_specific_handler", Module);
+  llvm::Function *Function =
+      llvm::Function::Create(VoidType, llvm::GlobalValue::ExternalLinkage,
+                             "seh_finally_layout", Module);
+  Function->setPersonalityFn(Personality);
+  auto Block = [&](const char *Name) {
+    return llvm::BasicBlock::Create(Context, Name, Function);
+  };
+  llvm::BasicBlock *Entry = Block("entry");
+  llvm::BasicBlock *Body = Block("body");
+  llvm::BasicBlock *Test = Block("test");
+  llvm::BasicBlock *End = Block("end");
+  llvm::BasicBlock *Cont = Block("cont");
+  llvm::BasicBlock *Far = Block("far");
+  llvm::BasicBlock *Finally = Block("finally");
+  auto Declare = [&](llvm::FunctionType *Type, const char *Name) {
+    return llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
+                                  Name, Module);
+  };
+  llvm::Function *Raise = Declare(BoolType, "may_raise");
+  llvm::Function *Again = Declare(VoidType, "raise_again");
+  llvm::Function *CleanupFn = Declare(VoidType, "run_finally");
+  auto *TryBegin = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_begin);
+  auto *TryEnd = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_end);
+  llvm::IRBuilder<>(Entry).CreateInvoke(TryBegin, Body, Finally);
+  llvm::Value *Flag =
+      llvm::IRBuilder<>(Body).CreateInvoke(Raise, Test, Finally);
+  llvm::IRBuilder<>(Test).CreateCondBr(Flag, Far, End);
+  llvm::IRBuilder<>(Far).CreateInvoke(Again, End, Finally);
+  llvm::IRBuilder<>(End).CreateInvoke(TryEnd, Cont, Finally);
+  llvm::IRBuilder<>(Cont).CreateRetVoid();
+  llvm::IRBuilder<> FinallyBuilder(Finally);
+  llvm::CleanupPadInst *Cleanup =
+      FinallyBuilder.CreateCleanupPad(llvm::ConstantTokenNone::get(Context));
+  FinallyBuilder.CreateCall(CleanupFn, {},
+                            {llvm::OperandBundleDef("funclet", Cleanup)});
+  FinallyBuilder.CreateCleanupRet(Cleanup, nullptr);
+
+  std::string Source = emitLLVMC(Module);
+  EXPECT_EQ(Source.find("AbnormalTermination"), std::string::npos) << Source;
+  // raise_again() stays protected, and every __finally runs the cleanup
+  // only after an exception.
+  const auto AgainAt = Source.find("raise_again();");
+  ASSERT_NE(AgainAt, std::string::npos) << Source;
+  const auto TryAt = Source.rfind("__try {", AgainAt);
+  ASSERT_NE(TryAt, std::string::npos) << Source;
+  EXPECT_EQ(Source.find('}', TryAt), Source.find("} __finally {", TryAt))
+      << Source;
+  size_t Finallies = 0;
+  for (size_t At = Source.find("} __finally {"); At != std::string::npos;
+       At = Source.find("} __finally {", At + 1), ++Finallies)
+    EXPECT_EQ(Source.find_first_not_of(" \n", At + 13),
+              Source.find("if (!neverd_seh_normal) {", At))
+        << Source;
+  EXPECT_GT(Finallies, 0u) << Source;
+  if (hasHostFixtureCompiler()) {
+    const std::string Prelude =
+        "#include <stdint.h>\n"
+        "uint8_t may_raise(void);\nvoid raise_again(void);\n"
+        "void run_finally(void);\n";
+    CompilerResult Syntax = runCCompiler(
+        Prelude + Source, {"--target=x86_64-pc-windows-msvc", "-fms-extensions",
+                           "-std=c11", "-fsyntax-only"});
+    EXPECT_EQ(Syntax.ExitCode, 0) << Syntax.Error << "\n" << Source;
+  }
+}
+
+// A jump out of the try that bypasses its end marker reaches a continuation
+// the end marker also reaches outside the range. C would run the __finally
+// on that jump, and no block scope fits the shared continuation, so LLVMC
+// refuses the function instead of running the cleanup on a normal path.
+TEST(COFFExceptionIR, LLVMCFinallyJumpPastItsEndMarkerIsRefused) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("llvm-c-seh-finally-jump", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  llvm::FunctionType *VoidType =
+      llvm::FunctionType::get(llvm::Type::getVoidTy(Context), false);
+  llvm::FunctionType *BoolType =
+      llvm::FunctionType::get(llvm::Type::getInt1Ty(Context), false);
+  llvm::Function *Personality = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getInt32Ty(Context),
+                              /*isVarArg=*/true),
+      llvm::GlobalValue::ExternalLinkage, "__C_specific_handler", Module);
+  llvm::Function *Function = llvm::Function::Create(
+      VoidType, llvm::GlobalValue::ExternalLinkage, "seh_finally_jump", Module);
+  Function->setPersonalityFn(Personality);
+  auto Block = [&](const char *Name) {
+    return llvm::BasicBlock::Create(Context, Name, Function);
+  };
+  llvm::BasicBlock *Entry = Block("entry");
+  llvm::BasicBlock *Body = Block("body");
+  llvm::BasicBlock *Test = Block("test");
+  llvm::BasicBlock *Early = Block("early");
+  llvm::BasicBlock *More = Block("more");
+  llvm::BasicBlock *End = Block("end");
+  llvm::BasicBlock *Cont = Block("cont");
+  llvm::BasicBlock *Finally = Block("finally");
+  auto Declare = [&](llvm::FunctionType *Type, const char *Name) {
+    return llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
+                                  Name, Module);
+  };
+  llvm::Function *Raise = Declare(BoolType, "may_raise");
+  llvm::Function *Again = Declare(VoidType, "raise_again");
+  llvm::Function *Leave = Declare(VoidType, "leave_early");
+  llvm::Function *CleanupFn = Declare(VoidType, "run_finally");
+  auto *TryBegin = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_begin);
+  auto *TryEnd = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::seh_try_end);
+  llvm::IRBuilder<>(Entry).CreateInvoke(TryBegin, Body, Finally);
+  llvm::Value *Flag =
+      llvm::IRBuilder<>(Body).CreateInvoke(Raise, Test, Finally);
+  llvm::IRBuilder<>(Test).CreateCondBr(Flag, Early, More);
+  llvm::IRBuilder<>(Early).CreateInvoke(Leave, Cont, Finally);
+  llvm::IRBuilder<>(More).CreateInvoke(Again, End, Finally);
+  llvm::IRBuilder<>(End).CreateInvoke(TryEnd, Cont, Finally);
+  llvm::IRBuilder<>(Cont).CreateRetVoid();
+  llvm::IRBuilder<> FinallyBuilder(Finally);
+  llvm::CleanupPadInst *Cleanup =
+      FinallyBuilder.CreateCleanupPad(llvm::ConstantTokenNone::get(Context));
+  FinallyBuilder.CreateCall(CleanupFn, {},
+                            {llvm::OperandBundleDef("funclet", Cleanup)});
+  FinallyBuilder.CreateCleanupRet(Cleanup, nullptr);
+
+  EXPECT_THROW((void)emitLLVMC(Module), std::runtime_error);
 }
 
 TEST(COFFExceptionIR, LLVMCFinallyContinuationFollowsCleanup) {
@@ -2915,6 +3518,8 @@ TEST(COFFExceptionIR, LLVMCFinallyContinuationFollowsCleanup) {
   EXPECT_LT(FinallyAt, RunAt) << Source;
   EXPECT_LT(RunAt, FinallyClose) << Source;
   EXPECT_LT(FinallyClose, AfterAt) << Source;
+  EXPECT_LT(Source.find("if (AbnormalTermination()) {", FinallyAt), RunAt)
+      << Source;
   EXPECT_EQ(
       Source.substr(FinallyOpen, FinallyClose - FinallyOpen).find("return"),
       std::string::npos)
@@ -3159,6 +3764,8 @@ TEST(COFFExceptionIR, LLVMCNestedFinallyInsideExceptContainsBothBodies) {
   if (hasHostFixtureCompiler()) {
     const std::string Prelude =
         "#include <stdint.h>\n#define EXCEPTION_EXECUTE_HANDLER 1\n"
+        "int _abnormal_termination(void);\n"
+        "#define AbnormalTermination _abnormal_termination\n"
         "extern uint32_t ProbeSink;\n"
         "void arm_region(void);\nvoid may_raise(void);\n"
         "void outer_step(void);\nvoid run_finally(void);\n"

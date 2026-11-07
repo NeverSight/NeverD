@@ -6,9 +6,14 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/support/Limits.h"
 #include "neverd/support/StringScan.h"
 
+#include <algorithm>
+#include <atomic>
+#include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace neverd::strings;
@@ -441,6 +446,115 @@ TEST(StringScan, OverlappingStringsKeepTheFirst) {
   EXPECT_EQ(Found[0].Kind, Encoding::ASCII);
   EXPECT_EQ(Found[1].Kind, Encoding::UTF16LE);
   EXPECT_EQ(Found[1].Offset, 6u);
+}
+
+/// Text in the encodings the scan reads, among data it must not read as
+/// text, laid out a little differently by \p Variant: wide strings off
+/// their alignment, a character of other data before one, a code page string
+/// after a NUL, an unterminated run.
+std::vector<uint8_t> mixedText(unsigned Variant) {
+  std::vector<uint8_t> Out;
+  const auto add = [&](const std::vector<uint8_t> &Bytes) {
+    Out.insert(Out.end(), Bytes.begin(), Bytes.end());
+  };
+  add(bytes("\x01\x02hello world\0"));
+  add(bytes("\xc3\xa9t\xc3\xa9 au caf\xc3\xa9\0"));
+  // "中文字符串" in GBK.
+  add(bytes("\0\xd6\xd0\xce\xc4\xd7\xd6\xb7\xfb\xb4\xae\0"));
+  if (Variant % 2)
+    Out.push_back(0x90);
+  add(bytes("\0\x40"));
+  add(wide(U"HashDigestLength", 2, false));
+  add(wide(U"\u4e2d\u6587\u5b57\u7b26\u4e32 text", 2, Variant % 3 == 1));
+  add(wide(U"utf-32 text \U0001F600", 4, Variant % 3 == 2));
+  add(bytes("\x48\x8b\x05\x10\x20\x30\x40\xe8\0\0\0\0\xff\x15unterminated"));
+  for (unsigned I = 0; I < Variant % 7; ++I)
+    Out.push_back(static_cast<uint8_t>('A' + I));
+  return Out;
+}
+
+void expectSameStrings(const std::vector<FoundString> &Expected,
+                       const std::vector<FoundString> &Actual) {
+  ASSERT_EQ(Expected.size(), Actual.size());
+  for (size_t I = 0; I < Expected.size(); ++I) {
+    EXPECT_EQ(Expected[I].Offset, Actual[I].Offset) << I;
+    EXPECT_EQ(Expected[I].Bytes, Actual[I].Bytes) << I;
+    EXPECT_EQ(Expected[I].Chars, Actual[I].Chars) << I;
+    EXPECT_EQ(Expected[I].Kind, Actual[I].Kind) << I;
+    EXPECT_EQ(Expected[I].Text, Actual[I].Text) << I;
+  }
+}
+
+TEST(StringScan, ReadsAtAByteWhatTheScanReportsFirstThere) {
+  ScanOptions Options;
+  Options.Encodings |= Everything;
+  Options.MinLength = 1;
+  std::vector<uint8_t> Data;
+  for (unsigned Variant = 0; Variant < 6; ++Variant) {
+    const auto Text = mixedText(Variant);
+    Data.insert(Data.end(), Text.begin(), Text.end());
+  }
+  const llvm::ArrayRef<uint8_t> All(Data);
+  size_t Read = 0;
+  for (size_t At = 0; At < Data.size(); ++At) {
+    const auto Window = All.slice(At, std::min<size_t>(256, Data.size() - At));
+    std::optional<FoundString> First;
+    scan(Window, Options, [&](FoundString &&Found) {
+      if (!First)
+        First = std::move(Found);
+    });
+    const auto There = scanAt(Window, Options);
+    ASSERT_EQ(There.has_value(), First && First->Offset == 0) << At;
+    if (!There)
+      continue;
+    ++Read;
+    expectSameStrings({*First}, {*There});
+  }
+  EXPECT_GT(Read, Data.size() / 4);
+}
+
+TEST(StringScan, ReportsTheSameStringsFromSpansRunAsTasks) {
+  ScanOptions Options;
+  Options.Encodings |= Everything;
+  std::vector<uint8_t> Data;
+  for (unsigned Variant = 0;
+       Data.size() < 2 * neverd::limits::support::kStringScanParallelBytes;
+       ++Variant) {
+    const auto Text = mixedText(Variant);
+    Data.insert(Data.end(), Text.begin(), Text.end());
+  }
+  const auto Serial = scanAll(Data, Options);
+  ASSERT_FALSE(Serial.empty());
+  const auto collect = [&](ParallelTasks Parallel) {
+    std::vector<FoundString> Found;
+    scan(
+        Data, Options,
+        [&](FoundString &&String) { Found.push_back(std::move(String)); },
+        Parallel);
+    return Found;
+  };
+  // One at a time, last first: an order no serial scan takes.
+  size_t Tasks = 0;
+  expectSameStrings(
+      Serial, collect([&](size_t Count, llvm::function_ref<void(size_t)> Task) {
+        Tasks = std::max(Tasks, Count);
+        for (size_t I = Count; I-- > 0;)
+          Task(I);
+      }));
+  EXPECT_GT(Tasks, 1u);
+  // Several at once.
+  expectSameStrings(
+      Serial, collect([](size_t Count, llvm::function_ref<void(size_t)> Task) {
+        std::atomic<size_t> Next{0};
+        std::vector<std::thread> Threads;
+        for (unsigned T = 0; T < 4; ++T)
+          Threads.emplace_back([&] {
+            for (size_t I; (I = Next.fetch_add(1)) < Count;)
+              Task(I);
+          });
+        for (std::thread &Thread : Threads)
+          Thread.join();
+      }));
 }
 
 TEST(StringScan, NamesEncodings) {

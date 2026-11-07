@@ -53,7 +53,7 @@ CFGBuilder::proveInstructionLocalTableSource(
   };
   const uint16_t PointerSize = Img.getPointerSize();
   if (!Take(32) || (Img.Arch != Arch::X86 && Img.Arch != Arch::X64) ||
-      !F.hasCompleteInstructionLift() || F.Blocks.empty() ||
+      F.AnalysisOnly || !F.hasCompleteInstructionLift() || F.Blocks.empty() ||
       !F.FunctionTemporaries.empty() || F.JumpTables.size() != 1 ||
       Source.Authority != RelocatedInstructionAddressProofKind::LoaderField ||
       Source.FieldVA == InvalidVA || Source.DefinesOutput ||
@@ -748,9 +748,37 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
     if (Rec.JumpTableTargets.empty())
       continue;
 
+    if (auto Analysis = AnalysisTables.find(Addr);
+        Analysis != AnalysisTables.end()) {
+      Func.JumpTables.push_back(Analysis->second);
+      Func.AnalysisOnly = true;
+      continue;
+    }
+
     JumpTable JT;
     JT.InsnAddr = Addr;
     JT.Targets = Rec.JumpTableTargets;
+
+    if ((Rec.ScalarBranchInput || Rec.ComputedScalarTargets) &&
+        Rec.IsIndirect) {
+      JT.OriginalAddressSelector = Rec.ScalarBranchInput.has_value();
+      // A logical dispatch on the original numeric branch value. There is no
+      // physical table, LOAD, slot map or relocation-suppression authority.
+      // Bind the exact use after SSA; never infer a selector by register name.
+      for (const LowOp &Op : Rec.Ops)
+        if (Op.Opcode == NdOp::INDIR_BR && Op.NumInputs == 1 &&
+            (!Rec.ScalarBranchInput || Op.Inputs[0] == *Rec.ScalarBranchInput))
+          JT.SelectorUseRefs.push_back(
+              {Op.Addr, Op.Seq, NdOp::INDIR_BR,
+               JumpTableSelectorUseRef::ValueRole::Input, 0,
+               Op.Inputs[0].Size});
+      if (JT.SelectorUseRefs.size() != 1)
+        continue;
+      for (va_t Target : JT.Targets)
+        JT.CaseLabels.push_back(static_cast<int64_t>(Target));
+      Func.JumpTables.push_back(std::move(JT));
+      continue;
+    }
 
     // Reuse the cached analysis from resolveJumpTable when available,
     // avoiding the duplicate backward-slicing logic.

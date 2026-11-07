@@ -40,6 +40,17 @@ struct LowSEHRuntimeCall {
   bool operator==(const LowSEHRuntimeCall &) const = default;
 };
 
+/// The file-backed writable ranges of an x64 COFF image's data that every
+/// catalog of the image holds, and the steps the catalog's scan of them
+/// takes; not Complete where the scan passes the catalog's allowance or
+/// range limit.
+struct LowSEHWritableImageRanges {
+  const BinaryImage *Image = nullptr;
+  std::vector<ExceptionAddressRange> Ranges;
+  size_t Steps = 0;
+  bool Complete = false;
+};
+
 class LowSEHRuntimeMemory {
 public:
   const auto &calls() const { return Calls; }
@@ -48,7 +59,8 @@ public:
 
 private:
   friend LowSEHRuntimeMemory
-  collectLowSEHRuntimeMemory(const BinaryImage &, llvm::ArrayRef<LowFunc>);
+  collectLowSEHRuntimeMemory(const BinaryImage &, llvm::ArrayRef<LowFunc>,
+                             const LowSEHWritableImageRanges *);
   /// The Boolean distinguishes a direct executable veneer from an IAT cell.
   std::map<std::pair<va_t, bool>, LowSEHRuntimeCall> Calls;
   /// Complete immutable narrow formats, including their terminating NUL.

@@ -93,6 +93,47 @@ bool meet(State &Left, const State &Right) {
 }
 } // namespace
 
+std::vector<StackFrameAccess>
+sourceEntryStackAccesses(llvm::ArrayRef<LowOp> Operations, Arch Architecture,
+                         size_t &Remaining) {
+  const auto &TRI = getTargetRegInfo(Architecture);
+  const auto Width = TRI.PointerSize;
+  if (Width != 8 ||
+      (Architecture != Arch::X64 && Architecture != Arch::AArch64))
+    return {};
+  State Values{{{VnodeSpace::REG, TRI.StackPointer}, 0}};
+  std::vector<StackFrameAccess> Accesses;
+  va_t Instruction = InvalidVA;
+  for (const LowOp &Op : Operations) {
+    const size_t Cost = 1 + Values.size();
+    if (Cost > Remaining) {
+      Remaining = 0;
+      return {};
+    }
+    Remaining -= Cost;
+    if (terminal(Op.Opcode) || Op.Opcode == NdOp::CALL ||
+        Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INTRINSIC ||
+        Op.MemoryOrdering != NdMemoryOrdering::None ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+      break;
+    if (Op.Addr != Instruction) {
+      std::erase_if(Values, [](const auto &Item) {
+        return Item.first.first == VnodeSpace::TEMP;
+      });
+      Instruction = Op.Addr;
+    }
+    if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
+        Op.NumInputs == (Op.Opcode == NdOp::LOAD ? 1 : 2))
+      if (const auto At = offset(Values, Op.Inputs[0], Width))
+        Accesses.push_back(
+            {Op.Addr, Op.Seq, *At,
+             Op.Opcode == NdOp::LOAD ? Op.Output.Size : Op.Inputs[1].Size,
+             Op.Opcode == NdOp::STORE});
+    transfer(Values, Op, Width);
+  }
+  return Accesses;
+}
+
 StackFrameAnalysis analyzeSourceStackFrame(const LowFunc &F, Arch Architecture,
                                            const SourceStackFrame &Policy) {
   StackFrameAnalysis Out;

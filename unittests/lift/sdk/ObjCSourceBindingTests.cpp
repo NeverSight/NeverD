@@ -9,6 +9,7 @@
 #include "../../../lib/sdk/capi/SourceSwiftWitnessFrameProjection.h"
 #include "../core/CFunctionParameterCallFixture.h"
 #include "../core/ImmutableNativeCallFixture.h"
+#include "../core/MappedSectionFlags.h"
 #include "../core/RuntimeFunctionAddressFixture.h"
 #include "../core/SwiftWitnessFrameFixture.h"
 #include "gtest/gtest.h"
@@ -3428,7 +3429,7 @@ TEST(ObjCSourceBindings, SwiftWitnessUndefRequiresExactDescriptorContract) {
     const auto Descriptor =
         MainActor        ? "_$sScMScAsMc"
         : StringProtocol ? "_$sSSSysMc"
-        : Range          ? "_$sSnyxGSXsMc"
+        : Range ? "_$sSnyxGSXsMc"
                 : "_$s7Combine19CurrentValueSubjectCyxq_GAA9PublisherAAMc";
     const auto Module =
         MainActor ? "/usr/lib/swift/libswift_Concurrency.dylib"
@@ -3474,7 +3475,7 @@ struct GenericWitnessFixture : SwiftWitnessAccessorFixture {
     const auto Descriptor =
         MainActor        ? "_$sScMScAsMc"
         : StringProtocol ? "_$sSSSysMc"
-        : Range          ? "_$sSnyxGSXsMc"
+        : Range ? "_$sSnyxGSXsMc"
                 : "_$s7Combine19CurrentValueSubjectCyxq_GAA9PublisherAAMc";
     Image.ImportStorageSlots.erase(ConformanceSlot);
     Image.ImportPtrSlots[ConformanceSlot] = Descriptor;
@@ -7943,8 +7944,8 @@ TEST(ObjCSourceBindings,
         Word(0x60, 0x42);
         break; // Anonymous outer context.
       case 11:
-        F.Image.Sections[3].Flags =
-            SegmentFlags::Readable | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[3],
+                              SegmentFlags::Readable | SegmentFlags::Writable);
         break;
       case 12:
         F.Image.RelDataPtrRelocSlots.insert(0x40c8);
@@ -8120,8 +8121,8 @@ TEST(ObjCSourceBindings,
         F.Image.RelDataPtrRelocSlots.insert(F.TypeReference + 8);
         break;
       case 14:
-        F.Image.Sections[3].Flags =
-            SegmentFlags::Readable | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[3],
+                              SegmentFlags::Readable | SegmentFlags::Writable);
         break;
       case 15:
         F.Image.Segments[1].Data[F.Cache - 0x2000] = 1;
@@ -9059,8 +9060,8 @@ TEST(ObjCSourceBindings, OriginalReadOnlyTablesRejectInvalidAccessOrDomain) {
       Load->Operands[1] = HighExpr::makeConst(0xffffffffU, 4);
       break;
     case 6:
-      F.Image.Sections[0].Flags =
-          SegmentFlags::Readable | SegmentFlags::Writable;
+      setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                            SegmentFlags::Readable | SegmentFlags::Writable);
       break;
     case 7:
       F.Function.Body.push_back(Branch.Body[0]); // An unguarded occurrence.
@@ -9300,8 +9301,8 @@ TEST(ObjCSourceBindings, CountdownByteTableRejectsUnboundedOrEscapingWalks) {
       F.Function.Body.insert(F.Function.Body.begin(), Overwrite);
     }
     if (Mutation == 5)
-      F.Image.Sections[0].Flags =
-          SegmentFlags::Readable | SegmentFlags::Writable;
+      setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                            SegmentFlags::Readable | SegmentFlags::Writable);
     if (Mutation == 6)
       F.Image.Sections[0].FileSz = 0x100;
     if (Mutation == 7)
@@ -9371,8 +9372,8 @@ TEST(ObjCSourceBindings, ReadOnlyTablesRejectUnprovenRangesStorageAndUses) {
       if (Mutation == 1)
         Branch.Cond->Op = NdOp::INT_SLESS;
       if (Mutation == 2)
-        F.Image.Sections[0].Flags =
-            SegmentFlags::Readable | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                              SegmentFlags::Readable | SegmentFlags::Writable);
       if (Mutation == 3)
         F.Image.Sections.push_back(F.Image.Sections[0]);
       if (Mutation == 4)
@@ -9752,8 +9753,8 @@ TEST(ObjCSourceBindings, TaggedCStringWordsRejectUnprovenAddressOccurrences) {
       F.Image.Sections[0].Type = llvm::MachO::S_REGULAR;
       break;
     case 12:
-      F.Image.Sections[0].Flags =
-          SegmentFlags::Readable | SegmentFlags::Writable;
+      setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                            SegmentFlags::Readable | SegmentFlags::Writable);
       break;
     case 13:
       F.Image.DataPtrRelocSlots.insert(0x1080);
@@ -9959,8 +9960,8 @@ TEST(ObjCSourceBindings,
       if (Case == 4)
         F.Image.Sections[0].FileSz = 0x4f;
       if (Case == 5)
-        F.Image.Sections[0].Flags =
-            SegmentFlags::Readable | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                              SegmentFlags::Readable | SegmentFlags::Writable);
       F.Function.ReturnType = NdType::makeInt(16, Case == 6);
       auto Load = HighExpr::makeLoad(HighExpr::makeConst(0x1040, 8),
                                      F.Function.ReturnType);
@@ -10002,8 +10003,8 @@ TEST(ObjCSourceBindings, ImmutableScalarsRejectUnprovedStorageAndAddressUses) {
                                        7);
       switch (Case) {
       case 0:
-        F.Image.Sections[0].Flags =
-            SegmentFlags::Readable | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                              SegmentFlags::Readable | SegmentFlags::Writable);
         break;
       case 1:
         F.Image.Segments[0].Flags =
@@ -10394,8 +10395,8 @@ TEST(ObjCSourceBindings,
         F.Image.Segments[0].Data[0x44] = 0xff;
         break;
       case 6:
-        F.Image.Sections[0].Flags =
-            SegmentFlags::Readable | SegmentFlags::Writable;
+        setMappedSectionFlags(F.Image, F.Image.Sections[0],
+                              SegmentFlags::Readable | SegmentFlags::Writable);
         break;
       case 7:
         F.Image.Segments[0].Flags =
@@ -13638,7 +13639,8 @@ TEST(ObjCSourceBindings, SwiftScalarStorageRejectsAmbiguousOrMutableImage) {
       I.Symbols.push_back({I.Symbols[0].Name, 0x1050, 0, false});
       break;
     case 16:
-      I.Sections[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      setMappedSectionFlags(I, I.Sections[0],
+                            SegmentFlags::Readable | SegmentFlags::Writable);
       break;
     case 17:
       I.Segments[0].Flags = SegmentFlags::Readable | SegmentFlags::Writable;

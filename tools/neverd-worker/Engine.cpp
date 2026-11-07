@@ -6,6 +6,7 @@
 #include "Contributions.h"
 #include "EngineSymbols.h"
 #include "GraphSnapshot.h"
+#include "InterpreterRecoveryView.h"
 #include "LineageService.h"
 #include "Listing.h"
 #include "OperandFormat.h"
@@ -778,6 +779,9 @@ bool Engine::reportsUnwindFrames() {
 bool Engine::reportsX87Capabilities() {
   return x87CapabilitiesFunction() != nullptr;
 }
+bool Engine::recoversInterpreterSource() {
+  return interpreter_recovery::function() != nullptr;
+}
 std::string Engine::error() const {
   return ownedString(neverd_last_error(session_));
 }
@@ -1017,10 +1021,23 @@ void Engine::invalidate() {
   functionOrderKey_.clear();
   functionOrder_.clear();
 }
+void Engine::unindexNamedView(NamedViewPosition position) {
+  if (const auto key = namedViewsByKey_.find((*position)->key);
+      key != namedViewsByKey_.end() && key->second == position)
+    namedViewsByKey_.erase(key);
+  if (const auto source = namedViewsBySource_.find((*position)->sourceKey);
+      source != namedViewsBySource_.end() && source->second == position)
+    namedViewsBySource_.erase(source);
+}
 void Engine::forgetNamedViews() {
+  for (auto &document : namedViews_)
+    releases_.retire(std::move(document));
   namedViews_.clear();
+  namedViewsByKey_.clear();
+  namedViewsBySource_.clear();
   namedViewBytes_ = 0;
   encodedPageBytes_ = 0;
+  restartRenderAhead();
 }
 
 void Engine::localNamesChanged() {
@@ -1028,6 +1045,7 @@ void Engine::localNamesChanged() {
   // pipeline. Keep original documents for checked, lazy redecoration; encoded
   // pages and already decorated documents still belong to their old revision.
   ++revision_;
+  ++localNameRevisions_;
   namedViewsRevision_ = revision_;
   forgetEncodedPages();
 }
@@ -1038,6 +1056,132 @@ void Engine::forgetEncodedPages() {
     document->pageBytes = 0;
   }
   encodedPageBytes_ = 0;
+}
+
+Json Engine::namedViewEngineOptions(std::uint64_t address,
+                                    const std::string &representation,
+                                    const Json &options,
+                                    const Json *variableEdits,
+                                    const Json *callTypes,
+                                    const Json *stackFrame, Json &stale) {
+  Json engineOptions = options;
+  std::optional<std::string> typeImage;
+  auto currentTypeImage = [&](const Json &type) {
+    if (!typeImage)
+      typeImage = inputHash();
+    return type.value("input_sha256", std::string()) == *typeImage;
+  };
+  const auto row = codeEditRow(address);
+  const auto route = representation == "source" ? "c" : representation;
+  const auto edits =
+      row.is_object()
+          ? row.value("views", Json::object()).value(route, Json::object())
+          : Json::object();
+  if (stackFrame || (row.is_object() && row.contains("stack_frame"))) {
+    const auto &Frame = stackFrame ? *stackFrame : row.at("stack_frame");
+    if (currentTypeImage(Frame))
+      engineOptions["stack_frame"] = Frame;
+    else
+      stale.push_back(
+          "A saved stack correction belongs to a different input image; "
+          "reset or reapply it");
+  }
+  const auto calls = callTypes         ? *callTypes
+                     : row.is_object() ? row.value("call_types", Json::object())
+                                       : Json::object();
+  Json bindings = Json::array();
+  for (const auto &[id, type] : calls.items()) {
+    if (!currentTypeImage(type)) {
+      stale.push_back(
+          "A saved call-site declaration belongs to a different input image; "
+          "reset or reapply it");
+      continue;
+    }
+    Json binding = type;
+    binding["id"] = id;
+    bindings.push_back(std::move(binding));
+  }
+  if (!bindings.empty())
+    engineOptions["call_types"] = std::move(bindings);
+  const auto associations = variableEdits
+                                ? *variableEdits
+                                : edits.value("variable_edits", Json::array());
+  bool Foreign = false;
+  for (const auto &Association : associations)
+    Foreign |= !currentTypeImage(Association);
+  if (Foreign)
+    stale.push_back(
+        "Saved variable associations belong to a different input image; "
+        "reset or reapply them");
+  else if (!associations.empty())
+    engineOptions["variable_edits"] = associations;
+  Json types = Json::array();
+  const Json variableTypes = edits.value("variable_types", Json::object());
+  for (const auto &[id, type] : variableTypes.items()) {
+    if (!currentTypeImage(type)) {
+      stale.push_back(id +
+                      ": the saved type belongs to a different input image");
+      continue;
+    }
+    Json binding = type;
+    binding["id"] = id;
+    binding["function"] = hexAddress(address);
+    types.push_back(std::move(binding));
+  }
+  for (const auto &row : codeEdits_)
+    if (row.contains("object_type")) {
+      if (!currentTypeImage(row.at("object_type"))) {
+        if (stale.empty())
+          stale.push_back(
+              "Saved object types belong to a different input image");
+        continue;
+      }
+      Json binding = row.at("object_type");
+      binding["function"] = hexAddress(address);
+      binding["address"] = row.at("addr");
+      binding["id"] =
+          "global:" +
+          std::to_string(parseAddress(row.at("addr").get<std::string>()));
+      binding["snapshot"] = "";
+      types.push_back(std::move(binding));
+    }
+  if (!types.empty())
+    engineOptions["variable_types"] = std::move(types);
+  return engineOptions;
+}
+
+std::string Engine::engineViewPage(std::uint64_t address,
+                                   const std::string &representation,
+                                   std::size_t next, bool sourceView,
+                                   const Json &engineOptions,
+                                   const std::string &optionText) {
+  const auto view = irViewFunction();
+  const auto extended = irViewExFunction();
+  return backendText(
+      sourceView && extended && !engineOptions.empty()
+          ? extended(session_, address, representation.c_str(), next,
+                     ::neverd::limits::worker::kEngineEnginePageLines,
+                     optionText.c_str())
+          : view(session_, address, representation.c_str(), next,
+                 ::neverd::limits::worker::kEngineEnginePageLines),
+      true);
+}
+
+void Engine::syncNamedViews() {
+  const auto generation = listing().generation();
+  if (namedViewsRevision_ != revision_ ||
+      namedViewsListingGeneration_ != generation) {
+    forgetNamedViews();
+    namedViewsRevision_ = revision_;
+    namedViewsListingGeneration_ = generation;
+  }
+}
+
+std::string Engine::namedViewSourceKey(std::uint64_t address,
+                                       const std::string &representation,
+                                       const std::string &optionText) {
+  return hexAddress(address) + ":" + representation + ":" +
+         std::to_string(listing().generation()) + ":" + optionText;
 }
 
 std::shared_ptr<const Engine::NamedView>
@@ -1058,127 +1202,61 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
                           representation == "source" ||
                           representation == "cpp" || representation == "rust" ||
                           representation == "go";
+  const bool recovery = options.contains(interpreter_recovery::kCapability);
+  std::optional<neverd_devirtualize_options_v10> recoveryOptions;
+  if (recovery) {
+    recoveryOptions = interpreter_recovery::options(options, representation);
+    if (!interpreter_recovery::function())
+      throw Error("unsupported",
+                  "This engine does not support interpreter source recovery");
+  }
   if (!sourceView && !options.empty())
     throw Error("invalid_request", "Source options require a source view");
-  Json engineOptions = options;
   Json staleVariableTypes = Json::array();
-  std::optional<std::string> typeImage;
-  auto currentTypeImage = [&](const Json &type) {
-    if (!typeImage)
-      typeImage = inputHash();
-    return type.value("input_sha256", std::string()) == *typeImage;
-  };
-  if (sourceView) {
-    const auto row = codeEditRow(address);
-    const auto route = representation == "source" ? "c" : representation;
-    const auto edits =
-        row.is_object()
-            ? row.value("views", Json::object()).value(route, Json::object())
-            : Json::object();
-    if (stackFrame || (row.is_object() && row.contains("stack_frame"))) {
-      const auto &Frame = stackFrame ? *stackFrame : row.at("stack_frame");
-      if (currentTypeImage(Frame))
-        engineOptions["stack_frame"] = Frame;
-      else
-        staleVariableTypes.push_back(
-            "A saved stack correction belongs to a different input image; "
-            "reset or reapply it");
-    }
-    const auto calls = callTypes ? *callTypes
-                       : row.is_object()
-                           ? row.value("call_types", Json::object())
-                           : Json::object();
-    Json bindings = Json::array();
-    for (const auto &[id, type] : calls.items()) {
-      if (!currentTypeImage(type)) {
-        staleVariableTypes.push_back(
-            "A saved call-site declaration belongs to a different input image; "
-            "reset or reapply it");
-        continue;
-      }
-      Json binding = type;
-      binding["id"] = id;
-      bindings.push_back(std::move(binding));
-    }
-    if (!bindings.empty())
-      engineOptions["call_types"] = std::move(bindings);
-    const auto associations =
-        variableEdits ? *variableEdits
-                      : edits.value("variable_edits", Json::array());
-    bool Foreign = false;
-    for (const auto &Association : associations)
-      Foreign |= !currentTypeImage(Association);
-    if (Foreign)
-      staleVariableTypes.push_back(
-          "Saved variable associations belong to a different input image; "
-          "reset or reapply them");
-    else if (!associations.empty())
-      engineOptions["variable_edits"] = associations;
-    Json types = Json::array();
-    const Json variableTypes = edits.value("variable_types", Json::object());
-    for (const auto &[id, type] : variableTypes.items()) {
-      if (!currentTypeImage(type)) {
-        staleVariableTypes.push_back(
-            id + ": the saved type belongs to a different input image");
-        continue;
-      }
-      Json binding = type;
-      binding["id"] = id;
-      binding["function"] = hexAddress(address);
-      types.push_back(std::move(binding));
-    }
-    for (const auto &row : codeEdits_)
-      if (row.contains("object_type")) {
-        if (!currentTypeImage(row.at("object_type"))) {
-          if (staleVariableTypes.empty())
-            staleVariableTypes.push_back(
-                "Saved object types belong to a different input image");
-          continue;
-        }
-        Json binding = row.at("object_type");
-        binding["function"] = hexAddress(address);
-        binding["address"] = row.at("addr");
-        binding["id"] =
-            "global:" +
-            std::to_string(parseAddress(row.at("addr").get<std::string>()));
-        binding["snapshot"] = "";
-        types.push_back(std::move(binding));
-      }
-    if (!types.empty())
-      engineOptions["variable_types"] = std::move(types);
-  }
+  const Json engineOptions =
+      sourceView && !recovery
+          ? namedViewEngineOptions(address, representation, options,
+                                   variableEdits, callTypes, stackFrame,
+                                   staleVariableTypes)
+          : options;
   const auto optionText = engineOptions.dump();
   (void)listing().functionAliases();
   const auto cacheKey = [&] {
-    const auto generation = listing().generation();
-    if (namedViewsRevision_ != revision_ ||
-        namedViewsListingGeneration_ != generation) {
-      forgetNamedViews();
-      namedViewsRevision_ = revision_;
-      namedViewsListingGeneration_ = generation;
-    }
+    syncNamedViews();
     return hexAddress(address) + ":" + representation + ":" +
-           std::to_string(revision_) + ":" + std::to_string(generation) + ":" +
-           optionText;
+           std::to_string(revision_) + ":" +
+           std::to_string(listing().generation()) + ":" + optionText;
   };
   const auto lookupKey = cacheKey();
-  for (auto it = namedViews_.begin(); it != namedViews_.end(); ++it)
-    if ((*it)->key == lookupKey) {
-      namedViews_.splice(namedViews_.begin(), namedViews_, it);
-      return namedViews_.front();
-    }
-  const auto sourceKey = hexAddress(address) + ":" + representation + ":" +
-                         std::to_string(listing().generation()) + ":" +
-                         optionText;
+  const auto sourceKey =
+      namedViewSourceKey(address, representation, optionText);
+  if (const auto cached = namedViewsByKey_.find(lookupKey);
+      cached != namedViewsByKey_.end()) {
+    namedViews_.splice(namedViews_.begin(), namedViews_, cached->second);
+    return namedViews_.front();
+  }
+  std::shared_ptr<const NamedView> reused;
+  if (const auto cached = namedViewsBySource_.find(sourceKey);
+      cached != namedViewsBySource_.end() &&
+      (!(*cached->second)->original.empty() ||
+       !(*cached->second)->enginePages.empty()))
+    reused = *cached->second;
   Json original;
-  for (const auto &cached : namedViews_)
-    if (cached->sourceKey == sourceKey && !cached->original.empty()) {
-      original = Json::parse(cached->original);
-      break;
-    }
+  if (reused && !reused->original.empty())
+    original = Json::parse(reused->original);
+  // A first visit to a function rendered ahead reads those pages.
+  const std::vector<std::string> renderedPages =
+      reused || recovery ? std::vector<std::string>()
+                         : renderedAheadPages(sourceKey);
+  // The engine's pages of the same source build the document again as they
+  // built it the first time.
+  const std::vector<std::string> *replay =
+      reused && reused->original.empty() ? &reused->enginePages
+      : !renderedPages.empty()           ? &renderedPages
+                                         : nullptr;
   // A hit answers from its finished document without pretending the mutable
   // Session still holds this function. Graph/IR requests prepare it normally.
-  if (original.is_null())
+  if (original.is_null() && !replay && !recovery)
     prepareFunction(address, representation);
   // Whole-program VM preparation can analyze(), invalidating the listing and
   // advancing the revision. Rebuild aliases and stamp the prepared context;
@@ -1194,29 +1272,69 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     // The whole function, from as many engine pages as it fills: the engine
     // emits it once and pages it from there.
     Json full = std::move(original);
-    auto backendRepresentation = representation;
+    if (full.is_null() && recovery) {
+      const char *report = nullptr;
+      const char *source = interpreter_recovery::function()(
+          session_, address, &*recoveryOptions, &report);
+      const bool hasSource = source != nullptr;
+      std::unique_ptr<const char, decltype(&neverd_free_string)> ownedReport(
+          report, neverd_free_string);
+      auto text = ownedString(source);
+      auto evidence = Json::parse(ownedString(ownedReport.release()));
+      if (!evidence.is_object())
+        throw Error("unavailable", "Interpreter recovery returned no report");
+      const bool available =
+          hasSource && !text.empty() && evidence.value("complete", false);
+      if (!available)
+        text.clear();
+      full = {{"schema_version", 1},
+              {"address", hexAddress(address)},
+              {"representation", representation},
+              {"dialect", "c"},
+              {"mapping_status", "unmapped_recovery_source"},
+              {"text", std::move(text)},
+              {"rows", Json::array()},
+              {"library_regions", Json::array()},
+              {"code_names", Json::array()},
+              {"source_names", Json::array()},
+              {"references", Json::array()},
+              {"offset", 0},
+              {"byte_offset", 0},
+              {"complete", true},
+              {"next_offset", nullptr},
+              {"source_available", available},
+              {"recovery_report", std::move(evidence)}};
+    }
+    auto backendRepresentation =
+        replay && reused ? reused->engineRepresentation : representation;
+    std::vector<std::string> enginePages;
     for (std::size_t next = 0;
          full.is_null() || !full.value("complete", false);) {
-      auto page = backendJson(
-          sourceView && extended && !engineOptions.empty()
-              ? extended(session_, address, backendRepresentation.c_str(), next,
-                         ::neverd::limits::worker::kEngineEnginePageLines,
-                         optionText.c_str())
-              : view(session_, address, backendRepresentation.c_str(), next,
-                     ::neverd::limits::worker::kEngineEnginePageLines),
-          true);
+      std::string text;
+      if (replay) {
+        if (enginePages.size() >= replay->size())
+          return nullptr;
+        text = (*replay)[enginePages.size()];
+      } else
+        text = engineViewPage(address, backendRepresentation, next, sourceView,
+                              engineOptions, optionText);
+      auto page = parsedBackendText(text);
       // Older page APIs offer HighC but not the automatic source dialect.
       // Keep the Pseudocode action useful, with the actual dialect reported.
-      if (next == 0 && options.empty() && representation == "source" &&
-          page.is_object() && !page.contains("text") &&
+      if (!replay && next == 0 && options.empty() &&
+          representation == "source" && page.is_object() &&
+          !page.contains("text") &&
           page.value("mapping_status", std::string()) ==
               "unsupported_representation") {
         backendRepresentation = "c";
-        page =
-            backendJson(view(session_, address, "c", next,
+        text =
+            backendText(view(session_, address, "c", next,
                              ::neverd::limits::worker::kEngineEnginePageLines),
                         true);
+        page = parsedBackendText(text);
       }
+      if (sourceView)
+        enginePages.push_back(std::move(text));
       if (!page.is_object() || !page.contains("text") ||
           !page["text"].is_string() || !page.contains("rows") ||
           !page["rows"].is_array() ||
@@ -1255,11 +1373,14 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     full["source_options"] = options;
     if (representation == "source" && backendRepresentation == "c")
       full["dialect"] = "c";
-    if (sourceView)
+    if (sourceView && !enginePages.empty()) {
+      document->enginePages = std::move(enginePages);
+      document->engineRepresentation = backendRepresentation;
+    } else if (sourceView)
       document->original = full.dump();
     for (const auto &reason : staleVariableTypes)
       full["stale_variable_types"].push_back(reason);
-    if (sourceView)
+    if (sourceView && !recovery)
       CodeEdits::spellIdentifierSymbols(full);
     // The resolver below runs other operations, so the decoration names
     // functions from a copy of the listing's display names.
@@ -1278,7 +1399,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
           displayNames.emplace(source.substr(begin, end - begin), *alias);
       }
     }
-    if (sourceView)
+    if (sourceView && !recovery)
       CodeEdits::decorate(
           full, codeEditRow(address), address, representation,
           backendJson(neverd_renames_json(session_)),
@@ -1383,7 +1504,11 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     const auto jsonBytes = namedViewJsonBytes(document->value);
     auto overhead =
         sizeof(NamedView) + 8 * sizeof(void *) + document->key.capacity() + 1 +
-        document->sourceKey.capacity() + 1 + document->original.capacity() + 1;
+        document->sourceKey.capacity() + 1 + document->original.capacity() + 1 +
+        document->engineRepresentation.capacity() + 1 +
+        document->enginePages.capacity() * sizeof(std::string);
+    for (const auto &page : document->enginePages)
+      overhead += page.capacity() + 1;
     for (const auto *bounds :
          {&document->rowBounds, &document->referenceBounds,
           &document->sourceNameBounds, &document->codeNameBounds}) {
@@ -1404,13 +1529,14 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
                 sizeof(std::size_t)) {
       document->bytes = jsonBytes + overhead +
                         document->lines.capacity() * sizeof(std::size_t);
-      for (auto it = namedViews_.begin(); it != namedViews_.end();) {
-        if ((*it)->sourceKey == sourceKey) {
-          namedViewBytes_ -= (*it)->bytes;
-          encodedPageBytes_ -= (*it)->pageBytes;
-          it = namedViews_.erase(it);
-        } else
-          ++it;
+      if (const auto same = namedViewsBySource_.find(sourceKey);
+          same != namedViewsBySource_.end()) {
+        const auto it = same->second;
+        unindexNamedView(it);
+        namedViewBytes_ -= (*it)->bytes;
+        encodedPageBytes_ -= (*it)->pageBytes;
+        releases_.retire(std::move(*it));
+        namedViews_.erase(it);
       }
       while (!namedViews_.empty() &&
              (namedViews_.size() >=
@@ -1418,8 +1544,10 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
               document->bytes >
                   ::neverd::limits::worker::kEngineMaxNamedViewCacheBytes -
                       namedViewBytes_)) {
+        unindexNamedView(std::prev(namedViews_.end()));
         namedViewBytes_ -= namedViews_.back()->bytes;
         encodedPageBytes_ -= namedViews_.back()->pageBytes;
+        releases_.retire(std::move(namedViews_.back()));
         namedViews_.pop_back();
       }
       // Keep completed documents ahead of optional encoded pages. Loading a
@@ -1429,6 +1557,8 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
               namedViewBytes_ - document->bytes)
         forgetEncodedPages();
       namedViews_.push_front(document);
+      namedViewsByKey_[document->key] = namedViews_.begin();
+      namedViewsBySource_[sourceKey] = namedViews_.begin();
       namedViewBytes_ += document->bytes;
     }
   }
@@ -1472,6 +1602,7 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
   Json page = Json::object();
   for (const auto &[field, value] : namedView_.items())
     if (field != "text" && field != "rows" &&
+        (field != "recovery_report" || offset == 0) &&
         !((field == "source_names" || field == "code_names" ||
            field == "references") &&
           value.is_array()))
@@ -1566,6 +1697,7 @@ void Engine::prepareFunction(std::uint64_t address,
   // Never leave its old address marked prepared after the call fails.
   preparedFunction_.reset();
   textKey_.clear();
+  const auto prepareStart = std::chrono::steady_clock::now();
   // Preparation shares the decompiler's entry/handler checks but emits no
   // discarded PlainC text before the requested source, IR or CFG view.
   using PrepareFunction = int (*)(neverd_session_t, neverd_va_t);
@@ -1595,6 +1727,10 @@ void Engine::prepareFunction(std::uint64_t address,
     (void)ownedString(neverd_decompile(session_, address));
   }
   preparedFunction_ = address;
+  if (!renderingAhead_) {
+    requestPrepared_ = address;
+    requestPrepareTime_ = std::chrono::steady_clock::now() - prepareStart;
+  }
 }
 Listing &Engine::newListing() {
   listing_ = std::make_unique<Listing>(session_);
@@ -1622,6 +1758,9 @@ Listing &Engine::listing() {
   return *listing_;
 }
 bool Engine::hasIdleWork() const {
+  if ((summaryWorkPending() || prefillPending() || renderAheadPending()) &&
+      neverd_session_is_loaded(session_))
+    return true;
   if (!listing_ || !neverd_session_is_loaded(session_))
     return false;
   return listing_->cachePending() ||
@@ -1632,16 +1771,193 @@ bool Engine::hasIdleWork() const {
 bool Engine::idleStep() {
   if (!hasIdleWork())
     return false;
-  if (listing_->cachePending()) {
+  if (listing_ && listing_->cachePending()) {
     listing_->flushCacheOne();
     return true;
   }
   // The listing and its reference index come first; preparing functions
   // only shortens later decompiles.
-  if (listing_->hasIdleWork())
-    return listing_->idleStep();
-  warmStep();
+  if (listing_ && backgroundAnalysis_) {
+    if (listing_->hasIdleWork())
+      return listing_->idleStep();
+    if (warmState_ == WarmState::Pending || warmState_ == WarmState::Running) {
+      warmStep();
+      return true;
+    }
+  }
+  return summaryStep();
+}
+bool Engine::summaryWorkPending() const {
+  return summaryState_ == SummaryState::Pending ||
+         summaryState_ == SummaryState::Preparing ||
+         summaryState_ == SummaryState::Solving;
+}
+void Engine::restartSummaries() {
+  // The engine may have dropped them with the analysis a change drops; a
+  // run of the job finds kept ones at once.
+  summaryState_ = summaryJob_ ? SummaryState::Pending : SummaryState::Off;
+  summaryCursor_ = 0;
+  summaryDiscovered_ = false;
+  summaryError_.clear();
+  prefillState_ = PrefillState::Off;
+  prefillCursor_ = 0;
+  prefillPrepared_ = 0;
+}
+bool Engine::prefillPending() const {
+  return summaryState_ == SummaryState::Ready &&
+         prefillState_ == PrefillState::Pending;
+}
+void Engine::prefillStep() {
+  using PrefillFunction = const char *(*)(neverd_session_t, int, int);
+  static const auto prefill =
+      engineSymbol<PrefillFunction>("neverd_prefill_callees_json");
+  if (!prefill) {
+    prefillState_ = PrefillState::Unavailable;
+    return;
+  }
+  // A step reads one batch of callees together, as a decompile's read-ahead
+  // does, and stays as short as one.
+  constexpr int PrefillStepCallees = 32;
+  const char *raw =
+      prefill(session_, static_cast<int>(prefillCursor_), PrefillStepCallees);
+  if (!raw) {
+    prefillState_ = PrefillState::Unavailable;
+    return;
+  }
+  const auto page = backendJson(raw);
+  if (!page.value("available", false)) {
+    prefillState_ = PrefillState::Unavailable;
+    return;
+  }
+  prefillPrepared_ += page.value("prepared", std::uint64_t{0});
+  const auto next = page.value("next", Json());
+  if (next.is_number_unsigned() || next.is_number_integer())
+    prefillCursor_ = next.get<std::uint64_t>();
+  else
+    prefillState_ = PrefillState::Done;
+}
+bool Engine::summaryStep() {
+  if (prefillPending()) {
+    try {
+      prefillStep();
+    } catch (const std::exception &) {
+      // Reading ahead only shortens later decompiles; they read the rest.
+      prefillState_ = PrefillState::Unavailable;
+    }
+    return true;
+  }
+  if (renderAheadPending())
+    return renderAheadStep();
+  if (!summaryWorkPending())
+    return true;
+  // A step that fails ends the job with its error rather than retrying it
+  // at every idle moment.
+  try {
+    return summaryJobStep();
+  } catch (const std::exception &failure) {
+    summaryState_ = SummaryState::Unavailable;
+    summaryError_ = failure.what();
+  }
   return true;
+}
+bool Engine::summaryJobStep() {
+  using WarmFunction = const char *(*)(neverd_session_t, neverd_va_t, int);
+  static const auto warm =
+      engineSymbol<WarmFunction>("neverd_warm_functions_json");
+  if (!warm) {
+    summaryState_ = SummaryState::Unavailable;
+    return true;
+  }
+  if (summaryState_ == SummaryState::Solving) {
+    prepareCallSummaries();
+    return true;
+  }
+  // Summaries describe the functions the session lists. Discovery adds the
+  // functions the detector finds, which retires summaries solved before:
+  // the listing discovers them in the background, and the first address no
+  // listed function starts at (functionIndex) does at once, as a replica's
+  // decompile of a function the owner discovered does. Discover them first,
+  // a step at a time, so the solve is of the inventory the replica keeps;
+  // discovery is idempotent, and those later find nothing new.
+  if (!summaryDiscovered_) {
+    using DiscoverFunction = int (*)(neverd_session_t);
+    static const auto step = engineSymbol<DiscoverFunction>(
+        "neverd_session_discover_functions_step");
+    static const auto discover =
+        engineSymbol<DiscoverFunction>("neverd_session_discover_functions");
+    const int status = step       ? step(session_)
+                       : discover ? discover(session_)
+                                  : 1;
+    // Pending: the next idle step polls again. A failure leaves the
+    // listing's discovery to report it; the summaries are still solved.
+    if (status == 0)
+      return false;
+    summaryDiscovered_ = true;
+  }
+  // The solve reads each function's facts, which a page at a time keeps
+  // each step as short as warming's.
+  summaryState_ = SummaryState::Preparing;
+  constexpr int SummaryStepFunctions = 4;
+  const char *raw = warm(session_, summaryCursor_, SummaryStepFunctions);
+  if (!raw) {
+    summaryState_ = SummaryState::Unavailable;
+    summaryError_ = error();
+    return true;
+  }
+  const auto page = backendJson(raw);
+  // The engine says at the first page whether it solves this image's
+  // summaries; preparing the rest would serve nothing.
+  if (!page.value("available", false) || !page.value("call_summaries", false)) {
+    summaryState_ = SummaryState::Unavailable;
+    return true;
+  }
+  const auto next = page.value("next_entry", Json());
+  if (next.is_string())
+    summaryCursor_ = parseAddress(next.get<std::string>());
+  else
+    summaryState_ = SummaryState::Solving;
+  return true;
+}
+
+Json Engine::prepareCallSummaries() {
+  using PrepareFunction = const char *(*)(neverd_session_t);
+  static const auto prepare =
+      engineSymbol<PrepareFunction>("neverd_prepare_call_summaries_json");
+  if (!prepare)
+    throw Error("unsupported", "This engine cannot prepare call summaries");
+  auto result = backendJson(prepare(session_), true);
+  if (result.value("ready", false)) {
+    summaryState_ = SummaryState::Ready;
+    forgetDecompiledViews();
+    // The replica's own job reads ahead the callees its decompiles read; an
+    // explicit request only solves.
+    if (summaryJob_ && prefillState_ == PrefillState::Off)
+      prefillState_ = PrefillState::Pending;
+  } else {
+    summaryState_ = SummaryState::Unavailable;
+  }
+  return result;
+}
+void Engine::forgetDecompiledViews() {
+  forgetNamedViews();
+  graphs_.clear();
+  textKey_.clear();
+  textCache_.clear();
+  textLines_.clear();
+}
+Json Engine::summaryJson() const {
+  static constexpr const char *Names[] = {"off",     "pending", "preparing",
+                                          "solving", "ready",   "unavailable"};
+  Json state = {{"state", Names[static_cast<int>(summaryState_)]}};
+  if (!summaryError_.empty())
+    state["error"] = summaryError_;
+  if (prefillState_ != PrefillState::Off) {
+    static constexpr const char *Prefill[] = {"off", "pending", "done",
+                                              "unavailable"};
+    state["prefill"] = {{"state", Prefill[static_cast<int>(prefillState_)]},
+                        {"prepared", prefillPrepared_}};
+  }
+  return state;
 }
 void Engine::restartWarming() {
   warmState_ = warmFunctions_ ? WarmState::Pending : WarmState::Off;
@@ -1692,13 +2008,22 @@ Json Engine::warmJson() const {
 }
 Json Engine::backgroundState() const {
   if (!listing_)
-    return nullptr;
+    return summaryState_ == SummaryState::Off
+               ? Json(nullptr)
+               : Json{{"call_summaries", summaryJson()}};
   auto state = listing_->indexState();
   state["warm"] = warmJson();
+  if (summaryState_ != SummaryState::Off)
+    state["call_summaries"] = summaryJson();
+  if (renderAheadState_ != RenderAheadState::Off)
+    state["render_ahead"] = renderAheadJson();
   return state;
 }
 Json Engine::backendJson(const char *owned, bool checkError) const {
-  const auto text = ownedString(owned);
+  return parsedBackendText(backendText(owned, checkError));
+}
+std::string Engine::backendText(const char *owned, bool checkError) const {
+  auto text = ownedString(owned);
   if (checkError) {
     auto diagnostic = error();
     if (!diagnostic.empty())
@@ -1710,6 +2035,9 @@ Json Engine::backendJson(const char *owned, bool checkError) const {
   if (text.empty())
     throw Error("engine_error",
                 error().empty() ? "Engine returned no result" : error());
+  return text;
+}
+Json Engine::parsedBackendText(const std::string &text) const {
   try {
     auto value = transport::parseBackendJson(text);
     canonicalizeAddresses(value);
@@ -2195,7 +2523,16 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
         restoredDebugInputs_.push_back(
             {{"path", path}, {"stamp", signatureStamp(utf8Path(path))}});
       }
+  // A replica that serves the workbench's decompiles solves the image's
+  // call summaries in idle time.  That is this client's request, not the
+  // owner's state, which later name updates compare.
   restoredSnapshot_ = snapshot;
+  restoredSnapshot_.erase("call_summaries");
+  restoredSnapshot_.erase("render_ahead");
+  summaryJob_ = snapshot.value("call_summaries", false);
+  renderAheadRequested_ = snapshot.value("render_ahead", false);
+  restartSummaries();
+  restartRenderAhead();
   return metadata();
 }
 
@@ -2345,14 +2682,18 @@ Json Engine::execute(const std::string &operation, const Json &p) {
 
 Engine::Reply Engine::executeResponse(const std::string &operation,
                                       const Json &p) {
-  // A change to the project can drop the engine's prepared functions.
-  const auto before = revision_;
+  // A change to the project can drop the engine's prepared functions; a
+  // change of local display names alone drops nothing it prepared.
+  const auto before = revision_ - localNameRevisions_;
   struct RestartOnChange {
     Engine &engine;
     std::uint64_t before;
     ~RestartOnChange() {
-      if (engine.revision_ != before)
+      engine.lastRequest_ = std::chrono::steady_clock::now();
+      if (engine.revision_ - engine.localNameRevisions_ != before) {
         engine.restartWarming();
+        engine.restartSummaries();
+      }
     }
   } restart{*this, before};
   Reply reply;
@@ -2807,6 +3148,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     // Preparing functions is the last step of idle-time analysis.
     warmFunctions_ = backgroundAnalysis_ && p.value("warm", false);
     restartWarming();
+    // A replica's restore asks for the image's call summaries afterwards.
+    summaryJob_ = false;
+    restartSummaries();
     dirty_ = false;
     sectionsDirty_ = false;
     analyzed_ = false;
@@ -3380,6 +3724,13 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
   if (operation == "analyze") {
     analyze();
     return metadata();
+  }
+  if (operation == "prepare_call_summaries") {
+    if (!p.is_object() || !p.empty())
+      throw Error("invalid_request",
+                  "prepare_call_summaries accepts no parameters");
+    requireLoaded();
+    return prepareCallSummaries();
   }
   if (operation == "functions" || operation == "resolve" ||
       operation == "disasm")

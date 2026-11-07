@@ -14,7 +14,6 @@
 #define NEVERD_LOADER_POINTERRELOCATION_H
 
 #include "neverd/loader/BinaryImage.h"
-#include "neverd/object/SectionNames.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
@@ -22,19 +21,11 @@
 namespace neverd {
 
 /// Whether storage is writable after loader relocation processing completes.
-/// ELF `.data.rel.ro` and equivalent container sections carry a writable file
-/// flag only for relocation, then become immutable at runtime; downstream
-/// mutation analysis must use this semantic view rather than raw SHF_WRITE /
-/// section flags.
+/// Mapping permissions and normalized loader protection own this decision;
+/// a section name or a finer section flag cannot protect writable storage.
 inline bool isRuntimeWritableAddress(const BinaryImage &Img, va_t Address) {
-  if (const Section *Sec = Img.getSectionFor(Address))
-    return Sec->isWritable() &&
-           !section_names::isReadOnlyAfterRelocSectionName(Sec->Name) &&
-           !section_names::isReadOnlyAfterRelocSectionName(Sec->SegmentName);
-  if (const Segment *Seg = Img.getSegmentFor(Address))
-    return Seg->isWritable();
   // Unknown ownership is not evidence of immutability.
-  return true;
+  return !Img.readOnlyAfterRelocations(Address, 1);
 }
 
 /// One full-width absolute pointer relocation: the slot that holds the
@@ -99,13 +90,22 @@ struct PointerRelocationAddressClass {
 
 /// Classify \p Addr for recording a relocation: whether it is mapped,
 /// readable, writable after relocation and code, and the section (or, in no
-/// section, the segment) that owns it.
+/// section, the segment; in no segment, the image's own headers) that owns
+/// it.
 inline PointerRelocationAddressClass
 classifyPointerRelocationAddress(const BinaryImage &Img, va_t Addr) {
   PointerRelocationAddressClass C;
   const Segment *Seg = Img.getSegmentFor(Addr);
-  if (!Seg)
+  if (!Seg) {
+    // The image's own headers are its read-only data whether or not the
+    // loader maps them (BinaryImage::imageBaseOffset).
+    if (Img.imageBaseOffset(Addr)) {
+      C.Mapped = C.Readable = C.HasOwnerRange = true;
+      C.OwnerBegin = Img.Base;
+      C.OwnerEnd = Img.Base + Img.PEHeaderBytes;
+    }
     return C;
+  }
   C.Mapped = true;
   if (const Section *Sec = Img.getSectionFor(Addr)) {
     C.Readable = Sec->isReadable();
@@ -122,7 +122,7 @@ classifyPointerRelocationAddress(const BinaryImage &Img, va_t Addr) {
     }
   } else {
     C.Readable = Seg->isReadable();
-    C.Writable = Seg->isWritable();
+    C.Writable = isRuntimeWritableAddress(Img, Addr);
     // Keep absolute-relocation provenance aligned with BinaryImage's
     // format-aware code classifier. In particular, a mapped header or
     // alignment gap is relocatable data identity when section metadata

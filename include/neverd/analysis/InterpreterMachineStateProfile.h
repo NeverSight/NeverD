@@ -27,11 +27,23 @@ enum class InterpreterMachineStateProfile : uint8_t {
   /// every POPFQ image must keep TF, AC and IOPL zero. IF is writable and is
   /// included in the mandatory final system-state observation. Rejection of
   /// a nonzero TF/AC/IOPL image restricts this profile, not hardware semantics.
-  /// This native-proof profile supplies no kernel API, IRQL, resource,
+  /// This profile alone supplies no kernel API, IRQL, resource,
   /// exception-dispatch or source-ABI evidence. User machine-source projection
   /// continues to reject it rather than applying CPL=3 semantics.
   KernelX64NoFaultV1,
+  /// The supervisor V1 domain with CPUID.07H.00H:EBX.SMAP[20]=1 and a live
+  /// AC bit. STAC/CLAC and POPFQ may change AC; TF and IOPL remain zero.
+  /// Successful ordinary memory accesses are still an explicit precondition
+  /// for every step, including the page-access permissions selected by AC.
+  /// This does not model page tables, SMAP faults or user-mode execution.
+  KernelX64SmapNoFaultV2,
 };
+
+constexpr bool
+isKernelX64MachineStateProfile(InterpreterMachineStateProfile Profile) {
+  return Profile == InterpreterMachineStateProfile::KernelX64NoFaultV1 ||
+         Profile == InterpreterMachineStateProfile::KernelX64SmapNoFaultV2;
+}
 
 /// A provider-owned projection whose meaning requires an explicit environment.
 /// It never promotes the original architectural undefined-output sidecar.
@@ -39,6 +51,30 @@ enum class InterpreterProfileProjection : uint8_t {
   None,
   CetDisabledReadShadowStackV1,
   CetDisabledIncrementShadowStackTrapV1,
+  /// Exact raw LFS/LGS bytes retained for the V6 descriptor-state owner.
+  /// No ordinary LowIR or undefined-output proof is supplied by this receipt.
+  X64FarPointerLoadV1,
+  /// Canonical UINTR bytes require the explicit V8 UIF/monitor/return owner.
+  X64UserInterruptV1,
+  X64FredReturnV1,
+  /// VMRUN requires the explicit native SVM state/environment contract.
+  X64SvmRunV1,
+  /// Raw BND bytes require the explicit V11 bounds/configuration owner.
+  X64MpxV1,
+  /// Raw VMCALL/VMMCALL require an explicitly selected hypervisor ABI.
+  X64HypercallV1,
+  /// SNP/VMGEXIT require the explicit native RMP or SEV-ES environment.
+  X64SnpV1,
+  /// HLE requires a native memory/publication boundary outside external TSX.
+  X64HleV1,
+  /// Raw RSM/ENCLU bytes require their profile's exact encoding and native
+  /// environment admission. Prefixed forms retain an unsupported boundary.
+  X64SmmReturnV1,
+  X64SgxTransferV1,
+  /// Selector MOV/POP requires the explicit descriptor and stack-state owner.
+  X64SegmentMoveV1,
+  /// Raw MOV-DR requires the paged debug bank and fault owner.
+  X64DebugRegisterV1,
 };
 
 } // namespace neverd::analysis

@@ -112,7 +112,7 @@ void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
     // every reaching path. Existing table identity/quarantine guards still own
     // dispatch classification; this frame condition supplies no callee ABI.
     if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall || Rec.IsRet ||
-        Rec.IsCond || Rec.RejectedScalarBranch ||
+        Rec.IsCond || Rec.RejectedScalarBranch || Rec.RejectedComputedTargets ||
         !Rec.JumpTableTargets.empty() || (NeedsFrameGuard && !Restored(Addr)) ||
         EverPublishedJumpTableBranches.count(Addr) ||
         LostValidatedJumpTableBranches.count(Addr) ||

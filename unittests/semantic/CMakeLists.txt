@@ -898,6 +898,35 @@ if(TARGET neverd)
   add_dependencies(NeverDSemanticTests neverd)
 endif()
 
+# Focused full-pipeline checks for changes to architectural DIV/IDIV state.
+# These sources also remain in the aggregate semantic CI suite above.
+add_neverd_unittest(NeverDX86DivisionRoundTripTests
+  x86_32/X86_32_PartialRegMulDivRTTests.cpp
+  x86_64/X64_Div128RTTests.cpp
+  x86_64/X64_DivMulEdgeRTTests.cpp
+  x86_64/X64_PartialRegMulDivRTTests.cpp
+)
+target_compile_definitions(NeverDX86DivisionRoundTripTests PRIVATE
+  NEVERD_BINARY="$<TARGET_FILE:neverd>"
+  TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+target_include_directories(NeverDX86DivisionRoundTripTests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/include
+  ${LLVM_INCLUDE_DIRS}
+  ${CMAKE_SOURCE_DIR}/third_party/unicorn/include
+)
+target_link_libraries(NeverDX86DivisionRoundTripTests PRIVATE
+  unicorn
+  neverd_shared
+  LLVMMC LLVMMCParser LLVMObject
+  LLVMX86AsmParser LLVMX86Desc LLVMX86Info
+  LLVMAArch64AsmParser LLVMAArch64Desc LLVMAArch64Info
+  LLVMARMAsmParser LLVMARMDesc LLVMARMInfo
+  LLVMSupport
+)
+add_dependencies(NeverDX86DivisionRoundTripTests neverd)
+
 # Local fast path for the linked ARM/Thumb rewrite regression. The same TU is
 # kept in NeverDSemanticTests so the aggregate semantic CI suite owns it.
 add_neverd_unittest(NeverDARM32InterworkingTests
@@ -1519,6 +1548,7 @@ target_link_libraries(NeverDSemanticFixtureTests PRIVATE
 set(_neverd_semantic_fixture_targets
     NeverDSemanticFixtureTests
     NeverDSemanticTests
+    NeverDX86DivisionRoundTripTests
     NeverDComputedGotoTests
     NeverDSwitchXformTests
     NeverDIndCallXformTests

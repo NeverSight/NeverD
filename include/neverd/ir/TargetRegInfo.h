@@ -152,6 +152,10 @@ struct TargetRegInfo {
   /// Set by getTargetRegInfo() alongside SubRegs (not in the const table).
   uint16_t MinInsnAlign = 1;
 
+  /// AArch64's potential platform register x18, zero elsewhere. Whether the
+  /// ABI reserves it is decided by isPlatformRegister(), not the ISA alone.
+  uint64_t PlatformRegister = 0;
+
   /// The lifter models a floating-point return value in the integer return
   /// register (ARM/AArch64: V0/D0 are not the tracked variable), rather than
   /// in FPReturnReg (x86 returns FP in XMM0).  Set by getTargetRegInfo().
@@ -263,6 +267,10 @@ struct TargetRegInfo {
   bool isLinkRegister(uint64_t RegOff) const {
     return LinkRegister != 0 && RegOff == LinkRegister;
   }
+  bool isPlatformRegister(uint64_t RegOff, BinaryFormat Format) const {
+    return PlatformRegister != 0 && RegOff == PlatformRegister &&
+           (Format == BinaryFormat::MachO || Format == BinaryFormat::COFF);
+  }
 
   bool isFlag(uint64_t RegOff, uint16_t Size) const {
     return Size == 1 && RegOff >= FlagRangeStart && RegOff <= FlagRangeEnd;
@@ -307,8 +315,9 @@ struct TargetRegInfo {
                                    BinaryFormat Format) const;
 
   /// Every register byte range preserved by the platform calling convention.
-  /// Includes the stack/frame pointers, partially preserved vector banks, and
-  /// Win64's additional nonvolatile GPR/SIMD registers.
+  /// Includes the frame pointer, partially preserved vector banks, and
+  /// Win64's additional nonvolatile GPR/SIMD registers. The stack pointer is
+  /// excluded on i386, where a callee may pop incoming arguments.
   std::vector<TargetRegisterRange>
   callPreservedRanges(BinaryFormat Format) const;
 

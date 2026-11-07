@@ -273,7 +273,25 @@ ProgramFeatures computeFeatures(const Program &P,
       if (!F.hasBody())
         continue;
 
-      StableHash Bytes, Shape, Mnemonics;
+      if (F.BlockCount == 1 && !F.EdgeCount && !F.has(TraitThunk)) {
+        const auto Instructions = P.instructions(P.blocks(F).front());
+        if (Instructions.size() > limits::diff::kMinTailPreludeContribution &&
+            Instructions.back().Flow == InstructionFlow::Jump &&
+            Instructions.back().Callee != NoIndex &&
+            Instructions.back().Callee != Index &&
+            llvm::all_of(Instructions.drop_back(), [](const Instruction &I) {
+              return I.Flow == InstructionFlow::None && I.Callee == NoIndex &&
+                     !I.UnresolvedCallee;
+            }))
+          Out.TailCallee = Instructions.back().Callee;
+      }
+
+      StableHash Bytes, Shape, Mnemonics, BodyWithoutPadding, BodyWithPadding,
+          EntryBody;
+      uint32_t BodyInstructions = 0, EntryInstructions = 0;
+      bool EntryCalls = false;
+      const Block *Entry =
+          F.EntryBlock == NoIndex ? nullptr : &P.blocks(F)[F.EntryBlock];
       uint64_t Prime = 1;
       Skeletons.clear();
       for (const Block &B : P.blocks(F))
@@ -282,6 +300,20 @@ ProgramFeatures computeFeatures(const Program &P,
             return;
           Bytes.add(P.bytes(I));
           Shape.add(I.Shape);
+          BodyWithPadding.add(I.AddressIndependentShape);
+          const auto &Name = P.Mnemonics[I.Mnemonic];
+          const bool Landing = Entry && I.Address == Entry->Address &&
+                               (Name == "endbr32" || Name == "endbr64");
+          if (I.Flow != InstructionFlow::None || (Name != "nop" && !Landing)) {
+            BodyWithoutPadding.add(I.AddressIndependentShape);
+            ++BodyInstructions;
+            if (&B == Entry) {
+              EntryBody.add(I.AddressIndependentShape);
+              ++EntryInstructions;
+              EntryCalls |= I.Flow == InstructionFlow::Call ||
+                            I.Flow == InstructionFlow::IndirectCall;
+            }
+          }
           const uint64_t Mnemonic = R.MnemonicKeys[I.Mnemonic];
           Mnemonics.add(Mnemonic);
           Prime *= oddFactor(Mnemonic);
@@ -293,6 +325,15 @@ ProgramFeatures computeFeatures(const Program &P,
               Out.AddressSites.push_back(
                   {P.functionAt(Address.Key).value_or(NoIndex),
                    Out.Instructions, Address.Operand});
+            else
+              Out.DataSites.push_back({Address.Key, Out.Instructions,
+                                       Address.Operand, Address.Kind,
+                                       Address.Coordinate});
+          if (I.HasUnresolvedData &&
+              !llvm::any_of(P.addressReferences(I), [](const auto &Address) {
+                return Address.Kind == ReferenceKind::UnresolvedData;
+              }))
+            Out.DataSitesComplete = false;
           if (I.Callee != NoIndex)
             Out.AddressSites.push_back({I.Callee, Out.Instructions, NoIndex});
           Out.UnresolvedCallee |= I.UnresolvedCallee;
@@ -307,14 +348,28 @@ ProgramFeatures computeFeatures(const Program &P,
         Keys.push_back((uint64_t(E.From) << 36) | (uint64_t(E.To) << 4) |
                        uint64_t(E.Kind));
       llvm::sort(Keys);
-      for (uint64_t K : Keys)
+      StableHash ReferenceLayout(BodyWithPadding.value());
+      ReferenceLayout.add(F.BlockCount).add(F.EdgeCount);
+      for (const Block &B : P.blocks(F))
+        ReferenceLayout.add(B.InstructionCount);
+      for (uint64_t K : Keys) {
         Shape.add(K);
+        ReferenceLayout.add(K);
+      }
       Shape.add(F.EntryBlock);
+      Out.ReferenceLayout = ReferenceLayout.add(F.EntryBlock).value();
 
       Out.Blocks = F.BlockCount;
       Out.Edges = F.EdgeCount;
       Out.Bytes = Bytes.value();
       Out.Shape = Shape.value();
+      if (BodyInstructions >= limits::diff::kMinShapeInstructions)
+        Out.BodyWithoutPadding = BodyWithoutPadding.value();
+      Out.BodyWithPadding = BodyWithPadding.value();
+      if (F.BlockCount > 1 && !EntryCalls &&
+          EntryInstructions >= limits::diff::kMinBlockHashInstructions &&
+          P.instructions(*Entry).back().Flow == InstructionFlow::Branch)
+        Out.EntryBody = EntryBody.value();
       Out.Mnemonics = Mnemonics.value();
       Out.Prime = Prime;
 
@@ -336,6 +391,11 @@ ProgramFeatures computeFeatures(const Program &P,
 
       StableHash Strings, Constants;
       unsigned StringCount = 0, ConstantCount = 0;
+      Keys.clear();
+      for (const auto &Site : Out.DataSites)
+        if (Site.Kind == ReferenceKind::UnresolvedData)
+          Keys.push_back(Site.Key);
+      llvm::sort(Keys);
       for (const Reference &Ref : P.references(F)) {
         if (Control.stop())
           return;
@@ -349,6 +409,7 @@ ProgramFeatures computeFeatures(const Program &P,
           ++Out.FunctionReferences;
         } else if (Ref.Kind == ReferenceKind::UnresolvedData) {
           Out.UnresolvedData = true;
+          Out.DataSitesComplete &= llvm::binary_search(Keys, Ref.Key);
         }
       }
       if (StringCount)
@@ -396,6 +457,7 @@ ProgramFeatures computeFeatures(const Program &P,
     return R;
   // Features that look at neighbors, once every function has its own.
   std::vector<uint32_t> Roots, Leaves;
+  std::vector<std::pair<uint32_t, uint32_t>> TailCalls;
   for (uint32_t FI = 0; FI < N; ++FI) {
     if (Control.stop())
       return R;
@@ -403,7 +465,10 @@ ProgramFeatures computeFeatures(const Program &P,
       Roots.push_back(FI);
     if (R.Callees.of(FI).empty())
       Leaves.push_back(FI);
+    if (R.Functions[FI].TailCallee != NoIndex)
+      TailCalls.emplace_back(R.Functions[FI].TailCallee, FI);
   }
+  R.TailCallers = buildAdjacency(N, std::move(TailCalls), true);
   const std::vector<uint32_t> Top = levels(
       N, Roots,
       [&](uint32_t Node, auto Visit) {

@@ -57,16 +57,22 @@ struct RegistrationTryLevelStore {
 
 /// A checked realigned local frame, distinct from the entry's EBP frame.
 /// The Windows C++ runtime establishes EBP just beyond the registration node.
-/// BaseOffset expresses ESI in that runtime coordinate, not in entry EBP.
+/// BaseOffset expresses the established local base in that runtime coordinate,
+/// not in entry EBP. ESI remains fixed in LLVM's layout. MSVC's ESP layout
+/// restores this offset between calls; every actual access still needs replay.
 struct RegistrationRealignedFrame {
-  /// Architectural x86 register encoding; the checked layout currently uses
-  /// ESI.
+  /// Architectural x86 register encoding: ESI for LLVM, ESP for MSVC.
   uint8_t BaseRegister = 6;
+  /// ESI's defining COPY, or the AND that establishes MSVC's aligned ESP root.
   va_t DefinitionVA = 0;
   uint32_t Alignment = 0;
+  /// LLVM's SUB allocation, or MSVC's complete depth below the aligned root.
   uint32_t AllocationBytes = 0;
   int32_t BaseOffset = 0;
+  /// LLVM saves entry EBP in the local frame. MSVC retains it in EBP and its
+  /// separate entry frame; this field must be zero for the ESP layout.
   int32_t SavedParentFrameOffset = 0;
+  bool hasSavedParentFrame() const { return BaseRegister == 6; }
   bool operator==(const RegistrationRealignedFrame &) const = default;
 };
 

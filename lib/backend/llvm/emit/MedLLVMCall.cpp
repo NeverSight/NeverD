@@ -18,6 +18,7 @@
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMFloatingCall.h"
 #include "neverd/backend/llvm/LLVMName.h"
+#include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
@@ -149,15 +150,26 @@ std::optional<LLVMArgumentBinding> bindResolvedLLVMArguments(
       Floating > Count - Integers)
     return std::nullopt;
   const auto [WantedIntegers, WantedFloating] = *Banks;
-  if (WantedIntegers > Integers || WantedFloating > Floating)
+  const bool TakesStackValues = WantedIntegers + WantedFloating < Fixed;
+  if ((WantedIntegers > Integers && !TakesStackValues) ||
+      WantedFloating > Floating)
     return std::nullopt;
   LLVMArgumentBinding Binding;
   auto Append = [&](unsigned I) {
     Binding.Values.push_back(Values[I]);
     Binding.SourceIndices.push_back(I);
   };
-  for (unsigned I = 0; I < WantedIntegers; ++I)
-    Append(I);
+  for (unsigned I = 0; I < WantedIntegers; ++I) {
+    if (I < Integers) {
+      Append(I);
+      continue;
+    }
+    if (!Binding.FirstUnsetInteger)
+      Binding.FirstUnsetInteger = I;
+    Binding.Values.push_back(llvm::Constant::getNullValue(
+        Target.getFunctionType()->getParamType(I)));
+    Binding.SourceIndices.push_back(-1);
+  }
   for (unsigned I = 0; I < WantedFloating; ++I)
     Append(Integers + I);
 
@@ -338,6 +350,7 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
     llvm::IRBuilder<> Builder(Call);
     std::vector<int> Indices;
     std::vector<llvm::Value *> Values;
+    std::optional<unsigned> FirstUnset;
     for (unsigned I = 0; I < Call->arg_size(); ++I) {
       Indices.push_back(I);
       Values.push_back(Call->getArgOperand(I));
@@ -353,6 +366,7 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
         return Refuse("lacks recovered argument bank or stack values");
       Indices = std::move(Bound->SourceIndices);
       Values = std::move(Bound->Values);
+      FirstUnset = Bound->FirstUnsetInteger;
     }
     if (Values.size() < Fixed)
       return Refuse("lacks recovered arguments");
@@ -402,6 +416,8 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
     if (CallerBanks && TargetBanks && !Target->isVarArg())
       setLLVMArgumentBanks(*Replacement, TargetBanks->first,
                            TargetBanks->second);
+    if (FirstUnset)
+      setLLVMFirstUnsetInteger(*Replacement, *FirstUnset);
     if (Replacement->getType() != Call->getType())
       for (unsigned Kind :
            {llvm::LLVMContext::MD_range, llvm::LLVMContext::MD_nonnull,
@@ -428,15 +444,39 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
 bool validateResolvedLLVMCallSignatures(llvm::Module &Module,
                                         bool AnalystSourceProjection) {
   const auto &Layout = Module.getDataLayout();
+  // Binding passed zero for integer positions the call does not set. Now that
+  // the body is known, it must not read them. A callee defined in another
+  // shard answers when the linked module is validated.
+  auto ReadsUnsetInteger = [](const llvm::CallBase &Call,
+                              const llvm::Function &Target) {
+    const auto First = getLLVMFirstUnsetInteger(Call);
+    const auto Banks = getLLVMArgumentBanks(Target);
+    if (!First || Target.isDeclaration())
+      return false;
+    if (!Banks)
+      return true;
+    for (unsigned I = *First; I < Banks->first; ++I)
+      if (!Target.getArg(I)->use_empty())
+        return true;
+    return false;
+  };
   for (auto &Function : Module)
     for (auto &Block : Function)
       for (auto &Instruction : Block)
         if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
           if (auto *Target = llvm::dyn_cast_or_null<llvm::Function>(
                   constantCallIdentity(Call->getCalledOperand(), Layout,
-                                       Layout.getPointerSizeInBits()));
-              Target && (Call->getFunctionType() != Target->getFunctionType() ||
-                         Call->getCallingConv() != Target->getCallingConv())) {
+                                       Layout.getPointerSizeInBits()))) {
+            if (ReadsUnsetInteger(*Call, *Target)) {
+              syncError() << "med_llvm_emitter: resolved call in "
+                          << Function.getName()
+                          << " does not set a register argument "
+                          << Target->getName() << " reads\n";
+              return false;
+            }
+            if (Call->getFunctionType() == Target->getFunctionType() &&
+                Call->getCallingConv() == Target->getCallingConv())
+              continue;
             if (AnalystSourceProjection &&
                 Call->getMetadata("neverd.source.analyst-call"))
               continue;
@@ -457,8 +497,9 @@ void MedLLVMEmitter::defineCallClobbers(const MedOp &Op,
   if (!CurMedFunc || Op.CallSiteId == 0 || Op.PreservesCallerSaved)
     return;
 
-  for (const MedCallClobber &Clobber : CurMedFunc->CallClobbers) {
-    if (Clobber.CallSiteId != Op.CallSiteId || Clobber.Value.Size == 0)
+  for (const MedCallClobber *Record : clobbersAtCall(Op.CallSiteId)) {
+    const MedCallClobber &Clobber = *Record;
+    if (Clobber.Value.Size == 0)
       continue;
     auto *ClobberTy =
         llvm::cast<llvm::IntegerType>(sizeToType(Clobber.Value.Size));
@@ -555,6 +596,12 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   if (CI)
     for (const MedVar &Arg : CI->Args)
       rejectEscapingAddressFragment(Arg, "a call argument");
+
+  std::vector<llvm::Value *> CookieArguments;
+  auto *CookieCheck = prepareX86RegistrationCookieCall(
+      Op, BlockId, OpIdx, Builder, CookieArguments);
+  if (FatalCodePointerResolution)
+    return;
 
   llvm::Value *Target = nullptr;
   const MedOp *Authentication = AArch64AuthenticatedCalls.lookup(&Op);
@@ -851,6 +898,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   if (CI && CI->SourceCallHint &&
       CI->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Analyst) {
     const auto &Hint = *CI->SourceCallHint;
+#define LLVM_SOURCE_CALL_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#define LLVM_SOURCE_CALL_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "MedLLVMSourceCall.def"
     std::string Diagnostic;
     auto Refuse = [&](llvm::StringRef Reason) {
       syncError() << "source call contract: " << Reason << "\n";
@@ -861,14 +911,16 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Hint.AnalystSite->Sequence != Op.OriginSeq ||
         Hint.Signature.Architecture != TargetArch ||
         !validateSourceABI(Hint.Signature, Diagnostic) ||
-        Args.size() != Hint.Signature.Parameters.size()) {
+        Args.size() != sourceABIParameters(Hint.Signature).size()) {
       Refuse("invalid or non-source-only occurrence binding");
       return;
     }
     std::vector<llvm::Type *> Types;
     std::vector<llvm::Value *> Values;
+    const auto Bindings = sourceABIParameters(Hint.Signature);
+    std::vector<llvm::Value *> Carriers;
     for (unsigned I = 0; I < Args.size(); ++I) {
-      auto *Type = mapNdtype(Hint.Signature.Parameters[I].Type);
+      auto *Type = mapNdtype(Bindings[I].Type);
       auto *Value = Args[I];
       const auto Bits = [](llvm::Type *T) -> unsigned {
         return T->isPointerTy() ? 64
@@ -876,7 +928,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       };
       if (!Type || Bits(Type) != Bits(Value->getType()) ||
           llvm::isa<llvm::UndefValue, llvm::PoisonValue>(Value)) {
-        Refuse("a complete argument carrier is unavailable");
+        Refuse(kSourceCallCarrierMissing);
         return;
       }
       if (Type != Value->getType()) {
@@ -887,7 +939,63 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         else
           Value = Builder.CreateBitCast(Value, Type);
       }
-      Types.push_back(Type);
+      Carriers.push_back(Value);
+    }
+    const auto IntegerBits = [&](llvm::Value *Value) -> llvm::Value * {
+      if (Value->getType()->isPointerTy())
+        return Builder.CreatePtrToInt(Value, I64Ty);
+      if (Value->getType()->isIntegerTy())
+        return Value;
+      return Builder.CreateBitCast(
+          Value, llvm::Type::getIntNTy(
+                     *Ctx, Value->getType()->getPrimitiveSizeInBits()));
+    };
+    const auto Pack = [&](llvm::ArrayRef<llvm::Value *> Parts,
+                          llvm::ArrayRef<SourceAggregateMember> Members,
+                          unsigned Bytes) {
+      auto *Integer = llvm::Type::getIntNTy(*Ctx, Bytes * kSourceCallByteBits);
+      llvm::Value *Value = llvm::ConstantInt::get(Integer, 0);
+      for (unsigned I = 0; I < Parts.size(); ++I) {
+        auto *Part = Builder.CreateZExtOrTrunc(IntegerBits(Parts[I]), Integer);
+        if (Members[I].ByteOffset)
+          Part = Builder.CreateShl(Part,
+                                   Members[I].ByteOffset * kSourceCallByteBits);
+        Value = Builder.CreateOr(Value, Part);
+      }
+      return Value;
+    };
+    size_t At = 0;
+    for (const auto &Parameter : Hint.Signature.Parameters) {
+      if (Parameter.Components.empty()) {
+        Types.push_back(Carriers[At]->getType());
+        Values.push_back(Carriers[At++]);
+        continue;
+      }
+      const auto Members = sourceABIValueMembers(Parameter.Type);
+      const llvm::ArrayRef<llvm::Value *> Parts(Carriers.data() + At,
+                                                Members.size());
+      At += Members.size();
+      auto *Packed = Pack(Parts, Members, Parameter.Type->Size);
+      if (Parameter.Type->Kind == NdTypeKind::Int) {
+        Types.push_back(Packed->getType());
+        Values.push_back(Packed);
+        continue;
+      }
+      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
+      auto *Array = llvm::cast<llvm::ArrayType>(
+          llvmSourceCallValueType(*Ctx, Parameter.Type, /*Parameter=*/true));
+      const unsigned Count = Array->getNumElements();
+      llvm::Value *Value = llvm::PoisonValue::get(Array);
+      for (unsigned I = 0; I < Count; ++I) {
+        auto *Part =
+            Floating ? Parts[I]
+                     : Builder.CreateZExtOrTrunc(
+                           Builder.CreateLShr(Packed, I * kSourceCallWordBytes *
+                                                          kSourceCallByteBits),
+                           I64Ty);
+        Value = Builder.CreateInsertValue(Value, Part, {I});
+      }
+      Types.push_back(Array);
       Values.push_back(Value);
     }
     const unsigned Fixed =
@@ -897,8 +1005,12 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       return;
     }
     std::vector<llvm::Type *> Prefix(Types.begin(), Types.begin() + Fixed);
-    auto *FT = llvm::FunctionType::get(mapNdtype(Hint.Signature.ReturnType),
-                                       Prefix, Hint.AnalystFixedCount >= 0);
+    auto *ReturnType = llvmSourceCallValueType(*Ctx, Hint.Signature.ReturnType,
+                                               /*Parameter=*/false);
+    const auto ReturnMembers =
+        sourceAggregateMembers(Hint.Signature.ReturnType);
+    auto *FT = llvm::FunctionType::get(ReturnType, Prefix,
+                                       Hint.AnalystFixedCount >= 0);
     llvm::Value *Callable = Target;
     if (!Callable) {
       auto Name = resolveCalleeName();
@@ -969,8 +1081,27 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Builder.CreateUnreachable();
       return;
     }
-    if (Op.Output.Size && !Call->getType()->isVoidTy())
-      setVar(Op.Output, Call, Builder);
+    if (Op.Output.Size && !Call->getType()->isVoidTy()) {
+      llvm::Value *Value = Call;
+      if (!ReturnMembers.empty()) {
+        std::vector<llvm::Value *> Parts;
+        std::vector<SourceAggregateMember> Members;
+        const bool Floating =
+            ReturnMembers.front().Type->Kind == NdTypeKind::Float;
+        const unsigned Count =
+            llvm::cast<llvm::StructType>(ReturnType)->getNumElements();
+        for (unsigned I = 0; I < Count; ++I) {
+          Parts.push_back(Builder.CreateExtractValue(Call, {I}));
+          Members.push_back(
+              Floating ? ReturnMembers[I]
+                       : SourceAggregateMember{
+                             NdType::makeInt(kSourceCallWordBytes, false),
+                             uint16_t(I * kSourceCallWordBytes)});
+        }
+        Value = Pack(Parts, Members, Hint.Signature.ReturnType->Size);
+      }
+      setVar(Op.Output, Value, Builder);
+    }
     defineCallClobbers(Op, Builder);
     return;
   }
@@ -1451,6 +1582,12 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     KnownTarget = Runtime;
     Target = nullptr;
   }
+  if (CookieCheck) {
+    Callee = CookieCheck;
+    KnownTarget = CookieCheck;
+    Target = nullptr;
+    Args = std::move(CookieArguments);
+  }
   if (Op.X87ImportArguments) {
     if (!Callee) {
       syncError() << "med_llvm_emitter: CRT x87 call has no import identity\n";
@@ -1491,6 +1628,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   for (unsigned I = 0; I < Args.size(); ++I)
     ArgumentIndices.push_back(I);
   bool BoundArgumentBanks = false;
+  std::optional<unsigned> FirstUnsetInteger;
   if (Target && Callee && CI && CI->IntegerRegisterArgCount >= 0 &&
       CI->FloatingRegisterArgCount >= 0 && getLLVMArgumentBanks(*Callee) &&
       !Callee->isVarArg()) {
@@ -1533,6 +1671,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     }
     Args = std::move(Bound->Values);
     BoundArgumentBanks = true;
+    FirstUnsetInteger = Bound->FirstUnsetInteger;
   }
   if (Op.ScalarCallSignature &&
       !Op.ScalarCallSignature->ParameterElements.empty()) {
@@ -1596,6 +1735,15 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 
   if (Callee) {
     auto *CalleeTy = Callee->getFunctionType();
+    // A formatted call's recovered arguments are the inputs its format
+    // names, in the source's order (MedOp::ExactArguments).
+    const auto ExactFloatingInput = [&](int Index) {
+      return Op.ExactArguments && CI && Index >= 0 && Index < 64 &&
+             static_cast<size_t>(Index) < CI->Args.size() &&
+             static_cast<unsigned>(Index) + 1 < Op.NumInputs &&
+             ((Op.ExactFloatInputs >> Index) & 1) &&
+             CI->Args[Index] == Op.Inputs[Index + 1];
+    };
     std::vector<llvm::Value *> CoercedArgs;
     for (size_t AI = 0; AI < Args.size(); ++AI) {
       llvm::Value *AV = Args[AI];
@@ -1629,6 +1777,25 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           if (llvm::Value *Sym = tryResolvePointerArg(
                   CI->Args[SourceIndex], /*FailClosed=*/false, Builder))
             AV = Builder.CreatePtrToInt(Sym, Want);
+        // The callee reads only the scalar in this floating argument
+        // register's low lane (MedCallInfo::ArgReadBytes), though its
+        // parameter takes the whole vector register.  The lanes above pass
+        // nothing: a scalar instruction such as `cvtsi2sd` or `mulsd` keeps
+        // them as the caller found them, its own unknown entry value where
+        // nothing set them.  Pass the scalar with zero above it, as HighC
+        // passes the scalar alone.
+        if (const unsigned Bits = AV->getType()->getPrimitiveSizeInBits();
+            Want->isVectorTy() && Bits && !AV->getType()->isPointerTy() && CI &&
+            SourceIndex >= 0 &&
+            static_cast<size_t>(SourceIndex) < CI->ArgReadBytes.size())
+          if (const unsigned ReadBits = CI->ArgReadBytes[SourceIndex] * 8u;
+              ReadBits && ReadBits < Bits)
+            AV = Builder.CreateTrunc(
+                AV->getType()->isIntegerTy()
+                    ? AV
+                    : Builder.CreateBitCast(AV,
+                                            llvm::Type::getIntNTy(*Ctx, Bits)),
+                llvm::Type::getIntNTy(*Ctx, ReadBits), "read_lane");
         if (AV->getType() != Want) {
           llvm::Type *AT = AV->getType();
           if (AT->isIntegerTy() && Want->isIntegerTy()) {
@@ -1673,6 +1840,16 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             }
           }
         }
+      } else if (CalleeTy->isVarArg() &&
+                 ExactFloatingInput(ArgumentIndices[AI]) &&
+                 AV->getType()->isIntegerTy(64)) {
+        // A variadic argument keeps its own type.  A formatted call's
+        // floating one is the scalar its routine's conversion reads
+        // (MedOp::ExactFloatInputs): pass that value, which the convention
+        // carries in a vector register.  Its integer bits would travel in an
+        // integer register, where the routine reads no floating argument.
+        AV = Builder.CreateBitCast(AV, llvm::Type::getDoubleTy(*Ctx),
+                                   "formatted_double");
       }
       CoercedArgs.push_back(AV);
     }
@@ -1696,6 +1873,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         CalleeTy, Callable, CoercedArgs, AuthenticationBundles,
         CalleeTy->getReturnType()->isVoidTy() ? "" : "call");
     Call->setCallingConv(Callee->getCallingConv());
+    if (CookieCheck)
+      Call->addParamAttr(0, llvm::Attribute::InReg);
     Result = Call;
   } else {
     if (!Target) {
@@ -1845,6 +2024,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (BoundArgumentBanks) {
       const auto Banks = getLLVMArgumentBanks(*Callee);
       setLLVMArgumentBanks(*Emitted, Banks->first, Banks->second);
+      if (FirstUnsetInteger)
+        setLLVMFirstUnsetInteger(*Emitted, *FirstUnsetInteger);
     } else if (CI && CI->IntegerRegisterArgCount >= 0 &&
                CI->FloatingRegisterArgCount >= 0 &&
                static_cast<unsigned>(CI->IntegerRegisterArgCount) <=

@@ -137,9 +137,11 @@ constexpr bool x86AmxAddressIsValid(uint32_t D, NdMemoryAddressSpace Space) {
   if ((D & X86AmxVersionMask) == X86AmxLegacyStateVersion &&
       !(D & X86AmxAddress32) && Space == NdMemoryAddressSpace::Default)
     return false;
-  // Tile rows consume the SIB index as a stride. The config-address lowering
-  // cannot use that same register for an offset relative to the host frame.
-  return !(D & X86AmxStackReference) || !x86AmxIsTileMemory(x86AmxOperation(D));
+  return true;
+}
+
+constexpr bool x86AmxNeedsStackLeaf(uint32_t D) {
+  return (D & X86AmxStackReference) && x86AmxIsTileMemory(x86AmxOperation(D));
 }
 
 struct X86AmxShape {

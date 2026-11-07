@@ -9,6 +9,7 @@
 #include "RegistrationSourceReceiptTestUtils.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
 #include "neverd/backend/codegen/COFF/COFFRegistrationPatch.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -16,11 +17,15 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
+#include "neverd/ir/low/RegistrationCallEffects.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/ir/med/X86/X86RegistrationEntry.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/raw_ostream.h"
@@ -30,6 +35,277 @@
 
 namespace {
 using namespace neverd;
+
+TEST(RegistrationEntryABI, InputPE32NonReturningCleanupHasNoReturnStack) {
+  const auto *Path = std::getenv("NEVERD_REGISTRATION_NORETURN_PE32");
+  if (!Path)
+    GTEST_SKIP() << "requires the non-returning cleanup-only PE32 fixture";
+  auto Image = COFFLoader().load(Path);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  const auto Found =
+      llvm::find_if(Image->ExceptionMetadata.Functions, [](const auto &F) {
+        return F.Cxx && F.Cxx->TryBlocks.empty();
+      });
+  ASSERT_NE(Found, Image->ExceptionMetadata.Functions.end());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(*Image));
+  const auto Low = CFGBuilder().build(*Image, Decode, Found->CodeRange.Begin,
+                                      "nonreturning_cleanup");
+  ASSERT_TRUE(Low.RegistrationStates);
+  ASSERT_EQ(getCheckedX86RegistrationCxxParentABI(Low, *Image), 0);
+  EXPECT_FALSE(getCheckedX86CalleeStackPop(*Image, Low.Entry));
+  const auto Callee = getCheckedX86RegistrationCxxCalleeABI(*Image, Low.Entry);
+  ASSERT_TRUE(Callee);
+  EXPECT_TRUE(Callee->isCxxParent());
+  EXPECT_TRUE(Callee->DoesNotReturn);
+  EXPECT_FALSE(Callee->HasIndependentScalarReturn);
+  EXPECT_EQ(Callee->StackPopBytes, 0u);
+  ASSERT_FALSE(Callee->RequiredImports.empty());
+  ASSERT_FALSE(Callee->RuntimeThrowInfos.empty());
+  for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+    auto Edited = *Callee;
+    if (Mutation == 0)
+      Edited.DoesNotReturn = false;
+    else if (Mutation == 1)
+      Edited.HasIndependentScalarReturn = true;
+    else
+      Edited.RequiredImports.clear();
+    size_t Work = 0;
+    EXPECT_FALSE(hasSameX86RegistrationCxxEffects(Edited, *Callee, Work));
+  }
+  for (bool NoReturn : {false, true}) {
+    const auto Name =
+        NoReturn ? "cleanup_only_forward" : "cleanup_only_returning_wrapper";
+    SCOPED_TRACE(Name);
+    const auto Export = llvm::find_if(
+        Image->Exports, [&](const auto &E) { return E.Name == Name; });
+    ASSERT_NE(Export, Image->Exports.end());
+    const auto Nested =
+        getCheckedX86RegistrationCxxCalleeABI(*Image, Export->Addr);
+    ASSERT_TRUE(Nested);
+    EXPECT_EQ(Nested->DoesNotReturn, NoReturn);
+    EXPECT_EQ(Nested->HasIndependentScalarReturn, !NoReturn);
+    EXPECT_FALSE(Nested->RequiredImports.empty());
+    EXPECT_FALSE(Nested->RuntimeThrowInfos.empty());
+    const auto Pop = getCheckedX86CalleeStackPop(*Image, Export->Addr);
+    EXPECT_EQ(Pop, NoReturn ? std::nullopt : std::optional<uint32_t>(0));
+    const auto Body = CFGBuilder().build(*Image, Decode, Export->Addr, Name);
+    EXPECT_EQ(getCheckedX86RegistrationCxxParentABI(Body, *Image), 0);
+  }
+  auto Changed = Low;
+  Changed.CalleePopBytes = 65532;
+  EXPECT_EQ(getCheckedX86RegistrationCxxParentABI(Changed, *Image), 0);
+  const auto &States = *Low.RegistrationStates;
+  const auto Call = llvm::find_if(
+      States.CallFrameEffects, [](const auto &C) { return C.DoesNotReturn; });
+  ASSERT_NE(Call, States.CallFrameEffects.end());
+  const size_t Index = Call - States.CallFrameEffects.begin();
+  ASSERT_LT(Call->CalleeIndex, States.CalleeContracts.size());
+  for (unsigned Mutation = 0; Mutation != 15; ++Mutation) {
+    SCOPED_TRACE(Mutation);
+    Changed = Low;
+    auto &Proof = *Changed.RegistrationStates;
+    auto &Effect = Proof.CallFrameEffects[Index];
+    auto &Contract = Proof.CalleeContracts[Effect.CalleeIndex];
+    switch (Mutation) {
+    case 0:
+      Effect.DoesNotReturn = false;
+      break;
+    case 1:
+      ++Effect.EndAddress;
+      break;
+    case 2:
+      Effect.CalleeIndex = Proof.CalleeContracts.size();
+      break;
+    case 3:
+      ++Effect.Target;
+      break;
+    case 4:
+      Effect.StackPopBytes = 4;
+      break;
+    case 5:
+      Contract.DoesNotReturn = false;
+      break;
+    case 6:
+      Contract.StackPopBytes = 4;
+      break;
+    case 7:
+      Contract.CalleeKind = RegistrationCalleeFrameContract::Kind::Leaf;
+      break;
+    case 8:
+      Contract.CodeRanges.clear();
+      break;
+    case 9:
+      Proof.IncomingFrameAccesses.emplace_back();
+      break;
+    case 10:
+      Proof.IncomingFrameAccessesComplete = false;
+      break;
+    case 11:
+      Proof.CallFrameEffectsComplete = false;
+      break;
+    case 12:
+      Proof.CxxContinuations.emplace_back();
+      break;
+    case 13:
+      Changed.ExceptionMetadata->Cxx->TryBlocks.emplace_back();
+      break;
+    case 14:
+      for (auto &State : Proof.Blocks)
+        if (State.Range.Begin == Low.Entry)
+          State.CallbackOnly = true;
+      break;
+    }
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Changed, *Image));
+  }
+  unsigned Branches = 0;
+  for (size_t B = 0; B != Low.Blocks.size(); ++B) {
+    const auto &Block = Low.Blocks[B];
+    if (Block.InstructionBoundaries.back().Control !=
+        LowInstructionControl::Branch)
+      continue;
+    ++Branches;
+    Changed = Low;
+    Changed.Blocks[B].Succs.clear();
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Changed, *Image));
+    Changed = Low;
+    Changed.Blocks[B].Succs.push_back(-1);
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Changed, *Image));
+    Changed = Low;
+    Changed.Blocks[B].InstructionBoundaries.back().Immediate.reset();
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Changed, *Image));
+  }
+  EXPECT_GT(Branches, 0u);
+  // An edited caller opcode or a now-returning helper cannot reuse the saved
+  // DoesNotReturn bit, source boundaries or callee code-range receipt.
+  for (va_t Address : {Call->Address, Call->Target}) {
+    SCOPED_TRACE(Address);
+    auto Edited = *Image;
+    unsigned Replacements = 0;
+    for (auto &Segment : Edited.Segments)
+      if (Address >= Segment.VA && Address - Segment.VA < Segment.Data.size()) {
+        Segment.Data[Address - Segment.VA] = 0xc3;
+        ++Replacements;
+      }
+    ASSERT_EQ(Replacements, 1u);
+    EXPECT_FALSE(getCheckedX86RegistrationCxxParentABI(Low, Edited));
+  }
+}
+
+TEST(RegistrationEntryABI, InputPE32NonReturningCalleeKeepsOuterCatch) {
+  const auto *Path = std::getenv("NEVERD_REGISTRATION_NORETURN_PE32");
+  if (!Path)
+    GTEST_SKIP() << "requires the non-returning cleanup-only PE32 fixture";
+  auto Image = COFFLoader().load(Path);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  const auto InnerEH =
+      llvm::find_if(Image->ExceptionMetadata.Functions, [](const auto &F) {
+        return F.Cxx && F.Cxx->TryBlocks.empty();
+      });
+  const auto OuterEH =
+      llvm::find_if(Image->ExceptionMetadata.Functions, [](const auto &F) {
+        return F.Cxx && !F.Cxx->TryBlocks.empty();
+      });
+  ASSERT_NE(InnerEH, Image->ExceptionMetadata.Functions.end());
+  ASSERT_NE(OuterEH, Image->ExceptionMetadata.Functions.end());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(*Image));
+  auto Inner = CFGBuilder().build(*Image, Decode, InnerEH->CodeRange.Begin,
+                                  "nonreturning_inner");
+  auto Outer =
+      CFGBuilder().build(*Image, Decode, OuterEH->CodeRange.Begin,
+                         "sub_" + llvm::utohexstr(OuterEH->CodeRange.Begin));
+  ASSERT_TRUE(Outer.RegistrationStates);
+  for (const auto &Diagnostic : Outer.RegistrationStates->Diagnostics)
+    llvm::errs() << Diagnostic << '\n';
+  ASSERT_TRUE(Outer.RegistrationStates->CallFrameEffectsComplete);
+  const auto Effect =
+      llvm::find_if(Outer.RegistrationStates->CallFrameEffects,
+                    [&](const auto &C) { return C.Target == Inner.Entry; });
+  ASSERT_NE(Effect, Outer.RegistrationStates->CallFrameEffects.end());
+  EXPECT_TRUE(Effect->DoesNotReturn);
+  ASSERT_EQ(getCheckedX86RegistrationCxxParentABI(Outer, *Image), 0);
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&*Image);
+  auto InnerMed = Converter.convert(Inner, Arch::X86, BinaryFormat::COFF);
+  auto OuterMed = Converter.convert(Outer, Arch::X86, BinaryFormat::COFF);
+  inferMedTypes(InnerMed, Arch::X86);
+  inferMedTypes(OuterMed, Arch::X86);
+  recoverCallAbi(InnerMed, Arch::X86, {}, &*Image);
+  recoverCallAbi(OuterMed, Arch::X86, {}, &*Image);
+  for (unsigned Order = 0; Order != 3; ++Order) {
+    SCOPED_TRACE(Order);
+    llvm::LLVMContext Context;
+    std::vector<MedFunc> Functions =
+        Order == 0   ? std::vector<MedFunc>{InnerMed, OuterMed}
+        : Order == 1 ? std::vector<MedFunc>{OuterMed, InnerMed}
+                     : std::vector<MedFunc>{OuterMed};
+    auto Module =
+        MedLLVMEmitter().emit(Functions, Context, "nonreturning-call",
+                              Arch::X86, {}, &*Image, BinaryFormat::COFF);
+    ASSERT_TRUE(Module);
+    auto *Parent = Module->getFunction(OuterMed.Name);
+    ASSERT_TRUE(Parent);
+    ASSERT_TRUE(Parent->getMetadata(windows_eh_md::NativeAttachment));
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    auto Proof = validateCOFFRegistrationCxxIR(*Parent, *OuterEH, *Image);
+    ASSERT_FALSE(bool(Proof)) << llvm::toString(std::move(Proof));
+    if (Order != 2) {
+      auto *Child = Module->getFunction(InnerMed.Name);
+      ASSERT_TRUE(Child);
+      ASSERT_TRUE(Child->getMetadata(windows_eh_md::NativeAttachment));
+      auto ChildProof = validateCOFFRegistrationCxxIR(*Child, *InnerEH, *Image);
+      ASSERT_FALSE(bool(ChildProof)) << llvm::toString(std::move(ChildProof));
+    }
+    unsigned Calls = 0;
+    for (auto &Block : *Parent)
+      for (auto &Instruction : Block) {
+        auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+        if (!Call || !Call->getCalledFunction())
+          continue;
+        auto Target = rewrite_source::getOriginalVA(*Call->getCalledFunction());
+        if (!Target) {
+          llvm::consumeError(Target.takeError());
+          continue;
+        }
+        if (*Target != Inner.Entry)
+          continue;
+        ++Calls;
+        EXPECT_TRUE(llvm::isa<llvm::InvokeInst>(Call));
+        EXPECT_TRUE(Call->doesNotReturn());
+        EXPECT_FALSE(Call->doesNotThrow());
+        EXPECT_TRUE(Call->getType()->isVoidTy());
+        for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
+          if (Mutation == 0) {
+            // CallBase inherits declaration attributes. Remove both copies
+            // to actually withdraw the non-returning invocation contract.
+            Call->removeFnAttr(llvm::Attribute::NoReturn);
+            Call->getCalledFunction()->removeFnAttr(llvm::Attribute::NoReturn);
+          } else if (Mutation == 1)
+            Call->getCalledFunction()->removeFnAttr(llvm::Attribute::NoReturn);
+          else
+            Call->setDoesNotThrow();
+          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          auto Rejected =
+              validateCOFFRegistrationCxxIR(*Parent, *OuterEH, *Image);
+          EXPECT_TRUE(bool(Rejected));
+          llvm::consumeError(std::move(Rejected));
+          Call->setDoesNotReturn();
+          Call->getCalledFunction()->addFnAttr(llvm::Attribute::NoReturn);
+          Call->removeFnAttr(llvm::Attribute::NoUnwind);
+        }
+      }
+    EXPECT_EQ(Calls, 1u);
+    if (Order == 2)
+      if (const auto *Output =
+              std::getenv("NEVERD_REGISTRATION_NORETURN_OUTER_IR")) {
+        std::error_code Error;
+        llvm::raw_fd_ostream Stream(Output, Error);
+        ASSERT_FALSE(Error) << Error.message();
+        Module->print(Stream, nullptr);
+      }
+  }
+}
 
 TEST(RegistrationEntryABI, InputPE32PreservesPhysicalArgumentsAndCleanup) {
 #ifdef LLVM_NEVERD_X86_CXX_CATCH_SUBFIELDS

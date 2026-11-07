@@ -32,6 +32,10 @@ public:
   /// Commands whose shortcuts apply only inside analysis views.
   const QList<QAction *> &viewActions() const { return viewActions_; }
   const QList<QAction *> &allActions() const { return all_; }
+  /// External commands participate in the palette; their owner controls
+  /// registration and must remove them before deletion.
+  void registerExternalAction(QAction *action);
+  void unregisterExternalAction(QAction *action);
   /// Attach the view-scoped shortcuts to \p view.
   void attachViewShortcuts(QWidget *view) const;
   /// Keep workbench shortcuts available when a dock becomes a top-level window.
