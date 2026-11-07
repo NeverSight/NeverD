@@ -470,12 +470,18 @@ std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
 }
 
 namespace {
-bool indirectTransformRecord(const TypeRef &Type) {
-  const auto Members = sourceAggregateMembers(Type);
-  return (Members.size() == 6 || Members.size() == 16) &&
-         std::all_of(Members.begin(), Members.end(), [](const auto &M) {
-           return M.Type->Kind == NdTypeKind::Float && M.Type->Size == 8;
-         });
+bool indirectDarwinRecord(const TypeRef &Type) {
+  if (!Type || Type->Kind != NdTypeKind::Struct ||
+      !equalSourceTypes(Type, Type))
+    return false;
+  // Reuse the PCS classification, including its HFA exception. A complete
+  // indirect record needs no direct-register member reconstruction.
+  auto Record = std::make_shared<NdType>(*Type);
+  Record->Passing = NdRecordPassing::ByValue;
+  const auto Placement = placeSourceParameters(
+      Arch::AArch64, BinaryFormat::MachO, NdType::makeVoid(), {Record});
+  return Placement && Placement->Parameters.front().size() == 1 &&
+         Placement->Parameters.front().front().Indirect;
 }
 } // namespace
 
@@ -809,7 +815,7 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
           Hint.Convention != SourceFunctionTypeHint::ConventionKind::C ||
           Parameter.TheRole != SourceParameterTypeHint::Role::Ordinary ||
           !Parameter.Components.empty() ||
-          !indirectTransformRecord(Parameter.Type) ||
+          !indirectDarwinRecord(Parameter.Type) ||
           !ValidLocation(NdType::makePtr(Parameter.Type), L, false) ||
           (L.Kind == SourceABICarrierKind::IntegerRegister &&
            std::find(TRI.IntParamRegs.begin(), TRI.IntParamRegs.end(),
@@ -946,7 +952,8 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
            !(Type && Type->Kind == NdTypeKind::Int &&
              Type->Size == kDarwinWideBytes &&
              Type->SourceName != kSourceAArch64Vector128CType) &&
-           !(Records && !sourceAggregateMembers(Type).empty())))
+           !(Records && (indirectDarwinRecord(Type) ||
+                         !sourceAggregateMembers(Type).empty()))))
         return fail(Diagnostic, kUnsupportedDarwinValue);
       if (Type->Kind == NdTypeKind::Struct) {
         Type = std::make_shared<NdType>(*Type);
@@ -1031,7 +1038,7 @@ bool assignDarwinSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       if (Floating && Members.size() > 4) {
         if (Architecture != Arch::AArch64 ||
             Convention != SourceFunctionTypeHint::ConventionKind::C ||
-            !indirectTransformRecord(Parameter.Type))
+            !indirectDarwinRecord(Parameter.Type))
           return fail(Diagnostic,
                       "Unsupported Darwin indirect record parameter");
         Parameter.IndirectByValue = true;
@@ -1337,8 +1344,13 @@ bool assignDarwinVariadicSourceABI(SourceFunctionTypeHint &Hint,
     }
     for (size_t I = FixedCount; I < Hint.Parameters.size(); ++I) {
       auto &P = Hint.Parameters[I];
-      if (P.IndirectByValue)
-        return fail(Diagnostic, kIndirectVariadicCopy);
+      if (P.IndirectByValue) {
+        StackOffset = (StackOffset + kDarwinWordBytes - 1) & -kDarwinWordBytes;
+        P.Location = {SourceABICarrierKind::Stack, 0, StackOffset,
+                      kDarwinWordBytes};
+        StackOffset += kDarwinWordBytes;
+        continue;
+      }
       // Darwin variadic objects start on eight-byte slots (or their higher
       // natural alignment). Members retain their in-object offsets: an HFA
       // of floats does not become one eight-byte slot per float.

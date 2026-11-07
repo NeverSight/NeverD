@@ -128,7 +128,7 @@ AndroidFramework::binderTransact(Heap &heap, const Program &program,
             "Android BinderProxy.transactNative requires an explicit native "
             "Binder binding"};
   const auto &source = parcels.at(arguments[1]);
-  if (!source.objects.empty() && source.fd != binding->second.fd)
+  if (!source.objects.empty() && source.fd && source.fd != binding->second.fd)
     return {
         ExecutionStop::Unsupported,
         0,
@@ -192,6 +192,9 @@ ExecutionResult AndroidFramework::completeBinder(Heap &heap,
                 0,
                 {},
                 "Android Binder reply storage budget exhausted"};
+      auto released = releaseParcelObjects(state);
+      if (released.stop != ExecutionStop::Returned)
+        return released;
       if (state.release)
         state.release();
       object->Bytes = std::move(*reply.bytes);

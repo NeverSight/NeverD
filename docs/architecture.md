@@ -63,6 +63,14 @@ The port transaction supplies a completed transfer receipt for I/O comparison.
 The same debug owner accepts an explicit REP group-boundary decision: target
 fast-string grouping can postpone MOVS/STOS data causes across completed
 elements without changing the existing elementwise memory/attempt owner.
+`BranchWatchpoints` additionally selects single-step causes using sampled TF,
+DEBUGCTL.BTF and the actual taken predicate. The legacy scalar owner returns
+that predicate; the x64 writer retains LowIR's condition in a debug-only
+operand observation. Equal target and fallthrough addresses do not erase it.
+Generated debug step/validation bridges use v2; old bridges refuse active BTF
+before fetch or producer polling. REP group inputs retain raw TF and DEBUGCTL
+separately. Shared cause/acceptance rules clear BTF on #DB, including retained
+entry failures, without treating software INT 1 as a hardware debug cause.
 `X86EventDeliveryOptions` owns the shared entry-attempt budget. Event owners
 retain a resumable next event when host work is exhausted, independently of
 instruction budgets and without replacing an architectural event by #DF.
@@ -1278,8 +1286,17 @@ The stack cursor includes the full storage of any fixed aggregate spill.
 `SourceABICarriers.def` owns the slot widths and diagnostics. Scalar tails must
 carry their default promotions; HFA members keep their declared float widths.
 Direct records and 128-bit values use the same logical types and member proofs
-in fixed and variadic calls. Indirect tails still require a separate copy
-storage proof and remain refused. Narrow integer
+in fixed and variadic calls. Complete natural records classified as indirect
+retain their original pointer in fixed and variadic analyst calls. The shared
+`sourceCallParameterType` supplies that ABI-lowered type to both C routes;
+LLVM receives the same pointer without `byval` or `noalias`. No new copy or
+stronger memory effect is introduced: address identity, aliases and writes
+through the original storage remain observable. An unnamed indirect parameter
+occupies one eight-byte pointer slot. Native logical by-value reconstruction
+still requires its separate copy-storage proof. Anonymous C record names reuse
+natural-layout validation independently of the stricter direct-value ABI check;
+naming a mixed record behind a pointer does not authorize passing it directly.
+Narrow integer
 register parameters and AArch64 narrow results retain the ABI's 32-bit
 sign/zero-extension guarantee separately from their source width. LLVM source
 call emission consumes those validated guarantees as `signext`/`zeroext`
@@ -1312,9 +1329,11 @@ requiring its padding bits. Other operations still require their full inputs;
 neither padding nor a later SSA version becomes an incoming parameter.
 The explicit call path currently supports one/two-word integer/pointer records,
 the padded 32-bit/64-bit integer pair and one-to-four-member f32/f64 HFAs,
-including nested records and complete stack spills. Array fields, arbitrary
-small mixed records, indirect by-value copies and indirect results still need
-their complete source storage and ABI contracts. These source declarations
+including nested records and complete stack spills. Large natural integer,
+mixed and nested records and non-HFA floating records additionally use indirect
+pointer transport. Array fields, arbitrary small mixed records, logical
+by-value copy reconstruction and indirect results still need their complete
+source storage and ABI contracts. These source declarations
 supply no authenticated whole-image or native signed-unwind ABI.
 
 The DWARF reader keeps an image-derived arm64e return ABI flag separate from
@@ -1759,6 +1778,15 @@ Recovered method names outrank synthesized function-start names while retaining
 existing stated, analysis and user function names.
 The formats follow Apple's [dyld definitions](https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/fixup-chains.h)
 and LLVM's [pointer-authentication contract](https://llvm.org/docs/PointerAuth.html).
+
+The strict whole-image dependency reader shares the six arm64e chain-word
+decoders with the analysis loader. Its preserved identity includes each slot's
+address, target or complete import identity, key, diversity and address-diversity
+flag, together with the image CPU type and ABI subtype. Repacking chain metadata
+may keep that identity; changing a signing recipe, import or slot may not.
+Per-format strides, import-addend overflow, segmented targets and page/storage
+bounds remain validated. This preservation contract does not synthesize signed
+storage, install new authenticated imports or authorize whole-image rebuilding.
 
 This support covers static loading, lifting and C/LLVM inspection. Native
 rebuilding and source replacement of an arm64e image fail explicitly until
@@ -8911,7 +8939,11 @@ store out, as a C function leaves its caller's registers alone, so the
 prologue neither prints the caller's register as a stale value nor keeps a
 frame in byte storage. The MedIR text view shows the mark. Operations keep
 their positions, because call records index them. A save read for anything
-else stays a store, and binary lift and patch never mark one. On x86 the
+else stays a store, and binary lift and patch never mark one. The restore proof
+also follows unobserved zero extensions, including the Q-register update from
+an AArch64 D-register restore. A read of any derived value retains the save.
+HighIR removes unused restore temporaries before checking private save slots,
+while frame addresses still retain their original SSA identities. On x86 the
 projection also marks a pointer-width load of the slot at the entry stack
 pointer, in a called function whose stores never write that slot: it reads
 the return address the call pushed. HighC prints it as
@@ -17232,10 +17264,11 @@ missing values. Contracts follow API 28
 and [Binder](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/android/os/Binder.java).
 See [application runtime inputs](android-application-runtime.md) for the schema.
 
-`AndroidParcel.cpp` owns the API 28 Java owned-Parcel lifecycle and object-free
-data subset. DEX and JNI use the same catalogue, heap identities and bounded
-byte storage; JNI adds no Parcel semantics. `obtain` and `recycle` retain the
-six-slot owned pool in slot order. Recycle clears the bytes and cursor; accessing
+`AndroidParcel.cpp` owns the API 28 Java owned-Parcel lifecycle, scalar/string
+data and strong-object encoding. DEX and JNI use the same catalogue, heap
+identities and bounded byte storage; JNI adds no Parcel semantics. `obtain` and
+`recycle` retain the six-slot owned pool in slot order. Recycle clears the bytes
+and cursor; accessing
 a recycled object before another obtain, or a raw Java allocation without owned
 native state, stops explicitly. Heap growth is admitted before resizing, using
 the existing conservative retained-storage budget.
@@ -17327,6 +17360,20 @@ proxies by endpoint and rejects duplicate input endpoint identities. Dynamic
 proxies have no invented input key in snapshots. Reference acquisition is ordered
 before Parcel release on the current native thread. No private service response
 or application-specific object conversion belongs in these shared models.
+
+`dalvik/AndroidBinderObjects.cpp` owns Java Binder holders, native-to-Java identity
+and owned-Parcel strong references. Exact-key maps retain holders by Java identity
+and native objects by cookie. A holder keeps a weak cache, replacing an expired
+native object on the next conversion. The native adapter supplies bounded opaque
+allocations through the existing Linux memory owner; no guest C++ layout or Java
+heap ID is substituted for a native pointer. Retained `MemoryView` allocation
+identity prevents same-address replacement from reviving an opaque object.
+Strong writes use the shared Parcel data owner and feed the existing Linux
+object translator, including null and
+handle-zero records without metadata. Native reference notifications enter this
+same registry. The response reader queues pointer/cookie acknowledgments and
+flushes them only before another driver read; synchronous native release work
+remains deferred until the currently unsupported top-level dispatch path.
 
 `enforceInterface` still requires incoming flags and the Java StrictMode upcall.
 Local Binder dispatch, nested/one-way transactions, weak objects/FDs, and

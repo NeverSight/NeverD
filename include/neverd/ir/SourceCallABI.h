@@ -11,10 +11,15 @@ std::optional<int64_t> sourceCallReturnAddressBias(const BinaryImage *Image,
                                                    va_t Address);
 /// Place a bounded analyst declaration with the ordinary image ABI. Fixed and
 /// variadic Darwin ARM64 calls include 128-bit values and supported direct
-/// records. This does not authenticate the declaration or authorize native
-/// effects.
+/// records. Indirect parameters retain their original pointer transport; they
+/// are not converted to new source-level by-value copies. This does not
+/// authenticate the declaration or authorize native effects.
 bool assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
                           BinaryFormat Format, std::string &Diagnostic);
+/// Value type for an ABI-lowered call parameter of a validated C signature.
+/// An indirect aggregate transports its existing address, without an extra
+/// load/copy, alignment promise, lifetime change or aliasing attribute.
+TypeRef sourceCallParameterType(const SourceParameterTypeHint &Parameter);
 /// System V x64 variadic floating operands also need the original AL vector
 /// count; an XMM value alone does not prove that the callee saved that bank.
 bool sourceCallVariadicStateDefined(const LowFunc &Function,

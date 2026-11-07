@@ -11,8 +11,10 @@
 
 #include "neverd/emulation/AndroidNative.h"
 #include "neverd/emulation/IntegerABI.h"
+#include "neverd/emulation/MemoryView.h"
 #include "neverd/loader/ELF/ELFProgramLinking.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 
 #include <array>
@@ -164,6 +166,7 @@ struct BinderPendingCommand {
   uint32_t Command;
   uint64_t Value;
   std::shared_ptr<const linux_model::BinderBuffer> Lease;
+  uint64_t Cookie = 0; // Pointer/cookie acknowledgments carry two words.
 };
 struct BinderThreadState {
   // API 28 IPCThreadState construction starts a new native thread at zero.
@@ -207,7 +210,11 @@ private:
   BinderThreadState SingleThreadBinder;
   std::shared_ptr<linux_model::LinuxDeviceState> BinderConnection;
   uint32_t BinderFD = 0;
+  llvm::DenseMap<uint64_t, MemoryView> BinderIdentities;
   class BinderWait;
+  mobile::dalvik::ExecutionResult
+  binderIdentity(mobile::dalvik::BinderIdentityOperation Operation,
+                 uint64_t Address);
   BionicResult binderTransact(const mobile::dalvik::ExternalCall &Call,
                               std::shared_ptr<DexContinuation> Continuation);
   BinderThreadState &binderThread();

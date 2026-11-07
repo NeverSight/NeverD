@@ -1989,6 +1989,7 @@ buildInstruction(SpecializationInstruction Instruction,
     if (PagedRoles.Sse && !PagedRoles.SseMemory)
       W.pagedAccess(constant(0), 0, X64PagedAccess::BeginSse, false);
     NdVar NextPC = constant(Instruction.Fallthrough.Address);
+    NdVar TakenBranch = constant(1, 1);
     auto Effects = [&](size_t After) {
       for (size_t I = 0; I != Instruction.UndefinedEffects.Effects.size(); ++I)
         if (Instruction.UndefinedEffects.Effects[I].AfterOp == After)
@@ -2011,8 +2012,9 @@ buildInstruction(SpecializationInstruction Instruction,
         NextPC = W.read(Op.Inputs[0]);
       } else if (Op.Opcode == NdOp::COND_BR) {
         NextPC = W.temporary();
+        TakenBranch = W.read(Op.Inputs[1]);
         W.emit(NdOp::SELECT, NextPC,
-               {W.read(Op.Inputs[1]), W.read(Op.Inputs[0]),
+               {TakenBranch, W.read(Op.Inputs[0]),
                 constant(Instruction.Fallthrough.Address)});
       } else {
         W.operation(Op);
@@ -2025,6 +2027,8 @@ buildInstruction(SpecializationInstruction Instruction,
       detail::X64ContinuationMpx<Writer>(W).completeBranch(*MpxBranch);
     if (Options.PagedMemory && Kind != Exit::Continue)
       W.codeTarget(NextPC);
+    if (Options.PagedDebug && Kind == Exit::Jump)
+      W.pagedAccess(TakenBranch, 0, X64PagedAccess::BranchDecision, false);
     W.leave(Kind, NextPC);
   }
   if (Function.Blocks.size() > Options.MaxOperations ||

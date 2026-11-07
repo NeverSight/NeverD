@@ -42149,9 +42149,6 @@ TEST(HighCPointerAddresses, CorpusFuncLoadSehProbeRaisesImmediate) {
   EXPECT_EQ(llvm::StringRef(sourceLineContaining(Source, "var_m18;")).trim(),
             "uint32_t var_m18;")
       << Source;
-  EXPECT_EQ(llvm::StringRef(sourceLineContaining(Source, "t22_4;")).trim(),
-            "int32_t t22_4;")
-      << Source;
   EXPECT_EQ(
       llvm::StringRef(sourceLineContaining(Source, "dword_1400050E0;")).trim(),
       "int32_t dword_1400050E0;")
@@ -42168,12 +42165,22 @@ TEST(HighCPointerAddresses, CorpusFuncLoadSehProbeRaisesImmediate) {
   EXPECT_EQ(Source.find("(int64_t)(uint32_t)(int32_t)"), std::string::npos)
       << Source;
   const auto GlobalStore = sourceLineContaining(Source, "dword_1400050E0 = ");
-  const auto Copy = sourceLineContaining(Source, "t22_4 = var_m18;");
   ASSERT_FALSE(GlobalStore.empty()) << Source;
+  // SSA numbering can change while this continuation keeps the same values.
+  // Bind its signed snapshot through the actual store, then execute that copy.
+  llvm::StringRef Stored = llvm::StringRef(GlobalStore).trim();
+  ASSERT_TRUE(Stored.consume_front("dword_1400050E0 = ")) << Source;
+  ASSERT_TRUE(Stored.consume_back(";")) << Source;
+  const std::string Name = Stored.trim().str();
+  const std::string Declaration = "int32_t " + Name + ";";
+  ASSERT_EQ(llvm::StringRef(sourceLineContaining(Source, Declaration)).trim(),
+            Declaration)
+      << Source;
+  const auto Copy = sourceLineContaining(Source, Name + " = var_m18;");
   ASSERT_FALSE(Copy.empty()) << Source;
   compileAndRunSehContinuation(
-      "uint32_t var_m18 = bits;\nint32_t t22_4;\n" + std::string(Copy) + "\n" +
-          std::string(GlobalStore) + "\n" +
+      "uint32_t var_m18 = bits;\n" + Declaration + "\n" + std::string(Copy) +
+          "\n" + std::string(GlobalStore) + "\n" +
           std::string(sourceLineContaining(Source, ReturnText)),
       "dword_1400050E0", /*Portable=*/false);
 }

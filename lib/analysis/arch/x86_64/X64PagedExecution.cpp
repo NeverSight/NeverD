@@ -55,6 +55,7 @@ struct Transaction {
   bool Watchpoints = false;
   unsigned SseAlignmentBytes = 0;
   bool Repeated = false, PortIO = false, DebugRegister = false;
+  bool TakenBranch = false;
   uint8_t RepeatRegisters = 0, RepeatAddressBytes = 0;
   X86MemoryAccessResult Access;
   std::optional<llvm::Error> Error;
@@ -120,6 +121,10 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   const bool SseMemory = Flags & kX64PagedSseAccess;
   const auto Kind =
       X64PagedAccess(Flags & ~(kX64PagedStackAccess | kX64PagedSseAccess));
+  if (Kind == X64PagedAccess::BranchDecision) {
+    T.TakenBranch = Address != 0;
+    return 0;
+  }
   if (Kind == X64PagedAccess::BeginSse || SseMemory) {
     const auto &Controls = T.Memory.controls();
     if (auto Vector =
@@ -287,11 +292,10 @@ extern "C" uint64_t neverd_x64_paged_debug_access_v1(void *Exchange,
   return neverd_x64_paged_access_v1(Exchange, Address, Size, Flags);
 }
 
-llvm::Expected<bool> X64PagedExecution::validate(X64ContinuationStateV6 &State,
-                                                 uint64_t Address,
-                                                 X64PagedBody Validate,
-                                                 unsigned PagingAddressBits,
-                                                 bool InstructionDebug) {
+llvm::Expected<bool>
+X64PagedExecution::validate(X64ContinuationStateV6 &State, uint64_t Address,
+                            X64PagedBody Validate, unsigned PagingAddressBits,
+                            bool InstructionDebug, bool BranchDebug) {
   Last = {};
   Error.clear();
   if (!Validate || (PagingAddressBits != 48 && PagingAddressBits != 57))
@@ -309,7 +313,10 @@ llvm::Expected<bool> X64PagedExecution::validate(X64ContinuationStateV6 &State,
                                  Options.Debug->DebugCTL, Options.DebugProfile,
                                  Controls.CR4, Options.Debug->PendingData)))
     return invalid("paged instruction debug requires a valid profile, DR6, "
-                   "supported DR7 and zero DEBUGCTL");
+                   "supported DR7/DEBUGCTL");
+  if (Options.Debug && (Options.Debug->DebugCTL & kX86BranchTraceFlag) &&
+      (!InstructionDebug || !BranchDebug))
+    return invalid("BTF requires the v2 branch-aware instruction-debug bridge");
   if (!InstructionDebug && ((Original.RFlags & 0x100) ||
                             (Options.Debug && ((Options.Debug->DR7 & 0x20ff) ||
                                                Options.Debug->PendingData))))
@@ -375,8 +382,7 @@ llvm::Error X64PagedExecution::deliverDebug(X64ContinuationStateV6 &State,
     Breakpoints |= x86ExecutionBreakpoints(
         Options.Debug->DR, Options.Debug->DR7, LinearPC, Core.RFlags, false);
   }
-  Options.Debug->DR6 =
-      x86InstructionDebugStatus(Options.Debug->DR6, SingleStep, Breakpoints);
+  x86PublishInstructionDebug(*Options.Debug, SingleStep, Breakpoints);
   X64ContinuationEventV1 Event;
   Event.SavedPC = State.Core.Core.Core.Core.PC;
   Event.Vector = 1;
@@ -414,14 +420,13 @@ X64PagedExecution::resume(X64ContinuationStateV6 &State,
   return Last;
 }
 
-llvm::Expected<X64PagedExecutionResult>
-X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
-                           llvm::ArrayRef<uint8_t> Bytes, X64PagedBody Body,
-                           X64PagedBody Validate, uint32_t MXCSRMask,
-                           unsigned PagingAddressBits,
-                           std::optional<bool> DebugSSBlocked) {
+llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
+    X64ContinuationStateV6 &State, uint64_t Address,
+    llvm::ArrayRef<uint8_t> Bytes, X64PagedBody Body, X64PagedBody Validate,
+    uint32_t MXCSRMask, unsigned PagingAddressBits,
+    std::optional<bool> DebugSSBlocked, bool BranchDebug) {
   auto Valid = validate(State, Address, Validate, PagingAddressBits,
-                        DebugSSBlocked.has_value());
+                        DebugSSBlocked.has_value(), BranchDebug);
   if (!Valid)
     return Valid.takeError();
   if (!Body || Bytes.empty() || Bytes.size() > 15)
@@ -431,6 +436,7 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
   auto Controls = Memory.controls();
   const auto &Original = State.Core.Core.Core.Core;
   const bool SingleStep = Original.RFlags & 0x100;
+  const uint64_t DebugCTL = Options.Debug ? Options.Debug->DebugCTL : 0;
   const auto CPL = uint8_t(State.Core.CS.Selector & 3);
   auto Next = State;
   Transaction T{Memory,
@@ -441,8 +447,7 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
                 Next,
                 Options.SseAlignment,
                 Options.RepeatDebug ? &*Options.RepeatDebug : nullptr,
-                Options.DebugProfile ==
-                    X86InstructionDebugProfile::Watchpoints};
+                x86DebugWatchpoints(Options.DebugProfile)};
   // Generated 128-bit exchange accesses cover only the adjacent value words.
   static_assert(offsetof(X64PagedExchange, ValueHigh) == 8);
   static_assert(offsetof(X64PagedExchange, Transaction) == 16);
@@ -515,9 +520,7 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     return Last;
   }
   if (T.DebugRegister) {
-    if (!DebugSSBlocked ||
-        (Options.DebugProfile != X86InstructionDebugProfile::DebugRegisters &&
-         Options.DebugProfile != X86InstructionDebugProfile::Watchpoints))
+    if (!DebugSSBlocked || !x86DebugRegisters(Options.DebugProfile))
       return invalid("MOV-DR requires the debug-register profile and bridge");
     const auto Move = x86DebugRegisterEncoding(Bytes, true);
     if (!Move || Move->Size != Bytes.size())
@@ -534,8 +537,8 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
       if (Options.GeneralDetectFrame != X86GeneralDetectFrame::FaultResume &&
           Options.GeneralDetectFrame != X86GeneralDetectFrame::ClearResume)
         return invalid("general detect requires a saved-RF binding");
-      Options.Debug->DR6 =
-          x86InstructionDebugStatus(Options.Debug->DR6, false) | 0x2000;
+      x86PublishInstructionDebug(*Options.Debug, false);
+      Options.Debug->DR6 |= 0x2000;
       T.Event.emplace();
       T.Event->Vector = 1;
       T.Event->SavedPC = Address;
@@ -592,7 +595,8 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
     if (Returned->Completed) {
       Last.InstructionCompleted = true;
       Last.Exit = uint64_t(X64ContinuationExitV1::PrivilegeReturn);
-      if (auto Failure = FinishDebug(SingleStep))
+      if (auto Failure =
+              FinishDebug(x86InstructionDebugStep(SingleStep, DebugCTL, true)))
         return std::move(Failure);
       return Last;
     }
@@ -691,7 +695,7 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
         *T.RepeatDebug,
         {Address, EntryFlags, After[1] & Mask, After[6] & Mask, After[7] & Mask,
          T.RepeatAddressBytes, Bytes, Source, Destination,
-         bool(T.RepeatRegisters & kX64PagedRepeatCompare)});
+         bool(T.RepeatRegisters & kX64PagedRepeatCompare), DebugCTL});
   }
   State = Next;
   // The bound processor retains the pre-instruction flags during unfinished
@@ -723,8 +727,12 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
                   Move->SegmentRegister == X86SegmentRegister::SS &&
                   !*DebugSSBlocked;
   }
+  const bool Taken = T.TakenBranch ||
+                     Exit == uint64_t(X64ContinuationExitV1::Call) ||
+                     Exit == uint64_t(X64ContinuationExitV1::Return);
   if (auto Failure =
-          FinishDebug(SingleStep, NewSSShadow, false, RepeatGroupContinues))
+          FinishDebug(x86InstructionDebugStep(SingleStep, DebugCTL, Taken),
+                      NewSSShadow, false, RepeatGroupContinues))
     return std::move(Failure);
   return Last;
 }
@@ -813,10 +821,11 @@ extern "C" uint64_t neverd_x64_paged_transfer_v1(uint8_t *Context,
   return Transfer.Exit;
 }
 
-extern "C" uint64_t neverd_x64_paged_debug_step_v1(
-    uint8_t *Context, uint8_t *State, uint64_t Address, const uint8_t *Bytes,
-    uint64_t Size, X64PagedBody Body, X64PagedBody Validate, uint64_t MXCSRMask,
-    uint64_t PagingAddressBits, uint64_t SSBlocked) {
+static uint64_t debugStep(uint8_t *Context, uint8_t *State, uint64_t Address,
+                          const uint8_t *Bytes, uint64_t Size,
+                          X64PagedBody Body, X64PagedBody Validate,
+                          uint64_t MXCSRMask, uint64_t PagingAddressBits,
+                          uint64_t SSBlocked, bool BranchDebug) {
   auto &Execution = *reinterpret_cast<X64PagedExecution *>(Context);
   if (SSBlocked > 1) {
     Execution.recordEntryError(invalid("invalid instruction-debug SS shadow"));
@@ -825,7 +834,7 @@ extern "C" uint64_t neverd_x64_paged_debug_step_v1(
   auto Result =
       Execution.execute(*reinterpret_cast<X64ContinuationStateV6 *>(State),
                         Address, {Bytes, Size}, Body, Validate, MXCSRMask,
-                        PagingAddressBits, bool(SSBlocked));
+                        PagingAddressBits, bool(SSBlocked), BranchDebug);
   if (!Result) {
     Execution.recordError(Result.takeError());
     return uint64_t(X64ContinuationExitV1::InvalidState);
@@ -833,20 +842,51 @@ extern "C" uint64_t neverd_x64_paged_debug_step_v1(
   return Result->Exit;
 }
 
-extern "C" uint64_t
-neverd_x64_paged_debug_validate_v1(uint8_t *Context, uint8_t *State,
-                                   uint64_t Address, X64PagedBody Validate,
-                                   uint64_t PagingAddressBits) {
+static uint64_t debugValidate(uint8_t *Context, uint8_t *State,
+                              uint64_t Address, X64PagedBody Validate,
+                              uint64_t PagingAddressBits, bool BranchDebug) {
   auto &Execution = *reinterpret_cast<X64PagedExecution *>(Context);
-  auto Result =
-      Execution.validate(*reinterpret_cast<X64ContinuationStateV6 *>(State),
-                         Address, Validate, PagingAddressBits, true);
+  auto Result = Execution.validate(
+      *reinterpret_cast<X64ContinuationStateV6 *>(State), Address, Validate,
+      PagingAddressBits, true, BranchDebug);
   if (!Result) {
     Execution.recordError(Result.takeError());
     return uint64_t(X64ContinuationExitV1::InvalidState);
   }
   return uint64_t(*Result ? X64ContinuationExitV1::Continue
                           : X64ContinuationExitV1::InvalidState);
+}
+
+extern "C" uint64_t neverd_x64_paged_debug_step_v1(
+    uint8_t *Context, uint8_t *State, uint64_t Address, const uint8_t *Bytes,
+    uint64_t Size, X64PagedBody Body, X64PagedBody Validate, uint64_t MXCSRMask,
+    uint64_t PagingAddressBits, uint64_t SSBlocked) {
+  return debugStep(Context, State, Address, Bytes, Size, Body, Validate,
+                   MXCSRMask, PagingAddressBits, SSBlocked, false);
+}
+
+extern "C" uint64_t neverd_x64_paged_debug_step_v2(
+    uint8_t *Context, uint8_t *State, uint64_t Address, const uint8_t *Bytes,
+    uint64_t Size, X64PagedBody Body, X64PagedBody Validate, uint64_t MXCSRMask,
+    uint64_t PagingAddressBits, uint64_t SSBlocked) {
+  return debugStep(Context, State, Address, Bytes, Size, Body, Validate,
+                   MXCSRMask, PagingAddressBits, SSBlocked, true);
+}
+
+extern "C" uint64_t
+neverd_x64_paged_debug_validate_v1(uint8_t *Context, uint8_t *State,
+                                   uint64_t Address, X64PagedBody Validate,
+                                   uint64_t PagingAddressBits) {
+  return debugValidate(Context, State, Address, Validate, PagingAddressBits,
+                       false);
+}
+
+extern "C" uint64_t
+neverd_x64_paged_debug_validate_v2(uint8_t *Context, uint8_t *State,
+                                   uint64_t Address, X64PagedBody Validate,
+                                   uint64_t PagingAddressBits) {
+  return debugValidate(Context, State, Address, Validate, PagingAddressBits,
+                       true);
 }
 
 } // namespace neverd::analysis

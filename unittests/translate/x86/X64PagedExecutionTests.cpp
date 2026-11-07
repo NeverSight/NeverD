@@ -10,6 +10,7 @@
 #include "../../HostCpu.h"
 #include "../../lift/NeverDLiftFixture.h"
 #include "X64PagedNativeCPU.h"
+#include "X86BranchDebugOracle.h"
 #include "X86PortDevice.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"
@@ -67,8 +68,8 @@ protected:
   using Validate = decltype(&neverd_x64_paged_validate_v1);
   using Event = decltype(&neverd_x64_paged_event_v1);
   using Progress = decltype(&neverd_x64_paged_progress_v1);
-  using DebugStep = decltype(&neverd_x64_paged_debug_step_v1);
-  using DebugValidate = decltype(&neverd_x64_paged_debug_validate_v1);
+  using DebugStep = decltype(&neverd_x64_paged_debug_step_v2);
+  using DebugValidate = decltype(&neverd_x64_paged_debug_validate_v2);
   using Bind = void (*)(Access, Step, Validate, Event, Progress, DebugStep,
                         DebugValidate, Access);
   struct Shadows {
@@ -282,14 +283,14 @@ uint64_t neverd_x64_paged_event_v1(uint8_t *context, uint8_t *state,
 uint64_t neverd_x64_paged_progress_v1(uint8_t *context) {
     return progress_bridge(context);
 }
-uint64_t neverd_x64_paged_debug_step_v1(uint8_t *context, uint8_t *state,
+uint64_t neverd_x64_paged_debug_step_v2(uint8_t *context, uint8_t *state,
     uint64_t address, const uint8_t *bytes, uint64_t size,
     neverd_x64_paged_body_v1 body, neverd_x64_paged_body_v1 validate,
     uint64_t mask, uint64_t bits, uint64_t ss_blocked) {
     return debug_step_bridge(context, state, address, bytes, size, body, validate,
                              mask, bits, ss_blocked);
 }
-uint64_t neverd_x64_paged_debug_validate_v1(uint8_t *context, uint8_t *state,
+uint64_t neverd_x64_paged_debug_validate_v2(uint8_t *context, uint8_t *state,
     uint64_t address, neverd_x64_paged_body_v1 validate, uint64_t bits) {
     return debug_validate_bridge(context, state, address, validate, bits);
 }
@@ -318,8 +319,8 @@ uint64_t neverd_x64_paged_debug_validate_v1(uint8_t *context, uint8_t *state,
     ASSERT_NE(Binder, nullptr);
     Binder(&neverd_x64_paged_access_v1, &neverd_x64_paged_step_v1,
            &neverd_x64_paged_validate_v1, &neverd_x64_paged_event_v1,
-           &neverd_x64_paged_progress_v1, &neverd_x64_paged_debug_step_v1,
-           &neverd_x64_paged_debug_validate_v1,
+           &neverd_x64_paged_progress_v1, &neverd_x64_paged_debug_step_v2,
+           &neverd_x64_paged_debug_validate_v2,
            &neverd_x64_paged_debug_access_v1);
   }
 };
@@ -981,7 +982,8 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X64PagedSegmentPushTests.inc"
 #include "X64PagedWatchpointTests.inc"
 
-// These controllers reuse the debug/watchpoint fixtures above.
+// These cases reuse the debug/watchpoint fixtures above.
+#include "X64PagedBranchDebugTests.inc"
 #include "X64PagedDebugFunctionTests.inc"
 
 } // namespace

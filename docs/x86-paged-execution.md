@@ -137,8 +137,10 @@ Add `"paged_debug": true` to a paged V6 instruction-region export and bind a
 live `X64PagedDebugState` through `X64PagedExecutionOptions::Debug`. The bank
 contains DR0–DR3, DR6, DR7 and IA32_DEBUGCTL and stays disjoint from V6 state,
 guest RAM and the execution context. Its lifetime covers every call. V6's wire
-layout does not change. Debug exports use distinct `neverd_x64_paged_debug_*_v1`
-bridges, so linking an older runtime cannot silently omit debug delivery.
+layout does not change. Debug exports use `neverd_x64_paged_debug_step_v2`
+and `neverd_x64_paged_debug_validate_v2`, retaining the v1 operand callback.
+The versioned step/validator prevents an older runtime from silently omitting
+branch outcomes; v1 entry points remain available and refuse active BTF.
 The scheduled bridge validates the bank before producer polling or fetch and
 passes its current MOV-SS shadow to each step.
 
@@ -146,7 +148,8 @@ The default `DebugProfile = InstructionStep` is nontransactional with DR7=0x400
 and DEBUGCTL=0. `ExecuteBreakpoints` additionally enables the hardware execution
 comparators described below; `DebugRegisters` also owns MOV-DR and GD.
 `Watchpoints` adds data/I/O comparators and delayed causes as described below.
-BTF, task traps and other debug producers require their own state;
+`BranchWatchpoints` additionally admits DEBUGCTL.BTF; see its contract below.
+Task traps and other debug producers require their own state;
 incompatible controls refuse before effects. DR6's high half and reserved bits
 are checked. Historical BLD/RTM status
 inputs assume a target that can represent them. The local native oracle uses canonical BLD=RTM=1
@@ -264,8 +267,8 @@ targets, including nonflat compatibility code and all three return widths.
 Original handlers set RF, clear TF, count entry and return; a separate
 case repairs a subsequent page fault before retry. Both C routes compile
 through Clang and NeverC at O0/O2. The watchpoint profile below has its own
-qualification. BTF, task traps and transactional debug production remain
-separate contracts.
+qualification. Branch stepping has the separate contract below; task traps
+and transactional debug production remain unbound.
 No new LLVM intrinsic, SDK release or pin change is needed for this runtime
 binding. Reference: Intel SDM revision 093, volume 3 §§7.9, 20.2.1–20.2.5 and
 20.3.1.1.
@@ -274,6 +277,47 @@ Native debug comparisons use the shared Intel host gate. The evidence records
 the complete P/E regression and the subsequent `dev` integration separately,
 including rebuilt runtime tests and byte-for-byte generated-source comparison.
 The gate does not change software execution or infer its profile from the host.
+
+### Branch single stepping
+
+`DebugProfile = BranchWatchpoints` extends `Watchpoints` with Intel's
+nontransactional DEBUGCTL.BTF bit (bit 1). DEBUGCTL accepts zero or two; LBR,
+trace stores, RTM and other bits remain unbound. Sampled entry TF requests a
+single-step trap only after a successful taken branch when BTF is set. An
+untaken condition, ordinary instruction or REP element does not set BS.
+A taken zero-displacement JMP/Jcc still traps. CALL/RET and successful
+IRET/RETF preserve their existing completion and frame owners.
+
+The writer passes LowIR's actual jump predicate through `BranchDecision`.
+It does not infer a branch from PC inequality. New debug exports require the
+v2 step and validation symbols; an old body cannot silently enable BTF, even
+with TF clear. The v1 near-transfer receipt still reports only CALL/RET.
+
+Every generated #DB cause clears BTF before IDT entry, including ICEBP,
+execution/data comparators and GD. Accepted external #DB has the same effect;
+deferred events leave the bank unchanged. Clearing survives secondary faults,
+backing stops and event resume. Software INT 1 and ordinary faults do not
+invent a hardware debug cause or clear BTF by themselves.
+
+REP group policy receives raw `Flags` and `DebugCTL` independently. With BTF,
+TF no longer forces an instruction-step trap at each element, but still can
+change processor fast-string grouping. Do not erase TF in a target's group
+callback. The default binding explicitly chooses an element boundary; it
+does not infer a particular CPU's group size.
+
+Original Linux ptrace probes and runtime comparisons qualify branch selection
+and selected GPR/stack changes in long64 and protected16/32 user code. Ptrace
+normalizes TF and owns exception entry. Raw debug frames, CPL0 behavior and
+DEBUGCTL readback therefore have software coverage only on this host: its KVM
+masks BTF even when the MSR write succeeds. Task-switch and transactional debug
+remain outside the profile. Reference: [Intel SDM, volume 3B, §18.4.3](https://cdrdv2-public.intel.com/671427/253669-sdm-vol-3b.pdf).
+
+[The November 7 qualification](evidence/x86-branch-debug-2026-11-07.json)
+records each tested revision, both SDKs and P/E cores, compiler/source hashes
+and generated-source comparisons. Broad regression results retain their frozen
+inputs; later dependency and shared-source integrations have separate results.
+The LA57 skip remains explicit. These bounded checks do not qualify full-machine
+BTF or close the global LLVM release gate.
 
 ### Debug-register transfers and general detect
 

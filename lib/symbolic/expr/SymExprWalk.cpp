@@ -204,9 +204,10 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
         Position->second = Hit->second;
         continue;
       }
-      // Membership concerns the original immutable DAG. A scheduled parent
-      // already passed this check before its children were visited.
-      if (ReplacedVariable && !containsVariable(Cur, *ReplacedVariable)) {
+      // Every variable here follows the replaced one. Use the cached lower
+      // bound only on this first visit; a membership walk per node would be
+      // quadratic on a chain. Uncertain subtrees are rebuilt once below.
+      if (ReplacedVariable && minimumVariableId(Cur) > *ReplacedVariable) {
         Position->second = Cur;
         continue;
       }

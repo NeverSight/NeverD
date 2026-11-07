@@ -7,6 +7,8 @@
 /// Instruction authentication, event admission and persistent restart state.
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCpu.h"
+#include "X86BranchDebugOracle.h"
 #include "X86PortDevice.h"
 #include "gtest/gtest.h"
 
@@ -742,5 +744,8 @@ TEST_F(X86LegacyExecutionTest, ScalarMalformedFormsFailBeforeFetch) {
 #include "X86LegacyStatusTests.inc"
 #include "X86LegacyStringTests.inc"
 #include "X86LegacyWatchpointTests.inc"
+
+// Branch cases reuse the debug fixture above.
+#include "X86LegacyBranchDebugTests.inc"
 
 } // namespace

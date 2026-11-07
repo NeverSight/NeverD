@@ -24,7 +24,7 @@ public:
                            X86InstructionDebugProfile Profile,
                            uint8_t Initial = 0)
       : Matches(Initial), Memory(Memory), Debug(Debug),
-        Active(Debug && Profile == X86InstructionDebugProfile::Watchpoints) {
+        Active(Debug && x86DebugWatchpoints(Profile)) {
     if (Active)
       Previous = Memory.exchangeAccessObserver({record, this});
   }

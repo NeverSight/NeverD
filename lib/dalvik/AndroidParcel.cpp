@@ -60,7 +60,7 @@ ExecutionResult AndroidFramework::readParcelBuffer(Heap &heap,
   return {};
 }
 
-ExecutionResult AndroidFramework::parcel(Heap &heap,
+ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
                                          const LibraryMethod &method,
                                          uint64_t receiver,
                                          std::span<const uint64_t> arguments,
@@ -106,6 +106,9 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
     auto &bytes = object->Bytes;
     auto &position = state.position;
     if (name == "recycle") {
+      auto released = releaseParcelObjects(state);
+      if (released.stop != ExecutionStop::Returned)
+        return released;
       if (state.release)
         state.release();
       state.release = {};
@@ -161,6 +164,13 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       if (readable.size() != bytes.size())
         return unsupported("Android Parcel Binder buffer size changed");
     }
+    auto protectedRange = [&](uint64_t start, uint64_t size) {
+      const auto index = neverd::sorted::lowerBound64(
+          state.objects.data(), state.objects.size(),
+          start > 23 ? start - 23 : 0);
+      return index != state.objects.size() &&
+             state.objects[index] < start + size;
+    };
     // No allocator bytes are invented for a cursor beyond initialized data.
     auto write = [&](std::span<const uint8_t> input, size_t zeros = 0) {
       if (state.release)
@@ -173,6 +183,9 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       if (end > INT32_MAX)
         throw Stop{
             unsupported("Android Parcel data exceeds the native size range")};
+      if (protectedRange(position, input.size() + zeros))
+        throw Stop{unsupported("Android Parcel overwrites of Binder objects "
+                               "require native object-table mutation")};
       work(input.size() + zeros);
       if (end > bytes.size() && !heap.resizeBytes(*object, end))
         storage();
@@ -185,13 +198,6 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       std::array<uint8_t, 8> encoded;
       llvm::support::endian::write64le(encoded.data(), value);
       write(std::span(encoded).first(size));
-    };
-    auto protectedRange = [&](uint64_t start, uint64_t size) {
-      const auto index = neverd::sorted::lowerBound64(
-          state.objects.data(), state.objects.size(),
-          start > 23 ? start - 23 : 0);
-      return index != state.objects.size() &&
-             state.objects[index] < start + size;
     };
     auto readInteger = [&](size_t size) -> uint64_t {
       if (uint64_t(position) + size > readable.size())
@@ -221,6 +227,14 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
       if (type == 0x73622a85) {
         if (!cookie)
           return returned();
+        auto node = local_binders.find(cookie);
+        if (node != local_binders.end() && node->second.alive()) {
+          auto valid = services.binder_identity(
+              BinderIdentityOperation::Validate, node->second.pointer);
+          return valid.stop == ExecutionStop::Returned
+                     ? returned(node->second.object)
+                     : valid;
+        }
         return unsupported("Android local Binder object requires a native Java "
                            "object association");
       }
@@ -231,6 +245,59 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
         return unsupported(
             "Android Parcel Binder handle has no native connection");
       return binderHandle(heap, *state.fd, uint32_t(pointer), admit);
+    }
+    if (name == "writeStrongBinder") {
+      if (state.release)
+        return unsupported("Android Parcel writes to a Binder-owned reply "
+                           "require native capacity semantics");
+      std::array<uint8_t, 24> encoded{};
+      uint32_t type = 0x73622a85;
+      uint64_t pointer = 0, cookie = 0;
+      std::optional<uint32_t> fd;
+      if (const auto binder = heap.get(arguments[0])) {
+        if (program.assignable(objectDescriptor(*binder),
+                               "Landroid/os/Binder;")) {
+          auto local = localBinder(heap, program, arguments[0]);
+          if (local.stop != ExecutionStop::Returned)
+            return local;
+          cookie = local.value;
+          pointer = local_binders.find(cookie)->second.pointer;
+        } else if (binder->ClassName == "android/os/BinderProxy") {
+          auto binding = binder_bindings.find(arguments[0]);
+          if (binding == binder_bindings.end())
+            return unsupported(
+                "Android Parcel BinderProxy has no native binding");
+          fd = binding->second.fd;
+          if (state.fd && state.fd != fd)
+            return unsupported(
+                "Android Parcel Binder objects require one native connection");
+          type = 0x73682a85;
+          pointer = binding->second.handle;
+        } else
+          return unsupported("Android custom IBinder conversion requires "
+                             "native warning logging");
+      }
+      if (pointer && !state.objects.empty() &&
+          position < state.objects.back() + 24)
+        return unsupported(
+            "Android Parcel non-append Binder metadata is not modeled");
+      llvm::support::endian::write32le(encoded.data(), type);
+      // API 28's cold IPCThreadState allows background scheduling: nice 19
+      // and ACCEPTS_FDS. This is a policy word, not an object ownership flag.
+      llvm::support::endian::write32le(encoded.data() + 4, 0x113);
+      llvm::support::endian::write64le(encoded.data() + 8, pointer);
+      llvm::support::endian::write64le(encoded.data() + 16, cookie);
+      const auto offset = position;
+      write(encoded);
+      if (pointer)
+        state.objects.push_back(offset);
+      if (cookie) {
+        ++local_binders.find(cookie)->second.references;
+        state.local_objects.push_back(cookie);
+      }
+      if (fd)
+        state.fd = fd;
+      return returned();
     }
     if (name == "writeInt" || name == "writeLong") {
       integer(arguments[0], name == "writeInt" ? 4 : 8);
@@ -300,6 +367,9 @@ ExecutionResult AndroidFramework::parcel(Heap &heap,
             "Android Parcel unmarshall requires a valid native array range");
       const uint64_t padded = (uint64_t(length) + 3) & ~uint64_t(3);
       work(length);
+      auto released = releaseParcelObjects(state);
+      if (released.stop != ExecutionStop::Returned)
+        return released;
       if (state.release)
         state.release();
       state.release = {};

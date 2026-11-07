@@ -383,7 +383,6 @@ void foldCopyChains(HighFunc &Func) {
     if (It == VarDefValue.end() || !It->second)
       continue;
     if (It->second->Kind == ExprKind::Call ||
-        It->second->hasOrderedMemoryAccess() ||
         containsNonMovableEffect(It->second))
       continue;
     FoldMap[DstKey] = It->second;
@@ -461,7 +460,7 @@ void foldMultiUseCopies(std::vector<HighStmt> &Stmts) {
     if (NumDefs != 1 || DefIsCall[Key])
       continue;
     auto Val = MultiDefValue[Key];
-    if (!Val || Val->hasOrderedMemoryAccess() || containsNonMovableEffect(Val))
+    if (!Val)
       continue;
     auto TotalIt = TotalUseCount.find(Key);
     auto CopyIt = CopyUseCount.find(Key);
@@ -469,7 +468,7 @@ void foldMultiUseCopies(std::vector<HighStmt> &Stmts) {
       continue;
     if (CopyIt == CopyUseCount.end())
       continue;
-    if (TotalIt->second == CopyIt->second)
+    if (TotalIt->second == CopyIt->second && !containsNonMovableEffect(Val))
       PropMap[Key] = Val;
   }
   filterStableCopyCandidates(Stmts, PropMap);
@@ -501,8 +500,7 @@ void inlineSingleDefSingleUse(std::vector<HighStmt> &Stmts) {
       bool IsInlineable =
           S.Val->Kind == ExprKind::BinOp || S.Val->Kind == ExprKind::UnaryOp ||
           S.Val->Kind == ExprKind::Var || S.Val->Kind == ExprKind::Const;
-      if (IsInlineable && !S.Val->hasOrderedMemoryAccess() &&
-          !containsNonMovableEffect(S.Val))
+      if (IsInlineable)
         SingleUseDefs[Key] = S.Val;
     }
     forEachRhsExpr(S, [&](const ExprPtr &E) {
@@ -510,7 +508,10 @@ void inlineSingleDefSingleUse(std::vector<HighStmt> &Stmts) {
     });
   });
   for (auto It = SingleUseDefs.begin(); It != SingleUseDefs.end();) {
-    if (SingleDefCount[It->first] != 1 || SingleUseCount[It->first] > 1)
+    // Count first: rejected definitions need no expression-graph proof.
+    // The effect predicate includes ordered and segmented memory accesses.
+    if (SingleDefCount[It->first] != 1 || SingleUseCount[It->first] > 1 ||
+        containsNonMovableEffect(It->second))
       It = SingleUseDefs.erase(It);
     else
       ++It;
