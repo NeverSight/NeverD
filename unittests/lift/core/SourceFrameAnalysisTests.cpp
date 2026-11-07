@@ -3047,6 +3047,7 @@ TEST(SourceFrameAnalysis, LogicalCopiesAcceptFixedAndVariadicStackPointers) {
     const auto Copies = F.query();
     ASSERT_TRUE(Copies);
     ASSERT_EQ(Copies->size(), 1U);
+    EXPECT_TRUE(restoresNativeSourceState(F.Low, Arch::AArch64, F.Calls));
     EXPECT_EQ(Copies->front().Parameter,
               Variadic ? kCopyVariadicPrefix : kCopyGPRegisters);
     EXPECT_EQ(Copies->front().FrameOffset, -int64_t(kCopyOriginalFrameBytes));
@@ -3107,4 +3108,24 @@ TEST(SourceFrameAnalysis, LogicalStackCopyCannotOverlapAnotherStackValue) {
   }
   Ops.insert(At, Setup.begin(), Setup.end());
   EXPECT_FALSE(F.query());
+}
+
+TEST(SourceFrameAnalysis, LogicalStackCopyRejectsUnrelatedFramePointerSpills) {
+  RecordCopyFixture F;
+  putRecordCopyOnStack(F, false);
+  ASSERT_TRUE(F.query());
+  auto &Ops = F.Low.Blocks.front().Ops;
+  auto At = std::find_if(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+    return nativeSourceCallKey(Op) == F.Site;
+  });
+  Ops.insert(
+      At, {op(NdOp::INT_ADD, F.X8,
+              {SP, NdVar::scalar(kCopyUnrelatedPointerOffset, kCopyWordBytes)},
+              F.Site.Instruction),
+           op(NdOp::INT_ADD, F.X9,
+              {SP, NdVar::scalar(kCopyOutgoingBytes, kCopyWordBytes)},
+              F.Site.Instruction),
+           op(NdOp::STORE, {}, {F.X8, F.X9}, F.Site.Instruction)});
+  EXPECT_FALSE(F.query());
+  EXPECT_FALSE(restoresNativeSourceState(F.Low, Arch::AArch64, F.Calls));
 }

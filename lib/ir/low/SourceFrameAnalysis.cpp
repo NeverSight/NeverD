@@ -278,8 +278,11 @@ public:
       for (const auto &[Site, Contract] : Calls)
         if (Contract.Signature)
           for (const auto &Parameter : sourceABIParameters(*Contract.Signature))
-            TrackStackArguments |=
-                Parameter.Location.Kind == SourceABICarrierKind::Stack;
+            if (Parameter.Location.Kind == SourceABICarrierKind::Stack) {
+              TrackStackArguments = true;
+              TrackCopyPointers |= Contract.ByValueFrameParameters.count(
+                  Parameter.ParameterIndex);
+            }
     for (const auto &Range : TRI.callPreservedRanges(Format))
       for (unsigned I = 0; I < Range.Bytes; ++I)
         Preserved.insert(Range.Offset + I);
@@ -706,6 +709,7 @@ public:
         std::vector<std::pair<int64_t, size_t>> WritableFrameRanges;
         std::vector<std::pair<int64_t, size_t>> BorrowedRanges;
         std::vector<SourceFrameByValueCopy> CallCopies;
+        std::set<int64_t> CopyPointerBytes;
         int64_t OutgoingStackEnd = *SP;
         std::optional<std::pair<int64_t, size_t>> InitializedResult;
         std::map<int64_t, State::ValueIdentity> InitializedValues;
@@ -757,6 +761,8 @@ public:
                         ByteFact{ByteFact::Frame, First.Value, I, true})
                   return false;
               Address = First.Value;
+              for (unsigned I = 0; I < Location.ValueBytes; ++I)
+                CopyPointerBytes.insert(Start + I);
               WritableFrameRanges.emplace_back(
                   *SP,
                   (Start - *SP + Location.ValueBytes + TRI.PointerSize - 1) &
@@ -1014,6 +1020,18 @@ public:
             if (UsedEntryRegisters)
               UsedEntryRegisters->insert(ResultRegister);
           }
+        }
+        // Only a checked by-value stack carrier may expose a stored frame
+        // address at a call. Unknown or other live pointer spills retain
+        // their taint, including after a callee may overwrite an argument.
+        if (TrackCopyPointers) {
+          if (Remaining < Current.Stack.size())
+            return false;
+          Remaining -= Current.Stack.size();
+          for (const auto &[Address, Fact] : Current.Stack)
+            if (Address >= *SP && Fact.MayBeFrame &&
+                !CopyPointerBytes.count(Address))
+              return false;
         }
         // The incoming stack area can be overwritten by the callee. A copy
         // inside it is observable through both transports, even if the stack
@@ -1405,11 +1423,16 @@ public:
         if (Op.Opcode == NdOp::STORE) {
           if (!Memory.StoredValue)
             return false;
-          // The initial spill domain carries entry bytes, not addresses of
-          // this frame. Reject these stores even into another private slot,
-          // so invalidating memory facts cannot lose a possible escape.
+          // The copy proof can retain a complete private pointer until its
+          // independently certified stack transport consumes it. Without
+          // that contract, retain the entry-byte spill domain. Inexact or
+          // external stores never acquire permission from a later call
+          // prototype.
+          const bool CopyPointer = TrackCopyPointers && Address &&
+                                   Memory.AccessSize == TRI.PointerSize &&
+                                   FrameOffset(*Memory.StoredValue);
           for (unsigned I = 0; I < Memory.AccessSize; ++I)
-            if (Read(*Memory.StoredValue, I).MayBeFrame)
+            if (Read(*Memory.StoredValue, I).MayBeFrame && !CopyPointer)
               return false;
           if (Address) {
             if (*Address < -::neverd::limits::ir::kSourceFrameAnalysisMaxFrame)
@@ -1619,6 +1642,7 @@ private:
   RegisterFacts RequiredExitRegisters;
   bool TerminalOnly;
   bool TrackStackArguments;
+  bool TrackCopyPointers = false;
   std::map<int64_t, uint16_t> IncomingStackSlots;
   std::map<int64_t, uint16_t> ObservedIncomingStackWidths;
   bool RequirePrivateFrame;

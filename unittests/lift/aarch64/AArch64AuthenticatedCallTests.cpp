@@ -21,6 +21,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/AArch64/AArch64AuthenticatedCall.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -880,7 +881,11 @@ TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
                                      Diagnostic))
         << Diagnostic;
     Call.SourceCallHint = Hint;
-    Function.CallInfos.front().SourceCallHint = Hint;
+    recoverCallAbi(Function, Arch::AArch64, {});
+    ASSERT_EQ(Function.CallInfos.size(), 1U);
+    ASSERT_EQ(Function.CallInfos.front().SourceCallHint, Hint);
+    ASSERT_EQ(Function.CallInfos.front().Args.size(),
+              sourceABIParameters(Hint->Signature).size() + 1);
     MedLLVMEmitter Emitter;
     Emitter.setAnalystSourceProjection(true);
     llvm::LLVMContext Context;
