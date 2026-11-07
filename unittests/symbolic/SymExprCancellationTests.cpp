@@ -358,3 +358,68 @@ TEST(SymExprCancellation, UnsignedZeroBoundsShareTheirExactZeroPredicate) {
     }
   }
 }
+
+TEST(SymExprCancellation, FlattenedOrWordsAbsorbRepeatedMaskedCopies) {
+  std::mt19937_64 Random(0xaba0b);
+  for (const unsigned Width : {1u, 3u, 8u, 32u, 64u, 128u, 257u})
+    for (const unsigned Count : {2u, 8u, 12u}) {
+      SCOPED_TRACE(Width);
+      SCOPED_TRACE(Count);
+      SymContext C;
+      llvm::SmallVector<SymRef> Terms;
+      for (unsigned I = 0; I < Count; ++I)
+        Terms.push_back(C.mkFreshVar(Width, "part_"));
+      const auto Word = C.mkOr(Terms);
+      const auto MaskValue = word(Random, Width);
+      const auto Mask = C.mkConst(MaskValue);
+      auto Repeated = Word;
+      for (unsigned I = 0; I < 16; ++I)
+        Repeated = C.mkAnd(Mask, C.mkOr(Word, Repeated));
+      EXPECT_EQ(Repeated, C.mkAnd(Mask, Word));
+      for (unsigned I = 0; I < 64; ++I) {
+        std::vector<llvm::APInt> Values;
+        llvm::APInt Expected(Width, 0);
+        for (unsigned T = 0; T < Count; ++T) {
+          Values.push_back(word(Random, Width));
+          Expected |= Values.back();
+        }
+        EXPECT_EQ(C.eval(Repeated, Values), Expected & MaskValue);
+      }
+    }
+}
+
+TEST(SymExprCancellation, FlattenedOrAbsorptionKeepsEveryUncoveredBit) {
+  SymContext C;
+  const auto X = C.mkVar("x", 4), Y = C.mkVar("y", 4);
+  const auto Z = C.mkVar("z", 4);
+  for (uint64_t M = 0; M < 16; ++M) {
+    const auto Mask = C.mkConst(4, M);
+    const auto Partial = C.mkOr({X, Y, C.mkAnd(Mask, C.mkOr(X, Z))});
+    const auto ConstantCover =
+        C.mkOr({X, C.mkConst(4, 3), C.mkAnd(Mask, C.mkOr(X, C.mkOne(4)))});
+    EXPECT_EQ(ConstantCover, C.mkOr(X, C.mkConst(4, 3)));
+    for (uint64_t A = 0; A < 16; ++A)
+      for (uint64_t B = 0; B < 16; ++B)
+        for (uint64_t D = 0; D < 16; ++D) {
+          const std::array<uint64_t, 3> Values{A, B, D};
+          EXPECT_EQ(C.evalU64(Partial, Values), A | B | (M & (A | D)));
+          EXPECT_EQ(C.evalU64(ConstantCover, Values), A | 3);
+        }
+  }
+}
+
+TEST(SymExprCancellation, FlattenedOrAbsorptionWorkRefusalKeepsUnknownBits) {
+  SymContext C;
+  llvm::SmallVector<SymRef> Covers;
+  for (unsigned I = 0; I < 300; ++I)
+    Covers.push_back(C.mkFreshVar(64, "cover_"));
+  const auto Unknown = C.mkFreshVar(64, "unknown_");
+  auto Parts = Covers;
+  Parts.push_back(Unknown);
+  Covers.push_back(
+      C.mkAnd(C.mkConst(64, 0x8000000000000001ULL), C.mkOr(Parts)));
+  const auto Result = C.mkOr(Covers);
+  std::vector<uint64_t> Values(301, 0);
+  Values.back() = 0x8000000000000001ULL;
+  EXPECT_EQ(C.evalU64(Result, Values), Values.back());
+}
