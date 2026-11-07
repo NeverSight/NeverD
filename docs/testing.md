@@ -1794,6 +1794,12 @@ the tested revision and library hash independently of the model producer.
 The earlier non-x8 typed-call matrix retains the C O0 exception-class
 differences recorded in its own receipt; byte-identical exports preserve
 that qualification and its limits.
+After integrating dev `64fabf148`, the additional qualification at `ad229f65e`
+rebuilds the same targets and repeats the complete public SDK matrix. Of 1,334
+affected call, frame, type and HighIR test instances, 1,308 pass and 26 explicitly
+skip; none fail or time out. All 25 original-x8 and 1,625 earlier typed-call
+objects again match the recorded model inputs. The receipt retains this
+integration check separately from the earlier complete owner regression.
 `ImmutableNativeCalls.Generated*` checks ordinary and loop-frame image
 publication after dead private reads and their initializers disappear. The
 relocation validator still rejects unbound live image addresses.

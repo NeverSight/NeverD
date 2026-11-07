@@ -346,6 +346,138 @@
       "result": "Cancelled; not a qualification run.",
       "reason": "Duplicate CTest case names spread labels to 2273 stale NeverDLiftTests cases and 8 unbuilt NeverDSEHRuntimeMemoryTests cases. The final run uses actual rebuilt executable paths.",
       "log_sha256": "246ec88772ba009771779474071c7c7f837d905cd6c1b78ee5f71f8e60398b0c"
+    },
+    "latest_dev_integration": {
+      "revision": "ad229f65eba7e855b44c25d63d347bd967fd76db",
+      "integrated_dev_revision": "64fabf148536754daf9d0ee06098bf4faa1a82bb",
+      "build_receipt_sha256": "0495734974d696abffc1ab8ceaa5a34c6a7bab0ff3881b7c3dad2f0bae8996ed",
+      "sdk": {
+        "library_sha256": "a0f22599bf6d672eb927c0f6f359b8eecdf126c23837c55213585f25a06d1cae",
+        "source_projections": 82,
+        "arm64e_object_compilations": 164,
+        "native_arm64_executions": 180,
+        "native_ordinary_unwind_executions": 6,
+        "refusals": 14,
+        "summary_sha256": "ffd2ac9e30d91fe51bab20a56a7550e47c4aaa29a9640caf9659edfc745db14d",
+        "active_native_pac_qualified": false,
+        "signed_unwind_qualified": false
+      },
+      "selection": {
+        "instances_per_executable": {
+          "NeverDSourceCallABITests": 26,
+          "NeverDTypesTests": 197,
+          "NeverDObjCSourceCallTests": 189,
+          "NeverDIntegerCallArgumentsTests": 13,
+          "NeverDAAPCS64CallContractTests": 29,
+          "NeverDHighControlFlowTests": 538,
+          "NeverDLLVMCValueTests": 153,
+          "NeverDMedPrologueSavesTests": 117,
+          "NeverDAArch64AuthenticatedCallTests": 72
+        },
+        "selection_sha256": "b79595b6a74c6ba0491537afe02d4c133e58d1f5b4a3c5206ea80985f48b19e4",
+        "inventory_sha256": "ae864c64536b1ef44ad77541881845c708f19b81584a04aaeafdd50bbde17d6f",
+        "method": "Actual executable owners, plus related source ABI/frame/immutable-image suites in the rebuilt ObjC source owner."
+      },
+      "phases": [
+        {
+          "phase": "fast",
+          "status": 0,
+          "tests": 1267,
+          "parallel": 2,
+          "timeout_override": false,
+          "passed": 1241,
+          "skipped": [
+            "HeaderLibrary.OptionalUCRTExportsKeepFloatingVarargAndCallbackContracts",
+            "HeaderLibrary.OptionalUCRTTerminationNeedsItsDeclarationContext",
+            "HeaderLibrary.OptionalUCRTStreamsKeepTheirOwnOpaqueRecord",
+            "PDBTypeImportKernel.RebuildsTheKernelTypes",
+            "TypeParseKernel.ReadsBackEveryKernelTypeAsRendered",
+            "LLVMCValues.PrefetchKeepsComputedAndSegmentedMemoryOperands",
+            "LLVMCValues.NativeSHA256KeepsVectorInputsAndInstructionFeatures",
+            "LLVMCValues.SHAFeaturesComposeWithNativeInstructionFallbacks",
+            "LLVMCValues.RtmFeaturesComposeWithShaAcrossNativeAndAssemblyCalls",
+            "LLVMCValues.NativeVirtualizationKeepsStatusAndFailedReadPrior",
+            "LLVMCValues.NativeDescriptorReadKeepsExplicitPrior",
+            "LLVMCValues.NativeDescriptorAddressesKeepSegmentWidthAndPrior",
+            "LLVMCValues.TargetIndexWidthKeepsNegativeFrameOffsets",
+            "LLVMCValues.X87MemoryViewsRetainBitsAndTenByteExtents",
+            "LLVMCValues.X87FiniteConstantsKeepExtendedPrecisionAndRange",
+            "LLVMCValues.X86NativeDivideKeepsBothResultsAndDeadResultFaults",
+            "LLVMCValues.X86BitStringIntrinsicsMatchOriginalMemoryAndFaults",
+            "LLVMCValues.X86DivideIntrinsicsMatchOriginalResultsAndFaults",
+            "LLVMCValues.NativeAssemblyKeepsOperandSnapshotsAcrossBranches",
+            "LLVMCValues.I386WideCarriersRetainWrappingShiftsAndSignedComparison",
+            "LLVMCValues.WideIntegerConstantsPreserveEveryWordAndStoreExtent",
+            "LLVMCValues.WideConstantsPreserveEveryStoredByte",
+            "LLVMCValues.AWeakImportIsDeclaredWeak",
+            "LLVMCValues.SelectedFunctionKeeps32BitSynthesizedTableStorage",
+            "LLVMCValues.VariadicCallSiteKeepsWindowsFloatingRegisterDuplicates",
+            "LLVMCValues.AFixedCallSiteKeepsItsOwnCallingConvention"
+          ],
+          "failed": [],
+          "junit_sha256": "3e9bb982c8f76da2ab4911f179260bd452c0b9bd671438b3a8f32a265708d72d"
+        },
+        {
+          "phase": "incoming",
+          "status": 0,
+          "tests": 2,
+          "parallel": 1,
+          "timeout_override": false,
+          "passed": 2,
+          "skipped": [],
+          "failed": [],
+          "junit_sha256": "81e7a65f0d51bdafb7e3151e7a84272397def1f6920eb356466510bd013740ed"
+        },
+        {
+          "phase": "typed",
+          "status": 0,
+          "tests": 65,
+          "parallel": 4,
+          "timeout_override": false,
+          "passed": 65,
+          "skipped": [],
+          "failed": [],
+          "junit_sha256": "fcc516dd9f3cf169cc6a92424cd5d5c7b62a756a77272a99627d20d2d50e0aa9"
+        }
+      ],
+      "object_equivalence": {
+        "original_x8": {
+          "exported_objects": 25,
+          "identical_objects": 25,
+          "differences": [],
+          "meaning": "Byte equivalence preserves earlier evidence and its limits; this is not a new model execution."
+        },
+        "earlier_typed_calls": {
+          "exported_objects": 1625,
+          "identical_objects": 1625,
+          "differences": [],
+          "meaning": "Byte equivalence preserves earlier evidence and its limits; this is not a new model execution."
+        }
+      },
+      "passed": true,
+      "qualified_tests": 1334,
+      "qualified_passes": 1308,
+      "qualified_skips": 26,
+      "qualification_sha256": "09d1ab1bea1cd7a6dac215335c92af81e8446681f23efe57bd008ab112a5aaae",
+      "reason": "A newer dev changed shared HighIR effect/demand analysis, type rendering and SDK view behavior. Rebuild the original targets, repeat the public SDK matrix, run affected source/frame/type/control-flow/call regressions, and regenerate model inputs. The earlier complete owner qualification is retained separately.",
+      "format": {
+        "version": "22.1.2",
+        "status": "passed",
+        "base": "64fabf148536754daf9d0ee06098bf4faa1a82bb",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "source_provenance": {
+        "passed": true,
+        "history_commits": 16,
+        "files": 11754,
+        "unit_tests_passed": 46,
+        "initial_inherited_findings": 8,
+        "normalization_commit": "1925b0941",
+        "normalization_scope": "Only eight identical compiler home-directory prefixes in the inherited x86 descriptor receipt. All other JSON values, commands, test results and artifact hashes are unchanged.",
+        "history_scope": "The adjacent provenance .def adds the exact file, publication/cleanup revisions and one line digest. Current files, other revisions and external policies remain checked.",
+        "log_sha256": "287d9804922fe7bc2d12c0f9c3037f8cec06536f737a4e832d3277ae5c5ebdcf",
+        "unit_log_sha256": "b91a0dbe8ffa2505f4291dbd1319726ea17264d416291d22f9befad586c6109f"
+      }
     }
   },
   "native_pac_control": {
