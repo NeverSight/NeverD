@@ -198,6 +198,10 @@ uint32_t neverd_x86_legacy_attempted_v1(void *context) {
                         "-shared", "-Wl,-Bsymbolic", "-Wall", "-Wextra",
                         "-Werror", Source.string(), "-o", Library.string()});
     ASSERT_TRUE(Built.ok()) << Built.err;
+    if (const auto *Artifacts =
+            std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR"))
+      fs::copy_file(Library, fs::path(Artifacts) / (Name + ".so"),
+                    fs::copy_options::overwrite_existing);
     std::string Error;
     auto DL = llvm::sys::DynamicLibrary::getPermanentLibrary(
         Library.string().c_str(), &Error);
@@ -578,6 +582,15 @@ TEST_P(X86LegacySourceTest,
                                              4));
   EXPECT_EQ(Object[4], 1);  // ELFCLASS32.
   EXPECT_EQ(Object[18], 3); // EM_386, not the executing host's x64 ABI.
+  if (const auto *Artifacts =
+          std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
+    fs::create_directories(Artifacts);
+    const auto Name = "i386-route-" + std::to_string(GetParam());
+    fs::copy_file(CrossSource, fs::path(Artifacts) / (Name + ".c"),
+                  fs::copy_options::overwrite_existing);
+    fs::copy_file(CrossObject, fs::path(Artifacts) / (Name + ".o"),
+                  fs::copy_options::overwrite_existing);
+  }
   std::vector<std::string> Args{"decompile", Input.string(),
                                 "--x86-legacy-source=" + Settings.string(),
                                 "-o", Output.string()};
