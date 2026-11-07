@@ -335,7 +335,11 @@ variants unless the function itself reads them. Unknown calls still depend on
 all registers and memory.
 
 Contextual joins retain complete sets of up to four register/stored-word
-alternatives. Transfers lift the canonical scalar operation over those sets;
+alternatives. Numeric literals already contained in an unsigned range are
+removed before checking that limit. This preserves the complete numeric set
+and prevents one returned pointer from acquiring a redundant literal/range
+alias split. Frame-relative and captured identities remain distinct from
+numeric ranges. Transfers lift the canonical scalar operation over those sets;
 for example two immutable table bases can load the same target. Unknown is
 absorbing and set overflow widens to unknown, never a truncated list. Multiple
 remaining literal CALLX values are analyzed by refining the actual call-register

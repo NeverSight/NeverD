@@ -1452,25 +1452,37 @@ GP/FP registers, mixed operands, exact result bits and Darwin variadic tails
 across both keys, zero/dynamic discriminators and raw controls. The matrix also
 checks signed/unsigned 128-bit values, single/pair integer and pointer records,
 a padded 32-bit/64-bit pair, and one-to-four-member f32/f64 HFAs with nested and
-whole-stack cases. CTest registers each of the 40 type shapes separately,
+whole-stack cases. Eighteen shapes additionally cover complete variadic
+values, higher alignment, fixed aggregate spills and padded fixed prefixes. CTest registers each of the 58 type shapes separately,
 retaining all five authentication variants and both C routes at O0/O2 within
 the ordinary per-test timeout. Stable shape names identify failures and permit
-parallel scheduling. All 200 typed groups emit actual Mach-O objects on five
+parallel scheduling. All 290 typed groups emit actual Mach-O objects on five
 routes. Narrow register arguments
 and results require the correct LLVM extension attribute; stack arguments
 retain their source width. The outer fixture explicitly writes the complete
 X0 return carrier, and a constant result cannot stand in for the callback's
 value. Set `NEVERD_ARM64E_CALL_ABI_ARTIFACT_DIR` to retain the nine integer
-groups and 200 typed groups with all five object routes. Composite result
+groups and 290 typed groups with all five object routes. Composite result
 oracles consume every logical member, excluding padding; pointer and integer
 members remain raw bits. The independent callback poisons record return padding.
 On macOS, `NeverDArm64eSourceCallSDK` loads a real arm64e dylib through the
 public C API, declares named integer/pointer records, a padded pair, a nested
 HFA and signed/unsigned 128-bit values, and applies complete call prototypes.
-Both C routes must compile all ten argument/result shapes at O0/O2, including
-record names matching the renderer's preferred temporary names.
-Packed/union values and indirect copies/results must refuse explicitly.
-These compiler checks execute no arm64e fixture code.
+Both C routes must compile all seventeen argument/result shapes at O0/O2,
+including record names matching the renderer's preferred temporary names.
+Seven raw variadic fixtures also execute as native arm64 on Apple arm64:
+original assembly and both C projections call independent C `va_arg` readers
+at O0/O2 (42 executions). These readers check signed/unsigned 128-bit values,
+16-byte alignment following a promoted int, named records, padding, HFA and
+nested HFA members, and a fixed record prefix. Other hosts retain compilation
+and explicitly record that native execution is unavailable. Packed/union values,
+indirect copies/results, and unpromoted scalar tails must refuse explicitly.
+Raw native execution does not qualify PAC behavior.
+`LLVMCValues.DarwinVariadicArraysValidateEveryActualOperand` also admits word
+and HFA arrays in the prefix/tail while refusing non-C conventions, tail
+`inreg` attributes, unpromoted scalar companions, nested/oversized arrays and
+non-Darwin platforms. Source ABI regressions check an i128 after exactly one
+eight-byte variadic slot, including both signednesses and scalar/HFA predecessors.
 `NativeTypesKeepTheOriginalIndirectTarget` separately retains recovered native
 C prototypes and refuses unsupported authenticated language bindings. Its five
 HighC variants must compile at O0/O2 with the original target and authentication.
@@ -1534,6 +1546,22 @@ admission and compilability; the model executes the separately exported
 200-group matrix. Arbitrary/indirect aggregates, automatic complete recovery,
 whole images, native Apple CPA2, native signed unwinding and exact fault PC/ESR
 remain unqualified.
+
+The [variadic-value receipt](evidence/arm64e-variadic-call-abi-2026-11-07.json)
+extends that profile to 58 shapes and 290 groups, including complete 128-bit,
+word-record and HFA variadic values. All 30 model guests pass: 34,800 valid
+original/projected pairs and 83,520 invalid-signature pairs, with 22,272 known
+C O0 exception-class differences counted separately. Each route prepares one
+object for its six guests and verifies its entire text against the original
+Mach-O bytes before linking. All 41 environment admission tests pass, including
+rejection of changed or truncated batch text. The public SDK compiles 34 source
+projections at O0/O2, executes 42 raw native arm64 calls against independent
+`va_arg` callbacks, and requires 20 explicit refusals. All 3,480 typed exports,
+including 1,450 Mach-O objects, remain identical after integrating current dev.
+The receipt retains the original array-boundary, i128-alignment and harness
+admission failures alongside the final results. Arbitrary/indirect aggregates,
+zero-fixed-prefix variadics and the broader unqualified boundaries above remain
+unsupported by this profile; remote CI status is recorded separately.
 
 `NeverDLanguageEHTests` checks the unified signing query's image/function
 provenance, exact PCs, source scopes and bounded CIE lookup.
@@ -5929,6 +5957,8 @@ truth tests too. `PipelineOutcome.HighCRefusesOnlyTheFunctionKeepingAnUnbackedAd
 omits one function, not the unit, when an escaped image address has no storage
 extent. `CSourceAnchors.SignedZeroPairSpellsTheSameWhenMarked` requires a marked
 render to spell that comparison as the ordinary one does, or the map is refused.
+`PipelineOutcome.HighCBacksAnAddressOfDataPlacedAmongCode` declares data the image
+places in an executable section whole, up to the next function.
 
 `NeverDHighSymSimplifyTests` provides the focused HighIR suite, including
 8–256-bit affine and quadratic synthesis, synthesis inside signed/unsigned
@@ -6080,6 +6110,30 @@ kept documents forgets them, requests hold the job off, an expensive prepared
 function stays prepared, the smallest function goes first, and the largest and
 one of unknown size are left to their visits. `NeverDWorkerPageCodec` round-trips the compact page form,
 including matches that overlap their output, under arbitrary damage.
+`NeverDWorkerRenderStore` reopens a project: the second session's first requests
+read as the first session's did with no engine page written, a complete store
+leaves the summaries deferred until a request the store does not answer, a graph
+does not start them, comments and local and function names keep the store both in
+a running replica and across sessions, a function's own view states its new name
+without the engine and asks it only once a name is taken away, operand formats keep
+it, a new name of data, a data item and another build of the worker start over,
+a job that starts over stops reading and adding, a record cut short is rendered
+again alone, and a damaged one reads the engine. A session reads past a record it
+could not walk through the index a finished job wrote, walks a file whose index does
+not fit it, and loses only the record an index misplaces.
+`WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
+through a real view.
+`NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
+session takes up what the replica keeps of a function's first look, a later session
+lists what asking the engine lists, a new name of a function or of data keeps the
+facts, a data item, another image and a damaged store ask the engine, and a corrected
+stack frame reads under what corrects it. A store another session is still writing
+answers up to its last whole record and the rest once it is there, and a later
+session reads what the code scan found, whatever it looked at first, while a
+read-only one keeps nothing and damage scans again.
+`NeverDWorkerNamesRebuild` also renames functions, exported and not, without the
+names being read again, and each page, table and resolved name then reads as after a
+reload.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and
@@ -6347,8 +6401,12 @@ repeated local renames, clearing aliases, readonly replica updates, rejected
 collisions and obsolete targets. Changed input identities, annotations and
 source comments cannot enter the name-only refresh path, and a stale committed
 sidecar is refused without changing the replica. The workbench's
-`localNameEditsReuseTheIdleAnalysisReplica` also checks the process identity,
-unchanged preparation counters and full retirement after a source comment.
+`localNameEditsReuseTheIdleAnalysisReplica` also checks the process identity and
+unchanged preparation counters through a source comment, a function's new name and
+an image comment, and full retirement after a deleted function.
+`analysisReplicaOutlivesAReadNobodyWaitsFor` checks that going to another function
+during a read keeps the replica, and `cancellingOneAnalysisLeavesTheOtherRunning`
+that one still running well past what restoring took is stopped.
 `localNameLatencyOnOptionalNativeInput` accepts `NEVERD_RENAME_BENCH_WORKER`,
 `NEVERD_RENAME_BENCH_INPUT`, optional `NEVERD_RENAME_BENCH_PDB`, the function's
 `NEVERD_RENAME_BENCH_TARGET` and selected `NEVERD_RENAME_BENCH_LOCAL`. It reports

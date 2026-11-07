@@ -1,0 +1,36 @@
+//===- LLVMCVariadicArrayFixtures.def - Variadic arrays --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Independent ordinary Darwin call shapes and rejected boundary mutations.
+//===----------------------------------------------------------------------===//
+
+#ifndef LLVMC_VARIADIC_CASE
+#define LLVMC_VARIADIC_CASE(Name, Triple, Accepted)
+#endif
+#ifndef LLVMC_VARIADIC_VALUE
+#define LLVMC_VARIADIC_VALUE(Type, Name, Value)
+#endif
+
+LLVMC_VARIADIC_CASE(WordTail, "arm64-apple-macos13", true)
+LLVMC_VARIADIC_CASE(HFATail, "arm64-apple-macos13", true)
+LLVMC_VARIADIC_CASE(HFAPrefix, "arm64-apple-macos13", true)
+LLVMC_VARIADIC_CASE(FastConvention, "arm64-apple-macos13", false)
+LLVMC_VARIADIC_CASE(InRegTail, "arm64-apple-macos13", false)
+LLVMC_VARIADIC_CASE(UnpromotedFloat, "arm64-apple-macos13", false)
+LLVMC_VARIADIC_CASE(UnpromotedInteger, "arm64-apple-macos13", false)
+LLVMC_VARIADIC_CASE(LargeHFA, "arm64-apple-macos13", false)
+LLVMC_VARIADIC_CASE(NestedArray, "arm64-apple-macos13", false)
+LLVMC_VARIADIC_CASE(Linux, "aarch64-unknown-linux-gnu", false)
+LLVMC_VARIADIC_CASE(DarwinX64, "x86_64-apple-macos13", false)
+LLVMC_VARIADIC_VALUE(unsigned, kVariadicPairWords, 2)
+LLVMC_VARIADIC_VALUE(unsigned, kVariadicHFAElements, 3)
+LLVMC_VARIADIC_VALUE(unsigned, kVariadicLargeHFAElements, 5)
+LLVMC_VARIADIC_VALUE(const char *, kVariadicLayout, "e-p:64:64")
+LLVMC_VARIADIC_VALUE(const char *, kVariadicEntry, "entry")
+LLVMC_VARIADIC_VALUE(const char *, kVariadicCaller, "variadic_array")
+
+#undef LLVMC_VARIADIC_CASE
+#undef LLVMC_VARIADIC_VALUE

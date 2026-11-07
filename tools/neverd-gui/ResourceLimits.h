@@ -133,6 +133,11 @@ inline constexpr int kChooserViewChooserModelRequestPageTextLimit = 400;
 
 // tools/neverd-gui/app/CodeView.cpp
 inline constexpr int kCodeViewPageLines = 256;
+/// A read nobody waits for any more runs to its end in the analysis worker,
+/// since stopping the worker loses everything it has analyzed.  It is stopped
+/// once the read has run this long, or as many times what restoring it took.
+inline constexpr int kAnalysisAbandonedReadMinimumMilliseconds = 300;
+inline constexpr int kAnalysisAbandonedReadRestores = 2;
 /// A completed function's display-name refresh can batch existing text. Keep
 /// the interactive first load small, and retry it if a batch exceeds bytes.
 inline constexpr int kCodeViewNameRefreshPageLines =

@@ -1,6 +1,7 @@
 #pragma once
 #include "DeferredRelease.h"
 #include "Protocol.h"
+#include "RenderStore.h"
 #include "ResourceLimits.h"
 
 #include "neverd/sdk/NeverDCAPISession.h"
@@ -208,7 +209,8 @@ private:
     Preparing,
     Solving,
     Ready,
-    Unavailable
+    Unavailable,
+    Deferred
   };
   SummaryState summaryState_ = SummaryState::Off;
   /// Whether the restore asked for the job, which a change to the project
@@ -233,7 +235,9 @@ private:
   /// pages in idle time, once its summaries and read-ahead are done, smallest
   /// function first (EngineRenderAhead.cpp).  namedView builds a first visit's
   /// document from them as it builds a later visit's from a kept document's.
-  /// They have a kept document's lifetime: forgetNamedViews drops them.
+  /// They have a kept document's lifetime: forgetNamedViews drops them.  What
+  /// the job renders also goes to renderStore_, for later sessions over the
+  /// same inputs, and a function kept there is not kept here.
   enum class RenderAheadState { Off, Pending, Done, Full };
   bool renderAheadRequested_ = false;
   RenderAheadState renderAheadState_ = RenderAheadState::Off;
@@ -247,6 +251,65 @@ private:
   std::size_t renderAheadBytes_ = 0, renderAheadRawBytes_ = 0;
   /// Compact engine pages by namedView's source key.
   std::unordered_map<std::string, std::vector<std::string>> renderedAhead_;
+  std::unique_ptr<RenderStore> renderStore_;
+  /// The compact bytes in renderedAhead_, which count against the job's limit
+  /// with the store's.
+  std::size_t renderAheadHeldBytes_ = 0;
+  /// The job started over after it began: this session's engine no longer
+  /// reads as a new session's does, whatever the store keeps for those.
+  bool renderStoreStale_ = false;
+  /// Earlier sessions rendered every function, so the summaries and read-ahead
+  /// wait for a request that asks for more than their renders answer.
+  bool summariesDeferred_ = false;
+  /// The function a view last asked for that no session could render: asking
+  /// the engine again reports the same, and does not need the summaries.
+  std::optional<std::uint64_t> renderFailedAddress_;
+  RenderStore *liveRenderStore() const {
+    return renderStoreStale_ ? nullptr : renderStore_.get();
+  }
+  /// Opens the store a restore asks for by \p mode: "read", "write" or empty.
+  void openRenderStore(const std::string &mode);
+  /// What the job keeps of what a function's first look in the listing asks
+  /// the engine, under the same identity as the renders and for the same
+  /// sessions.  The owner reads it too, and takes up what its replica adds.
+  std::unique_ptr<RenderStore> factsStore_;
+  /// The name of what factsStore_ reads, and the browse cache's generation an
+  /// owner last compared it at.
+  std::string factsStoreName_;
+  std::uint64_t factsStoreGeneration_ = 0;
+  bool factsStoreRead_ = false;
+  std::chrono::steady_clock::time_point factsRefreshed_{};
+  std::uint64_t factsHits_ = 0, factsMisses_ = 0;
+  /// The folder names of the stores this session reads, or none.
+  struct StoreNames {
+    std::string renders, facts;
+  };
+  StoreNames storeNames();
+  void openFactsStore(const std::string &name, bool writable);
+  std::vector<std::string> keptListingFacts(const std::string &key);
+  void keepListingFact(const std::string &key, std::string bytes);
+  Json listingFactsJson() const;
+  void keepListingFacts(std::uint64_t address);
+  std::string renderStoreMode_;
+  /// What renders depend on: browseCacheIdentity without what a view's
+  /// decoration reads, local and function names and comments.
+  Json renderStoreIdentity();
+  /// A view's key in the store: its source key without the generation, which
+  /// counts this session's listing builds.
+  std::string renderStoreKey(std::uint64_t address,
+                             const std::string &representation,
+                             const std::string &optionText);
+  /// Only functions' names changed, in a replica: what it keeps of a view stays
+  /// the view's.  Taking a name away from one (\p unnamed) changes what the
+  /// listing shows it as, and the others are read as a view is decorated.
+  void functionNamesChanged(bool unnamed);
+  /// Whether a kept \p page of a view can state the functions it names as they
+  /// are named now: it states them as the engine knew them when it rendered,
+  /// and a new name replaces those, but what one was called before a name was
+  /// taken away is only the engine's to say.
+  bool keptPageReadsCurrentNames(const Json &page) const;
+  /// States the names of \p view's functions as they are named now.
+  void currentNamesInView(Json &view) const;
   /// When the last request was answered.
   std::chrono::steady_clock::time_point lastRequest_{};
   /// The function a request last prepared and how long that took.
@@ -257,10 +320,22 @@ private:
   /// False while the step only waits for the reader to pause.
   bool renderAheadStep();
   void renderFunctionAhead(std::uint64_t address);
+  /// Whether what the engine renders now reads as it will from here on.
+  bool rendersSettled() const;
+  /// Keeps the engine pages of a view a request rendered, once they read as a
+  /// render of the job does: a function the job leaves to its visit, or has not
+  /// reached, costs the next session nothing.
+  void keepVisitedRender(std::uint64_t address,
+                         const std::string &representation,
+                         const std::string &optionText,
+                         const std::vector<std::string> &pages);
   void restartRenderAhead();
   Json renderAheadJson() const;
-  /// The pages kept under \p sourceKey, or none.
-  std::vector<std::string> renderedAheadPages(const std::string &sourceKey);
+  /// The pages kept of the view \p sourceKey names, or none.
+  std::vector<std::string> renderedAheadPages(std::uint64_t address,
+                                              const std::string &representation,
+                                              const std::string &optionText,
+                                              const std::string &sourceKey);
   bool summaryWorkPending() const;
   void restartSummaries();
   /// False where the step only waits on discovery (summaryJobStep).
@@ -434,6 +509,17 @@ private:
   /// The control flow graph of the function at \p address, in the engine's
   /// cfg JSON shape.
   Json functionGraph(std::uint64_t address);
+  /// What a job kept of functionGraph, for a snapshot, which reads no name from
+  /// it; or functionGraph.
+  Json keptFunctionGraph(std::uint64_t address);
+  static std::string graphFactsKey(std::uint64_t address) {
+    return "cfg:" + std::to_string(address);
+  }
+  static bool validFunctionGraph(const Json &graph) {
+    return graph.is_object() && graph.contains("nodes") &&
+           graph["nodes"].is_array() && graph.contains("edges") &&
+           graph["edges"].is_array();
+  }
   /// The function list changed: analysis restarts function by function and
   /// the reference index is built again.
   void functionsChanged();

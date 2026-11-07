@@ -69,6 +69,13 @@ inline constexpr std::size_t kEngineMaxEncodedBytes = 8 * 1024 * 1024;
 /// Compact bytes of engine pages a replica keeps of the functions it renders
 /// ahead (EngineRenderAhead.cpp); the job ends at them.
 inline constexpr std::size_t kRenderAheadMaxStoredBytes = 1024 * 1024 * 1024;
+/// The longest key of a render kept between sessions (RenderStore.h): a
+/// function's address, its view and its engine options.
+inline constexpr std::size_t kRenderStoreMaxKeyBytes = 1024 * 1024;
+/// What one session keeps of the facts the listing reads of a function.
+inline constexpr std::size_t kListingFactsMaxStoredBytes = 1024 * 1024 * 1024;
+/// How often a missing fact looks for what a replica has added to the store.
+inline constexpr std::int64_t kListingFactsRefreshMilliseconds = 1000;
 /// A request that arrives during a render waits for what is left of it, so the
 /// job renders a function only after no request has come for this long: past
 /// the pace of a reader going through functions, and for a larger function

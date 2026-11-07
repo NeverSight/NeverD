@@ -2349,6 +2349,82 @@ TEST(LLVMCValues, HFAArrayBoundariesRequireOrdinaryAAPCS64Parameters) {
   }
 }
 
+TEST(LLVMCValues, DarwinVariadicArraysValidateEveryActualOperand) {
+  enum class Mode {
+#define LLVMC_VARIADIC_CASE(Name, Triple, Accepted) Name,
+#include "LLVMCVariadicArrayFixtures.def"
+  };
+  const struct {
+    Mode Mutation;
+    const char *Triple;
+    bool Accepted;
+  } Cases[] = {
+#define LLVMC_VARIADIC_CASE(Name, Triple, Accepted)                            \
+  {Mode::Name, Triple, Accepted},
+#include "LLVMCVariadicArrayFixtures.def"
+  };
+#define LLVMC_VARIADIC_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "LLVMCVariadicArrayFixtures.def"
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(static_cast<unsigned>(Case.Mutation));
+    llvm::LLVMContext Context;
+    llvm::Module Module(kVariadicCaller, Context);
+    Module.setTargetTriple(llvm::Triple(Case.Triple));
+    Module.setDataLayout(kVariadicLayout);
+    auto *Void = llvm::Type::getVoidTy(Context);
+    auto *Word = llvm::Type::getInt64Ty(Context);
+    auto *Pointer = llvm::PointerType::getUnqual(Context);
+    const bool Floating = Case.Mutation == Mode::HFATail ||
+                          Case.Mutation == Mode::HFAPrefix ||
+                          Case.Mutation == Mode::LargeHFA;
+    llvm::Type *Array = llvm::ArrayType::get(
+        Floating ? llvm::Type::getFloatTy(Context) : Word,
+        Case.Mutation == Mode::LargeHFA ? kVariadicLargeHFAElements
+        : Floating                      ? kVariadicHFAElements
+                                        : kVariadicPairWords);
+    if (Case.Mutation == Mode::NestedArray)
+      Array = llvm::ArrayType::get(Array, kVariadicPairWords);
+    llvm::Type *Prefix = Case.Mutation == Mode::HFAPrefix ? Array : Word;
+    auto *CalleeType = llvm::FunctionType::get(Void, {Prefix}, true);
+    auto *Caller = llvm::Function::Create(
+        llvm::FunctionType::get(Void, {Pointer}, false),
+        llvm::GlobalValue::ExternalLinkage, kVariadicCaller, Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, kVariadicEntry, Caller));
+    llvm::SmallVector<llvm::Value *> Arguments{
+        llvm::Constant::getNullValue(Prefix),
+        llvm::Constant::getNullValue(Array)};
+    if (Case.Mutation == Mode::UnpromotedFloat)
+      Arguments.push_back(
+          llvm::Constant::getNullValue(llvm::Type::getFloatTy(Context)));
+    if (Case.Mutation == Mode::UnpromotedInteger)
+      Arguments.push_back(
+          llvm::Constant::getNullValue(llvm::Type::getInt8Ty(Context)));
+    auto *Call = Builder.CreateCall(CalleeType, Caller->getArg(0), Arguments);
+    if (Case.Mutation == Mode::FastConvention)
+      Call->setCallingConv(llvm::CallingConv::Fast);
+    if (Case.Mutation == Mode::InRegTail)
+      Call->addParamAttr(1, llvm::Attribute::InReg);
+    Builder.CreateRetVoid();
+    neverd::CEmitterOptions Options;
+    Options.TheArch = Case.Mutation == Mode::DarwinX64 ? neverd::Arch::X64
+                                                       : neverd::Arch::AArch64;
+    Options.Format = Case.Mutation == Mode::Linux ? neverd::BinaryFormat::ELF
+                                                  : neverd::BinaryFormat::MachO;
+    Options.PreserveLLVMFunctionTypes = true;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    if (Case.Accepted) {
+      EXPECT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, Options));
+      EXPECT_FALSE(Source.empty());
+    } else {
+      EXPECT_THROW(neverd::LLVMCEmitter().emit(Module, Out, Options),
+                   std::runtime_error);
+      EXPECT_TRUE(Source.empty());
+    }
+  }
+}
+
 TEST(LLVMCValues, AggregateCopiesPreserveUnalignedMemoryAndArrayStorage) {
   llvm::LLVMContext Context;
   llvm::Module Module("aggregate-memory", Context);

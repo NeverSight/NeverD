@@ -2905,7 +2905,8 @@ validateArrayValueBoundaries(const llvm::Module &Mod,
           "C projection has an unsupported array value ABI");
   };
   auto CheckSignature = [&](llvm::FunctionType *Ty, unsigned CC,
-                            const llvm::AttributeList &Attributes) {
+                            const llvm::AttributeList &Attributes,
+                            auto Parameters) {
     bool HasArray = containsArrayValue(Ty->getReturnType());
     bool HasArrayParameter = false;
     bool HasHFA = false;
@@ -2914,20 +2915,28 @@ validateArrayValueBoundaries(const llvm::Module &Mod,
     bool HFAParameters = true;
     bool DarwinRecordParameters = Target.isAArch64() && Target.isOSDarwin();
     CheckType(Ty->getReturnType(), false);
-    for (auto *Param : Ty->params()) {
+    unsigned ParameterIndex = 0;
+    for (auto *Param : Parameters) {
       HasArray |= containsArrayValue(Param);
       HasArrayParameter |= containsArrayValue(Param);
       CheckType(Param, true);
       const bool HFA = HFAABI && isAAPCS64HFAArray(Param);
+      const bool Promoted = ParameterIndex++ < Ty->getNumParams() ||
+                            (!Param->isFloatTy() &&
+                             (!Param->isIntegerTy() ||
+                              Param->getIntegerBitWidth() >=
+                                  llvm::Type::getInt32Ty(Param->getContext())
+                                      ->getIntegerBitWidth()));
       DarwinRecordParameters &=
-          HFA || isDarwinAArch64WordArray(Param) || Param->isFloatTy() ||
-          Param->isDoubleTy() ||
-          (Param->isIntegerTy() &&
-           (Param->getIntegerBitWidth() <=
-                llvm::Type::getInt64Ty(Param->getContext())
-                    ->getIntegerBitWidth() ||
-            Param == llvm::Type::getInt128Ty(Param->getContext()))) ||
-          (Param->isPointerTy() && Param->getPointerAddressSpace() == 0);
+          Promoted &&
+          (HFA || isDarwinAArch64WordArray(Param) || Param->isFloatTy() ||
+           Param->isDoubleTy() ||
+           (Param->isIntegerTy() &&
+            (Param->getIntegerBitWidth() <=
+                 llvm::Type::getInt64Ty(Param->getContext())
+                     ->getIntegerBitWidth() ||
+             Param == llvm::Type::getInt128Ty(Param->getContext()))) ||
+           (Param->isPointerTy() && Param->getPointerAddressSpace() == 0));
       HasHFA |= HFA;
       HFAParameters &=
           HFA || Param->isFloatTy() || Param->isDoubleTy() ||
@@ -2963,7 +2972,8 @@ validateArrayValueBoundaries(const llvm::Module &Mod,
         DarwinRecordParameters ||
         (HasHFA ? HFAParameters
                 : WordParameters && ArgumentWords <= RegisterWords);
-    if (HasArrayParameter && (!ParametersFit || Ty->isVarArg()))
+    if (HasArrayParameter &&
+        (!ParametersFit || (Ty->isVarArg() && !DarwinRecordParameters)))
       throw std::runtime_error(
           "C projection has an unsupported array argument ABI");
   };
@@ -2971,17 +2981,19 @@ validateArrayValueBoundaries(const llvm::Module &Mod,
     if (!Selected.contains(Fn))
       continue;
     CheckSignature(Fn.getFunctionType(), Fn.getCallingConv(),
-                   Fn.getAttributes());
+                   Fn.getAttributes(), Fn.getFunctionType()->params());
     for (const auto &BB : Fn)
       for (const auto &Inst : BB)
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst)) {
-          CheckSignature(Call->getFunctionType(), Call->getCallingConv(),
-                         Call->getAttributes());
-          for (unsigned I = Call->getFunctionType()->getNumParams();
-               I < Call->arg_size(); ++I)
-            if (containsArrayValue(Call->getArgOperand(I)->getType()))
-              throw std::runtime_error(
-                  "C projection has an unsupported variadic array value");
+          // The complete call boundary owns unnamed arrays too. In particular,
+          // their convention and ABI attributes cannot bypass the same checks
+          // applied to arrays in the fixed prefix.
+          CheckSignature(
+              Call->getFunctionType(), Call->getCallingConv(),
+              Call->getAttributes(),
+              llvm::map_range(Call->args(), [](const llvm::Use &Arg) {
+                return Arg->getType();
+              }));
         }
   }
 }

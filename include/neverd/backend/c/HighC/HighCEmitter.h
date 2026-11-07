@@ -36,6 +36,8 @@ struct HighCImageDataObjects {
   std::vector<std::pair<va_t, uint64_t>> SizedObjects;
   std::vector<va_t> SizedObjectReach;
   std::vector<va_t> DataSymbolStarts;
+  /// Where function symbols start, which end data placed among code.
+  std::vector<va_t> CodeSymbolStarts;
 };
 
 /// \p Image's data objects, as every emission over it reads them.
