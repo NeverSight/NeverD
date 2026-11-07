@@ -93,6 +93,16 @@ TEST_F(SessionSignatureProfile, DriverSelectionAndManualResetAreVisible) {
   EXPECT_EQ(Value->getAsObject()->getObject("signature_selection"), nullptr);
 }
 
+TEST_F(SessionSignatureProfile, OneFileUnderTwoSpellingsIsOneSource) {
+  const auto Input = write("stripped.bin", neverd::web::test::nativePE());
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  const auto Pattern =
+      write("tree/custom.npat", "B82A000000C3 00 0000 0006 :0000 answer\n");
+  ASSERT_EQ(neverd_apply_signature_file(Session, Pattern.c_str()), 1);
+  const auto Respelled = (Directory / "tree" / "." / "custom.npat").string();
+  EXPECT_EQ(neverd_apply_signature_file(Session, Respelled.c_str()), 1);
+}
+
 TEST_F(SessionSignatureProfile, CandidatesNeverReplaceNamesAcrossFormats) {
   const std::string Inputs[] = {
       neverd::web::test::nativePE(), neverd::web::test::nativeELF(),

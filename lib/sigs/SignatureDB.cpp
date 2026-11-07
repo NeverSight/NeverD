@@ -143,7 +143,9 @@ llvm::Error SignatureDB::loadFile(const std::filesystem::path &Path) {
 
   if (Ext == PatternExtension || Ext == NativePatternExtension) {
     SigSource Src;
-    Src.Path = pathToUTF8(Path);
+    // One file is one source under any spelling of its path; Windows mixes
+    // both separators in a path a caller joined.
+    Src.Path = pathToUTF8(Path.lexically_normal());
     Src.LibraryName = libraryName(Path);
     const std::optional<SignatureCache::SourceIdentity> Identity =
         Cache ? SignatureCache::identify(Path) : std::nullopt;
@@ -466,7 +468,7 @@ SignatureDB::loadFiles(const std::vector<std::filesystem::path> &PatFiles) {
   NewSources.reserve(PatFiles.size());
   for (size_t I = 0; I < PatFiles.size(); ++I) {
     SigSource Source;
-    Source.Path = pathToUTF8(PatFiles[I]);
+    Source.Path = pathToUTF8(PatFiles[I].lexically_normal());
     Source.LibraryName = libraryName(PatFiles[I]);
     Source.ModuleStart = NewModules.size();
     if (Cached[I]) {
