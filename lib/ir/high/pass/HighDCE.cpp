@@ -1012,6 +1012,9 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
     }
   }
   eliminateDeadConditions(Func.Body, referencedStatementEntries(Func.Body));
+  // The last liveness pass can delete a frame read that still kept its
+  // initialization live during the earlier private-store cleanup.
+  elimUnreadPrivateFrameStores(Func, TargetArch);
 
   if (WantDetail) {
     const auto TEnd = Clock::now();
