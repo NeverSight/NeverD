@@ -129,6 +129,29 @@ llvm::Error Bionic::initializeDex() {
       binderThread().StrictModePolicy = Policy;
       return mobile::dalvik::ExecutionResult{};
     };
+    Services.retain_binder_handle = [this](uint32_t FD, uint32_t Handle) {
+      using mobile::dalvik::ExecutionResult;
+      using mobile::dalvik::ExecutionStop;
+      auto Device = Kernel.binderConnection(FD);
+      if (!Device || Device != BinderConnection || FD != BinderFD)
+        return ExecutionResult{ExecutionStop::Unsupported,
+                               0,
+                               {},
+                               "Android Binder proxy acquisition requires its "
+                               "original connection"};
+      auto Reference = Device->BinderHandles.find(Handle);
+      if (Reference == Device->BinderHandles.end() || !Reference->second.Strong)
+        return ExecutionResult{
+            ExecutionStop::Unsupported,
+            0,
+            {},
+            "Android Binder proxy acquisition requires an owned strong handle"};
+      auto &Thread = binderThread();
+      Thread.UsesBinder = true;
+      Thread.PendingCommands.push_back({Device, FD, 0x40046304, Handle, {}});
+      Thread.PendingCommands.push_back({Device, FD, 0x40046305, Handle, {}});
+      return ExecutionResult{};
+    };
     Services.event_log_write = [this](std::span<const uint8_t> Payload) {
       using mobile::dalvik::ExecutionResult;
       using mobile::dalvik::ExecutionStop;

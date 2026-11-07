@@ -24,7 +24,9 @@ struct AndroidServiceManagerState {
   std::vector<CacheEntry> entries;
   std::optional<uint64_t> manager;
   struct BinderProxy {
-    uint32_t key = 0, identity = 0;
+    std::optional<uint32_t>
+        key; // Absent for a proxy read from native transport.
+    uint32_t identity = 0;
     std::optional<bool> warn_on_blocking;
     std::optional<
         AndroidApplicationSnapshot::ServiceManager::BinderProxy::NativeBinding>

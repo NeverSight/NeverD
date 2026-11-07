@@ -98,6 +98,7 @@ bool parseSEH(ExceptionFunction &F, const BinaryImage &Img) {
 
   SEHExceptionInfo Info;
   Info.Scopes.reserve(*Count);
+  std::vector<SEHScopeRecord> Empty;
   for (uint32_t I = 0; I < *Count; ++I) {
     const uint8_t *R = Records + uint64_t(I) * 16;
     uint32_t BeginRVA = readLE<uint32_t>(R);
@@ -106,10 +107,13 @@ bool parseSEH(ExceptionFunction &F, const BinaryImage &Img) {
     uint32_t JumpRVA = readLE<uint32_t>(R + 12);
     SEHScopeRecord Scope;
     // An optimizer can collapse a guarded body to nothing while the scope
-    // record survives.  Dispatch compares `Begin <= Pc < End`, so such an
-    // entry can never be selected; it is fully decoded but describes no
-    // region, which is exactly what a partial scope means here.
-    if (BeginRVA == EndRVA) {
+    // record survives, as `__try { } __finally { ... }` does.  Dispatch
+    // compares `Begin <= Pc < End`, so such an entry can never be selected; it
+    // is fully decoded but describes no region, which is exactly what a partial
+    // scope means here.  Beside scopes that do guard code it says nothing of
+    // the function, and goes with a note.
+    const bool GuardsNothing = BeginRVA == EndRVA;
+    if (GuardsNothing) {
       va_t Point = 0;
       if (!addCodeRVA(Img, BeginRVA, Point)) {
         diagnose(F, ExceptionParseStatus::Malformed,
@@ -118,9 +122,6 @@ bool parseSEH(ExceptionFunction &F, const BinaryImage &Img) {
       }
       Scope.GuardedRange = {Point, Point};
       Scope.ParseStatus = ExceptionParseStatus::Partial;
-      diagnose(F, ExceptionParseStatus::Partial,
-               "SEH scope at 0x" + llvm::utohexstr(Point) +
-                   " guards an empty range");
     } else {
       auto Range = checkedCodeRange(Img, BeginRVA, EndRVA);
       if (!Range || (!F.CodeRange.contains(*Range) &&
@@ -172,8 +173,22 @@ bool parseSEH(ExceptionFunction &F, const BinaryImage &Img) {
       }
       Scope.ContinuationVA = Scope.HandlerVA;
     }
-    Info.Scopes.push_back(std::move(Scope));
+    if (GuardsNothing)
+      Empty.push_back(std::move(Scope));
+    else
+      Info.Scopes.push_back(std::move(Scope));
   }
+  for (const SEHScopeRecord &Scope : Empty) {
+    const std::string Note = "SEH scope at 0x" +
+                             llvm::utohexstr(Scope.GuardedRange.Begin) +
+                             " guards an empty range";
+    if (Info.Scopes.empty())
+      diagnose(F, ExceptionParseStatus::Partial, Note);
+    else
+      F.Diagnostics.push_back(Note);
+  }
+  if (Info.Scopes.empty())
+    Info.Scopes = std::move(Empty);
   F.SEH = std::move(Info);
   return F.ParseStatus != ExceptionParseStatus::Malformed;
 }

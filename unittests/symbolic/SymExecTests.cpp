@@ -86,10 +86,10 @@ TEST(SymState, ALocationNeverWrittenReadsAsAnInputNamedForItself) {
   SymState State(Ctx);
   EXPECT_EQ(Ctx.toString(State.read(SymSpace::Register, kRax, 1)), "reg$0");
   // The first byte was already touched on its own, so a later wider read keeps
-  // that partition and fills the remaining bytes independently.  The width
+  // that partition and fills the unread bytes with one input.  The width
   // suffixes note that each leaf is narrower than the word being printed.
   EXPECT_EQ(Ctx.toString(State.read(SymSpace::Register, kRax, 4)),
-            "concat(reg$3#8, reg$2#8, reg$1#8, reg$0#8)");
+            "concat(reg$1#24, reg$0#8)");
 }
 
 TEST(SymState, ZeroByteReadFailsClosedWithoutCreatingAnInput) {
@@ -1643,4 +1643,27 @@ TEST(SymState, ScalarSnapshotsKeepEpochsAndOmitMemoryBanks) {
     EXPECT_NE(Snapshot.read(SymSpace::Register, 0, 8),
               State.read(SymSpace::Register, 0, 8));
   }
+}
+
+TEST(SymState, AnUnreadRunOfAPartlyKnownWordIsOneInput) {
+  SymContext C;
+  SymState S(C);
+  S.write(SymSpace::Register, 18, C.mkConst(48, 0));
+  const auto Word = S.read(SymSpace::Register, 16, 8);
+  ASSERT_EQ(C.op(Word), SymOp::ZExt);
+  const auto Low = C.operand(Word, 0);
+  ASSERT_TRUE(C.isVar(Low));
+  EXPECT_EQ(C.width(Low), 16u);
+  EXPECT_EQ(S.read(SymSpace::Register, 16, 2), Low);
+  EXPECT_EQ(S.read(SymSpace::Register, 17, 1), C.mkExtract(Low, 8, 8));
+
+  // Runs on both sides of a known byte stay separate inputs.
+  S.write(SymSpace::Register, 34, C.mkConst(8, 0x5A));
+  const auto Split = S.read(SymSpace::Register, 32, 5);
+  ASSERT_EQ(C.op(Split), SymOp::Concat);
+  const auto High = S.read(SymSpace::Register, 35, 2);
+  const auto Bottom = S.read(SymSpace::Register, 32, 2);
+  EXPECT_TRUE(C.isVar(High));
+  EXPECT_TRUE(C.isVar(Bottom));
+  EXPECT_EQ(Split, C.mkConcat({High, C.mkConst(8, 0x5A), Bottom}));
 }

@@ -215,12 +215,6 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
       return mkOr(mkAnd(Source, mkConst(~Removed)), mkConst(Forced & ~Removed));
     }
   }
-  // A masked word cannot carry into a disjoint constant's set bits.
-  // Keep this exact two-term sum in the same form as a packed OR word.
-  if (Final.size() == 2 && isConst(Final[0]) && op(Final[1]) == SymOp::And &&
-      isConst(operand(Final[1], 0)) &&
-      (constValue(Final[0]) & constValue(operand(Final[1], 0))).isZero())
-    return mkOr(Final);
   return intern(SymOp::Add, W, Final, 0);
 }
 

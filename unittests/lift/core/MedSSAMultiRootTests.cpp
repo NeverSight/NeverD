@@ -2822,9 +2822,9 @@ BinaryImage makeMaskedFrameSelectImage() {
 
 } // namespace
 
-TEST(Win64Forwarder, MaskedSelectOfAFrameAddressUsesItsIntegerValue) {
-  // `cmovne` over a frame address lifts to `(p & m) | (&slot & ~m)`; C has
-  // no bitwise operator on a pointer, so the address is an integer there.
+TEST(Win64Forwarder, SelectOfAFrameAddressUsesItsIntegerValue) {
+  // `cmovne` over a frame address selects between an integer and `&slot`;
+  // the arms of a C conditional need one type, so the address is an integer.
   auto Img = makeMaskedFrameSelectImage();
   llvm::LLVMContext Ctx;
   PipelineOptions Opts;
@@ -2841,14 +2841,9 @@ TEST(Win64Forwarder, MaskedSelectOfAFrameAddressUsesItsIntegerValue) {
   Options.Image = &Img;
   ASSERT_TRUE(HighCEmitter().emit({Result.HighFuncs.front()}, Stream, Options));
   Stream.flush();
-  for (size_t At = Source.find("&var_"); At != std::string::npos;
-       At = Source.find("&var_", At + 1)) {
-    const size_t End = Source.find_first_of(" ),;", At);
-    if (End == std::string::npos || Source.compare(End, 3, " & ") != 0)
-      continue;
-    EXPECT_EQ(Source.compare(At - 11, 11, "(uintptr_t)"), 0) << Source;
-  }
-  EXPECT_NE(Source.find("(uintptr_t)&var_"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("arg1 != 0 ? arg1 : (int64_t)(&var_"),
+            std::string::npos)
+      << Source;
 }
 
 namespace {

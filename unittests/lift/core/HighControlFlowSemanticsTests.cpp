@@ -48,6 +48,7 @@ void elimConsecutiveDeadStores(std::vector<HighStmt> &);
 void postRenameCleanup(std::vector<HighStmt> &);
 void renameVars(std::vector<HighStmt> &);
 void eliminateUnusedValues(std::vector<HighStmt> &);
+void eliminateUnusedValues(HighFunc &);
 void narrowUnreadRegisterBytes(HighFunc &, Arch Architecture = Arch::Unknown);
 } // namespace neverd
 using namespace neverd;
@@ -12427,4 +12428,54 @@ TEST(HighControlFlowSemantics, ExternalSkipsKeepEarlierNestedIncomingEdges) {
   EXPECT_EQ(execute(F, 0, true), 12u);
   EXPECT_EQ(execute(F, 1, true), 0u);
   EXPECT_EQ(execute(F, 2, true), 7u);
+}
+
+TEST(HighControlFlowSemantics, UnusedValuesDropReadsOfTheirOwnFrame) {
+  MedVar Entry;
+  Entry.Kind = MedVar::Reg;
+  Entry.Id = 40;
+  Entry.Size = 8;
+  Entry.RegOff = getTargetRegInfo(Arch::X64).StackPointer;
+  Entry.TheArch = Arch::X64;
+  const auto Below = [](ExprPtr Base, uint64_t Bytes) {
+    return HighExpr::makeBinop(NdOp::INT_SUB, std::move(Base),
+                               HighExpr::makeConst(Bytes, 8));
+  };
+  const auto Named = [](int Id) {
+    auto Value = local(Id);
+    Value->Var.TheArch = Arch::X64;
+    return Value;
+  };
+  const auto Read = [&](va_t Address, int Id, ExprPtr From) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Addr = Address;
+    S.Dst = Named(Id);
+    S.Val = HighExpr::makeLoad(std::move(From), NdType::makeInt(8, false));
+    return S;
+  };
+  HighFunc F;
+  F.FrameSize = 256;
+  // More stack adjustments than one recursive address walk may follow.
+  ExprPtr Moved = HighExpr::makeVar(Entry);
+  for (int I = 0; I != 40; ++I) {
+    HighStmt Adjust;
+    Adjust.Kind = StmtKind::Assign;
+    Adjust.Addr = 0x1000 + I;
+    Adjust.Dst = Named(100 + I);
+    Adjust.Val = Below(std::move(Moved), 4);
+    F.Body.push_back(std::move(Adjust));
+    Moved = Named(100 + I);
+  }
+  F.Body.push_back(Read(0x2000, 1, Below(HighExpr::makeVar(Entry), 8)));
+  F.Body.push_back(Read(0x2004, 2, Moved));
+  // Past the frame, and through a pointer, a read can fault.
+  F.Body.push_back(Read(0x2008, 3, Below(HighExpr::makeVar(Entry), 512)));
+  F.Body.push_back(Read(0x200C, 4, local(0)));
+  F.Body.push_back(result(0x2010, HighExpr::makeConst(7, 8)));
+  eliminateUnusedValues(F);
+  ASSERT_EQ(F.Body.size(), 3u);
+  EXPECT_EQ(F.Body[0].Dst->Var.Id, 3);
+  EXPECT_EQ(F.Body[1].Dst->Var.Id, 4);
+  EXPECT_EQ(F.Body[2].Kind, StmtKind::Return);
 }

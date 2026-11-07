@@ -107,7 +107,7 @@ TEST(AndroidParcelTest, DeclarationsArePublicAndFinalWithoutNativePointers) {
     EXPECT_TRUE(entry.Public);
     EXPECT_EQ(entry.Final, !entry.Static);
   }
-  EXPECT_FALSE(libraryMethod(
+  EXPECT_TRUE(libraryMethod(
       {Parcel, "readStrongBinder", {}, "Landroid/os/IBinder;"}, false));
 }
 

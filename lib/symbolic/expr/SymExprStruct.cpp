@@ -303,10 +303,10 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
   if (Width == 1 && Low == width(A) - 1)
     if (SymRef Predicate = detail::recoverSignComparison(*this, A))
       return Predicate;
-  // extract(extract(x, l1), l2) == extract(x, l1 + l2)
   if (op(A) == SymOp::Ite)
     if (auto Constant = constantWindow(A, Low, Width))
       return mkConst(*Constant);
+  // extract(extract(x, l1), l2) == extract(x, l1 + l2)
   if (op(A) == SymOp::Extract)
     return mkExtract(operand(A, 0), static_cast<uint32_t>(node(A).Aux) + Low,
                      Width);

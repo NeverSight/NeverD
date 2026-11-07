@@ -203,6 +203,53 @@ TEST(COFFExceptionParser, ResolvesAArch64PersonalityBranchVeneer) {
   EXPECT_TRUE(Decoded.SEH->Scopes.empty());
 }
 
+TEST(COFFExceptionParser, ResolvesThumbPersonalityImportThunk) {
+  // A focused load's discovery has recorded no stub here: the thunk's own bytes
+  // name the import's slot, 0x40402C below.
+  BinaryImage Img = makeX64ExceptionImage();
+  Img.Arch = Arch::ARM;
+  Img.Bits = Bitness::Bits32;
+  Img.Mode = InstructionMode::Thumb;
+  Img.Base = 0x400000;
+  Img.Segments[0].VA = Img.Base + 0x1000;
+  Img.Segments[1].VA = Img.Base + 0x3000;
+  uint8_t *Text = Img.Segments[0].Data.data();
+  // movw ip, #0x402c; movt ip, #0x40; ldr.w pc, [ip]
+  const uint16_t Thunk[] = {0xf244, 0x0c2c, 0xf2c0, 0x0c40, 0xf8dc, 0xf000};
+  for (size_t I = 0; I < std::size(Thunk); ++I)
+    writeLE<uint16_t>(Text + 0x100 + I * 2, Thunk[I]);
+  Import Imp;
+  Imp.Module = "vcruntime-test.dll";
+  Imp.Name = "__C_specific_handler";
+  Imp.IATAddr = 0x40402c;
+  Img.Imports.push_back(std::move(Imp));
+  writeLE<uint32_t>(Img.Segments[1].Data.data(), 0); // empty scope table
+
+  ExceptionFunction F;
+  F.CodeRange = {Img.Base + 0x1000, Img.Base + 0x1080};
+  F.PersonalityVA = Img.Base + 0x1101;
+  F.HandlerDataVA = Img.Base + 0x3000;
+  Img.ExceptionMetadata.Functions.push_back(std::move(F));
+
+  coff_loader::resolveExceptionHandlers(Img);
+  const ExceptionFunction &Decoded = Img.ExceptionMetadata.Functions[0];
+  EXPECT_EQ(Decoded.Personality, ExceptionPersonality::CSpecificHandler);
+  EXPECT_EQ(Decoded.PersonalityName, "__C_specific_handler");
+  EXPECT_EQ(Decoded.ParseStatus, ExceptionParseStatus::Complete);
+
+  // The same bytes reading through another register are no such thunk.
+  BinaryImage Other = Img;
+  writeLE<uint16_t>(Other.Segments[0].Data.data() + 0x100 + 8, 0xf8dd);
+  Other.ExceptionMetadata.Functions[0] = ExceptionFunction();
+  Other.ExceptionMetadata.Functions[0].CodeRange = {Other.Base + 0x1000,
+                                                    Other.Base + 0x1080};
+  Other.ExceptionMetadata.Functions[0].PersonalityVA = Other.Base + 0x1101;
+  Other.ExceptionMetadata.Functions[0].HandlerDataVA = Other.Base + 0x3000;
+  coff_loader::resolveExceptionHandlers(Other);
+  EXPECT_EQ(Other.ExceptionMetadata.Functions[0].Personality,
+            ExceptionPersonality::Unknown);
+}
+
 TEST(COFFExceptionParser, NormalizesOnlyExactAArch64ConstantTrueFilterThunks) {
   constexpr uint32_t Prologue[] = {
       0xa9bf7bfdu, // stp x29, x30, [sp, #-16]!

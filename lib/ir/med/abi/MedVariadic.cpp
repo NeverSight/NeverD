@@ -68,6 +68,9 @@ std::optional<int64_t> entrySpDelta(VariadicScan &S, const MedVar &Root,
     const auto &Phis = Index.Phis;
     const auto &AmbiguousPhis = Index.AmbiguousPhis;
     const Key K = VariadicValueIndex::keyOf(V);
+    if (const auto Proved = S.ProvedEntrySpDeltas.find(K);
+        Proved != S.ProvedEntrySpDeltas.end())
+      return Proved->second;
     if (!Active.insert(K).second || AmbiguousDefinitions.count(K) ||
         AmbiguousPhis.count(K))
       return std::nullopt;
@@ -76,6 +79,10 @@ std::optional<int64_t> entrySpDelta(VariadicScan &S, const MedVar &Root,
       Key Value;
       ~PopActive() { Set.erase(Value); }
     } Guard{Active, K};
+    auto Proved = [&](int64_t Offset) -> std::optional<int64_t> {
+      S.ProvedEntrySpDeltas.emplace(K, Offset);
+      return Offset;
+    };
 
     if (auto It = Phis.find(K); It != Phis.end()) {
       std::optional<int64_t> Merged;
@@ -86,7 +93,7 @@ std::optional<int64_t> entrySpDelta(VariadicScan &S, const MedVar &Root,
           return std::nullopt;
         Merged = Offset;
       }
-      return Merged;
+      return Merged ? Proved(*Merged) : std::nullopt;
     }
     auto It = Definitions.find(K);
     if (It == Definitions.end())
@@ -105,23 +112,26 @@ std::optional<int64_t> entrySpDelta(VariadicScan &S, const MedVar &Root,
     case NdOp::COPY:
     case NdOp::INT_ZEXT:
     case NdOp::INT_SEXT:
-      return Eval(Op.Inputs[0], Remaining - 1);
+      if (auto Base = Eval(Op.Inputs[0], Remaining - 1))
+        return Proved(*Base);
+      return std::nullopt;
     case NdOp::SUBBYTES:
-      return Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
-                     Op.Inputs[1].ConstVal == 0
-                 ? Eval(Op.Inputs[0], Remaining - 1)
-                 : std::nullopt;
+      if (Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
+          Op.Inputs[1].ConstVal == 0)
+        if (auto Base = Eval(Op.Inputs[0], Remaining - 1))
+          return Proved(*Base);
+      return std::nullopt;
     case NdOp::INT_ADD:
     case NdOp::INT_SUB:
       if (Op.NumInputs < 2)
         return std::nullopt;
       if (auto C = constOf(Op.Inputs[1]))
         if (auto Base = Eval(Op.Inputs[0], Remaining - 1))
-          return Op.Opcode == NdOp::INT_ADD ? *Base + *C : *Base - *C;
+          return Proved(Op.Opcode == NdOp::INT_ADD ? *Base + *C : *Base - *C);
       if (Op.Opcode == NdOp::INT_ADD)
         if (auto C = constOf(Op.Inputs[0]))
           if (auto Base = Eval(Op.Inputs[1], Remaining - 1))
-            return *Base + *C;
+            return Proved(*Base + *C);
       return std::nullopt;
     default:
       return std::nullopt;

@@ -16,4 +16,4 @@ add_neverd_component_library(NeverDDalvik
   Runtime.cpp
   Signature.cpp
   LLVM_COMPONENTS Support
-  LINK_LIBS ZLIB::ZLIB)
+  LINK_LIBS ZLIB::ZLIB neverd_sorted_search)

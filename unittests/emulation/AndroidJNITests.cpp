@@ -139,7 +139,7 @@ TEST_P(AndroidJNI, BinderTransportUsesGuestServiceAndRetainedReplyArenas) {
                                "",
                                "",
                                "live Binder descriptor",
-                               "outside the object-free profile",
+                               "outside the synchronous profile",
                                "status exception/logging",
                                "native capacity semantics",
                                "closed and reused",
@@ -170,6 +170,52 @@ TEST_P(AndroidJNI, BinderTransportUsesGuestServiceAndRetainedReplyArenas) {
       }
     }
   }
+}
+TEST_P(AndroidJNI, BinderObjectsRetainProxyIdentityAndDriverOwnership) {
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
+  Options.LinuxTime->AdvanceOnIdle = true;
+  Options.Android->ObserveJavaState = true;
+  auto &device = Options.LinuxFiles.emplace().Devices["/dev/binder"];
+  device.Binder = true;
+  device.AccessMode = 2;
+  auto &state =
+      Options.Android->Application.emplace().service_manager.emplace();
+  state.cache.emplace().push_back({"alpha", 7});
+  using Binding = mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::
+      BinderProxy::NativeBinding;
+  state.binder_proxies = {{7, false, Binding{3, 0, true}}};
+  const char *diagnostics[] = {"",
+                               "buffer is not readable",
+                               "mapping is no longer live",
+                               "release buffer lease is no longer live",
+                               "",
+                               "object table is not readable"};
+  for (unsigned mode = 0; mode != 6; ++mode)
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(mode);
+      SCOPED_TRACE(form);
+      Options.Android->Arguments = {form, mode};
+      auto result = run("jni_binder_objects");
+      if (*diagnostics[mode]) {
+        EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
+            << result.Diagnostic;
+        EXPECT_NE(result.Diagnostic.find(diagnostics[mode]), std::string::npos)
+            << result.Diagnostic;
+      } else {
+        EXPECT_EQ(result.Stop, ProcessStopReason::Returned)
+            << result.Diagnostic;
+        EXPECT_EQ(result.ReturnValue, 0u);
+        ASSERT_TRUE(result.JavaState);
+        const auto &proxies =
+            result.JavaState->framework.service_manager->binder_proxies;
+        ASSERT_EQ(proxies.size(), mode == 0 ? 2u : 1u);
+        if (!mode) {
+          EXPECT_FALSE(proxies.back().key);
+          ASSERT_TRUE(proxies.back().native_binding);
+          EXPECT_EQ(proxies.back().native_binding->handle, 1u);
+        }
+      }
+    }
 }
 TEST_P(AndroidJNI, BinderTransactionEntryPreservesValidationOrderAndEffects) {
   const char *diagnostics[] = {"",
