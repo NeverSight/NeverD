@@ -580,9 +580,14 @@ TEST(AndroidBinderTest, BinderObjectsProtectScalarReadsAndCannotBeMarshalled) {
       s.heap
           ->literal("Tried to marshall a Parcel that contained Binder objects.")
           ->Bytes);
-  // Unmarshalling bytes clears object metadata and does not create a proxy.
+  // setDataSize retains in-range metadata. Emptying first drops ownership;
+  // importing arbitrary bytes afterwards cannot create a native proxy.
   auto array = s.heap->allocateArray("[B", 24);
   array->Bytes = *binderObject(0x73682a85, 9).bytes;
+  ASSERT_EQ(
+      s.call(Parcel, "unmarshall", "([BII)V", s.reply, {array->Identity, 0, 0})
+          .stop,
+      ExecutionStop::Returned);
   ASSERT_EQ(
       s.call(Parcel, "unmarshall", "([BII)V", s.reply, {array->Identity, 0, 24})
           .stop,

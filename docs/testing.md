@@ -15900,7 +15900,7 @@ DEX catch/resume. `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyAre
 executes real guest services through all three JNI forms, including three-round
 buffer retention/reuse, a reply recycled and reused by another native thread,
 missing managers, declared dead proxies, invalid/reused descriptors and explicit
-borrowed-write/unmapped-arena/PROT_NONE boundaries. The corresponding public test
+borrowed-write growth and unmapped-arena/PROT_NONE boundaries. The corresponding public test
 compares 90 complete SDK/CLI reports at O0/O2, including native thread exit with queued
 frees and a supplied DEX caller spanning consecutive transactions, a guest
 native callback and another transaction. Linux tests check the same raw buffer
@@ -15932,10 +15932,20 @@ Java objects, and writes a returned remote proxy alongside null and handle zero.
 The multi-object case replaces an expired weak cache before export, spans native
 read buffers and checks pointer/cookie ACK ordering. Ordinary/V/A forms exercise
 altered holder permissions, same-address
-mapping replacement, unconstructed objects, borrowed writes and non-append
-metadata boundaries. The matching
+mapping replacement, unconstructed objects, borrowed strong-write growth and
+non-append metadata boundaries. The matching
 `ProcessPublic.AndroidBinderLocalWritesMatchSDKAndCLI` compares 42 full report
 pairs at O0/O2. These tests do not claim local transaction callback dispatch.
+`AndroidParcelBufferTest.*` checks literal native capacities, live byte copies,
+capacity no-ops, protected in-place writes, reference acquisition before free,
+duplicate handles shared across copies, Java proxy promotion, local identity
+lifetime, retained `unmarshall` metadata and bounded storage reservations.
+`AndroidJNI.ParcelBorrowedRepliesGrowWithSharedBinderOwnership` exercises
+ordinary/V/A calls through real guest peers: automatic/explicit growth, arena
+slot reuse, scalar and strong writes, native-only remote handle retention and
+retirement, empty replies, read-only faults, stale leases and unreadable mappings.
+`ProcessPublic.AndroidParcelBorrowedGrowthMatchesSDKAndCLI` compares 54 complete
+reports at O0/O2, including all explicit failure outcomes.
 Run full Dalvik, Android JNI, thread/callback and native/Linux Binder suites,
 plus these focused public tests after changing this owner. The shared scheduler
 also requires the stream-wait, receive, readiness and poll regressions. These are

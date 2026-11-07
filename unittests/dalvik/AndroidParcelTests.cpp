@@ -514,8 +514,13 @@ TEST(AndroidParcelTest, HeapLimitsBoundOwnedStorageAndReadAllocation) {
             ExecutionStop::HeapLimit);
   EXPECT_EQ(small.query(id, "dataPosition"), 0u);
   EXPECT_EQ(small.call("writeInt", "(I)V", id, {5}).stop,
+            ExecutionStop::HeapLimit); // Native growth needs six bytes.
+  State exact(overhead + 6);
+  const auto exactId = exact.obtain();
+  EXPECT_EQ(exact.call("writeInt", "(I)V", exactId, {5}).stop,
             ExecutionStop::Returned);
-  EXPECT_EQ(small.call("marshall", "()[B", id).stop, ExecutionStop::HeapLimit);
+  EXPECT_EQ(exact.call("marshall", "()[B", exactId).stop,
+            ExecutionStop::HeapLimit);
   State objects(::neverd::limits::dalvik::kHeapByteLimit, 2);
   const auto p = objects.obtain();
   EXPECT_EQ(objects
