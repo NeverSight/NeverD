@@ -6503,6 +6503,199 @@ TEST(SBFCallXContexts, TaggedReturnBranchesRecoverOnlyTheirOwnPayload) {
     }
 }
 
+TEST(SBFCallXContexts, TaggedCaptureDefinitionsFollowTheSelectedCase) {
+  for (unsigned Mode = 0; Mode < 7; ++Mode)
+    for (bool ReverseEdges : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << "mode=" << Mode << ", reverse=" << ReverseEdges);
+      std::vector<test::EncodedInstruction> Text;
+      const auto Literal = [&](unsigned R, uint64_t Value) {
+        const size_t Slot = Text.size();
+        const auto Words = test::loadImm64(R, Value);
+        Text.insert(Text.end(), Words.begin(), Words.end());
+        return Slot;
+      };
+      std::vector<size_t> Allocations, TargetLiterals;
+      const auto Allocate = [&](unsigned InputOffset) {
+        Literal(1, kInputStart + InputOffset);
+        Allocations.push_back(Text.size());
+        Text.push_back({});
+      };
+      if (Mode == 6) {
+        Allocate(8);
+        Text.push_back(encode(Opcode::MOV64_REG, 8, 0));
+        Text.push_back(encode(Opcode::MOV64_REG, 2, 8));
+      }
+      Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+      Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -32));
+      const size_t ProducerCall = Text.size();
+      Text.push_back({});
+      if (Mode == 3)
+        Text.push_back(encode(Opcode::ST_DW_IMM, 10, 0, -32, 1));
+      Text.push_back(encode(Opcode::LD_DW_REG, 2, 10, -32));
+      if (Mode == 4) {
+        Literal(1, kInputStart);
+        Text.push_back(encode(Opcode::LD_DW_REG, 2, 1, 24));
+      }
+      if (Mode >= 5)
+        Text.push_back(encode(Opcode::LD_DW_REG, 8, 10, -24));
+      const size_t Branch = Text.size();
+      Text.push_back({});
+      Text.push_back(encode(Opcode::LD_DW_REG, 7, 10, -24));
+      const size_t ErrorJump = Text.size();
+      Text.push_back({});
+      const size_t Success = Text.size();
+      Allocate(16);
+      Text.push_back(encode(Opcode::MOV64_REG, 7, 0));
+      const size_t OtherTarget = Literal(2, 0);
+      Text.push_back(encode(Opcode::ST_DW_REG, 7, 2, 8));
+      if (Mode >= 5)
+        Text.push_back(encode(Opcode::MOV64_REG, 7, 8));
+      const size_t Join = Text.size();
+      if (Mode == 2) {
+        Literal(1, kInputStart);
+        Text.push_back(encode(Opcode::LD_DW_REG, 2, 1, 32));
+        Text.push_back(encode(Opcode::LD_DW_REG, 1, 1, 40));
+        Text.push_back(encode(Opcode::ST_DW_REG, 1, 2, 8));
+      }
+      Text.push_back(encode(Opcode::LD_DW_REG, 2, 7, 8));
+      const size_t CallX = Text.size();
+      Text.push_back(encode(Opcode::CALL_REG, 2));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Producer = Text.size();
+      Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+      if (Mode == 6)
+        Text.push_back(encode(Opcode::MOV64_REG, 7, 2));
+      if (Mode == 5) {
+        // The same name was introduced before either tag, including the
+        // path whose field is unknown. Selecting a tag cannot erase it.
+        Allocate(8);
+        Text.push_back(encode(Opcode::MOV64_REG, 7, 0));
+      }
+      Literal(3, kInputStart);
+      Text.push_back(encode(Opcode::LD_DW_REG, 2, 3));
+      const size_t Select = Text.size();
+      Text.push_back({});
+      if (Mode >= 5) {
+        Text.push_back(encode(Opcode::LD_DW_REG, 2, 3, 32));
+        Text.push_back(encode(Opcode::ST_DW_REG, 7, 2, 8));
+        Text.push_back(encode(Opcode::ST_DW_REG, 6, 7, 8));
+      } else {
+        Text.push_back(encode(Opcode::LD_DW_REG, 2, 3, 8));
+        Text.push_back(encode(Opcode::ST_DW_REG, 6, 2, 8));
+      }
+      Text.push_back(encode(Opcode::MOV64_IMM, 1));
+      const size_t SuccessJump = Text.size();
+      Text.push_back({});
+      const size_t Error = Text.size();
+      if (Mode < 5) {
+        Allocate(8);
+        Text.push_back(encode(Opcode::MOV64_REG, 7, 0));
+      }
+      TargetLiterals.push_back(Literal(2, 0));
+      Text.push_back(encode(Opcode::ST_DW_REG, 7, 2, 8));
+      Text.push_back(encode(Opcode::ST_DW_REG, 6, 7, 8));
+      Text.push_back(encode(Opcode::MOV64_IMM, 1, 0, 0, 1));
+      const size_t Tail = Text.size();
+      Text.push_back(encode(Opcode::ST_DW_REG, 6, 1));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Allocator = Text.size();
+      Text.push_back(encode(Opcode::LD_DW_REG, 0, 1));
+      Literal(2, kHeapStart + 8);
+      const size_t Below = Text.size();
+      Text.push_back({});
+      Literal(2, kHeapStart + 128);
+      const size_t Above = Text.size();
+      Text.push_back({});
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Fallback = Literal(0, kHeapStart + 32);
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t A = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t B = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+      Text.push_back(encode(Opcode::EXIT));
+      Text[ProducerCall] =
+          encode(Opcode::CALL_IMM, 0, 1, 0, Producer - ProducerCall - 1);
+      Text[Branch] = encode(Opcode::JEQ64_IMM, 2, 0, Success - Branch - 1);
+      Text[ErrorJump] = encode(Opcode::JA, 0, 0, Join - ErrorJump - 1);
+      Text[Select] = encode(Opcode::JNE64_IMM, 2, 0, Error - Select - 1);
+      Text[SuccessJump] = encode(Opcode::JA, 0, 0, Tail - SuccessJump - 1);
+      for (size_t Slot : Allocations)
+        Text[Slot] = encode(Opcode::CALL_IMM, 0, 1, 0, Allocator - Slot - 1);
+      Text[Below] = encode(Opcode::JLT64_REG, 0, 2, Fallback - Below - 1);
+      Text[Above] = encode(Opcode::JGT64_REG, 0, 2, Fallback - Above - 1);
+      for (size_t Slot : TargetLiterals) {
+        const auto Words = test::loadImm64(2, kBytecodeStart + A * 8);
+        std::copy(Words.begin(), Words.end(), Text.begin() + Slot);
+      }
+      const auto Words =
+          test::loadImm64(2, kBytecodeStart + (Mode == 1 ? B : A) * 8);
+      std::copy(Words.begin(), Words.end(), Text.begin() + OtherTarget);
+      auto Program = analyze(test::makeImage(Text, {}));
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      if (ReverseEdges)
+        std::reverse(Program->Low.Edges.begin(), Program->Low.Edges.end());
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      checkSummaryReferences(*Report);
+      EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+      EXPECT_TRUE(llvm::any_of(Report->Summaries, [&](const auto &Summary) {
+        return Summary.EntrySlot == Producer && Summary.OutputTaggedCases == 2;
+      }));
+      bool Singleton = false, Finite = false;
+      for (const auto &Site : Report->Contexts)
+        if (Site.CallXSlot == CallX) {
+          Singleton |= Site.TargetSlot == A;
+          Finite |= Site.Result == CallXContextResult::ProvenTargetSet;
+          if (Mode >= 2)
+            EXPECT_FALSE(Site.TargetAddress ||
+                         Site.Result == CallXContextResult::ProvenTargetSet);
+        }
+      EXPECT_EQ(Singleton, Mode == 0);
+      EXPECT_EQ(Finite, Mode == 1);
+      for (unsigned ErrorInput : {0u, 1u})
+        for (bool Alias : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << "error=" << ErrorInput << ", alias=" << Alias);
+          std::vector<uint8_t> Input(48), Heap(256);
+          const uint64_t FirstObject = kHeapStart + 32;
+          const uint64_t SecondObject = kHeapStart + (Alias ? 32 : 96);
+          llvm::support::endian::write64le(Input.data(), ErrorInput);
+          llvm::support::endian::write64le(Input.data() + 8, FirstObject);
+          llvm::support::endian::write64le(Input.data() + 16, SecondObject);
+          llvm::support::endian::write64le(Input.data() + 24, 1);
+          llvm::support::endian::write64le(Input.data() + 32,
+                                           kBytecodeStart + B * 8);
+          llvm::support::endian::write64le(
+              Input.data() + 40, Alias
+                                     ? (ErrorInput ? FirstObject : SecondObject)
+                                     : kHeapStart + 160);
+          llvm::support::endian::write64le(Heap.data() + 40,
+                                           kBytecodeStart + B * 8);
+          ExecutionEnvironment Environment;
+          Environment.Memory.push_back({kInputStart, Input, false, "input"});
+          Environment.Memory.push_back({kHeapStart, Heap, true, "objects"});
+          auto Raw = executeRaw(*Program, std::move(Environment));
+          ASSERT_TRUE(static_cast<bool>(Raw))
+              << llvm::toString(Raw.takeError());
+          ASSERT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+          const bool CallsB = (Mode == 1 && !ErrorInput) ||
+                              (Mode == 2 && Alias) ||
+                              ((Mode == 3 || Mode == 4) && !ErrorInput) ||
+                              (Mode >= 5 && !ErrorInput && !Alias);
+          EXPECT_EQ(Raw->ReturnValue, CallsB ? 43u : 42u);
+          EXPECT_EQ(llvm::count_if(
+                        Raw->Trace,
+                        [&](const auto &Step) { return Step.Slot == CallX; }),
+                    1);
+        }
+    }
+}
+
 TEST(SBFCallXContexts, TaggedReturnsKeepTheCompleteAlternativeLimit) {
   for (unsigned Count :
        {kCallXContextValueAlternatives - 1, kCallXContextValueAlternatives,
