@@ -1474,15 +1474,17 @@ HFA and signed/unsigned 128-bit values, and applies complete call prototypes.
 Both C routes must compile all twenty-seven argument/result shapes at O0/O2,
 including record names matching the renderer's preferred temporary names.
 Seventeen raw fixtures also execute as native arm64 on Apple arm64:
-original assembly and both C projections call independent C `va_arg` readers
-at O0/O2 (102 executions). These readers check signed/unsigned 128-bit values,
+original assembly and both C projections call independent C callbacks
+at O0/O2 (102 executions). Variadic readers check signed/unsigned 128-bit values,
 16-byte alignment following a promoted int, named records, padding, HFA and
 nested HFA members, and a fixed record prefix. Indirect-record callbacks
 additionally check the original address, aliased reads and writes, register
 exhaustion and native variadic record reads. The authenticated model matrix
 checks the same pointer transport without dereferencing its synthetic pointer
 values; the native storage oracle supplies that separate evidence. Generated
-LLVM and recompiled C must not introduce `byval` or `noalias` attributes.
+LLVM and recompiled C must not introduce `byval`, `byref`, `noalias`, `nonnull`,
+alignment or dereferenceability parameter attributes. Mixed and nested indirect
+records also exercise forward declarations for opaque pointer fields.
 Other hosts retain compilation
 and explicitly record that native execution is unavailable. Packed/union values,
 hidden results, and unpromoted scalar tails must refuse explicitly.
