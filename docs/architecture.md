@@ -17269,7 +17269,8 @@ likewise suspend before returning to that import; ordinary and resumed calls
 share one callback-entry helper. The native adapter suspends on the existing guest
 scheduler until thread-specific Binder work arrives. Shared Linux memory owns
 reply arena bytes; Parcel retains a live read-only view and queues BC_FREE_BUFFER
-on replacement, unmarshalling or recycle. Thread exit flushes pending frees and
+on replacement, capacity detachment, unmarshalling or recycle. Thread exit
+flushes pending frees and
 uses the same BINDER_THREAD_EXIT owner. API 28 freeBuffer selects the current
 native thread, ignoring its cookie, so that thread flushes the queued frees at
 its next Binder exchange. Null Java replies use the temporary-reply release
@@ -17302,9 +17303,15 @@ flushes them only before another driver read; synchronous native release work
 remains deferred until the currently unsupported top-level dispatch path.
 
 `enforceInterface` still requires incoming flags and the Java StrictMode upcall.
-Local Binder dispatch, nested/one-way transactions, weak objects/FDs, and
-writes/capacity growth in borrowed reply storage remain explicit
-boundaries. ServiceManager `lookup_results` remain a separate semantic input;
+`AndroidParcel.cpp` owns native capacity separately from initialized data.
+Borrowed growth copies live bytes, acquires retained object references, and only
+then queues the arena free. The shared heap admits explicit reservations without
+making spare bytes readable. In-capacity borrowed writes use the native memory
+owner and retain read-only faults. `AndroidBinderObjects.cpp` tracks native-only
+remote references across copied Parcels independently of Java proxy creation;
+final release uses the existing Linux strong/weak reference commands.
+Local Binder dispatch, nested/one-way transactions, weak objects/FDs, and direct
+reallocation of a borrowed offset table remain explicit boundaries. ServiceManager `lookup_results` remain a separate semantic input;
 this transport does not turn those entries into kernel peers or replies.
 
 

@@ -56,7 +56,7 @@ ExecutionResult AndroidFramework::binderHandle(Heap &heap, uint32_t fd,
             0,
             {},
             "Android Binder proxy storage budget exhausted"};
-  auto retained = services.retain_binder_handle(fd, handle);
+  auto retained = retainBinderHandle(fd, handle);
   if (retained.stop != ExecutionStop::Returned)
     return retained;
   binder_handles.emplace(endpoint, object->Identity);
@@ -199,9 +199,11 @@ ExecutionResult AndroidFramework::completeBinder(Heap &heap,
         state.release();
       object->Bytes = std::move(*reply.bytes);
       state.position = 0;
+      state.capacity = object->Bytes.size();
       state.error = 0;
       state.view = std::move(reply.view);
       state.release = std::move(reply.release);
+      state.write = std::move(reply.write);
       state.objects = std::move(reply.objects);
       state.fd = reply.fd;
     }

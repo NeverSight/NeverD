@@ -10,6 +10,10 @@
 
 #include "neverd/dalvik/Limits.h"
 
+#include "llvm/Support/Endian.h"
+
+#include <algorithm>
+
 namespace neverd::mobile::dalvik {
 namespace {
 ExecutionResult unsupported(const char *message) {
@@ -117,14 +121,91 @@ ExecutionResult AndroidFramework::retireLocalBinder(uint64_t cookie) {
   return released;
 }
 
+ExecutionResult AndroidFramework::retainBinderHandle(uint32_t fd,
+                                                     uint32_t handle) {
+  const auto endpoint = std::make_pair(fd, handle);
+  if (binder_handles.contains(endpoint) ||
+      binder_input_keys.contains(endpoint) ||
+      binder_parcel_handles.contains(endpoint))
+    return {};
+  if (!handle)
+    return unsupported(
+        "Android uncached Binder handle zero requires a native ping");
+  if (!services.retain_binder_handle)
+    return unsupported(
+        "Android Binder handle ownership service is not supplied");
+  return services.retain_binder_handle(fd, handle);
+}
+
+ExecutionResult
+AndroidFramework::acquireParcelObjects(ParcelState &state,
+                                       std::span<const uint8_t> bytes) {
+  // API 28 acquireObjects walks the original offset table backwards. Kernel
+  // ownership remains live until every retained object has been acquired.
+  for (auto it = state.objects.rbegin(); it != state.objects.rend(); ++it) {
+    const auto *flat = bytes.data() + *it;
+    const auto type = llvm::support::endian::read32le(flat);
+    const auto pointer = llvm::support::endian::read64le(flat + 8);
+    const auto cookie = llvm::support::endian::read64le(flat + 16);
+    if (type == 0x73622a85) {
+      if (!pointer)
+        continue;
+      auto node = local_binders.find(cookie);
+      if (node == local_binders.end() || !node->second.alive())
+        return unsupported("Android local Binder object requires a native Java "
+                           "object association");
+      auto valid = services.binder_identity(BinderIdentityOperation::Validate,
+                                            node->second.pointer);
+      if (valid.stop != ExecutionStop::Returned)
+        return valid;
+      ++node->second.references;
+      state.references.push_back({cookie});
+    } else if (type == 0x73682a85) {
+      if (!state.fd)
+        return unsupported(
+            "Android Parcel Binder handle has no native connection");
+      const auto handle = uint32_t(pointer);
+      auto retained = retainBinderHandle(*state.fd, handle);
+      if (retained.stop != ExecutionStop::Returned)
+        return retained;
+      ++binder_parcel_handles[std::make_pair(*state.fd, handle)];
+      state.references.push_back({0, handle});
+    } else
+      return unsupported(
+          "Android Parcel acquisition of weak or FD objects is not modeled");
+  }
+  std::reverse(state.references.begin(), state.references.end());
+  return {};
+}
+
 ExecutionResult AndroidFramework::releaseParcelObjects(ParcelState &state) {
-  while (!state.local_objects.empty()) {
-    const auto cookie = state.local_objects.back();
-    --local_binders.find(cookie)->second.references;
-    state.local_objects.pop_back();
-    auto released = retireLocalBinder(cookie);
-    if (released.stop != ExecutionStop::Returned)
-      return released;
+  while (!state.references.empty()) {
+    const auto reference = state.references.back();
+    if (reference.cookie) {
+      --local_binders.find(reference.cookie)->second.references;
+      state.references.pop_back();
+      auto released = retireLocalBinder(reference.cookie);
+      if (released.stop != ExecutionStop::Returned)
+        return released;
+    } else {
+      const auto endpoint = std::make_pair(*state.fd, reference.handle);
+      auto entry = binder_parcel_handles.find(endpoint);
+      if (entry->second == 1) {
+        if (!binder_handles.contains(endpoint) &&
+            !binder_input_keys.contains(endpoint)) {
+          if (!services.release_binder_handle)
+            return unsupported(
+                "Android Binder handle release service is not supplied");
+          auto released =
+              services.release_binder_handle(endpoint.first, endpoint.second);
+          if (released.stop != ExecutionStop::Returned)
+            return released;
+        }
+        binder_parcel_handles.erase(entry);
+      } else
+        --entry->second;
+      state.references.pop_back();
+    }
   }
   return {};
 }

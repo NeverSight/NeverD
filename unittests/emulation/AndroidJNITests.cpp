@@ -141,7 +141,7 @@ TEST_P(AndroidJNI, BinderTransportUsesGuestServiceAndRetainedReplyArenas) {
                                "live Binder descriptor",
                                "outside the synchronous profile",
                                "status exception/logging",
-                               "native capacity semantics",
+                               "",
                                "closed and reused",
                                "mapping is no longer live",
                                "",
@@ -234,7 +234,7 @@ TEST_P(AndroidJNI, BinderLocalObjectsAndOwnedParcelWritesUseSharedTransport) {
                                "",
                                "storage must remain opaque",
                                "original native holder",
-                               "native capacity semantics",
+                               "",
                                "non-append Binder metadata",
                                "identity allocation was replaced"};
   for (unsigned mode = 0; mode != 7; ++mode)
@@ -253,6 +253,46 @@ TEST_P(AndroidJNI, BinderLocalObjectsAndOwnedParcelWritesUseSharedTransport) {
             << result.Diagnostic;
         EXPECT_EQ(result.ReturnValue, 0u);
       }
+    }
+}
+TEST_P(AndroidJNI, ParcelBorrowedRepliesGrowWithSharedBinderOwnership) {
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
+  Options.LinuxTime->AdvanceOnIdle = true;
+  Options.Android->ObserveJavaState = true;
+  auto &device = Options.LinuxFiles.emplace().Devices["/dev/binder"];
+  device.Binder = true;
+  device.AccessMode = 2;
+  auto &state =
+      Options.Android->Application.emplace().service_manager.emplace();
+  state.cache.emplace().push_back({"alpha", 7});
+  using Binding = mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::
+      BinderProxy::NativeBinding;
+  state.binder_proxies = {{7, false, Binding{3, 0, true}}};
+  for (unsigned mode = 0; mode != 9; ++mode)
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(mode);
+      SCOPED_TRACE(form);
+      Options.Android->Arguments = {form, mode};
+      auto result = run("jni_parcel_reply_growth");
+      const auto expected = mode == 2 ? ProcessStopReason::RuntimeFailure
+                            : mode == 3 || mode == 4 || mode == 8
+                                ? ProcessStopReason::UnsupportedService
+                                : ProcessStopReason::Returned;
+      EXPECT_EQ(result.Stop, expected) << result.Diagnostic;
+      if (expected == ProcessStopReason::Returned)
+        EXPECT_EQ(result.ReturnValue, 0u);
+      else if (mode == 3)
+        EXPECT_NE(result.Diagnostic.find("mapping is no longer live"),
+                  std::string::npos);
+      else if (mode == 4)
+        EXPECT_NE(result.Diagnostic.find("buffer is not readable"),
+                  std::string::npos);
+      else if (mode == 8)
+        EXPECT_NE(result.Diagnostic.find("borrowed object-table growth"),
+                  std::string::npos);
+      else
+        EXPECT_NE(result.Diagnostic.find("guest pointer"), std::string::npos)
+            << result.Diagnostic;
     }
 }
 TEST_P(AndroidJNI, BinderTransactionEntryPreservesValidationOrderAndEffects) {
