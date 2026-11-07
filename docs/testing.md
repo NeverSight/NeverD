@@ -21409,3 +21409,5 @@ and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
 frontend regressions and 91 generated-table tests passed. NeverC's strict
 global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
+
+`SymExpr` variable-membership checks compare structural membership with full variable collection, including context copies and missing IDs. Substitution checks retain unrelated shared payloads, exact root order, non-variable keys and simultaneous replacement semantics.

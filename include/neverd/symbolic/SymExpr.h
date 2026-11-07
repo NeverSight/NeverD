@@ -410,6 +410,8 @@ public:
 
   /// Every variable reachable from \p R, in ascending variable-id order.
   void collectVars(SymRef R, llvm::SmallVectorImpl<uint32_t> &Out) const;
+  /// Exact structural membership. Undeclared variable IDs are absent.
+  bool containsVariable(SymRef R, uint32_t VarIdx) const;
 
   /// Total nodes interned in this context.  Diagnostic only.
   size_t numNodes() const { return Nodes.size(); }
@@ -502,12 +504,15 @@ private:
   void retainLowWordProjection(SymRef Source, uint32_t Width, SymRef Image);
 
   llvm::APInt maskToWidth(const llvm::APInt &V, uint32_t Width) const;
+  uint32_t minimumVariableId(SymRef R) const;
 
   std::vector<SymNode> Nodes;
   std::vector<SymRef> OperandPool;
   std::vector<SymVarInfo> Vars;
   /// One readability cost per prefix of \c Nodes, filled lazily.
   mutable std::vector<SymReadability> ReadabilityCosts;
+  /// Minimum structural input ID per immutable node; UINT32_MAX is empty.
+  mutable std::vector<uint32_t> MinimumVariables;
   /// Literals wider than 64 bits, referenced by index from SymNode::Aux.
   std::vector<llvm::APInt> WideConsts;
 
