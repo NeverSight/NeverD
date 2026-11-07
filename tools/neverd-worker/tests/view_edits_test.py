@@ -140,7 +140,7 @@ def run(executable):
         ok(owner, "rename", {"address": hex(functions[2]), "name": "after_many"})
         assert isinstance(view(owner, functions[0]), dict)
         assert store_reads(owner) == reads, (store_reads(owner), reads)
-        for count in range(40):
+        for count in range(140):
             ok(owner, "annotation_set", {"address": hex(functions[3]), "text": f"note {count}"})
             ok(owner, "save")
         many = same_as_fresh("many edits")

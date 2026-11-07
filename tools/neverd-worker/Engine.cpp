@@ -1139,25 +1139,32 @@ void Engine::readViewEdits(const std::string &sourceKey) {
     return;
   const auto &reads = document.reads;
   const auto text = document.value.find("text");
+  std::size_t read = 0;
+  bool readEnough = false;
   const auto reaches = [&](const ViewEdit &edit) {
-    return !document.readsKnown ||
-           std::binary_search(reads.begin(), reads.end(), edit.address) ||
-           text == document.value.end() || !text->is_string() ||
-           // A name a token of the text spells may now resolve there.
-           std::any_of(edit.names.begin(), edit.names.end(),
-                       [&](const std::string &name) {
-                         return !name.empty() &&
-                                text->get_ref<const std::string &>().find(
-                                    name) != std::string::npos;
-                       });
+    if (!document.readsKnown ||
+        std::binary_search(reads.begin(), reads.end(), edit.address) ||
+        text == document.value.end() || !text->is_string())
+      return true;
+    // A name a token of the text spells may now resolve there.
+    const auto &spelled = text->get_ref<const std::string &>();
+    for (const auto &name : edit.names) {
+      if (name.empty())
+        continue;
+      read += spelled.size();
+      readEnough = read > ::neverd::limits::worker::kEngineMaxViewEditTextBytes;
+      if (readEnough || spelled.find(name) != std::string::npos)
+        return true;
+    }
+    return false;
   };
   // Behind what is remembered, it may read anything.
   bool stale = unread > viewEdits_.size(), decorated = false;
   if (!stale)
     for (auto edit = viewEdits_.end() - static_cast<std::ptrdiff_t>(unread);
-         edit != viewEdits_.end(); ++edit)
-      if (reaches(*edit))
-        (edit->pagesStale ? stale : decorated) = true;
+         edit != viewEdits_.end() && !stale; ++edit)
+      if ((!decorated || edit->pagesStale) && reaches(*edit))
+        (edit->pagesStale || readEnough ? stale : decorated) = true;
   if (stale) {
     unindexNamedView(position);
     namedViewBytes_ -= document.bytes;
@@ -2084,6 +2091,15 @@ void Engine::prefillStep() {
     prefillState_ = PrefillState::Done;
 }
 bool Engine::summaryStep() {
+  // A request that comes during a step waits for it: a step runs once the
+  // reader has paused, and the solve, the longest, once they have for longer.
+  namespace limits = ::neverd::limits::worker;
+  const auto idle = std::chrono::steady_clock::now() - lastRequest_;
+  if (idle <
+      std::chrono::milliseconds(summaryState_ == SummaryState::Solving
+                                    ? limits::kSummarySolveHoldOffMilliseconds
+                                    : limits::kSummaryStepHoldOffMilliseconds))
+    return false;
   if (prefillPending()) {
     try {
       prefillStep();

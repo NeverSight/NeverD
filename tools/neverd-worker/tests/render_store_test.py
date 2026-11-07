@@ -402,8 +402,11 @@ def run(executable):
         heartbeat = lambda m: m.get("type") == "heartbeat"
         ready = False
         while not ready:
-            # Requests hold the job off; a slow machine only renders it sooner.
+            # Requests hold the job off, and the summaries until the reader
+            # pauses: each visit comes as the summaries read ahead after one.
+            # A slow machine only renders it sooner.
             source(early, A)
+            time.sleep(2)
             try:
                 while True:
                     message = early.next(heartbeat, timeout=0.2)

@@ -175,7 +175,7 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
     add_test(NAME NeverDWorkerRenderStore
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_store_test.py"
               "$<TARGET_FILE:neverd-worker-test-server>")
-    set_tests_properties(NeverDWorkerRenderStore PROPERTIES TIMEOUT 180)
+    set_tests_properties(NeverDWorkerRenderStore PROPERTIES TIMEOUT 240)
     add_test(NAME NeverDWorkerMakeCode
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_code_test.py"
               "$<TARGET_FILE:neverd-worker-test-server>")

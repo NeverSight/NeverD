@@ -4581,7 +4581,9 @@ starts the job over. A render cannot be interrupted, so the job renders a
 function only after no request has come for a while, longer for a larger
 function, leaves a function a request took long to prepare prepared until the
 reader has paused for much longer, and leaves the largest functions and any of
-unknown size to their visits. Like a kept document, a render reads what the engine knew when it ran:
+unknown size to their visits. The summary job's steps and its solve, which a request
+also waits for, likewise wait for the reader to pause (`kSummaryStepHoldOffMilliseconds`),
+so a reader going through functions renders them without it. Like a kept document, a render reads what the engine knew when it ran:
 `BinaryImage::CodeRefTargets` is additive, so an address a function rendered
 earlier took, such as a funclet's `_local_unwind` continuation in its parent, can
 make the render differ from a first visit to that function in a new session.
