@@ -298,6 +298,10 @@ AndroidFramework::serviceManager(Heap &heap, const Program &program,
       return {ExecutionStop::Returned, arguments[0]};
     }
     if (method.Op == BinderQueryLocalInterface) {
+      if (program.assignable(objectDescriptor(*heap.get(receiver)),
+                             "Landroid/os/Binder;"))
+        return binderInterface(heap, program, method, receiver, arguments,
+                               admit);
       if (heap.get(receiver)->ClassName != "android/os/BinderProxy")
         return unsupported(
             "Android local Binder interface lookup is not modeled");

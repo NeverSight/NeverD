@@ -255,6 +255,74 @@ TEST_P(AndroidJNI, BinderLocalObjectsAndOwnedParcelWritesUseSharedTransport) {
       }
     }
 }
+TEST_P(AndroidJNI, JavaBinderDispatchUsesPoolAndIncomingNativeContinuations) {
+#ifndef NEVERD_ANDROID_DEX_FIXTURE_DIR
+  GTEST_SKIP() << "Python DEX fixture generator unavailable";
+#else
+  auto file = llvm::MemoryBuffer::getFile(
+      (std::filesystem::path(NEVERD_ANDROID_DEX_FIXTURE_DIR) /
+       "java-binder-dispatch.dex")
+          .string());
+  ASSERT_TRUE(bool(file));
+  auto bytes = (*file)->getBuffer();
+  Options.Android->DexImages.emplace_back(bytes.begin(), bytes.end());
+#endif
+  Options.LinuxTime.emplace().Clocks = {{0, {123, 0}}, {7, {50, 0}}};
+  Options.LinuxTime->AdvanceOnIdle = true;
+  Options.Android->ObserveJavaState = true;
+  auto &device = Options.LinuxFiles.emplace().Devices["/dev/binder"];
+  device.Binder = true;
+  device.AccessMode = 2;
+  auto &state =
+      Options.Android->Application.emplace().service_manager.emplace();
+  state.cache.emplace().push_back({"alpha", 7});
+  using Binding = mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::
+      BinderProxy::NativeBinding;
+  state.binder_proxies = {{7, false, Binding{3, 0, true}}};
+  for (unsigned mode = 0; mode != 6; ++mode)
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(mode);
+      SCOPED_TRACE(form);
+      if (mode == 4)
+        Options.LinuxTime->Clocks.erase(0);
+      else
+        Options.LinuxTime->Clocks[0] = {123, 0};
+      Options.Android->Arguments = {form, mode};
+      auto result = run("jni_binder_dispatch");
+      if (mode == 2 || mode == 3 || mode == 4) {
+        EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
+            << result.Diagnostic;
+        const char *diagnostic = mode == 2   ? "exception serialization"
+                                 : mode == 3 ? "BlockGuard"
+                                             : "clock";
+        EXPECT_NE(result.Diagnostic.find(diagnostic), std::string::npos)
+            << result.Diagnostic;
+      } else {
+        EXPECT_EQ(result.Stop, mode == 1 ? ProcessStopReason::Returned
+                                         : ProcessStopReason::Exited)
+            << result.Diagnostic;
+        if (mode == 1)
+          EXPECT_EQ(result.ReturnValue, 0u);
+        else
+          EXPECT_EQ(result.ExitStatus, 0);
+      }
+      ASSERT_TRUE(result.JavaState);
+      const auto &calls = result.JavaState->framework.binder_calls;
+      if (mode == 1 || mode == 4)
+        EXPECT_FALSE(calls);
+      else {
+        ASSERT_TRUE(calls);
+        EXPECT_EQ(calls->start_milliseconds, 123000u);
+        if (mode == 2)
+          EXPECT_TRUE(calls->entries.empty());
+        else {
+          ASSERT_EQ(calls->entries.size(), 1u);
+          EXPECT_EQ(calls->entries[0].uid, 1000u);
+          EXPECT_EQ(calls->entries[0].count, mode == 3 ? 1u : 3u);
+        }
+      }
+    }
+}
 TEST_P(AndroidJNI, ParcelBorrowedRepliesGrowWithSharedBinderOwnership) {
   Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
   Options.LinuxTime->AdvanceOnIdle = true;

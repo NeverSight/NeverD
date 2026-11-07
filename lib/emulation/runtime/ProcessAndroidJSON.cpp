@@ -1253,6 +1253,17 @@ llvm::json::Object androidResultJSON(const ProcessResult &Result) {
         {field::ApplicationInstrumentation,
          F.instrumentation ? llvm::json::Value(bits(*F.instrumentation))
                            : nullptr}};
+    if (F.binder_calls) {
+      llvm::json::Array Entries;
+      for (const auto &Entry : F.binder_calls->entries)
+        Entries.push_back(llvm::json::Object{{"uid", Entry.uid},
+                                             {"count", bits(Entry.count)},
+                                             {"time", bits(Entry.count)}});
+      Framework["binder_calls"] = llvm::json::Object{
+          {"start_milliseconds", bits(F.binder_calls->start_milliseconds)},
+          {"detailed_tracking", false},
+          {"entries", std::move(Entries)}};
+    }
     if (F.main_message_queue) {
       const auto &Queue = *F.main_message_queue;
       llvm::json::Array Messages;

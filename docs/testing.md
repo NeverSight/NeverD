@@ -16122,6 +16122,23 @@ buffers/cursors, owner retention and missing allocator services.
 interior, freed and unreadable foreign pointers with an unreadable owned allocation.
 `ProcessPublic.AndroidParcelBorrowedGrowthMatchesSDKAndCLI` compares 108 complete
 reports at O0/O2, including all explicit failure outcomes.
+`AndroidBinderDispatchTest` checks local and incoming Java dispatch, protected
+super calls and virtual descriptor overrides, exception cursor order, native
+continuation tokens, separate wrapper-pool reuse, reply-ack buffer lifetime,
+default call statistics and clock/stack/work boundaries. The original
+`java-binder-dispatch.dex` calls a guest native body that sleeps and resumes
+inside `onTransact`. `AndroidJNI.JavaBinderDispatchUsesPoolAndIncomingNativeContinuations`
+exports that object to a guest driver peer, then checks repeated incoming
+transactions, reply object translation, native ping and UNKNOWN_TRANSACTION.
+Ordinary/V/A calls also check local transact, missing realtime, Java exceptions
+and changed StrictMode policy. The successful peer exits the process after its
+checks; a live Binder pool never invents a normal Java return.
+`ProcessPublic.AndroidJavaBinderDispatchMatchesSDKAndCLI` compares 36 complete
+reports at O0/O2 with the original 200,000-instruction bound.
+`LinuxBinder.LooperReadinessMatchesActualProcessAndPrivateWork` submits raw
+transactions across four thread identities on x86-64 and AArch64, checking that
+only an idle looper wakes for process work and that private acknowledgements
+and replies still activate their owning threads.
 Run full Dalvik, Android JNI, thread/callback and native/Linux Binder suites,
 plus these focused public tests after changing this owner. The shared scheduler
 also requires the stream-wait, receive, readiness and poll regressions. These are

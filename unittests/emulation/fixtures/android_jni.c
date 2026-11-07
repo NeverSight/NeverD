@@ -5282,3 +5282,189 @@ int jni_parcel_reply_growth(unsigned form, unsigned mode) {
   CHECK(!pthread_join(thread, &status) && !status);
   return C(vm, int, 5);
 }
+
+/* A driver peer calls an exported Java Binder. The Java DEX body calls back
+ * into this guest native method, which sleeps before writing its reply. */
+static unsigned jd_form, jd_mode, jd_calls, jd_failure;
+static Ref jd_last_data, jd_last_reply;
+static int jd_body(Handle e, Ref self, unsigned code, Ref data, Ref reply,
+                   unsigned flags) {
+  Ref parcel = C(e, Ref, 6, "android/os/Parcel");
+  Ref binder = C(e, Ref, 6, "android/os/Binder");
+  Ref read = C(e, Ref, 33, parcel, "readInt", "()I");
+  Ref write = C(e, Ref, 33, parcel, "writeInt", "(I)V");
+  Ref strong =
+      C(e, Ref, 33, parcel, "writeStrongBinder", "(Landroid/os/IBinder;)V");
+  Ref position = C(e, Ref, 33, parcel, "dataPosition", "()I");
+  Ref obtain = C(e, Ref, 113, parcel, "obtain", "()Landroid/os/Parcel;");
+  Ref recycle = C(e, Ref, 33, parcel, "recycle", "()V");
+  Ref caller = C(e, Ref, 113, binder, "getCallingUid", "()I");
+  Ref pid = C(e, Ref, 113, binder, "getCallingPid", "()I");
+  CHECK(C(e, int, 129, binder, caller) == 1000);
+  CHECK(C(e, int, 129, binder, pid) > 0);
+  CHECK(!parcel_result(e, 49, jd_form, data, position));
+  CHECK(!parcel_result(e, 49, jd_form, reply, position));
+  if (jd_calls && jd_mode != 1) {
+    CHECK(same_ref(e, data, jd_last_reply));
+    CHECK(same_ref(e, reply, jd_last_data));
+  }
+  Ref own = parcel_result(e, 114, jd_form, parcel, obtain);
+  CHECK(!same_ref(e, own, data) && !same_ref(e, own, reply));
+  C(e, void, 61, own, recycle);
+  unsigned number = parcel_result(e, 49, jd_form, data, read);
+  CHECK(!usleep(1));
+  CHECK(C(e, int, 129, binder, caller) == 1000);
+  CHECK(parcel_result(e, 49, jd_form, data, position) == 4);
+  parcel_write(e, jd_form, reply, write, 1, number + code + flags);
+  parcel_write(e, jd_form, reply, strong, 0, self);
+  CHECK(parcel_result(e, 49, jd_form, reply, position) == 28);
+  if (jd_mode != 1) {
+    if (jd_last_data) {
+      C(e, void, 22, jd_last_data);
+      C(e, void, 22, jd_last_reply);
+    }
+    jd_last_data = C(e, Ref, 21, data);
+    jd_last_reply = C(e, Ref, 21, reply);
+  }
+  ++jd_calls;
+  if (jd_mode == 2) {
+    Ref error = C(e, Ref, 6, "java/lang/IllegalArgumentException");
+    CHECK(!C(e, int, 14, error, (const char *)0));
+  }
+  if (jd_mode == 3) {
+    Ref policy = C(e, Ref, 113, binder, "setThreadStrictModePolicy", "(I)V");
+    C(e, void, 141, binder, policy, 17);
+  }
+  return 0;
+}
+U8 Java_resumption_Dispatch_step(Handle e, Ref type, Ref self, unsigned code,
+                                 Ref data, Ref reply, unsigned flags) {
+  (void)type;
+  jd_failure = jd_body(e, self, code, data, reply, flags);
+  return !jd_failure && jd_mode != 5;
+}
+static int jd_read(int fd, unsigned command, struct JBinderTX *tx) {
+  for (unsigned tries = 0; tries != 1000; ++tries) {
+    unsigned output[32];
+    struct JBinderWR wr = {0, 0, 0, sizeof(output), 0, (U64)output};
+    int result = ioctl(fd, 0xc0306201UL, &wr);
+    CHECK(!result || *__errno() == 11);
+    for (unsigned i = 0; i < wr.read_consumed / 4; ++i) {
+      if (output[i] == command) {
+        jb_copy(tx, output + i + 1, 64);
+        return 0;
+      }
+      CHECK(output[i] == 0x720c || output[i] == 0x7206 || output[i] == 0x720d);
+    }
+    CHECK(!usleep(1));
+  }
+  return __LINE__;
+}
+static int jd_peer(int fd) {
+  CHECK(!jb_send(fd, 0x630c, 0, 0));
+  struct JBinderTX tx;
+  CHECK(!jd_read(fd, 0x80407202, &tx));
+  CHECK(tx.size == 24 && tx.objects == 8);
+  struct JBinderObject node;
+  jb_copy(&node, (void *)tx.buffer, sizeof(node));
+  CHECK(node.type == 0x73682a85 && node.pointer && !node.cookie);
+  unsigned handle = node.pointer;
+  CHECK(!jb_send(fd, 0x40046304, &handle, 4));
+  CHECK(!jb_send(fd, 0x40046305, &handle, 4));
+  U64 request = tx.buffer;
+  tx = (struct JBinderTX){0};
+  CHECK(!jb_send(fd, 0x40406301, &tx, 64));
+  CHECK(!jb_send(fd, 0x40086303, &request, 8));
+  for (unsigned turn = 0; turn != 4; ++turn) {
+    unsigned number = 19 + turn;
+    tx = (struct JBinderTX){
+        handle, 0, turn == 3 ? 0x5f504e47 : 7, 16, 0, 0, 4, 0, (U64)&number, 0};
+    CHECK(!jb_send(fd, 0x40406300, &tx, 64));
+    CHECK(!jd_read(fd, 0x80407203, &tx));
+    CHECK(!jd_failure);
+    if (turn == 3) {
+      CHECK(!tx.flags && tx.size == 4 && !tx.objects);
+      CHECK(!*(unsigned *)tx.buffer && jd_calls == 3);
+    } else if (jd_mode == 5) {
+      CHECK(tx.flags == 8 && tx.size == 4 && !tx.objects);
+      CHECK(*(unsigned *)tx.buffer == (unsigned)-74);
+    } else {
+      CHECK(!tx.flags && tx.size == 28 && tx.objects == 8);
+      CHECK(*(unsigned *)tx.buffer == 42 + turn);
+      CHECK(*(U64 *)tx.offsets == 4);
+      jb_copy(&node, (void *)(tx.buffer + 4), sizeof(node));
+      CHECK(node.type == 0x73682a85 && node.pointer == handle);
+    }
+    CHECK(!jb_send(fd, 0x40086303, &tx.buffer, 8));
+  }
+  CHECK(!jb_send(fd, 0x40046306, &handle, 4));
+  CHECK(!jb_send(fd, 0x40046307, &handle, 4));
+  /* Let the Java pool drain the final driver's deferred strong/weak releases.
+   */
+  CHECK(!usleep(1));
+  return 0;
+}
+static void *jd_thread(void *arg) {
+  const unsigned checked = jd_peer(*(int *)arg);
+  register U64 status __asm__("x0") = checked ? 1 : 0;
+  __asm__ volatile("mov x8, #94\n\tsvc #0" : "+r"(status) : : "x8", "memory");
+  return (void *)status;
+}
+int jni_binder_dispatch(unsigned form, unsigned mode) {
+  jd_form = form;
+  jd_mode = mode;
+  Handle e = attach();
+  CHECK(e);
+  Ref type = C(e, Ref, 6, "resumption/Dispatch");
+  struct NativeBinding binding = {
+      "step",
+      "(Lresumption/Dispatch;ILandroid/os/Parcel;Landroid/os/Parcel;I)Z",
+      (U64)Java_resumption_Dispatch_step};
+  CHECK(!C(e, int, 215, type, &binding, 1));
+  Ref ctor = C(e, Ref, 33, type, "<init>", "()V");
+  Ref local = form == 0   ? C(e, Ref, 28, type, ctor)
+              : form == 1 ? dex_new_v(e, type, ctor)
+                          : C(e, Ref, 30, type, ctor, (void *)0);
+  CHECK(local && !C(e, int, 228));
+  Ref parcel = C(e, Ref, 6, "android/os/Parcel");
+  Ref obtain = C(e, Ref, 113, parcel, "obtain", "()Landroid/os/Parcel;");
+  Ref data = parcel_result(e, 114, form, parcel, obtain);
+  Ref reply = parcel_result(e, 114, form, parcel, obtain);
+  Ref write =
+      C(e, Ref, 33, parcel, "writeStrongBinder", "(Landroid/os/IBinder;)V");
+  Ref recycle = C(e, Ref, 33, parcel, "recycle", "()V");
+  Ref transact = C(e, Ref, 33, type, "transact",
+                   "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z");
+  if (mode == 1) {
+    Ref integer = C(e, Ref, 33, parcel, "writeInt", "(I)V");
+    Ref read = C(e, Ref, 33, parcel, "readInt", "()I");
+    parcel_write(e, form, data, integer, 1, 19);
+    CHECK(binder_transact(e, form, local, transact, data, reply, 0));
+    CHECK(parcel_result(e, 49, form, reply, read) == 18 && !jd_failure);
+    return C(vm, int, 5);
+  }
+  int client = open("/dev/binder", 2 | 0x800),
+      server = open("/dev/binder", 2 | 0x800);
+  CHECK(client == 3 && server == 4);
+  CHECK((U64)mmap(0, 4096, 1, 2, client, 0) < (U64)-4095);
+  CHECK((U64)mmap(0, 4096, 1, 2, server, 0) < (U64)-4095);
+  CHECK(!ioctl(server, 0x40046207UL, 0));
+  parcel_write(e, form, data, write, 0, local);
+  Ref manager = C(e, Ref, 6, "android/os/ServiceManager");
+  Ref lookup = C(e, Ref, 113, manager, "getService",
+                 "(Ljava/lang/String;)Landroid/os/IBinder;");
+  Ref name = C(e, Ref, 167, "alpha");
+  Ref proxy = C(e, Ref, 114, manager, lookup, name);
+  Ref proxy_type = C(e, Ref, 6, "android/os/BinderProxy");
+  Ref remote = C(e, Ref, 33, proxy_type, "transact",
+                 "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z");
+  U64 thread;
+  CHECK(!pthread_create(&thread, 0, jd_thread, &server));
+  CHECK(binder_transact(e, form, proxy, remote, data, reply, 0));
+  C(e, void, 61, data, recycle);
+  C(e, void, 61, reply, recycle);
+  Ref binder = C(e, Ref, 6, "android/os/Binder");
+  Ref join = C(e, Ref, 113, binder, "joinThreadPool", "()V");
+  C(e, void, 141, binder, join);
+  return __LINE__; // A live pool has no normal return.
+}

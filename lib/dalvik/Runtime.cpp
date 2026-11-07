@@ -221,6 +221,9 @@ struct Runtime::State::Engine {
         engine.completion = engine.state.framework.completeBinder(
             *engine.state.heap, *engine.external,
             std::move(*engine.completion.binder_reply));
+      if (engine.external->complete)
+        engine.completion =
+            engine.external->complete(std::move(engine.completion));
       engine.external.reset();
       if (engine.completion.stop != ExecutionStop::Returned)
         throw Halt{std::move(engine.completion)};
@@ -563,6 +566,53 @@ struct Runtime::State::Engine {
       throw;
     }
     co_return 0;
+  }
+  ExecutionTask finishLibrary(ExecutionResult result, unsigned depth) {
+    while (result.stop == ExecutionStop::Suspended && result.external) {
+      if (result.external->kind != ExternalCall::JavaMethod)
+        co_return co_await request(std::move(*result.external));
+      if (depth >= ::neverd::limits::dalvik::kRuntimeRunDepthLimit)
+        fail(ExecutionStop::StackLimit,
+             "Java framework upcall depth exhausted");
+      auto call = std::move(*result.external);
+      ExecutionResult completed;
+      try {
+        const auto receiver = call.arguments.front();
+        const auto *callee = program.virtualMethod(
+            *call.java_method, objectDescriptor(*object(receiver)));
+        if (callee)
+          completed.value = co_await run(*callee, call.arguments, depth + 1);
+        else {
+          auto reference = *call.java_method;
+          const LibraryMethod *library = nullptr;
+          for (unsigned n = 0;
+               !reference.owner.empty() && !library &&
+               n < ::neverd::limits::dalvik::kMaxRuntimeMethodHierarchyDepth;
+               ++n) {
+            library = libraryMethod(reference, false);
+            reference.owner = program.parent(reference.owner);
+          }
+          if (!library)
+            fail(ExecutionStop::Unsupported,
+                 "unmodeled Java upcall " + call.java_method->identity());
+          completed.value = co_await finishLibrary(
+              executeLibrary(*state.heap, *library, receiver,
+                             std::span(call.arguments).subspan(1), admit, false,
+                             &program, &state.framework),
+              depth + 1);
+        }
+      } catch (Halt &halt) {
+        completed = std::move(halt.result);
+      }
+      if (completed.stop != ExecutionStop::Returned &&
+          completed.stop != ExecutionStop::Thrown)
+        throw Halt{std::move(completed)};
+      result = call.complete ? call.complete(std::move(completed))
+                             : std::move(completed);
+    }
+    if (result.stop != ExecutionStop::Returned)
+      throw Halt{std::move(result)};
+    co_return result.value;
   }
   ExecutionTask run(const Method &method, std::span<const uint64_t> args,
                     unsigned depth, bool initializer = false,
@@ -1085,7 +1135,12 @@ struct Runtime::State::Engine {
             if (!library)
               fail(ExecutionStop::Unsupported,
                    "unmodeled method " + reference->identity());
-            if (!library->Public)
+            if (!library->Public &&
+                !(library->Protected &&
+                  program.assignable(method.reference.owner, selected.owner) &&
+                  (super ||
+                   program.assignable(objectDescriptor(*object(receiver)),
+                                      method.reference.owner))))
               fail(ExecutionStop::Unsupported,
                    "nonpublic library method access requires an explicit JNI "
                    "call");
@@ -1101,7 +1156,7 @@ struct Runtime::State::Engine {
             if (executed.stop == ExecutionStop::Suspended &&
                 executed.external) {
               executed.external->caller = method.reference.owner;
-              result = co_await request(std::move(*executed.external));
+              result = co_await finishLibrary(std::move(executed), depth + 1);
             } else {
               if (executed.stop != ExecutionStop::Returned)
                 throw Halt{std::move(executed)};
@@ -1695,12 +1750,28 @@ ExecutionResult Runtime::binderReference(BinderReferenceOperation operation,
   return state->framework.binderReference(operation, pointer, cookie);
 }
 
+ExecutionResult Runtime::dispatchBinder(BinderIncoming incoming,
+                                        const AdmitInstruction &admit,
+                                        uint64_t stack_bytes, uint64_t owner) {
+  return state->start(
+      [incoming = std::move(incoming)](
+          State::Engine &engine) mutable -> ExecutionTask {
+        co_return co_await engine.finishLibrary(
+            engine.state.framework.dispatchBinder(
+                *engine.state.heap, engine.program, std::move(incoming),
+                engine.admit),
+            0);
+      },
+      admit, stack_bytes, owner);
+}
+
 ExecutionResult Runtime::library(const LibraryMethod &method, uint64_t receiver,
                                  std::span<const uint64_t> args,
                                  const AdmitInstruction &admit, bool nonvirtual,
                                  uint64_t execution_owner,
                                  uint64_t stack_bytes) {
-  if (execution_owner)
+  if (execution_owner || method.Op == BinderTransact ||
+      method.Op == BinderOnTransact)
     return state->start(
         [&method, receiver,
          values = std::vector<uint64_t>(args.begin(), args.end()),
@@ -1721,7 +1792,7 @@ ExecutionResult Runtime::library(const LibraryMethod &method, uint64_t receiver,
                           0,
                           {},
                           "Java library loading requires a DEX caller"}};
-            co_return co_await engine.request(std::move(*result.external));
+            co_return co_await engine.finishLibrary(std::move(result), 0);
           }
           if (result.stop != ExecutionStop::Returned)
             throw Halt{std::move(result)};

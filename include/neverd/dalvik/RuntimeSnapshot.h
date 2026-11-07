@@ -56,6 +56,18 @@ struct AndroidMessageQueueState {
 // Zero means not materialized. The declared phase is separate from lazy
 // materialization and does not certify execution of an Application constructor.
 struct AndroidFrameworkState {
+  struct BinderCalls {
+    uint64_t start_milliseconds = 0;
+    struct Entry {
+      uint32_t uid = 0;
+      uint64_t count =
+          0; // API 28 default tracking also increments time by one.
+      bool operator==(const Entry &) const = default;
+    };
+    std::vector<Entry> entries;
+    bool operator==(const BinderCalls &) const = default;
+  };
+  std::optional<BinderCalls> binder_calls;
   std::optional<AndroidApplicationSnapshot::Phase> declared_phase;
   std::optional<bool> application_loader_established;
   uint32_t activity_thread = 0, application = 0, context = 0;

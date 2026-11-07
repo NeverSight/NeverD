@@ -47,6 +47,9 @@ public:
                                  BinderReply reply);
   ExecutionResult binderReference(BinderReferenceOperation operation,
                                   uint64_t pointer, uint64_t cookie);
+  ExecutionResult dispatchBinder(Heap &heap, const Program &program,
+                                 BinderIncoming incoming,
+                                 const AdmitInstruction &admit);
   AndroidFrameworkState inspect(const Heap &heap, const Program &program) const;
   std::optional<AndroidApplicationSnapshot::ClassLookupFailure::Loader>
   definingLoader(std::string_view type, const Program &program) const;
@@ -77,6 +80,11 @@ private:
                                  const LibraryMethod &method, uint64_t receiver,
                                  std::span<const uint64_t> arguments,
                                  const AdmitInstruction &admit);
+  ExecutionResult binderInterface(Heap &heap, const Program &program,
+                                  const LibraryMethod &method,
+                                  uint64_t receiver,
+                                  std::span<const uint64_t> arguments,
+                                  const AdmitInstruction &admit);
   // API 28 Binder's new class state; also exposed by sTracingEnabled.
   bool binder_tracing_enabled = false;
   ExecutionResult parcelStatus(uint64_t receiver) const;
@@ -86,6 +94,10 @@ private:
                          std::span<const uint64_t> arguments,
                          const AdmitInstruction &admit);
   struct ParcelState {
+    // Non-owned Java wrappers have their own pool and refer to a native
+    // Parcel whose lifetime spans reply acknowledgement, not Java recycle.
+    std::shared_ptr<ParcelState> native;
+    std::unique_ptr<Object> storage;
     uint32_t position = 0;
     uint32_t capacity = 0;
     bool recycled = false;
@@ -110,6 +122,17 @@ private:
   std::map<uint32_t, ParcelState> parcels;
   // API 28 owned-Parcel pool, in first-empty/first-occupied slot order.
   std::array<uint32_t, 6> parcel_pool{};
+  std::array<uint32_t, 6> native_parcel_pool{};
+  ParcelState &parcelState(uint64_t receiver);
+  Object &parcelStorage(Heap &heap, uint64_t receiver);
+  ExecutionResult wrapNativeParcel(Heap &heap,
+                                   std::shared_ptr<ParcelState> state,
+                                   const AdmitInstruction &admit);
+  ExecutionResult replaceParcel(Heap &heap, ParcelState &state, Object &object,
+                                BinderReply reply);
+  std::optional<uint64_t> binder_calls_start;
+  std::map<uint32_t, uint64_t> binder_calls; // Default tracking: time == count.
+  Object binder_calls_storage{};
   ExecutionResult eventLog(Heap &heap, const Program &program,
                            const LibraryMethod &method,
                            std::span<const uint64_t> arguments,
