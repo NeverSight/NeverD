@@ -21444,3 +21444,5 @@ global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
 
 `NeverDHighCallParameterForwardingTests` checks Win64 argument value identity. Full-width copies and agreeing PHIs may name an incoming parameter; masks, shifts and narrowing copies must retain their computed argument.
+
+`HighControlFlowSemantics.UnusedValuesKeepPlainReadsAndTheirAddresses` checks that unused direct and nested ordinary loads retain their original address and evaluation in HighIR dead-value cleanup.

@@ -165,7 +165,8 @@ public:
     std::vector<size_t> Work;
     for (size_t I = 0; I < Nodes.size(); ++I) {
       const HighExpr *E = Nodes[I].Expr;
-      if (E->Kind == ExprKind::Call || E->Kind == ExprKind::Store ||
+      if (E->Kind == ExprKind::Call || E->Kind == ExprKind::Load ||
+          E->Kind == ExprKind::Store ||
           E->MemoryOrdering != NdMemoryOrdering::None ||
           E->MemoryAddressSpace != NdMemoryAddressSpace::Default) {
         Nodes[I].Observable = true;
