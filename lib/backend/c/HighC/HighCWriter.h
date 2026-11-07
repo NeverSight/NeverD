@@ -1690,6 +1690,9 @@ public:
   std::set<va_t> UsedDataBindings;
   std::map<std::string, std::string> ExternalDataNames;
   std::optional<std::string> dataSymbolAddress(va_t Slot) const;
+  /// The address \p Load prints as when it reads whole a read-only slot that
+  /// a data symbol binds, as an integer conversion of the symbol's address.
+  std::optional<std::string> immutableSlotAddress(const HighExpr &Load) const;
 
   /// The C initializer of an object's scalar value, as the image holds it;
   /// none for zero, for bytes the image does not hold, and for values C

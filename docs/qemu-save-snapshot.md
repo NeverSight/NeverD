@@ -180,6 +180,73 @@ page walker. It does not update page-table A/D bits, simulate faults or certify
 CPU/device access permissions. Ordinary decompilation does not import it, and
 it cannot recover an invocation that was not captured.
 
+## Q35 main-RAM consistency
+
+[`scripts/qemu_save_q35.py`](../scripts/qemu_save_q35.py) checks a supplied
+partial main-RAM map against the selected save's MCH configuration. It catches
+wrong original block offsets, RAM split/gap errors and maps that expose TSEG
+or PCI Express configuration MMIO as ordinary RAM. Use the explicit
+`qemu-10.2-q35-main-ram` profile with a `pc-q35-10.2` save, MCH v1/PCI v2 and
+the matching Intel MCH identity. Select the MCH by its exact migration name
+and instance, as in device inspection above.
+
+The producer must bind the original main RAM block, below-4G RAM size,
+above-4G RAM base, whether the machine created SMM ranges and its
+`extended-tseg-mbytes` property. These machine properties are **not all saved
+in MCH VMState**. Neither a machine name nor the RAM inventory authenticates
+them. In particular, the guest-writable PCI TSEG query field is not an
+authoritative copy of the extended size; the check uses the explicit property
+binding. Do not copy these example values to an unrelated capture:
+
+```sh
+python3 -m scripts.qemu_save_q35 paused.save --map physical-map.json \
+  --profile qemu-10.2-q35-main-ram --mch '0000:00:00.0/mch' 0 \
+  --ram-block pc.ram --below-4g 0x80000000 --above-4g-start 0x100000000 \
+  --smm-ranges on --extended-tseg-mib 64 --physical 0x12345000 64
+```
+
+All supplied regions are checked before the optional read. A rejected region
+is an error, never silently removed or shortened. TSEG uses its captured
+enable bits and 1/2/8 MiB or bound extended size. PCIEXBAR uses this QEMU
+version's masks and length encoding. A reserved length leaves QEMU's previous
+mapping unchanged, so even a disabled register cannot certify the address
+space; the check rejects it as unknown history.
+
+Only direct main RAM outside the first MiB is admitted. Low legacy RAM,
+PAM/ROM/VGA, SMBASE, SMM views and other aliases are outside this profile.
+Other device overlays, CPU-local APIC mappings, machine-property provenance,
+paging and CPU access permissions remain the producer's obligations.
+Success means **MCH consistency for the supplied regions**, not a complete
+physical-topology or execution-environment certificate. The generic physical
+map adapter remains available for independently established other mappings.
+
+```python
+from scripts.qemu_save_q35 import PROFILE, check_main_ram
+
+with QemuSaveSnapshot("paused.save") as snapshot:
+    memory = QemuPhysicalMemory.from_file(snapshot, "physical-map.json")
+    evidence = check_main_ram(
+        snapshot, memory, profile=PROFILE, mch_name=mch_name, mch_instance=mch_instance,
+        ram_block=main_ram_block, below_4g=original_low_ram_bytes,
+        above_4g_start=original_high_ram_base, smm_ranges=original_smm_ranges,
+        extended_tseg_mib=original_extended_tseg_mib)
+    original_bytes = memory.read_physical(physical_address, 8)
+```
+
+The map and device evidence must share the same open, immutable snapshot.
+Checking reads one selected MCH record and visits each supplied region once,
+without observing RAM contents. Subsequent reads use the existing map and
+page indices, with no extra check or cache. JSON includes the explicit
+bindings, selected MCH/configuration digest, excluded ranges, normalized map
+and optional complete read. Failure publishes no partial result.
+
+The independently authored interpretation follows QEMU 10.2's
+[MCH mapping rules](https://github.com/qemu/qemu/blob/v10.2.0/hw/pci-host/q35.c),
+[register encodings](https://github.com/qemu/qemu/blob/v10.2.0/include/hw/pci-host/q35.h),
+[RAM split](https://github.com/qemu/qemu/blob/v10.2.0/hw/i386/pc_q35.c) and
+[RAM aliases](https://github.com/qemu/qemu/blob/v10.2.0/hw/i386/pc.c).
+No device callback or guest instruction is executed.
+
 ## V6 register-bank projection
 
 [`scripts/qemu_save_x64.py`](../scripts/qemu_save_x64.py) converts the captured
@@ -258,7 +325,7 @@ errors and rejection of an unrelated entry PC:
 ```sh
 python3 -m unittest scripts.tests.test_qemu_save_snapshot \
   scripts.tests.test_qemu_save_x64 scripts.tests.test_qemu_save_memory \
-  scripts.tests.test_qemu_save_devices -v
+  scripts.tests.test_qemu_save_devices scripts.tests.test_qemu_save_q35 -v
 ```
 
 The interpretation references are QEMU 10.2's

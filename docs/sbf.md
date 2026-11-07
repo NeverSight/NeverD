@@ -316,9 +316,19 @@ JSON exact-or-empty. Exhaustion returns `{"nodes":[],"edges":[]}` and sets
 `recoverCallXContexts` analyzes complete recognized function CFGs with
 context-keyed function summaries. Keys project away entry registers that every
 path overwrites before reading, using a conservative interprocedural dependency
-fixed point. Scratch inputs are omitted only when the callee neither reads nor
-writes memory. Other keys include both scratch views, pointer kinds and
-memory-coordinate lanes. Arguments and memory enter nested direct calls and
+fixed point. Its continuation dependencies stop at matched nonreturning calls;
+callee dependencies still participate. Scratch inputs are omitted only when the
+callee neither reads nor writes memory. Exact keys retain full-word scratch
+facts, pointer kinds and memory-coordinate lanes. Once all four specialization
+slots are occupied, a completed summary can also be reused when its conservative
+read footprint proves that every changed word is unread. Loads, syscall read
+windows and nested callees share the footprint's address/alias rules. Unknown
+reads require matching the complete snapshot. Reads in a structurally
+nonreturning subtree without any reachable CALLX cannot affect return or target
+evidence; the whole-CFG fixed points establish both conditions. Reuse applies
+may-writes to the actual caller memory and restores proven output fields, never
+the old unread snapshot. The footprint and temporary comparisons consume the
+existing retained-state budget. Arguments and memory enter nested direct calls and
 proven literal CALLX targets; converged returns supply r0 and memory effects.
 The shared transfer owns register clobbers and syscall effects. A returning
 syscall replaces only r0; r1-r5 retain their argument values, including values
@@ -474,16 +484,48 @@ exactly with the completed generic summary. This currently requires unknown
 memory effects, no returned scratch/postcondition cells, the same scalar return
 alternatives and the same constant or unknown return origin. Any target facts
 in the dependency graph must also be covered by an independently published
-sibling under the same caller entry and call instruction. A node's own proven
-targets must also be established by the generic replacement. If they are not,
+sibling under the same caller entry and call instruction. Instantiated
+expression proofs must retain the same expression, input values and loaded
+values; matching target addresses from different fields do not cover each
+other's conditions. The comparison borrows existing bounded witnesses and
+charges its target index to the retained-state budget. A node's own proven
+targets must also be established by the generic replacement. If the generic
+summary cannot preserve either the return alternatives or those targets,
 a completed independently published sibling may instead receive the old
-incoming edges only when its opaque return, own site results, expressions and
-missing-fact diagnostics agree exactly. Descendant proof coverage is still
-required. This coalesces results already computed for those callers; it does
+incoming edges only when its opaque memory transfer, complete return values
+and origins, own site results, expressions and missing-fact diagnostics agree
+exactly. Equal finite return sets remain eligible even when the generic return
+is unknown; different finite sets cannot be merged just because neither has a
+singleton return value. Descendant proof coverage is still required. This
+coalesces results already computed for those callers; it does
 not broaden the sibling's input cache key or authorize reuse for new inputs.
 Those edges record `coalesced_proven_equivalent_summary_results`. A first
 captured input binding absent from all retained variants can demand one such
 exploration per entry register, without supplying target or nonalias facts.
+A forwarding wrapper can also explore one different frame descriptor per entry
+register when all retained known bindings repeat the same descriptor. The
+completed-result and descendant-proof preservation checks still apply; frame
+membership alone provides no alias fact.
+Schema 14 also coalesces completed returned-object results to admit a new
+scalar selector when variants repeat an old binding. Both results must have
+unknown write effects, one owned return capture from the same capturing
+call and source capture, and identical bounds. Only one non-frame-pointer
+frame argument may differ. Every returned typed cell and every applied concrete
+postcondition must agree after translating that frame displacement and renaming
+the return capture; field widths and all other identities remain exact. Copies,
+deferred expressions, unequal fields and different capture sources prevent
+this replacement. The existing site, descendant-proof and publication checks
+still apply. This is an equality check of completed abstract transfers, not an
+allocation-freshness assumption or permission to reuse a new input.
+An edge's `completed_result_binding` records the replacement summary's capture,
+the original summary's capture and the frame displacement back to the original
+result. Repeated replacements compose that displacement while retaining the
+original capture. Completed callers keep their already-applied fields and
+capture identities. Comparison workspace and the added report metadata are
+charged to the existing retained-state budget.
+A forwarding wrapper can admit further unrepresented image bindings by
+coalescing these equal, more precise sibling results. Results already equal to
+the generic summary retain the original once-per-register exploration rule.
 Complete target alternatives, roots and active caller graphs are not discarded. Image membership selects work; it does not prove a target or alias
 relationship. Old incoming edges distinguish specialization-limit generalization
 from equivalent-result coalescing; `generalized_redundant_published_summaries`
@@ -523,6 +565,28 @@ keys and static dependency masks remain intact. Schema 5 additionally records
 generalized unknown. Cached input fields outside the conditional mask are not
 additional requirements on such an edge. The four-summary and resource budgets
 remain unchanged.
+
+Branch bounds also constrain live copies with the same singleton entry-relative
+origin or immutable capture. Identical numeric ranges alone do not establish
+this relation. An adjacent full-width left/right shift pair can preserve the
+origin when the input bounds prove that the left shift discards no bits. The
+transfer witness stays within one basic block and is discarded across any
+intervening instruction. Truncated high bits, independent origins and alternate
+entries do not acquire equality. Solver and evidence replay share this rule;
+it adds no retained context state or additional specialization slots.
+
+At the four-variant limit, a completed specialized summary can also cover a
+narrower, nonwrapping numeric interval. Only an unknown or containing numeric
+input permits this reuse; pointer identities and other input facts still agree,
+and the memory-read checks still apply. An incoming memory snapshot that
+preserves every known cached cell and only adds facts is also covered, including
+when the read footprint is unknown. A changed or missing old cell cannot use
+this extension rule. Returned memory is reconstructed from the actual caller,
+may-write effects and must-write postconditions, preserving new facts only
+where the callee cannot overwrite them. The cached summary must improve the
+generic return or output fields. Its wider result remains conservative for the
+new caller. These edges use `reused_covering_specialized_inputs` and the separate
+`covering_specialized_summary_reuses` counter; they are not equal-input reuses.
 
 Generic summaries can retain a CALLX carrier as an expression of entry
 parameters and full-width loads from entry memory. Copies, supported normalized
@@ -693,12 +757,23 @@ catalogued as terminal: a host callback can still return.
 When recursion or call depth prevents summarizing a callee whose CFG cannot
 return, the edge records `proven_nonreturning_call` and stops that continuation.
 The ordinary callee analysis still retains caller-conditioned CALLX evidence
-executed before termination. A nonreturning callee's memory effects cannot
-invalidate a different returning sibling path. The work is included in the
+executed before termination. Its reads guard reuse whenever the completed
+subtree or an instantiated caller edge retains a concrete target, invalid
+literal target or finite target alternative. A structurally nonreturning
+subtree with no such evidence cannot affect the caller's return or existing
+target proofs; its unknown reads do not block reuse. This does not recover or
+prove the absence of an unknown target. A nonreturning callee's memory effects
+cannot invalidate a different returning sibling path. The work is included in the
 unchanged query budgets and reported as `return_reachability_instruction_visits`;
 its temporary dependency graph is released before context recovery. This does
 not prove that a particular host call terminates or that a reachable EXIT is
 feasible for every input.
+
+The contextual value lane retains the zero-extension bound of an unknown
+8-, 16- or 32-bit load after exact memory and origin lookups fail. Unsigned
+comparisons can exclude impossible paths using that bound, including in a
+called summary. A full-width unknown load stays unknown; a width bound supplies
+no pointer identity or alias fact.
 
 Unsigned branch comparisons can establish bounds on values carried affinely
 to a function's return. A nullable return retains the null alternative.
@@ -710,7 +785,9 @@ owner checks their complete numeric footprints, including modular offsets,
 before preserving a frame or another object field. A partial write invalidates
 the overlapping field. Captures are rebound at caller boundaries and widened
 to bounds across CFG back edges, so successive calls or loop iterations cannot
-reuse an old object's equality identity. Coordinate configuration is shared
+reuse an old object's equality identity. The existing reverse-postorder index
+identifies these edges; an acyclic jump to a smaller instruction slot retains
+its capture. Coordinate configuration is shared
 across the analysis and charged at its owner.
 
 Generic byte-copy postconditions snapshot entry fields after invalidating all
@@ -719,21 +796,53 @@ when a later destination write may overlap. Only generic summaries retain a
 complete entry-relative write history for deferred copies. A specialized caller
 applies them to its current memory and retains the resulting typed facts; it
 cannot replay them against an earlier entry snapshot. A caller can also
-instantiate a generic memory-transfer wrapper along a completely proven scalar
-path. Schema 12 also follows inline loads/stores and counted loops through the
+instantiate a memory-transfer wrapper along a completely proven scalar path
+when its summary has generalized inputs or unknown writes. A specialized loop
+that widens its destination uses the same path proof as a generic summary. The
+generic function body identifies the wrapper even when the specialized path
+uses only inline stores and does not reach its copy syscall. Schema 12 also
+follows inline loads/stores and counted loops through the
 canonical typed-memory transfer. The requested length remains bounded by the
 existing modeled-scratch limit. Every instruction, temporary state, write
 footprint and visited register snapshot consumes the existing work or retained
-memory budget; this creates no cached specialization. Unknown branches, other
-guest calls, multiple copy syscalls and repeated block/register states cannot
-establish a returning path. Ignoring memory in the repeated-state check can
+memory budget; this creates no cached specialization. Direct nested transfer
+wrappers use the same path proof and restore callee-saved registers and frame
+origins at each matched return. The existing guest call-depth limit and active
+entry recursion guard also bound these temporary paths. Unknown branches,
+opaque or indirect guest calls, registered legacy runtime dispatch, multiple
+copy syscalls and repeated block/register states cannot establish a returning
+path. Ignoring memory in the repeated-state check can
 reject a memory-driven loop, but cannot prove a path that did not return.
+Successful path proofs carry their complete read intervals as well as their
+writes, including direct nested paths and every finite length alternative.
+A matched proof uses these reads instead of importing an unknown generic read
+footprint. Changed source cells still prevent conditional summary reuse, and
+unknown reads remain unknown; immutable image reads require no caller memory
+facts. Temporary read intervals use the same retained-memory budget.
 `instantiated_memory_path_instructions` and `instantiated_memory_path_stores`
-record successful inline paths; `instantiated_copy_syscall_slot` and
+record analysis work across successful inline paths, including all proven
+length alternatives; these are not runtime execution counts.
+`instantiated_copy_syscall_slot` and
 `instantiated_copy_bytes` still refer only to an actual `memcpy`/`memmove`
 syscall. Store effects include every complete destination alternative, without
 assuming that different captures are disjoint. This propagation is demanded by
-a captured source field or pointer. `captured_addresses`, bounded may-write
+a captured source field or pointer, or by a known source/destination frame
+range while the caller retains typed facts and the wrapper contains guest
+stores. The latter lets a short stack-copy loop preserve fields outside its
+actual writes even when the copied bytes are unknown. Plain syscall wrappers
+keep their existing summary path: eagerly preserving their unrelated caller
+snapshots can displace useful later specializations. Unknown addresses do not
+authorize the frame-range path. A bounded append through a known holder can
+also demand this proof. For a finite set of lengths, every member of the
+existing value domain must complete its own proof before results are joined;
+source and destination alternatives remain independent. Unknown branches or
+inconsistent copy-syscall witnesses reject the entire joined proof. All cases
+share the original work, retained-memory and call-depth limits. An empty
+nested copy must still reach a matched return, and
+the wrapper's descriptor loads and stores still execute through the canonical
+memory owner. A zero argument alone does not establish preservation or erase
+an unknown branch or write.
+`captured_addresses`, bounded may-write
 intervals and `output_memory_copies` describe these additional facts separately
 from literal CALLX target proofs.
 
