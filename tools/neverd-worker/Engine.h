@@ -303,6 +303,12 @@ private:
   /// the same.  Empty, and holding, for an engine that does not tell.
   std::string renderReads();
   bool renderReadsHold(const std::string &compact);
+  /// What data is called now, where that is all that changed of what the render
+  /// read; null otherwise.
+  Json renderReadsRenamed(const std::string &compact);
+  /// That of the render the next page of a view replays: a page answers only if
+  /// decorating it spells them as a render would.
+  Json keptRenamed_;
   bool keptRenderHolds(RenderStore &store, const std::string &key);
   /// Whether an engine says what each render read, so that the stores do not
   /// move for what the user states of one address.
@@ -339,6 +345,14 @@ private:
   /// the view's.  Taking a name away from one (\p unnamed) changes what the
   /// listing shows it as, and the others are read as a view is decorated.
   void functionNamesChanged(bool unnamed);
+  /// open.write_behind: an edit's reply need not wait for its write.
+  bool writeBehind_ = false;
+  void persistEdit(ProjectHistory &store, Json state);
+  /// The listing took a new name of data in place (Listing::dataRenamed).
+  void dataNameChanged();
+  /// The listing took the user's data items in place
+  /// (Listing::dataItemsChanged).
+  void dataItemsChanged();
   /// Whether a kept \p page of a view can state the functions it names as they
   /// are named now: it states them as the engine knew them when it rendered,
   /// and a new name replaces those, but what one was called before a name was

@@ -6333,18 +6333,26 @@ function, undoes and redoes, all in a running replica over a real PE: each view 
 as that of a replica restored afresh and the owner's, its listing as after a reload,
 and whether a function returns is refused for a restore.
 `NeverDWorkerKeptReads` keeps what real renders read: another address's name keeps a
-render and its own sends the view to the engine, a later name and an undo read as a
-fresh replica does, a visit keeps what it rendered in place, a declaration reaches the
+render, its own spells the kept page as a fresh replica renders it, field for field,
+and a name the page has another use of, one the C spells otherwise and a library
+header's object send the view to the engine. A later name and an undo read as a fresh
+replica does, a visit keeps what it rendered in place, a declaration reaches the
 function and its callers and no other, and the store's folder never moves.
+`NeverDWorkerEditWrites` opens with `write_behind`: a burst of names ends in one exit
+with all of them written and each a step of the history, a view, an undo, a snapshot a
+replica restores from and a save each find what was queued, a kill at any moment leaves
+a project that opens and takes edits, a write that fails fails a later edit and goes
+through once it can, and files changed behind the worker stop the next edit.
 `NeverDWorkerUnreadTypes` declares types nothing has read and those something has: one
 that names a type yet unknown and new enumerators stay unread, while the type named,
 a replacement, a prototype and a type that takes an enumerator's name are not, each
 reading as a fresh replica after it. A type then applied reads as a new context does,
 an unread one leaves a job's store and a later session's as they were, and writing
 there keeps what leads to it until a type something read moves on.
-`NeverDWorkerNamesRebuild` also renames functions, exported and not, without the
-names being read again, and each page, table and resolved name then reads as after a
-reload.
+`NeverDWorkerNamesRebuild` also renames functions, exported and not, and data, and
+defines data items, without the names being read again, and each page, table and
+resolved name then reads as after a reload. A name inside an automatic item and an
+item over a string's bytes do read them again.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and

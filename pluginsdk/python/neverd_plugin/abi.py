@@ -1622,6 +1622,12 @@ _declare(
     ["neverd_session_t", "const char *"],
 )
 _declare(
+    "neverd_user_reads_renamed_json",
+    "const char *",
+    ["neverd_session_t", "const char *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_user_facts_analysis_reads_json",
     "const char *",
     ["neverd_session_t"],
@@ -2078,6 +2084,11 @@ _declare(
 )
 _declare("neverd_renames_save", "int", ["neverd_session_t"])
 _declare("neverd_renames_load", "int", ["neverd_session_t"])
+_declare(
+    "neverd_rename_take",
+    "int",
+    ["neverd_session_t", "neverd_va_t", "const char *"],
+)
 _declare("neverd_func_create", "int", ["neverd_session_t", "neverd_va_t"])
 _declare("neverd_func_delete", "int", ["neverd_session_t", "neverd_va_t"])
 _declare(

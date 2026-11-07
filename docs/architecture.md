@@ -4545,7 +4545,15 @@ A render notes every address it asks the user's name or declaration of, stated o
 not (`UserFactReads`), and its record keeps those with a digest of what they said
 (`neverd_user_reads`). It answers while they say the same
 (`neverd_user_reads_hold`), so such an edit costs only the renders that read it, and
-the job renders those again. What analysis reads of declarations no render's reads
+the job renders those again. Until it does, a render whose reads differ only in names
+of data the user states still answers, where it is C on one page and its text shows
+a spelling is all that moves (`neverd_user_reads_renamed_json`, `CodeEdits::respell`):
+the page is rewritten before decoration, so every field reads as a render under the
+new names does. Where the emitter decides more of a name than its spelling, a name it
+spells otherwise, a library header's object or a function's link name, or where the
+page has another use of the name, a number of the address, or a mention of the old
+name that is no token of its declaration or a use, it is left to a render.
+What analysis reads of declarations no render's reads
 cover, the prototype a declaration hides from a function's name and whether any
 declaration makes the context at all (`neverd_user_facts_analysis_reads_json`), so
 they stay in the inputs. Types new to the library that nothing names leave every
@@ -4568,6 +4576,15 @@ function, so a later session reads that and walks only what it leaves out.
 An index entry's page table must fit its record, as it must in the store file.
 An invalid index is discarded before reading pages; the original file still
 recovers every complete record.
+An edit costs what it changes. The owner's listing takes a name of data and a data
+item over bytes no string or code holds where they are (`Listing::dataRenamed`,
+`Listing::dataItemsChanged`), the session a name without reading its table
+(`neverd_rename_take`), and a declaration of types no other names reads them against
+what it read of the library once (`Session::LocalTypeNames`), whose copies share their
+definitions. The GUI opens with `write_behind`: the reply to such an edit goes before
+its write, which runs the same journaled transaction in order on a thread of its own
+(`ProjectHistory::persistLater`), joined with what is queued behind one already
+writing. What may read the project's files waits for it first.
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's. A note on a function and a data
 item, which nothing analyzed or rendered reads, leave the renders as they are, and a

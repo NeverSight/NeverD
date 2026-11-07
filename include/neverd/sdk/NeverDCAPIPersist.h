@@ -91,6 +91,11 @@ NEVERD_API int neverd_rename_addr(neverd_session_t Sess, neverd_va_t Addr,
 NEVERD_API const char *neverd_renames_json(neverd_session_t Sess);
 NEVERD_API int neverd_renames_save(neverd_session_t Sess);
 NEVERD_API int neverd_renames_load(neverd_session_t Sess);
+/// Takes \p Name for what the user calls \p Addr, or no name for NULL, as
+/// neverd_renames_load takes a table that differs in that row alone.  The
+/// caller keeps the table: nothing is written.
+NEVERD_API int neverd_rename_take(neverd_session_t Sess, neverd_va_t Addr,
+                                  const char *Name);
 
 /// Make \p Entry, an address in executable code where no function starts or
 /// one neverd_func_delete removed, the entry of a function.  The user's last

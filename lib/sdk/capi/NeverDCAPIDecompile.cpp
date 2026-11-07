@@ -11,6 +11,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../backend/c/CIdentifier.h"
 #include "FunctionAuditReason.h"
 #include "InstructionFlow.h"
 #include "LLVMFunctionView.h"
@@ -32,9 +33,11 @@
 #include "neverd/ir/high/HighIRPrint.h"
 #include "neverd/ir/high/HighVariableEdits.h"
 #include "neverd/ir/high/SEHFinallyBodies.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/loader/ARM/ARMModeCLIStrings.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/LanguageRuntime.h"
+#include "neverd/loader/SymbolDecoration.h"
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
 #include "neverd/sbf/emit/SBFCEmitter.h"
 #include "neverd/sbf/emit/SBFRustEmitter.h"
@@ -591,23 +594,25 @@ const char *neverd_prepare_call_summaries_json(neverd_session_t Sess) {
 }
 
 namespace {
-/// What the user states of the address \p Addr that a view reads: the name of
-/// data, for a function's is the page's to apply, and a function's declaration.
-void hashUserFact(Session &S, va_t Addr,
-                  const std::map<va_t, std::string> &Declarations,
-                  std::string &Stated) {
-  const auto Declaration = Declarations.find(Addr);
+/// The name of data the user gave \p Addr: a function's is the page's to apply.
+const std::string *userDataName(Session &S, va_t Addr) {
   const auto Name = S.Renames.find(Addr);
-  const bool Named = Name != S.Renames.end() && !S.functionIndexAt(Addr);
-  if (!Named && Declaration == Declarations.end())
-    return;
-  Stated.append(reinterpret_cast<const char *>(&Addr), sizeof(Addr));
-  if (Named)
-    Stated += Name->second;
-  Stated.push_back('\0');
-  if (Declaration != Declarations.end())
-    Stated += Declaration->second;
-  Stated.push_back('\0');
+  return Name != S.Renames.end() && !S.functionIndexAt(Addr) ? &Name->second
+                                                             : nullptr;
+}
+
+/// What the user states of \p Addr that a view reads, as two hashes, zero for
+/// what the user does not state.
+std::pair<uint64_t, uint64_t>
+userFactHashes(Session &S, va_t Addr,
+               const std::map<va_t, std::string> &Declarations) {
+  std::pair<uint64_t, uint64_t> Hashes{0, 0};
+  if (const std::string *Name = userDataName(S, Addr))
+    Hashes.first = llvm::xxh3_64bits(*Name) | 1;
+  if (const auto Declaration = Declarations.find(Addr);
+      Declaration != Declarations.end())
+    Hashes.second = llvm::xxh3_64bits(Declaration->second) | 1;
+  return Hashes;
 }
 
 /// \p Reads' digest of what the user states of them now, zero for nothing.
@@ -616,11 +621,69 @@ uint64_t userFactsDigest(Session &S, llvm::ArrayRef<va_t> Reads) {
   if (S.Renames.empty() && Declarations.empty())
     return 0;
   std::string Stated;
-  for (const va_t Addr : Reads)
-    hashUserFact(S, Addr, Declarations, Stated);
+  for (const va_t Addr : Reads) {
+    const auto Hashes = userFactHashes(S, Addr, Declarations);
+    if (!Hashes.first && !Hashes.second)
+      continue;
+    Stated.append(reinterpret_cast<const char *>(&Addr), sizeof(Addr));
+    Stated.append(reinterpret_cast<const char *>(&Hashes), sizeof(Hashes));
+  }
   return Stated.empty() ? 0 : llvm::xxh3_64bits(Stated);
 }
+
+/// What neverd_user_reads wrote: its digest, the addresses, and the hashes of
+/// what the user stated of each that had any.
+struct ReadUserFacts {
+  uint64_t Digest = 0;
+  std::vector<va_t> Addresses;
+  std::map<va_t, std::pair<uint64_t, uint64_t>> Stated;
+};
+
+std::optional<ReadUserFacts> parseUserReads(llvm::StringRef Text) {
+  ReadUserFacts Read;
+  const auto [First, Rest] = Text.split('\n');
+  llvm::SmallVector<llvm::StringRef, 32> Words;
+  First.split(Words, ' ');
+  if (Words.empty() || Words.front().getAsInteger(16, Read.Digest))
+    return std::nullopt;
+  Read.Addresses.reserve(Words.size() - 1);
+  for (const llvm::StringRef Word : llvm::ArrayRef(Words).drop_front()) {
+    uint64_t Addr = 0;
+    if (Word.getAsInteger(16, Addr))
+      return std::nullopt;
+    Read.Addresses.push_back(static_cast<va_t>(Addr));
+  }
+  llvm::SmallVector<llvm::StringRef, 8> Rows;
+  Rest.split(Rows, '\n', -1, /*KeepEmpty=*/false);
+  for (const llvm::StringRef Row : Rows) {
+    llvm::SmallVector<llvm::StringRef, 3> Fields;
+    Row.split(Fields, ' ');
+    uint64_t Addr = 0, Name = 0, Declaration = 0;
+    if (Fields.size() != 3 || Fields[0].getAsInteger(16, Addr) ||
+        Fields[1].getAsInteger(16, Name) ||
+        Fields[2].getAsInteger(16, Declaration))
+      return std::nullopt;
+    Read.Stated.emplace(static_cast<va_t>(Addr), std::pair(Name, Declaration));
+  }
+  return Read;
+}
 } // namespace
+
+const Session::SymbolNameIndex &Session::symbolNames() const {
+  if (!SymbolNames || SymbolNames->Symbols != Img.Symbols.data() ||
+      SymbolNames->Count != Img.Symbols.size()) {
+    SymbolNameIndex Index;
+    Index.Symbols = Img.Symbols.data();
+    Index.Count = Img.Symbols.size();
+    Index.ByName.reserve(Index.Count);
+    for (const Symbol &Sym : Img.Symbols)
+      Index.ByName.emplace(Sym.Name, &Sym);
+    Index.FunctionLinkNames =
+        collectImageFunctionLinkNames(Img, Img.abiFormat(), Img.Arch);
+    SymbolNames = std::move(Index);
+  }
+  return *SymbolNames;
+}
 
 const char *neverd_user_reads(neverd_session_t Sess) {
   auto *S = toSession(Sess);
@@ -633,6 +696,15 @@ const char *neverd_user_reads(neverd_session_t Sess) {
     Text += ' ';
     Text += llvm::utohexstr(Addr);
   }
+  const std::map<va_t, std::string> Declarations = S->functionDeclarations();
+  if (!S->Renames.empty() || !Declarations.empty())
+    for (const va_t Addr : Reads) {
+      const auto Hashes = userFactHashes(*S, Addr, Declarations);
+      if (Hashes.first || Hashes.second)
+        Text += '\n' + llvm::utohexstr(Addr) + ' ' +
+                llvm::utohexstr(Hashes.first) + ' ' +
+                llvm::utohexstr(Hashes.second);
+    }
   return dupStr(Text);
 }
 
@@ -641,20 +713,43 @@ int neverd_user_reads_hold(neverd_session_t Sess, const char *Reads) {
   if (!S || !Reads)
     return 0;
   S->clearError();
-  llvm::SmallVector<llvm::StringRef, 32> Words;
-  llvm::StringRef(Reads).split(Words, ' ');
-  uint64_t Digest = 0;
-  if (Words.empty() || Words.front().getAsInteger(16, Digest))
-    return 0;
-  std::vector<va_t> Addresses;
-  Addresses.reserve(Words.size() - 1);
-  for (const llvm::StringRef Word : llvm::ArrayRef(Words).drop_front()) {
-    uint64_t Addr = 0;
-    if (Word.getAsInteger(16, Addr))
-      return 0;
-    Addresses.push_back(static_cast<va_t>(Addr));
+  const auto Read = parseUserReads(Reads);
+  return Read && userFactsDigest(*S, Read->Addresses) == Read->Digest;
+}
+
+const char *neverd_user_reads_renamed_json(neverd_session_t Sess,
+                                           const char *Reads) {
+  auto *S = toSession(Sess);
+  if (!S || !Reads)
+    return nullptr;
+  S->clearError();
+  const auto Read = parseUserReads(Reads);
+  if (!Read)
+    return nullptr;
+  const std::map<va_t, std::string> Declarations = S->functionDeclarations();
+  llvm::json::Array Renamed;
+  for (const va_t Addr : Read->Addresses) {
+    const auto Now = userFactHashes(*S, Addr, Declarations);
+    const auto Then = Read->Stated.find(Addr);
+    const std::pair<uint64_t, uint64_t> Was =
+        Then != Read->Stated.end() ? Then->second
+                                   : std::pair<uint64_t, uint64_t>{0, 0};
+    // A declaration reaches more than a spelling, and a name taken away is the
+    // engine's to say.
+    if (Now.second != Was.second || (Was.first && !Now.first))
+      return nullptr;
+    if (Now.first == Was.first)
+      continue;
+    // What the emitter decides of a name beyond its spelling (noteImageObject).
+    const std::string &Name = *userDataName(*S, Addr);
+    if (canonicalizeCProjectionIdentifier(Name, "nd_symbol") != Name ||
+        libc::headerOfDataObject(Name) ||
+        S->symbolNames().FunctionLinkNames.count(Name))
+      return nullptr;
+    Renamed.push_back(
+        llvm::json::Object{{"addr", vaHex(Addr)}, {"name", Name}});
   }
-  return userFactsDigest(*S, Addresses) == Digest;
+  return dupStr(jsonToString(llvm::json::Value(std::move(Renamed))));
 }
 
 int neverd_call_summaries_held(neverd_session_t Sess) {

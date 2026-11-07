@@ -26,6 +26,11 @@ public:
   /// Decorate a complete source view, preserving its lines and remapping every
   /// UTF-8 span. Edit targets come from declared locals or resolved image
   /// names. An image name shows its rename, otherwise its display name.
+  /// Spells \p renamed, rows of what data is called now, in an engine page of C
+  /// rendered under the names before them, as a render under these reads.
+  /// False, with the page as it was, unless its text shows a spelling is all
+  /// that moves.
+  static bool respell(Json &page, const Json &renamed);
   static void decorate(Json &view, const Json &row, std::uint64_t function,
                        const std::string &representation, const Json &renames,
                        const Json &annotations,

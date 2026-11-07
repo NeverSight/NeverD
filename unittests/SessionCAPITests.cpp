@@ -5601,6 +5601,49 @@ TEST_F(SessionCAPITest, ReloadingRenamesRestoresNamesRemovedFromTheSidecar) {
   EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "evm_entry");
 }
 
+TEST_F(SessionCAPITest, TakingANameReadsAsLoadingItsTable) {
+  const std::string Path = write("take.evm", "6001600055");
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  const auto Entry = neverd_func_entry(Session, 0);
+  const auto Data = Entry + 0x100;
+  EXPECT_EQ(neverd_func_find_by_name(Session, "evm_entry"), 0);
+  // A name of data reaches no function; a function's reaches its row and what
+  // finds it by name.
+  ASSERT_EQ(neverd_rename_take(Session, Data, "taken_data"), 0);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "evm_entry");
+  ASSERT_EQ(neverd_rename_take(Session, Entry, "taken_entry"), 0);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "taken_entry");
+  EXPECT_EQ(neverd_func_find_by_name(Session, "taken_entry"), 0);
+  EXPECT_LT(neverd_func_find_by_name(Session, "evm_entry"), 0);
+  EXPECT_EQ(neverd_func_find_by_addr(Session, Entry), 0);
+  // The session that reads the same table from its file holds the same.
+  const std::string Taken = takeString(neverd_renames_json(Session));
+  const std::string Other = write("load.evm", "6001600055");
+  write("load.evm.neverd/renames.json", Taken);
+  neverd_session_t Loaded = neverd_session_create();
+  ASSERT_EQ(neverd_session_load(Loaded, Other.c_str()), 1);
+  EXPECT_EQ(takeString(neverd_renames_json(Loaded)), Taken);
+  EXPECT_EQ(takeString(neverd_func_name(Loaded, 0)), "taken_entry");
+  neverd_session_destroy(Loaded);
+  // Given up, the function reads as it did, and a table without it loads the
+  // same over a name kept.
+  ASSERT_EQ(neverd_rename_take(Session, Entry, nullptr), 0);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "evm_entry");
+  EXPECT_EQ(neverd_func_find_by_name(Session, "evm_entry"), 0);
+  EXPECT_LT(neverd_func_find_by_name(Session, "taken_entry"), 0);
+  ASSERT_EQ(neverd_rename_take(Session, Data, nullptr), 0);
+  EXPECT_EQ(takeString(neverd_renames_json(Session)), "[]");
+  // Loading a table over what was taken moves only what differs.
+  ASSERT_EQ(neverd_rename_take(Session, Entry, "taken_again"), 0);
+  write("take.evm.neverd/renames.json", Taken);
+  ASSERT_EQ(neverd_renames_load(Session), 0);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "taken_entry");
+  EXPECT_EQ(takeString(neverd_renames_json(Session)), Taken);
+  write("take.evm.neverd/renames.json", "[]");
+  ASSERT_EQ(neverd_renames_load(Session), 0);
+  EXPECT_EQ(takeString(neverd_func_name(Session, 0)), "evm_entry");
+}
+
 TEST_F(SessionCAPITest,
        ReloadingAbsentSidecarsDiscardsStagedNotesAndDeletedRenames) {
   const std::string Path = write("reload.evm", "6001600055");
