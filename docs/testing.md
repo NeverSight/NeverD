@@ -12723,6 +12723,14 @@ compilation check, not execution of a 32-bit host bridge.
 `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` retains generated C, its compiled
 bridge fixture and manifests.
 
+The Python ABI inventory includes `neverd_x86_legacy_source_v1` with two
+independently owned string addresses. Set `NEVERD_TEST_LIBNEVERD` to the
+matching shared library when running `test_legacy_source_integration.py` and
+`test_continuation_integration.py`: they check the real legacy and x64 SDK
+exports, source hashes, size-delimited requests, manifest lifetime after the
+source is freed, optional manifests and failure-output clearing. These raw
+SDK calls do not require the embedded Python plugin host.
+
 Its original-instruction oracle compares 64 protected branch selections per
 compiler/optimization lane using Linux ptrace in code16 and code32. It compares
 PC, accumulator/count, arithmetic/DF flags and stack delta. Software checks
