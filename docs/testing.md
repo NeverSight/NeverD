@@ -7075,6 +7075,10 @@ at EOF on all three data models. Failed declarations keep the library intact.
 and parenthesized names, pointer arrays, callbacks returning array pointers,
 array references and calling conventions on ILP32, LP64 and LLP64, including
 published types after the declaration input is overwritten.
+`TypeParse.NestedDeclaratorsKeepBindingWidthsAndQualifiers` combines arrays of
+callbacks, qualified return pointers, abstract callback parameters, two-dimensional
+array returns and explicit 32/64-bit pointer widths. It checks type structure,
+layout and C rendering round trips across all three data models.
 
 `HeaderLibrary.LayoutComparisonsFollowEachMergeAndGrowingConflicts` checks
 same-size, different-alignment overrides across ILP32, LP64 and LLP64. Reverse
