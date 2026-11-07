@@ -79,6 +79,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -202,7 +203,30 @@ struct Session {
   std::string platformEntryDeclaration() const;
   /// Drops the program's types, read anew when next asked for; the user's
   /// declarations stay, to be read again over them.
+  /// The image's symbols by name, and the C names its functions link by, read
+  /// once for its list of symbols: what naming an address asks of them all.
+  struct SymbolNameIndex {
+    const Symbol *Symbols = nullptr;
+    size_t Count = 0;
+    std::unordered_multimap<std::string_view, const Symbol *> ByName;
+    std::unordered_set<std::string_view> FunctionLinkNames;
+  };
+  const SymbolNameIndex &symbolNames() const;
+  mutable std::optional<SymbolNameIndex> SymbolNames;
+  /// What the local types spell, mention and declare prototypes of, read once
+  /// and kept through declarations that only add to them: those of a library
+  /// that can hold tens of thousands.
+  struct LocalTypeNameFacts {
+    const types::TypeLibrary *Library = nullptr;
+    size_t Types = 0, Declarations = 0;
+    types::SpelledNames Spelled;
+    llvm::StringSet<> Mentioned, Prototyped;
+  };
+  std::optional<LocalTypeNameFacts> LocalTypeNames;
+  /// Reads LocalTypeNames of \p Library, unless they hold for it.
+  void readLocalTypeNames(const types::TypeLibrary &Library);
   void dropLocalTypes() {
+    LocalTypeNames.reset();
     LocalTypes.reset();
     LocalTypeStats = {};
     LocalTypeSkipped.clear();
@@ -267,9 +291,8 @@ struct Session {
   /// is spelled otherwise for them, so that everything read and printed stays,
   /// and only the next context would have told them apart.  The context then
   /// takes them.
-  bool takeUnreadTypes(
-      const types::TypeLibrary &Library, llvm::ArrayRef<std::string> Names,
-      const std::vector<std::pair<std::string, std::string>> &RenamedBefore);
+  bool takeUnreadTypes(const types::TypeLibrary &Library,
+                       llvm::ArrayRef<std::string> Names);
   void dropLocalTypesDebug() {
     // The text it printed stays, and with it what that read.
     if (LocalTypesDbg)

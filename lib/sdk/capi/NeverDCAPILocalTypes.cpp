@@ -718,9 +718,25 @@ bool Session::typesChanged(const types::TypeLibrary &Library,
   return Shows;
 }
 
-bool Session::takeUnreadTypes(
-    const types::TypeLibrary &Library, llvm::ArrayRef<std::string> Names,
-    const std::vector<std::pair<std::string, std::string>> &RenamedBefore) {
+void Session::readLocalTypeNames(const types::TypeLibrary &Library) {
+  if (LocalTypeNames && LocalTypeNames->Library == &Library &&
+      LocalTypeNames->Types == Library.size() &&
+      LocalTypeNames->Declarations == TypeDeclarations.size())
+    return;
+  LocalTypeNames.emplace();
+  LocalTypeNames->Library = &Library;
+  LocalTypeNames->Types = Library.size();
+  LocalTypeNames->Declarations = TypeDeclarations.size();
+  LocalTypeNames->Spelled = types::spelledNames(Library, types::Language::C);
+  for (const types::LocalType *Type : Library.types())
+    for (const std::string &Named : types::mentionedTypeNames(*Type))
+      LocalTypeNames->Mentioned.insert(Named);
+  LocalTypeNames->Prototyped = prototypeTypeNames(Library);
+}
+
+bool Session::takeUnreadTypes(const types::TypeLibrary &Library,
+                              llvm::ArrayRef<std::string> Names) {
+  LocalTypeNameFacts &Facts = *LocalTypeNames;
   llvm::StringSet<> New;
   for (const std::string &Name : Names)
     New.insert(Name);
@@ -732,14 +748,9 @@ bool Session::takeUnreadTypes(
   if (llvm::any_of(FunctionSources, Asserts) ||
       llvm::any_of(FunctionLlvmModules, Asserts))
     return false;
-  for (const types::LocalType *Type : Library.types())
-    if (!New.contains(Type->Name))
-      for (const std::string &Named : types::mentionedTypeNames(*Type))
-        if (New.contains(Named))
-          return false;
-  const llvm::StringSet<> Prototyped = prototypeTypeNames(Library);
   if (llvm::any_of(Names, [&](const std::string &Name) {
-        return Prototyped.contains(Name);
+        return Facts.Mentioned.contains(Name) ||
+               Facts.Prototyped.contains(Name);
       }))
     return false;
   // Text that reads against the library names them where it spells them.
@@ -760,17 +771,42 @@ bool Session::takeUnreadTypes(
   for (const auto &[Entry, Declaration] : functionDeclarations())
     if (Spells(Declaration))
       return false;
-  // An enumerator gives way to a type of its name.
-  std::vector<std::pair<std::string, std::string>> Renamed =
-      types::renamedNames(Library, types::Language::C);
-  llvm::erase_if(Renamed, [&](const auto &Name) {
-    const size_t Scope = Name.first.find("::");
-    return New.contains(llvm::StringRef(Name.first).take_front(Scope));
-  });
-  if (Renamed != RenamedBefore)
-    return false;
+  // An enumerator gives way to a type of its name: new types that spell only
+  // names of their own, as they are, move no other.
+  types::TypeLibrary Alone(Library.dataModel());
+  Alone.setRecordABI(Library.recordABI());
+  for (const std::string &Name : Names)
+    if (const types::LocalType *Type = Library.find(Name))
+      Alone.define(*Type);
+  types::SpelledNames Own = types::spelledNames(Alone, types::Language::C);
+  const bool OwnNames =
+      Own.Renamed.empty() && llvm::none_of(Own.Taken, [&](const auto &Name) {
+        return Facts.Spelled.Taken.contains(Name.getKey());
+      });
+  if (!OwnNames) {
+    std::vector<std::pair<std::string, std::string>> Renamed =
+        types::renamedNames(Library, types::Language::C);
+    llvm::erase_if(Renamed, [&](const auto &Name) {
+      const size_t Scope = Name.first.find("::");
+      return New.contains(llvm::StringRef(Name.first).take_front(Scope));
+    });
+    if (Renamed != Facts.Spelled.Renamed)
+      return false;
+  }
   if (LocalTypesDbg)
-    LocalTypesDbg->takeNewTypes(Library);
+    LocalTypesDbg->takeNewTypes(Library, Names);
+  if (!OwnNames) {
+    // Read again when next asked for.
+    LocalTypeNames.reset();
+    return true;
+  }
+  for (const auto &Name : Own.Taken)
+    Facts.Spelled.Taken.insert(Name.getKey());
+  for (const std::string &Name : Names)
+    if (const types::LocalType *Type = Library.find(Name))
+      for (const std::string &Named : types::mentionedTypeNames(*Type))
+        Facts.Mentioned.insert(Named);
+  Facts.Types = Library.size();
   return true;
 }
 
@@ -1115,13 +1151,15 @@ const char *neverd_local_types_declare(neverd_session_t Sess,
     return nullptr;
   Declaration.Source = Source ? Source : "";
   const size_t TypesBefore = Library->size();
-  const auto RenamedBefore = types::renamedNames(*Library, types::Language::C);
+  S->readLocalTypeNames(*Library);
   const types::ParseResult Result = apply(Declaration, *Library);
   bool Decompilation = false, Unread = false;
   if (Result.ok()) {
     S->TypeDeclarations.push_back(std::move(Declaration));
     Unread = addsOnly(*Library, TypesBefore, Result) &&
-             S->takeUnreadTypes(*Library, Result.Types, RenamedBefore);
+             S->takeUnreadTypes(*Library, Result.Types);
+    if (Unread && S->LocalTypeNames)
+      S->LocalTypeNames->Declarations = S->TypeDeclarations.size();
     if (!Unread)
       Decompilation =
           S->typesChanged(*Library, Result.Types, !Result.Prototypes.empty());
@@ -1640,15 +1678,16 @@ int neverd_type_declarations_load(neverd_session_t Sess) {
     bool Unread = true;
     for (size_t I = Taken; Unread && I < Declarations.size(); ++I) {
       const size_t TypesBefore = S->LocalTypes->size();
-      const auto RenamedBefore =
-          types::renamedNames(*S->LocalTypes, types::Language::C);
+      S->readLocalTypeNames(*S->LocalTypes);
       const types::ParseResult Result = apply(Declarations[I], *S->LocalTypes);
       Unread = Result.ok() && Declarations[I].Forget.empty() &&
                addsOnly(*S->LocalTypes, TypesBefore, Result) &&
-               S->takeUnreadTypes(*S->LocalTypes, Result.Types, RenamedBefore);
+               S->takeUnreadTypes(*S->LocalTypes, Result.Types);
     }
     if (Unread) {
       S->TypeDeclarations = std::move(Declarations);
+      if (S->LocalTypeNames)
+        S->LocalTypeNames->Declarations = S->TypeDeclarations.size();
       return 0;
     }
   }
