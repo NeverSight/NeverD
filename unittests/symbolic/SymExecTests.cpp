@@ -1407,3 +1407,240 @@ TEST(SymExec, AStoreThroughAnUnknownAddressIsReportedAsAnApproximation) {
 }
 
 } // namespace
+
+TEST(SymState, WholeMemoryOverwritesAndSnapshotsRetainTheirWrittenWords) {
+  for (const auto Order : {llvm::endianness::little, llvm::endianness::big})
+    for (const bool Relative : {false, true})
+      for (const unsigned Width : {64u, 256u, 512u}) {
+        SymContext C;
+        SymState State(C, Order);
+        const auto Address =
+            Relative ? C.mkFreshVar(64, "memory_base_") : C.mkConst(64, 0x1000);
+        const auto X = C.mkFreshVar(Width, "memory_x_");
+        const auto Y = C.mkFreshVar(Width, "memory_y_");
+        std::vector<SymRef> Values;
+        for (unsigned I = 0; I < 32; ++I)
+          Values.push_back(C.mkUDiv(C.mkAdd(X, C.mkConst(Width, I)), Y));
+        const auto Before = C.numNodes();
+        for (const auto V : Values) {
+          State.store(Address, V);
+          EXPECT_EQ(State.load(Address, Width / 8), V);
+        }
+        EXPECT_EQ(C.numNodes(), Before);
+        EXPECT_EQ(State.numLiveBytes(), Width / 8);
+        if (Width == 64) {
+          const auto Knowledge = State.memoryKnowledge();
+          ASSERT_EQ(Knowledge.Facts.size(), 1u);
+          EXPECT_EQ(Knowledge.Facts.front().Value, Values.back());
+          EXPECT_EQ(C.numNodes(), Before);
+        }
+      }
+}
+
+TEST(SymState, DeferredMemoryProjectionRetainsLiteralConcatLanes) {
+  for (const auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SymContext C;
+    SymState State(C, Order);
+    const auto Base = C.mkFreshVar(64, "literal_lanes_");
+    const auto Middle = C.mkFreshVar(32, "mixed_middle_");
+    const auto Value =
+        C.mkConcat({C.mkConst(16, 0x1234), Middle, C.mkConst(16, 0x5678)});
+    State.store(Base, Value);
+    const auto Before = C.numNodes();
+    const auto Projection = State.constantRegionBytes(Base);
+    ASSERT_EQ(Projection.size(), 4u);
+    for (const auto &Byte : Projection) {
+      const auto Lane =
+          Order == llvm::endianness::little ? Byte.Offset : 7 - Byte.Offset;
+      EXPECT_TRUE(Lane < 2 || Lane >= 6);
+      const uint64_t Literal = Lane < 2 ? 0x5678 : 0x1234;
+      EXPECT_EQ(Byte.Value, (Literal >> ((Lane % 2) * 8)) & 0xff);
+    }
+    EXPECT_EQ(C.numNodes(), Before);
+  }
+}
+
+TEST(SymState, MaterializedLoadsDoNotCreateMemoryOrObservations) {
+  for (const auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SymContext C;
+    SymState State(C, Order);
+    const auto Base = C.mkFreshVar(64, "materialized_base_");
+    const auto Missing = C.mkFreshVar(64, "missing_base_");
+    const auto Value = C.mkFreshVar(64, "materialized_word_");
+    const auto At = C.mkAdd(Base, C.mkConst(64, 3));
+    EXPECT_FALSE(State.loadMaterialized(Base, 8));
+    EXPECT_EQ(State.numMemoryRegions(), 0u);
+    State.store(At, Value);
+    const auto Before = C.numNodes();
+    const auto Live = State.numLiveBytes();
+    EXPECT_EQ(State.loadMaterialized(At, 8), Value);
+    EXPECT_FALSE(State.loadMaterialized(Base, 8));
+    EXPECT_FALSE(State.loadMaterialized(At, 9));
+    EXPECT_FALSE(State.loadMaterialized(Missing, 8));
+    EXPECT_FALSE(State.loadMaterialized(At, 0));
+    EXPECT_FALSE(State.loadMaterialized({}, 8));
+    EXPECT_EQ(State.numLiveBytes(), Live);
+    EXPECT_EQ(State.numMemoryRegions(), 1u);
+    EXPECT_EQ(C.numNodes(), Before);
+    EXPECT_TRUE(State.loadOrigins(Value).empty());
+    const auto PatchAt = C.mkAdd(At, C.mkConst(64, 2));
+    State.store(PatchAt, C.mkConst(16, 0x1789));
+    EXPECT_EQ(State.loadMaterialized(At, 8), State.load(At, 8));
+    State.clobberMemory();
+    auto Sibling = State;
+    Sibling.load(At, 8);
+    EXPECT_FALSE(State.loadMaterialized(At, 8));
+    EXPECT_EQ(State.numLiveBytes(), 0u);
+  }
+}
+
+TEST(SymState, MaterializedLoadsKeepModularRelativeCoordinates) {
+  SymContext C;
+  SymState State(C);
+  const auto Base = C.mkFreshVar(64, "wrapping_base_");
+  const auto Address = C.mkSub(Base, C.mkConst(64, 3));
+  const auto Value = C.mkFreshVar(64, "wrapping_word_");
+  State.store(Address, Value);
+  EXPECT_EQ(State.loadMaterialized(Address, 8), Value);
+  State.write(SymSpace::Memory, UINT64_MAX, C.mkConst(8, 1));
+  EXPECT_FALSE(State.loadMaterialized(C.mkConst(64, UINT64_MAX), 2));
+}
+
+TEST(SymState, MemoryViewsKeepConstantWindowsAndPartialOverwrites) {
+  for (const auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SymContext C;
+    SymState State(C, Order);
+    const auto Base = C.mkFreshVar(64, "constant_region_");
+    const auto Value = C.mkConst(64, 0x1122334455667788);
+    State.store(Base, Value);
+    const auto Region = State.constantRegionBytes(Base);
+    ASSERT_EQ(Region.size(), 8u);
+    for (unsigned I = 0; I < 8; ++I) {
+      EXPECT_EQ(Region[I].Offset, I);
+      const auto Lane = Order == llvm::endianness::little ? I : 7 - I;
+      EXPECT_EQ(Region[I].Value,
+                C.constValue(Value).extractBitsAsZExtValue(8, Lane * 8));
+    }
+    const auto Patch = C.mkFreshVar(16, "memory_patch_");
+    const auto PatchAt = C.mkAdd(Base, C.mkConst(64, 3));
+    State.store(PatchAt, Patch);
+    EXPECT_EQ(State.constantRegionBytes(Base).size(), 6u);
+    const auto Knowledge = State.memoryKnowledge();
+    SymState Restored(C, Order);
+    ASSERT_TRUE(Restored.restoreMemoryKnowledge(Knowledge));
+    EXPECT_EQ(State.load(Base, 8), Restored.load(Base, 8));
+    for (unsigned I = 0; I < 8; ++I) {
+      const auto At = C.mkAdd(Base, C.mkConst(64, I));
+      const auto Actual = State.load(At, 1);
+      const auto Lane = Order == llvm::endianness::little ? I : 7 - I;
+      const auto Expected =
+          I == 3 || I == 4
+              ? C.mkExtract(
+                    Patch,
+                    (Order == llvm::endianness::little ? I - 3 : 4 - I) * 8, 8)
+              : C.mkExtract(Value, Lane * 8, 8);
+      EXPECT_EQ(Actual, Expected);
+    }
+  }
+}
+
+TEST(SymState, OrderedBankWalkRetainsGapsAndMiddleOverwrites) {
+  for (const auto Order : {llvm::endianness::little, llvm::endianness::big})
+    for (const auto Space :
+         {SymSpace::Register, SymSpace::Temporary, SymSpace::Memory}) {
+      SymContext C;
+      SymState Words(C, Order), Bytes(C, Order);
+      for (const uint64_t At : {7u, 11u, 24u, 40u}) {
+        const auto V = C.mkConst(8, At);
+        Words.write(Space, At, V);
+        Bytes.write(Space, At, V);
+      }
+      auto ReadBytes = [&](uint64_t At, uint16_t Count) {
+        std::vector<SymRef> Parts;
+        for (unsigned I = 0; I < Count; ++I)
+          Parts.push_back(Bytes.read(Space, At + I, 1));
+        if (Order == llvm::endianness::little)
+          std::reverse(Parts.begin(), Parts.end());
+        return C.mkConcat(Parts);
+      };
+      EXPECT_EQ(Words.read(Space, 8, 16), ReadBytes(8, 16));
+      const auto V = C.mkFreshVar(256, "wide_update_");
+      Words.write(Space, 8, V);
+      for (unsigned I = 0; I < 32; ++I) {
+        const auto Low = (Order == llvm::endianness::little ? I : 31 - I) * 8;
+        Bytes.write(Space, 8 + I, C.mkExtract(V, Low, 8));
+      }
+      Words.write(Space, 19, C.mkConst(16, 0x1234));
+      for (unsigned I = 0; I < 2; ++I) {
+        const auto Low = (Order == llvm::endianness::little ? I : 1 - I) * 8;
+        Bytes.write(Space, 19 + I, C.mkExtract(C.mkConst(16, 0x1234), Low, 8));
+      }
+      EXPECT_EQ(Words.read(Space, 8, 32), ReadBytes(8, 32));
+      EXPECT_EQ(Words.read(Space, 9, 16), ReadBytes(9, 16));
+    }
+}
+
+TEST(SymState, RestoringMemoryDoesNotForkOrReplaceScalarState) {
+  for (const auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SymContext C;
+    SymState State(C, Order);
+    const auto Base = C.mkFreshVar(64, "restored_memory_");
+    const auto Value = C.mkFreshVar(64, "historical_load_");
+    State.clobberMemory();
+    State.store(Base, Value);
+    EXPECT_EQ(State.load(Base, 8), Value);
+    State.clobberRegistersExcept({});
+    const auto R = State.read(SymSpace::Register, 0, 8);
+    State.write(SymSpace::Temporary, 12, Value);
+    ASSERT_TRUE(
+        State.setX64MemoryAddressSpaceBase(NdMemoryAddressSpace::X86GS, Base));
+    auto Sibling = State;
+    const auto Knowledge = State.memoryKnowledge();
+    ASSERT_TRUE(State.restoreMemoryKnowledge(Knowledge));
+    EXPECT_EQ(State.read(SymSpace::Register, 0, 8), R);
+    EXPECT_EQ(State.read(SymSpace::Register, 16, 8),
+              Sibling.read(SymSpace::Register, 16, 8));
+    EXPECT_EQ(State.read(SymSpace::Temporary, 12, 8), Value);
+    EXPECT_EQ(State.loadOrigins(Value), Sibling.loadOrigins(Value));
+    EXPECT_EQ(State.x64MemoryAddressSpaceBase(NdMemoryAddressSpace::X86GS),
+              Base);
+    EXPECT_EQ(State.loadMaterialized(Base, 8), Value);
+    auto Empty = Knowledge;
+    Empty.Facts.clear();
+    ASSERT_TRUE(State.restoreMemoryKnowledge(Empty));
+    EXPECT_FALSE(State.loadMaterialized(Base, 8));
+    EXPECT_NE(State.load(Base, 8), Value);
+    EXPECT_EQ(Sibling.loadMaterialized(Base, 8), Value);
+  }
+}
+
+TEST(SymState, ScalarSnapshotsKeepEpochsAndOmitMemoryBanks) {
+  for (const auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SymContext C;
+    SymState State(C, Order);
+    const auto Base = C.mkFreshVar(64, "snapshot_memory_");
+    const auto Value = C.mkFreshVar(64, "snapshot_value_");
+    State.store(Base, Value);
+    EXPECT_EQ(State.load(Base, 8), Value);
+    State.write(SymSpace::Register, 0, C.mkConst(64, 0x12345678));
+    State.clobberRegistersExcept({SymRegisterRange{0, 4}});
+    State.write(SymSpace::Temporary, 8, Value);
+    ASSERT_TRUE(
+        State.setX64MemoryAddressSpaceBase(NdMemoryAddressSpace::X86GS, Base));
+    auto Snapshot = State.scalarSnapshot();
+    EXPECT_EQ(Snapshot.byteOrder(), Order);
+    EXPECT_EQ(Snapshot.numMemoryRegions(), 0u);
+    EXPECT_TRUE(Snapshot.memoryKnowledge().Facts.empty());
+    EXPECT_TRUE(Snapshot.loadOrigins(Value).empty());
+    EXPECT_EQ(Snapshot.x64MemoryAddressSpaceBase(NdMemoryAddressSpace::X86GS),
+              Base);
+    EXPECT_EQ(Snapshot.read(SymSpace::Register, 0, 8),
+              State.read(SymSpace::Register, 0, 8));
+    EXPECT_EQ(Snapshot.read(SymSpace::Register, 16, 8),
+              State.read(SymSpace::Register, 16, 8));
+    EXPECT_EQ(Snapshot.read(SymSpace::Temporary, 8, 8), Value);
+    Snapshot.write(SymSpace::Register, 0, C.mkZero(64));
+    EXPECT_NE(Snapshot.read(SymSpace::Register, 0, 8),
+              State.read(SymSpace::Register, 0, 8));
+  }
+}

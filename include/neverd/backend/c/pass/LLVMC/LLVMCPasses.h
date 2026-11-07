@@ -68,6 +68,8 @@ void analyzeIntrinsicStructs(LLVMCAnalysisState &State, llvm::Function &Fn);
 unsigned x86CPUQueryResultWords(const llvm::CallInst &Call);
 /// Exact lifted Linux x64 SYSCALL ABI, including its RAX/R11 result pair.
 bool isLinuxX64SyscallInlineAsm(const llvm::CallInst &Call);
+/// Exact owned EFLAGS image whose unused result has no source effect.
+bool isDiscardableX86FlagRead(Arch TheArch, const llvm::CallInst &Call);
 /// True when \p Call is the backend's Windows NT x64 SYSCALL inline asm.
 bool isWindowsX64SyscallInlineAsm(const llvm::CallInst &Call);
 /// The supervisor call convention whose exact lowering \p Call is on

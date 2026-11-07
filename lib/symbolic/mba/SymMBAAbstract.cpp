@@ -219,8 +219,9 @@ void demoteArithmeticUnderBitwise(const SymContext &Ctx,
 /// result is returned.
 class Placeholders {
 public:
-  Placeholders(SymContext &Ctx, const NodeSet &Reserved)
-      : Ctx(Ctx), Reserved(Reserved) {}
+  Placeholders(SymContext &Ctx, const NodeSet &Reserved, WorkBudget *Budget)
+      : Ctx(Ctx), Reserved(Reserved),
+        Budget(Budget && Budget->MemoOwner == &Ctx ? Budget : nullptr) {}
 
   /// A fresh input of \p Width bits.  The width is the subterm's own, not the
   /// region's: a placeholder stands in an operand slot, and an operand keeps
@@ -228,9 +229,24 @@ public:
   /// hand a rebuilt node operands that disagree.
   SymRef take(uint32_t Width) {
     for (;;) {
-      std::string Name =
-          ("mba$" + llvm::Twine(Width) + "." + llvm::Twine(Next++)).str();
-      SymRef V = Ctx.mkVar(Name, Width);
+      const auto Number = Next++;
+      const uint64_t Key = (uint64_t(Width) << 32) | Number;
+      SymRef V;
+      if (Budget) {
+        ++Budget->PlaceholderLookups;
+        if (const auto Found = Budget->PlaceholderInputs.find(Key);
+            Found != Budget->PlaceholderInputs.end()) {
+          ++Budget->PlaceholderHits;
+          V = Found->second;
+        }
+      }
+      if (!V) {
+        const std::string Name =
+            ("mba$" + llvm::Twine(Width) + "." + llvm::Twine(Number)).str();
+        V = Ctx.mkVar(Name, Width);
+        if (Budget && Budget->PlaceholderInputs.size() < Budget->MemoCapacity)
+          Budget->PlaceholderInputs.try_emplace(Key, V);
+      }
       // Refuse a name the expression under study already uses, which would
       // quietly identify two different things.
       if (!Reserved.contains(V.index()))
@@ -241,6 +257,7 @@ public:
 private:
   SymContext &Ctx;
   const NodeSet &Reserved;
+  WorkBudget *Budget;
   unsigned Next = 0;
 };
 
@@ -1156,7 +1173,7 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
       Out.MayHaveProducts = true;
   }
 
-  Placeholders Pool(Ctx, Reserved);
+  Placeholders Pool(Ctx, Reserved, Budget);
   NodeMap<SymRef> Rewritten;
   NodeMap<SymRef> HiddenInputs;
   AffineResources WidenResources(Budget, MaxBytes);

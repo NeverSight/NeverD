@@ -234,7 +234,9 @@ SymRef detail::foldPartitionedMaskSum(SymContext &Ctx, SymRef A, SymRef B,
         }
         if (Same && Ctx.isConst(Mask))
           return Ctx.mkAdd({Ctx.mkConst(Offset), Mask, Word});
-        auto Other = maskedDifferenceSource(Ctx, Masked, Mask);
+        auto Other = Ctx.op(Masked) == SymOp::Not
+                         ? Ctx.operand(Masked, 0)
+                         : maskedDifferenceSource(Ctx, Masked, Mask);
         // M-(M&Q)=M&~Q has no borrow. When Q=~P, the whole sum is
         // (M|P)+(M&P)=M+P, including arbitrary masks and modular overflow.
         if (Other && isMaskComplement(Ctx, Word, Other))

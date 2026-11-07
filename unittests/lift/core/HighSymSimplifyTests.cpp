@@ -22,6 +22,7 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/pass/HighC/HighCPasses.h"
+#include "neverd/ir/high/HighIntegerProjection.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/support/Parallel.h"
 
@@ -36,7 +37,9 @@
 
 namespace neverd {
 bool simplifyAllExprs(std::vector<HighStmt> &);
-}
+void zeroUndemandedUnknownBytes(HighFunc &, Arch);
+void eliminateUnusedValues(HighFunc &);
+} // namespace neverd
 
 namespace {
 
@@ -82,6 +85,12 @@ public:
     Out.SSAVer = 1;
     Out.Size = kWordBytes;
     return append(Op, std::move(Inputs), Out);
+  }
+
+  void makeLarge() {
+    NextTemp = 100000;
+    for (size_t I = 0; I <= limits::kMaxStructurableMedOps; ++I)
+      emit(NdOp::COPY, {constant(I)});
   }
 
   /// Emit the last operation into the return register and close the function.
@@ -289,13 +298,11 @@ TEST(HighSymSimplify, OpaqueSelectDoesNotTaintFoldedScalarOperand) {
     Select->Kind = ExprKind::BinOp;
     Select->Op = NdOp::SELECT;
     Select->Type = NdType::makeInt(4, false);
-    MedVar Input;
-    Input.Kind = MedVar::Temp;
-    Input.TheArch = Arch::X64;
-    Input.Id = 1;
-    Input.SSAVer = 1;
-    Input.Size = 4;
-    Select->Operands = {HighExpr::makeVar(Input), HighExpr::makeConst(1, 4),
+    // Pure integer selections now translate. Keep this selection opaque at
+    // an actual effect boundary while checking the independent scalar fold.
+    auto Condition = HighExpr::makeCall("choose", 0x401000, {});
+    Condition->Type = NdType::makeInt(4, false);
+    Select->Operands = {Condition, HighExpr::makeConst(1, 4),
                         HighExpr::makeConst(0, 4)};
     HighStmt Return;
     Return.Kind = StmtKind::Return;
@@ -646,6 +653,16 @@ ExprPtr extendInteger(ExprPtr Operand, uint16_t Bytes, bool Signed = false) {
   return E;
 }
 
+ExprPtr integerSelect(const ExprPtr &Condition, const ExprPtr &Yes,
+                      const ExprPtr &No) {
+  auto E = std::make_shared<HighExpr>();
+  E->Kind = ExprKind::BinOp;
+  E->Op = NdOp::SELECT;
+  E->Type = Yes->Type;
+  E->Operands = {Condition, Yes, No};
+  return E;
+}
+
 ExprPtr carrySum(const ExprPtr &X, const ExprPtr &Y) {
   return HighExpr::makeBinop(
       NdOp::INT_ADD, HighExpr::makeBinop(NdOp::INT_XOR, X, Y),
@@ -674,6 +691,10 @@ integerValue(const ExprPtr &E, uint64_t X, uint64_t Y = 0,
     return llvm::APInt(Width, E->Var.Id == 1 ? X : Y, false, true);
   }
   llvm::APInt A = integerValue(E->Operands[0], X, Y, Bindings);
+  if (E->Kind == ExprKind::BitCast) {
+    EXPECT_EQ(A.getBitWidth(), Width);
+    return A;
+  }
   if (E->Kind == ExprKind::Cast)
     return E->Operands[0]->Type->IsSigned ? A.sextOrTrunc(Width)
                                           : A.zextOrTrunc(Width);
@@ -688,6 +709,10 @@ integerValue(const ExprPtr &E, uint64_t X, uint64_t Y = 0,
       return ~A;
     case NdOp::INT_NEG2:
       return -A;
+    case NdOp::BOOL_NOT:
+      return llvm::APInt(Width, A.isZero());
+    case NdOp::POPCOUNT:
+      return llvm::APInt(Width, A.popcount());
     default:
       ADD_FAILURE() << "unsupported unary test expression";
       return llvm::APInt(Width, 0);
@@ -695,8 +720,32 @@ integerValue(const ExprPtr &E, uint64_t X, uint64_t Y = 0,
   }
   if (E->Op == NdOp::SUBBYTES)
     return A.extractBits(Width, E->Operands[1]->ConstVal * 8);
-  llvm::APInt B =
-      integerValue(E->Operands[1], X, Y, Bindings).zextOrTrunc(Width);
+  if (E->Op == NdOp::SELECT)
+    return integerValue(E->Operands[A.isZero() ? 2 : 1], X, Y, Bindings);
+  llvm::APInt B = integerValue(E->Operands[1], X, Y, Bindings);
+  switch (E->Op) {
+  case NdOp::INT_EQUAL:
+    return llvm::APInt(Width, A == B);
+  case NdOp::INT_NOTEQUAL:
+    return llvm::APInt(Width, A != B);
+  case NdOp::INT_LESS:
+    return llvm::APInt(Width, A.ult(B));
+  case NdOp::INT_LESSEQUAL:
+    return llvm::APInt(Width, A.ule(B));
+  case NdOp::INT_SLESS:
+    return llvm::APInt(Width, A.slt(B));
+  case NdOp::INT_SLESSEQUAL:
+    return llvm::APInt(Width, A.sle(B));
+  case NdOp::BOOL_AND:
+    return llvm::APInt(Width, !A.isZero() && !B.isZero());
+  case NdOp::BOOL_OR:
+    return llvm::APInt(Width, !A.isZero() || !B.isZero());
+  case NdOp::BOOL_XOR:
+    return llvm::APInt(Width, A.isZero() != B.isZero());
+  default:
+    break;
+  }
+  B = B.zextOrTrunc(Width);
   A = A.zextOrTrunc(Width);
   switch (E->Op) {
   case NdOp::INT_ADD:
@@ -715,6 +764,8 @@ integerValue(const ExprPtr &E, uint64_t X, uint64_t Y = 0,
     return B.uge(Width) ? llvm::APInt(Width, 0) : A.shl(B.getZExtValue());
   case NdOp::INT_RIGHT:
     return B.uge(Width) ? llvm::APInt(Width, 0) : A.lshr(B.getZExtValue());
+  case NdOp::INT_ASHR:
+    return A.ashr(B.getLimitedValue(Width - 1));
   default:
     ADD_FAILURE() << "unsupported binary test expression";
     return llvm::APInt(Width, 0);
@@ -1569,12 +1620,14 @@ TEST(HighSymSimplify, DefinitionBindingsPreserveAssignmentWidthAndSignedness) {
         returnValue(sharedMaskUse(X, Y, Use))};
     simplifyExprSemantics(Body);
     const auto Text = Body.back().RetVal->str();
-    if (Bytes == 4) {
-      EXPECT_EQ(Text.find('|'), std::string::npos) << Text;
-      EXPECT_EQ(Text.find('&'), std::string::npos) << Text;
-    } else {
-      EXPECT_NE(Text.find('|'), std::string::npos) << Text;
-    }
+    // The known assignment conversion also preserves the low prefix of a
+    // widened capture. The wider store no longer has to block this identity.
+    EXPECT_EQ(Text.find('|'), std::string::npos) << Text;
+    EXPECT_EQ(Text.find('&'), std::string::npos) << Text;
+    for (uint64_t A : {0ULL, 1ULL, 7ULL, 0x80000000ULL, 0xffffffffULL})
+      for (uint64_t B : {0ULL, 1ULL, 17ULL, 0x80000000ULL, 0xffffffffULL})
+        EXPECT_EQ(integerValue(Body.back().RetVal, A, B),
+                  llvm::APInt(32, A + B));
   }
 }
 
@@ -2918,3 +2971,1229 @@ int main(void) {
 }
 
 } // namespace
+
+TEST(HighSymSimplify, LargeConversionHonorsSymbolicOptInAndKeepsLoads) {
+  for (bool Symbolic : {false, true})
+    for (bool ReadMemory : {false, true}) {
+      SCOPED_TRACE(Symbolic);
+      SCOPED_TRACE(ReadMemory);
+      FunctionBuilder B;
+      const auto X = B.param(0, 0x38);
+      const auto Y = ReadMemory
+                         ? B.emit(NdOp::LOAD, {MedVar::makeConst(0x8000, 8)})
+                         : B.param(1, 0x30);
+      const auto And = B.emit(NdOp::INT_AND, {X, Y});
+      const auto Or = B.emit(NdOp::INT_OR, {X, Y});
+      const auto Sum = B.emit(NdOp::INT_ADD, {And, Or});
+      const auto LessX = B.emit(NdOp::INT_SUB, {Sum, X});
+      B.makeLarge();
+      const auto High = B.finish(NdOp::INT_SUB, {LessX, Y}, Symbolic);
+      if (Symbolic)
+        EXPECT_EQ(returnedExpr(High), "0");
+      else
+        EXPECT_NE(returnedExpr(High), "0");
+      unsigned Loads = 0;
+      walkStmts(High.Body, [&](const HighStmt &S) {
+        forEachExpr(S, [&](const ExprPtr &Root) {
+          auto Visit = [&](auto &&Self, const ExprPtr &E) -> void {
+            if (!E)
+              return;
+            Loads += E->Kind == ExprKind::Load;
+            E->forEachChildExpr(
+                [&](const ExprPtr &Child) { Self(Self, Child); });
+          };
+          Visit(Visit, Root);
+        });
+      });
+      EXPECT_EQ(Loads != 0, ReadMemory);
+    }
+}
+
+TEST(HighExprSimplify, NamingCapturedReadsCleansTheirDeadValueConsumers) {
+  auto Address = HighExpr::makeVar(tempOfSize(1, 8));
+  auto Read = HighExpr::makeLoad(Address, NdType::makeInt(4, false));
+  auto Value = Read;
+  for (unsigned I = 0; I < 12; ++I) {
+    Value = HighExpr::makeBinop(NdOp::INT_ADD, Value, Value);
+    Value->Type = Read->Type;
+  }
+  HighFunc F;
+  F.ReturnType = Read->Type;
+  F.Body = {returnValue(
+      HighExpr::makeBinop(NdOp::INT_AND, Value, HighExpr::makeConst(0, 4)))};
+  simplifyAllExprs(F.Body);
+  ASSERT_NE(F.Body.back().RetVal->Kind, ExprKind::Const);
+  ASSERT_TRUE(nameRepeatedValues(F));
+  ASSERT_EQ(F.Body.back().RetVal->Kind, ExprKind::Const);
+  EXPECT_EQ(F.Body.back().RetVal->ConstVal, 0u);
+  // Capturing a read makes its subsequent value disposable, not its memory
+  // observation. The access must still execute and can still fault.
+  unsigned Reads = 0;
+  walkStmts(F.Body, [&](const HighStmt &S) {
+    forEachRhsExpr(S, [&](const ExprPtr &Root) {
+      std::vector<ExprPtr> Work{Root};
+      HighExprSet Seen;
+      while (!Work.empty()) {
+        auto E = Work.back();
+        Work.pop_back();
+        if (!E || !Seen.insert(E.get()).second)
+          continue;
+        if (E->Kind == ExprKind::Load) {
+          ++Reads;
+          EXPECT_EQ(E->Operands.front()->Var, Address->Var);
+        }
+        E->forEachChildExpr(
+            [&](const ExprPtr &Child) { Work.push_back(Child); });
+      }
+    });
+  });
+  EXPECT_GT(Reads, 0u);
+}
+
+size_t selectionCount(const ExprPtr &Root) {
+  size_t Count = 0;
+  std::vector<ExprPtr> Work{Root};
+  while (!Work.empty()) {
+    auto E = Work.back();
+    Work.pop_back();
+    Count += E->Kind == ExprKind::BinOp && E->Op == NdOp::SELECT;
+    Work.insert(Work.end(), E->Operands.begin(), E->Operands.end());
+  }
+  return Count;
+}
+
+TEST(HighSymSimplify, IntegerBitcastsPreserveWordIdentityThroughTheBridge) {
+  for (uint16_t Bytes : {1, 2, 4, 8})
+    for (bool Signed : {false, true}) {
+      auto X = HighExpr::makeVar(tempOfSize(1, Bytes),
+                                 NdType::makeInt(Bytes, Signed));
+      auto View = std::make_shared<HighExpr>();
+      View->Kind = ExprKind::BitCast;
+      View->Type = NdType::makeInt(Bytes, !Signed);
+      View->Operands = {X};
+      const auto Before = HighExpr::makeBinop(NdOp::INT_XOR, X, View);
+      const auto After = simplified(Before);
+      ASSERT_EQ(After->Kind, ExprKind::Const) << After->str();
+      EXPECT_EQ(After->ConstVal, 0U);
+      EXPECT_EQ(View->Type->IsSigned, !Signed);
+      EXPECT_EQ(X->Type->IsSigned, Signed);
+    }
+}
+
+TEST(HighSymSimplify, ModularOperationsReadExactLowPrefixesOfWiderInputs) {
+  for (uint16_t Bytes : {1, 2, 4})
+    for (NdOp Op : {NdOp::INT_ADD, NdOp::INT_SUB, NdOp::INT_MULT, NdOp::INT_AND,
+                    NdOp::INT_OR, NdOp::INT_XOR}) {
+      auto X = HighExpr::makeVar(tempOfSize(1, 8));
+      auto Y = HighExpr::makeVar(tempOfSize(2, 8));
+      auto WideInputs = HighExpr::makeBinop(Op, X, Y);
+      WideInputs->Type = NdType::makeInt(Bytes, false);
+      auto ExactInputs =
+          HighExpr::makeBinop(Op, integerCast(X, Bytes), integerCast(Y, Bytes));
+      auto Difference =
+          HighExpr::makeBinop(NdOp::INT_XOR, WideInputs, ExactInputs);
+      Difference->Type = WideInputs->Type;
+      auto After = simplified(Difference);
+      ASSERT_EQ(After->Kind, ExprKind::Const) << After->str();
+      EXPECT_EQ(After->ConstVal, 0U);
+      for (uint64_t A : {0ULL, 1ULL, 255ULL, 0x7fffffffffffffffULL, ~0ULL})
+        EXPECT_EQ(integerValue(WideInputs, A, ~A),
+                  integerValue(ExactInputs, A, ~A));
+    }
+}
+
+TEST(HighSymSimplify, PrefixReadingDoesNotChangeShiftOrWideningSemantics) {
+  auto X = HighExpr::makeVar(tempOfSize(1, 8));
+  for (NdOp Op : {NdOp::INT_LEFT, NdOp::INT_RIGHT, NdOp::INT_ASHR}) {
+    auto Shift = HighExpr::makeBinop(Op, X, HighExpr::makeConst(1, 4));
+    Shift->Type = NdType::makeInt(4, false);
+    auto Narrow =
+        HighExpr::makeBinop(Op, integerCast(X, 4), HighExpr::makeConst(1, 4));
+    auto Before = HighExpr::makeBinop(NdOp::INT_XOR, Shift, Narrow);
+    EXPECT_TRUE(containsNode(simplified(Before), Shift));
+  }
+  auto Byte = HighExpr::makeVar(tempOfSize(2, 1));
+  auto Ambiguous = HighExpr::makeBinop(NdOp::INT_ADD, X, Byte);
+  auto Explicit = HighExpr::makeBinop(NdOp::INT_ADD, X, integerCast(Byte, 8));
+  auto Before = HighExpr::makeBinop(NdOp::INT_XOR, Ambiguous, Explicit);
+  EXPECT_TRUE(containsNode(simplified(Before), Ambiguous));
+}
+
+TEST(HighSymSimplify, IntegerBitcastWideningKeepsSignedInterpretation) {
+  for (uint16_t Bytes : {1, 2, 4})
+    for (bool Signed : {false, true}) {
+      auto X = HighExpr::makeVar(tempOfSize(1, Bytes),
+                                 NdType::makeInt(Bytes, !Signed));
+      auto Y = HighExpr::makeVar(tempOfSize(2, 8));
+      auto View = std::make_shared<HighExpr>();
+      View->Kind = ExprKind::BitCast;
+      View->Type = NdType::makeInt(Bytes, Signed);
+      View->Operands = {X};
+      auto Before = carrySum(integerCast(View, 8), Y);
+      auto After = simplified(Before);
+      EXPECT_EQ(After->str().find('^'), std::string::npos) << After->str();
+      for (uint64_t A = 0; A != 256; ++A)
+        for (uint64_t Value : {A, ~A})
+          EXPECT_EQ(integerValue(After, Value, 0x7fffffffffffffffULL),
+                    integerValue(Before, Value, 0x7fffffffffffffffULL));
+    }
+}
+
+TEST(HighSymSimplify, UsesIncomingDefinitionsOnlyForOneShotConditions) {
+  for (StmtKind Kind : {StmtKind::If, StmtKind::IfElse, StmtKind::Switch}) {
+    const bool Switch = Kind == StmtKind::Switch;
+    auto X = HighExpr::makeVar(tempOfSize(1, 4));
+    auto Y = HighExpr::makeVar(tempOfSize(2, 4));
+    auto T = HighExpr::makeVar(tempOfSize(3, 4));
+    HighStmt Branch;
+    Branch.Kind = Kind;
+    auto &Condition = Switch ? Branch.SwitchExpr : Branch.Cond;
+    Condition = sharedMaskUse(X, Y, T);
+    if (Switch) {
+      Branch.DefaultBody = {returnValue(sharedMaskUse(X, Y, T))};
+    } else {
+      Branch.Body = {returnValue(sharedMaskUse(X, Y, T))};
+    }
+    std::vector<HighStmt> Body{
+        assignValue(T, HighExpr::makeBinop(NdOp::INT_AND, X, Y)), Branch,
+        returnValue(sharedMaskUse(X, Y, T))};
+    simplifyExprSemantics(Body);
+    const auto &Result = Switch ? Body[1].SwitchExpr : Body[1].Cond;
+    EXPECT_EQ(Result->str().find('|'), std::string::npos) << Result->str();
+    EXPECT_NE(Body.back().RetVal->str().find('|'), std::string::npos);
+    const auto &Child = Switch ? Body[1].DefaultBody : Body[1].Body;
+    EXPECT_NE(Child.front().RetVal->str().find('|'), std::string::npos);
+    for (uint64_t A = 0; A != 32; ++A)
+      for (uint64_t B = 0; B != 32; ++B)
+        EXPECT_EQ(integerValue(Result, A, B).getZExtValue(), A + B);
+
+    Branch.Addr = 0x402000;
+    HighStmt Jump;
+    Jump.Kind = StmtKind::Goto;
+    Jump.GotoTarget = Branch.Addr;
+    std::vector<HighStmt> WithLabel{Jump, Body.front(), Branch};
+    simplifyExprSemantics(WithLabel);
+    const auto &Joined = Switch ? WithLabel[2].SwitchExpr : WithLabel[2].Cond;
+    EXPECT_NE(Joined->str().find('|'), std::string::npos);
+  }
+}
+
+TEST(HighSymSimplify, OneShotPredicateDoesNotRepackFlags) {
+  auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  auto Y = HighExpr::makeVar(tempOfSize(2, 4));
+  auto T = HighExpr::makeVar(tempOfSize(3, 1));
+  auto Predicate = HighExpr::makeBinop(
+      NdOp::BOOL_AND,
+      HighExpr::makeUnary(NdOp::BOOL_NOT,
+                          HighExpr::makeBinop(NdOp::INT_LESS, X, Y)),
+      HighExpr::makeBinop(NdOp::INT_NOTEQUAL, X, Y));
+  auto Packed = HighExpr::makeBinop(
+      NdOp::INT_OR, extendInteger(T, 4),
+      HighExpr::makeBinop(
+          NdOp::INT_MULT, HighExpr::makeConst(64, 4),
+          extendInteger(HighExpr::makeUnary(NdOp::BOOL_NOT, T), 4)));
+  HighStmt Branch;
+  Branch.Kind = StmtKind::IfElse;
+  Branch.Cond = HighExpr::makeBinop(
+      NdOp::INT_AND, HighExpr::makeConst(1, 4),
+      HighExpr::makeBinop(NdOp::INT_RIGHT, Packed, HighExpr::makeConst(6, 1)));
+  Branch.Body = {returnValue(HighExpr::makeConst(1, 4))};
+  std::vector<HighStmt> Body{assignValue(T, Predicate), Branch};
+  simplifyExprSemantics(Body);
+  EXPECT_EQ(Body[1].Cond->str().find(" | "), std::string::npos)
+      << Body[1].Cond->str();
+  EXPECT_EQ(Body[1].Cond->str().find(">>"), std::string::npos)
+      << Body[1].Cond->str();
+  for (uint64_t A = 0; A != 32; ++A)
+    for (uint64_t B = 0; B != 32; ++B) {
+      const std::unordered_map<int, uint64_t> Values{
+          {1, A}, {2, B}, {3, A > B}};
+      EXPECT_EQ(integerValue(Body[1].Cond, 0, 0, &Values).getZExtValue(),
+                A <= B);
+    }
+}
+
+TEST(HighSymSimplify, IntegerBitcastSourceExecutesWithItsSignedWidening) {
+  auto Param = [](int Id) {
+    auto V = tempOfSize(Id, 8);
+    V.Kind = MedVar::Param;
+    return HighExpr::makeVar(V, NdType::makeInt(8, false));
+  };
+  auto X = Param(0), Y = Param(1);
+  auto View = std::make_shared<HighExpr>();
+  View->Kind = ExprKind::BitCast;
+  View->Type = NdType::makeInt(1, true);
+  View->Operands = {integerCast(X, 1)};
+  HighFunc F;
+  F.Name = "bitcast_sum";
+  F.Entry = kEntry;
+  F.ReturnType = X->Type;
+  F.Params = {{"x", X->Type, kNoParamReg, 0}, {"y", Y->Type, kNoParamReg, 1}};
+  F.Body = {returnValue(carrySum(integerCast(View, 8), Y))};
+  simplifyExprSemantics(F.Body);
+  EXPECT_EQ(F.Body.front().RetVal->str().find('^'), std::string::npos);
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options));
+  OS.flush();
+  const std::string Program = C + R"C(
+int main(void) {
+  const uint64_t values[] = {0, 1, 0x7fffffffffffffffull, 0x8000000000000000ull,
+                            0xffffffffffffffffull};
+  for (unsigned x = 0; x != 256; ++x)
+    for (unsigned j = 0; j != 5; ++j) {
+      int64_t signed_byte = x < 128 ? (int64_t)x : (int64_t)x - 256;
+      uint64_t expected = (uint64_t)signed_byte + values[j];
+      if (bitcast_sum(x, values[j]) != expected)
+        return 1;
+    }
+  return 0;
+}
+)C";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
+TEST(HighSymSimplify, IntegerPrefixSourceKeepsTruncationBeforeWidening) {
+  auto Param = [](int Id) {
+    auto V = tempOfSize(Id, 8);
+    V.Kind = MedVar::Param;
+    return HighExpr::makeVar(V, NdType::makeInt(8, false));
+  };
+  auto X = Param(0), Y = Param(1);
+  auto Narrow = HighExpr::makeBinop(NdOp::INT_ADD, X, Y);
+  Narrow->Type = NdType::makeInt(4, false);
+  HighFunc F;
+  F.Name = "prefix_sum";
+  F.Entry = kEntry;
+  F.ReturnType = X->Type;
+  F.Params = {{"x", X->Type, kNoParamReg, 0}, {"y", Y->Type, kNoParamReg, 1}};
+  F.Body = {returnValue(carrySum(integerCast(Narrow, 8), Y))};
+  simplifyExprSemantics(F.Body);
+  EXPECT_EQ(F.Body.front().RetVal->str().find('^'), std::string::npos);
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options));
+  OS.flush();
+  const std::string Program = C + R"C(
+int main(void) {
+  const uint64_t values[] = {0, 1, 0x7fffffffull, 0xffffffffull, 0x100000001ull,
+                            0x7fffffffffffffffull, 0xffffffffffffffffull};
+  for (unsigned i = 0; i != 7; ++i)
+    for (unsigned j = 0; j != 7; ++j) {
+      uint64_t expected = (uint64_t)(uint32_t)(values[i] + values[j]) + values[j];
+      if (prefix_sum(values[i], values[j]) != expected)
+        return 1;
+    }
+  return 0;
+}
+)C";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
+TEST(HighSymSimplify, WidenedCapturedFlagsRetainTheirAssignmentConversion) {
+  auto Param = [](int Id) {
+    auto V = tempOfSize(Id, 4);
+    V.Kind = MedVar::Param;
+    return HighExpr::makeVar(V, NdType::makeInt(4, false));
+  };
+  auto X = Param(0), Y = Param(1);
+  auto Captured = HighExpr::makeVar(tempOfSize(10, 8));
+  auto Equal = HighExpr::makeBinop(NdOp::INT_EQUAL, X, Y);
+  auto Less = HighExpr::makeBinop(NdOp::INT_LESS, X, Y);
+  auto Packed = HighExpr::makeBinop(
+      NdOp::INT_OR,
+      HighExpr::makeBinop(NdOp::INT_MULT, HighExpr::makeConst(64, 4),
+                          integerCast(Equal, 4)),
+      integerCast(Less, 4));
+  auto Bit = [&](unsigned Shift) {
+    auto Field = HighExpr::makeBinop(NdOp::INT_RIGHT, Captured,
+                                     HighExpr::makeConst(Shift, 8));
+    return HighExpr::makeBinop(
+        NdOp::INT_EQUAL,
+        HighExpr::makeBinop(NdOp::INT_AND, Field, HighExpr::makeConst(1, 8)),
+        HighExpr::makeConst(0, 8));
+  };
+  HighFunc F;
+  F.Name = "widened_order";
+  F.Entry = kEntry;
+  F.ReturnType = X->Type;
+  F.Params = {{"x", X->Type, kNoParamReg, 0}, {"y", Y->Type, kNoParamReg, 1}};
+  F.Body = {assignValue(Captured, Packed),
+            returnValue(HighExpr::makeBinop(NdOp::BOOL_AND, Bit(6), Bit(0)))};
+  simplifyExprSemantics(F.Body);
+  EXPECT_FALSE(containsNode(F.Body.back().RetVal, Captured))
+      << F.Body.back().RetVal->str();
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options));
+  OS.flush();
+  const std::string Program = C + R"C(
+int main(void) {
+  const uint32_t values[] = {0, 1, 39, 64, 255, 0x80000000u, 0xffffffffu};
+  for (unsigned i = 0; i != 7; ++i)
+    for (unsigned j = 0; j != 7; ++j)
+      if (widened_order(values[i], values[j]) != (values[i] > values[j]))
+        return 1;
+  return 0;
+}
+)C";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
+TEST(HighSymSimplify, PhiCopyReadsIncomingDefinitionsBeforeRetiringThem) {
+  auto X = HighExpr::makeVar(tempOfSize(1, 8));
+  auto Y = HighExpr::makeVar(tempOfSize(2, 8));
+  auto Flags = HighExpr::makeVar(tempOfSize(3, 8));
+  auto Out = HighExpr::makeVar(tempOfSize(4, 4));
+  auto Packed = HighExpr::makeBinop(
+      NdOp::INT_OR,
+      HighExpr::makeBinop(
+          NdOp::INT_MULT, HighExpr::makeConst(64, 4),
+          integerCast(HighExpr::makeBinop(NdOp::INT_EQUAL, X, Y), 4)),
+      integerCast(HighExpr::makeBinop(NdOp::INT_LESS, X, Y), 4));
+  auto Bit = [&](unsigned Shift) {
+    return HighExpr::makeBinop(
+        NdOp::INT_EQUAL,
+        HighExpr::makeBinop(NdOp::INT_AND, HighExpr::makeConst(1, 8),
+                            HighExpr::makeBinop(NdOp::INT_RIGHT, Flags,
+                                                HighExpr::makeConst(Shift, 8))),
+        HighExpr::makeConst(0, 8));
+  };
+  auto Copy = assignValue(
+      Out, integerCast(HighExpr::makeBinop(NdOp::INT_AND, Bit(6), Bit(0)), 4));
+  Copy.IsPhiCopy = true;
+  std::vector<HighStmt> Body{assignValue(Flags, integerCast(Packed, 8)), Copy,
+                             returnValue(Bit(0))};
+  simplifyExprSemantics(Body);
+  const auto &After = Body[1].Val;
+  EXPECT_FALSE(containsNode(After, Flags)) << After->str();
+  EXPECT_TRUE(Body[1].IsPhiCopy);
+  EXPECT_TRUE(containsNode(Body.back().RetVal, Flags));
+  const uint64_t Values[] = {0, 1, 63, 64, 255, 0x8000000000000000ULL, ~0ULL};
+  for (uint64_t A : Values)
+    for (uint64_t B : Values)
+      EXPECT_EQ(integerValue(After, A, B).getZExtValue(), A > B);
+
+  auto Labeled = Copy;
+  Labeled.Addr = kEntry + 16;
+  HighStmt Jump;
+  Jump.Kind = StmtKind::Goto;
+  Jump.GotoTarget = Labeled.Addr;
+  std::vector<HighStmt> Entered{Jump, Body.front(), Labeled};
+  simplifyExprSemantics(Entered);
+  EXPECT_TRUE(containsNode(Entered.back().Val, Flags));
+}
+
+TEST(HighSymSimplify, IntegerSelectionsCarryTheirConditionIntoComparisons) {
+  for (uint16_t Bytes : {1, 2, 4, 8}) {
+    auto X = HighExpr::makeVar(tempOfSize(1, Bytes));
+    auto Select = integerSelect(X, HighExpr::makeConst(17, 4),
+                                HighExpr::makeConst(33, 4));
+    auto Before = HighExpr::makeBinop(NdOp::INT_EQUAL, Select,
+                                      HighExpr::makeConst(17, 4));
+    auto After = simplified(Before);
+    EXPECT_EQ(selectionCount(After), 0U) << After->str();
+    for (uint64_t A :
+         {0ULL, 1ULL, 2ULL, 0x80ULL, 0x100ULL, 0x8000000000000000ULL, ~0ULL}) {
+      EXPECT_EQ(integerValue(After, A), integerValue(Before, A));
+      EXPECT_EQ(integerValue(After, A).getZExtValue(),
+                !llvm::APInt(Bytes * 8, A, false, true).isZero());
+    }
+  }
+}
+
+TEST(HighSymSimplify, SelectionBridgePreservesEffectsAndAmbiguousWidths) {
+  auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  auto Call = HighExpr::makeCall("choose", 0x401000, {});
+  Call->Type = NdType::makeInt(8, false);
+  auto Before =
+      HighExpr::makeBinop(NdOp::INT_EQUAL,
+                          integerSelect(Call, HighExpr::makeConst(17, 4),
+                                        HighExpr::makeConst(33, 4)),
+                          HighExpr::makeConst(17, 4));
+  auto After = simplified(Before);
+  EXPECT_TRUE(containsNode(After, Call));
+  for (uint16_t Bytes : {1, 8}) {
+    auto Ambiguous = integerSelect(X, HighExpr::makeConst(17, 4),
+                                   HighExpr::makeConst(17, Bytes));
+    Before = HighExpr::makeBinop(NdOp::INT_EQUAL, Ambiguous,
+                                 HighExpr::makeConst(17, 4));
+    After = simplified(Before);
+    EXPECT_TRUE(containsNode(After, Ambiguous)) << After->str();
+  }
+}
+
+TEST(HighSymSimplify, AssignmentDefinitionsPreserveEveryIntegerConversion) {
+  for (uint16_t SourceBytes : {1, 2, 4, 8})
+    for (uint16_t StoredBytes : {1, 2, 4, 8})
+      for (bool SourceSigned : {false, true})
+        for (bool StoredSigned : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << SourceBytes << ' ' << StoredBytes << ' '
+                       << SourceSigned << ' ' << StoredSigned);
+          auto X =
+              HighExpr::makeVar(tempOfSize(1, SourceBytes),
+                                NdType::makeInt(SourceBytes, SourceSigned));
+          auto Stored =
+              HighExpr::makeVar(tempOfSize(2, StoredBytes),
+                                NdType::makeInt(StoredBytes, StoredSigned));
+          auto Expected = integerCast(X, StoredBytes, StoredSigned);
+          std::vector<HighStmt> Body{
+              assignValue(Stored, X),
+              returnValue(HighExpr::makeBinop(NdOp::INT_EQUAL,
+                                              integerCast(Stored, 8),
+                                              integerCast(Expected, 8)))};
+          simplifyExprSemantics(Body);
+          const auto &Result = Body.back().RetVal;
+          ASSERT_EQ(Result->Kind, ExprKind::Const) << Result->str();
+          EXPECT_EQ(Result->ConstVal, 1U);
+        }
+}
+
+TEST(HighSymSimplify, BooleanInputsReadFullWidthNonzeroTruth) {
+  for (uint16_t Bytes : {1, 2, 4, 8})
+    for (NdOp Op : {NdOp::BOOL_AND, NdOp::BOOL_OR, NdOp::BOOL_XOR}) {
+      auto X = HighExpr::makeVar(tempOfSize(1, Bytes));
+      auto Y = HighExpr::makeVar(tempOfSize(2, Bytes));
+      auto Truth = [&](const ExprPtr &V) {
+        return HighExpr::makeBinop(NdOp::INT_NOTEQUAL, V,
+                                   HighExpr::makeConst(0, Bytes));
+      };
+      auto Before = HighExpr::makeBinop(Op, X, Y);
+      auto Explicit = HighExpr::makeBinop(Op, Truth(X), Truth(Y));
+      auto Difference =
+          simplified(HighExpr::makeBinop(NdOp::INT_XOR, Before, Explicit));
+      ASSERT_EQ(Difference->Kind, ExprKind::Const) << Difference->str();
+      EXPECT_EQ(Difference->ConstVal, 0u);
+      auto After = simplified(Before);
+      for (uint64_t A :
+           {0ULL, 1ULL, 2ULL, 0x80ULL, 0x100ULL, 0x8000000000000000ULL, ~0ULL})
+        for (uint64_t B : {0ULL, 1ULL, 2ULL, 0x80ULL, 0x100ULL,
+                           0x8000000000000000ULL, ~0ULL})
+          EXPECT_EQ(integerValue(After, A, B), integerValue(Before, A, B));
+    }
+}
+
+TEST(HighSymSimplify, ExpandedByteParityKeepsEveryBitAndItsInputWidth) {
+  for (const uint16_t Bytes : {1, 4, 8})
+    for (const bool Corrupt : {false, true}) {
+      auto X = HighExpr::makeVar(tempOfSize(1, Bytes));
+      auto Word =
+          HighExpr::makeBinop(NdOp::INT_ADD, X, HighExpr::makeConst(73, Bytes));
+      ExprPtr Fold = HighExpr::makeConst(0, Bytes);
+      for (unsigned Bit = 0; Bit < 8; ++Bit) {
+        const auto SourceBit = Corrupt && Bit == 3 ? 2 : Bit;
+        auto Part = HighExpr::makeBinop(
+            NdOp::INT_AND,
+            HighExpr::makeBinop(NdOp::INT_RIGHT, Word,
+                                HighExpr::makeConst(SourceBit, 1)),
+            HighExpr::makeConst(1, Bytes));
+        Fold = HighExpr::makeBinop(NdOp::INT_XOR, Fold, Part);
+      }
+      const auto Before = HighExpr::makeBinop(NdOp::INT_EQUAL, Fold,
+                                              HighExpr::makeConst(0, Bytes));
+      const auto After = simplified(Before);
+      bool HasPopcount = false;
+      std::vector<ExprPtr> Work{After};
+      while (!Work.empty()) {
+        const auto E = Work.back();
+        Work.pop_back();
+        HasPopcount |= E->Kind == ExprKind::UnaryOp && E->Op == NdOp::POPCOUNT;
+        Work.insert(Work.end(), E->Operands.begin(), E->Operands.end());
+      }
+      EXPECT_EQ(HasPopcount, !Corrupt) << After->str();
+      for (unsigned Value = 0; Value < 256; ++Value) {
+        EXPECT_EQ(integerValue(After, Value), integerValue(Before, Value));
+        EXPECT_EQ(integerValue(After, ~uint64_t(Value)),
+                  integerValue(Before, ~uint64_t(Value)));
+      }
+    }
+}
+
+TEST(HighSymSimplify, RecoveredParitySourceCountsOnlyItsUnsignedByte) {
+  auto Parameter = [](int Id) {
+    auto V = tempOfSize(Id, 1);
+    V.Kind = MedVar::Param;
+    return HighExpr::makeVar(V, NdType::makeInt(1, true));
+  };
+  const auto X = Parameter(0), Y = Parameter(1);
+  const auto Byte = HighExpr::makeBinop(NdOp::INT_SUB, X, Y);
+  auto Sum = HighExpr::makeConst(0, 1);
+  for (unsigned Bit = 0; Bit < 8; ++Bit)
+    Sum = HighExpr::makeBinop(
+        NdOp::INT_ADD, Sum,
+        HighExpr::makeBinop(NdOp::INT_AND,
+                            HighExpr::makeBinop(NdOp::INT_RIGHT, Byte,
+                                                HighExpr::makeConst(Bit, 1)),
+                            HighExpr::makeConst(1, 1)));
+  HighFunc F;
+  F.Name = "byte_parity_count";
+  F.Entry = kEntry;
+  F.ReturnType = NdType::makeInt(1, false);
+  F.Params = {{"x", X->Type, kNoParamReg, 0}, {"y", Y->Type, kNoParamReg, 1}};
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeBinop(
+      NdOp::INT_EQUAL,
+      HighExpr::makeBinop(NdOp::INT_AND, Sum, HighExpr::makeConst(1, 1)),
+      HighExpr::makeConst(0, 1));
+  F.Body.push_back(std::move(Return));
+  simplifyExprSemantics(F.Body);
+  std::string C;
+  llvm::raw_string_ostream Out(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({F}, Out, Options));
+  Out.flush();
+  ASSERT_NE(C.find("__builtin_popcount"), std::string::npos) << C;
+  const auto Program = C + R"C(
+int main(void) {
+  for (unsigned x = 0; x < 256; ++x)
+    for (unsigned y = 0; y < 256; ++y) {
+      unsigned byte = (x - y) & 255u, odd = 0;
+      for (unsigned bit = 0; bit < 8; ++bit)
+        odd ^= (byte >> bit) & 1u;
+      if (byte_parity_count((int8_t)x, (int8_t)y) != !odd)
+        return 1;
+    }
+  return 0;
+}
+)C";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
+TEST(HighExprSimplify, CrossDefinitionFlagDemandDoesNotKeepTheWholeByte) {
+  auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  auto Noise = HighExpr::makeVar(tempOfSize(2, 4));
+  auto Flags = HighExpr::makeVar(tempOfSize(3, 4));
+  auto Copy = HighExpr::makeVar(tempOfSize(4, 4));
+  auto Packed = HighExpr::makeBinop(
+      NdOp::INT_OR,
+      HighExpr::makeBinop(NdOp::INT_AND, X, HighExpr::makeConst(0x41, 4)),
+      HighExpr::makeBinop(NdOp::INT_AND, Noise,
+                          HighExpr::makeConst(~uint64_t(0x41), 4)));
+  const auto Text = Packed->str();
+  HighFunc F;
+  F.ReturnType = NdType::makeInt(4, false);
+  F.Body = {assignValue(Flags, Packed), assignValue(Copy, Flags),
+            returnValue(HighExpr::makeBinop(NdOp::INT_AND, Copy,
+                                            HighExpr::makeConst(0x41, 4)))};
+  zeroUndemandedUnknownBytes(F, Arch::X64);
+  EXPECT_FALSE(containsNode(F.Body[0].Val, Noise)) << F.Body[0].Val->str();
+  EXPECT_EQ(Packed->str(), Text);
+  for (uint64_t A = 0; A != 256; ++A)
+    EXPECT_EQ(integerValue(F.Body[0].Val, A).getZExtValue() & 0x41, A & 0x41);
+}
+
+TEST(HighExprSimplify, ScaledCapturedPredicateDoesNotKeepUnobservedLowBits) {
+  for (bool Swap : {false, true}) {
+    auto X = HighExpr::makeVar(tempOfSize(1, 4));
+    auto Noise = HighExpr::makeVar(tempOfSize(2, 1));
+    auto Predicate = HighExpr::makeVar(tempOfSize(3, 1));
+    auto Flags = HighExpr::makeVar(tempOfSize(4, 4));
+    auto Test = HighExpr::makeUnary(NdOp::BOOL_NOT, Noise);
+    auto Wide = extendInteger(Predicate, 4);
+    auto Scale = HighExpr::makeConst(4, 4);
+    auto Packed = HighExpr::makeBinop(NdOp::INT_OR, X,
+                                      HighExpr::makeBinop(NdOp::INT_MULT,
+                                                          Swap ? Scale : Wide,
+                                                          Swap ? Wide : Scale));
+    HighFunc F;
+    F.ReturnType = NdType::makeInt(4, false);
+    F.Body = {assignValue(Predicate, Test), assignValue(Flags, Packed),
+              returnValue(HighExpr::makeBinop(
+                  NdOp::INT_AND,
+                  HighExpr::makeBinop(NdOp::INT_RIGHT, Flags,
+                                      HighExpr::makeConst(8, 1)),
+                  HighExpr::makeConst(0x77, 4)))};
+    zeroUndemandedUnknownBytes(F, Arch::X64);
+    EXPECT_FALSE(containsNode(F.Body[0].Val, Noise)) << F.Body[0].Val->str();
+    EXPECT_EQ(F.Body[0].Val->Kind, ExprKind::Const);
+    EXPECT_EQ(F.Body[0].Val->ConstVal, 0u);
+    EXPECT_TRUE(containsNode(Test, Noise));
+
+    // A second reader observes the actual predicate and must keep its input.
+    F.Body[0].Val = Test;
+    F.Body[1].Val = Packed;
+    F.Body.push_back(returnValue(
+        HighExpr::makeBinop(NdOp::INT_AND, Flags, HighExpr::makeConst(4, 4))));
+    zeroUndemandedUnknownBytes(F, Arch::X64);
+    EXPECT_TRUE(containsNode(F.Body[0].Val, Noise));
+  }
+}
+
+TEST(HighExprSimplify, ScaledBitDemandKeepsImplicitPromotionsAndEffects) {
+  auto X = HighExpr::makeVar(tempOfSize(1, 1), NdType::makeInt(1, true));
+  auto Narrow = HighExpr::makeVar(tempOfSize(2, 1), X->Type);
+  auto Wide = HighExpr::makeVar(tempOfSize(3, 4), NdType::makeInt(4, false));
+  auto Product =
+      HighExpr::makeBinop(NdOp::INT_MULT, Narrow, HighExpr::makeConst(4, 4));
+  Product->Type = Wide->Type;
+  HighFunc F;
+  F.ReturnType = Wide->Type;
+  F.Body = {assignValue(Narrow, X), assignValue(Wide, Product),
+            returnValue(HighExpr::makeBinop(NdOp::INT_RIGHT, Wide,
+                                            HighExpr::makeConst(16, 1)))};
+  zeroUndemandedUnknownBytes(F, Arch::X64);
+  EXPECT_EQ(F.Body[0].Val, X);
+
+  for (bool Load : {false, true}) {
+    auto Predicate = HighExpr::makeVar(tempOfSize(4, 1));
+    auto Flags = HighExpr::makeVar(tempOfSize(5, 4));
+    auto Effect = Load ? HighExpr::makeLoad(HighExpr::makeConst(0x1000, 8),
+                                            NdType::makeInt(1, false))
+                       : HighExpr::makeCall("observe", 0x401000, {});
+    Effect->Type = NdType::makeInt(1, false);
+    auto Test = HighExpr::makeUnary(NdOp::BOOL_NOT, Effect);
+    F.Body = {
+        assignValue(Predicate, Test),
+        assignValue(Flags, HighExpr::makeBinop(NdOp::INT_MULT,
+                                               extendInteger(Predicate, 4),
+                                               HighExpr::makeConst(4, 4))),
+        returnValue(HighExpr::makeBinop(NdOp::INT_RIGHT, Flags,
+                                        HighExpr::makeConst(8, 1)))};
+    zeroUndemandedUnknownBytes(F, Arch::X64);
+    EXPECT_TRUE(containsNode(F.Body[0].Val, Effect));
+  }
+}
+
+TEST(HighExprSimplify, ScaledPredicateSourceRetainsItsProviderInvocation) {
+  auto V = tempOfSize(0, 4);
+  V.Kind = MedVar::Param;
+  auto X = HighExpr::makeVar(V, NdType::makeInt(4, false));
+  auto Predicate = HighExpr::makeVar(tempOfSize(1, 1));
+  auto Flags = HighExpr::makeVar(tempOfSize(2, 4));
+  auto Call = HighExpr::makeCall("next_value", 0x401000, {});
+  Call->Type = NdType::makeInt(4, true);
+  auto Test = HighExpr::makeUnary(NdOp::BOOL_NOT, Call);
+  Test->Type = Predicate->Type;
+  HighFunc F;
+  F.Name = "high_fields";
+  F.Entry = kEntry;
+  F.ReturnType = X->Type;
+  F.Params = {{"x", X->Type, kNoParamReg, 0}};
+  F.Body = {
+      assignValue(Predicate, Test),
+      assignValue(Flags, HighExpr::makeBinop(
+                             NdOp::INT_OR, X,
+                             HighExpr::makeBinop(NdOp::INT_MULT,
+                                                 extendInteger(Predicate, 4),
+                                                 HighExpr::makeConst(4, 4)))),
+      returnValue(
+          HighExpr::makeBinop(NdOp::INT_AND,
+                              HighExpr::makeBinop(NdOp::INT_RIGHT, Flags,
+                                                  HighExpr::makeConst(8, 1)),
+                              HighExpr::makeConst(0x77, 4)))};
+  zeroUndemandedUnknownBytes(F, Arch::X64);
+  EXPECT_TRUE(containsNode(F.Body.front().Val, Call));
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options));
+  OS.flush();
+  const std::string Program = C + R"C(
+static unsigned calls;
+static uint32_t noise;
+int next_value(void) { ++calls; return noise; }
+int main(void) {
+  const uint32_t values[] = {0, 1, 4, 256, 65536, 0x80000000u, 0xffffffffu};
+  for (noise = 0; noise != 256; ++noise)
+    for (unsigned i = 0; i != 7; ++i) {
+      calls = 0;
+      if (high_fields(values[i]) != ((values[i] >> 8) & 0x77) || calls != 1)
+        return 1;
+    }
+  return 0;
+}
+)C";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
+TEST(HighExprSimplify, CrossDefinitionDemandIncludesEveryReaderAndLoopArrival) {
+  auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  auto Noise = HighExpr::makeVar(tempOfSize(2, 4));
+  auto Flags = HighExpr::makeVar(tempOfSize(3, 4));
+  auto Packed = HighExpr::makeBinop(
+      NdOp::INT_OR,
+      HighExpr::makeBinop(NdOp::INT_AND, X, HighExpr::makeConst(0x41, 4)),
+      HighExpr::makeBinop(NdOp::INT_AND, Noise, HighExpr::makeConst(4, 4)));
+  HighFunc F;
+  F.ReturnType = NdType::makeInt(4, false);
+  HighStmt Loop;
+  Loop.Kind = StmtKind::While;
+  Loop.Cond =
+      HighExpr::makeBinop(NdOp::INT_AND, Flags, HighExpr::makeConst(4, 4));
+  Loop.Body = {assignValue(Flags, Packed)};
+  F.Body = {assignValue(Flags, Packed), Loop,
+            returnValue(HighExpr::makeBinop(NdOp::INT_AND, Flags,
+                                            HighExpr::makeConst(0x41, 4)))};
+  zeroUndemandedUnknownBytes(F, Arch::X64);
+  EXPECT_TRUE(containsNode(F.Body[0].Val, Noise));
+  EXPECT_TRUE(containsNode(F.Body[1].Body[0].Val, Noise));
+
+  F.Body.push_back(returnValue(Flags));
+  const auto Before = F.Body[0].Val;
+  zeroUndemandedUnknownBytes(F, Arch::X64);
+  EXPECT_EQ(F.Body[0].Val, Before);
+}
+
+TEST(HighExprSimplify, BitDemandUnifiesAllRenamedViewsOfTheSameLocal) {
+  auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  auto Noise = HighExpr::makeVar(tempOfSize(2, 4));
+  auto Defined = HighExpr::makeVar(tempOfSize(3, 4));
+  auto Alias = HighExpr::makeVar(tempOfSize(93, 4));
+  Defined->Var.RenameTag = Alias->Var.RenameTag = 12;
+  auto Packed = HighExpr::makeBinop(
+      NdOp::INT_OR,
+      HighExpr::makeBinop(NdOp::INT_AND, X, HighExpr::makeConst(0x41, 4)),
+      HighExpr::makeBinop(NdOp::INT_AND, Noise, HighExpr::makeConst(4, 4)));
+  HighFunc F;
+  F.ReturnType = NdType::makeInt(4, false);
+  F.Body = {assignValue(Defined, Packed),
+            returnValue(HighExpr::makeBinop(
+                NdOp::INT_OR,
+                HighExpr::makeBinop(NdOp::INT_AND, Defined,
+                                    HighExpr::makeConst(1, 4)),
+                HighExpr::makeBinop(NdOp::INT_AND, Alias,
+                                    HighExpr::makeConst(64, 4))))};
+  zeroUndemandedUnknownBytes(F, Arch::X64);
+  EXPECT_FALSE(containsNode(F.Body[0].Val, Noise));
+  for (uint64_t A = 0; A != 256; ++A)
+    EXPECT_EQ(integerValue(F.Body[0].Val, A).getZExtValue() & 0x41, A & 0x41);
+}
+
+TEST(HighExprSimplify, CrossDefinitionBitProjectionKeepsLoadsAndDivision) {
+  for (bool Load : {false, true}) {
+    auto X = HighExpr::makeVar(tempOfSize(1, 4));
+    auto T = HighExpr::makeVar(tempOfSize(2, 4));
+    auto Effect = std::make_shared<HighExpr>();
+    Effect->Type = NdType::makeInt(4, false);
+    if (Load) {
+      Effect->Kind = ExprKind::Load;
+      Effect->Operands = {HighExpr::makeConst(0x1000, 8)};
+    } else {
+      Effect = HighExpr::makeBinop(NdOp::INT_DIV, HighExpr::makeConst(1, 4), X);
+    }
+    auto Packed = HighExpr::makeBinop(
+        NdOp::INT_OR, X,
+        HighExpr::makeBinop(NdOp::INT_LEFT, Effect, HighExpr::makeConst(8, 1)));
+    HighFunc F;
+    F.ReturnType = NdType::makeInt(4, false);
+    F.Body = {assignValue(T, Packed),
+              returnValue(HighExpr::makeBinop(NdOp::INT_AND, T,
+                                              HighExpr::makeConst(1, 4)))};
+    zeroUndemandedUnknownBytes(F, Arch::X64);
+    EXPECT_TRUE(containsNode(F.Body[0].Val, Effect));
+  }
+}
+
+TEST(HighExprSimplify, BitDemandRetainsImplicitAssignmentConversions) {
+  auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  auto Narrow = HighExpr::makeVar(tempOfSize(2, 4), NdType::makeInt(4, true));
+  auto Wide = HighExpr::makeVar(tempOfSize(3, 8), NdType::makeInt(8, true));
+  auto Sign =
+      HighExpr::makeBinop(NdOp::INT_AND, X, HighExpr::makeConst(0x80000000, 4));
+  Sign->Type = Narrow->Type;
+  HighFunc F;
+  F.ReturnType = NdType::makeInt(8, true);
+  F.Body = {assignValue(Narrow, Sign), assignValue(Wide, Narrow),
+            returnValue(HighExpr::makeBinop(NdOp::INT_RIGHT, Wide,
+                                            HighExpr::makeConst(32, 1)))};
+  zeroUndemandedUnknownBytes(F, Arch::X64);
+  EXPECT_EQ(F.Body[0].Val, Sign);
+  EXPECT_EQ(F.Body[1].Val, Narrow);
+  EXPECT_TRUE(containsNode(F.Body[0].Val, X));
+}
+
+TEST(HighExprSimplify, PackedPredicatesKeepOnlyTheirOwnObservedBit) {
+  const auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  const auto Y = HighExpr::makeVar(tempOfSize(2, 4));
+  const auto Predicate = HighExpr::makeBinop(NdOp::INT_LESS, X, Y);
+  for (unsigned Bit = 0; Bit != 32; ++Bit) {
+    auto Flag = HighExpr::makeBinop(NdOp::INT_MULT,
+                                    HighExpr::makeConst(uint64_t{1} << Bit, 4),
+                                    extendInteger(Predicate, 4));
+    auto After = basicSimplified(projectHighIntegerBits(Flag, 0x41));
+    if (Bit != 0 && Bit != 6)
+      EXPECT_FALSE(containsNode(After, X)) << After->str();
+    for (uint64_t A = 0; A != 32; ++A)
+      for (uint64_t B = 0; B != 32; ++B)
+        EXPECT_EQ(integerValue(After, A, B).getZExtValue() & 0x41,
+                  (A < B ? uint64_t{1} << Bit : 0) & 0x41);
+  }
+
+  auto Call = std::make_shared<HighExpr>();
+  Call->Kind = ExprKind::Call;
+  Call->CallTarget = "observe";
+  Call->Type = NdType::makeInt(4, false);
+  auto Observed = HighExpr::makeBinop(NdOp::INT_EQUAL, Call, X);
+  auto Flag = HighExpr::makeBinop(NdOp::INT_MULT, HighExpr::makeConst(4, 4),
+                                  extendInteger(Observed, 4));
+  EXPECT_TRUE(containsNode(projectHighIntegerBits(Flag, 0x41), Call));
+}
+
+TEST(HighExprSimplify, EqualityWithMaskedCapturedWordReadsOnlyChangedBits) {
+  for (uint16_t Bytes : {1, 2, 4, 8}) {
+    auto X = HighExpr::makeVar(tempOfSize(1, Bytes));
+    for (NdOp MaskOp : {NdOp::INT_AND, NdOp::INT_OR})
+      for (NdOp Compare : {NdOp::INT_EQUAL, NdOp::INT_NOTEQUAL})
+        for (uint64_t Mask :
+             {0ull, 1ull, 0x41ull, 0x80ull, 0xfffffffeull, ~0ull}) {
+          auto Selected =
+              HighExpr::makeBinop(MaskOp, X, HighExpr::makeConst(Mask, Bytes));
+          auto Before = HighExpr::makeBinop(Compare, X, Selected);
+          auto After = basicSimplified(Before);
+          for (uint64_t A = 0; A != 256; ++A) {
+            EXPECT_EQ(integerValue(After, A), integerValue(Before, A));
+            EXPECT_EQ(integerValue(After, ~A), integerValue(Before, ~A));
+          }
+        }
+  }
+  auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  auto Flags = HighExpr::makeVar(tempOfSize(2, 4));
+  auto Noise = HighExpr::makeVar(tempOfSize(3, 4));
+  auto Packed = HighExpr::makeBinop(
+      NdOp::INT_OR,
+      HighExpr::makeBinop(NdOp::INT_AND, X, HighExpr::makeConst(1, 4)),
+      HighExpr::makeBinop(NdOp::INT_AND, Noise,
+                          HighExpr::makeConst(0xfffffffe, 4)));
+  HighFunc F;
+  F.ReturnType = NdType::makeInt(1, false);
+  F.Body = {assignValue(Flags, Packed),
+            returnValue(HighExpr::makeBinop(
+                NdOp::INT_EQUAL, Flags,
+                HighExpr::makeBinop(NdOp::INT_AND, Flags,
+                                    HighExpr::makeConst(0xfffffffe, 4))))};
+  simplifyAllExprs(F.Body);
+  zeroUndemandedUnknownBytes(F, Arch::X64);
+  EXPECT_FALSE(containsNode(F.Body[0].Val, Noise));
+
+  auto Load = std::make_shared<HighExpr>();
+  Load->Kind = ExprKind::Load;
+  Load->Type = NdType::makeInt(4, false);
+  Load->Operands = {HighExpr::makeConst(0x1000, 8)};
+  auto Before = HighExpr::makeBinop(
+      NdOp::INT_EQUAL, Load,
+      HighExpr::makeBinop(NdOp::INT_AND, Load,
+                          HighExpr::makeConst(0xfffffffe, 4)));
+  auto After = basicSimplified(Before);
+  EXPECT_EQ(After->Operands[0], Load);
+  EXPECT_TRUE(containsNode(After->Operands[1], Load));
+}
+
+TEST(HighExprSimplify,
+     CrossDefinitionMasksProjectSelectionsAndKeepTheirCondition) {
+  auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  auto Noise = HighExpr::makeVar(tempOfSize(2, 4));
+  auto T = HighExpr::makeVar(tempOfSize(3, 4));
+  auto Condition = std::make_shared<HighExpr>();
+  Condition->Kind = ExprKind::Call;
+  Condition->CallTarget = "choose";
+  Condition->Type = NdType::makeInt(1, false);
+  auto Select = std::make_shared<HighExpr>();
+  Select->Kind = ExprKind::BinOp;
+  Select->Op = NdOp::SELECT;
+  Select->Type = NdType::makeInt(4, false);
+  auto Padding =
+      HighExpr::makeBinop(NdOp::INT_LEFT, Noise, HighExpr::makeConst(8, 1));
+  Select->Operands = {Condition, HighExpr::makeBinop(NdOp::INT_OR, X, Padding),
+                      HighExpr::makeBinop(NdOp::INT_XOR, X, Padding)};
+  HighFunc F;
+  F.ReturnType = NdType::makeInt(4, false);
+  F.Body = {assignValue(T, Select),
+            returnValue(HighExpr::makeBinop(NdOp::INT_AND, T,
+                                            HighExpr::makeConst(0x41, 4)))};
+  zeroUndemandedUnknownBytes(F, Arch::X64);
+  EXPECT_FALSE(containsNode(F.Body[0].Val, Noise));
+  EXPECT_TRUE(containsNode(F.Body[0].Val, Condition));
+  EXPECT_TRUE(containsNode(Select, Noise));
+}
+
+TEST(HighExprSimplify, ProjectedFlagSourceExecutesWithItsOriginalCall) {
+  auto Param = [](int Id) {
+    auto V = tempOfSize(Id, 4);
+    V.Kind = MedVar::Param;
+    return HighExpr::makeVar(V, NdType::makeInt(4, false));
+  };
+  auto X = Param(0), Y = Param(1);
+  auto T = HighExpr::makeVar(tempOfSize(10, 4));
+  auto CF = HighExpr::makeBinop(NdOp::INT_LESS, X, Y);
+  auto ZF = HighExpr::makeBinop(
+      NdOp::INT_MULT, HighExpr::makeConst(64, 4),
+      extendInteger(HighExpr::makeBinop(NdOp::INT_EQUAL, X, Y), 4));
+  auto PF = HighExpr::makeBinop(
+      NdOp::INT_MULT, HighExpr::makeConst(4, 4),
+      extendInteger(
+          HighExpr::makeBinop(NdOp::INT_EQUAL, Y, HighExpr::makeConst(17, 4)),
+          4));
+  auto Packed = HighExpr::makeBinop(NdOp::INT_OR, extendInteger(CF, 4),
+                                    HighExpr::makeBinop(NdOp::INT_OR, ZF, PF));
+  HighStmt Call;
+  Call.Kind = StmtKind::Call;
+  Call.CallExpr = HighExpr::makeCall("observe", 0x401000, {});
+  Call.CallExpr->Type = NdType::makeVoid();
+  HighFunc F;
+  F.Name = "flag_test";
+  F.Entry = kEntry;
+  F.ReturnType = NdType::makeInt(4, false);
+  F.Params = {{"x", X->Type, kNoParamReg, 0}, {"y", Y->Type, kNoParamReg, 1}};
+  HighStmt Branch;
+  Branch.Kind = StmtKind::IfElse;
+  Branch.Cond = HighExpr::makeBinop(
+      NdOp::INT_EQUAL,
+      HighExpr::makeBinop(NdOp::INT_AND, T, HighExpr::makeConst(0x41, 4)),
+      HighExpr::makeConst(0, 4));
+  Branch.Body = {returnValue(HighExpr::makeConst(1, 4))};
+  F.Body = {assignValue(T, Packed), Call, Branch,
+            returnValue(HighExpr::makeConst(0, 4))};
+  zeroUndemandedUnknownBytes(F, Arch::X64);
+  simplifyAllExprs(F.Body);
+  simplifyExprSemantics(F.Body);
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options));
+  OS.flush();
+  const std::string Program = C + R"C(
+static unsigned calls;
+int observe(void) { ++calls; return 0; }
+int main(void) {
+  const uint32_t values[] = {0, 1, 16, 17, 18, 255, 0x80000000u, 0xffffffffu};
+  for (unsigned i = 0; i != 8; ++i)
+    for (unsigned j = 0; j != 8; ++j) {
+      calls = 0;
+      if (flag_test(values[i], values[j]) != (values[i] > values[j]) || calls != 1)
+        return 1;
+    }
+  return 0;
+}
+)C";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}
+
+TEST(HighExprSimplify, DiscardsDeepPureValuesWithoutKeepingTheirLocalsLive) {
+  for (NdOp Op : {NdOp::INT_AND, NdOp::INT_MULT}) {
+    auto Value = HighExpr::makeVar(tempOfSize(1, kWordBytes));
+    for (int I = 2; I < 258; ++I)
+      Value = HighExpr::makeBinop(NdOp::INT_XOR, Value,
+                                  HighExpr::makeVar(tempOfSize(I, kWordBytes)));
+    std::vector<HighStmt> Body{returnValue(
+        HighExpr::makeBinop(Op, Value, HighExpr::makeConst(0, kWordBytes)))};
+    simplifyAllExprs(Body);
+    ASSERT_EQ(Body.front().RetVal->Kind, ExprKind::Const);
+    EXPECT_EQ(Body.front().RetVal->ConstVal, 0U);
+    EXPECT_EQ(Body.front().RetVal->Type->Size, kWordBytes);
+  }
+}
+
+TEST(HighExprSimplify, DeepZeroMasksKeepObservationsAndPossibleTraps) {
+  auto X = HighExpr::makeVar(tempOfSize(1, kWordBytes));
+  auto Call = HighExpr::makeCall("observe", kEntry, {X});
+  Call->Type = X->Type;
+  auto Load = HighExpr::makeLoad(X, X->Type);
+  auto Divide = HighExpr::makeBinop(NdOp::INT_DIV, X, X);
+  auto Ordered = HighExpr::makeUnary(NdOp::INT_NOT, X);
+  Ordered->MemoryOrdering = NdMemoryOrdering::Acquire;
+  for (const auto &Effect : {Call, Load, Divide, Ordered}) {
+    for (NdOp Op : {NdOp::INT_AND, NdOp::INT_MULT}) {
+      auto Value = Effect;
+      for (int I = 2; I < 258; ++I)
+        Value = HighExpr::makeBinop(
+            NdOp::INT_XOR, Value, HighExpr::makeVar(tempOfSize(I, kWordBytes)));
+      std::vector<HighStmt> Body{returnValue(
+          HighExpr::makeBinop(Op, Value, HighExpr::makeConst(0, kWordBytes)))};
+      simplifyAllExprs(Body);
+      EXPECT_TRUE(containsNode(Body.front().RetVal, Effect));
+    }
+  }
+}
+
+TEST(HighExprSimplify, ZeroMasksDiscardOnlyPureCompleteSelections) {
+  auto X = HighExpr::makeVar(tempOfSize(1, kWordBytes));
+  auto Call = HighExpr::makeCall("observe", kEntry, {X});
+  Call->Type = X->Type;
+  auto Divide = HighExpr::makeBinop(NdOp::INT_DIV, X, X);
+  const auto Select = [&](const ExprPtr &Condition, const ExprPtr &Then,
+                          const ExprPtr &Else) {
+    auto E = std::make_shared<HighExpr>();
+    E->Kind = ExprKind::BinOp;
+    E->Op = NdOp::SELECT;
+    E->Type = X->Type;
+    E->Operands = {Condition, Then, Else};
+    return E;
+  };
+  for (NdOp Op : {NdOp::INT_AND, NdOp::INT_MULT}) {
+    auto Value = Select(X, HighExpr::makeConst(17, kWordBytes), X);
+    auto After = basicSimplified(
+        HighExpr::makeBinop(Op, Value, HighExpr::makeConst(0, kWordBytes)));
+    ASSERT_EQ(After->Kind, ExprKind::Const);
+    EXPECT_EQ(After->ConstVal, 0U);
+    for (const auto &Effect : {Call, Divide})
+      for (unsigned I = 0; I < 3; ++I) {
+        auto Inputs = std::vector<ExprPtr>{X, X, X};
+        Inputs[I] = Effect;
+        auto Kept = basicSimplified(
+            HighExpr::makeBinop(Op, Select(Inputs[0], Inputs[1], Inputs[2]),
+                                HighExpr::makeConst(0, kWordBytes)));
+        EXPECT_TRUE(containsNode(Kept, Effect));
+      }
+    auto Malformed = Select(X, X, HighExpr::makeConst(17, 1));
+    After = basicSimplified(
+        HighExpr::makeBinop(Op, Malformed, HighExpr::makeConst(0, kWordBytes)));
+    EXPECT_TRUE(containsNode(After, Malformed));
+  }
+}
+
+ExprPtr selectedBytes(const ExprPtr &Condition, const ExprPtr &Yes,
+                      const ExprPtr &No, unsigned YesOffset,
+                      uint16_t ResultBytes, NdOp Combine,
+                      bool SignExtend = false) {
+  ExprPtr Result;
+  for (unsigned I = 0; I != 4; ++I) {
+    auto Slice = [&](const ExprPtr &Source, unsigned Offset) {
+      auto E = HighExpr::makeBinop(NdOp::SUBBYTES, Source,
+                                   HighExpr::makeConst(Offset, 4));
+      E->Type = NdType::makeInt(1, true);
+      return E;
+    };
+    auto Select = std::make_shared<HighExpr>();
+    Select->Kind = ExprKind::BinOp;
+    Select->Op = NdOp::SELECT;
+    Select->Type = NdType::makeInt(1, true);
+    Select->Operands = {Condition, Slice(Yes, YesOffset + I), Slice(No, I)};
+    auto Piece = extendInteger(Select, ResultBytes, SignExtend);
+    if (I)
+      Piece = HighExpr::makeBinop(NdOp::INT_LEFT, Piece,
+                                  HighExpr::makeConst(8 * I, ResultBytes));
+    Result = Result ? HighExpr::makeBinop(Combine, Result, Piece) : Piece;
+  }
+  return Result;
+}
+
+size_t selectionCount(const ExprPtr &Root) {
+  size_t Count = 0;
+  std::vector<ExprPtr> Work{Root};
+  while (!Work.empty()) {
+    auto E = Work.back();
+    Work.pop_back();
+    Count += E->Kind == ExprKind::BinOp && E->Op == NdOp::SELECT;
+    Work.insert(Work.end(), E->Operands.begin(), E->Operands.end());
+  }
+  return Count;
+}
+
+TEST(HighExprSimplify, AdjacentSelectedBytesRecoverOneWordSelection) {
+  auto Condition = HighExpr::makeVar(tempOfSize(0, 8));
+  auto Yes = HighExpr::makeVar(tempOfSize(1, 16));
+  auto No = HighExpr::makeVar(tempOfSize(2, 4));
+  for (auto Combine : {NdOp::INT_OR, NdOp::INT_ADD})
+    for (uint16_t Bytes : {4, 8}) {
+      auto Before = selectedBytes(Condition, Yes, No, 4, Bytes, Combine);
+      EXPECT_EQ(selectionCount(Before), 4U);
+      auto After = basicSimplified(Before);
+      EXPECT_EQ(selectionCount(After), 1U) << After->str();
+      EXPECT_EQ(After->Type->Size, Bytes);
+    }
+}
+
+TEST(HighExprSimplify, SelectedByteRecoveryPreservesGuardsAndExtensions) {
+  auto Condition = HighExpr::makeVar(tempOfSize(0, 8));
+  auto Yes = HighExpr::makeVar(tempOfSize(1, 16));
+  auto No = HighExpr::makeVar(tempOfSize(2, 4));
+  for (auto Combine : {NdOp::INT_OR, NdOp::INT_ADD}) {
+    auto Signed = selectedBytes(Condition, Yes, No, 4, 4, Combine, true);
+    EXPECT_GT(selectionCount(basicSimplified(Signed)), 1U);
+    auto Guards = selectedBytes(Condition, Yes, No, 4, 4, Combine);
+    auto Last = Guards->Operands[1]->Operands[0]->Operands[0];
+    ASSERT_EQ(Last->Op, NdOp::SELECT);
+    Last->Operands[0] = HighExpr::makeVar(tempOfSize(3, 8));
+    EXPECT_GT(selectionCount(basicSimplified(Guards)), 1U);
+    auto Load = HighExpr::makeLoad(Condition, Yes->Type);
+    auto Reads = selectedBytes(Condition, Load, No, 4, 4, Combine);
+    EXPECT_TRUE(containsNode(basicSimplified(Reads), Load));
+    auto Effect = HighExpr::makeCall("next_guard", 0x401000, {});
+    Effect->Type = Condition->Type;
+    auto Effects = selectedBytes(Effect, Yes, No, 4, 4, Combine);
+    EXPECT_EQ(selectionCount(basicSimplified(Effects)), 4U);
+    auto Unknown =
+        selectedBytes(HighExpr::makeUndef(8), Yes, No, 4, 4, Combine);
+    EXPECT_EQ(selectionCount(basicSimplified(Unknown)), 4U);
+  }
+}
+
+TEST(HighExprSimplify, SelectedByteGuardsRetainTheirSignedWidening) {
+  auto Narrow = HighExpr::makeVar(tempOfSize(0, 1), NdType::makeInt(1, true));
+  auto Unsigned = HighExpr::makeVar(Narrow->Var, NdType::makeInt(1, false));
+  auto Guard = [&](const ExprPtr &Input) {
+    return HighExpr::makeBinop(NdOp::INT_EQUAL, integerCast(Input, 8),
+                               HighExpr::makeConst(uint64_t{0} - 128, 8));
+  };
+  auto Yes = HighExpr::makeVar(tempOfSize(1, 16));
+  auto No = HighExpr::makeVar(tempOfSize(2, 4));
+  auto Before = selectedBytes(Guard(Narrow), Yes, No, 4, 4, NdOp::INT_OR);
+  auto Last = Before->Operands[1]->Operands[0]->Operands[0];
+  ASSERT_EQ(Last->Op, NdOp::SELECT);
+  Last->Operands[0] = Guard(Unsigned);
+  EXPECT_GT(selectionCount(basicSimplified(Before)), 1U);
+}
+
+TEST(HighExprSimplify, RecoveredSelectedWordExecutesAtBothSourceWidths) {
+  auto Param = [](int Id, uint16_t Bytes) {
+    auto V = tempOfSize(Id, Bytes);
+    V.Kind = MedVar::Param;
+    return HighExpr::makeVar(V, NdType::makeInt(Bytes, false));
+  };
+  auto Condition = Param(0, 8), Yes = Param(1, 16), No = Param(2, 4);
+  for (uint16_t Bytes : {4, 8}) {
+    HighFunc F;
+    F.Name = "selected_word";
+    F.Entry = kEntry;
+    F.ReturnType = NdType::makeInt(Bytes, false);
+    F.Params = {{"guard", Condition->Type, kNoParamReg, 0},
+                {"yes", Yes->Type, kNoParamReg, 1},
+                {"no", No->Type, kNoParamReg, 2}};
+    F.Body = {returnValue(basicSimplified(
+        selectedBytes(Condition, Yes, No, 4, Bytes,
+                      Bytes == 4 ? NdOp::INT_OR : NdOp::INT_ADD)))};
+    ASSERT_EQ(selectionCount(F.Body.front().RetVal), 1U);
+    std::string C;
+    llvm::raw_string_ostream OS(C);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options));
+    OS.flush();
+    const std::string Program = C + R"C(
+int main(void) {
+  const uint64_t guards[] = {0, 1, 2, 0x100, 0x8000000000000000ULL, ~0ULL};
+  const uint64_t words[] = {0, 1, 0x80ff00ffULL, 0x8000000000000000ULL, ~0ULL};
+  for (unsigned g = 0; g != 6; ++g)
+    for (unsigned i = 0; i != 5; ++i)
+      for (unsigned j = 0; j != 5; ++j) {
+        const unsigned __int128 value =
+            ((unsigned __int128)words[i] << 64) | words[j];
+        const uint32_t no = (uint32_t)words[i];
+        const uint32_t want = guards[g] ? (uint32_t)(value >> 32) : no;
+        if (selected_word(guards[g], value, no) != (uint64_t)want)
+          return 1;
+      }
+  return 0;
+}
+)C";
+    source_call_execution_test::compileAndRun(Program, {"-O0"});
+    source_call_execution_test::compileAndRun(Program, {"-O2"});
+  }
+}

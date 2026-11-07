@@ -3220,6 +3220,18 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
     Modules.invalidate(*Projection, llvm::PreservedAnalyses::none());
     Pipeline.run(*Projection, Modules);
   }
+  // DCE can retire every consumer of an architectural EFLAGS snapshot while
+  // retaining its side-effecting inline-asm carrier. Drop only the exact
+  // owned, unused read in this source clone; live snapshots stay in place.
+  for (auto &Function : *Projection)
+    if (ProjectionFunctions.contains(Function))
+      for (auto &Block : Function)
+        for (auto I = Block.begin(); I != Block.end();) {
+          auto *Call = llvm::dyn_cast<llvm::CallInst>(&*I++);
+          if (Call && Call->use_empty() &&
+              isDiscardableX86FlagRead(Opts.TheArch, *Call))
+            Call->eraseFromParent();
+        }
   if (llvm::verifyModule(*Projection, &llvm::errs()))
     return false;
   if (HasVectors) {

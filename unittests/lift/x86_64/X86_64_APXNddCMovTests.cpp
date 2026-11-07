@@ -7,9 +7,11 @@
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 using namespace neverd;
@@ -61,9 +63,10 @@ std::vector<uint8_t> encodeMemory(unsigned Condition, bool W, unsigned PP) {
   };
 }
 
-LiftedInstruction liftX64(const std::vector<uint8_t> &Bytes) {
+LiftedInstruction liftX64(const std::vector<uint8_t> &Bytes,
+                          Arch Target = Arch::X64) {
   Decoder Dec;
-  if (!Dec.init(Arch::X64)) {
+  if (!Dec.init(Target)) {
     ADD_FAILURE() << "failed to initialize x86-64 decoder";
     return {};
   }
@@ -298,3 +301,114 @@ TEST(X86APXNddCMov, MemorySourceAlwaysReadsBeforeSelecting) {
 }
 
 } // namespace
+
+TEST(X86CMov, OrdinaryRegisterFormKeepsWidthAndAllFlagConditions) {
+  for (const Arch Target : {Arch::X86, Arch::X64})
+    for (const unsigned Bytes : {2u, 4u, 8u}) {
+      if (Target == Arch::X86 && Bytes == 8)
+        continue;
+      const uint64_t Initial = Target == Arch::X64
+                                   ? UINT64_C(0x8877665544332211)
+                                   : UINT64_C(0x44332211);
+      const uint64_t Source = Target == Arch::X64 ? UINT64_C(0xfedcba9876543210)
+                                                  : UINT64_C(0x76543210);
+      const uint64_t Mask =
+          Bytes == 8 ? UINT64_MAX : (UINT64_C(1) << (Bytes * 8)) - 1;
+      for (unsigned Condition = 0; Condition < 16; ++Condition) {
+        std::vector<uint8_t> Code;
+        if (Bytes == 2)
+          Code.push_back(0x66);
+        if (Bytes == 8)
+          Code.push_back(0x48);
+        Code.insert(Code.end(), {0x0f, uint8_t(0x40 + Condition), 0xc2});
+        const auto Move = liftX64(Code, Target);
+        ASSERT_EQ(Move.Id, kCMovIds[Condition]);
+        EXPECT_EQ(std::count_if(Move.Ops.begin(), Move.Ops.end(),
+                                [](const LowOp &Op) {
+                                  return Op.Opcode == NdOp::SELECT;
+                                }),
+                  1);
+
+        for (unsigned Flags = 0; Flags < 32; ++Flags) {
+          SCOPED_TRACE(::testing::Message()
+                       << "arch=" << unsigned(Target) << " bytes=" << Bytes
+                       << " condition=" << Condition << " flags=" << Flags);
+          BinaryImage Image;
+          Image.Arch = Target;
+          Image.Bits = Target == Arch::X64 ? Bitness::Bits64 : Bitness::Bits32;
+          NdOpEmulator Emulator(Image);
+          Emulator.setStrictMode(true);
+          Emulator.setRegister(x86reg::RAX, Initial);
+          Emulator.setRegister(x86reg::RDX, Source);
+          setFlags(Emulator, Flags);
+          Emulator.setRegister(x86reg::AF, 1);
+          Emulator.setRegister(x86reg::DF, 1);
+          ASSERT_EQ(Emulator.run(Move.Ops), Move.Ops.size());
+          const auto Selected =
+              conditionResult(Condition, Flags) ? Source : Initial;
+          EXPECT_EQ(Emulator.getRegister(x86reg::RAX),
+                    (Selected & Mask) | (Bytes == 2 ? Initial & ~Mask : 0));
+          EXPECT_EQ(Emulator.getRegister(x86reg::RDX), Source);
+          for (const auto &[Register, Bit] :
+               {std::pair{x86reg::CF, 0u}, std::pair{x86reg::PF, 1u},
+                std::pair{x86reg::ZF, 2u}, std::pair{x86reg::SF, 3u},
+                std::pair{x86reg::OF, 4u}})
+            EXPECT_EQ(Emulator.getRegister(Register), (Flags >> Bit) & 1);
+          EXPECT_EQ(Emulator.getRegister(x86reg::AF), 1u);
+          EXPECT_EQ(Emulator.getRegister(x86reg::DF), 1u);
+          EXPECT_FALSE(Emulator.skips().any());
+        }
+      }
+    }
+}
+
+TEST(X86CMov, OrdinaryFalseConditionStillReadsAndCanFault) {
+  constexpr va_t Address = 0x9000;
+  constexpr uint64_t Initial = UINT64_C(0x8877665544332211);
+  for (const unsigned Bytes : {2u, 4u, 8u}) {
+    std::vector<uint8_t> Code;
+    if (Bytes == 2)
+      Code.push_back(0x66);
+    if (Bytes == 8)
+      Code.push_back(0x48);
+    Code.insert(Code.end(), {0x0f, 0x44, 0x02}); // cmove ax/eax/rax,[rdx]
+    const auto Move = liftX64(Code);
+    ASSERT_EQ(Move.Id, X86_INS_CMOVE);
+    for (const bool Mapped : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << "bytes=" << Bytes << " mapped=" << Mapped);
+      BinaryImage Image;
+      Image.Arch = Arch::X64;
+      Image.Bits = Bitness::Bits64;
+      if (Mapped) {
+        Segment Data;
+        Data.VA = Address;
+        Data.Size = 8;
+        Data.Flags = SegmentFlags::Readable;
+        Data.Data.resize(8, 0xa5);
+        Image.Segments.push_back(std::move(Data));
+      }
+      NdOpEmulator Emulator(Image);
+      Emulator.setStrictMode(true);
+      Emulator.setLoadCollect(true);
+      Emulator.setRegister(x86reg::RAX, Initial);
+      Emulator.setRegister(x86reg::RDX, Address);
+      setFlags(Emulator, 0);
+      if (Mapped) {
+        ASSERT_EQ(Emulator.run(Move.Ops), Move.Ops.size());
+        ASSERT_EQ(Emulator.getLoadRecords().size(), 1u);
+        EXPECT_EQ(Emulator.getLoadRecords()[0].Addr, Address);
+        EXPECT_EQ(Emulator.getLoadRecords()[0].Size, Bytes);
+        EXPECT_EQ(Emulator.getRegister(x86reg::RAX),
+                  Bytes == 4 ? Initial & UINT32_MAX : Initial);
+      } else {
+        EXPECT_LT(Emulator.run(Move.Ops), Move.Ops.size());
+        EXPECT_TRUE(Emulator.getLoadRecords().empty());
+        EXPECT_EQ(Emulator.getRegister(x86reg::RAX), Initial);
+      }
+      EXPECT_EQ(Emulator.getRegister(x86reg::RDX), Address);
+      EXPECT_EQ(Emulator.getRegister(x86reg::ZF), 0u);
+      EXPECT_FALSE(Emulator.skips().any());
+    }
+  }
+}

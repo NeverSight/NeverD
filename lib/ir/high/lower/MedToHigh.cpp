@@ -19,6 +19,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 
 #include "../../../loader/Swift/SwiftErrorSourceProjection.h"
+#include "../pass/HighDCEDetail.h"
 #include "AnalysisCall.h"
 #include "HighEntryStackOffsets.h"
 #include "MedMutableToHigh.h"
@@ -682,6 +683,13 @@ const MedOp *MedToHighConverter::uniqueMedDefinition(const MedVar &V) {
     return nullptr;
   indexMedDefinitions();
   return EntryStackOffsets->uniqueDefinition(V);
+}
+
+const PhiNode *MedToHighConverter::uniqueMedPhi(const MedVar &V) {
+  if (!CurMed)
+    return nullptr;
+  indexMedDefinitions();
+  return EntryStackOffsets->uniquePhi(V);
 }
 
 ExprPtr MedToHighConverter::memoryAddressExpr(const MedVar &V,
@@ -1832,7 +1840,19 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
     if (!EarlyCxxRegions)
       structureExceptionRegions(Func, Med);
     attachSEHHandlerEntryCopies(Func, Med);
+    // Keep value/effect cleanup independent of CFG structuring.
+    simplifyAllExprs(Func.Body);
+    zeroUndemandedUnknownBytes(Func, TargetArch);
+    simplifyAllExprs(Func.Body);
+    eliminateUnusedValues(Func);
+    if (SymbolicSimplification) {
+      simplifyExprSemantics(Func.Body, SemanticThreadLimit);
+      zeroUndemandedUnknownBytes(Func, TargetArch);
+      simplifyAllExprs(Func.Body);
+      eliminateUnusedValues(Func);
+    }
     reduceLateGotos(Func);
+    nameRepeatedValues(Func);
     anchorDispatcherEntries(Func);
     Trace.high(Func, "after-exceptions");
     return Func;

@@ -6,9 +6,12 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/solver/BitVectorSolver.h"
 #include "neverd/symbolic/SymExpr.h"
 #include "neverd/symbolic/SymMBA.h"
 #include "neverd/symbolic/SymParse.h"
+
+#include "llvm/ADT/SmallVector.h"
 
 #include <cstdint>
 #include <string>
@@ -106,3 +109,76 @@ TEST(SymMBASelector, RetainsEstablishedCandidatesForIndependentWeights) {
 }
 
 } // namespace
+
+TEST(SymMBASelector, ComplementaryBooleanWordMasksKeepWideDataOpaque) {
+  for (unsigned Width : {3u, 8u, 64u, 129u}) {
+    for (unsigned Form = 0; Form != 3; ++Form) {
+      SCOPED_TRACE(Width);
+      SCOPED_TRACE(Form);
+      SymContext C;
+      auto Q = C.mkVar("control", 1);
+      auto A = C.mkVar("left", Width), B = C.mkVar("right", Width);
+      auto Mask = [&](SymRef Bit) {
+        if (Form == 0)
+          return C.mkNeg(C.mkZExt(Bit, Width));
+        if (Form == 1)
+          return C.mkSExt(Bit, Width);
+        return C.mkAdd(C.mkConst(llvm::APInt::getAllOnes(Width)),
+                       C.mkZExt(Bit, Width));
+      };
+      const auto Root =
+          C.mkOr(C.mkAnd(A, Mask(Q)), C.mkAnd(B, Mask(C.mkNot(Q))));
+      const auto Want = Form == 2 ? C.mkIte(Q, B, A) : C.mkIte(Q, A, B);
+      MBAOptions Options;
+      Options.VerifySamples = 0;
+      Options.MaxWork = 65536;
+      auto Result = simplifyMBADeep(C, Root, Options);
+      EXPECT_EQ(Result.Expr, Want) << C.toString(Result.Expr);
+      EXPECT_LE(Result.Work, Options.MaxWork);
+      neverd::solver::BitVectorSolver Proof(C);
+      EXPECT_EQ(Proof.check(C.mkNe(Root, Result.Expr)),
+                neverd::solver::SatResult::Unsat);
+      for (unsigned Bit = 0; Bit != 2; ++Bit)
+        for (unsigned X = 0; X != 8; ++X)
+          for (unsigned Y = 0; Y != 8; ++Y) {
+            const llvm::APInt Inputs[] = {llvm::APInt(1, Bit),
+                                          llvm::APInt(Width, X),
+                                          llvm::APInt(Width, Y)};
+            EXPECT_EQ(C.eval(Result.Expr, Inputs), C.eval(Root, Inputs));
+          }
+    }
+  }
+}
+
+TEST(SymMBASelector, PartialMasksDoNotBecomeBooleanWordSelections) {
+  SymContext C;
+  auto A = C.mkVar("left", 8), B = C.mkVar("right", 8);
+  auto Mask = C.mkVar("mask", 8);
+  const auto Root = C.mkOr(C.mkAnd(A, Mask), C.mkAnd(B, C.mkNot(Mask)));
+  auto Result = simplifyMBADeep(C, Root).Expr;
+  for (unsigned X : {0u, 0x55u, 0xAAu, 255u})
+    for (unsigned Y : {0u, 0x55u, 0xAAu, 255u})
+      for (unsigned M = 0; M != 256; ++M) {
+        const llvm::APInt Inputs[] = {llvm::APInt(8, X), llvm::APInt(8, Y),
+                                      llvm::APInt(8, M)};
+        EXPECT_EQ(C.eval(Result, Inputs), C.eval(Root, Inputs));
+      }
+}
+
+TEST(SymMBASelector, LargePredicatesDoNotHideACompleteWordChoice) {
+  SymContext C;
+  llvm::SmallVector<SymRef, 64> Terms;
+  for (unsigned I = 0; I != 64; ++I)
+    Terms.push_back(C.mkFreshVar(64, "predicate_input_"));
+  const auto Q = C.mkEq(C.mkAdd(Terms), C.mkZero(64));
+  const auto A = C.mkVar("left", 64), B = C.mkVar("right", 64);
+  const auto Mask = C.mkNeg(C.mkZExt(Q, 64));
+  const auto Root = C.mkOr(C.mkAnd(A, Mask), C.mkAnd(B, C.mkNot(Mask)));
+  MBAOptions Options;
+  Options.MaxWork = 64;
+  Options.VerifySamples = 0;
+  const auto Result = simplifyMBADeep(C, Root, Options);
+  EXPECT_EQ(Result.Expr, C.mkIte(Q, A, B)) << C.toString(Result.Expr);
+  EXPECT_LE(Result.Work, Options.MaxWork);
+  EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+}

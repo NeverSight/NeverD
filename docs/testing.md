@@ -21460,3 +21460,61 @@ and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
 frontend regressions and 91 generated-table tests passed. NeverC's strict
 global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
+
+`NeverDHighCallParameterForwardingTests` checks Win64 argument value identity. Full-width copies and agreeing PHIs may name an incoming parameter; masks, shifts and narrowing copies must retain their computed argument.
+
+`HighControlFlowSemantics.UnusedValuesKeepPlainReadsAndTheirAddresses` checks that unused direct and nested ordinary loads retain their original address and evaluation in HighIR dead-value cleanup.
+
+`HighControlFlowSemantics.SimplifierPublishesSharedReplacementAtEveryUse` checks shared DAG replacement publication in both root orders, independent return values and a stable second cleanup invocation.
+
+`SymExpr.ConditionalConstantWindowsIgnorePredicatesAndRespectWork` and `ConditionalSlicesKeepDifferentAndUnknownArms` check branch-common constant windows, exact work refusal and differing or unknown arms.
+
+`SymKnownBits` carrier, partial-cache and CONCAT refusal regressions check independent facts under exhausted child work and precision recovery on a later query without increasing query limits.
+
+`SymKnownBits` bounded unsigned-remainder regressions cover dynamic nonzero divisors, possibly zero divisors, exhausted dividends and 8/16/32/64/128-bit bounds; the extracted-bit MBA regression checks that a consumer uses the fact without assuming division is partial.
+
+`SymExpr.PlainVariableIndexKeepsLeafIdentityAcrossGrowthAndCopies` checks complete name/width identity, embedded NULs, growth, copies and repeated declarations without creating new nodes.
+
+`SymExpr` variable-membership checks compare structural membership with full variable collection, including context copies and missing IDs. Substitution checks retain unrelated shared payloads, exact root order, non-variable keys and simultaneous replacement semantics.
+
+`SymState` memory-view regressions check whole-word overwrite node counts, independent byte-store equivalence, endian order, partial overwrites, modular relative coordinates and non-allocating materialized reads. Scalar snapshot and restore tests check that memory operations do not fork or replace unrelated scalar state.
+
+`ActivityQueue.StrictPrioritySurvivesPrefixConsumptionAndReinsertion` uses an independent ordered-set oracle through queue copies, activity increases and reinsertion. The assumption-assigned queue regression checks every variable is restored after backtracking, with unchanged model and conflict behavior.
+
+`X86CMov` regressions cover ordinary x86/x64 CMOV through the shared SELECT representation: all 16 conditions, all flag inputs, partial and zero-extending destination writes, unchanged source/flags, and unconditional memory reads that can fault before destination writes.
+
+`NeverDMedPhiPlacementTests` checks a 128-value live join across x86, x64, ARM and AArch64: every required temporary has one complete PHI with its actual incoming edge identities. The membership index is independent of PHI output order.
+
+`NeverDMedTempLivenessTests` checks that block-local temporary definitions need no join PHI, while cross-branch reads and loop-carried temporaries retain theirs. Register and stack carriers keep conservative implicit ABI-use handling.
+
+`HighControlFlowSemantics.LargeSourceDropsUnobservedBitsButKeepsLoads` forces the large-function route and checks exact value cleanup without removing a still-observable memory read.
+
+`HighSymSimplify.LargeConversionHonorsSymbolicOptInAndKeepsLoads` checks the symbolic option on the large-function route, with the option both on and off and with or without a real LOAD.
+
+`HighControlFlowSemantics.LargeSourceNamesDeepConditionalValues` uses a reachable 1025-block function and deep conditional values. Independent HighIR execution checks both selected and unselected paths, and emitted C must contain no depth truncation or unknown-value placeholder.
+
+MedStackAlignment reusable-entry query regressions exercise the existing scoped MedEntryStackOffsets owner after changed definitions, PHI relocation, new incoming edges and duplicate definitions. Repeated known/unknown queries cover four ISAs and three formats. These qualify the upstream implementation from 5b5e901d2 instead of adding a second proof cache.
+
+`CDisplayFrameRecord` index regressions check duplicate-name owner precedence, layout replacement, current propagated types and disabled storage projection. The index is rebuilt with its layout snapshot; mutable types are read from their current slots.
+
+`HighEntryStackOffsets.SharedIndexesKeepDefinitionAndPhiIdentities` checks register/temporary identities, ambiguous PHIs and a new conversion after mutation. Win64 forwarding checks use the same converter-owned definition and PHI indexes as production calls.
+
+HighControlFlowSemantics external-skip tests independently execute all 256 branch choices and preserve earlier nested incoming edges. Batched external-skip ownership must retain statement order and reject outside entries; the current upstream goto-splice and entry-label indexes are retained. Windows exception regressions qualify exceptional control flow.
+
+`HighExprSimplify.NamingCapturedReadsCleansTheirDeadValueConsumers` checks newly pure consumers after expression naming. Zero masks disappear while the captured load and its original address remain.
+
+`NeverDHighFlagReadTests` covers unused/live EFLAGS images, malformed or unowned calls, branch anchors, exact owned x86/x64 LLVM assembly and retained write ordering. LLVM cleanup changes only the source clone; the original module and native code generation stay intact.
+
+HighSymSimplify bitcast, low-prefix, Boolean/selection and incoming-PHI regressions compare exact APInt results and compiled C at O0/O2. Control splits, labels, ambiguous widths, calls, loads and assignment conversions retain their original scope and effect boundaries.
+
+HighSymSimplify expanded-byte-parity tests preserve every input bit at 8/32/64-bit carrier widths and reject repeated-bit impostors. The generated source runs all 65536 signed-byte input pairs at O0 and O2. SymExec and the source bridge share the same population-count value definition; no additional x86 intrinsic capabilities are part of this fix.
+
+HighExprSimplify exact-demand regressions independently check multiple readers, renamed local identities, loop arrivals, integer conversions, predicate scaling and compiled source. Deep discardability retains loads, calls, ordered accesses, malformed selections and possibly trapping division even when their result is unused. The current upstream wrapped-difference equality semantics are preserved.
+
+HighExprSimplify selected-byte regressions recover only contiguous captured-local lanes with matching pure guards. Offset, sign-extension, different-guard, load and unknown-value controls remain unchanged; generated source executes at both result widths and optimization levels.
+
+SymExprCancellation captured-mask tests use independent exhaustive small-word and multiword APInt evaluation. Negative controls retain overlapping carries and uncovered fields; bounded known-bit queries leave unresolved inputs intact. Existing complemented-offset MBA tests qualify the equivalent normalized constructor forms.
+
+SymConditionalControls and SymMBASelector Boolean-word tests use exhaustive small input tables and an independent solver check through 257 bits. Partial-mask and nonfitting-constant controls retain their data semantics; a large opaque predicate must not consume the budget before a complete root choice is recognized.
+
+SymMBARewriteCache regressions compare cold/hot work counts rather than wall-clock thresholds. Completed unchanged subtrees, opaque parent compositions, refused siblings, working-set eviction and option/context/work boundaries retain exact derivation semantics. SymMBASparseContext additionally checks placeholder declaration reuse without hiding caller inputs or carrying declarations across contexts.

@@ -145,8 +145,8 @@ struct SymConditionalStore {
 
 /// The state is a regular value: copying one is what forking a path is, so it
 /// has to sit in a container and be assigned like anything else.  A copy is a
-/// handful of maps of small integers, which is cheap enough that nothing more
-/// elaborate has earned its place yet.
+/// full machine-state fork. Scalar-only queries can omit memory banks and
+/// historical load observations through scalarSnapshot().
 class SymState {
 public:
   SymState(SymContext &Ctx, llvm::endianness Order = llvm::endianness::little)
@@ -154,6 +154,11 @@ public:
 
   SymContext &context() const { return *Ctx; }
   llvm::endianness byteOrder() const { return Order; }
+
+  /// Copy the register and temporary banks, their input epochs and x64 segment
+  /// bases. Memory banks and historical load/input provenance are omitted.
+  /// This projection is for scalar queries, not a replacement memory state.
+  SymState scalarSnapshot() const;
 
   //===--------------------------------------------------------------------===//
   // Registers and temporaries
@@ -196,6 +201,12 @@ public:
   /// This does not establish validity of the actual address. Invalid,
   /// zero-byte, and overflowing absolute requests return an invalid reference.
   SymRef load(SymRef Addr, uint16_t Bytes);
+
+  /// Read only bytes already materialized in this exact address bank. A gap,
+  /// absent bank or invalid range returns an invalid reference. This does not
+  /// create observations, memory regions or load origins, and supplies no new
+  /// alias or accessibility proof.
+  SymRef loadMaterialized(SymRef Addr, uint16_t Bytes);
 
   /// Store \p Value and return whether an exact absolute write was recorded.
   ///
@@ -382,7 +393,7 @@ public:
   size_t numMemoryRegions() const { return Regions.size(); }
 
 private:
-  /// One exact byte view. Scalar writes retain the source word until a read
+  /// One exact byte view. Writes retain the source word until a read
   /// needs a slice, avoiding dead extracts for overwritten whole words.
   struct ByteView {
     SymRef Value;
@@ -457,6 +468,7 @@ private:
 
   /// Join \p Bytes byte expressions into one word, in this state's byte order.
   SymRef joinBytes(llvm::ArrayRef<SymRef> Bytes) const;
+  SymRef joinByteViews(llvm::ArrayRef<ByteView> Views) const;
 
   SymContext *Ctx;
   llvm::endianness Order;

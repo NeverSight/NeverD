@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/backend/c/HighC/HighCWriter.h"
 #include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
@@ -225,3 +226,98 @@ TEST(CDisplayFrameRecord, OveralignedRecordKeepsFrameBytes) {
   }
 }
 } // namespace
+
+TEST(CDisplayFrameRecord, CopyTypesKeepDuplicateOwnersAndObserveNewTypes) {
+  for (bool DuplicateDestination : {false, true}) {
+    SCOPED_TRACE(DuplicateDestination);
+    HighFunc F;
+    F.Entry = 0x1000;
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    HighCWriter Writer(Out, Options, nullptr);
+    Writer.CurrentFunc = &F;
+    auto Value = [](int Id) {
+      MedVar V;
+      V.Kind = MedVar::Temp;
+      V.Id = Id;
+      V.Size = 8;
+      V.TheArch = Arch::X64;
+      return HighExpr::makeVar(V, NdType::makeInt(8, false));
+    };
+    auto Source = Value(1), Bridge = Value(2), Destination = Value(3);
+    const auto Record = NdType::makeNamedRecord("COPIED_RECORD", 8);
+    auto Slot = [&](int64_t Offset, const ExprPtr &V, TypeRef Type) {
+      Writer.FrameSlots[Offset].Name = Writer.varName(V->Var);
+      Writer.FrameSlots[Offset].Type = std::move(Type);
+    };
+    Slot(-64, Source, NdType::makeInt(8, false));
+    Slot(-56, Source, Record);
+    Slot(-48, Bridge, NdType::makeInt(8, false));
+    Slot(-40, Destination, NdType::makeInt(8, false));
+    if (DuplicateDestination)
+      Slot(-32, Destination, NdType::makeInt(8, false));
+    HighStmt First, Second;
+    First.Kind = Second.Kind = StmtKind::Assign;
+    First.Dst = Bridge;
+    First.Val = Source;
+    Second.Dst = Destination;
+    Second.Val = Bridge;
+    F.Body = {First, Second};
+    Writer.propagateFrameSlotCopyTypes(F);
+    ASSERT_TRUE(Writer.FrameSlots.at(-48).Type);
+    EXPECT_EQ(Writer.FrameSlots.at(-48).Type->SourceName, "COPIED_RECORD");
+    EXPECT_EQ(Writer.FrameSlots.at(-40).Type->Kind,
+              DuplicateDestination ? NdTypeKind::Int : NdTypeKind::Struct);
+    if (DuplicateDestination)
+      EXPECT_EQ(Writer.FrameSlots.at(-32).Type->Kind, NdTypeKind::Int);
+  }
+}
+
+TEST(CDisplayFrameRecord, ProjectedReadsUseCurrentSlotsAndFirstNameOwner) {
+  HighFunc F;
+  F.Entry = 0x1000;
+  F.FrameSize = 64;
+  MedVar Value;
+  Value.Kind = MedVar::Temp;
+  Value.Id = 1;
+  Value.Size = 8;
+  Value.TheArch = Arch::X64;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeVar(Value, NdType::makeInt(8, false));
+  F.Body = {Return};
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  std::string Text;
+  llvm::raw_string_ostream Out(Text);
+  HighCWriter Writer(Out, Options, nullptr);
+  Writer.CurrentFunc = &F;
+  Writer.ProjectFrameAliasesIntoStorage = true;
+  const std::string Name = Writer.varName(Value);
+  std::map<int64_t, HighCWriter::NamedFrameSlot> Slots;
+  Slots[-32].Name = Name;
+  Slots[-16].Name = Name;
+  Slots[-16].Type = NdType::makeInt(4, false);
+  Writer.setFrameStorageSlots(Slots);
+  Writer.collectFrameRecordMembers(F, 64, 64);
+  ASSERT_EQ(Writer.FrameRecordMembers.size(), 1u);
+  ASSERT_TRUE(Writer.FrameRecordMembers.count(-32));
+  EXPECT_EQ(Writer.FrameRecordMembers.at(-32).Size, 8u);
+
+  // A new collection owns a new layout, even when the variable keeps its name.
+  Slots.clear();
+  Slots[-8].Name = Name;
+  Slots[-8].Type = NdType::makeInt(4, false);
+  Writer.setFrameStorageSlots(Slots);
+  Writer.collectFrameRecordMembers(F, 64, 64);
+  ASSERT_EQ(Writer.FrameRecordMembers.size(), 1u);
+  ASSERT_TRUE(Writer.FrameRecordMembers.count(-8));
+  EXPECT_EQ(Writer.FrameRecordMembers.at(-8).Size, 4u);
+
+  Writer.ProjectFrameAliasesIntoStorage = false;
+  Writer.collectFrameRecordMembers(F, 64, 64);
+  EXPECT_TRUE(Writer.FrameRecordMembers.empty());
+}

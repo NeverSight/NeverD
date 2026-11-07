@@ -99,7 +99,14 @@ TEST(SymMBAObservedWindow, FinishesFlagWindowsExposedByArithmeticMeasurement) {
                        C.mkZero(Width));
     auto Result = simplifyMBADeep(C, Root);
     EXPECT_EQ(Result.Expr, Selected) << C.toString(Result.Expr);
-    EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+    // Constructor normalization can finish the exact predicate before this
+    // query starts; in that case there is no additional rewrite to report.
+    if (Root == Selected) {
+      EXPECT_FALSE(Result.Changed);
+      EXPECT_EQ(Result.Evidence, MBAEvidence::None);
+    } else {
+      EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+    }
     neverd::solver::BitVectorSolver Proof(C);
     EXPECT_EQ(Proof.check(C.mkNe(Root, Result.Expr)),
               neverd::solver::SatResult::Unsat);

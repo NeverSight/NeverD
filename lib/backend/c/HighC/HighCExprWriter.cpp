@@ -570,32 +570,31 @@ std::string bareFrameRead(std::string Text, int ParentPrec) {
 
 } // anonymous namespace
 
-std::optional<std::pair<int64_t, TypeRef>>
-HighCWriter::projectedSlotRead(const HighExpr &E) const {
-  // The variables the Var printer reads from the storage, under the same
-  // conditions it checks first.
-  if (!ProjectFrameAliasesIntoStorage ||
-      (E.Kind != ExprKind::Var && E.Kind != ExprKind::Phi))
-    return std::nullopt;
-  const std::string RawName = varName(E.Var);
-  const std::string Name = copyForwardName(RawName);
-  if (ReachingCatchFields.count(Name) || ReachingCatchPtrs.count(Name) ||
-      isRegistrationEstablisherFrame(E.Var) || FrameAliases.count(RawName) ||
-      (CurrentFunc &&
-       isSyntheticEntryStackPointer(E.Var, *CurrentFunc, Opts.TheArch)) ||
-      E.Var.Kind == MedVar::Param || isEmittedParamName(Name) ||
-      isCxxCatchObjectName(Name))
-    return std::nullopt;
-  for (const auto &[Disp, Slot] : FrameStorageSlots)
-    if (Slot.Name == Name)
-      return std::pair{Disp, Slot.Type ? Slot.Type : E.Type};
-  return std::nullopt;
-}
-
 void HighCWriter::collectFrameRecordMembers(const HighFunc &Func,
                                             uint64_t FrameBaseOffset,
                                             uint64_t StorageSize) {
   FrameRecordMembers.clear();
+  auto ProjectedSlotRead =
+      [&](const HighExpr &E) -> std::optional<std::pair<int64_t, TypeRef>> {
+    // Keep the Var printer's precedence over projected frame storage.
+    if (!ProjectFrameAliasesIntoStorage ||
+        (E.Kind != ExprKind::Var && E.Kind != ExprKind::Phi))
+      return std::nullopt;
+    const std::string RawName = varName(E.Var);
+    const std::string Name = copyForwardName(RawName);
+    if (ReachingCatchFields.count(Name) || ReachingCatchPtrs.count(Name) ||
+        isRegistrationEstablisherFrame(E.Var) || FrameAliases.count(RawName) ||
+        (CurrentFunc &&
+         isSyntheticEntryStackPointer(E.Var, *CurrentFunc, Opts.TheArch)) ||
+        E.Var.Kind == MedVar::Param || isEmittedParamName(Name) ||
+        isCxxCatchObjectName(Name))
+      return std::nullopt;
+    const auto *Entry = frameStorageSlotNamed(Name);
+    if (!Entry)
+      return std::nullopt;
+    const auto &[Disp, Slot] = *Entry;
+    return std::pair{Disp, Slot.Type ? Slot.Type : E.Type};
+  };
   const bool Wide = getTargetRegInfo(Opts.TheArch).PointerSize == 8;
   auto ScalarWidth = [&](uint64_t Size) {
     return Size == 1 || Size == 2 || Size == 4 || Size == 8 ||
@@ -664,7 +663,7 @@ void HighCWriter::collectFrameRecordMembers(const HighFunc &Func,
                   certifiedFrameStorageDisplacement(Inner ? *Inner : *Operand))
             OutPointers[*Disp].push_back(outParameterRecordPointer(E, I));
         }
-    if (const auto Read = projectedSlotRead(E)) {
+    if (const auto Read = ProjectedSlotRead(E)) {
       NoteAccess(Read->first, Read->second, true, /*Read=*/true);
       return;
     }
@@ -7145,15 +7144,16 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
       // potentially skipped C assignment.
       if (auto Alias = FrameAliases.find(RawName); Alias != FrameAliases.end())
         return frameAddressText(E, Alias->second);
-      for (const auto &[Disp, Slot] : FrameStorageSlots)
-        if (Slot.Name == Name && E.Var.Kind != MedVar::Param &&
-            !isEmittedParamName(Name) && !isCxxCatchObjectName(Name)) {
-          const TypeRef &Type = Slot.Type ? Slot.Type : E.Type;
-          if (auto Member = frameRecordRead(Disp, Type))
-            return bareFrameRead(*Member, ParentPrec);
-          return bareLoad(memoryLoadExpr(Type, frameRecordAddress(Disp)),
-                          ParentPrec);
-        }
+      if (const auto *Entry = frameStorageSlotNamed(Name);
+          Entry && E.Var.Kind != MedVar::Param && !isEmittedParamName(Name) &&
+          !isCxxCatchObjectName(Name)) {
+        const auto &[Disp, Slot] = *Entry;
+        const TypeRef &Type = Slot.Type ? Slot.Type : E.Type;
+        if (auto Member = frameRecordRead(Disp, Type))
+          return bareFrameRead(*Member, ParentPrec);
+        return bareLoad(memoryLoadExpr(Type, frameRecordAddress(Disp)),
+                        ParentPrec);
+      }
     }
     const HighExpr *Forwarded = nullptr;
     if (auto Printed = printedForwardedVar(Name, ParentPrec, &Forwarded);
