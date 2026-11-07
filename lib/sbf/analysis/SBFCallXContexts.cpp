@@ -449,6 +449,8 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
          static_cast<int64_t>(Summary.OutputNarrowScalarCells)},
         {"output_memory_copies",
          static_cast<int64_t>(Summary.OutputMemoryCopies)},
+        {"output_tagged_cases",
+         static_cast<int64_t>(Summary.OutputTaggedCases)},
         {"output_parameterized_words",
          static_cast<int64_t>(Summary.OutputParameterizedWords)},
         {"output_narrow_parameterized_fields",
@@ -471,6 +473,8 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
     Row["applied_parameterized_memory_effects"] = Edge.AppliedMemoryEffects;
     Row["applied_stored_values"] =
         static_cast<int64_t>(Edge.AppliedStoredValues);
+    Row["instantiated_tagged_output_cases"] =
+        static_cast<int64_t>(Edge.InstantiatedTaggedOutputCases);
     Row["instantiated_return_input_expression"] =
         Edge.InstantiatedReturnInputExpression;
     Row["generalized_unknown_inputs"] = Edge.GeneralizedInputs;
@@ -530,7 +534,7 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
   const auto Translation =
       frameTranslationLimit(Program.Low.TheVersion, Program.Config);
   return llvm::json::Object{
-      {"schema", 14},
+      {"schema", 15},
       {"captured_addresses", std::move(Captures)},
       {"distinct_captures_prove_no_alias", false},
       {"frame_coordinates",
