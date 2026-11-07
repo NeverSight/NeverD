@@ -22,6 +22,8 @@ struct Object {
   uint32_t Identity = 0;
   std::string ClassName;
   std::vector<uint8_t> Bytes;
+  // Explicitly reserved byte storage remains charged after logical shrinking.
+  uint64_t ByteReserve = 0;
   std::vector<std::weak_ptr<Object>> Elements;
   std::map<const Field *, uint64_t> Fields;
   uint64_t Length = 0;
@@ -52,6 +54,7 @@ public:
   std::shared_ptr<Object> get(uint64_t identity) const;
   // Resize retained storage only after admitting its growth to the heap budget.
   bool resizeBytes(Object &object, uint64_t size);
+  bool reserveBytes(Object &object, uint64_t capacity);
   bool replaceBytes(Object &object, std::vector<uint8_t> bytes);
   bool replaceMapEntries(Object &object, std::vector<Object::MapEntry> entries);
   std::shared_ptr<Object> classObject(std::string_view name);

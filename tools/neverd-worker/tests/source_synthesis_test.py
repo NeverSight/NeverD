@@ -273,7 +273,7 @@ def multiple_residual_elf(degree, neighbor=False):
 
 
 def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=False,
-                      *, interleaved=False, complemented=False):
+                      *, interleaved=False, complemented=False, neighbor=False):
     # Retain the requested low bits, including observable residual cross terms.
     high_bits = high_bits or (3 if product else 2)
     mask = (0xffffffff << (high_bits - int(product))) & 0xffffffff
@@ -287,7 +287,8 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
         code += bytes.fromhex("89f9")
         if complemented:
             code += bytes.fromhex("83f101")
-        code += bytes.fromhex("81c1") + struct.pack("<I", 2*i)
+        offset = 2*i + int(neighbor and i == 0)
+        code += bytes.fromhex("81c1") + struct.pack("<I", offset)
         code += bytes.fromhex("4189f0 4181c0") + struct.pack("<I", i)
         if product:
             code += bytes.fromhex("4183e0fe 4189d1 4181c1") + struct.pack("<I", 2*i)
@@ -302,7 +303,7 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
         # Keep the independent C oracle in natural order even when the
         # original machine instructions construct the factors differently.
         base = "(x^1U)" if complemented else "x"
-        factors[i] = f"(({base}+{2*i}U){'+' if additive else '^'}{high})"
+        factors[i] = f"(({base}+{offset}U){'+' if additive else '^'}{high})"
     code += bytes.fromhex("01f8 01f0 01d0 c3")
     return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
 
@@ -569,6 +570,8 @@ if __name__ == "__main__":
             ("carry-product-32", *carry_product_elf(32)),
             ("carry-product-partial-23", *carry_product_elf(23, True, 6, 2)),
             ("carry-product-partial-narrow-23", *carry_product_elf(23, True, 6, 3)),
+            ("carry-product-partial-neighbor-47", *carry_product_elf(47, True, 7, 4, neighbor=True)),
+            ("carry-product-partial-complement-neighbor-95", *carry_product_elf(95, True, 8, 5, complemented=True, neighbor=True)),
             ("carry-product-64", *carry_product_elf(64, False)),
             ("carry-cofactor-8", *carry_product_elf(8, True, 5, 2)),
             ("carry-cofactor-projection-24", *carry_product_elf(24, True, 5, 2)),

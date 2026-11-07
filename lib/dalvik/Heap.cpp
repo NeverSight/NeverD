@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 #include "neverd/dalvik/Heap.h"
 
+#include <algorithm>
 #include <cassert>
 
 namespace neverd::mobile::dalvik {
@@ -54,9 +55,9 @@ std::shared_ptr<Object> Heap::get(uint64_t id) const {
   return id && id <= objects.size() ? objects[id - 1] : nullptr;
 }
 bool Heap::replaceBytes(Object &object, std::vector<uint8_t> bytes) {
-  const uint64_t growth = bytes.size() > object.Bytes.size()
-                              ? bytes.size() - object.Bytes.size()
-                              : 0;
+  const auto previous =
+      std::max<uint64_t>(object.Bytes.size(), object.ByteReserve);
+  const uint64_t growth = bytes.size() > previous ? bytes.size() - previous : 0;
   if (growth > limit - used)
     return false;
   used += growth; // Conservative retained capacity; no model GC/reclamation.
@@ -65,13 +66,25 @@ bool Heap::replaceBytes(Object &object, std::vector<uint8_t> bytes) {
   return true;
 }
 bool Heap::resizeBytes(Object &object, uint64_t size) {
-  const uint64_t growth =
-      size > object.Bytes.size() ? size - object.Bytes.size() : 0;
+  const auto previous =
+      std::max<uint64_t>(object.Bytes.size(), object.ByteReserve);
+  const uint64_t growth = size > previous ? size - previous : 0;
   if (growth > limit - used)
     return false;
   used += growth; // Same conservative retained-capacity policy as replacement.
   object.Bytes.resize(size);
   object.Length = size / 2;
+  return true;
+}
+bool Heap::reserveBytes(Object &object, uint64_t capacity) {
+  const auto previous =
+      std::max<uint64_t>(object.Bytes.size(), object.ByteReserve);
+  const auto growth = capacity > previous ? capacity - previous : 0;
+  if (growth > limit - used)
+    return false;
+  used += growth;
+  object.ByteReserve = std::max(object.ByteReserve, capacity);
+  object.Bytes.reserve(capacity);
   return true;
 }
 bool Heap::replaceMapEntries(Object &object,

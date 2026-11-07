@@ -87,15 +87,25 @@ private:
                          const AdmitInstruction &admit);
   struct ParcelState {
     uint32_t position = 0;
+    uint32_t capacity = 0;
     bool recycled = false;
     int32_t error = 0;
     std::function<ExecutionResult(std::span<const uint8_t> &)> view;
     std::function<void()> release;
+    std::function<ExecutionResult(uint64_t, std::span<const uint8_t>)> write;
     std::vector<uint64_t> objects;
-    std::vector<uint64_t> local_objects;
+    struct Reference {
+      uint64_t cookie = 0; // Nonzero denotes a local native object.
+      uint32_t handle = 0;
+    };
+    std::vector<Reference> references;
     std::optional<uint32_t> fd;
   };
   ExecutionResult releaseParcelObjects(ParcelState &state);
+  ExecutionResult acquireParcelObjects(ParcelState &state,
+                                       std::span<const uint8_t> bytes);
+  ExecutionResult retainBinderHandle(uint32_t fd, uint32_t handle);
+  llvm::DenseMap<std::pair<uint32_t, uint32_t>, uint64_t> binder_parcel_handles;
   std::map<uint32_t, ParcelState> parcels;
   // API 28 owned-Parcel pool, in first-empty/first-occupied slot order.
   std::array<uint32_t, 6> parcel_pool{};

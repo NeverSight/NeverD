@@ -152,6 +152,22 @@ llvm::Error Bionic::initializeDex() {
       Thread.PendingCommands.push_back({Device, FD, 0x40046305, Handle, {}});
       return ExecutionResult{};
     };
+    Services.release_binder_handle = [this](uint32_t FD, uint32_t Handle) {
+      using mobile::dalvik::ExecutionResult;
+      using mobile::dalvik::ExecutionStop;
+      auto Device = Kernel.binderConnection(FD);
+      if (!Device || Device != BinderConnection || FD != BinderFD)
+        return ExecutionResult{
+            ExecutionStop::Unsupported,
+            0,
+            {},
+            "Android Binder proxy release requires its original connection"};
+      auto &Thread = binderThread();
+      Thread.UsesBinder = true;
+      Thread.PendingCommands.push_back({Device, FD, 0x40046306, Handle, {}});
+      Thread.PendingCommands.push_back({Device, FD, 0x40046307, Handle, {}});
+      return ExecutionResult{};
+    };
     Services.binder_identity =
         [this](mobile::dalvik::BinderIdentityOperation Op, uint64_t Address) {
           return binderIdentity(Op, Address);
