@@ -100,6 +100,43 @@ SymReadability SymContext::readability(SymRef R) const {
   return ReadabilityCosts[R.index()];
 }
 
+uint32_t SymContext::minimumVariableId(SymRef R) const {
+  while (MinimumVariables.size() <= R.index()) {
+    const auto Current = SymRef(uint32_t(MinimumVariables.size()));
+    uint32_t Minimum = std::numeric_limits<uint32_t>::max();
+    if (isVar(Current))
+      Minimum = varId(Current);
+    else
+      for (const auto Child : operands(Current))
+        Minimum = std::min(Minimum, MinimumVariables[Child.index()]);
+    MinimumVariables.push_back(Minimum);
+  }
+  return MinimumVariables[R.index()];
+}
+
+bool SymContext::containsVariable(SymRef R, uint32_t VarIdx) const {
+  if (VarIdx >= Vars.size())
+    return false;
+  const auto Minimum = minimumVariableId(R);
+  if (Minimum >= VarIdx)
+    return Minimum == VarIdx;
+  llvm::SmallDenseSet<uint32_t,
+                      limits::symbolic::kSymExprTraversalInlineBuckets>
+      Seen;
+  llvm::SmallVector<SymRef, 32> Work{R};
+  while (!Work.empty()) {
+    const auto Current = Work.pop_back_val();
+    const auto Least = MinimumVariables[Current.index()];
+    if (Least == VarIdx)
+      return true;
+    if (Least > VarIdx || !Seen.insert(Current.index()).second)
+      continue;
+    const auto Children = operands(Current);
+    Work.append(Children.begin(), Children.end());
+  }
+  return false;
+}
+
 void SymContext::collectVars(SymRef R,
                              llvm::SmallVectorImpl<uint32_t> &Out) const {
   llvm::SmallDenseSet<uint32_t,
@@ -137,6 +174,12 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
   std::vector<SymRef> Results(Roots.begin(), Roots.end());
   if (Map.empty())
     return Results;
+  std::optional<uint32_t> ReplacedVariable;
+  if (Map.size() == 1) {
+    const auto Key = Map.begin()->first;
+    if (Key < Nodes.size() && isVar(SymRef(Key)))
+      ReplacedVariable = varId(SymRef(Key));
+  }
 
   // Rebuild bottom-up over a topological order.  Going through the builders
   // means the result is canonical, so a substitution that makes two subterms
@@ -159,6 +202,12 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
         continue;
       if (auto Hit = Map.find(Cur.index()); Hit != Map.end()) {
         Position->second = Hit->second;
+        continue;
+      }
+      // Membership concerns the original immutable DAG. A scheduled parent
+      // already passed this check before its children were visited.
+      if (ReplacedVariable && !containsVariable(Cur, *ReplacedVariable)) {
+        Position->second = Cur;
         continue;
       }
       if (numOperands(Cur) == 0) {
@@ -188,9 +237,7 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
 }
 
 SymRef SymContext::substituteVar(SymRef R, uint32_t VarIdx, SymRef Val) {
-  llvm::SmallVector<uint32_t, 8> Seen;
-  collectVars(R, Seen);
-  if (std::find(Seen.begin(), Seen.end(), VarIdx) == Seen.end())
+  if (!containsVariable(R, VarIdx))
     return R;
 
   SymRef VarRef = intern(SymOp::Var, Vars[VarIdx].Width, {}, VarIdx);

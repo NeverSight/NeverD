@@ -39,6 +39,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -410,6 +411,8 @@ public:
 
   /// Every variable reachable from \p R, in ascending variable-id order.
   void collectVars(SymRef R, llvm::SmallVectorImpl<uint32_t> &Out) const;
+  /// Exact structural membership. Undeclared variable IDs are absent.
+  bool containsVariable(SymRef R, uint32_t VarIdx) const;
 
   /// Total nodes interned in this context.  Diagnostic only.
   size_t numNodes() const { return Nodes.size(); }
@@ -502,12 +505,15 @@ private:
   void retainLowWordProjection(SymRef Source, uint32_t Width, SymRef Image);
 
   llvm::APInt maskToWidth(const llvm::APInt &V, uint32_t Width) const;
+  uint32_t minimumVariableId(SymRef R) const;
 
   std::vector<SymNode> Nodes;
   std::vector<SymRef> OperandPool;
   std::vector<SymVarInfo> Vars;
   /// One readability cost per prefix of \c Nodes, filled lazily.
   mutable std::vector<SymReadability> ReadabilityCosts;
+  /// Minimum structural input ID per immutable node; UINT32_MAX is empty.
+  mutable std::vector<uint32_t> MinimumVariables;
   /// Literals wider than 64 bits, referenced by index from SymNode::Aux.
   std::vector<llvm::APInt> WideConsts;
 
@@ -541,7 +547,15 @@ private:
   /// Invalid refs terminate a chain; copying a context retains all links.
   std::vector<SymRef> InternNext;
   /// Plain variables keep their legacy name-and-width declaration identity.
-  std::map<std::pair<std::string, uint32_t>, uint32_t> VarByNameAndWidth;
+  using VariableNameKey = std::pair<std::string, uint32_t>;
+  struct VariableNameHash {
+    size_t operator()(const VariableNameKey &Identity) const {
+      return static_cast<size_t>(
+          llvm::hash_combine(Identity.first, Identity.second));
+    }
+  };
+  std::unordered_map<VariableNameKey, SymRef, VariableNameHash>
+      VarByNameAndWidth;
 
   struct InputVariableKey {
     std::string Name;

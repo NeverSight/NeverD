@@ -136,9 +136,12 @@ swiftValueWitnessSlot(SourceCallTypeHint::SwiftValueWitnessKind Operation);
 bool isSwiftValueWitnessSourceCallHint(const SourceCallTypeHint &Hint,
                                        Arch Architecture);
 
-/// Assign a call's complete promoted scalar arguments, with a named prefix
-/// and an ellipsis. Darwin arm64 puts the unnamed values in eight-byte stack
-/// slots; x86_64 continues its independent integer and floating banks.
+/// Assign a call's complete values, with a named prefix and an ellipsis.
+/// Darwin arm64 supports the fixed ABI's direct values, including 128-bit
+/// integers and records. Unnamed values use whole eight-byte stack slots,
+/// higher natural alignment, and unchanged member offsets. Scalar tails must
+/// already have their default promotions; indirect tails remain unsupported.
+/// x86_64 retains scalar values and its independent integer/floating banks.
 bool assignDarwinVariadicSourceABI(SourceFunctionTypeHint &Hint,
                                    unsigned FixedCount, Arch Architecture,
                                    std::string &Diagnostic);

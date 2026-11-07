@@ -18,3 +18,5 @@ for count, index in [(17, 0), (2048, 0), (2048, 1), (2049, 1), (4096, 0), (4097,
 (output / 'native-calls.dex').write_bytes(native_calls_dex())
 
 (output / 'java-resume.dex').write_bytes(resume_dex())
+
+(output / 'java-binder.dex').write_bytes(resume_dex(binder_only=True))

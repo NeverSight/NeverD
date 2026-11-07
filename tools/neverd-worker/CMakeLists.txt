@@ -37,7 +37,7 @@ target_link_libraries(neverd_worker_format PUBLIC neverd_worker_protocol)
 target_include_directories(neverd_worker_format PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
 target_link_libraries(neverd_worker_graph PUBLIC neverd_worker_protocol)
 # The engine the worker serves, which neverd-mcp also runs in its own process.
-add_library(neverd_worker_engine STATIC Engine.cpp EnginePatch.cpp EngineRenderAhead.cpp PageCodec.cpp DeferredRelease.cpp ComparisonService.cpp LineageService.cpp Listing.cpp BrowseCache.cpp StringReferences.cpp TextFold.cpp ProjectHistory.cpp Contributions.cpp)
+add_library(neverd_worker_engine STATIC Engine.cpp EnginePatch.cpp EngineRenderAhead.cpp PageCodec.cpp RenderStore.cpp DeferredRelease.cpp ComparisonService.cpp LineageService.cpp Listing.cpp BrowseCache.cpp StringReferences.cpp TextFold.cpp ProjectHistory.cpp Contributions.cpp)
 target_compile_features(neverd_worker_engine PUBLIC cxx_std_20)
 target_include_directories(neverd_worker_engine PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
 # The C ABI is the only engine dependency. Never add LLVM to this target.
@@ -102,7 +102,7 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
   endif()
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
-    add_executable(neverd-worker-test-server main.cpp Engine.cpp EnginePatch.cpp EngineRenderAhead.cpp PageCodec.cpp DeferredRelease.cpp ComparisonService.cpp LineageService.cpp Listing.cpp BrowseCache.cpp StringReferences.cpp TextFold.cpp ProjectHistory.cpp Contributions.cpp tests/mock_engine.cpp)
+    add_executable(neverd-worker-test-server main.cpp Engine.cpp EnginePatch.cpp EngineRenderAhead.cpp PageCodec.cpp RenderStore.cpp DeferredRelease.cpp ComparisonService.cpp LineageService.cpp Listing.cpp BrowseCache.cpp StringReferences.cpp TextFold.cpp ProjectHistory.cpp Contributions.cpp tests/mock_engine.cpp)
     set_target_properties(neverd-worker-test-server PROPERTIES ENABLE_EXPORTS ON)
     add_test(NAME NeverDWorkerPatch
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/byte_patch_test.py"
@@ -135,7 +135,7 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
       PROPERTY TIMEOUT)
     set_tests_properties(NeverDWorkerUnwindQuery PROPERTIES
       TIMEOUT "${_neverd_worker_transport_timeout}")
-    add_executable(neverd-worker-discovery-test-server main.cpp Engine.cpp EnginePatch.cpp EngineRenderAhead.cpp PageCodec.cpp DeferredRelease.cpp ComparisonService.cpp LineageService.cpp Listing.cpp BrowseCache.cpp StringReferences.cpp TextFold.cpp ProjectHistory.cpp Contributions.cpp tests/mock_engine.cpp)
+    add_executable(neverd-worker-discovery-test-server main.cpp Engine.cpp EnginePatch.cpp EngineRenderAhead.cpp PageCodec.cpp RenderStore.cpp DeferredRelease.cpp ComparisonService.cpp LineageService.cpp Listing.cpp BrowseCache.cpp StringReferences.cpp TextFold.cpp ProjectHistory.cpp Contributions.cpp tests/mock_engine.cpp)
     set_target_properties(neverd-worker-discovery-test-server PROPERTIES ENABLE_EXPORTS ON)
     target_compile_features(neverd-worker-discovery-test-server PRIVATE cxx_std_20)
     target_compile_definitions(neverd-worker-discovery-test-server PRIVATE NEVERD_EXPORTS NEVERD_TEST_STEPPED_DISCOVERY)
@@ -172,6 +172,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_ahead_test.py"
               "$<TARGET_FILE:neverd-worker-test-server>")
     set_tests_properties(NeverDWorkerRenderAhead PROPERTIES TIMEOUT 180)
+    add_test(NAME NeverDWorkerRenderStore
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_store_test.py"
+              "$<TARGET_FILE:neverd-worker-test-server>")
+    set_tests_properties(NeverDWorkerRenderStore PROPERTIES TIMEOUT 180)
     add_test(NAME NeverDWorkerMakeCode
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_code_test.py"
               "$<TARGET_FILE:neverd-worker-test-server>")
@@ -266,6 +270,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/browse_cache_test.py"
                 "$<TARGET_FILE:neverd-worker>")
       set_tests_properties(NeverDWorkerBrowseCache PROPERTIES TIMEOUT 120)
+      add_test(NAME NeverDWorkerListingFacts
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/listing_facts_test.py"
+                "$<TARGET_FILE:neverd-worker>")
+      set_tests_properties(NeverDWorkerListingFacts PROPERTIES TIMEOUT 120)
       add_test(NAME NeverDWorkerPEListingFacts
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/pe_listing_facts_test.py"
                 "$<TARGET_FILE:neverd-worker>")

@@ -84,3 +84,17 @@ TEST(SymMBAKnownFacts, MissingFactStorageKeepsTheOriginalSemantics) {
   EXPECT_EQ(Proof.check(C.mkNe(Root, Result.Expr)),
             neverd::solver::SatResult::Unsat);
 }
+
+TEST(SymMBAKnownFacts, ExtractConsumesTheBoundOfATotalUnsignedRemainder) {
+  SymContext C;
+  const auto Dividend = C.mkFreshVar(64, "dividend_");
+  const auto Key = C.mkFreshVar(32, "divisor_input_");
+  const auto Divisor = C.mkAdd(C.mkConst(64, 0x1e139d83b), C.mkZExt(Key, 64));
+  const auto Flag = C.mkExtract(C.mkURem(Dividend, Divisor), 47, 1);
+  const auto Result = simplifyMBADeep(C, Flag);
+  EXPECT_EQ(Result.Expr, C.mkZero(1));
+  EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+  const auto MayBeZero =
+      C.mkExtract(C.mkURem(Dividend, C.mkZExt(Key, 64)), 47, 1);
+  EXPECT_NE(simplifyWindow(C, MayBeZero), C.mkZero(1));
+}

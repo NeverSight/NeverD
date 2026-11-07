@@ -900,17 +900,24 @@ A successful local-name commit adds `local_names_only:true` to its response.
 Other code edits continue through full invalidation.
 
 `analysis_update_names` accepts an owner `analysis_snapshot` only in an existing
-readonly replica created by `analysis_restore`. Every input, option and
-non-name state must match the restored snapshot. The worker also checks input
-stamps, committed user tables, loaded type declarations and library choices
-before replacing display-name state. A pending recovery transaction also
+readonly replica created by `analysis_restore`. Every input and option, and all
+state but code edits, names, comments, operand formats and data items, must match
+the restored snapshot. The worker also checks input stamps, committed user tables
+apart from comments, which the owner can hold staged, loaded type declarations and
+library choices before taking the new values. A pending recovery transaction also
 refuses reuse.
-Success returns `{updated:true}` and advances the replica's local revision;
-retained source is redecorated without rerunning the pipeline. This operation
-never writes sidecars or history. A changed snapshot or racing sidecar is
-`stale_snapshot`; a changed input is `input_changed`. The GUI uses the capability
-only for an idle replica after a confirmed local-name commit and otherwise
-keeps the existing fresh-process restore path.
+Success returns `{updated:true}` and advances the replica's local revision. No
+analysis reads these, so nothing is analyzed again, and retained source is
+redecorated: local and function names and comments are read as a view is decorated,
+with a kept page's own statement of a function's name brought up to date unless a
+name was taken away, which only the engine can answer; operand formats are not in
+source; and a function's other code edits are options of its own view, whose key
+they change. A new name of data or a data item is spelled in the pages that name
+it, so it forgets the documents and renders and starts the job over, under a store
+of its own. This operation never writes sidecars or history. A changed snapshot or racing
+sidecar is `stale_snapshot`; a changed input is `input_changed`. The GUI tries it
+on every change to the project of an idle replica, and restores a fresh process
+when it refuses.
 
 `analysis_restore` also takes `call_summaries:true`, which the GUI adds to the
 owner's snapshot when the replica advertises `prepare_call_summaries`. The
@@ -953,8 +960,35 @@ A render reads what the engine knew when it ran, as a kept document does: code
 addresses the functions rendered before it published can make it differ from a
 first visit to that function in a new session. Heartbeats report it as
 `background.render_ahead`: `{state, total, rendered, failed, hits, raw_bytes,
-bytes}` with `pending`, `done` or `full`. A function the job failed to render, or
-has not reached, is decompiled as usual.
+bytes, kept}` with `pending`, `done` or `full`. A function the job failed to
+render, or has not reached, is decompiled as usual.
+
+It also takes `render_store`, `read` or `write`, which the GUI gives every replica
+of a worker that advertises `render_store`: `write` to the one that renders ahead,
+and `read` to the others. A replica then
+reads what earlier sessions rendered over the same inputs, from the project's
+`local/render-ahead`, from its first request on, and `write` adds what its own job
+renders. `kept` counts the store's records. The inputs are the engine and worker
+files, the snapshot apart from code edits, comments, function names and operand
+formats, the project's shared files apart from the ones that hold those, and the
+debug files' stamps; a change to any of them starts a store of its own, and the
+first render under one removes the others. A session whose job
+starts over after it began neither reads nor adds to the store from then on, since
+its engine no longer reads as a new session's does. Once a job has reached every
+function, a later session's `call_summaries` stops at `deferred` after discovery,
+and a `decompile` or IR view the store does not answer starts the rest. A graph
+does not, since it reads no summary. A damaged or cut-short record is a render
+not kept; removing the folder only costs the renders.
+
+A job also keeps what a function's first look in `listing` asks the engine, in the
+project's `local/listing-facts` under the same inputs apart from the names of data,
+and any worker of that project reads it there. An owner takes up what its replica adds at most once a second.
+`metadata.listing_facts` and `background.render_ahead.facts` report `{kept, bytes,
+hits, misses}`. A look the store does not answer asks the engine. The owner keeps
+what its reference scan found there too, and `background.scan_kept` says this
+session's index was finished from that.
+`metadata.listing_name_builds` counts how many times the listing has read its names
+again; a function's new name usually does not.
 
 Source pages with edit metadata carry `code_names`, half-open UTF-8 spans in
 the complete displayed document. An address target has `kind:"address"`,

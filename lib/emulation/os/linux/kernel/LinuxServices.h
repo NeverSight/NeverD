@@ -49,6 +49,13 @@ public:
   auto descriptorStatus(uint32_t FD) const {
     return Files.descriptorStatus(FD, Result);
   }
+  auto binderConnection(uint32_t FD) const {
+    return Files.binderConnection(FD, Result);
+  }
+  auto binderBuffer(const LinuxDeviceState &Device, uint64_t Address,
+                    uint64_t Size) const {
+    return Files.binderBuffer(Device, Address, Size);
+  }
   LinuxClock &clock() { return Clock; }
   /// Libc's ppoll copies the timespec; the raw syscall updates guest memory.
   llvm::Expected<std::optional<uint64_t>> poll(ServiceKind Kind,

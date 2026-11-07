@@ -55,6 +55,12 @@ public:
   std::optional<uint64_t> outputError(uint32_t FD) const;
   uint32_t outputTarget(uint32_t FD) const;
   bool isDevice(uint32_t FD) const;
+  std::shared_ptr<LinuxDeviceState>
+  binderConnection(uint32_t FD, ProcessResult &Result) const;
+  // Kernel-owned bytes; native readers separately check guest permissions.
+  std::optional<llvm::ArrayRef<uint8_t>>
+  binderBuffer(const LinuxDeviceState &Device, uint64_t Address,
+               uint64_t Size) const;
   bool isSocket(uint32_t FD) const;
   llvm::Expected<std::optional<uint64_t>>
   network(ServiceKind Kind, const ProcessServiceEvent &Event,

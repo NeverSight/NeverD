@@ -49,6 +49,21 @@ public:
   void flushCacheOne();
   void flushCache();
   Json cacheStats() const;
+  /// Advances with each change of what the browse cache's identity reads.
+  std::uint64_t cacheGeneration() const;
+  /// What an earlier session or a replica kept of the engine's answers to what
+  /// a function's first look asks: the pages under \p key, or none.
+  using KeptFacts =
+      std::function<std::vector<std::string>(const std::string &)>;
+  /// Keeps \p bytes for later sessions, as what is asked by that key.
+  using KeepFact = std::function<void(const std::string &, std::string)>;
+  void setKeptFacts(KeptFacts kept, KeepFact keep = nullptr);
+  /// The engine's answers to what a first look at the function at \p entry
+  /// asks, for setKeptFacts to give back, without those \p wanted refuses by
+  /// their key.  None for an answer the look would not take.
+  std::vector<std::pair<std::string, std::vector<std::string>>>
+  factsToKeep(std::uint64_t entry,
+              const std::function<bool(const std::string &)> &wanted);
   void setStackFrames(const Json &rows, const std::string &imageHash);
   /// The neverd_strings_ex_json options strings are found with, as JSON
   /// text; empty for the engine's defaults.
@@ -89,6 +104,16 @@ public:
   /// Names or the user's data items changed: the next query reads them again
   /// without scanning strings or reading imports and exports again.
   void namesChanged();
+  /// The user named the function at \p address.  True when that changes what
+  /// the listing calls it and nothing else it has read, and the listing has
+  /// taken it, keeping what it decoded.  Otherwise the caller says
+  /// namesChanged.
+  bool functionRenamed(std::uint64_t address);
+  /// How many times names were read again over a built listing.
+  std::uint64_t nameBuilds() const;
+  /// Only functions' names changed.  The next query reads them again, and a
+  /// kept view of a function stays what its pages are (viewGeneration).
+  void functionNamesChanged();
   /// Comments changed. Rendering reads them live, but they are part of the
   /// browse cache identity, so cached documents start a new namespace.
   void commentsChanged();
@@ -158,6 +183,9 @@ public:
   Json indexState() const;
   /// Changes whenever published listing text can change.
   std::uint64_t generation() const;
+  /// generation() but for what only functions' names change, which a function's
+  /// engine pages do not spell: a view reads them as its decoration runs.
+  std::uint64_t viewGeneration() const;
 
 private:
   Json uncachedPage(const Json &payload);

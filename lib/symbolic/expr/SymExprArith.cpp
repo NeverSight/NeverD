@@ -216,11 +216,89 @@ SymRef SymContext::mkAdd(llvm::ArrayRef<SymRef> Ops) {
     return mkZero(W);
   if (Final.size() == 1)
     return Final[0];
+  // A union already contains every bit of each included field. Subtracting
+  // that complete field cannot borrow and is exactly XOR, even when the
+  // other fields overlap it. Match canonical OR factors without expanding
+  // the expressions that compute them; their operand lists are sorted with
+  // the optional constant first.
+  if (Final.size() == 2) {
+    for (unsigned I = 0; I != 2; ++I) {
+      const auto Packed = Final[I], Negative = Final[1 - I];
+      if (op(Packed) != SymOp::Or || op(Negative) != SymOp::Mul ||
+          numOperands(Negative) != 2 || !isConst(operand(Negative, 0)) ||
+          !constValue(operand(Negative, 0)).isAllOnes())
+        continue;
+      const auto Removed = operand(Negative, 1);
+      const auto Fields = operands(Packed);
+      const auto Required = op(Removed) == SymOp::Or
+                                ? operands(Removed)
+                                : llvm::ArrayRef<SymRef>(Removed);
+      if (std::includes(Fields.begin(), Fields.end(), Required.begin(),
+                        Required.end(), [&](SymRef A, SymRef B) {
+                          if (isConst(A) != isConst(B))
+                            return isConst(A);
+                          return A < B;
+                        }))
+        return mkXor(Packed, Removed);
+    }
+  }
+  // Subtracting a subset of a word's forced set bits cannot borrow. Keep
+  // this in the additive builder so canonical sums and substitution rebuilds
+  // obtain the same result as an explicit subtraction.
+  if (Final.size() == 2 && isConst(Final[0]) && op(Final[1]) == SymOp::Or &&
+      isConst(operand(Final[1], 0))) {
+    const llvm::APInt Removed = -constValue(Final[0]);
+    const llvm::APInt Forced = constValue(operand(Final[1], 0));
+    if ((Forced & Removed) == Removed) {
+      const auto Factors = operands(Final[1]).drop_front();
+      llvm::SmallVector<SymRef, 8> Sources(Factors.begin(), Factors.end());
+      const auto Source = Sources.size() == 1 ? Sources.front() : mkOr(Sources);
+      return mkOr(mkAnd(Source, mkConst(~Removed)), mkConst(Forced & ~Removed));
+    }
+  }
+  // A masked word cannot carry into a disjoint constant's set bits.
+  // Keep this exact two-term sum in the same form as a packed OR word.
+  if (Final.size() == 2 && isConst(Final[0]) && op(Final[1]) == SymOp::And &&
+      isConst(operand(Final[1], 0)) &&
+      (constValue(Final[0]) & constValue(operand(Final[1], 0))).isZero())
+    return mkOr(Final);
   return intern(SymOp::Add, W, Final, 0);
 }
 
 SymRef SymContext::mkSub(SymRef A, SymRef B) {
   assert(width(A) == width(B) && "subtraction operands must share a width");
+  // A literal in bits excluded by a word mask is an additive offset. Two
+  // views of the same masked word differ only by those offsets, even when
+  // no-borrow normalization removed one of the OR nodes entirely.
+  auto Offset = [&](SymRef Value, llvm::APInt &Literal) {
+    if (op(Value) != SymOp::Or || numOperands(Value) != 2 ||
+        !isConst(operand(Value, 0)))
+      return Value;
+    const auto Word = operand(Value, 1);
+    if (op(Word) != SymOp::And || !isConst(operand(Word, 0)) ||
+        !(constValue(operand(Value, 0)) & constValue(operand(Word, 0)))
+             .isZero())
+      return Value;
+    Literal = constValue(operand(Value, 0));
+    return Word;
+  };
+  llvm::APInt Left(width(A), 0), Right(width(B), 0);
+  if (Offset(A, Left) == Offset(B, Right) && Left != Right)
+    return mkConst(Left - Right);
+  // Removing a subset of a word's set bits never borrows:
+  // x - (x & mask) == x & ~mask. Retain the complete captured x.
+  if (op(B) == SymOp::And) {
+    llvm::SmallVector<SymRef, 8> Mask;
+    bool ContainsA = false;
+    for (SymRef Factor : operands(B)) {
+      if (Factor == A)
+        ContainsA = true;
+      else
+        Mask.push_back(Factor);
+    }
+    if (ContainsA)
+      return mkAnd(A, mkNot(Mask.size() == 1 ? Mask.front() : mkAnd(Mask)));
+  }
   if (op(A) == SymOp::Add || op(B) == SymOp::Add) {
     // Cancel complete additive terms before constructing a negated sum.
     // Operands are owned copies because any builder may relocate the pool.

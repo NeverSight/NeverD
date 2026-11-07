@@ -300,8 +300,30 @@ void ProvenValueSet::join(const ProvenValueSet &Other) {
     Values.clear();
     return;
   }
-  for (const RegisterValue &Value : Other.Values)
-    if (std::find(Values.begin(), Values.end(), Value) == Values.end()) {
+  llvm::SmallVector<RegisterValue, 2 * kCallXContextValueAlternatives> Joined(
+      Values.begin(), Values.end());
+  Joined.append(Other.Values.begin(), Other.Values.end());
+  // A numeric literal already covered by a numeric range adds no alternative.
+  // Remove it before enforcing the disjunction limit or capturing a returned
+  // address: otherwise one runtime pointer acquires redundant alias carriers.
+  // Coordinate-tagged pointers and captures keep their distinct provenance.
+  const auto CoveredLiteral = [&](const RegisterValue &Value) {
+    return Value.ValueKind == RegisterValue::Kind::Constant &&
+           std::any_of(Joined.begin(), Joined.end(), [&](const auto &Range) {
+             if (Range.ValueKind != RegisterValue::Kind::UnsignedRange)
+               return false;
+             const auto Bounds = *unsignedValueRange(Range);
+             return Bounds.Lower <= Bounds.Upper
+                        ? Bounds.Lower <= Value.Value &&
+                              Value.Value <= Bounds.Upper
+                        : Bounds.Lower <= Value.Value ||
+                              Value.Value <= Bounds.Upper;
+           });
+  };
+  Values.clear();
+  for (const auto &Value : Joined)
+    if (!CoveredLiteral(Value) &&
+        std::find(Values.begin(), Values.end(), Value) == Values.end()) {
       if (Values.size() == kCallXContextValueAlternatives) {
         Values.clear();
         return;

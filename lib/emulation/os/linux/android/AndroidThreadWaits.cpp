@@ -9,6 +9,39 @@
 #include "llvm/Support/Endian.h"
 
 namespace neverd::emulation::android_model {
+llvm::Error GuestThreads::startCallback(const GuestCallback &Callback) {
+  // The suspended import's live stack remains in place. All admitted
+  // callback signatures fit the ordinary scalar register ABI.
+  if (Callback.Arguments.size() > Calls.info().Arguments.size())
+    return failure(diagnostic::CallbackArguments);
+  for (size_t I = 0; I < Callback.Arguments.size(); ++I)
+    if (auto E = CPU.writeRegister(Calls.info().Arguments[I],
+                                   {Callback.Arguments[I], 0}))
+      return E;
+  if (auto E = CPU.writeRegister(Calls.info().Link, {ReturnPC, 0}))
+    return E;
+  if (auto E = CPU.writeRegister(CPURegister::AArch64PC, {Callback.Entry, 0}))
+    return E;
+  Result.PC = Callback.Entry;
+  return llvm::Error::success();
+}
+llvm::Error GuestThreads::pushCallback(const GuestCallback &Callback,
+                                       const ServiceRequest &Request,
+                                       size_t Event) {
+  auto Link = CPU.readRegister(Calls.info().Link);
+  if (!Link)
+    return Link.takeError();
+  auto SP = CPU.readRegister(Calls.info().StackPointer);
+  if (!SP)
+    return SP.takeError();
+  if (auto E = Calls.validateStackPointer((*SP)[0]))
+    return E;
+  if (auto E = startCallback(Callback))
+    return E;
+  callbacks().push_back({Callback, Request, Event, (*Link)[0], (*SP)[0]});
+  return llvm::Error::success();
+}
+
 std::optional<size_t> GuestThreads::onceOwner(uint64_t Control) const {
   for (size_t I = 0; I < Threads.size(); ++I)
     for (const auto &Pending : Threads[I].Callbacks)
@@ -80,8 +113,15 @@ bool GuestThreads::waitKernel(const std::optional<SleepContinuation> &Sleep) {
 }
 
 void GuestThreads::waitNative(std::unique_ptr<NativeWait> Pending) {
-  assert(!current().Waiting && !current().Kernel.Pending);
-  current().Waiting = Wait{std::move(Pending), std::nullopt};
+  assert(!current().Kernel.Pending);
+  if (current().Waiting) {
+    auto *Active =
+        std::get_if<std::unique_ptr<NativeWait>>(&current().Waiting->Operation);
+    assert(Active && !*Active &&
+           "only a resuming native wait can replace itself");
+    *Active = std::move(Pending);
+  } else
+    current().Waiting = Wait{std::move(Pending), std::nullopt};
 }
 
 void GuestThreads::waitSemaphore(uint64_t Address, bool Shared) {
@@ -146,7 +186,7 @@ llvm::Error GuestThreads::prepareJoin(const Join &Pending) {
 }
 
 BionicResult GuestThreads::resumeWait(Bionic &LibC) {
-  const auto &Pending = *current().Waiting;
+  auto &Pending = *current().Waiting;
   assert(Pending.Request && "scheduled wait has no suspended service");
   // Resumption can fail before another guest instruction executes. Attribute
   // that stop to this service, not the previous thread's last instruction.
@@ -175,8 +215,14 @@ BionicResult GuestThreads::resumeWait(Bionic &LibC) {
                             return std::optional<BionicValue>();
                           return value(**R);
                         },
-                        [&](const std::unique_ptr<NativeWait> &N) {
-                          return N->resume(LibC);
+                        [&](std::unique_ptr<NativeWait> &N) {
+                          // Preserve the running operation while a resumed
+                          // Java activation installs its next native wait.
+                          auto Running = std::move(N);
+                          auto Resumed = Running->resume(LibC);
+                          if (!N)
+                            N = std::move(Running);
+                          return Resumed;
                         }),
                     Pending.Operation);
 }

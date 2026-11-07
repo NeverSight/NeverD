@@ -1271,6 +1271,59 @@ TEST(PipelineOutcome, HighCRefusesAFunctionWhoseConversionFailed) {
 // An escaping image address no storage can back refuses the function keeping
 // it. The scan that finds it serves the whole unit, which must not fail with
 // it.
+// Data the image places among code, as a kernel keeps constants in its paged
+// code, backs an address kept as a value as any other data does, up to the next
+// function.
+TEST(PipelineOutcome, HighCBacksAnAddressOfDataPlacedAmongCode) {
+  constexpr va_t Start = 0x100000, Address = 0x100010, Next = 0x100020;
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  Segment Code;
+  Code.Name = "PAGE";
+  Code.VA = Start;
+  Code.Size = Code.FileSz = 0x100;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Code.Data.assign(Code.Size, 0x5a);
+  Image.Segments.push_back(std::move(Code));
+  Section Holder;
+  Holder.Name = "PAGE";
+  Holder.VA = Start;
+  Holder.Size = 0x100;
+  Holder.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Image.Sections.push_back(std::move(Holder));
+  Image.DataInCode.insert(Address);
+  Symbol Data;
+  Data.Name = "held_among_code";
+  Data.Addr = Address;
+  Image.Symbols.push_back(Data);
+  Symbol Function;
+  Function.Name = "next_function";
+  Function.Addr = Next;
+  Function.IsFunc = true;
+  Image.Symbols.push_back(Function);
+  std::vector<HighFunc> Functions = {
+      convertedIdentity(sourceFunction(0x1300, "keeps_address"))};
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal =
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress);
+  Functions.back().ReturnType = NdType::makeInt(8, false);
+  Functions.back().Body = {Return};
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.TheArch = Arch::X64;
+  Options.StructuredExceptionSyntax = false;
+  Options.Image = &Image;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+  EXPECT_NE(Source.find("held_among_code"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("keeps_address(void) {"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("[16]"), std::string::npos) << Source;
+}
+
 TEST(PipelineOutcome, HighCRefusesOnlyTheFunctionKeepingAnUnbackedAddress) {
   constexpr va_t Address = 0x100000;
   BinaryImage Image;

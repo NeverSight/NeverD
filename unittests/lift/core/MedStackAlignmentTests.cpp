@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/ir/med/pass/MedEntryStackOffsets.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ir/Limits.h"
@@ -2220,3 +2221,63 @@ TEST(MedStackAlignment, BalancedPushGroupsKeepEveryLoopStackCoordinate) {
 } // namespace
 
 #include "MedScalarSelectRangeTests.inc"
+
+namespace {
+TEST(MedStackAlignment, RepeatedEntryQueriesKeepTheirActualValues) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    auto F = frameWithEntrySP(A);
+    const auto Base = temp(101, A);
+    F.Blocks.front().Ops.push_back(
+        op(NdOp::INT_SUB, Base, reg(0, A), MedVar::makeConst(32, Base.Size)));
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (unsigned I = 0; I != 64; ++I) {
+        EXPECT_EQ(entryStackOffset(F, Base, A, Format), -32);
+        EXPECT_FALSE(entryStackOffset(F, temp(102, A), A, Format));
+      }
+  }
+}
+} // namespace
+
+namespace {
+TEST(MedStackAlignment, ReusableOffsetsInvalidateChangedDefinitionsAndJoins) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    MedFunc Func = frameWithEntrySP(A);
+    const MedVar Base = temp(10, A);
+    const MedVar Joined = temp(11, A);
+    Func.Blocks.front().Ops.push_back(
+        op(NdOp::INT_SUB, Base, reg(0, A), MedVar::makeConst(32, Base.Size)));
+    MedBlock Merge;
+    Merge.Id = 1;
+    Merge.Preds = {0};
+    Merge.Phis.push_back({Joined, {{0, Base}}});
+    Func.Blocks.front().Succs = {1};
+    Func.Blocks.push_back(std::move(Merge));
+    MedEntryStackOffsets Offsets(Func, A, BinaryFormat::ELF);
+    for (MedVar V : {Base, Joined, reg(0, A), Joined, Base})
+      EXPECT_EQ(Offsets.query(V), V == reg(0, A) ? 0 : -32);
+
+    Func.Blocks.front().Ops.back().Inputs[1] = MedVar::makeConst(48, Base.Size);
+    Offsets.invalidate();
+    EXPECT_EQ(Offsets.query(Joined), -48);
+    EXPECT_EQ(Offsets.query(Base), -48);
+
+    // Appending can relocate PHI storage. A new incoming path also changes
+    // the answer of an already queried value.
+    Func.Blocks.back().Preds.push_back(1);
+    Func.Blocks.back().Succs = {1};
+    Func.Blocks.back().Phis.front().Args.emplace_back(1, reg(0, A));
+    Func.Blocks.back().Phis.push_back({temp(12, A), {{0, Base}, {1, Base}}});
+    Offsets.invalidate();
+    EXPECT_FALSE(Offsets.query(Joined));
+    EXPECT_EQ(Offsets.query(Base), -48);
+    EXPECT_EQ(Offsets.query(temp(12, A)), -48);
+
+    // A second definition must invalidate a previously proven offset too.
+    Func.Blocks.back().Ops.push_back(op(NdOp::COPY, Base, reg(0, A)));
+    Offsets.invalidate();
+    EXPECT_FALSE(Offsets.query(Base));
+    EXPECT_FALSE(Offsets.query(temp(12, A)));
+  }
+}
+} // namespace

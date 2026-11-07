@@ -1031,7 +1031,7 @@ public:
               : RunEnd[M + 1];
     for (size_t M = 0; M < Stmts.size(); ++M) {
       VarKeyMap<int> Counts;
-      std::unordered_map<const HighExpr *, uint8_t> Visits;
+      HighExprUseVisits Visits;
       forEachExpr(Stmts[M], [&](const ExprPtr &E) {
         countExprVarUsesUpToTwo(E, Counts, Visits);
       });
@@ -4073,7 +4073,7 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
   });
   if (Complex) {
     Reads.clear();
-    std::unordered_map<const HighExpr *, uint8_t> Visits;
+    HighExprUseVisits Visits;
     VisitReadRoots(
         [&](const ExprPtr &E) { countExprVarUsesUpToTwo(E, Reads, Visits); });
   }
@@ -4478,7 +4478,7 @@ bool reduceSingleUseGotos(std::vector<HighStmt> &Body, bool SpliceRegions,
           };
           if (!CountKey(CountKey, L[I + 1].Cond, 0)) {
             VarKeyMap<int> Counts;
-            std::unordered_map<const HighExpr *, uint8_t> Visits;
+            HighExprUseVisits Visits;
             countExprVarUsesUpToTwo(L[I + 1].Cond, Counts, Visits);
             CondReads = Counts[Key];
           }

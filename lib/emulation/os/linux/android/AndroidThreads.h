@@ -46,6 +46,9 @@ public:
     return enabled() ? &current().Kernel : nullptr;
   }
   std::vector<PendingCallback> &callbacks() { return current().Callbacks; }
+  llvm::Error startCallback(const GuestCallback &Callback);
+  llvm::Error pushCallback(const GuestCallback &Callback,
+                           const ServiceRequest &Request, size_t Event);
   BionicResult invoke(const NativeCallEvent &Call);
   bool onceActive(uint64_t Control) const;
   BionicResult waitOnce(uint64_t Control);

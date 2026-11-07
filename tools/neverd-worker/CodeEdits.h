@@ -18,7 +18,6 @@ public:
   static void validateChange(const Json &view, const Json &request);
   /// State affecting analysis, excluding only local display names and their
   /// presentation identities. Unknown fields remain part of the comparison.
-  static Json analysisState(const Json &rows);
   using Resolver =
       std::function<std::optional<std::uint64_t>(const std::string &)>;
   /// The listing's display names for functions the engine leaves generic,

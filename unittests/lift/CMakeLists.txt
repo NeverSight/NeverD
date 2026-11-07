@@ -1838,6 +1838,10 @@ add_neverd_unittest(NeverDI386CallContractTests
 target_include_directories(NeverDI386CallContractTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
 
+add_neverd_unittest(NeverDHighExprUseCountsTests
+  core/HighExprUseCountsTests.cpp
+  LINK_COMPONENTS BackendC)
+
 # Exercise shared source control-flow and SSA invariants independently of the
 # aggregate lift inventory when fixing mobile source reconstruction.
 add_neverd_unittest(NeverDHighControlFlowTests
@@ -5329,3 +5333,30 @@ target_include_directories(NeverDCOFFOrdinalImportTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
+
+# Value identity at the Win64 argument-forwarding boundary.
+target_sources(NeverDLiftTests PRIVATE core/HighCallParameterForwardingTests.cpp)
+add_neverd_unittest(NeverDHighCallParameterForwardingTests
+  core/HighCallParameterForwardingTests.cpp
+  LINK_COMPONENTS IRHigh IRMed IRLow)
+target_include_directories(NeverDHighCallParameterForwardingTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+
+target_sources(NeverDLiftTests PRIVATE core/MedPhiPlacementTests.cpp)
+add_neverd_unittest(NeverDMedPhiPlacementTests
+  core/MedPhiPlacementTests.cpp
+  LINK_COMPONENTS IRMed IRLow)
+target_include_directories(NeverDMedPhiPlacementTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+
+target_sources(NeverDLiftTests PRIVATE core/MedTempLivenessTests.cpp)
+add_neverd_unittest(NeverDMedTempLivenessTests
+  core/MedTempLivenessTests.cpp
+  LINK_COMPONENTS IRMed IRLow)
+target_include_directories(NeverDMedTempLivenessTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+
+target_sources(NeverDLiftTests PRIVATE core/HighFlagReadTests.cpp)
+add_neverd_unittest(NeverDHighFlagReadTests
+  core/HighFlagReadTests.cpp
+  LINK_COMPONENTS BackendC)

@@ -2867,6 +2867,34 @@ TEST(ProcessReport, AndroidURLHandlerRequiresExplicitBoundedCustomFailures) {
   }
 }
 
+TEST(ProcessReport, AndroidBinderNativeBindingIsExplicitAndValidated) {
+  auto wrap = [](std::string_view binding) {
+    return std::string(
+               R"({"android":{"jni":true,"application_snapshot":{"phase":"unattached","service_manager":{"binder_proxies":[{"key":7,"native_binding":)") +
+           std::string(binding) + "}]}}}}";
+  };
+  auto parsed =
+      processOptionsFromJSON(wrap(R"({"fd":3,"handle":0,"alive":false})"));
+  ASSERT_TRUE(bool(parsed)) << llvm::toString(parsed.takeError());
+  const auto &binding =
+      parsed->Android->Application->service_manager->binder_proxies[0]
+          .native_binding;
+  ASSERT_TRUE(binding);
+  EXPECT_EQ(binding->fd, 3u);
+  EXPECT_EQ(binding->handle, 0u);
+  EXPECT_FALSE(binding->alive);
+  for (const char *bad : {"null", "{}", R"({"fd":3,"handle":0})",
+                          R"({"fd":0,"handle":0,"alive":true})",
+                          R"({"fd":2147483648,"handle":0,"alive":true})",
+                          R"({"fd":3,"handle":-1,"alive":true})",
+                          R"({"fd":3,"handle":0,"alive":null})",
+                          R"({"fd":3,"handle":0,"alive":true,"extra":0})"}) {
+    auto rejected = processOptionsFromJSON(wrap(bad));
+    EXPECT_FALSE(bool(rejected)) << bad;
+    llvm::consumeError(rejected.takeError());
+  }
+}
+
 TEST(ProcessReport, AndroidServiceManagerPreservesUnknownNullAndProxyKeys) {
   auto wrap = [](const std::string &value) {
     return "{\"android\":{\"jni\":true,\"application_snapshot\":{\"phase\":"

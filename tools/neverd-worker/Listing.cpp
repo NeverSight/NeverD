@@ -293,6 +293,141 @@ struct Reference {
   /// The bytes a read or write accesses; 0 when the engine names none.
   std::uint8_t width = 0;
 };
+/// The finished reference index, in order of target and then source.  A
+/// function's first view replaces the rows from its extent, so the rows are
+/// held in blocks of addresses, by target and again by source, and a change
+/// moves only the blocks it touches.
+class ReferenceIndex {
+public:
+  using Rows = std::vector<Reference>;
+
+  static bool before(const Reference &a, const Reference &b) {
+    return a.to != b.to ? a.to < b.to : a.from < b.from;
+  }
+
+  /// \p sorted is in the index's order.
+  void assign(const Rows &sorted) {
+    clear();
+    rows_ = sorted.size();
+    for (const auto &row : sorted) {
+      targets_[blockOf(row.to)].push_back(row);
+      sources_[blockOf(row.from)].push_back(row);
+    }
+  }
+  void clear() {
+    targets_.clear();
+    sources_.clear();
+    rows_ = 0;
+  }
+  std::size_t size() const { return rows_; }
+
+  /// The rows that refer to \p address.
+  std::pair<Rows::const_iterator, Rows::const_iterator>
+  to(std::uint64_t address) const {
+    static const Rows none;
+    const auto block = targets_.find(blockOf(address));
+    if (block == targets_.end())
+      return {none.end(), none.end()};
+    return {firstAfter(block->second, address, true),
+            firstAfter(block->second, address, false)};
+  }
+  /// The first target after \p address.
+  std::optional<std::uint64_t> targetAfter(std::uint64_t address) const {
+    auto block = targets_.lower_bound(blockOf(address));
+    if (block != targets_.end() && block->first == blockOf(address)) {
+      const auto next = firstAfter(block->second, address, false);
+      if (next != block->second.end())
+        return next->to;
+      ++block;
+    }
+    if (block == targets_.end())
+      return std::nullopt;
+    return block->second.front().to;
+  }
+  /// The last target at or before \p address.
+  std::optional<std::uint64_t> targetAtOrBefore(std::uint64_t address) const {
+    auto block = targets_.upper_bound(blockOf(address));
+    if (block == targets_.begin())
+      return std::nullopt;
+    --block;
+    if (block->first == blockOf(address)) {
+      const auto next = firstAfter(block->second, address, false);
+      if (next != block->second.begin())
+        return std::prev(next)->to;
+      if (block == targets_.begin())
+        return std::nullopt;
+      --block;
+    }
+    return block->second.back().to;
+  }
+  /// Each row, in the index's order.
+  template <typename Each> void forEach(Each each) const {
+    for (const auto &[key, rows] : targets_)
+      for (const auto &row : rows)
+        each(row);
+  }
+  /// Each row with a target from \p first up to \p end, in the index's order.
+  template <typename Each>
+  void forTargets(std::uint64_t first, std::uint64_t end, Each each) const {
+    for (auto block = targets_.lower_bound(blockOf(first));
+         block != targets_.end() && block->second.front().to < end; ++block)
+      for (auto row = firstAfter(block->second, first, true);
+           row != block->second.end() && row->to < end; ++row)
+        each(*row);
+  }
+  /// Drops the rows from [\p first, \p end) that \p drop chooses.
+  template <typename Drop>
+  void eraseFrom(std::uint64_t first, std::uint64_t end, Drop drop) {
+    if (first >= end)
+      return;
+    for (auto block = sources_.lower_bound(blockOf(first));
+         block != sources_.end() && block->first <= blockOf(end - 1); ++block)
+      std::erase_if(block->second, [&](const Reference &row) {
+        if (row.from < first || row.from >= end || !drop(row))
+          return false;
+        eraseTarget(row);
+        return true;
+      });
+  }
+  /// Adds \p row after any row that orders the same.
+  void insert(const Reference &row) {
+    auto &rows = targets_[blockOf(row.to)];
+    rows.insert(std::upper_bound(rows.begin(), rows.end(), row, before), row);
+    sources_[blockOf(row.from)].push_back(row);
+    ++rows_;
+  }
+  Rows flattened() const {
+    Rows rows;
+    rows.reserve(rows_);
+    forEach([&](const Reference &row) { rows.push_back(row); });
+    return rows;
+  }
+
+private:
+  static std::uint64_t blockOf(std::uint64_t address) { return address >> 12; }
+  /// The first of \p rows with a target after \p address, or from it on.
+  static Rows::const_iterator
+  firstAfter(const Rows &rows, std::uint64_t address, bool including) {
+    return std::partition_point(
+        rows.begin(), rows.end(), [&](const Reference &row) {
+          return including ? row.to < address : row.to <= address;
+        });
+  }
+  void eraseTarget(const Reference &row) {
+    const auto block = targets_.find(blockOf(row.to));
+    auto &rows = block->second;
+    auto at = std::lower_bound(rows.begin(), rows.end(), row, before);
+    while (at->kind != row.kind)
+      ++at;
+    rows.erase(at);
+    --rows_;
+    if (rows.empty())
+      targets_.erase(block);
+  }
+
+  std::map<std::uint64_t, Rows> targets_, sources_;
+  std::size_t rows_ = 0;
+};
 /// A jump table whole-program analysis recovered (neverd_switches_json).
 struct SwitchTable {
   std::uint64_t jump = 0;
@@ -602,6 +737,12 @@ struct Listing::Impl {
   /// The names, or the user's items, changed since the listing was built:
   /// the next query reads them again over what the build scanned.
   bool namesStale = false;
+  /// All that made the names stale since the last build is functions' names,
+  /// and the generations those advanced, which views do not read.
+  bool functionNamesStale = false;
+  Listing::KeptFacts keptFacts;
+  Listing::KeepFact keepFact;
+  std::uint64_t functionNameGenerations = 0, nameBuilds = 0;
   /// What the last full build read that names and the user's items do not
   /// change: the string scan, and the import, import slot and export rows.
   std::vector<StringItem> scannedStrings;
@@ -621,7 +762,8 @@ struct Listing::Impl {
   /// The first function listed under each name, and how many functions are
   /// not chunks, as functions held them at generation (namedFunction and
   /// indexState read them; a listing holds tens of thousands of functions).
-  /// Names change only in a build, which advances generation first.
+  /// Names change only in a build, which advances generation first, and in
+  /// functionRenamed, which keeps them.
   std::unordered_map<std::string, const Function *> functionsByName;
   std::uint64_t functionsByNameGeneration = 0;
   mutable std::size_t ownFunctionCount = 0;
@@ -670,7 +812,11 @@ struct Listing::Impl {
 
   enum class IndexState { Idle, Building, Ready, Unavailable };
   IndexState indexState = IndexState::Idle;
-  std::vector<Reference> references; // sorted by (to, from) when Ready
+  /// What the scan gathers until the index is Ready.
+  std::vector<Reference> references;
+  ReferenceIndex referenceIndex;
+  /// This session's scan was read from what an earlier one kept.
+  bool scanKept = false;
   /// Recovered bodies replace a linear scan's references in their own extent.
   /// Keep these across decode-cache eviction and an unfinished background scan.
   struct RecoveredReferences {
@@ -795,6 +941,7 @@ struct Listing::Impl {
     }
     built = true;
     namesStale = false;
+    functionNamesStale = false;
     builtFunctionCount = count;
     ++generation;
     const auto arch = takeString(neverd_session_arch_name(session));
@@ -846,8 +993,12 @@ struct Listing::Impl {
   /// scanned, by the build's own steps.  Decoding again sets the extents of
   /// functions without a size, as it did after the build.
   void rebuildNames(int count) {
+    ++nameBuilds;
     namesStale = false;
     ++generation;
+    if (functionNamesStale)
+      ++functionNameGenerations;
+    functionNamesStale = false;
     buildFunctions(count);
     buildInventoryKey();
     buildNames(/*Rescan=*/false);
@@ -1104,13 +1255,10 @@ struct Listing::Impl {
                           address));
     clip(dataBoundaries, dataBoundaries.upper_bound(address));
     if (indexState == IndexState::Ready) {
-      const auto next = std::upper_bound(
-          references.begin(), references.end(), address,
-          [](std::uint64_t at, const Reference &ref) { return at < ref.to; });
-      if (next != references.end())
-        end = std::min(end, next->to);
-      if (next != references.begin())
-        start = std::max(start, std::prev(next)->to);
+      if (const auto next = referenceIndex.targetAfter(address))
+        end = std::min(end, *next);
+      if (const auto last = referenceIndex.targetAtOrBefore(address))
+        start = std::max(start, *last);
     }
   }
 
@@ -1502,24 +1650,25 @@ struct Listing::Impl {
         }
   }
 
+  Json functionRow(const Function &function) {
+    Json row = {{"name", function.name},
+                {"address", hexAddress(function.entry)},
+                {"size", function.end - function.entry},
+                {"library", function.library},
+                {"thunk", function.thunk},
+                {"exported", function.exported}};
+    if (function.engineName != function.name)
+      row["engine_name"] = function.engineName;
+    if (const auto &readable = demangledName(function.name); !readable.empty())
+      row["demangled_name"] = readable;
+    return row;
+  }
+
   Json functionTable(const std::vector<Function> &catalog) {
     Json rows = Json::array();
-    for (const auto &function : catalog) {
-      if (function.chunkOf)
-        continue;
-      Json row = {{"name", function.name},
-                  {"address", hexAddress(function.entry)},
-                  {"size", function.end - function.entry},
-                  {"library", function.library},
-                  {"thunk", function.thunk},
-                  {"exported", function.exported}};
-      if (function.engineName != function.name)
-        row["engine_name"] = function.engineName;
-      if (const auto &readable = demangledName(function.name);
-          !readable.empty())
-        row["demangled_name"] = readable;
-      rows.push_back(std::move(row));
-    }
+    for (const auto &function : catalog)
+      if (!function.chunkOf)
+        rows.push_back(functionRow(function));
     return rows;
   }
 
@@ -1767,9 +1916,10 @@ struct Listing::Impl {
   /// The widths of the code's reads and writes, from the index.
   void noteAccessWidths() {
     accessWidths.clear();
-    for (const auto &reference : references)
+    referenceIndex.forEach([&](const Reference &reference) {
       if (reference.kind == RefKind::Read || reference.kind == RefKind::Write)
         accessWidths.add(reference.to, reference.width);
+    });
   }
 
   /// The width of every access to \p address, 0 where they differ, or none
@@ -2227,6 +2377,39 @@ struct Listing::Impl {
     return instructionRows(takeJson(raw));
   }
 
+  static bool validDisasmPage(const Json &value) {
+    return value.is_object() && value.value("lift_complete", false) &&
+           value.contains("instructions") &&
+           value.at("instructions").is_array() &&
+           value.contains("next_address");
+  }
+  static bool validFramePage(const Json &value) {
+    return value.is_object() && value.value("valid", false) &&
+           value.contains("instructions") &&
+           value.at("instructions").is_array();
+  }
+  static std::string disasmFactsKey(std::uint64_t entry) {
+    return "disasm:" + std::to_string(entry);
+  }
+  static std::string frameFactsKey(std::uint64_t owner,
+                                   const std::string &options) {
+    return "frame:" + std::to_string(owner) + ":" + options;
+  }
+  std::string stackFrameOptions(std::uint64_t owner) const {
+    const auto policy = stackFrames.find(owner);
+    return policy == stackFrames.end() ? "{}" : policy->second.dump();
+  }
+  /// What is kept under \p key, one page that \p valid takes or null.
+  Json keptFact(const std::string &key, bool (*valid)(const Json &)) {
+    if (!keptFacts)
+      return nullptr;
+    auto pages = keptFacts(key);
+    if (pages.size() != 1)
+      return nullptr;
+    auto value = Json::parse(pages.front(), nullptr, false);
+    return !value.is_discarded() && valid(value) ? value : Json();
+  }
+
   /// Project the owning function's proved entry-SP coordinates. Frame aliases
   /// are instruction-specific; an unknown or overwritten register cannot keep
   /// the preceding alias. This also handles noncanonical prologues and chunks.
@@ -2236,17 +2419,13 @@ struct Listing::Impl {
     const auto inspect = engineSymbol<Inspect>("neverd_stack_frame_json");
     if (!wide || pointerSize != 8 || !inspect)
       return false;
-    const auto policy = stackFrames.find(owner);
-    const auto options =
-        policy == stackFrames.end() ? "{}" : policy->second.dump();
-    const auto flow = cache.query(
-        "frame-" + inventoryKey + "-" + std::to_string(owner) + "-" + options,
-        [&] { return takeJson(inspect(session, owner, options.c_str())); },
-        [](const Json &value) {
-          return value.is_object() && value.value("valid", false) &&
-                 value.contains("instructions") &&
-                 value.at("instructions").is_array();
-        });
+    const auto options = stackFrameOptions(owner);
+    auto flow = keptFact(frameFactsKey(owner, options), validFramePage);
+    if (flow.is_null())
+      flow = cache.query(
+          "frame-" + inventoryKey + "-" + std::to_string(owner) + "-" + options,
+          [&] { return takeJson(inspect(session, owner, options.c_str())); },
+          validFramePage);
     if (flow.is_null())
       return false;
     const auto &rows = flow.at("instructions");
@@ -2311,7 +2490,8 @@ struct Listing::Impl {
       body.frame.emplace(offset, bytes);
       covered = offset + bytes;
     }
-    if (policy != stackFrames.end())
+    if (const auto policy = stackFrames.find(owner);
+        policy != stackFrames.end())
       for (const auto &variable :
            policy->second.value("variables", Json::array())) {
         const auto offset =
@@ -2540,23 +2720,27 @@ struct Listing::Impl {
       const auto entry = ownerOf(index).entry;
       cursor = 0; // A continuation may precede its function's entry.
       std::optional<std::uint64_t> previousAddress;
-      for (;;) {
-        const auto page = cache.query(
-            "disasm-" + inventoryKey + "-" + std::to_string(entry) + "-" +
-                std::to_string(cursor),
-            [&] {
-              return takeJson(functionDisasm(
-                  session, entry, cursor,
-                  ::neverd::limits::worker::kListingMaxDecodeChunk,
-                  NEVERD_DISASM_FLOW | NEVERD_DISASM_STACK |
-                      NEVERD_DISASM_OPERANDS));
-            },
-            [](const Json &value) {
-              return value.is_object() && value.value("lift_complete", false) &&
-                     value.contains("instructions") &&
-                     value.at("instructions").is_array() &&
-                     value.contains("next_address");
-            });
+      const auto kept = keptFacts ? keptFacts(disasmFactsKey(entry))
+                                  : std::vector<std::string>();
+      for (std::size_t keptPage = 0;;) {
+        Json page;
+        if (keptPage < kept.size()) {
+          page = Json::parse(kept[keptPage++], nullptr, false);
+          if (page.is_discarded() || !validDisasmPage(page))
+            page = nullptr;
+        }
+        if (page.is_null())
+          page = cache.query(
+              "disasm-" + inventoryKey + "-" + std::to_string(entry) + "-" +
+                  std::to_string(cursor),
+              [&] {
+                return takeJson(functionDisasm(
+                    session, entry, cursor,
+                    ::neverd::limits::worker::kListingMaxDecodeChunk,
+                    NEVERD_DISASM_FLOW | NEVERD_DISASM_STACK |
+                        NEVERD_DISASM_OPERANDS));
+              },
+              validDisasmPage);
         if (page.is_null()) {
           const auto reason = takeString(neverd_last_error(session));
           if (previousAddress)
@@ -2703,9 +2887,7 @@ struct Listing::Impl {
       }
       overlay.mergeRanges();
       if (indexState == IndexState::Ready) {
-        std::erase_if(references, [&](const Reference &reference) {
-          if (!overlay.contains(reference.from))
-            return false;
+        const auto superseded = [&](const Reference &reference) {
           if (metadataRole(reference.from, reference.to))
             return false;
           // These facts are owned by relocated storage and switch recovery,
@@ -2721,16 +2903,13 @@ struct Listing::Impl {
               return false;
           }
           return true;
-        });
-        const auto previous = references.size();
-        references.insert(references.end(), overlay.rows.begin(),
-                          overlay.rows.end());
-        const auto order = [](const Reference &a, const Reference &b) {
-          return a.to != b.to ? a.to < b.to : a.from < b.from;
         };
-        std::sort(references.begin() + previous, references.end(), order);
-        std::inplace_merge(references.begin(), references.begin() + previous,
-                           references.end(), order);
+        for (const auto &range : overlay.ranges)
+          referenceIndex.eraseFrom(range.first, range.second, superseded);
+        auto rows = overlay.rows;
+        std::sort(rows.begin(), rows.end(), ReferenceIndex::before);
+        for (const auto &row : rows)
+          referenceIndex.insert(row);
       }
     }
     for (const auto &instruction : body.instructions)
@@ -2738,15 +2917,14 @@ struct Listing::Impl {
           *instruction.target != function.entry)
         body.labels.insert(*instruction.target);
     // Branches from other functions into this body need labels too.
-    if (indexState == IndexState::Ready) {
-      auto it = std::lower_bound(
-          references.begin(), references.end(), function.entry + 1,
-          [](const Reference &r, std::uint64_t value) { return r.to < value; });
-      for (; it != references.end() && it->to < body.end; ++it)
-        if (it->kind == RefKind::Jump || it->kind == RefKind::CondJump ||
-            it->kind == RefKind::IndirectJump)
-          body.labels.insert(it->to);
-    }
+    if (indexState == IndexState::Ready)
+      referenceIndex.forTargets(function.entry + 1, body.end,
+                                [&](const Reference &reference) {
+                                  if (reference.kind == RefKind::Jump ||
+                                      reference.kind == RefKind::CondJump ||
+                                      reference.kind == RefKind::IndirectJump)
+                                    body.labels.insert(reference.to);
+                                });
     if (!forwarding && dialect == OperandDialect::X86 &&
         !buildSemanticFrame(body, ownerOf(index).entry) && !function.chunkOf)
       buildFrame(body);
@@ -3483,15 +3661,7 @@ struct Listing::Impl {
   std::pair<std::vector<Reference>::const_iterator,
             std::vector<Reference>::const_iterator>
   referencesTo(std::uint64_t address) const {
-    if (indexState != IndexState::Ready)
-      return {references.end(), references.end()};
-    const auto lower = std::lower_bound(
-        references.begin(), references.end(), address,
-        [](const Reference &r, std::uint64_t value) { return r.to < value; });
-    auto upper = lower;
-    while (upper != references.end() && upper->to == address)
-      ++upper;
-    return {lower, upper};
+    return referenceIndex.to(address);
   }
 
   //===--------------------------------------------------------------------===//
@@ -4481,7 +4651,13 @@ struct Listing::Impl {
       indexDone = 0;
       indexTotal = functions.size();
       references.clear();
+      referenceIndex.clear();
       accessWidths.clear();
+      scanKept = readKeptScan();
+      if (scanKept) {
+        finishIndex();
+        return;
+      }
     }
     if (indexState != IndexState::Building)
       return;
@@ -4525,6 +4701,59 @@ struct Listing::Impl {
           static_cast<std::size_t>(std::max<std::ptrdiff_t>(1, to - from));
       return;
     }
+    keepScan();
+    finishIndex();
+  }
+
+  /// What the code scan found depends on the image and on the functions it
+  /// scanned, which the key names; a session that has read the rest of this
+  /// identity's facts reads it as a scan would have found it.
+  std::string scanFactsKey() const { return "references:" + inventoryKey; }
+
+  /// Each row is the target, the source, the kind and the width.
+  static constexpr std::size_t ScanRowBytes = 2 * sizeof(std::uint64_t) + 2;
+
+  void keepScan() {
+    if (!keepFact)
+      return;
+    std::string bytes(references.size() * ScanRowBytes, '\0');
+    auto *at = bytes.data();
+    for (const auto &row : references) {
+      std::memcpy(at, &row.to, sizeof(row.to));
+      std::memcpy(at + sizeof(row.to), &row.from, sizeof(row.from));
+      at[2 * sizeof(std::uint64_t)] = static_cast<char>(row.kind);
+      at[2 * sizeof(std::uint64_t) + 1] = static_cast<char>(row.width);
+      at += ScanRowBytes;
+    }
+    keepFact(scanFactsKey(), std::move(bytes));
+  }
+
+  bool readKeptScan() {
+    if (!keptFacts)
+      return false;
+    const auto pages = keptFacts(scanFactsKey());
+    if (pages.size() != 1 || pages.front().size() % ScanRowBytes)
+      return false;
+    const auto &bytes = pages.front();
+    references.resize(bytes.size() / ScanRowBytes);
+    const auto *at = bytes.data();
+    for (auto &row : references) {
+      std::memcpy(&row.to, at, sizeof(row.to));
+      std::memcpy(&row.from, at + sizeof(row.to), sizeof(row.from));
+      row.kind = static_cast<RefKind>(
+          static_cast<unsigned char>(at[2 * sizeof(std::uint64_t)]));
+      if (refKindName(row.kind).empty()) {
+        references.clear();
+        return false;
+      }
+      row.width = static_cast<std::uint8_t>(at[2 * sizeof(std::uint64_t) + 1]);
+      at += ScanRowBytes;
+    }
+    return true;
+  }
+
+  /// The scan's rows, whichever session found them, as the finished index.
+  void finishIndex() {
     applyRecoveredReferences();
     // Each relocated data slot refers to its pointer. These storage facts
     // survive instruction recovery even for slots embedded inside code.
@@ -4547,6 +4776,8 @@ struct Listing::Impl {
     references.insert(references.end(), switchReferences.begin(),
                       switchReferences.end());
     sortReferences();
+    referenceIndex.assign(references);
+    references = {};
     indexDone = indexTotal;
     // Data the code reads or writes now takes its width.
     noteAccessWidths();
@@ -4575,10 +4806,7 @@ struct Listing::Impl {
 
   /// Orders the index by target, then source, without repeats.
   void sortReferences() {
-    std::sort(references.begin(), references.end(),
-              [](const Reference &a, const Reference &b) {
-                return a.to != b.to ? a.to < b.to : a.from < b.from;
-              });
+    std::sort(references.begin(), references.end(), ReferenceIndex::before);
     references.erase(std::unique(references.begin(), references.end(),
                                  [](const Reference &a, const Reference &b) {
                                    return a.to == b.to && a.from == b.from &&
@@ -4630,9 +4858,12 @@ struct Listing::Impl {
           switchReferences.push_back({target, *table.table, RefKind::Offset});
       }
     if (indexState == IndexState::Ready) {
+      references = referenceIndex.flattened();
       references.insert(references.end(), switchReferences.begin(),
                         switchReferences.end());
       sortReferences();
+      referenceIndex.assign(references);
+      references = {};
     }
     built = false;
     decoded.clear();
@@ -4864,6 +5095,69 @@ void Listing::flushCacheOne() { impl_->cache.flushOne(); }
 void Listing::flushCache() { impl_->cache.flush(); }
 Json Listing::cacheStats() const { return impl_->cache.stats(); }
 
+std::uint64_t Listing::nameBuilds() const { return impl_->nameBuilds; }
+
+std::uint64_t Listing::cacheGeneration() const {
+  return impl_->cache.generation();
+}
+
+void Listing::setKeptFacts(KeptFacts kept, KeepFact keep) {
+  impl_->keptFacts = std::move(kept);
+  impl_->keepFact = std::move(keep);
+}
+
+std::vector<std::pair<std::string, std::vector<std::string>>>
+Listing::factsToKeep(std::uint64_t entry,
+                     const std::function<bool(const std::string &)> &wanted) {
+  auto &d = *impl_;
+  std::vector<std::pair<std::string, std::vector<std::string>>> facts;
+  auto *function = d.functionAtEntry(entry);
+  // A chunk's look asks what its owner's does.
+  if (!function || function->chunkOf)
+    return facts;
+  d.readPresentation(*function);
+  if (d.functionDisasm && d.native && !function->thunk &&
+      wanted(Impl::disasmFactsKey(entry))) {
+    std::vector<std::string> pages;
+    std::uint64_t cursor = 0;
+    for (;;) {
+      const auto text = takeString(d.functionDisasm(
+          d.session, entry, cursor,
+          ::neverd::limits::worker::kListingMaxDecodeChunk,
+          NEVERD_DISASM_FLOW | NEVERD_DISASM_STACK | NEVERD_DISASM_OPERANDS));
+      const auto page = Json::parse(text, nullptr, false);
+      if (page.is_discarded() || !Impl::validDisasmPage(page)) {
+        pages.clear();
+        break;
+      }
+      pages.push_back(text);
+      const auto next = page.at("next_address");
+      if (next.is_null())
+        break;
+      const auto nextAddress = jsonAddress(next);
+      if (nextAddress <= cursor) {
+        pages.clear();
+        break;
+      }
+      cursor = nextAddress;
+    }
+    if (!pages.empty())
+      facts.emplace_back(Impl::disasmFactsKey(entry), std::move(pages));
+  }
+  using Inspect = const char *(*)(neverd_session_t, neverd_va_t, const char *);
+  const auto options = d.stackFrameOptions(entry);
+  if (const auto inspect = engineSymbol<Inspect>("neverd_stack_frame_json");
+      inspect && d.wide && d.pointerSize == 8 &&
+      wanted(Impl::frameFactsKey(entry, options))) {
+    auto text = takeString(inspect(d.session, entry, options.c_str()));
+    const auto page = Json::parse(text, nullptr, false);
+    if (!page.is_discarded() && Impl::validFramePage(page))
+      facts.emplace_back(Impl::frameFactsKey(entry, options),
+                         std::vector<std::string>{std::move(text)});
+  }
+  return facts;
+}
+
 void Listing::setStackFrames(const Json &rows, const std::string &imageHash) {
   impl_->stackFrames.clear();
   for (const auto &row : rows)
@@ -4883,7 +5177,66 @@ void Listing::invalidate() {
 void Listing::namesChanged() {
   impl_->cache.invalidate();
   impl_->namesStale = true;
+  impl_->functionNamesStale = false;
   ++impl_->generation;
+}
+
+bool Listing::functionRenamed(std::uint64_t address) {
+  auto &d = *impl_;
+  // A build gives the image's entry and its stubs names of their own, and reads
+  // each name it has given again: only a function that shows what the engine
+  // calls it, and goes on to show a name the user gave it, changes nothing else
+  // but the names its exports find it under.
+  auto *function =
+      d.built && !d.namesStale ? d.functionAtEntry(address) : nullptr;
+  if (!function || function->thunk || function->name != function->engineName)
+    return false;
+  const auto index = neverd_func_find_by_addr(d.session, address);
+  if (index < 0)
+    return false;
+  auto name = takeString(neverd_func_name(d.session, index));
+  if (name.empty() || parseDummyName(name))
+    return false;
+  d.cache.invalidate();
+  const auto previous = d.generation++;
+  ++d.functionNameGenerations;
+  auto old = std::exchange(function->name, name);
+  function->engineName = std::move(name);
+  if (function->exported && d.exportRows.is_array())
+    for (const auto &row : d.exportRows)
+      if (jsonAddress(row.value("addr", Json())) == address)
+        if (auto exported = row.value("name", std::string());
+            !exported.empty() && exported != function->name)
+          d.exportAliases.emplace(std::move(exported), address);
+  if (d.functionsByNameGeneration == previous) {
+    d.functionsByName.erase(old);
+    if (const auto *same = d.functionNamed(old))
+      d.functionsByName.emplace(std::move(old), same);
+    d.functionsByName.try_emplace(function->name, function);
+    d.functionsByNameGeneration = d.generation;
+  }
+  if (d.ownFunctionCountGeneration == previous)
+    d.ownFunctionCountGeneration = d.generation;
+  if (d.functionRowsGeneration == previous && !d.functionRowsCache.is_null()) {
+    auto &rows = d.functionRowsCache;
+    const auto row = std::partition_point(
+        rows.begin(), rows.end(), [&](const Json &candidate) {
+          return parseAddress(candidate.at("address").get<std::string>()) <
+                 address;
+        });
+    if (row != rows.end())
+      *row = d.functionRow(*function);
+    d.functionRowsGeneration = d.generation;
+  }
+  return true;
+}
+
+void Listing::functionNamesChanged() {
+  impl_->cache.invalidate();
+  impl_->functionNamesStale = !impl_->namesStale || impl_->functionNamesStale;
+  impl_->namesStale = true;
+  ++impl_->generation;
+  ++impl_->functionNameGenerations;
 }
 
 void Listing::commentsChanged() { impl_->cache.invalidate(); }
@@ -5019,6 +5372,9 @@ void Listing::setPdbDisplayNames(const Json &names) {
 }
 
 std::uint64_t Listing::generation() const { return impl_->generation; }
+std::uint64_t Listing::viewGeneration() const {
+  return impl_->generation - impl_->functionNameGenerations;
+}
 
 std::optional<std::string> Listing::pdbDataName(std::uint64_t address) {
   impl_->build();
@@ -5077,8 +5433,9 @@ Json Listing::indexState() const {
                 {"discovery_complete", impl_->discovered},
                 {"done", impl_->indexDone},
                 {"total", impl_->indexTotal},
+                {"scan_kept", impl_->scanKept},
                 {"references", impl_->indexState == Impl::IndexState::Ready
-                                   ? impl_->references.size()
+                                   ? impl_->referenceIndex.size()
                                    : 0},
                 {"generation", std::to_string(impl_->generation)}};
   // A listing not built yet lists nothing: a count of 0 would tell clients
@@ -5751,6 +6108,7 @@ const std::string &Listing::stringOptions() const {
 void Listing::reindex() {
   impl_->indexState = Impl::IndexState::Idle;
   impl_->references.clear();
+  impl_->referenceIndex.clear();
   impl_->accessWidths.clear();
   invalidate();
 }

@@ -25,7 +25,10 @@
 
 #include "llvm/ADT/SmallVector.h"
 
+#include <bit>
 #include <optional>
+#include <set>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -173,6 +176,240 @@ static ExprPtr asIntegerType(const ExprPtr &V, const TypeRef &Ty) {
   Cast->Type = Cast->CastTo = Ty;
   Cast->Operands = {V};
   return Cast;
+}
+
+/// Comparing a captured word with its masked copy observes only changed bits.
+/// Repeated loads, calls, narrowing views and address masks stay unchanged.
+// Restore one word choice only from contiguous captured-local lanes with
+// the same effect-free guard. Signed, moved and effectful lanes retain theirs.
+static ExprPtr joinSelectedBytes(const ExprPtr &E,
+                                 DiscardableIntegerValues &Discardability) {
+  const auto Integer = [](const ExprPtr &V) {
+    return V && V->Type && V->Type->Kind == NdTypeKind::Int && V->Type->Size &&
+           V->MemoryOrdering == NdMemoryOrdering::None &&
+           V->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+           V->IntrinsicId == Intrinsic::None && V->IntrinsicOutputs.empty() &&
+           !V->IndirectTarget;
+  };
+  if (!Integer(E) || E->Type->Size > sizeof(uint64_t) ||
+      E->Kind != ExprKind::BinOp || E->Operands.size() != 2 ||
+      (E->Op != NdOp::INT_OR && E->Op != NdOp::INT_ADD))
+    return nullptr;
+  const unsigned Bytes = E->Type->Size;
+  const auto Constant = [&](const ExprPtr &V) {
+    return Integer(V) && V->Kind == ExprKind::Const && V->Operands.empty() &&
+           V->AddressOwnerVA == InvalidVA &&
+           (V->ConstProvenance == ConstantAddressProvenance::Unknown ||
+            V->ConstProvenance == ConstantAddressProvenance::Scalar);
+  };
+  struct Slice {
+    ExprPtr Base;
+    unsigned Low;
+  };
+  const auto ReadSlice = [&](ExprPtr V) -> std::optional<Slice> {
+    if (!Integer(V))
+      return std::nullopt;
+    const unsigned Count = V->Type->Size;
+    unsigned Low = 0;
+    if (V->Kind == ExprKind::BinOp && V->Op == NdOp::SUBBYTES &&
+        V->Operands.size() == 2 && Constant(V->Operands[1])) {
+      if (V->Operands[1]->ConstVal > UINT16_MAX)
+        return std::nullopt;
+      Low = V->Operands[1]->ConstVal;
+      V = V->Operands[0];
+    } else if (V->Kind == ExprKind::Cast && V->Operands.size() == 1 &&
+               V->CastTo && V->CastTo->Kind == NdTypeKind::Int &&
+               V->CastTo->Size == Count) {
+      V = V->Operands[0];
+    }
+    if (!Integer(V) || V->Kind != ExprKind::Var || !V->Operands.empty() ||
+        V->Var.Kind == MedVar::Unspecified || V->Var.Size != V->Type->Size ||
+        Low > V->Type->Size || Count > V->Type->Size - Low)
+      return std::nullopt;
+    return Slice{V, Low};
+  };
+  const auto SameCondition = [](const ExprPtr &A, const ExprPtr &B) {
+    if (A != B && !A->structuralEq(*B))
+      return false;
+    // Structural equality alone can ignore a local's signedness. A later
+    // widening cast in a guard reads that signedness, so require it throughout
+    // the matched guards. An unknown occurrence has no shared captured value.
+    std::vector<std::pair<ExprPtr, ExprPtr>> Work{{A, B}};
+    std::set<std::pair<const HighExpr *, const HighExpr *>> Seen;
+    while (!Work.empty()) {
+      auto [Left, Right] = Work.back();
+      Work.pop_back();
+      if (!Seen.emplace(Left.get(), Right.get()).second)
+        continue;
+      if (Left->Kind == ExprKind::Undef || !Left->Type || !Right->Type ||
+          Left->Type->Kind != Right->Type->Kind ||
+          Left->Type->IsSigned != Right->Type->IsSigned)
+        return false;
+      for (size_t I = 0; I != Left->Operands.size(); ++I)
+        Work.emplace_back(Left->Operands[I], Right->Operands[I]);
+    }
+    return true;
+  };
+
+  ExprPtr Condition, Yes, No;
+  unsigned YesLow = 0, NoLow = 0, Covered = 0, Lanes = 0;
+  uint64_t Occupied = 0;
+  std::vector<ExprPtr> Work{E};
+  while (!Work.empty()) {
+    auto V = Work.back();
+    Work.pop_back();
+    if (!Integer(V) || V->Type->Size != Bytes)
+      return nullptr;
+    if (V->Kind == ExprKind::BinOp && V->Operands.size() == 2 &&
+        (V->Op == NdOp::INT_OR || V->Op == NdOp::INT_ADD)) {
+      Work.insert(Work.end(), V->Operands.begin(), V->Operands.end());
+      continue;
+    }
+    unsigned Offset = 0;
+    if (V->Kind == ExprKind::BinOp && V->Operands.size() == 2) {
+      ExprPtr Value, Scale;
+      if (V->Op == NdOp::INT_LEFT) {
+        Value = V->Operands[0];
+        Scale = V->Operands[1];
+        if (!Constant(Scale) || Scale->ConstVal % 8 ||
+            Scale->ConstVal >= Bytes * 8)
+          return nullptr;
+        Offset = Scale->ConstVal / 8;
+      } else if (V->Op == NdOp::INT_MULT) {
+        const unsigned I = Constant(V->Operands[0]) ? 0 : 1;
+        Scale = V->Operands[I];
+        Value = V->Operands[1 - I];
+        if (!Constant(Scale) || Scale->Type->Size != Bytes ||
+            !std::has_single_bit(Scale->ConstVal))
+          return nullptr;
+        const unsigned Shift = std::countr_zero(Scale->ConstVal);
+        if (Shift % 8 || Shift >= Bytes * 8)
+          return nullptr;
+        Offset = Shift / 8;
+      }
+      if (Value) {
+        if (!Integer(Value) || Value->Type->Size != Bytes)
+          return nullptr;
+        V = std::move(Value);
+      }
+    }
+    // A signed extension can set bits outside its lane and cannot be packed
+    // this way. A cast from an unsigned narrow value is a zero extension too.
+    const bool Extend = V->Kind == ExprKind::UnaryOp && V->Op == NdOp::INT_ZEXT;
+    const bool Cast = V->Kind == ExprKind::Cast && V->CastTo &&
+                      V->CastTo->Kind == NdTypeKind::Int &&
+                      V->CastTo->Size == Bytes;
+    if ((Extend || Cast) && V->Operands.size() == 1 &&
+        Integer(V->Operands[0]) && V->Operands[0]->Type->Size < Bytes &&
+        (Extend || !V->Operands[0]->Type->IsSigned))
+      V = V->Operands[0];
+    if (!Integer(V) || V->Kind != ExprKind::BinOp || V->Op != NdOp::SELECT ||
+        V->Operands.size() != 3 || !Integer(V->Operands[0]) ||
+        !Integer(V->Operands[1]) || !Integer(V->Operands[2]) ||
+        V->Operands[1]->Type->Size != V->Type->Size ||
+        V->Operands[2]->Type->Size != V->Type->Size ||
+        V->Type->Size > Bytes - Offset)
+      return nullptr;
+    const unsigned Count = V->Type->Size;
+    const uint64_t Mask = ((uint64_t{1} << Count) - 1) << Offset;
+    if (Occupied & Mask)
+      return nullptr;
+    Occupied |= Mask;
+    Covered = std::max(Covered, Offset + Count);
+    auto T = ReadSlice(V->Operands[1]), F = ReadSlice(V->Operands[2]);
+    if (!T || !F || T->Low < Offset || F->Low < Offset ||
+        !Discardability.canDiscard(V->Operands[0]))
+      return nullptr;
+    if (!Condition) {
+      Condition = V->Operands[0];
+      if (!SameCondition(Condition, Condition))
+        return nullptr;
+      Yes = T->Base;
+      No = F->Base;
+      YesLow = T->Low - Offset;
+      NoLow = F->Low - Offset;
+    } else if (!SameCondition(Condition, V->Operands[0]) ||
+               !Yes->structuralEq(*T->Base) || !No->structuralEq(*F->Base) ||
+               T->Low - Offset != YesLow || F->Low - Offset != NoLow) {
+      return nullptr;
+    }
+    ++Lanes;
+  }
+  if (Lanes < 2 || Occupied != (uint64_t{1} << Covered) - 1 ||
+      (Covered != 1 && Covered != 2 && Covered != 4 && Covered != 8))
+    return nullptr;
+  auto View = [&](const ExprPtr &Base, unsigned Low) {
+    auto Type = NdType::makeInt(Covered, false);
+    if (!Low && Covered == Base->Type->Size)
+      return asIntegerType(Base, Type);
+    auto Slice = HighExpr::makeBinop(
+        NdOp::SUBBYTES, Base,
+        HighExpr::makeConst(Low, 4, ConstantAddressProvenance::Scalar));
+    Slice->Type = Type;
+    return Slice;
+  };
+  auto Result = std::make_shared<HighExpr>();
+  Result->Kind = ExprKind::BinOp;
+  Result->Op = NdOp::SELECT;
+  Result->Type = NdType::makeInt(Covered, false);
+  Result->Operands = {Condition, View(Yes, YesLow), View(No, NoLow)};
+  if (Covered < Bytes)
+    Result = HighExpr::makeUnary(NdOp::INT_ZEXT, std::move(Result));
+  Result->Type = E->Type;
+  return Result;
+}
+
+static ExprPtr foldMaskedWordEquality(const ExprPtr &E) {
+  if (!E || E->Kind != ExprKind::BinOp || E->Operands.size() != 2 ||
+      (E->Op != NdOp::INT_EQUAL && E->Op != NdOp::INT_NOTEQUAL))
+    return nullptr;
+  const auto Word = [](const ExprPtr &V) {
+    return V && V->Type && V->Type->Kind == NdTypeKind::Int && V->Type->Size &&
+           V->Type->Size <= 8 && V->MemoryOrdering == NdMemoryOrdering::None &&
+           V->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+           V->IntrinsicId == Intrinsic::None && V->IntrinsicOutputs.empty() &&
+           !V->IndirectTarget && !V->SourceCallHint;
+  };
+  if (!Word(E))
+    return nullptr;
+  for (unsigned I = 0; I != 2; ++I) {
+    const auto &X = E->Operands[I], &Y = E->Operands[1 - I];
+    if (!Word(X) || !Word(Y) || X->Kind != ExprKind::Var ||
+        X->Var.Kind == MedVar::Unspecified || !X->Operands.empty() ||
+        X->Var.Size != X->Type->Size || Y->Kind != ExprKind::BinOp ||
+        Y->Operands.size() != 2 ||
+        (Y->Op != NdOp::INT_AND && Y->Op != NdOp::INT_OR) ||
+        X->Type->Size != Y->Type->Size ||
+        (X->Type->Size < 4 && X->Type->IsSigned != Y->Type->IsSigned))
+      continue;
+    for (unsigned J = 0; J != 2; ++J) {
+      const auto &K = Y->Operands[J], &V = Y->Operands[1 - J];
+      if (!Word(K) || K->Kind != ExprKind::Const || !K->Operands.empty() ||
+          K->AddressOwnerVA != InvalidVA ||
+          (K->ConstProvenance != ConstantAddressProvenance::Unknown &&
+           K->ConstProvenance != ConstantAddressProvenance::Scalar) ||
+          K->Type->Size != X->Type->Size || !Word(V) ||
+          V->Kind != ExprKind::Var || V->Var != X->Var ||
+          !V->Operands.empty() || V->Type->Size != X->Type->Size ||
+          V->Var.Size != V->Type->Size)
+        continue;
+      const unsigned Bytes = X->Type->Size;
+      const uint64_t All =
+          Bytes == 8 ? UINT64_MAX : (uint64_t{1} << (Bytes * 8)) - 1;
+      const uint64_t Mask =
+          (Y->Op == NdOp::INT_AND ? ~K->ConstVal : K->ConstVal) & All;
+      auto Selected = HighExpr::makeBinop(
+          NdOp::INT_AND, asIntegerType(X, NdType::makeInt(Bytes, false)),
+          HighExpr::makeConst(Mask, Bytes, ConstantAddressProvenance::Scalar));
+      auto Result = HighExpr::makeBinop(
+          E->Op, Selected,
+          HighExpr::makeConst(Y->Op == NdOp::INT_AND ? 0 : Mask, Bytes,
+                              ConstantAddressProvenance::Scalar));
+      Result->Type = E->Type;
+      return Result;
+    }
+  }
+  return nullptr;
 }
 
 /// Equality observes word bits, so a wrapped difference (including a
@@ -464,7 +701,8 @@ static ExprPtr foldWordIdentity(const ExprPtr &E) {
 /// This is local bit projection, independent of optional symbolic rewriting.
 /// Copy changed paths because another use of a shared node may read more bits.
 static ExprPtr demandMaskedBits(const ExprPtr &E, uint64_t Demand,
-                                size_t &Budget) {
+                                size_t &Budget,
+                                DiscardableIntegerValues &Discardability) {
   if (!E || !Budget || !E->Type || E->Type->Kind != NdTypeKind::Int ||
       !E->Type->Size || E->Type->Size > 8 ||
       E->IntrinsicId != Intrinsic::None || !E->IntrinsicOutputs.empty() ||
@@ -476,9 +714,10 @@ static ExprPtr demandMaskedBits(const ExprPtr &E, uint64_t Demand,
     return Bytes == 8 ? UINT64_MAX : (uint64_t{1} << (Bytes * 8)) - 1;
   };
   Demand &= Mask(E->Type->Size);
+  if (zeroOrOne(E))
+    Demand &= 1;
   if (!Demand) {
-    size_t DropBudget = ::neverd::limits::ir::kHighExprSimplifyDropBudget;
-    if (!discardableIntegerValue(E, DropBudget))
+    if (!Discardability.canDiscard(E))
       return E;
     auto Zero = HighExpr::makeConst(0, E->Type->Size,
                                     ConstantAddressProvenance::Scalar);
@@ -511,21 +750,77 @@ static ExprPtr demandMaskedBits(const ExprPtr &E, uint64_t Demand,
     const bool Signed = Cast ? In->Type->IsSigned : E->Op == NdOp::INT_SEXT;
     if (Signed && (Demand & ~InputMask))
       InputDemand |= uint64_t{1} << (In->Type->Size * 8 - 1);
-    auto Projected = demandMaskedBits(In, InputDemand, Budget);
+    auto Projected = demandMaskedBits(In, InputDemand, Budget, Discardability);
     if (Projected == In)
       return E;
     auto Copy = std::make_shared<HighExpr>(*E);
     Copy->Operands = {std::move(Projected)};
     return Copy;
   }
-  if (E->Kind != ExprKind::BinOp || E->Operands.size() != 2 ||
-      (E->Op != NdOp::INT_AND && E->Op != NdOp::INT_OR &&
-       E->Op != NdOp::INT_XOR))
+  if (E->Kind == ExprKind::BinOp && E->Op == NdOp::SELECT &&
+      E->Operands.size() == 3 && E->Operands[0] && E->Operands[1] &&
+      E->Operands[2] && E->Operands[1]->Type && E->Operands[2]->Type &&
+      E->Operands[1]->Type->Kind == NdTypeKind::Int &&
+      E->Operands[2]->Type->Kind == NdTypeKind::Int &&
+      E->Operands[1]->Type->Size == E->Type->Size &&
+      E->Operands[2]->Type->Size == E->Type->Size) {
+    auto Taken =
+        demandMaskedBits(E->Operands[1], Demand, Budget, Discardability);
+    auto Otherwise =
+        demandMaskedBits(E->Operands[2], Demand, Budget, Discardability);
+    if (Taken == E->Operands[1] && Otherwise == E->Operands[2])
+      return E;
+    auto Copy = std::make_shared<HighExpr>(*E);
+    Copy->Operands = {E->Operands[0], std::move(Taken), std::move(Otherwise)};
+    return Copy;
+  }
+  if (E->Kind != ExprKind::BinOp || E->Operands.size() != 2)
     return E;
   const auto &L = E->Operands[0], &R = E->Operands[1];
+  if (L && R && L->Type && R->Type && L->Type->Kind == NdTypeKind::Int &&
+      R->Type->Kind == NdTypeKind::Int && L->Type->Size == E->Type->Size &&
+      R->Kind == ExprKind::Const && R->Operands.empty() &&
+      (E->Op == NdOp::INT_LEFT || E->Op == NdOp::INT_RIGHT ||
+       E->Op == NdOp::INT_ASHR) &&
+      R->ConstVal < unsigned(E->Type->Size * 8)) {
+    const unsigned Shift = R->ConstVal;
+    const unsigned Width = E->Type->Size * 8;
+    uint64_t InputDemand =
+        E->Op == NdOp::INT_LEFT ? Demand >> Shift : Demand << Shift;
+    if (E->Op == NdOp::INT_ASHR && Shift &&
+        (Demand & (Mask(E->Type->Size) << (Width - Shift))))
+      InputDemand |= uint64_t{1} << (Width - 1);
+    auto Projected = demandMaskedBits(L, InputDemand, Budget, Discardability);
+    if (Projected == L)
+      return E;
+    auto Copy = std::make_shared<HighExpr>(*E);
+    Copy->Operands[0] = std::move(Projected);
+    return Copy;
+  }
   if (!L || !R || !L->Type || !R->Type || L->Type->Kind != NdTypeKind::Int ||
       R->Type->Kind != NdTypeKind::Int || L->Type->Size != E->Type->Size ||
       R->Type->Size != E->Type->Size)
+    return E;
+  if (E->Op == NdOp::INT_MULT) {
+    for (unsigned I = 0; I < 2; ++I) {
+      const auto &Factor = E->Operands[I];
+      if (Factor->Kind != ExprKind::Const || !Factor->Operands.empty())
+        continue;
+      const auto Value = Factor->ConstVal & Mask(E->Type->Size);
+      if (!std::has_single_bit(Value))
+        continue;
+      auto Projected = demandMaskedBits(E->Operands[1 - I],
+                                        Demand >> std::countr_zero(Value),
+                                        Budget, Discardability);
+      if (Projected == E->Operands[1 - I])
+        return E;
+      auto Copy = std::make_shared<HighExpr>(*E);
+      Copy->Operands[1 - I] = std::move(Projected);
+      return Copy;
+    }
+    return E;
+  }
+  if (E->Op != NdOp::INT_AND && E->Op != NdOp::INT_OR && E->Op != NdOp::INT_XOR)
     return E;
   auto ChildDemand = [&](const ExprPtr &Other) {
     // Two constants must not each give the other responsibility for a set
@@ -539,8 +834,8 @@ static ExprPtr demandMaskedBits(const ExprPtr &E, uint64_t Demand,
       return Demand & ~Other->ConstVal;
     return Demand;
   };
-  auto Left = demandMaskedBits(L, ChildDemand(R), Budget);
-  auto Right = demandMaskedBits(R, ChildDemand(L), Budget);
+  auto Left = demandMaskedBits(L, ChildDemand(R), Budget, Discardability);
+  auto Right = demandMaskedBits(R, ChildDemand(L), Budget, Discardability);
   if (Left == L && Right == R)
     return E;
   auto Copy = std::make_shared<HighExpr>(*E);
@@ -550,7 +845,8 @@ static ExprPtr demandMaskedBits(const ExprPtr &E, uint64_t Demand,
 
 ExprPtr projectHighIntegerBits(const ExprPtr &Value, uint64_t Demand) {
   size_t Budget = limits::ir::kHighExpressionDemandedMaskWork;
-  return demandMaskedBits(Value, Demand, Budget);
+  DiscardableIntegerValues Discardability;
+  return demandMaskedBits(Value, Demand, Budget, Discardability);
 }
 
 /// Rewrite \p X knowing only its low \p Bytes bytes are read (the operand
@@ -899,6 +1195,7 @@ static ExprPtr signedOrderFromFlags(const ExprPtr &E) {
 }
 
 static void simplifyExprNode(ExprPtr &E, const HighExprSet &OrderedMemory,
+                             DiscardableIntegerValues &Discardability,
                              bool &Changed) {
   // Atomic accesses are observable even when the surrounding value appears
   // algebraically redundant.  Keep the containing expression intact so a
@@ -911,7 +1208,10 @@ static void simplifyExprNode(ExprPtr &E, const HighExprSet &OrderedMemory,
     E = std::move(Value);
   };
 
-  if (auto Comparison = foldDifferenceZeroTest(E)) {
+  auto Comparison = foldMaskedWordEquality(E);
+  if (!Comparison)
+    Comparison = foldDifferenceZeroTest(E);
+  if (Comparison) {
     // A comparison may have several users. Keep its stable node (and source
     // metadata), updating its operands without modifying the shared word
     // expression from which they were recovered.
@@ -924,6 +1224,76 @@ static void simplifyExprNode(ExprPtr &E, const HighExprSet &OrderedMemory,
     Replace(std::move(Joined));
     return;
   }
+
+  if (auto Joined = joinSelectedBytes(E, Discardability)) {
+    Replace(std::move(Joined));
+    return;
+  }
+
+  // Machine sign extension is often lowered as (x << k) >>s k. Preserve the
+  // low-byte truncation and the signed narrow interpretation explicitly.
+  if (E->Kind == ExprKind::BinOp && E->Op == NdOp::INT_ASHR &&
+      E->Operands.size() == 2 && E->Type && E->Type->Kind == NdTypeKind::Int &&
+      E->Type->Size <= 8 && E->Operands[0] && E->Operands[1] &&
+      E->Operands[1]->Kind == ExprKind::Const) {
+    const auto &Shift = E->Operands[0];
+    const uint64_t Bits = E->Type->Size * 8;
+    const uint64_t Amount = E->Operands[1]->ConstVal;
+    if (Shift->Kind == ExprKind::BinOp && Shift->Op == NdOp::INT_LEFT &&
+        Shift->Operands.size() == 2 && Shift->Type &&
+        Shift->Type->Kind == NdTypeKind::Int &&
+        Shift->Type->Size == E->Type->Size && Shift->Operands[0] &&
+        Shift->Operands[0]->Type &&
+        Shift->Operands[0]->Type->Kind == NdTypeKind::Int &&
+        Shift->Operands[0]->Type->Size == E->Type->Size && Shift->Operands[1] &&
+        Shift->Operands[1]->Kind == ExprKind::Const &&
+        Shift->Operands[1]->ConstVal == Amount && Amount && Amount < Bits &&
+        (Bits - Amount == 8 || Bits - Amount == 16 || Bits - Amount == 32)) {
+      auto Narrow = std::make_shared<HighExpr>();
+      Narrow->Kind = ExprKind::Cast;
+      Narrow->Type = Narrow->CastTo =
+          NdType::makeInt((Bits - Amount) / 8, true);
+      Narrow->Operands = {Shift->Operands[0]};
+      auto Extended = HighExpr::makeUnary(NdOp::INT_SEXT, Narrow);
+      Extended->Type = E->Type;
+      Replace(std::move(Extended));
+      return;
+    }
+  }
+
+  if (E->Kind == ExprKind::UnaryOp && E->Op == NdOp::BOOL_NOT &&
+      E->Operands.size() == 1 && E->Operands[0] && zeroOrOne(E->Operands[0])) {
+    const auto &View = E->Operands[0];
+    if (View->Operands.size() == 1 && View->Operands[0] &&
+        (View->Kind == ExprKind::Cast ||
+         (View->Kind == ExprKind::UnaryOp &&
+          (View->Op == NdOp::INT_ZEXT || View->Op == NdOp::INT_SEXT)))) {
+      auto Truth = std::make_shared<HighExpr>(*E);
+      Truth->Operands = {View->Operands[0]};
+      Replace(std::move(Truth));
+      return;
+    }
+  }
+
+  // A widened predicate still contains only zero or one. Negating its low
+  // bit is logical negation, with the original result width kept explicitly.
+  if (E->Kind == ExprKind::BinOp && E->Op == NdOp::INT_AND &&
+      E->Operands.size() == 2 && E->Type && E->Type->Kind == NdTypeKind::Int)
+    for (unsigned I = 0; I < 2; ++I) {
+      const auto &Mask = E->Operands[I];
+      const auto &Not = E->Operands[1 - I];
+      if (!Mask || Mask->Kind != ExprKind::Const || Mask->ConstVal != 1 ||
+          !Not || Not->Kind != ExprKind::UnaryOp || Not->Op != NdOp::INT_NOT ||
+          Not->Operands.size() != 1 || !Not->Type ||
+          Not->Type->Size != E->Type->Size || !zeroOrOne(Not->Operands[0]))
+        continue;
+      auto Truth = HighExpr::makeUnary(NdOp::BOOL_NOT, Not->Operands[0]);
+      Truth->Type = NdType::makeInt(1, false);
+      auto Extended = HighExpr::makeUnary(NdOp::INT_ZEXT, Truth);
+      Extended->Type = E->Type;
+      Replace(std::move(Extended));
+      return;
+    }
 
   // Machine sign extension is often lowered as (x << k) >>s k. Preserve the
   // low-byte truncation and the signed narrow interpretation explicitly.
@@ -1298,8 +1668,9 @@ static void simplifyExprNode(ExprPtr &E, const HighExprSet &OrderedMemory,
       if (E->Operands[I]->Kind == ExprKind::Const && E->Operands[1 - I]->Type &&
           E->Operands[1 - I]->Type->Size == E->Type->Size) {
         size_t Budget = ::neverd::limits::ir::kHighExpressionDemandedMaskWork;
-        auto Projected = demandMaskedBits(E->Operands[1 - I],
-                                          E->Operands[I]->ConstVal, Budget);
+        auto Projected =
+            demandMaskedBits(E->Operands[1 - I], E->Operands[I]->ConstVal,
+                             Budget, Discardability);
         if (Projected != E->Operands[1 - I]) {
           auto Copy = std::make_shared<HighExpr>(*E);
           Copy->Operands[1 - I] = std::move(Projected);
@@ -1427,8 +1798,10 @@ static void simplifyExprNode(ExprPtr &E, const HighExprSet &OrderedMemory,
       E->Type->Size <= 8)
     for (unsigned I = 0; I < 2; ++I)
       if (isZeroConst(E->Operands[I]) && E->Operands[1 - I] &&
-          isEffectFree(E->Operands[1 - I])) {
-        Replace(HighExpr::makeConst(0, E->Type->Size));
+          Discardability.canDiscard(E->Operands[1 - I])) {
+        auto Zero = HighExpr::makeConst(0, E->Type->Size);
+        Zero->Type = E->Type;
+        Replace(std::move(Zero));
         return;
       }
 
@@ -1467,27 +1840,47 @@ static void simplifyExprNode(ExprPtr &E, const HighExprSet &OrderedMemory,
 // placing the large local-rewrite frame on the stack at every expression
 // level. A parent is rewritten only after its operand slots have finished;
 // those slots remain valid while their parent is waiting in the worklist.
-static void simplifyExprGraph(ExprPtr &Root, HighExprSet &Seen,
-                              const HighExprSet &OrderedMemory, bool &Changed) {
-  if (!Root || !Seen.insert(Root.get()).second)
+static void
+simplifyExprGraph(ExprPtr &Root, HighExprSet &Seen,
+                  std::unordered_map<ExprPtr, ExprPtr> &Replacements,
+                  const HighExprSet &OrderedMemory,
+                  DiscardableIntegerValues &Discardability, bool &Changed) {
+  auto Enter = [&](ExprPtr &E) {
+    if (!E)
+      return false;
+    if (const auto It = Replacements.find(E); It != Replacements.end()) {
+      Changed |= E != It->second;
+      E = It->second;
+      return false;
+    }
+    return Seen.insert(E.get()).second;
+  };
+  if (!Enter(Root))
     return;
   struct Frame {
     ExprPtr *Slot;
+    ExprPtr Original;
     size_t NextOperand;
   };
-  llvm::SmallVector<Frame, 16> Work{{&Root, 0}};
+  llvm::SmallVector<Frame, 16> Work{{&Root, Root, 0}};
   while (!Work.empty()) {
     auto &Current = Work.back();
     auto &Expr = *Current.Slot;
     if (Current.NextOperand < Expr->Operands.size()) {
       auto &Child = Expr->Operands[Current.NextOperand++];
-      if (Child && Seen.insert(Child.get()).second)
-        Work.push_back({&Child, 0});
+      if (Enter(Child))
+        Work.push_back({&Child, Child, 0});
       continue;
     }
     auto *Slot = Current.Slot;
+    auto Original = std::move(Current.Original);
     Work.pop_back();
-    simplifyExprNode(*Slot, OrderedMemory, Changed);
+    simplifyExprNode(*Slot, OrderedMemory, Discardability, Changed);
+    // A replacement changes this pointer slot, not the other parents of the
+    // shared node. Publish it to every later use, retaining its old identity
+    // so allocations made by a rewrite cannot reuse a visited pointer.
+    if (*Slot != Original)
+      Replacements.emplace(std::move(Original), *Slot);
   }
 }
 
@@ -1500,11 +1893,14 @@ bool simplifyAllExprs(std::vector<HighStmt> &Stmts) {
   // ancestors can be removed, and new nodes contain only pure operands, so
   // one graph-wide effect analysis remains valid throughout this pass.
   const auto OrderedMemory = findOrderedMemoryAncestors(Roots);
+  DiscardableIntegerValues Discardability;
   HighExprSet Seen;
+  std::unordered_map<ExprPtr, ExprPtr> Replacements;
   bool Changed = false;
   walkStmts(Stmts, [&](HighStmt &S) {
     forEachRhsExpr(S, [&](ExprPtr &EP) {
-      simplifyExprGraph(EP, Seen, OrderedMemory, Changed);
+      simplifyExprGraph(EP, Seen, Replacements, OrderedMemory, Discardability,
+                        Changed);
     });
   });
   return Changed;

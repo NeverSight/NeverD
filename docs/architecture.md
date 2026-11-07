@@ -1263,7 +1263,8 @@ authenticated storage, relocation and signed-unwind ABI contract.
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is
 exhausted. ELF and Windows ARM64 retain eight-byte stack slots. Darwin variadic
-tails keep their separate eight-byte placement rule. Darwin integer pairs may
+tails use whole objects rounded to eight-byte slots, with higher natural
+alignment when required and each member at its original object offset. Darwin integer pairs may
 start at odd-numbered registers; an entire 128-bit scalar moves to a 16-byte
 aligned stack slot when the remaining registers cannot hold it. ELF and COFF
 retain even-register alignment. Complete aggregate spills exhaust their bank
@@ -1271,8 +1272,14 @@ and preserve each field's declared offset. The limits for this owner live in
 `SourceParameterPlacementAAPCS64.def`.
 
 Fixed arm64 analyst call prototypes reuse `assignDarwinFixedSourceABI` and its
-shared AAPCS64 parameter placement. Darwin variadic prefixes retain their
-separate promoted-scalar contract. Narrow integer
+shared AAPCS64 parameter placement. Darwin variadic calls reuse that owner for
+the fixed prefix and result, then place complete unnamed values on the stack.
+The stack cursor includes the full storage of any fixed aggregate spill.
+`SourceABICarriers.def` owns the slot widths and diagnostics. Scalar tails must
+carry their default promotions; HFA members keep their declared float widths.
+Direct records and 128-bit values use the same logical types and member proofs
+in fixed and variadic calls. Indirect tails still require a separate copy
+storage proof and remain refused. Narrow integer
 register parameters and AArch64 narrow results retain the ABI's 32-bit
 sign/zero-extension guarantee separately from their source width. LLVM source
 call emission consumes those validated guarantees as `signext`/`zeroext`
@@ -1284,7 +1291,11 @@ type and complete physical members. LLVM uses arrays for HFA and word-record
 arguments so register exhaustion cannot split a logical value. Results flatten
 back to the declared source offsets, preserving padding as non-value bytes.
 LLVM C admits these grouped Darwin parameters independently of the register
-count; ELF/x86 array restrictions remain in place.
+count, including the unnamed variadic tail. Its boundary validator checks
+every actual operand, the ordinary C convention and all ABI attributes; raw
+non-promoted scalar tails cannot accompany admitted variadic arrays. ELF/x86
+array restrictions remain in place. Integer alignment uses the Darwin scalar
+width rather than the architecture-neutral `NdType` alignment cap.
 
 `sourceCallTypeOf` retains natural C record fields from the SDK's type library
 without changing the ordinary display conversion. Names, sizes, alignment and
@@ -4454,6 +4465,35 @@ unknown size to their visits. Like a kept document, a render reads what the engi
 `BinaryImage::CodeRefTargets` is additive, so an address a function rendered
 earlier took, such as a funclet's `_local_unwind` continuation in its parent, can
 make the render differ from a first visit to that function in a new session.
+What the job renders also goes to the project's `local/render-ahead`
+(`RenderStore.cpp`), one folder for each set of inputs and one append-only file for
+each session, so a later session over the same inputs reads it from its first
+request, renders only what no session reached, and, once a job has reached every
+function, leaves the summaries and read-ahead until a request needs more than
+those renders answer. The inputs are the browse cache's identity without code
+edits, which are options of a function's own view and so in its key, comments and
+function names, which a view's decoration reads and the pages do not spell, and
+operand formats, which source does not show. A session whose job starts over after
+it began no longer reads as a new session does, and stops reading and adding to the
+store.
+The job also keeps what a function's first look in the listing asks the engine, its
+recovered instructions and its stack frame, in `local/listing-facts` under the same
+identity without the names of data, which those answers do not spell either. The
+owner reads them there (`Listing::setKeptFacts`) and takes up what its
+replica adds as the job goes, so a first look at a function the job has reached
+prepares no LowIR. What misses, or no longer reads as it was written, asks the
+engine and the browse cache as before. The owner keeps what its reference scan
+found there too, under the functions it scanned, so a later session finishes its
+index from those rows once its discovery ends. A store's session writes where its
+records lie beside its file (`.ndri`) when it ends or its job reaches the last
+function, so a later session reads that and walks only what it leaves out.
+An index entry's page table must fit its record, as it must in the store file.
+An invalid index is discarded before reading pages; the original file still
+recovers every complete record.
+A replica takes those edits in place (`analysis_update_names`), since no analysis
+reads them: what it keeps of a view stays the view's, and only a new name of data
+or a data item, which pages spell, forgets the renders and moves to a store of its
+own.
 The GUI owner no longer requests that pipeline warmup: source/CFG views use
 separate analysis sessions and cannot consume the owner's pipeline cache.
 With idle analysis enabled, native images with 4096–65536 functions and at most
@@ -9002,6 +9042,15 @@ reports both replacements and in-place changes to shared nodes. With candidates
 present, another cleanup round requires a statement deletion, inlining or
 simplification; rejected candidates alone do not repeat the same analysis. The
 existing stopping point without candidates and iteration limits remain unchanged.
+Copy and control-flow cleanup share use counts saturated at two. Each read
+root contributes a use even when roots share one expression object. The
+expression-identity table belongs to one immutable walk, and a new walk starts
+after rewrites. Small visits tables use inline storage and grow normally
+when needed. Lookup storage never decides traversal or rewrite order; the
+pending walk keeps its existing operand order. Non-variable leaves have no
+read to count and need no identity-table entry; an indirect target is a child
+even when a call has no arguments.
+
 Med-to-High lowering preserves CFG successors after branch threading, including
 sole successors with no remaining branch operation. When source order differs,
 it emits an explicit transfer after that edge's PHI copies.
@@ -17142,14 +17191,41 @@ NullPointerException with a null message before inspecting the optional reply;
 non-null Parcels reuse the owned/recycled lifecycle checks without changing
 bytes or positions. Local Binder dispatch remains unsupported.
 
-The next transport boundary requires an explicit native Binder binding:
-Java proxy keys do not identify native handles, peer state or reply object
-translations. An absent model binding is not evidence that a Binder was
-finalized or died. No transaction success, native error or reply is fabricated.
-`enforceInterface` also remains unmodeled: its incoming transaction flags and
-Java StrictMode policy-change upcall cannot be omitted. Borrowed native Parcels,
-object/FD translation, custom string helpers, capacity/size mutation, floating
-methods and RPC remain unsupported.
+Each supplied proxy may independently declare `native_binding` with a positive
+signed `fd`, a uint32 `handle`, and explicit `alive`. The native adapter resolves
+the fd on first use to an existing shared Linux Binder open description and
+rejects closure/reuse. Java keys still imply no native endpoint. The guest must
+establish any context manager and read-only reply arenas itself. Object-free,
+synchronous handle-zero calls use the existing protocol-8 ioctl routing;
+replies are computed by guest service code. Missing managers return the kernel's
+DEAD_REPLY, which sets the BpBinder dead cache and a checked DeadObjectException.
+A declared dead proxy short-circuits before IPC. Status replies retain old Parcel
+bytes/cursors, set its error state and return false for UNKNOWN_TRANSACTION.
+Other modeled statuses reuse Java exceptions; remaining logging/error dispatch
+stops explicitly after the driver result.
+The native lifetime contract follows API 28
+[BpBinder](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/BpBinder.cpp)
+and [Parcel](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/Parcel.cpp).
+
+Runtime's authenticated external-call continuations cover both DEX invocation
+and direct JNI intrinsics. A resumed wait may retain its original import while
+installing the next wait or entering a guest callback. Callback completion may
+likewise suspend before returning to that import; ordinary and resumed calls
+share one callback-entry helper. The native adapter suspends on the existing guest
+scheduler until thread-specific Binder work arrives. Shared Linux memory owns
+reply arena bytes; Parcel retains a live read-only view and queues BC_FREE_BUFFER
+on replacement, unmarshalling or recycle. Thread exit flushes pending frees and
+uses the same BINDER_THREAD_EXIT owner. API 28 freeBuffer selects the current
+native thread, ignoring its cookie, so that thread flushes the queued frees at
+its next Binder exchange. Null Java replies use the temporary-reply release
+path. Neither cursor motion nor reading frees the buffer. An invalidated or unreadable mapping
+stops explicitly, and scalar reads do not copy the entire retained buffer.
+
+`enforceInterface` still requires incoming flags and the Java StrictMode upcall.
+Local Binder dispatch, nested/one-way transactions, translated handles, Binder
+objects/FDs, and writes/capacity growth in borrowed reply storage remain explicit
+boundaries. ServiceManager `lookup_results` remain a separate semantic input;
+this transport does not turn those entries into kernel peers or replies.
 
 
 `KernelFileSystem` owns the validated volume/node state; `KernelModel` owns canonical device topology and references. `DriverFileSystemJSON` is transport only. `DeviceOwnerKind` distinguishes Guest, PnpProvider and FileSystemProvider; only PnP routes use `isPnpProviderDevice`. Volume devices exist before DriverEntry, and four shared route guards reject unimplemented file I/O before publication. Owner snapshots remain independent of guest object projections and configuration.
@@ -18075,7 +18151,7 @@ later accesses through the escaped address.
 
 Image storage classifies operand uses separately from shared expression nodes. A local memory use cannot hide a later escaping use, in either traversal order; the same classification controls bounded table extents.
 
-If an escaping unsized address has no admissible storage extent, including an extent beyond the shared embedding limit, emission fails explicitly before publishing source. It must not substitute a smaller scalar object.
+If an escaping unsized address has no admissible storage extent, including an extent beyond the shared embedding limit, emission fails explicitly before publishing source. It must not substitute a smaller scalar object. Data the image places among code (`BinaryImage::DataInCode`), as a kernel keeps constants in its paged code, has the extent any other data has, from its own start to the next symbol or function.
 
 ## Native x64 dispatch frame source
 

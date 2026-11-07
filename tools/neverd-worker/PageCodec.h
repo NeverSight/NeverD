@@ -6,7 +6,8 @@
 /// \file
 /// A small byte-oriented LZ77 codec for the engine pages the worker keeps:
 /// JSON text with long repeated keys and C source.  The worker writes and
-/// reads its own memory; nothing here is a file or wire format.
+/// reads its own memory and RenderStore's files, which a different build of it
+/// does not read; nothing here is a wire format.
 //===----------------------------------------------------------------------===//
 #ifndef NEVERD_TOOLS_NEVERD_WORKER_PAGECODEC_H
 #define NEVERD_TOOLS_NEVERD_WORKER_PAGECODEC_H

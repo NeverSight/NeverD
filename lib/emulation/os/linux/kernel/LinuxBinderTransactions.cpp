@@ -27,6 +27,29 @@ uint64_t allocationSize(uint64_t Size) {
 }
 } // namespace
 
+std::shared_ptr<LinuxDeviceState>
+LinuxFiles::binderConnection(uint32_t FD, ProcessResult &Result) const {
+  auto Mapping = mappingDevice(FD);
+  if (auto Device = std::get_if<std::shared_ptr<LinuxDeviceState>>(&Mapping);
+      Device && *Device && (*Device)->Options->Binder)
+    return *Device;
+  Result.Stop = ProcessStopReason::UnsupportedService;
+  Result.Diagnostic =
+      "Android native Binder binding requires a live Binder descriptor";
+  return {};
+}
+std::optional<llvm::ArrayRef<uint8_t>>
+LinuxFiles::binderBuffer(const LinuxDeviceState &Device, uint64_t Address,
+                         uint64_t Size) const {
+  if (Memory)
+    for (const auto &[Offset, Buffer] : Device.BinderBuffers)
+      if (Buffer.Delivered && Buffer.Size == Size &&
+          Memory->binderAddress(Device, Offset, allocationSize(Size)) ==
+              Address)
+        return Memory->deviceBytes(Device.BinderMapping).slice(Offset, Size);
+  return std::nullopt;
+}
+
 llvm::Expected<std::optional<uint64_t>>
 LinuxFiles::binderCommand(LinuxDeviceState &Device, uint32_t Command,
                           llvm::ArrayRef<uint8_t> Data, ProcessResult &Result) {

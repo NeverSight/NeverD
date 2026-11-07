@@ -283,6 +283,24 @@ TEST_P(LinuxBinder, TransactionBuffersKeepLP64LayoutAndPeerOwnership) {
   EXPECT_EQ(read(ClientMap, 3), std::vector<uint8_t>({0x78, 0x56, 0x34}));
   EXPECT_FALSE(
       llvm::cantFail(cpu().canAccess(ClientMap, 3, Write | UserAccessible)));
+  auto Connection = Kernel->binderConnection(Client);
+  ASSERT_NE(Connection, nullptr);
+  const auto Alias = call(ServiceKind::Dup, Client, 0, 0);
+  ASSERT_TRUE(Alias);
+  EXPECT_EQ(Kernel->binderConnection(*Alias), Connection);
+  auto View = Kernel->binderBuffer(*Connection, ClientMap, 3);
+  ASSERT_TRUE(View);
+  EXPECT_EQ(std::vector<uint8_t>(View->begin(), View->end()),
+            std::vector<uint8_t>({0x78, 0x56, 0x34}));
+  EXPECT_FALSE(Kernel->binderBuffer(*Connection, ClientMap, 4));
+  std::vector<uint8_t> Free(8);
+  llvm::support::endian::write64le(Free.data(), ClientMap);
+  llvm::cantFail(cpu().write(Base + 1024, Free));
+  ASSERT_EQ(Send(*Alias, 0x40086303, Base + 1024, 8), 0u);
+  EXPECT_FALSE(Kernel->binderBuffer(*Connection, ClientMap, 3));
+  ASSERT_EQ(call(ServiceKind::Close, Client, 0, 0), 0u);
+  EXPECT_FALSE(Kernel->binderConnection(Client));
+  EXPECT_EQ(Kernel->binderConnection(*Alias), Connection);
 }
 TEST_P(LinuxBinder, ModelCannotMixCapturedTransactionsOrMappings) {
   for (unsigned Case = 0; Case < 3; ++Case) {

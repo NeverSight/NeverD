@@ -2005,3 +2005,165 @@ TEST(SymExpr, IncrementalProductsKeepCanonicalCoefficientsAndRepeatedFactors) {
 }
 
 } // namespace
+
+TEST(SymExpr, ConditionalConstantWindowsIgnorePredicatesAndRespectWork) {
+  SymContext C;
+  const auto A = C.mkVar("first", 64), B = C.mkVar("second", 64);
+  auto PredicateValue = A;
+  for (unsigned I = 0; I < 256; ++I)
+    PredicateValue = C.mkXor(C.mkAdd(PredicateValue, B),
+                             C.mkLShr(PredicateValue, C.mkConst(64, 7)));
+  const auto Predicate = C.mkEq(PredicateValue, C.mkZero(64));
+  const auto Inner =
+      C.mkIte(Predicate, C.mkConst(64, 0xEE49), C.mkConst(64, 0xEE4B));
+  const auto Value =
+      C.mkIte(C.mkEq(B, C.mkZero(64)), Inner, C.mkConst(64, 0xEE48));
+  const auto Before = C.numNodes();
+  unsigned Remaining = 256;
+  EXPECT_EQ(C.constantWindow(Value, 32, 32, Remaining), llvm::APInt(32, 0));
+  EXPECT_EQ(C.numNodes(), Before);
+  const auto Used = 256 - Remaining;
+  ASSERT_GT(Used, 0u);
+  ASSERT_LT(Used, 32u);
+  unsigned Exact = Used, Short = Used - 1;
+  EXPECT_EQ(C.constantWindow(Value, 32, 32, Exact), llvm::APInt(32, 0));
+  EXPECT_EQ(Exact, 0u);
+  EXPECT_FALSE(C.constantWindow(Value, 32, 32, Short));
+  EXPECT_EQ(C.mkExtract(Value, 32, 32), C.mkZero(32));
+  EXPECT_FALSE(C.constantWindow(Value, 0, 8));
+}
+
+TEST(SymExpr, ConditionalSlicesKeepDifferentAndUnknownArms) {
+  SymContext C;
+  const auto Condition = C.mkVar("condition", 1);
+  const auto Unknown = C.mkVar("unknown", 64);
+  const auto Same = C.mkIte(Condition, C.mkConst(64, 0x12345678000000AA),
+                            C.mkConst(64, 0x12345678000000BB));
+  EXPECT_EQ(C.mkExtract(Same, 32, 32), C.mkConst(32, 0x12345678));
+  const auto Different = C.mkIte(Condition, C.mkConst(64, 0x12345678000000AA),
+                                 C.mkConst(64, 0xFEDCBA98000000BB));
+  const auto Partial =
+      C.mkIte(Condition, C.mkConst(64, 0x12345678000000AA), Unknown);
+  for (const auto Value : {Different, Partial}) {
+    EXPECT_FALSE(C.constantWindow(Value, 32, 32));
+    const auto Slice = C.mkExtract(Value, 32, 32);
+    EXPECT_FALSE(C.isConst(Slice));
+    for (uint64_t Selected : {0u, 1u})
+      for (uint64_t Input : {UINT64_C(0), UINT64_C(0xA5A5A5A512345678)}) {
+        const uint64_t Values[] = {Selected, Input};
+        EXPECT_EQ(C.evalU64(Slice, Values), C.evalU64(Value, Values) >> 32);
+      }
+  }
+}
+
+TEST(SymExpr, PlainVariableIndexKeepsLeafIdentityAcrossGrowthAndCopies) {
+  SymContext C;
+  const std::string Name("value\0suffix", 12);
+  const auto First = C.mkVar(Name, 8);
+  const auto Wide = C.mkVar(Name, 64);
+  const auto Prefix = C.mkVar("value", 8);
+  EXPECT_NE(First, Wide);
+  EXPECT_NE(First, Prefix);
+  for (unsigned I = 0; I < 2048; ++I)
+    C.mkVar("other_" + std::to_string(I), I % 2 ? 8 : 64);
+  SymContext Copy(C);
+  for (auto *Context : {&C, &Copy}) {
+    const auto Nodes = Context->numNodes();
+    EXPECT_EQ(Context->mkVar(Name, 8), First);
+    EXPECT_EQ(Context->mkVar(Name, 64), Wide);
+    EXPECT_EQ(Context->mkVar("value", 8), Prefix);
+    EXPECT_EQ(Context->varRef(Context->varId(First)), First);
+    EXPECT_EQ(Context->numNodes(), Nodes);
+    EXPECT_EQ(Context->varInfo(Context->varId(First)).Name, Name);
+  }
+  const auto New = Copy.mkVar("copy_only", 32);
+  EXPECT_EQ(Copy.width(New), 32u);
+  EXPECT_FALSE(C.hasVarName("copy_only"));
+}
+
+TEST(SymExpr, SingleVariableSubstitutionRetainsUnrelatedPayloads) {
+  SymContext C;
+  const auto Frame = C.mkVar("substitution_frame", 64);
+  const auto Data = C.mkVar("substitution_data", 64);
+  const auto Key = C.mkVar("substitution_key", 64);
+  auto Payload = Data;
+  for (unsigned I = 0; I < 48; ++I)
+    Payload = C.mkXor(C.mkAdd(Payload, Data), Key);
+  const auto Root = C.mkAdd(Frame, Payload);
+  const auto Aligned =
+      C.mkOr(C.mkAnd(Frame, C.mkConst(64, uint64_t(-16))), C.mkConst(64, 8));
+  const auto Expected = C.mkAdd(Aligned, Payload);
+  const std::vector<SymRef> Roots{Payload, Root, Key, Frame};
+  const auto Before = C.numNodes();
+  const auto Results = C.substituteAll(Roots, {{Frame.index(), Aligned}});
+  EXPECT_EQ(Results, (std::vector<SymRef>{Payload, Expected, Key, Aligned}));
+  EXPECT_EQ(C.numNodes(), Before);
+  EXPECT_EQ(C.substituteVar(Payload, C.varId(Frame), Aligned), Payload);
+}
+
+TEST(SymExpr, VariableMembershipMatchesStructuralCollection) {
+  SymContext C;
+  const auto A = C.mkVar("membership_first", 32);
+  const auto Missing = C.mkVar("membership_gap", 32);
+  const auto B = C.mkVar("membership_last", 32);
+  auto Value = B;
+  for (unsigned I = 0; I < 32; ++I) {
+    Value = C.mkXor(C.mkAdd(Value, B), C.mkShl(A, C.mkConst(32, I % 31)));
+    llvm::SmallVector<uint32_t> Variables;
+    C.collectVars(Value, Variables);
+    const auto Before = C.numNodes();
+    for (uint32_t Id = 0; Id <= C.numVars(); ++Id)
+      EXPECT_EQ(C.containsVariable(Value, Id),
+                std::find(Variables.begin(), Variables.end(), Id) !=
+                    Variables.end());
+    EXPECT_FALSE(C.containsVariable(Value, C.varId(Missing)));
+    EXPECT_FALSE(C.containsVariable(Value, uint32_t(-1)));
+    EXPECT_EQ(C.numNodes(), Before);
+  }
+  const auto Later = C.mkVar("membership_appended", 32);
+  const auto Extended = C.mkAdd(Value, Later);
+  EXPECT_FALSE(C.containsVariable(Value, C.varId(Later)));
+  EXPECT_TRUE(C.containsVariable(Extended, C.varId(Later)));
+  auto Copy = C;
+  EXPECT_TRUE(Copy.containsVariable(Extended, C.varId(Later)));
+  EXPECT_FALSE(Copy.containsVariable(Extended, C.varId(Missing)));
+  EXPECT_FALSE(C.containsVariable(C.mkZero(32), C.varId(A)));
+}
+
+TEST(SymExpr, VariableMembershipDoesNotRestrictOtherSubstitutionKeys) {
+  SymContext C;
+  const auto A = C.mkVar("substitution_left", 64);
+  const auto B = C.mkVar("substitution_right", 64);
+  const auto Part = C.mkXor(A, B);
+  const auto Root = C.mkAdd(Part, A);
+  EXPECT_EQ(C.substitute(Root, {{Part.index(), C.mkConst(64, 17)}}),
+            C.mkAdd(C.mkConst(64, 17), A));
+  EXPECT_EQ(C.substitute(Root, {{A.index(), C.mkOne(64)},
+                                {B.index(), C.mkConst(64, 3)}}),
+            C.mkConst(64, 3));
+}
+
+TEST(SymExpr, DiscardedPackedFieldsDoNotGrowAcrossUpdates) {
+  for (unsigned Width : {16u, 32u, 64u, 128u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto Mask = C.mkConst(Width, 0x7300);
+    const auto Input = C.mkVar("status", Width);
+    const auto Preserved = C.mkAnd(Input, Mask);
+    auto Status = Preserved;
+    for (unsigned I = 0; I < 128; ++I) {
+      const auto Bit = C.mkVar("bit" + std::to_string(I), 1);
+      const auto Field = C.mkMul(C.mkConst(Width, 16), C.mkZExt(Bit, Width));
+      EXPECT_EQ(C.mkAnd(Field, Mask), C.mkZero(Width));
+      Status = C.mkAnd(C.mkOr(Status, Field), Mask);
+    }
+    EXPECT_EQ(Status, Preserved) << C.toString(Status);
+    // Observed bits and carries must survive; zero-extension is essential.
+    const auto Wide = C.mkVar("wide", Width);
+    const auto Field = C.mkMul(C.mkConst(Width, 16), Wide);
+    EXPECT_FALSE(C.isConst(C.mkAnd(Field, Mask)));
+    const auto Low = C.mkZExt(C.mkVar("low", 4), Width);
+    EXPECT_FALSE(
+        C.isConst(C.mkAnd(C.mkAdd(Low, C.mkOne(Width)), C.mkConst(Width, 16))));
+  }
+}

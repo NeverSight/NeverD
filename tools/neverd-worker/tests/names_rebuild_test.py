@@ -2,8 +2,9 @@
 """Edits that change names read them again without a full listing build.
 
 A rename, a data item, an undo and a comment let the listing read names and
-items again over its last string scan, or not rebuild at all.  After each
-edit, every page must match what a full rebuild (reload) shows.
+items again over its last string scan, or not rebuild at all, and a function's
+new name reads nothing again.  After each edit, every page must match what a
+full rebuild (reload) shows.
 
 Reads a binary file first -- one segment, no symbols, a function only its
 call names and a string only its reference does -- then builds a benign glibc
@@ -67,16 +68,98 @@ def snapshot(client, anchors):
     return pages
 
 
-def same_as_full_rebuild(client, anchors, step):
+def same_as_full_rebuild(client, anchors, step, names=()):
     light = snapshot(client, anchors)
+    found = {name: resolves(client, name) for name in names}
     ok(client, "reload")
     full = snapshot(client, anchors)
+    for name, address in found.items():
+        assert resolves(client, name) == address, f"{step}: {name} led to {address}"
     for key in light:
         if light[key] != full[key]:
             for index, (seen, rebuilt) in enumerate(zip(light[key], full[key])):
                 if seen != rebuilt:
                     raise AssertionError(f"{step}: {key} differs at {index}: {seen} != {rebuilt}")
             raise AssertionError(f"{step}: {key} has {len(light[key])} rows, not {len(full[key])}")
+
+
+def name_builds(client):
+    return ok(client, "metadata")["listing_name_builds"]
+
+
+def resolves(client, name):
+    reply = client.call("resolve", {"query": name})
+    return reply["payload"]["address"] if reply["status"] == "ok" else None
+
+
+def graph_rows(client, address):
+    metrics = {"char_width": 8, "line_height": 16}
+    summary = ok(client, "cfg_summary", {"address": address, "metrics": metrics})
+    return str(ok(client, "cfg_viewport", {
+        "address": address, "layout_revision": summary["layout_revision"],
+        "x": -1000000, "y": -1000000, "width": 2000000, "height": 2000000,
+        "scale": 1, "metrics": metrics})["nodes"])
+
+
+def rename_in_place(client, anchors, address, name, other, previous=None):
+    """A function's new name changes what the listing shows of it and nothing
+    it has read, and what shows it reads it at once."""
+    snapshot(client, anchors)
+    graph_rows(client, address)
+    builds = name_builds(client)
+    ok(client, "rename", {"address": address, "name": name})
+    assert resolves(client, name) == address, name
+    assert previous is None or resolves(client, previous) != address, previous
+    # A name leads to one address: another function cannot take it.
+    taken = client.call("rename", {"address": other, "name": name})
+    assert taken["status"] != "ok", taken
+    assert "is used at" in taken["error"]["message"], taken
+    light = snapshot(client, anchors)
+    assert name in str(light["functions"]), light["functions"]
+    assert name in graph_rows(client, address), "a graph kept the old name"
+    assert name_builds(client) == builds, "a function's new name read the names again"
+    return light
+
+
+def exported_function(executable, directory):
+    """An export keeps finding a function under the name it exports it by."""
+    compiler = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    if not compiler or not sys.platform.startswith("linux"):
+        return
+    source = Path(directory) / "exports.c"
+    source.write_text("int exported_value(int x) { return x + 1; }\n"
+                      "int other_value(int x) { return x + 2; }\n", encoding="ascii")
+    library = Path(directory) / "libexports.so"
+    built = subprocess.run([compiler, "-O1", "-shared", "-fPIC", str(source), "-o", str(library)],
+                           capture_output=True, text=True)
+    if built.returncode:
+        return
+    client = Client(executable)
+    try:
+        ok(client, "open", {"path": str(library)})
+        address = resolves(client, "exported_value")
+        other = resolves(client, "other_value")
+        assert address and other, (address, other)
+        anchors = [address, other]
+        ok(client, "xrefs", {"address": address})
+        def exported_name_taken():
+            taken = client.call("rename", {"address": other, "name": "exported_value"})
+            assert taken["status"] != "ok", taken
+            assert "is used at" in taken["error"]["message"], taken
+
+        rename_in_place(client, anchors, address, "renamed_export", other)
+        assert resolves(client, "exported_value") == address
+        exported_name_taken()
+        same_as_full_rebuild(client, anchors, "exported function rename")
+        assert resolves(client, "renamed_export") == address
+        assert resolves(client, "exported_value") == address
+        exported_name_taken()
+        rename_in_place(client, anchors, address, "exported_value", other)
+        same_as_full_rebuild(client, anchors, "exported function named as exported")
+        assert resolves(client, "exported_value") == address
+        assert resolves(client, "renamed_export") is None
+    finally:
+        client.close()
 
 
 def binary_file(executable, directory):
@@ -90,8 +173,29 @@ def binary_file(executable, directory):
         ok(client, "xrefs", {"address": text})
         anchors = [start, callee, text]
         same_as_full_rebuild(client, anchors, "binary file open")
-        ok(client, "rename", {"address": callee, "name": "add_seven"})
+        rename_in_place(client, anchors, callee, "add_seven", start)
+        view = ok(client, "decompile", {"address": start, "representation": "source",
+                                        "offset": 0, "limit": 200})
+        assert "add_seven" in view["text"], view
         same_as_full_rebuild(client, anchors, "binary file function rename")
+        view = ok(client, "decompile", {"address": start, "representation": "source",
+                                        "offset": 0, "limit": 200})
+        assert "add_seven" in view["text"], view
+        rename_in_place(client, anchors, callee, "add_seven_again", start, "add_seven")
+        same_as_full_rebuild(client, anchors, "binary file second name")
+        ok(client, "undo")
+        same_as_full_rebuild(client, anchors, "binary file undone name")
+        # The name the listing gives the entry gives way to the user's, and no
+        # longer finds it.
+        assert resolves(client, "start") == start
+        ok(client, "rename", {"address": start, "name": "named_start"})
+        assert resolves(client, "named_start") == start
+        assert resolves(client, "start") is None
+        same_as_full_rebuild(client, anchors, "binary file entry rename")
+        assert resolves(client, "start") is None
+        ok(client, "undo")
+        assert resolves(client, "start") == start
+        same_as_full_rebuild(client, anchors, "binary file entry undone")
         # A name leads to one address: another function cannot take it.
         taken = client.call("rename", {"address": start, "name": "add_seven"})
         assert taken["status"] != "ok", taken
@@ -109,6 +213,7 @@ def binary_file(executable, directory):
 def run(executable):
     with tempfile.TemporaryDirectory(prefix="neverd-names-rebuild-") as directory:
         binary_file(executable, directory)
+        exported_function(executable, directory)
     compiler = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
     strip = shutil.which("strip")
     if not compiler or not strip or not sys.platform.startswith("linux"):
@@ -143,8 +248,10 @@ def run(executable):
                         if line["text"].startswith(("qword_", "dword_")))
             anchors = [main, text["address"], data]
             same_as_full_rebuild(client, anchors, "open")
+            # The name only the listing gives it no longer finds it.
+            assert resolves(client, "main") == main
             ok(client, "rename", {"address": main, "name": "report_main"})
-            same_as_full_rebuild(client, anchors, "function rename")
+            same_as_full_rebuild(client, anchors, "function rename", ("main", "report_main"))
             ok(client, "rename", {"address": data, "name": "program_state"})
             same_as_full_rebuild(client, anchors, "data rename")
             ok(client, "rename", {"address": text["address"], "name": "usage_text"})
