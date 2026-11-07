@@ -1,0 +1,3 @@
+# This .def owns structured JSON data, not C/C++ macro records. The C++
+# formatter splits its strings into adjacent literals and invalidates JSON.
+Arm64eSourceCallFixtures.def
