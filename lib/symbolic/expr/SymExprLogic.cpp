@@ -435,6 +435,20 @@ SymRef SymContext::mkOr(llvm::ArrayRef<SymRef> Ops) {
   return intern(SymOp::Or, W, Final, 0);
 }
 
+// A masked word cannot carry into a disjoint constant, so that sum holds the
+// bits of an OR of its terms. Only comparisons read it as one: the sum stays a
+// sum everywhere else, since that is how an address names a base and an offset.
+static SymRef packedWordView(SymContext &C, SymRef Value) {
+  if (C.op(Value) != SymOp::Add || C.numOperands(Value) != 2 ||
+      !C.isConst(C.operand(Value, 0)))
+    return Value;
+  const SymRef Offset = C.operand(Value, 0), Word = C.operand(Value, 1);
+  if (C.op(Word) != SymOp::And || !C.isConst(C.operand(Word, 0)) ||
+      !(C.constValue(Offset) & C.constValue(C.operand(Word, 0))).isZero())
+    return Value;
+  return C.mkOr(Offset, Word);
+}
+
 SymRef SymContext::mkXor(llvm::ArrayRef<SymRef> Ops) {
   assert(!Ops.empty());
   uint32_t W = width(Ops[0]);
@@ -522,9 +536,13 @@ SymRef SymContext::mkXor(llvm::ArrayRef<SymRef> Ops) {
   // Canonical ORs keep their optional constant first and all other factors
   // sorted. Compare those factors directly; do not expand the shared word
   // or enumerate the atoms that compute it.
-  if (Rest.size() == 2 && op(Rest[0]) == SymOp::Or &&
-      op(Rest[1]) == SymOp::Or) {
-    auto Left = operands(Rest[0]), Right = operands(Rest[1]);
+  SymRef LeftWord =
+      Rest.size() == 2 ? packedWordView(*this, Rest[0]) : SymRef();
+  SymRef RightWord =
+      Rest.size() == 2 ? packedWordView(*this, Rest[1]) : SymRef();
+  if (Rest.size() == 2 && op(LeftWord) == SymOp::Or &&
+      op(RightWord) == SymOp::Or) {
+    auto Left = operands(LeftWord), Right = operands(RightWord);
     llvm::APInt ChangedMask(W, 0);
     llvm::APInt LeftMask(W, 0), RightMask(W, 0);
     if (isConst(Left.front())) {
