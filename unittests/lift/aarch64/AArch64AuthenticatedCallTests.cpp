@@ -551,8 +551,9 @@ TEST_P(AArch64TypedAuthenticatedCall,
               EXPECT_EQ(Width(Argument), Expected->Size * kBitsPerByte);
               if (Hint->Signature.Parameters[I].IndirectByValue) {
                 EXPECT_TRUE(Argument->isPointerTy());
-                EXPECT_FALSE(Call->paramHasAttr(I, llvm::Attribute::ByVal));
-                EXPECT_FALSE(Call->paramHasAttr(I, llvm::Attribute::NoAlias));
+#define A64_CALL_INDIRECT_FORBIDDEN_ATTRIBUTE(Name)                            \
+  EXPECT_FALSE(Call->paramHasAttr(I, llvm::Attribute::Name));
+#include "AArch64AuthenticatedCallFixtures.def"
               }
               if (Expected->Kind == NdTypeKind::Int &&
                   Expected->Size < kPromotedIntegerBytes &&
