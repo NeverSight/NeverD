@@ -39,11 +39,11 @@ enum class TokenKind : uint8_t { End, Word, Number, String, Punct, Pragma };
 enum class Encoding : uint8_t { Plain, Wide, UTF16, UTF32, UTF8 };
 
 struct Token {
-  TokenKind Kind = TokenKind::End;
   /// Ordinary spelling borrows the parse input; generated spelling belongs
   /// to that parse's arena. Both outlive all tokens, including macro copies.
   llvm::StringRef Text;
   uint64_t Value = 0;
+  TokenKind Kind = TokenKind::End;
   /// A quoted literal's prefix; a character constant's type follows it.
   Encoding Quoted = Encoding::Plain;
   /// Whether a number is a character constant ('A', L'A').
@@ -55,6 +55,8 @@ struct Token {
   unsigned Column = 1;
 };
 
+// Keep byte-sized metadata together after the naturally aligned payload,
+// avoiding a padding gap before every borrowed spelling.
 // Tokens only borrow immutable spelling. Keep their growing sequence on
 // SmallVector's trivial relocation path rather than moving each token during
 // vector growth. Zero inline elements keep the complete stream off the stack.
@@ -167,11 +169,12 @@ private:
       const size_t Start = At;
       // The first byte already starts an identifier, and none of its
       // continuation bytes can be a newline. Update the column once.
-      do {
-        ++At;
-      } while (At < Source.size() && (llvm::isAlnum(Source[At]) ||
-                                      Source[At] == '_' || Source[At] == '$'));
-      Column += static_cast<unsigned>(At - Start);
+      size_t End = Start + 1;
+      while (End < Source.size() && (llvm::isAlnum(Source[End]) ||
+                                     Source[End] == '_' || Source[End] == '$'))
+        ++End;
+      At = End;
+      Column += static_cast<unsigned>(End - Start);
       const llvm::StringRef Word = Source.slice(Start, At);
       // An encoding prefix directly before a quote: L"A", u'A', u8"A".
       if (At < Source.size() && (Source[At] == '"' || Source[At] == '\'')) {
