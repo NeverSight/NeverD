@@ -85,6 +85,12 @@ page or backing failure retains the original instruction state. Queries do not
 reuse segment-load fault checks or accessed-bit writes. The explicit table
 profile binds LAR's otherwise undefined limit nibble. Protected C reuses this
 same execution boundary.
+`translate/X86/X86LegacySystemSelector` owns protected LLDT/LTR cache loads
+and the whole-descriptor LTR busy update. The scalar adapter checks CPL/UMIP
+before explicit operand access and implements SLDT/STR through the common
+store boundary. The execution owner commits TR alongside the staged core,
+before debug/event entry. A shared table profile binds exclusive ordinary RAM;
+source export reuses it without duplicating cache or permission decisions.
 `X86InstructionDebugProfile::Watchpoints` composes the same rules with scoped
 `translate/X86/X86WatchpointObservation`. `X86PagedMemory` reports completed
 linear data reads and committed stores; physical page walks and fetches are

@@ -4082,9 +4082,23 @@ across both SDKs and qualified P/E cores. After dev integration, another 566
 checks pass, including the complete kernel-PDB type round-trip and generated
 C suites; the paging binaries remain byte-identical. NeverC contributes
 10,560 native query comparisons and 252 code-generation form checks.
-LDTR/TR loads, task switching, real/VM86 and other unbound system-state domains
-remain separate work. No LLVM implementation change or new release is needed
+LDTR/TR loads use the separate system-selector owner below; task switching,
+real/VM86 and other unbound system-state domains remain open.
+No LLVM implementation change or new release is needed
 for this batch; the global release gate remains open and the pin stays r6.
+
+### Protected system selectors
+
+Original SLDT/STR/LLDT/LTR now use the shared protected scalar execution and
+generated-C dispatch. The [system-selector contract](x86-legacy-segments.md#protected-system-selectors)
+owns CPL/UMIP priority, selector-word accesses, GDT type/presence checks,
+LDTR/TR cache publication and the complete-descriptor LTR busy update. The
+loaded TR is visible to following event delivery; loading it does not perform
+a task switch. Protected LLDT retains its descriptor flag nibble, including
+the otherwise unused L bit, without making following instructions reject
+their own valid cache state. Native LLVM and NeverC forms already exist.
+Task switching and the other machine-state domains still gate the final LLVM
+release; the production pin remains r6.
 
 ### Protected ARPL conditional completion
 

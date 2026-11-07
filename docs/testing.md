@@ -500,6 +500,20 @@ original i386/x64 query execution. Privileged builtins have code-generation
 coverage only; the separate protected NeverD fixtures own their state/fault
 contracts.
 
+`LegacySystemSelectors/*` qualifies original SLDT/STR/LLDT/LTR, including
+every descriptor access byte and flag nibble, CPL/RPL, independent code,
+operand and address widths, register choices, UMIP, invalid selectors,
+read-only/split tables and original page-repair/IRET/retry. The fixture compares
+both system caches as well as registers, flags, exception frames and table
+bytes. `OriginalSystemSelectorReadsAndBusyWrite` observes source-word and
+whole-descriptor read/write footprints, including TF. The software
+`X86LegacySystemSelectorTest.*` checks fixed expected values, unavailable
+backing, rejected profiles and continuation with the retained LDTR flag nibble.
+`X86LegacySourceTest.SystemSelector*` compiles cache-producing/consuming
+instruction chains and busy-write fault repair through Clang/NeverC O0/O2.
+Run these with both SDKs and qualified P/E cores, plus shared scalar,
+segment/query and ordinary system-state regressions.
+
 `NeverDLLVMCValueTests --gtest_filter=LLVMCValues.X86BitString*` rejects
 weakened native bit-string declarations and executes all twelve LLVM-to-C
 projections with live/dead results. The original-instruction oracle compares

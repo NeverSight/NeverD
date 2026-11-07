@@ -36,6 +36,26 @@ public:
     S.EIP = Fallthrough;
     uint32_t A = 0, B = 0;
     const unsigned N = F.Bytes;
+    if (F.SystemSelector) {
+      using System = X86LegacySystemSelector;
+      const auto Operation = *F.SystemSelector;
+      const bool Load =
+          Operation == System::LoadLDT || Operation == System::LoadTR;
+      if (S.Core.CPL && (Load || (M.controls().CR4 & (1u << 11)))) {
+        fault(13);
+        return;
+      }
+      if (Load) {
+        if (read(F.Source, 2, B))
+          accept(
+              loadLegacySystemSelector(S, M, Operation == System::LoadTR, B));
+      } else {
+        write(F.Destination, N,
+              Operation == System::StoreLDT ? S.Core.LDTR.Selector
+                                            : S.TR.Selector);
+      }
+      return;
+    }
     if (F.DescriptorQuery) {
       if (!read(F.Source, 2, B))
         return;

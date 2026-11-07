@@ -140,6 +140,11 @@ enum class X86LegacyScalarProfile : uint8_t { OrderedRAM };
 /// LAR's undefined bits 19:16; no query checks presence or sets accessed.
 enum class X86LegacyDescriptorProfile : uint8_t { TableImage };
 
+/// One CPU with exclusive ordinary RAM. LTR checks the descriptor before a
+/// whole-qword busy read/modify/write. Null LLDT keeps hidden unusable fields
+/// opaque; SLDT/STR dword register results zero-extend the selector.
+enum class X86LegacySystemSelectorProfile : uint8_t { ExclusiveTable };
+
 /// One ordinary-RAM element per step, with destination-first CMPS reads.
 /// Incomplete comparisons retain entry flags; completed elements retain their
 /// memory/register effects across faults and producer-selected IRQ/NMI entry.
@@ -279,6 +284,7 @@ struct X86LegacyExecutionOptions {
   std::optional<uint32_t> BMIUndefinedFlags;
   /// Required for LAR/LSL/VERR/VERW, including invalid selectors.
   std::optional<X86LegacyDescriptorProfile> DescriptorQueries;
+  std::optional<X86LegacySystemSelectorProfile> SystemSelectors;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {

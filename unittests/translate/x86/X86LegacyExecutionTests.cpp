@@ -11,6 +11,7 @@
 #include "X86BranchDebugOracle.h"
 #include "X86LegacyBMITestEncoding.h"
 #include "X86LegacyDescriptorTestEncoding.h"
+#include "X86LegacySystemSelectorTestEncoding.h"
 #include "X86LegacyTestState.h"
 #include "X86PortDevice.h"
 #include "gtest/gtest.h"
@@ -685,6 +686,7 @@ TEST_F(X86LegacyExecutionTest, ScalarMalformedFormsFailBeforeFetch) {
 #include "X86LegacyStackTests.inc"
 #include "X86LegacyStatusTests.inc"
 #include "X86LegacyStringTests.inc"
+#include "X86LegacySystemSelectorTests.inc"
 #include "X86LegacyWatchpointTests.inc"
 
 // Branch cases reuse the debug fixture above.

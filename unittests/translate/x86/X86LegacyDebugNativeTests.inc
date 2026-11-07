@@ -44,6 +44,8 @@ protected:
     std::optional<uint32_t> BitCountUndefinedFlags;
     std::optional<uint32_t> BMIUndefinedFlags;
     std::optional<X86LegacyDescriptorProfile> DescriptorQueries;
+    std::optional<X86LegacySystemSelectorProfile> SystemSelectors;
+    std::optional<uint64_t> SystemDescriptor;
   };
 
   enum Case {
@@ -399,7 +401,9 @@ protected:
             if (Bytes.size() >= 2 && Bytes[1] == 0x07)
               Bytes.insert(Bytes.begin(), 0x67);
       }
-      put(0x8100, 32 | CPL, 4);
+      put(0x8100, Watch->SystemSelectors ? 56 : 32 | CPL, 4);
+      if (Watch->SystemDescriptor)
+        put(GDT + 56, *Watch->SystemDescriptor);
     }
     if (Execute || RegistersAccess || Watch)
       Instructions.push_back({0xcd, 64});
@@ -543,6 +547,7 @@ protected:
       Options.BitCountUndefinedFlags = Watch->BitCountUndefinedFlags;
       Options.BMIUndefinedFlags = Watch->BMIUndefinedFlags;
       Options.DescriptorQueries = Watch->DescriptorQueries;
+      Options.SystemSelectors = Watch->SystemSelectors;
     }
     if (Execute && Execute->Resume)
       Options.LogicalAuxiliaryCarry = false;
@@ -638,6 +643,19 @@ protected:
       EXPECT_EQ(Native.Limit, Model.Limit);
       EXPECT_EQ(Native.Attributes, Model.Attributes);
       EXPECT_EQ(Native.Unusable, Model.Unusable);
+    }
+    if (Watch && Watch->SystemSelectors) {
+      for (const auto &[Native, Model] :
+           {std::pair{Cache(Special.ldt), State.Core.LDTR},
+            std::pair{Cache(Special.tr), State.TR}}) {
+        EXPECT_EQ(Native.Selector, Model.Selector);
+        EXPECT_EQ(Native.Unusable, Model.Unusable);
+        if (!Model.Unusable) {
+          EXPECT_EQ(Native.Base, Model.Base);
+          EXPECT_EQ(Native.Limit, Model.Limit);
+          EXPECT_EQ(Native.Attributes, Model.Attributes);
+        }
+      }
     }
     const auto Snapshot = Memory->physicalMemory().snapshotMemoryRegions();
     ASSERT_EQ(Snapshot.size(), 1u);

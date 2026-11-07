@@ -155,6 +155,10 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (Scalar && Scalar->DescriptorQuery &&
       Options.DescriptorQueries != X86LegacyDescriptorProfile::TableImage)
     return invalid("legacy descriptor query requires a bound table profile");
+  if (Scalar && Scalar->SystemSelector &&
+      Options.SystemSelectors != X86LegacySystemSelectorProfile::ExclusiveTable)
+    return invalid(
+        "legacy system selector requires an exclusive table profile");
   if (Scalar &&
       (Scalar->bitCounting() || Scalar->carryChain() || Scalar->BMI)) {
     if (!Options.IntegerExtensions)
@@ -412,6 +416,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       return R;
   }
   auto Next = State.Core;
+  auto NextTR = State.TR;
   uint32_t Flags = State.EFlags;
   bool SS = false, STI = false, RepeatContinue = false;
   bool TakenBranch = false;
@@ -518,6 +523,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       NextIP = Staged.EIP;
       Flags = Staged.EFlags;
       TakenBranch = Got->TakenBranch;
+      NextTR = Staged.TR;
     } else if (BoundMpx && Got->Exception && Got->Exception->Vector == 5) {
       // This is an architectural effect of #BR, before attempting IDT entry.
       // Unlike GPR/EIP/FLAGS staging, it survives delivery faults and #DF.
@@ -572,6 +578,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (R.BackingFault)
     return R;
   State.Core = Next;
+  State.TR = NextTR;
   State.EIP = NextIP;
   State.EFlags = RepeatContinue ? Flags | 0x10000u : Flags & ~0x10000u;
   State.SSBlocked = SS;

@@ -33,6 +33,7 @@ add_neverd_component_library(NeverDTranslate
   X86/X86LegacyScalarEncoding.cpp
   X86/X86LegacyBMI.cpp
   X86/X86LegacyDescriptorQuery.cpp
+  X86/X86LegacySystemSelector.cpp
   X86/X86LegacyScalarExecution.cpp
   X86/X86LegacyStackExecution.cpp
   X86/X86LegacyString.cpp

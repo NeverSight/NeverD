@@ -1418,3 +1418,48 @@ native query comparisons and 252 code-generation form checks across P/E cores.
 The archive binds actual source commits, compiler/dependency inputs, binaries,
 generated sources/libraries and raw result hashes. The LLVM release gate
 remains open and the pin remains r6.
+
+## Protected system selectors
+
+`SystemSelectors = X86LegacySystemSelectorProfile::ExclusiveTable` binds
+SLDT, STR, LLDT and LTR to one CPU with exclusive ordinary RAM. This is not a
+synchronization primitive for concurrent CPUs, DMA or MMIO. SLDT/STR write
+only a selector word to memory; word registers preserve their upper half and
+dword registers zero-extend. This is the modern target choice for SLDT's
+historically undefined upper register half. Stores do not read either table,
+and CR4.UMIP with CPL greater than zero raises #GP(0) before operand access.
+
+LLDT/LTR require CPL0 before reading their source word; operand-size prefixes
+do not widen the selector. GDT-only selection, table bounds, type and presence
+checks retain their architectural fault classes and order. Null LLDT preserves
+the supplied selector and marks the cache unusable; its hidden fields remain
+opaque. Null LTR faults. LLDT admits LDT descriptors; LTR admits available
+16/32-bit TSS descriptors and refuses busy TSS descriptors. Neither instruction
+checks DPL against RPL, accesses the TSS contents or changes EFLAGS.
+
+Implicit descriptor reads use supervisor access and 32-bit linear wrap. LTR
+then prepares a whole-qword write, reads the retained physical fragments and
+sets only the busy bit. The loaded TR cache uses that updated image, including
+page-walk A/D bits when the descriptor aliases its own page table.
+Read, write-protection and physical backing failures
+remain distinct. The original core/cache state is retained until the complete
+operation succeeds, while completed page-walk effects remain observable.
+TR publication precedes post-instruction debug/event delivery. Loading TR does
+not perform task switching or set CR0.TS. LLDT retains the raw descriptor flag
+nibble; its unused L bit must not cause the next instruction's state validation
+to reject that cache.
+
+The shared scalar owner provides segment/address decoding, exact instruction
+extent, alignment, data-watchpoint observation and generated-C dispatch. Missing
+profiles or malformed prefixes fail before fetch. A guest page-fault handler
+can make the original table writable, return with IRET and retry LTR without
+publishing a premature cache or busy bit. The generated-C tests also consume a
+newly loaded LDT through LSL and read back both system selectors.
+
+The references are SLDT, STR, LLDT and LTR in
+[Intel SDM Volume 2](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf).
+The existing LLVM intrinsic lowering and NeverC's common i386/x64 registry
+already emit these native forms. This owned protected-state work does not
+advance the LLVM release or r6 pin. Other state banks, task switching,
+real/VM86/general compatibility execution, software SMM/SGX transitions and
+unowned external-event producers remain outside the completed contract.
