@@ -711,7 +711,7 @@ static void iterativeDCE(HighFunc &Func,
     VarKeyMap<ExprPtr> InlineDefs;
     VarKeyMap<int> InlineDefCount;
     VarKeyMap<int> InlineUseCount;
-    std::unordered_map<const HighExpr *, uint8_t> Visits;
+    HighExprUseVisits Visits;
     walkStmts(Func.Body, [&](const HighStmt &S) {
       if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
           S.Dst->Kind == ExprKind::Var) {

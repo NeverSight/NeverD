@@ -4487,6 +4487,9 @@ found there too, under the functions it scanned, so a later session finishes its
 index from those rows once its discovery ends. A store's session writes where its
 records lie beside its file (`.ndri`) when it ends or its job reaches the last
 function, so a later session reads that and walks only what it leaves out.
+An index entry's page table must fit its record, as it must in the store file.
+An invalid index is discarded before reading pages; the original file still
+recovers every complete record.
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's, and only a new name of data
 or a data item, which pages spell, forgets the renders and moves to a store of its
@@ -8983,6 +8986,15 @@ reports both replacements and in-place changes to shared nodes. With candidates
 present, another cleanup round requires a statement deletion, inlining or
 simplification; rejected candidates alone do not repeat the same analysis. The
 existing stopping point without candidates and iteration limits remain unchanged.
+Copy and control-flow cleanup share use counts saturated at two. Each read
+root contributes a use even when roots share one expression object. The
+expression-identity table belongs to one immutable walk, and a new walk starts
+after rewrites. Small visits tables use inline storage and grow normally
+when needed. Lookup storage never decides traversal or rewrite order; the
+pending walk keeps its existing operand order. Non-variable leaves have no
+read to count and need no identity-table entry; an indirect target is a child
+even when a call has no arguments.
+
 Med-to-High lowering preserves CFG successors after branch threading, including
 sole successors with no remaining branch operation. When source order differs,
 it emits an explicit transfer after that edge's PHI copies.

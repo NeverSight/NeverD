@@ -1838,6 +1838,10 @@ add_neverd_unittest(NeverDI386CallContractTests
 target_include_directories(NeverDI386CallContractTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
 
+add_neverd_unittest(NeverDHighExprUseCountsTests
+  core/HighExprUseCountsTests.cpp
+  LINK_COMPONENTS BackendC)
+
 # Exercise shared source control-flow and SSA invariants independently of the
 # aggregate lift inventory when fixing mobile source reconstruction.
 add_neverd_unittest(NeverDHighControlFlowTests
