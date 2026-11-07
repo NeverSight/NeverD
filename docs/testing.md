@@ -21409,3 +21409,5 @@ and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
 frontend regressions and 91 generated-table tests passed. NeverC's strict
 global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
+
+`NeverDMedTempLivenessTests` checks that block-local temporary definitions need no join PHI, while cross-branch reads and loop-carried temporaries retain theirs. Register and stack carriers keep conservative implicit ABI-use handling.

@@ -197,6 +197,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
 
   std::vector<int> Roots;
   // Variables some root other than the entry reads on arrival.
+  std::vector<std::set<int>> PhiLiveIn(N);
   std::set<int> NonEntryRootLiveIns;
   std::vector<bool> IsRoot(N, false);
   auto AddRoot = [&](int Root) {
@@ -879,6 +880,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
       auto &RootOps = Func.Blocks[Root].Ops;
       RootOps.insert(RootOps.begin(), InitOps.begin(), InitOps.end());
     }
+    PhiLiveIn = std::move(LiveIn);
   }
 
   RegistrationRoots.seedSEHParentFrames(Func);
@@ -965,6 +967,12 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
     }
 
   for (auto &[VarId, DefBlocks] : VarDefs) {
+    const auto Var = VarIdToVar.find(VarId);
+    // Only temporaries have complete explicit uses here. ABI recovery may
+    // still discover implicit uses of machine registers and stack carriers.
+    const bool Temporary =
+        Var != VarIdToVar.end() && Var->second.Kind == MedVar::Temp;
+
     std::set<int> PhiBlocks;
     std::queue<int> Worklist;
     for (int B : DefBlocks)
@@ -975,6 +983,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
       Worklist.pop();
       for (int D : DF[B]) {
         if (D < 0 || D >= N)
+          continue;
+        if (Temporary && !PhiLiveIn[D].contains(VarId))
           continue;
         if (PhiBlocks.insert(D).second) {
           Worklist.push(D);

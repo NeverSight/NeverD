@@ -5329,3 +5329,10 @@ target_include_directories(NeverDCOFFOrdinalImportTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
+
+target_sources(NeverDLiftTests PRIVATE core/MedTempLivenessTests.cpp)
+add_neverd_unittest(NeverDMedTempLivenessTests
+  core/MedTempLivenessTests.cpp
+  LINK_COMPONENTS IRMed IRLow)
+target_include_directories(NeverDMedTempLivenessTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
