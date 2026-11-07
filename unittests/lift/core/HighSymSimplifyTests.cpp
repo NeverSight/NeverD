@@ -84,6 +84,12 @@ public:
     return append(Op, std::move(Inputs), Out);
   }
 
+  void makeLarge() {
+    NextTemp = 100000;
+    for (size_t I = 0; I <= limits::kMaxStructurableMedOps; ++I)
+      emit(NdOp::COPY, {constant(I)});
+  }
+
   /// Emit the last operation into the return register and close the function.
   /// Return-value recovery looks for the final definition of that register
   /// rather than at what the RETURN names, so a temporary would leave the
@@ -2918,3 +2924,40 @@ int main(void) {
 }
 
 } // namespace
+
+TEST(HighSymSimplify, LargeConversionHonorsSymbolicOptInAndKeepsLoads) {
+  for (bool Symbolic : {false, true})
+    for (bool ReadMemory : {false, true}) {
+      SCOPED_TRACE(Symbolic);
+      SCOPED_TRACE(ReadMemory);
+      FunctionBuilder B;
+      const auto X = B.param(0, 0x38);
+      const auto Y = ReadMemory
+                         ? B.emit(NdOp::LOAD, {MedVar::makeConst(0x8000, 8)})
+                         : B.param(1, 0x30);
+      const auto And = B.emit(NdOp::INT_AND, {X, Y});
+      const auto Or = B.emit(NdOp::INT_OR, {X, Y});
+      const auto Sum = B.emit(NdOp::INT_ADD, {And, Or});
+      const auto LessX = B.emit(NdOp::INT_SUB, {Sum, X});
+      B.makeLarge();
+      const auto High = B.finish(NdOp::INT_SUB, {LessX, Y}, Symbolic);
+      if (Symbolic)
+        EXPECT_EQ(returnedExpr(High), "0");
+      else
+        EXPECT_NE(returnedExpr(High), "0");
+      unsigned Loads = 0;
+      walkStmts(High.Body, [&](const HighStmt &S) {
+        forEachExpr(S, [&](const ExprPtr &Root) {
+          auto Visit = [&](auto &&Self, const ExprPtr &E) -> void {
+            if (!E)
+              return;
+            Loads += E->Kind == ExprKind::Load;
+            E->forEachChildExpr(
+                [&](const ExprPtr &Child) { Self(Self, Child); });
+          };
+          Visit(Visit, Root);
+        });
+      });
+      EXPECT_EQ(Loads != 0, ReadMemory);
+    }
+}

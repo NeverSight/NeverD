@@ -1838,6 +1838,12 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
     zeroUndemandedUnknownBytes(Func, TargetArch);
     simplifyAllExprs(Func.Body);
     eliminateUnusedValues(Func);
+    if (SymbolicSimplification) {
+      simplifyExprSemantics(Func.Body, SemanticThreadLimit);
+      zeroUndemandedUnknownBytes(Func, TargetArch);
+      simplifyAllExprs(Func.Body);
+      eliminateUnusedValues(Func);
+    }
     reduceLateGotos(Func);
     anchorDispatcherEntries(Func);
     Trace.high(Func, "after-exceptions");

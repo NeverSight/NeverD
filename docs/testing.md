@@ -21413,3 +21413,5 @@ recorded baseline; this change adds none and does not weaken the audit.
 `HighControlFlowSemantics.UnusedValuesKeepPlainReadsAndTheirAddresses` checks that unused direct and nested ordinary loads retain their original address and evaluation in HighIR dead-value cleanup.
 
 `HighControlFlowSemantics.LargeSourceDropsUnobservedBitsButKeepsLoads` forces the large-function route and checks exact value cleanup without removing a still-observable memory read.
+
+`HighSymSimplify.LargeConversionHonorsSymbolicOptInAndKeepsLoads` checks the symbolic option on the large-function route, with the option both on and off and with or without a real LOAD.
