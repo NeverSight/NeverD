@@ -152,6 +152,9 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     return Decoded.takeError();
   auto &[DebugRegister, Segment, Scalar, FastSystem, String, Port, Far, Body,
          Width, IRET, RETF, INT, UD2] = *Decoded;
+  if (Scalar && Scalar->DescriptorQuery &&
+      Options.DescriptorQueries != X86LegacyDescriptorProfile::TableImage)
+    return invalid("legacy descriptor query requires a bound table profile");
   if (Scalar &&
       (Scalar->bitCounting() || Scalar->carryChain() || Scalar->BMI)) {
     if (!Options.IntegerExtensions)

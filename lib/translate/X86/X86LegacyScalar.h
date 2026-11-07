@@ -11,6 +11,7 @@
 #define NEVERD_LIB_TRANSLATE_X86_X86LEGACYSCALAR_H
 
 #include "X86LegacyBMI.h"
+#include "X86LegacyDescriptorQuery.h"
 #include "X86LegacyEncoding.h"
 
 #include "neverd/ir/X86/X86DecimalAdjust.h"
@@ -110,6 +111,7 @@ struct X86LegacyScalarInstruction {
   std::optional<uint8_t> ShiftImmediate;
   std::optional<X86DecimalAdjustInstruction> Adjustment;
   std::optional<X86LegacyBMIInstruction> BMI;
+  std::optional<X86LegacyDescriptorQuery> DescriptorQuery;
   unsigned Bytes = 4, SourceBytes = 4, Condition = 0;
   unsigned CounterBytes = 0;
   uint16_t Discard = 0;

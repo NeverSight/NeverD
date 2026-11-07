@@ -463,6 +463,23 @@ and NeverC at O0/O2, including feature errors and MULX fault repair.
 Run both SDKs and the qualified P/E cores, the software paging tests, shared
 scalar/integer/segment regressions and ordinary BMI/BEXTR/decoder targets.
 
+`LegacyDescriptors/*` qualifies original protected LAR/LSL/VERR/VERW in
+legacy paging and PAE. It compares all descriptor access bytes, CPL/RPL/DPL
+combinations, presence, descriptor flags and limit nibbles; code/operand/address
+widths and all destination/source registers; GDT/LDT/null/bounds cases; split
+and supervisor read-only table pages; source segment/page/alignment faults and
+original handler repair/retry. No compared CPU output supplies model results.
+`OriginalDescriptorQueryReadWatchpoints` distinguishes the source word from
+neighboring bytes and observes both descriptor dwords, write-only comparators
+and TF. `X86LegacyDescriptorTest.*` separately checks fixed expected values,
+read-only/nonpresent tables, backing resume, 32-bit linear wrap, exact grammar
+and admission before fetch. `X86LegacySourceTest.Descriptor*` runs exported C
+with Clang/NeverC at O0/O2, including LDT lookup, word destination preservation,
+invalid selectors and descriptor page repair followed by IRET/retry. Qualify
+both SDKs on P/E cores and run shared scalar/selector and ordinary system-state
+regressions. The `TableImage` LAR undefined nibble is a measured target choice;
+qualification on this Intel host is not a claim about every x86 vendor.
+
 `NeverDLLVMCValueTests --gtest_filter=LLVMCValues.X86BitString*` rejects
 weakened native bit-string declarations and executes all twelve LLVM-to-C
 projections with live/dead results. The original-instruction oracle compares

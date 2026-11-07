@@ -4059,6 +4059,20 @@ checks, including 133,760 original state/debug comparisons across both SDKs
 and qualified P/E cores. The other machine-state gaps and LLVM release gate
 remain open.
 
+### Protected descriptor queries
+
+Original protected LAR, LSL, VERR and VERW now use the scalar executor and
+shared generated-C dispatcher. The [descriptor query contract](x86-legacy-segments.md#protected-descriptor-queries)
+owns GDT/LDT visibility, read-only implicit table accesses, exact selector-word
+loads and staged GPR/ZF completion. Null, out-of-bounds and invisible selectors
+clear ZF; descriptor page/backing failures retain their separate fault/retry
+behavior. Queries neither require presence nor set descriptor accessed bits.
+LAR's undefined limit nibble requires the explicit `TableImage` CPU profile.
+
+Ordinary native LLVM/NeverC descriptor APIs already existed. This closes the
+owned protected-query path; LDTR/TR loads, task switching, real/VM86 and other
+unbound system-state domains remain separate work. The LLVM pin stays r6.
+
 ### Protected ARPL conditional completion
 
 The protected ordinary-RAM executor now runs original ARPL register and memory

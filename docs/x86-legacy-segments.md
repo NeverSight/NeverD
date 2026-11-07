@@ -1363,3 +1363,41 @@ compiler and executable hashes, generated sources, libraries and raw results.
 Global completion remains open, including other unbound state banks, task
 switching, real/VM86 and general compatibility execution, software SMM/SGX
 transitions and external-event producers. LLVM release and pin remain at r6.
+
+## Protected descriptor queries
+
+`DescriptorQueries = X86LegacyDescriptorProfile::TableImage` enables LAR,
+LSL, VERR and VERW under `OrderedRAM`. Code and address widths are independent;
+66 changes LAR/LSL destination width and 67 changes memory addressing. The
+selector is always a word, including the low word of a register source. LAR
+and LSL preserve the full destination on failure; a successful word result
+preserves its high half. Only ZF changes. Register aliases capture the selector
+before publishing a destination.
+
+Null selectors, an unusable LDT, descriptors extending past the table limit,
+invisible privilege levels and disallowed types clear ZF. Conforming code
+bypasses the CPL/RPL versus DPL comparison. LAR admits data/code, LDT, 16/32-bit
+TSS and call/task gates; LSL excludes gates. VERR admits readable code/data,
+while VERW admits only writable data. Presence does not affect these queries,
+and no query sets the descriptor accessed bit or changes a segment cache.
+
+The explicit source word uses ordinary segment, page and alignment checks.
+Table reads are implicit supervisor accesses and remain faultable, even when
+a later type/privilege check would fail. An architectural fault enters the
+shared event owner with the original PC/GPR/flags; a physical backing stop
+preserves them for retry. Completed page-walk effects remain observable.
+Generated protected C uses the same dispatcher and attempt budget, including
+original handler repair followed by IRET and retry.
+
+The table profile returns the original descriptor limit nibble in LAR bits
+19:16. Intel defines these four result bits as undefined; this profile is an
+explicit CPU choice rather than an ISA-wide claim. LSL computes the granular
+byte limit before destination truncation. Prefix and exact-extent admission
+remains strict: LOCK/F2/F3, duplicate prefixes, truncated and trailing bytes
+are rejected before fetch. Unbound query profiles also refuse before fetch.
+
+The architectural reference is LAR, LSL and VERR/VERW in
+[Intel SDM Volume 2](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf).
+This query owner does not load LDTR/TR or implement task switching. Existing
+native LLVM/NeverC descriptor interfaces are independent of this owned-RAM
+execution path. The LLVM release gate remains open and the pin remains r6.

@@ -77,6 +77,14 @@ adapter performs the single source access and stages all writes; MULX captures
 EDX and the source before writing either destination, with the high half winning
 an alias. Explicit BMI features and undefined AF/PF (also SF for BEXTR) are
 validated by the execution boundary. Generated protected C calls that owner.
+`translate/X86/X86LegacyDescriptorQuery` owns protected LAR/LSL/VERR/VERW
+visibility, table reads and returned rights/limits. The scalar owner reads the
+selector word through the existing segment/page/alignment boundary and stages
+GPR/ZF publication. Invalid selectors return false visibility; a descriptor
+page or backing failure retains the original instruction state. Queries do not
+reuse segment-load fault checks or accessed-bit writes. The explicit table
+profile binds LAR's otherwise undefined limit nibble. Protected C reuses this
+same execution boundary.
 `X86InstructionDebugProfile::Watchpoints` composes the same rules with scoped
 `translate/X86/X86WatchpointObservation`. `X86PagedMemory` reports completed
 linear data reads and committed stores; physical page walks and fetches are
