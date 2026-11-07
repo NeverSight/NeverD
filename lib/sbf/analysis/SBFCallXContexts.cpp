@@ -178,6 +178,8 @@ llvm::StringRef generalizationName(CallXInputGeneralization Kind) {
     return "opaque_recursive_specialization_replaced";
   case CallXInputGeneralization::EquivalentSpecializedResults:
     return "coalesced_proven_equivalent_summary_results";
+  case CallXInputGeneralization::CoveringSpecializedInputs:
+    return "reused_covering_specialized_inputs";
   }
   llvm_unreachable("unknown input generalization");
 }
@@ -473,6 +475,13 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
         Edge.InstantiatedReturnInputExpression;
     Row["generalized_unknown_inputs"] = Edge.GeneralizedInputs;
     Row["input_generalization"] = generalizationName(Edge.InputGeneralization);
+    if (Edge.CompletedResultBinding) {
+      const auto &Binding = *Edge.CompletedResultBinding;
+      Row["completed_result_binding"] = llvm::json::Object{
+          {"frame_offset", Binding.FrameOffset},
+          {"summary_capture", static_cast<int64_t>(Binding.SummaryCapture)},
+          {"original_capture", static_cast<int64_t>(Binding.OriginalCapture)}};
+    }
     if (Edge.InstantiatedCopySlot) {
       Row["instantiated_copy_syscall_slot"] =
           static_cast<int64_t>(*Edge.InstantiatedCopySlot);
@@ -521,7 +530,7 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
   const auto Translation =
       frameTranslationLimit(Program.Low.TheVersion, Program.Config);
   return llvm::json::Object{
-      {"schema", 13},
+      {"schema", 14},
       {"captured_addresses", std::move(Captures)},
       {"distinct_captures_prove_no_alias", false},
       {"frame_coordinates",
@@ -578,6 +587,8 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
        static_cast<int64_t>(Report.EquivalentGenericReuses)},
       {"equivalent_specialized_summary_reuses",
        static_cast<int64_t>(Report.EquivalentSpecializedReuses)},
+      {"covering_specialized_summary_reuses",
+       static_cast<int64_t>(Report.CoveringSpecializedReuses)},
       {"skipped_non_callx_root_specializations",
        static_cast<int64_t>(Report.SkippedNonCallXRootSpecializations)},
       {"constant_branch_successors_skipped",
