@@ -7879,4 +7879,144 @@ TEST(SBFCallXContexts, BranchBoundsFollowExactCopiesAndLosslessTruncations) {
   }
 }
 
+TEST(SBFCallXContexts,
+     KnownCopyLoopsPreserveSpillsWithAndWithoutSpecialization) {
+  for (unsigned WarmCalls : {0u, 4u})
+    // Known copy, unknown destination/source/branch, and an overlapping spill.
+    for (unsigned Mode : {0u, 1u, 2u, 3u, 4u}) {
+      SCOPED_TRACE(::testing::Message() << WarmCalls << ":" << Mode);
+      std::vector<test::EncodedInstruction> Text;
+      const auto Literal = [&](unsigned R, uint64_t Value) {
+        const auto Slots = test::loadImm64(R, Value);
+        Text.insert(Text.end(), Slots.begin(), Slots.end());
+      };
+      Literal(6, 0);
+      for (int Base : {-192, -128})
+        for (int Offset = 0; Offset < 48; Offset += 8)
+          Text.push_back(encode(Opcode::ST_DW_IMM, 10, 0, Base + Offset));
+      std::vector<size_t> Calls;
+      for (unsigned I = 0; I <= WarmCalls; ++I) {
+        Text.push_back(encode(Opcode::ST_DW_REG, 10, 6, -8));
+        Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+        Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0,
+                              I == WarmCalls && Mode == 4 ? -48 : -128));
+        Text.push_back(encode(Opcode::MOV64_REG, 2, 10));
+        Text.push_back(encode(Opcode::ADD64_IMM, 2, 0, 0, -192));
+        if (I == WarmCalls && (Mode == 1 || Mode == 2)) {
+          Literal(Mode, kInputStart);
+          Text.push_back(encode(Opcode::LD_DW_REG, Mode, Mode));
+        }
+        Text.push_back(
+            encode(Opcode::MOV64_IMM, 3, 0, 0, I == WarmCalls ? 48 : I + 1));
+        Calls.push_back(Text.size());
+        Text.push_back({});
+      }
+      Text.push_back(encode(Opcode::LD_DW_REG, 0, 10, -8));
+      const size_t Site = Text.size();
+      Text.push_back(encode(Opcode::CALL_REG, 0));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Copy = Text.size();
+      Text.push_back({});
+      std::optional<size_t> UnknownBranch;
+      if (Mode == 3) {
+        Literal(4, kInputStart + 8);
+        Text.push_back(encode(Opcode::LD_DW_REG, 4, 4));
+        UnknownBranch = Text.size();
+        Text.push_back({});
+      }
+      Text.push_back(encode(Opcode::MOV64_IMM, 5));
+      const size_t Loop = Text.size();
+      Text.push_back(encode(Opcode::LD_DW_REG, 4, 2));
+      Text.push_back(encode(Opcode::ST_DW_REG, 1, 4));
+      Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, 8));
+      Text.push_back(encode(Opcode::ADD64_IMM, 2, 0, 0, 8));
+      Text.push_back(encode(Opcode::ADD64_IMM, 5, 0, 0, 8));
+      const size_t Back = Text.size();
+      Text.push_back(encode(Opcode::JLT64_REG, 5, 3, Loop - Back - 1));
+      Text.push_back(encode(Opcode::MOV64_IMM, 0));
+      Text.push_back(encode(Opcode::EXIT));
+      if (UnknownBranch) {
+        const size_t Poison = Text.size();
+        Text.push_back(encode(Opcode::ST_DW_IMM, 1, 0, 120));
+        Text.push_back(encode(Opcode::MOV64_IMM, 0));
+        Text.push_back(encode(Opcode::EXIT));
+        Text[*UnknownBranch] =
+            encode(Opcode::JNE64_IMM, 4, 0, Poison - *UnknownBranch - 1);
+      }
+      const size_t Syscall = Text.size();
+      Text.push_back(encode(Opcode::CALL_IMM, 0, 0, 0,
+                            getSyscallInfo(Syscall::Memmove)->Hash));
+      Text.push_back(encode(Opcode::EXIT));
+      Text[Copy] = encode(Opcode::JNE64_IMM, 3, 0, Syscall - Copy - 1, 48);
+      const size_t Target = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+      Text.push_back(encode(Opcode::EXIT));
+      const auto TargetAddress =
+          test::loadImm64(6, kBytecodeStart + Target * 8);
+      std::copy(TargetAddress.begin(), TargetAddress.end(), Text.begin());
+      for (size_t Slot : Calls)
+        Text[Slot] = encode(Opcode::CALL_IMM, 0, 1, 0, Copy - Slot - 1);
+      auto Program = analyze(test::makeImage(Text, {}));
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      checkSummaryReferences(*Report);
+      EXPECT_EQ(llvm::any_of(Report->Contexts,
+                             [&](const auto &Evidence) {
+                               return Evidence.CallXSlot == Site &&
+                                      Evidence.TargetSlot == Target;
+                             }),
+                Mode == 0);
+      EXPECT_TRUE(llvm::any_of(Report->SummaryEdges, [&](const auto &Edge) {
+        return Edge.CallerSlot == Calls.back() &&
+               Edge.InstantiatedMemoryPathStores ==
+                   (Mode == 0 || Mode == 4 ? 6 : 0);
+      }));
+      EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+      EXPECT_LE(llvm::count_if(Report->Summaries,
+                               [&](const auto &Summary) {
+                                 return Summary.EntrySlot == Copy &&
+                                        !Summary.GeneralizedInputs;
+                               }),
+                4);
+      for (unsigned Selector = 0; Selector != (Mode == 3 ? 2u : 1u);
+           ++Selector) {
+        SCOPED_TRACE(Selector);
+        const auto Frame =
+            initialFramePointer(Program->Low.TheVersion, Program->Config);
+        std::vector<uint8_t> Input(16);
+        llvm::support::endian::write64le(Input.data(),
+                                         Frame - (Mode == 1 ? 48 : 192));
+        llvm::support::endian::write64le(Input.data() + 8, Selector);
+        ExecutionEnvironment Environment;
+        Environment.Memory.push_back(
+            {kInputStart, Input, false, "copy controls"});
+        // Warm-up calls copy zero bytes onto zero bytes; the full copy and
+        // alias controls execute their actual guest stores without a callback.
+        Environment.HostSyscall = [Frame](uint32_t Hash,
+                                          const SyscallArguments &Args) {
+          return Hash == getSyscallInfo(Syscall::Memmove)->Hash &&
+                         Args[0] == Frame - 128 && Args[1] == Frame - 192 &&
+                         Args[2] >= 1 && Args[2] <= 4
+                     ? SyscallOutcome::returned(0)
+                     : SyscallOutcome::unregistered();
+        };
+        auto Raw = executeRaw(*Program, std::move(Environment));
+        ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+        if (Mode == 1 || Mode == 4 || Selector) {
+          EXPECT_EQ(Raw->Status, ExecutionStatus::Faulted) << Raw->Error;
+          EXPECT_EQ(Raw->Fault, FaultCode::UnknownIndirectCall);
+        } else {
+          EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+          EXPECT_EQ(Raw->ReturnValue, 42u);
+          EXPECT_TRUE(llvm::any_of(Raw->Trace, [&](const auto &Step) {
+            return Step.Slot == Target;
+          }));
+        }
+      }
+    }
+}
+
 } // namespace neverd::sbf
