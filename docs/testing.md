@@ -21409,3 +21409,5 @@ and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
 frontend regressions and 91 generated-table tests passed. NeverC's strict
 global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
+
+`SymState` memory-view regressions check whole-word overwrite node counts, independent byte-store equivalence, endian order, partial overwrites, modular relative coordinates and non-allocating materialized reads. Scalar snapshot and restore tests check that memory operations do not fork or replace unrelated scalar state.
