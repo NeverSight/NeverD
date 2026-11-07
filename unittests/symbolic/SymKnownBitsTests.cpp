@@ -687,3 +687,72 @@ TEST(SymKnownBits, BooleanCarriersKeepRangeWhenPredicateWorkIsExhausted) {
   EXPECT_EQ(Bits->Zero, llvm::APInt(32, 0xfffffffc));
   EXPECT_EQ(Bits->One, llvm::APInt(32, 1));
 }
+
+TEST(SymKnownBits, NonzeroBoundedDivisorBoundsTheUnsignedRemainder) {
+  SymContext C;
+  const auto X = C.mkFreshVar(64, "dividend_");
+  const auto Key = C.mkFreshVar(32, "divisor_input_");
+  const auto Divisor = C.mkAdd(C.mkConst(64, 0x1e139d83b), C.mkZExt(Key, 64));
+  const auto Remainder = C.mkURem(X, Divisor);
+  const auto High = C.mkAnd(Remainder, C.mkConst(64, 0x800000000000));
+  const auto Predicate = C.mkNe(High, C.mkZero(64));
+  const auto Before = C.numNodes();
+  SymKnownBits Facts(C);
+  expectConstant(Facts, High, 0);
+  expectConstant(Facts, Predicate, 0);
+  EXPECT_EQ(C.numNodes(), Before);
+}
+
+TEST(SymKnownBits, UnsignedRemainderRetainsTotalDivisionByZeroSemantics) {
+  SymContext C;
+  const auto X = C.mkVar("x", 8), Y = C.mkVar("y", 8);
+  const auto Low = C.mkAnd(Y, C.mkConst(8, 15));
+  const auto Nonzero = C.mkAdd(C.mkConst(8, 60), Low);
+  const auto Wrapping = C.mkAdd(C.mkConst(8, 250), Low);
+  const SymRef Roots[]{C.mkURem(X, Low), C.mkURem(X, Nonzero),
+                       C.mkURem(X, Wrapping), C.mkURem(X, C.mkZero(8)),
+                       C.mkURem(X, C.mkConst(8, 16))};
+  exhaustiveBytePairs(C, Roots);
+  SymKnownBits Facts(C);
+  expectConstant(Facts, C.mkAnd(Roots[1], C.mkConst(8, 128)), 0);
+  unsigned Work = 256;
+  const auto MaybeZero = Facts.query(Roots[0], Work);
+  ASSERT_TRUE(MaybeZero);
+  EXPECT_FALSE(MaybeZero->Zero[7]);
+}
+
+TEST(SymKnownBits, RemainderBoundDoesNotDependOnCompletingTheDividend) {
+  SymContext C;
+  const auto Key = C.mkFreshVar(32, "divisor_input_");
+  const auto Divisor = C.mkAdd(C.mkConst(64, 0x1e139d83b), C.mkZExt(Key, 64));
+  std::vector<SymRef> Terms;
+  for (unsigned I = 0; I != 128; ++I)
+    Terms.push_back(C.mkFreshVar(64, "dividend_input_"));
+  const auto Remainder = C.mkURem(C.mkAdd(Terms), Divisor);
+  const auto Before = C.numNodes();
+  SymKnownBits Facts(C);
+  unsigned Work = 32;
+  const auto K = Facts.query(Remainder, Work);
+  ASSERT_TRUE(K);
+  EXPECT_TRUE(K->Zero[47]);
+  EXPECT_EQ(C.numNodes(), Before);
+  Work = 0;
+  EXPECT_FALSE(Facts.query(Remainder, Work));
+}
+
+TEST(SymKnownBits, RemainderBoundsRetainTheirActualBitWidth) {
+  for (unsigned Width : {8u, 16u, 32u, 64u, 128u}) {
+    SymContext C;
+    const auto Dividend = C.mkFreshVar(Width, "dividend_");
+    const auto Input = C.mkFreshVar(Width / 2, "divisor_input_");
+    const auto Divisor = C.mkAdd(C.mkConst(Width, 5), C.mkZExt(Input, Width));
+    const auto Bounded = C.mkURem(Dividend, Divisor);
+    const auto MayBeZero = C.mkURem(Dividend, C.mkZExt(Input, Width));
+    SymKnownBits Facts(C);
+    expectConstant(Facts, C.mkExtract(Bounded, Width - 1, 1), 0);
+    unsigned Work = 256;
+    const auto Unknown = Facts.query(MayBeZero, Work);
+    ASSERT_TRUE(Unknown);
+    EXPECT_FALSE(Unknown->Zero[Width - 1]);
+  }
+}

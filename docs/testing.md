@@ -21452,3 +21452,5 @@ recorded baseline; this change adds none and does not weaken the audit.
 `SymExpr.ConditionalConstantWindowsIgnorePredicatesAndRespectWork` and `ConditionalSlicesKeepDifferentAndUnknownArms` check branch-common constant windows, exact work refusal and differing or unknown arms.
 
 `SymKnownBits` carrier, partial-cache and CONCAT refusal regressions check independent facts under exhausted child work and precision recovery on a later query without increasing query limits.
+
+`SymKnownBits` bounded unsigned-remainder regressions cover dynamic nonzero divisors, possibly zero divisors, exhausted dividends and 8/16/32/64/128-bit bounds; the extracted-bit MBA regression checks that a consumer uses the fact without assuming division is partial.
