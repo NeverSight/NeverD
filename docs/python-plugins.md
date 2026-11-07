@@ -116,6 +116,14 @@ version = session.raw.owned_string("neverd_version")
 object_bytes = session.raw.session_borrowed_bytes("neverd_roundtrip_obj")
 ```
 
+The raw ABI declares `neverd_x86_legacy_source_v1` for the explicit
+[`protected-legacy-v1` source route](x86-legacy-segments.md). Use
+`session.raw.owned_string` for its returned C and a `ctypes.c_void_p` output
+cell for the independently owned manifest, freeing that cell with
+`neverd_free_string` in `finally`. The JSON length bounds the request; no NUL
+terminator is required. This exports runtime-backed C; execution still needs
+the matching C++ state, memory and profile embedding.
+
 The raw ABI also declares `neverd_byte_patches_snapshot_v1` and the paired
 `neverd_byte_patch_snapshot_free_v1`. The returned ctypes pointer owns the rows
 and raw byte payloads independently of the session. Release it in `finally`

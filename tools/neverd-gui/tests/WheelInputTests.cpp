@@ -36,6 +36,7 @@ struct ListingViewTestAccess {
       view.lines_.push_back(std::move(line));
     }
     view.top_ = view.cursorLine_ = 100;
+    view.rebuildArrowEdges();
   }
 };
 } // namespace neverd::gui

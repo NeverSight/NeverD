@@ -81,6 +81,9 @@ enum class X86LegacyScalarOperation {
   Pop,
   PushFlags,
   PopFlags,
+  PushAll,
+  PopAll,
+  Enter,
   Leave,
   Call,
   Jump,
@@ -103,11 +106,18 @@ struct X86LegacyScalarInstruction {
   unsigned Bytes = 4, SourceBytes = 4, Condition = 0;
   unsigned CounterBytes = 0;
   uint16_t Discard = 0;
+  uint8_t Nesting = 0;
   bool Relative = false;
   bool Atomic = false;
   /// The string owner uses this for destination-first CMPS memory reads.
   /// Arithmetic still computes Destination - Source in the normal order.
   bool ReadSourceFirst = false;
+
+  bool stackFrame() const {
+    return Operation == X86LegacyScalarOperation::PushAll ||
+           Operation == X86LegacyScalarOperation::PopAll ||
+           Operation == X86LegacyScalarOperation::Enter;
+  }
 
   bool lockable() const {
     using Op = X86LegacyScalarOperation;
@@ -196,6 +206,20 @@ executeLegacyScalar(X86LegacyExecutionState &Staged, X86PagedMemory &Memory,
                     const X86LegacyScalarInstruction &Instruction,
                     uint32_t Fallthrough,
                     const X86LegacyExecutionOptions &Options);
+
+/// Check a retained stack instruction before any new fetch or event. A
+/// pending access cannot be redirected by replacing its instruction/state.
+llvm::Error
+validateLegacyStackContinuation(const X86LegacyExecutionState &State,
+                                llvm::ArrayRef<uint8_t> Instruction);
+
+/// Ordered multi-access instructions own partial architectural publication
+/// and host continuation; unlike ordinary scalars, State is not a staged copy.
+llvm::Expected<X86LegacyScalarResult>
+executeLegacyStack(X86LegacyExecutionState &State, X86PagedMemory &Memory,
+                   const X86LegacyScalarInstruction &Instruction,
+                   llvm::ArrayRef<uint8_t> Bytes, uint32_t Fallthrough,
+                   const X86LegacyExecutionOptions &Options);
 
 } // namespace neverd::translate::detail
 

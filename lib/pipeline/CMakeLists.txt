@@ -9,6 +9,7 @@ add_neverd_component_library(NeverDPipeline
   PipelineAnalysis.cpp
   X86/X64ContinuationEnvironment.cpp
   X86/X64ContinuationExport.cpp
+  X86/X86LegacySourceExport.cpp
   X86/X64ContinuationSchedule.cpp
   X86/X64FunctionContext.cpp
   X86/X64FunctionCalls.cpp
@@ -56,11 +57,13 @@ add_neverd_component_library(NeverDPipeline
   BackendC
   IR
   PassIR
+  Translate
   Decode
   Lift
   BackendLLVM
   CodeGen
   DebugInfo
+  Digest
   EVM
   SBF
 )

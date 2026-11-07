@@ -230,12 +230,131 @@ records commands, source hashes, SDK inputs, CPU affinity, independent native
 matrices, corrected probes and regression results.
 
 This is a bounded internal execution interface. The scalar binding below
-extends its ordinary instruction execution. General i386 source
-dispatch, task transitions, real/VM86, CET/FRED, software
+extends its ordinary instruction execution. The explicit source dispatcher
+below connects selected original instructions to this owner. Ordinary i386
+function projection, task transitions, real/VM86, CET/FRED, software
 SMM, enclave/AEX/EPCM and the remaining device/partial-progress contracts are
 not completed by it. No new LLVM or NeverC intrinsic is required for these
 runtime state transitions. The final LLVM release, SDK pin and NeverD LLVM
 gitlink remain unchanged pending global completion.
+
+## Protected source dispatch
+
+`--x86-legacy-source` exports a bounded C dispatcher over the protected
+execution owner. The SDK entry is `neverd_x86_legacy_source_v1`; its C++ owner
+is `exportX86LegacySource`. A request declares exact original instruction
+extents in an i386 image:
+
+```json
+{
+  "profile": "protected-legacy-v1",
+  "instructions": [
+    {"address": "0x1000", "code_bits": 32, "size": 2},
+    {"address": "0x2000", "code_bits": 16, "size": 1}
+  ]
+}
+```
+
+```sh
+neverd decompile input.elf --x86-legacy-source=request.json \
+  --continuation-report=manifest.json -o protected.c
+```
+
+The declared address is the **32-bit linear instruction address**. The
+dispatcher selects by `uint32(CS.base + EIP)` together with CS.D. Two code
+modes may select the same address with different complete extents. Live
+segment bases, offsets, limits and privileges remain in the runtime, including
+nonflat code and linear wrap. The image extent itself cannot wrap past 4 GiB.
+The shared executor grammar validates each complete byte sequence; this export
+does not ask a flat 32-bit decoder to guess a 16-bit extent. Duplicate
+address/mode pairs, extra fields, missing bytes and unsupported instructions
+fail explicitly. Selection order is normalized for deterministic output.
+
+Generated `neverd_x86_legacy_continue_v1(void *context, uint64_t *budget)`
+borrows a `translate::X86LegacySourceExecution`. Construct that C++ context
+with the complete `X86LegacyExecutionState`, `X86PagedMemory` and explicit
+`X86LegacyExecutionOptions`. Retain the state, RAM, borrowed device/debug
+callbacks and their contexts across pauses. Link the private bridge from the
+matching NeverD source build. The budget is a separate host cell, disjoint from
+state/RAM and never modified by device/debug callbacks. There is no serialized
+C++ object layout or stable C state-construction ABI. The SDK exports source
+and a manifest; it
+does not capture a native CPU, infer a service ABI or construct a guest machine.
+
+This is one **runtime-backed C dispatch route**: instruction arithmetic,
+fetch, paging, descriptor, debug and fault semantics stay in the existing
+execution owner. It is not a new HighC/LLVMC arithmetic projection. `--llvm`
+and ordinary function/source optimization options are therefore refused.
+Clang and NeverC compile the same generated C without embedded guest assembly.
+The manifest records the exact original bytes/modes, source hash, bridge
+identity, budget and event policies, and all status values.
+
+Completed selected near/far/system transfers, CALL and RET continue at the
+live target, including a selected IRET target. No ordinary function completion
+is inferred from RET. Each attempted instruction consumes one budget unit;
+REP consumes one per completed element, including its zero-count completion.
+Faulting attempts consume a unit even when fault entry subsequently stops.
+Changed code, pre-attempt fetch backing stops and refused steps consume none.
+An ordered stack instruction consumes one unit when first attempted, including
+when an operand subsequently stops on host backing. Resuming `PendingStack`
+does not consume another unit; an architectural fault followed by handler
+retry is a new attempt. IRET retains its existing attempted-frame semantics.
+Zero budget returns 258
+without selection or guest accesses; a null context/budget returns 256.
+
+Every delivered event stops before executing its handler. A caller can then
+invoke the dispatcher to execute a selected original handler, including a PTE
+repair, error-code removal, IRET and retry. The source-specific status values
+are 256 invalid/unbound state, 257 unselected address/mode, 258 instruction
+budget exhausted and 259 pending event delivery. Values 0–8 retain
+`X86LegacyExecutionStatus`; these are independent of the x64 continuation
+status namespace. `lastResult()` retains detailed progress, exceptions,
+device effects and self modifications; `lastError()` explains a refusal.
+Changed code requires a replacement selection. Shutdown is terminal for that
+CPU activation; a producer-owned machine reset is required before executing
+again. Neither condition is an automatic retry.
+
+When delivery is pending after a backing or event-work stop, selection returns
+259. Repair the physical backing if needed, call `context.resume()`, inspect
+its result, then continue. Previously consumed descriptor/TSS inputs, frame
+writes, debug causes and completed device input remain owned by the retained
+event. The dispatcher never replays the initiating instruction. The host may
+call `context.deliver(event)` between dispatch calls; eligibility, accepted
+events and inhibition remain owned by the existing event implementation.
+No asynchronous event producer or polling interval is inferred.
+
+This provides source selection/continuation for selected, admitted protected
+16/32-bit instructions within complete image extents. It does not supply
+unimplemented instruction banks, ordinary i386 function C, IA-32e compatibility
+mode, task/real/VM86 execution, software SMM/SGX, or native device qualification.
+Global LLVM release remains gated on those separately documented contracts.
+
+The [November 7 source qualification](evidence/x86-legacy-source-2026-11-07.json)
+records 2,075 source, semantic and interface executions across qualification
+and subsequent `dev` integrations: 2,074 pass, with one explicit KVM LA57
+hardware skip and no failures. The new 41-case source suite runs on both SDKs
+and P/E core classes in the full matrices, giving 164 passing executions and
+1,024 original branch comparisons per full matrix. Every retained set of 184
+source, manifest, shared-library and i386-object artifacts is byte-identical,
+including after the later integrations. Its
+paging test binaries are also unchanged, retaining the exact 527-case native
+legacy and 570-case r6 full-paging qualification.
+
+The full integration matrices separately pass 88 x64 exporter checks, four
+real Python source-ABI checks and seven native plugin adapter checks per SDK.
+The Android Parcel merge changes only the r6 shared SDK among the recorded
+executables and libraries; its updated ABI and export checks pass. A later
+C type lexer merge changes both shared SDKs while retaining those executables.
+Both updated SDKs pass another 41 source and four Python ABI cases. Additional
+parser checks each pass 56 cases and skip one optional Windows kernel PDB
+round-trip because `NEVERD_TYPES_NTKRNLMP` is unset. The initial
+two NeverC i386 failures came from omitting its existing explicit full LLVM
+backend option; the corrected invocation passes and the failed run remains a
+diagnostic, outside qualification counts. Embedded Python plugin-host tests
+are unavailable in these build profiles. i386 object generation does not
+qualify execution of a 32-bit host runtime bridge. LLVM and NeverC need no
+implementation change for this source route; the r6 pin and LLVM gitlink
+remain unchanged.
 
 ## Protected instruction-step debug events
 
@@ -1079,3 +1198,72 @@ two explicit LA57 skips and no failures. The new far-transfer matrix performs
 The source/export suites are regression checks for existing execution paths;
 they do not qualify a new i386 far-transfer source compiler. Diagnostic logs
 retain the parameter-copy ordering mismatch and the Capstone alias probe.
+
+## Ordered PUSHA, POPA and ENTER
+
+The bound `OrderedRAM` scalar profile executes original PUSHA/PUSHAD,
+POPA/POPAD and ENTER bytes in protected 16/32-bit code. Operand prefixes select
+word/dword data independently of CS.D and SS.B. Segment/address overrides do
+not change their implicit SS references. Malformed/trailing bytes, duplicate
+prefixes and LOCK/REP forms are explicit grammar errors before fetch.
+
+PUSHA pushes registers in encoding order and saves the entry SP/ESP value.
+POPA loads them in reverse order, discarding the saved SP value. In the
+qualified ordered-RAM model that discarded slot is still read: original P/E
+cores produce both its page fault and its data breakpoint. Treating the SDM's
+discard operation as an absent memory access gives the wrong CR2/debug result.
+Completed PUSHA/ENTER stores survive later faults. Completed POPA register loads
+also survive; ESP remains the entry value until the whole instruction succeeds.
+The existing event owner delivers faults with the original instruction PC and
+entry stack pointer, preserving those partial effects.
+
+ENTER masks nesting to five bits. It copies the previous display in order,
+including aliases of its earlier pushes. Display addresses subtract at the
+SS.B stack width. The saved frame value uses operand-width subtraction of
+entry ESP, including a borrow across bit 16 on a word stack; final word BP
+publication preserves the original EBP high word. Allocation adjusts SP/ESP
+at the stack width. The final pointer receives an operand-sized write-permission
+and alignment check: this can set page A/D bits or fault, but stores no data and
+does not trigger a data-write comparator. The entire frame is not preflighted.
+These order/partial-publication choices are explicit target bindings, measured
+on the qualified Intel cores, not inferred from the executing host.
+
+A physical backing failure retains `PendingStack`, independently of the guest
+exception mechanism. Keep the same architectural state, profiles and RAM;
+repair unavailable backing, then call the same original instruction again.
+Completed reads retain their values and completed stores are skipped. The
+original authenticated bytes also remain retained when a push has overwritten
+them. Resumption cannot accept different bytes, register/cache state or external
+events. Debug matches survive a backing stop and are published only at normal
+completion; an architectural fault discards the speculative cause. A fault
+clears `PendingStack` before IDT delivery, so handler repair/IRET starts a new
+attempt. The generated protected C dispatcher uses this same owner and charges
+the retained instruction only once.
+
+The ordinary lifter separately fixes word PUSHA/POPA to use a complete flat
+i386 stack address. Its ENTER display cursor now subtracts at pointer width,
+while final word BP publication preserves the original high bits. These
+operations already lower through ordinary LLVM IR and compile with the pinned
+r6 and current native SDK; no new inline-assembly fallback, LLVM intrinsic or
+NeverC builtin is needed for this change. This successful-memory projection
+does not acquire the protected executor's fault or continuation contract.
+
+The architectural reference is the ENTER/PUSHA/POPA entries in
+[Intel SDM Volume 2](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf).
+The [stack qualification](evidence/x86-legacy-stack-2026-11-07.json) retains
+the original-CPU experiments and the final test/build receipts. The initial
+CR2, discarded-slot breakpoint and frame-borrow mismatches are kept as
+diagnostics, separate from passing qualification.
+
+The final native-SDK/r6 matrix passes all 976 tests without skips across the
+qualified P/E cores. It includes 14,144 original stack/debug comparisons,
+12 original-versus-rewritten program pairs and 48 new generated-source cases.
+A separately retained, earlier executable passes 592 of 593 full paging tests;
+its one LA57 test is unavailable on this host. The evidence records that
+executable separately from the final code and preserves the actual commit,
+compiler, binary and exported-artifact hashes for each qualification lane.
+
+Real/VM86, compatibility execution, task switching, other unbound i386 banks,
+software SMM/SGX transitions and general external-event production remain
+outside this boundary. Global completion is still open; LLVM release, SDK pin
+and the LLVM submodule stay at r6.

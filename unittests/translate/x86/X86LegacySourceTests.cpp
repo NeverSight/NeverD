@@ -1,0 +1,733 @@
+//===- X86LegacySourceTests.cpp - Compiled protected dispatch ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Compile real exported C, compare original branches and exercise SDK/CLI.
+//===----------------------------------------------------------------------===//
+
+#include "../../HostCpu.h"
+#include "../../lift/NeverDLiftFixture.h"
+#include "X86BranchDebugOracle.h"
+#include "X86LegacyTestState.h"
+#include "X86PortDevice.h"
+
+#include "neverd/loader/BinaryImage.h"
+#include "neverd/pipeline/X86LegacySourceExport.h"
+#include "neverd/sdk/NeverDCAPI.h"
+#include "neverd/translate/X86/X86LegacySourceExecution.h"
+
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/Support/DynamicLibrary.h"
+#include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/JSON.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <utility>
+#include <vector>
+
+using namespace neverd;
+using namespace neverd::translate;
+
+namespace {
+
+std::string readSourceArtifact(const fs::path &Path) {
+  std::ifstream File(Path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(File), {}};
+}
+
+struct SourceUnit {
+  uint32_t Address;
+  unsigned Bits;
+  std::vector<uint8_t> Bytes;
+};
+
+BinaryImage image(llvm::ArrayRef<SourceUnit> Units) {
+  BinaryImage Image;
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  Image.Format = BinaryFormat::ELF;
+  Image.Base = Image.Entry = 0x1000;
+  Segment S;
+  S.Name = ".text";
+  S.VA = 0x1000;
+  S.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  size_t Size = 0x2000;
+  for (const auto &U : Units)
+    Size = std::max(Size, size_t(U.Address - S.VA) + U.Bytes.size());
+  S.Data.resize(Size, 0xcc);
+  S.Size = S.FileSz = S.Data.size();
+  for (const auto &U : Units)
+    std::copy(U.Bytes.begin(), U.Bytes.end(),
+              S.Data.begin() + U.Address - S.VA);
+  Image.Segments.push_back(std::move(S));
+  return Image;
+}
+
+std::string request(llvm::ArrayRef<SourceUnit> Units) {
+  llvm::json::Array Rows;
+  for (const auto &U : Units)
+    Rows.push_back(llvm::json::Object{{"address", U.Address},
+                                      {"code_bits", U.Bits},
+                                      {"size", U.Bytes.size()}});
+  return llvm::formatv("{0}", llvm::json::Value(llvm::json::Object{
+                                  {"profile", "protected-legacy-v1"},
+                                  {"instructions", std::move(Rows)}}))
+      .str();
+}
+
+TEST(X86LegacySourceContract, RejectsMalformedAndUnsupportedSelections) {
+  const auto Image = image({{0x1000, 32, {0xb8, 1, 2, 3, 4}}});
+  const auto Reject = [&](llvm::StringRef Text) {
+    auto Got = exportX86LegacySource(Image, Text);
+    EXPECT_FALSE(bool(Got)) << Text.str();
+    if (!Got)
+      llvm::consumeError(Got.takeError());
+  };
+  for (
+      const auto *Text :
+      {"", "null", "[]", "{}",
+       R"({"profile":"protected-legacy-v1","instructions":[]})",
+       R"({"profile":"protected-legacy-v1","instructions":[null]})",
+       R"({"profile":"protected-legacy-v1","instructions":[{"address":4096,"code_bits":64,"size":5}]})",
+       R"({"profile":"protected-legacy-v1","instructions":[{"address":4096,"code_bits":32,"size":3}]})",
+       R"({"profile":"protected-legacy-v1","instructions":[{"address":4096,"code_bits":32,"size":6}]})",
+       R"({"profile":"protected-legacy-v1","instructions":[{"address":-1,"code_bits":32,"size":1}]})",
+       R"({"profile":"protected-legacy-v1","instructions":[{"address":"0x100000000","code_bits":32,"size":1}]})",
+       R"({"profile":"protected-legacy-v1","instructions":[{"address":12288,"code_bits":32,"size":1}]})",
+       R"({"profile":"protected-legacy-v1","instructions":[{"address":4096,"code_bits":32,"size":5,"bytes":"90"}]})",
+       R"({"profile":"protected-legacy-v1","instructions":[{"address":4096,"code_bits":32,"size":5}],"guess":true})"})
+    Reject(Text);
+  Reject(
+      request({{0x1000, 32, {1, 2, 3, 4, 5}}, {0x1000, 32, {1, 2, 3, 4, 5}}}));
+  for (const std::vector<uint8_t> Bytes : {std::vector<uint8_t>{0x0f, 0xa2},
+                                           {0x90, 0x90},
+                                           {0x0f, 0x21, 0xc0, 0}}) {
+    const std::vector<SourceUnit> Units{{0x1000, 32, Bytes}};
+    auto Got = exportX86LegacySource(image(Units), request(Units));
+    EXPECT_FALSE(bool(Got));
+    if (!Got)
+      llvm::consumeError(Got.takeError());
+  }
+  auto WrongArch = Image;
+  WrongArch.Arch = Arch::X64;
+  auto Got = exportX86LegacySource(WrongArch, request({{0x1000, 32, {0x90}}}));
+  EXPECT_FALSE(bool(Got));
+  llvm::consumeError(Got.takeError());
+}
+
+class X86LegacySourceTest : public NeverDLiftTest,
+                            public X86LegacyTestState,
+                            public testing::WithParamInterface<unsigned> {
+protected:
+  using Driver = uint32_t (*)(void *, uint64_t *);
+  using Select = decltype(&neverd_x86_legacy_select_v1);
+  using Step = decltype(&neverd_x86_legacy_step_v1);
+  using Attempted = decltype(&neverd_x86_legacy_attempted_v1);
+  using Bind = void (*)(Select, Step, Attempted);
+  std::string Compiler;
+  unsigned Compilation = 0;
+
+  void SetUp() override {
+#if !defined(__linux__) || !defined(__x86_64__)
+    GTEST_SKIP() << "Compiled legacy source currently qualifies Linux x64";
+#else
+    NeverDLiftTest::SetUp();
+    resetLegacyState();
+    Compiler = NEVERD_TEST_CLANG;
+    if (GetParam() & 2) {
+      const auto *NeverC = std::getenv("NEVERD_TEST_NEVERC");
+      if (!NeverC || !*NeverC)
+        GTEST_SKIP() << "NEVERD_TEST_NEVERC is required for this compiler lane";
+      Compiler = NeverC;
+    }
+#endif
+  }
+
+  void install(llvm::ArrayRef<SourceUnit> Units) {
+    for (const auto &U : Units)
+      for (unsigned I = 0; I != U.Bytes.size(); ++I)
+        put(U.Address + I, U.Bytes[I], GuestScalarWidth::I8);
+  }
+
+  void compile(llvm::ArrayRef<SourceUnit> Units, Driver &Run) {
+    auto Export = exportX86LegacySource(image(Units), request(Units));
+    ASSERT_TRUE(bool(Export)) << llvm::toString(Export.takeError());
+    std::string Name =
+        testing::UnitTest::GetInstance()->current_test_info()->name();
+    std::replace(Name.begin(), Name.end(), '/', '_');
+    Name += "-" + std::to_string(Compilation++);
+    const auto Source = tmpFile(Name + ".c"), Library = tmpFile(Name + ".so");
+    std::ofstream File(Source);
+    File << Export->Source << R"C(
+static uint32_t (*select_bridge)(void *, uint64_t *);
+static uint32_t (*step_bridge)(void *, uint64_t, const uint8_t *, uint32_t);
+static uint32_t (*attempted_bridge)(void *);
+void bind_legacy(uint32_t (*select)(void *, uint64_t *),
+    uint32_t (*step)(void *, uint64_t, const uint8_t *, uint32_t),
+    uint32_t (*attempted)(void *)) {
+    select_bridge = select; step_bridge = step; attempted_bridge = attempted;
+}
+uint32_t neverd_x86_legacy_select_v1(void *context, uint64_t *key) {
+    return select_bridge(context, key);
+}
+uint32_t neverd_x86_legacy_step_v1(void *context, uint64_t key,
+    const uint8_t *bytes, uint32_t size) {
+    return step_bridge(context, key, bytes, size);
+}
+uint32_t neverd_x86_legacy_attempted_v1(void *context) {
+    return attempted_bridge(context);
+}
+)C";
+    File.close();
+    if (const auto *Artifacts =
+            std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
+      fs::create_directories(Artifacts);
+      fs::copy_file(Source, fs::path(Artifacts) / (Name + ".c"),
+                    fs::copy_options::overwrite_existing);
+      std::ofstream(fs::path(Artifacts) / (Name + ".generated.c"))
+          << Export->Source;
+      std::ofstream(fs::path(Artifacts) / (Name + ".json")) << Export->Manifest;
+    }
+    auto Built =
+        exec(Compiler, {"-std=c11", GetParam() & 1 ? "-O2" : "-O0", "-fPIC",
+                        "-shared", "-Wl,-Bsymbolic", "-Wall", "-Wextra",
+                        "-Werror", Source.string(), "-o", Library.string()});
+    ASSERT_TRUE(Built.ok()) << Built.err;
+    if (const auto *Artifacts =
+            std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR"))
+      fs::copy_file(Library, fs::path(Artifacts) / (Name + ".so"),
+                    fs::copy_options::overwrite_existing);
+    std::string Error;
+    auto DL = llvm::sys::DynamicLibrary::getPermanentLibrary(
+        Library.string().c_str(), &Error);
+    ASSERT_TRUE(DL.isValid()) << Error;
+    auto Binder = reinterpret_cast<Bind>(DL.getAddressOfSymbol("bind_legacy"));
+    ASSERT_NE(Binder, nullptr);
+    Binder(&neverd_x86_legacy_select_v1, &neverd_x86_legacy_step_v1,
+           &neverd_x86_legacy_attempted_v1);
+    Run = reinterpret_cast<Driver>(
+        DL.getAddressOfSymbol("neverd_x86_legacy_continue_v1"));
+    ASSERT_NE(Run, nullptr);
+    install(Units);
+  }
+};
+
+TEST_P(X86LegacySourceTest, ModesAliasesAndBudgetsUseLiveCaches) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(
+      compile({{0x1000, 16, {0xb8, 0x34, 0x12}},
+               {0x1000, 32, {0xb8, 0x34, 0x12, 0x78, 0x56}}},
+              Run));
+  for (bool Code32 : {false, true})
+    for (uint32_t Base : {0x800u, 0xffffff00u, 0xffff1001u}) {
+      resetLegacyState();
+      put(0x1000, 0x56781234b8ULL);
+      auto &CS = S.Core.Segments[1];
+      CS.Base = Base;
+      if (!Code32)
+        CS.Attributes &= ~0x4000;
+      S.EIP = uint32_t(0x1000 - Base);
+      const auto Entry = S.EIP;
+      S.Core.GPR[0] = 0xdeadbeef;
+      X86LegacySourceExecution Context(S, *M, O);
+      uint64_t Budget = 1;
+      ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+      EXPECT_EQ(Budget, 0u);
+      EXPECT_EQ(S.EIP, Entry + (Code32 ? 5 : 3));
+      EXPECT_EQ(S.Core.GPR[0], Code32 ? 0x56781234u : 0xdead1234u);
+      EXPECT_TRUE(Context.lastResult().InstructionCompleted);
+      Budget = 2;
+      EXPECT_EQ(Run(&Context, &Budget), 257u);
+      EXPECT_EQ(Budget, 2u);
+      S.EFlags = 0;
+      Budget = 0;
+      EXPECT_EQ(Run(&Context, &Budget), 258u);
+      Budget = 1;
+      EXPECT_EQ(Run(&Context, &Budget), 256u);
+      EXPECT_FALSE(Context.lastError().empty());
+      EXPECT_EQ(Budget, 1u);
+    }
+  uint64_t Budget = 1;
+  EXPECT_EQ(Run(nullptr, &Budget), 256u);
+  X86LegacySourceExecution Context(S, *M, O);
+  EXPECT_EQ(Run(&Context, nullptr), 256u);
+}
+
+TEST_P(X86LegacySourceTest, UnselectedCodeModeDoesNotFetchOrSpendBudget) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile({{0x1000, 16, {0x90}}}, Run));
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 2;
+  EXPECT_EQ(Run(&Context, &Budget), 257u);
+  EXPECT_EQ(Budget, 2u);
+  EXPECT_EQ(get(0x11004), 0x1007u);
+  S.Core.Segments[1].Attributes &= ~0x4000;
+  EXPECT_EQ(Run(&Context, &Budget), 257u);
+  EXPECT_EQ(Budget, 1u);
+  EXPECT_EQ(S.EIP, 0x1001u);
+  EXPECT_TRUE(Context.lastResult().InstructionCompleted);
+}
+
+TEST_P(X86LegacySourceTest, OriginalHandlerRepairsPageAndReturnsToRetry) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(
+      compile({{0x1000, 32, {0x8b, 0x07}},
+               {0x2000, 32, {0xc7, 0x05, 0x34, 0x10, 1, 0, 7, 0xd0, 0, 0}},
+               {0x200a, 32, {0x83, 0xc4, 4}},
+               {0x200d, 32, {0xcf}}},
+              Run));
+  put(0x5804, 0xb000, GuestScalarWidth::I32);
+  put(0xd004, 0x89abcdef, GuestScalarWidth::I32);
+  put(0x11034, 0xd006, GuestScalarWidth::I32);
+  S.Core.GPR[7] = 0xd004;
+  const auto Original = S;
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 5;
+  ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+  EXPECT_EQ(Budget, 4u);
+  EXPECT_EQ(S.EIP, 0x2000u);
+  EXPECT_EQ(Context.lastResult().DeliveredVector, 14);
+  EXPECT_FALSE(Context.lastResult().InstructionCompleted);
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(Budget, 0u);
+  EXPECT_EQ(S.EIP, 0x1002u);
+  EXPECT_EQ(S.Core.GPR[0], 0x89abcdefu);
+  EXPECT_EQ(S.Core.GPR[4], Original.Core.GPR[4]);
+  EXPECT_EQ(S.Core.CPL, Original.Core.CPL);
+  EXPECT_EQ(S.EFlags, Original.EFlags & ~0x10000u);
+  EXPECT_EQ(S.CR2, 0xd004u);
+}
+
+TEST_P(X86LegacySourceTest, StackFramesRoundTripAtBothOperandWidths) {
+  for (bool Word : {false, true}) {
+    resetLegacyState();
+    std::vector<SourceUnit> Units;
+    uint32_t PC = 0x1000;
+    for (std::vector<uint8_t> Bytes :
+         {std::vector<uint8_t>{0x60}, {0x61}, {0xc8, 0x20, 0, 3}, {0xc9}}) {
+      if (Word)
+        Bytes.insert(Bytes.begin(), 0x66);
+      Units.push_back({PC, 32, Bytes});
+      PC += Bytes.size();
+    }
+    Driver Run = nullptr;
+    ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
+    S.Core.GPR = {0x11223344, 0x22334455, 0x33445566, 0x44556677,
+                  0xd100,     0xc100,     0x66778899, 0x778899aa};
+    const auto Before = S.Core.GPR;
+    X86LegacySourceExecution Context(S, *M, O);
+    uint64_t Budget = 4;
+    ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+    EXPECT_EQ(S.EIP, PC);
+    EXPECT_EQ(S.Core.GPR, Before);
+    EXPECT_EQ(S.EFlags, 0x202u);
+    EXPECT_EQ(Budget, 0u);
+    EXPECT_FALSE(S.PendingStack);
+  }
+}
+
+TEST_P(X86LegacySourceTest, StackBackingContinuationRetainsAliasedCodeAndRAM) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile({{0xd00c, 32, {0xc8, 0, 0, 4}}}, Run));
+  S.EIP = 0xd00c;
+  S.Core.GPR[4] = 0xd010;
+  S.Core.GPR[5] = 0xd008;
+  put(0xd004, 0x11223344, GuestScalarWidth::I32);
+  put(0xd000, 0x55667788, GuestScalarWidth::I32);
+  put(0xcffc, 0x99aabbcc, GuestScalarWidth::I32);
+  put(0x11030, 0x40007, GuestScalarWidth::I32);
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 2;
+  ASSERT_EQ(Run(&Context, &Budget), 4u) << Context.lastError().str();
+  ASSERT_TRUE(S.PendingStack);
+  EXPECT_EQ(Budget, 1u);
+  EXPECT_EQ(get(0xd004), 0x55667788u);
+  EXPECT_EQ(get(0xd00c), 0xd008u);
+  put(0x11030, 0xc007, GuestScalarWidth::I32);
+  ASSERT_EQ(Run(&Context, &Budget), 257u) << Context.lastError().str();
+  EXPECT_EQ(Budget, 1u); // Resuming one attempted instruction is not another.
+  EXPECT_TRUE(Context.lastResult().InstructionCompleted);
+  EXPECT_FALSE(S.PendingStack);
+  EXPECT_EQ(get(0xd008), 0x11223344u);
+  EXPECT_EQ(get(0xd004), 0x55667788u);
+  EXPECT_EQ(get(0xd000), 0x99aabbccu);
+  EXPECT_EQ(get(0xcffc), 0xd00cu);
+  EXPECT_EQ(S.Core.GPR[4], 0xcffcu);
+  EXPECT_EQ(S.Core.GPR[5], 0xd00cu);
+}
+
+TEST_P(X86LegacySourceTest, PartialPopAllFaultHandlerRepairsAndRetries) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(
+      compile({{0x1000, 32, {0x61}},
+               {0x2000, 32, {0xc7, 0x05, 0x34, 0x10, 1, 0, 7, 0xd0, 0, 0}},
+               {0x200a, 32, {0x83, 0xc4, 4}},
+               {0x200d, 32, {0xcf}}},
+              Run));
+  S.Core.GPR[4] = 0xcff0;
+  put(0x5804, 0xb000, GuestScalarWidth::I32);
+  for (unsigned I = 0; I != 8; ++I)
+    put(0xcff0 + I * 4, 0x12340000 + I, GuestScalarWidth::I32);
+  put(0x11034, 0xd006, GuestScalarWidth::I32);
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 6;
+  ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+  EXPECT_EQ(Context.lastResult().DeliveredVector, 14);
+  EXPECT_EQ(S.Core.GPR[7], 0x12340000u);
+  EXPECT_EQ(S.Core.GPR[5], 0x12340002u);
+  EXPECT_FALSE(S.PendingStack);
+  ASSERT_EQ(Run(&Context, &Budget), 257u) << Context.lastError().str();
+  EXPECT_EQ(S.EIP, 0x1001u);
+  EXPECT_EQ(S.Core.GPR[4], 0xd010u);
+  EXPECT_EQ(S.Core.GPR[0], 0x12340007u);
+  EXPECT_EQ(S.Core.CPL, 3);
+  EXPECT_EQ(Budget, 1u);
+}
+
+TEST_P(X86LegacySourceTest, FarCallAndReturnRedispatchAcrossCodeModes) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile({{0x1000, 32, {0x9a, 0, 0x20, 0, 0, 0x33, 0}},
+                                   {0x1007, 32, {0x90}},
+                                   {0x2000, 16, {0xb8, 0x34, 0x12}},
+                                   {0x2003, 16, {0x66, 0xcb}}},
+                                  Run));
+  put(0x7030, 0x0000fb000000ffffULL);
+  O.FarTransfers = X86LegacyFarTransferProfile::OrderedFrame;
+  S.Core.GPR[0] = 0xdeadbeef;
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 1;
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(S.EIP, 0x2000u);
+  EXPECT_EQ(S.Core.Segments[1].Selector, 0x33);
+  EXPECT_EQ(S.Core.Segments[1].Attributes & 0x4000, 0u);
+  EXPECT_EQ(S.Core.GPR[4], 0xcff8u);
+  Budget = 3;
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(S.EIP, 0x1008u);
+  EXPECT_EQ(S.Core.Segments[1].Selector, 0x1b);
+  EXPECT_NE(S.Core.Segments[1].Attributes & 0x4000, 0u);
+  EXPECT_EQ(S.Core.GPR[4], 0xd000u);
+  EXPECT_EQ(S.Core.GPR[0], 0xdead1234u);
+}
+
+TEST_P(X86LegacySourceTest, StoreChangingNextInstructionStopsBeforeItExecutes) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile(
+      {{0x1000, 32, {0xc6, 0x05, 7, 0x10, 0, 0, 0xcc}}, {0x1007, 32, {0x90}}},
+      Run));
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 3;
+  ASSERT_EQ(Run(&Context, &Budget), 3u) << Context.lastError().str();
+  EXPECT_EQ(Budget, 2u);
+  EXPECT_EQ(S.EIP, 0x1007u);
+  EXPECT_EQ(get(0x1007, GuestScalarWidth::I8), 0xccu);
+  EXPECT_FALSE(S.PendingEvent);
+  EXPECT_FALSE(Context.lastResult().InstructionAttempted);
+}
+
+TEST_P(X86LegacySourceTest, RepPauseAndExternalEventPreserveElementProgress) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile(
+      {{0x1000, 32, {0xf3, 0xa4}}, {0x1002, 32, {0x90}}, {0x2000, 32, {0xcf}}},
+      Run));
+  O.Strings = X86LegacyStringProfile::ElementwiseDestinationFirst;
+  S.Core.GPR[1] = 3;
+  S.Core.GPR[6] = 0xb000;
+  S.Core.GPR[7] = 0xc000;
+  put(0xb000, 0x332211);
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 1;
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(Context.lastResult().Status,
+            X86LegacyExecutionStatus::RepeatContinue);
+  EXPECT_EQ(S.Core.GPR[1], 2u);
+  EXPECT_EQ(get(0xc000), 0x11u);
+  put(0xb000, 0xff, GuestScalarWidth::I8);
+  ASSERT_EQ(Context.deliver({S.EIP, 0, 0, 65, X86LegacyEventKind::Interrupt}),
+            1u);
+  EXPECT_TRUE(Context.lastResult().EventAccepted);
+  Budget = 1;
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(S.EIP, 0x1000u);
+  EXPECT_EQ(S.Core.GPR[1], 2u);
+  Budget = 3;
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(S.EIP, 0x1003u);
+  EXPECT_EQ(get(0xc000), 0x332211u);
+  EXPECT_EQ(S.Core.GPR[1], 0u);
+}
+
+TEST_P(X86LegacySourceTest,
+       ChangedCodeBackingAndMissingProfilesDoNotSpendAttempts) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile({{0x1000, 32, {0x89, 0xc0}}}, Run));
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 3;
+  put(0x1001, 0xc1, GuestScalarWidth::I8);
+  EXPECT_EQ(Run(&Context, &Budget), 3u);
+  EXPECT_EQ(Budget, 3u);
+  EXPECT_EQ(S.EIP, 0x1000u);
+  EXPECT_FALSE(Context.lastResult().InstructionAttempted);
+  put(0x1001, 0xc0, GuestScalarWidth::I8);
+  put(0x11004, 0x40007, GuestScalarWidth::I32);
+  EXPECT_EQ(Run(&Context, &Budget), 4u);
+  EXPECT_EQ(Budget, 3u);
+  EXPECT_FALSE(S.PendingEvent);
+  put(0x11004, 0x1007, GuestScalarWidth::I32);
+  O.Scalars.reset();
+  X86LegacySourceExecution Unbound(S, *M, O);
+  EXPECT_EQ(Run(&Unbound, &Budget), 256u);
+  EXPECT_EQ(Budget, 3u);
+  EXPECT_NE(Unbound.lastError().find("ordinary-RAM"), llvm::StringRef::npos);
+  EXPECT_EQ(get(0x11004), 0x1007u);
+  O.Scalars = X86LegacyScalarProfile::OrderedRAM;
+  X86LegacySourceExecution Restored(S, *M, O);
+  EXPECT_EQ(neverd_x86_legacy_step_v1(&Restored, 0x1000, nullptr, 1), 256u);
+  EXPECT_FALSE(Restored.lastResult().InstructionAttempted);
+  EXPECT_EQ(neverd_x86_legacy_step_v1(&Restored, 0x100001000ULL, nullptr, 1),
+            256u);
+  EXPECT_FALSE(Restored.lastResult().InstructionAttempted);
+  EXPECT_EQ(Run(&Restored, &Budget), 257u);
+  EXPECT_EQ(Budget, 2u);
+  EXPECT_TRUE(Restored.lastResult().InstructionCompleted);
+}
+
+TEST_P(X86LegacySourceTest, DeviceInputSurvivesPendingDebugEntryWithoutReplay) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(
+      compile({{0x1000, 32, {0xec}}, {0x2000, 32, {0xcf}}}, Run));
+  PagedPortTape Tape;
+  O.PortIO = X86PortIOBinding{X86PortIOProfile::InputBeforeWrite,
+                              PagedPortTape::transfer, &Tape};
+  O.Debug = X86LegacyDebugProfile::InstructionStep;
+  S.Debug.emplace();
+  S.EFlags = 0x3302;
+  S.Core.GPR[2] = 0x80;
+  put(0x11018, 0x40007, GuestScalarWidth::I32);
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 2;
+  ASSERT_EQ(Run(&Context, &Budget), 4u) << Context.lastError().str();
+  ASSERT_TRUE(S.PendingEvent);
+  EXPECT_EQ(Tape.Transfers.size(), 1u);
+  EXPECT_EQ(S.Core.GPR[0] & 0xff, 0x21u);
+  EXPECT_TRUE(Context.lastResult().DeviceTransferCompleted);
+  EXPECT_TRUE(Context.lastResult().InstructionCompleted);
+  EXPECT_EQ(Budget, 1u);
+  EXPECT_EQ(Run(&Context, &Budget), 259u);
+  EXPECT_EQ(Budget, 1u);
+  EXPECT_EQ(Tape.Transfers.size(), 1u);
+  put(0x11018, 0x6007, GuestScalarWidth::I32);
+  ASSERT_EQ(Context.resume(), 1u) << Context.lastError().str();
+  EXPECT_FALSE(S.PendingEvent);
+  EXPECT_FALSE(Context.lastResult().InstructionAttempted);
+  EXPECT_FALSE(Context.lastResult().EventAccepted);
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(S.EIP, 0x1001u);
+  Budget = 2;
+  EXPECT_EQ(Run(&Context, &Budget), 257u);
+  EXPECT_EQ(Budget, 2u);
+  EXPECT_EQ(Tape.Transfers.size(), 1u);
+}
+
+#if defined(__linux__) && defined(__x86_64__)
+TEST_P(X86LegacySourceTest, BranchDebugMatchesOriginalProtectedInstructions) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
+  unsigned Comparisons = 0;
+  for (bool Code16 : {false, true}) {
+    const auto Cases = neverd::test::x86BranchDebugCases(Code16);
+    std::vector<SourceUnit> Units;
+    for (unsigned I = 0; I != Cases.size(); ++I) {
+      unsigned Offset = 0;
+      for (const auto Length : Cases[I].Lengths) {
+        Units.push_back({0x1000 + I * 0x40 + Offset,
+                         Code16 ? 16u : 32u,
+                         {Cases[I].Code.begin() + Offset,
+                          Cases[I].Code.begin() + Offset + Length}});
+        Offset += Length;
+      }
+    }
+    Driver Run = nullptr;
+    ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
+    neverd::test::X86BranchDebugOracle CPU;
+    using Mode = neverd::test::X86BranchDebugOracle::Mode;
+    ASSERT_NO_FATAL_FAILURE(
+        CPU.initialize(Code16 ? Mode::Code16 : Mode::Code32));
+    for (unsigned I = 0; I != Cases.size(); ++I)
+      for (bool Branch : {false, true}) {
+        SCOPED_TRACE(testing::Message() << Code16 << ':' << I << ':' << Branch);
+        const auto &Case = Cases[I];
+        neverd::test::X86BranchDebugOracle::Result Native;
+        ASSERT_NO_FATAL_FAILURE(CPU.run(Case, Branch, Native));
+        resetLegacyState();
+        install(Units);
+        S.EIP = 0x1000 + I * 0x40;
+        const auto Start = S.EIP;
+        if (Code16)
+          S.Core.Segments[1].Attributes &= ~0x4000;
+        S.EFlags = Case.Flags | 0x100;
+        S.Core.GPR[0] = 0;
+        S.Core.GPR[1] = Case.Count;
+        O.Debug = X86LegacyDebugProfile::BranchWatchpoints;
+        S.Debug.emplace();
+        S.Debug->DebugCTL = Branch ? 2 : 0;
+        put(0xd000, Start + 4,
+            Code16 ? GuestScalarWidth::I16 : GuestScalarWidth::I32);
+        X86LegacySourceExecution Context(S, *M, O);
+        uint64_t Budget = Case.Lengths.size();
+        ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+        ASSERT_EQ(Context.lastResult().DeliveredVector, 1);
+        EXPECT_TRUE(Context.lastResult().InstructionCompleted);
+        EXPECT_EQ(get(S.Core.GPR[4]), Start + Native.PC);
+        EXPECT_EQ(S.Core.GPR[0], Native.Accumulator);
+        EXPECT_EQ(S.Core.GPR[1], Native.Count);
+        EXPECT_EQ(get(S.Core.GPR[4] + 8) & 0xcd5, Native.Flags & 0xcd5);
+        EXPECT_EQ(int64_t(get(S.Core.GPR[4] + 12)) - 0xd000, Native.StackDelta);
+        EXPECT_EQ(S.Debug->DR6, 0xffff4ff0u);
+        EXPECT_EQ(S.Debug->DebugCTL, 0u);
+        ++Comparisons;
+      }
+  }
+  RecordProperty("branch_selection_comparisons", Comparisons);
+}
+#endif
+
+TEST_P(X86LegacySourceTest,
+       SDKAndCLIExportIdenticalSourceAndRejectMixedRoutes) {
+  const std::vector<SourceUnit> Units{
+      {0x1000, 32, {0xb8, 0x78, 0x56, 0x34, 0x12}}};
+  const auto Input = tmpFile("input.elf"), Settings = tmpFile("request.json"),
+             Output = tmpFile("output.c"), Report = tmpFile("manifest.json");
+  // Independent minimal ELF32: one original executable PT_LOAD mapping.
+  std::vector<uint8_t> Bytes(0x1005);
+  const auto Put = [&](unsigned Offset, uint64_t Value, unsigned Count) {
+    for (unsigned I = 0; I != Count; ++I)
+      Bytes[Offset + I] = Value >> (I * 8);
+  };
+  Put(0, 0x10101464c457fULL, 7);
+  Put(16, 2, 2);
+  Put(18, 3, 2);
+  Put(20, 1, 4);
+  Put(24, 0x1000, 4);
+  Put(28, 52, 4);
+  Put(40, 52, 2);
+  Put(42, 32, 2);
+  Put(44, 1, 2);
+  Put(52, 1, 4);
+  Put(56, 0x1000, 4);
+  Put(60, 0x1000, 4);
+  Put(64, 0x1000, 4);
+  Put(68, 5, 4);
+  Put(72, 5, 4);
+  Put(76, 5, 4);
+  Put(80, 0x1000, 4);
+  std::copy(Units.front().Bytes.begin(), Units.front().Bytes.end(),
+            Bytes.begin() + 0x1000);
+  std::ofstream File(Input, std::ios::binary);
+  File.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  File.close();
+  const auto Request = request(Units);
+  std::ofstream(Settings) << Request;
+  auto Session = neverd_session_create();
+  ASSERT_NE(Session, nullptr);
+  auto Destroy = llvm::scope_exit([&] { neverd_session_destroy(Session); });
+  const char *Manifest = reinterpret_cast<const char *>(uintptr_t{1});
+  EXPECT_EQ(neverd_x86_legacy_source_v1(Session, Request.data(), Request.size(),
+                                        &Manifest),
+            nullptr);
+  EXPECT_EQ(Manifest, nullptr);
+  ASSERT_EQ(neverd_session_load(Session, Input.string().c_str()), 1);
+  const auto *Source = neverd_x86_legacy_source_v1(Session, Request.data(),
+                                                   Request.size(), &Manifest);
+  ASSERT_NE(Source, nullptr) << neverd_last_error(Session);
+  auto Free = llvm::scope_exit([&] {
+    neverd_free_string(Source);
+    neverd_free_string(Manifest);
+  });
+  auto Expected = llvm::cantFail(exportX86LegacySource(image(Units), Request));
+  EXPECT_EQ(Source, Expected.Source);
+  ASSERT_NE(Manifest, nullptr);
+  EXPECT_EQ(Manifest, Expected.Manifest);
+  const auto CrossSource = tmpFile("i386.c"), CrossObject = tmpFile("i386.o");
+  std::ofstream(CrossSource) << Expected.Source;
+  std::vector<std::string> CrossArgs{"--target=i386-unknown-linux-gnu",
+                                     "-ffreestanding",
+                                     "-std=c11",
+                                     GetParam() & 1 ? "-O2" : "-O0",
+                                     "-Wall",
+                                     "-Wextra",
+                                     "-Werror",
+                                     "-c",
+                                     CrossSource.string(),
+                                     "-o",
+                                     CrossObject.string()};
+  if (GetParam() & 2) {
+    const auto *LLC = std::getenv("NEVERD_TEST_NEVERC_LLC");
+    ASSERT_TRUE(LLC && *LLC) << "NEVERD_TEST_NEVERC_LLC must select the full "
+                                "NeverSight LLVM backend "
+                                "for NeverC i386 object generation";
+    CrossArgs.push_back(std::string("-fllvm-backend=") + LLC);
+  }
+  const auto Cross = exec(Compiler, CrossArgs);
+  ASSERT_TRUE(Cross.ok()) << Cross.err;
+  const auto Object = readSourceArtifact(CrossObject);
+  ASSERT_GE(Object.size(), 20u);
+  EXPECT_EQ(Object.substr(0, 4), std::string("\x7f"
+                                             "ELF",
+                                             4));
+  EXPECT_EQ(Object[4], 1);  // ELFCLASS32.
+  EXPECT_EQ(Object[18], 3); // EM_386, not the executing host's x64 ABI.
+  if (const auto *Artifacts =
+          std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
+    fs::create_directories(Artifacts);
+    const auto Name = "i386-route-" + std::to_string(GetParam());
+    fs::copy_file(CrossSource, fs::path(Artifacts) / (Name + ".c"),
+                  fs::copy_options::overwrite_existing);
+    fs::copy_file(CrossObject, fs::path(Artifacts) / (Name + ".o"),
+                  fs::copy_options::overwrite_existing);
+  }
+  std::vector<std::string> Args{"decompile", Input.string(),
+                                "--x86-legacy-source=" + Settings.string(),
+                                "-o", Output.string()};
+  EXPECT_FALSE(exec(ndBin(), Args).ok());
+  EXPECT_FALSE(fs::exists(Output));
+  Args.push_back("--continuation-report=" + Report.string());
+  auto Ran = exec(ndBin(), Args);
+  ASSERT_TRUE(Ran.ok()) << Ran.err;
+  EXPECT_EQ(readSourceArtifact(Output), Expected.Source);
+  EXPECT_EQ(readSourceArtifact(Report), Expected.Manifest);
+  for (const auto &Extra :
+       {std::string("--llvm"), "--x64-continuation=" + Settings.string(),
+        std::string("--func=0x1000")}) {
+    auto Bad = Args;
+    Bad.push_back(Extra);
+    EXPECT_FALSE(exec(ndBin(), Bad).ok());
+    EXPECT_EQ(readSourceArtifact(Output), Expected.Source);
+  }
+  Args.back() = "--continuation-report=" + Output.string();
+  EXPECT_FALSE(exec(ndBin(), Args).ok());
+  EXPECT_EQ(readSourceArtifact(Output), Expected.Source);
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 1;
+  EXPECT_EQ(Run(&Context, &Budget), 258u);
+  EXPECT_EQ(S.Core.GPR[0], 0x12345678u);
+}
+
+INSTANTIATE_TEST_SUITE_P(Compilers, X86LegacySourceTest, testing::Range(0u, 4u),
+                         [](const testing::TestParamInfo<unsigned> &I) {
+                           return std::string(I.param & 2 ? "NeverC"
+                                                          : "Clang") +
+                                  (I.param & 1 ? "O2" : "O0");
+                         });
+
+} // namespace

@@ -18,6 +18,26 @@ declarations and inspect its object bytes. Compile only; no generated program
 or guest execution is required. This establishes bank transport, not invocation
 capture, RAM mappings, paging or complete environment semantics.
 
+Add `scripts.tests.test_qemu_save_memory` for physical observations through an
+explicit producer map. Independent byte fixtures cover original block offsets,
+aliases, byte-aligned adjacent regions, cross-page/block reads, zero updates,
+holes, absent pages, uint64 endpoints/overflow, strict map bindings/schema,
+caller mutation and inspection bounds. CLI errors publish no partial result.
+Real-save checks should compare selected mapped bytes with existing capture
+receipts. They qualify those observations, not an inferred full machine map or
+CPU page-walk, permission and device semantics. The adapter runs no guest and
+adds no work to ordinary decompilation.
+
+Add `scripts.tests.test_qemu_save_devices` for selected device evidence. The
+fixtures distinguish migration name/instance from section and layout IDs,
+preserve raw PCI bytes and subsection versions, verify lazy field decoding
+and fresh results across interleaved reads, and reject malformed unselected
+sections and invalid selectors. The raw-reader suite also checks that QEMU's
+`int32 le` comparison tag uses big-endian wire bytes. For real-save checks,
+normalize presentation differences with an independent decoder explicitly;
+uncompared fields remain unqualified. No device model or post-load callback
+runs, and device transport alone does not establish physical topology.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
@@ -338,6 +358,24 @@ word-stack wrap, and original page-handler repair/IRET/retry. Its register
 inputs initialize the software state and original CPU from one shared image.
 The BSWAP word form has no defined architectural result and is tested as an
 explicit refusal, not assigned a guessed value.
+
+`LegacyStack/*` in `NeverDX86PagingTests` compares original PUSHA/POPA/ENTER
+against the protected executor under legacy paging and PAE. It varies CS.D,
+operand width, SS.B, privilege, nesting, nonzero SS base, word-stack wrapping,
+every faulting frame slot, overlapping displays, final write probes and original
+PTE-repair/IRET/retry. `OriginalStackFramesAndPermissionProbes` in `LegacyDebug`
+independently checks the discarded POPA slot and ENTER's probe with hardware
+data comparators. `X86LegacyStackTest.*` covers physical-backing continuation,
+code/input aliases, partial POPA publication, retained/discarded debug causes,
+exact grammar and refusal of redirected execution/events while suspended.
+
+Build `NeverDX86StackFrameTests` for focused ordinary-lifter checks. It executes
+LowIR stack semantics and compares original and identity-patched ELF32/ELF64
+programs on the host CPU. `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` retains the three
+original/rewritten binaries, assembly and patch logs. The protected source suite
+also compiles stack round trips, partial-fault handlers and aliased backing
+continuations with Clang and NeverC at O0/O2. Its i386 object checks remain
+compile-only; they do not qualify a 32-bit host runtime library.
 
 `LegacyShifts/*` compares protected SHL/SAL/SHR/SAR and ROL/ROR/RCL/RCR with
 original instructions under both paging modes. It covers every byte count,
@@ -6552,6 +6590,9 @@ document and all files on refusal.
 `listingRefreshKeepsItsContextAndArrows` observes every viewport paint through
 repeated refreshes, checks retained context, branch-gutter pixels and cursor
 placement, then verifies a real comment update and superseding navigation.
+`listingArrowEndpointsFollowLoadedRows` checks duplicate item rows, conditional
+and external targets, ignored calls, paging on both sides, front/back trimming,
+replacement and clearing against a separate linear endpoint lookup.
 `NeverDWorkerPEFunctionParts` checks a chained cold part's owner, recovered
 instructions, references and stable function inventory across repeated reads.
 `NeverDWorkerCLIPEFunctionParts` additionally checks CLI entry inventories,
@@ -6945,6 +6986,10 @@ similar identifiers and transactional diagnostics across all three data models.
 `TypeParse.NamedSpecifiersKeepPrecedenceAndUnknownWordPositions` checks named
 record/enum kinds, declared size_t and va_list, fixed builtin precedence, and
 recovery after unknown or incompatible type words across those models.
+`TypeParse.IdentifierRunsKeepBoundariesAndSourcePositions` checks identifiers
+containing underscores, digits and dollar signs, quoted encoding prefixes,
+CRLF and tab positions, macro invocation diagnostics, and identifiers ending
+at EOF on all three data models. Failed declarations keep the library intact.
 `TypeParse.NestedDeclaratorsKeepTheirCompositionAndQualifiers` covers plain
 and parenthesized names, pointer arrays, callbacks returning array pointers,
 array references and calling conventions on ILP32, LP64 and LLP64, including
@@ -12708,6 +12753,43 @@ The genuine WDK `driver_kmdf_pnp.c` file modes cover filter-default, explicit en
 Legacy cancellation tests retain the API continuation across cancellation, nested cleanup and final destruction; Ex still returns cancellation without callback delivery for an already canceled request. `KernelFrameworkRequestAccessorTests.cpp` and `KernelRequestMDLTests.cpp` check shared 64-bit Information, completion-time length validation, originating queue/IRP identity, NULL WDF file handles, retained-handle getter results, buffered MDL caching and first-direction ByteCount, direct descriptor identity and deferred mapping, completion retirement and rejected WDM-completion bypass. Genuine control-fixture modes L, M, D and C exercise legacy cancellation, buffered MDL/information, direct READ/WRITE MDLs and accessors after completion in normal/active-CFG images.
 
 ## Test layout
+
+`NeverDX86LegacySourceTests` compiles the protected original-byte C dispatcher
+with Clang and the compiler selected by `NEVERD_TEST_NEVERC`, at O0/O2. Set
+`NEVERD_TEST_NEVERC_LLC` to the full NeverSight fork's `llc` for the explicit
+NeverC i386 object route (`-fllvm-backend`); its embedded backend remains x64.
+The
+matrix checks 16/32-bit selection, nonflat and wrapping linear aliases, exact
+budget stops, far CALL/RETF mode changes, self-modifying code, original handler
+PTE repair/IRET/retry, REP continuation through
+an external interrupt, changed code, physical backing and unbound profiles.
+A completed port input followed by a failed debug entry must survive pending
+selection and resume without a second device read. SDK/CLI checks compare the
+actual generated source and manifest and reject conflicting routes and output
+aliases. Both compilers also emit verified ELF32/i386 objects; that is a
+compilation check, not execution of a 32-bit host bridge.
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR` retains generated C, its compiled
+bridge fixture and manifests.
+
+The Python ABI inventory includes `neverd_x86_legacy_source_v1` with two
+independently owned string addresses. Set `NEVERD_TEST_LIBNEVERD` to the
+matching shared library when running `test_legacy_source_integration.py` and
+`test_continuation_integration.py`: they check the real legacy and x64 SDK
+exports, source hashes, size-delimited requests, manifest lifetime after the
+source is freed, optional manifests and failure-output clearing. These raw
+SDK calls do not require the embedded Python plugin host.
+
+Its original-instruction oracle compares 64 protected branch selections per
+compiler/optimization lane using Linux ptrace in code16 and code32. It compares
+PC, accumulator/count, arithmetic/DF flags and stack delta. Software checks
+separately inspect DR6/DEBUGCTL and event state. This does not qualify raw
+full-machine BTF, CPL0 hardware, task/transactional debug or physical port I/O.
+The shared byte-grammar refactor also requires `NeverDX86PagingTests`; no
+unsupported encoding is converted to a NOP or inferred #UD. The SDK adapter
+shares string ownership/error handling with x64, whose public export regressions
+must remain valid. Linux x64 and the configured NeverC compiler are required
+for the compiled lanes; unavailable facilities are reported as skips.
+
 
 `unittests/devirtualization/x86_64/` owns the explicit x64 continuation suites,
 their shared frame fixtures and the native KVM runner. Its local CMake file

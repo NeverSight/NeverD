@@ -685,8 +685,9 @@ int runLift(neverd_session_t Sess) {
 
 int runDecompile(neverd_session_t Sess) {
   if (X64Continuation.getNumOccurrences() ||
+      X86LegacySource.getNumOccurrences() ||
       ContinuationReport.getNumOccurrences())
-    return runX64Continuation(Sess);
+    return runContinuation(Sess);
   const bool LLVMSourceTransforms = SourceLLVMControlFlow.getNumOccurrences() ||
                                     SourceLLVMLevel.getNumOccurrences() ||
                                     SourceLLVMPasses.getNumOccurrences();

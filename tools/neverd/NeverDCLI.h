@@ -369,6 +369,7 @@ extern llvm::cl::opt<bool> DumpHigh;
 // Decompile.
 extern llvm::cl::opt<bool> LlvmRoute;
 extern llvm::cl::opt<std::string> X64Continuation;
+extern llvm::cl::opt<std::string> X86LegacySource;
 extern llvm::cl::opt<std::string> ContinuationReport;
 extern llvm::cl::opt<bool> SourceSymbolic;
 extern llvm::cl::opt<bool> StackFrameInfo;
@@ -835,7 +836,7 @@ bool configureAnalysisSession(neverd_session_t Sess);
 int runPlugins(const char *Argv0);
 int runLift(neverd_session_t Sess);
 int runDecompile(neverd_session_t Sess);
-int runX64Continuation(neverd_session_t Sess);
+int runContinuation(neverd_session_t Sess);
 int runPatch(neverd_session_t Sess);
 
 } // namespace neverd::cli

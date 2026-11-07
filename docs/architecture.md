@@ -53,6 +53,15 @@ The paged continuation provider retains these bytes with a dedicated projection
 only when its debug bridge is selected, without certifying general LowIR or
 changing native intrinsic emission. Legacy and x64 adapters use that same
 register owner, then the existing event owner clears GD on accepted #DB.
+`translate/X86/X86LegacyStackExecution` owns ordered PUSHA/POPA/ENTER accesses,
+including POPA's partial register publication. `PendingStack` retains completed
+reads, writes and debug matches across host backing stops. Resumption uses
+already authenticated bytes and retained inputs, so self-modifying code and
+overlapping ENTER frames cannot cause replay. Architectural faults release this
+continuation before entering the existing event owner. New external events
+cannot interrupt a suspended host access. `ir/X86/X86StackFrameRules` shares
+ENTER nesting selection with the ordinary lifter; the paged owner additionally
+owns segment/page faults and the final stack permission probe.
 `X86InstructionDebugProfile::Watchpoints` composes the same rules with scoped
 `translate/X86/X86WatchpointObservation`. `X86PagedMemory` reports completed
 linear data reads and committed stores; physical page walks and fetches are
@@ -78,8 +87,15 @@ The event owner stages registers and caches while retaining descriptor/frame RAM
 effects and CR2 on later faults.
 TSS stack selection, conforming code and privilege changes stay in that owner;
 `ir/X86/X86ExceptionDelivery` shares event kinds, error-code vector sets and
-recursive-fault classification with IA-32e. The legacy entry is an internal
-execution interface, not a general i386 source dispatcher or a task engine.
+recursive-fault classification with IA-32e. The legacy entry remains an internal
+execution interface. `pipeline/X86/X86LegacySourceExport` selects original
+16/32-bit extents using that owner's shared byte grammar and emits a bounded
+C dispatcher. `translate/X86/X86LegacySourceExecution` retains the existing
+state, memory, options and result at its private bridge. Selection keys combine
+the live linear instruction address with CS.D; the dispatcher does not duplicate
+instruction semantics or infer an ordinary C ABI. Event delivery always stops;
+pending entry resumes through the existing owner before more source dispatch.
+This path supplies neither IA-32e compatibility state nor task transitions.
 `translate/X86/X86LegacyFrameReturn` adds protected 16/32-bit IRET/RETF to that
 executor, retaining ordered descriptor writes and IRET NMI unblocking on later
 faults. `ir/X86/X86ReturnRules` shares code-return privilege checks, inaccessible
@@ -2220,6 +2236,10 @@ from its owner.
 GUI refreshes retain loaded context within the per-side query budget and keep a
 prefetch margin, so replacing unchanged rows does not shrink and regrow the
 window used to route branch arrows. Revision and navigation fences still apply.
+The listing resolves arrow endpoints once after a page replaces, extends or
+trims those bounded rows, and clears the endpoints with the document. Painting
+selects visible edges and assigns lanes and current-arrow colors from the live
+viewport and cursor; the first eligible row at a target keeps precedence.
 
 <!-- i18n-section: interactive-patch-ownership -->
 ## Interactive patch ownership
@@ -3145,8 +3165,11 @@ published types and diagnostics retain their existing ownership and positions.
 The parser's token streams and macro replacements use a non-inline
 `SmallVector`: their borrowed spellings permit trivial relocation during
 growth without changing token order or extending the parse's spelling arena.
-Storage and import annotation keywords use fixed `StringSwitch` cases, so
-ordinary declarators do not walk the full annotation table for each word.
+Token payloads precede their small metadata fields to avoid a leading alignment
+gap. Identifier runs use a local cursor within the input and update their stored
+position once: accepted identifier bytes cannot include a newline. Encoding prefixes still join only
+an immediately following quote; macros retain their invocation positions.
+Storage and import annotation keywords use fixed `StringSwitch` cases.
 Matching remains exact and case-sensitive; pointer width annotations retain
 their existing typed handling before the ignored-annotation path.
 Named specifiers resolve their type and kind in one library lookup. Builtin
