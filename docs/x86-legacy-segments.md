@@ -1352,6 +1352,14 @@ determine the admitted behavior. Original comparisons cover the available
 Intel BMI1/BMI2 host. Disabled-feature #UD is a separate software contract,
 not physical qualification on a processor missing BMI.
 
+The [November 7 BMI qualification](evidence/x86-legacy-bmi-2026-11-07.json)
+passes 1,084 checks with no failures or skips across the native SDK, pinned
+r6 and qualified P/E cores. It includes 131,264 original BMI state comparisons,
+2,496 original data-debug comparisons and 48 new compiled-source cases, plus
+shared scalar/integer/segment, decoder and ordinary BMI/BEXTR regressions.
+The retained archive binds the actual clean source commit, dependency inputs,
+compiler and executable hashes, generated sources, libraries and raw results.
+
 Global completion remains open, including other unbound state banks, task
 switching, real/VM86 and general compatibility execution, software SMM/SGX
 transitions and external-event producers. LLVM release and pin remain at r6.

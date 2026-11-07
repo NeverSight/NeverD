@@ -4053,8 +4053,11 @@ C dispatcher. The [protected BMI contract](x86-legacy-segments.md#protected-bmi1
 owns explicit target features, dword operands in code16/code32, undefined
 flag images, source/destination aliases and faults. Ordinary lifting,
 LLVM lowering and NeverC computation support already existed; this adds no
-inline-assembly fallback or compiler intrinsic. The other machine-state gaps
-and LLVM release gate remain open.
+inline-assembly fallback or compiler intrinsic. The
+[BMI evidence](evidence/x86-legacy-bmi-2026-11-07.json) records 1,084 passing
+checks, including 133,760 original state/debug comparisons across both SDKs
+and qualified P/E cores. The other machine-state gaps and LLVM release gate
+remain open.
 
 ### Protected ARPL conditional completion
 
