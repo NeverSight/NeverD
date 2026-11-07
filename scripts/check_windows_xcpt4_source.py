@@ -56,9 +56,11 @@ def check_source(source: str) -> None:
     for block in source.split("/* neverd.analysis-only:")[1:]:
         if "code=[0x140001500," not in block:
             continue
-        required = ("seh.scope[", "gs.cookie_offset=", "__try",
-                    "_local_unwind", "unresolved runtime stack")
+        required = ("seh.scope[", "gs.cookie_offset=", "__try", "__finally",
+                    "AbnormalTermination()")
         if (all(token in block for token in required)
+                and "_local_unwind" not in block
+                and "unresolved runtime stack" not in block
                 and re.search(r"sub_140001500\([^;]*?\)\s*\{", block)
                 and re.search(r"highir.structured_regions=[1-9]\d*", block)):
             return

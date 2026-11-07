@@ -17977,10 +17977,22 @@ contradicts, a handler of no scope, and an exhausted budget;
 `SEHFinallyBody.GuardsTheAbnormalWorkAndKeepsTheNormalCopy` shows bar1's `99`
 under `if (AbnormalTermination())` with the `100` copy kept,
 `FlagIndependentHandlerFillsTheClauseAndDropsTheCopy` fills a flag-independent
-clause and removes the matching copy, and `FrameRegisterHandlerKeepsTheComment`,
-`LocalUnwindInTheProtectedBodyKeepsTheComment` and
-`NestedExceptInTheProtectedBodyKeepsTheComment` keep the address comment where
-the projection is unsound. `SEHLocalUnwind.*` imports `_local_unwind` and
+clause and removes the matching copy, `AFrameRegisterParentFillsTheClause`
+locates the handler's frame below the register's offset,
+`NestedExceptInTheProtectedBodyFillsTheClause` fills a finally around an
+`__except` that rejoins the protected body, and
+`AFrameRegisterThePrologueDoesNotSetKeepsTheComment` keeps the address comment
+where nothing locates the frame, and
+`AnUncertifiedLocalUnwindStaysBesideTheFilledClause` keeps a call the protocol
+cannot certify in its runtime form beside the filled clause it runs.
+`AHandlerPassingAStackArgumentFillsTheClause` fills a handler whose call takes a
+stack argument, and `ANameOfTheMovedStackPointerAddressesTheHandlersFrame` and
+`ARenamedVariableIsNotTheNameItsNumberShares` hold the two rules ntoskrnl's
+handlers need: a renamed stack pointer addresses the handler's slots, and an
+unread name goes although a nested clause reads another of its number.
+`SEHTerminationFrame.AFrameRegisterLocatesTheEstablisherBelowItsOffset` reads
+the frame below a frame register's coded offset.
+`SEHLocalUnwind.*` imports `_local_unwind` and
 certifies its saved-frame slot: a return out of the `__try` becomes a jump
 whose filled clause runs the handler's abnormal work, with the normal-path
 copy kept for the fall-through; a flag-independent handler fills the whole
@@ -17999,8 +18011,26 @@ data places the masked frame or the frame reaches the cookie slot unmasked.
 same frame reaches a function of the image that reads it, and
 `AFrameItsCalleeNeverObservesPassesNothing` certifies the frame left in R8
 for a function whose unread proof covers R8.
-`AFinallyThatUnwindsToTheTargetKeepsItARoot` lets the Guarded exit own its
-epilogue, and keeps it a root when the `__finally` local-unwinds there too.
+`AFinallyThatUnwindsToTheTargetLandsThereAsAJump` lets the Guarded exit own its
+epilogue, and turns a `__finally` that local-unwinds there too into the `goto`
+it makes. `ABranchyHandlerFillsTheClause` folds the handler's own branch on the
+flag while unwinding.
+`ARM64SEHLocalUnwindTests.cpp` builds MSVC ARM64 /O0 parents that reach the
+import through a veneer: `ARM64SEHLocalUnwind.*` certifies the exit through
+an unrecorded veneer from the saved entry stack pointer, with the handler
+matched at the `bl` and given the frame pointer; turns a return out of the
+`__try` into a jump whose clause runs the handler once, through x1 or
+through the parent's x19, with the `100` copy kept; lets a target return x0
+as the routine leaves it; and keeps the call when a handler writes the
+saved-frame slot through x19.
+`ARMSEHLocalUnwindTests.cpp` builds Thumb parents that call `__jump_unwind`
+through an import stub: `ARMSEHLocalUnwind.*` turns a return out of the `__try`
+into a jump whose clause runs the handler once, with the target in a
+`movw`/`movt` pair and in a literal pool, and with a GS prologue whose helper
+allocates four bytes the body's arithmetic does not show; a handler's own call
+becomes a jump out of its clause. `AnExceptArmRejoiningLeavesTheRegistersValue`
+publishes r4 across the PHI an `__except` arm leaves before a later `__try`, and
+`ATryAfterAnExceptArmFillsItsClause` prints that clause.
 Its `ARMSEHFinallyBodyTests.cpp`
 builds AArch64 and
 Thumb parents whose handler reads them through callee-saved registers:
@@ -18012,14 +18042,26 @@ range, one the parent never set, or a copy of an argument register that a
 PHI joins; `ARMSEHFinallyBody.*` stores `99` to the
 parent's own local, through its parameter or through the establisher frame
 under `if (AbnormalTermination())`, fills a finally nested in an `__except`
-and both of two nested finallys, and keeps the comment for the unpublished
-registers and a contradicted frame.
+and both of two nested finallys, fills through x1 whatever allocation the unwind
+codes give, prints a frame the parent cannot name that a handler forwards to a
+call as an unknown argument, keeps the comment for the unpublished registers, and
+`ARangeRunningPastTheEpilogueStillStructures` structures a `__try` whose range
+runs past the epilogue a branch around it skips to.
 `WindowsEHModesCorpus.LocalUnwindReturnRunsTheFinallyOnceInTheClause` checks
 xcpt4's `eret` the same way on the original x64 FH4 binary: one increment in
 the `__except` arm, one in the filled clause and one in the normal-path copy,
 with no `_local_unwind`, target address or handler call left, and
 `LocalUnwindExitAgreesAloneAndInTheWholeUnit` prints the same function from a
-`--func` view as from the whole unit.
+`--func` view as from the whole unit, and
+`AArch64LocalUnwindExitAgreesAloneAndInTheWholeUnit` does so for the ARM64
+/O0 build's loop of two nested finallys, with no `_local_unwind` left.
+`EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode` decompiles the x64, ARM and
+ARM64 builds, /O0 and /O2, and clang-cl's ARM64 /O2: no clause is only the address
+comment, no handler stays listed in an unstructured region's comment, and no
+function with a scope table keeps a runtime local unwind.
+`SplitTriesAndArmsKeepTheirSourceShape` reads Test85's three handlers around a
+loop whose return path splits their tries, and Test86's `__except` arm that holds
+a `__try` of its own and returns past every scope around it.
 `LocalUnwindExitsKeepTheirLoopRegionsStructured` decompiles the O2 FH4 /GS
 build, whose loop exits leave split finally scopes and jump to a copied
 return tail, and requires every region of both functions structured.
@@ -18318,7 +18360,8 @@ success. Routine Wine prefix diagnostics are allowed. The x64 fixture reports
 89 successes and one explicit skip: test 29's
 alignment check is compiled only for ARM. Unexpected skips fail. It then runs
 the original source CLI and checks main's body, language/GS
-metadata and explicit unresolved-frame annotation. JSON keeps original runtime
+metadata, that its local unwinds are jumps with filled `__finally` clauses, and
+that it needs no unresolved-frame annotation. JSON keeps original runtime
 and source-analysis results separate. Neither successful original execution
 nor readable source is evidence that a replacement PE can execute. The Windows
 EH CI lane runs this check and the full analysis matrix; source/patch refusal

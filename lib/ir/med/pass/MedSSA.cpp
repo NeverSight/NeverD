@@ -43,6 +43,7 @@
 #include <optional>
 #include <queue>
 #include <set>
+#include <tuple>
 
 #define DEBUG_TYPE "neverd-med-ssa"
 
@@ -463,6 +464,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   // value live throughout the protected range, not the value the function was
   // entered with.
   std::map<int, std::vector<int>> SEHProtected;
+  // The guarded addresses of a root's blocks, where the scope table gives them.
+  std::map<int, std::vector<ExceptionAddressRange>> SEHProtectedRanges;
   std::map<int, std::map<int, std::set<va_t>>> CxxProtectedCalls;
   std::set<int> SEHTrackedIds;
   std::set<int> SEHHandlerRoots;
@@ -672,10 +675,12 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
                         [](const ExceptionalEdge &E) {
                           return E.Kind == ExceptionalEdgeKind::SEHHandler;
                         });
-        const bool IsLocalUnwindTarget = llvm::any_of(
-            Low.SEHLocalUnwindContinuations, [&](const auto &Call) {
-              return Call.Target == Func.Blocks[B].StartAddr;
-            });
+        const bool IsLocalUnwindTarget =
+            Func.SEHHandlerUnwindTargets.count(Func.Blocks[B].StartAddr) ||
+            llvm::any_of(Low.SEHLocalUnwindContinuations,
+                         [&](const auto &Call) {
+                           return Call.Target == Func.Blocks[B].StartAddr;
+                         });
         if (!IsSEHHandler && !IsLocalUnwindTarget)
           continue;
         bool NeedsFrame = IsLocalUnwindTarget;
@@ -694,11 +699,17 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
           continue;
         // Ordinary flow and runtime resumption must agree on the same frame.
         // A runtime-only continuation is a real root: its SP is the proved
-        // target frame, not a second ordinary function-entry SP.
+        // target frame, not a second ordinary function-entry SP.  The decoded
+        // edge from code after a replaced local unwind still has to agree.
+        const bool DecodedEntry =
+            llvm::any_of(Low.Blocks, [&](const LowBlock &L) {
+              return L.StartAddr == Func.Blocks[B].StartAddr &&
+                     !L.Preds.empty();
+            });
         bool UnresolvedEntries = false;
         const auto FrameBytes = proveSEHEstablisherFrame(
             Low, Func, Func.Blocks[B].StartAddr, TRI,
-            /*OrdinaryEntry=*/!IsRoot[B], LocalUnwindDigest,
+            /*OrdinaryEntry=*/!IsRoot[B] || DecodedEntry, LocalUnwindDigest,
             /*CxxContinuation=*/false, nullptr, nullptr,
             SEHSourceProjectionEnabled, &UnresolvedEntries);
         Func.HasUnresolvedSEHFrame |= UnresolvedEntries;
@@ -727,13 +738,22 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         (TargetArch == Arch::ARM || TargetArch == Arch::AArch64) &&
         Low.ExceptionMetadata && Low.ExceptionMetadata->SEH;
     if (ARMTableSEH)
-      for (int Root : Roots)
-        if (Root != 0 && llvm::any_of(Func.Blocks[Root].ExceptionalPreds,
-                                      [](const ExceptionalEdge &E) {
-                                        return E.Kind ==
-                                               ExceptionalEdgeKind::SEHHandler;
-                                      }))
+      for (int Root : Roots) {
+        // A block only a termination handler's local unwind enters resumes
+        // the same way, on the frame of the ranges those handlers end.
+        const bool HandlerUnwindTarget =
+            Root != 0 &&
+            Func.SEHHandlerUnwindTargets.count(Func.Blocks[Root].StartAddr);
+        if (HandlerUnwindTarget)
+          LocalUnwindRoots.insert(Root);
+        if (HandlerUnwindTarget ||
+            (Root != 0 && llvm::any_of(Func.Blocks[Root].ExceptionalPreds,
+                                       [](const ExceptionalEdge &E) {
+                                         return E.Kind ==
+                                                ExceptionalEdgeKind::SEHHandler;
+                                       })))
           SEHProtectedSPRoots.insert(Root);
+      }
 
     for (int Root : Roots) {
       if (Root != 0)
@@ -761,15 +781,23 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
               Protected.push_back(Edge.BlockId);
             }
         }
+        std::vector<ExceptionAddressRange> Ranges;
+        const bool ResumedByHandlers =
+            ARMTableSEH &&
+            Func.SEHHandlerUnwindTargets.count(Func.Blocks[Root].StartAddr);
         if (!HasX86SEHFrame && EH.SEH)
           for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
-            if (Scope.HandlerVA != Func.Blocks[Root].StartAddr)
+            if (ResumedByHandlers
+                    ? Scope.Kind != SEHScopeKind::Finally ||
+                          !EH.codeChunkContaining(Scope.GuardedRange)
+                    : Scope.HandlerVA != Func.Blocks[Root].StartAddr)
               continue;
             auto Range = getSemanticSEHGuardedRange(Scope, TargetArch, EH);
             if (Scope.ParseStatus != ExceptionParseStatus::Complete || !Range) {
               Complete = false;
               break;
             }
+            Ranges.push_back(*Range);
             for (int B = 0; B < N; ++B)
               if (Func.Blocks[B].StartAddr < Range->End &&
                   Func.Blocks[B].EndAddr > Range->Begin)
@@ -777,6 +805,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
           }
         if (Complete && !Protected.empty()) {
           SEHProtected[Root] = std::move(Protected);
+          if (!Ranges.empty())
+            SEHProtectedRanges[Root] = std::move(Ranges);
           for (int Id : LiveIn[Root])
             if (auto V = VarOfId.find(Id);
                 V != VarOfId.end() &&
@@ -1046,7 +1076,12 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   const bool ARMSEHFunclets =
       (TargetArch == Arch::ARM || TargetArch == Arch::AArch64) &&
       Low.ExceptionMetadata && Low.ExceptionMetadata->SEH;
-  std::map<va_t, std::vector<int>> SEHFuncletProtected;
+  // A guarded range's part of one block.
+  struct ProtectedPart {
+    int Block = -1;
+    ExceptionAddressRange Range;
+  };
+  std::map<va_t, std::vector<ProtectedPart>> SEHFuncletProtected;
   std::set<int> SEHFuncletTrackedIds;
   std::optional<int64_t> SEHFuncletFrame;
   if (ARMSEHFunclets) {
@@ -1062,13 +1097,13 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         Refused.insert(Funclet);
         continue;
       }
-      auto &Blocks = SEHFuncletProtected[Funclet];
-      const size_t Before = Blocks.size();
+      auto &Parts = SEHFuncletProtected[Funclet];
+      const size_t Before = Parts.size();
       for (int B = 0; B < N; ++B)
         if (Func.Blocks[B].StartAddr < Range->End &&
             Func.Blocks[B].EndAddr > Range->Begin)
-          Blocks.push_back(B);
-      if (Blocks.size() == Before)
+          Parts.push_back({B, *Range});
+      if (Parts.size() == Before)
         Refused.insert(Funclet);
     }
     for (va_t Funclet : Refused)
@@ -1089,14 +1124,36 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
           SEHFuncletTrackedIds.insert(Id);
   }
   std::set<int> SEHFuncletBlocks;
-  for (const auto &[Funclet, Blocks] : SEHFuncletProtected)
-    SEHFuncletBlocks.insert(Blocks.begin(), Blocks.end());
+  for (const auto &[Funclet, Parts] : SEHFuncletProtected)
+    for (const ProtectedPart &Part : Parts)
+      SEHFuncletBlocks.insert(Part.Block);
   std::map<int, std::map<int, int>> SEHFuncletEntryVersions;
 
   std::set<int> SEHProtectedBlocks;
   for (const auto &[Root, Blocks] : SEHProtected)
     SEHProtectedBlocks.insert(Blocks.begin(), Blocks.end());
   std::map<int, std::map<int, int>> SEHEntryVersions;
+  // What a block guarded in part writes to a tracked register, in order: where
+  // a range starts inside the block, these say what it holds from there on.
+  struct TrackedWrite {
+    va_t Addr = InvalidVA;
+    int Id = -1;
+    int Version = 0;
+    /// A handler root's seed, which runs before the block's first instruction.
+    bool Seed = false;
+  };
+  std::map<int, std::vector<TrackedWrite>> SEHTrackedWrites;
+  // A root's seed names the value the runtime restores and writes nothing.
+  auto IsRootSeed = [&](int B, const MedOp &Op) {
+    return Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+           Op.Addr == Func.Blocks[B].StartAddr && IsRoot[B] &&
+           Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[0].Id == Op.Output.Id;
+  };
+  auto NoteTrackedWrite = [&](int B, const MedOp &Op, int Id, int Version) {
+    if ((SEHProtectedBlocks.count(B) && SEHTrackedIds.count(Id)) ||
+        (SEHFuncletBlocks.count(B) && SEHFuncletTrackedIds.count(Id)))
+      SEHTrackedWrites[B].push_back({Op.Addr, Id, Version, IsRootSeed(B, Op)});
+  };
   std::map<std::pair<int, va_t>, std::map<int, int>> CxxCallVersions;
   std::set<std::pair<int, va_t>> CxxThrowingCalls;
   for (const auto &[Root, Blocks] : CxxProtectedCalls)
@@ -1172,12 +1229,14 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         if (Func.HasUnresolvedSEHFrame && Op.Addr == InvalidVA &&
             SEHProtectedBlocks.count(F.B) && SEHTrackedIds.count(Op.Output.Id))
           SEHEntryVersions[F.B][Op.Output.Id] = Op.Output.SSAVer;
+        NoteTrackedWrite(F.B, Op, Op.Output.Id, Op.Output.SSAVer);
       }
       for (MedVar &Aux : Op.IntrinsicOutputs) {
         if (Aux.Id < 0 || Aux.Size == 0)
           continue;
         Aux.SSAVer = NewVersion(Aux.Id);
         F.Pushed.push_back(Aux.Id);
+        NoteTrackedWrite(F.B, Op, Aux.Id, Aux.SSAVer);
       }
       for (int Id : CallClobberedIds(Op)) {
         auto It = RegVarOfId.find(Id);
@@ -1196,6 +1255,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         }
         int Version = NewVersion(Id);
         F.Pushed.push_back(Id);
+        NoteTrackedWrite(F.B, Op, Id, Version);
         if (It != RegVarOfId.end()) {
           MedVar Clobber = It->second;
           Clobber.SSAVer = Version;
@@ -1241,15 +1301,73 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
     }
   }
 
+  // Every definition by SSA name, once something asks: version 0 with none is
+  // the entry value.  A PHI or an auxiliary output maps to no operation.
+  std::map<std::pair<int, int>, const MedOp *> Defs;
+  std::map<std::pair<int, int>, const PhiNode *> PhiDefs;
+  auto IndexDefinitions = [&] {
+    if (!Defs.empty())
+      return;
+    for (const MedBlock &Blk : Func.Blocks) {
+      for (const PhiNode &Phi : Blk.Phis)
+        if (Phi.Output.Id >= 0) {
+          Defs.emplace(std::make_pair(Phi.Output.Id, Phi.Output.SSAVer),
+                       nullptr);
+          PhiDefs.emplace(std::make_pair(Phi.Output.Id, Phi.Output.SSAVer),
+                          &Phi);
+        }
+      for (const MedOp &Op : Blk.Ops) {
+        if (Op.Output.Id >= 0 && Op.Output.Size > 0)
+          Defs.emplace(std::make_pair(Op.Output.Id, Op.Output.SSAVer), &Op);
+        for (const MedVar &Aux : Op.IntrinsicOutputs)
+          if (Aux.Id >= 0)
+            Defs.emplace(std::make_pair(Aux.Id, Aux.SSAVer), nullptr);
+      }
+    }
+  };
+  // What a tracked register holds as the instructions from \p From on run in
+  // block \p B, whose entry versions are \p Entry.  Nullopt when it holds
+  // nothing known on entry and nothing writes it first.
+  auto VersionFrom = [&](int B, int Id, va_t From,
+                         const std::map<int, int> &Entry) {
+    std::optional<int> Version;
+    if (const auto It = Entry.find(Id); It != Entry.end())
+      Version = It->second;
+    if (const auto Writes = SEHTrackedWrites.find(B);
+        Writes != SEHTrackedWrites.end())
+      for (const TrackedWrite &Write : Writes->second)
+        if (Write.Id == Id && Write.Addr != InvalidVA &&
+            (Write.Seed || Write.Addr < From))
+          Version = Write.Version;
+    return Version;
+  };
+  // A root's seed whose protected blocks hold the register under several
+  // names: joins of an `__except` arm back into the range.
+  struct JoinedSeed {
+    MedOp *Seed = nullptr;
+    std::set<int> Versions;
+  };
+  std::vector<JoinedSeed> JoinedSeeds;
   for (const auto &[Root, Blocks] : SEHProtected) {
+    const auto RangesAt = SEHProtectedRanges.find(Root);
+    const std::vector<ExceptionAddressRange> *Ranges =
+        RangesAt == SEHProtectedRanges.end() ? nullptr : &RangesAt->second;
     // Register bytes some protected operation writes.
     std::vector<std::pair<uint64_t, uint64_t>> Written;
     auto NoteWrite = [&](const MedVar &V) {
       if (V.Kind == MedVar::Reg && V.Size != 0)
         Written.emplace_back(V.RegOff, V.RegOff + V.Size);
     };
+    auto Guarded = [&](va_t Addr) {
+      return !Ranges ||
+             llvm::any_of(*Ranges, [&](const ExceptionAddressRange &Range) {
+               return Range.contains(Addr);
+             });
+    };
     for (int B : Blocks)
       for (const MedOp &Op : Func.Blocks[B].Ops) {
+        if (!Guarded(Op.Addr) || IsRootSeed(B, Op))
+          continue;
         NoteWrite(Op.Output);
         for (const MedVar &Aux : Op.IntrinsicOutputs)
           NoteWrite(Aux);
@@ -1294,59 +1412,178 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         In = MedVar::makeUnspecified(In.Size, TargetArch);
         continue;
       }
-      std::optional<int> Live;
-      bool Same = true;
-      auto AddLive = [&](const std::map<int, int> &Versions) {
-        auto It = Versions.find(In.Id);
-        if (It == Versions.end() || (Live && *Live != It->second)) {
-          Same = false;
-          return;
-        }
-        Live = It->second;
+      std::set<int> Versions;
+      bool Known = true;
+      auto AddLive = [&](const std::map<int, int> &Entry) {
+        const auto It = Entry.find(In.Id);
+        if (It == Entry.end())
+          Known = false;
+        else
+          Versions.insert(It->second);
       };
       if (AtCalls) {
         for (const auto &[B, Sites] : Calls->second)
           for (va_t Site : Sites)
             AddLive(CxxCallVersions[{B, Site}]);
-      } else
+      } else if (Ranges) {
+        for (int B : Blocks)
+          for (const ExceptionAddressRange &Range : *Ranges) {
+            if (Func.Blocks[B].StartAddr >= Range.End ||
+                Func.Blocks[B].EndAddr <= Range.Begin)
+              continue;
+            const std::optional<int> Version =
+                VersionFrom(B, In.Id, Range.Begin, SEHEntryVersions[B]);
+            if (Version)
+              Versions.insert(*Version);
+            else
+              Known = false;
+          }
+      } else {
         for (int B : Blocks)
           AddLive(SEHEntryVersions[B]);
-      if (!Same || !Live)
+      }
+      if (!Known || Versions.empty())
         In = MedVar::makeUnspecified(In.Size, TargetArch);
-      else if (*Live > 0)
-        In.SSAVer = *Live;
+      else if (Versions.size() > 1)
+        JoinedSeeds.push_back({&Seed, std::move(Versions)});
+      else if (*Versions.begin() > 0)
+        In.SSAVer = *Versions.begin();
+    }
+  }
+  // Several names still hold one value where every join only renames it.  A
+  // seed still open is a join of the names its own range holds the register
+  // under: execution enters any such seed first from a range that holds the
+  // one value.
+  if (!JoinedSeeds.empty()) {
+    IndexDefinitions();
+    std::map<const MedOp *, const JoinedSeed *> Open;
+    for (const JoinedSeed &Joined : JoinedSeeds)
+      Open.emplace(Joined.Seed, &Joined);
+    size_t Work = limits::ir::kMedSSASEHRestoredJoinWork;
+    using Source = std::tuple<int, int, uint64_t>;
+    auto SourceOf = [&](const MedVar &Start) -> std::optional<Source> {
+      std::optional<Source> Found;
+      std::vector<MedVar> Walk{Start};
+      std::set<std::pair<int, int>> Seen;
+      while (!Walk.empty()) {
+        if (!Work)
+          return std::nullopt;
+        --Work;
+        const MedVar V = Walk.back();
+        Walk.pop_back();
+        std::optional<Source> End;
+        if (V.Kind == MedVar::Const) {
+          End = Source{-1, 0, V.ConstVal};
+        } else {
+          if (V.Id < 0)
+            return std::nullopt;
+          if (!Seen.insert({V.Id, V.SSAVer}).second)
+            continue;
+          const auto Def = Defs.find({V.Id, V.SSAVer});
+          if (Def == Defs.end()) {
+            End = Source{V.Id, V.SSAVer, 0};
+          } else if (!Def->second) {
+            const auto Phi = PhiDefs.find({V.Id, V.SSAVer});
+            if (Phi == PhiDefs.end())
+              return std::nullopt;
+            for (const auto &Arm : Phi->second->Args)
+              Walk.push_back(Arm.second);
+            continue;
+          } else if (const auto Seed = Open.find(Def->second);
+                     Seed != Open.end()) {
+            MedVar At = V;
+            for (int Version : Seed->second->Versions) {
+              At.SSAVer = Version;
+              Walk.push_back(At);
+            }
+            continue;
+          } else if (Def->second->Opcode == NdOp::COPY &&
+                     Def->second->NumInputs == 1 &&
+                     !(Def->second->Inputs[0].Id == V.Id &&
+                       Def->second->Inputs[0].SSAVer == 0)) {
+            Walk.push_back(Def->second->Inputs[0]);
+            continue;
+          } else {
+            End = Source{V.Id, V.SSAVer, 0};
+          }
+        }
+        if (Found && *Found != *End)
+          return std::nullopt;
+        Found = End;
+      }
+      return Found;
+    };
+    // The verdict of every seed first: an open seed reads through to its names.
+    std::vector<bool> Settles;
+    for (const JoinedSeed &Joined : JoinedSeeds) {
+      MedVar At = Joined.Seed->Inputs[0];
+      At.SSAVer = *Joined.Versions.begin();
+      std::optional<Source> One;
+      bool Same = true;
+      for (int Version : Joined.Versions) {
+        At.SSAVer = Version;
+        const std::optional<Source> Value = SourceOf(At);
+        Same = Value && (!One || *One == *Value);
+        if (!Same)
+          break;
+        One = Value;
+      }
+      Settles.push_back(Same);
+    }
+    for (size_t K = 0; K < JoinedSeeds.size(); ++K) {
+      MedVar &In = JoinedSeeds[K].Seed->Inputs[0];
+      if (Settles[K])
+        In.SSAVer = *JoinedSeeds[K].Versions.begin();
+      else
+        In = MedVar::makeUnspecified(In.Size, TargetArch);
+    }
+  }
+  // Without a proven protected range, a callee-saved register's value at
+  // the fault is not known either.
+  for (int Root : SEHHandlerRoots) {
+    for (MedOp &Seed : Func.Blocks[Root].Ops) {
+      if (Seed.Addr != Func.Blocks[Root].StartAddr)
+        break;
+      if (Seed.Opcode != NdOp::COPY || Seed.NumInputs != 1)
+        continue;
+      if (Seed.RegistrationRoot != MedOp::RegistrationRootKind::None)
+        continue;
+      MedVar &In = Seed.Inputs[0];
+      if (IsNonvolatile(In) && In.Id == Seed.Output.Id && In.SSAVer == 0 &&
+          (!SEHProtected.count(Root) || !IsSEHRestored(In)))
+        In = MedVar::makeUnspecified(In.Size, TargetArch);
     }
   }
   // Publish each termination handler's callee-saved register values. Each is
   // resolved here to a form later passes neither rename nor delete, through a
-  // bounded chain of COPY and constant INT_ADD/INT_SUB definitions: no PHI web
-  // is walked, and each SSA value is resolved once.
+  // bounded walk of COPY, constant INT_ADD/INT_SUB and PHI definitions; each
+  // SSA value is resolved once.  A register an `__except` arm restores is a
+  // PHI where the arm rejoins, of arms that all hold the one value.
   if (!SEHFuncletProtected.empty()) {
-    // Every definition, so version 0 with none is the entry value. A PHI or
-    // an auxiliary output is a definition the trace does not follow.
-    std::map<std::pair<int, int>, const MedOp *> Defs;
-    for (const MedBlock &Blk : Func.Blocks) {
-      for (const PhiNode &Phi : Blk.Phis)
-        if (Phi.Output.Id >= 0)
-          Defs.emplace(std::make_pair(Phi.Output.Id, Phi.Output.SSAVer),
-                       nullptr);
-      for (const MedOp &Op : Blk.Ops) {
-        if (Op.Output.Id >= 0 && Op.Output.Size > 0)
-          Defs.emplace(std::make_pair(Op.Output.Id, Op.Output.SSAVer), &Op);
-        for (const MedVar &Aux : Op.IntrinsicOutputs)
-          if (Aux.Id >= 0)
-            Defs.emplace(std::make_pair(Aux.Id, Aux.SSAVer), nullptr);
-      }
-    }
+    IndexDefinitions();
     const IntegerArgumentLayout Arguments =
         TRI.integerArgumentLayout(TargetFormat);
     std::map<std::pair<int, int>, std::optional<SEHFuncletRegisterValue>>
         Resolved;
-    auto Trace = [&](MedVar V) -> std::optional<SEHFuncletRegisterValue> {
+    auto Trace =
+        [&](const MedVar &Start) -> std::optional<SEHFuncletRegisterValue> {
       using Kind = SEHFuncletRegisterValue::Kind;
-      int64_t Acc = 0;
-      for (unsigned Hop = 0;
-           Hop < limits::ir::kMedSSASEHFuncletRegisterChainLimit; ++Hop) {
+      std::optional<SEHFuncletRegisterValue> Found;
+      // Every definition the walk reaches ends in that one value, the same
+      // distance from it each time it comes by there.
+      auto Ends = [&](const SEHFuncletRegisterValue &Value) {
+        if (Found && *Found != Value)
+          return false;
+        Found = Value;
+        return true;
+      };
+      std::vector<std::pair<MedVar, int64_t>> Walk{{Start, 0}};
+      std::map<std::pair<int, int>, int64_t> Seen;
+      for (unsigned Hop = 0; !Walk.empty(); ++Hop) {
+        if (Hop >= limits::ir::kMedSSASEHFuncletRegisterWalkLimit)
+          return std::nullopt;
+        const auto [V, Acc] = Walk.back();
+        Walk.pop_back();
         SEHFuncletRegisterValue Value;
         if (V.Kind == MedVar::Const) {
           // An offset from an address constant names no address by itself.
@@ -1363,7 +1600,16 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
             Value.Provenance = V.Provenance;
             Value.AddressOwnerVA = V.AddressOwnerVA;
           }
-          return Value;
+          if (!Ends(Value))
+            return std::nullopt;
+          continue;
+        }
+        if (const auto [At, New] =
+                Seen.try_emplace(std::make_pair(V.Id, V.SSAVer), Acc);
+            !New) {
+          if (At->second != Acc)
+            return std::nullopt;
+          continue;
         }
         // A register's value on entry is its version 0 where it is live in,
         // defined by the entry block's self-copy; elsewhere version 0 is its
@@ -1381,25 +1627,36 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
           if (TRI.isStackPointer(V.RegOff)) {
             Value.ValueKind = Kind::EntryStackOffset;
             Value.Offset = Acc;
-            return Value;
-          }
-          if (TRI.ZeroRegister && V.RegOff == *TRI.ZeroRegister) {
+          } else if (TRI.ZeroRegister && V.RegOff == *TRI.ZeroRegister) {
             Value.ValueKind = Kind::Constant;
             Value.Value = static_cast<uint64_t>(Acc);
             Value.Provenance = ConstantAddressProvenance::Scalar;
-            return Value;
+          } else {
+            if (Acc ||
+                (Arguments.registerIndex(V.RegOff) < 0 && !IsNonvolatile(V)))
+              return std::nullopt;
+            Value.ValueKind = Arguments.registerIndex(V.RegOff) < 0
+                                  ? Kind::EntryRegister
+                                  : Kind::EntryArgument;
+            Value.RegOff = V.RegOff;
           }
-          if (Acc || Arguments.registerIndex(V.RegOff) < 0)
+          if (!Ends(Value))
             return std::nullopt;
-          Value.ValueKind = Kind::EntryArgument;
-          Value.RegOff = V.RegOff;
-          return Value;
+          continue;
         }
-        if (Def == Defs.end() || !Def->second)
+        if (Def == Defs.end())
           return std::nullopt;
+        if (!Def->second) {
+          const auto Phi = PhiDefs.find({V.Id, V.SSAVer});
+          if (Phi == PhiDefs.end())
+            return std::nullopt;
+          for (const auto &Arm : Phi->second->Args)
+            Walk.emplace_back(Arm.second, Acc);
+          continue;
+        }
         const MedOp &Op = *Def->second;
         if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
-          V = Op.Inputs[0];
+          Walk.emplace_back(Op.Inputs[0], Acc);
           continue;
         }
         if ((Op.Opcode != NdOp::INT_ADD && Op.Opcode != NdOp::INT_SUB) ||
@@ -1418,11 +1675,12 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
           return std::nullopt;
         if (Op.Opcode == NdOp::INT_SUB)
           Delta = -Delta;
-        if (llvm::AddOverflow(Acc, Delta, Acc))
+        int64_t Next;
+        if (llvm::AddOverflow(Acc, Delta, Next))
           return std::nullopt;
-        V = ConstantRight ? Op.Inputs[0] : Op.Inputs[1];
+        Walk.emplace_back(ConstantRight ? Op.Inputs[0] : Op.Inputs[1], Next);
       }
-      return std::nullopt;
+      return Found;
     };
     auto Resolve = [&](const MedVar &V) {
       auto [It, Inserted] =
@@ -1431,7 +1689,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         It->second = Trace(V);
       return It->second;
     };
-    for (const auto &[Funclet, Blocks] : SEHFuncletProtected) {
+    for (const auto &[Funclet, Parts] : SEHFuncletProtected) {
       // A PHI in a protected block is not among its operations, but it is
       // renamed before the block's entry versions are recorded, so blocks
       // that join different values record different versions.
@@ -1440,8 +1698,10 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         if (V.Kind == MedVar::Reg && V.Size != 0)
           Written.emplace_back(V.RegOff, V.RegOff + V.Size);
       };
-      for (int B : Blocks)
-        for (const MedOp &Op : Func.Blocks[B].Ops) {
+      for (const ProtectedPart &Part : Parts)
+        for (const MedOp &Op : Func.Blocks[Part.Block].Ops) {
+          if (!Part.Range.contains(Op.Addr) || IsRootSeed(Part.Block, Op))
+            continue;
           NoteWrite(Op.Output);
           for (const MedVar &Aux : Op.IntrinsicOutputs)
             NoteWrite(Aux);
@@ -1452,23 +1712,32 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
               return W.first < V.RegOff + V.Size && V.RegOff < W.second;
             }))
           continue;
-        std::optional<int> Live;
-        bool Same = true;
-        for (int B : Blocks) {
-          const auto &Versions = SEHFuncletEntryVersions[B];
-          const auto It = Versions.find(Id);
-          if (It == Versions.end() || (Live && *Live != It->second)) {
-            Same = false;
-            break;
-          }
-          Live = It->second;
+        // One SSA name, or names of the one value (Resolve walks a join).
+        std::set<int> Live;
+        bool Known = true;
+        for (const ProtectedPart &Part : Parts) {
+          const std::optional<int> Version =
+              VersionFrom(Part.Block, Id, Part.Range.Begin,
+                          SEHFuncletEntryVersions[Part.Block]);
+          if (!Version || *Version < 0)
+            Known = false;
+          else
+            Live.insert(*Version);
         }
-        if (!Same || !Live || *Live < 0)
+        if (!Known || Live.empty())
           continue;
-        MedVar At = V;
-        At.SSAVer = *Live;
-        const auto Value = Resolve(At);
-        if (!Value)
+        std::optional<SEHFuncletRegisterValue> Value;
+        bool Same = true;
+        for (int Version : Live) {
+          MedVar At = V;
+          At.SSAVer = Version;
+          const auto One = Resolve(At);
+          Same = One && (!Value || *Value == *One);
+          if (!Same)
+            break;
+          Value = One;
+        }
+        if (!Same)
           continue;
         // The stack pointer is published only as the establisher frame.
         if (TRI.isStackPointer(V.RegOff) &&
@@ -1493,22 +1762,6 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         if (Values.empty())
           Func.SEHFuncletRegisters.erase(Registers);
       }
-    }
-  }
-  // Without a proven protected range, a callee-saved register's value at
-  // the fault is not known either.
-  for (int Root : SEHHandlerRoots) {
-    for (MedOp &Seed : Func.Blocks[Root].Ops) {
-      if (Seed.Addr != Func.Blocks[Root].StartAddr)
-        break;
-      if (Seed.Opcode != NdOp::COPY || Seed.NumInputs != 1)
-        continue;
-      if (Seed.RegistrationRoot != MedOp::RegistrationRootKind::None)
-        continue;
-      MedVar &In = Seed.Inputs[0];
-      if (IsNonvolatile(In) && In.Id == Seed.Output.Id && In.SSAVer == 0 &&
-          (!SEHProtected.count(Root) || !IsSEHRestored(In)))
-        In = MedVar::makeUnspecified(In.Size, TargetArch);
     }
   }
 }

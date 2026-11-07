@@ -2238,11 +2238,14 @@ target_compile_definitions(NeverDCOFFExceptionIRTests PRIVATE
 add_neverd_unittest(NeverDSEHTerminationHandlerTests
   eh/SEHTerminationHandlerTests.cpp
   eh/ARMSEHFinallyBodyTests.cpp
+  eh/ARM64SEHLocalUnwindTests.cpp
+  eh/ARMSEHLocalUnwindTests.cpp
   LINK_COMPONENTS Pipeline BackendC
 )
 target_include_directories(NeverDSEHTerminationHandlerTests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
-)
+
+  ${CMAKE_SOURCE_DIR}/lib/ir/high/structure)
 
 # Pins the format-neutral distinction between an explicitly returned semantic
 # value producer and an incidental call result left in the native return

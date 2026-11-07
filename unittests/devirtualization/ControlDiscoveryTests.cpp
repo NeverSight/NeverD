@@ -486,11 +486,12 @@ TEST(ControlDiscovery, CompositeFrameLoadsRetainTheirUntouchedInputBytes) {
     const auto R = gatherControlDependencies(State, Loaded, Root, 100);
     EXPECT_EQ(R.Status, ControlDiscoveryStatus::Complete);
     EXPECT_TRUE(R.RegisterRanges.empty());
-    ASSERT_EQ(R.FrameSlots.size(), 3u);
-    for (size_t I = 0; I < 3; ++I) {
-      EXPECT_EQ(R.FrameSlots[I].Offset, I == 0 ? -16 : -15 + int(I));
-      EXPECT_EQ(R.FrameSlots[I].Bytes, 1u);
-    }
+    // The stored byte splits the load; each unread run around it is one input.
+    ASSERT_EQ(R.FrameSlots.size(), 2u);
+    EXPECT_EQ(R.FrameSlots[0].Offset, -16);
+    EXPECT_EQ(R.FrameSlots[0].Bytes, 1u);
+    EXPECT_EQ(R.FrameSlots[1].Offset, -14);
+    EXPECT_EQ(R.FrameSlots[1].Bytes, 2u);
     const unsigned Low = Order == llvm::endianness::little ? 16 : 8;
     const auto Slice = Ctx.mkExtract(Loaded, Low, 8);
     const auto Narrow = gatherControlDependencies(State, Slice, Root, 100);

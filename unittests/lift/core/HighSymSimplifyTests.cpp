@@ -4084,18 +4084,6 @@ ExprPtr selectedBytes(const ExprPtr &Condition, const ExprPtr &Yes,
   return Result;
 }
 
-size_t selectionCount(const ExprPtr &Root) {
-  size_t Count = 0;
-  std::vector<ExprPtr> Work{Root};
-  while (!Work.empty()) {
-    auto E = Work.back();
-    Work.pop_back();
-    Count += E->Kind == ExprKind::BinOp && E->Op == NdOp::SELECT;
-    Work.insert(Work.end(), E->Operands.begin(), E->Operands.end());
-  }
-  return Count;
-}
-
 TEST(HighExprSimplify, AdjacentSelectedBytesRecoverOneWordSelection) {
   auto Condition = HighExpr::makeVar(tempOfSize(0, 8));
   auto Yes = HighExpr::makeVar(tempOfSize(1, 16));

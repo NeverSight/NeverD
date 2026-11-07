@@ -26,6 +26,8 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
+#include <string>
 #include <vector>
 
 namespace neverd {
@@ -58,8 +60,19 @@ struct SEHLocalUnwindConvention {
   /// not by the call instruction's own address.
   bool ControlPcIsReturnAddress = false;
   /// What the return register holds where the unwind resumes, when the
-  /// routine fixes it.
+  /// routine fixes it.  Without it, a call qualifies only where the target
+  /// writes the return register before anything reads it.
   std::optional<uint64_t> ResumeReturnValue;
+  /// The runtime starts a filter or termination handler with the function's
+  /// callee-saved registers as they were where it left the body (the dispatcher
+  /// context's NonVolatileRegisters on ARM64 and ARM).
+  bool HandlersSeeParentRegisters = false;
+  /// The runtime passes the function's frame pointer, HandlerFrame, as the
+  /// EstablisherFrame, rather than a stack address (ARM64).
+  bool FramePointerIsHandlerFrame = false;
+  /// A helper the prologue calls allocates and fills the GS cookie's slot,
+  /// outside everything the function's own code writes.
+  bool CookieInCallee = false;
 };
 
 /// One local unwind the protocol certifies: the runtime call, and where in
@@ -73,6 +86,9 @@ struct LowSEHLocalUnwind {
   /// The EstablisherFrame the handlers receive, relative to the stack
   /// pointer the call runs on.
   int64_t HandlerFrameFromSP = 0;
+  /// The register that holds that EstablisherFrame, when the runtime passes
+  /// a register's value rather than a stack address.
+  std::optional<uint64_t> HandlerFrameRegister;
   /// SEHLocalUnwindConvention::ResumeReturnValue.
   std::optional<uint64_t> ResumeReturnValue;
   /// The frame the call passes, relative to the entry stack pointer.
@@ -85,9 +101,35 @@ struct LowSEHLocalUnwind {
   bool OnlyExitsName = false;
 };
 
+/// A call of the routine that keeps its runtime form although the function's
+/// frame certifies, and why.
+struct LowSEHLocalUnwindRefusal {
+  va_t CallAddr = InvalidVA;
+  std::string Reason;
+};
+
+/// Whether \p Name, without its leading underscores, is a runtime local unwind
+/// routine: `_local_unwind` or Windows ARM's `__jump_unwind`.
+inline bool isLowSEHLocalUnwindRoutine(llvm::StringRef Name) {
+  return Name == "local_unwind" || Name == "jump_unwind";
+}
+
 /// Whether \p Function calls a runtime local unwind routine at all, by its
 /// authenticated import: the cheap test before any proof.
 bool callsLowSEHLocalUnwind(const LowFunc &Function, const BinaryImage &Image);
+
+/// The code addresses \p Function's local unwinds name on Windows ARM and
+/// ARM64. Nothing else marks such an address as code there: a `movw`/`movt` or
+/// `adrp` pair or a literal pool holds it, which is what the pipeline makes the
+/// target's function start a block for.
+std::set<va_t> collectLowSEHLocalUnwindTargets(const LowFunc &Function,
+                                               const BinaryImage &Image,
+                                               const TargetRegInfo &TRI);
+
+/// Whether a termination handler of \p Function, among \p Bodies, calls one.
+bool handlersCallLowSEHLocalUnwind(
+    const LowFunc &Function, const BinaryImage &Image,
+    const std::map<va_t, const LowFunc *> &Bodies);
 
 /// \p Function's local unwind convention, from its architecture's frame rules
 /// (per-architecture files), or why its frame does not fit them.
@@ -98,8 +140,10 @@ sehLocalUnwindConvention(const LowFunc &Function, const TargetRegInfo &TRI,
 /// The calls of the authenticated local unwind import in \p Function that the
 /// saved-frame protocol certifies.  A call qualifies when its target is an
 /// exact code address that starts a block of the function, it runs on the
-/// body's stack pointer, and its frame is the convention's TargetFrame
-/// itself or an exact reload of one frame slot that:
+/// body's stack pointer, the target writes the result register before
+/// anything reads it unless the convention fixes the value the routine
+/// leaves there, and its frame is the convention's TargetFrame itself or an
+/// exact reload of one frame slot that:
 ///  - every store the function makes to it fills with that TargetFrame;
 ///  - no store of the function at an inexact frame address may reach;
 ///  - no callee may write as its home area;
@@ -119,12 +163,22 @@ sehLocalUnwindConvention(const LowFunc &Function, const TargetRegInfo &TRI,
 /// writes.  An argument register a direct callee provably never observes
 /// (\p Unread, the callee summaries' proof over complete bodies, which never
 /// covers a result register) passes it nothing; any other callee may read
-/// all four.  Any other shape refuses the
-/// function, and its calls keep their runtime form.
+/// all its argument registers.  The function's roots and, where the
+/// convention says so, its handlers start with the callee-saved registers the
+/// body holds where it may leave for them on the body's stack pointer, which
+/// every such place inside a protected range must run on.  Any other shape
+/// refuses the function, and its calls keep their runtime form.  A call the
+/// conditions on the call itself exclude keeps its runtime form as well, with
+/// its reason in \p Refused when given.  \p HandlerTargets, when given,
+/// receives the addresses in the function its out-of-line termination handlers
+/// pass the routine with this frame and that nothing but such calls names: a
+/// handler's own local unwind names its target for no other entry.
 llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
     const LowFunc &Function, const BinaryImage &Image, const TargetRegInfo &TRI,
     const std::map<va_t, const LowFunc *> &Bodies, size_t &WorkRemaining,
-    const std::map<va_t, GPRFamilyMask> *Unread = nullptr);
+    const std::map<va_t, GPRFamilyMask> *Unread = nullptr,
+    std::vector<LowSEHLocalUnwindRefusal> *Refused = nullptr,
+    std::set<va_t> *HandlerTargets = nullptr);
 
 } // namespace neverd
 

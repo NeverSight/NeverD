@@ -153,8 +153,16 @@ bool completeLowSEHFrameCFG(const LowFunc &F,
                !isUnconditionalNoReturn(Insn) &&
                (Insn.Control != LowInstructionControl::Terminator ||
                 hasLowInstructionControlFlag(
-                    Insn.ControlFlags, LowInstructionControlFlag::Resumable)))
-      Expected.insert(B.EndAddr);
+                    Insn.ControlFlags, LowInstructionControlFlag::Resumable))) {
+      // The `int3` that pads the end of a function resumes at nothing of it.
+      const bool RunsOffTheEnd =
+          Insn.Control == LowInstructionControl::Terminator &&
+          llvm::none_of(F.Blocks, [&](const LowBlock &Other) {
+            return Other.StartAddr == B.EndAddr;
+          });
+      if (!RunsOffTheEnd)
+        Expected.insert(B.EndAddr);
+    }
     if (Successors != Expected)
       return false;
   }

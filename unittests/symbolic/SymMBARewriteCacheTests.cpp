@@ -245,6 +245,24 @@ TEST(SymMBARewriteCache, AFullCacheRetainsNewExactDerivations) {
   }
 }
 
+TEST(SymMBARewriteCache, RecoveredWordChoicesStayInTheEvictionOrder) {
+  SymContext C;
+  const auto P = C.mkVar("p", 1), X = C.mkVar("x", 8), Y = C.mkVar("y", 8);
+  const auto Choice =
+      C.mkXor(X, C.mkAnd(C.mkNeg(C.mkZExt(P, 8)), C.mkXor(X, Y)));
+  MBARewriteCache Cache(C, 1);
+  MBAOptions Options;
+  Options.VerifySamples = 0;
+  const auto First = simplifyMBADeep(C, Choice, Options, Cache);
+  ASSERT_NE(First.Expr, Choice);
+  ASSERT_EQ(Cache.size(), 1u);
+  // The next entry must find the first in the order that evicts it.
+  const auto Second = simplifyMBADeep(C, obfuscateSum(C, X, Y), Options, Cache);
+  EXPECT_EQ(Second.Expr, C.mkAdd(X, Y));
+  EXPECT_EQ(Cache.size(), 1u);
+  EXPECT_EQ(Cache.evictedEntries(), 1u);
+}
+
 TEST(SymMBARewriteCache, AFullCacheRetainsNewCompletedSubtrees) {
   SymContext C;
   const auto X = C.mkVar("x", 32), Y = C.mkVar("y", 32);

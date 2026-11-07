@@ -129,6 +129,11 @@ public:
     return *Values;
   }
 
+  /// What entrySpDelta has proved of each value.  A proof does not depend on
+  /// the walk that reached it, and walks share them where PHIs join: a chain of
+  /// joins is otherwise walked once per path through it.
+  std::map<VariadicValueIndex::Key, int64_t> ProvedEntrySpDeltas;
+
 private:
   std::optional<VariadicValueIndex> Values;
 };
