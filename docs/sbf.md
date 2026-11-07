@@ -733,8 +733,13 @@ catalogued as terminal: a host callback can still return.
 When recursion or call depth prevents summarizing a callee whose CFG cannot
 return, the edge records `proven_nonreturning_call` and stops that continuation.
 The ordinary callee analysis still retains caller-conditioned CALLX evidence
-executed before termination. A nonreturning callee's memory effects cannot
-invalidate a different returning sibling path. The work is included in the
+executed before termination. Its reads guard reuse whenever the completed
+subtree or an instantiated caller edge retains a concrete target, invalid
+literal target or finite target alternative. A structurally nonreturning
+subtree with no such evidence cannot affect the caller's return or existing
+target proofs; its unknown reads do not block reuse. This does not recover or
+prove the absence of an unknown target. A nonreturning callee's memory effects
+cannot invalidate a different returning sibling path. The work is included in the
 unchanged query budgets and reported as `return_reachability_instruction_visits`;
 its temporary dependency graph is released before context recovery. This does
 not prove that a particular host call terminates or that a reachable EXIT is
@@ -784,6 +789,12 @@ opaque or indirect guest calls, registered legacy runtime dispatch, multiple
 copy syscalls and repeated block/register states cannot establish a returning
 path. Ignoring memory in the repeated-state check can
 reject a memory-driven loop, but cannot prove a path that did not return.
+Successful path proofs carry their complete read intervals as well as their
+writes, including direct nested paths and every finite length alternative.
+A matched proof uses these reads instead of importing an unknown generic read
+footprint. Changed source cells still prevent conditional summary reuse, and
+unknown reads remain unknown; immutable image reads require no caller memory
+facts. Temporary read intervals use the same retained-memory budget.
 `instantiated_memory_path_instructions` and `instantiated_memory_path_stores`
 record analysis work across successful inline paths, including all proven
 length alternatives; these are not runtime execution counts.

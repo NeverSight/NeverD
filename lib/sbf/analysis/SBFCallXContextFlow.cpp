@@ -510,6 +510,7 @@ struct FunctionContext : llvm::FoldingSetNode {
   uint16_t ExploredCapturedRegisters = 0;
   uint16_t ExploredFrameRegisters = 0;
   bool ReuseReadsMemory = false;
+  bool HasTargetEvidence = false;
   MemoryEffects Effects;
   MemoryEffects ReadEffects;
   size_t RootGeneration = 0;
@@ -620,6 +621,7 @@ private:
   struct MemoryTransferInstantiation {
     ContextState Output;
     MemoryEffects Effects;
+    MemoryEffects Reads;
     std::optional<size_t> CopySlot;
     uint64_t CopySize = 0;
     size_t Instructions = 0;
@@ -655,6 +657,9 @@ private:
   inputUnionExpression(llvm::ArrayRef<size_t> Alternatives);
   llvm::Error joinStates(ContextState &State, const ContextState &Other);
   llvm::Expected<std::optional<size_t>> inputMemoryGuard(MemoryEffects Effects);
+  void addMemoryReadEffects(MemoryEffects &Effects,
+                            const MedInstruction &Instruction,
+                            const ContextState &State) const;
   void addMemoryAccessEffects(MemoryEffects &Effects,
                               const MedInstruction &Instruction,
                               const ContextState &State,
@@ -1562,6 +1567,17 @@ registerResult(const MedInstruction &Instruction,
         Output->join(Value);
     }
   return *Output;
+}
+
+void ContextFlow::addMemoryReadEffects(MemoryEffects &Effects,
+                                       const MedInstruction &Instruction,
+                                       const ContextState &State) const {
+  const auto Base = State.Registers[Instruction.Src].singleton();
+  const auto Address = effectiveAddress(Base, Instruction.Offset);
+  if (Base.ValueKind != RegisterValue::Kind::Constant || !Address ||
+      !Program.ExecutableImage.findRegion(
+          *Address, Instruction.Width / kBitsPerByte, true))
+    addMemoryAccessEffects(Effects, Instruction, State, Instruction.Src);
 }
 
 void ContextFlow::addMemoryAccessEffects(MemoryEffects &Effects,
@@ -2785,7 +2801,9 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
         [](const MemoryTransferInstantiation &Path) {
           return stateBytes(Path.Output) + sizeof(MemoryTransferInstantiation) -
                  sizeof(ContextState) +
-                 Path.Effects.Writes.capacity() * sizeof(MemoryWrite);
+                 (Path.Effects.Writes.capacity() +
+                  Path.Reads.Writes.capacity()) *
+                     sizeof(MemoryWrite);
         };
     const auto ReleaseJoined =
         llvm::scope_exit([&] { RetainedBytes -= JoinedBytes; });
@@ -2822,6 +2840,7 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
         if (auto Error = joinStates(Joined->Output, (**Path).Output))
           return std::move(Error);
         Joined->Effects.include((**Path).Effects, symbolicInputs(), Program);
+        Joined->Reads.include((**Path).Reads, symbolicInputs(), Program);
         Joined->Instructions += (**Path).Instructions;
         Joined->Stores += (**Path).Stores;
       } else {
@@ -2858,7 +2877,8 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
   const auto RetainState = [&]() -> llvm::Error {
     const uint64_t NewBytes =
         stateBytes(State) + ResultOverhead +
-        Result.Effects.Writes.capacity() * sizeof(MemoryWrite);
+        (Result.Effects.Writes.capacity() + Result.Reads.Writes.capacity()) *
+            sizeof(MemoryWrite);
     if (NewBytes > StateBytes) {
       if (auto Error = retain(NewBytes - StateBytes))
         return Error;
@@ -2953,6 +2973,7 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
             ((**Child).CopySlot && (Result.CopySlot || Result.Stores)))
           return std::optional<MemoryTransferInstantiation>{};
         Result.Effects.include((**Child).Effects, symbolicInputs(), Program);
+        Result.Reads.include((**Child).Reads, symbolicInputs(), Program);
         Result.Instructions += (**Child).Instructions;
         Result.Stores += (**Child).Stores;
         if ((**Child).CopySlot) {
@@ -2982,6 +3003,12 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
         for (const auto &Address : possibleValues(State.Origins[1]))
           Result.Effects.addWrite(Address, Length.Value, Program,
                                   CapturedAddresses.get());
+        for (const auto &Address : possibleValues(State.Origins[2]))
+          if (Address.ValueKind != RegisterValue::Kind::Constant ||
+              !Program.ExecutableImage.findRegion(Address.Value, Length.Value,
+                                                  true))
+            Result.Reads.addWrite(Address, Length.Value, Program,
+                                  CapturedAddresses.get());
         State.InputWrites.include(Result.Effects, symbolicInputs(), Program);
         State.InputSpills.clear();
         transferValues(*Instruction, State);
@@ -2990,6 +3017,8 @@ ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
         Result.CopySlot = Slot;
         Result.CopySize = Length.Value;
       } else {
+        if (Instruction->Op == Operation::Load)
+          addMemoryReadEffects(Result.Reads, *Instruction, State);
         if (Instruction->Op == Operation::Store) {
           addMemoryAccessEffects(Result.Effects, *Instruction, State,
                                  Instruction->Dst);
@@ -3197,13 +3226,18 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       }
     }
   }
-  // Reads inside a structurally nonreturning, CALLX-free subtree cannot
-  // affect this summary's returns or target evidence. Use the whole-CFG
-  // dependency fixed point, not just the branches visited by this context.
+  // A structurally nonreturning subtree cannot affect caller returns.
+  // Its reads still guard any target evidence actually retained in the
+  // completed subtree or instantiated on this edge. Reusing an unknown target
+  // cannot invent a proof, even if different memory could refine that target.
   const bool ObservableCalleeReads =
-      Callee && (MayReturnFromBlock[Callee->EntryBlock] ||
-                 ReachesCallX[Callee->EntryBlock]);
-  if (Collect && ObservableCalleeReads && !Edge.LegacyRuntime) {
+      Callee &&
+      (MayReturnFromBlock[Callee->EntryBlock] || Callee->HasTargetEvidence ||
+       !Edge.InputExpressionTargets.empty());
+
+  const auto IncludeCalleeReads = [&] {
+    if (!Collect || !ObservableCalleeReads || Edge.LegacyRuntime)
+      return;
     auto Origins = State.Origins;
     pushAbstractFrame(Origins, Program);
     RegisterState EntryOrigins{};
@@ -3220,8 +3254,9 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       Context.ReadEffects.addWrite(Address, Read.Size, Program,
                                    CapturedAddresses.get());
     }
-  }
+  };
   if (Callee && !Callee->Return) {
+    IncludeCalleeReads();
     // Keep caller-conditioned sites reached before termination. Its writes
     // cannot affect a returning sibling path of this caller's summary.
     if (Collect) {
@@ -3301,7 +3336,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
         Edge.InstantiatedMemoryPathStores = (**Copy).Stores;
       }
       if (Collect) {
-        Context.ReadEffects.Unknown = true;
+        Context.ReadEffects.include((**Copy).Reads, symbolicInputs(), Program);
         Context.Effects.include((**Copy).Effects, symbolicInputs(), Program);
         if (auto Error = retain(sizeof(Edge)))
           return std::move(Error);
@@ -3315,6 +3350,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       return true;
     }
   }
+  IncludeCalleeReads();
   Context.PreservesMemory &=
       Callee && Callee->PreservesMemory && !Edge.LegacyRuntime;
   auto OriginEntry = State.Origins;
@@ -3786,13 +3822,7 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
         addMemoryAccessEffects(Context.Effects, *Instruction, State,
                                Instruction->Dst);
       if (Collect && Instruction->Op == Operation::Load) {
-        const auto Base = State.Registers[Instruction->Src].singleton();
-        const auto Address = effectiveAddress(Base, Instruction->Offset);
-        if (Base.ValueKind != RegisterValue::Kind::Constant || !Address ||
-            !Program.ExecutableImage.findRegion(
-                *Address, Instruction->Width / kBitsPerByte, true))
-          addMemoryAccessEffects(Context.ReadEffects, *Instruction, State,
-                                 Instruction->Src);
+        addMemoryReadEffects(Context.ReadEffects, *Instruction, State);
       }
       if (Context.Generic)
         if (auto Error = transferInputExpression(*Instruction, State))
@@ -4243,6 +4273,14 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         return std::move(Error);
     }
   }
+  Context.HasTargetEvidence = llvm::any_of(Context.Sites, [](const auto &Site) {
+    return Site.TargetAddress || !Site.TargetValueAlternatives.unknown();
+  });
+  for (const auto &Edge : Context.Calls)
+    Context.HasTargetEvidence |=
+        !Edge.InputExpressionTargets.empty() ||
+        (Edge.CalleeSummaryID &&
+         Contexts[*Edge.CalleeSummaryID]->HasTargetEvidence);
   if (Context.Return) {
     if (auto Error = retain(stateBytes(*Context.Return)))
       return std::move(Error);
