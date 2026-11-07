@@ -390,10 +390,13 @@ taken decisions in both executors, with original user-mode branch comparisons
 and separate software debug-state checks. The explicit
 [protected source dispatcher](x86-legacy-segments.md#protected-source-dispatch)
 now selects the admitted 16/32-bit original instructions through the shared
-runtime and retains event/backing pauses. Full-machine BTF qualification,
-ordinary i386 function projection, compatibility source dispatch and the other
-state families below remain open. This does not satisfy the global LLVM release
-gate; the production SDK and LLVM gitlink remain unchanged.
+runtime and retains event/backing pauses. Its
+[November 7 qualification](evidence/x86-legacy-source-2026-11-07.json) records
+the compiled Clang/NeverC dispatch, SDK/CLI/Python ownership checks and the
+unchanged paging regression binaries after final integration. Full-machine BTF
+qualification, ordinary i386 function projection, compatibility source dispatch
+and the other state families below remain open. This does not satisfy the global
+LLVM release gate; the production SDK and LLVM gitlink remain unchanged.
 
 The [protected legacy scalar binding](x86-legacy-segments.md#protected-scalar-execution)
 now runs byte/word/dword moves, extensions, LEA, scalar arithmetic/logical

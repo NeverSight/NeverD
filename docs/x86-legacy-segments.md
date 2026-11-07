@@ -319,11 +319,31 @@ call `context.deliver(event)` between dispatch calls; eligibility, accepted
 events and inhibition remain owned by the existing event implementation.
 No asynchronous event producer or polling interval is inferred.
 
-This closes source selection/continuation for the executor's admitted protected
-16/32-bit instructions. It does not supply unimplemented instruction banks,
-ordinary i386 function C, IA-32e compatibility mode, task/real/VM86 execution,
-software SMM/SGX, or native device qualification. Global LLVM release remains
-gated on those separately documented contracts.
+This provides source selection/continuation for selected, admitted protected
+16/32-bit instructions within complete image extents. It does not supply
+unimplemented instruction banks, ordinary i386 function C, IA-32e compatibility
+mode, task/real/VM86 execution, software SMM/SGX, or native device qualification.
+Global LLVM release remains gated on those separately documented contracts.
+
+The [November 7 source qualification](evidence/x86-legacy-source-2026-11-07.json)
+records 1,623 executions across the qualification and final `dev` integration:
+1,622 pass, with one explicit KVM LA57 hardware skip and no failures. The new
+41-case source suite runs on both SDKs and P/E core classes at each revision,
+giving 164 passing executions and 1,024 original branch comparisons per
+revision. The four sets of 184 source, manifest, shared-library and i386-object
+artifacts are byte-identical, including after the final integration. Its
+paging test binaries are also unchanged, retaining the exact 527-case native
+legacy and 570-case r6 full-paging qualification.
+
+Final integration separately passes 88 x64 exporter checks, four real Python
+source-ABI checks and seven native plugin adapter checks per SDK. The initial
+two NeverC i386 failures came from omitting its existing explicit full LLVM
+backend option; the corrected invocation passes and the failed run remains a
+diagnostic, outside qualification counts. Embedded Python plugin-host tests
+are unavailable in these build profiles. i386 object generation does not
+qualify execution of a 32-bit host runtime bridge. LLVM and NeverC need no
+implementation change for this source route; the r6 pin and LLVM gitlink
+remain unchanged.
 
 ## Protected instruction-step debug events
 
