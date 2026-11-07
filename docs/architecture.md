@@ -2984,6 +2984,8 @@ See [binary comparison](binary-diff.md) for the current profile and limitations.
 
 `arch/x86_64` owns checked `RequireAligned` transitions for 64-bit addresses in the default address space. The common recovery engine charges the scalar proof operations and proves the rejection predicate is zero before retaining the original guard. Explicit nonfaulting execution does not supply that proof. Alignment does not require MXCSR state; segmented addresses and optional guards remain unsupported by this recovery adapter.
 
+The LLVM scalar-offset proof's frame-domain audit reads `RequireAligned` as a use of its address alone: the check tests the address it is given, as `movaps` does before its separate STORE, and keeps nothing of it.
+
 ## Legacy GS recovery
 
 `X64LegacyGSState` declares 64-bit CPL0 execution with CR4.FRED disabled under `KernelX64NoFaultV1` and explicit nonfaulting machine state. `arch/x86_64` owns SWAPGS, its arbitrary 64-bit active/inactive bases and the atomic update of GS address interpretation. Both bases may alias any memory; FS stays fixed. Segmented reads/writes still need their separate options. Projection forgets correlations while retaining the original intrinsic and the full input domain. The declaration is bound into raw receipts. Source/native/LLVM interfaces without authenticated GS/MSR inputs refuse it; concrete Unicorn/KVM/WHP/HVF execution gains no capability. Only exact `0F 01 F8` receives native undefined-output and separate opaque-bank receipts; neither receipt proves the execution preconditions.

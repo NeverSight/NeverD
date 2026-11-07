@@ -3917,6 +3917,8 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
             // An x86 floating-state memory operand is a source the operation
             // reads as a LOAD would (`addss -0x54(%ebp), %xmm0`); only the
             // F16C store writes through its address.
+            // An alignment check tests the address it is given, as `movaps`
+            // does before its separate STORE, and keeps nothing of it.
             bool ReadsAddressOperand = false;
             if (Write.Opcode == NdOp::INTRINSIC &&
                 (TargetArch == Arch::X86 || TargetArch == Arch::X64) &&
@@ -3926,8 +3928,9 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
               const auto Id = static_cast<Intrinsic>(Write.Inputs[0].ConstVal);
               ReadsAddressOperand =
                   Write.Inputs[0].ConstVal == static_cast<uint64_t>(Id) &&
-                  isX86FPStateMemoryIntrinsic(Id) &&
-                  Id != Intrinsic::X86F16CStoreState;
+                  ((isX86FPStateMemoryIntrinsic(Id) &&
+                    Id != Intrinsic::X86F16CStoreState) ||
+                   Id == Intrinsic::RequireAligned);
             }
             if (Write.Opcode == NdOp::INTRINSIC)
               for (uint8_t I = 1; I < Write.NumInputs; ++I)
