@@ -7,6 +7,17 @@ identity, page updates/zero fills, absent pages, cross-page reads, entry-PC
 mismatch, malformed/truncated streams and resource bounds. It runs no guest,
 generated program or instruction executor and requires no C++ build.
 
+Add `scripts.tests.test_qemu_save_x64` to the same command for the independent
+V6 bank-projection fixtures. They cover explicit CPU/APIC binding, original
+PC/SP and full register bits, descriptor/unusable encoding, XMM/YMM and optional
+AVX-512 lanes, subsection versions, separate NMI masking/pending state and
+caller-selected undefined values. Missing banks fail without output. For a
+real-save qualification, compare projected banks with an existing independent
+register receipt, then compile the initializer with both source routes' V6
+declarations and inspect its object bytes. Compile only; no generated program
+or guest execution is required. This establishes bank transport, not invocation
+capture, RAM mappings, paging or complete environment semantics.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
