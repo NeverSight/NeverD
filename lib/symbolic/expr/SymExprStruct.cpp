@@ -723,6 +723,8 @@ SymRef SymContext::mkUlt(SymRef A, SymRef B) {
   // Nothing is below zero, and nothing is at or above the maximum.
   if (isConstZero(B))
     return mkFalse();
+  if (isConstZero(A))
+    return mkNe(B, A);
   if (auto Order = compareConstantWithZExtMaximum(*this, B, A))
     if (*Order >= 0)
       return mkFalse();
@@ -742,6 +744,8 @@ SymRef SymContext::mkUle(SymRef A, SymRef B) {
     return constValue(A).ule(constValue(B)) ? mkTrue() : mkFalse();
   if (isConstZero(A))
     return mkTrue();
+  if (isConstZero(B))
+    return mkEq(A, B);
   if (auto Order = compareConstantWithZExtMaximum(*this, A, B))
     if (*Order >= 0)
       return mkTrue();

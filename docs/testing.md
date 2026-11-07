@@ -21494,3 +21494,5 @@ HighSymSimplify expanded-byte-parity tests preserve every input bit at 8/32/64-b
 HighExprSimplify exact-demand regressions independently check multiple readers, renamed local identities, loop arrivals, integer conversions, predicate scaling and compiled source. Deep discardability retains loads, calls, ordered accesses, malformed selections and possibly trapping division even when their result is unused. The current upstream wrapped-difference equality semantics are preserved.
 
 HighExprSimplify selected-byte regressions recover only contiguous captured-local lanes with matching pure guards. Offset, sign-extension, different-guard, load and unknown-value controls remain unchanged; generated source executes at both result widths and optimization levels.
+
+SymExprCancellation captured-mask tests use independent exhaustive small-word and multiword APInt evaluation. Negative controls retain overlapping carries and uncovered fields; bounded known-bit queries leave unresolved inputs intact. Existing complemented-offset MBA tests qualify the equivalent normalized constructor forms.
