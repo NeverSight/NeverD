@@ -234,6 +234,98 @@ std::vector<uint8_t> remoteObjects() {
   return bytes;
 }
 
+TEST(AndroidParcelBufferTest, BorrowedObjectReallocationPrecedesBufferAccess) {
+  for (unsigned count : {0, 1, 3}) {
+    SCOPED_TRACE(count);
+    BufferState s;
+    const auto id = s.obtain();
+    auto arena = remoteObjects();
+    std::vector<uint64_t> offsets;
+    for (unsigned i = 0; i != count; ++i)
+      offsets.push_back(i * 24);
+    auto reply = s.borrowed(arena, offsets);
+    reply.view = [](std::span<const uint8_t> &) {
+      ADD_FAILURE() << "realloc must precede reading borrowed storage";
+      return ExecutionResult{ExecutionStop::Invalid};
+    };
+    reply.write = [](uint64_t, std::span<const uint8_t>) {
+      ADD_FAILURE() << "rejected realloc must precede writing borrowed storage";
+      return ExecutionResult{ExecutionStop::Invalid};
+    };
+    reply.reallocate_objects = [&](uint64_t size) {
+      EXPECT_EQ(size, count == 0 ? 24u : count == 1 ? 32u : 56u);
+      s.events.push_back("realloc");
+      return ExecutionResult{ExecutionStop::Invalid, 0, {}, "allocator fault"};
+    };
+    s.install(id, std::move(reply));
+    auto result =
+        s.call("writeStrongBinder", "(Landroid/os/IBinder;)V", id, {0});
+    EXPECT_EQ(result.stop, ExecutionStop::Invalid);
+    EXPECT_EQ(result.diagnostic, "allocator fault");
+    EXPECT_EQ(s.events, (std::vector<std::string>{"realloc"}));
+    EXPECT_EQ(s.call("dataPosition", "()I", id).value, 0u);
+    EXPECT_EQ(s.call("dataCapacity", "()I", id).value, 72u);
+    EXPECT_EQ(s.heap.get(id)->Bytes, arena);
+    ASSERT_EQ(s.call("recycle", "()V", id).stop, ExecutionStop::Returned);
+    EXPECT_EQ(s.events, (std::vector<std::string>{"realloc", "free"}));
+  }
+}
+
+TEST(AndroidParcelBufferTest,
+     JavaBinderConversionPrecedesBorrowedReallocation) {
+  BufferState s;
+  const auto *ctor =
+      libraryMethod({"Landroid/os/Binder;", "<init>", {}, "V"}, false);
+  ASSERT_NE(ctor, nullptr);
+  auto created = executeLibrary(s.heap, *ctor, 0, {}, Admit, false, &s.program,
+                                &s.framework);
+  ASSERT_EQ(created.stop, ExecutionStop::Returned);
+  EXPECT_EQ(s.identities.size(), 1u); // Holder; conversion creates JavaBBinder.
+  const auto id = s.obtain();
+  std::vector<uint8_t> arena(24);
+  auto reply = s.borrowed(arena);
+  reply.reallocate_objects = [&](uint64_t size) {
+    EXPECT_EQ(size, 24u);
+    EXPECT_EQ(s.identities.size(), 2u);
+    s.events.push_back("realloc");
+    return ExecutionResult{ExecutionStop::Invalid};
+  };
+  s.install(id, std::move(reply));
+  auto unconstructed =
+      s.heap.allocate(Object::Instance, "android/os/Binder", 0);
+  auto result = s.call("writeStrongBinder", "(Landroid/os/IBinder;)V", id,
+                       {unconstructed->Identity});
+  EXPECT_EQ(result.stop, ExecutionStop::Unsupported);
+  EXPECT_NE(result.diagnostic.find("original native holder"),
+            std::string::npos);
+  EXPECT_TRUE(s.events.empty());
+  result = s.call("writeStrongBinder", "(Landroid/os/IBinder;)V", id,
+                  {created.value});
+  EXPECT_EQ(result.stop, ExecutionStop::Invalid);
+  EXPECT_EQ(s.events, (std::vector<std::string>{"realloc"}));
+  EXPECT_EQ(s.heap.get(id)->Bytes, arena);
+  EXPECT_EQ(s.call("dataPosition", "()I", id).value, 0u);
+}
+
+TEST(AndroidParcelBufferTest, BorrowedObjectWritesRequireAnAllocatorService) {
+  BufferState s;
+  const auto id = s.obtain();
+  std::vector<uint8_t> arena(24);
+  s.install(id, s.borrowed(arena));
+  auto result = s.call("writeStrongBinder", "(Landroid/os/IBinder;)V", id, {0});
+  EXPECT_EQ(result.stop, ExecutionStop::Unsupported);
+  EXPECT_NE(result.diagnostic.find("allocator is not supplied"),
+            std::string::npos);
+  EXPECT_TRUE(s.events.empty());
+  EXPECT_EQ(s.call("dataPosition", "()I", id).value, 0u);
+  ASSERT_EQ(s.call("setDataCapacity", "(I)V", id, {48}).stop,
+            ExecutionStop::Returned);
+  ASSERT_EQ(
+      s.call("writeStrongBinder", "(Landroid/os/IBinder;)V", id, {0}).stop,
+      ExecutionStop::Returned);
+  EXPECT_EQ(s.events, (std::vector<std::string>{"free"}));
+}
+
 TEST(AndroidParcelBufferTest, NativeOnlyProxyReferencesAreSharedAcrossCopies) {
   BufferState s;
   const auto first = s.obtain(), second = s.obtain();

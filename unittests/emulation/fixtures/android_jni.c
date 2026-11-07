@@ -10,6 +10,7 @@ extern int pthread_create(U64 *, const void *, void *(*)(void *), void *);
 extern int pthread_join(U64, void **);
 extern int __system_property_get(const char *, char *);
 extern int usleep(unsigned);
+extern void *realloc(void *, U64);
 struct ClockTime {
   long seconds, nanoseconds;
 };
@@ -5056,8 +5057,10 @@ int jni_binder_local(unsigned form, unsigned mode) {
  * These peers validate copied payloads and translated objects independently. */
 static int jp_grow_serve(struct JBinderObjectService *s) {
   CHECK(!jb_send(s->fd, 0x630c, 0, 0));
-  unsigned objects = s->mode == 5 || s->mode == 6 || s->mode == 8;
-  unsigned turns = s->mode == 2 || s->mode == 3 || s->mode == 4 || s->mode == 8
+  unsigned objects = s->mode == 5 || s->mode == 6 || s->mode == 8 ||
+                     (s->mode >= 10 && s->mode <= 13) || s->mode == 15;
+  unsigned turns = s->mode == 2 || s->mode == 3 || s->mode == 4 ||
+                           (s->mode >= 8 && s->mode <= 15)
                        ? 1
                    : objects ? 3
                              : 2;
@@ -5071,7 +5074,7 @@ static int jp_grow_serve(struct JBinderObjectService *s) {
         CHECK(!usleep(1));
     }
     CHECK(found && tx.target == 0 && tx.code == 0xffffffff && tx.flags == 16);
-    U8 answer[76];
+    U8 answer[76] = {0};
     U64 offsets[3] = {0, 24, 48};
     unsigned length = 4, metadata = 0;
     unsigned value = turn ? 88 : 42;
@@ -5107,6 +5110,15 @@ static int jp_grow_serve(struct JBinderObjectService *s) {
                 added.pointer == input[0].pointer && !added.cookie);
         } else
           CHECK(*(unsigned *)(tx.buffer + 76) == 99);
+      } else if (turn == 1 && s->mode >= 16) {
+        CHECK(!tx.objects && tx.size == (s->mode == 16 ? 24 : 48));
+        struct JBinderObject added;
+        U64 offset = s->mode == 16 ? 0 : 24;
+        if (offset)
+          CHECK(*(unsigned *)tx.buffer == 42);
+        jb_copy(&added, (void *)(tx.buffer + offset), 24);
+        CHECK(added.type == 0x73622a85 && added.flags == 0x113 &&
+              !added.pointer && !added.cookie);
       } else if (turn == 1) {
         CHECK(!tx.objects && tx.size == (s->mode == 7 ? 4 : 8));
         unsigned *input = (unsigned *)tx.buffer;
@@ -5117,8 +5129,12 @@ static int jp_grow_serve(struct JBinderObjectService *s) {
       } else
         CHECK(!tx.size && !tx.objects);
       jb_copy(answer, &value, 4);
-      if (!turn && s->mode == 7)
-        length = 0;
+      if (!turn) {
+        if (s->mode == 7 || s->mode == 16)
+          length = 0;
+        if (s->mode == 9 || s->mode == 14 || s->mode == 17)
+          length = 24;
+      }
     }
     U64 request = tx.buffer;
     tx = (struct JBinderTX){
@@ -5158,7 +5174,8 @@ int jni_parcel_reply_growth(unsigned form, unsigned mode) {
   Ref recycle = C(e, Ref, 33, type, "recycle", "()V");
   Ref data = parcel_result(e, 114, form, type, obtain);
   Ref reply = parcel_result(e, 114, form, type, obtain);
-  unsigned objects = mode == 5 || mode == 6 || mode == 8;
+  unsigned objects = mode == 5 || mode == 6 || mode == 8 ||
+                     (mode >= 10 && mode <= 13) || mode == 15;
   Ref local = 0;
   if (objects) {
     Ref bt = C(e, Ref, 6, "android/os/Binder");
@@ -5181,12 +5198,31 @@ int jni_parcel_reply_growth(unsigned form, unsigned mode) {
   CHECK(!pthread_create(&thread, 0, jp_grow_thread, &service));
   CHECK(binder_transact(e, form, proxy, transact, data, reply, 0) &&
         !C(e, int, 228));
-  unsigned length = objects ? 76 : mode == 7 ? 0 : 4;
+  unsigned length = objects                                 ? 76
+                    : mode == 7 || mode == 16               ? 0
+                    : mode == 9 || mode == 14 || mode == 17 ? 24
+                                                            : 4;
   CHECK(parcel_result(e, 49, form, reply, capacity) == length);
   parcel_write(e, form, reply, reserve, 1, length); /* Must remain borrowed. */
-  if (mode == 8) {
-    parcel_write(e, form, reply, strong, 0, 0);
-    return 1;
+  if (mode >= 8 && mode <= 15) {
+    if (mode == 11)
+      CHECK(!mprotect(arena, 4096, 0));
+    if (mode == 12) {
+      U64 address = (U64)arena;
+      CHECK(!jb_send(client, 0x40086303, &address, 8));
+    }
+    if (mode == 13 || mode == 14) {
+      /* Same pointer and byte count passed by native Parcel::writeObject. */
+      void *table = (U8 *)arena + ((length + 7) & ~7u);
+      return (int)(U64)realloc(table, mode == 13 ? 56 : 24);
+    }
+    if (mode == 15) {
+      Ref bt = C(e, Ref, 6, "android/os/Binder");
+      local = C(e, Ref, 27, bt); /* Conversion fails before realloc. */
+    }
+    parcel_write(e, form, reply, strong, 0,
+                 mode == 10 || mode == 15 ? local : 0);
+    return 8;
   }
   if (mode == 2) {
     CHECK(mprotect(arena, 4096, 3) == -1 && *__errno() == 13);
@@ -5210,13 +5246,15 @@ int jni_parcel_reply_growth(unsigned form, unsigned mode) {
   parcel_write(e, form, reply, seek, 1, length);
   if (mode == 6)
     parcel_write(e, form, reply, strong, 0, local);
+  else if (mode >= 16)
+    parcel_write(e, form, reply, strong, 0, 0);
   else
     parcel_write(e, form, reply, write, 1, 99);
   CHECK(!C(e, int, 228));
   CHECK(parcel_result(e, 49, form, reply, capacity) ==
         (mode == 1   ? 20
          : mode == 6 ? 128
-                     : (length + 4) * 3 / 2));
+                     : (length + (mode >= 16 ? 24 : 4)) * 3 / 2));
   C(e, void, 61, data, recycle);
   data = parcel_result(e, 114, form, type, obtain);
   CHECK(binder_transact(e, form, proxy, transact, reply, data, 0) &&
@@ -5224,7 +5262,11 @@ int jni_parcel_reply_growth(unsigned form, unsigned mode) {
   CHECK(parcel_result(e, 49, form, data, read) == 88);
   CHECK(*(unsigned *)arena == 88); /* The released first slot was reused. */
   parcel_write(e, form, reply, seek, 1, mode == 1 ? 0 : length);
-  if (mode != 6)
+  if (mode >= 16) {
+    Ref strong_read =
+        C(e, Ref, 33, type, "readStrongBinder", "()Landroid/os/IBinder;");
+    CHECK(!parcel_result(e, 34, form, reply, strong_read));
+  } else if (mode != 6)
     CHECK(parcel_result(e, 49, form, reply, read) == (mode == 1 ? 77 : 99));
   C(e, void, 61, reply, recycle);
   C(e, void, 61, data, recycle);

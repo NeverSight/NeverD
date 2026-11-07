@@ -62,6 +62,13 @@ continuation before entering the existing event owner. New external events
 cannot interrupt a suspended host access. `ir/X86/X86StackFrameRules` shares
 ENTER nesting selection with the ordinary lifter; the paged owner additionally
 owns segment/page faults and the final stack permission probe.
+Protected scalar count and carry-chain instructions retain their exact prefixes
+in `translate/X86/X86LegacyScalarEncoding`. The execution boundary selects
+LZCNT/TZCNT or their BSR/BSF aliases from an explicit target feature binding;
+unavailable POPCNT/ADX enters #UD after authenticated fetch and before data
+access. Undefined count flags have their own producer image. The scalar owner
+stages results over the common segmented/page access, so generated protected C
+uses the same feature, fault and debug decisions.
 `X86InstructionDebugProfile::Watchpoints` composes the same rules with scoped
 `translate/X86/X86WatchpointObservation`. `X86PagedMemory` reports completed
 linear data reads and committed stores; physical page walks and fetches are
@@ -17431,9 +17438,16 @@ making spare bytes readable. In-capacity borrowed writes use the native memory
 owner and retain read-only faults. `AndroidBinderObjects.cpp` tracks native-only
 remote references across copied Parcels independently of Java proxy creation;
 final release uses the existing Linux strong/weak reference commands.
-Local Binder dispatch, nested/one-way transactions, weak objects/FDs, and direct
-reallocation of a borrowed offset table remain explicit boundaries. ServiceManager `lookup_results` remain a separate semantic input;
+In-capacity strong writes preserve JNI Binder conversion order before attempting
+the received offset-table pointer's realloc. The native adapter and C import use
+one `Bionic::reallocate` implementation. Binder arena pointers fail its allocation
+ownership check before memory access, even with zero offsets. Local Binder
+dispatch, nested/one-way transactions and weak objects/FDs remain explicit
+boundaries. ServiceManager `lookup_results` remain a separate semantic input;
 this transport does not turn those entries into kernel peers or replies.
+
+JNI propagates runtime-service failure diagnostics unchanged. The error owner
+supplies native context; the bridge does not add a second native prefix.
 
 
 `KernelFileSystem` owns the validated volume/node state; `KernelModel` owns canonical device topology and references. `DriverFileSystemJSON` is transport only. `DeviceOwnerKind` distinguishes Guest, PnpProvider and FileSystemProvider; only PnP routes use `isPnpProviderDevice`. Volume devices exist before DriverEntry, and four shared route guards reject unimplemented file I/O before publication. Owner snapshots remain independent of guest object projections and configuration.

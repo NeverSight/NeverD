@@ -1267,3 +1267,49 @@ Real/VM86, compatibility execution, task switching, other unbound i386 banks,
 software SMM/SGX transitions and general external-event production remain
 outside this boundary. Global completion is still open; LLVM release, SDK pin
 and the LLVM submodule stay at r6.
+
+## Protected integer extensions
+
+The `OrderedRAM` scalar binding admits exact legacy POPCNT, LZCNT, TZCNT,
+ADCX and ADOX bytes. Count operands use the code default and independent 66
+override. ADX always uses dword operands in protected code16/code32; 66 selects
+ADCX, and ADOX ignores an additional 66 in either prefix order. The common
+address parser retains 16/32-bit addresses, segment overrides and implicit SS.
+Duplicate prefixes, LOCK/REPNE selectors, absent mandatory selectors and
+truncated/trailing forms remain explicit grammar refusals before fetch.
+
+`X86LegacyExecutionOptions::IntegerExtensions` supplies target POPCNT, LZCNT,
+BMI1 and ADX availability. These are explicit producer inputs, never inferred
+from host CPUID. Missing POPCNT/ADX produces guest #UD after original-byte
+fetch and before operand access. Missing LZCNT/BMI1 selects BSR/BSF, including
+their existing `BitScanChoices` for zero results and non-ZF flags. The enabled
+LZCNT/TZCNT path instead requires `BitCountUndefinedFlags` containing only
+OF/SF/AF/PF. Its result, source-zero CF and result-zero ZF are always computed.
+POPCNT computes all six arithmetic flags. ADCX/ADOX update only their chosen
+CF/OF chain, and both use unsigned carry; the other chain and flags survive.
+
+Memory operands use the shared segment, paging and alignment owner. Faults
+preserve the destination and entry flags, while retaining page-table effects.
+The existing original fault handler can repair a PTE, IRET and retry. Completed
+reads participate in the common data-breakpoint owner. Generated protected C
+passes through this same execution boundary with its existing attempt budget.
+Ordinary lifting and LLVM/NeverC already provide these integer computations;
+this addition requires no new compiler intrinsic or inline-assembly fallback.
+
+The reference is the POPCNT/LZCNT/TZCNT/ADCX/ADOX entries in
+[Intel SDM Volume 2](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf).
+Original-CPU checks require those features and cover the current Intel host.
+Feature-disabled aliases and #UD priority are separately qualified software
+contracts, not physical execution on a processor missing those features.
+
+The [November 7 integer qualification](evidence/x86-legacy-integer-2026-11-07.json)
+passes 1,098 tests across the native SDK, pinned r6 and qualified P/E cores,
+including 33,696 original integer-state comparisons, 960 original data-debug
+comparisons and 48 new compiled-source cases. Decoder and ordinary-lift checks
+also cover the integrated Capstone revision and the preceding stack fixes.
+After a later Android-only merge, both rebuilt shared libraries pass another
+130 source checks; the paging executables remain byte-identical. The archive
+retains each actual source commit, tool/binary hash and generated source/library,
+with the pre-integration receipts recorded separately.
+
+The other state banks and the global LLVM release gate remain open.

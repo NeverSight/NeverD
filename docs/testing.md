@@ -423,6 +423,20 @@ SS inputs use their own memory, independently of DS. The shared W^X observer
 allocation and calls live in `X86LegacyScalarNativeObserverFixture.inc`;
 shift-specific encodings remain in `X86LegacyShiftNativeFixture.inc`.
 
+`LegacyInteger/*` compares protected POPCNT/LZCNT/TZCNT/ADCX/ADOX with original
+CPU execution in legacy paging and PAE. It covers word/dword count values,
+independent unsigned CF/OF chains, all GPR aliases, code/address widths,
+nonflat segments, read-only pages, alignment, page crossings and original
+handler repair/IRET/retry. Only the count instructions' undefined OF/SF/AF/PF
+come from an independent W^X probe. `X86LegacyIntegerTest.*` separately varies
+those images, qualifies feature-disabled BSR/BSF aliases and POPCNT/ADX #UD,
+and checks missing bindings, malformed prefixes, backing stops and data traps.
+Feature-disabled cases are software-contract checks; masking KVM CPUID does
+not make a supporting physical processor stop executing the instruction.
+`X86LegacySourceTest.Integer*` compiles and executes the same owner through
+Clang and NeverC at O0/O2, including a guest page-repair handler and feature
+selection without spending an attempt on an unbound context.
+
 `NeverDLLVMCValueTests --gtest_filter=LLVMCValues.X86BitString*` rejects
 weakened native bit-string declarations and executes all twelve LLVM-to-C
 projections with live/dead results. The original-instruction oracle compares
@@ -15999,7 +16013,15 @@ lifetime, retained `unmarshall` metadata and bounded storage reservations.
 ordinary/V/A calls through real guest peers: automatic/explicit growth, arena
 slot reuse, scalar and strong writes, native-only remote handle retention and
 retirement, empty replies, read-only faults, stale leases and unreadable mappings.
-`ProcessPublic.AndroidParcelBorrowedGrowthMatchesSDKAndCLI` compares 54 complete
+It also compares ordinary/V/A strong-write allocator failures with direct native
+realloc on the identical received table addresses, including empty tables,
+protected/freed arenas and conversion before allocation. Empty replies and
+data-capacity growth provide successful strong-write controls.
+`AndroidParcelBufferTest` checks literal object-table allocation sizes, untouched
+buffers/cursors, owner retention and missing allocator services.
+`AndroidAllocation.ReallocChecksOwnershipBeforeReadingStorage` contrasts external,
+interior, freed and unreadable foreign pointers with an unreadable owned allocation.
+`ProcessPublic.AndroidParcelBorrowedGrowthMatchesSDKAndCLI` compares 108 complete
 reports at O0/O2, including all explicit failure outcomes.
 Run full Dalvik, Android JNI, thread/callback and native/Linux Binder suites,
 plus these focused public tests after changing this owner. The shared scheduler

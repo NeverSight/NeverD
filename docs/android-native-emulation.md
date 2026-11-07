@@ -1263,9 +1263,11 @@ copies live bytes and retains local/remote objects before queuing the original
 buffer free. Native-only remote references retire through the same Linux driver
 commands; Java proxy materialization reuses them. Capacity queries and explicit
 reservation share the Dalvik heap budget. In-capacity writes retain the original
-mapping permissions, including read-only memory failure. Direct growth of a
-borrowed object table and incoming Java transaction dispatch remain explicit
-boundaries.
+mapping permissions, including read-only memory failure. In-capacity strong
+writes pass the original borrowed offset-table pointer to the shared Bionic
+realloc owner; its allocation-ownership failure precedes buffer access, including
+for an empty table. Data-capacity growth permits subsequent owned object writes.
+Incoming Java transaction dispatch remains an explicit boundary.
 Missing cache state is unknown; an explicit
 empty array is a known empty cache. Non-null cache hits return their retained
 identity without timing or changing the blocking flag. `initServiceCache`
