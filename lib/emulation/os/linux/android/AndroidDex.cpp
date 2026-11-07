@@ -241,6 +241,9 @@ BionicResult Bionic::finishDex(mobile::dalvik::ExecutionResult Executed,
       return failure("missing Java continuation request");
     auto Continuation = std::make_shared<DexContinuation>(DexContinuation{
         Executed.continuation, threadID(), std::move(Complete)});
+    if (Executed.external->kind ==
+        mobile::dalvik::ExternalCall::BinderTransaction)
+      return binderTransact(*Executed.external, std::move(Continuation));
     if (Executed.external->kind == mobile::dalvik::ExternalCall::LoadLibrary) {
       auto Load = loadJavaLibrary(*Executed.external, Continuation);
       if (!Load)

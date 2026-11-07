@@ -15743,9 +15743,24 @@ across native threads and JNI attachments. The matching
 `ProcessPublic.AndroidBinderEntryAndTracingMatchSDKAndCLI` compares 78 full
 report pairs at O0/O2. Successful cases check a real caught null-data exception
 or tracing state; none claims a completed Binder transaction.
+`AndroidBinderTest` also checks authenticated native reply continuation,
+retained bytes/cursors, UNKNOWN_TRANSACTION error propagation, dead-object
+caching and checked exception ancestry, live arena reads, temporary replies and
+DEX catch/resume. `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
+executes real guest services through all three JNI forms, including three-round
+buffer retention/reuse, a reply recycled and reused by another native thread,
+missing managers, declared dead proxies, invalid/reused descriptors and explicit
+borrowed-write/unmapped-arena/PROT_NONE boundaries. The corresponding public test
+compares 90 complete SDK/CLI reports at O0/O2, including native thread exit with queued
+frees and a supplied DEX caller spanning consecutive transactions, a guest
+native callback and another transaction. Linux tests check the same raw buffer
+view, dup aliases, delivered-buffer release and descriptor lifetime. JSON parser
+regressions require complete explicit bindings and share the C++ fd validator.
 Run full Dalvik, Android JNI, thread/callback and native/Linux Binder suites,
-plus these focused public tests after changing this owner. These are original synthetic tests;
-they establish no live Binder service or whole-MVM restoration.
+plus these focused public tests after changing this owner. The shared scheduler
+also requires the stream-wait, receive, readiness and poll regressions. These are
+original synthetic tests; they establish no live Binder service or whole-MVM
+restoration.
 
 `AndroidServiceManagerTest.*` covers slow/statistics record bytes, strict versus
 inclusive timing, signed wrapping/division, ART strings/nulls, ignored negative

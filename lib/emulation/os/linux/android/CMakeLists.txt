@@ -25,6 +25,7 @@ add_neverd_component_library(NeverDEmulationAndroid
   AndroidJNIMethods.cpp
   AndroidJNIFields.cpp
   AndroidDex.cpp
+  AndroidBinder.cpp
   AndroidSignals.cpp
   AndroidStdio.cpp
   AndroidStdioRead.cpp

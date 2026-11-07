@@ -110,6 +110,67 @@ TEST_P(AndroidJNI, BinderTracingMethodsAndFieldsShareStateAcrossThreads) {
     }
   }
 }
+TEST_P(AndroidJNI, BinderTransportUsesGuestServiceAndRetainedReplyArenas) {
+#ifndef NEVERD_ANDROID_DEX_FIXTURE_DIR
+  GTEST_SKIP() << "Python DEX fixture generator unavailable";
+#else
+  auto File = llvm::MemoryBuffer::getFile(
+      (std::filesystem::path(NEVERD_ANDROID_DEX_FIXTURE_DIR) /
+       "java-binder.dex")
+          .string());
+  ASSERT_TRUE(bool(File));
+  auto Bytes = (*File)->getBuffer();
+  Options.Android->DexImages.emplace_back(Bytes.begin(), Bytes.end());
+#endif
+  Options.LinuxTime.emplace().Clocks = {{7, {50, 0}}};
+  Options.LinuxTime->AdvanceOnIdle = true;
+  auto &device = Options.LinuxFiles.emplace().Devices["/dev/binder"];
+  device.Binder = true;
+  device.AccessMode = 2;
+
+  auto &state =
+      Options.Android->Application.emplace().service_manager.emplace();
+  state.cache.emplace().push_back({"alpha", 7});
+  using Binding = mobile::dalvik::AndroidApplicationSnapshot::ServiceManager::
+      BinderProxy::NativeBinding;
+  const char *diagnostics[] = {"",
+                               "",
+                               "",
+                               "",
+                               "",
+                               "live Binder descriptor",
+                               "outside the object-free profile",
+                               "status exception/logging",
+                               "native capacity semantics",
+                               "closed and reused",
+                               "mapping is no longer live",
+                               "",
+                               "",
+                               "",
+                               "buffer is not readable"};
+  for (unsigned mode = 0; mode != 15; ++mode) {
+    Options.Android->ThreadLimit = mode == 11 || mode == 13 ? 3 : 2;
+    state.binder_proxies = {
+        {7, false,
+         Binding{mode == 5 ? 77u : 3u, mode == 7 ? 1u : 0u, mode != 4}}};
+    for (unsigned form = 0; form != 3; ++form) {
+      SCOPED_TRACE(mode);
+      SCOPED_TRACE(form);
+      Options.Android->Arguments = {form, mode};
+      auto result = run("jni_binder_transport");
+      if (diagnostics[mode][0]) {
+        EXPECT_EQ(result.Stop, ProcessStopReason::UnsupportedService)
+            << result.Diagnostic;
+        EXPECT_NE(result.Diagnostic.find(diagnostics[mode]), std::string::npos)
+            << result.Diagnostic;
+      } else {
+        EXPECT_EQ(result.Stop, ProcessStopReason::Returned)
+            << result.Diagnostic;
+        EXPECT_EQ(result.ReturnValue, 0u);
+      }
+    }
+  }
+}
 TEST_P(AndroidJNI, BinderTransactionEntryPreservesValidationOrderAndEffects) {
   const char *diagnostics[] = {"",
                                "",

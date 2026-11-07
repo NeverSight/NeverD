@@ -17123,14 +17123,41 @@ NullPointerException with a null message before inspecting the optional reply;
 non-null Parcels reuse the owned/recycled lifecycle checks without changing
 bytes or positions. Local Binder dispatch remains unsupported.
 
-The next transport boundary requires an explicit native Binder binding:
-Java proxy keys do not identify native handles, peer state or reply object
-translations. An absent model binding is not evidence that a Binder was
-finalized or died. No transaction success, native error or reply is fabricated.
-`enforceInterface` also remains unmodeled: its incoming transaction flags and
-Java StrictMode policy-change upcall cannot be omitted. Borrowed native Parcels,
-object/FD translation, custom string helpers, capacity/size mutation, floating
-methods and RPC remain unsupported.
+Each supplied proxy may independently declare `native_binding` with a positive
+signed `fd`, a uint32 `handle`, and explicit `alive`. The native adapter resolves
+the fd on first use to an existing shared Linux Binder open description and
+rejects closure/reuse. Java keys still imply no native endpoint. The guest must
+establish any context manager and read-only reply arenas itself. Object-free,
+synchronous handle-zero calls use the existing protocol-8 ioctl routing;
+replies are computed by guest service code. Missing managers return the kernel's
+DEAD_REPLY, which sets the BpBinder dead cache and a checked DeadObjectException.
+A declared dead proxy short-circuits before IPC. Status replies retain old Parcel
+bytes/cursors, set its error state and return false for UNKNOWN_TRANSACTION.
+Other modeled statuses reuse Java exceptions; remaining logging/error dispatch
+stops explicitly after the driver result.
+The native lifetime contract follows API 28
+[BpBinder](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/BpBinder.cpp)
+and [Parcel](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/Parcel.cpp).
+
+Runtime's authenticated external-call continuations cover both DEX invocation
+and direct JNI intrinsics. A resumed wait may retain its original import while
+installing the next wait or entering a guest callback. Callback completion may
+likewise suspend before returning to that import; ordinary and resumed calls
+share one callback-entry helper. The native adapter suspends on the existing guest
+scheduler until thread-specific Binder work arrives. Shared Linux memory owns
+reply arena bytes; Parcel retains a live read-only view and queues BC_FREE_BUFFER
+on replacement, unmarshalling or recycle. Thread exit flushes pending frees and
+uses the same BINDER_THREAD_EXIT owner. API 28 freeBuffer selects the current
+native thread, ignoring its cookie, so that thread flushes the queued frees at
+its next Binder exchange. Null Java replies use the temporary-reply release
+path. Neither cursor motion nor reading frees the buffer. An invalidated or unreadable mapping
+stops explicitly, and scalar reads do not copy the entire retained buffer.
+
+`enforceInterface` still requires incoming flags and the Java StrictMode upcall.
+Local Binder dispatch, nested/one-way transactions, translated handles, Binder
+objects/FDs, and writes/capacity growth in borrowed reply storage remain explicit
+boundaries. ServiceManager `lookup_results` remain a separate semantic input;
+this transport does not turn those entries into kernel peers or replies.
 
 
 `KernelFileSystem` owns the validated volume/node state; `KernelModel` owns canonical device topology and references. `DriverFileSystemJSON` is transport only. `DeviceOwnerKind` distinguishes Guest, PnpProvider and FileSystemProvider; only PnP routes use `isPnpProviderDevice`. Volume devices exist before DriverEntry, and four shared route guards reject unimplemented file I/O before publication. Owner snapshots remain independent of guest object projections and configuration.

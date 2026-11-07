@@ -4440,3 +4440,261 @@ int jni_url_handler(int mode, int form) {
   CHECK(!C(e, int, 228));
   return C(vm, int, 5);
 }
+
+/* JNI Binder clients and a guest-owned, object-free protocol-8 service. */
+extern int open(const char *, int, ...);
+extern int close(int);
+extern int ioctl(int, unsigned long, void *);
+extern int *__errno(void);
+extern void *mmap(void *, U64, int, int, int, U64);
+extern int munmap(void *, U64);
+struct JBinderWR {
+  U64 size, consumed, data, read_size, read_consumed, read_data;
+};
+struct JBinderTX {
+  U64 target, cookie;
+  unsigned code, flags, pid, uid;
+  U64 size, objects, buffer, offsets;
+};
+static void jb_copy(void *to, const void *from, unsigned size) {
+  for (unsigned i = 0; i != size; ++i)
+    ((U8 *)to)[i] = ((const U8 *)from)[i];
+}
+static int jb_send(int fd, unsigned command, const void *body, unsigned size) {
+  U8 bytes[68];
+  jb_copy(bytes, &command, 4);
+  jb_copy(bytes + 4, body, size);
+  struct JBinderWR wr = {size + 4, 0, (U64)bytes, 0, 0, 0};
+  return ioctl(fd, 0xc0306201UL, &wr) || wr.consumed != size + 4;
+}
+struct JBinderService {
+  int fd;
+  unsigned mode, count;
+  unsigned *client;
+};
+static int jb_serve(struct JBinderService *s) {
+  CHECK(!jb_send(s->fd, 0x630c, 0, 0));
+  for (unsigned turn = 0; turn != s->count; ++turn) {
+    unsigned output[32];
+    struct JBinderTX tx;
+    int found = 0;
+    for (unsigned tries = 0; tries != 1000 && !found; ++tries) {
+      struct JBinderWR wr = {0, 0, 0, sizeof(output), 0, (U64)output};
+      int result = ioctl(s->fd, 0xc0306201UL, &wr);
+      CHECK(!result || *__errno() == 11);
+      for (unsigned i = 0; i < wr.read_consumed / 4; ++i) {
+        if (output[i] == 0x80407202) {
+          jb_copy(&tx, output + i + 1, 64);
+          found = 1;
+          break;
+        }
+        CHECK(output[i] == 0x720c || output[i] == 0x720d ||
+              output[i] == 0x7206);
+      }
+      if (!found)
+        CHECK(!usleep(1));
+    }
+    CHECK(found && !tx.target && tx.code == 0xffffffff && tx.flags == 16 &&
+          tx.size == 12 && !tx.objects && tx.pid &&
+          tx.offsets == tx.buffer + 16);
+    unsigned *input = (unsigned *)tx.buffer;
+    CHECK(input[0] == 19 && input[1] == 23 && input[2] == 0xaabbccdd);
+    unsigned answer[3] = {input[0] + input[1] + turn, input[2] ^ 0xff, turn};
+    if (s->mode == 2)
+      answer[0] = (unsigned)-74;
+    U64 request = tx.buffer;
+    tx = (struct JBinderTX){
+        0, 0,           0, s->mode == 2 ? 8 : 0, 0, 0, s->mode == 2 ? 4 : 12,
+        0, (U64)answer, 0};
+    CHECK(!jb_send(s->fd, 0x40406301, &tx, 64));
+    unsigned offset = (s->mode == 0 || s->mode == 12) && turn == 1 ? 4 : 0;
+    CHECK(s->client[offset] == answer[0]);
+    CHECK(!jb_send(s->fd, 0x40086303, &request, 8));
+  }
+  unsigned completed[32];
+  struct JBinderWR wr = {0, 0, 0, sizeof(completed), 0, (U64)completed};
+  CHECK(!ioctl(s->fd, 0xc0306201UL, &wr));
+  CHECK(wr.read_consumed == 8 && completed[0] == 0x720c &&
+        completed[1] == 0x7206);
+  CHECK(!ioctl(s->fd, 0x40046208UL, 0));
+  return 0;
+}
+static void *jb_thread(void *arg) { return (void *)(U64)jb_serve(arg); }
+struct JBinderRecycle {
+  unsigned form, only;
+  Ref data, reply, proxy, type, method;
+};
+static void *jb_recycle_thread(void *arg) {
+  struct JBinderRecycle *a = arg;
+  Handle e = attach();
+  if (!e)
+    return (void *)1;
+  Ref recycle = C(e, Ref, 33, a->type, "recycle", "()V");
+  C(e, void, 61, a->reply, recycle);
+  if (a->only)
+    return (void *)(U64)C(vm, int, 5);
+  Ref obtain = C(e, Ref, 113, a->type, "obtain", "()Landroid/os/Parcel;");
+  Ref reply = parcel_result(e, 114, a->form, a->type, obtain);
+  if (!same_ref(e, reply, a->reply) ||
+      !binder_transact(e, a->form, a->proxy, a->method, a->data, reply, 0) ||
+      C(e, int, 228))
+    return (void *)2;
+  return (void *)(U64)C(vm, int, 5);
+}
+static int jb_callback_count;
+int Java_resumption_Binder_step(Handle e, Ref type, int value) {
+  (void)e;
+  (void)type;
+  ++jb_callback_count;
+  return value + 13;
+}
+int jni_binder_transport(unsigned form, unsigned mode) {
+  Handle e = attach();
+  CHECK(e);
+  int client = open("/dev/binder", 2 | 0x800);
+  int server = open("/dev/binder", 2 | 0x800);
+  CHECK(client == 3 && server == 4);
+  unsigned *client_map = mmap(0, 4096, 1, 2, client, 0);
+  void *server_map = mmap(0, 4096, 1, 2, server, 0);
+  CHECK((U64)client_map < (U64)-4095 && (U64)server_map < (U64)-4095);
+  if (mode != 3)
+    CHECK(!ioctl(server, 0x40046207UL, 0));
+  Ref type = C(e, Ref, 6, "android/os/Parcel");
+  Ref obtain = C(e, Ref, 113, type, "obtain", "()Landroid/os/Parcel;");
+  Ref data = parcel_result(e, 114, form, type, obtain);
+  Ref reply = parcel_result(e, 114, form, type, obtain);
+  Ref write = C(e, Ref, 33, type, "writeInt", "(I)V");
+  Ref read = C(e, Ref, 33, type, "readInt", "()I");
+  Ref position = C(e, Ref, 33, type, "dataPosition", "()I");
+  Ref seek = C(e, Ref, 33, type, "setDataPosition", "(I)V");
+  Ref recycle = C(e, Ref, 33, type, "recycle", "()V");
+  parcel_write(e, form, data, write, 1, 19);
+  parcel_write(e, form, data, write, 1, 23);
+  parcel_write(e, form, data, write, 1, 0xaabbccdd);
+  parcel_write(e, form, reply, write, 1, 0x11223344);
+  Ref manager = C(e, Ref, 6, "android/os/ServiceManager");
+  Ref lookup = C(e, Ref, 113, manager, "getService",
+                 "(Ljava/lang/String;)Landroid/os/IBinder;");
+  Ref name = C(e, Ref, 167, "alpha");
+  Ref proxy = C(e, Ref, 114, manager, lookup, name);
+  Ref proxy_type = C(e, Ref, 6, "android/os/BinderProxy");
+  Ref transact = C(e, Ref, 33, proxy_type, "transact",
+                   "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z");
+  CHECK(proxy && transact && data && reply);
+  struct JBinderService service = {server, mode,
+                                   mode <= 2 || mode == 11 || mode == 12 ? 3
+                                   : mode == 13                          ? 2
+                                                                         : 1,
+                                   client_map};
+  U64 thread = 0;
+  if (mode <= 2 || mode >= 8)
+    CHECK(!pthread_create(&thread, 0, jb_thread, &service));
+  if (mode == 12) {
+    Ref owner = C(e, Ref, 6, "resumption/Binder");
+    struct NativeBinding binding = {"step", "(I)I",
+                                    (U64)Java_resumption_Binder_step};
+    CHECK(!C(e, int, 215, owner, &binding, 1));
+    Ref method =
+        C(e, Ref, 113, owner, "run",
+          "(Landroid/os/IBinder;Landroid/os/Parcel;Landroid/os/Parcel;)I");
+    CHECK(owner && method);
+    U64 args[] = {proxy, data, reply};
+    int result =
+        form == 2 ? C(e, int, 131, owner, method, args)
+        : form == 1
+            ? (int)parcel_result_v(e, 130, owner, method, proxy, data, reply)
+            : C(e, int, 129, owner, method, proxy, data, reply);
+    CHECK(result == 1 && jb_callback_count == 1 && !C(e, int, 228));
+    CHECK(parcel_result(e, 49, form, reply, position) == 0);
+    CHECK(parcel_result(e, 49, form, reply, read) == 44);
+    void *status = (void *)99;
+    CHECK(!pthread_join(thread, &status) && !status);
+    return C(vm, int, 5);
+  }
+  for (unsigned turn = 0; turn != (mode <= 2 || mode == 11   ? 3
+                                   : mode == 3 || mode == 13 ? 2
+                                                             : 1);
+       ++turn) {
+    U8 result;
+    if ((mode == 11 || mode == 13) && turn == 1) {
+      struct JBinderRecycle args = {form,
+                                    mode == 13,
+                                    C(e, Ref, 21, data),
+                                    C(e, Ref, 21, reply),
+                                    C(e, Ref, 21, proxy),
+                                    C(e, Ref, 21, type),
+                                    transact};
+      U64 child;
+      void *status = (void *)99;
+      CHECK(!pthread_create(&child, 0, jb_recycle_thread, &args));
+      CHECK(!pthread_join(child, &status) && !status);
+      C(e, void, 22, args.data);
+      C(e, void, 22, args.reply);
+      C(e, void, 22, args.proxy);
+      C(e, void, 22, args.type);
+      if (mode == 13) {
+        reply = parcel_result(e, 114, form, type, obtain);
+        result = binder_transact(e, form, proxy, transact, data, reply, 0);
+      } else
+        result = 1;
+    } else {
+      if (mode == 11 && turn == 2) {
+        C(e, void, 61, reply, recycle);
+        reply = parcel_result(e, 114, form, type, obtain);
+      }
+      result = binder_transact(e, form, proxy, transact, data,
+                               mode == 1 ? 0 : reply, mode == 6 ? 1 : 0);
+    }
+    if (mode == 3 || mode == 4) {
+      CHECK(!result && C(e, int, 228));
+      Ref error = C(e, Ref, 15);
+      C(e, void, 17);
+      Ref dead = C(e, Ref, 6, "android/os/DeadObjectException");
+      Ref remote = C(e, Ref, 6, "android/os/RemoteException");
+      CHECK(C(e, U8, 32, error, dead));
+      CHECK(C(e, U8, 32, error, remote));
+      if (!turn && mode == 3)
+        CHECK(!ioctl(server, 0x40046207UL, 0));
+    } else {
+      CHECK(result == (mode != 2) && !C(e, int, 228));
+      CHECK(parcel_result(e, 49, form, data, position) == 12);
+      if (mode != 1 && mode != 2) {
+        CHECK(parcel_result(e, 49, form, reply, position) == 0);
+        CHECK(parcel_result(e, 49, form, reply, read) == 42 + turn);
+        CHECK((unsigned)parcel_result(e, 49, form, reply, read) ==
+              (0xaabbccdd ^ 0xff));
+        CHECK(parcel_result(e, 49, form, reply, read) == turn);
+      } else
+        CHECK(parcel_result(e, 49, form, reply, position) == 4);
+      if (mode == 0 && turn == 1) {
+        C(e, void, 61, reply, recycle);
+        reply = parcel_result(e, 114, form, type, obtain);
+      }
+    }
+  }
+  if (mode == 8)
+    parcel_write(e, form, reply, write, 1, 123);
+  if (mode == 9) {
+    CHECK(!close(client) && open("/dev/binder", 2) == client);
+    binder_transact(e, form, proxy, transact, data, reply, 0);
+  }
+  if (mode == 10 || mode == 14) {
+    if (mode == 10)
+      CHECK(!munmap(client_map, 4096));
+    else
+      CHECK(!mprotect(client_map, 4096, 0));
+    parcel_write(e, form, reply, seek, 1, 0);
+    parcel_result(e, 49, form, reply, read);
+  }
+  if (mode == 2) {
+    /* errorCheck short-circuits without a fourth transaction. */
+    CHECK(!binder_transact(e, form, proxy, transact, reply, data, 0));
+    CHECK(!C(e, int, 228));
+  }
+  if (thread) {
+    void *result = (void *)99;
+    CHECK(!pthread_join(thread, &result) && !result);
+  }
+  CHECK(!C(e, int, 228));
+  return C(vm, int, 5);
+}

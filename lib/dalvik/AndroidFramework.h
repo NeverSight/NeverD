@@ -41,6 +41,8 @@ public:
   // Library owns URL values and selects the already-validated scheme.
   ExecutionResult openURL(Heap &heap, std::string_view scheme,
                           const AdmitInstruction &admit);
+  ExecutionResult completeBinder(Heap &heap, const ExternalCall &call,
+                                 BinderReply reply);
   AndroidFrameworkState inspect(const Heap &heap, const Program &program) const;
   std::optional<AndroidApplicationSnapshot::ClassLookupFailure::Loader>
   definingLoader(std::string_view type, const Program &program) const;
@@ -54,12 +56,16 @@ private:
   // API 28 Binder's new class state; also exposed by sTracingEnabled.
   bool binder_tracing_enabled = false;
   ExecutionResult parcelStatus(uint64_t receiver) const;
+  ExecutionResult readParcelBuffer(Heap &heap, uint64_t receiver);
   ExecutionResult parcel(Heap &heap, const LibraryMethod &method,
                          uint64_t receiver, std::span<const uint64_t> arguments,
                          const AdmitInstruction &admit);
   struct ParcelState {
     uint32_t position = 0;
     bool recycled = false;
+    int32_t error = 0;
+    std::function<ExecutionResult(std::span<const uint8_t> &)> view;
+    std::function<void()> release;
   };
   std::map<uint32_t, ParcelState> parcels;
   // API 28 owned-Parcel pool, in first-empty/first-occupied slot order.
@@ -79,6 +85,10 @@ private:
   std::map<const Field *, std::optional<uint64_t>> service_fields;
   std::map<uint32_t, uint32_t> binder_identities;
   std::map<uint32_t, std::optional<bool>> binder_warnings;
+  std::map<
+      uint32_t,
+      AndroidApplicationSnapshot::ServiceManager::BinderProxy::NativeBinding>
+      binder_bindings;
   bool service_manager_initialized = false;
   ExecutionResult recordStatistic(Heap &heap, const Program &program,
                                   uint64_t receiver, int32_t event,

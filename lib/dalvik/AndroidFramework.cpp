@@ -1188,8 +1188,14 @@ AndroidFrameworkState AndroidFramework::inspect(const Heap &heap,
             state.entries.push_back({entry.Key, entry.Value});
       }
     }
-    for (const auto &[key, id] : binder_identities)
-      state.binder_proxies.push_back({key, id, binder_warnings.at(id)});
+    for (const auto &[key, id] : binder_identities) {
+      auto &proxy = state.binder_proxies.emplace_back(
+          AndroidServiceManagerState::BinderProxy{key, id,
+                                                  binder_warnings.at(id)});
+      if (auto binding = binder_bindings.find(id);
+          binding != binder_bindings.end())
+        proxy.native_binding = binding->second;
+    }
   }
   if (main_queue && snapshot->initial_main_queue) {
     auto &queue = result.main_message_queue.emplace();

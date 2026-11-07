@@ -216,6 +216,11 @@ struct Runtime::State::Engine {
       engine.suspended = handle;
     }
     uint64_t await_resume() {
+      if (engine.external->kind == ExternalCall::BinderTransaction &&
+          engine.completion.stop == ExecutionStop::Returned)
+        engine.completion = engine.state.framework.completeBinder(
+            *engine.state.heap, *engine.external,
+            std::move(*engine.completion.binder_reply));
       engine.external.reset();
       if (engine.completion.stop != ExecutionStop::Returned)
         throw Halt{std::move(engine.completion)};
@@ -1674,13 +1679,50 @@ ExecutionResult Runtime::resume(uint64_t id, uint64_t owner,
       return {
           ExecutionStop::Invalid, 0, {}, "invalid Java continuation throwable"};
   }
+  const bool binder =
+      it->second->external->kind == ExternalCall::BinderTransaction;
+  if (completion.binder_reply.has_value() !=
+      (binder && completion.stop == ExecutionStop::Returned))
+    return {ExecutionStop::Invalid,
+            0,
+            {},
+            "invalid Binder continuation completion"};
   it->second->completion = std::move(completion);
   return state->advance(id);
 }
 ExecutionResult Runtime::library(const LibraryMethod &method, uint64_t receiver,
                                  std::span<const uint64_t> args,
-                                 const AdmitInstruction &admit,
-                                 bool nonvirtual) {
+                                 const AdmitInstruction &admit, bool nonvirtual,
+                                 uint64_t execution_owner,
+                                 uint64_t stack_bytes) {
+  if (execution_owner)
+    return state->start(
+        [&method, receiver,
+         values = std::vector<uint64_t>(args.begin(), args.end()),
+         nonvirtual](State::Engine &engine) -> ExecutionTask {
+          const auto name = "L" + std::string(method.Class) + ";";
+          if (method.Static &&
+              engine.program.android_framework_initializers.contains(
+                  engine.program.findClass(name)))
+            co_await engine.initialize(name, 0);
+          auto result = executeLibrary(
+              *engine.state.heap, method, receiver, values, engine.admit,
+              nonvirtual, &engine.program, &engine.state.framework);
+          if (result.stop == ExecutionStop::Suspended && result.external) {
+            // Direct JNI has no authenticated Java calling class for
+            // System.loadLibrary. Keep that existing boundary unchanged.
+            if (result.external->kind == ExternalCall::LoadLibrary)
+              throw Halt{{ExecutionStop::Unsupported,
+                          0,
+                          {},
+                          "Java library loading requires a DEX caller"}};
+            co_return co_await engine.request(std::move(*result.external));
+          }
+          if (result.stop != ExecutionStop::Returned)
+            throw Halt{std::move(result)};
+          co_return result.value;
+        },
+        admit, stack_bytes, execution_owner);
   const auto owner = "L" + std::string(method.Class) + ";";
   if (method.Static && state->program.android_framework_initializers.contains(
                            state->program.findClass(owner))) {

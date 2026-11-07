@@ -179,6 +179,13 @@ llvm::Expected<bool> GuestThreads::schedule(Bionic &LibC) {
       return false;
     if (std::holds_alternative<GuestThreadWait>(**Resumed))
       continue;
+    if (auto *Callback = std::get_if<GuestCallback>(&**Resumed)) {
+      const auto &Pending = *current().Waiting;
+      if (auto E = pushCallback(*Callback, *Pending.Request, Pending.Event))
+        return std::move(E);
+      current().Waiting.reset();
+      return true;
+    }
     if (auto E = completeWait(std::get<uint64_t>(**Resumed)))
       return std::move(E);
     return true;

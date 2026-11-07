@@ -262,7 +262,8 @@ find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
   set(_dex_outputs "${_android_fixture_dir}/registration.dex"
     "${_android_fixture_dir}/native-calls.dex"
-    "${_android_fixture_dir}/java-resume.dex")
+    "${_android_fixture_dir}/java-resume.dex"
+    "${_android_fixture_dir}/java-binder.dex")
   foreach(_case 17-0 2048-0 2048-1 2049-1 4096-0 4097-0)
     list(APPEND _dex_outputs "${_android_fixture_dir}/classes-${_case}.dex")
   endforeach()

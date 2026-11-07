@@ -281,5 +281,216 @@ TEST(AndroidBinderTest,
   expectStop(runtime.execute(*body, args, Admit, 65536),
              "native object is not supplied");
 }
+
+struct BoundRuntime {
+  Program program{{}, std::map<std::string, std::string>{}};
+  std::shared_ptr<Heap> heap = std::make_shared<Heap>();
+  Runtime runtime;
+  uint64_t proxy = 0, data = 0, reply = 0;
+  static AndroidApplicationSnapshot application() {
+    auto app = input(false);
+    app.service_manager->binder_proxies[0].native_binding =
+        AndroidApplicationSnapshot::ServiceManager::BinderProxy::NativeBinding{
+            3, 0, true};
+    return app;
+  }
+  BoundRuntime() : runtime(program, heap, application(), services()) {
+    proxy = call("Landroid/os/ServiceManager;", "getService",
+                 "(Ljava/lang/String;)Landroid/os/IBinder;", 0,
+                 {heap->literal("alpha")->Identity}, true)
+                .value;
+    data = call(Parcel, "obtain", "()Landroid/os/Parcel;", 0, {}, true).value;
+    reply = call(Parcel, "obtain", "()Landroid/os/Parcel;", 0, {}, true).value;
+    EXPECT_NE(proxy, 0u);
+    EXPECT_NE(data, 0u);
+    EXPECT_NE(reply, 0u);
+  }
+  ExecutionResult call(const char *owner, const char *name,
+                       const char *signature, uint64_t receiver,
+                       std::initializer_list<uint64_t> values = {},
+                       bool is_static = false) {
+    auto [params, result] = prototype(signature);
+    const auto *method =
+        libraryMethod({owner, name, params, result}, is_static);
+    return runtime.library(*method, receiver, values, Admit, false, 11, 65536);
+  }
+  ExecutionResult transact(uint64_t source = 0,
+                           uint64_t destination = UINT64_MAX) {
+    return call(Proxy, "transact", Transaction, proxy,
+                {19, source ? source : data,
+                 destination == UINT64_MAX ? reply : destination, 0});
+  }
+  ExecutionResult complete(const ExecutionResult &request, BinderReply reply) {
+    ExecutionResult result;
+    result.binder_reply = std::move(reply);
+    return runtime.resume(request.continuation, 11, std::move(result));
+  }
+};
+
+TEST(AndroidBinderTest,
+     NativeBindingAuthenticatesResumeAndRetainsReplyStorage) {
+  BoundRuntime s;
+  auto request = s.transact();
+  ASSERT_EQ(request.stop, ExecutionStop::Suspended) << request.diagnostic;
+  ASSERT_TRUE(request.external);
+  EXPECT_EQ(request.external->kind, ExternalCall::BinderTransaction);
+  ASSERT_TRUE(request.external->binder);
+  EXPECT_EQ(*request.external->binder,
+            (BinderTransactionRequest{s.proxy, s.data, s.reply, 19, 0, 3, 0}));
+  EXPECT_EQ(s.runtime.resume(request.continuation, 12, {}).stop,
+            ExecutionStop::Invalid);
+  EXPECT_EQ(s.runtime.resume(request.continuation, 11, {}).stop,
+            ExecutionStop::Invalid);
+  unsigned releases = 0;
+  std::vector<uint8_t> arena{0x78, 0x56, 0x34, 0x12};
+  BinderReply native;
+  native.bytes = arena;
+  native.view = [&](std::span<const uint8_t> &view) {
+    view = arena;
+    return ExecutionResult{};
+  };
+  native.release = [&] { ++releases; };
+  auto result = s.complete(request, std::move(native));
+  ASSERT_EQ(result.stop, ExecutionStop::Returned) << result.diagnostic;
+  EXPECT_EQ(result.value, 1u);
+  EXPECT_EQ(releases, 0u);
+  EXPECT_EQ(s.call(Parcel, "dataPosition", "()I", s.reply).value, 0u);
+  // Reads observe the shared native buffer, not the bridge's old copy.
+  arena[0] = 0xab;
+  EXPECT_EQ(s.call(Parcel, "readInt", "()I", s.reply).value, 0x123456abu);
+  EXPECT_EQ(s.call(Parcel, "recycle", "()V", s.reply).stop,
+            ExecutionStop::Returned);
+  EXPECT_EQ(releases, 1u);
+  EXPECT_EQ(s.runtime.resume(request.continuation, 11, {}).stop,
+            ExecutionStop::Invalid);
+}
+
+TEST(AndroidBinderTest,
+     StatusReplyPreservesBytesCursorAndPropagatesParcelError) {
+  BoundRuntime s;
+  s.call(Parcel, "writeInt", "(I)V", s.reply, {0x11223344});
+  auto request = s.transact();
+  auto result = s.complete(request, {-74});
+  ASSERT_EQ(result.stop, ExecutionStop::Returned);
+  EXPECT_EQ(result.value, 0u);
+  EXPECT_EQ(s.call(Parcel, "dataPosition", "()I", s.reply).value, 4u);
+  EXPECT_EQ(s.heap->get(s.reply)->Bytes,
+            (std::vector<uint8_t>{0x44, 0x33, 0x22, 0x11}));
+  result = s.transact(s.reply, s.data);
+  EXPECT_EQ(result.stop, ExecutionStop::Returned);
+  EXPECT_EQ(result.value, 0u);
+  EXPECT_FALSE(result.external);
+}
+
+TEST(AndroidBinderTest,
+     DeadReplyCachesBpBinderLivenessAndCheckedExceptionHierarchy) {
+  BoundRuntime s;
+  auto request = s.transact();
+  auto result = s.complete(request, {-32});
+  ASSERT_EQ(result.stop, ExecutionStop::Thrown) << result.diagnostic;
+  EXPECT_EQ(result.exception, "android/os/DeadObjectException");
+  EXPECT_TRUE(s.program.assignable("Landroid/os/DeadObjectException;",
+                                   "Landroid/os/RemoteException;"));
+  EXPECT_FALSE(s.program.assignable("Landroid/os/DeadObjectException;",
+                                    "Ljava/lang/RuntimeException;"));
+  auto next = s.transact();
+  EXPECT_EQ(next.stop, ExecutionStop::Thrown);
+  EXPECT_FALSE(next.external);
+  auto snapshot = s.runtime.snapshot();
+  ASSERT_TRUE(snapshot.framework.service_manager);
+  ASSERT_TRUE(
+      snapshot.framework.service_manager->binder_proxies[0].native_binding);
+  EXPECT_FALSE(snapshot.framework.service_manager->binder_proxies[0]
+                   .native_binding->alive);
+}
+
+TEST(AndroidBinderTest, NullReplyReleasesTemporaryAndRetiredArenaStopsReads) {
+  BoundRuntime s;
+  unsigned released = 0;
+  BinderReply reply;
+  reply.bytes = std::vector<uint8_t>{1, 2, 3, 4};
+  reply.release = [&] { ++released; };
+  ASSERT_EQ(s.complete(s.transact(0, 0), std::move(reply)).stop,
+            ExecutionStop::Returned);
+  EXPECT_EQ(released, 1u);
+  reply.bytes = std::vector<uint8_t>{1, 2, 3, 4};
+  reply.view = [](std::span<const uint8_t> &) {
+    return ExecutionResult{
+        ExecutionStop::Unsupported,
+        0,
+        {},
+        "Android Parcel Binder buffer mapping is no longer live"};
+  };
+  reply.release = [&] { ++released; };
+  ASSERT_EQ(s.complete(s.transact(), std::move(reply)).stop,
+            ExecutionStop::Returned);
+  expectStop(s.call(Parcel, "readInt", "()I", s.reply),
+             "mapping is no longer live");
+  EXPECT_EQ(released, 1u);
+}
+TEST(AndroidBinderTest, DexCallerCatchesNativeReplyAndCachedDeadObject) {
+  Class caller;
+  caller.name = "Ltest/BoundTransaction;";
+  caller.superclass = "Ljava/lang/Object;";
+  Method method;
+  method.reference = {caller.name,
+                      "run",
+                      {"Landroid/os/IBinder;", "I", Parcel, Parcel, "I"},
+                      "I"};
+  method.access = {"public", "static"};
+  method.registers = 5;
+  Instruction invoke;
+  invoke.pc = 0;
+  invoke.opcode = "invoke-interface";
+  invoke.registers = {0, 1, 2, 3, 4};
+  invoke.reference = MethodRef{
+      "Landroid/os/IBinder;", "transact", {"I", Parcel, Parcel, "I"}, "Z"};
+  Instruction constant;
+  constant.pc = 3;
+  constant.opcode = "const/4";
+  constant.registers = {0};
+  constant.literal = 0;
+  Instruction ret;
+  ret.pc = 4;
+  ret.opcode = "return";
+  ret.registers = {0};
+  Instruction caught;
+  caught.pc = 5;
+  caught.opcode = "move-exception";
+  caught.registers = {0};
+  method.instructions = {invoke, constant, ret, caught};
+  constant.pc = 6;
+  constant.literal = 7;
+  ret.pc = 7;
+  method.instructions.push_back(constant);
+  method.instructions.push_back(ret);
+  method.tries = {{0, 3, {{"Landroid/os/RemoteException;", 5}}}};
+  caller.methods.push_back(method);
+  Program program({caller}, std::map<std::string, std::string>{});
+  auto heap = std::make_shared<Heap>();
+  Runtime runtime(program, heap, BoundRuntime::application(), services());
+  const auto *lookup = libraryMethod({"Landroid/os/ServiceManager;",
+                                      "getService",
+                                      {"Ljava/lang/String;"},
+                                      "Landroid/os/IBinder;"},
+                                     true);
+  std::array<uint64_t, 1> name{heap->literal("alpha")->Identity};
+  auto proxy = runtime.library(*lookup, 0, name, Admit).value;
+  const auto *obtain = libraryMethod({Parcel, "obtain", {}, Parcel}, true);
+  auto data = runtime.library(*obtain, 0, {}, Admit).value;
+  std::array<uint64_t, 5> args{proxy, 23, data, 0, 0};
+  const auto *body = program.findStatic(method.reference);
+  auto request = runtime.execute(*body, args, Admit, 65536, 11);
+  ASSERT_EQ(request.stop, ExecutionStop::Suspended) << request.diagnostic;
+  ExecutionResult completion;
+  completion.binder_reply = BinderReply{-32};
+  auto result = runtime.resume(request.continuation, 11, std::move(completion));
+  ASSERT_EQ(result.stop, ExecutionStop::Returned) << result.diagnostic;
+  EXPECT_EQ(result.value, 7u);
+  result = runtime.execute(*body, args, Admit, 65536, 11);
+  EXPECT_EQ(result.stop, ExecutionStop::Returned) << result.diagnostic;
+  EXPECT_EQ(result.value, 7u);
+}
+
 } // namespace
 } // namespace neverd::mobile::dalvik
