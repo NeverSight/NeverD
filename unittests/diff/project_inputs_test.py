@@ -229,7 +229,7 @@ def cli_checks(executable, root, a, b):
     base = [executable, "diff", "--structural", "-a", str(a), "-b", str(b)]
     saved = root / "review.nddiff"
     report = json.loads(run(base + ["--json", "--save", str(saved)]).stdout)
-    assert report["primary"]["path"] == str(a)
+    assert report["primary"]["path"] == str(a), (report["primary"]["path"], str(a))
     assert report["primary"]["project"]["input_name"] == "旧版本.bin"
     assert report["primary"]["format"] == "raw"
     reopened = json.loads(run(base + ["--json", "--reopen", str(saved)]).stdout)

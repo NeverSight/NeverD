@@ -326,11 +326,16 @@ protected:
         const auto Program =
             tmpFile(std::string("continuation") + Optimization +
                     neverd::test::executableSuffix());
-        const auto Built =
-            exec(NEVERD_TEST_CLANG,
-                 {"-std=c11", Optimization, "-Werror=uninitialized",
-                  "-Werror=return-type", "-fsanitize=undefined,address",
-                  File.string(), "-o", Program.string()});
+        std::vector<std::string> Arguments{"-std=c11",
+                                           Optimization,
+                                           "-Werror=uninitialized",
+                                           "-Werror=return-type",
+                                           "-fsanitize=undefined,address",
+                                           File.string(),
+                                           "-o",
+                                           Program.string()};
+        neverd::test::addHostCompilerRuntime(Arguments);
+        const auto Built = exec(NEVERD_TEST_CLANG, Arguments);
         ASSERT_TRUE(Built.ok()) << Built.err << '\n' << Source;
         const auto Ran = exec(Program.string(), {});
         ASSERT_TRUE(Ran.ok()) << Ran.err << " exit " << Ran.exitCode << '\n'

@@ -13,6 +13,7 @@
 #include "BlobStore.h"
 #include "ExportDirectory.h"
 #include "Internal.h"
+#include "PathPolicy.h"
 #include "gtest/gtest.h"
 #include "platform/WindowsFile.h"
 #include "rewrite/Export.h"
@@ -152,6 +153,8 @@ TEST_F(WebWindowsHost, EnumeratedIdentityDetectsReplacementBeforeOpen) {
   EXPECT_FALSE(Entries[0].matches(win::inspect(New.get())));
 }
 TEST_F(WebWindowsHost, UTF8NamesAndRelocationPreserveSnapshotIdentity) {
+  if (!archivePathsAvailable())
+    GTEST_SKIP() << "non-ASCII member names need the optional Unicode owner";
   const auto Name = win::wide("\xe6\xba\x90\xf0\x9f\x98\x80.js");
   write(Root / "one" / Name, "const x=1;");
   write(Root / "two" / Name, "const x=1;");

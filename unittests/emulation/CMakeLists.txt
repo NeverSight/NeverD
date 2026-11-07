@@ -238,7 +238,9 @@ add_neverd_unittest(NeverDLinuxProcessTests
   LinuxClockTests.cpp
   LinuxOutputNativeTests.cpp
   ProcessReportTests.cpp
-  TIMEOUT 20
+  # A sustained command stream spends 17-20 s on a hosted Windows hypervisor,
+  # and its own guest limit allows 30 s per optimization level.
+  TIMEOUT 70
   LINK_COMPONENTS EmulationProcess)
 target_include_directories(NeverDLinuxProcessTests PRIVATE ${CMAKE_SOURCE_DIR}/lib/emulation)
 if(TARGET neverd_shared AND TARGET neverd)

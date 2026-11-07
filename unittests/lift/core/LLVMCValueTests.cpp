@@ -150,11 +150,17 @@ __attribute__((noreturn, force_align_arg_pointer)) void _start(void) {
   if (CheckUndefinedBehavior) {
     Arguments.push_back("-fsanitize=undefined");
     Arguments.push_back("-fsanitize-trap=all");
+    // Decompiled C is built as its prelude says: for a target with unaligned
+    // access. Nothing makes a byte array in a test's frame eight-aligned.
+    Arguments.push_back("-fno-sanitize=alignment");
   }
   std::string Error;
   int Result = llvm::sys::ExecuteAndWait(Compiler, Arguments, std::nullopt,
                                          Redirects, 30, 0, &Error);
   auto Errors = llvm::MemoryBuffer::getFile(ErrorPath);
+  if (Result != 0 && Errors &&
+      neverd::test::hostRuntimeRefusesLink((*Errors)->getBuffer().str()))
+    GTEST_SKIP() << "this host's C runtime does not link this source";
   ASSERT_EQ(Result, 0) << Error << (Errors ? (*Errors)->getBuffer().str() : "")
                        << '\n'
                        << Source;

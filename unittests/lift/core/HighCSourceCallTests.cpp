@@ -449,7 +449,11 @@ TEST(HighCSourceCalls, PortableDeclarationsOwnObjectPointerConversions) {
                "-Werror=incompatible-pointer-types"});
   for (const auto Optimization : {"-O0", "-O2"})
     compileAndRun(Source + R"(
+#ifdef _WIN32
+int read_mask(unsigned long *mask) { return *mask == 0x1234; }
+#else
 int read_mask(uint32_t *mask) { return *mask == 0x1234; }
+#endif
 int main(void) { uint32_t mask = 0x1234; return use_mask(&mask) != 1; }
 )",
                   {Optimization, "-Werror=incompatible-pointer-types"});

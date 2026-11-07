@@ -50,14 +50,40 @@ inline bool namesX86Instructions(std::string_view C) {
   return false;
 }
 
-/// Whether C needs headers that only a POSIX host has.
+/// Whether C needs headers that only a POSIX host has. MSVC's <search.h> has
+/// no tree walks, which is what C names it for.
 inline bool namesPosixHeaders(std::string_view C) {
   for (std::string_view Header :
        {"<sys/mman.h>", "<sys/socket.h>", "<pthread.h>", "<unistd.h>",
-        "<arpa/inet.h>", "<netinet/in.h>", "<semaphore.h>", "<pwd.h>"})
+        "<arpa/inet.h>", "<netinet/in.h>", "<semaphore.h>", "<pwd.h>",
+        "<search.h>"})
     if (C.find(Header) != std::string_view::npos)
       return true;
   return false;
+}
+
+/// Whether a failed link is this host's C runtime refusing the source: C
+/// decompiled from an image defines the routines it carried, which the static
+/// CRT also defines.
+inline bool hostRuntimeRefusesLink(std::string_view Errors) {
+#ifdef _WIN32
+  for (std::string_view Mark : {"LNK2005", "duplicate symbol"})
+    if (Errors.find(Mark) != std::string_view::npos)
+      return true;
+#else
+  (void)Errors;
+#endif
+  return false;
+}
+
+/// Names the compiler's own runtime, which holds wide division, in a host
+/// program's link. An MSVC link does not name it by itself.
+template <typename Arguments> void addHostCompilerRuntime(Arguments &Args) {
+#ifdef _WIN32
+  Args.push_back("--rtlib=compiler-rt");
+#else
+  (void)Args;
+#endif
 }
 
 /// The reason this host has no such headers for C, if so.

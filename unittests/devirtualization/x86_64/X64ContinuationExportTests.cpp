@@ -194,10 +194,16 @@ protected:
       SCOPED_TRACE(Level);
       const auto Exe = tmpFile(std::string("run") + Level +
                                neverd::test::executableSuffix());
-      auto Built = exec(NEVERD_TEST_CLANG,
-                        {"-std=c11", Level, "-fsanitize=address,undefined",
-                         "-Werror=uninitialized", "-Werror=return-type",
-                         File.string(), "-o", Exe.string()});
+      std::vector<std::string> Arguments{"-std=c11",
+                                         Level,
+                                         "-fsanitize=address,undefined",
+                                         "-Werror=uninitialized",
+                                         "-Werror=return-type",
+                                         File.string(),
+                                         "-o",
+                                         Exe.string()};
+      neverd::test::addHostCompilerRuntime(Arguments);
+      auto Built = exec(NEVERD_TEST_CLANG, Arguments);
       ASSERT_TRUE(Built.ok()) << Built.err;
       auto Ran = exec(Exe.string(), {});
       ASSERT_TRUE(Ran.ok()) << Ran.err;

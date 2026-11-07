@@ -77,8 +77,14 @@ protected:
                  const std::vector<std::string> &Args) const {
     std::string Cmd =
         neverd::test::shellQuote(neverd::test::builtProgramPath(Program));
-    for (const auto &A : Args)
+    for (const auto &A : Args) {
+#ifdef _WIN32
+      // The C runtime holds the math routines; there is no library to name.
+      if (A == "-lm")
+        continue;
+#endif
       Cmd += " " + neverd::test::shellQuote(A);
+    }
     auto OutFile = tmpFile("_stdout.txt");
     auto ErrFile = tmpFile("_stderr.txt");
     Cmd += neverd::test::redirectOutput(OutFile.string(), ErrFile.string());

@@ -49281,6 +49281,10 @@ TEST(HighCPointerAddresses, GnuProgramObjectsAreTheHeaders) {
 }
 
 TEST(HighCPointerAddresses, HeaderObjectsReadAsBytesStayTheHeaders) {
+#ifdef _WIN32
+  GTEST_SKIP()
+      << "an ELF program's stderr is an object, MSVC's a function call";
+#endif
   // paper reads stderr through an address its code computes, which makes
   // the object bytes the unit reaches by offset: they are the header's
   // object's, reached through its address, not an array of the unit's own

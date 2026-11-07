@@ -64,19 +64,15 @@ inline void compileSource(const std::string &Source,
   Arguments.append({SourcePath, "-o", BinaryPath});
   if (!Execute)
     Arguments.push_back("-fsyntax-only");
+  else
+    neverd::test::addHostCompilerRuntime(Arguments);
   std::string Error;
   const int Compiled = llvm::sys::ExecuteAndWait(
       Compiler, Arguments, std::nullopt, Redirects, 30, 0, &Error);
   auto Errors = llvm::MemoryBuffer::getFile(ErrorPath);
-#ifdef _WIN32
-  // C decompiled from an image defines the routines it carried, which the
-  // static CRT also defines, and wide division needs a compiler runtime that
-  // an MSVC link does not name.
   if (Compiled != 0 && Errors &&
-      ((*Errors)->getBuffer().contains("LNK2005") ||
-       (*Errors)->getBuffer().contains("LNK2019")))
+      neverd::test::hostRuntimeRefusesLink((*Errors)->getBuffer().str()))
     GTEST_SKIP() << "this host's C runtime does not link this source";
-#endif
   ASSERT_EQ(Compiled, 0) << Error
                          << (Errors ? (*Errors)->getBuffer().str() : "") << "\n"
                          << Source;

@@ -284,7 +284,9 @@ int main(void) {
       for (unsigned sticky = 0; sticky < 2; ++sticky)
         for (unsigned a = 0; a < sizeof(values)/sizeof(values[0]); ++a)
           for (unsigned b = 0; b < sizeof(values)/sizeof(values[0]); ++b) {
-            unsigned char expected[80], actual[80];
+            // Packed legacy-SSE memory forms fault on an unaligned operand, and
+            // Windows does not align a byte array as System V does.
+            _Alignas(32) unsigned char expected[80], actual[80];
             for (unsigned i = 0; i < sizeof(expected); ++i)
               expected[i] = (unsigned char)(0x59u + i * 37u);
             memcpy(expected, &values[a], sizeof(values[0]));
@@ -332,7 +334,7 @@ int main(void) {
 #include <unistd.h>
 #endif
 extern void native_probe(uintptr_t);
-static unsigned char actual[80];
+_Alignas(32) static unsigned char actual[80];
 static int numerical_output_untouched(void) {
   for (unsigned i = 48; i < 64; ++i)
     if (actual[i] != (unsigned char)(0x59u + i * 37u)) return 0;

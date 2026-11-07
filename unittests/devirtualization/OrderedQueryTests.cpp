@@ -78,10 +78,21 @@ TEST(OrderedQuery, IndependentExhaustiveArithmeticOracle) {
 
 TEST(OrderedQuery, CompleteUnsatRetriesExactlyOnce) {
   OrderedProblem P(5, 0, true);
-  ASSERT_EQ(checkSat(P.Ctx, P.Full, nullptr, P.Options), SatResult::Unknown);
-  ASSERT_EQ(checkSat(P.Ctx, P.First, nullptr, P.Options), SatResult::Sat);
-  EXPECT_EQ(P.check(P.First), SatResult::Unsat);
-  EXPECT_EQ(P.RetryCharges, 1u);
+  // How far a search gets on a budget depends on the order a compiler numbers
+  // the solver's variables in. Find one the whole query spends and its retry
+  // does not, from the budget this test names on Clang.
+  auto &Budget = P.Options.Sat.MaxPropagations;
+  const auto Largest = Budget * 16;
+  SatResult Answer = SatResult::Unknown;
+  for (; Budget <= Largest && Answer == SatResult::Unknown; Budget += 64) {
+    if (checkSat(P.Ctx, P.Full, nullptr, P.Options) != SatResult::Unknown)
+      break;
+    ASSERT_EQ(checkSat(P.Ctx, P.First, nullptr, P.Options), SatResult::Sat);
+    P.RetryCharges = 0;
+    Answer = P.check(P.First);
+    EXPECT_EQ(P.RetryCharges, 1u);
+  }
+  EXPECT_EQ(Answer, SatResult::Unsat);
 }
 
 TEST(OrderedQuery, CompleteSatRetriesExactlyOnce) {

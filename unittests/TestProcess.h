@@ -107,11 +107,19 @@ inline const char *executableSuffix() {
 /// Windows, where the shell then finds no program at the name the test gave.
 inline std::string builtProgramPath(std::string Path) {
 #ifdef _WIN32
+  // MSVC's linker adds `.exe` to `-o name`; lld-link writes exactly `name`,
+  // which cmd.exe will not run. Copy over any earlier build of the same name.
   std::error_code Error;
   const std::filesystem::path Program(Path);
-  if (Program.has_parent_path() && !Program.has_extension() &&
-      std::filesystem::exists(Path + ".exe", Error))
-    Path += ".exe";
+  if (Program.has_parent_path() && !Program.has_extension()) {
+    const std::string Executable = Path + ".exe";
+    if (std::filesystem::is_regular_file(Program, Error))
+      std::filesystem::copy_file(
+          Program, Executable,
+          std::filesystem::copy_options::overwrite_existing, Error);
+    if (std::filesystem::exists(Executable, Error))
+      Path = Executable;
+  }
 #endif
   return Path;
 }

@@ -158,12 +158,13 @@ void compileSourceAndRun(const std::string &Source, size_t MaxSourceBytes,
   for (const char *Opt : {"-O0", "-O2"}) {
     SCOPED_TRACE(Opt);
     std::string Error;
-    const llvm::SmallVector<llvm::StringRef, 12> Args{
+    llvm::SmallVector<llvm::StringRef, 12> Args{
         Compiler, "-std=c11", Opt, "-fsanitize=undefined",
         // Decompiled C is built as its prelude says: for a target with
         // unaligned access, without strict aliasing.
         "-fno-sanitize=alignment", "-fno-strict-aliasing",
         "-fno-sanitize-recover=all", SourcePath, "-o", BinaryPath};
+    neverd::test::addHostCompilerRuntime(Args);
     // A large graph with its checks takes macOS's slower hosted runner over
     // 30 s to build. The bound only has to catch a hang.
     int Status = llvm::sys::ExecuteAndWait(Compiler, Args, std::nullopt,
@@ -174,7 +175,12 @@ void compileSourceAndRun(const std::string &Source, size_t MaxSourceBytes,
     Status = llvm::sys::ExecuteAndWait(BinaryPath, {BinaryPath}, std::nullopt,
                                        Redirects, 10, 0, &Error);
     if (ExpectTrap) {
-      ASSERT_EQ(Status, -2) << Error << '\n' << Source;
+#ifdef _WIN32
+      constexpr int TrapStatus = -1073741795; // STATUS_ILLEGAL_INSTRUCTION
+#else
+      constexpr int TrapStatus = -2; // How LLVM reports any signal.
+#endif
+      ASSERT_EQ(Status, TrapStatus) << Error << '\n' << Source;
       ASSERT_EQ(Error.find("timed out"), std::string::npos) << Error;
     } else {
       ASSERT_EQ(Status, 0) << Error << '\n' << Source;

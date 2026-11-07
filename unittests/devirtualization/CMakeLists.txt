@@ -242,6 +242,11 @@ add_neverd_unittest(NeverDInterpreterMachineStateTests
   MachineStringSourceTests.cpp
   LINK_COMPONENTS Pipeline BackendC Support
 )
+if(MSVC)
+  # Large exports recurse as deep as the product does on its 128 MiB main stack
+  # (kDecompilerMainStackSize), and MSVC's frames are larger than Clang's.
+  target_link_options(NeverDInterpreterMachineStateTests PRIVATE /STACK:134217728)
+endif()
 
 add_subdirectory(x86_64)
 

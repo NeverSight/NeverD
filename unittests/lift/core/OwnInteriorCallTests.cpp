@@ -177,8 +177,14 @@ void compileAndRun(const std::string &Source, bool Loops = false) {
     Errors = llvm::MemoryBuffer::getFile(ErrorPath);
     if (Loops) {
       ASSERT_EQ(Result, -2) << Error << '\n' << Source;
-      ASSERT_NE(Error.find("timed out"), std::string::npos) << Error << '\n'
-                                                            << Source;
+#ifdef _WIN32
+      // LLVM closes a timed-out process there, then fails to read its status.
+      const char *const TimedOut = "Failed getting status";
+#else
+      const char *const TimedOut = "timed out";
+#endif
+      ASSERT_NE(Error.find(TimedOut), std::string::npos) << Error << '\n'
+                                                         << Source;
       continue;
     }
     ASSERT_EQ(Result, 0) << Error

@@ -2780,7 +2780,11 @@ TEST_F(NativePointerRelocationBoundary,
       const auto Syntax =
           exec(NEVERD_TEST_CLANG,
                {"--target=x86_64-w64-mingw32", "-fsyntax-only",
-                HeaderUCRT ? "-D_UCRT" : "-U_UCRT", Source.string()});
+                // The version selects the headers whichever one a toolchain
+                // defaults to, which -U_UCRT does not on a UCRT toolchain.
+                HeaderUCRT ? "-D__MSVCRT_VERSION__=0xE00"
+                           : "-D__MSVCRT_VERSION__=0x600",
+                Source.string()});
       if (HeaderUCRT == UCRT && Variant != 2)
         EXPECT_TRUE(Syntax.ok()) << Syntax.err;
       else {

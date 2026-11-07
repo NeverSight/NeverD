@@ -2867,6 +2867,9 @@ int main(void) {
 }
 
 TEST(Win64CallContract, DebugNamedOmittedRuntimeKeepsItsFixedArity) {
+#ifdef _WIN32
+  GTEST_SKIP() << "the test's own runtime routine contradicts vcruntime.h's";
+#endif
   constexpr va_t Runtime = Text + 0x80;
   class PublicNames : public NullDebugContext {
   public:
