@@ -21462,3 +21462,5 @@ recorded baseline; this change adds none and does not weaken the audit.
 `SymState` memory-view regressions check whole-word overwrite node counts, independent byte-store equivalence, endian order, partial overwrites, modular relative coordinates and non-allocating materialized reads. Scalar snapshot and restore tests check that memory operations do not fork or replace unrelated scalar state.
 
 `ActivityQueue.StrictPrioritySurvivesPrefixConsumptionAndReinsertion` uses an independent ordered-set oracle through queue copies, activity increases and reinsertion. The assumption-assigned queue regression checks every variable is restored after backtracking, with unchanged model and conflict behavior.
+
+`X86CMov` regressions cover ordinary x86/x64 CMOV through the shared SELECT representation: all 16 conditions, all flag inputs, partial and zero-extending destination writes, unchanged source/flags, and unconditional memory reads that can fault before destination writes.
