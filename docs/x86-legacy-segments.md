@@ -1254,6 +1254,15 @@ The [stack qualification](evidence/x86-legacy-stack-2026-11-07.json) retains
 the original-CPU experiments and the final test/build receipts. The initial
 CR2, discarded-slot breakpoint and frame-borrow mismatches are kept as
 diagnostics, separate from passing qualification.
+
+The final native-SDK/r6 matrix passes all 976 tests without skips across the
+qualified P/E cores. It includes 14,144 original stack/debug comparisons,
+12 original-versus-rewritten program pairs and 48 new generated-source cases.
+A separately retained, earlier executable passes 592 of 593 full paging tests;
+its one LA57 test is unavailable on this host. The evidence records that
+executable separately from the final code and preserves the actual commit,
+compiler, binary and exported-artifact hashes for each qualification lane.
+
 Real/VM86, compatibility execution, task switching, other unbound i386 banks,
 software SMM/SGX transitions and general external-event production remain
 outside this boundary. Global completion is still open; LLVM release, SDK pin
