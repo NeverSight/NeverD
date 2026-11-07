@@ -177,6 +177,17 @@ std::optional<llvm::APInt> constantBitSlice(const SymContext &Ctx, SymRef A,
       return constantBitSlice(Ctx, Inner, Low, Width, Remaining, Depth + 1);
     return std::nullopt;
   }
+  if (Op == SymOp::Ite) {
+    // A window common to both arms is independent of the condition. Do not
+    // spend the bounded query on a predicate whose value cannot affect it.
+    auto Taken = constantBitSlice(Ctx, Ctx.operand(A, 1), Low, Width, Remaining,
+                                  Depth + 1);
+    if (!Taken)
+      return std::nullopt;
+    auto Other = constantBitSlice(Ctx, Ctx.operand(A, 2), Low, Width, Remaining,
+                                  Depth + 1);
+    return Other && *Other == *Taken ? Taken : std::nullopt;
+  }
   if (Op == SymOp::Not) {
     auto Value = constantBitSlice(Ctx, Ctx.operand(A, 0), Low, Width, Remaining,
                                   Depth + 1);
@@ -293,6 +304,9 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
     if (SymRef Predicate = detail::recoverSignComparison(*this, A))
       return Predicate;
   // extract(extract(x, l1), l2) == extract(x, l1 + l2)
+  if (op(A) == SymOp::Ite)
+    if (auto Constant = constantWindow(A, Low, Width))
+      return mkConst(*Constant);
   if (op(A) == SymOp::Extract)
     return mkExtract(operand(A, 0), static_cast<uint32_t>(node(A).Aux) + Low,
                      Width);
