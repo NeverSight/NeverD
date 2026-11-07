@@ -7028,8 +7028,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         if (!consumeEvidence())
           return false;
         const LowOp &Op = Ops[I];
-        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-            Op.Opcode == NdOp::INTRINSIC)
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
           return false;
         const NdVar &Out = Op.Output;
         if (Out.Space != V.Space || Out.Size == 0 ||
