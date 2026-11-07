@@ -15,6 +15,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/ir/high/HighIRPrint.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
@@ -410,12 +411,13 @@ TEST(ImmutableNativeCalls, GeneratedSourceMatchesOriginalARM64CallsAtO0AndO2) {
     auto Bound =
         bindObjCSourceReferences(*F.high(), F.Image, nullptr, &Functions);
     ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation << [&] {
-      CEmitterOptions Options;
-      Options.TheArch = Arch::AArch64;
-      Options.Format = F.Image.Format;
       std::string Source;
       llvm::raw_string_ostream OS(Source);
-      (void)HighCEmitter().emit({*F.high()}, OS, Options);
+      for (const auto &S : F.high()->Body)
+        printHighStatementRows(
+            S, 0, [&](llvm::StringRef Row, const HighStmt *) { OS << Row; });
+      for (const auto &D : Bound.Diagnostics.Items)
+        OS << D.StatementAddress << ' ' << D.RelatedAddress << '\n';
       return Source;
     }();
     elimUnreadPrivateFrameStores(Bound.Function, F.Image.Arch);
