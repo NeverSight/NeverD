@@ -609,6 +609,10 @@ private:
   void reclaimOrphanedContexts(size_t Entry);
   std::optional<RecursionRetry>
   unblockedRecursiveCall(FunctionContext &Context) const;
+  bool hasCompletedObjectResult(const FunctionContext &Context) const;
+  llvm::Expected<std::optional<CallXCompletedResultBinding>>
+  completedObjectBinding(const FunctionContext &Original,
+                         const FunctionContext &Replacement);
   llvm::Expected<bool> generalizeRedundantContext(
       size_t Entry, const ContextState &Input,
       std::optional<RecursionRetry> Retry = std::nullopt);
@@ -999,6 +1003,111 @@ ContextFlow::unblockedRecursiveCall(FunctionContext &Context) const {
   return std::nullopt;
 }
 
+bool ContextFlow::hasCompletedObjectResult(
+    const FunctionContext &Context) const {
+  if (!Context.Complete || !Context.Return || !Context.Effects.Unknown ||
+      !Context.Return->Scratch.Memory.empty() ||
+      Context.Return->Postconditions.copyCount() ||
+      Context.Return->Postconditions.expressionCount() ||
+      Context.Return->InputExpressions[kReturnRegister])
+    return false;
+  const auto Object = Context.Return->Registers[kReturnRegister].singleton();
+  return Object.ValueKind == RegisterValue::Kind::SymbolicAddress &&
+         CaptureOwners[Object.Value] == Context.ID &&
+         Context.Return->Origins[kReturnRegister] ==
+             Context.Return->Registers[kReturnRegister];
+}
+
+llvm::Expected<std::optional<CallXCompletedResultBinding>>
+ContextFlow::completedObjectBinding(const FunctionContext &Original,
+                                    const FunctionContext &Replacement) {
+  const auto NoBinding = std::optional<CallXCompletedResultBinding>{};
+  if (!hasCompletedObjectResult(Replacement))
+    return NoBinding;
+  // The old calls have both completed. Compare their actual results under a
+  // single changed frame argument, not a guessed dependency of a new input.
+  std::optional<int64_t> Delta;
+  for (unsigned R = 0; R < kRegisterCount; ++R) {
+    if (Original.Input.Registers[R] == Replacement.Input.Registers[R])
+      continue;
+    const auto A = Original.Input.Registers[R].singleton();
+    const auto B = Replacement.Input.Registers[R].singleton();
+    int64_t Offset;
+    if (Delta || R == kFramePointerRegister ||
+        A.ValueKind != RegisterValue::Kind::StackAddress ||
+        B.ValueKind != RegisterValue::Kind::StackAddress ||
+        A.Value != B.Value || llvm::SubOverflow(A.Offset, B.Offset, Offset))
+      return NoBinding;
+    Delta = Offset;
+  }
+  if (!Delta)
+    return NoBinding;
+  const auto A = Original.Return->Registers[kReturnRegister].singleton();
+  const auto B = Replacement.Return->Registers[kReturnRegister].singleton();
+  if (A.Offset != B.Offset)
+    return NoBinding;
+  // Equal bounds alone do not identify a returned value. Require the same
+  // capturing call and source capture as well. Neither this rename
+  // nor a distinct capture ID establishes freshness or non-aliasing.
+  const auto Source = [&](const FunctionContext &Owner, uint64_t Capture) {
+    auto It = CaptureIndex.lower_bound(
+        std::tuple(Owner.ID, size_t{0}, uint64_t{0}, uint64_t{0}, uint64_t{0}));
+    for (; It != CaptureIndex.end() && std::get<0>(It->first) == Owner.ID; ++It)
+      if (It->second == Capture)
+        return It;
+    return CaptureIndex.end();
+  };
+  const auto AS = Source(Original, A.Value);
+  const auto BS = Source(Replacement, B.Value);
+  if (AS == CaptureIndex.end() || BS == CaptureIndex.end() ||
+      std::tie(std::get<1>(AS->first), std::get<2>(AS->first),
+               std::get<3>(AS->first), std::get<4>(AS->first)) !=
+          std::tie(std::get<1>(BS->first), std::get<2>(BS->first),
+                   std::get<3>(BS->first), std::get<4>(BS->first)))
+    return NoBinding;
+  const auto Rename = [&](RegisterValue Value) {
+    if (Value.ValueKind == RegisterValue::Kind::SymbolicAddress &&
+        Value.Value == B.Value)
+      Value.Value = A.Value;
+    return Value;
+  };
+  const auto &AP = Original.Return->Postconditions;
+  const auto &BP = Replacement.Return->Postconditions;
+  // Include the temporary maps used while applying/renaming typed cells.
+  // Applying a postcondition also builds raw byte runs; those are redundant
+  // with the checked typed cells below, but their workspace is still charged.
+  constexpr uint64_t RawCellBytes =
+      sizeof(std::pair<const va_t, std::vector<uint8_t>>) + 4 * sizeof(void *) +
+      sizeof(uint64_t);
+  const uint64_t Bytes =
+      3 * sizeof(ScratchState) +
+      3 * Replacement.Return->Scratch.Values.retainedByteEstimate() +
+      4 * (AP.retainedByteEstimate() + BP.retainedByteEstimate() +
+           (AP.size() + BP.size()) * RawCellBytes);
+  if (auto Error = retain(Bytes))
+    return std::move(Error);
+  const auto Release = llvm::scope_exit([&] { RetainedBytes -= Bytes; });
+  auto Returned = Replacement.Return->Scratch.Values;
+  if (!Returned.translateFrameCoordinates(*Delta))
+    return NoBinding;
+  Returned.transformSymbols(Rename);
+  if (Returned != Original.Return->Scratch.Values)
+    return NoBinding;
+  ScratchState ActualA, ActualB;
+  ActualA.Values.setCoordinates(Coordinates);
+  ActualB.Values.setCoordinates(Coordinates);
+  if (AP.apply(ActualA, Original.Input.Registers, Program) != AP.size() ||
+      BP.apply(ActualB, Replacement.Input.Registers, Program) != BP.size() ||
+      ActualA.Values.size() != AP.size() ||
+      ActualB.Values.size() != BP.size() ||
+      !ActualB.Values.translateFrameCoordinates(*Delta))
+    return NoBinding;
+  ActualB.Values.transformSymbols(Rename);
+  if (ActualA.Values != ActualB.Values)
+    return NoBinding;
+  return CallXCompletedResultBinding{*Delta, B.Value, A.Value};
+}
+
 llvm::Expected<bool>
 ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
                                         std::optional<RecursionRetry> Retry) {
@@ -1019,8 +1128,19 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   uint16_t NewImageRegisters = 0;
   uint16_t NewCapturedRegisters = 0;
   uint16_t NewFrameRegisters = 0;
+  uint16_t NewScalarRegisters = 0;
   for (unsigned R = 0; R < kRegisterCount; ++R) {
     const auto Value = Input.Registers[R].singleton();
+    // A new scalar selector can use space occupied by equal completed object
+    // results. This does not enable opaque-result eviction or input reuse.
+    if (!Retry && Generic.Sites.empty() && R != kFramePointerRegister &&
+        Value.ValueKind == RegisterValue::Kind::Constant &&
+        !Program.ExecutableImage.findRegion(Value.Value, 1, true) &&
+        llvm::all_of(Variants, [&](const auto *Variant) {
+          const auto Old = Variant->Input.Registers[R].singleton();
+          return Old.ValueKind == RegisterValue::Kind::Constant && Old != Value;
+        }))
+      NewScalarRegisters |= registerBit(R);
     if (R != kFramePointerRegister &&
         Value.ValueKind == RegisterValue::Kind::SymbolicAddress &&
         !(Generic.ExploredCapturedRegisters & registerBit(R)) &&
@@ -1083,7 +1203,8 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   const bool OnlyPreciseSiblingResult =
       !Retry && !NewImageArgument && !NewImageRegisters &&
       !NewCapturedRegisters && !NewFrameRegisters;
-  if (OnlyPreciseSiblingResult && !UnrepresentedImageBinding)
+  if (OnlyPreciseSiblingResult && !UnrepresentedImageBinding &&
+      !NewScalarRegisters)
     return false;
   // Replacing an old incoming edge must leave the caller transfer unchanged.
   // Start with the opaque-memory case: no returned cells or affine return
@@ -1104,7 +1225,8 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
                                  RegisterValue::Kind::StackAddress;
                         });
   };
-  if (!OpaqueReturn(Generic))
+  const bool GenericOpaque = OpaqueReturn(Generic);
+  if (!GenericOpaque && !NewScalarRegisters)
     return false;
   if (Retry && Generic.Return->InputExpressions[kReturnRegister])
     return false;
@@ -1252,9 +1374,16 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     if ((Retry && Candidate != Retry->Summary) ||
         (!Retry && (!Candidate->Published ||
                     Candidate->RootGeneration == RootGeneration)) ||
-        Candidate->IsRoot || !OpaqueReturn(*Candidate))
+        Candidate->IsRoot)
+      continue;
+    const bool ObjectResult =
+        NewScalarRegisters && hasCompletedObjectResult(*Candidate);
+    const bool OpaqueResult = GenericOpaque && OpaqueReturn(*Candidate);
+    if (!ObjectResult && (!OpaqueResult || (OnlyPreciseSiblingResult &&
+                                            !UnrepresentedImageBinding)))
       continue;
     const bool GenericKeepsResult =
+        OpaqueResult &&
         Candidate->Return->Registers[0] == Generic.Return->Registers[0] &&
         Candidate->Return->Origins[0] == Generic.Return->Origins[0];
     // Further image inputs can use redundant, more precise completed results.
@@ -1309,18 +1438,31 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
       continue;
     bool Redundant = GenericEquivalent && Required.empty();
     FunctionContext *Replacement = &Generic;
+    std::optional<CallXCompletedResultBinding> ResultBinding;
     for (auto *Sibling : Specializations.at(Entry)) {
       if (Redundant)
         break;
       if (Sibling == Candidate || !Sibling->Complete || !Sibling->Published)
         continue;
-      if (!GenericEquivalent &&
-          (!OpaqueReturn(*Sibling) ||
-           Sibling->Return->Registers[0] != Candidate->Return->Registers[0] ||
-           Sibling->Return->Origins[0] != Candidate->Return->Origins[0] ||
-           Sibling->Return->InputExpressions[0] !=
-               Candidate->Return->InputExpressions[0] ||
-           !SameSites(*Sibling)))
+      std::optional<CallXCompletedResultBinding> Binding;
+      if (ObjectResult) {
+        if (!SameSites(*Sibling))
+          continue;
+        auto Matched = completedObjectBinding(*Candidate, *Sibling);
+        if (!Matched)
+          return Matched.takeError();
+        if (!*Matched)
+          continue;
+        Binding = **Matched;
+      } else if (!GenericEquivalent &&
+                 (!OpaqueReturn(*Sibling) ||
+                  Sibling->Return->Registers[0] !=
+                      Candidate->Return->Registers[0] ||
+                  Sibling->Return->Origins[0] !=
+                      Candidate->Return->Origins[0] ||
+                  Sibling->Return->InputExpressions[0] !=
+                      Candidate->Return->InputExpressions[0] ||
+                  !SameSites(*Sibling)))
         continue;
       ClearTargets(Covered);
       auto Collected = CollectTargets(*Sibling, Candidate->ID, Covered);
@@ -1332,6 +1474,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
           !IndependentlyPublished(*Sibling, Candidate->ID))
         continue;
       Redundant = true;
+      ResultBinding = Binding;
       if (!GenericEquivalent)
         Replacement = Sibling;
     }
@@ -1341,9 +1484,18 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     // computed. Completed old callers receive the same ABI facts above.
     bool ActiveCaller = false;
     for (const auto &Context : Contexts)
-      if (Context && !Context->Complete)
-        for (const auto &Edge : Context->Calls)
-          ActiveCaller |= Edge.CalleeSummaryID == Candidate->ID;
+      if (Context)
+        for (const auto &Edge : Context->Calls) {
+          if (Edge.CalleeSummaryID != Candidate->ID)
+            continue;
+          ActiveCaller |= !Context->Complete;
+          int64_t Offset;
+          if (ResultBinding && Edge.CompletedResultBinding &&
+              llvm::AddOverflow(ResultBinding->FrameOffset,
+                                Edge.CompletedResultBinding->FrameOffset,
+                                Offset))
+            ActiveCaller = true;
+        }
     if (ActiveCaller)
       continue;
     if (Retry) {
@@ -1368,10 +1520,20 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
                     : CallXInputGeneralization::EquivalentSpecializedResults;
             for (auto &Site : Edge.InputExpressionTargets)
               Site.SummaryID = Replacement->ID;
-            Edge.PreservedOlderFrames = false;
-            Edge.AppliedMemoryEffects = false;
-            Edge.AppliedStoredValues = 0;
-            Edge.InstantiatedReturnInputExpression = false;
+            if (ResultBinding) {
+              auto Binding = *ResultBinding;
+              if (Edge.CompletedResultBinding) {
+                Binding.FrameOffset += Edge.CompletedResultBinding->FrameOffset;
+                Binding.OriginalCapture =
+                    Edge.CompletedResultBinding->OriginalCapture;
+              }
+              Edge.CompletedResultBinding = Binding;
+            } else {
+              Edge.PreservedOlderFrames = false;
+              Edge.AppliedMemoryEffects = false;
+              Edge.AppliedStoredValues = 0;
+              Edge.InstantiatedReturnInputExpression = false;
+            }
             ++Replacement->IncomingReferences;
             --Candidate->IncomingReferences;
           }
@@ -4614,6 +4776,8 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
     if (Context->IsRoot)
       AddSites(*Context, nullptr);
     for (const auto &Edge : Context->Calls) {
+      if (auto Error = retain(sizeof(Edge.CompletedResultBinding)))
+        return std::move(Error);
       Report.SummaryEdges.push_back(Edge);
       if (Edge.CalleeSummaryID)
         AddSites(*Contexts[*Edge.CalleeSummaryID], &Edge);

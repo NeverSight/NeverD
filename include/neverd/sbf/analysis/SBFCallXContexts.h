@@ -137,6 +137,15 @@ enum class CallXSummaryBarrier : uint8_t {
   NonReturningCall,
 };
 
+/// Correspondence between two completed results, not permission to reuse the
+/// replacement summary for a new input. Captures remain in summary scope; the
+/// old caller has already bound OriginalCapture to its own object identity.
+struct CallXCompletedResultBinding {
+  int64_t FrameOffset = 0;
+  size_t SummaryCapture = 0;
+  size_t OriginalCapture = 0;
+};
+
 struct CallXSummaryEdge {
   size_t CallerSummaryID = 0;
   size_t CallerSlot = 0;
@@ -155,6 +164,7 @@ struct CallXSummaryEdge {
   size_t InstantiatedMemoryPathStores = 0;
   bool GeneralizedInputs = false;
   CallXInputGeneralization InputGeneralization = CallXInputGeneralization::None;
+  std::optional<CallXCompletedResultBinding> CompletedResultBinding;
 };
 
 enum class CallXMemoryWriteBase : uint8_t {

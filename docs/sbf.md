@@ -506,6 +506,23 @@ A forwarding wrapper can also explore one different frame descriptor per entry
 register when all retained known bindings repeat the same descriptor. The
 completed-result and descendant-proof preservation checks still apply; frame
 membership alone provides no alias fact.
+Schema 14 also coalesces completed returned-object results to admit a new
+scalar selector when variants repeat an old binding. Both results must have
+unknown write effects, one owned return capture from the same capturing
+call and source capture, and identical bounds. Only one non-frame-pointer
+frame argument may differ. Every returned typed cell and every applied concrete
+postcondition must agree after translating that frame displacement and renaming
+the return capture; field widths and all other identities remain exact. Copies,
+deferred expressions, unequal fields and different capture sources prevent
+this replacement. The existing site, descendant-proof and publication checks
+still apply. This is an equality check of completed abstract transfers, not an
+allocation-freshness assumption or permission to reuse a new input.
+An edge's `completed_result_binding` records the replacement summary's capture,
+the original summary's capture and the frame displacement back to the original
+result. Repeated replacements compose that displacement while retaining the
+original capture. Completed callers keep their already-applied fields and
+capture identities. Comparison workspace and the added report metadata are
+charged to the existing retained-state budget.
 A forwarding wrapper can admit further unrepresented image bindings by
 coalescing these equal, more precise sibling results. Results already equal to
 the generic summary retain the original once-per-register exploration rule.
