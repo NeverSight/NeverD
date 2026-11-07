@@ -684,6 +684,41 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
     for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
       ReachableInsns.insert(Boundary.Address);
 
+  auto branchLocalLoadIndex = [&](const InsnRecord &Branch,
+                                  const JumpTableInfo &Table)
+      -> std::optional<JumpTableValueOccurrence> {
+    std::optional<NdVar> Target;
+    for (const LowOp &Op : Branch.Ops)
+      if (Op.Opcode == NdOp::INDIR_BR && Op.NumInputs >= 1)
+        Target = Op.Inputs[0];
+    const auto Next = BlockStarts.upper_bound(Branch.Addr);
+    if (!Target || Next == BlockStarts.begin())
+      return std::nullopt;
+    const va_t BlockStart = *std::prev(Next);
+    for (auto Insn = Insns.upper_bound(Branch.Addr); Insn != Insns.begin();) {
+      --Insn;
+      if (Insn->first < BlockStart)
+        break;
+      for (auto Op = Insn->second.Ops.rbegin(); Op != Insn->second.Ops.rend();
+           ++Op) {
+        if (Op->Output.Space != Target->Space ||
+            Op->Output.Offset != Target->Offset || Op->Opcode == NdOp::INDIR_BR)
+          continue;
+        if (Op->Output.Size != Target->Size)
+          return std::nullopt;
+        if (Op->Opcode == NdOp::COPY && Op->NumInputs >= 1) {
+          Target = Op->Inputs[0];
+          continue;
+        }
+        for (const JumpTableLoadRole &Role : Table.LoadRoles)
+          if (Role.Load.Addr == Op->Addr && Role.Load.Seq == Op->Seq &&
+              Role.Indices.size() == 1)
+            return Role.Indices.front();
+        return std::nullopt;
+      }
+    }
+    return std::nullopt;
+  };
   auto selectorUseRef = [&](const JumpTableValueOccurrence &Occurrence)
       -> std::optional<JumpTableSelectorUseRef> {
     // A constant has no SSA lifetime to bind. The shared dispatch owner uses
@@ -877,6 +912,11 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
           IndexOccurrences.push_back({Info.IndexValueAtUse, Info.IndexUseAddr,
                                       Info.IndexUseSeq,
                                       Info.IndexValueDefinedAtUse});
+        // Branches sharing a table each list every site's index. A branch whose
+        // target is loaded in its own block reads only that load's index.
+        if (IndexOccurrences.size() > 1)
+          if (const auto Own = branchLocalLoadIndex(Rec, Info))
+            IndexOccurrences = {*Own};
         bool CompleteSelectorRefs = !IndexOccurrences.empty();
         for (const JumpTableValueOccurrence &IndexOccurrence :
              IndexOccurrences) {
