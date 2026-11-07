@@ -312,6 +312,13 @@ DEBUGCTL readback therefore have software coverage only on this host: its KVM
 masks BTF even when the MSR write succeeds. Task-switch and transactional debug
 remain outside the profile. Reference: [Intel SDM, volume 3B, §18.4.3](https://cdrdv2-public.intel.com/671427/253669-sdm-vol-3b.pdf).
 
+[The November 7 qualification](evidence/x86-branch-debug-2026-11-07.json)
+records each tested revision, both SDKs and P/E cores, compiler/source hashes
+and generated-source comparisons. Broad regression results retain their frozen
+inputs; later dependency and shared-source integrations have separate results.
+The LA57 skip remains explicit. These bounded checks do not qualify full-machine
+BTF or close the global LLVM release gate.
+
 ### Debug-register transfers and general detect
 
 Select `DebugProfile = X86InstructionDebugProfile::DebugRegisters` and retain
