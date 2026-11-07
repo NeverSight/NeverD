@@ -30,6 +30,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
@@ -964,6 +965,11 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
           VarIdToVar.emplace(Aux.Id, Aux);
     }
 
+  // Membership does not determine the ordered PHI output vectors.
+  std::vector<llvm::DenseSet<int>> PhiVariables(N);
+  for (int B = 0; B < N; ++B)
+    for (const auto &Phi : Func.Blocks[B].Phis)
+      PhiVariables[B].insert(Phi.Output.Id);
   for (auto &[VarId, DefBlocks] : VarDefs) {
     std::set<int> PhiBlocks;
     std::queue<int> Worklist;
@@ -979,10 +985,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         if (PhiBlocks.insert(D).second) {
           Worklist.push(D);
           // Step 3b already placed this variable's PHI at a shared handler.
-          const auto &Existing = Func.Blocks[D].Phis;
-          if (std::any_of(
-                  Existing.begin(), Existing.end(),
-                  [&](const PhiNode &Phi) { return Phi.Output.Id == VarId; }))
+          if (!PhiVariables[D].insert(VarId).second)
             continue;
           auto VIt = VarIdToVar.find(VarId);
           MedVar PhiVar = (VIt != VarIdToVar.end()) ? VIt->second : MedVar{};

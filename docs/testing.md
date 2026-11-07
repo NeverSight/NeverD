@@ -21409,3 +21409,5 @@ and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
 frontend regressions and 91 generated-table tests passed. NeverC's strict
 global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
+
+`NeverDMedPhiPlacementTests` checks a 128-value live join across x86, x64, ARM and AArch64: every required temporary has one complete PHI with its actual incoming edge identities. The membership index is independent of PHI output order.
