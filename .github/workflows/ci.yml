@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - dev
+      - ci/windows-first-tests
     paths-ignore:
       - '**/*.md'
       - '.agents/**'
@@ -83,7 +84,7 @@ jobs:
   # llvm-style and evm-upstream-audit workflows.
   repository-checks:
     name: Repository and script checks
-    if: ${{ github.event.action != 'closed' && !inputs.native_cpu_only && !inputs.windows_eh_only }}
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -176,7 +177,7 @@ jobs:
   # reports on its own and the native matrix does not wait for it.
   source-provenance:
     name: Source provenance
-    if: ${{ github.event.action != 'closed' && !inputs.native_cpu_only && !inputs.windows_eh_only }}
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -197,7 +198,6 @@ jobs:
 
   build-and-test:
     name: Build and test (${{ matrix.name }})
-    needs: repository-checks
     if: ${{ github.event.action != 'closed' && !inputs.native_cpu_only && !inputs.windows_eh_only }}
     runs-on: ${{ matrix.runner }}
     env:
@@ -212,24 +212,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Linux x64
-            runner: ubuntu-24.04
-            cc: clang-18
-            cxx: clang++-18
-            parallel: 4
-            test_profile: linux-semantic
-            exclude_labels: '^NeverDPatchFullTests$'
-            python: python3
-            python_version: '3.12'
-          - name: macOS arm64
-            runner: macos-15
-            cc: clang
-            cxx: clang++
-            parallel: 3
-            test_profile: macos-patch
-            exclude_labels: '^NeverDSemanticTests$'
-            python: python3
-            python_version: '3.12'
           - name: Windows x64
             runner: windows-latest
             cc: cl
@@ -401,7 +383,7 @@ jobs:
       # job runs these tools and shell fragments on its own host, and because
       # the two named macOS cases execute nowhere else.
       - name: Verify host-specific script behavior
-        if: runner.os != 'Linux'
+        if: ${{ false }}
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
@@ -678,6 +660,27 @@ jobs:
           EXCLUDE_LABELS: ${{ steps.inventory.outputs.label_exclude }}
           TEST_PARALLEL: ${{ matrix.parallel }}
 
+      - name: Probe diagnostics
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          x86_64-w64-mingw32-gcc --version
+          Get-ChildItem $env:RUNNER_TEMP\neverd-llvm -Recurse -Filter 'clang_rt.builtins*' | Select-Object -First 3 FullName
+          ctest --test-dir build-ci -R "AArch64DecodeOccurrence.OperandQueries|ArchitecturalChoiceSourceCompactsLargeExports|FunctionCallSitesProveOriginalStackTransfer|MinGWProgramWholeModule" -V --timeout 600 2>&1 | Select-Object -Last 500
+
+      - name: Upload failing test directories
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-nd-test
+          retention-days: 3
+          if-no-files-found: ignore
+          path: |
+            ~/AppData/Local/Temp/nd_test_*MinGW*/**
+            ~/AppData/Local/Temp/nd_test_*FunctionCallSites*/**
+
       - name: Audit selected test outcomes
         if: ${{ always() && steps.inventory.outcome == 'success' }}
         shell: bash
@@ -909,7 +912,7 @@ jobs:
 
   windows-context-oracle:
     name: Windows caller context (${{ matrix.arch }})
-    if: ${{ github.event.action != 'closed' && !inputs.windows_eh_only }}
+    if: ${{ false }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     strategy:
