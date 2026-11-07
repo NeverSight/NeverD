@@ -152,6 +152,10 @@ llvm::Error Bionic::initializeDex() {
       Thread.PendingCommands.push_back({Device, FD, 0x40046305, Handle, {}});
       return ExecutionResult{};
     };
+    Services.binder_identity =
+        [this](mobile::dalvik::BinderIdentityOperation Op, uint64_t Address) {
+          return binderIdentity(Op, Address);
+        };
     Services.event_log_write = [this](std::span<const uint8_t> Payload) {
       using mobile::dalvik::ExecutionResult;
       using mobile::dalvik::ExecutionStop;

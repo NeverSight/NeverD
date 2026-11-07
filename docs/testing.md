@@ -15774,6 +15774,20 @@ replies, payload-only and object-table-only PROT_NONE pages, and raw free/reallo
 of an identical arena slot, including rejection of a stale queued free.
 `AndroidBinderObjectTransportMatchesSDKAndCLI`
 compares 36 complete public report pairs, including dynamic proxy `key:null`.
+`AndroidLocalBinderTest.*` checks independent strong-object wire bytes, null
+metadata, holder weak-cache replacement, shared ownership across Parcels,
+unmarshalling reference retirement, DEX subclass construction, native service
+admission and deferred synchronous release notifications.
+`AndroidJNI.BinderLocalObjectsAndOwnedParcelWritesUseSharedTransport` exports
+local Java objects through the shared Linux driver, echoes them as the original
+Java objects, and writes a returned remote proxy alongside null and handle zero.
+The multi-object case replaces an expired weak cache before export, spans native
+read buffers and checks pointer/cookie ACK ordering. Ordinary/V/A forms exercise
+altered holder permissions, same-address
+mapping replacement, unconstructed objects, borrowed writes and non-append
+metadata boundaries. The matching
+`ProcessPublic.AndroidBinderLocalWritesMatchSDKAndCLI` compares 42 full report
+pairs at O0/O2. These tests do not claim local transaction callback dispatch.
 Run full Dalvik, Android JNI, thread/callback and native/Linux Binder suites,
 plus these focused public tests after changing this owner. The shared scheduler
 also requires the stream-wait, receive, readiness and poll regressions. These are
