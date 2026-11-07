@@ -2388,7 +2388,12 @@ void HighCWriter::collectFieldLoadForward(const HighFunc &Func) {
             const std::string Name = varName(E.Var);
             const bool SizeOk = E.Var.Size == UnusedSize ||
                                 (UnusedSize == 4 && E.Var.Size == 8);
-            if (!Name.empty() && E.Var.Kind != MedVar::Param &&
+            // A register's entry value is what the caller left in it. It is
+            // never the skipped copy of a load this function makes later.
+            const bool EntryValue =
+                (E.Var.Kind == MedVar::Reg || E.Var.Kind == MedVar::Flag) &&
+                E.Var.RenameTag < 0 && E.Var.SSAVer == 0;
+            if (!Name.empty() && !EntryValue && E.Var.Kind != MedVar::Param &&
                 !isReservedParamDisplayName(Name) && !Assigned.count(Name) &&
                 !FieldForward.count(Name) && !JoinPhiNames.count(Name) &&
                 SizeOk) {
