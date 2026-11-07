@@ -329,6 +329,13 @@ NEVERD_API const char *neverd_user_reads(neverd_session_t Sess);
 /// Whether a result that read \p Reads reads the same of what the user states
 /// now.
 NEVERD_API int neverd_user_reads_hold(neverd_session_t Sess, const char *Reads);
+/// Where only names of data the user states now differ from what \p Reads read:
+/// [{"addr","name"},...] with what they are called now, [] where nothing does.
+/// NULL where a declaration differs, a name was taken away, or one reaches more
+/// than a spelling in the C: as it spells it otherwise, or a library header or
+/// a function holds it.
+NEVERD_API const char *neverd_user_reads_renamed_json(neverd_session_t Sess,
+                                                      const char *Reads);
 
 /// Whether the session holds the call summaries
 /// neverd_prepare_call_summaries_json solved, and what was read ahead under

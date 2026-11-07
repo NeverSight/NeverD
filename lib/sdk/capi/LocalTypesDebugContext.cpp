@@ -759,10 +759,11 @@ bool LocalTypesDebugContext::takeDeclarations(
   return true;
 }
 
-void LocalTypesDebugContext::takeNewTypes(const types::TypeLibrary &Library) {
+void LocalTypesDebugContext::takeNewTypes(const types::TypeLibrary &Library,
+                                          llvm::ArrayRef<std::string> Names) {
   std::lock_guard<std::mutex> Guard(Mutex);
-  for (const types::LocalType *Type : Library.types())
-    if (!Types->find(Type->Name))
+  for (const std::string &Name : Names)
+    if (const types::LocalType *Type = Library.find(Name))
       Types->define(*Type);
   // These read every name of the library they were made of.
   Spellers.clear();

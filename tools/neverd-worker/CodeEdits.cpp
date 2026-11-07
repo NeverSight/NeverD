@@ -249,6 +249,116 @@ bool member(const std::vector<Token> &ts, std::size_t i) {
                (i > 1 && ts[i - 2].text == "-" && ts[i - 1].text == ">") ||
                (i > 1 && ts[i - 2].text == ":" && ts[i - 1].text == ":"));
 }
+struct Replacement {
+  std::size_t begin, end;
+  std::string text;
+};
+/// Where the bytes of a text stand once \p replacements, in order, are made.
+class ByteShifts {
+  std::vector<std::pair<std::size_t, std::ptrdiff_t>> shifts_;
+
+public:
+  explicit ByteShifts(const std::vector<Replacement> &replacements) {
+    std::ptrdiff_t delta = 0;
+    for (const auto &replacement : replacements) {
+      delta += static_cast<std::ptrdiff_t>(replacement.text.size()) -
+               static_cast<std::ptrdiff_t>(replacement.end - replacement.begin);
+      shifts_.emplace_back(replacement.end, delta);
+    }
+  }
+  std::size_t operator()(std::size_t at) const {
+    const auto following =
+        std::upper_bound(shifts_.begin(), shifts_.end(), at,
+                         [](std::size_t position, const auto &shift) {
+                           return position < shift.first;
+                         });
+    const auto delta =
+        following == shifts_.begin() ? 0 : std::prev(following)->second;
+    return static_cast<std::size_t>(static_cast<std::ptrdiff_t>(at) + delta);
+  }
+};
+std::string replaced(const std::string &text,
+                     const std::vector<Replacement> &replacements) {
+  std::string result;
+  std::size_t cursor = 0;
+  for (const auto &r : replacements) {
+    result.append(text, cursor, r.begin - cursor);
+    result += r.text;
+    cursor = r.end;
+  }
+  result.append(text, cursor, text.size() - cursor);
+  return result;
+}
+/// The byte spans of a page, other than the names decorating adds.
+void remapPageSpans(Json &view, const ByteShifts &shifted) {
+  const auto remap = [&](Json &span) {
+    for (const char *field : {"begin_byte", "end_byte"})
+      if (span.contains(field))
+        span[field] = shifted(span[field].get<std::size_t>());
+  };
+  for (auto &name : view["source_names"])
+    remap(name);
+  for (auto &region : view["library_regions"])
+    for (auto &span : region["spans"])
+      remap(span);
+  if (view.contains("prelude") && view["prelude"].contains("end_byte"))
+    view["prelude"]["end_byte"] =
+        shifted(view["prelude"]["end_byte"].get<std::size_t>());
+}
+/// A global as a source text declares it, by a marker or an extern's trailing
+/// address.
+struct DeclaredGlobal {
+  std::uint64_t address;
+  std::string name;
+  /// By a marker that says only the address, on a line where nothing before the
+  /// name could hold another: all a name reaches of the declaration.
+  bool plain;
+};
+std::vector<DeclaredGlobal> declaredGlobals(const std::string &text) {
+  static const std::regex imageMarker(
+      R"(^\s*/\*\s*neverd\.image:\s*(0x[0-9A-Fa-f]+)\b)");
+  static const std::regex trailingAddress(
+      R"(;\s*/\*\s*(0x[0-9A-Fa-f]+)\s*\*/\s*$)");
+  static const std::regex declared(
+      R"(\b([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*[=;])");
+  std::vector<DeclaredGlobal> globals;
+  std::optional<std::uint64_t> pending;
+  bool bare = false;
+  for (std::size_t start = 0; start < text.size();) {
+    const auto newline = text.find('\n', start);
+    const auto line =
+        text.substr(start, newline == std::string::npos ? std::string::npos
+                                                        : newline - start);
+    std::smatch match;
+    if (line.find("neverd.image:") != std::string::npos &&
+        std::regex_search(line, match, imageMarker,
+                          std::regex_constants::match_continuous)) {
+      pending = parseAddress(match[1].str());
+      // The address alone, or the range a backing holds from it.
+      static const std::regex bareRest(
+          R"(^(?:\s*\.\.\s*0x[0-9A-Fa-f]+)?\s*\*/\s*$)");
+      bare = std::regex_match(match.suffix().str(), bareRest);
+    } else {
+      auto address = std::exchange(pending, std::nullopt);
+      const bool marked = address.has_value();
+      if (!address && line.find("extern") != std::string::npos &&
+          std::regex_search(line, match, trailingAddress))
+        address = parseAddress(match[1].str());
+      if (address && std::regex_search(line, match, declared)) {
+        auto before = match.prefix().str();
+        if (before.starts_with("_Alignas("))
+          before.erase(0, before.find(')') + 1);
+        globals.push_back(
+            {*address, match[1].str(),
+             marked && bare && before.find('(') == std::string::npos});
+      }
+    }
+    if (newline == std::string::npos)
+      break;
+    start = newline + 1;
+  }
+  return globals;
+}
 std::string inlineComment(std::string text) {
   for (std::size_t at = 0; (at = text.find("*/", at)) != std::string::npos;
        at += 3)
@@ -807,6 +917,157 @@ void CodeEdits::spellIdentifierSymbols(Json &view) {
   });
 }
 
+bool CodeEdits::respell(Json &page, const Json &renamed) {
+  const auto found = page.find("text");
+  const auto prelude = page.find("prelude");
+  if (found == page.end() || !found->is_string() || prelude == page.end() ||
+      page.value("dialect", std::string("c")) != "c")
+    return false;
+  const auto &text = found->get_ref<const std::string &>();
+  const std::size_t bodyStart = prelude->value("end_byte", std::size_t{0});
+  const auto ts = tokens(text);
+  std::set<std::string> identifiers;
+  for (const auto &token : ts)
+    if (identifier(token.text))
+      identifiers.insert(token.text);
+  // A name another is numbered after: the allocator steps around it, so a
+  // render under other names numbers it otherwise.
+  const auto numberedAfter = [&](const std::string &name) {
+    const auto prefix = name + "_";
+    for (auto at = identifiers.lower_bound(prefix);
+         at != identifiers.end() && at->starts_with(prefix); ++at)
+      if (at->find_first_not_of("0123456789", prefix.size()) ==
+          std::string::npos)
+        return true;
+    return false;
+  };
+  const auto numbered = [&](const std::string &name) {
+    const auto mark = name.rfind('_');
+    return mark != std::string::npos && mark + 1 < name.size() &&
+           name.find_first_not_of("0123456789", mark + 1) ==
+               std::string::npos &&
+           identifiers.contains(name.substr(0, mark));
+  };
+  // What the C reads as a name of the function and not this global, which only
+  // a render tells apart.
+  std::set<std::string> others;
+  for (const auto &variable : page.value("source_variables", Json::array()))
+    if (!variable.contains("address"))
+      others.insert(variable.value("name", std::string()));
+  const auto globals = declaredGlobals(text);
+  std::string folded = text;
+  std::transform(folded.begin(), folded.end(), folded.begin(), [](char c) {
+    return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  });
+  std::unordered_map<std::string, std::string> spellings;
+  std::unordered_map<std::uint64_t, std::string> shown;
+  std::set<std::string> taken;
+  for (const auto &row : renamed) {
+    const auto address = parseAddress(row.at("addr").get<std::string>());
+    const auto name = row.at("name").get<std::string>();
+    const auto isIt = [&](const DeclaredGlobal &global) {
+      return global.address == address;
+    };
+    const auto global = std::find_if(globals.begin(), globals.end(), isIt);
+    if (global == globals.end() || !global->plain ||
+        std::count_if(globals.begin(), globals.end(), isIt) != 1 ||
+        others.contains(global->name) || numberedAfter(global->name) ||
+        numbered(global->name) || !identifier(name) ||
+        identifiers.contains(name) || others.contains(name) ||
+        numberedAfter(name) || !taken.insert(name).second)
+      return false;
+    // A constant of the address that printed as a number is one a name would
+    // have the code spell as the object.
+    const auto spelled = hexAddress(address);
+    std::size_t numbers = 0;
+    for (auto at = folded.find(spelled); at != std::string::npos;
+         at = folded.find(spelled, at + spelled.size()))
+      if (at + spelled.size() == folded.size() ||
+          !std::isxdigit(
+              static_cast<unsigned char>(folded[at + spelled.size()])))
+        ++numbers;
+    if (numbers != 1)
+      return false;
+    spellings.emplace(global->name, name);
+    shown.emplace(address, name);
+  }
+  std::vector<Replacement> replacements;
+  std::unordered_map<std::string, std::size_t> seen, inPrelude;
+  std::unordered_map<std::string, std::size_t> addressed;
+  for (std::size_t i = 0; i < ts.size() && ts[i].begin < bodyStart; ++i)
+    if (ts[i].text == "&" && i + 1 < ts.size() && identifier(ts[i + 1].text) &&
+        (!i || ts[i - 1].text != "&"))
+      addressed.emplace(ts[i + 1].text, 0);
+  if (!addressed.empty()) {
+    for (std::size_t i = 0; i < ts.size() && ts[i].begin < bodyStart; ++i)
+      if (const auto name = addressed.find(ts[i].text); name != addressed.end())
+        ++name->second;
+    // An initializer may take the address of an object by a symbol the page
+    // declares nothing by, which a user's name of it replaces.
+    for (const auto &[name, count] : addressed)
+      if (count < 2)
+        return false;
+  }
+  for (std::size_t i = 0; i < ts.size(); ++i) {
+    const auto &token = ts[i];
+    const auto to = spellings.find(token.text);
+    if (to == spellings.end())
+      continue;
+    ++seen[token.text];
+    if (member(ts, i))
+      continue;
+    if (token.begin < bodyStart)
+      ++inPrelude[token.text];
+    else if (i) {
+      // A label, or a declaration of the body's.
+      const auto &before = ts[i - 1].text;
+      if ((identifier(before) && before != "return" && before != "sizeof" &&
+           before != "else" && before != "do" && before != "case") ||
+          (i + 1 < ts.size() && ts[i + 1].text == ":"))
+        return false;
+    }
+    replacements.push_back({token.begin, token.end, to->second});
+  }
+  const auto word = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+  };
+  for (const auto &[from, to] : spellings) {
+    // The declaration alone, and no comment or string that spells it.
+    if (inPrelude[from] != 1)
+      return false;
+    std::size_t spelled = 0;
+    for (auto at = text.find(from); at != std::string::npos;
+         at = text.find(from, at + from.size()))
+      if ((at == 0 || !word(text[at - 1])) &&
+          (at + from.size() == text.size() || !word(text[at + from.size()])))
+        ++spelled;
+    if (spelled != seen[from])
+      return false;
+  }
+  std::vector<std::pair<std::size_t, std::size_t>> moved;
+  moved.reserve(replacements.size());
+  for (const auto &replacement : replacements)
+    moved.emplace_back(replacement.begin, replacement.end);
+  const SourceSpanIndex covered(moved.begin(), moved.end());
+  for (const auto &name : page.value("source_names", Json::array()))
+    if (covered.overlaps(name.value("begin_byte", std::size_t{0}),
+                         name.value("end_byte", std::size_t{0})))
+      return false;
+  auto spelled = replaced(text, replacements);
+  remapPageSpans(page, ByteShifts(replacements));
+  page["text"] = std::move(spelled);
+  if (auto variables = page.find("source_variables");
+      variables != page.end() && variables->is_array())
+    for (auto &variable : *variables)
+      if (const auto address = variable.find("address");
+          address != variable.end() && address->is_string())
+        if (const auto name =
+                shown.find(parseAddress(address->get<std::string>()));
+            name != shown.end())
+          variable["name"] = name->second;
+  return true;
+}
+
 void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
                          const std::string &representation, const Json &renames,
                          const Json &annotations,
@@ -822,35 +1083,8 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
     if (identifier(token.text))
       identifiers.insert(token.text);
   std::unordered_map<std::string, std::uint64_t> globals;
-  static const std::regex imageMarker(
-      R"(^\s*/\*\s*neverd\.image:\s*(0x[0-9A-Fa-f]+)\b)");
-  static const std::regex trailingAddress(
-      R"(;\s*/\*\s*(0x[0-9A-Fa-f]+)\s*\*/\s*$)");
-  static const std::regex declared(
-      R"(\b([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*[=;])");
-  std::optional<std::uint64_t> pending;
-  for (std::size_t start = 0; start < original.size();) {
-    const auto newline = original.find('\n', start);
-    const auto line =
-        original.substr(start, newline == std::string::npos ? std::string::npos
-                                                            : newline - start);
-    std::smatch match;
-    if (line.find("neverd.image:") != std::string::npos &&
-        std::regex_search(line, match, imageMarker,
-                          std::regex_constants::match_continuous))
-      pending = parseAddress(match[1].str());
-    else {
-      auto address = std::exchange(pending, std::nullopt);
-      if (!address && line.find("extern") != std::string::npos &&
-          std::regex_search(line, match, trailingAddress))
-        address = parseAddress(match[1].str());
-      if (address && std::regex_search(line, match, declared))
-        globals[match[1].str()] = *address;
-    }
-    if (newline == std::string::npos)
-      break;
-    start = newline + 1;
-  }
+  for (auto &global : declaredGlobals(original))
+    globals[std::move(global.name)] = global.address;
   const auto links = sourceLinks(original, ts);
   std::unordered_map<std::string, std::uint64_t> originalAddresses;
   for (const auto &name : renames)
@@ -1025,10 +1259,6 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
         display != displayNames.end())
       return display->second;
     return std::nullopt;
-  };
-  struct Replacement {
-    std::size_t begin, end;
-    std::string text;
   };
   std::vector<Replacement> replacements;
   Json names = Json::array();
@@ -1220,23 +1450,7 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
   }
   std::sort(replacements.begin(), replacements.end(),
             [](const auto &a, const auto &b) { return a.begin < b.begin; });
-  std::vector<std::pair<std::size_t, std::ptrdiff_t>> shifts;
-  std::ptrdiff_t delta = 0;
-  for (const auto &replacement : replacements) {
-    delta += static_cast<std::ptrdiff_t>(replacement.text.size()) -
-             static_cast<std::ptrdiff_t>(replacement.end - replacement.begin);
-    shifts.emplace_back(replacement.end, delta);
-  }
-  const auto shifted = [&](std::size_t at) {
-    const auto following =
-        std::upper_bound(shifts.begin(), shifts.end(), at,
-                         [](std::size_t position, const auto &shift) {
-                           return position < shift.first;
-                         });
-    const auto delta =
-        following == shifts.begin() ? 0 : std::prev(following)->second;
-    return static_cast<std::size_t>(static_cast<std::ptrdiff_t>(at) + delta);
-  };
+  const ByteShifts shifted(replacements);
   auto remap = [&](Json &span) {
     for (const char *field : {"begin_byte", "end_byte"})
       if (span.contains(field))
@@ -1244,22 +1458,8 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
   };
   for (auto &name : names)
     remap(name);
-  for (auto &name : view["source_names"])
-    remap(name);
-  for (auto &region : view["library_regions"])
-    for (auto &span : region["spans"])
-      remap(span);
-  if (view.contains("prelude") && view["prelude"].contains("end_byte"))
-    view["prelude"]["end_byte"] =
-        shifted(view["prelude"]["end_byte"].get<std::size_t>());
-  std::string decorated;
-  std::size_t cursor = 0;
-  for (const auto &r : replacements) {
-    decorated.append(original, cursor, r.begin - cursor);
-    decorated += r.text;
-    cursor = r.end;
-  }
-  decorated.append(original, cursor, original.size() - cursor);
+  remapPageSpans(view, shifted);
+  std::string decorated = replaced(original, replacements);
   view["text"] = std::move(decorated);
   view["code_names"] = std::move(names);
 }

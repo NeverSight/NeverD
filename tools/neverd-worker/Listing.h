@@ -109,6 +109,16 @@ public:
   /// taken it, keeping what it decoded.  Otherwise the caller says
   /// namesChanged.
   bool functionRenamed(std::uint64_t address);
+  /// The user named the data at \p address \p name.  True when that changes
+  /// what the listing calls it and where the items around it stop, no more, as
+  /// outside code, and the listing has taken it.  Otherwise the caller says
+  /// namesChanged.
+  bool dataRenamed(std::uint64_t address, const std::string &name);
+  /// The user's data items changed.  True when that changes only what those
+  /// bytes show and where the items around them stop, and the listing has read
+  /// them: no string, code or function is in them.  Otherwise the caller says
+  /// namesChanged.  A view of a function reads no data item (viewGeneration).
+  bool dataItemsChanged();
   /// A declaration changed.  What the listing decoded shows what a function was
   /// declared as, and reads it again; nothing else it has read changes.
   void declarationsChanged();
@@ -187,7 +197,8 @@ public:
   /// Changes whenever published listing text can change.
   std::uint64_t generation() const;
   /// generation() but for what only functions' names change, which a function's
-  /// engine pages do not spell: a view reads them as its decoration runs.
+  /// engine pages do not spell: a view reads them as its decoration runs.  Data
+  /// items reach no view at all.
   std::uint64_t viewGeneration() const;
 
 private:

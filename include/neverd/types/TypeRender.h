@@ -26,6 +26,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 
 #include <map>
 #include <memory>
@@ -247,6 +248,14 @@ std::string renderTypes(const TypeLibrary &Library,
 /// the C that C++ reads too, which steps around C++'s keywords as well.
 std::vector<std::pair<std::string, std::string>>
 renamedNames(const TypeLibrary &Library, Language Lang);
+
+/// renamedNames, and every identifier the spelling takes, which a type added
+/// with others of its own disturbs none of.
+struct SpelledNames {
+  std::vector<std::pair<std::string, std::string>> Renamed;
+  llvm::StringSet<> Taken;
+};
+SpelledNames spelledNames(const TypeLibrary &Library, Language Lang);
 
 /// The names of the types \p Type mentions: its members', target's and
 /// parameters' types, through pointers, arrays and records in place.

@@ -761,7 +761,8 @@ void Session::sendOpen(const QString &requested, const QString &path,
                       {"warm", false},
                       // This client gates large replicas on discovery
                       // completion before opting in to an owned SDK snapshot.
-                      {"step_discovery", options.analysis}};
+                      {"step_discovery", options.analysis},
+                      {"write_behind", true}};
   if (!options.pdb.isEmpty())
     payload.insert(QStringLiteral("pdb"), options.pdb);
   if (!options.dwarf.isEmpty())
