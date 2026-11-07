@@ -21,14 +21,16 @@ inline bool isEmptyBlockAnchor(const HighStmt &S) {
   return Empty;
 }
 
-/// A bounded arithmetic offset from the synthetic entry stack pointer.
+/// A bounded arithmetic offset from the synthetic entry stack pointer, given
+/// the offset \p VariableOffset knows for a variable at a recursion depth.
 /// The caller must separately check the access width and private frame bounds,
-/// and prove that each supplied alias is defined and evaluates to the same
-/// immutable frame address at every use.
-inline std::optional<int64_t>
-frameAddressOffset(const ExprPtr &E, const HighFunc &Func, Arch Architecture,
-                   size_t &Budget, unsigned Depth = 0,
-                   llvm::function_ref<ExprPtr(const MedVar &)> Alias = {}) {
+/// and prove that each variable evaluates to the same immutable frame address
+/// at every use.
+inline std::optional<int64_t> frameAddressOffsetFrom(
+    const ExprPtr &E, const HighFunc &Func, Arch Architecture, size_t &Budget,
+    unsigned Depth,
+    llvm::function_ref<std::optional<int64_t>(const MedVar &, unsigned)>
+        VariableOffset) {
   const auto &TRI = getTargetRegInfo(Architecture);
   if (!E || !E->Type || E->Type->Size != TRI.PointerSize ||
       E->MemoryOrdering != NdMemoryOrdering::None ||
@@ -40,11 +42,10 @@ frameAddressOffset(const ExprPtr &E, const HighFunc &Func, Arch Architecture,
   if (E->Kind == ExprKind::Var && E->Var.Size == TRI.PointerSize &&
       isSyntheticEntryStackPointer(E->Var, Func, Architecture))
     return 0;
-  if (Alias && E->Kind == ExprKind::Var && E->Var.Size == TRI.PointerSize) {
-    if (ExprPtr Value = Alias(E->Var))
-      return frameAddressOffset(Value, Func, Architecture, Budget, Depth + 1,
-                                Alias);
-  }
+  if (VariableOffset && E->Kind == ExprKind::Var &&
+      E->Var.Size == TRI.PointerSize)
+    if (const auto Known = VariableOffset(E->Var, Depth))
+      return Known;
   // A signedness view of the target pointer bits does not alter its address.
   // Keep widening and truncating conversions outside this proof.
   if ((E->Kind == ExprKind::Cast || E->Kind == ExprKind::BitCast) &&
@@ -57,8 +58,8 @@ frameAddressOffset(const ExprPtr &E, const HighFunc &Func, Arch Architecture,
        (E->CastTo && E->CastTo->Kind == NdTypeKind::Int &&
         E->CastTo->Size == TRI.PointerSize &&
         E->CastTo->IsSigned == E->Type->IsSigned)))
-    return frameAddressOffset(E->Operands[0], Func, Architecture, Budget,
-                              Depth + 1, Alias);
+    return frameAddressOffsetFrom(E->Operands[0], Func, Architecture, Budget,
+                                  Depth + 1, VariableOffset);
   if (E->Kind != ExprKind::BinOp || E->Operands.size() != 2 ||
       (E->Op != NdOp::INT_ADD && E->Op != NdOp::INT_SUB))
     return std::nullopt;
@@ -71,8 +72,8 @@ frameAddressOffset(const ExprPtr &E, const HighFunc &Func, Arch Architecture,
       (OffsetExpr->Type->Size < 8 &&
        OffsetExpr->ConstVal >= (UINT64_C(1) << (OffsetExpr->Type->Size * 8))))
     return std::nullopt;
-  const auto Base = frameAddressOffset(BaseExpr, Func, Architecture, Budget,
-                                       Depth + 1, Alias);
+  const auto Base = frameAddressOffsetFrom(BaseExpr, Func, Architecture, Budget,
+                                           Depth + 1, VariableOffset);
   if (!Base)
     return std::nullopt;
   const int64_t Delta = TRI.PointerSize == 4
@@ -85,6 +86,23 @@ frameAddressOffset(const ExprPtr &E, const HighFunc &Func, Arch Architecture,
   if (TRI.PointerSize == 4 && Result != int64_t(int32_t(Result)))
     return std::nullopt;
   return Result;
+}
+
+/// The same offset through expressions \p Alias supplies for variables.
+inline std::optional<int64_t>
+frameAddressOffset(const ExprPtr &E, const HighFunc &Func, Arch Architecture,
+                   size_t &Budget, unsigned Depth = 0,
+                   llvm::function_ref<ExprPtr(const MedVar &)> Alias = {}) {
+  const auto Through = [&](const MedVar &V,
+                           unsigned At) -> std::optional<int64_t> {
+    if (ExprPtr Value = Alias(V))
+      return frameAddressOffset(Value, Func, Architecture, Budget, At + 1,
+                                Alias);
+    return std::nullopt;
+  };
+  if (!Alias)
+    return frameAddressOffsetFrom(E, Func, Architecture, Budget, Depth, {});
+  return frameAddressOffsetFrom(E, Func, Architecture, Budget, Depth, Through);
 }
 
 // Earlier pipeline consumers still operate on MedIR SSA identities. Source

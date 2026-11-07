@@ -66,6 +66,8 @@ private:
     int32_t error = 0;
     std::function<ExecutionResult(std::span<const uint8_t> &)> view;
     std::function<void()> release;
+    std::vector<uint64_t> objects;
+    std::optional<uint32_t> fd;
   };
   std::map<uint32_t, ParcelState> parcels;
   // API 28 owned-Parcel pool, in first-empty/first-occupied slot order.
@@ -80,10 +82,14 @@ private:
                                  const AdmitInstruction &admit);
   ExecutionResult binderProxy(Heap &heap, uint32_t key,
                               const AdmitInstruction &admit);
+  ExecutionResult binderHandle(Heap &heap, uint32_t fd, uint32_t handle,
+                               const AdmitInstruction &admit);
   ExecutionResult serviceProxy(Heap &heap, const Program &program,
                                uint64_t binder, const AdmitInstruction &admit);
   std::map<const Field *, std::optional<uint64_t>> service_fields;
   std::map<uint32_t, uint32_t> binder_identities;
+  std::map<std::pair<uint32_t, uint32_t>, uint32_t> binder_handles;
+  std::map<std::pair<uint32_t, uint32_t>, uint32_t> binder_input_keys;
   std::map<uint32_t, std::optional<bool>> binder_warnings;
   std::map<
       uint32_t,

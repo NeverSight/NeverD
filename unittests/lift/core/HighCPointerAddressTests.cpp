@@ -6373,6 +6373,51 @@ TEST(HighCPointerAddresses, UnsignedFieldCompareOmitsWidthCast) {
   EXPECT_EQ(Source.find("(uint32_t)this->"), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, UnusedFieldLoadIsNotARegistersEntryValue) {
+  auto Record = NdType::makeNamedRecord("CRecord", 512);
+  Record->FieldDisplayNames = {"m_completedCount"};
+  Record->FieldDisplayOffsets = {32};
+  Record->FieldDisplayTypes = {NdType::makeInt(4, false)};
+  HighFunc Func;
+  Func.Name = "saves_entry_register";
+  Func.ReturnType = NdType::makeVoid();
+  Func.Params = {{"this", NdType::makePtr(Record)}};
+  auto This = parameter(0, Func.Params[0].Type);
+  // Nothing reads this load, and the register below holds what the caller left
+  // in it. The later load does not say what that was.
+  MedVar Loaded;
+  Loaded.Kind = MedVar::Temp;
+  Loaded.Id = 94;
+  Loaded.Size = 4;
+  Loaded.TheArch = Arch::X64;
+  HighStmt Load;
+  Load.Kind = StmtKind::Assign;
+  Load.Dst = HighExpr::makeVar(Loaded, NdType::makeInt(4, true));
+  Load.Val = HighExpr::makeLoad(
+      HighExpr::makeBinop(NdOp::INT_ADD, This, HighExpr::makeConst(32, 8)),
+      NdType::makeInt(4, true));
+  MedVar Register;
+  Register.Kind = MedVar::Reg;
+  Register.Id = 7;
+  Register.Size = 4;
+  Register.RegOff = 0;
+  Register.TheArch = Arch::X64;
+  HighStmt Guard;
+  Guard.Kind = StmtKind::If;
+  Guard.Cond = HighExpr::makeBinop(
+      NdOp::INT_NOTEQUAL, HighExpr::makeVar(Register, NdType::makeInt(4, true)),
+      HighExpr::makeConst(0, 4));
+  HighStmt Work;
+  Work.Kind = StmtKind::Call;
+  Work.CallExpr = HighExpr::makeCall("master", 0x140002000, {This});
+  Guard.Body = {Work};
+  Func.Body = {Guard, Load};
+  const std::string Source = emitFunctions({Func});
+  EXPECT_NE(Source.find("unknown register"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("if (this->m_completedCount"), std::string::npos)
+      << Source;
+}
+
 TEST(HighCPointerAddresses, UnusedAliasUnsignedFieldCompareOmitsWidthCast) {
   auto U32 = NdType::makeInt(4, false);
   auto Record = NdType::makeNamedRecord("CRecord", 512);
@@ -42059,9 +42104,9 @@ TEST(HighCPointerAddresses, CorpusArmPredicatedBranchesStayForwardJumps) {
   const std::string ImageCheck = Emit(0x40386C);
   EXPECT_NE(ImageCheck.find("!= 0x5A4D) {"), std::string::npos) << ImageCheck;
   EXPECT_EQ(ImageCheck.find("do {"), std::string::npos) << ImageCheck;
-  // `bne` past a local unwind jumps forward once.
+  // `bne` past a local unwind, which is a jump now, branches forward once.
   const std::string Unwinds = Emit(0x4031F4);
-  EXPECT_NE(Unwinds.find("!= 10) {"), std::string::npos) << Unwinds;
+  EXPECT_NE(Unwinds.find("== 10) {"), std::string::npos) << Unwinds;
   EXPECT_EQ(Unwinds.find("do {"), std::string::npos) << Unwinds;
 }
 

@@ -20,10 +20,12 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/ir/low/SEHLocalUnwindProtocol.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionFunction.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Sequence.h"
@@ -59,6 +61,14 @@ std::optional<std::vector<Handler>> unwindHandlers(const ExceptionFunction &EH,
   std::vector<ExceptionAddressRange> Ranges;
   Ranges.reserve(Scopes.size());
   for (const SEHScopeRecord &Scope : Scopes) {
+    // MSVC's ARM table lists the scopes of a nested handler's own try too; the
+    // code they guard runs under that handler's table, not this frame's.
+    if (Scope.ParseStatus == ExceptionParseStatus::Complete &&
+        !EH.codeChunkContaining(Scope.GuardedRange) &&
+        !EH.ownsCode(Scope.GuardedRange.Begin)) {
+      Ranges.emplace_back();
+      continue;
+    }
     const std::optional<ExceptionAddressRange> Range =
         getSemanticSEHGuardedRange(Scope, TargetArch, EH);
     if (Scope.ParseStatus != ExceptionParseStatus::Complete || !Range)
@@ -94,12 +104,98 @@ std::optional<std::vector<Handler>> unwindHandlers(const ExceptionFunction &EH,
   return Handlers;
 }
 
+/// Spell what a runtime local unwind call is given where nothing declares the
+/// routine: its two arguments, and a target that a register copy takes from a
+/// literal pool as the constant the pool holds, which nothing folds otherwise.
+/// A register the call does not read is no argument of it.
+void settleLocalUnwindCalls(MedFunc &Func, const BinaryImage &Image,
+                            const TargetRegInfo &TRI) {
+  const llvm::ArrayRef<uint64_t> Args =
+      TRI.integerParamRegs(BinaryFormat::COFF);
+  if (Args.size() < 2)
+    return;
+  for (MedBlock &Block : Func.Blocks) {
+    // The values of the block's own constant arithmetic, the program counter's
+    // among them, by variable.
+    std::map<int, uint64_t> Known;
+    MedOp *TargetWrite = nullptr;
+    auto ValueOf = [&](const MedVar &V) -> std::optional<uint64_t> {
+      if (V.isConst())
+        return V.ConstVal;
+      const auto It = Known.find(V.Id);
+      return It == Known.end() ? std::nullopt
+                               : std::optional<uint64_t>(It->second);
+    };
+    for (MedOp &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst()) {
+        const Import *Imported =
+            Image.findImportStubAt(static_cast<va_t>(Op.Inputs[0].ConstVal));
+        const llvm::StringRef Name =
+            Imported ? stripLeadingUnderscores(Imported->Name)
+                     : llvm::StringRef();
+        if (isLowSEHLocalUnwindRoutine(Name)) {
+          if (Op.CalleeRegisterArgs <= 0)
+            Op.CalleeRegisterArgs = 2;
+          if (TargetWrite && TargetWrite->Opcode == NdOp::COPY &&
+              TargetWrite->NumInputs == 1 && !TargetWrite->Inputs[0].isConst())
+            if (const auto Value = ValueOf(TargetWrite->Output))
+              TargetWrite->Inputs[0] =
+                  MedVar::makeConst(*Value, TRI.PointerSize,
+                                    ConstantAddressProvenance::CodeAddress);
+        }
+      }
+      std::optional<uint64_t> Value;
+      const auto In = [&](unsigned I) { return ValueOf(Op.Inputs[I]); };
+      switch (Op.Opcode) {
+      case NdOp::COPY:
+        if (Op.NumInputs == 1)
+          Value = In(0);
+        break;
+      case NdOp::INT_ADD:
+      case NdOp::INT_SUB:
+      case NdOp::INT_AND:
+        if (Op.NumInputs == 2 && In(0) && In(1))
+          Value = Op.Opcode == NdOp::INT_ADD   ? *In(0) + *In(1)
+                  : Op.Opcode == NdOp::INT_SUB ? *In(0) - *In(1)
+                                               : *In(0) & *In(1);
+        break;
+      case NdOp::LOAD:
+        if (Op.NumInputs == 1 && Op.Output.Size == TRI.PointerSize && In(0) &&
+            Image.isCodeRange(static_cast<va_t>(*In(0)), TRI.PointerSize))
+          if (const uint8_t *Bytes =
+                  Image.readVA(static_cast<va_t>(*In(0)), TRI.PointerSize))
+            Value = readPtr(Bytes, TRI.PointerSize == 8);
+        break;
+      default:
+        break;
+      }
+      if (Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == Args[1])
+        TargetWrite = &Op;
+      if (Op.Output.Id >= 0) {
+        if (Value)
+          Known[Op.Output.Id] = *Value;
+        else
+          Known.erase(Op.Output.Id);
+      }
+    }
+  }
+}
+
 } // namespace
 
 void LowToMedConverter::modelSEHLocalUnwindExits(MedFunc &Func,
                                                  const LowFunc &Low) {
-  if (!Image || !Low.ExceptionMetadata || !Low.ExceptionMetadata->SEH ||
-      Func.Blocks.empty() || !callsLowSEHLocalUnwind(Low, *Image))
+  if (!Image || TargetFormat != BinaryFormat::COFF)
+    return;
+  const bool CallsRoutine = callsLowSEHLocalUnwind(Low, *Image);
+  if (CallsRoutine)
+    settleLocalUnwindCalls(Func, *Image, getTargetRegInfo(TargetArch));
+  static const std::map<va_t, const LowFunc *> NoBodies;
+  const std::map<va_t, const LowFunc *> &Bodies =
+      SEHFrameCallees ? *SEHFrameCallees : NoBodies;
+  if (!SEHLocalUnwindExitsEnabled || !Low.ExceptionMetadata ||
+      !Low.ExceptionMetadata->SEH || Func.Blocks.empty() ||
+      (!CallsRoutine && !handlersCallLowSEHLocalUnwind(Low, *Image, Bodies)))
     return;
   const ExceptionFunction &EH = *Low.ExceptionMetadata;
   const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
@@ -107,11 +203,11 @@ void LowToMedConverter::modelSEHLocalUnwindExits(MedFunc &Func,
   const uint16_t Pointer = static_cast<uint16_t>(TRI.PointerSize);
   if (ArgRegs.size() < 2 || !Pointer)
     return;
-  static const std::map<va_t, const LowFunc *> NoBodies;
   size_t Work = limits::kMaxSEHEstablisherFrameWork;
-  auto Sites = certifyLowSEHLocalUnwinds(
-      Low, *Image, TRI, SEHFrameCallees ? *SEHFrameCallees : NoBodies, Work,
-      CallUnreadGPRs);
+  std::set<va_t> HandlerTargets;
+  auto Sites =
+      certifyLowSEHLocalUnwinds(Low, *Image, TRI, Bodies, Work, CallUnreadGPRs,
+                                /*Refused=*/nullptr, &HandlerTargets);
   if (!Sites) {
     // An uncertified call keeps its runtime form.
     llvm::consumeError(Sites.takeError());
@@ -125,6 +221,12 @@ void LowToMedConverter::modelSEHLocalUnwindExits(MedFunc &Func,
       return;
     BlockAt.emplace(Block.StartAddr, Block.Id);
   }
+  for (va_t Target : HandlerTargets)
+    if (BlockAt.count(Target))
+      Func.SEHHandlerUnwindTargets.insert(Target);
+  if (!Func.SEHHandlerUnwindTargets.empty())
+    Func.SEHTerminationFrameBytes = collectLowSEHTerminationFrames(
+        Low, TargetArch, Func.SEHHandlerUnwindTargets);
 
   // Each certified call this replaces: its block, its position there, the
   // target's block and the handlers the jump runs.  A target the exception
@@ -174,8 +276,19 @@ void LowToMedConverter::modelSEHLocalUnwindExits(MedFunc &Func,
     Plans.push_back(std::move(P));
   }
   std::erase_if(Plans, [](const Plan &P) { return P.Site < 0; });
-  if (Plans.empty())
+  ModeledSEHLocalUnwindExits |=
+      !Plans.empty() || !Func.SEHHandlerUnwindTargets.empty();
+  // A target nothing else names is entered by ordinary flow and the handlers'
+  // unwinds alone; one that ordinary flow does not reach stays a root for them.
+  auto OwnHandlerTargets = [&] {
+    for (va_t Target : Func.SEHHandlerUnwindTargets)
+      if (!Func.Blocks[BlockAt.at(Target)].Preds.empty())
+        Func.ModuleAnalysisRoots.erase(Target);
+  };
+  if (Plans.empty()) {
+    OwnHandlerTargets();
     return;
+  }
   PlanAt.clear();
   for (size_t K = 0; K < Plans.size(); ++K)
     PlanAt[Plans[K].Site] = K;
@@ -224,9 +337,10 @@ void LowToMedConverter::modelSEHLocalUnwindExits(MedFunc &Func,
 
   // The code after a call that never returned runs no more where nothing
   // else leads to it.  The proofs that read the decoded CFG still see it
-  // enter its successors, so a block the runtime or a code address enters,
-  // which only that code entered by an edge, would be a root here and not
-  // there: such a function keeps its runtime calls.
+  // enter its successors, so a block a code address enters, which only that
+  // code entered by an edge, would be a root here and not there: such a
+  // function keeps its runtime calls.  An `__except` arm the runtime still
+  // enters takes the same frame on the decoded edge (MedSSA proves it does).
   // The edges that enter each block from code that runs.
   auto Entering = [&](bool Cut, const std::vector<bool> &Runs) {
     std::vector<std::pair<unsigned, unsigned>> Edges(N);
@@ -246,7 +360,8 @@ void LowToMedConverter::modelSEHLocalUnwindExits(MedFunc &Func,
   const auto EnteredAfter = Entering(/*Cut=*/true, After);
   for (size_t B = 0; B < N; ++B)
     if (After[B] && Independent[B] &&
-        ((EnteredBefore[B].first && !EnteredAfter[B].first) ||
+        ((EnteredBefore[B].first && !EnteredAfter[B].first &&
+          !EnteredAfter[B].second) ||
          (EnteredBefore[B].second && !EnteredAfter[B].second)))
       return;
 
@@ -281,11 +396,15 @@ void LowToMedConverter::modelSEHLocalUnwindExits(MedFunc &Func,
         Extend.addInput(ndVarToMedVar(NdVar::reg(ArgRegs[0], Word)));
         Ops.push_back(At(std::move(Extend)));
       }
+      // The frame register itself where the runtime passes that.
+      const bool ByRegister = Call.HandlerFrameRegister.has_value();
       MedOp Frame;
-      Frame.Opcode = Call.HandlerFrameFromSP ? NdOp::INT_ADD : NdOp::COPY;
+      Frame.Opcode =
+          !ByRegister && Call.HandlerFrameFromSP ? NdOp::INT_ADD : NdOp::COPY;
       Frame.Output = ndVarToMedVar(NdVar::reg(ArgRegs[1], Pointer));
-      Frame.addInput(ndVarToMedVar(SP));
-      if (Call.HandlerFrameFromSP)
+      Frame.addInput(ndVarToMedVar(
+          ByRegister ? NdVar::reg(*Call.HandlerFrameRegister, Pointer) : SP));
+      if (Frame.Opcode == NdOp::INT_ADD)
         Frame.addInput(
             MedVar::makeConst(static_cast<uint64_t>(Call.HandlerFrameFromSP),
                               Pointer, ConstantAddressProvenance::Scalar));
@@ -401,6 +520,7 @@ void LowToMedConverter::modelSEHLocalUnwindExits(MedFunc &Func,
     if (Exit.OwnsTarget)
       Func.ModuleAnalysisRoots.erase(Target);
   }
+  OwnHandlerTargets();
 }
 
 } // namespace neverd

@@ -1253,7 +1253,7 @@ model shares cache, Binder identities and initialization across JNI and DEX.
 `android.application_snapshot.service_manager` admits `cache` entries with
 nullable `name` and `binder`, and `binder_proxies` with positive unique `key`
 and optional `warn_on_blocking`. An optional `native_binding` explicitly supplies
-`fd`, `handle` and `alive` for synchronous object-free BinderProxy transport;
+`fd`, `handle` and `alive` for synchronous BinderProxy transport;
 see [native binding and reply ownership](android-application-runtime.md#servicemanager-cache-and-binder-state).
 Missing cache state is unknown; an explicit
 empty array is a known empty cache. Non-null cache hits return their retained

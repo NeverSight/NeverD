@@ -42,15 +42,21 @@ class XCPT4SourceTests(unittest.TestCase):
             "stderr": "wine: configuration has been updated.\n"}),
             {"passed": 90, "skipped": []})
 
-    def test_source_needs_the_main_body_and_explicit_frame_limitation(self):
+    def test_source_needs_the_main_body_with_its_finally_clauses_filled(self):
         source = """/* neverd.analysis-only: recovered Windows SEH/C++ */
 /* code=[0x140001500, 0x14000392D), seh.scope[0], gs.cookie_offset=8
- * highir.structured_regions=114; unresolved runtime stack */
-int sub_140001500(void) { __try { _local_unwind(frame, target); } }
+ * highir.structured_regions=114 */
+int sub_140001500(void) {
+  __try { goto done; } __finally { if (AbnormalTermination()) { } }
+done:
+  return 0;
+}
 """
         check_source(source)
         for changed in (source.replace("sub_140001500", "sub_140001000"),
-                        source.replace("unresolved runtime stack", ""),
+                        source.replace("goto done;", "_local_unwind(frame, target);"),
+                        source.replace("structured_regions=114", "structured_regions=114; unresolved runtime stack"),
+                        source.replace("__finally", ""),
                         source.replace("__try", ""),
                         source.replace("(void) {", "(void); {")):
             with self.subTest(changed=changed), self.assertRaises(ValueError):

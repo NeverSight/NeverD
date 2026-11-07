@@ -15881,12 +15881,15 @@ bodies are the function's own code.
 A Windows x64 `__finally` is an out-of-line termination handler the runtime
 calls with the parent's EstablisherFrame as its second argument and an
 abnormal-termination flag as its first; the handler reaches the parent's
-locals through `EstablisherFrame + k`. For a parent without a frame register
-that frame is the entry stack pointer less the prologue's fixed allocations,
-which `proveLowSEHTerminationFrame` (`lib/ir/low/SEHEstablisherFrame.cpp`)
-certifies from the normalized unwind codes cross-checked against the decoded
-prologue, refusing a frame register, a stack adjustment on any path into the
-guarded scope, or chained or incomplete unwind data. The bytes it returns ride
+locals through `EstablisherFrame + k`. That frame is the entry stack pointer
+less the prologue's fixed allocations, or with a frame register less those
+before `UWOP_SET_FPREG`, which `proveLowSEHTerminationFrame`
+(`lib/ir/low/SEHEstablisherFrame.cpp`) certifies from the normalized unwind
+codes cross-checked against the decoded prologue, refusing a frame register the
+prologue does not set exactly once, a stack adjustment on any path into the
+guarded scope, or chained or incomplete unwind data. A block only a certified
+handler's own local unwind enters joins that proof with the code of every
+termination scope, on whose frame the unwind resumes. The bytes it returns ride
 `MedFunc::SEHTerminationFrameBytes` to HighIR, where `attachSEHFinallyBodies`
 (`lib/ir/high/structure/SEHFinallyBodies.cpp`, with the x64 projection in
 `X86/X64SEHFinallyBodies.cpp`) projects the handler's body into the empty
@@ -15897,14 +15900,26 @@ Because a C `__finally` runs on the normal exit too, the compiler's inline
 normal-path copy must not run twice: when the handler ignores the abnormal flag
 and its statements equal that copy, the copy is removed and the clause holds
 the whole body; otherwise the copy stays and the clause holds only the abnormal
-work under `if (AbnormalTermination())`. A handler whose frame is not certified,
-whose body is unavailable or has its own exception scope, or whose `__try`
-transfers control out other than by a local-unwind exit (below), nests a
-region with a handler or still calls `_local_unwind` keeps its address comment
-(a reducible inner `__try/__finally` resumes nowhere and leaves by falling
-through, so it may nest): the machine runs the handler on such an exit while
-C would not, so the clause stays out of line. The projection runs in the
-plain-C view as well as the C++ one, because SEH is C.
+work under `if (AbnormalTermination())`. A handler known to do nothing is an
+empty clause. The clause holds the handler whatever its shape: its own `__try`
+regions print inside it, filled first; the handler's stack slots become locals
+of the clause, also where renaming gave its moved stack pointer a name of its
+own to address them through; a `return` from a nested `__except` arm or from the handler's end
+goes to where the body ends, or inlines the arm where that keeps the source
+shape; and a certified local unwind in the handler is the `goto` it makes,
+`HighStmt::AbnormalExit` as in the parent. C runs a filled clause on every jump
+out of the `__try`, which the machine leaves normally: a jump to where the try
+falls through prints as `__leave` (`HighStmt::LeavesTry`), and one that goes
+further sets a local the code after the try reads to go on (`routeStrandedExits`),
+so the clause sees each exit the way the machine ran it. A handler ends a split
+try once: its ranges join, and a try over a loop that its ranges start and end
+inside hoists over that loop. A range's tail where nothing can raise stays out of
+the `__try` when a jump enters it (clang-cl ends a range one byte past a call's
+return address, where an `__except` arm rejoins), and an epilogue's load nothing
+reads does not count as left out when MSVC's ARM64 range runs past it. Only a handler whose frame or registers are not
+certified, or whose body is unavailable, keeps its address comment, which is the
+whole clause; the comment otherwise stays next to the code it names. The
+projection runs in the plain-C view as well as the C++ one, because SEH is C.
 
 A `return` or `goto` out of a `__try` compiles to a call of the runtime's
 `_local_unwind(TargetFrame, TargetIp)`. It runs the termination handler of
@@ -15916,10 +15931,13 @@ what it does: a call of each handler `__C_specific_handler` would run, with
 the flag 1 and the EstablisherFrame as the LLVM route's cleanup passes them,
 the value the routine resumes with in RAX (`RtlUnwind`'s `ReturnValue`,
 zero), and a jump to TargetIp. The code only the call's fall-through reached
-goes with it, unless that code was the only ordinary entry of a block the
-exception runtime or a code address enters: the proofs over the decoded CFG
-would still see that edge, so such a function keeps its runtime calls, as
-does a call whose target the runtime itself enters.
+goes with it, unless that code was the only ordinary entry of a block a code
+address enters: the proofs over the decoded CFG would still see that edge, so
+such a function keeps its runtime calls, as does a call whose target the runtime
+itself enters. An `__except` arm that loses that edge stays an arm the runtime
+enters, and the frame proof walks the decoded edge as well. A conversion the
+modeled exits make impossible retries once with the calls left in their runtime
+form, so they cost no function.
 `MedFunc::SEHLocalUnwindExits` records each exit and the handlers it runs,
 and HighIR keeps it. Where structuring puts the
 rest of a protected body in the other arm of an `if` whose arm takes the exit,
@@ -15943,7 +15961,9 @@ frame slot and reloads it at each call. `certifyLowSEHLocalUnwinds`
 in its own file, `X86/SEHLocalUnwindX64.cpp`) certifies a call only when its
 callee is the authenticated `_local_unwind` import, its target an exact code
 address that starts a block of the function, it runs on the body's stack
-pointer, and its frame is an exact reload of one slot that every store of the
+pointer, the target writes the result register before anything reads it
+unless the convention fixes what the routine leaves there, and its frame is
+an exact reload of one slot that every store of the
 function fills with TargetFrame, that no store at an inexact frame address and
 no callee's home area may reach, and that no out-of-line filter or termination
 handler of the function writes through its EstablisherFrame: each handler's
@@ -15951,7 +15971,14 @@ body must be in the view, and one that stores through frame arithmetic it
 cannot bound refuses. TargetFrame, the body's stack pointer and the slot's
 address may reach only that slot, the runtime (the local unwind, and an
 authenticated setjmp, which keeps the frame in its jump buffer for
-longjmp's unwind) and the handlers. A call passes it in an argument register
+longjmp's unwind) and the handlers. The function's roots, and on ARM64
+its handlers, start with the callee-saved registers the body holds where it
+may leave for them: at a call or a branch through a register, or inside a
+protected range at anything that may raise, running on the body's stack
+pointer, which every such place inside a protected range must do; an
+epilogue's restores are no such place. A call the conditions on the call
+itself exclude keeps its runtime form with its reason
+(`LowSEHLocalUnwindRefusal`). A call passes it in an argument register
 only where its direct callee may observe that register: the callee
 summaries' unread proof (`PipelineResult::CallUnreadGPRs`), which takes an
 opaque call to read everything and never covers a result register, rules a
@@ -15975,10 +16002,59 @@ such a target from the exits' calls with the frame they pass
 (`LowSEHLocalUnwindExitSource`, as from module local-unwind evidence), and
 source projection gives it no unknown entry values; this trusts, as the
 pipeline does elsewhere, that no unrelated function takes an interior
-address of this one. Three shapes still keep their runtime calls, all in
-xcpt4's `main`: a termination handler that saves its EstablisherFrame for the
-handlers nested in it, a handler with an `__except` of its own, and a frame
-register (the O2 builds).
+address of this one. A handler's own certified local unwinds count the same
+way (`MedFunc::SEHHandlerUnwindTargets`): the mentions that are such a call's
+arguments name their target for no entry of its own, a nested handler or one
+whose `__try` left no scope is found through its code references, and a target
+that reads a callee-saved register the handler's ranges write stays out, as what
+it would read is the unwinder's. A handler may hand its EstablisherFrame on only
+in the register it arrived in, where that register still holds it.
+
+On ARM64 (`AArch64/SEHLocalUnwindAArch64.cpp`) the unwinder's
+EstablisherFrame is the stack pointer the function was entered with: MSVC
+saves it as TargetFrame (`add x16, sp, #frame; str x16, [x29, #slot]`), and
+the GS data places the cookie from it. The import is reached through a
+veneer, `adrp x16, page; ldr x16, [x16, #slot]; br x16`, whose code names the
+import's IAT slot, so a single-function view in which discovery recorded no
+stub authenticates it as well. The unwind codes fix the prologue's
+allocation and the frame pointer. The C-specific handler starts a filter or
+termination handler with the parent's callee-saved registers as they were
+where it left the body (the dispatcher context's NonVolatileRegisters) and
+passes the parent's frame pointer in x1,
+so the handler check knows x19 and the like exactly; it takes x1 as an exact
+frame address only where the frame pointer is the body's stack pointer, as
+the funclet model reads it, and the handler calls take x1 from x29 elsewhere.
+A scope matches the `bl` into the runtime itself: the handler steps an
+unwound frame's return address back by an instruction, so MSVC ends an /O2
+`__try` right after such a call. The routine resumes through `RtlUnwind` with no
+return value, as on x64. A GS prologue's `__security_push_cookie` allocates the
+cookie's slot in that callee, 16 bytes the body's own arithmetic does not show:
+the frame the code saves then sits that far above the entry stack pointer that
+arithmetic gives, and nothing the function's own code writes touches the slot.
+The unwind codes stop at the frame pointer, which restores the stack pointer
+for the unwinder, so the stack pointer the body runs on is what the first block
+goes on to allocate. A target only a handler's unwind enters is a root seeded
+like an `__except` arm's, from the ranges of the function's termination scopes.
+
+Windows ARM's routine is `__jump_unwind` (`ARM/SEHLocalUnwindARM.cpp`), whose
+frame MSVC computes from its frame register (`add.w r0, r7, #frame`) with no
+saved slot, and whose target is a Thumb address with the low bit set. The frame
+is the entry stack pointer; the unwind codes fix the allocation, four bytes more
+than the prologue's own instructions show where a GS prologue's
+`__security_push_cookie` allocates its slot. The C-specific handler starts a
+handler with the parent's callee-saved registers, as on ARM64, and the routine
+resumes through `RtlUnwind` with no return value. Nothing else marks the target
+as code on either: `movw`/`movt`, `adrp`/`add` or a literal pool holds it, so the
+pipeline asks the protocol's interpreter what each function names
+(`collectLowSEHLocalUnwindTargets`) and makes the owner start a block there.
+Low-to-Med folds the literal into the call and gives it its two arguments, so
+it reads as what it is in a handler's body as well. The loader reads a
+personality's Thumb import thunk (`movw ip`, `movt ip`, `ldr.w pc, [ip]`) from
+its own bytes, since a focused load's discovery records no stub. A leaf filter has no unwind
+record and no body in the view: a C expression names no label, so it counts as
+naming no target. A scope record over an empty range can never be selected:
+beside scopes that guard code the loader notes it and drops it, which leaves the
+function complete, and a table of nothing else stays partial.
 
 An ARM or AArch64 termination handler takes only the abnormal flag. The
 unwinder restores the parent's callee-saved registers to their values where
@@ -15986,11 +16062,18 @@ the exception struck before calling it, and the handler reads the parent's
 state through them (`ldr w8,[x27]`, `ldr r3,[r7,#12]`). `buildSsa`
 (`lib/ir/med/pass/MedSSA.cpp`) records, for every finally scope whose handler
 lies outside the function, the version of each full-width callee-saved or
-frame-pointer register at the entry of every block of the scope's protected
-range, as it does for an `__except` root. A register that no protected
-operation writes and whose versions agree across every range the handler ends
-is resolved through COPY and constant INT_ADD/INT_SUB definitions, never a
-PHI or an auxiliary output, to an entry-stack-pointer offset, an incoming argument register or a
+frame-pointer register where each protected range starts, as it does for an
+`__except` root; only operations inside a range count as writes, and a handler
+root's seed writes nothing. A root whose range holds the register under several
+SSA names, because an `__except` arm rejoined there, takes that value where every
+definition those names reach through PHI and COPY is one (an open seed reads as
+the names its own range holds, since execution enters it first with the value).
+A register that no protected operation writes and that holds one value across
+every range the handler ends is resolved through COPY, constant INT_ADD/INT_SUB
+and PHI definitions, never an auxiliary output, to an entry-stack-pointer offset,
+an incoming argument register, what a callee-saved register held on entry (which
+C prints as the unknown register it is, in the parent and in the clause alike:
+a nested handler does this, whatever the view knows of its own parent) or a
 constant (keeping an address constant's provenance), and published in
 `MedFunc::SEHFuncletRegisters` by handler; anything else is left out. Version
 0 is a register's value on entry only where the entry block's self-copy
@@ -16007,16 +16090,19 @@ stack pointer by another; only where the two agree is it known. These
 forms survive HighIR's renaming passes, which a raw SSA value in an exception
 clause would not. `ARM/ARMSEHFinallyBodies.cpp` replaces each entry register
 the handler reads with that value (`frame_base - k`, the parameter, or the
-constant) and an AArch64 x1 with the establisher frame, sets the flag, folds
-constant conditions so the unwind path keeps only the branches it takes
-(a `return` or jump in a dropped branch goes with it; one that survives keeps
-the comment), gives the handler's temporaries fresh numbers past the parent's
-so they print and inline as the parent's own do, and always uses the guarded
-form: the compiler's normal-path code stays where it
-is, so nothing is removed and a region nested in another `__try` is filled in
-place. A handler that reads a register without a published value, its own
-stack, another parameter or exception state, or that loops, jumps or has
-exception scopes of its own keeps its address comment. MSVC ARM leaf handlers
+constant), an AArch64 x1 with the establisher frame and an ARM r1 with the
+entry stack pointer, spells an argument register a handler forwards to a call
+without ever writing it, past those the parent can spell, as the unknown value it
+is, sets the flag, folds constant
+conditions so the unwind path keeps only the branches it takes, gives the
+handler's temporaries fresh numbers past the parent's so they print and inline
+as the parent's own do, and always uses the guarded form: the compiler's
+normal-path code stays where it is, so nothing is removed and a region nested in
+another `__try` is filled in place. A local-unwind exit that leaves such a
+`__try` runs the handler as its clause, as on x64: where the clause can run it
+for every such exit, the exits' explicit calls of it go and their jumps stay
+jumps. A handler that reads a register without a published value keeps its
+address comment. MSVC ARM leaf handlers
 have no unwind record of their own, so `FuncDetector` also takes each scope's
 out-of-line termination handler as a function entry unless it lies inside
 another record's range. Filters stay as they were: the `__except` expression
@@ -17139,8 +17225,8 @@ Each supplied proxy may independently declare `native_binding` with a positive
 signed `fd`, a uint32 `handle`, and explicit `alive`. The native adapter resolves
 the fd on first use to an existing shared Linux Binder open description and
 rejects closure/reuse. Java keys still imply no native endpoint. The guest must
-establish any context manager and read-only reply arenas itself. Object-free,
-synchronous handle-zero calls use the existing protocol-8 ioctl routing;
+establish any context manager and read-only reply arenas itself. Synchronous
+handle-zero and owned strong-handle calls use the shared protocol-8 ioctl routing;
 replies are computed by guest service code. Missing managers return the kernel's
 DEAD_REPLY, which sets the BpBinder dead cache and a checked DeadObjectException.
 A declared dead proxy short-circuits before IPC. Status replies retain old Parcel
@@ -17165,9 +17251,20 @@ its next Binder exchange. Null Java replies use the temporary-reply release
 path. Neither cursor motion nor reading frees the buffer. An invalidated or unreadable mapping
 stops explicitly, and scalar reads do not copy the entire retained buffer.
 
+`LinuxBinderObjects.cpp` owns strong flat-object translation, process-local handle
+identity, reference commands and node-control work. Buffer allocation leases
+retain object metadata and distinguish address reuse. Final device-open retirement
+drops process references; nodes weakly identify their owner. The native adapter
+only queues libbinder reference/free commands through that owner. Parcel validates
+object reads and protects scalar reads; `AndroidBinder.cpp` caches remote Java
+proxies by endpoint and rejects duplicate input endpoint identities. Dynamic
+proxies have no invented input key in snapshots. Reference acquisition is ordered
+before Parcel release on the current native thread. No private service response
+or application-specific object conversion belongs in these shared models.
+
 `enforceInterface` still requires incoming flags and the Java StrictMode upcall.
-Local Binder dispatch, nested/one-way transactions, translated handles, Binder
-objects/FDs, and writes/capacity growth in borrowed reply storage remain explicit
+Local Binder dispatch, nested/one-way transactions, weak objects/FDs, and
+writes/capacity growth in borrowed reply storage remain explicit
 boundaries. ServiceManager `lookup_results` remain a separate semantic input;
 this transport does not turn those entries into kernel peers or replies.
 

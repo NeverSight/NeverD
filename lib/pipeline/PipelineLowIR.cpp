@@ -29,6 +29,7 @@
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/RegistrationLeafPrefixMemo.h"
 #include "neverd/ir/low/SEHFrameProof.h"
+#include "neverd/ir/low/SEHLocalUnwindProtocol.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallTarget.h"
@@ -2370,6 +2371,27 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
        FH4Candidates ? *FH4Candidates : OwnFH4Candidates)
     if (isFunctionEntry(Owner) && !isFunctionEntry(Target))
       Result.RootsByOwner[Owner].insert(Target);
+
+  // Where a local unwind's target is named only as the routine's argument.
+  for (const LowFunc &Func : Funcs)
+    for (va_t Target : collectLowSEHLocalUnwindTargets(
+             Func, Img, getTargetRegInfo(Img.Arch))) {
+      const ExceptionFunction *Owner = nullptr;
+      bool Ambiguous = false;
+      for (const ExceptionFunction &Candidate :
+           Img.ExceptionMetadata.Functions) {
+        if (Candidate.Kind != RuntimeFunctionKind::Primary ||
+            Candidate.ParseStatus != ExceptionParseStatus::Complete ||
+            !Candidate.SEH || Target <= Candidate.CodeRange.Begin ||
+            Target >= Candidate.CodeRange.End)
+          continue;
+        Ambiguous = Owner != nullptr;
+        Owner = &Candidate;
+      }
+      if (Owner && !Ambiguous && isFunctionEntry(Owner->CodeRange.Begin) &&
+          !isFunctionEntry(Target))
+        Result.RootsByOwner[Owner->CodeRange.Begin].insert(Target);
+    }
 
   // FH3 separated funclets return continuation addresses only in the x64
   // table ABI.  Other Windows targets either use registration records or

@@ -2893,6 +2893,10 @@ TEST(ProcessReport, AndroidBinderNativeBindingIsExplicitAndValidated) {
     EXPECT_FALSE(bool(rejected)) << bad;
     llvm::consumeError(rejected.takeError());
   }
+  auto duplicate = processOptionsFromJSON(
+      R"({"android":{"jni":true,"application_snapshot":{"phase":"unattached","service_manager":{"binder_proxies":[{"key":7,"native_binding":{"fd":3,"handle":1,"alive":true}},{"key":8,"native_binding":{"fd":3,"handle":1,"alive":true}}]}}}})");
+  EXPECT_FALSE(bool(duplicate));
+  llvm::consumeError(duplicate.takeError());
 }
 
 TEST(ProcessReport, AndroidServiceManagerPreservesUnknownNullAndProxyKeys) {

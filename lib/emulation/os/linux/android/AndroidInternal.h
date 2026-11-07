@@ -158,10 +158,12 @@ public:
 };
 class GuestThreads;
 /// Native libbinder TLS, independent of JNI attachments and kernel handles.
-struct BinderBufferRelease {
+struct BinderPendingCommand {
   std::shared_ptr<linux_model::LinuxDeviceState> Device;
   uint32_t FD;
-  uint64_t Address;
+  uint32_t Command;
+  uint64_t Value;
+  std::shared_ptr<const linux_model::BinderBuffer> Lease;
 };
 struct BinderThreadState {
   // API 28 IPCThreadState construction starts a new native thread at zero.
@@ -169,7 +171,7 @@ struct BinderThreadState {
   bool UsesBinder = false;
   // API 28 freeBuffer uses self(), ignoring the originating thread cookie.
   // Recycle queues a free on the current thread's next driver exchange.
-  std::vector<BinderBufferRelease> PendingFrees;
+  std::vector<BinderPendingCommand> PendingCommands;
 };
 class Bionic {
 public:

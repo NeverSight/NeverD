@@ -133,6 +133,31 @@ std::optional<va_t> decodeAArch64Veneer(const BinaryImage &Img, va_t Current,
   return std::nullopt;
 }
 
+/// The import slot a Thumb import thunk reads, `movw ip, #lo; movt ip, #hi;
+/// ldr.w pc, [ip]`, which a focused load's discovery has not recorded.
+std::optional<va_t> decodeARMImportThunkSlot(const BinaryImage &Img,
+                                             va_t Current) {
+  const uint8_t *Code = Img.readVA(Current & ~va_t(1), 12);
+  if (!Code)
+    return std::nullopt;
+  const uint16_t MovWHi = readLE<uint16_t>(Code);
+  const uint16_t MovWLo = readLE<uint16_t>(Code + 2);
+  const uint16_t MovTHi = readLE<uint16_t>(Code + 4);
+  const uint16_t MovTLo = readLE<uint16_t>(Code + 6);
+  if ((MovWHi & 0xfbf0u) != 0xf240u || (MovWLo & 0x8f00u) != 0x0c00u ||
+      (MovTHi & 0xfbf0u) != 0xf2c0u || (MovTLo & 0x8f00u) != 0x0c00u ||
+      readLE<uint16_t>(Code + 8) != 0xf8dcu ||
+      readLE<uint16_t>(Code + 10) != 0xf000u)
+    return std::nullopt;
+  auto Imm16 = [](uint16_t Hi, uint16_t Lo) {
+    return static_cast<uint32_t>(((Hi & 0x000fu) << 12) |
+                                 ((Hi & 0x0400u) << 1) | ((Lo & 0x7000u) >> 4) |
+                                 (Lo & 0x00ffu));
+  };
+  return static_cast<va_t>(Imm16(MovWHi, MovWLo)) |
+         (static_cast<va_t>(Imm16(MovTHi, MovTLo)) << 16);
+}
+
 std::optional<va_t> decodeARMBranchVeneer(const BinaryImage &Img,
                                           va_t Current) {
   bool Thumb = (Current & 1u) != 0;
@@ -198,6 +223,9 @@ std::pair<va_t, std::string> resolvePersonality(const BinaryImage &Img,
       if (std::string Name = directNameAt(Img, Current & ~va_t(1));
           !Name.empty())
         return {Current & ~va_t(1), std::move(Name)};
+      if (const auto Slot = decodeARMImportThunkSlot(Img, Current))
+        if (std::string Name = directNameAt(Img, *Slot); !Name.empty())
+          return {Current & ~va_t(1), std::move(Name)};
       auto Target = decodeARMBranchVeneer(Img, Current);
       if (!Target)
         break;
