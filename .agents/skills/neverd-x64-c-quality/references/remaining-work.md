@@ -1,5 +1,15 @@
 # Remaining x64 C-quality work
 
+Existing raw libvirt/QEMU saves can now be inspected offline through
+`scripts/qemu_save_snapshot.py`. CPU/APIC fields and original RAM-block bytes
+are available without restoring a guest; one bounded page index supports
+subsequent reads. Repeated page records preserve the latest bytes, missing pages
+fail, and an expected entry PC must match the capture. The inspected matching
+kernel save is paused elsewhere, so it does not recover either ordinary
+registry input. Physical mappings, complete V6 state import, invocation capture
+and external environment effects remain separate obligations. The independent
+tool adds no work to source emission. See `docs/qemu-save-snapshot.md`.
+
 The explicit-state route now has an original-instruction stack-observer
 regression: a partial DWORD store preserves arbitrary upper bits, and an
 observer reloads the slot pointer from a saved RDI cell. Both source routes

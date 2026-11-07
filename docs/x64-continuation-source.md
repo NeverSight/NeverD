@@ -1,5 +1,9 @@
 # Explicit x64 continuation C
 
+[Offline QEMU save inspection](qemu-save-snapshot.md) exposes captured CPU fields
+and named RAM-block bytes without restoring a guest. It checks a requested entry
+PC explicitly and does not infer missing ordinary inputs or a complete V6 state.
+
 The alternative [Hyper-V page binding](x86-hyperv-hypercalls.md) publishes
 ordinary, fast and rep result registers through a native page call.
 
