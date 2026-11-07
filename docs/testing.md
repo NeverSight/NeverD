@@ -59,6 +59,19 @@ of the outputs. For real-save qualification, compare banks with existing
 independent register receipts and keep producer choices separate. Neither
 these images nor clear saved inhibition bits establish runtime admission.
 
+Add `scripts.tests.test_qemu_save_events` for event-boundary interpretation.
+Authored records cover absent exception-info post-load injection, distinct
+pending payloads, signed/stale error codes, software versus hardware injected
+interrupts, separate NMI phases/masking, halted/MP/crash/triple-fault evidence,
+APIC bit banks, and unknown versus explicitly bound instruction shadows.
+Tests cover every vector/IRR bit without delivering any event. CPU/APIC/common
+identity, subsection versions, malformed fields and atomic CLI failures remain
+checked. Real-save qualification should compare CPU/APIC values with an
+independent decoder and halted/SMM observations with existing register receipts;
+uncompared common fields remain unqualified. Existing V6/control outputs must
+stay identical after shared validation changes. No target program, instruction
+executor, event callback or VM runs; no native build is needed for this suite.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
