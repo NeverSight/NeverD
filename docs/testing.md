@@ -19934,6 +19934,10 @@ origins and unresolved exceptional inputs. The real PE32 `xcpt4` filter and
 `seh_probe` handler regressions in `NeverDCPointerProjectionTests` cover their
 interaction with source SEH rendering; run both source routes and the complete
 C-pointer, Win64, SysV and i386 call-contract suites after changing this boundary.
+The immediate-raise continuation check binds its signed snapshot through the
+emitted global store instead of a fixed SSA number. It checks the 32-bit
+declaration and executes the copy, store and return over boundary and sampled
+values, independently of temporary numbering.
 
 `I386CallContract.PhysicalCallReturnSlotsDoNotKeepOldSourceConstants` checks
 four-byte CALL slots across the same three formats, both source routes and
@@ -20652,6 +20656,15 @@ responses; a primitive improvement alone does not establish GUI latency.
 `NeverDHighExprUseCountsTests` compares shared graphs with independently
 expanded tree reads, retains distinct variable identities and repeated reads,
 and checks an indirect target when a call has no arguments.
+
+`HighControlFlowSemantics.CopyCandidateCountsRetainMemorySnapshots` checks
+single-use inlining and both copy-folding passes after count-based admission.
+Ordinary reads keep their earlier value across an intervening store; atomic
+and segmented reads retain their original expression at the original statement.
+Run the same source suites when changing the order of candidate checks.
+`LeafSimplificationKeepsCallsAndSharedUses` retains no-argument indirect calls
+and their ordered target, propagates a shared arithmetic replacement to both
+uses, and reports no progress when the next simplification leaves them intact.
 
 ### Predicate cleanup and independent call effects
 
