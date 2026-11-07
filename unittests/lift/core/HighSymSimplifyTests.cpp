@@ -3479,3 +3479,92 @@ TEST(HighSymSimplify, BooleanInputsReadFullWidthNonzeroTruth) {
           EXPECT_EQ(integerValue(After, A, B), integerValue(Before, A, B));
     }
 }
+
+TEST(HighSymSimplify, ExpandedByteParityKeepsEveryBitAndItsInputWidth) {
+  for (const uint16_t Bytes : {1, 4, 8})
+    for (const bool Corrupt : {false, true}) {
+      auto X = HighExpr::makeVar(tempOfSize(1, Bytes));
+      auto Word =
+          HighExpr::makeBinop(NdOp::INT_ADD, X, HighExpr::makeConst(73, Bytes));
+      ExprPtr Fold = HighExpr::makeConst(0, Bytes);
+      for (unsigned Bit = 0; Bit < 8; ++Bit) {
+        const auto SourceBit = Corrupt && Bit == 3 ? 2 : Bit;
+        auto Part = HighExpr::makeBinop(
+            NdOp::INT_AND,
+            HighExpr::makeBinop(NdOp::INT_RIGHT, Word,
+                                HighExpr::makeConst(SourceBit, 1)),
+            HighExpr::makeConst(1, Bytes));
+        Fold = HighExpr::makeBinop(NdOp::INT_XOR, Fold, Part);
+      }
+      const auto Before = HighExpr::makeBinop(NdOp::INT_EQUAL, Fold,
+                                              HighExpr::makeConst(0, Bytes));
+      const auto After = simplified(Before);
+      bool HasPopcount = false;
+      std::vector<ExprPtr> Work{After};
+      while (!Work.empty()) {
+        const auto E = Work.back();
+        Work.pop_back();
+        HasPopcount |= E->Kind == ExprKind::UnaryOp && E->Op == NdOp::POPCOUNT;
+        Work.insert(Work.end(), E->Operands.begin(), E->Operands.end());
+      }
+      EXPECT_EQ(HasPopcount, !Corrupt) << After->str();
+      for (unsigned Value = 0; Value < 256; ++Value) {
+        EXPECT_EQ(integerValue(After, Value), integerValue(Before, Value));
+        EXPECT_EQ(integerValue(After, ~uint64_t(Value)),
+                  integerValue(Before, ~uint64_t(Value)));
+      }
+    }
+}
+
+TEST(HighSymSimplify, RecoveredParitySourceCountsOnlyItsUnsignedByte) {
+  auto Parameter = [](int Id) {
+    auto V = tempOfSize(Id, 1);
+    V.Kind = MedVar::Param;
+    return HighExpr::makeVar(V, NdType::makeInt(1, true));
+  };
+  const auto X = Parameter(0), Y = Parameter(1);
+  const auto Byte = HighExpr::makeBinop(NdOp::INT_SUB, X, Y);
+  auto Sum = HighExpr::makeConst(0, 1);
+  for (unsigned Bit = 0; Bit < 8; ++Bit)
+    Sum = HighExpr::makeBinop(
+        NdOp::INT_ADD, Sum,
+        HighExpr::makeBinop(NdOp::INT_AND,
+                            HighExpr::makeBinop(NdOp::INT_RIGHT, Byte,
+                                                HighExpr::makeConst(Bit, 1)),
+                            HighExpr::makeConst(1, 1)));
+  HighFunc F;
+  F.Name = "byte_parity_count";
+  F.Entry = kEntry;
+  F.ReturnType = NdType::makeInt(1, false);
+  F.Params = {{"x", X->Type, kNoParamReg, 0}, {"y", Y->Type, kNoParamReg, 1}};
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeBinop(
+      NdOp::INT_EQUAL,
+      HighExpr::makeBinop(NdOp::INT_AND, Sum, HighExpr::makeConst(1, 1)),
+      HighExpr::makeConst(0, 1));
+  F.Body.push_back(std::move(Return));
+  simplifyExprSemantics(F.Body);
+  std::string C;
+  llvm::raw_string_ostream Out(C);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({F}, Out, Options));
+  Out.flush();
+  ASSERT_NE(C.find("__builtin_popcount"), std::string::npos) << C;
+  const auto Program = C + R"C(
+int main(void) {
+  for (unsigned x = 0; x < 256; ++x)
+    for (unsigned y = 0; y < 256; ++y) {
+      unsigned byte = (x - y) & 255u, odd = 0;
+      for (unsigned bit = 0; bit < 8; ++bit)
+        odd ^= (byte >> bit) & 1u;
+      if (byte_parity_count((int8_t)x, (int8_t)y) != !odd)
+        return 1;
+    }
+  return 0;
+}
+)C";
+  source_call_execution_test::compileAndRun(Program, {"-O0"});
+  source_call_execution_test::compileAndRun(Program, {"-O2"});
+}

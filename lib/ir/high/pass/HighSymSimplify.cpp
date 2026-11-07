@@ -29,6 +29,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/solver/SymSynthVerifier.h"
 #include "neverd/support/Parallel.h"
+#include "neverd/symbolic/SymIntegerIntrinsics.h"
 #include "neverd/symbolic/SymMBA.h"
 #include "neverd/symbolic/SymWideArithmetic.h"
 
@@ -305,8 +306,8 @@ bool canTranslateOperands(const ExprPtr &E, const WidthFn &WidthOf) {
       return Width == 8 && Left && Left == Right;
   }
   if (E->Kind == ExprKind::UnaryOp && E->Operands.size() == 1 &&
-      E->Op == NdOp::BOOL_NOT)
-    return Width == 8 && WidthOf(E->Operands[0]);
+      (E->Op == NdOp::BOOL_NOT || E->Op == NdOp::POPCOUNT))
+    return (E->Op == NdOp::POPCOUNT || Width == 8) && WidthOf(E->Operands[0]);
   if (E->Kind == ExprKind::UnaryOp && E->Operands.size() == 1 &&
       (E->Op == NdOp::INT_NOT || E->Op == NdOp::INT_NEGATE ||
        E->Op == NdOp::INT_NEG2))
@@ -640,11 +641,13 @@ sym::SymRef Translator::in(const ExprPtr &E) {
                  (Current->Op == NdOp::INT_NOT ||
                   Current->Op == NdOp::INT_NEGATE ||
                   Current->Op == NdOp::INT_NEG2 ||
-                  Current->Op == NdOp::BOOL_NOT) &&
+                  Current->Op == NdOp::BOOL_NOT ||
+                  Current->Op == NdOp::POPCOUNT) &&
                  Current->Operands.size() == 1 &&
                  widthOf(Current->Operands[0]) &&
                  (widthOf(Current->Operands[0]) == Width ||
-                  Current->Op == NdOp::BOOL_NOT)) {
+                  Current->Op == NdOp::BOOL_NOT ||
+                  Current->Op == NdOp::POPCOUNT)) {
         Dependencies.push_back(Current->Operands[0]);
       }
       for (auto It = Dependencies.rbegin(); It != Dependencies.rend(); ++It)
@@ -826,6 +829,14 @@ sym::SymRef Translator::in(const ExprPtr &E) {
     }
 
     case ExprKind::UnaryOp: {
+      if (Current->Op == NdOp::POPCOUNT &&
+          canTranslateOperands(Current, [&](const ExprPtr &Operand) {
+            return widthOf(Operand);
+          })) {
+        Result = Ctx.mkZExtOrTrunc(
+            sym::evaluatePopulationCount(Ctx, in(Current->Operands[0])), Width);
+        break;
+      }
       if (Current->Op == NdOp::BOOL_NOT &&
           canTranslateOperands(Current, [&](const ExprPtr &Operand) {
             return widthOf(Operand);
@@ -908,6 +919,65 @@ ExprPtr literalExpr(const llvm::APInt &Val, uint16_t Bytes,
   return nullptr;
 }
 
+// Reconstruct only a complete eight-bit parity. The existing exact reducer
+// must prove its XOR difference constant; repeated or missing bits stay.
+std::pair<sym::SymRef, bool> lowByteParityInput(sym::SymContext &Ctx,
+                                                sym::SymRef Root) {
+  const auto Op = Ctx.op(Root);
+  const bool MaskedLowBit = Op == sym::SymOp::And &&
+                            std::any_of(Ctx.operands(Root).begin(),
+                                        Ctx.operands(Root).end(), [&](auto V) {
+                                          const auto K = Ctx.asConst(V);
+                                          return K && K->isOne();
+                                        });
+  if (Op != sym::SymOp::Xor && !MaskedLowBit &&
+      !(Op == sym::SymOp::Add && Ctx.width(Root) == 1))
+    return {};
+  if (Ctx.width(Root) != 1) {
+    const auto Upper = Ctx.constantWindow(Root, 1, Ctx.width(Root) - 1);
+    if (!Upper || !Upper->isZero())
+      return {};
+  }
+  const auto Low = Ctx.mkExtract(Root, 0, 1);
+  // Addition and XOR are identical in a one-bit result. In particular, this
+  // covers the low bit of the population-count sum emitted by the lifter.
+  if (Ctx.op(Low) != sym::SymOp::Xor && Ctx.op(Low) != sym::SymOp::Add)
+    return {};
+  const auto Borrowed = Ctx.operands(Low);
+  const llvm::SmallVector<sym::SymRef, 8> Terms(Borrowed.begin(),
+                                                Borrowed.end());
+  for (const auto Term : Terms) {
+    if (Ctx.op(Term) != sym::SymOp::Extract || Ctx.width(Term) != 1)
+      continue;
+    auto Source = Ctx.operand(Term, 0);
+    auto Bit = Ctx.node(Term).Aux;
+    if (Ctx.op(Source) == sym::SymOp::LShr ||
+        Ctx.op(Source) == sym::SymOp::AShr) {
+      const auto Shift = Ctx.asConst(Ctx.operand(Source, 1));
+      if (!Shift || Shift->uge(Ctx.width(Source)) ||
+          Bit >= Ctx.width(Source) - Shift->getZExtValue())
+        continue;
+      Bit += Shift->getZExtValue();
+      Source = Ctx.operand(Source, 0);
+    }
+    if (Bit != 7)
+      continue;
+    const auto Byte = Ctx.mkExtract(Source, 0, 8);
+    llvm::SmallVector<sym::SymRef, 8> Bits;
+    for (unsigned Bit = 0; Bit < 8; ++Bit)
+      Bits.push_back(Ctx.mkExtract(Byte, Bit, 1));
+    const auto Difference = Ctx.mkXor(Ctx.mkXor(Bits), Low);
+    sym::MBAOptions Options;
+    Options.MaxWork = limits::ir::kHighSymSimplifySimplifyOneMaxWork;
+    const auto Proof = sym::simplifyMBADeep(Ctx, Difference, Options);
+    if (Proof.Changed && Proof.Evidence != sym::MBAEvidence::Derivation)
+      continue;
+    if (const auto Constant = Ctx.asConst(Proof.Expr))
+      return {Byte, !Constant->isZero()};
+  }
+  return {};
+}
+
 ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
                         bool ScalarLiterals) {
   struct WorkItem {
@@ -917,6 +987,7 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
   llvm::SmallVector<WorkItem, 64> Work{{R, false}};
   std::unordered_map<uint32_t, ExprPtr> Built;
   std::unordered_set<uint32_t> Active;
+  std::unordered_map<uint32_t, std::pair<sym::SymRef, bool>> ParityInputs;
 
   while (!Work.empty()) {
     WorkItem Item = Work.pop_back_val();
@@ -942,6 +1013,10 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       if (Ctx.op(Child) == sym::SymOp::Extract && Ctx.width(Child) < 8)
         UnsignedFragment = Child;
     }
+    if (!Item.ChildrenReady)
+      if (const auto Parity = lowByteParityInput(Ctx, Item.Ref); Parity.first)
+        ParityInputs.emplace(Index, Parity);
+    const auto Parity = ParityInputs.find(Index);
 
     if (!Item.ChildrenReady) {
       if (!Active.insert(Index).second) {
@@ -949,6 +1024,11 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
         continue;
       }
       Work.push_back({Item.Ref, true});
+      if (Parity != ParityInputs.end()) {
+        if (!Built.contains(Parity->second.first.index()))
+          Work.push_back({Parity->second.first, false});
+        continue;
+      }
       llvm::ArrayRef<sym::SymRef> Operands =
           Ctx.operands(UnsignedFragment ? UnsignedFragment : Item.Ref);
       for (auto It = Operands.rbegin(); It != Operands.rend(); ++It)
@@ -964,9 +1044,6 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       continue;
     }
     const auto ByteSize = static_cast<uint16_t>((NodeWidth + 7) / 8);
-    // HighIR carries predicates as byte-valued 0/1. Only Boolean operations
-    // and comparisons may use that view; one-bit arithmetic has different
-    // wrapping semantics from byte arithmetic.
     if (NodeWidth == 1 && Ctx.op(Item.Ref) != sym::SymOp::Const &&
         Ctx.op(Item.Ref) != sym::SymOp::Var &&
         Ctx.op(Item.Ref) != sym::SymOp::Add &&
@@ -984,9 +1061,26 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     auto get = [&](sym::SymRef Child) -> ExprPtr {
       auto It = Built.find(Child.index());
       assert(It != Built.end() && "iterative HighIR rebuild lost an operand");
-      // A lost operand abandons this rewrite and keeps the source expression.
       return It == Built.end() ? nullptr : It->second;
     };
+    if (Parity != ParityInputs.end()) {
+      const auto Byte = get(Parity->second.first);
+      ExprPtr Result;
+      if (Byte) {
+        auto Count = HighExpr::makeUnary(NdOp::POPCOUNT, Byte);
+        Count->Type = NdType::makeInt(ByteSize, false);
+        Result = HighExpr::makeBinop(NdOp::INT_AND, std::move(Count),
+                                     HighExpr::makeConst(1, ByteSize));
+        Result->Type = NdType::makeInt(ByteSize, false);
+        if (Parity->second.second) {
+          Result = HighExpr::makeBinop(NdOp::INT_XOR, std::move(Result),
+                                       HighExpr::makeConst(1, ByteSize));
+          Result->Type = NdType::makeInt(ByteSize, false);
+        }
+      }
+      Built.emplace(Index, std::move(Result));
+      continue;
+    }
     auto binop = [&](NdOp Op, llvm::ArrayRef<sym::SymRef> Operands) -> ExprPtr {
       if (Operands.empty())
         return nullptr;
@@ -1026,10 +1120,11 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       // `p - 8` rather than `-8 + p`.
       llvm::SmallVector<sym::SymRef, 8> Plus, Minus, Constants;
       for (sym::SymRef Term : Ctx.operands(Item.Ref)) {
-        // A term spelled by an available local was built as that local, without
-        // its factors, so it cannot be rewritten as a subtraction of them.
-        if (Ctx.op(Term) == sym::SymOp::Mul &&
-            DefinitionViews.find(Term.index()) == DefinitionViews.end()) {
+        // An available definition is rebuilt as its source local above,
+        // without visiting its symbolic children. Keep that complete spelling
+        // instead of trying to extract an unbuilt child from a negated term.
+        if (!DefinitionViews.count(Term.index()) &&
+            Ctx.op(Term) == sym::SymOp::Mul) {
           llvm::ArrayRef<sym::SymRef> Factors = Ctx.operands(Term);
           if (Factors.size() == 2 && Ctx.isConst(Factors[0]) &&
               Ctx.constValue(Factors[0]).isAllOnes()) {
@@ -1179,7 +1274,8 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       default:
         break;
       }
-      // A signed one-bit value denotes 0/-1, not the byte carrier's 0/1.
+      // HighIR stores predicates as byte-valued 0/1. A signed one-bit word
+      // instead denotes 0/-1, so preserve that reading before comparison.
       if (Ctx.width(A) == 1 &&
           (Op == NdOp::INT_SLESS || Op == NdOp::INT_SLESSEQUAL)) {
         Left = HighExpr::makeUnary(NdOp::INT_NEG2, Left);
@@ -1298,7 +1394,7 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     }
 
     default:
-      // Unsupported operators retain the source expression.
+      // Unsupported sub-byte operations retain the source.
       Result = nullptr;
       break;
     }
