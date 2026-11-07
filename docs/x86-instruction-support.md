@@ -4031,6 +4031,18 @@ word stack addresses and nested ENTER word-address borrow. See the
 [stack evidence](evidence/x86-legacy-stack-2026-11-07.json). This does not close
 the other full-machine execution gaps or advance the LLVM release gate.
 
+### Protected bit counts and ADX
+
+Original protected POPCNT/LZCNT/TZCNT/ADCX/ADOX now use the shared scalar
+executor and generated C dispatcher. The
+[integer-extension contract](x86-legacy-segments.md#protected-integer-extensions)
+selects target availability explicitly: absent LZCNT/BMI1 uses BSR/BSF;
+absent POPCNT/ADX delivers #UD after fetch. Count undefined flags remain
+producer inputs, while CF/ZF and unsigned ADX chains are computed. Operand
+faults, guest repair/IRET/retry and data breakpoints compose with their existing
+owners. Ordinary lifting and LLVM/NeverC computation support already existed;
+the global state gaps and LLVM release gate remain open.
+
 ### Protected ARPL conditional completion
 
 The protected ordinary-RAM executor now runs original ARPL register and memory

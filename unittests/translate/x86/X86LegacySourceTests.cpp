@@ -418,6 +418,91 @@ TEST_P(X86LegacySourceTest, FarCallAndReturnRedispatchAcrossCodeModes) {
   EXPECT_EQ(S.Core.GPR[0], 0xdead1234u);
 }
 
+TEST_P(X86LegacySourceTest, IntegerCountsAndIndependentCarryChains) {
+  for (bool Code32 : {false, true}) {
+    resetLegacyState();
+    O.IntegerExtensions = {true, true, true, true};
+    O.BitCountUndefinedFlags = 0x810;
+    S.Core.Segments[1].Attributes = Code32 ? 0xc0fb : 0x80fb;
+    std::vector<SourceUnit> Units;
+    uint32_t Address = 0x1000;
+    for (auto Bytes : {std::vector<uint8_t>{0xf3, 0x0f, 0xb8, 0xc1},
+                       {0xf3, 0x0f, 0xbc, 0xc1},
+                       {0xf3, 0x0f, 0xbd, 0xc1},
+                       {0x66, 0x0f, 0x38, 0xf6, 0xc1},
+                       {0xf3, 0x0f, 0x38, 0xf6, 0xc1}}) {
+      Units.push_back({Address, Code32 ? 32u : 16u, Bytes});
+      Address += Bytes.size();
+    }
+    Driver Run = nullptr;
+    ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
+    X86LegacySourceExecution Context(S, *M, O);
+    for (unsigned I = 0; I != Units.size(); ++I) {
+      S.Core.GPR[0] = 0xffffffff;
+      S.Core.GPR[1] = I < 3 ? 0x80000001 : 1;
+      S.EFlags = 0xed7;
+      uint64_t Budget = 1;
+      ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+      EXPECT_EQ(Budget, 0u);
+      const uint32_t Counts[]{Code32 ? 2u : 1u, 0, Code32 ? 0u : 15u};
+      const uint32_t Expected =
+          I < 3 ? (Code32 ? 0 : 0xffff0000) | Counts[I] : 1;
+      EXPECT_EQ(S.Core.GPR[0], Expected);
+      const uint32_t Flags =
+          I < 3 ? 0x602 | (I ? 0x810 : 0) | (!Counts[I] ? 64 : 0) : 0xed7;
+      EXPECT_EQ(S.EFlags, Flags);
+    }
+  }
+}
+
+TEST_P(X86LegacySourceTest, IntegerCountFaultHandlerRepairsAndRetriesOriginal) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(
+      compile({{0x1000, 32, {0xf3, 0x0f, 0xb8, 0x07}},
+               {0x1004, 32, {0x90}},
+               {0x2000, 32, {0xc7, 0x05, 0x24, 0x10, 1, 0, 7, 0x90, 0, 0}},
+               {0x200a, 32, {0x83, 0xc4, 4}},
+               {0x200d, 32, {0xcf}}},
+              Run));
+  O.IntegerExtensions = {true, true, true, true};
+  S.Core.GPR[0] = 0x12345678;
+  S.Core.GPR[7] = 0x9000;
+  put(0x9000, 0x8101, GuestScalarWidth::I32);
+  put(0x11024, 0, GuestScalarWidth::I32);
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 1;
+  ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+  EXPECT_EQ(S.Core.GPR[0], 0x12345678u);
+  EXPECT_EQ(S.CR2, 0x9000u);
+  EXPECT_EQ(Context.lastResult().DeliveredVector, 14);
+  EXPECT_EQ(Budget, 0u);
+  Budget = 5;
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(S.Core.GPR[0], 3u);
+  EXPECT_EQ(S.EIP, 0x1005u);
+  EXPECT_EQ(S.Core.CPL, 3);
+}
+
+TEST_P(X86LegacySourceTest, IntegerFeatureBindingsSelectAliasesOrGuestUD) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile({{0x1000, 32, {0xf3, 0x0f, 0xbc, 0xc1}},
+                                   {0x1004, 32, {0xf3, 0x0f, 0xb8, 0xc1}}},
+                                  Run));
+  S.Core.GPR[1] = 0;
+  uint64_t Budget = 3;
+  X86LegacySourceExecution Unbound(S, *M, O);
+  EXPECT_EQ(Run(&Unbound, &Budget), 256u);
+  EXPECT_EQ(Budget, 3u);
+  O.IntegerExtensions.emplace();
+  O.BitScanChoices = {0x98765432, 0};
+  X86LegacySourceExecution Bound(S, *M, O);
+  ASSERT_EQ(Run(&Bound, &Budget), 1u) << Bound.lastError().str();
+  EXPECT_EQ(Budget, 1u);
+  EXPECT_EQ(S.Core.GPR[0], 0x98765432u);
+  EXPECT_EQ(Bound.lastResult().DeliveredVector, 6);
+  EXPECT_EQ(get(S.Core.GPR[4]), 0x1004u);
+}
+
 TEST_P(X86LegacySourceTest, StoreChangingNextInstructionStopsBeforeItExecutes) {
   Driver Run = nullptr;
   ASSERT_NO_FATAL_FAILURE(compile(

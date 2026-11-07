@@ -413,6 +413,20 @@ SS inputs use their own memory, independently of DS. The shared W^X observer
 allocation and calls live in `X86LegacyScalarNativeObserverFixture.inc`;
 shift-specific encodings remain in `X86LegacyShiftNativeFixture.inc`.
 
+`LegacyInteger/*` compares protected POPCNT/LZCNT/TZCNT/ADCX/ADOX with original
+CPU execution in legacy paging and PAE. It covers word/dword count values,
+independent unsigned CF/OF chains, all GPR aliases, code/address widths,
+nonflat segments, read-only pages, alignment, page crossings and original
+handler repair/IRET/retry. Only the count instructions' undefined OF/SF/AF/PF
+come from an independent W^X probe. `X86LegacyIntegerTest.*` separately varies
+those images, qualifies feature-disabled BSR/BSF aliases and POPCNT/ADX #UD,
+and checks missing bindings, malformed prefixes, backing stops and data traps.
+Feature-disabled cases are software-contract checks; masking KVM CPUID does
+not make a supporting physical processor stop executing the instruction.
+`X86LegacySourceTest.Integer*` compiles and executes the same owner through
+Clang and NeverC at O0/O2, including a guest page-repair handler and feature
+selection without spending an attempt on an unbound context.
+
 `NeverDLLVMCValueTests --gtest_filter=LLVMCValues.X86BitString*` rejects
 weakened native bit-string declarations and executes all twelve LLVM-to-C
 projections with live/dead results. The original-instruction oracle compares

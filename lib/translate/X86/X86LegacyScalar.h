@@ -72,6 +72,11 @@ enum class X86LegacyScalarOperation {
   BitComplement,
   BitScanForward,
   BitScanReverse,
+  CountPopulation,
+  CountLeadingZeros,
+  CountTrailingZeros,
+  CarryChainCF,
+  CarryChainOF,
   Divide,
   SignedDivide,
   Multiply,
@@ -188,6 +193,17 @@ struct X86LegacyScalarInstruction {
   bool bitScanning() const {
     return Operation == X86LegacyScalarOperation::BitScanForward ||
            Operation == X86LegacyScalarOperation::BitScanReverse;
+  }
+
+  bool bitCounting() const {
+    return Operation == X86LegacyScalarOperation::CountPopulation ||
+           Operation == X86LegacyScalarOperation::CountLeadingZeros ||
+           Operation == X86LegacyScalarOperation::CountTrailingZeros;
+  }
+
+  bool carryChain() const {
+    return Operation == X86LegacyScalarOperation::CarryChainCF ||
+           Operation == X86LegacyScalarOperation::CarryChainOF;
   }
 };
 

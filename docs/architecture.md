@@ -62,6 +62,13 @@ continuation before entering the existing event owner. New external events
 cannot interrupt a suspended host access. `ir/X86/X86StackFrameRules` shares
 ENTER nesting selection with the ordinary lifter; the paged owner additionally
 owns segment/page faults and the final stack permission probe.
+Protected scalar count and carry-chain instructions retain their exact prefixes
+in `translate/X86/X86LegacyScalarEncoding`. The execution boundary selects
+LZCNT/TZCNT or their BSR/BSF aliases from an explicit target feature binding;
+unavailable POPCNT/ADX enters #UD after authenticated fetch and before data
+access. Undefined count flags have their own producer image. The scalar owner
+stages results over the common segmented/page access, so generated protected C
+uses the same feature, fault and debug decisions.
 `X86InstructionDebugProfile::Watchpoints` composes the same rules with scoped
 `translate/X86/X86WatchpointObservation`. `X86PagedMemory` reports completed
 linear data reads and committed stores; physical page walks and fetches are

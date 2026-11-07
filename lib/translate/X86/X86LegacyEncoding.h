@@ -38,11 +38,12 @@ public:
   unsigned OperandBytes, AddressBytes;
   std::optional<X86SegmentRegister> Segment;
   uint8_t Group1Prefix = 0;
+  bool OperandOverride = false;
 
   X86LegacyEncoding(llvm::ArrayRef<uint8_t> Bytes, bool Code32)
       : OperandBytes(Code32 ? 4 : 2), AddressBytes(OperandBytes), Rest(Bytes),
         Valid(!Bytes.empty() && Bytes.size() <= 15) {
-    bool OperandOverride = false, AddressOverride = false;
+    bool AddressOverride = false;
     while (!Rest.empty()) {
       const uint8_t B = Rest.front();
       if ((B == 0xf0 || B == 0xf2 || B == 0xf3) && !Group1Prefix) {

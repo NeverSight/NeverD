@@ -36,6 +36,11 @@ public:
     S.EIP = Fallthrough;
     uint32_t A = 0, B = 0;
     const unsigned N = F.Bytes;
+    if ((F.Operation == Op::CountPopulation && !O.IntegerExtensions->POPCNT) ||
+        (F.carryChain() && !O.IntegerExtensions->ADX)) {
+      fault(6);
+      return;
+    }
     if (F.Adjustment) {
       decimalAdjust(*F.Adjustment);
       return;
@@ -168,6 +173,32 @@ public:
     }
     if (F.bitTesting()) {
       bitTest(F);
+      return;
+    }
+    if (F.bitCounting()) {
+      if (!read(F.Source, N, B))
+        return;
+      const unsigned Bits = N * 8;
+      const uint32_t Count = F.Operation == Op::CountPopulation
+                                 ? std::popcount(B)
+                             : F.Operation == Op::CountLeadingZeros
+                                 ? std::countl_zero(B) - (32 - Bits)
+                             : B ? std::countr_zero(B)
+                                 : Bits;
+      writeRegister(*F.Destination.Register, N, Count);
+      const bool Population = F.Operation == Op::CountPopulation;
+      S.EFlags = (S.EFlags & ~kX86LegacyArithmeticFlagsMask) |
+                 (Population ? 0 : *O.BitCountUndefinedFlags) |
+                 (!Count ? 64 : 0) | (!Population && !B ? 1 : 0);
+      return;
+    }
+    if (F.carryChain()) {
+      if (!read(F.Destination, 4, A) || !read(F.Source, 4, B))
+        return;
+      const uint32_t Flag = F.Operation == Op::CarryChainOF ? 0x800 : 1;
+      const uint64_t Sum = uint64_t(A) + B + bool(S.EFlags & Flag);
+      writeRegister(*F.Destination.Register, 4, uint32_t(Sum));
+      S.EFlags = (S.EFlags & ~Flag) | (Sum >> 32 ? Flag : 0);
       return;
     }
     if (F.bitScanning()) {
