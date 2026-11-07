@@ -25,6 +25,7 @@
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
@@ -249,7 +250,7 @@ void checkBundle(llvm::Module &Module, unsigned Key, bool Zero,
 void compile(const std::string &Source,
              const std::function<void(llvm::Module &)> &Inspect,
              llvm::StringRef Case, bool LLVMRoute, bool DarwinObject = false,
-             bool CanUnwind = false) {
+             llvm::ArrayRef<llvm::StringRef> ExtraFlags = {}) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -290,8 +291,7 @@ void compile(const std::string &Source,
         SourcePath,
         kOutputOption,
         LLVMPath};
-    if (CanUnwind)
-      Arguments.push_back(kExceptionsOption);
+    Arguments.append(ExtraFlags.begin(), ExtraFlags.end());
     const std::optional<llvm::StringRef> Redirects[] = {
         std::nullopt, std::nullopt, ErrorPath.str()};
     std::string Diagnostic;
@@ -862,10 +862,15 @@ TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
     auto &Call = Block.Ops[Variant.Raw ? 0 : 1];
     Call.Addr = kEntryAddress;
     Call.OriginSeq = 0;
+    // AArch64 RETURN can name the return address. Model the actual x0 write
+    // so both value and register-based consumers see the dispatcher's result.
+    MedOp Result;
+    Result.Opcode = NdOp::COPY;
+    Result.Output = Call.Output;
+    Result.addInput(MedVar::makeConst(0, kPointerBytes));
     Call.Output = {};
     for (unsigned I = 2; I < Function.Params.size(); ++I)
       Call.addInput(Function.Params[I]);
-    Block.Ops.back().Inputs[0] = MedVar::makeConst(0, kPointerBytes);
     if (!Variant.Raw && Variant.Zero)
       Block.Ops.front().Inputs[3] = MedVar::makeConst(0, kPointerBytes);
     auto Hint = std::make_shared<SourceCallTypeHint>();
@@ -881,6 +886,7 @@ TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
                                      Diagnostic))
         << Diagnostic;
     Call.SourceCallHint = Hint;
+    Block.Ops.insert(Block.Ops.end() - 1, std::move(Result));
     recoverCallAbi(Function, Arch::AArch64, {});
     ASSERT_EQ(Function.CallInfos.size(), 1U);
     ASSERT_EQ(Function.CallInfos.front().SourceCallHint, Hint);
@@ -906,7 +912,8 @@ TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
       }
       for (const auto &B : *Fn)
         for (const auto &I : B)
-          if (const auto *C = llvm::dyn_cast<llvm::CallBase>(&I))
+          if (const auto *C = llvm::dyn_cast<llvm::CallBase>(&I)) {
+            EXPECT_NE(C->getIntrinsicID(), llvm::Intrinsic::trap);
             if (const auto *Assembly =
                     llvm::dyn_cast<llvm::InlineAsm>(C->getCalledOperand());
                 Assembly && llvm::StringRef(Assembly->getAsmString())
@@ -922,6 +929,7 @@ TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
               EXPECT_NE(Assembly->getAsmString().find(Branch),
                         std::string::npos);
             }
+          }
       EXPECT_EQ(Calls, 1U);
     };
     Inspect(*Module);
@@ -955,8 +963,10 @@ TEST(AArch64AuthenticatedCall, IndirectResultsKeepOriginalStorageAndPAC) {
         ASSERT_TRUE(HighCEmitter().emit({High}, Out, Options));
       }
       save(Case, LLVMRoute ? kLLVMSource : kHighSource, Source);
+      // The FVP guest consumes the unchanged text without a Darwin runtime.
+      // Public SDK executions independently retain the compiler's defaults.
       compile(Source, Inspect, Case, LLVMRoute, /*DarwinObject=*/true,
-              /*CanUnwind=*/true);
+              {kExceptionsOption, kNoStackProtectorOption});
     }
   }
 }
