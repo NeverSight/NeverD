@@ -2046,7 +2046,9 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
               /*ExactFiniteRelativeSingletonTarget=*/nullptr,
               /*ExactFiniteRelativeClosureUnknown=*/nullptr,
               RetainProvisionalRelativeEdges);
-          if (EntrySemanticAmbiguous) {
+          // This search only extends an exact finite seed: a mask it cannot
+          // read, as in `((u | 1) & 7) - 1`, says nothing against that seed.
+          if (EntrySemanticAmbiguous && !ExactFiniteReplayOccurrences) {
             if (SemanticIndexDomainAmbiguous)
               *SemanticIndexDomainAmbiguous = true;
             return 0;
