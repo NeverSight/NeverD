@@ -1,5 +1,12 @@
 **Languages**: [English](testing.md) | [简体中文](zh-CN/testing.md) | [繁體中文](zh-TW/testing.md) | [日本語](ja/testing.md) | [한국어](ko/testing.md) | [Français](fr/testing.md) | [Deutsch](de/testing.md) | [Español](es/testing.md) | [Italiano](it/testing.md) | [Русский](ru/testing.md) | [العربية](ar/testing.md)
 
+`python3 -m unittest scripts.tests.test_qemu_save_snapshot -v` checks the
+[offline QEMU save reader](qemu-save-snapshot.md) with independently encoded
+CPU, nested VMState and RAM records. It covers exact register bits, instance
+identity, page updates/zero fills, absent pages, cross-page reads, entry-PC
+mismatch, malformed/truncated streams and resource bounds. It runs no guest,
+generated program or instruction executor and requires no C++ build.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
