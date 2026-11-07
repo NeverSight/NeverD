@@ -37,8 +37,17 @@ public:
     uint32_t A = 0, B = 0;
     const unsigned N = F.Bytes;
     if ((F.Operation == Op::CountPopulation && !O.IntegerExtensions->POPCNT) ||
-        (F.carryChain() && !O.IntegerExtensions->ADX)) {
+        (F.carryChain() && !O.IntegerExtensions->ADX) ||
+        (F.BMI && !F.BMI->enabled(*O.IntegerExtensions))) {
       fault(6);
+      return;
+    }
+    if (F.BMI) {
+      X86LegacyScalarOperand Source;
+      static_cast<X86LegacyAddress &>(Source) = F.BMI->Source;
+      if (read(Source, 4, B))
+        executeLegacyBMI(*F.BMI, S.Core.GPR, S.EFlags, B,
+                         O.BMIUndefinedFlags.value_or(0));
       return;
     }
     if (F.Adjustment) {

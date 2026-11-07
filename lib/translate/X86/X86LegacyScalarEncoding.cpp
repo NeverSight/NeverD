@@ -42,7 +42,12 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
   };
   constexpr Op Arithmetic[]{Op::Add, Op::Or,       Op::AddCarry, Op::SubBorrow,
                             Op::And, Op::Subtract, Op::Xor,      Op::Compare};
-  if (const auto Adjust = x86DecimalAdjustOperation(B)) {
+  if (B == 0xc4) {
+    F.BMI = decodeLegacyBMI(R);
+    if (!F.BMI)
+      return std::nullopt;
+    F.Bytes = F.SourceBytes = 4;
+  } else if (const auto Adjust = x86DecimalAdjustOperation(B)) {
     F.Operation = Op::DecimalAdjust;
     F.Adjustment = X86DecimalAdjustInstruction{*Adjust};
     if (F.Adjustment->hasBase())

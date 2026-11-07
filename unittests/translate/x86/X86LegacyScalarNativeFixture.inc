@@ -24,6 +24,7 @@ protected:
   std::optional<X86LegacyBitScanChoices> BitScanChoices;
   std::optional<X86LegacyIntegerExtensions> IntegerExtensions;
   std::optional<uint32_t> BitCountUndefinedFlags;
+  std::optional<uint32_t> BMIUndefinedFlags;
   std::optional<X86LegacyAtomicProfile> Atomics;
   std::optional<uint32_t> MemoryHigh;
   /// Bind only architectural undefined bits from the independent original CPU.
@@ -276,6 +277,7 @@ protected:
     Options.BitScanChoices = BitScanChoices;
     Options.IntegerExtensions = IntegerExtensions;
     Options.BitCountUndefinedFlags = BitCountUndefinedFlags;
+    Options.BMIUndefinedFlags = BMIUndefinedFlags;
     Options.Atomics = Atomics;
     Options.Strings = Strings;
     Options.FarTransfers = FarTransfers;

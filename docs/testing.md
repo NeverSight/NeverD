@@ -437,6 +437,21 @@ not make a supporting physical processor stop executing the instruction.
 Clang and NeverC at O0/O2, including a guest page-repair handler and feature
 selection without spending an attempt on an unbound context.
 
+`LegacyBMI/*` in `NeverDX86PagingTests` compares original ANDN/BEXTR,
+BLSI/BLSMSK/BLSR, BZHI, MULX, PDEP/PEXT, RORX and SARX/SHLX/SHRX. The
+BMI1/BMI2 host gate checks KVM's feature bank. Matrices cover both code and
+address widths, every register, multiply destination/source aliases, low-byte
+control boundaries, ignored non-64-bit W/B/high-vvvv bits, segment/page/#AC
+faults and original handler repair/IRET/retry. An independent W^X probe supplies
+only AF/PF and BEXTR SF; defined results and flags never come from the compared
+protected CPU run. `OriginalBMIReadWatchpoints` checks read/write comparators
+and TF. `X86LegacyBMITest.*` independently varies undefined images, checks
+explicit features, #UD priority, exact grammar, C4/LES coexistence and backing
+stops. `X86LegacySourceTest.BMI*` compiles the existing dispatcher with Clang
+and NeverC at O0/O2, including feature errors and MULX fault repair.
+Run both SDKs and the qualified P/E cores, the software paging tests, shared
+scalar/integer/segment regressions and ordinary BMI/BEXTR/decoder targets.
+
 `NeverDLLVMCValueTests --gtest_filter=LLVMCValues.X86BitString*` rejects
 weakened native bit-string declarations and executes all twelve LLVM-to-C
 projections with live/dead results. The original-instruction oracle compares

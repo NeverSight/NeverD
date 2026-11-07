@@ -154,15 +154,18 @@ inline constexpr uint32_t kX86LegacyShiftUndefinedFlagsMask = 0x811;
 inline constexpr uint32_t kX86LegacyBitTestUndefinedFlagsMask = 0x894;
 inline constexpr uint32_t kX86LegacyBitScanChoiceFlagsMask = 0x895;
 inline constexpr uint32_t kX86LegacyBitCountUndefinedFlagsMask = 0x894;
+inline constexpr uint32_t kX86LegacyBMIUndefinedFlagsMask = 0x14;
+inline constexpr uint32_t kX86LegacyBEXTRUndefinedFlagsMask = 0x94;
 
 /// Producer-selected instruction availability, independently of host CPUID.
-/// Missing POPCNT/ADX delivers #UD; missing LZCNT/BMI1 selects BSR/BSF and
-/// their existing result/flag choices. Other ISA banks are not implied.
+/// Missing POPCNT/ADX or VEX BMI1/BMI2 delivers #UD. Missing LZCNT/BMI1
+/// selects BSR/BSF for LZCNT/TZCNT. Other ISA banks are not implied.
 struct X86LegacyIntegerExtensions {
   bool POPCNT = false;
   bool LZCNT = false;
   bool BMI1 = false;
   bool ADX = false;
+  bool BMI2 = false;
 };
 
 /// Explicit CPU choices for BSF/BSR's zero-source result and non-ZF flags.
@@ -261,11 +264,15 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacyDebugProfile> Debug;
   std::optional<X86GeneralDetectFrame> GeneralDetectFrame;
   X86EventDeliveryOptions EventDelivery;
-  /// Required for POPCNT/LZCNT/TZCNT/ADCX/ADOX, even when unavailable.
+  /// Required for POPCNT/LZCNT/TZCNT/ADCX/ADOX and BMI, even when unavailable.
   std::optional<X86LegacyIntegerExtensions> IntegerExtensions;
   /// OF/SF/AF/PF after successful LZCNT/TZCNT with the feature enabled.
   /// CF/ZF are computed. Feature-disabled aliases use BitScanChoices instead.
   std::optional<uint32_t> BitCountUndefinedFlags;
+  /// AF/PF for ANDN/BLSI/BLSMSK/BLSR/BZHI, plus SF for BEXTR. Required only
+  /// when the corresponding feature is enabled; defined flags are forbidden.
+  /// MULX/PDEP/PEXT/RORX/SARX/SHLX/SHRX preserve flags and need no image.
+  std::optional<uint32_t> BMIUndefinedFlags;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {

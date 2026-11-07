@@ -4045,6 +4045,17 @@ the [integer evidence](evidence/x86-legacy-integer-2026-11-07.json) records
 both SDKs, CPU core types and post-integration checks. The global state gaps
 and LLVM release gate remain open.
 
+### Protected BMI1/BMI2
+
+Original protected ANDN/BEXTR, BLSI/BLSMSK/BLSR, BZHI, MULX, PDEP/PEXT,
+RORX and SARX/SHLX/SHRX now use the shared scalar memory boundary and generated
+C dispatcher. The [protected BMI contract](x86-legacy-segments.md#protected-bmi1bmi2)
+owns explicit target features, dword operands in code16/code32, undefined
+flag images, source/destination aliases and faults. Ordinary lifting,
+LLVM lowering and NeverC computation support already existed; this adds no
+inline-assembly fallback or compiler intrinsic. The other machine-state gaps
+and LLVM release gate remain open.
+
 ### Protected ARPL conditional completion
 
 The protected ordinary-RAM executor now runs original ARPL register and memory

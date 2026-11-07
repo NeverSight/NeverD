@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../HostCpu.h"
+#include "X86LegacyBMITestEncoding.h"
 #include "X86PortDevice.h"
 #include "gtest/gtest.h"
 
@@ -648,6 +649,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
 }
 
 #include "X86LegacyArplNativeTests.inc"
+#include "X86LegacyBMINativeTests.inc"
 #include "X86LegacyBitNativeTests.inc"
 #include "X86LegacyBoundNativeTests.inc"
 #include "X86LegacyConditionNativeTests.inc"

@@ -10,6 +10,7 @@
 #include "../../HostCpu.h"
 #include "../../lift/NeverDLiftFixture.h"
 #include "X86BranchDebugOracle.h"
+#include "X86LegacyBMITestEncoding.h"
 #include "X86LegacyTestState.h"
 #include "X86PortDevice.h"
 
@@ -501,6 +502,98 @@ TEST_P(X86LegacySourceTest, IntegerFeatureBindingsSelectAliasesOrGuestUD) {
   EXPECT_EQ(S.Core.GPR[0], 0x98765432u);
   EXPECT_EQ(Bound.lastResult().DeliveredVector, 6);
   EXPECT_EQ(get(S.Core.GPR[4]), 0x1004u);
+}
+
+TEST_P(X86LegacySourceTest, BMIValuesBothCodeWidthsAndMultiplyDestinations) {
+  for (bool Code32 : {false, true}) {
+    resetLegacyState();
+    O.IntegerExtensions = {false, false, true, false, true};
+    S.Core.Segments[1].Attributes = Code32 ? 0xc0fb : 0x80fb;
+    std::vector<SourceUnit> Units;
+    uint32_t Address = 0x1000;
+    for (unsigned Form = 0; Form != test::LegacyBMIForms.size(); ++Form) {
+      auto Bytes = test::legacyBMIBytes(Form, 0, 1, 6);
+      Units.push_back({Address, Code32 ? 32u : 16u, Bytes});
+      Address += Bytes.size();
+    }
+    Driver Run = nullptr;
+    ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
+    for (const auto &F : test::LegacyBMIForms) {
+      SCOPED_TRACE(F.Name);
+      S.Core.GPR[0] = 0x87654321;
+      S.Core.GPR[1] = F.Control;
+      S.Core.GPR[2] = 0xffffffff;
+      S.Core.GPR[6] = F.Source;
+      S.EFlags = 0xed7;
+      O.BMIUndefinedFlags = F.UndefinedMask;
+      X86LegacySourceExecution Context(S, *M, O);
+      uint64_t Budget = 1;
+      ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+      EXPECT_EQ(Budget, 0u);
+      EXPECT_EQ(S.Core.GPR[0], F.Expected);
+      EXPECT_EQ(S.Core.GPR[1], F.Opcode == 0xf6 ? 1 : F.Control);
+      EXPECT_EQ(S.EFlags, F.UndefinedMask
+                              ? 0x602 | F.DefinedFlags | F.UndefinedMask
+                              : 0xed7);
+    }
+  }
+}
+
+TEST_P(X86LegacySourceTest, BMIFeaturesRefuseUnboundAndDeliverGuestUD) {
+  const std::vector<SourceUnit> Units{
+      {0x1000, 32, test::legacyBMIBytes(0, 0, 1, -1)},
+      {0x1005, 32, test::legacyBMIBytes(6, 0, 1, -1)}};
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
+  for (unsigned Form : {0u, 6u}) {
+    resetLegacyState();
+    install(Units);
+    S.EIP = Form ? 0x1005 : 0x1000;
+    S.Core.GPR[3] = 0x9000;
+    S.Core.Segments[3].Unusable = true;
+    O.IntegerExtensions.reset();
+    O.BMIUndefinedFlags.reset();
+    uint64_t Budget = 1;
+    X86LegacySourceExecution Unbound(S, *M, O);
+    EXPECT_EQ(Run(&Unbound, &Budget), 256u);
+    EXPECT_EQ(Budget, 1u);
+    O.IntegerExtensions.emplace();
+    X86LegacySourceExecution Bound(S, *M, O);
+    ASSERT_EQ(Run(&Bound, &Budget), 1u) << Bound.lastError().str();
+    EXPECT_EQ(Budget, 0u);
+    EXPECT_EQ(Bound.lastResult().DeliveredVector, 6);
+    EXPECT_EQ(get(S.Core.GPR[4]), Form ? 0x1005u : 0x1000u);
+  }
+}
+
+TEST_P(X86LegacySourceTest, BMIMultiplyFaultRepairRetriesBothDestinations) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(
+      compile({{0x1000, 32, test::legacyBMIBytes(6, 0, 1, -1)},
+               {0x1005, 32, {0x90}},
+               {0x2000, 32, {0xc7, 0x05, 0x24, 0x10, 1, 0, 7, 0x90, 0, 0}},
+               {0x200a, 32, {0x83, 0xc4, 4}},
+               {0x200d, 32, {0xcf}}},
+              Run));
+  O.IntegerExtensions = {false, false, false, false, true};
+  S.Core.GPR[0] = 0x12345678;
+  S.Core.GPR[1] = 0x87654321;
+  S.Core.GPR[2] = 0xffffffff;
+  S.Core.GPR[3] = 0x9000;
+  put(0x9000, 0xffffffff, GuestScalarWidth::I32);
+  put(0x11024, 0, GuestScalarWidth::I32);
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 1;
+  ASSERT_EQ(Run(&Context, &Budget), 1u) << Context.lastError().str();
+  EXPECT_EQ(S.Core.GPR[0], 0x12345678u);
+  EXPECT_EQ(S.Core.GPR[1], 0x87654321u);
+  EXPECT_EQ(Context.lastResult().DeliveredVector, 14);
+  Budget = 5;
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(S.Core.GPR[0], 0xfffffffeu);
+  EXPECT_EQ(S.Core.GPR[1], 1u);
+  EXPECT_EQ(S.EIP, 0x1006u);
+  EXPECT_EQ(S.Core.CPL, 3);
 }
 
 TEST_P(X86LegacySourceTest, StoreChangingNextInstructionStopsBeforeItExecutes) {

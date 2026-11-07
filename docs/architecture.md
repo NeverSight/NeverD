@@ -69,6 +69,14 @@ unavailable POPCNT/ADX enters #UD after authenticated fetch and before data
 access. Undefined count flags have their own producer image. The scalar owner
 stages results over the common segmented/page access, so generated protected C
 uses the same feature, fault and debug decisions.
+`translate/X86/X86LegacyBMI` owns the protected VEX BMI1/BMI2 grammar and
+register computation. The common legacy encoding reader retains segment,
+address-size, ModRM/SIB and instruction-extent ownership, including C4/LES
+disambiguation. BMI always uses dword operands in code16/code32. Its scalar
+adapter performs the single source access and stages all writes; MULX captures
+EDX and the source before writing either destination, with the high half winning
+an alias. Explicit BMI features and undefined AF/PF (also SF for BEXTR) are
+validated by the execution boundary. Generated protected C calls that owner.
 `X86InstructionDebugProfile::Watchpoints` composes the same rules with scoped
 `translate/X86/X86WatchpointObservation`. `X86PagedMemory` reports completed
 linear data reads and committed stores; physical page walks and fetches are
