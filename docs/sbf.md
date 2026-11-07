@@ -569,6 +569,15 @@ conservative join. Conditional state and comparison workspace consume the
 existing retained-state budget. `output_tagged_cases` and
 `instantiated_tagged_output_cases` report these partitions and their call
 bindings; they do not establish whole-program closure or allocation freshness.
+Each tag case also retains its capture definition history, even when writes
+have made an object's fields unknown. Selecting a tag can remove a newly
+imported name from caller history only when no selected case introduced it.
+Names already present before the call remain defined. Equal-tag predecessors
+union this history. A caller join that disagrees on which names were newly
+imported discards definition refinement and keeps the existing field partition.
+Private callee objects
+are not named merely to export their history. These histories and their binding
+workspace consume the existing retained-state budget.
 Tagged-return summaries are excluded from opaque-result and returned-object
 result coalescing; those equality checks do not compare conditional fields.
 

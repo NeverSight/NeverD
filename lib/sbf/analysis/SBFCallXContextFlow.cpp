@@ -137,6 +137,9 @@ struct TaggedMemoryCase {
   uint64_t Tag = 0;
   StoredRegisterMemory Values;
   MemoryPostconditions Postconditions;
+  // May-definition history, independent of whether an object's fields remain
+  // known. Summary names are rebound only when they escape into the caller.
+  std::vector<uint64_t> DefinedCaptures;
 
   bool operator==(const TaggedMemoryCase &) const = default;
 };
@@ -149,12 +152,17 @@ struct TaggedMemory {
   unsigned Width = 0;
   uint16_t Registers = 0;
   std::vector<TaggedMemoryCase> Cases;
+  // Only names newly introduced by this call can be removed by selecting a
+  // case. A definition that predates the call remains part of caller history.
+  std::vector<uint64_t> ConditionalCaptures;
 
   uint64_t retainedByteEstimate() const {
-    uint64_t Bytes = Cases.capacity() * sizeof(TaggedMemoryCase);
+    uint64_t Bytes = Cases.capacity() * sizeof(TaggedMemoryCase) +
+                     ConditionalCaptures.capacity() * sizeof(uint64_t);
     for (const auto &Case : Cases)
       Bytes += Case.Values.retainedByteEstimate() +
-               Case.Postconditions.retainedByteEstimate();
+               Case.Postconditions.retainedByteEstimate() +
+               Case.DefinedCaptures.capacity() * sizeof(uint64_t);
     return Bytes;
   }
 
@@ -271,10 +279,25 @@ struct ContextState {
       Tagged.reset();
     } else {
       Tagged->Registers &= Other.Tagged->Registers;
+      const bool SameDefinitions =
+          Tagged->ConditionalCaptures == Other.Tagged->ConditionalCaptures;
+      if (!SameDefinitions)
+        Tagged->ConditionalCaptures.clear();
       for (size_t I = 0; I < Tagged->Cases.size(); ++I) {
         Tagged->Cases[I].Values.joinValues(Other.Tagged->Cases[I].Values);
         Tagged->Cases[I].Postconditions.meet(
             Other.Tagged->Cases[I].Postconditions, MergeExpression);
+        auto &Captures = Tagged->Cases[I].DefinedCaptures;
+        if (SameDefinitions) {
+          for (uint64_t Capture : Other.Tagged->Cases[I].DefinedCaptures) {
+            const auto Position =
+                std::lower_bound(Captures.begin(), Captures.end(), Capture);
+            if (Position == Captures.end() || *Position != Capture)
+              Captures.insert(Position, Capture);
+          }
+        } else {
+          Captures.clear();
+        }
       }
     }
   }
@@ -2063,7 +2086,7 @@ ContextFlow::inputUnionExpression(llvm::ArrayRef<size_t> Alternatives) {
 
 llvm::Error ContextFlow::joinStates(ContextState &State,
                                     const ContextState &Other) {
-  const uint64_t Temporary =
+  uint64_t Temporary =
       State.DefinedCaptures.empty() && Other.DefinedCaptures.empty()
           ? 0
           : sizeof(StoredRegisterMemory) +
@@ -2073,6 +2096,10 @@ llvm::Error ContextFlow::joinStates(ContextState &State,
                     (State.DefinedCaptures.size() +
                      Other.DefinedCaptures.size()) *
                     sizeof(uint64_t);
+  for (const auto *Input : std::array<const ContextState *, 2>{&State, &Other})
+    if (Input->Tagged)
+      for (const auto &Case : Input->Tagged->Cases)
+        Temporary += 2 * Case.DefinedCaptures.size() * sizeof(uint64_t);
   if (auto Error = retain(Temporary))
     return Error;
   const auto Release = llvm::scope_exit([&] { RetainedBytes -= Temporary; });
@@ -2515,6 +2542,14 @@ llvm::Expected<bool> ContextFlow::refineTaggedBranch(const MedInstruction *Last,
   });
   if (Tagged.Cases.empty())
     return false;
+  std::erase_if(State.DefinedCaptures, [&](uint64_t Capture) {
+    return std::binary_search(Tagged.ConditionalCaptures.begin(),
+                              Tagged.ConditionalCaptures.end(), Capture) &&
+           llvm::none_of(Tagged.Cases, [&](const auto &Case) {
+             return std::binary_search(Case.DefinedCaptures.begin(),
+                                       Case.DefinedCaptures.end(), Capture);
+           });
+  });
   const auto &First = Tagged.Cases.front();
   const uint64_t Temporary = sizeof(TaggedMemoryCase) +
                              First.Values.retainedByteEstimate() +
@@ -2522,7 +2557,7 @@ llvm::Expected<bool> ContextFlow::refineTaggedBranch(const MedInstruction *Last,
   if (auto Error = retain(Temporary))
     return std::move(Error);
   const auto Release = llvm::scope_exit([&] { RetainedBytes -= Temporary; });
-  auto Facts = Tagged.Cases.front();
+  TaggedMemoryCase Facts{First.Tag, First.Values, First.Postconditions, {}};
   ProvenValueSet Tags(
       RegisterValue{RegisterValue::Kind::Constant, Facts.Tag, 0});
   for (const auto &Case : llvm::drop_begin(Tagged.Cases)) {
@@ -3828,6 +3863,10 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
   ProvenValueSet ReturnOrigins;
   llvm::Error CaptureError = llvm::Error::success();
   std::set<size_t> ImportedCaptures;
+  std::map<uint64_t, uint64_t> NewCaptures;
+  uint64_t NewCaptureBytes = 0;
+  const auto ReleaseNewCaptures =
+      llvm::scope_exit([&] { RetainedBytes -= NewCaptureBytes; });
   const auto BindCapture = [&](RegisterValue Value) {
     if (Edge.LegacyRuntime || !Callee ||
         CaptureOwners[Value.Value] != Callee->ID)
@@ -3840,6 +3879,17 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       return RegisterValue{};
     }
     ImportedCaptures.insert(Bound->Value);
+    if (Callee->TaggedReturn && !State.definesCapture(Bound->Value)) {
+      constexpr uint64_t Bytes =
+          sizeof(decltype(NewCaptures)::value_type) + 4 * sizeof(void *);
+      if (auto Error = retain(Bytes)) {
+        CaptureError =
+            llvm::joinErrors(std::move(CaptureError), std::move(Error));
+        return RegisterValue{};
+      }
+      NewCaptureBytes += Bytes;
+      NewCaptures.emplace(Value.Value, Bound->Value);
+    }
     State.defineCapture(Bound->Value);
     Bound->Offset = Value.Offset;
     return *Bound;
@@ -3868,7 +3918,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     StoredRegisterMemory Owner;
     Owner.setCoordinates(Coordinates);
     if (Address && Owner.canModelRange(*Address, Template.Width)) {
-      ReturnedTagged = TaggedMemory{*Address, Template.Width, 0, {}};
+      ReturnedTagged = TaggedMemory{*Address, Template.Width, 0, {}, {}};
       for (const auto &Original : Template.Cases) {
         MemoryPostconditions Fields = Original.Postconditions;
         Fields.transformSymbols(BindCapture);
@@ -4183,6 +4233,28 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       State.Nullable = NullableCapture{*NewCapture, registerBit(0)};
     if (CaptureError)
       return std::move(CaptureError);
+    if (ReturnedTagged) {
+      // Binding other return lanes can introduce additional escaping names.
+      // Complete the per-case history after all bindings, without creating
+      // names for private objects that never escaped the callee.
+      for (const auto &[Source, Bound] : NewCaptures) {
+        ReturnedTagged->ConditionalCaptures.push_back(Bound);
+        for (size_t I = 0; I < ReturnedTagged->Cases.size(); ++I) {
+          const auto &Definitions =
+              Callee->TaggedReturn->Cases[I].DefinedCaptures;
+          if (std::binary_search(Definitions.begin(), Definitions.end(),
+                                 Source))
+            ReturnedTagged->Cases[I].DefinedCaptures.push_back(Bound);
+        }
+      }
+      llvm::sort(ReturnedTagged->ConditionalCaptures);
+      for (auto &Case : ReturnedTagged->Cases)
+        llvm::sort(Case.DefinedCaptures);
+      const uint64_t Bytes = ReturnedTagged->retainedByteEstimate();
+      if (auto Error = retain(Bytes - ReturnedTaggedBytes))
+        return std::move(Error);
+      ReturnedTaggedBytes = Bytes;
+    }
     if (!State.Registers[0].unknown() &&
         llvm::all_of(State.Registers[0].values(),
                      [](const RegisterValue &Value) {
@@ -4894,7 +4966,7 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
       return Error;
     transfer(*TagStore, Path, nullptr);
     if (!TaggedReturn)
-      TaggedReturn = TaggedMemory{Address, Width, 0, {}};
+      TaggedReturn = TaggedMemory{Address, Width, 0, {}, {}};
     TaggedMemoryCase Case;
     Case.Tag = Tag.Value;
     Case.Postconditions = std::move(Path.Postconditions);
@@ -4904,6 +4976,10 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
     Case.Values.includeCells(Path.Scratch.Values, [&](const auto &Cell) {
       return Cell.ValueKind == RegisterValue::Kind::SymbolicAddress &&
              CaptureOwners[Cell.Value] == Context.ID;
+    });
+    Case.DefinedCaptures = std::move(Path.DefinedCaptures);
+    std::erase_if(Case.DefinedCaptures, [&](uint64_t Capture) {
+      return CaptureOwners[Capture] != Context.ID;
     });
     auto Existing = llvm::find_if(TaggedReturn->Cases, [&](const auto &Old) {
       return Old.Tag == Case.Tag;
@@ -4917,6 +4993,13 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
     } else {
       Existing->Values.joinValues(Case.Values);
       Existing->Postconditions.meet(Case.Postconditions);
+      for (uint64_t Capture : Case.DefinedCaptures) {
+        auto &Captures = Existing->DefinedCaptures;
+        const auto Position =
+            std::lower_bound(Captures.begin(), Captures.end(), Capture);
+        if (Position == Captures.end() || *Position != Capture)
+          Captures.insert(Position, Capture);
+      }
     }
     const uint64_t Bytes = TaggedReturn->retainedByteEstimate();
     if (Bytes > TaggedBytes) {
