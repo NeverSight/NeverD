@@ -421,7 +421,7 @@ TEST(SourceAggregate, ThreeWordResultsUseOnlyTheDarwinArm64IndirectPointer) {
   Unsupported = *Hint;
   EXPECT_FALSE(assignDarwinSwiftSourceABI(Unsupported, Arch::AArch64, Error));
   auto WithInput = *Hint;
-  WithInput.Parameters.push_back({"record", Hint->ReturnType});
+  WithInput.Parameters.push_back({{}, Hint->ReturnType});
   ASSERT_TRUE(assignDarwinFixedSourceABI(WithInput, Arch::AArch64, Error));
   EXPECT_TRUE(WithInput.Parameters.back().IndirectByValue);
   EXPECT_TRUE(validateSourceABI(WithInput, Error));
