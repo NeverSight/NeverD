@@ -1818,3 +1818,28 @@ TEST(SymExpr, ConditionalSlicesKeepDifferentAndUnknownArms) {
       }
   }
 }
+
+TEST(SymExpr, PlainVariableIndexKeepsLeafIdentityAcrossGrowthAndCopies) {
+  SymContext C;
+  const std::string Name("value\0suffix", 12);
+  const auto First = C.mkVar(Name, 8);
+  const auto Wide = C.mkVar(Name, 64);
+  const auto Prefix = C.mkVar("value", 8);
+  EXPECT_NE(First, Wide);
+  EXPECT_NE(First, Prefix);
+  for (unsigned I = 0; I < 2048; ++I)
+    C.mkVar("other_" + std::to_string(I), I % 2 ? 8 : 64);
+  SymContext Copy(C);
+  for (auto *Context : {&C, &Copy}) {
+    const auto Nodes = Context->numNodes();
+    EXPECT_EQ(Context->mkVar(Name, 8), First);
+    EXPECT_EQ(Context->mkVar(Name, 64), Wide);
+    EXPECT_EQ(Context->mkVar("value", 8), Prefix);
+    EXPECT_EQ(Context->varRef(Context->varId(First)), First);
+    EXPECT_EQ(Context->numNodes(), Nodes);
+    EXPECT_EQ(Context->varInfo(Context->varId(First)).Name, Name);
+  }
+  const auto New = Copy.mkVar("copy_only", 32);
+  EXPECT_EQ(Copy.width(New), 32u);
+  EXPECT_FALSE(C.hasVarName("copy_only"));
+}

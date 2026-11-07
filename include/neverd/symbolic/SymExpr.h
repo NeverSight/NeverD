@@ -39,6 +39,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -541,7 +542,15 @@ private:
   /// Invalid refs terminate a chain; copying a context retains all links.
   std::vector<SymRef> InternNext;
   /// Plain variables keep their legacy name-and-width declaration identity.
-  std::map<std::pair<std::string, uint32_t>, uint32_t> VarByNameAndWidth;
+  using VariableNameKey = std::pair<std::string, uint32_t>;
+  struct VariableNameHash {
+    size_t operator()(const VariableNameKey &Identity) const {
+      return static_cast<size_t>(
+          llvm::hash_combine(Identity.first, Identity.second));
+    }
+  };
+  std::unordered_map<VariableNameKey, SymRef, VariableNameHash>
+      VarByNameAndWidth;
 
   struct InputVariableKey {
     std::string Name;
