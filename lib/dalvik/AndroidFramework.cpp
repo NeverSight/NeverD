@@ -526,6 +526,13 @@ void Program::addAndroidFramework() {
     if (std::string_view(name) == "android/os/Binder" ||
         std::string_view(name) == "android/os/BinderProxy")
       type.interfaces = {"Landroid/os/IBinder;"};
+    if (std::string_view(name) == "android/os/Binder") {
+      Field field;
+      field.reference = {type.name, "sTracingEnabled", "Z"};
+      field.access = {"private", "static", "volatile"};
+      field.value = false;
+      type.fields.push_back(std::move(field));
+    }
     if (std::string_view(name) == "android/os/IServiceManager")
       type.interfaces = {"Landroid/os/IInterface;"};
     if (std::string_view(name) == "android/os/ServiceManagerProxy") {
@@ -706,6 +713,7 @@ void Program::addAndroidFramework() {
     if (inserted &&
         (std::string_view(name) == "android/os/ServiceManager" ||
          std::string_view(name) == "java/lang/Float" ||
+         std::string_view(name) == "android/os/Binder" ||
          std::string_view(name) == "android/os/BinderProxy" ||
          std::string_view(name) == "android/app/ActivityThread" ||
          std::string_view(name) == "android/content/pm/PackageItemInfo" ||
@@ -1058,6 +1066,11 @@ ExecutionResult AndroidFramework::field(Heap &heap, const Field &field,
                                         std::optional<uint64_t> write,
                                         const AdmitInstruction &admit) {
   const auto &ref = field.reference;
+  if (ref.owner == "Landroid/os/Binder;" && ref.name == "sTracingEnabled") {
+    if (write)
+      binder_tracing_enabled = bool(*write);
+    return {ExecutionStop::Returned, binder_tracing_enabled};
+  }
   if (ref.owner == "Ljava/lang/Float;") {
     // The projected immutable value is an IEEE-754 bit carrier. This does not
     // admit floating-point DEX arithmetic or writes to final fields.
@@ -1526,6 +1539,15 @@ ExecutionResult AndroidFramework::execute(Heap &heap, const Program &program,
                                           const AdmitInstruction &admit) {
   if (method.Op == ParcelData)
     return parcel(heap, method, receiver, arguments, admit);
+  if (method.Op == BinderTransact || method.Op == BinderTransactNative)
+    return binderTransact(heap, program, method, receiver, arguments, admit);
+  if (method.Op == BinderTracing) {
+    const std::string_view name = method.Name;
+    if (name == "isTracingEnabled")
+      return {ExecutionStop::Returned, binder_tracing_enabled};
+    binder_tracing_enabled = name == "enableTracing";
+    return {};
+  }
   if (method.Op == BinderGetStrictMode)
     return binderThreadPolicy();
   if (method.Op == BinderSetStrictMode) {

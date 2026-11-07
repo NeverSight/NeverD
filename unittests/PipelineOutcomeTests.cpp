@@ -8,6 +8,7 @@
 #include "PipelineLLVMDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
@@ -1267,6 +1268,59 @@ TEST(PipelineOutcome, HighCRefusesAFunctionWhoseConversionFailed) {
                std::invalid_argument);
 }
 
+// An escaping image address no storage can back refuses the function keeping
+// it. The scan that finds it serves the whole unit, which must not fail with
+// it.
+TEST(PipelineOutcome, HighCRefusesOnlyTheFunctionKeepingAnUnbackedAddress) {
+  constexpr va_t Address = 0x100000;
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Segment Data;
+  Data.Name = ".rodata";
+  Data.VA = Address;
+  // Unsized data this long bounds no object C could declare for the address.
+  Data.Size = Data.FileSz = ::neverd::limits::kMaxSingleGlobalEmbedLen + 1;
+  Data.Flags = SegmentFlags::Readable;
+  Data.Data.assign(Data.Size, 0);
+  Image.Segments.push_back(std::move(Data));
+  std::vector<HighFunc> Functions = {
+      convertedIdentity(sourceFunction(0x1200, "unaffected")),
+      convertedIdentity(sourceFunction(0x1300, "keeps_address"))};
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal =
+      HighExpr::makeConst(Address, 8, ConstantAddressProvenance::DataAddress);
+  Functions.back().ReturnType = NdType::makeInt(8, false);
+  Functions.back().Body = {Return};
+  const std::map<va_t, std::string> Names = {{Address, "named_data"}};
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.TheArch = Arch::X64;
+  Options.StructuredExceptionSyntax = false;
+  Options.Image = &Image;
+  Options.UserNames = &Names;
+  std::vector<CEmitterOptions::RefusedDefinition> Refused;
+  Options.RefusedDefinitions = &Refused;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit(Functions, OS, Options));
+  ASSERT_EQ(Refused.size(), 1u) << Source;
+  EXPECT_EQ(Refused.front().Entry, Functions.back().Entry);
+  EXPECT_NE(Refused.front().Reason.find("no materializable storage extent"),
+            std::string::npos)
+      << Refused.front().Reason;
+  EXPECT_NE(Source.find("unaffected(void) {"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("keeps_address(void) {"), std::string::npos) << Source;
+  // Asked for alone, the function still fails with its reason.
+  Options.RefusedDefinitions = nullptr;
+  std::string View;
+  llvm::raw_string_ostream ViewOS(View);
+  EXPECT_THROW(HighCEmitter().emit({Functions.back()}, ViewOS, Options),
+               std::invalid_argument);
+}
+
 TEST(PipelineOutcome, HighIRWorkerFailuresAreContainedAfterJoining) {
   ScopedThreadCount Threads(2);
   PipelineResult Result;
@@ -1742,6 +1796,43 @@ TEST(PipelineOutcome, ResolvedCallsKeepIndependentArgumentBanksAndStackSlots) {
     EXPECT_FALSE(Bound->paramHasAttr(0, llvm::Attribute::NoUndef));
     EXPECT_EQ(llvm::isa<llvm::InvokeInst>(Bound), Invoke);
     EXPECT_TRUE(normalizeResolvedLLVMCalls(Module, &Sources));
+  }
+}
+
+TEST(PipelineOutcome, ResolvedCallsReachStackValuesPastUnsetIntegers) {
+  // `f(float x12)` recovers no integer register at its call, while its callee
+  // declares every integer position below its stack parameters. Those positions
+  // pass as zero only for a body that does not read them.
+  for (bool Reads : {false, true}) {
+    SCOPED_TRACE(Reads);
+    llvm::LLVMContext C;
+    llvm::Module Module("unset_integers", C);
+    Module.setDataLayout("e-p:64:64");
+    auto *I64 = llvm::Type::getInt64Ty(C);
+    auto *Target = llvm::Function::Create(
+        llvm::FunctionType::get(I64, {I64, I64, I64}, false),
+        llvm::GlobalValue::ExternalLinkage, "target", Module);
+    setLLVMArgumentBanks(*Target, 2, 0);
+    llvm::IRBuilder<> Body(llvm::BasicBlock::Create(C, "entry", Target));
+    Body.CreateRet(Reads ? Body.CreateAdd(Target->getArg(1), Target->getArg(2))
+                         : static_cast<llvm::Value *>(Target->getArg(2)));
+    auto *Caller = llvm::Function::Create(llvm::FunctionType::get(I64, false),
+                                          llvm::GlobalValue::ExternalLinkage,
+                                          "caller", Module);
+    llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", Caller));
+    auto *Call = B.CreateCall(llvm::FunctionType::get(I64, {I64}, false),
+                              Target, {B.getInt64(31)});
+    setLLVMArgumentBanks(*Call, 0, 0, {0}, 8);
+    B.CreateRet(Call);
+
+    ASSERT_TRUE(normalizeResolvedLLVMCalls(Module));
+    auto *Bound = llvm::cast<llvm::CallBase>(&Caller->getEntryBlock().front());
+    ASSERT_EQ(Bound->arg_size(), 3u);
+    EXPECT_EQ(Bound->getArgOperand(0), B.getInt64(0));
+    EXPECT_EQ(Bound->getArgOperand(1), B.getInt64(0));
+    EXPECT_EQ(Bound->getArgOperand(2), B.getInt64(31));
+    EXPECT_EQ(getLLVMFirstUnsetInteger(*Bound), 0u);
+    EXPECT_EQ(validateResolvedLLVMCallSignatures(Module), !Reads);
   }
 }
 

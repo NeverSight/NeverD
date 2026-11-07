@@ -370,14 +370,16 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
     }
     return false;
   };
-  auto AsSignedLtZero = [&](const HighExpr *Op, ExprPtr &X) -> bool {
+  auto AsSignedLtZero = [&](const HighExpr *Op, ExprPtr &X,
+                            uint16_t &Bytes) -> bool {
     const HighExpr *Cmp = PeelCmpNeZero(Op);
     if (!Cmp || Cmp->Kind != ExprKind::BinOp || Cmp->Op != NdOp::INT_SLESS ||
         Cmp->Operands.size() != 2)
       return false;
     if (IsZeroLike(Cmp->Operands[1]) && Cmp->Operands[0]) {
       X = Cmp->Operands[0];
-      return true;
+      Bytes = zeroTestBytes(*Cmp->Operands[0], *Cmp->Operands[1]);
+      return Bytes != 0;
     }
     return false;
   };
@@ -395,22 +397,23 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
     if (Cmp) {
       if (E.Op == NdOp::INT_NOTEQUAL)
         return exprStr(*Cmp, ParentPrec);
-      return invertCondStr(*Cmp);
+      return invertedTruthValue(*Cmp, E, ParentPrec);
     }
   }
   if (E.Operands.size() == 2 && E.Operands[0] && E.Operands[1] &&
       (E.Op == NdOp::BOOL_OR || E.Op == NdOp::INT_OR)) {
     ExprPtr XEq;
     ExprPtr XLt;
+    uint16_t Bytes = 0;
     const bool LeftEq = AsEqZero(E.Operands[0].get(), XEq) &&
-                        AsSignedLtZero(E.Operands[1].get(), XLt);
+                        AsSignedLtZero(E.Operands[1].get(), XLt, Bytes);
     const bool RightEq = AsEqZero(E.Operands[1].get(), XEq) &&
-                         AsSignedLtZero(E.Operands[0].get(), XLt);
-    if ((LeftEq || RightEq) && SameScalar(XEq.get(), XLt.get())) {
+                         AsSignedLtZero(E.Operands[0].get(), XLt, Bytes);
+    if ((LeftEq || RightEq) && SameScalar(XEq.get(), XLt.get()) &&
+        readsSameBytes(E.Operands[0].get(), E.Operands[1].get())) {
       // The zero takes x's width: a wider one would compare x extended,
       // and a 16-bit x zero-extended is never below zero.
-      const uint16_t Bytes = XEq->Type && XEq->Type->Size ? XEq->Type->Size : 4;
-      auto Sle = HighExpr::makeBinop(NdOp::INT_SLESSEQUAL, XEq,
+      auto Sle = HighExpr::makeBinop(NdOp::INT_SLESSEQUAL, XLt,
                                      HighExpr::makeConst(0, Bytes));
       return renderBinOp(*Sle, ParentPrec);
     }
@@ -1147,6 +1150,11 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
     const TypeRef &Width = E.Operands[0]->Type;
     if (!Enumerator && Width && Width->Kind == NdTypeKind::Int &&
         Width->Size < sizeof(int))
+      NeedsUnsignedCast = true;
+    // The same width is what a name declared wider must be read at: `cmp $1,
+    // %esi` of an `int64_t arg1` says nothing about the upper half.
+    if (!Enumerator && (printsWiderThanItsValue(*E.Operands[0]) ||
+                        printsWiderThanItsValue(*E.Operands[1])))
       NeedsUnsignedCast = true;
   }
 

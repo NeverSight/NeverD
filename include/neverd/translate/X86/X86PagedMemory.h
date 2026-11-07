@@ -57,6 +57,16 @@ public:
   llvm::Error bindControls(const X86PagingState &State);
   GuestMemoryRuntime &physicalMemory() { return *Physical; }
 
+  /// Borrowed observation of completed linear data accesses, including system
+  /// tables and stacks, excluding fetches and physical page walks. The callback
+  /// must not throw, reenter, mutate RAM or rebind controls. Restore the prior
+  /// observer before its context dies; preparation alone observes no store.
+  struct AccessObserver {
+    void (*Observe)(void *, const X86LinearAccess &, uint64_t) = nullptr;
+    void *Context = nullptr;
+  };
+  AccessObserver exchangeAccessObserver(AccessObserver Next);
+
   llvm::Expected<X86MemoryAccessResult>
   load(const X86LinearAccess &Access, llvm::MutableArrayRef<uint8_t> Output);
   llvm::Expected<X86MemoryAccessResult> store(const X86LinearAccess &Access,
@@ -106,6 +116,7 @@ public:
     std::vector<Fragment> Fragments;
     const X86PagedMemory *Owner = nullptr;
     uint64_t Bytes = 0;
+    X86LinearAccess Access{};
   };
 
 private:
@@ -113,10 +124,12 @@ private:
                  const X86PagingFeatures &Features,
                  const X86PagingState &Controls);
   llvm::Expected<Plan> plan(const X86LinearAccess &Access, uint64_t Bytes);
+  void observe(const X86LinearAccess &Access, uint64_t Bytes) const;
 
   std::unique_ptr<GuestMemoryRuntime> Physical;
   X86PagingFeatures Features;
   X86PagingState Controls;
+  AccessObserver Observer;
 };
 
 } // namespace neverd::translate

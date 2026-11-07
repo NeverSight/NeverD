@@ -47,6 +47,13 @@ public:
 
 private:
   ExecutionResult binderThreadPolicy();
+  ExecutionResult binderTransact(Heap &heap, const Program &program,
+                                 const LibraryMethod &method, uint64_t receiver,
+                                 std::span<const uint64_t> arguments,
+                                 const AdmitInstruction &admit);
+  // API 28 Binder's new class state; also exposed by sTracingEnabled.
+  bool binder_tracing_enabled = false;
+  ExecutionResult parcelStatus(uint64_t receiver) const;
   ExecutionResult parcel(Heap &heap, const LibraryMethod &method,
                          uint64_t receiver, std::span<const uint64_t> arguments,
                          const AdmitInstruction &admit);

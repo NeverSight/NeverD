@@ -721,6 +721,25 @@ public:
   /// (`(int32_t)(int8_t)v` is not `v`).
   const HighExpr *sameWidthVariable(const HighExpr &E) const;
   const HighExpr *forwardedExpr(const HighExpr *E) const;
+  /// The text \p Not is `!(x < 0)` of the text \p Value, which is then `x > 0`
+  /// with it: without a cast, `x` is signed at its own width. Both are read
+  /// without source markers, so a marked render spells what the ordinary one
+  /// does.
+  bool isNotBelowZeroOf(llvm::StringRef Not, llvm::StringRef Value) const;
+  /// exprStr last printed the variable \p E as a name declared wider than its
+  /// value, so that reading only the value takes a cast.
+  bool printsWiderThanItsValue(const HighExpr &E) const;
+  /// The width a comparison of \p Value with the constant \p Zero tests: the
+  /// narrower of the two, since a variable can be typed wider than its test and
+  /// a zero wider than a 16-bit value.
+  static uint16_t zeroTestBytes(const HighExpr &Value, const HighExpr &Zero);
+  /// How many low bytes of the value under \p E reach it, or 0 if unknown. A
+  /// comparison with zero reads what its value does.
+  unsigned lowBytesRead(const HighExpr *E) const;
+  /// Whether two tests of one variable read the same low bytes of it, so that
+  /// either's zero test decides the other's. `v` and `(int32_t)v` do not when
+  /// `v` is wider.
+  bool readsSameBytes(const HighExpr *A, const HighExpr *B) const;
   /// \p Operand's text as an operand of a floating-point operator.  An
   /// operation whose type C may compute wider (CFloatTypes.def) is cast to
   /// that type, which rounds it where the instruction rounded.
@@ -1016,6 +1035,11 @@ public:
   std::string condStr(const HighExpr &E);
   std::string condStrImpl(const HighExpr &E);
   std::string invertCondStrImpl(const HighExpr &E);
+  /// The logical inverse of \p Test as the rendering of \p Node. A value is 0
+  /// or 1 and keeps its grouping; only the node a condition is currently
+  /// testing may read `!(x == 0)` as plain `x`.
+  std::string invertedTruthValue(const HighExpr &Test, const HighExpr &Node,
+                                 int ParentPrec);
   /// `!(a <= b && a != b)` is `a >= b`. When both IfElse arms print, Hex-Rays
   /// prefers `if (b > a) else-arm else then-arm`.
   std::optional<std::string> preferGreaterIfElseCond(const HighExpr &E);
@@ -1534,6 +1558,8 @@ public:
   std::map<std::string, TypeRef> PointerArgDestTypes;
   /// Single-use call / image-global loads print at the use, not as a temp.
   std::map<std::string, const HighExpr *> ValueForward;
+  /// The node whose truth, not value, the enclosing condition reads.
+  const HighExpr *TruthTested = nullptr;
   /// Values assigned to each printed variable name in the current function,
   /// built on first use by incrementBaseMatchesAddr.
   mutable std::unordered_map<std::string, std::vector<const HighExpr *>>
@@ -1648,6 +1674,9 @@ public:
     bool HeaderBytes = false;
   };
   std::map<va_t, ImageObject> ImageObjects;
+  /// Functions keeping an image address as a value that no storage can back,
+  /// with the first such address. Each refuses when it renders.
+  std::map<const HighFunc *, va_t> UnbackedEscapes;
   /// The access width that names the unnamed object \p Obj at \p Addr, as
   /// the listing names it: the width every access the image's code states
   /// there shares (CEmitterOptions::AccessWidths), else, without those, the

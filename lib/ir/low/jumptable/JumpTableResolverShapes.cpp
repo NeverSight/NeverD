@@ -1322,16 +1322,33 @@ bool CFGBuilder::aarch64OriginalTableLoadMatches(
       return true;
   }
   const auto Results = Match({IndexQuery});
-  if (!AnalysisComplete || Results.size() != 1)
+  if (Results.size() != 1)
     return false;
-  if (Results[0])
+  if (AnalysisComplete && Results[0])
     return true;
-  // Masks and exact remainders need no branch reconstruction. Otherwise
-  // retain CMP/B.HI and other compound unsigned guards for the complete raw
-  // index, without granting finite-mask or predecessor-join authority.
-  IndexQuery.Relation = JumpTableValueRelation::GuardedUnsignedLessThan;
-  const auto Guarded = Match({IndexQuery});
-  return AnalysisComplete && Guarded.size() == 1 && Guarded[0];
+  if (AnalysisComplete) {
+    // Masks and exact remainders need no branch reconstruction. Otherwise
+    // retain CMP/B.HI and other compound unsigned guards for the complete raw
+    // index, without granting finite-mask or predecessor-join authority.
+    IndexQuery.Relation = JumpTableValueRelation::GuardedUnsignedLessThan;
+    const auto Guarded = Match({IndexQuery});
+    if (!AnalysisComplete || Guarded.size() != 1)
+      return false;
+    if (Guarded[0])
+      return true;
+  }
+  // A loop-carried index can outgrow the cheap bound's symbol allowance, or be
+  // bounded only by the values each path stores. The finite-coordinate proof of
+  // this exact use shows it below Capacity, every slot of which the address
+  // equality above covered. Only its bound is taken: the coordinates remain the
+  // common domain proof's to publish.
+  if (Capacity > std::numeric_limits<uint64_t>::digits)
+    return false;
+  AnalysisComplete = true;
+  IndexQuery.Relation = JumpTableValueRelation::UnsignedFeasibleSet;
+  IndexQuery.UnsignedUpperBound = Capacity;
+  const auto Finite = Match({IndexQuery});
+  return AnalysisComplete && Finite.size() == 1 && Finite[0];
 }
 
 bool CFGBuilder::tryConstBaseAbsoluteTable(

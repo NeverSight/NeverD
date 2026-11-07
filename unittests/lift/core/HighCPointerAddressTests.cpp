@@ -33866,8 +33866,7 @@ TEST(HighCPointerAddresses, GetLengthJleKeepsOneSequencedSignedResult) {
   const std::string Source = emitFunctions({Func});
   EXPECT_NE(Source.find("Length = GetLength(arg0);"), std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("if ((int32_t)Length > 0)"), std::string::npos)
-      << Source;
+  EXPECT_NE(Source.find("if (Length > 0)"), std::string::npos) << Source;
   EXPECT_NE(Source.find("CStringT_assign("), std::string::npos) << Source;
   EXPECT_NE(Source.find("GetData("), std::string::npos) << Source;
   EXPECT_EQ(Source.find("t82_23"), std::string::npos) << Source;

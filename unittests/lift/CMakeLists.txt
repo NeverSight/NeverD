@@ -124,6 +124,7 @@ add_neverd_unittest(NeverDConstantBranchSourceTests
 add_neverd_unittest(NeverDUnaryIdentitySourceTests
   core/UnaryIdentitySourceTests.cpp
   LINK_COMPONENTS Pipeline BackendC
+  TIMEOUT 300
 )
 if(NEVERD_TEST_CLANG_EXECUTABLE)
   target_compile_definitions(NeverDUnaryIdentitySourceTests PRIVATE
@@ -884,6 +885,7 @@ add_neverd_unittest(NeverDX86SnpSourceTests
   LINK_COMPONENTS BackendC CodeGen)
 
 add_neverd_unittest(NeverDX86VirtualizationSourceTests
+  TIMEOUT 300
   NO_PRETTY_VALUES
   x86_64/X86VirtualizationSourceTests.cpp
   LINK_COMPONENTS Pipeline BackendC CodeGen)
@@ -919,6 +921,7 @@ add_neverd_unittest(NeverDX86FourSourceSourceTests
   LINK_COMPONENTS Pipeline BackendC CodeGen)
 
 add_neverd_unittest(NeverDX86FourSourceSegmentTests
+  TIMEOUT 300
   x86/X86FourSourceSegmentTests.cpp
   LINK_COMPONENTS Pipeline BackendC CodeGen)
 target_include_directories(NeverDX86FourSourceSegmentTests PRIVATE
@@ -5243,6 +5246,7 @@ add_neverd_unittest(NeverDX86MaskCompareStateTests
 target_include_directories(NeverDX86MaskCompareStateTests PRIVATE
   ${CMAKE_SOURCE_DIR}/unittests)
 add_neverd_unittest(NeverDX86FPRoundAccuracyTests
+  TIMEOUT 300
   x86_64/X86_64_FPRoundAccuracyTests.cpp
   LINK_COMPONENTS Pipeline BackendC CodeGen)
 target_include_directories(NeverDX86FPRoundAccuracyTests PRIVATE

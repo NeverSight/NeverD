@@ -216,19 +216,31 @@ TEST_F(X64PagedDebugTest, UnexecutedStepsAndExternalEventsRetainDebugStatus) {
 
 TEST_F(X64PagedDebugTest, SourceAdmissionKeepsOtherExecutionContractsExplicit) {
   for (bool LLVM : {false, true}) {
-    for (const char *Extra :
-         {"\"paged_memory\":false,\"instructions\":[4096]",
-          "\"paged_memory\":true,\"entries\":[4096],\"follow_internal_calls\":"
-          "true,\"function_context\":true"}) {
-      const auto Request =
-          std::string("{\"profile\":\"kernel-events-v6\",\"mxcsr_mask\":65535,"
-                      "\"paging_address_bits\":48,\"paged_debug\":true,") +
-          Extra + "}";
-      auto Export = exportX64Continuation(image({0x90}), Request, LLVM);
-      ASSERT_FALSE(bool(Export));
-      EXPECT_NE(llvm::toString(Export.takeError()).find("paged_debug"),
-                std::string::npos);
-    }
+    auto Export = exportX64Continuation(
+        image({0x90}),
+        R"({"profile":"kernel-events-v6","mxcsr_mask":65535,
+            "paging_address_bits":48,"paged_debug":true,
+            "paged_memory":false,"instructions":[4096]})",
+        LLVM);
+    ASSERT_FALSE(bool(Export));
+    EXPECT_NE(llvm::toString(Export.takeError()).find("paged_debug"),
+              std::string::npos);
+    Export = exportX64Continuation(
+        image({0xc3}),
+        R"({"profile":"kernel-events-v6","mxcsr_mask":65535,
+            "paging_address_bits":48,"paged_debug":true,"paged_memory":true,
+            "entries":[4096],"follow_internal_calls":true,
+            "function_context":true})",
+        LLVM);
+    ASSERT_TRUE(bool(Export)) << llvm::toString(Export.takeError());
+    const auto Manifest = llvm::cantFail(llvm::json::parse(Export->Manifest));
+    const auto *Function =
+        Manifest.getAsObject()->getObject("function_context");
+    ASSERT_NE(Function, nullptr);
+    EXPECT_EQ(Function->getString("context_type"),
+              "neverd_x64_function_context_v2");
+    EXPECT_EQ(Function->getString("transfer_receipt"),
+              "neverd_x64_paged_transfer_v1");
   }
 }
 

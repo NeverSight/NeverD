@@ -55,6 +55,9 @@ struct X86PortIOResult {
   bool DeviceUnavailable = false;
   uint8_t InputBytesWritten = 0;
   uint32_t InputValue = 0;
+  /// Actual completed device extent, valid when DeviceTransferCompleted.
+  uint16_t Port = 0;
+  uint8_t TransferBytes = 0;
 };
 
 /// Mode owner supplies the checked segment/canonical extent and the explicit

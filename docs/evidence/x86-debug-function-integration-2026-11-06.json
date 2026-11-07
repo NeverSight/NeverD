@@ -1,0 +1,563 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-06",
+  "scope": "Integration of qualified paged x64 debug function/call completion with the three concurrent dev no-return and jump-table fixes",
+  "qualification_status": "complete_for_declared_integration_scope",
+  "global_goal_complete": false,
+  "parents": {
+    "feature_commit": "c2cf4ce44e355bf8a551296fa97e38eef1dc5eed",
+    "remote_parent": "f190dfdb1eca7cdbe1d603cbe6512805cca25939",
+    "upstream_paths": [
+      "docs/architecture.md",
+      "include/neverd/ir/low/LowNoReturn.h",
+      "lib/ir/low/LowNoReturn.cpp",
+      "lib/ir/low/jumptable/JumpTableResolverBounds.cpp",
+      "lib/ir/low/jumptable/JumpTableResolverSlice.cpp",
+      "lib/ir/low/jumptable/ResolverPendingWalks.h",
+      "lib/ir/med/pass/MedNoReturn.cpp",
+      "unittests/lift/core/MedNoReturnTests.cpp"
+    ],
+    "feature_code_unchanged": true,
+    "feature_qualification": "/mnt/data/neverd-debug-function-20261106/qualified-commit.json"
+  },
+  "tested_merged_git_tree": "b5f301d1d75a0e24a0458a1fbf7bc8cc6455a394",
+  "feature_code_files_unchanged": 19,
+  "source_sha256": {
+    "docs/architecture.md": "0b132d55403f19abdb5bfa0e3b6df2953e5fcf1cdb52dd2e90468fcefad97be2",
+    "docs/evidence/x86-debug-function-activation-2026-11-06.json": "fe0435845dd42d1aa745ca2a91eff60afe464fb5a40043c8d1a0aebf08b6b8e6",
+    "docs/testing.md": "f81eeba9e8ddf9ee91ead49ef1d5f217f1708bbf002efbba1ec21815f8ba9e14",
+    "docs/x64-continuation-source.md": "fb93a599035107046404988c930e7ea08e1cb1256a4ec766eaa8140e21d7e8db",
+    "docs/x86-instruction-support.md": "9a3dea9f93ae54520992d25181c58ababf1c3a2cced46cc961485075ee445322",
+    "docs/x86-paged-execution.md": "06caa31e14a6428969369e0d00b292e068047f6f5bd6363bc68f244138caa01d",
+    "include/neverd/analysis/arch/x86_64/X64PagedExecution.h": "358fe2c36d362f67e3335807e40a85f0a86335dd139db7aeac1889044838d007",
+    "include/neverd/ir/low/LowNoReturn.h": "11899d847c847c030063c64d875f1284af84f04b8385beadf87ddba4e6506ba8",
+    "lib/analysis/arch/x86_64/X64PagedExecution.cpp": "ca5febf0b874f4f697c47be42a60efa303e49a58d820ec2a226c134800f96057",
+    "lib/ir/low/LowNoReturn.cpp": "55d4dce96e4d8d3aa2310ae0e0f609416e1f4e9da8601ae2db28b054b95b9c8f",
+    "lib/ir/low/jumptable/JumpTableResolverBounds.cpp": "61f66816c9c93cbdd8a0bd92d6af5814d9daf25c5b73d2bfd2407f13bed80d63",
+    "lib/ir/low/jumptable/JumpTableResolverSlice.cpp": "6354af77352ec70293f87485851117232826df60a950a8ed2f38a64767a4f5b2",
+    "lib/ir/low/jumptable/ResolverPendingWalks.h": "5fa0cc4752cd6624b9591ae90eecefa9075003cfd5232a86de854d655ad74b01",
+    "lib/ir/med/pass/MedNoReturn.cpp": "ed61fd101e369de199c5d5dcce0b4d9e8ce9863d41668b2133a4ccc0a7b403c6",
+    "lib/pipeline/X86/X64ContinuationExport.cpp": "a9e6b38344beb0b82be6edf261688ddfc167424d13fdf317f73d67650a7c26a6",
+    "lib/pipeline/X86/X64ContinuationPagedDriver.h": "2b9513e0d44d209f6d7c7ffa475916e9fb7573b6e5327e6532498cb175829614",
+    "lib/pipeline/X86/X64ContinuationSchedule.cpp": "734c142323a07398c381c92e792e850e7cfbf84ad272f50b9a35118ed211f506",
+    "lib/pipeline/X86/X64FunctionCallHandlers.cpp": "b7c9d83632a4310f49074c75c7d0309d70dbbae6afc5c40bdbf2a8e39f77e4d6",
+    "lib/pipeline/X86/X64FunctionCallHandlers.h": "257897087bc03150e94753b0cef53838b164e446962ebd84cd978b56b176db04",
+    "lib/pipeline/X86/X64FunctionCallSchedule.cpp": "2bdfdc06b05660ac017f9b2f9e748f45adfab4d09f173e371ee9f771394a1f31",
+    "lib/pipeline/X86/X64FunctionCallSchedule.h": "cea085c93d3d958fe4bbfa68ac4acb570207c00ffe93d6e85a42f2f50bcd94e6",
+    "lib/pipeline/X86/X64FunctionCallSites.cpp": "2a58db773f10735272257f39058d99b82b9aa4dc62411cf4c039ca5ec3dfa32c",
+    "lib/pipeline/X86/X64FunctionCallSites.h": "701043fbf387e08b574bd1f715532d263135bfbc44e2c715beaf06beda1bc894",
+    "lib/pipeline/X86/X64FunctionCalls.cpp": "64414a22197ce2c8f4622587735e1d1f94f3495aa07e056597c1ba0435948d17",
+    "lib/pipeline/X86/X64FunctionCalls.h": "1a85bd7de961ced25699bc7168da25697a8e89af9e27577548dc44f9c63f0e8c",
+    "lib/pipeline/X86/X64FunctionContext.cpp": "b5caaf1afed89920ac88235ade52815ff2c52389044c0f1744ea6cb4116cab9b",
+    "lib/pipeline/X86/X64FunctionContext.h": "4ba38fedceddd0790facbc5e8a98ac202fafde773deaa2ad2fbefc843c086ac7",
+    "unittests/devirtualization/x86_64/X64ScheduledCallTests.inc": "67a6e6562271b8f8a7544b7ec0ddc12e1f02ae81322cca717c0bc4b799eb4b5b",
+    "unittests/lift/core/MedNoReturnTests.cpp": "4664b1196597c666f834969849f8000eedd44ea4a23eb931d122f143a1475c33",
+    "unittests/translate/x86/X64PagedDebugFunctionTests.inc": "4235f520b422051b8b0b3d4ccaf9f24caada27c5095f5fabcac015480039c8af",
+    "unittests/translate/x86/X64PagedDebugTests.inc": "e6f501aca0bb7a008f6a0d33d8903a2baf0413c6b4e814bc855ef6a0f87324fb",
+    "unittests/translate/x86/X64PagedExecutionTests.cpp": "32306b3b05b3d2722fc693493526da377061d0e88974f5938dfd832800a4bfbf"
+  },
+  "source_digest_scope": "Feature and concurrent upstream paths; this evidence document is excluded. Recorded Git tree identifies all remaining inputs.",
+  "prior_feature_qualification": {
+    "commit": "c2cf4ce44e355bf8a551296fa97e38eef1dc5eed",
+    "evidence": "x86-debug-function-activation-2026-11-06.json",
+    "qualification": {
+      "tests": 792,
+      "passed": 792,
+      "failed": 0,
+      "skipped": 0,
+      "new_original_transfer_comparisons": 768
+    },
+    "counts_reused_in_integration": false,
+    "archive_manifest_sha256": "7a187c503bc01dd919b64009dc75a7eab7a0db3fa627e46579c34a506e7f393c"
+  },
+  "artifact_root": "/mnt/data/neverd-debug-function-integration-20261106",
+  "archive": "qualified-inputs",
+  "qualification": {
+    "tests": 825,
+    "passed": 823,
+    "failed": 0,
+    "skipped_in_initial_run": 2,
+    "distinct_cases": 823,
+    "distinct_cases_passed": 823,
+    "unresolved_skips": 0,
+    "new_original_transfer_comparisons": 384,
+    "records": [
+      {
+        "name": "integrated-native-noreturn-p",
+        "sdk": "native",
+        "core": "2",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-debug-function-20261106/qualified-inputs/private_tmp.py",
+          "/mnt/data/neverd-debug-function-integration-20261106/integrated-native-noreturn-p/tmp",
+          "taskset",
+          "-c",
+          "2",
+          "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDNoReturnTests",
+          "--gtest_filter=*",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-integration-20261106/integrated-native-noreturn-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-integration-20261106/integrated-native-noreturn-p/exports"
+        },
+        "binary_sha256": "41a514386083515dfa26465aba23d05f8c7067d4e0b71a79c5e9559e61b4b76b",
+        "exit_code": 0,
+        "seconds": 0.094,
+        "log_sha256": "9caa33d5a7b2c6d1369930e688dfd02cd23ec7869956d6bfeb99ae3f31415751",
+        "result_sha256": "77a126655ea61f9524f2c0225a99a5902663850c644a295de31b5948844e06cc",
+        "tests": 48,
+        "failed": 0,
+        "skipped": [],
+        "passed": 48,
+        "transfer_comparisons": 0,
+        "watchpoint_comparisons": 0,
+        "debug_cpu_comparisons": 0,
+        "debug_round_trips": 0,
+        "runtime_library_sha256": "db72b8da20675ab0f4c8e982dae1439858765a528aae364cf36ef209f8335bcd"
+      },
+      {
+        "name": "integrated-native-jumptable-p",
+        "sdk": "native",
+        "core": "2",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-debug-function-20261106/qualified-inputs/private_tmp.py",
+          "/mnt/data/neverd-debug-function-integration-20261106/integrated-native-jumptable-p/tmp",
+          "taskset",
+          "-c",
+          "2",
+          "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDJumpTableTests",
+          "--gtest_filter=*",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-integration-20261106/integrated-native-jumptable-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-integration-20261106/integrated-native-jumptable-p/exports"
+        },
+        "binary_sha256": "383addb5816b238f197e8ece09567137302dd3a7879071ce4c65b03508acacfd",
+        "exit_code": 0,
+        "seconds": 483.892,
+        "log_sha256": "1c87eff9f2754c4e38f92cbffd01f59536c4c2d34f6c0f2420a0fc3131ab0c46",
+        "result_sha256": "574761e9bedbb64774ce52319cfa1c3fa4e0cdd864b2ccb25bf1445fd303b1ab",
+        "tests": 697,
+        "failed": 0,
+        "skipped": [
+          "JumpTableSharedAbsolute.BothSourceRoutesExecuteEverySelection",
+          "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/0"
+        ],
+        "passed": 695,
+        "transfer_comparisons": 0,
+        "watchpoint_comparisons": 0,
+        "debug_cpu_comparisons": 0,
+        "debug_round_trips": 0,
+        "runtime_library_sha256": "db72b8da20675ab0f4c8e982dae1439858765a528aae364cf36ef209f8335bcd"
+      },
+      {
+        "name": "integrated-native-paged-p",
+        "sdk": "native",
+        "core": "4",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-debug-function-20261106/qualified-inputs/private_tmp.py",
+          "/mnt/data/neverd-debug-function-integration-20261106/integrated-native-paged-p/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=X64PagedDebugFunctionTest.*:X64PagedDebugTest.SourceAdmissionKeepsOtherExecutionContractsExplicit",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-integration-20261106/integrated-native-paged-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-integration-20261106/integrated-native-paged-p/exports"
+        },
+        "binary_sha256": "c696b11ccf78501154042618d2aa20e126241ee306c84e863f777064f73cc40c",
+        "exit_code": 0,
+        "seconds": 43.439,
+        "log_sha256": "fac9bb70108e3383589986e954f1d3d781b9187301558fdf31c1d8608c24e659",
+        "result_sha256": "b5f813c330ac360c0f07252ef1e395c8c6785e772b95fadf04e8ebf20329a3b4",
+        "tests": 10,
+        "failed": 0,
+        "skipped": [],
+        "passed": 10,
+        "transfer_comparisons": 192,
+        "watchpoint_comparisons": 0,
+        "debug_cpu_comparisons": 0,
+        "debug_round_trips": 0,
+        "runtime_library_sha256": "db72b8da20675ab0f4c8e982dae1439858765a528aae364cf36ef209f8335bcd"
+      },
+      {
+        "name": "integrated-native-calls-p",
+        "sdk": "native",
+        "core": "4",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-debug-function-20261106/qualified-inputs/private_tmp.py",
+          "/mnt/data/neverd-debug-function-integration-20261106/integrated-native-calls-p/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX64ContinuationExportTests",
+          "--gtest_filter=*FunctionContext*:*FunctionCall*:*CallSite*:*CallPause*:*ScheduledCall*",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-integration-20261106/integrated-native-calls-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-integration-20261106/integrated-native-calls-p/exports"
+        },
+        "binary_sha256": "19934b4b14b54c18968b8c232ff69dfeb0680e2f6cb5307c1a822ece8dd13e8f",
+        "exit_code": 0,
+        "seconds": 278.488,
+        "log_sha256": "768699cfe145b497679f948df08a3426f4a44b119da41bd951aabd29726adb29",
+        "result_sha256": "555ab02d571d0ebbc10c15ffe7bd5222c0a832b1933e96f4a0ef5f629887608c",
+        "tests": 29,
+        "failed": 0,
+        "skipped": [],
+        "passed": 29,
+        "transfer_comparisons": 0,
+        "watchpoint_comparisons": 0,
+        "debug_cpu_comparisons": 0,
+        "debug_round_trips": 0,
+        "runtime_library_sha256": "db72b8da20675ab0f4c8e982dae1439858765a528aae364cf36ef209f8335bcd"
+      },
+      {
+        "name": "integrated-r6-paged-p",
+        "sdk": "r6",
+        "core": "4",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-debug-function-20261106/qualified-inputs/private_tmp.py",
+          "/mnt/data/neverd-debug-function-integration-20261106/integrated-r6-paged-p/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "${NEVERD_WORKTREE}/build-x86/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=X64PagedDebugFunctionTest.*:X64PagedDebugTest.SourceAdmissionKeepsOtherExecutionContractsExplicit",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-integration-20261106/integrated-r6-paged-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-integration-20261106/integrated-r6-paged-p/exports"
+        },
+        "binary_sha256": "2a7b6b24b1c5c4bf4aa36453000624c089adaf9a01308cfab112eea69aa3ff0e",
+        "exit_code": 0,
+        "seconds": 54.281,
+        "log_sha256": "2ae5f410eb3ff51dde9768a4077656fd9f0673c4bd9b92ab6072843ee7a25c71",
+        "result_sha256": "565e80674adb84c2e0ad5b3acb764bb3dab8a98793fda84b7a44573d6abd31b1",
+        "tests": 10,
+        "failed": 0,
+        "skipped": [],
+        "passed": 10,
+        "transfer_comparisons": 192,
+        "watchpoint_comparisons": 0,
+        "debug_cpu_comparisons": 0,
+        "debug_round_trips": 0,
+        "runtime_library_sha256": "32750df82540361a474e1436caa7c28a39c63562601f1f57e3a8f61ed0274f7c"
+      },
+      {
+        "name": "integrated-r6-calls-p",
+        "sdk": "r6",
+        "core": "4",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-debug-function-20261106/qualified-inputs/private_tmp.py",
+          "/mnt/data/neverd-debug-function-integration-20261106/integrated-r6-calls-p/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "${NEVERD_WORKTREE}/build-x86/bin/NeverDX64ContinuationExportTests",
+          "--gtest_filter=*FunctionContext*:*FunctionCall*:*CallSite*:*CallPause*:*ScheduledCall*",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-integration-20261106/integrated-r6-calls-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-integration-20261106/integrated-r6-calls-p/exports"
+        },
+        "binary_sha256": "6a7d2bc97d4c451150a2e9f13c8092c8368a124755fc9cfdd20f9dc321a44a21",
+        "exit_code": 0,
+        "seconds": 238.517,
+        "log_sha256": "f8205f579aa5e0af9cdd44d16f4341d122319022cac720de65efe0c27c6d950c",
+        "result_sha256": "e7cc779a273f5505b09c79171f9fc76aed3a4e1ff8c486ce024f5b6a8850b83b",
+        "tests": 29,
+        "failed": 0,
+        "skipped": [],
+        "passed": 29,
+        "transfer_comparisons": 0,
+        "watchpoint_comparisons": 0,
+        "debug_cpu_comparisons": 0,
+        "debug_round_trips": 0,
+        "runtime_library_sha256": "32750df82540361a474e1436caa7c28a39c63562601f1f57e3a8f61ed0274f7c"
+      },
+      {
+        "name": "integrated-native-jumptable-qemu-p",
+        "sdk": "native",
+        "core": "2",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-debug-function-20261106/qualified-inputs/private_tmp.py",
+          "/mnt/data/neverd-debug-function-integration-20261106/integrated-native-jumptable-qemu-p/tmp",
+          "taskset",
+          "-c",
+          "2",
+          "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDJumpTableTests",
+          "--gtest_filter=JumpTableSharedAbsolute.BothSourceRoutesExecuteEverySelection:NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/0",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-integration-20261106/integrated-native-jumptable-qemu-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-integration-20261106/integrated-native-jumptable-qemu-p/exports"
+        },
+        "binary_sha256": "383addb5816b238f197e8ece09567137302dd3a7879071ce4c65b03508acacfd",
+        "exit_code": 0,
+        "seconds": 9.568,
+        "log_sha256": "18c91ad452ecdef3fee372637f7fbd754d32db74421e954e277030a925d4d678",
+        "result_sha256": "984ebd17401ab10d6623edec8d2ad435fb11c6fad6d4eed059bb00fd4d608135",
+        "tests": 2,
+        "failed": 0,
+        "skipped": [],
+        "passed": 2,
+        "transfer_comparisons": 0,
+        "watchpoint_comparisons": 0,
+        "debug_cpu_comparisons": 0,
+        "debug_round_trips": 0,
+        "runtime_library_sha256": "db72b8da20675ab0f4c8e982dae1439858765a528aae364cf36ef209f8335bcd"
+      }
+    ]
+  },
+  "resolved_initial_skips": {
+    "cases": [
+      "JumpTableSharedAbsolute.BothSourceRoutesExecuteEverySelection",
+      "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/0"
+    ],
+    "cause": "qemu-aarch64 was not initially on PATH",
+    "resolution": "Locally extracted verified Ubuntu qemu-user package; reran precisely the two skipped cases with the same frozen test/product binaries.",
+    "tool": {
+      "package": "qemu-user_1%3a10.2.1+ds-1ubuntu3.3_amd64.deb",
+      "version": "1:10.2.1+ds-1ubuntu3.3",
+      "package_sha256": "a00c7fdf34c913b799f8d1cc556d3fdd9f9fd695167a17baf86123a9cfaefb22",
+      "apt_metadata": "Package: qemu-user\nSource: qemu\nPriority: optional\nSection: universe/misc\nInstalled-Size: 133132\nMaintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>\nArchitecture: amd64\nVersion: 1:10.2.1+ds-1ubuntu3.3\nRecommends: qemu-user-binfmt\nReplaces: qemu-user-binfmt (<< 1:9.1.0), qemu-user-hwe, qemu-user-static (<< 1:9.1.0)\nDepends: ubuntu-virt (>= 1:10.2.1+ds-1ubuntu3.3)\nBreaks: qemu-user-binfmt (<< 1:9.1.0), qemu-user-static (<< 1:9.1.0)\nFilename: pool/universe/q/qemu/qemu-user_10.2.1+ds-1ubuntu3.3_amd64.deb\nSize: 14740854\nMD5sum: 3c272b472f16678491facba65b4c5024\nSHA1: 3cc8a874d0df302f1103c40a6fe07c67c49c423e\nSHA256: a00c7fdf34c913b799f8d1cc556d3fdd9f9fd695167a17baf86123a9cfaefb22\nSHA512: d7a02eaa7053909b54e568b207f78f5bb5e006f034c96cc82c6f910224d47bdfa85757f295a21514a0dfe7d26b686e12383bd76bbd9e921e5016d0ef26e7b91e\nHomepage: http://www.qemu.org/\nDescription-en: QEMU user mode emulation (static binaries)\n QEMU is a fast processor emulator: currently the package supports Alpha, ARM,\n CRIS, i386, LoongArch, M68k (ColdFire), MicroBlaze, MIPS, PowerPC, RISC-V,\n S390x, SH4, SPARC, x86-64, Xtensa and other emulations. By using dynamic\n translation it achieves reasonable speed while being easy to port on new host\n CPUs.\n .\n This package provides statically linked user mode emulation binaries.\n In user mode QEMU can launch Linux processes compiled for one CPU\n on another CPU.\n .\n If qemu-user-binfmt package is also installed, it will register binary\n format handlers from this qemu-user package with the kernel automatically\n so it will be possible to run foreign binaries directly.  Without\n qemu-user-binfmt, it is possible to register certain binfmt(s) by installing\n symbolic links to /usr/share/qemu/binfmt.d/*.conf in /etc/binfmt.d/.\nDescription-md5: b5ae91329ebad9c1b179f0ba91f86d3e\nBuilt-Using: gcc-15 (= 15.2.0-16ubuntu1), glib2.0 (= 2.88.0-1ubuntu0.1), glibc (= 2.43-2ubuntu2.4), sysprof (= 50.0-1), zlib (= 1:1.3.dfsg+really1.3.1-1ubuntu3.1)\nMulti-Arch: foreign\nOriginal-Maintainer: Debian QEMU Team <pkg-qemu-devel@lists.alioth.debian.org>\nOrigin: Ubuntu\nBugs: https://bugs.launchpad.net/ubuntu/+filebug\n\n",
+      "binary": "/mnt/data/neverd-debug-function-integration-20261106/qemu-package/runtime/usr/bin/qemu-aarch64",
+      "binary_sha256": "532b2c75f44749d4c6db3e5f578a76488bfcd7a261289a89675d2ced24a0bd3c",
+      "version_output": "qemu-aarch64 version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)\nCopyright (c) 2003-2025 Fabrice Bellard and the QEMU Project developers\n",
+      "environment": {
+        "PATH": "/mnt/data/neverd-debug-function-integration-20261106/qemu-package/runtime/usr/bin:/home/ad/.codex/tmp/arg0/codex-arg0BFws8v:/home/ad/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/home/ad/tools/ida94:/home/ad/.grok/bin:/home/ad/bin:/home/ad/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin:/home/ad/tools/ida94/tools/teams:/home/ad/tools/ida94/tools/teams:/home/ad/tools/ida94/tools/teams:/home/ad/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/usr/lib/chatgpt/resources"
+      },
+      "command": [
+        "python3",
+        "/mnt/data/neverd-debug-function-integration-20261106/qualify.py",
+        "integrated-native-jumptable-qemu-p",
+        "native",
+        "2",
+        "NeverDJumpTableTests",
+        "JumpTableSharedAbsolute.BothSourceRoutesExecuteEverySelection:NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/0"
+      ],
+      "scope": "QEMU user-mode execution of original AArch64 fixtures and unchanged generated C; not physical AArch64 hardware qualification."
+    }
+  },
+  "generated_exports": {
+    "reference_sha256": "095d699d9a6a69c0537e0c6cb798e1642fd36f4d75f35ef737da52bcc37ecb81",
+    "comparisons": {
+      "integrated-native-paged-p": {
+        "c_files": 104,
+        "manifests": 104,
+        "byte_identical_to_feature_reference": true
+      },
+      "integrated-r6-paged-p": {
+        "c_files": 104,
+        "manifests": 104,
+        "byte_identical_to_feature_reference": true
+      }
+    }
+  },
+  "toolchain": {
+    "llvm_commit": "1c51c12828cc0d8eb6089ee02614f3f86f2e95f5",
+    "neverc_commit": "785a3dc1b78cd1fc4a738497a91f9416f1fd7d3f",
+    "sha256": {
+      "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "neverc": "df9dd82278bcf2649a512da46ba0360e4891d124114081c5b14bfdd0d5204911"
+    }
+  },
+  "production_sdk": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "llvm_release_created": false,
+  "production_pin_changed": false,
+  "dependency_inputs_unchanged": true,
+  "build_products": {
+    "native": {
+      "sha256": {
+        "neverd": "645200309a35c0c1a617eb8cd0579808fc913272a21a90d8f02ed2d437f48956",
+        "libneverd.so": "db72b8da20675ab0f4c8e982dae1439858765a528aae364cf36ef209f8335bcd",
+        "NeverDX64PagedExecutionTests": "c696b11ccf78501154042618d2aa20e126241ee306c84e863f777064f73cc40c",
+        "NeverDX64ContinuationExportTests": "19934b4b14b54c18968b8c232ff69dfeb0680e2f6cb5307c1a822ece8dd13e8f",
+        "NeverDNoReturnTests": "41a514386083515dfa26465aba23d05f8c7067d4e0b71a79c5e9559e61b4b76b",
+        "NeverDJumpTableTests": "383addb5816b238f197e8ece09567137302dd3a7879071ce4c65b03508acacfd"
+      },
+      "inputs": {
+        "neverd-build-receipt.json": "55c3fb70b245e8904cf2a5363922207006516a24aee996cd112f0fb3e40cbbe3",
+        "neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "CMakeCache.txt": "47525d2f95f1a2862256d0cda1309689a93d9dda5ce02737e357bd8df0496287"
+      }
+    },
+    "r6": {
+      "sha256": {
+        "neverd": "43870d2caec59f50f4d00a543a60948fa6a20d9d44d3adfd5e9b6808ca39df00",
+        "libneverd.so": "32750df82540361a474e1436caa7c28a39c63562601f1f57e3a8f61ed0274f7c",
+        "NeverDX64PagedExecutionTests": "2a7b6b24b1c5c4bf4aa36453000624c089adaf9a01308cfab112eea69aa3ff0e",
+        "NeverDX64ContinuationExportTests": "6a7d2bc97d4c451150a2e9f13c8092c8368a124755fc9cfdd20f9dc321a44a21"
+      },
+      "inputs": {
+        "neverd-build-receipt.json": "f040a212d944fc36fdfebb97372edace338fa521f4a924b9ec68fc83969cd6c1",
+        "neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+        "CMakeCache.txt": "1bf7e75ad734ab9e16d7af098d4af139162a75ffe9e75cf6113958ed0a302f80"
+      }
+    }
+  },
+  "fixtures_native_snapshot_sha256": "ac3a475f2022822006f5c982424969dbdc51f1f545fb3765034ed35399c66883",
+  "checks": {
+    "docs": {
+      "command": [
+        "python3",
+        "scripts/check_docs_i18n.py"
+      ],
+      "exit_code": 0,
+      "log_sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+    },
+    "provenance": {
+      "command": [
+        "python3",
+        "scripts/check_source_provenance.py",
+        "--history-commits",
+        "2"
+      ],
+      "exit_code": 0,
+      "log_sha256": "294358c7bc4b53efcab90afee59e98525bbff3dd33caa965220378f6bbc08d90"
+    },
+    "format": {
+      "command": [
+        "clang-format",
+        "--dry-run",
+        "--Werror",
+        "include/neverd/analysis/arch/x86_64/X64PagedExecution.h",
+        "include/neverd/ir/low/LowNoReturn.h",
+        "lib/analysis/arch/x86_64/X64PagedExecution.cpp",
+        "lib/ir/low/LowNoReturn.cpp",
+        "lib/ir/low/jumptable/JumpTableResolverBounds.cpp",
+        "lib/ir/low/jumptable/JumpTableResolverSlice.cpp",
+        "lib/ir/low/jumptable/ResolverPendingWalks.h",
+        "lib/ir/med/pass/MedNoReturn.cpp",
+        "lib/pipeline/X86/X64ContinuationExport.cpp",
+        "lib/pipeline/X86/X64ContinuationPagedDriver.h",
+        "lib/pipeline/X86/X64ContinuationSchedule.cpp",
+        "lib/pipeline/X86/X64FunctionCallHandlers.cpp",
+        "lib/pipeline/X86/X64FunctionCallHandlers.h",
+        "lib/pipeline/X86/X64FunctionCallSchedule.cpp",
+        "lib/pipeline/X86/X64FunctionCallSchedule.h",
+        "lib/pipeline/X86/X64FunctionCallSites.cpp",
+        "lib/pipeline/X86/X64FunctionCallSites.h",
+        "lib/pipeline/X86/X64FunctionCalls.cpp",
+        "lib/pipeline/X86/X64FunctionCalls.h",
+        "lib/pipeline/X86/X64FunctionContext.cpp",
+        "lib/pipeline/X86/X64FunctionContext.h",
+        "unittests/devirtualization/x86_64/X64ScheduledCallTests.inc",
+        "unittests/lift/core/MedNoReturnTests.cpp",
+        "unittests/translate/x86/X64PagedDebugFunctionTests.inc",
+        "unittests/translate/x86/X64PagedDebugTests.inc",
+        "unittests/translate/x86/X64PagedExecutionTests.cpp"
+      ],
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "qualification_limits": [
+    "The 792-test/768-comparison full P/E matrix belongs to the prior feature commit and its archived products. Integration adds separately recorded P-core regression results on rebuilt products.",
+    "This integration runs the full native no-return/jump-table targets including AArch64, and both SDKs for debug function/controller and public call compatibility filters. It does not claim a new full cross-architecture or P/E matrix.",
+    "The first jump-table run skipped two AArch64 source execution cases for missing qemu-aarch64. Both pass in the supplemental run; original skipped records are retained. QEMU execution is not physical AArch64 processor evidence.",
+    "Original transfer comparisons cover the represented machine state and 262144-byte RAM, not a complete machine/environment proof.",
+    "General i386/compatibility dispatch, branch/task/RTM debug, real/VM86/task environments, FRED/CET fault environments, software SMM/SGX/AEX and unavailable physical-hardware oracles remain outside this milestone."
+  ]
+}

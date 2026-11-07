@@ -3893,7 +3893,13 @@ ImportPrototypeArguments importPrototypeArguments(
     bool PrototypeOwnsArguments = false;
     bool UserDeclared = false;
     if (!Name.empty()) {
-      if (const uint16_t Bytes = RoutineFloatReturn(Name))
+      // The base AAPCS returns a routine's floating value in the integer
+      // registers the call already writes: the floating bank holds none of it.
+      const bool ReturnsInCoreRegisters =
+          Convention && Convention->ExternalFloatsInCoreRegisters &&
+          Convention->ExternalFloatsInCoreRegisters(Img);
+      if (const uint16_t Bytes = RoutineFloatReturn(Name);
+          Bytes && !ReturnsInCoreRegisters)
         Result.FloatReturns[Addr] = Bytes;
       // Bind a complete fixed declaration before SSA, including stack values
       // written in predecessor blocks. Counts alone cannot retain those uses.

@@ -79,6 +79,22 @@ static void parcel_import(Handle e, unsigned form, Ref object, Ref method,
   else
     C(e, void, 61, object, method, array, 0, length);
 }
+static U8 binder_transact_v(Handle e, Ref object, Ref method, ...) {
+  __builtin_va_list args;
+  __builtin_va_start(args, method);
+  U8 result = C(e, U8, 38, object, method, args);
+  __builtin_va_end(args);
+  return result;
+}
+static U8 binder_transact(Handle e, unsigned form, Ref object, Ref method,
+                          Ref data, Ref reply, unsigned flags) {
+  const U64 args[] = {0xffffffff, data, reply, flags};
+  if (form == 2)
+    return C(e, U8, 39, object, method, args);
+  if (form)
+    return binder_transact_v(e, object, method, -1, data, reply, (int)flags);
+  return C(e, U8, 37, object, method, -1, data, reply, (int)flags);
+}
 int jni_parcel_data(unsigned form, unsigned mode) {
   Handle e = attach();
   CHECK(e);
@@ -118,8 +134,10 @@ int jni_parcel_data(unsigned form, unsigned mode) {
     parcel_write(e, form, data, m[9], 0, C(e, Ref, 167, "activity"));
     if (mode == 8) {
       Ref proxy = C(e, Ref, 6, "android/os/BinderProxy");
-      return (int)C(e, Ref, 33, proxy, "transact",
-                    "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z");
+      Ref transact = C(e, Ref, 33, proxy, "transact",
+                       "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z");
+      return binder_transact(e, form, C(e, Ref, 27, proxy), transact, data,
+                             reply, 1);
     }
     parcel_write(e, form, data, m[4], 1, 0);
     CHECK(parcel_result(e, 49, form, data, m[6]) == 0x00400000);
@@ -224,6 +242,113 @@ static void binder_set_v(Handle e, Ref type, Ref method, ...) {
   __builtin_va_start(args, method);
   C(e, void, 142, type, method, args);
   __builtin_va_end(args);
+}
+static void binder_trace(Handle e, unsigned form, int enabled) {
+  Ref type = C(e, Ref, 6, "android/os/Binder");
+  Ref method =
+      C(e, Ref, 113, type, enabled ? "enableTracing" : "disableTracing", "()V");
+  if (form == 2)
+    C(e, void, 143, type, method, (void *)0);
+  else if (form)
+    binder_set_v(e, type, method);
+  else
+    C(e, void, 141, type, method);
+}
+static int binder_tracing(Handle e, unsigned form) {
+  Ref type = C(e, Ref, 6, "android/os/Binder");
+  Ref method = C(e, Ref, 113, type, "isTracingEnabled", "()Z");
+  return (int)parcel_result(e, 117, form, type, method);
+}
+static int binder_trace_child(unsigned form) {
+  Handle e = attach();
+  CHECK(e && binder_tracing(e, form));
+  binder_trace(e, form, 0);
+  CHECK(!binder_tracing(e, form));
+  return C(vm, int, 5);
+}
+static void *binder_trace_worker(void *form) {
+  return (void *)(U64)binder_trace_child((unsigned)(U64)form);
+}
+int jni_binder_tracing(unsigned form, unsigned threaded) {
+  Handle e = attach();
+  CHECK(e && !binder_tracing(e, form));
+  binder_trace(e, form, 1);
+  Ref type = C(e, Ref, 6, "android/os/Binder");
+  Ref field = C(e, Ref, 144, type, "sTracingEnabled", "Z");
+  CHECK(field && C(e, U8, 146, type, field));
+  CHECK(!C(vm, int, 5));
+  e = attach();
+  CHECK(e && binder_tracing(e, form));
+  type = C(e, Ref, 6, "android/os/Binder");
+  if (threaded) {
+    U64 thread = 0;
+    void *result = (void *)1;
+    CHECK(!pthread_create(&thread, 0, binder_trace_worker, (void *)(U64)form));
+    CHECK(!pthread_join(thread, &result) && !result);
+  } else {
+    binder_trace(e, form, 0);
+  }
+  CHECK(!binder_tracing(e, form) && !C(e, U8, 146, type, field));
+  C(e, void, 155, type, field, 1);
+  CHECK(binder_tracing(e, form));
+  binder_trace(e, form, 0);
+  CHECK(!C(e, int, 228));
+  return C(vm, int, 5);
+}
+int jni_binder_transaction(unsigned form, unsigned mode) {
+  Handle e = attach();
+  CHECK(e);
+  Ref type = C(e, Ref, 6, "android/os/Parcel");
+  Ref obtain = C(e, Ref, 113, type, "obtain", "()Landroid/os/Parcel;");
+  Ref data = parcel_result(e, 114, form, type, obtain);
+  Ref reply = parcel_result(e, 114, form, type, obtain);
+  Ref write = C(e, Ref, 33, type, "writeInt", "(I)V");
+  parcel_write(e, form, reply, write, 1, 0x12345678);
+  Ref proxy_type = C(e, Ref, 6, "android/os/BinderProxy");
+  Ref proxy;
+  if (mode == 8) {
+    proxy = C(e, Ref, 27, proxy_type);
+  } else {
+    Ref manager = C(e, Ref, 6, "android/os/ServiceManager");
+    Ref lookup = C(e, Ref, 113, manager, "getService",
+                   "(Ljava/lang/String;)Landroid/os/IBinder;");
+    Ref name = C(e, Ref, 167, "alpha");
+    proxy = C(e, Ref, 114, manager, lookup, name);
+  }
+  CHECK(proxy && data && reply);
+  if (mode == 5 || mode == 6)
+    binder_trace(e, form, 1);
+  if (mode == 9) {
+    Ref recycle = C(e, Ref, 33, type, "recycle", "()V");
+    C(e, void, 61, data, recycle);
+  }
+  if (mode == 10)
+    reply = C(e, Ref, 27, type);
+  Ref method =
+      C(e, Ref, 33, proxy_type,
+        mode == 0 || mode == 6 || mode == 8 ? "transactNative" : "transact",
+        "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z");
+  CHECK(method);
+  U8 result =
+      binder_transact(e, form, proxy, method, mode <= 6 ? 0 : data,
+                      mode == 7 ? 0 : reply, mode == 4 || mode == 5 ? 1 : 0);
+  CHECK(!result && (mode == 0 || mode == 1 || mode == 4 || mode == 6));
+  Ref exception = C(e, Ref, 15);
+  CHECK(exception);
+  C(e, void, 17);
+  Ref null_pointer = C(e, Ref, 6, "java/lang/NullPointerException");
+  CHECK(C(e, U8, 32, exception, null_pointer));
+  Ref throwable = C(e, Ref, 6, "java/lang/Throwable");
+  Ref message = C(e, Ref, 33, throwable, "getMessage", "()Ljava/lang/String;");
+  CHECK(!parcel_result(e, 34, form, exception, message));
+  CHECK(parcel_result(e, 49, form, reply,
+                      C(e, Ref, 33, type, "dataPosition", "()I")) == 4);
+  parcel_write(e, form, reply, C(e, Ref, 33, type, "setDataPosition", "(I)V"),
+               1, 0);
+  CHECK(parcel_result(e, 49, form, reply,
+                      C(e, Ref, 33, type, "readInt", "()I")) == 0x12345678);
+  CHECK(!C(e, int, 228));
+  return C(vm, int, 5);
 }
 static unsigned binder_get(Handle e, unsigned form) {
   Ref type = C(e, Ref, 6, "android/os/Binder");

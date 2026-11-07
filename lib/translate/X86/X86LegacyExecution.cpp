@@ -20,6 +20,7 @@
 #include "neverd/ir/X86/X86DebugRules.h"
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 #include "neverd/lift/X86/X86DebugRegisterEncoding.h"
+#include "neverd/translate/X86/X86WatchpointObservation.h"
 
 #include "llvm/Support/Errc.h"
 
@@ -39,9 +40,15 @@ llvm::Error invalid(const char *Message) {
 llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                                          X86PagedMemory &M,
                                          const X86LegacyExecutionOptions &O) {
+  if (!O.EventDelivery.MaxAttempts)
+    return invalid("event delivery requires a positive work budget");
   if (bool(S.Debug) != bool(O.Debug) ||
-      (S.Debug && !x86InstructionDebugValid(S.Debug->DR6, S.Debug->DR7,
-                                            S.Debug->DebugCTL, *O.Debug)))
+      (S.PendingEvent && S.PendingEvent->DataBreakpoints &&
+       (!S.Debug || O.Debug != X86InstructionDebugProfile::Watchpoints ||
+        (S.PendingEvent->DataBreakpoints & 0xf0))) ||
+      (S.Debug && !x86InstructionDebugValid(
+                      S.Debug->DR6, S.Debug->DR7, S.Debug->DebugCTL, *O.Debug,
+                      M.controls().CR4, S.Debug->PendingData)))
     return invalid("legacy debug state requires a valid instruction-debug "
                    "profile, DR6, supported DR7 and zero DEBUGCTL");
   auto Controls = M.controls();
@@ -106,7 +113,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       !Single && !INT && !UD2 && !IRET && !RETF && !DebugRegister)
     return invalid("unsupported or malformed legacy step instruction");
   if (DebugRegister &&
-      Options.Debug != X86InstructionDebugProfile::DebugRegisters)
+      Options.Debug != X86InstructionDebugProfile::DebugRegisters &&
+      Options.Debug != X86InstructionDebugProfile::Watchpoints)
     return invalid("MOV-DR requires the debug-register profile");
   if (Far && Options.FarTransfers != X86LegacyFarTransferProfile::OrderedFrame)
     return invalid("legacy far transfer requires a bound transfer profile");
@@ -120,6 +128,10 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       Options.Strings != X86LegacyStringProfile::ElementwiseDestinationFirst)
     return invalid(
         "legacy string step requires a bound element-progress profile");
+  if (String && String->Repeat &&
+      Options.Debug == X86InstructionDebugProfile::Watchpoints &&
+      (!Options.RepeatDebug || !Options.RepeatDebug->EndGroup))
+    return invalid("legacy REP watchpoints require a debug-group binding");
   if (Scalar &&
       !(Scalar->Operation == detail::X86LegacyScalarOperation::Move &&
         Scalar->Destination.Register && Scalar->Source.Immediate) &&
@@ -211,6 +223,9 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (auto Error = detail::admitLegacyExecution(State, Memory, Options))
     return std::move(Error);
   X86LegacyExecutionResult R;
+  X86WatchpointObservation Observation(
+      Memory, State.Debug ? &*State.Debug : nullptr,
+      Options.Debug.value_or(X86InstructionDebugProfile::InstructionStep));
   const auto Accept = [&](const X86MemoryAccessResult &Got) {
     R.SelfModifications.insert(R.SelfModifications.end(),
                                Got.SelfModifications.begin(),
@@ -224,6 +239,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   const auto Enter =
       [&](const X86LegacyEvent &Event,
           bool Completed) -> llvm::Expected<X86LegacyExecutionResult> {
+    Observation.stop();
     auto Delivered = deliverX86LegacyEvent(State, Memory, Event, Options);
     if (!Delivered)
       return Delivered.takeError();
@@ -231,10 +247,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     Delivered->PortInputBytesWritten = R.PortInputBytesWritten;
     Delivered->InstructionAttempted = true;
     Delivered->InstructionCompleted =
-        Completed &&
-        (Event.Kind == X86LegacyEventKind::Trap ||
-         (Delivered->Status == X86LegacyExecutionStatus::EventDelivered &&
-          !Delivered->Exception));
+        Completed && (Event.Kind == X86LegacyEventKind::Trap ||
+                      Delivered->SoftwareCompleted);
     if (!Delivered->Exception)
       Delivered->Exception = R.Exception;
     Delivered->SelfModifications.insert(Delivered->SelfModifications.begin(),
@@ -243,18 +257,18 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     return Delivered;
   };
   const auto EnterDebug =
-      [&](bool FromSingleStep,
-          bool Completed) -> llvm::Expected<X86LegacyExecutionResult> {
+      [&](bool FromSingleStep, bool Completed, uint8_t Data = 0,
+          bool Icebp = false) -> llvm::Expected<X86LegacyExecutionResult> {
     // Publish the debug cause before IDT entry: it survives a failed #DB
     // delivery and a backing stop. Software INT 1 does not update DR6.
     if (State.Debug) {
       const auto Matches =
-          FromSingleStep
-              ? x86ExecutionBreakpoints(
-                    State.Debug->DR, State.Debug->DR7,
-                    uint32_t(State.Core.Segments[1].Base + State.EIP),
-                    State.EFlags, false)
-              : 0;
+          Data | ((FromSingleStep || Data) && !Icebp
+                      ? x86ExecutionBreakpoints(
+                            State.Debug->DR, State.Debug->DR7,
+                            uint32_t(State.Core.Segments[1].Base + State.EIP),
+                            State.EFlags, false)
+                      : 0);
       State.Debug->DR6 =
           x86InstructionDebugStatus(State.Debug->DR6, FromSingleStep, Matches);
     }
@@ -314,8 +328,12 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       if (auto Error = Memory.bindControls(Controls))
         return std::move(Error);
       R.InstructionCompleted = true;
-      if (SingleStep)
-        return EnterDebug(true, true);
+      const uint8_t Data =
+          State.Debug ? x86CompleteDataBreakpoints(*State.Debug,
+                                                   Observation.Matches, false)
+                      : 0;
+      if (SingleStep || Data)
+        return EnterDebug(SingleStep, true, Data);
       return R;
     }
     if (R.BackingFault)
@@ -329,7 +347,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     auto Bank = *State.Debug;
     const auto Result = x86AccessDebugRegister(
         Bank, Next.GPR[DebugRegister->Access.General], DebugRegister->Access,
-        Memory.controls().CR4, State.Core.CPL);
+        Memory.controls().CR4, State.Core.CPL, *Options.Debug);
     using Status = X86DebugRegisterResult;
     if (Result == Status::UnsupportedControl)
       return invalid("MOV-DR requests unbound debug controls");
@@ -380,6 +398,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       return Got.takeError();
     R.DeviceTransferCompleted = Got->DeviceTransferCompleted;
     R.PortInputBytesWritten = Got->InputBytesWritten;
+    if (Got->DeviceTransferCompleted)
+      Observation.port(Got->Port, Got->TransferBytes);
     if (Accept(Got->Access)) {
       if (Got->DeviceUnavailable) {
         R.Status = X86LegacyExecutionStatus::DeviceUnavailable;
@@ -445,7 +465,11 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
         // the fallthrough and must not restore pre-instruction RF or STI.
         State.EIP = NextIP;
         State.EFlags = Flags & ~0x10000u;
-        return EnterDebug(false, true);
+        const uint8_t Data =
+            State.Debug ? x86CompleteDataBreakpoints(*State.Debug,
+                                                     Observation.Matches, false)
+                        : 0;
+        return EnterDebug(false, true, Data, true);
       }
       return Enter({NextIP, 0, 0, Vector, X86LegacyEventKind::Software}, true);
     } else if (UD2) {
@@ -472,11 +496,29 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   R.InstructionCompleted = !RepeatContinue;
   if (RepeatContinue)
     R.Status = X86LegacyExecutionStatus::RepeatContinue;
+  bool RepeatGroupContinues = false;
+  if (RepeatContinue && String &&
+      Options.Debug == X86InstructionDebugProfile::Watchpoints) {
+    const uint32_t Mask = String->AddressBytes == 2 ? UINT16_MAX : UINT32_MAX;
+    const auto &GPR = State.Core.GPR;
+    RepeatGroupContinues = x86RepeatDebugDefers(
+        *Options.RepeatDebug,
+        {State.EIP, Flags, GPR[1] & Mask, GPR[6] & Mask, GPR[7] & Mask,
+         uint8_t(String->AddressBytes), uint8_t(String->Element.Bytes),
+         String->SourceIndex, String->DestinationIndex,
+         String->Element.Operation ==
+             detail::X86LegacyScalarOperation::Compare});
+  }
   // Sample TF at instruction entry, before POPF/IRET can change it. A MOV/POP
   // SS that establishes a shadow suppresses this trap, rather than postponing
   // it. A REP iteration traps at its retained PC with RF set until completion.
-  if (SingleStep && !SS)
-    return EnterDebug(true, !RepeatContinue);
+  const uint8_t Data =
+      State.Debug
+          ? x86CompleteDataBreakpoints(*State.Debug, Observation.Matches, SS,
+                                       RepeatGroupContinues)
+          : 0;
+  if ((SingleStep && !SS) || Data)
+    return EnterDebug(SingleStep && !SS, !RepeatContinue, Data);
   return R;
 }
 

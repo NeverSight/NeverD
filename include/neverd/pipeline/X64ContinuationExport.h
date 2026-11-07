@@ -76,16 +76,21 @@ struct X64ContinuationExport {
 /// call_sites on a function_calls declaration bind selected original direct
 /// CALLs to that entry. Pre-CALL checks use the shared caller layout; the
 /// original step creates the return cell before function-context entry.
-/// Separate site contexts retain pending and active calls across budget pauses.
-/// This does not capture full native state from an ordinary C caller.
-/// pause_call_sites optionally stops both drivers with status 21 before each
-/// bound CALL, preserving state and RAM without spending an instruction or
-/// environment unit. Zero instruction budget still returns 9. Keep the caller
-/// activation, invoke the site's bridge with this pre-CALL state, then resume
-/// the caller after that bridge completes. Nested stops need separate site
-/// contexts. The original step still owns state validation and CALL effects.
-/// V7 requires sysenter_msr_address_bits and returns a distinct V7
-/// state/driver. The intel-user-interrupt-v8 profile additionally requires
+/// With call-site pauses enabled, separate handler-resume entries can continue
+/// producer-declared delivered handlers while CALL remains pending. They reuse
+/// the region driver and retry only after a successful privilege return to the
+/// original CALL PC/SP (also attempted in paged mode). Budgets preserve the
+/// return; new CALL faults keep the new handler state. This grants no initial
+/// capture or lifetime proof. Separate site contexts retain pending and active
+/// calls across budget pauses. This does not capture full native state from an
+/// ordinary C caller. pause_call_sites optionally stops both drivers with
+/// status 21 before each bound CALL, preserving state and RAM without spending
+/// an instruction or environment unit. Zero instruction budget still returns 9.
+/// Keep the caller activation, invoke the site's bridge with this pre-CALL
+/// state, then resume the caller after that bridge completes. Nested stops need
+/// separate site contexts. The original step still owns state validation and
+/// CALL effects. V7 requires sysenter_msr_address_bits and returns a distinct
+/// V7 state/driver. The intel-user-interrupt-v8 profile additionally requires
 /// uiret_restores_uif, owns UIF/monitor validity and stops UIRET at its
 /// completed return context. intel-fred-return-v9 owns canonical ERETS/ERETU to
 /// 64-bit targets with explicit FRED configuration and pending-event outputs.

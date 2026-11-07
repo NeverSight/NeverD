@@ -18,6 +18,8 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
@@ -1490,6 +1492,9 @@ static void original(neverd_x64_state_v6 *s, void *code, uint64_t *ram) {
 #include "X64SnpContinuationExportTests.inc"
 #include "X64SparseFrameContinuationTests.inc"
 #include "X64SvmContinuationExportTests.inc"
+
+// Handler predicates reuse the scheduled-call fixture above.
+#include "X64CallSiteHandlerTests.inc"
 
 TEST_F(X64ContinuationExportTest,
        PagedMemoryExportsItsExplicitRuntimeContract) {

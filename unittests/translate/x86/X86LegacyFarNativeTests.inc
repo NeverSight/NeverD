@@ -42,6 +42,8 @@ protected:
 };
 
 TEST_P(X86LegacyFarNativeTest, DirectWidthsPrivilegesAndAccessedWrites) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Call : {false, true})
     for (bool Code32 : {false, true})
       for (bool Wide : {false, true})
@@ -183,6 +185,8 @@ TEST_P(X86LegacyFarNativeTest, MemoryPointersUseCapturedAddressAndSegment) {
 }
 
 TEST_P(X86LegacyFarNativeTest, ParameterAndFramePageFaultOrdering) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Gate32 : {false, true})
     for (unsigned Failure = 0; Failure != 9; ++Failure) {
       SCOPED_TRACE(testing::Message()
@@ -321,6 +325,8 @@ TEST_P(X86LegacyFarNativeTest, PointerAddressWrapAndStackAliases) {
 }
 
 TEST_P(X86LegacyFarNativeTest, ConformingAndLdtTargetsCheckPrivileges) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   ExtraMemoryChecks.emplace_back(0x8000, 128);
   for (bool Call : {false, true})
     for (bool Gate : {false, true})
@@ -357,6 +363,8 @@ TEST_P(X86LegacyFarNativeTest, ConformingAndLdtTargetsCheckPrivileges) {
 }
 
 TEST_P(X86LegacyFarNativeTest, AlignmentOfPointerParametersAndReturnFrame) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Wide : {false, true})
     for (unsigned Form = 0; Form != 4; ++Form) {
       SCOPED_TRACE(testing::Message() << "wide=" << Wide << " form=" << Form);
@@ -384,6 +392,8 @@ TEST_P(X86LegacyFarNativeTest, AlignmentOfPointerParametersAndReturnFrame) {
 }
 
 TEST_P(X86LegacyFarNativeTest, TssAndDescriptorFaultsKeepCallerState) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Tss32 : {false, true})
     for (unsigned Failure = 0; Failure != 12; ++Failure) {
       SCOPED_TRACE(testing::Message()

@@ -153,6 +153,8 @@ transferX86PortIO(X86PagedMemory &M, const X86PortIOBinding &B,
     return R;
   }
   R.DeviceTransferCompleted = true;
+  R.Port = Request.Port;
+  R.TransferBytes = Request.Bytes;
   if (Request.Input) {
     R.InputValue = **Transfer & Mask;
     for (unsigned I = 0; I != N; ++I)

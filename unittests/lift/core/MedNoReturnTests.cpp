@@ -280,6 +280,48 @@ TEST(MedNoReturn, NoReturnCallStillFollowsExceptionalContinuations) {
   }
 }
 
+TEST(MedNoReturn, AnUnprovedRegistrationFrameMayResumeThroughItsHandler) {
+  enum class Frame { None, Unanalyzed, Cleanups, Scope, TryBlock, Proved };
+  for (const Frame Kind : {Frame::None, Frame::Unanalyzed, Frame::Cleanups,
+                           Frame::Scope, Frame::TryBlock, Frame::Proved}) {
+    SCOPED_TRACE(static_cast<int>(Kind));
+    auto Guarded = function(0x1000, {block(0, {callOp(0x2000)})});
+    if (Kind != Frame::None) {
+      auto &Metadata = Guarded.ExceptionMetadata.emplace();
+      auto &Chain = Metadata.Registration.emplace();
+      if (Kind == Frame::Scope || Kind == Frame::Proved)
+        Chain.Scopes.emplace_back();
+      if (Kind == Frame::TryBlock)
+        Metadata.Cxx.emplace().TryBlocks.emplace_back();
+      if (Kind != Frame::Unanalyzed)
+        Guarded.RegistrationStates.emplace().Complete = Kind == Frame::Proved;
+    }
+    const bool MayResume = Kind == Frame::Scope || Kind == Frame::TryBlock;
+    std::vector<MedFunc> Functions = {
+        Guarded, function(0x2000, {block(0, {trapOp()})}),
+        function(0x3000, {block(0, {callOp(0x1000), returnOp()})})};
+    propagateInternalNoReturn(Functions, Arch::X86);
+    EXPECT_EQ(Functions[0].DoesNotReturn, !MayResume);
+    EXPECT_EQ(Functions[2].DoesNotReturn, !MayResume);
+    EXPECT_EQ(Functions[2].Blocks[0].Ops[0].DoesNotReturn, !MayResume);
+
+    LowFunc Low;
+    Low.Entry = 0x1000;
+    Low.ExceptionMetadata = Guarded.ExceptionMetadata;
+    Low.RegistrationStates = Guarded.RegistrationStates;
+    LowBlock Body;
+    Body.Id = 0;
+    Body.StartAddr = 0x1000;
+    LowOp Trap;
+    Trap.Opcode = NdOp::INTRINSIC;
+    Trap.addInput(NdVar::cst(static_cast<uint64_t>(Intrinsic::Brk), 2));
+    Body.Ops.push_back(Trap);
+    Low.Blocks.push_back(std::move(Body));
+    Low.Blocks[0].InstructionBoundaries.push_back({0x1000, 4, 0, 1});
+    EXPECT_EQ(lowFunctionNeverReturns(Low, Arch::X86), !MayResume);
+  }
+}
+
 TEST(MedNoReturn, EarlierExceptionalPathSurvivesALaterTerminatingCall) {
   auto Entry = block(0, {}, {1});
   Entry.ExceptionalSuccs.push_back({2, 0x1020, ExceptionalEdgeKind::CxxCatch});

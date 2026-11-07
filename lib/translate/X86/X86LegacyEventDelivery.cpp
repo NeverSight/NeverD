@@ -13,12 +13,14 @@
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 #include "neverd/ir/X86/X86SegmentDescriptorRules.h"
 #include "neverd/translate/X86/X86LegacyExecution.h"
+#include "neverd/translate/X86/X86WatchpointObservation.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Errc.h"
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -97,9 +99,23 @@ private:
   uint32_t External;
   X86MemoryAccessResult R;
   std::optional<llvm::Error> Failure;
+  size_t NextAccess = 0;
 
   bool access(uint32_t Address, unsigned Bytes, Value &V, bool Write = false,
               bool Implicit = true, uint8_t CPL = 0) {
+    auto &Completed = S.PendingEvent->CompletedAccesses;
+    if (NextAccess < Completed.size()) {
+      const auto &Previous = Completed[NextAccess++];
+      if (Previous.Address != Address || Previous.Bytes != Bytes ||
+          Previous.Write != Write || (Write && Previous.Value != V)) {
+        Failure =
+            invalid("legacy event continuation access disagrees with state");
+        return false;
+      }
+      if (!Write)
+        V = Previous.Value;
+      return true;
+    }
     std::array<uint8_t, 8> Buffer{};
     for (unsigned I = 0; I != Bytes; ++I)
       Buffer[I] = V >> (I * 8);
@@ -129,6 +145,8 @@ private:
       for (unsigned I = 0; I != Bytes; ++I)
         V |= Value(Buffer[I]) << (I * 8);
     }
+    Completed.push_back({Address, uint8_t(Bytes), Write, V});
+    ++NextAccess;
     return true;
   }
 
@@ -282,11 +300,20 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   auto &Pending = *State.PendingEvent;
   auto &Event = Pending.Event;
   auto &SavedFlags = Pending.SavedFlags;
-  const uint32_t FaultEIP = Pending.FaultEIP;
   X86LegacyExecutionResult R;
   R.EventAccepted = Accepted;
   R.Exception = Pending.LastException;
+  R.SoftwareCompleted = Pending.SoftwareCompleted;
+  X86WatchpointObservation Observation(
+      Memory, State.Debug ? &*State.Debug : nullptr,
+      Options.Debug.value_or(X86InstructionDebugProfile::InstructionStep),
+      Pending.DataBreakpoints);
   for (;;) {
+    if (R.DeliveryAttempts == Options.EventDelivery.MaxAttempts) {
+      Pending.DataBreakpoints = Observation.Matches;
+      R.Status = X86LegacyExecutionStatus::EventBudgetExhausted;
+      return R;
+    }
     // OrderedFrame preserves the failed fault entry's RF image if the next
     // attempt becomes #DF. The architectural state after #DF is undefined;
     // this behavior is part of the explicitly bound processor profile.
@@ -303,11 +330,31 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                                Got->SelfModifications.begin(),
                                Got->SelfModifications.end());
     if (Got->Status == X86PageWalkStatus::BackingFault) {
+      Pending.DataBreakpoints = Observation.Matches;
       R.Status = X86LegacyExecutionStatus::BackingFault;
       R.BackingFault = Got->BackingFault;
       return R;
     }
     if (Got->Status == X86PageWalkStatus::Completed) {
+      const bool Software = Event.Kind == Kind::Software;
+      R.SoftwareCompleted |= Software;
+      Pending.SoftwareCompleted = R.SoftwareCompleted;
+      if (State.Debug && x86EventDataBreakpoints(
+                             *State.Debug, Software, Observation.Matches,
+                             uint32_t(State.Core.Segments[1].Base + State.EIP),
+                             State.EFlags)) {
+        State.Debug->DR7 &= ~uint32_t{0x2000};
+        Observation.Matches = Pending.DataBreakpoints = 0;
+        Pending.CompletedAccesses.clear();
+        Event = {State.EIP, 0, 0, 1, Kind::Trap};
+        Pending.FaultEIP = State.EIP;
+        SavedFlags = State.EFlags;
+        auto Controls = Memory.controls();
+        Controls.RFlags = State.EFlags;
+        if (auto Error = Memory.bindControls(Controls))
+          return std::move(Error);
+        continue;
+      }
       R.Status = X86LegacyExecutionStatus::EventDelivered;
       R.DeliveredVector = Event.Vector;
       State.PendingEvent.reset();
@@ -319,6 +366,10 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     }
     R.Exception = Got->Exception;
     Pending.LastException = Got->Exception;
+    Observation.Matches = Pending.DataBreakpoints = 0;
+    Pending.CompletedAccesses.clear();
+    if (State.Debug)
+      State.Debug->PendingData = 0;
     const auto Vector = Got->Exception->Vector;
     if (Event.Kind == Kind::Abort && Event.Vector == 8 &&
         (x86ContributoryException(Vector) || x86PageClassException(Vector))) {
@@ -328,7 +379,7 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     }
     const bool Double =
         Event.Kind == Kind::Fault && x86DoubleFaultPair(Event.Vector, Vector);
-    Event = {FaultEIP, Double ? 0 : Got->Exception->ErrorCode,
+    Event = {Pending.FaultEIP, Double ? 0 : Got->Exception->ErrorCode,
              Double ? 0 : uint32_t(Got->Exception->CR2.value_or(0)),
              uint8_t(Double ? 8 : Vector), Double ? Kind::Abort : Kind::Fault};
   }
@@ -362,6 +413,8 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   }
   if (Debug && State.Debug)
     State.Debug->DR7 &= ~uint64_t{0x2000};
+  if (State.Debug && Input.Kind != Kind::Software)
+    State.Debug->PendingData = 0;
   State.STIBlocked = State.SSBlocked = false;
   if (Input.Kind == Kind::NMI)
     State.NMIBlocked = true;

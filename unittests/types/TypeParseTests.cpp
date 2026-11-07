@@ -915,6 +915,68 @@ TEST(TypeParse, ReadsTypedefsPrototypesAndFunctionPointers) {
             CallingConvention::Stdcall);
 }
 
+TEST(TypeParse, NestedDeclaratorsKeepTheirCompositionAndQualifiers) {
+  for (const auto Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    ParseOptions Options;
+    Options.Lang = Language::Cpp;
+    std::string Source = R"(
+      typedef const unsigned short (Plain), (*Pointer), (*PointerArray[3]),
+          (*(*Factory)(int count))[2];
+      typedef const unsigned short (&ArrayRef)[3];
+      int __stdcall Use(Plain value,
+                        int (__stdcall *callback)(const Plain *, int));
+    )";
+    auto Library = parsed(Source, Options, Model);
+    Source.assign(Source.size(), '!');
+    for (const auto Name :
+         {"Plain", "Pointer", "PointerArray", "Factory", "ArrayRef"}) {
+      ASSERT_NE(Library.find(Name), nullptr) << Name;
+      ASSERT_NE(Library.find(Name)->Target, nullptr) << Name;
+    }
+    const auto Plain = Library.find("Plain")->Target;
+    EXPECT_EQ(Plain->Kind, TypeExprKind::Builtin);
+    EXPECT_EQ(Plain->TheBuiltin, Builtin::UShort);
+    EXPECT_TRUE(Plain->Const);
+    const auto Pointer = Library.find("Pointer")->Target;
+    ASSERT_EQ(Pointer->Kind, TypeExprKind::Pointer);
+    EXPECT_TRUE(Pointer->Element->Const);
+    const auto Array = Library.find("PointerArray")->Target;
+    ASSERT_EQ(Array->Kind, TypeExprKind::Array);
+    EXPECT_EQ(Array->Count, 3u);
+    ASSERT_EQ(Array->Element->Kind, TypeExprKind::Pointer);
+    EXPECT_TRUE(Array->Element->Element->Const);
+    const auto Factory = Library.find("Factory")->Target;
+    ASSERT_EQ(Factory->Kind, TypeExprKind::Pointer);
+    ASSERT_EQ(Factory->Element->Kind, TypeExprKind::Function);
+    const auto Function = Factory->Element->Function;
+    ASSERT_EQ(Function->Params.size(), 1u);
+    EXPECT_EQ(Function->Params[0].Name, "count");
+    EXPECT_EQ(Function->Params[0].Type->TheBuiltin, Builtin::Int);
+    ASSERT_EQ(Function->Return->Kind, TypeExprKind::Pointer);
+    ASSERT_EQ(Function->Return->Element->Kind, TypeExprKind::Array);
+    EXPECT_EQ(Function->Return->Element->Count, 2u);
+    EXPECT_TRUE(Function->Return->Element->Element->Const);
+    const auto Reference = Library.find("ArrayRef")->Target;
+    ASSERT_EQ(Reference->Kind, TypeExprKind::Pointer);
+    EXPECT_TRUE(Reference->Reference);
+    ASSERT_EQ(Reference->Element->Kind, TypeExprKind::Array);
+    EXPECT_EQ(Reference->Element->Count, 3u);
+    EXPECT_TRUE(Reference->Element->Element->Const);
+    const auto *Use = Library.findPrototype("Use");
+    ASSERT_NE(Use, nullptr);
+    ASSERT_EQ(Use->Params.size(), 2u);
+    EXPECT_EQ(Use->Params[0].Name, "value");
+    EXPECT_EQ(Use->Params[1].Name, "callback");
+    const auto Convention = Model == DataModel::ILP32
+                                ? CallingConvention::Stdcall
+                                : CallingConvention::Unspecified;
+    EXPECT_EQ(Use->Convention, Convention);
+    EXPECT_EQ(Use->Params[1].Type->Element->Function->Convention, Convention);
+  }
+}
+
 TEST(TypeParse, ReadsWhatGnuPreprocessedHeadersHold) {
   // As clang -E writes <ntifs.h> for mingw-w64: attributes wherever GNU
   // puts them, __extension__, inline definitions, assembler names, and a

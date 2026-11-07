@@ -303,9 +303,6 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text) {
   if (bool(Object->get("entries")) == bool(Object->get("instructions")))
     return invalid("select exactly one of entries or instructions");
   Result.Entries = Object->get("entries") != nullptr;
-  if (Options.PagedDebug && Result.FunctionContext)
-    return invalid("paged_debug requires instruction-region dispatch; "
-                   "function completion across debug handlers is not bound");
   if (Object->get("follow_direct_jumps") && !Result.Entries)
     return invalid("follow_direct_jumps requires entries");
   if (Result.FunctionContext &&
@@ -895,10 +892,13 @@ typedef struct neverd_x64_event_v1 {
   }
   llvm::json::Array FunctionCalls;
   llvm::json::Array FunctionCallSites;
+  const auto FunctionNames =
+      x64FunctionContextNames(Request->Options.PagedDebug);
   CallSitePauses.declare(OS);
   if (Request->Options.PagedMemory) {
     if (Request->FunctionContext)
-      emitX64FunctionContext(OS, Version, Request->Addresses);
+      emitX64FunctionContext(OS, Version, Request->Addresses,
+                             Request->Options.PagedDebug);
     emitX64PagedDriver(OS, *Units, Request->Options,
                        Request->FollowInternalCalls, Request->FunctionContext,
                        CallSitePauses);
@@ -923,12 +923,13 @@ typedef struct neverd_x64_event_v1 {
         OS, *Units, Request->FollowInternalCalls, Request->FunctionContext,
         Request->Options, *CallSites,
         Request->PauseCallSites ? &CallSitePauses : nullptr);
-  FunctionCalls = emitX64FunctionCalls(OS, Request->FunctionCalls,
-                                       Request->Options.PagedMemory,
-                                       Request->Options.ScheduledEvents);
-  FunctionCallSites =
-      emitX64FunctionCallSites(OS, *CallSites, Request->Options.PagedMemory,
-                               Request->Options.ScheduledEvents);
+  FunctionCalls = emitX64FunctionCalls(
+      OS, Request->FunctionCalls, Request->Options.PagedMemory,
+      Request->Options.ScheduledEvents, Request->Options.PagedDebug);
+  FunctionCallSites = emitX64FunctionCallSites(
+      OS, *CallSites, Request->Options.PagedMemory,
+      Request->Options.ScheduledEvents, Request->PauseCallSites,
+      Request->Options.PagedDebug);
   llvm::json::Array RtmAborts;
   if (Request->NativeRtmAbortRegions)
     RtmAborts = emitX64RtmAbortEnvironment(OS, Image, *Units,
@@ -1158,15 +1159,18 @@ typedef struct neverd_x64_event_v1 {
         "state, context and budgets are disjoint from guest RAM";
     Report["instruction_debug"] =
         Request->Options.PagedDebug
-            ? "explicit nontransactional TF/ICEBP bank; DR7=0x400, DEBUGCTL=0; "
-              "entry TF, committed REP elements and MOV-SS inhibition; DR6 "
-              "published before #DB IDT entry; region dispatch only"
+            ? "explicit nontransactional runtime debug profile: TF/ICEBP, "
+              "execution comparators, MOV-DR/GD, or data/I/O watchpoints; "
+              "DEBUGCTL=0; entry TF, explicit REP data-debug groups and MOV-SS "
+              "inhibition; DR6 published before #DB IDT entry; completed near "
+              "transfers retain their pre-event state"
             : "TF excluded; no instruction-debug producer";
     Report["event_delivery_domain"] =
         "automatic synchronous #PF/#GP/#SS/#AC/#DE/#UD and software "
         "interrupts; shared paged IA-32e IDT entry, recursive faults, #DF and "
         "shutdown; software entry faults restart INT/INT3; stop at handler "
-        "entry";
+        "entry; runtime event-work exhaustion returns status 23 with a "
+        "resumable pending event";
     Report["interrupt_flags"] =
         "CLI/STI CPL/IOPL checks; CPL3 PVI targets VIF and virtual STI checks "
         "VIP; pre-instruction CPL3/PVI/VIF/VIP #GP precedes fetch; only an "
@@ -1198,13 +1202,13 @@ typedef struct neverd_x64_event_v1 {
     Report["native_rtm_environment"] = std::move(Rtm);
   if (Request->FunctionContext)
     Report["function_context"] = llvm::json::Object{
-        {"context_type", "neverd_x64_function_context_v1"},
-        {"begin", "neverd_x64_begin_function_v6"},
+        {"context_type", FunctionNames.Context},
+        {"begin", FunctionNames.Begin},
         {"driver", Request->Options.PagedMemory
-                       ? "neverd_x64_run_paged_function_v6"
+                       ? FunctionNames.PagedDriver
                        : "neverd_x64_continue_function_v6"},
         {"environment_driver", Request->Options.PagedMemory
-                                   ? "neverd_x64_run_paged_function_v6"
+                                   ? FunctionNames.PagedDriver
                                    : "neverd_x64_run_function_v6"},
         {"completion",
          "successful selected near RET consuming entry RSP; "
@@ -1226,9 +1230,8 @@ typedef struct neverd_x64_event_v1 {
   if (Request->FunctionContext && Request->Options.ScheduledEvents) {
     auto &Contract = *Report["function_context"].getAsObject();
     Contract["scheduled_driver"] =
-        Request->Options.PagedMemory
-            ? "neverd_x64_continue_paged_events_function_v6"
-            : "neverd_x64_continue_events_function_v6";
+        Request->Options.PagedMemory ? FunctionNames.ScheduledDriver
+                                     : "neverd_x64_continue_events_function_v6";
     Contract["scheduled_domain"] =
         "successful selected near RET charges its instruction and expires "
         "STI/SS inhibition before completing; paged completion requires "
@@ -1238,7 +1241,7 @@ typedef struct neverd_x64_event_v1 {
   }
   if (!FunctionCalls.empty())
     Report["function_calls"] = llvm::json::Object{
-        {"context_type", "neverd_x64_call_context_v1"},
+        {"context_type", FunctionNames.CallContext},
         {"result_type", "neverd_x64_call_result_v1"},
         {"interfaces", std::move(FunctionCalls)},
         {"domain", "producer-declared Win64 scalar views; entry arguments "
@@ -1260,7 +1263,7 @@ typedef struct neverd_x64_event_v1 {
   }
   if (!FunctionCallSites.empty())
     Report["function_call_sites"] = llvm::json::Object{
-        {"context_type", "neverd_x64_call_site_context_v1"},
+        {"context_type", FunctionNames.SiteContext},
         {"result_type", "neverd_x64_call_result_v1"},
         {"interfaces", std::move(FunctionCallSites)},
         {"domain", "original pre-CALL state and accessible stack RAM; scalar "
@@ -1268,6 +1271,18 @@ typedef struct neverd_x64_event_v1 {
                    "owns the return cell; retain context across pauses; "
                    "same function-boundary and environment obligations; "
                    "ordinary caller state capture is not inferred"}};
+  if (Request->PauseCallSites) {
+    auto &Sites = *Report["function_call_sites"].getAsObject();
+    Sites["handler_context_type"] = "neverd_x64_call_site_handler_context_v1";
+    Sites["begin_handler"] = FunctionNames.HandlerBegin;
+    Sites["handler_domain"] =
+        "call-site pauses enabled; explicitly declared delivered handler "
+        "context; selected instructions retain original state and RAM; only a "
+        "successful privilege return to the pending CALL PC/SP permits retry, "
+        "with attempted progress in paged mode; budgets and external stops "
+        "retain the handler; no implicit provider, restored frame or initial "
+        "capture";
+  }
   if (Request->Options.PagedMemory && !CallSites->empty()) {
     auto &Contract = *Report["function_call_sites"].getAsObject();
     Contract["paged_memory"] = true;
@@ -1299,6 +1314,51 @@ typedef struct neverd_x64_event_v1 {
           "restore the original CALL PC/SP before retrying a pending site; "
           "active resumes never replay CALL; the scheduler owns budgets and "
           "shadow expiry";
+    }
+  }
+  if (Request->FunctionContext && Request->Options.PagedDebug) {
+    auto &Function = *Report["function_context"].getAsObject();
+    Function["transfer_receipt"] = "neverd_x64_paged_transfer_v1";
+    Function["completion"] =
+        "completed selected near RET consuming entry RSP, authenticated by "
+        "the runtime transfer receipt before post-instruction debug entry; "
+        "cache its actual stop and pre-event RAX; later event or handler "
+        "execution cannot replay RET or replace the completed result";
+    Function["paged_domain"] =
+        "entry RSP names a producer-declared guest virtual return cell; "
+        "retain the same paged context and declared cell lifetime; faults or "
+        "backing stops before RET completion retain the activation; debug "
+        "entry stops after completion consume it, including backing failure, "
+        "event-work exhaustion and shutdown; no initial state capture or "
+        "mapping-identity inference";
+    if (Request->Options.ScheduledEvents)
+      Function["scheduled_domain"] =
+          "use the actual scheduler SS inhibition for each RET; completed "
+          "root RET charges once and expires STI/SS inhibition before "
+          "returning its actual stop; cached completion does not poll events "
+          "or spend budgets; producer owns handler/event resumption";
+    if (!Request->FunctionCalls.empty())
+      (*Report["function_calls"].getAsObject())["debug_completion"] =
+          "Completed reports consumed root RET independently of Status; "
+          "Value is the declared-width view of RAX before post-RET debug "
+          "entry; cached resumes preserve both the original stop and value";
+    if (!CallSites->empty()) {
+      auto &Sites = *Report["function_call_sites"].getAsObject();
+      Sites["domain"] =
+          "original pre-CALL state and retained paged binding; register "
+          "checks add no guest-memory access; every attempted CALL spends "
+          "one step; a completed CALL receipt starts the callee from its "
+          "actual pre-debug PC/SP before returning the actual event stop; "
+          "only an uncompleted CALL remains pending and requires restoration "
+          "of its original PC/SP before retry; active resumes never replay "
+          "CALL; producer owns state, address-space and return-cell lifetime";
+      if (Request->Options.ScheduledEvents)
+        Sites["scheduled_domain"] =
+            "shared scheduler validates and polls before the original CALL; "
+            "completed CALL starts its callee even if subsequent debug entry "
+            "stops; pre-CALL events and uncompleted faults retain a pending "
+            "site; scheduler owns budgets and shadow expiry; active resumes "
+            "never replay CALL";
     }
   }
   if (Request->PauseCallSites)

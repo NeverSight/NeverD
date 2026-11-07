@@ -28,15 +28,17 @@ enum class X86DebugRegisterResult : uint8_t {
   UnsupportedControl,
 };
 
-/// Requires the DebugRegisters profile. The target preserves the six
+/// Requires DebugRegisters or Watchpoints. The target preserves the six
 /// architecturally undefined arithmetic flags, has no RTM/bus-lock debug
-/// extensions, and owns only canonical execution comparators. A valid write
-/// requesting other comparators refuses the environment; it is not a #GP.
+/// extensions. Comparator admission follows the selected profile. A valid
+/// write requesting unbound controls refuses the environment; it is not #GP.
 /// Call after authenticated fetch. Value has the execution mode's GPR width.
 template <typename Bank, typename Word>
 inline X86DebugRegisterResult
 x86AccessDebugRegister(Bank &State, Word &Value, X86DebugRegisterAccess Access,
-                       uint64_t CR4, uint8_t CPL) {
+                       uint64_t CR4, uint8_t CPL,
+                       X86InstructionDebugProfile Profile =
+                           X86InstructionDebugProfile::DebugRegisters) {
   using Result = X86DebugRegisterResult;
   const bool Alias = Access.Debug == 4 || Access.Debug == 5;
   if (Access.InvalidOpcode || (Alias && (CR4 & 8)))
@@ -55,8 +57,8 @@ x86AccessDebugRegister(Bank &State, Word &Value, X86DebugRegisterAccess Access,
       State.DR6 = (Value & 0xe00f) | 0xffff0ff0;
     } else {
       const uint64_t Next = (Value & 0xffff2bff) | 0x400;
-      if (!x86InstructionDebugValid(State.DR6, Next, State.DebugCTL,
-                                    X86InstructionDebugProfile::DebugRegisters))
+      if (!x86InstructionDebugValid(State.DR6, Next, State.DebugCTL, Profile,
+                                    CR4))
         return Result::UnsupportedControl;
       State.DR7 = Next;
     }

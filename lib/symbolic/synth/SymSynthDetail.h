@@ -19,7 +19,7 @@
 /// candidates that turn out not to matter.
 ///
 /// This header is an implementation detail of the symbolic library and should
-/// not be included outside lib/symbolic/synth/.
+/// not be included outside lib/symbolic/synth/ and its tests.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -105,12 +105,21 @@ SymRef buildGramOp(SymContext &Ctx, GramOp Op, llvm::ArrayRef<SymRef> Args);
 /// canonicalizing builders cannot fold, and hands those nodes back.  Restating
 /// the semantics here instead would give the engine a second opinion about
 /// what `ashr` means, and the two would drift.
+///
+/// \c applyColumn is the one exception, and a differential test holds it to
+/// \c apply for every operator and width.  The search measures every candidate
+/// at every grid point, which through a node would be most of its running time.
 class OpSemantics {
 public:
   OpSemantics(SymContext &Ctx, uint32_t Width);
 
   /// The value \c buildGramOp would produce for operands of these values.
   llvm::APInt apply(GramOp Op, llvm::ArrayRef<llvm::APInt> Args) const;
+
+  /// \c apply across \p Count operand pairs, at a width of at most 64 bits with
+  /// every value in the low bits of its word.  A unary operator ignores \p B.
+  void applyColumn(GramOp Op, const uint64_t *A, const uint64_t *B,
+                   uint64_t *Out, size_t Count) const;
 
 private:
   const SymContext &Ctx;
@@ -134,10 +143,6 @@ using SamplePoint = llvm::SmallVector<llvm::APInt, 4>;
 using Signature = std::vector<llvm::APInt>;
 
 bool signaturesEqual(const Signature &A, const Signature &B);
-
-/// A hash over the raw words of every value, so that lookup does not depend on
-/// how wide the values happen to be.
-uint64_t hashSignature(const Signature &S);
 
 /// Bits of \p A that match \p B, out of every bit of every value.
 ///

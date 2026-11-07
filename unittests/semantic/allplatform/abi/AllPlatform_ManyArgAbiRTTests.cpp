@@ -14,11 +14,17 @@
 //
 //   * sumd10  - 10 doubles: 8 in XMM/V regs + 2 spilled to the overflow area.
 //   * sumf12  - 12 floats: register file overflow at float width.
-//   * mix_id  - 8 ints + 6 doubles: integer regs overflow (x86-64) alongside FP.
-//   * mix_di  - 6 doubles + 10 ints: FP regs fit, integer regs overflow to stack
+//   * mix_id  - 8 ints + 6 doubles: integer regs overflow (x86-64) alongside
+//   FP.
+//   * mix_di  - 6 doubles + 10 ints: FP regs fit, integer regs overflow to
+//   stack
 //               interleaved after the FP block.
 //   * sumd8   - exactly 8 doubles: fills XMM0-7 / V0-7 with no overflow (the
 //               boundary case, a green guard for the others).
+//   * ind_*   - the same overflow through a function pointer at -O0, so the
+//               target is known only once the call is emitted. The call
+//               recovers no integer register, while the callee declares every
+//               integer position below its stack parameters.
 //
 // Every callee has external linkage + noinline so clang keeps a standard-ABI
 // call (no IPA arg elision).  Each kernel folds the FP result to an integer
@@ -123,6 +129,42 @@ static std::vector<RoundTripTC> makeManyArgAbiTC(const char *prefix, const char 
      "double g,double h){\n"
      "  return a*1+b*2+c*3+d*4+e*5+f*6+g*7+h*8; }\n",
      {0x6dULL}, "ManyArgAbi", 2},
+
+    // 10 doubles through a pointer: no integer register at the call.
+    {p+"_ind_d10",
+     "static double "+p+"_ind_d10_t(double a,double b,double c,double d,double e,"
+     "double f,double g,double h,double i,double j){\n"
+     "  return a*1+b*2+c*3+d*4+e*5+f*6+g*7+h*8+i*9+j*10; }\n"
+     +t+" "+p+"_ind_d10("+t+" a){\n"
+     "  double (*f)(double,double,double,double,double,double,double,double,"
+     "double,double)="+p+"_ind_d10_t;\n"
+     "  double b=(double)(unsigned)((unsigned)a&0xffffu);\n"
+     "  return ("+t+")(int)f(b,b+1,b+2,b+3,b+4,b+5,b+6,b+7,b+8,b+9); }\n",
+     {0x41ULL}, "ManyArgAbi", 0},
+
+    // 12 floats through a pointer: stack values share eight-byte slots on Darwin.
+    {p+"_ind_f12",
+     "static float "+p+"_ind_f12_t(float a,float b,float c,float d,float e,"
+     "float f,float g,float h,float i,float j,float k,float l){\n"
+     "  return a+b*2+c*3+d*4+e*5+f*6+g*7+h*8+i*9+j*10+k*11+l*12; }\n"
+     +t+" "+p+"_ind_f12("+t+" a){\n"
+     "  float (*f)(float,float,float,float,float,float,float,float,float,float,"
+     "float,float)="+p+"_ind_f12_t;\n"
+     "  float b=(float)(unsigned)((unsigned)a&0x3ffu);\n"
+     "  return ("+t+")(int)f(b,b+1,b+2,b+3,b+4,b+5,b+6,b+7,b+8,b+9,b+10,b+11); }\n",
+     {0x55ULL}, "ManyArgAbi", 0},
+
+    // One integer read, the rest of the bank unset, nine doubles.
+    {p+"_ind_mix",
+     "static double "+p+"_ind_mix_t(int n,double a,double b,double c,double d,"
+     "double e,double f,double g,double h,double i){\n"
+     "  return n+a*1+b*2+c*3+d*4+e*5+f*6+g*7+h*8+i*9; }\n"
+     +t+" "+p+"_ind_mix("+t+" a){\n"
+     "  double (*f)(int,double,double,double,double,double,double,double,double,"
+     "double)="+p+"_ind_mix_t;\n"
+     "  double b=(double)(unsigned)((unsigned)a&0xffffu);\n"
+     "  return ("+t+")(int)f((int)a,b,b+1,b+2,b+3,b+4,b+5,b+6,b+7,b+8); }\n",
+     {0x6dULL}, "ManyArgAbi", 0},
   };
 }
 // clang-format on
@@ -132,7 +174,11 @@ static const std::vector<RoundTripTC> kA64 = makeManyArgAbiTC("a64ma", "long");
 static const std::vector<RoundTripTC> kARM = makeManyArgAbiTC("armma", "int");
 static const std::vector<RoundTripTC> kX86 = makeManyArgAbiTC("x86ma", "int");
 
-INSTANTIATE_TEST_SUITE_P(ManyArgAbi, X64ManyArgAbiRT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(ManyArgAbi, A64ManyArgAbiRT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(ManyArgAbi, ARM32ManyArgAbiRT, ::testing::ValuesIn(kARM), rtTCName);
-INSTANTIATE_TEST_SUITE_P(ManyArgAbi, X86ManyArgAbiRT, ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(ManyArgAbi, X64ManyArgAbiRT, ::testing::ValuesIn(kX64),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(ManyArgAbi, A64ManyArgAbiRT, ::testing::ValuesIn(kA64),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(ManyArgAbi, ARM32ManyArgAbiRT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(ManyArgAbi, X86ManyArgAbiRT, ::testing::ValuesIn(kX86),
+                         rtTCName);

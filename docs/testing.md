@@ -55,6 +55,36 @@ saved-RF GD frame is an explicit target choice; software tests separately
 cover the architectural fault-RF choice, unbound writes and accepted backing
 resume. See [the contract and evidence](x86-paged-execution.md#debug-register-transfers-and-general-detect).
 
+`X64PagedWatchpointTest.*`, `X86LegacyWatchpointTest.*` and the watchpoint
+cases in `LegacyDebug/*` qualify the data/I/O profile. Original CPU data tests
+compare represented registers, debug banks, shadows and all RAM; return byte
+footprints and selector-page boundaries have separate cases. Recursive #DB
+compares the shutdown endpoint, whose undefined register bank is not a full-state
+comparison. Software tests cover pending causes, accepted-entry backing resume,
+secondary faults and actual port receipts. Event-work tests bound fixed-IST
+recursion, retain the next event across repeated resumes, compare paused
+software-entry/fault chains with uninterrupted delivery, and reject zero work
+or inconsistent continuation inputs before effects. KVM's intercepted port emulator
+omits I/O debug traps; keep that measured limitation separate from CPU data
+qualification. These data-oracle tests require `KVM_PRE_FAULT_MEMORY` to prepare
+second-level mappings without executing guest code or altering guest page
+tables. A cold mapping fault during software entry can otherwise lose a delayed
+MOV-SS trap; a fresh-vCPU regression checks that first sequence explicitly.
+`X86LegacyEventReplayTest.*` compares interrupted and uninterrupted delivery
+when a partial frame overwrites its TSS inputs with either 16-bit or 32-bit
+gates, including retained data causes and event-work pauses. It also rejects
+changed access-record shapes before replaying memory effects.
+REP debug tests bind `NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES` explicitly. The
+recorded P/E profiles use `1`/`16` respectively for aligned forward MOVS/STOS;
+the original CPU may retire a group before reporting a data breakpoint.
+Width/direction/count cases compare full state and RAM, and software tests
+retain grouped causes over budgets/backing stops, discard them on faults and
+reject a missing group binding before operand effects. Do not convert a
+fast-string difference into an elementwise equality or silently retry it.
+Run both SDKs and qualified P/E cores, plus affected paging,
+paged execution and source/export regressions. See the
+[watchpoint contract](x86-paged-execution.md#data-and-io-watchpoints).
+
 `NeverDInstructionRelocationsTests` checks address-field selection against an
 independent linear membership oracle on x86, x64, ARM and AArch64 metadata in
 COFF, ELF and Mach-O. It covers disjoint and touching ranges, included first
@@ -3056,7 +3086,10 @@ existing synthesis contract suite without building the CLI. It covers
 coefficients, root conversions, signed one-bit inputs, an exhaustive byte-pair
 arithmetic oracle, full-width sampling collisions, refusal on incomplete proofs,
 and cost/work ceilings. An equal-budget comparison disables affine fitting to
-isolate its contribution. Enable `NEVERD_ENABLE_Z3` to run the independent Z3 cases;
+isolate its contribution. `SymSynth.ColumnSemanticsAgreeWithNodes` holds the
+search's native column evaluation to the node semantics for every grammar
+operator from 1 to 64 bits, exhaustively where a width allows.
+Enable `NEVERD_ENABLE_Z3` to run the independent Z3 cases;
 unavailable Z3 is explicitly skipped and is not proof coverage.
 `SymSimplifyGuard.SemanticAffineSynthesisAcrossBlocksAndAtCallArguments` checks
 the production LLVM pass across a dominated block boundary and at an observable
@@ -5892,8 +5925,22 @@ oracle; discarded value dependencies must not discard the producing call.
 unsigned 8/16/32/64-bit comparisons, their complements and full-word Boolean
 masks at boundary inputs. The output bridge retains one-bit arithmetic it
 cannot represent faithfully as a byte-valued predicate.
+`PeeledComparisonsKeepTheirValueAtEverySignedness` executes those predicates for
+literals around each sign boundary, and `NegatedTermKeepsItsAvailableDefinition`
+covers a sum whose negated term is spelled by an available local.
 Run `NeverDSymbolicTests` and `NeverDHighSymSimplifyTests` for these shared
 expression-builder changes.
+
+`HighCTruthValue.InvertedEqualityHasAZeroOrOneValue` executes `!(x == 0)` as a
+value, where it must stay 0 or 1, and as a condition, where it reads as `x`.
+`HighCTruthValue.GreaterThanZeroComparesTheWidthTheTestsRead` executes the
+`test; jle` spellings at each width: both tests must read the same low bytes of
+one variable, and the comparison takes the width of the test rather than the
+variable's. A variable declared wider than its value is cast in equality and
+truth tests too. `PipelineOutcome.HighCRefusesOnlyTheFunctionKeepingAnUnbackedAddress`
+omits one function, not the unit, when an escaped image address has no storage
+extent. `CSourceAnchors.SignedZeroPairSpellsTheSameWhenMarked` requires a marked
+render to spell that comparison as the ordinary one does, or the map is refused.
 
 `NeverDHighSymSimplifyTests` provides the focused HighIR suite, including
 8–256-bit affine and quadratic synthesis, synthesis inside signed/unsigned
@@ -6739,6 +6786,10 @@ similar identifiers and transactional diagnostics across all three data models.
 `TypeParse.NamedSpecifiersKeepPrecedenceAndUnknownWordPositions` checks named
 record/enum kinds, declared size_t and va_list, fixed builtin precedence, and
 recovery after unknown or incompatible type words across those models.
+`TypeParse.NestedDeclaratorsKeepTheirCompositionAndQualifiers` covers plain
+and parenthesized names, pointer arrays, callbacks returning array pointers,
+array references and calling conventions on ILP32, LP64 and LLP64, including
+published types after the declaration input is overwritten.
 
 `HeaderLibrary.LayoutComparisonsFollowEachMergeAndGrowingConflicts` checks
 same-size, different-alignment overrides across ILP32, LP64 and LLP64. Reverse
@@ -15629,7 +15680,7 @@ round trip alone is insufficient. `AndroidJNI.Parcel*` runs ordinary/V/A calls
 at O0/O2 across relocation variants and available CPU backends.
 `ProcessPublic.AndroidParcelDataAndBoundariesMatchSDKAndCLI` compares 54 complete
 report pairs, including token/name writes, explicit null-token refusal and the
-next `BinderProxy.transact` method-resolution boundary.
+raw `BinderProxy.transact` native-object boundary.
 Binder/token unit cases check exact gather-bit bytes, high/sign bits, raw UTF-16,
 empty descriptors, missing services, propagated service stops, budget admission,
 partial headers and DEX/library sharing. `AndroidJNI.BinderStrictMode*` checks
@@ -15637,6 +15688,15 @@ ordinary/V/A calls, native thread isolation, fresh child policies and retained
 policy across JNI detach/reattach; it writes through one globally retained
 Parcel from parent and child threads. `ProcessPublic.AndroidBinderThreadPolicyMatchesSDKAndCLI`
 compares twelve complete reports in single-thread and scheduled modes at O0/O2.
+`AndroidBinderTest.*` checks transaction declarations, admission, warning and
+tracing order, direct native entry, null-data exceptions, owned/recycled Parcel
+validation, retained bytes/positions and DEX interface dispatch/catching.
+`AndroidJNI.BinderTransaction*` executes eleven entry cases through ordinary/V/A
+calls; `AndroidJNI.BinderTracing*` checks methods/field aliases and process state
+across native threads and JNI attachments. The matching
+`ProcessPublic.AndroidBinderEntryAndTracingMatchSDKAndCLI` compares 78 full
+report pairs at O0/O2. Successful cases check a real caught null-data exception
+or tracing state; none claims a completed Binder transaction.
 Run full Dalvik, Android JNI, thread/callback and native/Linux Binder suites,
 plus these focused public tests after changing this owner. These are original synthetic tests;
 they establish no live Binder service or whole-MVM restoration.
@@ -20438,6 +20498,27 @@ HighIR structuring contract; it requires no external source interface.
 
 ### Explicit x64 continuation export
 
+`X64CallSiteHandlerTest.*` verifies that handler interfaces require call-site
+pauses, compiles both C routes at O0/O2 and uses optimizer
+predicates over the actual generated controller and instruction bodies. The
+proofs override helper/direct-driver inlining attributes; instruction/controller
+bodies and effects are unchanged, and ordinary O0/O2 compilation uses unmodified
+source.
+Only predicates are public in the proof module, so unused exports can be removed
+before optimization. Bounded fixture RAM is bound in successive frame, descriptor,
+resumed-CALL and callee phases; only wholly contained constant operands qualify.
+Plain proofs retain MOV, IRETQ, CALL, the upper-DWORD load, XOR and RET-immediate with
+bounded fixture RAM; paged proofs independently model privilege-return and
+fault/backing outcomes and retain the ordinary instruction bodies. Both
+scheduled and unscheduled interfaces, plus the direct plain dispatcher, check
+arbitrary incoming upper bits, handler register effects, nested returns,
+wrong/merely coincident PC/SP, near-RET refusal, zero final budgets, poll budgets,
+bindings, cached completion, attempted progress and fault/backing retry without
+replaying a handler or CALL. These tests execute no generated program,
+instruction executor, specimen or guest. They do not qualify an arbitrary
+Windows handler or page walker. The existing scheduled-call proof helper is
+shared; its prior fixture domain and expected predicate counts are unchanged.
+
 `NeverDX64ContinuationExportTests` exercises the actual size-delimited C SDK
 and CLI through both C routes. Generated C runs at O0/O2 with ASan/UBSan,
 including physical CALL bytes, callback-selected replacement stacks, reentry,
@@ -20481,6 +20562,28 @@ or specimen. They qualify controller composition, not page walking, original
 instruction execution, live context capture or an arbitrary fault handler.
 `X64PagedExecutionTests` separately owns the runtime's instruction/fault tests;
 compile-only checks do not replace that coverage.
+
+`X64PagedDebugFunctionTest.*` runs public V2 function, scalar-call and original
+CALL-site exports against the actual paged runtime. Both C routes compile with
+Clang and the bound NeverC. The original-transfer matrix additionally uses
+O0/O2 and KVM with guest-debug interception disabled and backing pre-faulted:
+CALL, RET and RET-immediate, CPL0/CPL3, TF and data-watchpoint causes compare
+represented processor/debug state and complete RAM. Saved #DB frames verify
+the receipt's original instruction and pre-event PC/SP/RAX. Record
+`original_comparisons` separately from software-only controller cases.
+
+Controller cases exercise all scalar result widths, a real handler changing
+RAX, returned-result idempotence, nested return-cell ownership, pre-RET operand
+faults, pending CALL retry, post-CALL/RET backing and event-work stops,
+shutdown, actual scheduler SS inhibition and stale-receipt refusal. A pending
+CALL's selected handler can exhaust its budget after IRET and then retry only
+once; an IRET data watchpoint must keep it in handler processing. Tests retain
+V1 result/handler layouts and assert the V2 context sizes. Shutdown controller
+cases do not claim original post-shutdown processor state. Set
+`NEVERD_TEST_NEVERC` and `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to retain both
+compiler paths and uniquely named source/manifest pairs. Run the existing
+function/call/scheduled/handler export suites as compatibility regressions;
+their compile-time models remain distinct from these runtime comparisons.
 
 `X64ScheduledFunctionContextTest.*` checks scheduled activation admission,
 disabled source/manifest identity and O0/O2 compilation in both C routes.

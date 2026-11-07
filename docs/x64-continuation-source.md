@@ -311,7 +311,7 @@ previous source and manifest. The owner is
 
 ### Paged entry call views
 
-With `"paged_memory": true`, function activation uses
+With `"paged_memory": true` and instruction debug disabled, function activation uses
 `neverd_x64_run_paged_function_v6(state, context, budget, function)`. Its context
 is the existing `X64PagedExecution` binding. The recorded return cell is a guest
 virtual address; only an attempted successful original near RET consumes it.
@@ -348,6 +348,72 @@ change page-table access bits. Paged original-CALL bridges are described below.
 These interfaces do not capture the initial machine state, infer environment
 effects or recover bytes missing from ordinary C arguments. Entry views append
 wrappers without changing an instruction body or the paged dispatcher.
+
+### Debug-aware paged call views
+
+Combining `paged_debug`, `paged_memory` and `function_context` uses distinct
+V2 contexts. The same root selection, `follow_internal_calls`, original-state
+and return-cell lifetime obligations apply. The V1 layouts and non-debug
+entry points retain their contracts.
+
+| Context | V1 bytes | Debug V2 bytes | Added state |
+| --- | ---: | ---: | --- |
+| `neverd_x64_function_context` | 16 | 32 | Original completion `Status` and `Value` |
+| `neverd_x64_call_context` | 32 | 48 | Nested V2 function context |
+| `neverd_x64_call_site_context` | 48 | 64 | Nested V2 call context |
+
+Initialize with `neverd_x64_begin_debug_function_v6`. The function drivers are
+`neverd_x64_run_paged_debug_function_v6` and
+`neverd_x64_continue_paged_debug_events_function_v6`. Typed entry/call-site
+interfaces use `paged_debug_` or `paged_debug_events_` in their names; exact
+names are recorded in the manifest. The result remains
+`neverd_x64_call_result_v1` with `Status`, `Completed` and `Value`.
+
+```c
+neverd_x64_call_context_v2 call = {0};
+neverd_x64_call_result_v1 result = neverd_x64_call_paged_debug_1000_v6(
+    &state, paged_context, &budget, &call, arg0, arg2, arg3);
+result = neverd_x64_resume_paged_debug_1000_v6(
+    &state, paged_context, &budget, &call);
+```
+
+`neverd_x64_paged_transfer_v1` is a required runtime symbol. It returns the
+completed near transfer's original Call/Return kind and, through nullable
+outputs, its instruction address, committed PC/SP and RAX. A subsequent
+runtime operation, including entry refusal or event resumption, replaces the
+record. When no transfer completed, it returns zero without writing outputs.
+This is separate from the unchanged instruction-attempt progress ABI.
+
+A selected near RET consuming the declared entry cell completes the activation
+before its post-instruction debug event. `Completed == 1` is independent of
+`Status`: the status can be an exception, backing failure, event-work stop or
+shutdown. `Value` contains the declared-width view of RAX captured before that
+event. Repeated resumes of the completed call preserve both values and consume
+no budgets, runtime accesses or polls. Continue pending event entry and selected
+handlers through their separate runtime/region interfaces; doing so cannot
+replace the cached result. A fault before RET completes retains the active
+function. Nested RETs consuming other cells cannot complete it.
+
+A completed original CALL similarly starts its callee using the recorded
+post-CALL PC/SP, even when the live state already names a debug handler or
+partial event entry. The bridge returns that actual stop before resuming the
+callee. A pre-CALL fault or scheduled event leaves the site pending. Scheduled
+bridges consume a receipt only for an instruction attempt owned by that
+invocation; an old receipt cannot turn a rejected boundary into a completed
+CALL. The scheduler passes its actual SS inhibition into RET and owns each
+instruction charge and shadow expiry.
+
+With call-site pauses, the pending-handler context remains the flat
+`neverd_x64_call_site_handler_context_v1`; use
+`neverd_x64_begin_debug_call_site_handler_v1` for a V2 site. Only a successful
+privilege-return boundary to the pending original CALL PC/SP permits retry.
+An IRET followed by another debug event continues handler processing instead.
+The producer still supplies initial state, memory and event resumption. These
+interfaces do not infer an ordinary C ABI or dynamic frame ownership.
+
+The [qualification record](evidence/x86-debug-function-activation-2026-11-06.json)
+separates original-processor comparisons, runtime controller cases and
+compatibility regressions, with retained source/tool/product hashes.
 
 ### Original CALL bridges
 
@@ -485,6 +551,72 @@ requests without call views retain their previous drivers. Nonpaged LLVM C
 event delivery also preserves the producer-declared event object's pointer,
 using bounded object offsets for its fields. This supplies no object bounds
 for guest addresses or ordinary parameters.
+
+### Resuming selected handlers before an original CALL
+
+With `pause_call_sites: true`, each call-site interface also exports
+`resume_handler_<mode>site_<address>_v6`. The pauses prevent a near RET or
+fallthrough from executing the pending CALL before a privilege return is
+observed. Without them the handler context and interfaces are not exported.
+Use this interface when a pending CALL has stopped at a delivered event/fault handler and
+that handler's instructions are selected. This is an explicit handler-context
+declaration by the producer; a matching PC/SP does not establish it. Retain a
+separate `neverd_x64_call_site_handler_context_v1` alongside the site:
+
+```c
+/* result.Status == 7, with the original CALL still pending. */
+neverd_x64_call_site_handler_context_v1 handler;
+if (!neverd_x64_begin_call_site_handler_v1(&site, &handler))
+    return INVALID_PHASE;
+result = neverd_x64_resume_handler_paged_events_site_1005_v6(
+    &state, paged_context, &instruction_budget, &site,
+    &shadows, &poll_budget, peek, accepted, event_context, &handler);
+```
+
+`begin_call_site_handler` binds the site and its original pre-CALL SP without
+reading or altering machine state or RAM. It rejects an unprepared or already
+active/completed site without changing the handler context. Do not begin again
+when merely replenishing a budget: retain both objects and call the same handler
+resume interface. The context storage has the same disjointness and lifetime
+requirements as the site context. An invocation needs its own handler context.
+
+The helper runs the existing region driver without a callee activation. The
+original handler instructions own register, memory and return-frame effects;
+no PC, SP, argument, padding or frame byte is synthesized. Only a successful
+privilege-return boundary (status 6) whose actual PC/SP equal the pending CALL
+coordinates permits the ordinary bridge to retry. Paged returns additionally
+require instruction-attempt progress. Merely entering the handler at matching
+coordinates, reaching another selected CALL, a near RET, fault delivery or an
+unattempted boundary cannot start the callee. Nested returns to other
+coordinates stop with their actual status; resume continues the selected
+handler from that state. Other selected CALL pauses can be handled with their
+own bridges and then this handler resumed.
+
+A matching return is retained across instruction/poll-budget exhaustion or a
+backing stop before CALL, so resumption does not replay the handler. If retrying
+CALL delivers another exception before starting the callee, the helper switches
+back to handler continuation with that new native state. Successful CALL and
+all active/completed resumes reuse the original site/activation owner and cached
+result; they cannot push the CALL return cell twice. Scalar checks retain their
+existing start-only contract, including producer-owned handler effects.
+
+Unscheduled plain helpers run `continue_v6` while in the handler, so an
+ordinary environment callback cannot consume the privilege-return boundary
+before the helper sees it. The supplied environment is used by the existing
+callee resume after CALL succeeds. Scheduled and paged helpers reuse their
+existing region drivers, budgets, shadows and boundary accounting. Outside
+selection, unsupported instructions, faults and other external boundaries still
+stop for the producer. No missing handler instruction or external service is
+inferred. Debug-enabled requests use the separate
+[V2 contexts and completed-transfer contract](#debug-aware-paged-call-views).
+
+The manifest records `handler_context_type`, `begin_handler`, `handler_domain`
+and each site's `resume_handler`. Existing start/resume interfaces and every
+instruction driver remain unchanged. Only requests with call sites and their pauses emit these
+additional helpers; ordinary decompilation and site-free exports do not gain
+analysis or per-instruction checks. This closes selected-handler/pending-CALL
+composition, not initial state capture, frame/address-space lifetime proof,
+complete environment effects or recovery of missing ordinary-C arguments.
 
 ## Invocation
 
