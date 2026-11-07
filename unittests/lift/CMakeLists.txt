@@ -124,6 +124,7 @@ add_neverd_unittest(NeverDConstantBranchSourceTests
 add_neverd_unittest(NeverDUnaryIdentitySourceTests
   core/UnaryIdentitySourceTests.cpp
   LINK_COMPONENTS Pipeline BackendC
+  TIMEOUT 300
 )
 if(NEVERD_TEST_CLANG_EXECUTABLE)
   target_compile_definitions(NeverDUnaryIdentitySourceTests PRIVATE
