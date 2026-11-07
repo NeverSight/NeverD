@@ -4779,8 +4779,10 @@ each merge round, so only zero-to-one neighbor flips need lookup; the reverse
 pair was already visited. Prepared Boolean recipes keep their reconstruction
 memo inline, with ordinary growth for optional larger recipes.
 Small implicant rounds also keep their temporary term and merge vectors inline;
-larger rounds grow normally. Their deduplication keys retain both complete
-value/care fields, and discovery order and work admission remain unchanged.
+larger rounds grow normally. Frontiers, merge flags and exact lookup tables
+reuse their storage across rounds within one cover search. The neighbor index
+is initialized only when an indexed round is reached. Deduplication keys retain
+both complete value/care fields; discovery order and work admission are unchanged.
 The shared exact MBA layer also recombines weighted literal AND/OR/XOR/NOT
 views of one opaque word. It constructs per-bit coefficients and a constant,
 then independently checks the pointwise grammar, constant difference and every

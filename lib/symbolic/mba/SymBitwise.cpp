@@ -345,6 +345,12 @@ std::vector<Implicant> primeImplicants(const TruthTable &Table,
       Current.push_back(Implicant{static_cast<uint32_t>(K), Full});
 
   std::vector<Implicant> Primes;
+  // Reuse each round's scratch storage. The current and next frontiers stay
+  // distinct, and clearing the lookup tables preserves discovery order.
+  llvm::SmallVector<char, 16> Merged;
+  llvm::SmallVector<Implicant, 16> Next;
+  llvm::SmallDenseSet<uint64_t, 64> Seen;
+  std::optional<llvm::SmallDenseMap<uint64_t, size_t, 64>> IndexedPositions;
   while (!Current.empty()) {
     Work = saturatingAdd(Work, saturatingMul(Current.size(), Current.size()));
     if (Work > Budget)
@@ -352,9 +358,9 @@ std::vector<Implicant> primeImplicants(const TruthTable &Table,
 
     // Small cover rounds stay inline; larger tables retain ordinary growth.
     // Deduplication keeps both complete 32-bit fields in one integer key.
-    llvm::SmallVector<char, 16> Merged(Current.size(), 0);
-    llvm::SmallVector<Implicant, 16> Next;
-    llvm::SmallDenseSet<uint64_t, 64> Seen;
+    Merged.assign(Current.size(), 0);
+    Next.clear();
+    Seen.clear();
     auto grow = [&](size_t I, size_t J, uint32_t Diff) {
       Merged[I] = Merged[J] = 1;
       Implicant Grown{Current[I].Value & ~Diff, Current[I].Care & ~Diff};
@@ -370,7 +376,11 @@ std::vector<Implicant> primeImplicants(const TruthTable &Table,
       auto key = [](uint32_t Value, uint32_t Care) {
         return (uint64_t(Care) << 32) | Value;
       };
-      llvm::SmallDenseMap<uint64_t, size_t, 64> Positions;
+      if (!IndexedPositions)
+        IndexedPositions.emplace();
+      else
+        IndexedPositions->clear();
+      auto &Positions = *IndexedPositions;
       Positions.reserve(Current.size());
       for (size_t I = 0; I < Current.size(); ++I)
         Positions.try_emplace(key(Current[I].Value, Current[I].Care), I);
@@ -411,7 +421,7 @@ std::vector<Implicant> primeImplicants(const TruthTable &Table,
     for (size_t I = 0; I < Current.size(); ++I)
       if (!Merged[I])
         Primes.push_back(Current[I]);
-    Current = std::move(Next);
+    Current.swap(Next);
   }
   return Primes;
 }
