@@ -13598,6 +13598,8 @@ private slots:
     const auto last = ListingViewTestAccess::last(*listing);
     const auto top = listing->topItem();
     const auto arrows = ListingViewTestAccess::arrows(*listing);
+    QCOMPARE(ListingViewTestAccess::edges(*listing),
+             ListingViewTestAccess::expectedEdges(*listing));
     QVERIFY(ListingViewTestAccess::rows(*listing) >
             ::neverd::limits::gui::kListingViewPageLines * 2);
     bool keptContext = true, keptArrows = true;
@@ -13609,6 +13611,8 @@ private slots:
                      ListingViewTestAccess::first(*listing) <= first &&
                      ListingViewTestAccess::last(*listing) >= last;
       keptArrows &= ListingViewTestAccess::arrows(*listing) == arrows;
+      keptArrows &= ListingViewTestAccess::edges(*listing) ==
+                    ListingViewTestAccess::expectedEdges(*listing);
     };
     listing->viewport()->installEventFilter(&observer);
     for (int pass = 0; pass < 3; ++pass) {
@@ -13638,6 +13642,83 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(ListingViewTestAccess::settled(*listing),
                              OpenTimeoutMs);
     QCOMPARE(listing->currentItem(), std::optional<Address>(Base + 0x1500));
+    QCOMPARE(ListingViewTestAccess::edges(*listing),
+             ListingViewTestAccess::expectedEdges(*listing));
+  }
+
+  void listingArrowEndpointsFollowLoadedRows() {
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("fixture.bin")));
+    auto *listing = bench.window->disassembly()->listing();
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded() &&
+                                 ListingViewTestAccess::settled(*listing),
+                             OpenTimeoutMs);
+    const auto row = [](Address address, const char *kind, const char *flow,
+                        std::optional<Address> target = {}) {
+      QJsonObject value{{"item", hexAddress(address)},
+                        {"kind", QLatin1String(kind)},
+                        {"flow", QLatin1String(flow)},
+                        {"text", "instruction"}};
+      if (target)
+        value["target"] = hexAddress(*target);
+      return value;
+    };
+    using Access = ListingViewTestAccess;
+    using Page = Access::Page;
+    const QJsonArray rows{row(0x1000, "comment", ""),
+                          row(0x1000, "header", ""),
+                          row(0x1000, "insn", "jump", 0x1010),
+                          row(0x1008, "data", "jump", 0x1008),
+                          row(0x1010, "comment", ""),
+                          row(0x1010, "label", ""),
+                          row(0x1010, "insn", "cjump", 0x1000),
+                          row(0x1014, "insn", "call", 0x1000),
+                          row(0x1018, "insn", "jump", 0),
+                          row(0x1020, "insn", "jump", 0x9999),
+                          row(0x1028, "insn", "cjump", 0x1028),
+                          row(0x1030, "insn", "cjump"),
+                          row(0x1038, "insn", "ret", 0x1000)};
+    Access::acceptRows(*listing, rows, Page::Replace);
+    const QJsonArray expected{
+        QJsonArray{2, 5, false},  QJsonArray{3, 13, false},
+        QJsonArray{6, 1, true},   QJsonArray{8, -1, false},
+        QJsonArray{9, 13, false}, QJsonArray{10, 10, true}};
+    QCOMPARE(Access::edges(*listing), expected);
+    const auto firstPaint = Access::arrows(*listing);
+    QCOMPARE(Access::arrows(*listing), firstPaint);
+    Access::acceptRows(*listing, {row(0, "label", "")}, Page::Before);
+    QCOMPARE(Access::edges(*listing), Access::expectedEdges(*listing));
+    Access::acceptRows(*listing, {row(0x9999, "insn", "")}, Page::After);
+    QCOMPARE(Access::edges(*listing), Access::expectedEdges(*listing));
+    QJsonArray tail;
+    for (int index = 0;
+         index < ::neverd::limits::gui::kListingViewMaxLoadedLines; ++index)
+      tail.append(row(0x10000 + index, "insn", "jump", 0));
+    Access::acceptRows(*listing, tail, Page::After);
+    QCOMPARE(Access::rows(*listing),
+             ::neverd::limits::gui::kListingViewMaxLoadedLines);
+    QCOMPARE(Access::edges(*listing), Access::expectedEdges(*listing));
+    Access::acceptRows(*listing, rows, Page::Replace);
+    QCOMPARE(Access::edges(*listing), expected);
+    QJsonArray prefix;
+    for (int index = 0;
+         index < ::neverd::limits::gui::kListingViewMaxLoadedLines; ++index) {
+      auto before = row(0, "label", "");
+      before["sub"] = index;
+      prefix.append(before);
+    }
+    Access::acceptRows(*listing, prefix, Page::Before);
+    QCOMPARE(Access::rows(*listing),
+             ::neverd::limits::gui::kListingViewMaxLoadedLines);
+    QCOMPARE(Access::edges(*listing), Access::expectedEdges(*listing));
+    Access::acceptRows(*listing, {}, Page::Replace);
+    QVERIFY(Access::edges(*listing).isEmpty());
+    Access::acceptRows(*listing, rows, Page::Replace);
+    listing->clear();
+    QVERIFY(Access::edges(*listing).isEmpty());
   }
 
   void laterLinksSupersedeWhileTheProgramOpens() {

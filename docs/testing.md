@@ -6572,6 +6572,9 @@ document and all files on refusal.
 `listingRefreshKeepsItsContextAndArrows` observes every viewport paint through
 repeated refreshes, checks retained context, branch-gutter pixels and cursor
 placement, then verifies a real comment update and superseding navigation.
+`listingArrowEndpointsFollowLoadedRows` checks duplicate item rows, conditional
+and external targets, ignored calls, paging on both sides, front/back trimming,
+replacement and clearing against a separate linear endpoint lookup.
 `NeverDWorkerPEFunctionParts` checks a chained cold part's owner, recovered
 instructions, references and stable function inventory across repeated reads.
 `NeverDWorkerCLIPEFunctionParts` additionally checks CLI entry inventories,
