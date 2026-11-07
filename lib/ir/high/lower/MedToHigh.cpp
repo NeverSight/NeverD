@@ -685,6 +685,13 @@ const MedOp *MedToHighConverter::uniqueMedDefinition(const MedVar &V) {
   return EntryStackOffsets->uniqueDefinition(V);
 }
 
+const PhiNode *MedToHighConverter::uniqueMedPhi(const MedVar &V) {
+  if (!CurMed)
+    return nullptr;
+  indexMedDefinitions();
+  return EntryStackOffsets->uniquePhi(V);
+}
+
 ExprPtr MedToHighConverter::memoryAddressExpr(const MedVar &V,
                                               bool InlineDefinition) {
   if (CurMed && TargetArch == Arch::X86 && Image &&

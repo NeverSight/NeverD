@@ -148,17 +148,6 @@ void resolvePassThroughParams(CallArgContext &C) {
   std::vector<ExprPtr> &Found = C.Found;
   const MedFunc *CurMed = C.CurMed;
   const int RegisterPositions = static_cast<int>(C.ParamRegs.size());
-  auto UniqueDef = [&](const MedVar &V) -> const MedOp * {
-    const MedOp *Def = nullptr;
-    for (const auto &Blk : CurMed->Blocks)
-      for (const auto &Op : Blk.Ops)
-        if (Op.Output.Id == V.Id && Op.Output.SSAVer == V.SSAVer) {
-          if (Def)
-            return nullptr;
-          Def = &Op;
-        }
-    return Def;
-  };
   std::function<bool(const MedVar &, int, int)> IsSlot =
       [&](const MedVar &V, int Slot, int Depth) -> bool {
     if (Depth >
@@ -171,23 +160,21 @@ void resolvePassThroughParams(CallArgContext &C) {
       return C.AbiParamIndex(V) == Slot;
     if (V.Kind == MedVar::Reg && V.SSAVer == 0)
       return C.RegToArgIdx(V.RegOff) == Slot;
-    for (const auto &Blk : CurMed->Blocks)
-      for (const auto &Phi : Blk.Phis)
-        if (Phi.Output.Id == V.Id && Phi.Output.SSAVer == V.SSAVer) {
-          if (Phi.Args.empty())
-            return false;
-          for (const auto &Arg : Phi.Args)
-            if (!IsSlot(Arg.second, Slot, Depth + 1))
-              return false;
-          return true;
-        }
-    const MedOp *Def = UniqueDef(V);
+    if (const auto *Phi = C.UniquePhi(V)) {
+      if (Phi->Args.empty())
+        return false;
+      for (const auto &Arg : Phi->Args)
+        if (!IsSlot(Arg.second, Slot, Depth + 1))
+          return false;
+      return true;
+    }
+    const MedOp *Def = C.UniqueDefinition(V);
     if (!Def)
       return false;
     if (Def->Opcode == NdOp::COPY && Def->NumInputs >= 1)
       return IsSlot(Def->Inputs[0], Slot, Depth + 1);
-    // Depending on a parameter does not mean preserving its value.
-    // Only full-width copies and agreeing PHIs name the same argument.
+    // A mask or shift can depend on this parameter while changing its value.
+    // Only full-width copies and agreeing PHIs establish an unchanged value.
     return false;
   };
   const int Limit =

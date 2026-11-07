@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/ir/high/lower/CallArgCollectionDetail.h"
+#include "../../../lib/ir/high/lower/HighEntryStackOffsets.h"
 #include "gtest/gtest.h"
 
 #include "neverd/lift/X86/X86Regs.h"
@@ -59,12 +60,15 @@ MedVar forwarded(NdOp Opcode, uint16_t Width = 8, bool ThroughPhi = false) {
     F.Blocks.back().Preds = {1, 2};
     F.Blocks.back().Phis.push_back({Argument, {{1, P}, {2, T}}});
   }
+  detail::HighEntryStackOffsets Index(F, Arch::X64);
   std::vector<ExprPtr> Found(4);
   Found[0] = HighExpr::makeVar(Argument);
   auto Slot = [](uint64_t Offset) { return Offset == x86reg::RCX ? 0 : -1; };
   auto Param = [](const MedVar &V) {
     return V.Kind == MedVar::Param || V.RegOff == x86reg::RCX ? 0 : -1;
   };
+  auto Definition = [&](const MedVar &V) { return Index.uniqueDefinition(V); };
+  auto Phi = [&](const MedVar &V) { return Index.uniquePhi(V); };
   const auto &TRI = getTargetRegInfo(Arch::X64);
   call_args_detail::CallArgContext Context{
       .Found = Found,
@@ -73,7 +77,9 @@ MedVar forwarded(NdOp Opcode, uint16_t Width = 8, bool ThroughPhi = false) {
       .CurBlock = F.Blocks.back(),
       .CurMed = &F,
       .RegToArgIdx = Slot,
-      .AbiParamIndex = Param};
+      .AbiParamIndex = Param,
+      .UniqueDefinition = Definition,
+      .UniquePhi = Phi};
   const auto *Policy =
       call_args_detail::callArgPolicy(Arch::X64, BinaryFormat::COFF);
   Policy->ResolvePassThroughParams(Context);
