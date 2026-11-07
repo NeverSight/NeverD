@@ -21411,3 +21411,5 @@ global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
 
 `HighControlFlowSemantics.UnusedValuesKeepPlainReadsAndTheirAddresses` checks that unused direct and nested ordinary loads retain their original address and evaluation in HighIR dead-value cleanup.
+
+`HighExprSimplify.NamingCapturedReadsCleansTheirDeadValueConsumers` checks newly pure consumers after expression naming. Zero masks disappear while the captured load and its original address remain.
