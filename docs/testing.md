@@ -38,6 +38,16 @@ normalize presentation differences with an independent decoder explicitly;
 uncompared fields remain unqualified. No device model or post-load callback
 runs, and device transport alone does not establish physical topology.
 
+Add `scripts.tests.test_qemu_save_q35` for the optional Q35 main-RAM consistency
+check. Authored saved PCI bytes cover all TSEG sizes and gates, guest-writable
+query values distinct from the bound machine property, QEMU-specific PCIEXBAR
+masks/lengths and reserved-length history, original RAM offsets, split/gaps,
+exact profile/device bindings, first-MiB exclusions and atomic CLI failures.
+The check touches no RAM and adds no work to subsequent reads. Real-save
+qualification should retain the explicit unsaved-property bindings and compare
+selected bytes before and after checking. A passing MCH check does not prove
+absence of other overlays or CPU access permission; no device callback runs.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
