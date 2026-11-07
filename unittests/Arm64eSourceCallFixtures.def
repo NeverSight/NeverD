@@ -269,6 +269,9 @@
   "native_main": "\nint main(void) {{ return (uint64_t){name}({arguments}) == {expected} ? 0 : 1; }}\n",
   "native_prototype": "extern long long {name}(long long, long long, {parameters});\n",
   "native_parameter": "long long",
+  "native_header_arguments": ["(uintptr_t)&callback", "0"],
+  "native_argument": "({type})({value})",
+  "native_callback_file": "{name}-callback.c",
   "native_host": [
     "Darwin",
     "arm64"

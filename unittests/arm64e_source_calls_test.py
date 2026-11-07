@@ -91,9 +91,11 @@ def main():
     def execute_variadic(case, source, route):
         if "callback" not in case or not native:
             return 0
-        parameter_types = [FIXTURES["native_parameter"]] * (len(case["inputs"]) + 2)
+        values = [*FIXTURES["native_header_arguments"], *case["inputs"]]
+        parameter_types = [FIXTURES["native_parameter"]] * len(values)
         prototype = FIXTURES["native_prototype"].format(
-            name=case["name"], parameters=", ".join(parameter_types[2:]))
+            name=case["name"], parameters=", ".join(
+                parameter_types[len(FIXTURES["native_header_arguments"]):]))
         if source != original:
             signature = re.search(FIXTURES["native_signature"].format(
                 name=re.escape(case["name"])), source.read_text())
@@ -101,12 +103,12 @@ def main():
             prototype = signature[1] + ";\n"
             parameter_types = [re.sub(FIXTURES["native_parameter_name"], "", p).strip()
                                for p in signature[2].split(",")]
-            assert len(parameter_types) == len(case["inputs"]) + 2, prototype
+            assert len(parameter_types) == len(values), prototype
             assert all(t in FIXTURES["native_entry_types"] for t in parameter_types), prototype
-        values = ["(uintptr_t)&callback", "0", *case["inputs"]]
-        arguments = ", ".join(f"({t})({value})" for t, value
-                              in zip(parameter_types, values))
-        harness = args.artifacts / (case["name"] + "-callback.c")
+        arguments = ", ".join(FIXTURES["native_argument"].format(type=t, value=value)
+                              for t, value in zip(parameter_types, values))
+        harness = args.artifacts / FIXTURES["native_callback_file"].format(
+            name=case["name"])
         harness.write_text(
             FIXTURES["native_header"] + FIXTURES["declarations"] + "\n" +
             prototype +

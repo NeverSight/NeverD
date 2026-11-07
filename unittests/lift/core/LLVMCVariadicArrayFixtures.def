@@ -1,5 +1,4 @@
-//===- LLVMCVariadicArrayFixtures.def - Variadic array boundaries -*- C++
-//-*-===//
+//===- LLVMCVariadicArrayFixtures.def - Variadic arrays --------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
