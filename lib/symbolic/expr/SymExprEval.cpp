@@ -33,6 +33,43 @@ bool preservesLowBits(SymOp Op) {
          Op == SymOp::Or || Op == SymOp::Xor || Op == SymOp::Not;
 }
 
+// Run only for wide plans, after lowering has resolved every operand slot.
+// Keeping this pass out of the constructor also keeps its scratch storage and
+// register saves out of native plans. Step is SymEvalPlan's private step type.
+template <typename Step>
+LLVM_ATTRIBUTE_NOINLINE void
+prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
+                    size_t NumSlots, llvm::MutableArrayRef<Step> Steps,
+                    llvm::ArrayRef<uint32_t> ArgSlots) {
+  llvm::SmallVector<unsigned, 64> Needed(NumSlots, 1);
+  Needed[RootSlot] = Ctx.width(Root);
+  for (auto &St : llvm::reverse(Steps)) {
+    const auto Demand = Needed[St.OutputSlot];
+    const bool Prefix = preservesLowBits(St.Op);
+    if (Prefix && Demand <= 64)
+      St.Width = Demand;
+    const auto Operands = Ctx.operands(St.Node);
+    unsigned Zeros = 0;
+    if (St.Op == SymOp::Mul && Ctx.isConst(Operands.front()))
+      Zeros = Ctx.constValue(Operands.front()).countr_zero();
+    if (Zeros && Demand > 64) {
+      const unsigned FactorBits = Demand - std::min(Demand - 1, Zeros);
+      if (FactorBits <= 64)
+        St.Aux = ~uint64_t(0) >> (64 - FactorBits);
+    }
+    for (size_t I = 0; I < Operands.size(); ++I) {
+      unsigned Bits = Ctx.width(Operands[I]);
+      if (Prefix) {
+        Bits = Demand;
+        if (Zeros && !Ctx.isConst(Operands[I]))
+          Bits -= std::min(Bits - 1, Zeros);
+      }
+      auto &Required = Needed[ArgSlots[St.FirstArg + I]];
+      Required = std::max(Required, Bits);
+    }
+  }
+}
+
 } // namespace
 
 bool SymContext::fitsU64(SymRef R) const {
@@ -113,34 +150,6 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
       Work.emplace_back(C, false);
   }
 
-  // A scaled wide product observes only a prefix of each remaining factor.
-  // Propagate the largest demand from every user in reverse topological
-  // order. Other operators retain complete operands: a high bit can affect
-  // even the lowest result bit of a comparison, division or right shift.
-  // Native plans already use word arithmetic and need no precision analysis.
-  llvm::SmallVector<unsigned, 64> Needed;
-  if (!FitsU64) {
-    Needed.resize(NextSlot, 1);
-    Needed[Slot.find(Root.index())->second - 1] = Ctx.width(Root);
-    for (auto [R, OutputSlot] : llvm::reverse(PostOrder)) {
-      const auto Op = Ctx.op(R);
-      const bool Prefix = preservesLowBits(Op);
-      unsigned Zeros = 0;
-      if (Op == SymOp::Mul && Ctx.isConst(Ctx.operand(R, 0)))
-        Zeros = Ctx.constValue(Ctx.operand(R, 0)).countr_zero();
-      for (SymRef C : Ctx.operands(R)) {
-        unsigned Bits = Ctx.width(C);
-        if (Prefix) {
-          Bits = Needed[OutputSlot];
-          if (Zeros && !Ctx.isConst(C))
-            Bits -= std::min(Bits - 1, Zeros);
-        }
-        auto &Demand = Needed[Slot.find(C.index())->second - 1];
-        Demand = std::max(Demand, Bits);
-      }
-    }
-  }
-
   // Lower to flat steps.  Operand slots are resolved here, once, so the
   // evaluation loops never touch the hash map or the DAG.
   Steps.reserve(NextSlot);
@@ -150,8 +159,6 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
     Step S;
     S.Op = N.Op;
     S.Width = N.Width;
-    if (!FitsU64 && preservesLowBits(N.Op) && Needed[OutputSlot] <= 64)
-      S.Width = Needed[OutputSlot];
     S.Aux = N.Aux;
     // A native product has no node payload. Prepare its exact modulus once
     // for the long fold, without increasing the per-step storage.
@@ -177,6 +184,12 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
     ScratchU64.resize(NextSlot);
     for (const auto &[Slot, Node] : ConstantSlots)
       ScratchU64[Slot] = Ctx.node(Node).Aux;
+  } else {
+    // A scaled wide product observes only a prefix of each remaining factor.
+    // Other operators retain complete operands: a high bit can affect even
+    // the lowest result bit of a comparison, division or right shift.
+    prepareWidePrefixes(Ctx, Root, RootSlot, NextSlot,
+                        llvm::MutableArrayRef<Step>(Steps), ArgSlots);
   }
 }
 
@@ -499,12 +512,12 @@ llvm::APInt SymEvalPlan::evalWith(
     // A lookup may throw; the same plan must remain usable on the next call.
     for (const auto &[Slot, Node] : ConstantSlots)
       ScratchAP[Slot] = Ctx.constValue(Node);
-    // Keep the declared slot width even when only its prefix is observed.
-    // Assigning a native value below then reuses the wide allocation, and
-    // full-width consumers can keep the shared APInt operator semantics.
+    // Prefix slots fit in APInt's inline word. Their scaled-product consumers
+    // multiply the complete prefix before restoring the wide coefficient;
+    // every other full-width use already prevented this narrowing.
     for (const Step &St : Steps)
       if (St.Width <= 64 && preservesLowBits(St.Op))
-        ScratchAP[St.OutputSlot] = llvm::APInt(Ctx.width(St.Node), 0);
+        ScratchAP[St.OutputSlot] = llvm::APInt(St.Width, 0);
   }
   for (const Step &St : Steps) {
     const auto I = St.OutputSlot;
@@ -550,6 +563,19 @@ llvm::APInt SymEvalPlan::evalWith(
         llvm_unreachable("not a low-prefix operator");
       }
       ScratchAP[I] = Value & (~uint64_t(0) >> (64 - St.Width));
+      continue;
+    }
+
+    if (St.Op == SymOp::Mul && St.Aux) {
+      // All nonconstant factors are observed modulo the prepared mask.
+      // Multiplying their prefixes first is exact in that ring. Restoring
+      // the original coefficient then needs just one wide multiplication,
+      // and preserves every output bit any parent can observe.
+      uint64_t Product = ScratchAP[A[1]].getRawData()[0];
+      for (size_t K = 2; K < St.NumArgs; ++K)
+        Product *= ScratchAP[A[K]].getRawData()[0];
+      ScratchAP[I] = ScratchAP[A[0]];
+      ScratchAP[I] *= Product & St.Aux;
       continue;
     }
 

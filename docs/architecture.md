@@ -4873,11 +4873,15 @@ same general operator implementation. Wide plans propagate the largest observed
 low-bit prefix from every use through modular arithmetic and bitwise operations.
 A constant product coefficient reduces the required factor prefix by its
 trailing-zero count. Prefixes fitting a native word use modular word arithmetic
-while retaining the original slot width; other consumers demand complete
-operands, including divisions, comparisons and shifts. A shared full-width use
-therefore prevents truncation. This analysis changes only evaluation, keeps
-all input lookups, and is unnecessary for native-only plans. Validation keeps
-its original full-width input assignments, sample count and work charges.
+and inline APInt storage. Their wide product consumers first multiply the
+prefixes in that native modular ring, then restore the complete coefficient
+with one wide multiplication. Other consumers demand
+complete operands, including divisions, comparisons and shifts; a shared
+full-width use therefore prevents truncation. Precision propagation uses the
+resolved operand slots in a separate wide-only pass, preserving the native
+constructor's stack footprint. This analysis changes only evaluation and keeps
+all input lookups. Validation keeps its original full-width input assignments,
+sample count and work charges.
 Native long products stop when the initial operand pair is zero modulo the
 declared width, retaining the tight fold for other inputs. Their prepared steps
 keep the width mask in the unused product payload, without enlarging a step
