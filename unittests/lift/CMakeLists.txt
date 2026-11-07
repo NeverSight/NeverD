@@ -5333,3 +5333,11 @@ target_include_directories(NeverDCOFFOrdinalImportTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
   ${LLVM_INCLUDE_DIRS}
 )
+
+# Value identity at the Win64 argument-forwarding boundary.
+target_sources(NeverDLiftTests PRIVATE core/HighCallParameterForwardingTests.cpp)
+add_neverd_unittest(NeverDHighCallParameterForwardingTests
+  core/HighCallParameterForwardingTests.cpp
+  LINK_COMPONENTS IRHigh IRMed IRLow)
+target_include_directories(NeverDHighCallParameterForwardingTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
