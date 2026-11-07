@@ -176,6 +176,8 @@ llvm::StringRef generalizationName(CallXInputGeneralization Kind) {
     return "reused_proven_equivalent_specialized_inputs";
   case CallXInputGeneralization::ReplacedRecursiveContext:
     return "opaque_recursive_specialization_replaced";
+  case CallXInputGeneralization::EquivalentSpecializedResults:
+    return "coalesced_proven_equivalent_summary_results";
   }
   llvm_unreachable("unknown input generalization");
 }
