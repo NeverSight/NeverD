@@ -212,7 +212,7 @@ def sdk_checks(library, root, a, b, a_bytes):
             lib.neverd_free_string(value)
         assert report["primary"]["path"] == str(a)
         assert report["primary"]["sha256"] == hashlib.sha256(a_bytes).hexdigest()
-        assert report["primary"]["project"]["input_name"] == "旧版本.bin"
+        assert report["primary"]["project"]["input_name"] == "旧版本.bin", report["primary"]["project"]
         lib.neverd_comparison_destroy(comparison)
         comparison = None
         assert not first_folder.exists() and not second_folder.exists()

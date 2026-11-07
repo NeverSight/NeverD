@@ -303,7 +303,8 @@ protected:
                   (ArtifactStem.str() + (LLVM ? "-llvm.c" : "-high.c")),
               std::filesystem::copy_options::overwrite_existing);
         }
-      if (const auto Reason = neverd::test::cannotRunX86C(Source))
+      if (const auto Reason =
+              neverd::test::cannotRunX86C(Source + Harness.str()))
         GTEST_SKIP() << *Reason;
       for (const char *Optimization : {"-O0", "-O2"}) {
         SCOPED_TRACE(Optimization);

@@ -75,7 +75,8 @@ protected:
 
   RunResult exec(const std::string &Program,
                  const std::vector<std::string> &Args) const {
-    std::string Cmd = neverd::test::shellQuote(Program);
+    std::string Cmd =
+        neverd::test::shellQuote(neverd::test::builtProgramPath(Program));
     for (const auto &A : Args)
       Cmd += " " + neverd::test::shellQuote(A);
     auto OutFile = tmpFile("_stdout.txt");

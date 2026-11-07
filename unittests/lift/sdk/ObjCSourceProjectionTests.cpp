@@ -108,6 +108,9 @@ void executeSynchronizedSource(const std::string &Source,
   }
   const std::optional<llvm::StringRef> Redirects[] = {
       std::nullopt, std::nullopt, ErrorPath.str()};
+#ifdef _WIN32
+  GTEST_SKIP() << "these programs unwind through the Itanium C++ runtime";
+#endif
   for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
     const llvm::SmallVector<llvm::StringRef> CompileArgs{Compiler,
                                                          "-x",

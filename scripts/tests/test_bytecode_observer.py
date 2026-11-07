@@ -307,7 +307,7 @@ int main(void) {
         report['functions'][0]['calls'][0]['string'] = 'name*/injected'
         (self.root / 'result').write_text(json.dumps(report))
         source = 'uint64_t decode_loop(void *state) {\n    return 17;\n}\n'
-        (self.root / 'source.c').write_text(source)
+        (self.root / 'source.c').write_text(source, newline='')
         proc = subprocess.run([ENGINE, '--annotate-c', str(self.root / 'source.c'),
                                str(self.root / 'result'), str(self.root / 'annotated.c')],
                               capture_output=True, text=True, timeout=15)

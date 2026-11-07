@@ -141,6 +141,9 @@ endif()
 # for u8/U literals, changing the bytes/code points under test.
 if(MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>")
+    # Lifting recurses over what a binary's code holds. Reserve the 8 MiB a main
+    # thread has on Linux and macOS, not Windows's 1 MiB.
+    add_link_options("$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:/STACK:8388608>")
 endif()
 include(${CMAKE_SOURCE_DIR}/cmake/AddNeverD.cmake)
 

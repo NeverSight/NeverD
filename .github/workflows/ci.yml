@@ -332,6 +332,29 @@ jobs:
         with:
           arch: x64
 
+      - name: Install the Clang Windows tests build with
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Tests build generated IR and C, which need a Clang as new as the LLVM
+          # that emits them. Its sanitizer runtime goes ahead of the one MSVC puts
+          # on the path, which a program built by this Clang finds and cannot use.
+          $Installer = Join-Path $env:RUNNER_TEMP 'LLVM-23.1.5-win64.msi'
+          Invoke-WebRequest -OutFile $Installer -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.5/LLVM-23.1.5-win64.msi'
+          if ((Get-FileHash $Installer -Algorithm SHA256).Hash -ne '288AB326377157A9E02E6FB9724914CC2B55963882D493A405F31DC66E837C12') {
+            throw 'unexpected LLVM installer'
+          }
+          # An administrative install only unpacks, wherever the package would go.
+          $Target = Join-Path $env:RUNNER_TEMP 'neverd-llvm'
+          $Unpack = Start-Process msiexec -Wait -PassThru -ArgumentList "/a `"$Installer`" /qn TARGETDIR=`"$Target`""
+          if ($Unpack.ExitCode -ne 0) { throw "msiexec exited with $($Unpack.ExitCode)" }
+          $Clang = Get-ChildItem $Target -Recurse -Filter clang.exe | Select-Object -First 1
+          if (-not $Clang) { throw "no clang.exe under $Target" }
+          $Runtime = Get-ChildItem $Target -Recurse -Filter 'clang_rt.asan_dynamic*.dll' | Select-Object -First 1
+          if (-not $Runtime) { throw "no sanitizer runtime under $Target" }
+          Add-Content $env:GITHUB_PATH $Runtime.DirectoryName
+          Add-Content $env:GITHUB_PATH $Clang.DirectoryName
+
       - name: Verify Unix toolchain
         if: runner.os != 'Windows'
         shell: bash

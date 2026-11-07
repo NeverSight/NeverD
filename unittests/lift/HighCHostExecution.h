@@ -100,6 +100,11 @@ protected:
       if (const auto Reason = neverd::test::cannotRunX86C(C))
         GTEST_SKIP() << *Reason;
     ASSERT_EQ(C.find("unknown"), std::string::npos) << C;
+#ifdef _WIN32
+    // A kernel and its C agree under the Unix C types they were written for:
+    // `long` and the library routines they name differ on an MSVC host.
+    GTEST_SKIP() << "comparing a kernel with its C requires a Unix host";
+#endif
 
     // AArch64 C retains each original register-offset memory instruction as
     // its encoded word (AArch64AddressMemory.def), which only an AArch64 host

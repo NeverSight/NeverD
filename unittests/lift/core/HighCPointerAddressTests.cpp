@@ -2939,6 +2939,8 @@ TEST(LLVMCPointerAddresses, DataOnlyAddressedIsDeclared) {
 
 /// Expect \p Source to be C a compiler accepts.
 void expectCSyntax(const std::string &Source, llvm::StringRef Target = {}) {
+  if (const auto Reason = neverd::test::lacksPosixHeaders(Source))
+    GTEST_SKIP() << *Reason;
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else

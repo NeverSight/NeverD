@@ -185,7 +185,8 @@ protected:
   }
   void execute(llvm::StringRef Source, llvm::StringRef Harness) {
     ASSERT_FALSE(Source.empty());
-    if (const auto Reason = neverd::test::cannotRunX86C(Source.str()))
+    if (const auto Reason =
+            neverd::test::cannotRunX86C((Source + Harness).str()))
       GTEST_SKIP() << *Reason;
     const auto File = tmpFile("run.c");
     std::ofstream(File) << Source.str() << Harness.str();

@@ -50,9 +50,32 @@ inline bool namesX86Instructions(std::string_view C) {
   return false;
 }
 
+/// Whether C needs headers that only a POSIX host has.
+inline bool namesPosixHeaders(std::string_view C) {
+  for (std::string_view Header :
+       {"<sys/mman.h>", "<sys/socket.h>", "<pthread.h>", "<unistd.h>",
+        "<arpa/inet.h>", "<netinet/in.h>", "<semaphore.h>", "<pwd.h>"})
+    if (C.find(Header) != std::string_view::npos)
+      return true;
+  return false;
+}
+
+/// The reason this host has no such headers for C, if so.
+inline std::optional<std::string> lacksPosixHeaders(std::string_view C) {
+#ifdef _WIN32
+  if (namesPosixHeaders(C))
+    return std::string("the C needs POSIX headers this host does not have");
+#else
+  (void)C;
+#endif
+  return std::nullopt;
+}
+
 /// The reason to skip C of unknown architecture on this host, or nothing when
 /// it can build and run here.
 inline std::optional<std::string> cannotRunC(std::string_view C) {
+  if (const auto Reason = lacksPosixHeaders(C))
+    return Reason;
   if (hostRunsX86() || !namesX86Instructions(C))
     return std::nullopt;
   return std::string(
@@ -62,6 +85,8 @@ inline std::optional<std::string> cannotRunC(std::string_view C) {
 /// As cannotRunC, for C known to come from an x86 image, whose inline assembly
 /// is x86 assembly too.
 inline std::optional<std::string> cannotRunX86C(std::string_view C) {
+  if (const auto Reason = lacksPosixHeaders(C))
+    return Reason;
   if (hostRunsX86() ||
       (!namesX86Instructions(C) && C.find("__asm__") == std::string_view::npos))
     return std::nullopt;

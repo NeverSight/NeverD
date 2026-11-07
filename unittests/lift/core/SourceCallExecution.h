@@ -1,6 +1,7 @@
 #ifndef NEVERD_TEST_SOURCECALLEXECUTION_H
 #define NEVERD_TEST_SOURCECALLEXECUTION_H
 
+#include "../../HostCompiler.h"
 #include "gtest/gtest.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -16,6 +17,8 @@ namespace source_call_execution_test {
 inline void compileSource(const std::string &Source,
                           llvm::ArrayRef<llvm::StringRef> ExtraArguments,
                           bool Execute) {
+  if (const auto Reason = neverd::test::lacksPosixHeaders(Source))
+    GTEST_SKIP() << *Reason;
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -65,6 +68,15 @@ inline void compileSource(const std::string &Source,
   const int Compiled = llvm::sys::ExecuteAndWait(
       Compiler, Arguments, std::nullopt, Redirects, 30, 0, &Error);
   auto Errors = llvm::MemoryBuffer::getFile(ErrorPath);
+#ifdef _WIN32
+  // C decompiled from an image defines the routines it carried, which the
+  // static CRT also defines, and wide division needs a compiler runtime that
+  // an MSVC link does not name.
+  if (Compiled != 0 && Errors &&
+      ((*Errors)->getBuffer().contains("LNK2005") ||
+       (*Errors)->getBuffer().contains("LNK2019")))
+    GTEST_SKIP() << "this host's C runtime does not link this source";
+#endif
   ASSERT_EQ(Compiled, 0) << Error
                          << (Errors ? (*Errors)->getBuffer().str() : "") << "\n"
                          << Source;

@@ -25,6 +25,8 @@ def stable(document):
 
 
 def cancel_input_loading(args, root, small):
+    if os.name == "nt":
+        return  # subprocess has no SIGINT to send on Windows.
     if os.name != "posix":
         print("SKIP: CLI loading interrupt requires POSIX child SIGINT delivery")
         return
@@ -80,6 +82,8 @@ def cancel_input_loading(args, root, small):
 
 
 def cancel_saved_restore(args, root, base, saved):
+    if os.name == "nt":
+        return  # subprocess has no SIGINT to send on Windows.
     report = root / "恢复-取消.nddiff"
     document = json.loads(saved.read_text())
     document["warnings"].append("retained diagnostic " + "x" * (64 * 1024 * 1024))
@@ -159,6 +163,8 @@ def argument_accesses(args, root):
 
 
 def cancel_mapping_edits(args, root):
+    if os.name == "nt":
+        return  # subprocess has no SIGINT to send on Windows.
     if os.name != "posix":
         print("SKIP: CLI editing interrupt requires POSIX child SIGINT delivery")
         return

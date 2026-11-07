@@ -169,6 +169,15 @@ endif()
 
 if(NEVERD_PYTHON_PLUGIN_HOST_ENABLED)
     target_link_libraries(neverd_shared PRIVATE Python3::Python)
+    # The library imports Python at load, so a program using it cannot start
+    # unless Python's DLL is found. Keep it beside the program, not on PATH.
+    if(WIN32)
+        add_custom_command(TARGET neverd_shared POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:Python3::Python>"
+                "$<TARGET_FILE_DIR:neverd_shared>"
+            VERBATIM)
+    endif()
     target_compile_definitions(neverd_shared PRIVATE
         NEVERD_ENABLE_PYTHON_PLUGINS=1
         NEVERD_PYTHON_SDK_SOURCE_DIR="${CMAKE_SOURCE_DIR}/pluginsdk/python"

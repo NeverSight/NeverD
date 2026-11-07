@@ -478,6 +478,9 @@ TEST(DyldSharedCache, CancellationStopsBeforePublishingResults) {
 }
 
 TEST(DyldSharedCache, FileLoadingFollowsValidatedSuffixAndUUID) {
+#ifdef _WIN32
+  GTEST_SKIP() << "Windows does not let this test rewrite a mapped subcache";
+#endif
   llvm::SmallString<128> Directory;
   ASSERT_FALSE(
       llvm::sys::fs::createUniqueDirectory("neverd-dyld-cache", Directory));
@@ -1213,6 +1216,9 @@ TEST(DyldSharedCache, ProjectionHandlesCommandOrderAndSectionRelocations) {
 }
 
 TEST(DyldSharedCache, SelectedImageLoadingRetainsSlideAndInputIdentity) {
+#ifdef _WIN32
+  GTEST_SKIP() << "Windows does not let this test rewrite a mapped subcache";
+#endif
   CacheFixture Fixture;
   Fixture.imageProjection();
   // Add a pointer section while keeping the source linkedit offsets fixed.

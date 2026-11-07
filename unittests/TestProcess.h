@@ -3,8 +3,10 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 #ifdef _WIN32
 #include <process.h>
@@ -101,6 +103,19 @@ inline const char *executableSuffix() {
 #endif
 }
 
+/// The file a program built with `-o Path` landed in. Clang adds the suffix on
+/// Windows, where the shell then finds no program at the name the test gave.
+inline std::string builtProgramPath(std::string Path) {
+#ifdef _WIN32
+  std::error_code Error;
+  const std::filesystem::path Program(Path);
+  if (Program.has_parent_path() && !Program.has_extension() &&
+      std::filesystem::exists(Path + ".exe", Error))
+    Path += ".exe";
+#endif
+  return Path;
+}
+
 inline std::string silenceOutput() {
   return " >" + shellQuote(nullDevice()) + " 2>&1";
 }
@@ -114,9 +129,7 @@ inline std::string redirectStdout(std::string_view Path) {
   return " >" + shellQuote(Path);
 }
 
-inline std::string silenceStderr() {
-  return " 2>" + shellQuote(nullDevice());
-}
+inline std::string silenceStderr() { return " 2>" + shellQuote(nullDevice()); }
 
 } // namespace neverd::test
 
