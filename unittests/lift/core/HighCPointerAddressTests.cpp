@@ -27263,31 +27263,20 @@ TEST(HighCPointerAddresses, Win64CookiePhiPrefersIncomingParam) {
   Restore.Id = 1;
   Restore.Preds = {0};
   Restore.Succs = {2};
-  MedVar Imm16;
-  Imm16.Kind = MedVar::Temp;
-  Imm16.TheArch = Arch::X64;
-  Imm16.Id = 40;
-  Imm16.Size = 8;
-  MedOp LoadImm;
-  LoadImm.Opcode = NdOp::COPY;
-  LoadImm.Output = Imm16;
-  LoadImm.addInput(MedVar::makeConst(16, 8));
-  LoadImm.Addr = 0x14000100c;
-  Restore.Ops.push_back(std::move(LoadImm));
-  MedOp Rol;
-  Rol.Opcode = NdOp::INT_LEFT;
-  Rol.Output = RCX1;
-  Rol.addInput(RCX0);
-  Rol.addInput(Imm16);
-  Rol.Addr = 0x140001010;
-  Restore.Ops.push_back(std::move(Rol));
-  MedOp Ror;
-  Ror.Opcode = NdOp::INT_RIGHT;
-  Ror.Output = RCX2;
-  Ror.addInput(RCX1);
-  Ror.addInput(Imm16);
-  Ror.Addr = 0x140001014;
-  Restore.Ops.push_back(std::move(Ror));
+  // Both arms of the PHI hold the incoming value. Shifting it away and back
+  // would not, and HighCallParameterForwarding covers that case.
+  MedOp Saved;
+  Saved.Opcode = NdOp::COPY;
+  Saved.Output = RCX1;
+  Saved.addInput(RCX0);
+  Saved.Addr = 0x140001010;
+  Restore.Ops.push_back(std::move(Saved));
+  MedOp Restored;
+  Restored.Opcode = NdOp::COPY;
+  Restored.Output = RCX2;
+  Restored.addInput(RCX1);
+  Restored.Addr = 0x140001014;
+  Restore.Ops.push_back(std::move(Restored));
   Med.Blocks.push_back(std::move(Restore));
 
   MedBlock Fail;
