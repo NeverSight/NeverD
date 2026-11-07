@@ -430,7 +430,7 @@ SymRef foldKnownBits(SymContext &Ctx, SymRef Root, SymKnownBits &Known,
       Ctx.width(Root) > SymKnownBits::MaxWidth)
     return Root;
   const bool HasMask = (Op == SymOp::And || Op == SymOp::Or) &&
-                       Ctx.numOperands(Root) == 2 &&
+                       Ctx.numOperands(Root) >= 2 &&
                        Ctx.isConst(Ctx.operand(Root, 0));
   // Only ask for facts at the consumers that use them. Opaque boundaries keep
   // the existing deep walk's guarantee of spending no region work there.
@@ -443,9 +443,18 @@ SymRef foldKnownBits(SymContext &Ctx, SymRef Root, SymKnownBits &Known,
     Available /= 2;
   if (!Available)
     return Root;
-  const auto Source = HasMask ? Ctx.operand(Root, 1) : Root;
-  if (HasMask && Ctx.numOperands(Source) == 0)
-    return Root;
+  // The terms beside the constant, as one value: 2 * p and 256 * p share no bit
+  // however many other factors the AND holds.
+  SymRef Source = Root;
+  if (HasMask) {
+    const auto Rest = Ctx.operands(Root).drop_front();
+    llvm::SmallVector<SymRef, 8> Terms(Rest.begin(), Rest.end());
+    Source = Terms.size() == 1  ? Terms.front()
+             : Op == SymOp::And ? Ctx.mkAnd(Terms)
+                                : Ctx.mkOr(Terms);
+    if (Ctx.numOperands(Source) == 0)
+      return Root;
+  }
   unsigned Remaining = Available;
   auto Bits = Known.query(Source, Remaining);
   Budget.consume(Available - Remaining);
