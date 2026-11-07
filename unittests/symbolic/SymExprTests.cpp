@@ -1418,6 +1418,42 @@ TEST(SymExpr, NativeAssociativeEvaluationMatchesFullWidthArithmetic) {
   }
 }
 
+TEST(SymExpr, EvaluationPlansReadEveryReachableInputOnce) {
+  for (unsigned Width : {8u, 64u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width);
+    Ctx.mkVar("unused", Width);
+    const auto Y = Ctx.mkVar("y", Width), Z = Ctx.mkVar("z", Width);
+    const llvm::APInt One(Width, 1), Seven(Width, 7);
+    const auto Root = Ctx.mkMul(
+        Ctx.mkAdd(Ctx.mkMul(X, Ctx.mkConst(Seven)), Y),
+        Ctx.mkAdd(Z, Ctx.mkConst(One)));
+    SymEvalPlan Plan(Ctx, Root);
+    for (const auto &A : {llvm::APInt(Width, 0), One,
+                          llvm::APInt::getAllOnes(Width)}) {
+      const std::array Values{A, Seven, A + Seven, ~A};
+      const auto Expected = (A * Seven + Values[2]) * (Values[3] + One);
+      std::array<unsigned, 4> Calls{};
+      EXPECT_EQ(Plan.evalWith([&](uint32_t Id) {
+                  ++Calls.at(Id);
+                  return &Values.at(Id);
+                }),
+                Expected);
+      EXPECT_EQ(Calls, (std::array<unsigned, 4>{1, 0, 1, 1}));
+      if (Width <= 64) {
+        Calls.fill(0);
+        EXPECT_EQ(Plan.evalU64With([&](uint32_t Id) {
+                    ++Calls.at(Id);
+                    return Values.at(Id).getZExtValue();
+                  }),
+                  Expected.getZExtValue());
+        EXPECT_EQ(Calls, (std::array<unsigned, 4>{1, 0, 1, 1}));
+      }
+    }
+  }
+}
+
 TEST(SymExpr, WideConstantSlotsSurviveInterruptedInputLookup) {
   for (unsigned Width : {8u, 64u, 65u, 257u}) {
     SCOPED_TRACE(Width);

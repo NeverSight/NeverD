@@ -67,22 +67,38 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
                       limits::symbolic::kSymExprTraversalInlineBuckets>
       Slot;
   llvm::SmallVector<std::pair<SymRef, bool>, 64> Work{{Root, false}};
-  llvm::SmallVector<SymRef, 64> PostOrder;
+  llvm::SmallVector<std::pair<SymRef, uint32_t>, 64> PostOrder;
   size_t OperandCount = 0;
+  uint32_t NextSlot = 0;
 
   while (!Work.empty()) {
     auto [Cur, Expanded] = Work.pop_back_val();
     if (Expanded) {
-      auto Position = Slot.find(Cur.index());
-      if (Position->second)
-        continue;
-      Position->second = static_cast<uint32_t>(PostOrder.size()) + 1;
-      PostOrder.push_back(Cur);
-      OperandCount += Ctx.numOperands(Cur);
+      const auto OutputSlot = NextSlot++;
+      Slot.find(Cur.index())->second = OutputSlot + 1;
+      PostOrder.emplace_back(Cur, OutputSlot);
       continue;
     }
-    if (!Slot.try_emplace(Cur.index(), 0).second)
+    auto [Position, New] = Slot.try_emplace(Cur.index(), 0);
+    if (!New)
       continue;
+    const auto &N = Ctx.node(Cur);
+    if (N.Width > 64)
+      FitsU64 = false;
+    // Leaves need neither operand resolution nor a second worklist visit.
+    // Lower them now and keep inputs first in their original lookup order.
+    if (N.Op == SymOp::Const || N.Op == SymOp::Var) {
+      const auto OutputSlot = NextSlot++;
+      Position->second = OutputSlot + 1;
+      if (N.Op == SymOp::Const) {
+        ConstantSlots.emplace_back(OutputSlot, Cur);
+      } else {
+        Vars.push_back(static_cast<uint32_t>(N.Aux));
+        Steps.push_back({N.Op, N.Width, N.Aux, 0, 0, Cur, OutputSlot});
+      }
+      continue;
+    }
+    OperandCount += N.NumOperands;
     Work.emplace_back(Cur, true);
     for (SymRef C : Ctx.operands(Cur))
       Work.emplace_back(C, false);
@@ -90,21 +106,10 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
 
   // Lower to flat steps.  Operand slots are resolved here, once, so the
   // evaluation loops never touch the hash map or the DAG.
-  Steps.reserve(PostOrder.size());
+  Steps.reserve(NextSlot);
   ArgSlots.reserve(OperandCount);
-  uint32_t NextSlot = 0;
-  for (SymRef R : PostOrder) {
+  for (auto [R, OutputSlot] : PostOrder) {
     const SymNode &N = Ctx.node(R);
-    const auto OutputSlot = NextSlot++;
-    if (N.Width > 64)
-      FitsU64 = false;
-    if (N.Op == SymOp::Const) {
-      ConstantSlots.emplace_back(OutputSlot, R);
-      continue;
-    }
-    if (N.Op == SymOp::Var)
-      Vars.push_back(static_cast<uint32_t>(N.Aux));
-
     Step S;
     S.Op = N.Op;
     S.Width = N.Width;
@@ -130,7 +135,7 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
   Vars.erase(std::unique(Vars.begin(), Vars.end()), Vars.end());
 
   if (FitsU64) {
-    ScratchU64.resize(PostOrder.size());
+    ScratchU64.resize(NextSlot);
     for (const auto &[Slot, Node] : ConstantSlots)
       ScratchU64[Slot] = Ctx.node(Node).Aux;
   }
@@ -169,7 +174,10 @@ SymEvalPlan::evalU64With(llvm::function_ref<uint64_t(uint32_t)> Lookup) {
   const uint32_t *Args = ArgSlots.data();
   uint64_t *S = ScratchU64.data();
 
-  for (const Step &St : Steps) {
+  for (const Step &St : llvm::ArrayRef<Step>(Steps).take_front(Vars.size()))
+    S[St.OutputSlot] = mask(Lookup(static_cast<uint32_t>(St.Aux)), St.Width);
+
+  for (const Step &St : llvm::ArrayRef<Step>(Steps).drop_front(Vars.size())) {
     const auto I = St.OutputSlot;
     const uint32_t *A = Args + St.FirstArg;
     uint32_t W = St.Width;
@@ -177,10 +185,8 @@ SymEvalPlan::evalU64With(llvm::function_ref<uint64_t(uint32_t)> Lookup) {
 
     switch (St.Op) {
     case SymOp::Const:
-      llvm_unreachable("constants are initialized before evaluation");
     case SymOp::Var:
-      Res = Lookup(static_cast<uint32_t>(St.Aux));
-      break;
+      llvm_unreachable("inputs and constants are initialized before operators");
     case SymOp::Add:
       // Canonical associative nodes have at least two operands. Evaluate
       // that common pair directly, then fold any remaining operands.

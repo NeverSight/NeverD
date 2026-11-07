@@ -14405,8 +14405,14 @@ versions that counted n-ary nodes once and omitted all all-ones literals.
 Verification samples reuse the compiled evaluator's word-sized path when both
 plans and all context variables fit in 64 bits. Corner assignments and the
 random stream stay unchanged; wider inputs retain arbitrary-width evaluation.
+The evaluator lowers constant and variable leaves on their first worklist
+visit. Native inputs are loaded before the operator loop, in the original
+lookup order; shared inputs are still read once and unused inputs are omitted.
 Minterm expansion reuses one sorted combination buffer across its Cartesian
 walk while preserving combination order and per-combination work charges.
+It borrows cached factor tables only until the next cache insertion and
+initializes new coefficients from their first contribution, avoiding repeated
+wide-table copies and temporary zero coefficients during accumulation.
 Textual coefficients that fit in 64 bits use one native integer parse; the
 constant builder still owns width truncation and zero extension, and larger
 literals retain arbitrary-precision parsing.
