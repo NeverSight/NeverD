@@ -201,7 +201,10 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
       Done.try_emplace(Cur.index(), Hit->second);
       continue;
     }
-    if (ReplacedVariable && !containsVariable(Cur, *ReplacedVariable)) {
+    // Every variable below this node comes after the replaced one. A walk per
+    // node would be quadratic on a chain; the rebuild below already keeps a
+    // node none of whose operands changed.
+    if (ReplacedVariable && minimumVariableId(Cur) > *ReplacedVariable) {
       Done.try_emplace(Cur.index(), Cur);
       continue;
     }
