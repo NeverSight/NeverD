@@ -41,6 +41,9 @@ struct BinderReply {
   std::vector<uint64_t> objects;
   std::optional<uint32_t> fd;
   std::function<ExecutionResult(uint64_t, std::span<const uint8_t>)> write;
+  // In-capacity strong writes first realloc the native borrowed offset table.
+  // The Binder adapter reports the shared allocator's failure for this pointer.
+  std::function<ExecutionResult(uint64_t)> reallocate_objects;
 };
 struct BinderTransactionRequest {
   uint64_t receiver = 0, data = 0, reply = 0;

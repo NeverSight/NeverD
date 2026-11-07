@@ -204,6 +204,7 @@ ExecutionResult AndroidFramework::completeBinder(Heap &heap,
       state.view = std::move(reply.view);
       state.release = std::move(reply.release);
       state.write = std::move(reply.write);
+      state.reallocate_objects = std::move(reply.reallocate_objects);
       state.objects = std::move(reply.objects);
       state.fd = reply.fd;
     }

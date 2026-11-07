@@ -4622,7 +4622,7 @@ TEST_F(ProcessPublic, AndroidParcelBorrowedGrowthMatchesSDKAndCLI) {
     Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
             (std::string("jni-") + Variant + ".so"))
                .string();
-    for (unsigned Mode = 0; Mode != 9; ++Mode)
+    for (unsigned Mode = 0; Mode != 18; ++Mode)
       for (unsigned Form = 0; Form != 3; ++Form) {
         SCOPED_TRACE(Variant);
         SCOPED_TRACE(Mode);
@@ -4645,11 +4645,13 @@ TEST_F(ProcessPublic, AndroidParcelBorrowedGrowthMatchesSDKAndCLI) {
             Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
         ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
         auto Parsed = llvm::cantFail(llvm::json::parse(Text));
-        const bool Stopped = Mode == 2 || Mode == 3 || Mode == 4 || Mode == 8;
+        const bool ReallocFailure = Mode >= 8 && Mode <= 14;
+        const bool Stopped =
+            Mode == 2 || Mode == 3 || Mode == 4 || ReallocFailure || Mode == 15;
         EXPECT_EQ(Parsed.getAsObject()->getString(field::Stop),
-                  Mode == 2 ? "runtime_failure"
-                  : Stopped ? "unsupported_service"
-                            : "returned")
+                  Mode == 2 || ReallocFailure ? "runtime_failure"
+                  : Stopped                   ? "unsupported_service"
+                                              : "returned")
             << Text;
         if (!Stopped)
           EXPECT_EQ(Parsed.getAsObject()->getString(field::ReturnValue), "0");
