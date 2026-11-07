@@ -74,6 +74,25 @@ inline std::optional<ChainFormat> chainFormat(uint16_t Format) {
   }
 }
 
+/// Container-independent pointer fields. Target is an import ordinal, a
+/// segment offset, or the encoded rebase target according to the format.
+/// Decoding grants neither mapped storage nor a process-signed pointer.
+struct PointerWord {
+  uint64_t Target = 0;
+  int64_t Addend = 0;
+  uint32_t Next = 0;
+  unsigned SegmentIndex = 0;
+  uint16_t Diversity = 0;
+  uint8_t Key = 0;
+  bool Authenticated = false;
+  bool Bind = false;
+  bool AddressDiversity = false;
+};
+
+/// Format must be a descriptor returned by chainFormat().
+std::optional<PointerWord> decodePointerWord(uint64_t Raw,
+                                             const ChainFormat &Format);
+
 } // namespace neverd::macho_loader::arm64e
 
 #endif // NEVERD_LOADER_MACHO_MACHOARM64E_H

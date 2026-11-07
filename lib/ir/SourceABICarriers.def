@@ -24,16 +24,12 @@ SOURCE_ABI_CARRIER_TEXT(kIncompleteDarwinPlacement,
                         "Darwin cannot place every complete parameter")
 SOURCE_ABI_CARRIER_TEXT(kInvalidWideParameter,
                         "Unsupported source integer-pair parameter carriers")
-SOURCE_ABI_CARRIER_TEXT(kIndirectAnalystCopy,
-                        "An indirect by-value call needs a copy storage proof")
 SOURCE_ABI_CARRIER_TEXT(kIndirectAnalystResult,
                         "An indirect call result needs a complete storage ABI")
 SOURCE_ABI_CARRIER_TEXT(kInvalidVariadicPrefix,
                         "Invalid variadic source prefix")
 SOURCE_ABI_CARRIER_TEXT(kUnpromotedVariadicValue,
                         "Variadic source arguments need default promotions")
-SOURCE_ABI_CARRIER_TEXT(kIndirectVariadicCopy,
-                        "An indirect variadic value needs a copy storage proof")
 
 #undef SOURCE_ABI_CARRIER_VALUE
 #undef SOURCE_ABI_CARRIER_TEXT

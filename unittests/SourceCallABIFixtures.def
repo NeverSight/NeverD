@@ -30,6 +30,7 @@ SOURCE_CALL_ABI_VALUE(unsigned, kDarwinFloatBytes, 4)
 SOURCE_CALL_ABI_VALUE(unsigned, kDarwinHFAMembers, 4)
 SOURCE_CALL_ABI_VALUE(unsigned, kDarwinVariadicPrefix, 9)
 SOURCE_CALL_ABI_VALUE(unsigned, kDarwinThreeMembers, 3)
+SOURCE_CALL_ABI_VALUE(unsigned, kDarwinTransformMembers, 6)
 SOURCE_CALL_ABI_VALUE(unsigned, kDarwinNarrowBytes, 1)
 SOURCE_CALL_ABI_VALUE(unsigned, kDarwinPartialFPPrefix, 7)
 // Independent layout after nine fixed signed bytes. The ninth byte is at SP;

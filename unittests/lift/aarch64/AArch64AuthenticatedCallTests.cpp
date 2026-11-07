@@ -543,8 +543,14 @@ TEST_P(AArch64TypedAuthenticatedCall,
                                                : llvm::Attribute::ZExt));
             for (unsigned I = 0; I < Shape.Parameters.size(); ++I) {
               auto *Argument = Call->getArgOperand(I)->getType();
-              const auto Expected = typedParameter(Shape.Parameters[I]);
+              const auto Expected =
+                  sourceCallParameterType(Hint->Signature.Parameters[I]);
               EXPECT_EQ(Width(Argument), Expected->Size * kBitsPerByte);
+              if (Hint->Signature.Parameters[I].IndirectByValue) {
+                EXPECT_TRUE(Argument->isPointerTy());
+                EXPECT_FALSE(Call->paramHasAttr(I, llvm::Attribute::ByVal));
+                EXPECT_FALSE(Call->paramHasAttr(I, llvm::Attribute::NoAlias));
+              }
               if (Expected->Kind == NdTypeKind::Int &&
                   Expected->Size < kPromotedIntegerBytes &&
                   Hint->Signature.Parameters[I].Location.Kind ==

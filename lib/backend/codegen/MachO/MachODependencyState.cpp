@@ -14,6 +14,7 @@
 
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
+#include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 
 #include "llvm/Support/Errc.h"
@@ -21,12 +22,16 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/SHA256.h"
 
+#include <cstddef>
 #include <set>
 
 namespace neverd {
 namespace {
 using namespace llvm::MachO;
 using Bytes = std::vector<uint8_t>;
+#define MACHO_DEPENDENCY_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#define MACHO_DEPENDENCY_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "MachODependencyState.def"
 llvm::Error fail(const llvm::Twine &S) {
   return llvm::createStringError(llvm::errc::not_supported,
                                  "Mach-O dyld proof: " + S);
@@ -66,13 +71,15 @@ struct Reader {
       return fail("metadata is not contained in LINKEDIT");
     return B.slice(O, N);
   }
-  llvm::Expected<uint64_t> slot(unsigned Segment, uint64_t Offset) {
+  llvm::Expected<uint64_t> slot(unsigned Segment, uint64_t Offset,
+                                unsigned Alignment = 0) {
     if (Segment >= Segments.size())
       return fail("invalid segment ordinal");
     const auto &S = Segments[Segment];
     if (S.VMAddr == LinkeditVA || !(S.InitProt & VM_PROT_WRITE) ||
         (S.InitProt & VM_PROT_EXECUTE) ||
-        !rangeInBounds(Offset, Pointer, S.FileSize) || Offset % Pointer)
+        !rangeInBounds(Offset, Pointer, S.FileSize) ||
+        Offset % (Alignment ? Alignment : Pointer))
       return fail("fixup lacks a unique writable, aligned file-backed owner");
     return S.VMAddr + Offset;
   }
@@ -83,8 +90,8 @@ struct Reader {
     return llvm::Error::success();
   }
   llvm::Error rebase(unsigned Segment, uint64_t Offset, uint64_t Target,
-                     uint64_t Raw) {
-    auto VA = slot(Segment, Offset);
+                     uint64_t Raw, unsigned Alignment = 0) {
+    auto VA = slot(Segment, Offset, Alignment);
     if (!VA)
       return VA.takeError();
     if (Target >= LinkeditVA && Target - LinkeditVA < LinkeditSize)
@@ -97,8 +104,8 @@ struct Reader {
   }
   llvm::Error bind(unsigned Segment, uint64_t Offset, int64_t Ordinal,
                    llvm::StringRef Name, int64_t Addend, unsigned Flags,
-                   unsigned Phase, uint64_t Raw = 0) {
-    auto VA = slot(Segment, Offset);
+                   unsigned Phase, uint64_t Raw = 0, unsigned Alignment = 0) {
+    auto VA = slot(Segment, Offset, Alignment);
     if (!VA)
       return VA.takeError();
     if (Ordinal > int64_t(State.Libraries.size()) || Ordinal < -3 ||
@@ -119,6 +126,9 @@ struct Reader {
     if (!macho_patch_detail::collectMachOFileRanges(B, S, C))
       return fail("overlapping storage");
     Pointer = H.Is64 ? 8 : 4;
+    State.CPUType = readLE<uint32_t>(B.data() + offsetof(mach_header, cputype));
+    State.CPUSubtype =
+        readLE<uint32_t>(B.data() + offsetof(mach_header, cpusubtype));
     const auto Flags = readLE<uint32_t>(B.data() + 24),
                Type = readLE<uint32_t>(B.data() + 12);
     if (!(Flags & MH_DYLDLINK) || !(Flags & MH_TWOLEVEL) ||
@@ -528,9 +538,11 @@ struct Reader {
       const unsigned Size = readLE<uint32_t>(S), Page = readLE<uint16_t>(S + 4),
                      Format = readLE<uint16_t>(S + 6),
                      Pages = readLE<uint16_t>(S + 20);
+      const auto Arm64e = macho_loader::arm64e::chainFormat(Format);
       if ((Page != 4096 && Page != 16384) ||
           (Format != DYLD_CHAINED_PTR_64 &&
-           Format != DYLD_CHAINED_PTR_64_OFFSET) ||
+           Format != DYLD_CHAINED_PTR_64_OFFSET && !Arm64e) ||
+          (Arm64e && State.CPUType != CPU_TYPE_ARM64) ||
           (Size != 22 + Pages * 2 &&
            Size != llvm::alignTo(22 + Pages * 2, 8)) ||
           !rangeInBounds(O, Size, F.imports_offset) ||
@@ -556,12 +568,54 @@ struct Reader {
           if (!rangeInBounds(At, 8, Page))
             return fail("chained pointer crosses a page");
           const uint64_t Offset = uint64_t(P) * Page + At;
-          auto VA = slot(I, Offset);
+          auto VA = slot(I, Offset, Arm64e ? Arm64e->Stride : Pointer);
           if (!VA)
             return VA.takeError();
           const uint64_t Raw =
               readLE<uint64_t>(B.data() + Segments[I].FileOff + Offset);
-          if (Raw >> 63) {
+          unsigned NextBytes = ((Raw >> 51) & 0xfff) * kOrdinaryChainStride;
+          if (Arm64e) {
+            const auto Word =
+                macho_loader::arm64e::decodePointerWord(Raw, *Arm64e);
+            if (!Word)
+              return fail(kInvalidArm64eWord);
+            NextBytes = Word->Next * Arm64e->Stride;
+            if (Word->Bind) {
+              if (Word->Target >= Imports.size())
+                return fail(kInvalidArm64eImport);
+              const auto &Import = Imports[Word->Target];
+              int64_t Addend;
+              if (llvm::AddOverflow(Import.Addend, Word->Addend, Addend))
+                return fail(kArm64eAddendOverflow);
+              if (auto E = bind(I, Offset, Import.Ordinal, Import.Name, Addend,
+                                Import.Flags, kBindPhase, Raw, Arm64e->Stride))
+                return E;
+            } else {
+              uint64_t Base =
+                  Word->Authenticated || Arm64e->Offset ? HeaderVA : 0;
+              if (Arm64e->Segmented) {
+                if (Word->SegmentIndex >= Segments.size() ||
+                    Word->Target > Segments[Word->SegmentIndex].VMSize)
+                  return fail(kInvalidArm64eSegment);
+                Base = Segments[Word->SegmentIndex].VMAddr;
+              }
+              if (Word->Target > UINT64_MAX - Base)
+                return fail(kArm64eTargetOverflow);
+              if (auto E = rebase(I, Offset, Base + Word->Target, Raw,
+                                  Arm64e->Stride))
+                return E;
+            }
+            if (Word->Authenticated) {
+              // Slot identity above also owns address diversity. Retaining
+              // only the target/import would silently admit a different key
+              // or discriminator after image layout edits.
+              auto &Row =
+                  State.Slots.at({*VA, Word->Bind ? kBindPhase : kRebasePhase});
+              number(Row, Word->Key);
+              number(Row, Word->Diversity);
+              number(Row, Word->AddressDiversity);
+            }
+          } else if (Raw >> 63) {
             const unsigned Ord = Raw & 0xffffff;
             if (Ord >= Imports.size() || ((Raw >> 32) & 0x7ffff))
               return fail("invalid chained bind ordinal or reserved bits");
@@ -585,12 +639,11 @@ struct Reader {
             if (auto E = rebase(I, Offset, Target, Raw))
               return E;
           }
-          const unsigned Next = (Raw >> 51) & 0xfff;
-          if (!Next)
+          if (!NextBytes)
             break;
-          if (Next * 4 < 8 || Next * 4 > Page - At)
+          if (NextBytes < Pointer || NextBytes > Page - At)
             return fail("overlapping or cross-page chain");
-          At += Next * 4;
+          At += NextBytes;
         }
       }
     }
@@ -659,6 +712,8 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B) {
 }
 llvm::Error preserveMachODependencyState(const MachODependencyState &Before,
                                          const MachODependencyState &After) {
+  if (Before.CPUType != After.CPUType || Before.CPUSubtype != After.CPUSubtype)
+    return fail(kChangedCPUABI);
   for (const auto &[Key, Value] : Before.Slots) {
     auto I = After.Slots.find(Key);
     if (I == After.Slots.end() || I->second != Value)

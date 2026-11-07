@@ -1453,31 +1453,47 @@ across both keys, zero/dynamic discriminators and raw controls. The matrix also
 checks signed/unsigned 128-bit values, single/pair integer and pointer records,
 a padded 32-bit/64-bit pair, and one-to-four-member f32/f64 HFAs with nested and
 whole-stack cases. Eighteen shapes additionally cover complete variadic
-values, higher alignment, fixed aggregate spills and padded fixed prefixes. CTest registers each of the 58 type shapes separately,
+values, higher alignment, fixed aggregate spills and padded fixed prefixes.
+Seven further shapes cover indirect natural records in GP registers, after GP
+exhaustion and in variadic tails, including an indirect fixed stack prefix.
+CTest registers each of the 65 type shapes separately,
 retaining all five authentication variants and both C routes at O0/O2 within
 the ordinary per-test timeout. Stable shape names identify failures and permit
-parallel scheduling. All 290 typed groups emit actual Mach-O objects on five
+parallel scheduling. All 325 typed groups emit actual Mach-O objects on five
 routes. Narrow register arguments
 and results require the correct LLVM extension attribute; stack arguments
 retain their source width. The outer fixture explicitly writes the complete
 X0 return carrier, and a constant result cannot stand in for the callback's
 value. Set `NEVERD_ARM64E_CALL_ABI_ARTIFACT_DIR` to retain the nine integer
-groups and 290 typed groups with all five object routes. Composite result
+groups and 325 typed groups with all five object routes. Composite result
 oracles consume every logical member, excluding padding; pointer and integer
 members remain raw bits. The independent callback poisons record return padding.
 On macOS, `NeverDArm64eSourceCallSDK` loads a real arm64e dylib through the
 public C API, declares named integer/pointer records, a padded pair, a nested
 HFA and signed/unsigned 128-bit values, and applies complete call prototypes.
-Both C routes must compile all seventeen argument/result shapes at O0/O2,
+Both C routes must compile all twenty-seven argument/result shapes at O0/O2,
 including record names matching the renderer's preferred temporary names.
-Seven raw variadic fixtures also execute as native arm64 on Apple arm64:
+Seventeen raw fixtures also execute as native arm64 on Apple arm64:
 original assembly and both C projections call independent C `va_arg` readers
-at O0/O2 (42 executions). These readers check signed/unsigned 128-bit values,
+at O0/O2 (102 executions). These readers check signed/unsigned 128-bit values,
 16-byte alignment following a promoted int, named records, padding, HFA and
-nested HFA members, and a fixed record prefix. Other hosts retain compilation
+nested HFA members, and a fixed record prefix. Indirect-record callbacks
+additionally check the original address, aliased reads and writes, register
+exhaustion and native variadic copy addresses. The authenticated model matrix
+checks the same pointer transport without dereferencing its synthetic pointer
+values; the native storage oracle supplies that separate evidence. Generated
+LLVM and recompiled C must not introduce `byval` or `noalias` attributes.
+Other hosts retain compilation
 and explicitly record that native execution is unavailable. Packed/union values,
-indirect copies/results, and unpromoted scalar tails must refuse explicitly.
+hidden results, and unpromoted scalar tails must refuse explicitly.
 Raw native execution does not qualify PAC behavior.
+`MachOArm64eDependencies` in `NeverDArm64eAnalysisTests` checks independently
+encoded linked images for all six arm64e chained-pointer formats. Chain metadata
+can be repacked while retaining the dependency identity; changes to target,
+import ordinal/name/weakness/addend, key, diversity, address diversity, slot
+address or CPU subtype must fail preservation. Four-byte and eight-byte chain
+alignments remain distinct, and wrong-CPU and cross-page storage fail parsing.
+These checks do not execute dyld, sign new storage or qualify rebuilt images.
 `LLVMCValues.DarwinVariadicArraysValidateEveryActualOperand` also admits word
 and HFA arrays in the prefix/tail while refusing non-C conventions, tail
 `inreg` attributes, unpromoted scalar companions, nested/oversized arrays and
