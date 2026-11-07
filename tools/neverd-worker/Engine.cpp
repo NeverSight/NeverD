@@ -1141,19 +1141,51 @@ void Engine::readViewEdits(const std::string &sourceKey) {
   const auto text = document.value.find("text");
   std::size_t read = 0;
   bool readEnough = false;
+  const auto identifierChar = [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+  };
+  const auto hashOf = [](std::string_view token) {
+    return static_cast<std::uint64_t>(std::hash<std::string_view>{}(token));
+  };
   const auto reaches = [&](const ViewEdit &edit) {
     if (!document.readsKnown ||
         std::binary_search(reads.begin(), reads.end(), edit.address) ||
         text == document.value.end() || !text->is_string())
       return true;
     // A name a token of the text spells may now resolve there.
-    const auto &spelled = text->get_ref<const std::string &>();
+    const std::string_view spelled = text->get_ref<const std::string &>();
     for (const auto &name : edit.names) {
       if (name.empty())
         continue;
-      read += spelled.size();
-      readEnough = read > ::neverd::limits::worker::kEngineMaxViewEditTextBytes;
-      if (readEnough || spelled.find(name) != std::string::npos)
+      if (!std::all_of(name.begin(), name.end(), identifierChar)) {
+        // Spelled otherwise than as one identifier: wherever it is.
+        read += spelled.size();
+        readEnough =
+            read > ::neverd::limits::worker::kEngineMaxViewEditTextBytes;
+        if (readEnough || spelled.find(name) != std::string_view::npos)
+          return true;
+        continue;
+      }
+      if (!document.spelledRead) {
+        for (std::size_t at = 0; at < spelled.size();) {
+          if (!identifierChar(spelled[at])) {
+            ++at;
+            continue;
+          }
+          const auto begin = at;
+          while (at < spelled.size() && identifierChar(spelled[at]))
+            ++at;
+          document.spelled.push_back(hashOf(spelled.substr(begin, at - begin)));
+        }
+        std::sort(document.spelled.begin(), document.spelled.end());
+        document.spelled.erase(
+            std::unique(document.spelled.begin(), document.spelled.end()),
+            document.spelled.end());
+        document.spelledRead = true;
+      }
+      if (std::binary_search(document.spelled.begin(), document.spelled.end(),
+                             hashOf(name)))
         return true;
     }
     return false;
