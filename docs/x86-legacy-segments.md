@@ -326,17 +326,19 @@ mode, task/real/VM86 execution, software SMM/SGX, or native device qualification
 Global LLVM release remains gated on those separately documented contracts.
 
 The [November 7 source qualification](evidence/x86-legacy-source-2026-11-07.json)
-records 1,623 executions across the qualification and final `dev` integration:
-1,622 pass, with one explicit KVM LA57 hardware skip and no failures. The new
+records 1,985 executions across qualification and two `dev` integrations:
+1,984 pass, with one explicit KVM LA57 hardware skip and no failures. The new
 41-case source suite runs on both SDKs and P/E core classes at each revision,
 giving 164 passing executions and 1,024 original branch comparisons per
 revision. The four sets of 184 source, manifest, shared-library and i386-object
-artifacts are byte-identical, including after the final integration. Its
+artifacts are byte-identical, including after both integrations. Its
 paging test binaries are also unchanged, retaining the exact 527-case native
 legacy and 570-case r6 full-paging qualification.
 
 Final integration separately passes 88 x64 exporter checks, four real Python
-source-ABI checks and seven native plugin adapter checks per SDK. The initial
+source-ABI checks and seven native plugin adapter checks per SDK. The final
+Android Parcel merge changes only the r6 shared SDK among the recorded
+executables and libraries; its updated ABI and export checks pass. The initial
 two NeverC i386 failures came from omitting its existing explicit full LLVM
 backend option; the corrected invocation passes and the failed run remains a
 diagnostic, outside qualification counts. Embedded Python plugin-host tests
