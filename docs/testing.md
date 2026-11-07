@@ -48,6 +48,17 @@ qualification should retain the explicit unsaved-property bindings and compare
 selected bytes before and after checking. A passing MCH check does not prove
 absence of other overlays or CPU access permission; no device callback runs.
 
+Add `scripts.tests.test_qemu_save_controls` for paging/debug bank transport.
+Authored saves distinguish proven PKRU/PKRS zero omissions from unavailable
+cached PDPTEs and unsaved debug-control/cause inputs. They cover exact debug
+indices, full widths, independent subsection versions, mandatory fields,
+shared CPU/PC checks, enabled A20, preserved pending/halted evidence, no RAM
+reads and atomic CLI failures. Compile C++20 initializers against the actual
+public state headers at O0/O2 and inspect constant object data; execute none
+of the outputs. For real-save qualification, compare banks with existing
+independent register receipts and keep producer choices separate. Neither
+these images nor clear saved inhibition bits establish runtime admission.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU

@@ -325,13 +325,71 @@ errors and rejection of an unrelated entry PC:
 ```sh
 python3 -m unittest scripts.tests.test_qemu_save_snapshot \
   scripts.tests.test_qemu_save_x64 scripts.tests.test_qemu_save_memory \
-  scripts.tests.test_qemu_save_devices scripts.tests.test_qemu_save_q35 -v
+  scripts.tests.test_qemu_save_devices scripts.tests.test_qemu_save_q35 \
+  scripts.tests.test_qemu_save_controls -v
 ```
 
 The interpretation references are QEMU 10.2's
 [x86 VMState fields and omission predicates](https://github.com/qemu/qemu/blob/v10.2.0/target/i386/machine.c),
 [register and flag encodings](https://github.com/qemu/qemu/blob/v10.2.0/target/i386/cpu.h),
 and [KVM bank/event conversion](https://github.com/qemu/qemu/blob/v10.2.0/target/i386/kvm/kvm.c).
+
+## Paging and debug control banks
+
+[`scripts/qemu_save_controls.py`](../scripts/qemu_save_controls.py) projects
+saved controls into the existing `X86PagingState` and `X64PagedDebugState`
+fields. It shares the register adapter's exact CPU, producer version and
+64-bit PC-coordinate checks, and requires captured enabled A20. It reads no
+RAM, walks no pages and creates no execution context.
+
+CR0/CR3/CR4, EFER, RFLAGS and DR0–DR3/DR6/DR7 retain their complete saved bits.
+CPU capabilities such as physical-address width are not inferred from active
+control bits or the host. The existing paging and debug runtime validators
+remain authoritative for mode, feature and execution-profile admission.
+
+The selected QEMU version's omission rules differ by bank:
+
+- An absent `cpu/pkru` or `cpu/pkrs` means zero. Present v1 subsections require
+  the complete 32-bit field, even when the corresponding CR4 feature is off.
+- An absent `cpu/pdptrs` means its cached bank is invalid, not that its four
+  entries are zero. Bind that inactive bank explicitly with `--missing-pdpte`.
+  A present v1 bank is retained and cannot be overridden. Reading current CR3
+  memory would not reconstruct the previously loaded registers.
+- IA32_DEBUGCTL and pending data-breakpoint causes are not serialized by this
+  profile. `--debugctl` and `--pending-data` are required producer inputs, with
+  provenance distinct from captured fields. Passing zero is an explicit
+  binding, not a recovered observation.
+
+For example, after independently establishing the unsaved inputs:
+
+```sh
+python3 -m scripts.qemu_save_controls paused.save \
+  --profile qemu-10.2-kvm-x64 --cpu 0 --expect-pc 0xfffff80000123456 \
+  --debugctl 0 --pending-data 0 --missing-pdpte 0 0 0 0 \
+  --cpp-initializer > captured-controls.inc
+```
+
+Without `--cpp-initializer`, JSON includes each field's origin, exact CPU/PC
+bindings, and raw CPU/common evidence. Failures publish no partial result.
+The C++20 output uses the current public header types and assigns fields by
+name in `constexpr` initializers; it duplicates no layout offsets and needs
+no initialization work at runtime. Copy these bank images into the embedding's
+owned state and bind its feature set, debug profile and physical RAM through
+the existing [paged execution API](x86-paged-execution.md). This internal
+embedding API is not a stable C SDK runtime constructor.
+
+Pending/injected events, halted state, APIC priority and instruction shadows
+are not consumed by this projection. In particular, the selected QEMU KVM
+event-copy path does not preserve `interrupt.shadow`; a clear serialized
+`hflags` inhibition bit is not evidence that both STI and MOV-SS shadows were
+clear. These require an independent producer binding. Bank transport is not
+an executable capture, a complete environment import, a permission check or
+recovery of an uncaptured function invocation.
+
+The interpretation follows the same QEMU
+[CPU VMState fields and omission predicates](https://github.com/qemu/qemu/blob/v10.2.0/target/i386/machine.c)
+and [KVM register/event conversion](https://github.com/qemu/qemu/blob/v10.2.0/target/i386/kvm/kvm.c)
+referenced above. No QEMU post-load callback or guest instruction runs.
 This adapter is independently authored from those format contracts.
 
 ## Supported save format

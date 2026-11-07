@@ -113,15 +113,9 @@ class V6RegisterProjection:
         )
 
 
-def project_v6(snapshot: QemuSaveSnapshot, *, profile: str, cpu: int, apic: int,
-               expected_pc: int, undefined: list[int]) -> V6RegisterProjection:
-    """Bind a captured CPU and its caller-identified APIC without moving PC/SP.
-
-    The producer supplies the CPU/APIC association and QEMU interpretation
-    profile. A projection preserves bank values, not all prerequisites for
-    invoking a continuation; halted/pending state and other banks remain in
-    environment. Undefined is an explicit choice for the first instruction.
-    """
+def _captured_cpu(snapshot: QemuSaveSnapshot, profile: str, cpu: int,
+                  expected_pc: int) -> tuple[dict, list[dict]]:
+    """Share the producer, CPU version and original code-coordinate checks."""
     if profile != PROFILE:
         raise SnapshotError("unsupported QEMU x64 register profile")
     try:
@@ -133,20 +127,37 @@ def project_v6(snapshot: QemuSaveSnapshot, *, profile: str, cpu: int, apic: int,
             machine is None or machine.get("arch") != "x86_64"):
         raise SnapshotError("register projection requires a saved x86_64 KVM domain")
     snapshot.expect_pc(cpu, expected_pc)
-    apic = _integer(apic, "APIC instance", 0xffffffff)
-    if apic not in snapshot.apics:
-        raise SnapshotError(f"APIC {apic} is absent")
-    if snapshot.cpus[cpu]["version"] != 12 or snapshot.apics[apic]["version"] != 3:
-        raise SnapshotError("register profile requires CPU v12 and APIC v3")
-    fields = snapshot.cpus[cpu]["fields"]
-    apic_fields = snapshot.apics[apic]["fields"]
-    choices = [_integer(v, "undefined choice", 0xffffffffffffffff)
-               for v in _array(undefined, 8, "undefined choices")]
+    record = snapshot.cpus[cpu]
+    if record["version"] != 12:
+        raise SnapshotError("register profile requires CPU v12")
+    fields = record["fields"]
     segments = [_segment(v) for v in _array(fields.get("env.segs"), 6, "segment bank")]
     # A saved 32-bit env.eip is an offset, not the V6 linear PC. CS.L and
     # EFER.LMA authenticate the coordinate system; no rebasing is performed.
     if not segments[1]["Attributes"] & 0x2000 or not _uint(fields, "env.efer") & 0x400:
         raise SnapshotError("V6 register projection requires captured 64-bit code")
+    return record, segments
+
+
+def project_v6(snapshot: QemuSaveSnapshot, *, profile: str, cpu: int, apic: int,
+               expected_pc: int, undefined: list[int]) -> V6RegisterProjection:
+    """Bind a captured CPU and its caller-identified APIC without moving PC/SP.
+
+    The producer supplies the CPU/APIC association and QEMU interpretation
+    profile. A projection preserves bank values, not all prerequisites for
+    invoking a continuation; halted/pending state and other banks remain in
+    environment. Undefined is an explicit choice for the first instruction.
+    """
+    record, segments = _captured_cpu(snapshot, profile, cpu, expected_pc)
+    apic = _integer(apic, "APIC instance", 0xffffffff)
+    if apic not in snapshot.apics:
+        raise SnapshotError(f"APIC {apic} is absent")
+    if snapshot.apics[apic]["version"] != 3:
+        raise SnapshotError("register profile requires CPU v12 and APIC v3")
+    fields = record["fields"]
+    apic_fields = snapshot.apics[apic]["fields"]
+    choices = [_integer(v, "undefined choice", 0xffffffffffffffff)
+               for v in _array(undefined, 8, "undefined choices")]
     result = {
         "GPR": [_integer(v, "GPR", 0xffffffffffffffff)
                 for v in _array(fields.get("env.regs"), 16, "GPR bank")],
