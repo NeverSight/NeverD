@@ -4487,6 +4487,9 @@ found there too, under the functions it scanned, so a later session finishes its
 index from those rows once its discovery ends. A store's session writes where its
 records lie beside its file (`.ndri`) when it ends or its job reaches the last
 function, so a later session reads that and walks only what it leaves out.
+An index entry's page table must fit its record, as it must in the store file.
+An invalid index is discarded before reading pages; the original file still
+recovers every complete record.
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's, and only a new name of data
 or a data item, which pages spell, forgets the renders and moves to a store of its

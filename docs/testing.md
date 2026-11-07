@@ -6120,7 +6120,9 @@ it, a new name of data, a data item and another build of the worker start over,
 a job that starts over stops reading and adding, a record cut short is rendered
 again alone, and a damaged one reads the engine. A session reads past a record it
 could not walk through the index a finished job wrote, walks a file whose index does
-not fit it, and loses only the record an index misplaces.
+not fit it, and loses only the record an index misplaces. An index whose page
+count exceeds its record's length is discarded; complete records in the original
+file still reproduce their exact source without asking the engine.
 `WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
 through a real view.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
