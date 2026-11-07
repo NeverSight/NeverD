@@ -306,6 +306,9 @@ budget exhausted and 259 pending event delivery. Values 0–8 retain
 `X86LegacyExecutionStatus`; these are independent of the x64 continuation
 status namespace. `lastResult()` retains detailed progress, exceptions,
 device effects and self modifications; `lastError()` explains a refusal.
+Changed code requires a replacement selection. Shutdown is terminal for that
+CPU activation; a producer-owned machine reset is required before executing
+again. Neither condition is an automatic retry.
 
 When delivery is pending after a backing or event-work stop, selection returns
 259. Repair the physical backing if needed, call `context.resume()`, inspect
