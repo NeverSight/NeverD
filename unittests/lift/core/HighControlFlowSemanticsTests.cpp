@@ -1904,6 +1904,30 @@ TEST(HighControlFlowSemantics, ATruthValueSelectingOneOrZeroIsItself) {
   EXPECT_EQ(F.Body[1].RetVal->Op, NdOp::INT_AND);
 }
 
+TEST(HighControlFlowSemantics, LeafSimplificationKeepsCallsAndSharedUses) {
+  const auto Input = local(0);
+  const auto Zero = HighExpr::makeConst(0, 8);
+  auto Call = HighExpr::makeCall("indirect", 0x4000, {});
+  Call->Type = NdType::makeInt(8);
+  Call->IsIndirectCall = true;
+  Call->IndirectTarget = HighExpr::makeLoad(local(1), NdType::makeInt(8),
+                                            NdMemoryOrdering::Acquire);
+  auto Kept = HighExpr::makeBinop(NdOp::INT_MULT, Call, Zero);
+  auto Shared = HighExpr::makeBinop(NdOp::INT_ADD, Zero, Input);
+  HighFunc F;
+  F.Body = {result(0, Input), result(4, Zero),    result(8, Call),
+            result(12, Kept), result(16, Shared), result(20, Shared)};
+  EXPECT_TRUE(simplifyAllExprs(F.Body));
+  EXPECT_EQ(F.Body[0].RetVal, Input);
+  EXPECT_EQ(F.Body[1].RetVal, Zero);
+  EXPECT_EQ(F.Body[2].RetVal, Call);
+  EXPECT_EQ(F.Body[3].RetVal, Kept);
+  EXPECT_TRUE(Kept->hasOrderedMemoryAccess());
+  EXPECT_EQ(F.Body[4].RetVal, Input);
+  EXPECT_EQ(F.Body[5].RetVal, Input);
+  EXPECT_FALSE(simplifyAllExprs(F.Body));
+}
+
 TEST(HighControlFlowSemantics, MemoryBoundaryAncestorsMatchIndividualQueries) {
   for (const bool Atomic : {false, true}) {
     auto Memory = HighExpr::makeLoad(local(0), NdType::makeInt(8));

@@ -20560,6 +20560,9 @@ single-use inlining and both copy-folding passes after count-based admission.
 Ordinary reads keep their earlier value across an intervening store; atomic
 and segmented reads retain their original expression at the original statement.
 Run the same source suites when changing the order of candidate checks.
+`LeafSimplificationKeepsCallsAndSharedUses` retains no-argument indirect calls
+and their ordered target, propagates a shared arithmetic replacement to both
+uses, and reports no progress when the next simplification leaves them intact.
 
 ### Predicate cleanup and independent call effects
 

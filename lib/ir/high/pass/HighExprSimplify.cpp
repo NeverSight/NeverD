@@ -1848,6 +1848,11 @@ simplifyExprGraph(ExprPtr &Root, HighExprSet &Seen,
   auto Enter = [&](ExprPtr &E) {
     if (!E)
       return false;
+    // Every local rewrite below needs an operand. Leaves cannot change, so
+    // they need neither a replacement lookup nor a traversal frame. The
+    // separate effect analysis still includes them and indirect targets.
+    if (E->Operands.empty())
+      return false;
     if (const auto It = Replacements.find(E); It != Replacements.end()) {
       Changed |= E != It->second;
       E = It->second;
