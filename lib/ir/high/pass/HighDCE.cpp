@@ -20,6 +20,7 @@
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/support/Diagnostic.h"
 
@@ -165,7 +166,14 @@ public:
     std::vector<size_t> Work;
     for (size_t I = 0; I < Nodes.size(); ++I) {
       const HighExpr *E = Nodes[I].Expr;
-      if (E->Kind == ExprKind::Call || E->Kind == ExprKind::Store ||
+      const bool DiscardableRead =
+          E->Kind == ExprKind::Call && E->Type &&
+          E->Type->Kind == NdTypeKind::Int && E->Operands.empty() &&
+          E->IntrinsicOutputs.empty() && !E->IndirectTarget &&
+          !E->IsIndirectCall &&
+          intrinsicHasDiscardableStateRead(E->IntrinsicId, 1, E->Type->Size);
+      if ((E->Kind == ExprKind::Call && !DiscardableRead) ||
+          E->Kind == ExprKind::Store ||
           E->MemoryOrdering != NdMemoryOrdering::None ||
           E->MemoryAddressSpace != NdMemoryAddressSpace::Default) {
         Nodes[I].Observable = true;

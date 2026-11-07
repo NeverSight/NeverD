@@ -12,6 +12,8 @@
 
 #include "neverd/backend/c/pass/LLVMC/LLVMCPasses.h"
 #include "neverd/backend/llvm/LLVMSyscallAsm.h"
+#include "neverd/backend/llvm/X86/LLVMX86StackEffects.h"
+#include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/InlineAsm.h"
@@ -19,6 +21,23 @@
 #include <stdexcept>
 
 namespace neverd {
+
+bool isDiscardableX86FlagRead(Arch TheArch, const llvm::CallInst &Call) {
+  if (TheArch != Arch::X86 && TheArch != Arch::X64)
+    return false;
+  const auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
+  const unsigned Bytes = TheArch == Arch::X64 ? 8 : 4;
+  return IA && Call.arg_empty() && Call.getType()->isIntegerTy(Bytes * 8) &&
+         intrinsicHasDiscardableStateRead(Intrinsic::Pushf, 1, Bytes) &&
+         Call.getMetadata(X86StackTemporaryMetadata) &&
+         Call.getFunction()->hasFnAttribute(llvm::Attribute::NoRedZone) &&
+         !Call.hasOperandBundles() && !Call.isTailCall() &&
+         IA->hasSideEffects() && !IA->isAlignStack() && !IA->canThrow() &&
+         IA->getDialect() == llvm::InlineAsm::AD_ATT &&
+         IA->getConstraintString() == "=r,~{memory}" &&
+         IA->getAsmString() ==
+             (TheArch == Arch::X64 ? "pushfq\n\tpopq $0" : "pushfl\n\tpopl $0");
+}
 
 bool isLinuxX64SyscallInlineAsm(const llvm::CallInst &Call) {
   const auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());

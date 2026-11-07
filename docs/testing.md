@@ -21409,3 +21409,5 @@ and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
 frontend regressions and 91 generated-table tests passed. NeverC's strict
 global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
+
+`NeverDHighFlagReadTests` covers unused/live EFLAGS images, malformed or unowned calls, branch anchors, exact owned x86/x64 LLVM assembly and retained write ordering. LLVM cleanup changes only the source clone; the original module and native code generation stay intact.
