@@ -3,9 +3,9 @@
   "overall_arm64e_complete": false,
   "scope": "Controlled PAC execution of unchanged self-contained Darwin explicit scalar, 128-bit integer, one/two-word record and f32/f64 HFA calls, including register exhaustion, packed fixed stack placement, and whole aligned variadic values. Default promotions apply to scalar tails; HFA members retain their original widths. Supplied prototypes, not automatic complete recovery. Indirect copies/results, arbitrary records, authenticated whole images, native Apple execution, signed exception unwinding and exact fault PC/ESR remain unqualified.",
   "initial_base_revision": "198607e865914942f7aef8b6c60cc89a285837a2",
-  "integrated_dev_revision": "fee4ae41908b2747cff576b6d8a9daa42e48eed8",
+  "integrated_dev_revision": "a092b275fc37ca8cc4ad4dcd08b40e280d0bbb8c",
   "model_input_revision": "569b2eba2e256435f3f22c1388328ca05ede5d28",
-  "integration_revision": "79873805afebdf6cb56bc89b509b06e1cab9e09f",
+  "integration_revision": "a9b487a015a3747eddd7942b0c9fdc17bfe51d97",
   "environment_repository": "https://github.com/gmh5225/test_mac_intel",
   "environment_revision": "6466a9cd8763ad4b0aa960d20fba4aa371102d15",
   "environment_pr": "https://github.com/gmh5225/test_mac_intel/pull/3",
@@ -27,7 +27,7 @@
     "host_compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)\nTarget: arm64-apple-darwin24.6.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
     "build_receipt": {
       "status": "success",
-      "started_at": "2026-11-07T03:33:56.315247+00:00",
+      "started_at": "2026-11-07T03:54:18.161676+00:00",
       "options": [
         "--target",
         "NeverDSourceCallABITests",
@@ -43,7 +43,7 @@
       "scope": "Only the requested build targets and configuration; not all features or tests.",
       "snapshot": {
         "schema": 1,
-        "resolved_at": "2026-11-07T03:33:58.381156+00:00",
+        "resolved_at": "2026-11-07T03:54:20.028145+00:00",
         "sources": {
           "neverd_highway": {
             "repository": "https://github.com/NeverSight/highway.git",
@@ -82,7 +82,7 @@
           }
         }
       },
-      "snapshot_sha256": "c084dfde59d3e522e0bd46a8a1c9b73986d415c33aeaddf48476384e502c02b4",
+      "snapshot_sha256": "91cbe2ad413695109fbd59278b2c091b17ec87c2bd48ad4d86b1ba079e3ffc70",
       "configuration": "Release",
       "configure_inputs": {
         "purpose": "configure_inputs",
@@ -132,13 +132,14 @@
       },
       "inputs_sha256": "0a2047e110412d0ca2908fa8847878fc1e1b25d5238139c4ba78f8a6b2030dde",
       "cache_sha256": "3c7bd9cc1e0153eb083573bbc17d0e1790bc9232e7df8c8e32a4785f044cd745",
-      "finished_at": "2026-11-07T03:34:51.029082+00:00"
+      "finished_at": "2026-11-07T03:55:10.258002+00:00"
     },
     "dependency_checkouts": [
       {
         "path": "third_party/capstone",
         "original": "88f3e3966565fb9383cd4fbb20c051c9aa22f309",
-        "build_revision": "dcca2885585d16a03be2aa471e8a8ca61c1da9d1"
+        "build_revision": "ba71bc73998720da4b7b4ff2e62d49400a7296c3",
+        "prior_build_revision": "dcca2885585d16a03be2aa471e8a8ca61c1da9d1"
       },
       {
         "path": "third_party/unicorn",
@@ -148,6 +149,38 @@
     ]
   },
   "validation": {
+    "full_cpp_revision": "79873805afebdf6cb56bc89b509b06e1cab9e09f",
+    "full_cpp_capstone_revision": "dcca2885585d16a03be2aa471e8a8ca61c1da9d1",
+    "publication_dependency_integration": {
+      "capstone_revision": "ba71bc73998720da4b7b4ff2e62d49400a7296c3",
+      "scope": "The subsequent dev change touches only Capstone x86/RISC-V mapping and its tests/docs; AArch64 and public interfaces are unchanged. Rebuilt publication artifacts repeat core ABI and LLVM array-boundary checks, the complete SDK test and all 58 typed exports. The full six-owner CTest inventory remains attributed to its exact earlier revision.",
+      "smoke": {
+        "revision": "a9b487a015a3747eddd7942b0c9fdc17bfe51d97",
+        "results": [
+          {
+            "executable": "NeverDSourceCallABITests",
+            "returncode": 0,
+            "tests": 23,
+            "failures": 0,
+            "errors": 0
+          },
+          {
+            "executable": "NeverDIntegerCallArgumentsTests",
+            "returncode": 0,
+            "tests": 13,
+            "failures": 0,
+            "errors": 0
+          },
+          {
+            "executable": "NeverDLLVMCValueTests",
+            "returncode": 0,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0
+          }
+        ]
+      }
+    },
     "cpp_owners": [
       "NeverDSourceCallABITests",
       "NeverDSourceEntryBindingTests",
@@ -175,7 +208,7 @@
       }
     ],
     "typed_tests": 58,
-    "typed_longest_case_seconds": 2.047,
+    "typed_longest_case_seconds": 2.156,
     "cpp_passed": 804,
     "cpp_skipped": 21,
     "skipped_cases": [
@@ -835,19 +868,29 @@
       ]
     },
     "environment_tests": 41,
+    "publication_binary_sha256": {
+      "NeverDSourceCallABITests": "2b062afb66e219b2a6525fbf449b249f743ee8781860a48e8d39a577cdafc86d",
+      "NeverDIntegerCallArgumentsTests": "bfc38ae69e9eeb1899e44a5a341fdc4391f7f8fdae9eff7d7c4ab9df58f27cea",
+      "NeverDLLVMCValueTests": "8140f8b8bc0d8b78d64efcdaf5109d953586466b7464ede546ea5127232b8cf1",
+      "NeverDAArch64AuthenticatedCallTests": "2c216406038581760f999cf9a9604335729ac0998f3ad08350aa09d50b2e8fe2",
+      "libneverd.dylib": "bacccf2e45af83d2e82cbfb000811d50b21e9babbe0bd99cf321257d364f569c"
+    },
     "report_sha256": {
-      "publication-verification.json": "40ebce4e1504409568edb85802884fb779af7b7cbb4c0ba913821dd9a6c8e066",
-      "publication-export-comparison.json": "27a431a65f67056cdd5f9122c28498883be58bc9ccdedc6926b428f98722d211",
+      "publication-verification.json": "f26900158b986347c5285f2a3867705a3a88eb8ea15368f1c983f94c3020d618",
+      "dependency-smoke.json": "74fddd298905a7567a60226953174f9acb3b76afd7c79c0d04187e12787e6389",
+      "typed-integration-fee4.json": "74c46956591a0a60855d8af11f00383710125c553fa2c93015656813cbef413a",
+      "build-receipt-fee4.json": "0c892dda7e65300ececd1c130d44504bb221561b54012055f5965125327a1bdf",
+      "publication-export-comparison.json": "9790be9084b7dcb29abd28f59ba45f1304edf0868cf039fd0a711c4e5c4b8d6e",
       "integration/abi-summary.json": "5d46aea06c4fa32d32ab349ebe4a09b69724b4256882c336cf71448f82f53187",
       "integration/inventory.json": "2ed987225f599da364870b4af7f0d7492dd456e24e52d0eeb2f8f13897ddf96b",
       "integration/selected.json": "5ad94d656ec8e3fbcff816c2f6407f284c9f953d5227b78bad8ef4c3e4dd776a",
       "integration/abi-fast.xml": "124f4a45142323da77b81dcd10bfbe2890ccf689bc1083e4dfccb591a090ef51",
       "integration/abi-incoming.xml": "a3327e91b545b5d81a80d3a5f5817aeb208ff158049a12e47027250ab55ab481",
-      "typed-integration.json": "74c46956591a0a60855d8af11f00383710125c553fa2c93015656813cbef413a",
+      "typed-integration.json": "1b56538c5c6f344237815eb31bdc38feb4b720a32ff1de56dbc966a8ef93ca47",
       "sdk-integration/summary.json": "d00d9938ddcbbc91294f54dd3bb2bd6203c94cbd6ddc79c238faab1cedc93244",
       "environment-batched-tests.log": "da901c3a9acd1b20f21a9a5aa149c0b04d8c1e5647b48c8f07e5c5afe5781202",
       "format-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "build-integration.log": "a312caa3dfa2a2813786d1fdaf9a4ddba3c9db6f6f94b354622a77c589e25ed4"
+      "build-integration.log": "e15de466aca2392825bcad253e7ed824beed95bce0417cd9df14675b121e48dc"
     },
     "retained_failures_sha256": {
       "build.log": "e792b2363f6469892e11a17f9dd931a5998ebfafa3edf6592f73f7939c24e304",
