@@ -36,6 +36,21 @@ public:
     S.EIP = Fallthrough;
     uint32_t A = 0, B = 0;
     const unsigned N = F.Bytes;
+    if (F.DescriptorQuery) {
+      if (!read(F.Source, 2, B))
+        return;
+      auto Query = queryLegacyDescriptor(S.Core, M, *F.DescriptorQuery, B);
+      if (!Query) {
+        Failure = Query.takeError();
+        return;
+      }
+      if (!accept(static_cast<X86MemoryAccessResult &>(*Query)))
+        return;
+      if (Query->Visible && F.Destination.Register)
+        writeRegister(*F.Destination.Register, N, Query->Value);
+      S.EFlags = (S.EFlags & ~64u) | (Query->Visible ? 64 : 0);
+      return;
+    }
     if ((F.Operation == Op::CountPopulation && !O.IntegerExtensions->POPCNT) ||
         (F.carryChain() && !O.IntegerExtensions->ADX) ||
         (F.BMI && !F.BMI->enabled(*O.IntegerExtensions))) {

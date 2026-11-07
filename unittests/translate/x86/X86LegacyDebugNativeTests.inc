@@ -43,6 +43,7 @@ protected:
     std::optional<X86LegacyIntegerExtensions> IntegerExtensions;
     std::optional<uint32_t> BitCountUndefinedFlags;
     std::optional<uint32_t> BMIUndefinedFlags;
+    std::optional<X86LegacyDescriptorProfile> DescriptorQueries;
   };
 
   enum Case {
@@ -541,6 +542,7 @@ protected:
       Options.IntegerExtensions = Watch->IntegerExtensions;
       Options.BitCountUndefinedFlags = Watch->BitCountUndefinedFlags;
       Options.BMIUndefinedFlags = Watch->BMIUndefinedFlags;
+      Options.DescriptorQueries = Watch->DescriptorQueries;
     }
     if (Execute && Execute->Resume)
       Options.LogicalAuxiliaryCarry = false;
