@@ -158,7 +158,7 @@ class LowWordDecisions {
     if ((Cache.size() + 1) * 4 < Buckets * 3)
       return true;
     const auto Next =
-        std::max(limits::kResidueDecisionMinMapBuckets, 2 * Buckets);
+        std::max(limits::kResidueMinDenseMapBuckets, 2 * Buckets);
     if (!charge(0, Next * sizeof(typename Map::value_type)))
       return false;
     Cache.reserve(Cache.size() + 1);

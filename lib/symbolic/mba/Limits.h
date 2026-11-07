@@ -93,7 +93,9 @@ inline constexpr unsigned kMinResidueDecisionWidePairingBits = 6;
 inline constexpr std::size_t kResidueDecisionPartialPairingDivisor = 2;
 inline constexpr unsigned kResidueDecisionPolynomialFirstBits = 6;
 inline constexpr std::size_t kResidueDecisionPolynomialFirstNodes = 512;
-inline constexpr std::size_t kResidueDecisionMinMapBuckets = 64;
+// LLVM dense maps start with 64 buckets. Residue caches prepay each complete
+// bucket allocation before insertion, including this initial table.
+inline constexpr std::size_t kResidueMinDenseMapBuckets = 64;
 inline constexpr unsigned kMaxResidueDecisionSynthesisInputs = 6;
 inline constexpr unsigned kMaxUnconditionedResidueDecisionBits = 3;
 inline constexpr std::size_t kMaxResidueDecisionPolynomialTerms = 256;

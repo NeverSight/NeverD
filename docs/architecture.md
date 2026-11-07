@@ -14413,6 +14413,10 @@ walk while preserving combination order and per-combination work charges.
 It borrows cached factor tables only until the next cache insertion and
 initializes new coefficients from their first contribution, avoiding repeated
 wide-table copies and temporary zero coefficients during accumulation.
+Affine prefix inference stores completed value/known-mask facts by exact node
+and queried precision in a dense cache. Facts are copied before recursion;
+bucket growth is fully charged before allocation, and incomplete queries are
+never cached. Partial known bits still cannot stand in for constant prefixes.
 Textual coefficients that fit in 64 bits use one native integer parse; the
 constant builder still owns width truncation and zero extension, and larger
 literals retain arbitrary-precision parsing.
