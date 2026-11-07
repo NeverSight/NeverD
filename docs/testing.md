@@ -21456,3 +21456,5 @@ recorded baseline; this change adds none and does not weaken the audit.
 `SymKnownBits` bounded unsigned-remainder regressions cover dynamic nonzero divisors, possibly zero divisors, exhausted dividends and 8/16/32/64/128-bit bounds; the extracted-bit MBA regression checks that a consumer uses the fact without assuming division is partial.
 
 `SymExpr.PlainVariableIndexKeepsLeafIdentityAcrossGrowthAndCopies` checks complete name/width identity, embedded NULs, growth, copies and repeated declarations without creating new nodes.
+
+`SymExpr` variable-membership checks compare structural membership with full variable collection, including context copies and missing IDs. Substitution checks retain unrelated shared payloads, exact root order, non-variable keys and simultaneous replacement semantics.

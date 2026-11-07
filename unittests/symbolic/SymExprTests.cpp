@@ -1843,3 +1843,65 @@ TEST(SymExpr, PlainVariableIndexKeepsLeafIdentityAcrossGrowthAndCopies) {
   EXPECT_EQ(Copy.width(New), 32u);
   EXPECT_FALSE(C.hasVarName("copy_only"));
 }
+
+TEST(SymExpr, SingleVariableSubstitutionRetainsUnrelatedPayloads) {
+  SymContext C;
+  const auto Frame = C.mkVar("substitution_frame", 64);
+  const auto Data = C.mkVar("substitution_data", 64);
+  const auto Key = C.mkVar("substitution_key", 64);
+  auto Payload = Data;
+  for (unsigned I = 0; I < 48; ++I)
+    Payload = C.mkXor(C.mkAdd(Payload, Data), Key);
+  const auto Root = C.mkAdd(Frame, Payload);
+  const auto Aligned =
+      C.mkOr(C.mkAnd(Frame, C.mkConst(64, uint64_t(-16))), C.mkConst(64, 8));
+  const auto Expected = C.mkAdd(Aligned, Payload);
+  const std::vector<SymRef> Roots{Payload, Root, Key, Frame};
+  const auto Before = C.numNodes();
+  const auto Results = C.substituteAll(Roots, {{Frame.index(), Aligned}});
+  EXPECT_EQ(Results, (std::vector<SymRef>{Payload, Expected, Key, Aligned}));
+  EXPECT_EQ(C.numNodes(), Before);
+  EXPECT_EQ(C.substituteVar(Payload, C.varId(Frame), Aligned), Payload);
+}
+
+TEST(SymExpr, VariableMembershipMatchesStructuralCollection) {
+  SymContext C;
+  const auto A = C.mkVar("membership_first", 32);
+  const auto Missing = C.mkVar("membership_gap", 32);
+  const auto B = C.mkVar("membership_last", 32);
+  auto Value = B;
+  for (unsigned I = 0; I < 32; ++I) {
+    Value = C.mkXor(C.mkAdd(Value, B), C.mkShl(A, C.mkConst(32, I % 31)));
+    llvm::SmallVector<uint32_t> Variables;
+    C.collectVars(Value, Variables);
+    const auto Before = C.numNodes();
+    for (uint32_t Id = 0; Id <= C.numVars(); ++Id)
+      EXPECT_EQ(C.containsVariable(Value, Id),
+                std::find(Variables.begin(), Variables.end(), Id) !=
+                    Variables.end());
+    EXPECT_FALSE(C.containsVariable(Value, C.varId(Missing)));
+    EXPECT_FALSE(C.containsVariable(Value, uint32_t(-1)));
+    EXPECT_EQ(C.numNodes(), Before);
+  }
+  const auto Later = C.mkVar("membership_appended", 32);
+  const auto Extended = C.mkAdd(Value, Later);
+  EXPECT_FALSE(C.containsVariable(Value, C.varId(Later)));
+  EXPECT_TRUE(C.containsVariable(Extended, C.varId(Later)));
+  auto Copy = C;
+  EXPECT_TRUE(Copy.containsVariable(Extended, C.varId(Later)));
+  EXPECT_FALSE(Copy.containsVariable(Extended, C.varId(Missing)));
+  EXPECT_FALSE(C.containsVariable(C.mkZero(32), C.varId(A)));
+}
+
+TEST(SymExpr, VariableMembershipDoesNotRestrictOtherSubstitutionKeys) {
+  SymContext C;
+  const auto A = C.mkVar("substitution_left", 64);
+  const auto B = C.mkVar("substitution_right", 64);
+  const auto Part = C.mkXor(A, B);
+  const auto Root = C.mkAdd(Part, A);
+  EXPECT_EQ(C.substitute(Root, {{Part.index(), C.mkConst(64, 17)}}),
+            C.mkAdd(C.mkConst(64, 17), A));
+  EXPECT_EQ(C.substitute(Root, {{A.index(), C.mkOne(64)},
+                                {B.index(), C.mkConst(64, 3)}}),
+            C.mkConst(64, 3));
+}
