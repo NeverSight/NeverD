@@ -165,9 +165,13 @@ private:
     const char C = Source[At];
     if (llvm::isAlpha(C) || C == '_' || C == '$') {
       const size_t Start = At;
-      while (At < Source.size() && (llvm::isAlnum(Source[At]) ||
-                                    Source[At] == '_' || Source[At] == '$'))
-        advance();
+      // The first byte already starts an identifier, and none of its
+      // continuation bytes can be a newline. Update the column once.
+      do {
+        ++At;
+      } while (At < Source.size() && (llvm::isAlnum(Source[At]) ||
+                                      Source[At] == '_' || Source[At] == '$'));
+      Column += static_cast<unsigned>(At - Start);
       const llvm::StringRef Word = Source.slice(Start, At);
       // An encoding prefix directly before a quote: L"A", u'A', u8"A".
       if (At < Source.size() && (Source[At] == '"' || Source[At] == '\'')) {
@@ -564,11 +568,6 @@ const llvm::StringMap<Builtin> &builtinWords() {
 
 /// The words that make builtin types together: unsigned long long int.
 bool builtinKeyword(llvm::StringRef Word) {
-  // The shortest and longest builtin spellings bound this fixed lookup.
-  // Ordinary identifiers outside that range cannot match any keyword.
-  if (Word.size() < llvm::StringLiteral("int").size() ||
-      Word.size() > llvm::StringLiteral("__signed__").size())
-    return false;
   return llvm::is_contained(
       std::initializer_list<llvm::StringRef>{
           "void",    "char",     "short",     "int",        "long",

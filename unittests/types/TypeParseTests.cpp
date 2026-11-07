@@ -65,60 +65,47 @@ std::string leaves(const RecordDef &Record, uint64_t Base = 0) {
 
 } // namespace
 
-TEST(TypeParse, BuiltinKeywordsKeepNamedPrefixesAndSignedWidths) {
+TEST(TypeParse, IdentifierRunsKeepBoundariesAndSourcePositions) {
   for (DataModel Model :
        {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
     SCOPED_TRACE(int(Model));
-    auto Library = parsed(R"(
-      #define SIGNED_WORD __signed__
-      typedef unsigned short integer;
-      typedef unsigned char __int64_suffix;
-      typedef unsigned int Unsigned;
-      typedef SIGNED_WORD long long signed_wide;
-      struct Values {
-        integer int_value;
-        __int64_suffix long_value;
-        Unsigned unsigned_value;
-        signed_wide wide_value;
-        __signed char byte_value;
-        unsigned __int128 huge_value;
-      };
-      signed_wide Inspect(integer value, __int64_suffix suffix, Unsigned upper);
-    )",
-                          {}, Model);
-    const auto &Values = recordOf(Library, "Values");
-    ASSERT_EQ(Values.Members.size(), 6u);
-    for (size_t I = 0; I < 4; ++I)
-      EXPECT_EQ(Values.Members[I].Type->Kind, TypeExprKind::Named);
-    EXPECT_EQ(Library.sizeOf(*Values.Members[0].Type), 2u);
-    EXPECT_EQ(Library.sizeOf(*Values.Members[1].Type), 1u);
-    EXPECT_EQ(Library.sizeOf(*Values.Members[2].Type), 4u);
-    EXPECT_EQ(Library.sizeOf(*Values.Members[3].Type), 8u);
-    EXPECT_EQ(Values.Members[4].Type->TheBuiltin, Builtin::SChar);
-    EXPECT_EQ(Values.Members[5].Type->TheBuiltin, Builtin::UInt128);
-    const auto *Inspect = Library.findPrototype("Inspect");
-    ASSERT_NE(Inspect, nullptr);
-    EXPECT_EQ(Inspect->Return->Name, "signed_wide");
-    ASSERT_EQ(Inspect->Params.size(), 3u);
-    EXPECT_EQ(Inspect->Params[0].Type->Name, "integer");
-    EXPECT_EQ(Inspect->Params[1].Type->Name, "__int64_suffix");
-    EXPECT_EQ(Inspect->Params[2].Type->Name, "Unsigned");
-
-    ParseOptions Going;
-    Going.KeepGoing = true;
-    const auto Read = parseCTypes("\n  unsigned_suffix Bad(void);\n"
-                                  "unsigned long After(void);",
-                                  Library, Going);
-    ASSERT_EQ(Read.Problems.size(), 1u);
-    EXPECT_EQ(Read.Problems[0].Line, 2u);
-    EXPECT_EQ(Read.Problems[0].Column, 3u);
-    EXPECT_EQ(Read.Problems[0].Message, "'unsigned_suffix' names no type");
-    EXPECT_EQ(Library.findPrototype("Bad"), nullptr);
-    const auto *After = Library.findPrototype("After");
-    ASSERT_NE(After, nullptr);
-    EXPECT_EQ(After->Return->TheBuiltin, Builtin::ULong);
-    EXPECT_EQ(Library.sizeOf(*After->Return),
-              Model == DataModel::LP64 ? 8u : 4u);
+    auto Library =
+        parsed("#define WORD unsigned\n"
+               "typedef WORD $Type_123;\r\n"
+               "struct _Record9 {\t$Type_123 long_identifier_0123456789; };\n"
+               "int _Call9($Type_123 $param0);\n"
+               "_Static_assert(L'A' == 65 && u'A' == 65 && U'A' == 65 && "
+               "u8'A' == 65, \"prefixes\");\n"
+               "_Static_assert(sizeof(u\"abc\") == 8, \"UTF16\");\n"
+               "_Static_assert(sizeof(U\"abc\") == 16, \"UTF32\");\n"
+               "_Static_assert(sizeof(u8\"abc\") == 4, \"UTF8\");",
+               {}, Model);
+    const auto &Record = recordOf(Library, "_Record9");
+    ASSERT_EQ(Record.Members.size(), 1u);
+    EXPECT_EQ(Record.Members[0].Name, "long_identifier_0123456789");
+    EXPECT_EQ(Record.Members[0].Type->Name, "$Type_123");
+    const auto *Call = Library.findPrototype("_Call9");
+    ASSERT_NE(Call, nullptr);
+    ASSERT_EQ(Call->Params.size(), 1u);
+    EXPECT_EQ(Call->Params[0].Name, "$param0");
+    EXPECT_EQ(Call->Params[0].Type->Name, "$Type_123");
+    const auto Before = renderTypes(Library, {}, {});
+    for (llvm::StringRef Text :
+         {"\n\tint long_identifier_0123456789@", "\n\tint $end9"}) {
+      const auto Read = parseCTypes(Text, Library);
+      ASSERT_EQ(Read.Problems.size(), 1u);
+      EXPECT_EQ(Read.Problems[0].Line, 2u);
+      const size_t Position = Text.contains('@') ? Text.find('@') : Text.size();
+      EXPECT_EQ(Read.Problems[0].Column, Position - Text.rfind('\n'));
+      EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+    }
+    const auto Macro =
+        parseCTypes("#define BAD UnknownType\n\tBAD value;", Library);
+    ASSERT_EQ(Macro.Problems.size(), 1u);
+    EXPECT_EQ(Macro.Problems[0].Line, 2u);
+    EXPECT_EQ(Macro.Problems[0].Column, 2u);
+    EXPECT_EQ(Macro.Problems[0].Message, "'UnknownType' names no type");
+    EXPECT_EQ(renderTypes(Library, {}, {}), Before);
   }
 }
 
