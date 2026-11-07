@@ -17,13 +17,21 @@
 #include "neverd/support/ProjectFiles.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
+#include <exception>
 #include <fstream>
+#include <functional>
+#include <iostream>
 #include <iterator>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -575,6 +583,25 @@ bool stateMatches(const fs::path &binary, const State &expected,
 #include "UserStateTables.def"
   return matches && expected.size() == tables;
 }
+/// Whether the user's files hold exactly \p contents.
+bool sameBytes(const fs::path &binary, const fs::path &history,
+               const FileContents &contents) {
+#define NEVERD_USER_STATE_TABLE(Table, Kind, Id, Optional)                     \
+  {                                                                            \
+    const auto path = sidecar(binary, project_files::File::Id);                \
+    if (!sameText(                                                             \
+            contents, path,                                                    \
+            readText(                                                          \
+                path,                                                          \
+                ::neverd::limits::worker::kProjectHistoryMaxStateFileBytes)))  \
+      return false;                                                            \
+  }
+#include "UserStateTables.def"
+  return sameText(
+      contents, history,
+      readText(history,
+               ::neverd::limits::worker::kProjectHistoryMaxHistoryBytes));
+}
 bool historyMatches(const fs::path &path, std::string_view expected,
                     const FileContents &contents) {
   constexpr auto limit =
@@ -584,6 +611,177 @@ bool historyMatches(const fs::path &path, std::string_view expected,
          parseFile(path, text, limit) == transport::parseBackendJson(expected);
 }
 } // namespace
+
+/// One journaled publication of the user's files: a journal of both sides, the
+/// files, the journal gone.  It reads immutable snapshots, so another thread
+/// can run it.
+struct ProjectHistory::Transaction {
+  std::string head;
+  std::shared_ptr<const Snapshot> before, after;
+  /// Encodings of \p before where the snapshot holds none a journal can embed.
+  std::string beforeState, beforeHistory;
+  std::map<fs::path, std::shared_ptr<const std::string>> files;
+  /// Whether the files were found to hold \p before when it was made.
+  bool checked = true;
+
+  std::array<std::string_view, 9> parts() const {
+    return {",\"before\":",
+            beforeState.empty() ? std::string_view(before->stateText)
+                                : std::string_view(beforeState),
+            ",\"before_history\":",
+            beforeHistory.empty() ? std::string_view(*before->document)
+                                  : std::string_view(beforeHistory),
+            ",\"after\":",
+            after->stateText,
+            ",\"after_history\":",
+            *after->document,
+            "}"};
+  }
+  std::size_t journalSize() const {
+    auto size = head.size();
+    for (const auto part : parts())
+      size += part.size();
+    return size;
+  }
+  void writeJournal(AtomicWriter writer, const fs::path &journalPath) const {
+    std::string journal;
+    journal.reserve(journalSize());
+    journal += head;
+    for (const auto part : parts())
+      journal += part;
+    writer(journalPath, journal);
+  }
+  /// From a journal written, any failure leaves it recoverable.
+  void writeFiles(AtomicWriter writer, const fs::path &journalPath,
+                  const fs::path &historyPath) const {
+    for (const auto &[path, text] : files)
+      writer(path, *text);
+    writer(historyPath, *after->document);
+    std::error_code ec;
+    if (!fs::remove(journalPath, ec) || ec)
+      throw Error("recovery_required", "User edits were saved but journal "
+                                       "cleanup failed; retry Save to recover");
+  }
+};
+
+/// Runs transactions in the order they came on a thread of its own, started
+/// with the first.  One not yet begun takes what follows it, so a burst of
+/// edits comes to one journaled write.  One that throws stays first and stops
+/// the rest until finish asks again.
+class ProjectHistory::Writes {
+public:
+  Writes(fs::path binary, fs::path history, fs::path journal,
+         AtomicWriter writer)
+      : binary_(std::move(binary)), history_(std::move(history)),
+        journal_(std::move(journal)), writer_(writer) {}
+  ~Writes() {
+    {
+      std::lock_guard lock(mutex_);
+      stopping_ = true;
+    }
+    wake_.notify_all();
+    if (thread_.joinable())
+      thread_.join();
+    // No edit is left to say it: the project keeps what it holds, or a journal
+    // that completes it.
+    if (failure_)
+      try {
+        std::rethrow_exception(failure_);
+      } catch (const std::exception &error) {
+        std::cerr << "neverd-worker: an edit was not written: " << error.what()
+                  << '\n';
+      }
+  }
+  void post(Transaction transaction) {
+    std::lock_guard lock(mutex_);
+    if (!queue_.empty() && (!running_ || queue_.size() > 1)) {
+      auto &last = queue_.back();
+      Transaction merged = last;
+      merged.after = transaction.after;
+      for (auto &[path, text] : transaction.files)
+        merged.files[path] = std::move(text);
+      if (merged.journalSize() <=
+          ::neverd::limits::worker::kProjectHistoryMaxJournalBytes) {
+        last = std::move(merged);
+        return;
+      }
+    }
+    queue_.push_back(std::move(transaction));
+    if (!thread_.joinable())
+      thread_ = std::thread([this] { run(); });
+    wake_.notify_all();
+  }
+  bool idle() {
+    std::lock_guard lock(mutex_);
+    return queue_.empty() && !running_;
+  }
+  bool failed() {
+    std::lock_guard lock(mutex_);
+    return failure_ != nullptr;
+  }
+  void finish() {
+    std::unique_lock lock(mutex_);
+    if (failure_) {
+      failure_ = nullptr;
+      wake_.notify_all();
+    }
+    done_.wait(lock, [&] { return failure_ || (queue_.empty() && !running_); });
+    if (failure_)
+      std::rethrow_exception(failure_);
+  }
+  void forget() {
+    std::lock_guard lock(mutex_);
+    queue_.clear();
+    failure_ = nullptr;
+  }
+
+private:
+  void run() {
+    std::unique_lock lock(mutex_);
+    for (;;) {
+      wake_.wait(lock,
+                 [&] { return stopping_ || (!queue_.empty() && !failure_); });
+      if (queue_.empty() || failure_) {
+        if (stopping_)
+          return;
+        continue;
+      }
+      const Transaction transaction = queue_.front();
+      running_ = true;
+      lock.unlock();
+      std::exception_ptr failure;
+      try {
+        // The check of what it was made over waits for the one before it, and
+        // one retried may have begun.
+        std::error_code ec;
+        if (!transaction.checked && !fs::exists(journal_, ec) &&
+            !sameBytes(binary_, history_, transaction.before->contents))
+          throw Error("foreign_edits",
+                      "Sidecars or history changed outside this worker; reload "
+                      "and inspect before editing");
+        transaction.writeJournal(writer_, journal_);
+        transaction.writeFiles(writer_, journal_, history_);
+      } catch (...) {
+        failure = std::current_exception();
+      }
+      lock.lock();
+      running_ = false;
+      if (failure)
+        failure_ = failure;
+      else if (!queue_.empty())
+        queue_.pop_front();
+      done_.notify_all();
+    }
+  }
+  const fs::path binary_, history_, journal_;
+  const AtomicWriter writer_;
+  std::mutex mutex_;
+  std::condition_variable wake_, done_;
+  std::deque<Transaction> queue_;
+  std::exception_ptr failure_;
+  bool running_ = false, stopping_ = false;
+  std::thread thread_;
+};
 
 ProjectHistory::PatchRow::PatchRow(Json normalized)
     : value_(std::move(normalized)),
@@ -727,7 +925,9 @@ ProjectHistory::ProjectHistory(fs::path binary, std::string sourceHash,
       historyPath_(sidecar(binary_, project_files::File::History)),
       journalPath_(sidecar(binary_, project_files::File::Journal)),
       hash_(std::move(sourceHash)), engineVersion_(std::move(engineVersion)),
-      readOnly_(readOnly), writer_(writer) {
+      readOnly_(readOnly), writer_(writer),
+      writes_(std::make_shared<Writes>(binary_, historyPath_, journalPath_,
+                                       writer)) {
   fileSize_ = fs::file_size(binary_);
   fileTime_ = fs::last_write_time(binary_);
   if (hash_.size() != 64 ||
@@ -951,14 +1151,29 @@ std::string ProjectHistory::document(std::string_view encodedState) const {
 }
 
 void ProjectHistory::persist(Json state) {
-  persist(std::move(state), std::nullopt);
+  persist(std::move(state), std::nullopt, false);
+}
+
+void ProjectHistory::persistLater(Json state) {
+  persist(std::move(state), std::nullopt, true);
 }
 
 void ProjectHistory::persistPatches(PatchRows rows) {
-  persist(nullptr, std::move(rows));
+  persist(nullptr, std::move(rows), false);
 }
 
-void ProjectHistory::persist(Json state, std::optional<PatchRows> patches) {
+void ProjectHistory::finishWrites() { writes_->finish(); }
+
+void ProjectHistory::settleWrites() noexcept {
+  try {
+    writes_->finish();
+  } catch (...) {
+    writes_->forget();
+  }
+}
+
+void ProjectHistory::persist(Json state, std::optional<PatchRows> patches,
+                             bool later) {
   requireUsable();
   if (readOnly_)
     throw Error("read_only", "History persistence requires the writer lock");
@@ -967,6 +1182,13 @@ void ProjectHistory::persist(Json state, std::optional<PatchRows> patches) {
     throw Error(
         "input_changed",
         "Input changed while the Session was open; reopen it before editing");
+  // What an earlier edit queued is first, and what a failed write says belongs
+  // to the edit that finds it.  While writes run, the files hold what they will
+  // only once those are done, and the one that follows checks them.
+  later = later && interruptedWrite_.is_null();
+  if (!later || writes_->failed())
+    writes_->finish();
+  const bool idle = writes_->idle();
   // Preserve the caller's starting tables even if this call must first
   // finish an interrupted transaction that changed the committed snapshot.
   const auto other = snapshot_->state.Other;
@@ -1000,16 +1222,17 @@ void ProjectHistory::persist(Json state, std::optional<PatchRows> patches) {
       return;
     }
   }
-  if (recoveryPending(binary_))
+  if (idle && recoveryPending(binary_))
     throw Error("recovery_required",
                 "An interrupted edit must be recovered before another save");
   auto contents = snapshot_->contents;
   // Compare actual bounded file contents, never timestamps or file sizes.
   // Equal bytes reuse the validated snapshot; changed bytes retain the full
   // parser/normalizer, including acceptance of equivalent formatting.
-  if (!stateMatches(binary_, snapshot_->state, snapshot_->contents,
-                    &contents) ||
-      !historyMatches(historyPath_, *snapshot_->document, snapshot_->contents))
+  if (idle && (!stateMatches(binary_, snapshot_->state, snapshot_->contents,
+                             &contents) ||
+               !historyMatches(historyPath_, *snapshot_->document,
+                               snapshot_->contents)))
     throw Error("foreign_edits", "Sidecars or history changed outside this "
                                  "worker; reload and inspect before editing");
   auto after =
@@ -1031,34 +1254,16 @@ void ProjectHistory::persist(Json state, std::optional<PatchRows> patches) {
   // Compose only serializer-produced JSON. The history is already encoded;
   // reuse it without copying whole states into a second tree. Keep the owning
   // states until publication succeeds, or retain the full journal on failure.
-  auto journalText = compactText(journal);
-  journalText.pop_back();
-  {
-    std::string beforeStateText, beforeHistoryText;
-    std::string_view beforeState = snapshot_->stateText;
-    if (beforeState.empty()) {
-      beforeStateText = StateEncoding(snapshot_->state, 0).Text;
-      beforeState = beforeStateText;
-    }
-    std::string_view beforeHistory = *snapshot_->document;
-    if (!snapshot_->documentIsEncoded) {
-      beforeHistoryText =
-          compactText(transport::parseBackendJson(*snapshot_->document));
-      beforeHistory = beforeHistoryText;
-    }
-    const std::string_view parts[] = {
-        ",\"before\":",        beforeState,   ",\"before_history\":",
-        beforeHistory,         ",\"after\":", afterText,
-        ",\"after_history\":", *historyText,  "}"};
-    auto journalSize = journalText.size();
-    for (const auto part : parts)
-      journalSize += part.size();
-    if (journalSize > ::neverd::limits::worker::kProjectHistoryMaxJournalBytes)
-      throw Error("history_budget_exceeded", "Recovery journal exceeds 24 MiB");
-    journalText.reserve(journalSize);
-    for (const auto part : parts)
-      journalText += part;
-  }
+  Transaction transaction;
+  transaction.head = compactText(journal);
+  transaction.head.pop_back();
+  transaction.before = snapshot_;
+  transaction.checked = idle;
+  if (snapshot_->stateText.empty())
+    transaction.beforeState = StateEncoding(snapshot_->state, 0).Text;
+  if (!snapshot_->documentIsEncoded)
+    transaction.beforeHistory =
+        compactText(transport::parseBackendJson(*snapshot_->document));
   const auto writes =
       prepareSidecars(binary_, after, &snapshot_->state, &encoded);
   if (const auto error = project_files::prepare(binary_))
@@ -1072,16 +1277,21 @@ void ProjectHistory::persist(Json state, std::optional<PatchRows> patches) {
   auto next = std::make_shared<Snapshot>(
       Snapshot{std::move(after), std::move(afterText), historyText,
                std::move(contents)});
-  writer_(journalPath_, journalText);
-  // From this point any failure leaves a recoverable write-ahead journal.
+  transaction.after = next;
+  transaction.files.insert(writes.begin(), writes.end());
+  if (transaction.journalSize() >
+      ::neverd::limits::worker::kProjectHistoryMaxJournalBytes)
+    throw Error("history_budget_exceeded", "Recovery journal exceeds 24 MiB");
+  if (later) {
+    writes_->post(std::move(transaction));
+    snapshot_ = std::move(next);
+    if (committed_)
+      committed_();
+    return;
+  }
+  transaction.writeJournal(writer_, journalPath_);
   try {
-    for (const auto &[path, text] : writes)
-      writer_(path, *text);
-    writer_(historyPath_, *historyText);
-    std::error_code ec;
-    if (!fs::remove(journalPath_, ec) || ec)
-      throw Error("recovery_required", "User edits were saved but journal "
-                                       "cleanup failed; retry Save to recover");
+    transaction.writeFiles(writer_, journalPath_, historyPath_);
   } catch (...) {
     journal["before"] = snapshot_->state.json();
     journal["before_history"] =

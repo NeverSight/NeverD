@@ -1,5 +1,45 @@
 # Remaining x64 C-quality work
 
+Offline event-boundary interpretation now distinguishes QEMU post-load
+exception reinjection from pending payloads and stale error codes. The
+separate `scripts/qemu_save_events.py` retains NMI phases/masking, injected
+software interrupts, halted/MP/crash/triple-fault state and APIC bit banks.
+Unsaved instruction shadows stay unknown unless explicitly bound; no event is
+selected, acknowledged or delivered. Shared CPU/APIC/subsection checks keep
+existing V6/control exports consistent, with no ordinary-decompiler or
+instruction-loop work. This closes event evidence interpretation only:
+arbitration, delivery composition, complete environment import and both
+ordinary registry inputs remain open.
+
+Offline paging/debug bank projection now emits the existing C++ state types
+through `scripts/qemu_save_controls.py`. It shares CPU/version/PC validation
+with the V6 bank adapter, retains saved controls and requires separate bindings
+for unsaved DEBUGCTL, pending data causes and absent cached PDPTEs. PKRU/PKRS
+omissions alone prove zero. The conversion reads no RAM and emits constant
+initializers; runtime feature/admission rules keep their existing owner.
+QEMU's selected KVM event-copy path does not preserve interrupt.shadow, so a
+clear saved hflags bit does not recover STI/MOV-SS state. Scheduler/event
+bindings, complete environment import and both ordinary inputs remain open.
+
+An optional Q35 main-RAM consistency check now validates the complete supplied
+map against selected captured MCH state and explicit unsaved machine-property
+bindings. It rejects wrong original block offsets, split/gap errors, active
+TSEG and PCI configuration windows, unknown reserved PCIEXBAR history and the
+unsupported first MiB. Extended TSEG uses the bound machine property, not the
+guest-writable query field. Checking reads one device and no RAM, with no new
+per-read/decompiler work. This closes a chipset-consistency boundary only:
+other overlays, binding provenance, SMM/legacy mappings, CPU permissions and
+complete environment import remain open, as do both ordinary registry inputs.
+See `scripts/qemu_save_q35.py` and `docs/qemu-save-snapshot.md`.
+
+A static PDB-bound list walk of one matching capture inspected 136 processes
+and 1,981 linked threads under explicit RAM bindings. The 48,050,176 bytes of
+present stack pages contained no aligned target-range or query-return words.
+Fourteen transition pages also had no candidates after checking the original
+kernel's decoder, saved mask and PFN/PTE ownership. Another 148 pages were not
+available through these observations. This does not certify stack unwinding,
+unlinked threads or absence of an invocation; neither missing input is recovered.
+
 Offline device evidence now uses exact migration name/instance selection in
 `scripts/qemu_save_devices.py`. The save reader retains validated layouts and
 offsets, decoding auxiliary fields only on request without rebuilding the RAM

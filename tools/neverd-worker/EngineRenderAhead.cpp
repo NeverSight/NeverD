@@ -90,10 +90,13 @@ Json Engine::renderStoreIdentity() {
       }
     state["renames"] = std::move(dataNames);
   }
+  // The state above says those that stay, whether or not their files have been
+  // written yet (ProjectHistory::persistLater), as it says the declared types.
   for (const auto file :
        {project_files::File::Code, project_files::File::Annotations,
         project_files::File::Renames, project_files::File::Operands,
-        project_files::File::Functions, project_files::File::Items})
+        project_files::File::Functions, project_files::File::Items,
+        project_files::File::Types})
     identity.at("shared").erase(
         std::string(project_files::describe(file).Path));
   return identity;
@@ -595,9 +598,20 @@ std::vector<std::string> Engine::renderedAheadPages(
   }
   const auto &compactPages =
       kept != renderedAhead_.end() ? kept->second : stored;
-  // Its first says what the render read, and it answers while that holds.
-  if (compactPages.empty() || !renderReadsHold(compactPages.front()))
+  // Its first says what the render read, and it answers while that holds, or
+  // reads the same but for the names of data, in C on one page, which spelling
+  // them there answers (CodeEdits::respell).
+  keptRenamed_ = nullptr;
+  if (compactPages.empty())
     return pages;
+  if (!renderReadsHold(compactPages.front())) {
+    if ((representation != "source" && representation != "c") ||
+        compactPages.size() != 2)
+      return pages;
+    keptRenamed_ = renderReadsRenamed(compactPages.front());
+    if (keptRenamed_.is_null())
+      return pages;
+  }
   pages.reserve(compactPages.size() - 1);
   for (std::size_t at = 1; at < compactPages.size(); ++at) {
     const auto &compact = compactPages[at];

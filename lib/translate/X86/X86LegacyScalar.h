@@ -10,6 +10,7 @@
 #ifndef NEVERD_LIB_TRANSLATE_X86_X86LEGACYSCALAR_H
 #define NEVERD_LIB_TRANSLATE_X86_X86LEGACYSCALAR_H
 
+#include "X86LegacyBMI.h"
 #include "X86LegacyEncoding.h"
 
 #include "neverd/ir/X86/X86DecimalAdjust.h"
@@ -72,6 +73,11 @@ enum class X86LegacyScalarOperation {
   BitComplement,
   BitScanForward,
   BitScanReverse,
+  CountPopulation,
+  CountLeadingZeros,
+  CountTrailingZeros,
+  CarryChainCF,
+  CarryChainOF,
   Divide,
   SignedDivide,
   Multiply,
@@ -103,6 +109,7 @@ struct X86LegacyScalarInstruction {
   std::optional<uint32_t> MultiplyImmediate;
   std::optional<uint8_t> ShiftImmediate;
   std::optional<X86DecimalAdjustInstruction> Adjustment;
+  std::optional<X86LegacyBMIInstruction> BMI;
   unsigned Bytes = 4, SourceBytes = 4, Condition = 0;
   unsigned CounterBytes = 0;
   uint16_t Discard = 0;
@@ -188,6 +195,17 @@ struct X86LegacyScalarInstruction {
   bool bitScanning() const {
     return Operation == X86LegacyScalarOperation::BitScanForward ||
            Operation == X86LegacyScalarOperation::BitScanReverse;
+  }
+
+  bool bitCounting() const {
+    return Operation == X86LegacyScalarOperation::CountPopulation ||
+           Operation == X86LegacyScalarOperation::CountLeadingZeros ||
+           Operation == X86LegacyScalarOperation::CountTrailingZeros;
+  }
+
+  bool carryChain() const {
+    return Operation == X86LegacyScalarOperation::CarryChainCF ||
+           Operation == X86LegacyScalarOperation::CarryChainOF;
   }
 };
 

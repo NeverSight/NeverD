@@ -38,6 +38,40 @@ normalize presentation differences with an independent decoder explicitly;
 uncompared fields remain unqualified. No device model or post-load callback
 runs, and device transport alone does not establish physical topology.
 
+Add `scripts.tests.test_qemu_save_q35` for the optional Q35 main-RAM consistency
+check. Authored saved PCI bytes cover all TSEG sizes and gates, guest-writable
+query values distinct from the bound machine property, QEMU-specific PCIEXBAR
+masks/lengths and reserved-length history, original RAM offsets, split/gaps,
+exact profile/device bindings, first-MiB exclusions and atomic CLI failures.
+The check touches no RAM and adds no work to subsequent reads. Real-save
+qualification should retain the explicit unsaved-property bindings and compare
+selected bytes before and after checking. A passing MCH check does not prove
+absence of other overlays or CPU access permission; no device callback runs.
+
+Add `scripts.tests.test_qemu_save_controls` for paging/debug bank transport.
+Authored saves distinguish proven PKRU/PKRS zero omissions from unavailable
+cached PDPTEs and unsaved debug-control/cause inputs. They cover exact debug
+indices, full widths, independent subsection versions, mandatory fields,
+shared CPU/PC checks, enabled A20, preserved pending/halted evidence, no RAM
+reads and atomic CLI failures. Compile C++20 initializers against the actual
+public state headers at O0/O2 and inspect constant object data; execute none
+of the outputs. For real-save qualification, compare banks with existing
+independent register receipts and keep producer choices separate. Neither
+these images nor clear saved inhibition bits establish runtime admission.
+
+Add `scripts.tests.test_qemu_save_events` for event-boundary interpretation.
+Authored records cover absent exception-info post-load injection, distinct
+pending payloads, signed/stale error codes, software versus hardware injected
+interrupts, separate NMI phases/masking, halted/MP/crash/triple-fault evidence,
+APIC bit banks, and unknown versus explicitly bound instruction shadows.
+Tests cover every vector/IRR bit without delivering any event. CPU/APIC/common
+identity, subsection versions, malformed fields and atomic CLI failures remain
+checked. Real-save qualification should compare CPU/APIC values with an
+independent decoder and halted/SMM observations with existing register receipts;
+uncompared common fields remain unqualified. Existing V6/control outputs must
+stay identical after shared validation changes. No target program, instruction
+executor, event callback or VM runs; no native build is needed for this suite.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
@@ -412,6 +446,35 @@ result and non-ZF choices through a separate host instruction. Nonflat CS and
 SS inputs use their own memory, independently of DS. The shared W^X observer
 allocation and calls live in `X86LegacyScalarNativeObserverFixture.inc`;
 shift-specific encodings remain in `X86LegacyShiftNativeFixture.inc`.
+
+`LegacyInteger/*` compares protected POPCNT/LZCNT/TZCNT/ADCX/ADOX with original
+CPU execution in legacy paging and PAE. It covers word/dword count values,
+independent unsigned CF/OF chains, all GPR aliases, code/address widths,
+nonflat segments, read-only pages, alignment, page crossings and original
+handler repair/IRET/retry. Only the count instructions' undefined OF/SF/AF/PF
+come from an independent W^X probe. `X86LegacyIntegerTest.*` separately varies
+those images, qualifies feature-disabled BSR/BSF aliases and POPCNT/ADX #UD,
+and checks missing bindings, malformed prefixes, backing stops and data traps.
+Feature-disabled cases are software-contract checks; masking KVM CPUID does
+not make a supporting physical processor stop executing the instruction.
+`X86LegacySourceTest.Integer*` compiles and executes the same owner through
+Clang and NeverC at O0/O2, including a guest page-repair handler and feature
+selection without spending an attempt on an unbound context.
+
+`LegacyBMI/*` in `NeverDX86PagingTests` compares original ANDN/BEXTR,
+BLSI/BLSMSK/BLSR, BZHI, MULX, PDEP/PEXT, RORX and SARX/SHLX/SHRX. The
+BMI1/BMI2 host gate checks KVM's feature bank. Matrices cover both code and
+address widths, every register, multiply destination/source aliases, low-byte
+control boundaries, ignored non-64-bit W/B/high-vvvv bits, segment/page/#AC
+faults and original handler repair/IRET/retry. An independent W^X probe supplies
+only AF/PF and BEXTR SF; defined results and flags never come from the compared
+protected CPU run. `OriginalBMIReadWatchpoints` checks read/write comparators
+and TF. `X86LegacyBMITest.*` independently varies undefined images, checks
+explicit features, #UD priority, exact grammar, C4/LES coexistence and backing
+stops. `X86LegacySourceTest.BMI*` compiles the existing dispatcher with Clang
+and NeverC at O0/O2, including feature errors and MULX fault repair.
+Run both SDKs and the qualified P/E cores, the software paging tests, shared
+scalar/integer/segment regressions and ordinary BMI/BEXTR/decoder targets.
 
 `NeverDLLVMCValueTests --gtest_filter=LLVMCValues.X86BitString*` rejects
 weakened native bit-string declarations and executes all twelve LLVM-to-C
@@ -6064,6 +6127,16 @@ ordered-memory ancestors that must remain intact. The x87 classification test
 executes ordinary HighC against native extended-precision encodings; ARM mode
 tests execute both ordinary and explicitly enhanced source.
 
+`HighExprSimplify.SharedObservableSeedsDoNotSpendBudgetPerRoot` shares a deep
+expression across 4,096 assignments. Demanded-bit analysis must remove unread
+unknown bits within its existing budget while retaining an unknown load address
+or indirect call target. `SharedSeedsStillDemandEachRootsValue` keeps the union
+of each root's value demand in either root order. Observable-node discovery is
+shared only within one unchanged seeding phase; value propagation and later
+invocations retain their own state. Run `NeverDHighSymSimplifyTests` and the
+HighIR/source suites for changes to this traversal, including the sanitizer
+configuration with acceleration libraries and the process allocator disabled.
+
 `SymExprCompare` covers literal observations of complemented, negated and
 masked packed predicates, including 128-bit lanes, impossible constants and
 overlapping lanes. `HighSymSimplify.NegatedPackedComparisonKeepsOnlyObservedFlags`
@@ -6273,18 +6346,26 @@ function, undoes and redoes, all in a running replica over a real PE: each view 
 as that of a replica restored afresh and the owner's, its listing as after a reload,
 and whether a function returns is refused for a restore.
 `NeverDWorkerKeptReads` keeps what real renders read: another address's name keeps a
-render and its own sends the view to the engine, a later name and an undo read as a
-fresh replica does, a visit keeps what it rendered in place, a declaration reaches the
+render, its own spells the kept page as a fresh replica renders it, field for field,
+and a name the page has another use of, one the C spells otherwise and a library
+header's object send the view to the engine. A later name and an undo read as a fresh
+replica does, a visit keeps what it rendered in place, a declaration reaches the
 function and its callers and no other, and the store's folder never moves.
+`NeverDWorkerEditWrites` opens with `write_behind`: a burst of names ends in one exit
+with all of them written and each a step of the history, a view, an undo, a snapshot a
+replica restores from and a save each find what was queued, a kill at any moment leaves
+a project that opens and takes edits, a write that fails fails a later edit and goes
+through once it can, and files changed behind the worker stop the next edit.
 `NeverDWorkerUnreadTypes` declares types nothing has read and those something has: one
 that names a type yet unknown and new enumerators stay unread, while the type named,
 a replacement, a prototype and a type that takes an enumerator's name are not, each
 reading as a fresh replica after it. A type then applied reads as a new context does,
 an unread one leaves a job's store and a later session's as they were, and writing
 there keeps what leads to it until a type something read moves on.
-`NeverDWorkerNamesRebuild` also renames functions, exported and not, without the
-names being read again, and each page, table and resolved name then reads as after a
-reload.
+`NeverDWorkerNamesRebuild` also renames functions, exported and not, and data, and
+defines data items, without the names being read again, and each page, table and
+resolved name then reads as after a reload. A name inside an automatic item and an
+item over a string's bytes do read them again.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and
@@ -6994,6 +7075,10 @@ at EOF on all three data models. Failed declarations keep the library intact.
 and parenthesized names, pointer arrays, callbacks returning array pointers,
 array references and calling conventions on ILP32, LP64 and LLP64, including
 published types after the declaration input is overwritten.
+`TypeParse.NestedDeclaratorsKeepBindingWidthsAndQualifiers` combines arrays of
+callbacks, qualified return pointers, abstract callback parameters, two-dimensional
+array returns and explicit 32/64-bit pointer widths. It checks type structure,
+layout and C rendering round trips across all three data models.
 
 `HeaderLibrary.LayoutComparisonsFollowEachMergeAndGrowingConflicts` checks
 same-size, different-alignment overrides across ILP32, LP64 and LLP64. Reverse

@@ -150,8 +150,33 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   auto Decoded = decodeInstruction(Instruction, Code32);
   if (!Decoded)
     return Decoded.takeError();
-  const auto &[DebugRegister, Segment, Scalar, FastSystem, String, Port, Far,
-               Body, Width, IRET, RETF, INT, UD2] = *Decoded;
+  auto &[DebugRegister, Segment, Scalar, FastSystem, String, Port, Far, Body,
+         Width, IRET, RETF, INT, UD2] = *Decoded;
+  if (Scalar &&
+      (Scalar->bitCounting() || Scalar->carryChain() || Scalar->BMI)) {
+    if (!Options.IntegerExtensions)
+      return invalid(
+          "legacy integer extension requires a target feature binding");
+    using Op = detail::X86LegacyScalarOperation;
+    if (Scalar->Operation == Op::CountLeadingZeros &&
+        !Options.IntegerExtensions->LZCNT)
+      Scalar->Operation = Op::BitScanReverse;
+    if (Scalar->Operation == Op::CountTrailingZeros &&
+        !Options.IntegerExtensions->BMI1)
+      Scalar->Operation = Op::BitScanForward;
+    if ((Scalar->Operation == Op::CountLeadingZeros ||
+         Scalar->Operation == Op::CountTrailingZeros) &&
+        (!Options.BitCountUndefinedFlags ||
+         (*Options.BitCountUndefinedFlags &
+          ~kX86LegacyBitCountUndefinedFlagsMask)))
+      return invalid("legacy zero count requires an undefined-flags image");
+    if (Scalar->BMI && Scalar->BMI->enabled(*Options.IntegerExtensions)) {
+      const uint32_t Mask = Scalar->BMI->undefinedFlagsMask();
+      if (Mask &&
+          (!Options.BMIUndefinedFlags || (*Options.BMIUndefinedFlags & ~Mask)))
+        return invalid("legacy BMI requires an undefined-flags image");
+    }
+  }
   if (ResumingStack && (!Scalar || !Scalar->stackFrame()))
     return invalid("pending legacy stack state requires a stack instruction");
   if (DebugRegister && (!Options.Debug || !x86DebugRegisters(*Options.Debug)))

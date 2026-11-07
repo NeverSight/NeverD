@@ -105,6 +105,16 @@ that the SDK discovery result has been consumed; it does not promise that the
 derived listing or reference index has been rebuilt. The executor admits
 requests for up to its existing 150 ms idle grace at that transition, waking
 as soon as one arrives, before continuing derived background work.
+`open.write_behind:true` lets the reply to an edit that names data or a
+function, defines data, edits a function or declares a type go before its write:
+the same journaled transaction runs on a thread of its own, joined with edits
+queued behind one already writing, in the few milliseconds after the reply.  A
+kill in that time leaves the project's files as they were, or a journal that
+completes them; a clean exit, `save`, `analysis_snapshot` and any operation that
+may read the project's files wait for the write first.  A write that fails stays
+queued and fails the next edit or waiting operation with its error, and goes
+through once it can.  By default the reply follows the write.
+
 Stepped SDK discovery is opt-in through `open.step_discovery:true`; it defaults
 to false so older clients do not acquire an extra image snapshot. Only clients
 that coordinate large-image replica startup with `discovery_complete` should

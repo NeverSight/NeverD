@@ -6412,6 +6412,57 @@ TEST(HighControlFlowSemantics, SharedLiveRHSFollowsEveryBranchDefinition) {
   }
 }
 
+TEST(HighControlFlowSemantics,
+     ObservableRootsKeepInputsAndClassifySharedChildren) {
+  for (bool InnerRead : {false, true}) {
+    for (bool Reverse : {false, true}) {
+      for (unsigned Effect = 0; Effect < 3; ++Effect) {
+        SCOPED_TRACE(InnerRead);
+        SCOPED_TRACE(Reverse);
+        SCOPED_TRACE(Effect);
+        ExprPtr Shared = HighExpr::makeBinop(
+            NdOp::INT_ADD,
+            InnerRead ? HighExpr::makeLoad(local(1), NdType::makeInt(8))
+                      : local(1),
+            local(2));
+        ExprPtr Observable;
+        if (Effect == 0) {
+          Observable = HighExpr::makeCall("", InvalidVA, {Shared});
+          Observable->IsIndirectCall = true;
+          Observable->IndirectTarget = local(3);
+        } else {
+          Observable = HighExpr::makeBinop(NdOp::INT_ADD, Shared, local(3));
+          if (Effect == 1)
+            Observable = HighExpr::makeLoad(Observable, NdType::makeInt(8));
+          else
+            Observable->MemoryOrdering = NdMemoryOrdering::Acquire;
+        }
+        auto Outer = assign(0x1010, 4, 0);
+        Outer.Val = Observable;
+        auto Inner = assign(0x1020, 5, 0);
+        Inner.Val = Shared;
+        HighFunc F;
+        F.Body = {assign(0x1000, 1, 0x4000),
+                  assign(0x1004, 2, 8),
+                  assign(0x1008, 3, 0x5000),
+                  Reverse ? Inner : Outer,
+                  Reverse ? Outer : Inner,
+                  result(0x1030, HighExpr::makeConst(73, 8))};
+        eliminateUnusedValues(F.Body);
+        ASSERT_EQ(F.Body.size(), InnerRead ? 6U : 5U);
+        // Every input remains live through the observable root. Its pure
+        // shared child does not acquire an effect from that parent, but a
+        // child with its own read remains observable in either root order.
+        for (size_t I = 0; I < 3; ++I)
+          EXPECT_EQ(F.Body[I].Dst->Var.Id, int(I + 1));
+        EXPECT_EQ(F.Body[InnerRead && Reverse ? 4 : 3].Val, Observable);
+        if (InnerRead)
+          EXPECT_EQ(F.Body[Reverse ? 3 : 4].Val, Shared);
+      }
+    }
+  }
+}
+
 TEST(HighControlFlowSemantics, ExpressionCyclesPropagateEffectsBeforeDeletion) {
   for (bool Effect : {false, true}) {
     for (bool Reverse : {false, true}) {
