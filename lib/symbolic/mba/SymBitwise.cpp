@@ -330,10 +330,9 @@ TruthTable coverage(Implicant P, unsigned NumVars) {
 /// that input from the pair, until nothing can grow any further.  Whatever
 /// survives a round un-merged is prime.
 ///
-/// Deduplication is by hash rather than by scanning what has already been
-/// grown.  The scan made a round cubic in the number of implicants, which is
-/// only invisible while the arity keeps that number in the dozens — exactly
-/// the assumption this file no longer makes.
+/// Deduplication uses exact membership tables rather than scanning what has
+/// already been grown. The scan made a round cubic in the number of terms,
+/// which is only invisible while the arity keeps that number in the dozens.
 LLVM_ATTRIBUTE_NOINLINE
 llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
                                                  unsigned NumVars, size_t &Work,
@@ -349,7 +348,15 @@ llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
   // distinct and alternate without copying their inline elements. Clearing
   // the lookup tables preserves discovery order.
   llvm::SmallVector<char, 16> Merged;
-  llvm::SmallDenseSet<uint64_t, 64> Seen;
+  constexpr unsigned DirectAtoms =
+      detail::limits::kSymBitwiseDirectImplicantAtoms;
+  constexpr size_t DirectWords = (size_t(1) << (2 * DirectAtoms)) / 64;
+  const size_t SeenWords =
+      NumVars <= DirectAtoms ? ((size_t(1) << (2 * NumVars)) + 63) / 64 : 0;
+  std::array<uint64_t, DirectWords> DirectSeen;
+  std::optional<llvm::SmallDenseSet<uint64_t, 64>> Seen;
+  if (!SeenWords)
+    Seen.emplace();
   std::optional<llvm::SmallDenseMap<uint64_t, size_t, 64>> IndexedPositions;
   unsigned Active = 0;
   while (!Frontiers[Active].empty()) {
@@ -360,14 +367,29 @@ llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
       return {};
 
     // Small cover rounds stay inline; larger tables retain ordinary growth.
-    // Deduplication keeps both complete 32-bit fields in one integer key.
+    // Both membership representations retain the complete care/value pair.
     Merged.assign(Current.size(), 0);
     Next.clear();
-    Seen.clear();
+    if (SeenWords)
+      std::fill_n(DirectSeen.begin(), SeenWords, uint64_t(0));
+    else
+      Seen->clear();
     auto grow = [&](size_t I, size_t J, uint32_t Diff) {
       Merged[I] = Merged[J] = 1;
       Implicant Grown{Current[I].Value & ~Diff, Current[I].Care & ~Diff};
-      if (Seen.insert((uint64_t(Grown.Care) << 32) | Grown.Value).second)
+      bool New;
+      if (SeenWords) {
+        // Both fields fit in NumVars bits. This is an exact membership bit,
+        // with the same first-discovery order as the general hash set.
+        const auto Key = (Grown.Care << NumVars) | Grown.Value;
+        auto &Word = DirectSeen[Key / 64];
+        const uint64_t Bit = uint64_t(1) << (Key % 64);
+        New = !(Word & Bit);
+        Word |= Bit;
+      } else {
+        New = Seen->insert((uint64_t(Grown.Care) << 32) | Grown.Value).second;
+      }
+      if (New)
         Next.push_back(Grown);
     };
     // Every round removes exactly one cared bit. When indexing each term and

@@ -4975,8 +4975,19 @@ Prepared arbitrary-width evaluation reuses each output slot's allocation for
 associative arithmetic and bitwise operations, starting from the first operand.
 A product stops multiplying after its complete word becomes zero; all input
 steps have already been evaluated. Standalone and prepared evaluation use the
-same operator implementation. Validation keeps its original full-width input
-assignments and sample count.
+same general operator implementation. Wide plans propagate the largest observed
+low-bit prefix from every use through modular arithmetic and bitwise operations.
+A constant product coefficient reduces the required factor prefix by its
+trailing-zero count. Prefixes fitting a native word use modular word arithmetic
+and inline APInt storage. Their wide product consumers first multiply the
+prefixes in that native modular ring, then restore the complete coefficient
+with one wide multiplication. Other consumers demand
+complete operands, including divisions, comparisons and shifts; a shared
+full-width use therefore prevents truncation. Precision propagation uses the
+resolved operand slots in a separate wide-only pass, preserving the native
+constructor's stack footprint. This analysis changes only evaluation and keeps
+all input lookups. Validation keeps its original full-width input assignments,
+sample count and work charges.
 Native long products stop when the initial operand pair is zero modulo the
 declared width, retaining the tight fold for other inputs. Their prepared steps
 keep the width mask in the unused product payload, without enlarging a step
@@ -5019,6 +5030,10 @@ their inline elements. Merge flags and exact lookup tables reuse their storage
 across rounds within one cover search. The neighbor index
 is initialized only when an indexed round is reached. Deduplication keys retain
 both complete value/care fields; discovery order and work admission are unchanged.
+For up to six inputs, a packed care/value pair indexes an exact membership
+bit in at most 4096 bits. Only that used prefix is cleared each round; larger
+covers initialize the general hash set instead. This retains the same grown
+terms and greedy tie order without a hash lookup for every small-cover merge.
 The shared exact MBA layer also recombines weighted literal AND/OR/XOR/NOT
 views of one opaque word. It constructs per-bit coefficients and a constant,
 then independently checks the pointwise grammar, constant difference and every
@@ -5253,9 +5268,17 @@ throughout reconstruction.
 Constant binary operands use exact low-word cache keys containing the other
 operand, operation, literal residue and precision. Native literals need no
 temporary expression nodes; wide literal prefixes are copied and charged once
-per search. Word and pairing-signature caches share this normalization without
-changing any source constant or wider reading. Neutral observed constants
-reuse the operand directly.
+per search. Word, projected-representative and pairing-signature caches share
+this normalization without changing any source constant or wider reading.
+Neutral observed constants reuse the operand directly.
+Constant additions reuse the literal residue already present in the word key.
+Bits below its first set bit remain unchanged and cannot start a carry; a
+single-bit query constructs only the carry into its requested position.
+Projected handles, known-zero facts and pairing signatures use exact-key
+dense tables, avoiding one heap allocation per cached fact. Their values are
+copied before recursion, and complete bucket growth is charged before insertion.
+Decision-word caches and interned signature keys retain stable references for
+callers that keep them across recursive insertions.
 Native key construction reads inline constants without entering the wide
 literal reader.
 Decision identity hits and terminal two-input Boolean operations return before
@@ -5286,6 +5309,11 @@ Products spanning the complete observed domain also normalize their factors
 once. Each operand needs only the bits still observable after the other
 factors' proved trailing zeros; the projection cache includes that precision.
 Neutral low-word constants bypass reconstruction of identity operations.
+Partial even pairing blocks coalesce exact two-bit correction words before
+constructing their sum. Four equal corrections vanish modulo four; two copies
+move their low bit into the high column. This avoids transient carry graphs
+for repetitions that cancel, while retaining every distinct correction and
+charging the sort, storage and remaining decisions to the same allowance.
 For a partial block of XOR factors, narrow nonlinear products can use
 exact lower decision bits as pairing identities. Their two actual upper bits
 form the additive correction, including cross terms that cannot be discarded
@@ -14499,8 +14527,18 @@ versions that counted n-ary nodes once and omitted all all-ones literals.
 Verification samples reuse the compiled evaluator's word-sized path when both
 plans and all context variables fit in 64 bits. Corner assignments and the
 random stream stay unchanged; wider inputs retain arbitrary-width evaluation.
+The evaluator lowers constant and variable leaves on their first worklist
+visit. Native inputs are loaded before the operator loop, in the original
+lookup order; shared inputs are still read once and unused inputs are omitted.
 Minterm expansion reuses one sorted combination buffer across its Cartesian
 walk while preserving combination order and per-combination work charges.
+It borrows cached factor tables only until the next cache insertion and
+initializes new coefficients from their first contribution, avoiding repeated
+wide-table copies and temporary zero coefficients during accumulation.
+Affine prefix inference stores completed value/known-mask facts by exact node
+and queried precision in a dense cache. Facts are copied before recursion;
+bucket growth is fully charged before allocation, and incomplete queries are
+never cached. Partial known bits still cannot stand in for constant prefixes.
 Textual coefficients that fit in 64 bits use one native integer parse; the
 constant builder still owns width truncation and zero extension, and larger
 literals retain arbitrary-precision parsing.

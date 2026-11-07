@@ -288,7 +288,7 @@ TEST(SymMBA, StillPrefersAUnionOfCubesWhereThatIsShorter) {
 
 TEST(SymMBA, DenseCoversKeepEveryCornerAndWholeWord) {
   std::mt19937_64 Random(0x636f766572);
-  for (unsigned Count : {4u, 6u, 8u}) {
+  for (unsigned Count : {4u, 5u, 6u, 7u, 8u}) {
     for (unsigned Mode = 0; Mode != 3; ++Mode) {
       auto Table = TruthTable::zero(Count);
       for (size_t Pattern = 0; Pattern < Table.entries(); ++Pattern) {

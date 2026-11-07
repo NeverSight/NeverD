@@ -572,6 +572,7 @@ if __name__ == "__main__":
             ("carry-product-partial-narrow-23", *carry_product_elf(23, True, 6, 3)),
             ("carry-product-partial-neighbor-47", *carry_product_elf(47, True, 7, 4, neighbor=True)),
             ("carry-product-partial-complement-neighbor-95", *carry_product_elf(95, True, 8, 5, complemented=True, neighbor=True)),
+            ("carry-product-partial-projected-neighbor-256", *carry_product_elf(256, True, 7, 2, complemented=True, neighbor=True)),
             ("carry-product-64", *carry_product_elf(64, False)),
             ("carry-cofactor-8", *carry_product_elf(8, True, 5, 2)),
             ("carry-cofactor-projection-24", *carry_product_elf(24, True, 5, 2)),
