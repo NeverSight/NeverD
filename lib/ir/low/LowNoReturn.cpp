@@ -28,6 +28,9 @@ bool isArchitecturalNoReturn(const LowOp &Op) {
 bool lowFunctionNeverReturns(
     const LowFunc &Func, Arch TheArch,
     llvm::function_ref<bool(va_t)> TailCalleeNeverReturns) {
+  if (hasUnmodeledRegistrationResumption(Func.ExceptionMetadata,
+                                         Func.RegistrationStates))
+    return false;
   // A tail call stands for `call target; ret`: the return is reached only
   // if the target returns.
   const auto endsInTailCall = [&](const LowInstructionBoundary &Insn) {
