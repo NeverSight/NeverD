@@ -8030,7 +8030,7 @@ TEST(SBFCallXContexts,
 TEST(SBFCallXContexts, NestedCopyPathsPreserveDescriptorFieldsAtVariantLimit) {
   // Empty/nonempty append, unknown descriptor/branch, recursive/spinning
   // nested body, depth refusal, and registered legacy runtime mutation.
-  for (unsigned Mode = 0; Mode != 8; ++Mode) {
+  for (unsigned Mode = 0; Mode != 10; ++Mode) {
     SCOPED_TRACE(Mode);
     std::vector<test::EncodedInstruction> Text;
     const auto Literal = [&](unsigned R, uint64_t Value) {
@@ -8065,6 +8065,27 @@ TEST(SBFCallXContexts, NestedCopyPathsPreserveDescriptorFieldsAtVariantLimit) {
         Text.push_back(encode(Opcode::MOV64_IMM, 2));
       Text.push_back(encode(Opcode::MOV64_IMM, 3, 0, 0,
                             I == 4 ? (Mode == 1 ? 40 : 0) : 8 * (I + 1)));
+      if (I == 4 && Mode >= 8) {
+        Literal(4, kInputStart + 8);
+        Text.push_back(encode(Opcode::LD_DW_REG, 4, 4));
+        std::vector<size_t> Branches, DoneBranches;
+        for (unsigned Choice = 0; Choice != 3; ++Choice) {
+          Branches.push_back(Text.size());
+          Text.push_back({});
+        }
+        for (unsigned Choice = 0; Choice != 4; ++Choice) {
+          const unsigned Value = Choice == 0 ? 3 : Choice - 1;
+          if (Choice)
+            Text[Branches[Value]] =
+                encode(Opcode::JEQ64_IMM, 4, 0,
+                       Text.size() - Branches[Value] - 1, Value);
+          Text.push_back(encode(Opcode::MOV64_IMM, 3, 0, 0, Value * 8));
+          DoneBranches.push_back(Text.size());
+          Text.push_back({});
+        }
+        for (size_t Jump : DoneBranches)
+          Text[Jump] = encode(Opcode::JA, 0, 0, Text.size() - Jump - 1);
+      }
       Text.push_back(encode(Opcode::MOV64_REG, 5, 10));
       Text.push_back(encode(Opcode::ADD64_IMM, 5, 0, 0, -8));
       Calls.push_back(Text.size());
@@ -8114,8 +8135,8 @@ TEST(SBFCallXContexts, NestedCopyPathsPreserveDescriptorFieldsAtVariantLimit) {
     Text.push_back(encode(Opcode::MOV64_IMM, 0));
     Text.push_back(encode(Opcode::EXIT));
     const size_t Empty = Text.size();
-    if (Mode == 3) {
-      Literal(4, kInputStart + 8);
+    if (Mode == 3 || Mode == 9) {
+      Literal(4, kInputStart + (Mode == 9 ? 16 : 8));
       Text.push_back(encode(Opcode::LD_DW_REG, 4, 4));
       Text.push_back(encode(Opcode::JEQ64_IMM, 4, 0, 1));
       Text.push_back(encode(Opcode::ST_DW_IMM, 5));
@@ -8171,14 +8192,16 @@ TEST(SBFCallXContexts, NestedCopyPathsPreserveDescriptorFieldsAtVariantLimit) {
                                     Evidence.CallXSlot == Site &&
                                     Evidence.TargetSlot == Target;
                            }),
-              Mode < 2);
+              Mode < 2 || Mode == 8);
     const auto Edge = llvm::find_if(Report->SummaryEdges, [&](const auto &E) {
       return E.CallerSummaryID == Root->ID && E.CallerSlot == Calls.back();
     });
     ASSERT_NE(Edge, Report->SummaryEdges.end());
-    EXPECT_EQ(Edge->InstantiatedMemoryPathStores,
-              Mode < 2 ? (Mode == 0 ? 1u : 6u) : 0u);
-    if (Mode < 2)
+    EXPECT_EQ(Edge->InstantiatedMemoryPathStores, Mode < 2
+                                                      ? (Mode == 0 ? 1u : 6u)
+                                                  : Mode == 8 ? 10u
+                                                              : 0u);
+    if (Mode < 2 || Mode == 8)
       EXPECT_TRUE(Edge->GeneralizedInputs);
     EXPECT_FALSE(Report->SpecializationBudgetExhausted);
     EXPECT_LE(llvm::count_if(Report->Summaries,
@@ -8191,33 +8214,40 @@ TEST(SBFCallXContexts, NestedCopyPathsPreserveDescriptorFieldsAtVariantLimit) {
     // execute the original instruction bytes, including both unknown branches.
     if (Mode == 7)
       continue;
-    for (unsigned Selector = 0; Selector != (Mode == 3 ? 2u : 1u); ++Selector) {
-      const auto Frame =
-          initialFramePointer(Program->Low.TheVersion, Program->Config);
-      std::vector<uint8_t> Input(16);
-      llvm::support::endian::write64le(Input.data(), Frame - 96);
-      llvm::support::endian::write64le(Input.data() + 8, Selector);
-      ExecutionEnvironment Environment;
-      Environment.Memory.push_back(
-          {kInputStart, Input, false, "nested copy controls"});
-      InterpreterOptions Options;
-      Options.MaxSteps = 4096;
-      auto Raw = executeRaw(*Program, std::move(Environment), Options);
-      ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
-      if (Mode == 5) {
-        EXPECT_EQ(Raw->Status, ExecutionStatus::StepLimit);
-      } else if (Mode == 4 || Mode == 6 || Selector) {
-        EXPECT_EQ(Raw->Status, ExecutionStatus::Faulted) << Raw->Error;
-        EXPECT_EQ(Raw->Fault, Mode == 4 || Mode == 6
-                                  ? FaultCode::CallDepth
-                                  : FaultCode::UnknownIndirectCall);
-      } else {
-        EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
-        EXPECT_EQ(Raw->ReturnValue, 42u);
-        EXPECT_TRUE(llvm::any_of(
-            Raw->Trace, [&](const auto &Step) { return Step.Slot == Target; }));
+    for (unsigned Selector = 0; Selector != (Mode >= 8   ? 4u
+                                             : Mode == 3 ? 2u
+                                                         : 1u);
+         ++Selector)
+      for (unsigned Poison = 0; Poison != (Mode == 9 ? 2u : 1u); ++Poison) {
+        const auto Frame =
+            initialFramePointer(Program->Low.TheVersion, Program->Config);
+        std::vector<uint8_t> Input(24);
+        llvm::support::endian::write64le(Input.data(), Frame - 96);
+        llvm::support::endian::write64le(Input.data() + 8, Selector);
+        llvm::support::endian::write64le(Input.data() + 16, Poison);
+        ExecutionEnvironment Environment;
+        Environment.Memory.push_back(
+            {kInputStart, Input, false, "nested copy controls"});
+        InterpreterOptions Options;
+        Options.MaxSteps = 4096;
+        auto Raw = executeRaw(*Program, std::move(Environment), Options);
+        ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+        if (Mode == 5) {
+          EXPECT_EQ(Raw->Status, ExecutionStatus::StepLimit);
+        } else if (Mode == 4 || Mode == 6 || (Mode == 3 && Selector) ||
+                   (Mode == 9 && Selector == 0 && Poison)) {
+          EXPECT_EQ(Raw->Status, ExecutionStatus::Faulted) << Raw->Error;
+          EXPECT_EQ(Raw->Fault, Mode == 4 || Mode == 6
+                                    ? FaultCode::CallDepth
+                                    : FaultCode::UnknownIndirectCall);
+        } else {
+          EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+          EXPECT_EQ(Raw->ReturnValue, 42u);
+          EXPECT_TRUE(llvm::any_of(Raw->Trace, [&](const auto &Step) {
+            return Step.Slot == Target;
+          }));
+        }
       }
-    }
   }
 }
 
