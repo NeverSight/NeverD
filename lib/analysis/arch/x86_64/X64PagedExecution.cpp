@@ -710,6 +710,12 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
   Last.InstructionAttempted = true;
   Last.InstructionCompleted = !Partial;
   Last.Exit = Exit;
+  if (!Partial && (Exit == uint64_t(X64ContinuationExitV1::Call) ||
+                   Exit == uint64_t(X64ContinuationExitV1::Return))) {
+    const auto &Core = State.Core.Core.Core.Core;
+    Last.Transfer =
+        X64PagedTransfer{Exit, Address, Core.PC, Core.GPR[4], Core.GPR[0]};
+  }
   bool NewSSShadow = false;
   if (DebugSSBlocked && T.SegmentMove) {
     const auto Move = detail::x64SegmentMove(Bytes);
@@ -725,6 +731,11 @@ X64PagedExecution::execute(X64ContinuationStateV6 &State, uint64_t Address,
 
 void X64PagedExecution::recordError(llvm::Error Failure) {
   Error = llvm::toString(std::move(Failure));
+}
+
+void X64PagedExecution::recordEntryError(llvm::Error Failure) {
+  Last = {};
+  recordError(std::move(Failure));
 }
 
 extern "C" uint64_t
@@ -782,13 +793,33 @@ extern "C" uint64_t neverd_x64_paged_progress_v1(uint8_t *Context) {
                                                         : 0);
 }
 
+extern "C" uint64_t neverd_x64_paged_transfer_v1(uint8_t *Context,
+                                                 uint64_t *Instruction,
+                                                 uint64_t *PC, uint64_t *SP,
+                                                 uint64_t *RAX) {
+  const auto &Last =
+      reinterpret_cast<X64PagedExecution *>(Context)->lastResult();
+  if (!Last.Transfer)
+    return 0;
+  const auto Transfer = *Last.Transfer;
+  if (Instruction)
+    *Instruction = Transfer.Instruction;
+  if (PC)
+    *PC = Transfer.PC;
+  if (SP)
+    *SP = Transfer.SP;
+  if (RAX)
+    *RAX = Transfer.RAX;
+  return Transfer.Exit;
+}
+
 extern "C" uint64_t neverd_x64_paged_debug_step_v1(
     uint8_t *Context, uint8_t *State, uint64_t Address, const uint8_t *Bytes,
     uint64_t Size, X64PagedBody Body, X64PagedBody Validate, uint64_t MXCSRMask,
     uint64_t PagingAddressBits, uint64_t SSBlocked) {
   auto &Execution = *reinterpret_cast<X64PagedExecution *>(Context);
   if (SSBlocked > 1) {
-    Execution.recordError(invalid("invalid instruction-debug SS shadow"));
+    Execution.recordEntryError(invalid("invalid instruction-debug SS shadow"));
     return uint64_t(X64ContinuationExitV1::InvalidState);
   }
   auto Result =

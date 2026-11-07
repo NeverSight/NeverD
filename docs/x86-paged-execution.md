@@ -188,9 +188,15 @@ its blocker without treating it as a new eligibility check on resume. Preserve
 the state and record while repairing backing. This continuation is for the
 confined ordinary-RAM binding, not device replay or concurrent mutation.
 
-`function_context` is currently refused with `paged_debug`: function completion
-across an intervening debug handler needs its own activation contract. Default
-paged and no-fault exports keep their existing TF admission.
+`function_context` combines with `paged_debug` through the explicit
+[V2 activation contract](x64-continuation-source.md#debug-aware-paged-call-views).
+The runtime records a committed near CALL/RET before its post-instruction #DB.
+An entry-cell RET completes the activation even when that #DB subsequently
+stops in event delivery, backing failure, event-work exhaustion or shutdown.
+Its actual stop and pre-event RAX remain cached; handler execution cannot
+replace the result or replay RET. A completed CALL starts the callee from the
+recorded PC/SP before returning its event stop. Default paged and no-fault
+exports keep their existing TF admission.
 Branch stepping, general compatibility/i386 source dispatch, SMM/SGX and
 transactional debug events remain separate work. Native LLVM/NeverC ICEBP and
 flags instructions already exist; this extension adds the software execution
@@ -429,9 +435,10 @@ Independent repeated probes reproduced that loss on the initial run and no
 loss after preparing mappings; a fresh-vCPU regression retains full state/RAM
 comparison. Guest page tables and instruction sequences are unchanged.
 
-This profile applies to the admitted paged/protected instruction sets. It does
-not provide debug-aware function activation, a general i386/compatibility
-source dispatcher, task/transaction debug, FRED/CET, SMM or SGX execution.
+This profile applies to the admitted paged/protected instruction sets. The
+separate V2 activation contract composes its near transfers with function/call
+views. It does not provide a general i386/compatibility source dispatcher,
+task/transaction debug, FRED/CET, SMM or SGX execution.
 No new native intrinsic or production LLVM pin is required for this runtime
 extension. Reference: Intel SDM revision 093, volume 3 §§20.2.4–20.2.5 and
 20.3.1.2; the unaligned and delayed-status choices are separately measured.

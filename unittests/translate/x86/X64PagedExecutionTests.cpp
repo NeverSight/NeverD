@@ -207,9 +207,27 @@ protected:
                 "-" + std::to_string(Compilation++);
     if (Base != 0x1000)
       Name += "-at-" + std::to_string(Addresses.front());
+    llvm::sys::DynamicLibrary DL;
+    ASSERT_NO_FATAL_FAILURE(
+        compileProgram(*Export, Name, Compiler, Optimization, DL));
+    if (Scheduled) {
+      *Scheduled = reinterpret_cast<Schedule>(
+          DL.getAddressOfSymbol("neverd_x64_continue_paged_events_v6"));
+      ASSERT_NE(*Scheduled, nullptr);
+    }
+    Driver =
+        reinterpret_cast<Run>(DL.getAddressOfSymbol("neverd_x64_run_paged_v6"));
+    ASSERT_NE(Driver, nullptr);
+  }
+
+  void compileProgram(const X64ContinuationExport &Export,
+                      const std::string &Name, const std::string &Compiler,
+                      const std::string &Optimization,
+                      llvm::sys::DynamicLibrary &DL,
+                      llvm::StringRef ExtraSource = {}) {
     const auto Source = tmpFile(Name + ".c"), Library = tmpFile(Name + ".so");
     std::ofstream File(Source);
-    File << Export->Source << R"C(
+    File << Export.Source << R"C(
 static uint64_t (*access_bridge)(void *, uint64_t, uint64_t, uint64_t);
 static uint64_t (*debug_access_bridge)(void *, uint64_t, uint64_t, uint64_t);
 static uint64_t (*step_bridge)(uint8_t *, uint8_t *, uint64_t, const uint8_t *,
@@ -276,13 +294,14 @@ uint64_t neverd_x64_paged_debug_validate_v1(uint8_t *context, uint8_t *state,
     return debug_validate_bridge(context, state, address, validate, bits);
 }
 )C";
+    File << ExtraSource.str();
     File.close();
     if (const char *Artifacts =
             std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
       fs::create_directories(Artifacts);
       fs::copy_file(Source, fs::path(Artifacts) / (Name + ".c"),
                     fs::copy_options::overwrite_existing);
-      std::ofstream(fs::path(Artifacts) / (Name + ".json")) << Export->Manifest;
+      std::ofstream(fs::path(Artifacts) / (Name + ".json")) << Export.Manifest;
     }
     const auto Built =
         exec(Compiler,
@@ -291,7 +310,7 @@ uint64_t neverd_x64_paged_debug_validate_v1(uint8_t *context, uint8_t *state,
               "-o", Library.string()});
     ASSERT_TRUE(Built.ok()) << Built.err;
     std::string Error;
-    auto DL = llvm::sys::DynamicLibrary::getPermanentLibrary(
+    DL = llvm::sys::DynamicLibrary::getPermanentLibrary(
         Library.string().c_str(), &Error);
     ASSERT_TRUE(DL.isValid()) << Error;
     const auto Binder =
@@ -302,14 +321,6 @@ uint64_t neverd_x64_paged_debug_validate_v1(uint8_t *context, uint8_t *state,
            &neverd_x64_paged_progress_v1, &neverd_x64_paged_debug_step_v1,
            &neverd_x64_paged_debug_validate_v1,
            &neverd_x64_paged_debug_access_v1);
-    if (Scheduled) {
-      *Scheduled = reinterpret_cast<Schedule>(
-          DL.getAddressOfSymbol("neverd_x64_continue_paged_events_v6"));
-      ASSERT_NE(*Scheduled, nullptr);
-    }
-    Driver =
-        reinterpret_cast<Run>(DL.getAddressOfSymbol("neverd_x64_run_paged_v6"));
-    ASSERT_NE(Driver, nullptr);
   }
 };
 
@@ -969,5 +980,8 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X64PagedSegmentMoveTests.inc"
 #include "X64PagedSegmentPushTests.inc"
 #include "X64PagedWatchpointTests.inc"
+
+// These controllers reuse the debug/watchpoint fixtures above.
+#include "X64PagedDebugFunctionTests.inc"
 
 } // namespace

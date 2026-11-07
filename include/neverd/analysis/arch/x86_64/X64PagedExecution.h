@@ -80,12 +80,20 @@ struct X64PagedExecutionOptions {
   translate::X86EventDeliveryOptions EventDelivery;
 };
 
+/// A committed near CALL/RET, captured before its post-instruction event.
+/// The final execution status and live PC/SP may already name a debug handler
+/// or an incomplete event entry. Neither can stand in for this receipt.
+struct X64PagedTransfer {
+  uint64_t Exit = 0, Instruction = 0, PC = 0, SP = 0, RAX = 0;
+};
+
 struct X64PagedExecutionResult {
   uint64_t Exit = uint64_t(X64ContinuationExitV1::InvalidState);
   bool InstructionAttempted = false;
   /// A completed instruction remains complete if its subsequent #DB entry
   /// fails. Software INT requires successful entry; intermediate REP is false.
   bool InstructionCompleted = false;
+  std::optional<X64PagedTransfer> Transfer;
   /// One irreversible device transfer, also retained on an INS guest fault.
   bool DeviceTransferCompleted = false;
   /// Bytes committed by this INS element, including a prefix on a later #PF.
@@ -141,6 +149,9 @@ public:
   const std::string &lastError() const { return Error; }
   /// C bridge retains diagnostic ownership in the supplied execution context.
   void recordError(llvm::Error Failure);
+  /// Reject a bridge argument before starting an operation. Unlike a failure
+  /// after effects, this must not expose the preceding operation's progress.
+  void recordEntryError(llvm::Error Failure);
 
 private:
   llvm::Error
@@ -185,6 +196,15 @@ extern "C" uint64_t neverd_x64_paged_event_v1(uint8_t *Context, uint8_t *State,
                                               const uint8_t *Event,
                                               uint64_t MXCSRMask);
 extern "C" uint64_t neverd_x64_paged_progress_v1(uint8_t *Context);
+/// Return the completed near transfer's original Call/Return exit, or zero
+/// without writing outputs when the last operation has no such receipt.
+/// Non-null outputs borrow disjoint caller storage. A subsequent operation,
+/// including event delivery/resume or entry refusal, replaces the receipt.
+/// The distinct symbol prevents older runtimes from silently omitting it.
+extern "C" uint64_t neverd_x64_paged_transfer_v1(uint8_t *Context,
+                                                 uint64_t *Instruction,
+                                                 uint64_t *PC, uint64_t *SP,
+                                                 uint64_t *RAX);
 
 } // namespace neverd::analysis
 #endif // NEVERD_ANALYSIS_ARCH_X86_64_X64PAGEDEXECUTION_H

@@ -10,6 +10,7 @@
 #include "X64FunctionCalls.h"
 
 #include "X64FunctionCallSchedule.h"
+#include "X64FunctionContext.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -83,11 +84,12 @@ llvm::json::Array emitX64FunctionCallArguments(
 llvm::json::Array
 emitX64FunctionCalls(llvm::raw_ostream &OS,
                      llvm::ArrayRef<X64FunctionCallInterface> Calls,
-                     bool PagedMemory, bool ScheduledEvents) {
+                     bool PagedMemory, bool ScheduledEvents, bool Debug) {
   llvm::json::Array Manifest;
   if (Calls.empty())
     return Manifest;
   using Exit = analysis::X64ContinuationExitV1;
+  const auto Names = x64FunctionContextNames(Debug);
   const auto &TRI = getTargetRegInfo(Arch::X64);
   const auto Layout = TRI.integerArgumentLayout(BinaryFormat::COFF);
   OS << R"C(
@@ -102,31 +104,31 @@ emitX64FunctionCalls(llvm::raw_ostream &OS,
                "entry checks read no guest RAM. */\n"
              : " * disjoint from guest RAM. Declared stack arguments require "
                "accessible RAM. */\n");
-  OS << R"C(typedef struct neverd_x64_call_context_v1 {
-    neverd_x64_function_context_v1 Function;
-    uint64_t Entry, Value;
-} neverd_x64_call_context_v1;
-typedef struct neverd_x64_call_result_v1 {
+  OS << "typedef struct " << Names.CallContext << " {\n    " << Names.Context
+     << " Function;\n    uint64_t Entry, Value;\n} " << Names.CallContext
+     << ";\n";
+  OS << R"C(typedef struct neverd_x64_call_result_v1 {
     uint64_t Status, Completed, Value;
 } neverd_x64_call_result_v1;
 )C";
   for (const auto &Call : Calls) {
     const auto Entry = llvm::utohexstr(Call.Entry);
-    const llvm::StringRef Prefix =
-        PagedMemory ? (ScheduledEvents ? "paged_events_" : "paged_")
-                    : (ScheduledEvents ? "events_" : "");
+    const auto Prefix =
+        x64FunctionCallPrefix(PagedMemory, ScheduledEvents, Debug);
     const std::string Start =
         (llvm::Twine("neverd_x64_call_") + Prefix + Entry + "_v6").str();
     const std::string Resume =
         (llvm::Twine("neverd_x64_resume_") + Prefix + Entry + "_v6").str();
     const auto ResultType =
         "uint" + std::to_string(Call.ResultBytes * 8) + "_t";
-    const llvm::StringRef Parameters =
-        ScheduledEvents ? x64ScheduledCallParameters(PagedMemory, false)
+    const std::string Parameters =
+        ScheduledEvents ? x64ScheduledCallParameters(PagedMemory, false, Debug)
         : PagedMemory
-            ? "(neverd_x64_state_v6 *state, uint8_t *context, uint64_t "
-              "*budget,\n"
-              "    neverd_x64_call_context_v1 *call"
+            ? (llvm::Twine(
+                   "(neverd_x64_state_v6 *state, uint8_t *context, uint64_t "
+                   "*budget,\n    ") +
+               Names.CallContext + " *call")
+                  .str()
             : "(neverd_x64_state_v6 *state, uint64_t *budget, "
               "uint64_t *environment_budget,\n"
               "    neverd_x64_call_context_v1 *call, neverd_x64_environment_v6 "
@@ -137,28 +139,36 @@ typedef struct neverd_x64_call_result_v1 {
        << "    if (call->Entry != 0x" << Entry
        << "ULL) return result;\n"
           "    if (call->Function.Phase == NEVERD_X64_FUNCTION_RETURNED) {\n"
-          "        result.Status = "
-       << uint64_t(Exit::Return)
-       << "; result.Completed = 1; result.Value = call->Value;\n"
+          "        result.Status = ";
+    if (Debug)
+      OS << "call->Function.Status";
+    else
+      OS << uint64_t(Exit::Return);
+    OS << "; result.Completed = 1; result.Value = call->Value;\n"
           "        return result;\n"
           "    }\n"
           "    result.Status = ";
     if (ScheduledEvents)
-      OS << "neverd_x64_continue_" << (PagedMemory ? "paged_" : "")
-         << "events_function_v6(state, "
-         << (PagedMemory ? "memory_context, " : "")
+      OS << (PagedMemory ? Names.ScheduledDriver
+                         : "neverd_x64_continue_events_function_v6")
+         << "(state, " << (PagedMemory ? "memory_context, " : "")
          << "budget, shadows, poll_budget, peek, accepted, event_context, "
             "&call->Function);\n";
     else if (PagedMemory)
-      OS << "neverd_x64_run_paged_function_v6(state, context, budget, "
+      OS << Names.PagedDriver
+         << "(state, context, budget, "
             "&call->Function);\n";
     else
       OS << "neverd_x64_run_function_v6(state, budget, environment_budget,\n"
             "        &call->Function, environment, environment_context);\n";
     OS << "    if (call->Function.Phase == NEVERD_X64_FUNCTION_RETURNED) {\n"
           "        call->Value = ("
-       << ResultType << ")state->GPR[" << TRI.IntReturnReg / TRI.PointerSize
-       << "];\n"
+       << ResultType << ")";
+    if (Debug)
+      OS << "call->Function.Value";
+    else
+      OS << "state->GPR[" << TRI.IntReturnReg / TRI.PointerSize << "]";
+    OS << ";\n"
           "        result.Completed = 1; result.Value = call->Value;\n"
           "    }\n"
           "    return result;\n}\n";
@@ -180,7 +190,8 @@ typedef struct neverd_x64_call_result_v1 {
         OS, Call, Layout.EntryStackBase, "entry_sp_offset");
     // The exact entry above is a validated explicit root, so the shared begin
     // cannot reject. Keep return-cell initialization in its existing owner.
-    OS << "    neverd_x64_begin_function_v6(state, &call->Function);\n"
+    OS << "    " << Names.Begin
+       << "(state, &call->Function);\n"
           "    call->Entry = 0x"
        << Entry << "ULL;\n"
        << "    return " << Resume;

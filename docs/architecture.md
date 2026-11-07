@@ -17755,7 +17755,8 @@ explicit input contract keeps unknown original stack bytes supplied by the
 caller instead of weakening ordinary source proofs.
 
 The same owner emits `neverd_x64_run_paged_function_v6` when paged memory is
-selected. Entry RSP then names a guest virtual return cell. Completion requires
+selected without instruction debug. Entry RSP then names a guest virtual return
+cell. Completion requires
 both the authenticated near RET and the paged executor's instruction-attempt
 bit; the original runtime owns fetch verification, operand access, fault
 delivery and retained side effects. Fault, backing and changed-code stops keep
@@ -17780,6 +17781,23 @@ The context-free scheduled driver is a null-activation adapter. Disabled source
 is unchanged. Scalar/call-site views select the same scheduled owner when
 scheduled events are requested. Handler resumption,
 return-cell lifetime and mapping ownership remain producer obligations.
+
+For `paged_debug`, `X64PagedExecution` owns a completed near-transfer record
+captured before post-instruction event delivery. It contains the original
+instruction, transfer kind and committed PC/SP/RAX. The distinct
+`neverd_x64_paged_transfer_v1` symbol exposes that record without changing
+`progress_v1`; new operations and entry refusals replace it. Final execution
+status and live handler coordinates cannot substitute for completion evidence.
+`X64FunctionContext` owns the V2 context names, entry-cell check and cached
+completion stop/value shared by both C routes. `X64FunctionCalls` projects the
+declared result width from that captured value. `X64FunctionCallSites` begins
+the callee from the completed CALL coordinates before returning a post-CALL
+event stop; scheduler-owned attempt accounting prevents stale receipt reuse
+after an entry refusal. The scheduled RET path carries its actual SS shadow.
+Consumed root RETs stay completed through backing/work stops or shutdown;
+event/handler resumption is separate. Pre-completion faults retain the active
+or pending context. V1 context layouts and flat pending-handler contexts remain
+unchanged; debug controllers have distinct names and nested V2 types.
 
 `X64FunctionCalls` adds producer-declared Win64 scalar call views at explicit
 roots. The shared argument-layout owner supplies register and stack positions;

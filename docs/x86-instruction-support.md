@@ -381,7 +381,10 @@ physical backing stops. MOV-DR/GD now has the explicit [register-access binding]
 The [watchpoint profile](x86-paged-execution.md#data-and-io-watchpoints) now owns
 data/I/O comparison, delayed SS causes and event-access traps for the admitted
 instruction sets; physical I/O qualification remains unavailable through the
-local KVM port emulator. BTF, debug-aware function activation completion,
+local KVM port emulator. The explicit
+[V2 paged function/call views](x64-continuation-source.md#debug-aware-paged-call-views)
+retain completed CALL/RET state across post-instruction debug entry and cache
+the actual completion stop and pre-event result. BTF,
 general i386/compatibility source dispatch and the other
 state families below remain open. This does not satisfy the global LLVM release
 gate; the production SDK and LLVM gitlink remain unchanged.

@@ -10,6 +10,7 @@
 #include "X64FunctionCallHandlers.h"
 
 #include "X64FunctionCallSchedule.h"
+#include "X64FunctionContext.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
@@ -21,7 +22,8 @@
 
 namespace neverd {
 
-void emitX64FunctionCallHandlerContext(llvm::raw_ostream &OS) {
+void emitX64FunctionCallHandlerContext(llvm::raw_ostream &OS, bool Debug) {
+  const auto Names = x64FunctionContextNames(Debug);
   OS << R"C(
 /* Optional selected-handler continuation for a pending original CALL.
  * Begin only after the producer supplies a delivered event/fault handler
@@ -33,9 +35,10 @@ void emitX64FunctionCallHandlerContext(llvm::raw_ostream &OS) {
 typedef struct neverd_x64_call_site_handler_context_v1 {
     uint64_t Site, ReturnSlot, Ready;
 } neverd_x64_call_site_handler_context_v1;
-int neverd_x64_begin_call_site_handler_v1(
-    const neverd_x64_call_site_context_v1 *site,
-    neverd_x64_call_site_handler_context_v1 *handler) {
+)C";
+  OS << "int " << Names.HandlerBegin << "(\n    const " << Names.SiteContext
+     << " *site,\n    neverd_x64_call_site_handler_context_v1 *handler) {\n";
+  OS << R"C(
     if (site->Prepared != 1 ||
         site->Callee.Function.Phase != NEVERD_X64_FUNCTION_UNINITIALIZED)
         return 0;

@@ -62,9 +62,11 @@ llvm::Expected<std::vector<X64FunctionCallSite>> bindX64FunctionCallSites(
 /// Separate handler resumes reuse region drivers before retrying a pending
 /// CALL only when call-site pauses are enabled; existing site resumes retain
 /// their explicit PC/SP restore contract.
-llvm::json::Array emitX64FunctionCallSites(
-    llvm::raw_ostream &OS, llvm::ArrayRef<X64FunctionCallSite> Sites,
-    bool PagedMemory, bool ScheduledEvents, bool PauseCallSites);
+llvm::json::Array
+emitX64FunctionCallSites(llvm::raw_ostream &OS,
+                         llvm::ArrayRef<X64FunctionCallSite> Sites,
+                         bool PagedMemory, bool ScheduledEvents,
+                         bool PauseCallSites, bool Debug = false);
 
 } // namespace neverd
 

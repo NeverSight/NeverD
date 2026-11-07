@@ -1,0 +1,747 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-06",
+  "scope": "Explicit paged x64 V2 function/call/site activation across completed near CALL/RET and subsequent nontransactional instruction-debug events",
+  "global_goal_complete": false,
+  "qualification_status": "complete_for_declared_scope",
+  "neverd_source_base": "c9de309f9bea4fd49150cb0c95e214e642cf193b",
+  "changed_source_sha256": {
+    "docs/architecture.md": "d4a6e690c3da92f056efd7c5b997eb5a394f360ea23d711afa3314e4cf8bf52b",
+    "docs/testing.md": "f81eeba9e8ddf9ee91ead49ef1d5f217f1708bbf002efbba1ec21815f8ba9e14",
+    "docs/x64-continuation-source.md": "fb93a599035107046404988c930e7ea08e1cb1256a4ec766eaa8140e21d7e8db",
+    "docs/x86-instruction-support.md": "9a3dea9f93ae54520992d25181c58ababf1c3a2cced46cc961485075ee445322",
+    "docs/x86-paged-execution.md": "06caa31e14a6428969369e0d00b292e068047f6f5bd6363bc68f244138caa01d",
+    "include/neverd/analysis/arch/x86_64/X64PagedExecution.h": "358fe2c36d362f67e3335807e40a85f0a86335dd139db7aeac1889044838d007",
+    "lib/analysis/arch/x86_64/X64PagedExecution.cpp": "ca5febf0b874f4f697c47be42a60efa303e49a58d820ec2a226c134800f96057",
+    "lib/pipeline/X86/X64ContinuationExport.cpp": "a9e6b38344beb0b82be6edf261688ddfc167424d13fdf317f73d67650a7c26a6",
+    "lib/pipeline/X86/X64ContinuationPagedDriver.h": "2b9513e0d44d209f6d7c7ffa475916e9fb7573b6e5327e6532498cb175829614",
+    "lib/pipeline/X86/X64ContinuationSchedule.cpp": "734c142323a07398c381c92e792e850e7cfbf84ad272f50b9a35118ed211f506",
+    "lib/pipeline/X86/X64FunctionCallHandlers.cpp": "b7c9d83632a4310f49074c75c7d0309d70dbbae6afc5c40bdbf2a8e39f77e4d6",
+    "lib/pipeline/X86/X64FunctionCallHandlers.h": "257897087bc03150e94753b0cef53838b164e446962ebd84cd978b56b176db04",
+    "lib/pipeline/X86/X64FunctionCallSchedule.cpp": "2bdfdc06b05660ac017f9b2f9e748f45adfab4d09f173e371ee9f771394a1f31",
+    "lib/pipeline/X86/X64FunctionCallSchedule.h": "cea085c93d3d958fe4bbfa68ac4acb570207c00ffe93d6e85a42f2f50bcd94e6",
+    "lib/pipeline/X86/X64FunctionCallSites.cpp": "2a58db773f10735272257f39058d99b82b9aa4dc62411cf4c039ca5ec3dfa32c",
+    "lib/pipeline/X86/X64FunctionCallSites.h": "701043fbf387e08b574bd1f715532d263135bfbc44e2c715beaf06beda1bc894",
+    "lib/pipeline/X86/X64FunctionCalls.cpp": "64414a22197ce2c8f4622587735e1d1f94f3495aa07e056597c1ba0435948d17",
+    "lib/pipeline/X86/X64FunctionCalls.h": "1a85bd7de961ced25699bc7168da25697a8e89af9e27577548dc44f9c63f0e8c",
+    "lib/pipeline/X86/X64FunctionContext.cpp": "b5caaf1afed89920ac88235ade52815ff2c52389044c0f1744ea6cb4116cab9b",
+    "lib/pipeline/X86/X64FunctionContext.h": "4ba38fedceddd0790facbc5e8a98ac202fafde773deaa2ad2fbefc843c086ac7",
+    "unittests/devirtualization/x86_64/X64ScheduledCallTests.inc": "67a6e6562271b8f8a7544b7ec0ddc12e1f02ae81322cca717c0bc4b799eb4b5b",
+    "unittests/translate/x86/X64PagedDebugFunctionTests.inc": "4235f520b422051b8b0b3d4ccaf9f24caada27c5095f5fabcac015480039c8af",
+    "unittests/translate/x86/X64PagedDebugTests.inc": "e6f501aca0bb7a008f6a0d33d8903a2baf0413c6b4e814bc855ef6a0f87324fb",
+    "unittests/translate/x86/X64PagedExecutionTests.cpp": "32306b3b05b3d2722fc693493526da377061d0e88974f5938dfd832800a4bfbf"
+  },
+  "source_digest_scope": "All changed files except this evidence document. Runtime-producing sources/products are frozen before retained qualification; a test-only export repair and hash-verified carry-forward are recorded in qualification_epoch.",
+  "artifact_root": "/mnt/data/neverd-debug-function-20261106",
+  "archive": "qualified-inputs",
+  "previous_milestone": {
+    "commit": "c9de309f9bea4fd49150cb0c95e214e642cf193b",
+    "evidence": "x86-data-watchpoints-2026-11-06.json",
+    "counts_reused": false
+  },
+  "llvm_commit": "1c51c12828cc0d8eb6089ee02614f3f86f2e95f5",
+  "neverc_commit": "785a3dc1b78cd1fc4a738497a91f9416f1fd7d3f",
+  "production_sdk": "neverd-llvm-v23.0.0-r6",
+  "llvm_gitlink": "03270359c2ed8f6806533d3832a947bf883a6f69",
+  "llvm_release_created": false,
+  "production_pin_changed": false,
+  "host": {
+    "cpu_model": "13th Gen Intel(R) Core(TM) i9-13900H",
+    "kernel": "Linux 7.0.0-42-generic",
+    "qualified_cores": {
+      "P": [
+        2,
+        4
+      ],
+      "E": [
+        12
+      ]
+    }
+  },
+  "contracts": [
+    "The runtime captures original near-transfer kind, instruction PC, committed PC/SP/RAX before post-instruction debug delivery. A distinct transfer_v1 symbol forces runtime linkage; progress_v1 is unchanged.",
+    "A selected near RET consumes only the declared entry return cell. V2 contexts cache the real completion stop and pre-event RAX, including post-RET backing/work/shutdown stops; pre-RET faults retain the activation.",
+    "Completed CALL starts its callee from the receipt before returning a debug/event stop. Pending noncompleted CALL retains original retry coordinates. Scheduled bridges require this invocation to charge an instruction before consuming a receipt.",
+    "Scheduled RET uses actual SS inhibition and shared shadow expiry. Completed call resumes do not access state, runtime, budgets or producers.",
+    "V2 function/call/site layouts are 32/48/64 bytes. V1 layouts remain 16/32/48 bytes, result_v1 and flat handler_context_v1 remain 24 bytes; new debug names prevent cross-layout writes.",
+    "Selected pending handlers retry only after a successful privilege-return boundary to the original CALL PC/SP. A post-IRET debug event remains a handler boundary."
+  ],
+  "new_original_transfer_oracle": {
+    "comparisons": 768,
+    "per_run": 192,
+    "runs": 4,
+    "dimensions": [
+      "near CALL, RET, RET imm16",
+      "CPL0/CPL3",
+      "TF and 8-byte read/write watchpoint",
+      "HighC/LLVMC",
+      "scheduled/unscheduled",
+      "Clang/NeverC",
+      "O0/O2",
+      "native SDK/production r6",
+      "P/E core"
+    ],
+    "observations": [
+      "represented GPR,flags,segment,CR2,inhibition state",
+      "DR6/DR7",
+      "complete 262144-byte RAM including page tables",
+      "saved debug-frame PC/SP and actual RAX versus completed-transfer receipt"
+    ],
+    "execution": "Original bytes in KVM with guest-debug interception disabled and backing pre-faulted; the handler stops at HLT. This is confined original-processor evidence, not a complete machine/environment proof."
+  },
+  "new_runtime_controller_coverage": [
+    "Clang and NeverC, both C routes and scheduled/unscheduled execution; actual generated exports linked to X64PagedExecution.",
+    "All 1/2/4/8-byte scalar results; independent real handler execution changes RAX without changing cached completion status/value.",
+    "Pre-RET operand faults; nested return-cell ownership; successful and post-debug root return; completed-context idempotence.",
+    "Completed CALL followed by backing failure, event-work exhaustion or shutdown; explicit event continuation and active-callee resume without replaying CALL.",
+    "Pending CALL fault and producer-owned restoration; real handler IRET/budget exhaustion/retry; IRET data watchpoint and later quiescent privilege return.",
+    "Actual scheduler SS inhibition; invalid bridge arguments clear stale receipts; invalid scheduler shadows, poll exhaustion and zero budget cannot reuse old CALL receipts.",
+    "Software-only shutdown controller cases assert the stopping contract; they do not claim defined original post-shutdown state."
+  ],
+  "compatibility_regressions": "Full paged-execution, source and public export suites on both SDKs; debug/watchpoint suites also on E core. Existing V1 function/call/scheduler/handler compile-time and runtime checks remain separate from new processor comparisons.",
+  "qualification": {
+    "tests": 792,
+    "passed": 792,
+    "failed": 0,
+    "skipped": 0,
+    "new_original_transfer_comparisons": 768,
+    "records": [
+      {
+        "name": "qualified-native-paged-p",
+        "sdk": "native",
+        "core": "2",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-debug-function-20261106/qualified-native-paged-p/tmp",
+          "taskset",
+          "-c",
+          "2",
+          "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-20261106/qualified-native-paged-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-20261106/qualified-native-paged-p/exports"
+        },
+        "binary_sha256": "6688750ec2ef37f4649c9fdd3da112c2cc8fb93775ed90ec7978526b3ef739b4",
+        "exit_code": 0,
+        "seconds": 839.198,
+        "log_sha256": "3faff10afb271283e9561be00dcee2cc5deff7dbc0b9e867a66b340fcb075f81",
+        "result_sha256": "029ce3a7c4ca46f5a967b514c86175974a10850915c176bab3ba9cabe20647cf",
+        "tests": 92,
+        "failed": 0,
+        "skipped": [],
+        "passed": 92,
+        "transfer_comparisons": 192,
+        "watchpoint_comparisons": 6384,
+        "debug_cpu_comparisons": 34184,
+        "debug_round_trips": 16,
+        "new_original_transfer_comparisons": 192,
+        "runtime_library_sha256": "60917835e01b618091d66b6d78bfe3a0e54199b4754f45267b1ff79783d66e05"
+      },
+      {
+        "name": "qualified-native-source-p",
+        "sdk": "native",
+        "core": "4",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-debug-function-20261106/qualified-native-source-p/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX64ContinuationSourceTests",
+          "--gtest_filter=*",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-20261106/qualified-native-source-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-20261106/qualified-native-source-p/exports"
+        },
+        "binary_sha256": "a2f32399747d3ea3282a4879345cf61519a398d8f6d190f9f7a968539d70979a",
+        "exit_code": 0,
+        "seconds": 704.132,
+        "log_sha256": "12a95c55a54d27ef513075d5471a41bd97c2504b02969d1146c4bc39a25e6a5e",
+        "result_sha256": "9bbed6066483ea9ae80c8628669252b7ec5f8d2d497c6074f408b0ea1da24339",
+        "tests": 152,
+        "failed": 0,
+        "skipped": [],
+        "passed": 152,
+        "transfer_comparisons": 0,
+        "watchpoint_comparisons": 0,
+        "debug_cpu_comparisons": 0,
+        "debug_round_trips": 0,
+        "new_original_transfer_comparisons": 0,
+        "runtime_library_sha256": "60917835e01b618091d66b6d78bfe3a0e54199b4754f45267b1ff79783d66e05"
+      },
+      {
+        "name": "qualified-native-export-final-p",
+        "sdk": "native",
+        "core": "4",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-debug-function-20261106/qualified-native-export-final-p/tmp",
+          "taskset",
+          "-c",
+          "4",
+          "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX64ContinuationExportTests",
+          "--gtest_filter=*",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-20261106/qualified-native-export-final-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-20261106/qualified-native-export-final-p/exports"
+        },
+        "binary_sha256": "19934b4b14b54c18968b8c232ff69dfeb0680e2f6cb5307c1a822ece8dd13e8f",
+        "exit_code": 0,
+        "seconds": 783.28,
+        "log_sha256": "e388b22bfb4e14824e9b6124012a6ba81802c81b24df85d89d76f874b6a185ba",
+        "result_sha256": "53cd9d42d9faf46a659c0d44b5f6bbcdb132850e06667de2740bb9f74a6f9549",
+        "tests": 112,
+        "failed": 0,
+        "skipped": [],
+        "passed": 112,
+        "transfer_comparisons": 0,
+        "watchpoint_comparisons": 0,
+        "debug_cpu_comparisons": 0,
+        "debug_round_trips": 0,
+        "new_original_transfer_comparisons": 0,
+        "runtime_library_sha256": "60917835e01b618091d66b6d78bfe3a0e54199b4754f45267b1ff79783d66e05"
+      },
+      {
+        "name": "qualified-native-debug-e",
+        "sdk": "native",
+        "core": "12",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-debug-function-20261106/qualified-native-debug-e/tmp",
+          "taskset",
+          "-c",
+          "12",
+          "${NEVERD_WORKTREE}/build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*Watchpoint*:*ExecutionBreakpoint*:*Debug*",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-20261106/qualified-native-debug-e/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "check",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-20261106/qualified-native-debug-e/exports"
+        },
+        "binary_sha256": "6688750ec2ef37f4649c9fdd3da112c2cc8fb93775ed90ec7978526b3ef739b4",
+        "exit_code": 0,
+        "seconds": 153.858,
+        "log_sha256": "277a7f6633d83652ff7260bd27cbddc9db45c21ebc77a5d855934b6249d45252",
+        "result_sha256": "93aa001bb3447c3b47c3b062418d0d507ed80484331f2380346ecd15632a080e",
+        "tests": 40,
+        "failed": 0,
+        "skipped": [],
+        "passed": 40,
+        "transfer_comparisons": 192,
+        "watchpoint_comparisons": 6384,
+        "debug_cpu_comparisons": 34184,
+        "debug_round_trips": 16,
+        "new_original_transfer_comparisons": 192,
+        "runtime_library_sha256": "60917835e01b618091d66b6d78bfe3a0e54199b4754f45267b1ff79783d66e05"
+      },
+      {
+        "name": "qualified-r6-paged-p",
+        "sdk": "r6",
+        "core": "2",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-debug-function-20261106/qualified-r6-paged-p/tmp",
+          "taskset",
+          "-c",
+          "2",
+          "${NEVERD_WORKTREE}/build-x86/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-20261106/qualified-r6-paged-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-20261106/qualified-r6-paged-p/exports"
+        },
+        "binary_sha256": "089a12945228e9ec4342261ed9a8d9bcdf50befe9738fab5eb09686dc78924bd",
+        "exit_code": 0,
+        "seconds": 559.849,
+        "log_sha256": "72e27e6e944ec80d9471f68923cf4e9984265f4edf69cf1d3cf7d9e7235d5567",
+        "result_sha256": "c210d728ac5d5425a92c9addd0f56cfd08cf48a2e676fe31af601525eb6bcb0a",
+        "tests": 92,
+        "failed": 0,
+        "skipped": [],
+        "passed": 92,
+        "transfer_comparisons": 192,
+        "watchpoint_comparisons": 6384,
+        "debug_cpu_comparisons": 34184,
+        "debug_round_trips": 16,
+        "new_original_transfer_comparisons": 192,
+        "runtime_library_sha256": "cf22e0c583dc0d40ca150702864eb5568108e87a68327ccece3d71fca120a953"
+      },
+      {
+        "name": "qualified-r6-source-p",
+        "sdk": "r6",
+        "core": "2",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-debug-function-20261106/qualified-r6-source-p/tmp",
+          "taskset",
+          "-c",
+          "2",
+          "${NEVERD_WORKTREE}/build-x86/bin/NeverDX64ContinuationSourceTests",
+          "--gtest_filter=*",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-20261106/qualified-r6-source-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-20261106/qualified-r6-source-p/exports"
+        },
+        "binary_sha256": "bf2ad5b49b5c0eff03d7d81f18d1e38b4df64ff1375b43f8d7464f528af58481",
+        "exit_code": 0,
+        "seconds": 556.207,
+        "log_sha256": "de1cfac3c1be8feb35644cfe12f149edec325374c26be4fe1948b374e3d32d78",
+        "result_sha256": "c2d5f76873cb60765721143fac845bb36e6c6d08ef4aac356579d565812cb531",
+        "tests": 152,
+        "failed": 0,
+        "skipped": [],
+        "passed": 152,
+        "transfer_comparisons": 0,
+        "watchpoint_comparisons": 0,
+        "debug_cpu_comparisons": 0,
+        "debug_round_trips": 0,
+        "new_original_transfer_comparisons": 0,
+        "runtime_library_sha256": "cf22e0c583dc0d40ca150702864eb5568108e87a68327ccece3d71fca120a953"
+      },
+      {
+        "name": "qualified-r6-export-p",
+        "sdk": "r6",
+        "core": "2",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-debug-function-20261106/qualified-r6-export-p/tmp",
+          "taskset",
+          "-c",
+          "2",
+          "${NEVERD_WORKTREE}/build-x86/bin/NeverDX64ContinuationExportTests",
+          "--gtest_filter=*",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-20261106/qualified-r6-export-p/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-20261106/qualified-r6-export-p/exports"
+        },
+        "binary_sha256": "6a7d2bc97d4c451150a2e9f13c8092c8368a124755fc9cfdd20f9dc321a44a21",
+        "exit_code": 0,
+        "seconds": 712.518,
+        "log_sha256": "de4f4cdd488e11b75397788ee71ef0bda0bf4db25fd319a3e0034a9edffe58d8",
+        "result_sha256": "6fac6d8d51af5ec17e244d8b19d104d17a9f6561481b33e51d956c08ad5ffe1a",
+        "tests": 112,
+        "failed": 0,
+        "skipped": [],
+        "passed": 112,
+        "transfer_comparisons": 0,
+        "watchpoint_comparisons": 0,
+        "debug_cpu_comparisons": 0,
+        "debug_round_trips": 0,
+        "new_original_transfer_comparisons": 0,
+        "runtime_library_sha256": "cf22e0c583dc0d40ca150702864eb5568108e87a68327ccece3d71fca120a953"
+      },
+      {
+        "name": "qualified-r6-debug-e",
+        "sdk": "r6",
+        "core": "12",
+        "command": [
+          "unshare",
+          "--user",
+          "--map-root-user",
+          "--mount",
+          "python3",
+          "/mnt/data/neverd-paged-far-pointer-20261102/private_tmp.py",
+          "/mnt/data/neverd-debug-function-20261106/qualified-r6-debug-e/tmp",
+          "taskset",
+          "-c",
+          "12",
+          "${NEVERD_WORKTREE}/build-x86/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=*Watchpoint*:*ExecutionBreakpoint*:*Debug*",
+          "--gtest_output=json:/mnt/data/neverd-debug-function-20261106/qualified-r6-debug-e/result.json"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "TMPDIR": "/tmp",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "check",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_NEVERC": "${NEVERC_WORKTREE}/build-neverc/bin/neverc",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-debug-function-20261106/qualified-r6-debug-e/exports"
+        },
+        "binary_sha256": "089a12945228e9ec4342261ed9a8d9bcdf50befe9738fab5eb09686dc78924bd",
+        "exit_code": 0,
+        "seconds": 166.57,
+        "log_sha256": "029c1b8238017b80ee02406a6ed0a8cfd7b6041eb0ce06d026b468b9476aa898",
+        "result_sha256": "88ec3480172d79d726d45f0f7ad3e547f056a05e887cce60df4b58b7909914b6",
+        "tests": 40,
+        "failed": 0,
+        "skipped": [],
+        "passed": 40,
+        "transfer_comparisons": 192,
+        "watchpoint_comparisons": 6384,
+        "debug_cpu_comparisons": 34184,
+        "debug_round_trips": 16,
+        "new_original_transfer_comparisons": 192,
+        "runtime_library_sha256": "cf22e0c583dc0d40ca150702864eb5568108e87a68327ccece3d71fca120a953"
+      }
+    ]
+  },
+  "generated_reference": {
+    "sha256": "095d699d9a6a69c0537e0c6cb798e1642fd36f4d75f35ef737da52bcc37ecb81",
+    "c_files": 104,
+    "manifests": 104,
+    "comparison": {
+      "qualified-native-paged-p": {
+        "c_files": 104,
+        "manifests": 104,
+        "identical_to_reference": true
+      },
+      "qualified-native-debug-e": {
+        "c_files": 104,
+        "manifests": 104,
+        "identical_to_reference": true
+      },
+      "qualified-r6-paged-p": {
+        "c_files": 104,
+        "manifests": 104,
+        "identical_to_reference": true
+      },
+      "qualified-r6-debug-e": {
+        "c_files": 104,
+        "manifests": 104,
+        "identical_to_reference": true
+      }
+    }
+  },
+  "builds": {
+    "native": {
+      "build_receipt_sha256": "fba300bfbe91611574db7debb3703e0825620460f24632d11c409b27ed70e1ff",
+      "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "configuration": "Release",
+      "final_build_scope": "Only the requested build targets and configuration; not all features or tests.",
+      "products_sha256": {
+        "neverd": "645200309a35c0c1a617eb8cd0579808fc913272a21a90d8f02ed2d437f48956",
+        "libneverd.so": "60917835e01b618091d66b6d78bfe3a0e54199b4754f45267b1ff79783d66e05",
+        "NeverDX64PagedExecutionTests": "6688750ec2ef37f4649c9fdd3da112c2cc8fb93775ed90ec7978526b3ef739b4",
+        "NeverDX64ContinuationSourceTests": "a2f32399747d3ea3282a4879345cf61519a398d8f6d190f9f7a968539d70979a",
+        "NeverDX64ContinuationExportTests": "19934b4b14b54c18968b8c232ff69dfeb0680e2f6cb5307c1a822ece8dd13e8f"
+      },
+      "logs_sha256": {
+        "build-native-4.log": "c1ce4deb135df3203950ed5a9916dc7d72ebadb1fac81e160eb3ddb72f78a4d4",
+        "build-native-5.log": "861cca2b6a1485d26675bfd2a62c94ba94e65113f0aaafe5667a1e7e01d4cc58",
+        "build-native-3.log": "71cbdc05ded6261c0e7e8a0d44fc00fdcd2762058a3cb735fa9957de617a5cd1",
+        "build-native-6.log": "308e3de80f53427de270fbbc39843b5515cdc6a39d252e833489b27649225783",
+        "build-native-1.log": "f79bca34bcfae0055997c844b60b504a82c2dbf0bbf9a9eab06ac4b88c4af8c7",
+        "build-native-2.log": "d0c4a4588016b780814a5f79e90311821c44d48779f70930f935034737e72fa0"
+      }
+    },
+    "r6": {
+      "build_receipt_sha256": "3115587f0f934bbeb357965ebb6756aba8cc087c3c21bf924f42bbd856d80f66",
+      "dependency_inputs_sha256": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c",
+      "configuration": "Release",
+      "final_build_scope": "Only the requested build targets and configuration; not all features or tests.",
+      "products_sha256": {
+        "neverd": "43870d2caec59f50f4d00a543a60948fa6a20d9d44d3adfd5e9b6808ca39df00",
+        "libneverd.so": "cf22e0c583dc0d40ca150702864eb5568108e87a68327ccece3d71fca120a953",
+        "NeverDX64PagedExecutionTests": "089a12945228e9ec4342261ed9a8d9bcdf50befe9738fab5eb09686dc78924bd",
+        "NeverDX64ContinuationSourceTests": "bf2ad5b49b5c0eff03d7d81f18d1e38b4df64ff1375b43f8d7464f528af58481",
+        "NeverDX64ContinuationExportTests": "6a7d2bc97d4c451150a2e9f13c8092c8368a124755fc9cfdd20f9dc321a44a21"
+      },
+      "logs_sha256": {
+        "build-r6-1.log": "c34475a9eb6634217ff71f46adea31e139927f7a162ce9087fc2c9f98be6f13f",
+        "build-r6-3.log": "f6ff10d3714643b66f35013b4568ef2ddeb94d46db1f0cb2872bd5b5d58544c7",
+        "build-r6-2.log": "e985fde12d35c99cda61c44e5174a60ebe71f227cd2e67efb8ba2303f2e7a702",
+        "build-r6-4.log": "45f81d774c1b8d7f0d8fff4c9681ca01d5c2e1a830ace599372990563441ecb2"
+      }
+    }
+  },
+  "toolchain": {
+    "llvm_commit": "1c51c12828cc0d8eb6089ee02614f3f86f2e95f5",
+    "neverc_commit": "785a3dc1b78cd1fc4a738497a91f9416f1fd7d3f",
+    "sha256": {
+      "clang": "ffd0d7a36200bc5620008e8665410e1a74c4d64896b4f857f3b7a7d395d45884",
+      "neverc": "df9dd82278bcf2649a512da46ba0360e4891d124114081c5b14bfdd0d5204911"
+    }
+  },
+  "qualification_epoch": {
+    "reason": "One obsolete public-export refusal assertion updated to supported V2 debug call admission, while keeping nonpaged debug refusal. No runtime source changed.",
+    "changed_test": "unittests/devirtualization/x86_64/X64ScheduledCallTests.inc",
+    "first_epoch_archive": "epoch1-inputs",
+    "first_epoch_source_snapshot_sha256": "dc8bf98cbf44b9c4530623dc63b6aca060d9003b2898d2b8141ce5cc39ab9ce2",
+    "first_epoch_product_snapshot_sha256": "7e4ddf938a979f239a270dfd726325934e645db182f18d80b01e176475ee58b9",
+    "unchanged_runtime_sources": {
+      "include/neverd/analysis/arch/x86_64/X64PagedExecution.h": "358fe2c36d362f67e3335807e40a85f0a86335dd139db7aeac1889044838d007",
+      "lib/analysis/arch/x86_64/X64PagedExecution.cpp": "ca5febf0b874f4f697c47be42a60efa303e49a58d820ec2a226c134800f96057",
+      "lib/pipeline/X86/X64ContinuationExport.cpp": "a9e6b38344beb0b82be6edf261688ddfc167424d13fdf317f73d67650a7c26a6",
+      "lib/pipeline/X86/X64ContinuationPagedDriver.h": "2b9513e0d44d209f6d7c7ffa475916e9fb7573b6e5327e6532498cb175829614",
+      "lib/pipeline/X86/X64ContinuationSchedule.cpp": "734c142323a07398c381c92e792e850e7cfbf84ad272f50b9a35118ed211f506",
+      "lib/pipeline/X86/X64FunctionCallHandlers.cpp": "b7c9d83632a4310f49074c75c7d0309d70dbbae6afc5c40bdbf2a8e39f77e4d6",
+      "lib/pipeline/X86/X64FunctionCallHandlers.h": "257897087bc03150e94753b0cef53838b164e446962ebd84cd978b56b176db04",
+      "lib/pipeline/X86/X64FunctionCallSchedule.cpp": "2bdfdc06b05660ac017f9b2f9e748f45adfab4d09f173e371ee9f771394a1f31",
+      "lib/pipeline/X86/X64FunctionCallSchedule.h": "cea085c93d3d958fe4bbfa68ac4acb570207c00ffe93d6e85a42f2f50bcd94e6",
+      "lib/pipeline/X86/X64FunctionCallSites.cpp": "2a58db773f10735272257f39058d99b82b9aa4dc62411cf4c039ca5ec3dfa32c",
+      "lib/pipeline/X86/X64FunctionCallSites.h": "701043fbf387e08b574bd1f715532d263135bfbc44e2c715beaf06beda1bc894",
+      "lib/pipeline/X86/X64FunctionCalls.cpp": "64414a22197ce2c8f4622587735e1d1f94f3495aa07e056597c1ba0435948d17",
+      "lib/pipeline/X86/X64FunctionCalls.h": "1a85bd7de961ced25699bc7168da25697a8e89af9e27577548dc44f9c63f0e8c",
+      "lib/pipeline/X86/X64FunctionContext.cpp": "b5caaf1afed89920ac88235ade52815ff2c52389044c0f1744ea6cb4116cab9b",
+      "lib/pipeline/X86/X64FunctionContext.h": "4ba38fedceddd0790facbc5e8a98ac202fafde773deaa2ad2fbefc843c086ac7",
+      "unittests/translate/x86/X64PagedDebugFunctionTests.inc": "4235f520b422051b8b0b3d4ccaf9f24caada27c5095f5fabcac015480039c8af",
+      "unittests/translate/x86/X64PagedDebugTests.inc": "e6f501aca0bb7a008f6a0d33d8903a2baf0413c6b4e814bc855ef6a0f87324fb",
+      "unittests/translate/x86/X64PagedExecutionTests.cpp": "32306b3b05b3d2722fc693493526da377061d0e88974f5938dfd832800a4bfbf"
+    },
+    "unchanged_products": {
+      "native": {
+        "neverd": "645200309a35c0c1a617eb8cd0579808fc913272a21a90d8f02ed2d437f48956",
+        "libneverd.so": "60917835e01b618091d66b6d78bfe3a0e54199b4754f45267b1ff79783d66e05",
+        "NeverDX64PagedExecutionTests": "6688750ec2ef37f4649c9fdd3da112c2cc8fb93775ed90ec7978526b3ef739b4",
+        "NeverDX64ContinuationSourceTests": "a2f32399747d3ea3282a4879345cf61519a398d8f6d190f9f7a968539d70979a"
+      },
+      "r6": {
+        "neverd": "43870d2caec59f50f4d00a543a60948fa6a20d9d44d3adfd5e9b6808ca39df00",
+        "libneverd.so": "cf22e0c583dc0d40ca150702864eb5568108e87a68327ccece3d71fca120a953",
+        "NeverDX64PagedExecutionTests": "089a12945228e9ec4342261ed9a8d9bcdf50befe9738fab5eb09686dc78924bd",
+        "NeverDX64ContinuationSourceTests": "bf2ad5b49b5c0eff03d7d81f18d1e38b4df64ff1375b43f8d7464f528af58481"
+      }
+    },
+    "carry_forward_runs": [
+      "qualified-native-paged-p",
+      "qualified-r6-paged-p"
+    ],
+    "carry_forward_reason": "Both paged test executables, linked runtime libraries, source test executables and CLI binaries retain the exact pre-run SHA-256. The only source change is in the independent public-export test translation unit.",
+    "full_export_reruns": [
+      "qualified-native-export-final-p",
+      "qualified-r6-export-p"
+    ]
+  },
+  "snapshots": {
+    "source-snapshot.json": "7c78e6e4fbca7bee8903b2603bd2fe3b9d6ae25049f69db7b53799f1143a9ddb",
+    "product-snapshot.json": "80bef50562f96439472c0c3b69f98aa12515e269864889192880fa59b5f6b7af",
+    "tools-snapshot.json": "7095eb2930209519de3ff412195c8a81e6f948c08a2f1cc693d47e17ebee43b2",
+    "matrix-final-done.json": "1d8dcc46e473775c122af2ea180e50949225f2a1e03e6d97a364084fc25cf209",
+    "qualification-epoch.json": "39822f52ad32bf57fe86d01620f8655e9df125878c4fc7f10477641342b7df31"
+  },
+  "checks": {
+    "format-final": {
+      "command": [
+        "python3",
+        "/mnt/data/neverd-debug-function-20261106/check-format.py"
+      ],
+      "exit_code": 0,
+      "log_sha256": "1a16260fe2b327361ce558be88ed468480acbfbc69a582965d9c23b14245931b"
+    },
+    "docs": {
+      "command": [
+        "python3",
+        "scripts/check_docs_i18n.py"
+      ],
+      "exit_code": 0,
+      "log_sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+    },
+    "provenance-final": {
+      "command": [
+        "python3",
+        "scripts/check_source_provenance.py",
+        "--history-commits",
+        "2"
+      ],
+      "exit_code": 0,
+      "log_sha256": "294358c7bc4b53efcab90afee59e98525bbff3dd33caa965220378f6bbc08d90"
+    },
+    "diff": {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "prior_diagnostic_attempts": {
+    "focused-native-1": {
+      "tests": 9,
+      "passed": 5,
+      "failed": 4,
+      "skipped": [],
+      "binary_sha256": "e0763d2ba378bdc2bccc3e2880f6997a8e788d036d3f6e478fd2199b7889572c",
+      "log_sha256": "599f21b31b7b4d3b1572fb32395a9d610c221cc6c5692b956652dd9ab49c4607",
+      "result_sha256": "7a949958c7ac58cf66cb6989778b667accca67e11f1affb42d42c805a5a5d4e4"
+    },
+    "focused-native-2": {
+      "tests": 10,
+      "passed": 9,
+      "failed": 1,
+      "skipped": [],
+      "binary_sha256": "bd33ffd4488cd3742459500b63f27954e313c6c3dc785a286a6091280a741e8d",
+      "log_sha256": "2e25853494dd9c367487b1b67bdc14ca58077a3c47d1301ddc4fc2f3dddfd6d8",
+      "result_sha256": "693afc16557060f4b6c222dbc9b9d824691fd2e442a13813afc443356be473f9"
+    },
+    "focused-native-3": {
+      "tests": 1,
+      "passed": 0,
+      "failed": 1,
+      "skipped": [],
+      "binary_sha256": "cafa81fb4471023a8ec793484ea6fc03fae18506e2d2b22e43a47f02312c688f",
+      "log_sha256": "2cedafe0120c15d7494a47b742ed119ddcea3232cd26eb183a95930b34ec9d7d",
+      "result_sha256": "ab2c8ab06d2054181912a822941a0bc16207153e459c9ee199d32ba95b8c12bc"
+    },
+    "focused-native-4": {
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": [],
+      "binary_sha256": "6688750ec2ef37f4649c9fdd3da112c2cc8fb93775ed90ec7978526b3ef739b4",
+      "log_sha256": "5a5cad8428ed520f31de6ddfbb2d51fbc4e692dd150859f37a2eb5a3d8349b9b",
+      "result_sha256": "f24ae0719d31b119df6d89575d759c4598f38a599cb06d405c2d485fd2a5c6d6"
+    },
+    "qualified-native-export-p": {
+      "tests": 112,
+      "passed": 111,
+      "failed": 1,
+      "skipped": [],
+      "binary_sha256": "65fdb42005d265947384018ed03fc57f29d83c4906ae861be969b975ee53a212",
+      "log_sha256": "9b37f414ccaafcd5297b79eec7e66bd83c65d1d1031ed90325c94aedf244bea8",
+      "result_sha256": "8b5dce0ef2940e23a78cd248adc3b2d80dc85bd6d92adc731379f84e9cbfda74"
+    },
+    "focused-native-export-repair": {
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": [],
+      "binary_sha256": "19934b4b14b54c18968b8c232ff69dfeb0680e2f6cb5307c1a822ece8dd13e8f",
+      "log_sha256": "3a85c67832e1c4b0641ec60026d281374b04c4e53d6a4a9047f9ed39d24c434b",
+      "result_sha256": "56c5795ab1025f11ff17fbaabe49bc4e1e057f2fd65157fcf91c2261aad461c1"
+    },
+    "focused-r6-export-repair": {
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": [],
+      "binary_sha256": "6a7d2bc97d4c451150a2e9f13c8092c8368a124755fc9cfdd20f9dc321a44a21",
+      "log_sha256": "1d1d457723b89a873b689516a0d1b42de2fe15aeb9753e88c675eb19416fb66d",
+      "result_sha256": "23d3b31fe67e563a9fed3ed16a243c431de66ca3e98ef1e8586ab61d816edcc8"
+    }
+  },
+  "diagnostic_repairs": [
+    "Initial build corrected StringRef ostream conversion and dependent fixture include order.",
+    "First runtime run reproduced stale CALL receipt consumption after scheduler entry refusal; fixed by owned instruction-charge check. Fixture IRET/poll status numbers were corrected to their enums.",
+    "Pending handler fixture added an actual OR of saved RF, as required for instruction-breakpoint retry; production behavior was unchanged.",
+    "The first full public export regression retained an obsolete refusal for newly supported debug function views. The old test now verifies V2 admission and retains the nonpaged-debug refusal; both full export suites were rerun.",
+    "IRET data-watchpoint fixture originally reused a fixed IST frame and correctly reached resumable recursive event-work exhaustion. The delivered-handler case now supplies another IST top to avoid aliasing the watched frame."
+  ],
+  "references": [
+    {
+      "source": "https://cdrdv2-public.intel.com/843857/253669-sdm-vol-3b-dec-24.pdf",
+      "reason": "Selected instruction-breakpoint handler must set RF in the saved flags to permit retry. Existing original-handler regression uses explicit OR RF before IRET."
+    }
+  ],
+  "remaining_global_boundaries": [
+    "General i386/compatibility C source dispatch and further instruction/state domains.",
+    "Branch/task/transactional debug, real/VM86/task environments.",
+    "FRED/CET fault environments and software SMM/SGX/AEX.",
+    "Unavailable physical-hardware oracles, including unsupported AMX/3DNow/HLE/RTM and physical I/O domains; no synthetic match is substituted.",
+    "Producer-owned initial state, memory/address-space and return-cell lifetime remain explicit; ordinary source ABI inference is not established."
+  ],
+  "path_variables": {
+    "NEVERD_WORKTREE": "Checkout at source base with recorded changes",
+    "NEVERC_WORKTREE": "NeverC checkout at recorded commit"
+  }
+}

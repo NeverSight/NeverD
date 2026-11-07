@@ -270,7 +270,7 @@ TEST_F(X64ScheduledCallTest, RetainsArgumentAndProducerAdmission) {
          request(
              R"("entries":[4128],"follow_internal_calls":true,"function_context":true,"paged_memory":true,"scheduled_events":true,"function_calls":[{"entry":4128,"abi":"win64","argument_bytes":[8,8,8,8,4],"result_bytes":4}])"),
          request(
-             R"("entries":[4128],"follow_internal_calls":true,"function_context":true,"paged_memory":true,"paged_debug":true,"scheduled_events":true,"function_calls":[{"entry":4128,"abi":"win64","argument_bytes":[8],"result_bytes":4}])")}) {
+             R"("entries":[4128],"follow_internal_calls":true,"function_context":true,"paged_debug":true,"scheduled_events":true,"function_calls":[{"entry":4128,"abi":"win64","argument_bytes":[8],"result_bytes":4}])")}) {
       const char *Report = "old";
       EXPECT_EQ(neverd_x64_continuation_source_v1(Session, Bad.data(),
                                                   Bad.size(), LLVM, &Report),
@@ -278,6 +278,23 @@ TEST_F(X64ScheduledCallTest, RetainsArgumentAndProducerAdmission) {
       EXPECT_EQ(Report, nullptr);
       EXPECT_FALSE(take(neverd_last_error(Session)).empty());
     }
+    const auto Debug = request(
+        R"("entries":[4128],"follow_internal_calls":true,"function_context":true,"paged_memory":true,"paged_debug":true,"scheduled_events":true,"function_calls":[{"entry":4128,"abi":"win64","argument_bytes":[8],"result_bytes":4}])");
+    const char *Report = nullptr;
+    const auto Source = take(neverd_x64_continuation_source_v1(
+        Session, Debug.data(), Debug.size(), LLVM, &Report));
+    const auto ReportText = take(Report);
+    ASSERT_FALSE(Source.empty()) << take(neverd_last_error(Session));
+    auto Manifest = llvm::json::parse(ReportText);
+    ASSERT_TRUE(bool(Manifest));
+    const auto *Calls = Manifest->getAsObject()->getObject("function_calls");
+    ASSERT_NE(Calls, nullptr);
+    EXPECT_EQ(Calls->getString("context_type"), "neverd_x64_call_context_v2");
+    const auto *Interfaces = Calls->getArray("interfaces");
+    ASSERT_NE(Interfaces, nullptr);
+    ASSERT_EQ(Interfaces->size(), 1u);
+    EXPECT_EQ(Interfaces->front().getAsObject()->getString("call"),
+              "neverd_x64_call_paged_debug_events_1020_v6");
   }
 }
 

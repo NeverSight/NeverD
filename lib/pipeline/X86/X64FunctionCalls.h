@@ -57,10 +57,9 @@ llvm::json::Array emitX64FunctionCallArguments(
 /// native state. Only register comparisons precede the paged driver.
 /// Scheduled views share the scheduler and expose its producer/shadow inputs;
 /// they do not invoke the ordinary environment provider implicitly.
-llvm::json::Array
-emitX64FunctionCalls(llvm::raw_ostream &OS,
-                     llvm::ArrayRef<X64FunctionCallInterface> Calls,
-                     bool PagedMemory = false, bool ScheduledEvents = false);
+llvm::json::Array emitX64FunctionCalls(
+    llvm::raw_ostream &OS, llvm::ArrayRef<X64FunctionCallInterface> Calls,
+    bool PagedMemory = false, bool ScheduledEvents = false, bool Debug = false);
 
 } // namespace neverd
 

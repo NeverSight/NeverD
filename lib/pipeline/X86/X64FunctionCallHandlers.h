@@ -19,7 +19,8 @@ class raw_ostream;
 }
 
 namespace neverd {
-void emitX64FunctionCallHandlerContext(llvm::raw_ostream &OS);
+void emitX64FunctionCallHandlerContext(llvm::raw_ostream &OS,
+                                       bool Debug = false);
 
 /// Append a separate resume interface; ordinary site resumes and all
 /// instruction drivers retain their existing behavior. The producer declares

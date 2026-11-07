@@ -20539,6 +20539,28 @@ instruction execution, live context capture or an arbitrary fault handler.
 `X64PagedExecutionTests` separately owns the runtime's instruction/fault tests;
 compile-only checks do not replace that coverage.
 
+`X64PagedDebugFunctionTest.*` runs public V2 function, scalar-call and original
+CALL-site exports against the actual paged runtime. Both C routes compile with
+Clang and the bound NeverC. The original-transfer matrix additionally uses
+O0/O2 and KVM with guest-debug interception disabled and backing pre-faulted:
+CALL, RET and RET-immediate, CPL0/CPL3, TF and data-watchpoint causes compare
+represented processor/debug state and complete RAM. Saved #DB frames verify
+the receipt's original instruction and pre-event PC/SP/RAX. Record
+`original_comparisons` separately from software-only controller cases.
+
+Controller cases exercise all scalar result widths, a real handler changing
+RAX, returned-result idempotence, nested return-cell ownership, pre-RET operand
+faults, pending CALL retry, post-CALL/RET backing and event-work stops,
+shutdown, actual scheduler SS inhibition and stale-receipt refusal. A pending
+CALL's selected handler can exhaust its budget after IRET and then retry only
+once; an IRET data watchpoint must keep it in handler processing. Tests retain
+V1 result/handler layouts and assert the V2 context sizes. Shutdown controller
+cases do not claim original post-shutdown processor state. Set
+`NEVERD_TEST_NEVERC` and `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` to retain both
+compiler paths and uniquely named source/manifest pairs. Run the existing
+function/call/scheduled/handler export suites as compatibility regressions;
+their compile-time models remain distinct from these runtime comparisons.
+
 `X64ScheduledFunctionContextTest.*` checks scheduled activation admission,
 disabled source/manifest identity and O0/O2 compilation in both C routes.
 Each route has 22 nonpaged and
