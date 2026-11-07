@@ -477,6 +477,10 @@ private:
     bool readsKnown = false;
     /// Of the edits views have kept through, how many it has read.
     mutable std::uint64_t viewEditsRead = 0;
+    /// Hashes of the identifiers its text spells, sorted, once an edit's names
+    /// are first looked for in it.
+    mutable std::vector<std::uint64_t> spelled;
+    mutable bool spelledRead = false;
     // Decide once after decoration. Older engines may return unsorted rows
     // or overlapping name spans; those retain their original order while
     // filtering cached numeric bounds.

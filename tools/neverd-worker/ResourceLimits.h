@@ -65,8 +65,9 @@ inline constexpr std::size_t kEngineMaxCodePageBytes =
 inline constexpr std::size_t kEngineMaxNamedViewCacheBytes = 256 * 1024 * 1024;
 inline constexpr std::size_t kEngineMaxNamedViews = 512;
 /// Edits a kept document can be behind and still read for what reached it, and
-/// the bytes of its text it reads for the names they took and gave up; past
-/// either, building it again from what is kept costs less.
+/// the bytes of its text it reads for names they took and gave up that are not
+/// one identifier (an identifier is looked up among those its text spells);
+/// past either, building it again from what is kept costs less.
 inline constexpr std::size_t kEngineMaxViewEdits = 128;
 inline constexpr std::size_t kEngineMaxViewEditTextBytes = 4 * 1024 * 1024;
 inline constexpr std::size_t kEngineMaxEncodedPages = 64;
