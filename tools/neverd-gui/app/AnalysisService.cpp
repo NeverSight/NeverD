@@ -50,6 +50,7 @@ bool AnalysisService::handles(const QString &operation) {
 
 void AnalysisService::stopWorker() {
   ++serial_;
+  forgetKeptRequests();
   if (snapshotRequest_)
     owner_.unsubscribe(std::exchange(snapshotRequest_, 0));
   wire_.clear();
@@ -69,6 +70,7 @@ void AnalysisService::reset() {
   const bool retain = (ready_ || refreshingNames_) && updatesNames_ &&
                       queries_.projectId() == owner_.projectId();
   active_.clear();
+  forgetKeptRequests();
   if (retain) {
     ++serial_;
     ready_ = false;
@@ -139,9 +141,74 @@ QString AnalysisService::send(const QString &operation,
       dispatch();
       return;
     }
+    if (ownerReadsKept_ && (operation_ == QLatin1String("decompile") ||
+                            operation_ == QLatin1String("cfg_summary") ||
+                            operation_ == QLatin1String("cfg_viewport"))) {
+      readKept();
+      return;
+    }
     requestSnapshot();
   });
   return id;
+}
+
+void AnalysisService::readKept() {
+  if (keptState_ == KeptState::Unknown) {
+    keptState_ = KeptState::Asked;
+    const auto serial = serial_;
+    keptStateRequest_ = owner_.subscribe(
+        {QStringLiteral("kept_renders"), {}}, this,
+        [this, serial](const QJsonObject &response) {
+          if (serial != serial_)
+            return;
+          keptStateRequest_ = 0;
+          keptState_ =
+              response.value("payload").toObject().value("complete").toBool()
+                  ? KeptState::Whole
+                  : KeptState::Part;
+          if (!active_.isEmpty() && !ready_)
+            readKept();
+        });
+    return;
+  }
+  if (keptState_ == KeptState::Asked)
+    return;
+  // Part of the renders leaves a job to go on with, whatever this read finds.
+  if (keptState_ == KeptState::Part)
+    requestSnapshot();
+  auto payload = payload_;
+  payload["kept_only"] = true;
+  const auto serial = serial_;
+  if (keptRead_)
+    owner_.unsubscribe(std::exchange(keptRead_, 0));
+  keptRead_ = owner_.subscribe(
+      {operation_, payload}, this,
+      [this, serial, read = active_](const QJsonObject &response) {
+        if (serial != serial_)
+          return;
+        keptRead_ = 0;
+        if (read != active_)
+          return;
+        // A graph the owner has let go of is the query's to ask for again.
+        if (response.value("status") == QLatin1String("ok") ||
+            response.value("error").toObject().value("code") ==
+                QLatin1String("stale_layout")) {
+          finish(response);
+          return;
+        }
+        if (ready_)
+          dispatch();
+        else
+          requestSnapshot();
+      });
+}
+
+void AnalysisService::forgetKeptRequests() {
+  if (keptStateRequest_)
+    owner_.unsubscribe(std::exchange(keptStateRequest_, 0));
+  if (keptRead_)
+    owner_.unsubscribe(std::exchange(keptRead_, 0));
+  keptState_ = KeptState::Unknown;
 }
 
 void AnalysisService::setSnapshotBlocked(bool blocked) {
@@ -266,6 +333,9 @@ void AnalysisService::receive(const QJsonObject &message) {
     refreshingNames_ = false;
     workerRevision_ = message.value("revision").toString();
     ready_ = true;
+    // The replica answers from here on.
+    if (keptRead_)
+      owner_.unsubscribe(std::exchange(keptRead_, 0));
     dispatch();
   } else if (!wire_.isEmpty() && id == wire_) {
     workerRevision_ = message.value("revision").toString();

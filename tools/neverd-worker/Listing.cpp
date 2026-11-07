@@ -5231,6 +5231,18 @@ bool Listing::functionRenamed(std::uint64_t address) {
   return true;
 }
 
+void Listing::declarationsChanged() {
+  auto &d = *impl_;
+  d.cache.invalidate();
+  d.decoded.clear();
+  d.decodedOrder.clear();
+  // The table holds nothing a declaration changes.
+  const bool rows = d.functionRowsGeneration == d.generation;
+  ++d.generation;
+  if (rows)
+    d.functionRowsGeneration = d.generation;
+}
+
 void Listing::functionNamesChanged() {
   impl_->cache.invalidate();
   impl_->functionNamesStale = !impl_->namesStale || impl_->functionNamesStale;

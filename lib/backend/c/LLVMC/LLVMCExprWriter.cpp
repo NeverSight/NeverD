@@ -441,9 +441,8 @@ std::string LLVMCWriter::namedImageObject(va_t Addr) const {
   // The name the identifier is spelled from, which a comment beside its
   // declaration names where the identifier is not that name.
   std::string Spelling;
-  if (Opts.UserNames)
-    if (auto It = Opts.UserNames->find(Addr); It != Opts.UserNames->end())
-      Raw = It->second;
+  if (const std::string *User = Opts.userName(Addr))
+    Raw = *User;
   if (Raw.empty() && Dbg) {
     if (auto Data = Dbg->resolveDataObject(Addr);
         Data && !Data->Name.empty() && !isStringLiteralName(Data->Name))

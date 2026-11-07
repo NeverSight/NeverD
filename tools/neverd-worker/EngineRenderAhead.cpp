@@ -59,24 +59,41 @@ std::chrono::milliseconds holdOff(std::uint64_t size) {
 const std::string CompleteKey = "complete";
 } // namespace
 
+bool Engine::keptRenderHolds(RenderStore &store, const std::string &key) {
+  const auto first = store.readFirst(key);
+  return !first || renderReadsHold(*first);
+}
+
 Json Engine::renderStoreIdentity() {
   auto identity = browseCacheIdentity();
   auto &state = identity.at("state");
   state.erase("code_edits");
   state.erase("annotations");
   state.erase("operands");
-  // Data's names are spelled in the pages that name it; a function's are not.
-  Json dataNames = Json::array();
-  for (auto row : state.value("renames", Json::array()))
-    if (neverd_func_find_by_addr(
-            session_, parseAddress(row.at("addr").get<std::string>())) < 0) {
-      row.erase("original");
-      dataNames.push_back(std::move(row));
-    }
-  state["renames"] = std::move(dataNames);
+  // Only the listing lays out what the user defines of data.
+  state.erase("items");
+  // Each render says which names of data and declarations it read, and answers
+  // while they read the same (renderReadsHold).  A function's name is not
+  // spelled in its pages at all.
+  if (rendersSayTheirReads()) {
+    state["functions"] = functionRowsRead(state.at("functions"), false);
+    state.erase("renames");
+    identity["user_facts_analysis_reads"] = userFactsAnalysisReads();
+  } else {
+    state["functions"] = functionRowsRead(state.at("functions"), true);
+    Json dataNames = Json::array();
+    for (auto row : state.value("renames", Json::array()))
+      if (neverd_func_find_by_addr(
+              session_, parseAddress(row.at("addr").get<std::string>())) < 0) {
+        row.erase("original");
+        dataNames.push_back(std::move(row));
+      }
+    state["renames"] = std::move(dataNames);
+  }
   for (const auto file :
        {project_files::File::Code, project_files::File::Annotations,
-        project_files::File::Renames, project_files::File::Operands})
+        project_files::File::Renames, project_files::File::Operands,
+        project_files::File::Functions, project_files::File::Items})
     identity.at("shared").erase(
         std::string(project_files::describe(file).Path));
   return identity;
@@ -112,9 +129,17 @@ void eachStatedFunction(Page &page, Each each) {
 }
 } // namespace
 
+const Json &Engine::renameRows() const {
+  if (renameRowsRevision_ != revision_) {
+    renameRows_ = backendJson(neverd_renames_json(session_));
+    renameRowsRevision_ = revision_;
+  }
+  return renameRows_;
+}
+
 bool Engine::keptPageReadsCurrentNames(const Json &page) const {
   bool current = true;
-  const auto names = backendJson(neverd_renames_json(session_));
+  const auto &names = renameRows();
   eachStatedFunction(page, [&](std::uint64_t address, const Json &identity) {
     if (identity.value("name_origin", std::string()) != "user")
       return;
@@ -129,7 +154,7 @@ bool Engine::keptPageReadsCurrentNames(const Json &page) const {
 }
 
 void Engine::currentNamesInView(Json &view) const {
-  const auto rows = backendJson(neverd_renames_json(session_));
+  const auto &rows = renameRows();
   if (rows.empty())
     return;
   std::unordered_map<std::uint64_t, std::string> names;
@@ -192,6 +217,54 @@ void Engine::openRenderStore(const std::string &mode) {
     return;
   }
   summariesDeferred_ = summaryJob_ && renderStore_->contains(CompleteKey);
+}
+
+void Engine::keepStoresFor(const StoreNames &before) {
+  rendersStoreRead_ = false;
+  factsStoreRead_ = false;
+  try {
+    const auto names = storeNames();
+    const auto project = projectJson();
+    if (!before.renders.empty() && !names.renders.empty())
+      RenderStore::keepFor(projectLocalFolder(project, "render-ahead"),
+                           before.renders, names.renders);
+    if (!before.facts.empty() && !names.facts.empty())
+      RenderStore::keepFor(projectLocalFolder(project, "listing-facts"),
+                           before.facts, names.facts);
+  } catch (const std::exception &) {
+    // Later sessions render again.
+  }
+}
+
+RenderStore *Engine::storeOfViews() {
+  if (!renderStoreMode_.empty())
+    return liveRenderStore();
+  const auto generation = listing().cacheGeneration();
+  if (!rendersStoreRead_ || rendersStoreGeneration_ != generation) {
+    rendersStoreRead_ = true;
+    rendersStoreGeneration_ = generation;
+    try {
+      const auto name = storeNames().renders;
+      if (name.empty()) {
+        renderStore_.reset();
+        rendersStoreName_.clear();
+      } else if (name != rendersStoreName_) {
+        renderStore_ = std::make_unique<RenderStore>(
+            projectLocalFolder(projectJson(), "render-ahead"), name, false);
+        rendersStoreName_ = name;
+      }
+    } catch (const std::exception &) {
+      renderStore_.reset();
+      rendersStoreName_.clear();
+    }
+  }
+  return renderStore_.get();
+}
+
+Json Engine::keptRendersJson() {
+  const auto *store = storeOfViews();
+  return {{"kept", store ? store->records() : 0},
+          {"complete", store && store->contains(CompleteKey)}};
 }
 
 void Engine::openFactsStore(const std::string &name, bool writable) {
@@ -295,7 +368,7 @@ void Engine::restartRenderAhead() {
       !renderAheadRequested_ ? RenderAheadState::Off
       : ++renderAheadStarts_ >
                   ::neverd::limits::worker::kRenderAheadMaxStarts ||
-              (store && store->contains(CompleteKey))
+              (store && store->contains(CompleteKey) && !renderAheadVerifying_)
           ? RenderAheadState::Done
           : RenderAheadState::Pending;
 }
@@ -350,6 +423,7 @@ bool Engine::renderAheadStep() {
   auto *store = liveRenderStore();
   if (renderAheadCursor_ >= renderAheadOrder_.size()) {
     renderAheadState_ = RenderAheadState::Done;
+    renderAheadVerifying_ = false;
     if (store) {
       store->write(CompleteKey, {});
       store->writeIndex();
@@ -396,9 +470,19 @@ void Engine::renderFunctionAhead(std::uint64_t address) {
                            : std::string();
   // A kept document answers a visit already, but not one in a later session.
   if (renderedAhead_.contains(sourceKey) ||
-      (store ? store->contains(keptKey)
-             : namedViewsBySource_.contains(sourceKey)))
+      (!store && namedViewsBySource_.contains(sourceKey)))
     return;
+  if (store && store->contains(keptKey)) {
+    if (keptRenderHolds(*store, keptKey))
+      return;
+    // What it read changed.  Rendering reads the summaries, which come first.
+    if (summariesDeferred_) {
+      summariesDeferred_ = false;
+      restartSummaries();
+      --renderAheadCursor_;
+      return;
+    }
+  }
   // Later sessions leave what this one failed to render to their visits.
   const auto failed = [&] {
     ++renderAheadFailed_;
@@ -453,6 +537,7 @@ void Engine::renderFunctionAhead(std::uint64_t address) {
   renderAheadBytes_ += compact;
   renderAheadRawBytes_ += raw;
   ++renderAheadRendered_;
+  pages.insert(pages.begin(), renderReads());
   if (!store || !store->write(keptKey, pages)) {
     renderAheadHeldBytes_ += compact;
     renderedAhead_.emplace(sourceKey, std::move(pages));
@@ -468,10 +553,11 @@ void Engine::keepVisitedRender(std::uint64_t address,
       store->bytes() >= ::neverd::limits::worker::kRenderAheadMaxStoredBytes)
     return;
   const auto key = renderStoreKey(address, representation, optionText);
-  if (store->contains(key))
+  if (store->contains(key) && keptRenderHolds(*store, key))
     return;
   std::vector<std::string> compact;
-  compact.reserve(pages.size());
+  compact.reserve(pages.size() + 1);
+  compact.push_back(renderReads());
   for (const auto &page : pages)
     compact.push_back(compressPage(page));
   store->write(key, compact);
@@ -484,19 +570,37 @@ std::vector<std::string> Engine::renderedAheadPages(
   renderFailedAddress_.reset();
   const auto kept = renderedAhead_.find(sourceKey);
   if (kept == renderedAhead_.end()) {
-    if (auto *store = liveRenderStore()) {
+    // An owner reads the store only for a request that asks for that.
+    if (auto *store =
+            renderStoreMode_.empty() && !keptOnly_ ? nullptr : storeOfViews()) {
       const auto key = renderStoreKey(address, representation, optionText);
       stored = store->read(key);
       if (stored.empty() && store->contains(key))
         renderFailedAddress_ = address;
+      if ((stored.empty() || !renderReadsHold(stored.front())) &&
+          renderStoreMode_.empty()) {
+        // What the replica has rendered since.
+        const auto now = std::chrono::steady_clock::now();
+        if (now - rendersRefreshed_ >=
+            std::chrono::milliseconds(
+                ::neverd::limits::worker::kListingFactsRefreshMilliseconds)) {
+          rendersRefreshed_ = now;
+          store->refresh();
+          stored = store->read(key);
+        }
+      }
     }
     if (stored.empty())
       return pages;
   }
   const auto &compactPages =
       kept != renderedAhead_.end() ? kept->second : stored;
-  pages.reserve(compactPages.size());
-  for (const auto &compact : compactPages) {
+  // Its first says what the render read, and it answers while that holds.
+  if (compactPages.empty() || !renderReadsHold(compactPages.front()))
+    return pages;
+  pages.reserve(compactPages.size() - 1);
+  for (std::size_t at = 1; at < compactPages.size(); ++at) {
+    const auto &compact = compactPages[at];
     auto page = decompressPage(compact);
     if (!page)
       return {};

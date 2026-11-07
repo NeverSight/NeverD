@@ -322,6 +322,19 @@ neverd_prepare_call_summaries_json(neverd_session_t Sess);
 NEVERD_API const char *neverd_prefill_callees_json(neverd_session_t Sess,
                                                    int First, int MaxCallees);
 
+/// What the session's current result read of what the user states of addresses:
+/// the names of data and the declarations of functions, stated or not.  Opaque
+/// text for neverd_user_reads_hold, valid for this binary and engine build.
+NEVERD_API const char *neverd_user_reads(neverd_session_t Sess);
+/// Whether a result that read \p Reads reads the same of what the user states
+/// now.
+NEVERD_API int neverd_user_reads_hold(neverd_session_t Sess, const char *Reads);
+
+/// Whether the session holds the call summaries
+/// neverd_prepare_call_summaries_json solved, and what was read ahead under
+/// them.  An edit that leaves analysis as it is leaves them.
+NEVERD_API int neverd_call_summaries_held(neverd_session_t Sess);
+
 NEVERD_API const char *neverd_decompile(neverd_session_t Sess,
                                         neverd_va_t FuncEntry);
 

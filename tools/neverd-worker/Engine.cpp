@@ -10,6 +10,7 @@
 #include "LineageService.h"
 #include "Listing.h"
 #include "OperandFormat.h"
+#include "PageCodec.h"
 #include "ProjectHistory.h"
 #include "ResourceLimits.h"
 #include "TablePage.h"
@@ -891,6 +892,7 @@ bool Engine::reloadOperandFormats() {
   return true;
 }
 void Engine::namesChanged() {
+  renameRowsRevision_.reset();
   forgetNamedViews();
   graphs_.clear();
   if (listing_)
@@ -902,6 +904,7 @@ void Engine::namesChanged() {
   functionOrder_.clear();
 }
 void Engine::functionNamesChanged(bool unnamed) {
+  renameRowsRevision_.reset();
   graphs_.clear();
   if (listing_ && unnamed)
     listing_->functionNamesChanged();
@@ -939,6 +942,8 @@ Json Engine::keptFunctionGraph(std::uint64_t address) {
     if (validFunctionGraph(graph))
       return graph;
   }
+  if (keptOnly_)
+    throw Error("not_kept", "No session has kept this graph");
   return functionGraph(address);
 }
 void Engine::commentsChanged() {
@@ -984,8 +989,11 @@ bool Engine::reloadFunctionEdits() {
   const auto before = functionEditRows();
   if (edits.load(session_) != 0)
     return false;
-  if (functionEditRows() != before)
+  const auto after = functionEditRows();
+  if (functionRowsRead(before, false) != functionRowsRead(after, false))
     functionsChanged();
+  else if (functionRowsRead(before, true) != functionRowsRead(after, true))
+    declarationsChanged();
   return true;
 }
 Json Engine::typeDeclarationRows() const {
@@ -1024,6 +1032,32 @@ void Engine::functionsChanged() {
     listing_->reindex();
   invalidate();
 }
+Json Engine::functionRowsRead(const Json &rows, bool declarations) {
+  Json read = Json::array();
+  for (auto row : rows) {
+    for (const char *note : {"library", "static", "color"})
+      row.erase(note);
+    if (!declarations)
+      row.erase("type");
+    // A row always names its address.
+    if (row.size() > 1)
+      read.push_back(std::move(row));
+  }
+  return read;
+}
+void Engine::declarationsChanged() {
+  analyzed_ = false;
+  preparedFunction_.reset();
+  forgetNamedViews();
+  graphs_.clear();
+  textKey_.clear();
+  textCache_.clear();
+  textLines_.clear();
+  functionOrderKey_.clear();
+  functionOrder_.clear();
+  if (listing_)
+    listing_->declarationsChanged();
+}
 void Engine::invalidate() {
   forgetNamedViews();
   graphs_.clear();
@@ -1061,6 +1095,7 @@ void Engine::forgetNamedViews() {
 }
 
 void Engine::localNamesChanged() {
+  renameRowsRevision_.reset();
   // Local display names do not change instructions, functions or the prepared
   // pipeline. Keep original documents for checked, lazy redecoration; encoded
   // pages and already decorated documents still belong to their old revision.
@@ -1275,6 +1310,8 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
       reused && reused->original.empty() ? &reused->enginePages
       : !renderedPages.empty()           ? &renderedPages
                                          : nullptr;
+  if (keptOnly_ && original.is_null() && !replay)
+    throw Error("not_kept", "No session has kept this view");
   // A hit answers from its finished document without pretending the mutable
   // Session still holds this function. Graph/IR requests prepare it normally.
   if (original.is_null() && !replay && !recovery)
@@ -1341,6 +1378,8 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
                               engineOptions, optionText);
       auto page = parsedBackendText(text);
       if (replay && next == 0 && !keptPageReadsCurrentNames(page)) {
+        if (keptOnly_)
+          throw Error("not_kept", "A kept view reads a name since taken away");
         replay = nullptr;
         prepareFunction(address, representation);
         text = engineViewPage(address, backendRepresentation, next, sourceView,
@@ -1433,8 +1472,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     }
     if (sourceView && !recovery)
       CodeEdits::decorate(
-          full, codeEditRow(address), address, representation,
-          backendJson(neverd_renames_json(session_)),
+          full, codeEditRow(address), address, representation, renameRows(),
           backendJson(neverd_annotations_json(session_)), displayNames,
           [this](const std::string &name) -> std::optional<std::uint64_t> {
             // The address the resolve operation answers, without describing
@@ -1836,6 +1874,35 @@ bool Engine::summaryWorkPending() const {
          summaryState_ == SummaryState::Preparing ||
          summaryState_ == SummaryState::Solving;
 }
+bool Engine::rendersSayTheirReads() const {
+  static const bool says =
+      engineSymbol<SessionJsonFunction>("neverd_user_reads") &&
+      engineSymbol<SessionJsonFunction>(
+          "neverd_user_facts_analysis_reads_json");
+  return says;
+}
+
+Json Engine::userFactsAnalysisReads() const {
+  static const auto reads = engineSymbol<SessionJsonFunction>(
+      "neverd_user_facts_analysis_reads_json");
+  return backendJson(reads(session_), true);
+}
+
+std::string Engine::renderReads() {
+  static const auto reads =
+      engineSymbol<SessionJsonFunction>("neverd_user_reads");
+  return reads ? compressPage(ownedString(reads(session_))) : std::string();
+}
+
+bool Engine::renderReadsHold(const std::string &compact) {
+  using Hold = int (*)(neverd_session_t, const char *);
+  static const auto hold = engineSymbol<Hold>("neverd_user_reads_hold");
+  if (compact.empty() || !hold)
+    return true;
+  const auto reads = decompressPage(compact);
+  return reads && hold(session_, reads->c_str()) != 0;
+}
+
 void Engine::restartSummaries() {
   // The engine may have dropped them with the analysis a change drops; a
   // run of the job finds kept ones at once.
@@ -2412,6 +2479,8 @@ Json Engine::analysisSnapshot() {
           {"open", options},
           {"input_sha256", inputHash()},
           {"state", userState()},
+          {"declared_types",
+           declaresLocalTypes() ? typeDeclarationRows() : Json::array()},
           {"analysis_sections", std::move(analysisSections)},
           {"signatures", signatureInputs_},
           {"pdb", pdbInput_},
@@ -2600,11 +2669,17 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
   auto before = restoredSnapshot_;
   auto after = snapshot;
   // These are read as a view is emitted and decorated, or under the options of
-  // its own function's view, and by nothing the replica has analyzed.
-  for (auto *value : {&before, &after})
+  // its own function's view, and by nothing the replica has analyzed.  A
+  // declaration is read by the decompiler alone, and the engine lets go of what
+  // read it.
+  for (auto *value : {&before, &after}) {
+    auto &state = value->at("state");
     for (const char *table :
          {"code_edits", "renames", "annotations", "operands", "items"})
-      value->at("state").erase(table);
+      state.erase(table);
+    state["functions"] = functionRowsRead(state.at("functions"), false);
+    value->erase("declared_types");
+  }
   if (before != after)
     throw Error("stale_snapshot", "Analysis changed; restore a fresh replica");
   // Check the retained inputs as well as the new writer-owned sidecar before
@@ -2626,10 +2701,8 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
       ::neverd::limits::worker::kEngineReadCodeEditsRowsSizeLimit)
     throw Error("invalid_request", "Invalid code edit table");
   auto expected = ProjectHistory::normalizedState(snapshot.at("state"));
-  // Local declarations are loaded from disk when a replica opens. They must
-  // still match that analysis even though the snapshot has no types table.
-  expected["types"] =
-      declaresLocalTypes() ? typeDeclarationRows() : committed.at("types");
+  // What the owner has declared.  Anything else on disk is a foreign edit.
+  expected["types"] = snapshot.value("declared_types", committed.at("types"));
   for (auto *state : {&committed, &expected}) {
     for (auto &rename : state->at("renames"))
       rename.erase("original");
@@ -2658,6 +2731,13 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
                             next.value("items", Json::array());
   const bool formatsChanged = previous.value("operands", Json::array()) !=
                               next.value("operands", Json::array());
+  const bool typesChanged =
+      declaresLocalTypes() && typeDeclarationRows() != expected.at("types");
+  const auto oldFunctions = previous.value("functions", Json::array());
+  const auto newFunctions = next.value("functions", Json::array());
+  const bool declared =
+      typesChanged || functionRowsRead(oldFunctions, true) !=
+                          functionRowsRead(newFunctions, true);
   // A function's name is applied to its pages as they are decorated, and data's
   // is spelled in the pages that name it, whichever those are.
   bool dataRenamed = false, unnamed = false;
@@ -2673,12 +2753,18 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
     }
   codeEdits_ = next.value("code_edits", Json::array());
   restoredSnapshot_ = snapshot;
+  renameRowsRevision_.reset();
   if (oldNames != newNames && neverd_renames_load(session_) != 0)
     throw Error("stale_snapshot", "Cannot read the project's names again");
   if (formatsChanged && !reloadOperandFormats())
     throw Error("stale_snapshot", "Cannot read the project's formats again");
   if (itemsChanged && dataItems() && dataItems().load(session_) != 0)
     throw Error("stale_snapshot", "Cannot read the project's items again");
+  if (declared && functionEdits() && functionEdits().load(session_) != 0)
+    throw Error("stale_snapshot", "Cannot read the project's functions again");
+  if (typesChanged && engineSymbol<SessionLoadFunction>(
+                          "neverd_type_declarations_load")(session_) != 0)
+    throw Error("stale_snapshot", "Cannot read the project's types again");
   if (commented) {
     for (const auto &row : oldComments)
       neverd_annotation_set(
@@ -2694,15 +2780,33 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
     if (listing_)
       listing_->commentsChanged();
   }
-  if (dataRenamed || itemsChanged) {
-    // The pages of other data.
+  if (dataRenamed || itemsChanged || declared) {
+    // The pages of other data, or of whatever read a declaration.
     const bool deferred = summariesDeferred_;
     renderAheadCursor_ = 0;
-    openRenderStore(renderStoreMode_);
-    summariesDeferred_ = summariesDeferred_ && deferred;
-    if (deferred && !summariesDeferred_)
+    // The user's edits start the job over as often as they come.
+    renderAheadStarts_ = 0;
+    // What the store keeps answers while what each render read holds; the job
+    // renders again what does not.
+    const bool sameStore = !renderStoreMode_.empty() && renderStore_ &&
+                           renderStore_->keeps(storeNames().renders);
+    renderAheadVerifying_ = sameStore && (dataRenamed || declared);
+    using HeldFunction = int (*)(neverd_session_t);
+    static const auto held =
+        engineSymbol<HeldFunction>("neverd_call_summaries_held");
+    const bool summariesHeld = held && held(session_) != 0;
+    if (!sameStore) {
+      openRenderStore(renderStoreMode_);
+      summariesDeferred_ = summariesDeferred_ && deferred;
+      if (declared)
+        summariesDeferred_ = false;
+    }
+    if (!summariesHeld && !summariesDeferred_ && (declared || deferred))
       restartSummaries();
-    namesChanged();
+    if (declared)
+      declarationsChanged();
+    if (dataRenamed || itemsChanged)
+      namesChanged();
   } else if (oldNames != newNames)
     functionNamesChanged(unnamed);
   localNamesChanged();
@@ -3642,6 +3746,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     ++revision_;
     return {{"loaded", true}, {"byte_matches", matches}};
   }
+  if (operation == "kept_renders")
+    return keptRendersJson();
   if (operation == "metadata")
     return metadata();
   if (operation == "history") {
@@ -4021,7 +4127,13 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     static const auto load =
         engineSymbol<SessionLoadFunction>("neverd_type_declarations_load");
     std::string reply;
+    StoreNames storesBefore;
     if (operation == "local_types_declare") {
+      try {
+        storesBefore = storeNames();
+      } catch (const std::exception &) {
+        // Later sessions render again.
+      }
       const auto source =
           stringField(p, "source", {},
                       ::neverd::limits::worker::kEngineMaxDeclarationBytes);
@@ -4072,6 +4184,18 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         (void)load(session_);
         throw;
       }
+    }
+    // Types nothing has read: what is kept of the project holds for it now,
+    // where no code edit spells their names.
+    const auto codeEdits = codeEdits_.dump();
+    const auto types = result.value("types", Json::array());
+    if (result.value("unread", false) &&
+        std::none_of(types.begin(), types.end(), [&](const Json &name) {
+          return codeEdits.find(name.get<std::string>()) != std::string::npos;
+        })) {
+      keepStoresFor(storesBefore);
+      ++revision_;
+      return result;
     }
     // Structure offsets name the members of the types as they are now.
     if (result.value("problems", Json::array()).empty()) {
@@ -5267,7 +5391,15 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       functionsChanged();
       throw;
     }
-    functionsChanged();
+    // What analysis reads of the functions decides how much starts over.
+    const auto rowRead = [&](const Json &row, bool declarations) {
+      return functionRowsRead(
+          row.is_null() ? Json::array() : Json::array({row}), declarations);
+    };
+    if (!edit || rowRead(before, false) != rowRead(after, false))
+      functionsChanged();
+    else if (rowRead(before, true) != rowRead(after, true))
+      declarationsChanged();
     ++revision_;
     Json result{{"address", hexAddress(address)}, {"saved", true}};
     if (edit)
@@ -5683,6 +5815,11 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
             {"also", others.size()},
             {"saved", true}};
   }
+  struct KeptOnly {
+    bool &flag;
+    ~KeptOnly() { flag = false; }
+  } keptOnlyScope{keptOnly_};
+  keptOnly_ = p.is_object() && p.value("kept_only", false);
   if (operation == "decompile") {
     const auto representation = stringField(
         p, "representation", "c",
@@ -5727,6 +5864,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       if (auto named = namedViewPage(entry, representation, offset, limit,
                                      options, encoded))
         return std::move(*named);
+      if (keptOnly_)
+        throw Error("not_kept", "No session has kept this view");
       if (!options.empty())
         throw Error("unavailable",
                     error().empty() ? "Source transformation failed" : error());

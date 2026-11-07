@@ -6758,10 +6758,13 @@ private slots:
                                  !listing->jumpPending() &&
                                  !bench.session.queries().hasPending(),
                              OpenTimeoutMs);
-    // Initial discovery and navigation may retire the first source replica.
-    // Establish the cache baseline after that setup, then require this same
-    // idle replica to survive both display-name commits.
+    // Initial discovery and navigation may retire the first source replica,
+    // and the owner answers what is kept until the next is ready.  Establish
+    // the cache baseline after that setup, then require this same idle replica
+    // to survive both display-name commits.
     first = {};
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.analysisReplicaReady(),
+                             OpenTimeoutMs);
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { first = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!first.isEmpty(), OpenTimeoutMs);
@@ -6833,6 +6836,49 @@ private slots:
     for (const auto *field :
          {"fixture_instance", "fixture_prepares", "fixture_pages"})
       QCOMPARE(kept.value(field), first.value(field));
+    // So does a note on a function, and a declaration, whose views start anew.
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    current = bench.session.revision();
+    bench.session.editFunction(Base + 16, {{"color", "#204060"}});
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != current,
+                             OpenTimeoutMs);
+    QJsonObject noted;
+    bench.session.read("decompile", payload, &reader,
+                       [&](const QJsonObject &page) { noted = page; });
+    QTRY_VERIFY_WITH_TIMEOUT(!noted.isEmpty(), OpenTimeoutMs);
+    for (const auto *field :
+         {"fixture_instance", "fixture_prepares", "fixture_pages"})
+      QCOMPARE(noted.value(field), first.value(field));
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    current = bench.session.revision();
+    bench.session.editFunction(Base + 16,
+                               {{"type", "int renamed_in_place(int value)"}});
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != current,
+                             OpenTimeoutMs);
+    QJsonObject declared;
+    bench.session.read("decompile", payload, &reader,
+                       [&](const QJsonObject &page) { declared = page; });
+    QTRY_VERIFY_WITH_TIMEOUT(!declared.isEmpty(), OpenTimeoutMs);
+    QCOMPARE(declared.value("fixture_instance"),
+             first.value("fixture_instance"));
+    QVERIFY(declared.value("fixture_pages").toInteger() >
+            first.value("fixture_pages").toInteger());
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    bool typesDeclared = false;
+    bench.session.declareTypes(
+        QStringLiteral("c"), QStringLiteral("struct IN_PLACE { int value; };"),
+        [&](const QJsonObject &) { typesDeclared = true; });
+    QTRY_VERIFY_WITH_TIMEOUT(typesDeclared, OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QJsonObject typed;
+    bench.session.read("decompile", payload, &reader,
+                       [&](const QJsonObject &page) { typed = page; });
+    QTRY_VERIFY_WITH_TIMEOUT(!typed.isEmpty(), OpenTimeoutMs);
+    QCOMPARE(typed.value("fixture_instance"), first.value("fixture_instance"));
     // An edit to what the engine reads restores a fresh replica.
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
@@ -7368,8 +7414,13 @@ private slots:
     code.load(Base + 32, QStringLiteral("source"));
     QTRY_VERIFY_WITH_TIMEOUT(code.complete(), NativeOpenTimeoutMs);
     QCOMPARE(code.allText(), rendered);
-    // The first page this session's engine writes is for this request.
+    // The owner answered: no replica has started.
+    QTest::qWait(100);
+    QVERIFY(!session.analysisReplicaStarted());
+    // A view no session kept starts one.  The first page this session's engine
+    // writes is for this request.
     QCOMPARE(readPages(session, Base + 48), 1);
+    QVERIFY(session.analysisReplicaStarted());
   }
 
   void analysisReplicaRendersNothingAheadForViewsOpeningUnderOptions() {
