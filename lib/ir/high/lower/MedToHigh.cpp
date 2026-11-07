@@ -1845,6 +1845,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
       eliminateUnusedValues(Func);
     }
     reduceLateGotos(Func);
+    nameRepeatedValues(Func);
     anchorDispatcherEntries(Func);
     Trace.high(Func, "after-exceptions");
     return Func;
