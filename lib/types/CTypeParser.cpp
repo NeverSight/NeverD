@@ -24,7 +24,6 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/StringSaver.h"
 
 #include <functional>
@@ -564,30 +563,19 @@ const llvm::StringMap<Builtin> &builtinWords() {
 }
 
 /// The words that make builtin types together: unsigned long long int.
-LLVM_ATTRIBUTE_ALWAYS_INLINE bool builtinKeyword(llvm::StringRef Word) {
-  // Group exact spellings by length so ordinary names skip unrelated
-  // keywords. Keep the boolean checks in their callers' parsing loops.
-  switch (Word.size()) {
-  case 3:
-    return Word == "int";
-  case 4:
-    return Word == "void" || Word == "char" || Word == "long" || Word == "bool";
-  case 5:
-    return Word == "short" || Word == "float" || Word == "_Bool";
-  case 6:
-    return Word == "signed" || Word == "double" || Word == "__int8";
-  case 7:
-    return Word == "wchar_t" || Word == "__int16" || Word == "__int32" ||
-           Word == "__int64";
-  case 8:
-    return Word == "unsigned" || Word == "__int128" || Word == "__signed";
-  case 9:
-    return Word == "__wchar_t";
-  case 10:
-    return Word == "__signed__";
-  default:
+bool builtinKeyword(llvm::StringRef Word) {
+  // The shortest and longest builtin spellings bound this fixed lookup.
+  // Ordinary identifiers outside that range cannot match any keyword.
+  if (Word.size() < llvm::StringLiteral("int").size() ||
+      Word.size() > llvm::StringLiteral("__signed__").size())
     return false;
-  }
+  return llvm::is_contained(
+      std::initializer_list<llvm::StringRef>{
+          "void",    "char",     "short",     "int",        "long",
+          "signed",  "unsigned", "float",     "double",     "bool",
+          "_Bool",   "wchar_t",  "__wchar_t", "__int8",     "__int16",
+          "__int32", "__int64",  "__int128",  "__signed__", "__signed"},
+      Word);
 }
 
 std::optional<CallingConvention> conventionWord(llvm::StringRef Word) {

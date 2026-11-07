@@ -3146,8 +3146,8 @@ The parser's token streams and macro replacements use a non-inline
 `SmallVector`: their borrowed spellings permit trivial relocation during
 growth without changing token order or extending the parse's spelling arena.
 Storage and import annotation keywords use fixed `StringSwitch` cases. Builtin
-type keywords group exact spellings by length, so ordinary declarators skip
-unrelated keywords. These boolean checks stay inline in the parsing loops.
+type keywords first reject lengths outside their shortest and longest spellings,
+so ordinary declarators outside that range skip the fixed keyword table.
 Matching remains exact and case-sensitive; pointer width annotations retain
 their existing typed handling before the ignored-annotation path.
 Named specifiers resolve their type and kind in one library lookup. Builtin
