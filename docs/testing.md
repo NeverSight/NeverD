@@ -492,6 +492,13 @@ invalid selectors and descriptor page repair followed by IRET/retry. Qualify
 both SDKs on P/E cores and run shared scalar/selector and ordinary system-state
 regressions. The `TableImage` LAR undefined nibble is a measured target choice;
 qualification on this Intel host is not a claim about every x86 vendor.
+The [descriptor qualification](evidence/x86-legacy-descriptors-2026-11-07.json)
+also retains NeverC's `verify_i386_descriptor_builtins.py` results: 28 shared
+forms and seven x64-only forms, live/dead result preservation at O0/O2,
+verified native machine output without helpers or inline assembly, and
+original i386/x64 query execution. Privileged builtins have code-generation
+coverage only; the separate protected NeverD fixtures own their state/fault
+contracts.
 
 `NeverDLLVMCValueTests --gtest_filter=LLVMCValues.X86BitString*` rejects
 weakened native bit-string declarations and executes all twelve LLVM-to-C

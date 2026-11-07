@@ -4069,9 +4069,22 @@ clear ZF; descriptor page/backing failures retain their separate fault/retry
 behavior. Queries neither require presence nor set descriptor accessed bits.
 LAR's undefined limit nibble requires the explicit `TableImage` CPU profile.
 
-Ordinary native LLVM/NeverC descriptor APIs already existed. This closes the
-owned protected-query path; LDTR/TR loads, task switching, real/VM86 and other
-unbound system-state domains remain separate work. The LLVM pin stays r6.
+LLVM already lowered these native instructions, but NeverC registered 28
+descriptor/machine builtin forms only for x64. Those forms now belong to its
+shared i386/x64 registry; seven wide forms remain x64-only. The explicit full
+LLVM backend emits i386 machine code directly, without an assembly fallback.
+The compiler qualification executes unprivileged queries in real i386 and x64
+processes; privileged operations have code-generation coverage.
+
+The [descriptor evidence](evidence/x86-legacy-descriptors-2026-11-07.json)
+records 1,154 passing checks and 198,400 original state/debug comparisons
+across both SDKs and qualified P/E cores. After dev integration, another 566
+checks pass, including the complete kernel-PDB type round-trip and generated
+C suites; the paging binaries remain byte-identical. NeverC contributes
+10,560 native query comparisons and 252 code-generation form checks.
+LDTR/TR loads, task switching, real/VM86 and other unbound system-state domains
+remain separate work. No LLVM implementation change or new release is needed
+for this batch; the global release gate remains open and the pin stays r6.
 
 ### Protected ARPL conditional completion
 

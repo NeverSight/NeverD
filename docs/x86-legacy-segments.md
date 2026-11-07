@@ -1399,5 +1399,22 @@ are rejected before fetch. Unbound query profiles also refuse before fetch.
 The architectural reference is LAR, LSL and VERR/VERW in
 [Intel SDM Volume 2](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf).
 This query owner does not load LDTR/TR or implement task switching. Existing
-native LLVM/NeverC descriptor interfaces are independent of this owned-RAM
-execution path. The LLVM release gate remains open and the pin remains r6.
+native LLVM descriptor interfaces are independent of this owned-RAM execution
+path. NeverC now exposes 28 previously x64-only descriptor/machine builtin
+forms to i386 source through the common registry, preserving seven x64-only
+wide forms. Its explicit full LLVM backend emits the original instructions;
+privileged forms are checked for code generation, and unprivileged queries
+also execute in original Linux i386/x64 processes at O0/O2.
+
+The [November 7 descriptor qualification](evidence/x86-legacy-descriptors-2026-11-07.json)
+records 1,154 passing checks, 196,608 original descriptor-state comparisons,
+1,792 original data-debug comparisons and 48 new compiled-source cases across
+both SDKs and qualified P/E cores. Another 566 post-integration checks pass,
+including both complete type suites with the existing kernel PDB and all four
+generated-C suites. The paging executables remain byte-identical. Initial
+type runs without the PDB binding are retained as superseded records, with
+their skips excluded from the final counts. NeverC separately passes 10,560
+native query comparisons and 252 code-generation form checks across P/E cores.
+The archive binds actual source commits, compiler/dependency inputs, binaries,
+generated sources/libraries and raw result hashes. The LLVM release gate
+remains open and the pin remains r6.
