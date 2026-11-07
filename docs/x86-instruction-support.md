@@ -4097,6 +4097,13 @@ loaded TR is visible to following event delivery; loading it does not perform
 a task switch. Protected LLDT retains its descriptor flag nibble, including
 the otherwise unused L bit, without making following instructions reject
 their own valid cache state. Native LLVM and NeverC forms already exist.
+The [system-selector evidence](evidence/x86-legacy-system-selectors-2026-11-07.json)
+records 1,250 passing checks with no skips, including 83,592 original state
+comparisons, 2,304 original data-debug comparisons and 48 new generated-C
+cases across both SDKs and qualified P/E cores. A descriptor aliasing its own
+legacy PTE exposed a stale TR limit: cache publication now uses the busy
+operation's updated image, retaining the page-walk dirty bit. The failing
+observation and its repaired regressions are both retained.
 Task switching and the other machine-state domains still gate the final LLVM
 release; the production pin remains r6.
 

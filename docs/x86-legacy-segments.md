@@ -1463,3 +1463,16 @@ already emit these native forms. This owned protected-state work does not
 advance the LLVM release or r6 pin. Other state banks, task switching,
 real/VM86/general compatibility execution, software SMM/SGX transitions and
 unowned external-event producers remain outside the completed contract.
+
+The [November 7 system-selector qualification](evidence/x86-legacy-system-selectors-2026-11-07.json)
+records 1,250 passing checks, no failures and no skips. Both SDKs and qualified
+P/E cores contribute 83,592 original state comparisons, 2,304 original
+data-debug comparisons and 48 new generated-C cases. The complete source
+suites retain 560 compiled libraries; shared scalar/segment/query and ordinary
+system-state regressions also pass. In the legacy self-referential PTE case,
+the original CPU loaded TR.limit `0x1067`; the initial implementation retained
+the earlier `0x1027`. The repaired owner caches the image after the busy write's
+translation has set D. Raw failed/fixed results, actual clean source commits,
+dependency inputs, executable/compiler hashes and generated artifacts remain
+in the evidence archive. The PAE matrices do not certify a high-physical-address
+self-referential descriptor/PTE case.
