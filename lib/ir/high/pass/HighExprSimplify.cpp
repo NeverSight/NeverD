@@ -1467,27 +1467,46 @@ static void simplifyExprNode(ExprPtr &E, const HighExprSet &OrderedMemory,
 // placing the large local-rewrite frame on the stack at every expression
 // level. A parent is rewritten only after its operand slots have finished;
 // those slots remain valid while their parent is waiting in the worklist.
-static void simplifyExprGraph(ExprPtr &Root, HighExprSet &Seen,
-                              const HighExprSet &OrderedMemory, bool &Changed) {
-  if (!Root || !Seen.insert(Root.get()).second)
+static void
+simplifyExprGraph(ExprPtr &Root, HighExprSet &Seen,
+                  std::unordered_map<ExprPtr, ExprPtr> &Replacements,
+                  const HighExprSet &OrderedMemory, bool &Changed) {
+  auto Enter = [&](ExprPtr &E) {
+    if (!E)
+      return false;
+    if (const auto It = Replacements.find(E); It != Replacements.end()) {
+      Changed |= E != It->second;
+      E = It->second;
+      return false;
+    }
+    return Seen.insert(E.get()).second;
+  };
+  if (!Enter(Root))
     return;
   struct Frame {
     ExprPtr *Slot;
+    ExprPtr Original;
     size_t NextOperand;
   };
-  llvm::SmallVector<Frame, 16> Work{{&Root, 0}};
+  llvm::SmallVector<Frame, 16> Work{{&Root, Root, 0}};
   while (!Work.empty()) {
     auto &Current = Work.back();
     auto &Expr = *Current.Slot;
     if (Current.NextOperand < Expr->Operands.size()) {
       auto &Child = Expr->Operands[Current.NextOperand++];
-      if (Child && Seen.insert(Child.get()).second)
-        Work.push_back({&Child, 0});
+      if (Enter(Child))
+        Work.push_back({&Child, Child, 0});
       continue;
     }
     auto *Slot = Current.Slot;
+    auto Original = std::move(Current.Original);
     Work.pop_back();
     simplifyExprNode(*Slot, OrderedMemory, Changed);
+    // A replacement changes this pointer slot, not the other parents of the
+    // shared node. Publish it to every later use, retaining its old identity
+    // so allocations made by a rewrite cannot reuse a visited pointer.
+    if (*Slot != Original)
+      Replacements.emplace(std::move(Original), *Slot);
   }
 }
 
@@ -1501,10 +1520,11 @@ bool simplifyAllExprs(std::vector<HighStmt> &Stmts) {
   // one graph-wide effect analysis remains valid throughout this pass.
   const auto OrderedMemory = findOrderedMemoryAncestors(Roots);
   HighExprSet Seen;
+  std::unordered_map<ExprPtr, ExprPtr> Replacements;
   bool Changed = false;
   walkStmts(Stmts, [&](HighStmt &S) {
     forEachRhsExpr(S, [&](ExprPtr &EP) {
-      simplifyExprGraph(EP, Seen, OrderedMemory, Changed);
+      simplifyExprGraph(EP, Seen, Replacements, OrderedMemory, Changed);
     });
   });
   return Changed;

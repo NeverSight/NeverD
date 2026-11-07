@@ -21446,3 +21446,5 @@ recorded baseline; this change adds none and does not weaken the audit.
 `NeverDHighCallParameterForwardingTests` checks Win64 argument value identity. Full-width copies and agreeing PHIs may name an incoming parameter; masks, shifts and narrowing copies must retain their computed argument.
 
 `HighControlFlowSemantics.UnusedValuesKeepPlainReadsAndTheirAddresses` checks that unused direct and nested ordinary loads retain their original address and evaluation in HighIR dead-value cleanup.
+
+`HighControlFlowSemantics.SimplifierPublishesSharedReplacementAtEveryUse` checks shared DAG replacement publication in both root orders, independent return values and a stable second cleanup invocation.
