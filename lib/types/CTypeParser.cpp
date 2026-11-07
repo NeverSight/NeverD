@@ -564,13 +564,30 @@ const llvm::StringMap<Builtin> &builtinWords() {
 
 /// The words that make builtin types together: unsigned long long int.
 bool builtinKeyword(llvm::StringRef Word) {
-  return llvm::is_contained(
-      std::initializer_list<llvm::StringRef>{
-          "void",    "char",     "short",     "int",        "long",
-          "signed",  "unsigned", "float",     "double",     "bool",
-          "_Bool",   "wchar_t",  "__wchar_t", "__int8",     "__int16",
-          "__int32", "__int64",  "__int128",  "__signed__", "__signed"},
-      Word);
+  // Exact fixed cases let the compiler dispatch on spelling and length.
+  // Most identifiers are named types or declarators, not builtin keywords.
+  return llvm::StringSwitch<bool>(Word)
+      .Case("void", true)
+      .Case("char", true)
+      .Case("short", true)
+      .Case("int", true)
+      .Case("long", true)
+      .Case("signed", true)
+      .Case("unsigned", true)
+      .Case("float", true)
+      .Case("double", true)
+      .Case("bool", true)
+      .Case("_Bool", true)
+      .Case("wchar_t", true)
+      .Case("__wchar_t", true)
+      .Case("__int8", true)
+      .Case("__int16", true)
+      .Case("__int32", true)
+      .Case("__int64", true)
+      .Case("__int128", true)
+      .Case("__signed__", true)
+      .Case("__signed", true)
+      .Default(false);
 }
 
 std::optional<CallingConvention> conventionWord(llvm::StringRef Word) {
