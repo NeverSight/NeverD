@@ -604,3 +604,86 @@ TEST(SymKnownBits, LiteralDivisionAndRemainderBoundTheirResults) {
     EXPECT_TRUE(K->isUnknown());
   }
 }
+
+TEST(SymKnownBits, PackedBooleanFactsSurviveAnExhaustedPredicateChild) {
+  SymContext C;
+  auto Sum = C.mkVar("head", 64);
+  for (unsigned I = 0; I < 256; ++I)
+    Sum = C.mkXor(Sum, C.mkMul(C.mkVar("word" + std::to_string(I), 64),
+                               C.mkConst(64, I + 3)));
+  auto Predicate = C.mkEq(Sum, C.mkZero(64));
+  auto Byte = C.mkIte(Predicate, C.mkConst(8, 0), C.mkConst(8, 1));
+  auto Packed = C.mkConcat({C.mkVar("padding2", 8), C.mkVar("padding1", 8),
+                            C.mkVar("padding0", 8), Byte});
+  SymKnownBits Facts(C);
+  const auto Nodes = C.numNodes();
+  unsigned Work = 256;
+  auto Result = Facts.query(Packed, Work);
+  ASSERT_TRUE(Result);
+  EXPECT_EQ(Result->Zero.getZExtValue() & 0xff, 0xfeU);
+  EXPECT_TRUE(Result->One.isZero());
+  EXPECT_EQ(C.numNodes(), Nodes);
+}
+
+TEST(SymKnownBits, PartialCacheDoesNotFreezeABooleanByteAtFullQueryWork) {
+  SymContext C;
+  auto P = C.mkEq(C.mkVar("left", 64), C.mkVar("right", 64));
+  // Keep a byte-wide select: selecting 0/1 is now a predicate extension.
+  auto Byte = C.mkIte(P, C.mkConst(8, 0), C.mkConst(8, 2));
+  auto Carrier = C.mkZExt(Byte, 64);
+  SymKnownBits Facts(C);
+  unsigned Small = 2;
+  auto Partial = Facts.query(Carrier, Small);
+  ASSERT_TRUE(Partial);
+  EXPECT_EQ(Partial->Zero, llvm::APInt::getHighBitsSet(64, 56));
+  unsigned Work = 256;
+  auto Full = Facts.query(Carrier, Work);
+  ASSERT_TRUE(Full);
+  EXPECT_EQ(Full->Zero, ~llvm::APInt(64, 2));
+  EXPECT_TRUE(Full->One.isZero());
+}
+
+TEST(SymKnownBits, ConcatRetainsIndependentFactsAfterAChildRefusal) {
+  SymContext C;
+  auto Word = C.mkVar("first", 64);
+  for (unsigned I = 0; I != 256; ++I)
+    Word = C.mkXor(C.mkAdd(Word, C.mkConst(64, I + 1)),
+                   C.mkVar("input" + std::to_string(I), 64));
+  const auto Predicate = C.mkEq(Word, C.mkZero(64));
+  const auto Packed = C.mkConcat({C.mkConst(8, 0xa5), C.mkZero(7), Predicate});
+  SymKnownBits Facts(C);
+  unsigned Work = 64;
+  const auto Result = Facts.query(Packed, Work);
+  ASSERT_TRUE(Result);
+  EXPECT_EQ(Result->One, llvm::APInt(16, 0xa500));
+  EXPECT_EQ(Result->Zero, llvm::APInt(16, 0x5afe));
+  EXPECT_FALSE(Result->isConstant());
+}
+
+TEST(SymKnownBits, BooleanCarriersKeepRangeWhenPredicateWorkIsExhausted) {
+  SymContext C;
+  llvm::SmallVector<SymRef> Terms;
+  for (unsigned I = 0; I < 256; ++I)
+    Terms.push_back(C.mkVar("term_" + std::to_string(I), 64));
+  auto Condition = C.mkEq(C.mkAdd(Terms), C.mkConst(64, 0));
+  SymRef Carriers[] = {C.mkZExt(Condition, 32),
+                       C.mkExtract(C.mkZExt(C.mkNot(Condition), 64), 0, 32),
+                       C.mkIte(Condition, C.mkConst(32, 0), C.mkConst(32, 1))};
+  for (auto Carrier : Carriers) {
+    SymKnownBits Facts(C);
+    const auto Nodes = C.numNodes();
+    unsigned Work = SymKnownBits::MaxQueryWork;
+    auto Bits = Facts.query(Carrier, Work);
+    ASSERT_TRUE(Bits);
+    EXPECT_EQ(Bits->Zero, llvm::APInt(32, 0xfffffffe));
+    EXPECT_TRUE(Bits->One.isZero());
+    EXPECT_EQ(C.numNodes(), Nodes);
+  }
+  SymKnownBits Facts(C);
+  unsigned Work = SymKnownBits::MaxQueryWork;
+  auto Mixed = C.mkIte(Condition, C.mkConst(32, 1), C.mkConst(32, 3));
+  auto Bits = Facts.query(Mixed, Work);
+  ASSERT_TRUE(Bits);
+  EXPECT_EQ(Bits->Zero, llvm::APInt(32, 0xfffffffc));
+  EXPECT_EQ(Bits->One, llvm::APInt(32, 1));
+}
