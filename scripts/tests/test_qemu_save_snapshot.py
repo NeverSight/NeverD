@@ -136,6 +136,7 @@ class QemuSaveSnapshotTests(unittest.TestCase):
     def test_registers_keep_full_bits_arrays_nested_fields_and_instance_identity(self):
         snapshot = self.open()
         self.assertEqual(list(snapshot.cpus), [3])  # Not section ID 5 or ordinal 0.
+        self.assertEqual(snapshot.cpus[3]["subsection_versions"], {"cpu/extra": 2})
         cpu = snapshot.cpus[3]["fields"]
         self.assertEqual(cpu["env.regs"], [0x8000000000000000 + i for i in range(16)])
         self.assertEqual(cpu["env.eip"], PC)

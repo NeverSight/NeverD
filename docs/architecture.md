@@ -4833,6 +4833,10 @@ Decision and carry caches pack their bounded input and edge fields into exact
 bucket and entry storage reflect the compact representation, with unchanged
 work and node limits. Carry-cache hits stay outside the recursive allocation
 frame; only missing identities construct new decision frontiers.
+Recursive Boolean application specializes its fixed AND or XOR operation;
+OR enters the same AND frontier through complemented edges. The outer word
+reader selects the operation, while recursive calls retain the same exact
+keys, work charges and failure behavior.
 Native sample guards index contiguous variable-ID windows directly. Sparse
 windows retain compact maps, and both paths preserve the same referenced-input
 order and random stream. Numeric node-order comparisons stay inside the sort.
@@ -4858,9 +4862,38 @@ same minimum-reading predicate, including constant-minus-variable forms;
 an all-ones offset still permits the cheaper complement spelling.
 General operators retain the shared APInt semantics in a separate call, keeping
 their operand construction and cleanup out of the native evaluator's hot frame.
+Prepared arbitrary-width evaluation reuses each output slot's allocation for
+associative arithmetic and bitwise operations, starting from the first operand.
+A product stops multiplying after its complete word becomes zero; all input
+steps have already been evaluated. Standalone and prepared evaluation use the
+same operator implementation. Validation keeps its original full-width input
+assignments and sample count.
+Native long products stop when the initial operand pair is zero modulo the
+declared width, retaining the tight fold for other inputs. Their prepared steps
+keep the width mask in the unused product payload, without enlarging a step
+or skipping input evaluation.
+Batch substitution uses one table for scheduled nodes and completed results.
+Its bottom-up walk reuses one owned operand buffer, sized from the current
+node before rebuilding. MBA abstraction also reuses its operand buffer and
+reserves classification and rewrite tables from the complete reachable order.
+These buffers last only for the current walk; proof work and storage charges
+remain unchanged.
+It checks the replacement map once per reachable node, keeps replacements
+simultaneous, and reuses its owned root array for the ordered results. Shared
+roots and descendants retain one bottom-up reconstruction.
+Mask abstraction also rewrites its owned operand snapshot in place. Mask
+creation may grow the context arena; the snapshot remains valid without a
+second temporary operand array. Unchanged operand lists retain their existing
+node without rerunning its builder; linear complements still receive their
+required arithmetic rewrite.
 The compact two-word hash key uses one 64-bit bucket mix, without hashing its
-halves independently. Sum construction collects small coefficient maps in
-inline storage and sorts completed entries by base-node index before rebuilding.
+halves independently. A sum of a literal and one canonical term reuses that
+literal and term directly. Two nonliteral addends with distinct coefficient
+bases likewise retain their original terms in base-index order. Equal bases,
+nested sums, masked or packed words and long coefficient products retain the
+full collector, preserving coefficient cancellation and no-borrow identities.
+Other sums collect small coefficient maps in inline storage and sort completed
+entries by base-node index before rebuilding.
 Larger sums retain hashed lookup; cancellation, recollection and canonical node
 order are unchanged.
 Dense implicant rounds look up exact one-bit neighbors when that requires
@@ -4871,9 +4904,12 @@ outside the small-recipe synthesis path. Terms remain ordered by value after
 each merge round, so only zero-to-one neighbor flips need lookup; the reverse
 pair was already visited. Prepared Boolean recipes keep their reconstruction
 memo inline, with ordinary growth for optional larger recipes.
-Small implicant rounds also keep their temporary term and merge vectors inline;
-larger rounds grow normally. Their deduplication keys retain both complete
-value/care fields, and discovery order and work admission remain unchanged.
+Small implicant rounds keep their temporary terms, prime results and merge flags
+inline; larger rounds grow normally. The two frontiers alternate without copying
+their inline elements. Merge flags and exact lookup tables reuse their storage
+across rounds within one cover search. The neighbor index
+is initialized only when an indexed round is reached. Deduplication keys retain
+both complete value/care fields; discovery order and work admission are unchanged.
 The shared exact MBA layer also recombines weighted literal AND/OR/XOR/NOT
 views of one opaque word. It constructs per-bit coefficients and a constant,
 then independently checks the pointwise grammar, constant difference and every
@@ -4882,6 +4918,16 @@ word remains opaque; unrelated residual words must cancel exactly. Finite
 work, storage and literal-chain depth limits preserve the original region on
 refusal. This derivation uses the existing symbolic switch in both source
 emitters without an additional GUI or CLI option.
+For a single carrier, separately folded literals participate in the same XOR
+orientation choice and independent equality check. They leave the residual sum
+only after that complete group proof succeeds.
+When its offset equals its sole word coefficient, the group emits the exact
+complement form before an enclosing residual sum can flatten that opportunity.
+Arithmetic factor verification also recognizes a literal OR a masked word as
+their sum when the complete masks prove them disjoint. It retains the masked
+word as an opaque coordinate, so an explicitly packed input cannot hide a valid
+common coefficient. Traversal, flat-product admission and memoized polynomials use
+that same reading within the existing work and storage bounds.
 When enclosing arithmetic interleaves several such words, the same layer
 certifies each changed group and independently proves distribution against
 the original region using modular arithmetic normalization. This composition
@@ -5095,15 +5141,29 @@ low prefix before the remaining interleaved bits. Dense decision and carry
 caches prepay their bucket growth. Immutable word views avoid repeated copies
 and are discarded when the assumption changes; polynomial views remain valid
 throughout reconstruction.
+Constant binary operands use exact low-word cache keys containing the other
+operand, operation, literal residue and precision. Native literals need no
+temporary expression nodes; wide literal prefixes are copied and charged once
+per search. Word and pairing-signature caches share this normalization without
+changing any source constant or wider reading. Neutral observed constants
+reuse the operand directly.
+Native key construction reads inline constants without entering the wide
+literal reader.
 Decision identity hits and terminal two-input Boolean operations return before
 entering the allocation and recursive expansion helpers. Three-input carry and
 parity operations keep their cache lookup and recursive expansion in one
 function, avoiding another call frame on the frequent cache misses. Lookup,
 depth admission, charging and insertion keep their original order, including
 failure paths.
-Application keys place their operation tag in the unused high bit of the
-low edge word, so the integer hash distinguishes AND and XOR for identical
-operands. Full edge identity and the existing node bound remain authoritative.
+XOR and three-input parity reuse a completed low cofactor when every high
+cofactor has the same complete decision identity apart from its complement
+edge. Their complement flags combine exactly, avoiding a repeated recursive
+lookup. Any changed decision identity retains the general recursion; only
+the queries actually performed consume work.
+Application keys pack both complete bounded edges and their operation into
+one 32-bit word, halving the application-cache bucket size. The 64-bit integer
+mixer includes every identity bit in small tables' bucket selection. Full edge
+identity, sentinel separation and the existing node bound remain authoritative.
 A dominant exact low prefix may be proved separately from unmatched product
 factors. A majority vote, weighted by exact projected-word multiplicities,
 only nominates the prefix; complete decision equality and the exact factor
@@ -5117,12 +5177,14 @@ Products spanning the complete observed domain also normalize their factors
 once. Each operand needs only the bits still observable after the other
 factors' proved trailing zeros; the projection cache includes that precision.
 Neutral low-word constants bypass reconstruction of identity operations.
-For a whole partial block of XOR factors, narrow nonlinear products can use
+For a partial block of XOR factors, narrow nonlinear products can use
 exact lower decision bits as pairing identities. Their two actual upper bits
 form the additive correction, including cross terms that cannot be discarded
-when fewer than four product bits remain. This search applies at the block's
-observed precision; affine factors, complete blocks, isolated subgroups and
-recursive lower precisions retain their existing structural path.
+when fewer than four product bits remain. This also applies to a separately
+proved parity subgroup with complete residual words. Recursive lower
+precisions can reuse a completed wider decision word; they do not start a new
+narrow expansion. Affine factors and complete blocks retain their structural
+path.
 Small products can group by parity alone after affine synthesis, retaining
 multiple independently valued residual words. A complete count must still
 prove the other branch zero; a majority by itself does not suffice. Large
@@ -5158,6 +5220,8 @@ blocks and projected groups keep their joint reconstruction. Degree-block
 admission only orders this search; it never establishes a pair or oddness.
 Pairing indexes are constructed only for an admitted search and are confined
 to its active odd assumption, avoiding setup in ordinary low-word searches.
+Pair lookup uses exact hashed identities. Only unmatched identities are sorted,
+preserving the established factor order without sorting every successful pair.
 All signature, pairing and reconstruction work uses the existing cumulative
 work/storage allowances and decision-node limit.
 Full-block two-bit admission caches structural identities before constructing
@@ -5170,7 +5234,9 @@ by CLI and GUI source optimization.
 Complete blocks and odd residual blocks combine two-bit correction columns
 before constructing their carry graph. Literal corrections sum directly modulo
 four; repeated or complementary variable bits cancel or move to the next
-column through the existing exact word adder. Partial even blocks preserve
+column through the existing exact word adder. Identical complete signatures
+need only their shared square, with no zero correction to accumulate.
+Partial even blocks preserve
 streaming accumulation so unfinished proofs leave the established headroom
 for child rewrites. Both strategies retain the same cumulative resource limits.
 Boolean polynomial reconstruction can factor shared cofactors across groups
@@ -5197,8 +5263,13 @@ product proof; multiple high-degree products retain their joint search order.
 A concrete nonzero
 witness may reject further zero-proof attempts but never authorizes a rewrite.
 All-odd assignments retain their cheap parity path. If they fail, bounded
-native-width evaluations can count trailing zeros in even factors at complete
-input assignments. Their sum must be below the observed width. Evaluation
+complete-word evaluations can count trailing zeros in even factors at complete
+input assignments. Their sum must be below the observed width. A complete
+parity scan first rejects assignments with enough even factors to force zero,
+avoiding their evaluation plans. Wide evaluations charge limb counts, including
+quadratic arithmetic, within the same witness limit. Repeated assignments reuse
+the prepared wide plan but reevaluate every variable and expression; each use
+still pays its evaluation work and scratch storage. Evaluation
 reuses the ordinary word evaluator, keeps correlated inputs consistent, and
 shares the existing witness work and storage allowance.
 When a prefix attempt has completed every coefficient map, its witness reuses
