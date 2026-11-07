@@ -149,10 +149,11 @@ struct ValueReads {
     return !Ops.count(keyOf(V)) && !Others.count(keyOf(V));
   }
 
-  /// Callee-save restores may flow through dead copies and joins. Scratch
-  /// restores still use unread(): later ABI recovery can observe their
-  /// register writes implicitly, so they need the separate overwrite proof.
-  bool onlyDeadCopies(const MedVar &V, size_t &Budget) const {
+  /// Callee-save restores may flow through dead copies, zero extensions and
+  /// joins. Scratch restores still use unread(): later ABI recovery can observe
+  /// their register writes implicitly, so they need the separate overwrite
+  /// proof.
+  bool onlyDeadCopiesAndExtensions(const MedVar &V, size_t &Budget) const {
     std::vector<ValueKey> Pending{keyOf(V)};
     std::set<ValueKey> Seen;
     while (!Pending.empty()) {
@@ -167,8 +168,9 @@ struct ValueReads {
         return false;
       if (const auto It = Ops.find(Key); It != Ops.end())
         for (const MedOp *Read : It->second) {
-          if (!Budget || Read->Opcode != NdOp::COPY || Read->NumInputs != 1 ||
-              Read->Output.Id < 0)
+          if (!Budget ||
+              (Read->Opcode != NdOp::COPY && Read->Opcode != NdOp::INT_ZEXT) ||
+              Read->NumInputs != 1 || Read->Output.Id < 0)
             return false;
           --Budget;
           Pending.push_back(keyOf(Read->Output));
@@ -310,7 +312,7 @@ void markCalleeSavePrologueSaves(
       if (Read.Offset != Save.Offset || Read.Size != Saved.Size)
         return false;
       const MedVar &Out = Read.Op->Output;
-      if (Reads.onlyDeadCopies(Out, ReadBudget))
+      if (Reads.onlyDeadCopiesAndExtensions(Out, ReadBudget))
         return true;
       const MedOp *Reader = Reads.singleReader(Out);
       if (SameRegister(Out) || !Reader)
@@ -318,7 +320,7 @@ void markCalleeSavePrologueSaves(
       const MedOp &Copy = *Reader;
       return Copy.Opcode == NdOp::COPY && Copy.NumInputs == 1 &&
              SameRegister(Copy.Output) &&
-             Reads.onlyDeadCopies(Copy.Output, ReadBudget);
+             Reads.onlyDeadCopiesAndExtensions(Copy.Output, ReadBudget);
     });
     if (OnlyRestored)
       Saves.push_back(Save.Op);

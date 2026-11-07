@@ -18,6 +18,7 @@
 #include <vector>
 namespace neverd {
 struct MachODependencyState {
+  uint32_t CPUType = 0, CPUSubtype = 0;
   std::array<uint8_t, 32> Digest;
   std::map<std::pair<uint64_t, unsigned>, std::vector<uint8_t>> Slots;
   std::vector<std::vector<uint8_t>> Libraries, Symbols, Indirect;

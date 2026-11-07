@@ -65,6 +65,7 @@
 #include "neverd/backend/llvm/X86/LLVMX87ValueAsm.h"
 #include "neverd/backend/llvm/X86/X86AmxNative.h"
 #include "neverd/backend/llvm/X86/X86SgxNative.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/libc/LibCRecordArguments.h"
@@ -6032,7 +6033,6 @@ LLVMCWriter::analystCallHint(const llvm::CallBase &Call) const {
         "The call-site source declaration lost its complete operands");
   std::string Diagnostic;
   if (!validateSourceABI(Found->Signature, Diagnostic) ||
-      hasIndirectSourceParameters(Found->Signature) ||
       Found->Signature.ReturnLocation.Kind ==
           SourceABICarrierKind::IndirectResultPointer)
     throw std::runtime_error(c_detail::kInvalidSourceRecordABI);
@@ -6042,9 +6042,10 @@ LLVMCWriter::analystCallHint(const llvm::CallBase &Call) const {
     throw std::runtime_error("The call-site source result carrier changed");
   for (unsigned I = 0; I < Call.arg_size(); ++I)
     if (Call.getArgOperand(I)->getType() !=
-        llvmSourceCallValueType(Call.getContext(),
-                                Found->Signature.Parameters[I].Type,
-                                /*Parameter=*/true))
+        llvmSourceCallValueType(
+            Call.getContext(),
+            sourceCallParameterType(Found->Signature.Parameters[I]),
+            /*Parameter=*/true))
       throw std::runtime_error("A call-site source argument carrier changed");
   return Found;
 }
@@ -6069,8 +6070,9 @@ LLVMCWriter::preservedIndirectCalleeStr(const llvm::CallBase &Call) {
     for (unsigned I = 0; I < Fixed; ++I) {
       if (I)
         Params += ", ";
-      Params +=
-          declarationToC(cDisplayType(Hint->Signature.Parameters[I].Type), "");
+      Params += declarationToC(
+          cDisplayType(sourceCallParameterType(Hint->Signature.Parameters[I])),
+          "");
     }
     if (Hint->AnalystFixedCount >= 0)
       Params += ", ...";
@@ -6110,13 +6112,14 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       if (I)
         Expression += ", ";
       const auto Type =
-          Hint ? declarationToC(
-                     cDisplayType(Hint->Signature.Parameters[I].Type), "")
+          Hint ? declarationToC(cDisplayType(sourceCallParameterType(
+                                    Hint->Signature.Parameters[I])),
+                                "")
                : sourceScalarType(Call.getArgOperand(I)->getType(),
                                   Call.getAttributes().hasParamAttr(
                                       I, LLVMSourceSignedParameter));
       const auto *Argument = Call.getArgOperand(I);
-      if (Hint &&
+      if (Hint && !Hint->Signature.Parameters[I].IndirectByValue &&
           Hint->Signature.Parameters[I].Type->Kind == NdTypeKind::Struct)
         Expression += c_detail::sourceRecordValue(
             Hint->Signature.Parameters[I].Type,
@@ -6124,7 +6127,8 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       else {
         std::string Projected = "(" + Type + ")(" + valueStr(Argument) + ")";
         const bool Pointer =
-            Hint ? Hint->Signature.Parameters[I].Type->Kind == NdTypeKind::Ptr
+            Hint ? sourceCallParameterType(Hint->Signature.Parameters[I])
+                           ->Kind == NdTypeKind::Ptr
                  : Argument->getType()->isPointerTy();
         Expression += Pointer
                           ? imagePointerArgument(Argument, std::move(Projected))

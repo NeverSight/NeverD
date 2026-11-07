@@ -83,8 +83,6 @@ bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
                                             Architecture, Error);
     if (!Assigned)
       return false;
-    if (hasIndirectSourceParameters(Signature))
-      return refuse(Error, kIndirectAnalystCopy);
     if (Signature.ReturnLocation.Kind ==
         SourceABICarrierKind::IndirectResultPointer)
       return refuse(Error, kIndirectAnalystResult);
@@ -163,6 +161,12 @@ bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
     Signature.Parameters[I].Location = Placement->Parameters[I][0].Location;
   }
   return validateSourceABI(Signature, Error);
+}
+
+TypeRef
+neverd::sourceCallParameterType(const SourceParameterTypeHint &Parameter) {
+  return Parameter.IndirectByValue ? NdType::makePtr(Parameter.Type)
+                                   : Parameter.Type;
 }
 
 bool neverd::sourceCallVariadicStateDefined(const LowFunc &Function,
