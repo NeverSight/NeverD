@@ -50,6 +50,7 @@
 #include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/backend/c/render/X86/X87ContextRender.h"
 #include "neverd/backend/c/render/X86/X87GuardedValueRender.h"
+#include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64AuthenticatedCall.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/LLVMSourceCallValue.h"
@@ -88,6 +89,7 @@
 #include "llvm/Support/SaveAndRestore.h"
 
 #include <cctype>
+#include <climits>
 #include <iterator>
 #include <set>
 #include <stdexcept>
@@ -4470,6 +4472,27 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
        << ";\n";
     return true;
   }
+  if (IID == llvm::Intrinsic::ptrauth_strip) {
+    if (Opts.TheArch != Arch::AArch64)
+      throw std::runtime_error(kAArch64PAuthRequiresAArch64);
+    const auto *Key =
+        Call.arg_size() == 2
+            ? llvm::dyn_cast<llvm::ConstantInt>(Call.getArgOperand(1))
+            : nullptr;
+    if (!Key || Key->getZExtValue() > kAArch64PAuthKeyDB ||
+        !Call.getType()->isIntegerTy(kAArch64PAuthPointerBytes * CHAR_BIT) ||
+        Call.getArgOperand(0)->getType() != Call.getType())
+      throw std::runtime_error(kAArch64PAuthMalformedOperation);
+    const auto Operation = aarch64PAuthOperation(
+        aarch64PAuthCodeKeyIsValid(Key->getZExtValue()) ? Intrinsic::Xpaci
+                                                        : Intrinsic::Xpacd);
+    emitIndent(Indent);
+    if (!Call.use_empty())
+      OS << getName(&Call) << " = ";
+    OS << aarch64PAuthMachineC(*Operation, valueStr(Call.getArgOperand(0)))
+       << ";\n";
+    return true;
+  }
   if (IID == llvm::Intrinsic::ptrauth_auth) {
     if (Opts.TheArch != Arch::AArch64 || Call.arg_size() != 3)
       throw std::runtime_error(kAArch64PAuthRequiresAArch64);
@@ -4762,6 +4785,17 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
   if (!IA)
     return false;
+  if (Opts.TheArch == Arch::AArch64 && Call.arg_size() == 2 &&
+      Call.getType()->isVoidTy() && IA->hasSideEffects() && IA->canThrow() &&
+      IA->getConstraintString() == kResultCallConstraints &&
+      llvm::StringRef(IA->getAsmString()).starts_with(kResultCallMarker)) {
+    emitIndent(Indent);
+    OS << sourceResultCallAsmC(IA->getAsmString(),
+                               valueStr(Call.getArgOperand(0)),
+                               valueStr(Call.getArgOperand(1)))
+       << "\n";
+    return true;
+  }
 
   // A modeled supervisor call prints through the helper that keeps each
   // value in the register its kernel reads.

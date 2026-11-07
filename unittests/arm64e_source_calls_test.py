@@ -30,13 +30,14 @@ def main():
     assembly = FIXTURES["assembly_prefix"]
     for case in FIXTURES["cases"]:
         variadic = "variadic_types" in case
-        assembly += FIXTURES["assembly_variadic_entry" if variadic else
-                             "assembly_entry"].format(name=case["name"])
+        assembly += FIXTURES[case.get("entry", "assembly_variadic_entry" if variadic else
+                             "assembly_entry")].format(name=case["name"])
         assembly += FIXTURES["arguments"][case["arguments"]]
         assembly += FIXTURES[case.get("call", "call")]
         assembly += FIXTURES["results"][case["result"]]
-        assembly += FIXTURES["assembly_variadic_exit" if variadic else
-                             "assembly_exit"]
+        assembly += FIXTURES[case.get("exit", "assembly_variadic_exit" if variadic else
+                             "assembly_exit")]
+    assembly += FIXTURES["assembly_suffix"]
     original = args.artifacts / "calls.S"
     binary = args.artifacts / "calls.dylib"
     original.write_text(assembly)
@@ -88,10 +89,40 @@ def main():
 
     native = [platform.system(), platform.machine()] == FIXTURES["native_host"]
 
+    def execute_unwind(case, source, route, prototype, parameter_types):
+        if not case.get("unwind"):
+            return 0
+        policy = FIXTURES["unwind"]
+        harness = args.artifacts / policy["harness"].format(name=case["name"], route=route)
+        harness.write_text(policy["source"].format(prototype=prototype, name=case["name"],
+                                                   target=parameter_types[0],
+                                                   modifier=parameter_types[1],
+                                                   storage=parameter_types[2]))
+        for optimization in FIXTURES["optimizations"]:
+            stem = policy["stem"].format(name=case["name"], route=route, optimization=optimization)
+            executable = args.artifacts / stem
+            obj = executable.with_suffix(".o")
+            commands = [
+                [args.compiler, "-target", FIXTURES["native_triple"],
+                 *FIXTURES["native_flags"], optimization, "-c", str(source), "-o", str(obj)],
+                [args.compiler, "-target", FIXTURES["native_triple"],
+                 *policy["flags"], optimization, str(harness), str(obj), "-o", str(executable)],
+                [str(executable)],
+            ]
+            with (args.artifacts / (stem + ".log")).open("w") as log:
+                for command in commands:
+                    result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
+                    assert result.returncode == 0, (stem, result.returncode)
+        summary.append({"name": case["name"], "route": route,
+                        "native_unwind_executions": len(FIXTURES["optimizations"]),
+                        "signed_unwind_qualified": False})
+        return len(FIXTURES["optimizations"])
+
     def execute_variadic(case, source, route):
         if "callback" not in case or not native:
             return 0
-        values = [*FIXTURES["native_header_arguments"], *case["inputs"]]
+        values = [*case.get("native_header_arguments",
+                            FIXTURES["native_header_arguments"]), *case["inputs"]]
         parameter_types = [FIXTURES["native_parameter"]] * len(values)
         prototype = FIXTURES["native_prototype"].format(
             name=case["name"], parameters=", ".join(
@@ -129,6 +160,7 @@ def main():
                                       stderr=subprocess.STDOUT, text=True)
             assert executed.returncode == 0, (stem, executed.returncode,
                                               executed.stdout)
+        execute_unwind(case, source, route, prototype, parameter_types)
         return len(FIXTURES["optimizations"])
 
     try:

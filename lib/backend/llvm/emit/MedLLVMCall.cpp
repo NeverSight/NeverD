@@ -15,6 +15,7 @@
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMFloatingCall.h"
 #include "neverd/backend/llvm/LLVMName.h"
@@ -27,6 +28,7 @@
 #include "neverd/backend/llvm/SafetyCallsiteMetadata.h"
 #include "neverd/backend/llvm/X86/X86X87ImportCall.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/low/X86/X87ImportCall.h"
 #include "neverd/ir/med/MedABIPass.h"
@@ -37,6 +39,8 @@
 #include "neverd/object/SectionNames.h"
 #include "neverd/safety/CountedWriteSemantics.h"
 #include "neverd/support/Diagnostic.h"
+
+#include "llvm/IR/InlineAsm.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-call"
 #include "neverd/ir/SourceABI.h"
@@ -901,6 +905,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
 #define LLVM_SOURCE_CALL_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #define LLVM_SOURCE_CALL_TEXT(Name, Text) constexpr char Name[] = Text;
 #include "MedLLVMSourceCall.def"
+    const bool RetainResultStorage = sourceCallRetainsResultStorage(Hint);
     std::string Diagnostic;
     auto Refuse = [&](llvm::StringRef Reason) {
       syncError() << "source call contract: " << Reason << "\n";
@@ -911,7 +916,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Hint.AnalystSite->Sequence != Op.OriginSeq ||
         Hint.Signature.Architecture != TargetArch ||
         !validateSourceABI(Hint.Signature, Diagnostic) ||
-        Args.size() != sourceABIParameters(Hint.Signature).size()) {
+        Args.size() != sourceABIParameters(Hint.Signature).size() +
+                           unsigned(RetainResultStorage)) {
       Refuse("invalid or non-source-only occurrence binding");
       return;
     }
@@ -919,13 +925,20 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     std::vector<llvm::Value *> Values;
     const auto Bindings = sourceABIParameters(Hint.Signature);
     std::vector<llvm::Value *> Carriers;
-    for (unsigned I = 0; I < Args.size(); ++I) {
+    const auto Bits = [](llvm::Type *T) -> unsigned {
+      return T->isPointerTy() ? kSourceCallWordBytes * kSourceCallByteBits
+                              : T->getPrimitiveSizeInBits().getFixedValue();
+    };
+    if (RetainResultStorage &&
+        (Bits(Args.back()->getType()) !=
+             kSourceCallWordBytes * kSourceCallByteBits ||
+         llvm::isa<llvm::UndefValue, llvm::PoisonValue>(Args.back()))) {
+      Refuse(kSourceCallCarrierMissing);
+      return;
+    }
+    for (unsigned I = 0; I < Bindings.size(); ++I) {
       auto *Type = mapNdtype(Bindings[I].Type);
       auto *Value = Args[I];
-      const auto Bits = [](llvm::Type *T) -> unsigned {
-        return T->isPointerTy() ? 64
-                                : T->getPrimitiveSizeInBits().getFixedValue();
-      };
       if (!Type || Bits(Type) != Bits(Value->getType()) ||
           llvm::isa<llvm::UndefValue, llvm::PoisonValue>(Value)) {
         Refuse(kSourceCallCarrierMissing);
@@ -1005,8 +1018,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       return;
     }
     std::vector<llvm::Type *> Prefix(Types.begin(), Types.begin() + Fixed);
-    auto *ReturnType = llvmSourceCallValueType(*Ctx, Hint.Signature.ReturnType,
-                                               /*Parameter=*/false);
+    auto *ReturnType =
+        RetainResultStorage
+            ? llvm::Type::getVoidTy(*Ctx)
+            : llvmSourceCallValueType(*Ctx, Hint.Signature.ReturnType,
+                                      /*Parameter=*/false);
     const auto ReturnMembers =
         sourceAggregateMembers(Hint.Signature.ReturnType);
     auto *FT = llvm::FunctionType::get(ReturnType, Prefix,
@@ -1040,8 +1056,53 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     }
     if (Callable->getType()->isIntegerTy())
       Callable = Builder.CreateIntToPtr(Callable, PtrTy);
-    auto *Call =
-        Builder.CreateCall(FT, Callable, Values, AuthenticationBundles);
+    llvm::CallInst *Call;
+    if (RetainResultStorage) {
+      auto *Function = Builder.GetInsertBlock()->getParent();
+      Function->removeFnAttr(llvm::Attribute::NoUnwind);
+      Function->setUWTableKind(llvm::UWTableKind::Async);
+      Function->addFnAttr(kResultCallFrameAttribute, kResultCallFrameAll);
+      llvm::IRBuilder<> Allocation(&Function->getEntryBlock(),
+                                   Function->getEntryBlock().begin());
+      auto *Packet = Allocation.CreateAlloca(
+          I64Ty, Allocation.getInt64(kResultCallHeaderWords + Carriers.size()));
+      Packet->setAlignment(llvm::Align(kResultCallWordBytes));
+      auto *Address = Builder.CreatePtrToInt(Callable, I64Ty);
+      // A named symbol is a compiler code address. An original indirect
+      // operand is already machine bits and must never be stripped here.
+      if (!Target)
+        Address =
+            Builder.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
+                                   Mod, llvm::Intrinsic::ptrauth_strip),
+                               {Address, Builder.getInt32(kAArch64PAuthKeyIA)});
+      std::optional<unsigned> Key;
+      llvm::Value *Modifier = Builder.getInt64(0);
+      if (Authentication) {
+        Key = Authentication->Inputs[2].ConstVal;
+        Modifier = IntegerBits(getVar(Authentication->Inputs[3], Builder));
+      }
+      std::vector<llvm::Value *> PacketValues{
+          Address, Modifier, IntegerBits(Args.back()),
+          Builder.getInt64(sourceResultCallStackBytes(Bindings))};
+      PacketValues.insert(PacketValues.end(), Carriers.begin(), Carriers.end());
+      for (unsigned I = 0; I < PacketValues.size(); ++I) {
+        auto *Slot = Builder.CreateGEP(I64Ty, Packet, Builder.getInt64(I));
+        Builder.CreateStore(PacketValues[I], Slot);
+      }
+      auto *Frame =
+          Builder.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
+                                 Mod, llvm::Intrinsic::frameaddress, {PtrTy}),
+                             {Builder.getInt32(0)});
+      auto *AssemblyType =
+          llvm::FunctionType::get(Builder.getVoidTy(), {PtrTy, PtrTy}, false);
+      auto *Assembly = llvm::InlineAsm::get(
+          AssemblyType, sourceResultCallAsm(Bindings, Key),
+          kResultCallConstraints, /*hasSideEffects=*/true,
+          /*isAlignStack=*/false, llvm::InlineAsm::AD_ATT, /*canThrow=*/true);
+      Call = Builder.CreateCall(Assembly, {Packet, Frame});
+    } else {
+      Call = Builder.CreateCall(FT, Callable, Values, AuthenticationBundles);
+    }
     if (Hint.Signature.ReturnType->Kind == NdTypeKind::Int &&
         Hint.Signature.ReturnType->IsSigned)
       Call->addFnAttr(llvm::Attribute::get(*Ctx, LLVMSourceSignedResult));
@@ -1049,7 +1110,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Call->addRetAttr(Hint.Signature.ReturnType->IsSigned
                            ? llvm::Attribute::SExt
                            : llvm::Attribute::ZExt);
-    for (unsigned I = 0; I < Hint.Signature.Parameters.size(); ++I) {
+    for (unsigned I = 0;
+         !RetainResultStorage && I < Hint.Signature.Parameters.size(); ++I) {
       const auto &Parameter = Hint.Signature.Parameters[I];
       if (Parameter.Type->Kind == NdTypeKind::Int && Parameter.Type->IsSigned)
         Call->addParamAttr(
@@ -1060,13 +1122,14 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Call->addParamAttr(I, Parameter.Type->IsSigned ? llvm::Attribute::SExt
                                                        : llvm::Attribute::ZExt);
     }
-    Call->setMetadata(
-        "neverd.source.analyst-call",
-        llvm::MDNode::get(*Ctx,
-                          {llvm::ConstantAsMetadata::get(
-                               llvm::ConstantInt::get(I64Ty, Op.Addr)),
-                           llvm::ConstantAsMetadata::get(
-                               llvm::ConstantInt::get(I32Ty, Op.OriginSeq))}));
+    if (!RetainResultStorage)
+      Call->setMetadata(
+          "neverd.source.analyst-call",
+          llvm::MDNode::get(
+              *Ctx, {llvm::ConstantAsMetadata::get(
+                         llvm::ConstantInt::get(I64Ty, Op.Addr)),
+                     llvm::ConstantAsMetadata::get(
+                         llvm::ConstantInt::get(I32Ty, Op.OriginSeq))}));
     if (TargetFormat == BinaryFormat::COFF && TargetArch == Arch::X64)
       Call->setCallingConv(llvm::CallingConv::Win64);
     if (SourceMap)

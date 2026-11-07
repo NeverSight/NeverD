@@ -706,6 +706,7 @@ public:
         std::vector<std::pair<int64_t, size_t>> WritableFrameRanges;
         std::vector<std::pair<int64_t, size_t>> BorrowedRanges;
         std::vector<SourceFrameByValueCopy> CallCopies;
+        int64_t OutgoingStackEnd = *SP;
         std::optional<std::pair<int64_t, size_t>> InitializedResult;
         std::map<int64_t, State::ValueIdentity> InitializedValues;
         std::set<int64_t> DestroyedValues;
@@ -731,15 +732,39 @@ public:
           const size_t ParameterIndex = Physical.ParameterIndex;
           const auto &Parameter = Signature.Parameters[ParameterIndex];
           const auto &Location = Physical.Location;
+          if (Location.Kind == SourceABICarrierKind::Stack)
+            OutgoingStackEnd =
+                std::max(OutgoingStackEnd,
+                         *SP + Location.EntryStackOffset + Location.ValueBytes);
           if (Parameter.IndirectByValue) {
             if (!Found->second.ByValueFrameParameters.count(ParameterIndex) ||
-                Tail || Location.Kind != SourceABICarrierKind::IntegerRegister)
+                Tail)
               return false;
-            const auto Address = FrameOffset(
-                NdVar::reg(Location.RegisterOffset, Location.ValueBytes));
+            std::optional<int64_t> Address;
+            if (Location.Kind == SourceABICarrierKind::IntegerRegister) {
+              Address = FrameOffset(
+                  NdVar::reg(Location.RegisterOffset, Location.ValueBytes));
+            } else if (Location.Kind == SourceABICarrierKind::Stack) {
+              const int64_t Start = *SP + Location.EntryStackOffset;
+              if (Start < *SP || Start > -int64_t(Location.ValueBytes))
+                return false;
+              const auto First = lookup(Current.Stack, Start);
+              if (First.TheKind != ByteFact::Frame)
+                return false;
+              for (unsigned I = 0; I < Location.ValueBytes; ++I)
+                if (!WrittenStack.count(Start + I) ||
+                    lookup(Current.Stack, Start + I) !=
+                        ByteFact{ByteFact::Frame, First.Value, I, true})
+                  return false;
+              Address = First.Value;
+              WritableFrameRanges.emplace_back(
+                  *SP,
+                  (Start - *SP + Location.ValueBytes + TRI.PointerSize - 1) &
+                      -int64_t(TRI.PointerSize));
+            }
             const size_t Bytes = Parameter.Type->Size;
-            if (!Address || *Address % 8 || *Address < *SP ||
-                *Address > -static_cast<int64_t>(Bytes) ||
+            if (!Address || *Address % Parameter.Type->Alignment ||
+                *Address < *SP || *Address > -static_cast<int64_t>(Bytes) ||
                 !Initialized(*Address, Bytes))
               return false;
             CallCopies.push_back({ParameterIndex, *Address, Bytes});
@@ -990,6 +1015,13 @@ public:
               UsedEntryRegisters->insert(ResultRegister);
           }
         }
+        // The incoming stack area can be overwritten by the callee. A copy
+        // inside it is observable through both transports, even if the stack
+        // parameter itself is a scalar rather than a borrowed pointer.
+        if (!CallCopies.empty() && OutgoingStackEnd != *SP)
+          BorrowedRanges.emplace_back(
+              *SP, (OutgoingStackEnd - *SP + TRI.PointerSize - 1) &
+                       -int64_t(TRI.PointerSize));
         // A source-level copy changes the address seen by the callee. Another
         // frame argument must not expose an alias of that disposable storage.
         for (const auto &Copy : CallCopies) {

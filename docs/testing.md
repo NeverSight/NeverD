@@ -1614,6 +1614,19 @@ indirect argument addresses and existing image signing recipes; logical copies,
 hidden result buffers, new authenticated storage/imports, relocation emission
 and native signed unwinding still require their separate contracts.
 
+`SourceCallABI.DarwinIndirectResultKeepsItsOriginalStorageContract` checks the
+x8 result classifier and separates physical storage from native logical values.
+The `SourceFrameAnalysis.Logical*` cases cover fixed and variadic stacked copy
+pointers, missing effect certificates, partial pointer bytes, expired copies
+and overlap with another outgoing stack value. The public
+`arm64e_source_calls_test.py` adds original x8 storage, parameter/result aliases,
+callee writes visible during the call, clobbered x8, floating and stacked
+operands, variadics, mixed records, five-float results and direct/A-key/B-key
+calls. Native callbacks are independent assembly and inspect storage guards;
+C routes compile at O0/O2 with `-fexceptions`. Authenticated object compilation
+is not native PAC execution, and the earlier model receipt does not qualify
+these new result-storage cases.
+
 `NeverDLanguageEHTests` checks the unified signing query's image/function
 provenance, exact PCs, source scopes and bounded CIE lookup.
 `NeverDUnwindFrameCAPITests` loads independent Mach-O fixtures through the

@@ -53,6 +53,17 @@ NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCTargetDeclaration, "uint64_t {0} = {1}; ")
 NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCTarget, "__target")
 NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCRawCall, "__neverd_aarch64_raw_call({0})")
 NEVERD_A64_PAUTH_C_TEXT(kAArch64PAuthCRawCallHeader,
+                        "#ifndef __neverd_aarch64_code_address\n"
+                        "#if defined(__clang__)\n"
+                        "#if __has_feature(ptrauth_calls)\n"
+                        "#define __neverd_aarch64_code_address(fn) "
+                        "__builtin_ptrauth_strip((void *)(fn), 0)\n"
+                        "#endif\n"
+                        "#endif\n"
+                        "#ifndef __neverd_aarch64_code_address\n"
+                        "#define __neverd_aarch64_code_address(fn) (fn)\n"
+                        "#endif\n"
+                        "#endif\n"
                         "#ifndef __neverd_aarch64_raw_call\n"
                         "#if defined(__clang__)\n"
                         "#if __has_feature(ptrauth_calls)\n"

@@ -3076,3 +3076,41 @@ TEST(AArch64ExceptionReturnSemantics, HighCPublishesTheTerminalCall) {
     compileArm64eC(Source);
   }
 }
+
+TEST(AArch64PAuthSemantics, LLVMStripKeepsCodeAndDataKeyClassesInC) {
+  for (unsigned Key = kAArch64PAuthKeyIA; Key <= kAArch64PAuthKeyDB; ++Key) {
+    SCOPED_TRACE(Key);
+    const auto F =
+        pointerFunction(Intrinsic::Xpaci, intrinsicName(Intrinsic::Xpaci));
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit({F}, Context, F.Name, Arch::AArch64);
+    ASSERT_TRUE(Module);
+    auto *Function = Module->getFunction(F.Name);
+    ASSERT_TRUE(Function);
+    llvm::CallInst *Original = nullptr;
+    for (auto &Block : *Function)
+      for (auto &Instruction : Block)
+        if (auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction);
+            Call && Call->isInlineAsm())
+          Original = Call;
+    ASSERT_TRUE(Original);
+    llvm::IRBuilder<> Builder(Original);
+    auto *Strip =
+        Builder.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
+                               Module.get(), llvm::Intrinsic::ptrauth_strip),
+                           {Function->getArg(0), Builder.getInt32(Key)});
+    Original->replaceAllUsesWith(Strip);
+    Original->eraseFromParent();
+    EXPECT_FALSE(llvm::verifyModule(*Module));
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.Format = BinaryFormat::MachO;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+    const auto Operation = aarch64PAuthOperation(
+        aarch64PAuthCodeKeyIsValid(Key) ? Intrinsic::Xpaci : Intrinsic::Xpacd);
+    EXPECT_NE(Source.find(Operation->Mnemonic), std::string::npos) << Source;
+    compileArm64eC(Source);
+  }
+}

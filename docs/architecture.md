@@ -1296,6 +1296,35 @@ occupies one eight-byte pointer slot. Native logical by-value reconstruction
 still requires its separate copy-storage proof. Anonymous C record names reuse
 natural-layout validation independently of the stricter direct-value ABI check;
 naming a mixed record behind a pointer does not authorize passing it directly.
+Supplied Darwin C prototypes with an indirect result bind the original pre-call
+x8 address as an additional physical input. `AArch64SourceResultCall.def` owns
+one packet layout, assembly program and clobber list shared by LLVM, HighC and
+LLVMC. The bridge passes that address through the actual BLR, BLRAA or BLRAB;
+it does not allocate a logical result and copy it back after the call. Argument
+aliases and writes made during the call remain observable. The supplied result
+type uses the shared natural-record PCS classifier, including mixed records
+and the HFA size exception. It introduces no LLVM `sret`, `byval`, `noalias`,
+alignment or dereferenceability promise on the original storage. The existing
+native logical-result adapter still requires a reconstructible member layout.
+
+The bridge preserves the compiler's stack in a callee-saved register, reserves
+the Darwin red zone plus aligned outgoing arguments, and forces a compiler
+frame pointer. C compilation requires AArch64 Clang with `-fexceptions`; LLVM
+marks the assembly as potentially unwinding. These properties preserve the
+compiler's own frame contract, not a qualification of native signed exception
+unwinding or exact fault PCs. A named compiler code address is stripped before
+a raw register call; an original signed indirect operand retains its key and
+modifier and is never stripped to bypass authentication.
+
+The logical-copy proof also accepts complete pointers carried in fixed and
+variadic stack slots. It checks their reaching bytes, the record's actual
+alignment and initialized private storage. Copies cannot overlap another
+borrow, a hidden result or the outgoing argument area. Consuming a copy kills
+its initialized-byte identities, so a later read needs a new definite write.
+This remains an independently authenticated frame-effect proof; an analyst
+prototype alone cannot grant nonescape, copy lifetime or logical call
+reconstruction.
+
 Narrow integer
 register parameters and AArch64 narrow results retain the ABI's 32-bit
 sign/zero-extension guarantee separately from their source width. LLVM source

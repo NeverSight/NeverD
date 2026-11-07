@@ -1,0 +1,138 @@
+//===- AArch64SourceResultCall.def - Original x8 call transport -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// RESULT_CALL_VALUE and RESULT_CALL_TEXT own the packet layout, AArch64
+/// instruction templates and C spelling. RESULT_CALL_CLOBBER lists registers
+/// overwritten by the bridge or the callee. x18 is Darwin's reserved register.
+//===----------------------------------------------------------------------===//
+#ifndef RESULT_CALL_VALUE
+#define RESULT_CALL_VALUE(Name, Value)
+#endif
+#ifndef RESULT_CALL_TEXT
+#define RESULT_CALL_TEXT(Name, Text)
+#endif
+#ifndef RESULT_CALL_INPUTS
+#define RESULT_CALL_INPUTS(Text)
+#endif
+#ifndef RESULT_CALL_CLOBBER
+#define RESULT_CALL_CLOBBER(Name)
+#endif
+
+RESULT_CALL_INPUTS("r,r")
+RESULT_CALL_VALUE(kResultCallWordBytes, 8)
+RESULT_CALL_VALUE(kResultCallFloatBytes, 4)
+RESULT_CALL_VALUE(kResultCallHalfBytes, 2)
+RESULT_CALL_VALUE(kResultCallByteBytes, 1)
+RESULT_CALL_VALUE(kResultCallScratchRegister, 9)
+RESULT_CALL_VALUE(kResultCallHeaderWords, 4)
+RESULT_CALL_VALUE(kResultCallRedZoneBytes, 128)
+RESULT_CALL_VALUE(kResultCallStackAlignment, 16)
+RESULT_CALL_TEXT(kResultCallMarker, "// neverd.aarch64.result-storage.v1\n")
+RESULT_CALL_TEXT(
+    kResultCallPrefix,
+    "mov x19, $0\nmov x20, sp\nldr x9, [x19, #24]\nsub sp, sp, x9\n")
+RESULT_CALL_TEXT(
+    kResultCallSuffix,
+    "ldr x16, [x19]\nldr x17, [x19, #8]\nldr x8, [x19, #16]\n{0}\nmov sp, x20")
+RESULT_CALL_TEXT(kResultCallRaw, "blr x16")
+RESULT_CALL_TEXT(kResultCallIA, "blraa x16, x17")
+RESULT_CALL_TEXT(kResultCallIB, "blrab x16, x17")
+RESULT_CALL_TEXT(kResultCallLoad, "{0} {1}{2}, [x19, #{3}]\n")
+RESULT_CALL_TEXT(kResultCallStore, "{0} {1}9, [sp, #{2}]\n")
+RESULT_CALL_TEXT(kResultCallLoadByte, "ldrb")
+RESULT_CALL_TEXT(kResultCallLoadSignedByte, "ldrsb")
+RESULT_CALL_TEXT(kResultCallLoadHalf, "ldrh")
+RESULT_CALL_TEXT(kResultCallLoadSignedHalf, "ldrsh")
+RESULT_CALL_TEXT(kResultCallLoadWord, "ldr")
+RESULT_CALL_TEXT(kResultCallStoreByte, "strb")
+RESULT_CALL_TEXT(kResultCallStoreHalf, "strh")
+RESULT_CALL_TEXT(kResultCallStoreWord, "str")
+RESULT_CALL_TEXT(kResultCallW, "w")
+RESULT_CALL_TEXT(kResultCallX, "x")
+RESULT_CALL_TEXT(kResultCallS, "s")
+RESULT_CALL_TEXT(kResultCallD, "d")
+RESULT_CALL_TEXT(kResultCallPacket, "__neverd_result_call")
+RESULT_CALL_TEXT(kResultCallValue, "__neverd_result_argument")
+RESULT_CALL_TEXT(kResultCallPacketC,
+                 "({{ uint64_t {0}[{1}] = {{(uint64_t)({2}), (uint64_t)({3}), "
+                 "(uint64_t)({4}), {5}}; ")
+RESULT_CALL_TEXT(kResultCallArgumentC,
+                 "{{ {0} = {1}; __builtin_memcpy(&{2}[{3}], &{4}, {5}); } ")
+RESULT_CALL_TEXT(
+    kResultCallAsmC,
+    "__asm__ volatile(\"{0}\" : : \"r\"({1}), \"r\"({2}) : {3}\"unwind\");")
+RESULT_CALL_TEXT(kResultCallEndC, " (void)0; })")
+RESULT_CALL_TEXT(kResultCallFrameC, "__builtin_frame_address(0)")
+RESULT_CALL_TEXT(kResultCallDirectC, "__neverd_aarch64_code_address({0})")
+RESULT_CALL_TEXT(
+    kResultCallError,
+    "The original indirect-result storage call has incomplete carriers")
+RESULT_CALL_TEXT(kResultCallFrameAttribute, "frame-pointer")
+RESULT_CALL_TEXT(kResultCallFrameAll, "all")
+RESULT_CALL_TEXT(kResultCallCompilerContract,
+                 "\n#if !defined(__aarch64__) || !defined(__clang__) || "
+                 "!defined(__EXCEPTIONS)\n#error \"AArch64 result-storage "
+                 "calls require AArch64 Clang and -fexceptions\"\n#endif\n")
+RESULT_CALL_CLOBBER("x0")
+RESULT_CALL_CLOBBER("x1")
+RESULT_CALL_CLOBBER("x2")
+RESULT_CALL_CLOBBER("x3")
+RESULT_CALL_CLOBBER("x4")
+RESULT_CALL_CLOBBER("x5")
+RESULT_CALL_CLOBBER("x6")
+RESULT_CALL_CLOBBER("x7")
+RESULT_CALL_CLOBBER("x8")
+RESULT_CALL_CLOBBER("x9")
+RESULT_CALL_CLOBBER("x10")
+RESULT_CALL_CLOBBER("x11")
+RESULT_CALL_CLOBBER("x12")
+RESULT_CALL_CLOBBER("x13")
+RESULT_CALL_CLOBBER("x14")
+RESULT_CALL_CLOBBER("x15")
+RESULT_CALL_CLOBBER("x16")
+RESULT_CALL_CLOBBER("x17")
+RESULT_CALL_CLOBBER("x19")
+RESULT_CALL_CLOBBER("x20")
+RESULT_CALL_CLOBBER("lr")
+RESULT_CALL_CLOBBER("v0")
+RESULT_CALL_CLOBBER("v1")
+RESULT_CALL_CLOBBER("v2")
+RESULT_CALL_CLOBBER("v3")
+RESULT_CALL_CLOBBER("v4")
+RESULT_CALL_CLOBBER("v5")
+RESULT_CALL_CLOBBER("v6")
+RESULT_CALL_CLOBBER("v7")
+RESULT_CALL_CLOBBER("v8")
+RESULT_CALL_CLOBBER("v9")
+RESULT_CALL_CLOBBER("v10")
+RESULT_CALL_CLOBBER("v11")
+RESULT_CALL_CLOBBER("v12")
+RESULT_CALL_CLOBBER("v13")
+RESULT_CALL_CLOBBER("v14")
+RESULT_CALL_CLOBBER("v15")
+RESULT_CALL_CLOBBER("v16")
+RESULT_CALL_CLOBBER("v17")
+RESULT_CALL_CLOBBER("v18")
+RESULT_CALL_CLOBBER("v19")
+RESULT_CALL_CLOBBER("v20")
+RESULT_CALL_CLOBBER("v21")
+RESULT_CALL_CLOBBER("v22")
+RESULT_CALL_CLOBBER("v23")
+RESULT_CALL_CLOBBER("v24")
+RESULT_CALL_CLOBBER("v25")
+RESULT_CALL_CLOBBER("v26")
+RESULT_CALL_CLOBBER("v27")
+RESULT_CALL_CLOBBER("v28")
+RESULT_CALL_CLOBBER("v29")
+RESULT_CALL_CLOBBER("v30")
+RESULT_CALL_CLOBBER("v31")
+RESULT_CALL_CLOBBER("memory")
+RESULT_CALL_CLOBBER("cc")
+
+#undef RESULT_CALL_VALUE
+#undef RESULT_CALL_TEXT
+#undef RESULT_CALL_INPUTS
+#undef RESULT_CALL_CLOBBER

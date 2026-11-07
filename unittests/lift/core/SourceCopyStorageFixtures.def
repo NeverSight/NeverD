@@ -1,0 +1,17 @@
+//===- SourceCopyStorageFixtures.def - Logical copy storage cases --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// SOURCE_COPY_VALUE names the independent frame, pointer and record extents.
+//===----------------------------------------------------------------------===//
+SOURCE_COPY_VALUE(kCopyVariadicPrefix, 2)
+SOURCE_COPY_VALUE(kCopyGPRegisters, 8)
+SOURCE_COPY_VALUE(kCopyWordBytes, 8)
+SOURCE_COPY_VALUE(kCopyOutgoingBytes, 16)
+SOURCE_COPY_VALUE(kCopyOriginalFrameBytes, 288)
+SOURCE_COPY_VALUE(kCopyRecordBytes, 128)
+SOURCE_COPY_VALUE(kCopyPartialPointerBytes, 4)
+SOURCE_COPY_VALUE(kCopyOverlappingValues, 2)
+#undef SOURCE_COPY_VALUE

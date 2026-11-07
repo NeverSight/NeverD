@@ -27,6 +27,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighFlowOracle.h"
 #include "neverd/ir/high/HighSourceFlow.h"
@@ -368,6 +369,8 @@ ExprPtr MedToHighConverter::inlineableDefinition(VarKey Key) const {
 }
 
 TypeRef MedToHighConverter::sourceCallResultType(const MedOp &Op) const {
+  if (Op.SourceCallHint && sourceCallRetainsResultStorage(*Op.SourceCallHint))
+    return NdType::makeVoid();
   if (Op.SourceCallHint &&
       isNativeSwiftErrorSourceCall(*Op.SourceCallHint, TargetArch))
     if (auto Type = swiftErrorCallResultType(Op.SourceCallHint->Signature);
