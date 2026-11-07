@@ -7,6 +7,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/high/HighSwiftErrorProjection.h"
 #include "neverd/libc/LibCObjC.h"
 #include "neverd/loader/MachO/CFunctionParameterCalls.h"
@@ -162,7 +163,12 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     for (unsigned I = 0; I < Fixed; ++I) {
       if (I)
         Prototype += ", ";
-      Prototype += declarationToC(Signature.Parameters[I].Type, "");
+      const auto &Parameter = Signature.Parameters[I];
+      Prototype +=
+          declarationToC(Hint.CallKind == SourceCallTypeHint::Kind::Analyst
+                             ? sourceCallParameterType(Parameter)
+                             : Parameter.Type,
+                         "");
     }
     if (Variadic)
       Prototype += ", ...";
@@ -208,10 +214,11 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     std::string Call = Callee + "(";
     for (unsigned I = 0; I < E.Operands.size(); ++I) {
       const auto &Argument = E.Operands[I];
-      const auto Value = Argument
-                             ? sourceValue(exprStr(*Argument), Argument->Type,
-                                           Signature.Parameters[I].Type)
-                             : std::nullopt;
+      const auto Value =
+          Argument
+              ? sourceValue(exprStr(*Argument), Argument->Type,
+                            sourceCallParameterType(Signature.Parameters[I]))
+              : std::nullopt;
       if (!Value)
         throw std::invalid_argument(
             "A complete call-site argument carrier is unavailable");

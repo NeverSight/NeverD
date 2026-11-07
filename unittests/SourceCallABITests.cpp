@@ -221,13 +221,11 @@ TEST(SourceCallABI, DarwinVariadicWideValuesSkipHalfAlignedSlots) {
     }
 }
 
-TEST(SourceCallABI, DarwinVariadicValuesRetainPromotionAndIndirectRefusals) {
+TEST(SourceCallABI, DarwinVariadicValuesRetainPromotionAndPlatformRefusals) {
   const auto Word = NdType::makeInt(kDarwinRegisterBytes);
   const auto Float = NdType::makeFloat(kDarwinFloatBytes);
   std::string Error;
-  for (const auto Type :
-       {NdType::makeInt(kDarwinNarrowBytes), Float,
-        NdType::makeStruct(std::vector<TypeRef>(kDarwinThreeMembers, Word))}) {
+  for (const auto Type : {NdType::makeInt(kDarwinNarrowBytes), Float}) {
     auto Hint = contract({Word, Type}, 1);
     EXPECT_FALSE(
         assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error));
@@ -242,6 +240,77 @@ TEST(SourceCallABI, DarwinVariadicValuesRetainPromotionAndIndirectRefusals) {
       EXPECT_FALSE(assignAnalystCallABI(Hint, Arch::AArch64, Format, Error));
     }
   }
+}
+
+TEST(SourceCallABI, DarwinIndirectArgumentsRetainOriginalPointerCarriers) {
+  const auto Word = NdType::makeInt(kDarwinRegisterBytes);
+  const auto Record = NdType::makeStruct(std::vector<TypeRef>(
+      kDarwinTransformMembers, NdType::makeFloat(kDarwinRegisterBytes)));
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (unsigned Prefix = 0; Prefix <= kDarwinRegisterArguments; ++Prefix)
+    for (const bool Variadic : {false, true}) {
+      if (Variadic && !Prefix)
+        continue;
+      std::vector<TypeRef> Types(Prefix, Word);
+      Types.push_back(Record);
+      auto Hint = contract(Types, Variadic ? int(Prefix) : -1);
+      std::string Error;
+      ASSERT_TRUE(
+          assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error))
+          << Error;
+      const auto &Parameter = Hint.Signature.Parameters.back();
+      EXPECT_TRUE(Parameter.IndirectByValue);
+      EXPECT_TRUE(Parameter.Components.empty());
+      const auto Bindings = sourceABIParameters(Hint.Signature);
+      ASSERT_EQ(Bindings.size(), Types.size());
+      EXPECT_EQ(Bindings.back().Type->Kind, NdTypeKind::Ptr);
+      EXPECT_EQ(Bindings.back().Type->Size, kDarwinRegisterBytes);
+      if (Variadic || Prefix == kDarwinRegisterArguments) {
+        EXPECT_EQ(Parameter.Location.Kind, SourceABICarrierKind::Stack);
+        EXPECT_EQ(Parameter.Location.EntryStackOffset, 0);
+      } else {
+        EXPECT_EQ(Parameter.Location.Kind,
+                  SourceABICarrierKind::IntegerRegister);
+        EXPECT_EQ(Parameter.Location.RegisterOffset, TRI.IntParamRegs[Prefix]);
+      }
+    }
+}
+
+TEST(SourceCallABI, DarwinIndirectLayoutUsesTheSharedPCSClassifier) {
+  const auto Word = NdType::makeInt(kDarwinRegisterBytes, false);
+  const auto Double = NdType::makeFloat(kDarwinRegisterBytes);
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  const auto Pair = NdType::makeStruct({Word, Double});
+  for (const auto Record :
+       {NdType::makeStruct({Word, Word, Word}),
+        NdType::makeStruct({Pointer, Double, Word}),
+        NdType::makeStruct({Pair, Pair}),
+        NdType::makeStruct({Word, Double, NdType::makeInt(kDarwinNarrowBytes)}),
+        NdType::makeStruct(
+            std::vector<TypeRef>(kDarwinTransformMembers, Double))}) {
+    auto Hint = contract({Word, Record}, 1);
+    std::string Error;
+    ASSERT_TRUE(
+        assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error))
+        << Error;
+    const auto &Parameter = Hint.Signature.Parameters.back();
+    EXPECT_TRUE(Parameter.IndirectByValue);
+    const auto Carrier = sourceCallParameterType(Parameter);
+    EXPECT_EQ(Carrier->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(Carrier->Pointee, Record);
+    EXPECT_FALSE(Hint.ByValueCopy);
+    auto Malformed = std::make_shared<NdType>(*Record);
+    --Malformed->Size;
+    auto Invalid = contract({Malformed});
+    EXPECT_FALSE(assignAnalystCallABI(Invalid, Arch::AArch64,
+                                      BinaryFormat::MachO, Error));
+  }
+  auto HFA = contract(
+      {NdType::makeStruct(std::vector<TypeRef>(kDarwinHFAMembers, Double))});
+  std::string Error;
+  ASSERT_TRUE(
+      assignAnalystCallABI(HFA, Arch::AArch64, BinaryFormat::MachO, Error));
+  EXPECT_FALSE(HFA.Signature.Parameters.front().IndirectByValue);
 }
 
 TEST(SourceCallABI, DarwinEmptyVariadicTailKeepsTheFixedValueContract) {

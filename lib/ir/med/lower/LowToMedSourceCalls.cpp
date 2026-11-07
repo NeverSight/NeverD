@@ -340,10 +340,11 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           !validateSourceABI(Hint->Signature, Diagnostic) ||
           (hasSwiftErrorResult(Hint->Signature) &&
            !isSwiftWillThrowSourceCall(*Hint, TargetArch) && !NativeError) ||
-          // The ABI describes an address of a by-value copy. Until a call
-          // owns a separate copy-storage proof, leave the original operation
-          // unbound; a physical pointer is not its logical record argument.
-          (hasIndirectSourceParameters(Hint->Signature) &&
+          // Logical by-value reconstruction needs a separate copy-storage
+          // proof. Analyst calls instead retain the original ABI pointer;
+          // they neither reconstruct the value nor introduce another copy.
+          (Hint->CallKind != SourceCallTypeHint::Kind::Analyst &&
+           hasIndirectSourceParameters(Hint->Signature) &&
            (!isObjCByValueCopyHint(*Hint, Low.Entry, TargetArch) ||
             Op.Opcode != NdOp::CALL || !Op.Inputs[0].isConst() ||
             Hint->ByValueCopy->Site.Instruction != Op.Addr ||

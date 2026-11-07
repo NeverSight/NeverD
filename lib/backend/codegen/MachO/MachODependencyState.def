@@ -1,0 +1,29 @@
+//===- MachODependencyState.def - Dyld preservation contracts --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Constants and diagnostics for exact authenticated binding preservation.
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_DEPENDENCY_VALUE
+#define MACHO_DEPENDENCY_VALUE(Type, Name, Value)
+#endif
+#ifndef MACHO_DEPENDENCY_TEXT
+#define MACHO_DEPENDENCY_TEXT(Name, Text)
+#endif
+
+MACHO_DEPENDENCY_VALUE(unsigned, kOrdinaryChainStride, 4)
+MACHO_DEPENDENCY_VALUE(unsigned, kRebasePhase, 0)
+MACHO_DEPENDENCY_VALUE(unsigned, kBindPhase, 1)
+MACHO_DEPENDENCY_TEXT(kInvalidArm64eWord, "invalid arm64e pointer word")
+MACHO_DEPENDENCY_TEXT(kInvalidArm64eImport, "invalid arm64e import ordinal")
+MACHO_DEPENDENCY_TEXT(kArm64eAddendOverflow, "arm64e bind addend overflows")
+MACHO_DEPENDENCY_TEXT(kInvalidArm64eSegment,
+                      "arm64e rebase has no complete target segment")
+MACHO_DEPENDENCY_TEXT(kArm64eTargetOverflow, "arm64e rebase target overflows")
+MACHO_DEPENDENCY_TEXT(kChangedCPUABI, "image CPU type or ABI subtype changed")
+
+#undef MACHO_DEPENDENCY_VALUE
+#undef MACHO_DEPENDENCY_TEXT
