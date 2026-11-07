@@ -17,6 +17,12 @@
 
 namespace neverd::translate {
 
+uint64_t X86LegacySourceExecution::key() const {
+  const auto &CS = State.Core.Segments[1];
+  return x86LegacySourceKey(uint32_t(CS.Base + State.EIP),
+                            bool(CS.Attributes & 0x4000));
+}
+
 uint32_t X86LegacySourceExecution::fail(llvm::Error Failure) {
   Last = {};
   Error = llvm::toString(std::move(Failure));
@@ -37,9 +43,7 @@ uint32_t X86LegacySourceExecution::select(uint64_t &Key) {
     return uint32_t(X86LegacySourceExit::PendingEvent);
   if (auto Failure = detail::admitLegacyExecution(State, Memory, Options))
     return fail(std::move(Failure));
-  const auto &CS = State.Core.Segments[1];
-  Key = x86LegacySourceKey(uint32_t(CS.Base + State.EIP),
-                           bool(CS.Attributes & 0x4000));
+  Key = key();
   Error.clear();
   return uint32_t(X86LegacyExecutionStatus::Completed);
 }
@@ -47,13 +51,14 @@ uint32_t X86LegacySourceExecution::select(uint64_t &Key) {
 uint32_t X86LegacySourceExecution::step(uint64_t Key,
                                         llvm::ArrayRef<uint8_t> Bytes) {
   Last = {};
-  uint64_t Current = 0;
-  if (const auto Status = select(Current))
-    return Status;
-  if (Key != Current)
+  Error.clear();
+  if (State.PendingEvent)
+    return uint32_t(X86LegacySourceExit::PendingEvent);
+  if (Key != key())
     return fail(llvm::createStringError(
         llvm::errc::invalid_argument,
         "legacy source instruction address or CS.D mode does not match"));
+  // The instruction owner validates the complete live state before accesses.
   return record(executeX86LegacyInstruction(State, Memory, Bytes, Options));
 }
 

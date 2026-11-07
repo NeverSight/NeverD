@@ -1,4 +1,4 @@
-//===- NeverDCAPIContinuation.cpp - Explicit x64 state C API -------------===//
+//===- NeverDCAPIContinuation.cpp - Explicit x86 state C API -------------===//
 //
 // NeverD Decompiler
 //

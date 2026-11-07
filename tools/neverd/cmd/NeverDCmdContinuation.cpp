@@ -1,4 +1,4 @@
-//===- NeverDCmdContinuation.cpp - Explicit x64 state source -------------===//
+//===- NeverDCmdContinuation.cpp - Explicit x86 state source -------------===//
 //
 // NeverD Decompiler
 //

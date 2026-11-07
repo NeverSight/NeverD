@@ -1,4 +1,4 @@
-//===- NeverDCAPIContinuation.h - Explicit x64 state C ------------*- C -*-===//
+//===- NeverDCAPIContinuation.h - Explicit x86 state C ------------*- C -*-===//
 //
 // NeverD Decompiler
 //

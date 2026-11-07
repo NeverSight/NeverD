@@ -61,6 +61,7 @@ public:
   llvm::StringRef lastError() const { return Error; }
 
 private:
+  uint64_t key() const;
   uint32_t record(llvm::Expected<X86LegacyExecutionResult> Result);
   uint32_t fail(llvm::Error Failure);
   X86LegacyExecutionState &State;
