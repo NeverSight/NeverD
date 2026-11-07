@@ -776,9 +776,13 @@ follows inline loads/stores and counted loops through the
 canonical typed-memory transfer. The requested length remains bounded by the
 existing modeled-scratch limit. Every instruction, temporary state, write
 footprint and visited register snapshot consumes the existing work or retained
-memory budget; this creates no cached specialization. Unknown branches, other
-guest calls, multiple copy syscalls and repeated block/register states cannot
-establish a returning path. Ignoring memory in the repeated-state check can
+memory budget; this creates no cached specialization. Direct nested transfer
+wrappers use the same path proof and restore callee-saved registers and frame
+origins at each matched return. The existing guest call-depth limit and active
+entry recursion guard also bound these temporary paths. Unknown branches,
+opaque or indirect guest calls, registered legacy runtime dispatch, multiple
+copy syscalls and repeated block/register states cannot establish a returning
+path. Ignoring memory in the repeated-state check can
 reject a memory-driven loop, but cannot prove a path that did not return.
 `instantiated_memory_path_instructions` and `instantiated_memory_path_stores`
 record successful inline paths; `instantiated_copy_syscall_slot` and
@@ -791,7 +795,11 @@ stores. The latter lets a short stack-copy loop preserve fields outside its
 actual writes even when the copied bytes are unknown. Plain syscall wrappers
 keep their existing summary path: eagerly preserving their unrelated caller
 snapshots can displace useful later specializations. Unknown addresses do not
-authorize the frame-range path.
+authorize the frame-range path. A zero-length append through a known holder
+can also demand this proof: its nested copy must reach a matched return, and
+the wrapper's descriptor loads and stores still execute through the canonical
+memory owner. A zero argument alone does not establish preservation or erase
+an unknown branch or write.
 `captured_addresses`, bounded may-write
 intervals and `output_memory_copies` describe these additional facts separately
 from literal CALLX target proofs.

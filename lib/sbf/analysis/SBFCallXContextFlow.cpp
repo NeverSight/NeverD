@@ -613,10 +613,17 @@ private:
     size_t Stores = 0;
   };
   llvm::Expected<std::optional<MemoryTransferInstantiation>>
-  instantiateMemoryTransferPath(size_t Entry, const ContextState &Input);
+  instantiateMemoryTransferPath(const FunctionContext &Owner, size_t Entry,
+                                const ContextState &Input);
   llvm::Expected<bool> callTarget(FunctionContext &Context,
                                   const MedInstruction &Instruction,
                                   ContextState &State, bool Collect);
+  bool hasRegisteredLegacyRuntime(const MedInstruction &Instruction) const {
+    return Instruction.Dispatch ==
+               CallDispatchPolicy::LegacyRuntimeThenFunction &&
+           Program.isSyscallRegistered(
+               static_cast<uint32_t>(Instruction.Immediate));
+  }
   std::optional<size_t> rawTargetSlot(va_t Address) const {
     // Raw CALLX subtracts in uint64_t and floors to a slot. An unaligned
     // address or an LDDW continuation is not rejected by address resolution.
@@ -779,10 +786,7 @@ llvm::Error ContextFlow::computeReturnReachability() {
   const auto DirectCallee =
       [&](const MedInstruction &Instruction) -> std::optional<size_t> {
     if (Instruction.Call != CallKind::Internal || !Instruction.CallTarget ||
-        (Instruction.Dispatch ==
-             CallDispatchPolicy::LegacyRuntimeThenFunction &&
-         Program.isSyscallRegistered(
-             static_cast<uint32_t>(Instruction.Immediate))))
+        hasRegisteredLegacyRuntime(Instruction))
       return std::nullopt;
     const auto It = ByEntry.find(*Instruction.CallTarget);
     if (It == ByEntry.end() || !Index.find(*Instruction.CallTarget))
@@ -1466,9 +1470,7 @@ llvm::Error ContextFlow::computeInputDependencies() {
         LiveCallReturns[I->Slot] = Uses & registerBit(kReturnRegister);
         if (I->Call == CallKind::Internal && I->CallTarget &&
             ByEntry.contains(*I->CallTarget) &&
-            !(I->Dispatch == CallDispatchPolicy::LegacyRuntimeThenFunction &&
-              Program.isSyscallRegistered(
-                  static_cast<uint32_t>(I->Immediate)))) {
+            !hasRegisteredLegacyRuntime(*I)) {
           const size_t Entry = ByEntry.at(*I->CallTarget);
           if (!MayReturnFromBlock[Entry]) {
             // A matched nonreturning call makes the continuation unreachable.
@@ -2752,22 +2754,30 @@ llvm::Expected<bool> ContextFlow::call(FunctionContext &Context,
 /// Replay a short memory-transfer path using actual caller values and the
 /// canonical load/store owner. This creates no cached specialization. Only
 /// known branch successors and a matched return establish a postcondition;
-/// unknown branches, other calls and repeated register states do not.
+/// unknown branches, opaque calls and repeated register states do not.
 llvm::Expected<std::optional<ContextFlow::MemoryTransferInstantiation>>
-ContextFlow::instantiateMemoryTransferPath(size_t Entry,
+ContextFlow::instantiateMemoryTransferPath(const FunctionContext &Owner,
+                                           size_t Entry,
                                            const ContextState &Input) {
+  const size_t EntrySlot = Program.Med.Blocks[Entry].StartSlot;
+  if (ActiveEntries.contains(EntrySlot) ||
+      ActiveEntries.size() >= Program.Config.MaxCallDepth - 1)
+    return std::optional<MemoryTransferInstantiation>{};
   const auto Requested = Input.Registers[3].singleton();
   if (Requested.ValueKind != RegisterValue::Kind::Constant ||
       Requested.Value > kMaxModeledScratchBytes)
     return std::optional<MemoryTransferInstantiation>{};
-  constexpr uint64_t ResultOverhead =
-      sizeof(MemoryTransferInstantiation) - sizeof(ContextState);
+  constexpr uint64_t ResultOverhead = sizeof(MemoryTransferInstantiation) -
+                                      sizeof(ContextState) + sizeof(size_t) +
+                                      4 * sizeof(void *);
   uint64_t StateBytes = stateBytes(Input) + ResultOverhead;
   if (auto Error = retain(StateBytes))
     return std::move(Error);
   uint64_t SeenBytes = 0;
   const auto Release =
       llvm::scope_exit([&] { RetainedBytes -= StateBytes + SeenBytes; });
+  ActiveEntries.insert(EntrySlot);
+  const auto Leave = llvm::scope_exit([&] { ActiveEntries.erase(EntrySlot); });
   MemoryTransferInstantiation Result;
   Result.Output = Input;
   auto &State = Result.Output;
@@ -2830,10 +2840,15 @@ ContextFlow::instantiateMemoryTransferPath(size_t Entry,
         continue;
       if (auto Error = visit())
         return std::move(Error);
+      // Every nested state keeps origins in the original caller's frame.
+      // Recover a loaded frame pointer using the same owner as normal replay.
+      refineOrigins(Owner, State);
       ++Result.Instructions;
       Last = Instruction;
       if (Instruction->Op == Operation::Exit) {
-        if (!Result.CopySlot && !Result.Stores)
+        // An empty path is useful for a zero-length nested copy, but still
+        // needs an actual matched return; a zero argument alone proves nothing.
+        if (!Result.CopySlot && !Result.Stores && Requested.Value != 0)
           return std::optional<MemoryTransferInstantiation>{};
         for (unsigned R = kFirstCalleeSavedRegister; R < kRegisterCount; ++R) {
           State.Registers[R] = Input.Registers[R];
@@ -2844,7 +2859,34 @@ ContextFlow::instantiateMemoryTransferPath(size_t Entry,
           return std::move(Error);
         return std::optional<MemoryTransferInstantiation>(std::move(Result));
       }
-      if (Instruction->Call != CallKind::None) {
+      if (Instruction->Call == CallKind::Internal) {
+        if (!Instruction->CallTarget ||
+            hasRegisteredLegacyRuntime(*Instruction))
+          return std::optional<MemoryTransferInstantiation>{};
+        const auto ChildEntry = ByEntry.find(*Instruction->CallTarget);
+        if (ChildEntry == ByEntry.end() ||
+            !Index.find(*Instruction->CallTarget))
+          return std::optional<MemoryTransferInstantiation>{};
+        const auto Generic = GenericContexts.find(ChildEntry->second);
+        if (Generic == GenericContexts.end() || !Generic->second->Complete ||
+            !Generic->second->HasMemoryTransfer)
+          return std::optional<MemoryTransferInstantiation>{};
+        auto Child =
+            instantiateMemoryTransferPath(Owner, ChildEntry->second, State);
+        if (!Child)
+          return Child.takeError();
+        if (!*Child ||
+            ((**Child).CopySlot && (Result.CopySlot || Result.Stores)))
+          return std::optional<MemoryTransferInstantiation>{};
+        Result.Effects.include((**Child).Effects, symbolicInputs(), Program);
+        Result.Instructions += (**Child).Instructions;
+        Result.Stores += (**Child).Stores;
+        if ((**Child).CopySlot) {
+          Result.CopySlot = (**Child).CopySlot;
+          Result.CopySize = (**Child).CopySize;
+        }
+        State = std::move((**Child).Output);
+      } else if (Instruction->Call != CallKind::None) {
         const auto Length = State.Registers[3].singleton();
         if (Result.CopySlot || Result.Stores ||
             Instruction->Call != CallKind::Syscall || !Instruction->Syscall ||
@@ -2985,9 +3027,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       Edge.CalleeEntrySlot = rawTargetSlot(Target.Value);
     }
   }
-  Edge.LegacyRuntime =
-      Instruction.Dispatch == CallDispatchPolicy::LegacyRuntimeThenFunction &&
-      Program.isSyscallRegistered(static_cast<uint32_t>(Instruction.Immediate));
+  Edge.LegacyRuntime = hasRegisteredLegacyRuntime(Instruction);
   if (!Edge.CalleeEntrySlot)
     Edge.Barrier = CallXSummaryBarrier::UnknownTarget;
   else if (!ByEntry.contains(*Edge.CalleeEntrySlot) ||
@@ -3053,6 +3093,8 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       Generalization = CallXInputGeneralization::ResourceBudget;
     }
     Callee = *Result;
+    if (!Edge.LegacyRuntime)
+      Context.HasMemoryTransfer |= Callee->HasMemoryTransfer;
     Edge.CalleeSummaryID = Callee->ID;
     Edge.GeneralizedInputs = Callee->Generic;
     Edge.InputGeneralization = Generalization;
@@ -3120,6 +3162,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
   const auto CopyLength = State.Registers[3].singleton();
   bool CopiesCapturedValue = false;
   bool CopiesKnownFrameRange = false;
+  bool UpdatesKnownDescriptor = false;
   // A specialized loop can also widen its destination to unknown. The
   // generic body identifies the transfer wrapper even when the specialized
   // path uses only inline stores and never reaches its copy syscall.
@@ -3133,6 +3176,12 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
           });
     const auto Source = memoryAddress(State.Registers[2].singleton());
     const auto Destination = memoryAddress(State.Registers[1].singleton());
+    // A zero-length append can still read and update a descriptor. Admit
+    // only a known holder here; replay proves every branch and nested call.
+    UpdatesKnownDescriptor =
+        CopyLength.Value == 0 && Callee->HasInlineStores && Destination &&
+        State.Scratch.Values.readValues(*Destination).singleton().ValueKind ==
+            RegisterValue::Kind::StackAddress;
     // An inline stack-copy loop can erase unrelated saved pointers when its
     // summary destination widens. Replay the known address/length path even
     // when the copied bytes are unknown. Plain syscall wrappers already have
@@ -3163,9 +3212,11 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
                     });
           });
   }
-  if ((CopiesCapturedValue || CopiesKnownFrameRange) && !Edge.LegacyRuntime &&
-      !SpecializationBudgetExhausted) {
-    auto Copy = instantiateMemoryTransferPath(Callee->EntryBlock, State);
+  if ((CopiesCapturedValue || CopiesKnownFrameRange ||
+       UpdatesKnownDescriptor) &&
+      !Edge.LegacyRuntime && !SpecializationBudgetExhausted) {
+    auto Copy =
+        instantiateMemoryTransferPath(Context, Callee->EntryBlock, State);
     if (!Copy)
       return Copy.takeError();
     if (*Copy) {
@@ -4202,10 +4253,7 @@ llvm::Error ContextFlow::collectEntryPrefixes(CallXContextReport &Report) {
         }
         Evidence.EntryPrefixOnly = true;
         Evidence.CallerSlot = Slot;
-        if (Instruction->Dispatch ==
-                CallDispatchPolicy::LegacyRuntimeThenFunction &&
-            Program.isSyscallRegistered(
-                static_cast<uint32_t>(Instruction->Immediate))) {
+        if (hasRegisteredLegacyRuntime(*Instruction)) {
           Evidence.Result = CallXContextResult::LegacyRuntimeMayMutateArguments;
           Evidence.TargetAddress.reset();
           Evidence.TargetSlot.reset();
