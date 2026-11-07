@@ -42,25 +42,27 @@ public:
   /// boundary supply unknown bits; enclosing operations may still prove facts.
   /// Cached facts are bounded and belong only to this context. Cache hits are
   /// charged too; a failed query may retain sound facts about visited children.
+  /// Width and branch-common facts survive an exhausted child. Only
+  /// complete facts persist across queries; partial facts can improve
+  /// with more work on the next query.
   std::optional<llvm::KnownBits> query(SymRef R, unsigned &WorkBudget);
 
 private:
   const SymContext &C;
+  struct Query;
   llvm::DenseMap<uint32_t, llvm::KnownBits> Cache;
 
-  std::optional<llvm::KnownBits> infer(SymRef R, unsigned &Remaining,
-                                       unsigned Depth);
-  std::optional<llvm::KnownBits> compute(SymRef R, unsigned &Remaining,
-                                         unsigned Depth);
+  std::optional<llvm::KnownBits> infer(SymRef R, Query &Q, unsigned Depth);
+  std::optional<llvm::KnownBits> compute(SymRef R, Query &Q, unsigned Depth);
   std::optional<llvm::KnownBits>
-  compare(SymRef R, llvm::ArrayRef<llvm::KnownBits> Children,
-          unsigned &Remaining, unsigned Depth);
-  std::optional<bool> nonwrappingAtLeast(SymRef Sum, SymRef Term,
-                                         unsigned &Remaining, unsigned Depth);
-  std::optional<bool> sameLowBits(SymRef A, SymRef B, unsigned Width,
-                                  unsigned &Remaining, unsigned Depth);
+  compare(SymRef R, llvm::ArrayRef<llvm::KnownBits> Children, Query &Q,
+          unsigned Depth);
+  std::optional<bool> nonwrappingAtLeast(SymRef Sum, SymRef Term, Query &Q,
+                                         unsigned Depth);
+  std::optional<bool> sameLowBits(SymRef A, SymRef B, unsigned Width, Query &Q,
+                                  unsigned Depth);
   std::optional<bool> sameLowProduct(SymRef A, SymRef B, unsigned Width,
-                                     unsigned &Remaining, unsigned Depth);
+                                     Query &Q, unsigned Depth);
 };
 
 } // namespace neverd::symbolic

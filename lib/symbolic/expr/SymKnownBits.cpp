@@ -89,35 +89,81 @@ std::optional<bool> losslessProjection(const SymContext &C, SymRef Back,
 }
 } // namespace
 
+struct SymKnownBits::Query {
+  unsigned Remaining;
+  explicit Query(unsigned Work) : Remaining(Work) {}
+  uint64_t Truncations = 0;
+  struct Entry {
+    Bits Facts;
+    unsigned Available, Depth;
+    bool Complete;
+  };
+  llvm::DenseMap<uint32_t, Entry> Local;
+};
+
 std::optional<Bits> SymKnownBits::query(SymRef R, unsigned &WorkBudget) {
   if (!R || R.index() >= C.numNodes() || C.width(R) > MaxWidth)
     return std::nullopt;
   const unsigned Available = std::min(WorkBudget, MaxQueryWork);
-  unsigned Remaining = Available;
-  auto Result = infer(R, Remaining, 0);
-  WorkBudget -= Available - Remaining;
+  Query Q{Available};
+  auto Result = infer(R, Q, 0);
+  WorkBudget -= Available - Q.Remaining;
   return Result;
 }
 
-std::optional<Bits> SymKnownBits::infer(SymRef R, unsigned &Remaining,
-                                        unsigned Depth) {
-  if (!spend(Remaining))
+std::optional<Bits> SymKnownBits::infer(SymRef R, Query &Q, unsigned Depth) {
+  auto &Remaining = Q.Remaining;
+  if (!spend(Remaining)) {
+    ++Q.Truncations;
     return std::nullopt;
+  }
   const unsigned W = C.width(R);
-  if (W > MaxWidth || !spend(Remaining, words(W)))
+  if (W > MaxWidth || !spend(Remaining, words(W))) {
+    ++Q.Truncations;
     return std::nullopt;
-  if (Depth >= MaxDepth)
+  }
+  if (Depth >= MaxDepth) {
+    ++Q.Truncations;
     return Bits(W);
+  }
   if (auto I = Cache.find(R.index()); I != Cache.end())
     return I->second;
-  auto Result = compute(R, Remaining, Depth);
-  if (Result && !Result->isUnknown() && Cache.size() < MaxCachedFacts)
-    Cache.try_emplace(R.index(), *Result);
+  const unsigned Offered = Remaining;
+  std::optional<Bits> Previous;
+  if (auto I = Q.Local.find(R.index()); I != Q.Local.end()) {
+    Previous = I->second.Facts;
+    if (I->second.Complete ||
+        (Offered <= I->second.Available && Depth >= I->second.Depth)) {
+      if (!I->second.Complete)
+        ++Q.Truncations;
+      return I->second.Facts;
+    }
+  }
+  const auto Before = Q.Truncations;
+  auto Result = compute(R, Q, Depth);
+  if (!Remaining)
+    ++Q.Truncations;
+  bool Complete = Before == Q.Truncations;
+  if (Previous) {
+    if (!Result)
+      Result = *Previous;
+    else {
+      Result->Zero |= Previous->Zero;
+      Result->One |= Previous->One;
+    }
+  }
+  if (Result) {
+    Complete |= Result->isConstant();
+    if (Complete && !Result->isUnknown() && Cache.size() < MaxCachedFacts)
+      Cache.try_emplace(R.index(), *Result);
+    Q.Local.insert_or_assign(R.index(),
+                             Query::Entry{*Result, Offered, Depth, Complete});
+  }
   return Result;
 }
 
-std::optional<Bits> SymKnownBits::compute(SymRef R, unsigned &Remaining,
-                                          unsigned Depth) {
+std::optional<Bits> SymKnownBits::compute(SymRef R, Query &Q, unsigned Depth) {
+  auto &Remaining = Q.Remaining;
   const unsigned W = C.width(R);
   if (auto K = C.asConst(R))
     return Bits::makeConstant(*K);
@@ -129,6 +175,8 @@ std::optional<Bits> SymKnownBits::compute(SymRef R, unsigned &Remaining,
   case SymOp::Xor:
   case SymOp::Add:
   case SymOp::Mul:
+  case SymOp::UDiv:
+  case SymOp::URem:
   case SymOp::Extract:
   case SymOp::Concat:
   case SymOp::ZExt:
@@ -136,8 +184,6 @@ std::optional<Bits> SymKnownBits::compute(SymRef R, unsigned &Remaining,
   case SymOp::Shl:
   case SymOp::LShr:
   case SymOp::AShr:
-  case SymOp::UDiv:
-  case SymOp::URem:
   case SymOp::Ite:
   case SymOp::Eq:
   case SymOp::Ult:
@@ -148,12 +194,49 @@ std::optional<Bits> SymKnownBits::compute(SymRef R, unsigned &Remaining,
   default:
     return Bits(W);
   }
+  const auto Operands = C.operands(R);
+  if (Op == SymOp::ZExt) {
+    // The extension's high zeros do not depend on proving its input value.
+    // In particular, a wide Boolean carrier remains in {0,1} even when the
+    // flag expression producing the predicate exhausts optional query work.
+    auto Input = infer(Operands[0], Q, Depth + 1);
+    return Input.value_or(Bits(C.width(Operands[0]))).zext(W);
+  }
+  if (Op == SymOp::Ite) {
+    // Branch-common facts need no condition proof. Analyze the arms first so
+    // a large predicate cannot erase an already established carrier range.
+    auto Taken = infer(Operands[1], Q, Depth + 1);
+    if (!Taken)
+      return std::nullopt;
+    auto Otherwise = infer(Operands[2], Q, Depth + 1);
+    if (!Otherwise)
+      return std::nullopt;
+    auto Common = Taken->intersectWith(*Otherwise);
+    auto Condition = infer(Operands[0], Q, Depth + 1);
+    if (Condition && Condition->isConstant())
+      return Condition->One.isZero() ? *Otherwise : *Taken;
+    if (!Condition && Common.isUnknown())
+      return std::nullopt;
+    return Common;
+  }
+  // Reserve the parent transfer before optional child inference. A child's
+  // budget exhaustion must not erase bits it already established (e.g. the
+  // seven zero bits of a Boolean byte beside unspecified concatenated bytes).
+  // The transfer still pays exactly its previous per-word, per-operand cost.
+  if (Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor ||
+      Op == SymOp::Add || Op == SymOp::Mul || Op == SymOp::Concat)
+    for (unsigned I = 1; I < Operands.size(); ++I)
+      if (!spend(Remaining, words(W)))
+        return std::nullopt;
   llvm::SmallVector<Bits, 4> Children;
   for (auto O : C.operands(R)) {
-    auto K = infer(O, Remaining, Depth + 1);
-    if (!K)
+    auto K = infer(O, Q, Depth + 1);
+    if (!K && Op != SymOp::Concat)
       return std::nullopt;
-    Children.push_back(*K);
+    // A refused concatenated lane cannot erase facts in another lane. The
+    // parent transfer is already reserved; retain only that child's unknown
+    // width and keep the query incomplete so a later request can retry it.
+    Children.push_back(K.value_or(Bits(C.width(O))));
   }
   Bits Result = Children.front();
   if (Op == SymOp::Not) {
@@ -162,15 +245,8 @@ std::optional<Bits> SymKnownBits::compute(SymRef R, unsigned &Remaining,
   }
   if (Op == SymOp::Extract)
     return Result.extractBits(W, C.node(R).Aux);
-  if (Op == SymOp::ZExt)
-    return Result.zext(W);
   if (Op == SymOp::SExt)
     return Result.sext(W);
-  if (Op == SymOp::Ite) {
-    if (Result.isConstant())
-      return Children[Result.One.isZero() ? 2 : 1];
-    return Children[1].intersectWith(Children[2]);
-  }
   if (Op == SymOp::Shl || Op == SymOp::LShr || Op == SymOp::AShr) {
     if (!Children[1].isConstant())
       return Bits(W);
@@ -210,10 +286,8 @@ std::optional<Bits> SymKnownBits::compute(SymRef R, unsigned &Remaining,
     return Bits::urem(Children[0], Children[1]);
   }
   if (isPredicate(Op))
-    return compare(R, Children, Remaining, Depth);
+    return compare(R, Children, Q, Depth);
   for (unsigned I = 1; I < Children.size(); ++I) {
-    if (!spend(Remaining, words(W)))
-      return std::nullopt;
     switch (Op) {
     case SymOp::And:
       Result &= Children[I];
@@ -242,7 +316,8 @@ std::optional<Bits> SymKnownBits::compute(SymRef R, unsigned &Remaining,
 
 std::optional<Bits> SymKnownBits::compare(SymRef R,
                                           llvm::ArrayRef<Bits> Children,
-                                          unsigned &Remaining, unsigned Depth) {
+                                          Query &Q, unsigned Depth) {
+  auto &Remaining = Q.Remaining;
   const auto Op = C.op(R);
   const auto Ops = C.operands(R);
   const auto &Left = Children[0];
@@ -290,8 +365,7 @@ std::optional<Bits> SymKnownBits::compare(SymRef R,
           (Kind == SymOp::SExt && (Facts.One & Mask) == Mask)) {
         // Low extraction distributes through modular arithmetic in the DAG.
         // Check that relation too, without building a second expression.
-        auto Same =
-            sameLowBits(Slice, Source, C.width(Slice), Remaining, Depth + 1);
+        auto Same = sameLowBits(Slice, Source, C.width(Slice), Q, Depth + 1);
         if (!Same)
           return std::nullopt;
         if (*Same)
@@ -310,8 +384,7 @@ std::optional<Bits> SymKnownBits::compare(SymRef R,
         Value = false;
     }
     if (!Value) {
-      auto Same =
-          sameLowBits(Ops[0], Ops[1], C.width(Ops[0]), Remaining, Depth + 1);
+      auto Same = sameLowBits(Ops[0], Ops[1], C.width(Ops[0]), Q, Depth + 1);
       if (!Same)
         return std::nullopt;
       if (*Same)
@@ -334,7 +407,7 @@ std::optional<Bits> SymKnownBits::compare(SymRef R,
       for (auto Term : C.operands(Ops[Side])) {
         if (!spend(Remaining, 2 * words(W)))
           return std::nullopt;
-        auto K = infer(Term, Remaining, Depth + 2);
+        auto K = infer(Term, Q, Depth + 2);
         if (!K)
           return std::nullopt;
         bool Overflow = false;
@@ -363,7 +436,7 @@ std::optional<Bits> SymKnownBits::compare(SymRef R,
   if (!Value && (Op == SymOp::Ult || Op == SymOp::Ule)) {
     auto Contains =
         nonwrappingAtLeast(Ops[Op == SymOp::Ult ? 0 : 1],
-                           Ops[Op == SymOp::Ult ? 1 : 0], Remaining, Depth + 2);
+                           Ops[Op == SymOp::Ult ? 1 : 0], Q, Depth + 2);
     if (!Contains)
       return std::nullopt;
     if (*Contains)
@@ -373,18 +446,20 @@ std::optional<Bits> SymKnownBits::compare(SymRef R,
 }
 
 std::optional<bool> SymKnownBits::sameLowBits(SymRef A, SymRef B,
-                                              unsigned Width,
-                                              unsigned &Remaining,
+                                              unsigned Width, Query &Q,
                                               unsigned Depth) {
+  auto &Remaining = Q.Remaining;
   if (!spend(Remaining, 1 + words(Width)))
     return std::nullopt;
   if (A == B)
     return true;
-  if (Depth >= MaxDepth)
+  if (Depth >= MaxDepth) {
+    ++Q.Truncations;
     return false;
+  }
   auto Left = lowBitSource(C, A, Width), Right = lowBitSource(C, B, Width);
   if (Left != A || Right != B)
-    return sameLowBits(Left, Right, Width, Remaining, Depth + 1);
+    return sameLowBits(Left, Right, Width, Q, Depth + 1);
   auto IsExtension = [](SymOp Op) {
     return Op == SymOp::ZExt || Op == SymOp::SExt;
   };
@@ -393,12 +468,12 @@ std::optional<bool> SymKnownBits::sameLowBits(SymRef A, SymRef B,
     const unsigned InnerWidth = C.width(AInner);
     if (InnerWidth != C.width(BInner))
       return false;
-    auto Same = sameLowBits(AInner, BInner, InnerWidth, Remaining, Depth + 1);
+    auto Same = sameLowBits(AInner, BInner, InnerWidth, Q, Depth + 1);
     if (!Same || !*Same || C.op(A) == C.op(B))
       return Same;
     // Above the shared source width, sign and zero extension agree only when
     // the source sign is proved zero. No LLVM nsw premise is assumed here.
-    auto K = infer(AInner, Remaining, Depth + 1);
+    auto K = infer(AInner, Q, Depth + 1);
     if (!K)
       return std::nullopt;
     return K->Zero.isSignBitSet();
@@ -406,7 +481,7 @@ std::optional<bool> SymKnownBits::sameLowBits(SymRef A, SymRef B,
   if (C.isConst(A) && C.isConst(B))
     return C.constValue(A).trunc(Width) == C.constValue(B).trunc(Width);
   if (C.op(A) == SymOp::Mul || C.op(B) == SymOp::Mul)
-    return sameLowProduct(A, B, Width, Remaining, Depth);
+    return sameLowProduct(A, B, Width, Q, Depth);
   if (C.op(A) != C.op(B))
     return false;
   // These operations commute with reduction modulo 2^Width. Shifts, division,
@@ -427,7 +502,7 @@ std::optional<bool> SymKnownBits::sameLowBits(SymRef A, SymRef B,
         return std::nullopt;
       if (Used[I])
         continue;
-      auto Same = sameLowBits(Term, Bs[I], Width, Remaining, Depth + 1);
+      auto Same = sameLowBits(Term, Bs[I], Width, Q, Depth + 1);
       if (!Same)
         return std::nullopt;
       if (*Same) {
@@ -443,9 +518,9 @@ std::optional<bool> SymKnownBits::sameLowBits(SymRef A, SymRef B,
 }
 
 std::optional<bool> SymKnownBits::sameLowProduct(SymRef A, SymRef B,
-                                                 unsigned Width,
-                                                 unsigned &Remaining,
+                                                 unsigned Width, Query &Q,
                                                  unsigned Depth) {
+  auto &Remaining = Q.Remaining;
   llvm::APInt CA(Width, 1), CB(Width, 1);
   using Factor = std::pair<SymRef, unsigned>;
   llvm::SmallVector<Factor, 8> LA, LB;
@@ -460,8 +535,10 @@ std::optional<bool> SymKnownBits::sameLowProduct(SymRef A, SymRef B,
       if (!spend(Remaining, 1 + words(Width)))
         return std::nullopt;
       auto [R, D] = Pending.pop_back_val();
-      if (D >= MaxDepth)
+      if (D >= MaxDepth) {
+        ++Q.Truncations;
         return false;
+      }
       auto P = lowBitSource(C, R, Width);
       if (P != R) {
         Pending.push_back({P, D + 1});
@@ -501,7 +578,7 @@ std::optional<bool> SymKnownBits::sameLowProduct(SymRef A, SymRef B,
         return std::nullopt;
       if (Used[I])
         continue;
-      auto Same = sameLowBits(Term, LB[I].first, Width, Remaining,
+      auto Same = sameLowBits(Term, LB[I].first, Width, Q,
                               std::max(TermDepth, LB[I].second) + 1);
       if (!Same)
         return std::nullopt;
@@ -518,8 +595,8 @@ std::optional<bool> SymKnownBits::sameLowProduct(SymRef A, SymRef B,
 }
 
 std::optional<bool> SymKnownBits::nonwrappingAtLeast(SymRef Sum, SymRef Term,
-                                                     unsigned &Remaining,
-                                                     unsigned Depth) {
+                                                     Query &Q, unsigned Depth) {
+  auto &Remaining = Q.Remaining;
   // Repeated addition is interned as a scalar multiple. Compare unsigned
   // coefficients only for the same base and a proved nonwrapping maximum.
   if (C.op(Sum) == SymOp::Mul || C.op(Term) == SymOp::Mul) {
@@ -537,7 +614,7 @@ std::optional<bool> SymKnownBits::nonwrappingAtLeast(SymRef Sum, SymRef Term,
     auto [A, KA] = Scale(Sum);
     auto [B, KB] = Scale(Term);
     if (A == B && KA.uge(KB)) {
-      auto K = infer(A, Remaining, Depth);
+      auto K = infer(A, Q, Depth);
       if (!K)
         return std::nullopt;
       bool Overflow = false;
@@ -551,7 +628,7 @@ std::optional<bool> SymKnownBits::nonwrappingAtLeast(SymRef Sum, SymRef Term,
   bool Includes = false;
   const auto SumOps = C.operands(Sum);
   for (auto O : SumOps) {
-    auto K = infer(O, Remaining, Depth);
+    auto K = infer(O, Q, Depth);
     if (!K)
       return std::nullopt;
     bool Overflow = false;

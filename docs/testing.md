@@ -21450,3 +21450,5 @@ recorded baseline; this change adds none and does not weaken the audit.
 `HighControlFlowSemantics.SimplifierPublishesSharedReplacementAtEveryUse` checks shared DAG replacement publication in both root orders, independent return values and a stable second cleanup invocation.
 
 `SymExpr.ConditionalConstantWindowsIgnorePredicatesAndRespectWork` and `ConditionalSlicesKeepDifferentAndUnknownArms` check branch-common constant windows, exact work refusal and differing or unknown arms.
+
+`SymKnownBits` carrier, partial-cache and CONCAT refusal regressions check independent facts under exhausted child work and precision recovery on a later query without increasing query limits.
