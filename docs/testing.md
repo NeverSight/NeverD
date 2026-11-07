@@ -1634,9 +1634,21 @@ and overlap with another outgoing stack value. The public
 callee writes visible during the call, clobbered x8, floating and stacked
 operands, variadics, mixed records, five-float results and direct/A-key/B-key
 calls. Native callbacks are independent assembly and inspect storage guards;
-C routes compile at O0/O2 with `-fexceptions`. Authenticated object compilation
-is not native PAC execution, and the earlier model receipt does not qualify
-these new result-storage cases.
+C routes compile at O0/O2 with `-fexceptions`. The original and both C routes
+also execute ordinary C++ exception unwinding across an x8 call at O0/O2.
+The complete SDK profile passes 82 projections, 164 arm64e object compilations,
+180 ordinary arm64 executions, six ordinary unwind checks and 14 refusals.
+Independent A/B signing controls in the ordinary arm64 host process leave the
+pointer unchanged, so its authenticated transport checks are not active PAC
+evidence. Native signed unwinding remains unqualified.
+
+`AArch64AuthenticatedCall.IndirectResultsKeepOriginalStorageAndPAC` exports
+five key/modifier variants for direct LLVM and HighC/LLVMC at O0/O2. The
+synthetic MedIR explicitly defines x0 before returning and rejects projected
+traps. Freestanding C exports use `-fexceptions -fno-stack-protector` because
+the controlled guest has no Darwin stack-check runtime. The extractor still
+requires unchanged, relocation-free text; ordinary SDK executables retain
+normal host compiler defaults.
 
 `NeverDLanguageEHTests` checks the unified signing query's image/function
 provenance, exact PCs, source scopes and bounded CIE lookup.

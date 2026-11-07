@@ -409,7 +409,15 @@ TEST(ImmutableNativeCalls, GeneratedSourceMatchesOriginalARM64CallsAtO0AndO2) {
       Functions.emplace(Function.Entry, &Function);
     auto Bound =
         bindObjCSourceReferences(*F.high(), F.Image, nullptr, &Functions);
-    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation;
+    ASSERT_TRUE(Bound.Limitation.empty()) << Bound.Limitation << [&] {
+      CEmitterOptions Options;
+      Options.TheArch = Arch::AArch64;
+      Options.Format = F.Image.Format;
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      (void)HighCEmitter().emit({*F.high()}, OS, Options);
+      return Source;
+    }();
     elimUnreadPrivateFrameStores(Bound.Function, F.Image.Arch);
     const auto Audit = std::find_if(
         F.Result.FunctionAudits.begin(), F.Result.FunctionAudits.end(),
@@ -3429,7 +3437,7 @@ TEST(ObjCSourceBindings, SwiftWitnessUndefRequiresExactDescriptorContract) {
     const auto Descriptor =
         MainActor        ? "_$sScMScAsMc"
         : StringProtocol ? "_$sSSSysMc"
-        : Range ? "_$sSnyxGSXsMc"
+        : Range          ? "_$sSnyxGSXsMc"
                 : "_$s7Combine19CurrentValueSubjectCyxq_GAA9PublisherAAMc";
     const auto Module =
         MainActor ? "/usr/lib/swift/libswift_Concurrency.dylib"
@@ -3475,7 +3483,7 @@ struct GenericWitnessFixture : SwiftWitnessAccessorFixture {
     const auto Descriptor =
         MainActor        ? "_$sScMScAsMc"
         : StringProtocol ? "_$sSSSysMc"
-        : Range ? "_$sSnyxGSXsMc"
+        : Range          ? "_$sSnyxGSXsMc"
                 : "_$s7Combine19CurrentValueSubjectCyxq_GAA9PublisherAAMc";
     Image.ImportStorageSlots.erase(ConformanceSlot);
     Image.ImportPtrSlots[ConformanceSlot] = Descriptor;

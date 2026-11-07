@@ -1322,8 +1322,8 @@ alignment and initialized private storage. Stored frame pointers retain their
 provenance until a validated stack-copy carrier consumes them; unrelated live
 pointer spills still refuse. ABI recovery and source pointer-use analysis count
 the hidden result input without treating it as an ordinary prototype parameter.
-Copies cannot overlap another
-borrow, a hidden result or the outgoing argument area. Consuming a copy kills
+Copies cannot overlap another borrow, a hidden result or the outgoing argument
+area. Consuming a copy kills
 its initialized-byte identities, so a later read needs a new definite write.
 This remains an independently authenticated frame-effect proof; an analyst
 prototype alone cannot grant nonescape, copy lifetime or logical call
