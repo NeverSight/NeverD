@@ -1912,5 +1912,38 @@
     "final_integration",
     "publication_integration"
   ],
-  "tested_commit_note": "tested_commit identifies the initial broad qualification. The ordered integration records retain later source revisions and exact product hashes; latest_tested_commit is the final qualified code revision before documentation-only publication."
+  "tested_commit_note": "tested_commit identifies the initial broad qualification. The ordered integration records retain later source revisions and exact product hashes; latest_tested_commit is the final qualified code revision before documentation-only publication.",
+  "publication_followup_merge": {
+    "head": "17049022d6c48a4ac87f0bc5b13464ca5fe6b610",
+    "tree": "2887b108ce48a17df4cd56190717e38b5c8a0028",
+    "remote_parent": "3ce574a9b878d1eabb41e11af90d9b3c6bdefa91",
+    "paths": [
+      ".agents/skills/neverd-x64-c-quality/references/remaining-work.md",
+      "docs/qemu-save-snapshot.md",
+      "docs/testing.md",
+      "scripts/qemu_save_memory.py",
+      "scripts/qemu_save_snapshot.py",
+      "scripts/tests/test_qemu_save_memory.py"
+    ],
+    "runtime_build_inputs_unchanged": true,
+    "runtime_qualification_retained_from": "8536968db06d977ce4289add039df612859eabdb",
+    "additional_script_tests": 14,
+    "script_tests_passed": true,
+    "test_log": "qemu-merge-tests.log",
+    "test_log_sha256": "98e2c1e6dafa9adb3a4f63f209231ed30ebe6a2630338bfd8598bb714b880db7",
+    "artifact_record": "publication-followup-merge.json",
+    "artifact_record_sha256": "990413f027028738fad1e81bb4db1b44f38873d35846553c475b767ea2e8846f",
+    "static_checks": {
+      "localized_documentation": {
+        "passed": true,
+        "log": "docs-after-qemu-merge.log",
+        "log_sha256": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14"
+      },
+      "source_provenance": {
+        "passed": true,
+        "log": "provenance-after-qemu-merge.log",
+        "log_sha256": "bde8be0ada9f89b51a1050d56753a0abfe3b4c2a067376d2325e2ac11dfbb30d"
+      }
+    }
+  }
 }
