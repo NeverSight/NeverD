@@ -17402,6 +17402,11 @@ stops explicitly, and scalar reads do not copy the entire retained buffer.
 identity, reference commands and node-control work. Buffer allocation leases
 retain object metadata and distinguish address reuse. Final device-open retirement
 drops process references; nodes weakly identify their owner. The native adapter
+and ioctl reader share `hasReadyBinderThreadWork`: activated private work takes
+priority, otherwise an idle entered/registered looper can take process work.
+Incoming or outgoing calls prevent that thread from taking another process
+transaction. This same rule wakes a native thread waiting in the pool.
+The native adapter
 only queues libbinder reference/free commands through that owner. Parcel validates
 object reads and protects scalar reads; `AndroidBinder.cpp` caches remote Java
 proxies by endpoint and rejects duplicate input endpoint identities. Dynamic
@@ -17420,8 +17425,33 @@ Strong writes use the shared Parcel data owner and feed the existing Linux
 object translator, including null and
 handle-zero records without metadata. Native reference notifications enter this
 same registry. The response reader queues pointer/cookie acknowledgments and
-flushes them only before another driver read; synchronous native release work
-remains deferred until the currently unsupported top-level dispatch path.
+flushes them only before another driver read. Synchronous waits defer release
+work into native thread queues; `Binder.joinThreadPool` drains weak references
+before one strong reference, repeating at an exhausted-input boundary.
+
+`dalvik/AndroidBinderDispatch.cpp` owns the API 28 JavaBBinder upcall. Local
+`Binder.transact` rewinds input, invokes the virtual `onTransact`, and rewinds
+reply only on normal return. Framework Java upcalls reuse Runtime's existing
+DEX/native activations, budgets and owner-local continuations. Protected super
+calls and virtual interface-descriptor overrides share method resolution;
+`attachInterface`, descriptor fields and local-interface lookup share storage.
+
+Native `Binder.joinThreadPool` requires an explicitly cached context handle on
+the shared ProcessState connection. It enters the Linux looper and dispatches
+actual BR_TRANSACTION records to the existing pointer/cookie association.
+Calling pid/uid, transaction flags and native policy belong to that thread and
+survive Java/native suspension. Incoming data and reply have non-owned Java
+wrappers with a separate six-slot pool. Recycling a wrapper does not destroy
+the underlying native Parcel. The shared driver sends BC_REPLY and acknowledges
+it before native Parcel references and input-buffer leases are released.
+Default BinderCallsStats retains its explicit realtime start and per-UID count
+(duration one), exposed only once materialized in `java_state.framework.binder_calls`.
+Native ping bypasses Java and statistics; an unhandled Java transaction returns
+UNKNOWN_TRANSACTION. No host clock, fabricated service response or Java heap
+identity substitutes for driver state. Semantics follow API 28
+[Binder.java](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/android/os/Binder.java),
+[BinderCallsStats.java](https://android.googlesource.com/platform/frameworks/base/+/android-9.0.0_r1/core/java/com/android/internal/os/BinderCallsStats.java)
+and [IPCThreadState.cpp](https://android.googlesource.com/platform/frameworks/native/+/android-9.0.0_r1/libs/binder/IPCThreadState.cpp).
 
 `enforceInterface` still requires incoming flags and the Java StrictMode upcall.
 `AndroidParcel.cpp` owns native capacity separately from initialized data.
@@ -17434,9 +17464,11 @@ final release uses the existing Linux strong/weak reference commands.
 In-capacity strong writes preserve JNI Binder conversion order before attempting
 the received offset-table pointer's realloc. The native adapter and C import use
 one `Bionic::reallocate` implementation. Binder arena pointers fail its allocation
-ownership check before memory access, even with zero offsets. Local Binder
-dispatch, nested/one-way transactions and weak objects/FDs remain explicit
-boundaries. ServiceManager `lookup_results` remain a separate semantic input;
+ownership check before memory access, even with zero offsets. Incoming context
+association, uncached context ping, automatic pool-thread creation/starvation
+timing, exception serialization/logging, tracing, changed-policy Java BlockGuard
+restoration, dump/shell/property callbacks, nested/one-way transactions and weak
+objects/FDs remain explicit boundaries. ServiceManager `lookup_results` remain a separate semantic input;
 this transport does not turn those entries into kernel peers or replies.
 
 JNI propagates runtime-service failure diagnostics unchanged. The error owner

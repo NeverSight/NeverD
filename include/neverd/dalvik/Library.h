@@ -102,7 +102,11 @@ enum LibraryOperation {
   BinderSetStrictMode,
   BinderTransact,
   BinderTransactNative,
-  BinderTracing
+  BinderTracing,
+  BinderOnTransact,
+  BinderJoin,
+  BinderCallingIdentity,
+  BinderInterface
 };
 struct LibraryMethod {
   const char *Class, *Name, *Signature;
@@ -112,6 +116,7 @@ struct LibraryMethod {
   // JNI may resolve nonpublic methods. Direct DEX library dispatch must not
   // turn that permission into public Java access.
   bool Public = true;
+  bool Protected = false;
 };
 
 std::span<const LibraryMethod> libraryMethods();

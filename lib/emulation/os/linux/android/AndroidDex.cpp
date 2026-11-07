@@ -191,6 +191,28 @@ llvm::Error Bionic::initializeDex() {
       return ReadClock(linux_model::ClockBootTime, 1,
                        "Android boot time exceeds its range");
     };
+    Services.realtime_milliseconds = [ReadClock] {
+      return ReadClock(linux_model::ClockRealtime, 1000000,
+                       "Android realtime exceeds its range");
+    };
+    Services.binder_calling_identity = [this](bool UID) {
+      using mobile::dalvik::ExecutionResult;
+      using mobile::dalvik::ExecutionStop;
+      const auto &Identity = binderThread().CallingIdentity;
+      if (Identity)
+        return ExecutionResult{ExecutionStop::Returned,
+                               UID ? Identity->second : Identity->first};
+      auto Own = kernelService(UID ? linux_model::ServiceKind::GetUID
+                                   : linux_model::ServiceKind::GetPID,
+                               {});
+      if (!Own)
+        return ExecutionResult{
+            ExecutionStop::Invalid, 0, {}, llvm::toString(Own.takeError())};
+      if (!*Own)
+        return ExecutionResult{
+            ExecutionStop::Unsupported, 0, {}, Result.Diagnostic};
+      return ExecutionResult{ExecutionStop::Returned, **Own};
+    };
     Services.process_uid = [this] {
       using mobile::dalvik::ExecutionResult;
       using mobile::dalvik::ExecutionStop;
@@ -289,6 +311,11 @@ BionicResult Bionic::finishDex(mobile::dalvik::ExecutionResult Executed,
     if (Executed.external->kind ==
         mobile::dalvik::ExternalCall::BinderTransaction)
       return binderTransact(*Executed.external, std::move(Continuation));
+    if (Executed.external->kind == mobile::dalvik::ExternalCall::BinderJoin)
+      return binderJoin(*Executed.external, std::move(Continuation));
+    if (Executed.external->kind ==
+        mobile::dalvik::ExternalCall::BinderSendReply)
+      return binderSendReply(*Executed.external, std::move(Continuation));
     if (Executed.external->kind == mobile::dalvik::ExternalCall::LoadLibrary) {
       auto Load = loadJavaLibrary(*Executed.external, Continuation);
       if (!Load)

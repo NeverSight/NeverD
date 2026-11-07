@@ -386,10 +386,27 @@ static const LibraryMethod Methods[] = {
      ParcelData, false, true},
     {"android/os/Binder", "getThreadStrictModePolicy", "()I",
      BinderGetStrictMode, true, true},
+    {"android/os/Binder", "joinThreadPool", "()V", BinderJoin, true, true},
+    {"android/os/Binder", "getCallingPid", "()I", BinderCallingIdentity, true,
+     true},
+    {"android/os/Binder", "getCallingUid", "()I", BinderCallingIdentity, true,
+     true},
     {"android/os/Binder", "setThreadStrictModePolicy", "(I)V",
      BinderSetStrictMode, true, true},
     {"android/os/IBinder", "transact",
      "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", BinderTransact},
+    {"android/os/Binder", "transact",
+     "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", BinderTransact, false,
+     true},
+    {"android/os/Binder", "onTransact",
+     "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", BinderOnTransact, false,
+     false, false, true},
+    {"android/os/Binder", "attachInterface",
+     "(Landroid/os/IInterface;Ljava/lang/String;)V", BinderInterface},
+    {"android/os/Binder", "getInterfaceDescriptor", "()Ljava/lang/String;",
+     BinderInterface},
+    {"android/os/Binder", "queryLocalInterface",
+     "(Ljava/lang/String;)Landroid/os/IInterface;", BinderInterface},
     {"android/os/BinderProxy", "transact",
      "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", BinderTransact},
     {"android/os/BinderProxy", "transactNative",
@@ -529,6 +546,8 @@ ExecutionResult executeLibrary(Heap &heap, const LibraryMethod &M,
         M.Op == ParcelData || M.Op == BinderGetStrictMode ||
         M.Op == BinderSetStrictMode || M.Op == BinderTransact ||
         M.Op == BinderTransactNative || M.Op == BinderTracing ||
+        M.Op == BinderOnTransact || M.Op == BinderInterface ||
+        M.Op == BinderJoin || M.Op == BinderCallingIdentity ||
         (M.Op == Construct &&
          (std::string_view(M.Class) == "android/os/Handler" ||
           std::string_view(M.Class) == "android/os/Binder" ||

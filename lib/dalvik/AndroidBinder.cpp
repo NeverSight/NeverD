@@ -15,6 +15,82 @@
 #include <span>
 
 namespace neverd::mobile::dalvik {
+namespace {
+ExecutionResult javaCall(MethodRef method, uint64_t receiver,
+                         std::span<const uint64_t> arguments) {
+  ExecutionResult result{ExecutionStop::Suspended};
+  auto &call = result.external.emplace();
+  call.kind = ExternalCall::JavaMethod;
+  call.java_method = std::move(method);
+  call.arguments.push_back(receiver);
+  call.arguments.insert(call.arguments.end(), arguments.begin(),
+                        arguments.end());
+  return result;
+}
+} // namespace
+
+ExecutionResult AndroidFramework::binderInterface(
+    Heap &heap, const Program &program, const LibraryMethod &method,
+    uint64_t receiver, std::span<const uint64_t> arguments,
+    const AdmitInstruction &admit) {
+  if (method.Op == BinderOnTransact) {
+    const uint32_t code = arguments[0];
+    if (code == 0x5f444d50 || code == 0x5f434d44)
+      return {
+          ExecutionStop::Unsupported,
+          0,
+          {},
+          "Android Binder dump/shell transactions require file descriptors"};
+    if (code != 0x5f4e5446)
+      return {};
+    auto result = javaCall({"Landroid/os/Binder;",
+                            "getInterfaceDescriptor",
+                            {},
+                            "Ljava/lang/String;"},
+                           receiver, {});
+    result.external->complete = [this, &heap, &program, admit,
+                                 reply = arguments[2]](ExecutionResult value) {
+      if (value.stop != ExecutionStop::Returned)
+        return value;
+      const auto *write = libraryMethod(
+          {"Landroid/os/Parcel;", "writeString", {"Ljava/lang/String;"}, "V"},
+          false);
+      const uint64_t descriptor[] = {value.value};
+      auto written = executeLibrary(heap, *write, reply, descriptor, admit,
+                                    false, &program, this);
+      if (written.stop == ExecutionStop::Returned)
+        written.value = 1;
+      return written;
+    };
+    return result;
+  }
+  const auto object = heap.get(receiver);
+  const auto *descriptor = program.findField(
+      {"Landroid/os/Binder;", "mDescriptor", "Ljava/lang/String;"}, false);
+  const auto *owner = program.findField(
+      {"Landroid/os/Binder;", "mOwner", "Landroid/os/IInterface;"}, false);
+  if (!object->Fields.contains(descriptor) || !object->Fields.contains(owner))
+    return {ExecutionStop::Unsupported,
+            0,
+            {},
+            "Android Binder interface field state is not supplied"};
+  const std::string_view name = method.Name;
+  if (name == "attachInterface") {
+    object->Fields.at(owner) = arguments[0];
+    object->Fields.at(descriptor) = arguments[1];
+    return {};
+  }
+  if (name == "getInterfaceDescriptor")
+    return {ExecutionStop::Returned, object->Fields.at(descriptor)};
+  const auto expected = heap.get(object->Fields.at(descriptor));
+  if (!expected)
+    return {ExecutionStop::Thrown, 0, "java/lang/NullPointerException"};
+  const auto actual = heap.get(arguments[0]);
+  return {ExecutionStop::Returned, actual && actual->Bytes == expected->Bytes
+                                       ? object->Fields.at(owner)
+                                       : 0};
+}
+
 ExecutionResult AndroidFramework::binderHandle(Heap &heap, uint32_t fd,
                                                uint32_t handle,
                                                const AdmitInstruction &admit) {
@@ -73,13 +149,42 @@ AndroidFramework::binderTransact(Heap &heap, const Program &program,
                                  const LibraryMethod &method, uint64_t receiver,
                                  std::span<const uint64_t> arguments,
                                  const AdmitInstruction &admit) {
-  // Local Binder.transact rewinds Parcels and dispatches onTransact. It must
-  // not acquire BinderProxy semantics merely through the IBinder interface.
-  if (heap.get(receiver)->ClassName != "android/os/BinderProxy")
-    return {ExecutionStop::Unsupported,
-            0,
-            {},
-            "Android local Binder onTransact dispatch is not modeled"};
+  if (heap.get(receiver)->ClassName != "android/os/BinderProxy") {
+    if (!program.assignable(objectDescriptor(*heap.get(receiver)),
+                            "Landroid/os/Binder;"))
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Android custom IBinder transact body is not supplied"};
+    const auto *seek = libraryMethod(
+        {"Landroid/os/Parcel;", "setDataPosition", {"I"}, "V"}, false);
+    const uint64_t zero[] = {0};
+    if (arguments[1]) {
+      auto result = executeLibrary(heap, *seek, arguments[1], zero, admit,
+                                   false, &program, this);
+      if (result.stop != ExecutionStop::Returned)
+        return result;
+    }
+    auto result =
+        javaCall({"Landroid/os/Binder;",
+                  "onTransact",
+                  {"I", "Landroid/os/Parcel;", "Landroid/os/Parcel;", "I"},
+                  "Z"},
+                 receiver, arguments);
+    result.external->complete = [this, &heap, &program, admit, seek,
+                                 reply = arguments[2]](ExecutionResult value) {
+      // The Java wrapper has no finally: an exception retains the reply cursor.
+      if (value.stop == ExecutionStop::Returned && reply) {
+        const uint64_t zero[] = {0};
+        auto result = executeLibrary(heap, *seek, reply, zero, admit, false,
+                                     &program, this);
+        if (result.stop != ExecutionStop::Returned)
+          return result;
+      }
+      return value;
+    };
+    return result;
+  }
   if (method.Op == BinderTransact) {
     // API 28 CHECK_PARCEL_SIZE is false. There is no size read or null check
     // before the warning/tracing wrapper. FLAG_ONEWAY suppresses the warning
@@ -127,7 +232,7 @@ AndroidFramework::binderTransact(Heap &heap, const Program &program,
             {},
             "Android BinderProxy.transactNative requires an explicit native "
             "Binder binding"};
-  const auto &source = parcels.at(arguments[1]);
+  const auto &source = parcelState(arguments[1]);
   if (!source.objects.empty() && source.fd && source.fd != binding->second.fd)
     return {
         ExecutionStop::Unsupported,
@@ -144,23 +249,64 @@ AndroidFramework::binderTransact(Heap &heap, const Program &program,
                                          uint32_t(arguments[3]),
                                          binding->second.fd,
                                          binding->second.handle,
-                                         parcels.at(arguments[1]).objects};
+                                         parcelState(arguments[1]).objects};
   if (!binding->second.alive)
     return {ExecutionStop::Thrown, 0, "android/os/DeadObjectException"};
-  if (parcels.at(arguments[1]).error)
-    return completeBinder(heap, call, {parcels.at(arguments[1]).error});
+  if (parcelState(arguments[1]).error)
+    return completeBinder(heap, call, {parcelState(arguments[1]).error});
   auto read = readParcelBuffer(heap, arguments[1]);
   if (read.stop != ExecutionStop::Returned)
     return read;
-  if (parcels.at(arguments[1]).position > heap.get(arguments[1])->Bytes.size())
+  if (parcelState(arguments[1]).position >
+      parcelStorage(heap, arguments[1]).Bytes.size())
     return {ExecutionStop::Unsupported,
             0,
             {},
             "Android Binder data requires uninitialized Parcel bytes"};
+  call.binder->bytes = parcelStorage(heap, arguments[1]).Bytes;
   ExecutionResult result;
   result.stop = ExecutionStop::Suspended;
   result.external = std::move(call);
   return result;
+}
+ExecutionResult AndroidFramework::replaceParcel(Heap &heap, ParcelState &state,
+                                                Object &object,
+                                                BinderReply reply) {
+  if (reply.bytes) {
+    uint64_t minimum = 0;
+    for (auto offset : reply.objects) {
+      if (offset < minimum || offset % 4 || offset > reply.bytes->size() ||
+          reply.bytes->size() - offset < 24)
+        return {ExecutionStop::Invalid,
+                0,
+                {},
+                "Android Binder reply object table is malformed"};
+      minimum = offset + 24;
+    }
+    if (!heap.resizeBytes(object, reply.bytes->size()))
+      return {ExecutionStop::HeapLimit,
+              0,
+              {},
+              "Android Binder reply storage budget exhausted"};
+    auto released = releaseParcelObjects(state);
+    if (released.stop != ExecutionStop::Returned)
+      return released;
+    if (state.release)
+      state.release();
+    object.Bytes = std::move(*reply.bytes);
+    state.position = 0;
+    state.capacity = object.Bytes.size();
+    state.error = 0;
+    state.view = std::move(reply.view);
+    state.release = std::move(reply.release);
+    state.write = std::move(reply.write);
+    state.reallocate_objects = std::move(reply.reallocate_objects);
+    state.objects = std::move(reply.objects);
+    state.fd = reply.fd;
+  }
+  if (reply.status)
+    state.error = reply.status;
+  return {};
 }
 ExecutionResult AndroidFramework::completeBinder(Heap &heap,
                                                  const ExternalCall &call,
@@ -175,41 +321,13 @@ ExecutionResult AndroidFramework::completeBinder(Heap &heap,
               0,
               {},
               "Android Binder reply Parcel was recycled during transaction"};
-    if (reply.bytes) {
-      uint64_t minimum = 0;
-      for (auto offset : reply.objects) {
-        if (offset < minimum || offset % 4 || offset > reply.bytes->size() ||
-            reply.bytes->size() - offset < 24)
-          return {ExecutionStop::Invalid,
-                  0,
-                  {},
-                  "Android Binder reply object table is malformed"};
-        minimum = offset + 24;
-      }
-      auto object = heap.get(destination);
-      if (!heap.resizeBytes(*object, reply.bytes->size()))
-        return {ExecutionStop::HeapLimit,
-                0,
-                {},
-                "Android Binder reply storage budget exhausted"};
-      auto released = releaseParcelObjects(state);
-      if (released.stop != ExecutionStop::Returned)
-        return released;
-      if (state.release)
-        state.release();
-      object->Bytes = std::move(*reply.bytes);
-      state.position = 0;
-      state.capacity = object->Bytes.size();
-      state.error = 0;
-      state.view = std::move(reply.view);
-      state.release = std::move(reply.release);
-      state.write = std::move(reply.write);
-      state.reallocate_objects = std::move(reply.reallocate_objects);
-      state.objects = std::move(reply.objects);
-      state.fd = reply.fd;
-    }
-    if (reply.status)
-      state.error = reply.status;
+    const auto status = reply.status;
+    auto replaced =
+        replaceParcel(heap, parcelState(destination),
+                      parcelStorage(heap, destination), std::move(reply));
+    if (replaced.stop != ExecutionStop::Returned)
+      return replaced;
+    reply.status = status;
   } else if (reply.release)
     reply.release(); // IPCThreadState's temporary reply queues BC_FREE_BUFFER.
   switch (reply.status) {

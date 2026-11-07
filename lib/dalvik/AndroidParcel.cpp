@@ -18,6 +18,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -46,18 +47,56 @@ ExecutionResult AndroidFramework::parcelStatus(uint64_t receiver) const {
 
 ExecutionResult AndroidFramework::readParcelBuffer(Heap &heap,
                                                    uint64_t receiver) {
-  const auto &state = parcels.at(receiver);
+  const auto &state = parcelState(receiver);
   if (!state.view)
     return {};
   std::span<const uint8_t> bytes;
   auto result = state.view(bytes);
   if (result.stop != ExecutionStop::Returned)
     return result;
-  auto &storage = heap.get(receiver)->Bytes;
+  auto &storage = parcelStorage(heap, receiver).Bytes;
   if (bytes.size() != storage.size())
     return unsupported("Android Parcel Binder buffer size changed");
   std::copy(bytes.begin(), bytes.end(), storage.begin());
   return {};
+}
+
+AndroidFramework::ParcelState &
+AndroidFramework::parcelState(uint64_t receiver) {
+  auto &wrapper = parcels.at(receiver);
+  return wrapper.native ? *wrapper.native : wrapper;
+}
+
+Object &AndroidFramework::parcelStorage(Heap &heap, uint64_t receiver) {
+  auto &state = parcelState(receiver);
+  return state.storage ? *state.storage : *heap.get(receiver);
+}
+
+ExecutionResult
+AndroidFramework::wrapNativeParcel(Heap &heap,
+                                   std::shared_ptr<ParcelState> state,
+                                   const AdmitInstruction &admit) {
+  auto stop = admit();
+  if (stop != ExecutionStop::Returned)
+    return {stop};
+  for (auto &slot : native_parcel_pool)
+    if (slot) {
+      const auto id = std::exchange(slot, 0);
+      auto &wrapper = parcels.at(id);
+      wrapper.recycled = false;
+      wrapper.native = std::move(state);
+      return {ExecutionStop::Returned, id};
+    }
+  auto object = heap.allocate(
+      Object::Instance, "android/os/Parcel", 0,
+      ::neverd::limits::dalvik::kFrameworkFieldStateOverheadBytes);
+  if (!object)
+    return {ExecutionStop::HeapLimit,
+            0,
+            {},
+            "Android native Parcel wrapper storage budget exhausted"};
+  parcels[object->Identity].native = std::move(state);
+  return {ExecutionStop::Returned, object->Identity};
 }
 
 ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
@@ -101,8 +140,19 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
     auto status = parcelStatus(receiver);
     if (status.stop != ExecutionStop::Returned)
       return status;
-    auto &state = parcels.at(receiver);
-    auto object = heap.get(receiver); // Library validated the receiver.
+    auto &wrapper = parcels.at(receiver);
+    if (name == "recycle" && wrapper.native) {
+      wrapper.native.reset();
+      wrapper.recycled = true;
+      for (auto &slot : native_parcel_pool)
+        if (!slot) {
+          slot = receiver;
+          break;
+        }
+      return returned();
+    }
+    auto &state = parcelState(receiver);
+    auto *object = &parcelStorage(heap, receiver);
     auto &bytes = object->Bytes;
     auto &position = state.position;
     if (name == "recycle") {

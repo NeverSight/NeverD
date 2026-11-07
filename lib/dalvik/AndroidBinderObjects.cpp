@@ -45,13 +45,16 @@ AndroidFramework::constructBinder(Heap &heap, const Program &program,
   if (!object) {
     object =
         heap.allocate(Object::Instance, "android/os/Binder", 0,
-                      ::neverd::limits::dalvik::kInstanceFieldStorageBytes);
+                      3 * ::neverd::limits::dalvik::kInstanceFieldStorageBytes);
     if (!object)
       return {ExecutionStop::HeapLimit,
               0,
               {},
               "Android Binder holder storage budget exhausted"};
     object->Fields.emplace(field, 0);
+    for (const auto &value : program.findClass("Landroid/os/Binder;")->fields)
+      if (!value.access.contains("static"))
+        object->Fields.try_emplace(&value, 0);
   }
   auto identity =
       services.binder_identity(BinderIdentityOperation::Allocate, 0);
@@ -241,6 +244,18 @@ AndroidFramework::binderReference(BinderReferenceOperation operation,
     if (value.weak == value.pending_weak)
       return unsupported("Android Binder weak reference is not owned");
     ++value.pending_weak;
+    break;
+  case BinderReferenceOperation::ReleaseDeferredStrong:
+    if (!value.pending_strong)
+      return unsupported("Android Binder strong release was not deferred");
+    --value.pending_strong;
+    --value.strong;
+    break;
+  case BinderReferenceOperation::ReleaseDeferredWeak:
+    if (!value.pending_weak)
+      return unsupported("Android Binder weak release was not deferred");
+    --value.pending_weak;
+    --value.weak;
     break;
   }
   return retireLocalBinder(cookie);

@@ -6,7 +6,7 @@ import zlib
 from benchmark_mobile_inventory import uleb128
 
 
-def resume_dex(binder_only=False):
+def resume_dex(binder_only=False, dispatch=False):
     owner, obj = 'Lresumption/Library;', 'Ljava/lang/Object;'
     string, system = 'Ljava/lang/String;', 'Ljava/lang/System;'
     # owner, name, result, parameters, access, registers, code factory
@@ -58,7 +58,18 @@ def resume_dex(binder_only=False):
             code=transactions, cls=owner)
         add('step', 'I', ['I'], 0x109, 0, cls=owner)
         add('transact', 'Z', ['I', parcel, parcel, 'I'], cls=binder)
-    types = sorted({owner, obj, string, system, 'I', *[d[2] for d in declarations],
+    parent = obj
+    if dispatch:
+        declarations.clear()
+        owner, parent = 'Lresumption/Dispatch;', 'Landroid/os/Binder;'
+        parcel = 'Landroid/os/Parcel;'
+        add('<init>', 'V', [], 0x10001, 1,
+            lambda m, s: [0x1070, m[(parent, '<init>')], 0, 0xe], cls=owner)
+        add('<init>', 'V', [], cls=parent)
+        add('onTransact', 'Z', ['I', parcel, parcel, 'I'], 4, 6,
+            lambda m, s: [0x5571, m[(owner, 'step')], 0x4321, 0xa, 0xf], cls=owner)
+        add('step', 'Z', [owner, 'I', parcel, parcel, 'I'], 0x109, 0, cls=owner)
+    types = sorted({owner, parent, obj, string, system, 'I', *[d[2] for d in declarations],
                     *[t for d in declarations for t in d[3]]})
     ti = {t: i for i, t in enumerate(types)}
     protos = sorted({(d[2], d[3]) for d in declarations},
@@ -111,19 +122,21 @@ def resume_dex(binder_only=False):
             data.extend(bytes(-len(data) % 4))
             code[i] = len(data)
             incoming = len(args) + (not flags & 8)
-            data.extend(struct.pack('<HHHHII', regs, incoming, 5 if binder_only else 1, 0, 0, len(words)))
+            data.extend(struct.pack('<HHHHII', regs, incoming, 5 if binder_only or dispatch else 1, 0, 0, len(words)))
             data.extend(struct.pack('<' + 'H'*len(words), *words))
     sections.append((0x2001, len(code), min(code.values())))
     at = len(data)
     direct = [i for i, m in enumerate(methods) if m[0] == owner and (m[4] & 8 or m[1] == '<init>')]
-    data.extend(uleb128(1) + b'\0' + uleb128(len(direct)) + b'\0')
+    virtual = [i for i, m in enumerate(methods) if m[0] == owner and i not in direct]
+    data.extend(uleb128(1) + b'\0' + uleb128(len(direct)) + uleb128(len(virtual)))
     data.extend(uleb128(0) + uleb128(9))  # public static count
-    last = 0
-    for i in direct:
-        data.extend(uleb128(i-last) + uleb128(methods[i][4]) + uleb128(code.get(i, 0)))
-        last = i
+    for group in (direct, virtual):
+        last = 0
+        for i in group:
+            data.extend(uleb128(i-last) + uleb128(methods[i][4]) + uleb128(code.get(i, 0)))
+            last = i
     sections.append((0x2000, 1, at))
-    struct.pack_into('<8I', data, co, ti[owner], 1, ti[obj], 0, 0xffffffff, 0, at, 0)
+    struct.pack_into('<8I', data, co, ti[owner], 1, ti[parent], 0, 0xffffffff, 0, at, 0)
     data.extend(bytes(-len(data) % 4))
     map_at = len(data)
     sections.append((0x1000, 1, map_at))
