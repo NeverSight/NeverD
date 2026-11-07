@@ -1440,6 +1440,11 @@ Objective-C scalar table binding relocates only a proved immutable base,
 retaining the raw index, encoded extension, access width and memory effects.
 Every occurrence needs a bounded complete access range and the original
 instruction owner's address proof; publication rechecks the current uses.
+A computed branch through such a load keeps its one table role: the value
+resolver reads the load as defining its own occurrence, as it reads a LOAD with
+a computed address, so a loop through the index cannot change what the branch
+compares. The raw index bound may come from the cheap query, a guarded query or
+the finite proof of the same use, whose coordinates stay with the domain proof.
 Byte and halfword stores slice the encoded W value explicitly; the tracer
 requires those source bytes to be known before publishing the slice. Unknown
 unused upper bytes do not prevent a known narrow store.
