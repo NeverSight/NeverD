@@ -4739,6 +4739,10 @@ Decision and carry caches pack their bounded input and edge fields into exact
 bucket and entry storage reflect the compact representation, with unchanged
 work and node limits. Carry-cache hits stay outside the recursive allocation
 frame; only missing identities construct new decision frontiers.
+Recursive Boolean application specializes its fixed AND or XOR operation;
+OR enters the same AND frontier through complemented edges. The outer word
+reader selects the operation, while recursive calls retain the same exact
+keys, work charges and failure behavior.
 Native sample guards index contiguous variable-ID windows directly. Sparse
 windows retain compact maps, and both paths preserve the same referenced-input
 order and random stream. Numeric node-order comparisons stay inside the sort.
@@ -4775,6 +4779,11 @@ declared width, retaining the tight fold for other inputs. Their prepared steps
 keep the width mask in the unused product payload, without enlarging a step
 or skipping input evaluation.
 Batch substitution uses one table for scheduled nodes and completed results.
+Its bottom-up walk reuses one owned operand buffer, sized from the current
+node before rebuilding. MBA abstraction also reuses its operand buffer and
+reserves classification and rewrite tables from the complete reachable order.
+These buffers last only for the current walk; proof work and storage charges
+remain unchanged.
 It checks the replacement map once per reachable node, keeps replacements
 simultaneous, and reuses its owned root array for the ordered results. Shared
 roots and descendants retain one bottom-up reconstruction.
@@ -4801,9 +4810,10 @@ outside the small-recipe synthesis path. Terms remain ordered by value after
 each merge round, so only zero-to-one neighbor flips need lookup; the reverse
 pair was already visited. Prepared Boolean recipes keep their reconstruction
 memo inline, with ordinary growth for optional larger recipes.
-Small implicant rounds also keep their temporary term and merge vectors inline;
-larger rounds grow normally. Frontiers, merge flags and exact lookup tables
-reuse their storage across rounds within one cover search. The neighbor index
+Small implicant rounds keep their temporary terms, prime results and merge flags
+inline; larger rounds grow normally. The two frontiers alternate without copying
+their inline elements. Merge flags and exact lookup tables reuse their storage
+across rounds within one cover search. The neighbor index
 is initialized only when an indexed round is reached. Deduplication keys retain
 both complete value/care fields; discovery order and work admission are unchanged.
 The shared exact MBA layer also recombines weighted literal AND/OR/XOR/NOT

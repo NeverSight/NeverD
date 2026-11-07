@@ -21,6 +21,7 @@
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <algorithm>
 #include <array>
@@ -219,19 +220,20 @@ class LowWordDecisions {
 
   // Only a missing application needs a recursive frontier and cache insertion.
   // The caller has already normalized its edges and charged the same lookup.
-  LLVM_ATTRIBUTE_NOINLINE
-  uint32_t expandApplication(Operation Op, uint32_t A, uint32_t B,
-                             unsigned Depth, uint32_t Key,
-                             uint32_t Complement) {
+  template <Operation Op>
+  LLVM_ATTRIBUTE_NOINLINE uint32_t expandApplication(uint32_t A, uint32_t B,
+                                                     unsigned Depth,
+                                                     uint32_t Key,
+                                                     uint32_t Complement) {
     // Recursive insertion may reallocate Nodes; copy both decisions first.
     const auto Left = decision(A), Right = decision(B);
     const auto Variable = std::min(Left.Variable, Right.Variable);
     const auto Low =
-        apply(Op, Left.Variable == Variable ? Left.Low : A,
-              Right.Variable == Variable ? Right.Low : B, Depth + 1);
+        apply<Op>(Left.Variable == Variable ? Left.Low : A,
+                  Right.Variable == Variable ? Right.Low : B, Depth + 1);
     const auto High =
-        apply(Op, Left.Variable == Variable ? Left.High : A,
-              Right.Variable == Variable ? Right.High : B, Depth + 1);
+        apply<Op>(Left.Variable == Variable ? Left.High : A,
+                  Right.Variable == Variable ? Right.High : B, Depth + 1);
     const auto Result = node(Variable, Low, High);
     if (!charge(1, sizeof(Key) + sizeof(uint32_t) + 4 * sizeof(void *)) ||
         !reserveEntry(Applied))
@@ -240,23 +242,25 @@ class LowWordDecisions {
     return Result ^ Complement;
   }
 
-  uint32_t apply(Operation Op, uint32_t A, uint32_t B, unsigned Depth = 0) {
+  // Recursive application keeps its normalized operation for the entire
+  // frontier; specialize that dispatch without changing admission or keys.
+  template <Operation Op>
+  uint32_t apply(uint32_t A, uint32_t B, unsigned Depth = 0) {
     if (!charge())
       return 0;
     uint32_t Complement = 0;
-    if (Op == Or) {
-      Op = And;
+    if constexpr (Op == Or) {
       A ^= 1;
       B ^= 1;
       Complement = 1;
-    } else if (Op == Xor) {
+    } else if constexpr (Op == Xor) {
       Complement = (A ^ B) & 1;
       A &= ~uint32_t(1);
       B &= ~uint32_t(1);
     }
     if (A > B)
       std::swap(A, B);
-    if (Op == And) {
+    if constexpr (Op != Xor) {
       if ((A ^ B) == 1)
         return Complement;
       if (!A || A == B)
@@ -282,7 +286,19 @@ class LowWordDecisions {
         (A << EdgeBits) | B | (uint32_t(Op == Xor) << (2 * EdgeBits));
     if (auto It = Applied.find(Key); It != Applied.end())
       return It->second ^ Complement;
-    return expandApplication(Op, A, B, Depth, Key, Complement);
+    return expandApplication<Op == Or ? And : Op>(A, B, Depth, Key, Complement);
+  }
+
+  uint32_t apply(Operation Op, uint32_t A, uint32_t B) {
+    switch (Op) {
+    case And:
+      return apply<And>(A, B);
+    case Or:
+      return apply<Or>(A, B);
+    case Xor:
+      return apply<Xor>(A, B);
+    }
+    llvm_unreachable("unknown Boolean operation");
   }
 
   Bits calculate(SymOp Op, const Bits &A, const Bits &B) {
@@ -396,7 +412,7 @@ class LowWordDecisions {
     if (A > B)
       std::swap(A, B);
     if (A <= 1)
-      return {apply(Xor, B, C) ^ A, apply(A ? Or : And, B, C)};
+      return {apply<Xor>(B, C) ^ A, apply(A ? Or : And, B, C)};
     const uint32_t Complement = A & 1;
     A ^= Complement;
     B ^= Complement;
@@ -447,7 +463,7 @@ class LowWordDecisions {
     if (A > B)
       std::swap(A, B);
     if (!A)
-      return apply(Xor, B, C) ^ Complement;
+      return apply<Xor>(B, C) ^ Complement;
     const auto Key = carryKey(A, B, C);
     if (auto It = Parities.find(Key); It != Parities.end())
       return It->second ^ Complement;
@@ -506,7 +522,7 @@ class LowWordDecisions {
       if (2 * I < A.size())
         Row[2 * I] = A[I];
       for (size_t J = I + 1; I + J + 1 < A.size(); ++J)
-        Row[I + J + 1] = apply(And, A[I], A[J]);
+        Row[I + J + 1] = apply<And>(A[I], A[J]);
       Result = calculate(SymOp::Add, Result, Row);
     }
     return Result;
@@ -519,7 +535,7 @@ class LowWordDecisions {
         continue;
       Bits Row(A.size(), 0);
       for (size_t J = 0; I + J < A.size(); ++J)
-        Row[I + J] = apply(And, A[J], B[I]);
+        Row[I + J] = apply<And>(A[J], B[I]);
       Result = calculate(SymOp::Add, Result, Row);
     }
     return Result;
@@ -815,7 +831,7 @@ class LowWordDecisions {
     } else if (Op == SymOp::Not) {
       Result = word(Ctx.operand(R, 0), Count, Depth + 1);
       for (auto &Bit : Result)
-        Bit = apply(Xor, Bit, 1);
+        Bit = apply<Xor>(Bit, 1);
     } else if (Op == SymOp::Shl && Ctx.isConst(Ctx.operand(R, 1))) {
       const auto Value = literal(Ctx.operand(R, 1));
       if (!Value)
@@ -856,8 +872,8 @@ class LowWordDecisions {
           for (unsigned Bit = 0; Bit < IndexBits; ++Bit) {
             for (size_t J = 0; J < Size / 2; ++J) {
               const auto Low = Values[2 * J], High = Values[2 * J + 1];
-              Values[J] = apply(Xor, Low,
-                                apply(And, Index[Bit], apply(Xor, Low, High)));
+              Values[J] = apply<Xor>(
+                  Low, apply<And>(Index[Bit], apply<Xor>(Low, High)));
             }
             Size /= 2;
           }
@@ -892,7 +908,7 @@ class LowWordDecisions {
       // Avoid constructing a constant word and caching a generic word sum.
       uint32_t Carry = 0;
       for (unsigned I = 0; I < Count && !Failed; ++I) {
-        Result[I] = apply(Xor, Value[I], Carry ^ uint32_t((*Literal)[I]));
+        Result[I] = apply<Xor>(Value[I], Carry ^ uint32_t((*Literal)[I]));
         if (I + 1 < Count)
           Carry = apply((*Literal)[I] ? Or : And, Value[I], Carry);
       }
@@ -1116,7 +1132,7 @@ class LowWordDecisions {
         if (!charge(1 + Width))
           return Bits(Width, 0);
         for (size_t I = 1; I < Width && !Failed; ++I)
-          Value[I] = apply(And, Value.front(), Value[I]);
+          Value[I] = apply<And>(Value.front(), Value[I]);
         return Value;
       }
       const size_t Reduced =
@@ -1161,12 +1177,12 @@ class LowWordDecisions {
       uint32_t HighParity = 0, MixedParity = 0;
       for (const auto &V : Values) {
         if (K[0])
-          HighParity = apply(Xor, HighParity, V[1]);
-        MixedParity = apply(Xor, MixedParity, apply(And, V[0], V[1]));
+          HighParity = apply<Xor>(HighParity, V[1]);
+        MixedParity = apply<Xor>(MixedParity, apply<And>(V[0], V[1]));
       }
       Result.push_back(
-          apply(Xor, apply(Xor, K[2], apply(And, K[0], K[1])),
-                apply(Xor, MixedParity, apply(And, K[0], HighParity))));
+          apply<Xor>(apply<Xor>(K[2], apply<And>(K[0], K[1])),
+                     apply<Xor>(MixedParity, apply<And>(K[0], HighParity))));
     }
     return Result;
   }
@@ -1329,7 +1345,7 @@ class LowWordDecisions {
           auto Sum = Bits(High.begin(), High.begin() + N);
           auto SumSquare = calculate(SymOp::Mul, Sum, Sum);
           for (auto &Bit : SumSquares)
-            Bit = apply(Xor, Bit, 1);
+            Bit = apply<Xor>(Bit, 1);
           Bits One(N, 0);
           One[0] = 1;
           auto Difference = calculate(SymOp::Add, SumSquare,
@@ -1500,7 +1516,7 @@ class LowWordDecisions {
           const auto Value = residueSignature(State, Child, Count, Depth + 1);
           if (Failed)
             return {};
-          Flip = apply(Xor, Flip, Value.Flip);
+          Flip = apply<Xor>(Flip, Value.Flip);
           if (Op == SymOp::Xor) {
             if (!appendSignatureXor(State, Children, Literal, Count,
                                     Value.Identity))
@@ -1510,7 +1526,7 @@ class LowWordDecisions {
           }
         }
       }
-      Flip = apply(Xor, Flip, bool(Literal & Top));
+      Flip = apply<Xor>(Flip, bool(Literal & Top));
       Literal &= Top - 1;
       std::sort(Children.begin(), Children.end());
       if (Op == SymOp::Xor) {
@@ -1588,14 +1604,14 @@ class LowWordDecisions {
           Bits Parities, Prefix(OperandCount + 1, 1);
           for (size_t I = 0; I < OperandCount; ++I) {
             Parities.push_back(word(Ctx.operand(R, I), Zeros[I] + 1)[Zeros[I]]);
-            Prefix[I + 1] = apply(And, Prefix[I], Parities.back());
+            Prefix[I + 1] = apply<And>(Prefix[I], Parities.back());
           }
           uint32_t Suffix = 1;
           for (size_t I = OperandCount; I-- != 0;) {
             if (Flips[I])
-              Flip = apply(Xor, Flip,
-                           apply(And, Flips[I], apply(And, Prefix[I], Suffix)));
-            Suffix = apply(And, Suffix, Parities[I]);
+              Flip = apply<Xor>(
+                  Flip, apply<And>(Flips[I], apply<And>(Prefix[I], Suffix)));
+            Suffix = apply<And>(Suffix, Parities[I]);
           }
         }
         std::sort(Children.begin(), Children.end());
@@ -1640,8 +1656,8 @@ class LowWordDecisions {
         uint32_t Carry = 0;
         for (unsigned I = 0; I + 1 < Count; ++I)
           Carry = apply((*Literal)[I] ? Or : And, Value[I], Carry);
-        return apply(Xor, Value.back(),
-                     Carry ^ uint32_t((*Literal)[Count - 1]));
+        return apply<Xor>(Value.back(),
+                          Carry ^ uint32_t((*Literal)[Count - 1]));
       }
     }
     return word(R, Count, Depth + 1).back();
@@ -1655,9 +1671,9 @@ class LowWordDecisions {
     if (!B[0] && !B[1])
       return A;
     if (A[0] == B[0])
-      return {0, apply(Xor, A[1], B[1])};
-    return {apply(Xor, A[0], B[0]),
-            parity(A[1], B[1], apply(And, A[0] ^ 1, B[0]))};
+      return {0, apply<Xor>(A[1], B[1])};
+    return {apply<Xor>(A[0], B[0]),
+            parity(A[1], B[1], apply<And>(A[0] ^ 1, B[0]))};
   }
 
   Bits sumCorrection(const Bits &A, const Bits &B) {
@@ -1671,7 +1687,7 @@ class LowWordDecisions {
       return {0, A[0]};
     if (A[0] == B[0])
       return {0, parity(A[1], B[1], A[0])};
-    return {apply(Xor, A[0], B[0]), parity(A[1], B[1], apply(And, A[0], B[0]))};
+    return {apply<Xor>(A[0], B[0]), parity(A[1], B[1], apply<And>(A[0], B[0]))};
   }
 
   Bits multiplyCorrection(const Bits &A, const Bits &B) {
@@ -1684,13 +1700,13 @@ class LowWordDecisions {
     if (B[0] == 1 && !B[1])
       return A;
     if (!A[0])
-      return {0, apply(And, A[1], B[0])};
+      return {0, apply<And>(A[1], B[0])};
     if (!B[0])
-      return {0, apply(And, A[0], B[1])};
+      return {0, apply<And>(A[0], B[1])};
     if (A[0] == 1 && B[0] == 1)
-      return {1, apply(Xor, A[1], B[1])};
-    return {apply(And, A[0], B[0]),
-            apply(Xor, apply(And, A[0], B[1]), apply(And, A[1], B[0]))};
+      return {1, apply<Xor>(A[1], B[1])};
+    return {apply<And>(A[0], B[0]),
+            apply<Xor>(apply<And>(A[0], B[1]), apply<And>(A[1], B[0]))};
   }
 
   // Equal identities share a full-width representative. Delta is its exact
@@ -1778,22 +1794,22 @@ class LowWordDecisions {
         // own bit, so do not build that word merely to subtract it again.
         for (const auto &Value : Values) {
           if (Value.Delta[0])
-            D[0] = apply(Xor, D[0], Value.Delta[0]);
+            D[0] = apply<Xor>(D[0], Value.Delta[0]);
           if (Value.Delta[1])
-            D[1] = apply(Xor, D[1], Value.Delta[1]);
+            D[1] = apply<Xor>(D[1], Value.Delta[1]);
         }
         for (size_t I = 0; I < OperandCount; ++I) {
           if (Ctx.isConst(Ctx.operand(R, I)))
             continue;
           const auto Coefficient =
-              Values[I].Delta[0] ? apply(Xor, D[0], Values[I].Delta[0]) : D[0];
+              Values[I].Delta[0] ? apply<Xor>(D[0], Values[I].Delta[0]) : D[0];
           if (Coefficient)
-            D[1] = apply(Xor, D[1],
-                         apply(And, Coefficient,
-                               highestBit(Ctx.operand(R, I), Count - 1)));
+            D[1] = apply<Xor>(
+                D[1], apply<And>(Coefficient,
+                                 highestBit(Ctx.operand(R, I), Count - 1)));
         }
         if (Literal & Unit)
-          D[1] = apply(Xor, D[1], D[0] ^ 1);
+          D[1] = apply<Xor>(D[1], D[0] ^ 1);
       }
       Literal &= Unit - 1;
       std::sort(Children.begin(), Children.end());
@@ -1834,9 +1850,8 @@ class LowWordDecisions {
           const bool LowMask = Mask & Unit, HighMask = Mask & (2 * Unit);
           Bits D{LowMask ? S.Delta[0] : 0, HighMask ? S.Delta[1] : 0};
           if (!IdentityOnly && LowMask != HighMask && S.Delta[0])
-            D[1] =
-                apply(Xor, D[1],
-                      apply(And, highestBit(Child, Count - 1) ^ 1, S.Delta[0]));
+            D[1] = apply<Xor>(
+                D[1], apply<And>(highestBit(Child, Count - 1) ^ 1, S.Delta[0]));
           Save(internSignature(State,
                                {uint64_t(Op) + 1, Count, Mask, S.Identity}),
                D);
@@ -2022,7 +2037,7 @@ class LowWordDecisions {
         // the upper cross term when the correction's low bit is nonzero.
         if (Change[0])
           Change[1] =
-              apply(Xor, Change[1], apply(And, Change[0], word(A, 2)[1]));
+              apply<Xor>(Change[1], apply<And>(Change[0], word(A, 2)[1]));
         if constexpr (BatchCorrections) {
           if (!charge())
             return {};
@@ -2105,7 +2120,7 @@ class LowWordDecisions {
       }
       Pairs.push_back(Factor);
       Correction =
-          apply(Xor, Correction, apply(Xor, It->second.second, Signature.Flip));
+          apply<Xor>(Correction, apply<Xor>(It->second.second, Signature.Flip));
       Unpaired.erase(It);
     }
     if (Pairs.empty())
@@ -2121,7 +2136,7 @@ class LowWordDecisions {
     if (Failed || Other.empty())
       return {};
     Result = calculate(SymOp::Mul, Result, Other);
-    Result.back() = apply(Xor, Result.back(), Correction);
+    Result.back() = apply<Xor>(Result.back(), Correction);
     return Result;
   }
 

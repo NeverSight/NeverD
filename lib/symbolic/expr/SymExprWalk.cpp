@@ -145,6 +145,7 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
                       limits::symbolic::kSymExprTraversalInlineBuckets>
       Done;
 
+  llvm::SmallVector<SymRef, 8> NewOps;
   llvm::SmallVector<std::pair<SymRef, bool>, 32> Work;
   for (SymRef R : Results)
     Work.emplace_back(R, false);
@@ -170,7 +171,8 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
       continue;
     }
 
-    llvm::SmallVector<SymRef, 8> NewOps;
+    NewOps.clear();
+    NewOps.reserve(numOperands(Cur));
     bool Changed = false;
     for (SymRef C : operands(Cur)) {
       SymRef NC = Done.find(C.index())->second;

@@ -1249,6 +1249,41 @@ TEST(SymExpr, SharedRootSubstitutionKeepsSimultaneousReplacements) {
   }
 }
 
+TEST(SymExpr, BatchedSubstitutionPreservesDifferentOperandArities) {
+  std::mt19937_64 Random(0x6172697479626174);
+  const std::array Counts{3u, 17u, 33u, 5u, 65u};
+  for (unsigned Width : {8u, 64u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    const auto Z = C.mkVar("z", Width), Shared = C.mkXor(X, Y);
+    llvm::SmallVector<SymRef, 8> Terms, Roots;
+    for (unsigned I = 0; I < Counts.back(); ++I)
+      Terms.push_back(C.mkXor(C.mkAdd(Shared, C.mkConst(Width, I)), Z));
+    for (unsigned Count : Counts)
+      Roots.push_back(C.mkAdd(llvm::ArrayRef(Terms).take_front(Count)));
+    const std::unordered_map<uint32_t, SymRef> Replacements{{X.index(), Y},
+                                                            {Y.index(), Z}};
+    const auto Results = C.substituteAll(Roots, Replacements);
+    ASSERT_EQ(Results.size(), Counts.size());
+    for (unsigned Trial = 0; Trial < 32; ++Trial) {
+      std::array<llvm::APInt, 3> Values;
+      for (auto &V : Values) {
+        V = llvm::APInt(Width, 0);
+        for (unsigned Bit = 0; Bit < Width; Bit += 64)
+          V |= llvm::APInt(Width, Random()).shl(Bit);
+      }
+      const auto ReplacedShared = Values[1] ^ Values[2];
+      for (size_t R = 0; R < Results.size(); ++R) {
+        llvm::APInt Expected(Width, 0);
+        for (unsigned I = 0; I < Counts[R]; ++I)
+          Expected += (ReplacedShared + I) ^ Values[2];
+        EXPECT_EQ(C.eval(Results[R], Values), Expected);
+      }
+    }
+  }
+}
+
 TEST(SymExpr, RebuildingMergedMasksRetainsDemandedSimplification) {
   for (unsigned Width : {8u, 64u, 257u}) {
     SCOPED_TRACE(Width);

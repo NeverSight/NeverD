@@ -92,6 +92,7 @@ bool isBitwiseOperand(Role R) {
 void classify(const SymContext &Ctx, llvm::ArrayRef<uint32_t> Order,
               const NodeSet &ForcedAtoms, bool AllowProducts,
               NodeMap<Role> &Roles) {
+  Roles.reserve(Order.size());
   for (uint32_t Index : Order) {
     SymRef R(Index);
     if (ForcedAtoms.contains(Index)) {
@@ -1158,6 +1159,7 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
 
   Placeholders Pool(Ctx, Reserved);
   NodeMap<SymRef> Rewritten;
+  Rewritten.reserve(Order.size());
   NodeMap<SymRef> HiddenInputs;
   AffineResources WidenResources(Budget, MaxBytes);
   llvm::DenseMap<llvm::APInt, SymRef> MaskInputs;
@@ -1276,6 +1278,9 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
     return Value;
   };
 
+  // Each iteration owns its operand snapshot across context growth. Reuse
+  // its capacity once that node has been rebuilt.
+  llvm::SmallVector<SymRef, 8> Ops;
   for (uint32_t Index : Order) {
     SymRef R(Index);
     if (Roles.lookup(Index) == Role::Atom) {
@@ -1303,8 +1308,7 @@ abstractToMBAImpl(SymContext &Ctx, SymRef Root, bool AllowProducts,
       Rewritten[Index] = R;
       continue;
     }
-    llvm::SmallVector<SymRef, 8> Ops(SourceOperands.begin(),
-                                     SourceOperands.end());
+    Ops.assign(SourceOperands.begin(), SourceOperands.end());
     const SymOp Op = Ctx.op(R);
     const bool IsBitwise =
         Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor;
