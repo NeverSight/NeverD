@@ -169,6 +169,9 @@ struct CallArgContext {
   /// predecessor's write of the register reaching the call, or the write
   /// in the fork that dominates a join.  False when there is none.
   llvm::function_ref<bool(int)> TakePrecedingSetup;
+  /// Shared indexes for the immutable function being converted.
+  llvm::function_ref<const MedOp *(const MedVar &)> UniqueDefinition;
+  llvm::function_ref<const PhiNode *(const MedVar &)> UniquePhi;
 };
 
 /// The steps of call-argument recovery that belong to one calling

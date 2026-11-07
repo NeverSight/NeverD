@@ -8146,7 +8146,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       Found = true;
       if (Def.Opcode != NdOp::COPY && Def.Opcode != NdOp::INT_ZEXT &&
           Def.Opcode != NdOp::INT_SEXT && Def.Opcode != NdOp::SUBBYTES &&
-          Def.Opcode != NdOp::LOAD)
+          Def.Opcode != NdOp::LOAD && !originalAArch64TableLoad(Def))
         Walk.readComputationInputs();
 
       ResolverValue Full;
@@ -8564,6 +8564,15 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             Full = std::move(Chosen);
           }
         }
+      } else if (originalAArch64TableLoad(Def)) {
+        // A register-offset LOAD keeps its address check in this form. Like a
+        // LOAD with a computed address, it defines its own occurrence: its
+        // index belongs to the address role, and may close a loop that later
+        // uses of this value do not depend on.
+        Full = namedResolverRoot(Def.Output.Size, "D",
+                                 {Def.Addr, static_cast<uint64_t>(Def.Seq),
+                                  static_cast<unsigned>(Def.Output.Space),
+                                  Def.Output.Offset, Def.Output.Size});
       } else if (Def.Opcode == NdOp::LOAD && Def.NumInputs >= 1) {
         const NdVar &Address =
             Def.NumInputs >= 2 ? Def.Inputs[1] : Def.Inputs[0];

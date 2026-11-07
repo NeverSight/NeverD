@@ -95,9 +95,23 @@ serviceManager(const llvm::json::Value &Value) {
         for (const auto &[Name, Value] : *Proxy) {
           if (Name == "key")
             continue;
-          if (Name != "warn_on_blocking" || !Value.getAsBoolean())
-            return invalid(field::ApplicationServiceManager);
-          Entry.warn_on_blocking = *Value.getAsBoolean();
+          if (Name == "native_binding") {
+            const auto *Binding = Value.getAsObject();
+            if (!Binding || Binding->size() != 3 || !Binding->get("fd") ||
+                !Binding->get("handle") || !Binding->getBoolean("alive"))
+              return invalid(field::ApplicationServiceManager);
+            auto FD = process_json::integer<uint32_t>(*Binding->get("fd"));
+            auto Handle =
+                process_json::integer<uint32_t>(*Binding->get("handle"));
+            if (!FD || !Handle)
+              return invalid(field::ApplicationServiceManager);
+            Entry.native_binding = State::BinderProxy::NativeBinding{
+                *FD, *Handle, *Binding->getBoolean("alive")};
+          } else {
+            if (Name != "warn_on_blocking" || !Value.getAsBoolean())
+              return invalid(field::ApplicationServiceManager);
+            Entry.warn_on_blocking = *Value.getAsBoolean();
+          }
         }
         Result.binder_proxies.push_back(std::move(Entry));
       }
@@ -1262,13 +1276,20 @@ llvm::json::Object androidResultJSON(const ProcessResult &Result) {
       for (const auto &Entry : State.entries)
         Entries.push_back(llvm::json::Object{{"name", bits(Entry.name)},
                                              {"binder", bits(Entry.binder)}});
-      for (const auto &Proxy : State.binder_proxies)
-        Proxies.push_back(llvm::json::Object{
-            {"key", Proxy.key},
+      for (const auto &Proxy : State.binder_proxies) {
+        llvm::json::Object Object{
+            {"key", Proxy.key ? llvm::json::Value(*Proxy.key) : nullptr},
             {"identity", bits(Proxy.identity)},
             {"warn_on_blocking",
              Proxy.warn_on_blocking ? llvm::json::Value(*Proxy.warn_on_blocking)
-                                    : nullptr}});
+                                    : nullptr}};
+        if (Proxy.native_binding)
+          Object["native_binding"] =
+              llvm::json::Object{{"fd", Proxy.native_binding->fd},
+                                 {"handle", Proxy.native_binding->handle},
+                                 {"alive", Proxy.native_binding->alive}};
+        Proxies.push_back(std::move(Object));
+      }
       Framework[field::ApplicationServiceManager] = llvm::json::Object{
           {"initialized", State.initialized},
           {"cache", bits(State.cache)},

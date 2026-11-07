@@ -24,6 +24,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/symbolic/synth/SymSynthDetail.h"
 #include "gtest/gtest.h"
 
 #include "neverd/symbolic/SymExpr.h"
@@ -38,6 +39,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <random>
 #include <type_traits>
 #include <vector>
 
@@ -733,3 +735,57 @@ TEST(SymSynth, ReportsWhatItSpent) {
 }
 
 } // namespace
+
+// The search measures candidates through applyColumn and builds them through
+// the nodes apply reads, so any disagreement is a wrong answer the proof must
+// catch, or a missed one nothing catches.
+TEST(SymSynth, ColumnSemanticsAgreeWithNodes) {
+  using namespace neverd::symbolic::synth;
+  const GramOp Ops[] = {GramOp::Add,  GramOp::Sub, GramOp::Mul, GramOp::And,
+                        GramOp::Or,   GramOp::Xor, GramOp::Shl, GramOp::LShr,
+                        GramOp::AShr, GramOp::Not, GramOp::Neg};
+  std::mt19937_64 Rng(0x243F6A8885A308D3ull);
+  for (uint32_t Width : {1u, 2u, 3u, 4u, 5u, 7u, 8u, 9u, 15u, 16u, 17u, 31u,
+                         32u, 33u, 47u, 48u, 63u, 64u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const OpSemantics Sem(Ctx, Width);
+    const uint64_t Mask = ~uint64_t(0) >> (64 - Width);
+    const uint64_t Sign = (Mask >> 1) + 1;
+    // Every value at the small widths, else the boundaries of the arithmetic
+    // and of the shift amounts, plus random words.
+    std::vector<uint64_t> Values;
+    if (Width <= 5) {
+      for (uint64_t V = 0; V <= Mask; ++V)
+        Values.push_back(V);
+    } else {
+      for (uint64_t V :
+           {uint64_t(0), uint64_t(1), uint64_t(2), uint64_t(3),
+            uint64_t(Width - 1), uint64_t(Width), uint64_t(Width + 1),
+            uint64_t(63), uint64_t(64), uint64_t(65), Mask, Mask - 1, Sign,
+            Sign - 1, Sign + 1, uint64_t(0x5555555555555555ull),
+            uint64_t(0xAAAAAAAAAAAAAAAAull)})
+        Values.push_back(V & Mask);
+      for (unsigned I = 0; I != 32; ++I)
+        Values.push_back(Rng() & Mask);
+    }
+    std::vector<uint64_t> A, B;
+    for (const uint64_t X : Values)
+      for (const uint64_t Y : Values) {
+        A.push_back(X);
+        B.push_back(Y);
+      }
+    std::vector<uint64_t> Out(A.size());
+    for (const GramOp Op : Ops) {
+      SCOPED_TRACE(unsigned(Op));
+      Sem.applyColumn(Op, A.data(), B.data(), Out.data(), A.size());
+      for (size_t I = 0; I != A.size(); ++I) {
+        const llvm::APInt Args[] = {llvm::APInt(Width, A[I]),
+                                    llvm::APInt(Width, B[I])};
+        const llvm::APInt Want = Sem.apply(
+            Op, llvm::ArrayRef<llvm::APInt>(Args, isUnaryGramOp(Op) ? 1 : 2));
+        ASSERT_EQ(Out[I], Want.getZExtValue()) << "a=" << A[I] << " b=" << B[I];
+      }
+    }
+  }
+}

@@ -1310,28 +1310,56 @@ bool assignDarwinVariadicSourceABI(SourceFunctionTypeHint &Hint,
                                    unsigned FixedCount, Arch Architecture,
                                    std::string &Diagnostic) {
   if (!FixedCount || FixedCount > Hint.Parameters.size())
-    return fail(Diagnostic, "Invalid variadic source prefix");
+    return fail(Diagnostic, kInvalidVariadicPrefix);
   for (size_t I = FixedCount; I < Hint.Parameters.size(); ++I) {
     const auto &T = Hint.Parameters[I].Type;
-    if (!scalarType(T) || (T->Kind == NdTypeKind::Int && T->Size < 4) ||
-        (T->Kind == NdTypeKind::Float && T->Size != 8))
-      return fail(Diagnostic, "Variadic source arguments must be promoted");
+    if (!T || (Architecture != Arch::AArch64 && !scalarType(T)) ||
+        (T->Kind == NdTypeKind::Int && T->Size < kDarwinPromotedIntegerBytes) ||
+        (T->Kind == NdTypeKind::Float && T->Size != kDarwinWordBytes))
+      return fail(Diagnostic, kUnpromotedVariadicValue);
   }
-  if (!assignDarwinScalarSourceABI(Hint, Architecture, Diagnostic))
+  const bool Assigned =
+      Architecture == Arch::AArch64
+          ? assignDarwinFixedSourceABI(Hint, Architecture, Diagnostic)
+          : assignDarwinScalarSourceABI(Hint, Architecture, Diagnostic);
+  if (!Assigned)
     return false;
   if (Architecture == Arch::AArch64) {
     int64_t StackOffset = 0;
-    for (size_t I = 0; I < FixedCount; ++I) {
-      const auto &P = Hint.Parameters[I];
-      if (P.Location.Kind == SourceABICarrierKind::Stack)
-        StackOffset =
-            std::max(StackOffset, P.Location.EntryStackOffset + P.Type->Size);
+    for (const auto &Binding : sourceABIParameters(Hint)) {
+      if (Binding.ParameterIndex >= FixedCount ||
+          Binding.Location.Kind != SourceABICarrierKind::Stack)
+        continue;
+      const auto &P = Hint.Parameters[Binding.ParameterIndex];
+      const auto Size = P.IndirectByValue ? kDarwinWordBytes : P.Type->Size;
+      StackOffset = std::max(StackOffset, Binding.Location.EntryStackOffset -
+                                              Binding.ByteOffset + Size);
     }
-    StackOffset = (StackOffset + 7) & ~int64_t(7);
     for (size_t I = FixedCount; I < Hint.Parameters.size(); ++I) {
       auto &P = Hint.Parameters[I];
-      P.Location = {SourceABICarrierKind::Stack, 0, StackOffset, P.Type->Size};
-      StackOffset += 8;
+      if (P.IndirectByValue)
+        return fail(Diagnostic, kIndirectVariadicCopy);
+      // Darwin variadic objects start on eight-byte slots (or their higher
+      // natural alignment). Members retain their in-object offsets: an HFA
+      // of floats does not become one eight-byte slot per float.
+      // NdType's architecture-neutral integer alignment is capped at a word.
+      // The Darwin scalar ABI instead aligns i128 to its complete width.
+      const int64_t Alignment = std::max<unsigned>(
+          kDarwinWordBytes,
+          P.Type->Kind == NdTypeKind::Int ? P.Type->Size : P.Type->Alignment);
+      StackOffset = (StackOffset + Alignment - 1) & -Alignment;
+      P.Location = {};
+      P.Components.clear();
+      const auto Members = sourceABIValueMembers(P.Type);
+      if (Members.empty())
+        P.Location = {SourceABICarrierKind::Stack, 0, StackOffset,
+                      P.Type->Size};
+      else
+        for (const auto &Member : Members)
+          P.Components.push_back({SourceABICarrierKind::Stack, 0,
+                                  StackOffset + Member.ByteOffset,
+                                  Member.Type->Size});
+      StackOffset += (P.Type->Size + kDarwinWordBytes - 1) & -kDarwinWordBytes;
     }
   }
   return validateSourceABI(Hint, Diagnostic);

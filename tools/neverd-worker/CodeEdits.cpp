@@ -634,34 +634,6 @@ Json CodeEdits::change(Json row, const Json &request) {
   return row;
 }
 
-Json CodeEdits::analysisState(const Json &rows) {
-  std::map<std::uint64_t, Json> ordered;
-  for (auto row : rows) {
-    validateRow(row);
-    auto &views = row.at("views");
-    for (auto it = views.begin(); it != views.end();) {
-      auto &view = it.value();
-      for (const auto *field : {"names", "identity", "shape"})
-        view.erase(field);
-      if (view.value("comments", Json::object()).empty())
-        view.erase("comments");
-      if (view.empty())
-        it = views.erase(it);
-      else
-        ++it;
-    }
-    if (views.empty())
-      row.erase("views");
-    if (row.size() != 1)
-      ordered.emplace(parseAddress(row.at("addr").get<std::string>()),
-                      std::move(row));
-  }
-  Json result = Json::array();
-  for (auto &[address, row] : ordered)
-    result.push_back(std::move(row));
-  return result;
-}
-
 void CodeEdits::validateChange(const Json &view, const Json &request) {
   if (request.value("kind", std::string()) == "call_type") {
     // Clearing policies never needs to rebind an occurrence. It must remain

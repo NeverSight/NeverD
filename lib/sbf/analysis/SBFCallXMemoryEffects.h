@@ -74,7 +74,7 @@ struct MemoryEffects {
                   const SBFProgram &Program) const;
 };
 
-/// Full-width postconditions at absolute scratch addresses or relative to a
+/// Exact-width postconditions at absolute scratch addresses or relative to a
 /// function's entry registers. Symbolic keys are bases and signed
 /// displacements, never synthetic VM addresses. Distinct entry registers may
 /// alias; a write through either invalidates the other's cells. CFG joins meet
@@ -88,7 +88,8 @@ public:
   void transformSymbols(llvm::function_ref<RegisterValue(RegisterValue)> Map);
   void store(const RegisterValue &Address, uint64_t Size,
              const ProvenValueSet &Value);
-  ProvenValueSet read(const RegisterValue &Address) const;
+  ProvenValueSet read(const RegisterValue &Address,
+                      uint64_t ByteWidth = sizeof(uint64_t)) const;
   void storeExpression(const RegisterValue &Address, size_t Expression);
   std::optional<size_t> readExpression(const RegisterValue &Address) const;
   void discardExpressions();
@@ -120,6 +121,7 @@ public:
                const SBFProgram &Program,
                const ScratchState *EntryScratch = nullptr) const;
   size_t size() const { return Values.size(); }
+  size_t wordCount() const;
   uint64_t retainedByteEstimate() const;
   bool operator==(const MemoryPostconditions &) const = default;
 
@@ -136,7 +138,8 @@ private:
   // Expression IDs describe captured entry-input values, never VM bits. They
   // share address invalidation with affine origins and meet only identical IDs.
   using StoredValue = std::variant<ProvenValueSet, size_t>;
-  std::map<std::tuple<RegisterValue::Kind, uint64_t, int64_t>, StoredValue>
+  std::map<std::tuple<RegisterValue::Kind, uint64_t, int64_t, uint64_t>,
+           StoredValue>
       Values;
 };
 

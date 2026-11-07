@@ -9,9 +9,10 @@ struct BinaryImage;
 std::optional<int64_t> sourceCallReturnAddressBias(const BinaryImage *Image,
                                                    Arch Architecture,
                                                    va_t Address);
-/// Place a bounded analyst declaration with the ordinary image ABI. Fixed
-/// Darwin ARM64 calls include complete 128-bit and supported direct records.
-/// This does not authenticate the declaration or authorize native effects.
+/// Place a bounded analyst declaration with the ordinary image ABI. Fixed and
+/// variadic Darwin ARM64 calls include 128-bit values and supported direct
+/// records. This does not authenticate the declaration or authorize native
+/// effects.
 bool assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
                           BinaryFormat Format, std::string &Diagnostic);
 /// System V x64 variadic floating operands also need the original AL vector

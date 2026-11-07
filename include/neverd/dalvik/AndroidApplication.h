@@ -169,6 +169,14 @@ struct AndroidApplicationSnapshot {
     struct BinderProxy {
       uint32_t key = 0;
       std::optional<bool> warn_on_blocking;
+      // Explicit pre-existing ProcessState connection, resolved on first use.
+      // The guest must open/map this Binder fd before invoking the proxy.
+      struct NativeBinding {
+        uint32_t fd = 0, handle = 0;
+        bool alive = true; // A fresh BpBinder, unless explicitly declared dead.
+        bool operator==(const NativeBinding &) const = default;
+      };
+      std::optional<NativeBinding> native_binding;
     };
     std::vector<BinderProxy> binder_proxies;
     struct CacheEntry {

@@ -502,6 +502,25 @@ int neverd_session_analyze(neverd_session_t s) {
 const char *neverd_session_file_path(neverd_session_t s) {
   return copy(session(s)->path);
 }
+// The fixtures with a project to keep renders in.
+const char *neverd_project_json(neverd_session_t s) {
+  const auto &path = session(s)->path;
+  return copy(path.find("render-store") == std::string::npos
+                  ? std::string()
+                  : Json{{"folder", path + ".neverd"}}.dump());
+}
+// Names files here; nothing compares it with a real SHA-256.
+const char *neverd_sha256_hex(const unsigned char *data, size_t size) {
+  std::uint64_t hash = 0xcbf29ce484222325ULL;
+  char text[17];
+  for (size_t index = 0; index != size; ++index) {
+    hash ^= data[index];
+    hash *= 0x100000001b3ULL;
+  }
+  std::snprintf(text, sizeof(text), "%016llx",
+                static_cast<unsigned long long>(hash));
+  return copy(text);
+}
 const char *neverd_session_arch_name(neverd_session_t s) {
   if (session(s)->path.ends_with("source-cache-evm.bin"))
     return copy("evm");
@@ -1121,6 +1140,9 @@ const char *neverd_prefill_callees_json(neverd_session_t s, int first,
       state.summarySolves > 0 &&
       (state.path.find("summaries-ready") != std::string::npos ||
        state.path.find("summaries-discover") != std::string::npos);
+  // Long enough for a request to come while it reads ahead.
+  if (state.path.find("slow-prefill") != std::string::npos)
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
   const size_t total = state.functions.size();
   const size_t from = std::min<size_t>(std::max(first, 0), total);
   const size_t count =
@@ -2114,6 +2136,11 @@ static int prepareMockFunction(neverd_session_t s, neverd_va_t address) {
       session(s)->error = "fixture export preparation failed";
       return 0;
     }
+    if (address == Base + 16 &&
+        session(s)->path.find("render-fails") != std::string::npos) {
+      session(s)->error = "fixture render failure";
+      return 0;
+    }
     if (address == Base + 16 && session(s)->path.ends_with("source-export.bin"))
       std::this_thread::sleep_for(std::chrono::milliseconds(250));
     if (session(s)->path.find("slow-prepare") != std::string::npos)
@@ -2649,27 +2676,41 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
         std::reverse(references.begin(), references.end());
       }
     }
-    return copy(Json{{"schema_version", 1},
-                     {"address", hexAddress(address)},
-                     {"representation", representation},
-                     {"dialect", "c"},
-                     {"text", text},
-                     {"rows", rows},
-                     {"offset", first},
-                     {"byte_offset", begin},
-                     {"total_lines", total},
-                     {"complete", end == total},
-                     {"next_offset", end == total ? Json(nullptr) : Json(end)},
-                     {"library_regions", Json::array()},
-                     {"source_names", names},
-                     {"code_names", names},
-                     {"references", references},
-                     {"fixture_prepares", state.sourcePrepares},
-                     {"fixture_instance", std::to_string(Instance)},
-                     {"fixture_prepared_view", state.preparedView},
-                     {"fixture_pages", state.sourcePages},
-                     {"fixture_renders", state.sourceRenders}}
-                    .dump());
+    Json view{{"schema_version", 1},
+              {"address", hexAddress(address)},
+              {"representation", representation},
+              {"dialect", "c"},
+              {"text", text},
+              {"rows", rows},
+              {"offset", first},
+              {"byte_offset", begin},
+              {"total_lines", total},
+              {"complete", end == total},
+              {"next_offset", end == total ? Json(nullptr) : Json(end)},
+              {"library_regions", Json::array()},
+              {"source_names", names},
+              {"code_names", names},
+              {"references", references},
+              {"fixture_prepares", state.sourcePrepares},
+              {"fixture_instance", std::to_string(Instance)},
+              {"fixture_prepared_view", state.preparedView},
+              {"fixture_pages", state.sourcePages},
+              {"fixture_renders", state.sourceRenders}};
+    // The fixtures that state a function's names, as a real page does.
+    if (state.path.find("render-store") != std::string::npos) {
+      const auto named = state.names.find(address);
+      const bool renamed = named != state.names.end();
+      const auto origin = renamed ? "user" : "stated";
+      const auto own = "function_" + std::to_string((address - Base) / 16);
+      view["function_identity"] = {
+          {"addr", hexAddress(address)},
+          {"name", renamed ? named->second : own},
+          {"display_name", renamed ? named->second : own},
+          {"linkage_name", own},
+          {"name_origin", origin},
+          {"display_origin", origin}};
+    }
+    return copy(view.dump());
   }
   if (session(s)->path.ends_with("code-edits.bin") ||
       session(s)->path.ends_with("code-edits-cpp.bin") ||

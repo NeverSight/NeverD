@@ -474,6 +474,7 @@ private:
   ExprPtr memoryAddressExpr(const MedVar &V, bool InlineDefinition = true);
   void indexMedDefinitions();
   const MedOp *uniqueMedDefinition(const MedVar &V);
+  const PhiNode *uniqueMedPhi(const MedVar &V);
   ExprPtr sourceBitSlice(const ExprPtr &Value, uint64_t ByteOffset,
                          uint16_t Bytes, unsigned Depth = 0);
   ExprPtr sourceFloatValue(const MedVar &Value, uint16_t Bytes);
@@ -536,7 +537,7 @@ private:
   /// are not arguments of a later call. Also covers `lea r8` in the
   /// shared fork of `mov edx; jmp call` join arms.
   bool isCallArgSetupDef(const MedBlock &CallBlk, const MedVar &LiveIn,
-                         uint64_t RegOff) const;
+                         uint64_t RegOff);
 
   void lowerStore(HighFunc &Func, const MedOp &CurOp);
   void lowerCall(HighFunc &Func, const MedBlock &CurBlock, const MedOp &CurOp);

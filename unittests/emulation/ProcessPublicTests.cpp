@@ -4356,7 +4356,7 @@ TEST_F(ProcessPublic, AndroidParcelDataAndBoundariesMatchSDKAndCLI) {
                                "native abort",
                                "native array range",
                                "nonnull native String",
-                               "android/os/BinderProxy.transact"};
+                               "native object is not supplied"};
   for (const char *Variant : {"O0-none", "O2-relr"}) {
     Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
             (std::string("jni-") + Variant + ".so"))
@@ -4433,6 +4433,202 @@ TEST_F(ProcessPublic, AndroidBinderThreadPolicyMatchesSDKAndCLI) {
         EXPECT_EQ(Report->getString(field::ReturnValue), "0");
         EXPECT_EQ(runCLIRequest(Path, AndroidNativeAArch64, Options, Output),
                   process_cli::Success);
+        ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, Parsed));
+      }
+    }
+  }
+#endif
+}
+
+TEST_F(ProcessPublic, AndroidBinderNativeTransportMatchesSDKAndCLI) {
+#ifndef NEVERD_ANDROID_FIXTURE_DIR
+  GTEST_SKIP() << "Android shared library fixtures unavailable";
+#else
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  auto Dex = llvm::MemoryBuffer::getFile(
+      (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) / "java-binder.dex")
+          .string());
+  if (!Dex)
+    GTEST_SKIP() << "Generated Binder DEX fixture unavailable: "
+                 << Dex.getError().message();
+  for (const char *Variant : {"O0-none", "O2-relr"}) {
+    Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
+            (std::string("jni-") + Variant + ".so"))
+               .string();
+    for (unsigned Mode = 0; Mode != 15; ++Mode)
+      for (unsigned Form = 0; Form != 3; ++Form) {
+        SCOPED_TRACE(Variant);
+        SCOPED_TRACE(Mode);
+        SCOPED_TRACE(Form);
+        auto Request = llvm::cantFail(llvm::json::parse(R"({
+          "backend":"unicorn","instruction_limit":200000,"instruction_quantum":83,
+          "linux_time":{"advance_on_idle":true,"clocks":[{"id":7,"seconds":50,"nanoseconds":0}]},
+          "linux_files":{"files":[],"devices":[{"path":"/dev/binder","access_mode":2,"open_errno":0,"ioctls":[],"binder":true}]},
+          "android":{"initialize":false,"jni":true,"observe_java_state":true,
+            "entry_symbol":"jni_binder_transport","thread_limit":2,
+            "application_snapshot":{"phase":"unattached","service_manager":{
+              "cache":[{"name":"alpha","binder":7}],
+              "binder_proxies":[{"key":7,"warn_on_blocking":false,
+                "native_binding":{"fd":3,"handle":0,"alive":true}}]}}}
+        })"));
+        auto &Android = *Request.getAsObject()->getObject("android");
+        Android["thread_limit"] = Mode == 11 || Mode == 13 ? 3 : 2;
+        Android["dex_images"] =
+            llvm::json::Array{llvm::toHex((*Dex)->getBuffer())};
+        Android["arguments"] = llvm::json::Array{Form, Mode};
+        auto &Binding = *Android.getObject("application_snapshot")
+                             ->getObject("service_manager")
+                             ->getArray("binder_proxies")
+                             ->front()
+                             .getAsObject()
+                             ->getObject("native_binding");
+        Binding["fd"] = Mode == 5 ? 77 : 3;
+        Binding["handle"] = Mode == 7 ? 1 : 0;
+        Binding["alive"] = Mode != 4;
+        const auto Options = jsonText(std::move(*Request.getAsObject()));
+        auto Text = takeString(neverd_emulate_process_json(
+            Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
+        ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+        auto Parsed = llvm::cantFail(llvm::json::parse(Text));
+        const bool Stopped = (Mode >= 5 && Mode <= 10) || Mode == 14;
+        EXPECT_EQ(Parsed.getAsObject()->getString(field::Stop),
+                  Stopped ? "unsupported_service" : "returned")
+            << Text;
+        if (!Stopped)
+          EXPECT_EQ(Parsed.getAsObject()->getString(field::ReturnValue), "0");
+        EXPECT_EQ(runCLIRequest(Path, AndroidNativeAArch64, Options, Output),
+                  Stopped ? process_cli::Incomplete : process_cli::Success);
+        ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, Parsed));
+      }
+  }
+#endif
+}
+
+TEST_F(ProcessPublic, AndroidBinderObjectTransportMatchesSDKAndCLI) {
+#ifndef NEVERD_ANDROID_FIXTURE_DIR
+  GTEST_SKIP() << "Android shared library fixtures unavailable";
+#else
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  for (const char *Variant : {"O0-none", "O2-relr"}) {
+    Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
+            (std::string("jni-") + Variant + ".so"))
+               .string();
+    for (unsigned Mode = 0; Mode != 6; ++Mode)
+      for (unsigned Form = 0; Form != 3; ++Form) {
+        SCOPED_TRACE(Variant);
+        SCOPED_TRACE(Mode);
+        SCOPED_TRACE(Form);
+        auto Request = llvm::cantFail(llvm::json::parse(R"({
+          "backend":"unicorn","instruction_limit":200000,"instruction_quantum":83,
+          "linux_time":{"advance_on_idle":true,"clocks":[{"id":7,"seconds":50,"nanoseconds":0}]},
+          "linux_files":{"files":[],"devices":[{"path":"/dev/binder","access_mode":2,"open_errno":0,"ioctls":[],"binder":true}]},
+          "android":{"initialize":false,"jni":true,"observe_java_state":true,
+            "entry_symbol":"jni_binder_objects","thread_limit":2,
+            "application_snapshot":{"phase":"unattached","service_manager":{
+              "cache":[{"name":"alpha","binder":7}],
+              "binder_proxies":[{"key":7,"warn_on_blocking":false,
+                "native_binding":{"fd":3,"handle":0,"alive":true}}]}}}
+        })"));
+        auto &Android = *Request.getAsObject()->getObject("android");
+        Android["arguments"] = llvm::json::Array{Form, Mode};
+        const auto Options = jsonText(std::move(*Request.getAsObject()));
+        auto Text = takeString(neverd_emulate_process_json(
+            Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
+        ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+        auto Parsed = llvm::cantFail(llvm::json::parse(Text));
+        const bool Stopped = (Mode >= 1 && Mode <= 3) || Mode == 5;
+        EXPECT_EQ(Parsed.getAsObject()->getString(field::Stop),
+                  Stopped ? "unsupported_service" : "returned")
+            << Text;
+        if (!Stopped)
+          EXPECT_EQ(Parsed.getAsObject()->getString(field::ReturnValue), "0");
+        EXPECT_EQ(runCLIRequest(Path, AndroidNativeAArch64, Options, Output),
+                  Stopped ? process_cli::Incomplete : process_cli::Success);
+        ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, Parsed));
+      }
+  }
+#endif
+}
+
+TEST_F(ProcessPublic, AndroidBinderEntryAndTracingMatchSDKAndCLI) {
+#ifndef NEVERD_ANDROID_FIXTURE_DIR
+  GTEST_SKIP() << "Android shared library fixtures unavailable";
+#else
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(Prefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Output = (Root / OutputFile).string();
+  const char *Diagnostics[] = {"",
+                               "",
+                               "blocking warning requires Log.w",
+                               "warning state is not supplied",
+                               "",
+                               "transaction tracing requires",
+                               "",
+                               "explicit native Binder binding",
+                               "native object is not supplied",
+                               "after recycle",
+                               "owned native state",
+                               "",
+                               ""};
+  for (const char *Variant : {"O0-none", "O2-relr"}) {
+    Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
+            (std::string("jni-") + Variant + ".so"))
+               .string();
+    for (unsigned Mode = 0; Mode != 13; ++Mode) {
+      for (unsigned Form = 0; Form != 3; ++Form) {
+        SCOPED_TRACE(Variant);
+        SCOPED_TRACE(Mode);
+        SCOPED_TRACE(Form);
+        auto Request = llvm::cantFail(llvm::json::parse(R"({
+          "backend":"unicorn","instruction_limit":200000,
+          "instruction_quantum":83,
+          "linux_time":{"clocks":[{"id":7,"seconds":50,"nanoseconds":0}]},
+          "android":{"initialize":false,"jni":true,"observe_java_state":true,
+            "entry_symbol":"jni_binder_transaction","thread_limit":2,
+            "application_snapshot":{"phase":"unattached","service_manager":{
+              "cache":[{"name":"alpha","binder":7}],
+              "binder_proxies":[{"key":7,"warn_on_blocking":false}]}}}
+        })"));
+        auto &Android = *Request.getAsObject()->getObject(field::Android);
+        Android[field::Arguments] =
+            llvm::json::Array{Form, Mode < 11 ? Mode : Mode - 11};
+        if (Mode >= 11)
+          Android[field::EntrySymbol] = "jni_binder_tracing";
+        auto &Proxy = *(*Android.getObject(field::ApplicationSnapshot)
+                             ->getObject("service_manager")
+                             ->getArray("binder_proxies"))[0]
+                           .getAsObject();
+        if (Mode == 3 || Mode == 4)
+          Proxy.erase("warn_on_blocking");
+        else
+          Proxy["warn_on_blocking"] = Mode == 2 || Mode == 6;
+        const auto Options = jsonText(std::move(*Request.getAsObject()));
+        auto Text = takeString(neverd_emulate_process_json(
+            Session, Path.c_str(), AndroidNativeAArch64, Options.c_str()));
+        ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
+        auto Parsed = llvm::cantFail(llvm::json::parse(Text));
+        const auto *Report = Parsed.getAsObject();
+        ASSERT_NE(Report, nullptr);
+        const bool Stopped = Diagnostics[Mode][0];
+        EXPECT_EQ(Report->getString(field::Stop),
+                  Stopped ? "unsupported_service" : "returned")
+            << Text;
+        if (Stopped)
+          EXPECT_NE(Text.find(Diagnostics[Mode]), std::string::npos) << Text;
+        else
+          EXPECT_EQ(Report->getString(field::ReturnValue), "0");
+        EXPECT_EQ(runCLIRequest(Path, AndroidNativeAArch64, Options, Output),
+                  Stopped ? process_cli::Incomplete : process_cli::Success);
         ASSERT_NO_FATAL_FAILURE(expectCLIReport(Output, Parsed));
       }
     }

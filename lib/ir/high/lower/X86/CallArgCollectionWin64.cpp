@@ -148,71 +148,33 @@ void resolvePassThroughParams(CallArgContext &C) {
   std::vector<ExprPtr> &Found = C.Found;
   const MedFunc *CurMed = C.CurMed;
   const int RegisterPositions = static_cast<int>(C.ParamRegs.size());
-  auto UniqueDef = [&](const MedVar &V) -> const MedOp * {
-    const MedOp *Def = nullptr;
-    for (const auto &Blk : CurMed->Blocks)
-      for (const auto &Op : Blk.Ops)
-        if (Op.Output.Id == V.Id && Op.Output.SSAVer == V.SSAVer) {
-          if (Def)
-            return nullptr;
-          Def = &Op;
-        }
-    return Def;
-  };
-  std::function<bool(const MedVar &, int)> IsConstLike =
-      [&](const MedVar &V, int Depth) -> bool {
-    if (Depth >
-        ::neverd::limits::ir::
-            kCallArgCollectionWin64ResolvePassThroughParamsIsConstLikeDepthLimit)
-      return false;
-    if (V.isConst())
-      return true;
-    const MedOp *Def = UniqueDef(V);
-    if (!Def || Def->NumInputs < 1)
-      return false;
-    if (Def->Opcode == NdOp::COPY)
-      return IsConstLike(Def->Inputs[0], Depth + 1);
-    return false;
-  };
   std::function<bool(const MedVar &, int, int)> IsSlot =
       [&](const MedVar &V, int Slot, int Depth) -> bool {
     if (Depth >
             ::neverd::limits::ir::
                 kCallArgCollectionWin64ResolvePassThroughParamsIsSlotDepthLimit ||
-        Slot < 0)
+        Slot < 0 || static_cast<size_t>(Slot) >= CurMed->Params.size() ||
+        V.Size != CurMed->Params[Slot].Size)
       return false;
     if (V.Kind == MedVar::Param)
       return C.AbiParamIndex(V) == Slot;
     if (V.Kind == MedVar::Reg && V.SSAVer == 0)
       return C.RegToArgIdx(V.RegOff) == Slot;
-    for (const auto &Blk : CurMed->Blocks)
-      for (const auto &Phi : Blk.Phis)
-        if (Phi.Output.Id == V.Id && Phi.Output.SSAVer == V.SSAVer) {
-          if (Phi.Args.empty())
-            return false;
-          for (const auto &Arg : Phi.Args)
-            if (!IsSlot(Arg.second, Slot, Depth + 1))
-              return false;
-          return true;
-        }
-    const MedOp *Def = UniqueDef(V);
+    if (const auto *Phi = C.UniquePhi(V)) {
+      if (Phi->Args.empty())
+        return false;
+      for (const auto &Arg : Phi->Args)
+        if (!IsSlot(Arg.second, Slot, Depth + 1))
+          return false;
+      return true;
+    }
+    const MedOp *Def = C.UniqueDefinition(V);
     if (!Def)
       return false;
     if (Def->Opcode == NdOp::COPY && Def->NumInputs >= 1)
       return IsSlot(Def->Inputs[0], Slot, Depth + 1);
-    if ((Def->Opcode == NdOp::INT_LEFT || Def->Opcode == NdOp::INT_RIGHT ||
-         Def->Opcode == NdOp::INT_OR || Def->Opcode == NdOp::INT_AND) &&
-        Def->NumInputs >= 1) {
-      bool Any = false;
-      for (uint8_t I = 0; I < Def->NumInputs; ++I) {
-        if (IsConstLike(Def->Inputs[I], 0))
-          continue;
-        if (!IsSlot(Def->Inputs[I], Slot, Depth + 1))
-          return false;
-        Any = true;
-      }
-      return Any;
-    }
+    // A mask or shift can depend on this parameter while changing its value.
+    // Only full-width copies and agreeing PHIs establish an unchanged value.
     return false;
   };
   const int Limit =

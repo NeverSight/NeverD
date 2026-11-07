@@ -293,18 +293,15 @@ BionicResult Bionic::jniMethods(unsigned Slot, const NativeCallEvent &Call) {
       });
     }
   }
-  auto Executed = runDex([&](const auto &Admit, uint64_t) {
-    return JNI.DexRuntime->library(M, Static || New ? 0 : (*Receiver)->Identity,
-                                   Values, Admit, Nonvirtual);
-  });
-  if (!Executed || !*Executed || JNI.Threads.at(threadID()).Exception)
-    return Executed;
-  if (New || Return == 'L' || Return == '[') {
-    auto Ref = jniReference(JNI.Heap->get(std::get<uint64_t>(**Executed)));
-    if (!Ref)
-      return Ref.takeError();
-    return value(*Ref);
-  }
-  return Executed;
+  return runDex(
+      [&](const auto &Admit, uint64_t Stack) {
+        return JNI.DexRuntime->library(
+            M, Static || New ? 0 : (*Receiver)->Identity, Values, Admit,
+            Nonvirtual, threadID(), Stack);
+      },
+      [this, New, Return](uint64_t Bits) {
+        return New || Return == 'L' || Return == '[' ? dexReference(Bits)
+                                                     : value(Bits);
+      });
 }
 } // namespace neverd::emulation::android_model

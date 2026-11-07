@@ -604,3 +604,155 @@ TEST(SymKnownBits, LiteralDivisionAndRemainderBoundTheirResults) {
     EXPECT_TRUE(K->isUnknown());
   }
 }
+
+TEST(SymKnownBits, PackedBooleanFactsSurviveAnExhaustedPredicateChild) {
+  SymContext C;
+  auto Sum = C.mkVar("head", 64);
+  for (unsigned I = 0; I < 256; ++I)
+    Sum = C.mkXor(Sum, C.mkMul(C.mkVar("word" + std::to_string(I), 64),
+                               C.mkConst(64, I + 3)));
+  auto Predicate = C.mkEq(Sum, C.mkZero(64));
+  auto Byte = C.mkIte(Predicate, C.mkConst(8, 0), C.mkConst(8, 1));
+  auto Packed = C.mkConcat({C.mkVar("padding2", 8), C.mkVar("padding1", 8),
+                            C.mkVar("padding0", 8), Byte});
+  SymKnownBits Facts(C);
+  const auto Nodes = C.numNodes();
+  unsigned Work = 256;
+  auto Result = Facts.query(Packed, Work);
+  ASSERT_TRUE(Result);
+  EXPECT_EQ(Result->Zero.getZExtValue() & 0xff, 0xfeU);
+  EXPECT_TRUE(Result->One.isZero());
+  EXPECT_EQ(C.numNodes(), Nodes);
+}
+
+TEST(SymKnownBits, PartialCacheDoesNotFreezeABooleanByteAtFullQueryWork) {
+  SymContext C;
+  auto P = C.mkEq(C.mkVar("left", 64), C.mkVar("right", 64));
+  // Keep a byte-wide select: selecting 0/1 is now a predicate extension.
+  auto Byte = C.mkIte(P, C.mkConst(8, 0), C.mkConst(8, 2));
+  auto Carrier = C.mkZExt(Byte, 64);
+  SymKnownBits Facts(C);
+  unsigned Small = 2;
+  auto Partial = Facts.query(Carrier, Small);
+  ASSERT_TRUE(Partial);
+  EXPECT_EQ(Partial->Zero, llvm::APInt::getHighBitsSet(64, 56));
+  unsigned Work = 256;
+  auto Full = Facts.query(Carrier, Work);
+  ASSERT_TRUE(Full);
+  EXPECT_EQ(Full->Zero, ~llvm::APInt(64, 2));
+  EXPECT_TRUE(Full->One.isZero());
+}
+
+TEST(SymKnownBits, ConcatRetainsIndependentFactsAfterAChildRefusal) {
+  SymContext C;
+  auto Word = C.mkVar("first", 64);
+  for (unsigned I = 0; I != 256; ++I)
+    Word = C.mkXor(C.mkAdd(Word, C.mkConst(64, I + 1)),
+                   C.mkVar("input" + std::to_string(I), 64));
+  const auto Predicate = C.mkEq(Word, C.mkZero(64));
+  const auto Packed = C.mkConcat({C.mkConst(8, 0xa5), C.mkZero(7), Predicate});
+  SymKnownBits Facts(C);
+  unsigned Work = 64;
+  const auto Result = Facts.query(Packed, Work);
+  ASSERT_TRUE(Result);
+  EXPECT_EQ(Result->One, llvm::APInt(16, 0xa500));
+  EXPECT_EQ(Result->Zero, llvm::APInt(16, 0x5afe));
+  EXPECT_FALSE(Result->isConstant());
+}
+
+TEST(SymKnownBits, BooleanCarriersKeepRangeWhenPredicateWorkIsExhausted) {
+  SymContext C;
+  llvm::SmallVector<SymRef> Terms;
+  for (unsigned I = 0; I < 256; ++I)
+    Terms.push_back(C.mkVar("term_" + std::to_string(I), 64));
+  auto Condition = C.mkEq(C.mkAdd(Terms), C.mkConst(64, 0));
+  SymRef Carriers[] = {C.mkZExt(Condition, 32),
+                       C.mkExtract(C.mkZExt(C.mkNot(Condition), 64), 0, 32),
+                       C.mkIte(Condition, C.mkConst(32, 0), C.mkConst(32, 1))};
+  for (auto Carrier : Carriers) {
+    SymKnownBits Facts(C);
+    const auto Nodes = C.numNodes();
+    unsigned Work = SymKnownBits::MaxQueryWork;
+    auto Bits = Facts.query(Carrier, Work);
+    ASSERT_TRUE(Bits);
+    EXPECT_EQ(Bits->Zero, llvm::APInt(32, 0xfffffffe));
+    EXPECT_TRUE(Bits->One.isZero());
+    EXPECT_EQ(C.numNodes(), Nodes);
+  }
+  SymKnownBits Facts(C);
+  unsigned Work = SymKnownBits::MaxQueryWork;
+  auto Mixed = C.mkIte(Condition, C.mkConst(32, 1), C.mkConst(32, 3));
+  auto Bits = Facts.query(Mixed, Work);
+  ASSERT_TRUE(Bits);
+  EXPECT_EQ(Bits->Zero, llvm::APInt(32, 0xfffffffc));
+  EXPECT_EQ(Bits->One, llvm::APInt(32, 1));
+}
+
+TEST(SymKnownBits, NonzeroBoundedDivisorBoundsTheUnsignedRemainder) {
+  SymContext C;
+  const auto X = C.mkFreshVar(64, "dividend_");
+  const auto Key = C.mkFreshVar(32, "divisor_input_");
+  const auto Divisor = C.mkAdd(C.mkConst(64, 0x1e139d83b), C.mkZExt(Key, 64));
+  const auto Remainder = C.mkURem(X, Divisor);
+  const auto High = C.mkAnd(Remainder, C.mkConst(64, 0x800000000000));
+  const auto Predicate = C.mkNe(High, C.mkZero(64));
+  const auto Before = C.numNodes();
+  SymKnownBits Facts(C);
+  expectConstant(Facts, High, 0);
+  expectConstant(Facts, Predicate, 0);
+  EXPECT_EQ(C.numNodes(), Before);
+}
+
+TEST(SymKnownBits, UnsignedRemainderRetainsTotalDivisionByZeroSemantics) {
+  SymContext C;
+  const auto X = C.mkVar("x", 8), Y = C.mkVar("y", 8);
+  const auto Low = C.mkAnd(Y, C.mkConst(8, 15));
+  const auto Nonzero = C.mkAdd(C.mkConst(8, 60), Low);
+  const auto Wrapping = C.mkAdd(C.mkConst(8, 250), Low);
+  const SymRef Roots[]{C.mkURem(X, Low), C.mkURem(X, Nonzero),
+                       C.mkURem(X, Wrapping), C.mkURem(X, C.mkZero(8)),
+                       C.mkURem(X, C.mkConst(8, 16))};
+  exhaustiveBytePairs(C, Roots);
+  SymKnownBits Facts(C);
+  expectConstant(Facts, C.mkAnd(Roots[1], C.mkConst(8, 128)), 0);
+  unsigned Work = 256;
+  const auto MaybeZero = Facts.query(Roots[0], Work);
+  ASSERT_TRUE(MaybeZero);
+  EXPECT_FALSE(MaybeZero->Zero[7]);
+}
+
+TEST(SymKnownBits, RemainderBoundDoesNotDependOnCompletingTheDividend) {
+  SymContext C;
+  const auto Key = C.mkFreshVar(32, "divisor_input_");
+  const auto Divisor = C.mkAdd(C.mkConst(64, 0x1e139d83b), C.mkZExt(Key, 64));
+  std::vector<SymRef> Terms;
+  for (unsigned I = 0; I != 128; ++I)
+    Terms.push_back(C.mkFreshVar(64, "dividend_input_"));
+  const auto Remainder = C.mkURem(C.mkAdd(Terms), Divisor);
+  const auto Before = C.numNodes();
+  SymKnownBits Facts(C);
+  unsigned Work = 32;
+  const auto K = Facts.query(Remainder, Work);
+  ASSERT_TRUE(K);
+  EXPECT_TRUE(K->Zero[47]);
+  EXPECT_EQ(C.numNodes(), Before);
+  Work = 0;
+  EXPECT_FALSE(Facts.query(Remainder, Work));
+}
+
+TEST(SymKnownBits, RemainderBoundsRetainTheirActualBitWidth) {
+  for (unsigned Width : {8u, 16u, 32u, 64u, 128u}) {
+    SymContext C;
+    const auto Dividend = C.mkFreshVar(Width, "dividend_");
+    const auto Input = C.mkFreshVar(Width / 2, "divisor_input_");
+    const auto Divisor = C.mkAdd(C.mkConst(Width, 5), C.mkZExt(Input, Width));
+    const auto Bounded = C.mkURem(Dividend, Divisor);
+    const auto MayBeZero = C.mkURem(Dividend, C.mkZExt(Input, Width));
+    SymKnownBits Facts(C);
+    expectConstant(Facts, C.mkExtract(Bounded, Width - 1, 1), 0);
+    unsigned Work = 256;
+    const auto Unknown = Facts.query(MayBeZero, Work);
+    ASSERT_TRUE(Unknown);
+    EXPECT_FALSE(Unknown->Zero[Width - 1]);
+  }
+}

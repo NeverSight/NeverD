@@ -48,17 +48,35 @@ void ActivityQueue::insert(SatVar V) {
   grow(static_cast<size_t>(V) + 1);
   if (Position[V] >= 0)
     return;
+  if (empty()) {
+    Heap.clear();
+    Front = 0;
+    Sorted = true;
+  }
+  if (Sorted && (Heap.empty() || !higher(V, Heap.back()))) {
+    Position[V] = static_cast<int32_t>(Heap.size());
+    Heap.push_back(V);
+    return;
+  }
+  useHeap();
   Position[V] = static_cast<int32_t>(Heap.size());
   Heap.push_back(V);
   siftUp(Heap.size() - 1);
 }
 
 void ActivityQueue::increased(SatVar V) {
-  if (V < Position.size() && Position[V] >= 0)
+  if (V < Position.size() && Position[V] >= 0) {
+    useHeap();
     siftUp(static_cast<size_t>(Position[V]));
+  }
 }
 
 SatVar ActivityQueue::removeMax() {
+  if (Sorted) {
+    const SatVar Top = Heap[Front++];
+    Position[Top] = -1;
+    return Top;
+  }
   SatVar Top = Heap.front();
   Position[Top] = -1;
 
@@ -74,8 +92,9 @@ SatVar ActivityQueue::removeMax() {
 
 void ActivityQueue::discardRootAssigned(llvm::ArrayRef<int8_t> Value,
                                         llvm::ArrayRef<uint32_t> Level) {
-  size_t Write = 0;
-  for (SatVar V : Heap) {
+  size_t Write = Front;
+  for (size_t Read = Front; Read < Heap.size(); ++Read) {
+    const SatVar V = Heap[Read];
     if (Value[V] && Level[V] == 0) {
       Position[V] = -1;
       continue;
@@ -84,13 +103,37 @@ void ActivityQueue::discardRootAssigned(llvm::ArrayRef<int8_t> Value,
     Position[V] = static_cast<int32_t>(Write++);
   }
   Heap.resize(Write);
+  // Removing entries preserves a globally sorted sequence. Its next decision
+  // needs no heap construction or sift through the assigned prefix.
+  if (Sorted)
+    return;
   for (size_t I = Write / 2; I != 0;)
     siftDown(--I);
 }
 
 void ActivityQueue::clear() {
   Heap.clear();
+  Front = 0;
+  Sorted = true;
   std::fill(Position.begin(), Position.end(), -1);
+}
+
+void ActivityQueue::useHeap() {
+  if (!Sorted)
+    return;
+  Sorted = false;
+  if (!Front)
+    return;
+  size_t Write = 0;
+  for (size_t Read = Front; Read < Heap.size(); ++Read) {
+    const SatVar V = Heap[Read];
+    Heap[Write] = V;
+    Position[V] = static_cast<int32_t>(Write++);
+  }
+  Heap.resize(Write);
+  Front = 0;
+  // Apart from the one increased/inserted priority handled by the caller,
+  // the remaining sorted sequence is already a valid heap.
 }
 
 void ActivityQueue::siftUp(size_t I) {

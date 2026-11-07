@@ -151,3 +151,210 @@ TEST(SymExprCancellation, ExhaustedSubsetWorkRetainsUncoveredBits) {
   Values.back() = 0x8000000000000001ULL;
   EXPECT_EQ(C.evalU64(Result, Values), Values.back());
 }
+
+TEST(SymExprCancellation, SharedOrMasksDifferOnlyAtChangedBits) {
+  for (unsigned Width : {1u, 3u, 8u, 32u, 64u, 128u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    auto Z = C.mkVar("z", Width);
+    auto Common = C.mkOr({X, Y, C.mkMul(Z, C.mkConst(Width, 5))});
+    auto LeftMask = llvm::APInt(Width, 2);
+    auto RightMask = llvm::APInt(Width, 3);
+    if (Width > 3)
+      RightMask.setBit(Width - 1);
+    auto Left = C.mkOr(Common, C.mkConst(LeftMask));
+    auto Right = C.mkOr(Common, C.mkConst(RightMask));
+    auto Difference = C.mkXor(Left, Right);
+    auto ChangedBits =
+        C.mkAnd(C.mkNot(Common), C.mkConst(LeftMask ^ RightMask));
+    if (!C.isConst(Left) && !C.isConst(Right))
+      EXPECT_EQ(Difference, ChangedBits) << C.toString(Difference);
+    std::mt19937_64 Random(37);
+    for (unsigned I = 0; I != 256; ++I) {
+      std::array<llvm::APInt, 3> Inputs{
+          word(Random, Width), word(Random, Width), word(Random, Width)};
+      const auto Base =
+          Inputs[0] | Inputs[1] | (Inputs[2] * llvm::APInt(Width, 5));
+      EXPECT_EQ(C.eval(Difference, Inputs),
+                (Base | LeftMask) ^ (Base | RightMask));
+    }
+  }
+}
+
+TEST(SymExprCancellation, ConstantMasksAbsorbCoveredBitwiseTerms) {
+  for (unsigned Width : {3u, 8u, 32u, 64u, 128u, 257u}) {
+    SymContext C;
+    llvm::SmallVector<SymRef, 16> Fields;
+    for (unsigned I = 0; I != 12; ++I)
+      Fields.push_back(C.mkVar("field" + std::to_string(I), Width));
+    auto Common = C.mkOr(Fields);
+    auto A = C.mkOr(Common, C.mkConst(Width, 2));
+    auto B = C.mkOr(Common, C.mkConst(Width, 3));
+    EXPECT_EQ(C.mkOr(C.mkConst(Width, 1), C.mkXor(A, B)), C.mkConst(Width, 1));
+    EXPECT_EQ(C.mkOr(C.mkConst(Width, 3), C.mkAnd(Common, C.mkConst(Width, 1))),
+              C.mkConst(Width, 3));
+    EXPECT_EQ(C.mkAnd(C.mkConst(Width, 1), C.mkOr(Common, C.mkConst(Width, 3))),
+              C.mkConst(Width, 1));
+  }
+}
+
+TEST(SymExprCancellation, MaskVariantsMatchEveryThreeBitMaskAndInput) {
+  SymContext C;
+  auto X = C.mkVar("x", 3), Y = C.mkVar("y", 3);
+  auto Common = C.mkOr(X, Y);
+  for (uint64_t A = 0; A != 8; ++A)
+    for (uint64_t B = 0; B != 8; ++B) {
+      auto Difference =
+          C.mkXor({C.mkOr(Common, C.mkConst(3, A)),
+                   C.mkOr(Common, C.mkConst(3, B)), C.mkConst(3, 4)});
+      auto CoveredOr = C.mkOr(C.mkConst(3, A), C.mkAnd(X, C.mkConst(3, B)));
+      auto CoveredAnd = C.mkAnd(C.mkConst(3, A), C.mkOr(X, C.mkConst(3, B)));
+      for (uint64_t U = 0; U != 8; ++U)
+        for (uint64_t V = 0; V != 8; ++V) {
+          std::array<uint64_t, 2> Inputs{U, V};
+          EXPECT_EQ(C.evalU64(Difference, Inputs),
+                    ((U | V | A) ^ (U | V | B)) ^ 4);
+          EXPECT_EQ(C.evalU64(CoveredOr, Inputs), A | (U & B));
+          EXPECT_EQ(C.evalU64(CoveredAnd, Inputs), A & (U | B));
+        }
+    }
+}
+
+TEST(SymExprCancellation, ConstantComplementMasksKeepTheCapturedWord) {
+  for (unsigned Width : {1u, 3u, 8u, 32u, 64u, 128u, 257u}) {
+    SymContext C;
+    auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    auto Common = C.mkOr(X, C.mkMul(Y, C.mkConst(Width, 5)));
+    std::mt19937_64 Random(41);
+    for (unsigned I = 0; I != 64; ++I) {
+      const auto Mask = word(Random, Width);
+      const auto Constant = C.mkConst(Mask);
+      auto And = C.mkNot(C.mkOr(Constant, C.mkNot(Common)));
+      auto Or = C.mkNot(C.mkAnd(Constant, C.mkNot(Common)));
+      EXPECT_EQ(And, C.mkAnd(C.mkConst(~Mask), Common));
+      EXPECT_EQ(Or, C.mkOr(C.mkConst(~Mask), Common));
+      std::array<llvm::APInt, 2> Inputs{word(Random, Width),
+                                        word(Random, Width)};
+      const auto Base = Inputs[0] | (Inputs[1] * llvm::APInt(Width, 5));
+      EXPECT_EQ(C.eval(And, Inputs), ~(Mask | ~Base));
+      EXPECT_EQ(C.eval(Or, Inputs), ~(Mask & ~Base));
+    }
+  }
+}
+
+TEST(SymExprCancellation, RemovingCapturedSetBitsDoesNotBorrow) {
+  for (unsigned Width : {1u, 3u, 8u, 32u, 64u, 128u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    auto Z = C.mkVar("z", Width);
+    auto Base = C.mkAdd(X, C.mkConst(Width, 5));
+    auto Mask = C.mkAnd(Y, Z);
+    auto R = C.mkSub(Base, C.mkAnd(Base, Mask));
+    EXPECT_EQ(R, C.mkAnd(Base, C.mkNot(Mask)));
+    auto Neighbor = C.mkSub(Base, C.mkAnd(C.mkAdd(Base, C.mkOne(Width)), Mask));
+    std::mt19937_64 Random(43);
+    for (unsigned I = 0; I != 256; ++I) {
+      std::array<llvm::APInt, 3> Inputs{
+          word(Random, Width), word(Random, Width), word(Random, Width)};
+      const auto Value = Inputs[0] + llvm::APInt(Width, 5);
+      const auto Bits = Inputs[1] & Inputs[2];
+      EXPECT_EQ(C.eval(R, Inputs), Value - (Value & Bits));
+      EXPECT_EQ(C.eval(Neighbor, Inputs),
+                Value - ((Value + llvm::APInt(Width, 1)) & Bits));
+    }
+  }
+}
+
+TEST(SymExprCancellation, XorOfCapturedMaskedWordReadsOnlyTheOtherBits) {
+  for (unsigned Width : {1u, 3u, 8u, 32u, 64u, 128u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+    auto Z = C.mkVar("z", Width), W = C.mkVar("w", Width);
+    auto Base = C.mkOr(X, C.mkMul(Y, C.mkConst(Width, 5)));
+    auto Mask = C.mkAnd(Z, W);
+    auto R = C.mkXor(Base, C.mkAnd(Base, Mask));
+    auto Extra = C.mkXor({Base, C.mkAnd(Base, Mask), C.mkConst(Width, 3)});
+    auto Neighbor = C.mkXor(Base, C.mkAnd(C.mkAdd(Base, C.mkOne(Width)), Mask));
+    EXPECT_EQ(R, C.mkAnd(Base, C.mkNot(Mask)));
+    std::mt19937_64 Random(47);
+    for (unsigned I = 0; I != 256; ++I) {
+      std::array<llvm::APInt, 4> Inputs{
+          word(Random, Width), word(Random, Width), word(Random, Width),
+          word(Random, Width)};
+      const auto Value = Inputs[0] | (Inputs[1] * llvm::APInt(Width, 5));
+      const auto Bits = Inputs[2] & Inputs[3];
+      EXPECT_EQ(C.eval(R, Inputs), Value ^ (Value & Bits));
+      EXPECT_EQ(C.eval(Extra, Inputs),
+                Value ^ (Value & Bits) ^ llvm::APInt(Width, 3));
+      EXPECT_EQ(C.eval(Neighbor, Inputs),
+                Value ^ ((Value + llvm::APInt(Width, 1)) & Bits));
+    }
+  }
+}
+
+TEST(SymExprCancellation, ForcedOrBitsCancelAcrossACarryFreeMaskedSum) {
+  for (unsigned Width : {3u, 8u, 32u, 64u, 128u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    auto X = C.mkVar("x", Width);
+    auto Forced = llvm::APInt(Width, 2);
+    auto Observed = llvm::APInt::getOneBitSet(Width, Width - 1);
+    auto Keep = ~(Forced | Observed);
+    auto Packed = C.mkOr(X, C.mkConst(Forced));
+    auto Sum = C.mkAdd(C.mkConst(Forced), C.mkAnd(X, C.mkConst(Keep)));
+    auto Difference = C.mkXor(Packed, Sum);
+    EXPECT_EQ(Difference, C.mkAnd(X, C.mkConst(Observed)))
+        << C.toString(Difference);
+    auto Extra = C.mkXor({Packed, Sum, C.mkConst(Width, 1)});
+    std::mt19937_64 Random(53);
+    for (unsigned I = 0; I != 256; ++I) {
+      std::array<llvm::APInt, 1> Values{word(Random, Width)};
+      const auto Want = (Values[0] | Forced) ^ (Forced + (Values[0] & Keep));
+      EXPECT_EQ(C.eval(Difference, Values), Want);
+      EXPECT_EQ(C.eval(Extra, Values), Want ^ llvm::APInt(Width, 1));
+    }
+  }
+}
+
+TEST(SymExprCancellation, MaskedConstantSumsKeepOverlappingCarryBits) {
+  SymContext C;
+  auto X = C.mkVar("x", 3), Y = C.mkVar("y", 3);
+  for (uint64_t K = 0; K != 8; ++K)
+    for (uint64_t Mask = 0; Mask != 8; ++Mask) {
+      auto Sum = C.mkAdd(C.mkConst(3, K), C.mkAnd(X, C.mkConst(3, Mask)));
+      auto Difference = C.mkXor(C.mkOr(X, C.mkConst(3, K)), Sum);
+      auto Pair =
+          C.mkXor(C.mkOr(X, C.mkConst(3, K)), C.mkOr(Y, C.mkConst(3, K)));
+      for (uint64_t A = 0; A != 8; ++A)
+        for (uint64_t B = 0; B != 8; ++B) {
+          std::array<uint64_t, 2> Values{A, B};
+          EXPECT_EQ(C.evalU64(Sum, Values), (K + (A & Mask)) & 7);
+          EXPECT_EQ(C.evalU64(Difference, Values),
+                    ((K | A) ^ (K + (A & Mask))) & 7);
+          EXPECT_EQ(C.evalU64(Pair, Values), (K | A) ^ (K | B));
+        }
+    }
+}
+
+TEST(SymExprCancellation, UnsignedZeroBoundsShareTheirExactZeroPredicate) {
+  std::mt19937_64 Random(0x170b0d);
+  for (const unsigned Width : {1u, 3u, 8u, 16u, 32u, 64u, 128u, 257u}) {
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Zero = C.mkZero(Width);
+    const auto Above = C.mkUlt(Zero, X), BelowOrEqual = C.mkUle(X, Zero);
+    EXPECT_EQ(Above, C.mkNe(X, Zero));
+    EXPECT_EQ(BelowOrEqual, C.mkEq(X, Zero));
+    std::vector<llvm::APInt> Inputs{llvm::APInt(Width, 0),
+                                    llvm::APInt(Width, 1),
+                                    llvm::APInt::getAllOnes(Width)};
+    for (unsigned I = 0; I < 64; ++I)
+      Inputs.push_back(word(Random, Width));
+    for (const auto &V : Inputs) {
+      EXPECT_EQ(C.eval(Above, {V}).getBoolValue(), !V.isZero());
+      EXPECT_EQ(C.eval(BelowOrEqual, {V}).getBoolValue(), V.isZero());
+    }
+  }
+}

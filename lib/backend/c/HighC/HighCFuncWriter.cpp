@@ -458,7 +458,7 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
   EmittedLabels.clear();
   GotoTargetUses.clear();
   walkStmts(Func.Body, [&](const HighStmt &Stmt) {
-    if (Stmt.Kind == StmtKind::Goto)
+    if (Stmt.Kind == StmtKind::Goto && !Stmt.LeavesTry)
       ++GotoTargetUses[Stmt.GotoTarget];
   });
   decideExceptArms(Func);
@@ -638,17 +638,28 @@ void HighCWriter::collectDeferredUnknowns(const HighFunc &Func) {
   }
 }
 
+void HighCWriter::setFrameStorageSlots(
+    std::map<int64_t, NamedFrameSlot> Slots) {
+  FrameStorageSlots = std::move(Slots);
+  FrameStorageSlotOffsets.clear();
+  for (const auto &[Disp, Slot] : FrameStorageSlots)
+    FrameStorageSlotOffsets.try_emplace(Slot.Name, Disp);
+}
+
+const std::pair<const int64_t, HighCWriter::NamedFrameSlot> *
+HighCWriter::frameStorageSlotNamed(llvm::StringRef Name) const {
+  const auto It = FrameStorageSlotOffsets.find(Name);
+  return It == FrameStorageSlotOffsets.end()
+             ? nullptr
+             : &*FrameStorageSlots.find(It->second);
+}
+
 void HighCWriter::emitLocalDecls(const HighFunc &Func,
                                  const std::set<std::string> &ParamNames) {
   auto IsStorageSlotName = [this](llvm::StringRef Name) {
     if (!ProjectFrameAliasesIntoStorage)
       return false;
-    for (const auto &[Disp, Slot] : FrameStorageSlots) {
-      (void)Disp;
-      if (Slot.Name == Name && !isCxxCatchObjectName(Name))
-        return true;
-    }
-    return false;
+    return frameStorageSlotNamed(Name) && !isCxxCatchObjectName(Name);
   };
   auto VarFn = [this](const MedVar &V) {
     if (isCatchFuncletParentFrame(V))
@@ -1839,6 +1850,14 @@ void HighCWriter::propagateFrameSlotCopyTypes(const HighFunc &Func) {
     return true;
   };
 
+  // Types can change at each propagation step, but slot names and positions
+  // do not. Keep all same-name slots so destinations still require a unique
+  // owner and sources still choose the first currently named record.
+  llvm::StringMap<
+      llvm::SmallVector<std::pair<const int64_t, NamedFrameSlot> *, 1>>
+      SlotsByName;
+  for (auto &Entry : FrameSlots)
+    SlotsByName[Entry.second.Name].push_back(&Entry);
   bool Changed = true;
   unsigned Guard = 0;
   while (Changed && Guard++ < limits::kMaxFrameAliasFixedPoint) {
@@ -1868,15 +1887,10 @@ void HighCWriter::propagateFrameSlotCopyTypes(const HighFunc &Func) {
         return std::nullopt;
       if (auto Alias = FrameAliases.find(Name); Alias != FrameAliases.end())
         return Alias->second;
-      std::optional<int64_t> Found;
-      for (const auto &[Disp, Slot] : FrameSlots) {
-        if (Slot.Name != Name)
-          continue;
-        if (Found)
-          return std::nullopt;
-        Found = Disp;
-      }
-      return Found;
+      const auto It = SlotsByName.find(Name);
+      if (It == SlotsByName.end() || It->second.size() != 1)
+        return std::nullopt;
+      return It->second.front()->first;
     };
     walkStmts(Func.Body, [&](const HighStmt &S) {
       const HighExpr *Addr = nullptr;
@@ -1927,13 +1941,13 @@ void HighCWriter::propagateFrameSlotCopyTypes(const HighFunc &Func) {
           }
         }
         if (!NamedRecord(SrcTy)) {
-          for (const auto &[Disp, Slot] : FrameSlots) {
-            (void)Disp;
-            if (Slot.Name == Name && NamedRecord(Slot.Type)) {
-              SrcTy = Slot.Type;
-              break;
-            }
-          }
+          if (const auto Found = SlotsByName.find(Name);
+              Found != SlotsByName.end())
+            for (const auto *Entry : Found->second)
+              if (NamedRecord(Entry->second.Type)) {
+                SrcTy = Entry->second.Type;
+                break;
+              }
         }
       }
       if (const auto SrcDisp = frameDisplacement(*Val)) {
@@ -2374,7 +2388,12 @@ void HighCWriter::collectFieldLoadForward(const HighFunc &Func) {
             const std::string Name = varName(E.Var);
             const bool SizeOk = E.Var.Size == UnusedSize ||
                                 (UnusedSize == 4 && E.Var.Size == 8);
-            if (!Name.empty() && E.Var.Kind != MedVar::Param &&
+            // A register's entry value is what the caller left in it. It is
+            // never the skipped copy of a load this function makes later.
+            const bool EntryValue =
+                (E.Var.Kind == MedVar::Reg || E.Var.Kind == MedVar::Flag) &&
+                E.Var.RenameTag < 0 && E.Var.SSAVer == 0;
+            if (!Name.empty() && !EntryValue && E.Var.Kind != MedVar::Param &&
                 !isReservedParamDisplayName(Name) && !Assigned.count(Name) &&
                 !FieldForward.count(Name) && !JoinPhiNames.count(Name) &&
                 SizeOk) {
@@ -5912,7 +5931,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   SourceLocalClasses.clear();
   FrameStorageActive = false;
   ProjectFrameAliasesIntoStorage = false;
-  FrameStorageSlots.clear();
+  setFrameStorageSlots({});
   FrameRecordMembers.clear();
   FrameSlotNamesBeforeStorage.clear();
   CopyForward.clear();
@@ -6280,7 +6299,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     if (!NeedsFrameStorage)
       RewriteStorageViews();
     if (ProjectFrameAliasesIntoStorage)
-      FrameStorageSlots = FrameSlots;
+      setFrameStorageSlots(FrameSlots);
     for (const auto &[Disp, Slot] : FrameSlots)
       if (!Slot.Name.empty() && Slot.Outer.empty() && !Slot.RegionBytes)
         FrameSlotNamesBeforeStorage[Disp] = Slot.Name;

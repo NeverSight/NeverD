@@ -901,6 +901,16 @@ void Engine::namesChanged() {
   functionOrderKey_.clear();
   functionOrder_.clear();
 }
+void Engine::functionNamesChanged(bool unnamed) {
+  graphs_.clear();
+  if (listing_ && unnamed)
+    listing_->functionNamesChanged();
+  textKey_.clear();
+  textCache_.clear();
+  textLines_.clear();
+  functionOrderKey_.clear();
+  functionOrder_.clear();
+}
 int Engine::functionIndex(std::uint64_t address) {
   // Explicit entries keep their identity. Otherwise use the same bounded
   // recovered ownership as navigation before preparing a function view.
@@ -920,6 +930,16 @@ Json Engine::functionGraph(std::uint64_t address) {
   // same function then continues its analysis.
   prepareFunction(address, "cfg");
   return backendJson(neverd_cfg_json(session_, address), true);
+}
+Json Engine::keptFunctionGraph(std::uint64_t address) {
+  (void)listing();
+  const auto kept = keptListingFacts(graphFactsKey(address));
+  if (kept.size() == 1) {
+    auto graph = Json::parse(kept.front(), nullptr, false);
+    if (validFunctionGraph(graph))
+      return graph;
+  }
+  return functionGraph(address);
 }
 void Engine::commentsChanged() {
   forgetNamedViews();
@@ -1168,7 +1188,7 @@ std::string Engine::engineViewPage(std::uint64_t address,
 }
 
 void Engine::syncNamedViews() {
-  const auto generation = listing().generation();
+  const auto generation = listing().viewGeneration();
   if (namedViewsRevision_ != revision_ ||
       namedViewsListingGeneration_ != generation) {
     forgetNamedViews();
@@ -1181,7 +1201,7 @@ std::string Engine::namedViewSourceKey(std::uint64_t address,
                                        const std::string &representation,
                                        const std::string &optionText) {
   return hexAddress(address) + ":" + representation + ":" +
-         std::to_string(listing().generation()) + ":" + optionText;
+         std::to_string(listing().viewGeneration()) + ":" + optionText;
 }
 
 std::shared_ptr<const Engine::NamedView>
@@ -1246,8 +1266,9 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     original = Json::parse(reused->original);
   // A first visit to a function rendered ahead reads those pages.
   const std::vector<std::string> renderedPages =
-      reused || recovery ? std::vector<std::string>()
-                         : renderedAheadPages(sourceKey);
+      reused || recovery
+          ? std::vector<std::string>()
+          : renderedAheadPages(address, representation, optionText, sourceKey);
   // The engine's pages of the same source build the document again as they
   // built it the first time.
   const std::vector<std::string> *replay =
@@ -1319,6 +1340,13 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
         text = engineViewPage(address, backendRepresentation, next, sourceView,
                               engineOptions, optionText);
       auto page = parsedBackendText(text);
+      if (replay && next == 0 && !keptPageReadsCurrentNames(page)) {
+        replay = nullptr;
+        prepareFunction(address, representation);
+        text = engineViewPage(address, backendRepresentation, next, sourceView,
+                              engineOptions, optionText);
+        page = parsedBackendText(text);
+      }
       // Older page APIs offer HighC but not the automatic source dialect.
       // Keep the Pseudocode action useful, with the actual dialect reported.
       if (!replay && next == 0 && options.empty() &&
@@ -1371,9 +1399,13 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
     full["next_offset"] = nullptr;
     full["representation"] = representation;
     full["source_options"] = options;
+    if (replay)
+      currentNamesInView(full);
     if (representation == "source" && backendRepresentation == "c")
       full["dialect"] = "c";
     if (sourceView && !enginePages.empty()) {
+      if (!replay && backendRepresentation == representation)
+        keepVisitedRender(address, representation, optionText, enginePages);
       document->enginePages = std::move(enginePages);
       document->engineRepresentation = backendRepresentation;
     } else if (sourceView)
@@ -1685,6 +1717,13 @@ void Engine::analyze() {
 }
 void Engine::prepareFunction(std::uint64_t address,
                              std::string_view representation) {
+  // Kept renders do not answer this request.  A graph reads the function's
+  // LowIR, which no summary changes.
+  if (summariesDeferred_ && representation != "cfg" &&
+      renderFailedAddress_ != address) {
+    summariesDeferred_ = false;
+    restartSummaries();
+  }
   if (analyzed_ || preparedFunction_ == address)
     return;
   // VM images analyze the whole program as one unit.
@@ -1741,6 +1780,11 @@ Listing &Engine::newListing() {
       std::any_of(codeEdits_.begin(), codeEdits_.end(),
                   [](const Json &row) { return row.contains("stack_frame"); });
   listing_->setStackFrames(codeEdits_, frames ? inputHash() : std::string());
+  listing_->setKeptFacts(
+      [this](const std::string &key) { return keptListingFacts(key); },
+      [this](const std::string &key, std::string bytes) {
+        keepListingFact(key, std::move(bytes));
+      });
   const auto project = projectJson();
   if (browseCacheEnabled_ && project.is_object() && project.contains("folder"))
     listing_->configureCache(
@@ -1894,6 +1938,10 @@ bool Engine::summaryJobStep() {
       return false;
     summaryDiscovered_ = true;
   }
+  if (summariesDeferred_) {
+    summaryState_ = SummaryState::Deferred;
+    return true;
+  }
   // The solve reads each function's facts, which a page at a time keeps
   // each step as short as warming's.
   summaryState_ = SummaryState::Preparing;
@@ -1947,7 +1995,8 @@ void Engine::forgetDecompiledViews() {
 }
 Json Engine::summaryJson() const {
   static constexpr const char *Names[] = {"off",     "pending", "preparing",
-                                          "solving", "ready",   "unavailable"};
+                                          "solving", "ready",   "unavailable",
+                                          "deferred"};
   Json state = {{"state", Names[static_cast<int>(summaryState_)]}};
   if (!summaryError_.empty())
     state["error"] = summaryError_;
@@ -2015,7 +2064,7 @@ Json Engine::backgroundState() const {
   state["warm"] = warmJson();
   if (summaryState_ != SummaryState::Off)
     state["call_summaries"] = summaryJson();
-  if (renderAheadState_ != RenderAheadState::Off)
+  if (renderAheadState_ != RenderAheadState::Off || renderStore_ || factsStore_)
     state["render_ahead"] = renderAheadJson();
   return state;
 }
@@ -2153,6 +2202,8 @@ Json Engine::metadata() const {
           {"analysis_state", analyzed_ ? "complete" : "not_analyzed"},
           {"read_only", readOnly_},
           {"browse_cache", listing_ ? listing_->cacheStats() : Json()},
+          {"listing_facts", listingFactsJson()},
+          {"listing_name_builds", listing_ ? listing_->nameBuilds() : 0},
           {"dirty", dirty_},
           // How the file was read: for a binary file, its processor,
           // placement and platform, and whether detection chose the platform.
@@ -2529,8 +2580,11 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
   restoredSnapshot_ = snapshot;
   restoredSnapshot_.erase("call_summaries");
   restoredSnapshot_.erase("render_ahead");
+  restoredSnapshot_.erase("render_store");
   summaryJob_ = snapshot.value("call_summaries", false);
   renderAheadRequested_ = snapshot.value("render_ahead", false);
+  renderStoreMode_ = snapshot.value("render_store", std::string());
+  openRenderStore(renderStoreMode_);
   restartSummaries();
   restartRenderAhead();
   return metadata();
@@ -2545,11 +2599,12 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
                 "Only a restored analysis replica can update names");
   auto before = restoredSnapshot_;
   auto after = snapshot;
-  for (auto *value : {&before, &after}) {
-    auto &state = value->at("state");
-    state["code_edits"] =
-        CodeEdits::analysisState(state.value("code_edits", Json::array()));
-  }
+  // These are read as a view is emitted and decorated, or under the options of
+  // its own function's view, and by nothing the replica has analyzed.
+  for (auto *value : {&before, &after})
+    for (const char *table :
+         {"code_edits", "renames", "annotations", "operands", "items"})
+      value->at("state").erase(table);
   if (before != after)
     throw Error("stale_snapshot", "Analysis changed; restore a fresh replica");
   // Check the retained inputs as well as the new writer-owned sidecar before
@@ -2575,14 +2630,81 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
   // still match that analysis even though the snapshot has no types table.
   expected["types"] =
       declaresLocalTypes() ? typeDeclarationRows() : committed.at("types");
-  for (auto *state : {&committed, &expected})
+  for (auto *state : {&committed, &expected}) {
     for (auto &rename : state->at("renames"))
       rename.erase("original");
+    // The owner stages comments before it saves them, and takes a foreign one
+    // into its next snapshot.
+    state->erase("annotations");
+  }
   if (committed != expected || typeLibrariesChanged())
     throw Error("stale_snapshot",
                 "Project edits changed while updating analysis");
-  codeEdits_ = snapshot.at("state").value("code_edits", Json::array());
+  const auto renamedNow = [](const Json &state) {
+    std::map<std::uint64_t, std::string> names;
+    for (const auto &row : state.value("renames", Json::array()))
+      names.emplace(parseAddress(row.at("addr").get<std::string>()),
+                    row.at("renamed").get<std::string>());
+    return names;
+  };
+  const auto &previous = restoredSnapshot_.at("state");
+  const auto &next = snapshot.at("state");
+  const auto oldNames = renamedNow(previous);
+  const auto newNames = renamedNow(next);
+  const auto oldComments = previous.value("annotations", Json::array());
+  const bool commented =
+      oldComments != next.value("annotations", Json::array());
+  const bool itemsChanged = previous.value("items", Json::array()) !=
+                            next.value("items", Json::array());
+  const bool formatsChanged = previous.value("operands", Json::array()) !=
+                              next.value("operands", Json::array());
+  // A function's name is applied to its pages as they are decorated, and data's
+  // is spelled in the pages that name it, whichever those are.
+  bool dataRenamed = false, unnamed = false;
+  for (const auto *one : {&oldNames, &newNames})
+    for (const auto &[address, name] : *one) {
+      const auto *other = one == &oldNames ? &newNames : &oldNames;
+      const auto same = other->find(address);
+      if (same == other->end() && one == &oldNames)
+        unnamed = true;
+      if ((same == other->end() || same->second != name) &&
+          neverd_func_find_by_addr(session_, address) < 0)
+        dataRenamed = true;
+    }
+  codeEdits_ = next.value("code_edits", Json::array());
   restoredSnapshot_ = snapshot;
+  if (oldNames != newNames && neverd_renames_load(session_) != 0)
+    throw Error("stale_snapshot", "Cannot read the project's names again");
+  if (formatsChanged && !reloadOperandFormats())
+    throw Error("stale_snapshot", "Cannot read the project's formats again");
+  if (itemsChanged && dataItems() && dataItems().load(session_) != 0)
+    throw Error("stale_snapshot", "Cannot read the project's items again");
+  if (commented) {
+    for (const auto &row : oldComments)
+      neverd_annotation_set(
+          session_, parseAddress(row.at("addr").get<std::string>()), "");
+    for (const auto &row : next.value("annotations", Json::array()))
+      neverd_annotation_set(
+          session_, parseAddress(row.at("addr").get<std::string>()),
+          row.at("text").get_ref<const std::string &>().c_str());
+    graphs_.clear();
+    textKey_.clear();
+    textCache_.clear();
+    textLines_.clear();
+    if (listing_)
+      listing_->commentsChanged();
+  }
+  if (dataRenamed || itemsChanged) {
+    // The pages of other data.
+    const bool deferred = summariesDeferred_;
+    renderAheadCursor_ = 0;
+    openRenderStore(renderStoreMode_);
+    summariesDeferred_ = summariesDeferred_ && deferred;
+    if (deferred && !summariesDeferred_)
+      restartSummaries();
+    namesChanged();
+  } else if (oldNames != newNames)
+    functionNamesChanged(unnamed);
   localNamesChanged();
   return {{"updated", true}};
 }
@@ -5044,7 +5166,10 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (neverd_renames_load(session_) != 0)
       throw Error("reload_failed", "Rename was saved but could not be reloaded",
                   {{"saved", true}});
-    namesChanged();
+    if (listing_ && listing_->functionRenamed(address))
+      functionNamesChanged(false);
+    else
+      namesChanged();
     ++revision_;
     return {{"address", hexAddress(address)}, {"name", name}, {"saved", true}};
   }
@@ -5705,7 +5830,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     const auto layout =
         projectId_ + ":" + revision() + ":" + key + ":" + metricsKey;
     auto snapshot = std::make_unique<GraphSnapshot>(
-        functionGraph(entry), key, layout, metrics,
+        keptFunctionGraph(entry), key, layout, metrics,
         metrics.valid()
             ? GraphRows([this](std::uint64_t start, std::uint64_t end) {
                 return listing().blockLines(start, end);

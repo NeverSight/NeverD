@@ -10,14 +10,34 @@
 #include "neverd/emulation/LinuxDeviceOptions.h"
 #include "neverd/emulation/MemoryView.h"
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
+#include <vector>
 
 namespace neverd::emulation::linux_model {
 struct LinuxDeviceState;
+struct BinderNode {
+  std::weak_ptr<LinuxDeviceState> Owner;
+  uint64_t Pointer = 0, Cookie = 0;
+  uint32_t InternalStrong = 0, References = 0;
+  uint32_t LocalStrong = 0, LocalWeak = 0;
+  bool HasStrong = false, HasWeak = false;
+  bool PendingStrong = false, PendingWeak = false, Queued = false;
+  std::optional<uint32_t> QueuedThread;
+};
+struct BinderReference {
+  std::shared_ptr<BinderNode> Node;
+  uint32_t Strong = 0, Weak = 0;
+};
 struct BinderCall {
   std::weak_ptr<LinuxDeviceState> Sender;
   uint32_t Thread = 0;
@@ -25,11 +45,30 @@ struct BinderCall {
 struct BinderBuffer {
   uint64_t Size = 0;
   bool Delivered = false;
+  std::vector<uint64_t> Objects;
+  // A remote object holds a strong handle; a returned local object holds a
+  // local node reference. The transaction target has its own local reference.
+  struct Object {
+    std::shared_ptr<BinderNode> Node;
+    std::optional<uint32_t> Handle;
+  };
+  std::vector<Object> References;
+  std::shared_ptr<BinderNode> Target;
+  uint64_t allocationSize() const {
+    return std::max<uint64_t>(8,
+                              ((Size + 7) & ~uint64_t(7)) + Objects.size() * 8);
+  }
+};
+struct BinderBufferView {
+  llvm::ArrayRef<uint8_t> Bytes;
+  std::shared_ptr<const BinderBuffer> Lease;
 };
 struct BinderWork {
   uint32_t Command = 0, Code = 0, Flags = 0, SenderPID = 0;
   uint64_t Offset = 0;
   std::shared_ptr<BinderCall> Call;
+  // Command zero is queued kernel node-reference work, not a wire command.
+  std::shared_ptr<BinderNode> Node;
 };
 struct GPUAllocation {
   MemoryView Bytes;
@@ -43,6 +82,10 @@ struct KGSLProcess {
   uint64_t NextAddress = 0x10000000;
 };
 struct LinuxDeviceState {
+  explicit LinuxDeviceState(const LinuxDeviceOptions *Options)
+      : Options(Options) {}
+  ~LinuxDeviceState();
+  LinuxDeviceState(const LinuxDeviceState &) = delete;
   const LinuxDeviceOptions *Options;
   size_t NextIoctl = 0;
   std::set<uint32_t> Contexts;
@@ -55,11 +98,16 @@ struct LinuxDeviceState {
   uint32_t BinderStartedThreads = 0;
   bool BinderManager = false;
   LinuxDeviceMapping BinderMapping;
-  std::map<uint64_t, BinderBuffer> BinderBuffers;
+  std::map<uint64_t, std::shared_ptr<BinderBuffer>> BinderBuffers;
+  std::map<uint64_t, std::shared_ptr<BinderNode>> BinderNodes;
+  std::map<uint32_t, BinderReference> BinderHandles;
+  llvm::DenseMap<const BinderNode *, uint32_t> BinderHandlesByNode;
   std::deque<BinderWork> BinderProcessWork;
   std::map<uint32_t, std::deque<BinderWork>> BinderThreadWork;
   std::map<uint32_t, std::shared_ptr<BinderCall>> BinderIncoming,
       BinderOutgoing;
+
+  bool hasReadyBinderThreadWork(uint32_t Thread) const;
 
   bool hasPendingBinderWork() const {
     if (!BinderIncoming.empty() || !BinderOutgoing.empty() ||

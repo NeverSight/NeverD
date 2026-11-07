@@ -300,8 +300,30 @@ void ProvenValueSet::join(const ProvenValueSet &Other) {
     Values.clear();
     return;
   }
-  for (const RegisterValue &Value : Other.Values)
-    if (std::find(Values.begin(), Values.end(), Value) == Values.end()) {
+  llvm::SmallVector<RegisterValue, 2 * kCallXContextValueAlternatives> Joined(
+      Values.begin(), Values.end());
+  Joined.append(Other.Values.begin(), Other.Values.end());
+  // A numeric literal already covered by a numeric range adds no alternative.
+  // Remove it before enforcing the disjunction limit or capturing a returned
+  // address: otherwise one runtime pointer acquires redundant alias carriers.
+  // Coordinate-tagged pointers and captures keep their distinct provenance.
+  const auto CoveredLiteral = [&](const RegisterValue &Value) {
+    return Value.ValueKind == RegisterValue::Kind::Constant &&
+           std::any_of(Joined.begin(), Joined.end(), [&](const auto &Range) {
+             if (Range.ValueKind != RegisterValue::Kind::UnsignedRange)
+               return false;
+             const auto Bounds = *unsignedValueRange(Range);
+             return Bounds.Lower <= Bounds.Upper
+                        ? Bounds.Lower <= Value.Value &&
+                              Value.Value <= Bounds.Upper
+                        : Bounds.Lower <= Value.Value ||
+                              Value.Value <= Bounds.Upper;
+           });
+  };
+  Values.clear();
+  for (const auto &Value : Joined)
+    if (!CoveredLiteral(Value) &&
+        std::find(Values.begin(), Values.end(), Value) == Values.end()) {
       if (Values.size() == kCallXContextValueAlternatives) {
         Values.clear();
         return;
@@ -330,6 +352,25 @@ uint64_t ProvenValueSet::allocatedBytes() const {
   return Values.capacity() > 1 ? Values.capacity() * sizeof(RegisterValue) : 0;
 }
 
+ProvenValueSet truncateStoredValue(const ProvenValueSet &Value,
+                                   uint64_t ByteWidth) {
+  if (ByteWidth == sizeof(uint64_t))
+    return Value;
+  if (ByteWidth != 1 && ByteWidth != 2 && ByteWidth != 4)
+    return {};
+  std::optional<ProvenValueSet> Result;
+  for (auto Alternative : Value.values()) {
+    if (Alternative.ValueKind != RegisterValue::Kind::Constant)
+      return {};
+    Alternative.Value &= (uint64_t{1} << (ByteWidth * kBitsPerByte)) - 1;
+    if (!Result)
+      Result = Alternative;
+    else
+      Result->join(Alternative);
+  }
+  return Result.value_or(ProvenValueSet{});
+}
+
 namespace {
 RegisterValue coordinateAddress(va_t Address, MemoryCoordinate Coordinate) {
   return {Coordinate == MemoryCoordinate::FrameRelative
@@ -338,20 +379,23 @@ RegisterValue coordinateAddress(va_t Address, MemoryCoordinate Coordinate) {
           Address, 0};
 }
 
-std::pair<uint64_t, uint64_t> memoryKey(const RegisterValue &Address) {
+std::tuple<uint64_t, uint64_t, unsigned>
+memoryKey(const RegisterValue &Address, unsigned ByteWidth = sizeof(uint64_t)) {
   if (Address.ValueKind == RegisterValue::Kind::SymbolicAddress)
-    return {Address.Value + 2, static_cast<uint64_t>(Address.Offset)};
+    return {Address.Value + 2, static_cast<uint64_t>(Address.Offset),
+            ByteWidth};
   return {Address.ValueKind == RegisterValue::Kind::StackAddress ? 1 : 0,
-          Address.Value};
+          Address.Value, ByteWidth};
 }
 
-RegisterValue cellAddress(const std::pair<uint64_t, uint64_t> &Key) {
-  if (Key.first >= 2)
-    return {RegisterValue::Kind::SymbolicAddress, Key.first - 2,
-            std::bit_cast<int64_t>(Key.second)};
-  return {Key.first == 1 ? RegisterValue::Kind::StackAddress
-                         : RegisterValue::Kind::Constant,
-          Key.second, 0};
+RegisterValue cellAddress(const std::tuple<uint64_t, uint64_t, unsigned> &Key) {
+  const auto [Coordinate, Number, Width] = Key;
+  if (Coordinate >= 2)
+    return {RegisterValue::Kind::SymbolicAddress, Coordinate - 2,
+            std::bit_cast<int64_t>(Number)};
+  return {Coordinate == 1 ? RegisterValue::Kind::StackAddress
+                          : RegisterValue::Kind::Constant,
+          Number, 0};
 }
 } // namespace
 
@@ -387,6 +431,18 @@ bool StoredRegisterMemory::operator==(const StoredRegisterMemory &Other) const {
          symbolicAddresses() == Other.symbolicAddresses();
 }
 
+void StoredRegisterMemory::discardNarrowCells() {
+  std::erase_if(Values, [](const auto &Cell) {
+    return std::get<2>(Cell.first) != sizeof(uint64_t);
+  });
+}
+
+void StoredRegisterMemory::discardWordCells() {
+  std::erase_if(Values, [](const auto &Cell) {
+    return std::get<2>(Cell.first) == sizeof(uint64_t);
+  });
+}
+
 void StoredRegisterMemory::write(va_t Address, const RegisterValue &Value,
                                  MemoryCoordinate Coordinate) {
   writeValues(Address, ProvenValueSet(Value), Coordinate);
@@ -398,12 +454,14 @@ void StoredRegisterMemory::writeValues(va_t Address, ProvenValueSet Value,
 }
 
 void StoredRegisterMemory::writeValues(const RegisterValue &Address,
-                                       ProvenValueSet Value) {
+                                       ProvenValueSet Value,
+                                       unsigned ByteWidth) {
   const auto Key = memoryAddress(Address);
-  invalidate(Address, sizeof(uint64_t));
+  invalidate(Address, ByteWidth);
+  Value = truncateStoredValue(Value, ByteWidth);
   if (Key && !Value.unknown() &&
       Values.size() < kMaxModeledScratchBytes / sizeof(uint64_t))
-    Values.emplace(memoryKey(*Key), std::move(Value));
+    Values.emplace(memoryKey(*Key, ByteWidth), std::move(Value));
 }
 
 void StoredRegisterMemory::invalidate(va_t Address, uint64_t Size,
@@ -456,9 +514,10 @@ void StoredRegisterMemory::invalidate(const RegisterValue &Address,
           Key->ValueKind == RegisterValue::Kind::SymbolicAddress
               ? static_cast<uint64_t>(Key->Offset)
               : Key->Value;
-      Disjoint = Start - Write >= Size && Write - Start >= sizeof(uint64_t);
+      Disjoint =
+          Start - Write >= Size && Write - Start >= std::get<2>(It->first);
     } else if (Written) {
-      const auto Existing = Footprint(Other, sizeof(uint64_t));
+      const auto Existing = Footprint(Other, std::get<2>(It->first));
       Disjoint = Existing && Existing->intersectWith(*Written).isEmptySet();
     }
     if (Disjoint)
@@ -476,7 +535,7 @@ void StoredRegisterMemory::invalidateFrom(va_t Address,
 
 void StoredRegisterMemory::discardFrameCoordinates() {
   std::erase_if(Values, [](const auto &Cell) {
-    return Cell.first.first == 1 ||
+    return std::get<0>(Cell.first) == 1 ||
            std::any_of(Cell.second.values().begin(), Cell.second.values().end(),
                        [](const RegisterValue &Value) {
                          return Value.ValueKind ==
@@ -504,7 +563,7 @@ bool StoredRegisterMemory::translateFrameCoordinates(int64_t Delta) {
     return Address - Magnitude;
   };
   for (const auto &[Key, Stored] : Values) {
-    if (Key.first == 1 && !TranslateKey(Key.second))
+    if (std::get<0>(Key) == 1 && !TranslateKey(std::get<1>(Key)))
       return false;
     for (const auto &Value : Stored.values()) {
       int64_t Offset;
@@ -516,8 +575,8 @@ bool StoredRegisterMemory::translateFrameCoordinates(int64_t Delta) {
   decltype(Values) Translated;
   while (!Values.empty()) {
     auto Node = Values.extract(Values.begin());
-    if (Node.key().first == 1)
-      Node.key().second = *TranslateKey(Node.key().second);
+    if (std::get<0>(Node.key()) == 1)
+      std::get<1>(Node.key()) = *TranslateKey(std::get<1>(Node.key()));
     std::optional<ProvenValueSet> Stored;
     for (auto Value : Node.mapped().values()) {
       if (Value.ValueKind == RegisterValue::Kind::StackAddress)
@@ -587,12 +646,13 @@ StoredRegisterMemory::readValues(va_t Address,
 }
 
 const ProvenValueSet &
-StoredRegisterMemory::readValues(const RegisterValue &Address) const {
+StoredRegisterMemory::readValues(const RegisterValue &Address,
+                                 unsigned ByteWidth) const {
   const auto Key = memoryAddress(Address);
   static const ProvenValueSet Unknown;
   if (!Key)
     return Unknown;
-  const auto It = Values.find(memoryKey(*Key));
+  const auto It = Values.find(memoryKey(*Key, ByteWidth));
   return It == Values.end() ? Unknown : It->second;
 }
 
@@ -603,7 +663,8 @@ void StoredRegisterMemory::meet(const StoredRegisterMemory &Other) {
                                ? std::optional(std::max(*Bound, *OtherBound))
                                : std::nullopt);
   std::erase_if(Values, [&](const auto &Cell) {
-    return Cell.second != Other.readValues(cellAddress(Cell.first));
+    return Cell.second !=
+           Other.readValues(cellAddress(Cell.first), std::get<2>(Cell.first));
   });
 }
 
@@ -614,7 +675,8 @@ void StoredRegisterMemory::joinValues(const StoredRegisterMemory &Other) {
                                ? std::optional(std::max(*Bound, *OtherBound))
                                : std::nullopt);
   for (auto It = Values.begin(); It != Values.end();) {
-    It->second.join(Other.readValues(cellAddress(It->first)));
+    It->second.join(
+        Other.readValues(cellAddress(It->first), std::get<2>(It->first)));
     if (It->second.unknown())
       It = Values.erase(It);
     else
@@ -638,8 +700,9 @@ void StoredRegisterMemory::profile(llvm::FoldingSetNodeID &ID) const {
     ID.AddInteger(*Bound);
   ID.AddInteger(Values.size());
   for (const auto &[Key, Value] : Values) {
-    ID.AddInteger(Key.first);
-    ID.AddInteger(Key.second);
+    ID.AddInteger(std::get<0>(Key));
+    ID.AddInteger(std::get<1>(Key));
+    ID.AddInteger(std::get<2>(Key));
     Value.profile(ID);
   }
 }
@@ -659,7 +722,7 @@ void StoredRegisterMemory::copyFrom(const StoredRegisterMemory &Source,
                                     uint64_t Size) {
   const auto From = memoryAddress(SourceAddress);
   const auto To = memoryAddress(Destination);
-  std::vector<std::pair<RegisterValue, ProvenValueSet>> Copied;
+  std::vector<std::tuple<RegisterValue, unsigned, ProvenValueSet>> Copied;
   if (From && To)
     for (const auto &[Key, Value] : Source.Values) {
       const auto Cell = cellAddress(Key);
@@ -672,18 +735,18 @@ void StoredRegisterMemory::copyFrom(const StoredRegisterMemory &Source,
               ? static_cast<uint64_t>(Cell.Offset) -
                     static_cast<uint64_t>(From->Offset)
               : Cell.Value - From->Value;
-      if (Offset >= Size || sizeof(uint64_t) > Size - Offset ||
+      if (Offset >= Size || std::get<2>(Key) > Size - Offset ||
           Offset > static_cast<uint64_t>(INT64_MAX))
         continue;
       if (auto Address = memoryAddress(*To, static_cast<int64_t>(Offset)))
-        Copied.emplace_back(*Address, Value);
+        Copied.emplace_back(*Address, std::get<2>(Key), Value);
     }
   invalidate(Destination, Size);
   // Invalidate the complete destination once. Repeated strong stores through
   // possibly aliasing anchors must not erase other snapshotted copy fields.
-  for (const auto &[Address, Value] : Copied)
+  for (const auto &[Address, Width, Value] : Copied)
     if (Values.size() < kMaxModeledScratchBytes / sizeof(uint64_t))
-      Values[memoryKey(Address)] = Value;
+      Values[memoryKey(Address, Width)] = Value;
 }
 
 void StoredRegisterMemory::transformSymbols(
@@ -706,7 +769,8 @@ void StoredRegisterMemory::transformSymbols(
         Stored->join(Alternative);
     }
     if (Stored && !Stored->unknown())
-      Transformed.emplace(memoryKey(*NewKey), std::move(*Stored));
+      Transformed.emplace(memoryKey(*NewKey, std::get<2>(Key)),
+                          std::move(*Stored));
   }
   Values = std::move(Transformed);
 }
@@ -715,18 +779,33 @@ void StoredRegisterMemory::visitCells(
     llvm::function_ref<void(const RegisterValue &, const ProvenValueSet &)>
         Visit) const {
   for (const auto &[Key, Value] : Values)
-    Visit(cellAddress(Key), Value);
+    if (std::get<2>(Key) == sizeof(uint64_t))
+      Visit(cellAddress(Key), Value);
+}
+
+void StoredRegisterMemory::visitScalarCells(
+    llvm::function_ref<void(const RegisterValue &, unsigned,
+                            const ProvenValueSet &)>
+        Visit) const {
+  for (const auto &[Key, Value] : Values)
+    Visit(cellAddress(Key), std::get<2>(Key), Value);
+}
+
+size_t StoredRegisterMemory::wordCount() const {
+  return std::count_if(Values.begin(), Values.end(), [](const auto &Cell) {
+    return std::get<2>(Cell.first) == sizeof(uint64_t);
+  });
 }
 
 void StoredRegisterMemory::includeCells(
     const StoredRegisterMemory &Other,
     llvm::function_ref<bool(const RegisterValue &)> Include) {
-  Other.visitCells(
-      [&](const RegisterValue &Address, const ProvenValueSet &Value) {
-        if (Include(Address) &&
-            Values.size() < kMaxModeledScratchBytes / sizeof(uint64_t))
-          Values[memoryKey(Address)] = Value;
-      });
+  Other.visitScalarCells([&](const RegisterValue &Address, unsigned Width,
+                             const ProvenValueSet &Value) {
+    if (Include(Address) &&
+        Values.size() < kMaxModeledScratchBytes / sizeof(uint64_t))
+      Values[memoryKey(Address, Width)] = Value;
+  });
 }
 
 uint64_t ScratchState::retainedByteEstimate() const {

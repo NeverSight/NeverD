@@ -372,6 +372,8 @@ static const LibraryMethod Methods[] = {
     {"android/os/Parcel", "readInt", "()I", ParcelData, false, true},
     {"android/os/Parcel", "writeLong", "(J)V", ParcelData, false, true},
     {"android/os/Parcel", "readLong", "()J", ParcelData, false, true},
+    {"android/os/Parcel", "readStrongBinder", "()Landroid/os/IBinder;",
+     ParcelData, false, true},
     {"android/os/Parcel", "writeString", "(Ljava/lang/String;)V", ParcelData,
      false, true},
     {"android/os/Parcel", "readString", "()Ljava/lang/String;", ParcelData,
@@ -384,6 +386,15 @@ static const LibraryMethod Methods[] = {
      BinderGetStrictMode, true, true},
     {"android/os/Binder", "setThreadStrictModePolicy", "(I)V",
      BinderSetStrictMode, true, true},
+    {"android/os/IBinder", "transact",
+     "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", BinderTransact},
+    {"android/os/BinderProxy", "transact",
+     "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", BinderTransact},
+    {"android/os/BinderProxy", "transactNative",
+     "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", BinderTransactNative},
+    {"android/os/Binder", "enableTracing", "()V", BinderTracing, true},
+    {"android/os/Binder", "disableTracing", "()V", BinderTracing, true},
+    {"android/os/Binder", "isTracingEnabled", "()Z", BinderTracing, true},
 };
 
 struct LibraryStop {
@@ -511,7 +522,8 @@ ExecutionResult executeLibrary(Heap &heap, const LibraryMethod &M,
         M.Op == BinderAllowBlocking || M.Op == BinderQueryLocalInterface ||
         M.Op == ServiceAsBinder || M.Op == EventLogWrite ||
         M.Op == ParcelData || M.Op == BinderGetStrictMode ||
-        M.Op == BinderSetStrictMode ||
+        M.Op == BinderSetStrictMode || M.Op == BinderTransact ||
+        M.Op == BinderTransactNative || M.Op == BinderTracing ||
         (M.Op == Construct &&
          (std::string_view(M.Class) == "android/os/Handler" ||
           std::string_view(M.Class) ==

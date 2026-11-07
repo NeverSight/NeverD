@@ -1464,25 +1464,37 @@ GP/FP registers, mixed operands, exact result bits and Darwin variadic tails
 across both keys, zero/dynamic discriminators and raw controls. The matrix also
 checks signed/unsigned 128-bit values, single/pair integer and pointer records,
 a padded 32-bit/64-bit pair, and one-to-four-member f32/f64 HFAs with nested and
-whole-stack cases. CTest registers each of the 40 type shapes separately,
+whole-stack cases. Eighteen shapes additionally cover complete variadic
+values, higher alignment, fixed aggregate spills and padded fixed prefixes. CTest registers each of the 58 type shapes separately,
 retaining all five authentication variants and both C routes at O0/O2 within
 the ordinary per-test timeout. Stable shape names identify failures and permit
-parallel scheduling. All 200 typed groups emit actual Mach-O objects on five
+parallel scheduling. All 290 typed groups emit actual Mach-O objects on five
 routes. Narrow register arguments
 and results require the correct LLVM extension attribute; stack arguments
 retain their source width. The outer fixture explicitly writes the complete
 X0 return carrier, and a constant result cannot stand in for the callback's
 value. Set `NEVERD_ARM64E_CALL_ABI_ARTIFACT_DIR` to retain the nine integer
-groups and 200 typed groups with all five object routes. Composite result
+groups and 290 typed groups with all five object routes. Composite result
 oracles consume every logical member, excluding padding; pointer and integer
 members remain raw bits. The independent callback poisons record return padding.
 On macOS, `NeverDArm64eSourceCallSDK` loads a real arm64e dylib through the
 public C API, declares named integer/pointer records, a padded pair, a nested
 HFA and signed/unsigned 128-bit values, and applies complete call prototypes.
-Both C routes must compile all ten argument/result shapes at O0/O2, including
-record names matching the renderer's preferred temporary names.
-Packed/union values and indirect copies/results must refuse explicitly.
-These compiler checks execute no arm64e fixture code.
+Both C routes must compile all seventeen argument/result shapes at O0/O2,
+including record names matching the renderer's preferred temporary names.
+Seven raw variadic fixtures also execute as native arm64 on Apple arm64:
+original assembly and both C projections call independent C `va_arg` readers
+at O0/O2 (42 executions). These readers check signed/unsigned 128-bit values,
+16-byte alignment following a promoted int, named records, padding, HFA and
+nested HFA members, and a fixed record prefix. Other hosts retain compilation
+and explicitly record that native execution is unavailable. Packed/union values,
+indirect copies/results, and unpromoted scalar tails must refuse explicitly.
+Raw native execution does not qualify PAC behavior.
+`LLVMCValues.DarwinVariadicArraysValidateEveryActualOperand` also admits word
+and HFA arrays in the prefix/tail while refusing non-C conventions, tail
+`inreg` attributes, unpromoted scalar companions, nested/oversized arrays and
+non-Darwin platforms. Source ABI regressions check an i128 after exactly one
+eight-byte variadic slot, including both signednesses and scalar/HFA predecessors.
 `NativeTypesKeepTheOriginalIndirectTarget` separately retains recovered native
 C prototypes and refuses unsupported authenticated language bindings. Its five
 HighC variants must compile at O0/O2 with the original target and authentication.
@@ -1546,6 +1558,22 @@ admission and compilability; the model executes the separately exported
 200-group matrix. Arbitrary/indirect aggregates, automatic complete recovery,
 whole images, native Apple CPA2, native signed unwinding and exact fault PC/ESR
 remain unqualified.
+
+The [variadic-value receipt](evidence/arm64e-variadic-call-abi-2026-11-07.json)
+extends that profile to 58 shapes and 290 groups, including complete 128-bit,
+word-record and HFA variadic values. All 30 model guests pass: 34,800 valid
+original/projected pairs and 83,520 invalid-signature pairs, with 22,272 known
+C O0 exception-class differences counted separately. Each route prepares one
+object for its six guests and verifies its entire text against the original
+Mach-O bytes before linking. All 41 environment admission tests pass, including
+rejection of changed or truncated batch text. The public SDK compiles 34 source
+projections at O0/O2, executes 42 raw native arm64 calls against independent
+`va_arg` callbacks, and requires 20 explicit refusals. All 3,480 typed exports,
+including 1,450 Mach-O objects, remain identical after integrating current dev.
+The receipt retains the original array-boundary, i128-alignment and harness
+admission failures alongside the final results. Arbitrary/indirect aggregates,
+zero-fixed-prefix variadics and the broader unqualified boundaries above remain
+unsupported by this profile; remote CI status is recorded separately.
 
 `NeverDLanguageEHTests` checks the unified signing query's image/function
 provenance, exact PCs, source scopes and bounded CIE lookup.
@@ -3086,7 +3114,10 @@ existing synthesis contract suite without building the CLI. It covers
 coefficients, root conversions, signed one-bit inputs, an exhaustive byte-pair
 arithmetic oracle, full-width sampling collisions, refusal on incomplete proofs,
 and cost/work ceilings. An equal-budget comparison disables affine fitting to
-isolate its contribution. Enable `NEVERD_ENABLE_Z3` to run the independent Z3 cases;
+isolate its contribution. `SymSynth.ColumnSemanticsAgreeWithNodes` holds the
+search's native column evaluation to the node semantics for every grammar
+operator from 1 to 64 bits, exhaustively where a width allows.
+Enable `NEVERD_ENABLE_Z3` to run the independent Z3 cases;
 unavailable Z3 is explicitly skipped and is not proof coverage.
 `SymSimplifyGuard.SemanticAffineSynthesisAcrossBlocksAndAtCallArguments` checks
 the production LLVM pass across a dominated block boundary and at an observable
@@ -5938,6 +5969,8 @@ truth tests too. `PipelineOutcome.HighCRefusesOnlyTheFunctionKeepingAnUnbackedAd
 omits one function, not the unit, when an escaped image address has no storage
 extent. `CSourceAnchors.SignedZeroPairSpellsTheSameWhenMarked` requires a marked
 render to spell that comparison as the ordinary one does, or the map is refused.
+`PipelineOutcome.HighCBacksAnAddressOfDataPlacedAmongCode` declares data the image
+places in an executable section whole, up to the next function.
 
 `NeverDHighSymSimplifyTests` provides the focused HighIR suite, including
 8–256-bit affine and quadratic synthesis, synthesis inside signed/unsigned
@@ -6089,6 +6122,32 @@ kept documents forgets them, requests hold the job off, an expensive prepared
 function stays prepared, the smallest function goes first, and the largest and
 one of unknown size are left to their visits. `NeverDWorkerPageCodec` round-trips the compact page form,
 including matches that overlap their output, under arbitrary damage.
+`NeverDWorkerRenderStore` reopens a project: the second session's first requests
+read as the first session's did with no engine page written, a complete store
+leaves the summaries deferred until a request the store does not answer, a graph
+does not start them, comments and local and function names keep the store both in
+a running replica and across sessions, a function's own view states its new name
+without the engine and asks it only once a name is taken away, operand formats keep
+it, a new name of data, a data item and another build of the worker start over,
+a job that starts over stops reading and adding, a record cut short is rendered
+again alone, and a damaged one reads the engine. A session reads past a record it
+could not walk through the index a finished job wrote, walks a file whose index does
+not fit it, and loses only the record an index misplaces. An index whose page
+count exceeds its record's length is discarded; complete records in the original
+file still reproduce their exact source without asking the engine.
+`WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
+through a real view.
+`NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
+session takes up what the replica keeps of a function's first look, a later session
+lists what asking the engine lists, a new name of a function or of data keeps the
+facts, a data item, another image and a damaged store ask the engine, and a corrected
+stack frame reads under what corrects it. A store another session is still writing
+answers up to its last whole record and the rest once it is there, and a later
+session reads what the code scan found, whatever it looked at first, while a
+read-only one keeps nothing and damage scans again.
+`NeverDWorkerNamesRebuild` also renames functions, exported and not, without the
+names being read again, and each page, table and resolved name then reads as after a
+reload.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and
@@ -6356,8 +6415,12 @@ repeated local renames, clearing aliases, readonly replica updates, rejected
 collisions and obsolete targets. Changed input identities, annotations and
 source comments cannot enter the name-only refresh path, and a stale committed
 sidecar is refused without changing the replica. The workbench's
-`localNameEditsReuseTheIdleAnalysisReplica` also checks the process identity,
-unchanged preparation counters and full retirement after a source comment.
+`localNameEditsReuseTheIdleAnalysisReplica` also checks the process identity and
+unchanged preparation counters through a source comment, a function's new name and
+an image comment, and full retirement after a deleted function.
+`analysisReplicaOutlivesAReadNobodyWaitsFor` checks that going to another function
+during a read keeps the replica, and `cancellingOneAnalysisLeavesTheOtherRunning`
+that one still running well past what restoring took is stopped.
 `localNameLatencyOnOptionalNativeInput` accepts `NEVERD_RENAME_BENCH_WORKER`,
 `NEVERD_RENAME_BENCH_INPUT`, optional `NEVERD_RENAME_BENCH_PDB`, the function's
 `NEVERD_RENAME_BENCH_TARGET` and selected `NEVERD_RENAME_BENCH_LOCAL`. It reports
@@ -15677,7 +15740,7 @@ round trip alone is insufficient. `AndroidJNI.Parcel*` runs ordinary/V/A calls
 at O0/O2 across relocation variants and available CPU backends.
 `ProcessPublic.AndroidParcelDataAndBoundariesMatchSDKAndCLI` compares 54 complete
 report pairs, including token/name writes, explicit null-token refusal and the
-next `BinderProxy.transact` method-resolution boundary.
+raw `BinderProxy.transact` native-object boundary.
 Binder/token unit cases check exact gather-bit bytes, high/sign bits, raw UTF-16,
 empty descriptors, missing services, propagated service stops, budget admission,
 partial headers and DEX/library sharing. `AndroidJNI.BinderStrictMode*` checks
@@ -15685,9 +15748,49 @@ ordinary/V/A calls, native thread isolation, fresh child policies and retained
 policy across JNI detach/reattach; it writes through one globally retained
 Parcel from parent and child threads. `ProcessPublic.AndroidBinderThreadPolicyMatchesSDKAndCLI`
 compares twelve complete reports in single-thread and scheduled modes at O0/O2.
+`AndroidBinderTest.*` checks transaction declarations, admission, warning and
+tracing order, direct native entry, null-data exceptions, owned/recycled Parcel
+validation, retained bytes/positions and DEX interface dispatch/catching.
+`AndroidJNI.BinderTransaction*` executes eleven entry cases through ordinary/V/A
+calls; `AndroidJNI.BinderTracing*` checks methods/field aliases and process state
+across native threads and JNI attachments. The matching
+`ProcessPublic.AndroidBinderEntryAndTracingMatchSDKAndCLI` compares 78 full
+report pairs at O0/O2. Successful cases check a real caught null-data exception
+or tracing state; none claims a completed Binder transaction.
+`AndroidBinderTest` also checks authenticated native reply continuation,
+retained bytes/cursors, UNKNOWN_TRANSACTION error propagation, dead-object
+caching and checked exception ancestry, live arena reads, temporary replies and
+DEX catch/resume. `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
+executes real guest services through all three JNI forms, including three-round
+buffer retention/reuse, a reply recycled and reused by another native thread,
+missing managers, declared dead proxies, invalid/reused descriptors and explicit
+borrowed-write/unmapped-arena/PROT_NONE boundaries. The corresponding public test
+compares 90 complete SDK/CLI reports at O0/O2, including native thread exit with queued
+frees and a supplied DEX caller spanning consecutive transactions, a guest
+native callback and another transaction. Linux tests check the same raw buffer
+view, dup aliases, delivered-buffer release and descriptor lifetime. JSON parser
+regressions require complete explicit bindings and share the C++ fd validator.
+`ReadStrongBinder*` and related Dalvik cases cover retained proxy identity,
+null/short/malformed reads, scalar/String object protection, marshalling exceptions,
+unmarshalling without metadata and duplicate native endpoint validation.
+`LinuxBinder.StrongObjects*`, `RepeatedExport*`, `ForwardedHandles*`,
+`FinalOpenRetirement*` and `MalformedObjectTables*` independently exercise LP64
+offset bytes, buffer references,
+node acknowledgments, pointer/cookie restoration, third-open handle renumbering,
+owner retirement, dead handles, pending node notifications across two owner threads
+and rejection before payload effects on x64/AArch64.
+`AndroidJNI.BinderObjectsRetainProxyIdentityAndDriverOwnership` executes an original
+guest service through ordinary/V/A JNI at O0/O2 and all relocation/backend variants.
+It checks proxy reuse after recycle, forwarding a borrowed object table, null Binder
+replies, payload-only and object-table-only PROT_NONE pages, and raw free/reallocation
+of an identical arena slot, including rejection of a stale queued free.
+`AndroidBinderObjectTransportMatchesSDKAndCLI`
+compares 36 complete public report pairs, including dynamic proxy `key:null`.
 Run full Dalvik, Android JNI, thread/callback and native/Linux Binder suites,
-plus these focused public tests after changing this owner. These are original synthetic tests;
-they establish no live Binder service or whole-MVM restoration.
+plus these focused public tests after changing this owner. The shared scheduler
+also requires the stream-wait, receive, readiness and poll regressions. These are
+original synthetic tests; they establish no live Binder service or whole-MVM
+restoration.
 
 `AndroidServiceManagerTest.*` covers slow/statistics record bytes, strict versus
 inclusive timing, signed wrapping/division, ART strings/nulls, ignored negative
@@ -17884,10 +17987,22 @@ contradicts, a handler of no scope, and an exhausted budget;
 `SEHFinallyBody.GuardsTheAbnormalWorkAndKeepsTheNormalCopy` shows bar1's `99`
 under `if (AbnormalTermination())` with the `100` copy kept,
 `FlagIndependentHandlerFillsTheClauseAndDropsTheCopy` fills a flag-independent
-clause and removes the matching copy, and `FrameRegisterHandlerKeepsTheComment`,
-`LocalUnwindInTheProtectedBodyKeepsTheComment` and
-`NestedExceptInTheProtectedBodyKeepsTheComment` keep the address comment where
-the projection is unsound. `SEHLocalUnwind.*` imports `_local_unwind` and
+clause and removes the matching copy, `AFrameRegisterParentFillsTheClause`
+locates the handler's frame below the register's offset,
+`NestedExceptInTheProtectedBodyFillsTheClause` fills a finally around an
+`__except` that rejoins the protected body, and
+`AFrameRegisterThePrologueDoesNotSetKeepsTheComment` keeps the address comment
+where nothing locates the frame, and
+`AnUncertifiedLocalUnwindStaysBesideTheFilledClause` keeps a call the protocol
+cannot certify in its runtime form beside the filled clause it runs.
+`AHandlerPassingAStackArgumentFillsTheClause` fills a handler whose call takes a
+stack argument, and `ANameOfTheMovedStackPointerAddressesTheHandlersFrame` and
+`ARenamedVariableIsNotTheNameItsNumberShares` hold the two rules ntoskrnl's
+handlers need: a renamed stack pointer addresses the handler's slots, and an
+unread name goes although a nested clause reads another of its number.
+`SEHTerminationFrame.AFrameRegisterLocatesTheEstablisherBelowItsOffset` reads
+the frame below a frame register's coded offset.
+`SEHLocalUnwind.*` imports `_local_unwind` and
 certifies its saved-frame slot: a return out of the `__try` becomes a jump
 whose filled clause runs the handler's abnormal work, with the normal-path
 copy kept for the fall-through; a flag-independent handler fills the whole
@@ -17906,8 +18021,26 @@ data places the masked frame or the frame reaches the cookie slot unmasked.
 same frame reaches a function of the image that reads it, and
 `AFrameItsCalleeNeverObservesPassesNothing` certifies the frame left in R8
 for a function whose unread proof covers R8.
-`AFinallyThatUnwindsToTheTargetKeepsItARoot` lets the Guarded exit own its
-epilogue, and keeps it a root when the `__finally` local-unwinds there too.
+`AFinallyThatUnwindsToTheTargetLandsThereAsAJump` lets the Guarded exit own its
+epilogue, and turns a `__finally` that local-unwinds there too into the `goto`
+it makes. `ABranchyHandlerFillsTheClause` folds the handler's own branch on the
+flag while unwinding.
+`ARM64SEHLocalUnwindTests.cpp` builds MSVC ARM64 /O0 parents that reach the
+import through a veneer: `ARM64SEHLocalUnwind.*` certifies the exit through
+an unrecorded veneer from the saved entry stack pointer, with the handler
+matched at the `bl` and given the frame pointer; turns a return out of the
+`__try` into a jump whose clause runs the handler once, through x1 or
+through the parent's x19, with the `100` copy kept; lets a target return x0
+as the routine leaves it; and keeps the call when a handler writes the
+saved-frame slot through x19.
+`ARMSEHLocalUnwindTests.cpp` builds Thumb parents that call `__jump_unwind`
+through an import stub: `ARMSEHLocalUnwind.*` turns a return out of the `__try`
+into a jump whose clause runs the handler once, with the target in a
+`movw`/`movt` pair and in a literal pool, and with a GS prologue whose helper
+allocates four bytes the body's arithmetic does not show; a handler's own call
+becomes a jump out of its clause. `AnExceptArmRejoiningLeavesTheRegistersValue`
+publishes r4 across the PHI an `__except` arm leaves before a later `__try`, and
+`ATryAfterAnExceptArmFillsItsClause` prints that clause.
 Its `ARMSEHFinallyBodyTests.cpp`
 builds AArch64 and
 Thumb parents whose handler reads them through callee-saved registers:
@@ -17919,14 +18052,26 @@ range, one the parent never set, or a copy of an argument register that a
 PHI joins; `ARMSEHFinallyBody.*` stores `99` to the
 parent's own local, through its parameter or through the establisher frame
 under `if (AbnormalTermination())`, fills a finally nested in an `__except`
-and both of two nested finallys, and keeps the comment for the unpublished
-registers and a contradicted frame.
+and both of two nested finallys, fills through x1 whatever allocation the unwind
+codes give, prints a frame the parent cannot name that a handler forwards to a
+call as an unknown argument, keeps the comment for the unpublished registers, and
+`ARangeRunningPastTheEpilogueStillStructures` structures a `__try` whose range
+runs past the epilogue a branch around it skips to.
 `WindowsEHModesCorpus.LocalUnwindReturnRunsTheFinallyOnceInTheClause` checks
 xcpt4's `eret` the same way on the original x64 FH4 binary: one increment in
 the `__except` arm, one in the filled clause and one in the normal-path copy,
 with no `_local_unwind`, target address or handler call left, and
 `LocalUnwindExitAgreesAloneAndInTheWholeUnit` prints the same function from a
-`--func` view as from the whole unit.
+`--func` view as from the whole unit, and
+`AArch64LocalUnwindExitAgreesAloneAndInTheWholeUnit` does so for the ARM64
+/O0 build's loop of two nested finallys, with no `_local_unwind` left.
+`EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode` decompiles the x64, ARM and
+ARM64 builds, /O0 and /O2, and clang-cl's ARM64 /O2: no clause is only the address
+comment, no handler stays listed in an unstructured region's comment, and no
+function with a scope table keeps a runtime local unwind.
+`SplitTriesAndArmsKeepTheirSourceShape` reads Test85's three handlers around a
+loop whose return path splits their tries, and Test86's `__except` arm that holds
+a `__try` of its own and returns past every scope around it.
 `LocalUnwindExitsKeepTheirLoopRegionsStructured` decompiles the O2 FH4 /GS
 build, whose loop exits leave split finally scopes and jump to a copied
 return tail, and requires every region of both functions structured.
@@ -18225,7 +18370,8 @@ success. Routine Wine prefix diagnostics are allowed. The x64 fixture reports
 89 successes and one explicit skip: test 29's
 alignment check is compiled only for ARM. Unexpected skips fail. It then runs
 the original source CLI and checks main's body, language/GS
-metadata and explicit unresolved-frame annotation. JSON keeps original runtime
+metadata, that its local unwinds are jumps with filled `__finally` clauses, and
+that it needs no unresolved-frame annotation. JSON keeps original runtime
 and source-analysis results separate. Neither successful original execution
 nor readable source is evidence that a replacement PE can execute. The Windows
 EH CI lane runs this check and the full analysis matrix; source/patch refusal
@@ -18858,7 +19004,7 @@ exits at O0. They test the synchronous model, not hardware scheduling or shaders
 `AndroidBinder.GuestServicesExecuteSynchronousTransactionsAndReplies` runs
 ordinary and TF_ACCEPT_FDS requests with both data and guest-computed
 TF_STATUS_CODE replies, including exact guards and buffer release. The LP64
-`LinuxBinder` test checks rejected flags/status sizes/objects, unchanged arenas
+`LinuxBinder` test checks rejected flags/status sizes/object tables, unchanged arenas
 and consumed counts, and a successful retry of the same pending call. These
 checks validate message transport, not any Android service's response policy.
 `LinuxBinder` also checks page-rounded arenas through 4 MiB, both ends' read-only
@@ -20464,6 +20610,22 @@ The focused NeverDCOFFExceptionModelTests target runs exception model and decode
 
 `X86LegacyAtomic.NeutralLogic*` checks neutral locked logic across widths and FS/GS, preserving memory, defined flags and DF while refusing denied writes, incomplete accesses and HLE. Non-neutral immediates keep the x64 native transaction and remain refused on i386. `NeverDX86NeutralAtomicSourceTests` executes both C routes for COFF/ELF/MachO at O0/O2 with UBSan, high-bit inputs and eight byte offsets; it requires an x64 host. Pair it with `NeverDHighControlFlowTests` and `NeverDHighCIntegerWidthTests` for declared-type changes.
 
+### Shared expression use counts
+
+`HighControlFlowSemantics.SharedExpressionKeepsItsRepeatedInputUse`,
+`CopyChainKeepsItsSharedSourceDefinition` and
+`CopyChainCountsUsesInEverySwitchArm` retain the independent interpreter and
+source-flow checks for shared reads. A shared expression must not become a
+single use merely because the counter has already seen its address. Run
+`NeverDHighControlFlowTests`, `NeverDHighCStoreForwardingTests`,
+`NeverDWindowsEHSourceTests` and `NeverDCPointerProjectionTests` for changes to
+this counter, together with the acceleration/allocator opt-out configuration.
+Performance checks include table construction/destruction and complete worker
+responses; a primitive improvement alone does not establish GUI latency.
+`NeverDHighExprUseCountsTests` compares shared graphs with independently
+expanded tree reads, retains distinct variable identities and repeated reads,
+and checks an indirect target when a call has no arguments.
+
 ### Predicate cleanup and independent call effects
 
 `HighSourceExpressions.PredicateCleanupKeepsDistinctIndirectCallEffects`
@@ -21351,3 +21513,61 @@ and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
 frontend regressions and 91 generated-table tests passed. NeverC's strict
 global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
+
+`NeverDHighCallParameterForwardingTests` checks Win64 argument value identity. Full-width copies and agreeing PHIs may name an incoming parameter; masks, shifts and narrowing copies must retain their computed argument.
+
+`HighControlFlowSemantics.UnusedValuesKeepPlainReadsAndTheirAddresses` checks that unused direct and nested ordinary loads retain their original address and evaluation in HighIR dead-value cleanup.
+
+`HighControlFlowSemantics.SimplifierPublishesSharedReplacementAtEveryUse` checks shared DAG replacement publication in both root orders, independent return values and a stable second cleanup invocation.
+
+`SymExpr.ConditionalConstantWindowsIgnorePredicatesAndRespectWork` and `ConditionalSlicesKeepDifferentAndUnknownArms` check branch-common constant windows, exact work refusal and differing or unknown arms.
+
+`SymKnownBits` carrier, partial-cache and CONCAT refusal regressions check independent facts under exhausted child work and precision recovery on a later query without increasing query limits.
+
+`SymKnownBits` bounded unsigned-remainder regressions cover dynamic nonzero divisors, possibly zero divisors, exhausted dividends and 8/16/32/64/128-bit bounds; the extracted-bit MBA regression checks that a consumer uses the fact without assuming division is partial.
+
+`SymExpr.PlainVariableIndexKeepsLeafIdentityAcrossGrowthAndCopies` checks complete name/width identity, embedded NULs, growth, copies and repeated declarations without creating new nodes.
+
+`SymExpr` variable-membership checks compare structural membership with full variable collection, including context copies and missing IDs. Substitution checks retain unrelated shared payloads, exact root order, non-variable keys and simultaneous replacement semantics.
+
+`SymState` memory-view regressions check whole-word overwrite node counts, independent byte-store equivalence, endian order, partial overwrites, modular relative coordinates and non-allocating materialized reads. Scalar snapshot and restore tests check that memory operations do not fork or replace unrelated scalar state.
+
+`ActivityQueue.StrictPrioritySurvivesPrefixConsumptionAndReinsertion` uses an independent ordered-set oracle through queue copies, activity increases and reinsertion. The assumption-assigned queue regression checks every variable is restored after backtracking, with unchanged model and conflict behavior.
+
+`X86CMov` regressions cover ordinary x86/x64 CMOV through the shared SELECT representation: all 16 conditions, all flag inputs, partial and zero-extending destination writes, unchanged source/flags, and unconditional memory reads that can fault before destination writes.
+
+`NeverDMedPhiPlacementTests` checks a 128-value live join across x86, x64, ARM and AArch64: every required temporary has one complete PHI with its actual incoming edge identities. The membership index is independent of PHI output order.
+
+`NeverDMedTempLivenessTests` checks that block-local temporary definitions need no join PHI, while cross-branch reads and loop-carried temporaries retain theirs. Register and stack carriers keep conservative implicit ABI-use handling.
+
+`HighControlFlowSemantics.LargeSourceDropsUnobservedBitsButKeepsLoads` forces the large-function route and checks exact value cleanup without removing a still-observable memory read.
+
+`HighSymSimplify.LargeConversionHonorsSymbolicOptInAndKeepsLoads` checks the symbolic option on the large-function route, with the option both on and off and with or without a real LOAD.
+
+`HighControlFlowSemantics.LargeSourceNamesDeepConditionalValues` uses a reachable 1025-block function and deep conditional values. Independent HighIR execution checks both selected and unselected paths, and emitted C must contain no depth truncation or unknown-value placeholder.
+
+MedStackAlignment reusable-entry query regressions exercise the existing scoped MedEntryStackOffsets owner after changed definitions, PHI relocation, new incoming edges and duplicate definitions. Repeated known/unknown queries cover four ISAs and three formats. These qualify the upstream implementation from 5b5e901d2 instead of adding a second proof cache.
+
+`CDisplayFrameRecord` index regressions check duplicate-name owner precedence, layout replacement, current propagated types and disabled storage projection. The index is rebuilt with its layout snapshot; mutable types are read from their current slots.
+
+`HighEntryStackOffsets.SharedIndexesKeepDefinitionAndPhiIdentities` checks register/temporary identities, ambiguous PHIs and a new conversion after mutation. Win64 forwarding checks use the same converter-owned definition and PHI indexes as production calls.
+
+HighControlFlowSemantics external-skip tests independently execute all 256 branch choices and preserve earlier nested incoming edges. Batched external-skip ownership must retain statement order and reject outside entries; the current upstream goto-splice and entry-label indexes are retained. Windows exception regressions qualify exceptional control flow.
+
+`HighExprSimplify.NamingCapturedReadsCleansTheirDeadValueConsumers` checks newly pure consumers after expression naming. Zero masks disappear while the captured load and its original address remain.
+
+`NeverDHighFlagReadTests` covers unused/live EFLAGS images, malformed or unowned calls, branch anchors, exact owned x86/x64 LLVM assembly and retained write ordering. LLVM cleanup changes only the source clone; the original module and native code generation stay intact.
+
+HighSymSimplify bitcast, low-prefix, Boolean/selection and incoming-PHI regressions compare exact APInt results and compiled C at O0/O2. Control splits, labels, ambiguous widths, calls, loads and assignment conversions retain their original scope and effect boundaries.
+
+HighSymSimplify expanded-byte-parity tests preserve every input bit at 8/32/64-bit carrier widths and reject repeated-bit impostors. The generated source runs all 65536 signed-byte input pairs at O0 and O2. SymExec and the source bridge share the same population-count value definition; no additional x86 intrinsic capabilities are part of this fix.
+
+HighExprSimplify exact-demand regressions independently check multiple readers, renamed local identities, loop arrivals, integer conversions, predicate scaling and compiled source. Deep discardability retains loads, calls, ordered accesses, malformed selections and possibly trapping division even when their result is unused. The current upstream wrapped-difference equality semantics are preserved.
+
+HighExprSimplify selected-byte regressions recover only contiguous captured-local lanes with matching pure guards. Offset, sign-extension, different-guard, load and unknown-value controls remain unchanged; generated source executes at both result widths and optimization levels.
+
+SymExprCancellation captured-mask tests use independent exhaustive small-word and multiword APInt evaluation. Negative controls retain overlapping carries and uncovered fields; bounded known-bit queries leave unresolved inputs intact. Existing complemented-offset MBA tests qualify the equivalent normalized constructor forms.
+
+SymConditionalControls and SymMBASelector Boolean-word tests use exhaustive small input tables and an independent solver check through 257 bits. Partial-mask and nonfitting-constant controls retain their data semantics; a large opaque predicate must not consume the budget before a complete root choice is recognized.
+
+SymMBARewriteCache regressions compare cold/hot work counts rather than wall-clock thresholds. Completed unchanged subtrees, opaque parent compositions, refused siblings, working-set eviction and option/context/work boundaries retain exact derivation semantics. SymMBASparseContext additionally checks placeholder declaration reuse without hiding caller inputs or carrying declarations across contexts.

@@ -45,6 +45,16 @@ LinuxFiles::binderIoctl(LinuxDeviceState &Device, uint32_t Request,
       if (auto Open = Weak.lock())
         if (Open->Options == Device.Options && Open->BinderManager)
           return Reply(uint64_t(0) - 16); // EBUSY
+    if (Device.BinderNodes.size() ==
+        ::neverd::limits::emulation::kMaxBinderNodesPerOpen)
+      return unsupported(Result, "Binder node budget exhausted");
+    if (Device.BinderNodes.contains(0))
+      return unsupported(Result, "Binder context manager node already exists");
+    auto Node = std::make_shared<BinderNode>();
+    Node->Owner = binderOwner(Device);
+    Node->LocalStrong = Node->LocalWeak = 1;
+    Node->HasStrong = Node->HasWeak = true;
+    Device.BinderNodes.emplace(0, std::move(Node));
     Device.BinderManager = true;
     return Reply(0);
   }
@@ -135,9 +145,11 @@ LinuxFiles::binderIoctl(LinuxDeviceState &Device, uint32_t Request,
   unsigned Transactions = 0;
   for (size_t I = 0; I < Commands.size();) {
     uint32_t Command = llvm::support::endian::read32le(Commands.data() + I);
-    const size_t Size = Command == 0x40406300 || Command == 0x40406301 ? 64
-                        : Command == 0x40086303                        ? 8
-                                                                       : 0;
+    const size_t Size = Command == 0x40406300 || Command == 0x40406301   ? 64
+                        : Command == 0x40086303                          ? 8
+                        : Command >= 0x40046304 && Command <= 0x40046307 ? 4
+                        : Command == 0x40106308 || Command == 0x40106309 ? 16
+                                                                         : 0;
     if (!Size && Command != Register && Command != Enter && Command != Exit)
       return unsupported(
           Result, "Binder command requires an unmodeled object or protocol");

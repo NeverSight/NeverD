@@ -69,12 +69,13 @@ readFile(const fs::path &path,
   return bytes;
 }
 
-const std::string &runtimeIdentity() {
+} // namespace
+
+const std::string &BrowseCache::runtimeIdentity() {
   static const auto identity = [] {
     const auto engine =
         modulePath(reinterpret_cast<const void *>(&neverd_session_create));
-    const auto worker =
-        modulePath(reinterpret_cast<const void *>(&runtimeIdentity));
+    const auto worker = modulePath(reinterpret_cast<const void *>(&modulePath));
     const auto moduleKey = [](const fs::path &path) {
 #ifdef _WIN32
       // Loaded PE files cannot be rewritten in place. Bind the local cache to
@@ -134,7 +135,6 @@ const std::string &runtimeIdentity() {
   }();
   return identity;
 }
-} // namespace
 
 std::string BrowseCache::digest(std::string_view bytes) {
   const auto hash = engineSymbol<Hash>("neverd_sha256_hex");
@@ -160,6 +160,7 @@ void BrowseCache::configure(fs::path projectFolder,
 }
 
 void BrowseCache::invalidate() {
+  ++generation_;
   pending_.clear();
   initialized_ = enabled_ = false;
   namespace_.clear();

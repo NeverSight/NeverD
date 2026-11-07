@@ -121,6 +121,148 @@ TEST(SourceCallABI, DarwinRecordPrototypeKeepsHFAAndWholeStackSpills) {
       }
     }
 }
+TEST(SourceCallABI, DarwinVariadicValuesKeepWholeAlignedStackObjects) {
+  const auto Word = NdType::makeInt(kDarwinRegisterBytes);
+  const auto Float = NdType::makeFloat(kDarwinFloatBytes);
+  const auto Double = NdType::makeFloat(kDarwinRegisterBytes);
+  const auto FloatPair = NdType::makeStruct({Float, Float});
+  const auto Result =
+      NdType::makeStruct(std::vector<TypeRef>(kDarwinHFAMembers, Double));
+  std::vector<TypeRef> Types(kDarwinVariadicPrefix,
+                             NdType::makeInt(kDarwinNarrowBytes));
+  Types.insert(
+      Types.end(),
+      {NdType::makeInt(kDarwinFloatBytes), NdType::makeInt(kDarwinWideBytes),
+       NdType::makeStruct({Word, Word}),
+       NdType::makeStruct(std::vector<TypeRef>(kDarwinThreeMembers, Float)),
+       Double, NdType::makeStruct({FloatPair, FloatPair}),
+       NdType::makeStruct({Float}), Result});
+  auto Hint = contract(Types, kDarwinVariadicPrefix);
+  Hint.Signature.ReturnType = Result;
+  std::string Error;
+  ASSERT_TRUE(
+      assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error))
+      << Error;
+  const auto Bindings = sourceABIParameters(Hint.Signature);
+  struct Part {
+    unsigned Parameter;
+    int64_t Offset;
+    unsigned Bytes;
+  };
+  const Part Expected[] = {
+#define SOURCE_CALL_ABI_VARIADIC_PART(Parameter, Offset, Bytes)                \
+  {Parameter, Offset, Bytes},
+#include "SourceCallABIFixtures.def"
+  };
+  ASSERT_EQ(Bindings.size(), kDarwinVariadicPrefix + std::size(Expected));
+  for (unsigned I = 0; I < std::size(Expected); ++I) {
+    const auto &Binding = Bindings[kDarwinVariadicPrefix + I];
+    EXPECT_EQ(Binding.ParameterIndex, Expected[I].Parameter);
+    EXPECT_EQ(Binding.Location.Kind, SourceABICarrierKind::Stack);
+    EXPECT_EQ(Binding.Location.EntryStackOffset, Expected[I].Offset);
+    EXPECT_EQ(Binding.Location.ValueBytes, Expected[I].Bytes);
+    EXPECT_FALSE(Binding.Location.ExtendTo32Bits);
+  }
+  EXPECT_EQ(Bindings[kDarwinRegisterArguments].Location.EntryStackOffset, 0);
+  EXPECT_EQ(Hint.Signature.ReturnComponents.size(), kDarwinHFAMembers);
+}
+
+TEST(SourceCallABI, DarwinVariadicTailFollowsFixedAggregateSpills) {
+  const auto Float = NdType::makeFloat(kDarwinFloatBytes);
+  const auto HFA =
+      NdType::makeStruct(std::vector<TypeRef>(kDarwinThreeMembers, Float));
+  const auto Wide = NdType::makeInt(kDarwinWideBytes);
+  std::vector<TypeRef> Types(kDarwinPartialFPPrefix, Float);
+  Types.insert(Types.end(), {HFA, Wide, HFA});
+  auto Hint = contract(Types, kDarwinPartialFPPrefix + 1);
+  Hint.Signature.ReturnType = Wide;
+  std::string Error;
+  ASSERT_TRUE(
+      assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error))
+      << Error;
+  const auto &Fixed = Hint.Signature.Parameters[kDarwinPartialFPPrefix];
+  ASSERT_EQ(Fixed.Components.size(), kDarwinThreeMembers);
+  for (unsigned I = 0; I < Fixed.Components.size(); ++I) {
+    EXPECT_EQ(Fixed.Components[I].Kind, SourceABICarrierKind::Stack);
+    EXPECT_EQ(Fixed.Components[I].EntryStackOffset, I * kDarwinFloatBytes);
+  }
+  const auto &WideParts =
+      Hint.Signature.Parameters[kDarwinPartialFPPrefix + 1].Components;
+  ASSERT_EQ(WideParts.size(), kDarwinPairWords);
+  for (unsigned I = 0; I < WideParts.size(); ++I)
+    EXPECT_EQ(WideParts[I].EntryStackOffset,
+              kDarwinWideBytes + I * kDarwinRegisterBytes);
+  const auto &Tail = Hint.Signature.Parameters.back().Components;
+  ASSERT_EQ(Tail.size(), kDarwinThreeMembers);
+  for (unsigned I = 0; I < Tail.size(); ++I)
+    EXPECT_EQ(Tail[I].EntryStackOffset,
+              kDarwinPairWords * kDarwinWideBytes + I * kDarwinFloatBytes);
+}
+
+TEST(SourceCallABI, DarwinVariadicWideValuesSkipHalfAlignedSlots) {
+  const auto Word = NdType::makeInt(kDarwinRegisterBytes);
+  for (const auto Preceding :
+       {NdType::makeInt(kDarwinFloatBytes), Word,
+        NdType::makeStruct({NdType::makeFloat(kDarwinFloatBytes)})})
+    for (const bool Signed : {false, true}) {
+      auto Hint = contract(
+          {Word, Preceding, NdType::makeInt(kDarwinWideBytes, Signed)}, 1);
+      std::string Error;
+      ASSERT_TRUE(
+          assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error))
+          << Error;
+      const auto &Parts = Hint.Signature.Parameters.back().Components;
+      ASSERT_EQ(Parts.size(), kDarwinPairWords);
+      for (unsigned I = 0; I < Parts.size(); ++I) {
+        EXPECT_EQ(Parts[I].Kind, SourceABICarrierKind::Stack);
+        EXPECT_EQ(Parts[I].EntryStackOffset,
+                  kDarwinWideBytes + I * kDarwinRegisterBytes);
+      }
+    }
+}
+
+TEST(SourceCallABI, DarwinVariadicValuesRetainPromotionAndIndirectRefusals) {
+  const auto Word = NdType::makeInt(kDarwinRegisterBytes);
+  const auto Float = NdType::makeFloat(kDarwinFloatBytes);
+  std::string Error;
+  for (const auto Type :
+       {NdType::makeInt(kDarwinNarrowBytes), Float,
+        NdType::makeStruct(std::vector<TypeRef>(kDarwinThreeMembers, Word))}) {
+    auto Hint = contract({Word, Type}, 1);
+    EXPECT_FALSE(
+        assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error));
+  }
+  for (const auto Type : {NdType::makeInt(kDarwinWideBytes),
+                          NdType::makeStruct({Float, Float})}) {
+    auto DarwinX64 = contract({Word, Type}, 1);
+    EXPECT_FALSE(
+        assignAnalystCallABI(DarwinX64, Arch::X64, BinaryFormat::MachO, Error));
+    for (const auto Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+      auto Hint = contract({Word, Type}, 1);
+      EXPECT_FALSE(assignAnalystCallABI(Hint, Arch::AArch64, Format, Error));
+    }
+  }
+}
+
+TEST(SourceCallABI, DarwinEmptyVariadicTailKeepsTheFixedValueContract) {
+  const auto Double = NdType::makeFloat(kDarwinRegisterBytes);
+  for (const auto Type : {NdType::makeInt(kDarwinWideBytes),
+                          NdType::makeStruct({Double, Double})}) {
+    auto Variadic = contract({Type}, 1);
+    Variadic.Signature.ReturnType = Type;
+    auto Fixed = Variadic;
+    Fixed.AnalystFixedCount = -1;
+    std::string Error;
+    ASSERT_TRUE(assignAnalystCallABI(Variadic, Arch::AArch64,
+                                     BinaryFormat::MachO, Error))
+        << Error;
+    ASSERT_TRUE(
+        assignAnalystCallABI(Fixed, Arch::AArch64, BinaryFormat::MachO, Error))
+        << Error;
+    EXPECT_TRUE(equalSourceABIs(Variadic.Signature, Fixed.Signature));
+  }
+}
+
 TEST(SourceCallABI, WindowsARM64FixedScalarsKeepSeparateBanksAndStackSlots) {
   std::vector<TypeRef> Types;
   for (unsigned I = 0; I < 9; ++I) {
@@ -322,42 +464,43 @@ TEST(SourceCallABI, CompositeStackArgumentsRequireEveryDefinedMemberByte) {
   const auto HFA =
       NdType::makeStruct(std::vector<TypeRef>(kDarwinHFAMembers, Float));
   const auto &TRI = getTargetRegInfo(Arch::AArch64);
-  for (const auto Type : {Wide, HFA}) {
-    std::vector<TypeRef> Types(kDarwinRegisterArguments,
-                               Type == Wide ? Word : Float);
-    Types.push_back(Type);
-    auto Hint = contract(Types);
-    std::string Error;
-    ASSERT_TRUE(
-        assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error))
-        << Error;
-    const auto SP = NdVar::reg(TRI.StackPointer, kDarwinRegisterBytes);
-    const auto Address =
-        NdVar::tmp(kDarwinRegisterArguments, kDarwinRegisterBytes);
-    LowFunc Function;
-    LowBlock Block;
-    Block.Ops = {
-        op(NdOp::STORE, {}, {SP, NdVar::cst(0, kDarwinRegisterBytes)}),
-        op(NdOp::INT_ADD, Address,
-           {SP, NdVar::cst(kDarwinRegisterBytes, kDarwinRegisterBytes)}),
-        op(NdOp::STORE, {}, {Address, NdVar::cst(0, kDarwinRegisterBytes)}),
-        op(NdOp::CALL, {},
-           {NdVar::cst(*Hint.AnalystSite->StaticTarget,
-                       kDarwinRegisterBytes)})};
-    Block.Ops.back().Addr = Hint.AnalystSite->Instruction;
-    Block.Ops.back().Seq = Hint.AnalystSite->Sequence;
-    Function.Blocks.push_back(std::move(Block));
-    EXPECT_TRUE(sourceCallStackArgumentsDefined(Function, Hint, Arch::AArch64,
-                                                0, Error))
-        << Error;
-    Function.Blocks.front().Ops.erase(Function.Blocks.front().Ops.begin() +
-                                      kDarwinPairWords);
-    EXPECT_FALSE(sourceCallStackArgumentsDefined(Function, Hint, Arch::AArch64,
-                                                 0, Error));
-    Hint.Signature.Parameters.back().Components.pop_back();
-    EXPECT_FALSE(sourceCallStackArgumentsDefined(Function, Hint, Arch::AArch64,
-                                                 0, Error));
-  }
+  for (const auto Type : {Wide, HFA})
+    for (const bool Variadic : {false, true}) {
+      std::vector<TypeRef> Types(kDarwinRegisterArguments,
+                                 Type == Wide ? Word : Float);
+      Types.push_back(Type);
+      auto Hint = contract(Types, Variadic ? kDarwinRegisterArguments : -1);
+      std::string Error;
+      ASSERT_TRUE(
+          assignAnalystCallABI(Hint, Arch::AArch64, BinaryFormat::MachO, Error))
+          << Error;
+      const auto SP = NdVar::reg(TRI.StackPointer, kDarwinRegisterBytes);
+      const auto Address =
+          NdVar::tmp(kDarwinRegisterArguments, kDarwinRegisterBytes);
+      LowFunc Function;
+      LowBlock Block;
+      Block.Ops = {
+          op(NdOp::STORE, {}, {SP, NdVar::cst(0, kDarwinRegisterBytes)}),
+          op(NdOp::INT_ADD, Address,
+             {SP, NdVar::cst(kDarwinRegisterBytes, kDarwinRegisterBytes)}),
+          op(NdOp::STORE, {}, {Address, NdVar::cst(0, kDarwinRegisterBytes)}),
+          op(NdOp::CALL, {},
+             {NdVar::cst(*Hint.AnalystSite->StaticTarget,
+                         kDarwinRegisterBytes)})};
+      Block.Ops.back().Addr = Hint.AnalystSite->Instruction;
+      Block.Ops.back().Seq = Hint.AnalystSite->Sequence;
+      Function.Blocks.push_back(std::move(Block));
+      EXPECT_TRUE(sourceCallStackArgumentsDefined(Function, Hint, Arch::AArch64,
+                                                  0, Error))
+          << Error;
+      Function.Blocks.front().Ops.erase(Function.Blocks.front().Ops.begin() +
+                                        kDarwinPairWords);
+      EXPECT_FALSE(sourceCallStackArgumentsDefined(Function, Hint,
+                                                   Arch::AArch64, 0, Error));
+      Hint.Signature.Parameters.back().Components.pop_back();
+      EXPECT_FALSE(sourceCallStackArgumentsDefined(Function, Hint,
+                                                   Arch::AArch64, 0, Error));
+    }
 }
 
 TEST(SourceCallABI, VariadicFloatingNeedsTheActualVectorCount) {

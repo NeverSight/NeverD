@@ -210,7 +210,8 @@ const char *neverd_stack_frame_json(neverd_session_t Sess, neverd_va_t Entry,
     const auto *O = Parsed->getAsObject();
     if (!O)
       throw std::invalid_argument("Stack policy must be an object");
-    const bool Prepared = neverd_prepare_function_view(Sess, Entry, "low") != 0;
+    // The frame is read from the instructions LowIR recovered.
+    const bool Prepared = neverd_prepare_function_view(Sess, Entry, "cfg") != 0;
     if (!Prepared && !S->findLowFunc(Entry))
       return nullptr;
     S->clearError();

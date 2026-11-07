@@ -625,13 +625,41 @@ void addSEHCandidates(const ExceptionFunction &EH, Arch TargetArch,
   if (!EH.SEH)
     return;
   std::map<std::pair<va_t, va_t>, size_t> ByRange;
+  // Clang ends a range past a call's return address, where the next record of
+  // the same `__try` may already begin: records that meet are one range.
+  auto Joined = [&](const SEHScopeRecord &Scope, ExceptionAddressRange Range) {
+    for (bool Grew = true; Grew;) {
+      Grew = false;
+      for (const SEHScopeRecord &Other : EH.SEH->Scopes) {
+        if (Other.Kind != Scope.Kind ||
+            Other.FilterOrFinallyVA != Scope.FilterOrFinallyVA ||
+            Other.HandlerVA != Scope.HandlerVA)
+          continue;
+        const auto Part = getSemanticSEHGuardedRange(Other, TargetArch, EH);
+        if (!Part || !Part->overlaps(Range) || Range.contains(*Part))
+          continue;
+        Range = {std::min(Range.Begin, Part->Begin),
+                 std::max(Range.End, Part->End)};
+        Grew = true;
+      }
+    }
+    return Range;
+  };
+  std::set<std::tuple<SEHScopeKind, va_t, va_t, va_t, va_t>> SeenJoined;
   for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
-    const std::optional<ExceptionAddressRange> SemanticRange =
+    std::optional<ExceptionAddressRange> SemanticRange =
         getSemanticSEHGuardedRange(Scope, TargetArch, EH);
     if (Scope.ParseStatus != ExceptionParseStatus::Complete || !SemanticRange) {
       ++Rejected;
       continue;
     }
+    SemanticRange = Joined(Scope, *SemanticRange);
+    // The record a join has already taken counts as part of that try.
+    const bool Again =
+        !SeenJoined
+             .insert({Scope.Kind, Scope.FilterOrFinallyVA, Scope.HandlerVA,
+                      SemanticRange->Begin, SemanticRange->End})
+             .second;
     auto Key = std::make_pair(SemanticRange->Begin, SemanticRange->End);
     size_t Index = 0;
     if (auto It = ByRange.find(Key); It != ByRange.end()) {
@@ -643,6 +671,10 @@ void addSEHCandidates(const ExceptionFunction &EH, Arch TargetArch,
       Candidate.Kind = StmtKind::SEHTry;
       Candidate.Range = *SemanticRange;
       Candidates.push_back(std::move(Candidate));
+    }
+    if (Again) {
+      ++Candidates[Index].NativeRegionCount;
+      continue;
     }
 
     HighEHClause Clause;
@@ -1187,6 +1219,37 @@ bool jumpEntersSlice(const std::vector<HighStmt> &Outside,
   return Entered;
 }
 
+/// Where \p Slice can end so that no jump in \p Outside enters it, when only a
+/// tail nothing in which can raise stands in the way, or nullopt.  Such a tail
+/// protects nothing: clang-cl ends a range one byte past a call's return
+/// address, where its `__except` arm rejoins, and MSVC can end one past the
+/// epilogue an `if` around the `__try` skips to.
+std::optional<size_t> enteredQuietTail(const std::vector<HighStmt> &Outside,
+                                       const std::vector<HighStmt> &Slice,
+                                       va_t Entry) {
+  size_t Quiet = Slice.size();
+  while (Quiet && !highStmtMayFault(Slice[Quiet - 1]) &&
+         Slice[Quiet - 1].Body.empty() && Slice[Quiet - 1].ElseBody.empty() &&
+         Slice[Quiet - 1].Cases.empty() &&
+         Slice[Quiet - 1].DefaultBody.empty() &&
+         Slice[Quiet - 1].EHClauseBodies.empty())
+    --Quiet;
+  for (size_t Cut = std::max<size_t>(Quiet, 1); Cut < Slice.size(); ++Cut) {
+    if (Slice[Cut].Addr == Entry ||
+        !jumpEntersSlice(Outside, {Slice[Cut]}, Entry))
+      continue;
+    const std::vector<HighStmt> Kept(
+        Slice.begin(), Slice.begin() + static_cast<ptrdiff_t>(Cut));
+    const std::vector<HighStmt> Tail(
+        Slice.begin() + static_cast<ptrdiff_t>(Cut), Slice.end());
+    if (jumpEntersSlice(Outside, Kept, Entry) ||
+        jumpEntersSlice(Tail, Kept, Entry))
+      return std::nullopt;
+    return Cut;
+  }
+  return std::nullopt;
+}
+
 bool hasCrossingRegions(const std::vector<RegionCandidate> &Candidates,
                         size_t Index) {
   const ExceptionAddressRange &A = Candidates[Index].Range;
@@ -1201,25 +1264,60 @@ bool hasCrossingRegions(const std::vector<RegionCandidate> &Candidates,
   return false;
 }
 
+/// Whether \p S only loads a value into a variable nothing in \p Whole reads,
+/// as an epilogue restoring a register does, which MSVC's ARM64 `__try` range
+/// can run past: dead code elimination takes it before anything prints.
+bool loadsForNobody(const HighStmt &S, const std::vector<HighStmt> &Whole) {
+  if (S.Kind != StmtKind::Assign || !S.Dst || S.Dst->Kind != ExprKind::Var ||
+      !S.Val || S.Val->Kind != ExprKind::Load)
+    return false;
+  bool Calls = false;
+  bool Read = false;
+  const VarKey Key = varKey(S.Dst->Var);
+  std::function<void(const ExprPtr &)> Visit = [&](const ExprPtr &E) {
+    if (!E)
+      return;
+    Calls |= E->Kind == ExprKind::Call;
+    Read |= E->Kind == ExprKind::Var && varKey(E->Var) == Key;
+    E->forEachChildExpr(Visit);
+  };
+  Visit(S.Val);
+  if (Calls || Read)
+    return false;
+  walkStmts(Whole, [&](const HighStmt &Other) {
+    forEachExpr(Other, [&](const ExprPtr &Root) {
+      if (Root != Other.Dst || Root->Kind != ExprKind::Var)
+        Visit(Root);
+    });
+  });
+  return !Read;
+}
+
 /// Whether \p Stmts, outside the slice taken for a try over \p Range, still
 /// hold a statement of that range that may raise an exception.
 bool guardedStatementLeftOut(const std::vector<HighStmt> &Stmts,
-                             const ExceptionAddressRange &Range) {
+                             const ExceptionAddressRange &Range,
+                             const std::vector<HighStmt> &Whole) {
   for (const HighStmt &S : Stmts) {
     if (S.Addr && S.Addr != InvalidVA && Range.contains(S.Addr) &&
-        highStmtMayFault(S))
+        highStmtMayFault(S) && !loadsForNobody(S, Whole))
       return true;
     for (const auto *List : {&S.Body, &S.ElseBody, &S.DefaultBody})
-      if (guardedStatementLeftOut(*List, Range))
+      if (guardedStatementLeftOut(*List, Range, Whole))
         return true;
     for (const SwitchCase &Case : S.Cases)
-      if (guardedStatementLeftOut(Case.Body, Range))
+      if (guardedStatementLeftOut(Case.Body, Range, Whole))
         return true;
     for (const std::vector<HighStmt> &ClauseBody : S.EHClauseBodies)
-      if (guardedStatementLeftOut(ClauseBody, Range))
+      if (guardedStatementLeftOut(ClauseBody, Range, Whole))
         return true;
   }
   return false;
+}
+
+bool guardedStatementLeftOut(const std::vector<HighStmt> &Stmts,
+                             const ExceptionAddressRange &Range) {
+  return guardedStatementLeftOut(Stmts, Range, Stmts);
 }
 
 /// The list and index of the try statement of \p Kind over \p Range.  A
@@ -1773,6 +1871,8 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     for (const MedSEHLocalUnwindExit &Exit : Func.SEHLocalUnwindExits)
       Targets.insert(Exit.Target);
     std::set<va_t> Entered = gotoTargets(Func.Body);
+    Entered.insert(Func.SEHHandlerUnwindTargets.begin(),
+                   Func.SEHHandlerUnwindTargets.end());
     walkStmts(Func.Body, [&](const HighStmt &S) {
       if (S.LoopHeaderAddr)
         Entered.insert(S.LoopHeaderAddr);
@@ -1856,6 +1956,47 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     Merged.push_back(std::move(Candidate));
   }
   Candidates = std::move(Merged);
+
+  // Scopes sharing one range of a __try the compiler split can differ on the
+  // other ranges, where each joins its own part: each is a candidate of its
+  // own, innermost first, as the table lists them.
+  {
+    using ClauseKey = std::tuple<HighEHClauseKind, va_t, va_t>;
+    auto KeyOf = [](const HighEHClause &Clause) {
+      return ClauseKey(Clause.Kind, Clause.FilterOrActionVA, Clause.HandlerVA);
+    };
+    std::set<std::pair<ClauseKey, std::pair<va_t, va_t>>> Single;
+    for (const RegionCandidate &Candidate : Candidates)
+      if (Candidate.Kind == StmtKind::SEHTry && Candidate.Cover.empty() &&
+          Candidate.Clauses.size() == 1)
+        Single.insert({KeyOf(Candidate.Clauses.front()),
+                       {Candidate.Range.Begin, Candidate.Range.End}});
+    std::vector<RegionCandidate> Separated;
+    for (RegionCandidate &Candidate : Candidates) {
+      auto HasPart = [&](const HighEHClause &Clause) {
+        return llvm::any_of(Single, [&](const auto &Other) {
+          return Other.first == KeyOf(Clause) &&
+                 !Candidate.Range.overlaps(ExceptionAddressRange{
+                     Other.second.first, Other.second.second});
+        });
+      };
+      if (Candidate.Kind != StmtKind::SEHTry || !Candidate.Cover.empty() ||
+          Candidate.Clauses.size() < 2 ||
+          !llvm::all_of(Candidate.Clauses, HasPart)) {
+        Separated.push_back(std::move(Candidate));
+        continue;
+      }
+      for (HighEHClause &Clause : Candidate.Clauses) {
+        RegionCandidate One;
+        One.Kind = Candidate.Kind;
+        One.Range = Candidate.Range;
+        One.NativeRegionCount = 1;
+        One.Clauses.push_back(std::move(Clause));
+        Separated.push_back(std::move(One));
+      }
+    }
+    Candidates = std::move(Separated);
+  }
 
   std::map<va_t, unsigned> WindowsTargetUses;
   for (const RegionCandidate &Candidate : Candidates)
@@ -2095,6 +2236,17 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     bool Entered = jumpEntersSlice(Func.Body, ProtectedBody, Entry);
     for (const auto &Body : SeparatedBodies)
       Entered |= jumpEntersSlice(Body, ProtectedBody, Entry);
+    std::vector<HighStmt> QuietTail;
+    if (Entered && !LeftOut && Candidate.Kind == StmtKind::SEHTry &&
+        !SeparateRegistrationCxx && NestedParts.empty())
+      if (const auto Cut = enteredQuietTail(Func.Body, ProtectedBody, Entry)) {
+        const auto First = ProtectedBody.begin() + static_cast<ptrdiff_t>(*Cut);
+        QuietTail.assign(std::make_move_iterator(First),
+                         std::make_move_iterator(ProtectedBody.end()));
+        ProtectedBody.erase(First, ProtectedBody.end());
+        Candidate.Range.End = QuietTail.front().Addr;
+        Entered = false;
+      }
     if (Entered || LeftOut) {
       Host->insert(Host->begin() + static_cast<ptrdiff_t>(InsertAt),
                    std::make_move_iterator(ProtectedBody.begin()),
@@ -2117,6 +2269,9 @@ void MedToHighConverter::structureExceptionRegions(HighFunc &Func,
     Try.EHIsReducible = true;
     Host->insert(Host->begin() + static_cast<ptrdiff_t>(InsertAt),
                  std::move(Try));
+    Host->insert(Host->begin() + static_cast<ptrdiff_t>(InsertAt) + 1,
+                 std::make_move_iterator(QuietTail.begin()),
+                 std::make_move_iterator(QuietTail.end()));
 
     // The parts that join this try no longer use its clauses on their own.
     unsigned JoinedParts = 0;

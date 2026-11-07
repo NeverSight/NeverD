@@ -234,6 +234,7 @@ Json hello() {
                 "analysis_update_names",
                 "prepare_call_summaries",
                 "render_ahead",
+                "render_store",
                 "functions",
                 "disasm",
                 "bytes",

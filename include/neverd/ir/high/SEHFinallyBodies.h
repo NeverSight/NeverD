@@ -28,26 +28,31 @@
 namespace neverd {
 
 /// Fill the empty `__finally` clauses of every SEH function in \p Funcs with
-/// its termination handler's logic.  On x64 the handler reads the parent's
-/// locals through `EstablisherFrame + k`; the certified frame bytes
-/// (`HighFunc::SEHTerminationFrameBytes`) rebase that onto the parent's entry
-/// stack pointer, as a catch funclet's `RDX` is rebased.  On ARM and AArch64
-/// each callee-saved register the handler reads becomes the parent's value of
-/// it throughout the protected ranges (`HighFunc::SEHFuncletRegisters`), and
-/// only the guarded form below is used.  The abnormal-termination argument
-/// becomes `AbnormalTermination()`.
+/// its termination handler's logic, at any depth of its statements and whatever
+/// the handler's control flow; a handler's own clauses fill first, so a
+/// `__try` nested in a `__finally` prints inside it.  On x64 the handler reads
+/// the parent's locals through `EstablisherFrame + k`; the certified frame
+/// bytes (`HighFunc::SEHTerminationFrameBytes`) rebase that onto the parent's
+/// entry stack pointer, as a catch funclet's `RDX` is rebased.  On ARM and
+/// AArch64 each callee-saved register the handler reads becomes the parent's
+/// value of it throughout the protected ranges
+/// (`HighFunc::SEHFuncletRegisters`).  The abnormal-termination argument
+/// becomes `AbnormalTermination()`, and a local unwind in the handler the
+/// `goto` it makes.
 ///
 /// A C `__finally` runs on the normal exit too, so the compiler's inline
 /// normal-path copy must not run a second time.  When the parent's statements
 /// after the `__try` are that copy, they are left in place and the clause
 /// holds only the abnormal work under `if (AbnormalTermination())`; when the
 /// clause can instead be proved equal to that copy with the flag false, the
-/// copy is removed and the clause holds the whole body.  A handler whose frame
-/// or registers are not known, whose body is unavailable, or whose shape is
-/// unsupported keeps its address comment.  \p Funcs is the whole translation
-/// unit so the termination funclets can be read; only non-funclet parents are
-/// filled. Each funclet whose body is attached into a parent is added to \p
-/// Merged when given, so a single-function view need not also print it
+/// copy is removed and the clause holds the whole body.  A handler with nothing
+/// to do while unwinding is an empty clause.  C also runs a filled clause for a
+/// jump out of the `__try`, which the machine leaves normally: such a jump to
+/// where the try falls through becomes `__leave`.  A handler whose frame or
+/// registers are not known or whose body is unavailable keeps its address
+/// comment.  \p Funcs is the whole translation unit so the handlers can be
+/// read.  Each funclet whose body is attached into a parent is added to
+/// \p Merged when given, so a single-function view need not also print it
 /// standalone.
 void attachSEHFinallyBodies(std::vector<HighFunc> &Funcs, Arch TargetArch,
                             std::set<va_t> *Merged = nullptr);

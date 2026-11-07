@@ -332,10 +332,18 @@ input dependencies and missing-fact attribution.
 Resolved syscalls depend on their five exposed host-ABI argument carriers;
 unexposed return, callee-saved and frame registers do not create new summary
 variants unless the function itself reads them. Unknown calls still depend on
-all registers and memory.
+all registers and memory. Dependency propagation stops at a statically proven
+nonreturning direct call: unreachable continuation loads and CALLX sites do
+not consume inputs or specialization demand. Dependencies and target evidence
+inside the nonreturning callee still participate, including calls executed
+before a mandatory loop or recursion cycle.
 
 Contextual joins retain complete sets of up to four register/stored-word
-alternatives. Transfers lift the canonical scalar operation over those sets;
+alternatives. Numeric literals already contained in an unsigned range are
+removed before checking that limit. This preserves the complete numeric set
+and prevents one returned pointer from acquiring a redundant literal/range
+alias split. Frame-relative and captured identities remain distinct from
+numeric ranges. Transfers lift the canonical scalar operation over those sets;
 for example two immutable table bases can load the same target. Unknown is
 absorbing and set overflow widens to unknown, never a truncated list. Multiple
 remaining literal CALLX values are analyzed by refining the actual call-register
@@ -460,19 +468,26 @@ retained variants repeat one image argument, an old published dependency may
 make room. Forwarding wrappers with no CALLX sites of their own can also explore
 an image binding absent from every variant, once per entry register. The generic
 node remembers explored registers across evictions; ordinary scalar changes do
-not select this extra work. Functions owning CALLX sites retain their previous
-demand policy. An old published dependency may be generalized only if its
-caller-visible return and memory transfer agree
+not select this extra work. An old published dependency may be generalized only
+if its caller-visible return and memory transfer agree
 exactly with the completed generic summary. This currently requires unknown
 memory effects, no returned scratch/postcondition cells, the same scalar return
 alternatives and the same constant or unknown return origin. Any target facts
 in the dependency graph must also be covered by an independently published
 sibling under the same caller entry and call instruction. A node's own proven
-targets must also be established by the generic replacement, preserving the
-proofs on incoming caller edges. Complete target alternatives, roots and active
-caller graphs are not discarded. Image membership selects work; it does not prove a target or alias
-relationship. Old incoming edges record specialization-limit generalization,
-and `generalized_redundant_published_summaries` counts these replacements. The
+targets must also be established by the generic replacement. If they are not,
+a completed independently published sibling may instead receive the old
+incoming edges only when its opaque return, own site results, expressions and
+missing-fact diagnostics agree exactly. Descendant proof coverage is still
+required. This coalesces results already computed for those callers; it does
+not broaden the sibling's input cache key or authorize reuse for new inputs.
+Those edges record `coalesced_proven_equivalent_summary_results`. A first
+captured input binding absent from all retained variants can demand one such
+exploration per entry register, without supplying target or nonalias facts.
+Complete target alternatives, roots and active caller graphs are not discarded. Image membership selects work; it does not prove a target or alias
+relationship. Old incoming edges distinguish specialization-limit generalization
+from equivalent-result coalescing; `generalized_redundant_published_summaries`
+counts these replacements. The
 four-variant and resource budgets remain unchanged. Other pinned proofs stay
 live. When a later root needs a specialization,
 unused earlier parents and their unreferenced children can be reclaimed
@@ -699,7 +714,7 @@ reuse an old object's equality identity. Coordinate configuration is shared
 across the analysis and charged at its owner.
 
 Generic byte-copy postconditions snapshot entry fields after invalidating all
-preceding may-writes. They retain full words only, meet at joins and disappear
+preceding may-writes. They retain complete typed cells, meet at joins and disappear
 when a later destination write may overlap. Only generic summaries retain a
 complete entry-relative write history for deferred copies. A specialized caller
 applies them to its current memory and retains the resulting typed facts; it
@@ -729,11 +744,31 @@ partial loads, runtime/account contents, recursive effects, unresolved aliasing
 and unproved expressions remain open. No result rewrites global CALLX dispatch
 or closes its target set; dynamic fallback is mandatory.
 
-Contextual keys retain the typed full-width cells consumed by CALLX proofs.
-Descriptor-byte buffers have no reader in this optional analysis and are
-projected out, so unread byte differences do not split equivalent inputs or
-consume the retained-state budget. Canonical store/copy transfers retain their
-full-width tags and partial-overwrite invalidation. Concrete functions whose
+Schema 13 retains literal 1-, 2- and 4-byte scalar cells alongside full-width
+pointer/value cells. Narrow stores truncate literal bits; a partial pointer
+store cannot establish a pointer fragment. Loads require an exact address and
+width: cells are neither assembled from adjacent stores nor sliced from larger
+stores. Complete copies preserve cell widths, and possibly overlapping writes
+invalidate them through the same typed-memory owner. Parameterized output fields
+carry these narrow constants across calls. The existing 128-cell limit and all
+analysis budgets remain unchanged; the larger map keys consume the retained
+memory estimate. Full-width word counters keep their old meaning; separate
+`input_narrow_scalar_cells`, `output_narrow_scalar_cells` and
+`output_narrow_parameterized_fields` report narrow facts. Applied stored-value
+counts include both widths. This does not preserve tag/payload correlations
+between distinct return paths.
+
+Contextual input keys retain full-width cells. Incoming narrow cells are
+projected to unknown before specialization; they cannot consume the four slots
+merely because a caller left different byte values in unrelated memory.
+The callee can still read immutable image bytes and publish locally established
+narrow output fields. Narrow caller facts survive a call only after canonical
+may-write invalidation, then new output postconditions are applied. Unknown
+writes cannot restore a saved byte from an older invocation. The separate
+untyped descriptor byte buffer also remains projected out. Consuming caller
+narrow fields inside another function needs read-dependent input summaries and
+remains an explicit precision gap; this round does not claim that capability.
+Concrete functions whose
 completed generic summary contains CALLX sites process CFG joins in reverse
 postorder. Generic summaries and concrete forwarding wrappers retain FIFO
 scheduling, including the order in which they request the four cached

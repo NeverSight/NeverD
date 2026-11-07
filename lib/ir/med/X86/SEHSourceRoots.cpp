@@ -26,6 +26,7 @@ void seedSourceEntries(MedFunc &Func, const LowFunc &Low,
     // A local unwind's target only its exits enter is entered by ordinary
     // flow alone.
     if (!Low.OrdinaryModuleAnalysisRoots.count(Start) ||
+        Func.SEHHandlerUnwindTargets.count(Start) ||
         llvm::any_of(Func.SEHLocalUnwindExits, [&](const auto &Exit) {
           return Exit.OwnsTarget && Exit.Target == Start;
         }))

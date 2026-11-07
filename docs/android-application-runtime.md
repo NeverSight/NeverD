@@ -680,10 +680,11 @@ translation and remote exceptions remain outside this subset. With
 `java_state.framework.service_manager` report retains cache completeness,
 entry identities, manager/logger identities and proxy warning state. Report
 heap identities use hexadecimal strings; input proxy keys remain numeric keys.
+A proxy first created by native transport has report `key:null`.
 
 The shared API 28 `Parcel` subset supports `obtain`, `recycle`, `dataSize`,
 `dataPosition`, `dataAvail`, `setDataPosition`, int/long/String reads and writes,
-`marshall` and valid-range `unmarshall`. Owned objects reuse a six-slot pool;
+`readStrongBinder`, `marshall` and valid-range `unmarshall`. Owned objects reuse a six-slot pool;
 recycled buffers are empty. Strings preserve UTF-16 units and native four-byte
 padding. Imported slices are padded and leave the cursor at the padded end;
 negative lengths leave the Parcel unchanged. Byte-array exports are independent
@@ -699,12 +700,55 @@ String. Standalone Dalvik callers must supply the native policy services; no
 application or ServiceManager snapshot is needed for Android native callers.
 This does not change the separate Java StrictMode/BlockGuard state.
 
-The next ServiceManagerProxy transport boundary is `BinderProxy.transact`.
-A supplied Java Binder key does not supply a native handle or transaction
-endpoint. `enforceInterface` still needs incoming Binder flags and the Java
-policy-change upcall. Raw allocated Parcel instances, access after recycle,
-invalid native import ranges and exporting or writing an uninitialized cursor
-gap also stop explicitly. Native borrowed Parcels, object/FD translation,
-capacity/size changes, float/double methods and custom read/write helpers are
-outside this subset. ServiceManager semantic lookup replies still do not execute
-Parcel/Binder transport.
+`BinderProxy.transact` can bind to a pre-existing native Binder connection:
+
+```json
+{"key":7,"warn_on_blocking":false,
+ "native_binding":{"fd":3,"handle":0,"alive":true}}
+```
+
+All three binding fields are required in JSON. The fd must be positive and fit a
+signed int; the handle is a uint32. Each fd/handle endpoint has one declared
+proxy identity. Resolution occurs on first native use, after
+the guest has opened and mapped its Binder connection. A closed/reused descriptor
+cannot silently rebind a retained proxy. Omitting the binding preserves the
+explicit unsupported boundary. `alive:false` declares an already dead BpBinder;
+it throws DeadObjectException without sending a transaction. Observed Java state
+includes the binding and its updated alive flag for supplied and native-created
+proxies. Native Java transport uses one canonical ProcessState descriptor; raw
+Linux descriptor aliases remain supported by the kernel owner.
+
+The transport profile supports synchronous calls to a guest-owned context
+manager and to strong handles obtained from its replies. Guest code supplies every reply
+through the same Linux Binder ioctl model used by raw native callers. Calls can
+wait for another scheduled guest thread; ordinary/V/A JNI and DEX share the
+continuation and exception semantics. UNKNOWN_TRANSACTION returns false; a dead
+reply updates the proxy cache. Reply Parcel bytes/cursor are replaced only by a
+normal data reply. Error replies preserve them and retain native errorCheck
+state. A null reply still waits for and releases the temporary response.
+
+Reply storage remains owned by the kernel arena until a subsequent native
+exchange sends its queued free. Reading uses the live mapped
+bytes; recycle, replacement and unmarshalling queue release on the *current*
+native thread. Thread exit flushes these frees and retires its kernel Binder
+thread state. Allocation identity is checked as well as address, size and
+mapping permissions, including when a raw caller frees and reuses an arena slot.
+
+`readStrongBinder` consumes a complete 24-byte flat object, validates its offset
+metadata, and reuses the ProcessState proxy for its fd/handle. Short reads return
+null without moving the cursor; invalid types or missing nonnull metadata return
+null after consuming the record. Null Binder objects need no offset entry.
+A new remote proxy queues weak/strong acquisition before any later Parcel free;
+recycling the Parcel does not retire the proxy. The bounded Java heap does not
+run GC, so these proxy references last for the workload. Forwarding a borrowed
+Parcel preserves its object table for shared Linux translation. Scalar and String
+reads cannot expose object fields; complete denied reads retain native cursor
+advancement. Marshalling a Parcel with objects throws RuntimeException with the
+API 28 message; unmarshalling bytes never creates Binder ownership.
+A supplied handle-zero proxy is reusable; creating an uncached one still needs
+native PING_TRANSACTION. Local Binder cookies require an explicit native-to-Java
+object association and are never interpreted as Java heap IDs.
+Borrowed reply writes/capacity growth, weak/FD object translation, one-way/nested
+transactions, local Binder dispatch, remaining native error/logging cases and
+`enforceInterface` remain unsupported.
+ServiceManager semantic lookup replies still do not execute this transport.

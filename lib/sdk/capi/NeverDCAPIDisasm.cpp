@@ -383,7 +383,8 @@ const char *neverd_function_disasm_json(neverd_session_t Sess,
     S->setError("function disassembly requires a loaded native image");
     return nullptr;
   }
-  if (!neverd_prepare_function_view(Sess, Entry, "low") &&
+  // A listing reads the instructions LowIR recovered and no further stage.
+  if (!neverd_prepare_function_view(Sess, Entry, "cfg") &&
       !S->findLowFunc(Entry))
     return nullptr;
   const LowFunc *Function = S->findLowFunc(Entry);

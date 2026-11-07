@@ -1306,7 +1306,6 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     NdVar Src = operandRead(S, X86.operands[1]);
     NdVar DstR = operandRead(S, X86.operands[0]);
     NdVar Dst = operandWrite(X86.operands[0]);
-    uint16_t Sz = Dst.Size > 0 ? Dst.Size : DstR.Size;
 
     NdVar Cond = S.makeTemp(1);
     switch (InsnId) {
@@ -1380,17 +1379,11 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
       S.emit(NdOp::COPY, Cond, {NdVar::scalar(1, 1)});
       break;
     }
-    NdVar CondExt = S.makeTemp(Sz);
-    S.emit(NdOp::INT_ZEXT, CondExt, {Cond});
-    NdVar Mask = S.makeTemp(Sz);
-    S.emit(NdOp::INT_NEG2, Mask, {CondExt});
-    NdVar InvMask = S.makeTemp(Sz);
-    S.emit(NdOp::INT_NOT, InvMask, {Mask});
-    NdVar T1 = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, T1, {Src, Mask});
-    NdVar T2 = S.makeTemp(Sz);
-    S.emit(NdOp::INT_AND, T2, {DstR, InvMask});
-    S.emit(NdOp::INT_OR, Dst, {T1, T2});
+    // Preserve the value-selection boundary, as with APX CMOV. Expanding it
+    // into integer masks makes pointer/flag provenance depend on the selector
+    // and gives every consumer an artificial Boolean/arithmetic expression.
+    // operandRead above deliberately retains an unconditional memory read.
+    S.emit(NdOp::SELECT, Dst, {Cond, Src, DstR});
     break;
   }
 
@@ -1530,8 +1523,8 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     // transfer reads; control never resumes in the caller.  This records the
     // observed transfer; it does not reconstruct the privilege, segment or
     // flag transition and grants no source ABI or memory contract.
-    const bool Interrupt = InsnId == X86_INS_IRET ||
-                           InsnId == X86_INS_IRETD || InsnId == X86_INS_IRETQ;
+    const bool Interrupt = InsnId == X86_INS_IRET || InsnId == X86_INS_IRETD ||
+                           InsnId == X86_INS_IRETQ;
     // Width of each popped stack field, selected by the operand-size attribute.
     uint16_t Field;
     switch (InsnId) {
