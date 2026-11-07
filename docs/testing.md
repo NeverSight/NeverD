@@ -19895,6 +19895,10 @@ origins and unresolved exceptional inputs. The real PE32 `xcpt4` filter and
 `seh_probe` handler regressions in `NeverDCPointerProjectionTests` cover their
 interaction with source SEH rendering; run both source routes and the complete
 C-pointer, Win64, SysV and i386 call-contract suites after changing this boundary.
+The immediate-raise continuation check binds its signed snapshot through the
+emitted global store instead of a fixed SSA number. It checks the 32-bit
+declaration and executes the copy, store and return over boundary and sampled
+values, independently of temporary numbering.
 
 `I386CallContract.PhysicalCallReturnSlotsDoNotKeepOldSourceConstants` checks
 four-byte CALL slots across the same three formats, both source routes and
