@@ -1,5 +1,15 @@
 # Remaining x64 C-quality work
 
+Offline paging/debug bank projection now emits the existing C++ state types
+through `scripts/qemu_save_controls.py`. It shares CPU/version/PC validation
+with the V6 bank adapter, retains saved controls and requires separate bindings
+for unsaved DEBUGCTL, pending data causes and absent cached PDPTEs. PKRU/PKRS
+omissions alone prove zero. The conversion reads no RAM and emits constant
+initializers; runtime feature/admission rules keep their existing owner.
+QEMU's selected KVM event-copy path does not preserve interrupt.shadow, so a
+clear saved hflags bit does not recover STI/MOV-SS state. Scheduler/event
+bindings, complete environment import and both ordinary inputs remain open.
+
 An optional Q35 main-RAM consistency check now validates the complete supplied
 map against selected captured MCH state and explicit unsaved machine-property
 bindings. It rejects wrong original block offsets, split/gap errors, active
