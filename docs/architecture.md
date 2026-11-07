@@ -7931,6 +7931,9 @@ the current graph may propose a small finite query envelope. Only the shared
 all-path value proof can establish the exact use's complete dense domain;
 unrelated literals, physical table capacity and provisional group edges grant
 no selector bound. Incomplete queries retain an unsafe unresolved branch.
+A dense prefix smaller than a relocation-owned table bounds that use but not
+the table, whose other slots another dispatch may select. The finite-domain
+route then keeps every consumer of the object together.
 For a narrow comparison over a merged wide index, the value resolver first
 proves every incoming value has zero high bytes, then matches the exact low
 lane. It applies the constraint to the original wide graph, retaining all
