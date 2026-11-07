@@ -569,11 +569,25 @@ TEST_P(X86LegacySourceTest,
   EXPECT_EQ(Manifest, Expected.Manifest);
   const auto CrossSource = tmpFile("i386.c"), CrossObject = tmpFile("i386.o");
   std::ofstream(CrossSource) << Expected.Source;
-  const auto Cross =
-      exec(Compiler,
-           {"--target=i386-unknown-linux-gnu", "-ffreestanding", "-std=c11",
-            GetParam() & 1 ? "-O2" : "-O0", "-Wall", "-Wextra", "-Werror", "-c",
-            CrossSource.string(), "-o", CrossObject.string()});
+  std::vector<std::string> CrossArgs{"--target=i386-unknown-linux-gnu",
+                                     "-ffreestanding",
+                                     "-std=c11",
+                                     GetParam() & 1 ? "-O2" : "-O0",
+                                     "-Wall",
+                                     "-Wextra",
+                                     "-Werror",
+                                     "-c",
+                                     CrossSource.string(),
+                                     "-o",
+                                     CrossObject.string()};
+  if (GetParam() & 2) {
+    const auto *LLC = std::getenv("NEVERD_TEST_NEVERC_LLC");
+    ASSERT_TRUE(LLC && *LLC) << "NEVERD_TEST_NEVERC_LLC must select the full "
+                                "NeverSight LLVM backend "
+                                "for NeverC i386 object generation";
+    CrossArgs.push_back(std::string("-fllvm-backend=") + LLC);
+  }
+  const auto Cross = exec(Compiler, CrossArgs);
   ASSERT_TRUE(Cross.ok()) << Cross.err;
   const auto Object = readSourceArtifact(CrossObject);
   ASSERT_GE(Object.size(), 20u);

@@ -12710,7 +12710,10 @@ Legacy cancellation tests retain the API continuation across cancellation, neste
 ## Test layout
 
 `NeverDX86LegacySourceTests` compiles the protected original-byte C dispatcher
-with Clang and the compiler selected by `NEVERD_TEST_NEVERC`, at O0/O2. The
+with Clang and the compiler selected by `NEVERD_TEST_NEVERC`, at O0/O2. Set
+`NEVERD_TEST_NEVERC_LLC` to the full NeverSight fork's `llc` for the explicit
+NeverC i386 object route (`-fllvm-backend`); its embedded backend remains x64.
+The
 matrix checks 16/32-bit selection, nonflat and wrapping linear aliases, exact
 budget stops, far CALL/RETF mode changes, self-modifying code, original handler
 PTE repair/IRET/retry, REP continuation through
