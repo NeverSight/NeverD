@@ -326,19 +326,24 @@ mode, task/real/VM86 execution, software SMM/SGX, or native device qualification
 Global LLVM release remains gated on those separately documented contracts.
 
 The [November 7 source qualification](evidence/x86-legacy-source-2026-11-07.json)
-records 1,985 executions across qualification and two `dev` integrations:
-1,984 pass, with one explicit KVM LA57 hardware skip and no failures. The new
-41-case source suite runs on both SDKs and P/E core classes at each revision,
-giving 164 passing executions and 1,024 original branch comparisons per
-revision. The four sets of 184 source, manifest, shared-library and i386-object
-artifacts are byte-identical, including after both integrations. Its
+records 2,075 source, semantic and interface executions across qualification
+and subsequent `dev` integrations: 2,074 pass, with one explicit KVM LA57
+hardware skip and no failures. The new 41-case source suite runs on both SDKs
+and P/E core classes in the full matrices, giving 164 passing executions and
+1,024 original branch comparisons per full matrix. Every retained set of 184
+source, manifest, shared-library and i386-object artifacts is byte-identical,
+including after the later integrations. Its
 paging test binaries are also unchanged, retaining the exact 527-case native
 legacy and 570-case r6 full-paging qualification.
 
-Final integration separately passes 88 x64 exporter checks, four real Python
-source-ABI checks and seven native plugin adapter checks per SDK. The final
-Android Parcel merge changes only the r6 shared SDK among the recorded
-executables and libraries; its updated ABI and export checks pass. The initial
+The full integration matrices separately pass 88 x64 exporter checks, four
+real Python source-ABI checks and seven native plugin adapter checks per SDK.
+The Android Parcel merge changes only the r6 shared SDK among the recorded
+executables and libraries; its updated ABI and export checks pass. A later
+C type lexer merge changes both shared SDKs while retaining those executables.
+Both updated SDKs pass another 41 source and four Python ABI cases. Additional
+parser checks each pass 56 cases and skip one optional Windows kernel PDB
+round-trip because `NEVERD_TYPES_NTKRNLMP` is unset. The initial
 two NeverC i386 failures came from omitting its existing explicit full LLVM
 backend option; the corrected invocation passes and the failed run remains a
 diagnostic, outside qualification counts. Embedded Python plugin-host tests
