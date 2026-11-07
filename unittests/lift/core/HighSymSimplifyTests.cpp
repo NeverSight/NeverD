@@ -2961,3 +2961,44 @@ TEST(HighSymSimplify, LargeConversionHonorsSymbolicOptInAndKeepsLoads) {
       EXPECT_EQ(Loads != 0, ReadMemory);
     }
 }
+
+TEST(HighExprSimplify, NamingCapturedReadsCleansTheirDeadValueConsumers) {
+  auto Address = HighExpr::makeVar(tempOfSize(1, 8));
+  auto Read = HighExpr::makeLoad(Address, NdType::makeInt(4, false));
+  auto Value = Read;
+  for (unsigned I = 0; I < 12; ++I) {
+    Value = HighExpr::makeBinop(NdOp::INT_ADD, Value, Value);
+    Value->Type = Read->Type;
+  }
+  HighFunc F;
+  F.ReturnType = Read->Type;
+  F.Body = {returnValue(
+      HighExpr::makeBinop(NdOp::INT_AND, Value, HighExpr::makeConst(0, 4)))};
+  simplifyAllExprs(F.Body);
+  ASSERT_NE(F.Body.back().RetVal->Kind, ExprKind::Const);
+  ASSERT_TRUE(nameRepeatedValues(F));
+  ASSERT_EQ(F.Body.back().RetVal->Kind, ExprKind::Const);
+  EXPECT_EQ(F.Body.back().RetVal->ConstVal, 0u);
+  // Capturing a read makes its subsequent value disposable, not its memory
+  // observation. The access must still execute and can still fault.
+  unsigned Reads = 0;
+  walkStmts(F.Body, [&](const HighStmt &S) {
+    forEachRhsExpr(S, [&](const ExprPtr &Root) {
+      std::vector<ExprPtr> Work{Root};
+      HighExprSet Seen;
+      while (!Work.empty()) {
+        auto E = Work.back();
+        Work.pop_back();
+        if (!E || !Seen.insert(E.get()).second)
+          continue;
+        if (E->Kind == ExprKind::Load) {
+          ++Reads;
+          EXPECT_EQ(E->Operands.front()->Var, Address->Var);
+        }
+        E->forEachChildExpr(
+            [&](const ExprPtr &Child) { Work.push_back(Child); });
+      }
+    });
+  });
+  EXPECT_GT(Reads, 0u);
+}

@@ -17,6 +17,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "HighDCEDetail.h"
+
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
@@ -544,6 +546,16 @@ private:
 
 } // namespace
 
-bool nameRepeatedValues(HighFunc &Func) { return Namer(Func).run(); }
+bool nameRepeatedValues(HighFunc &Func) {
+  if (!Namer(Func).run())
+    return false;
+  // A captured read still executes in its new assignment, but consumers now
+  // read a pure local. For example, local & 0 can disappear after LOAD has
+  // been captured. Clean these newly available identities without repeating
+  // symbolic synthesis or moving the observation back into its consumers.
+  if (simplifyAllExprs(Func.Body))
+    eliminateUnusedValues(Func);
+  return true;
+}
 
 } // namespace neverd
