@@ -293,6 +293,141 @@ struct Reference {
   /// The bytes a read or write accesses; 0 when the engine names none.
   std::uint8_t width = 0;
 };
+/// The finished reference index, in order of target and then source.  A
+/// function's first view replaces the rows from its extent, so the rows are
+/// held in blocks of addresses, by target and again by source, and a change
+/// moves only the blocks it touches.
+class ReferenceIndex {
+public:
+  using Rows = std::vector<Reference>;
+
+  static bool before(const Reference &a, const Reference &b) {
+    return a.to != b.to ? a.to < b.to : a.from < b.from;
+  }
+
+  /// \p sorted is in the index's order.
+  void assign(const Rows &sorted) {
+    clear();
+    rows_ = sorted.size();
+    for (const auto &row : sorted) {
+      targets_[blockOf(row.to)].push_back(row);
+      sources_[blockOf(row.from)].push_back(row);
+    }
+  }
+  void clear() {
+    targets_.clear();
+    sources_.clear();
+    rows_ = 0;
+  }
+  std::size_t size() const { return rows_; }
+
+  /// The rows that refer to \p address.
+  std::pair<Rows::const_iterator, Rows::const_iterator>
+  to(std::uint64_t address) const {
+    static const Rows none;
+    const auto block = targets_.find(blockOf(address));
+    if (block == targets_.end())
+      return {none.end(), none.end()};
+    return {firstAfter(block->second, address, true),
+            firstAfter(block->second, address, false)};
+  }
+  /// The first target after \p address.
+  std::optional<std::uint64_t> targetAfter(std::uint64_t address) const {
+    auto block = targets_.lower_bound(blockOf(address));
+    if (block != targets_.end() && block->first == blockOf(address)) {
+      const auto next = firstAfter(block->second, address, false);
+      if (next != block->second.end())
+        return next->to;
+      ++block;
+    }
+    if (block == targets_.end())
+      return std::nullopt;
+    return block->second.front().to;
+  }
+  /// The last target at or before \p address.
+  std::optional<std::uint64_t> targetAtOrBefore(std::uint64_t address) const {
+    auto block = targets_.upper_bound(blockOf(address));
+    if (block == targets_.begin())
+      return std::nullopt;
+    --block;
+    if (block->first == blockOf(address)) {
+      const auto next = firstAfter(block->second, address, false);
+      if (next != block->second.begin())
+        return std::prev(next)->to;
+      if (block == targets_.begin())
+        return std::nullopt;
+      --block;
+    }
+    return block->second.back().to;
+  }
+  /// Each row, in the index's order.
+  template <typename Each> void forEach(Each each) const {
+    for (const auto &[key, rows] : targets_)
+      for (const auto &row : rows)
+        each(row);
+  }
+  /// Each row with a target from \p first up to \p end, in the index's order.
+  template <typename Each>
+  void forTargets(std::uint64_t first, std::uint64_t end, Each each) const {
+    for (auto block = targets_.lower_bound(blockOf(first));
+         block != targets_.end() && block->second.front().to < end; ++block)
+      for (auto row = firstAfter(block->second, first, true);
+           row != block->second.end() && row->to < end; ++row)
+        each(*row);
+  }
+  /// Drops the rows from [\p first, \p end) that \p drop chooses.
+  template <typename Drop>
+  void eraseFrom(std::uint64_t first, std::uint64_t end, Drop drop) {
+    if (first >= end)
+      return;
+    for (auto block = sources_.lower_bound(blockOf(first));
+         block != sources_.end() && block->first <= blockOf(end - 1); ++block)
+      std::erase_if(block->second, [&](const Reference &row) {
+        if (row.from < first || row.from >= end || !drop(row))
+          return false;
+        eraseTarget(row);
+        return true;
+      });
+  }
+  /// Adds \p row after any row that orders the same.
+  void insert(const Reference &row) {
+    auto &rows = targets_[blockOf(row.to)];
+    rows.insert(std::upper_bound(rows.begin(), rows.end(), row, before), row);
+    sources_[blockOf(row.from)].push_back(row);
+    ++rows_;
+  }
+  Rows flattened() const {
+    Rows rows;
+    rows.reserve(rows_);
+    forEach([&](const Reference &row) { rows.push_back(row); });
+    return rows;
+  }
+
+private:
+  static std::uint64_t blockOf(std::uint64_t address) { return address >> 12; }
+  /// The first of \p rows with a target after \p address, or from it on.
+  static Rows::const_iterator
+  firstAfter(const Rows &rows, std::uint64_t address, bool including) {
+    return std::partition_point(
+        rows.begin(), rows.end(), [&](const Reference &row) {
+          return including ? row.to < address : row.to <= address;
+        });
+  }
+  void eraseTarget(const Reference &row) {
+    const auto block = targets_.find(blockOf(row.to));
+    auto &rows = block->second;
+    auto at = std::lower_bound(rows.begin(), rows.end(), row, before);
+    while (at->kind != row.kind)
+      ++at;
+    rows.erase(at);
+    --rows_;
+    if (rows.empty())
+      targets_.erase(block);
+  }
+
+  std::map<std::uint64_t, Rows> targets_, sources_;
+  std::size_t rows_ = 0;
+};
 /// A jump table whole-program analysis recovered (neverd_switches_json).
 struct SwitchTable {
   std::uint64_t jump = 0;
@@ -674,7 +809,9 @@ struct Listing::Impl {
 
   enum class IndexState { Idle, Building, Ready, Unavailable };
   IndexState indexState = IndexState::Idle;
-  std::vector<Reference> references; // sorted by (to, from) when Ready
+  /// What the scan gathers until the index is Ready.
+  std::vector<Reference> references;
+  ReferenceIndex referenceIndex;
   /// Recovered bodies replace a linear scan's references in their own extent.
   /// Keep these across decode-cache eviction and an unfinished background scan.
   struct RecoveredReferences {
@@ -1112,13 +1249,10 @@ struct Listing::Impl {
                           address));
     clip(dataBoundaries, dataBoundaries.upper_bound(address));
     if (indexState == IndexState::Ready) {
-      const auto next = std::upper_bound(
-          references.begin(), references.end(), address,
-          [](std::uint64_t at, const Reference &ref) { return at < ref.to; });
-      if (next != references.end())
-        end = std::min(end, next->to);
-      if (next != references.begin())
-        start = std::max(start, std::prev(next)->to);
+      if (const auto next = referenceIndex.targetAfter(address))
+        end = std::min(end, *next);
+      if (const auto last = referenceIndex.targetAtOrBefore(address))
+        start = std::max(start, *last);
     }
   }
 
@@ -1775,9 +1909,10 @@ struct Listing::Impl {
   /// The widths of the code's reads and writes, from the index.
   void noteAccessWidths() {
     accessWidths.clear();
-    for (const auto &reference : references)
+    referenceIndex.forEach([&](const Reference &reference) {
       if (reference.kind == RefKind::Read || reference.kind == RefKind::Write)
         accessWidths.add(reference.to, reference.width);
+    });
   }
 
   /// The width of every access to \p address, 0 where they differ, or none
@@ -2711,9 +2846,7 @@ struct Listing::Impl {
       }
       overlay.mergeRanges();
       if (indexState == IndexState::Ready) {
-        std::erase_if(references, [&](const Reference &reference) {
-          if (!overlay.contains(reference.from))
-            return false;
+        const auto superseded = [&](const Reference &reference) {
           if (metadataRole(reference.from, reference.to))
             return false;
           // These facts are owned by relocated storage and switch recovery,
@@ -2729,16 +2862,13 @@ struct Listing::Impl {
               return false;
           }
           return true;
-        });
-        const auto previous = references.size();
-        references.insert(references.end(), overlay.rows.begin(),
-                          overlay.rows.end());
-        const auto order = [](const Reference &a, const Reference &b) {
-          return a.to != b.to ? a.to < b.to : a.from < b.from;
         };
-        std::sort(references.begin() + previous, references.end(), order);
-        std::inplace_merge(references.begin(), references.begin() + previous,
-                           references.end(), order);
+        for (const auto &range : overlay.ranges)
+          referenceIndex.eraseFrom(range.first, range.second, superseded);
+        auto rows = overlay.rows;
+        std::sort(rows.begin(), rows.end(), ReferenceIndex::before);
+        for (const auto &row : rows)
+          referenceIndex.insert(row);
       }
     }
     for (const auto &instruction : body.instructions)
@@ -2746,15 +2876,14 @@ struct Listing::Impl {
           *instruction.target != function.entry)
         body.labels.insert(*instruction.target);
     // Branches from other functions into this body need labels too.
-    if (indexState == IndexState::Ready) {
-      auto it = std::lower_bound(
-          references.begin(), references.end(), function.entry + 1,
-          [](const Reference &r, std::uint64_t value) { return r.to < value; });
-      for (; it != references.end() && it->to < body.end; ++it)
-        if (it->kind == RefKind::Jump || it->kind == RefKind::CondJump ||
-            it->kind == RefKind::IndirectJump)
-          body.labels.insert(it->to);
-    }
+    if (indexState == IndexState::Ready)
+      referenceIndex.forTargets(function.entry + 1, body.end,
+                                [&](const Reference &reference) {
+                                  if (reference.kind == RefKind::Jump ||
+                                      reference.kind == RefKind::CondJump ||
+                                      reference.kind == RefKind::IndirectJump)
+                                    body.labels.insert(reference.to);
+                                });
     if (!forwarding && dialect == OperandDialect::X86 &&
         !buildSemanticFrame(body, ownerOf(index).entry) && !function.chunkOf)
       buildFrame(body);
@@ -3491,15 +3620,7 @@ struct Listing::Impl {
   std::pair<std::vector<Reference>::const_iterator,
             std::vector<Reference>::const_iterator>
   referencesTo(std::uint64_t address) const {
-    if (indexState != IndexState::Ready)
-      return {references.end(), references.end()};
-    const auto lower = std::lower_bound(
-        references.begin(), references.end(), address,
-        [](const Reference &r, std::uint64_t value) { return r.to < value; });
-    auto upper = lower;
-    while (upper != references.end() && upper->to == address)
-      ++upper;
-    return {lower, upper};
+    return referenceIndex.to(address);
   }
 
   //===--------------------------------------------------------------------===//
@@ -4489,6 +4610,7 @@ struct Listing::Impl {
       indexDone = 0;
       indexTotal = functions.size();
       references.clear();
+      referenceIndex.clear();
       accessWidths.clear();
     }
     if (indexState != IndexState::Building)
@@ -4555,6 +4677,8 @@ struct Listing::Impl {
     references.insert(references.end(), switchReferences.begin(),
                       switchReferences.end());
     sortReferences();
+    referenceIndex.assign(references);
+    references = {};
     indexDone = indexTotal;
     // Data the code reads or writes now takes its width.
     noteAccessWidths();
@@ -4583,10 +4707,7 @@ struct Listing::Impl {
 
   /// Orders the index by target, then source, without repeats.
   void sortReferences() {
-    std::sort(references.begin(), references.end(),
-              [](const Reference &a, const Reference &b) {
-                return a.to != b.to ? a.to < b.to : a.from < b.from;
-              });
+    std::sort(references.begin(), references.end(), ReferenceIndex::before);
     references.erase(std::unique(references.begin(), references.end(),
                                  [](const Reference &a, const Reference &b) {
                                    return a.to == b.to && a.from == b.from &&
@@ -4638,9 +4759,12 @@ struct Listing::Impl {
           switchReferences.push_back({target, *table.table, RefKind::Offset});
       }
     if (indexState == IndexState::Ready) {
+      references = referenceIndex.flattened();
       references.insert(references.end(), switchReferences.begin(),
                         switchReferences.end());
       sortReferences();
+      referenceIndex.assign(references);
+      references = {};
     }
     built = false;
     decoded.clear();
@@ -5098,7 +5222,7 @@ Json Listing::indexState() const {
                 {"done", impl_->indexDone},
                 {"total", impl_->indexTotal},
                 {"references", impl_->indexState == Impl::IndexState::Ready
-                                   ? impl_->references.size()
+                                   ? impl_->referenceIndex.size()
                                    : 0},
                 {"generation", std::to_string(impl_->generation)}};
   // A listing not built yet lists nothing: a count of 0 would tell clients
@@ -5771,6 +5895,7 @@ const std::string &Listing::stringOptions() const {
 void Listing::reindex() {
   impl_->indexState = Impl::IndexState::Idle;
   impl_->references.clear();
+  impl_->referenceIndex.clear();
   impl_->accessWidths.clear();
   invalidate();
 }
