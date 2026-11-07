@@ -967,7 +967,12 @@ TEST(SourceABI, SwiftArm64FourWordResultRequiresExactReturnBank) {
   }
   auto Unsupported = Hint;
   EXPECT_FALSE(assignDarwinSwiftSourceABI(Unsupported, Arch::X64, Error));
-  EXPECT_FALSE(assignDarwinFixedSourceABI(Unsupported, Arch::AArch64, Error));
+  ASSERT_TRUE(assignDarwinFixedSourceABI(Unsupported, Arch::AArch64, Error));
+  EXPECT_EQ(Unsupported.ReturnLocation.Kind,
+            SourceABICarrierKind::IndirectResultPointer);
+  EXPECT_EQ(Unsupported.ReturnLocation.RegisterOffset,
+            getTargetRegInfo(Arch::AArch64).indirectResultReg());
+  EXPECT_TRUE(Unsupported.ReturnComponents.empty());
 }
 
 TEST(SourceABI, SwiftArm64ScalarFloatUsesIndependentRegisterBank) {
@@ -4468,17 +4473,26 @@ TEST(SourceABI, SixteenDoubleResultsRequireTheCompleteDarwinArm64Contract) {
   for (unsigned Count : {5U, 7U, 8U, 15U, 17U}) {
     Hint.ReturnType = NdType::makeStruct(std::vector<TypeRef>(Count, Double));
     EXPECT_TRUE(sourceAggregateMembers(Hint.ReturnType).empty());
-    EXPECT_FALSE(assignDarwinFixedSourceABI(Hint, Arch::AArch64, Error));
+    ASSERT_TRUE(assignDarwinFixedSourceABI(Hint, Arch::AArch64, Error));
+    EXPECT_EQ(Hint.ReturnLocation.Kind,
+              SourceABICarrierKind::IndirectResultPointer);
+    EXPECT_EQ(Hint.ReturnLocation.RegisterOffset,
+              getTargetRegInfo(Arch::AArch64).indirectResultReg());
+    EXPECT_TRUE(Hint.ReturnComponents.empty());
   }
   auto Fields = std::vector<TypeRef>(16, Double);
   Fields[5] = NdType::makeFloat(4);
   Hint.ReturnType = NdType::makeStruct(Fields);
   EXPECT_TRUE(sourceAggregateMembers(Hint.ReturnType).empty());
-  EXPECT_FALSE(assignDarwinFixedSourceABI(Hint, Arch::AArch64, Error));
+  ASSERT_TRUE(assignDarwinFixedSourceABI(Hint, Arch::AArch64, Error));
+  EXPECT_EQ(Hint.ReturnLocation.Kind,
+            SourceABICarrierKind::IndirectResultPointer);
   Fields[5] = NdType::makeInt(8, false);
   Hint.ReturnType = NdType::makeStruct(Fields);
   EXPECT_TRUE(sourceAggregateMembers(Hint.ReturnType).empty());
-  EXPECT_FALSE(assignDarwinFixedSourceABI(Hint, Arch::AArch64, Error));
+  ASSERT_TRUE(assignDarwinFixedSourceABI(Hint, Arch::AArch64, Error));
+  EXPECT_EQ(Hint.ReturnLocation.Kind,
+            SourceABICarrierKind::IndirectResultPointer);
   Hint.ReturnType = Matrix;
   EXPECT_FALSE(assignDarwinFixedSourceABI(Hint, Arch::X64, Error));
   EXPECT_FALSE(assignDarwinSwiftSourceABI(Hint, Arch::AArch64, Error));
