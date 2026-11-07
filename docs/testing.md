@@ -21484,3 +21484,5 @@ MedStackAlignment reusable-entry query regressions exercise the existing scoped 
 HighControlFlowSemantics external-skip tests independently execute all 256 branch choices and preserve earlier nested incoming edges. Batched external-skip ownership must retain statement order and reject outside entries; the current upstream goto-splice and entry-label indexes are retained. Windows exception regressions qualify exceptional control flow.
 
 `HighExprSimplify.NamingCapturedReadsCleansTheirDeadValueConsumers` checks newly pure consumers after expression naming. Zero masks disappear while the captured load and its original address remain.
+
+`NeverDHighFlagReadTests` covers unused/live EFLAGS images, malformed or unowned calls, branch anchors, exact owned x86/x64 LLVM assembly and retained write ordering. LLVM cleanup changes only the source clone; the original module and native code generation stay intact.

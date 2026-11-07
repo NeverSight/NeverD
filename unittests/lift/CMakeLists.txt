@@ -5355,3 +5355,8 @@ add_neverd_unittest(NeverDMedTempLivenessTests
   LINK_COMPONENTS IRMed IRLow)
 target_include_directories(NeverDMedTempLivenessTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+
+target_sources(NeverDLiftTests PRIVATE core/HighFlagReadTests.cpp)
+add_neverd_unittest(NeverDHighFlagReadTests
+  core/HighFlagReadTests.cpp
+  LINK_COMPONENTS BackendC)
