@@ -116,6 +116,25 @@ TEST(SourceAggregate, RecordTagsKeepWordAndPointeeTypeIdentity) {
   }
 }
 
+TEST(SourceAggregate, IndirectRecordSpellingDoesNotGrantDirectValueABI) {
+  const auto Word = NdType::makeInt(sizeof(uint64_t), false);
+  const auto Mixed = NdType::makeStruct(
+      {Word, NdType::makeFloat(sizeof(double)), NdType::makePtr(Word)});
+  const auto Nested = NdType::makeStruct({Mixed, Mixed});
+  for (const auto &Record : {Mixed, Nested}) {
+    ASSERT_TRUE(Record);
+    EXPECT_TRUE(sourceAggregateMembers(Record).empty());
+    EXPECT_TRUE(hasCSpelling(Record));
+    EXPECT_FALSE(hasCValueLayout(Record));
+    EXPECT_TRUE(hasCValueLayout(NdType::makePtr(Record)));
+    auto Invalid = std::make_shared<NdType>(*Record);
+    Invalid->FieldOffsets.back() = 0;
+    EXPECT_FALSE(hasCSpelling(Invalid));
+    EXPECT_FALSE(hasCValueLayout(NdType::makePtr(Invalid)));
+  }
+  EXPECT_NE(typeToC(Mixed), typeToC(Nested));
+}
+
 TEST(SourceAggregate, SourceNamesAreSpelledAsC) {
   // A debug record's C++ name is the identifier its unit declares it under,
   // which the C++ view names back; a record that shares a C library

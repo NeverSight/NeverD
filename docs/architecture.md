@@ -1285,7 +1285,10 @@ LLVM receives the same pointer without `byval` or `noalias`. No new copy or
 stronger memory effect is introduced: address identity, aliases and writes
 through the original storage remain observable. An unnamed indirect parameter
 occupies one eight-byte pointer slot. Native logical by-value reconstruction
-still requires its separate copy-storage proof. Narrow integer
+still requires its separate copy-storage proof. Anonymous C record names reuse
+natural-layout validation independently of the stricter direct-value ABI check;
+naming a mixed record behind a pointer does not authorize passing it directly.
+Narrow integer
 register parameters and AArch64 narrow results retain the ABI's 32-bit
 sign/zero-extension guarantee separately from their source width. LLVM source
 call emission consumes those validated guarantees as `signext`/`zeroext`
