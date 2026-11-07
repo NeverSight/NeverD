@@ -468,19 +468,26 @@ retained variants repeat one image argument, an old published dependency may
 make room. Forwarding wrappers with no CALLX sites of their own can also explore
 an image binding absent from every variant, once per entry register. The generic
 node remembers explored registers across evictions; ordinary scalar changes do
-not select this extra work. Functions owning CALLX sites retain their previous
-demand policy. An old published dependency may be generalized only if its
-caller-visible return and memory transfer agree
+not select this extra work. An old published dependency may be generalized only
+if its caller-visible return and memory transfer agree
 exactly with the completed generic summary. This currently requires unknown
 memory effects, no returned scratch/postcondition cells, the same scalar return
 alternatives and the same constant or unknown return origin. Any target facts
 in the dependency graph must also be covered by an independently published
 sibling under the same caller entry and call instruction. A node's own proven
-targets must also be established by the generic replacement, preserving the
-proofs on incoming caller edges. Complete target alternatives, roots and active
-caller graphs are not discarded. Image membership selects work; it does not prove a target or alias
-relationship. Old incoming edges record specialization-limit generalization,
-and `generalized_redundant_published_summaries` counts these replacements. The
+targets must also be established by the generic replacement. If they are not,
+a completed independently published sibling may instead receive the old
+incoming edges only when its opaque return, own site results, expressions and
+missing-fact diagnostics agree exactly. Descendant proof coverage is still
+required. This coalesces results already computed for those callers; it does
+not broaden the sibling's input cache key or authorize reuse for new inputs.
+Those edges record `coalesced_proven_equivalent_summary_results`. A first
+captured input binding absent from all retained variants can demand one such
+exploration per entry register, without supplying target or nonalias facts.
+Complete target alternatives, roots and active caller graphs are not discarded. Image membership selects work; it does not prove a target or alias
+relationship. Old incoming edges distinguish specialization-limit generalization
+from equivalent-result coalescing; `generalized_redundant_published_summaries`
+counts these replacements. The
 four-variant and resource budgets remain unchanged. Other pinned proofs stay
 live. When a later root needs a specialization,
 unused earlier parents and their unreferenced children can be reclaimed

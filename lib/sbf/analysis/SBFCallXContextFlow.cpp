@@ -478,6 +478,7 @@ struct FunctionContext : llvm::FoldingSetNode {
   // The generic node outlives replaceable forwarding variants, so eviction
   // cannot repeatedly rediscover the same exploratory image binding.
   uint16_t ExploredImageRegisters = 0;
+  uint16_t ExploredCapturedRegisters = 0;
   bool ReuseReadsMemory = false;
   MemoryEffects Effects;
   size_t RootGeneration = 0;
@@ -962,13 +963,26 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   // variant, once per entry register. Wrappers have no sites of their own;
   // preserve the existing demand order of functions that own CALLX sites.
   // The generic node remembers explored registers across evictions. These
-  // select work only; image addresses supply no target or alias proof.
+  // select work only; image addresses supply no target or alias proof. A first
+  // captured binding can likewise demand one exploration per entry register,
+  // after all retained variants used literal, frame or unknown values.
   const auto &Variants = Specializations.at(Entry);
   auto &Generic = *GenericContexts.at(Entry);
   bool NewImageArgument = false;
   uint16_t NewImageRegisters = 0;
+  uint16_t NewCapturedRegisters = 0;
   for (unsigned R = 0; R < kRegisterCount; ++R) {
     const auto Value = Input.Registers[R].singleton();
+    if (R != kFramePointerRegister &&
+        Value.ValueKind == RegisterValue::Kind::SymbolicAddress &&
+        !(Generic.ExploredCapturedRegisters & registerBit(R)) &&
+        llvm::all_of(Variants, [&](const auto *Variant) {
+          return llvm::none_of(
+              Variant->Input.Registers[R].values(), [](const auto &Old) {
+                return Old.ValueKind == RegisterValue::Kind::SymbolicAddress;
+              });
+        }))
+      NewCapturedRegisters |= registerBit(R);
     if (R == kFramePointerRegister ||
         Value.ValueKind != RegisterValue::Kind::Constant ||
         !Program.ExecutableImage.findRegion(Value.Value, 1, true))
@@ -998,7 +1012,8 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
         !(Generic.ExploredImageRegisters & registerBit(R)))
       NewImageRegisters |= registerBit(R);
   }
-  if (!Retry && !NewImageArgument && !NewImageRegisters)
+  if (!Retry && !NewImageArgument && !NewImageRegisters &&
+      !NewCapturedRegisters)
     return false;
   // Replacing an old incoming edge must leave the caller transfer unchanged.
   // Start with the opaque-memory case: no returned cells or affine return
@@ -1134,33 +1149,64 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
         Candidate->Return->Registers[0] != Generic.Return->Registers[0] ||
         Candidate->Return->Origins[0] != Generic.Return->Origins[0])
       continue;
-    // Replacing this node also rewrites its incoming edges. Only the generic
-    // node's own targets can preserve those incoming caller proofs. Descendant
-    // proofs instead retain their actual caller entries and call instructions.
-    if (std::any_of(Candidate->Sites.begin(), Candidate->Sites.end(),
-                    [&](const auto &Site) {
-                      return Site.TargetAddress &&
-                             std::none_of(Generic.Sites.begin(),
-                                          Generic.Sites.end(),
-                                          [&](const auto &Replacement) {
-                                            return Replacement.CallXSlot ==
-                                                       Site.CallXSlot &&
-                                                   Replacement.TargetAddress ==
-                                                       Site.TargetAddress;
-                                          });
-                    }))
+    // A generic replacement must preserve the node's own caller proofs.
+    // Otherwise only an already computed, independently published sibling
+    // with equal results can own these completed incoming edges. Its input
+    // key is unchanged: this does not authorize reuse for a new caller.
+    const bool GenericKeepsSites = !std::any_of(
+        Candidate->Sites.begin(), Candidate->Sites.end(),
+        [&](const auto &Site) {
+          return Site.TargetAddress &&
+                 std::none_of(
+                     Generic.Sites.begin(), Generic.Sites.end(),
+                     [&](const auto &Replacement) {
+                       return Replacement.CallXSlot == Site.CallXSlot &&
+                              Replacement.TargetAddress == Site.TargetAddress;
+                     });
+        });
+    if (!GenericKeepsSites && Retry)
       continue;
+    const auto SameSites = [&](const FunctionContext &Sibling) {
+      if (Candidate->Sites.size() != Sibling.Sites.size())
+        return false;
+      return std::equal(
+          Candidate->Sites.begin(), Candidate->Sites.end(),
+          Sibling.Sites.begin(), [](const auto &A, const auto &B) {
+            return A.CallXSlot == B.CallXSlot && A.Result == B.Result &&
+                   A.TargetAddress == B.TargetAddress &&
+                   A.TargetSlot == B.TargetSlot &&
+                   A.TargetIsContinuation == B.TargetIsContinuation &&
+                   A.TargetValueAlternatives == B.TargetValueAlternatives &&
+                   A.InputExpression == B.InputExpression &&
+                   A.InputExpressionValues.empty() &&
+                   B.InputExpressionValues.empty() &&
+                   std::tie(A.Missing.Kind, A.Missing.Slot, A.Missing.Address,
+                            A.Missing.Coordinate, A.Missing.InputRegister) ==
+                       std::tie(B.Missing.Kind, B.Missing.Slot,
+                                B.Missing.Address, B.Missing.Coordinate,
+                                B.Missing.InputRegister);
+          });
+    };
     ClearTargets(Required);
     auto Collected = CollectTargets(*Candidate, Candidate->ID, Required);
     if (!Collected)
       return Collected.takeError();
     if (!*Collected)
       continue;
-    bool Redundant = Required.empty();
+    bool Redundant = GenericKeepsSites && Required.empty();
+    FunctionContext *Replacement = &Generic;
     for (auto *Sibling : Specializations.at(Entry)) {
       if (Redundant)
         break;
       if (Sibling == Candidate || !Sibling->Complete || !Sibling->Published)
+        continue;
+      if (!GenericKeepsSites &&
+          (!OpaqueReturn(*Sibling) ||
+           Sibling->Return->Registers[0] != Candidate->Return->Registers[0] ||
+           Sibling->Return->Origins[0] != Candidate->Return->Origins[0] ||
+           Sibling->Return->InputExpressions[0] !=
+               Candidate->Return->InputExpressions[0] ||
+           !SameSites(*Sibling)))
         continue;
       ClearTargets(Covered);
       auto Collected = CollectTargets(*Sibling, Candidate->ID, Covered);
@@ -1172,6 +1218,8 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
           !IndependentlyPublished(*Sibling, Candidate->ID))
         continue;
       Redundant = true;
+      if (!GenericKeepsSites)
+        Replacement = Sibling;
     }
     if (!Redundant)
       continue;
@@ -1197,16 +1245,20 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
       if (Context)
         for (auto &Edge : Context->Calls)
           if (Edge.CalleeSummaryID == Candidate->ID) {
-            Edge.CalleeSummaryID = Generic.ID;
-            Edge.GeneralizedInputs = true;
+            Edge.CalleeSummaryID = Replacement->ID;
+            Edge.GeneralizedInputs = Replacement->Generic;
             Edge.InputGeneralization =
                 Retry ? CallXInputGeneralization::ReplacedRecursiveContext
-                      : CallXInputGeneralization::SpecializationLimit;
+                : Replacement->Generic
+                    ? CallXInputGeneralization::SpecializationLimit
+                    : CallXInputGeneralization::EquivalentSpecializedResults;
+            for (auto &Site : Edge.InputExpressionTargets)
+              Site.SummaryID = Replacement->ID;
             Edge.PreservedOlderFrames = false;
             Edge.AppliedMemoryEffects = false;
             Edge.AppliedStoredValues = 0;
             Edge.InstantiatedReturnInputExpression = false;
-            ++GenericContexts.at(Entry)->IncomingReferences;
+            ++Replacement->IncomingReferences;
             --Candidate->IncomingReferences;
           }
     Candidate->Published = false;
@@ -1215,6 +1267,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
     for (size_t I = 0; I < Pending.size(); ++I)
       reclaimContext(*Contexts[Pending[I]], &Pending, true);
     Generic.ExploredImageRegisters |= NewImageRegisters;
+    Generic.ExploredCapturedRegisters |= NewCapturedRegisters;
     if (WasPublished)
       ++GeneralizedPublishedSummaries;
     if (Retry)

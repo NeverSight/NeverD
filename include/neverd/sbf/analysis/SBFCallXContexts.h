@@ -67,6 +67,7 @@ enum class CallXInputGeneralization : uint8_t {
   EquivalentGenericInputs,
   EquivalentSpecializedInputs,
   ReplacedRecursiveContext,
+  EquivalentSpecializedResults,
 };
 
 enum class CallXInputExpressionKind : uint8_t {
