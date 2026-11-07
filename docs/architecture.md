@@ -5153,10 +5153,11 @@ Neutral observed constants reuse the operand directly.
 Constant additions reuse the literal residue already present in the word key.
 Bits below its first set bit remain unchanged and cannot start a carry; a
 single-bit query constructs only the carry into its requested position.
-Projected handles and known-zero facts use exact-key dense tables, avoiding
-one heap allocation per cached fact. Their values are copied before recursion,
-and complete bucket growth is charged before insertion. Word caches retain
-stable references for callers that keep a word across recursive insertions.
+Projected handles, known-zero facts and pairing signatures use exact-key
+dense tables, avoiding one heap allocation per cached fact. Their values are
+copied before recursion, and complete bucket growth is charged before insertion.
+Decision-word caches and interned signature keys retain stable references for
+callers that keep them across recursive insertions.
 Native key construction reads inline constants without entering the wide
 literal reader.
 Decision identity hits and terminal two-input Boolean operations return before

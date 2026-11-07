@@ -1450,7 +1450,9 @@ class LowWordDecisions {
   struct WidePairingState {
     std::unordered_map<SignatureKey, uint32_t, SignatureHash> Ids;
     std::vector<const SignatureKey *> Keys;
-    std::unordered_map<uint64_t, WideSignature> Words;
+    // Completed values are copied before recursion; only Ids exposes stable
+    // key addresses. Queried precisions keep word keys off both sentinels.
+    llvm::DenseMap<uint64_t, WideSignature> Words;
     unsigned NarrowPrecision = 0;
   };
   // Ordinary low-word searches do not need this state. Construct it only
@@ -1458,7 +1460,7 @@ class LowWordDecisions {
   struct PairingState {
     std::unordered_map<SignatureKey, uint32_t, SignatureHash> Ids;
     std::vector<const SignatureKey *> Keys;
-    std::unordered_map<uint64_t, ResidueSignature> Words;
+    llvm::DenseMap<uint64_t, ResidueSignature> Words;
     std::unique_ptr<WidePairingState> Wide;
   };
 
@@ -1668,9 +1670,10 @@ class LowWordDecisions {
       Result = {internSignature(State, {UINT64_MAX, Count, R.index()}), 0};
     }
     if (!charge(1, sizeof(uint64_t) + sizeof(ResidueSignature) +
-                       4 * sizeof(void *)))
+                       4 * sizeof(void *)) ||
+        !reserveEntry(State.Words))
       return {};
-    State.Words.emplace(Key, Result);
+    State.Words.try_emplace(Key, Result);
     return Result;
   }
 
@@ -2002,9 +2005,10 @@ class LowWordDecisions {
       It->second = Result;
     } else {
       if (!charge(1, sizeof(uint64_t) + sizeof(WideSignature) +
-                         4 * sizeof(void *)))
+                         4 * sizeof(void *)) ||
+          !reserveEntry(State.Words))
         return {};
-      State.Words.emplace(Key, Result);
+      State.Words.try_emplace(Key, Result);
     }
     return Result;
   }
