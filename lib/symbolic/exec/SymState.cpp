@@ -11,7 +11,8 @@
 /// bytes keep an exact view of the written word; a matching read can reuse
 /// that word without first creating extracts and intermediate concatenations.
 /// Partial overwrites and unaligned reads still assemble the actual bytes.
-/// Memory keeps its materialized byte expressions and provenance unchanged.
+/// Memory uses the same views; exporting knowledge materializes only the
+/// actual requested spans, retaining byte provenance and forgetting epochs.
 ///
 /// Memory adds one step in front of that: deciding which store a given address
 /// belongs to.  The builders have already put an address into a canonical sum
@@ -31,6 +32,50 @@
 #include <limits>
 
 namespace neverd::symbolic {
+namespace {
+// Match literal backing lanes without proving new facts about a mixed word.
+// Projection consumers retain that word's other dependencies as a whole.
+std::optional<llvm::APInt> literalMemoryByte(const SymContext &Ctx,
+                                             SymRef Value, uint32_t Low) {
+  while (true) {
+    if (const auto Literal = Ctx.asConst(Value))
+      return Literal->extractBits(8, Low);
+    if (Ctx.op(Value) == SymOp::Extract) {
+      Low += uint32_t(Ctx.node(Value).Aux);
+      Value = Ctx.operand(Value, 0);
+      continue;
+    }
+    if (Ctx.op(Value) == SymOp::ZExt || Ctx.op(Value) == SymOp::SExt) {
+      const auto Inner = Ctx.operand(Value, 0);
+      if (Low + 8 <= Ctx.width(Inner)) {
+        Value = Inner;
+        continue;
+      }
+      if (Low >= Ctx.width(Inner) && Ctx.op(Value) == SymOp::ZExt)
+        return llvm::APInt(8, 0);
+      return {};
+    }
+    if (Ctx.op(Value) != SymOp::Concat)
+      return {};
+    auto Parts = Ctx.operands(Value);
+    bool Found = false;
+    for (auto It = Parts.rbegin(); It != Parts.rend(); ++It) {
+      const auto Width = Ctx.width(*It);
+      if (Low >= Width) {
+        Low -= Width;
+        continue;
+      }
+      if (8 > Width - Low)
+        return {};
+      Value = *It;
+      Found = true;
+      break;
+    }
+    if (!Found)
+      return {};
+  }
+}
+} // namespace
 
 bool SymState::setX64MemoryAddressSpaceBase(NdMemoryAddressSpace Space,
                                             SymRef Base) {
@@ -77,7 +122,7 @@ SymState::constantRegionBytes(SymRef Base) const {
   if (Found == Regions.end())
     return Result;
   for (const auto &[Offset, View] : Found->second.Bytes)
-    if (const auto Constant = Ctx->asConst(View.Value))
+    if (const auto Constant = literalMemoryByte(*Ctx, View.Value, View.Low))
       Result.push_back(
           {Offset, static_cast<uint8_t>(Constant->getZExtValue())});
   return Result;
@@ -100,10 +145,6 @@ constexpr uint32_t kByteBits = 8;
 /// 64-bit key, so a wider address space cannot be indexed that way and each of
 /// its addresses becomes a region of its own instead.
 constexpr uint32_t kMaxAddressBits = 64;
-
-bool defersByteViews(std::optional<SymInputKind> Kind) {
-  return Kind == SymInputKind::Register || Kind == SymInputKind::Temporary;
-}
 
 bool hasModularCoordinates(const SymContext &Ctx, SymRef RegionBase) {
   return RegionBase && Ctx.width(RegionBase) == kMaxAddressBits;
@@ -220,11 +261,14 @@ SymRef SymState::readBank(Bank &B, uint64_t Offset, uint16_t Bytes) {
   // Keep an untouched word as one input rather than eagerly turning it into a
   // concatenation of unrelated byte variables.  The write records its byte
   // views, so every later overlapping read still observes exact aliasing.
-  bool HasMaterialisedByte = false;
-  for (uint16_t I = 0; I < Bytes; ++I)
-    HasMaterialisedByte |=
-        B.Bytes.count(Offset + I) != 0 ||
-        (B.Unknowns && B.Unknowns->Values.count(Offset + I) != 0);
+  auto Next = B.Bytes.lower_bound(Offset);
+  bool HasMaterialisedByte =
+      Next != B.Bytes.end() && Next->first - Offset < Bytes;
+  if (!HasMaterialisedByte && B.Unknowns) {
+    const auto Unknown = B.Unknowns->Values.lower_bound(Offset);
+    HasMaterialisedByte =
+        Unknown != B.Unknowns->Values.end() && Unknown->first - Offset < Bytes;
+  }
   if (!HasMaterialisedByte) {
     const std::string Name = byteName(B.Name, Offset);
     const uint32_t Width = uint32_t(Bytes) * kByteBits;
@@ -248,39 +292,40 @@ SymRef SymState::readBank(Bank &B, uint64_t Offset, uint16_t Bytes) {
     return Input;
   }
 
-  if (!defersByteViews(B.InputKind)) {
-    // Memory still stores materialized byte expressions. Avoid inspecting
-    // word views or extracting the already complete byte on this path.
-    llvm::SmallVector<SymRef, 8> Parts;
-    Parts.reserve(Bytes);
-    for (uint16_t I = 0; I < Bytes; ++I)
-      Parts.push_back(byteAt(B, Offset + I).Value);
-    return joinBytes(Parts);
-  }
+  // Byte keys are ordered and this range does not wrap. Visit retained bytes
+  // once; materializing a gap does not invalidate the next map iterator.
+  auto ReadByte = [&](uint64_t At) {
+    if (Next != B.Bytes.end() && Next->first == At) {
+      const auto Result = Next->second;
+      ++Next;
+      return Result;
+    }
+    return byteAt(B, At);
+  };
 
   llvm::SmallVector<ByteView, 8> Views;
   Views.reserve(Bytes);
   for (uint16_t I = 0; I < Bytes; ++I)
-    Views.push_back(byteAt(B, Offset + I));
+    Views.push_back(ReadByte(Offset + I));
+  return joinByteViews(Views);
+}
 
-  // A byte view is an exact source and bit offset, not a claim that adjacent
-  // locations still contain one word. Check every byte, including middle
-  // overwrites, before taking this shortcut in either byte order.
-  const auto &Low =
-      Order == llvm::endianness::little ? Views.front() : Views.back();
-  bool Contiguous = true;
-  for (uint16_t I = 0; I < Bytes; ++I) {
-    const uint32_t Lane = Order == llvm::endianness::little ? I : Bytes - I - 1;
-    Contiguous &= Views[I].Value == Low.Value &&
-                  Views[I].Low == Low.Low + Lane * kByteBits;
-  }
-  if (Contiguous)
-    return Ctx->mkExtract(Low.Value, Low.Low, uint32_t(Bytes) * kByteBits);
-
+SymRef SymState::joinByteViews(llvm::ArrayRef<ByteView> Views) const {
+  assert(!Views.empty());
   llvm::SmallVector<SymRef, 8> Parts;
-  Parts.reserve(Bytes);
-  for (const auto &View : Views)
-    Parts.push_back(Ctx->mkExtract(View.Value, View.Low, kByteBits));
+  for (size_t First = 0; First < Views.size();) {
+    size_t End = First + 1;
+    while (End < Views.size() && Views[End].Value == Views[First].Value &&
+           (Order == llvm::endianness::little
+                ? Views[End].Low == Views[End - 1].Low + kByteBits
+                : Views[End].Low + kByteBits == Views[End - 1].Low))
+      ++End;
+    const auto Low = Order == llvm::endianness::little ? Views[First].Low
+                                                       : Views[End - 1].Low;
+    Parts.push_back(Ctx->mkExtract(Views[First].Value, Low,
+                                   uint32_t(End - First) * kByteBits));
+    First = End;
+  }
   return joinBytes(Parts);
 }
 
@@ -290,17 +335,24 @@ bool SymState::writeBank(Bank &B, uint64_t Offset, SymRef Value) {
   const uint32_t Width = Ctx->width(Value);
   const uint32_t ByteCount = Width / kByteBits;
   const uint16_t Bytes = static_cast<uint16_t>(ByteCount);
-  const bool Scalar = defersByteViews(B.InputKind);
 
+  auto Next = B.Bytes.lower_bound(Offset);
   for (uint16_t I = 0; I < Bytes; ++I) {
     // Bit position of byte I of the address range, which is the low end of the
     // word on a little-endian target and the high end on a big-endian one.
     const uint32_t Low = Order == llvm::endianness::little
                              ? uint32_t(I) * kByteBits
                              : Width - (uint32_t(I) + 1) * kByteBits;
-    B.Bytes[Offset + I] = Scalar
-                              ? ByteView{Value, Low}
-                              : ByteView{Ctx->mkExtract(Value, Low, kByteBits)};
+    const auto At = Offset + I;
+    if (I && !At)
+      Next = B.Bytes.begin(); // Relative 64-bit coordinates wrap at zero.
+    const auto View = ByteView{Value, Low};
+    if (Next != B.Bytes.end() && Next->first == At) {
+      Next->second = View;
+      ++Next;
+    } else {
+      B.Bytes.emplace_hint(Next, At, View);
+    }
   }
   return true;
 }
@@ -484,15 +536,14 @@ SymState::MemoryKnowledge SymState::memoryKnowledge() const {
     auto It = B.Bytes.begin();
     while (It != B.Bytes.end()) {
       const uint64_t Offset = It->first;
-      llvm::SmallVector<SymRef, 8> Bytes;
+      llvm::SmallVector<ByteView, 8> Bytes;
       while (It != B.Bytes.end() && Bytes.size() < 8 &&
              Offset <= std::numeric_limits<uint64_t>::max() - Bytes.size() &&
              It->first == Offset + Bytes.size()) {
-        Bytes.push_back(
-            Ctx->mkExtract(It->second.Value, It->second.Low, kByteBits));
+        Bytes.push_back(It->second);
         ++It;
       }
-      Out.Facts.push_back({Base, Offset, joinBytes(Bytes)});
+      Out.Facts.push_back({Base, Offset, joinByteViews(Bytes)});
     }
   };
   Export({}, AbsoluteMemory);
@@ -501,11 +552,32 @@ SymState::MemoryKnowledge SymState::memoryKnowledge() const {
   return Out;
 }
 
+SymState SymState::scalarSnapshot() const {
+  SymState Result(*Ctx, Order);
+  Result.Registers = Registers;
+  Result.Temporaries = Temporaries;
+  Result.X64MemoryAddressSpaceBases = X64MemoryAddressSpaceBases;
+  return Result;
+}
+
 bool SymState::restoreMemoryKnowledge(const MemoryKnowledge &Knowledge) {
   if (Knowledge.Owner != Ctx || Knowledge.Order != Order)
     return false;
-  SymState Draft(*this);
-  Draft.clobberMemory();
+  SymState Draft(*Ctx, Order);
+  auto ForgottenBank = [&](const Bank &Previous) {
+    Bank Fresh;
+    Fresh.Name = Previous.Name;
+    Fresh.InputKind = Previous.InputKind;
+    Fresh.Epoch = Previous.Epoch;
+    Fresh.RegionBase = Previous.RegionBase;
+    forget(Fresh);
+    return Fresh;
+  };
+  Draft.AbsoluteMemory = ForgottenBank(AbsoluteMemory);
+  for (const auto &[Base, Storage] : Regions)
+    Draft.Regions.emplace(Base, ForgottenBank(Storage));
+  Draft.UnseenRegions = std::make_shared<UnknownRegions>();
+  Draft.MemoryClobbered = true;
   // Historical load provenance remains true of unchanged value identities
   // even when memory knowledge is replaced. It is not used to seed facts.
   for (const auto &Fact : Knowledge.Facts) {
@@ -541,7 +613,10 @@ bool SymState::restoreMemoryKnowledge(const MemoryKnowledge &Knowledge) {
     if (!Draft.writeBank(B, Where.Offset, Fact.Value))
       return false;
   }
-  *this = std::move(Draft);
+  AbsoluteMemory = std::move(Draft.AbsoluteMemory);
+  Regions = std::move(Draft.Regions);
+  UnseenRegions = std::move(Draft.UnseenRegions);
+  MemoryClobbered = Draft.MemoryClobbered;
   return true;
 }
 
@@ -588,6 +663,34 @@ void SymState::recordLoadOrigin(SymRef Value, LoadOrigin Origin) {
   auto It = std::lower_bound(Origins.begin(), Origins.end(), Origin, Less);
   if (It == Origins.end() || *It != Origin)
     Origins.insert(It, Origin);
+}
+
+SymRef SymState::loadMaterialized(SymRef Addr, uint16_t Bytes) {
+  if (!Addr || !Bytes)
+    return {};
+  const auto Where = locate(Addr);
+  const Bank *Storage = &AbsoluteMemory;
+  if (Where.Base) {
+    const auto Found = Regions.find(Where.Base.index());
+    if (Found == Regions.end())
+      return {};
+    Storage = &Found->second;
+  }
+  if (!hasModularCoordinates(*Ctx, Where.Base) &&
+      Where.Offset > std::numeric_limits<uint64_t>::max() - (Bytes - 1))
+    return {};
+  llvm::SmallVector<ByteView, 8> Views;
+  auto Next = Storage->Bytes.lower_bound(Where.Offset);
+  for (unsigned I = 0; I < Bytes; ++I) {
+    const auto At = Where.Offset + I;
+    if (I && !At)
+      Next = Storage->Bytes.begin();
+    if (Next == Storage->Bytes.end() || Next->first != At)
+      return {};
+    Views.push_back(Next->second);
+    ++Next;
+  }
+  return joinByteViews(Views);
 }
 
 SymRef SymState::load(SymRef Addr, uint16_t Bytes) {
