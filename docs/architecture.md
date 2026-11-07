@@ -3190,10 +3190,11 @@ their existing typed handling before the ignored-annotation path.
 Named specifiers resolve their type and kind in one library lookup. Builtin
 spellings keep precedence, declared aliases keep their names, and pointer-sized
 and va_list fallback types apply only when the library has no declaration.
-Declarators with no added pointer, array or function modifiers reuse the inner
-composition directly. Composed declarators take ownership of their modifier
-lists and nested callable, keeping the same binding order and qualifiers
-without copying those temporary structures. Each composition is applied once,
+Declarators collect pointer, array and function modifiers in one list from
+the declared object toward its base type. Parenthesized declarators bind first,
+then suffixes in source order, then pointers in reverse source order. Applying
+the list backward preserves qualifiers and calling conventions without nested
+callable allocations. Each modifier is applied once,
 so its freshly parsed parameter lists become the resulting functions directly.
 
 `importPDBTypes` reads every named record and enumeration of a PDB's TPI
