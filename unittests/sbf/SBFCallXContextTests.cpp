@@ -7746,4 +7746,137 @@ TEST(SBFCallXContexts,
   }
 }
 
+TEST(SBFCallXContexts, BranchBoundsFollowExactCopiesAndLosslessTruncations) {
+  // Direct copy, truncation, lost high bits, independent equal domains,
+  // overwritten source, overwritten shifted value, and a skipped prefix.
+  for (unsigned Mode : {0u, 1u, 2u, 3u, 4u, 5u, 6u}) {
+    SCOPED_TRACE(Mode);
+    constexpr uint64_t Character = 43;
+    constexpr uint64_t Sentinel = 0x110000;
+    const uint64_t Other =
+        Mode == 2 ? (uint64_t{1} << 32) | Character : Sentinel;
+    std::vector<test::EncodedInstruction> Text;
+    const auto Literal = [&](unsigned R, uint64_t Value) {
+      const auto Encoded = test::loadImm64(R, Value);
+      Text.insert(Text.end(), Encoded.begin(), Encoded.end());
+    };
+    Literal(6, kInputStart);
+    const auto Choose = [&](unsigned R, int16_t Offset, uint64_t Alternative) {
+      Text.push_back(encode(Opcode::LD_DW_REG, 1, 6, Offset));
+      const size_t Branch = Text.size();
+      Text.push_back({});
+      Literal(R, Alternative);
+      const size_t Jump = Text.size();
+      Text.push_back({});
+      const size_t First = Text.size();
+      Literal(R, Character);
+      Text[Branch] = encode(Opcode::JEQ64_IMM, 1, 0, First - Branch - 1);
+      Text[Jump] = encode(Opcode::JA, 0, 0, Text.size() - Jump - 1);
+    };
+    Choose(3, 0, Other);
+    Choose(4, 8, Sentinel);
+    Text.push_back(encode(Opcode::LD_DW_REG, 5, 6, 16));
+    const size_t RootCall = Text.size();
+    Text.push_back({});
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Helper = Text.size();
+    Text.push_back(encode(Opcode::MOV64_REG, 1, Mode == 3 ? 4 : 3));
+    if (Mode) {
+      if (Mode == 6)
+        Text.push_back(encode(Opcode::JEQ64_IMM, 5, 0, 1));
+      Text.push_back(encode(Opcode::LSH64_IMM, 1, 0, 0, 32));
+      if (Mode == 4)
+        Text.push_back(encode(Opcode::MOV64_IMM, 3, 0, 0, Sentinel));
+      if (Mode == 5)
+        Text.push_back(encode(Opcode::MOV64_IMM, 1, 0, 0, Character));
+      Text.push_back(encode(Opcode::RSH64_IMM, 1, 0, 0, 32));
+    }
+    const size_t Guard = Text.size();
+    Text.push_back({});
+    Text.push_back(encode(Opcode::MOV64_REG, 2, 3));
+    const size_t Forward = Text.size();
+    Text.push_back({});
+    Text.push_back(encode(Opcode::MOV64_REG, 6, 0));
+    const size_t Site = Text.size();
+    Text.push_back(encode(Opcode::CALL_REG, 6));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Skip = Text.size();
+    Text.push_back(encode(Opcode::MOV64_IMM, 0));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Select = Text.size();
+    Text.push_back({});
+    const size_t ReturnB = Text.size();
+    Literal(0, 0);
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t ReturnA = Text.size();
+    Literal(0, 0);
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t TargetA = Text.size();
+    Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t TargetB = Text.size();
+    Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+    Text.push_back(encode(Opcode::EXIT));
+    Text[RootCall] = encode(Opcode::CALL_IMM, 0, 1, 0, Helper - RootCall - 1);
+    Text[Guard] = encode(Opcode::JEQ64_IMM, 1, 0, Skip - Guard - 1, Sentinel);
+    Text[Forward] = encode(Opcode::CALL_IMM, 0, 1, 0, Select - Forward - 1);
+    Text[Select] =
+        encode(Opcode::JEQ64_IMM, 2, 0, ReturnA - Select - 1, Character);
+    for (const auto &[Slot, Target] :
+         {std::pair{ReturnA, TargetA}, std::pair{ReturnB, TargetB}}) {
+      const auto Encoded = test::loadImm64(0, kBytecodeStart + Target * 8);
+      std::copy(Encoded.begin(), Encoded.end(), Text.begin() + Slot);
+    }
+    auto Program = analyze(test::makeImage(Text, {}));
+    ASSERT_TRUE(static_cast<bool>(Program))
+        << llvm::toString(Program.takeError());
+    auto Report = recoverCallXContexts(*Program);
+    ASSERT_TRUE(static_cast<bool>(Report))
+        << llvm::toString(Report.takeError());
+    checkSummaryReferences(*Report);
+    EXPECT_EQ(llvm::any_of(Report->Contexts,
+                           [&](const auto &Evidence) {
+                             return Evidence.CallXSlot == Site &&
+                                    Evidence.TargetSlot == TargetA;
+                           }),
+              Mode <= 1);
+    for (unsigned First : {0u, 1u})
+      for (unsigned Second : {0u, 1u})
+        for (unsigned Shift : {0u, 1u}) {
+          SCOPED_TRACE(::testing::Message()
+                       << First << ":" << Second << ":" << Shift);
+          uint64_t R3 = First ? Other : Character;
+          uint64_t R1 = Mode == 3 ? (Second ? Sentinel : Character) : R3;
+          if (Mode) {
+            if (Mode != 6 || Shift)
+              R1 <<= 32;
+            if (Mode == 4)
+              R3 = Sentinel;
+            if (Mode == 5)
+              R1 = Character;
+            R1 >>= 32;
+          }
+          const uint64_t Expected = R1 == Sentinel    ? 0
+                                    : R3 == Character ? 42
+                                                      : 43;
+          std::vector<uint8_t> Input(24);
+          llvm::support::endian::write64le(Input.data(), First);
+          llvm::support::endian::write64le(Input.data() + 8, Second);
+          llvm::support::endian::write64le(Input.data() + 16, Shift);
+          ExecutionEnvironment Environment;
+          Environment.Memory.push_back(
+              {kInputStart, Input, false, "selectors"});
+          auto Raw = executeRaw(*Program, std::move(Environment));
+          ASSERT_TRUE(static_cast<bool>(Raw))
+              << llvm::toString(Raw.takeError());
+          EXPECT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+          EXPECT_EQ(Raw->ReturnValue, Expected);
+          if (Expected)
+            EXPECT_TRUE(llvm::any_of(Raw->Trace, [&](const auto &Step) {
+              return Step.Slot == (Expected == 42 ? TargetA : TargetB);
+            }));
+        }
+  }
+}
+
 } // namespace neverd::sbf
