@@ -1721,6 +1721,16 @@ parameter alias during result writes, records the exact buffer address and
 clobbers x8. This execution scope is smaller than the SDK's stack/FP/variadic
 transport matrix. The receipt distinguishes the actual model producer from
 later integrated exports and records their object hashes.
+After dev integration, all 25 original-x8 objects and all 1,625 objects from
+the earlier typed-call matrix retain their recorded bytes. The final Release
+regression covers 4,892 instances from twelve rebuilt executables: 4,815 pass
+and 77 explicitly skip for recorded host or fixture prerequisites. Two
+parallel timeouts pass serially with the unchanged CTest limits; both initial
+and retry reports remain bound by the receipt. The public SDK rerun records
+the tested revision and library hash independently of the model producer.
+The earlier non-x8 typed-call matrix retains the C O0 exception-class
+differences recorded in its own receipt; byte-identical exports preserve
+that qualification and its limits.
 `ImmutableNativeCalls.Generated*` checks ordinary and loop-frame image
 publication after dead private reads and their initializers disappear. The
 relocation validator still rejects unbound live image addresses.
