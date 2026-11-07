@@ -6686,9 +6686,10 @@ TEST(SBFCallXContexts, NewCapturedInputCanUseEquivalentCompletedResults) {
           Text.push_back(encode(Opcode::MOV64_IMM, 9, 0, 0, I));
         }
         Targets.push_back(Literal(2, 0));
-        Text.push_back(encode(Opcode::ST_DW_REG, 10, 2, -8));
-        Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
-        Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -8));
+        // Each disconnected entry establishes its own backing address. An
+        // unknown entry frame must not reduce this to expression-only proof.
+        Literal(1, kHeapStart + 96);
+        Text.push_back(encode(Opcode::ST_DW_REG, 1, 2));
         Literal(4, kInputStart);
         Calls.push_back(Text.size());
         Text.push_back({});
