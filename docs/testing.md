@@ -20555,6 +20555,12 @@ responses; a primitive improvement alone does not establish GUI latency.
 expanded tree reads, retains distinct variable identities and repeated reads,
 and checks an indirect target when a call has no arguments.
 
+`HighControlFlowSemantics.CopyCandidateCountsRetainMemorySnapshots` checks
+single-use inlining and both copy-folding passes after count-based admission.
+Ordinary reads keep their earlier value across an intervening store; atomic
+and segmented reads retain their original expression at the original statement.
+Run the same source suites when changing the order of candidate checks.
+
 ### Predicate cleanup and independent call effects
 
 `HighSourceExpressions.PredicateCleanupKeepsDistinctIndirectCallEffects`

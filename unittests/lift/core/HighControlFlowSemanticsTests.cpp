@@ -36,6 +36,7 @@ bool inlineSingleDefs(std::vector<HighStmt> &, const VarKeyMap<ExprPtr> &);
 void filterStableCopyCandidates(const std::vector<HighStmt> &,
                                 VarKeyMap<ExprPtr> &);
 void foldCopyChains(HighFunc &);
+void foldMultiUseCopies(std::vector<HighStmt> &);
 void resolveRegAliases(std::vector<HighStmt> &);
 bool simplifyAllExprs(std::vector<HighStmt> &);
 void recoverSwitchStatements(HighFunc &);
@@ -5272,6 +5273,51 @@ TEST(HighControlFlowSemantics, NestedCallRetainsItsPrecedingMemorySnapshot) {
   inlineSingleDefSingleUse(F.Body);
   EXPECT_EQ(execute(F, 0), 6u);
   EXPECT_EQ(F.Body.back().RetVal->Kind, ExprKind::Var);
+}
+
+TEST(HighControlFlowSemantics, CopyCandidateCountsRetainMemorySnapshots) {
+  for (unsigned Pass = 0; Pass < 3; ++Pass) {
+    for (unsigned Boundary = 0; Boundary < 3; ++Boundary) {
+      SCOPED_TRACE(Pass);
+      SCOPED_TRACE(Boundary);
+      const auto Address = HighExpr::makeConst(0x4000, 8);
+      auto Store = [&](va_t Site, uint64_t Value) {
+        HighStmt S;
+        S.Kind = StmtKind::Store;
+        S.Addr = Site;
+        S.StoreAddr = Address;
+        S.StoreVal = HighExpr::makeConst(Value, 8);
+        return S;
+      };
+      auto Read = HighExpr::makeLoad(Address, NdType::makeInt(8));
+      if (Boundary == 1)
+        Read->MemoryOrdering = NdMemoryOrdering::Acquire;
+      else if (Boundary == 2)
+        Read->MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+      auto Snapshot = assign(0x1004, 2, 0);
+      Snapshot.Val =
+          HighExpr::makeBinop(NdOp::INT_ADD, Read, HighExpr::makeConst(1, 8));
+      auto Copy = assign(0x100c, 3, 0);
+      Copy.Val = local(2);
+      HighFunc F;
+      F.Body = {Store(0x1000, 5), Snapshot, Store(0x1008, 7), Copy,
+                result(0x1010, local(3))};
+      if (Boundary == 0)
+        ASSERT_EQ(execute(F, 0), 6u);
+      if (Pass == 0)
+        foldCopyChains(F);
+      else if (Pass == 1)
+        foldMultiUseCopies(F.Body);
+      else
+        inlineSingleDefSingleUse(F.Body);
+      // The copy remains a read of the earlier value, across the overwrite.
+      ASSERT_EQ(F.Body[3].Val->Kind, ExprKind::Var);
+      EXPECT_EQ(F.Body[3].Val->Var.Id, 2u);
+      EXPECT_EQ(F.Body[1].Val, Snapshot.Val);
+      if (Boundary == 0)
+        EXPECT_EQ(execute(F, 0), 6u);
+    }
+  }
 }
 
 TEST(HighControlFlowSemantics, SameRegisterAliasesPreserveExtensionSemantics) {
