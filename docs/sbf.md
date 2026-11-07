@@ -767,8 +767,12 @@ when a later destination write may overlap. Only generic summaries retain a
 complete entry-relative write history for deferred copies. A specialized caller
 applies them to its current memory and retains the resulting typed facts; it
 cannot replay them against an earlier entry snapshot. A caller can also
-instantiate a generic memory-transfer wrapper along a completely proven scalar
-path. Schema 12 also follows inline loads/stores and counted loops through the
+instantiate a memory-transfer wrapper along a completely proven scalar path
+when its summary has generalized inputs or unknown writes. A specialized loop
+that widens its destination uses the same path proof as a generic summary. The
+generic function body identifies the wrapper even when the specialized path
+uses only inline stores and does not reach its copy syscall. Schema 12 also
+follows inline loads/stores and counted loops through the
 canonical typed-memory transfer. The requested length remains bounded by the
 existing modeled-scratch limit. Every instruction, temporary state, write
 footprint and visited register snapshot consumes the existing work or retained

@@ -3120,8 +3120,12 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
   const auto CopyLength = State.Registers[3].singleton();
   bool CopiesCapturedValue = false;
   bool CopiesKnownFrameRange = false;
-  if (Callee && Callee->Generic && Callee->HasMemoryTransfer &&
-      CopyLength.ValueKind == RegisterValue::Kind::Constant) {
+  // A specialized loop can also widen its destination to unknown. The
+  // generic body identifies the transfer wrapper even when the specialized
+  // path uses only inline stores and never reaches its copy syscall.
+  if (Callee && (Callee->Generic || Callee->Effects.Unknown) &&
+      CopyLength.ValueKind == RegisterValue::Kind::Constant &&
+      GenericContexts.at(Callee->EntryBlock)->HasMemoryTransfer) {
     for (unsigned R : {1u, 2u})
       CopiesCapturedValue |= llvm::any_of(
           State.Registers[R].values(), [](const RegisterValue &Value) {
@@ -3130,7 +3134,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     const auto Source = memoryAddress(State.Registers[2].singleton());
     const auto Destination = memoryAddress(State.Registers[1].singleton());
     // An inline stack-copy loop can erase unrelated saved pointers when its
-    // generic destination widens. Replay the known address/length path even
+    // summary destination widens. Replay the known address/length path even
     // when the copied bytes are unknown. Plain syscall wrappers already have
     // transfer summaries; replaying those adds unrelated scratch snapshots to
     // later specializations and can displace their useful inputs.
