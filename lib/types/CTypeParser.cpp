@@ -2611,10 +2611,10 @@ ParseResult parseCTypes(llvm::StringRef Source, TypeLibrary &Library,
   TokenList Tokens = Lexer(Source, Result.Problems, Spellings).run();
   if (!Result.Problems.empty())
     return Result;
-  TypeLibrary Scratch(Library);
-  Parser(std::move(Tokens), Scratch, Options, Result).run();
+  TypeLibrary::Trial Trial(Library);
+  Parser(std::move(Tokens), Library, Options, Result).run();
   if (Result.Problems.empty() || Options.KeepGoing)
-    Library = std::move(Scratch);
+    Trial.keep();
   return Result;
 }
 

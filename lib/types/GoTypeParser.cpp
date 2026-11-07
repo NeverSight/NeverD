@@ -1211,10 +1211,10 @@ ParseResult parseGoTypes(llvm::StringRef Source, TypeLibrary &Library,
   std::vector<GToken> Tokens = lexGo(Source, Result.Problems);
   if (!Result.Problems.empty())
     return Result;
-  TypeLibrary Scratch(Library);
-  GoReader(std::move(Tokens), Scratch, Options, Result).run();
+  TypeLibrary::Trial Trial(Library);
+  GoReader(std::move(Tokens), Library, Options, Result).run();
   if (Result.Problems.empty())
-    Library = std::move(Scratch);
+    Trial.keep();
   return Result;
 }
 

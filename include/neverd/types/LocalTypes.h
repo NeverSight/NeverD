@@ -34,6 +34,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace neverd::types {
@@ -279,13 +280,37 @@ class TypeLibrary {
 public:
   explicit TypeLibrary(DataModel Model = DataModel::LLP64)
       : Model(Model), ABI(defaultRecordABI(Model)) {}
-  /// Copies are whole libraries of their own, which share the definitions,
-  /// so that a change can be tried on one and kept or dropped.  A definition
-  /// never changes once made: a new one takes its place.
+  /// Copies are whole libraries of their own, which share the definitions.  A
+  /// definition never changes once made: a new one takes its place.
   TypeLibrary(const TypeLibrary &Other) = default;
   TypeLibrary &operator=(const TypeLibrary &Other) = default;
   TypeLibrary(TypeLibrary &&) = default;
   TypeLibrary &operator=(TypeLibrary &&) = default;
+
+  /// A change tried on the library itself, for what it changes rather than the
+  /// size of the library: what \p Library defines or removes while this lives
+  /// is undone unless kept, and it then reads as it did, prototypes in their
+  /// order.  One at a time, and the library is not copied meanwhile.
+  class Trial {
+  public:
+    explicit Trial(TypeLibrary &Library);
+    Trial(const Trial &) = delete;
+    Trial &operator=(const Trial &) = delete;
+    ~Trial();
+    void keep() { Kept = true; }
+
+  private:
+    TypeLibrary &Library;
+    bool Kept = false;
+    /// Each type changed with what its ordinal held, null for a new one, oldest
+    /// first.
+    std::vector<std::pair<uint32_t, std::shared_ptr<const LocalType>>> Changed;
+    /// The table as it was before the first prototype: taking an entry out of
+    /// one again would move later entries.
+    std::optional<llvm::StringMap<std::shared_ptr<const FunctionDef>>>
+        PrototypesBefore;
+    friend class TypeLibrary;
+  };
 
   DataModel dataModel() const { return Model; }
   /// How the program's compilers laid its records out, which parsing lays
@@ -345,6 +370,7 @@ private:
   /// By ordinal - 1; null where a type was removed.
   std::vector<std::shared_ptr<const LocalType>> ByOrdinal;
   llvm::StringMap<uint32_t> ByName;
+  Trial *Tried = nullptr;
 };
 
 /// A member as MSVC lists it: anonymous unions and structures flattened into
