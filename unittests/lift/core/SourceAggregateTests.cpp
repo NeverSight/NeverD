@@ -116,6 +116,25 @@ TEST(SourceAggregate, RecordTagsKeepWordAndPointeeTypeIdentity) {
   }
 }
 
+TEST(SourceAggregate, IndirectRecordSpellingDoesNotGrantDirectValueABI) {
+  const auto Word = NdType::makeInt(sizeof(uint64_t), false);
+  const auto Mixed = NdType::makeStruct(
+      {Word, NdType::makeFloat(sizeof(double)), NdType::makePtr(Word)});
+  const auto Nested = NdType::makeStruct({Mixed, Mixed});
+  for (const auto &Record : {Mixed, Nested}) {
+    ASSERT_TRUE(Record);
+    EXPECT_TRUE(sourceAggregateMembers(Record).empty());
+    EXPECT_TRUE(hasCSpelling(Record));
+    EXPECT_FALSE(hasCValueLayout(Record));
+    EXPECT_TRUE(hasCValueLayout(NdType::makePtr(Record)));
+    auto Invalid = std::make_shared<NdType>(*Record);
+    Invalid->FieldOffsets.back() = 0;
+    EXPECT_FALSE(hasCSpelling(Invalid));
+    EXPECT_FALSE(hasCValueLayout(NdType::makePtr(Invalid)));
+  }
+  EXPECT_NE(typeToC(Mixed), typeToC(Nested));
+}
+
 TEST(SourceAggregate, SourceNamesAreSpelledAsC) {
   // A debug record's C++ name is the identifier its unit declares it under,
   // which the C++ view names back; a record that shares a C library
@@ -401,9 +420,11 @@ TEST(SourceAggregate, ThreeWordResultsUseOnlyTheDarwinArm64IndirectPointer) {
   EXPECT_FALSE(assignDarwinScalarSourceABI(Unsupported, Arch::AArch64, Error));
   Unsupported = *Hint;
   EXPECT_FALSE(assignDarwinSwiftSourceABI(Unsupported, Arch::AArch64, Error));
-  Unsupported = *Hint;
-  Unsupported.Parameters.push_back({"record", Hint->ReturnType});
-  EXPECT_FALSE(assignDarwinFixedSourceABI(Unsupported, Arch::AArch64, Error));
+  auto WithInput = *Hint;
+  WithInput.Parameters.push_back({{}, Hint->ReturnType});
+  ASSERT_TRUE(assignDarwinFixedSourceABI(WithInput, Arch::AArch64, Error));
+  EXPECT_TRUE(WithInput.Parameters.back().IndirectByValue);
+  EXPECT_TRUE(validateSourceABI(WithInput, Error));
   for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Bad = *Hint;
@@ -664,9 +685,15 @@ TEST(SourceAggregate, IndirectRecordsRejectPartialOrIncompatibleCarriers) {
         break;
       }
       }
-      EXPECT_FALSE(validateSourceABI(Bad, Error));
-      EXPECT_FALSE(Error.empty());
-      EXPECT_TRUE(sourceABIParameters(Bad).empty());
+      if (Mutation == 4 || Mutation == 5) {
+        // Natural non-HFA records use the same indirect pointer carrier.
+        EXPECT_TRUE(validateSourceABI(Bad, Error)) << Error;
+        EXPECT_FALSE(sourceABIParameters(Bad).empty());
+      } else {
+        EXPECT_FALSE(validateSourceABI(Bad, Error));
+        EXPECT_FALSE(Error.empty());
+        EXPECT_TRUE(sourceABIParameters(Bad).empty());
+      }
       EXPECT_FALSE(equalSourceABIs(H, Bad));
     }
     auto Stack = H;

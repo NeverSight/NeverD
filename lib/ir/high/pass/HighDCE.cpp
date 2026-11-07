@@ -798,8 +798,7 @@ static void iterativeDCE(HighFunc &Func,
           S.Dst->Kind == ExprKind::Var) {
         auto Key = VK(S.Dst->Var);
         InlineDefCount[Key]++;
-        if (S.Val->Kind != ExprKind::Call && !S.Val->hasOrderedMemoryAccess() &&
-            !containsNonMovableEffect(S.Val))
+        if (S.Val->Kind != ExprKind::Call)
           InlineDefs[Key] = S.Val;
       }
       forEachRhsExpr(S, [&](const ExprPtr &E) {
@@ -807,7 +806,10 @@ static void iterativeDCE(HighFunc &Func,
       });
     });
     for (auto It = InlineDefs.begin(); It != InlineDefs.end();) {
-      if (InlineDefCount[It->first] != 1 || InlineUseCount[It->first] != 1)
+      // Prove effects only for candidates whose counts permit inlining.
+      // containsNonMovableEffect also owns ordered-memory admission.
+      if (InlineDefCount[It->first] != 1 || InlineUseCount[It->first] != 1 ||
+          containsNonMovableEffect(It->second))
         It = InlineDefs.erase(It);
       else
         ++It;

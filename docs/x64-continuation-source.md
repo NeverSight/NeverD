@@ -1,5 +1,9 @@
 # Explicit x64 continuation C
 
+[Offline QEMU save inspection](qemu-save-snapshot.md) exposes captured CPU fields
+and named RAM-block bytes without restoring a guest. It checks a requested entry
+PC explicitly and does not infer missing ordinary inputs or a complete V6 state.
+
 The alternative [Hyper-V page binding](x86-hyperv-hypercalls.md) publishes
 ordinary, fast and rep result registers through a native page call.
 
@@ -551,6 +555,27 @@ requests without call views retain their previous drivers. Nonpaged LLVM C
 event delivery also preserves the producer-declared event object's pointer,
 using bounded object offsets for its fields. This supplies no object bounds
 for guest addresses or ordinary parameters.
+
+### Retaining private stack inputs and aliases
+
+A four-byte write to an eight-byte stack slot leaves the other four bytes as
+native inputs. The explicit-state interface retains that original storage,
+including addresses transported through registers or saved-register cells.
+Supply the original accessible bytes and retain the same RAM binding across
+CALL, pauses and resume. A scalar parameter or a copy taken at function entry
+cannot replace this storage: an external observer can reload a saved pointer,
+and producer-owned effects during a pause can change either the pointer or its
+pointee. The selected instructions must observe the resulting RAM.
+
+`X64StackObserverTest` checks this distinction through a partial store, saved
+RDI, pointer reload and upper-DWORD read in both source routes, all three V6
+memory/debug modes and both scheduling choices. Its compile-time predicates
+also check changed RAM after a pause and cached results after the original RET.
+The paged model supplies accessible operand RAM and successful transfer
+receipts; it does not certify page walks, debug delivery or Windows callbacks.
+This establishes the explicit input contract, not recovery of these bytes from
+an ordinary C signature. Initial capture and external environment effects still
+belong to the producer.
 
 ### Resuming selected handlers before an original CALL
 
