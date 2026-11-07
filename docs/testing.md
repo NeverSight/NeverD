@@ -12649,6 +12649,29 @@ Legacy cancellation tests retain the API continuation across cancellation, neste
 
 ## Test layout
 
+`NeverDX86LegacySourceTests` compiles the protected original-byte C dispatcher
+with Clang and the compiler selected by `NEVERD_TEST_NEVERC`, at O0/O2. The
+matrix checks 16/32-bit selection, nonflat and wrapping linear aliases, exact
+budget stops, original handler PTE repair/IRET/retry, REP continuation through
+an external interrupt, changed code, physical backing and unbound profiles.
+A completed port input followed by a failed debug entry must survive pending
+selection and resume without a second device read. SDK/CLI checks compare the
+actual generated source and manifest and reject conflicting routes and output
+aliases. `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` retains generated C, its compiled
+bridge fixture and manifests.
+
+Its original-instruction oracle compares 64 protected branch selections per
+compiler/optimization lane using Linux ptrace in code16 and code32. It compares
+PC, accumulator/count, arithmetic/DF flags and stack delta. Software checks
+separately inspect DR6/DEBUGCTL and event state. This does not qualify raw
+full-machine BTF, CPL0 hardware, task/transactional debug or physical port I/O.
+The shared byte-grammar refactor also requires `NeverDX86PagingTests`; no
+unsupported encoding is converted to a NOP or inferred #UD. The SDK adapter
+shares string ownership/error handling with x64, whose public export regressions
+must remain valid. Linux x64 and the configured NeverC compiler are required
+for the compiled lanes; unavailable facilities are reported as skips.
+
+
 `unittests/devirtualization/x86_64/` owns the explicit x64 continuation suites,
 their shared frame fixtures and the native KVM runner. Its local CMake file
 registers the existing source/export targets and labels. Architecture-neutral

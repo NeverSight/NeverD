@@ -812,10 +812,15 @@ cl::opt<std::string> X64Continuation(
     "x64-continuation",
     cl::desc("Export explicit x64 state C using a declared request JSON"),
     cl::value_desc("path"), cl::sub(DecompileCmd));
+cl::opt<std::string> X86LegacySource(
+    "x86-legacy-source",
+    cl::desc(
+        "Export protected i386 original-byte C dispatch using a request JSON"),
+    cl::value_desc("path"), cl::sub(DecompileCmd));
 cl::opt<std::string>
     ContinuationReport("continuation-report",
                        cl::desc("Write the exact instruction and state "
-                                "manifest for --x64-continuation"),
+                                "manifest for explicit state source"),
                        cl::value_desc("path"), cl::sub(DecompileCmd));
 
 cl::opt<bool> Devirtualize(

@@ -78,8 +78,15 @@ The event owner stages registers and caches while retaining descriptor/frame RAM
 effects and CR2 on later faults.
 TSS stack selection, conforming code and privilege changes stay in that owner;
 `ir/X86/X86ExceptionDelivery` shares event kinds, error-code vector sets and
-recursive-fault classification with IA-32e. The legacy entry is an internal
-execution interface, not a general i386 source dispatcher or a task engine.
+recursive-fault classification with IA-32e. The legacy entry remains an internal
+execution interface. `pipeline/X86/X86LegacySourceExport` selects original
+16/32-bit extents using that owner's shared byte grammar and emits a bounded
+C dispatcher. `translate/X86/X86LegacySourceExecution` retains the existing
+state, memory, options and result at its private bridge. Selection keys combine
+the live linear instruction address with CS.D; the dispatcher does not duplicate
+instruction semantics or infer an ordinary C ABI. Event delivery always stops;
+pending entry resumes through the existing owner before more source dispatch.
+This path supplies neither IA-32e compatibility state nor task transitions.
 `translate/X86/X86LegacyFrameReturn` adds protected 16/32-bit IRET/RETF to that
 executor, retaining ordered descriptor writes and IRET NMI unblocking on later
 faults. `ir/X86/X86ReturnRules` shares code-return privilege checks, inaccessible

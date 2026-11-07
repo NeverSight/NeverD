@@ -19,6 +19,11 @@
 namespace neverd {
 namespace limits {
 
+/// Bounded explicit protected-mode C dispatch selection and emitted source.
+inline constexpr size_t kX86LegacySourceRequestBytes = 4u << 20;
+inline constexpr size_t kX86LegacySourceBytes = 128u << 20;
+inline constexpr size_t kX86LegacySourceInstructions = 65536;
+
 //===----------------------------------------------------------------------===//
 // Binary loading
 //===----------------------------------------------------------------------===//

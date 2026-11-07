@@ -35,7 +35,71 @@ llvm::Error invalid(const char *Message) {
   return llvm::createStringError(llvm::errc::invalid_argument, Message);
 }
 
+struct LegacyInstruction {
+  std::optional<X86DebugRegisterEncoding> DebugRegister;
+  std::optional<detail::X86LegacySegmentInstruction> Segment;
+  std::optional<detail::X86LegacyScalarInstruction> Scalar;
+  std::optional<detail::X86LegacyFastSystemInstruction> FastSystem;
+  std::optional<detail::X86LegacyStringInstruction> String;
+  std::optional<detail::X86LegacyPortInstruction> Port;
+  std::optional<detail::X86LegacyFarTransfer> Far;
+  llvm::ArrayRef<uint8_t> Body;
+  unsigned Width;
+  bool IRET, RETF, INT, UD2;
+};
+
+llvm::Expected<LegacyInstruction>
+decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32) {
+  if (Instruction.empty() || Instruction.size() > 15)
+    return invalid("invalid legacy instruction length");
+  auto DebugRegister = x86DebugRegisterEncoding(Instruction, false);
+  if (DebugRegister && DebugRegister->Size != Instruction.size())
+    return invalid("MOV-DR binding contains trailing bytes");
+  LegacyInstruction I{
+      DebugRegister,
+      detail::decodeLegacySegmentInstruction(Instruction, Code32),
+      detail::decodeLegacyScalarInstruction(Instruction, Code32),
+      detail::decodeLegacyFastSystem(Instruction, Code32),
+      detail::decodeLegacyString(Instruction, Code32),
+      detail::decodeLegacyPortIO(Instruction, Code32),
+      detail::decodeLegacyFarTransfer(Instruction, Code32),
+      Instruction,
+      Code32 ? 4u : 2u,
+      false,
+      false,
+      false,
+      false};
+  if (I.Body.front() == 0x66) {
+    I.Width = 6 - I.Width;
+    I.Body = I.Body.drop_front();
+  }
+  const bool Single = Instruction.size() == 1 &&
+                      (Instruction[0] == 0x90 || Instruction[0] == 0xfa ||
+                       Instruction[0] == 0xfb || Instruction[0] == 0xcc ||
+                       Instruction[0] == 0xce || Instruction[0] == 0xf1);
+  I.INT = Instruction.size() == 2 && Instruction[0] == 0xcd;
+  I.UD2 = Instruction.size() == 2 && Instruction[0] == 0x0f &&
+          Instruction[1] == 0x0b;
+  I.IRET = I.Body.size() == 1 && I.Body[0] == 0xcf;
+  I.RETF = (I.Body.size() == 1 && I.Body[0] == 0xcb) ||
+           (I.Body.size() == 3 && I.Body[0] == 0xca);
+  if (!I.Segment && !I.Scalar && !I.FastSystem && !I.String && !I.Port &&
+      !I.Far && !Single && !I.INT && !I.UD2 && !I.IRET && !I.RETF &&
+      !I.DebugRegister)
+    return invalid("unsupported or malformed legacy step instruction");
+  return I;
+}
+
 } // namespace
+
+llvm::Error
+validateX86LegacyInstructionEncoding(llvm::ArrayRef<uint8_t> Instruction,
+                                     bool Code32) {
+  auto Decoded = decodeInstruction(Instruction, Code32);
+  if (!Decoded)
+    return Decoded.takeError();
+  return llvm::Error::success();
+}
 
 llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                                          X86PagedMemory &M,
@@ -79,39 +143,12 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (State.PendingEvent)
     return invalid(
         "resume the pending legacy event before another instruction");
-  if (Instruction.empty() || Instruction.size() > 15)
-    return invalid("invalid legacy instruction length");
-  const auto DebugRegister = x86DebugRegisterEncoding(Instruction, false);
-  if (DebugRegister && DebugRegister->Size != Instruction.size())
-    return invalid("MOV-DR binding contains trailing bytes");
   const bool Code32 = State.Core.Segments[1].Attributes & 0x4000;
-  const auto Segment =
-      detail::decodeLegacySegmentInstruction(Instruction, Code32);
-  const auto Scalar =
-      detail::decodeLegacyScalarInstruction(Instruction, Code32);
-  const auto FastSystem = detail::decodeLegacyFastSystem(Instruction, Code32);
-  const auto String = detail::decodeLegacyString(Instruction, Code32);
-  const auto Port = detail::decodeLegacyPortIO(Instruction, Code32);
-  const auto Far = detail::decodeLegacyFarTransfer(Instruction, Code32);
-  auto Body = Instruction;
-  unsigned Width = Code32 ? 4 : 2;
-  if (Body.front() == 0x66) {
-    Width = 6 - Width;
-    Body = Body.drop_front();
-  }
-  const bool Single = Instruction.size() == 1 &&
-                      (Instruction[0] == 0x90 || Instruction[0] == 0xfa ||
-                       Instruction[0] == 0xfb || Instruction[0] == 0xcc ||
-                       Instruction[0] == 0xce || Instruction[0] == 0xf1);
-  const bool INT = Instruction.size() == 2 && Instruction[0] == 0xcd;
-  const bool UD2 = Instruction.size() == 2 && Instruction[0] == 0x0f &&
-                   Instruction[1] == 0x0b;
-  const bool IRET = Body.size() == 1 && Body[0] == 0xcf;
-  const bool RETF = (Body.size() == 1 && Body[0] == 0xcb) ||
-                    (Body.size() == 3 && Body[0] == 0xca);
-  if (!Segment && !Scalar && !FastSystem && !String && !Port && !Far &&
-      !Single && !INT && !UD2 && !IRET && !RETF && !DebugRegister)
-    return invalid("unsupported or malformed legacy step instruction");
+  auto Decoded = decodeInstruction(Instruction, Code32);
+  if (!Decoded)
+    return Decoded.takeError();
+  const auto &[DebugRegister, Segment, Scalar, FastSystem, String, Port, Far,
+               Body, Width, IRET, RETF, INT, UD2] = *Decoded;
   if (DebugRegister && (!Options.Debug || !x86DebugRegisters(*Options.Debug)))
     return invalid("MOV-DR requires the debug-register profile");
   if (Far && Options.FarTransfers != X86LegacyFarTransferProfile::OrderedFrame)

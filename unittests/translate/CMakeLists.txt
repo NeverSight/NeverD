@@ -20,6 +20,17 @@ add_neverd_unittest(NeverDX86PagingTests
   X64PagedEventDelivery
 )
 
+add_neverd_unittest(NeverDX86LegacySourceTests
+  x86/X86LegacySourceTests.cpp
+  LINK_COMPONENTS Pipeline Translate
+  LINK_LIBS neverd_shared
+)
+target_compile_definitions(NeverDX86LegacySourceTests PRIVATE
+  NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}"
+  NEVERD_BINARY="$<TARGET_FILE:neverd>"
+  TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../lift")
+add_dependencies(NeverDX86LegacySourceTests neverd)
+
 add_neverd_unittest(NeverDTranslationContractTests
   ${CMAKE_SOURCE_DIR}/tools/neverd/NeverDTranslateOutput.cpp
   GuestMemoryRuntimeTests.cpp
