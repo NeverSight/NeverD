@@ -408,6 +408,16 @@
     "int64_t",
     "uint64_t",
     "void*",
-    "void *"
+    "void *",
+    "LargeHFA*",
+    "LargeHFA *",
+    "Big*",
+    "Big *",
+    "Mixed*",
+    "Mixed *",
+    "FiveFloats*",
+    "FiveFloats *",
+    "NestedIndirect*",
+    "NestedIndirect *"
   ]
 }
