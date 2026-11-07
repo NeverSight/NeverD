@@ -2227,6 +2227,10 @@ from its owner.
 GUI refreshes retain loaded context within the per-side query budget and keep a
 prefetch margin, so replacing unchanged rows does not shrink and regrow the
 window used to route branch arrows. Revision and navigation fences still apply.
+The listing resolves arrow endpoints once after a page replaces, extends or
+trims those bounded rows, and clears the endpoints with the document. Painting
+selects visible edges and assigns lanes and current-arrow colors from the live
+viewport and cursor; the first eligible row at a target keeps precedence.
 
 <!-- i18n-section: interactive-patch-ownership -->
 ## Interactive patch ownership
