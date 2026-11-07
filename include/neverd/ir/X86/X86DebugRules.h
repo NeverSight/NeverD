@@ -33,7 +33,28 @@ enum class X86InstructionDebugProfile : uint8_t {
   /// Delayed MOV/POP-SS causes survive software entry, whose new accesses
   /// replace their B0..B3 status. Other debug extensions remain unbound.
   Watchpoints,
+  /// Watchpoints plus nontransactional Intel branch single-stepping (BTF).
+  /// LBR/trace stores, task switches and RTM remain outside this binding.
+  BranchWatchpoints,
 };
+
+inline constexpr uint64_t kX86BranchTraceFlag = 2;
+
+constexpr bool x86DebugWatchpoints(X86InstructionDebugProfile Profile) {
+  return Profile == X86InstructionDebugProfile::Watchpoints ||
+         Profile == X86InstructionDebugProfile::BranchWatchpoints;
+}
+
+constexpr bool x86DebugRegisters(X86InstructionDebugProfile Profile) {
+  return Profile == X86InstructionDebugProfile::DebugRegisters ||
+         x86DebugWatchpoints(Profile);
+}
+
+/// Sample TF before execution. Taken is the actual control-flow predicate,
+/// even when the target equals fallthrough; REP iteration is not a branch.
+constexpr bool x86InstructionDebugStep(bool TF, uint64_t DebugCTL, bool Taken) {
+  return TF && (!(DebugCTL & kX86BranchTraceFlag) || Taken);
+}
 
 template <typename Word> struct X86InstructionDebugState {
   Word DR6 = 0xffff0ff0;
@@ -50,12 +71,12 @@ x86InstructionDebugValid(uint64_t DR6, uint64_t DR7, uint64_t DebugCTL,
                          X86InstructionDebugProfile Profile =
                              X86InstructionDebugProfile::InstructionStep,
                          uint64_t CR4 = 0, uint8_t PendingData = 0) {
-  const bool Watch = Profile == X86InstructionDebugProfile::Watchpoints;
+  const bool Watch = x86DebugWatchpoints(Profile);
   const bool Controls =
       Profile == X86InstructionDebugProfile::InstructionStep ? DR7 == 0x400
       : Profile == X86InstructionDebugProfile::ExecuteBreakpoints
           ? (DR7 & ~uint64_t{0x3ff}) == 0x400
-          : (Profile == X86InstructionDebugProfile::DebugRegisters || Watch) &&
+          : x86DebugRegisters(Profile) &&
                 (DR7 & ~(Watch ? uint64_t{0xffff23ff} : uint64_t{0x23ff})) ==
                     0x400 &&
                 (DR6 & 0x10800) == 0x10800;
@@ -70,7 +91,12 @@ x86InstructionDebugValid(uint64_t DR6, uint64_t DR7, uint64_t DebugCTL,
       if ((!Kind && Length) || (Kind == 2 && (!(CR4 & 8) || Length == 2)))
         return false;
     }
-  return Controls && DebugCTL == 0 && (DR6 & 0xffffffff00000000ULL) == 0 &&
+  const uint64_t DebugMask =
+      Profile == X86InstructionDebugProfile::BranchWatchpoints
+          ? kX86BranchTraceFlag
+          : 0;
+  return Controls && !(DebugCTL & ~DebugMask) &&
+         (DR6 & 0xffffffff00000000ULL) == 0 &&
          (DR6 & 0xfffe07f0u) == 0xfffe07f0u && !(DR6 & 0x1000);
 }
 
@@ -101,6 +127,9 @@ struct X86RepeatDebugStep {
   uint64_t PC = 0, Flags = 0, Count = 0, Source = 0, Destination = 0;
   uint8_t AddressBytes = 0, ElementBytes = 0;
   bool SourceIndex = false, DestinationIndex = false, Compare = false;
+  /// Raw TF remains in Flags: BTF suppresses the instruction-step trap but
+  /// does not erase target-specific effects of TF on fast-string grouping.
+  uint64_t DebugCTL = 0;
 };
 
 struct X86RepeatDebugBinding {
@@ -115,8 +144,9 @@ struct X86RepeatDebugBinding {
 
 inline bool x86RepeatDebugDefers(const X86RepeatDebugBinding &Binding,
                                  const X86RepeatDebugStep &Step) {
-  return !(Step.Flags & 0x100) && Step.Count && !Step.Compare &&
-         Step.DestinationIndex && !Binding.EndGroup(Binding.Context, Step);
+  return !x86InstructionDebugStep(Step.Flags & 0x100, Step.DebugCTL, false) &&
+         Step.Count && !Step.Compare && Step.DestinationIndex &&
+         !Binding.EndGroup(Binding.Context, Step);
 }
 
 /// Linear byte ranges, independent of CPL, AC and RF. The qualified target
@@ -165,6 +195,22 @@ inline uint64_t x86InstructionDebugStatus(uint64_t DR6, bool SingleStep,
          Breakpoints;
 }
 
+/// Publish before attempting IDT entry, retaining the cause and BTF clearing
+/// across entry faults or host stops. Software INT 1 is not a #DB cause.
+template <typename Bank>
+inline void x86PublishInstructionDebug(Bank &Debug, bool SingleStep,
+                                       uint8_t Breakpoints = 0) {
+  Debug.DR6 = x86InstructionDebugStatus(Debug.DR6, SingleStep, Breakpoints);
+  Debug.DebugCTL &= ~kX86BranchTraceFlag;
+}
+
+/// External debug producers use the same acceptance effects without replacing
+/// their DR6 cause. Deferred events must not call this function.
+template <typename Bank> inline void x86AcceptDebugException(Bank &Debug) {
+  Debug.DR7 &= ~uint64_t{0x2000};
+  Debug.DebugCTL &= ~kX86BranchTraceFlag;
+}
+
 /// Accepted event entry consumes the old delayed cause. Software entry keeps
 /// its trap request but the target reports only the entry's new data matches.
 /// A newly recognized data trap also reports next-PC execution comparators.
@@ -177,7 +223,7 @@ inline bool x86EventDataBreakpoints(Bank &Debug, bool Software, uint8_t Matches,
     return false;
   Matches |=
       x86ExecutionBreakpoints(Debug.DR, Debug.DR7, LinearPC, Flags, false);
-  Debug.DR6 = x86InstructionDebugStatus(Debug.DR6, false, Matches);
+  x86PublishInstructionDebug(Debug, false, Matches);
   return true;
 }
 

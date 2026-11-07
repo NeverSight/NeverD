@@ -1,5 +1,26 @@
 # Remaining x64 C-quality work
 
+Existing raw libvirt/QEMU saves can now be inspected offline through
+`scripts/qemu_save_snapshot.py`. CPU/APIC fields and original RAM-block bytes
+are available without restoring a guest; one bounded page index supports
+subsequent reads. Repeated page records preserve the latest bytes, missing pages
+fail, and an expected entry PC must match the capture. The inspected matching
+kernel save is paused elsewhere, so it does not recover either ordinary
+registry input. Physical mappings, complete V6 state import, invocation capture
+and external environment effects remain separate obligations. The independent
+tool adds no work to source emission. See `docs/qemu-save-snapshot.md`.
+
+The explicit-state route now has an original-instruction stack-observer
+regression: a partial DWORD store preserves arbitrary upper bits, and an
+observer reloads the slot pointer from a saved RDI cell. Both source routes
+retain changes to either that pointer or its pointee across a bounded pause,
+then cache the result only after the original RET. Static predicates cover
+plain, paged and paged-debug call views with and without scheduling; the paged
+operand/transfer model supplies no page-walk or debug-delivery proof. This is
+validation of the explicit native input contract, with no product code or
+runtime overhead added. It does not recover the two ordinary registry inputs
+or establish initial capture and arbitrary external environment effects.
+
 Pending original CALLs now have a separate selected-handler resume interface in
 both V6 memory modes, with and without scheduling, when call-site pauses are
 enabled. Those pauses prevent a near RET/fallthrough from executing CALL before

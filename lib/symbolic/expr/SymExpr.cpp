@@ -287,12 +287,13 @@ SymRef SymContext::mkVar(llvm::StringRef Name, uint32_t Width) {
   auto Identity = std::make_pair(Key, Width);
   auto It = VarByNameAndWidth.find(Identity);
   if (It != VarByNameAndWidth.end())
-    return intern(SymOp::Var, Width, {}, It->second);
+    return It->second;
   auto Id = static_cast<uint32_t>(Vars.size());
   Vars.push_back(SymVarInfo{Key, Width});
   recordVariableName(Key, Id);
-  VarByNameAndWidth.emplace(std::move(Identity), Id);
-  return intern(SymOp::Var, Width, {}, Id);
+  const auto Result = intern(SymOp::Var, Width, {}, Id);
+  VarByNameAndWidth.emplace(std::move(Identity), Result);
+  return Result;
 }
 
 SymRef SymContext::mkInputVar(llvm::StringRef Name, uint32_t Width,

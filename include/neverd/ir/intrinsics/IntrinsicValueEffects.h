@@ -72,6 +72,15 @@ constexpr bool intrinsicWritesOnlyItsOutput(Intrinsic Id) {
   }
 }
 
+/// An unused nontrapping EFLAGS image may disappear. Live reads retain their
+/// occurrence: this grants no value-only, CSE or motion permission. The lifter
+/// represents PUSHF stack adjustment and memory writes as separate operations.
+constexpr bool intrinsicHasDiscardableStateRead(Intrinsic Id, uint8_t NumInputs,
+                                                uint16_t OutputSize) {
+  return Id == Intrinsic::Pushf && NumInputs == 1 &&
+         (OutputSize == 2 || OutputSize == 4 || OutputSize == 8);
+}
+
 /// Intrinsics run for the system register they read into their destination
 /// (`mrs x0, cntvct_el0`, `mrc p15, #0, r0, c13, c0, #3`, `mov rax, cr3`).
 /// A function that returns that value returns a value, though the

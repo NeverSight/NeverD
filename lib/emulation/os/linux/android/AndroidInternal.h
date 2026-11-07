@@ -11,8 +11,10 @@
 
 #include "neverd/emulation/AndroidNative.h"
 #include "neverd/emulation/IntegerABI.h"
+#include "neverd/emulation/MemoryView.h"
 #include "neverd/loader/ELF/ELFProgramLinking.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 
 #include <array>
@@ -158,9 +160,21 @@ public:
 };
 class GuestThreads;
 /// Native libbinder TLS, independent of JNI attachments and kernel handles.
+struct BinderPendingCommand {
+  std::shared_ptr<linux_model::LinuxDeviceState> Device;
+  uint32_t FD;
+  uint32_t Command;
+  uint64_t Value;
+  std::shared_ptr<const linux_model::BinderBuffer> Lease;
+  uint64_t Cookie = 0; // Pointer/cookie acknowledgments carry two words.
+};
 struct BinderThreadState {
   // API 28 IPCThreadState construction starts a new native thread at zero.
   uint32_t StrictModePolicy = 0;
+  bool UsesBinder = false;
+  // API 28 freeBuffer uses self(), ignoring the originating thread cookie.
+  // Recycle queues a free on the current thread's next driver exchange.
+  std::vector<BinderPendingCommand> PendingCommands;
 };
 class Bionic {
 public:
@@ -181,6 +195,7 @@ public:
                const std::optional<SleepContinuation> &Sleep = std::nullopt);
   BionicResult resumeSemaphore(uint64_t Address, bool Shared);
   llvm::Error jniThreadExit();
+  BionicResult binderThreadExit();
   llvm::Error initializeDex();
 
 private:
@@ -193,6 +208,15 @@ private:
   const LinkedImage &Linked;
   GuestThreads *Threads;
   BinderThreadState SingleThreadBinder;
+  std::shared_ptr<linux_model::LinuxDeviceState> BinderConnection;
+  uint32_t BinderFD = 0;
+  llvm::DenseMap<uint64_t, MemoryView> BinderIdentities;
+  class BinderWait;
+  mobile::dalvik::ExecutionResult
+  binderIdentity(mobile::dalvik::BinderIdentityOperation Operation,
+                 uint64_t Address);
+  BionicResult binderTransact(const mobile::dalvik::ExternalCall &Call,
+                              std::shared_ptr<DexContinuation> Continuation);
   BinderThreadState &binderThread();
   uint64_t tlsAddress() const;
   uint64_t threadID() const;

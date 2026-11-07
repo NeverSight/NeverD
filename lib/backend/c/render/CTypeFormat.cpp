@@ -802,7 +802,10 @@ std::string typeToC(const TypeRef &Ty) {
         return std::string(Ty->IsEnum ? "enum" : Keyword) + " " + Name;
       return Name;
     }
-    if (sourceAggregateMembers(Ty).empty())
+    // A complete natural record can be named behind an ABI pointer even
+    // when its members have no supported direct-value call convention.
+    // hasCValueLayout separately owns that stronger value requirement.
+    if (!equalSourceTypes(Ty, Ty))
       throw std::invalid_argument("C record has no supported source layout");
     std::function<std::string(const TypeRef &)> Code = [&](const TypeRef &T) {
       if (isSourceBooleanType(T))

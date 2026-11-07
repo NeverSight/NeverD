@@ -1536,14 +1536,18 @@ reached it. One it has not reached, or one it left to the visit because it is
 very large or its size is unknown, is decompiled when you open it. A comment, a new
 name for a local or a function, or a number format keeps the renders and the
 analysis, so the view reads it at once; a type you give a local or a call changes
-that function alone; a new name for data or a data item forgets the renders, a data
-item also forgets what the disassembly keeps, and any other edit also starts the
-analysis over. The job takes idle time on one core and disk for the compact
+that function alone; a function's colour and a data item change no view; a new name
+for data costs the renders that spell it, and a function's declaration those of the
+function and its callers, which the job renders again; a new type nothing uses yet
+changes nothing; a change to a type something uses forgets the renders and the running
+analysis reads it at once; any other edit, such as whether a function returns, also
+starts the analysis over. The job takes idle time on one core and disk for the compact
 text: on a Windows kernel of 25,800 functions, about ten minutes and 200 MB, in
 the project's `local/render-ahead`, which you can delete at any time. It also keeps
 what the disassembly reads of each function, about 170 MB in
 `local/listing-facts`, so a function it has reached opens there at once as well.
-Opening the file again reads those renders from the first function you open, and
+Opening the file again reads those renders from the first function you open, with no
+second process until you open something they do not answer, and
 renders only what the job had not reached. With all of them there, the worker also skips
 solving call summaries until you open something the renders do not answer, such
 as an IR view or a function that was too large to render. A change to the inputs

@@ -532,6 +532,10 @@ void Program::addAndroidFramework() {
       field.access = {"private", "static", "volatile"};
       field.value = false;
       type.fields.push_back(std::move(field));
+      Field holder;
+      holder.reference = {type.name, "mObject", "J"};
+      holder.access = {"private", "final"};
+      type.fields.push_back(std::move(holder));
     }
     if (std::string_view(name) == "android/os/IServiceManager")
       type.interfaces = {"Landroid/os/IInterface;"};
@@ -744,6 +748,12 @@ AndroidFramework::AndroidFramework(
   validateAndroidClassLoaderPaths(*snapshot);
   validateAndroidMessageQueue(*snapshot);
   validateAndroidServiceManager(*snapshot);
+  if (snapshot->service_manager)
+    for (const auto &proxy : snapshot->service_manager->binder_proxies)
+      if (proxy.native_binding)
+        binder_input_keys.emplace(std::make_pair(proxy.native_binding->fd,
+                                                 proxy.native_binding->handle),
+                                  proxy.key);
   if (snapshot->initial_main_queue)
     main_queue_blocked = snapshot->initial_main_queue->blocked;
   validateAndroidURLHandlers(*snapshot);
@@ -1071,6 +1081,18 @@ ExecutionResult AndroidFramework::field(Heap &heap, const Field &field,
       binder_tracing_enabled = bool(*write);
     return {ExecutionStop::Returned, binder_tracing_enabled};
   }
+  if (ref.owner == "Landroid/os/Binder;" && ref.name == "mObject") {
+    auto object = heap.get(receiver);
+    auto entry = object->Fields.find(&field);
+    if (entry == object->Fields.end())
+      return {ExecutionStop::Unsupported,
+              0,
+              {},
+              "Android Binder holder field storage is not supplied"};
+    if (write)
+      entry->second = *write;
+    return {ExecutionStop::Returned, entry->second};
+  }
   if (ref.owner == "Ljava/lang/Float;") {
     // The projected immutable value is an IEEE-754 bit carrier. This does not
     // admit floating-point DEX arithmetic or writes to final fields.
@@ -1171,7 +1193,8 @@ AndroidFrameworkState AndroidFramework::inspect(const Heap &heap,
   result.system_loader = system_loader;
   result.application_loader = app_loader;
   result.instrumentation = instrumentation;
-  if (!service_fields.empty() || !binder_identities.empty()) {
+  if (!service_fields.empty() || !binder_identities.empty() ||
+      !binder_handles.empty()) {
     auto &state = result.service_manager.emplace();
     state.initialized = service_manager_initialized;
     for (const auto &[field, value] : service_fields) {
@@ -1188,8 +1211,17 @@ AndroidFrameworkState AndroidFramework::inspect(const Heap &heap,
             state.entries.push_back({entry.Key, entry.Value});
       }
     }
-    for (const auto &[key, id] : binder_identities)
-      state.binder_proxies.push_back({key, id, binder_warnings.at(id)});
+    for (const auto &[key, id] : binder_identities) {
+      auto &proxy = state.binder_proxies.emplace_back(
+          AndroidServiceManagerState::BinderProxy{key, id,
+                                                  binder_warnings.at(id)});
+      if (auto binding = binder_bindings.find(id);
+          binding != binder_bindings.end())
+        proxy.native_binding = binding->second;
+    }
+    for (const auto &[endpoint, id] : binder_handles)
+      state.binder_proxies.push_back(
+          {std::nullopt, id, binder_warnings.at(id), binder_bindings.at(id)});
   }
   if (main_queue && snapshot->initial_main_queue) {
     auto &queue = result.main_message_queue.emplace();
@@ -1538,7 +1570,10 @@ ExecutionResult AndroidFramework::execute(Heap &heap, const Program &program,
                                           std::span<const uint64_t> arguments,
                                           const AdmitInstruction &admit) {
   if (method.Op == ParcelData)
-    return parcel(heap, method, receiver, arguments, admit);
+    return parcel(heap, program, method, receiver, arguments, admit);
+  if (method.Op == Construct &&
+      std::string_view(method.Class) == "android/os/Binder")
+    return constructBinder(heap, program, receiver, admit);
   if (method.Op == BinderTransact || method.Op == BinderTransactNative)
     return binderTransact(heap, program, method, receiver, arguments, admit);
   if (method.Op == BinderTracing) {

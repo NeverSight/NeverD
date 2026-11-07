@@ -64,6 +64,51 @@ def asks_engine_first(client):
     assert view["fixture_prepares"] == 1, view
 
 
+def run_kept_edits(clients, executable, root, total):
+    """What an owner says of the store after an edit, with no replica to tell it."""
+    binary = root / ("kept-" + NAME)
+    binary.write_bytes(b"render store fixture")
+    owner, writer = session(clients, executable, binary)
+    assert render_ahead(writer, done)["kept"] == total + 1
+    fresh = unfixtured(source(writer, B))
+    end(writer, owner)
+
+    def keeper():
+        client = clients.enter_context(Client(executable))
+        ok(client, "open", {"path": str(binary), "analysis": False, "warm": False})
+        return client
+
+    def kept(client, address):
+        return client.call("decompile", {"address": address, "representation": "source",
+                                         "offset": 0, "limit": 4, "kept_only": True})
+
+    client = keeper()
+    # The name of a function is read anew from a page that goes on answering.
+    assert kept(client, C)["status"] == "ok"
+    ok(client, "rename", {"address": C, "name": "named_in_the_owner"})
+    view = kept(client, C)
+    assert view["status"] == "ok", view
+    identity = view["payload"]["function_identity"]
+    assert identity["name"] == "named_in_the_owner", identity
+    # A note reads nowhere.
+    ok(client, "function_edit", {"address": B, "attributes": {"color": "#204060"}})
+    assert ok(client, "kept_renders")["complete"]
+    assert kept(client, B)["status"] == "ok"
+    asks_engine_first(client)
+    # A declaration moves what answers, in this request as in any later.
+    ok(client, "function_edit", {"address": B,
+                                 "attributes": {"type": "int function_1(int value)"}})
+    state = ok(client, "kept_renders")
+    assert not state["complete"] and not state["kept"], state
+    refused = kept(client, B)
+    assert refused["error"]["code"] == "not_kept", refused
+    assert kept(client, A)["error"]["code"] == "not_kept"
+    # The edit undone reads the store again, as nothing was rendered for it.
+    ok(client, "undo")
+    assert kept(client, A)["status"] == "ok"
+    end(client)
+
+
 def run(executable):
     with tempfile.TemporaryDirectory(prefix="neverd-render-store-") as directory, ExitStack() as clients:
         root = Path(directory)
@@ -100,6 +145,28 @@ def run(executable):
         state = latest(second)
         assert done(state) and not state["rendered"], state
         assert len(files(binary)) == 1
+
+        # An owner answers what is kept, asks the engine nothing, and says what it
+        # has not kept.
+        end(second, owner)
+        keeper = clients.enter_context(Client(executable))
+        ok(keeper, "open", {"path": str(binary), "analysis": False, "warm": False})
+        state = ok(keeper, "kept_renders")
+        assert state["complete"] and state["kept"] == total + 1, state
+        for address in (A, B, C):
+            view = ok(keeper, "decompile", {"address": address, "representation": "source",
+                                            "offset": 0, "limit": 4, "kept_only": True})
+            shown = {**unfixtured(view), "revision": fresh[address]["revision"]}
+            assert shown == fresh[address], (shown, fresh[address])
+        for asked in ({"representation": "c"}, {"representation": "low"},
+                      {"representation": "source", "source_options": {"symbolic": True}}):
+            refused = keeper.call("decompile", {"address": A, "offset": 0, "limit": 4,
+                                                "kept_only": True, **asked})
+            assert refused["error"]["code"] == "not_kept", refused
+        asks_engine_first(keeper)
+        end(keeper)
+        owner, second = session(clients, executable, binary)
+        run_kept_edits(clients, executable, root, total)
 
         # A rename of a local redecorates: the store still reads.
         edit = request(source(owner), "renamed_value")
@@ -145,6 +212,31 @@ def run(executable):
         assert summaries(next_session, lambda s: s == "deferred") == "deferred"
         asks_engine_first(next_session)
         end(next_session, owner)
+
+        # A note on a function reads nowhere: the store and the job stand.  A
+        # declaration moves them to a store of their own, in the same replica, and
+        # the summaries and the job start over.
+        noted = root / ("noted-" + NAME)
+        noted.write_bytes(b"render store fixture")
+        owner, writer = session(clients, executable, noted)
+        assert render_ahead(writer, done)["kept"] == total + 1
+        ok(owner, "function_edit", {"address": B, "attributes": {"color": "#204060"}})
+        assert ok(writer, "analysis_update_names", ok(owner, "analysis_snapshot"))["updated"]
+        state = latest(writer)
+        assert done(state) and state["rendered"] == total and state["kept"] == total + 1, state
+        end(writer, owner)
+        owner, reader = session(clients, executable, noted)
+        state = render_ahead(reader, done)
+        assert not state["rendered"] and state["kept"] == total + 1, state
+        assert summaries(reader, lambda s: s == "deferred") == "deferred"
+        ok(owner, "function_edit", {"address": B,
+                                    "attributes": {"type": "int function_1(int value)"}})
+        assert ok(reader, "analysis_update_names", ok(owner, "analysis_snapshot"))["updated"]
+        assert summaries(reader, lambda s: s == "ready") == "ready"
+        state = render_ahead(reader, lambda s: done(s) and s["rendered"] == total)
+        assert state["kept"] == total + 1, state
+        assert len(files(noted)) == 1
+        end(reader, owner)
 
         # What a function was called before a name was taken away is the engine's
         # to say, so its kept page does not answer.
@@ -246,6 +338,18 @@ def run(executable):
         assert unfixtured(source(reader, A)) == fresh_indexed[A]
         assert unfixtured(source(reader, B)) == fresh_indexed[B]
         assert render_ahead(reader, lambda s: s and s["hits"] == 1)
+        end(reader, owner)
+
+        # An index's page table must fit inside its record before any pages
+        # are read. The intact file still recovers every original render.
+        bad_pages = bytearray(listed)
+        data_bytes = int.from_bytes(listed[at + 8:at + 16], "little")
+        bad_pages[at + 24:at + 28] = (data_bytes // 8 + 1).to_bytes(4, "little")
+        index.write_bytes(bad_pages)
+        owner, reader = session(clients, executable, indexed, store="read")
+        for address in (A, B, C):
+            assert unfixtured(source(reader, address)) == fresh_indexed[address]
+        assert render_ahead(reader, lambda s: s and s["hits"] == 3)
         end(reader, owner)
 
         # A damaged record is a render not kept: the visit reads the engine.

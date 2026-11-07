@@ -14,6 +14,40 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/MathExtras.h"
 
+namespace neverd::macho_loader::arm64e {
+
+std::optional<PointerWord> decodePointerWord(uint64_t Raw,
+                                             const ChainFormat &Format) {
+  PointerWord Word;
+  Word.Authenticated = kAuthentication.extract(Raw);
+  Word.Bind = !Format.Segmented && kBind.extract(Raw);
+  Word.Next = (Format.Segmented ? kSegmentedNext : kNext).extract(Raw);
+  if (Word.Authenticated) {
+    Word.Diversity = kDiversity.extract(Raw);
+    Word.AddressDiversity = kAddressDiversity.extract(Raw);
+    Word.Key = kKey.extract(Raw);
+  }
+  if (Format.Segmented) {
+    if (!Word.Authenticated && kSegmentedReserved.extract(Raw))
+      return std::nullopt;
+    Word.SegmentIndex = kSegmentedTargetIndex.extract(Raw);
+    Word.Target = kSegmentedTargetOffset.extract(Raw);
+  } else if (Word.Bind) {
+    Word.Target = kOrdinalStorage.extract(Raw);
+    if (Word.Target >> Format.OrdinalBits)
+      return std::nullopt;
+    if (!Word.Authenticated)
+      Word.Addend = kInlineAddend.signExtend(Raw);
+  } else {
+    Word.Target = Word.Authenticated ? kAuthenticatedTarget.extract(Raw)
+                                     : kTarget.extract(Raw) |
+                                           (kHigh8.extract(Raw) << kHigh8Shift);
+  }
+  return Word;
+}
+
+} // namespace neverd::macho_loader::arm64e
+
 namespace neverd::macho_loader::detail {
 void joinImportSlot(BinaryImage &Img, llvm::StringRef Name,
                     llvm::StringRef Module, va_t SlotVA) {
@@ -31,26 +65,25 @@ std::optional<Arm64eFixup>
 decodeArm64eFixup(uint64_t Raw, const arm64e::ChainFormat &Format, va_t Slot,
                   va_t Base, llvm::ArrayRef<Arm64eImportRecord> Imports,
                   const BinaryImage &Img) {
-  const bool Auth = arm64e::kAuthentication.extract(Raw);
-  const bool Bind = !Format.Segmented && arm64e::kBind.extract(Raw);
-  const uint32_t Next =
-      (Format.Segmented ? arm64e::kSegmentedNext : arm64e::kNext).extract(Raw);
+  const auto Word = arm64e::decodePointerWord(Raw, Format);
+  if (!Word)
+    return std::nullopt;
+  const bool Auth = Word->Authenticated;
   Arm64eFixup F{Slot};
-  F.Next = Next;
+  F.Next = Word->Next;
   if (Auth) {
     F.Authentication.emplace();
     F.Authentication->EncodedValue = Raw;
-    F.Authentication->Diversity = arm64e::kDiversity.extract(Raw);
-    F.Authentication->AddressDiversity = arm64e::kAddressDiversity.extract(Raw);
-    F.Authentication->Key = arm64e::kKey.extract(Raw);
+    F.Authentication->Diversity = Word->Diversity;
+    F.Authentication->AddressDiversity = Word->AddressDiversity;
+    F.Authentication->Key = Word->Key;
   }
   if (Format.Segmented) {
     // Segment indices name load commands, not a sorted address view.
     // Linked Mach-O images retain those entries, including empty ones.
-    const uint32_t Index = arm64e::kSegmentedTargetIndex.extract(Raw);
-    const uint64_t Offset = arm64e::kSegmentedTargetOffset.extract(Raw);
-    if ((!Auth && arm64e::kSegmentedReserved.extract(Raw)) ||
-        Index >= Img.Segments.size())
+    const uint32_t Index = Word->SegmentIndex;
+    const uint64_t Offset = Word->Target;
+    if (Index >= Img.Segments.size())
       return std::nullopt;
     const Segment &Target = Img.Segments[Index];
     if (Offset > Target.Size || Offset > InvalidVA - Target.VA)
@@ -58,18 +91,14 @@ decodeArm64eFixup(uint64_t Raw, const arm64e::ChainFormat &Format, va_t Slot,
     F.Target = Target.VA + Offset;
     if (Auth)
       F.Authentication->Target = F.Target;
-  } else if (Bind) {
-    const uint32_t Ordinal =
-        Raw & llvm::maskTrailingOnes<uint32_t>(Format.OrdinalBits);
-    if ((arm64e::kOrdinalStorage.extract(Raw) >> Format.OrdinalBits) != 0 ||
-        Ordinal >= Imports.size() || !Imports[Ordinal].Valid)
+  } else if (Word->Bind) {
+    const uint32_t Ordinal = Word->Target;
+    if (Ordinal >= Imports.size() || !Imports[Ordinal].Valid)
       return std::nullopt;
     F.Import = &Imports[Ordinal];
     if (!Auth && !Img.isValidImportStorageSlot(Slot, F.Import->Name))
       return std::nullopt;
-    const int64_t InlineAddend =
-        Auth ? 0 : arm64e::kInlineAddend.signExtend(Raw);
-    if (llvm::AddOverflow(F.Import->Addend, InlineAddend, F.Addend))
+    if (llvm::AddOverflow(F.Import->Addend, Word->Addend, F.Addend))
       return std::nullopt;
     if (Auth) {
       F.Authentication->Symbol = F.Import->Name;
@@ -79,9 +108,7 @@ decodeArm64eFixup(uint64_t Raw, const arm64e::ChainFormat &Format, va_t Slot,
       F.Authentication->LibraryOrdinal = F.Import->LibraryOrdinal;
     }
   } else {
-    F.Target = Auth ? arm64e::kAuthenticatedTarget.extract(Raw)
-                    : arm64e::kTarget.extract(Raw) |
-                          (arm64e::kHigh8.extract(Raw) << arm64e::kHigh8Shift);
+    F.Target = Word->Target;
     if (Auth || Format.Offset) {
       if (F.Target > InvalidVA - Base)
         return std::nullopt;

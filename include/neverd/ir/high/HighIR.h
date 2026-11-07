@@ -282,6 +282,19 @@ struct HighEHClause {
       CxxUnwindAction::ActionKind::None;
   int32_t UnwindObjectOffset = 0;
   std::vector<va_t> ContinuationVAs;
+  /// What a `__finally` clause's statements stand for (SEHFinallyBodies.h).
+  enum class FinallyBody : uint8_t {
+    /// Nothing is known of the termination handler but its address.
+    OutOfLine,
+    /// The handler's work while unwinding, none of which runs on a normal
+    /// exit; the compiler's normal-path code stays after the try.  An empty
+    /// list is a handler that does nothing.
+    AbnormalWork,
+    /// All of the finally: the normal-path copy is gone, and the clause runs
+    /// on either exit.
+    WholeBody,
+  };
+  FinallyBody FinallyKind = FinallyBody::OutOfLine;
   /// x86 registration EH: the value the filter thunk at \ref FilterOrActionVA
   /// returns, an expression in the function's frame, when the thunk computes
   /// nothing else.  The thunk runs inside the exception dispatch rather than
@@ -376,6 +389,10 @@ struct HighStmt {
   /// abnormal termination only when the goto leaves its `__try` as a jump,
   /// so the writer prints it neither as a fall-through nor as `__leave`.
   bool AbnormalExit = false;
+  /// A jump that ends the innermost `__try` normally, printed as `__leave`,
+  /// where the try's filled `__finally` must not read it as a jump out of the
+  /// try: GotoTarget is where the try falls through.
+  bool LeavesTry = false;
 
   std::string str(int Indent = 0) const;
 };
@@ -679,9 +696,13 @@ struct HighFunc {
   bool HasUnresolvedSEHFrame = false;
   /// MedFunc::SEHTerminationFrameBytes.
   std::map<va_t, uint64_t> SEHTerminationFrameBytes;
+  /// MedFunc::SEHHomedArguments.
+  std::map<int64_t, unsigned> SEHHomedArguments;
   /// MedFunc::SEHFuncletRegisters.
   std::map<va_t, std::map<uint64_t, SEHFuncletRegisterValue>>
       SEHFuncletRegisters;
+  /// MedFunc::SEHHandlerUnwindTargets.
+  std::set<va_t> SEHHandlerUnwindTargets;
   /// MedFunc::SEHLocalUnwindExits.
   std::vector<MedSEHLocalUnwindExit> SEHLocalUnwindExits;
   std::set<va_t> CxxContinuationTargets;

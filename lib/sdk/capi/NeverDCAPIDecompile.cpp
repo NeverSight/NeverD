@@ -44,6 +44,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/SaveAndRestore.h"
+#include "llvm/Support/xxhash.h"
 
 #include <algorithm>
 #include <limits>
@@ -509,6 +510,7 @@ const char *neverd_warm_functions_json(neverd_session_t Sess,
         PipelineOptions Opts;
         S->applyAnalysisOptions(Opts);
         Opts.AnalysisCache = &S->AnalysisCache;
+        const UserFactReads::Held Held(S->UserReads);
         Warmup = Pipeline().warmAnalysisCache(S->Img, Opts, S->decompileDebug(),
                                               Entries);
         Next = Page.NextEntry;
@@ -562,8 +564,11 @@ const char *neverd_prepare_call_summaries_json(neverd_session_t Sess) {
       S->applyAnalysisOptions(Opts);
       Opts.AnalysisCache = &S->AnalysisCache;
       bool Solved = false;
-      Ready = Pipeline().prepareCallSummaries(S->Img, Opts, S->decompileDebug(),
-                                              &Solved);
+      {
+        const UserFactReads::Held Held(S->UserReads);
+        Ready = Pipeline().prepareCallSummaries(S->Img, Opts,
+                                                S->decompileDebug(), &Solved);
+      }
       // The kept analysis and C read each run's own callee summaries; the
       // next request reads the image's.  Summaries the session already held
       // leave both as they are.
@@ -581,6 +586,83 @@ const char *neverd_prepare_call_summaries_json(neverd_session_t Sess) {
     S->setError("unexpected call summary preparation failure");
   }
   return nullptr;
+}
+
+namespace {
+/// What the user states of the address \p Addr that a view reads: the name of
+/// data, for a function's is the page's to apply, and a function's declaration.
+void hashUserFact(Session &S, va_t Addr,
+                  const std::map<va_t, std::string> &Declarations,
+                  std::string &Stated) {
+  const auto Declaration = Declarations.find(Addr);
+  const auto Name = S.Renames.find(Addr);
+  const bool Named = Name != S.Renames.end() && !S.functionIndexAt(Addr);
+  if (!Named && Declaration == Declarations.end())
+    return;
+  Stated.append(reinterpret_cast<const char *>(&Addr), sizeof(Addr));
+  if (Named)
+    Stated += Name->second;
+  Stated.push_back('\0');
+  if (Declaration != Declarations.end())
+    Stated += Declaration->second;
+  Stated.push_back('\0');
+}
+
+/// \p Reads' digest of what the user states of them now, zero for nothing.
+uint64_t userFactsDigest(Session &S, llvm::ArrayRef<va_t> Reads) {
+  const std::map<va_t, std::string> Declarations = S.functionDeclarations();
+  if (S.Renames.empty() && Declarations.empty())
+    return 0;
+  std::string Stated;
+  for (const va_t Addr : Reads)
+    hashUserFact(S, Addr, Declarations, Stated);
+  return Stated.empty() ? 0 : llvm::xxh3_64bits(Stated);
+}
+} // namespace
+
+const char *neverd_user_reads(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  S->clearError();
+  const std::vector<va_t> Reads = S->UserReads.addresses();
+  std::string Text = llvm::utohexstr(userFactsDigest(*S, Reads));
+  for (const va_t Addr : Reads) {
+    Text += ' ';
+    Text += llvm::utohexstr(Addr);
+  }
+  return dupStr(Text);
+}
+
+int neverd_user_reads_hold(neverd_session_t Sess, const char *Reads) {
+  auto *S = toSession(Sess);
+  if (!S || !Reads)
+    return 0;
+  S->clearError();
+  llvm::SmallVector<llvm::StringRef, 32> Words;
+  llvm::StringRef(Reads).split(Words, ' ');
+  uint64_t Digest = 0;
+  if (Words.empty() || Words.front().getAsInteger(16, Digest))
+    return 0;
+  std::vector<va_t> Addresses;
+  Addresses.reserve(Words.size() - 1);
+  for (const llvm::StringRef Word : llvm::ArrayRef(Words).drop_front()) {
+    uint64_t Addr = 0;
+    if (Word.getAsInteger(16, Addr))
+      return 0;
+    Addresses.push_back(static_cast<va_t>(Addr));
+  }
+  return userFactsDigest(*S, Addresses) == Digest;
+}
+
+int neverd_call_summaries_held(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  if (!S || !S->Loaded)
+    return 0;
+  PipelineOptions Opts;
+  S->applyAnalysisOptions(Opts);
+  Opts.AnalysisCache = &S->AnalysisCache;
+  return Pipeline().holdsCallSummaries(S->Img, Opts, S->decompileDebug());
 }
 
 const char *neverd_prefill_callees_json(neverd_session_t Sess, int First,
@@ -603,6 +685,7 @@ const char *neverd_prefill_callees_json(neverd_session_t Sess, int First,
       PipelineOptions Opts;
       S->applyAnalysisOptions(Opts);
       Opts.AnalysisCache = &S->AnalysisCache;
+      const UserFactReads::Held Held(S->UserReads);
       Prefilled = Pipeline().prefillCalleeSignatures(
           S->Img, Opts, S->decompileDebug(),
           static_cast<size_t>(std::max(First, 0)),
@@ -849,6 +932,7 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
   Opts.Format = S->Img.abiFormat();
   Opts.Image = &S->Img;
   Opts.UserNames = &S->Renames;
+  Opts.UserNameReads = &S->UserReads;
   std::optional<const DataAccessWidths *> AccessWidths;
   Opts.ReadAccessWidths = deferredAccessWidths(*S, AccessWidths);
   if (SourceMap) {
@@ -974,6 +1058,7 @@ static const char *decompileLlvmC(neverd_session_t Sess, neverd_va_t FuncEntry,
   Opts.TheArch = S->Img.Arch;
   Opts.Format = S->Img.abiFormat();
   Opts.UserNames = &S->Renames;
+  Opts.UserNameReads = &S->UserReads;
   std::optional<const DataAccessWidths *> AccessWidths;
   Opts.ReadAccessWidths = deferredAccessWidths(*S, AccessWidths);
   if (SourceMap) {

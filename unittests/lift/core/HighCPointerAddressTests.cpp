@@ -6373,6 +6373,51 @@ TEST(HighCPointerAddresses, UnsignedFieldCompareOmitsWidthCast) {
   EXPECT_EQ(Source.find("(uint32_t)this->"), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, UnusedFieldLoadIsNotARegistersEntryValue) {
+  auto Record = NdType::makeNamedRecord("CRecord", 512);
+  Record->FieldDisplayNames = {"m_completedCount"};
+  Record->FieldDisplayOffsets = {32};
+  Record->FieldDisplayTypes = {NdType::makeInt(4, false)};
+  HighFunc Func;
+  Func.Name = "saves_entry_register";
+  Func.ReturnType = NdType::makeVoid();
+  Func.Params = {{"this", NdType::makePtr(Record)}};
+  auto This = parameter(0, Func.Params[0].Type);
+  // Nothing reads this load, and the register below holds what the caller left
+  // in it. The later load does not say what that was.
+  MedVar Loaded;
+  Loaded.Kind = MedVar::Temp;
+  Loaded.Id = 94;
+  Loaded.Size = 4;
+  Loaded.TheArch = Arch::X64;
+  HighStmt Load;
+  Load.Kind = StmtKind::Assign;
+  Load.Dst = HighExpr::makeVar(Loaded, NdType::makeInt(4, true));
+  Load.Val = HighExpr::makeLoad(
+      HighExpr::makeBinop(NdOp::INT_ADD, This, HighExpr::makeConst(32, 8)),
+      NdType::makeInt(4, true));
+  MedVar Register;
+  Register.Kind = MedVar::Reg;
+  Register.Id = 7;
+  Register.Size = 4;
+  Register.RegOff = 0;
+  Register.TheArch = Arch::X64;
+  HighStmt Guard;
+  Guard.Kind = StmtKind::If;
+  Guard.Cond = HighExpr::makeBinop(
+      NdOp::INT_NOTEQUAL, HighExpr::makeVar(Register, NdType::makeInt(4, true)),
+      HighExpr::makeConst(0, 4));
+  HighStmt Work;
+  Work.Kind = StmtKind::Call;
+  Work.CallExpr = HighExpr::makeCall("master", 0x140002000, {This});
+  Guard.Body = {Work};
+  Func.Body = {Guard, Load};
+  const std::string Source = emitFunctions({Func});
+  EXPECT_NE(Source.find("unknown register"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("if (this->m_completedCount"), std::string::npos)
+      << Source;
+}
+
 TEST(HighCPointerAddresses, UnusedAliasUnsignedFieldCompareOmitsWidthCast) {
   auto U32 = NdType::makeInt(4, false);
   auto Record = NdType::makeNamedRecord("CRecord", 512);
@@ -27263,31 +27308,20 @@ TEST(HighCPointerAddresses, Win64CookiePhiPrefersIncomingParam) {
   Restore.Id = 1;
   Restore.Preds = {0};
   Restore.Succs = {2};
-  MedVar Imm16;
-  Imm16.Kind = MedVar::Temp;
-  Imm16.TheArch = Arch::X64;
-  Imm16.Id = 40;
-  Imm16.Size = 8;
-  MedOp LoadImm;
-  LoadImm.Opcode = NdOp::COPY;
-  LoadImm.Output = Imm16;
-  LoadImm.addInput(MedVar::makeConst(16, 8));
-  LoadImm.Addr = 0x14000100c;
-  Restore.Ops.push_back(std::move(LoadImm));
-  MedOp Rol;
-  Rol.Opcode = NdOp::INT_LEFT;
-  Rol.Output = RCX1;
-  Rol.addInput(RCX0);
-  Rol.addInput(Imm16);
-  Rol.Addr = 0x140001010;
-  Restore.Ops.push_back(std::move(Rol));
-  MedOp Ror;
-  Ror.Opcode = NdOp::INT_RIGHT;
-  Ror.Output = RCX2;
-  Ror.addInput(RCX1);
-  Ror.addInput(Imm16);
-  Ror.Addr = 0x140001014;
-  Restore.Ops.push_back(std::move(Ror));
+  // Both arms of the PHI hold the incoming value. Shifting it away and back
+  // would not, and HighCallParameterForwarding covers that case.
+  MedOp Saved;
+  Saved.Opcode = NdOp::COPY;
+  Saved.Output = RCX1;
+  Saved.addInput(RCX0);
+  Saved.Addr = 0x140001010;
+  Restore.Ops.push_back(std::move(Saved));
+  MedOp Restored;
+  Restored.Opcode = NdOp::COPY;
+  Restored.Output = RCX2;
+  Restored.addInput(RCX1);
+  Restored.Addr = 0x140001014;
+  Restore.Ops.push_back(std::move(Restored));
   Med.Blocks.push_back(std::move(Restore));
 
   MedBlock Fail;
@@ -42070,9 +42104,9 @@ TEST(HighCPointerAddresses, CorpusArmPredicatedBranchesStayForwardJumps) {
   const std::string ImageCheck = Emit(0x40386C);
   EXPECT_NE(ImageCheck.find("!= 0x5A4D) {"), std::string::npos) << ImageCheck;
   EXPECT_EQ(ImageCheck.find("do {"), std::string::npos) << ImageCheck;
-  // `bne` past a local unwind jumps forward once.
+  // `bne` past a local unwind, which is a jump now, branches forward once.
   const std::string Unwinds = Emit(0x4031F4);
-  EXPECT_NE(Unwinds.find("!= 10) {"), std::string::npos) << Unwinds;
+  EXPECT_NE(Unwinds.find("== 10) {"), std::string::npos) << Unwinds;
   EXPECT_EQ(Unwinds.find("do {"), std::string::npos) << Unwinds;
 }
 
@@ -42115,9 +42149,6 @@ TEST(HighCPointerAddresses, CorpusFuncLoadSehProbeRaisesImmediate) {
   EXPECT_EQ(llvm::StringRef(sourceLineContaining(Source, "var_m18;")).trim(),
             "uint32_t var_m18;")
       << Source;
-  EXPECT_EQ(llvm::StringRef(sourceLineContaining(Source, "t22_4;")).trim(),
-            "int32_t t22_4;")
-      << Source;
   EXPECT_EQ(
       llvm::StringRef(sourceLineContaining(Source, "dword_1400050E0;")).trim(),
       "int32_t dword_1400050E0;")
@@ -42134,12 +42165,22 @@ TEST(HighCPointerAddresses, CorpusFuncLoadSehProbeRaisesImmediate) {
   EXPECT_EQ(Source.find("(int64_t)(uint32_t)(int32_t)"), std::string::npos)
       << Source;
   const auto GlobalStore = sourceLineContaining(Source, "dword_1400050E0 = ");
-  const auto Copy = sourceLineContaining(Source, "t22_4 = var_m18;");
   ASSERT_FALSE(GlobalStore.empty()) << Source;
+  // SSA numbering can change while this continuation keeps the same values.
+  // Bind its signed snapshot through the actual store, then execute that copy.
+  llvm::StringRef Stored = llvm::StringRef(GlobalStore).trim();
+  ASSERT_TRUE(Stored.consume_front("dword_1400050E0 = ")) << Source;
+  ASSERT_TRUE(Stored.consume_back(";")) << Source;
+  const std::string Name = Stored.trim().str();
+  const std::string Declaration = "int32_t " + Name + ";";
+  ASSERT_EQ(llvm::StringRef(sourceLineContaining(Source, Declaration)).trim(),
+            Declaration)
+      << Source;
+  const auto Copy = sourceLineContaining(Source, Name + " = var_m18;");
   ASSERT_FALSE(Copy.empty()) << Source;
   compileAndRunSehContinuation(
-      "uint32_t var_m18 = bits;\nint32_t t22_4;\n" + std::string(Copy) + "\n" +
-          std::string(GlobalStore) + "\n" +
+      "uint32_t var_m18 = bits;\n" + Declaration + "\n" + std::string(Copy) +
+          "\n" + std::string(GlobalStore) + "\n" +
           std::string(sourceLineContaining(Source, ReturnText)),
       "dword_1400050E0", /*Portable=*/false);
 }

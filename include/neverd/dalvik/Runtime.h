@@ -30,11 +30,29 @@ enum class ExecutionStop {
   HeapLimit,
   Suspended
 };
+struct ExecutionResult;
+// Transport data is owned by the native IPC adapter; framework completion
+// retains its read-only arena lease until Parcel replacement or recycle.
+struct BinderReply {
+  int32_t status = 0;
+  std::optional<std::vector<uint8_t>> bytes;
+  std::function<ExecutionResult(std::span<const uint8_t> &)> view;
+  std::function<void()> release;
+  std::vector<uint64_t> objects;
+  std::optional<uint32_t> fd;
+};
+struct BinderTransactionRequest {
+  uint64_t receiver = 0, data = 0, reply = 0;
+  uint32_t code = 0, flags = 0, fd = 0, handle = 0;
+  std::vector<uint64_t> objects;
+  bool operator==(const BinderTransactionRequest &) const = default;
+};
 struct ExternalCall {
-  enum Kind { Native, LoadLibrary } kind = Native;
+  enum Kind { Native, LoadLibrary, BinderTransaction } kind = Native;
   const Method *method = nullptr;
   std::vector<uint64_t> arguments; // Shared heap identities, never JNI handles.
   std::string library;
+  std::optional<BinderTransactionRequest> binder;
   std::string caller; // Declaring class of the actual DEX invocation.
 };
 struct ExecutionResult {
@@ -46,12 +64,20 @@ struct ExecutionResult {
       0; // Shared heap identity, retained across catch/rethrow/JNI.
   uint64_t continuation = 0;
   std::optional<ExternalCall> external;
+  std::optional<BinderReply> binder_reply;
 };
 // Return Returned to admit an instruction, or the resource stop to propagate.
 // The owner supplies one workload-wide instruction/deadline budget.
 using AdmitInstruction = std::function<ExecutionStop()>;
 // Workload services retain their existing OS owner and return explicit stops.
 // Callbacks remain valid for the Runtime's lifetime; no host state is inferred.
+enum class BinderIdentityOperation { Allocate, Validate, Release };
+enum class BinderReferenceOperation {
+  AcquireWeak,
+  AcquireStrong,
+  DeferStrongRelease,
+  DeferWeakRelease
+};
 struct RuntimeServices {
   // Nonnegative Java longs; elapsed realtime has its own boot-time epoch.
   std::function<ExecutionResult()> uptime_milliseconds;
@@ -68,6 +94,13 @@ struct RuntimeServices {
   // Java int bits survive JNI detach/reattach; Java BlockGuard is separate.
   std::function<ExecutionResult()> binder_thread_policy;
   std::function<ExecutionResult(uint32_t)> set_binder_thread_policy;
+  // Retain a newly materialized proxy on its existing Linux connection.
+  // Libbinder queues weak then strong acquisition before freeing its Parcel.
+  std::function<ExecutionResult(uint32_t, uint32_t)> retain_binder_handle;
+  // Allocate returns opaque native storage for two pointer-sized identities,
+  // not a JavaBBinder/RefBase C++ layout. Other operations take its base.
+  std::function<ExecutionResult(BinderIdentityOperation, uint64_t)>
+      binder_identity;
 };
 class Program {
 public:
@@ -164,10 +197,14 @@ public:
   ExecutionResult library(const LibraryMethod &method, uint64_t receiver,
                           std::span<const uint64_t> args,
                           const AdmitInstruction &admit,
-                          bool nonvirtual = false);
+                          bool nonvirtual = false, uint64_t owner = 0,
+                          uint64_t stack_bytes = 0);
   // No guest allocation, initialization, loader lookup or budget consumption.
   // Available after terminal stops as well as ordinary Java returns/throws.
   RuntimeSnapshot snapshot() const;
+  // Native libbinder reference notifications; no Java callback is dispatched.
+  ExecutionResult binderReference(BinderReferenceOperation operation,
+                                  uint64_t pointer, uint64_t cookie);
 
 private:
   struct State;

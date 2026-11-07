@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -38,6 +39,13 @@ public:
               bool writable);
   ~RenderStore();
 
+  /// Says that what \p folder keeps of identity \p from holds for \p to too:
+  /// nothing kept read what changed between them.
+  static void keepFor(const std::filesystem::path &folder,
+                      const std::string &from, const std::string &to);
+  /// Whether this store is what \p identity reads.
+  bool keeps(const std::string &identity) const;
+
   /// Writes where this session's records lie, for later sessions to read.
   void writeIndex();
   /// Takes up what other sessions have added to the folder since.
@@ -46,6 +54,9 @@ public:
   /// The pages kept for \p key.  None for a key kept without pages, and for a
   /// record that no longer reads as it was written, which is forgotten.
   std::vector<std::string> read(const std::string &key);
+  /// The first page kept for \p key, unchecked until the whole record is read;
+  /// none for a key kept without pages.
+  std::optional<std::string> readFirst(const std::string &key);
   /// False when \p pages are not kept, and from then on.
   bool write(const std::string &key, const std::vector<std::string> &pages);
   /// Whether write can still keep anything.

@@ -186,8 +186,10 @@ bool stmtAlwaysExit(TryExitTest Hidden, TryExitTest LeftOut,
     return false;
   switch (Stmt.Kind) {
   case StmtKind::Return:
-  case StmtKind::Goto:
     return true;
+  case StmtKind::Goto:
+    // `__leave` runs on to what follows its try.
+    return !Stmt.LeavesTry;
   case StmtKind::While:
   case StmtKind::DoWhile:
   case StmtKind::For:
@@ -211,10 +213,12 @@ bool stmtAlwaysExit(TryExitTest Hidden, TryExitTest LeftOut,
     if (Stmt.EHClauseBodies.empty())
       return true;
     for (size_t I = 0; I < Stmt.EHClauseBodies.size(); ++I) {
-      // A cleanup runs while the exception unwinds and rethrows it: nothing
-      // after the try follows it.
+      // A cleanup runs while the exception unwinds and rethrows it, and a
+      // `__finally` as the jump that leaves the try goes on: nothing after
+      // the try follows either.
       if (I < Stmt.EHClauses.size() &&
-          Stmt.EHClauses[I].Kind == HighEHClauseKind::CxxCleanup)
+          (Stmt.EHClauses[I].Kind == HighEHClauseKind::CxxCleanup ||
+           Stmt.EHClauses[I].Kind == HighEHClauseKind::SEHFinally))
         continue;
       const auto &ClauseBody = Stmt.EHClauseBodies[I];
       if (!stmtsAlwaysExit(Hidden, LeftOut, ClauseBody,
@@ -1611,8 +1615,8 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     }
     // `__leave` ends a `__try` normally; a local unwind's goto ends it as a
     // jump, which a filled `__finally` runs its termination handler for.
-    if (llvm::is_contained(LeaveTargets, Stmt.GotoTarget) &&
-        !Stmt.AbnormalExit) {
+    if (Stmt.LeavesTry || (llvm::is_contained(LeaveTargets, Stmt.GotoTarget) &&
+                           !Stmt.AbnormalExit)) {
       OS << "__leave;\n";
       break;
     }
@@ -1705,11 +1709,15 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     emitIndent(Indent);
     if (Clause.Kind == HighEHClauseKind::SEHFinally) {
       OS << "} __finally {\n";
-      // Keep the termination handler's address visible whether or not its
-      // body was projected into the clause.
-      emitIndent(Indent + 1);
-      OS << "/* finally handler @ 0x"
-         << llvm::utohexstr(Clause.FilterOrActionVA) << " */\n";
+      // Keep the termination handler's address visible next to its body, or
+      // in place of one that could not be projected.  A handler known to do
+      // nothing is an empty clause, as its source would be.
+      if (Clause.FinallyKind == HighEHClause::FinallyBody::OutOfLine ||
+          !stmtsEffectivelyEmpty(Stmt.EHClauseBodies.front())) {
+        emitIndent(Indent + 1);
+        OS << "/* finally handler @ 0x"
+           << llvm::utohexstr(Clause.FilterOrActionVA) << " */\n";
+      }
       {
         const bool SavedHandler = InEHClauseBody;
         InEHClauseBody = true;
@@ -2663,12 +2671,28 @@ HighCWriter::sehTrySplitPoint(const HighStmt &Stmt) const {
                      return Clause.Kind == HighEHClauseKind::SEHExcept ||
                             Clause.Kind == HighEHClauseKind::SEHFinally;
                    }) ||
-      !std::all_of(Stmt.EHClauseBodies.begin(), Stmt.EHClauseBodies.end(),
-                   [](const auto &Body) { return Body.empty(); }))
+      Stmt.EHClauseBodies.size() != Stmt.EHClauses.size())
     return std::nullopt;
+  // Each piece of a try prints its clause, and falls out of it normally.  A
+  // clause that holds the whole finally would then run it for each piece; one
+  // that holds what runs while unwinding runs for the piece the unwind leaves.
+  // A jump inside a clause would print its label twice.
+  for (size_t I = 0; I < Stmt.EHClauses.size(); ++I) {
+    if (Stmt.EHClauseBodies[I].empty())
+      continue;
+    if (Stmt.EHClauses[I].FinallyKind !=
+        HighEHClause::FinallyBody::AbnormalWork)
+      return std::nullopt;
+    bool Jumps = false;
+    walkStmts(Stmt.EHClauseBodies[I], [&](const HighStmt &S) {
+      Jumps |= S.Kind == StmtKind::Goto && !S.AbnormalExit;
+    });
+    if (Jumps)
+      return std::nullopt;
+  }
   std::map<va_t, unsigned> Inner;
   walkStmts(Stmt.Body, [&](const HighStmt &Child) {
-    if (Child.Kind == StmtKind::Goto)
+    if (Child.Kind == StmtKind::Goto && !Child.LeavesTry)
       ++Inner[Child.GotoTarget];
   });
   for (size_t K = 1; K < Stmt.Body.size(); ++K) {
@@ -3974,8 +3998,8 @@ void HighCWriter::collectGotoTargets(const std::vector<HighStmt> &Stmts,
           : Stmts.size();
   for (size_t I = 0; I < Stmts.size(); ++I) {
     const HighStmt &S = Stmts[I];
-    if (S.Kind == StmtKind::Goto && I < End && S.GotoTarget != 0 &&
-        S.GotoTarget != InvalidVA)
+    if (S.Kind == StmtKind::Goto && !S.LeavesTry && I < End &&
+        S.GotoTarget != 0 && S.GotoTarget != InvalidVA)
       GotoTargets.insert(S.GotoTarget);
     const bool IsTry = S.Kind == StmtKind::SEHTry ||
                        S.Kind == StmtKind::CxxTry ||

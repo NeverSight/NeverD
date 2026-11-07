@@ -95,8 +95,7 @@ public:
   /// function, where its kind's specification gives it one.  \p ProgramMain
   /// is the function the C runtime runs as main (findProgramMain).
   LocalTypesDebugContext(
-      const DebugContext &Inner,
-      std::shared_ptr<const types::TypeLibrary> Types,
+      const DebugContext &Inner, std::shared_ptr<types::TypeLibrary> Types,
       std::map<va_t, std::string> Declarations = {},
       const BinaryImage *Image = nullptr,
       std::vector<types::HeaderLibrary> Headers = {},
@@ -231,6 +230,24 @@ public:
   /// one changes what the decompiler prints.
   llvm::StringSet<> readTypes() const;
 
+  /// Reads \p Next as the user's declarations from now on, as a context made
+  /// for them does, and what analysis read through this context stays.  False,
+  /// and another context takes them, where analysis read what they change: the
+  /// prototype a function's name binds, which a declaration hides
+  /// (importPrototypeArguments).
+  bool takeDeclarations(std::map<va_t, std::string> Next);
+  /// Defines the types \p Library has past those of this context's copy, as a
+  /// context made of \p Library does, and what was read through this context
+  /// stays.  Those types are new, and nothing it has read names them
+  /// (Session::takeUnreadTypes).
+  void takeNewTypes(const types::TypeLibrary &Library);
+
+  /// Notes in \p Reads each function whose declaration is asked for, declared
+  /// or not.  \p Reads outlives this.
+  void noteDeclarationReads(UserFactReads *Reads) { DeclarationReads = Reads; }
+  /// Whether analysis reads the declaration of the function at \p Entry: what
+  /// it hides is the prototype the function's name binds.
+  bool hidesPrototype(va_t Entry) const;
   /// Reads the names the image states for its functions (statedNames()),
   /// where nothing waits for them, as warming the analysis does.
   void indexStatedNames() const;
@@ -269,8 +286,12 @@ private:
   prototypeHeader(llvm::StringRef Name,
                   const types::FunctionDef *Function) const;
 
+  /// The function at \p Addr as the context gives it without a declaration.
+  std::optional<FunctionSym> undeclared(va_t Addr) const;
+
   const DebugContext &Inner;
-  std::shared_ptr<const types::TypeLibrary> Types;
+  UserFactReads *DeclarationReads = nullptr;
+  std::shared_ptr<types::TypeLibrary> Types;
   std::map<va_t, std::string> Declarations;
   const BinaryImage *Image;
   std::vector<types::HeaderLibrary> Headers;

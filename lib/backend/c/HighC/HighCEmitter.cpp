@@ -4008,7 +4008,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
           Object && Object->first != E.ConstVal)
         NoteWhole(E.ConstVal, nullptr, false);
     if (isImageDataAddress(E.ConstVal) && !stringLiteral(E.ConstVal)) {
-      bool Named = Opts.UserNames && Opts.UserNames->count(E.ConstVal);
+      bool Named = Opts.userName(E.ConstVal) != nullptr;
       if (!Named && Dbg) {
         if (auto Data = Dbg->resolveDataObject(E.ConstVal);
             Data && !Data->Name.empty() && !isStringLiteralName(Data->Name))
@@ -5395,8 +5395,10 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
   std::set<va_t> FinallyBodies;
   if (LeavesOut)
     for (const HighFunc &Func : Funcs)
-      for (const auto &Entry : Func.SEHTerminationFrameBytes)
-        FinallyBodies.insert(Entry.first);
+      if (Func.ExceptionMetadata && Func.ExceptionMetadata->SEH)
+        for (const SEHScopeRecord &Scope : Func.ExceptionMetadata->SEH->Scopes)
+          if (Scope.Kind == SEHScopeKind::Finally)
+            FinallyBodies.insert(Scope.FilterOrFinallyVA);
   std::vector<CEmitterOptions::RefusedDefinition> Unmet;
   std::vector<bool> LeftOut(Funcs.size(), false);
   const auto Check = [&](size_t I, const auto &Requirements) {

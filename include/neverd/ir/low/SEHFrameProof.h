@@ -50,7 +50,11 @@ struct LowSEHEstablisherFrame {
 /// A certified local unwind (SEHLocalUnwindProtocol.h) that converted MedIR
 /// turned into a jump, and whose target only such exits name: a decoded-frame
 /// proof enters the target from the call with the frame the call passes, as
-/// from LowSEHLocalUnwindEvidence, instead of as an independent root.
+/// from LowSEHLocalUnwindEvidence, instead of as an independent root.  Without
+/// a call (\ref CallAddr is InvalidVA), a termination handler's own certified
+/// local unwind names the target: the runtime calls the handler from a block
+/// a `__finally` scope guards, and the unwind resumes on the frame that block
+/// runs on.
 struct LowSEHLocalUnwindExitSource {
   va_t CallAddr = InvalidVA;
   int CallSeq = -1;
@@ -94,11 +98,23 @@ llvm::Expected<uint64_t> proveLowSEHFixedFrame(const LowFunc &Function,
                                                const TargetRegInfo &TRI,
                                                size_t &WorkRemaining);
 
+/// Where a Windows x64 function with termination handlers saves its incoming
+/// argument registers in its own entry block, before any of its protected
+/// ranges: entry-SP displacement to argument position.  MSVC homes them there
+/// for the handlers, which read them back through their EstablisherFrame.  Only
+/// a slot the function writes with nothing else at any address it computes
+/// from its stack pointer counts.
+std::map<int64_t, unsigned> collectLowSEHHomedArguments(const LowFunc &Parent,
+                                                        Arch TargetArch);
+
 /// The certified frame bytes of every termination handler of \p Parent, by
 /// handler entry. A handler whose frame is not proved is absent; each handler
-/// has its own `kMaxSEHEstablisherFrameWork` budget.
-std::map<va_t, uint64_t> collectLowSEHTerminationFrames(const LowFunc &Parent,
-                                                        Arch TargetArch);
+/// has its own `kMaxSEHEstablisherFrameWork` budget.  \p HandlerUnwindTargets
+/// are the blocks certified termination handlers' own local unwinds resume at,
+/// which ordinary flow need not enter.
+std::map<va_t, uint64_t>
+collectLowSEHTerminationFrames(const LowFunc &Parent, Arch TargetArch,
+                               const std::set<va_t> &HandlerUnwindTargets = {});
 
 struct LowSEHFrameProof {
   /// Exact entry-relative SP at direct calls whose first Win64 argument is

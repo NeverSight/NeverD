@@ -570,6 +570,11 @@ public:
   bool prepareCallSummaries(const BinaryImage &Img, const PipelineOptions &Opts,
                             DebugContext *Dbg, bool *Solved = nullptr);
 
+  /// Whether \p Opts' analysis cache holds the image's call summaries as read
+  /// through \p Dbg (prepareCallSummaries).
+  bool holdsCallSummaries(const BinaryImage &Img, const PipelineOptions &Opts,
+                          const DebugContext *Dbg);
+
   /// Read the signature bodies of the functions \p Img's functions call,
   /// those more of them call first, into Opts.AnalysisCache's omitted-callee
   /// memo, as runs of the image's symbol starts read them once the cache

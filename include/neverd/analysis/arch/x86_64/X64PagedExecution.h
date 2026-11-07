@@ -126,7 +126,8 @@ public:
   llvm::Expected<bool> validate(X64ContinuationStateV6 &State, uint64_t Address,
                                 X64PagedBody Validate,
                                 unsigned PagingAddressBits,
-                                bool InstructionDebug = false);
+                                bool InstructionDebug = false,
+                                bool BranchDebug = false);
 
   llvm::Expected<X64PagedExecutionResult>
   deliver(X64ContinuationStateV6 &State, const X64ContinuationEventV1 &Event,
@@ -143,7 +144,8 @@ public:
   execute(X64ContinuationStateV6 &State, uint64_t Address,
           llvm::ArrayRef<uint8_t> Bytes, X64PagedBody Body,
           X64PagedBody Validate, uint32_t MXCSRMask, unsigned PagingAddressBits,
-          std::optional<bool> DebugSSBlocked = std::nullopt);
+          std::optional<bool> DebugSSBlocked = std::nullopt,
+          bool BranchDebug = false);
 
   const X64PagedExecutionResult &lastResult() const { return Last; }
   const std::string &lastError() const { return Error; }
@@ -190,6 +192,16 @@ extern "C" uint64_t neverd_x64_paged_debug_step_v1(
     uint64_t PagingAddressBits, uint64_t SSBlocked);
 extern "C" uint64_t
 neverd_x64_paged_debug_validate_v1(uint8_t *Context, uint8_t *State,
+                                   uint64_t Address, X64PagedBody Validate,
+                                   uint64_t PagingAddressBits);
+/// V2 bodies publish actual conditional outcomes. V1 rejects active BTF before
+/// validation, fetch or producer polling; its existing ABI remains available.
+extern "C" uint64_t neverd_x64_paged_debug_step_v2(
+    uint8_t *Context, uint8_t *State, uint64_t Address, const uint8_t *Bytes,
+    uint64_t Size, X64PagedBody Body, X64PagedBody Validate, uint64_t MXCSRMask,
+    uint64_t PagingAddressBits, uint64_t SSBlocked);
+extern "C" uint64_t
+neverd_x64_paged_debug_validate_v2(uint8_t *Context, uint8_t *State,
                                    uint64_t Address, X64PagedBody Validate,
                                    uint64_t PagingAddressBits);
 extern "C" uint64_t neverd_x64_paged_event_v1(uint8_t *Context, uint8_t *State,

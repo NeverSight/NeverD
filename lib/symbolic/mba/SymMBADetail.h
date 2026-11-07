@@ -331,6 +331,11 @@ public:
   std::shared_ptr<ResidueMemo> Residues;
   size_t MultipleResidueAttempts = 0;
   size_t IncompleteAbstractions = 0;
+  // Numbered placeholder declarations are independent of an abstraction's
+  // reserved inputs. Reuse their context-local identities, then check the
+  // current reserved set before selecting one for an opaque input.
+  llvm::DenseMap<uint64_t, SymRef> PlaceholderInputs;
+  size_t PlaceholderLookups = 0, PlaceholderHits = 0;
 
 private:
   size_t Remaining;

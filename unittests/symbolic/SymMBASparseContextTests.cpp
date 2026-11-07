@@ -152,3 +152,36 @@ TEST(SymMBASparseContext, UnusedWideVariablesDoNotShiftRelevantSamples) {
   EXPECT_TRUE(detail::agreeOnSamples(Ctx, Hit, False, 3));
   EXPECT_FALSE(detail::agreeOnSamples(Ctx, Hit, False, 4));
 }
+
+TEST(SymMBASparseContext, PlaceholderDeclarationsReuseTheCurrentContextOnly) {
+  SymContext C;
+  detail::WorkBudget Budget(1000000);
+  Budget.MemoOwner = &C;
+  Budget.MemoCapacity = 8;
+  for (unsigned I = 0; I < 12; ++I) {
+    // These are legal caller inputs, even though their names also occur in
+    // the numbered placeholder pool. A reused declaration must stay reserved.
+    const auto X = C.mkVar("mba$64.0", 64);
+    const auto Y = C.mkVar("mba$64.1", 64);
+    const auto Z = C.mkFreshVar(64, "other_");
+    const auto Opaque = C.mkURem(X, C.mkConst(64, 17 + I));
+    const auto Root = C.mkAdd(
+        {C.mkXor(Opaque, Z), C.mkMul(C.mkConst(64, 2), C.mkAnd(Opaque, Z)), Y});
+    const auto Abstract = detail::abstractToMBA(C, Root, false, &Budget);
+    ASSERT_TRUE(Abstract);
+    EXPECT_EQ(C.substitute(Abstract->Body, Abstract->Hidden), Root);
+    EXPECT_FALSE(Abstract->Hidden.contains(X.index()));
+    EXPECT_FALSE(Abstract->Hidden.contains(Y.index()));
+    EXPECT_LE(Budget.PlaceholderInputs.size(), Budget.MemoCapacity);
+  }
+  EXPECT_GT(Budget.PlaceholderHits, 0u);
+  EXPECT_LT(Budget.PlaceholderHits, Budget.PlaceholderLookups);
+  SymContext Other;
+  const auto A = Other.mkVar("a", 64), B = Other.mkVar("b", 64);
+  const auto Root = Other.mkAdd(Other.mkURem(A, B), A);
+  const auto Lookups = Budget.PlaceholderLookups;
+  const auto Abstract = detail::abstractToMBA(Other, Root, false, &Budget);
+  ASSERT_TRUE(Abstract);
+  EXPECT_EQ(Other.substitute(Abstract->Body, Abstract->Hidden), Root);
+  EXPECT_EQ(Budget.PlaceholderLookups, Lookups);
+}

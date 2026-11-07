@@ -21,9 +21,14 @@ public:
   ~AnalysisService() override;
   QueryService &queries() { return queries_; }
   bool ready() const { return ready_; }
+  /// Whether a replica runs, or is on its way.
+  bool replicaStarted() const { return ready_ || startingReplica_; }
   void setSnapshotBlocked(bool blocked);
   /// Asks the replica to render functions ahead in idle time.
   void setRendersAhead(bool renders) { rendersAhead_ = renders; }
+  /// The owner can answer a read from what earlier sessions kept, so that a
+  /// replica starts only for what they did not.
+  void setOwnerReadsKept(bool reads) { ownerReadsKept_ = reads; }
   /// That job's state as the replica's last heartbeat reports it; empty where
   /// it reports none.
   const QString &renderAheadState() const { return renderAheadState_; }
@@ -39,6 +44,10 @@ private:
   QString send(const QString &operation, const QJsonObject &payload);
   void reset();
   void requestSnapshot();
+  /// Asks the owner for the running read from what is kept, and starts the
+  /// replica for what is not.
+  void readKept();
+  void forgetKeptRequests();
   void stopWorker();
   /// Leaves what the worker is answering to run to its end, unanswered.
   void abandonRunningRead();
@@ -57,6 +66,11 @@ private:
   qint64 restoreMilliseconds_ = 0;
   QJsonObject payload_, snapshot_;
   QueryService::SubscriptionId snapshotRequest_ = 0;
+  QueryService::SubscriptionId keptStateRequest_ = 0, keptRead_ = 0;
+  /// What the owner says the store holds for the current project state.
+  enum class KeptState { Unknown, Asked, Whole, Part };
+  KeptState keptState_ = KeptState::Unknown;
+  bool ownerReadsKept_ = false;
   quint64 serial_ = 0, next_ = 0;
   bool ready_ = false;
   bool snapshotBlocked_ = false, startingReplica_ = false;
@@ -82,6 +96,22 @@ public:
   /// Whether the replica reads start in renders functions ahead.  A second one
   /// serves only overlapping reads, and rendering every function again there
   /// would double the memory and the work.
+  void setOwnerReadsKept(bool reads) {
+    for (auto &lane : lanes_)
+      lane.service->setOwnerReadsKept(reads);
+  }
+  bool replicaStarted() const {
+    for (const auto &lane : lanes_)
+      if (lane.service->replicaStarted())
+        return true;
+    return false;
+  }
+  bool replicaReady() const {
+    for (const auto &lane : lanes_)
+      if (lane.service->ready())
+        return true;
+    return false;
+  }
   void setRendersAhead(bool renders) {
     lanes_.front().service->setRendersAhead(renders);
   }

@@ -343,7 +343,7 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                              *State.Debug, Software, Observation.Matches,
                              uint32_t(State.Core.Segments[1].Base + State.EIP),
                              State.EFlags)) {
-        State.Debug->DR7 &= ~uint32_t{0x2000};
+        x86AcceptDebugException(*State.Debug);
         Observation.Matches = Pending.DataBreakpoints = 0;
         Pending.CompletedAccesses.clear();
         Event = {State.EIP, 0, 0, 1, Kind::Trap};
@@ -412,7 +412,7 @@ deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     return R;
   }
   if (Debug && State.Debug)
-    State.Debug->DR7 &= ~uint64_t{0x2000};
+    x86AcceptDebugException(*State.Debug);
   if (State.Debug && Input.Kind != Kind::Software)
     State.Debug->PendingData = 0;
   State.STIBlocked = State.SSBlocked = false;

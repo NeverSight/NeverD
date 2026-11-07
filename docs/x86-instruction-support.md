@@ -384,7 +384,10 @@ instruction sets; physical I/O qualification remains unavailable through the
 local KVM port emulator. The explicit
 [V2 paged function/call views](x64-continuation-source.md#debug-aware-paged-call-views)
 retain completed CALL/RET state across post-instruction debug entry and cache
-the actual completion stop and pre-event result. BTF,
+the actual completion stop and pre-event result. The explicit
+[BTF profile](x86-paged-execution.md#branch-single-stepping) now preserves actual
+taken decisions in both executors, with original user-mode branch comparisons
+and separate software debug-state checks. Full-machine BTF qualification,
 general i386/compatibility source dispatch and the other
 state families below remain open. This does not satisfy the global LLVM release
 gate; the production SDK and LLVM gitlink remain unchanged.

@@ -82,6 +82,11 @@ inline bool hasLegacyIntegerBankAudit(unsigned Id) {
   case X86_INS_JS:
   case X86_INS_LAHF:
   case X86_INS_LEA:
+  // LOOP/LOOPcc change only the counter and control flow. Independent of
+  // their undefined-output audit, they preserve every closed opaque bank.
+  case X86_INS_LOOP:
+  case X86_INS_LOOPE:
+  case X86_INS_LOOPNE:
   case X86_INS_MOV:
   case X86_INS_MOVABS:
   case X86_INS_MOVSX:

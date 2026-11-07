@@ -901,18 +901,23 @@ Other code edits continue through full invalidation.
 
 `analysis_update_names` accepts an owner `analysis_snapshot` only in an existing
 readonly replica created by `analysis_restore`. Every input and option, and all
-state but code edits, names, comments, operand formats and data items, must match
-the restored snapshot. The worker also checks input stamps, committed user tables
-apart from comments, which the owner can hold staged, loaded type declarations and
-library choices before taking the new values. A pending recovery transaction also
-refuses reuse.
+state but code edits, names, comments, operand formats, data items, declared types
+and what the function table says beyond whether a function exists and returns, must
+match the restored snapshot. The worker also checks input stamps, committed user
+tables apart from comments, which the owner can hold staged, and library choices
+before taking the new values. A pending recovery transaction also refuses reuse.
+The snapshot's `declared_types` lists the owner's declarations, so a change to them
+on disk that the owner did not make is refused.
 Success returns `{updated:true}` and advances the replica's local revision. No
 analysis reads these, so nothing is analyzed again, and retained source is
 redecorated: local and function names and comments are read as a view is decorated,
 with a kept page's own statement of a function's name brought up to date unless a
 name was taken away, which only the engine can answer; operand formats are not in
 source; and a function's other code edits are options of its own view, whose key
-they change. A new name of data or a data item is spelled in the pages that name
+they change. A note on a function changes nothing. A function's declaration or a change to the
+declared types is read again in place: the engine lets go of what read it, and the
+documents, renders, summaries and job start over under a store of their own, in the
+same process. A new name of data or a data item is spelled in the pages that name
 it, so it forgets the documents and renders and starts the job over, under a store
 of its own. This operation never writes sidecars or history. A changed snapshot or racing
 sidecar is `stale_snapshot`; a changed input is `input_changed`. The GUI tries it
@@ -969,16 +974,27 @@ and `read` to the others. A replica then
 reads what earlier sessions rendered over the same inputs, from the project's
 `local/render-ahead`, from its first request on, and `write` adds what its own job
 renders. `kept` counts the store's records. The inputs are the engine and worker
-files, the snapshot apart from code edits, comments, function names and operand
-formats, the project's shared files apart from the ones that hold those, and the
-debug files' stamps; a change to any of them starts a store of its own, and the
-first render under one removes the others. A session whose job
+files, the snapshot apart from code edits, comments, names, data items, function
+declarations and operand formats, the project's shared files apart from the ones
+that hold those, and the debug files' stamps, with what analysis reads of function
+declarations; a change to any of them starts a store of its own, and the
+first render under one removes the others, though a declaration of types nothing has
+read (`local_types_declare` replies `unread`) keeps the one it had. A render answers
+while the names of data and the functions' declarations it asked for read the same;
+the job renders again what no longer does, and a `decompile` that reaches one asks
+the engine. A session whose job
 starts over after it began neither reads nor adds to the store from then on, since
 its engine no longer reads as a new session's does. Once a job has reached every
 function, a later session's `call_summaries` stops at `deferred` after discovery,
 and a `decompile` or IR view the store does not answer starts the rest. A graph
 does not, since it reads no summary. A damaged or cut-short record is a render
 not kept; removing the folder only costs the renders.
+
+A `decompile`, `cfg_summary` or `cfg_viewport` with `kept_only: true`, on a worker
+that advertises `kept_renders`, answers from what is kept and otherwise refuses it as
+`not_kept` without asking the engine, so an owner can answer them with no replica.
+`kept_renders` replies `{kept, complete}`: how many records the store for the current
+inputs holds, and whether a job has reached every function.
 
 A job also keeps what a function's first look in `listing` asks the engine, in the
 project's `local/listing-facts` under the same inputs apart from the names of data,

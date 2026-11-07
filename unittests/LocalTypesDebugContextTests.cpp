@@ -68,6 +68,96 @@ TEST(DebugContext, NoReturnQueryUsesTheProvidersValidatedPrototype) {
   EXPECT_FALSE(Context.prototypeDoesNotReturn("missing"));
 }
 
+TEST(LocalTypesDebugContext, TakesDeclarationsAndNewTypesInPlace) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+  ASSERT_TRUE(
+      types::parseCTypes("struct Known { int Value; };", *Library).ok());
+  NamesOnlyDebugContext Names;
+  const va_t Entry = 0x1000, Other = 0x2000;
+  sdk::LocalTypesDebugContext Context(
+      Names, Library, std::map<va_t, std::string>{{Entry, "int Entry(void)"}});
+  UserFactReads Reads;
+  Context.noteDeclarationReads(&Reads);
+  const auto ReturnBytes = [&](va_t Address) -> unsigned {
+    const auto Function = Context.resolveFunction(Address);
+    return Function && Function->ReturnType ? Function->ReturnType->Size : 0;
+  };
+  EXPECT_EQ(ReturnBytes(Entry), 4u);
+  // What it asks of a function without a declaration counts too.
+  EXPECT_EQ(ReturnBytes(Other), 0u);
+  EXPECT_EQ(Reads.addresses(), (std::vector<va_t>{Entry, Other}));
+  {
+    // Work for every result reads apart from the result so far.
+    const UserFactReads::Held Held(Reads);
+    EXPECT_EQ(Reads.addresses(), std::vector<va_t>{});
+    EXPECT_EQ(ReturnBytes(0x3000), 0u);
+  }
+  EXPECT_EQ(Reads.addresses(), (std::vector<va_t>{Entry, Other}));
+
+  EXPECT_TRUE(Context.takeDeclarations(
+      {{Entry, "long long Entry(void)"}, {Other, "char Other(void)"}}));
+  EXPECT_EQ(ReturnBytes(Entry), 8u);
+  EXPECT_EQ(ReturnBytes(Other), 1u);
+  EXPECT_TRUE(Context.takeDeclarations({{Other, "short Other(void)"}}));
+  EXPECT_EQ(ReturnBytes(Entry), 0u);
+  EXPECT_EQ(ReturnBytes(Other), 2u);
+
+  // A declaration that names a type the context has yet to take does not read;
+  // one read after it takes the type does, as in a context made of them all.
+  EXPECT_TRUE(Context.takeDeclarations({{Entry, "struct Later Entry(void)"}}));
+  EXPECT_EQ(ReturnBytes(Entry), 0u);
+  types::TypeLibrary Grown(*Library);
+  ASSERT_TRUE(types::parseCTypes("struct Later { long long First; long long "
+                                 "Second; };",
+                                 Grown)
+                  .ok());
+  Context.takeNewTypes(Grown);
+  EXPECT_EQ(Context.library().size(), Grown.size());
+  EXPECT_TRUE(Context.takeDeclarations({{Entry, "struct Later *Entry(void)"}}));
+  EXPECT_EQ(ReturnBytes(Entry), 8u);
+  // A second take of what it holds adds nothing.
+  Context.takeNewTypes(Grown);
+  EXPECT_EQ(Context.library().size(), Grown.size());
+}
+
+TEST(LocalTypesDebugContext, NewTypesReadAsInAContextMadeOfThem) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+  // C spells this name as the new type's, which steps aside for it.
+  types::LocalType Scoped;
+  Scoped.Name = "Scope::Item";
+  Scoped.Kind = types::TypeKind::Struct;
+  Scoped.Record = std::make_shared<types::RecordDef>();
+  Library->define(std::move(Scoped));
+  ASSERT_TRUE(
+      types::parseCTypes("struct Known { int Value; };", *Library).ok());
+  NamesOnlyDebugContext Names;
+  sdk::LocalTypesDebugContext Context(Names, Library);
+  const auto Known = NdType::makeNamedRecord("Known");
+  const auto Item = NdType::makeNamedRecord("Scope::Item");
+  const auto Later = NdType::makeNamedRecord("Scope__Item");
+  EXPECT_FALSE(Context.definitions({Known, Item}).Text.empty());
+
+  auto Grown = std::make_shared<types::TypeLibrary>(*Library);
+  ASSERT_TRUE(
+      types::parseCTypes("struct Scope__Item { long long Value; };", *Grown)
+          .ok());
+  Context.takeNewTypes(*Grown);
+  NamesOnlyDebugContext FreshNames;
+  sdk::LocalTypesDebugContext Fresh(FreshNames, Grown);
+  for (const std::vector<TypeRef> &Unit :
+       {std::vector<TypeRef>{Known, Item}, std::vector<TypeRef>{Later},
+        std::vector<TypeRef>{Later, Item, Known}}) {
+    const CRecordDefinitions Taken = Context.definitions(Unit);
+    const CRecordDefinitions Made = Fresh.definitions(Unit);
+    EXPECT_EQ(Taken.Text, Made.Text);
+    EXPECT_EQ(Taken.Records, Made.Records);
+    EXPECT_EQ(Taken.Tags, Made.Tags);
+    EXPECT_EQ(Taken.Identifiers, Made.Identifiers);
+  }
+}
+
 TEST(LocalTypesDebugContext, NoReturnQueryMatchesValidatedPrototype) {
   using namespace neverd;
   for (auto Model : {types::DataModel::ILP32, types::DataModel::LLP64,

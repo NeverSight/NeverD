@@ -663,6 +663,10 @@ struct PDBDebugContext::Impl {
   mutable std::map<va_t, FunctionSym> Functions;
   mutable std::map<va_t, DataObjectSym> DataObjects;
   mutable std::set<va_t> AbsentPublics;
+  /// The functions only a procedure read for its locals has named.  Reading it
+  /// comes when a run first asks, so no name a run reads ahead of that comes
+  /// from it (functionName).
+  mutable std::set<va_t> ProcedureNamedFunctions;
   mutable std::map<va_t, std::map<int64_t, VariableSym>> Locals;
   mutable std::map<va_t, std::map<int64_t, VariableSym>> StackPointerLocals;
   mutable std::map<va_t, std::set<int64_t>> AmbiguousLocalOffsets;
@@ -2348,10 +2352,13 @@ void PDBDebugContext::ensureLocalsForAddress(va_t Addr) const {
       }
       Next.Wanted = Next.VA == Addr;
       if (Next.Wanted && Next.VA != 0 && !ProcOr->Name.empty()) {
+        std::lock_guard<std::mutex> Publics(PImpl->PublicMutex);
         FunctionSym &FS = PImpl->Functions[Next.VA];
         FS.Addr = Next.VA;
-        if (FS.Name.empty())
+        if (FS.Name.empty()) {
           FS.Name = ProcOr->Name.str();
+          PImpl->ProcedureNamedFunctions.insert(Next.VA);
+        }
       }
       // `End` is the matching S_END. Skip unrequested bodies so a late
       // `--func` hit does not deserialize every prefix S_LOCAL.
@@ -2491,7 +2498,8 @@ std::optional<std::string> PDBDebugContext::functionName(va_t Addr) const {
     llvm::consumeError(std::move(Err));
   std::lock_guard<std::mutex> Guard(PImpl->PublicMutex);
   const auto It = PImpl->Functions.find(Addr);
-  if (It != PImpl->Functions.end() && !It->second.Name.empty())
+  if (It != PImpl->Functions.end() && !It->second.Name.empty() &&
+      !PImpl->ProcedureNamedFunctions.count(Addr))
     return It->second.Name;
   return std::nullopt;
 }

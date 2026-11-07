@@ -442,12 +442,13 @@ static bool rangeHasObservableWork(const std::vector<HighStmt> &Body,
 /// the first statement within 32 bytes after it stands in; one that starts a
 /// statement elsewhere in the function is that statement.
 static size_t findSkipTargetInList(const std::vector<HighStmt> &Body,
-                                   size_t After, va_t Target) {
+                                   size_t After, va_t Target,
+                                   size_t End = SIZE_MAX) {
   if (!Target || Target == InvalidVA)
     return SIZE_MAX;
   const bool Starts =
       IfElseFunctionStarts && IfElseFunctionStarts->count(Target);
-  for (size_t K = After; K < Body.size(); ++K) {
+  for (size_t K = After; K < Body.size() && K < End; ++K) {
     const va_t Address = AddrMap::entryAddress(Body[K]);
     if (Address == Target ||
         (!Starts && Address && Address > Target && Address < Target + 32))
@@ -4280,20 +4281,94 @@ static void foldJoinValueGotoChainNested(std::vector<HighStmt> &Body) {
     ;
 }
 
+namespace {
+
+/// Ownership for consecutive runs consumed in list order. Original positions
+/// stay valid while planning: a previously consumed goto remains outside every
+/// later candidate, even after it becomes nested in an earlier owner.
+class ExternalSkipOwnership {
+  const std::vector<HighStmt> &Body;
+  std::map<va_t, size_t> Entries;
+  std::vector<size_t> NextAddress;
+  std::map<va_t, std::pair<size_t, size_t>> GotoSources;
+
+  size_t targetIndex(va_t Target) const {
+    const auto It = Entries.lower_bound(Target);
+    if (It != Entries.end() && It->first == Target)
+      return It->second;
+    if (IfElseFunctionStarts && IfElseFunctionStarts->count(Target))
+      return SIZE_MAX;
+    return It != Entries.end() && It->first - Target <= 16 ? It->second
+                                                           : SIZE_MAX;
+  }
+
+public:
+  explicit ExternalSkipOwnership(const std::vector<HighStmt> &Body)
+      : Body(Body), NextAddress(Body.size(), SIZE_MAX) {
+    for (size_t I = Body.size(); I-- > 0;) {
+      if (const va_t Address = AddrMap::entryAddress(Body[I])) {
+        auto [It, Inserted] = Entries.try_emplace(Address, I);
+        if (!Inserted) {
+          NextAddress[I] = It->second;
+          It->second = I;
+        }
+      }
+      walkStatementTree(Body[I], [&](const HighStmt &S) {
+        if (S.Kind != StmtKind::Goto)
+          return;
+        auto [It, Inserted] =
+            GotoSources.try_emplace(S.GotoTarget, std::make_pair(I, I));
+        if (!Inserted)
+          It->second.first = I;
+      });
+    }
+  }
+
+  bool owns(size_t Owner, size_t End) const {
+    for (size_t K = Owner + 1; K < End; ++K) {
+      const va_t Address = AddrMap::entryAddress(Body[K]);
+      const auto Entry = Entries.find(Address);
+      if (Entry == Entries.end() || Entry->second != K)
+        continue;
+      // findTargetIndex accepts an exact entry or the nearest surviving
+      // address up to 16 bytes later. Inspect only gotos in that interval.
+      auto It = GotoSources.lower_bound(Address > 16 ? Address - 16 : 0);
+      for (; It != GotoSources.end() && It->first <= Address; ++It) {
+        const auto [First, Last] = It->second;
+        if ((First < Owner || Last >= End) && targetIndex(It->first) == K)
+          return false;
+      }
+    }
+    return true;
+  }
+
+  void consume(size_t Start, size_t End) {
+    for (size_t K = Start; K < End; ++K) {
+      auto It = Entries.find(AddrMap::entryAddress(Body[K]));
+      if (It == Entries.end() || It->second != K)
+        continue;
+      if (NextAddress[K] == SIZE_MAX)
+        Entries.erase(It);
+      else
+        It->second = NextAddress[K];
+    }
+  }
+};
+
+} // namespace
+
 /// `if (c) goto L_out; work; goto L_cleanup;` when L_out is not inside the
 /// work. Cleanup is the next top-level goto, not the list tail, so a later
 /// sibling label stays put. Cond may contain a call.
 static bool invertExternalSkipGoto(std::vector<HighStmt> &Body) {
-  bool Changed = false;
-  // Rejected candidates leave every statement index unchanged. Build once
-  // when needed and retire the map after moving a range into an arm.
-  std::optional<AddrMap> AM;
-  for (int I = 0; I < static_cast<int>(Body.size()); ++I) {
-    HighStmt &Stmt = Body[I];
+  std::optional<ExternalSkipOwnership> Ownership;
+  std::vector<std::pair<size_t, size_t>> Runs;
+  for (size_t I = 0; I < Body.size(); ++I) {
+    const HighStmt &Stmt = Body[I];
     if (Stmt.Kind != StmtKind::If || !Stmt.Cond || !bodyIsSkipGoto(Stmt.Body))
       continue;
     const va_t Target = Stmt.Body.back().GotoTarget;
-    const size_t NextI = static_cast<size_t>(I) + 1;
+    const size_t NextI = I + 1;
     if (NextI >= Body.size())
       continue;
     size_t CleanupI = SIZE_MAX;
@@ -4310,27 +4385,46 @@ static bool invertExternalSkipGoto(std::vector<HighStmt> &Body) {
     }
     if (CleanupI == SIZE_MAX || Body[CleanupI].GotoTarget == Target)
       continue;
-    const size_t TargetInRest = findSkipTargetInList(Body, NextI, Target);
-    if (TargetInRest != SIZE_MAX && TargetInRest <= CleanupI)
+    if (findSkipTargetInList(Body, NextI, Target, CleanupI + 1) != SIZE_MAX)
       continue;
-    if (!AM)
-      AM.emplace().rebuild(Body);
-    if (!ownsRunHighIR(Body, *AM, {NextI, CleanupI + 1},
-                       static_cast<size_t>(I)))
+    if (!Ownership)
+      Ownership.emplace(Body);
+    if (!Ownership->owns(I, CleanupI + 1))
       continue;
+    Runs.emplace_back(I, CleanupI + 1);
+    Ownership->consume(NextI, CleanupI + 1);
+    I = CleanupI;
+  }
+  if (Runs.empty())
+    return false;
+  Ownership.reset();
+
+  // Compact once. Erasing each accepted run separately shifts the entire
+  // remaining statement vector once per conditional.
+  size_t Source = 0;
+  size_t Destination = 0;
+  auto KeepUntil = [&](size_t End) {
+    for (; Source < End; ++Source, ++Destination)
+      if (Source != Destination)
+        Body[Destination] = std::move(Body[Source]);
+  };
+  for (const auto [Owner, End] : Runs) {
+    KeepUntil(Owner);
+    auto &Stmt = Body[Owner];
     std::vector<HighStmt> ThenBody;
-    for (size_t K = NextI; K <= CleanupI; ++K)
+    ThenBody.reserve(End - Owner - 1);
+    for (size_t K = Owner + 1; K < End; ++K)
       ThenBody.push_back(std::move(Body[K]));
     Stmt.Kind = StmtKind::IfElse;
     Stmt.Cond = invertHighCond(Stmt.Cond);
     Stmt.ElseBody = std::move(Stmt.Body);
     Stmt.Body = std::move(ThenBody);
-    Body.erase(Body.begin() + static_cast<long>(NextI),
-               Body.begin() + static_cast<long>(CleanupI + 1));
-    AM.reset();
-    Changed = true;
+    KeepUntil(Owner + 1);
+    Source = End;
   }
-  return Changed;
+  KeepUntil(Body.size());
+  Body.resize(Destination);
+  return true;
 }
 
 static void invertExternalSkipGotoNested(std::vector<HighStmt> &Body) {
@@ -4863,21 +4957,26 @@ static bool hasFallthroughPred(const std::vector<HighStmt> &Body, size_t I) {
   return true;
 }
 
-static void countGotosTo(const std::vector<HighStmt> &Body, va_t Target,
-                         size_t &All, size_t &ElseOnly) {
+struct ExclusiveJoinUses {
+  size_t All = 0;
+  size_t ElseOnly = 0;
+};
+using ExclusiveJoinIndex = std::unordered_map<va_t, ExclusiveJoinUses>;
+
+static void countExclusiveJoinUses(const std::vector<HighStmt> &Body,
+                                   ExclusiveJoinIndex &Index) {
   for (const HighStmt &S : Body) {
-    if (S.Kind == StmtKind::IfElse && ifBodyIsOnlyGoto(S.ElseBody) &&
-        S.ElseBody.back().GotoTarget == Target)
-      ++ElseOnly;
-    if (S.Kind == StmtKind::Goto && S.GotoTarget == Target)
-      ++All;
-    countGotosTo(S.Body, Target, All, ElseOnly);
-    countGotosTo(S.ElseBody, Target, All, ElseOnly);
-    countGotosTo(S.DefaultBody, Target, All, ElseOnly);
+    if (S.Kind == StmtKind::IfElse && ifBodyIsOnlyGoto(S.ElseBody))
+      ++Index[S.ElseBody.back().GotoTarget].ElseOnly;
+    if (S.Kind == StmtKind::Goto)
+      ++Index[S.GotoTarget].All;
+    countExclusiveJoinUses(S.Body, Index);
+    countExclusiveJoinUses(S.ElseBody, Index);
+    countExclusiveJoinUses(S.DefaultBody, Index);
     for (const auto &C : S.Cases)
-      countGotosTo(C.Body, Target, All, ElseOnly);
+      countExclusiveJoinUses(C.Body, Index);
     for (const auto &Clause : S.EHClauseBodies)
-      countGotosTo(Clause, Target, All, ElseOnly);
+      countExclusiveJoinUses(Clause, Index);
   }
 }
 
@@ -4908,7 +5007,8 @@ static bool replaceElseOnlyGotos(std::vector<HighStmt> &Body, va_t Target,
 /// inlines L into every else-only goto when nothing falls through into L.
 /// Then-arm gotos to a shared wind tail keep L_7D6 / L_7DD.
 static bool inlineSmallExclusiveJoin(std::vector<HighStmt> &Body,
-                                     std::vector<HighStmt> &Root) {
+                                     std::vector<HighStmt> &Root,
+                                     std::optional<ExclusiveJoinIndex> &Uses) {
   bool Changed = false;
   for (size_t I = 0; I < Body.size();) {
     size_t End = 0;
@@ -4917,9 +5017,11 @@ static bool inlineSmallExclusiveJoin(std::vector<HighStmt> &Body,
       continue;
     }
     const va_t Label = AddrMap::entryAddress(Body[I]);
-    size_t All = 0;
-    size_t ElseOnly = 0;
-    countGotosTo(Root, Label, All, ElseOnly);
+    if (!Uses) {
+      Uses.emplace();
+      countExclusiveJoinUses(Root, *Uses);
+    }
+    const auto [All, ElseOnly] = (*Uses)[Label];
     if (!All || All != ElseOnly) {
       ++I;
       continue;
@@ -4939,23 +5041,34 @@ static bool inlineSmallExclusiveJoin(std::vector<HighStmt> &Body,
     }
     Body.erase(Body.begin() + static_cast<long>(I),
                Body.begin() + static_cast<long>(End));
+    // Fill can introduce jumps to another join. Recount after a mutation;
+    // unsuccessful candidates reuse the same complete root inventory.
+    Uses.reset();
     Changed = true;
   }
   return Changed;
 }
 
+static void
+inlineSmallExclusiveJoinNestedImpl(std::vector<HighStmt> &Body,
+                                   std::vector<HighStmt> &Root,
+                                   std::optional<ExclusiveJoinIndex> &Uses) {
+  for (HighStmt &S : Body) {
+    inlineSmallExclusiveJoinNestedImpl(S.Body, Root, Uses);
+    inlineSmallExclusiveJoinNestedImpl(S.ElseBody, Root, Uses);
+    inlineSmallExclusiveJoinNestedImpl(S.DefaultBody, Root, Uses);
+    for (auto &C : S.Cases)
+      inlineSmallExclusiveJoinNestedImpl(C.Body, Root, Uses);
+    for (auto &Clause : S.EHClauseBodies)
+      inlineSmallExclusiveJoinNestedImpl(Clause, Root, Uses);
+  }
+  inlineSmallExclusiveJoin(Body, Root, Uses);
+}
+
 static void inlineSmallExclusiveJoinNested(std::vector<HighStmt> &Body,
                                            std::vector<HighStmt> &Root) {
-  for (HighStmt &S : Body) {
-    inlineSmallExclusiveJoinNested(S.Body, Root);
-    inlineSmallExclusiveJoinNested(S.ElseBody, Root);
-    inlineSmallExclusiveJoinNested(S.DefaultBody, Root);
-    for (auto &C : S.Cases)
-      inlineSmallExclusiveJoinNested(C.Body, Root);
-    for (auto &Clause : S.EHClauseBodies)
-      inlineSmallExclusiveJoinNested(Clause, Root);
-  }
-  inlineSmallExclusiveJoin(Body, Root);
+  std::optional<ExclusiveJoinIndex> Uses;
+  inlineSmallExclusiveJoinNestedImpl(Body, Root, Uses);
 }
 
 /// Structures \p Stmts bottom-up; true when anything in it changed.

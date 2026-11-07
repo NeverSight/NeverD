@@ -2,6 +2,7 @@ include(${CMAKE_SOURCE_DIR}/cmake/NeverDZlib.cmake)
 add_neverd_component_library(NeverDDalvik
   AndroidFramework.cpp
   AndroidBinder.cpp
+  AndroidBinderObjects.cpp
   AndroidEventLog.cpp
   AndroidParcel.cpp
   AndroidServiceManager.cpp
@@ -16,4 +17,4 @@ add_neverd_component_library(NeverDDalvik
   Runtime.cpp
   Signature.cpp
   LLVM_COMPONENTS Support
-  LINK_LIBS ZLIB::ZLIB)
+  LINK_LIBS ZLIB::ZLIB neverd_sorted_search)

@@ -293,6 +293,13 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
       Result.Diagnostic = diagnostic::ThreadCallbackExit;
       return false;
     }
+    auto BinderExit = LibC.binderThreadExit();
+    if (!BinderExit) {
+      RuntimeFailure(BinderExit.takeError());
+      return false;
+    }
+    if (!*BinderExit)
+      return false;
     if (auto E = LibC.jniThreadExit()) {
       RuntimeFailure(std::move(E));
       return false;
@@ -303,22 +310,6 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
     }
     NeedSchedule = true;
     return true;
-  };
-  auto StartCallback = [&](const GuestCallback &Callback) -> llvm::Error {
-    // The suspended import's live stack remains in place. All admitted
-    // callback signatures fit the ordinary scalar register ABI.
-    if (Callback.Arguments.size() > Calls->info().Arguments.size())
-      return failure(diagnostic::CallbackArguments);
-    for (size_t I = 0; I < Callback.Arguments.size(); ++I)
-      if (auto E = CPU.writeRegister(Calls->info().Arguments[I],
-                                     {Callback.Arguments[I], 0}))
-        return E;
-    if (auto E = CPU.writeRegister(Calls->info().Link, {ReturnPC, 0}))
-      return E;
-    if (auto E = CPU.writeRegister(CPURegister::AArch64PC, {Callback.Entry, 0}))
-      return E;
-    Result.PC = Callback.Entry;
-    return llvm::Error::success();
   };
   while (true) {
     if (Threads.enabled() && (NeedSchedule || !QuantumRemaining)) {
@@ -459,11 +450,22 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
         if (!*Value)
           break;
         if (auto *Next = std::get_if<GuestCallback>(&**Value)) {
-          if (auto E = StartCallback(*Next)) {
+          if (auto E = Threads.startCallback(*Next)) {
             RuntimeFailure(std::move(E));
             break;
           }
           Callbacks.back().Call = *Next;
+          continue;
+        }
+        if (std::holds_alternative<GuestThreadWait>(**Value)) {
+          if (auto E =
+                  CPU.writeRegister(Calls->info().Link, {Pending.Link, 0})) {
+            RuntimeFailure(std::move(E));
+            break;
+          }
+          Callbacks.pop_back();
+          Threads.suspend(Pending.Request, Pending.Event);
+          NeedSchedule = true;
           continue;
         }
         const uint64_t Returned = std::get<uint64_t>(**Value);
@@ -579,28 +581,11 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
         continue;
       }
       if (auto *Callback = std::get_if<GuestCallback>(&**Value)) {
-        auto Link = CPU.readRegister(Calls->info().Link);
-        if (!Link) {
-          RuntimeFailure(Link.takeError());
-          break;
-        }
-        auto SP = CPU.readRegister(Calls->info().StackPointer);
-        if (!SP) {
-          RuntimeFailure(SP.takeError());
-          break;
-        }
-        if (auto E = Calls->validateStackPointer((*SP)[0])) {
+        if (auto E = Threads.pushCallback(*Callback, *Request,
+                                          Result.NativeCalls.size() - 1)) {
           RuntimeFailure(std::move(E));
           break;
         }
-        // Reuse the current guest stack below the suspended import. Preparing
-        // a fresh top-level frame would overwrite its caller's live locals.
-        if (auto E = StartCallback(*Callback)) {
-          RuntimeFailure(std::move(E));
-          break;
-        }
-        Callbacks.push_back({*Callback, *Request, Result.NativeCalls.size() - 1,
-                             (*Link)[0], (*SP)[0]});
         continue;
       }
       uint64_t Returned = std::get<uint64_t>(**Value);

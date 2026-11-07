@@ -18,6 +18,17 @@
 
 namespace neverd::symbolic {
 
+/// Count set bits at the input's exact width. Shared by symbolic execution
+/// and the source adapter so a recovered spelling keeps the same relation.
+inline SymRef evaluatePopulationCount(SymContext &Ctx, SymRef Input) {
+  const auto Width = Ctx.width(Input);
+  llvm::SmallVector<SymRef, 64> Bits;
+  Bits.reserve(Width);
+  for (uint32_t Bit = 0; Bit < Width; ++Bit)
+    Bits.push_back(Ctx.mkZExtOrTrunc(Ctx.mkExtract(Input, Bit, 1), Width));
+  return Ctx.mkAdd(Bits);
+}
+
 /// Exact integer semantics for an intrinsic whose values are bit vectors.
 /// Unsupported IDs or malformed shapes produce no value and read no inputs.
 /// Register upper-state and memory accesses remain owned by the lifter.

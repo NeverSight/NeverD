@@ -628,14 +628,7 @@ StepResult SymExec::stepBits(const LowOp &Op) {
   case NdOp::POPCOUNT: {
     if (Width > kMaxBitCountWidth)
       return unmodelled(Op);
-    // A bit at a time, because the expression language has no population
-    // count and nothing shorter is exact.  The sum cannot overflow the width
-    // it is taken at: a W-bit word holds at most W ones, and W < 2^W.
-    llvm::SmallVector<SymRef, 64> Bits;
-    Bits.reserve(Width);
-    for (uint32_t I = 0; I < Width; ++I)
-      Bits.push_back(Ctx.mkZExtOrTrunc(Ctx.mkExtract(A, I, 1), Width));
-    writeResult(Op.Output, Ctx.mkAdd(Bits));
+    writeResult(Op.Output, evaluatePopulationCount(Ctx, A));
     return StepResult::Continue;
   }
 

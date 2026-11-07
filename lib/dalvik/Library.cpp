@@ -372,6 +372,8 @@ static const LibraryMethod Methods[] = {
     {"android/os/Parcel", "readInt", "()I", ParcelData, false, true},
     {"android/os/Parcel", "writeLong", "(J)V", ParcelData, false, true},
     {"android/os/Parcel", "readLong", "()J", ParcelData, false, true},
+    {"android/os/Parcel", "readStrongBinder", "()Landroid/os/IBinder;",
+     ParcelData, false, true},
     {"android/os/Parcel", "writeString", "(Ljava/lang/String;)V", ParcelData,
      false, true},
     {"android/os/Parcel", "readString", "()Ljava/lang/String;", ParcelData,
@@ -393,6 +395,9 @@ static const LibraryMethod Methods[] = {
     {"android/os/Binder", "enableTracing", "()V", BinderTracing, true},
     {"android/os/Binder", "disableTracing", "()V", BinderTracing, true},
     {"android/os/Binder", "isTracingEnabled", "()Z", BinderTracing, true},
+    {"android/os/Binder", "<init>", "()V", Construct},
+    {"android/os/Parcel", "writeStrongBinder", "(Landroid/os/IBinder;)V",
+     ParcelData, false, true},
 };
 
 struct LibraryStop {
@@ -524,6 +529,7 @@ ExecutionResult executeLibrary(Heap &heap, const LibraryMethod &M,
         M.Op == BinderTransactNative || M.Op == BinderTracing ||
         (M.Op == Construct &&
          (std::string_view(M.Class) == "android/os/Handler" ||
+          std::string_view(M.Class) == "android/os/Binder" ||
           std::string_view(M.Class) ==
               "com/android/internal/util/StatLogger"))) {
       if (!program || !framework)

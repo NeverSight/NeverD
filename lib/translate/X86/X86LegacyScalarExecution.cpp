@@ -325,7 +325,7 @@ public:
     S.EFlags = (S.EFlags & ~kX86LegacyArithmeticFlagsMask) | Flags;
   }
 
-  llvm::Expected<X86MemoryAccessResult> finish() {
+  llvm::Expected<X86LegacyScalarResult> finish() {
     if (Failure)
       return std::move(*Failure);
     return std::move(Result);
@@ -373,7 +373,7 @@ private:
   X86LegacyExecutionState &S;
   X86PagedMemory &M;
   const X86LegacyExecutionOptions &O;
-  X86MemoryAccessResult Result;
+  X86LegacyScalarResult Result;
   std::optional<llvm::Error> Failure;
   std::optional<X86PagedMemory::PreparedStore> Store;
 
@@ -613,6 +613,7 @@ private:
     if (Target > S.Core.Segments[1].Limit)
       return fault(13);
     S.EIP = Target;
+    Result.TakenBranch = true;
     return true;
   }
 
@@ -724,7 +725,7 @@ private:
 
 } // namespace
 
-llvm::Expected<X86MemoryAccessResult>
+llvm::Expected<X86LegacyScalarResult>
 executeLegacyScalar(X86LegacyExecutionState &Staged, X86PagedMemory &Memory,
                     const X86LegacyScalarInstruction &Instruction,
                     uint32_t Fallthrough,

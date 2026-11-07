@@ -255,15 +255,19 @@ void countExprVarUses(const ExprPtr &E, VarKeyMap<int> &Uses,
       [&](const ExprPtr &Op) { countExprVarUses(Op, Uses, Seen); });
 }
 
-void countExprVarUsesUpToTwo(
-    const ExprPtr &E, VarKeyMap<int> &Uses,
-    std::unordered_map<const HighExpr *, uint8_t> &Visits) {
+void countExprVarUsesUpToTwo(const ExprPtr &E, VarKeyMap<int> &Uses,
+                             HighExprUseVisits &Visits) {
   std::vector<const HighExpr *> Work;
   if (E)
     Work.push_back(E.get());
   while (!Work.empty()) {
     const HighExpr *Current = Work.back();
     Work.pop_back();
+    // A non-variable leaf cannot contribute a read on any visit. Avoid
+    // inserting constants and other empty leaves into the identity table.
+    if (Current->Kind != ExprKind::Var && Current->Operands.empty() &&
+        !Current->IndirectTarget)
+      continue;
     auto &Count = Visits[Current];
     if (Count == 2)
       continue;
@@ -351,7 +355,7 @@ void foldCopyChains(HighFunc &Func) {
   VarKeyMap<int> VarDefCount;
   VarKeyMap<int> VarUseCount;
   VarKeyMap<ExprPtr> VarDefValue;
-  std::unordered_map<const HighExpr *, uint8_t> Visits;
+  HighExprUseVisits Visits;
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var) {
       auto Key = VK(S.Dst->Var);
@@ -379,7 +383,6 @@ void foldCopyChains(HighFunc &Func) {
     if (It == VarDefValue.end() || !It->second)
       continue;
     if (It->second->Kind == ExprKind::Call ||
-        It->second->hasOrderedMemoryAccess() ||
         containsNonMovableEffect(It->second))
       continue;
     FoldMap[DstKey] = It->second;
@@ -457,7 +460,7 @@ void foldMultiUseCopies(std::vector<HighStmt> &Stmts) {
     if (NumDefs != 1 || DefIsCall[Key])
       continue;
     auto Val = MultiDefValue[Key];
-    if (!Val || Val->hasOrderedMemoryAccess() || containsNonMovableEffect(Val))
+    if (!Val)
       continue;
     auto TotalIt = TotalUseCount.find(Key);
     auto CopyIt = CopyUseCount.find(Key);
@@ -465,7 +468,7 @@ void foldMultiUseCopies(std::vector<HighStmt> &Stmts) {
       continue;
     if (CopyIt == CopyUseCount.end())
       continue;
-    if (TotalIt->second == CopyIt->second)
+    if (TotalIt->second == CopyIt->second && !containsNonMovableEffect(Val))
       PropMap[Key] = Val;
   }
   filterStableCopyCandidates(Stmts, PropMap);
@@ -488,7 +491,7 @@ void inlineSingleDefSingleUse(std::vector<HighStmt> &Stmts) {
   VarKeyMap<ExprPtr> SingleUseDefs;
   VarKeyMap<int> SingleDefCount;
   VarKeyMap<int> SingleUseCount;
-  std::unordered_map<const HighExpr *, uint8_t> Visits;
+  HighExprUseVisits Visits;
   walkStmts(Stmts, [&](const HighStmt &S) {
     if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
         S.Dst->Kind == ExprKind::Var) {
@@ -497,8 +500,7 @@ void inlineSingleDefSingleUse(std::vector<HighStmt> &Stmts) {
       bool IsInlineable =
           S.Val->Kind == ExprKind::BinOp || S.Val->Kind == ExprKind::UnaryOp ||
           S.Val->Kind == ExprKind::Var || S.Val->Kind == ExprKind::Const;
-      if (IsInlineable && !S.Val->hasOrderedMemoryAccess() &&
-          !containsNonMovableEffect(S.Val))
+      if (IsInlineable)
         SingleUseDefs[Key] = S.Val;
     }
     forEachRhsExpr(S, [&](const ExprPtr &E) {
@@ -506,7 +508,10 @@ void inlineSingleDefSingleUse(std::vector<HighStmt> &Stmts) {
     });
   });
   for (auto It = SingleUseDefs.begin(); It != SingleUseDefs.end();) {
-    if (SingleDefCount[It->first] != 1 || SingleUseCount[It->first] > 1)
+    // Count first: rejected definitions need no expression-graph proof.
+    // The effect predicate includes ordered and segmented memory accesses.
+    if (SingleDefCount[It->first] != 1 || SingleUseCount[It->first] > 1 ||
+        containsNonMovableEffect(It->second))
       It = SingleUseDefs.erase(It);
     else
       ++It;
