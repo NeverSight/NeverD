@@ -464,9 +464,10 @@ constexpr size_t kMaxCallEffectExtraLifts = 256;
 /// An image with more keeps each run's own callee summaries.
 constexpr size_t kMaxImageCallSummaryFunctions = 262144;
 /// On-demand CFG register proofs admit only small, metadata-bounded callees.
-/// The query may not recursively start another CFG register proof.
+/// The query may not recursively start another CFG register proof. Building a
+/// larger callee, with its jump tables, can cost more than a second per caller.
 constexpr size_t kMaxCFGCallRegisterProofFunctions = 32;
-constexpr uint64_t kMaxCFGCallRegisterProofBytes = 4096;
+constexpr uint64_t kMaxCFGCallRegisterProofBytes = 1024;
 /// Scalar exit facts inspect only bounded, complete, call-free callee bodies.
 constexpr size_t kMaxCallExitConstantOps = 4096;
 /// All-path predecessor stack-store evidence for one call argument setup.
