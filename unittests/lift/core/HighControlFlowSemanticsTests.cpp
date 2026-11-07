@@ -12103,3 +12103,25 @@ TEST(HighControlFlowDAG, SharedPurePrefixCannotHideAnEffectfulSibling) {
   EXPECT_EQ(Body.front().Val, Value);
   EXPECT_TRUE(containsVariable(Body));
 }
+
+TEST(HighControlFlowSemantics, SimplifierPublishesSharedReplacementAtEveryUse) {
+  for (bool ReverseRoots : {false, true}) {
+    SCOPED_TRACE(ReverseRoots);
+    auto Shared = HighExpr::makeBinop(NdOp::INT_MULT, local(0),
+                                      HighExpr::makeConst(0, 8));
+    auto Consumer =
+        HighExpr::makeBinop(NdOp::INT_SUB, Shared, HighExpr::makeConst(0, 8));
+    auto Copy = assign(0x1000, 1, 0);
+    Copy.Val = ReverseRoots ? Consumer : Shared;
+    HighFunc F;
+    F.Body = {Copy, result(0x1004, ReverseRoots ? Shared : Consumer)};
+    ASSERT_TRUE(simplifyAllExprs(F.Body));
+    ASSERT_EQ(F.Body[0].Val->Kind, ExprKind::Const);
+    EXPECT_EQ(F.Body[0].Val->ConstVal, 0u);
+    ASSERT_EQ(F.Body[1].RetVal->Kind, ExprKind::Const);
+    EXPECT_EQ(F.Body[1].RetVal->ConstVal, 0u);
+    for (uint64_t Input : {uint64_t{0}, uint64_t{1}, ~uint64_t{0}})
+      EXPECT_EQ(execute(F, Input), 0u);
+    EXPECT_FALSE(simplifyAllExprs(F.Body));
+  }
+}
