@@ -6448,6 +6448,9 @@ with all of them written and each a step of the history, a view, an undo, a snap
 replica restores from and a save each find what was queued, a kill at any moment leaves
 a project that opens and takes edits, a write that fails fails a later edit and goes
 through once it can, and files changed behind the worker stop the next edit.
+`NeverDWorkerViewEdits` reads every view after each edit an owner takes while keeping
+documents, a function's name, a comment, a colour, a new type and undoing them, and each
+must read field for field as a session that has just opened the project's files.
 `NeverDWorkerUnreadTypes` declares types nothing has read and those something has: one
 that names a type yet unknown and new enumerators stay unread, while the type named,
 a replacement, a prototype and a type that takes an enumerator's name are not, each

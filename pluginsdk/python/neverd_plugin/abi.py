@@ -2085,6 +2085,12 @@ _declare(
 _declare("neverd_renames_save", "int", ["neverd_session_t"])
 _declare("neverd_renames_load", "int", ["neverd_session_t"])
 _declare(
+    "neverd_rename_original",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_rename_take",
     "int",
     ["neverd_session_t", "neverd_va_t", "const char *"],

@@ -498,6 +498,14 @@ void takeRenames(Session &S, std::map<va_t, std::string> Renames) {
 }
 } // namespace
 
+const char *neverd_rename_original(neverd_session_t Sess, neverd_va_t Addr) {
+  const auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  const auto Original = S->OriginalNames.find(Addr);
+  return dupStr(Original != S->OriginalNames.end() ? Original->second : "");
+}
+
 int neverd_rename_take(neverd_session_t Sess, neverd_va_t Addr,
                        const char *Name) {
   auto *S = toSession(Sess);

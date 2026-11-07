@@ -40,8 +40,9 @@ std::optional<std::uint64_t> resolve(const std::string &name) {
 void decorate(Json &view, const Json &row = nullptr,
               const Json &renames = Json::array(),
               const CodeEdits::FunctionAliases &displayNames = {}) {
-  CodeEdits::decorate(view, row, 0x1000, "c", renames, Json::array(),
-                      displayNames, resolve);
+  CodeEdits::ImageFacts image;
+  image.read(renames, Json::array());
+  CodeEdits::decorate(view, row, 0x1000, "c", image, displayNames, resolve);
 }
 Json target(const Json &view, const std::string &original) {
   for (const auto &name : view.at("code_names"))
@@ -532,10 +533,12 @@ int main() {
     check(name.at("identifier") == "fini" && name.at("symbol") == "_fini" &&
               name.at("address") == "0x10ab",
           "A renamed identifier lost its symbol or address");
-  CodeEdits::decorate(
-      renamedView, nullptr, 0x10ab, "c",
+  CodeEdits::ImageFacts renamedImage;
+  renamedImage.read(
       Json::array({{{"addr", "0x10ab"}, {"renamed", "shutdown"}}}),
-      Json::array(), {}, resolve);
+      Json::array());
+  CodeEdits::decorate(renamedView, nullptr, 0x10ab, "c", renamedImage, {},
+                      resolve);
   const auto &renamedText =
       renamedView.at("text").get_ref<const std::string &>();
   check(renamedText.find("void shutdown(void) {") != std::string::npos &&

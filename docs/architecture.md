@@ -4634,11 +4634,18 @@ An edit costs what it changes. The owner's listing takes a name of data and a da
 item over bytes no string or code holds where they are (`Listing::dataRenamed`,
 `Listing::dataItemsChanged`), the session a name without reading its table
 (`neverd_rename_take`), and a declaration of types no other names reads them against
-what it read of the library once (`Session::LocalTypeNames`), whose copies share their
-definitions. The GUI opens with `write_behind`: the reply to such an edit goes before
+what it read of the library once (`Session::LocalTypeNames`), on the library itself
+(`TypeLibrary::Trial`, which undoes a refused declaration). The GUI opens with `write_behind`: the reply to such an edit goes before
 its write, which runs the same journaled transaction in order on a thread of its own
 (`ProjectHistory::persistLater`), joined with what is queued behind one already
-writing. What may read the project's files waits for it first.
+writing. What may read the project's files waits for it first. A document of a view
+notes the addresses its render read and its decoration looked up, and reads what such
+an edit reached when it is next asked for, so the edit leaves the owner's other
+documents as they are (`Engine::keepNamedViewsThrough`, `Engine::readViewEdits`).
+Decoration asks for the image's names and comments by address, and the edit changes
+that one row (`CodeEdits::ImageFacts`), so a view costs the same among thousands.
+The GUI starts a replica on a function as its Set Type dialog opens
+(`AnalysisService::prepareRead`), so the render after the edit finds it ready.
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's. A note on a function and a data
 item, which nothing analyzed or rendered reads, leave the renders as they are, and a

@@ -64,6 +64,9 @@ inline constexpr std::size_t kEngineMaxCodePageBytes =
 /// working set of functions, bounded by retained bytes as well as count.
 inline constexpr std::size_t kEngineMaxNamedViewCacheBytes = 256 * 1024 * 1024;
 inline constexpr std::size_t kEngineMaxNamedViews = 512;
+/// Edits a kept document can be behind and still read for what reached it; past
+/// them building it again from what is kept costs less.
+inline constexpr std::size_t kEngineMaxViewEdits = 32;
 inline constexpr std::size_t kEngineMaxEncodedPages = 64;
 inline constexpr std::size_t kEngineMaxEncodedBytes = 8 * 1024 * 1024;
 /// Compact bytes of engine pages a replica keeps of the functions it renders

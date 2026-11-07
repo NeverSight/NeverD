@@ -94,6 +94,11 @@ NEVERD_API int neverd_renames_load(neverd_session_t Sess);
 /// Takes \p Name for what the user calls \p Addr, or no name for NULL, as
 /// neverd_renames_load takes a table that differs in that row alone.  The
 /// caller keeps the table: nothing is written.
+/// The name the engine has for \p Addr apart from the user's, as
+/// neverd_renames_json states it in its row: empty where it has none.
+NEVERD_API const char *neverd_rename_original(neverd_session_t Sess,
+                                              neverd_va_t Addr);
+
 NEVERD_API int neverd_rename_take(neverd_session_t Sess, neverd_va_t Addr,
                                   const char *Name);
 

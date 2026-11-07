@@ -38,9 +38,11 @@
 #include "neverd/support/ProjectFiles.h"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -65,24 +67,18 @@ bool Engine::keptRenderHolds(RenderStore &store, const std::string &key) {
 }
 
 Json Engine::renderStoreIdentity() {
-  auto identity = browseCacheIdentity();
-  auto &state = identity.at("state");
-  state.erase("code_edits");
-  state.erase("annotations");
-  state.erase("operands");
-  // Only the listing lays out what the user defines of data.
-  state.erase("items");
+  // What it reads of the user's facts alone, which may be thousands of names
+  // and comments.  What the code edits, comments, operand formats and data
+  // items say reaches a listing, not a render.
+  Json state{{"functions", functionEditRows()}, {"patches", bytePatchRows()}};
   // Each render says which names of data and declarations it read, and answers
   // while they read the same (renderReadsHold).  A function's name is not
   // spelled in its pages at all.
-  if (rendersSayTheirReads()) {
-    state["functions"] = functionRowsRead(state.at("functions"), false);
-    state.erase("renames");
-    identity["user_facts_analysis_reads"] = userFactsAnalysisReads();
-  } else {
-    state["functions"] = functionRowsRead(state.at("functions"), true);
+  const bool says = rendersSayTheirReads();
+  state["functions"] = functionRowsRead(state.at("functions"), !says);
+  if (!says) {
     Json dataNames = Json::array();
-    for (auto row : state.value("renames", Json::array()))
+    for (auto row : backendJson(neverd_renames_json(session_)))
       if (neverd_func_find_by_addr(
               session_, parseAddress(row.at("addr").get<std::string>())) < 0) {
         row.erase("original");
@@ -92,13 +88,14 @@ Json Engine::renderStoreIdentity() {
   }
   // The state above says those that stay, whether or not their files have been
   // written yet (ProjectHistory::persistLater), as it says the declared types.
-  for (const auto file :
-       {project_files::File::Code, project_files::File::Annotations,
-        project_files::File::Renames, project_files::File::Operands,
-        project_files::File::Functions, project_files::File::Items,
-        project_files::File::Types})
-    identity.at("shared").erase(
-        std::string(project_files::describe(file).Path));
+  auto identity = browseCacheIdentity(
+      analysisSnapshot(std::move(state)),
+      {project_files::File::Code, project_files::File::Annotations,
+       project_files::File::Renames, project_files::File::Operands,
+       project_files::File::Functions, project_files::File::Items,
+       project_files::File::Types});
+  if (says)
+    identity["user_facts_analysis_reads"] = userFactsAnalysisReads();
   return identity;
 }
 
@@ -132,38 +129,79 @@ void eachStatedFunction(Page &page, Each each) {
 }
 } // namespace
 
-const Json &Engine::renameRows() const {
-  if (renameRowsRevision_ != revision_) {
-    renameRows_ = backendJson(neverd_renames_json(session_));
-    renameRowsRevision_ = revision_;
+void Engine::noteRenderReads(NamedView &document) const {
+  // The digest, then the addresses it read, to the end of the first line.
+  std::string_view line(keptReads_);
+  line = line.substr(0, line.find('\n'));
+  if (line.empty())
+    return;
+  std::vector<std::uint64_t> reads;
+  for (auto at = line.find(' '); at != std::string_view::npos;
+       at = line.find(' ')) {
+    line.remove_prefix(at + 1);
+    const auto word = line.substr(0, line.find(' '));
+    const char *const end = word.data() + word.size();
+    std::uint64_t read = 0;
+    const auto parsed = std::from_chars(word.data(), end, read, 16);
+    if (parsed.ec != std::errc() || parsed.ptr != end)
+      return;
+    reads.push_back(read);
   }
-  return renameRows_;
+  document.reads = std::move(reads);
+  document.readsKnown = true;
+}
+
+void Engine::noteDecorationReads(NamedView &document, const Json &view,
+                                 std::uint64_t function) const {
+  auto &reads = document.reads;
+  const auto note = [&](const Json &at) {
+    if (at.is_string())
+      reads.push_back(parseAddress(at.get_ref<const std::string &>()));
+  };
+  reads.push_back(function);
+  for (const char *field : {"code_names", "source_names"})
+    if (const auto names = view.find(field);
+        names != view.end() && names->is_array())
+      for (const auto &name : *names)
+        if (const auto at = name.find("address"); at != name.end())
+          note(*at);
+  if (const auto rows = view.find("rows"); rows != view.end())
+    for (const auto &row : *rows)
+      if (const auto addresses = row.find("addresses");
+          addresses != row.end() && addresses->is_array())
+        for (const auto &at : *addresses)
+          note(at);
+  eachStatedFunction(view, [&](std::uint64_t address, const Json &) {
+    reads.push_back(address);
+  });
+  std::sort(reads.begin(), reads.end());
+  reads.erase(std::unique(reads.begin(), reads.end()), reads.end());
+}
+
+const CodeEdits::ImageFacts &Engine::imageFacts() const {
+  if (imageFactsRevision_ != revision_) {
+    imageFacts_.read(backendJson(neverd_renames_json(session_)),
+                     backendJson(neverd_annotations_json(session_)));
+    imageFactsRevision_ = revision_;
+  }
+  return imageFacts_;
 }
 
 bool Engine::keptPageReadsCurrentNames(const Json &page) const {
   bool current = true;
-  const auto &names = renameRows();
+  const auto &names = imageFacts().names;
   eachStatedFunction(page, [&](std::uint64_t address, const Json &identity) {
     if (identity.value("name_origin", std::string()) != "user")
       return;
-    current =
-        current &&
-        std::any_of(names.begin(), names.end(), [&](const auto &row) {
-          return parseAddress(row.at("addr").template get<std::string>()) ==
-                 address;
-        });
+    current = current && names.contains(address);
   });
   return current;
 }
 
 void Engine::currentNamesInView(Json &view) const {
-  const auto &rows = renameRows();
-  if (rows.empty())
+  const auto &names = imageFacts().names;
+  if (names.empty())
     return;
-  std::unordered_map<std::uint64_t, std::string> names;
-  for (const auto &row : rows)
-    names.emplace(parseAddress(row.at("addr").get<std::string>()),
-                  row.at("renamed").get<std::string>());
   eachStatedFunction(view, [&](std::uint64_t address, Json &identity) {
     if (const auto name = names.find(address); name != names.end()) {
       identity["name"] = identity["display_name"] = name->second;
@@ -228,12 +266,19 @@ void Engine::keepStoresFor(const StoreNames &before) {
   try {
     const auto names = storeNames();
     const auto project = projectJson();
-    if (!before.renders.empty() && !names.renders.empty())
+    if (!before.renders.empty() && !names.renders.empty()) {
       RenderStore::keepFor(projectLocalFolder(project, "render-ahead"),
                            before.renders, names.renders);
-    if (!before.facts.empty() && !names.facts.empty())
+      // What is open holds for them too.
+      if (rendersStoreName_ == before.renders)
+        rendersStoreName_ = names.renders;
+    }
+    if (!before.facts.empty() && !names.facts.empty()) {
       RenderStore::keepFor(projectLocalFolder(project, "listing-facts"),
                            before.facts, names.facts);
+      if (factsStoreName_ == before.facts)
+        factsStoreName_ = names.facts;
+    }
   } catch (const std::exception &) {
     // Later sessions render again.
   }
@@ -604,6 +649,8 @@ std::vector<std::string> Engine::renderedAheadPages(
   keptRenamed_ = nullptr;
   if (compactPages.empty())
     return pages;
+  if (const auto reads = decompressPage(compactPages.front()))
+    keptReads_ = *reads;
   if (!renderReadsHold(compactPages.front())) {
     if ((representation != "source" && representation != "c") ||
         compactPages.size() != 2)

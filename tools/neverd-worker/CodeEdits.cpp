@@ -55,10 +55,11 @@ bool identifier(const std::string &name) {
   if (name.empty() ||
       name.size() >
           ::neverd::limits::worker::kCodeEditsIdentifierNameSizeLimit ||
-      !(std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_'))
+      (name[0] >= '0' && name[0] <= '9'))
     return false;
-  return std::all_of(name.begin(), name.end(), [](unsigned char c) {
-    return std::isalnum(c) || c == '_';
+  return std::all_of(name.begin(), name.end(), [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
   });
 }
 std::string sourceIdentity(const std::string &text) {
@@ -1068,14 +1069,52 @@ bool CodeEdits::respell(Json &page, const Json &renamed) {
   return true;
 }
 
+void CodeEdits::ImageFacts::read(const Json &renames, const Json &annotations) {
+  originals.clear();
+  names.clear();
+  comments.clear();
+  // By address, as the engine lists them: the last of a spelling is the one.
+  for (const auto &row : renames) {
+    const auto address = parseAddress(row.at("addr").get<std::string>());
+    originals[row.value("original", std::string())] = address;
+    names[address] = row.at("renamed").get<std::string>();
+  }
+  for (const auto &row : annotations)
+    comments[parseAddress(row.at("addr").get<std::string>())] =
+        row.at("text").get<std::string>();
+}
+
+void CodeEdits::ImageFacts::renamed(std::uint64_t address,
+                                    const std::string &original,
+                                    const std::string &name) {
+  names[address] = name;
+  const auto [held, added] = originals.try_emplace(original, address);
+  if (!added)
+    held->second = std::max(held->second, address);
+}
+
+void CodeEdits::ImageFacts::commented(std::uint64_t address,
+                                      const std::string &text) {
+  if (text.empty())
+    comments.erase(address);
+  else
+    comments[address] = text;
+}
+
 void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
-                         const std::string &representation, const Json &renames,
-                         const Json &annotations,
+                         const std::string &representation,
+                         const ImageFacts &image,
                          const FunctionAliases &displayNames,
                          const Resolver &resolve) {
   if (!source(representation))
     return;
-  const auto original = view.at("text").get<std::string>();
+  // A view's lists are read in place: each may hold a row for every line.
+  static const Json noRows = Json::array();
+  const auto listed = [&view](const char *field) -> const Json & {
+    const auto list = view.find(field);
+    return list != view.end() ? *list : noRows;
+  };
+  const auto &original = view.at("text").get_ref<const std::string &>();
   const auto identity = sourceIdentity(original);
   const auto ts = tokens(original);
   std::set<std::string> identifiers;
@@ -1086,10 +1125,7 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
   for (auto &global : declaredGlobals(original))
     globals[std::move(global.name)] = global.address;
   const auto links = sourceLinks(original, ts);
-  std::unordered_map<std::string, std::uint64_t> originalAddresses;
-  for (const auto &name : renames)
-    originalAddresses[name.value("original", std::string())] =
-        parseAddress(name.at("addr").get<std::string>());
+  const auto &originalAddresses = image.originals;
   std::unordered_map<std::string, std::optional<std::uint64_t>> resolved;
   const auto imageAddress = [&](const std::string &name) {
     const auto symbol = links.contains(name) ? links.at(name) : name;
@@ -1100,8 +1136,9 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
               : resolve(symbol);
     return resolved.at(symbol);
   };
-  const auto prelude = view.value("prelude", Json::object());
-  const std::size_t bodyStart = prelude.value("end_byte", std::size_t{0});
+  const auto prelude = view.find("prelude");
+  const std::size_t bodyStart =
+      prelude != view.end() ? prelude->value("end_byte", std::size_t{0}) : 0;
   std::optional<std::size_t> definition;
   std::size_t body = ts.size();
   std::size_t bodyEnd = ts.size();
@@ -1129,7 +1166,7 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
       // A prelude can be followed by synthetic helper definitions. Only a
       // resolved image name or an explicit SDK name span identifies this body.
       const auto at = imageAddress(ts[i].text);
-      const auto sourceNames = view.value("source_names", Json::array());
+      const auto &sourceNames = listed("source_names");
       // The engine spells addresses in upper case.
       const bool explicitName = std::any_of(
           sourceNames.begin(), sourceNames.end(), [&](const Json &name) {
@@ -1239,13 +1276,8 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
       stale ? Json::object() : edits.value("names", Json::object());
   view["code_edits_stale"] = stale;
   const auto notes = edits.value("comments", Json::object());
-  std::unordered_map<std::uint64_t, std::string> imageNames, imageComments;
-  for (const auto &name : renames)
-    imageNames[parseAddress(name.at("addr").get<std::string>())] =
-        name.at("renamed").get<std::string>();
-  for (const auto &note : annotations)
-    imageComments[parseAddress(note.at("addr").get<std::string>())] =
-        note.at("text").get<std::string>();
+  const auto &imageNames = image.names;
+  const auto &imageComments = image.comments;
   // An image name shows the analyst's rename of its address, otherwise the
   // listing's display name for how the engine spelled it, as main for the
   // sub_ name of the function the C runtime's start routine calls.
@@ -1263,7 +1295,7 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
   std::vector<Replacement> replacements;
   Json names = Json::array();
   std::set<std::pair<std::size_t, std::size_t>> spelled;
-  for (const auto &name : view.value("source_names", Json::array())) {
+  for (const auto &name : listed("source_names")) {
     const auto begin = name.value("begin_byte", std::size_t{0});
     const auto end = name.value("end_byte", std::size_t{0});
     if (end <= begin || end > original.size())
@@ -1296,7 +1328,7 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
   std::set<std::string> functionNames;
   std::map<std::string, Json> sourceVariables;
   std::set<std::string> ambiguousVariables;
-  for (const auto &variable : view.value("source_variables", Json::array())) {
+  for (const auto &variable : listed("source_variables")) {
     const auto name = variable.value("name", std::string());
     if (variable.value("ambiguous", true) ||
         !sourceVariables.emplace(name, variable).second)
@@ -1431,14 +1463,16 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
         note != notes.end() && note->value("anchor", std::string()) == anchor)
       comment = note->value("text", std::string());
     mapping["code_comment_is_source"] = !comment.empty();
-    if (comment.empty()) {
-      for (const auto &at : mapping.value("addresses", Json::array())) {
-        const auto address = parseAddress(at.get<std::string>());
-        if (imageComments.contains(address)) {
-          comment = imageComments.at(address);
-          break;
+    if (comment.empty() && !imageComments.empty()) {
+      if (const auto addresses = mapping.find("addresses");
+          addresses != mapping.end())
+        for (const auto &at : *addresses) {
+          const auto address = parseAddress(at.get<std::string>());
+          if (imageComments.contains(address)) {
+            comment = imageComments.at(address);
+            break;
+          }
         }
-      }
       if (comment.empty() && definition &&
           ts[*definition].begin >= starts[line] &&
           ts[*definition].begin <= end && imageComments.contains(function))
