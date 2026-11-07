@@ -13,6 +13,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/solver/sat/SatDetail.h"
 #include "gtest/gtest.h"
 
 #include "neverd/solver/SatSolver.h"
@@ -21,6 +22,7 @@
 #include "llvm/ADT/ArrayRef.h"
 
 #include <limits>
+#include <set>
 #include <vector>
 
 using namespace neverd::solver;
@@ -430,3 +432,104 @@ TEST(SatSolver, LiteralsPackAndUnpack) {
 }
 
 } // namespace
+
+TEST(ActivityQueue, StrictPrioritySurvivesPrefixConsumptionAndReinsertion) {
+  using neverd::solver::detail::ActivityQueue;
+  std::vector<double> Activity(96, 0);
+  ActivityQueue Queue(Activity);
+  std::set<SatVar> Pending;
+  for (SatVar V = 0; V < Activity.size(); ++V) {
+    Queue.insert(V);
+    Pending.insert(V);
+  }
+  auto Take = [&](ActivityQueue &Order, std::set<SatVar> &Live,
+                  const std::vector<double> &Scores) {
+    const auto Best =
+        std::min_element(Live.begin(), Live.end(), [&](SatVar A, SatVar B) {
+          return Scores[A] != Scores[B] ? Scores[A] > Scores[B] : A < B;
+        });
+    EXPECT_EQ(Order.removeMax(), *Best);
+    Live.erase(Best);
+    EXPECT_EQ(Order.size(), Live.size());
+    EXPECT_EQ(Order.empty(), Live.empty());
+    for (SatVar V = 0; V < Scores.size(); ++V)
+      EXPECT_EQ(Order.contains(V), Live.contains(V));
+  };
+  for (unsigned I = 0; I < 7; ++I)
+    Take(Queue, Pending, Activity);
+  auto CopyActivity = Activity;
+  ActivityQueue Copy(Queue, CopyActivity);
+  auto CopyPending = Pending;
+  std::vector<int8_t> Value(Activity.size());
+  std::vector<uint32_t> Level(Activity.size());
+  Value[8] = Value[12] = Value[14] = 1;
+  Level[12] = 1;
+  Copy.discardRootAssigned(Value, Level);
+  CopyPending.erase(8);
+  CopyPending.erase(14);
+  EXPECT_FALSE(Copy.contains(8));
+  EXPECT_FALSE(Copy.contains(14));
+  EXPECT_TRUE(Copy.contains(12));
+  EXPECT_TRUE(Queue.contains(8));
+  while (!CopyPending.empty())
+    Take(Copy, CopyPending, CopyActivity);
+  for (unsigned I = 0; I < 300; ++I) {
+    if (I % 5 == 0 && !Pending.empty()) {
+      Take(Queue, Pending, Activity);
+      continue;
+    }
+    const SatVar V = (I * 37 + 11) % Activity.size();
+    if (I % 3 == 0) {
+      Activity[V] += 1 + I % 9;
+      Queue.increased(V);
+    } else {
+      Queue.insert(V);
+      Pending.insert(V);
+    }
+    ASSERT_EQ(Queue.size(), Pending.size());
+    for (SatVar W = 0; W < Activity.size(); ++W)
+      EXPECT_EQ(Queue.contains(W), Pending.contains(W));
+  }
+  while (!Pending.empty())
+    Take(Queue, Pending, Activity);
+  Queue.clear();
+  std::fill(Activity.begin(), Activity.end(), 0);
+  for (SatVar V = Activity.size(); V-- > 0;) {
+    Queue.insert(V);
+    Pending.insert(V);
+  }
+  while (!Pending.empty())
+    Take(Queue, Pending, Activity);
+}
+
+TEST(SatSolver, AssumptionAssignedQueuesRestoreEveryVariableAfterBacktracking) {
+  Formula F;
+  const auto Selector = F.addVar();
+  std::vector<SatVar> Values;
+  for (unsigned I = 0; I < 2048; ++I) {
+    const auto V = F.addVar();
+    Values.push_back(V);
+    F.add({SatLit::negative(Selector), SatLit::positive(V)});
+  }
+  const auto Independent = F.addVar();
+  for (unsigned Repeat = 0; Repeat < 3; ++Repeat) {
+    auto Decisions = F.Solver.stats().Decisions;
+    ASSERT_EQ(F.Solver.solve({SatLit::positive(Selector)}), SatResult::Sat);
+    EXPECT_EQ(F.Solver.stats().Decisions - Decisions, 1u);
+    EXPECT_NE(F.Solver.modelValue(Independent), SatValue::Unknown);
+    for (const auto V : Values)
+      EXPECT_EQ(F.Solver.modelValue(V), SatValue::True);
+    EXPECT_TRUE(F.modelSatisfiesEveryClause());
+
+    Decisions = F.Solver.stats().Decisions;
+    ASSERT_EQ(F.Solver.solve({SatLit::negative(Selector)}), SatResult::Sat);
+    EXPECT_EQ(F.Solver.stats().Decisions - Decisions, Values.size() + 1);
+    for (const auto V : Values)
+      EXPECT_NE(F.Solver.modelValue(V), SatValue::Unknown);
+    EXPECT_TRUE(F.modelSatisfiesEveryClause());
+    ASSERT_EQ(F.Solver.solve({SatLit::positive(Selector),
+                              SatLit::negative(Values.back())}),
+              SatResult::Unsat);
+    EXPECT_FALSE(F.Solver.isFalsified());
+  }
+}

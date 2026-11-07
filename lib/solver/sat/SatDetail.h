@@ -146,10 +146,12 @@ public:
       : Activity(Activity) {}
 
   ActivityQueue(const ActivityQueue &Other, const std::vector<double> &Activity)
-      : Activity(Activity), Heap(Other.Heap), Position(Other.Position) {}
+      : Activity(Activity), Heap(Other.Heap), Position(Other.Position),
+        Front(Other.Front), Sorted(Other.Sorted) {}
 
-  bool empty() const { return Heap.empty(); }
-  size_t size() const { return Heap.size(); }
+  bool empty() const { return Front == Heap.size(); }
+  size_t size() const { return Heap.size() - Front; }
+  bool hasSortedPriorities() const { return Sorted; }
 
   bool contains(SatVar V) const {
     return V < Position.size() && Position[V] >= 0;
@@ -178,6 +180,7 @@ private:
     return A < B;
   }
 
+  void useHeap();
   void siftUp(size_t I);
   void siftDown(size_t I);
 
@@ -185,6 +188,11 @@ private:
   std::vector<SatVar> Heap;
   /// Position of each variable in \c Heap, or -1 when it is not queued.
   std::vector<int32_t> Position;
+  // Initial equal-activity declarations arrive in strict priority order.
+  // Consume that order directly until a priority change or reinsertion needs
+  // the general heap. Positions remain physical indices in either form.
+  size_t Front = 0;
+  bool Sorted = true;
 };
 
 /// Term \p I of the restart schedule, counting from zero: 1, 1, 2, 1, 1, 2, 4,
