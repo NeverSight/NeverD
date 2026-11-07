@@ -4421,6 +4421,42 @@ TEST_F(SessionCAPITest, SolvedCalleeSignaturesLeaveEachAnalysisAsItWas) {
   EXPECT_EQ(takeString(neverd_decompile(Fresh, Entry)), Solved);
 }
 
+TEST_F(SessionCAPITest, AViewAfterAnEditRunsItsOwnFunctionAlone) {
+  // Three functions that each return.
+  constexpr unsigned Stride = 0x10;
+  std::string Code(3 * Stride, '\xcc');
+  for (unsigned I = 0; I < 3; ++I)
+    Code.replace(I * Stride, 4, "\x48\x89\xc8\xc3", 4);
+  const auto Path = write("edit-selection.exe", makePE64(Code));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  auto &State = *neverd::sdk::toSession(Session);
+  const auto Entry = neverd_session_entry_addr(Session);
+  for (unsigned I = 0; I < 3; ++I)
+    State.Img.Symbols.push_back(
+        neverd::Symbol::makeFunc(Entry + I * Stride, Stride));
+  neverd::sdk::SessionTestAccess::resetFunctions(State);
+  ASSERT_FALSE(takeString(neverd_decompile(Session, Entry)).empty());
+  ASSERT_EQ(
+      neverd_func_edit(Session, Entry + Stride,
+                       R"J({"type":"long long second(long long value)"})J"),
+      0)
+      << neverd_last_error(Session);
+  // The edit let the result go, and what it selected with it.
+  ASSERT_FALSE(
+      takeString(neverd_decompile(Session, Entry + 2 * Stride)).empty());
+  EXPECT_EQ(State.OnlyFunctionEntries,
+            (std::set<neverd::va_t>{Entry + 2 * Stride}));
+  // A restriction stays what it is.
+  neverd_session_restrict_function(Session, Entry);
+  ASSERT_FALSE(takeString(neverd_decompile(Session, Entry)).empty());
+  EXPECT_EQ(State.OnlyFunctionEntries, (std::set<neverd::va_t>{Entry}));
+  ASSERT_EQ(neverd_func_edit(Session, Entry + Stride,
+                             R"J({"type":"long long second(void)"})J"),
+            0);
+  ASSERT_FALSE(takeString(neverd_decompile(Session, Entry)).empty());
+  EXPECT_EQ(State.OnlyFunctionEntries, (std::set<neverd::va_t>{Entry}));
+}
+
 TEST_F(SessionCAPITest, PrefilledSourceStacksLeaveEachAnalysisAsItWas) {
   // A chain of x64 COFF functions that each spill their first argument to its
   // home slot, save RBX, read the argument back and pass it to the next:
@@ -7976,7 +8012,8 @@ TEST_F(SessionCAPITest, AProgramsOwnDeclarationOfAnImportDecides) {
     for (const auto &[Declaration, Count] :
          {std::pair<const char *, size_t>{"long read(void);", 0},
           {"long read(int File);", 1},
-          {"long read(int File, void *Buffer, unsigned long Count, int Extra);",
+          {"long read(int File, void *Buffer, unsigned long Count, int "
+           "Extra);",
            4}}) {
       SCOPED_TRACE(std::string(Fixture) + ": " + Declaration);
       std::ifstream Input(std::filesystem::path(__FILE__).parent_path() /
@@ -8109,9 +8146,9 @@ TEST_F(SessionCAPITest, FreeBSDProgramsJoinTheirArchitecturesLibrary) {
   // architecture, laid out by its data model and record ABI, and no Linux
   // one: struct stat is as large as clang makes it for each target, i386's
   // the smaller by its 32-bit time_t.  Each was built as linux_libc_calls.c
-  // says for its Linux sibling, with clang --target=<arch>-unknown-freebsd15.1
-  // and the sysroot of FreeBSD 15.1-RELEASE's base.txz, and lib32.txz for the
-  // 32-bit ones.
+  // says for its Linux sibling, with clang
+  // --target=<arch>-unknown-freebsd15.1 and the sysroot of
+  // FreeBSD 15.1-RELEASE's base.txz, and lib32.txz for the 32-bit ones.
   struct Program {
     const char *File, *Library, *Model, *ABI;
     int64_t StatSize;
@@ -11834,9 +11871,11 @@ TEST_F(SessionCAPITest, FunctionsThatShareANameAreNumberedAsIDANumbersThem) {
   // Two files of the program each define a static helper.
   const std::string Binary = buildProgramFrom(
       "shared_names",
-      {"__attribute__((noinline)) static int helper(int x) { return x * 3; }\n"
+      {"__attribute__((noinline)) static int helper(int x) { return x * 3; "
+       "}\n"
        "int use_a(int x) { return helper(x); }\n",
-       "__attribute__((noinline)) static int helper(int x) { return x - 7; }\n"
+       "__attribute__((noinline)) static int helper(int x) { return x - 7; "
+       "}\n"
        "int use_b(int x) { return helper(x) * 2; }\n",
        "int use_a(int);\nint use_b(int);\n"
        "int main(int argc, char **argv) {\n"
@@ -12508,7 +12547,8 @@ TEST_F(SessionCAPITest,
 TEST_F(SessionCAPITest, SignaturesMatchARoutineOnlyACallReveals) {
   // A stripped program without sections lists no function at all; its entry
   // calls a routine no table names.  Signatures are tried where the
-  // pipeline's detector would find functions, so its candidate is still found.
+  // pipeline's detector would find functions, so its candidate is still
+  // found.
   const std::string Body("\xe8\x01\x00\x00\x00\xc3"  // call helper; ret
                          "\xb8\x2a\x00\x00\x00\xc3", // helper: mov eax, 42
                          12);

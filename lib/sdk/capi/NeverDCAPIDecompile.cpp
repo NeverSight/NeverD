@@ -440,10 +440,12 @@ static int prepareFunction(neverd_session_t Sess, neverd_va_t FuncEntry,
           coff_loader::exceptionHandlersSettled(S->Img);
     }
 
-    if (!S->PipeRan)
+    if (!S->PipeRan) {
+      // What a result since let go selected is not for this run to read again.
+      S->OnlyFunctionEntries = S->RestrictedFunctionEntries;
       S->OnlyFunctionEntries.insert(FuncEntry);
-    else if (!S->OnlyFunctionEntries.empty() &&
-             !S->OnlyFunctionEntries.count(FuncEntry)) {
+    } else if (!S->OnlyFunctionEntries.empty() &&
+               !S->OnlyFunctionEntries.count(FuncEntry)) {
       S->selectFunction(FuncEntry);
     }
     return S->ensurePipeline(Depth) ? 1 : 0;
