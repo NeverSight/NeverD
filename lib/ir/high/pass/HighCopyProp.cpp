@@ -263,6 +263,11 @@ void countExprVarUsesUpToTwo(const ExprPtr &E, VarKeyMap<int> &Uses,
   while (!Work.empty()) {
     const HighExpr *Current = Work.back();
     Work.pop_back();
+    // A non-variable leaf cannot contribute a read on any visit. Avoid
+    // inserting constants and other empty leaves into the identity table.
+    if (Current->Kind != ExprKind::Var && Current->Operands.empty() &&
+        !Current->IndirectTarget)
+      continue;
     auto &Count = Visits[Current];
     if (Count == 2)
       continue;

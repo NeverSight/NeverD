@@ -20536,6 +20536,9 @@ single use merely because the counter has already seen its address. Run
 this counter, together with the acceleration/allocator opt-out configuration.
 Performance checks include table construction/destruction and complete worker
 responses; a primitive improvement alone does not establish GUI latency.
+`NeverDHighExprUseCountsTests` compares shared graphs with independently
+expanded tree reads, retains distinct variable identities and repeated reads,
+and checks an indirect target when a call has no arguments.
 
 ### Predicate cleanup and independent call effects
 

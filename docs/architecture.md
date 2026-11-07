@@ -8991,7 +8991,9 @@ root contributes a use even when roots share one expression object. The
 expression-identity table belongs to one immutable walk, and a new walk starts
 after rewrites. Small visits tables use inline storage and grow normally
 when needed. Lookup storage never decides traversal or rewrite order; the
-pending walk keeps its existing operand order.
+pending walk keeps its existing operand order. Non-variable leaves have no
+read to count and need no identity-table entry; an indirect target is a child
+even when a call has no arguments.
 
 Med-to-High lowering preserves CFG successors after branch threading, including
 sole successors with no remaining branch operation. When source order differs,
