@@ -134,9 +134,9 @@ std::vector<SymRef>
 SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
                           const std::unordered_map<uint32_t, SymRef> &Map) {
   // Builders can grow operand storage while any root is rebuilt.
-  const std::vector<SymRef> OwnedRoots(Roots.begin(), Roots.end());
+  std::vector<SymRef> Results(Roots.begin(), Roots.end());
   if (Map.empty())
-    return OwnedRoots;
+    return Results;
 
   // Rebuild bottom-up over a topological order.  Going through the builders
   // means the result is canonical, so a substitution that makes two subterms
@@ -146,24 +146,27 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
       Done;
 
   llvm::SmallVector<std::pair<SymRef, bool>, 32> Work;
-  for (SymRef R : OwnedRoots)
+  for (SymRef R : Results)
     Work.emplace_back(R, false);
   while (!Work.empty()) {
     auto [Cur, Expanded] = Work.pop_back_val();
-    if (Done.count(Cur.index()))
-      continue;
-
-    auto Hit = Map.find(Cur.index());
-    if (Hit != Map.end()) {
-      Done.try_emplace(Cur.index(), Hit->second);
-      continue;
-    }
-
     if (!Expanded) {
+      // A null result marks a scheduled node. Check replacements only on
+      // this first visit; replacement values themselves are not rewritten.
+      auto [Position, Inserted] = Done.try_emplace(Cur.index(), SymRef());
+      if (!Inserted)
+        continue;
+      if (auto Hit = Map.find(Cur.index()); Hit != Map.end()) {
+        Position->second = Hit->second;
+        continue;
+      }
+      if (numOperands(Cur) == 0) {
+        Position->second = Cur;
+        continue;
+      }
       Work.emplace_back(Cur, true);
       for (SymRef C : operands(Cur))
-        if (!Done.count(C.index()))
-          Work.emplace_back(C, false);
+        Work.emplace_back(C, false);
       continue;
     }
 
@@ -174,17 +177,11 @@ SymContext::substituteAll(llvm::ArrayRef<SymRef> Roots,
       Changed |= (NC != C);
       NewOps.push_back(NC);
     }
-    if (!Changed) {
-      Done.try_emplace(Cur.index(), Cur);
-      continue;
-    }
-    Done.try_emplace(Cur.index(), rebuild(Cur, NewOps));
+    Done.find(Cur.index())->second = Changed ? rebuild(Cur, NewOps) : Cur;
   }
 
-  std::vector<SymRef> Results;
-  Results.reserve(OwnedRoots.size());
-  for (SymRef R : OwnedRoots)
-    Results.push_back(Done.find(R.index())->second);
+  for (SymRef &R : Results)
+    R = Done.find(R.index())->second;
   return Results;
 }
 
