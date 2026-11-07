@@ -11,7 +11,7 @@
 
 #include "SessionImpl.h"
 
-#include "neverd/Limits.h"
+#include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/X64ContinuationExport.h"
 #include "neverd/pipeline/X86LegacySourceExport.h"
 
@@ -94,7 +94,7 @@ extern "C" const char *neverd_x86_legacy_source_v1(neverd_session_t Sess,
                                                    size_t RequestSize,
                                                    const char **ManifestJSON) {
   return exportSource(Sess, RequestJSON, RequestSize,
-                      neverd::limits::kX86LegacySourceRequestBytes,
+                      neverd::limits::pipeline::kX86LegacySourceRequestBytes,
                       ManifestJSON, [](auto &Session, llvm::StringRef Text) {
                         return neverd::exportX86LegacySource(Session.Img, Text);
                       });

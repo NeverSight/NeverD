@@ -9,7 +9,7 @@
 
 #include "../NeverDCLI.h"
 
-#include "neverd/Limits.h"
+#include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/X64ContinuationExport.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -64,7 +64,7 @@ int runContinuation(neverd_session_t Sess) {
   }
   uint64_t Size = 0;
   const auto RequestLimit =
-      Legacy ? limits::kX86LegacySourceRequestBytes
+      Legacy ? limits::pipeline::kX86LegacySourceRequestBytes
              : limits::pipeline::kX64ContinuationRequestBytes;
   if (llvm::sys::fs::file_size(Request, Size) || !Size || Size > RequestLimit) {
     llvm::WithColor::error() << "cannot read a bounded continuation request\n";

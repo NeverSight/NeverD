@@ -12669,12 +12669,15 @@ Legacy cancellation tests retain the API continuation across cancellation, neste
 `NeverDX86LegacySourceTests` compiles the protected original-byte C dispatcher
 with Clang and the compiler selected by `NEVERD_TEST_NEVERC`, at O0/O2. The
 matrix checks 16/32-bit selection, nonflat and wrapping linear aliases, exact
-budget stops, original handler PTE repair/IRET/retry, REP continuation through
+budget stops, far CALL/RETF mode changes, self-modifying code, original handler
+PTE repair/IRET/retry, REP continuation through
 an external interrupt, changed code, physical backing and unbound profiles.
 A completed port input followed by a failed debug entry must survive pending
 selection and resume without a second device read. SDK/CLI checks compare the
 actual generated source and manifest and reject conflicting routes and output
-aliases. `NEVERD_ISA_REGRESSION_ARTIFACT_DIR` retains generated C, its compiled
+aliases. Both compilers also emit verified ELF32/i386 objects; that is a
+compilation check, not execution of a 32-bit host bridge.
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR` retains generated C, its compiled
 bridge fixture and manifests.
 
 Its original-instruction oracle compares 64 protected branch selections per

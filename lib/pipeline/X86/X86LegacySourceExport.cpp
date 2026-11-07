@@ -9,8 +9,8 @@
 
 #include "neverd/pipeline/X86LegacySourceExport.h"
 
-#include "neverd/Limits.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/pipeline/Limits.h"
 #include "neverd/support/SHA256.h"
 #include "neverd/translate/X86/X86LegacySourceExecution.h"
 
@@ -45,7 +45,8 @@ struct Instruction {
 
 llvm::Expected<std::vector<Instruction>> readRequest(const BinaryImage &Image,
                                                      llvm::StringRef Text) {
-  if (Text.empty() || Text.size() > limits::kX86LegacySourceRequestBytes)
+  if (Text.empty() ||
+      Text.size() > limits::pipeline::kX86LegacySourceRequestBytes)
     return invalid("legacy source request exceeds its byte bound");
   auto JSON = llvm::json::parse(Text);
   if (!JSON)
@@ -60,7 +61,7 @@ llvm::Expected<std::vector<Instruction>> readRequest(const BinaryImage &Image,
     return invalid("legacy source requires protected-legacy-v1");
   const auto *Rows = Object->getArray("instructions");
   if (!Rows || Rows->empty() ||
-      Rows->size() > limits::kX86LegacySourceInstructions)
+      Rows->size() > limits::pipeline::kX86LegacySourceInstructions)
     return invalid("legacy source requires a bounded instruction array");
   std::vector<Instruction> Result;
   Result.reserve(Rows->size());
@@ -171,7 +172,7 @@ uint32_t neverd_x86_legacy_continue_v1(void *context, uint64_t *budget) {
                            {"code_bits", I.Code32 ? 32 : 16},
                            {"size", I.Bytes.size()},
                            {"bytes", llvm::toHex(I.Bytes, true)}});
-    if (Result.Source.size() > limits::kX86LegacySourceBytes)
+    if (Result.Source.size() > limits::pipeline::kX86LegacySourceBytes)
       return invalid("legacy source exceeds its output byte bound");
   }
   OS << R"C(        default: return NEVERD_X86_LEGACY_UNSELECTED;
@@ -183,7 +184,7 @@ uint32_t neverd_x86_legacy_continue_v1(void *context, uint64_t *budget) {
     return NEVERD_X86_LEGACY_BUDGET_EXHAUSTED;
 }
 )C";
-  if (Result.Source.size() > limits::kX86LegacySourceBytes)
+  if (Result.Source.size() > limits::pipeline::kX86LegacySourceBytes)
     return invalid("legacy source exceeds its output byte bound");
   llvm::raw_string_ostream Manifest(Result.Manifest);
   Manifest << llvm::formatv(

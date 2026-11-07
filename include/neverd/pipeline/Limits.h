@@ -25,6 +25,11 @@ inline constexpr uint64_t BytecodeRecoveryInputLimit = 64 * 1024 * 1024;
 
 namespace neverd::limits::pipeline {
 
+/// Bounded explicit protected-mode C dispatch selection and emitted source.
+inline constexpr size_t kX86LegacySourceRequestBytes = 4u << 20;
+inline constexpr size_t kX86LegacySourceBytes = 128u << 20;
+inline constexpr size_t kX86LegacySourceInstructions = 65536;
+
 // lib/pipeline/BytecodeSourceEvidence.cpp
 inline constexpr size_t kBytecodeSourceEvidenceBindBytecodeSourceEvidenceWork =
     100000;

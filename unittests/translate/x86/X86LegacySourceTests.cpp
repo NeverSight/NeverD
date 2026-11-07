@@ -293,6 +293,47 @@ TEST_P(X86LegacySourceTest, OriginalHandlerRepairsPageAndReturnsToRetry) {
   EXPECT_EQ(S.CR2, 0xd004u);
 }
 
+TEST_P(X86LegacySourceTest, FarCallAndReturnRedispatchAcrossCodeModes) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile({{0x1000, 32, {0x9a, 0, 0x20, 0, 0, 0x33, 0}},
+                                   {0x1007, 32, {0x90}},
+                                   {0x2000, 16, {0xb8, 0x34, 0x12}},
+                                   {0x2003, 16, {0x66, 0xcb}}},
+                                  Run));
+  put(0x7030, 0x0000fb000000ffffULL);
+  O.FarTransfers = X86LegacyFarTransferProfile::OrderedFrame;
+  S.Core.GPR[0] = 0xdeadbeef;
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 1;
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(S.EIP, 0x2000u);
+  EXPECT_EQ(S.Core.Segments[1].Selector, 0x33);
+  EXPECT_EQ(S.Core.Segments[1].Attributes & 0x4000, 0u);
+  EXPECT_EQ(S.Core.GPR[4], 0xcff8u);
+  Budget = 3;
+  ASSERT_EQ(Run(&Context, &Budget), 258u) << Context.lastError().str();
+  EXPECT_EQ(S.EIP, 0x1008u);
+  EXPECT_EQ(S.Core.Segments[1].Selector, 0x1b);
+  EXPECT_NE(S.Core.Segments[1].Attributes & 0x4000, 0u);
+  EXPECT_EQ(S.Core.GPR[4], 0xd000u);
+  EXPECT_EQ(S.Core.GPR[0], 0xdead1234u);
+}
+
+TEST_P(X86LegacySourceTest, StoreChangingNextInstructionStopsBeforeItExecutes) {
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile(
+      {{0x1000, 32, {0xc6, 0x05, 7, 0x10, 0, 0, 0xcc}}, {0x1007, 32, {0x90}}},
+      Run));
+  X86LegacySourceExecution Context(S, *M, O);
+  uint64_t Budget = 3;
+  ASSERT_EQ(Run(&Context, &Budget), 3u) << Context.lastError().str();
+  EXPECT_EQ(Budget, 2u);
+  EXPECT_EQ(S.EIP, 0x1007u);
+  EXPECT_EQ(get(0x1007, GuestScalarWidth::I8), 0xccu);
+  EXPECT_FALSE(S.PendingEvent);
+  EXPECT_FALSE(Context.lastResult().InstructionAttempted);
+}
+
 TEST_P(X86LegacySourceTest, RepPauseAndExternalEventPreserveElementProgress) {
   Driver Run = nullptr;
   ASSERT_NO_FATAL_FAILURE(compile(
@@ -516,6 +557,21 @@ TEST_P(X86LegacySourceTest,
   EXPECT_EQ(Source, Expected.Source);
   ASSERT_NE(Manifest, nullptr);
   EXPECT_EQ(Manifest, Expected.Manifest);
+  const auto CrossSource = tmpFile("i386.c"), CrossObject = tmpFile("i386.o");
+  std::ofstream(CrossSource) << Expected.Source;
+  const auto Cross =
+      exec(Compiler,
+           {"--target=i386-unknown-linux-gnu", "-ffreestanding", "-std=c11",
+            GetParam() & 1 ? "-O2" : "-O0", "-Wall", "-Wextra", "-Werror", "-c",
+            CrossSource.string(), "-o", CrossObject.string()});
+  ASSERT_TRUE(Cross.ok()) << Cross.err;
+  const auto Object = readFile(CrossObject);
+  ASSERT_GE(Object.size(), 20u);
+  EXPECT_EQ(Object.substr(0, 4), std::string("\x7f"
+                                             "ELF",
+                                             4));
+  EXPECT_EQ(Object[4], 1);  // ELFCLASS32.
+  EXPECT_EQ(Object[18], 3); // EM_386, not the executing host's x64 ABI.
   std::vector<std::string> Args{"decompile", Input.string(),
                                 "--x86-legacy-source=" + Settings.string(),
                                 "-o", Output.string()};
