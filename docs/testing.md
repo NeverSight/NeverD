@@ -21464,3 +21464,5 @@ recorded baseline; this change adds none and does not weaken the audit.
 `ActivityQueue.StrictPrioritySurvivesPrefixConsumptionAndReinsertion` uses an independent ordered-set oracle through queue copies, activity increases and reinsertion. The assumption-assigned queue regression checks every variable is restored after backtracking, with unchanged model and conflict behavior.
 
 `X86CMov` regressions cover ordinary x86/x64 CMOV through the shared SELECT representation: all 16 conditions, all flag inputs, partial and zero-extending destination writes, unchanged source/flags, and unconditional memory reads that can fault before destination writes.
+
+`NeverDMedPhiPlacementTests` checks a 128-value live join across x86, x64, ARM and AArch64: every required temporary has one complete PHI with its actual incoming edge identities. The membership index is independent of PHI output order.

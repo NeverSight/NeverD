@@ -5341,3 +5341,10 @@ add_neverd_unittest(NeverDHighCallParameterForwardingTests
   LINK_COMPONENTS IRHigh IRMed IRLow)
 target_include_directories(NeverDHighCallParameterForwardingTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+
+target_sources(NeverDLiftTests PRIVATE core/MedPhiPlacementTests.cpp)
+add_neverd_unittest(NeverDMedPhiPlacementTests
+  core/MedPhiPlacementTests.cpp
+  LINK_COMPONENTS IRMed IRLow)
+target_include_directories(NeverDMedPhiPlacementTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
