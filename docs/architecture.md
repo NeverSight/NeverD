@@ -8483,7 +8483,8 @@ the independently proved runtime coordinates of the group. Unused slots keep
 their independent roots. The group publishes and withdraws atomically; a
 missing owner, changed member, observable table use or exhausted proof retains
 the unresolved transfers. Module-wide mutation and consumer arbitration still
-owns the final publication decision.
+owns the final publication decision. A dispatch vetoes a sibling's suppression
+only of a slot it reads: a gap in its selector's domain is no use of that slot.
 
 Module arbitration keeps input capacity, retained evidence and repeated work
 separate. The LowIR inventory admits at most 400000 operations; its queue still

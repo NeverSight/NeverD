@@ -2886,10 +2886,11 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
         const auto OwnsRequestedSlot = [&](const JumpTableStorageRange &Range) {
           return Range.ownsStorageAddress(Slot);
         };
-        if (!(JT.ExactPhysicalStorageRange
-                  ? OwnsRequestedSlot(*JT.ExactPhysicalStorageRange)
-                  : std::any_of(JT.StorageRanges.begin(),
-                                JT.StorageRanges.end(), OwnsRequestedSlot)))
+        // A dispatch vetoes a slot it reads. Its physical identity also spans
+        // the gaps of its selector's domain, which a sibling on the same object
+        // may read and consume whole.
+        if (std::none_of(JT.StorageRanges.begin(), JT.StorageRanges.end(),
+                         OwnsRequestedSlot))
           continue;
         if (!Budget.consume())
           return abandonAnalysis();
