@@ -39,6 +39,11 @@ namespace neverd::sbf {
 /// Abstract value of every SBF register at one program point.
 using RegisterState = std::array<RegisterValue, kRegisterCount>;
 
+/// The canonical loader ABI boundary before any guest instruction executes.
+/// Seed it once for the program entry; real CFG backedges must still join it.
+/// Calls to that same entry use their caller's registers instead.
+RegisterState programEntryRegisterFacts(const SBFProgram &Program);
+
 /// The address a base register and a displacement designate, when the base is
 /// known well enough to name one.
 std::optional<va_t> effectiveAddress(const RegisterValue &Base,
