@@ -7465,9 +7465,13 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
                  typeToC(Carrier) + ")0 /* unknown struct return fields */))";
         if (Return->Size == Carrier->Size &&
             (Carrier->Size == 4 || Carrier->Size == 8 || Carrier->Size == 16))
-          return typedText(
-              E, "__builtin_bit_cast(" + typeToC(Carrier) + ", " + Text + ")",
-              Carrier->Size, Carrier->IsSigned);
+          // Materialize the aggregate once before reading its representation.
+          // Clang's C frontend cannot lower bit_cast of an aggregate call
+          // rvalue on supported Apple toolchains.
+          return typedText(E,
+                           c_detail::sourceRecordValue(Return, typeToC(Return),
+                                                       typeToC(Carrier), Text),
+                           Carrier->Size, Carrier->IsSigned);
         // No integer bit casts from the record (three floats are twelve
         // bytes, and an int beside a double leaves padding): place each
         // member's bits where the packed fields put them.

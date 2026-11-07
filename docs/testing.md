@@ -1,5 +1,12 @@
 **Languages**: [English](testing.md) | [简体中文](zh-CN/testing.md) | [繁體中文](zh-TW/testing.md) | [日本語](ja/testing.md) | [한국어](ko/testing.md) | [Français](fr/testing.md) | [Deutsch](de/testing.md) | [Español](es/testing.md) | [Italiano](it/testing.md) | [Русский](ru/testing.md) | [العربية](ar/testing.md)
 
+`python3 -m unittest scripts.tests.test_qemu_save_snapshot -v` checks the
+[offline QEMU save reader](qemu-save-snapshot.md) with independently encoded
+CPU, nested VMState and RAM records. It covers exact register bits, instance
+identity, page updates/zero fills, absent pages, cross-page reads, entry-PC
+mismatch, malformed/truncated streams and resource bounds. It runs no guest,
+generated program or instruction executor and requires no C++ build.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
@@ -1465,31 +1472,49 @@ across both keys, zero/dynamic discriminators and raw controls. The matrix also
 checks signed/unsigned 128-bit values, single/pair integer and pointer records,
 a padded 32-bit/64-bit pair, and one-to-four-member f32/f64 HFAs with nested and
 whole-stack cases. Eighteen shapes additionally cover complete variadic
-values, higher alignment, fixed aggregate spills and padded fixed prefixes. CTest registers each of the 58 type shapes separately,
+values, higher alignment, fixed aggregate spills and padded fixed prefixes.
+Seven further shapes cover indirect natural records in GP registers, after GP
+exhaustion and in variadic tails, including an indirect fixed stack prefix.
+CTest registers each of the 65 type shapes separately,
 retaining all five authentication variants and both C routes at O0/O2 within
 the ordinary per-test timeout. Stable shape names identify failures and permit
-parallel scheduling. All 290 typed groups emit actual Mach-O objects on five
+parallel scheduling. All 325 typed groups emit actual Mach-O objects on five
 routes. Narrow register arguments
 and results require the correct LLVM extension attribute; stack arguments
 retain their source width. The outer fixture explicitly writes the complete
 X0 return carrier, and a constant result cannot stand in for the callback's
 value. Set `NEVERD_ARM64E_CALL_ABI_ARTIFACT_DIR` to retain the nine integer
-groups and 290 typed groups with all five object routes. Composite result
+groups and 325 typed groups with all five object routes. Composite result
 oracles consume every logical member, excluding padding; pointer and integer
 members remain raw bits. The independent callback poisons record return padding.
 On macOS, `NeverDArm64eSourceCallSDK` loads a real arm64e dylib through the
 public C API, declares named integer/pointer records, a padded pair, a nested
 HFA and signed/unsigned 128-bit values, and applies complete call prototypes.
-Both C routes must compile all seventeen argument/result shapes at O0/O2,
+Both C routes must compile all twenty-seven argument/result shapes at O0/O2,
 including record names matching the renderer's preferred temporary names.
-Seven raw variadic fixtures also execute as native arm64 on Apple arm64:
-original assembly and both C projections call independent C `va_arg` readers
-at O0/O2 (42 executions). These readers check signed/unsigned 128-bit values,
+Seventeen raw fixtures also execute as native arm64 on Apple arm64:
+original assembly and both C projections call independent C callbacks
+at O0/O2 (102 executions). Variadic readers check signed/unsigned 128-bit values,
 16-byte alignment following a promoted int, named records, padding, HFA and
-nested HFA members, and a fixed record prefix. Other hosts retain compilation
+nested HFA members, and a fixed record prefix. Indirect-record callbacks
+additionally check the original address, aliased reads and writes, register
+exhaustion and native variadic record reads. The authenticated model matrix
+checks the same pointer transport without dereferencing its synthetic pointer
+values; the native storage oracle supplies that separate evidence. Generated
+LLVM and recompiled C must not introduce `byval`, `byref`, `noalias`, `nonnull`,
+alignment or dereferenceability parameter attributes. Mixed and nested indirect
+records also exercise forward declarations for opaque pointer fields.
+Other hosts retain compilation
 and explicitly record that native execution is unavailable. Packed/union values,
-indirect copies/results, and unpromoted scalar tails must refuse explicitly.
+hidden results, and unpromoted scalar tails must refuse explicitly.
 Raw native execution does not qualify PAC behavior.
+`MachOArm64eDependencies` in `NeverDArm64eAnalysisTests` checks independently
+encoded linked images for all six arm64e chained-pointer formats. Chain metadata
+can be repacked while retaining the dependency identity; changes to target,
+import ordinal/name/weakness/addend, key, diversity, address diversity, slot
+address or CPU subtype must fail preservation. Four-byte and eight-byte chain
+alignments remain distinct, and wrong-CPU and cross-page storage fail parsing.
+These checks do not execute dyld, sign new storage or qualify rebuilt images.
 `LLVMCValues.DarwinVariadicArraysValidateEveryActualOperand` also admits word
 and HFA arrays in the prefix/tail while refusing non-C conventions, tail
 `inreg` attributes, unpromoted scalar companions, nested/oversized arrays and
@@ -1574,6 +1599,20 @@ The receipt retains the original array-boundary, i128-alignment and harness
 admission failures alongside the final results. Arbitrary/indirect aggregates,
 zero-fixed-prefix variadics and the broader unqualified boundaries above remain
 unsupported by this profile; remote CI status is recorded separately.
+
+The [indirect-aggregate and image-dependency receipt](evidence/arm64e-indirect-image-abi-2026-11-07.json)
+extends the matrix to 65 shapes and 325 groups. All 30 controlled model guests
+pass: 39,000 valid original/projected pairs and 93,600 invalid-signature pairs,
+with 24,960 known C O0 exception-class differences retained separately. The
+model executed the recorded producer revision; all 1,625 newly exported objects
+are byte-identical to those model inputs after integration and regression fixes.
+The public SDK compiles 54 source routes at O0/O2, executes 102 raw native arm64
+storage checks and requires 14 explicit refusals. Its execution receipt records
+the exact final library hash. Complete owner-test results, explicit skips and
+the earlier regression failures remain in the receipt. This profile retains
+indirect argument addresses and existing image signing recipes; logical copies,
+hidden result buffers, new authenticated storage/imports, relocation emission
+and native signed unwinding still require their separate contracts.
 
 `NeverDLanguageEHTests` checks the unified signing query's image/function
 provenance, exact PCs, source scopes and bounded CIE lookup.
@@ -19907,6 +19946,10 @@ origins and unresolved exceptional inputs. The real PE32 `xcpt4` filter and
 `seh_probe` handler regressions in `NeverDCPointerProjectionTests` cover their
 interaction with source SEH rendering; run both source routes and the complete
 C-pointer, Win64, SysV and i386 call-contract suites after changing this boundary.
+The immediate-raise continuation check binds its signed snapshot through the
+emitted global store instead of a fixed SSA number. It checks the 32-bit
+declaration and executes the copy, store and return over boundary and sampled
+values, independently of temporary numbering.
 
 `I386CallContract.PhysicalCallReturnSlotsDoNotKeepOldSourceConstants` checks
 four-byte CALL slots across the same three formats, both source routes and
@@ -20625,6 +20668,15 @@ responses; a primitive improvement alone does not establish GUI latency.
 `NeverDHighExprUseCountsTests` compares shared graphs with independently
 expanded tree reads, retains distinct variable identities and repeated reads,
 and checks an indirect target when a call has no arguments.
+
+`HighControlFlowSemantics.CopyCandidateCountsRetainMemorySnapshots` checks
+single-use inlining and both copy-folding passes after count-based admission.
+Ordinary reads keep their earlier value across an intervening store; atomic
+and segmented reads retain their original expression at the original statement.
+Run the same source suites when changing the order of candidate checks.
+`LeafSimplificationKeepsCallsAndSharedUses` retains no-argument indirect calls
+and their ordered target, propagates a shared arithmetic replacement to both
+uses, and reports no progress when the next simplification leaves them intact.
 
 ### Predicate cleanup and independent call effects
 

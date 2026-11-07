@@ -251,12 +251,28 @@ void HighCWriter::writeSourceRecordDeclarations(
         Visit(Parameter);
     } else if (Type->Kind == NdTypeKind::Array) {
       Visit(Type->ElemType);
+    } else if (Type->Kind == NdTypeKind::Struct) {
+      // Indirect anonymous records still declare their fields. Any opaque
+      // pointee named by a field needs the same declaration as a parameter.
+      for (const auto &Field : Type->Fields)
+        Visit(Field);
     }
   };
   auto Signature = [&](const FunctionSym &Function) {
     Visit(Function.ReturnType);
     for (const auto &[Name, Type] : Function.Params)
       Visit(Type);
+  };
+  HighExprSet SeenExpressions;
+  std::function<void(const ExprPtr &)> VisitCalls = [&](const ExprPtr &E) {
+    if (!E || !SeenExpressions.insert(E.get()).second)
+      return;
+    if (E->SourceCallHint) {
+      Visit(E->SourceCallHint->Signature.ReturnType);
+      for (const auto &Parameter : E->SourceCallHint->Signature.Parameters)
+        Visit(Parameter.Type);
+    }
+    E->forEachChildExpr(VisitCalls);
   };
   if (Opts.VariableTypes) {
     for (const auto &[Key, Type] : Opts.VariableTypes->Locals)
@@ -268,6 +284,9 @@ void HighCWriter::writeSourceRecordDeclarations(
     Visit(Function.ReturnType);
     for (const HighParam &Param : Function.Params)
       Visit(Param.Type);
+    walkStmts(Function.Body, [&](const HighStmt &Statement) {
+      forEachExpr(Statement, VisitCalls);
+    });
     if (Dbg)
       if (auto Found = debugFunction(Function))
         Signature(*Found);

@@ -1286,8 +1286,17 @@ The stack cursor includes the full storage of any fixed aggregate spill.
 `SourceABICarriers.def` owns the slot widths and diagnostics. Scalar tails must
 carry their default promotions; HFA members keep their declared float widths.
 Direct records and 128-bit values use the same logical types and member proofs
-in fixed and variadic calls. Indirect tails still require a separate copy
-storage proof and remain refused. Narrow integer
+in fixed and variadic calls. Complete natural records classified as indirect
+retain their original pointer in fixed and variadic analyst calls. The shared
+`sourceCallParameterType` supplies that ABI-lowered type to both C routes;
+LLVM receives the same pointer without `byval` or `noalias`. No new copy or
+stronger memory effect is introduced: address identity, aliases and writes
+through the original storage remain observable. An unnamed indirect parameter
+occupies one eight-byte pointer slot. Native logical by-value reconstruction
+still requires its separate copy-storage proof. Anonymous C record names reuse
+natural-layout validation independently of the stricter direct-value ABI check;
+naming a mixed record behind a pointer does not authorize passing it directly.
+Narrow integer
 register parameters and AArch64 narrow results retain the ABI's 32-bit
 sign/zero-extension guarantee separately from their source width. LLVM source
 call emission consumes those validated guarantees as `signext`/`zeroext`
@@ -1320,9 +1329,11 @@ requiring its padding bits. Other operations still require their full inputs;
 neither padding nor a later SSA version becomes an incoming parameter.
 The explicit call path currently supports one/two-word integer/pointer records,
 the padded 32-bit/64-bit integer pair and one-to-four-member f32/f64 HFAs,
-including nested records and complete stack spills. Array fields, arbitrary
-small mixed records, indirect by-value copies and indirect results still need
-their complete source storage and ABI contracts. These source declarations
+including nested records and complete stack spills. Large natural integer,
+mixed and nested records and non-HFA floating records additionally use indirect
+pointer transport. Array fields, arbitrary small mixed records, logical
+by-value copy reconstruction and indirect results still need their complete
+source storage and ABI contracts. These source declarations
 supply no authenticated whole-image or native signed-unwind ABI.
 
 The DWARF reader keeps an image-derived arm64e return ABI flag separate from
@@ -1767,6 +1778,15 @@ Recovered method names outrank synthesized function-start names while retaining
 existing stated, analysis and user function names.
 The formats follow Apple's [dyld definitions](https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/fixup-chains.h)
 and LLVM's [pointer-authentication contract](https://llvm.org/docs/PointerAuth.html).
+
+The strict whole-image dependency reader shares the six arm64e chain-word
+decoders with the analysis loader. Its preserved identity includes each slot's
+address, target or complete import identity, key, diversity and address-diversity
+flag, together with the image CPU type and ABI subtype. Repacking chain metadata
+may keep that identity; changing a signing recipe, import or slot may not.
+Per-format strides, import-addend overflow, segmented targets and page/storage
+bounds remain validated. This preservation contract does not synthesize signed
+storage, install new authenticated imports or authorize whole-image rebuilding.
 
 This support covers static loading, lifting and C/LLVM inspection. Native
 rebuilding and source replacement of an arm64e image fail explicitly until
@@ -8853,7 +8873,11 @@ store out, as a C function leaves its caller's registers alone, so the
 prologue neither prints the caller's register as a stale value nor keeps a
 frame in byte storage. The MedIR text view shows the mark. Operations keep
 their positions, because call records index them. A save read for anything
-else stays a store, and binary lift and patch never mark one. On x86 the
+else stays a store, and binary lift and patch never mark one. The restore proof
+also follows unobserved zero extensions, including the Q-register update from
+an AArch64 D-register restore. A read of any derived value retains the save.
+HighIR removes unused restore temporaries before checking private save slots,
+while frame addresses still retain their original SSA identities. On x86 the
 projection also marks a pointer-width load of the slot at the entry stack
 pointer, in a called function whose stores never write that slot: it reads
 the return address the call pushed. HighC prints it as
