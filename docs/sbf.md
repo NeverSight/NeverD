@@ -484,7 +484,11 @@ exactly with the completed generic summary. This currently requires unknown
 memory effects, no returned scratch/postcondition cells, the same scalar return
 alternatives and the same constant or unknown return origin. Any target facts
 in the dependency graph must also be covered by an independently published
-sibling under the same caller entry and call instruction. A node's own proven
+sibling under the same caller entry and call instruction. Instantiated
+expression proofs must retain the same expression, input values and loaded
+values; matching target addresses from different fields do not cover each
+other's conditions. The comparison borrows existing bounded witnesses and
+charges its target index to the retained-state budget. A node's own proven
 targets must also be established by the generic replacement. If they are not,
 a completed independently published sibling may instead receive the old
 incoming edges only when its opaque return, own site results, expressions and
@@ -494,6 +498,10 @@ not broaden the sibling's input cache key or authorize reuse for new inputs.
 Those edges record `coalesced_proven_equivalent_summary_results`. A first
 captured input binding absent from all retained variants can demand one such
 exploration per entry register, without supplying target or nonalias facts.
+A forwarding wrapper can also explore one different frame descriptor per entry
+register when all retained known bindings repeat the same descriptor. The
+completed-result and descendant-proof preservation checks still apply; frame
+membership alone provides no alias fact.
 Complete target alternatives, roots and active caller graphs are not discarded. Image membership selects work; it does not prove a target or alias
 relationship. Old incoming edges distinguish specialization-limit generalization
 from equivalent-result coalescing; `generalized_redundant_published_summaries`
@@ -533,6 +541,19 @@ keys and static dependency masks remain intact. Schema 5 additionally records
 generalized unknown. Cached input fields outside the conditional mask are not
 additional requirements on such an edge. The four-summary and resource budgets
 remain unchanged.
+
+At the four-variant limit, a completed specialized summary can also cover a
+narrower, nonwrapping numeric interval. Only an unknown or containing numeric
+input permits this reuse; pointer identities and other input facts still agree,
+and the memory-read checks still apply. An incoming memory snapshot that
+preserves every known cached cell and only adds facts is also covered, including
+when the read footprint is unknown. A changed or missing old cell cannot use
+this extension rule. Returned memory is reconstructed from the actual caller,
+may-write effects and must-write postconditions, preserving new facts only
+where the callee cannot overwrite them. The cached summary must improve the
+generic return or output fields. Its wider result remains conservative for the
+new caller. These edges use `reused_covering_specialized_inputs` and the separate
+`covering_specialized_summary_reuses` counter; they are not equal-input reuses.
 
 Generic summaries can retain a CALLX carrier as an expression of entry
 parameters and full-width loads from entry memory. Copies, supported normalized
@@ -710,6 +731,12 @@ its temporary dependency graph is released before context recovery. This does
 not prove that a particular host call terminates or that a reachable EXIT is
 feasible for every input.
 
+The contextual value lane retains the zero-extension bound of an unknown
+8-, 16- or 32-bit load after exact memory and origin lookups fail. Unsigned
+comparisons can exclude impossible paths using that bound, including in a
+called summary. A full-width unknown load stays unknown; a width bound supplies
+no pointer identity or alias fact.
+
 Unsigned branch comparisons can establish bounds on values carried affinely
 to a function's return. A nullable return retains the null alternative.
 Nonliteral address returns receive a report-local captured identity; its bounds
@@ -720,7 +747,9 @@ owner checks their complete numeric footprints, including modular offsets,
 before preserving a frame or another object field. A partial write invalidates
 the overlapping field. Captures are rebound at caller boundaries and widened
 to bounds across CFG back edges, so successive calls or loop iterations cannot
-reuse an old object's equality identity. Coordinate configuration is shared
+reuse an old object's equality identity. The existing reverse-postorder index
+identifies these edges; an acyclic jump to a smaller instruction slot retains
+its capture. Coordinate configuration is shared
 across the analysis and charged at its owner.
 
 Generic byte-copy postconditions snapshot entry fields after invalidating all

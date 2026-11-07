@@ -481,6 +481,7 @@ struct FunctionContext : llvm::FoldingSetNode {
   // cannot repeatedly rediscover the same exploratory image binding.
   uint16_t ExploredImageRegisters = 0;
   uint16_t ExploredCapturedRegisters = 0;
+  uint16_t ExploredFrameRegisters = 0;
   bool ReuseReadsMemory = false;
   MemoryEffects Effects;
   MemoryEffects ReadEffects;
@@ -564,7 +565,8 @@ private:
             CallXInputGeneralization *Generalization = nullptr,
             bool *ReadProjectedInput = nullptr);
   llvm::Expected<bool> memoryInputsMatch(const FunctionContext &Candidate,
-                                         const ContextState &Input);
+                                         const ContextState &Input,
+                                         bool &CoveringInputs);
   llvm::Error computeInputDependencies();
   llvm::Error computeReturnReachability();
   ContextState genericInput() const;
@@ -715,6 +717,7 @@ private:
   std::set<std::pair<size_t, size_t>> RetriedUnblockedCalls;
   size_t EquivalentGenericReuses = 0;
   size_t EquivalentSpecializedReuses = 0;
+  size_t CoveringSpecializedReuses = 0;
   size_t SkippedNonCallXRoots = 0;
   size_t SkippedConstantBranchSuccessors = 0;
   size_t CanonicalizedFrameInputs = 0;
@@ -978,6 +981,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   bool NewImageArgument = false;
   uint16_t NewImageRegisters = 0;
   uint16_t NewCapturedRegisters = 0;
+  uint16_t NewFrameRegisters = 0;
   for (unsigned R = 0; R < kRegisterCount; ++R) {
     const auto Value = Input.Registers[R].singleton();
     if (R != kFramePointerRegister &&
@@ -990,6 +994,25 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
               });
         }))
       NewCapturedRegisters |= registerBit(R);
+    // A forwarding wrapper can pin all variants on snapshots of one frame
+    // descriptor. Explore a distinct descriptor once per entry register only
+    // when the retained known bindings agree; frame membership is not an
+    // alias proof and does not change the replacement obligations below.
+    if (Generic.Sites.empty() && R != kFramePointerRegister &&
+        Value.ValueKind == RegisterValue::Kind::StackAddress &&
+        !(Generic.ExploredFrameRegisters & registerBit(R))) {
+      const auto Known = llvm::find_if(Variants, [&](const auto *Variant) {
+        const auto Old = Variant->Input.Registers[R].singleton();
+        return Old.ValueKind == RegisterValue::Kind::StackAddress &&
+               Old.Value == Value.Value && Old != Value;
+      });
+      if (Known != Variants.end() &&
+          llvm::all_of(Variants, [&](const auto *Variant) {
+            return Variant->Input.Registers[R].unknown() ||
+                   Variant->Input.Registers[R] == (*Known)->Input.Registers[R];
+          }))
+        NewFrameRegisters |= registerBit(R);
+    }
     if (R == kFramePointerRegister ||
         Value.ValueKind != RegisterValue::Kind::Constant ||
         !Program.ExecutableImage.findRegion(Value.Value, 1, true))
@@ -1020,7 +1043,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
       NewImageRegisters |= registerBit(R);
   }
   if (!Retry && !NewImageArgument && !NewImageRegisters &&
-      !NewCapturedRegisters)
+      !NewCapturedRegisters && !NewFrameRegisters)
     return false;
   // Replacing an old incoming edge must leave the caller transfer unchanged.
   // Start with the opaque-memory case: no returned cells or affine return
@@ -1046,8 +1069,44 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
   if (Retry && Generic.Return->InputExpressions[kReturnRegister])
     return false;
 
-  using TargetKey = std::tuple<size_t, size_t, size_t, va_t>;
-  std::set<TargetKey> Required, Covered;
+  using TargetCoordinates = std::tuple<size_t, size_t, size_t, va_t>;
+  using TargetKey = std::pair<TargetCoordinates, const CallXContextEvidence *>;
+  // Equal target addresses do not preserve distinct input/load conditions.
+  // Borrow the stable proof steps during this comparison instead of copying
+  // their value sets into another retained representation.
+  const auto TargetLess = [](const TargetKey &A, const TargetKey &B) {
+    if (A.first != B.first)
+      return A.first < B.first;
+    const auto &Left = *A.second;
+    const auto &Right = *B.second;
+    if (Left.InputExpressionValues.empty() ||
+        Right.InputExpressionValues.empty())
+      return Left.InputExpressionValues.size() <
+             Right.InputExpressionValues.size();
+    if (Left.InputExpression != Right.InputExpression)
+      return Left.InputExpression < Right.InputExpression;
+    const auto ValuesLess = [](const ProvenValueSet &A,
+                               const ProvenValueSet &B) {
+      return std::lexicographical_compare(
+          A.values().begin(), A.values().end(), B.values().begin(),
+          B.values().end(), [](const auto &A, const auto &B) {
+            return std::tie(A.ValueKind, A.Value, A.Offset) <
+                   std::tie(B.ValueKind, B.Value, B.Offset);
+          });
+    };
+    return std::lexicographical_compare(
+        Left.InputExpressionValues.begin(), Left.InputExpressionValues.end(),
+        Right.InputExpressionValues.begin(), Right.InputExpressionValues.end(),
+        [&](const auto &A, const auto &B) {
+          if (A.Expression != B.Expression)
+            return A.Expression < B.Expression;
+          if (A.Inputs != B.Inputs)
+            return ValuesLess(A.Inputs, B.Inputs);
+          return ValuesLess(A.Values, B.Values);
+        });
+  };
+  std::set<TargetKey, decltype(TargetLess)> Required(TargetLess),
+      Covered(TargetLess);
   constexpr uint64_t TargetBytes = sizeof(TargetKey) + 4 * sizeof(void *);
   uint64_t TemporaryBytes = 0;
   const auto Release =
@@ -1090,8 +1149,9 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
         const size_t CallerSlot = Edge ? Edge->CallerSlot : CallerEntry;
         if (Site.TargetAddress &&
             Targets
-                .emplace(CallerEntry, CallerSlot, Site.CallXSlot,
-                         *Site.TargetAddress)
+                .emplace(TargetCoordinates{CallerEntry, CallerSlot,
+                                           Site.CallXSlot, *Site.TargetAddress},
+                         &Site)
                 .second) {
           if (auto Error = this->retain(TargetBytes))
             return std::move(Error);
@@ -1221,7 +1281,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
         return Collected.takeError();
       if (!*Collected ||
           !std::includes(Covered.begin(), Covered.end(), Required.begin(),
-                         Required.end()) ||
+                         Required.end(), TargetLess) ||
           !IndependentlyPublished(*Sibling, Candidate->ID))
         continue;
       Redundant = true;
@@ -1275,6 +1335,7 @@ ContextFlow::generalizeRedundantContext(size_t Entry, const ContextState &Input,
       reclaimContext(*Contexts[Pending[I]], &Pending, true);
     Generic.ExploredImageRegisters |= NewImageRegisters;
     Generic.ExploredCapturedRegisters |= NewCapturedRegisters;
+    Generic.ExploredFrameRegisters |= NewFrameRegisters;
     if (WasPublished)
       ++GeneralizedPublishedSummaries;
     if (Retry)
@@ -2185,6 +2246,13 @@ void ContextFlow::transferValues(const MedInstruction &Instruction,
                                  RegisterValue::Kind::SymbolicAddress;
                     }))
       State.Registers[Instruction.Dst] = LoadedOrigin;
+    // A successful narrow load is zero-extended even when its bytes are
+    // unknown. Keep the type bound after the exact memory/origin lookups;
+    // it supplies no address identity and cannot replace a stronger fact.
+    if (State.Registers[Instruction.Dst].unknown() &&
+        Instruction.Semantics.MemoryWidth < kDoubleWordBitWidth)
+      State.Registers[Instruction.Dst] = unsignedRangeValue(
+          {0, (uint64_t{1} << Instruction.Semantics.MemoryWidth) - 1});
   } else {
     State.Registers[Instruction.Dst] =
         registerResult(Instruction, State.Registers, Program.ExecutableImage,
@@ -3561,7 +3629,21 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
 
 llvm::Expected<bool>
 ContextFlow::memoryInputsMatch(const FunctionContext &Candidate,
-                               const ContextState &Input) {
+                               const ContextState &Input,
+                               bool &CoveringInputs) {
+  // A summary computed with fewer known cells covers an input that keeps
+  // every old fact and only adds facts, even when its read range is unknown.
+  // Changed or forgotten old cells still need the read-footprint proof below.
+  bool Extends = true;
+  Candidate.Input.Scratch.Values.visitCells(
+      [&](const RegisterValue &Address, const ProvenValueSet &Value) {
+        if (Extends && Input.Scratch.Values.readValues(Address) != Value)
+          Extends = false;
+      });
+  if (Extends) {
+    CoveringInputs = true;
+    return true;
+  }
   if (Candidate.ReadEffects.Unknown)
     return false;
   const auto &Before = Candidate.Input.Scratch;
@@ -3689,28 +3771,50 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
   // Only real caller edges use this conditional projection. Standalone roots
   // retain their own entry assumptions, and generic mode still drops locally
   // known inputs at nested calls, so it is not interchangeable with this mode.
-  if (!Generic && Generalization && Specializations.contains(Entry))
+  if (!Generic && Generalization && Specializations.contains(Entry)) {
+    const bool AtCapacity = Specializations.at(Entry).size() ==
+                            kCallXContextSpecializationsPerEntry;
     for (auto *Candidate : Specializations.at(Entry)) {
       if (!Candidate->Complete)
         continue;
       bool Same = true;
+      bool CoveringInputs = false;
       for (unsigned R = 0; R < kRegisterCount; ++R)
         if ((Candidate->ReuseInputRegisters & registerBit(R)) &&
             Candidate->Input.Registers[R] != Input.Registers[R]) {
-          Same = false;
-          break;
+          const auto Value = Input.Registers[R].singleton();
+          if (!AtCapacity ||
+              Value.ValueKind != RegisterValue::Kind::UnsignedRange) {
+            Same = false;
+            break;
+          }
+          const auto &Before = Candidate->Input.Registers[R];
+          const auto Bounds =
+              Before.unknown()
+                  ? std::optional<UnsignedValueRange>(UnsignedValueRange{})
+                  : unsignedValueRange(Before.singleton());
+          const auto Narrow = *unsignedValueRange(Value);
+          // A completed summary for a wider numeric input remains sound for
+          // this interval. Keep pointer identities and nonnumeric inputs
+          // exact; wrapping ranges need a different containment proof.
+          if (!Bounds || Bounds->Lower > Bounds->Upper ||
+              Narrow.Lower > Narrow.Upper || Bounds->Lower > Narrow.Lower ||
+              Bounds->Upper < Narrow.Upper) {
+            Same = false;
+            break;
+          }
+          CoveringInputs = true;
         }
       if (!Same)
         continue;
       const bool DifferentMemory =
           (Candidate->ReuseReadsMemory || !Candidate->PreservesMemory) &&
           Candidate->Input.Scratch != Input.Scratch;
-      if (DifferentMemory) {
+      if (DifferentMemory || CoveringInputs) {
         // Keep exact scratch variants while space remains. The projected
         // output uses may-write effects, which can be less precise than a
         // fresh execution even when the changed input fields are unread.
-        if (!ReadProjectedInput || Specializations.at(Entry).size() <
-                                       kCallXContextSpecializationsPerEntry)
+        if (!AtCapacity || (DifferentMemory && !ReadProjectedInput))
           continue;
         const auto &Generic = *GenericContexts.at(Entry);
         const bool RefinesReturn =
@@ -3726,18 +3830,26 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
         // Spend that precision only for a stronger scalar or field result.
         if (!RefinesReturn && !AddsFields)
           continue;
-        auto Matches = memoryInputsMatch(*Candidate, Input);
-        if (!Matches)
-          return Matches.takeError();
-        if (!*Matches)
-          continue;
-        *ReadProjectedInput = true;
+        if (DifferentMemory) {
+          auto Matches = memoryInputsMatch(*Candidate, Input, CoveringInputs);
+          if (!Matches)
+            return Matches.takeError();
+          if (!*Matches)
+            continue;
+          *ReadProjectedInput = true;
+        }
       }
       ++CacheHits;
-      ++EquivalentSpecializedReuses;
-      *Generalization = CallXInputGeneralization::EquivalentSpecializedInputs;
+      if (CoveringInputs) {
+        ++CoveringSpecializedReuses;
+        *Generalization = CallXInputGeneralization::CoveringSpecializedInputs;
+      } else {
+        ++EquivalentSpecializedReuses;
+        *Generalization = CallXInputGeneralization::EquivalentSpecializedInputs;
+      }
       return Candidate;
     }
+  }
   if (!Generic && SpecializationBudgetExhausted)
     return Generalized(CallXInputGeneralization::ResourceBudget);
   if (!Generic && Specializations.contains(Entry) &&
@@ -3922,7 +4034,10 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
                                  SuccessorState, *CapturedAddresses,
                                  ReturnCarriers[Successors[E]]))
           continue;
-        if (NextSlot <= MedBlock.StartSlot)
+        // Reverse postorder identifies a DFS backedge even when the bytecode
+        // places an acyclic continuation before its allocating predecessor.
+        // Every cycle still crosses such an edge and loses capture identity.
+        if (BlockOrder[Successors[E]] <= BlockOrder[BlockID])
           widenCapturedValues(SuccessorState, *CapturedAddresses);
         if (auto Error = Enqueue(Successors[E], SuccessorState, Defined))
           return std::move(Error);
@@ -4300,6 +4415,7 @@ llvm::Expected<CallXContextReport> ContextFlow::run() {
   Report.UnblockedRecursionRetries = UnblockedRecursionRetries;
   Report.EquivalentGenericReuses = EquivalentGenericReuses;
   Report.EquivalentSpecializedReuses = EquivalentSpecializedReuses;
+  Report.CoveringSpecializedReuses = CoveringSpecializedReuses;
   Report.SkippedNonCallXRootSpecializations = SkippedNonCallXRoots;
   Report.SkippedConstantBranchSuccessors = SkippedConstantBranchSuccessors;
   Report.CanonicalizedFrameInputs = CanonicalizedFrameInputs;

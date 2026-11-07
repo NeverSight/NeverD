@@ -178,6 +178,8 @@ llvm::StringRef generalizationName(CallXInputGeneralization Kind) {
     return "opaque_recursive_specialization_replaced";
   case CallXInputGeneralization::EquivalentSpecializedResults:
     return "coalesced_proven_equivalent_summary_results";
+  case CallXInputGeneralization::CoveringSpecializedInputs:
+    return "reused_covering_specialized_inputs";
   }
   llvm_unreachable("unknown input generalization");
 }
@@ -578,6 +580,8 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
        static_cast<int64_t>(Report.EquivalentGenericReuses)},
       {"equivalent_specialized_summary_reuses",
        static_cast<int64_t>(Report.EquivalentSpecializedReuses)},
+      {"covering_specialized_summary_reuses",
+       static_cast<int64_t>(Report.CoveringSpecializedReuses)},
       {"skipped_non_callx_root_specializations",
        static_cast<int64_t>(Report.SkippedNonCallXRootSpecializations)},
       {"constant_branch_successors_skipped",

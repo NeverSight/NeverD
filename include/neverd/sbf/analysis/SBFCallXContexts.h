@@ -68,6 +68,7 @@ enum class CallXInputGeneralization : uint8_t {
   EquivalentSpecializedInputs,
   ReplacedRecursiveContext,
   EquivalentSpecializedResults,
+  CoveringSpecializedInputs,
 };
 
 enum class CallXInputExpressionKind : uint8_t {
@@ -233,6 +234,7 @@ struct CallXContextReport {
   size_t UnblockedRecursionRetries = 0;
   size_t EquivalentGenericReuses = 0;
   size_t EquivalentSpecializedReuses = 0;
+  size_t CoveringSpecializedReuses = 0;
   size_t SkippedNonCallXRootSpecializations = 0;
   size_t SkippedConstantBranchSuccessors = 0;
   size_t CanonicalizedFrameInputs = 0;
