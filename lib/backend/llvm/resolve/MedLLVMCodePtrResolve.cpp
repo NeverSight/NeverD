@@ -1382,7 +1382,8 @@ MedLLVMEmitter::jumpTableForLoad(const MedOp &Load,
           JT.Targets.size() != 2 * Lo.PhysicalSlotCount ||
           Lo.PhysicalSlotCount >
               std::numeric_limits<uint64_t>::max() / Load.Output.Size ||
-          uint64_t(Lo.PhysicalSlotCount) * Load.Output.Size !=
+          uint64_t(Lo.PhysicalSlotCount) *
+                  (JT.PreScaledIndex ? Load.Output.Size : 1) !=
               JT.TwoTableOffset)
         continue;
 

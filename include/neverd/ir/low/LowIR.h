@@ -1270,9 +1270,10 @@ struct JumpTable {
   /// a single switch.
   bool TwoTableSelect = false;
 
-  /// Byte distance between the two tables (entries(lo) * EntrySize); the
-  /// emitter adds it to the index byte offset when the higher table is
-  /// selected.
+  /// Distance between the two tables in the selector's coordinate; the emitter
+  /// adds it to the index when the higher table is selected. A pre-scaled index
+  /// counts bytes (entries(lo) * EntrySize); a load that scales its own index
+  /// counts entries.
   uint32_t TwoTableOffset = 0;
 
   /// True when the higher table (BaseAddr + TwoTableOffset) is selected by the

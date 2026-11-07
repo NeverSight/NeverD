@@ -755,6 +755,7 @@ struct AuthenticatedTargetLoadFixture {
   void makeTwoTable() {
     JumpTable &JT = Func.JumpTables.front();
     JT.TwoTableSelect = true;
+    JT.PreScaledIndex = true;
     JT.TwoTableOffset = 16;
     JT.Targets = {0x300, 0x310, 0x320, 0x330};
     JT.StorageRanges = {{0x2000, 8, 8, 2}, {0x2010, 8, 8, 2}};

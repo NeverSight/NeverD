@@ -1456,6 +1456,10 @@ resolver reads the load as defining its own occurrence, as it reads a LOAD with
 a computed address, so a loop through the index cannot change what the branch
 compares. The raw index bound may come from the cheap query, a guarded query or
 the finite proof of the same use, whose coordinates stay with the domain proof.
+A load through a SELECT of two table bases keeps the same operands: the base must
+be that exact SELECT, whose arms name the two tables, and every index of both
+must have one address. Its selector counts entries rather than bytes, because
+the load scales its own index.
 Byte and halfword stores slice the encoded W value explicitly; the tracer
 requires those source bytes to be known before publishing the slice. Unknown
 unused upper bytes do not prevent a known narrow store.

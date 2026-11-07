@@ -12390,11 +12390,44 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
                      {},
                      {}});
     if (originalAArch64TableLoad(*Load)) {
-      if (Role.IsLiteralCoordinate || Role.AllowedBases.size() != 1 ||
-          Role.HasBaseSelect || Role.HasBaseMaskBlend || HasFrameStorage ||
-          HasDisplacedAddress || Role.AddressIndex.Value.Size ||
+      // The composite selector consumes the index this load itself scales.
+      const bool SelectedBase =
+          Role.HasBaseSelect && Role.AllowedBases.size() == 2 &&
+          Role.AddressIndex.Addr == Load->Addr &&
+          Role.AddressIndex.Seq == Load->Seq &&
+          !Role.AddressIndex.DefinedAtPoint &&
+          sameVar(Role.AddressIndex.Value,
+                  Load->Inputs[kAddressMemoryIndexOperand + 1]);
+      if (Role.IsLiteralCoordinate || Role.HasBaseMaskBlend ||
+          HasFrameStorage || HasDisplacedAddress ||
+          (!SelectedBase &&
+           (Role.AllowedBases.size() != 1 || Role.HasBaseSelect ||
+            Role.AddressIndex.Value.Size)) ||
           Role.AddressScale != originalAArch64TableLoad(*Load)->accessBytes())
         return false;
+      if (SelectedBase) {
+        std::vector<JumpTableValueQuery> Arms(2);
+        for (const unsigned Arm : {0u, 1u}) {
+          const NdVar &Value = Select->Inputs[Arm + 1];
+          const va_t Base = Arm == 0 ? Role.TrueBase : Role.FalseBase;
+          Arms[Arm].Candidate = Value;
+          Arms[Arm].UseAddr = Select->Addr;
+          Arms[Arm].UseSeq = Select->Seq;
+          Arms[Arm].Alternatives = {
+              {NdVar::address(Base, Value.Size), InvalidVA, -1, false}};
+        }
+        bool ArmsComplete = true;
+        const std::vector<bool> ArmResults = tableValuesMatchAtUses(
+            Arms, &ArmsComplete, nullptr, InvalidVA, nullptr,
+            AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork,
+            nullptr, nullptr,
+            limits::kMaxJumpTableLargeExpressionRoleResolverDepth,
+            CertifiedEdgeOverrides, UseGroupContext, &QueryScope);
+        Complete &= ArmsComplete;
+        if (!ArmsComplete || ArmResults.size() != 2 || !ArmResults[0] ||
+            !ArmResults[1])
+          return false;
+      }
       bool AddressComplete = false;
       if (!aarch64OriginalTableLoadMatches(
               *Load, Role,
@@ -14062,7 +14095,8 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     if (!consumeWork())
       return false;
     JumpTableLoadRole &Role = *Roles[RoleIndex].Role;
-    if (Role.AddressIndex.Value.Size == 0)
+    if (Role.AddressIndex.Value.Size == 0 ||
+        Roles[RoleIndex].OriginalCheckedAddress)
       continue;
     const auto &Addresses = AddressAlternatives[RoleIndex];
     const auto &Indices = AddressIndexAlternatives[RoleIndex];
