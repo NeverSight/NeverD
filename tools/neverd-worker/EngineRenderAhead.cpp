@@ -34,6 +34,7 @@
 
 #include "neverd/sdk/NeverDCAPIDisasm.h"
 #include "neverd/sdk/NeverDCAPIPersist.h"
+#include "neverd/sdk/NeverDCAPIQuery.h"
 #include "neverd/support/ProjectFiles.h"
 
 #include <algorithm>
@@ -143,35 +144,129 @@ void Engine::currentNamesInView(Json &view) const {
   });
 }
 
+std::string Engine::renderStoreName() {
+  const auto project = projectJson();
+  if (!browseCacheEnabled_ || !project.is_object() ||
+      !project.contains("folder"))
+    return {};
+  return BrowseCache::digest(BrowseCache::runtimeIdentity() +
+                             renderStoreIdentity().dump());
+}
+
+namespace {
+std::filesystem::path projectLocalFolder(const Json &project,
+                                         const char *folder) {
+  const auto &root = project.at("folder").get_ref<const std::string &>();
+  return std::filesystem::path(std::u8string(
+             reinterpret_cast<const char8_t *>(root.data()), root.size())) /
+         "local" / folder;
+}
+} // namespace
+
 void Engine::openRenderStore(const std::string &mode) {
   renderStore_.reset();
+  factsStore_.reset();
+  factsStoreName_.clear();
   renderStoreStale_ = false;
   summariesDeferred_ = false;
   if (mode.empty())
     return;
   if (mode != "read" && mode != "write")
     throw Error("invalid_request", "render_store is read or write");
-  const auto project = projectJson();
-  if (!browseCacheEnabled_ || !project.is_object() ||
-      !project.contains("folder"))
-    return;
   try {
-    const auto name = BrowseCache::digest(BrowseCache::runtimeIdentity() +
-                                          renderStoreIdentity().dump());
+    const auto name = renderStoreName();
     if (name.empty())
       return;
-    const auto &folder = project.at("folder").get_ref<const std::string &>();
     renderStore_ = std::make_unique<RenderStore>(
-        std::filesystem::path(std::u8string(
-            reinterpret_cast<const char8_t *>(folder.data()), folder.size())) /
-            "local" / "render-ahead",
-        name, mode == "write");
+        projectLocalFolder(projectJson(), "render-ahead"), name,
+        mode == "write");
+    openFactsStore(name, mode == "write");
   } catch (const std::exception &) {
     // The job keeps what it renders in memory, and later sessions render it
     // again.
     return;
   }
   summariesDeferred_ = summaryJob_ && renderStore_->contains(CompleteKey);
+}
+
+void Engine::openFactsStore(const std::string &name, bool writable) {
+  factsStore_ = std::make_unique<RenderStore>(
+      projectLocalFolder(projectJson(), "listing-facts"), name, writable);
+  factsStoreName_ = name;
+}
+
+std::vector<std::string> Engine::keptListingFacts(const std::string &key) {
+  namespace limits = ::neverd::limits::worker;
+  // A restored store follows its job.  An owner's follows what the identity
+  // reads, which it cannot tell has changed before reading it.
+  if (renderStoreMode_.empty() &&
+      (!factsStoreRead_ ||
+       factsStoreGeneration_ != listing_->cacheGeneration())) {
+    factsStoreRead_ = true;
+    factsStoreGeneration_ = listing_->cacheGeneration();
+    try {
+      const auto name = renderStoreName();
+      if (name.empty())
+        factsStore_.reset();
+      else if (name != factsStoreName_)
+        openFactsStore(name, false);
+      if (name.empty())
+        factsStoreName_.clear();
+    } catch (const std::exception &) {
+      factsStore_.reset();
+      factsStoreName_.clear();
+    }
+  }
+  if (!factsStore_)
+    return {};
+  auto compact = factsStore_->read(key);
+  if (compact.empty() && !factsStore_->writable()) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - factsRefreshed_ >=
+        std::chrono::milliseconds(limits::kListingFactsRefreshMilliseconds)) {
+      factsRefreshed_ = now;
+      factsStore_->refresh();
+      compact = factsStore_->read(key);
+    }
+  }
+  std::vector<std::string> pages;
+  pages.reserve(compact.size());
+  for (const auto &page : compact) {
+    auto raw = decompressPage(page);
+    if (!raw) {
+      pages.clear();
+      break;
+    }
+    pages.push_back(std::move(*raw));
+  }
+  ++(pages.empty() ? factsMisses_ : factsHits_);
+  return pages;
+}
+
+void Engine::keepListingFacts(std::uint64_t address) {
+  namespace limits = ::neverd::limits::worker;
+  if (!liveRenderStore() || !factsStore_ || !factsStore_->writable() ||
+      factsStore_->bytes() >= limits::kListingFactsMaxStoredBytes)
+    return;
+  try {
+    for (const auto &[key, pages] :
+         listing().factsToKeep(address, [&](const std::string &candidate) {
+           return !factsStore_->contains(candidate);
+         })) {
+      std::vector<std::string> compact;
+      compact.reserve(pages.size());
+      for (const auto &page : pages)
+        compact.push_back(compressPage(page));
+      factsStore_->write(key, compact);
+    }
+    if (const auto key = graphFactsKey(address); !factsStore_->contains(key)) {
+      const auto text = backendText(neverd_cfg_json(session_, address), true);
+      if (validFunctionGraph(Json::parse(text, nullptr, false)))
+        factsStore_->write(key, std::vector<std::string>{compressPage(text)});
+    }
+  } catch (const std::exception &) {
+    // The first look reports what the engine refuses.
+  }
 }
 
 void Engine::restartRenderAhead() {
@@ -263,6 +358,7 @@ bool Engine::renderAheadStep() {
     return false;
   ++renderAheadCursor_;
   renderFunctionAhead(address);
+  keepListingFacts(address);
   return true;
 }
 
@@ -403,7 +499,15 @@ Json Engine::renderAheadJson() const {
           {"hits", renderAheadHits_},
           {"raw_bytes", renderAheadRawBytes_},
           {"bytes", renderAheadBytes_},
-          {"kept", renderStore_ ? renderStore_->records() : 0}};
+          {"kept", renderStore_ ? renderStore_->records() : 0},
+          {"facts", listingFactsJson()}};
+}
+
+Json Engine::listingFactsJson() const {
+  return {{"kept", factsStore_ ? factsStore_->records() : 0},
+          {"bytes", factsStore_ ? factsStore_->bytes() : 0},
+          {"hits", factsHits_},
+          {"misses", factsMisses_}};
 }
 
 } // namespace neverd::worker

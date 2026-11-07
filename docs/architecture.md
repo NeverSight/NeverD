@@ -4465,6 +4465,12 @@ function names, which a view's decoration reads and the pages do not spell, and
 operand formats, which source does not show. A session whose job starts over after
 it began no longer reads as a new session does, and stops reading and adding to the
 store.
+The job also keeps what a function's first look in the listing asks the engine, its
+recovered instructions and its stack frame, in `local/listing-facts` under the same
+identity. The owner reads them there (`Listing::setKeptFacts`) and takes up what its
+replica adds as the job goes, so a first look at a function the job has reached
+prepares no LowIR. What misses, or no longer reads as it was written, asks the
+engine and the browse cache as before.
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's, and only a new name of data
 or a data item, which pages spell, forgets the renders and moves to a store of its

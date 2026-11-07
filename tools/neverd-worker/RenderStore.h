@@ -34,6 +34,8 @@ public:
   RenderStore(std::filesystem::path folder, const std::string &identity,
               bool writable);
 
+  /// Takes up what other sessions have added to the folder since.
+  void refresh();
   bool contains(const std::string &key) const { return records_.contains(key); }
   /// The pages kept for \p key.  None for a key kept without pages, and for a
   /// record that no longer reads as it was written, which is forgotten.
@@ -52,12 +54,18 @@ private:
     std::uint64_t offset, dataBytes, checksum;
     std::uint32_t pages;
   };
-  void readFile(const std::filesystem::path &path);
+  struct File {
+    std::filesystem::path path;
+    std::unique_ptr<std::ifstream> input;
+    /// Where the next record starts; records before it are known.
+    std::uint64_t walked = 0;
+  };
+  void walkFile(File &file);
   bool startFile();
 
   std::filesystem::path folder_, directory_;
   bool writable_;
-  std::vector<std::unique_ptr<std::ifstream>> files_;
+  std::vector<File> files_;
   std::unordered_map<std::string, Record> records_;
   std::uint64_t bytes_ = 0;
   std::ofstream output_;

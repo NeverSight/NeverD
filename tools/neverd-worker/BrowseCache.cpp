@@ -160,6 +160,7 @@ void BrowseCache::configure(fs::path projectFolder,
 }
 
 void BrowseCache::invalidate() {
+  ++generation_;
   pending_.clear();
   initialized_ = enabled_ = false;
   namespace_.clear();

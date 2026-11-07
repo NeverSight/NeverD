@@ -29,6 +29,8 @@ public:
                  std::function<Json()> identity, bool writable,
                  AtomicWriter writer);
   void invalidate();
+  /// Advances with each invalidate.
+  std::uint64_t generation() const { return generation_; }
   std::optional<std::string> read(const std::string &key);
   void defer(const std::string &key, Producer producer);
   void reject(std::string diagnostic);
@@ -53,6 +55,7 @@ private:
   std::string namespace_, diagnostic_;
   std::map<std::string, Producer> pending_;
   std::size_t hits_ = 0, misses_ = 0, writes_ = 0, invalid_ = 0;
+  std::uint64_t generation_ = 0;
 };
 
 } // namespace neverd::worker

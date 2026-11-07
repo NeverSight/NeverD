@@ -1539,9 +1539,11 @@ analysis, so the view reads it at once; a type you give a local or a call change
 that function alone; a new name for data or a data item forgets the renders, and
 any other edit also starts the analysis over. The job takes idle time on one core and disk for the compact
 text: on a Windows kernel of 25,800 functions, about ten minutes and 200 MB, in
-the project's `local/render-ahead`, which you can delete at any time. Opening the
-file again reads those renders from the first function you open, and renders only
-what the job had not reached. With all of them there, the worker also skips
+the project's `local/render-ahead`, which you can delete at any time. It also keeps
+what the disassembly reads of each function, about 170 MB in
+`local/listing-facts`, so a function it has reached opens there at once as well.
+Opening the file again reads those renders from the first function you open, and
+renders only what the job had not reached. With all of them there, the worker also skips
 solving call summaries until you open something the renders do not answer, such
 as an IR view or a function that was too large to render. A change to the inputs
 (a new build of NeverD, a changed PDB, an edit to what the engine reads) starts

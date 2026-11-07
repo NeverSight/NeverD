@@ -6093,6 +6093,11 @@ a job that starts over stops reading and adding, a record cut short is rendered
 again alone, and a damaged one reads the engine.
 `WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
 through a real view.
+`NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
+session takes up what the replica keeps of a function's first look, a later session
+lists what asking the engine lists, a function's new name keeps the facts, a new
+name of data, another image and a damaged store ask the engine, and a corrected
+stack frame reads under what corrects it.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and

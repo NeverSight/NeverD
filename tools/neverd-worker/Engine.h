@@ -269,6 +269,23 @@ private:
   }
   /// Opens the store a restore asks for by \p mode: "read", "write" or empty.
   void openRenderStore(const std::string &mode);
+  /// What the job keeps of what a function's first look in the listing asks
+  /// the engine, under the same identity as the renders and for the same
+  /// sessions.  The owner reads it too, and takes up what its replica adds.
+  std::unique_ptr<RenderStore> factsStore_;
+  /// The name of what factsStore_ reads, and the browse cache's generation an
+  /// owner last compared it at.
+  std::string factsStoreName_;
+  std::uint64_t factsStoreGeneration_ = 0;
+  bool factsStoreRead_ = false;
+  std::chrono::steady_clock::time_point factsRefreshed_{};
+  std::uint64_t factsHits_ = 0, factsMisses_ = 0;
+  /// The store's folder name for what this session reads, or none.
+  std::string renderStoreName();
+  void openFactsStore(const std::string &name, bool writable);
+  std::vector<std::string> keptListingFacts(const std::string &key);
+  Json listingFactsJson() const;
+  void keepListingFacts(std::uint64_t address);
   std::string renderStoreMode_;
   /// What renders depend on: browseCacheIdentity without what a view's
   /// decoration reads, local and function names and comments.
@@ -488,6 +505,17 @@ private:
   /// The control flow graph of the function at \p address, in the engine's
   /// cfg JSON shape.
   Json functionGraph(std::uint64_t address);
+  /// What a job kept of functionGraph, for a snapshot, which reads no name from
+  /// it; or functionGraph.
+  Json keptFunctionGraph(std::uint64_t address);
+  static std::string graphFactsKey(std::uint64_t address) {
+    return "cfg:" + std::to_string(address);
+  }
+  static bool validFunctionGraph(const Json &graph) {
+    return graph.is_object() && graph.contains("nodes") &&
+           graph["nodes"].is_array() && graph.contains("edges") &&
+           graph["edges"].is_array();
+  }
   /// The function list changed: analysis restarts function by function and
   /// the reference index is built again.
   void functionsChanged();

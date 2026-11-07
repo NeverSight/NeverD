@@ -740,6 +740,7 @@ struct Listing::Impl {
   /// All that made the names stale since the last build is functions' names,
   /// and the generations those advanced, which views do not read.
   bool functionNamesStale = false;
+  Listing::KeptFacts keptFacts;
   std::uint64_t functionNameGenerations = 0;
   /// What the last full build read that names and the user's items do not
   /// change: the string scan, and the import, import slot and export rows.
@@ -2370,6 +2371,39 @@ struct Listing::Impl {
     return instructionRows(takeJson(raw));
   }
 
+  static bool validDisasmPage(const Json &value) {
+    return value.is_object() && value.value("lift_complete", false) &&
+           value.contains("instructions") &&
+           value.at("instructions").is_array() &&
+           value.contains("next_address");
+  }
+  static bool validFramePage(const Json &value) {
+    return value.is_object() && value.value("valid", false) &&
+           value.contains("instructions") &&
+           value.at("instructions").is_array();
+  }
+  static std::string disasmFactsKey(std::uint64_t entry) {
+    return "disasm:" + std::to_string(entry);
+  }
+  static std::string frameFactsKey(std::uint64_t owner,
+                                   const std::string &options) {
+    return "frame:" + std::to_string(owner) + ":" + options;
+  }
+  std::string stackFrameOptions(std::uint64_t owner) const {
+    const auto policy = stackFrames.find(owner);
+    return policy == stackFrames.end() ? "{}" : policy->second.dump();
+  }
+  /// What is kept under \p key, one page that \p valid takes or null.
+  Json keptFact(const std::string &key, bool (*valid)(const Json &)) {
+    if (!keptFacts)
+      return nullptr;
+    auto pages = keptFacts(key);
+    if (pages.size() != 1)
+      return nullptr;
+    auto value = Json::parse(pages.front(), nullptr, false);
+    return !value.is_discarded() && valid(value) ? value : Json();
+  }
+
   /// Project the owning function's proved entry-SP coordinates. Frame aliases
   /// are instruction-specific; an unknown or overwritten register cannot keep
   /// the preceding alias. This also handles noncanonical prologues and chunks.
@@ -2379,17 +2413,13 @@ struct Listing::Impl {
     const auto inspect = engineSymbol<Inspect>("neverd_stack_frame_json");
     if (!wide || pointerSize != 8 || !inspect)
       return false;
-    const auto policy = stackFrames.find(owner);
-    const auto options =
-        policy == stackFrames.end() ? "{}" : policy->second.dump();
-    const auto flow = cache.query(
-        "frame-" + inventoryKey + "-" + std::to_string(owner) + "-" + options,
-        [&] { return takeJson(inspect(session, owner, options.c_str())); },
-        [](const Json &value) {
-          return value.is_object() && value.value("valid", false) &&
-                 value.contains("instructions") &&
-                 value.at("instructions").is_array();
-        });
+    const auto options = stackFrameOptions(owner);
+    auto flow = keptFact(frameFactsKey(owner, options), validFramePage);
+    if (flow.is_null())
+      flow = cache.query(
+          "frame-" + inventoryKey + "-" + std::to_string(owner) + "-" + options,
+          [&] { return takeJson(inspect(session, owner, options.c_str())); },
+          validFramePage);
     if (flow.is_null())
       return false;
     const auto &rows = flow.at("instructions");
@@ -2454,7 +2484,8 @@ struct Listing::Impl {
       body.frame.emplace(offset, bytes);
       covered = offset + bytes;
     }
-    if (policy != stackFrames.end())
+    if (const auto policy = stackFrames.find(owner);
+        policy != stackFrames.end())
       for (const auto &variable :
            policy->second.value("variables", Json::array())) {
         const auto offset =
@@ -2683,23 +2714,27 @@ struct Listing::Impl {
       const auto entry = ownerOf(index).entry;
       cursor = 0; // A continuation may precede its function's entry.
       std::optional<std::uint64_t> previousAddress;
-      for (;;) {
-        const auto page = cache.query(
-            "disasm-" + inventoryKey + "-" + std::to_string(entry) + "-" +
-                std::to_string(cursor),
-            [&] {
-              return takeJson(functionDisasm(
-                  session, entry, cursor,
-                  ::neverd::limits::worker::kListingMaxDecodeChunk,
-                  NEVERD_DISASM_FLOW | NEVERD_DISASM_STACK |
-                      NEVERD_DISASM_OPERANDS));
-            },
-            [](const Json &value) {
-              return value.is_object() && value.value("lift_complete", false) &&
-                     value.contains("instructions") &&
-                     value.at("instructions").is_array() &&
-                     value.contains("next_address");
-            });
+      const auto kept = keptFacts ? keptFacts(disasmFactsKey(entry))
+                                  : std::vector<std::string>();
+      for (std::size_t keptPage = 0;;) {
+        Json page;
+        if (keptPage < kept.size()) {
+          page = Json::parse(kept[keptPage++], nullptr, false);
+          if (page.is_discarded() || !validDisasmPage(page))
+            page = nullptr;
+        }
+        if (page.is_null())
+          page = cache.query(
+              "disasm-" + inventoryKey + "-" + std::to_string(entry) + "-" +
+                  std::to_string(cursor),
+              [&] {
+                return takeJson(functionDisasm(
+                    session, entry, cursor,
+                    ::neverd::limits::worker::kListingMaxDecodeChunk,
+                    NEVERD_DISASM_FLOW | NEVERD_DISASM_STACK |
+                        NEVERD_DISASM_OPERANDS));
+              },
+              validDisasmPage);
         if (page.is_null()) {
           const auto reason = takeString(neverd_last_error(session));
           if (previousAddress)
@@ -4995,6 +5030,66 @@ bool Listing::cachePending() const { return impl_->cache.pending(); }
 void Listing::flushCacheOne() { impl_->cache.flushOne(); }
 void Listing::flushCache() { impl_->cache.flush(); }
 Json Listing::cacheStats() const { return impl_->cache.stats(); }
+
+std::uint64_t Listing::cacheGeneration() const {
+  return impl_->cache.generation();
+}
+
+void Listing::setKeptFacts(KeptFacts kept) {
+  impl_->keptFacts = std::move(kept);
+}
+
+std::vector<std::pair<std::string, std::vector<std::string>>>
+Listing::factsToKeep(std::uint64_t entry,
+                     const std::function<bool(const std::string &)> &wanted) {
+  auto &d = *impl_;
+  std::vector<std::pair<std::string, std::vector<std::string>>> facts;
+  auto *function = d.functionAtEntry(entry);
+  // A chunk's look asks what its owner's does.
+  if (!function || function->chunkOf)
+    return facts;
+  d.readPresentation(*function);
+  if (d.functionDisasm && d.native && !function->thunk &&
+      wanted(Impl::disasmFactsKey(entry))) {
+    std::vector<std::string> pages;
+    std::uint64_t cursor = 0;
+    for (;;) {
+      const auto text = takeString(d.functionDisasm(
+          d.session, entry, cursor,
+          ::neverd::limits::worker::kListingMaxDecodeChunk,
+          NEVERD_DISASM_FLOW | NEVERD_DISASM_STACK | NEVERD_DISASM_OPERANDS));
+      const auto page = Json::parse(text, nullptr, false);
+      if (page.is_discarded() || !Impl::validDisasmPage(page)) {
+        pages.clear();
+        break;
+      }
+      pages.push_back(text);
+      const auto next = page.at("next_address");
+      if (next.is_null())
+        break;
+      const auto nextAddress = jsonAddress(next);
+      if (nextAddress <= cursor) {
+        pages.clear();
+        break;
+      }
+      cursor = nextAddress;
+    }
+    if (!pages.empty())
+      facts.emplace_back(Impl::disasmFactsKey(entry), std::move(pages));
+  }
+  using Inspect = const char *(*)(neverd_session_t, neverd_va_t, const char *);
+  const auto options = d.stackFrameOptions(entry);
+  if (const auto inspect = engineSymbol<Inspect>("neverd_stack_frame_json");
+      inspect && d.wide && d.pointerSize == 8 &&
+      wanted(Impl::frameFactsKey(entry, options))) {
+    auto text = takeString(inspect(d.session, entry, options.c_str()));
+    const auto page = Json::parse(text, nullptr, false);
+    if (!page.is_discarded() && Impl::validFramePage(page))
+      facts.emplace_back(Impl::frameFactsKey(entry, options),
+                         std::vector<std::string>{std::move(text)});
+  }
+  return facts;
+}
 
 void Listing::setStackFrames(const Json &rows, const std::string &imageHash) {
   impl_->stackFrames.clear();

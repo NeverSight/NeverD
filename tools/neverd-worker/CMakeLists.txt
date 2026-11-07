@@ -270,6 +270,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/browse_cache_test.py"
                 "$<TARGET_FILE:neverd-worker>")
       set_tests_properties(NeverDWorkerBrowseCache PROPERTIES TIMEOUT 120)
+      add_test(NAME NeverDWorkerListingFacts
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/listing_facts_test.py"
+                "$<TARGET_FILE:neverd-worker>")
+      set_tests_properties(NeverDWorkerListingFacts PROPERTIES TIMEOUT 120)
       add_test(NAME NeverDWorkerPEListingFacts
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/pe_listing_facts_test.py"
                 "$<TARGET_FILE:neverd-worker>")

@@ -14,6 +14,7 @@
 
 #include "ResourceLimits.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <limits>
@@ -55,26 +56,49 @@ RenderStore::RenderStore(fs::path folder, const std::string &identity,
                          bool writable)
     : folder_(std::move(folder)), directory_(folder_ / identity),
       writable_(writable) {
-  std::error_code error;
-  for (fs::directory_iterator file(directory_, error), end;
-       !error && file != end; file.increment(error))
-    if (file->path().extension() == FileExtension)
-      readFile(file->path());
+  refresh();
 }
 
-void RenderStore::readFile(const fs::path &path) {
-  namespace limits = ::neverd::limits::worker;
+void RenderStore::refresh() {
   std::error_code error;
-  const std::uint64_t size = fs::file_size(path, error);
+  for (fs::directory_iterator entry(directory_, error), end;
+       !error && entry != end; entry.increment(error)) {
+    if (entry->path().extension() != FileExtension)
+      continue;
+    auto file = std::find_if(files_.begin(), files_.end(), [&](const File &at) {
+      return at.path == entry->path();
+    });
+    if (file == files_.end())
+      file = files_.insert(files_.end(), File{entry->path(), nullptr, 0});
+    walkFile(*file);
+  }
+}
+
+void RenderStore::walkFile(File &file) {
+  namespace limits = ::neverd::limits::worker;
+  // What this session writes is known already.
+  if (output_.is_open() && file.path == files_[outputFile_].path)
+    return;
+  std::error_code error;
+  const std::uint64_t size = fs::file_size(file.path, error);
   if (error || size < FileMagic.size())
     return;
-  auto input = std::make_unique<std::ifstream>(path, std::ios::binary);
-  std::string magic(FileMagic.size(), '\0');
-  if (!input->read(magic.data(), static_cast<std::streamsize>(magic.size())) ||
-      magic != FileMagic)
-    return;
-  const auto file = files_.size();
-  std::uint64_t at = FileMagic.size();
+  if (!file.input) {
+    auto input = std::make_unique<std::ifstream>(file.path, std::ios::binary);
+    std::string magic(FileMagic.size(), '\0');
+    if (!input->read(magic.data(),
+                     static_cast<std::streamsize>(magic.size())) ||
+        magic != FileMagic)
+      return;
+    file.input = std::move(input);
+    file.walked = FileMagic.size();
+  }
+  auto &input = file.input;
+  input->clear();
+  input->seekg(static_cast<std::streamoff>(file.walked));
+  const auto index = static_cast<std::size_t>(&file - files_.data());
+  auto &at = file.walked;
+  // A session may be writing the last record, or have ended within it.
   while (size - at >= sizeof(RecordHeader)) {
     RecordHeader header;
     if (!input->read(reinterpret_cast<char *>(&header), sizeof(header)))
@@ -92,11 +116,10 @@ void RenderStore::readFile(const fs::path &path) {
     bytes_ += header.dataBytes;
     records_.insert_or_assign(
         std::move(key),
-        Record{file, data, header.dataBytes, header.checksum, header.pages});
+        Record{index, data, header.dataBytes, header.checksum, header.pages});
     at = data + header.dataBytes;
     input->seekg(static_cast<std::streamoff>(at));
   }
-  files_.push_back(std::move(input));
 }
 
 std::vector<std::string> RenderStore::read(const std::string &key) {
@@ -104,7 +127,7 @@ std::vector<std::string> RenderStore::read(const std::string &key) {
   if (found == records_.end() || !found->second.pages)
     return {};
   const Record record = found->second;
-  auto &input = *files_[record.file];
+  auto &input = *files_[record.file].input;
   input.clear();
   input.seekg(static_cast<std::streamoff>(record.offset));
   std::string data(record.dataBytes, '\0');
@@ -161,7 +184,7 @@ bool RenderStore::startFile() {
     return false;
   outputFile_ = files_.size();
   outputBytes_ = FileMagic.size();
-  files_.push_back(std::move(input));
+  files_.push_back(File{path, std::move(input), FileMagic.size()});
   return true;
 }
 

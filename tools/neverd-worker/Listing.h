@@ -49,6 +49,19 @@ public:
   void flushCacheOne();
   void flushCache();
   Json cacheStats() const;
+  /// Advances with each change of what the browse cache's identity reads.
+  std::uint64_t cacheGeneration() const;
+  /// What an earlier session or a replica kept of the engine's answers to what
+  /// a function's first look asks: the pages under \p key, or none.
+  using KeptFacts =
+      std::function<std::vector<std::string>(const std::string &)>;
+  void setKeptFacts(KeptFacts kept);
+  /// The engine's answers to what a first look at the function at \p entry
+  /// asks, for setKeptFacts to give back, without those \p wanted refuses by
+  /// their key.  None for an answer the look would not take.
+  std::vector<std::pair<std::string, std::vector<std::string>>>
+  factsToKeep(std::uint64_t entry,
+              const std::function<bool(const std::string &)> &wanted);
   void setStackFrames(const Json &rows, const std::string &imageHash);
   /// The neverd_strings_ex_json options strings are found with, as JSON
   /// text; empty for the engine's defaults.

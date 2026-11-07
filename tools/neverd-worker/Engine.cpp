@@ -931,6 +931,16 @@ Json Engine::functionGraph(std::uint64_t address) {
   prepareFunction(address, "cfg");
   return backendJson(neverd_cfg_json(session_, address), true);
 }
+Json Engine::keptFunctionGraph(std::uint64_t address) {
+  (void)listing();
+  const auto kept = keptListingFacts(graphFactsKey(address));
+  if (kept.size() == 1) {
+    auto graph = Json::parse(kept.front(), nullptr, false);
+    if (validFunctionGraph(graph))
+      return graph;
+  }
+  return functionGraph(address);
+}
 void Engine::commentsChanged() {
   forgetNamedViews();
   graphs_.clear();
@@ -1770,6 +1780,8 @@ Listing &Engine::newListing() {
       std::any_of(codeEdits_.begin(), codeEdits_.end(),
                   [](const Json &row) { return row.contains("stack_frame"); });
   listing_->setStackFrames(codeEdits_, frames ? inputHash() : std::string());
+  listing_->setKeptFacts(
+      [this](const std::string &key) { return keptListingFacts(key); });
   const auto project = projectJson();
   if (browseCacheEnabled_ && project.is_object() && project.contains("folder"))
     listing_->configureCache(
@@ -2049,7 +2061,7 @@ Json Engine::backgroundState() const {
   state["warm"] = warmJson();
   if (summaryState_ != SummaryState::Off)
     state["call_summaries"] = summaryJson();
-  if (renderAheadState_ != RenderAheadState::Off || renderStore_)
+  if (renderAheadState_ != RenderAheadState::Off || renderStore_ || factsStore_)
     state["render_ahead"] = renderAheadJson();
   return state;
 }
@@ -2187,6 +2199,7 @@ Json Engine::metadata() const {
           {"analysis_state", analyzed_ ? "complete" : "not_analyzed"},
           {"read_only", readOnly_},
           {"browse_cache", listing_ ? listing_->cacheStats() : Json()},
+          {"listing_facts", listingFactsJson()},
           {"dirty", dirty_},
           // How the file was read: for a binary file, its processor,
           // placement and platform, and whether detection chose the platform.
@@ -5810,7 +5823,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     const auto layout =
         projectId_ + ":" + revision() + ":" + key + ":" + metricsKey;
     auto snapshot = std::make_unique<GraphSnapshot>(
-        functionGraph(entry), key, layout, metrics,
+        keptFunctionGraph(entry), key, layout, metrics,
         metrics.valid()
             ? GraphRows([this](std::uint64_t start, std::uint64_t end) {
                 return listing().blockLines(start, end);
