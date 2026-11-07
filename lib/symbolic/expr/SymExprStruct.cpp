@@ -588,12 +588,37 @@ SymRef SymContext::mkIte(SymRef C, SymRef T, SymRef E) {
     return constValue(C).isZero() ? E : T;
   if (T == E)
     return T;
-  // ite(c, 1, 0) is c itself, the shape a lifted setcc produces.
-  if (width(T) == 1 && isConst(T) && isConst(E)) {
-    if (!constValue(T).isZero() && constValue(E).isZero())
-      return C;
-    if (constValue(T).isZero() && !constValue(E).isZero())
-      return mkNot(C);
+  // Scalar 0/1 selections and zero-extended predicates are the same carrier.
+  // Keep that identity across word-sized flag saves and byte-sized SETccs.
+  if (isConst(T) && isConst(E)) {
+    if (constValue(T).isOne() && constValue(E).isZero())
+      return mkZExt(C, width(T));
+    if (constValue(T).isZero() && constValue(E).isOne())
+      return mkZExt(mkNot(C), width(T));
+  }
+  // A one-bit selection with a constant arm is an ordinary Boolean gate.
+  if (width(T) == 1) {
+    if (isConst(T))
+      return isConstZero(T) ? mkAnd(mkNot(C), E) : mkOr(C, E);
+    if (isConst(E))
+      return isConstZero(E) ? mkAnd(C, T) : mkOr(mkNot(C), T);
+  }
+  // Keep the width of selected Boolean/subword carriers visible. Selecting
+  // two equally zero-extended words (or a fitting constant) needs just one
+  // extension, so later consumers see the exact common input range.
+  if (op(T) == SymOp::ZExt || op(E) == SymOp::ZExt) {
+    const auto Extended = op(T) == SymOp::ZExt ? T : E;
+    const uint32_t NarrowWidth = width(operand(Extended, 0));
+    auto Narrow = [&](SymRef R) -> SymRef {
+      if (op(R) == SymOp::ZExt && width(operand(R, 0)) == NarrowWidth)
+        return operand(R, 0);
+      if (isConst(R) && constValue(R).getActiveBits() <= NarrowWidth)
+        return mkConst(constValue(R).trunc(NarrowWidth));
+      return {};
+    };
+    const auto Yes = Narrow(T), No = Narrow(E);
+    if (Yes && No)
+      return mkZExt(mkIte(C, Yes, No), width(T));
   }
   return intern(SymOp::Ite, width(T), {C, T, E}, 0);
 }
