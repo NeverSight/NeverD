@@ -8865,7 +8865,11 @@ store out, as a C function leaves its caller's registers alone, so the
 prologue neither prints the caller's register as a stale value nor keeps a
 frame in byte storage. The MedIR text view shows the mark. Operations keep
 their positions, because call records index them. A save read for anything
-else stays a store, and binary lift and patch never mark one. On x86 the
+else stays a store, and binary lift and patch never mark one. The restore proof
+also follows unobserved zero extensions, including the Q-register update from
+an AArch64 D-register restore. A read of any derived value retains the save.
+HighIR removes unused restore temporaries before checking private save slots,
+while frame addresses still retain their original SSA identities. On x86 the
 projection also marks a pointer-width load of the slot at the entry stack
 pointer, in a called function whose stores never write that slot: it reads
 the return address the call pushed. HighC prints it as

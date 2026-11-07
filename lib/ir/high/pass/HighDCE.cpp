@@ -173,8 +173,7 @@ public:
           !E->IsIndirectCall &&
           intrinsicHasDiscardableStateRead(E->IntrinsicId, 1, E->Type->Size);
       if ((E->Kind == ExprKind::Call && !DiscardableRead) ||
-          E->Kind == ExprKind::Load ||
-          E->Kind == ExprKind::Store ||
+          E->Kind == ExprKind::Load || E->Kind == ExprKind::Store ||
           E->MemoryOrdering != NdMemoryOrdering::None ||
           E->MemoryAddressSpace != NdMemoryAddressSpace::Default) {
         Nodes[I].Observable = true;
@@ -874,9 +873,10 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   iterativeDCE(Func, Entries);
   const auto TPost = Clock::now();
 
-  // A shared epilogue can retain load temporaries and PHI chains for saved
-  // registers until DCE. Revisit home-slot preservation after those reads
-  // disappear, while addresses still have their original SSA identities.
+  // Drop unused restore temporaries before checking callee-save storage.
+  // Run this cleanup before renaming: the frame proof still resolves saved
+  // addresses through their original SSA identities.
+  postRenameCleanup(Func);
   stripPrologueEpilogue(Func);
   if (Image)
     elimUndefinedEntryScratchStores(Func, TargetArch, Image->abiFormat());
@@ -891,8 +891,6 @@ void MedToHighConverter::eliminateDeadStmts(HighFunc &Func) {
   LLVM_DEBUG(llvm::dbgs() << "    dce phase 14: var rename (" << Func.Name
                           << ", " << Func.Body.size() << " stmts)\n");
   renameVars(Func);
-
-  postRenameCleanup(Func);
 
   // Run semantic rewriting after every pass that substitutes expressions.
   // Its result is a shared DAG; feeding it back through alias propagation can

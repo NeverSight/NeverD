@@ -420,9 +420,11 @@ TEST(SourceAggregate, ThreeWordResultsUseOnlyTheDarwinArm64IndirectPointer) {
   EXPECT_FALSE(assignDarwinScalarSourceABI(Unsupported, Arch::AArch64, Error));
   Unsupported = *Hint;
   EXPECT_FALSE(assignDarwinSwiftSourceABI(Unsupported, Arch::AArch64, Error));
-  Unsupported = *Hint;
-  Unsupported.Parameters.push_back({"record", Hint->ReturnType});
-  EXPECT_FALSE(assignDarwinFixedSourceABI(Unsupported, Arch::AArch64, Error));
+  auto WithInput = *Hint;
+  WithInput.Parameters.push_back({"record", Hint->ReturnType});
+  ASSERT_TRUE(assignDarwinFixedSourceABI(WithInput, Arch::AArch64, Error));
+  EXPECT_TRUE(WithInput.Parameters.back().IndirectByValue);
+  EXPECT_TRUE(validateSourceABI(WithInput, Error));
   for (unsigned Mutation = 0; Mutation != 9; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto Bad = *Hint;
@@ -683,9 +685,15 @@ TEST(SourceAggregate, IndirectRecordsRejectPartialOrIncompatibleCarriers) {
         break;
       }
       }
-      EXPECT_FALSE(validateSourceABI(Bad, Error));
-      EXPECT_FALSE(Error.empty());
-      EXPECT_TRUE(sourceABIParameters(Bad).empty());
+      if (Mutation == 4 || Mutation == 5) {
+        // Natural non-HFA records use the same indirect pointer carrier.
+        EXPECT_TRUE(validateSourceABI(Bad, Error)) << Error;
+        EXPECT_FALSE(sourceABIParameters(Bad).empty());
+      } else {
+        EXPECT_FALSE(validateSourceABI(Bad, Error));
+        EXPECT_FALSE(Error.empty());
+        EXPECT_TRUE(sourceABIParameters(Bad).empty());
+      }
       EXPECT_FALSE(equalSourceABIs(H, Bad));
     }
     auto Stack = H;

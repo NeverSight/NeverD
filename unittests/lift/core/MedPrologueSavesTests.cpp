@@ -181,6 +181,21 @@ TEST_P(MedPrologueSaves, OnlyObservedRestoreJoinsKeepTheirSave) {
   }
 }
 
+TEST_P(MedPrologueSaves, OnlyUnobservedRestoredExtensionsKeepTheSave) {
+  for (bool Observed : {false, true}) {
+    SCOPED_TRACE(Observed);
+    MedFunc Func = pushedRbx();
+    auto &Ops = Func.Blocks.front().Ops;
+    MedVar Wide = temp(20);
+    Wide.Size *= 2;
+    Ops.insert(Ops.end() - 1, op(NdOp::INT_ZEXT, Wide, {temp(10)}));
+    if (Observed)
+      Ops.back() = op(NdOp::RETURN, none(), {Wide});
+    markStackAccesses(Func, Arch::X64, BinaryFormat::ELF);
+    EXPECT_EQ(save(Func).PrologueSave, !Observed);
+  }
+}
+
 TEST_P(MedPrologueSaves, AComputedValueIsNoSave) {
   MedFunc Func = pushedRbx();
   Func.Blocks[0].Ops[4] = op(NdOp::STORE, none(), {sp(1), rbx(1)});
