@@ -12143,3 +12143,70 @@ TEST(HighControlFlowSemantics, SimplifierPublishesSharedReplacementAtEveryUse) {
     EXPECT_FALSE(simplifyAllExprs(F.Body));
   }
 }
+
+TEST(HighControlFlowSemantics, LargeSourceDropsUnobservedBitsButKeepsLoads) {
+  for (bool MemoryRead : {false, true}) {
+    SCOPED_TRACE(MemoryRead);
+    MedFunc F;
+    F.Entry = 0x1000;
+    F.Name = "large_observed_bytes";
+    F.ReturnType = NdType::makeInt(8, false);
+    F.Blocks.resize(1);
+    auto &B = F.Blocks.front();
+    B.Id = 0;
+    B.StartAddr = F.Entry;
+    auto Temp = [](int Id, uint16_t Bytes) {
+      MedVar V;
+      V.Kind = MedVar::Temp;
+      V.Id = Id;
+      V.SSAVer = 1;
+      V.Size = Bytes;
+      return V;
+    };
+    // Select the large-function route while leaving the observed calculation
+    // small. Dead scalar padding must not change which bytes the return reads.
+    for (size_t I = 0; I <= limits::kMaxStructurableMedOps; ++I)
+      B.Ops.push_back(operation(NdOp::COPY, F.Entry + B.Ops.size(),
+                                Temp(100 + static_cast<int>(I), 8),
+                                {MedVar::makeConst(I, 8)}));
+    MedVar Byte = MedVar::makeUnspecified(1, Arch::X64);
+    if (MemoryRead) {
+      Byte = Temp(1, 1);
+      B.Ops.push_back(operation(NdOp::LOAD, F.Entry + B.Ops.size(), Byte,
+                                {MedVar::makeConst(0x8000, 8)}));
+    }
+    const auto Wide = Temp(2, 8), Shifted = Temp(3, 8), Answer = Temp(4, 8);
+    B.Ops.push_back(
+        operation(NdOp::INT_ZEXT, F.Entry + B.Ops.size(), Wide, {Byte}));
+    B.Ops.push_back(operation(NdOp::INT_RIGHT, F.Entry + B.Ops.size(), Shifted,
+                              {Wide, MedVar::makeConst(8, 8)}));
+    B.Ops.push_back(operation(NdOp::INT_OR, F.Entry + B.Ops.size(), Answer,
+                              {Shifted, MedVar::makeConst(7, 8)}));
+    B.Ops.push_back(
+        operation(NdOp::RETURN, F.Entry + B.Ops.size(), {}, {Answer}));
+    B.EndAddr = F.Entry + B.Ops.size();
+    auto High = MedToHighConverter().convert(F, Arch::X64);
+    unsigned Loads = 0;
+    walkStmts(High.Body, [&](const HighStmt &S) {
+      forEachExpr(S, [&](const ExprPtr &Root) {
+        auto Visit = [&](auto &&Self, const ExprPtr &E) -> void {
+          if (!E)
+            return;
+          Loads += E->Kind == ExprKind::Load;
+          E->forEachChildExpr([&](const ExprPtr &Child) { Self(Self, Child); });
+        };
+        Visit(Visit, Root);
+      });
+    });
+    EXPECT_EQ(Loads != 0, MemoryRead);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::COFF;
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(HighCEmitter().emit({High}, Out, Options));
+    EXPECT_EQ(Text.find("unknown value"), std::string::npos) << Text;
+    if (!MemoryRead)
+      EXPECT_EQ(execute(High, 0, true), 7u);
+  }
+}

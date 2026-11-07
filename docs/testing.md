@@ -21468,3 +21468,5 @@ recorded baseline; this change adds none and does not weaken the audit.
 `NeverDMedPhiPlacementTests` checks a 128-value live join across x86, x64, ARM and AArch64: every required temporary has one complete PHI with its actual incoming edge identities. The membership index is independent of PHI output order.
 
 `NeverDMedTempLivenessTests` checks that block-local temporary definitions need no join PHI, while cross-branch reads and loop-carried temporaries retain theirs. Register and stack carriers keep conservative implicit ABI-use handling.
+
+`HighControlFlowSemantics.LargeSourceDropsUnobservedBitsButKeepsLoads` forces the large-function route and checks exact value cleanup without removing a still-observable memory read.
