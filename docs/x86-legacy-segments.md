@@ -1476,3 +1476,8 @@ translation has set D. Raw failed/fixed results, actual clean source commits,
 dependency inputs, executable/compiler hashes and generated artifacts remain
 in the evidence archive. The PAE matrices do not certify a high-physical-address
 self-referential descriptor/PTE case.
+
+After the later SBF-only dev integration, both rebuilt SDKs pass another 260
+source and ordinary system-state checks, retaining 280 additional compiled
+libraries. The paging executables remain byte-identical to the complete
+qualification. The evidence records this integration commit separately.

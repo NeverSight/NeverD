@@ -4104,6 +4104,9 @@ cases across both SDKs and qualified P/E cores. A descriptor aliasing its own
 legacy PTE exposed a stale TR limit: cache publication now uses the busy
 operation's updated image, retaining the page-walk dirty bit. The failing
 observation and its repaired regressions are both retained.
+After the SBF-only dev merge, another 260 SDK/source checks pass and both
+paging executables remain byte-identical; those receipts retain their actual
+integration commit.
 Task switching and the other machine-state domains still gate the final LLVM
 release; the production pin remains r6.
 
