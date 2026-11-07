@@ -194,8 +194,10 @@ void jumpLocalUnwinds(std::vector<HighStmt> &Stmts,
 /// follows a branch that returns becomes that branch's other arm, a `return`
 /// code still follows jumps past that code, and what a return's value does
 /// stays.  False when one is left in a nested `__try`, which it could leave
-/// only as a jump.
-bool settleHandlerReturns(std::vector<HighStmt> &Body);
+/// only as a jump.  The `return`s at \p Leaving leave the function itself, as
+/// an x86 `__finally` that returns does, and stay.
+bool settleHandlerReturns(std::vector<HighStmt> &Body,
+                          const std::set<va_t> *Leaving = nullptr);
 
 /// Remove from a handler's body the computed values nothing reads any more,
 /// such as those only its `return` read.

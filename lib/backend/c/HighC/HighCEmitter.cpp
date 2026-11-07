@@ -2308,7 +2308,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     // `AbnormalTermination()` in a projected `__finally` is an <excpt.h>
     // intrinsic, included wherever an SEH region is printed; declaring it
     // would conflict with that header.
-    if (Name == "AbnormalTermination")
+    if (Name == "AbnormalTermination" || Name == "GetExceptionCode" ||
+        Name == "GetExceptionInformation")
       continue;
 
     std::string CleanName = Name;

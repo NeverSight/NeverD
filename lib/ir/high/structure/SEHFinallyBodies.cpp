@@ -1165,8 +1165,8 @@ std::set<va_t> landingAddresses(const std::vector<HighStmt> &Stmts) {
 /// Settles the `return`s of a handler's body for the clause that holds it.
 class ReturnSettler {
 public:
-  explicit ReturnSettler(std::vector<HighStmt> &Body)
-      : Body(Body), Labels(landingAddresses(Body)) {}
+  ReturnSettler(std::vector<HighStmt> &Body, const std::set<va_t> *Leaving)
+      : Body(Body), Labels(landingAddresses(Body)), Leaving(Leaving) {}
 
   bool run() {
     if (!settle(Body, /*Tail=*/true, /*InTry=*/false))
@@ -1183,8 +1183,13 @@ public:
 private:
   std::vector<HighStmt> &Body;
   std::set<va_t> Labels;
+  const std::set<va_t> *Leaving;
   /// Where a `return` that is not at the clause's end jumps to.
   std::optional<va_t> EndLabel;
+
+  bool leaves(const HighStmt &Return) const {
+    return Leaving && Leaving->count(Return.Addr);
+  }
 
   bool labelFollows(const std::vector<HighStmt> &Stmts, size_t I) const {
     return std::any_of(
@@ -1199,12 +1204,15 @@ private:
     // A last `return` that does nothing else leaves its statement before it
     // at the end of the clause.
     while (Tail && !Stmts.empty() && Stmts.back().Kind == StmtKind::Return &&
-           !Labels.count(Stmts.back().Addr) && !returnedWork(Stmts.back()))
+           !Labels.count(Stmts.back().Addr) && !leaves(Stmts.back()) &&
+           !returnedWork(Stmts.back()))
       Stmts.pop_back();
     for (size_t I = 0; I < Stmts.size(); ++I) {
       const bool Last = I + 1 == Stmts.size();
       switch (Stmts[I].Kind) {
       case StmtKind::Return: {
+        if (leaves(Stmts[I]))
+          break;
         if (InTry)
           return false;
         std::optional<HighStmt> Work = returnedWork(Stmts[I]);
@@ -1215,6 +1223,15 @@ private:
           Stmts.resize(Keep);
         else
           Stmts.erase(Stmts.begin() + static_cast<ptrdiff_t>(Keep));
+        // A jump that lands on the `return` still lands here.
+        if (Labels.count(Addr)) {
+          HighStmt Anchor;
+          Anchor.Kind = StmtKind::Block;
+          Anchor.Addr = Addr;
+          Stmts.insert(Stmts.begin() + static_cast<ptrdiff_t>(Keep),
+                       std::move(Anchor));
+          ++Keep;
+        }
         if (Work) {
           Stmts.insert(Stmts.begin() + static_cast<ptrdiff_t>(Keep),
                        std::move(*Work));
@@ -1382,9 +1399,10 @@ void inlineExceptArms(std::vector<HighStmt> &Stmts,
 
 } // namespace
 
-bool settleHandlerReturns(std::vector<HighStmt> &Body) {
+bool settleHandlerReturns(std::vector<HighStmt> &Body,
+                          const std::set<va_t> *Leaving) {
   inlineExceptArms(Body, Body);
-  return ReturnSettler(Body).run();
+  return ReturnSettler(Body, Leaving).run();
 }
 
 namespace {

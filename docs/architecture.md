@@ -16152,6 +16152,60 @@ certified, or whose body is unavailable, keeps its address comment, which is the
 whole clause; the comment otherwise stays next to the code it names. The
 projection runs in the plain-C view as well as the C++ one, because SEH is C.
 
+An x86 `_except_handler3` or `_except_handler4` frame prints the same clauses
+from its own code, in the decompile view only. That view defers the native
+registration proofs, so `lib/ir/low/X86/RegistrationDisplayFrame.cpp` reads what
+to print from the instructions into `RegistrationDisplayFacts`, which grant a
+native reconstruction nothing: the try level of each stretch of code, from the
+stores into the frame's level slot and from `_local_unwind4` or `_local_unwind2`,
+which leaves it at `stop`; which code only one runtime entry runs; and where the
+prologue puts the frame and stack pointers, biased (`lea ebp, [esp - 0x70]`) or
+built by `__SEH_prolog4`. What only serves the runtime goes: the level stores, the
+record, the encoded table and cookie, the saved registers, the save of the stack
+pointer an `__except` handler's `mov esp, [ebp - 0x18]` reads as the constant
+distance it is, and each local unwind, whose `return` or `goto` says the same in
+C. A `__finally` is one body in the function, entered by the runtime at the
+scope's handler and on the normal path by a `call`, possibly past the registers
+the handler reloads (`PipelineAnalysis`' `analysisFinallyInteriors` keeps those
+addresses from becoming functions). A body whose `ret`s all put the frame pointer
+back is a `return` in the clause, so nothing runs after its `call`; a register the
+normal path goes on using is read back from the frame word the body wrote it to.
+A `__finally` body that reloads the saved stack pointer has left its clause, as a
+`goto` or `return` out of it does, and what follows is the function's again; the
+call past a body that never comes back ends its path, and code that runs on into a
+handler ends its `__try` there. A stdcall import through its slot pops what the
+caller pushed, as the other way to the code after a `__try`, through its handler,
+says by the saved stack pointer. `lib/ir/med/X86/RegistrationDisplayJoins.cpp` then
+gives each PHI of the stack or frame pointer that every way in agrees on that one
+distance from the entry stack pointer: these joins chain through a whole function,
+and no bounded proof of where the frame is follows them.
+
+Control-flow structuring knows nothing of scopes, and /O2 lays a scope's code out
+around its handlers. `lib/ir/high/structure/X86/X86RegistrationRegions.cpp` puts
+every statement where its try level says, each scope being one `__try` in the list
+its first statement was found in and a clause holding only what one handler's
+runtime entry runs. A statement whose neighbours went elsewhere is reached by a jump,
+what falls off the end of a list goes on by one, and code nothing can tell guards
+from not keeps a scope whole between two of its statements. The statements of each
+list are then laid out with what jumps enter first and what a jump goes on to next,
+and the jumps to what runs next anyway go: leaving a `__try` by its end is a normal
+termination, unlike the jump a local unwind became, and a jump out of a `__finally`
+stays because it stops an unwind. A single entry that cannot come first, the head of
+a loop in the scope, is the first statement of the `__try` jumping to it. A scope a
+jump still enters, which C cannot say, prints as a block with its handler in a
+comment, and the others settle again without it. A clause starts at its handler
+whatever order its statements were found in, since nothing but the runtime enters
+it, and statements at one address stay together, since a jump to it lands on the
+first. A frame whose record is not where the runtime leaves EBP, as clang-cl's, is
+not read this way: its handlers' code keeps the block view. `lib/ir/high/structure/X86/X86RegistrationDisplay.cpp` runs this and takes the
+normal path's `call` of each body away. A filter's
+code leaves the listing as one expression (`HighEHClause::FilterValue`): branches
+are conditionals, what it does first a comma's left side, and the pointers the
+runtime leaves below the record `GetExceptionInformation()` and
+`GetExceptionCode()`, also where an `__except` arm reads the word a filter saved
+the code in. A filter one expression cannot say keeps its thunk's address and the
+scope still prints.
+
 A `return` or `goto` out of a `__try` compiles to a call of the runtime's
 `_local_unwind(TargetFrame, TargetIp)`. It runs the termination handler of
 each scope the jump leaves, innermost first, with the abnormal flag set and

@@ -43132,9 +43132,8 @@ TEST(HighCPointerAddresses, CorpusFuncLoadX86FilterThunksPrintTheirValue) {
 
 TEST(HighCPointerAddresses, CorpusFuncLoadX86SehProbeExceptAssignsResult) {
   // MSVC x86 `_except_handler3` plants the outlined except body in-function.
-  // Its filter calls another function. Retain that native entry and recover
-  // `Result = 41` on the same slot as `Result = -100`, without assigning the
-  // frame-dependent filter thunk an ordinary C ABI.
+  // Its filter calls another function, and its arm joins the normal path:
+  // `Result = 41` lands on the slot of `Result = -100`, read after the try.
   if (NEVERD_BINARY_CORPUS_ROOT[0] == '\0')
     GTEST_SKIP() << "windows-eh corpus root is not configured";
   const auto Path = std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
@@ -43162,38 +43161,35 @@ TEST(HighCPointerAddresses, CorpusFuncLoadX86SehProbeExceptAssignsResult) {
   const std::string Source =
       highcOnlyFunction(std::move(*Img), Entry, /*Portable=*/true);
   ASSERT_FALSE(Source.empty()) << Source << "\n" << Blocks << HighDump;
-  EXPECT_EQ(Source.find("__except ("), std::string::npos) << Source << "\n"
-                                                          << Blocks << HighDump;
-  EXPECT_NE(Source.find("filter @ 0x40109D, handler @ 0x4010AA"),
-            std::string::npos)
+  // The filter is the call it makes, on the pointers the runtime holds.
+  EXPECT_NE(Source.find("__except (sub_401000("), std::string::npos) << Source;
+  EXPECT_NE(Source.find("GetExceptionInformation()"), std::string::npos)
       << Source;
-  const size_t FilterAt = Source.find("L_40109D:");
-  ASSERT_NE(FilterAt, std::string::npos) << Source;
-  const size_t NativeFilterCall = Source.find("sub_401000(", FilterAt);
-  EXPECT_NE(NativeFilterCall, std::string::npos) << Source;
-  // The recovered frame maps [ebp-28] to entry ESP-32 on every path.
-  // Both stores and the continuation must access those same four bytes:
-  // the frame record's member there.
-  const auto Joined = frameRecordMemberAt(Source, "frame_base - 32", "");
-  ASSERT_TRUE(Joined) << Source << "\n" << Blocks << HighDump;
-  const size_t Normal = Source.find(*Joined + " = 0xFFFFFF9C;");
-  const size_t Handler = Source.find(*Joined + " = 0x29;");
+  EXPECT_EQ(Source.find("_except_handler3("), std::string::npos) << Source;
+  const size_t TryAt = Source.find("__try {");
+  const size_t ExceptAt = Source.find("} __except (");
+  ASSERT_NE(TryAt, std::string::npos) << Source;
+  ASSERT_NE(ExceptAt, std::string::npos) << Source;
+  // Both assignments write the one slot, each on its side of the clause.
+  const std::string Joined = assignedNameBefore(Source, "= 0xFFFFFF9C;");
+  ASSERT_FALSE(Joined.empty()) << Source;
+  const size_t Normal = Source.find(Joined + " = 0xFFFFFF9C;");
+  const size_t Handler = Source.find(Joined + " = 0x29;");
   ASSERT_NE(Normal, std::string::npos) << Source << "\n" << Blocks << HighDump;
   ASSERT_NE(Handler, std::string::npos) << Source << "\n" << Blocks << HighDump;
-  const size_t ExceptAt = Source.find("L_4010AA:");
-  ASSERT_NE(ExceptAt, std::string::npos) << Source;
-  EXPECT_LT(NativeFilterCall, ExceptAt) << Source;
-  const std::string HandlerText = Source.substr(ExceptAt);
+  EXPECT_LT(TryAt, Normal) << Source;
   EXPECT_LT(Normal, ExceptAt) << Source;
   EXPECT_GT(Handler, ExceptAt) << Source;
-  const auto GlobalStore = sourceLineContaining(HandlerText, "dword_4040C8 = ");
-  EXPECT_NE(GlobalStore.find(*Joined), std::string_view::npos) << Source;
-  const auto Return = sourceLineContaining(HandlerText, "return ");
+  // One continuation reads it, past the clause.
+  const auto GlobalStore = sourceLineContaining(Source, "dword_4040C8 = ");
+  ASSERT_FALSE(GlobalStore.empty()) << Source;
+  EXPECT_NE(GlobalStore.find(Joined), std::string_view::npos) << Source;
+  EXPECT_GT(Source.find("dword_4040C8 = "), Handler) << Source;
+  const auto Return = sourceLineContaining(Source, "return ");
   ASSERT_FALSE(Return.empty()) << Source;
-  EXPECT_NE(Return.find(*Joined + " + 1;"), std::string_view::npos) << Source;
-  EXPECT_LT(HandlerText.find("dword_4040C8 = "), HandlerText.find("return "))
-      << Source;
-  EXPECT_EQ(HandlerText.find("return ", HandlerText.find("return ") + 7),
+  EXPECT_NE(Return.find(Joined + " + 1;"), std::string_view::npos) << Source;
+  EXPECT_LT(Source.find("dword_4040C8 = "), Source.find("return ")) << Source;
+  EXPECT_EQ(Source.find("return ", Source.find("return ") + 7),
             std::string::npos)
       << Source;
   EXPECT_EQ(llvm::StringRef(sourceLineContaining(Source, "sub_401040(")).trim(),
@@ -43203,31 +43199,16 @@ TEST(HighCPointerAddresses, CorpusFuncLoadX86SehProbeExceptAssignsResult) {
       llvm::StringRef(sourceLineContaining(Source, "dword_4040C8;")).trim(),
       "int32_t dword_4040C8;")
       << Source;
-  // Run the continuation on the joined slot's member holding the bits.
-  const auto Members = frameRecordMembers(Source);
-  const auto Slot =
-      llvm::find_if(Members, [](const FrameRecordMemberInfo &Member) {
-        return Member.Disp == -32 && !Member.Array;
-      });
-  ASSERT_NE(Slot, Members.end()) << Source;
-  EXPECT_EQ(Slot->Type, "uint32_t") << Source;
-  compileAndRunSehContinuation(
-      "uint8_t *frame = frameStorage;\nmemset(frame, 0xa5, 64);\n"
-      "memcpy(frame, &bits, 4);\nstruct { uint32_t " +
-          Slot->Name + "; } stack_storage;\nmemcpy(&stack_storage." +
-          Slot->Name + ", &bits, 4);\n" + std::string(GlobalStore) + "\n" +
-          std::string(Return),
-      "dword_4040C8", /*Portable=*/true);
+  // Run the continuation on the slot holding the bits.
+  compileAndRunSehContinuation("uint32_t " + Joined + " = bits;\n" +
+                                   std::string(GlobalStore) + "\n" +
+                                   std::string(Return),
+                               "dword_4040C8", /*Portable=*/false);
   EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
-  // The retained SSA copy of the exception code must reach the call unchanged.
-  const std::string Code = assignedNameBefore(Source, "= 0xE0421001;");
-  ASSERT_FALSE(Code.empty()) << Source;
   const auto Raise = callArguments(Source, "RaiseException", true);
   ASSERT_TRUE(Raise && Raise->size() == 4) << Source;
-  EXPECT_TRUE(llvm::StringRef((*Raise)[0]).trim() == Code ||
-              llvm::StringRef((*Raise)[0]).trim() == "0xE0421001")
-      << Source;
+  EXPECT_EQ(llvm::StringRef((*Raise)[0]).trim(), "0xE0421001") << Source;
   for (unsigned I = 1; I != 4; ++I)
     EXPECT_EQ(llvm::StringRef((*Raise)[I]).trim(), "0") << Source;
   EXPECT_FALSE(declaresLocal(Source, "var_m14")) << Source;

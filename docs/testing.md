@@ -18502,6 +18502,20 @@ table in `.text` as GNU ld keeps `__CTOR_LIST__`: the table is data, the
 pointer to it in `.data` points to data, and its entry is a slot that holds
 code.
 
+`unittests/lift/eh/X86SEHDisplayTests.cpp`, in the same binary, gives the pipeline
+an x86 `_except_handler3` frame byte for byte: `X86SEHDisplay.*` pins the `__finally`
+holding its body with the `call` gone and the address comment kept, the abnormal
+flag cleared inside the `__try`, the filter forms (a constant, `GetExceptionCode()`,
+a call passing `GetExceptionInformation()`, a write before the value), nested
+levels nesting their tries, a body that leaves the function ending the path of its
+`call`, an ordinary local that is no try level, a scope laid out in pieces being one
+try that starts where jumps enter it, an arm that does nothing, a jump out of a
+`__finally` staying a jump, code running on into a `__finally`, a loop on a
+register staying in its try, an entry inside a loop being a jump in the try, an arm
+starting at its handler, and a filter keeping its calls in order. `WindowsEHModesCorpus.EveryFinallyClauseOfXcpt4HoldsItsHandlerAsCode`
+holds the same for the whole of x86 `xcpt4`, with no loop that does nothing and every
+call a filter or the startup code's arm makes.
+
 `NeverDRelocatedFunctionEntryTests` checks LLVM's shared entry evidence across
 x86, x64, Thumb and AArch64 with PE, ELF and Mach-O images. It covers bounded
 relocation proofs, complete CFG tables, malformed metadata and cache reuse.

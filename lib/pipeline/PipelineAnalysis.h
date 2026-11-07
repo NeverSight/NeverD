@@ -29,6 +29,11 @@ namespace neverd::pipeline_detail {
 std::set<va_t> analysisCallbackEntries(const BinaryImage &Image,
                                        const PipelineOptions &Options);
 
+/// Where the normal path of an x86 `__finally` calls in past the registers its
+/// handler reloads: code of the function that holds the body, not functions.
+std::set<va_t> analysisFinallyInteriors(const BinaryImage &Image,
+                                        const PipelineOptions &Options);
+
 /// Every instruction has operations, but native state proof may be incomplete.
 /// Decode/lift failures and ambiguous local returns still disqualify the body.
 bool hasAnalysisInstructionBody(const LowFunc &Function);

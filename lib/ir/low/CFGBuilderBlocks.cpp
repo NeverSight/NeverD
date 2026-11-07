@@ -14,6 +14,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "X86/RegistrationDisplayFrame.h"
 #include "X86/RegistrationJumpRuntime.h"
 #include "X86/RegistrationSEHControl.h"
 #include "X86/RegistrationTryLevel.h"
@@ -784,6 +785,9 @@ void CFGBuilder::rebuildBlocks(LowFunc &Func) {
   resolveAArch64PAuthPrefixes(Func);
   resolveX86BoundedLeaves(Func);
   fixupFpuStack(Func, FinalView.SuppressedRelocationRoots);
+  if (Func.AnalysisOnly && Func.ExceptionMetadata &&
+      Func.ExceptionMetadata->Registration)
+    x86_registration::prepareRegistrationDisplayFrame(Func, CurrentImg);
 }
 
 //===----------------------------------------------------------------------===//

@@ -11,6 +11,7 @@ add_neverd_component_library(NeverDIRMed
   MedDynamicStack.cpp
   MedPointerAccesses.cpp
   X86/RegistrationFrame.cpp
+  X86/RegistrationDisplayJoins.cpp
   X86/RegistrationCallback.cpp
   X86/RegistrationCatchContext.cpp
   X86/RegistrationCleanupContext.cpp
