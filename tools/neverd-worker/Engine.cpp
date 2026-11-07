@@ -2552,9 +2552,10 @@ Json Engine::browseCacheIdentity() {
     if (!fs::exists(path))
       continue;
     std::ifstream input(path, std::ios::binary);
-    std::string bytes(static_cast<std::size_t>(fs::file_size(path)), '\0');
-    if (!input.read(bytes.data(), static_cast<std::streamsize>(bytes.size())))
+    if (!input)
       throw Error("cache_unavailable", "Cannot read project cache identity");
+    // As it is when opened: a queued edit may replace it at any moment.
+    const std::string bytes((std::istreambuf_iterator<char>(input)), {});
     shared[std::string(file.Path)] = BrowseCache::digest(bytes);
   }
   identity["shared"] = std::move(shared);
