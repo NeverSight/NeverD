@@ -8946,6 +8946,13 @@ reports both replacements and in-place changes to shared nodes. With candidates
 present, another cleanup round requires a statement deletion, inlining or
 simplification; rejected candidates alone do not repeat the same analysis. The
 existing stopping point without candidates and iteration limits remain unchanged.
+Copy and control-flow cleanup share use counts saturated at two. Each read
+root contributes a use even when roots share one expression object. The
+expression-identity table belongs to one immutable walk, and a new walk starts
+after rewrites. Its flat lookup storage never decides traversal or rewrite
+order; the pending walk keeps operand order and grows past its inline storage
+when necessary.
+
 Med-to-High lowering preserves CFG successors after branch threading, including
 sole successors with no remaining branch operation. When source order differs,
 it emits an explicit transfer after that edge's PHI copies.

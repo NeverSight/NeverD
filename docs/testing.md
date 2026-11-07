@@ -20464,6 +20464,19 @@ The focused NeverDCOFFExceptionModelTests target runs exception model and decode
 
 `X86LegacyAtomic.NeutralLogic*` checks neutral locked logic across widths and FS/GS, preserving memory, defined flags and DF while refusing denied writes, incomplete accesses and HLE. Non-neutral immediates keep the x64 native transaction and remain refused on i386. `NeverDX86NeutralAtomicSourceTests` executes both C routes for COFF/ELF/MachO at O0/O2 with UBSan, high-bit inputs and eight byte offsets; it requires an x64 host. Pair it with `NeverDHighControlFlowTests` and `NeverDHighCIntegerWidthTests` for declared-type changes.
 
+### Shared expression use counts
+
+`HighControlFlowSemantics.SharedExpressionKeepsItsRepeatedInputUse`,
+`CopyChainKeepsItsSharedSourceDefinition` and
+`CopyChainCountsUsesInEverySwitchArm` retain the independent interpreter and
+source-flow checks for shared reads. A shared expression must not become a
+single use merely because the counter has already seen its address. Run
+`NeverDHighControlFlowTests`, `NeverDHighCStoreForwardingTests`,
+`NeverDWindowsEHSourceTests` and `NeverDCPointerProjectionTests` for changes to
+this counter, together with the acceleration/allocator opt-out configuration.
+Performance checks include table construction/destruction and complete worker
+responses; a primitive improvement alone does not establish GUI latency.
+
 ### Predicate cleanup and independent call effects
 
 `HighSourceExpressions.PredicateCleanupKeepsDistinctIndirectCallEffects`
