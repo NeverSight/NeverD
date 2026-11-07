@@ -143,6 +143,7 @@ void ListingView::clear() {
   scrollJump_.stop();
   session_.queries().unsubscribeOwner(this);
   lines_.clear();
+  arrowEdges_.clear();
   pendingJump_.reset();
   pendingScrollAddress_ = 0;
   fetchingBefore_ = fetchingAfter_ = false;
@@ -423,6 +424,7 @@ void ListingView::accept(Fetch kind, const QJsonObject &payload, quint64 serial,
   }
   }
   trim();
+  rebuildArrowEdges();
   updateScrollBar();
   viewport()->update();
   // The next page goes out before the work of views that follow the
@@ -1076,24 +1078,18 @@ void ListingView::paintEvent(QPaintEvent *) {
   }
 }
 
-void ListingView::paintArrows(QPainter &painter, int first, int last) {
-  const auto &theme = Theme::instance();
-  struct Arrow {
-    int from, to;
-    bool conditional, current;
-    int level = 0;
-  };
+void ListingView::rebuildArrowEdges() {
+  arrowEdges_.clear();
   // First content line of each loaded item that a branch can land on.
   std::unordered_map<Address, int> landing;
+  landing.reserve(lines_.size());
   for (int i = 0; i < int(lines_.size()); ++i) {
     const auto &line = lines_[i];
-    if ((line.kind == QLatin1String("label") ||
-         line.kind == QLatin1String("insn") ||
-         line.kind == QLatin1String("header")) &&
-        !landing.count(line.item))
-      landing.emplace(line.item, i);
+    if (line.kind == QLatin1String("label") ||
+        line.kind == QLatin1String("insn") ||
+        line.kind == QLatin1String("header"))
+      landing.try_emplace(line.item, i);
   }
-  QVector<Arrow> arrows;
   const int count = int(lines_.size());
   for (int i = 0; i < count; ++i) {
     const auto &line = lines_[i];
@@ -1105,11 +1101,26 @@ void ListingView::paintArrows(QPainter &painter, int first, int last) {
       to = it->second;
     else
       to = *line.target < line.item ? -1 : count;
+    arrowEdges_.append({i, to, line.flow == QLatin1String("cjump")});
+  }
+}
+
+void ListingView::paintArrows(QPainter &painter, int first, int last) {
+  const auto &theme = Theme::instance();
+  struct Arrow {
+    int from, to;
+    bool conditional, current;
+    int level = 0;
+  };
+  QVector<Arrow> arrows;
+  const int count = int(lines_.size());
+  for (const auto &edge : arrowEdges_) {
+    const int i = edge.from, to = edge.to;
     const int low = std::min(i, to), high = std::max(i, to);
     if (high < first || low > last)
       continue;
-    arrows.push_back({i, to, line.flow == QLatin1String("cjump"),
-                      i == cursorLine_ || to == cursorLine_});
+    arrows.push_back(
+        {i, to, edge.conditional, i == cursorLine_ || to == cursorLine_});
   }
   std::sort(arrows.begin(), arrows.end(), [](const Arrow &a, const Arrow &b) {
     return std::abs(a.to - a.from) < std::abs(b.to - b.from);

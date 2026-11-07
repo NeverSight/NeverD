@@ -18,6 +18,7 @@
 #include <QAbstractScrollArea>
 #include <QPointer>
 #include <QTimer>
+#include <QVector>
 #include <deque>
 #include <optional>
 
@@ -163,6 +164,7 @@ private:
   int firstColumn(const Line &line) const;
   qreal columnX(const Line &line, int column) const;
   int textLeft() const;
+  void rebuildArrowEdges();
   void paintArrows(QPainter &painter, int first, int last);
   void showHint(const QPoint &position);
   void emitLocation();
@@ -171,6 +173,13 @@ private:
   Session &session_;
   const AddressSpace &space_;
   std::deque<Line> lines_;
+  struct ArrowEdge {
+    int from, to;
+    bool conditional;
+  };
+  // Endpoints depend only on the bounded loaded rows, not the viewport or
+  // cursor. Refresh them with those rows; choose visible lanes while painting.
+  QVector<ArrowEdge> arrowEdges_;
   bool atStart_ = false, atEnd_ = false;
   bool fetchingBefore_ = false, fetchingAfter_ = false;
   quint64 serial_ = 0;
