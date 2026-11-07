@@ -4057,3 +4057,143 @@ TEST(HighExprSimplify, ZeroMasksDiscardOnlyPureCompleteSelections) {
     EXPECT_TRUE(containsNode(After, Malformed));
   }
 }
+
+ExprPtr selectedBytes(const ExprPtr &Condition, const ExprPtr &Yes,
+                      const ExprPtr &No, unsigned YesOffset,
+                      uint16_t ResultBytes, NdOp Combine,
+                      bool SignExtend = false) {
+  ExprPtr Result;
+  for (unsigned I = 0; I != 4; ++I) {
+    auto Slice = [&](const ExprPtr &Source, unsigned Offset) {
+      auto E = HighExpr::makeBinop(NdOp::SUBBYTES, Source,
+                                   HighExpr::makeConst(Offset, 4));
+      E->Type = NdType::makeInt(1, true);
+      return E;
+    };
+    auto Select = std::make_shared<HighExpr>();
+    Select->Kind = ExprKind::BinOp;
+    Select->Op = NdOp::SELECT;
+    Select->Type = NdType::makeInt(1, true);
+    Select->Operands = {Condition, Slice(Yes, YesOffset + I), Slice(No, I)};
+    auto Piece = extendInteger(Select, ResultBytes, SignExtend);
+    if (I)
+      Piece = HighExpr::makeBinop(NdOp::INT_LEFT, Piece,
+                                  HighExpr::makeConst(8 * I, ResultBytes));
+    Result = Result ? HighExpr::makeBinop(Combine, Result, Piece) : Piece;
+  }
+  return Result;
+}
+
+size_t selectionCount(const ExprPtr &Root) {
+  size_t Count = 0;
+  std::vector<ExprPtr> Work{Root};
+  while (!Work.empty()) {
+    auto E = Work.back();
+    Work.pop_back();
+    Count += E->Kind == ExprKind::BinOp && E->Op == NdOp::SELECT;
+    Work.insert(Work.end(), E->Operands.begin(), E->Operands.end());
+  }
+  return Count;
+}
+
+TEST(HighExprSimplify, AdjacentSelectedBytesRecoverOneWordSelection) {
+  auto Condition = HighExpr::makeVar(tempOfSize(0, 8));
+  auto Yes = HighExpr::makeVar(tempOfSize(1, 16));
+  auto No = HighExpr::makeVar(tempOfSize(2, 4));
+  for (auto Combine : {NdOp::INT_OR, NdOp::INT_ADD})
+    for (uint16_t Bytes : {4, 8}) {
+      auto Before = selectedBytes(Condition, Yes, No, 4, Bytes, Combine);
+      EXPECT_EQ(selectionCount(Before), 4U);
+      auto After = basicSimplified(Before);
+      EXPECT_EQ(selectionCount(After), 1U) << After->str();
+      EXPECT_EQ(After->Type->Size, Bytes);
+    }
+}
+
+TEST(HighExprSimplify, SelectedByteRecoveryPreservesGuardsAndExtensions) {
+  auto Condition = HighExpr::makeVar(tempOfSize(0, 8));
+  auto Yes = HighExpr::makeVar(tempOfSize(1, 16));
+  auto No = HighExpr::makeVar(tempOfSize(2, 4));
+  for (auto Combine : {NdOp::INT_OR, NdOp::INT_ADD}) {
+    auto Signed = selectedBytes(Condition, Yes, No, 4, 4, Combine, true);
+    EXPECT_GT(selectionCount(basicSimplified(Signed)), 1U);
+    auto Guards = selectedBytes(Condition, Yes, No, 4, 4, Combine);
+    auto Last = Guards->Operands[1]->Operands[0]->Operands[0];
+    ASSERT_EQ(Last->Op, NdOp::SELECT);
+    Last->Operands[0] = HighExpr::makeVar(tempOfSize(3, 8));
+    EXPECT_GT(selectionCount(basicSimplified(Guards)), 1U);
+    auto Load = HighExpr::makeLoad(Condition, Yes->Type);
+    auto Reads = selectedBytes(Condition, Load, No, 4, 4, Combine);
+    EXPECT_TRUE(containsNode(basicSimplified(Reads), Load));
+    auto Effect = HighExpr::makeCall("next_guard", 0x401000, {});
+    Effect->Type = Condition->Type;
+    auto Effects = selectedBytes(Effect, Yes, No, 4, 4, Combine);
+    EXPECT_EQ(selectionCount(basicSimplified(Effects)), 4U);
+    auto Unknown =
+        selectedBytes(HighExpr::makeUndef(8), Yes, No, 4, 4, Combine);
+    EXPECT_EQ(selectionCount(basicSimplified(Unknown)), 4U);
+  }
+}
+
+TEST(HighExprSimplify, SelectedByteGuardsRetainTheirSignedWidening) {
+  auto Narrow = HighExpr::makeVar(tempOfSize(0, 1), NdType::makeInt(1, true));
+  auto Unsigned = HighExpr::makeVar(Narrow->Var, NdType::makeInt(1, false));
+  auto Guard = [&](const ExprPtr &Input) {
+    return HighExpr::makeBinop(NdOp::INT_EQUAL, integerCast(Input, 8),
+                               HighExpr::makeConst(uint64_t{0} - 128, 8));
+  };
+  auto Yes = HighExpr::makeVar(tempOfSize(1, 16));
+  auto No = HighExpr::makeVar(tempOfSize(2, 4));
+  auto Before = selectedBytes(Guard(Narrow), Yes, No, 4, 4, NdOp::INT_OR);
+  auto Last = Before->Operands[1]->Operands[0]->Operands[0];
+  ASSERT_EQ(Last->Op, NdOp::SELECT);
+  Last->Operands[0] = Guard(Unsigned);
+  EXPECT_GT(selectionCount(basicSimplified(Before)), 1U);
+}
+
+TEST(HighExprSimplify, RecoveredSelectedWordExecutesAtBothSourceWidths) {
+  auto Param = [](int Id, uint16_t Bytes) {
+    auto V = tempOfSize(Id, Bytes);
+    V.Kind = MedVar::Param;
+    return HighExpr::makeVar(V, NdType::makeInt(Bytes, false));
+  };
+  auto Condition = Param(0, 8), Yes = Param(1, 16), No = Param(2, 4);
+  for (uint16_t Bytes : {4, 8}) {
+    HighFunc F;
+    F.Name = "selected_word";
+    F.Entry = kEntry;
+    F.ReturnType = NdType::makeInt(Bytes, false);
+    F.Params = {{"guard", Condition->Type, kNoParamReg, 0},
+                {"yes", Yes->Type, kNoParamReg, 1},
+                {"no", No->Type, kNoParamReg, 2}};
+    F.Body = {returnValue(basicSimplified(
+        selectedBytes(Condition, Yes, No, 4, Bytes,
+                      Bytes == 4 ? NdOp::INT_OR : NdOp::INT_ADD)))};
+    ASSERT_EQ(selectionCount(F.Body.front().RetVal), 1U);
+    std::string C;
+    llvm::raw_string_ostream OS(C);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options));
+    OS.flush();
+    const std::string Program = C + R"C(
+int main(void) {
+  const uint64_t guards[] = {0, 1, 2, 0x100, 0x8000000000000000ULL, ~0ULL};
+  const uint64_t words[] = {0, 1, 0x80ff00ffULL, 0x8000000000000000ULL, ~0ULL};
+  for (unsigned g = 0; g != 6; ++g)
+    for (unsigned i = 0; i != 5; ++i)
+      for (unsigned j = 0; j != 5; ++j) {
+        const unsigned __int128 value =
+            ((unsigned __int128)words[i] << 64) | words[j];
+        const uint32_t no = (uint32_t)words[i];
+        const uint32_t want = guards[g] ? (uint32_t)(value >> 32) : no;
+        if (selected_word(guards[g], value, no) != (uint64_t)want)
+          return 1;
+      }
+  return 0;
+}
+)C";
+    source_call_execution_test::compileAndRun(Program, {"-O0"});
+    source_call_execution_test::compileAndRun(Program, {"-O2"});
+  }
+}
