@@ -323,9 +323,13 @@ facts, pointer kinds and memory-coordinate lanes. Once all four specialization
 slots are occupied, a completed summary can also be reused when its conservative
 read footprint proves that every changed word is unread. Loads, syscall read
 windows and nested callees share the footprint's address/alias rules. Unknown
-reads require matching the complete snapshot. Reads in a structurally
-nonreturning subtree without any reachable CALLX cannot affect return or target
-evidence; the whole-CFG fixed points establish both conditions. Reuse applies
+reads require matching the complete snapshot. Register and memory reads in a
+structurally nonreturning subtree guard reuse only when that subtree retains
+proven target evidence, including a target instantiated on its incoming edge.
+A returning child always keeps its input guards; reusing unknown evidence never
+creates a proof for different inputs. Register guards are relaxed only at the
+four-variant limit and for a stronger return or field result, preserving the
+existing exploration order while space remains. Reuse applies
 may-writes to the actual caller memory and restores proven output fields, never
 the old unread snapshot. The footprint and temporary comparisons consume the
 existing retained-state budget. Arguments and memory enter nested direct calls and
@@ -582,6 +586,9 @@ keys and static dependency masks remain intact. Schema 5 additionally records
 generalized unknown. Cached input fields outside the conditional mask are not
 additional requirements on such an edge. The four-summary and resource budgets
 remain unchanged.
+The conditional register mask reports the guards on retained return/target
+evidence. Before capacity, the solver can still explore stricter register keys
+to seek additional proofs in a previously unproven nonreturning subtree.
 
 Branch bounds also constrain live copies with the same singleton entry-relative
 origin or immutable capture. Identical numeric ranges alone do not establish
@@ -894,12 +901,27 @@ writes cannot restore a saved byte from an older invocation. The separate
 untyped descriptor byte buffer also remains projected out. Consuming caller
 narrow fields inside another function needs read-dependent input summaries and
 remains an explicit precision gap; this round does not claim that capability.
+
+Within one invocation, CFG joins retain a captured object's fields when its
+capture was introduced on only one incoming path. The pointer and its fields
+remain conditional on that path. A capture already introduced on both paths
+still loses a field if either path forgets it. Possible-alias writes
+continue to invalidate every overlapping capture, and backedges still widen
+capture identities. This is not an allocation freshness or non-aliasing proof.
+The local definition history is charged to retained state and is reset at a
+summary entry; incoming captures keep the ordinary must-fact join there.
+A newly captured scalar return of exactly `null` or one nonzero captured value
+can discard that capture's definition on the null branch. This relation follows
+exact register copies, ends at calls, backedges and incompatible joins, and
+does not apply to a capture already introduced on an earlier path or iteration.
+It does not assume that allocation succeeds.
+
 Concrete functions whose
 completed generic summary contains CALLX sites process CFG joins in reverse
 postorder. Generic summaries and concrete forwarding wrappers retain FIFO
 scheduling, including the order in which they request the four cached
 specializations.
-The value lattice, all-path joins and resource limits remain unchanged.
+The scalar value lattice and resource limits remain unchanged.
 A concrete summary's proven target can also retain an independently instantiated
 generic input-expression witness when their actual target addresses agree.
 That witness does not change the concrete summary's return or memory transfer.
