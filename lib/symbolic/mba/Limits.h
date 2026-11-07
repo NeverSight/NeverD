@@ -112,6 +112,9 @@ inline constexpr std::size_t kMaxResidueWitnessWork = 1024;
 /// allocation.  Clamping a larger request rather than refusing it keeps a
 /// caller that asked for more from losing the optimality it could have had.
 inline constexpr unsigned kSymBitwiseMaxTabulatedAtoms = 4;
+// Packing care/value pairs for six inputs needs a 4096-bit membership table.
+// Larger prime-cover rounds keep the sparse hash-based representation.
+inline constexpr unsigned kSymBitwiseDirectImplicantAtoms = 6;
 
 // lib/symbolic/mba/SymMBA.cpp
 // This runs only on a completed answer. A local builder rule would change

@@ -4913,6 +4913,10 @@ their inline elements. Merge flags and exact lookup tables reuse their storage
 across rounds within one cover search. The neighbor index
 is initialized only when an indexed round is reached. Deduplication keys retain
 both complete value/care fields; discovery order and work admission are unchanged.
+For up to six inputs, a packed care/value pair indexes an exact membership
+bit in at most 4096 bits. Only that used prefix is cleared each round; larger
+covers initialize the general hash set instead. This retains the same grown
+terms and greedy tie order without a hash lookup for every small-cover merge.
 The shared exact MBA layer also recombines weighted literal AND/OR/XOR/NOT
 views of one opaque word. It constructs per-bit coefficients and a constant,
 then independently checks the pointwise grammar, constant difference and every
