@@ -44,13 +44,13 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
     return invalid("event delivery requires a positive work budget");
   if (bool(S.Debug) != bool(O.Debug) ||
       (S.PendingEvent && S.PendingEvent->DataBreakpoints &&
-       (!S.Debug || O.Debug != X86InstructionDebugProfile::Watchpoints ||
+       (!S.Debug || !x86DebugWatchpoints(*O.Debug) ||
         (S.PendingEvent->DataBreakpoints & 0xf0))) ||
       (S.Debug && !x86InstructionDebugValid(
                       S.Debug->DR6, S.Debug->DR7, S.Debug->DebugCTL, *O.Debug,
                       M.controls().CR4, S.Debug->PendingData)))
     return invalid("legacy debug state requires a valid instruction-debug "
-                   "profile, DR6, supported DR7 and zero DEBUGCTL");
+                   "profile, DR6 and supported DR7/DEBUGCTL");
   auto Controls = M.controls();
   Controls.RFlags = S.EFlags;
   if (auto Error = validateX86LegacySegmentState(S.Core, Controls))
@@ -112,9 +112,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (!Segment && !Scalar && !FastSystem && !String && !Port && !Far &&
       !Single && !INT && !UD2 && !IRET && !RETF && !DebugRegister)
     return invalid("unsupported or malformed legacy step instruction");
-  if (DebugRegister &&
-      Options.Debug != X86InstructionDebugProfile::DebugRegisters &&
-      Options.Debug != X86InstructionDebugProfile::Watchpoints)
+  if (DebugRegister && (!Options.Debug || !x86DebugRegisters(*Options.Debug)))
     return invalid("MOV-DR requires the debug-register profile");
   if (Far && Options.FarTransfers != X86LegacyFarTransferProfile::OrderedFrame)
     return invalid("legacy far transfer requires a bound transfer profile");
@@ -128,8 +126,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       Options.Strings != X86LegacyStringProfile::ElementwiseDestinationFirst)
     return invalid(
         "legacy string step requires a bound element-progress profile");
-  if (String && String->Repeat &&
-      Options.Debug == X86InstructionDebugProfile::Watchpoints &&
+  if (String && String->Repeat && Options.Debug &&
+      x86DebugWatchpoints(*Options.Debug) &&
       (!Options.RepeatDebug || !Options.RepeatDebug->EndGroup))
     return invalid("legacy REP watchpoints require a debug-group binding");
   if (Scalar &&
@@ -195,6 +193,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       return invalid("BOUND requires known nontransactional MPX enable state");
   }
   const bool SingleStep = State.EFlags & 0x100;
+  const uint64_t DebugCTL = State.Debug ? State.Debug->DebugCTL : 0;
   if (SingleStep && (!State.Debug || !Options.Debug))
     return invalid("legacy TF stepping requires a debug-event producer");
   if (IRET && (State.EFlags & 0x4000))
@@ -269,8 +268,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
                             uint32_t(State.Core.Segments[1].Base + State.EIP),
                             State.EFlags, false)
                       : 0);
-      State.Debug->DR6 =
-          x86InstructionDebugStatus(State.Debug->DR6, FromSingleStep, Matches);
+      x86PublishInstructionDebug(*State.Debug, FromSingleStep, Matches);
     }
     State.SSBlocked = State.STIBlocked = false;
     return Enter({State.EIP, 0, 0, 1, X86LegacyEventKind::Trap}, Completed);
@@ -284,8 +282,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
         uint32_t(State.Core.Segments[1].Base + State.EIP), State.EFlags,
         State.SSBlocked);
     if (Matches) {
-      State.Debug->DR6 =
-          x86InstructionDebugStatus(State.Debug->DR6, false, Matches);
+      x86PublishInstructionDebug(*State.Debug, false, Matches);
       return Enter(
           {State.EIP, 0, 0, 1, X86LegacyEventKind::InstructionBreakpoint},
           false);
@@ -332,8 +329,9 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
           State.Debug ? x86CompleteDataBreakpoints(*State.Debug,
                                                    Observation.Matches, false)
                       : 0;
-      if (SingleStep || Data)
-        return EnterDebug(SingleStep, true, Data);
+      const bool Step = x86InstructionDebugStep(SingleStep, DebugCTL, true);
+      if (Step || Data)
+        return EnterDebug(Step, true, Data);
       return R;
     }
     if (R.BackingFault)
@@ -342,6 +340,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   auto Next = State.Core;
   uint32_t Flags = State.EFlags;
   bool SS = false, STI = false, RepeatContinue = false;
+  bool TakenBranch = false;
   auto NextIP = uint32_t(State.EIP + Instruction.size());
   if (!R.Exception && DebugRegister) {
     auto Bank = *State.Debug;
@@ -355,8 +354,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       if (Options.GeneralDetectFrame != X86GeneralDetectFrame::FaultResume &&
           Options.GeneralDetectFrame != X86GeneralDetectFrame::ClearResume)
         return invalid("general detect requires a saved-RF binding");
-      State.Debug->DR6 =
-          x86InstructionDebugStatus(State.Debug->DR6, false) | 0x2000;
+      x86PublishInstructionDebug(*State.Debug, false);
+      State.Debug->DR6 |= 0x2000;
       State.SSBlocked = State.STIBlocked = false;
       return Enter(
           {State.EIP, 0, 0, 1,
@@ -373,6 +372,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   } else if (!R.Exception && FastSystem) {
     R.Exception = detail::executeLegacyFastSystem(Next, Flags, NextIP,
                                                   State.Sysenter, *FastSystem);
+    TakenBranch = !R.Exception;
   } else if (!R.Exception && Far) {
     auto Staged = State;
     auto Got =
@@ -382,6 +382,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     if (Accept(*Got)) {
       Next = Staged.Core;
       NextIP = Staged.EIP;
+      TakenBranch = true;
     }
   } else if (!R.Exception && Segment) {
     auto Got = executeX86LegacySegmentInstruction(Next, Memory, Instruction,
@@ -431,6 +432,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       Next = Staged.Core;
       NextIP = Staged.EIP;
       Flags = Staged.EFlags;
+      TakenBranch = Got->TakenBranch;
     } else if (BoundMpx && Got->Exception && Got->Exception->Vector == 5) {
       // This is an architectural effect of #BR, before attempting IDT entry.
       // Unlike GPR/EIP/FLAGS staging, it survives delivery faults and #DF.
@@ -497,8 +499,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   if (RepeatContinue)
     R.Status = X86LegacyExecutionStatus::RepeatContinue;
   bool RepeatGroupContinues = false;
-  if (RepeatContinue && String &&
-      Options.Debug == X86InstructionDebugProfile::Watchpoints) {
+  if (RepeatContinue && String && Options.Debug &&
+      x86DebugWatchpoints(*Options.Debug)) {
     const uint32_t Mask = String->AddressBytes == 2 ? UINT16_MAX : UINT32_MAX;
     const auto &GPR = State.Core.GPR;
     RepeatGroupContinues = x86RepeatDebugDefers(
@@ -506,8 +508,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
         {State.EIP, Flags, GPR[1] & Mask, GPR[6] & Mask, GPR[7] & Mask,
          uint8_t(String->AddressBytes), uint8_t(String->Element.Bytes),
          String->SourceIndex, String->DestinationIndex,
-         String->Element.Operation ==
-             detail::X86LegacyScalarOperation::Compare});
+         String->Element.Operation == detail::X86LegacyScalarOperation::Compare,
+         DebugCTL});
   }
   // Sample TF at instruction entry, before POPF/IRET can change it. A MOV/POP
   // SS that establishes a shadow suppresses this trap, rather than postponing
@@ -517,8 +519,10 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
           ? x86CompleteDataBreakpoints(*State.Debug, Observation.Matches, SS,
                                        RepeatGroupContinues)
           : 0;
-  if ((SingleStep && !SS) || Data)
-    return EnterDebug(SingleStep && !SS, !RepeatContinue, Data);
+  const bool Step =
+      x86InstructionDebugStep(SingleStep, DebugCTL, TakenBranch) && !SS;
+  if (Step || Data)
+    return EnterDebug(Step, !RepeatContinue, Data);
   return R;
 }
 

@@ -84,6 +84,10 @@ enum class X64PagedAccess : uint64_t {
   PopFlags = 22,
   /// Authenticated original MOV-DR bytes are executed by the debug bank owner.
   DebugRegister = 23,
+  /// Actual Jump predicate (0/1), independent of target equality. Size is zero.
+  /// Bit 3 and bit 5 are access flags; neither may be part of a kind identity.
+  /// Only debug v2 source bodies publish this observation.
+  BranchDecision = 64,
 };
 
 struct X64PagedExchange {

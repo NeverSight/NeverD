@@ -112,6 +112,9 @@ TEST_F(X86UndefinedEffects, DefinedAndPreservedFlagsCreateNoArbitraryProducer) {
       {"mov eax, ecx", {0x89, 0xc8}},
       {"BMI2 SHLX", {0xc4, 0xe2, 0x71, 0xf7, 0xc0}},
       {"nop", {0x90}},
+      {"loop rcx", {0xe2, 0}},
+      {"loope ecx", {0x67, 0xe1, 0}},
+      {"loopne rcx", {0x66, 0xe0, 0}},
   };
   for (const auto &Case : Cases) {
     SCOPED_TRACE(Case.Name);

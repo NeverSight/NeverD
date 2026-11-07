@@ -63,6 +63,14 @@ The port transaction supplies a completed transfer receipt for I/O comparison.
 The same debug owner accepts an explicit REP group-boundary decision: target
 fast-string grouping can postpone MOVS/STOS data causes across completed
 elements without changing the existing elementwise memory/attempt owner.
+`BranchWatchpoints` additionally selects single-step causes using sampled TF,
+DEBUGCTL.BTF and the actual taken predicate. The legacy scalar owner returns
+that predicate; the x64 writer retains LowIR's condition in a debug-only
+operand observation. Equal target and fallthrough addresses do not erase it.
+Generated debug step/validation bridges use v2; old bridges refuse active BTF
+before fetch or producer polling. REP group inputs retain raw TF and DEBUGCTL
+separately. Shared cause/acceptance rules clear BTF on #DB, including retained
+entry failures, without treating software INT 1 as a hardware debug cause.
 `X86EventDeliveryOptions` owns the shared entry-attempt budget. Event owners
 retain a resumable next event when host work is exhausted, independently of
 instruction budgets and without replacing an architectural event by #DF.

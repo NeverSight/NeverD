@@ -15,6 +15,18 @@ lifetime. A userspace IRQ must wait for KVM's injection window: an immediate
 `KVM_INTERRUPT` while IF=0 is not a valid pending-event oracle.
 See [the generated execution contract](x86-paged-execution.md).
 
+`X64PagedBranchDebugTest.*` and `X86LegacyBranchDebugTest.*` qualify the explicit
+BTF profile. A child-owned Linux ptrace oracle executes original long64,
+protected32 and protected16 bytes with instruction/block stepping. Compare
+branch position, accumulator, count and stack delta; ptrace owns #DB entry and
+normalizes TF, so these are not full-state or raw DR6/DEBUGCTL comparisons.
+Zero-displacement taken/untaken conditions, LOOP, counter-zero branches and
+CALL/RET distinguish actual outcomes from PC inequality. Both generated C
+routes run through Clang/NeverC at O0/O2. Separate software cases cover BTF
+clearing, deferred/failed entry, v1 refusal and raw-TF REP group inputs. The
+local KVM masks DEBUGCTL.BTF; accepted MSR writes do not qualify execution.
+Repeat on both SDKs and P/E cores, retaining the precise oracle limitations.
+
 `X64PagedDebugTest.*` in `NeverDX64PagedExecutionTests` qualifies the opt-in
 instruction-step bank. Both C routes compile with Clang and optional NeverC at
 O0/O2; the original KVM CPU runs without guest-debug interception. Cases cover

@@ -77,7 +77,7 @@ void emitScheduledDriver(
       continue;
     OS << "status = ";
     if (Paged)
-      OS << (Options.PagedDebug ? "neverd_x64_paged_debug_validate_v1"
+      OS << (Options.PagedDebug ? "neverd_x64_paged_debug_validate_v2"
                                 : "neverd_x64_paged_validate_v1")
          << "(memory_context, (uint8_t *)state, 0x"
          << llvm::utohexstr(Unit.Address) << "ULL, "

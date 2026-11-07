@@ -1161,7 +1161,8 @@ typedef struct neverd_x64_event_v1 {
         Request->Options.PagedDebug
             ? "explicit nontransactional runtime debug profile: TF/ICEBP, "
               "execution comparators, MOV-DR/GD, or data/I/O watchpoints; "
-              "DEBUGCTL=0; entry TF, explicit REP data-debug groups and MOV-SS "
+              "optional BTF through the v2 branch-aware bridge; entry TF, "
+              "explicit REP data-debug groups and MOV-SS "
               "inhibition; DR6 published before #DB IDT entry; completed near "
               "transfers retain their pre-event state"
             : "TF excluded; no instruction-debug producer";

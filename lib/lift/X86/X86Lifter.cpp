@@ -782,6 +782,17 @@ bool hasAuditedLegacyIntegerForm(const cs_insn *Insn, Arch TargetArch) {
   case X86_INS_JECXZ:
   case X86_INS_JRCXZ:
     return X86.op_count == 1 && X86.operands[0].type == X86_OP_IMM;
+  case X86_INS_LOOP:
+  case X86_INS_LOOPE:
+  case X86_INS_LOOPNE:
+    // LOOP/LOOPcc decrement the address-sized counter and preserve all flags.
+    // No undefined output on completion. Legacy operand-sized target
+    // truncation has a separate execution owner; this audit is long-mode only.
+    return Is64Bit && X86.op_count == 1 && X86.operands[0].type == X86_OP_IMM &&
+           Insn->size == OpcodeOffset + 2 &&
+           Insn->bytes[OpcodeOffset] == (Insn->id == X86_INS_LOOP    ? 0xe2
+                                         : Insn->id == X86_INS_LOOPE ? 0xe1
+                                                                     : 0xe0);
   case X86_INS_SETE:
   case X86_INS_SETNE:
   case X86_INS_SETA:
