@@ -633,9 +633,9 @@ public:
           return nullptr;
         const auto Literal = Ctx.operand(R, 0);
         const auto Mask = Ctx.operand(Ctx.operand(R, 1), 0);
-        // Canonical addition packs a disjoint literal and masked word into
-        // OR. Independently recover that exact sum when checking emitted
-        // factors, keeping the complete masked word as its coordinate.
+        // A disjoint literal and masked word also form an exact sum when
+        // expressed as OR. Recover that sum independently for input and
+        // emitted factors, keeping the complete masked word as a coordinate.
         if ((Ctx.constValue(Literal) & Ctx.constValue(Mask)).isZero())
           Position->second = Reading::LiteralUnion;
       }

@@ -4871,8 +4871,8 @@ When its offset equals its sole word coefficient, the group emits the exact
 complement form before an enclosing residual sum can flatten that opportunity.
 Arithmetic factor verification also recognizes a literal OR a masked word as
 their sum when the complete masks prove them disjoint. It retains the masked
-word as an opaque coordinate, so canonical packing cannot hide a valid common
-coefficient. Traversal, flat-product admission and memoized polynomials use
+word as an opaque coordinate, so an explicitly packed input cannot hide a valid
+common coefficient. Traversal, flat-product admission and memoized polynomials use
 that same reading within the existing work and storage bounds.
 When enclosing arithmetic interleaves several such words, the same layer
 certifies each changed group and independently proves distribution against

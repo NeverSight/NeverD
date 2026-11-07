@@ -3437,7 +3437,7 @@ Independent arithmetic checks that replacement values are not substituted again.
 `AdditionFastPathsKeepPackedWordIdentities` retains forced-bit and union
 subtraction identities through the additive constructor's short paths.
 `PackedOffsetsPreserveCoefficientProofs` checks repeated coefficient extraction
-when canonical construction packs a disjoint offset into a masked word.
+with a disjoint offset and masked word, expressed as either addition or OR.
 `FoldedLiteralKeepsTheShortestCarrierOrientation` keeps folded constants in the
 single-word mask proof, including unscaled opaque residuals. Both synthesis
 regressions disable verification sampling and check independent full-width
