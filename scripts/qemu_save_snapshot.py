@@ -33,6 +33,8 @@ class SnapshotLimits:
     ram_bytes: int = 64 * 1024 * 1024 * 1024
     # Observations are bounded; exporting the entire guest is not this API.
     read_bytes: int = 1024 * 1024
+    # Bound the offline adapter's flattened map separately from RAM/page count.
+    physical_regions: int = 65_536
 
 
 @dataclass(frozen=True)
