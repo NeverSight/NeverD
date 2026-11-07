@@ -1,16 +1,31 @@
 {
   "triple": "arm64e-apple-macos13",
   "page_size": 256,
-  "routes": ["c", "llvmc"],
-  "optimizations": ["-O0", "-O2"],
-  "compile_flags": ["-std=c11", "-fblocks", "-fno-strict-aliasing", "-Werror=implicit-function-declaration", "-Werror=return-type"],
+  "routes": [
+    "c",
+    "llvmc"
+  ],
+  "optimizations": [
+    "-O0",
+    "-O2"
+  ],
+  "compile_flags": [
+    "-std=c11",
+    "-fblocks",
+    "-fno-strict-aliasing",
+    "-Werror=implicit-function-declaration",
+    "-Werror=return-type"
+  ],
   "declarations": "typedef struct Pair { long long low, high; } Pair; typedef struct Padded { int tag; long long value; } Padded; typedef struct Node { struct Node *next; long long value; } Node; typedef struct HFA { double a, b; } HFA; typedef struct FloatPair { float a, b; } FloatPair; typedef struct Nested { FloatPair first, second; } Nested; typedef struct Big { long long a, b, c; } Big; typedef struct LargeHFA { double a, b, c, d, e, f; } LargeHFA; typedef struct __attribute__((packed)) Packed { int a; long long b; } Packed; typedef union Union { double a; long long b; } Union; typedef struct __neverd_record_destination { long long low, high; } __neverd_record_destination; typedef struct __neverd_record_source { long long low, high; } __neverd_record_source;",
   "assembly_prefix": ".text\n.p2align 2\n",
   "assembly_entry": ".globl _{name}\n_{name}:\n  sub sp,sp,#16\n  str x30,[sp,#8]\n  mov x16,x0\n  mov x17,x1\n",
   "arguments": {
     "gp": "  mov x0,x2\n  mov x1,x3\n",
     "fp": "  fmov d0,x2\n  fmov d1,x3\n",
-    "nested": "  fmov d0,x2\n  lsr x9,x2,#32\n  fmov s1,w9\n  fmov d2,x3\n  lsr x9,x3,#32\n  fmov s3,w9\n"
+    "nested": "  fmov d0,x2\n  lsr x9,x2,#32\n  fmov s1,w9\n  fmov d2,x3\n  lsr x9,x3,#32\n  fmov s3,w9\n",
+    "var_pair": "  stp x2,x3,[sp]\n  mov w0,#7\n",
+    "var_aligned": "  str w2,[sp]\n  stp x3,x4,[sp,#16]\n  mov w0,#7\n",
+    "var_fixed_pair": "  stp x4,x5,[sp]\n  mov x0,x2\n  mov x1,x3\n"
   },
   "call": "  blraa x16,x17\n",
   "results": {
@@ -22,21 +37,254 @@
   },
   "assembly_exit": "  ldr x30,[sp,#8]\n  add sp,sp,#16\n  ret\n.p2align 2\n",
   "cases": [
-    {"name": "pair_scalar", "arguments": "gp", "result": "scalar", "declaration": "long long dispatch(Pair value)"},
-    {"name": "pair_result", "arguments": "gp", "result": "gp", "declaration": "Pair dispatch(Pair value)"},
-    {"name": "padded_result", "arguments": "gp", "result": "padded", "declaration": "Padded dispatch(Padded value)"},
-    {"name": "node_result", "arguments": "gp", "result": "gp", "declaration": "Node dispatch(Node value)"},
-    {"name": "hfa_result", "arguments": "fp", "result": "fp", "declaration": "HFA dispatch(HFA value)"},
-    {"name": "nested_result", "arguments": "nested", "result": "nested", "declaration": "Nested dispatch(Nested value)"},
-    {"name": "signed_wide", "arguments": "gp", "result": "gp", "declaration": "__int128 dispatch(__int128 value)"},
-    {"name": "unsigned_wide", "arguments": "gp", "result": "gp", "declaration": "unsigned __int128 dispatch(unsigned __int128 value)"},
-    {"name": "destination_name", "arguments": "gp", "result": "gp", "declaration": "__neverd_record_destination dispatch(__neverd_record_destination value)"},
-    {"name": "source_name", "arguments": "gp", "result": "gp", "declaration": "__neverd_record_source dispatch(__neverd_record_source value)"}
+    {
+      "name": "pair_scalar",
+      "arguments": "gp",
+      "result": "scalar",
+      "declaration": "long long dispatch(Pair value)"
+    },
+    {
+      "name": "pair_result",
+      "arguments": "gp",
+      "result": "gp",
+      "declaration": "Pair dispatch(Pair value)"
+    },
+    {
+      "name": "padded_result",
+      "arguments": "gp",
+      "result": "padded",
+      "declaration": "Padded dispatch(Padded value)"
+    },
+    {
+      "name": "node_result",
+      "arguments": "gp",
+      "result": "gp",
+      "declaration": "Node dispatch(Node value)"
+    },
+    {
+      "name": "hfa_result",
+      "arguments": "fp",
+      "result": "fp",
+      "declaration": "HFA dispatch(HFA value)"
+    },
+    {
+      "name": "nested_result",
+      "arguments": "nested",
+      "result": "nested",
+      "declaration": "Nested dispatch(Nested value)"
+    },
+    {
+      "name": "signed_wide",
+      "arguments": "gp",
+      "result": "gp",
+      "declaration": "__int128 dispatch(__int128 value)"
+    },
+    {
+      "name": "unsigned_wide",
+      "arguments": "gp",
+      "result": "gp",
+      "declaration": "unsigned __int128 dispatch(unsigned __int128 value)"
+    },
+    {
+      "name": "destination_name",
+      "arguments": "gp",
+      "result": "gp",
+      "declaration": "__neverd_record_destination dispatch(__neverd_record_destination value)"
+    },
+    {
+      "name": "source_name",
+      "arguments": "gp",
+      "result": "gp",
+      "declaration": "__neverd_record_source dispatch(__neverd_record_source value)"
+    },
+    {
+      "name": "variadic_pair",
+      "arguments": "var_pair",
+      "result": "gp",
+      "declaration": "Pair dispatch(int tag, ...)",
+      "variadic_types": [
+        "Pair"
+      ],
+      "inputs": [
+        "0x1122",
+        "0x3344"
+      ],
+      "expected": "0x22ee",
+      "callback": "Pair callback(int tag, ...) { va_list ap; va_start(ap, tag); Pair value = va_arg(ap, Pair); va_end(ap); if (tag != 7 || value.low != 0x1122 || value.high != 0x3344) __builtin_trap(); return (Pair){0x5566,0x7788}; }",
+      "call": "raw_call"
+    },
+    {
+      "name": "variadic_padded",
+      "arguments": "var_pair",
+      "result": "padded",
+      "declaration": "Padded dispatch(int tag, ...)",
+      "variadic_types": [
+        "Padded"
+      ],
+      "inputs": [
+        "0xcafebabe00001122ULL",
+        "0x3344"
+      ],
+      "expected": "0x22ee",
+      "callback": "Padded callback(int tag, ...) { va_list ap; va_start(ap, tag); Padded value = va_arg(ap, Padded); va_end(ap); if (tag != 7 || value.tag != 0x1122 || value.value != 0x3344) __builtin_trap(); return (Padded){0x5566,0x7788}; }",
+      "call": "raw_call"
+    },
+    {
+      "name": "variadic_hfa",
+      "arguments": "var_pair",
+      "result": "fp",
+      "declaration": "HFA dispatch(int tag, ...)",
+      "variadic_types": [
+        "HFA"
+      ],
+      "inputs": [
+        "0x3ff4000000000000ULL",
+        "0x4004000000000000ULL"
+      ],
+      "expected": "0x7ff0000000000000ULL",
+      "callback": "HFA callback(int tag, ...) { va_list ap; va_start(ap, tag); HFA value = va_arg(ap, HFA); va_end(ap); if (tag != 7 || value.a != 1.25 || value.b != 2.5) __builtin_trap(); return value; }",
+      "call": "raw_call"
+    },
+    {
+      "name": "variadic_nested",
+      "arguments": "var_pair",
+      "result": "nested",
+      "declaration": "Nested dispatch(int tag, ...)",
+      "variadic_types": [
+        "Nested"
+      ],
+      "inputs": [
+        "0x400000003f800000ULL",
+        "0x4080000040400000ULL"
+      ],
+      "expected": "0x7f400000",
+      "callback": "Nested callback(int tag, ...) { va_list ap; va_start(ap, tag); Nested value = va_arg(ap, Nested); va_end(ap); if (tag != 7 || value.first.a != 1.0f || value.first.b != 2.0f || value.second.a != 3.0f || value.second.b != 4.0f) __builtin_trap(); return value; }",
+      "call": "raw_call"
+    },
+    {
+      "name": "variadic_signed_wide",
+      "arguments": "var_pair",
+      "result": "gp",
+      "declaration": "__int128 dispatch(int tag, ...)",
+      "variadic_types": [
+        "__int128"
+      ],
+      "inputs": [
+        "0x1122",
+        "-1"
+      ],
+      "expected": "0xffffffffffffeeddULL",
+      "callback": "__int128 callback(int tag, ...) { va_list ap; va_start(ap, tag); __int128 value = va_arg(ap, __int128); va_end(ap); if (tag != 7 || (unsigned long long)value != 0x1122 || (value >> 64) != -1) __builtin_trap(); return value; }",
+      "call": "raw_call"
+    },
+    {
+      "name": "variadic_unsigned_wide",
+      "arguments": "var_aligned",
+      "result": "gp",
+      "declaration": "unsigned __int128 dispatch(int tag, ...)",
+      "variadic_types": [
+        "int",
+        "unsigned __int128"
+      ],
+      "inputs": [
+        "11",
+        "0x1122",
+        "0x3344"
+      ],
+      "expected": "0x2266",
+      "callback": "unsigned __int128 callback(int tag, ...) { va_list ap; va_start(ap, tag); int pad = va_arg(ap, int); unsigned __int128 value = va_arg(ap, unsigned __int128); va_end(ap); if (tag != 7 || pad != 11 || (unsigned long long)value != 0x1122 || (value >> 64) != 0x3344) __builtin_trap(); return value; }",
+      "call": "raw_call"
+    },
+    {
+      "name": "variadic_record_prefix",
+      "arguments": "var_fixed_pair",
+      "result": "gp",
+      "declaration": "Pair dispatch(Pair first, ...)",
+      "variadic_types": [
+        "Pair"
+      ],
+      "inputs": [
+        "0x1122",
+        "0x3344",
+        "0x5566",
+        "0x7788"
+      ],
+      "expected": "0x22ee",
+      "callback": "Pair callback(Pair first, ...) { va_list ap; va_start(ap, first); Pair value = va_arg(ap, Pair); va_end(ap); if (first.low != 0x1122 || first.high != 0x3344 || value.low != 0x5566 || value.high != 0x7788) __builtin_trap(); return value; }",
+      "call": "raw_call"
+    }
   ],
   "refused": [
     "Big dispatch(Pair value)",
     "long long dispatch(LargeHFA value)",
     "long long dispatch(Packed value)",
-    "long long dispatch(Union value)"
+    "long long dispatch(Union value)",
+    {
+      "declaration": "long long dispatch(int tag, ...)",
+      "variadic_types": [
+        "float"
+      ]
+    },
+    {
+      "declaration": "long long dispatch(int tag, ...)",
+      "variadic_types": [
+        "short"
+      ]
+    },
+    {
+      "declaration": "long long dispatch(int tag, ...)",
+      "variadic_types": [
+        "Big"
+      ]
+    },
+    {
+      "declaration": "long long dispatch(int tag, ...)",
+      "variadic_types": [
+        "LargeHFA"
+      ]
+    },
+    {
+      "declaration": "long long dispatch(int tag, ...)",
+      "variadic_types": [
+        "Packed"
+      ]
+    },
+    {
+      "declaration": "long long dispatch(int tag, ...)",
+      "variadic_types": [
+        "Union"
+      ]
+    }
+  ],
+  "assembly_variadic_entry": ".globl _{name}\n_{name}:\n  sub sp,sp,#96\n  str x30,[sp,#88]\n  mov x16,x0\n  mov x17,x1\n",
+  "assembly_variadic_exit": "  ldr x30,[sp,#88]\n  add sp,sp,#96\n  ret\n.p2align 2\n",
+  "raw_call": "  blr x16\n",
+  "native_triple": "arm64-apple-macos13",
+  "native_flags": [
+    "-std=c11",
+    "-fblocks",
+    "-fno-strict-aliasing"
+  ],
+  "native_header": "#include <stdint.h>\n#include <stdarg.h>\n",
+  "native_main": "\nint main(void) {{ return (uint64_t){name}({arguments}) == {expected} ? 0 : 1; }}\n",
+  "native_prototype": "extern long long {name}(long long, long long, {parameters});\n",
+  "native_parameter": "long long",
+  "native_header_arguments": ["(uintptr_t)&callback", "0"],
+  "native_argument": "({type})({value})",
+  "native_callback_file": "{name}-callback.c",
+  "native_host": [
+    "Darwin",
+    "arm64"
+  ],
+  "native_signature": "(?m)^([^\\n;{{}}]*\\b{name}\\(([^;{{}}]*)\\))\\s*\\{{",
+  "native_parameter_name": "\\s*\\barg\\d+$",
+  "native_entry_types": [
+    "long long",
+    "int32_t",
+    "uint32_t",
+    "int64_t",
+    "uint64_t",
+    "void*",
+    "void *"
   ]
 }

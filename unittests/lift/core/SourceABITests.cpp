@@ -4417,8 +4417,8 @@ TEST(SourceABI, DarwinVariadicArgumentsKeepPromotionsAndStackBoundary) {
       EXPECT_EQ(Hint.Parameters[3].Location.RegisterOffset,
                 TRI.IntParamRegs[2]);
     }
-    for (const auto &Bad : {NdType::makeInt(1), NdType::makeInt(2),
-                            NdType::makeFloat(4), NdType::makeInt(16)}) {
+    for (const auto &Bad :
+         {NdType::makeInt(1), NdType::makeInt(2), NdType::makeFloat(4)}) {
       Hint.Parameters.back().Type = Bad;
       EXPECT_FALSE(assignDarwinVariadicSourceABI(Hint, 1, Architecture, Error));
     }

@@ -1263,7 +1263,8 @@ authenticated storage, relocation and signed-unwind ABI contract.
 The shared AAPCS64 parameter placement owner describes Darwin fixed value
 spills with their natural size and alignment after either register bank is
 exhausted. ELF and Windows ARM64 retain eight-byte stack slots. Darwin variadic
-tails keep their separate eight-byte placement rule. Darwin integer pairs may
+tails use whole objects rounded to eight-byte slots, with higher natural
+alignment when required and each member at its original object offset. Darwin integer pairs may
 start at odd-numbered registers; an entire 128-bit scalar moves to a 16-byte
 aligned stack slot when the remaining registers cannot hold it. ELF and COFF
 retain even-register alignment. Complete aggregate spills exhaust their bank
@@ -1271,8 +1272,14 @@ and preserve each field's declared offset. The limits for this owner live in
 `SourceParameterPlacementAAPCS64.def`.
 
 Fixed arm64 analyst call prototypes reuse `assignDarwinFixedSourceABI` and its
-shared AAPCS64 parameter placement. Darwin variadic prefixes retain their
-separate promoted-scalar contract. Narrow integer
+shared AAPCS64 parameter placement. Darwin variadic calls reuse that owner for
+the fixed prefix and result, then place complete unnamed values on the stack.
+The stack cursor includes the full storage of any fixed aggregate spill.
+`SourceABICarriers.def` owns the slot widths and diagnostics. Scalar tails must
+carry their default promotions; HFA members keep their declared float widths.
+Direct records and 128-bit values use the same logical types and member proofs
+in fixed and variadic calls. Indirect tails still require a separate copy
+storage proof and remain refused. Narrow integer
 register parameters and AArch64 narrow results retain the ABI's 32-bit
 sign/zero-extension guarantee separately from their source width. LLVM source
 call emission consumes those validated guarantees as `signext`/`zeroext`
@@ -1284,7 +1291,11 @@ type and complete physical members. LLVM uses arrays for HFA and word-record
 arguments so register exhaustion cannot split a logical value. Results flatten
 back to the declared source offsets, preserving padding as non-value bytes.
 LLVM C admits these grouped Darwin parameters independently of the register
-count; ELF/x86 array restrictions remain in place.
+count, including the unnamed variadic tail. Its boundary validator checks
+every actual operand, the ordinary C convention and all ABI attributes; raw
+non-promoted scalar tails cannot accompany admitted variadic arrays. ELF/x86
+array restrictions remain in place. Integer alignment uses the Darwin scalar
+width rather than the architecture-neutral `NdType` alignment cap.
 
 `sourceCallTypeOf` retains natural C record fields from the SDK's type library
 without changing the ordinary display conversion. Names, sizes, alignment and
