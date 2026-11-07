@@ -262,6 +262,26 @@ public:
           Reply.fd = FD;
           Reply.bytes.emplace(Buffer->Bytes.begin(), Buffer->Bytes.end());
           Reply.release = std::move(Release);
+          Reply.write = [&LibC, Device = Device, Address, Length,
+                         Lease = Buffer->Lease](uint64_t Offset,
+                                                std::span<const uint8_t> Data)
+              -> mobile::dalvik::ExecutionResult {
+            using mobile::dalvik::ExecutionStop;
+            auto Current = LibC.Kernel.binderBuffer(*Device, Address, Length);
+            if (!Current || Current->Lease != Lease)
+              return {ExecutionStop::Unsupported,
+                      0,
+                      {},
+                      "Android Parcel Binder buffer mapping is no longer live"};
+            if (auto E = LibC.access(Address + Offset, Data.size(), Write))
+              return {
+                  ExecutionStop::Invalid, 0, {}, llvm::toString(std::move(E))};
+            if (auto E = LibC.CPU.write(Address + Offset,
+                                        {Data.data(), Data.size()}))
+              return {
+                  ExecutionStop::Invalid, 0, {}, llvm::toString(std::move(E))};
+            return {};
+          };
           Reply.view = [&LibC, Device = Device, Address, Length, OffsetsAddress,
                         Lease = Buffer->Lease](std::span<const uint8_t> &View)
               -> mobile::dalvik::ExecutionResult {

@@ -33,6 +33,8 @@ class SnapshotLimits:
     ram_bytes: int = 64 * 1024 * 1024 * 1024
     # Observations are bounded; exporting the entire guest is not this API.
     read_bytes: int = 1024 * 1024
+    # Bound the offline adapter's flattened map separately from RAM/page count.
+    physical_regions: int = 65_536
 
 
 @dataclass(frozen=True)
@@ -379,7 +381,11 @@ class QemuSaveSnapshot:
                 destination = destinations.get(key[0])
                 value = self._state(devices[key], destination is not None)
                 if destination is not None:
-                    destination[key[1]] = {"version": devices[key].version, "fields": value}
+                    destination[key[1]] = {
+                        "version": devices[key].version, "fields": value,
+                        "subsection_versions": {sub.name: sub.version
+                                                for sub in devices[key].subsections},
+                    }
             if self._uint(1) != 0x7e or self._uint(4) != section_id:
                 raise SnapshotError("migration section footer mismatch")
             if kind in (3, 4):
@@ -506,7 +512,7 @@ def main(argv: list[str] | None = None) -> int:
             result = snapshot.summary()
             for category in ("cpus", "apics", "cpu_common"):
                 result[category] = {
-                    key: {"version": value["version"], "fields": _json_state(value["fields"])}
+                    key: {**value, "fields": _json_state(value["fields"])}
                     for key, value in result[category].items()
                     if args.cpu is None or key == args.cpu
                 }

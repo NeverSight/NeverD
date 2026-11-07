@@ -25,6 +25,12 @@ class ABIInventoryTests(unittest.TestCase):
         self.assertEqual(spec.argtypes,
                          (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t,
                           ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)))
+        legacy = abi.FUNCTION_SPECS["neverd_x86_legacy_source_v1"]
+        self.assertIs(legacy.ownership, abi.Ownership.OWNED_STRING)
+        self.assertIs(legacy.restype, ctypes.c_void_p)
+        self.assertEqual(legacy.argtypes,
+                         (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t,
+                          ctypes.POINTER(ctypes.c_void_p)))
 
     def test_metadata_visitor_preserves_borrowed_layout_and_callback(self) -> None:
         from neverd_plugin import abi

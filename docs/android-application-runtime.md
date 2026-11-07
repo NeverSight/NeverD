@@ -683,7 +683,8 @@ heap identities use hexadecimal strings; input proxy keys remain numeric keys.
 A proxy first created by native transport has report `key:null`.
 
 The shared API 28 `Parcel` subset supports `obtain`, `recycle`, `dataSize`,
-`dataPosition`, `dataAvail`, `setDataPosition`, int/long/String reads and writes,
+`dataPosition`, `dataAvail`, `dataCapacity`, `setDataCapacity`, `setDataPosition`,
+int/long/String reads and writes,
 `readStrongBinder`, `writeStrongBinder`, `marshall` and valid-range `unmarshall`.
 Owned objects reuse a six-slot pool;
 recycled buffers are empty. Strings preserve UTF-16 units and native four-byte
@@ -740,12 +741,15 @@ metadata, and reuses the ProcessState proxy for its fd/handle. Short reads retur
 null without moving the cursor; invalid types or missing nonnull metadata return
 null after consuming the record. Null Binder objects need no offset entry.
 A new remote proxy queues weak/strong acquisition before any later Parcel free;
-recycling the Parcel does not retire the proxy. The bounded Java heap does not
+recycling the Parcel does not retire the Java proxy. The bounded Java heap does not
 run GC, so these proxy references last for the workload. Forwarding a borrowed
 Parcel preserves its object table for shared Linux translation. Scalar and String
 reads cannot expose object fields; complete denied reads retain native cursor
 advancement. Marshalling a Parcel with objects throws RuntimeException with the
-API 28 message; unmarshalling bytes never creates Binder ownership.
+API 28 message. Unmarshalling into empty metadata never creates Binder
+ownership. JNI unmarshalling uses `setDataSize`; a nonempty import that would
+overwrite retained Binder metadata stops explicitly. Emptying first releases
+those references.
 A supplied handle-zero proxy is reusable; creating an uncached one still needs
 native PING_TRANSACTION. A local cookie resolves only through a live native-to-Java
 association and is never interpreted as a Java heap ID.
@@ -771,7 +775,23 @@ queues pointer/cookie ACKs and flushes them at the next driver exchange. Release
 notifications remain deferred, as in native `waitForResponse`; top-level
 thread-pool/polling dispatch that drains those releases is not yet modeled.
 Overwriting object bytes or inserting non-append metadata stops explicitly.
-Borrowed reply writes/capacity growth, weak/FD object translation, one-way/nested
-transactions, local Binder dispatch, remaining native error/logging cases and
-`enforceInterface` remain unsupported.
+Borrowed reply capacity initially equals its data length. An in-capacity scalar
+or String write accesses the original mapping and preserves its permissions;
+a read-only arena produces a native memory failure. Growth detaches the Parcel:
+it copies live initialized bytes and the offset table, acquires retained objects
+in native reverse-table order, then queues the old arena free. Automatic growth
+uses API 28's `(data size + write size) * 3 / 2`; explicit `setDataCapacity` uses
+the requested capacity and does nothing when it is no larger. Neither operation
+exposes reserved, uninitialized bytes. Reservations use the shared heap budget.
+
+Copied remote entries retain native proxies without creating Java objects.
+Duplicate entries and multiple Parcels share those references. Their final
+release queues strong then weak driver release unless a Java proxy still owns
+the endpoint. Later `readStrongBinder` reuses the native reference when creating
+its Java proxy. Local entries use the same native-to-Java registry as strong
+writes. Subsequent writes to detached storage use the ordinary Parcel owner.
+In-capacity `writeStrongBinder` on a borrowed offset table still requires native
+allocator handling; grow the capacity first for supported object writes.
+Weak/FD object translation, one-way/nested transactions, local Binder dispatch,
+remaining native error/logging cases and `enforceInterface` remain unsupported.
 ServiceManager semantic lookup replies still do not execute this transport.

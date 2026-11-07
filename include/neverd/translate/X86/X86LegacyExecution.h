@@ -254,6 +254,14 @@ struct X86LegacyExecutionResult {
   std::vector<SelfModificationExit> SelfModifications;
 };
 
+/// Authenticate a complete instruction extent with the executor's own byte
+/// grammar. This performs no accesses and binds no runtime state or profiles.
+/// An accepted encoding can still require an explicit execution option or
+/// raise an owned architectural fault. Used by original-byte source export.
+llvm::Error
+validateX86LegacyInstructionEncoding(llvm::ArrayRef<uint8_t> Instruction,
+                                     bool Code32);
+
 /// Persistent shadows determine eligibility before any table access. Fault
 /// delivery retains CR2, NMI blocking, descriptor writes and earlier frame
 /// stores, including on a subsequent #DF/shutdown. Registers/cache/EIP commit

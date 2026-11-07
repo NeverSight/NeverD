@@ -1,12 +1,34 @@
 # Remaining x64 C-quality work
 
+Offline physical observations now accept an explicit producer-supplied map in
+`scripts/qemu_save_memory.py`. A sorted interval index reuses the original RAM
+page index, preserving aliases and cross-region reads without copying guest
+RAM. Holes, absent pages, overlapping mappings and malformed bindings fail.
+Machine/block-size checks do not authenticate physical topology: the producer
+must flatten chipset/device overlays for the captured address space. A Q35
+low/high RAM split alone is not a complete map. This closes mapped read
+transport, not topology recovery, CPU paging/permissions or mutable environment
+import. Both ordinary registry inputs and target invocation capture remain
+open. The adapter adds no ordinary-decompilation or instruction-loop work.
+
+The offline save adapter now projects captured QEMU/KVM x64 register banks
+into the existing V6 source declaration. Producer-bound CPU/APIC association,
+exact captured PC, all GPR/vector bits, descriptor caches and independent NMI
+masking are retained. Explicit arbitrary-effect choices remain separate from
+captured data; missing mandatory fields fail. Raw pending/halted/control state
+is retained in the environment evidence and is not automatically consumed.
+This closes register-bank conversion only. No inspected CPU is paused at
+either registry entry; the two ordinary inputs, physical RAM mappings, complete
+environment import and invocation capture remain open. The adapter is a
+separate file and adds no ordinary-decompilation or instruction-loop work.
+
 Existing raw libvirt/QEMU saves can now be inspected offline through
 `scripts/qemu_save_snapshot.py`. CPU/APIC fields and original RAM-block bytes
 are available without restoring a guest; one bounded page index supports
 subsequent reads. Repeated page records preserve the latest bytes, missing pages
 fail, and an expected entry PC must match the capture. The inspected matching
 kernel save is paused elsewhere, so it does not recover either ordinary
-registry input. Physical mappings, complete V6 state import, invocation capture
+registry input. Physical mappings, complete V6 environment import, invocation capture
 and external environment effects remain separate obligations. The independent
 tool adds no work to source emission. See `docs/qemu-save-snapshot.md`.
 

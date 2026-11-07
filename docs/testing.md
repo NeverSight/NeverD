@@ -7,6 +7,27 @@ identity, page updates/zero fills, absent pages, cross-page reads, entry-PC
 mismatch, malformed/truncated streams and resource bounds. It runs no guest,
 generated program or instruction executor and requires no C++ build.
 
+Add `scripts.tests.test_qemu_save_x64` to the same command for the independent
+V6 bank-projection fixtures. They cover explicit CPU/APIC binding, original
+PC/SP and full register bits, descriptor/unusable encoding, XMM/YMM and optional
+AVX-512 lanes, subsection versions, separate NMI masking/pending state and
+caller-selected undefined values. Missing banks fail without output. For a
+real-save qualification, compare projected banks with an existing independent
+register receipt, then compile the initializer with both source routes' V6
+declarations and inspect its object bytes. Compile only; no generated program
+or guest execution is required. This establishes bank transport, not invocation
+capture, RAM mappings, paging or complete environment semantics.
+
+Add `scripts.tests.test_qemu_save_memory` for physical observations through an
+explicit producer map. Independent byte fixtures cover original block offsets,
+aliases, byte-aligned adjacent regions, cross-page/block reads, zero updates,
+holes, absent pages, uint64 endpoints/overflow, strict map bindings/schema,
+caller mutation and inspection bounds. CLI errors publish no partial result.
+Real-save checks should compare selected mapped bytes with existing capture
+receipts. They qualify those observations, not an inferred full machine map or
+CPU page-walk, permission and device semantics. The adapter runs no guest and
+adds no work to ordinary decompilation.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
@@ -3482,6 +3503,24 @@ overshifts and remainder by zero preserve the normalized scratch-slot invariant.
 `NativeLiteralOverloadsKeepEveryWidthAndWordBoundary` checks literal identity,
 constant-only plans and unchanged step counts at every width from 1 through
 257 bits. Constant plans must not request variable values.
+`SharedRootSubstitutionKeepsSimultaneousReplacements` covers shared descendants,
+repeated roots, and overlapping replacement keys at native and wide widths.
+Independent arithmetic checks that replacement values are not substituted again.
+`AdditionFastPathsKeepPackedWordIdentities` retains forced-bit and union
+subtraction identities through the additive constructor's short paths.
+`PackedOffsetsPreserveCoefficientProofs` checks repeated coefficient extraction
+with a disjoint offset and masked word, expressed as either addition or OR.
+`FoldedLiteralKeepsTheShortestCarrierOrientation` keeps folded constants in the
+single-word mask proof, including unscaled opaque residuals. Both synthesis
+regressions disable verification sampling and check independent full-width
+arithmetic at 8/16/32/64/65/128/257 bits.
+`NativeProductsKeepAllInputsAfterModularOverflow` checks repeated even and odd
+factors against APInt arithmetic at 1–64 bits and counts every input lookup.
+`PreparedWideArithmeticKeepsEveryInputAcrossEvaluations` alternates zero,
+all-ones, signed-boundary and random inputs through one prepared arithmetic
+plan at 1/8/64/65/127/128/129/257 bits. Independent full-word arithmetic checks
+repeated factors, every associative bitwise operator, narrow input promotion
+and missing input values after earlier nonzero evaluations.
 `SymMBAWidePairs.SharedAllowancesPreserveDecisionWorkAndMemo` checks fresh and
 previously spent request budgets, local caps under unlimited requests, zero and
 short storage, exact completion boundaries and saturated unlimited accounting.
@@ -3492,6 +3531,20 @@ partial blocks must reduce their cost by at least half below 32,768 work units.
 An independent multiplication oracle exhausts all 262,144 relevant low-word
 assignments for one complemented product. Keep the existing 9,500-work complete
 block regression alongside these tests to protect its structural path.
+`NarrowParityNeighborsFinishWithCompleteResidualWords` adds 21 degree-47
+neighbors across 8/16/32/64/65/128/257 bits, including complemented and reversed
+construction. They must finish below the existing 65,536-work limit with cost
+at most 128 and derivation evidence with verification sampling disabled.
+Independent full-width multiplication checks both parity branches and retained
+factors. A complemented case is zero at the first two witness assignments and
+nonzero at the third, checking that cached wide plans use the new inputs.
+`ComplementCofactorsExposeAWidePerturbedResidual` covers a degree-126 neighbor
+at 257 bits with surrounding linear MBA terms. With verification sampling
+disabled and the same 65,536-work limit, the result must have derivation
+evidence and cost at most 256. Independent full-width arithmetic checks the
+retained nonlinear residual and all four inputs on boundary and random values.
+Real worker and CLI source tests also execute degree-47 and degree-95
+nonlinear neighbors through all six source routes at O0/O2.
 `DenseFrequenciesFinishWidePartialProducts` checks degree-62 partial products
 at 8/64/65/128 bits against independent complete-word multiplication. The
 non-native cases must finish below 60,000 work units with output cost at most
@@ -6902,6 +6955,10 @@ similar identifiers and transactional diagnostics across all three data models.
 `TypeParse.NamedSpecifiersKeepPrecedenceAndUnknownWordPositions` checks named
 record/enum kinds, declared size_t and va_list, fixed builtin precedence, and
 recovery after unknown or incompatible type words across those models.
+`TypeParse.IdentifierRunsKeepBoundariesAndSourcePositions` checks identifiers
+containing underscores, digits and dollar signs, quoted encoding prefixes,
+CRLF and tab positions, macro invocation diagnostics, and identifiers ending
+at EOF on all three data models. Failed declarations keep the library intact.
 `TypeParse.NestedDeclaratorsKeepTheirCompositionAndQualifiers` covers plain
 and parenthesized names, pointer arrays, callbacks returning array pointers,
 array references and calling conventions on ILP32, LP64 and LLP64, including
@@ -12666,6 +12723,43 @@ Legacy cancellation tests retain the API continuation across cancellation, neste
 
 ## Test layout
 
+`NeverDX86LegacySourceTests` compiles the protected original-byte C dispatcher
+with Clang and the compiler selected by `NEVERD_TEST_NEVERC`, at O0/O2. Set
+`NEVERD_TEST_NEVERC_LLC` to the full NeverSight fork's `llc` for the explicit
+NeverC i386 object route (`-fllvm-backend`); its embedded backend remains x64.
+The
+matrix checks 16/32-bit selection, nonflat and wrapping linear aliases, exact
+budget stops, far CALL/RETF mode changes, self-modifying code, original handler
+PTE repair/IRET/retry, REP continuation through
+an external interrupt, changed code, physical backing and unbound profiles.
+A completed port input followed by a failed debug entry must survive pending
+selection and resume without a second device read. SDK/CLI checks compare the
+actual generated source and manifest and reject conflicting routes and output
+aliases. Both compilers also emit verified ELF32/i386 objects; that is a
+compilation check, not execution of a 32-bit host bridge.
+`NEVERD_ISA_REGRESSION_ARTIFACT_DIR` retains generated C, its compiled
+bridge fixture and manifests.
+
+The Python ABI inventory includes `neverd_x86_legacy_source_v1` with two
+independently owned string addresses. Set `NEVERD_TEST_LIBNEVERD` to the
+matching shared library when running `test_legacy_source_integration.py` and
+`test_continuation_integration.py`: they check the real legacy and x64 SDK
+exports, source hashes, size-delimited requests, manifest lifetime after the
+source is freed, optional manifests and failure-output clearing. These raw
+SDK calls do not require the embedded Python plugin host.
+
+Its original-instruction oracle compares 64 protected branch selections per
+compiler/optimization lane using Linux ptrace in code16 and code32. It compares
+PC, accumulator/count, arithmetic/DF flags and stack delta. Software checks
+separately inspect DR6/DEBUGCTL and event state. This does not qualify raw
+full-machine BTF, CPL0 hardware, task/transactional debug or physical port I/O.
+The shared byte-grammar refactor also requires `NeverDX86PagingTests`; no
+unsupported encoding is converted to a NOP or inferred #UD. The SDK adapter
+shares string ownership/error handling with x64, whose public export regressions
+must remain valid. Linux x64 and the configured NeverC compiler are required
+for the compiled lanes; unavailable facilities are reported as skips.
+
+
 `unittests/devirtualization/x86_64/` owns the explicit x64 continuation suites,
 their shared frame fixtures and the native KVM runner. Its local CMake file
 registers the existing source/export targets and labels. Architecture-neutral
@@ -15820,7 +15914,7 @@ DEX catch/resume. `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyAre
 executes real guest services through all three JNI forms, including three-round
 buffer retention/reuse, a reply recycled and reused by another native thread,
 missing managers, declared dead proxies, invalid/reused descriptors and explicit
-borrowed-write/unmapped-arena/PROT_NONE boundaries. The corresponding public test
+borrowed-write growth and unmapped-arena/PROT_NONE boundaries. The corresponding public test
 compares 90 complete SDK/CLI reports at O0/O2, including native thread exit with queued
 frees and a supplied DEX caller spanning consecutive transactions, a guest
 native callback and another transaction. Linux tests check the same raw buffer
@@ -15852,10 +15946,20 @@ Java objects, and writes a returned remote proxy alongside null and handle zero.
 The multi-object case replaces an expired weak cache before export, spans native
 read buffers and checks pointer/cookie ACK ordering. Ordinary/V/A forms exercise
 altered holder permissions, same-address
-mapping replacement, unconstructed objects, borrowed writes and non-append
-metadata boundaries. The matching
+mapping replacement, unconstructed objects, borrowed strong-write growth and
+non-append metadata boundaries. The matching
 `ProcessPublic.AndroidBinderLocalWritesMatchSDKAndCLI` compares 42 full report
 pairs at O0/O2. These tests do not claim local transaction callback dispatch.
+`AndroidParcelBufferTest.*` checks literal native capacities, live byte copies,
+capacity no-ops, protected in-place writes, reference acquisition before free,
+duplicate handles shared across copies, Java proxy promotion, local identity
+lifetime, retained `unmarshall` metadata and bounded storage reservations.
+`AndroidJNI.ParcelBorrowedRepliesGrowWithSharedBinderOwnership` exercises
+ordinary/V/A calls through real guest peers: automatic/explicit growth, arena
+slot reuse, scalar and strong writes, native-only remote handle retention and
+retirement, empty replies, read-only faults, stale leases and unreadable mappings.
+`ProcessPublic.AndroidParcelBorrowedGrowthMatchesSDKAndCLI` compares 54 complete
+reports at O0/O2, including all explicit failure outcomes.
 Run full Dalvik, Android JNI, thread/callback and native/Linux Binder suites,
 plus these focused public tests after changing this owner. The shared scheduler
 also requires the stream-wait, receive, readiness and poll regressions. These are

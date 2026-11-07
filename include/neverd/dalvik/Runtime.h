@@ -32,7 +32,7 @@ enum class ExecutionStop {
 };
 struct ExecutionResult;
 // Transport data is owned by the native IPC adapter; framework completion
-// retains its read-only arena lease until Parcel replacement or recycle.
+// retains its arena lease until Parcel replacement, recycle or capacity growth.
 struct BinderReply {
   int32_t status = 0;
   std::optional<std::vector<uint8_t>> bytes;
@@ -40,6 +40,7 @@ struct BinderReply {
   std::function<void()> release;
   std::vector<uint64_t> objects;
   std::optional<uint32_t> fd;
+  std::function<ExecutionResult(uint64_t, std::span<const uint8_t>)> write;
 };
 struct BinderTransactionRequest {
   uint64_t receiver = 0, data = 0, reply = 0;
@@ -94,9 +95,12 @@ struct RuntimeServices {
   // Java int bits survive JNI detach/reattach; Java BlockGuard is separate.
   std::function<ExecutionResult()> binder_thread_policy;
   std::function<ExecutionResult(uint32_t)> set_binder_thread_policy;
-  // Retain a newly materialized proxy on its existing Linux connection.
+  // Retain a newly materialized native proxy on its existing Linux connection.
   // Libbinder queues weak then strong acquisition before freeing its Parcel.
   std::function<ExecutionResult(uint32_t, uint32_t)> retain_binder_handle;
+  // Retire a native proxy when its last owned Parcel reference disappears and
+  // no Java proxy retains it. Queues strong release before weak release.
+  std::function<ExecutionResult(uint32_t, uint32_t)> release_binder_handle;
   // Allocate returns opaque native storage for two pointer-sized identities,
   // not a JavaBBinder/RefBase C++ layout. Other operations take its base.
   std::function<ExecutionResult(BinderIdentityOperation, uint64_t)>

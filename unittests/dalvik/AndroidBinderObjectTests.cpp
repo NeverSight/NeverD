@@ -170,7 +170,7 @@ TEST(AndroidLocalBinderTest, SynchronousDriverReleasesRemainDeferred) {
             ExecutionStop::Unsupported);
 }
 
-TEST(AndroidLocalBinderTest, UnmarshallingDropsOwnedLocalReferences) {
+TEST(AndroidLocalBinderTest, EmptyUnmarshallingDropsOwnedLocalReferences) {
   LocalState s;
   const auto binder = s.binder(), parcel = s.parcel();
   ASSERT_EQ(s.write(parcel, binder).stop, ExecutionStop::Returned);
@@ -178,6 +178,14 @@ TEST(AndroidLocalBinderTest, UnmarshallingDropsOwnedLocalReferences) {
   auto array = s.heap.allocateArray("[B", original.size());
   ASSERT_NE(array, nullptr);
   array->Bytes = original;
+  EXPECT_EQ(s.call(Parcel, "unmarshall", "([BII)V", parcel,
+                   {array->Identity, 0, original.size()})
+                .stop,
+            ExecutionStop::Unsupported);
+  ASSERT_EQ(
+      s.call(Parcel, "unmarshall", "([BII)V", parcel, {array->Identity, 0, 0})
+          .stop,
+      ExecutionStop::Returned);
   ASSERT_EQ(s.call(Parcel, "unmarshall", "([BII)V", parcel,
                    {array->Identity, 0, original.size()})
                 .stop,

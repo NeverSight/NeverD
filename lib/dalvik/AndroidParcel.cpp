@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// API 28 owned Parcels over bounded heap bytes, shared by DEX and JNI.
+/// API 28 owned and borrowed Parcels over bounded storage, shared by DEX/JNI.
 //===----------------------------------------------------------------------===//
 
 #include "AndroidFramework.h"
@@ -113,6 +113,8 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         state.release();
       state.release = {};
       state.view = {};
+      state.write = {};
+      state.capacity = 0;
       state.error = 0;
       state.objects.clear();
       state.fd.reset();
@@ -130,6 +132,8 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       return returned(position);
     if (name == "dataSize")
       return returned(std::max<size_t>(bytes.size(), position));
+    if (name == "dataCapacity")
+      return returned(state.capacity);
     if (name == "dataAvail")
       return returned(bytes.size() > position ? bytes.size() - position : 0);
     if (name == "setDataPosition") {
@@ -138,6 +142,37 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         return unsupported(
             "Android Parcel negative position requires native abort");
       position = next;
+      return returned();
+    }
+    auto capacity = [&](uint64_t desired) {
+      if (desired > INT32_MAX)
+        throw Stop{
+            {ExecutionStop::Thrown, 0, "java/lang/IllegalArgumentException"}};
+      if (desired <= state.capacity)
+        return;
+      // Only initialized data is copied; reserved allocator bytes never become
+      // observable. A borrowed buffer must retain its references before free.
+      if (state.release) {
+        work(bytes.size());
+        auto read = readParcelBuffer(heap, receiver);
+        if (read.stop != ExecutionStop::Returned)
+          throw Stop{std::move(read)};
+      }
+      if (!heap.reserveBytes(*object, desired))
+        storage();
+      if (state.release) {
+        auto acquired = acquireParcelObjects(state, bytes);
+        if (acquired.stop != ExecutionStop::Returned)
+          throw Stop{std::move(acquired)};
+        state.release();
+        state.release = {};
+        state.view = {};
+        state.write = {};
+      }
+      state.capacity = desired;
+    };
+    if (name == "setDataCapacity") {
+      capacity(uint32_t(arguments[0]));
       return returned();
     }
     if (name == "marshall" && !state.objects.empty()) {
@@ -157,7 +192,7 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       return result;
     }
     std::span<const uint8_t> readable = bytes;
-    if (name != "unmarshall" && state.view) {
+    if (name != "unmarshall" && !name.starts_with("write") && state.view) {
       auto result = state.view(readable);
       if (result.stop != ExecutionStop::Returned)
         return result;
@@ -173,9 +208,6 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
     };
     // No allocator bytes are invented for a cursor beyond initialized data.
     auto write = [&](std::span<const uint8_t> input, size_t zeros = 0) {
-      if (state.release)
-        throw Stop{unsupported("Android Parcel writes to a Binder-owned reply "
-                               "require native capacity semantics")};
       if (position > bytes.size())
         throw Stop{
             unsupported("Android Parcel write crosses an uninitialized gap")};
@@ -187,6 +219,25 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         throw Stop{unsupported("Android Parcel overwrites of Binder objects "
                                "require native object-table mutation")};
       work(input.size() + zeros);
+      if (end > state.capacity)
+        capacity(((uint64_t(bytes.size()) + input.size() + zeros) * 3) / 2);
+      if (state.release) {
+        if (!state.write)
+          throw Stop{unsupported(
+              "Android Parcel borrowed write service is not supplied")};
+        // In-capacity writes do not detach mOwner. The native memory owner
+        // enforces the actual mapping permissions and allocation identity.
+        auto written = state.write(position, input);
+        if (written.stop != ExecutionStop::Returned)
+          throw Stop{std::move(written)};
+        if (zeros) {
+          const std::array<uint8_t, 4> padding{};
+          written = state.write(position + input.size(),
+                                std::span(padding).first(zeros));
+          if (written.stop != ExecutionStop::Returned)
+            throw Stop{std::move(written)};
+        }
+      }
       if (end > bytes.size() && !heap.resizeBytes(*object, end))
         storage();
       std::copy(input.begin(), input.end(), bytes.begin() + position);
@@ -247,9 +298,9 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
       return binderHandle(heap, *state.fd, uint32_t(pointer), admit);
     }
     if (name == "writeStrongBinder") {
-      if (state.release)
-        return unsupported("Android Parcel writes to a Binder-owned reply "
-                           "require native capacity semantics");
+      if (state.release && uint64_t(position) + 24 <= state.capacity)
+        return unsupported("Android Parcel borrowed object-table growth "
+                           "requires native allocator handling");
       std::array<uint8_t, 24> encoded{};
       uint32_t type = 0x73622a85;
       uint64_t pointer = 0, cookie = 0;
@@ -293,10 +344,15 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         state.objects.push_back(offset);
       if (cookie) {
         ++local_binders.find(cookie)->second.references;
-        state.local_objects.push_back(cookie);
+        state.references.push_back({cookie});
       }
-      if (fd)
+      if (fd) {
         state.fd = fd;
+        if (pointer) {
+          ++binder_parcel_handles[std::make_pair(*fd, uint32_t(pointer))];
+          state.references.push_back({0, uint32_t(pointer)});
+        }
+      }
       return returned();
     }
     if (name == "writeInt" || name == "writeLong") {
@@ -366,7 +422,26 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         return unsupported(
             "Android Parcel unmarshall requires a valid native array range");
       const uint64_t padded = (uint64_t(length) + 3) & ~uint64_t(3);
+      // JNI uses setDataSize, which preserves entries whose offsets remain
+      // in range. Overwriting those records is not an ownership reset.
+      if (!state.objects.empty() && state.objects.front() < length)
+        return unsupported("Android Parcel unmarshall overwrites retained "
+                           "Binder object metadata");
       work(length);
+      if (state.release && length) {
+        work(std::min<size_t>(bytes.size(), length));
+        auto read = readParcelBuffer(heap, receiver);
+        if (read.stop != ExecutionStop::Returned)
+          return read;
+      }
+      uint64_t nextCapacity =
+          state.release ? length : std::max(state.capacity, length);
+      if (padded > nextCapacity)
+        nextCapacity = (uint64_t(length) + padded) * 3 / 2;
+      if (nextCapacity > INT32_MAX)
+        return unsupported("Android Parcel data exceeds the native size range");
+      if (!heap.reserveBytes(*object, nextCapacity))
+        return storage();
       auto released = releaseParcelObjects(state);
       if (released.stop != ExecutionStop::Returned)
         return released;
@@ -374,9 +449,11 @@ ExecutionResult AndroidFramework::parcel(Heap &heap, const Program &program,
         state.release();
       state.release = {};
       state.view = {};
+      state.write = {};
       state.error = 0;
       state.objects.clear();
       state.fd.reset();
+      state.capacity = nextCapacity;
       if (!heap.resizeBytes(*object, padded))
         return storage();
       std::copy_n(array->Bytes.begin() + offset, length, bytes.begin());

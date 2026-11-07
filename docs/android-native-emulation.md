@@ -1258,8 +1258,14 @@ see [native binding and reply ownership](android-application-runtime.md#servicem
 Java `Binder()` construction and owned `Parcel.writeStrongBinder` use the same
 Linux memory and Binder owners. Local objects round-trip to their original Java
 identity; bound proxies, null and handle zero retain their native wire rules.
-Opaque holders do not expose a guest C++ object layout. Incoming Java transaction
-dispatch and borrowed-reply capacity changes remain explicit boundaries.
+Opaque holders do not expose a guest C++ object layout. Borrowed reply growth
+copies live bytes and retains local/remote objects before queuing the original
+buffer free. Native-only remote references retire through the same Linux driver
+commands; Java proxy materialization reuses them. Capacity queries and explicit
+reservation share the Dalvik heap budget. In-capacity writes retain the original
+mapping permissions, including read-only memory failure. Direct growth of a
+borrowed object table and incoming Java transaction dispatch remain explicit
+boundaries.
 Missing cache state is unknown; an explicit
 empty array is a known empty cache. Non-null cache hits return their retained
 identity without timing or changing the blocking flag. `initServiceCache`

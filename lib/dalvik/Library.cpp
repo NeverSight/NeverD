@@ -365,6 +365,8 @@ static const LibraryMethod Methods[] = {
     {"android/os/Parcel", "obtain", "()Landroid/os/Parcel;", ParcelData, true},
     {"android/os/Parcel", "recycle", "()V", ParcelData, false, true},
     {"android/os/Parcel", "dataSize", "()I", ParcelData, false, true},
+    {"android/os/Parcel", "dataCapacity", "()I", ParcelData, false, true},
+    {"android/os/Parcel", "setDataCapacity", "(I)V", ParcelData, false, true},
     {"android/os/Parcel", "dataPosition", "()I", ParcelData, false, true},
     {"android/os/Parcel", "dataAvail", "()I", ParcelData, false, true},
     {"android/os/Parcel", "setDataPosition", "(I)V", ParcelData, false, true},

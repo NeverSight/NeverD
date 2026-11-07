@@ -230,12 +230,127 @@ records commands, source hashes, SDK inputs, CPU affinity, independent native
 matrices, corrected probes and regression results.
 
 This is a bounded internal execution interface. The scalar binding below
-extends its ordinary instruction execution. General i386 source
-dispatch, task transitions, real/VM86, CET/FRED, software
+extends its ordinary instruction execution. The explicit source dispatcher
+below connects selected original instructions to this owner. Ordinary i386
+function projection, task transitions, real/VM86, CET/FRED, software
 SMM, enclave/AEX/EPCM and the remaining device/partial-progress contracts are
 not completed by it. No new LLVM or NeverC intrinsic is required for these
 runtime state transitions. The final LLVM release, SDK pin and NeverD LLVM
 gitlink remain unchanged pending global completion.
+
+## Protected source dispatch
+
+`--x86-legacy-source` exports a bounded C dispatcher over the protected
+execution owner. The SDK entry is `neverd_x86_legacy_source_v1`; its C++ owner
+is `exportX86LegacySource`. A request declares exact original instruction
+extents in an i386 image:
+
+```json
+{
+  "profile": "protected-legacy-v1",
+  "instructions": [
+    {"address": "0x1000", "code_bits": 32, "size": 2},
+    {"address": "0x2000", "code_bits": 16, "size": 1}
+  ]
+}
+```
+
+```sh
+neverd decompile input.elf --x86-legacy-source=request.json \
+  --continuation-report=manifest.json -o protected.c
+```
+
+The declared address is the **32-bit linear instruction address**. The
+dispatcher selects by `uint32(CS.base + EIP)` together with CS.D. Two code
+modes may select the same address with different complete extents. Live
+segment bases, offsets, limits and privileges remain in the runtime, including
+nonflat code and linear wrap. The image extent itself cannot wrap past 4 GiB.
+The shared executor grammar validates each complete byte sequence; this export
+does not ask a flat 32-bit decoder to guess a 16-bit extent. Duplicate
+address/mode pairs, extra fields, missing bytes and unsupported instructions
+fail explicitly. Selection order is normalized for deterministic output.
+
+Generated `neverd_x86_legacy_continue_v1(void *context, uint64_t *budget)`
+borrows a `translate::X86LegacySourceExecution`. Construct that C++ context
+with the complete `X86LegacyExecutionState`, `X86PagedMemory` and explicit
+`X86LegacyExecutionOptions`. Retain the state, RAM, borrowed device/debug
+callbacks and their contexts across pauses. Link the private bridge from the
+matching NeverD source build. The budget is a separate host cell, disjoint from
+state/RAM and never modified by device/debug callbacks. There is no serialized
+C++ object layout or stable C state-construction ABI. The SDK exports source
+and a manifest; it
+does not capture a native CPU, infer a service ABI or construct a guest machine.
+
+This is one **runtime-backed C dispatch route**: instruction arithmetic,
+fetch, paging, descriptor, debug and fault semantics stay in the existing
+execution owner. It is not a new HighC/LLVMC arithmetic projection. `--llvm`
+and ordinary function/source optimization options are therefore refused.
+Clang and NeverC compile the same generated C without embedded guest assembly.
+The manifest records the exact original bytes/modes, source hash, bridge
+identity, budget and event policies, and all status values.
+
+Completed selected near/far/system transfers, CALL and RET continue at the
+live target, including a selected IRET target. No ordinary function completion
+is inferred from RET. Each attempted instruction consumes one budget unit;
+REP consumes one per completed element, including its zero-count completion.
+Faulting attempts consume a unit even when fault entry subsequently stops.
+Changed code, scalar backing stops and refused steps consume none. IRET
+retains its existing attempted-frame semantics. Zero budget returns 258
+without selection or guest accesses; a null context/budget returns 256.
+
+Every delivered event stops before executing its handler. A caller can then
+invoke the dispatcher to execute a selected original handler, including a PTE
+repair, error-code removal, IRET and retry. The source-specific status values
+are 256 invalid/unbound state, 257 unselected address/mode, 258 instruction
+budget exhausted and 259 pending event delivery. Values 0–8 retain
+`X86LegacyExecutionStatus`; these are independent of the x64 continuation
+status namespace. `lastResult()` retains detailed progress, exceptions,
+device effects and self modifications; `lastError()` explains a refusal.
+Changed code requires a replacement selection. Shutdown is terminal for that
+CPU activation; a producer-owned machine reset is required before executing
+again. Neither condition is an automatic retry.
+
+When delivery is pending after a backing or event-work stop, selection returns
+259. Repair the physical backing if needed, call `context.resume()`, inspect
+its result, then continue. Previously consumed descriptor/TSS inputs, frame
+writes, debug causes and completed device input remain owned by the retained
+event. The dispatcher never replays the initiating instruction. The host may
+call `context.deliver(event)` between dispatch calls; eligibility, accepted
+events and inhibition remain owned by the existing event implementation.
+No asynchronous event producer or polling interval is inferred.
+
+This provides source selection/continuation for selected, admitted protected
+16/32-bit instructions within complete image extents. It does not supply
+unimplemented instruction banks, ordinary i386 function C, IA-32e compatibility
+mode, task/real/VM86 execution, software SMM/SGX, or native device qualification.
+Global LLVM release remains gated on those separately documented contracts.
+
+The [November 7 source qualification](evidence/x86-legacy-source-2026-11-07.json)
+records 2,075 source, semantic and interface executions across qualification
+and subsequent `dev` integrations: 2,074 pass, with one explicit KVM LA57
+hardware skip and no failures. The new 41-case source suite runs on both SDKs
+and P/E core classes in the full matrices, giving 164 passing executions and
+1,024 original branch comparisons per full matrix. Every retained set of 184
+source, manifest, shared-library and i386-object artifacts is byte-identical,
+including after the later integrations. Its
+paging test binaries are also unchanged, retaining the exact 527-case native
+legacy and 570-case r6 full-paging qualification.
+
+The full integration matrices separately pass 88 x64 exporter checks, four
+real Python source-ABI checks and seven native plugin adapter checks per SDK.
+The Android Parcel merge changes only the r6 shared SDK among the recorded
+executables and libraries; its updated ABI and export checks pass. A later
+C type lexer merge changes both shared SDKs while retaining those executables.
+Both updated SDKs pass another 41 source and four Python ABI cases. Additional
+parser checks each pass 56 cases and skip one optional Windows kernel PDB
+round-trip because `NEVERD_TYPES_NTKRNLMP` is unset. The initial
+two NeverC i386 failures came from omitting its existing explicit full LLVM
+backend option; the corrected invocation passes and the failed run remains a
+diagnostic, outside qualification counts. Embedded Python plugin-host tests
+are unavailable in these build profiles. i386 object generation does not
+qualify execution of a 32-bit host runtime bridge. LLVM and NeverC need no
+implementation change for this source route; the r6 pin and LLVM gitlink
+remain unchanged.
 
 ## Protected instruction-step debug events
 

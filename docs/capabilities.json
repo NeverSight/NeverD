@@ -14708,6 +14708,64 @@
       }
     },
     {
+      "id": "analysis.x86-legacy-source",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "pipeline",
+      "targets": [
+        "i386 protected 16/32-bit"
+      ],
+      "docs": [
+        "docs/x86-legacy-segments.md",
+        "docs/x86-instruction-support.md",
+        "docs/testing.md"
+      ],
+      "limitations": [
+        "The protected-legacy-v1 request selects exact original byte extents and code modes. The generated C dispatches on live CS.base + EIP and CS.D through the existing protected instruction executor; it does not emit independent arithmetic semantics or an ordinary function ABI.",
+        "The C++ embedding supplies and retains state, RAM, profiles, devices and event arbitration from the matching source build. The opaque context is not a serialized public C state layout. Changed code, missing backing, pending events and unselected targets stop explicitly; no handler or external event is inferred.",
+        "This adds no instruction encodings to the protected executor. IA-32e compatibility, real/VM86 mode, task switches, complete x86 coverage and hardware-independent machine emulation remain outside this source route. Cross-compiling emitted C to i386 does not establish a 32-bit runtime-bridge execution result."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDX86LegacySourceTests",
+          "source": "unittests/translate/x86/X86LegacySourceTests.cpp",
+          "filter": "*/X86LegacySourceTest.SDKAndCLIExportIdenticalSourceAndRejectMixedRoutes/*",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX86LegacySourceTests",
+          "source": "unittests/translate/x86/X86LegacySourceTests.cpp",
+          "filter": "*/X86LegacySourceTest.OriginalHandlerRepairsPageAndReturnsToRetry/*",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDX86LegacySourceTests",
+          "source": "unittests/translate/x86/X86LegacySourceTests.cpp",
+          "filter": "*/X86LegacySourceTest.DeviceInputSurvivesPendingDebugEntryWithoutReplay/*",
+          "platforms": [
+            "linux"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_x86_legacy_source_v1"
+        ],
+        "python": [],
+        "cli": [
+          "neverd decompile --x86-legacy-source"
+        ],
+        "json": []
+      }
+    },
+    {
       "id": "emulation.darwin-process",
       "kind": "execution",
       "status": "experimental",

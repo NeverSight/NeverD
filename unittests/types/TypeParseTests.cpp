@@ -65,6 +65,50 @@ std::string leaves(const RecordDef &Record, uint64_t Base = 0) {
 
 } // namespace
 
+TEST(TypeParse, IdentifierRunsKeepBoundariesAndSourcePositions) {
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    SCOPED_TRACE(int(Model));
+    auto Library =
+        parsed("#define WORD unsigned\n"
+               "typedef WORD $Type_123;\r\n"
+               "struct _Record9 {\t$Type_123 long_identifier_0123456789; };\n"
+               "int _Call9($Type_123 $param0);\n"
+               "_Static_assert(L'A' == 65 && u'A' == 65 && U'A' == 65 && "
+               "u8'A' == 65, \"prefixes\");\n"
+               "_Static_assert(sizeof(u\"abc\") == 8, \"UTF16\");\n"
+               "_Static_assert(sizeof(U\"abc\") == 16, \"UTF32\");\n"
+               "_Static_assert(sizeof(u8\"abc\") == 4, \"UTF8\");",
+               {}, Model);
+    const auto &Record = recordOf(Library, "_Record9");
+    ASSERT_EQ(Record.Members.size(), 1u);
+    EXPECT_EQ(Record.Members[0].Name, "long_identifier_0123456789");
+    EXPECT_EQ(Record.Members[0].Type->Name, "$Type_123");
+    const auto *Call = Library.findPrototype("_Call9");
+    ASSERT_NE(Call, nullptr);
+    ASSERT_EQ(Call->Params.size(), 1u);
+    EXPECT_EQ(Call->Params[0].Name, "$param0");
+    EXPECT_EQ(Call->Params[0].Type->Name, "$Type_123");
+    const auto Before = renderTypes(Library, {}, {});
+    for (llvm::StringRef Text :
+         {"\n\tint long_identifier_0123456789@", "\n\tint $end9"}) {
+      const auto Read = parseCTypes(Text, Library);
+      ASSERT_EQ(Read.Problems.size(), 1u);
+      EXPECT_EQ(Read.Problems[0].Line, 2u);
+      const size_t Position = Text.contains('@') ? Text.find('@') : Text.size();
+      EXPECT_EQ(Read.Problems[0].Column, Position - Text.rfind('\n'));
+      EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+    }
+    const auto Macro =
+        parseCTypes("#define BAD UnknownType\n\tBAD value;", Library);
+    ASSERT_EQ(Macro.Problems.size(), 1u);
+    EXPECT_EQ(Macro.Problems[0].Line, 2u);
+    EXPECT_EQ(Macro.Problems[0].Column, 2u);
+    EXPECT_EQ(Macro.Problems[0].Message, "'UnknownType' names no type");
+    EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+  }
+}
+
 TEST(TypeParse, StorageQualifiersKeepDeclaratorsAndKeywordBoundaries) {
   for (DataModel Model :
        {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {

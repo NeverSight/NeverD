@@ -109,6 +109,10 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
     S.Op = N.Op;
     S.Width = N.Width;
     S.Aux = N.Aux;
+    // A native product has no node payload. Prepare its exact modulus once
+    // for the long fold, without increasing the per-step storage.
+    if (N.Op == SymOp::Mul && N.NumOperands > 2 && N.Width <= 64)
+      S.Aux = ~uint64_t(0) >> (64 - N.Width);
     S.Node = R;
     S.OutputSlot = OutputSlot;
     S.FirstArg = static_cast<uint32_t>(ArgSlots.size());
@@ -186,8 +190,15 @@ SymEvalPlan::evalU64With(llvm::function_ref<uint64_t(uint32_t)> Lookup) {
       break;
     case SymOp::Mul:
       Res = S[A[0]] * S[A[1]];
-      for (uint32_t K = 2; K < St.NumArgs; ++K)
-        Res *= S[A[K]];
+      if (St.NumArgs > 2) {
+        // A zero first pair remains zero modulo this node's width. Check
+        // once before the tight fold; per-factor checks slow nonzero words.
+        // All operand steps, including input lookups, have already run.
+        if (!(Res & St.Aux))
+          break;
+        for (uint32_t K = 2; K < St.NumArgs; ++K)
+          Res *= S[A[K]];
+      }
       break;
     case SymOp::And:
       // Every earlier slot is normalized to its declared width. These
@@ -286,82 +297,113 @@ llvm::APInt SymEvalPlan::eval(llvm::ArrayRef<llvm::APInt> VarVals) {
 namespace {
 
 template <typename GetArgument>
-llvm::APInt evalNodeAPImpl(const SymContext &Ctx, SymRef R, size_t NumArgs,
-                           GetArgument &&Arg) {
+void evalNodeAPImpl(const SymContext &Ctx, SymRef R, size_t NumArgs,
+                    llvm::APInt &Result, GetArgument &&Arg) {
   const SymNode &N = Ctx.node(R);
   uint32_t W = N.Width;
+  // Reuse the prepared output's allocation. Operand slots precede the
+  // output, so assigning the first operand cannot overwrite another input.
+  auto Start = [&](uint64_t Identity) {
+    if (NumArgs)
+      Result = Arg(0);
+    else
+      Result = llvm::APInt(W, Identity, true);
+  };
 
   switch (N.Op) {
   case SymOp::Const:
-    return Ctx.constValue(R);
+    Result = Ctx.constValue(R);
+    return;
   case SymOp::Var:
-    return llvm::APInt(W, 0);
+    Result = llvm::APInt(W, 0);
+    return;
   case SymOp::Add: {
-    llvm::APInt Acc(W, 0);
-    for (size_t I = 0; I < NumArgs; ++I)
-      Acc += Arg(I);
-    return Acc;
+    Start(0);
+    for (size_t I = 1; I < NumArgs; ++I)
+      Result += Arg(I);
+    return;
   }
   case SymOp::Mul: {
-    llvm::APInt Acc(W, 1);
-    for (size_t I = 0; I < NumArgs; ++I)
-      Acc *= Arg(I);
-    return Acc;
+    Start(1);
+    for (size_t I = 1; I < NumArgs && !Result.isZero(); ++I)
+      Result *= Arg(I);
+    return;
   }
   case SymOp::And: {
-    llvm::APInt Acc = llvm::APInt::getAllOnes(W);
-    for (size_t I = 0; I < NumArgs; ++I)
-      Acc &= Arg(I);
-    return Acc;
+    Start(UINT64_MAX);
+    for (size_t I = 1; I < NumArgs; ++I)
+      Result &= Arg(I);
+    return;
   }
   case SymOp::Or: {
-    llvm::APInt Acc(W, 0);
-    for (size_t I = 0; I < NumArgs; ++I)
-      Acc |= Arg(I);
-    return Acc;
+    Start(0);
+    for (size_t I = 1; I < NumArgs; ++I)
+      Result |= Arg(I);
+    return;
   }
   case SymOp::Xor: {
-    llvm::APInt Acc(W, 0);
-    for (size_t I = 0; I < NumArgs; ++I)
-      Acc ^= Arg(I);
-    return Acc;
+    Start(0);
+    for (size_t I = 1; I < NumArgs; ++I)
+      Result ^= Arg(I);
+    return;
   }
   case SymOp::Not:
-    return ~Arg(0);
+    Result = ~Arg(0);
+    return;
   case SymOp::Shl:
-    return Arg(1).uge(W) ? llvm::APInt(W, 0)
-                         : Arg(0).shl(Arg(1).getZExtValue());
+    Result =
+        Arg(1).uge(W) ? llvm::APInt(W, 0) : Arg(0).shl(Arg(1).getZExtValue());
+    return;
   case SymOp::LShr:
-    return Arg(1).uge(W) ? llvm::APInt(W, 0)
-                         : Arg(0).lshr(Arg(1).getZExtValue());
+    Result =
+        Arg(1).uge(W) ? llvm::APInt(W, 0) : Arg(0).lshr(Arg(1).getZExtValue());
+    return;
   case SymOp::AShr:
-    if (Arg(1).uge(W))
-      return Arg(0).isNegative() ? llvm::APInt::getAllOnes(W)
-                                 : llvm::APInt(W, 0);
-    return Arg(0).ashr(Arg(1).getZExtValue());
+    if (Arg(1).uge(W)) {
+      Result =
+          Arg(0).isNegative() ? llvm::APInt::getAllOnes(W) : llvm::APInt(W, 0);
+      return;
+    }
+    Result = Arg(0).ashr(Arg(1).getZExtValue());
+    return;
   case SymOp::UDiv:
-    return Arg(1).isZero() ? llvm::APInt::getAllOnes(W) : Arg(0).udiv(Arg(1));
+    Result = Arg(1).isZero() ? llvm::APInt::getAllOnes(W) : Arg(0).udiv(Arg(1));
+    return;
   case SymOp::SDiv:
-    if (Arg(1).isZero())
-      return Arg(0).isNonNegative() ? llvm::APInt::getAllOnes(W)
-                                    : llvm::APInt(W, 1);
-    if (Arg(0).isMinSignedValue() && Arg(1).isAllOnes())
-      return Arg(0);
-    return Arg(0).sdiv(Arg(1));
+    if (Arg(1).isZero()) {
+      Result = Arg(0).isNonNegative() ? llvm::APInt::getAllOnes(W)
+                                      : llvm::APInt(W, 1);
+      return;
+    }
+    if (Arg(0).isMinSignedValue() && Arg(1).isAllOnes()) {
+      Result = Arg(0);
+      return;
+    }
+    Result = Arg(0).sdiv(Arg(1));
+    return;
   case SymOp::URem:
-    return Arg(1).isZero() ? Arg(0) : Arg(0).urem(Arg(1));
+    Result = Arg(1).isZero() ? Arg(0) : Arg(0).urem(Arg(1));
+    return;
   case SymOp::SRem:
-    if (Arg(1).isZero())
-      return Arg(0);
-    if (Arg(0).isMinSignedValue() && Arg(1).isAllOnes())
-      return llvm::APInt(W, 0);
-    return Arg(0).srem(Arg(1));
+    if (Arg(1).isZero()) {
+      Result = Arg(0);
+      return;
+    }
+    if (Arg(0).isMinSignedValue() && Arg(1).isAllOnes()) {
+      Result = llvm::APInt(W, 0);
+      return;
+    }
+    Result = Arg(0).srem(Arg(1));
+    return;
   case SymOp::Rol:
-    return Arg(0).rotl(Arg(1).urem(W));
+    Result = Arg(0).rotl(Arg(1).urem(W));
+    return;
   case SymOp::Ror:
-    return Arg(0).rotr(Arg(1).urem(W));
+    Result = Arg(0).rotr(Arg(1).urem(W));
+    return;
   case SymOp::Extract:
-    return Arg(0).extractBits(W, static_cast<uint32_t>(N.Aux));
+    Result = Arg(0).extractBits(W, static_cast<uint32_t>(N.Aux));
+    return;
   case SymOp::Concat: {
     llvm::APInt Acc(W, 0);
     uint32_t Shift = W;
@@ -370,24 +412,33 @@ llvm::APInt evalNodeAPImpl(const SymContext &Ctx, SymRef R, size_t NumArgs,
       Shift -= A.getBitWidth();
       Acc |= A.zext(W).shl(Shift);
     }
-    return Acc;
+    Result = Acc;
+    return;
   }
   case SymOp::ZExt:
-    return Arg(0).zext(W);
+    Result = Arg(0).zext(W);
+    return;
   case SymOp::SExt:
-    return Arg(0).sext(W);
+    Result = Arg(0).sext(W);
+    return;
   case SymOp::Ite:
-    return Arg(0).isZero() ? Arg(2) : Arg(1);
+    Result = Arg(0).isZero() ? Arg(2) : Arg(1);
+    return;
   case SymOp::Eq:
-    return llvm::APInt(1, Arg(0) == Arg(1));
+    Result = llvm::APInt(1, Arg(0) == Arg(1));
+    return;
   case SymOp::Ult:
-    return llvm::APInt(1, Arg(0).ult(Arg(1)));
+    Result = llvm::APInt(1, Arg(0).ult(Arg(1)));
+    return;
   case SymOp::Ule:
-    return llvm::APInt(1, Arg(0).ule(Arg(1)));
+    Result = llvm::APInt(1, Arg(0).ule(Arg(1)));
+    return;
   case SymOp::Slt:
-    return llvm::APInt(1, Arg(0).slt(Arg(1)));
+    Result = llvm::APInt(1, Arg(0).slt(Arg(1)));
+    return;
   case SymOp::Sle:
-    return llvm::APInt(1, Arg(0).sle(Arg(1)));
+    Result = llvm::APInt(1, Arg(0).sle(Arg(1)));
+    return;
   }
   llvm_unreachable("unhandled SymOp in evalNodeAP");
 }
@@ -410,17 +461,18 @@ llvm::APInt SymEvalPlan::evalWith(
 
     if (St.Op == SymOp::Var) {
       const llvm::APInt *V = Lookup(static_cast<uint32_t>(St.Aux));
-      ScratchAP[I] =
-          V ? (V->getBitWidth() == St.Width ? *V : V->zextOrTrunc(St.Width))
-            : llvm::APInt(St.Width, 0);
+      if (V && V->getBitWidth() == St.Width)
+        ScratchAP[I] = *V;
+      else
+        ScratchAP[I] = V ? V->zextOrTrunc(St.Width) : llvm::APInt(St.Width, 0);
       continue;
     }
 
     // Every operand precedes this output slot. Read it directly through
     // the shared operator evaluator instead of copying wide APInts into a
     // temporary argument vector for every step and validation assignment.
-    ScratchAP[I] = evalNodeAPImpl(
-        Ctx, St.Node, St.NumArgs,
+    evalNodeAPImpl(
+        Ctx, St.Node, St.NumArgs, ScratchAP[I],
         [&](size_t K) -> const llvm::APInt & { return ScratchAP[A[K]]; });
   }
 
@@ -429,9 +481,10 @@ llvm::APInt SymEvalPlan::evalWith(
 
 llvm::APInt evalNodeAP(const SymContext &Ctx, SymRef R,
                        llvm::ArrayRef<llvm::APInt> Args) {
-  return evalNodeAPImpl(
-      Ctx, R, Args.size(),
-      [&](size_t I) -> const llvm::APInt & { return Args[I]; });
+  llvm::APInt Result;
+  evalNodeAPImpl(Ctx, R, Args.size(), Result,
+                 [&](size_t I) -> const llvm::APInt & { return Args[I]; });
+  return Result;
 }
 
 } // namespace neverd::symbolic
