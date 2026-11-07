@@ -4507,10 +4507,22 @@ request, renders only what no session reached, and, once a job has reached every
 function, leaves the summaries and read-ahead until a request needs more than
 those renders answer. The inputs are the browse cache's identity without code
 edits, which are options of a function's own view and so in its key, comments and
-function names, which a view's decoration reads and the pages do not spell, and
-operand formats, which source does not show. A session whose job starts over after
-it began no longer reads as a new session does, and stops reading and adding to the
-store.
+function names, which a view's decoration reads and the pages do not spell, operand
+formats, which source does not show, data items, which only the listing reads, and
+the names of data and functions' declarations, which each render answers for itself.
+A render notes every address it asks the user's name or declaration of, stated or
+not (`UserFactReads`), and its record keeps those with a digest of what they said
+(`neverd_user_reads`). It answers while they say the same
+(`neverd_user_reads_hold`), so such an edit costs only the renders that read it, and
+the job renders those again. What analysis reads of declarations no render's reads
+cover, the prototype a declaration hides from a function's name and whether any
+declaration makes the context at all (`neverd_user_facts_analysis_reads_json`), so
+they stay in the inputs. Types new to the library that nothing names leave every
+render as it was, and a file beside the folders (`.same`) says the folder holds for
+the inputs after them too. A session whose job starts over after it began no longer
+reads as a new session does, and stops reading and adding to the store.
+With a store that reaches every function, the owner answers those views itself
+(`kept_only`), and a replica starts only for what the store does not answer.
 The job also keeps what a function's first look in the listing asks the engine, its
 recovered instructions and its stack frame, in `local/listing-facts` under the same
 identity without the names of data, which those answers do not spell either. The
@@ -4526,9 +4538,16 @@ An index entry's page table must fit its record, as it must in the store file.
 An invalid index is discarded before reading pages; the original file still
 recovers every complete record.
 A replica takes those edits in place (`analysis_update_names`), since no analysis
-reads them: what it keeps of a view stays the view's, and only a new name of data
-or a data item, which pages spell, forgets the renders and moves to a store of its
-own.
+reads them: what it keeps of a view stays the view's. A note on a function and a data
+item, which nothing analyzed or rendered reads, leave the renders as they are, and a
+new name of data costs those that asked for it. A function's declaration reaches only
+what the decompiler reads, so the debug context takes it in place
+(`LocalTypesDebugContext::takeDeclarations`) and the analysis, the summaries and what
+was read ahead under them stand, unless it hides a prototype analysis read. Types new
+to the library that nothing names do the same (`Session::takeUnreadTypes`). Other
+types let go of what read them, and the summaries, the job and the store start over,
+while the process and its image stand. The owner keeps its listing and reference index
+for those, and reads what a function was declared as when it next decodes it.
 The GUI owner no longer requests that pipeline warmup: source/CFG views use
 separate analysis sessions and cannot consume the owner's pipeline cache.
 With idle analysis enabled, native images with 4096–65536 functions and at most

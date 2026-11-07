@@ -910,6 +910,8 @@ void Session::sendOpen(const QString &requested, const QString &path,
         // Idle-time work, which a file opened without idle analysis asks for
         // none of.
         analysis_.setRendersAhead(options.analysis);
+        analysis_.setOwnerReadsKept(
+            capabilities_.contains(QStringLiteral("kept_renders")));
         if (options.analysis && native && !large &&
             functionCount_ >=
                 ::neverd::limits::gui::kSessionSendOpenFunctionCountLimit) {

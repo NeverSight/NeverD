@@ -517,6 +517,13 @@ types::TypeLibrary *localTypes(Session &S) {
   return S.LocalTypes.get();
 }
 
+/// Whether \p Result only added types to \p Library, which held \p Before.
+bool addsOnly(const types::TypeLibrary &Library, size_t Before,
+              const types::ParseResult &Result) {
+  return Result.Prototypes.empty() &&
+         Library.size() - Before == Result.Types.size();
+}
+
 /// The options object, or null with the session's error.
 std::optional<llvm::json::Object> options(Session &S, const char *Json) {
   if (!Json || !*Json)
@@ -711,6 +718,62 @@ bool Session::typesChanged(const types::TypeLibrary &Library,
   return Shows;
 }
 
+bool Session::takeUnreadTypes(
+    const types::TypeLibrary &Library, llvm::ArrayRef<std::string> Names,
+    const std::vector<std::pair<std::string, std::string>> &RenamedBefore) {
+  llvm::StringSet<> New;
+  for (const std::string &Name : Names)
+    New.insert(Name);
+  // Text asserted of a variable or a call may name them.
+  const auto Asserts = [](const auto &Kept) {
+    return !Kept.Options.VariableTypes.empty() ||
+           !Kept.Options.CallTypes.empty() || !Kept.Options.StackFrame.empty();
+  };
+  if (llvm::any_of(FunctionSources, Asserts) ||
+      llvm::any_of(FunctionLlvmModules, Asserts))
+    return false;
+  for (const types::LocalType *Type : Library.types())
+    if (!New.contains(Type->Name))
+      for (const std::string &Named : types::mentionedTypeNames(*Type))
+        if (New.contains(Named))
+          return false;
+  const llvm::StringSet<> Prototyped = prototypeTypeNames(Library);
+  if (llvm::any_of(Names, [&](const std::string &Name) {
+        return Prototyped.contains(Name);
+      }))
+    return false;
+  // Text that reads against the library names them where it spells them.
+  const auto Spells = [&](llvm::StringRef Text) {
+    while (!Text.empty()) {
+      Text =
+          Text.drop_while([](char C) { return !llvm::isAlnum(C) && C != '_'; });
+      const llvm::StringRef Word =
+          Text.take_while([](char C) { return llvm::isAlnum(C) || C == '_'; });
+      if (New.contains(Word))
+        return true;
+      Text = Text.drop_front(Word.size());
+    }
+    return false;
+  };
+  if (Spells(LocalTypeEntryType) || Spells(platformEntryDeclaration()))
+    return false;
+  for (const auto &[Entry, Declaration] : functionDeclarations())
+    if (Spells(Declaration))
+      return false;
+  // An enumerator gives way to a type of its name.
+  std::vector<std::pair<std::string, std::string>> Renamed =
+      types::renamedNames(Library, types::Language::C);
+  llvm::erase_if(Renamed, [&](const auto &Name) {
+    const size_t Scope = Name.first.find("::");
+    return New.contains(llvm::StringRef(Name.first).take_front(Scope));
+  });
+  if (Renamed != RenamedBefore)
+    return false;
+  if (LocalTypesDbg)
+    LocalTypesDbg->takeNewTypes(Library);
+  return true;
+}
+
 std::string Session::platformEntryDeclaration() const {
   if (Img.Format == BinaryFormat::COFF && Img.Entry &&
       (Img.DynInfo.PECharacteristics & llvm::COFF::IMAGE_FILE_DLL) &&
@@ -810,6 +873,7 @@ DebugContext *Session::decompileDebug() {
               : std::shared_ptr<types::TypeLibrary>(libraryFor(Img)),
       std::move(Declarations), &Img, std::move(Headers), SigDB.buildNameMap(),
       LocalTypeEntryType, programMain(), LocalTypeEntryDeclaration);
+  LocalTypesDbg->noteDeclarationReads(&UserReads);
   return LocalTypesDbg.get();
 }
 
@@ -1050,12 +1114,17 @@ const char *neverd_local_types_declare(neverd_session_t Sess,
   if (!Library)
     return nullptr;
   Declaration.Source = Source ? Source : "";
+  const size_t TypesBefore = Library->size();
+  const auto RenamedBefore = types::renamedNames(*Library, types::Language::C);
   const types::ParseResult Result = apply(Declaration, *Library);
-  bool Decompilation = false;
+  bool Decompilation = false, Unread = false;
   if (Result.ok()) {
     S->TypeDeclarations.push_back(std::move(Declaration));
-    Decompilation =
-        S->typesChanged(*Library, Result.Types, !Result.Prototypes.empty());
+    Unread = addsOnly(*Library, TypesBefore, Result) &&
+             S->takeUnreadTypes(*Library, Result.Types, RenamedBefore);
+    if (!Unread)
+      Decompilation =
+          S->typesChanged(*Library, Result.Types, !Result.Prototypes.empty());
   }
   llvm::json::Array Types, Prototypes, Problems;
   for (const std::string &Name : Result.Types)
@@ -1071,7 +1140,8 @@ const char *neverd_local_types_declare(neverd_session_t Sess,
       llvm::json::Object{{"types", std::move(Types)},
                          {"prototypes", std::move(Prototypes)},
                          {"problems", std::move(Problems)},
-                         {"decompilation", Decompilation}})));
+                         {"decompilation", Decompilation},
+                         {"unread", Unread}})));
 }
 
 const char *neverd_local_types_forget(neverd_session_t Sess,
@@ -1134,6 +1204,31 @@ const char *neverd_local_types_forget(neverd_session_t Sess,
       llvm::json::Value(llvm::json::Object{{"removed", std::move(Names)},
                                            {"usedBy", std::move(UsedBy)},
                                            {"decompilation", Decompilation}})));
+}
+
+const char *neverd_user_facts_analysis_reads_json(neverd_session_t Sess) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  S->clearError();
+  llvm::json::Array Hiding;
+  bool Context = false;
+  const std::map<va_t, std::string> Declarations = S->functionDeclarations();
+  if (!Declarations.empty()) {
+    const std::string Error = S->LastError;
+    S->decompileDebug();
+    const types::TypeLibrary *Library = S->readLocalTypes();
+    S->LastError = Error;
+    // Without them no context would read anything, and a view asks nothing.
+    Context = !S->Dbg && (!Library || Library->prototypes().empty());
+    if (const auto *Read = S->LocalTypesDbg.get())
+      for (const auto &[Entry, Text] : Declarations)
+        if (Read->hidesPrototype(Entry))
+          Hiding.push_back(vaHex(Entry));
+  }
+  return dupStr(jsonToString(llvm::json::Value(
+      llvm::json::Object{{"hiding_prototypes", std::move(Hiding)},
+                         {"declarations_make_the_context", Context}})));
 }
 
 const char *neverd_types_languages_json(void) {
@@ -1530,6 +1625,32 @@ int neverd_type_declarations_load(neverd_session_t Sess) {
       return -1;
     }
     Declarations = std::move(*Read);
+  }
+  // Declarations past those the session took, each of types nothing has read,
+  // leave what it read as it is: a running session takes them as declare does.
+  if (S->LocalTypes && Declarations.size() > S->TypeDeclarations.size() &&
+      std::equal(S->TypeDeclarations.begin(), S->TypeDeclarations.end(),
+                 Declarations.begin(),
+                 [](const Session::TypeDeclaration &A,
+                    const Session::TypeDeclaration &B) {
+                   return A.Lang == B.Lang && A.Source == B.Source &&
+                          A.Forget == B.Forget;
+                 })) {
+    const size_t Taken = S->TypeDeclarations.size();
+    bool Unread = true;
+    for (size_t I = Taken; Unread && I < Declarations.size(); ++I) {
+      const size_t TypesBefore = S->LocalTypes->size();
+      const auto RenamedBefore =
+          types::renamedNames(*S->LocalTypes, types::Language::C);
+      const types::ParseResult Result = apply(Declarations[I], *S->LocalTypes);
+      Unread = Result.ok() && Declarations[I].Forget.empty() &&
+               addsOnly(*S->LocalTypes, TypesBefore, Result) &&
+               S->takeUnreadTypes(*S->LocalTypes, Result.Types, RenamedBefore);
+    }
+    if (Unread) {
+      S->TypeDeclarations = std::move(Declarations);
+      return 0;
+    }
   }
   S->TypeDeclarations = std::move(Declarations);
   // A decompilation that read the prototypes read the declarations these

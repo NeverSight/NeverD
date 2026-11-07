@@ -6167,7 +6167,9 @@ leaves the summaries deferred until a request the store does not answer, a graph
 does not start them, comments and local and function names keep the store both in
 a running replica and across sessions, a function's own view states its new name
 without the engine and asks it only once a name is taken away, operand formats keep
-it, a new name of data, a data item and another build of the worker start over,
+it, an owner answers what is kept and refuses the rest as `not_kept` without asking
+the engine, follows a rename, a note and a declaration in what it says and reads,
+another build of the worker starts over,
 a job that starts over stops reading and adding, a record cut short is rendered
 again alone, and a damaged one reads the engine. A session reads past a record it
 could not walk through the index a finished job wrote, walks a file whose index does
@@ -6179,11 +6181,26 @@ through a real view.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the
-facts, a data item, another image and a damaged store ask the engine, and a corrected
+facts, and so does a data item, which lists as a session without the store lists it,
+another image and a damaged store ask the engine, and a corrected
 stack frame reads under what corrects it. A store another session is still writing
 answers up to its last whole record and the rest once it is there, and a later
 session reads what the code scan found, whatever it looked at first, while a
 read-only one keeps nothing and damage scans again.
+`NeverDWorkerReplicaDeclarations` declares types and a function's type, notes a
+function, undoes and redoes, all in a running replica over a real PE: each view reads
+as that of a replica restored afresh and the owner's, its listing as after a reload,
+and whether a function returns is refused for a restore.
+`NeverDWorkerKeptReads` keeps what real renders read: another address's name keeps a
+render and its own sends the view to the engine, a later name and an undo read as a
+fresh replica does, a visit keeps what it rendered in place, a declaration reaches the
+function and its callers and no other, and the store's folder never moves.
+`NeverDWorkerUnreadTypes` declares types nothing has read and those something has: one
+that names a type yet unknown and new enumerators stay unread, while the type named,
+a replacement, a prototype and a type that takes an enumerator's name are not, each
+reading as a fresh replica after it. A type then applied reads as a new context does,
+an unread one leaves a job's store and a later session's as they were, and writing
+there keeps what leads to it until a type something read moves on.
 `NeverDWorkerNamesRebuild` also renames functions, exported and not, without the
 names being read again, and each page, table and resolved name then reads as after a
 reload.
@@ -21672,3 +21689,5 @@ SymExprCancellation captured-mask tests use independent exhaustive small-word an
 SymConditionalControls and SymMBASelector Boolean-word tests use exhaustive small input tables and an independent solver check through 257 bits. Partial-mask and nonfitting-constant controls retain their data semantics; a large opaque predicate must not consume the budget before a complete root choice is recognized.
 
 SymMBARewriteCache regressions compare cold/hot work counts rather than wall-clock thresholds. Completed unchanged subtrees, opaque parent compositions, refused siblings, working-set eviction and option/context/work boundaries retain exact derivation semantics. SymMBASparseContext additionally checks placeholder declaration reuse without hiding caller inputs or carrying declarations across contexts.
+
+`HighControlFlowSemantics.UnusedValuesDropReadsOfTheirOwnFrame` keeps unused reads through pointers and past the frame while dropping reads of the private frame, across stack-adjustment chains longer than one address walk. `HighCPointerAddresses.UnusedFieldLoadIsNotARegistersEntryValue` keeps a register's entry value from taking a later unused field load's name. `SymState.AnUnreadRunOfAPartlyKnownWordIsOneInput`, `SymMBARewriteCache.RecoveredWordChoicesStayInTheEvictionOrder` and `SymMBAKnownFacts.ConstantsBesideSeveralTermsStillFold` cover unread byte runs, cache eviction of recovered word choices and masks beside several terms.

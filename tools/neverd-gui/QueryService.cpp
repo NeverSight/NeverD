@@ -51,6 +51,7 @@ bool readable(const QString &operation) {
                                         "listing",
                                         "overview",
                                         "xrefs",
+                                        "kept_renders",
                                         "string_references",
                                         "string_encodings",
                                         "x87_capabilities",

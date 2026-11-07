@@ -8333,9 +8333,8 @@ HighCWriter::anchoredOwnerAddress(const HighExpr &Const) const {
 
 HighCWriter::ImageSymbolName HighCWriter::imageSymbolName(va_t Addr) const {
   ImageSymbolName Named;
-  if (Opts.UserNames)
-    if (auto It = Opts.UserNames->find(Addr); It != Opts.UserNames->end())
-      Named.Raw = It->second;
+  if (const std::string *User = Opts.userName(Addr))
+    Named.Raw = *User;
   // A literal's symbol spells its text, not a name (MSVC's `??_C@`).
   if (Named.Raw.empty() && Dbg) {
     if (auto Data = Dbg->resolveDataObject(Addr);

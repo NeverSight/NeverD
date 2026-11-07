@@ -749,16 +749,8 @@ int neverd_functions_load(neverd_session_t Sess) {
     }
   }
   // What analysis reads: whether functions start there and return.  A
-  // declaration, or a note, changes no more than the decompiler's text.
-  const auto WithoutDeclarations =
-      [](std::map<va_t, Session::FunctionAttributes> Rows) {
-        for (auto &[Entry, Attributes] : Rows)
-          Attributes.Type.reset();
-        return Rows;
-      };
-  const bool Changed = Edits != S->FunctionEdits ||
-                       WithoutDeclarations(AttributeEdits) !=
-                           WithoutDeclarations(S->FunctionAttributeEdits);
+  // declaration changes no more than the decompiler's text, and a note nothing.
+  const bool Changed = Edits != S->FunctionEdits;
   const std::map<va_t, std::string> DeclarationsBefore =
       S->functionDeclarations();
   S->FunctionEdits = std::move(Edits);

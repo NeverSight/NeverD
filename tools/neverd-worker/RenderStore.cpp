@@ -30,6 +30,9 @@ constexpr std::string_view FileExtension = ".ndrs";
 constexpr std::string_view RecordMagic = "NDRR";
 constexpr std::string_view IndexExtension = ".ndri";
 constexpr std::string_view IndexMagic = "NDRI1\n";
+/// A file beside the folders, named for an identity, naming the folder that
+/// identity reads.
+constexpr std::string_view SameExtension = ".same";
 
 struct RecordHeader {
   char magic[4];
@@ -60,13 +63,52 @@ struct IndexRow {
   std::uint32_t pages, keyBytes;
 };
 static_assert(sizeof(IndexRow) == 32);
+
+/// The folder \p identity reads under \p folder.
+std::string readFolder(const fs::path &folder, const std::string &identity) {
+  std::ifstream input(folder / (identity + std::string(SameExtension)),
+                      std::ios::binary);
+  std::string name;
+  std::error_code error;
+  if (input && std::getline(input, name) && !name.empty() &&
+      name.find_first_of("/\\") == std::string::npos &&
+      fs::is_directory(folder / name, error))
+    return name;
+  return identity;
+}
 } // namespace
 
 RenderStore::RenderStore(fs::path folder, const std::string &identity,
                          bool writable)
-    : folder_(std::move(folder)), directory_(folder_ / identity),
-      writable_(writable) {
+    : folder_(std::move(folder)), writable_(writable) {
+  directory_ = folder_ / readFolder(folder_, identity);
   refresh();
+}
+
+void RenderStore::keepFor(const fs::path &folder, const std::string &from,
+                          const std::string &to) {
+  const auto kept = readFolder(folder, from);
+  std::error_code error;
+  // A folder of its own holds for it already.
+  if (kept == to || !fs::is_directory(folder / kept, error) ||
+      fs::is_directory(folder / to, error))
+    return;
+  const auto path = folder / (to + std::string(SameExtension));
+  auto temporary = path;
+  temporary += ".tmp";
+  {
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    output << kept << '\n';
+    if (!output.flush())
+      return;
+  }
+  fs::rename(temporary, path, error);
+  if (error)
+    fs::remove(temporary, error);
+}
+
+bool RenderStore::keeps(const std::string &identity) const {
+  return folder_ / readFolder(folder_, identity) == directory_;
 }
 
 void RenderStore::refresh() {
@@ -242,6 +284,26 @@ std::vector<std::string> RenderStore::read(const std::string &key) {
   return {};
 }
 
+std::optional<std::string> RenderStore::readFirst(const std::string &key) {
+  const auto found = records_.find(key);
+  if (found == records_.end() || !found->second.pages)
+    return std::nullopt;
+  const Record &record = found->second;
+  auto &input = *files_[record.file].input;
+  input.clear();
+  input.seekg(static_cast<std::streamoff>(record.offset));
+  std::uint64_t size = 0;
+  const std::uint64_t sizes = record.pages * sizeof(std::uint64_t);
+  if (!input.read(reinterpret_cast<char *>(&size), sizeof(size)) ||
+      sizes > record.dataBytes || size > record.dataBytes - sizes)
+    return std::string();
+  input.seekg(static_cast<std::streamoff>(record.offset + sizes));
+  std::string page(size, '\0');
+  if (size && !input.read(page.data(), static_cast<std::streamsize>(size)))
+    return std::string();
+  return page;
+}
+
 bool RenderStore::startFile() {
   std::error_code error;
   fs::create_directories(directory_, error);
@@ -251,7 +313,10 @@ bool RenderStore::startFile() {
   // again unless the project returns to it exactly.
   for (fs::directory_iterator other(folder_, error), end;
        !error && other != end; other.increment(error))
-    if (other->path() != directory_) {
+    if (other->path() != directory_ &&
+        !(other->path().extension() == SameExtension &&
+          folder_ / readFolder(folder_, other->path().stem().string()) ==
+              directory_)) {
       std::error_code removal;
       fs::remove_all(other->path(), removal);
     }

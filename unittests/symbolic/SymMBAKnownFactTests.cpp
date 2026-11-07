@@ -98,3 +98,30 @@ TEST(SymMBAKnownFacts, ExtractConsumesTheBoundOfATotalUnsignedRemainder) {
       C.mkExtract(C.mkURem(Dividend, C.mkZExt(Key, 64)), 47, 1);
   EXPECT_NE(simplifyWindow(C, MayBeZero), C.mkZero(1));
 }
+
+TEST(SymMBAKnownFacts, ConstantsBesideSeveralTermsStillFold) {
+  SymContext C;
+  const auto P = C.mkZExt(C.mkVar("p", 1), 8), Q = C.mkZExt(C.mkVar("q", 1), 8);
+  const auto X = C.mkVar("x", 8);
+  // Bit 0 and bit 5 never meet, whatever else the AND reads.
+  const auto Nothing =
+      C.mkAnd({C.mkConst(8, 0xAA), X, P, C.mkMul(C.mkConst(8, 32), Q)});
+  ASSERT_EQ(C.op(Nothing), SymOp::And);
+  EXPECT_EQ(simplifyMBADeep(C, Nothing).Expr, C.mkZero(8));
+  // Every bit these terms can set is already set.
+  const auto Doubled = C.mkMul(C.mkConst(8, 2), P);
+  const auto Scaled = C.mkMul(C.mkConst(8, 4), Q);
+  const auto Everything = C.mkOr({C.mkConst(8, 0xFE), Doubled, Scaled});
+  ASSERT_EQ(C.op(Everything), SymOp::Or);
+  EXPECT_EQ(simplifyMBADeep(C, Everything).Expr, C.mkConst(8, 0xFE));
+  // A term that can set another bit stays.
+  const auto Kept = C.mkOr({C.mkConst(8, 0xFE), P, Scaled});
+  const auto Result = simplifyMBADeep(C, Kept).Expr;
+  EXPECT_FALSE(C.isConst(Result));
+  for (uint64_t PV : {0u, 1u})
+    for (uint64_t QV : {0u, 1u})
+      for (uint64_t XV : {0u, 0x5Au}) {
+        const uint64_t Values[] = {PV, QV, XV};
+        EXPECT_EQ(C.evalU64(Result, Values), C.evalU64(Kept, Values));
+      }
+}
