@@ -21409,3 +21409,5 @@ and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
 frontend regressions and 91 generated-table tests passed. NeverC's strict
 global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
+
+`SymKnownBits` bounded unsigned-remainder regressions cover dynamic nonzero divisors, possibly zero divisors, exhausted dividends and 8/16/32/64/128-bit bounds; the extracted-bit MBA regression checks that a consumer uses the fact without assuming division is partial.

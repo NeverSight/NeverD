@@ -430,7 +430,7 @@ SymRef foldKnownBits(SymContext &Ctx, SymRef Root, SymKnownBits &Known,
                        Ctx.isConst(Ctx.operand(Root, 0));
   // Only ask for facts at the consumers that use them. Opaque boundaries keep
   // the existing deep walk's guarantee of spending no region work there.
-  if (!HasMask && !isPredicate(Op))
+  if (!HasMask && !isPredicate(Op) && Op != SymOp::Extract)
     return Root;
   constexpr size_t FactBytes = 128;
   unsigned Available = unsigned(

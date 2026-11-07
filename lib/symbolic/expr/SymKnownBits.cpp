@@ -148,6 +148,37 @@ std::optional<Bits> SymKnownBits::compute(SymRef R, unsigned &Remaining,
   default:
     return Bits(W);
   }
+  if (Op == SymOp::URem) {
+    if (!spend(Remaining, words(W)))
+      return std::nullopt;
+    const auto Divisor = C.operand(R, 1);
+    auto Right = infer(Divisor, Remaining, Depth + 1);
+    if (!Right)
+      return std::nullopt;
+    bool Nonzero = Right->isNonZero();
+    if (!Nonzero && C.op(Divisor) == SymOp::Add)
+      for (auto Term : C.operands(Divisor))
+        if (auto Literal = C.asConst(Term); Literal && !Literal->isZero()) {
+          auto NoWrap = nonwrappingAtLeast(Divisor, Term, Remaining, Depth + 1);
+          if (!NoWrap)
+            return std::nullopt;
+          Nonzero = *NoWrap;
+          break;
+        }
+    auto Left = infer(C.operand(R, 0), Remaining, Depth + 1);
+    const auto Dividend = Left.value_or(Bits(W));
+    if (Left && Right->isConstant() && !Right->getConstant().isZero() &&
+        Left->getMaxValue().ult(Right->getConstant()))
+      return *Left;
+    auto Result = Bits::urem(Dividend, *Right);
+    // LLVM's transfer excludes division by zero. In the total bitvector
+    // domain x urem 0 is x, so retain that case unless nonzero is proved.
+    if (!Nonzero)
+      Result = Result.intersectWith(Dividend);
+    if (!Left && Result.isUnknown())
+      return std::nullopt;
+    return Result;
+  }
   llvm::SmallVector<Bits, 4> Children;
   for (auto O : C.operands(R)) {
     auto K = infer(O, Remaining, Depth + 1);
