@@ -223,7 +223,7 @@ TEST(SBFCallXContexts, JoinsEveryFiniteCalleeReturnAndMemoryOutcome) {
           }
         EXPECT_TRUE(CompleteSet);
         const auto JSON = callXContextReportJSON(*Program, *Report);
-        EXPECT_EQ(JSON.getInteger("schema"), 14);
+        EXPECT_EQ(JSON.getInteger("schema"), 15);
         const auto *Frame = JSON.getObject("frame_coordinates");
         ASSERT_NE(Frame, nullptr);
         EXPECT_EQ(Frame->getString("namespace").value_or(""),
@@ -6039,6 +6039,255 @@ TEST(SBFCallXContexts, NarrowDiscriminantsCrossOutputMemory) {
           EXPECT_EQ(Raw->ReturnValue, 42u);
       }
     }
+}
+
+TEST(SBFCallXContexts, TaggedReturnBranchesRecoverOnlyTheirOwnPayload) {
+  for (unsigned Bytes : {1u, 2u, 4u, 8u})
+    for (unsigned Mode = 0; Mode < 9; ++Mode) {
+      SCOPED_TRACE(Bytes);
+      SCOPED_TRACE(Mode);
+      const Opcode Load = Bytes == 1   ? Opcode::LD_B_REG
+                          : Bytes == 2 ? Opcode::LD_H_REG
+                          : Bytes == 4 ? Opcode::LD_W_REG
+                                       : Opcode::LD_DW_REG;
+      const Opcode Store = Bytes == 1   ? Opcode::ST_B_REG
+                           : Bytes == 2 ? Opcode::ST_H_REG
+                           : Bytes == 4 ? Opcode::ST_W_REG
+                                        : Opcode::ST_DW_REG;
+      std::vector<test::EncodedInstruction> Text;
+      const auto Literal = [&](unsigned R, uint64_t Value) {
+        const size_t Slot = Text.size();
+        const auto Words = test::loadImm64(R, Value);
+        Text.insert(Text.end(), Words.begin(), Words.end());
+        return Slot;
+      };
+      Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+      Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -32));
+      const size_t Call = Text.size();
+      Text.push_back({});
+      if (Mode == 1) {
+        Text.push_back(encode(Opcode::MOV64_IMM, 2, 0, 0, 1));
+        Text.push_back(encode(Store, 10, 2, -32));
+      } else if (Mode == 2 || Mode == 3 || Mode == 8) {
+        Literal(1, kInputStart);
+        Text.push_back(encode(Opcode::LD_DW_REG, 2, 1, 8));
+        if (Mode != 2) {
+          // This pointer can alias either returned field.
+          Text.push_back(encode(Opcode::LD_DW_REG, 1, 1, 16));
+          Text.push_back(encode(Opcode::ST_DW_REG, 1, 2));
+        } else {
+          Text.push_back(encode(Opcode::ST_DW_REG, 10, 2, -24));
+        }
+      }
+      Text.push_back(encode(Load, 7, 10, -32));
+      unsigned TagRegister = 7;
+      if (Mode == 4) {
+        Text.push_back(encode(Opcode::MOV64_REG, 8, 7));
+        TagRegister = 8;
+      } else if (Mode == 5) {
+        Literal(1, kInputStart);
+        Text.push_back(encode(Load, 7, 1, 24));
+      }
+      const size_t Branch = Text.size();
+      Text.push_back({});
+      Text.push_back(encode(Opcode::LD_DW_REG, 2, 10, -24));
+      if (Mode == 7 || Mode == 8)
+        Text.push_back(encode(Opcode::LD_DW_REG, 2, 2));
+      const size_t CallX = Text.size();
+      Text.push_back(encode(Opcode::CALL_REG, 2));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Success = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 5));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t Callee = Text.size();
+      Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+      Literal(3, kInputStart);
+      Text.push_back(encode(Opcode::LD_DW_REG, 2, 3));
+      const size_t Select = Text.size();
+      Text.push_back({});
+      Text.push_back(encode(Opcode::LD_DW_REG, 2, 3, 8));
+      Text.push_back(encode(Opcode::ST_DW_REG, 6, 2, 8));
+      Text.push_back(encode(Opcode::MOV64_IMM, 1));
+      const size_t Join = Text.size();
+      Text.push_back({});
+      const size_t Error = Text.size();
+      std::optional<size_t> AllocationCall;
+      if (Mode == 7 || Mode == 8) {
+        Literal(1, kInputStart + 32);
+        AllocationCall = Text.size();
+        Text.push_back({});
+      }
+      const size_t TargetLiteral = Literal(2, 0);
+      if (Mode == 7 || Mode == 8) {
+        Text.push_back(encode(Opcode::ST_DW_REG, 0, 2));
+        Text.push_back(encode(Opcode::ST_DW_REG, 6, 0, 8));
+      } else {
+        Text.push_back(encode(Opcode::ST_DW_REG, 6, 2, 8));
+      }
+      Text.push_back(Mode == 6 ? encode(Load, 1, 3, 24)
+                               : encode(Opcode::MOV64_IMM, 1, 0, 0, 1));
+      const size_t Tail = Text.size();
+      Text.push_back(encode(Store, 6, 1));
+      Text.push_back(encode(Opcode::EXIT));
+      if (AllocationCall) {
+        const size_t Allocate = Text.size();
+        Text.push_back(encode(Opcode::LD_DW_REG, 0, 1));
+        Literal(2, kHeapStart + 8);
+        const size_t Below = Text.size();
+        Text.push_back({});
+        Literal(2, kHeapStart + 128);
+        const size_t Above = Text.size();
+        Text.push_back({});
+        Text.push_back(encode(Opcode::EXIT));
+        const size_t Fallback = Literal(0, kHeapStart + 32);
+        Text.push_back(encode(Opcode::EXIT));
+        Text[*AllocationCall] =
+            encode(Opcode::CALL_IMM, 0, 1, 0, Allocate - *AllocationCall - 1);
+        Text[Below] = encode(Opcode::JLT64_REG, 0, 2, Fallback - Below - 1);
+        Text[Above] = encode(Opcode::JGT64_REG, 0, 2, Fallback - Above - 1);
+      }
+      const size_t A = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+      Text.push_back(encode(Opcode::EXIT));
+      const size_t B = Text.size();
+      Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 43));
+      Text.push_back(encode(Opcode::EXIT));
+      Text[Call] = encode(Opcode::CALL_IMM, 0, 1, 0, Callee - Call - 1);
+      Text[Branch] =
+          encode(Opcode::JEQ64_IMM, TagRegister, 0, Success - Branch - 1);
+      Text[Select] = encode(Opcode::JNE64_IMM, 2, 0, Error - Select - 1);
+      Text[Join] = encode(Opcode::JA, 0, 0, Tail - Join - 1);
+      const auto Address = test::loadImm64(2, kBytecodeStart + A * 8);
+      std::copy(Address.begin(), Address.end(), Text.begin() + TargetLiteral);
+      auto Program = analyze(test::makeImage(Text, {}));
+      ASSERT_TRUE(static_cast<bool>(Program))
+          << llvm::toString(Program.takeError());
+      auto Report = recoverCallXContexts(*Program);
+      ASSERT_TRUE(static_cast<bool>(Report))
+          << llvm::toString(Report.takeError());
+      checkSummaryReferences(*Report);
+      EXPECT_FALSE(Report->SpecializationBudgetExhausted);
+      EXPECT_EQ(llvm::any_of(Report->Contexts,
+                             [&](const auto &Site) {
+                               return Site.CallXSlot == CallX &&
+                                      Site.TargetSlot == A;
+                             }),
+                Mode == 0 || Mode == 4 || Mode == 7);
+      for (uint64_t ErrorInput : {0u, 1u}) {
+        ExecutionEnvironment Environment;
+        std::vector<uint8_t> Input(40);
+        llvm::support::endian::write64le(Input.data(), ErrorInput);
+        llvm::support::endian::write64le(Input.data() + 8,
+                                         kBytecodeStart + B * 8);
+        llvm::support::endian::write64le(
+            Input.data() + 16,
+            Mode == 8 ? kHeapStart + 32
+                      : initialFramePointer(Program->Low.TheVersion,
+                                            Program->Config) -
+                            24);
+        llvm::support::endian::write64le(Input.data() + 24, 1);
+        llvm::support::endian::write64le(Input.data() + 32, kHeapStart + 32);
+        Environment.Memory.push_back({kInputStart, Input, false, "tag input"});
+        Environment.Memory.push_back(
+            {kHeapStart, std::vector<uint8_t>(256), true, "heap"});
+        auto Raw = executeRaw(*Program, std::move(Environment));
+        ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+        ASSERT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+        const bool TakesCall = ErrorInput || Mode == 1 || Mode == 5;
+        EXPECT_EQ(Raw->ReturnValue,
+                  !TakesCall                                           ? 5u
+                  : !ErrorInput || Mode == 2 || Mode == 3 || Mode == 8 ? 43u
+                                                                       : 42u);
+      }
+    }
+}
+
+TEST(SBFCallXContexts, TaggedReturnsKeepTheCompleteAlternativeLimit) {
+  for (unsigned Count :
+       {kCallXContextValueAlternatives - 1, kCallXContextValueAlternatives,
+        kCallXContextValueAlternatives + 1}) {
+    SCOPED_TRACE(Count);
+    std::vector<test::EncodedInstruction> Text;
+    const auto Literal = [&](unsigned R, uint64_t Value) {
+      const size_t Slot = Text.size();
+      const auto Words = test::loadImm64(R, Value);
+      Text.insert(Text.end(), Words.begin(), Words.end());
+      return Slot;
+    };
+    Text.push_back(encode(Opcode::MOV64_REG, 1, 10));
+    Text.push_back(encode(Opcode::ADD64_IMM, 1, 0, 0, -16));
+    const size_t Call = Text.size();
+    Text.push_back({});
+    Text.push_back(encode(Opcode::LD_DW_REG, 1, 10, -16));
+    Text.push_back(encode(Opcode::JNE64_IMM, 1, 0, 3, Count - 1));
+    Text.push_back(encode(Opcode::LD_DW_REG, 2, 10, -8));
+    const size_t CallX = Text.size();
+    Text.push_back(encode(Opcode::CALL_REG, 2));
+    Text.push_back(encode(Opcode::EXIT));
+    Text.push_back(encode(Opcode::MOV64_IMM, 0));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Callee = Text.size();
+    Text.push_back(encode(Opcode::MOV64_REG, 6, 1));
+    Literal(3, kInputStart);
+    Text.push_back(encode(Opcode::LD_DW_REG, 2, 3));
+    std::vector<size_t> Selects, Entries, Joins;
+    for (unsigned I = 0; I + 1 < Count; ++I) {
+      Selects.push_back(Text.size());
+      Text.push_back({});
+    }
+    const size_t Default = Text.size();
+    Text.push_back({});
+    size_t TargetLiteral = 0;
+    for (unsigned I = 0; I < Count; ++I) {
+      Entries.push_back(Text.size());
+      if (I + 1 == Count)
+        TargetLiteral = Literal(2, 0);
+      else
+        Text.push_back(encode(Opcode::LD_DW_REG, 2, 3, 8));
+      Text.push_back(encode(Opcode::ST_DW_REG, 6, 2, 8));
+      Text.push_back(encode(Opcode::MOV64_IMM, 1, 0, 0, I));
+      Joins.push_back(Text.size());
+      Text.push_back({});
+    }
+    const size_t Tail = Text.size();
+    Text.push_back(encode(Opcode::ST_DW_REG, 6, 1));
+    Text.push_back(encode(Opcode::EXIT));
+    const size_t Target = Text.size();
+    Text.push_back(encode(Opcode::MOV64_IMM, 0, 0, 0, 42));
+    Text.push_back(encode(Opcode::EXIT));
+    Text[Call] = encode(Opcode::CALL_IMM, 0, 1, 0, Callee - Call - 1);
+    for (unsigned I = 0; I + 1 < Count; ++I)
+      Text[Selects[I]] =
+          encode(Opcode::JEQ64_IMM, 2, 0, Entries[I] - Selects[I] - 1, I);
+    Text[Default] = encode(Opcode::JA, 0, 0, Entries.back() - Default - 1);
+    for (size_t At : Joins)
+      Text[At] = encode(Opcode::JA, 0, 0, Tail - At - 1);
+    const auto Address = test::loadImm64(2, kBytecodeStart + Target * 8);
+    std::copy(Address.begin(), Address.end(), Text.begin() + TargetLiteral);
+    auto Program = analyze(test::makeImage(Text, {}));
+    ASSERT_TRUE(static_cast<bool>(Program))
+        << llvm::toString(Program.takeError());
+    auto Report = recoverCallXContexts(*Program);
+    ASSERT_TRUE(static_cast<bool>(Report))
+        << llvm::toString(Report.takeError());
+    checkSummaryReferences(*Report);
+    EXPECT_EQ(llvm::any_of(Report->Contexts,
+                           [&](const auto &Site) {
+                             return Site.CallXSlot == CallX &&
+                                    Site.TargetSlot == Target;
+                           }),
+              Count <= kCallXContextValueAlternatives);
+    for (unsigned InputCase = 0; InputCase <= Count; ++InputCase) {
+      ExecutionEnvironment Environment;
+      std::vector<uint8_t> Input(16);
+      llvm::support::endian::write64le(Input.data(), InputCase);
+      Environment.Memory.push_back({kInputStart, Input, false, "tag selector"});
+      auto Raw = executeRaw(*Program, std::move(Environment));
+      ASSERT_TRUE(static_cast<bool>(Raw)) << llvm::toString(Raw.takeError());
+      ASSERT_EQ(Raw->Status, ExecutionStatus::Returned) << Raw->Error;
+      EXPECT_EQ(Raw->ReturnValue, InputCase + 1 >= Count ? 42u : 0u);
+    }
+  }
 }
 
 TEST(SBFStoredRegisterMemory, NarrowCopiesKeepWidthsAndRejectPointerFragments) {
