@@ -21486,3 +21486,5 @@ HighControlFlowSemantics external-skip tests independently execute all 256 branc
 `HighExprSimplify.NamingCapturedReadsCleansTheirDeadValueConsumers` checks newly pure consumers after expression naming. Zero masks disappear while the captured load and its original address remain.
 
 `NeverDHighFlagReadTests` covers unused/live EFLAGS images, malformed or unowned calls, branch anchors, exact owned x86/x64 LLVM assembly and retained write ordering. LLVM cleanup changes only the source clone; the original module and native code generation stay intact.
+
+HighSymSimplify bitcast, low-prefix, Boolean/selection and incoming-PHI regressions compare exact APInt results and compiled C at O0/O2. Control splits, labels, ambiguous widths, calls, loads and assignment conversions retain their original scope and effect boundaries.
