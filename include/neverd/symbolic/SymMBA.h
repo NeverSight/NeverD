@@ -64,7 +64,9 @@
 
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <unordered_map>
+#include <vector>
 
 namespace neverd::symbolic {
 
@@ -155,6 +157,8 @@ struct MBAOptions {
   /// algorithm that fits.
   size_t MaxTableBytes = size_t(1) << 28;
 
+  bool operator==(const MBAOptions &) const = default;
+
   /// Every reach dial at its maximum: measure as wide as memory allows,
   /// tabulate as far as that reaches, and never stop for a work budget.
   ///
@@ -241,7 +245,7 @@ namespace detail {
 class MBADeepSimplifier;
 }
 
-/// Caller-owned, bounded cache of context-local exact shortening derivations.
+/// Caller-owned, bounded cache of context-local simplification work.
 /// The context must outlive this object and remain at the same address. No
 /// sampled equalities or path assumptions are retained. Capacity bounds the
 /// persistent entry count independently of per-query measurement storage.
@@ -254,8 +258,10 @@ public:
       : Owner(&Context), Capacity(Capacity) {}
   MBARewriteCache(const MBARewriteCache &) = delete;
   MBARewriteCache &operator=(const MBARewriteCache &) = delete;
-  size_t size() const { return Rewrites.size(); }
+  size_t size() const { return Rewrites.size() + Completed.size(); }
   uint64_t reusedRoots() const { return ReusedRoots; }
+  uint64_t reusedCompletions() const { return ReusedCompletions; }
+  uint64_t evictedEntries() const { return EvictedEntries; }
 
 private:
   friend class detail::MBADeepSimplifier;
@@ -263,6 +269,20 @@ private:
   size_t Capacity;
   uint64_t ReusedRoots = 0;
   std::unordered_map<uint32_t, SymRef> Rewrites;
+  // An unchanged completed attempt is a reusable transformation, not a claim
+  // that the expression has no shorter form. Different options retry it.
+  std::optional<MBAOptions> CompletedOptions;
+  std::unordered_map<uint32_t, MBAResult> Completed;
+  uint64_t ReusedCompletions = 0;
+  struct Entry {
+    uint32_t Index;
+    bool IsRewrite;
+  };
+  // Insertion order bounds the working set without permanently pinning the
+  // first Capacity results of a long analysis. Policy changes retire noops.
+  std::vector<Entry> Order;
+  size_t OrderFront = 0;
+  uint64_t EvictedEntries = 0;
 };
 
 /// Measure \p E as one region and rewrite it into the best form that admits.
@@ -284,8 +304,9 @@ MBAResult simplifyMBADeep(SymContext &Ctx, SymRef E,
                           const MBAOptions &Opts = {});
 
 /// Reuse exact derivations across queries. Each reused root consumes work;
-/// zero-work queries do not reuse facts. Child hits retain the ordinary DAG
-/// walk and final whole-expression growth/verification checks. A cache from
+/// zero-work queries do not reuse facts. Child hits cut their completed
+/// subtrees, retaining independent uses and the final whole-expression
+/// growth/verification checks. A cache from
 /// another context throws std::invalid_argument before analysis starts.
 MBAResult simplifyMBADeep(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
                           MBARewriteCache &Cache);
