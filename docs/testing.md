@@ -21409,3 +21409,5 @@ and 64 rejected corruption controls. All four LLVM lit tests, 25 NeverC
 frontend regressions and 91 generated-table tests passed. NeverC's strict
 global-state audit still reports the same 90 source-global findings as the
 recorded baseline; this change adds none and does not weaken the audit.
+
+HighControlFlowSemantics external-skip tests independently execute all 256 branch choices and preserve earlier nested incoming edges. Batched external-skip ownership must retain statement order and reject outside entries; the current upstream goto-splice and entry-label indexes are retained. Windows exception regressions qualify exceptional control flow.
