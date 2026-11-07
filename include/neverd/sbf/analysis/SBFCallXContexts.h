@@ -204,8 +204,11 @@ struct CallXFunctionSummary {
   std::vector<CallXMemoryWrite> MemoryWrites;
   size_t MinimumDepth = 0;
   size_t InputScratchWords = 0;
+  size_t InputNarrowScalarCells = 0;
   size_t OutputScratchWords = 0;
+  size_t OutputNarrowScalarCells = 0;
   size_t OutputParameterizedWords = 0;
+  size_t OutputNarrowParameterizedFields = 0;
   size_t OutputFieldValueExpressions = 0;
   size_t OutputMemoryCopies = 0;
 };

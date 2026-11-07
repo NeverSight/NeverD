@@ -439,10 +439,16 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
          static_cast<int64_t>(Summary.InputScratchWords)},
         {"output_scratch_words",
          static_cast<int64_t>(Summary.OutputScratchWords)},
+        {"input_narrow_scalar_cells",
+         static_cast<int64_t>(Summary.InputNarrowScalarCells)},
+        {"output_narrow_scalar_cells",
+         static_cast<int64_t>(Summary.OutputNarrowScalarCells)},
         {"output_memory_copies",
          static_cast<int64_t>(Summary.OutputMemoryCopies)},
         {"output_parameterized_words",
          static_cast<int64_t>(Summary.OutputParameterizedWords)},
+        {"output_narrow_parameterized_fields",
+         static_cast<int64_t>(Summary.OutputNarrowParameterizedFields)},
         {"output_field_value_expressions",
          static_cast<int64_t>(Summary.OutputFieldValueExpressions)}};
     if (Summary.ReturnValueExpression)
@@ -513,7 +519,7 @@ llvm::json::Object callXContextReportJSON(const SBFProgram &Program,
   const auto Translation =
       frameTranslationLimit(Program.Low.TheVersion, Program.Config);
   return llvm::json::Object{
-      {"schema", 12},
+      {"schema", 13},
       {"captured_addresses", std::move(Captures)},
       {"distinct_captures_prove_no_alias", false},
       {"frame_coordinates",

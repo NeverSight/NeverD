@@ -699,7 +699,7 @@ reuse an old object's equality identity. Coordinate configuration is shared
 across the analysis and charged at its owner.
 
 Generic byte-copy postconditions snapshot entry fields after invalidating all
-preceding may-writes. They retain full words only, meet at joins and disappear
+preceding may-writes. They retain complete typed cells, meet at joins and disappear
 when a later destination write may overlap. Only generic summaries retain a
 complete entry-relative write history for deferred copies. A specialized caller
 applies them to its current memory and retains the resulting typed facts; it
@@ -729,11 +729,31 @@ partial loads, runtime/account contents, recursive effects, unresolved aliasing
 and unproved expressions remain open. No result rewrites global CALLX dispatch
 or closes its target set; dynamic fallback is mandatory.
 
-Contextual keys retain the typed full-width cells consumed by CALLX proofs.
-Descriptor-byte buffers have no reader in this optional analysis and are
-projected out, so unread byte differences do not split equivalent inputs or
-consume the retained-state budget. Canonical store/copy transfers retain their
-full-width tags and partial-overwrite invalidation. Concrete functions whose
+Schema 13 retains literal 1-, 2- and 4-byte scalar cells alongside full-width
+pointer/value cells. Narrow stores truncate literal bits; a partial pointer
+store cannot establish a pointer fragment. Loads require an exact address and
+width: cells are neither assembled from adjacent stores nor sliced from larger
+stores. Complete copies preserve cell widths, and possibly overlapping writes
+invalidate them through the same typed-memory owner. Parameterized output fields
+carry these narrow constants across calls. The existing 128-cell limit and all
+analysis budgets remain unchanged; the larger map keys consume the retained
+memory estimate. Full-width word counters keep their old meaning; separate
+`input_narrow_scalar_cells`, `output_narrow_scalar_cells` and
+`output_narrow_parameterized_fields` report narrow facts. Applied stored-value
+counts include both widths. This does not preserve tag/payload correlations
+between distinct return paths.
+
+Contextual input keys retain full-width cells. Incoming narrow cells are
+projected to unknown before specialization; they cannot consume the four slots
+merely because a caller left different byte values in unrelated memory.
+The callee can still read immutable image bytes and publish locally established
+narrow output fields. Narrow caller facts survive a call only after canonical
+may-write invalidation, then new output postconditions are applied. Unknown
+writes cannot restore a saved byte from an older invocation. The separate
+untyped descriptor byte buffer also remains projected out. Consuming caller
+narrow fields inside another function needs read-dependent input summaries and
+remains an explicit precision gap; this round does not claim that capability.
+Concrete functions whose
 completed generic summary contains CALLX sites process CFG joins in reverse
 postorder. Generic summaries and concrete forwarding wrappers retain FIFO
 scheduling, including the order in which they request the four cached
