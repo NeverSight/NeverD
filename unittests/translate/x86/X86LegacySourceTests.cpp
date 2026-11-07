@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -36,6 +37,11 @@ using namespace neverd;
 using namespace neverd::translate;
 
 namespace {
+
+std::string readSourceArtifact(const fs::path &Path) {
+  std::ifstream File(Path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(File), {}};
+}
 
 struct SourceUnit {
   uint32_t Address;
@@ -565,7 +571,7 @@ TEST_P(X86LegacySourceTest,
             GetParam() & 1 ? "-O2" : "-O0", "-Wall", "-Wextra", "-Werror", "-c",
             CrossSource.string(), "-o", CrossObject.string()});
   ASSERT_TRUE(Cross.ok()) << Cross.err;
-  const auto Object = readFile(CrossObject);
+  const auto Object = readSourceArtifact(CrossObject);
   ASSERT_GE(Object.size(), 20u);
   EXPECT_EQ(Object.substr(0, 4), std::string("\x7f"
                                              "ELF",
@@ -580,19 +586,19 @@ TEST_P(X86LegacySourceTest,
   Args.push_back("--continuation-report=" + Report.string());
   auto Ran = exec(ndBin(), Args);
   ASSERT_TRUE(Ran.ok()) << Ran.err;
-  EXPECT_EQ(readFile(Output), Expected.Source);
-  EXPECT_EQ(readFile(Report), Expected.Manifest);
+  EXPECT_EQ(readSourceArtifact(Output), Expected.Source);
+  EXPECT_EQ(readSourceArtifact(Report), Expected.Manifest);
   for (const auto &Extra :
        {std::string("--llvm"), "--x64-continuation=" + Settings.string(),
         std::string("--func=0x1000")}) {
     auto Bad = Args;
     Bad.push_back(Extra);
     EXPECT_FALSE(exec(ndBin(), Bad).ok());
-    EXPECT_EQ(readFile(Output), Expected.Source);
+    EXPECT_EQ(readSourceArtifact(Output), Expected.Source);
   }
   Args.back() = "--continuation-report=" + Output.string();
   EXPECT_FALSE(exec(ndBin(), Args).ok());
-  EXPECT_EQ(readFile(Output), Expected.Source);
+  EXPECT_EQ(readSourceArtifact(Output), Expected.Source);
   Driver Run = nullptr;
   ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
   X86LegacySourceExecution Context(S, *M, O);
