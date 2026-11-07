@@ -73,7 +73,9 @@ class LegacySourceIntegrationTests(unittest.TestCase):
             self.request, len(self.request), None), source)
 
     def test_failure_clears_manifest_and_reports_error(self):
-        for request, size in ((b"{}", 2), (self.request, len(self.request) - 1),
+        for request, size in ((b"{}", 2), (self.request, 0),
+                              (self.request, ctypes.c_size_t(-1).value),
+                              (self.request, len(self.request) - 1),
                               (None, len(self.request))):
             with self.subTest(request=request, size=size):
                 manifest = ctypes.c_void_p(1)

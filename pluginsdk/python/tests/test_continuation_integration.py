@@ -87,6 +87,8 @@ class ContinuationIntegrationTests(unittest.TestCase):
     def test_failure_clears_manifest_and_reports_error(self):
         for request, size, route in (
                 (b"{}", 2, 0), (self.request, len(self.request), 2),
+                (self.request, 0, 0),
+                (self.request, ctypes.c_size_t(-1).value, 0),
                 (self.request, len(self.request) - 1, 0),
                 (None, len(self.request), 0)):
             with self.subTest(request=request, size=size, route=route):
