@@ -455,11 +455,13 @@ void profileInput(llvm::FoldingSetNodeID &ID, size_t Block, bool Generic,
 }
 
 struct ContextCall : CallXSummaryEdge {
+  bool ReadProjectedInput = false;
   std::vector<CallXContextEvidence> InputExpressionTargets;
 };
 
 struct FunctionContext : llvm::FoldingSetNode {
   bool HasMemoryTransfer = false;
+  bool HasInlineStores = false;
   size_t ID;
   size_t EntryBlock;
   ContextState Input;
@@ -481,6 +483,7 @@ struct FunctionContext : llvm::FoldingSetNode {
   uint16_t ExploredCapturedRegisters = 0;
   bool ReuseReadsMemory = false;
   MemoryEffects Effects;
+  MemoryEffects ReadEffects;
   size_t RootGeneration = 0;
   size_t IncomingReferences = 0;
   uint64_t RetainedBytes = 0;
@@ -558,7 +561,10 @@ public:
 private:
   llvm::Expected<FunctionContext *>
   summarize(size_t Entry, const ContextState &Input, bool Generic = false,
-            CallXInputGeneralization *Generalization = nullptr);
+            CallXInputGeneralization *Generalization = nullptr,
+            bool *ReadProjectedInput = nullptr);
+  llvm::Expected<bool> memoryInputsMatch(const FunctionContext &Candidate,
+                                         const ContextState &Input);
   llvm::Error computeInputDependencies();
   llvm::Error computeReturnReachability();
   ContextState genericInput() const;
@@ -613,9 +619,10 @@ private:
   inputUnionExpression(llvm::ArrayRef<size_t> Alternatives);
   llvm::Error joinStates(ContextState &State, const ContextState &Other);
   llvm::Expected<std::optional<size_t>> inputMemoryGuard(MemoryEffects Effects);
-  void addStoreEffects(MemoryEffects &Effects,
-                       const MedInstruction &Instruction,
-                       const ContextState &State) const;
+  void addMemoryAccessEffects(MemoryEffects &Effects,
+                              const MedInstruction &Instruction,
+                              const ContextState &State,
+                              unsigned AddressRegister) const;
   llvm::Expected<std::optional<size_t>>
   inputOriginExpression(const ProvenValueSet &Origins);
   llvm::Expected<std::optional<size_t>> composeReturnExpression(
@@ -1467,14 +1474,15 @@ registerResult(const MedInstruction &Instruction,
   return *Output;
 }
 
-void ContextFlow::addStoreEffects(MemoryEffects &Effects,
-                                  const MedInstruction &Instruction,
-                                  const ContextState &State) const {
-  auto Origins = State.Origins[Instruction.Dst];
+void ContextFlow::addMemoryAccessEffects(MemoryEffects &Effects,
+                                         const MedInstruction &Instruction,
+                                         const ContextState &State,
+                                         unsigned AddressRegister) const {
+  auto Origins = State.Origins[AddressRegister];
   // Literal addresses and captures can replace lost origins, but an actual
   // frame coordinate must never be reinterpreted as a formal entry register.
   if (Origins.unknown() &&
-      llvm::all_of(State.Registers[Instruction.Dst].values(),
+      llvm::all_of(State.Registers[AddressRegister].values(),
                    [](const RegisterValue &Value) {
                      return Value.ValueKind == RegisterValue::Kind::Constant ||
                             Value.ValueKind ==
@@ -1482,7 +1490,7 @@ void ContextFlow::addStoreEffects(MemoryEffects &Effects,
                             Value.ValueKind ==
                                 RegisterValue::Kind::SymbolicAddress;
                    }))
-    Origins = State.Registers[Instruction.Dst];
+    Origins = State.Registers[AddressRegister];
   for (const auto &Origin : possibleValues(Origins)) {
     RegisterState Base{};
     Base[0] = Origin;
@@ -1801,7 +1809,8 @@ llvm::Error
 ContextFlow::transferInputExpression(const MedInstruction &Instruction,
                                      ContextState &State) {
   if (Instruction.Op == Operation::Store) {
-    addStoreEffects(State.InputWrites, Instruction, State);
+    addMemoryAccessEffects(State.InputWrites, Instruction, State,
+                           Instruction.Dst);
     MedInstruction Store = Instruction;
     Store.Form = OperandForm::StoreReg;
     Store.Src = Store.Dst == 0 ? 1 : 0;
@@ -2784,7 +2793,8 @@ ContextFlow::instantiateMemoryTransferPath(size_t Entry,
         Result.CopySize = Length.Value;
       } else {
         if (Instruction->Op == Operation::Store) {
-          addStoreEffects(Result.Effects, *Instruction, State);
+          addMemoryAccessEffects(Result.Effects, *Instruction, State,
+                                 Instruction->Dst);
           State.InputWrites.include(Result.Effects, symbolicInputs(), Program);
           State.InputSpills.clear();
           ++Result.Stores;
@@ -2828,17 +2838,21 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     const auto CopyLength = State.Registers[3].singleton();
     if (!Instruction.Syscall) {
       Context.PreservesMemory = false;
-      if (Collect)
+      if (Collect) {
         Context.Effects.Unknown = true;
+        Context.ReadEffects.Unknown = true;
+      }
       if (Context.Generic)
         State.InputWrites.Unknown = true;
       State.InputSpills.clear();
     } else {
       for (const auto &Window : getSyscallMemory(Instruction.Syscall->ID)) {
-        if (Window.Access != SyscallMemoryAccess::Write)
-          continue;
-        Context.PreservesMemory = false;
-        State.InputSpills.clear();
+        const bool Writes = Window.Access == SyscallMemoryAccess::Write;
+        auto &Effects = Writes ? Context.Effects : Context.ReadEffects;
+        if (Writes) {
+          Context.PreservesMemory = false;
+          State.InputSpills.clear();
+        }
         std::optional<uint64_t> Bytes = Window.fixedBytes();
         if (!Bytes)
           if (const auto Length = Window.lengthArgument()) {
@@ -2849,17 +2863,19 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
           }
         if (!Bytes) {
           if (Collect)
-            Context.Effects.Unknown = true;
-          if (Context.Generic)
+            Effects.Unknown = true;
+          if (Context.Generic && Writes)
             State.InputWrites.Unknown = true;
           continue;
         }
         const auto &Origins = State.Origins[argumentRegister(Window.Argument)];
         for (const auto &Address : possibleValues(Origins)) {
+          if (!Writes && Address.ValueKind == RegisterValue::Kind::Constant &&
+              Program.ExecutableImage.findRegion(Address.Value, *Bytes, true))
+            continue;
           if (Collect)
-            Context.Effects.addWrite(Address, *Bytes, Program,
-                                     CapturedAddresses.get());
-          if (Context.Generic)
+            Effects.addWrite(Address, *Bytes, Program, CapturedAddresses.get());
+          if (Context.Generic && Writes)
             State.InputWrites.addWrite(Address, *Bytes, Program,
                                        CapturedAddresses.get());
         }
@@ -2945,8 +2961,8 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
     pushAbstractFrame(Input, Program);
     const size_t EntryBlock = ByEntry.at(*Edge.CalleeEntrySlot);
     CallXInputGeneralization Generalization = CallXInputGeneralization::None;
-    auto Result =
-        summarize(EntryBlock, Input, Context.Generic, &Generalization);
+    auto Result = summarize(EntryBlock, Input, Context.Generic, &Generalization,
+                            &Edge.ReadProjectedInput);
     if (!Result) {
       if (Context.Generic || !SpecializationBudgetExhausted)
         return Result.takeError();
@@ -2983,6 +2999,30 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       }
     }
   }
+  // Reads inside a structurally nonreturning, CALLX-free subtree cannot
+  // affect this summary's returns or target evidence. Use the whole-CFG
+  // dependency fixed point, not just the branches visited by this context.
+  const bool ObservableCalleeReads =
+      Callee && (MayReturnFromBlock[Callee->EntryBlock] ||
+                 ReachesCallX[Callee->EntryBlock]);
+  if (Collect && ObservableCalleeReads && !Edge.LegacyRuntime) {
+    auto Origins = State.Origins;
+    pushAbstractFrame(Origins, Program);
+    RegisterState EntryOrigins{};
+    for (unsigned R = 0; R < kRegisterCount; ++R)
+      EntryOrigins[R] = Origins[R].singleton();
+    Context.ReadEffects.Unknown |= Callee->ReadEffects.Unknown;
+    Context.ReadEffects.WritesFrames |= Callee->ReadEffects.WritesFrames;
+    for (const auto &Read : Callee->ReadEffects.Writes) {
+      const auto Address =
+          substituteOrigin(Read.Address, EntryOrigins, Program);
+      if (Address.ValueKind == RegisterValue::Kind::Constant &&
+          Program.ExecutableImage.findRegion(Address.Value, Read.Size, true))
+        continue;
+      Context.ReadEffects.addWrite(Address, Read.Size, Program,
+                                   CapturedAddresses.get());
+    }
+  }
   if (Callee && !Callee->Return) {
     // Keep caller-conditioned sites reached before termination. Its writes
     // cannot affect a returning sibling path of this caller's summary.
@@ -2997,6 +3037,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
   }
   const auto CopyLength = State.Registers[3].singleton();
   bool CopiesCapturedValue = false;
+  bool CopiesKnownFrameRange = false;
   if (Callee && Callee->Generic && Callee->HasMemoryTransfer &&
       CopyLength.ValueKind == RegisterValue::Kind::Constant) {
     for (unsigned R : {1u, 2u})
@@ -3005,6 +3046,19 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
             return Value.ValueKind == RegisterValue::Kind::SymbolicAddress;
           });
     const auto Source = memoryAddress(State.Registers[2].singleton());
+    const auto Destination = memoryAddress(State.Registers[1].singleton());
+    // An inline stack-copy loop can erase unrelated saved pointers when its
+    // generic destination widens. Replay the known address/length path even
+    // when the copied bytes are unknown. Plain syscall wrappers already have
+    // transfer summaries; replaying those adds unrelated scratch snapshots to
+    // later specializations and can displace their useful inputs.
+    CopiesKnownFrameRange =
+        Callee->HasInlineStores && Source && Destination &&
+        Source->ValueKind == RegisterValue::Kind::StackAddress &&
+        Destination->ValueKind == RegisterValue::Kind::StackAddress &&
+        State.Scratch.Values.canModelRange(*Source, CopyLength.Value) &&
+        State.Scratch.Values.canModelRange(*Destination, CopyLength.Value) &&
+        (!State.Scratch.Values.empty() || !State.OriginScratch.Values.empty());
     if (Source && !CopiesCapturedValue)
       State.Scratch.Values.visitCells(
           [&](const RegisterValue &Address, const ProvenValueSet &Value) {
@@ -3023,7 +3077,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
                     });
           });
   }
-  if (CopiesCapturedValue && !Edge.LegacyRuntime &&
+  if ((CopiesCapturedValue || CopiesKnownFrameRange) && !Edge.LegacyRuntime &&
       !SpecializationBudgetExhausted) {
     auto Copy = instantiateMemoryTransferPath(Callee->EntryBlock, State);
     if (!Copy)
@@ -3038,6 +3092,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
         Edge.InstantiatedMemoryPathStores = (**Copy).Stores;
       }
       if (Collect) {
+        Context.ReadEffects.Unknown = true;
         Context.Effects.include((**Copy).Effects, symbolicInputs(), Program);
         if (auto Error = retain(sizeof(Edge)))
           return std::move(Error);
@@ -3188,11 +3243,13 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
       return std::move(Failure);
   }
   if (Collect) {
-    if (!Callee || Edge.LegacyRuntime)
+    if (!Callee || Edge.LegacyRuntime) {
       Context.Effects.Unknown = true;
-    else
+      Context.ReadEffects.Unknown = true;
+    } else {
       Context.Effects.include(Callee->Effects, ScalarOriginEntry, Program,
                               CapturedAddresses.get());
+    }
   }
   // This is the canonical caller ABI: r0-r5 are clobbered, r6-r10 survive.
   // A converged callee supplies only its return carrier and memory effects.
@@ -3209,8 +3266,10 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
   }
   const bool EquivalentLeaf = Edge.InputGeneralization ==
                               CallXInputGeneralization::EquivalentGenericInputs;
-  const bool ApplyEffects = Callee && Callee->Generic && !EquivalentLeaf &&
-                            !Callee->Effects.Unknown && !Edge.LegacyRuntime;
+  const bool ApplyEffects =
+      Callee &&
+      ((Callee->Generic && !EquivalentLeaf) || Edge.ReadProjectedInput) &&
+      !Callee->Effects.Unknown && !Edge.LegacyRuntime;
   if (PreserveInput || ApplyEffects)
     Preserved = State.Scratch;
   else if (Callee && !Edge.LegacyRuntime) {
@@ -3244,6 +3303,7 @@ llvm::Expected<bool> ContextFlow::callTarget(FunctionContext &Context,
   ScratchState ReturnScratch;
   if (Callee && Callee->Return) {
     ReturnScratch = PreserveInput || ApplyEffects ? std::move(Preserved)
+                    : Edge.ReadProjectedInput     ? ScratchState{}
                                                   : Callee->Return->Scratch;
     if (!PreserveInput && !ApplyEffects) {
       rebaseReturnedFrame(ReturnScratch.Values, ReturnFrameDelta);
@@ -3474,10 +3534,22 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
         Context.ReuseReadsMemory |= Dependencies.Memory;
       }
       Defined |= Dependencies.Writes;
-      if (Instruction->Op == Operation::Store)
+      if (Instruction->Op == Operation::Store) {
+        Context.HasInlineStores = true;
         Context.PreservesMemory = false;
+      }
       if (Collect && Instruction->Op == Operation::Store)
-        addStoreEffects(Context.Effects, *Instruction, State);
+        addMemoryAccessEffects(Context.Effects, *Instruction, State,
+                               Instruction->Dst);
+      if (Collect && Instruction->Op == Operation::Load) {
+        const auto Base = State.Registers[Instruction->Src].singleton();
+        const auto Address = effectiveAddress(Base, Instruction->Offset);
+        if (Base.ValueKind != RegisterValue::Kind::Constant || !Address ||
+            !Program.ExecutableImage.findRegion(
+                *Address, Instruction->Width / kBitsPerByte, true))
+          addMemoryAccessEffects(Context.ReadEffects, *Instruction, State,
+                                 Instruction->Src);
+      }
       if (Context.Generic)
         if (auto Error = transferInputExpression(*Instruction, State))
           return std::move(Error);
@@ -3487,9 +3559,46 @@ llvm::Expected<bool> ContextFlow::replay(FunctionContext &Context,
   return true;
 }
 
+llvm::Expected<bool>
+ContextFlow::memoryInputsMatch(const FunctionContext &Candidate,
+                               const ContextState &Input) {
+  if (Candidate.ReadEffects.Unknown)
+    return false;
+  const auto &Before = Candidate.Input.Scratch;
+  const auto &After = Input.Scratch;
+  const uint64_t Bytes = 2 * sizeof(ScratchState) +
+                         Before.retainedByteEstimate() +
+                         After.retainedByteEstimate();
+  if (auto Error = retain(Bytes))
+    return std::move(Error);
+  const auto Release = llvm::scope_exit([&] { RetainedBytes -= Bytes; });
+  ScratchState UnreadBefore = Before;
+  ScratchState UnreadAfter = After;
+  Candidate.ReadEffects.invalidate(UnreadBefore, Candidate.Input.Registers,
+                                   Program);
+  Candidate.ReadEffects.invalidate(UnreadAfter, Input.Registers, Program);
+  bool Same = true;
+  const auto Check = [&](const ScratchState &Original,
+                         const ScratchState &Unread,
+                         const ScratchState &Other) {
+    Original.Values.visitCells(
+        [&](const RegisterValue &Address, const ProvenValueSet &Value) {
+          if (Unread.Values.readValues(Address).unknown() &&
+              Other.Values.readValues(Address) != Value)
+            Same = false;
+        });
+  };
+  Check(Before, UnreadBefore, After);
+  Check(After, UnreadAfter, Before);
+  return Same;
+}
+
 llvm::Expected<FunctionContext *>
 ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
-                       CallXInputGeneralization *Generalization) {
+                       CallXInputGeneralization *Generalization,
+                       bool *ReadProjectedInput) {
+  if (ReadProjectedInput)
+    *ReadProjectedInput = false;
   const auto Generalized = [&](CallXInputGeneralization Reason) {
     if (Generalization)
       *Generalization = Reason;
@@ -3591,10 +3700,39 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
           Same = false;
           break;
         }
-      if (!Same ||
-          ((Candidate->ReuseReadsMemory || !Candidate->PreservesMemory) &&
-           Candidate->Input.Scratch != Input.Scratch))
+      if (!Same)
         continue;
+      const bool DifferentMemory =
+          (Candidate->ReuseReadsMemory || !Candidate->PreservesMemory) &&
+          Candidate->Input.Scratch != Input.Scratch;
+      if (DifferentMemory) {
+        // Keep exact scratch variants while space remains. The projected
+        // output uses may-write effects, which can be less precise than a
+        // fresh execution even when the changed input fields are unread.
+        if (!ReadProjectedInput || Specializations.at(Entry).size() <
+                                       kCallXContextSpecializationsPerEntry)
+          continue;
+        const auto &Generic = *GenericContexts.at(Entry);
+        const bool RefinesReturn =
+            Candidate->Return &&
+            !Candidate->Return->Registers[kReturnRegister].unknown() &&
+            (!Generic.Return || Candidate->Return->Registers[kReturnRegister] !=
+                                    Generic.Return->Registers[kReturnRegister]);
+        const bool AddsFields =
+            Candidate->Return &&
+            (!Generic.Return || Candidate->Return->Postconditions.size() >
+                                    Generic.Return->Postconditions.size());
+        // Projected effects can preserve extra unrelated caller snapshots.
+        // Spend that precision only for a stronger scalar or field result.
+        if (!RefinesReturn && !AddsFields)
+          continue;
+        auto Matches = memoryInputsMatch(*Candidate, Input);
+        if (!Matches)
+          return Matches.takeError();
+        if (!*Matches)
+          continue;
+        *ReadProjectedInput = true;
+      }
       ++CacheHits;
       ++EquivalentSpecializedReuses;
       *Generalization = CallXInputGeneralization::EquivalentSpecializedInputs;
@@ -3817,11 +3955,12 @@ ContextFlow::summarize(size_t Entry, const ContextState &Incoming, bool Generic,
       return std::move(Error);
     Context.RetainedBytes += stateBytes(*Context.Return);
   }
-  if (auto Error =
-          retain(Context.Effects.Writes.capacity() * sizeof(MemoryWrite)))
+  const uint64_t AccessBytes = (Context.Effects.Writes.capacity() +
+                                Context.ReadEffects.Writes.capacity()) *
+                               sizeof(MemoryWrite);
+  if (auto Error = retain(AccessBytes))
     return std::move(Error);
-  Context.RetainedBytes +=
-      Context.Effects.Writes.capacity() * sizeof(MemoryWrite);
+  Context.RetainedBytes += AccessBytes;
   Context.WritesOnlyOwnAndChildFrames =
       !Context.Effects.Unknown && Context.Effects.Writes.empty();
   Context.PreservesMemory =

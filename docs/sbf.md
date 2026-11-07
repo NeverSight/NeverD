@@ -316,9 +316,19 @@ JSON exact-or-empty. Exhaustion returns `{"nodes":[],"edges":[]}` and sets
 `recoverCallXContexts` analyzes complete recognized function CFGs with
 context-keyed function summaries. Keys project away entry registers that every
 path overwrites before reading, using a conservative interprocedural dependency
-fixed point. Scratch inputs are omitted only when the callee neither reads nor
-writes memory. Other keys include both scratch views, pointer kinds and
-memory-coordinate lanes. Arguments and memory enter nested direct calls and
+fixed point. Its continuation dependencies stop at matched nonreturning calls;
+callee dependencies still participate. Scratch inputs are omitted only when the
+callee neither reads nor writes memory. Exact keys retain full-word scratch
+facts, pointer kinds and memory-coordinate lanes. Once all four specialization
+slots are occupied, a completed summary can also be reused when its conservative
+read footprint proves that every changed word is unread. Loads, syscall read
+windows and nested callees share the footprint's address/alias rules. Unknown
+reads require matching the complete snapshot. Reads in a structurally
+nonreturning subtree without any reachable CALLX cannot affect return or target
+evidence; the whole-CFG fixed points establish both conditions. Reuse applies
+may-writes to the actual caller memory and restores proven output fields, never
+the old unread snapshot. The footprint and temporary comparisons consume the
+existing retained-state budget. Arguments and memory enter nested direct calls and
 proven literal CALLX targets; converged returns supply r0 and memory effects.
 The shared transfer owns register clobbers and syscall effects. A returning
 syscall replaces only r0; r1-r5 retain their argument values, including values
@@ -733,7 +743,14 @@ record successful inline paths; `instantiated_copy_syscall_slot` and
 `instantiated_copy_bytes` still refer only to an actual `memcpy`/`memmove`
 syscall. Store effects include every complete destination alternative, without
 assuming that different captures are disjoint. This propagation is demanded by
-a captured source field or pointer. `captured_addresses`, bounded may-write
+a captured source field or pointer, or by a known source/destination frame
+range while the caller retains typed facts and the wrapper contains guest
+stores. The latter lets a short stack-copy loop preserve fields outside its
+actual writes even when the copied bytes are unknown. Plain syscall wrappers
+keep their existing summary path: eagerly preserving their unrelated caller
+snapshots can displace useful later specializations. Unknown addresses do not
+authorize the frame-range path.
+`captured_addresses`, bounded may-write
 intervals and `output_memory_copies` describe these additional facts separately
 from literal CALLX target proofs.
 
