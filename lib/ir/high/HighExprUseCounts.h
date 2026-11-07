@@ -18,11 +18,13 @@
 
 namespace neverd {
 
+using HighExprUseVisits = llvm::SmallDenseMap<const HighExpr *, uint8_t, 8>;
+
 /// Count a shared expression once per use site, saturating at two. Reuse
 /// Visits across read roots in the same immutable graph to bound the complete
 /// walk by its nodes and edges without mistaking multiple uses for one.
 void countExprVarUsesUpToTwo(const ExprPtr &E, VarKeyMap<int> &Uses,
-                             llvm::DenseMap<const HighExpr *, uint8_t> &Visits);
+                             HighExprUseVisits &Visits);
 
 } // namespace neverd
 

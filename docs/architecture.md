@@ -8989,9 +8989,9 @@ existing stopping point without candidates and iteration limits remain unchanged
 Copy and control-flow cleanup share use counts saturated at two. Each read
 root contributes a use even when roots share one expression object. The
 expression-identity table belongs to one immutable walk, and a new walk starts
-after rewrites. Its flat lookup storage never decides traversal or rewrite
-order; the pending walk keeps operand order and grows past its inline storage
-when necessary.
+after rewrites. Small visits tables use inline storage and grow normally
+when needed. Lookup storage never decides traversal or rewrite order; the
+pending walk keeps its existing operand order.
 
 Med-to-High lowering preserves CFG successors after branch threading, including
 sole successors with no remaining branch operation. When source order differs,

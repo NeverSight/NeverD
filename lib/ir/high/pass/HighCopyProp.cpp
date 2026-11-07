@@ -255,10 +255,9 @@ void countExprVarUses(const ExprPtr &E, VarKeyMap<int> &Uses,
       [&](const ExprPtr &Op) { countExprVarUses(Op, Uses, Seen); });
 }
 
-void countExprVarUsesUpToTwo(
-    const ExprPtr &E, VarKeyMap<int> &Uses,
-    llvm::DenseMap<const HighExpr *, uint8_t> &Visits) {
-  llvm::SmallVector<const HighExpr *, 16> Work;
+void countExprVarUsesUpToTwo(const ExprPtr &E, VarKeyMap<int> &Uses,
+                             HighExprUseVisits &Visits) {
+  std::vector<const HighExpr *> Work;
   if (E)
     Work.push_back(E.get());
   while (!Work.empty()) {
@@ -351,7 +350,7 @@ void foldCopyChains(HighFunc &Func) {
   VarKeyMap<int> VarDefCount;
   VarKeyMap<int> VarUseCount;
   VarKeyMap<ExprPtr> VarDefValue;
-  llvm::DenseMap<const HighExpr *, uint8_t> Visits;
+  HighExprUseVisits Visits;
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var) {
       auto Key = VK(S.Dst->Var);
@@ -488,7 +487,7 @@ void inlineSingleDefSingleUse(std::vector<HighStmt> &Stmts) {
   VarKeyMap<ExprPtr> SingleUseDefs;
   VarKeyMap<int> SingleDefCount;
   VarKeyMap<int> SingleUseCount;
-  llvm::DenseMap<const HighExpr *, uint8_t> Visits;
+  HighExprUseVisits Visits;
   walkStmts(Stmts, [&](const HighStmt &S) {
     if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
         S.Dst->Kind == ExprKind::Var) {
