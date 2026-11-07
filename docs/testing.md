@@ -21476,3 +21476,5 @@ recorded baseline; this change adds none and does not weaken the audit.
 `HighControlFlowSemantics.LargeSourceNamesDeepConditionalValues` uses a reachable 1025-block function and deep conditional values. Independent HighIR execution checks both selected and unselected paths, and emitted C must contain no depth truncation or unknown-value placeholder.
 
 MedStackAlignment reusable-entry query regressions exercise the existing scoped MedEntryStackOffsets owner after changed definitions, PHI relocation, new incoming edges and duplicate definitions. Repeated known/unknown queries cover four ISAs and three formats. These qualify the upstream implementation from 5b5e901d2 instead of adding a second proof cache.
+
+`CDisplayFrameRecord` index regressions check duplicate-name owner precedence, layout replacement, current propagated types and disabled storage projection. The index is rebuilt with its layout snapshot; mutable types are read from their current slots.

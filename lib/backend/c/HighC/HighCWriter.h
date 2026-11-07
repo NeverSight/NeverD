@@ -36,6 +36,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
@@ -1447,6 +1448,11 @@ public:
   /// Slot identity retained for value forwarding and catch-object recovery
   /// after their memory representation switches to stack_storage.
   std::map<int64_t, NamedFrameSlot> FrameStorageSlots;
+  /// Name lookup for the same immutable snapshot, rebuilt at its owner.
+  llvm::StringMap<int64_t> FrameStorageSlotOffsets;
+  void setFrameStorageSlots(std::map<int64_t, NamedFrameSlot> Slots);
+  const std::pair<const int64_t, NamedFrameSlot> *
+  frameStorageSlotNamed(llvm::StringRef Name) const;
   /// Frame storage prints as one record laid out like its bytes, and every
   /// frame access or address with a certified displacement names a member:
   /// - the widest accesses at a displacement, when they cover every access
@@ -1505,9 +1511,6 @@ public:
   /// replaces it, or a region of \p RegionBytes bytes there.
   std::string frameStorageView(int64_t Disp, const TypeRef &Ty,
                                int64_t RegionBytes) const;
-  /// The displacement a variable the storage replaces reads, with its type.
-  std::optional<std::pair<int64_t, TypeRef>>
-  projectedSlotRead(const HighExpr &E) const;
   /// The address \p E computes, of \p Disp, as frameRecordAddress prints it.
   std::string frameAddressText(const HighExpr &E, int64_t Disp);
   /// Writes the store of \p Value, of type \p Ty, at \p Addr as the frame
