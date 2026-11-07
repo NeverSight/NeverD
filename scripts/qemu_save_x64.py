@@ -34,6 +34,28 @@ def _array(value, count: int, label: str) -> list:
     return value
 
 
+def _subsection(record: dict, name: str) -> dict | None:
+    sections = _object(record["fields"].get("subsections", {}), "state subsections")
+    versions = record["subsection_versions"]
+    if (name in sections) != (name in versions):
+        raise SnapshotError(f"{name} subsection/version mismatch")
+    if name not in sections:
+        return None
+    if versions[name] != 1:
+        raise SnapshotError(f"x64 profile requires {name} subsection v1")
+    return _object(sections[name], name)
+
+
+def _captured_apic(snapshot: QemuSaveSnapshot, apic: int) -> dict:
+    apic = _integer(apic, "APIC instance", 0xffffffff)
+    if apic not in snapshot.apics:
+        raise SnapshotError(f"APIC {apic} is absent")
+    record = snapshot.apics[apic]
+    if record["version"] != 3:
+        raise SnapshotError("register profile requires CPU v12 and APIC v3")
+    return record
+
+
 def _segment(value) -> dict:
     value = _object(value, "x86 segment cache")
     flags = _uint(value, "flags", 32)
@@ -149,13 +171,8 @@ def project_v6(snapshot: QemuSaveSnapshot, *, profile: str, cpu: int, apic: int,
     environment. Undefined is an explicit choice for the first instruction.
     """
     record, segments = _captured_cpu(snapshot, profile, cpu, expected_pc)
-    apic = _integer(apic, "APIC instance", 0xffffffff)
-    if apic not in snapshot.apics:
-        raise SnapshotError(f"APIC {apic} is absent")
-    if snapshot.apics[apic]["version"] != 3:
-        raise SnapshotError("register profile requires CPU v12 and APIC v3")
     fields = record["fields"]
-    apic_fields = snapshot.apics[apic]["fields"]
+    apic_fields = _captured_apic(snapshot, apic)["fields"]
     choices = [_integer(v, "undefined choice", 0xffffffffffffffff)
                for v in _array(undefined, 8, "undefined choices")]
     result = {
