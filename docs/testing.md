@@ -1547,6 +1547,22 @@ admission and compilability; the model executes the separately exported
 whole images, native Apple CPA2, native signed unwinding and exact fault PC/ESR
 remain unqualified.
 
+The [variadic-value receipt](evidence/arm64e-variadic-call-abi-2026-11-07.json)
+extends that profile to 58 shapes and 290 groups, including complete 128-bit,
+word-record and HFA variadic values. All 30 model guests pass: 34,800 valid
+original/projected pairs and 83,520 invalid-signature pairs, with 22,272 known
+C O0 exception-class differences counted separately. Each route prepares one
+object for its six guests and verifies its entire text against the original
+Mach-O bytes before linking. All 41 environment admission tests pass, including
+rejection of changed or truncated batch text. The public SDK compiles 34 source
+projections at O0/O2, executes 42 raw native arm64 calls against independent
+`va_arg` callbacks, and requires 20 explicit refusals. All 3,480 typed exports,
+including 1,450 Mach-O objects, remain identical after integrating current dev.
+The receipt retains the original array-boundary, i128-alignment and harness
+admission failures alongside the final results. Arbitrary/indirect aggregates,
+zero-fixed-prefix variadics and the broader unqualified boundaries above remain
+unsupported by this profile; remote CI status is recorded separately.
+
 `NeverDLanguageEHTests` checks the unified signing query's image/function
 provenance, exact PCs, source scopes and bounded CIE lookup.
 `NeverDUnwindFrameCAPITests` loads independent Mach-O fixtures through the
