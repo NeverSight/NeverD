@@ -2200,6 +2200,7 @@ Json Engine::metadata() const {
           {"read_only", readOnly_},
           {"browse_cache", listing_ ? listing_->cacheStats() : Json()},
           {"listing_facts", listingFactsJson()},
+          {"listing_name_builds", listing_ ? listing_->nameBuilds() : 0},
           {"dirty", dirty_},
           // How the file was read: for a binary file, its processor,
           // placement and platform, and whether detection chose the platform.
@@ -5162,7 +5163,10 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (neverd_renames_load(session_) != 0)
       throw Error("reload_failed", "Rename was saved but could not be reloaded",
                   {{"saved", true}});
-    namesChanged();
+    if (listing_ && listing_->functionRenamed(address))
+      functionNamesChanged(false);
+    else
+      namesChanged();
     ++revision_;
     return {{"address", hexAddress(address)}, {"name", name}, {"saved", true}};
   }

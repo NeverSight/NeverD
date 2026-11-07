@@ -985,6 +985,8 @@ project's `local/listing-facts` under the same inputs, and any worker of that pr
 reads it there. An owner takes up what its replica adds at most once a second.
 `metadata.listing_facts` and `background.render_ahead.facts` report `{kept, bytes,
 hits, misses}`. A look the store does not answer asks the engine.
+`metadata.listing_name_builds` counts how many times the listing has read its names
+again; a function's new name usually does not.
 
 Source pages with edit metadata carry `code_names`, half-open UTF-8 spans in
 the complete displayed document. An address target has `kind:"address"`,

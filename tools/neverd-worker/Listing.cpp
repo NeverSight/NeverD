@@ -741,7 +741,7 @@ struct Listing::Impl {
   /// and the generations those advanced, which views do not read.
   bool functionNamesStale = false;
   Listing::KeptFacts keptFacts;
-  std::uint64_t functionNameGenerations = 0;
+  std::uint64_t functionNameGenerations = 0, nameBuilds = 0;
   /// What the last full build read that names and the user's items do not
   /// change: the string scan, and the import, import slot and export rows.
   std::vector<StringItem> scannedStrings;
@@ -761,7 +761,8 @@ struct Listing::Impl {
   /// The first function listed under each name, and how many functions are
   /// not chunks, as functions held them at generation (namedFunction and
   /// indexState read them; a listing holds tens of thousands of functions).
-  /// Names change only in a build, which advances generation first.
+  /// Names change only in a build, which advances generation first, and in
+  /// functionRenamed, which keeps them.
   std::unordered_map<std::string, const Function *> functionsByName;
   std::uint64_t functionsByNameGeneration = 0;
   mutable std::size_t ownFunctionCount = 0;
@@ -989,6 +990,7 @@ struct Listing::Impl {
   /// scanned, by the build's own steps.  Decoding again sets the extents of
   /// functions without a size, as it did after the build.
   void rebuildNames(int count) {
+    ++nameBuilds;
     namesStale = false;
     ++generation;
     if (functionNamesStale)
@@ -1645,24 +1647,25 @@ struct Listing::Impl {
         }
   }
 
+  Json functionRow(const Function &function) {
+    Json row = {{"name", function.name},
+                {"address", hexAddress(function.entry)},
+                {"size", function.end - function.entry},
+                {"library", function.library},
+                {"thunk", function.thunk},
+                {"exported", function.exported}};
+    if (function.engineName != function.name)
+      row["engine_name"] = function.engineName;
+    if (const auto &readable = demangledName(function.name); !readable.empty())
+      row["demangled_name"] = readable;
+    return row;
+  }
+
   Json functionTable(const std::vector<Function> &catalog) {
     Json rows = Json::array();
-    for (const auto &function : catalog) {
-      if (function.chunkOf)
-        continue;
-      Json row = {{"name", function.name},
-                  {"address", hexAddress(function.entry)},
-                  {"size", function.end - function.entry},
-                  {"library", function.library},
-                  {"thunk", function.thunk},
-                  {"exported", function.exported}};
-      if (function.engineName != function.name)
-        row["engine_name"] = function.engineName;
-      if (const auto &readable = demangledName(function.name);
-          !readable.empty())
-        row["demangled_name"] = readable;
-      rows.push_back(std::move(row));
-    }
+    for (const auto &function : catalog)
+      if (!function.chunkOf)
+        rows.push_back(functionRow(function));
     return rows;
   }
 
@@ -5031,6 +5034,8 @@ void Listing::flushCacheOne() { impl_->cache.flushOne(); }
 void Listing::flushCache() { impl_->cache.flush(); }
 Json Listing::cacheStats() const { return impl_->cache.stats(); }
 
+std::uint64_t Listing::nameBuilds() const { return impl_->nameBuilds; }
+
 std::uint64_t Listing::cacheGeneration() const {
   return impl_->cache.generation();
 }
@@ -5112,6 +5117,56 @@ void Listing::namesChanged() {
   impl_->namesStale = true;
   impl_->functionNamesStale = false;
   ++impl_->generation;
+}
+
+bool Listing::functionRenamed(std::uint64_t address) {
+  auto &d = *impl_;
+  // A build gives the image's entry and its stubs names of their own, and reads
+  // each name it has given again: only a function that shows what the engine
+  // calls it, and goes on to show a name the user gave it, changes nothing else
+  // but the names its exports find it under.
+  auto *function =
+      d.built && !d.namesStale ? d.functionAtEntry(address) : nullptr;
+  if (!function || function->thunk || function->name != function->engineName)
+    return false;
+  const auto index = neverd_func_find_by_addr(d.session, address);
+  if (index < 0)
+    return false;
+  auto name = takeString(neverd_func_name(d.session, index));
+  if (name.empty() || parseDummyName(name))
+    return false;
+  d.cache.invalidate();
+  const auto previous = d.generation++;
+  ++d.functionNameGenerations;
+  auto old = std::exchange(function->name, name);
+  function->engineName = std::move(name);
+  if (function->exported && d.exportRows.is_array())
+    for (const auto &row : d.exportRows)
+      if (jsonAddress(row.value("addr", Json())) == address)
+        if (auto exported = row.value("name", std::string());
+            !exported.empty() && exported != function->name)
+          d.exportAliases.emplace(std::move(exported), address);
+  if (d.functionsByNameGeneration == previous) {
+    d.functionsByName.erase(old);
+    if (const auto *same = d.functionNamed(old))
+      d.functionsByName.emplace(std::move(old), same);
+    d.functionsByName.try_emplace(function->name, function);
+    d.functionsByNameGeneration = d.generation;
+  }
+  if (d.ownFunctionCountGeneration == previous)
+    d.ownFunctionCountGeneration = d.generation;
+  if (d.functionRowsGeneration == previous && !d.functionRowsCache.is_null()) {
+    auto &rows = d.functionRowsCache;
+    const auto row = std::partition_point(
+        rows.begin(), rows.end(), [&](const Json &candidate) {
+          return parseAddress(candidate.at("address").get<std::string>()) <
+                 address;
+        });
+    if (row != rows.end())
+      *row = d.functionRow(*function);
+    d.functionRowsGeneration = d.generation;
+  }
+  return true;
 }
 
 void Listing::functionNamesChanged() {

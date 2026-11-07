@@ -6098,6 +6098,9 @@ session takes up what the replica keeps of a function's first look, a later sess
 lists what asking the engine lists, a function's new name keeps the facts, a new
 name of data, another image and a damaged store ask the engine, and a corrected
 stack frame reads under what corrects it.
+`NeverDWorkerNamesRebuild` also renames functions, exported and not, without the
+names being read again, and each page, table and resolved name then reads as after a
+reload.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and

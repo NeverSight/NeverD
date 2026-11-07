@@ -102,6 +102,13 @@ public:
   /// Names or the user's data items changed: the next query reads them again
   /// without scanning strings or reading imports and exports again.
   void namesChanged();
+  /// The user named the function at \p address.  True when that changes what
+  /// the listing calls it and nothing else it has read, and the listing has
+  /// taken it, keeping what it decoded.  Otherwise the caller says
+  /// namesChanged.
+  bool functionRenamed(std::uint64_t address);
+  /// How many times names were read again over a built listing.
+  std::uint64_t nameBuilds() const;
   /// Only functions' names changed.  The next query reads them again, and a
   /// kept view of a function stays what its pages are (viewGeneration).
   void functionNamesChanged();
