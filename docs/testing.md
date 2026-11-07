@@ -28,6 +28,16 @@ receipts. They qualify those observations, not an inferred full machine map or
 CPU page-walk, permission and device semantics. The adapter runs no guest and
 adds no work to ordinary decompilation.
 
+Add `scripts.tests.test_qemu_save_devices` for selected device evidence. The
+fixtures distinguish migration name/instance from section and layout IDs,
+preserve raw PCI bytes and subsection versions, verify lazy field decoding
+and fresh results across interleaved reads, and reject malformed unselected
+sections and invalid selectors. The raw-reader suite also checks that QEMU's
+`int32 le` comparison tag uses big-endian wire bytes. For real-save checks,
+normalize presentation differences with an independent decoder explicitly;
+uncompared fields remain unqualified. No device model or post-load callback
+runs, and device transport alone does not establish physical topology.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
