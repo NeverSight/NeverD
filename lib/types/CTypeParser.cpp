@@ -564,30 +564,29 @@ const llvm::StringMap<Builtin> &builtinWords() {
 
 /// The words that make builtin types together: unsigned long long int.
 bool builtinKeyword(llvm::StringRef Word) {
-  // Exact fixed cases let the compiler dispatch on spelling and length.
-  // Most identifiers are named types or declarators, not builtin keywords.
-  return llvm::StringSwitch<bool>(Word)
-      .Case("void", true)
-      .Case("char", true)
-      .Case("short", true)
-      .Case("int", true)
-      .Case("long", true)
-      .Case("signed", true)
-      .Case("unsigned", true)
-      .Case("float", true)
-      .Case("double", true)
-      .Case("bool", true)
-      .Case("_Bool", true)
-      .Case("wchar_t", true)
-      .Case("__wchar_t", true)
-      .Case("__int8", true)
-      .Case("__int16", true)
-      .Case("__int32", true)
-      .Case("__int64", true)
-      .Case("__int128", true)
-      .Case("__signed__", true)
-      .Case("__signed", true)
-      .Default(false);
+  // Group exact spellings by length so ordinary names skip unrelated
+  // keywords. Keep each match a boolean rather than an optional value.
+  switch (Word.size()) {
+  case 3:
+    return Word == "int";
+  case 4:
+    return Word == "void" || Word == "char" || Word == "long" || Word == "bool";
+  case 5:
+    return Word == "short" || Word == "float" || Word == "_Bool";
+  case 6:
+    return Word == "signed" || Word == "double" || Word == "__int8";
+  case 7:
+    return Word == "wchar_t" || Word == "__int16" || Word == "__int32" ||
+           Word == "__int64";
+  case 8:
+    return Word == "unsigned" || Word == "__int128" || Word == "__signed";
+  case 9:
+    return Word == "__wchar_t";
+  case 10:
+    return Word == "__signed__";
+  default:
+    return false;
+  }
 }
 
 std::optional<CallingConvention> conventionWord(llvm::StringRef Word) {

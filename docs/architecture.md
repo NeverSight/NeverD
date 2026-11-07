@@ -3145,8 +3145,9 @@ published types and diagnostics retain their existing ownership and positions.
 The parser's token streams and macro replacements use a non-inline
 `SmallVector`: their borrowed spellings permit trivial relocation during
 growth without changing token order or extending the parse's spelling arena.
-Storage, import annotation and builtin type keywords use fixed `StringSwitch`
-cases, so ordinary declarators do not walk the full keyword tables for each word.
+Storage and import annotation keywords use fixed `StringSwitch` cases. Builtin
+type keywords group exact spellings by length, so ordinary declarators skip
+unrelated keywords without carrying an optional match value between cases.
 Matching remains exact and case-sensitive; pointer width annotations retain
 their existing typed handling before the ignored-annotation path.
 Named specifiers resolve their type and kind in one library lookup. Builtin
