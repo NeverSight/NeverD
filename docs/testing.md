@@ -1581,6 +1581,20 @@ admission failures alongside the final results. Arbitrary/indirect aggregates,
 zero-fixed-prefix variadics and the broader unqualified boundaries above remain
 unsupported by this profile; remote CI status is recorded separately.
 
+The [indirect-aggregate and image-dependency receipt](evidence/arm64e-indirect-image-abi-2026-11-07.json)
+extends the matrix to 65 shapes and 325 groups. All 30 controlled model guests
+pass: 39,000 valid original/projected pairs and 93,600 invalid-signature pairs,
+with 24,960 known C O0 exception-class differences retained separately. The
+model executed the recorded producer revision; all 1,625 newly exported objects
+are byte-identical to those model inputs after integration and regression fixes.
+The public SDK compiles 54 source routes at O0/O2, executes 102 raw native arm64
+storage checks and requires 14 explicit refusals. Its execution receipt records
+the exact final library hash. Complete owner-test results, explicit skips and
+the earlier regression failures remain in the receipt. This profile retains
+indirect argument addresses and existing image signing recipes; logical copies,
+hidden result buffers, new authenticated storage/imports, relocation emission
+and native signed unwinding still require their separate contracts.
+
 `NeverDLanguageEHTests` checks the unified signing query's image/function
 provenance, exact PCs, source scopes and bounded CIE lookup.
 `NeverDUnwindFrameCAPITests` loads independent Mach-O fixtures through the
