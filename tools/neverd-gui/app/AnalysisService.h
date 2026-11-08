@@ -65,6 +65,7 @@ private:
   QueryService &owner_;
   EngineClient client_;
   std::optional<quint64> preparedRead_;
+  bool preparesFunctions_ = false;
   QueryService queries_;
   QString workerPath_, active_, operation_, wire_, restore_, workerRevision_;
   /// The read the worker runs for nobody, and what restoring the worker took.

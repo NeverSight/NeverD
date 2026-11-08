@@ -6493,6 +6493,8 @@ with all of them written and each a step of the history, a view, an undo, a snap
 replica restores from and a save each find what was queued, a kill at any moment leaves
 a project that opens and takes edits, a write that fails fails a later edit and goes
 through once it can, and files changed behind the worker stop the next edit.
+`NeverDWorkerViewEdits` also checks a prepared function, a page named as kept, and a
+replica taking a function's and data's names in one update without reading names again.
 `NeverDWorkerViewEdits` reads every view after each edit an owner takes while keeping
 documents, a function's name, a comment, a colour, a new type and undoing them, and each
 must read field for field as a session that has just opened the project's files.

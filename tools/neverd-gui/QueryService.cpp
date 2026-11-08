@@ -200,6 +200,15 @@ struct QueryService::State {
     QJsonObject BackgroundSnapshot;
     QString summaryRevision;
     QElapsedTimer sent;
+    /// The page of this read the client keeps, which the worker may answer it
+    /// is still (if_none_match).
+    QString keptEtag;
+    QJsonObject keptResponse;
+  };
+  /// A page as the worker last sent it, under what names it there.
+  struct KeptPage {
+    QString etag;
+    QJsonObject response;
   };
   using JobPtr = std::shared_ptr<Job>;
   struct Subscription {
@@ -227,6 +236,8 @@ struct QueryService::State {
   QQueue<quint64> queue;
   JobPtr active;
   QCache<QByteArray, QJsonObject> cache;
+  QCache<QByteArray, KeptPage> keptPages{
+      ::neverd::limits::gui::kQueryServiceKeptPages};
 
   State(QueryService *service, Sender send, Limits budget)
       : q(service), sender(std::move(send)), limits(budget),
@@ -258,6 +269,14 @@ struct QueryService::State {
             {"project_id", project},
             {"revision", revision},
             {"error", QJsonObject{{"code", code}, {"message", message}}}};
+  }
+
+  /// A source page's place apart from the revision it was read at.
+  QByteArray keptPageKey(const Job &job) const {
+    return QJsonDocument(QJsonArray{QString::number(epoch), project,
+                                    QString::number(job.listing),
+                                    job.spec.operation, job.spec.payload})
+        .toJson(QJsonDocument::Compact);
   }
 
   QByteArray key(const Job &job, bool forCache) const {
@@ -497,10 +516,20 @@ struct QueryService::State {
     if (job->kind == Command)
       cache.clear(); // A save/registry command need not advance image revision.
     job->phase = job->kind == Graph ? Summary : Reading;
+    auto payload = job->kind == Graph ? summaryPayload(job->spec.payload)
+                                      : job->spec.payload;
+    if (job->kind == Read &&
+        job->spec.operation == QLatin1String("decompile")) {
+      // A page kept from an earlier revision is named; a worker that still
+      // holds its document answers that it stands rather than sending it.
+      const auto *kept = keptPages.object(keptPageKey(*job));
+      job->keptEtag = kept ? kept->etag : QString();
+      job->keptResponse = kept ? kept->response : QJsonObject();
+      payload["if_none_match"] = job->keptEtag;
+    }
     dispatch(job,
              job->kind == Graph ? QString("cfg_summary") : job->spec.operation,
-             job->kind == Graph ? summaryPayload(job->spec.payload)
-                                : job->spec.payload);
+             payload);
   }
 
   void standalone(Id id, QJsonObject response) {
@@ -754,6 +783,40 @@ struct QueryService::State {
         }
         response["payload"] =
             QJsonObject{{"summary", job->summary}, {"viewport", payload}};
+      }
+    }
+    if (job->kind == Read && status == "ok" &&
+        job->spec.operation == QLatin1String("decompile")) {
+      const auto payload = response.value("payload").toObject();
+      if (payload.value("unchanged").toBool()) {
+        if (job->keptEtag.isEmpty() ||
+            payload.value("etag").toString() != job->keptEtag) {
+          finish(job, error("invalid_response",
+                            "Worker named a page this client does not keep."));
+          return;
+        }
+        // The kept page, as of this reply.
+        auto kept = job->keptResponse;
+        auto keptPayload = kept.value("payload").toObject();
+        for (const char *field : {"project_id", "revision"})
+          if (payload.contains(QLatin1String(field)))
+            keptPayload[QLatin1String(field)] =
+                payload.value(QLatin1String(field));
+        kept["payload"] = keptPayload;
+        for (const char *field :
+             {"request_id", "project_id", "revision", "analysis_state",
+              "background", "background_sequence"}) {
+          const QLatin1String name(field);
+          if (response.contains(name))
+            kept[name] = response.value(name);
+          else
+            kept.remove(name);
+        }
+        response = kept;
+      } else if (payload.contains("etag")) {
+        keptPages.insert(keptPageKey(*job),
+                         new KeptPage{payload.value("etag").toString(),
+                                      cleanResponse(response)});
       }
     }
     if (job->kind == Read && status == "ok" && cacheable(job->spec.operation)) {

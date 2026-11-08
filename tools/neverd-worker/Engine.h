@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <list>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -170,6 +171,10 @@ private:
                            const std::vector<project_files::File> &unread);
   Json restoreAnalysis(const Json &snapshot);
   Json updateAnalysisNames(const Json &snapshot);
+  /// A replica takes the names that changed as the owner took them, row by row,
+  /// and false where it must read the table again.
+  bool takeNames(const std::map<std::uint64_t, std::string> &before,
+                 const std::map<std::uint64_t, std::string> &after);
   Json restoredSnapshot_;
   Json restoredDebugInputs_ = Json::array();
   void localNamesChanged();
@@ -475,6 +480,8 @@ private:
     /// are known: its render's reads and what its decoration looked up.
     std::vector<std::uint64_t> reads;
     bool readsKnown = false;
+    /// Unique among the documents of this process: its pages' identity.
+    std::uint64_t id = 0;
     /// Of the edits views have kept through, how many it has read.
     mutable std::uint64_t viewEditsRead = 0;
     /// Hashes of the identifiers its text spells, sorted, once an edit's names
@@ -550,7 +557,10 @@ private:
                                     const std::string &representation,
                                     std::size_t offset, std::size_t limit,
                                     const Json &options = Json::object(),
-                                    EncodedPayload *encoded = nullptr);
+                                    EncodedPayload *encoded = nullptr,
+                                    const std::string *ifNoneMatch = nullptr);
+  std::uint64_t namedViewIds_ = 0;
+  std::string instanceTag_;
   /// Function-list order (indices into Listing::functionRows) for the last
   /// filter, sort and listing generation.
   std::string functionOrderKey_;
