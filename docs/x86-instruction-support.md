@@ -4425,7 +4425,10 @@ qualified tool. x64 ELF/COFF/Mach-O and stock Clang remain in the source matrix.
 The two SDKs pass 24 source checks and 1,280 C compile checks, with
 41,943,040 generated-C write comparisons. NeverC separately passes 179 x86
 checks, 5,016 controlled CR/DR completions and 19,922,944 native FLAGS
-comparisons. These selected matrices have no failures or skips.
+comparisons. These selected matrices have no failures or skips. The subsequent
+SBF/LAPIC/C type-parser integration passes twelve more source checks and 640 C
+compile checks. All 96 complete C exports per SDK match both qualified cores
+byte for byte, with unchanged compiler hashes; the evidence records that reuse.
 Original CPU witnesses compare all TF-clear low words and incoming/outgoing
 AC/ID combinations on P/E cores, restore host flags before returning to C, and
 reject wrong-width writes and fabricated snapshots. They qualify the selected
