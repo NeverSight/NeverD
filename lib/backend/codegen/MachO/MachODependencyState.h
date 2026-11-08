@@ -37,6 +37,7 @@ struct MachOChainedSegment {
 struct MachOChainedFixups {
   uint64_t HeaderVA = 0;
   uint32_t CommandOffset = 0;
+  bool Threaded = false;
   unsigned LinkeditIndex = 0;
   std::vector<MachOChainedSegment> Segments;
   std::vector<MachOChainedImport> Imports;

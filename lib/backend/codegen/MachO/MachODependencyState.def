@@ -31,5 +31,13 @@ MACHO_DEPENDENCY_TEXT(kInvalidChainOverflow,
 MACHO_DEPENDENCY_TEXT(kOverlappingChainSlots,
                       "duplicate or overlapping chained pointer storage")
 
+MACHO_DEPENDENCY_TEXT(
+    kThreadedContract,
+    "threaded arm64e requires an exclusive ordinary bind stream")
+MACHO_DEPENDENCY_TEXT(kThreadedProgram,
+                      "invalid threaded ordinal table or program")
+MACHO_DEPENDENCY_TEXT(kThreadedStorage,
+                      "invalid threaded root or chain storage")
+
 #undef MACHO_DEPENDENCY_VALUE
 #undef MACHO_DEPENDENCY_TEXT

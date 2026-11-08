@@ -1,0 +1,19 @@
+//===- MachOPatch.def - Mach-O replacement placement contracts --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Define MACHO_PATCH_TEXT(Name, Text) to consume placement names and errors.
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_PATCH_TEXT
+#define MACHO_PATCH_TEXT(Name, Text)
+#endif
+
+MACHO_PATCH_TEXT(kPatchDataSegment, "__ND_DATA")
+MACHO_PATCH_TEXT(kPlacementIdentity, "native Mach-O placement identity changed")
+MACHO_PATCH_TEXT(kSegmentInstallation,
+                 "native Mach-O segment installation failed")
+
+#undef MACHO_PATCH_TEXT
