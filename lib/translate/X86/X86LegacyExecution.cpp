@@ -160,6 +160,12 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
     return invalid(
         "legacy system selector requires an exclusive table profile");
   if (Scalar &&
+      Scalar->Operation ==
+          detail::X86LegacyScalarOperation::StoreMachineStatus &&
+      Scalar->Destination.Register && Scalar->Bytes == 4 &&
+      Options.MachineStatus != X86LegacyMachineStatusProfile::FullCR0)
+    return invalid("legacy dword SMSW requires an upper-word result profile");
+  if (Scalar &&
       (Scalar->bitCounting() || Scalar->carryChain() || Scalar->BMI)) {
     if (!Options.IntegerExtensions)
       return invalid(
@@ -417,6 +423,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   }
   auto Next = State.Core;
   auto NextTR = State.TR;
+  std::optional<uint64_t> NextCR0;
   uint32_t Flags = State.EFlags;
   bool SS = false, STI = false, RepeatContinue = false;
   bool TakenBranch = false;
@@ -524,6 +531,7 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       Flags = Staged.EFlags;
       TakenBranch = Got->TakenBranch;
       NextTR = Staged.TR;
+      NextCR0 = Got->CR0;
     } else if (BoundMpx && Got->Exception && Got->Exception->Vector == 5) {
       // This is an architectural effect of #BR, before attempting IDT entry.
       // Unlike GPR/EIP/FLAGS staging, it survives delivery faults and #DF.
@@ -584,6 +592,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
   State.SSBlocked = SS;
   State.STIBlocked = STI;
   auto Controls = Memory.controls();
+  if (NextCR0)
+    Controls.CR0 = *NextCR0;
   Controls.RFlags = State.EFlags;
   if (auto Error = Memory.bindControls(Controls))
     return std::move(Error);

@@ -36,6 +36,38 @@ public:
     S.EIP = Fallthrough;
     uint32_t A = 0, B = 0;
     const unsigned N = F.Bytes;
+    if (F.Operation == Op::Undefined) {
+      fault(6);
+      return;
+    }
+    if (F.Operation == Op::ClearAccessControl ||
+        F.Operation == Op::SetAccessControl) {
+      if (S.Core.CPL || !M.features().SMAP)
+        fault(6);
+      else
+        S.EFlags = F.Operation == Op::SetAccessControl
+                       ? S.EFlags | 0x40000u
+                       : S.EFlags & ~uint32_t{0x40000};
+      return;
+    }
+    if (F.Operation == Op::StoreMachineStatus ||
+        F.Operation == Op::LoadMachineStatus ||
+        F.Operation == Op::ClearTaskSwitch) {
+      const bool Store = F.Operation == Op::StoreMachineStatus;
+      const auto &Controls = M.controls();
+      if (S.Core.CPL && (!Store || (Controls.CR4 & (1u << 11)))) {
+        fault(13);
+        return;
+      }
+      if (Store)
+        write(F.Destination, N, Controls.CR0);
+      else if (F.Operation == Op::ClearTaskSwitch)
+        Result.CR0 = Controls.CR0 & ~uint64_t{8};
+      else if (read(F.Source, 2, B))
+        // Admission guarantees PE=1. LMSW cannot clear it or change CR0[63:4].
+        Result.CR0 = (Controls.CR0 & ~uint64_t{14}) | (B & 14);
+      return;
+    }
     if (F.SystemSelector) {
       using System = X86LegacySystemSelector;
       const auto Operation = *F.SystemSelector;

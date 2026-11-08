@@ -43,8 +43,8 @@ LLVM disassembly and dynamic relocation inspection establish these anchors:
 Imports include `getopt`, `atoi`, `strcmp`, `ubus_connect`, `ubus_invoke`,
 `ubus_lookup`, `ubus_free` and uloop functions. The main function is the first
 end-to-end NeverD target; its instruction stream uses ordinary integer
-operations, calls and delay slots. A later parser contains unaligned merge
-loads and is outside the initial supported subset.
+operations, calls and delay slots. The `call` handler additionally uses the
+SPECIAL2 `MUL` instruction, outside the initial supported subset.
 
 The independent dispatch-table decode at `0x4118e0` contains these four
 command handlers:
@@ -77,7 +77,8 @@ image and emitted both HighC and LLVMC for these original entries:
 | `0x4011ec` | `send` | emitted | emitted |
 | `0x4012d0` | `call` | refused at `0x401390` | refused at `0x401390` |
 
-The refusal is an unimplemented unaligned merge load in the `call` handler.
+The refusal is the unimplemented SPECIAL2 `MUL v0,v1,v0` instruction
+(`0x70621002`) in the `call` handler; it scales the timeout by 1000.
 It is reported as incomplete lifting, rather than silently emitting a partial
 function. Successful emission alone is not a proof of runtime equivalence for
 these vendor functions.

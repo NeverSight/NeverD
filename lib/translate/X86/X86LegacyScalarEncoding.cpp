@@ -227,7 +227,30 @@ decodeLegacyScalarInstruction(llvm::ArrayRef<uint8_t> Bytes, bool Code32) {
               B == 0xeb || B < 0x80 || F.Bytes == 2);
   } else if (B == 0x0f) {
     const uint8_t Extended = R.byte();
-    if (Extended == 0x00 || Extended == 0x02 || Extended == 0x03) {
+    if (Extended == 0x06) {
+      if (R.Group1Prefix)
+        return std::nullopt;
+      F.Operation = Op::ClearTaskSwitch;
+    } else if (Extended == 0x01) {
+      if (R.Group1Prefix)
+        return std::nullopt;
+      const unsigned Reg = R.modRM(F.Source);
+      F.SourceBytes = 2;
+      if (Reg == 1 && (F.Source.Register == 2 || F.Source.Register == 3)) {
+        F.Operation = R.OperandOverride        ? Op::Undefined
+                      : F.Source.Register == 2 ? Op::ClearAccessControl
+                                               : Op::SetAccessControl;
+      } else if (Reg == 4) {
+        F.Operation = Op::StoreMachineStatus;
+        std::swap(F.Source, F.Destination);
+        if (!F.Destination.Register)
+          F.Bytes = 2;
+      } else if (Reg == 6) {
+        F.Operation = Op::LoadMachineStatus;
+      } else {
+        return std::nullopt;
+      }
+    } else if (Extended == 0x00 || Extended == 0x02 || Extended == 0x03) {
       if (R.Group1Prefix)
         return std::nullopt;
       const unsigned Reg = R.modRM(F.Source);

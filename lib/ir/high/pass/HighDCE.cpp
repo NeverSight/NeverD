@@ -163,10 +163,34 @@ class PrivateFrameReads {
                                                0, Known);
   }
 
+  // A temporary carries no target, and a function's locals can all be
+  // temporaries: the first register any expression names gives the target.
+  void findArchitecture() {
+    HighExprSet Seen;
+    walkStmts(Func->Body, [&](const HighStmt &S) {
+      forEachExpr(S, [&](const ExprPtr &Root) {
+        std::vector<const HighExpr *> Pending{Root.get()};
+        while (!Pending.empty() && Architecture == Arch::Unknown) {
+          const HighExpr *E = Pending.back();
+          Pending.pop_back();
+          if (!E || !Seen.insert(E).second)
+            continue;
+          if (E->Kind == ExprKind::Var)
+            Architecture = E->Var.TheArch;
+          E->forEachChildExpr(
+              [&](const ExprPtr &Child) { Pending.push_back(Child.get()); });
+        }
+      });
+    });
+  }
+
   // Stack adjustments form long chains of single definitions, so resolve them
   // once in statement order instead of walking the chain from every read.
   void index() {
     Indexed = true;
+    findArchitecture();
+    if (Architecture == Arch::Unknown)
+      return;
     VarKeyMap<unsigned> Definitions;
     walkStmts(Func->Body, [&](const HighStmt &S) {
       const HighExpr *Call =
@@ -177,11 +201,7 @@ class PrivateFrameReads {
       if (S.Kind != StmtKind::Assign || !S.Dst || !isLocalExpr(*S.Dst))
         return;
       ++Definitions[VK(S.Dst->Var)];
-      if (Architecture == Arch::Unknown)
-        Architecture = S.Dst->Var.TheArch;
     });
-    if (Architecture == Arch::Unknown)
-      return;
     walkStmts(Func->Body, [&](const HighStmt &S) {
       if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
           S.Dst->Kind != ExprKind::Var || Definitions[VK(S.Dst->Var)] != 1)

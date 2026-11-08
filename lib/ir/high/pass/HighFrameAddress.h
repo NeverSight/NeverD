@@ -68,9 +68,13 @@ inline std::optional<int64_t> frameAddressOffsetFrom(
   const auto &BaseExpr = E->Operands[Swapped ? 1 : 0];
   const auto &OffsetExpr = E->Operands[Swapped ? 0 : 1];
   if (!OffsetExpr || OffsetExpr->Kind != ExprKind::Const || !OffsetExpr->Type ||
-      !OffsetExpr->Type->Size || OffsetExpr->Type->Size > TRI.PointerSize ||
-      (OffsetExpr->Type->Size < 8 &&
-       OffsetExpr->ConstVal >= (UINT64_C(1) << (OffsetExpr->Type->Size * 8))))
+      !OffsetExpr->Type->Size || OffsetExpr->Type->Size > TRI.PointerSize)
+    return std::nullopt;
+  // A narrow constant holds its value zero- or sign-extended: i386's
+  // `add esp, -12` carries 0xFFFFFFFFFFFFFFF4. Other high bits are not a value.
+  const unsigned OffsetBits = OffsetExpr->Type->Size * 8;
+  if (!llvm::isUIntN(OffsetBits, OffsetExpr->ConstVal) &&
+      !llvm::isIntN(OffsetBits, int64_t(OffsetExpr->ConstVal)))
     return std::nullopt;
   const auto Base = frameAddressOffsetFrom(BaseExpr, Func, Architecture, Budget,
                                            Depth + 1, VariableOffset);

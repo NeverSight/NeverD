@@ -526,6 +526,39 @@ instruction chains and busy-write fault repair through Clang/NeverC O0/O2.
 Run these with both SDKs and qualified P/E cores, plus shared scalar,
 segment/query and ordinary system-state regressions.
 
+`LegacyMachineStatus/*` qualifies original protected SMSW/LMSW/CLTS in legacy
+paging and PAE. It compares the complete control bank, registers, flags,
+exceptions and RAM across code/operand/address sizes, all GPRs, low CR0 bits,
+ignored source bits, preserved control fields, CPL/UMIP, segment/page/alignment
+faults and original handler repair/retry. `OriginalMachineStatusAccessesAndTraps`
+uses real guest debug handlers to check exact word accesses and post-instruction
+CR0 publication. Its LMSW case clears TS while retaining MP/EM: KVM lets the
+guest own TS, whereas changing MP can take an intercepted LMSW path. On the
+qualified host, the latter lost the data-breakpoint trap; unchanged-CR0 and
+TS-only controls retained it. This agrees with the
+[KVM VMX control-register handler](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/05e96e96a315fa49faca4da2aedd1761a218b616/arch/x86/kvm/vmx/vmx.c#5505),
+but is not a trace of the running kernel's VM exit. Keep the failing diagnostic
+receipts; do not use that intercepted case as architectural debug evidence.
+Fixed software and generated-C cases separately check MP/EM/TS publication
+before data/TF traps and no publication on a faulting read.
+`X86LegacyMachineStatusTest.*` adds fixed expected values,
+backing resume, sticky PE and prefetch refusal of missing choices or malformed
+encodings. `X86LegacySourceTest.MachineStatus*` executes compiled state-producing
+and consuming chains, faults/retry and single-step traps with Clang and NeverC
+at O0/O2. Run both SDKs on the qualified P/E cores and the shared scalar,
+descriptor/selector and system-state regressions. FullCR0 is an explicit target
+choice, not a universal definition of SMSW's undefined high word. NeverC's
+descriptor-builtin harness also checks CLTS on i386 and x64; privileged native
+builtins have code-generation coverage there, while these protected CPU tests
+own the original instruction state/fault comparisons.
+The same native matrix qualifies CLAC/STAC flag preservation and #UD privilege
+checks in both code sizes, including #UD for the 66 prefix, and the guest debug
+tests cover their TF traps. Software tests check fetch-fault priority over that
+prefix's #UD; generated C checks the unchanged AC bit in the saved fault frame.
+Software tests also bind a target without SMAP. Generated C composes
+STAC → supervisor read of a user page → CLAC → denied read, checking the actual
+page-fault frame and preservation of the earlier loaded value.
+
 `NeverDLLVMCValueTests --gtest_filter=LLVMCValues.X86BitString*` rejects
 weakened native bit-string declarations and executes all twelve LLVM-to-C
 projections with live/dead results. The original-instruction oracle compares
@@ -22073,7 +22106,7 @@ SymConditionalControls and SymMBASelector Boolean-word tests use exhaustive smal
 
 SymMBARewriteCache regressions compare cold/hot work counts rather than wall-clock thresholds. Completed unchanged subtrees, opaque parent compositions, refused siblings, working-set eviction and option/context/work boundaries retain exact derivation semantics. SymMBASparseContext additionally checks placeholder declaration reuse without hiding caller inputs or carrying declarations across contexts.
 
-`HighControlFlowSemantics.UnusedValuesDropReadsOfTheirOwnFrame` keeps unused reads through pointers and past the frame while dropping reads of the private frame, across stack-adjustment chains longer than one address walk. `HighCPointerAddresses.UnusedFieldLoadIsNotARegistersEntryValue` keeps a register's entry value from taking a later unused field load's name. `SymState.AnUnreadRunOfAPartlyKnownWordIsOneInput`, `SymMBARewriteCache.RecoveredWordChoicesStayInTheEvictionOrder` and `SymMBAKnownFacts.ConstantsBesideSeveralTermsStillFold` cover unread byte runs, cache eviction of recovered word choices and masks beside several terms.
+`HighControlFlowSemantics.UnusedValuesDropReadsOfTheirOwnFrame` keeps unused reads through pointers and past the frame while dropping reads of the private frame, across stack-adjustment chains longer than one address walk. `HighCPointerAddresses.UnusedFieldLoadIsNotARegistersEntryValue` keeps a register's entry value from taking a later unused field load's name. `SymState.AnUnreadRunOfAPartlyKnownWordIsOneInput`, `SymMBARewriteCache.RecoveredWordChoicesStayInTheEvictionOrder` and `SymMBAKnownFacts.ConstantsBesideSeveralTermsStillFold` cover unread byte runs, cache eviction of recovered word choices and masks beside several terms. `HighControlFlowSemantics.UnusedOwnFrameReadsFollowEveryStackAdjustment` proves a read of the private frame through i386's sign-extended stack adjustment and in a function whose locals are all temporaries, so an unused reload no longer keeps its register's save. `HighCPointerAddresses.ImmutableSlotLoadsConvertTheirAddressOnce` converts a read-only GOT slot's address to an integer once.
 
 ## MIPS ELF analysis and source roundtrips
 

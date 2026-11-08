@@ -12530,3 +12530,62 @@ TEST(HighControlFlowSemantics, UnusedValuesDropReadsOfTheirOwnFrame) {
   EXPECT_EQ(F.Body[1].Dst->Var.Id, 4);
   EXPECT_EQ(F.Body[2].Kind, StmtKind::Return);
 }
+
+TEST(HighControlFlowSemantics, UnusedOwnFrameReadsFollowEveryStackAdjustment) {
+  // An unused reload that stays read keeps the save of its register alive.
+  // Whether it is a read of the function's own frame cannot depend on how the
+  // machine spelled the adjustment or on the function's other locals.
+  const auto EntryOf = [](Arch Target, uint16_t Bytes) {
+    MedVar Entry;
+    Entry.Kind = MedVar::Reg;
+    Entry.Id = 40;
+    Entry.Size = Bytes;
+    Entry.RegOff = getTargetRegInfo(Target).StackPointer;
+    Entry.TheArch = Target;
+    return Entry;
+  };
+  const auto Temporary = [](int Id, uint16_t Bytes) {
+    MedVar Var;
+    Var.Kind = MedVar::Temp;
+    Var.Id = Id;
+    Var.Size = Bytes;
+    return HighExpr::makeVar(Var, NdType::makeInt(Bytes, false));
+  };
+  const auto Assign = [](va_t Address, ExprPtr Destination, ExprPtr Value) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Addr = Address;
+    S.Dst = std::move(Destination);
+    S.Val = std::move(Value);
+    return S;
+  };
+  const auto Adjusted = [](ExprPtr Base, uint64_t Bits, uint16_t Bytes) {
+    auto Sum = HighExpr::makeBinop(NdOp::INT_ADD, std::move(Base),
+                                   HighExpr::makeConst(Bits, Bytes));
+    Sum->Type = NdType::makeInt(Bytes, false);
+    return Sum;
+  };
+  const auto Remaining = [&](Arch Target, uint16_t Bytes, uint64_t Bits) {
+    HighFunc F;
+    F.FrameSize = 64;
+    F.Body.push_back(
+        Assign(0x1000, Temporary(1, Bytes),
+               Adjusted(HighExpr::makeVar(EntryOf(Target, Bytes),
+                                          NdType::makeInt(Bytes, false)),
+                        Bits, Bytes)));
+    F.Body.push_back(Assign(0x1004, Temporary(2, Bytes),
+                            HighExpr::makeLoad(Temporary(1, Bytes),
+                                               NdType::makeInt(Bytes, false))));
+    F.Body.push_back(result(0x1008, HighExpr::makeConst(7, Bytes)));
+    eliminateUnusedValues(F);
+    return F.Body.size();
+  };
+  // i386's `add esp, -12` carries the displacement sign-extended.
+  EXPECT_EQ(Remaining(Arch::X86, 4, UINT64_C(0xFFFFFFFFFFFFFFF4)), 1u);
+  EXPECT_EQ(Remaining(Arch::X86, 4, UINT64_C(0xFFFFFFF4)), 1u);
+  // High bits that extend nothing are no displacement, and the read stays.
+  EXPECT_EQ(Remaining(Arch::X86, 4, UINT64_C(0x1FFFFFFF4)), 3u);
+  // An AArch64 funclet's locals are all temporaries: only its stack pointer
+  // names the target.
+  EXPECT_EQ(Remaining(Arch::AArch64, 8, UINT64_C(0xFFFFFFFFFFFFFFF0)), 1u);
+}
