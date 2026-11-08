@@ -16,6 +16,9 @@
 using namespace neverd;
 
 namespace {
+#define SOURCE_AGGREGATE_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "SourceAggregateFixtures.def"
+
 TypeRef pair(unsigned Bytes = 8) {
   return NdType::makeStruct(
       {NdType::makeFloat(Bytes), NdType::makeFloat(Bytes)});
@@ -1320,87 +1323,142 @@ TEST(SourceAggregate, SwiftMixedResultRejectsUnprovedRecordShapes) {
 }
 
 TEST(SourceAggregate, SwiftMixedCallAndReturnPreserveAllFourTypedFields) {
-  for (const auto A : {Arch::AArch64, Arch::X64}) {
-    auto Hint = mixedSwiftDeclaration();
-    std::string Error;
-    ASSERT_TRUE(assignDarwinSwiftSourceABI(Hint, A, Error)) << Error;
-    LowFunc Low;
-    Low.Entry = 0x1000;
-    Low.Name = "mixed_swift_forward";
-    LowBlock Block;
-    Block.Id = 0;
-    Block.StartAddr = 0x1000;
-    Block.EndAddr = 0x1008;
-    LowOp Call;
-    Call.Opcode = NdOp::CALL;
-    Call.Addr = 0x1000;
-    Call.addInput(NdVar::cst(0x2000, 8));
-    LowOp Return;
-    Return.Opcode = NdOp::RETURN;
-    Return.Addr = 0x1004;
-    Block.Ops = {Call, Return};
-    Low.Blocks = {Block};
-    std::map<va_t, SourceFunctionTypeHint> Hints{{0x1000, Hint},
-                                                 {0x2000, Hint}};
-    LowToMedConverter Converter;
-    Converter.setSourceCallHintsEnabled(true);
-    Converter.setSourceCalleeTypeHints(&Hints);
-    auto Med = Converter.convert(Low, A, BinaryFormat::MachO);
-    ASSERT_FALSE(Med.Blocks.empty());
-    const auto CallIt = std::find_if(
-        Med.Blocks.front().Ops.begin(), Med.Blocks.front().Ops.end(),
-        [](const auto &Op) { return Op.Opcode == NdOp::CALL; });
-    ASSERT_NE(CallIt, Med.Blocks.front().Ops.end());
-    const auto &BoundCall = *CallIt;
-    ASSERT_TRUE(BoundCall.SourceCallHint);
-    EXPECT_EQ(BoundCall.NumInputs, 6U);
-    EXPECT_EQ(BoundCall.Output.Size, 32U);
-    std::map<uint64_t, MedVar> Extracts;
-    for (const auto &Op : Med.Blocks.front().Ops)
-      if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
-          Op.Inputs[0] == BoundCall.Output && Op.Inputs[1].isConst()) {
-        EXPECT_EQ(Op.Output.Size, 8U);
-        Extracts.emplace(Op.Inputs[1].ConstVal, Op.Output);
-      }
-    ASSERT_EQ(Extracts.size(), 4U);
-    for (size_t I = 0; I != 4; ++I) {
-      const auto &Value = Extracts.at(I * 8);
-      const auto &Location = Hint.ReturnComponents[I];
-      if (Location.Kind == SourceABICarrierKind::IntegerRegister) {
-        EXPECT_EQ(Value.Kind, MedVar::Reg);
-        EXPECT_EQ(Value.RegOff, Location.RegisterOffset);
-        continue;
-      }
-      EXPECT_EQ(Value.Kind, MedVar::Temp);
-      unsigned Merges = 0;
-      for (const auto &Op : Med.Blocks.front().Ops)
-        if (Op.Opcode == NdOp::CONCAT && Op.NumInputs == 2 &&
-            Op.Inputs[1] == Value) {
-          EXPECT_EQ(Op.Output.Kind, MedVar::Reg);
-          EXPECT_EQ(Op.Output.RegOff, Location.RegisterOffset);
-          EXPECT_EQ(Op.Output.Size, 16U);
-          EXPECT_EQ(Op.Inputs[0].Size, 8U);
-          ++Merges;
+  for (const auto A : {Arch::AArch64, Arch::X64})
+    for (bool ObserveFullCarriers : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(ObserveFullCarriers);
+      const auto &TRI = getTargetRegInfo(A);
+      auto Hint = mixedSwiftDeclaration();
+      std::string Error;
+      ASSERT_TRUE(assignDarwinSwiftSourceABI(Hint, A, Error)) << Error;
+      LowFunc Low;
+      Low.Entry = 0x1000;
+      Low.Name = "mixed_swift_forward";
+      LowBlock Block;
+      Block.Id = 0;
+      Block.StartAddr = 0x1000;
+      Block.EndAddr = 0x1008;
+      LowOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = 0x1000;
+      Call.addInput(NdVar::cst(0x2000, 8));
+      LowOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.Addr = 0x1004;
+      Block.Ops.push_back(Call);
+      if (ObserveFullCarriers)
+        for (size_t I = 0; I != Hint.ReturnComponents.size(); ++I) {
+          const auto &Location = Hint.ReturnComponents[I];
+          if (Location.Kind != SourceABICarrierKind::FloatingRegister)
+            continue;
+          LowOp Store;
+          Store.Opcode = NdOp::STORE;
+          Store.Addr = Return.Addr;
+          Store.addInput(NdVar::cst(
+              kSwiftMixedCarrierSink + I * TRI.FPABIRegWidth, TRI.PointerSize));
+          Store.addInput(
+              NdVar::reg(Location.RegisterOffset, TRI.FPABIRegWidth));
+          Block.Ops.push_back(Store);
         }
-      EXPECT_EQ(Merges, 1U);
+      Block.Ops.push_back(Return);
+      Low.Blocks = {Block};
+      std::map<va_t, SourceFunctionTypeHint> Hints{{0x1000, Hint},
+                                                   {0x2000, Hint}};
+      LowToMedConverter Converter;
+      Converter.setSourceCallHintsEnabled(true);
+      Converter.setSourceCalleeTypeHints(&Hints);
+      auto Med = Converter.convert(Low, A, BinaryFormat::MachO);
+      ASSERT_FALSE(Med.Blocks.empty());
+      const auto CallIt = std::find_if(
+          Med.Blocks.front().Ops.begin(), Med.Blocks.front().Ops.end(),
+          [](const auto &Op) { return Op.Opcode == NdOp::CALL; });
+      ASSERT_NE(CallIt, Med.Blocks.front().Ops.end());
+      const auto &BoundCall = *CallIt;
+      ASSERT_TRUE(BoundCall.SourceCallHint);
+      EXPECT_EQ(BoundCall.NumInputs, 6U);
+      EXPECT_EQ(BoundCall.Output.Size, 32U);
+      std::map<uint64_t, MedVar> Extracts;
+      for (const auto &Op : Med.Blocks.front().Ops)
+        if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+            Op.Inputs[0] == BoundCall.Output && Op.Inputs[1].isConst()) {
+          EXPECT_EQ(Op.Output.Size, 8U);
+          Extracts.emplace(Op.Inputs[1].ConstVal, Op.Output);
+        }
+      ASSERT_EQ(Extracts.size(), 4U);
+      const auto &BoundReturn = Med.Blocks.front().Ops.back();
+      ASSERT_EQ(BoundReturn.Opcode, NdOp::RETURN);
+      ASSERT_EQ(BoundReturn.NumInputs, Hint.ReturnComponents.size());
+      for (size_t I = 0; I != 4; ++I) {
+        const auto &Value = Extracts.at(I * 8);
+        EXPECT_EQ(BoundReturn.Inputs[I], Value);
+        const auto &Location = Hint.ReturnComponents[I];
+        if (Location.Kind == SourceABICarrierKind::IntegerRegister) {
+          EXPECT_EQ(Value.Kind, MedVar::Reg);
+          EXPECT_EQ(Value.RegOff, Location.RegisterOffset);
+          continue;
+        }
+        EXPECT_EQ(Value.Kind, MedVar::Temp);
+        unsigned Merges = 0;
+        for (const auto &Op : Med.Blocks.front().Ops)
+          if (Op.Opcode == NdOp::CONCAT && Op.NumInputs == 2 &&
+              Op.Inputs[1] == Value) {
+            EXPECT_EQ(Op.Output.Kind, MedVar::Reg);
+            EXPECT_EQ(Op.Output.RegOff, Location.RegisterOffset);
+            EXPECT_EQ(Op.Output.Size, 16U);
+            EXPECT_EQ(Op.Inputs[0].Size, 8U);
+            if (ObserveFullCarriers) {
+              const auto Upper = std::find_if(
+                  Med.Blocks.front().Ops.begin(), Med.Blocks.front().Ops.end(),
+                  [&](const auto &Candidate) {
+                    return Candidate.Output == Op.Inputs[0];
+                  });
+              ASSERT_NE(Upper, Med.Blocks.front().Ops.end());
+              EXPECT_EQ(Upper->Opcode, NdOp::SUBBYTES);
+              ASSERT_EQ(Upper->NumInputs, 2U);
+              EXPECT_TRUE(Upper->Inputs[1].isConst());
+              EXPECT_EQ(Upper->Inputs[1].ConstVal, Value.Size);
+              EXPECT_TRUE(std::any_of(
+                  Med.CallClobbers.begin(), Med.CallClobbers.end(),
+                  [&](const auto &Clobber) {
+                    return Clobber.Value == Upper->Inputs[0] &&
+                           Clobber.CallSiteId == BoundCall.CallSiteId;
+                  }));
+              EXPECT_TRUE(std::any_of(Med.Blocks.front().Ops.begin(),
+                                      Med.Blocks.front().Ops.end(),
+                                      [&](const auto &Store) {
+                                        return Store.Opcode == NdOp::STORE &&
+                                               Store.NumInputs == 2 &&
+                                               Store.Inputs[1] == Op.Output;
+                                      }));
+            }
+            ++Merges;
+          }
+        // Scalar return reads may fold through CONCAT. A full-register consumer
+        // must still receive the call's unknown upper lane, never zero padding.
+        if (ObserveFullCarriers)
+          EXPECT_EQ(Merges, 1U);
+        else
+          EXPECT_LE(Merges, 1U);
+      }
+      if (ObserveFullCarriers)
+        continue;
+      Med.SourceTypeHint = Hint;
+      recoverCallAbi(Med, A, {});
+      inferMedTypes(Med, A);
+      ASSERT_TRUE(Med.SourceParametersBound);
+      const auto High = MedToHighConverter().convert(Med, A);
+      EXPECT_TRUE(equalSourceTypes(High.ReturnType, Hint.ReturnType));
+      std::string C;
+      llvm::raw_string_ostream OS(C);
+      CEmitterOptions Options;
+      Options.TheArch = A;
+      ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+      OS.flush();
+      EXPECT_NE(C.find("swiftcall"), std::string::npos) << C;
+      for (unsigned I = 0; I != 4; ++I)
+        EXPECT_NE(C.find("field_" + std::to_string(I)), std::string::npos) << C;
+      EXPECT_EQ(C.find("__asm__"), std::string::npos) << C;
     }
-    Med.SourceTypeHint = Hint;
-    recoverCallAbi(Med, A, {});
-    inferMedTypes(Med, A);
-    ASSERT_TRUE(Med.SourceParametersBound);
-    const auto High = MedToHighConverter().convert(Med, A);
-    EXPECT_TRUE(equalSourceTypes(High.ReturnType, Hint.ReturnType));
-    std::string C;
-    llvm::raw_string_ostream OS(C);
-    CEmitterOptions Options;
-    Options.TheArch = A;
-    ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
-    OS.flush();
-    EXPECT_NE(C.find("swiftcall"), std::string::npos) << C;
-    for (unsigned I = 0; I != 4; ++I)
-      EXPECT_NE(C.find("field_" + std::to_string(I)), std::string::npos) << C;
-    EXPECT_EQ(C.find("__asm__"), std::string::npos) << C;
-  }
 }
 
 TEST(SourceAggregate, WordRecordSpillsKeepArchitectureSpecificBankState) {
