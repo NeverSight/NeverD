@@ -32,6 +32,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -649,6 +650,62 @@ TEST(MachOArm64eInstallation,
   EXPECT_EQ(Plan->Imports.front().Ordinal, kWideThreadedLibraryOrdinal);
   EXPECT_FALSE(
       macho_loader::threaded::decode(Bytes, kWideThreadedLibraryOrdinal - 1));
+}
+
+TEST(MachOArm64eInstallation, BoundsThreadedSymbolCopiesBeforeInstallation) {
+  for (unsigned Count : {kThreadedSmallCopyCount, kThreadedLargeCopyCount}) {
+    SCOPED_TRACE(Count);
+    auto Bytes = threadedImage();
+    std::string Program(kThreadedProgram, sizeof(kThreadedProgram) - 1);
+    Program.replace(kThreadedSymbolFlagsOffset + 1, sizeof(kSymbol) - 1,
+                    kThreadedLongSymbolBytes, kThreadedLongSymbolByte);
+    const auto Strings = kChains + Program.size();
+    Bytes.resize(Strings + 1);
+    std::memcpy(Bytes.data() + kChains, Program.data(), Program.size());
+    forEachMachOLoadCommand(
+        Bytes.data(), Bytes.size(),
+        [&](const uint8_t *P, uint32_t ID, uint32_t, bool) {
+          auto *Command = Bytes.data() + (P - Bytes.data());
+          if (ID == LC_DYLD_INFO_ONLY) {
+            reinterpret_cast<dyld_info_command *>(Command)->bind_size =
+                Program.size();
+          } else if (ID == LC_SYMTAB) {
+            auto *Symbols = reinterpret_cast<symtab_command *>(Command);
+            Symbols->symoff = Symbols->stroff = Strings;
+          } else if (ID == LC_SEGMENT_64) {
+            auto *Segment = reinterpret_cast<segment_command_64 *>(Command);
+            if (Segment->fileoff == kLinkedit) {
+              Segment->filesize = Bytes.size() - kLinkedit;
+              Segment->vmsize = llvm::alignTo(Segment->filesize, kPage);
+            }
+          }
+        });
+    for (unsigned I = 0; I < Count; ++I)
+      writeLE<uint64_t>(Bytes.data() + kPage + I * kSlotBytes,
+                        Chains[0].Second |
+                            (I + 1 < Count ? Chains[0].First & kNextMask : 0));
+    auto State = readMachODependencyState(Bytes);
+    if (Count == kThreadedSmallCopyCount) {
+      ASSERT_TRUE(bool(State)) << llvm::toString(State.takeError());
+      EXPECT_EQ(State->Slots.size(), Count);
+    } else {
+      ASSERT_FALSE(bool(State));
+      EXPECT_NE(llvm::toString(State.takeError()).find(kThreadedCopyDiagnostic),
+                std::string::npos);
+    }
+    const auto Original = Bytes;
+    auto Fixup = installedFixup();
+    Fixup.Address = kBase + kPage + Count * kSlotBytes;
+    auto Error = installMachOAuthenticatedFixups(Bytes, {Fixup});
+    if (Count == kThreadedSmallCopyCount) {
+      ASSERT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    } else {
+      ASSERT_TRUE(bool(Error));
+      EXPECT_NE(llvm::toString(std::move(Error)).find(kThreadedCopyDiagnostic),
+                std::string::npos);
+      EXPECT_EQ(Bytes, Original);
+    }
+  }
 }
 
 TEST(MachOArm64eInstallation,

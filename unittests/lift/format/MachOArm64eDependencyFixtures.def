@@ -103,6 +103,12 @@ ARM64E_DEPENDENCY_IMPORT_MUTATION(0x20e0, 0x1ULL)
 ARM64E_DEPENDENCY_TEXT(kThreadedProgram,
                        "\xd0\x01\x11\x40_target\0\x51\x60\x7c\x90\x71\0\xd1\0")
 ARM64E_DEPENDENCY_VALUE(unsigned, kThreadedSymbolFlagsOffset, 3)
+ARM64E_DEPENDENCY_VALUE(size_t, kThreadedLongSymbolBytes, 1u << 20)
+ARM64E_DEPENDENCY_VALUE(char, kThreadedLongSymbolByte, 's')
+ARM64E_DEPENDENCY_VALUE(unsigned, kThreadedSmallCopyCount, 12)
+ARM64E_DEPENDENCY_VALUE(unsigned, kThreadedLargeCopyCount, 16)
+ARM64E_DEPENDENCY_TEXT(kThreadedCopyDiagnostic,
+                       "threaded bind names exceed copied-byte budget")
 
 ARM64E_DEPENDENCY_TEXT(kProducerTriple, "arm64e-apple-macosx14.0.0")
 ARM64E_DEPENDENCY_TEXT(kProducerModule, "arm64e-producer")

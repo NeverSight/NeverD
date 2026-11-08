@@ -26,6 +26,7 @@
 
 #include <cstddef>
 #include <iterator>
+#include <optional>
 #include <set>
 
 namespace neverd {
@@ -68,9 +69,20 @@ struct Reader {
   const dysymtab_command *Dyn = nullptr;
   MachODependencyState State;
   MachOChainedFixups *Chained = nullptr;
+  std::optional<size_t> ThreadedCopiedBytes;
   Bytes Digest;
   bool Bad = false;
   unsigned Pointer = 0;
+
+  llvm::Error chargeThreadedNames(size_t Size) {
+    if (!ThreadedCopiedBytes)
+      return llvm::Error::success();
+    if (Size >
+        limits::loader::kMachOThreadedMaxCopiedBytes - *ThreadedCopiedBytes)
+      return fail(kThreadedCopies);
+    *ThreadedCopiedBytes += Size;
+    return llvm::Error::success();
+  }
 
   llvm::Expected<llvm::ArrayRef<uint8_t>> payload(uint64_t O, uint64_t N) {
     if (!N)
@@ -121,6 +133,8 @@ struct Reader {
     if (Ordinal > int64_t(State.Libraries.size()) || Ordinal < -3 ||
         Name.empty())
       return fail("invalid bind library or symbol");
+    if (auto Error = chargeThreadedNames(Name.size()))
+      return Error;
     Bytes Row;
     number(Row, Ordinal);
     text(Row, Name);
@@ -548,14 +562,18 @@ struct Reader {
         macho_loader::threaded::decode(Stream, State.Libraries.size());
     if (!Plan)
       return fail(kThreadedProgram);
+    ThreadedCopiedBytes = Plan->CopiedBytes;
     bytes(Digest, Stream);
     std::vector<Import> Imports;
     Imports.reserve(Plan->Imports.size());
     for (const auto &Entry : Plan->Imports) {
       Imports.push_back({Entry.Ordinal, Entry.Addend, Entry.Flags, Entry.Name});
-      if (Chained)
+      if (Chained) {
+        if (auto Error = chargeThreadedNames(Entry.Name.size()))
+          return Error;
         Chained->Imports.push_back(
             {Entry.Ordinal, Entry.Addend, Entry.Flags, Entry.Name});
+      }
     }
     if (Chained) {
       Chained->Threaded = true;
