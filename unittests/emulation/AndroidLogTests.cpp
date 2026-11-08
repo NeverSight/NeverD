@@ -79,6 +79,44 @@ protected:
     Options.InstructionQuantum = 17;
 #endif
   }
+  void put(size_t Offset, llvm::StringRef Text) {
+    auto &Bytes = Options.Android->Memory[0].Bytes;
+    std::copy(Text.bytes_begin(), Text.bytes_end(), Bytes.begin() + Offset);
+    Bytes[Offset + Text.size()] = 0;
+  }
+  void prepareFormatted(unsigned Form, unsigned Mode, llvm::StringRef Format,
+                        llvm::StringRef Message) {
+    Options.Android->EntrySymbol = "log_formatted";
+    Options.Android->Libraries["liblog.so"] = {"__android_log_print",
+                                               "__android_log_buf_print",
+                                               "__android_log_vprint"};
+    put(4096, Format);
+    put(8192, "abcdef");
+    put(12288, "tag");
+    Options.Android->Arguments = {Output,        Form, Mode,  Output + 4096,
+                                  Output + 8192, 3,    0x106, Output + 12288};
+    std::vector<uint8_t> Payload{6, 't', 'a', 'g', 0};
+    Payload.insert(Payload.end(), Message.bytes_begin(), Message.bytes_end());
+    Payload.push_back(0);
+    const unsigned Buffer = Form == 1 || Form == 4 ? 3 : 0;
+    Options.Android->TextLogWrites = {
+        {{Buffer, Payload, -11}, {Buffer, Payload, INT32_MAX}}};
+  }
+  void checkFormatted() {
+    auto Result =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_EQ(Result->Stop, ProcessStopReason::Returned) << Result->Diagnostic;
+    EXPECT_EQ(Result->ReturnValue, 0u);
+    EXPECT_EQ(Result->TextLogWritesConsumed, 2u);
+    auto Expected = Options.Android->Memory[0].Bytes;
+    integer(Expected, 0, uint64_t(-11), 8);
+    integer(Expected, 8, 73, 8);
+    integer(Expected, 16, INT32_MAX, 8);
+    integer(Expected, 24, 73, 8);
+    ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+    EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Expected);
+  }
   void check(std::initializer_list<int> Indices) {
     auto R =
         emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
@@ -216,6 +254,105 @@ TEST_P(AndroidLog, DirectOptionsRejectMalformedAndOversizedSnapshots) {
     llvm::consumeError(R.takeError());
   }
 }
+TEST_P(AndroidLog, FormattedWritesShareGrammarStackedArgumentsAndResults) {
+  for (unsigned Form = 0; Form != 6; ++Form) {
+    SCOPED_TRACE(Form);
+    prepareFormatted(Form, 0, "%+08d|%#lx|%.3s|%d|%d|%d|%d|%d|%d",
+                     "-0000123|0xfedcba9876543210|abc|7|8|9|10|11|12");
+    checkFormatted();
+  }
+}
+
+TEST_P(AndroidLog, FormattedWritesClipTheBufferBeforeCStringLogging) {
+  for (unsigned Form = 0; Form != 6; ++Form) {
+    SCOPED_TRACE(Form);
+    for (unsigned Width : {0u, 1022u, 1023u, 1024u, 1000000000u}) {
+      SCOPED_TRACE(Width);
+      // API 28's 1024-byte buffer includes NUL. The transcript result, not
+      // the untruncated formatting count, is returned to the caller.
+      prepareFormatted(Form, Width + 10, "",
+                       std::string(std::min(Width, 1023u), ' '));
+      checkFormatted();
+    }
+    prepareFormatted(Form, 2, "%cignored", "");
+    checkFormatted();
+  }
+}
+
+TEST_P(AndroidLog, FormattedPrecisionDoesNotReadPastTheGuestPage) {
+  for (unsigned Form = 0; Form != 6; ++Form) {
+    SCOPED_TRACE(Form);
+    prepareFormatted(Form, 1, "%.*s", "ABCD");
+    auto &Bytes = Options.Android->Memory[0].Bytes;
+    std::copy_n("ABCD", 4,
+                Bytes.end() - 4); // No NUL; the next page is unmapped.
+    Options.Android->Arguments[4] = Output + Bytes.size() - 4;
+    checkFormatted();
+  }
+}
+
+TEST_P(AndroidLog, FormattedUnsupportedConversionsPrecedeTagAndLogReads) {
+  for (unsigned Form = 0; Form != 3; ++Form)
+    for (const char *Format : {"%n", "%f", "%ls", "bad%", "%c%n"}) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(Format);
+      prepareFormatted(Form, 3, Format, "");
+      Options.Android->Arguments[7] =
+          1; // Would fault if the tag were read first.
+      auto Result =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      EXPECT_EQ(Result->Stop, ProcessStopReason::UnsupportedService)
+          << Result->Diagnostic;
+      const std::string ExpectedReason =
+          std::string(Format) == "%ls"
+              ? "wide or length-qualified text conversion"
+          : std::string(Format) == "bad%" ? "incomplete format conversion"
+                                          : "unsupported format conversion";
+      EXPECT_NE(Result->Diagnostic.find(ExpectedReason), std::string::npos)
+          << Result->Diagnostic;
+      EXPECT_EQ(Result->TextLogWritesConsumed, 0u);
+      EXPECT_FALSE(Result->ReturnValue);
+      ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+      EXPECT_EQ(Result->MemorySnapshots[0].Bytes,
+                Options.Android->Memory[0].Bytes);
+    }
+}
+
+TEST_P(AndroidLog, FormattedWritesKeepExplicitTranscriptBoundaries) {
+  for (unsigned Mode = 0; Mode != 5; ++Mode) {
+    SCOPED_TRACE(Mode);
+    prepareFormatted(2, 0, "%d", "-123");
+    if (Mode == 0)
+      Options.Android->TextLogWrites.reset();
+    else if (Mode == 1)
+      Options.Android->TextLogWrites->clear();
+    else if (Mode == 2)
+      Options.Android->TextLogWrites->front().Payload[5] = '+';
+    else if (Mode == 3)
+      Options.Android->TextLogWrites->back().ID = 3;
+    else
+      Options.Android->Arguments[6] =
+          7; // Fatal abort-message state remains explicit.
+    auto Result =
+        emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    EXPECT_EQ(Result->Stop, ProcessStopReason::UnsupportedService)
+        << Result->Diagnostic;
+    if (Mode == 0)
+      EXPECT_FALSE(Result->TextLogWritesConsumed);
+    else
+      EXPECT_EQ(Result->TextLogWritesConsumed, Mode == 3 ? 1u : 0u);
+    auto Expected = Options.Android->Memory[0].Bytes;
+    if (Mode == 3) {
+      integer(Expected, 0, uint64_t(-11), 8);
+      integer(Expected, 8, 73, 8);
+    }
+    ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+    EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Expected);
+  }
+}
+
 TEST_P(AndroidLog, TextWritesShareOrderedResultsRoutingAndErrno) {
   Options.Android->EntrySymbol = "log_text_write";
   Options.Android->Libraries["liblog.so"] = {"__android_log_write"};

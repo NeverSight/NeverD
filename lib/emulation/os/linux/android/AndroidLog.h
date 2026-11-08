@@ -15,6 +15,8 @@
 #include "llvm/Support/Error.h"
 
 namespace neverd::emulation::android_model {
+inline constexpr unsigned LogFormattedBufferBytes =
+    ::neverd::limits::emulation::kAndroidLogFormattedBufferBytes;
 inline constexpr unsigned LogPayloadLimit =
     ::neverd::limits::dalvik::kAndroidEventLogPayloadBytes;
 llvm::Error

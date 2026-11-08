@@ -2,6 +2,7 @@
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import json
 import os
@@ -15,8 +16,10 @@ import threading
 import time
 
 try:
+    from .sbf_artifacts import ArtifactWorkspace, child_options
     from .sbf_corpus_common import DEFAULT_MANIFEST, LIMITS, analysis_stages, atomic_json, load_manifest, sha256, verify_artifact
 except ImportError:
+    from sbf_artifacts import ArtifactWorkspace, child_options
     from sbf_corpus_common import DEFAULT_MANIFEST, LIMITS, analysis_stages, atomic_json, load_manifest, sha256, verify_artifact
 
 
@@ -29,7 +32,7 @@ def git(root, *args):
     return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
 
 
-def fingerprint(worker, manifest_path):
+def fingerprint(worker, manifest_path, build_metadata=None):
     root = Path(__file__).resolve().parents[1]
     changed = git(root, "ls-files", "--modified", "--others", "--exclude-standard").splitlines()
     inputs = {}
@@ -44,7 +47,7 @@ def fingerprint(worker, manifest_path):
              "logical_cpus": os.cpu_count(), "python": sys.version,
              "started_at": datetime.now(timezone.utc).isoformat()}
     for name in ("neverd-dependency-inputs.json", "neverd-build-receipt.json"):
-        path = worker.parent.parent / name
+        path = (build_metadata or worker.parent.parent) / name
         if path.exists():
             value[name] = json.loads(path.read_text())
     return value
@@ -87,38 +90,50 @@ def execute(command, directory, timeout, memory_bytes, cancellation=None):
     started = time.monotonic()
     stop_reason, peak_rss, last_usage = None, None, None
     with stdout.open("w") as out, stderr.open("w") as err:
-        process = subprocess.Popen(command, stdout=out, stderr=err, start_new_session=True)
-        while process.poll() is None:
-            elapsed = time.monotonic() - started
-            if cancellation is not None and cancellation.is_set():
-                stop_reason = "cancelled"
-            elif elapsed > timeout:
-                stop_reason = "timeout"
-            if stop_reason is None and os.name == "posix":
-                try:
-                    usage = sample_process_group_usage(process.pid)
-                    if usage is not None:
-                        last_usage = {**usage, "elapsed_seconds": elapsed}
-                        rss = usage["rss_bytes"]
-                        peak_rss = max(peak_rss or 0, rss)
-                        if rss > memory_bytes:
-                            stop_reason = "memory_budget_exhausted"
-                except (OSError, ValueError, subprocess.TimeoutExpired):
-                    pass
-            if stop_reason is None and (stdout.stat().st_size > LIMITS.max_report_bytes or
-                                        stderr.stat().st_size > LIMITS.max_output_bytes):
-                stop_reason = "report_budget_exhausted"
-            if stop_reason:
-                if os.name == "posix":
+        process = subprocess.Popen(command, stdout=out, stderr=err, start_new_session=True,
+                                   **child_options())
+        try:
+            while process.poll() is None:
+                elapsed = time.monotonic() - started
+                if cancellation is not None and cancellation.is_set():
+                    stop_reason = "cancelled"
+                elif elapsed > timeout:
+                    stop_reason = "timeout"
+                if stop_reason is None and os.name == "posix":
                     try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
+                        usage = sample_process_group_usage(process.pid)
+                        if usage is not None:
+                            last_usage = {**usage, "elapsed_seconds": elapsed}
+                            rss = usage["rss_bytes"]
+                            peak_rss = max(peak_rss or 0, rss)
+                            if rss > memory_bytes:
+                                stop_reason = "memory_budget_exhausted"
+                    except (OSError, ValueError, subprocess.TimeoutExpired):
                         pass
-                else:
-                    process.kill()
-                break
-            time.sleep(0.05)
-        code = process.wait()
+                if stop_reason is None and (stdout.stat().st_size > LIMITS.max_report_bytes or
+                                            stderr.stat().st_size > LIMITS.max_output_bytes):
+                    stop_reason = "report_budget_exhausted"
+                if stop_reason:
+                    if os.name == "posix":
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    else:
+                        process.kill()
+                    break
+                time.sleep(0.05)
+            code = process.wait()
+        except BaseException:
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            elif process.poll() is None:
+                process.kill()
+            process.wait()
+            raise
     events = read_events(stdout)
     stages = {name: {"state": "not_run"} for name in STAGES}
     began = {}
@@ -173,63 +188,67 @@ def qualify(row, manifest, worker, cache, output, kinds, timeout, memory_bytes,
             command.append("--slot=" + str(manifest["profile"]["slot"]))
         if kind != "analysis":
             command.append("--output=" + str(destination))
-        request = execute(command, directory / kind, timeout, memory_bytes, cancellation)
-        if kind in ("c", "rust"):
-            request["compilation"] = {"state": "not_run", "reason": "not requested"}
-        result["requests"][kind] = request
-        atomic_json(directory / "result.json", result)
-        if destination.exists():
-            request["output_bytes"] = destination.stat().st_size
-            request["output_sha256"] = sha256(destination)
-        if compile_sources and kind in ("c", "rust"):
-            passed = request["stages"].get(kind, {}).get("state") == "passed"
-            compiler = shutil.which("clang" if kind == "c" else "rustc")
-            if not passed:
-                request["compilation"] = {"state": "not_run", "reason": "emission did not pass"}
-            elif not compiler:
-                request["compilation"] = {"state": "not_run", "reason": "compiler unavailable"}
-            else:
-                source = destination
-                object_path = directory / (kind + ".native.o")
-                if kind == "rust":
-                    source = directory / "rust-native-probe.rs"
-                    shutil.copyfile(destination, source)
-                    probe = Path(__file__).with_name("sbf_corpus_native_probe.rs")
-                    with source.open("a") as stream:
-                        stream.write("\n" + probe.read_text())
-                cmd = ([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O0", "-c",
-                        str(source), "-o", str(object_path)]
-                       if kind == "c" else [compiler, "--edition=2021", "--crate-name=neverd_sbf_qualified",
-                                            "-D", "warnings", "--crate-type=lib", "--emit=obj",
-                                            "-C", "opt-level=0", str(source), "-o", str(object_path)])
-                compiled = execute(cmd, directory / (kind + "-compile"), timeout, memory_bytes, cancellation)
-                compiled["state"] = ("passed" if compiled["exit_code"] == 0 else
-                                     compiled["stop_reason"] or "failed")
-                compiled["compiler_version"] = subprocess.check_output([compiler, "--version"], text=True).splitlines()[0]
-                compiled["kind"] = "native_object"
-                compiled["source_sha256"] = sha256(source)
-                if kind == "rust":
-                    compiled["host_contract"] = "opaque unresolved Rust-ABI symbols; compile-only v2 instantiation"
-                    compiled["probe_template_sha256"] = sha256(probe)
-                if compiled["state"] == "passed":
-                    if not object_path.is_file():
-                        compiled["state"] = "failed"
-                        compiled["stop_reason"] = "compiler returned success without an object"
-                    else:
-                        compiled["object_bytes"] = object_path.stat().st_size
-                        if object_path.stat().st_size > LIMITS.max_output_bytes:
-                            compiled["state"] = "budget_exhausted"
-                            compiled["stop_reason"] = "native object output byte budget exceeded"
+        object_path = directory / (kind + ".native.o")
+        probe_path = directory / "rust-native-probe.rs"
+        try:
+            request = execute(command, directory / kind, timeout, memory_bytes, cancellation)
+            if kind in ("c", "rust"):
+                request["compilation"] = {"state": "not_run", "reason": "not requested"}
+            result["requests"][kind] = request
+            atomic_json(directory / "result.json", result)
+            if destination.exists():
+                request["output_bytes"] = destination.stat().st_size
+                request["output_sha256"] = sha256(destination)
+            if compile_sources and kind in ("c", "rust"):
+                passed = request["stages"].get(kind, {}).get("state") == "passed"
+                compiler = shutil.which("clang" if kind == "c" else "rustc")
+                if not passed:
+                    request["compilation"] = {"state": "not_run", "reason": "emission did not pass"}
+                elif not compiler:
+                    request["compilation"] = {"state": "not_run", "reason": "compiler unavailable"}
+                else:
+                    source = destination
+                    if kind == "rust":
+                        source = directory / "rust-native-probe.rs"
+                        shutil.copyfile(destination, source)
+                        probe = Path(__file__).with_name("sbf_corpus_native_probe.rs")
+                        with source.open("a") as stream:
+                            stream.write("\n" + probe.read_text())
+                    cmd = ([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O0", "-c",
+                            str(source), "-o", str(object_path)]
+                           if kind == "c" else [compiler, "--edition=2021", "--crate-name=neverd_sbf_qualified",
+                                                "-D", "warnings", "--crate-type=lib", "--emit=obj",
+                                                "-C", "opt-level=0", str(source), "-o", str(object_path)])
+                    compiled = execute(cmd, directory / (kind + "-compile"), timeout, memory_bytes, cancellation)
+                    compiled["state"] = ("passed" if compiled["exit_code"] == 0 else
+                                         compiled["stop_reason"] or "failed")
+                    compiled["compiler_version"] = subprocess.check_output([compiler, "--version"], text=True).splitlines()[0]
+                    compiled["kind"] = "native_object"
+                    compiled["source_sha256"] = sha256(source)
+                    if kind == "rust":
+                        compiled["host_contract"] = "opaque unresolved Rust-ABI symbols; compile-only v2 instantiation"
+                        compiled["probe_template_sha256"] = sha256(probe)
+                    if compiled["state"] == "passed":
+                        if not object_path.is_file():
+                            compiled["state"] = "failed"
+                            compiled["stop_reason"] = "compiler returned success without an object"
                         else:
-                            compiled["object_sha256"] = sha256(object_path)
-                request["compilation"] = compiled
-                if not retain_sources:
-                    object_path.unlink(missing_ok=True)
-                    if source != destination:
-                        source.unlink(missing_ok=True)
-        if not retain_sources:
-            destination.unlink(missing_ok=True)
-        atomic_json(directory / "result.json", result)
+                            compiled["object_bytes"] = object_path.stat().st_size
+                            if object_path.stat().st_size > LIMITS.max_output_bytes:
+                                compiled["state"] = "budget_exhausted"
+                                compiled["stop_reason"] = "native object output byte budget exceeded"
+                            else:
+                                compiled["object_sha256"] = sha256(object_path)
+                    request["compilation"] = compiled
+            atomic_json(directory / "result.json", result)
+        finally:
+            # Object hashes are the evidence. Source audits do not consume the
+            # objects, including when recording the compiler result failed.
+            object_path.unlink(missing_ok=True)
+            if not retain_sources:
+                destination.unlink(missing_ok=True)
+                if kind == "rust":
+                    probe_path.unlink(missing_ok=True)
     return result
 
 
@@ -265,20 +284,51 @@ def main():
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--worker", type=Path, required=True)
+    parser.add_argument("--build-metadata", type=Path,
+                        help="build receipts for a content-addressed frozen worker")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--kinds", nargs="+", choices=KINDS + OPTIONAL_KINDS, default=KINDS)
     parser.add_argument("--timeout", type=float, default=LIMITS.stage_timeout_seconds)
     parser.add_argument("--memory-bytes", type=int, default=LIMITS.worker_address_space_bytes)
     parser.add_argument("--jobs", type=int, default=LIMITS.default_jobs)
     parser.add_argument("--retain-sources", action="store_true")
+    parser.add_argument("--artifact-workspace", type=Path,
+                        help="manage only explicitly registered products below this root")
+    parser.add_argument("--artifact-role", default="corpus-current",
+                        help="stable pending-reader pin; another run replaces this role")
+    parser.add_argument("--pending-reader",
+                        help="protect a finished bundle until this audit explicitly releases it")
     parser.add_argument("--compile", action="store_true", dest="compile_sources")
     args = parser.parse_args()
     if args.jobs < 1 or args.timeout <= 0 or args.memory_bytes <= 0:
         parser.error("jobs, timeout and memory budget must be positive")
+    if args.pending_reader and not args.artifact_workspace:
+        parser.error("--pending-reader requires --artifact-workspace")
     worker, cache, output = args.worker.resolve(), args.cache.resolve(), args.output.resolve()
     manifest = load_manifest(args.manifest)
-    output.mkdir(parents=True, exist_ok=False)
-    identity = fingerprint(worker, args.manifest)
+    previous_term = None
+    if hasattr(signal, "SIGTERM"):
+        def terminate(signum, frame):
+            raise KeyboardInterrupt
+        previous_term = signal.signal(signal.SIGTERM, terminate)
+    try:
+        with (ArtifactWorkspace(args.artifact_workspace) if args.artifact_workspace
+              else nullcontext()) as artifacts:
+            run_manifest(args, manifest, worker, cache, output, artifacts)
+    finally:
+        if previous_term is not None:
+            signal.signal(signal.SIGTERM, previous_term)
+
+
+def run_manifest(args, manifest, worker, cache, output, artifacts):
+    if artifacts is None:
+        output.mkdir(parents=True, exist_ok=False)
+    else:
+        if args.pending_reader and args.pending_reader in artifacts.state["pins"]:
+            raise RuntimeError(f"unfinished artifact reader: {args.pending_reader}")
+        artifacts.begin(args.artifact_role, {"output": str(output), "worker_sha256": sha256(worker)})
+        artifacts.own(output, directory=True)
+    identity = fingerprint(worker, args.manifest, args.build_metadata)
     identity["budgets"] = {"timeout_seconds_per_request": args.timeout,
                            "sampled_rss_bytes_per_request": args.memory_bytes,
                            "rss_scope": "owned_process_group_sum",
@@ -287,6 +337,9 @@ def main():
     identity["process_observer"] = {
         "selection": "macOS process group" if sys.platform == "darwin" else "all processes with group filter",
         "scope": "owned process group only; same RSS charge and numerical budgets"}
+    if artifacts is not None:
+        artifacts.state["entries"][artifacts.run_id]["metadata"]["identity"] = identity
+        artifacts.save()
     atomic_json(output / "identity.json", identity)
     rows = []
     cancellation = threading.Event()
@@ -304,9 +357,22 @@ def main():
         except KeyboardInterrupt:
             cancellation.set()
             rows = [future.result() for future in futures]
+        except BaseException:
+            cancellation.set()
+            raise
     final = {"identity": identity, "summary": summarize(rows), "artifacts": rows}
     atomic_json(output / "report.json", final)
     print(json.dumps(final["summary"], indent=2))
+    if artifacts is not None:
+        artifacts.state["entries"][artifacts.run_id]["metadata"].update(
+            summary=final["summary"], report_sha256=sha256(output / "report.json"))
+        # A finished report/source audit is a concrete next reader. Cancelled
+        # attempts retain their compact receipt and log tails, not full payloads.
+        if not cancellation.is_set():
+            artifacts.keep(args.artifact_role)
+            if args.pending_reader:
+                artifacts.keep(args.pending_reader)
+        artifacts.finish("cancelled" if cancellation.is_set() else "completed")
 
 
 if __name__ == "__main__":

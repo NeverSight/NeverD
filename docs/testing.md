@@ -4683,6 +4683,45 @@ order and retain paired measurements and CPU time alongside output hashes.
 The full build's `neverd-acceleration-bench` target reports wall and process CPU
 time separately; use both when the host has competing workloads.
 
+Shared fork exports are owned at `scripts/fork_dependencies.py::refresh` and
+the `scripts/build.py` configure/build boundary. On POSIX, a successful
+configuration retires newly managed commit directories that are no longer
+referenced by the current snapshot, configured graph or named frozen readers.
+The ownership journal is written before creation, and its matching marker is
+removed last during retirement. Retry journals occupy fixed files. Existing
+unmarked exports are not adopted or deleted; reusable `_deps` build caches,
+installed SDKs and other build directories remain caller-owned.
+
+A failed configuration retains both the previous graph and pending snapshot.
+The next supported build first completes that pending configuration before
+refreshing remote heads. Fix the reported configuration error and rerun
+`scripts/build.py`; repeated failures do not export more revisions. Initial
+plain CMake configuration records a pending reader too, which the build wrapper
+completes. Do not run plain CMake and the wrapper concurrently in one directory.
+The wrapper passes its POSIX lock to CMake: interrupting or killing the Python
+owner does not permit retirement while its surviving CMake process still runs.
+An interrupted wrapper may therefore leave CMake finishing its current work.
+Windows retains the previous no-retirement policy; orphaned CMake reader
+locking there is not qualified by the POSIX implementation.
+
+Before retaining fork source paths for a frozen benchmark or external reader,
+register them while they are still current:
+
+```bash
+python3 scripts/fork_dependencies.py retain BUILD_DIR --reader frozen-baseline
+# Release only when no reader needs those exported source paths.
+python3 scripts/fork_dependencies.py release BUILD_DIR --reader frozen-baseline
+```
+
+`retain --snapshot SNAPSHOT.json` accepts an earlier saved snapshot only while
+its archives still exist. Reader names do not expire automatically. Run
+`python3 -m unittest scripts.tests.test_fork_dependencies scripts.tests.test_fork_export_lifecycle -v`
+for tiny local Git/archive/CMake fixtures covering normal refresh and builds,
+repeated success and configure failure, frozen readers and protected caches,
+archive failures, SIGINT/SIGTERM/SIGKILL, surviving CMake child locks and
+interrupted ownership creation/retirement. Tests remove their own fixture trees.
+They neither refresh the real dependency submodules nor clean real build trees.
+
 Local Capstone experiment drivers use
 `scripts/capstone_perf_lifecycle.py::Experiment` around preparation, compilation,
 validation and measurement. It owns one `.capstone-perf/current` directory under
@@ -6071,6 +6110,12 @@ controls, full-size close targets, and a padlock that opens and closes with the
 lock over the caption's own color. `doubleClickDetachStartsLocked` and
 `lockedDragsStayFloating` check the default lock, caption movement and rejected
 tab docking. `explicitDockIgnoresLock` clicks the dock button while locked.
+`retiredFloatingCaptionDoesNotRestoreFocus` transfers a complete floating
+layout into the main window, then delivers a focus event to its old caption
+before deferred deletion. This reproduces Cocoa reactivation while the drop
+preview hides. It also checks live-caption focus forwarding, deletion of the
+retired caption and keyboard focus in the newly docked pane. The lifecycle
+check runs offscreen as well as with a native window system.
 `quickStartChoosesWorkbenchSize` checks that accepting the startup greeting,
 including opening a recent file, maximizes the workbench, while reopening the
 dialog over a visible workbench preserves its state. `workbenchReopensWindowed`
@@ -16404,6 +16449,13 @@ exhausted and mismatching explicit logs through ordinary/V/A calls; its native
 client interleaves a text write between two failed transactions on the same
 proxy. `AndroidLog.Text*` checks direct/dynamic calls, buffer/priority bytes,
 null tags, radio routing, signed results, errno and bounded payload admission.
+`AndroidLog.Formatted*` runs direct and dynamic print/vprint/buf_print calls
+at O0/O2 across relocation variants and available CPU backends. Independent
+transcripts check stacked scalar arguments, unchanged va_list bytes, 1022/1023/
+1024-byte and large-width clipping, embedded NUL, bounded precision at a page
+edge, signed results and errno. Unsupported conversions precede tag reads and
+log consumption; missing, exhausted and mismatching transcripts preserve the
+completed prefix. Fatal state and transport truncation remain explicit.
 `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
 executes real guest services through all three JNI forms, including three-round
 buffer retention/reuse, a reply recycled and reused by another native thread,
@@ -22491,3 +22543,43 @@ handler and discovered functions (limited to 250), with one/default threads and
 both C backends. New instruction coverage and additional strict checks are
 different work and require separate reporting, not same-output speedup claims.
 This small corpus and a shared host do not establish a cross-tool ranking.
+
+Both MIPS Python drivers reuse their `--output` directory through
+`scripts/mips_validation_artifacts.py`. A new output must be empty; older,
+unmarked reports are never adopted or deleted. Keep SDKs, firmware, fixture
+inputs and pending comparison baselines outside that directory. The drivers
+read those inputs in place and do not copy or install SDKs.
+
+Generated objects, ELFs, successful C output and full per-command logs live in
+owned scratch storage. Each completed roundtrip removes its temporary files;
+the driver also removes scratch after failure or normal interruption. A later
+start reclaims scratch left by an uncatchable kill. One output lock, inherited
+by the compiler/CLI, prevents another invocation from reclaiming a surviving
+reader's files. This lock is separate from the existing build lock because the
+drivers never mutate the build cache or CTest's `LastTest.log`.
+The recorded process group also protects descendants that close inherited file
+descriptors. Scratch stays in place if a descendant outlives its command leader.
+A kill during the spawn handoff, before the process group was recorded, requires
+a reader audit; missing process identity is never treated as permission to
+delete. These drivers use POSIX process groups and locks.
+
+The reusable output retains the latest semantic/timing receipts and command
+hashes, with up to 8 KiB of diagnostic tail for each failed command. Failed
+generated sources are deduplicated by SHA-256 and verified after copying;
+only the current and preceding run's source evidence remain. This retention
+contract applies to newly owned validation output, not preexisting recovery
+archives or user files. Copy a receipt needed for a separate comparison outside
+the run directory before reusing it. Performance output disagreement retains
+both differing sources and blocks a timing claim.
+
+Run the small producer lifecycle checks without building a new SDK:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/tests/test_mips_validation_artifacts.py -v
+```
+
+They exercise repeated success/failure, SIGTERM, SIGKILL recovery, surviving
+child readers, preserved inputs and the actual paired-measurement entry point
+with tiny fake commands. The roundtrip compiler-failure entry check uses the
+local pinned Unicorn bindings when available. These are artifact lifecycle
+checks, not performance or ISA qualification measurements.

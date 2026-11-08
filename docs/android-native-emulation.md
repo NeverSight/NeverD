@@ -1306,7 +1306,8 @@ are modeled; missing writes and RemoteException handling remain unsupported.
 
 BinderProxy's FAILED_TRANSACTION JNI path uses the separate explicit
 [text-write transcript](android-log-reader.md#text-write-contract), shared
-with native `__android_log_write` and `__android_log_buf_write`. It logs before
+with native `__android_log_write`, `__android_log_buf_write` and the shared
+print/vprint/buf_print formatting entries. It logs before
 creating the checked exception and message, preserves proxy liveness, and
 retains earlier reply-Parcel state when log input is missing.
 

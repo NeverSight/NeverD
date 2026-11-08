@@ -13,6 +13,14 @@ import subprocess
 import tempfile
 
 
+try:
+    from .sbf_artifacts import ArtifactWorkspace, run_owned
+    from .sbf_corpus_common import sha256
+except ImportError:
+    from sbf_artifacts import ArtifactWorkspace, run_owned
+    from sbf_corpus_common import sha256
+
+
 EXAMPLE_NAME = "neverd_sbf_official_oracle"
 PROTOCOL_RS_NAME = "SBFOfficialOracleProtocol.rs"
 FAULTS_RS_NAME = "SBFOfficialExecutionFaults.rs"
@@ -70,7 +78,7 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, check=True, text=True, **kwargs)
+    return run_owned(command, check=True, text=True, **kwargs)
 
 
 def upstream_metadata_value(
@@ -229,78 +237,101 @@ def main() -> None:
             raise RuntimeError(f"required path does not exist: {required}")
     run(["git", "-C", str(root), "cat-file", "-e", f"{revision}^{{commit}}"])
 
-    with tempfile.TemporaryDirectory(prefix="neverd-sbpf-oracle-") as temporary:
-        temporary_root = Path(temporary)
-        checkout = temporary_root / "upstream"
-        target = temporary_root / "target"
-        worktree_added = False
-        try:
-            run(
-                [
-                    "git",
-                    "-C",
-                    str(root),
-                    "worktree",
-                    "add",
-                    "--detach",
-                    str(checkout),
-                    revision,
-                ]
-            )
-            worktree_added = True
-            shutil.copy2(source, checkout / "examples" / f"{EXAMPLE_NAME}.rs")
-            (checkout / "examples" / PROTOCOL_RS_NAME).write_text(
-                render_rust_protocol(protocol), encoding="utf-8"
-            )
-            (checkout / "examples" / FAULTS_RS_NAME).write_text(
-                render_rust_faults(faults), encoding="utf-8"
-            )
-            (checkout / "examples" / EXECUTION_CONSTANTS_RS_NAME).write_text(
-                render_rust_execution_constants(execution_constants), encoding="utf-8"
-            )
-            (checkout / "examples" / VERSIONS_RS_NAME).write_text(
-                render_rust_versions(versions), encoding="utf-8"
-            )
-            environment = os.environ.copy()
-            environment["NEVERD_SBPF_ORACLE_REVISION"] = revision
-            run(
-                [
-                    arguments.cargo,
-                    f"+{toolchain}",
-                    "build",
-                    "--manifest-path",
-                    str(checkout / "Cargo.toml"),
-                    "--locked",
-                    "--release",
-                    "--example",
-                    EXAMPLE_NAME,
-                    "--target-dir",
-                    str(target),
-                ],
-                env=environment,
-            )
-            suffix = ".exe" if os.name == "nt" else ""
-            binary = target / "release" / "examples" / f"{EXAMPLE_NAME}{suffix}"
-            output.parent.mkdir(parents=True, exist_ok=True)
-            staged_output = output.with_name(f".{output.name}.tmp")
-            shutil.copy2(binary, staged_output)
-            os.replace(staged_output, output)
-        finally:
-            if worktree_added:
-                subprocess.run(
-                    [
-                        "git",
-                        "-C",
-                        str(root),
-                        "worktree",
-                        "remove",
-                        "--force",
-                        str(checkout),
-                    ],
-                    check=False,
-                )
+    build_cached_oracle(root, output, revision, toolchain, arguments.cargo,
+                        source, protocol, faults, execution_constants, versions)
 
     print(f"built {output} from anza-xyz/sbpf {revision}")
+
+
+def build_cached_oracle(root, output, revision, toolchain, cargo,
+                        source, protocol, faults, execution_constants, versions):
+    """Reuse one owned checkout/target; Cargo still validates every invocation."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if os.name != "posix":
+        # Preserve the existing disposable Windows build. POSIX leases are not
+        # a cross-platform guarantee about inherited child handles.
+        with tempfile.TemporaryDirectory(prefix="neverd-sbpf-oracle-", dir=output.parent) as temporary:
+            build_oracle(Path(temporary), None, root, output, revision, toolchain,
+                         cargo, source, protocol, faults, execution_constants, versions)
+        return
+    with ArtifactWorkspace(output.parent) as artifacts:
+        cache = artifacts.retained_path("oracle-cache")
+        if cache is None:
+            artifacts.begin("oracle-cache")
+            cache = artifacts.own(output.parent / ".sbpf-oracle-build", directory=True)
+            artifacts.keep("oracle-cache")
+            artifacts.finish()
+        artifacts.begin("oracle-publication", {"revision": revision, "toolchain": toolchain})
+        build_oracle(cache, artifacts, root, output, revision, toolchain, cargo,
+                     source, protocol, faults, execution_constants, versions)
+
+
+def build_oracle(cache, artifacts, root, output, revision, toolchain, cargo,
+                 source, protocol, faults, execution_constants, versions):
+    checkout, target = cache / "upstream", cache / "target"
+    inputs = {"source": str(root.resolve()), "revision": revision, "toolchain": toolchain}
+    previous = cache / "inputs.json"
+    values = {f"{EXAMPLE_NAME}.rs": source.read_text(),
+              PROTOCOL_RS_NAME: render_rust_protocol(protocol),
+              FAULTS_RS_NAME: render_rust_faults(faults),
+              EXECUTION_CONSTANTS_RS_NAME: render_rust_execution_constants(execution_constants),
+              VERSIONS_RS_NAME: render_rust_versions(versions)}
+    if checkout.exists():
+        origin = run(["git", "-C", str(checkout), "remote", "get-url", "origin"],
+                     capture_output=True).stdout.strip()
+        if Path(origin).resolve() != root.resolve():
+            raise RuntimeError("oracle cache belongs to another source checkout")
+        changed = run(["git", "-C", str(checkout), "status", "--porcelain=v1",
+                       "--untracked-files=all"], capture_output=True).stdout.splitlines()
+        generated = {"examples/" + n for n in values}
+        if any(line[3:] not in generated for line in changed):
+            raise RuntimeError("oracle cache has unrelated changes; preserve them")
+        head = run(["git", "-C", str(checkout), "rev-parse", "HEAD"], capture_output=True).stdout.strip()
+        if head != revision:
+            run(["git", "-C", str(checkout), "fetch", "--no-tags", "origin", revision])
+            run(["git", "-C", str(checkout), "checkout", "--detach", revision])
+    else:
+        # A private shared-object clone does not register or prune worktrees in
+        # the caller's repository. Partial creation remains a disposable bundle.
+        staging = cache / "checkout-staging"
+        if artifacts:
+            artifacts.own(staging, directory=True)
+        else:
+            staging.mkdir()
+        run(["git", "clone", "--shared", "--no-checkout", str(root), str(staging / "repo")])
+        run(["git", "-C", str(staging / "repo"), "checkout", "--detach", revision])
+        (staging / "repo").rename(checkout)
+    if previous.exists() and json.loads(previous.read_text()) != inputs:
+        if target.is_symlink():
+            raise RuntimeError("oracle target cache is a symlink; preserve it")
+        if target.exists():
+            shutil.rmtree(target)
+    temporary = cache / "inputs.tmp"
+    temporary.write_text(json.dumps(inputs) + "\n")
+    temporary.replace(previous)
+    (checkout / "examples").mkdir(exist_ok=True)
+    for name, value in values.items():
+        path = checkout / "examples" / name
+        if not path.exists() or path.read_text() != value:
+            path.write_text(value, encoding="utf-8")
+    environment = os.environ.copy()
+    environment["NEVERD_SBPF_ORACLE_REVISION"] = revision
+    run([cargo, f"+{toolchain}", "build", "--manifest-path", str(checkout / "Cargo.toml"),
+         "--locked", "--release", "--example", EXAMPLE_NAME, "--target-dir", str(target)],
+        env=environment)
+    suffix = ".exe" if os.name == "nt" else ""
+    binary = target / "release/examples" / f"{EXAMPLE_NAME}{suffix}"
+    digest = sha256(binary)
+    if not output.exists() or sha256(output) != digest:
+        staged = (artifacts.own(output.with_name(f".{output.name}.tmp")) if artifacts
+                  else cache / "publication.tmp")
+        shutil.copy2(binary, staged)
+        if sha256(staged) != digest:
+            raise RuntimeError("oracle publication copy differs")
+        os.replace(staged, output)
+    if artifacts:
+        artifacts.state["entries"][artifacts.run_id]["metadata"].update(
+            output=str(output), output_sha256=digest, cache=str(cache))
 
 
 if __name__ == "__main__":

@@ -148,7 +148,8 @@ writes remain outside this subset.
 
 ## Text write contract
 
-`__android_log_write`, `__android_log_buf_write` and BinderProxy's API 28
+`__android_log_write`, `__android_log_buf_write`, the three formatted liblog
+entries below and BinderProxy's API 28
 FAILED_TRANSACTION diagnostic share `android.text_log_writes`. Each entry has
 exactly `log_id`, `payload` and `result`. IDs 0, 1, 3 and 4 select main, radio,
 system and crash. Payload bytes contain one priority byte, a NUL-terminated
@@ -167,10 +168,21 @@ with at most 4096 entries / 1 MiB including each buffer id and result.
 Validated hex payloads share the JSON payload accounting; metadata limits
 still apply.
 
+`__android_log_print`, `__android_log_vprint` and `__android_log_buf_print`
+reuse Bionic's shared scalar formatter and AAPCS64 argument reader, including
+register/stack overflow slots and guest-owned `va_list` save areas. API 28 uses
+a 1024-byte formatting buffer including NUL: at most 1023 bytes reach the
+subsequent C-string write, and an embedded NUL ends that message. Formatting
+still reads all required arguments before the tag and log write. The return
+value is the explicit liblog result, not the untruncated formatting count;
+errno and caller `va_list` bytes are preserved. Unsupported conversions retain
+the formatter's existing boundary and consume no log entry.
+
 This bounded subset requires explicit results and supplies no logd clock,
-property filter or host transport. Oversized payload truncation, fatal
-abort-message state, formatted native log exports and Java Log wrappers
-remain explicit boundaries.
+property filter or host transport. Transport truncation of an oversized
+combined tag/message payload, fatal abort-message state, log assertions and
+Java Log wrappers remain explicit boundaries. Formatting-buffer clipping does
+not imply support for these separate transport and process-state contracts.
 
 Binder logs priority ERROR (6), tag `JavaBinder`, and the data Parcel size
 after native completion. The write precedes exception creation, even when its

@@ -367,6 +367,7 @@ private:
                                        llvm::StringRef Tag,
                                        llvm::StringRef Message);
   BionicResult textLogCall(const NativeCallEvent &Call);
+  BionicResult formatLogCall(const NativeCallEvent &Call);
   BionicResult unsupportedLog(llvm::StringRef Detail);
   struct InputStream {
     uint32_t FD;
