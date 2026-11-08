@@ -103,8 +103,14 @@ llvm::Error validateTextLogWrites(
     const auto &P = Write.Payload;
     Bytes += P.size() + sizeof(Write.ID) + sizeof(Write.Result);
     if (!textBuffer(Write.ID) || P.size() < 3 || P.size() > LogPayloadLimit ||
-        Bytes > LogSnapshotLimit || P.back() != 0 ||
-        std::count(P.begin() + 1, P.end(), uint8_t(0)) != 2)
+        Bytes > LogSnapshotLimit)
+      return failure(
+          "invalid Android text log write payload, buffer or total size");
+    // Only a full transport payload may omit either string terminator.
+    // A second NUL always ends the message; trailing bytes cannot be a prefix.
+    const auto Terminators = std::count(P.begin() + 1, P.end(), uint8_t(0));
+    if (Terminators > 2 || (Terminators == 2 && P.back() != 0) ||
+        (Terminators < 2 && P.size() != LogPayloadLimit))
       return failure(
           "invalid Android text log write payload, buffer or total size");
   }
@@ -129,8 +135,6 @@ std::optional<uint32_t> Bionic::textLogWrite(uint32_t ID, int32_t Priority,
     Boundary = "requires a main/radio/system/crash buffer";
   else if (Priority == 7)
     Boundary = "requires native fatal abort-message state";
-  else if (Tag.size() + Message.size() + 3 > LogPayloadLimit)
-    Boundary = "requires payload truncation";
   if (Boundary) {
     Result.Stop = ProcessStopReason::UnsupportedService;
     Result.Diagnostic =
@@ -138,12 +142,17 @@ std::optional<uint32_t> Bionic::textLogWrite(uint32_t ID, int32_t Priority,
     return std::nullopt;
   }
   std::vector<uint8_t> Payload;
-  Payload.reserve(Tag.size() + Message.size() + 3);
+  Payload.reserve(
+      std::min<size_t>(LogPayloadLimit, Tag.size() + Message.size() + 3));
   Payload.push_back(uint8_t(Priority));
-  Payload.insert(Payload.end(), Tag.begin(), Tag.end());
-  Payload.push_back(0);
-  Payload.insert(Payload.end(), Message.begin(), Message.end());
-  Payload.push_back(0);
+  // logd clips the concatenated priority/tag/message iovecs. A cut may land
+  // inside either string or just after its NUL; no replacement NUL is added.
+  for (llvm::StringRef Text : {Tag, Message}) {
+    auto Prefix = Text.take_front(LogPayloadLimit - Payload.size());
+    Payload.insert(Payload.end(), Prefix.begin(), Prefix.end());
+    if (Payload.size() < LogPayloadLimit)
+      Payload.push_back(0);
+  }
   return consumeLogWrite(
       Options.Android->TextLogWrites, Result.TextLogWritesConsumed,
       [&](const NativeTextLogWrite &Write) {

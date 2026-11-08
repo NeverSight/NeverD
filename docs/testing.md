@@ -16498,13 +16498,19 @@ exhausted and mismatching explicit logs through ordinary/V/A calls; its native
 client interleaves a text write between two failed transactions on the same
 proxy. `AndroidLog.Text*` checks direct/dynamic calls, buffer/priority bytes,
 null tags, radio routing, signed results, errno and bounded payload admission.
+`AndroidLog.TextTransport*` checks clipping inside tag/message, a cut after tag
+NUL, byte cuts inside UTF-8, full guest-string reads beyond the retained prefix,
+and partial transcript effects. `FormattedTransport*` composes the 1023-byte
+formatting limit with transport clipping. C++/JSON admission checks complete
+short payloads and capped prefixes with zero, one or two terminators; SDK/CLI
+coverage uses `ProcessPublic.AndroidTextLogTransportPrefixesMatchSDKAndCLI`.
 `AndroidLog.Formatted*` runs direct and dynamic print/vprint/buf_print calls
 at O0/O2 across relocation variants and available CPU backends. Independent
 transcripts check stacked scalar arguments, unchanged va_list bytes, 1022/1023/
 1024-byte and large-width clipping, embedded NUL, bounded precision at a page
 edge, signed results and errno. Unsupported conversions precede tag reads and
 log consumption; missing, exhausted and mismatching transcripts preserve the
-completed prefix. Fatal state and transport truncation remain explicit.
+completed prefix. Fatal state remains explicit.
 `AndroidJNI.BinderTransportUsesGuestServiceAndRetainedReplyArenas`
 executes real guest services through all three JNI forms, including three-round
 buffer retention/reuse, a reply recycled and reused by another native thread,
@@ -21668,6 +21674,25 @@ cases do not claim original post-shutdown processor state. Set
 compiler paths and uniquely named source/manifest pairs. Run the existing
 function/call/scheduled/handler export suites as compatibility regressions;
 their compile-time models remain distinct from these runtime comparisons.
+
+`X64Cr8WriteNotificationTest.*` compiles both C routes with switch/direct
+selection at O0/O2, checks default/disabled source and manifest identity, and
+rejects unsupported opt-in contracts atomically. Compile-only predicates retain
+the actual MOV-CR8/read/NOP/UD2/CALL/RET/IRETQ bodies and event scheduler. They cover
+symbolic legal and reserved-bit writes, same-value subpriority clearing, reads,
+notification-before-poll ordering, budgets, native stops, IRQ deferral and
+preemption, exception delivery, original IRETQ before the deferred write, and
+checked-entry/original-CALL resumption.
+An independent producer checks CPU/TPR coherence and counts notifications;
+no callback is executed. Plain descriptor/stack RAM operands are bound to a
+single declared object at `[0x10000, 0x14000)` by the existing bounded proof
+helper. The proof copy explicitly inlines the scheduler and call wrappers when
+HighC IRET exceeds the ordinary optimizer threshold; every body and guard is
+retained, and unmodified exports compile separately. LLVM must reduce every
+predicate to one block returning constant zero.
+`X64Cr8WriteNotification.MetadataComesFromModeledWrites` checks lowering-owned
+write metadata, including the unchanged paged native boundary. These checks do
+not qualify a live device environment or paged MOV-CR8 fault delivery.
 
 `X64ScheduledFunctionContextTest.*` checks scheduled activation admission,
 disabled source/manifest identity and O0/O2 compilation in both C routes.

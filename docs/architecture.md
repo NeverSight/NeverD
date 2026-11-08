@@ -16115,8 +16115,10 @@ exact binary event bytes and share one consumption cursor. Write results never
 create visible reader records; omission, exhaustion and mismatch stay explicit.
 Bounded native text writes and Binder's FAILED_TRANSACTION diagnostic reuse
 this matcher with `text_log_writes`, a separate cursor and exact buffer id,
-priority, tag and message bytes. Radio-tag routing precedes matching; negative
-results complete without inferred transport success or errno changes.
+priority, tag and message bytes. Radio-tag routing precedes the shared 4068-byte
+transport prefix; admission accepts missing string terminators only at that
+full limit. Native C-string reads complete before clipping. Negative results
+complete without inferred transport success or errno changes.
 
 `AndroidProperties` builds one immutable guest property table from explicit
 inputs. Name lookup, stable `prop_info` identities, serials, legacy reads and
@@ -18538,8 +18540,15 @@ See the [local APIC contract](x86-local-apic.md).
 Its CR8 read/write methods and paired CPU/APIC import check preserve the
 distinction between restoration and an actual same-value write. The former
 retains TPR subpriority; the latter clears it. Privilege/fault handling and
-instruction/device completion wiring remain with the embedding. The fixed
-PPR tie policy retains TPR subpriority as QEMU/KVM do, rather than inferring a
+device wiring remain with the embedding. The successful-RAM scheduler can
+explicitly opt into CR8-write completion notifications. Instruction lowering
+records modeled writes while lowering the authoritative task-priority
+transition; the shared scheduler calls the producer bridge only on that
+instruction's successful exit, including same-value writes. This requires no
+re-decoding, default-source change or ordinary-case runtime check. The embedding
+supplies the bridge and coherent initial banks. Paged MOV CR8 and TPR aliases
+retain their previous boundaries. The fixed PPR tie policy retains TPR
+subpriority as QEMU/KVM do, rather than inferring a
 model-specific choice for arbitrary hardware.
 
 `X64FunctionCallHandlers` composes a producer-declared delivered handler context

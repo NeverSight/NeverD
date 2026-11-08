@@ -5,9 +5,16 @@ import. Same-value writes clear TPR subpriority; reads/imports retain it.
 Reserved-bit writes and mismatched CPU/APIC imports reject without effects.
 Compile-only proofs cover all initial TPR bytes, legal classes, every reserved
 source bit and post-write arbitration. The PPR equal-class subpriority choice
-is explicitly the QEMU/KVM profile, not a universal hardware claim. Scheduler
-completion notifications, paged MOV-CR8 admission, TPR/device wiring, complete
-environment import and both ordinary registry inputs remain open.
+is explicitly the QEMU/KVM profile, not a universal hardware claim. The
+successful-RAM scheduler now offers explicit `notify_cr8_writes` completion
+notifications, shared by both C routes and scheduled function/call views.
+Only successfully modeled writes notify, including same-value writes and the
+last budgeted instruction; the notification precedes the next poll. Imports,
+reads, rejections, native requests and preempting events do not notify. Default
+source remains unchanged. The embedding supplies the bridge and initial bank
+coherence; raw steps and unscheduled drivers retain their old contract. Paged
+MOV-CR8 admission, TPR aliases/device wiring, complete environment import and
+both ordinary registry inputs remain open.
 
 The independent `X86LocalApicFixed` component now owns enabled fixed-message
 reception/coalescing, priority, nonconsuming selection, exact acknowledgment

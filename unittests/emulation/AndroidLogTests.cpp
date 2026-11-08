@@ -11,6 +11,8 @@
 #include "neverd/emulation/ProcessReport.h"
 #include "neverd/emulation/ProcessSession.h"
 
+#include "llvm/ADT/StringExtras.h"
+
 #include <tuple>
 
 namespace neverd::emulation {
@@ -102,7 +104,7 @@ protected:
     Options.Android->TextLogWrites = {
         {{Buffer, Payload, -11}, {Buffer, Payload, INT32_MAX}}};
   }
-  void checkFormatted() {
+  void checkTwoTextWrites() {
     auto Result =
         emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
     ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
@@ -259,7 +261,7 @@ TEST_P(AndroidLog, FormattedWritesShareGrammarStackedArgumentsAndResults) {
     SCOPED_TRACE(Form);
     prepareFormatted(Form, 0, "%+08d|%#lx|%.3s|%d|%d|%d|%d|%d|%d",
                      "-0000123|0xfedcba9876543210|abc|7|8|9|10|11|12");
-    checkFormatted();
+    checkTwoTextWrites();
   }
 }
 
@@ -272,10 +274,10 @@ TEST_P(AndroidLog, FormattedWritesClipTheBufferBeforeCStringLogging) {
       // the untruncated formatting count, is returned to the caller.
       prepareFormatted(Form, Width + 10, "",
                        std::string(std::min(Width, 1023u), ' '));
-      checkFormatted();
+      checkTwoTextWrites();
     }
     prepareFormatted(Form, 2, "%cignored", "");
-    checkFormatted();
+    checkTwoTextWrites();
   }
 }
 
@@ -287,7 +289,7 @@ TEST_P(AndroidLog, FormattedPrecisionDoesNotReadPastTheGuestPage) {
     std::copy_n("ABCD", 4,
                 Bytes.end() - 4); // No NUL; the next page is unmapped.
     Options.Android->Arguments[4] = Output + Bytes.size() - 4;
-    checkFormatted();
+    checkTwoTextWrites();
   }
 }
 
@@ -406,6 +408,136 @@ TEST_P(AndroidLog, TextWritesShareOrderedResultsRoutingAndErrno) {
     }
 }
 
+TEST_P(AndroidLog, TextTransportClipsTagAndMessageWithoutRepairingTerminators) {
+  Options.Android->EntrySymbol = "log_text_write";
+  Options.Android->Libraries["liblog.so"] = {"__android_log_write",
+                                             "__android_log_buf_write"};
+  std::vector<std::pair<std::string, std::string>> Cases;
+  for (auto [TagSize, MessageSize] : {std::pair{0u, 0u},
+                                      {3u, 4062u},
+                                      {3u, 4063u},
+                                      {3u, 4064u},
+                                      {4065u, 0u},
+                                      {4066u, 0u},
+                                      {4067u, 0u},
+                                      {4068u, 32u},
+                                      {5000u, 5000u}})
+    Cases.emplace_back(std::string(TagSize, 't'),
+                       std::string(MessageSize, 'm'));
+  Cases.emplace_back(std::string(4064, 't'),
+                     "\xe2\x82\xac"); // Cuts UTF-8 bytes.
+  Cases.emplace_back("RIL" + std::string(5000, 't'), std::string(5000, 'm'));
+  for (unsigned Form = 0; Form != 4; ++Form)
+    for (const auto &[Tag, Message] : Cases) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(Tag.size());
+      SCOPED_TRACE(Message.size());
+      put(4096, Tag);
+      put(16384, Message);
+      const bool Radio = Tag.starts_with("RIL");
+      const auto WireTag =
+          Radio ? "use-Rlog/RLOG-RIL" + std::string(14, 't') : Tag;
+      // Independent oracle: the wire is a prefix of three complete iovecs.
+      std::vector<uint8_t> Payload{6};
+      Payload.insert(Payload.end(), WireTag.begin(), WireTag.end());
+      Payload.push_back(0);
+      Payload.insert(Payload.end(), Message.begin(), Message.end());
+      Payload.push_back(0);
+      if (Payload.size() > 4068)
+        Payload.resize(4068);
+      const unsigned ID = Radio ? 1 : Form == 1 || Form == 3 ? 3 : 0;
+      Options.Android->Arguments = {Output,         3, 0x106, Output + 4096,
+                                    Output + 16384, 2, Form};
+      Options.Android->TextLogWrites = {
+          {{ID, Payload, -11}, {ID, Payload, INT32_MAX}}};
+      checkTwoTextWrites();
+    }
+}
+
+TEST_P(AndroidLog, FormattedTransportClipsAfterTheFormattingBuffer) {
+  for (unsigned Form = 0; Form != 6; ++Form)
+    for (unsigned TagSize : {3042u, 3043u, 4066u, 4067u, 5000u}) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(TagSize);
+      prepareFormatted(Form, 5010, "", ""); // %5000s first retains 1023 spaces.
+      const std::string Tag(TagSize, 't');
+      put(12288, Tag);
+      std::vector<uint8_t> Payload{6};
+      Payload.insert(Payload.end(), Tag.begin(), Tag.end());
+      Payload.push_back(0);
+      Payload.insert(Payload.end(), 1023, ' ');
+      Payload.push_back(0);
+      Payload.resize(4068);
+      for (auto &Write : *Options.Android->TextLogWrites)
+        Write.Payload = Payload;
+      checkTwoTextWrites();
+    }
+}
+
+TEST_P(AndroidLog, TextTransportStillReadsCompleteGuestStringsBeforeClipping) {
+  Options.Android->EntrySymbol = "log_text_write";
+  Options.Android->ObserveMemoryOnFailure = true;
+  Options.Android->Libraries["liblog.so"] = {"__android_log_write",
+                                             "__android_log_buf_write"};
+  for (unsigned Form = 0; Form != 4; ++Form)
+    for (unsigned Mode = 0; Mode != 3; ++Mode) {
+      SCOPED_TRACE(Form);
+      SCOPED_TRACE(Mode);
+      put(4096, std::string(5000, 't'));
+      put(16384, "message");
+      auto &Bytes = Options.Android->Memory[0].Bytes;
+      std::fill(Bytes.end() - 5000, Bytes.end(), 'x'); // Unmapped next page.
+      const uint64_t Unterminated = Output + Bytes.size() - 5000;
+      Options.Android->Arguments = {Output,
+                                    3,
+                                    6,
+                                    Mode == 1 ? Unterminated : Output + 4096,
+                                    Mode == 0   ? 1
+                                    : Mode == 2 ? Unterminated
+                                                : Output + 16384,
+                                    1,
+                                    Form};
+      std::vector<uint8_t> Payload(4068, 't');
+      Payload[0] = 6;
+      Options.Android->TextLogWrites = {
+          {{Form == 1 || Form == 3 ? 3u : 0u, Payload, 0}}};
+      auto Result =
+          emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+      ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+      EXPECT_EQ(Result->Stop, ProcessStopReason::RuntimeFailure)
+          << Result->Diagnostic;
+      EXPECT_EQ(Result->TextLogWritesConsumed, 0u);
+      ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+      EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Bytes);
+    }
+}
+
+TEST_P(AndroidLog, TextTransportMismatchPreservesTheCompletedPrefix) {
+  Options.Android->EntrySymbol = "log_text_write";
+  put(4096, "");
+  put(16384, std::string(5000, 'm'));
+  Options.Android->Arguments = {Output,         0, 6, Output + 4096,
+                                Output + 16384, 2, 0};
+  std::vector<uint8_t> Payload(4068, 'm');
+  Payload[0] = 6;
+  Payload[1] = 0;
+  Options.Android->TextLogWrites = {{{0, Payload, -11}, {0, Payload, 0}}};
+  Options.Android->TextLogWrites->back().Payload.back() = 'x';
+  auto Result =
+      emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  EXPECT_EQ(Result->Stop, ProcessStopReason::UnsupportedService)
+      << Result->Diagnostic;
+  EXPECT_NE(Result->Diagnostic.find("does not match the next entry"),
+            std::string::npos);
+  EXPECT_EQ(Result->TextLogWritesConsumed, 1u);
+  auto Expected = Options.Android->Memory[0].Bytes;
+  integer(Expected, 0, uint64_t(-11), 8);
+  integer(Expected, 8, 73, 8);
+  ASSERT_EQ(Result->MemorySnapshots.size(), 1u);
+  EXPECT_EQ(Result->MemorySnapshots[0].Bytes, Expected);
+}
+
 TEST_P(AndroidLog, TextWriteBoundariesAndInputAdmissionStayExplicit) {
   Options.Android->EntrySymbol = "log_text_write";
   auto &memory = Options.Android->Memory[0].Bytes;
@@ -423,12 +555,14 @@ TEST_P(AndroidLog, TextWriteBoundariesAndInputAdmissionStayExplicit) {
     Options.Android->TextLogWrites = {{{0, payload, 4068}}};
     memory[8192 + 4065] = mode == 2 ? 'x' : 0;
     memory[8192 + 4066] = 0;
+    if (mode == 2)
+      Options.Android->TextLogWrites->front().Payload.back() = 'x';
     if (mode == 3)
       Options.Android->Arguments[1] = 2;
     if (mode == 4)
       Options.Android->TextLogWrites->front().ID = 2;
     if (mode == 5)
-      Options.Android->TextLogWrites->front().Payload.back() = 'x';
+      Options.Android->TextLogWrites->front().Payload.pop_back();
     if (mode == 6)
       Options.Android->TextLogWrites->front().Payload[4] = 0;
     if (mode == 7)
@@ -443,10 +577,11 @@ TEST_P(AndroidLog, TextWriteBoundariesAndInputAdmissionStayExplicit) {
       continue;
     }
     ASSERT_TRUE(bool(result)) << llvm::toString(result.takeError());
-    EXPECT_EQ(result->Stop, mode == 0 ? ProcessStopReason::Returned
-                                      : ProcessStopReason::UnsupportedService)
+    EXPECT_EQ(result->Stop, mode == 0 || mode == 2
+                                ? ProcessStopReason::Returned
+                                : ProcessStopReason::UnsupportedService)
         << result->Diagnostic;
-    EXPECT_EQ(result->TextLogWritesConsumed, mode == 0 ? 1u : 0u);
+    EXPECT_EQ(result->TextLogWritesConsumed, mode == 0 || mode == 2 ? 1u : 0u);
   }
 }
 
@@ -590,6 +725,35 @@ TEST(AndroidLogOptions, TextWriteSchemaKeepsStrictBytesBuffersAndResults) {
     EXPECT_FALSE(bool(result)) << invalid;
     llvm::consumeError(result.takeError());
   }
+}
+
+TEST(AndroidLogOptions, TextTransportAcceptsOnlyCompleteOrFullSizePrefixes) {
+  for (unsigned Size : {4067u, 4068u, 4069u})
+    for (unsigned Shape = 0; Shape != 6; ++Shape) {
+      SCOPED_TRACE(Size);
+      SCOPED_TRACE(Shape);
+      std::string Payload(Size, 'x');
+      Payload[0] = 0; // A zero priority byte is independent of the terminators.
+      if (Shape == 1)
+        Payload.back() = 0; // Tag ends at the transport boundary.
+      if (Shape >= 2)
+        Payload[1] = 0;
+      if (Shape == 3 || Shape == 5)
+        Payload.back() = 0;
+      if (Shape >= 4)
+        Payload[2] = 0; // Trailing data after message NUL or a third NUL.
+      auto Result = processOptionsFromJSON(
+          "{\"android\":{\"text_log_writes\":[{\"log_id\":0,\"payload\":\"" +
+          llvm::toHex(Payload) + "\",\"result\":-11}]}}");
+      const bool Accepted =
+          Size <= 4068 && (Shape == 3 || (Size == 4068 && Shape < 3));
+      EXPECT_EQ(bool(Result), Accepted);
+      if (Result)
+        EXPECT_EQ(Result->Android->TextLogWrites->front().Payload,
+                  std::vector<uint8_t>(Payload.begin(), Payload.end()));
+      else
+        llvm::consumeError(Result.takeError());
+    }
 }
 
 TEST(AndroidLogOptions, EventWriteSchemaPreservesAbsenceBytesAndSignedResults) {
