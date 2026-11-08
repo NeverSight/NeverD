@@ -119,7 +119,7 @@ bool canMeasureAtRoot(const SymContext &Ctx, SymRef R);
 /// that puts the hidden subterms back.
 struct Abstraction {
   SymRef Body;
-  /// A nonlinear product occurs in the source DAG. Without one, enabling
+  /// A nonlinear product is reached in this reading. Without one, enabling
   /// product roles cannot change this reading or yield a polynomial candidate.
   bool MayHaveProducts = false;
   /// The same hidden inputs before recovering their affine relations. Keep

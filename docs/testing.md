@@ -3860,6 +3860,17 @@ mask bit when the outer coefficient no longer discards it.
 odd coefficients, including one, minus one and high limbs, against independent
 full-width arithmetic at 1–257 bits. Native associative evaluation also covers
 long products and multiplication-chain boundaries against the APInt oracle.
+`WideFrontiersRetainIndependentProductInputs` checks affine recovery across
+33- and 65-input frontiers together with an unchanged nonlinear product.
+Independent full-word arithmetic covers 3–257 bits, odd and arbitrary factors,
+and exhausted, partial and complete work budgets.
+`TransferredTermsCombineWithSharedAffineTails` retains coefficient addition
+and cancellation when a cached shared tail and a transferred terminal reach
+the same base, including multiword values.
+`OpaqueInteriorsDoNotMintUnusedInputs` checks that a deep hidden word does not
+create unused abstract inputs, while preserving a caller variable whose name
+matches the placeholder pool. Its restoration is compared with independent
+3–257-bit arithmetic, including zero divisors.
 `PreparedParityPrefixesKeepTheirProductAndContext` checks that a completed
 prefix reduces the next reader's work at 8/64/257 bits, without changing its
 values. A different product, the same handle in another context, zero scratch

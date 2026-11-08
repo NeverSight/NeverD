@@ -14661,6 +14661,16 @@ bitwise inputs required by the coefficient proof. Shared linear tails reuse
 coefficient summaries; optional relation recovery spends the same work
 budget and also bounds its temporary storage. An incomplete recovery leaves
 the original abstraction intact.
+An opaque terminal moves its already-paid coefficient node from the pending
+map into the result, combining any earlier contribution from a shared tail.
+The descending traversal still visits every parent before its children. Affine
+restoration reuses its operand buffer and retains canonical nodes whose inputs
+did not change, spending construction work only on actual rebuilds.
+Region abstraction stops at operators that are unconditionally opaque for its
+linear or polynomial reading. The deep walk still simplifies their interiors
+independently. All original variables below those boundaries remain reserved,
+including names shared with placeholder declarations; fully visible regions
+reuse their existing node order instead of collecting variables again.
 
 Complete hidden affine inputs may also be identified as bitwise complements
 after their offsets and every coefficient establish `F+G=-1` at the original

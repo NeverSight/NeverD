@@ -167,4 +167,131 @@ TEST(SymMBAAffineFastPath, GateBudgetRefusalRemainsAtomic) {
   }
 }
 
+TEST(SymMBAAffineFastPath, WideFrontiersRetainIndependentProductInputs) {
+  std::mt19937_64 Random(0x46524f4e54494552);
+  for (unsigned Width : {3u, 8u, 64u, 65u, 128u, 257u}) {
+    for (unsigned Count : {33u, 65u}) {
+      SymContext Ctx;
+      const auto Y = Ctx.mkVar("y", Width);
+      llvm::SmallVector<SymRef, 8> Variables, Terms;
+      for (unsigned I = 0; I < Count; ++I) {
+        const auto X = Ctx.mkVar("x" + std::to_string(I), Width);
+        Variables.push_back(X);
+        Terms.push_back(Ctx.mkMul(
+            Ctx.mkConst(llvm::APInt(Width, 2 * I + 1, false, true)), X));
+      }
+      Terms.push_back(Ctx.mkConst(llvm::APInt(Width, 17, false, true)));
+      const auto Root = Ctx.mkAdd({Ctx.mkXor(Ctx.mkAdd(Terms), Y),
+                                   Ctx.mkAdd(Variables), Ctx.mkMul(Variables)});
+      for (size_t Limit :
+           {size_t(0), size_t(4096), MBAOptions::UnlimitedWork}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Width << " / " << Count << " / " << Limit);
+        detail::WorkBudget Budget(Limit);
+        const auto A = detail::abstractToMBA(Ctx, Root, true, &Budget);
+        ASSERT_TRUE(A);
+        SymEvalPlan Restored(Ctx, Ctx.substitute(A->Body, A->Hidden));
+        std::vector<llvm::APInt> Values(Ctx.numVars(), llvm::APInt(Width, 0));
+        for (unsigned Sample = 0; Sample < 32; ++Sample) {
+          for (auto &Value : Values) {
+            Value = llvm::APInt(Width, Random(), false, true);
+            for (unsigned Bit = 64; Bit < Width; Bit += 64)
+              Value |= llvm::APInt(Width, Random()).shl(Bit);
+            if (Sample % 2)
+              Value |= 1;
+          }
+          llvm::APInt Sum(Width, 0), Weighted(Width, 17, false, true),
+              Product(Width, 1);
+          for (unsigned I = 0; I < Count; ++I) {
+            const auto &Value = Values[Ctx.varId(Variables[I])];
+            Sum += Value;
+            Weighted += llvm::APInt(Width, 2 * I + 1, false, true) * Value;
+            Product *= Value;
+          }
+          const auto Expected =
+              (Weighted ^ Values[Ctx.varId(Y)]) + Sum + Product;
+          EXPECT_EQ(Restored.evalWith([&](uint32_t Id) { return &Values[Id]; }),
+                    Expected);
+        }
+      }
+    }
+  }
+}
+
+TEST(SymMBAAffineFastPath, TransferredTermsCombineWithSharedAffineTails) {
+  std::mt19937_64 Random(0x5452414e53464552);
+  for (unsigned Width : {3u, 8u, 64u, 65u, 128u, 257u}) {
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+    const auto Three = Ctx.mkConst(llvm::APInt(Width, 3));
+    const auto Five = Ctx.mkConst(llvm::APInt(Width, 5));
+    const auto Shared = Ctx.mkAdd(X, Y);
+    const auto F = Ctx.mkSub(Ctx.mkMul(Three, Shared), Ctx.mkMul(Three, X));
+    const auto G = Ctx.mkAdd(Ctx.mkMul(Five, Shared), X);
+    const auto Root = Ctx.mkAdd({Ctx.mkXor(F, Z), Ctx.mkAnd(G, W), X});
+    detail::WorkBudget Budget(MBAOptions::UnlimitedWork);
+    const auto A = detail::abstractToMBA(Ctx, Root, false, &Budget);
+    ASSERT_TRUE(A);
+    SymEvalPlan Restored(Ctx, Ctx.substitute(A->Body, A->Hidden));
+    std::vector<llvm::APInt> Values(Ctx.numVars(), llvm::APInt(Width, 0));
+    for (unsigned Sample = 0; Sample < 128; ++Sample) {
+      for (auto &Value : Values) {
+        Value = llvm::APInt(Width, Random(), false, true);
+        for (unsigned Bit = 64; Bit < Width; Bit += 64)
+          Value |= llvm::APInt(Width, Random()).shl(Bit);
+      }
+      const auto &XV = Values[Ctx.varId(X)], &YV = Values[Ctx.varId(Y)];
+      const auto &ZV = Values[Ctx.varId(Z)], &WV = Values[Ctx.varId(W)];
+      const auto Expected = ((3 * YV) ^ ZV) + ((6 * XV + 5 * YV) & WV) + XV;
+      EXPECT_EQ(Restored.evalWith([&](uint32_t Id) { return &Values[Id]; }),
+                Expected);
+    }
+  }
+}
+
+TEST(SymMBAAffineFastPath, OpaqueInteriorsDoNotMintUnusedInputs) {
+  std::mt19937_64 Random(0x4f5041515545494e);
+  for (unsigned Width : {3u, 8u, 64u, 65u, 128u, 257u}) {
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("mba$" + std::to_string(Width) + ".0", Width);
+    const auto Y = Ctx.mkVar("y", Width), Z = Ctx.mkVar("z", Width);
+    const auto Divisor = Ctx.mkVar("d", Width);
+    SymRef Interior = X;
+    for (unsigned I = 0; I < 64; ++I)
+      Interior = Ctx.mkXor(Ctx.mkAdd(Interior, Y),
+                           Ctx.mkConst(llvm::APInt(Width, I % 7 + 1)));
+    const auto Opaque = Ctx.mkURem(Interior, Divisor);
+    const auto Root = Ctx.mkAdd(
+        {Ctx.mkXor(Opaque, Z),
+         Ctx.mkMul(Ctx.mkConst(llvm::APInt(Width, 2)), Ctx.mkAnd(Opaque, Z)),
+         X});
+    const auto OriginalVariables = Ctx.numVars();
+    detail::WorkBudget Budget(MBAOptions::UnlimitedWork);
+    const auto A = detail::abstractToMBA(Ctx, Root, false, &Budget);
+    ASSERT_TRUE(A);
+    EXPECT_EQ(A->Hidden.size(), 1u);
+    EXPECT_EQ(Ctx.numVars(), OriginalVariables + 1);
+    EXPECT_FALSE(A->Hidden.contains(X.index()));
+    SymEvalPlan Restored(Ctx, Ctx.substitute(A->Body, A->Hidden));
+    std::vector<llvm::APInt> Values(Ctx.numVars(), llvm::APInt(Width, 0));
+    for (unsigned Sample = 0; Sample < 64; ++Sample) {
+      for (auto &Value : Values) {
+        Value = llvm::APInt(Width, Random(), false, true);
+        for (unsigned Bit = 64; Bit < Width; Bit += 64)
+          Value |= llvm::APInt(Width, Random()).shl(Bit);
+      }
+      const auto &XV = Values[Ctx.varId(X)], &YV = Values[Ctx.varId(Y)];
+      const auto &DV = Values[Ctx.varId(Divisor)];
+      auto Inner = XV;
+      for (unsigned I = 0; I < 64; ++I)
+        Inner = (Inner + YV) ^ llvm::APInt(Width, I % 7 + 1);
+      const auto Remainder = DV.isZero() ? Inner : Inner.urem(DV);
+      const auto Expected = Remainder + Values[Ctx.varId(Z)] + XV;
+      EXPECT_EQ(Restored.evalWith([&](uint32_t Id) { return &Values[Id]; }),
+                Expected);
+    }
+  }
+}
+
 } // namespace
