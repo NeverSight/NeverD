@@ -22,6 +22,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64ReturnProtectionC.h"
 #include "neverd/backend/c/render/AArch64/AArch64SVEVectorState.h"
 #include "neverd/ir/SourceParameterPlacement.h"
@@ -6385,6 +6386,9 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   }
 
   if (EmitFunctionWrapper) {
+    if (Opts.Image && isMIPS(Opts.TheArch))
+      if (const auto Mode = Opts.Image->instructionModeAt(Func.Entry))
+        OS << mips::instructionModeCAttribute(*Mode);
     if (Opts.Image && !Func.SourceTypeHint)
       if (dispatchFrame(Func.Entry))
         c_stub::writeDispatchFramePreamble(OS);

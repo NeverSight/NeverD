@@ -749,6 +749,8 @@ enum class LowInstructionTargetMode : uint8_t {
   ARM = 1,
   Thumb = 2,
   FromTargetBit0 = 3,
+  MIPSClassic = 4,
+  MicroMIPS = 5,
 };
 
 /// Canonical destination of one LowIR control transfer.
@@ -776,6 +778,8 @@ canonicalizeLowControlTarget(uint64_t RawTarget, InstructionMode SourceMode,
   case InstructionMode::Default:
   case InstructionMode::ARM:
   case InstructionMode::Thumb:
+  case InstructionMode::MIPSClassic:
+  case InstructionMode::MicroMIPS:
     break;
   default:
     return Invalid("control target has an unknown source instruction mode");
@@ -783,10 +787,13 @@ canonicalizeLowControlTarget(uint64_t RawTarget, InstructionMode SourceMode,
 
   const bool IsAArch32 = SourceMode == InstructionMode::ARM ||
                          SourceMode == InstructionMode::Thumb;
+  const bool IsMIPSMode = SourceMode == InstructionMode::MIPSClassic ||
+                          SourceMode == InstructionMode::MicroMIPS;
   if (RawTarget == InvalidVA)
     return Invalid("control target uses the invalid address");
-  if (IsAArch32 && RawTarget > std::numeric_limits<uint32_t>::max())
-    return Invalid("AArch32 control target exceeds its address width");
+  if ((IsAArch32 || IsMIPSMode) &&
+      RawTarget > std::numeric_limits<uint32_t>::max())
+    return Invalid("32-bit control target exceeds its address width");
 
   LowControlTarget Result{RawTarget, SourceMode};
   switch (TargetMode) {
@@ -803,19 +810,27 @@ canonicalizeLowControlTarget(uint64_t RawTarget, InstructionMode SourceMode,
     Result.Mode = InstructionMode::Thumb;
     break;
   case LowInstructionTargetMode::FromTargetBit0:
-    if (!IsAArch32)
-      return Invalid("target-bit mode exchange has a non-ARM source mode");
-    Result.Mode =
-        (RawTarget & 1) != 0 ? InstructionMode::Thumb : InstructionMode::ARM;
+    if (!IsAArch32 && !IsMIPSMode)
+      return Invalid("target-bit mode exchange has no admitted source mode");
+    Result.Mode = IsMIPSMode ? ((RawTarget & 1) ? InstructionMode::MicroMIPS
+                                                : InstructionMode::MIPSClassic)
+                             : ((RawTarget & 1) ? InstructionMode::Thumb
+                                                : InstructionMode::ARM);
     Result.Address = RawTarget & ~uint64_t{1};
+    break;
+  case LowInstructionTargetMode::MIPSClassic:
+  case LowInstructionTargetMode::MicroMIPS:
+    if (!IsMIPSMode)
+      return Invalid("fixed MIPS target has a non-MIPS source mode");
+    Result.Mode = TargetMode == LowInstructionTargetMode::MicroMIPS
+                      ? InstructionMode::MicroMIPS
+                      : InstructionMode::MIPSClassic;
     break;
   default:
     return Invalid("control target has an unknown destination-mode contract");
   }
 
-  const uint64_t Alignment = Result.Mode == InstructionMode::ARM     ? 4
-                             : Result.Mode == InstructionMode::Thumb ? 2
-                                                                     : 1;
+  const uint64_t Alignment = instructionModeAlignment(Result.Mode);
   if ((Result.Address & (Alignment - 1)) != 0)
     return Invalid("control target is not aligned for its destination mode");
   return Result;

@@ -61,9 +61,16 @@ int main(int Argc, char **Argv) try {
     throw std::invalid_argument("usage: neverd-mips-bench PROFILE "
                                 "capstone|decode|lift RAW_CODE REPEATS");
   Arch Target = Arch::Unknown;
+  InstructionMode Encoding = InstructionMode::Default;
 #define NEVERD_MIPS_BENCH_PROFILE(Name, Value)                                 \
   if (std::string_view(Argv[1]) == #Name)                                      \
     Target = Arch::Value;
+#include "mips-bench.def"
+#define NEVERD_MICROMIPS_BENCH_PROFILE(Name, Value)                            \
+  if (std::string_view(Argv[1]) == #Name) {                                    \
+    Target = Arch::Value;                                                      \
+    Encoding = InstructionMode::MicroMIPS;                                     \
+  }
 #include "mips-bench.def"
   if (!isMIPS(Target))
     throw std::invalid_argument("unsupported MIPS benchmark profile");
@@ -85,16 +92,18 @@ int main(int Argc, char **Argv) try {
   if (!Input)
     throw std::runtime_error(Input.getError().message());
   const auto Bytes = (*Input)->getBuffer();
-  if (Bytes.empty() || Bytes.size() % 4)
-    throw std::invalid_argument("expected a nonempty classic MIPS code span");
+  if (Bytes.empty() ||
+      Bytes.size() % (Encoding == InstructionMode::MicroMIPS ? 2 : 4))
+    throw std::invalid_argument("expected a nonempty aligned MIPS code span");
   Decoder Decode;
-  if (!Decode.init(Target))
+  if (!Decode.init(Target, Encoding))
     throw std::runtime_error("decoder initialization failed");
   Decode.setDetail(true);
   Decode.setText(false);
   Capstone Reference;
   const auto Mode = static_cast<cs_mode>(
       (isMIPS64(Target) ? CS_MODE_MIPS64R2 : CS_MODE_MIPS32R2) |
+      (Encoding == InstructionMode::MicroMIPS ? CS_MODE_MICRO : 0) |
       (archLittleEndian(Target) ? CS_MODE_LITTLE_ENDIAN : CS_MODE_BIG_ENDIAN));
   if (cs_open(CS_ARCH_MIPS, Mode, &Reference.Handle) != CS_ERR_OK ||
       cs_option(Reference.Handle, CS_OPT_DETAIL, CS_OPT_ON) != CS_ERR_OK ||

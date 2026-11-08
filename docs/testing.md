@@ -22292,12 +22292,23 @@ original addresses; this qualifies the regenerated caller against that
 dependency contract. It does
 not claim a standalone rebuilt firmware. `results.json` records each case and
 any failure, generated-source and binary hashes, and reclaimed bytes.
-Successful per-function `.o`/`.elf` artifacts are deleted immediately; original
-profile binaries are removed after all of that profile's comparisons pass.
-Failures retain their diagnostic artifacts. An unavailable compiler or oracle
-is a failure, not a skipped pass.
+Per-function objects, executables and successful generated sources are retired
+after each comparison. Once the workers have finished, the original profile
+binaries are retired as well. Failures retain bounded diagnostics and verified
+source evidence through the lifecycle contract below. An unavailable compiler
+or oracle is a failure, not a skipped pass.
 Vendor firmware remains outside the committed fixtures. Its separate static
 receipt is [Archer C7 V5](firmware/archer-c7-v5.md).
+
+Add `--encoding micro` to run the five microMIPS32/o32 leaves in both byte
+orders and both C backends. This selects `micromips.S` and M14Kc, follows the
+ELF symbol's callable tag, and preserves the original target on recompilation.
+The ordinary four-profile run remains the default. Only the micro fixture's
+functions may be selected with `--function` in that mode. The instruction-level
+`MicroMIPSInteger` tests separately check independent literal memory encodings,
+signed/unsigned loads, exact store bytes, failed writes and original-target
+execution. Source numeric callable/import values remain explicitly unqualified;
+the pipeline suite checks those refusals as well as ordinary leaf emission.
 
 ### MIPS decode/lift and firmware performance
 
@@ -22308,10 +22319,11 @@ python3 scripts/build.py build-mips --target neverd-mips-bench --parallel 4
 build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 ```
 
-Profiles are `mips`, `mipsel`, `mips64` and `mips64el`. Stages are `capstone`
+Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips` and
+`micromipsel`. Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same
-classic r2 profile, detail on and text off. The pinned Capstone fork suppresses
+selected r2 encoding profile, detail on and text off. The pinned Capstone fork suppresses
 rendered operand detail with text off; these physical decode measurements consume
 instruction sizes and IDs. The harness reuses decoder handles, counts physical
 instructions/LowOps and validates output fingerprints outside

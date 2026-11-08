@@ -15168,6 +15168,13 @@ calls, PHIs, exceptional flow and unproved uses retain their original inputs.
 The focused MIPS loader, integer, flow, SDK and pipeline suites cover these
 contracts. Owned kernels are recompiled from HighC and LLVMC for the original
 MIPS target and compared with their assembly originals in pinned Unicorn.
+The microMIPS32/o32 subset adds local instruction modes to the existing image
+and decoder owners. `MIPSCodeMode` validates serialized targets and complete
+unit spans; `MicroMIPSInteger.def` maps admitted scalar encodings without using
+Capstone aliases as semantics. `MedMIPSReturnTargets` proves source returns
+against captured entry RA, and `MIPSInstructionModeSource` owns mode attributes
+and the numeric code-pointer source qualification boundary. Actual two/four-byte
+head and slot lengths remain in the shared LowIR instruction records.
 The official Archer C7 V5 example qualifies selected static function views,
 not an entire firmware image. This is an analysis-only addition to the matrix
 above: no MIPS rewrite or guest-process execution backend is claimed. See

@@ -36,7 +36,8 @@ using namespace llvm::ELF;
 namespace {
 
 va_t normalizeELFFunctionAddress(va_t Addr, const BinaryImage &Img) {
-  return Img.Arch == Arch::ARM ? clearThumbBit(Addr) : Addr;
+  return Img.Arch == Arch::ARM ? clearThumbBit(Addr)
+                               : normalizeCodeAddress(Addr, Img.Arch, Img.Mode);
 }
 
 /// The DT_PLTGOT slots the psABI gives the dynamic linker: their callers

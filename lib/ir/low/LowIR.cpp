@@ -57,6 +57,8 @@ bool isKnownTargetMode(LowInstructionTargetMode Mode) {
   case LowInstructionTargetMode::ARM:
   case LowInstructionTargetMode::Thumb:
   case LowInstructionTargetMode::FromTargetBit0:
+  case LowInstructionTargetMode::MIPSClassic:
+  case LowInstructionTargetMode::MicroMIPS:
     return true;
   }
   return false;
@@ -456,6 +458,8 @@ llvm::Error validateControl(const LowBlock &Block,
     return invalid("instruction boundary has an unknown target mode");
   const bool IsARMMode = Boundary.Mode == InstructionMode::ARM ||
                          Boundary.Mode == InstructionMode::Thumb;
+  const bool IsMIPSMode = Boundary.Mode == InstructionMode::MIPSClassic ||
+                          Boundary.Mode == InstructionMode::MicroMIPS;
   switch (Boundary.TargetMode) {
   case LowInstructionTargetMode::Preserve:
     break;
@@ -466,9 +470,14 @@ llvm::Error validateControl(const LowBlock &Block,
           "fixed target mode requires a direct ARM control transfer");
     break;
   case LowInstructionTargetMode::FromTargetBit0:
-    if (!IsARMMode || (!IsIndirect && !IsReturn))
+    if ((!IsARMMode && !IsMIPSMode) || (!IsIndirect && !IsReturn))
       return invalid(
-          "target-bit mode exchange requires an ARM register transfer");
+          "target-bit mode exchange requires an ARM or MIPS register transfer");
+    break;
+  case LowInstructionTargetMode::MIPSClassic:
+  case LowInstructionTargetMode::MicroMIPS:
+    if (!IsMIPSMode || IsIndirect || (!IsBranch && !IsCall) || IsReturn)
+      return invalid("fixed MIPS target mode requires a direct MIPS transfer");
     break;
   }
 

@@ -1,7 +1,8 @@
 # MIPS analysis
 
 The experimental MIPS analysis path targets linked ELF programs with classic
-MIPS32 Release 2/o32 or MIPS64 Release 2/n64 instructions, in either byte order.
+MIPS32 Release 2/o32 or MIPS64 Release 2/n64 instructions, in either byte order,
+and the bounded microMIPS32 Release 2/o32 subset described below.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
 
@@ -19,7 +20,7 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   Known libc objects retain their external header declarations. HighC rejects
   partial/overlapping access or indexed byte backings for other COPY objects
   until those backings have an external-object contract.
-- Ordinary disassembly consumes four bytes. A delayed transfer and its slot
+- Classic disassembly consumes four bytes. A delayed transfer and its slot
   form an eight-byte semantic execution unit. The branch reads its condition
   and indirect target before the slot, writes its link before the slot, and
   transfers after it. Branch-likely instructions annul the slot on the false
@@ -82,7 +83,7 @@ Concrete LowIR transport and source parameter inference have separate validation
 boundaries; this source proof does not initialize absent machine registers.
 
 This is a strict subset. n32, historical MIPS I–V profiles, Release 6, MIPS16,
-microMIPS, floating point, DSP/MSA, privileged instructions, LL/SC reservations,
+microMIPS64, floating point, DSP/MSA, privileged instructions, LL/SC reservations,
 unaligned merge stores and trapping arithmetic/division are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
@@ -95,6 +96,52 @@ The SPECIAL3 and word-input rules follow the operation/restriction sections of
 The [Ghidra MIPS definitions at e45e5a62](https://github.com/NationalSecurityAgency/ghidra/tree/e45e5a62fd66c2e48514931f6e356aff33a79fcb/Ghidra/Processors/MIPS/data/languages)
 were a cross-check; the LowIR implementation and independent expectations are
 owned here. Decoder recognition alone does not qualify instruction semantics.
+
+## microMIPS32 instruction and source boundaries
+
+The loader accepts linked r2/o32 ELF with consistent microMIPS header and
+`.MIPS.abiflags` evidence. `st_other` supplies each defined function's encoding;
+an even `st_value` can name a microMIPS function. Entry tags, symbol ranges and
+incoming control-flow modes must agree. Mixed images retain local mode evidence
+through discovery, CFG construction and SDK instruction-flow requests; an
+unknown destination is not silently treated as classic code.
+
+The scalar decoder maps explicit microMIPS encodings into the existing integer
+semantic forms. The current set includes MOVE16, ADDU16/SUBU16, SLL16/SRL16,
+LI16, compact byte/halfword/word memory forms, SP/GP-relative word accesses,
+the 32-bit immediate/register forms listed in `MicroMIPSInteger.def`,
+BEQZ16/BNEZ16/B16, BEQ/BNE, J/JAL/JALS/JALX and the supported JR/JALR forms.
+Unlisted encodings are errors. This is not complete compressed-instruction
+coverage and does not admit MIPS16, other ISA revisions or DSP/MSA encodings.
+
+Physical instructions occupy two or four bytes, including four-byte heads at
+addresses congruent to two modulo four. The execution-unit record keeps the
+actual head and slot widths. JALR16/JALRS16 require four/two-byte slots, JRC has
+no slot, and a slot cannot itself transfer control. Link values retain the
+caller's mode tag, while direct JALX destinations and serialized indirect
+targets have distinct validation rules. Defined function GOT cells use callable
+tags; data symbol addresses keep their original bits.
+
+Both source routes retain microMIPS/nomicromips function attributes. A source
+return must prove the captured incoming RA, including its mode bit, from the
+original instruction boundaries and SSA. Tail calls and unproved stack restores
+across calls remain outside this source proof. Source tests currently target
+bounded integer leaves, memory effects, o32 stack arguments and branch/slot
+capture.
+
+Numeric microMIPS code-pointer reconstruction is explicitly refused. The tested
+Clang 22 compiler folds a microMIPS function pointer's low bit to zero in some
+integer expressions and static initializers; a function mode attribute does not
+establish that contract. HighC and LLVM share this qualification boundary when
+materializing a code identity. Unknown-mode import values, including whole or
+partial GOT reads, are also unqualified. Direct control identities, serialized
+callables and code-byte/data addresses are separate roles. These limits require
+a subsequent toolchain/source-contract increment, not merely another opcode.
+
+The microMIPS operation and slot rules were checked against
+[microMIPS32 Volume II, revision 5.04](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00582-2B-microMIPS32-AFP-05.04.pdf)
+and the pinned [GNU simulator definitions](https://gnu.googlesource.com/binutils-gdb/+/d01e823438c7dc264d6885fbbfeace4d8955dcb7/sim/mips/micromips.igen).
+The lifter's admitted ISA remains r2; this reference does not admit later forms.
 
 ## Tests
 
@@ -136,6 +183,21 @@ original-image storage; either source route explicitly binds omitted original
 callees. See the
 [testing guide](testing.md#mips-elf-analysis-and-source-roundtrips) for setup.
 A registered test is not a claim that it has passed on every host.
+
+Use `roundtrip.py --encoding micro` for the five microMIPS assembly leaves in
+both byte orders and both C backends. The runner selects M14Kc, follows each ELF
+symbol's mode bit and recompiles each result for its original target. The
+BEQZ16 fixture specifies literal displacement bytes: the local-label spelling
+in the tested Clang 22 assembler emitted a zero displacement. Both branch
+outcomes are checked by original-target execution. Memory tests also compare
+literal 16/32-bit encodings with independent byte expectations and Unicorn,
+including sign extension, aliases, exact stores and failed/discarded loads.
+
+`neverd-mips-bench micromips|micromipsel capstone|decode|lift CODE REPEATS`
+uses matching microMIPS options for physical Capstone/Decoder comparisons.
+Decode plus lift is a separate workload. The paired regression runner continues
+to compare identical classic inputs and TP-Link requests against the retained
+baseline; support for new encodings is not a same-output speedup claim.
 
 The merge-load/MUL qualification used macOS arm64 Release, integrated with
 dev `e320fec5b`: 1,294 focused/shared CTest cases passed, including 169 MIPS
@@ -210,6 +272,17 @@ The current receipts are `build-mips/roundtrip-bitfields-dev/results.json` and
 objects/executables were removed; current source, hashes and compact receipts
 remain. This qualification used macOS arm64 Release, not Linux/Windows hosts
 or the still-unsupported profiles/extensions listed above.
+
+The microMIPS follow-up passed all 294 MIPS tests. The broader shared-boundary,
+pointer projection and metadata run selected 1,298 cases: 1,252 passed and 46
+existing fixture/toolchain-dependent cases were skipped, with no failures.
+All 344 classic source groups and 20 microMIPS source groups passed on macOS
+arm64 Release. The micro groups cover 44 inputs across both byte orders and
+both C backends. Import-memory regressions cover ordinary, partial, merge and
+dynamically indexed reads; adjacent ordinary data and external parameter
+storage remain admitted. Compact receipts are in
+`build-mips/compressed-ase/checkpoint.json`; the roundtrip producers remove
+their generated sources, objects and ELFs after their readers finish.
 
 ## TP-Link firmware workflow
 

@@ -1,0 +1,15 @@
+//===- InstructionModes.def - Concrete and mixed instruction modes ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Name, public spelling, concrete decoder mode, instruction alignment.
+NEVERD_INSTRUCTION_MODE(Default, "default", true, 1)
+NEVERD_INSTRUCTION_MODE(ARM, "arm", true, 4)
+NEVERD_INSTRUCTION_MODE(Thumb, "thumb", true, 2)
+NEVERD_INSTRUCTION_MODE(MixedARMThumb, "mixed_arm_thumb", false, 0)
+NEVERD_INSTRUCTION_MODE(MIPSClassic, "mips_classic", true, 4)
+NEVERD_INSTRUCTION_MODE(MicroMIPS, "micromips", true, 2)
+NEVERD_INSTRUCTION_MODE(MixedMIPS, "mixed_mips", false, 0)
+
+#undef NEVERD_INSTRUCTION_MODE

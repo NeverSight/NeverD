@@ -31,6 +31,7 @@ from mips_validation_artifacts import MIPSValidationArtifacts
 
 PROFILES = [("mips", 32, False), ("mipsel", 32, True),
             ("mips64", 64, False), ("mips64el", 64, True)]
+MICRO_FUNCTIONS = ["mips_add", "mips_load", "mips_store", "mips_stack", "mips_branch_capture"]
 KERNEL_FORMS = Path(__file__).with_name("MIPSBitfieldKernels.def").read_text()
 FIELDS = {name: tuple(map(int, (width, insert, pos, size)))
           for name, width, insert, pos, size in re.findall(
@@ -106,7 +107,9 @@ def emulator(path, bits, little, function, original=None):
     elf = ELFFile(io.BytesIO(path.read_bytes()))
     uc = Uc(UC_ARCH_MIPS, (UC_MODE_MIPS64 if bits == 64 else UC_MODE_MIPS32)
             | (0 if little else UC_MODE_BIG_ENDIAN))
+    micro = bool(elf["e_flags"] & 0x02000000)
     uc.ctl_set_cpu_model(mips.UC_CPU_MIPS64_MIPS64R2_GENERIC if bits == 64
+                        else mips.UC_CPU_MIPS32_M14KC if micro
                         else mips.UC_CPU_MIPS32_24KC)
     pages = set()
     images = [ELFFile(io.BytesIO(original.read_bytes())), elf] if original else [elf]
@@ -126,7 +129,10 @@ def emulator(path, bits, little, function, original=None):
     symbols = elf.get_section_by_name(".symtab").get_symbol_by_name(function)
     if not symbols:
         raise RuntimeError(f"missing {function} in {path}")
-    return uc, symbols[0]["st_value"]
+    # pyelftools represents st_other bits 7:5 as `local`; bit 7 is the
+    # microMIPS symbol mode even when st_value itself is an even instruction VA.
+    entry = symbols[0]["st_value"] | bool(symbols[0]["st_other"]["local"] & 4)
+    return uc, entry
 
 
 def invoke(uc, entry, bits, little, arguments, old_destination=0):
@@ -237,7 +243,10 @@ def main():
     parser.add_argument("--ld", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--function", action="append", choices=FUNCTIONS)
+    parser.add_argument("--encoding", choices=("classic", "micro"), default="classic")
     args = parser.parse_args()
+    if args.encoding == "micro" and any(f not in MICRO_FUNCTIONS for f in args.function or []):
+        parser.error("selected function has no microMIPS fixture")
     with MIPSValidationArtifacts(args.output, "mips-roundtrip", (args.neverd, args.clang, args.ld)) as artifacts:
         result = run(args, artifacts)
         if result:
@@ -256,9 +265,11 @@ def run(args, artifacts):
         "void *memset(void *, int, size_t);\n")
     resource = subprocess.check_output([str(args.clang), "-print-resource-dir"],
                                        text=True).strip()
-    fixture = Path(__file__).with_name("integer.S")
+    micro = args.encoding == "micro"
+    fixture = Path(__file__).with_name("micromips.S" if micro else "integer.S")
+    profiles = [p for p in PROFILES if not micro or p[1] == 32]
     tasks = []
-    for profile, bits, little in PROFILES:
+    for profile, bits, little in profiles:
         triple = profile + "-linux-gnu" + ("abi64" if bits == 64 else "")
         flags = [f"--target={triple}", f"-march=mips{bits}r2",
                  f"-mabi={64 if bits == 64 else 32}", "-mno-abicalls", "-fno-pic",
@@ -271,7 +282,7 @@ def run(args, artifacts):
                  "-c", fixture, "-o", obj], output / f"{profile}-assembly.log")
         command([*link, "-e", "mips_add", obj, "-o", original],
                 output / f"{profile}-link.log")
-        for function in args.function or FUNCTIONS:
+        for function in args.function or (MICRO_FUNCTIONS if micro else FUNCTIONS):
             if function in FIELDS or function in SHUFFLES:
                 if (FIELDS.get(function) or SHUFFLES[function])[0] > bits:
                     continue
@@ -399,7 +410,8 @@ def run(args, artifacts):
                                            "original_executed": False})
                 else:
                     raise RuntimeError(f"{stem.name}: invalid word input was silently accepted")
-        receipt = {"profile": profile, "function": function, "backend": backend,
+        receipt = {"profile": profile, "encoding": args.encoding,
+                "function": function, "backend": backend,
                 "cases": observations,
                 "faults": faults,
                 "strict_word_refusals": strict_refusals,
@@ -442,7 +454,7 @@ def run(args, artifacts):
         pool.shutdown(wait=True, cancel_futures=True)
     cleanup = {"removed_bytes": sum(r["removed_bytes"] for r in receipts),
                "originals": {}}
-    for profile, _, _ in PROFILES:
+    for profile, _, _ in profiles:
         for suffix in (".o", ".elf"):
             artifact = output / (profile + suffix)
             cleanup["originals"][artifact.name] = hashlib.sha256(artifact.read_bytes()).hexdigest()

@@ -54,6 +54,7 @@
 #include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/LLVMOriginalImageStorage.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/FloatingPointContract.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
@@ -2544,6 +2545,8 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
     // Calls the callee's prototype decides pass as many arguments as it
     // takes (printedCallArgLimit), which the declaration takes too.
     const std::optional<unsigned> Params = prototypedParamCount(Fn);
+    if (isMIPS(Opts.TheArch))
+      OS << mips::instructionModeCAttribute(mips::instructionModeFromLLVM(Fn));
     if (Fn.hasFnAttribute("neverd.x64_dispatch_frame"))
       OS << "__attribute__((ms_abi)) ";
     // An i386 stdcall routine pops the arguments its calls push, which a C

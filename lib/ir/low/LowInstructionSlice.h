@@ -77,11 +77,16 @@ checkedInstructionOperations(const LowBlock &Block,
     return std::nullopt;
   const auto Ops = llvm::ArrayRef<LowOp>(Block.Ops).slice(Instruction.FirstOp,
                                                           Instruction.OpCount);
-  if (const auto &Slot = Instruction.DelaySlot;
-      Slot && (Slot->Offset != 4 || Slot->Size != 4 || Instruction.Size != 8 ||
-               Slot->FirstOp > Ops.size() ||
-               Slot->OpCount > Ops.size() - Slot->FirstOp))
-    return std::nullopt;
+  if (const auto &Slot = Instruction.DelaySlot) {
+    const bool Lengths = Instruction.Mode == InstructionMode::MicroMIPS
+                             ? (Slot->Offset == 2 || Slot->Offset == 4) &&
+                                   (Slot->Size == 2 || Slot->Size == 4)
+                             : Slot->Offset == 4 && Slot->Size == 4;
+    if (!Lengths || Instruction.Size != Slot->Offset + Slot->Size ||
+        Slot->FirstOp > Ops.size() ||
+        Slot->OpCount > Ops.size() - Slot->FirstOp)
+      return std::nullopt;
+  }
   for (size_t I = 0; I < Ops.size(); ++I) {
     va_t Address = Instruction.Address;
     if (const auto &Slot = Instruction.DelaySlot;

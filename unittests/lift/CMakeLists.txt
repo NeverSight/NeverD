@@ -1,4 +1,5 @@
 add_neverd_unittest(NeverDMIPSPipelineTests
+  mips/MicroMIPSPipelineTests.cpp
   mips/MIPSMergeValueTests.cpp
   mips/MIPSPipelineTests.cpp
   LINK_COMPONENTS Pipeline BackendLLVM BackendC)
@@ -15,6 +16,7 @@ if(TARGET neverd_shared)
 endif()
 
 add_neverd_unittest(NeverDMIPSFlowTests
+  mips/MicroMIPSFlowTests.cpp
   mips/MIPSControlFlowTests.cpp
   LINK_COMPONENTS IRMed IRLow Lift Decode)
 
@@ -23,6 +25,7 @@ add_neverd_unittest(NeverDMIPSTests
   LINK_COMPONENTS Loader)
 
 add_neverd_unittest(NeverDMIPSIntegerTests
+  mips/MicroMIPSIntegerTests.cpp
   mips/MIPSBitfieldTests.cpp
   mips/MIPSIntegerTests.cpp
   mips/MIPSScalarTests.cpp

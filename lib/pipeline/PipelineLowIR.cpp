@@ -26,6 +26,7 @@
 #include "neverd/ir/low/InternalNoReturn.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/low/MIPS/MIPSControlTarget.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/RegistrationLeafPrefixMemo.h"
 #include "neverd/ir/low/SEHFrameProof.h"
@@ -4259,8 +4260,14 @@ static LocalRegisterEffect summarizeRecoveredCallRegisters(
             Targets.try_emplace(I, MedCallTarget{Found->second, false});
         }
       for (const auto &[Index, Target] : Targets) {
+        const auto CodeTarget =
+            Target.ThroughSlot ? std::optional<va_t>(Target.Address)
+                               : qualifiedMIPSCallTarget(Img, Body.Blocks[B],
+                                                         Index, Target.Address);
+        if (!CodeTarget)
+          continue;
         if (Target.ThroughSlot ? importCalleeName(Img, Target.Address).empty()
-                               : !Img.hasExecutableCodeOwnerAt(Target.Address))
+                               : !Img.hasExecutableCodeOwnerAt(*CodeTarget))
           continue;
         if (!Projection) {
           Projection.emplace();
@@ -4274,7 +4281,7 @@ static LocalRegisterEffect summarizeRecoveredCallRegisters(
         // A caller forwarding RCX still owns that incoming parameter even
         // when the callable was transported through a frame slot.
         Call.Opcode = Target.ThroughSlot ? NdOp::INDIR_CALL : NdOp::CALL;
-        Call.Inputs[0] = NdVar::cst(Target.Address, Call.Inputs[0].Size);
+        Call.Inputs[0] = NdVar::cst(*CodeTarget, Call.Inputs[0].Size);
       }
     }
   return localRegisterEffect(
