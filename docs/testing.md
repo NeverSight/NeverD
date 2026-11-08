@@ -3884,10 +3884,11 @@ supports 65/128/257-bit words for SDK and CLI diagnostic runs.
 factor runs around power-of-two boundaries at 1–257 bits, both full and scaled
 products. Independent complete-word multiplication and high-bit near misses
 check equality and retained input models.
-`SymMBA.DenseCoversKeepEveryCornerAndWholeWord` exhausts four-, six- and
-eight-input cover tables, including mixed literal polarities and an isolated
-negative corner. Independent bit-plane evaluation checks random complete words
-through 257 bits; zero work must refuse without constructing a new node.
+`SymMBA.DenseCoversKeepEveryCornerAndWholeWord` exhausts four- through
+eight-input cover tables, including mixed literal polarities, an isolated
+negative corner and opposite missing corners. Independent bit-plane evaluation
+checks random complete words through 257 bits; zero work must refuse without
+constructing a new node.
 Paired-product regressions cover degree-64–128 mixed carry frontiers with
 independent 8–257-bit arithmetic oracles. A separate 32-factor fixture retains
 an input-dependent highest-bit correction, exhausts its three relevant low

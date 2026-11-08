@@ -374,9 +374,8 @@ llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
       std::fill_n(DirectSeen.begin(), SeenWords, uint64_t(0));
     else
       Seen->clear();
-    auto grow = [&](size_t I, size_t J, uint32_t Diff) {
-      Merged[I] = Merged[J] = 1;
-      Implicant Grown{Current[I].Value & ~Diff, Current[I].Care & ~Diff};
+    auto grow = [&](Implicant P, uint32_t Diff) {
+      Implicant Grown{P.Value & ~Diff, P.Care & ~Diff};
       bool New;
       if (SeenWords) {
         // Both fields fit in NumVars bits. This is an exact membership bit,
@@ -397,7 +396,35 @@ llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
     // complete pair scan, visit only those exact neighbors. The original
     // quadratic work admission stays in force.
     const auto CareBits = std::popcount(Current.front().Care);
-    if (Current.size() - 1 > 2 * size_t(CareBits + 1)) {
+    const bool IndexNeighbors = Current.size() - 1 > 2 * size_t(CareBits + 1);
+    if (IndexNeighbors && SeenWords) {
+      // Current terms have one more cared bit than every grown term. Their
+      // complete care/value keys therefore occupy disjoint bits in the same
+      // table: exact neighbor membership and next-round deduplication can
+      // share it without another index, allocation or clearing pass.
+      for (Implicant P : Current) {
+        const auto Key = (P.Care << NumVars) | P.Value;
+        DirectSeen[Key / 64] |= uint64_t(1) << (Key % 64);
+      }
+      // Values stay ascending between rounds. Ascending zero-to-one bits
+      // visit later neighbors in the original (I, J) discovery order,
+      // retaining every greedy cover tie without sorting neighbor indices.
+      for (size_t I = 0; I < Current.size(); ++I) {
+        const auto P = Current[I];
+        const auto Key = (P.Care << NumVars) | P.Value;
+        for (uint32_t Rest = P.Care; Rest; Rest &= Rest - 1) {
+          const uint32_t Bit = Rest & -Rest;
+          const auto Neighbor = Key ^ Bit;
+          if (!(DirectSeen[Neighbor / 64] & (uint64_t(1) << (Neighbor % 64))))
+            continue;
+          // Each endpoint independently finds the other, including a term
+          // with only earlier neighbors. Emit only from the smaller value.
+          Merged[I] = 1;
+          if (!(P.Value & Bit))
+            grow(P, Bit);
+        }
+      }
+    } else if (IndexNeighbors) {
       auto key = [](uint32_t Value, uint32_t Care) {
         return (uint64_t(Care) << 32) | Value;
       };
@@ -427,8 +454,10 @@ llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
         // Preserve the old (I, J) discovery order: greedy cover ties must not
         // change merely because the lookup table uses a different traversal.
         std::sort(Neighbors.begin(), Neighbors.end());
-        for (size_t J : Neighbors)
-          grow(I, J, Current[I].Value ^ Current[J].Value);
+        for (size_t J : Neighbors) {
+          Merged[I] = Merged[J] = 1;
+          grow(Current[I], Current[I].Value ^ Current[J].Value);
+        }
       }
     } else {
       for (size_t I = 0; I < Current.size(); ++I) {
@@ -439,7 +468,8 @@ llvm::SmallVector<Implicant, 16> primeImplicants(const TruthTable &Table,
               (Current[I].Value ^ Current[J].Value) & Current[I].Care;
           if (Diff == 0 || (Diff & (Diff - 1)) != 0)
             continue;
-          grow(I, J, Diff);
+          Merged[I] = Merged[J] = 1;
+          grow(Current[I], Diff);
         }
       }
     }

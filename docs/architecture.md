@@ -5105,9 +5105,9 @@ fewer probes than a complete pair scan. Neighbors retain the original index
 order before merging, preserving prime discovery and greedy-cover tie order.
 The existing quadratic work admission remains unchanged; merge storage stays
 outside the small-recipe synthesis path. Terms remain ordered by value after
-each merge round, so only zero-to-one neighbor flips need lookup; the reverse
-pair was already visited. Prepared Boolean recipes keep their reconstruction
-memo inline, with ordinary growth for optional larger recipes.
+each merge round, so the general index only looks up zero-to-one neighbor
+flips; the reverse pair was already visited. Prepared Boolean recipes keep their
+reconstruction memo inline, with ordinary growth for optional larger recipes.
 Small implicant rounds keep their temporary terms, prime results and merge flags
 inline; larger rounds grow normally. The two frontiers alternate without copying
 their inline elements. Merge flags and exact lookup tables reuse their storage
@@ -5118,6 +5118,11 @@ For up to six inputs, a packed care/value pair indexes an exact membership
 bit in at most 4096 bits. Only that used prefix is cleared each round; larger
 covers initialize the general hash set instead. This retains the same grown
 terms and greedy tie order without a hash lookup for every small-cover merge.
+Indexed small rounds also place their current terms in that same bitmap.
+Current and grown terms have different numbers of cared bits, so their exact
+keys cannot overlap. Both endpoints mark themselves merged; ascending bit flips
+emit each pair once in the original order. Neighbor lookup needs no separate
+index, additional storage or sorting, and the existing work admission is kept.
 The shared exact MBA layer also recombines weighted literal AND/OR/XOR/NOT
 views of one opaque word. It constructs per-bit coefficients and a constant,
 then independently checks the pointwise grammar, constant difference and every
