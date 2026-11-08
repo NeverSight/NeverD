@@ -23,6 +23,7 @@
 #include "neverd/loader/ELF/ELFOperatingSystem.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -964,18 +965,21 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
 // sampled, and calls/opaque effects invalidate register facts.
 struct BlockScalarFacts {
   using Fact = std::pair<uint16_t, uint64_t>;
+  using RegisterFacts = std::map<uint64_t, Fact>;
   std::map<size_t, unsigned> SelectedArms;
-  std::map<uint64_t, Fact> Registers;
+  RegisterFacts Registers;
 };
 
-BlockScalarFacts blockScalarFacts(const BinaryImage &Img, const LowBlock &Block,
-                                  bool KeepExit) {
+BlockScalarFacts
+blockScalarFacts(const BinaryImage &Img, const LowBlock &Block, bool KeepExit,
+                 BlockScalarFacts::RegisterFacts Incoming = {}) {
   BlockScalarFacts Facts;
   if (!KeepExit &&
       std::none_of(Block.Ops.begin(), Block.Ops.end(),
                    [](const LowOp &O) { return O.Opcode == NdOp::SELECT; }))
     return Facts;
   auto &Registers = Facts.Registers;
+  Registers = std::move(Incoming);
   std::map<uint64_t, BlockScalarFacts::Fact> Temps;
   auto Value = [&](const NdVar &V) -> std::optional<uint64_t> {
     if (!V.Size || V.Size > 8)
@@ -1050,19 +1054,20 @@ BlockScalarFacts blockScalarFacts(const BinaryImage &Img, const LowBlock &Block,
   return Facts;
 }
 
-/// A constant set within every return block needs no inter-block search.
-/// Inspect only complete call-free bodies, with ordinary internal edges and
-/// no independent or exceptional entries. Other bodies keep unknown state.
-bool canSummarizeExitConstants(const BinaryImage &Img, CallRegisterBodyView F) {
+/// Inspect only bounded, complete call-free bodies with ordinary internal
+/// edges and no independent or exceptional entries. Other bodies keep unknown
+/// state. The caller already owns the block index used by register summaries.
+bool canSummarizeExitConstants(const BinaryImage &Img, CallRegisterBodyView F,
+                               const std::map<int, size_t> &IndexOfId) {
   if (Img.Arch != Arch::X64 || !F.Complete || F.UnsafeIndirectBranches ||
-      F.HasIndependentRoots || F.Blocks.empty())
+      F.HasIndependentRoots || F.Blocks.empty() ||
+      IndexOfId.size() != F.Blocks.size())
     return false;
   size_t Operations = 0;
-  std::set<int> Blocks;
   for (const LowBlock &Block : F.Blocks) {
-    if (Block.Ops.empty() || !Block.ExceptionalSuccs.empty() ||
-        Block.Ops.size() > limits::kMaxCallExitConstantOps - Operations ||
-        !Blocks.insert(Block.Id).second)
+    if (Block.Ops.empty() || !Block.ExceptionalPreds.empty() ||
+        !Block.ExceptionalSuccs.empty() ||
+        Block.Ops.size() > limits::kMaxCallExitConstantOps - Operations)
       return false;
     Operations += Block.Ops.size();
   }
@@ -1070,17 +1075,21 @@ bool canSummarizeExitConstants(const BinaryImage &Img, CallRegisterBodyView F) {
   bool WritesExtraRegister = false;
   const TargetRegInfo &Registers = getTargetRegInfo(Img.Arch);
   for (const LowBlock &Block : F.Blocks) {
+    for (int Succ : Block.Succs)
+      if (!IndexOfId.count(Succ))
+        return false;
     const auto Last = Block.Ops.back().Opcode;
     if (Last == NdOp::RETURN) {
       if (!Block.Succs.empty())
         return false;
       Returns = true;
-    } else if ((Last != NdOp::BRANCH && Last != NdOp::COND_BR) ||
-               Block.Succs.empty())
-      return false;
-    for (int Succ : Block.Succs)
-      if (!Blocks.count(Succ))
+    } else if (Last == NdOp::BRANCH || Last == NdOp::COND_BR) {
+      if (Block.Succs.empty())
         return false;
+    } else if (Block.Succs.size() != 1 || Block.EndAddr <= Block.StartAddr ||
+               Block.EndAddr !=
+                   F.Blocks[IndexOfId.at(Block.Succs.front())].StartAddr)
+      return false;
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
       const NdVar &Output = Block.Ops[I].Output;
       if (Output.isReg() && Output.Size == sizeof(uint64_t) &&
@@ -1220,6 +1229,68 @@ GPRExitConstants scalarExitConstants(const BinaryImage &Img,
   return Constants;
 }
 
+/// A unique predecessor carries its register facts into either branch arm.
+/// Joins and the ordinary entry start with no facts; unreachable cycles retain
+/// only local facts. Each admitted block is evaluated once, under the body's
+/// existing operation bound. No path predicates or symbolic fixed point are
+/// needed, and temporaries never cross an instruction or block boundary.
+GPRExitConstants scalarExitConstants(const BinaryImage &Img,
+                                     CallRegisterBodyView F,
+                                     const std::map<int, size_t> &IndexOfId) {
+  if (F.Blocks.size() == 1)
+    return scalarExitConstants(Img,
+                               blockScalarFacts(Img, F.Blocks.front(), true));
+  const size_t Count = F.Blocks.size();
+  std::vector<size_t> Parent(Count, Count), IncomingEdges(Count);
+  for (size_t I = 0; I < Count; ++I)
+    for (int Succ : F.Blocks[I].Succs) {
+      const size_t Next = IndexOfId.at(Succ);
+      Parent[Next] = ++IncomingEdges[Next] == 1 ? I : Count;
+    }
+  Parent.front() = Count; // A backedge cannot define the ordinary entry state.
+  std::vector<llvm::SmallVector<size_t, 2>> Children(Count);
+  struct Pending {
+    size_t Block;
+    BlockScalarFacts::RegisterFacts Registers;
+  };
+  std::vector<Pending> Work;
+  for (size_t I = 0; I < Count; ++I)
+    if (Parent[I] == Count)
+      Work.push_back({I, {}});
+    else
+      Children[Parent[I]].push_back(I);
+
+  GPRExitConstants Constants;
+  bool FirstReturn = true;
+  const auto ObserveReturn = [&](const BlockScalarFacts &Facts) {
+    const auto Values = scalarExitConstants(Img, Facts);
+    if (FirstReturn) {
+      Constants = Values;
+      FirstReturn = false;
+    } else
+      llvm::erase_if(Constants, [&](const auto &Value) {
+        return !llvm::is_contained(Values, Value);
+      });
+  };
+  std::vector<bool> Visited(Count);
+  while (!Work.empty()) {
+    auto [I, Incoming] = std::move(Work.back());
+    Work.pop_back();
+    Visited[I] = true;
+    auto Facts = blockScalarFacts(Img, F.Blocks[I], true, std::move(Incoming));
+    if (F.Blocks[I].Ops.back().Opcode == NdOp::RETURN)
+      ObserveReturn(Facts);
+    for (size_t K = 0; K < Children[I].size(); ++K)
+      Work.push_back({Children[I][K], K + 1 == Children[I].size()
+                                          ? std::move(Facts.Registers)
+                                          : Facts.Registers});
+  }
+  for (size_t I = 0; I < Count; ++I)
+    if (!Visited[I] && F.Blocks[I].Ops.back().Opcode == NdOp::RETURN)
+      ObserveReturn(blockScalarFacts(Img, F.Blocks[I], true));
+  return Constants;
+}
+
 } // namespace
 
 std::optional<unsigned> gprFamilyOf(Arch A, uint64_t RegOff) {
@@ -1345,8 +1416,8 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
   }
   Effect.RegisterLeaf = registerLeaf(Img, F);
   Effect.Blocks.resize(F.Blocks.size());
-  const bool SummarizeExit = canSummarizeExitConstants(Img, F);
-  bool FirstReturn = true;
+  if (canSummarizeExitConstants(Img, F, IndexOfId))
+    Effect.ExitConstants = scalarExitConstants(Img, F, IndexOfId);
   const uint64_t FPReturn = getTargetRegInfo(Img.Arch).FPReturnReg;
   auto WritesFPReturn = [&](const NdVar &Out) {
     return FPReturn != 0 && Out.isReg() && Out.Size != 0 &&
@@ -1387,20 +1458,8 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
         overwrittenRegisterCopies(Img.Arch, Block, MergeWrites);
     const std::map<size_t, llvm::ArrayRef<uint64_t>> UnreadArguments =
         unreadSyscallArguments(Img, Block);
-    const bool AtReturn =
-        SummarizeExit && Block.Ops.back().Opcode == NdOp::RETURN;
-    const auto ScalarFacts = blockScalarFacts(Img, Block, AtReturn);
+    const auto ScalarFacts = blockScalarFacts(Img, Block, false);
     const auto &SelectedArms = ScalarFacts.SelectedArms;
-    if (AtReturn) {
-      const auto Constants = scalarExitConstants(Img, ScalarFacts);
-      if (FirstReturn) {
-        Effect.ExitConstants = Constants;
-        FirstReturn = false;
-      } else
-        llvm::erase_if(Effect.ExitConstants, [&](const auto &Value) {
-          return !llvm::is_contained(Constants, Value);
-        });
-    }
     auto ControlOf = [&](size_t OpIndex) {
       for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
         if (OpIndex >= Boundary.FirstOp &&

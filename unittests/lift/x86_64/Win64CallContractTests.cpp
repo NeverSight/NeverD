@@ -3932,64 +3932,98 @@ TEST(CallExitRegisters, ConstantScratchValueReachesTheCallersStore) {
     SCOPED_TRACE(static_cast<unsigned>(Format));
     const bool Windows = Format == BinaryFormat::COFF;
     const uint8_t Frame = Windows ? 32 : 0;
-    std::vector<uint8_t> Code(0xA0, 0xCC);
-    // Keep the output pointer in RBX while the leaf writes a non-return
-    // volatile register. The caller observes its actual machine value.
-    std::vector<uint8_t> Caller = {
-        0x53, 0x48, 0x89, static_cast<uint8_t>(Windows ? 0xCB : 0xFB),
-        0x48, 0x83, 0xEC, Frame,
-        0xE8};
-    const auto Displacement = rel32(Text + Caller.size() + 4, Producer);
-    Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
-    const std::vector<uint8_t> Suffix = {
-        0x48,  0x89, static_cast<uint8_t>(Windows ? 0x0B : 0x3B),
-        0x48,  0x83, 0xC4,
-        Frame, 0x5B, 0xC3};
-    Caller.insert(Caller.end(), Suffix.begin(), Suffix.end());
-    put(Code, Text, Caller);
-    put(Code, Producer,
-        {static_cast<uint8_t>(Windows ? 0xB9 : 0xBF), 27, 0, 0, 0, 0xB8, 1, 0,
-         0, 0, 0xC3});
-    auto Image = makeImage(
-        Code, {{Text, "observe_exit"}, {Producer, "produce_exit"}}, {});
-    Image.Format = Format;
-    for (bool LLVM : {false, true})
-      for (bool NoOpt : {false, true}) {
-        SCOPED_TRACE(LLVM);
-        SCOPED_TRACE(NoOpt);
-        llvm::LLVMContext Context;
-        PipelineOptions Options;
-        Options.EmitDumpOutput = false;
-        Options.OnlyFunctionEntries = {Text, Producer};
-        Options.LiftMode = LLVM;
-        Options.SourceProjection = true;
-        Options.NoOpt = NoOpt;
-        auto Result = Pipeline().run(Image, Context, Options);
-        ASSERT_TRUE(Result.Success) << Result.Error;
-        std::string Source;
-        llvm::raw_string_ostream Output(Source);
-        CEmitterOptions COptions;
-        COptions.TheArch = Image.Arch;
-        COptions.Format = Image.Format;
-        COptions.Image = &Image;
-        if (LLVM) {
-          ASSERT_TRUE(Result.LlvmModule);
-          ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
-          ASSERT_TRUE(
-              LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions));
-        } else
-          ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, COptions));
-        const std::string Oracle = R"(
-int main(void) {
-  uint64_t output = 999;
-  return observe_exit(&output) != 1 || output != 27;
-}
-)";
-        for (llvm::StringRef Level : {"-O0", "-O2"})
-          source_call_execution_test::compileAndRun(
-              Source + Oracle,
-              {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+    for (unsigned Shape = 0; Shape != 3; ++Shape) {
+      SCOPED_TRACE(Shape);
+      std::vector<uint8_t> Code(0xA0, 0xCC);
+      // Keep the output pointer in RBX while the leaf writes a non-return
+      // volatile register. The caller observes its actual machine value.
+      std::vector<uint8_t> Caller = {
+          0x53, 0x48, 0x89, static_cast<uint8_t>(Windows ? 0xCB : 0xFB),
+          0x48, 0x83, 0xEC, Frame,
+          0xE8};
+      const auto Displacement = rel32(Text + Caller.size() + 4, Producer);
+      Caller.insert(Caller.end(), Displacement.begin(), Displacement.end());
+      const std::vector<uint8_t> Suffix = {
+          0x48,  0x89, static_cast<uint8_t>(Windows ? 0x0B : 0x3B),
+          0x48,  0x83, 0xC4,
+          Frame, 0x5B, 0xC3};
+      Caller.insert(Caller.end(), Suffix.begin(), Suffix.end());
+      put(Code, Text, Caller);
+      std::vector<uint8_t> Body = {static_cast<uint8_t>(Windows ? 0xB9 : 0xBF),
+                                   27, 0, 0, 0};
+      if (Shape == 1)
+        // The constant precedes a direct jump, outside the return block.
+        Body.insert(Body.end(), {0xEB, 1, 0xCC});
+      if (Shape == 2) {
+        // Both exits inherit the constant, but return different scalar results.
+        // The second incoming argument selects the path.
+        Body.insert(Body.end(),
+                    {0x85, static_cast<uint8_t>(Windows ? 0xD2 : 0xF6), 0x74, 6,
+                     0xB8, 2, 0, 0, 0, 0xC3});
       }
+      Body.insert(Body.end(), {0xB8, 1, 0, 0, 0, 0xC3});
+      put(Code, Producer, Body);
+      auto Image = makeImage(
+          Code, {{Text, "observe_exit"}, {Producer, "produce_exit"}}, {});
+      Image.Format = Format;
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(LLVM);
+          SCOPED_TRACE(NoOpt);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Text, Producer};
+          Options.LiftMode = LLVM;
+          Options.SourceProjection = true;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Image.Arch;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            ASSERT_TRUE(
+                LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions));
+          } else
+            ASSERT_TRUE(
+                HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          ASSERT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+          std::string Oracle;
+          llvm::raw_string_ostream Check(Oracle);
+          Check << "\n#include <sys/mman.h>\n"
+                   "#include <string.h>\nint main(void) {\n"
+                   "  const uint8_t original[] = {";
+          for (uint8_t Byte : Code)
+            Check << unsigned(Byte) << ',';
+          Check << "};\n  void *native = mmap(0, sizeof(original), "
+                   "PROT_READ | PROT_WRITE | PROT_EXEC, "
+                   "MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);\n"
+                   "  if (native == MAP_FAILED) return 10;\n"
+                   "  memcpy(native, original, sizeof(original));\n"
+                   "  typedef uint64_t ("
+                << (Windows ? "__attribute__((ms_abi)) " : "")
+                << "*fn)(uint64_t *, uint32_t);\n"
+                   "  for (uint32_t choice = 0; choice != 2; ++choice) {\n"
+                   "    uint64_t machine = 999, source = 999;\n"
+                   "    uint64_t expected = ((fn)native)(&machine, choice);\n"
+                   "    uint64_t actual = observe_exit(&source"
+                << (Shape == 2 ? ", choice" : "")
+                << ");\n"
+                   "    if (machine != 27 || source != machine || "
+                   "actual != expected) return 11;\n"
+                   "  }\n  return munmap(native, sizeof(original)) != 0;\n}\n";
+          for (llvm::StringRef Level : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                "#define _GNU_SOURCE\n" + Source + Oracle,
+                {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+        }
+    }
   }
 }
 
