@@ -4633,6 +4633,29 @@ order and retain paired measurements and CPU time alongside output hashes.
 The full build's `neverd-acceleration-bench` target reports wall and process CPU
 time separately; use both when the host has competing workloads.
 
+Local Capstone experiment drivers use
+`scripts/capstone_perf_lifecycle.py::Experiment` around preparation, compilation,
+validation and measurement. It owns one `.capstone-perf/current` directory under
+the experiment root. Recipes, original corpora, frozen comparison libraries and
+reusable canonical build caches stay outside that directory and are inputs,
+not cleanup targets. Child producers call `managed_workspace()` so invoking a
+stage directly cannot bypass the owner. Compilation still uses `scripts/build.py`.
+
+A completed run can retain its workspace for named pending readers. Release the
+last reader only after saving the needed compact result and paired measurement
+evidence; `release --reader NAME --summary RESULT.json` then removes generated
+copies, binaries and expanded reports. A new run refuses to replace a workspace
+with pending readers. Failure and normal interruption retire it automatically;
+after a hard kill, the next start recovers it once the inherited child lock is
+released. This does not catch a hard kill with `finally`, scan other build trees,
+or delete historical source and diagnostic archives. Retry diagnostics use fixed
+files with log hashes and at most 16 KiB of raw log tails, rather than new report
+directories. The owner requires POSIX file locks and process groups.
+
+Run `python3 scripts/tests/test_capstone_perf_lifecycle.py -v` for small fixtures
+covering repeated success/failure, retained readers, protected inputs and caches,
+normal interruption, hard-kill recovery and interrupted creation/retirement.
+
 The [LowIR to MedIR component benchmark](../tools/neverd-bench/med-bench.md)
 reuses decoded functions and measures standalone conversion, including SSA.
 It verifies every result and checks canonical dump hashes outside the measured
