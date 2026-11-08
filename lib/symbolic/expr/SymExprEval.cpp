@@ -20,8 +20,10 @@
 #include "llvm/Support/ErrorHandling.h"
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <cstddef>
+#include <limits>
 #include <utility>
 
 namespace neverd::symbolic {
@@ -255,17 +257,28 @@ LLVM_ATTRIBUTE_NOINLINE void SymEvalPlan::prepareNativeReuse() {
     return;
   }
   NativeState = NativePreparation::Done;
-  bool HasScaledProduct = false, HasNeutralPrefix = false;
+  constexpr unsigned NativeBits = std::numeric_limits<uint64_t>::digits;
+  unsigned AvailableZeros = 0, NeededZeros = NativeBits + 1;
   for (const auto &St : llvm::ArrayRef<Step>(Steps).drop_front(Vars.size())) {
     if (St.NumArgs < 2 || !Ctx.isConst(Ctx.operand(St.Node, 0)))
       continue;
-    const bool Odd = Ctx.node(Ctx.operand(St.Node, 0)).Aux & 1;
-    HasScaledProduct |= St.Op == SymOp::Mul && !Odd;
-    if (St.NumArgs == 2)
-      HasNeutralPrefix |= Odd ? (St.Op == SymOp::And || St.Op == SymOp::Mul)
-                              : (St.Op == SymOp::Add || St.Op == SymOp::Or ||
-                                 St.Op == SymOp::Xor);
-    if (HasScaledProduct && HasNeutralPrefix) {
+    const auto Literal = Ctx.node(Ctx.operand(St.Node, 0)).Aux;
+    if (St.Op == SymOp::Mul)
+      AvailableZeros = std::min(
+          NativeBits, AvailableZeros + unsigned(std::countr_zero(Literal)));
+    if (St.NumArgs == 2 && preservesLowBits(St.Op)) {
+      const auto Difference = St.Op == SymOp::Mul   ? Literal - 1
+                              : St.Op == SymOp::And ? ~Literal
+                                                    : Literal;
+      const auto NeutralBits =
+          std::min(St.Width, unsigned(std::countr_zero(Difference)));
+      if (NeutralBits)
+        NeededZeros = std::min(NeededZeros, St.Width - NeutralBits);
+    }
+    // Even the sum of every scale's trailing zeros is only an upper bound
+    // on any one path. If it cannot hide a literal, no alias is possible.
+    // A possible alias still needs the complete, shared-use demand analysis.
+    if (AvailableZeros >= NeededZeros) {
       Steps.resize(prepareNativeResidues(Ctx, Root, RootSlot, ScratchU64.size(),
                                          llvm::MutableArrayRef<Step>(Steps),
                                          ArgSlots));

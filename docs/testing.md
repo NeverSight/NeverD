@@ -3889,6 +3889,14 @@ eight-input cover tables, including mixed literal polarities, an isolated
 negative corner and opposite missing corners. Independent bit-plane evaluation
 checks random complete words through 257 bits; zero work must refuse without
 constructing a new node.
+`SymMBAParity.PackedCoefficientsKeepEveryCornerAndBitPlane` exhausts every
+function through three inputs, then checks dense, sparse and random tables
+through seven inputs across the packed-storage boundary. Optimal recipes are
+disabled; independent truth-table lookups verify every corner and random
+64-bit planes under the original synthesis work allowance.
+`SymMBA.SingleMissingCornersKeepCompleteWordsAndWorkAdmission` checks every
+excluded corner through seven inputs, independent 8/64/257-bit words, the
+excluded assignment and its neighbor, and exact/one-short cover allowances.
 Paired-product regressions cover degree-64–128 mixed carry frontiers with
 independent 8–257-bit arithmetic oracles. A separate 32-factor fixture retains
 an input-dependent highest-bit correction, exhausts its three relevant low
@@ -3906,6 +3914,9 @@ also require independent full-width Z3 proofs. Fused sum/carry decisions must
 finish both degree-64 carry products at the same benchmark allowance, with
 lower output costs. Exhausting all 65,536 low-byte input pairs for each product
 checks the resulting carries independently of the decision implementation.
+`SymMBAResiduePolynomialCache.ColumnSumsKeepComplementedCarries` checks final-column
+parity and full-adder results with independent products through 257 bits,
+complemented factors, and exact/one-short work and storage allowances.
 Single- and two-group cofactor partitions also avoid redundant maps and sorts.
 A degree-24 fixture must finish within the shared work budget; exhaustive
 eight-bit supports and independent 8–257-bit arithmetic oracles retain

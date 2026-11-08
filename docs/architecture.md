@@ -5123,6 +5123,14 @@ Current and grown terms have different numbers of cared bits, so their exact
 keys cannot overlap. Both endpoints mark themselves merged; ascending bit flips
 emit each pair once in the original order. Neighbor lookup needs no separate
 index, additional storage or sorting, and the existing work admission is kept.
+For truth tables that fit in one machine word, subset inversion derives all
+exclusive-or coefficients with masked shifts across disjoint bit blocks.
+Set-bit enumeration preserves monomial order; larger tables retain scalar
+inversion. Synthesis admission, cover ranking and exact output are unchanged.
+The same packed columns compare both cofactors to recover exact input support.
+A packed table excluding only one corner has one essential literal per input;
+its cover retains the original frontier order and computes each merge round's
+admission from its exact cube count before bypassing those expansions.
 The shared exact MBA layer also recombines weighted literal AND/OR/XOR/NOT
 views of one opaque word. It constructs per-bit coefficients and a constant,
 then independently checks the pointwise grammar, constant difference and every
@@ -5589,6 +5597,9 @@ operands. This preparation starts only after the first evaluation, keeping
 one-shot calls free of the extra traversal. Input callbacks, original scratch
 slots and the public work count remain unchanged; native and AP evaluation
 share the prepared plan. Wide prefix evaluation uses the same demand rules.
+An upper bound from all literal scales rejects preparation when even that
+many discarded bits cannot hide a literal; possible aliases still require
+the complete shared-use analysis.
 Arbitrary-width plans read prior operand slots directly through the shared
 operator evaluator, avoiding temporary copies of wide integers at every step.
 They initialize immutable constant slots before any external input callback,

@@ -19,6 +19,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include <array>
+#include <random>
 #include <utility>
 
 using namespace neverd;
@@ -212,6 +213,82 @@ TEST(SymMBAResiduePolynomialCache, SingleBitArithmeticKeepsCompleteWords) {
       }
     }
   }
+}
+
+TEST(SymMBAResiduePolynomialCache, ColumnSumsKeepComplementedCarries) {
+  std::mt19937_64 Random(0x636f6c756d6e);
+  unsigned Rewrites = 0;
+  for (unsigned Width : {8u, 64u, 257u})
+    for (unsigned Observed : {3u, 6u, 8u})
+      for (unsigned Mode = 0; Mode < 4; ++Mode) {
+        SCOPED_TRACE(::testing::Message()
+                     << Width << ':' << Observed << ':' << Mode);
+        const auto Scale = llvm::APInt(Width, 3).shl(Width - Observed);
+        const auto Even = ~llvm::APInt(Width, 1);
+        auto Input = [&](SymContext &Ctx) {
+          const auto X = Ctx.mkVar("x", Width);
+          auto Y = Ctx.mkVar("y", Width), Z = Ctx.mkVar("z", Width);
+          if (Mode & 1)
+            Y = Ctx.mkNot(Y);
+          if (Mode & 2)
+            Z = Ctx.mkNot(Z);
+          llvm::SmallVector<SymRef, 16> Factors{Ctx.mkConst(Scale)};
+          for (unsigned I = 0; I < 8; ++I)
+            Factors.push_back(Ctx.mkXor(
+                Ctx.mkAdd({X, Y, Z, Ctx.mkConst(Width, 2 * I)}),
+                Ctx.mkMul(Ctx.mkAnd(Ctx.mkAdd(Y, Ctx.mkConst(Width, I)),
+                                    Ctx.mkConst(Even)),
+                          Ctx.mkAnd(Ctx.mkAdd(Z, Ctx.mkConst(Width, 2 * I)),
+                                    Ctx.mkConst(Even)))));
+          return Ctx.mkMul(Factors);
+        };
+        SymContext FullCtx;
+        const auto Root = Input(FullCtx);
+        detail::WorkBudget FullBudget(65536);
+        size_t FullStorage = 1 << 24;
+        const auto Full = detail::foldResidueDecisions(FullCtx, Root,
+                                                       FullBudget, FullStorage);
+        Rewrites += Full != Root;
+        const auto Work = FullBudget.used();
+        const size_t Bytes = (1 << 24) - FullStorage;
+        ASSERT_GT(Work, 1u);
+        ASSERT_GT(Bytes, 1u);
+        for (auto Limits : {std::pair<size_t, size_t>{Work, Bytes},
+                            {Work - 1, Bytes},
+                            {Work, Bytes - 1}}) {
+          SymContext Ctx;
+          const auto Original = Input(Ctx);
+          detail::WorkBudget Budget(Limits.first);
+          size_t Storage = Limits.second;
+          const auto Result =
+              detail::foldResidueDecisions(Ctx, Original, Budget, Storage);
+          EXPECT_LE(Budget.used(), Limits.first);
+          EXPECT_LE(Storage, Limits.second);
+          if (Limits.first == Work && Limits.second == Bytes)
+            EXPECT_EQ(Ctx.toString(Result), FullCtx.toString(Full));
+          SymEvalPlan Plan(Ctx, Result);
+          for (unsigned Trial = 0; Trial < 128; ++Trial) {
+            std::array<llvm::APInt, 3> Values;
+            for (auto &Value : Values) {
+              Value = llvm::APInt(Width, 0);
+              for (unsigned Bit = 0; Bit < Width; Bit += 64)
+                Value |= llvm::APInt(Width, Random(), false, true).shl(Bit);
+              if (Trial < 2)
+                Value = Trial ? llvm::APInt::getAllOnes(Width)
+                              : llvm::APInt(Width, 0);
+            }
+            const auto Y = Mode & 1 ? ~Values[1] : Values[1];
+            const auto Z = Mode & 2 ? ~Values[2] : Values[2];
+            auto Expected = Scale;
+            for (unsigned I = 0; I < 8; ++I)
+              Expected *= (Values[0] + Y + Z + llvm::APInt(Width, 2 * I)) ^
+                          (((Y + llvm::APInt(Width, I)) & Even) *
+                           ((Z + llvm::APInt(Width, 2 * I)) & Even));
+            EXPECT_EQ(Plan.eval(Values), Expected);
+          }
+        }
+      }
+  EXPECT_GT(Rewrites, 0u);
 }
 
 TEST(SymMBAResiduePolynomialCache, NarrowReadsKeepDistinctOriginalInputs) {
