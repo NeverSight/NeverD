@@ -11,6 +11,7 @@
 #include "Listing.h"
 #include "OperandFormat.h"
 #include "PageCodec.h"
+#include "PageDelta.h"
 #include "ProjectHistory.h"
 #include "ResourceLimits.h"
 #include "TablePage.h"
@@ -30,6 +31,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -1105,8 +1107,13 @@ void Engine::unindexNamedView(NamedViewPosition position) {
 }
 void Engine::forgetNamedViews() {
   imageFactsRevision_.reset();
+  // The newest are those whose pages clients most likely keep.
+  std::size_t kept = 0;
   for (auto &document : namedViews_)
-    releases_.retire(std::move(document));
+    if (kept++ < ::neverd::limits::worker::kEngineMaxPreviousViews)
+      keepPreviousView(std::move(document));
+    else
+      releases_.retire(std::move(document));
   namedViews_.clear();
   namedViewsByKey_.clear();
   namedViewsBySource_.clear();
@@ -1206,7 +1213,7 @@ void Engine::readViewEdits(const std::string &sourceKey) {
     unindexNamedView(position);
     namedViewBytes_ -= document.bytes;
     encodedPageBytes_ -= document.pageBytes;
-    releases_.retire(std::move(*position));
+    keepPreviousView(std::move(*position));
     namedViews_.erase(position);
     return;
   }
@@ -1775,7 +1782,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
         unindexNamedView(it);
         namedViewBytes_ -= (*it)->bytes;
         encodedPageBytes_ -= (*it)->pageBytes;
-        releases_.retire(std::move(*it));
+        keepPreviousView(std::move(*it));
         namedViews_.erase(it);
       }
       while (!namedViews_.empty() &&
@@ -1805,12 +1812,118 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
   return document;
 }
 
-std::optional<Json> Engine::namedViewPage(std::uint64_t address,
-                                          const std::string &representation,
-                                          std::size_t offset, std::size_t limit,
-                                          const Json &options,
-                                          EncodedPayload *encoded,
-                                          const std::string *ifNoneMatch) {
+void Engine::keepPreviousView(std::shared_ptr<const NamedView> document) {
+  if (!document)
+    return;
+  const auto bytes = document->bytes;
+  if (!bytes || bytes > ::neverd::limits::worker::kEngineMaxPreviousViewBytes) {
+    releases_.retire(std::move(document));
+    return;
+  }
+  // Its encoded pages answer nothing a delta reads.
+  document->pages.clear();
+  document->pageBytes = 0;
+  previousViews_.push_back(std::move(document));
+  previousViewBytes_ += bytes;
+  while (previousViews_.size() >
+             ::neverd::limits::worker::kEngineMaxPreviousViews ||
+         previousViewBytes_ >
+             ::neverd::limits::worker::kEngineMaxPreviousViewBytes) {
+    previousViewBytes_ -= previousViews_.front()->bytes;
+    releases_.retire(std::move(previousViews_.front()));
+    previousViews_.pop_front();
+  }
+}
+
+std::optional<Json> Engine::keptClientPage(const std::string &etag) const {
+  // instanceTag_-document-start-end, as namedViewPage names a page.
+  if (!etag.starts_with(instanceTag_ + "-"))
+    return std::nullopt;
+  std::string_view rest(etag);
+  rest.remove_prefix(instanceTag_.size() + 1);
+  std::uint64_t parts[3] = {};
+  for (std::size_t part = 0; part < 3; ++part) {
+    const auto dash = part < 2 ? rest.find('-') : rest.size();
+    if (dash == std::string_view::npos || dash == 0)
+      return std::nullopt;
+    const auto field = rest.substr(0, dash);
+    const auto [end, error] =
+        std::from_chars(field.data(), field.data() + field.size(), parts[part]);
+    if (error != std::errc() || end != field.data() + field.size())
+      return std::nullopt;
+    rest.remove_prefix(part < 2 ? dash + 1 : dash);
+  }
+  const NamedView *found = nullptr;
+  for (const auto &document : namedViews_)
+    if (document->id == parts[0])
+      found = document.get();
+  for (const auto &document : previousViews_)
+    if (!found && document->id == parts[0])
+      found = document.get();
+  if (!found || found->value.contains("recovery_report"))
+    return std::nullopt;
+  const auto &text = found->value.at("text").get_ref<const std::string &>();
+  const std::size_t total = text.empty() ? 0 : found->lines.size();
+  if (parts[1] > parts[2] || parts[2] > total)
+    return std::nullopt;
+  return namedViewLines(*found, parts[1], parts[2], parts[1] == 0);
+}
+
+Json Engine::namedViewLines(const NamedView &document, std::size_t start,
+                            std::size_t end, bool first) const {
+  const auto &namedView_ = document.value;
+  const auto &namedViewLines_ = document.lines;
+  const auto &text = namedView_.at("text").get_ref<const std::string &>();
+  const std::size_t total = text.empty() ? 0 : namedViewLines_.size();
+  const auto startByte = start < namedViewLines_.size() && !text.empty()
+                             ? namedViewLines_[start]
+                             : text.size();
+  const auto endByte =
+      end < namedViewLines_.size() ? namedViewLines_[end] : text.size();
+  Json page = Json::object();
+  for (const auto &[field, value] : namedView_.items())
+    if (field != "text" && field != "rows" &&
+        (field != "recovery_report" || first) &&
+        !((field == "source_names" || field == "code_names" ||
+           field == "references") &&
+          value.is_array()))
+      page[field] = value;
+  page["text"] = text.substr(startByte, endByte - startByte);
+  page["rows"] =
+      viewItemsOnPage(namedView_.at("rows"), document.orderedRows, "line",
+                      "line", true, start, end, &document.rowBounds);
+  if (const auto references = namedView_.find("references");
+      references != namedView_.end() && references->is_array()) {
+    page["references"] =
+        viewItemsOnPage(*references, document.orderedReferences, "line", "line",
+                        true, start, end, &document.referenceBounds);
+  }
+  const std::size_t base = namedView_.value("byte_offset", std::size_t{0});
+  for (const char *field : {"source_names", "code_names"}) {
+    if (!namedView_.contains(field) || !namedView_.at(field).is_array())
+      continue;
+    const bool ordered = std::string_view(field) == "source_names"
+                             ? document.orderedSourceNames
+                             : document.orderedCodeNames;
+    page[field] = viewItemsOnPage(
+        namedView_.at(field), ordered, "begin_byte", "end_byte", false,
+        base + startByte, base + endByte,
+        std::string_view(field) == "source_names" ? &document.sourceNameBounds
+                                                  : &document.codeNameBounds);
+  }
+  page["offset"] = start;
+  page["byte_offset"] = base + startByte;
+  page["total_lines"] = total;
+  page["complete"] = end == total;
+  page["next_offset"] = end == total ? Json(nullptr) : Json(end);
+  return page;
+}
+
+std::optional<Json>
+Engine::namedViewPage(std::uint64_t address, const std::string &representation,
+                      std::size_t offset, std::size_t limit,
+                      const Json &options, EncodedPayload *encoded,
+                      const std::string *ifNoneMatch, bool pageDelta) {
   const auto document = namedView(address, representation, options);
   if (!document)
     return std::nullopt;
@@ -1836,6 +1949,12 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
                 {"etag", etag},
                 {"project_id", projectId_},
                 {"revision", revision()}};
+  // A page the client keeps, of a document this worker still has, reads what
+  // changed from it.
+  std::optional<Json> kept;
+  if (pageDelta && ifNoneMatch && !ifNoneMatch->empty() &&
+      !namedView_.contains("recovery_report"))
+    kept = keptClientPage(*ifNoneMatch);
   if (encoded)
     for (auto it = document->pages.begin(); it != document->pages.end(); ++it)
       if (it->start == start && it->end == end) {
@@ -1843,47 +1962,18 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
         document->pages.splice(document->pages.begin(), document->pages, it);
         return Json(nullptr);
       }
-  const auto startByte = start < namedViewLines_.size() && !text.empty()
-                             ? namedViewLines_[start]
-                             : text.size();
-  const auto endByte =
-      end < namedViewLines_.size() ? namedViewLines_[end] : text.size();
-  Json page = Json::object();
-  for (const auto &[field, value] : namedView_.items())
-    if (field != "text" && field != "rows" &&
-        (field != "recovery_report" || offset == 0) &&
-        !((field == "source_names" || field == "code_names" ||
-           field == "references") &&
-          value.is_array()))
-      page[field] = value;
-  page["text"] = text.substr(startByte, endByte - startByte);
-  page["rows"] =
-      viewItemsOnPage(namedView_.at("rows"), document->orderedRows, "line",
-                      "line", true, start, end, &document->rowBounds);
-  if (const auto references = namedView_.find("references");
-      references != namedView_.end() && references->is_array()) {
-    page["references"] =
-        viewItemsOnPage(*references, document->orderedReferences, "line",
-                        "line", true, start, end, &document->referenceBounds);
-  }
-  const std::size_t base = namedView_.value("byte_offset", std::size_t{0});
-  for (const char *field : {"source_names", "code_names"}) {
-    if (!namedView_.contains(field) || !namedView_[field].is_array())
-      continue;
-    const bool ordered = std::string_view(field) == "source_names"
-                             ? document->orderedSourceNames
-                             : document->orderedCodeNames;
-    page[field] = viewItemsOnPage(
-        namedView_[field], ordered, "begin_byte", "end_byte", false,
-        base + startByte, base + endByte,
-        std::string_view(field) == "source_names" ? &document->sourceNameBounds
-                                                  : &document->codeNameBounds);
-  }
-  page["offset"] = start;
-  page["byte_offset"] = base + startByte;
-  page["total_lines"] = total;
-  page["complete"] = end == total;
-  page["next_offset"] = end == total ? Json(nullptr) : Json(end);
+  Json page = namedViewLines(*document, start, end, offset == 0);
+  if (kept)
+    if (auto delta = neverd::worker::pageDelta(*kept, page)) {
+      const auto bytes = delta->dump().size();
+      if (bytes <= ::neverd::limits::worker::kEngineSmallPageDeltaBytes ||
+          bytes * 2 <= page.dump().size())
+        return Json{{"delta", std::move(*delta)},
+                    {"base", *ifNoneMatch},
+                    {"etag", etag},
+                    {"project_id", projectId_},
+                    {"revision", revision()}};
+    }
   page["project_id"] = projectId_;
   page["revision"] = revision();
   if (ifNoneMatch)
@@ -6387,9 +6477,12 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
           etags ? stringField(p, "if_none_match", {},
                               ::neverd::limits::worker::kEngineMaxPageEtagBytes)
                 : std::string();
+      // A client that applies what changed to the page it keeps asks for
+      // that (page_delta).
+      const bool deltas = etags && p.value("page_delta", false);
       if (auto named = namedViewPage(entry, representation, offset, limit,
                                      options, etags ? nullptr : encoded,
-                                     etags ? &known : nullptr))
+                                     etags ? &known : nullptr, deltas))
         return std::move(*named);
       if (keptOnly_)
         throw Error("not_kept", "No session has kept this view");

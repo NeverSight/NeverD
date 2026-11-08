@@ -4719,7 +4719,10 @@ names that changed row by row (`Engine::takeNames`), so its name index stands, a
 does the function list the next selection reads (`Session::functionListCurrent`). A page the
 GUI keeps is named by the document and lines it came from; a later read names it
 (`if_none_match`), and while the document stands the worker says so instead of sending
-the page again (`QueryService::State::keptPages`).
+the page again (`QueryService::State::keptPages`). Where an edit built the document
+again, a worker that still has the old one sends what changed of the page
+(`page_delta`: lines replaced and the offsets after them shifted, `pageDelta`), which the
+GUI applies to the page it keeps (`page_delta::apply`).
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's. The owner's snapshot for it does
 not wait for the write (`analysis_snapshot` `in_memory`): the replica takes the names

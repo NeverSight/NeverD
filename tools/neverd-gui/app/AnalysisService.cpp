@@ -316,6 +316,9 @@ void AnalysisService::receive(const QJsonObject &message) {
     preparesFunctions_ = message.value("capabilities")
                              .toArray()
                              .contains(QStringLiteral("prepare_function"));
+    queries_.setPageDeltas(message.value("capabilities")
+                               .toArray()
+                               .contains(QStringLiteral("page_delta")));
     if (!message.value("capabilities")
              .toArray()
              .contains(QStringLiteral("analysis_restore"))) {
