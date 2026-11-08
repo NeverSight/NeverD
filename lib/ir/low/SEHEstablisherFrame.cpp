@@ -982,9 +982,10 @@ prepareTerminationFrame(const LowFunc &Low, const TargetRegInfo &TRI,
   return Frame;
 }
 
-/// One handler's half of the proof against \p Frame: the scopes it
-/// terminates, every ordinary path into their guarded code, and the SP writes
-/// on those paths.
+/// One callback's half of the proof against \p Frame: the scopes it terminates
+/// or filters, every ordinary path into their guarded code, and the SP writes
+/// on those paths.  The dispatcher passes a filter the same EstablisherFrame
+/// as a termination handler, from where the exception struck.
 llvm::Expected<uint64_t>
 proveTerminationHandler(const LowFunc &Low, const TerminationFrame &Frame,
                         va_t Handler, const TargetRegInfo &TRI,
@@ -1026,19 +1027,21 @@ proveTerminationHandler(const LowFunc &Low, const TerminationFrame &Frame,
       return Fail("protected scope has no decoded code");
     return llvm::Error::success();
   };
-  bool Terminates = false;
+  std::optional<SEHScopeKind> Role;
   for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
     if (!Charge())
       return Fail("work budget exhausted");
     if (Scope.FilterOrFinallyVA != Handler)
       continue;
-    if (Scope.Kind != SEHScopeKind::Finally)
-      return Fail("handler is also a filter callback");
+    if ((Scope.Kind != SEHScopeKind::Finally &&
+         Scope.Kind != SEHScopeKind::Filter) ||
+        (Role && *Role != Scope.Kind))
+      return Fail("handler is both a filter and a termination callback");
     if (auto Error = AddScope(Scope))
       return std::move(Error);
-    Terminates = true;
+    Role = Scope.Kind;
   }
-  if (!Terminates)
+  if (!Role)
     return Fail("handler terminates no scope of this function");
 
   // Every ordinary path into a guarded instruction participates. A root the
@@ -1288,12 +1291,15 @@ std::map<int64_t, unsigned> collectLowSEHHomedArguments(const LowFunc &Low,
     return Homed;
   const ExceptionFunction &EH = *Low.ExceptionMetadata;
   va_t FirstProtected = InvalidVA;
-  bool Finally = false;
+  bool Callbacks = false;
   for (const SEHScopeRecord &Scope : EH.SEH->Scopes) {
-    Finally |= Scope.Kind == SEHScopeKind::Finally;
+    Callbacks |=
+        Scope.Kind == SEHScopeKind::Finally ||
+        (Scope.Kind == SEHScopeKind::Filter && Scope.FilterOrFinallyVA &&
+         !EH.ownsCode(Scope.FilterOrFinallyVA));
     FirstProtected = std::min(FirstProtected, Scope.GuardedRange.Begin);
   }
-  if (!Finally)
+  if (!Callbacks)
     return Homed;
   const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
   const llvm::ArrayRef<uint64_t> Arguments =
@@ -1392,7 +1398,10 @@ collectLowSEHTerminationFrames(const LowFunc &Low, Arch TargetArch,
     return Frames;
   std::set<va_t> Handlers;
   for (const SEHScopeRecord &Scope : Low.ExceptionMetadata->SEH->Scopes)
-    if (Scope.Kind == SEHScopeKind::Finally && Scope.FilterOrFinallyVA)
+    if ((Scope.Kind == SEHScopeKind::Finally ||
+         Scope.Kind == SEHScopeKind::Filter) &&
+        Scope.FilterOrFinallyVA &&
+        !Low.ExceptionMetadata->ownsCode(Scope.FilterOrFinallyVA))
       Handlers.insert(Scope.FilterOrFinallyVA);
   if (Handlers.empty())
     return Frames;

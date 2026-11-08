@@ -16490,6 +16490,36 @@ certified, or whose body is unavailable, keeps its address comment, which is the
 whole clause; the comment otherwise stays next to the code it names. The
 projection runs in the plain-C view as well as the C++ one, because SEH is C.
 
+A filter callback reads its parent the same way, with the exception pointers
+in place of the abnormal flag: x64 passes it the same EstablisherFrame, which
+the same proof certifies for the callback, and ARM and AArch64 restore the same
+callee-saved registers, which `buildSsa` tracks through filter scopes as through
+finally ones. `attachSEHFinallyBodies` spells its body in the parent, the
+pointers being `GetExceptionInformation()`, and folds it with the x86 filters'
+folder (`lib/ir/high/structure/SEHFilterValues.cpp`) into the clause's
+`__except` expression (`HighEHClause::FilterValue`), so the clause reads
+`__except (*Counter)` or `__except ((GetExceptionCode() == 0xC0000005) ?
+(EXCEPTION_EXECUTE_HANDLER) : (EXCEPTION_CONTINUE_SEARCH))` rather than a call
+of the callback with one of its two arguments. A write it makes to the
+parent's frame stays in the expression unless nothing else can read those
+bytes: no statement of the parent, no other filter and no handler still out of
+line touches them, and no address of the frame goes anywhere else, as with the
+temporaries MSVC's `/Od` keeps for a filter in its parent's frame. The
+expression must also print as C that evaluates as the callback did, or the
+callback keeps its call: an integer, reading no value of a function whose
+result the writer leaves out (`analyzeVoidReturn`), and reaching the frame only
+as the parent's own code does, each word it reads one the parent's statements
+read at that width and each address it takes one the parent takes. A word the
+parent only writes, as an argument clang-cl spills for its callbacks while the
+parent reads the register, may print as nothing. The single-function view
+gathers the callback as it gathers a termination handler. The writer treats the
+expression as part of the `__try`: it declares what the expression calls,
+names the frame words it reads and writes, keeps the stores and variables it
+reads (`forEachExprAndFilter` in `HighCDeadStoreAnalysis.cpp` and
+`HighCUsedVars.cpp`), and passes `GetExceptionInformation()` to a parameter
+declared as a record pointer of the unit's own through `void *`, as <excpt.h>
+types it after its own `EXCEPTION_POINTERS`.
+
 An x86 `_except_handler3` or `_except_handler4` frame prints the same clauses
 from its own code, in the decompile view only. That view defers the native
 registration proofs, so `lib/ir/low/X86/RegistrationDisplayFrame.cpp` reads what
@@ -16703,8 +16733,8 @@ An ARM or AArch64 termination handler takes only the abnormal flag. The
 unwinder restores the parent's callee-saved registers to their values where
 the exception struck before calling it, and the handler reads the parent's
 state through them (`ldr w8,[x27]`, `ldr r3,[r7,#12]`). `buildSsa`
-(`lib/ir/med/pass/MedSSA.cpp`) records, for every finally scope whose handler
-lies outside the function, the version of each full-width callee-saved or
+(`lib/ir/med/pass/MedSSA.cpp`) records, for every finally or filter scope whose
+callback lies outside the function, the version of each full-width callee-saved or
 frame-pointer register where each protected range starts, as it does for an
 `__except` root; only operations inside a range count as writes, and a handler
 root's seed writes nothing. A root whose range holds the register under several

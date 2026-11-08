@@ -1205,4 +1205,219 @@ TEST(SEHLocalUnwind, AFinallyThatUnwindsToTheTargetLandsThereAsAJump) {
   EXPECT_TRUE(Leaves) << P;
 }
 
+constexpr va_t FilterCallback = Entry + 0x80;
+
+/// An `__except` whose filter MSVC x64 compiles as a callback.
+enum class FilterShape {
+  /// `/O2`: reads the Counter whose pointer the parent homed, through its
+  /// EstablisherFrame: `__except (*Counter)`.
+  ReadsTheHomedArgument,
+  /// Tests the exception code alone.
+  TestsTheCode,
+  /// Decides one constant.
+  Constant,
+  /// `/O0`: keeps the exception pointers, the code and the decision in
+  /// temporaries of the parent's frame that nothing else touches.
+  TemporariesInTheParentsFrame,
+  /// The same, with the parent reading the decision's slot after the try.
+  ParentReadsATemporary,
+};
+
+BinaryImage makeFilterImage(FilterShape Kind) {
+  const bool Temporaries = Kind == FilterShape::TemporariesInTheParentsFrame ||
+                           Kind == FilterShape::ParentReadsATemporary;
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Img.Base = 0x140000000;
+  Img.Entry = Entry;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Entry;
+  Text.Size = 0xc0;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xcc);
+  auto &D = Text.Data;
+  const uint8_t Allocation = Temporaries ? 0x30 : 0x20;
+  // mov [rsp+0x10],rdx; push rbx; sub rsp,N; mov rbx,rdx; call foo; nop;
+  // jmp done | handler: mov dword [rbx],99 | done:
+  place(D, 0x00, {0x48,       0x89, 0x54, 0x24, 0x10, 0x53, 0x48, 0x83, 0xec,
+                  Allocation, 0x48, 0x8b, 0xda, 0xe8, 0x2e, 0,    0,    0,
+                  0x90,       0xeb, 0x06, 0xc7, 0x03, 0x63, 0,    0,    0});
+  size_t Done = 0x1b;
+  if (Kind == FilterShape::ParentReadsATemporary) {
+    // mov eax,[rsp+0x2c]; mov [rbx],eax: the decision's slot.
+    place(D, Done, {0x8b, 0x44, 0x24, 0x2c, 0x89, 0x03});
+    Done += 6;
+  }
+  // add rsp,N; pop rbx; ret
+  place(D, Done, {0x48, 0x83, 0xc4, Allocation, 0x5b, 0xc3});
+  const va_t End = Entry + Done + 6;
+  // foo: ret
+  place(D, 0x40, {0xc3});
+  size_t Length = 0;
+  bool Leaf = false;
+  switch (Kind) {
+  case FilterShape::ReadsTheHomedArgument:
+    // push rbp; sub rsp,0x20; mov rbp,rdx; mov rax,[rbp+0x38]; mov eax,[rax];
+    // add rsp,0x20; pop rbp; ret
+    place(D, 0x80,
+          {0x40, 0x55, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xea, 0x48, 0x8b,
+           0x45, 0x38, 0x8b, 0x00, 0x48, 0x83, 0xc4, 0x20, 0x5d, 0xc3});
+    Length = 0x15;
+    break;
+  case FilterShape::TestsTheCode:
+    // mov rax,[rcx]; cmp dword [rax],0xC0000005; sete al; movzx eax,al; ret
+    place(D, 0x80,
+          {0x48, 0x8b, 0x01, 0x81, 0x38, 0x05, 0, 0, 0xc0, 0x0f, 0x94, 0xc0,
+           0x0f, 0xb6, 0xc0, 0xc3});
+    Length = 0x10;
+    Leaf = true;
+    break;
+  case FilterShape::Constant:
+    // mov eax,1; ret
+    place(D, 0x80, {0xb8, 0x01, 0, 0, 0, 0xc3});
+    Length = 6;
+    Leaf = true;
+    break;
+  case FilterShape::TemporariesInTheParentsFrame:
+  case FilterShape::ParentReadsATemporary:
+    // push rbp; sub rsp,0x20; mov rbp,rdx; mov [rbp+0x20],rcx;
+    // mov rax,[rbp+0x20]; mov rax,[rax]; mov eax,[rax]; mov [rbp+0x28],eax;
+    // cmp dword [rbp+0x28],0xC0000005; jne zero; mov dword [rbp+0x2c],1;
+    // jmp out | zero: mov dword [rbp+0x2c],0 | out: mov eax,[rbp+0x2c];
+    // add rsp,0x20; pop rbp; ret
+    place(D, 0x80, {0x40, 0x55, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xea, 0x48,
+                    0x89, 0x4d, 0x20, 0x48, 0x8b, 0x45, 0x20, 0x48, 0x8b, 0x00,
+                    0x8b, 0x00, 0x89, 0x45, 0x28, 0x81, 0x7d, 0x28, 0x05, 0,
+                    0,    0xc0, 0x75, 0x09, 0xc7, 0x45, 0x2c, 0x01, 0,    0,
+                    0,    0xeb, 0x07, 0xc7, 0x45, 0x2c, 0,    0,    0,    0,
+                    0x8b, 0x45, 0x2c, 0x48, 0x83, 0xc4, 0x20, 0x5d, 0xc3});
+    Length = 0x3b;
+    break;
+  }
+  Img.Segments.push_back(std::move(Text));
+  Section Code;
+  Code.Name = ".text";
+  Code.VA = Entry;
+  Code.Size = 0xc0;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Img.Sections.push_back(std::move(Code));
+  Img.Symbols.push_back(Symbol::makeFunc(Entry, End - Entry));
+  Img.Symbols.push_back(Symbol::makeFunc(Entry + 0x40, 1));
+  Img.Symbols.push_back(Symbol::makeFunc(FilterCallback, Length));
+
+  ExceptionFunction Parent;
+  Parent.CodeRange = {Entry, End};
+  Parent.Encoding = ExceptionEncoding::X64UnwindV1;
+  Parent.UnwindVersion = 1;
+  Parent.UnwindFlags = 3;
+  Parent.PrologueSize = 0x0a;
+  Parent.Personality = ExceptionPersonality::CSpecificHandler;
+  Parent.UnwindOperations.push_back(
+      unwindOp(UnwindOperationKind::AllocateSmall, 0x0a, Allocation));
+  Parent.UnwindOperations.push_back(
+      unwindOp(UnwindOperationKind::PushNonVolatile, 6, 0, 3));
+  Parent.SEH.emplace();
+  SEHScopeRecord Except;
+  Except.GuardedRange = {Entry + 0x0d, Entry + 0x13};
+  Except.Kind = SEHScopeKind::Filter;
+  Except.FilterOrFinallyVA = FilterCallback;
+  Except.HandlerVA = Entry + 0x15;
+  Except.ContinuationVA = Entry + 0x15;
+  Parent.SEH->Scopes.push_back(Except);
+  Img.ExceptionMetadata.Functions.push_back(std::move(Parent));
+  if (!Leaf) {
+    ExceptionFunction Callback;
+    Callback.CodeRange = {FilterCallback, FilterCallback + Length};
+    Callback.Encoding = ExceptionEncoding::X64UnwindV1;
+    Callback.UnwindVersion = 1;
+    Callback.PrologueSize = 6;
+    Callback.UnwindOperations.push_back(
+        unwindOp(UnwindOperationKind::AllocateSmall, 6, 0x20));
+    Callback.UnwindOperations.push_back(
+        unwindOp(UnwindOperationKind::PushNonVolatile, 2, 0, 5));
+    Img.ExceptionMetadata.Functions.push_back(std::move(Callback));
+  }
+  Img.ExceptionMetadata.rebuildIndex();
+  return Img;
+}
+
+/// The expression of the parent's `__except`.
+std::string exceptExpression(const std::string &P) {
+  const std::string Open = "} __except (";
+  const size_t At = P.find(Open);
+  if (At == std::string::npos)
+    return {};
+  const size_t From = At + Open.size();
+  const size_t To = P.find(") {\n", From);
+  return To == std::string::npos ? std::string() : P.substr(From, To - From);
+}
+
+TEST(SEHTerminationFrame, AFilterCallbackTakesTheSameEstablisher) {
+  // The dispatcher passes a filter the frame it passes a termination handler.
+  const LowFunc Low =
+      decodeParent(makeFilterImage(FilterShape::ReadsTheHomedArgument));
+  EXPECT_EQ(terminationFrameError(Low, FilterCallback), "proved 40");
+  EXPECT_EQ(collectLowSEHTerminationFrames(Low, Arch::X64),
+            (std::map<va_t, uint64_t>{{FilterCallback, 0x28}}));
+  EXPECT_EQ(collectLowSEHHomedArguments(Low, Arch::X64),
+            (std::map<int64_t, unsigned>{{0x10, 1}}));
+}
+
+TEST(SEHFilterValue, AFilterReadingTheHomedArgumentIsItsExpression) {
+  // The callback reaches the Counter pointer the parent homed through its
+  // EstablisherFrame: the expression reads the parent's argument.
+  const std::string P = parentText(
+      decompileHighC(makeFilterImage(FilterShape::ReadsTheHomedArgument)));
+  const std::string E = exceptExpression(P);
+  ASSERT_FALSE(E.empty()) << P;
+  EXPECT_EQ(E.find("sub_"), std::string::npos) << P;
+  EXPECT_EQ(E.find("GetExceptionInformation"), std::string::npos) << P;
+  EXPECT_NE(E.find("arg1"), std::string::npos) << P;
+  EXPECT_EQ(E.find("var_"), std::string::npos) << P;
+}
+
+TEST(SEHFilterValue, AFilterTestingTheCodeSaysGetExceptionCode) {
+  const std::string P =
+      parentText(decompileHighC(makeFilterImage(FilterShape::TestsTheCode)));
+  EXPECT_EQ(exceptExpression(P), "GetExceptionCode() == 0xC0000005") << P;
+}
+
+TEST(SEHFilterValue, AConstantFilterNamesItsDisposition) {
+  const std::string P =
+      parentText(decompileHighC(makeFilterImage(FilterShape::Constant)));
+  EXPECT_EQ(exceptExpression(P), "EXCEPTION_EXECUTE_HANDLER") << P;
+}
+
+TEST(SEHFilterValue, TemporariesNothingElseTouchesGo) {
+  // The /O0 callback keeps what it computes in its parent's frame; nothing of
+  // the parent touches those words, so only the decision is left.
+  const std::string P = parentText(decompileHighC(
+      makeFilterImage(FilterShape::TemporariesInTheParentsFrame)));
+  const std::string E = exceptExpression(P);
+  ASSERT_FALSE(E.empty()) << P;
+  EXPECT_NE(E.find("GetExceptionCode()"), std::string::npos) << P;
+  EXPECT_NE(E.find("0xC0000005"), std::string::npos) << P;
+  EXPECT_NE(E.find("EXCEPTION_EXECUTE_HANDLER"), std::string::npos) << P;
+  EXPECT_NE(E.find("EXCEPTION_CONTINUE_SEARCH"), std::string::npos) << P;
+  EXPECT_EQ(E.find(" = "), std::string::npos) << P;
+  EXPECT_EQ(E.find("sub_"), std::string::npos) << P;
+}
+
+TEST(SEHFilterValue, ATemporaryTheParentReadsStays) {
+  // The parent reads the decision's slot after the try: the callback's writes
+  // to it stay in the expression, and only those.
+  const std::string P = parentText(
+      decompileHighC(makeFilterImage(FilterShape::ParentReadsATemporary)));
+  const std::string E = exceptExpression(P);
+  ASSERT_FALSE(E.empty()) << P;
+  EXPECT_NE(E.find("GetExceptionCode()"), std::string::npos) << P;
+  EXPECT_NE(E.find(" = 1"), std::string::npos) << P;
+  EXPECT_NE(E.find(" = 0"), std::string::npos) << P;
+  EXPECT_EQ(E.find("GetExceptionInformation"), std::string::npos) << P;
+  EXPECT_EQ(E.find("sub_"), std::string::npos) << P;
+}
+
 } // namespace

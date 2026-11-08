@@ -249,6 +249,15 @@ public:
   virtual std::optional<std::vector<HighStmt>>
   project(const HighFunc &Handler, const std::set<va_t> &UnwindTargets,
           const ExprPtr &Flag, FuncletNames &Names) = 0;
+
+  /// \p Filter's body as its parent's `__except` reads it: its exception
+  /// pointers replaced by \p Pointers, its view of the parent spelled in the
+  /// parent as a termination handler's is, each `return` kept with the value
+  /// it decides, and its locals moved past \p Names.  Nullopt when it could
+  /// not move.
+  virtual std::optional<std::vector<HighStmt>>
+  projectFilter(const HighFunc &Filter, const ExprPtr &Pointers,
+                FuncletNames &Names) = 0;
 };
 
 /// Each architecture's projection (X86/X64SEHFinallyBodies.cpp,

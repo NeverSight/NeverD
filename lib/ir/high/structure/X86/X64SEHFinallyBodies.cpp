@@ -101,15 +101,15 @@ std::map<int64_t, MedVar> homedParameters(const HighFunc &Func,
 
 /// The funclet body projected into the parent frame: the establisher-frame
 /// parameter rebased onto the parent's entry stack pointer, each home-slot load
-/// turned back into the parameter it holds, and the abnormal-termination
-/// parameter replaced by \p AbnormalFlag (a call to `AbnormalTermination()`, or
-/// a folded constant for the dedup check), with the funclet's names moved
-/// past \p Names.  Nullopt when they cannot move.
+/// turned back into the parameter it holds, and the first parameter replaced by
+/// \p First (a termination handler's abnormal flag: a call to
+/// `AbnormalTermination()`, or a folded constant for the dedup check; a
+/// filter's exception pointers), with the funclet's names moved past
+/// \p Names.  Nullopt when they cannot move.
 std::optional<std::vector<HighStmt>>
 projectFuncletBody(const std::vector<HighStmt> &FuncletBody,
                    const HighFunc &Parent, Arch TargetArch, uint64_t FrameBytes,
-                   const ExprPtr &AbnormalFlag,
-                   const std::map<int64_t, MedVar> &Homed,
+                   const ExprPtr &First, const std::map<int64_t, MedVar> &Homed,
                    const MedVar &EntrySP, FuncletNames &Names) {
   const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
   std::vector<HighStmt> Body = cloneStmts(FuncletBody);
@@ -117,15 +117,15 @@ projectFuncletBody(const std::vector<HighStmt> &FuncletBody,
   if (!renameFuncletLocals(Body, Names))
     return std::nullopt;
 
-  // arg0 -> abnormal flag, arg1 -> entry SP - FrameBytes.
+  // arg0 -> abnormal flag or exception pointers, arg1 -> entry SP - FrameBytes.
   mapExprs(Body, [&](ExprPtr E) -> ExprPtr {
     if (!E || E->Kind != ExprKind::Var)
       return E;
-    if (E->Var.Kind == MedVar::Param && E->Var.Id == 0 && AbnormalFlag) {
-      ExprPtr Flag = cloneExpr(AbnormalFlag);
+    if (E->Var.Kind == MedVar::Param && E->Var.Id == 0 && First) {
+      ExprPtr Value = cloneExpr(First);
       if (E->Type)
-        Flag->Type = E->Type;
-      return Flag;
+        Value->Type = E->Type;
+      return Value;
     }
     if (E->Var.Kind == MedVar::Param && E->Var.Id == 1) {
       ExprPtr Base = HighExpr::makeVar(EntrySP, NdType::makeInt(8, false));
@@ -197,8 +197,9 @@ bool namesFrame(const std::vector<HighStmt> &Stmts, const HighFunc &Parent) {
   return Used;
 }
 
-/// A finally callback takes only (flag, frame), each in its register, and reads
-/// no register of the parent: the dispatcher calls it with its own.  The frame
+/// A finally callback takes only (flag, frame) and a filter only (exception
+/// pointers, frame), each in its register, and neither reads a register of the
+/// parent: the dispatcher calls them with its own.  The frame
 /// rebases onto the parent's entry stack pointer by the bytes its prologue
 /// allocates, and a home slot it reads is the argument the parent saved there.
 class X64Projection final : public HandlerProjection {
@@ -213,16 +214,40 @@ public:
   std::optional<std::vector<HighStmt>>
   project(const HighFunc &Handler, const std::set<va_t> &UnwindTargets,
           const ExprPtr &Flag, FuncletNames &Names) override {
+    return projectBody(Handler, &UnwindTargets, Flag, Names);
+  }
+
+  std::optional<std::vector<HighStmt>>
+  projectFilter(const HighFunc &Filter, const ExprPtr &Pointers,
+                FuncletNames &Names) override {
+    return projectBody(Filter, nullptr, Pointers, Names);
+  }
+
+private:
+  HighFunc &Parent;
+  std::map<int64_t, MedVar> Homed;
+  MedVar EntrySP;
+
+  /// The callback's body spelled in the parent, its first argument replaced by
+  /// \p First.  A termination handler's (\p UnwindTargets given) makes its
+  /// local unwinds jumps and its returns the end of the clause; a filter keeps
+  /// its returns, which say what it decides.  The dispatcher passes both the
+  /// same EstablisherFrame.
+  std::optional<std::vector<HighStmt>>
+  projectBody(const HighFunc &Handler, const std::set<va_t> *UnwindTargets,
+              const ExprPtr &First, FuncletNames &Names) {
     const llvm::ArrayRef<uint64_t> Arguments =
         getTargetRegInfo(Arch::X64).integerParamRegs(BinaryFormat::COFF);
     for (size_t I = 0; I < Handler.Params.size(); ++I)
       if (I >= Arguments.size() || Handler.Params[I].RegOff != Arguments[I])
         return std::nullopt;
     std::vector<HighStmt> Body = cloneStmts(Handler.Body);
-    jumpLocalUnwinds(Body, UnwindTargets, Arch::X64);
-    if (!settleHandlerReturns(Body))
-      return std::nullopt;
-    dropUnreadValues(Body);
+    if (UnwindTargets) {
+      jumpLocalUnwinds(Body, *UnwindTargets, Arch::X64);
+      if (!settleHandlerReturns(Body))
+        return std::nullopt;
+      dropUnreadValues(Body);
+    }
     if (!localizeHandlerFrame(Body, Arch::X64))
       return std::nullopt;
     if (!funcletVariablesMovable(Body, Arch::X64, /*MaxParam=*/1,
@@ -241,7 +266,7 @@ public:
     if (FrameBytes && OwnFrameSize <= 0)
       Parent.FrameSize = static_cast<int64_t>(FrameBytes);
     std::optional<std::vector<HighStmt>> Projected = projectFuncletBody(
-        Body, Parent, Arch::X64, FrameBytes, Flag, Homed, EntrySP, Names);
+        Body, Parent, Arch::X64, FrameBytes, First, Homed, EntrySP, Names);
     // Other slots of a frame the parent holds nothing in: whatever its
     // prologue may have saved there left no statement that says what they
     // hold.
@@ -254,11 +279,6 @@ public:
       return std::nullopt;
     return Projected;
   }
-
-private:
-  HighFunc &Parent;
-  std::map<int64_t, MedVar> Homed;
-  MedVar EntrySP;
 };
 
 } // namespace

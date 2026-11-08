@@ -5,23 +5,27 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// What projecting a termination handler into its parent's `__finally` needs
-/// on every architecture, and the dispatch to each architecture's projection
-/// of the handler's view of the parent.
+/// What projecting a termination handler into its parent's `__finally`, or a
+/// filter into its parent's `__except`, needs on every architecture, and the
+/// dispatch to each architecture's projection of the callback's view of the
+/// parent.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/high/SEHFinallyBodies.h"
 
+#include "SEHFilterValues.h"
 #include "SEHFinallyBodiesDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <functional>
 #include <limits>
@@ -2136,13 +2140,214 @@ bool hoistTryOverLoop(HighStmt &S, const ExceptionFunction &EH,
 /// Fills the `__finally` clauses of one function, outermost first: a local
 /// unwind's handler calls leave the exit in the order of the clauses that take
 /// them.
+/// What statements touch of their function's frame: the bytes they read or
+/// write directly, by entry-SP displacement and width, and whether the frame's
+/// address goes anywhere a load or a store does not take it straight to, such
+/// as a variable, a call or memory, where any of it may be read or written.
+struct FrameTouches {
+  std::vector<std::pair<int64_t, uint64_t>> Bytes;
+  /// Those of \ref Bytes that are read.
+  std::vector<std::pair<int64_t, uint64_t>> Reads;
+  /// The displacements of the frame addresses that go anywhere else.
+  std::vector<int64_t> Addresses;
+  /// The frame is reached where this cannot follow.
+  bool Lost = false;
+
+  bool escapes() const { return Lost || !Addresses.empty(); }
+
+  bool overlaps(int64_t At, uint64_t Size) const {
+    return escapes() || llvm::any_of(Bytes, [&](const auto &Touched) {
+             return Touched.first < At + static_cast<int64_t>(Size) &&
+                    At < Touched.first + static_cast<int64_t>(Touched.second);
+           });
+  }
+};
+
+/// The variable a HighIR name prints as (HighCWriter::rawVarName): a renamed
+/// name is its number's, whichever register or temporary it came from, kept
+/// apart from every identity varKey gives.
+VarKey printedVar(const MedVar &V) {
+  return V.RenameTag >= 0 ? VarKey{std::numeric_limits<int>::min(), V.RenameTag}
+                          : varKey(V);
+}
+
+/// The distance of \p E from the entry stack pointer, the stack pointer's
+/// name the projections spell the parent's frame from (entryStackPointer), or
+/// from a variable \p Aliases gives a fixed distance (by printedVar): past
+/// views, by constants added or taken away.
+std::optional<int64_t> entryDistance(const HighExpr *E, uint64_t StackPointer,
+                                     const std::map<VarKey, int64_t> &Aliases) {
+  E = seh_filter::peelViews(E);
+  if (!E)
+    return std::nullopt;
+  if (E->Kind == ExprKind::Var) {
+    if (E->Var.Kind == MedVar::Reg && E->Var.RegOff == StackPointer &&
+        E->Var.SSAVer == 0 && E->Var.RenameTag < 0)
+      return 0;
+    const auto It = Aliases.find(printedVar(E->Var));
+    return It == Aliases.end() ? std::nullopt
+                               : std::optional<int64_t>(It->second);
+  }
+  if (E->Kind != ExprKind::BinOp || E->Operands.size() != 2 ||
+      (E->Op != NdOp::INT_ADD && E->Op != NdOp::INT_SUB))
+    return std::nullopt;
+  const HighExpr *Step = seh_filter::peelViews(E->Operands[1].get());
+  const HighExpr *From = E->Operands[0].get();
+  if (E->Op == NdOp::INT_ADD && (!Step || Step->Kind != ExprKind::Const)) {
+    From = E->Operands[1].get();
+    Step = seh_filter::peelViews(E->Operands[0].get());
+  }
+  if (!Step || Step->Kind != ExprKind::Const)
+    return std::nullopt;
+  const auto Base = entryDistance(From, StackPointer, Aliases);
+  if (!Base)
+    return std::nullopt;
+  const int64_t Delta = llvm::SignExtend64<32>(Step->ConstVal);
+  return E->Op == NdOp::INT_ADD ? *Base + Delta : *Base - Delta;
+}
+
+/// The variables a function gives frame addresses (`v0 = RSP - 0x38`), as the
+/// writer's frame aliases: pointer-width variables, as they print, whose every
+/// assignment is the same address of the frame, perhaps through another such
+/// variable.  The stack pointer the prologue leaves is one, whichever of its
+/// names a use reads, also where a copied tail assigns it again.  A variable
+/// assigned anything else is none, and each value it is assigned counts where
+/// it is assigned.  \p Definitions receives the aliases' assignments.
+std::map<VarKey, int64_t>
+frameAliases(const std::vector<HighStmt> &Body, Arch TargetArch,
+             std::set<const HighStmt *> &Definitions) {
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  std::map<VarKey, std::vector<const HighStmt *>> Assignments;
+  walkStmts(Body, [&](const HighStmt &S) {
+    if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var)
+      Assignments[printedVar(S.Dst->Var)].push_back(&S);
+  });
+  std::map<VarKey, int64_t> Aliases;
+  // A variable defined from another resolves once that one has.
+  for (bool Grew = true; Grew;) {
+    Grew = false;
+    for (const auto &[Key, Stmts] : Assignments) {
+      if (Aliases.count(Key))
+        continue;
+      std::optional<int64_t> Same;
+      for (const HighStmt *S : Stmts) {
+        const auto At =
+            S->Val && S->Dst->Var.Size == TRI.PointerSize
+                ? entryDistance(S->Val.get(), TRI.StackPointer, Aliases)
+                : std::nullopt;
+        if (!At || (Same && *Same != *At)) {
+          Same.reset();
+          break;
+        }
+        Same = At;
+      }
+      if (!Same)
+        continue;
+      Aliases.emplace(Key, *Same);
+      Definitions.insert(Stmts.begin(), Stmts.end());
+      Grew = true;
+    }
+  }
+  return Aliases;
+}
+
+/// What \p Stmts, their clauses' filter values included, touch of their
+/// function's frame, in the coordinates the filter folder reads it in, reading
+/// \p Aliases' names as the addresses they hold and leaving out their
+/// \p Definitions.  Any other name of the stack pointer, such as one a move
+/// renamed, reaches the frame where this cannot follow, as does running out of
+/// \p Budget, one expression node each.
+FrameTouches frameTouches(const std::vector<HighStmt> &Stmts, Arch TargetArch,
+                          const std::map<VarKey, int64_t> &Aliases,
+                          const std::set<const HighStmt *> &Definitions,
+                          size_t &Budget) {
+  FrameTouches Touches;
+  const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+  auto Width = [&](const TypeRef &Type) -> uint64_t {
+    return Type && Type->Size ? Type->Size : TRI.PointerSize;
+  };
+  auto Offset = [&](const ExprPtr &Address) {
+    return entryDistance(Address.get(), TRI.StackPointer, Aliases);
+  };
+  std::function<void(const ExprPtr &)> Visit = [&](const ExprPtr &E) {
+    if (!E)
+      return;
+    if (!Budget) {
+      Touches.Lost = true;
+      return;
+    }
+    --Budget;
+    if (E->Kind == ExprKind::Var && E->Var.Kind == MedVar::Reg &&
+        E->Var.RegOff == TRI.StackPointer && !Offset(E)) {
+      Touches.Lost = true;
+      return;
+    }
+    if (E->Kind == ExprKind::Load && !E->Operands.empty()) {
+      if (const auto At = Offset(E->Operands[0])) {
+        Touches.Bytes.emplace_back(*At, Width(E->Type));
+        Touches.Reads.emplace_back(*At, Width(E->Type));
+        return;
+      }
+    } else if (E->Kind == ExprKind::Store && E->Operands.size() == 2) {
+      // A filter value's write (seh_filter::foldFilterBody).
+      if (const auto At = Offset(E->Operands[0])) {
+        Touches.Bytes.emplace_back(*At, Width(E->Type));
+        Visit(E->Operands[1]);
+        return;
+      }
+    } else if (const auto At = Offset(E)) {
+      Touches.Addresses.push_back(*At);
+      return;
+    }
+    E->forEachChildExpr(Visit);
+  };
+  walkStmts(Stmts, [&](const HighStmt &S) {
+    if (Definitions.count(&S))
+      return;
+    if (S.Kind == StmtKind::Store && S.StoreAddr) {
+      if (const auto At = Offset(S.StoreAddr))
+        Touches.Bytes.emplace_back(
+            *At, Width(S.StoreVal ? S.StoreVal->Type : S.StoreAddr->Type));
+      else
+        Visit(S.StoreAddr);
+    }
+    forEachExpr(S, [&](const ExprPtr &E) {
+      if (&E != &S.StoreAddr)
+        Visit(E);
+    });
+    for (const HighEHClause &Clause : S.EHClauses)
+      Visit(Clause.FilterValue);
+  });
+  return Touches;
+}
+
+/// Whether a termination handler of \p Stmts still runs out of line, as a call
+/// or from the runtime alone, where what it reads of the frame is not in them.
+bool runsHandlerOutOfLine(const std::vector<HighStmt> &Stmts) {
+  bool Found = false;
+  walkStmts(Stmts, [&](const HighStmt &S) {
+    if (S.Kind != StmtKind::SEHTry)
+      return;
+    if (!S.EHIsReducible)
+      Found = true;
+    for (const HighEHClause &Clause : S.EHClauses)
+      if (Clause.Kind == HighEHClauseKind::SEHFinally &&
+          Clause.FinallyKind == HighEHClause::FinallyBody::OutOfLine)
+        Found = true;
+  });
+  return Found;
+}
+
 class ParentFill {
 public:
   ParentFill(HighFunc &Parent, const std::map<va_t, HighFunc *> &ByEntry,
-             Arch TargetArch, std::set<va_t> *Merged,
+             const std::map<va_t, HighFunc *> &Filters,
+             const std::map<va_t, const HighFunc *> &Units, Arch TargetArch,
+             std::set<va_t> *Merged,
              std::unique_ptr<HandlerProjection> Projection)
-      : Parent(Parent), ByEntry(ByEntry), TargetArch(TargetArch),
-        Merged(Merged), Projection(std::move(Projection)), Exits(Parent) {}
+      : Parent(Parent), ByEntry(ByEntry), Filters(Filters), Units(Units),
+        TargetArch(TargetArch), Merged(Merged),
+        Projection(std::move(Projection)), Exits(Parent) {}
 
   void run() {
     // The targets a handler's certified local unwinds may jump to, where the
@@ -2162,11 +2367,19 @@ public:
     if (ExitFlag)
       Parent.Body.insert(Parent.Body.begin(),
                          setExitCode(*ExitFlag, 0, Parent.Entry));
+    // Once every `__finally` holds its handler, what the parent's statements
+    // touch of its frame is all there is to know.
+    if (!Filters.empty())
+      foldFilterLists(Parent.Body);
   }
 
 private:
   HighFunc &Parent;
   const std::map<va_t, HighFunc *> &ByEntry;
+  /// The filter callbacks some function's scope table names, by entry.
+  const std::map<va_t, HighFunc *> &Filters;
+  /// The unit's functions by entry, when it has filter callbacks.
+  const std::map<va_t, const HighFunc *> &Units;
   Arch TargetArch;
   std::set<va_t> *Merged;
   std::unique_ptr<HandlerProjection> Projection;
@@ -2179,6 +2392,233 @@ private:
   /// What says which jump left a try (routeExits), and the codes it took.
   std::optional<MedVar> ExitFlag;
   uint64_t ExitCodes = 0;
+
+  void prepare() {
+    if (Prepared)
+      return;
+    Names = firstFreeNames(Parent.Body);
+    Projection->prepare(Names);
+    Prepared = true;
+  }
+
+  /// The `__except` clauses whose filter is a callback the unit holds, and
+  /// that callback's body spelled in the parent.
+  struct PendingFilter {
+    HighEHClause *Clause = nullptr;
+    std::vector<HighStmt> Body;
+  };
+
+  void collectFilters(std::vector<HighStmt> &List,
+                      std::vector<PendingFilter> &Pending) {
+    for (HighStmt &S : List) {
+      if (S.Kind == StmtKind::SEHTry && S.EHIsReducible &&
+          S.EHClauses.size() == 1 &&
+          S.EHClauses.front().Kind == HighEHClauseKind::SEHExcept &&
+          !S.EHClauses.front().FilterValue)
+        if (std::optional<std::vector<HighStmt>> Body =
+                projectFilter(S.EHClauses.front()))
+          Pending.push_back({&S.EHClauses.front(), std::move(*Body)});
+      collectFilters(S.Body, Pending);
+      collectFilters(S.ElseBody, Pending);
+      for (SwitchCase &Case : S.Cases)
+        collectFilters(Case.Body, Pending);
+      collectFilters(S.DefaultBody, Pending);
+      for (std::vector<HighStmt> &Clause : S.EHClauseBodies)
+        collectFilters(Clause, Pending);
+    }
+  }
+
+  /// \p Clause's filter callback spelled in the parent: its body, with the
+  /// exception pointers GetExceptionInformation().  Nullopt when the unit does
+  /// not hold it or it does not move.
+  std::optional<std::vector<HighStmt>> projectFilter(HighEHClause &Clause) {
+    const auto Found = Filters.find(Clause.FilterOrActionVA);
+    if (Found == Filters.end() || !Found->second || Found->second == &Parent)
+      return std::nullopt;
+    const HighFunc &Filter = *Found->second;
+    if (Filter.ExceptionMetadata &&
+        (Filter.ExceptionMetadata->Cxx || Filter.ExceptionMetadata->Itanium ||
+         Filter.ExceptionMetadata->Registration ||
+         (Filter.ExceptionMetadata->SEH &&
+          !Filter.ExceptionMetadata->SEH->Scopes.empty())))
+      return std::nullopt;
+    prepare();
+    // What a body takes of the names is gone once it folds: the expression
+    // holds the parent's own.
+    FuncletNames FilterNames = Names;
+    std::optional<std::vector<HighStmt>> Body = Projection->projectFilter(
+        Filter,
+        seh_filter::callOfRuntime(seh_filter::kExceptionInformation, nullptr),
+        FilterNames);
+    if (!Body)
+      return std::nullopt;
+    // <excpt.h> declares the exception pointers a pointer, whatever word the
+    // callback read its argument as.
+    mapExprs(*Body, [](ExprPtr E) -> ExprPtr {
+      if (seh_filter::callsNamed(E.get(), seh_filter::kExceptionInformation))
+        E->Type = NdType::makePtr();
+      return E;
+    });
+    return Body;
+  }
+
+  /// Each `__except` expression from its filter callback, folded from the
+  /// callback's body spelled in the parent, which C evaluates where the
+  /// dispatcher calls the callback.  A write to the parent's frame goes only
+  /// where nothing else can read it: no statement of the parent, no other
+  /// filter, and no handler that still runs out of line touches those bytes,
+  /// and no address of the frame leaves for anywhere else, as with the
+  /// temporaries a compiler keeps for a filter in its parent's frame.  A
+  /// callback keeps its call when one expression cannot say what it does, or
+  /// its expression would read what C cannot give it (spelledInParent).
+  void foldFilterLists(std::vector<HighStmt> &Body) {
+    std::vector<PendingFilter> Pending;
+    collectFilters(Body, Pending);
+    if (Pending.empty())
+      return;
+    const bool Framed = Parent.FrameSize > 0 || Parent.FrameHeadroom > 0;
+    const bool Knowable = Framed && !runsHandlerOutOfLine(Body);
+    size_t Budget = limits::ir::kSEHFilterFrameScanWork;
+    FrameTouches Own;
+    Own.Lost = !Framed;
+    std::vector<FrameTouches> Touches(Pending.size());
+    std::map<VarKey, int64_t> Aliases;
+    if (Framed) {
+      std::set<const HighStmt *> Definitions;
+      Aliases = frameAliases(Body, TargetArch, Definitions);
+      Own = frameTouches(Body, TargetArch, Aliases, Definitions, Budget);
+      for (size_t I = 0; I < Pending.size(); ++I)
+        Touches[I] =
+            frameTouches(Pending[I].Body, TargetArch, Aliases, {}, Budget);
+    }
+    for (size_t I = 0; I < Pending.size(); ++I) {
+      seh_filter::FilterFrame Frame;
+      Frame.TargetArch = TargetArch;
+      Frame.IsPrivate = [&](int64_t Word, const HighExpr &Written) {
+        if (!Knowable || Own.escapes() || Touches[I].escapes())
+          return false;
+        const uint64_t Size = Written.Type && Written.Type->Size
+                                  ? Written.Type->Size
+                                  : getTargetRegInfo(TargetArch).PointerSize;
+        if (Own.overlaps(Word, Size))
+          return false;
+        for (size_t J = 0; J < Pending.size(); ++J)
+          if (J != I && Touches[J].overlaps(Word, Size))
+            return false;
+        return true;
+      };
+      ExprPtr Value = seh_filter::foldFilterBody(Pending[I].Body, Frame);
+      if (!Value)
+        continue;
+      Value = dispositionOf(std::move(Value));
+      if (!spelledInParent(Value, Own, Aliases, Budget))
+        continue;
+      Pending[I].Clause->FilterValue = std::move(Value);
+      if (Merged)
+        Merged->insert(Pending[I].Clause->FilterOrActionVA);
+    }
+  }
+
+  /// Whether the writer prints \p Value as C that evaluates as the callback
+  /// did: an integer, reading no value of a call of a unit function that
+  /// returns none, and reaching the frame only as the parent's own code does
+  /// (\p Own, whose direct accesses witness each word even where the rest of
+  /// its frame is lost), each word it reads one the parent's statements read
+  /// at that width, and each address it takes one the parent takes.  A word it
+  /// only writes the writer names as it names the parent's.  A word the
+  /// parent only writes, as an argument a compiler spills for its callbacks
+  /// while the parent's code reads the register, may print as nothing the C
+  /// program writes.
+  bool spelledInParent(const ExprPtr &Value, const FrameTouches &Own,
+                       const std::map<VarKey, int64_t> &Aliases,
+                       size_t &Budget) const {
+    if (Value->Type && Value->Type->Kind != NdTypeKind::Int)
+      return false;
+    if (readsNothingReturned(Value))
+      return false;
+    HighStmt Holder;
+    Holder.Kind = StmtKind::ExprStmt;
+    Holder.Val = Value;
+    const FrameTouches Used =
+        frameTouches({Holder}, TargetArch, Aliases, {}, Budget);
+    if (Used.Lost)
+      return false;
+    for (const auto &Read : Used.Reads)
+      if (!llvm::is_contained(Own.Reads, Read))
+        return false;
+    for (const int64_t At : Used.Addresses)
+      if (!llvm::is_contained(Own.Addresses, At))
+        return false;
+    return true;
+  }
+
+  /// Whether C shows \p Func returning nothing, as the writer decides
+  /// (analyzeVoidReturn): by its source type, its own type, or the contract
+  /// MedIR settled for its callers.
+  static bool returnsNothing(const HighFunc &Func) {
+    if (Func.SourceTypeHint && Func.SourceTypeHint->ReturnType)
+      return Func.SourceTypeHint->ReturnType->Kind == NdTypeKind::Void;
+    return !Func.ReturnType || Func.ReturnType->Kind == NdTypeKind::Void ||
+           Func.ReturnsNoValue;
+  }
+
+  /// Whether \p Value reads the value of a call of a function of the unit
+  /// that returns nothing; the left side of a comma reads none.
+  bool readsNothingReturned(const ExprPtr &Value) const {
+    std::function<bool(const ExprPtr &, bool)> Reads = [&](const ExprPtr &E,
+                                                           bool Read) -> bool {
+      if (!E)
+        return false;
+      if (Read && E->Kind == ExprKind::Call && !E->IsIndirectCall &&
+          E->CallAddr)
+        if (const auto It = Units.find(E->CallAddr);
+            It != Units.end() && It->second && returnsNothing(*It->second))
+          return true;
+      if (E->Kind == ExprKind::BinOp && E->Op == NdOp::NOP &&
+          E->Operands.size() == 2)
+        return Reads(E->Operands[0], false) || Reads(E->Operands[1], Read);
+      return llvm::any_of(E->Operands, [&](const ExprPtr &Operand) {
+        return Reads(Operand, true);
+      });
+    };
+    return Reads(Value, true);
+  }
+
+  /// \p Value as the disposition the dispatcher reads, a 32-bit integer: a
+  /// view widening it to the register says nothing more.
+  static ExprPtr dispositionOf(ExprPtr Value) {
+    if (Value->Kind == ExprKind::BinOp && Value->Op == NdOp::NOP &&
+        Value->Operands.size() == 2) {
+      auto Copy = std::make_shared<HighExpr>(*Value);
+      Copy->Operands[1] = dispositionOf(Copy->Operands[1]);
+      Copy->Type = Copy->Operands[1]->Type;
+      return Copy;
+    }
+    if (Value->Kind == ExprKind::BinOp && Value->Op == NdOp::SELECT &&
+        Value->Operands.size() == 3) {
+      auto Copy = std::make_shared<HighExpr>(*Value);
+      Copy->Operands[1] = dispositionOf(Copy->Operands[1]);
+      Copy->Operands[2] = dispositionOf(Copy->Operands[2]);
+      return Copy;
+    }
+    for (unsigned Depth = 0; Depth <= limits::kMaxIntegerViewUnwrapDepth;
+         ++Depth) {
+      const bool Widens =
+          (Value->Kind == ExprKind::Cast || Value->Kind == ExprKind::BitCast ||
+           (Value->Kind == ExprKind::UnaryOp &&
+            (Value->Op == NdOp::INT_ZEXT || Value->Op == NdOp::INT_SEXT ||
+             Value->Op == NdOp::CAST))) &&
+          Value->Operands.size() == 1 && Value->Operands[0] && Value->Type &&
+          Value->Type->Kind == NdTypeKind::Int && Value->Operands[0]->Type &&
+          Value->Operands[0]->Type->Kind == NdTypeKind::Int &&
+          Value->Operands[0]->Type->Size <= sizeof(int32_t) &&
+          Value->Operands[0]->Type->Size <= Value->Type->Size;
+      if (!Widens)
+        break;
+      Value = Value->Operands[0];
+    }
+    return Value;
+  }
 
   void fillList(std::vector<HighStmt> &List,
                 const std::set<va_t> &Continuation) {
@@ -2229,11 +2669,7 @@ private:
          Handler.ExceptionMetadata->Registration)) {
       return;
     }
-    if (!Prepared) {
-      Names = firstFreeNames(Parent.Body);
-      Projection->prepare(Names);
-      Prepared = true;
-    }
+    prepare();
 
     // What runs while unwinding, with the flag set.
     FuncletNames AbnormalNames = Names;
@@ -2360,23 +2796,35 @@ void attachSEHFinallyBodies(std::vector<HighFunc> &Funcs, Arch TargetArch,
   if (TargetArch != Arch::X64 && TargetArch != Arch::ARM &&
       TargetArch != Arch::AArch64)
     return;
-  // Index just the handlers some function's scope table names, so a unit
+  // Index just the callbacks some function's scope table names, so a unit
   // without one pays nothing.
   std::map<va_t, HighFunc *> ByEntry;
-  auto OutOfLineFinally = [](const HighFunc &Func, const SEHScopeRecord &S) {
-    return S.Kind == SEHScopeKind::Finally && S.FilterOrFinallyVA &&
+  std::map<va_t, HighFunc *> Filters;
+  auto OutOfLine = [](const HighFunc &Func, const SEHScopeRecord &S) {
+    return S.FilterOrFinallyVA &&
            !Func.ExceptionMetadata->ownsCode(S.FilterOrFinallyVA);
+  };
+  auto OutOfLineFinally = [&](const HighFunc &Func, const SEHScopeRecord &S) {
+    return S.Kind == SEHScopeKind::Finally && OutOfLine(Func, S);
   };
   for (const HighFunc &Func : Funcs)
     if (Func.ExceptionMetadata && Func.ExceptionMetadata->SEH)
       for (const SEHScopeRecord &Scope : Func.ExceptionMetadata->SEH->Scopes)
         if (OutOfLineFinally(Func, Scope))
           ByEntry.emplace(Scope.FilterOrFinallyVA, nullptr);
-  if (ByEntry.empty())
+        else if (Scope.Kind == SEHScopeKind::Filter && OutOfLine(Func, Scope))
+          Filters.emplace(Scope.FilterOrFinallyVA, nullptr);
+  if (ByEntry.empty() && Filters.empty())
     return;
-  for (HighFunc &Func : Funcs)
+  std::map<va_t, const HighFunc *> Units;
+  for (HighFunc &Func : Funcs) {
     if (auto It = ByEntry.find(Func.Entry); It != ByEntry.end() && !It->second)
       It->second = &Func;
+    if (auto It = Filters.find(Func.Entry); It != Filters.end() && !It->second)
+      It->second = &Func;
+    if (!Filters.empty())
+      Units.emplace(Func.Entry, &Func);
+  }
 
   // A handler's own `__finally` clauses fill before a parent takes its body,
   // whichever order the unit holds them in.
@@ -2390,7 +2838,7 @@ void attachSEHFinallyBodies(std::vector<HighFunc> &Funcs, Arch TargetArch,
         if (const auto It = ByEntry.find(Scope.FilterOrFinallyVA);
             It != ByEntry.end() && It->second)
           Fill(*It->second);
-    ParentFill(Func, ByEntry, TargetArch, Merged,
+    ParentFill(Func, ByEntry, Filters, Units, TargetArch, Merged,
                TargetArch == Arch::X64 ? makeX64Projection(Func)
                                        : makeARMProjection(Func, TargetArch))
         .run();

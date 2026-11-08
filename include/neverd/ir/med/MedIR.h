@@ -790,22 +790,23 @@ struct MedFunc {
   /// Source analysis retained unknown machine entries instead of asserting a
   /// common SEH invocation frame. This function cannot be lowered to LLVM.
   bool HasUnresolvedSEHFrame = false;
-  /// Windows x64 termination handlers (out-of-line `__finally` callbacks) of
-  /// this function by entry: how far below the entry SP the EstablisherFrame
-  /// they receive lies (proveLowSEHTerminationFrame). A handler whose frame
-  /// LowIR did not certify is absent.
+  /// Windows x64 termination handlers (out-of-line `__finally` callbacks) and
+  /// filter callbacks of this function by entry: how far below the entry SP
+  /// the EstablisherFrame they receive lies (proveLowSEHTerminationFrame). A
+  /// callback whose frame LowIR did not certify is absent.
   std::map<va_t, uint64_t> SEHTerminationFrameBytes;
   /// Windows x64: where this function's prologue saves its argument registers
-  /// for its termination handlers, which read them back through their
-  /// EstablisherFrame though nothing in the function does: entry-SP
-  /// displacement to argument position.  The function writes no other value
-  /// there (collectLowSEHHomedArguments).
+  /// for its termination handlers and filter callbacks, which read them back
+  /// through their EstablisherFrame though nothing in the function does:
+  /// entry-SP displacement to argument position.  The function writes no other
+  /// value there (collectLowSEHHomedArguments).
   std::map<int64_t, unsigned> SEHHomedArguments;
-  /// ARM and AArch64 termination handlers read the parent's callee-saved
-  /// registers, which the unwinder restores to their values where the
-  /// exception struck. By handler entry and register offset: a full-width
-  /// callee-saved register's value throughout every protected range the
-  /// handler ends, where no protected operation writes it and the ranges agree
+  /// ARM and AArch64 termination handlers and filter callbacks read the
+  /// parent's callee-saved registers, which the unwinder, or for a filter the
+  /// C-specific handler, restores to their values where the exception struck.
+  /// By callback entry and register offset: a full-width callee-saved
+  /// register's value throughout every protected range the callback ends or
+  /// filters, where no protected operation writes it and the ranges agree
   /// (buildSsa). A register absent here has no such value.
   std::map<va_t, std::map<uint64_t, SEHFuncletRegisterValue>>
       SEHFuncletRegisters;

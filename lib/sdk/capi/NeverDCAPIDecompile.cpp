@@ -879,15 +879,18 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
   };
   std::set<va_t> Included = {HF->Entry};
   std::vector<const HighFunc *> Needed = {HF};
-  // Termination handlers are out-of-line funclets gathered only so their
-  // bodies can fill a `__finally`; unlike C++ catch funclets they are not
-  // themselves printed in this view, so keep them out of the requested set.
+  // Termination handlers and filter callbacks are out-of-line funclets
+  // gathered only so their bodies can fill a `__finally` or an `__except`
+  // expression; unlike C++ catch funclets they are not themselves printed in
+  // this view, so keep them out of the requested set.
   std::set<va_t> SEHFuncletSources;
   for (size_t I = 0; I < Needed.size(); ++I)
     walkStmts(Needed[I]->Body, [&](const HighStmt &Stmt) {
       if (Stmt.Kind == StmtKind::SEHTry) {
         for (const auto &Clause : Stmt.EHClauses)
-          if (Clause.Kind == HighEHClauseKind::SEHFinally &&
+          if ((Clause.Kind == HighEHClauseKind::SEHFinally ||
+               (Clause.Kind == HighEHClauseKind::SEHExcept &&
+                Clause.FilterOrActionVA && !Clause.FilterValue)) &&
               Clause.FilterOrActionVA != FuncEntry)
             if (const HighFunc *Handler = handlerAt(Clause.FilterOrActionVA);
                 Handler && Included.insert(Clause.FilterOrActionVA).second) {
@@ -926,7 +929,7 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
   std::vector<HighFunc> Single = {*Attached};
   if (PlainC) {
     // The plain-C view keeps every related function (e.g. C++ catch funclets)
-    // except termination handlers gathered only to fill a `__finally`.
+    // except termination handlers and filters gathered only to fill a clause.
     Single.clear();
     for (HighFunc &Func : Related)
       if (!SEHFuncletSources.count(Func.Entry))
