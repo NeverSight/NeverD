@@ -311,7 +311,8 @@ RegisterValue ProvenValueSet::singleton() const {
   return Values.size() == 1 ? Values.front() : RegisterValue{};
 }
 
-void ProvenValueSet::join(const ProvenValueSet &Other) {
+void ProvenValueSet::join(const ProvenValueSet &Other,
+                          const SymbolicAddressSpace *Addresses) {
   if (unknown() || Other.unknown()) {
     Values.clear();
     return;
@@ -319,33 +320,64 @@ void ProvenValueSet::join(const ProvenValueSet &Other) {
   llvm::SmallVector<RegisterValue, 2 * kCallXContextValueAlternatives> Joined(
       Values.begin(), Values.end());
   Joined.append(Other.Values.begin(), Other.Values.end());
-  // A numeric literal already covered by a numeric range adds no alternative.
-  // Remove it before enforcing the disjunction limit or capturing a returned
-  // address: otherwise one runtime pointer acquires redundant alias carriers.
-  // Coordinate-tagged pointers and captures keep their distinct provenance.
-  const auto CoveredLiteral = [&](const RegisterValue &Value) {
-    return Value.ValueKind == RegisterValue::Kind::Constant &&
-           std::any_of(Joined.begin(), Joined.end(), [&](const auto &Range) {
-             if (Range.ValueKind != RegisterValue::Kind::UnsignedRange)
-               return false;
-             const auto Bounds = *unsignedValueRange(Range);
-             return Bounds.Lower <= Bounds.Upper
-                        ? Bounds.Lower <= Value.Value &&
-                              Value.Value <= Bounds.Upper
-                        : Bounds.Lower <= Value.Value ||
-                              Value.Value <= Bounds.Upper;
-           });
+  // A literal or bounded capture covered by a numeric range adds no
+  // alternative. Remove it before enforcing the disjunction limit or capturing
+  // a returned address: otherwise one runtime pointer acquires redundant alias
+  // carriers. Frame coordinates cannot be covered by numeric intervals. Once a
+  // capture has widened, rejoining a covered identity must not oscillate the
+  // state.
+  const auto CoveredNumericValue = [&](const RegisterValue &Value) {
+    if (Value.ValueKind != RegisterValue::Kind::Constant &&
+        Value.ValueKind != RegisterValue::Kind::SymbolicAddress)
+      return false;
+    const auto Candidate = unsignedValueRange(Value, Addresses);
+    if (!Candidate)
+      return false;
+    return std::any_of(Joined.begin(), Joined.end(), [&](const auto &Range) {
+      if (Range.ValueKind != RegisterValue::Kind::UnsignedRange)
+        return false;
+      const auto Bounds = *unsignedValueRange(Range);
+      return Bounds.Lower <= Bounds.Upper
+                 ? Bounds.Lower <= Candidate->Lower &&
+                       Candidate->Upper <= Bounds.Upper
+                 : Bounds.Lower <= Candidate->Lower ||
+                       Candidate->Upper <= Bounds.Upper;
+    });
   };
-  Values.clear();
-  for (const auto &Value : Joined)
-    if (!CoveredLiteral(Value) &&
-        std::find(Values.begin(), Values.end(), Value) == Values.end()) {
-      if (Values.size() == kCallXContextValueAlternatives) {
+  const auto RetainAlternatives = [&] {
+    Values.clear();
+    for (const auto &Value : Joined)
+      if (!CoveredNumericValue(Value) &&
+          std::find(Values.begin(), Values.end(), Value) == Values.end()) {
+        if (Values.size() == kCallXContextValueAlternatives)
+          return false;
+        Values.push_back(Value);
+      }
+    return true;
+  };
+  if (!RetainAlternatives()) {
+    if (!Addresses) {
+      Values.clear();
+      return;
+    }
+    // More captured identities can still describe the same bounded numeric
+    // alternatives. Widen only after the exact disjunction overflows; never
+    // turn frame coordinates into numbers or infer separation from capture IDs.
+    for (auto &Value : Joined) {
+      if (Value.ValueKind != RegisterValue::Kind::SymbolicAddress)
+        continue;
+      const auto Range = unsignedValueRange(Value, Addresses);
+      if (!Range || (Value = unsignedRangeValue(*Range)).ValueKind ==
+                        RegisterValue::Kind::Unknown) {
         Values.clear();
         return;
       }
-      Values.push_back(Value);
     }
+    if (!RetainAlternatives()) {
+      Values.clear();
+      return;
+    }
+  }
   std::sort(Values.begin(), Values.end(), [](const auto &L, const auto &R) {
     if (L.ValueKind != R.ValueKind)
       return L.ValueKind < R.ValueKind;
@@ -692,7 +724,8 @@ void StoredRegisterMemory::joinValues(const StoredRegisterMemory &Other) {
                                : std::nullopt);
   for (auto It = Values.begin(); It != Values.end();) {
     It->second.join(
-        Other.readValues(cellAddress(It->first), std::get<2>(It->first)));
+        Other.readValues(cellAddress(It->first), std::get<2>(It->first)),
+        symbolicAddresses().get());
     if (It->second.unknown())
       It = Values.erase(It);
     else
