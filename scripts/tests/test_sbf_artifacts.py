@@ -110,13 +110,15 @@ with ArtifactWorkspace(root) as store:
         return process
 
     def test_termination_cleans_and_keeps_diagnostic(self):
-        process = self.producer()
-        process.send_signal(signal.SIGTERM)
-        process.wait(timeout=5)
-        self.assertFalse((self.root / "partial").exists())
-        summary = json.loads((self.root / ".sbf-artifacts/summaries/interrupted.json").read_text())
-        self.assertIn("KeyboardInterrupt", summary["disposition"])
-        self.assertEqual(list(summary["diagnostic_tails"].values()), ["before interruption"])
+        for interruption in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal=interruption):
+                process = self.producer()
+                process.send_signal(interruption)
+                self.assertNotEqual(process.wait(timeout=5), 0)
+                self.assertFalse((self.root / "partial").exists())
+                summary = json.loads((self.root / ".sbf-artifacts/summaries/interrupted.json").read_text())
+                self.assertIn("KeyboardInterrupt", summary["disposition"])
+                self.assertEqual(list(summary["diagnostic_tails"].values()), ["before interruption"])
 
     def test_sigkill_is_recovered_at_next_start_not_by_finally(self):
         process = self.producer()
