@@ -125,17 +125,8 @@ void applyStore(const MedInstruction &Instruction, MachineState &State,
   if (!Address) {
     // A range can constrain invalidation, but it cannot name the value that
     // a later load dereferences. Unknown writes still invalidate everything.
-    RegisterState Shifted{};
-    Shifted[0] = Base;
-    MedInstruction Add;
-    Add.Op = Operation::Add;
-    Add.Form = OperandForm::DstImm;
-    Add.Width = kDoubleWordBitWidth;
-    Add.Immediate = static_cast<uint64_t>(Instruction.Offset);
-    Add.Semantics.Immediate = ImmediateExtension::Full64;
-    Add.Semantics.WritesDestination = true;
-    applyRegisterTransfer(Add, Shifted, {});
-    State.Scratch.Values.invalidate(Shifted[0], ByteWidth);
+    State.Scratch.Values.invalidate(
+        offsetMemoryAccess(Base, Instruction.Offset), ByteWidth);
     State.Scratch.Memory.clear();
     return;
   }
@@ -344,6 +335,21 @@ void applyCall(const MedInstruction &Instruction, MachineState &State,
 //===----------------------------------------------------------------------===//
 // Transfer
 //===----------------------------------------------------------------------===//
+RegisterValue offsetMemoryAccess(RegisterValue Base, int64_t Displacement) {
+  if (Base.ValueKind == RegisterValue::Kind::UnsignedRange) {
+    const auto Range = *addressValueRange(Base);
+    const auto Delta = static_cast<uint64_t>(Displacement);
+    return unsignedRangeValue({Range.Lower + Delta, Range.Upper + Delta});
+  }
+  MedInstruction Add;
+  Add.Op = Operation::Add;
+  Add.Width = kDoubleWordBitWidth;
+  Add.Immediate = static_cast<uint64_t>(Displacement);
+  Add.Semantics.Immediate = ImmediateExtension::Full64;
+  applyAddSubImmediate(Add, Base);
+  return Base;
+}
+
 MedInstructionIndex::MedInstructionIndex(const MedIR &IR) {
   size_t Slots = 0;
   for (const MedInstruction &Instruction : IR.Instructions)

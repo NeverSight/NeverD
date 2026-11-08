@@ -47,6 +47,15 @@ bool admitsPostconditionValue(const RegisterValue &Address, uint64_t Size) {
           isScratchRange(Address.Value, Size));
 }
 
+RegisterValue substituteMemoryAddress(const RegisterValue &Origin,
+                                      const RegisterState &Entry,
+                                      const SBFProgram &Program) {
+  if (Origin.ValueKind == RegisterValue::Kind::StackAddress &&
+      Entry[Origin.Value - 1].ValueKind == RegisterValue::Kind::UnsignedRange)
+    return offsetMemoryAccess(Entry[Origin.Value - 1], Origin.Offset);
+  return substituteOrigin(Origin, Entry, Program);
+}
+
 } // namespace
 
 RegisterState symbolicInputs() {
@@ -216,7 +225,7 @@ void MemoryEffects::include(const MemoryEffects &Callee,
   }
   WritesFrames |= Callee.WritesFrames;
   for (const auto &Write : Callee.Writes)
-    addWrite(substituteOrigin(Write.Address, Entry, Program), Write.Size,
+    addWrite(substituteMemoryAddress(Write.Address, Entry, Program), Write.Size,
              Program, Addresses);
 }
 
@@ -263,7 +272,8 @@ bool MemoryEffects::invalidate(
       auto Registers = Actual;
       if (Write.Address.ValueKind == RegisterValue::Kind::StackAddress)
         Registers[Write.Address.Value - 1] = Value;
-      const auto Address = substituteOrigin(Write.Address, Registers, Program);
+      const auto Address =
+          substituteMemoryAddress(Write.Address, Registers, Program);
       const auto Number = effectiveAddress(Address, 0);
       if (Address.ValueKind == RegisterValue::Kind::UnsignedRange ||
           Address.ValueKind == RegisterValue::Kind::SymbolicAddress) {
@@ -499,7 +509,8 @@ void MemoryPostconditions::invalidate(const MemoryEffects &Effects,
     return;
   }
   for (const auto &Write : Effects.Writes)
-    invalidate(substituteOrigin(Write.Address, Entry, Program), Write.Size);
+    invalidate(substituteMemoryAddress(Write.Address, Entry, Program),
+               Write.Size);
 }
 
 void MemoryPostconditions::include(
