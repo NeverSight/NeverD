@@ -37,6 +37,7 @@
 #include "neverd/DataAccessWidths.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthLoadC.h"
@@ -65,6 +66,7 @@
 #include "neverd/libc/LibCRecordArguments.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/DataSymbolBinding.h"
+#include "neverd/loader/ELF/MIPSCodeMode.h"
 #include "neverd/loader/StringLiteralSymbols.h"
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -80,6 +82,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 
 namespace neverd {
@@ -2047,7 +2050,7 @@ std::string HighCWriter::importDataSlotIdentifier(va_t Addr) const {
 
 std::optional<va_t> HighCWriter::importDataSlotRead(const HighExpr &Address,
                                                     uint16_t Size) const {
-  if (!Opts.Image || Size == 0 || Size != Opts.Image->getPointerSize())
+  if (!Opts.Image || Size == 0)
     return std::nullopt;
   std::optional<va_t> Slot = constAddress(Address);
   if (!Slot) {
@@ -2059,9 +2062,26 @@ std::optional<va_t> HighCWriter::importDataSlotRead(const HighExpr &Address,
       if (const auto Holder = constAddress(*Pointer->Operands[0]))
         Slot = foldReadonlyScalar(*Holder, Size);
   }
-  if (!Slot || importDataSlotIdentifier(*Slot).empty())
+  if (Slot)
+    requireBoundImportMemory(*Slot, Size);
+  if (Size != Opts.Image->getPointerSize() || !Slot ||
+      importDataSlotIdentifier(*Slot).empty())
     return std::nullopt;
   return Slot;
+}
+
+void HighCWriter::requireBoundImportMemory(va_t Address, uint64_t Size) const {
+  if (!Size || (Opts.Image->Mode != InstructionMode::MixedMIPS &&
+                Opts.Image->Mode != InstructionMode::MicroMIPS))
+    return;
+  // ELF imports have no C slot-name prefix. Reading even one byte of the
+  // runtime slot can observe its encoding tag, absent from the file bytes.
+  const auto &Slots = Opts.Image->ImportStorageSlots;
+  const auto Next = Slots.lower_bound(Address);
+  if ((Next != Slots.end() && Next->first - Address < Size) ||
+      (Next != Slots.begin() &&
+       Address - std::prev(Next)->first < Opts.Image->getPointerSize()))
+    mips::requireNumericCodePointerSource(Opts.Image, InvalidVA);
 }
 
 const Symbol *HighCWriter::imageSymbolAt(va_t Addr) const {
@@ -3149,14 +3169,27 @@ const HighExpr *HighCWriter::functionAddressArgument(const HighExpr &Arg) {
       return nullptr;
     Cur = Forward->second;
   }
-  return Cur && Cur->Kind == ExprKind::Const &&
-                 isAddressProvenance(Cur->ConstProvenance) &&
-                 FunctionAddressNames.count(functionAddressKey(*Cur))
-             ? Cur
-             : nullptr;
+  if (Cur && Cur->Kind == ExprKind::Const &&
+      isAddressProvenance(Cur->ConstProvenance))
+    if (const auto Key = functionAddressKey(*Cur);
+        Key && FunctionAddressNames.count(*Key))
+      return Cur;
+  return nullptr;
 }
 
-va_t HighCWriter::functionAddressKey(const HighExpr &Const) const {
+std::optional<va_t>
+HighCWriter::functionAddressKey(const HighExpr &Const) const {
+  if (Opts.Image && (Opts.Image->Mode == InstructionMode::MixedMIPS ||
+                     Opts.Image->Mode == InstructionMode::MicroMIPS)) {
+    if (Const.ConstProvenance == ConstantAddressProvenance::DataAddress)
+      return std::nullopt;
+    const auto Entry = mips::serializedCodeTarget(*Opts.Image, Const.ConstVal);
+    if (!Entry &&
+        Const.ConstProvenance == ConstantAddressProvenance::CodeAddress)
+      throw std::invalid_argument(
+          "MIPS copied callable has an invalid mode tag");
+    return Entry;
+  }
   return Const.ConstProvenance == ConstantAddressProvenance::CodeAddress &&
                  Opts.Image
              ? normalizeCodeAddress(Const.ConstVal, Opts.Image->Arch,
@@ -4516,7 +4549,7 @@ HighCWriter::exprStrAsTypedArg(const HighExpr &E, const TypeRef &Expected,
   if (FunctionPointer(Expected))
     if (const HighExpr *Address = functionAddressArgument(E)) {
       const auto &Target =
-          FunctionAddressNames.at(functionAddressKey(*Address));
+          FunctionAddressNames.at(*functionAddressKey(*Address));
       if (!Target.Definition && FunctionAddressAliases.count(Target.Symbol))
         return "(" + Parameter() + ")" + castOperand(Text);
     }
@@ -7282,9 +7315,11 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     }
     // A function's address prints as the function, whose designator C
     // converts to its address; it keeps the integer type the machine moves.
-    if (isAddressProvenance(E.ConstProvenance))
-      if (const auto Function =
-              FunctionAddressNames.find(functionAddressKey(E));
+    if (const auto Key = isAddressProvenance(E.ConstProvenance)
+                             ? functionAddressKey(E)
+                             : std::nullopt;
+        Key)
+      if (const auto Function = FunctionAddressNames.find(*Key);
           Function != FunctionAddressNames.end()) {
         const std::string Identifier =
             functionAddressIdentifier(Function->second);

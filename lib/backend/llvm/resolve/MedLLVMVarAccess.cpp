@@ -21,10 +21,12 @@
 #include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/X86/X86RepAddresses.h"
 #include "neverd/ir/med/X86/X87ControlWord.h"
+#include "neverd/loader/ELF/MIPSCodeMode.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -1050,9 +1052,20 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
         return rawConstant();
 
       if (isCodeAddressProvenance(V.Provenance)) {
-        if (llvm::Constant *Code = resolveLiftedCodeAddress(V.ConstVal))
+        va_t Address = V.ConstVal;
+        if (Img && (Img->Mode == InstructionMode::MixedMIPS ||
+                    Img->Mode == InstructionMode::MicroMIPS)) {
+          const auto Entry = mips::serializedCodeTarget(*Img, Address);
+          if (!Entry)
+            throw std::invalid_argument(
+                "MIPS copied callable has an invalid mode tag");
+          Address = *Entry;
+        }
+        if (llvm::Constant *Code = resolveLiftedCodeAddress(Address)) {
+          mips::requireNumericCodePointerSource(Img, Address);
           return Builder.CreatePtrToInt(Code, sizeToType(V.Size),
                                         "codeptr.prov");
+        }
         // An exact import veneer stands for its import, as in the pointer
         // mirror: a destructor `push offset` names one for an iterator.
         if (const Import *Imported =
@@ -1154,8 +1167,10 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
         (V.Size == 0 || PtrSz == 0 || V.Size >= PtrSz) &&
         (V.ConstVal >= kMinGlobalDataAddr ||
          Img->CodeRefTargets.count(V.ConstVal))) {
-      if (llvm::Function *F = resolveLiftedFunctionEntry(V.ConstVal))
+      if (llvm::Function *F = resolveLiftedFunctionEntry(V.ConstVal)) {
+        mips::requireNumericCodePointerSource(Img, V.ConstVal);
         return Builder.CreatePtrToInt(F, sizeToType(V.Size), "fnptr");
+      }
     }
     // A constant the loader proved is a taken address `&G` inside a WRITABLE
     // .data/.bss segment is symbolized to the same whole-segment writable run

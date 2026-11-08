@@ -53,7 +53,8 @@ std::optional<mips::MergeLoad> mergeLoad(const MedOp &Op) {
 const LowOp *physicalMerge(const LowBlock &Block,
                            const LowInstructionBoundary &Boundary) {
   if (Boundary.Control != LowInstructionControl::None || Boundary.DelaySlot ||
-      Boundary.Mode != InstructionMode::Default)
+      (Boundary.Mode != InstructionMode::Default &&
+       Boundary.Mode != InstructionMode::MIPSClassic))
     return nullptr;
   const LowOp *Found = nullptr;
   for (uint64_t I = Boundary.FirstOp; I < Boundary.FirstOp + Boundary.OpCount;

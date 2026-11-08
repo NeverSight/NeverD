@@ -1,0 +1,32 @@
+//===- MicroMIPSMemoryFixtures.def - Literal memory encodings ------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// MICRO_MEMORY(Name, First, Second, Size, Base, Register, Offset, Width,
+///              Store, Signed) contains independent assembler fixtures.
+//===----------------------------------------------------------------------===//
+
+MICRO_MEMORY(lbu16_negative, 0x094f, 0, 2, 4, 2, -1, 1, false, false)
+MICRO_MEMORY(lhu16, 0x2941, 0, 2, 4, 2, 2, 2, false, false)
+MICRO_MEMORY(lw16, 0x6941, 0, 2, 4, 2, 4, 4, false, false)
+MICRO_MEMORY(sb16, 0x8ac1, 0, 2, 4, 5, 1, 1, true, false)
+MICRO_MEMORY(sh16_zero, 0xa841, 0, 2, 4, 0, 2, 2, true, false)
+MICRO_MEMORY(sw16_s1, 0xe8c1, 0, 2, 4, 17, 4, 4, true, false)
+MICRO_MEMORY(lwsp16, 0x4843, 0, 2, 29, 2, 12, 4, false, false)
+MICRO_MEMORY(swsp16, 0xc843, 0, 2, 29, 2, 12, 4, true, false)
+MICRO_MEMORY(lwgp16_negative, 0x657f, 0, 2, 28, 2, -4, 4, false, false)
+MICRO_MEMORY(lb32, 0x1c44, 0x0001, 4, 4, 2, 1, 1, false, true)
+MICRO_MEMORY(lbu32, 0x1444, 0x0001, 4, 4, 2, 1, 1, false, false)
+MICRO_MEMORY(lh32, 0x3c44, 0x0002, 4, 4, 2, 2, 2, false, true)
+MICRO_MEMORY(lhu32, 0x3444, 0x0002, 4, 4, 2, 2, 2, false, false)
+MICRO_MEMORY(lw32, 0xfc44, 0x0004, 4, 4, 2, 4, 4, false, false)
+MICRO_MEMORY(sb32, 0x1844, 0x0001, 4, 4, 2, 1, 1, true, false)
+MICRO_MEMORY(sh32, 0x3844, 0x0002, 4, 4, 2, 2, 2, true, false)
+MICRO_MEMORY(sw32, 0xf844, 0x0004, 4, 4, 2, 4, 4, true, false)
+MICRO_MEMORY(lw32_base_is_destination, 0xfc42, 0x0004, 4, 2, 2, 4, 4, false,
+             false)
+MICRO_MEMORY(lbu32_zero, 0x1404, 0x0001, 4, 4, 0, 1, 1, false, false)
+
+#undef MICRO_MEMORY

@@ -171,6 +171,8 @@ llvm::Error collectSymbols(const llvm::object::ELFFile<ELFT> &ELF,
       va_t Value = Img.Arch == Arch::ARM && IsFunction
                        ? clearThumbBit(Sym.st_value)
                        : static_cast<va_t>(Sym.st_value);
+      if (isMIPS(Img.Arch) && IsFunction)
+        Value = normalizeCodeAddress(Value, Img.Arch, Img.Mode);
       if (IsRelocatable && Sym.st_shndx < SHN_LORESERVE &&
           Sym.st_shndx < SecBase.size()) {
         if (Value > InvalidVA - SecBase[Sym.st_shndx])

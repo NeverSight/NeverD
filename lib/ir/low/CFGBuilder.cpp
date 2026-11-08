@@ -28,11 +28,13 @@
 #include "neverd/ir/low/AArch64ImmediateMemoryImage.h"
 #include "neverd/ir/low/GuardedZeroSelect.h"
 #include "neverd/ir/low/ImportedMemoryCopy.h"
+#include "neverd/ir/low/MIPS/MIPSControlTarget.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/COFF/COFFSEH4Entry.h"
+#include "neverd/loader/ELF/MIPSCodeMode.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -2607,6 +2609,10 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       return InstructionMode::ARM;
     case LowInstructionTargetMode::Thumb:
       return InstructionMode::Thumb;
+    case LowInstructionTargetMode::MIPSClassic:
+      return InstructionMode::MIPSClassic;
+    case LowInstructionTargetMode::MicroMIPS:
+      return InstructionMode::MicroMIPS;
     case LowInstructionTargetMode::Preserve:
       return Source.Mode;
     case LowInstructionTargetMode::FromTargetBit0:
@@ -2623,7 +2629,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
 
     while (true) {
       if (ExploredAddrs.count(Cur)) {
-        if (Img.Arch == Arch::ARM) {
+        if (Img.Arch == Arch::ARM || Img.Mode == InstructionMode::MixedMIPS) {
           const auto Existing = Insns.find(Cur);
           if (Existing != Insns.end() &&
               Img.instructionModeAt(Cur, PathMode) != Existing->second.Mode)
@@ -2693,9 +2699,10 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         DecodeFailureAddresses.insert(Cur);
         break;
       }
-      if (Img.Arch == Arch::ARM &&
-          Img.instructionModeAt(Cur + Sz - 1, Dec.currentMode()) !=
-              Dec.currentMode()) {
+      if (!mips::codeModeRangeMatches(Img, Cur, Sz, Dec.currentMode()) ||
+          (Img.Arch == Arch::ARM &&
+           Img.instructionModeAt(Cur + Sz - 1, Dec.currentMode()) !=
+               Dec.currentMode())) {
         DecodeFailureAddresses.insert(Cur);
         break;
       }
@@ -2703,7 +2710,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       DecodedInstructionAddresses.insert(Cur);
       if (Unit.HasDelaySlot) {
         ++DecodedInstructionCount;
-        DecodedInstructionAddresses.insert(Cur + 4);
+        DecodedInstructionAddresses.insert(Unit.Slot.Addr);
       }
 
       const va_t InsnSize = static_cast<va_t>(Sz);
@@ -2777,7 +2784,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       LiftedInstructionAddresses.insert(Cur);
       if (Unit.HasDelaySlot) {
         ++LiftedInstructionCount;
-        LiftedInstructionAddresses.insert(Cur + 4);
+        LiftedInstructionAddresses.insert(Unit.Slot.Addr);
       }
       Rec.FpuTopOut = Dec.getX86FpuTop();
       Rec.FpuReset = Dec.x86FpuDidReset();
@@ -2856,6 +2863,19 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
           registration_state::restoreAdjacentSEHFinallyCall(Img, *EH, Rec.Addr,
                                                             Rec.Size, Rec.Ops);
       rewriteI386PLTJump(Img, Rec);
+      bool InvalidCallMode = false;
+      if (Img.Mode == InstructionMode::MixedMIPS ||
+          Img.Mode == InstructionMode::MicroMIPS)
+        for (const auto &Op : Rec.Ops)
+          if (Op.Opcode == NdOp::CALL && Op.NumInputs &&
+              Op.Inputs[0].isConst() &&
+              !qualifiedMIPSControlTarget(Img, Rec.Mode, Rec.TargetMode,
+                                          Op.Inputs[0].Offset))
+            InvalidCallMode = true;
+      if (InvalidCallMode) {
+        DecodeFailureAddresses.insert(Cur);
+        break;
+      }
       classifyInsn(Rec);
       if (Rec.IsCall && !Rec.IsIndirect && Rec.Immediate)
         rewriteGetPcThunkCall(Img, Rec, Next);

@@ -648,6 +648,9 @@ inline constexpr int
 
 // lib/ir/low/SourceFrameAnalysis.cpp
 inline constexpr size_t kSourceFrameAnalysisRemaining = 262144;
+/// Bound the native stack of MIPS return-identity tracing; longer or cyclic
+/// transports remain unqualified, never approximated.
+inline constexpr size_t kMIPSReturnIdentityDepth = 256;
 inline constexpr size_t kSourceFrameStorageObservationPointers = 8;
 inline constexpr size_t kSourceFrameTextBytes = 1024;
 inline constexpr size_t kSourceFrameTextObservations = 32;

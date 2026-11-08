@@ -81,6 +81,12 @@ void Decoder::reset() {
 // The parallel phases each build a per-thread Decoder, so a failure here can be
 // reported from several worker threads at once — hence the serialized writes.
 bool Decoder::init(Arch TheArch, InstructionMode Mode) {
+  if ((Mode == InstructionMode::MIPSClassic ||
+       Mode == InstructionMode::MicroMIPS) &&
+      !isMIPS(TheArch)) {
+    syncError() << "MIPS instruction mode requires a MIPS target\n";
+    return false;
+  }
   if (!isSingleInstructionMode(Mode)) {
     syncError() << (Mode == InstructionMode::MixedARMThumb
                         ? "mixed ARM/Thumb decoding unsupported\n"
@@ -118,16 +124,20 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
   case Arch::MIPS32EL:
   case Arch::MIPS64:
   case Arch::MIPS64EL:
-    if (Mode != InstructionMode::Default) {
-      syncError() << "MIPS requires the classic instruction mode\n";
+    if ((Mode != InstructionMode::Default &&
+         Mode != InstructionMode::MIPSClassic &&
+         Mode != InstructionMode::MicroMIPS) ||
+        (isMIPS64(TheArch) && Mode != InstructionMode::Default)) {
+      syncError() << "unsupported MIPS instruction mode\n";
       return false;
     }
     CsArch = CS_ARCH_MIPS;
     CsMode = static_cast<cs_mode>(
         (isMIPS64(TheArch) ? CS_MODE_MIPS64R2 : CS_MODE_MIPS32R2) |
+        (Mode == InstructionMode::MicroMIPS ? CS_MODE_MICRO : 0) |
         (archLittleEndian(TheArch) ? CS_MODE_LITTLE_ENDIAN
                                    : CS_MODE_BIG_ENDIAN));
-    NewMIPS = std::make_unique<MIPSLifter>(TheArch);
+    NewMIPS = std::make_unique<MIPSLifter>(TheArch, Mode);
     break;
   default:
     syncError() << "unsupported arch for decoder\n";
@@ -180,6 +190,16 @@ void Decoder::configureFor(const BinaryImage &Img) {
 }
 
 bool Decoder::init(const BinaryImage &Img) {
+  if (Img.Mode == InstructionMode::MixedMIPS) {
+    if (!isMIPS(Img.Arch) || !Img.MIPS || !Img.MIPS->HasMicroMIPS)
+      return false;
+    if (Img.instructionModeAt(Img.Entry))
+      return selectMode(Img, Img.Entry);
+    for (const auto &[Address, Mode] : Img.MIPS->CodeModeEntries)
+      if (Img.instructionModeAt(Address) == Mode)
+        return selectMode(Img, Address);
+    return false;
+  }
   if (Img.Mode != InstructionMode::MixedARMThumb) {
     if (!init(Img.Arch, Img.Mode))
       return false;
@@ -196,6 +216,10 @@ bool Decoder::selectMode(const BinaryImage &Img, va_t Addr,
     return false;
   if (Img.Arch == Arch::ARM &&
       !decoder_detail::isARMInstructionAligned(Addr, *Mode))
+    return false;
+  if (isMIPS(Img.Arch) &&
+      (Addr % (*Mode == InstructionMode::MicroMIPS ? 2 : 4) ||
+       (!isMIPS64(Img.Arch) && Addr > UINT32_MAX)))
     return false;
   if (Handle && TargetArch == Img.Arch && CurrentMode == *Mode) {
     if (AArch64)
@@ -233,7 +257,8 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
                        DecodedInsn &Out) {
   if (!beginDecode(Out) || !Handle || !InsnBuf)
     return 0;
-  if (MIPS && ((Addr & 3) || (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
+  if (MIPS && ((Addr % (CurrentMode == InstructionMode::MicroMIPS ? 2 : 4)) ||
+               (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
     return 0;
   const uint8_t *Code = Bytes;
   size_t Sz = Len;
@@ -275,6 +300,9 @@ int Decoder::decodeOneForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
 int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
                             DecodedInsn &Out) {
   if (!beginDecode(Out) || !Handle || !InsnBuf)
+    return 0;
+  if (MIPS && ((Addr % (CurrentMode == InstructionMode::MicroMIPS ? 2 : 4)) ||
+               (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
     return 0;
   const uint8_t *Code = Bytes;
   size_t Sz = Len;
@@ -376,7 +404,7 @@ bool Decoder::isAlignmentNop(const DecodedInsn &Insn) const {
        !hasAArch64DecodeOccurrence(Insn)))
     return false;
   if (MIPS)
-    return MIPS->word(*Insn.Raw) == 0;
+    return MIPS->isAlignmentNop(*Insn.Raw);
   if (X86 && decoder_detail::isX86AlignmentNop(Insn))
     return true;
   return alignmentNopLength(TargetArch, Insn.Raw->bytes, Insn.Size,

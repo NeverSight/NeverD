@@ -27,6 +27,7 @@
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMName.h"
@@ -734,6 +735,11 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(
       FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
+  if (Img && isMIPS(TargetArch))
+    if (const auto Mode = Img->instructionModeAt(Func.Entry))
+      if (const char *Attribute = mips::instructionModeLLVMAttribute(*Mode);
+          *Attribute)
+        LLVMFunc->addFnAttr(Attribute);
   // The physical source entry is independent of native EH admission. Assign
   // its checked stack convention before any earlier caller sees the symbol.
   if (TargetArch == Arch::X86 && TargetFormat == BinaryFormat::COFF &&

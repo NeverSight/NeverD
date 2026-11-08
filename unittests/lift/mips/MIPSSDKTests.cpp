@@ -139,6 +139,85 @@ TEST_P(MIPSSDK, StartupMainArgumentCanBePreparedInTheCallSlot) {
   EXPECT_EQ(sdk::SessionTestAccess::programMain(Image), 0x1010u);
 }
 
+class MicroMIPSSDK : public MIPSSDK {};
+
+TEST_P(MicroMIPSSDK, PhysicalPagesKeepTwoByteHeadAndFourByteSlot) {
+  mips_test::ELFBytes File(GetParam());
+  File.put(36, 0x72001000, 4);
+  File.put(24, 0x10101, 4);
+  File.put(0x100, 0x459f, 2); // jr16 ra
+  File.put(0x102, 0x33bd, 2); // addiu sp,sp,16
+  File.put(0x104, 16, 2);
+  const std::string Path =
+      (std::filesystem::path(Directory.str().str()) / "micro-slot.elf")
+          .string();
+  std::error_code Error;
+  llvm::raw_fd_ostream Output(Path, Error);
+  ASSERT_FALSE(Error);
+  Output.write(reinterpret_cast<const char *>(File.Bytes.data()),
+               File.Bytes.size());
+  Output.close();
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+      << take(neverd_last_error(Session));
+  for (unsigned I = 0; I != 2; ++I) {
+    const std::string Text = take(
+        neverd_function_disasm_json(Session, 0x10100, 0x10100 + 2 * I, 1,
+                                    NEVERD_DISASM_FLOW | NEVERD_DISASM_STACK));
+    auto Page = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(Page)) << Text << take(neverd_last_error(Session));
+    const auto *Object = Page->getAsObject();
+    ASSERT_NE(Object, nullptr);
+    const auto *Rows = Object->getArray("instructions");
+    ASSERT_NE(Rows, nullptr);
+    ASSERT_EQ(Rows->size(), 1u);
+    const auto *Row = Rows->front().getAsObject();
+    ASSERT_NE(Row, nullptr);
+    EXPECT_EQ(Row->getInteger("size"), I ? 4 : 2);
+    EXPECT_EQ(Row->getString("addr"), I ? "0x10102" : "0x10100");
+    EXPECT_EQ(Row->getInteger("sp"), I ? 16 : 0);
+    if (!I)
+      EXPECT_EQ(Object->getString("next_address"), "0x10102");
+  }
+}
+
+TEST_P(MicroMIPSSDK, CachedFlowDecoderSwitchesModesWithoutReplacingTheListing) {
+  for (bool Micro : {false, true, false, true}) {
+    auto Image = image({0x0080f809, 0}); // classic jalr a0; nop
+    Image.Mode = InstructionMode::MixedMIPS;
+    Image.MIPS.emplace();
+    Image.MIPS->HasMicroMIPS = true;
+    Image.MIPS->CodeModeEntries[Image.Entry] =
+        Micro ? InstructionMode::MicroMIPS : InstructionMode::MIPSClassic;
+    if (Micro) {
+      auto &Text = Image.Segments.front();
+      Text.Data.clear();
+      for (uint16_t Half : {0x45e4, 0x0c9f}) { // jalrs16 a0; move a0,ra
+        Text.Data.push_back(Half >> (archLittleEndian(GetParam()) ? 0 : 8));
+        Text.Data.push_back(Half >> (archLittleEndian(GetParam()) ? 8 : 0));
+      }
+      Text.Size = Text.FileSz = Text.Data.size();
+    }
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    const auto &Code = Image.Segments.front().Data;
+    DecodedInsn Instruction;
+    ASSERT_EQ(
+        Decode.decodeOne(Code.data(), Code.size(), Image.Entry, Instruction),
+        Micro ? 2 : 4);
+    const std::string Before = Instruction.Raw->mnemonic;
+    const auto Flow =
+        sdk::SessionTestAccess::instructionFlow(Image, Decode, Instruction);
+    EXPECT_EQ(Flow.Kind, "icall");
+    EXPECT_EQ(Flow.DelaySlotBytes, Micro ? 2 : 4);
+    EXPECT_EQ(Instruction.Raw->address, Image.Entry);
+    EXPECT_EQ(Instruction.Raw->size, Micro ? 2 : 4);
+    EXPECT_EQ(std::string(Instruction.Raw->mnemonic), Before);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(ByteOrders, MicroMIPSSDK,
+                         ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));
+
 INSTANTIATE_TEST_SUITE_P(Profiles, MIPSSDK,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
                                            Arch::MIPS64, Arch::MIPS64EL));
