@@ -1052,16 +1052,15 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
                 renderX86SystemStateCall(Opts.TheArch, *CI, "result",
                                          !CI->getType()->isVoidTy(), Arguments)
                     .has_value();
-            if (Opts.TheArch == Arch::X64)
-              NeedsX86VirtualizationDispatch |=
-                  renderX86VirtualizationNativeCall(Opts.TheArch, *CI, "result",
-                                                    !CI->getType()->isVoidTy(),
-                                                    Arguments)
-                      .has_value() ||
-                  renderX86VirtualizationCall(Opts.TheArch, *CI, "result",
-                                              !CI->getType()->isVoidTy(),
-                                              Arguments)
-                      .has_value();
+            NeedsX86VirtualizationDispatch |=
+                renderX86VirtualizationNativeCall(Opts.TheArch, *CI, "result",
+                                                  !CI->getType()->isVoidTy(),
+                                                  Arguments)
+                    .has_value() ||
+                renderX86VirtualizationCall(Opts.TheArch, *CI, "result",
+                                            !CI->getType()->isVoidTy(),
+                                            Arguments)
+                    .has_value();
           }
           if (classifyX86ShadowStackReadAsm(*CI)) {
             const unsigned Word = CI->getType()->getIntegerBitWidth() / 8;

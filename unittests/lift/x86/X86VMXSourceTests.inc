@@ -88,6 +88,9 @@ TEST(X86VirtualizationSource, NeverCI386CompilesBothRoutesWithoutAssembly) {
                                                   FunctionBytes.data()),
                                               FunctionBytes.size()});
         for (const auto &Source : {High, LLVM}) {
+          EXPECT_NE(Source.find("#define NEVERD_X86_VIRTUALIZATION("),
+                    std::string::npos)
+              << Source;
           EXPECT_NE(Source.find(Plan->Builtin + "("), std::string::npos)
               << Source;
           compileNativeC(Compiler, Directory, BinaryFormat::ELF, Source,
