@@ -159,6 +159,19 @@ fault orders and annulled/executed invalid-memory likely slots. The selected
 Archer C7 views were regenerated successfully. The source receipt is
 `build-mips/roundtrip-source-pairs-final/results.json`; the wider qualification
 is recorded in `build-mips/source-merge-pairs/qualification.json`.
+All 221 MIPS cases passed across the broad run and the final 69-case
+pipeline/proof suite, including actual base/destination aliasing and reversed
+address relations. The broader 818-case selection initially passed 808 cases;
+nine timed-out generated-source matrices completed on isolated reruns (eight
+through CTest, one direct run in 33 seconds). One x64/AArch64 native-hint
+assertion also fails with unchanged dev production code and the MIPS proof
+absent from the binary. It is recorded as an existing failure, not a passing
+check. These shared results retain their original dependency snapshot.
+The final integration with dev `aac568578` and Capstone `8b81f225` passed all
+221 MIPS cases again and repeated all 240 source groups with identical generated
+source hashes. Firmware views were regenerated on that build. Its current
+source receipt is `build-mips/roundtrip-source-pairs-capstone/results.json`;
+earlier detailed reports are retained in verified local archives.
 
 ## TP-Link firmware workflow
 
