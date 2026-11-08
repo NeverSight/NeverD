@@ -19,6 +19,7 @@
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -264,7 +265,15 @@ TEST_P(MachOArm64eNativeInstallation,
   const auto NewCompact = macho_unwind::parseCompactUnwind(*After);
   ASSERT_EQ(OldCompact.ParseStatus, ExceptionParseStatus::Complete);
   ASSERT_EQ(NewCompact.ParseStatus, ExceptionParseStatus::Complete);
-  ASSERT_FALSE(OldCompact.Entries.empty());
+  const auto CleanupVA = SymbolVA(kCleanupSymbol);
+  ASSERT_NE(CleanupVA, InvalidVA);
+  const auto CleanupFrame =
+      llvm::find_if(OldCompact.Entries, [&](const auto &E) {
+        return E.CodeRange.contains(CleanupVA);
+      });
+  ASSERT_NE(CleanupFrame, OldCompact.Entries.end());
+  ASSERT_TRUE(CleanupFrame->HasLSDA);
+  ASSERT_NE(CleanupFrame->NativeEncoding & macho_unwind::kPersonalityMask, 0u);
   ASSERT_EQ(OldCompact.Entries.size(), NewCompact.Entries.size());
   EXPECT_EQ(OldCompact.Personalities, NewCompact.Personalities);
   EXPECT_EQ(OldCompact.PersonalitySlots, NewCompact.PersonalitySlots);
